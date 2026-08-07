@@ -569,6 +569,8 @@ h2 { margin:3px 0 0; font-size:22px; }
 .video-drop-field input { width:100%; max-width:220px; }
 .video-drop-field strong,.video-drop-field small { display:block; }
 .video-drop-field small { margin-top:5px; color:var(--muted); font-size:10px; line-height:1.5; }
+.video-drop-copy { min-width:0; }
+.video-provider-target { margin-top:8px !important; color:var(--subtle) !important; font-size:10px !important; line-height:1.45 !important; overflow-wrap:anywhere; }
 .upload-progress { display:grid; gap:8px; }
 .upload-progress > div { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; }
 .upload-progress progress { width:100%; height:7px; border:0; border-radius:999px; overflow:hidden; accent-color:var(--gold); }
@@ -2486,11 +2488,13 @@ input[type="checkbox"],input[type="radio"] { accent-color:var(--gold); }
 .asset-summary strong { margin-top:2px; font-size:14px; }
 .course-resource-layout { display:grid; grid-template-columns:minmax(0,1.22fr) minmax(350px,.78fr); gap:12px; align-items:start; }
 .course-resource-stack { display:grid; gap:12px; }
-.course-attachment-upload { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:9px; padding:12px; border-bottom:1px solid var(--border); }
+.course-attachment-upload { display:grid; grid-template-columns:minmax(0,1fr); align-items:center; gap:9px; padding:12px; border-bottom:1px solid var(--border); }
 .attachment-file-drop { min-height:74px; grid-template-columns:36px minmax(0,1fr); }
 .file-drop-icon { width:34px; height:34px; display:grid; place-items:center; border-radius:8px; background:var(--gold-soft); color:var(--gold-strong); }
 .file-drop-icon svg { width:17px; height:17px; }
+.course-attachment-upload .storage-upload-provider { grid-column:1 / -1; width:100%; min-width:0; margin:0; padding:7px 10px; border:1px solid var(--border); border-radius:7px; background:var(--surface-2); color:var(--muted); font-size:10px; line-height:1.45; overflow-wrap:anywhere; }
 .course-attachment-upload .attachment-upload-progress { grid-column:1 / -1; }
+.course-attachment-upload > .primary-button { grid-column:1 / -1; width:100%; }
 .attachment-upload-progress { display:grid; gap:5px; padding:8px 10px; border:1px solid var(--border); border-radius:7px; background:var(--surface-2); }
 .attachment-upload-progress > div { display:flex; justify-content:space-between; gap:10px; color:var(--muted); font-size:9px; }
 .attachment-upload-progress strong { color:var(--text); font-family:var(--font-mono); }
@@ -4153,10 +4157,12 @@ input[type="checkbox"],input[type="radio"] { accent-color:var(--gold); }
   .content-operations-page .course-attachment-upload,
   .content-operations-page .course-visual-assets .asset-upload-form { grid-template-columns:1fr; }
   .content-operations-page .course-attachment-upload .primary-button,
-  .content-operations-page .course-visual-assets .asset-upload-form .secondary-button { width:100%; }
+  .content-operations-page .course-visual-assets .asset-upload-form .secondary-button { width:100%; min-height:44px; }
   .content-operations-page .course-attachment-admin-row { grid-template-columns:42px minmax(0,1fr); }
   .content-operations-page .course-attachment-admin-row .row-actions { grid-column:1 / -1; display:grid; grid-template-columns:1fr 1fr; }
   .content-operations-page .video-upload-fields { grid-template-columns:1fr; }
+  .content-operations-page .video-upload-form > .primary-button,
+  .content-operations-page .video-upload-form > [data-video-upload-cancel] { width:100%; min-height:44px; }
   .content-operations-page .hosted-video-row { grid-template-columns:34px minmax(0,1fr); }
   .content-operations-page .hosted-video-row > label,
   .content-operations-page .hosted-video-row > button,

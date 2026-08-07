@@ -67,6 +67,28 @@ describe('media storage admin settings contract', () => {
     expect(app).not.toContain("api('/api/video-stream',{method:'POST'")
   })
 
+  it('keeps storage status rows full-width and video provider markup stable', () => {
+    expect(app).toContain('class="storage-upload-provider" id="courseAttachmentStorageStatus" role="status" aria-live="polite"')
+    expect(css).toMatch(/\.course-attachment-upload\s+\.storage-upload-provider\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;[^}]*width:100%;/s)
+    expect(css).toContain('.course-attachment-upload { display:grid; grid-template-columns:minmax(0,1fr);')
+    expect(css).toContain('.course-attachment-upload > .primary-button { grid-column:1 / -1; width:100%; }')
+    expect(css).toContain('overflow-wrap:anywhere')
+
+    expect(app).toContain('<small class="video-provider-target" id="videoProviderTarget" aria-live="polite">正在读取实际存储位置…</small>')
+    expect(app).toContain('id="videoUploadStatus" aria-live="polite"')
+    const bindStart=app.indexOf('function bindManagedVideoUpload(root)')
+    const bindEnd=app.indexOf('\nasync function renderContentVideos',bindStart)
+    const bindSource=app.slice(bindStart,bindEnd)
+    expect(bindSource).toContain("form.querySelector('#videoProviderTarget')")
+    expect(bindSource).not.toContain('document.createElement')
+    expect(bindSource).not.toContain('appendChild')
+    expect(bindSource).not.toContain('insertAdjacentElement')
+    expect(css).toContain('.video-drop-copy { min-width:0; }')
+    expect(css).toMatch(/\.content-operations-page \.video-drop-field\s*\{[^}]*grid-template-columns:42px minmax\(0,1fr\);/s)
+    expect(css).toContain('.content-operations-page .course-attachment-upload .primary-button,\n  .content-operations-page .course-visual-assets .asset-upload-form .secondary-button { width:100%; min-height:44px; }')
+    expect(css).toContain('.content-operations-page .video-upload-form > .primary-button,\n  .content-operations-page .video-upload-form > [data-video-upload-cancel] { width:100%; min-height:44px; }')
+  })
+
   it('prefers explicit managed playback and refreshes an expired URL at most once', () => {
     expect(main).toContain("r.videoSource === 'local_mp4' || r.videoSource === 'qiniu_mp4'")
     expect(main).toContain('function initLocalPlayer(videoUrl, options = {})')
