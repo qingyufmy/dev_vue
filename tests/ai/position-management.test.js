@@ -65,14 +65,14 @@ function response(overrides = {}) {
     trade_thesis:'reversal',
     market_plan:{ signal_type:'sell', entry_method:'market' },
     pending_evaluations:[{
-      management_group_id:'pending_group_01', action:'cancel', reason:'原挂单结构已经失效',
-      cancel_reason_code:'model_judgment',
+      management_group_id:'pending_group_01', action:'cancel', market_alignment:'misaligned', reason:'当前行情已经跌破原挂单方向的关键结构',
+      cancel_reason_code:'market_misaligned',
       evidence_refs:['bar:M15:1784736900000'],
     }],
     position_evaluations:[{
-      management_group_id:'position_group_01', thesis_id:'thesis_01', action:'exit',
-      exit_reason_code:'current_thesis_invalidated', reversal_candidate:true,
-      reason:'原交易论点已经连续失效', evidence_refs:['bar:M15:1784736900000'],
+      management_group_id:'position_group_01', thesis_id:'thesis_01', action:'exit', market_alignment:'misaligned',
+      exit_reason_code:'market_misaligned', reversal_candidate:true,
+      reason:'当前行情已经与原持仓方向和入场逻辑不一致', evidence_refs:['bar:M15:1784736900000'],
     }],
     analysis:'当前行情已经转为空头结构。',
     reasoning:'新仓、挂单与持仓分别完成独立判断。',
@@ -80,7 +80,7 @@ function response(overrides = {}) {
   }
 }
 
-describe('position management v1.3 current-state contract', () => {
+describe('position management v1.4 market-alignment contract', () => {
   it('uses the explicit last closed bar instead of the forming candle', () => {
     const result = buildPositionManagementAsOf({
       timestamp:'2026-07-24 12:30:00',
@@ -127,7 +127,7 @@ describe('position management v1.3 current-state contract', () => {
     expect(result.signal_type).toBe('hold')
     expect(result._position_management.validation.market_plan).toBe('invalid')
     expect(result._position_management.position_evaluations).toEqual([
-      expect.objectContaining({ action:'exit', exit_reason_code:'current_thesis_invalidated' }),
+      expect.objectContaining({ action:'exit', market_alignment:'misaligned', exit_reason_code:'market_misaligned' }),
     ])
   })
 
@@ -135,14 +135,14 @@ describe('position management v1.3 current-state contract', () => {
     const value = response({
       position_evaluations:[{
         management_group_id:'position_group_01', thesis_id:'thesis_01', action:'exit',
-        exit_reason_code:'trend_reversal', matched_condition_id:'invented_condition', reversal_candidate:false,
+        market_alignment:'misaligned', exit_reason_code:'market_misaligned', matched_condition_id:'invented_condition', reversal_candidate:false,
         reason:'尝试改写条件', evidence_refs:['bar:M15:1784736900000'],
       }],
     })
     const result = validatePositionManagementResponse(value, context, plan => ({ ...plan, confidence:0.8 }))
     expect(result.signal_type).toBe('sell')
     expect(result._position_management.position_evaluations).toEqual([
-      expect.objectContaining({ action:'exit', exit_reason_code:'trend_reversal' }),
+      expect.objectContaining({ action:'exit', market_alignment:'misaligned', exit_reason_code:'market_misaligned' }),
     ])
     expect(result._position_management.position_evaluations[0]).not.toHaveProperty('matched_condition_id')
   })
@@ -161,11 +161,11 @@ describe('position management v1.3 current-state contract', () => {
     const invalidEvidence = response({
       market_plan:{ signal_type:'hold', entry_method:'observe' },
       pending_evaluations:[{
-        ...response().pending_evaluations[0], action:'keep', cancel_reason_code:null,
+        ...response().pending_evaluations[0], action:'keep', market_alignment:'aligned', cancel_reason_code:null,
         reason:'原挂单继续保留', evidence_refs:['condition:not-allowed'],
       }],
       position_evaluations:[{
-        ...response().position_evaluations[0], action:'hold', exit_reason_code:null,
+        ...response().position_evaluations[0], action:'hold', market_alignment:'aligned', exit_reason_code:null,
         reason:'原持仓继续持有', evidence_refs:['condition:not-allowed'],
       }],
     })
@@ -224,10 +224,10 @@ describe('position management v1.3 current-state contract', () => {
     const value = response({
       market_plan:{ signal_type:'hold', entry_method:'observe' },
       pending_evaluations:[{
-        ...response().pending_evaluations[0], action:'keep', cancel_reason_code:null,
+        ...response().pending_evaluations[0], action:'keep', market_alignment:'aligned', cancel_reason_code:null,
       }],
       position_evaluations:[{
-        ...response().position_evaluations[0], action:'hold', exit_reason_code:null,
+        ...response().position_evaluations[0], action:'hold', market_alignment:'aligned', exit_reason_code:null,
       }],
     })
     expect(() => validatePositionManagementResponse(
@@ -241,11 +241,11 @@ describe('position management v1.3 current-state contract', () => {
   it('keeps repair strict for management defects alongside an executable market plan', () => {
     const value = response({
       pending_evaluations:[{
-        ...response().pending_evaluations[0], action:'keep', cancel_reason_code:null,
+        ...response().pending_evaluations[0], action:'keep', market_alignment:'aligned', cancel_reason_code:null,
         evidence_refs:['condition:not-allowed'],
       }],
       position_evaluations:[{
-        ...response().position_evaluations[0], action:'hold', exit_reason_code:null,
+        ...response().position_evaluations[0], action:'hold', market_alignment:'aligned', exit_reason_code:null,
         evidence_refs:['condition:not-allowed'],
       }],
     })
@@ -268,77 +268,93 @@ describe('position management v1.3 current-state contract', () => {
     expect(result._position_management.position_evaluations[0].action).toBe('exit')
   })
 
-  it('requires server-confirmed expiry for an expired cancellation reason', () => {
-    const value = response({ pending_evaluations:[{
-      ...response().pending_evaluations[0], cancel_reason_code:'expired',
-    }] })
-    const notExpiredContext = { ...context, pending_groups:[{
-      ...context.pending_groups[0], pending_order_facts:[{ is_expired:false, valid_until_utc_msc:1784748720000 }],
-    }] }
-    const result = validatePositionManagementResponse(value, notExpiredContext,
-      plan => ({ ...plan, confidence:0.8 }))
-    expect(result._position_management.pending_evaluations[0]).toMatchObject({
-      action:'keep', validation_source:'server_fail_closed', cancel_reason_code:null,
+  it.each([
+    ['aligned', 'hold'], ['uncertain', 'hold'], ['misaligned', 'exit'],
+  ])('enforces position market_alignment=%s as action=%s', (marketAlignment, action) => {
+    const value = response({
+      pending_evaluations:[{ ...response().pending_evaluations[0], action:'keep', market_alignment:'aligned', cancel_reason_code:null }],
+      position_evaluations:[{
+        ...response().position_evaluations[0], action, market_alignment:marketAlignment,
+        exit_reason_code:action === 'exit' ? 'market_misaligned' : null,
+        reason:action === 'exit' ? '当前行情与原入场逻辑明确不一致' : '当前行情仍支持原持仓方向',
+      }],
     })
-    expect(result._position_management.validation.errors).toContainEqual(
-      expect.objectContaining({ code:'pending_expired_evidence_required' }),
-    )
-    const expiredContext = { ...notExpiredContext, pending_groups:[{
-      ...notExpiredContext.pending_groups[0], pending_order_facts:[{ is_expired:true }],
-    }] }
-    expect(validatePositionManagementResponse(value, expiredContext,
-      plan => ({ ...plan, confidence:0.8 }))._position_management.pending_evaluations[0])
-      .toMatchObject({ action:'cancel', cancel_reason_code:'expired' })
+    const result = validatePositionManagementResponse(value, context,
+      plan => ({ ...plan, confidence:0.8 }))
+    expect(result._position_management.position_evaluations[0]).toMatchObject({ action, market_alignment:marketAlignment })
   })
 
-  it('allows a current thesis cancellation without a frozen-condition trigger', () => {
+  it.each([
+    ['aligned', 'cancel'], ['uncertain', 'cancel'], ['misaligned', 'keep'],
+  ])('fails closed for pending market_alignment=%s action=%s', (marketAlignment, action) => {
     const value = response({ pending_evaluations:[{
-      ...response().pending_evaluations[0], cancel_reason_code:'thesis_invalidated',
-      evidence_refs:['bar:M15:1784736900000'],
+      ...response().pending_evaluations[0], action, market_alignment:marketAlignment,
+      cancel_reason_code:action === 'cancel' ? 'market_misaligned' : null,
     }] })
-    const pendingGroup = {
-      ...context.pending_groups[0],
-      allowed_evidence_refs:['bar:M15:1784736900000'],
-    }
-    const valid = validatePositionManagementResponse(value,
-      { ...context, pending_groups:[pendingGroup] }, plan => ({ ...plan, confidence:0.8 }))
-    expect(valid._position_management.validation.errors).toEqual([])
-    expect(valid._position_management.pending_evaluations[0])
-      .toMatchObject({ action:'cancel', cancel_reason_code:'thesis_invalidated' })
+    const result = validatePositionManagementResponse(value, context,
+      plan => ({ ...plan, confidence:0.8 }))
+    expect(result._position_management.pending_evaluations[0]).toMatchObject({
+      action:'keep', market_alignment:'uncertain', validation_source:'server_fail_closed',
+    })
+    expect(result._position_management.validation.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ section:'pending', code:'pending_action_alignment_mismatch' }),
+    ]))
   })
 
   it.each(['expired', 'thesis_invalidated', 'risk_reduction', 'model_judgment'])
-    ('allows %s based on current evidence without frozen-condition evaluation', cancelReasonCode => {
-      const value = response({ pending_evaluations:[{
+    ('rejects retired pending reason code %s', cancelReasonCode => {
+      const result = validatePositionManagementResponse(response({ pending_evaluations:[{
         ...response().pending_evaluations[0], cancel_reason_code:cancelReasonCode,
-        reason:'风险依据', evidence_refs:['bar:M15:1784736900000'],
-      }] })
-      const pendingGroup = {
-        ...context.pending_groups[0], allowed_evidence_refs:['bar:M15:1784736900000'],
-        pending_order_facts:[{ is_expired:true }],
-      }
-      const result = validatePositionManagementResponse(value,
-        { ...context, pending_groups:[pendingGroup] }, plan => ({ ...plan, confidence:0.8 }))
+      }] }), context, plan => ({ ...plan, confidence:0.8 }))
       expect(result._position_management.pending_evaluations[0]).toMatchObject({
-        action:'cancel', cancel_reason_code:cancelReasonCode,
+        action:'keep', market_alignment:'uncertain', validation_source:'server_fail_closed',
       })
+      expect(result._position_management.validation.errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({ section:'pending' }),
+      ]))
     })
 
-  it.each(['thesis_invalidated', 'risk_reduction', 'model_judgment'])
-    ('does not let %s disguise an expiry claim', cancelReasonCode => {
-      const value = response({ pending_evaluations:[{
-        ...response().pending_evaluations[0], cancel_reason_code:cancelReasonCode,
-        reason:'该挂单已过期，应该撤销', evidence_refs:['bar:M15:1784736900000'],
-      }] })
-      const result = validatePositionManagementResponse(value, context,
-        plan => ({ ...plan, confidence:0.8 }))
-      expect(result._position_management.validation.errors).toContainEqual(
-        expect.objectContaining({ code:'pending_expiry_reason_code_mismatch' }),
-      )
-      expect(result._position_management.pending_evaluations[0]).toMatchObject({
-        action:'keep', validation_source:'server_fail_closed', cancel_reason_code:null,
+  it.each(['current_thesis_invalidated', 'trend_reversal', 'risk_reduction', 'model_judgment'])
+    ('rejects retired position reason code %s', exitReasonCode => {
+      const result = validatePositionManagementResponse(response({ position_evaluations:[{
+        ...response().position_evaluations[0], exit_reason_code:exitReasonCode,
+      }] }), context, plan => ({ ...plan, confidence:0.8 }))
+      expect(result._position_management.position_evaluations[0]).toMatchObject({
+        action:'hold', market_alignment:'uncertain', validation_source:'server_fail_closed',
       })
+      expect(result._position_management.validation.errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({ section:'position' }),
+      ]))
     })
+
+  it('rejects a protective or P&L explanation even when alignment says misaligned', () => {
+    const result = validatePositionManagementResponse(response({
+      position_evaluations:[{
+        ...response().position_evaluations[0], market_alignment:'misaligned',
+        exit_reason_code:'market_misaligned', reason:'跌破保本止损，盈利保护触发',
+      }],
+    }), context, plan => ({ ...plan, confidence:0.8 }))
+    expect(result._position_management.position_evaluations[0]).toMatchObject({
+      action:'hold', market_alignment:'uncertain', validation_source:'server_fail_closed',
+    })
+    expect(result._position_management.validation.errors).toContainEqual(
+      expect.objectContaining({ code:'position_reason_not_market_alignment' }),
+    )
+  })
+
+  it('fails closed and preserves groups when terminal facts are unavailable', () => {
+    const unavailable = { ...context, position_groups:[{
+      ...context.position_groups[0], current_facts_status:'unavailable',
+    }] }
+    const result = validatePositionManagementResponse(response(), unavailable,
+      plan => ({ ...plan, confidence:0.8 }))
+    expect(result._position_management.position_evaluations[0]).toMatchObject({
+      action:'hold', market_alignment:'uncertain', validation_source:'server_fail_closed',
+    })
+    expect(result._position_management.validation.errors).toContainEqual(
+      expect.objectContaining({ code:'position_current_facts_unavailable' }),
+    )
+  })
 
   it('expires the whole response when snapshot identity changes', () => {
     expect(() => validatePositionManagementResponse(response({
@@ -355,6 +371,11 @@ describe('position management v1.3 current-state contract', () => {
     expect(parsed.market_plan.pending_action).toBeUndefined()
     expect(parsed.market_plan.position_action).toBeUndefined()
     expect(schema).toContain('exit_reason_code')
+    expect(schema).toContain('market_alignment')
+    expect(schema).toContain('market_misaligned')
+    expect(schema).not.toContain('risk_reduction')
+    expect(schema).not.toContain('model_judgment')
+    expect(schema).not.toContain('expired')
     expect(schema).not.toContain('matched_condition_id')
     expect(schema).not.toContain('cancel_replace')
     expect(schema).not.toContain('"reverse"')
@@ -362,38 +383,46 @@ describe('position management v1.3 current-state contract', () => {
 })
 
 describe('consecutive automatic-inference exit confirmation', () => {
-  it('requires two distinct v1.3 inferences and current snapshots', () => {
+  it('requires two distinct v1.4 inferences and current snapshots', () => {
     expect(AUTO_EXIT_CONFIRMATIONS_REQUIRED).toBe(2)
-    expect(resolveAutomaticExitConfirmation({ action:'exit', decision_signal_id:101,
+    expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, null))
       .toMatchObject({ validation_status:'valid', confirmation_count:1 })
-    expect(resolveAutomaticExitConfirmation({ action:'exit', decision_signal_id:102,
+    expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:102,
       market_snapshot_hash:'sha256:snapshot-b', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
-      action:'exit', validation_status:'valid', decision_signal_id:101,
+      action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
     })).toMatchObject({ validation_status:'valid', confirmation_count:2 })
   })
 
   it('does not increment when the task or snapshot is reused', () => {
-    const current = { action:'exit', decision_signal_id:102, task_id:7,
+    const current = { action:'exit', market_alignment:'misaligned', decision_signal_id:102, task_id:7,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }
-    const previous = { action:'exit', validation_status:'valid', decision_signal_id:101, task_id:7,
+    const previous = { action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:101, task_id:7,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }
     expect(resolveAutomaticExitConfirmation(current, previous)).toMatchObject({
       validation_status:'valid', confirmation_count:1,
     })
   })
 
-  it('does not combine a legacy or unknown previous contract with v1.3', () => {
-    expect(resolveAutomaticExitConfirmation({ action:'exit', decision_signal_id:102,
+  it('does not combine a legacy or unknown previous contract with v1.4', () => {
+    expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:102,
       market_snapshot_hash:'sha256:snapshot-b', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
-      action:'exit', validation_status:'valid', decision_signal_id:101,
+      action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:'position-management-v1.2',
     })).toMatchObject({ validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' })
-    expect(resolveAutomaticExitConfirmation({ action:'exit', decision_signal_id:103,
+    expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:103,
       market_snapshot_hash:'sha256:snapshot-c', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
       action:'exit', validation_status:'valid', decision_signal_id:102,
       market_snapshot_hash:'sha256:snapshot-b',
+    })).toMatchObject({ validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' })
+  })
+
+  it('does not pair a v1.3 candidate with a v1.4 confirmation', () => {
+    expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:104,
+      market_snapshot_hash:'sha256:snapshot-d', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
+      action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:103,
+      market_snapshot_hash:'sha256:snapshot-c', contract_version:'position-management-v1.3',
     })).toMatchObject({ validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' })
   })
 
@@ -434,7 +463,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
     queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
       .mockResolvedValueOnce({ id:11, decision_signal_id:101, action:'exit', validation_status:'valid',
         market_snapshot_hash:'snapshot-a', closed_bar_time_utc_ms:1784736900000,
-        model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }) })
+        model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION, market_alignment:'misaligned' }) })
       .mockResolvedValueOnce({ id:21, state_version:1, status:'CANDIDATE', user_id:7,
         execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01',
         model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }) })
@@ -658,11 +687,12 @@ describe('durable state and protection boundaries', () => {
     expect(value._targets.get('group_pending')[0].strategy_version).toBe(1)
   })
 
-  it('injects terminal expiry facts but keeps original conditions out of active context', async () => {
+  it('injects complete terminal facts and keeps expiration outside the model contract', async () => {
     queryAll.mockResolvedValueOnce([{
       outcome_id:9305, pending_ticket:'O-9305', position_id:null, effective_pending_state:'pending',
       management_group_id:'group_9305', thesis_id:'thesis_9305', strategy_id:3, strategy_version:1,
       standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:9305, decision_timeframe:'M15',
+      entry_method:'limit', core_entry_reason:'回踩支撑做多', original_stop_loss:4000,
       invalidation_conditions_json:JSON.stringify([{
         condition_id:'hard_9305', kind:'hard', timeframe:'M15', operator:'closed_bar_lte', threshold:4000,
       }]), evidence_refs_json:'[]',
@@ -673,9 +703,10 @@ describe('durable state and protection boundaries', () => {
         strategy_reference_portfolio:{
           role:'platform_strategy_reference_portfolio', positions:[],
           captured_at:'2026-07-22T02:58:00.000Z', captured_at_utc_msc:1784746680000,
-          pending_orders:[{ reference_id:'outcome:9305', valid_until_utc_msc:1784748720000,
-            valid_until_utc:'2026-07-22T06:12:00.000Z', valid_until_terminal:'2026-07-22 09:12:00',
-            terminal_timezone_offset_minutes:180, is_expired:false, remaining_seconds:11640 }],
+          pending_orders:[{ reference_id:'outcome:9305', direction:'buy', side:'buy',
+            order_type:'buy_limit', trigger_price:4100, actual_stop_loss:4000,
+            actual_take_profit:4200, original_stop_loss:4000, original_take_profits:[4200],
+            valid_until_utc_msc:1784748720000, is_expired:false }],
         },
         strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{
           time_utc_msc:1784746680000, close:3990,
@@ -684,15 +715,120 @@ describe('durable state and protection boundaries', () => {
     })
     expect(value.pending_groups[0]).toMatchObject({
       management_group_id:'group_9305',
-      pending_order_facts:[expect.objectContaining({ is_expired:false, valid_until_terminal:'2026-07-22 09:12:00' })],
+      current_facts_status:'available',
+      pending_order_facts:[expect.objectContaining({ direction:'buy', trigger_price:4100,
+        actual_stop_loss:4000, actual_take_profit:4200 })],
     })
+    expect(value.pending_groups[0].pending_order_facts[0]).not.toHaveProperty('is_expired')
+    expect(value.pending_groups[0].pending_order_facts[0]).not.toHaveProperty('valid_until_utc_msc')
     expect(value.pending_groups[0]).not.toHaveProperty('frozen_conditions')
     expect(value.pending_groups[0].allowed_evidence_refs).toEqual(expect.arrayContaining([
       'bar:M15:1784746680000',
       expect.stringMatching(/^snapshot:/),
-      'pending:9305:terminal',
+      'terminal:9305:pending',
     ]))
     expect(value.pending_groups[0].allowed_evidence_refs).not.toContain('condition:hard_9305')
+  })
+
+  it('maps complete platform position and pending terminal facts without account data', async () => {
+    queryAll.mockResolvedValueOnce([
+      { outcome_id:501, position_id:'POS-501', pending_ticket:null, effective_pending_state:null,
+        management_group_id:'group-pos-501', thesis_id:'thesis-pos-501', strategy_id:3, strategy_version:4,
+        standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:401, decision_timeframe:'M15',
+        entry_method:'market', core_entry_reason:'回踩支撑后顺势做多', original_stop_loss:1980,
+        original_take_profits_json:'[2040,2080]', created_at:'2026-08-07 08:00:00' },
+      { outcome_id:502, position_id:null, pending_ticket:'ORD-502', effective_pending_state:'pending',
+        management_group_id:'group-pend-502', thesis_id:'thesis-pend-502', strategy_id:3, strategy_version:4,
+        standard_symbol:'XAUUSD', direction:'sell', origin_signal_id:402, decision_timeframe:'M15',
+        entry_method:'limit', core_entry_reason:'反弹至阻力位做空', original_stop_loss:2060,
+        original_take_profits_json:'[1980]', created_at:'2026-08-07 08:05:00' },
+    ])
+    const value = await loadActivePositionManagementContext({
+      strategyId:3, strategyVersion:4, symbol:'XAUUSD', decisionTimeframe:'M15',
+      market:{
+        strategy_reference_portfolio:{
+          role:'platform_strategy_reference_portfolio',
+          positions:[{ reference_id:'outcome:501', direction:'buy', order_type:'position',
+            entry_price:2000, current_price:2010, actual_stop_loss:1985,
+            actual_take_profit:2050, opened_at:'2026-08-07T08:00:00Z' }],
+          pending_orders:[{ reference_id:'outcome:502', direction:'sell', order_type:'sell_limit',
+            trigger_price:2050, actual_stop_loss:2070, actual_take_profit:1980,
+            created_at:'2026-08-07T08:05:00Z' }],
+        },
+        strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1786070400000 } } } } },
+      },
+    })
+    expect(value.position_groups[0]).toMatchObject({
+      current_facts_status:'available', direction:'buy', entry_method:'market',
+      core_entry_reason:'回踩支撑后顺势做多', original_stop_loss:1980,
+      original_take_profits:[2040,2080],
+      position_facts:[expect.objectContaining({ source:'platform_reference_portfolio', direction:'buy',
+        order_type:'position', entry_price:2000, current_price:2010,
+        actual_stop_loss:1985, actual_take_profit:2050 })],
+    })
+    expect(value.pending_groups[0]).toMatchObject({
+      current_facts_status:'available', direction:'sell', entry_method:'limit',
+      pending_order_facts:[expect.objectContaining({ source:'platform_reference_portfolio', direction:'sell',
+        order_type:'sell_limit', trigger_price:2050, actual_stop_loss:2070 })],
+    })
+    const contextKeys = JSON.stringify({ position:value.position_groups, pending:value.pending_groups })
+      .match(/"([^"]+)":/g)?.map(key => key.slice(1, -2)) || []
+    expect(contextKeys).not.toEqual(expect.arrayContaining([
+      'protection_status', 'ticket', 'volume', 'profit', 'balance', 'equity',
+    ]))
+  })
+
+  it('matches private terminal positions and pending orders by exact identity', async () => {
+    queryAll.mockResolvedValueOnce([
+      { outcome_id:601, position_id:'POS-601', pending_ticket:null, effective_pending_state:null,
+        management_group_id:'private-pos-601', thesis_id:'private-thesis-601', strategy_id:9, strategy_version:2,
+        standard_symbol:'EURUSD', direction:'buy', origin_signal_id:501, decision_timeframe:'M5',
+        entry_method:'market', core_entry_reason:'突破后顺势跟进', original_stop_loss:1.08,
+        original_take_profits_json:'[1.1]', created_at:'2026-08-07 08:00:00' },
+      { outcome_id:602, position_id:null, pending_ticket:'ORD-602', effective_pending_state:'pending',
+        management_group_id:'private-pend-602', thesis_id:'private-thesis-602', strategy_id:9, strategy_version:2,
+        standard_symbol:'EURUSD', direction:'sell', origin_signal_id:502, decision_timeframe:'M5',
+        entry_method:'limit', core_entry_reason:'阻力位反转做空', original_stop_loss:1.11,
+        original_take_profits_json:'[1.07]', created_at:'2026-08-07 08:01:00' },
+    ])
+    const value = await loadActivePositionManagementContext({
+      strategyId:9, strategyVersion:2, strategyScope:'private', ownerUserId:7,
+      symbol:'EURUSD', decisionTimeframe:'M5',
+      market:{
+        positions:[{ position_id:'POS-601', identifier:'ID-601', ticket:'T-601', type:'buy',
+          open_price:1.09, price_current:1.095, sl:1.08, tp:1.1, time:'2026-08-07T08:00:00Z' }],
+        pending_orders:[{ ticket:'ORD-602', pending_type:'sell_limit', side:'sell', price:1.105,
+          sl:1.11, tp:1.07, time_setup:'2026-08-07T08:01:00Z' }],
+        strategy_context:{ timeframes:{ M5:{ summary:{ last_closed_bar:{ time_utc_msc:1786070400000 } } } } },
+      },
+    })
+    expect(value.position_groups[0].current_facts_status).toBe('available')
+    expect(value.position_groups[0].position_facts[0]).toMatchObject({
+      source:'private_market', direction:'buy', entry_price:1.09, current_price:1.095,
+    })
+    expect(value.pending_groups[0].current_facts_status).toBe('available')
+    expect(value.pending_groups[0].pending_order_facts[0]).toMatchObject({
+      source:'private_market', direction:'sell', trigger_price:1.105, order_type:'sell_limit',
+    })
+  })
+
+  it('retains a group as unavailable when the platform snapshot cannot map its live fact', async () => {
+    queryAll.mockResolvedValueOnce([{
+      outcome_id:701, position_id:'POS-701', pending_ticket:null, effective_pending_state:null,
+      management_group_id:'unmapped-701', thesis_id:'thesis-701', strategy_id:4, strategy_version:1,
+      standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:701, decision_timeframe:'M15',
+      entry_method:'market', core_entry_reason:'原入场理由', original_stop_loss:1900,
+      original_take_profits_json:'[2100]', created_at:'2026-08-07 08:00:00',
+    }])
+    const value = await loadActivePositionManagementContext({
+      strategyId:4, symbol:'XAUUSD', decisionTimeframe:'M15',
+      market:{ strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', status:'unavailable', positions:[], pending_orders:[] },
+        strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1786070400000 } } } } } },
+    })
+    expect(value.position_groups).toEqual([expect.objectContaining({
+      management_group_id:'unmapped-701', current_facts_status:'unavailable',
+      position_facts:[null],
+    })])
   })
 
   it('does not accept the retired auto-reverse mode through the settings API', async () => {

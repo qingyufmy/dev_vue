@@ -3,20 +3,23 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.3'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.4'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
 export const AUTO_EXIT_CONFIRMATIONS_REQUIRED = 2
 
-// v1.3 evaluates the position/pending state that is true at the current
-// inference snapshot.  The original signal thesis and its protective prices
-// remain attached to the group for audit/replay, but they are deliberately
-// not used as executable gates for a new management decision.
-export const POSITION_EXIT_REASON_CODES = [
-  'current_thesis_invalidated', 'trend_reversal', 'risk_reduction', 'model_judgment',
-]
+// v1.4 evaluates only whether the current market still aligns with the
+// direction and entry logic that created the live position/pending order.
+// Protective prices and account outcomes remain terminal facts for audit, but
+// can never become a model exit/cancel reason.
+export const POSITION_EXIT_REASON_CODES = ['market_misaligned']
 const POSITION_EXIT_REASON_CODE_SET = new Set(POSITION_EXIT_REASON_CODES)
+const MARKET_ALIGNMENT_VALUES = new Set(['aligned', 'misaligned', 'uncertain'])
+// A model can mark a group misaligned while still explaining a protective or
+// P&L trigger. Those explanations are outside v1.4's contract and must fail
+// closed instead of becoming an executable action.
+const NON_ALIGNMENT_REASON_PATTERN = /(?:盈利保护|保护盈利|保本|止损|止盈|浮盈|浮亏|盈亏|利润|回撤|风险降低|降低风险|模型判断|模型认为|泛化判断|主观判断|risk\s*reduction|model\s*judg(?:e|ment)|generic\s*judg(?:e|ment)|profit\s*protection|break[- ]?even|stop\s*loss|take\s*profit|drawdown|profit|p&l|到期|过期|超时|expired|expiry|timeout)/i
 
 const SYSTEM_MAGIC = 234000
 const MODE_RANK = new Map(POSITION_MANAGEMENT_MODES.map((mode, index) => [mode, index]))
@@ -50,6 +53,7 @@ const TRANSITIONS = new Map(Object.entries({
 const object = value => value && !Array.isArray(value) && typeof value === 'object' ? value : null
 const text = (value, max = 500) => typeof value === 'string' ? value.trim().slice(0, max) : ''
 const number = value => Number.isFinite(Number(value)) ? Number(value) : null
+const positiveNumber = value => { const parsed = number(value); return parsed && parsed > 0 ? parsed : null }
 const json = (value, fallback = {}) => { try { return value ? JSON.parse(value) : fallback } catch { return fallback } }
 const canonicalJson = value => Array.isArray(value) ? value.map(canonicalJson)
   : value && typeof value === 'object'
@@ -189,6 +193,7 @@ export async function createTradeThesisTx(run, {
 }
 
 function publicGroup(row) {
+  const originalTakeProfits = json(row.original_take_profits_json, [])
   return {
     management_group_id:row.management_group_id,
     thesis_id:row.thesis_id,
@@ -197,12 +202,77 @@ function publicGroup(row) {
     standard_symbol:row.standard_symbol,
     direction:row.direction,
     original_signal_id:Number(row.origin_signal_id || row.signal_id),
+    core_entry_reason:text(row.core_entry_reason, 1000),
+    entry_method:text(row.entry_method, 64).toLowerCase() || null,
     decision_timeframe:row.decision_timeframe,
-    // Historical thesis evidence is intentionally omitted from the active
-    // model context.  It remains available through thesis/detail audit APIs;
-    // a v1.3 response may cite only current-state evidence below.
+    original_stop_loss:positiveNumber(row.original_stop_loss),
+    original_take_profits:Array.isArray(originalTakeProfits) ? originalTakeProfits : [],
+    // Frozen thesis details are supplied as context only.  They describe the
+    // original entry logic; the model must compare that logic with current
+    // market facts and may not treat protective prices as exit gates.
     allowed_evidence_refs:[],
   }
+}
+
+function terminalDirection(value, fallback = null) {
+  return normalizeDirection(value?.direction || value?.side || value?.type
+    || value?.pending_type || fallback)
+}
+
+function terminalTime(value, ...keys) {
+  for (const key of keys) {
+    const candidate = value?.[key]
+    if (candidate != null && String(candidate).trim() !== '') return candidate
+  }
+  return null
+}
+
+function terminalFact(value, row, kind, source) {
+  const pending = kind === 'pending'
+  const direction = terminalDirection(value, row?.direction)
+  const orderType = text(value?.order_type || value?.pending_type || value?.type
+    || (pending ? row?.entry_method : 'position'), 64).toLowerCase() || null
+  const entryPrice = number(value?.entry_price ?? value?.open_price ?? value?.price_open)
+  const triggerPrice = number(value?.trigger_price ?? value?.price)
+  const currentPrice = number(value?.current_price ?? value?.price_current)
+  const originalTakeProfits = json(row?.original_take_profits_json, [])
+  const result = {
+    source,
+    kind,
+    direction,
+    order_type:orderType,
+    entry_price:pending ? null : (entryPrice && entryPrice > 0 ? entryPrice : null),
+    trigger_price:pending ? (triggerPrice && triggerPrice > 0 ? triggerPrice : null) : null,
+    current_price:pending ? null : (currentPrice && currentPrice > 0 ? currentPrice : null),
+    actual_stop_loss:positiveNumber(value?.actual_stop_loss ?? value?.sl),
+    actual_take_profit:positiveNumber(value?.actual_take_profit ?? value?.tp),
+    original_stop_loss:positiveNumber(value?.original_stop_loss ?? row?.original_stop_loss),
+    original_take_profits:Array.isArray(value?.original_take_profits)
+      ? value.original_take_profits : (Array.isArray(originalTakeProfits) ? originalTakeProfits : []),
+    opened_at:pending ? null : terminalTime(value, 'opened_at', 'open_time', 'time_open', 'time'),
+    created_at:terminalTime(value, 'created_at', 'created_at_utc', 'time_setup', 'time_create', 'time')
+      || row?.created_at || null,
+  }
+  return result
+}
+
+function terminalFactComplete(fact, kind) {
+  if (!fact || fact.kind !== kind || !fact.direction || !fact.order_type) return false
+  if (kind === 'position') return Number(fact.entry_price) > 0 && Number(fact.current_price) > 0
+  return Number(fact.trigger_price) > 0
+}
+
+function lookupKeys(value, keys) {
+  return keys.map(key => value?.[key]).map(value => value == null ? '' : String(value).trim())
+    .filter(Boolean)
+}
+
+function mapTerminalRows(rows, keys) {
+  const map = new Map()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    for (const key of lookupKeys(row, keys)) if (!map.has(key)) map.set(key, row)
+  }
+  return map
 }
 
 export function isActivePositionManagementOutcome(row) {
@@ -230,7 +300,7 @@ export async function loadActivePositionManagementContext({
       outcomes.ownership_history_id, outcomes.broker_server_key, outcomes.login_account,
       outcomes.original_symbol, outcomes.symbol, outcomes.pending_ticket, outcomes.position_id,
       outcomes.entry_direction, outcomes.system_magic, outcomes.attribution_status,
-      outcomes.protection_status, outcomes.actual_stop_loss, outcomes.actual_take_profit,
+      outcomes.actual_stop_loss, outcomes.actual_take_profit,
       COALESCE(deliveries.pending_state, origin_signals.pending_state) AS effective_pending_state,
       theses.* , theses.signal_id AS origin_signal_id
     FROM signal_outcomes outcomes
@@ -246,30 +316,51 @@ export async function loadActivePositionManagementContext({
           AND COALESCE(deliveries.pending_state, origin_signals.pending_state, '') <> 'pending'))
     ORDER BY theses.created_at DESC, outcomes.id DESC`, params)
   const referencePortfolio = market?.strategy_reference_portfolio
-  const referenceOutcomeIds = referencePortfolio?.role === 'platform_strategy_reference_portfolio'
+  const isPlatformStrategy = strategyScope === 'platform'
+  const hasReferencePortfolio = referencePortfolio?.role === 'platform_strategy_reference_portfolio'
+  const referencePortfolioAvailable = hasReferencePortfolio
     && referencePortfolio?.status !== 'unavailable'
     && Array.isArray(referencePortfolio?.positions)
     && Array.isArray(referencePortfolio?.pending_orders)
+  const referenceOutcomeIds = referencePortfolioAvailable
     ? new Set([...referencePortfolio.positions, ...referencePortfolio.pending_orders]
       .map(item => /^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1])
-      .filter(Boolean).map(Number))
-    : null
-  const referencePendingByOutcome = referencePortfolio?.role === 'platform_strategy_reference_portfolio'
-    && Array.isArray(referencePortfolio?.pending_orders)
-    ? new Map(referencePortfolio.pending_orders
-      .map(item => [/^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1], item])
-      .filter(([id]) => id)
-      .map(([id, item]) => [Number(id), {
-        valid_until_utc_msc:item?.valid_until_utc_msc ?? null,
-        valid_until_utc:item?.valid_until_utc ?? null,
-        valid_until_terminal:item?.valid_until_terminal ?? null,
-        terminal_timezone_offset_minutes:item?.terminal_timezone_offset_minutes ?? null,
-        is_expired:item?.is_expired ?? null,
-        remaining_seconds:item?.remaining_seconds ?? null,
-        captured_at:item?.captured_at ?? referencePortfolio?.captured_at ?? null,
-        captured_at_utc_msc:item?.captured_at_utc_msc ?? referencePortfolio?.captured_at_utc_msc ?? null,
-      }]))
-    : new Map()
+      .filter(Boolean).map(Number)) : null
+  const referenceFactsByOutcome = new Map()
+  if (referencePortfolioAvailable) {
+    for (const item of referencePortfolio.positions) {
+      const outcomeId = Number(/^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1] || 0)
+      if (outcomeId > 0) referenceFactsByOutcome.set(outcomeId,
+        { ...(referenceFactsByOutcome.get(outcomeId) || {}), position:item })
+    }
+    for (const item of referencePortfolio.pending_orders) {
+      const outcomeId = Number(/^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1] || 0)
+      if (outcomeId > 0) referenceFactsByOutcome.set(outcomeId,
+        { ...(referenceFactsByOutcome.get(outcomeId) || {}), pending:item })
+    }
+  }
+  const privatePortfolioAvailable = Array.isArray(market?.positions)
+    && Array.isArray(market?.pending_orders)
+  const privatePositionRows = mapTerminalRows(market?.positions,
+    ['position_id', 'identifier', 'ticket', 'position_ticket'])
+  const privatePendingRows = mapTerminalRows(market?.pending_orders,
+    ['ticket', 'mt5_ticket', 'order_id', 'pending_ticket'])
+
+  const resolveTerminalFact = (row, kind) => {
+    if (isPlatformStrategy) {
+      if (!referencePortfolioAvailable) return null
+      const facts = referenceFactsByOutcome.get(Number(row?.outcome_id))
+      const source = facts?.[kind]
+      return source ? terminalFact(source, row, kind, 'platform_reference_portfolio') : null
+    }
+    if (!privatePortfolioAvailable) return null
+    const keys = kind === 'position'
+      ? lookupKeys(row, ['position_id', 'pending_ticket'])
+      : lookupKeys(row, ['pending_ticket', 'position_id'])
+    const source = (kind === 'position' ? privatePositionRows : privatePendingRows)
+      && keys.map(key => (kind === 'position' ? privatePositionRows : privatePendingRows).get(key)).find(Boolean)
+    return source ? terminalFact(source, row, kind, 'private_market') : null
+  }
   const groups = new Map()
   for (const rawRow of rows) {
     // The reference portfolio is sourced from the terminal's current
@@ -284,15 +375,24 @@ export async function loadActivePositionManagementContext({
     if (!groups.has(row.management_group_id)) {
       const group = { ...publicGroup(row), targets:[] }
       group.pending_order_facts = []
+      group.position_facts = []
+      group.current_facts_status = group.core_entry_reason && group.entry_method
+        && group.decision_timeframe && group.direction ? 'available' : 'unavailable'
       groups.set(row.management_group_id, group)
     }
-    const pendingFact = referencePendingByOutcome.get(Number(row.outcome_id))
-    if (pendingFact && row.pending_ticket && !row.position_id) {
-      const group = groups.get(row.management_group_id)
-      group.pending_order_facts.push(pendingFact)
-      group.allowed_evidence_refs.push(`pending:${row.outcome_id}:terminal`)
+    const group = groups.get(row.management_group_id)
+    const kind = row.position_id ? 'position' : 'pending'
+    const fact = resolveTerminalFact(row, kind)
+    if (kind === 'position') group.position_facts.push(fact)
+    else group.pending_order_facts.push(fact)
+    if (fact && terminalFactComplete(fact, kind)) {
+      group.allowed_evidence_refs.push(`terminal:${row.outcome_id}:${kind}`)
+    } else {
+      // Keep the group visible so an unavailable snapshot resets an earlier
+      // candidate rather than silently disappearing and later pairing with it.
+      group.current_facts_status = 'unavailable'
     }
-    groups.get(row.management_group_id).targets.push(row)
+    group.targets.push(row)
   }
   const pendingGroups = []
   const positionGroups = []
@@ -307,6 +407,9 @@ export async function loadActivePositionManagementContext({
     const hasPending = group.targets.some(row => row.pending_ticket && !row.position_id)
     const safe = { ...group }
     delete safe.targets
+    // Facts are always present for the corresponding management section. A
+    // null entry is intentional: it makes the fail-closed state explicit to
+    // the model and server validator without exposing terminal identifiers.
     safe.allowed_evidence_refs = [...new Set([
       ...(safe.allowed_evidence_refs || []),
       ...(currentBarRef ? [currentBarRef] : []),
@@ -357,17 +460,19 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
     pending_evaluations:(context.pending_groups || []).map(group => ({
       management_group_id:group.management_group_id,
       action:'仅允许 keep | cancel',
-      cancel_reason_code:'cancel 时必填，仅允许 expired | thesis_invalidated | risk_reduction | model_judgment；keep 时必须为 null 或 none；expired 只能引用终端当前事实 is_expired=true；其他原因基于当前行情证据，不得把冻结条件当作硬门槛',
-      reason:'简体中文具体依据',
+      market_alignment:'仅允许 aligned | misaligned | uncertain；aligned/uncertain 必须 keep，misaligned 才能 cancel',
+      cancel_reason_code:'仅当 market_alignment=misaligned 且 action=cancel 时填写 market_misaligned；其他情况必须为 null',
+      reason:'只能说明当前行情与原挂单方向/入场逻辑是否一致；不得以到期、止损止盈、盈利保护、风险降低或泛化判断撤单',
       evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
     })),
     position_evaluations:(context.position_groups || []).map(group => ({
       management_group_id:group.management_group_id,
       thesis_id:group.thesis_id,
       action:'仅允许 hold | exit',
-      exit_reason_code:'exit 时必填，仅允许 current_thesis_invalidated | trend_reversal | risk_reduction | model_judgment；hold 时必须为 null',
+      market_alignment:'仅允许 aligned | misaligned | uncertain；aligned/uncertain 必须 hold，misaligned 才能 exit',
+      exit_reason_code:'仅当 market_alignment=misaligned 且 action=exit 时填写 market_misaligned；其他情况必须为 null',
       reversal_candidate:'布尔值，仅为解释性判断，不是执行命令',
-      reason:'简体中文说明当前持仓结论',
+      reason:'只能说明当前行情与原持仓方向/入场逻辑是否一致；不得以止损止盈、盈利保护、风险降低或泛化判断平仓',
       evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
     })),
     analysis:'简体中文行情分析',
@@ -378,7 +483,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
 function validateAsOf(value, context) {
   // A response and its server context must be from the same contract
   // generation.  In particular, do not allow a rolling deployment to combine
-  // a v1.2 thesis/context with a v1.3 current-state response.
+  // a prior-contract thesis/context with a v1.4 current-state response.
   if (String(context?.contract_version || '') !== POSITION_MANAGEMENT_CONTRACT_VERSION
     || String(value?.contract_version || '') !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
     throw new Error('position_management_contract_version_mismatch')
@@ -427,6 +532,30 @@ function hasManagementExecutionIntent(item, section) {
   return false
 }
 
+function normalizeMarketAlignment(value) {
+  const alignment = String(value ?? '').trim().toLowerCase()
+  return MARKET_ALIGNMENT_VALUES.has(alignment) ? alignment : null
+}
+
+function groupCurrentFactsAvailable(group) {
+  return String(group?.current_facts_status || 'available').toLowerCase() === 'available'
+}
+
+function safePendingEvaluation(groupId, reason = '该管理组未通过模型输出校验，服务端按安全默认继续保留挂单') {
+  return {
+    management_group_id:groupId, action:'keep', market_alignment:'uncertain',
+    cancel_reason_code:null, reason, evidence_refs:[], validation_source:'server_fail_closed',
+  }
+}
+
+function safePositionEvaluation(groupId, thesisId, reason = '该管理组未通过模型输出校验，服务端按安全默认继续持有') {
+  return {
+    management_group_id:groupId, thesis_id:thesisId, action:'hold', market_alignment:'uncertain',
+    exit_reason_code:null, reversal_candidate:false, reason, evidence_refs:[],
+    validation_source:'server_fail_closed',
+  }
+}
+
 export function validatePositionManagementResponse(value, context, validateMarketPlan, {
   allowFailClosed = true, allowNonExecutionFailClosed = false,
 } = {}) {
@@ -470,36 +599,40 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (!group || seenPending.has(group.management_group_id)) throw new Error('pending_management_group_invalid')
       const action = String(item.action || '').toLowerCase()
       if (!['keep', 'cancel'].includes(action)) throw new Error('pending_action_invalid')
+      const marketAlignment = normalizeMarketAlignment(item?.market_alignment)
+      if (!marketAlignment) throw new Error('pending_market_alignment_required')
+      if (!groupCurrentFactsAvailable(group)) throw new Error('pending_current_facts_unavailable')
       const rawCancelReasonCode = item?.cancel_reason_code
       const hasCancelReasonCode = rawCancelReasonCode !== undefined && rawCancelReasonCode !== null
         && String(rawCancelReasonCode).trim() !== ''
-      if (action === 'cancel' && !hasCancelReasonCode) throw new Error('pending_cancel_reason_code_required')
+      if (action === 'cancel' && marketAlignment !== 'misaligned') {
+        throw new Error('pending_action_alignment_mismatch')
+      }
+      if (action === 'keep' && marketAlignment === 'misaligned') {
+        throw new Error('pending_action_alignment_mismatch')
+      }
+      if (action === 'cancel' && (!hasCancelReasonCode
+        || String(rawCancelReasonCode).trim().toLowerCase() !== 'market_misaligned')) {
+        throw new Error('pending_cancel_reason_code_required')
+      }
       if (action !== 'cancel' && hasCancelReasonCode
         && String(rawCancelReasonCode).trim().toLowerCase() !== 'none') {
         throw new Error('pending_keep_cancel_reason_code_invalid')
       }
       const cancelReasonCode = action === 'cancel'
         ? String(rawCancelReasonCode).trim().toLowerCase() : null
-      if (cancelReasonCode && !['expired', 'thesis_invalidated', 'risk_reduction', 'model_judgment'].includes(cancelReasonCode)) {
+      if (cancelReasonCode && cancelReasonCode !== 'market_misaligned') {
         throw new Error('pending_cancel_reason_code_invalid')
       }
       const reason = text(item.reason, 1000)
       if (!reason) throw new Error('pending_reason_required')
+      if (action === 'cancel' && NON_ALIGNMENT_REASON_PATTERN.test(reason)) {
+        throw new Error('pending_reason_not_market_alignment')
+      }
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
-      // Frozen thesis conditions are retained for audit/replay only.  A
-      // current-state cancellation may rely on the model's current evidence;
-      // it must not be rejected merely because an original condition was not
-      // triggered in this snapshot.
-      if (action === 'cancel' && cancelReasonCode !== 'expired'
-        && /(?:过期|到期|超时|expired|timeout)/i.test(reason)) {
-        throw new Error('pending_expiry_reason_code_mismatch')
-      }
-      if (cancelReasonCode === 'expired') {
-        const expired = (group.pending_order_facts || []).some(fact => fact?.is_expired === true)
-        if (!expired) throw new Error('pending_expired_evidence_required')
-      }
       seenPending.add(group.management_group_id)
       pendingEvaluations.push({ management_group_id:group.management_group_id, action,
+        market_alignment:marketAlignment,
         cancel_reason_code:cancelReasonCode, reason, evidence_refs:evidenceRefs })
     } catch (error) { errors.push({ section:'pending', group_id:item?.management_group_id || null, code:error.message }) }
   }
@@ -511,10 +644,19 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (String(item.thesis_id || '') !== String(group.thesis_id)) throw new Error('position_thesis_invalid')
       const action = String(item.action || '').toLowerCase()
       if (!['hold', 'exit'].includes(action)) throw new Error('position_action_invalid')
+      const marketAlignment = normalizeMarketAlignment(item?.market_alignment)
+      if (!marketAlignment) throw new Error('position_market_alignment_required')
+      if (!groupCurrentFactsAvailable(group)) throw new Error('position_current_facts_unavailable')
       const rawExitReasonCode = item?.exit_reason_code
       const hasExitReasonCode = rawExitReasonCode !== undefined && rawExitReasonCode !== null
         && String(rawExitReasonCode).trim() !== ''
       const exitReasonCode = hasExitReasonCode ? String(rawExitReasonCode).trim().toLowerCase() : null
+      if (action === 'exit' && marketAlignment !== 'misaligned') {
+        throw new Error('position_action_alignment_mismatch')
+      }
+      if (action === 'hold' && marketAlignment === 'misaligned') {
+        throw new Error('position_action_alignment_mismatch')
+      }
       if (action === 'exit' && (!exitReasonCode || !POSITION_EXIT_REASON_CODE_SET.has(exitReasonCode))) {
         throw new Error('position_exit_reason_code_required')
       }
@@ -523,10 +665,14 @@ export function validatePositionManagementResponse(value, context, validateMarke
       }
       const reason = text(item.reason, 1000)
       if (!reason) throw new Error('position_reason_required')
+      if (action === 'exit' && NON_ALIGNMENT_REASON_PATTERN.test(reason)) {
+        throw new Error('position_reason_not_market_alignment')
+      }
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
       seenPosition.add(group.management_group_id)
       positionEvaluations.push({
         management_group_id:group.management_group_id, thesis_id:group.thesis_id, action,
+        market_alignment:marketAlignment,
         exit_reason_code:exitReasonCode === 'null' ? null : exitReasonCode,
         reversal_candidate:Boolean(item.reversal_candidate),
         reason, evidence_refs:evidenceRefs,
@@ -537,19 +683,13 @@ export function validatePositionManagementResponse(value, context, validateMarke
   for (const [groupId] of pendingById) if (!seenPending.has(groupId)) {
     errors.push({ section:'pending', group_id:groupId, code:'evaluation_missing' })
     pendingEvaluations.push({
-      management_group_id:groupId, action:'keep',
-      cancel_reason_code:null,
-      reason:'该管理组未通过模型输出校验，服务端按安全默认继续保留挂单',
-      evidence_refs:[], validation_source:'server_fail_closed',
+      ...safePendingEvaluation(groupId),
     })
   }
   for (const [groupId, group] of positionById) if (!seenPosition.has(groupId)) {
     errors.push({ section:'position', group_id:groupId, code:'evaluation_missing' })
     positionEvaluations.push({
-      management_group_id:groupId, thesis_id:group.thesis_id, action:'hold',
-      exit_reason_code:null, reversal_candidate:false,
-      reason:'该管理组未通过模型输出校验，服务端按安全默认继续持有',
-      evidence_refs:[], validation_source:'server_fail_closed',
+      ...safePositionEvaluation(groupId, group.thesis_id),
     })
   }
 
@@ -647,16 +787,30 @@ export function resolveAutomaticExitConfirmation(current, previous = null) {
   if (action !== 'exit') {
     return { validation_status:'valid', confirmation_count:0, reset_reason:'automatic_inference_hold' }
   }
+  // The current inference must be an explicit market-misalignment exit. Keep
+  // this check ahead of legacy-history handling so an invalid current output
+  // can never become a first confirmation.
+  if (normalizeMarketAlignment(current?.market_alignment) !== 'misaligned') {
+    return { validation_status:'invalid', confirmation_count:0, reset_reason:'market_alignment_action_mismatch' }
+  }
   if (previousContract && previousContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
     return { validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' }
   }
   if (previous && !previousContract) {
     // Legacy/unknown evaluation rows are audit history only.  They cannot be
-    // paired with a v1.3 current-state inference for automatic execution.
+    // paired with a v1.4 current-state inference for automatic execution.
     return { validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' }
+  }
+  // Only a compatible v1.4 previous exit is eligible for the alignment
+  // validation below. Legacy/unknown previous rows were handled above and
+  // intentionally count only as audit history.
+  if (previous && String(previous?.action || '').toLowerCase() === 'exit'
+    && normalizeMarketAlignment(previous?.market_alignment) !== 'misaligned') {
+    return { validation_status:'invalid', confirmation_count:0, reset_reason:'market_alignment_action_mismatch' }
   }
   const previousExit = String(previous?.validation_status || '').toLowerCase() === 'valid'
     && String(previous?.action || '').toLowerCase() === 'exit'
+    && normalizeMarketAlignment(previous?.market_alignment) === 'misaligned'
   if (!previousExit) {
     return { validation_status:'valid', confirmation_count:1, reset_reason:null }
   }
@@ -731,6 +885,7 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
       contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
     }, {
       ...previous,
+      ...json(previous?.model_evaluation_json, {}),
       contract_version:managementContractVersion(json(previous?.model_evaluation_json, {})),
     })
     : { validation_status:validationStatus, confirmation_count:0, reset_reason:null }
@@ -886,7 +1041,7 @@ async function advanceAutomaticExitCandidate({ signalId, context, target, evalua
   if (task && task.status === 'CANDIDATE') {
     const taskContract = managementContractVersion(parseManagementJson(task.model_evaluation_json, {}))
     if (taskContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
-      // A pre-v1.3 candidate is audit history, never the second half of a
+      // A pre-v1.4 candidate is audit history, never the second half of a
       // current-state confirmation.  Retire it before creating a fresh task
       // so two historical candidates cannot execute the same position.
       const now = beijingNow()
@@ -937,6 +1092,33 @@ async function advanceAutomaticExitCandidate({ signalId, context, target, evalua
   return updated
 }
 
+function normalizePersistedManagementEvaluation(evaluation, group, section) {
+  const action = String(evaluation?.action || '').trim().toLowerCase()
+  const alignment = normalizeMarketAlignment(evaluation?.market_alignment)
+  const reason = text(evaluation?.reason, 1000)
+  const reasonCode = String(section === 'position'
+    ? evaluation?.exit_reason_code : evaluation?.cancel_reason_code || '').trim().toLowerCase()
+  const invalid = !groupCurrentFactsAvailable(group)
+    || !alignment
+    || (section === 'position'
+      ? !(['hold', 'exit'].includes(action)
+        && ((action === 'exit' && alignment === 'misaligned' && reasonCode === 'market_misaligned')
+          || (action === 'hold' && ['aligned', 'uncertain'].includes(alignment)
+            && (!reasonCode || reasonCode === 'null' || reasonCode === 'none'))))
+      : !(['keep', 'cancel'].includes(action)
+        && ((action === 'cancel' && alignment === 'misaligned' && reasonCode === 'market_misaligned')
+          || (action === 'keep' && ['aligned', 'uncertain'].includes(alignment)
+            && (!reasonCode || reasonCode === 'null' || reasonCode === 'none')))))
+    || ((action === 'exit' || action === 'cancel') && NON_ALIGNMENT_REASON_PATTERN.test(reason))
+  if (!invalid) return { ...evaluation, market_alignment:alignment }
+  if (section === 'position') return safePositionEvaluation(
+    evaluation?.management_group_id, group?.thesis_id,
+    '当前终端事实不可用或模型理由不符合行情一致性合同，服务端按安全默认继续持有',
+  )
+  return safePendingEvaluation(evaluation?.management_group_id,
+    '当前终端事实不可用或模型理由不符合行情一致性合同，服务端按安全默认继续保留挂单')
+}
+
 export async function persistPositionManagementEvaluations({
   signalId, context, management, inferenceSource = 'manual_analysis', synchronousPendingCancelGroupIds = null,
 } = {}) {
@@ -963,6 +1145,9 @@ export async function persistPositionManagementEvaluations({
     ? synchronousPendingCancelGroupIds
     : new Set(Array.isArray(synchronousPendingCancelGroupIds) ? synchronousPendingCancelGroupIds : [])
   const pendingCandidates = pendingEvaluations
+    .map(item => normalizePersistedManagementEvaluation(item,
+      (context.pending_groups || []).find(group => String(group.management_group_id) === String(item?.management_group_id)),
+      'pending'))
     .filter(item => item.action === 'cancel'
       && !synchronousGroups.has(String(item?.management_group_id || '')))
     .map(item => ({ ...item, taskType:'pending_cancel' }))
@@ -976,6 +1161,9 @@ export async function persistPositionManagementEvaluations({
   const created = []
 
   for (const evaluation of positionEvaluations) {
+    const normalizedEvaluation = normalizePersistedManagementEvaluation(evaluation,
+      (context.position_groups || []).find(group => String(group.management_group_id) === String(evaluation?.management_group_id)),
+      'position')
     const targets = (context._targets.get(evaluation.management_group_id) || [])
       .filter(target => targetMatchesPositionManagementTask(target, 'position_exit'))
     for (const target of targets) {
@@ -983,13 +1171,14 @@ export async function persistPositionManagementEvaluations({
         modes.byUser.get(Number(target.user_id)) || 'auto_exit', modes.control)
       if (mode === 'display') continue
       const record = await recordAutomaticPositionEvaluation({
-        signalId, context, target, evaluation, inferenceSource,
+        signalId, context, target, evaluation:normalizedEvaluation, inferenceSource,
       })
       if (!record) continue
       if (inferenceSource !== 'automatic_scheduler') continue
       const task = record.validation_status !== 'valid' || record.action !== 'exit'
-        ? await resetAutomaticExitCandidate(target, record, evaluation)
-        : await advanceAutomaticExitCandidate({ signalId, context, target, evaluation, mode, record })
+        ? await resetAutomaticExitCandidate(target, record, normalizedEvaluation)
+        : await advanceAutomaticExitCandidate({ signalId, context, target,
+          evaluation:normalizedEvaluation, mode, record })
       if (task) created.push(task)
     }
   }
@@ -1469,6 +1658,10 @@ export function buildSignalManagementActions({
         thesis_id:text(spec.thesis_id, 80) || text(evaluation?.thesis_id, 80) || null,
         signal_id:signalNumber,
         evaluation_id:managementNumber(evaluation?.id),
+        market_alignment:normalizeMarketAlignment(spec.market_alignment)
+          || normalizeMarketAlignment(evaluation?.market_alignment) || null,
+        cancel_reason_code:spec.task_type === 'pending_cancel'
+          ? (String(spec.cancel_reason_code || '').toLowerCase() || null) : null,
         exit_reason_code:spec.task_type === 'position_exit'
           ? (String(spec.exit_reason_code || '').toLowerCase() || null) : null,
         ticket:targetTicket,

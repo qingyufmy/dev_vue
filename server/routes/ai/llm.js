@@ -99,6 +99,34 @@ export function compactInferenceMarketPayload(payload) {
   return compacted
 }
 
+const POSITION_MANAGEMENT_NON_MARKET_PENDING_FIELDS = new Set([
+  'pending_valid_until', 'valid_until_utc_msc', 'valid_until_utc', 'valid_until_terminal',
+  'terminal_timezone_offset_minutes', 'is_expired', 'remaining_seconds', 'expires_at',
+  'expiration', 'expiration_time', 'time_expiration',
+])
+
+function stripPositionManagementPendingTiming(rows) {
+  if (!Array.isArray(rows)) return rows
+  return rows.map(row => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return row
+    return Object.fromEntries(Object.entries(row)
+      .filter(([key]) => !POSITION_MANAGEMENT_NON_MARKET_PENDING_FIELDS.has(key.toLowerCase())))
+  })
+}
+
+function stripPositionManagementNonMarketInputs(payload) {
+  if (!payload || typeof payload !== 'object') return payload
+  if (Array.isArray(payload.pending_orders)) {
+    payload.pending_orders = stripPositionManagementPendingTiming(payload.pending_orders)
+  }
+  const referencePortfolio = payload.strategy_reference_portfolio
+  if (referencePortfolio && typeof referencePortfolio === 'object'
+    && Array.isArray(referencePortfolio.pending_orders)) {
+    referencePortfolio.pending_orders = stripPositionManagementPendingTiming(referencePortfolio.pending_orders)
+  }
+  return payload
+}
+
 export function formatPendingValidUntilUtc(validMinutes, nowMs = Date.now()) {
   const minutes = Math.min(Math.max(parseInt(validMinutes) || 240, 1), 1440)
   return new Date(nowMs + minutes * 60000).toISOString().replace('T', ' ').substring(0, 19)
@@ -1136,8 +1164,9 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const pendingRule = strategySchema.hasPending ? `\n\n${PENDING_LIFECYCLE_RULE}` : ''
     const positionManagementRule = positionManagementEnabled ? `
 
-## 持仓管理 v1.3 强制边界
-输入中的 position_management_context 由服务端生成。你必须基于本轮当前行情、当前持仓或挂单事实、当前止损止盈及当前策略证据，完整返回每一个挂单管理组和持仓管理组；只能原样引用给出的 management_group_id、thesis_id 和 evidence_refs。原始信号的交易论点、失效条件及原始止损止盈只用于历史说明，不是本轮继续持有、平仓或撤单的硬门槛。挂单动作只允许 keep 或 cancel；cancel 时必须填写 cancel_reason_code，仅允许 expired | thesis_invalidated | risk_reduction | model_judgment，其中 expired 必须与对应组服务端 is_expired=true 一致，不能使用 timestamp、MT4/MT5 墙钟或叙述自行比较。持仓动作只允许 hold 或 exit；exit 时必须填写 exit_reason_code，仅允许 current_thesis_invalidated | trend_reversal | risk_reduction | model_judgment，hold 时该字段必须为 null。所有结论必须引用本轮允许的当前证据。禁止输出 replace、reverse、ticket、手数或任何账户身份。reversal_candidate 只表示解释性判断，不是执行命令。新建仓、挂单评估、持仓评估彼此独立；新建仓字段无效时也必须继续完成其他评估。` : ''
+## 持仓管理 v1.4 强制边界
+输入中的 position_management_context 由服务端生成。每个管理组都包含原入场 thesis（core_entry_reason、entry_method、decision_timeframe、direction）以及去身份化的当前终端事实：持仓方向、入场价格、当前价格、真实 actual_stop_loss/actual_take_profit、原始止损止盈、订单类型和开仓/创建信息；挂单使用触发价格。actual_stop_loss 与 actual_take_profit 只表示持仓事实，绝不是盈利保护、保本、止损止盈触发或接近的退出依据；不要把存在止损解释为盈利保护。current_facts_status=unavailable 或事实不完整时必须按 uncertain + hold/keep，不能退出或撤单。不得推测账户身份、余额、权益、手数、浮盈浮亏或盈亏。
+你必须仅判断当前行情是否仍与该持仓方向/原入场逻辑一致。每个挂单和持仓都必须完整返回；market_alignment 只能为 aligned | misaligned | uncertain。aligned 或 uncertain 必须分别输出 keep 或 hold；只有明确 market_alignment=misaligned 才能输出 cancel 或 exit，并且唯一 reason code 必须是 market_misaligned。禁止因到期、有效期、盈利保护、保本、止损/止盈触发或接近、浮盈浮亏、盈亏、回撤、风险降低或泛化 model judgment 撤单/平仓；挂单到期由服务端确定性链路处理，不在本合同内。不能用替代、反向、票号、手数或任何账户信息。reversal_candidate 只表示解释性判断，不是执行命令。` : ''
     const strategyPolicyRule = typeof config._strategyPolicyPrompt === 'string' && config._strategyPolicyPrompt
       ? `\n\n${config._strategyPolicyPrompt}` : ''
     const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + platformExperience + personalMemoryRule + strategyPolicyRule + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
@@ -1186,6 +1215,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       aiPayload.strategy_context = ctx
     }
     if (positionManagementEnabled) {
+      aiPayload = stripPositionManagementNonMarketInputs(aiPayload)
       aiPayload.position_management_context = {
         contract_version:positionManagementContext.contract_version,
         as_of:positionManagementContext.as_of,
@@ -1315,7 +1345,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
           position_management_groups:(positionManagementContext.position_groups || []).map(group => ({
             management_group_id:group.management_group_id,
             thesis_id:group.thesis_id,
-            allowed_condition_ids:(group.frozen_conditions || []).map(condition => condition.condition_id),
+            allowed_evidence_refs:[...(group.allowed_evidence_refs || [])],
           })),
         } : null,
       },
