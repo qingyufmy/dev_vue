@@ -1479,10 +1479,15 @@ export function normalizeAiSignal(parsed, config, market) {
   parsed.risk_factors = cleanList(parsed.risk_factors)
   parsed.analysis = cleanText(parsed.analysis, 4000)
   parsed.reasoning = cleanText(parsed.reasoning, 4000)
-  const availableExperienceIds = [...new Set((config?._experienceSelection?.selectedItemIds || [])
+  const configuredExperienceIds = [...new Set((config?._experienceSelection?.selectedItemIds || [])
     .map(Number).filter(id => Number.isInteger(id) && id > 0))]
-  const availableExperienceRefs = [...new Set((config?._experienceSelection?.selectedRefs || availableExperienceIds.map(id => `item:${id}`))
-    .map(value => String(value || '').trim()).filter(Boolean))]
+  const availableExperienceRefs = [...new Set((config?._experienceSelection?.selectedRefs || configuredExperienceIds.map(id => `item:${id}`))
+    .map(value => String(value || '').trim())
+    .filter(value => /^(?:platform|short|long|summary|item):\d+$/.test(value)))]
+  const availableExperienceIds = [...new Set([
+    ...(config?._experienceSelection?.selectedItemIds || []),
+    ...availableExperienceRefs.map(ref => Number(ref.split(':').at(-1))),
+  ].map(Number).filter(id => Number.isInteger(id) && id > 0))]
   const allowedExperienceIds = new Set(availableExperienceIds)
   const usage = parsed.experience_usage && typeof parsed.experience_usage === 'object' ? parsed.experience_usage : {}
   const validUsageIds = value => [...new Set((Array.isArray(value) ? value : []).map(Number)
@@ -1491,28 +1496,49 @@ export function normalizeAiSignal(parsed, config, market) {
   const allowedExperienceRefs = new Set(availableExperienceRefs)
   const validUsageRefs = value => [...new Set((Array.isArray(value) ? value : []).map(item => String(item || '').trim())
     .filter(item => allowedExperienceRefs.has(item)))]
+  const refsById = new Map()
+  for (const ref of availableExperienceRefs) {
+    const id = Number(ref.split(':').at(-1))
+    if (!Number.isInteger(id) || id <= 0) continue
+    const refs = refsById.get(id) || []
+    refs.push(ref)
+    refsById.set(id, refs)
+  }
+  const uniqueRefsForIds = ids => ids.flatMap(id => {
+    const matches = refsById.get(Number(id)) || []
+    return matches.length === 1 ? matches : []
+  })
   let usedExperienceRefs = validUsageRefs(usage.used_refs)
   let usedIds = usedExperienceIds
+  // Explicit legal references are authoritative. Legacy numeric ids only
+  // fill the corresponding ref when that id has exactly one available scope;
+  // short/long (or any other same-id) collisions stay unresolved.
+  usedExperienceRefs = [...new Set([...usedExperienceRefs, ...uniqueRefsForIds(usedIds)])]
   if (!usedExperienceRefs.length && !usedIds.length && availableExperienceRefs.length && /采用|使用|参考了/.test(String(usage.influence || ''))) {
     const influenceText = String(usage.influence || '')
     const directRefs = availableExperienceRefs.filter(ref => influenceText.includes(ref))
     const mentionedIds = [...influenceText.matchAll(/#\s*(\d+)/g)].map(match => Number(match[1]))
     const unambiguousRefs = mentionedIds.flatMap(id => {
-      const matches = availableExperienceRefs.filter(ref => Number(ref.split(':').at(-1)) === id)
+      const matches = refsById.get(id) || []
       return matches.length === 1 ? matches : []
     })
     usedExperienceRefs = [...new Set([...directRefs, ...unambiguousRefs])]
     usedIds = [...new Set(mentionedIds.filter(id => allowedExperienceIds.has(id)))]
   }
+  const rejectedIds = validUsageIds(usage.rejected_ids).filter(id => !usedIds.includes(id))
+  const rejectedRefs = [...new Set([
+    ...validUsageRefs(usage.rejected_refs),
+    ...uniqueRefsForIds(rejectedIds),
+  ])].filter(ref => !usedExperienceRefs.includes(ref))
   const influence = cleanText(usage.influence, 400)
   parsed.experience_usage = {
     source:config?._experienceSelection?.source || null,
     considered_ids:availableExperienceIds,
     used_ids:usedIds,
-    rejected_ids:validUsageIds(usage.rejected_ids).filter(id => !usedIds.includes(id)),
+    rejected_ids:rejectedIds,
     considered_refs:availableExperienceRefs,
     used_refs:usedExperienceRefs,
-    rejected_refs:validUsageRefs(usage.rejected_refs).filter(ref => !usedExperienceRefs.includes(ref)),
+    rejected_refs:rejectedRefs,
     influence:availableExperienceRefs.length ? influence : '',
   }
   const bullishRaw = Number(parsed.bullish_score)

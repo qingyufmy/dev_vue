@@ -103,6 +103,58 @@ describe('platform strategy experience boundary', () => {
     expect(result.retrievalContext).toMatchObject({ market_regime:'downward_exhaustion', trend_direction:'down', chan_divergence:'bottom' })
   })
 
+  it('records bounded candidate exclusion reasons without changing selected ids', async () => {
+    db.queryOne.mockResolvedValue({ mode:'active', max_items:1, runtime_token_budget:800, policy_version:4 })
+    db.queryAll.mockResolvedValue([
+      { id:4, lesson_text:'等待确认', platform_version:2,
+        applicability_json:JSON.stringify({ applicable_when:{ symbols:['xauusd'], timeframes:['h1'] } }) },
+      { id:5, lesson_text:'第二条经验', platform_version:1,
+        applicability_json:JSON.stringify({ applicable_when:{ symbols:['xauusd'], timeframes:['h1'] } }) },
+      { id:6, lesson_text:'其他品种经验', platform_version:3,
+        applicability_json:JSON.stringify({ applicable_when:{ symbols:['eurusd'], timeframes:['h1'] } }) },
+    ])
+    db.queryRun.mockResolvedValue({ insertId:22, changes:1 })
+    const result = await retrievePlatformExperience({ strategyId:3, symbol:'XAUUSD', timeframe:'H1' })
+    expect(result.selectedItemIds).toEqual([4])
+    expect(result.selectionDetails).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id:4, eligible:true, selected:true, exclusion_reason:'selected' }),
+      expect.objectContaining({ id:5, eligible:true, selected:false, exclusion_reason:'max_items_reached' }),
+      expect.objectContaining({ id:6, eligible:false, selected:false, exclusion_reason:'context_not_eligible' }),
+    ]))
+    const details = JSON.parse(db.queryRun.mock.calls.at(-1)[1][7])
+    expect(details).toHaveLength(3)
+    expect(details[0]).toHaveProperty('reasons')
+    expect(details[0]).not.toHaveProperty('lesson_text')
+  })
+
+  it('records budget exclusions separately from context mismatches', async () => {
+    db.queryOne.mockResolvedValue({ mode:'shadow', max_items:5, runtime_token_budget:1, policy_version:4 })
+    db.queryAll.mockResolvedValue([{ id:4, lesson_text:'这条经验必须因令牌预算被淘汰', platform_version:2,
+      applicability_json:JSON.stringify({ applicable_when:{ symbols:['xauusd'], timeframes:['h1'] } }) }])
+    db.queryRun.mockResolvedValue({ insertId:23, changes:1 })
+    const result = await retrievePlatformExperience({ strategyId:3, symbol:'XAUUSD', timeframe:'H1' })
+    expect(result.selectedItemIds).toEqual([])
+    expect(result.selectionDetails[0]).toMatchObject({ id:4, eligible:true, selected:false, exclusion_reason:'token_budget_exceeded' })
+  })
+
+  it('keeps selected candidates in bounded details even when they follow twenty unselected rows', async () => {
+    db.queryOne.mockResolvedValue({ mode:'shadow', max_items:1, runtime_token_budget:800, policy_version:4 })
+    const unselected = Array.from({ length:20 }, (_, index) => ({
+      id:index + 1, lesson_text:`其他品种经验 ${index + 1}`, platform_version:1,
+      applicability_json:JSON.stringify({ applicable_when:{ symbols:['EURUSD'], timeframes:['H1'] } }),
+    }))
+    db.queryAll.mockResolvedValue([...unselected, { id:99, lesson_text:'当前品种经验', platform_version:1,
+      applicability_json:JSON.stringify({ applicable_when:{ symbols:['XAUUSD'], timeframes:['H1'] } }) }])
+    db.queryRun.mockResolvedValue({ insertId:24, changes:1 })
+    const result = await retrievePlatformExperience({ strategyId:3, symbol:'XAUUSD', timeframe:'H1' })
+    expect(result.selectedItemIds).toEqual([99])
+    expect(result.selectionDetails.length).toBeLessThanOrEqual(20)
+    expect(result.selectionDetails.find(detail => detail.id === 99)).toMatchObject({ selected:true, exclusion_reason:'selected' })
+    const details = JSON.parse(db.queryRun.mock.calls.at(-1)[1][7])
+    expect(details.length).toBeLessThanOrEqual(20)
+    expect(details.find(detail => detail.id === 99)).toMatchObject({ selected:true })
+  })
+
   it('derives a stable pre-inference retrieval context without another model call', () => {
     expect(buildPlatformExperienceRetrievalContext({ symbol:'XAUUSD', timeframe:'M15', allowedEntryMethods:['market'],
       market:{ strategy_score:{ momentum_alignment:1, trend_strength:0.7 }, sma_distance_pct:0.2, volatility_pct:0.2 } }))
@@ -143,6 +195,9 @@ describe('platform strategy experience boundary', () => {
     const migration = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
     expect(llm).toContain("config._market_only && typeof config._platformExperienceContext === 'string'")
     expect(scheduler).toContain('retrievePlatformExperience')
+    expect(scheduler).toContain('const snapshotId = await persistInferenceSnapshotTx(run, {')
+    expect(scheduler).toContain('return { signalId:insertedSignalId, snapshotId }')
+    expect(scheduler).toContain('attachPlatformExperienceSignal(memory.logId, signalId, snapshotId)')
     expect(migration).toContain('077_platform_strategy_experience')
     expect(migration).toContain("ss.memory_mode = 'platform_only'")
   })

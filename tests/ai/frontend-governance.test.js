@@ -570,6 +570,22 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('id="platformExperienceEvaluation"')
   })
 
+  it('shows active and shadow retrieval facts without turning an empty window into 0% effect', () => {
+    expect(app).toContain('const total = Number(retrieval.total || 0)')
+    expect(app).toContain('const activeTotal = Number(retrieval.active_total || 0)')
+    expect(app).toContain('const shadowTotal = Number(retrieval.shadow_total || 0)')
+    expect(app).toContain('return count > 0 ? `${Math.round(Number(hits || 0) / count * 100)}%` : "暂无检索"')
+    expect(app).toContain('${Number(row.hits || 0)} / ${Number(row.retrievals || 0)}')
+    expect(css).toContain('.platform-evaluation-breakdown { display: flex;')
+    expect(css).toContain('.platform-evaluation-breakdown { flex-direction: column;')
+    const versions = [
+      html.match(/\/ai\/styles\.css\?v=([^"']+)/)?.[1],
+      html.match(/\/ai\/responsive\.css\?v=([^"']+)/)?.[1],
+      html.match(/\/ai\/app\.js\?v=([^"']+)/)?.[1],
+    ]
+    expect(new Set(versions).size).toBe(1)
+  })
+
   it('lets private strategy owners explicitly opt into position and pending-order context', () => {
     expect(html).toContain('id="strategyIncludePortfolioContext"')
     expect(html).toContain('仅适用于你的私有策略')

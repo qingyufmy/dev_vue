@@ -57,6 +57,25 @@ describe('signal presentation', () => {
     expect(result.experience_usage).toEqual({ source:'platform', considered_ids:[3, 4], used_ids:[4], rejected_ids:[3], influence:'等待确认' })
   })
 
+  it('backfills only uniquely scoped refs for legacy history ids', () => {
+    const result = normalizeDecisionFields({ experience_usage:{ source:'personal',
+      considered_ids:[7, 8], used_ids:[7, 8, 99], rejected_ids:[7, 8],
+      considered_refs:['short:7', 'long:7', 'short:8', 'invalid:9'],
+      influence:'采用短期记忆' } })
+    expect(result.experience_usage).toMatchObject({
+      considered_refs:['short:7', 'long:7', 'short:8'],
+      used_ids:[7, 8], used_refs:['short:8'], rejected_ids:[], rejected_refs:[],
+    })
+  })
+
+  it('keeps explicit refs while filtering illegal historical refs', () => {
+    const result = normalizeDecisionFields({ experience_usage:{ source:'platform',
+      considered_ids:[7], used_ids:[7], used_refs:['long:7', 'item:99', 'bad:7'],
+      considered_refs:['short:7', 'long:7'], rejected_refs:['short:7', 'nope:7'] } })
+    expect(result.experience_usage.used_refs).toEqual(['long:7'])
+    expect(result.experience_usage.rejected_refs).toEqual(['short:7'])
+  })
+
   it('normalizes direction inclination without presenting it as confidence', () => {
     expect(normalizeDecisionFields({ bullish_score: 2, bearish_score: 1 })).toMatchObject({ bullish_score: 66.7, bearish_score: 33.3 })
     expect(normalizeDecisionFields({ bullish_score: 'bad', bearish_score: 50 })).toMatchObject({ bullish_score: null, bearish_score: null })

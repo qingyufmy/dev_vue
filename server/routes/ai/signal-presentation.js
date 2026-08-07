@@ -51,25 +51,46 @@ function experienceUsage(signal) {
   const usage = signal?.experience_usage && typeof signal.experience_usage === 'object' ? signal.experience_usage : {}
   const ids = value => [...new Set((Array.isArray(value) ? value : []).map(Number)
     .filter(id => Number.isInteger(id) && id > 0))].slice(0, 10)
-  const considered = ids(usage.considered_ids)
-  const allowed = new Set(considered)
-  const used = ids(usage.used_ids).filter(id => allowed.has(id))
   const refs = value => [...new Set((Array.isArray(value) ? value : []).map(item => String(item || '').trim())
     .filter(item => /^(?:platform|short|long|summary|item):\d+$/.test(item)))].slice(0, 10)
   const consideredRefs = refs(usage.considered_refs)
+  const considered = ids([...(Array.isArray(usage.considered_ids) ? usage.considered_ids : []), ...consideredRefs.map(ref => Number(ref.split(':').at(-1)))])
+  const allowed = new Set(considered)
   const allowedRefs = new Set(consideredRefs)
-  const usedRefs = refs(usage.used_refs).filter(ref => allowedRefs.has(ref))
+  const refsById = new Map()
+  for (const ref of consideredRefs) {
+    const id = Number(ref.split(':').at(-1))
+    const matches = refsById.get(id) || []
+    matches.push(ref)
+    refsById.set(id, matches)
+  }
+  const uniqueRefsForIds = value => ids(value).flatMap(id => {
+    const matches = refsById.get(Number(id)) || []
+    return matches.length === 1 ? matches : []
+  })
+  const used = ids(usage.used_ids).filter(id => allowed.has(id))
+  const explicitUsedRefs = refs(usage.used_refs).filter(ref => allowedRefs.has(ref))
+  const usedRefs = [...new Set([...explicitUsedRefs, ...uniqueRefsForIds(used)])]
+  for (const ref of usedRefs) {
+    const id = Number(ref.split(':').at(-1))
+    if (allowed.has(id) && !used.includes(id)) used.push(id)
+  }
+  const rejectedIds = ids(usage.rejected_ids).filter(id => allowed.has(id) && !used.includes(id))
+  const rejectedRefs = [...new Set([
+    ...refs(usage.rejected_refs).filter(ref => allowedRefs.has(ref)),
+    ...uniqueRefsForIds(rejectedIds),
+  ])].filter(ref => !usedRefs.includes(ref))
   const result = {
     source:usage.source === 'platform' || usage.source === 'personal' ? usage.source : null,
     considered_ids:considered,
     used_ids:used,
-    rejected_ids:ids(usage.rejected_ids).filter(id => allowed.has(id) && !used.includes(id)),
+    rejected_ids:rejectedIds,
     influence:cleanText(usage.influence, 400),
   }
   if (consideredRefs.length) {
     result.considered_refs = consideredRefs
     result.used_refs = usedRefs
-    result.rejected_refs = refs(usage.rejected_refs).filter(ref => allowedRefs.has(ref) && !usedRefs.includes(ref))
+    result.rejected_refs = rejectedRefs
   }
   return result
 }

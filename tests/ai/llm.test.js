@@ -201,6 +201,26 @@ describe('experience usage normalization', () => {
     { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
     expect(result.experience_usage.used_refs).toEqual(['long:12'])
   })
+
+  it('maps legacy ids to refs only when the available ref is unique', () => {
+    const unique = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ used_ids:[8, 999], rejected_ids:[7, 8, 999], influence:'采用平台记忆' } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'platform', selectedItemIds:[7, 8], selectedRefs:['short:7', 'long:7', 'platform:8', 'bad:9'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(unique.experience_usage).toMatchObject({
+      considered_refs:['short:7', 'long:7', 'platform:8'],
+      used_ids:[8], used_refs:['platform:8'], rejected_ids:[7], rejected_refs:[],
+    })
+  })
+
+  it('keeps an explicit legal ref when its numeric id is ambiguous', () => {
+    const result = normalizeAiSignal({ signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+      experience_usage:{ used_ids:[7], used_refs:['long:7', 'unknown:7'] } },
+    { _allowed_entry_methods:['market'], _experienceSelection:{ source:'personal', selectedItemIds:[7], selectedRefs:['short:7', 'long:7'] } },
+    { strategy_score:{ trend_strength:0.2 }, volatility_pct:0.1 })
+    expect(result.experience_usage.used_ids).toEqual([7])
+    expect(result.experience_usage.used_refs).toEqual(['long:7'])
+  })
 })
 
 describe('model comparison signal isolation', () => {

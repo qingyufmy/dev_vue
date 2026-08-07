@@ -4402,11 +4402,21 @@ function renderPlatformExperience(items = [], policies = [], evaluation = {}) {
   const evaluationHost = $("platformExperienceEvaluation");
   if (evaluationHost) {
     const retrieval = evaluation.retrieval || {};
-    const rate = `${Math.round(Number(retrieval.shadow_hit_rate || 0) * 100)}%`;
+    const ratioLabel = (hits, total) => {
+      const count = Number(total || 0);
+      return count > 0 ? `${Math.round(Number(hits || 0) / count * 100)}%` : "暂无检索";
+    };
+    const total = Number(retrieval.total || 0);
+    const hits = Number(retrieval.hits || 0);
+    const activeTotal = Number(retrieval.active_total || 0);
+    const activeHits = Number(retrieval.active_hits || 0);
+    const shadowTotal = Number(retrieval.shadow_total || 0);
+    const shadowHits = Number(retrieval.shadow_hits || 0);
     evaluationHost.innerHTML = `<section class="platform-governance-card">
       <header class="platform-governance-head"><div><span class="review-section-kicker">效果评估</span><h3>最近 ${Number(evaluation.window_days || 30)} 天</h3><p>命中率只衡量匹配效果，不代表收益提升。</p></div></header>
-      <div class="platform-evaluation-metrics"><div><span>影子检索</span><strong>${Number(retrieval.shadow_total || 0)}</strong></div><div><span>命中次数</span><strong>${Number(retrieval.shadow_hits || 0)}</strong></div><div><span>影子命中率</span><strong>${rate}</strong></div></div>
-      <div class="platform-strategy-evaluation">${(evaluation.strategies || []).slice(0, 8).map(row => `<div><span>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</span><strong>${Number(row.shadow_hits || 0)} / ${Number(row.shadow_retrievals || 0)}</strong></div>`).join("") || '<div class="empty-inline">尚无可评估的检索记录</div>'}</div>
+      <div class="platform-evaluation-metrics"><div><span>检索总次数</span><strong>${total}</strong></div><div><span>命中次数</span><strong>${hits}</strong></div><div><span>综合命中率</span><strong>${ratioLabel(hits, total)}</strong></div></div>
+      <div class="platform-evaluation-breakdown"><span>正式使用 <strong>${activeHits} / ${activeTotal}</strong> · ${ratioLabel(activeHits, activeTotal)}</span><span>影子评估 <strong>${shadowHits} / ${shadowTotal}</strong> · ${ratioLabel(shadowHits, shadowTotal)}</span></div>
+      <div class="platform-strategy-evaluation">${(evaluation.strategies || []).slice(0, 8).map(row => `<div><span>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</span><strong>${Number(row.hits || 0)} / ${Number(row.retrievals || 0)}</strong></div>`).join("") || '<div class="empty-inline">尚无可评估的检索记录</div>'}</div>
     </section>`;
   }
 
@@ -7262,13 +7272,35 @@ function experienceRefLabel(value) {
 
 function renderExperienceUsage(signal, usage = {}) {
   if (!canViewSignalExperienceUsage(signal, usage)) return "";
-  const consideredRefs = Array.isArray(usage.considered_refs) ? usage.considered_refs : [];
-  const usedRefs = Array.isArray(usage.used_refs) ? usage.used_refs : [];
-  const rejectedRefs = Array.isArray(usage.rejected_refs) ? usage.rejected_refs : [];
-  const considered = consideredRefs.length ? consideredRefs : (Array.isArray(usage.considered_ids) ? usage.considered_ids : []);
+  const refPattern = /^(?:platform|short|long|summary|item):(\d+)$/;
+  const validRefs = value => [...new Set((Array.isArray(value) ? value : [])
+    .map(item => String(item || "").trim()).filter(item => refPattern.test(item)))];
+  const consideredRefs = validRefs(usage.considered_refs);
+  const consideredIds = [...new Set((Array.isArray(usage.considered_ids) ? usage.considered_ids : [])
+    .map(Number).filter(id => Number.isInteger(id) && id > 0))];
+  const refsById = new Map();
+  consideredRefs.forEach(ref => {
+    const id = Number(ref.match(refPattern)[1]);
+    const refs = refsById.get(id) || [];
+    refs.push(ref);
+    refsById.set(id, refs);
+  });
+  const uniqueRefsForIds = ids => (Array.isArray(ids) ? ids : []).flatMap(id => {
+    const matches = refsById.get(Number(id)) || [];
+    return matches.length === 1 ? matches : [];
+  });
+  const explicitUsedRefs = validRefs(usage.used_refs).filter(ref => consideredRefs.includes(ref));
+  const usedIds = consideredIds.filter(id => (Array.isArray(usage.used_ids) ? usage.used_ids : []).map(Number).includes(id));
+  const usedRefs = [...new Set([...explicitUsedRefs, ...uniqueRefsForIds(usedIds)])];
+  const used = consideredRefs.length ? usedRefs : usedIds;
+  const rejectedIds = consideredIds.filter(id => (Array.isArray(usage.rejected_ids) ? usage.rejected_ids : []).map(Number).includes(id) && !usedIds.includes(id));
+  const rejectedRefs = [...new Set([
+    ...validRefs(usage.rejected_refs).filter(ref => consideredRefs.includes(ref)),
+    ...uniqueRefsForIds(rejectedIds),
+  ])].filter(ref => !usedRefs.includes(ref));
+  const considered = consideredRefs.length ? consideredRefs : consideredIds;
   if (!considered.length) return "";
-  const used = consideredRefs.length ? usedRefs : (Array.isArray(usage.used_ids) ? usage.used_ids : []);
-  const rejected = consideredRefs.length ? rejectedRefs : (Array.isArray(usage.rejected_ids) ? usage.rejected_ids : []);
+  const rejected = consideredRefs.length ? rejectedRefs : rejectedIds;
   const source = usage.source === "platform" ? "平台记忆" : "个人记忆";
   const adopted = (consideredRefs.length ? usedRefs : used.map(id => `item:${Number(id)}`)).map(experienceRefLabel);
   return `<section class="analysis-experience-usage">

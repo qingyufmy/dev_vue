@@ -2493,7 +2493,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     const decisionJson = JSON.stringify(decision)
     const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'persist', label: '校验并保存推理结果', progress_percent: 84 })
-    const signalId = await withTransaction(async run => {
+    const persisted = await withTransaction(async run => {
       if (typeof modelTaskTracker.assertOwnedTx === 'function') {
         await modelTaskTracker.assertOwnedTx(run)
         const taskResult = await run(`SELECT task_deadline_at_utc_msc
@@ -2532,7 +2532,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       ])
       const insertedSignalId = signalResult.insertId
       if (!renderedEvidence) throw new Error('inference_evidence_missing')
-      await persistInferenceSnapshotTx(run, {
+      const snapshotId = await persistInferenceSnapshotTx(run, {
         signalId: insertedSignalId,
         strategyId: promptTypeId,
         strategyVersion: Number(pt.version || 1),
@@ -2588,8 +2588,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
           deliveryParams
         )
       }
-      return insertedSignalId
+      return { signalId:insertedSignalId, snapshotId }
     })
+    const signalId = persisted.signalId
+    const snapshotId = persisted.snapshotId
     signal.id = signalId
     if (!executionWindowExpired && signal._position_management && positionManagementContext) {
       try {
@@ -2608,10 +2610,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       }
     }
     if (isPrivate && memory.logId) {
-      try { await attachMemoryInjectionSignal(memory.logId, inferenceUserId, signalId) }
+      try { await attachMemoryInjectionSignal(memory.logId, inferenceUserId, signalId, snapshotId) }
       catch (error) { l(`memory attribution failed (${error.message})`) }
     } else if (!isPrivate && memory.logId) {
-      try { await attachPlatformExperienceSignal(memory.logId, signalId) }
+      try { await attachPlatformExperienceSignal(memory.logId, signalId, snapshotId) }
       catch (error) { l(`platform memory attribution failed (${error.message})`) }
     }
     signal.symbol = symbol
