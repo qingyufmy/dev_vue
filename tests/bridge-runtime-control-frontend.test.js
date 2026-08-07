@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 const html = fs.readFileSync(new URL('../public/ai/index.html', import.meta.url), 'utf8')
 const css = fs.readFileSync(new URL('../public/ai/styles.css', import.meta.url), 'utf8')
 const js = fs.readFileSync(new URL('../public/ai/app.js', import.meta.url), 'utf8')
+const normalizedJs = js.replace(/\r\n?/g, '\n')
 
 describe('bridge control center frontend contract', () => {
   it('renders status, latency, terminal detail and explicit start or pause controls', () => {
@@ -38,7 +39,7 @@ describe('bridge control center frontend contract', () => {
 
   it('switches an ordinary paused bridge to observer data without waiting for disconnect timeout', () => {
     expect(js).toContain('async function enterBridgeObserverMode')
-    expect(js).toContain('if (!enabled) {\n      await enterBridgeObserverMode({ paused:true });')
+    expect(normalizedJs).toContain('if (!enabled) {\n      await enterBridgeObserverMode({ paused:true });')
     expect(js).toContain('const accessRes = await api("/api/ai/access-context")')
     expect(js).toContain('await loadObserverChannels()')
     expect(js).toContain('notifyObserverChannelSelection()')

@@ -104,6 +104,23 @@ describe('dashboard current-position entry markers', () => {
     expect(volumeBlock).toContain('_klineVolumeSeries.update({ time: barTime')
     expect(volumeBlock).not.toContain('_klineVolumeSeries.update({ time: _klineLastBar.time')
   })
+
+  it('keeps quote direction arrows in a fixed hidden and visible slot', () => {
+    const changeStart = css.indexOf('.quote-change {')
+    const changeEnd = css.indexOf('.quote-change.hidden {', changeStart)
+    const changeBlock = css.slice(changeStart, changeEnd)
+    const hiddenStart = changeEnd
+    const hiddenEnd = css.indexOf('.quote-change.up {', hiddenStart)
+    const hiddenBlock = css.slice(hiddenStart, hiddenEnd)
+
+    expect(changeBlock).toContain('height: 18px;')
+    expect(changeBlock).toContain('line-height: 18px;')
+    expect(changeBlock).not.toContain('min-height: 18px;')
+    expect(hiddenBlock).toContain('display: block !important;')
+    expect(hiddenBlock).toContain('visibility: hidden;')
+    expect(html).toMatch(/<span id="quoteBidDir" class="quote-change hidden"><\/span>/)
+    expect(html).toMatch(/<span id="quoteAskDir" class="quote-change hidden"><\/span>/)
+  })
 })
 
 describe('shared current-position table contract', () => {
@@ -151,7 +168,7 @@ describe('shared current-position table contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const responsiveVersion = html.match(/responsive\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z._-]+)/i)?.[1]
-    expect(stylesheetVersion).toBe('20260807demand1')
+    expect(stylesheetVersion).toBe('20260807quote1')
     expect(responsiveVersion).toBe(stylesheetVersion)
     expect(appVersion).toBe(stylesheetVersion)
   })

@@ -41,9 +41,12 @@ function loadAutoRuntimeRemainingSeconds() {
 }
 
 function loadPeriodReviewEffectiveStatus() {
-  const start = app.indexOf('function periodReviewEffectiveStatus')
-  const end = app.indexOf('\n\nfunction renderReviewSummary', start)
-  return new Function(`${app.slice(start, end)}\nreturn periodReviewEffectiveStatus;`)()
+  const normalizedApp = app.replace(/\r\n?/g, '\n')
+  const start = normalizedApp.indexOf('function periodReviewEffectiveStatus')
+  const end = normalizedApp.indexOf('\n\nfunction renderReviewSummary', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`${normalizedApp.slice(start, end)}\nreturn periodReviewEffectiveStatus;`)()
 }
 
 describe('AI governance navigation and DOM contract', () => {
