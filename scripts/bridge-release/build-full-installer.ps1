@@ -79,7 +79,8 @@ $rehearsalResultPath = $null
 if ($TestRehearsalInstallRoot) {
   if ($TargetEnvironment -ne 'test') { throw 'full_installer_rehearsal_not_allowed' }
   $rehearsalInstallRoot = [IO.Path]::GetFullPath($TestRehearsalInstallRoot)
-  $defaultInstallRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'AURUM\LiangjianBridge'))
+  $programFilesRoot = if (${env:ProgramFiles}) { ${env:ProgramFiles} } else { 'C:\Program Files' }
+  $defaultInstallRoot = [IO.Path]::GetFullPath((Join-Path $programFilesRoot 'AURUM\LiangjianBridge'))
   if ($rehearsalInstallRoot -eq $defaultInstallRoot) { throw 'full_installer_rehearsal_not_allowed' }
   $rehearsalResultPath = [IO.Path]::GetFullPath("$rehearsalInstallRoot.install-result.json")
 }
@@ -128,6 +129,12 @@ foreach ($package in $manifest.packages) {
 }
 
 $inno = Resolve-InnoCompiler $InnoCompiler
+$defaultInstallRootKind = if ($rehearsalInstallRoot) { 'rehearsal' } else { 'program_files' }
+$directorySelectionEnabled = [bool](-not $rehearsalInstallRoot)
+$requiresAdmin = [bool](-not $rehearsalInstallRoot)
+$defaultDirName = if ($rehearsalInstallRoot) { '{tmp}\LiangjianBridgeRehearsal' } else { '{autopf}\AURUM\LiangjianBridge' }
+$disableDirPage = if ($rehearsalInstallRoot) { 'yes' } else { 'no' }
+$privilegesRequired = if ($rehearsalInstallRoot) { 'lowest' } else { 'admin' }
 if ($DryRun) {
   [pscustomobject]@{
     ok=$true; operation='build-full-installer'; dry_run=$true
@@ -140,6 +147,13 @@ if ($DryRun) {
     minimum_offline_validity_days=$MinimumOfflineValidityDays
     rehearsal_install_root=$rehearsalInstallRoot
     rehearsal_result_path=$rehearsalResultPath
+    default_install_root_kind=$defaultInstallRootKind
+    directory_selection_enabled=$directorySelectionEnabled
+    requires_admin=$requiresAdmin
+    default_dir_name=$defaultDirName
+    disable_dir_page=$disableDirPage
+    privileges_required=$privilegesRequired
+    shortcut_scope='user'
   } | ConvertTo-Json
   exit 0
 }
@@ -169,20 +183,37 @@ try {
       "    '$(Escape-PascalString $rehearsalResultPath)' + '`"';"
   } else {
     "  Arguments := '--offline-bundle-root `"' + ExpandConstant('{tmp}') +`r`n" +
-      "    '`" --install-result `"' + ExpandConstant('{tmp}\install-result.json') + '`"';"
+      "    '`" --install-root `"' + ExpandConstant('{app}') + '`" --install-result `"' + ExpandConstant('{tmp}\install-result.json') + '`"';"
   }
   $productName = ConvertFrom-CodePoints @(0x91CF,0x89C1,0x667A,0x6865)
   $runSection = if ($rehearsalInstallRoot) { '' } else {
 @"
 [Run]
-Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; Description: "{cm:LaunchProgram,$(Escape-Inno $productName)}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\AURUMBridge.Launcher.exe"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,$(Escape-Inno $productName)}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 "@
   }
   $iconSection = if ($rehearsalInstallRoot) { '' } else {
 @"
 [Icons]
-Name: "{autodesktop}\$(Escape-Inno $productName)"; Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; WorkingDir: "{localappdata}\AURUM\LiangjianBridge"
-Name: "{userprograms}\$(Escape-Inno $productName)"; Filename: "{localappdata}\AURUM\LiangjianBridge\AURUMBridge.Launcher.exe"; WorkingDir: "{localappdata}\AURUM\LiangjianBridge"
+Name: "{userdesktop}\$(Escape-Inno $productName)"; Filename: "{app}\AURUMBridge.Launcher.exe"; WorkingDir: "{app}"
+Name: "{userprograms}\$(Escape-Inno $productName)"; Filename: "{app}\AURUMBridge.Launcher.exe"; WorkingDir: "{app}"
+"@
+  }
+  $directoryLockCode = if ($rehearsalInstallRoot) { '' } else {
+@"
+procedure InitializeWizard;
+var
+  RegisteredLocation: String;
+begin
+  if RegQueryStringValue(HKCU,
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\LiangjianBridge',
+    'InstallLocation', RegisteredLocation) and (RegisteredLocation <> '') then
+  begin
+    WizardForm.DirEdit.Text := RegisteredLocation;
+    WizardForm.DirEdit.ReadOnly := True;
+    WizardForm.DirBrowseButton.Enabled := False;
+  end;
+end;
 "@
   }
   $publisherName = ConvertFrom-CodePoints @(0x91CF,0x89C1)
@@ -208,8 +239,8 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={localappdata}\AURUM\LiangjianBridge
-DisableDirPage=yes
+DefaultDirName=$defaultDirName
+DisableDirPage=$disableDirPage
 DefaultGroupName={#MyAppName}
 OutputDir=$(Escape-Inno $output)
 OutputBaseFilename=LiangjianBridgeSetup
@@ -219,7 +250,7 @@ WizardStyle=modern
 SetupIconFile=$(Escape-Inno $icon)
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-PrivilegesRequired=lowest
+PrivilegesRequired=$privilegesRequired
 Uninstallable=no
 CreateUninstallRegKey=no
 CloseApplications=yes
@@ -243,6 +274,7 @@ $runSection
 $iconSection
 
 [Code]
+$directoryLockCode
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ResultCode: Integer;
@@ -300,6 +332,13 @@ end;
     minimum_offline_validity_days=$MinimumOfflineValidityDays
     rehearsal_install_root=$rehearsalInstallRoot
     rehearsal_result_path=$rehearsalResultPath
+    default_install_root_kind=$defaultInstallRootKind
+    directory_selection_enabled=$directorySelectionEnabled
+    requires_admin=$requiresAdmin
+    default_dir_name=$defaultDirName
+    disable_dir_page=$disableDirPage
+    privileges_required=$privilegesRequired
+    shortcut_scope='user'
     generated_at_utc=(Get-Date).ToUniversalTime().ToString('o')
   }
   [IO.File]::WriteAllText(

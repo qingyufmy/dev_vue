@@ -1,11 +1,12 @@
 use crate::activation::ReleaseActivationStore;
 use crate::manifest::DotNetVersion;
+use crate::release_publish::{ReleasePublishMode, ReleasePublishRequest, publish_release};
 use crate::{
     BridgeUpdateState, BridgeUpdateStateStore, ReleaseManifest, ReleaseManifestClient,
     ReleaseManifestVerifier, ReleasePackageStager, STATE_ACQUIRING_LEASE, STATE_ACTIVATING,
     STATE_CHECKING, STATE_DOWNLOADING, STATE_DRAINING, STATE_FAILED, STATE_ROLLED_BACK,
-    STATE_WAITING_WINDOW, UpdateError, extract_verified_package, verified_expanded_size,
-    verify_extracted_package, verify_package_file,
+    STATE_WAITING_WINDOW, UpdateError, discard_unpublished_release, extract_verified_package,
+    verified_expanded_size, verify_extracted_package, verify_package_file,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -580,9 +581,38 @@ impl BridgeUpdateCoordinator {
         fs::create_dir_all(&versions_root)
             .map_err(|_| UpdateError::new("update_staging_create_failed"))?;
         let final_directory = versions_root.join(&manifest.release_version);
+        let pointer = self.activation_store.load()?;
+        let protected_versions = HashSet::from([
+            self.environment.current_version.clone(),
+            pointer.active_version,
+            pointer.last_known_good_version,
+        ]);
         if final_directory.exists() {
-            validate_existing_release(&final_directory, manifest)?;
-            return Ok(describe_staged_release(manifest, final_directory));
+            match validate_existing_release(&final_directory, manifest) {
+                Ok(()) => return Ok(describe_staged_release(manifest, final_directory)),
+                Err(error) if error.code() == "update_version_already_exists" => {
+                    return Err(error);
+                }
+                Err(error) => {
+                    let discarded = discard_unpublished_release(
+                        &versions_root,
+                        &manifest.release_version,
+                        &protected_versions,
+                        "update_staged_release_cleanup_failed",
+                    )
+                    .map_err(|cleanup_error| {
+                        eprintln!(
+                            "native_update_staged_release_cleanup_failed code={} {}",
+                            cleanup_error.code(),
+                            cleanup_error.diagnostic_line()
+                        );
+                        UpdateError::new(cleanup_error.code())
+                    })?;
+                    if !discarded {
+                        return Err(error);
+                    }
+                }
+            }
         }
         let operation_id = random_hex_16()?;
         let temporary_directory =
@@ -657,8 +687,28 @@ impl BridgeUpdateCoordinator {
             }
             validate_native_release_layout(&temporary_directory)?;
             write_release_marker(&temporary_directory, manifest)?;
-            fs::rename(&temporary_directory, &final_directory)
-                .map_err(|_| UpdateError::new("update_version_publish_failed"))?;
+            let validate_layout = |directory: &Path| {
+                validate_native_release_layout(directory).map_err(|error| error.code())
+            };
+            let receipt = publish_release(ReleasePublishRequest {
+                versions_root: &versions_root,
+                source_directory: &temporary_directory,
+                destination_version: &manifest.release_version,
+                protected_versions: &protected_versions,
+                mode: ReleasePublishMode::NewVersion,
+                io_error_code: "update_version_publish_failed",
+                repair_restore_error_code: "update_version_publish_failed",
+                validate_layout: &validate_layout,
+            })
+            .map_err(|error| {
+                eprintln!(
+                    "native_update_version_publish_failed code={} {}",
+                    error.code(),
+                    error.diagnostic_line()
+                );
+                UpdateError::new(error.code())
+            })?;
+            receipt.commit();
             Ok::<(), UpdateError>(())
         }
         .await;

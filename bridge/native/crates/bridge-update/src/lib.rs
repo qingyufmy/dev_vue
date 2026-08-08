@@ -1,6 +1,7 @@
 mod activation;
 mod coordinator;
 mod manifest;
+mod release_publish;
 mod staging;
 
 pub use activation::{
@@ -14,6 +15,11 @@ pub use coordinator::{
 pub use manifest::{
     ReleaseManifest, ReleaseManifestClient, ReleaseManifestVerifier, ReleasePackage,
     canonicalize_manifest, canonicalize_package,
+};
+pub use release_publish::{
+    RELEASE_MARKER_FILE_NAME, ReleasePublishError, ReleasePublishMode, ReleasePublishOutcome,
+    ReleasePublishReceipt, ReleasePublishRequest, ReleasePublishStrategy,
+    discard_unpublished_release, publish_release,
 };
 pub use staging::{
     ReleasePackageStager, extract_verified_package, verified_expanded_size,
