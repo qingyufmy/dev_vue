@@ -28,6 +28,33 @@ describe('bridge installer release descriptor', () => {
     })
   })
 
+  it('does not let stale same-version runtime metadata replace the verified installer', () => {
+    expect(resolveBridgeInstallerRelease({
+      BRIDGE_INSTALLER_URL:`https://qiniu.acadfx.com/bridge/bootstrapper/${'c'.repeat(64)}/LiangjianBridgeSetup.exe`,
+      BRIDGE_INSTALLER_RELEASE_VERSION:'3.0.0',
+      BRIDGE_INSTALLER_BUILD_DATE:'2026-08-08',
+      BRIDGE_INSTALLER_SIZE_BYTES:'84044167',
+      BRIDGE_INSTALLER_SHA256:'c'.repeat(64),
+    })).toMatchObject({
+      version:'3.0.0',
+      buildDate:'2026-08-09',
+      fileSize:26669199,
+      sha256:'1D3098693F6F220B368A9876DA315BF2D6765BF0D43E510DEC2FEFFB553D810E',
+    })
+  })
+
+  it('keeps the verified descriptor on a same-version same-date conflict', () => {
+    expect(resolveBridgeInstallerRelease({
+      BRIDGE_INSTALLER_URL:`https://qiniu.acadfx.com/bridge/bootstrapper/${'d'.repeat(64)}/LiangjianBridgeSetup.exe`,
+      BRIDGE_INSTALLER_RELEASE_VERSION:'3.0.0',
+      BRIDGE_INSTALLER_BUILD_DATE:'2026-08-09',
+      BRIDGE_INSTALLER_SIZE_BYTES:'84044167',
+      BRIDGE_INSTALLER_SHA256:'d'.repeat(64),
+    })).toMatchObject({
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'1d3098693f6f220b368a9876da315bf2d6765bf0d43e510dec2feffb553d810e'}/LiangjianBridgeSetup.exe`,
+    })
+  })
+
   it('publishes the complete V3 version metadata contract', async () => {
     const source = await readFile(new URL('../server/routes/ai/index.js', import.meta.url), 'utf8')
     expect(source).toContain("router.get('/bridge/version'")

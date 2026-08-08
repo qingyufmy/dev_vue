@@ -18,6 +18,19 @@ function validHttpsObjectUrl(value, sha256) {
   }
 }
 
+function compareReleaseVersion(left, right) {
+  const leftParts = left.split('.').map(BigInt)
+  const rightParts = right.split('.').map(BigInt)
+  const width = Math.max(leftParts.length, rightParts.length)
+  for (let index = 0; index < width; index += 1) {
+    const leftPart = leftParts[index] || 0n
+    const rightPart = rightParts[index] || 0n
+    if (leftPart > rightPart) return 1
+    if (leftPart < rightPart) return -1
+  }
+  return 0
+}
+
 export function resolveBridgeInstallerRelease(environment = process.env) {
   const url = String(environment.BRIDGE_INSTALLER_URL || '').trim()
   const version = String(environment.BRIDGE_INSTALLER_RELEASE_VERSION || '').trim()
@@ -33,7 +46,7 @@ export function resolveBridgeInstallerRelease(environment = process.env) {
     || !Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > 512 * 1024 * 1024) {
     throw new Error('bridge_installer_release_configuration_invalid')
   }
-  return Object.freeze({
+  const configured = Object.freeze({
     version,
     buildDate,
     fullUrl:url,
@@ -41,4 +54,10 @@ export function resolveBridgeInstallerRelease(environment = process.env) {
     sha256,
     v3:true,
   })
+  const versionOrder = compareReleaseVersion(configured.version, VERIFIED_INSTALLER.version)
+  if (versionOrder > 0
+    || (versionOrder === 0 && configured.buildDate > VERIFIED_INSTALLER.buildDate)) {
+    return configured
+  }
+  return VERIFIED_INSTALLER
 }
