@@ -898,8 +898,8 @@
             </div>
             <div class="history-scope-bar">
               <label class="filter-field"><span class="filter-label">统计范围</span><select id="historyRangeMode" class="filter-select">
-                <option value="all">全账户历史</option>
-                <option value="platform" selected>平台接入后</option>
+                <option value="recent" selected>最近 7 天</option>
+                <option value="ownership">本次接入以来</option>
                 <option value="custom">自定义日期</option>
               </select></label>
               <div class="history-range-dates hidden" id="historyRangeDates">
@@ -908,7 +908,7 @@
                 <input type="date" id="historyRangeTo" class="filter-date" disabled aria-label="历史结束日期">
               </div>
               <button class="btn-filter-action" id="historyRangeApply" type="button"><i data-lucide="filter" size="12"></i>应用</button>
-              <span id="historyRangeHint" class="field-help" data-bridge-platform-template="包含该 {platform} 账户的完整交易、入金、提款和信用记录。">包含该交易平台账户的完整交易、入金、提款和信用记录。</span>
+              <span id="historyRangeHint" class="field-help">默认显示当前归属期内最近 7 天的交易、入金、提款和信用记录。</span>
             </div>
             <div class="history-chart-wrap">
               <div class="chart-top-bar">

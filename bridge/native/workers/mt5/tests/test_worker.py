@@ -17,6 +17,9 @@ WORKER_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKER_DIR))
 
 from worker import (  # noqa: E402
+    ARCHIVE_CAPABILITIES,
+    IPC_VERSION,
+    LIVE_CAPABILITIES,
     BrokerClock,
     ReadOnlyMt5Adapter,
     Mt5Worker,
@@ -26,6 +29,7 @@ from worker import (  # noqa: E402
     _terminal_process_running,
     probe_terminal,
     read_frame,
+    role_from_environment,
     write_frame,
 )
 
@@ -241,6 +245,7 @@ class WorkerTests(unittest.TestCase):
         )
         self.adapter.connect()
         self.worker = Mt5Worker(self.adapter, self.route)
+        self.archive_worker = Mt5Worker(self.adapter, self.route, role="archive")
         self.worker.trade._clock_msc = lambda: self.now
 
     def test_probe_terminal_returns_only_strict_identity_and_closes_mt5(self):
@@ -415,7 +420,7 @@ class WorkerTests(unittest.TestCase):
 
     def request(self, operation, payload, request_id="request_01JTEST001"):
         return {
-            "ipc_v": 1,
+            "ipc_v": IPC_VERSION,
             "type": "worker_request",
             "request_id": request_id,
             "route": self.route.payload(),
@@ -598,7 +603,9 @@ class WorkerTests(unittest.TestCase):
 
     def test_history_sync_is_bounded_cursor_ordered_and_builds_related_evidence(self):
         cursor_time = self.mt5.history_deals[0].time_msc - 180 * 60_000 - 1
-        first = self.worker.handle(self.request("history_sync", {
+        first = self.archive_worker.handle(self.request("history_range_sync", {
+            "range_start_utc_msc": cursor_time,
+            "range_end_utc_msc": self.now + 1,
             "cursor": {"time_msc": cursor_time, "ticket": "0"}, "limit": 1
         }))
         self.assertEqual("history_batch", first["outcome"])
@@ -611,7 +618,9 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(first_batch["has_more"])
         self.assertEqual([], first_batch["trades"])
 
-        second = self.worker.handle(self.request("history_sync", {
+        second = self.archive_worker.handle(self.request("history_range_sync", {
+            "range_start_utc_msc": cursor_time,
+            "range_end_utc_msc": self.now + 1,
             "cursor": first_batch["next_cursor"], "limit": 250
         }, "request_01JHISTORY02"))
         second_batch = second["payload"]["batch"]
@@ -629,6 +638,125 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(2, len(self.mt5.history_order_queries))
         self.assertTrue(all(not kwargs for _, kwargs in self.mt5.history_deal_queries))
         self.assertTrue(all(not kwargs for _, kwargs in self.mt5.history_order_queries))
+
+    def test_history_range_pages_standalone_orders_and_keeps_same_pair_atomic(self):
+        event_one = self.now - 5_000
+        event_two = self.now - 4_000
+
+        def order(ticket: int, event_utc_msc: int) -> HistoryOrder:
+            server_seconds = event_utc_msc // 1000 + 180 * 60
+            return HistoryOrder(
+                ticket, 0, "XAUUSD.s", 2, 2, 234000, 0, "cancelled",
+                0.01, 0.0, 2280.0, 0.0, 0.0,
+                server_seconds, server_seconds,
+                server_seconds * 1000, server_seconds * 1000,
+            )
+
+        self.mt5.history_deals = []
+        self.mt5.history_orders = {
+            3101: order(3101, event_one),
+            3102: order(3102, event_two),
+        }
+        payload = {
+            "range_start_utc_msc": self.now - 10_000,
+            "range_end_utc_msc": self.now,
+            "cursor": {"time_msc": self.now - 10_000, "ticket": "0"},
+            "limit": 1,
+        }
+        first = self.archive_worker.handle(
+            self.request("history_range_sync", payload, "request_01JORDERPAGE01")
+        )
+        self.assertEqual("history_batch", first["outcome"], first)
+        first_batch = first["payload"]["batch"]
+        self.assertEqual([], first_batch["deals"])
+        self.assertEqual([3101], [item["ticket"] for item in first_batch["history_orders"]])
+        self.assertTrue(first_batch["has_more"])
+
+        second = self.archive_worker.handle(self.request(
+            "history_range_sync",
+            {**payload, "cursor": first_batch["next_cursor"]},
+            "request_01JORDERPAGE02",
+        ))
+        self.assertEqual("history_batch", second["outcome"], second)
+        second_batch = second["payload"]["batch"]
+        self.assertEqual([3102], [item["ticket"] for item in second_batch["history_orders"]])
+        self.assertFalse(second_batch["has_more"])
+        self.assertEqual(
+            {"time_msc": payload["range_end_utc_msc"], "ticket": "0"},
+            second_batch["next_cursor"],
+        )
+
+        # A deal and order with the same pair are one compound cursor group;
+        # a page boundary must not return only one and skip the other.
+        event = self.now - 3_000
+        server_seconds = event // 1000 + 180 * 60
+        self.mt5.history_deals = [Deal(
+            3200, 3200, 0, "XAUUSD.s", 0, 0, 234000, 0, "open",
+            0.01, 2295.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            server_seconds, server_seconds * 1000,
+        )]
+        self.mt5.history_orders = {
+            3200: order(3200, event),
+        }
+        compound = self.archive_worker.handle(self.request(
+            "history_range_sync",
+            {
+                "range_start_utc_msc": event - 1_000,
+                "range_end_utc_msc": event + 1_000,
+                "cursor": {"time_msc": event - 1_000, "ticket": "0"},
+                "limit": 1,
+            },
+            "request_01JORDERCOMPOUND",
+        ))
+        self.assertEqual("history_batch", compound["outcome"], compound)
+        compound_batch = compound["payload"]["batch"]
+        self.assertEqual([3200], [item["deal_ticket"] for item in compound_batch["deals"]])
+        self.assertEqual([3200], [item["ticket"] for item in compound_batch["history_orders"]])
+        self.assertFalse(compound_batch["has_more"])
+        self.assertEqual(
+            {"time_msc": event + 1_000, "ticket": "0"},
+            compound_batch["next_cursor"],
+        )
+
+    def test_history_range_rejects_fanout_instead_of_slicing_wire_items(self):
+        event = self.now - 3_000
+        original_batch = self.adapter._history_batch
+
+        def oversized_batch(_raw_deals, _raw_orders, next_time, next_ticket,
+                            has_more, observed_at):
+            return {
+                "deals": [],
+                "history_orders": [
+                    {"ticket": 3301, "time_utc_msc": event},
+                    {"ticket": 3302, "time_utc_msc": event},
+                ],
+                "trades": [],
+                "next_cursor": {"time_msc": next_time, "ticket": str(next_ticket)},
+                "has_more": has_more,
+                "observed_at_utc_msc": observed_at,
+                "timezone_offset_minutes": self.adapter.clock.offset_minutes,
+                "clock_status": self.adapter.clock.status,
+            }
+
+        self.adapter._history_batch = oversized_batch
+        try:
+            response = self.archive_worker.handle(self.request(
+                "history_range_sync",
+                {
+                    "range_start_utc_msc": event - 500,
+                    "range_end_utc_msc": event + 500,
+                    "cursor": {"time_msc": event - 500, "ticket": "0"},
+                    "limit": 1,
+                },
+                "request_01JFANOUTDENSE",
+            ))
+        finally:
+            self.adapter._history_batch = original_batch
+        self.assertEqual("error", response["outcome"], response)
+        self.assertEqual(
+            "mt5_history_range_too_dense",
+            response["payload"]["error_code"],
+        )
 
     def test_dense_history_uses_two_bulk_queries_without_per_item_mt5_calls(self):
         start_seconds = int(time.time()) - 10_000
@@ -665,12 +793,14 @@ class WorkerTests(unittest.TestCase):
         self.mt5.history_deal_queries.clear()
         self.mt5.history_order_queries.clear()
 
-        response = self.worker.handle(self.request("history_sync", {
+        response = self.archive_worker.handle(self.request("history_range_sync", {
+            "range_start_utc_msc": start_seconds * 1000 - 1,
+            "range_end_utc_msc": start_seconds * 1000 + 30 * 24 * 60 * 60 * 1000 - 1,
             "cursor": {"time_msc": start_seconds * 1000 - 1, "ticket": "0"},
             "limit": 250,
         }, "request_01JDENSEHISTORY"))
 
-        self.assertEqual("history_batch", response["outcome"])
+        self.assertEqual("history_batch", response["outcome"], response)
         batch = response["payload"]["batch"]
         self.assertEqual(200, len(batch["deals"]))
         self.assertEqual(100, len(batch["trades"]))
@@ -715,6 +845,8 @@ class WorkerTests(unittest.TestCase):
         self.mt5.history_deal_queries.clear()
         self.mt5.history_order_queries.clear()
         payload = {
+            "range_start_utc_msc": close_start * 1000 - 1,
+            "range_end_utc_msc": close_start * 1000 + 30 * 24 * 60 * 60 * 1000 - 1,
             "cursor": {"time_msc": close_start * 1000 - 1, "ticket": "0"},
             "limit": 250,
         }
@@ -722,8 +854,8 @@ class WorkerTests(unittest.TestCase):
         attempts = []
         for index in range(4):
             before = len(self.mt5.history_deal_queries) + len(self.mt5.history_order_queries)
-            response = self.worker.handle(self.request(
-                "history_sync", payload, f"request_01JBOUNDED{index}"))
+            response = self.archive_worker.handle(self.request(
+                "history_range_sync", payload, f"request_01JBOUNDED{index}"))
             after = len(self.mt5.history_deal_queries) + len(self.mt5.history_order_queries)
             attempts.append(after - before)
             if response["outcome"] == "history_batch":
@@ -731,7 +863,7 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual("mt5_history_evidence_pending",
                              response["payload"]["error_code"])
 
-        self.assertEqual("history_batch", response["outcome"])
+        self.assertEqual("history_batch", response["outcome"], response)
         self.assertEqual(6, len(response["payload"]["batch"]["trades"]))
         # Each attempt has two bulk calls and no more than four targeted fallbacks.
         self.assertTrue(all(count <= 6 for count in attempts), attempts)
@@ -739,13 +871,119 @@ class WorkerTests(unittest.TestCase):
 
     def test_history_sync_rejects_zero_cursor_and_oversized_limit_before_mt5_query(self):
         for payload in (
-            {"cursor": {"time_msc": 0, "ticket": "0"}, "limit": 250},
-            {"cursor": {"time_msc": 1, "ticket": "0"}, "limit": 251},
+            {"range_start_utc_msc": 1,
+             "range_end_utc_msc": 1 + 30 * 24 * 60 * 60 * 1000,
+             "cursor": {"time_msc": 0, "ticket": "0"}, "limit": 250},
+            {"range_start_utc_msc": 1,
+             "range_end_utc_msc": 1 + 30 * 24 * 60 * 60 * 1000,
+             "cursor": {"time_msc": 1, "ticket": "0"}, "limit": 251},
         ):
             with self.subTest(payload=payload):
-                response = self.worker.handle(self.request("history_sync", payload))
+                response = self.archive_worker.handle(self.request("history_range_sync", payload))
                 self.assertEqual("error", response["outcome"])
-                self.assertEqual("worker_history_cursor_invalid", response["payload"]["error_code"])
+                expected = ("worker_history_range_cursor_invalid"
+                            if payload["cursor"]["time_msc"] == 0
+                            else "worker_history_limit_invalid")
+                self.assertEqual(expected, response["payload"]["error_code"])
+
+    def test_worker_roles_fail_closed_and_archive_range_is_half_open(self):
+        range_start = self.mt5.history_deals[0].time_msc - 180 * 60_000
+        range_end = self.mt5.history_deals[1].time_msc - 180 * 60_000
+        request = self.request("history_range_sync", {
+            "range_start_utc_msc": range_start,
+            "range_end_utc_msc": range_end,
+            "cursor": {"time_msc": range_start, "ticket": "0"},
+            "limit": 250,
+        }, "request_01JRANGEBOUNDARY")
+        live = self.worker.handle(request)
+        self.assertEqual("worker_role_operation_forbidden", live["payload"]["error_code"])
+        archive = self.archive_worker.handle(request)
+        self.assertEqual("history_batch", archive["outcome"])
+        batch = archive["payload"]["batch"]
+        self.assertEqual([4001], [item["deal_ticket"] for item in batch["deals"]])
+        self.assertFalse(batch["has_more"])
+        self.assertEqual({"time_msc": range_end, "ticket": "0"}, batch["next_cursor"])
+        self.assertEqual(
+            "worker_role_operation_forbidden",
+            self.archive_worker.handle(
+                self.request("collect_snapshot", {"streams": ["account"]})
+            )["payload"]["error_code"],
+        )
+        self.assertEqual(
+            "worker_role_operation_forbidden",
+            self.archive_worker.handle(
+                self.request("history_sync", {
+                    "cursor": {"time_msc": range_start, "ticket": "0"},
+                    "limit": 1,
+                })
+            )["payload"]["error_code"],
+        )
+
+    def test_role_environment_and_hello_capabilities_are_minimal(self):
+        self.assertEqual(
+            ("snapshot", "quote", "data", "execute_command", "query_execution"),
+            LIVE_CAPABILITIES,
+        )
+        self.assertEqual(("history_range_sync",), ARCHIVE_CAPABILITIES)
+        with patch.dict("os.environ", {"AURUM_BRIDGE_WORKER_ROLE": "archive"}):
+            self.assertEqual("archive", role_from_environment())
+        with patch.dict("os.environ", {"AURUM_BRIDGE_WORKER_ROLE": "live"}):
+            self.assertEqual("live", role_from_environment())
+        with patch.dict("os.environ", {"AURUM_BRIDGE_WORKER_ROLE": "history"}):
+            with self.assertRaisesRegex(WorkerError, "worker_environment_invalid"):
+                role_from_environment()
+    def test_history_range_rejects_invalid_future_and_dense_requests_fail_closed(self):
+        cases = [
+            ({
+                "range_start_utc_msc": self.now,
+                "range_end_utc_msc": self.now + 1,
+                "cursor": {"time_msc": self.now + 1, "ticket": "1"},
+                "limit": 1,
+            }, "worker_history_range_cursor_invalid"),
+            ({
+                "range_start_utc_msc": self.now - 1,
+                "range_end_utc_msc": self.now + 61_000,
+                "cursor": {"time_msc": self.now - 1, "ticket": "0"},
+                "limit": 1,
+            }, "worker_history_range_future"),
+            ({
+                "range_start_utc_msc": self.now - 1,
+                "range_end_utc_msc": self.now - 1 + 30 * 24 * 60 * 60 * 1000 + 1,
+                "cursor": {"time_msc": self.now - 1, "ticket": "0"},
+                "limit": 1,
+            }, "worker_history_range_invalid"),
+        ]
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                response = self.archive_worker.handle(
+                    self.request("history_range_sync", payload)
+                )
+                self.assertEqual("error", response["outcome"])
+                self.assertEqual(expected, response["payload"]["error_code"])
+
+        original_budget = __import__("worker").MAX_HISTORY_WINDOW_CACHE_ITEMS
+        try:
+            __import__("worker").MAX_HISTORY_WINDOW_CACHE_ITEMS = 1
+            response = self.archive_worker.handle(self.request("history_range_sync", {
+                "range_start_utc_msc": self.mt5.history_deals[0].time_msc - 180 * 60_000 - 1,
+                "range_end_utc_msc": self.now + 1,
+                "cursor": {
+                    "time_msc": self.mt5.history_deals[0].time_msc - 180 * 60_000 - 1,
+                    "ticket": "0",
+                },
+                "limit": 250,
+            }, "request_01JRANGEDENSE"))
+            self.assertEqual("mt5_history_range_too_dense",
+                             response["payload"]["error_code"])
+        finally:
+            __import__("worker").MAX_HISTORY_WINDOW_CACHE_ITEMS = original_budget
+
+    def test_history_range_rejects_items_without_a_trusted_utc_time(self):
+        from worker import _history_item_in_utc_range
+
+        self.assertFalse(_history_item_in_utc_range({"ticket": 1}, 100, 200))
+        self.assertFalse(_history_item_in_utc_range(
+            {"time_utc_msc": 200}, 100, 200))
 
     def test_cross_account_request_is_rejected(self):
         request = self.request("quote", {"symbol": "XAUUSD"})

@@ -41,6 +41,7 @@ function hello() {
     sent_at_utc_msc:NOW,
     session_id:'session_01JGATEWAY01',
     bridge_version:'3.0.0',
+    capabilities:['history_exact_range_v1', 'history_cursor_v1', 'history_evidence_v1'],
     installation_id:'install_0123456789abcdef0123456789abcdef',
     update_report:{
       release_id:'bridge-3.0.0-test', target_version:'3.0.0', state:'healthy',
@@ -304,6 +305,9 @@ describe('Bridge v3 websocket gateway', () => {
     expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({ type:'hello_ack', session_id:'session_01JGATEWAY01' })
     expect(gateway.connectionsByTerminal.has('terminal_01JGATEWAY1')).toBe(true)
     expect(gateway.listConnectedTerminals(42)[0].connection_generation).toBe(1)
+    expect(gateway.listConnectedTerminals(42)[0].capabilities).toEqual([
+      'history_exact_range_v1', 'history_cursor_v1', 'history_evidence_v1',
+    ])
     expect(gateway.listConnectedUsers()).toEqual([expect.objectContaining({ userId:42, generation:1 })])
     expect(gateway.isTradeEnabled(42)).toBe(true)
     expect(gateway.setTradeEnabled(42, false)).toBe(true)

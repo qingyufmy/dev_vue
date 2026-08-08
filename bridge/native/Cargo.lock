@@ -173,6 +173,7 @@ name = "bridge-store"
 version = "3.0.0"
 dependencies = [
  "bridge-contract",
+ "getrandom 0.4.3",
  "rusqlite",
  "serde",
  "serde_json",

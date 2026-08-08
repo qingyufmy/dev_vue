@@ -7,9 +7,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
-pub const WORKER_IPC_VERSION: u16 = 1;
+pub const WORKER_IPC_VERSION: u16 = 2;
 const MAX_CAPABILITIES: usize = 16;
 const MAX_SNAPSHOT_ITEMS: usize = 10_000;
+const MAX_HISTORY_RANGE_MSC: i64 = 30 * 24 * 60 * 60 * 1_000;
+const MAX_HISTORY_RANGE_FUTURE_MSC: i64 = 60_000;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerRole {
+    Live,
+    Archive,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +29,7 @@ pub enum WorkerCapability {
     Data,
     Snapshot,
     HistorySync,
+    HistoryRangeSync,
     Shutdown,
 }
 
@@ -89,6 +99,7 @@ pub struct WorkerHello {
     pub session_nonce: String,
     pub worker_version: String,
     pub route: WorkerRoute,
+    pub role: WorkerRole,
     pub capabilities: Vec<WorkerCapability>,
 }
 
@@ -119,6 +130,20 @@ impl WorkerHello {
         if unique.is_empty()
             || unique.len() != self.capabilities.len()
             || unique.len() > MAX_CAPABILITIES
+            || unique.iter().any(|capability| !match self.role {
+                WorkerRole::Live => matches!(
+                    capability,
+                    WorkerCapability::ExecuteCommand
+                        | WorkerCapability::QueryExecution
+                        | WorkerCapability::Quote
+                        | WorkerCapability::Data
+                        | WorkerCapability::Snapshot
+                ),
+                WorkerRole::Archive => matches!(
+                    capability,
+                    WorkerCapability::HistoryRangeSync | WorkerCapability::Shutdown
+                ),
+            })
         {
             return Err(WorkerHostError::new("worker_hello_capabilities_invalid"));
         }
@@ -134,6 +159,7 @@ pub enum WorkerOperation {
     CollectSnapshot { request: SnapshotRequest },
     Quote { request: QuoteRequest },
     HistorySync { request: HistorySyncRequest },
+    HistoryRangeSync { request: HistoryRangeSyncRequest },
     Data { request: WorkerDataRequest },
 }
 
@@ -144,6 +170,7 @@ impl WorkerOperation {
             Self::CollectSnapshot { .. }
             | Self::Quote { .. }
             | Self::HistorySync { .. }
+            | Self::HistoryRangeSync { .. }
             | Self::Data { .. } => None,
         }
     }
@@ -155,6 +182,7 @@ impl WorkerOperation {
             Self::CollectSnapshot { .. } => WorkerCapability::Snapshot,
             Self::Quote { .. } => WorkerCapability::Quote,
             Self::HistorySync { .. } => WorkerCapability::HistorySync,
+            Self::HistoryRangeSync { .. } => WorkerCapability::HistoryRangeSync,
             Self::Data { .. } => WorkerCapability::Data,
         }
     }
@@ -229,6 +257,48 @@ pub struct HistorySyncRequest {
 impl HistorySyncRequest {
     fn validate(&self) -> Result<(), WorkerHostError> {
         self.cursor.validate()?;
+        if !(1..=250).contains(&self.limit) {
+            return Err(WorkerHostError::new("worker_history_limit_invalid"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryRangeSyncRequest {
+    pub range_start_utc_msc: i64,
+    pub range_end_utc_msc: i64,
+    pub cursor: WorkerHistoryCursor,
+    pub limit: u16,
+}
+
+impl HistoryRangeSyncRequest {
+    fn validate(&self, now_utc_msc: i64) -> Result<(), WorkerHostError> {
+        if self.range_start_utc_msc <= 0
+            || self.range_end_utc_msc <= self.range_start_utc_msc
+            || self
+                .range_end_utc_msc
+                .checked_sub(self.range_start_utc_msc)
+                .is_none_or(|window| window > MAX_HISTORY_RANGE_MSC)
+        {
+            return Err(WorkerHostError::new("worker_history_range_invalid"));
+        }
+        if now_utc_msc <= 0
+            || self
+                .range_end_utc_msc
+                .checked_sub(now_utc_msc)
+                .is_some_and(|delta| delta > MAX_HISTORY_RANGE_FUTURE_MSC)
+        {
+            return Err(WorkerHostError::new("worker_history_range_future"));
+        }
+        self.cursor.validate()?;
+        if self.cursor.time_msc < self.range_start_utc_msc
+            || self.cursor.time_msc > self.range_end_utc_msc
+            || (self.cursor.time_msc == self.range_end_utc_msc && self.cursor.ticket != "0")
+        {
+            return Err(WorkerHostError::new("worker_history_range_cursor_invalid"));
+        }
         if !(1..=250).contains(&self.limit) {
             return Err(WorkerHostError::new("worker_history_limit_invalid"));
         }
@@ -567,6 +637,90 @@ impl WorkerHistoryBatch {
         }
         Ok(())
     }
+
+    fn validate_for_range(
+        &self,
+        request: &HistoryRangeSyncRequest,
+        now_utc_msc: Option<i64>,
+    ) -> Result<(), WorkerHostError> {
+        self.next_cursor.validate()?;
+        if self.observed_at_utc_msc <= 0
+            || now_utc_msc.is_some_and(|now| {
+                now <= 0
+                    || self
+                        .observed_at_utc_msc
+                        .checked_sub(now)
+                        .is_some_and(|delta| delta > MAX_HISTORY_RANGE_FUTURE_MSC)
+            })
+            || !(-720..=840).contains(&self.timezone_offset_minutes)
+            || !matches!(
+                self.clock_status.as_str(),
+                "verified" | "persisted_stale" | "provisional_stale"
+            )
+            || self.deals.len() > usize::from(request.limit)
+            || self.history_orders.len() > usize::from(request.limit)
+            || self.trades.len() > usize::from(request.limit)
+            || self
+                .deals
+                .iter()
+                .chain(&self.history_orders)
+                .chain(&self.trades)
+                .any(|item| !item.is_object())
+        {
+            return Err(WorkerHostError::new("worker_history_batch_invalid"));
+        }
+        if compare_history_cursor(&self.next_cursor, &request.cursor).is_lt()
+            || self.next_cursor.time_msc < request.range_start_utc_msc
+            || self.next_cursor.time_msc > request.range_end_utc_msc
+        {
+            return Err(WorkerHostError::new("worker_history_range_batch_invalid"));
+        }
+        if self.has_more {
+            if self.next_cursor.time_msc >= request.range_end_utc_msc
+                || compare_history_cursor(&self.next_cursor, &request.cursor)
+                    != std::cmp::Ordering::Greater
+            {
+                return Err(WorkerHostError::new("worker_history_range_batch_invalid"));
+            }
+        } else if self.next_cursor.time_msc != request.range_end_utc_msc
+            || self.next_cursor.ticket != "0"
+        {
+            return Err(WorkerHostError::new("worker_history_range_batch_invalid"));
+        }
+        for item in self
+            .deals
+            .iter()
+            .chain(&self.history_orders)
+            .chain(&self.trades)
+        {
+            match history_item_time(item) {
+                Err(()) => {
+                    return Err(WorkerHostError::new("worker_history_range_batch_invalid"));
+                }
+                Ok(Some(time))
+                    if time < request.range_start_utc_msc || time >= request.range_end_utc_msc =>
+                {
+                    return Err(WorkerHostError::new("worker_history_range_batch_invalid"));
+                }
+                Ok(None) | Ok(Some(_)) => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+fn history_item_time(value: &serde_json::Value) -> Result<Option<i64>, ()> {
+    let object = value.as_object().ok_or(())?;
+    [
+        "time_utc_msc",
+        "close_time_utc_msc",
+        "time_msc",
+        "close_time_msc",
+    ]
+    .into_iter()
+    .into_iter()
+    .find_map(|key| object.get(key).map(|value| value.as_i64().ok_or(())))
+    .transpose()
 }
 
 fn compare_history_cursor(
@@ -790,6 +944,30 @@ impl WorkerRequest {
         }
     }
 
+    pub fn history_range_sync(
+        route: WorkerRoute,
+        request_id: String,
+        range_start_utc_msc: i64,
+        range_end_utc_msc: i64,
+        cursor: WorkerHistoryCursor,
+        limit: u16,
+    ) -> Self {
+        Self {
+            ipc_v: WORKER_IPC_VERSION,
+            message_type: "worker_request".to_owned(),
+            request_id,
+            route,
+            operation: WorkerOperation::HistoryRangeSync {
+                request: HistoryRangeSyncRequest {
+                    range_start_utc_msc,
+                    range_end_utc_msc,
+                    cursor,
+                    limit,
+                },
+            },
+        }
+    }
+
     pub fn data(
         route: WorkerRoute,
         request_id: String,
@@ -828,6 +1006,7 @@ impl WorkerRequest {
             WorkerOperation::CollectSnapshot { request } => request.validate()?,
             WorkerOperation::Quote { request } => request.validate()?,
             WorkerOperation::HistorySync { request } => request.validate()?,
+            WorkerOperation::HistoryRangeSync { request } => request.validate(now_utc_msc)?,
             WorkerOperation::Data { request } => request.validate()?,
         }
         match &self.operation {
@@ -853,6 +1032,7 @@ impl WorkerRequest {
             WorkerOperation::CollectSnapshot { .. }
             | WorkerOperation::Quote { .. }
             | WorkerOperation::HistorySync { .. }
+            | WorkerOperation::HistoryRangeSync { .. }
             | WorkerOperation::Data { .. } => {}
         }
         Ok(())
@@ -1270,6 +1450,14 @@ impl WorkerResponse {
     }
 
     pub fn validate_for(&self, request: &WorkerRequest) -> Result<(), WorkerHostError> {
+        self.validate_for_at(request, None)
+    }
+
+    pub(crate) fn validate_for_at(
+        &self,
+        request: &WorkerRequest,
+        now_utc_msc: Option<i64>,
+    ) -> Result<(), WorkerHostError> {
         if self.ipc_v != WORKER_IPC_VERSION || self.message_type != "worker_response" {
             return Err(WorkerHostError::new("worker_response_protocol_invalid"));
         }
@@ -1305,12 +1493,15 @@ impl WorkerResponse {
                 };
                 quote.validate_for(request)?;
             }
-            WorkerResponseBody::HistoryBatch { batch } => {
-                let WorkerOperation::HistorySync { request } = &request.operation else {
+            WorkerResponseBody::HistoryBatch { batch } => match &request.operation {
+                WorkerOperation::HistorySync { request } => batch.validate_for(request)?,
+                WorkerOperation::HistoryRangeSync { request } => {
+                    batch.validate_for_range(request, now_utc_msc)?
+                }
+                _ => {
                     return Err(WorkerHostError::new("worker_response_operation_mismatch"));
-                };
-                batch.validate_for(request)?;
-            }
+                }
+            },
             WorkerResponseBody::Data { data } => {
                 let WorkerOperation::Data { request } = &request.operation else {
                     return Err(WorkerHostError::new("worker_response_operation_mismatch"));
@@ -1902,6 +2093,209 @@ mod tests {
                 .expect_err("incomplete identity snapshot")
                 .code(),
             "worker_pending_order_state_params_invalid"
+        );
+    }
+
+    #[test]
+    fn worker_roles_and_history_range_contract_are_strict() {
+        let now = 1_700_000_000_001;
+        let range_start = 1_699_000_000_000;
+        let range_end = 1_700_000_000_000;
+        let request = WorkerRequest::history_range_sync(
+            route(),
+            "history_range_01JCONTRACT01".to_owned(),
+            range_start,
+            range_end,
+            WorkerHistoryCursor {
+                time_msc: range_start,
+                ticket: "0".to_owned(),
+            },
+            250,
+        );
+        request.validate(now).expect("valid explicit range");
+        let endpoint = WorkerRequest::history_range_sync(
+            route(),
+            "history_range_01JCONTRACT02".to_owned(),
+            range_start,
+            range_end,
+            WorkerHistoryCursor {
+                time_msc: range_end,
+                ticket: "0".to_owned(),
+            },
+            1,
+        );
+        endpoint.validate(now).expect("valid endpoint cursor");
+
+        let mut invalid = request.clone();
+        let WorkerOperation::HistoryRangeSync { request } = &mut invalid.operation else {
+            unreachable!();
+        };
+        request.range_end_utc_msc = request.range_start_utc_msc + 30 * 24 * 60 * 60 * 1_000 + 1;
+        assert_eq!(
+            invalid
+                .validate(now)
+                .expect_err("range over 30 days")
+                .code(),
+            "worker_history_range_invalid"
+        );
+        let mut future = endpoint.clone();
+        let WorkerOperation::HistoryRangeSync { request } = &mut future.operation else {
+            unreachable!();
+        };
+        request.range_start_utc_msc = now + 60_000;
+        request.range_end_utc_msc = now + 60_001;
+        request.cursor.time_msc = now + 60_000;
+        assert_eq!(
+            future.validate(now).expect_err("future range").code(),
+            "worker_history_range_future"
+        );
+        let mut bad_endpoint = endpoint.clone();
+        let WorkerOperation::HistoryRangeSync { request } = &mut bad_endpoint.operation else {
+            unreachable!();
+        };
+        request.cursor.ticket = "9".to_owned();
+        assert_eq!(
+            bad_endpoint
+                .validate(now)
+                .expect_err("nonzero endpoint ticket")
+                .code(),
+            "worker_history_range_cursor_invalid"
+        );
+
+        let hello = |role, capabilities| WorkerHello {
+            ipc_v: WORKER_IPC_VERSION,
+            message_type: "worker_hello".to_owned(),
+            session_nonce: "0123456789abcdef0123456789abcdef".to_owned(),
+            worker_version: "3.0.0".to_owned(),
+            route: route(),
+            role,
+            capabilities,
+        };
+        hello(
+            WorkerRole::Archive,
+            vec![WorkerCapability::HistoryRangeSync],
+        )
+        .validate()
+        .expect("archive capability");
+        assert_eq!(
+            hello(WorkerRole::Archive, vec![WorkerCapability::ExecuteCommand],)
+                .validate()
+                .expect_err("archive must not claim live capability")
+                .code(),
+            "worker_hello_capabilities_invalid"
+        );
+        assert_eq!(
+            hello(WorkerRole::Live, vec![WorkerCapability::HistoryRangeSync],)
+                .validate()
+                .expect_err("live must not claim archive capability")
+                .code(),
+            "worker_hello_capabilities_invalid"
+        );
+    }
+
+    #[test]
+    fn history_range_response_fences_cursor_items_and_endpoint() {
+        let now = 1_700_000_000_001;
+        let range_start = 1_699_000_000_000;
+        let range_end = 1_700_000_000_000;
+        let request = WorkerRequest::history_range_sync(
+            route(),
+            "history_range_01JCONTRACT03".to_owned(),
+            range_start,
+            range_end,
+            WorkerHistoryCursor {
+                time_msc: range_start,
+                ticket: "0".to_owned(),
+            },
+            2,
+        );
+        let batch = |next_time: i64, next_ticket: &str, has_more: bool| WorkerHistoryBatch {
+            deals: vec![serde_json::json!({
+                "ticket": "1001",
+                "time_utc_msc": range_start + 1,
+            })],
+            history_orders: Vec::new(),
+            trades: Vec::new(),
+            next_cursor: WorkerHistoryCursor {
+                time_msc: next_time,
+                ticket: next_ticket.to_owned(),
+            },
+            has_more,
+            observed_at_utc_msc: now,
+            timezone_offset_minutes: 0,
+            clock_status: "verified".to_owned(),
+        };
+        let response = |batch| WorkerResponse {
+            ipc_v: WORKER_IPC_VERSION,
+            message_type: "worker_response".to_owned(),
+            request_id: request.request_id.clone(),
+            route: request.route.clone(),
+            body: WorkerResponseBody::HistoryBatch {
+                batch: Box::new(batch),
+            },
+        };
+        response(batch(range_start + 1, "1001", true))
+            .validate_for_at(&request, Some(now))
+            .expect("advancing range page");
+        response(batch(range_end, "0", false))
+            .validate_for_at(&request, Some(now))
+            .expect("range endpoint");
+        let mut invalid = response(batch(range_end, "0", true));
+        assert_eq!(
+            invalid
+                .validate_for_at(&request, Some(now))
+                .expect_err("has_more endpoint")
+                .code(),
+            "worker_history_range_batch_invalid"
+        );
+        let WorkerResponseBody::HistoryBatch { batch: body_batch } = &mut invalid.body else {
+            unreachable!();
+        };
+        body_batch.has_more = false;
+        body_batch.next_cursor.time_msc = range_start;
+        body_batch.next_cursor.ticket = "0".to_owned();
+        assert_eq!(
+            invalid
+                .validate_for_at(&request, Some(now))
+                .expect_err("premature endpoint")
+                .code(),
+            "worker_history_range_batch_invalid"
+        );
+        let mut out_of_range = response(batch(range_end, "0", false));
+        let WorkerResponseBody::HistoryBatch { batch: body_batch } = &mut out_of_range.body else {
+            unreachable!();
+        };
+        body_batch.deals[0]["time_utc_msc"] = serde_json::json!(range_end);
+        assert_eq!(
+            out_of_range
+                .validate_for_at(&request, Some(now))
+                .expect_err("out of range item")
+                .code(),
+            "worker_history_range_batch_invalid"
+        );
+        let mut malformed = response(batch(range_end, "0", false));
+        let WorkerResponseBody::HistoryBatch { batch: body_batch } = &mut malformed.body else {
+            unreachable!();
+        };
+        body_batch.deals[0]["time_utc_msc"] = serde_json::json!("not-a-time");
+        assert_eq!(
+            malformed
+                .validate_for_at(&request, Some(now))
+                .expect_err("malformed item time")
+                .code(),
+            "worker_history_range_batch_invalid"
+        );
+        let mut future = response(batch(range_end, "0", false));
+        let WorkerResponseBody::HistoryBatch { batch: body_batch } = &mut future.body else {
+            unreachable!();
+        };
+        body_batch.observed_at_utc_msc = now + 60_001;
+        assert_eq!(
+            future
+                .validate_for_at(&request, Some(now))
+                .expect_err("future observation")
+                .code(),
+            "worker_history_batch_invalid"
         );
     }
 }

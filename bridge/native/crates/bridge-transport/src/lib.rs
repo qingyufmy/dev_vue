@@ -2247,6 +2247,7 @@ mod tests {
             sent_at_utc_msc: 1_700_000_000_000,
             session_id: "session_01JTRANSPORT".to_owned(),
             bridge_version: "3.0.0-alpha.1".to_owned(),
+            capabilities: Vec::new(),
             installation_id: None,
             update_report: None,
             terminals: vec![TerminalDescriptor {

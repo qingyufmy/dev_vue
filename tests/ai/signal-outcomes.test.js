@@ -15,11 +15,15 @@ import {
   reconcileTerminalPendingOutcomes,
   reconcileSignalOutcomes,
   resolveOutcomeClosureTransition,
+  loadOutcomeHistory,
+  utcDateToday,
 } from '../../server/routes/ai/signal-outcomes.js'
 
 const outcome = (overrides = {}) => ({
   id: 1, user_id: 2, trading_account_id: 3, margin_mode: 'hedging', position_id: 'P1',
   entry_order_ticket: 'O1', pending_ticket: null, bridge_command_ref: 'AI-1', expected_volume: 1,
+  ownership_history_id:91, broker_server_key:'BROKER-DEMO', login_account:'7788',
+  ownership_started_at_utc_msc:Date.parse('2026-07-01T06:00:00.000Z'),
   approved_order_json: JSON.stringify({ sl: 90, tp: 120 }), ...overrides,
 })
 const deal = (overrides = {}) => ({
@@ -131,6 +135,92 @@ describe('signal outcome attribution', () => {
   })
 })
 
+describe('Bridge history coverage contract', () => {
+  const RANGE_START_UTC_MSC = Date.parse('2026-07-01T00:00:00.000Z')
+  const RANGE_END_UTC_MSC = 1786176000123
+  const route = { broker_server:'BROKER-DEMO', login:'7788' }
+  const batch = { evidence_position_ids:['100'], evidence_order_tickets:['200'] }
+  const page = (historySync = {}, overrides = {}) => ({
+    status:'success', deals:[], history_orders:[], source:'mt5_sqlite',
+    evidence_truncated:false,
+    history_sync:{
+      requested_range_complete:true,
+      requested_range_start_utc_msc:RANGE_START_UTC_MSC,
+      requested_range_end_utc_msc:RANGE_END_UTC_MSC,
+      evidence_truncated:false,
+      ...historySync,
+    },
+    ...overrides,
+  })
+
+  it('allows requested-range-complete evidence while archive backfill is still pending', async () => {
+    const bridge = vi.fn().mockResolvedValue(page({
+      archive_complete:false, backfill_pending:true, complete:false,
+    }))
+    await expect(loadOutcomeHistory(bridge, 2, RANGE_START_UTC_MSC, RANGE_END_UTC_MSC, [batch], route))
+      .resolves.toMatchObject({ status:'success' })
+  })
+
+  it('keeps an explicitly incomplete requested range pending', async () => {
+    const bridge = vi.fn().mockResolvedValue(page({
+      requested_range_complete:false, archive_complete:true, backfill_pending:false,
+      complete:true,
+    }))
+    await expect(loadOutcomeHistory(bridge, 2, RANGE_START_UTC_MSC, RANGE_END_UTC_MSC, [batch], route)).resolves.toBeNull()
+  })
+
+  it('fails closed on status errors and never falls back to ordinary history', async () => {
+    const bridge = vi.fn().mockResolvedValue({ status:'error', error:'history_evidence_unavailable' })
+    await expect(loadOutcomeHistory(bridge, 2, RANGE_START_UTC_MSC, RANGE_END_UTC_MSC, [batch], route)).resolves.toBeNull()
+    expect(bridge).toHaveBeenCalledTimes(1)
+    expect(bridge.mock.calls[0][1]).toBe('history_evidence')
+  })
+
+  it('rejects truncated evidence regardless of range completeness', async () => {
+    const bridge = vi.fn().mockResolvedValue(page({
+      complete:true, evidence_truncated:true,
+    }))
+    await expect(loadOutcomeHistory(bridge, 2, RANGE_START_UTC_MSC, RANGE_END_UTC_MSC, [batch], route)).resolves.toBeNull()
+  })
+
+  it('does not issue an unbounded evidence request', async () => {
+    const bridge = vi.fn().mockResolvedValue(page({ complete:true, evidence_truncated:false }))
+    await expect(loadOutcomeHistory(bridge, 2, null, null, [batch], route)).resolves.toBeNull()
+    expect(bridge).not.toHaveBeenCalled()
+  })
+
+  it('uses one exact range per evidence batch and deduplicates results', async () => {
+    const secondBatch = { evidence_position_ids:['101'], evidence_order_tickets:[] }
+    const bridge = vi.fn()
+      .mockResolvedValueOnce(page({}, { deals:[deal({ deal_ticket:'D1' })], history_orders:[{ ticket:'200' }] }))
+      .mockResolvedValueOnce(page({}, { deals:[deal({ deal_ticket:'D1' }), deal({ deal_ticket:'D2' })], history_orders:[{ ticket:'200' }, { ticket:'201' }] }))
+    const result = await loadOutcomeHistory(bridge, 2, RANGE_START_UTC_MSC, RANGE_END_UTC_MSC, [batch, secondBatch], route)
+    const calls = bridge.mock.calls.map(([, action, params]) => ({ action, params }))
+    expect(calls).toHaveLength(2)
+    expect(calls.every(call => call.action === 'history_evidence')).toBe(true)
+    expect(calls.every(call => call.params.range_start_utc_msc === RANGE_START_UTC_MSC)).toBe(true)
+    expect(calls.every(call => call.params.range_end_utc_msc === RANGE_END_UTC_MSC)).toBe(true)
+    expect(calls.every(call => call.params.broker_server === route.broker_server
+      && call.params.login === route.login)).toBe(true)
+    expect(calls.every(call => !('date_from' in call.params) && !('page' in call.params))).toBe(true)
+    expect(result.deals.map(item => item.deal_ticket)).toEqual(['D1', 'D2'])
+    expect(result.history_orders.map(item => item.ticket)).toEqual(['200', '201'])
+  })
+
+  it('rejects malformed evidence arrays and range metadata', async () => {
+    const malformed = vi.fn().mockResolvedValue(page({}, { deals:{} }))
+    await expect(loadOutcomeHistory(malformed, 2, RANGE_START_UTC_MSC, RANGE_END_UTC_MSC, [batch], route)).resolves.toBeNull()
+    const wrongRange = vi.fn().mockResolvedValue(page({ requested_range_end_utc_msc:RANGE_END_UTC_MSC + 1 }))
+    await expect(loadOutcomeHistory(wrongRange, 2, RANGE_START_UTC_MSC, RANGE_END_UTC_MSC, [batch], route)).resolves.toBeNull()
+  })
+
+  it('rejects evidence requests that are not bound to one broker account', async () => {
+    const bridge = vi.fn().mockResolvedValue(page())
+    await expect(loadOutcomeHistory(bridge, 2, RANGE_START_UTC_MSC, RANGE_END_UTC_MSC, [batch], {})).resolves.toBeNull()
+    expect(bridge).not.toHaveBeenCalled()
+  })
+})
+
 describe('position outcome monitor durability', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -142,10 +232,11 @@ describe('position outcome monitor durability', () => {
     expect(db.queryRun).toHaveBeenCalledTimes(4)
   })
 
-  it('keeps legacy Bridge history reconciliation working until scoped evidence is installed', async () => {
+  it('fails closed when scoped evidence is unavailable instead of scanning history pages', async () => {
     const legacyOutcome = outcome({
       status:'open', order_intent_id:8, entry_direction:'buy',
       position_id:'694675577', entry_order_ticket:'694675500',
+      created_at:'2026-07-15 10:00:00',
     })
     db.queryAll.mockResolvedValue([legacyOutcome])
     const run = vi.fn(async sql => sql.includes('SELECT * FROM signal_outcomes')
@@ -153,19 +244,56 @@ describe('position outcome monitor durability', () => {
     db.withTransaction.mockImplementation(callback => callback(run))
     const bridge = vi.fn(async (_userId, action, params) => {
       if (action === 'positions') return { status:'success', positions:[] }
-      if (params.evidence_position_ids) return { status:'error', error:'history_params_invalid' }
-      return {
-        status:'success', deals:[], history_orders:[],
-        pagination:{ total_pages:1 }, history_sync:{ complete:true, evidence_truncated:false },
-      }
+      if (action === 'history_evidence') return { status:'error', error:'history_evidence_unavailable' }
+      throw new Error(`unexpected action ${action}`)
     })
 
     await reconcileSignalOutcomes({ bridge })
 
-    const historyCalls = bridge.mock.calls.filter(([, action]) => action === 'history')
-    expect(historyCalls).toHaveLength(2)
-    expect(historyCalls[0][2]).toMatchObject({ evidence_position_ids:['694675577'] })
-    expect(historyCalls[1][2]).not.toHaveProperty('evidence_position_ids')
+    const historyCalls = bridge.mock.calls.filter(([, action]) => action === 'history_evidence')
+    expect(historyCalls).toHaveLength(1)
+    expect(bridge.mock.calls.some(([, action]) => action === 'history')).toBe(false)
+  })
+
+  it('isolates reconciliation history and positions by ownership-bound trading account', async () => {
+    const first = outcome({
+      status:'open', order_intent_id:8, created_at:'2026-07-15 10:00:00',
+      trading_account_id:3, ownership_history_id:91,
+      position_id:'7001', entry_order_ticket:'7101',
+      broker_server_key:'BROKER-A', login_account:'7788',
+      ownership_started_at_utc_msc:Date.parse('2026-07-01T06:00:00.000Z'),
+    })
+    const second = outcome({
+      id:2, status:'open', order_intent_id:9, created_at:'2026-07-16 10:00:00',
+      trading_account_id:4, ownership_history_id:92,
+      position_id:'8001', entry_order_ticket:'8101',
+      broker_server_key:'BROKER-B', login_account:'8899',
+      ownership_started_at_utc_msc:Date.parse('2026-07-10T08:00:00.000Z'),
+    })
+    db.queryAll.mockResolvedValue([first, second])
+    const bridge = vi.fn(async (_userId, action) => action === 'positions'
+      ? { status:'success', positions:[] }
+      : { status:'error', error:'history_evidence_unavailable' })
+
+    await reconcileSignalOutcomes({ bridge })
+
+    const evidenceParams = bridge.mock.calls
+      .filter(([, action]) => action === 'history_evidence')
+      .map(([, , params]) => params)
+    const positionsParams = bridge.mock.calls
+      .filter(([, action]) => action === 'positions')
+      .map(([, , params]) => params)
+    expect(evidenceParams).toEqual(expect.arrayContaining([
+      expect.objectContaining({ broker_server:'BROKER-A', login:'7788' }),
+      expect.objectContaining({ broker_server:'BROKER-B', login:'8899' }),
+    ]))
+    expect(positionsParams).toEqual(expect.arrayContaining([
+      { broker_server:'BROKER-A', login:'7788' },
+      { broker_server:'BROKER-B', login:'8899' },
+    ]))
+    expect(db.queryAll.mock.calls[0][0]).toContain('JOIN mt5_account_ownership_history ownership')
+    expect(db.queryAll.mock.calls[0][0]).toContain('ownership.ended_at IS NULL')
+    expect(db.withTransaction).not.toHaveBeenCalled()
   })
 
   it('retires terminal pending outcomes before they reach inference context', async () => {
@@ -187,6 +315,7 @@ describe('position outcome monitor durability', () => {
       status:'open', order_intent_id:8, entry_direction:'buy',
       protection_status:'missing_stop_loss', original_stop_loss:90,
       position_id:'694675577', entry_order_ticket:'694675500',
+      created_at:'2026-07-15 10:00:00',
     })
     db.queryAll.mockResolvedValue([managedOutcome])
     const writes = []
@@ -202,8 +331,14 @@ describe('position outcome monitor durability', () => {
       return [{ affectedRows:1 }, []]
     })
     db.withTransaction.mockImplementation(callback => callback(run))
-    const bridge = vi.fn(async (_userId, action) => action === 'history'
-      ? { status:'success', deals:[deal({ position_id:'694675577', order:'694675500' })], history_orders:[] }
+    const bridge = vi.fn(async (_userId, action, params) => action === 'history_evidence'
+      ? { status:'success', deals:[deal({ position_id:'694675577', order:'694675500' })], history_orders:[],
+        evidence_truncated:false, history_sync:{
+          requested_range_complete:true,
+          requested_range_start_utc_msc:params.range_start_utc_msc,
+          requested_range_end_utc_msc:params.range_end_utc_msc,
+          evidence_truncated:false,
+        }, source:'mt5_sqlite' }
       : { status:'success', positions:[{
         ticket:'694675577', position_id:'694675577', type:'buy', price_current:100,
         sl:90, tp:120, magic:234000, volume:1,
@@ -211,7 +346,7 @@ describe('position outcome monitor durability', () => {
 
     await reconcileSignalOutcomes({ bridge })
 
-    expect(bridge).toHaveBeenCalledWith(2, 'history', expect.objectContaining({
+    expect(bridge).toHaveBeenCalledWith(2, 'history_evidence', expect.objectContaining({
       evidence_position_ids:['694675577'],
       evidence_order_tickets:['694675500'],
     }), { noFallback:true })
@@ -219,9 +354,15 @@ describe('position outcome monitor durability', () => {
   })
 
   it('writes normalized close timestamps to both deal and outcome DATETIME columns', async () => {
-    db.queryAll.mockResolvedValue([outcome({ status:'open', order_intent_id:8, entry_direction:'buy' })])
+    db.queryAll.mockResolvedValue([outcome({
+      status:'open', order_intent_id:8, entry_direction:'buy', created_at:'2026-07-15 10:00:00',
+      position_id:'694675577', entry_order_ticket:'694675500',
+    })])
     const calls = []
-    const locked = outcome({ status:'open', order_intent_id:8, entry_direction:'buy' })
+    const locked = outcome({
+      status:'open', order_intent_id:8, entry_direction:'buy', created_at:'2026-07-15 10:00:00',
+      position_id:'694675577', entry_order_ticket:'694675500',
+    })
     const run = vi.fn(async (sql, params = []) => {
       calls.push([sql, params])
       if (sql.includes('SELECT * FROM signal_outcomes')) return [[locked], []]
@@ -229,11 +370,16 @@ describe('position outcome monitor durability', () => {
       return [{ affectedRows:1 }, []]
     })
     db.withTransaction.mockImplementation(callback => callback(run))
-    const bridge = vi.fn(async (_userId, action) => action === 'history'
+    const bridge = vi.fn(async (_userId, action, params) => action === 'history_evidence'
       ? { status:'success', deals:[
-          deal({ time:'2026-07-31T08:00:00Z' }),
-          deal({ deal_ticket:'D2', entry:1, profit:2, time:'2026-07-31T09:07:49Z' }),
-        ], history_orders:[] }
+          deal({ position_id:'694675577', order:'694675500', time:'2026-07-31T08:00:00Z' }),
+          deal({ deal_ticket:'D2', position_id:'694675577', order:'694675500', entry:1, profit:2, time:'2026-07-31T09:07:49Z' }),
+        ], history_orders:[], evidence_truncated:false, history_sync:{
+          requested_range_complete:true,
+          requested_range_start_utc_msc:params.range_start_utc_msc,
+          requested_range_end_utc_msc:params.range_end_utc_msc,
+          evidence_truncated:false,
+        }, source:'mt5_sqlite' }
       : { status:'success', positions:[] })
 
     await reconcileSignalOutcomes({ bridge })

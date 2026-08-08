@@ -1,6 +1,6 @@
 use crate::{
-    WorkerCapability, WorkerHello, WorkerHostError, WorkerRequest, WorkerResponse, WorkerRoute,
-    read_frame, write_frame,
+    WorkerCapability, WorkerHello, WorkerHostError, WorkerRequest, WorkerResponse, WorkerRole,
+    WorkerRoute, read_frame, write_frame,
 };
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +13,7 @@ use tokio::time::timeout;
 pub struct ExpectedWorker {
     pub session_nonce: String,
     pub route: WorkerRoute,
+    pub role: WorkerRole,
     pub required_capabilities: BTreeSet<WorkerCapability>,
 }
 
@@ -29,6 +30,26 @@ impl ExpectedWorker {
             return Err(WorkerHostError::new("worker_expected_nonce_invalid"));
         }
         if self.required_capabilities.is_empty() {
+            return Err(WorkerHostError::new("worker_expected_capabilities_invalid"));
+        }
+        if self
+            .required_capabilities
+            .iter()
+            .any(|capability| !match self.role {
+                WorkerRole::Live => matches!(
+                    capability,
+                    WorkerCapability::ExecuteCommand
+                        | WorkerCapability::QueryExecution
+                        | WorkerCapability::Quote
+                        | WorkerCapability::Data
+                        | WorkerCapability::Snapshot
+                ),
+                WorkerRole::Archive => matches!(
+                    capability,
+                    WorkerCapability::HistoryRangeSync | WorkerCapability::Shutdown
+                ),
+            })
+        {
             return Err(WorkerHostError::new("worker_expected_capabilities_invalid"));
         }
         Ok(())
@@ -64,6 +85,9 @@ where
         }
         if !hello.route.matches(&expected.route) {
             return Err(WorkerHostError::new("worker_hello_route_mismatch"));
+        }
+        if hello.role != expected.role {
+            return Err(WorkerHostError::new("worker_hello_role_mismatch"));
         }
         let capabilities = hello.capabilities.iter().copied().collect::<BTreeSet<_>>();
         if !expected.required_capabilities.is_subset(&capabilities) {
@@ -136,7 +160,7 @@ where
             }
             Ok(Ok(response)) => response,
         };
-        if let Err(error) = response.validate_for(request) {
+        if let Err(error) = response.validate_for_at(request, Some(now_utc_msc)) {
             self.fail();
             return Err(error);
         }
@@ -176,6 +200,7 @@ mod tests {
             session_nonce: NONCE.to_owned(),
             worker_version: "3.0.0-alpha.1".to_owned(),
             route,
+            role: WorkerRole::Live,
             capabilities: vec![
                 WorkerCapability::ExecuteCommand,
                 WorkerCapability::QueryExecution,
@@ -187,6 +212,7 @@ mod tests {
         ExpectedWorker {
             session_nonce: NONCE.to_owned(),
             route: route(),
+            role: WorkerRole::Live,
             required_capabilities: [
                 WorkerCapability::ExecuteCommand,
                 WorkerCapability::QueryExecution,
@@ -264,6 +290,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handshake_rejects_a_role_mismatch() {
+        let (core, mut worker) = duplex(16 * 1024);
+        let task = tokio::spawn(async move {
+            let mut archive = hello(route());
+            archive.role = WorkerRole::Archive;
+            archive.capabilities = vec![WorkerCapability::HistoryRangeSync];
+            write_frame(&mut worker, &archive).await.expect("hello");
+        });
+        assert_eq!(
+            WorkerClient::handshake(core, expected(), Duration::from_secs(1))
+                .await
+                .err()
+                .expect("role mismatch")
+                .code(),
+            "worker_hello_role_mismatch"
+        );
+        task.await.expect("worker");
+    }
+
+    #[tokio::test]
     async fn response_mismatch_poisoning_requires_a_worker_restart() {
         let (core, mut worker) = duplex(64 * 1024);
         let task = tokio::spawn(async move {
@@ -326,6 +372,7 @@ mod tests {
             ExpectedWorker {
                 session_nonce: NONCE.to_owned(),
                 route: route(),
+                role: WorkerRole::Live,
                 required_capabilities: BTreeSet::from([WorkerCapability::ExecuteCommand]),
             },
             Duration::from_secs(1),

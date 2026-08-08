@@ -3,16 +3,20 @@ use bridge_contract::{
     TerminalDescriptor, validate_id,
 };
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+    params_from_iter,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const BRIDGE_DATABASE_FILE_NAME: &str = "bridge.db";
 const DEFAULT_DATA_OUTBOX_LIMIT_PER_STREAM: i64 = 256;
@@ -21,6 +25,85 @@ const MAX_HISTORY_EVIDENCE_ITEMS: usize = 500;
 const MAX_HISTORY_EVIDENCE_REFS: usize = 100;
 const MAX_HISTORY_ITEM_BYTES: usize = 16 * 1024;
 const MAX_HISTORY_PAGE_PAYLOAD_BYTES: usize = SERVER_MAX_MESSAGE_BYTES - 64 * 1024;
+const MAX_LEGACY_HISTORY_PAGE: i64 = 500;
+const MAX_HISTORY_CURSOR_PAGE_SIZE: i64 = 200;
+const MAX_HISTORY_SNAPSHOTS: usize = 256;
+const MAX_HISTORY_SNAPSHOT_CURSORS: usize = 512;
+const HISTORY_SNAPSHOT_TTL_MSC: i64 = 10 * 60 * 1_000;
+const HISTORY_CURSOR_TOKEN_BYTES: usize = 32;
+pub const HISTORY_COVERAGE_START_UTC_MSC: i64 = 946_684_800_000;
+
+const NATIVE_COMMAND_LEDGER_REQUIRED_COLUMNS: &[&str] = &[
+    "command_id",
+    "payload_json",
+    "status",
+    "result_message_id",
+    "created_at_utc_msc",
+    "updated_at_utc_msc",
+];
+
+const HISTORY_RUNTIME_REQUIRED_TABLES: &[(&str, &[&str])] = &[
+    (
+        "account_initialization_state",
+        &[
+            "terminal_instance_id",
+            "broker_server",
+            "login_account",
+            "platform",
+            "schema_version",
+            "state",
+            "local_operational_ready",
+            "last_error_code",
+            "initialized_at_utc_msc",
+            "updated_at_utc_msc",
+        ],
+    ),
+    (
+        "history_sync_jobs",
+        &[
+            "job_id",
+            "terminal_instance_id",
+            "broker_server",
+            "login_account",
+            "job_kind",
+            "priority",
+            "range_start_utc_msc",
+            "range_end_utc_msc",
+            "cursor_time_msc",
+            "cursor_ticket",
+            "window_msc",
+            "state",
+            "attempt_count",
+            "next_attempt_at_utc_msc",
+            "last_error_code",
+            "lease_generation",
+            "lease_expires_at_utc_msc",
+            "created_at_utc_msc",
+            "updated_at_utc_msc",
+        ],
+    ),
+    (
+        "history_coverage_ranges",
+        &[
+            "terminal_instance_id",
+            "broker_server",
+            "login_account",
+            "range_start_utc_msc",
+            "range_end_utc_msc",
+            "observed_at_utc_msc",
+            "updated_at_utc_msc",
+        ],
+    ),
+];
+
+const NATIVE_COMMAND_LEDGER_REQUIRED_INDEXES: &[&str] = &["idx_native_command_ledger_status"];
+const HISTORY_RUNTIME_REQUIRED_INDEXES: &[&str] = &[
+    "idx_account_initialization_updated",
+    "idx_history_archive_order",
+    "idx_history_sync_jobs_claim",
+    "idx_history_sync_jobs_scope",
+    "idx_history_coverage_ranges_scope",
+];
 
 pub const REQUIRED_SCHEMA: &[(&str, &[&str])] = &[
     (
@@ -376,6 +459,19 @@ pub struct PersistDeltaResult {
     pub next_revision: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HistoryJobBatchStatus {
+    Checkpointed,
+    Completed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryJobBatchResult {
+    pub status: HistoryJobBatchStatus,
+    pub job: HistorySyncJob,
+    pub persisted_item_count: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredStreamProjection {
     pub revision: i64,
@@ -412,6 +508,120 @@ pub struct HistoryArchiveState {
     pub updated_at_utc_msc: i64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryScope {
+    pub terminal_instance_id: String,
+    pub broker_server: String,
+    pub login_account: String,
+}
+
+impl HistoryScope {
+    pub fn new(terminal_instance_id: &str, account_ref: &AccountRef) -> Result<Self, StoreError> {
+        let scope = Self {
+            terminal_instance_id: terminal_instance_id.to_owned(),
+            broker_server: account_ref.broker_server.clone(),
+            login_account: account_ref.login.clone(),
+        };
+        validate_history_scope_values(&scope)?;
+        Ok(scope)
+    }
+
+    fn account_ref(&self) -> AccountRef {
+        AccountRef {
+            broker_server: self.broker_server.clone(),
+            login: self.login_account.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AccountInitializationState {
+    pub scope: HistoryScope,
+    pub platform: String,
+    pub schema_version: i64,
+    pub state: String,
+    pub local_operational_ready: bool,
+    pub last_error_code: Option<String>,
+    pub initialized_at_utc_msc: i64,
+    pub updated_at_utc_msc: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NewHistorySyncJob {
+    pub job_id: String,
+    pub scope: HistoryScope,
+    pub job_kind: String,
+    pub priority: String,
+    pub range_start_utc_msc: i64,
+    pub range_end_utc_msc: i64,
+    pub cursor_time_msc: i64,
+    pub cursor_ticket: String,
+    pub window_msc: i64,
+    pub created_at_utc_msc: i64,
+}
+
+/// Atomic request for planning one bounded history range.  The planner owns
+/// coverage subtraction, active-job attachment and deterministic job identity;
+/// callers should not construct a synthetic `NewHistorySyncJob` for this path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryJobPlanningRequest {
+    pub scope: HistoryScope,
+    pub job_kind: String,
+    pub priority: String,
+    pub range_start_utc_msc: i64,
+    pub range_end_utc_msc: i64,
+    pub window_msc: i64,
+    pub now_utc_msc: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct HistoryJobPlanningResult {
+    pub created_jobs: Vec<HistorySyncJob>,
+    pub attached_jobs: Vec<HistorySyncJob>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistorySyncJob {
+    pub job_id: String,
+    pub scope: HistoryScope,
+    pub job_kind: String,
+    pub priority: String,
+    pub range_start_utc_msc: i64,
+    pub range_end_utc_msc: i64,
+    pub cursor_time_msc: i64,
+    pub cursor_ticket: String,
+    pub window_msc: i64,
+    pub state: String,
+    pub attempt_count: i64,
+    pub next_attempt_at_utc_msc: i64,
+    pub last_error_code: Option<String>,
+    pub lease_generation: i64,
+    pub lease_expires_at_utc_msc: Option<i64>,
+    pub created_at_utc_msc: i64,
+    pub updated_at_utc_msc: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryCoverageRange {
+    pub scope: HistoryScope,
+    pub range_start_utc_msc: i64,
+    pub range_end_utc_msc: i64,
+    pub observed_at_utc_msc: i64,
+    pub updated_at_utc_msc: i64,
+}
+
+/// A user-requested history range represented as a UTC half-open interval.
+///
+/// The range is deliberately independent from the SQL date filters.  It is
+/// used only to prove that the requested evidence is covered by the archive,
+/// so adjacent pages can use the same fixed endpoint without changing their
+/// completeness result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryRequestedRange {
+    pub range_start_utc_msc: i64,
+    pub range_end_utc_msc: i64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerminalDataCacheEntry {
     pub observed_at_utc_msc: i64,
@@ -421,6 +631,53 @@ pub struct TerminalDataCacheEntry {
 
 pub struct OutboxStore {
     connection: Mutex<Connection>,
+    history_read_connection: Mutex<Connection>,
+    history_snapshots: Mutex<HashMap<String, HistorySnapshotState>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistoryCursorQuery {
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+    page_size: i64,
+    entry_from_utc_msc: Option<i64>,
+    entry_to_utc_msc: Option<i64>,
+    direction: Option<String>,
+    profit_filter: Option<String>,
+}
+
+struct HistoryCursorPageRequest {
+    query: HistoryCursorQuery,
+    requested_range: HistoryRequestedRange,
+    snapshot_id: Option<String>,
+    cursor: Option<String>,
+    filter_sql: String,
+    filter_values: Vec<SqlValue>,
+    capital_filter_sql: String,
+    capital_filter_values: Vec<SqlValue>,
+}
+
+#[derive(Clone)]
+struct HistorySnapshotState {
+    terminal_instance_id: String,
+    broker_server: String,
+    login_account: String,
+    platform: String,
+    query: HistoryCursorQuery,
+    highwater_rowid: i64,
+    total_count: i64,
+    statistics: serde_json::Value,
+    history_sync: serde_json::Value,
+    expires_at_utc_msc: i64,
+    cursors: HashMap<String, HistorySnapshotCursor>,
+    cursor_order: VecDeque<String>,
+}
+
+#[derive(Clone)]
+struct HistorySnapshotCursor {
+    page: i64,
+    last_time_msc: i64,
+    last_item_id: String,
 }
 
 #[derive(Clone, Copy)]
@@ -457,7 +714,7 @@ impl OutboxStore {
         if report.status != SchemaCompatibilityStatus::Compatible {
             return Err(StoreError::new("bridge_store_schema_incompatible"));
         }
-        let connection = Connection::open_with_flags(
+        let mut connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
         )
@@ -465,16 +722,1157 @@ impl OutboxStore {
         connection
             .busy_timeout(Duration::from_secs(5))
             .map_err(|_| StoreError::new("bridge_store_busy_timeout_failed"))?;
-        connection
-            .pragma_update(None, "synchronous", "FULL")
-            .map_err(|_| StoreError::new("bridge_store_synchronous_failed"))?;
-        connection
-            .pragma_update(None, "foreign_keys", "ON")
-            .map_err(|_| StoreError::new("bridge_store_foreign_keys_failed"))?;
-        ensure_native_command_ledger_schema(&connection)?;
+        match runtime_schema_status(&connection)? {
+            RuntimeSchemaStatus::Complete => {
+                // A legacy 2.x writer may still advance history_archive_state
+                // after the runtime tables have been created.  Preserve that
+                // compatibility only when a read-only comparison proves a
+                // newer valid cursor needs seeding; ordinary 3.0 opens stay
+                // entirely free of schema writes.
+                let seed_needed = legacy_history_seed_needed(&connection)?;
+                configure_open_connection(&connection)?;
+                if seed_needed {
+                    ensure_history_runtime_schema(&mut connection)?;
+                    if runtime_schema_status(&connection)? != RuntimeSchemaStatus::Complete {
+                        return Err(StoreError::new("bridge_store_schema_incompatible"));
+                    }
+                }
+            }
+            RuntimeSchemaStatus::Incompatible => {
+                return Err(StoreError::new("bridge_store_schema_incompatible"));
+            }
+            RuntimeSchemaStatus::NeedsMigration => {
+                // The common path is deliberately read-only: CREATE IF NOT
+                // EXISTS still takes SQLite's schema write lock even when all
+                // objects already exist.  Only genuinely old databases enter
+                // the migration path below.
+                configure_open_connection(&connection)?;
+                ensure_native_command_ledger_schema(&connection)?;
+                ensure_history_runtime_schema(&mut connection)?;
+                if runtime_schema_status(&connection)? != RuntimeSchemaStatus::Complete {
+                    return Err(StoreError::new("bridge_store_schema_incompatible"));
+                }
+            }
+        }
+        let history_read_connection = open_history_read_connection(path)?;
         Ok(Self {
             connection: Mutex::new(connection),
+            history_read_connection: Mutex::new(history_read_connection),
+            history_snapshots: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn read_account_initialization_state(
+        &self,
+        scope: &HistoryScope,
+    ) -> Result<Option<AccountInitializationState>, StoreError> {
+        validate_history_scope_values(scope)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        read_account_initialization_state_locked(&connection, scope)
+    }
+
+    pub fn account_initialization_state(
+        &self,
+        scope: &HistoryScope,
+    ) -> Result<Option<AccountInitializationState>, StoreError> {
+        self.read_account_initialization_state(scope)
+    }
+
+    pub fn write_account_initialization_state(
+        &self,
+        state: &AccountInitializationState,
+    ) -> Result<(), StoreError> {
+        validate_account_initialization_state(state)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        connection
+            .execute(
+                "INSERT INTO account_initialization_state (
+                   terminal_instance_id, broker_server, login_account, platform,
+                   schema_version, state, local_operational_ready, last_error_code,
+                   initialized_at_utc_msc, updated_at_utc_msc
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(terminal_instance_id, broker_server, login_account) DO UPDATE SET
+                   platform = excluded.platform,
+                   schema_version = excluded.schema_version,
+                   state = excluded.state,
+                   local_operational_ready = excluded.local_operational_ready,
+                   last_error_code = excluded.last_error_code,
+                   initialized_at_utc_msc = excluded.initialized_at_utc_msc,
+                   updated_at_utc_msc = excluded.updated_at_utc_msc;",
+                params![
+                    state.scope.terminal_instance_id,
+                    state.scope.broker_server,
+                    state.scope.login_account,
+                    state.platform,
+                    state.schema_version,
+                    state.state,
+                    i64::from(state.local_operational_ready),
+                    state.last_error_code,
+                    state.initialized_at_utc_msc,
+                    state.updated_at_utc_msc,
+                ],
+            )
+            .map(|_| ())
+            .map_err(|_| StoreError::new("bridge_store_initialization_state_write_failed"))
+    }
+
+    pub fn enqueue_history_job(
+        &self,
+        job: &NewHistorySyncJob,
+    ) -> Result<HistorySyncJob, StoreError> {
+        validate_new_history_sync_job(job)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_history_job_transaction_failed"))?;
+        if let Some(existing) = read_history_sync_job_by_id(&transaction, &job.job_id)? {
+            if !history_scopes_equal(&existing.scope, &job.scope)
+                || existing.job_kind != job.job_kind
+                || existing.priority != job.priority
+                || existing.range_start_utc_msc != job.range_start_utc_msc
+                || existing.range_end_utc_msc != job.range_end_utc_msc
+                || existing.cursor_time_msc != job.cursor_time_msc
+                || existing.cursor_ticket != job.cursor_ticket
+                || existing.window_msc != job.window_msc
+                || existing.created_at_utc_msc != job.created_at_utc_msc
+            {
+                return Err(StoreError::new("bridge_store_history_job_conflict"));
+            }
+            transaction
+                .commit()
+                .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))?;
+            return Ok(existing);
+        }
+        transaction
+            .execute(
+                "INSERT INTO history_sync_jobs (
+                   job_id, terminal_instance_id, broker_server, login_account,
+                   job_kind, priority, range_start_utc_msc, range_end_utc_msc,
+                   cursor_time_msc, cursor_ticket, window_msc, state, attempt_count,
+                   next_attempt_at_utc_msc, last_error_code, lease_generation,
+                   lease_expires_at_utc_msc, created_at_utc_msc, updated_at_utc_msc
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                           'queued', 0, ?12, NULL, 0, NULL, ?12, ?12)
+                 ON CONFLICT(
+                   terminal_instance_id, broker_server, login_account,
+                   range_start_utc_msc, range_end_utc_msc
+                 ) DO NOTHING;",
+                params![
+                    job.job_id,
+                    job.scope.terminal_instance_id,
+                    job.scope.broker_server,
+                    job.scope.login_account,
+                    job.job_kind,
+                    job.priority,
+                    job.range_start_utc_msc,
+                    job.range_end_utc_msc,
+                    job.cursor_time_msc,
+                    job.cursor_ticket,
+                    job.window_msc,
+                    job.created_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_job_write_failed"))?;
+        let existing = read_history_sync_job_by_range(
+            &transaction,
+            &job.scope,
+            job.range_start_utc_msc,
+            job.range_end_utc_msc,
+        )?
+        .ok_or_else(|| StoreError::new("bridge_store_history_job_write_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))?;
+        Ok(existing)
+    }
+
+    pub fn enqueue_history_sync_job(
+        &self,
+        job: &NewHistorySyncJob,
+    ) -> Result<HistorySyncJob, StoreError> {
+        self.enqueue_history_job(job)
+    }
+
+    /// Enqueue a history job, promoting an existing lower-priority request for
+    /// the exact same account scope and half-open range when the new request is
+    /// P1.  The ordinary `enqueue_history_job` immutability contract remains
+    /// unchanged; this entry point is intentionally the only path that may
+    /// promote P2/P3 work.
+    pub fn enqueue_or_promote_history_job(
+        &self,
+        job: &NewHistorySyncJob,
+    ) -> Result<HistorySyncJob, StoreError> {
+        validate_new_history_sync_job(job)?;
+        if job.priority != "p1" {
+            return self.enqueue_history_job(job);
+        }
+        let now_utc_msc = job.created_at_utc_msc;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_job_transaction_failed"))?;
+
+        if let Some(existing_by_id) = read_history_sync_job_by_id(&transaction, &job.job_id)?
+            && (!history_scopes_equal(&existing_by_id.scope, &job.scope)
+                || existing_by_id.range_start_utc_msc != job.range_start_utc_msc
+                || existing_by_id.range_end_utc_msc != job.range_end_utc_msc)
+        {
+            return Err(StoreError::new("bridge_store_history_job_conflict"));
+        }
+
+        // The insert is intentionally idempotent on the schema's unique
+        // (scope, range) key.  Reading again after the insert handles a race
+        // in which another writer created the same range just before us.
+        transaction
+            .execute(
+                "INSERT INTO history_sync_jobs (
+                   job_id, terminal_instance_id, broker_server, login_account,
+                   job_kind, priority, range_start_utc_msc, range_end_utc_msc,
+                   cursor_time_msc, cursor_ticket, window_msc, state, attempt_count,
+                   next_attempt_at_utc_msc, last_error_code, lease_generation,
+                   lease_expires_at_utc_msc, created_at_utc_msc, updated_at_utc_msc
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                           'queued', 0, ?12, NULL, 0, NULL, ?12, ?12)
+                 ON CONFLICT(
+                   terminal_instance_id, broker_server, login_account,
+                   range_start_utc_msc, range_end_utc_msc
+                 ) DO NOTHING;",
+                params![
+                    job.job_id,
+                    job.scope.terminal_instance_id,
+                    job.scope.broker_server,
+                    job.scope.login_account,
+                    job.job_kind,
+                    job.priority,
+                    job.range_start_utc_msc,
+                    job.range_end_utc_msc,
+                    job.cursor_time_msc,
+                    job.cursor_ticket,
+                    job.window_msc,
+                    job.created_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_job_write_failed"))?;
+        let existing = read_history_sync_job_by_range(
+            &transaction,
+            &job.scope,
+            job.range_start_utc_msc,
+            job.range_end_utc_msc,
+        )?
+        .ok_or_else(|| StoreError::new("bridge_store_history_job_write_failed"))?;
+
+        let promoted = if existing.priority == "p1" {
+            match existing.state.as_str() {
+                "queued" | "retrying" | "running" | "completed" => existing,
+                "blocked" | "superseded" => {
+                    return Err(StoreError::new(
+                        "bridge_store_history_job_promotion_invalid",
+                    ));
+                }
+                _ => return Err(StoreError::new("bridge_store_history_job_invalid")),
+            }
+        } else if matches!(existing.priority.as_str(), "p2" | "p3") {
+            match existing.state.as_str() {
+                "queued" | "retrying" | "running" => {
+                    let affected = transaction
+                        .execute(
+                            "UPDATE history_sync_jobs
+                             SET priority = 'p1',
+                                 next_attempt_at_utc_msc = CASE
+                                   WHEN next_attempt_at_utc_msc > ?1 THEN ?1
+                                   ELSE next_attempt_at_utc_msc
+                                 END,
+                                 updated_at_utc_msc = ?1
+                             WHERE terminal_instance_id = ?2
+                               AND broker_server = ?3 COLLATE NOCASE
+                               AND login_account = ?4
+                               AND range_start_utc_msc = ?5
+                               AND range_end_utc_msc = ?6
+                               AND priority IN ('p2', 'p3')
+                               AND state IN ('queued', 'retrying', 'running');",
+                            params![
+                                now_utc_msc,
+                                job.scope.terminal_instance_id,
+                                job.scope.broker_server,
+                                job.scope.login_account,
+                                job.range_start_utc_msc,
+                                job.range_end_utc_msc,
+                            ],
+                        )
+                        .map_err(|_| StoreError::new("bridge_store_history_job_promote_failed"))?;
+                    if affected != 1 {
+                        return Err(StoreError::new(
+                            "bridge_store_history_job_promotion_invalid",
+                        ));
+                    }
+                    read_history_sync_job_by_range(
+                        &transaction,
+                        &job.scope,
+                        job.range_start_utc_msc,
+                        job.range_end_utc_msc,
+                    )?
+                    .ok_or_else(|| StoreError::new("bridge_store_history_job_promote_failed"))?
+                }
+                "completed" => existing,
+                "blocked" | "superseded" => {
+                    return Err(StoreError::new(
+                        "bridge_store_history_job_promotion_invalid",
+                    ));
+                }
+                _ => return Err(StoreError::new("bridge_store_history_job_invalid")),
+            }
+        } else {
+            return Err(StoreError::new(
+                "bridge_store_history_job_promotion_invalid",
+            ));
+        };
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))?;
+        Ok(promoted)
+    }
+
+    /// Atomically subtract completed coverage and in-flight allowed jobs from
+    /// a requested range, creating deterministic gap jobs and returning the
+    /// jobs that were attached to by the request.  Only the semantic
+    /// combinations used by the new scheduler are accepted; legacy backfill
+    /// rows remain untouched and are never considered active work here.
+    pub fn plan_history_jobs(
+        &self,
+        request: &HistoryJobPlanningRequest,
+    ) -> Result<HistoryJobPlanningResult, StoreError> {
+        validate_history_job_planning_request(request)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_planning_transaction_failed"))?;
+
+        let coverage = read_history_coverage_ranges_locked(&transaction, &request.scope)?;
+        let mut active_jobs = read_active_history_jobs_locked(&transaction, &request.scope)?;
+        let exact_existing = read_history_sync_job_by_range(
+            &transaction,
+            &request.scope,
+            request.range_start_utc_msc,
+            request.range_end_utc_msc,
+        )?;
+        let mut attached_jobs = Vec::new();
+
+        // An exact active lower-priority allowed job is promoted in place for
+        // P1.  Preserve progress and lease ownership while making a delayed
+        // retry immediately claimable, matching the existing promotion path.
+        if request.priority == "p1"
+            && exact_existing.as_ref().is_some_and(|job| {
+                is_allowed_history_job_kind(&job.job_kind)
+                    && matches!(job.state.as_str(), "queued" | "retrying" | "running")
+                    && matches!(job.priority.as_str(), "p2" | "p3")
+            })
+        {
+            let affected = transaction
+                .execute(
+                    "UPDATE history_sync_jobs
+                     SET priority = 'p1',
+                         next_attempt_at_utc_msc = CASE
+                           WHEN next_attempt_at_utc_msc > ?1 THEN ?1
+                           ELSE next_attempt_at_utc_msc
+                         END,
+                         updated_at_utc_msc = ?1
+                     WHERE terminal_instance_id = ?2
+                       AND broker_server = ?3 COLLATE NOCASE
+                       AND login_account = ?4
+                       AND range_start_utc_msc = ?5
+                       AND range_end_utc_msc = ?6
+                       AND job_kind IN ('recent', 'on_demand')
+                       AND priority IN ('p2', 'p3')
+                       AND state IN ('queued', 'retrying', 'running');",
+                    params![
+                        request.now_utc_msc,
+                        request.scope.terminal_instance_id,
+                        request.scope.broker_server,
+                        request.scope.login_account,
+                        request.range_start_utc_msc,
+                        request.range_end_utc_msc,
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_planning_promote_failed"))?;
+            if affected != 1 {
+                return Err(StoreError::new(
+                    "bridge_store_history_planning_promote_failed",
+                ));
+            }
+            let promoted = read_history_sync_job_by_range(
+                &transaction,
+                &request.scope,
+                request.range_start_utc_msc,
+                request.range_end_utc_msc,
+            )?
+            .ok_or_else(|| StoreError::new("bridge_store_history_planning_promote_failed"))?;
+            active_jobs.retain(|job| job.job_id != promoted.job_id);
+            active_jobs.push(promoted.clone());
+            attached_jobs.push(promoted);
+        }
+
+        let mut blockers = coverage
+            .iter()
+            .map(|range| (range.range_start_utc_msc, range.range_end_utc_msc))
+            .collect::<Vec<_>>();
+        for job in &active_jobs {
+            if !is_allowed_history_job_kind(&job.job_kind)
+                || !matches!(job.state.as_str(), "queued" | "retrying" | "running")
+            {
+                continue;
+            }
+            if request.priority == "p1" && job.priority != "p1" {
+                continue;
+            }
+            blockers.push((job.range_start_utc_msc, job.range_end_utc_msc));
+            if ranges_overlap(
+                request.range_start_utc_msc,
+                request.range_end_utc_msc,
+                job.range_start_utc_msc,
+                job.range_end_utc_msc,
+            ) {
+                attached_jobs.push(job.clone());
+            }
+        }
+        let gaps = subtract_history_ranges(
+            request.range_start_utc_msc,
+            request.range_end_utc_msc,
+            &blockers,
+        );
+
+        let mut created_jobs = Vec::new();
+        for (range_start_utc_msc, range_end_utc_msc) in gaps {
+            let job_id = history_job_identity(
+                &request.scope,
+                &request.job_kind,
+                range_start_utc_msc,
+                range_end_utc_msc,
+            );
+            let affected = transaction
+                .execute(
+                    "INSERT INTO history_sync_jobs (
+                       job_id, terminal_instance_id, broker_server, login_account,
+                       job_kind, priority, range_start_utc_msc, range_end_utc_msc,
+                       cursor_time_msc, cursor_ticket, window_msc, state, attempt_count,
+                       next_attempt_at_utc_msc, last_error_code, lease_generation,
+                       lease_expires_at_utc_msc, created_at_utc_msc, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?7, '0', ?9,
+                               'queued', 0, ?10, NULL, 0, NULL, ?10, ?10)
+                     ON CONFLICT(
+                       terminal_instance_id, broker_server, login_account,
+                       range_start_utc_msc, range_end_utc_msc
+                     ) DO NOTHING;",
+                    params![
+                        job_id,
+                        request.scope.terminal_instance_id,
+                        request.scope.broker_server,
+                        request.scope.login_account,
+                        request.job_kind,
+                        request.priority,
+                        range_start_utc_msc,
+                        range_end_utc_msc,
+                        request.window_msc,
+                        request.now_utc_msc,
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_planning_write_failed"))?;
+            let existing = read_history_sync_job_by_range(
+                &transaction,
+                &request.scope,
+                range_start_utc_msc,
+                range_end_utc_msc,
+            )?
+            .ok_or_else(|| StoreError::new("bridge_store_history_planning_write_failed"))?;
+            if affected == 1 {
+                created_jobs.push(existing);
+                continue;
+            }
+            if existing.job_kind == "backfill" {
+                return Err(StoreError::new(
+                    "bridge_store_history_planning_legacy_collision",
+                ));
+            }
+            if is_allowed_history_job_kind(&existing.job_kind)
+                && matches!(existing.state.as_str(), "queued" | "retrying" | "running")
+            {
+                if request.priority == "p1" && matches!(existing.priority.as_str(), "p2" | "p3") {
+                    let affected = transaction
+                        .execute(
+                            "UPDATE history_sync_jobs
+                             SET priority = 'p1',
+                                 next_attempt_at_utc_msc = CASE
+                                   WHEN next_attempt_at_utc_msc > ?1 THEN ?1
+                                   ELSE next_attempt_at_utc_msc
+                                 END,
+                                 updated_at_utc_msc = ?1
+                             WHERE job_id = ?2 AND priority IN ('p2', 'p3')
+                               AND state IN ('queued', 'retrying', 'running');",
+                            params![request.now_utc_msc, existing.job_id.as_str()],
+                        )
+                        .map_err(|_| {
+                            StoreError::new("bridge_store_history_planning_promote_failed")
+                        })?;
+                    if affected != 1 {
+                        return Err(StoreError::new(
+                            "bridge_store_history_planning_promote_failed",
+                        ));
+                    }
+                    let promoted = read_history_sync_job_by_id(&transaction, &existing.job_id)?
+                        .ok_or_else(|| {
+                            StoreError::new("bridge_store_history_planning_promote_failed")
+                        })?;
+                    attached_jobs.push(promoted);
+                } else {
+                    attached_jobs.push(existing);
+                }
+                continue;
+            }
+            return Err(StoreError::new("bridge_store_history_planning_collision"));
+        }
+        dedup_history_jobs(&mut attached_jobs);
+        attached_jobs.sort_by(history_job_order);
+        created_jobs.sort_by(history_job_order);
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_planning_commit_failed"))?;
+        Ok(HistoryJobPlanningResult {
+            created_jobs,
+            attached_jobs,
+        })
+    }
+
+    pub fn history_sync_job(&self, job_id: &str) -> Result<Option<HistorySyncJob>, StoreError> {
+        validate_history_job_id(job_id)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        read_history_sync_job_by_id(&connection, job_id)
+    }
+
+    pub fn claim_history_job(
+        &self,
+        scope: &HistoryScope,
+        now_utc_msc: i64,
+        lease_duration_msc: i64,
+    ) -> Result<Option<HistorySyncJob>, StoreError> {
+        self.claim_history_job_internal(scope, now_utc_msc, lease_duration_msc, None)
+    }
+
+    /// Claim only jobs whose kind is present in `allowed_job_kinds`.
+    ///
+    /// The old `claim_history_job` entry point intentionally remains
+    /// unrestricted for rollback compatibility, including legacy `backfill`
+    /// rows.  New schedulers should pass the explicit allow-list so those
+    /// rows remain inert without changing the database CHECK constraint.
+    pub fn claim_history_job_with_allowed_kinds<K: AsRef<str>>(
+        &self,
+        scope: &HistoryScope,
+        now_utc_msc: i64,
+        lease_duration_msc: i64,
+        allowed_job_kinds: &[K],
+    ) -> Result<Option<HistorySyncJob>, StoreError> {
+        let allowed_job_kinds = normalize_history_job_kinds(allowed_job_kinds)?;
+        self.claim_history_job_internal(
+            scope,
+            now_utc_msc,
+            lease_duration_msc,
+            Some(&allowed_job_kinds),
+        )
+    }
+
+    fn claim_history_job_internal(
+        &self,
+        scope: &HistoryScope,
+        now_utc_msc: i64,
+        lease_duration_msc: i64,
+        allowed_job_kinds: Option<&[String]>,
+    ) -> Result<Option<HistorySyncJob>, StoreError> {
+        validate_history_scope_values(scope)?;
+        let lease_expires_at_utc_msc = now_utc_msc
+            .checked_add(lease_duration_msc)
+            .ok_or_else(|| StoreError::new("bridge_store_history_lease_invalid"))?;
+        if now_utc_msc <= 0 || lease_duration_msc <= 0 || lease_expires_at_utc_msc <= now_utc_msc {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_job_transaction_failed"))?;
+        let candidate =
+            read_claimable_history_job(&transaction, scope, now_utc_msc, allowed_job_kinds)?;
+        let Some(mut job) = candidate else {
+            transaction
+                .commit()
+                .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))?;
+            return Ok(None);
+        };
+        let lease_generation = job
+            .lease_generation
+            .checked_add(1)
+            .ok_or_else(|| StoreError::new("bridge_store_history_lease_generation_exhausted"))?;
+        let affected = transaction
+            .execute(
+                "UPDATE history_sync_jobs
+                 SET state = 'running', attempt_count = attempt_count + 1,
+                     lease_generation = ?2, lease_expires_at_utc_msc = ?3,
+                     updated_at_utc_msc = ?4
+                 WHERE job_id = ?1
+                   AND (
+                     (state IN ('queued', 'retrying') AND next_attempt_at_utc_msc <= ?4)
+                     OR (state = 'running' AND lease_expires_at_utc_msc <= ?4)
+                   );",
+                params![
+                    job.job_id,
+                    lease_generation,
+                    lease_expires_at_utc_msc,
+                    now_utc_msc
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_job_claim_failed"))?;
+        if affected != 1 {
+            return Err(StoreError::new("bridge_store_history_job_claim_failed"));
+        }
+        job.state = "running".to_owned();
+        job.attempt_count = job
+            .attempt_count
+            .checked_add(1)
+            .ok_or_else(|| StoreError::new("bridge_store_history_attempt_exhausted"))?;
+        job.lease_generation = lease_generation;
+        job.lease_expires_at_utc_msc = Some(lease_expires_at_utc_msc);
+        job.updated_at_utc_msc = now_utc_msc;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))?;
+        Ok(Some(job))
+    }
+
+    /// Yield a running lower-priority history job when a due P1 job for the
+    /// same account scope is waiting.  This is a normal scheduler handoff,
+    /// not a retry: the current cursor, window, attempt count and last error
+    /// are deliberately preserved and no failure is recorded.
+    pub fn yield_history_job_if_higher_priority_waiting(
+        &self,
+        job_id: &str,
+        lease_generation: i64,
+        now_utc_msc: i64,
+    ) -> Result<bool, StoreError> {
+        validate_history_job_id(job_id)?;
+        validate_history_lease_generation(lease_generation)?;
+        if now_utc_msc <= 0 {
+            return Err(StoreError::new("bridge_store_history_yield_invalid"));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_job_transaction_failed"))?;
+        let current = read_history_sync_job_by_id(&transaction, job_id)?
+            .ok_or_else(|| StoreError::new("bridge_store_history_job_unknown"))?;
+        if current.state != "running"
+            || current.lease_generation != lease_generation
+            || current
+                .lease_expires_at_utc_msc
+                .is_none_or(|expires| expires <= now_utc_msc)
+        {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        let should_yield = matches!(current.priority.as_str(), "p2" | "p3")
+            && transaction
+                .query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM history_sync_jobs
+                       WHERE terminal_instance_id = ?1
+                         AND broker_server = ?2 COLLATE NOCASE
+                         AND login_account = ?3
+                         AND priority = 'p1'
+                         AND (
+                           (state IN ('queued', 'retrying') AND next_attempt_at_utc_msc <= ?4)
+                           OR (state = 'running' AND lease_expires_at_utc_msc <= ?4)
+                         )
+                     );",
+                    params![
+                        current.scope.terminal_instance_id,
+                        current.scope.broker_server,
+                        current.scope.login_account,
+                        now_utc_msc
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_job_query_failed"))?
+                == 1;
+        if !should_yield {
+            transaction
+                .commit()
+                .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))?;
+            return Ok(false);
+        }
+        let affected = transaction
+            .execute(
+                "UPDATE history_sync_jobs
+                 SET state = 'queued', next_attempt_at_utc_msc = ?2,
+                     lease_expires_at_utc_msc = NULL, updated_at_utc_msc = ?2
+                 WHERE job_id = ?1 AND state = 'running'
+                   AND lease_generation = ?3
+                   AND lease_expires_at_utc_msc > ?2;",
+                params![job_id, now_utc_msc, lease_generation],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_yield_failed"))?;
+        if affected != 1 {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))?;
+        Ok(true)
+    }
+
+    pub fn checkpoint_history_job(
+        &self,
+        job_id: &str,
+        lease_generation: i64,
+        cursor_time_msc: i64,
+        cursor_ticket: &str,
+        window_msc: i64,
+        now_utc_msc: i64,
+    ) -> Result<(), StoreError> {
+        validate_history_job_id(job_id)?;
+        validate_history_lease_generation(lease_generation)?;
+        validate_job_cursor(cursor_time_msc, cursor_ticket)?;
+        if window_msc <= 0 || now_utc_msc <= 0 {
+            return Err(StoreError::new("bridge_store_history_checkpoint_invalid"));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_history_job_transaction_failed"))?;
+        let (range_start, range_end, current_cursor_time, current_cursor_ticket) = transaction
+            .query_row(
+                "SELECT range_start_utc_msc, range_end_utc_msc,
+                        cursor_time_msc, cursor_ticket
+                 FROM history_sync_jobs WHERE job_id = ?1 LIMIT 1;",
+                [job_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_job_query_failed"))?
+            .ok_or_else(|| StoreError::new("bridge_store_history_job_unknown"))?;
+        if cursor_time_msc < range_start
+            || cursor_time_msc > range_end
+            || cursor_time_msc == range_end && !cursor_ticket.is_empty()
+        {
+            return Err(StoreError::new("bridge_store_history_checkpoint_invalid"));
+        }
+        if cursor_time_msc < current_cursor_time
+            || cursor_time_msc == current_cursor_time
+                && compare_decimal_strings(cursor_ticket, &current_cursor_ticket).is_lt()
+        {
+            return Err(StoreError::new(
+                "bridge_store_history_checkpoint_regression",
+            ));
+        }
+        let affected = transaction
+            .execute(
+                "UPDATE history_sync_jobs
+                 SET cursor_time_msc = ?2, cursor_ticket = ?3, window_msc = ?4,
+                     updated_at_utc_msc = ?5
+                 WHERE job_id = ?1 AND state = 'running'
+                   AND lease_generation = ?6
+                   AND lease_expires_at_utc_msc > ?5;",
+                params![
+                    job_id,
+                    cursor_time_msc,
+                    cursor_ticket,
+                    window_msc,
+                    now_utc_msc,
+                    lease_generation
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_checkpoint_failed"))?;
+        if affected != 1 {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))
+    }
+
+    pub fn persist_history_job_batch(
+        &self,
+        terminal: &TerminalDescriptor,
+        job_id: &str,
+        lease_generation: i64,
+        batch: &HistoryArchiveBatch,
+        window_msc: i64,
+        now_utc_msc: i64,
+    ) -> Result<HistoryJobBatchResult, StoreError> {
+        validate_history_job_id(job_id)?;
+        validate_history_lease_generation(lease_generation)?;
+        if window_msc <= 0 || now_utc_msc <= 0 {
+            return Err(StoreError::new("bridge_store_history_batch_invalid"));
+        }
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        if terminal.platform != "mt5" {
+            return Err(StoreError::new("bridge_store_history_scope_invalid"));
+        }
+        validate_history_archive_batch_shape(batch)?;
+
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_transaction_failed"))?;
+        let job = read_history_sync_job_by_id(&transaction, job_id)?
+            .ok_or_else(|| StoreError::new("bridge_store_history_job_unknown"))?;
+        if job.state != "running"
+            || job.lease_generation != lease_generation
+            || job
+                .lease_expires_at_utc_msc
+                .is_none_or(|expires| expires <= now_utc_msc)
+        {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        if !history_scope_matches_terminal(&job.scope, terminal) {
+            return Err(StoreError::new("bridge_store_history_scope_mismatch"));
+        }
+        validate_history_job_batch_cursor(&job, &batch.next_cursor, batch.has_more)?;
+        validate_history_items_in_range(
+            &batch.deals,
+            job.range_start_utc_msc,
+            job.range_end_utc_msc,
+        )?;
+        validate_history_items_in_range(
+            &batch.history_orders,
+            job.range_start_utc_msc,
+            job.range_end_utc_msc,
+        )?;
+        validate_history_items_in_range(
+            &batch.trades,
+            job.range_start_utc_msc,
+            job.range_end_utc_msc,
+        )?;
+        upsert_history_items(
+            &transaction,
+            terminal,
+            "deal",
+            &batch.deals,
+            batch.observed_at_utc_msc,
+        )?;
+        upsert_history_items(
+            &transaction,
+            terminal,
+            "history_order",
+            &batch.history_orders,
+            batch.observed_at_utc_msc,
+        )?;
+        upsert_history_items(
+            &transaction,
+            terminal,
+            "trade",
+            &batch.trades,
+            batch.observed_at_utc_msc,
+        )?;
+        // A no-more response can terminate either the current sub-window or
+        // the complete job range.  Only the latter is allowed to write
+        // coverage and transition the job to `completed`; sub-window
+        // endpoints remain lease-owned `running` checkpoints.
+        let is_complete = !batch.has_more
+            && batch.next_cursor.time_msc == job.range_end_utc_msc
+            && batch.next_cursor.ticket == "0";
+        let (cursor_time_msc, cursor_ticket) = if is_complete {
+            merge_history_coverage_range_tx(
+                &transaction,
+                &job.scope,
+                job.range_start_utc_msc,
+                job.range_end_utc_msc,
+                batch.observed_at_utc_msc,
+                now_utc_msc,
+            )?;
+            (job.range_end_utc_msc, String::new())
+        } else {
+            (batch.next_cursor.time_msc, batch.next_cursor.ticket.clone())
+        };
+        let affected = transaction
+            .execute(
+                "UPDATE history_sync_jobs
+                 SET state = CASE WHEN ?2 = 1 THEN 'completed' ELSE 'running' END,
+                     cursor_time_msc = ?3, cursor_ticket = ?4, window_msc = ?5,
+                     next_attempt_at_utc_msc = ?6,
+                     last_error_code = NULL,
+                     lease_expires_at_utc_msc = CASE WHEN ?2 = 1 THEN NULL
+                                                    ELSE lease_expires_at_utc_msc END,
+                     updated_at_utc_msc = ?6
+                 WHERE job_id = ?1 AND state = 'running'
+                   AND lease_generation = ?7
+                   AND lease_expires_at_utc_msc > ?6;",
+                params![
+                    job_id,
+                    i64::from(is_complete),
+                    cursor_time_msc,
+                    cursor_ticket,
+                    window_msc,
+                    now_utc_msc,
+                    lease_generation,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_batch_write_failed"))?;
+        if affected != 1 {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        let updated_job = read_history_sync_job_by_id(&transaction, job_id)?
+            .ok_or_else(|| StoreError::new("bridge_store_history_job_unknown"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))?;
+        Ok(HistoryJobBatchResult {
+            status: if is_complete {
+                HistoryJobBatchStatus::Completed
+            } else {
+                HistoryJobBatchStatus::Checkpointed
+            },
+            job: updated_job,
+            persisted_item_count: batch.deals.len()
+                + batch.history_orders.len()
+                + batch.trades.len(),
+        })
+    }
+
+    pub fn renew_history_job(
+        &self,
+        job_id: &str,
+        lease_generation: i64,
+        now_utc_msc: i64,
+        lease_duration_msc: i64,
+    ) -> Result<HistorySyncJob, StoreError> {
+        validate_history_job_id(job_id)?;
+        validate_history_lease_generation(lease_generation)?;
+        let lease_expires_at_utc_msc = now_utc_msc
+            .checked_add(lease_duration_msc)
+            .ok_or_else(|| StoreError::new("bridge_store_history_lease_invalid"))?;
+        if now_utc_msc <= 0 || lease_duration_msc <= 0 || lease_expires_at_utc_msc <= now_utc_msc {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_history_job_transaction_failed"))?;
+        let affected = transaction
+            .execute(
+                "UPDATE history_sync_jobs
+                 SET lease_expires_at_utc_msc = ?3, updated_at_utc_msc = ?4
+                 WHERE job_id = ?1 AND state = 'running'
+                   AND lease_generation = ?2
+                   AND lease_expires_at_utc_msc > ?4;",
+                params![
+                    job_id,
+                    lease_generation,
+                    lease_expires_at_utc_msc,
+                    now_utc_msc
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_renew_failed"))?;
+        if affected != 1 {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        let job = read_history_sync_job_by_id(&transaction, job_id)?
+            .ok_or_else(|| StoreError::new("bridge_store_history_job_unknown"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_job_commit_failed"))?;
+        Ok(job)
+    }
+
+    pub fn heartbeat_history_job(
+        &self,
+        job_id: &str,
+        lease_generation: i64,
+        now_utc_msc: i64,
+        lease_duration_msc: i64,
+    ) -> Result<HistorySyncJob, StoreError> {
+        self.renew_history_job(job_id, lease_generation, now_utc_msc, lease_duration_msc)
+    }
+
+    pub fn retry_history_job(
+        &self,
+        job_id: &str,
+        lease_generation: i64,
+        next_attempt_at_utc_msc: i64,
+        error_code: &str,
+        now_utc_msc: i64,
+    ) -> Result<(), StoreError> {
+        validate_history_job_id(job_id)?;
+        validate_history_lease_generation(lease_generation)?;
+        validate_history_error_code(error_code)?;
+        if next_attempt_at_utc_msc <= 0 || now_utc_msc <= 0 {
+            return Err(StoreError::new("bridge_store_history_retry_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let affected = connection
+            .execute(
+                "UPDATE history_sync_jobs
+                 SET state = 'retrying', next_attempt_at_utc_msc = ?3,
+                     last_error_code = ?4, lease_expires_at_utc_msc = NULL,
+                     updated_at_utc_msc = ?5
+                 WHERE job_id = ?1 AND state = 'running'
+                   AND lease_generation = ?2
+                   AND lease_expires_at_utc_msc > ?5;",
+                params![
+                    job_id,
+                    lease_generation,
+                    next_attempt_at_utc_msc,
+                    error_code,
+                    now_utc_msc
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_retry_failed"))?;
+        if affected != 1 {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        Ok(())
+    }
+
+    pub fn block_history_job(
+        &self,
+        job_id: &str,
+        lease_generation: i64,
+        error_code: &str,
+        now_utc_msc: i64,
+    ) -> Result<(), StoreError> {
+        validate_history_job_id(job_id)?;
+        validate_history_lease_generation(lease_generation)?;
+        validate_history_error_code(error_code)?;
+        if now_utc_msc <= 0 {
+            return Err(StoreError::new("bridge_store_history_block_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let affected = connection
+            .execute(
+                "UPDATE history_sync_jobs
+                 SET state = 'blocked', last_error_code = ?3,
+                     lease_expires_at_utc_msc = NULL, updated_at_utc_msc = ?4
+                 WHERE job_id = ?1 AND state = 'running'
+                   AND lease_generation = ?2
+                   AND lease_expires_at_utc_msc > ?4;",
+                params![job_id, lease_generation, error_code, now_utc_msc],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_block_failed"))?;
+        if affected != 1 {
+            return Err(StoreError::new("bridge_store_history_lease_invalid"));
+        }
+        Ok(())
+    }
+
+    pub fn supersede_history_scope(
+        &self,
+        scope: &HistoryScope,
+        now_utc_msc: i64,
+    ) -> Result<usize, StoreError> {
+        validate_history_scope_values(scope)?;
+        if now_utc_msc <= 0 {
+            return Err(StoreError::new("bridge_store_history_supersede_invalid"));
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let affected = connection
+            .execute(
+                "UPDATE history_sync_jobs
+                 SET state = 'superseded', last_error_code = 'scope_superseded',
+                     lease_expires_at_utc_msc = NULL, updated_at_utc_msc = ?4
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3
+                   AND state NOT IN ('completed', 'superseded');",
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account,
+                    now_utc_msc
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_supersede_failed"))?;
+        Ok(affected)
+    }
+
+    pub fn history_coverage_ranges(
+        &self,
+        scope: &HistoryScope,
+    ) -> Result<Vec<HistoryCoverageRange>, StoreError> {
+        validate_history_scope_values(scope)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        read_history_coverage_ranges_locked(&connection, scope)
+    }
+
+    pub fn is_history_range_covered(
+        &self,
+        scope: &HistoryScope,
+        range_start_utc_msc: i64,
+        range_end_utc_msc: i64,
+    ) -> Result<bool, StoreError> {
+        validate_history_scope_values(scope)?;
+        validate_history_range(range_start_utc_msc, range_end_utc_msc)?;
+        let ranges = self.history_coverage_ranges(scope)?;
+        Ok(history_ranges_cover(
+            &ranges,
+            range_start_utc_msc,
+            range_end_utc_msc,
+        ))
+    }
+
+    pub fn history_range_is_covered(
+        &self,
+        scope: &HistoryScope,
+        range_start_utc_msc: i64,
+        range_end_utc_msc: i64,
+    ) -> Result<bool, StoreError> {
+        self.is_history_range_covered(scope, range_start_utc_msc, range_end_utc_msc)
     }
 
     pub fn enqueue(&self, record: &NewOutboxRecord) -> Result<bool, StoreError> {
@@ -892,14 +2290,7 @@ impl OutboxStore {
         terminal
             .validate()
             .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
-        validate_history_cursor(&batch.next_cursor)?;
-        if batch.observed_at_utc_msc <= 0
-            || batch.deals.len() > MAX_HISTORY_BATCH_ITEMS
-            || batch.history_orders.len() > MAX_HISTORY_BATCH_ITEMS
-            || batch.trades.len() > MAX_HISTORY_BATCH_ITEMS
-        {
-            return Err(StoreError::new("bridge_store_history_batch_invalid"));
-        }
+        validate_history_archive_batch_shape(batch)?;
         let mut connection = self
             .connection
             .lock()
@@ -980,12 +2371,21 @@ impl OutboxStore {
         terminal: &TerminalDescriptor,
         parameters: &serde_json::Value,
     ) -> Result<serde_json::Value, StoreError> {
+        self.read_history_archive_page_at(terminal, parameters, current_utc_msc()?)
+    }
+
+    pub fn read_history_archive_page_at(
+        &self,
+        terminal: &TerminalDescriptor,
+        parameters: &serde_json::Value,
+        now_utc_msc: i64,
+    ) -> Result<serde_json::Value, StoreError> {
         terminal
             .validate()
             .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
-        let request = parse_history_page_request(parameters)?;
+        let request = parse_history_page_request(parameters, now_utc_msc)?;
         let connection = self
-            .connection
+            .history_read_connection
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
         let scope = history_scope_values(terminal);
@@ -1018,14 +2418,20 @@ impl OutboxStore {
             (request.page - 1).saturating_mul(request.page_size),
         ));
         let mut rows = read_json_rows(&mut statement, params_from_iter(page_values))?;
-        hydrate_history_trade_protection(&connection, terminal, &mut rows)?;
+        hydrate_history_trade_protection(
+            &connection,
+            terminal,
+            &mut rows,
+            request.requested_range.as_ref(),
+        )?;
         let (deals, history_orders, evidence_truncated) = if request.include_deals {
-            read_history_evidence(
+            read_history_evidence_for_page(
                 &connection,
                 terminal,
                 &rows,
                 &request.evidence_position_ids,
                 &request.evidence_order_tickets,
+                request.requested_range.as_ref(),
             )?
         } else {
             (Vec::new(), Vec::new(), false)
@@ -1033,6 +2439,14 @@ impl OutboxStore {
         let statistics =
             read_history_statistics(&connection, terminal, &request, total, filtered_values)?;
         let state = read_history_state_locked(&connection, terminal)?;
+        let mut history_sync = read_history_sync_metadata_locked(
+            &connection,
+            terminal,
+            &request,
+            &state,
+            now_utc_msc,
+        )?;
+        history_sync["evidence_truncated"] = serde_json::Value::Bool(evidence_truncated);
         let mut payload = serde_json::json!({
             "orders": rows,
             "deals": deals,
@@ -1044,12 +2458,395 @@ impl OutboxStore {
                 "total_count": total,
                 "total_pages": std::cmp::max((total + request.page_size - 1) / request.page_size, 1),
             },
-            "history_sync": {
-                "complete": state.is_complete,
-                "cursor_time_msc": state.cursor.time_msc,
-                "updated_at_utc_msc": state.updated_at_utc_msc,
-                "evidence_truncated": evidence_truncated,
+            "history_sync": history_sync,
+            "source": format!("{}_sqlite", terminal.platform),
+        });
+        enforce_history_payload_budget(&mut payload)?;
+        Ok(payload)
+    }
+
+    /// Read one exact-range history page using an opaque, bounded keyset
+    /// cursor.  The legacy `history` action remains OFFSET based; this path
+    /// deliberately has its own strict request parser and in-process state so
+    /// a caller cannot accidentally turn a cursor into an unbounded archive
+    /// scan.
+    pub fn read_history_cursor_page(
+        &self,
+        terminal: &TerminalDescriptor,
+        parameters: &serde_json::Value,
+    ) -> Result<serde_json::Value, StoreError> {
+        self.read_history_cursor_page_at(terminal, parameters, current_utc_msc()?)
+    }
+
+    pub fn read_history_cursor_page_at(
+        &self,
+        terminal: &TerminalDescriptor,
+        parameters: &serde_json::Value,
+        now_utc_msc: i64,
+    ) -> Result<serde_json::Value, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        let request = parse_history_cursor_page_request(parameters, now_utc_msc)?;
+        let requested_snapshot = request.snapshot_id.clone();
+        let requested_cursor = request.cursor.clone();
+        let existing_snapshot = {
+            let mut snapshots = self
+                .history_snapshots
+                .lock()
+                .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+            cleanup_history_snapshots(&mut snapshots, now_utc_msc);
+            requested_snapshot
+                .as_deref()
+                .map(|snapshot_id| {
+                    snapshots
+                        .get(snapshot_id)
+                        .cloned()
+                        .ok_or_else(|| StoreError::new("history_snapshot_invalid"))
+                })
+                .transpose()?
+        };
+
+        let (snapshot_id, snapshot, page_boundary, page) = if let Some(snapshot) = existing_snapshot
+        {
+            validate_history_snapshot_request(terminal, &request, &snapshot)?;
+            let (boundary, page) = if let Some(cursor) = requested_cursor.as_deref() {
+                let cursor_state = snapshot
+                    .cursors
+                    .get(cursor)
+                    .ok_or_else(|| StoreError::new("history_cursor_invalid"))?;
+                (
+                    Some((
+                        cursor_state.last_time_msc,
+                        cursor_state.last_item_id.clone(),
+                    )),
+                    cursor_state.page.saturating_add(1),
+                )
+            } else {
+                (None, 1)
+            };
+            (
+                requested_snapshot.ok_or_else(|| StoreError::new("history_snapshot_invalid"))?,
+                snapshot,
+                boundary,
+                page,
+            )
+        } else {
+            if requested_cursor.is_some() {
+                return Err(StoreError::new("history_cursor_invalid"));
+            }
+            let (snapshot_id, snapshot) =
+                self.create_history_snapshot(terminal, &request, now_utc_msc)?;
+            (snapshot_id, snapshot, None, 1)
+        };
+
+        let connection = self
+            .history_read_connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let mut query = String::from(
+            "SELECT payload_json, event_time_msc, item_id FROM history_archive_items \
+             WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
+               AND login_account = ? AND platform = ? AND item_kind = 'trade' \
+               AND rowid <= ? AND event_time_msc >= ? AND event_time_msc < ?",
+        );
+        query.push_str(&request.filter_sql);
+        if page_boundary.is_some() {
+            query.push_str(" AND (event_time_msc < ? OR (event_time_msc = ? AND item_id < ?))");
+        }
+        query.push_str(" ORDER BY event_time_msc DESC, item_id DESC LIMIT ?;");
+        let mut values = history_scope_values(terminal);
+        values.push(SqlValue::Text(terminal.platform.clone()));
+        values.push(SqlValue::Integer(snapshot.highwater_rowid));
+        values.push(SqlValue::Integer(request.query.range_start_utc_msc));
+        values.push(SqlValue::Integer(request.query.range_end_utc_msc));
+        values.extend(request.filter_values.iter().cloned());
+        if let Some((last_time_msc, last_item_id)) = page_boundary.as_ref() {
+            values.push(SqlValue::Integer(*last_time_msc));
+            values.push(SqlValue::Integer(*last_time_msc));
+            values.push(SqlValue::Text(last_item_id.clone()));
+        }
+        values.push(SqlValue::Integer(request.query.page_size.saturating_add(1)));
+        let mut statement = connection
+            .prepare(&query)
+            .map_err(|_| StoreError::new("bridge_store_history_cursor_query_failed"))?;
+        let rows = statement
+            .query_map(params_from_iter(values), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|_| StoreError::new("bridge_store_history_cursor_query_failed"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| StoreError::new("bridge_store_history_cursor_query_failed"))?;
+        let has_more = rows.len() > request.query.page_size as usize;
+        let rows = rows
+            .into_iter()
+            .take(request.query.page_size as usize)
+            .collect::<Vec<_>>();
+        let orders = rows
+            .iter()
+            .map(|(payload, _, _)| {
+                serde_json::from_str(payload)
+                    .ok()
+                    .filter(serde_json::Value::is_object)
+                    .ok_or_else(|| StoreError::new("bridge_store_history_payload_invalid"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let next_cursor = if has_more {
+            rows.last()
+                .map(|(_, time_msc, item_id)| (*time_msc, item_id.clone()))
+        } else {
+            None
+        };
+        let next_cursor_token = if let Some((last_time_msc, last_item_id)) = next_cursor {
+            let cursor_state = HistorySnapshotCursor {
+                page,
+                last_time_msc,
+                last_item_id,
+            };
+            let mut snapshots = self
+                .history_snapshots
+                .lock()
+                .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+            cleanup_history_snapshots(&mut snapshots, now_utc_msc);
+            let snapshot_entry = snapshots
+                .get_mut(&snapshot_id)
+                .ok_or_else(|| StoreError::new("history_snapshot_invalid"))?;
+            if let Some((token, _)) = snapshot_entry.cursors.iter().find(|(_, state)| {
+                state.page == cursor_state.page
+                    && state.last_time_msc == cursor_state.last_time_msc
+                    && state.last_item_id == cursor_state.last_item_id
+            }) {
+                Some(token.clone())
+            } else {
+                let token = loop {
+                    let candidate = random_history_token("hc_")?;
+                    if !snapshot_entry.cursors.contains_key(&candidate) {
+                        break candidate;
+                    }
+                };
+                while snapshot_entry.cursors.len() >= MAX_HISTORY_SNAPSHOT_CURSORS {
+                    let Some(oldest) = snapshot_entry.cursor_order.pop_front() else {
+                        break;
+                    };
+                    snapshot_entry.cursors.remove(&oldest);
+                }
+                snapshot_entry.cursor_order.push_back(token.clone());
+                snapshot_entry.cursors.insert(token.clone(), cursor_state);
+                Some(token)
+            }
+        } else {
+            None
+        };
+
+        let mut payload = serde_json::json!({
+            "orders": orders,
+            "deals": [],
+            "history_orders": [],
+            "statistics": snapshot.statistics,
+            "pagination": {
+                "current_page": page,
+                "page_size": request.query.page_size,
+                "total_count": snapshot.total_count,
+                "total_pages": std::cmp::max(
+                    (snapshot.total_count + request.query.page_size - 1)
+                        / request.query.page_size,
+                    1,
+                ),
             },
+            "history_snapshot_id": snapshot_id,
+            "next_cursor": next_cursor_token,
+            "has_more": has_more,
+            "history_sync": snapshot.history_sync,
+            "source": format!("{}_sqlite", terminal.platform),
+        });
+        enforce_history_payload_budget(&mut payload)?;
+        Ok(payload)
+    }
+
+    fn create_history_snapshot(
+        &self,
+        terminal: &TerminalDescriptor,
+        request: &HistoryCursorPageRequest,
+        now_utc_msc: i64,
+    ) -> Result<(String, HistorySnapshotState), StoreError> {
+        let connection = self
+            .history_read_connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let metadata_request = HistoryPageRequest {
+            page: 1,
+            page_size: request.query.page_size,
+            include_deals: false,
+            evidence_position_ids: Vec::new(),
+            evidence_order_tickets: Vec::new(),
+            requested_range: Some(request.requested_range.clone()),
+            filter_sql: request.filter_sql.clone(),
+            filter_values: request.filter_values.clone(),
+            capital_filter_sql: request.capital_filter_sql.clone(),
+            capital_filter_values: request.capital_filter_values.clone(),
+        };
+        let state = read_history_state_locked(&connection, terminal)?;
+        let history_sync = read_history_sync_metadata_locked(
+            &connection,
+            terminal,
+            &metadata_request,
+            &state,
+            now_utc_msc,
+        )?;
+        if history_sync["requested_range_complete"] != serde_json::Value::Bool(true) {
+            return Err(StoreError::new("history_cursor_range_incomplete"));
+        }
+        let highwater_rowid = connection
+            .query_row(
+                "SELECT COALESCE(MAX(rowid), 0) FROM history_archive_items \
+                 WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
+                   AND login_account = ? AND platform = ?;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.platform,
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_cursor_query_failed"))?;
+        let mut total_sql = String::from(
+            "SELECT COUNT(*) FROM history_archive_items \
+             WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
+               AND login_account = ? AND platform = ? AND item_kind = 'trade' \
+               AND rowid <= ? AND event_time_msc >= ? AND event_time_msc < ?",
+        );
+        total_sql.push_str(&request.filter_sql);
+        let mut total_values = history_scope_values(terminal);
+        total_values.push(SqlValue::Text(terminal.platform.clone()));
+        total_values.push(SqlValue::Integer(highwater_rowid));
+        total_values.push(SqlValue::Integer(request.query.range_start_utc_msc));
+        total_values.push(SqlValue::Integer(request.query.range_end_utc_msc));
+        total_values.extend(request.filter_values.iter().cloned());
+        let total = connection
+            .query_row(&total_sql, params_from_iter(total_values), |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|_| StoreError::new("bridge_store_history_cursor_query_failed"))?;
+        let statistics =
+            read_history_cursor_statistics(&connection, terminal, request, total, highwater_rowid)?;
+        drop(connection);
+
+        let expires_at_utc_msc = now_utc_msc
+            .checked_add(HISTORY_SNAPSHOT_TTL_MSC)
+            .ok_or_else(|| StoreError::new("history_snapshot_invalid"))?;
+        let snapshot = HistorySnapshotState {
+            terminal_instance_id: terminal.terminal_instance_id.clone(),
+            broker_server: terminal.account_ref.broker_server.clone(),
+            login_account: terminal.account_ref.login.clone(),
+            platform: terminal.platform.clone(),
+            query: request.query.clone(),
+            highwater_rowid,
+            total_count: total,
+            statistics,
+            history_sync,
+            expires_at_utc_msc,
+            cursors: HashMap::new(),
+            cursor_order: VecDeque::new(),
+        };
+        let mut snapshots = self
+            .history_snapshots
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        cleanup_history_snapshots(&mut snapshots, now_utc_msc);
+        let snapshot_id = loop {
+            let candidate = random_history_token("hs_")?;
+            if !snapshots.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        while snapshots.len() >= MAX_HISTORY_SNAPSHOTS {
+            let oldest = snapshots
+                .iter()
+                .min_by_key(|(_, snapshot)| snapshot.expires_at_utc_msc)
+                .map(|(snapshot_id, _)| snapshot_id.clone())
+                .ok_or_else(|| StoreError::new("history_snapshot_invalid"))?;
+            snapshots.remove(&oldest);
+        }
+        snapshots.insert(snapshot_id.clone(), snapshot.clone());
+        Ok((snapshot_id, snapshot))
+    }
+
+    pub fn read_history_evidence(
+        &self,
+        terminal: &TerminalDescriptor,
+        parameters: &serde_json::Value,
+    ) -> Result<serde_json::Value, StoreError> {
+        self.read_history_evidence_at(terminal, parameters, current_utc_msc()?)
+    }
+
+    pub fn read_history_evidence_at(
+        &self,
+        terminal: &TerminalDescriptor,
+        parameters: &serde_json::Value,
+        now_utc_msc: i64,
+    ) -> Result<serde_json::Value, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        let request = parse_history_evidence_request(parameters, now_utc_msc)?;
+        let connection = self
+            .history_read_connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let deals = query_history_evidence(
+            &connection,
+            terminal,
+            "deal",
+            &request.evidence_position_ids,
+            &request.evidence_order_tickets,
+            Some(&request.requested_range),
+        )?;
+        let history_orders = query_history_evidence(
+            &connection,
+            terminal,
+            "history_order",
+            &request.evidence_position_ids,
+            &request.evidence_order_tickets,
+            Some(&request.requested_range),
+        )?;
+        let evidence_truncated = deals.len() > MAX_HISTORY_EVIDENCE_ITEMS
+            || history_orders.len() > MAX_HISTORY_EVIDENCE_ITEMS;
+        let state = read_history_state_locked(&connection, terminal)?;
+        let page_request = HistoryPageRequest {
+            page: 1,
+            page_size: 1,
+            include_deals: true,
+            evidence_position_ids: request.evidence_position_ids.clone(),
+            evidence_order_tickets: request.evidence_order_tickets.clone(),
+            requested_range: Some(request.requested_range.clone()),
+            filter_sql: String::new(),
+            filter_values: Vec::new(),
+            capital_filter_sql: String::new(),
+            capital_filter_values: Vec::new(),
+        };
+        let mut history_sync = read_history_sync_metadata_locked(
+            &connection,
+            terminal,
+            &page_request,
+            &state,
+            now_utc_msc,
+        )?;
+        history_sync["evidence_truncated"] = serde_json::Value::Bool(evidence_truncated);
+        let mut payload = serde_json::json!({
+            "deals": deals.into_iter().take(MAX_HISTORY_EVIDENCE_ITEMS).collect::<Vec<_>>(),
+            "history_orders": history_orders
+                .into_iter()
+                .take(MAX_HISTORY_EVIDENCE_ITEMS)
+                .collect::<Vec<_>>(),
+            "history_sync": history_sync,
+            "evidence_truncated": evidence_truncated,
             "source": format!("{}_sqlite", terminal.platform),
         });
         enforce_history_payload_budget(&mut payload)?;
@@ -1061,12 +2858,21 @@ impl OutboxStore {
         terminal: &TerminalDescriptor,
         parameters: &serde_json::Value,
     ) -> Result<serde_json::Value, StoreError> {
+        self.read_history_chart_data_at(terminal, parameters, current_utc_msc()?)
+    }
+
+    pub fn read_history_chart_data_at(
+        &self,
+        terminal: &TerminalDescriptor,
+        parameters: &serde_json::Value,
+        now_utc_msc: i64,
+    ) -> Result<serde_json::Value, StoreError> {
         terminal
             .validate()
             .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
-        let request = parse_history_chart_request(parameters)?;
+        let request = parse_history_chart_request(parameters, now_utc_msc)?;
         let connection = self
-            .connection
+            .history_read_connection
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
         let mut values = history_scope_values(terminal);
@@ -1185,6 +2991,13 @@ impl OutboxStore {
             0.0
         };
         let state = read_history_state_locked(&connection, terminal)?;
+        let history_sync = read_history_sync_metadata_locked(
+            &connection,
+            terminal,
+            &request,
+            &state,
+            now_utc_msc,
+        )?;
         Ok(serde_json::json!({
             "daily": daily,
             "cumulative": cumulative,
@@ -1197,11 +3010,7 @@ impl OutboxStore {
                 "gross_profit": round(gross_profit),
                 "gross_loss": round(gross_loss),
             },
-            "history_sync": {
-                "complete": state.is_complete,
-                "cursor_time_msc": state.cursor.time_msc,
-                "updated_at_utc_msc": state.updated_at_utc_msc,
-            },
+            "history_sync": history_sync,
             "source": format!("{}_sqlite", terminal.platform),
         }))
     }
@@ -1978,7 +3787,7 @@ impl OutboxStore {
             .ok_or_else(|| StoreError::new("bridge_store_command_unknown"))?;
         let command: CommandMessage = serde_json::from_str(&ledger.0)
             .map_err(|_| StoreError::new("bridge_store_reconciliation_record_invalid"))?;
-        if !result.matches_command(&command) {
+        if !result.matches_reconciliation_command(&command) {
             return Err(StoreError::new(
                 "bridge_store_reconciliation_transition_invalid",
             ));
@@ -2190,6 +3999,36 @@ fn database_is_empty(path: &Path) -> Result<bool, StoreError> {
         .map_err(|_| StoreError::new("bridge_store_schema_query_failed"))
 }
 
+/// Open the short-lived history read model on an independent read-only
+/// connection.  Schema checks and migrations must always run through the
+/// writer connection before this is called; this connection only executes
+/// connection-local/read-only pragmas and history queries.
+fn open_history_read_connection(path: &Path) -> Result<Connection, StoreError> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| StoreError::new("bridge_store_history_read_open_failed"))?;
+    connection
+        .busy_timeout(Duration::from_millis(250))
+        .map_err(|_| StoreError::new("bridge_store_history_read_busy_timeout_failed"))?;
+    let journal_mode: String = connection
+        .query_row("PRAGMA journal_mode;", [], |row| row.get(0))
+        .map_err(|_| StoreError::new("bridge_store_history_read_journal_mode_failed"))?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Err(StoreError::new(
+            "bridge_store_history_read_journal_mode_failed",
+        ));
+    }
+    // query_only is connection-local and is intentionally the only setting
+    // performed on this read-only handle.  Do not run schema ensure or any
+    // write-style journal/synchronous PRAGMA here.
+    connection
+        .pragma_update(None, "query_only", "ON")
+        .map_err(|_| StoreError::new("bridge_store_history_read_query_only_failed"))?;
+    Ok(connection)
+}
+
 fn normalize_terminal_binding(
     terminal_instance_id: &str,
     platform: &str,
@@ -2264,7 +4103,1074 @@ fn initialize_fresh_database(path: &Path) -> Result<(), StoreError> {
     transaction
         .commit()
         .map_err(|_| StoreError::new("bridge_store_schema_commit_failed"))?;
-    ensure_native_command_ledger_schema(&connection)
+    ensure_native_command_ledger_schema(&connection)?;
+    ensure_history_runtime_schema(&mut connection)
+}
+
+const HISTORY_RUNTIME_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS account_initialization_state (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  schema_version INTEGER NOT NULL CHECK (schema_version > 0 AND schema_version <= 1000),
+  state TEXT NOT NULL CHECK (
+    state IN (
+      'detected', 'verifying_identity', 'warming_realtime_snapshot',
+      'reconciling_local_commands', 'ready', 'retrying', 'blocked', 'superseded'
+    )
+  ),
+  local_operational_ready INTEGER NOT NULL CHECK (local_operational_ready IN (0, 1)),
+  last_error_code TEXT,
+  initialized_at_utc_msc INTEGER NOT NULL CHECK (initialized_at_utc_msc > 0),
+  updated_at_utc_msc INTEGER NOT NULL CHECK (updated_at_utc_msc > 0),
+  CHECK (
+    (state = 'ready' AND local_operational_ready = 1)
+    OR (state <> 'ready' AND local_operational_ready = 0)
+  ),
+  PRIMARY KEY (terminal_instance_id, broker_server, login_account)
+);
+CREATE INDEX IF NOT EXISTS idx_account_initialization_updated
+  ON account_initialization_state (
+    terminal_instance_id, broker_server, login_account, updated_at_utc_msc DESC
+  );
+CREATE TABLE IF NOT EXISTS history_sync_jobs (
+  job_id TEXT PRIMARY KEY,
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  job_kind TEXT NOT NULL CHECK (job_kind IN ('recent', 'on_demand', 'backfill')),
+  priority TEXT NOT NULL CHECK (priority IN ('p1', 'p2', 'p3')),
+  range_start_utc_msc INTEGER NOT NULL CHECK (range_start_utc_msc > 0),
+  range_end_utc_msc INTEGER NOT NULL CHECK (range_end_utc_msc > range_start_utc_msc),
+  cursor_time_msc INTEGER NOT NULL CHECK (cursor_time_msc > 0),
+  cursor_ticket TEXT NOT NULL CHECK (
+    length(cursor_ticket) <= 32
+    AND (cursor_ticket = '' OR cursor_ticket NOT GLOB '*[^0-9]*')
+  ),
+  window_msc INTEGER NOT NULL CHECK (window_msc > 0),
+  state TEXT NOT NULL CHECK (
+    state IN ('queued', 'running', 'retrying', 'blocked', 'superseded', 'completed')
+  ),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0 AND attempt_count <= 1000000),
+  next_attempt_at_utc_msc INTEGER NOT NULL CHECK (next_attempt_at_utc_msc > 0),
+  last_error_code TEXT,
+  lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+  lease_expires_at_utc_msc INTEGER CHECK (
+    lease_expires_at_utc_msc IS NULL OR lease_expires_at_utc_msc > 0
+  ),
+  created_at_utc_msc INTEGER NOT NULL CHECK (created_at_utc_msc > 0),
+  updated_at_utc_msc INTEGER NOT NULL CHECK (updated_at_utc_msc > 0),
+  UNIQUE (
+    terminal_instance_id, broker_server, login_account,
+    range_start_utc_msc, range_end_utc_msc
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_history_sync_jobs_claim
+  ON history_sync_jobs (
+    terminal_instance_id, broker_server, login_account,
+    state, priority, next_attempt_at_utc_msc, created_at_utc_msc
+  );
+CREATE INDEX IF NOT EXISTS idx_history_sync_jobs_scope
+  ON history_sync_jobs (
+    terminal_instance_id, broker_server, login_account, updated_at_utc_msc DESC
+  );
+CREATE INDEX IF NOT EXISTS idx_history_archive_order
+  ON history_archive_items (
+    terminal_instance_id, broker_server, login_account,
+    item_kind, order_ticket, event_time_msc, item_id
+  );
+CREATE TABLE IF NOT EXISTS history_coverage_ranges (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  range_start_utc_msc INTEGER NOT NULL CHECK (range_start_utc_msc > 0),
+  range_end_utc_msc INTEGER NOT NULL CHECK (range_end_utc_msc > range_start_utc_msc),
+  observed_at_utc_msc INTEGER NOT NULL CHECK (observed_at_utc_msc > 0),
+  updated_at_utc_msc INTEGER NOT NULL CHECK (updated_at_utc_msc > 0),
+  PRIMARY KEY (
+    terminal_instance_id, broker_server, login_account, range_start_utc_msc
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_history_coverage_ranges_scope
+  ON history_coverage_ranges (
+    terminal_instance_id, broker_server, login_account,
+    range_start_utc_msc, range_end_utc_msc
+  );
+"#;
+
+fn ensure_history_runtime_schema(connection: &mut Connection) -> Result<(), StoreError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|_| StoreError::new("bridge_store_history_schema_transaction_failed"))?;
+    transaction
+        .execute_batch(HISTORY_RUNTIME_SCHEMA_SQL)
+        .map_err(|_| StoreError::new("bridge_store_history_schema_failed"))?;
+    seed_history_coverage_from_legacy(&transaction)?;
+    transaction
+        .commit()
+        .map_err(|_| StoreError::new("bridge_store_history_schema_commit_failed"))
+}
+
+fn seed_history_coverage_from_legacy(transaction: &Transaction<'_>) -> Result<(), StoreError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT terminal_instance_id, broker_server, login_account,
+                    cursor_value, CAST(is_complete AS TEXT),
+                    CAST(updated_at_utc_msc AS TEXT)
+             FROM history_archive_state;",
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_seed_query_failed"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_seed_query_failed"))?;
+    let mut legacy_rows = Vec::new();
+    for row in rows {
+        legacy_rows
+            .push(row.map_err(|_| StoreError::new("bridge_store_history_seed_query_failed"))?);
+    }
+    drop(statement);
+    for (
+        terminal_instance_id,
+        broker_server,
+        login_account,
+        cursor_value,
+        is_complete_text,
+        updated_at_utc_msc_text,
+    ) in legacy_rows
+    {
+        let Some((scope, cursor_time_msc, updated_at_utc_msc)) = parse_legacy_history_seed_row(
+            terminal_instance_id,
+            broker_server,
+            login_account,
+            cursor_value,
+            is_complete_text,
+            updated_at_utc_msc_text,
+        )?
+        else {
+            continue;
+        };
+        transaction
+            .execute(
+                "INSERT INTO history_coverage_ranges (
+                   terminal_instance_id, broker_server, login_account,
+                   range_start_utc_msc, range_end_utc_msc,
+                   observed_at_utc_msc, updated_at_utc_msc
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT(terminal_instance_id, broker_server, login_account,
+                             range_start_utc_msc) DO UPDATE SET
+                   range_end_utc_msc = excluded.range_end_utc_msc,
+                   observed_at_utc_msc = excluded.observed_at_utc_msc,
+                   updated_at_utc_msc = excluded.updated_at_utc_msc
+                 WHERE history_coverage_ranges.range_end_utc_msc
+                       < excluded.range_end_utc_msc;",
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account,
+                    HISTORY_COVERAGE_START_UTC_MSC,
+                    cursor_time_msc,
+                    updated_at_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_seed_write_failed"))?;
+    }
+    Ok(())
+}
+
+fn parse_legacy_history_seed_row(
+    terminal_instance_id: String,
+    broker_server: String,
+    login_account: String,
+    cursor_value: String,
+    is_complete_text: String,
+    updated_at_utc_msc_text: String,
+) -> Result<Option<(HistoryScope, i64, i64)>, StoreError> {
+    let scope = HistoryScope {
+        terminal_instance_id,
+        broker_server,
+        login_account,
+    };
+    validate_history_scope_values(&scope)
+        .map_err(|_| StoreError::new("bridge_store_history_seed_invalid"))?;
+    let is_complete = is_complete_text
+        .parse::<i64>()
+        .map_err(|_| StoreError::new("bridge_store_history_seed_invalid"))?;
+    let updated_at_utc_msc = updated_at_utc_msc_text
+        .parse::<i64>()
+        .map_err(|_| StoreError::new("bridge_store_history_seed_invalid"))?;
+    if !matches!(is_complete, 0 | 1) || updated_at_utc_msc <= 0 {
+        return Err(StoreError::new("bridge_store_history_seed_invalid"));
+    }
+    let cursor = parse_history_cursor(&cursor_value)
+        .map_err(|_| StoreError::new("bridge_store_history_seed_invalid"))?;
+    if cursor.time_msc <= HISTORY_COVERAGE_START_UTC_MSC {
+        return Ok(None);
+    }
+    Ok(Some((scope, cursor.time_msc, updated_at_utc_msc)))
+}
+
+fn legacy_history_seed_needed(connection: &Connection) -> Result<bool, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT terminal_instance_id, broker_server, login_account,
+                    cursor_value, CAST(is_complete AS TEXT),
+                    CAST(updated_at_utc_msc AS TEXT)
+             FROM history_archive_state;",
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_seed_query_failed"))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_seed_query_failed"))?;
+    let mut legacy_rows = Vec::new();
+    for row in rows {
+        legacy_rows
+            .push(row.map_err(|_| StoreError::new("bridge_store_history_seed_query_failed"))?);
+    }
+    drop(statement);
+
+    for (
+        terminal_instance_id,
+        broker_server,
+        login_account,
+        cursor_value,
+        is_complete_text,
+        updated_at_utc_msc_text,
+    ) in legacy_rows
+    {
+        let Some((scope, cursor_time_msc, _updated_at_utc_msc)) = parse_legacy_history_seed_row(
+            terminal_instance_id,
+            broker_server,
+            login_account,
+            cursor_value,
+            is_complete_text,
+            updated_at_utc_msc_text,
+        )?
+        else {
+            continue;
+        };
+        let existing_end = connection
+            .query_row(
+                "SELECT range_end_utc_msc
+                 FROM history_coverage_ranges
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3
+                   AND range_start_utc_msc = ?4
+                 LIMIT 1;",
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account,
+                    HISTORY_COVERAGE_START_UTC_MSC,
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_seed_query_failed"))?;
+        if existing_end.is_none_or(|existing_end| existing_end < cursor_time_msc) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn validate_history_scope_values(scope: &HistoryScope) -> Result<(), StoreError> {
+    if validate_id(&scope.terminal_instance_id).is_err() || scope.account_ref().validate().is_err()
+    {
+        return Err(StoreError::new("bridge_store_history_scope_invalid"));
+    }
+    Ok(())
+}
+
+fn history_scopes_equal(left: &HistoryScope, right: &HistoryScope) -> bool {
+    left.terminal_instance_id == right.terminal_instance_id
+        && left.login_account == right.login_account
+        && left
+            .broker_server
+            .eq_ignore_ascii_case(&right.broker_server)
+}
+
+fn validate_history_job_id(job_id: &str) -> Result<(), StoreError> {
+    validate_id(job_id).map_err(|_| StoreError::new("bridge_store_history_job_id_invalid"))
+}
+
+fn history_job_identity(
+    scope: &HistoryScope,
+    job_kind: &str,
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        scope.terminal_instance_id.as_str(),
+        scope.broker_server.as_str(),
+        scope.login_account.as_str(),
+        job_kind,
+    ] {
+        hasher.update(value.as_bytes());
+        hasher.update([0]);
+    }
+    hasher.update(range_start_utc_msc.to_be_bytes());
+    hasher.update(range_end_utc_msc.to_be_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn validate_history_lease_generation(lease_generation: i64) -> Result<(), StoreError> {
+    if lease_generation <= 0 {
+        return Err(StoreError::new("bridge_store_history_lease_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_history_error_code(error_code: &str) -> Result<(), StoreError> {
+    if !(1..=128).contains(&error_code.len())
+        || !error_code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err(StoreError::new("bridge_store_history_error_code_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_history_state(state: &str) -> Result<(), StoreError> {
+    if !matches!(
+        state,
+        "queued" | "running" | "retrying" | "blocked" | "superseded" | "completed"
+    ) {
+        return Err(StoreError::new("bridge_store_history_state_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_initialization_state(state: &str) -> Result<(), StoreError> {
+    if !matches!(
+        state,
+        "detected"
+            | "verifying_identity"
+            | "warming_realtime_snapshot"
+            | "reconciling_local_commands"
+            | "ready"
+            | "retrying"
+            | "blocked"
+            | "superseded"
+    ) {
+        return Err(StoreError::new("bridge_store_initialization_state_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_history_job_kind(job_kind: &str) -> Result<(), StoreError> {
+    if !matches!(job_kind, "recent" | "on_demand" | "backfill") {
+        return Err(StoreError::new("bridge_store_history_job_kind_invalid"));
+    }
+    Ok(())
+}
+
+fn is_allowed_history_job_kind(job_kind: &str) -> bool {
+    matches!(job_kind, "recent" | "on_demand")
+}
+
+fn validate_history_job_planning_request(
+    request: &HistoryJobPlanningRequest,
+) -> Result<(), StoreError> {
+    validate_history_scope_values(&request.scope)?;
+    validate_history_job_kind(&request.job_kind)?;
+    validate_history_priority(&request.priority)?;
+    validate_history_range(request.range_start_utc_msc, request.range_end_utc_msc)?;
+    if request.window_msc <= 0 || request.now_utc_msc <= 0 {
+        return Err(StoreError::new("bridge_store_history_planning_invalid"));
+    }
+    if !matches!(
+        (request.job_kind.as_str(), request.priority.as_str()),
+        ("recent", "p2") | ("on_demand", "p1") | ("on_demand", "p3")
+    ) {
+        return Err(StoreError::new(
+            "bridge_store_history_planning_combination_invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_history_job_kinds<K: AsRef<str>>(
+    allowed_job_kinds: &[K],
+) -> Result<Vec<String>, StoreError> {
+    if allowed_job_kinds.is_empty() {
+        return Err(StoreError::new(
+            "bridge_store_history_allowed_job_kinds_invalid",
+        ));
+    }
+    let mut normalized = Vec::with_capacity(allowed_job_kinds.len());
+    for job_kind in allowed_job_kinds {
+        let job_kind = job_kind.as_ref();
+        validate_history_job_kind(job_kind)
+            .map_err(|_| StoreError::new("bridge_store_history_allowed_job_kinds_invalid"))?;
+        if !normalized.iter().any(|existing| existing == job_kind) {
+            normalized.push(job_kind.to_owned());
+        }
+    }
+    if normalized.is_empty() {
+        return Err(StoreError::new(
+            "bridge_store_history_allowed_job_kinds_invalid",
+        ));
+    }
+    Ok(normalized)
+}
+
+fn validate_history_priority(priority: &str) -> Result<(), StoreError> {
+    if !matches!(priority, "p1" | "p2" | "p3") {
+        return Err(StoreError::new("bridge_store_history_priority_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_history_range(
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+) -> Result<(), StoreError> {
+    if range_start_utc_msc <= 0 || range_end_utc_msc <= range_start_utc_msc {
+        return Err(StoreError::new("bridge_store_history_range_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_job_cursor(cursor_time_msc: i64, cursor_ticket: &str) -> Result<(), StoreError> {
+    if cursor_time_msc <= 0
+        || cursor_ticket.len() > 32
+        || cursor_ticket.bytes().any(|byte| !byte.is_ascii_digit())
+    {
+        return Err(StoreError::new("bridge_store_history_cursor_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_account_initialization_state(
+    state: &AccountInitializationState,
+) -> Result<(), StoreError> {
+    validate_history_scope_values(&state.scope)?;
+    if !matches!(state.platform.as_str(), "mt4" | "mt5")
+        || !(1..=1000).contains(&state.schema_version)
+        || state.initialized_at_utc_msc <= 0
+        || state.updated_at_utc_msc < state.initialized_at_utc_msc
+    {
+        return Err(StoreError::new("bridge_store_initialization_state_invalid"));
+    }
+    validate_initialization_state(&state.state)?;
+    if (state.state == "ready") != state.local_operational_ready {
+        return Err(StoreError::new("bridge_store_initialization_state_invalid"));
+    }
+    if let Some(error_code) = state.last_error_code.as_deref() {
+        validate_history_error_code(error_code)?;
+    }
+    Ok(())
+}
+
+fn validate_new_history_sync_job(job: &NewHistorySyncJob) -> Result<(), StoreError> {
+    validate_history_job_id(&job.job_id)?;
+    validate_history_scope_values(&job.scope)?;
+    validate_history_job_kind(&job.job_kind)?;
+    validate_history_priority(&job.priority)?;
+    validate_history_range(job.range_start_utc_msc, job.range_end_utc_msc)?;
+    validate_job_cursor(job.cursor_time_msc, &job.cursor_ticket)?;
+    if job.cursor_time_msc < job.range_start_utc_msc
+        || job.cursor_time_msc > job.range_end_utc_msc
+        || job.cursor_time_msc == job.range_end_utc_msc && !job.cursor_ticket.is_empty()
+        || job.window_msc <= 0
+        || job.created_at_utc_msc <= 0
+    {
+        return Err(StoreError::new("bridge_store_history_job_invalid"));
+    }
+    Ok(())
+}
+
+fn read_account_initialization_state_locked(
+    connection: &Connection,
+    scope: &HistoryScope,
+) -> Result<Option<AccountInitializationState>, StoreError> {
+    let row = connection
+        .query_row(
+            "SELECT platform, schema_version, state, local_operational_ready,
+                    last_error_code, initialized_at_utc_msc, updated_at_utc_msc
+             FROM account_initialization_state
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 LIMIT 1;",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_initialization_state_query_failed"))?;
+    let Some((platform, schema_version, state, ready, last_error_code, initialized_at, updated_at)) =
+        row
+    else {
+        return Ok(None);
+    };
+    let state = AccountInitializationState {
+        scope: scope.clone(),
+        platform,
+        schema_version,
+        state,
+        local_operational_ready: match ready {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(StoreError::new("bridge_store_initialization_state_invalid"));
+            }
+        },
+        last_error_code,
+        initialized_at_utc_msc: initialized_at,
+        updated_at_utc_msc: updated_at,
+    };
+    validate_account_initialization_state(&state)
+        .map_err(|_| StoreError::new("bridge_store_initialization_state_invalid"))?;
+    Ok(Some(state))
+}
+
+type HistorySyncJobRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    String,
+    i64,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    i64,
+    Option<i64>,
+    i64,
+    i64,
+);
+
+fn history_sync_job_select() -> &'static str {
+    "SELECT job_id, terminal_instance_id, broker_server, login_account,
+            job_kind, priority, range_start_utc_msc, range_end_utc_msc,
+            cursor_time_msc, cursor_ticket, window_msc, state, attempt_count,
+            next_attempt_at_utc_msc, last_error_code, lease_generation,
+            lease_expires_at_utc_msc, created_at_utc_msc, updated_at_utc_msc"
+}
+
+fn read_history_sync_job_by_id(
+    connection: &Connection,
+    job_id: &str,
+) -> Result<Option<HistorySyncJob>, StoreError> {
+    let row = connection
+        .query_row(
+            &format!(
+                "{} FROM history_sync_jobs WHERE job_id = ?1 LIMIT 1;",
+                history_sync_job_select()
+            ),
+            [job_id],
+            history_sync_job_row_from_sql,
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_job_query_failed"))?;
+    row.map(history_sync_job_from_row).transpose()
+}
+
+fn read_history_sync_job_by_range(
+    connection: &Connection,
+    scope: &HistoryScope,
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+) -> Result<Option<HistorySyncJob>, StoreError> {
+    let row = connection
+        .query_row(
+            &format!(
+                "{} FROM history_sync_jobs
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3
+                   AND range_start_utc_msc = ?4
+                   AND range_end_utc_msc = ?5 LIMIT 1;",
+                history_sync_job_select()
+            ),
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                range_start_utc_msc,
+                range_end_utc_msc
+            ],
+            history_sync_job_row_from_sql,
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_job_query_failed"))?;
+    row.map(history_sync_job_from_row).transpose()
+}
+
+fn read_active_history_jobs_locked(
+    connection: &Connection,
+    scope: &HistoryScope,
+) -> Result<Vec<HistorySyncJob>, StoreError> {
+    let mut statement = connection
+        .prepare(&format!(
+            "{} FROM history_sync_jobs
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3
+               AND job_kind IN ('recent', 'on_demand')
+               AND state IN ('queued', 'retrying', 'running')
+             ORDER BY range_start_utc_msc, range_end_utc_msc, job_id;",
+            history_sync_job_select()
+        ))
+        .map_err(|_| StoreError::new("bridge_store_history_planning_query_failed"))?;
+    let rows = statement
+        .query_map(
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account
+            ],
+            history_sync_job_row_from_sql,
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_planning_query_failed"))?;
+    rows.map(|row| {
+        row.map_err(|_| StoreError::new("bridge_store_history_planning_query_failed"))
+            .and_then(history_sync_job_from_row)
+    })
+    .collect()
+}
+
+fn history_job_order(left: &HistorySyncJob, right: &HistorySyncJob) -> std::cmp::Ordering {
+    left.range_start_utc_msc
+        .cmp(&right.range_start_utc_msc)
+        .then_with(|| left.range_end_utc_msc.cmp(&right.range_end_utc_msc))
+        .then_with(|| left.job_id.cmp(&right.job_id))
+}
+
+fn dedup_history_jobs(jobs: &mut Vec<HistorySyncJob>) {
+    jobs.sort_by(history_job_order);
+    jobs.dedup_by(|left, right| left.job_id == right.job_id);
+}
+
+fn ranges_overlap(left_start: i64, left_end: i64, right_start: i64, right_end: i64) -> bool {
+    left_start < right_end && right_start < left_end
+}
+
+fn subtract_history_ranges(
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+    blockers: &[(i64, i64)],
+) -> Vec<(i64, i64)> {
+    let mut sorted = blockers
+        .iter()
+        .copied()
+        .filter(|(start, end)| *end > *start)
+        .collect::<Vec<_>>();
+    sorted.sort_unstable();
+    let mut cursor = range_start_utc_msc;
+    let mut gaps = Vec::new();
+    for (blocker_start, blocker_end) in sorted {
+        if blocker_end <= cursor {
+            continue;
+        }
+        if blocker_start >= range_end_utc_msc {
+            break;
+        }
+        if blocker_start > cursor {
+            gaps.push((cursor, blocker_start.min(range_end_utc_msc)));
+        }
+        cursor = cursor.max(blocker_end.min(range_end_utc_msc));
+        if cursor >= range_end_utc_msc {
+            break;
+        }
+    }
+    if cursor < range_end_utc_msc {
+        gaps.push((cursor, range_end_utc_msc));
+    }
+    gaps.retain(|(start, end)| end > start);
+    gaps
+}
+
+fn history_sync_job_row_from_sql(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistorySyncJobRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+        row.get(12)?,
+        row.get(13)?,
+        row.get(14)?,
+        row.get(15)?,
+        row.get(16)?,
+        row.get(17)?,
+        row.get(18)?,
+    ))
+}
+
+fn history_sync_job_from_row(row: HistorySyncJobRow) -> Result<HistorySyncJob, StoreError> {
+    let (
+        job_id,
+        terminal_instance_id,
+        broker_server,
+        login_account,
+        job_kind,
+        priority,
+        range_start_utc_msc,
+        range_end_utc_msc,
+        cursor_time_msc,
+        cursor_ticket,
+        window_msc,
+        state,
+        attempt_count,
+        next_attempt_at_utc_msc,
+        last_error_code,
+        lease_generation,
+        lease_expires_at_utc_msc,
+        created_at_utc_msc,
+        updated_at_utc_msc,
+    ) = row;
+    let job = HistorySyncJob {
+        job_id,
+        scope: HistoryScope {
+            terminal_instance_id,
+            broker_server,
+            login_account,
+        },
+        job_kind,
+        priority,
+        range_start_utc_msc,
+        range_end_utc_msc,
+        cursor_time_msc,
+        cursor_ticket,
+        window_msc,
+        state,
+        attempt_count,
+        next_attempt_at_utc_msc,
+        last_error_code,
+        lease_generation,
+        lease_expires_at_utc_msc,
+        created_at_utc_msc,
+        updated_at_utc_msc,
+    };
+    validate_history_sync_job_record(&job)?;
+    Ok(job)
+}
+
+fn validate_history_sync_job_record(job: &HistorySyncJob) -> Result<(), StoreError> {
+    validate_history_job_id(&job.job_id)?;
+    validate_history_scope_values(&job.scope)?;
+    validate_history_job_kind(&job.job_kind)?;
+    validate_history_priority(&job.priority)?;
+    validate_history_range(job.range_start_utc_msc, job.range_end_utc_msc)?;
+    validate_job_cursor(job.cursor_time_msc, &job.cursor_ticket)?;
+    validate_history_state(&job.state)?;
+    if job.cursor_time_msc < job.range_start_utc_msc
+        || job.cursor_time_msc > job.range_end_utc_msc
+        || job.cursor_time_msc == job.range_end_utc_msc && !job.cursor_ticket.is_empty()
+        || job.window_msc <= 0
+        || !(0..=1_000_000).contains(&job.attempt_count)
+        || job.next_attempt_at_utc_msc <= 0
+        || job.lease_generation < 0
+        || job.lease_expires_at_utc_msc.is_some_and(|value| value <= 0)
+        || job.created_at_utc_msc <= 0
+        || job.updated_at_utc_msc < job.created_at_utc_msc
+    {
+        return Err(StoreError::new("bridge_store_history_job_invalid"));
+    }
+    if let Some(error_code) = job.last_error_code.as_deref() {
+        validate_history_error_code(error_code)?;
+    }
+    if job.state == "running" && job.lease_expires_at_utc_msc.is_none() {
+        return Err(StoreError::new("bridge_store_history_job_invalid"));
+    }
+    Ok(())
+}
+
+fn read_claimable_history_job(
+    connection: &Connection,
+    scope: &HistoryScope,
+    now_utc_msc: i64,
+    allowed_job_kinds: Option<&[String]>,
+) -> Result<Option<HistorySyncJob>, StoreError> {
+    let mut sql = format!(
+        "{} FROM history_sync_jobs
+         WHERE terminal_instance_id = ?1
+           AND broker_server = ?2 COLLATE NOCASE
+           AND login_account = ?3
+           AND (
+             (state IN ('queued', 'retrying') AND next_attempt_at_utc_msc <= ?4)
+             OR (state = 'running' AND lease_expires_at_utc_msc <= ?4)
+           )",
+        history_sync_job_select()
+    );
+    let mut values = vec![
+        SqlValue::Text(scope.terminal_instance_id.clone()),
+        SqlValue::Text(scope.broker_server.clone()),
+        SqlValue::Text(scope.login_account.clone()),
+        SqlValue::Integer(now_utc_msc),
+    ];
+    if let Some(allowed_job_kinds) = allowed_job_kinds {
+        sql.push_str(" AND job_kind IN (");
+        for (index, job_kind) in allowed_job_kinds.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(&format!("?{}", index + 5));
+            values.push(SqlValue::Text(job_kind.clone()));
+        }
+        sql.push(')');
+    }
+    sql.push_str(
+        " ORDER BY CASE priority WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 ELSE 3 END,
+                  created_at_utc_msc, job_id LIMIT 1;",
+    );
+    let row = connection
+        .query_row(
+            &sql,
+            params_from_iter(values),
+            history_sync_job_row_from_sql,
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_job_query_failed"))?;
+    row.map(history_sync_job_from_row).transpose()
+}
+
+fn read_history_coverage_ranges_locked(
+    connection: &Connection,
+    scope: &HistoryScope,
+) -> Result<Vec<HistoryCoverageRange>, StoreError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT range_start_utc_msc, range_end_utc_msc,
+                    observed_at_utc_msc, updated_at_utc_msc
+             FROM history_coverage_ranges
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3
+             ORDER BY range_start_utc_msc, range_end_utc_msc;",
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_coverage_query_failed"))?;
+    let rows = statement
+        .query_map(
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account
+            ],
+            |row| {
+                Ok(HistoryCoverageRange {
+                    scope: scope.clone(),
+                    range_start_utc_msc: row.get(0)?,
+                    range_end_utc_msc: row.get(1)?,
+                    observed_at_utc_msc: row.get(2)?,
+                    updated_at_utc_msc: row.get(3)?,
+                })
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_coverage_query_failed"))?;
+    let mut ranges = Vec::new();
+    for row in rows {
+        let range =
+            row.map_err(|_| StoreError::new("bridge_store_history_coverage_query_failed"))?;
+        validate_history_coverage_range(&range)?;
+        ranges.push(range);
+    }
+    Ok(ranges)
+}
+
+fn validate_history_coverage_range(range: &HistoryCoverageRange) -> Result<(), StoreError> {
+    validate_history_scope_values(&range.scope)?;
+    validate_history_range(range.range_start_utc_msc, range.range_end_utc_msc)?;
+    if range.observed_at_utc_msc <= 0
+        || range.updated_at_utc_msc <= 0
+        || range.updated_at_utc_msc < range.observed_at_utc_msc
+    {
+        return Err(StoreError::new("bridge_store_history_coverage_invalid"));
+    }
+    Ok(())
+}
+
+fn history_ranges_cover(
+    ranges: &[HistoryCoverageRange],
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+) -> bool {
+    let mut covered_until = range_start_utc_msc;
+    for range in ranges {
+        if range.range_end_utc_msc <= covered_until {
+            continue;
+        }
+        if range.range_start_utc_msc > covered_until {
+            return false;
+        }
+        covered_until = covered_until.max(range.range_end_utc_msc);
+        if covered_until >= range_end_utc_msc {
+            return true;
+        }
+    }
+    covered_until >= range_end_utc_msc
+}
+
+fn history_ranges_covering_bounds(
+    ranges: &[HistoryCoverageRange],
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+) -> Option<(i64, i64)> {
+    let mut covered_until = range_start_utc_msc;
+    let mut covered_start = None;
+    for range in ranges {
+        if range.range_end_utc_msc <= covered_until {
+            continue;
+        }
+        if range.range_start_utc_msc > covered_until {
+            return None;
+        }
+        covered_start = Some(
+            covered_start.map_or(range.range_start_utc_msc, |start: i64| {
+                start.min(range.range_start_utc_msc)
+            }),
+        );
+        covered_until = covered_until.max(range.range_end_utc_msc);
+        if covered_until >= range_end_utc_msc {
+            return covered_start.map(|start| (start, covered_until));
+        }
+    }
+    None
+}
+
+fn merge_history_coverage_range_tx(
+    transaction: &Transaction<'_>,
+    scope: &HistoryScope,
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+    observed_at_utc_msc: i64,
+    updated_at_utc_msc: i64,
+) -> Result<(), StoreError> {
+    validate_history_scope_values(scope)?;
+    validate_history_range(range_start_utc_msc, range_end_utc_msc)?;
+    if observed_at_utc_msc <= 0 || updated_at_utc_msc < observed_at_utc_msc {
+        return Err(StoreError::new("bridge_store_history_coverage_invalid"));
+    }
+    let mut merged_start = range_start_utc_msc;
+    let mut merged_end = range_end_utc_msc;
+    loop {
+        let mut statement = transaction
+            .prepare(
+                "SELECT range_start_utc_msc, range_end_utc_msc
+                 FROM history_coverage_ranges
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3
+                   AND range_end_utc_msc >= ?4
+                   AND range_start_utc_msc <= ?5;",
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_coverage_query_failed"))?;
+        let rows = statement
+            .query_map(
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account,
+                    merged_start,
+                    merged_end
+                ],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_coverage_query_failed"))?;
+        let mut changed = false;
+        for row in rows {
+            let (existing_start, existing_end) =
+                row.map_err(|_| StoreError::new("bridge_store_history_coverage_query_failed"))?;
+            let next_start = merged_start.min(existing_start);
+            let next_end = merged_end.max(existing_end);
+            changed |= next_start != merged_start || next_end != merged_end;
+            merged_start = next_start;
+            merged_end = next_end;
+        }
+        drop(statement);
+        if !changed {
+            break;
+        }
+    }
+    transaction
+        .execute(
+            "DELETE FROM history_coverage_ranges
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3
+               AND range_end_utc_msc >= ?4
+               AND range_start_utc_msc <= ?5;",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                merged_start,
+                merged_end
+            ],
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_coverage_write_failed"))?;
+    transaction
+        .execute(
+            "INSERT INTO history_coverage_ranges (
+               terminal_instance_id, broker_server, login_account,
+               range_start_utc_msc, range_end_utc_msc,
+               observed_at_utc_msc, updated_at_utc_msc
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                merged_start,
+                merged_end,
+                observed_at_utc_msc,
+                updated_at_utc_msc
+            ],
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_coverage_write_failed"))?;
+    Ok(())
 }
 
 fn ensure_native_command_ledger_schema(connection: &Connection) -> Result<(), StoreError> {
@@ -2571,14 +5477,393 @@ struct HistoryPageRequest {
     include_deals: bool,
     evidence_position_ids: Vec<String>,
     evidence_order_tickets: Vec<String>,
+    requested_range: Option<HistoryRequestedRange>,
     filter_sql: String,
     filter_values: Vec<SqlValue>,
     capital_filter_sql: String,
     capital_filter_values: Vec<SqlValue>,
 }
 
+fn parse_history_cursor_page_request(
+    parameters: &serde_json::Value,
+    now_utc_msc: i64,
+) -> Result<HistoryCursorPageRequest, StoreError> {
+    if now_utc_msc <= 0 {
+        return Err(StoreError::new("history_range_now_invalid"));
+    }
+    let object = parameters
+        .as_object()
+        .ok_or_else(|| StoreError::new("history_cursor_params_invalid"))?;
+    const ALLOWED: &[&str] = &[
+        "range_start_utc_msc",
+        "range_end_utc_msc",
+        "page_size",
+        "entry_from",
+        "entry_to",
+        "direction",
+        "profit_filter",
+        "force_refresh",
+        "snapshot_id",
+        "cursor",
+    ];
+    if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err(StoreError::new("history_cursor_params_invalid"));
+    }
+    if object
+        .get("force_refresh")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(StoreError::new("history_cursor_params_invalid"));
+    }
+    if !object.contains_key("range_start_utc_msc") || !object.contains_key("range_end_utc_msc") {
+        return Err(StoreError::new("history_cursor_range_invalid"));
+    }
+    let requested_range = parse_history_requested_range(parameters, now_utc_msc)?
+        .ok_or_else(|| StoreError::new("history_cursor_range_invalid"))?;
+    let page_size = history_integer(object.get("page_size"), 20, 1, MAX_HISTORY_CURSOR_PAGE_SIZE)?;
+    let entry_from_utc_msc = object
+        .get("entry_from")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| StoreError::new("history_date_invalid"))
+                .and_then(parse_utc_date_msc)
+        })
+        .transpose()?;
+    let entry_to_utc_msc = object
+        .get("entry_to")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| StoreError::new("history_date_invalid"))
+                .and_then(parse_utc_date_msc)
+                .and_then(|value| {
+                    value
+                        .checked_add(86_400_000 - 1)
+                        .ok_or_else(|| StoreError::new("history_date_invalid"))
+                })
+        })
+        .transpose()?;
+    if entry_from_utc_msc.is_some_and(|start| entry_to_utc_msc.is_some_and(|end| start > end)) {
+        return Err(StoreError::new("history_range_invalid"));
+    }
+    let direction = object
+        .get("direction")
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| matches!(*value, "BUY" | "SELL"))
+                .map(str::to_owned)
+                .ok_or_else(|| StoreError::new("history_direction_invalid"))
+        })
+        .transpose()?;
+    let profit_filter = object
+        .get("profit_filter")
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| matches!(*value, "profit" | "loss"))
+                .map(str::to_owned)
+                .ok_or_else(|| StoreError::new("history_profit_filter_invalid"))
+        })
+        .transpose()?;
+    let snapshot_id = object
+        .get("snapshot_id")
+        .map(parse_history_token)
+        .transpose()?;
+    let cursor = object.get("cursor").map(parse_history_token).transpose()?;
+    if cursor.is_some() && snapshot_id.is_none() {
+        return Err(StoreError::new("history_cursor_invalid"));
+    }
+
+    let mut filter_sql = String::new();
+    let mut filter_values = Vec::new();
+    if let Some(entry_from) = entry_from_utc_msc {
+        filter_sql.push_str(" AND event_time_msc >= ?");
+        filter_values.push(SqlValue::Integer(entry_from));
+    }
+    if let Some(entry_to) = entry_to_utc_msc {
+        filter_sql.push_str(" AND event_time_msc <= ?");
+        filter_values.push(SqlValue::Integer(entry_to));
+    }
+    if let Some(direction) = direction.as_deref() {
+        filter_sql.push_str(
+            " AND UPPER(COALESCE(json_extract(payload_json, '$.type'), \
+             json_extract(payload_json, '$.side'), '')) = ?",
+        );
+        filter_values.push(SqlValue::Text(direction.to_owned()));
+    }
+    if let Some(profit_filter) = profit_filter.as_deref() {
+        filter_sql.push_str(match profit_filter {
+            "profit" => {
+                " AND CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
+                 json_extract(payload_json, '$.profit'), 0) AS REAL) > 0"
+            }
+            "loss" => {
+                " AND CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
+                 json_extract(payload_json, '$.profit'), 0) AS REAL) < 0"
+            }
+            _ => unreachable!("profit filter validated above"),
+        });
+    }
+    let query = HistoryCursorQuery {
+        range_start_utc_msc: requested_range.range_start_utc_msc,
+        range_end_utc_msc: requested_range.range_end_utc_msc,
+        page_size,
+        entry_from_utc_msc,
+        entry_to_utc_msc,
+        direction,
+        profit_filter,
+    };
+    Ok(HistoryCursorPageRequest {
+        query,
+        requested_range,
+        snapshot_id,
+        cursor,
+        filter_sql,
+        filter_values,
+        capital_filter_sql: String::new(),
+        capital_filter_values: Vec::new(),
+    })
+}
+
+fn parse_history_token(value: &serde_json::Value) -> Result<String, StoreError> {
+    let token = value
+        .as_str()
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or_else(|| StoreError::new("history_cursor_invalid"))?;
+    if token
+        .bytes()
+        .any(|byte| !(byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'))
+    {
+        return Err(StoreError::new("history_cursor_invalid"));
+    }
+    Ok(token.to_owned())
+}
+
+fn validate_history_snapshot_request(
+    terminal: &TerminalDescriptor,
+    request: &HistoryCursorPageRequest,
+    snapshot: &HistorySnapshotState,
+) -> Result<(), StoreError> {
+    let same_scope = snapshot.terminal_instance_id == terminal.terminal_instance_id
+        && snapshot.login_account == terminal.account_ref.login
+        && snapshot
+            .broker_server
+            .eq_ignore_ascii_case(&terminal.account_ref.broker_server)
+        && snapshot.platform == terminal.platform;
+    if !same_scope {
+        return Err(StoreError::new("history_snapshot_invalid"));
+    }
+    if snapshot.query != request.query {
+        return Err(StoreError::new("history_cursor_invalid"));
+    }
+    Ok(())
+}
+
+fn cleanup_history_snapshots(
+    snapshots: &mut HashMap<String, HistorySnapshotState>,
+    now_utc_msc: i64,
+) {
+    snapshots.retain(|_, snapshot| snapshot.expires_at_utc_msc > now_utc_msc);
+}
+
+fn random_history_token(prefix: &str) -> Result<String, StoreError> {
+    let mut bytes = [0_u8; HISTORY_CURSOR_TOKEN_BYTES];
+    getrandom::fill(&mut bytes).map_err(|_| StoreError::new("history_cursor_random_failed"))?;
+    let mut token = String::with_capacity(prefix.len() + bytes.len() * 2);
+    token.push_str(prefix);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut token, "{byte:02x}")
+            .map_err(|_| StoreError::new("history_cursor_random_failed"))?;
+    }
+    Ok(token)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryEvidenceRequest {
+    pub requested_range: HistoryRequestedRange,
+    pub evidence_position_ids: Vec<String>,
+    pub evidence_order_tickets: Vec<String>,
+}
+
+/// Parse the deliberately narrow request accepted by `history_evidence`.
+///
+/// Evidence is never an unbounded history query: callers must provide one
+/// exact half-open UTC range and at least one positive position/order
+/// reference.  Calendar, paging, filter, refresh, and unknown fields are
+/// rejected so a future caller cannot silently turn this path back into a
+/// history scan.
+pub fn parse_history_evidence_request(
+    parameters: &serde_json::Value,
+    now_utc_msc: i64,
+) -> Result<HistoryEvidenceRequest, StoreError> {
+    if now_utc_msc <= 0 {
+        return Err(StoreError::new("history_range_now_invalid"));
+    }
+    let object = parameters
+        .as_object()
+        .ok_or_else(|| StoreError::new("history_evidence_params_invalid"))?;
+    const ALLOWED: &[&str] = &[
+        "range_start_utc_msc",
+        "range_end_utc_msc",
+        "evidence_position_ids",
+        "evidence_order_tickets",
+    ];
+    if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err(StoreError::new("history_evidence_params_invalid"));
+    }
+    let range_start_utc_msc = object
+        .get("range_start_utc_msc")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| StoreError::new("history_evidence_range_invalid"))?;
+    let range_end_utc_msc = object
+        .get("range_end_utc_msc")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| StoreError::new("history_evidence_range_invalid"))?;
+    let max_endpoint = now_utc_msc
+        .checked_add(60_000)
+        .ok_or_else(|| StoreError::new("history_evidence_range_invalid"))?;
+    if range_start_utc_msc >= range_end_utc_msc || range_end_utc_msc > max_endpoint {
+        return Err(StoreError::new("history_evidence_range_invalid"));
+    }
+    let raw_position_count = object
+        .get("evidence_position_ids")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    let raw_order_count = object
+        .get("evidence_order_tickets")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    if raw_position_count + raw_order_count > MAX_HISTORY_EVIDENCE_REFS {
+        return Err(StoreError::new("history_evidence_refs_invalid"));
+    }
+    let evidence_position_ids = history_reference_list(object.get("evidence_position_ids"))?;
+    let evidence_order_tickets = history_reference_list(object.get("evidence_order_tickets"))?;
+    if evidence_position_ids.is_empty() && evidence_order_tickets.is_empty()
+        || evidence_position_ids.len() + evidence_order_tickets.len() > MAX_HISTORY_EVIDENCE_REFS
+    {
+        return Err(StoreError::new("history_evidence_refs_invalid"));
+    }
+    Ok(HistoryEvidenceRequest {
+        requested_range: HistoryRequestedRange {
+            range_start_utc_msc,
+            range_end_utc_msc,
+        },
+        evidence_position_ids,
+        evidence_order_tickets,
+    })
+}
+
+/// Parse the explicit history range used for coverage decisions.
+///
+/// `date_from` is the inclusive start date at midnight UTC.  The returned
+/// interval is half-open: the end is either the explicit millisecond endpoint
+/// or the earlier of the explicit `date_to` next-day boundary and `now`.  A
+/// missing `date_from` intentionally returns `None`; an unbounded history
+/// request must never be reported as a covered range.
+pub fn parse_history_requested_range(
+    parameters: &serde_json::Value,
+    now_utc_msc: i64,
+) -> Result<Option<HistoryRequestedRange>, StoreError> {
+    if now_utc_msc <= 0 {
+        return Err(StoreError::new("history_range_now_invalid"));
+    }
+    let object = parameters
+        .as_object()
+        .ok_or_else(|| StoreError::new("history_params_invalid"))?;
+    let has_exact_start = object.contains_key("range_start_utc_msc");
+    let has_exact_end = object.contains_key("range_end_utc_msc");
+    let has_date_bounds = object.contains_key("date_from") || object.contains_key("date_to");
+
+    // A millisecond request is a separate mode.  It is deliberately strict:
+    // accepting a lone endpoint or mixing it with calendar dates would make
+    // the returned coverage metadata ambiguous.
+    if has_exact_start {
+        if !has_exact_end || has_date_bounds {
+            return Err(StoreError::new("history_range_invalid"));
+        }
+        let range_start_utc_msc = object
+            .get("range_start_utc_msc")
+            .and_then(serde_json::Value::as_i64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| StoreError::new("history_range_start_invalid"))?;
+        let range_end_utc_msc = object
+            .get("range_end_utc_msc")
+            .and_then(serde_json::Value::as_i64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| StoreError::new("history_range_end_invalid"))?;
+        let max_endpoint = now_utc_msc
+            .checked_add(60_000)
+            .ok_or_else(|| StoreError::new("history_range_end_invalid"))?;
+        if range_end_utc_msc > max_endpoint || range_start_utc_msc >= range_end_utc_msc {
+            return Err(StoreError::new("history_range_invalid"));
+        }
+        return Ok(Some(HistoryRequestedRange {
+            range_start_utc_msc,
+            range_end_utc_msc,
+        }));
+    }
+
+    let date_to_end_utc_msc = object
+        .get("date_to")
+        .map(|value| {
+            let date_to = value
+                .as_str()
+                .ok_or_else(|| StoreError::new("history_date_invalid"))?;
+            let date_to_start = parse_utc_date_msc(date_to)?;
+            date_to_start
+                .checked_add(86_400_000)
+                .ok_or_else(|| StoreError::new("history_date_invalid"))
+        })
+        .transpose()?;
+    let explicit_range_end_utc_msc = if let Some(value) = object.get("range_end_utc_msc") {
+        let endpoint = value
+            .as_i64()
+            .filter(|endpoint| *endpoint > 0)
+            .ok_or_else(|| StoreError::new("history_range_end_invalid"))?;
+        let max_endpoint = now_utc_msc
+            .checked_add(60_000)
+            .ok_or_else(|| StoreError::new("history_range_end_invalid"))?;
+        if endpoint > max_endpoint
+            || date_to_end_utc_msc.is_some_and(|date_to_end| endpoint > date_to_end)
+        {
+            return Err(StoreError::new("history_range_end_invalid"));
+        }
+        Some(endpoint)
+    } else {
+        None
+    };
+    let Some(date_from) = object.get("date_from") else {
+        if explicit_range_end_utc_msc.is_some() {
+            return Err(StoreError::new("history_range_invalid"));
+        }
+        // Keep this fail-closed even when the caller supplies only date_to or
+        // an endpoint: there is no explicit lower bound to prove complete.
+        return Ok(None);
+    };
+    let date_from = date_from
+        .as_str()
+        .ok_or_else(|| StoreError::new("history_date_invalid"))?;
+    let range_start_utc_msc = parse_utc_date_msc(date_from)?;
+    let range_end_utc_msc = explicit_range_end_utc_msc.unwrap_or_else(|| {
+        date_to_end_utc_msc.map_or(now_utc_msc, |date_to_end| date_to_end.min(now_utc_msc))
+    });
+    if range_end_utc_msc <= range_start_utc_msc {
+        return Err(StoreError::new("history_range_invalid"));
+    }
+    Ok(Some(HistoryRequestedRange {
+        range_start_utc_msc,
+        range_end_utc_msc,
+    }))
+}
+
 fn parse_history_chart_request(
     parameters: &serde_json::Value,
+    now_utc_msc: i64,
 ) -> Result<HistoryPageRequest, StoreError> {
     let object = parameters
         .as_object()
@@ -2586,6 +5871,8 @@ fn parse_history_chart_request(
     const ALLOWED: &[&str] = &[
         "date_from",
         "date_to",
+        "range_start_utc_msc",
+        "range_end_utc_msc",
         "direction",
         "profit_filter",
         "force_refresh",
@@ -2593,11 +5880,12 @@ fn parse_history_chart_request(
     if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
         return Err(StoreError::new("history_params_invalid"));
     }
-    parse_history_page_request(parameters)
+    parse_history_page_request(parameters, now_utc_msc)
 }
 
 fn parse_history_page_request(
     parameters: &serde_json::Value,
+    now_utc_msc: i64,
 ) -> Result<HistoryPageRequest, StoreError> {
     let object = parameters
         .as_object()
@@ -2607,11 +5895,13 @@ fn parse_history_page_request(
         "page_size",
         "date_from",
         "date_to",
+        "range_start_utc_msc",
         "entry_from",
         "entry_to",
         "direction",
         "profit_filter",
         "force_refresh",
+        "range_end_utc_msc",
         "include_deals",
         "compact",
         "evidence_position_ids",
@@ -2624,8 +5914,9 @@ fn parse_history_page_request(
     {
         return Err(StoreError::new("history_params_invalid"));
     }
-    let page = history_integer(object.get("page"), 1, 1, 1_000_000)?;
+    let page = history_integer(object.get("page"), 1, 1, MAX_LEGACY_HISTORY_PAGE)?;
     let page_size = history_integer(object.get("page_size"), 20, 1, 200)?;
+    let requested_range = parse_history_requested_range(parameters, now_utc_msc)?;
     let mut clauses = Vec::new();
     let mut values = Vec::new();
     let mut capital_clauses = Vec::new();
@@ -2651,6 +5942,32 @@ fn parse_history_page_request(
                 capital_values.push(SqlValue::Integer(timestamp));
             }
         }
+    }
+    if object.contains_key("range_start_utc_msc") {
+        let range = requested_range
+            .as_ref()
+            .ok_or_else(|| StoreError::new("history_range_invalid"))?;
+        clauses.push(" AND event_time_msc >= ?".to_owned());
+        values.push(SqlValue::Integer(range.range_start_utc_msc));
+        clauses.push(" AND event_time_msc < ?".to_owned());
+        values.push(SqlValue::Integer(range.range_end_utc_msc));
+        capital_clauses.push(" AND event_time_msc >= ?".to_owned());
+        capital_values.push(SqlValue::Integer(range.range_start_utc_msc));
+        capital_clauses.push(" AND event_time_msc < ?".to_owned());
+        capital_values.push(SqlValue::Integer(range.range_end_utc_msc));
+    } else if object.contains_key("range_end_utc_msc") {
+        // Legacy calendar mode may pin its upper endpoint while retaining
+        // date_from/date_to semantics.  Keep that endpoint as a half-open SQL
+        // bound, while exact mode above remains the only path that accepts a
+        // millisecond start.
+        let range_end = requested_range
+            .as_ref()
+            .map(|range| range.range_end_utc_msc)
+            .ok_or_else(|| StoreError::new("history_range_invalid"))?;
+        clauses.push(" AND event_time_msc < ?".to_owned());
+        values.push(SqlValue::Integer(range_end));
+        capital_clauses.push(" AND event_time_msc < ?".to_owned());
+        capital_values.push(SqlValue::Integer(range_end));
     }
     if let Some(value) = object.get("direction") {
         let direction = value
@@ -2693,6 +6010,7 @@ fn parse_history_page_request(
             .unwrap_or(false),
         evidence_position_ids,
         evidence_order_tickets,
+        requested_range,
         filter_sql: clauses.concat(),
         filter_values: values,
         capital_filter_sql: capital_clauses.concat(),
@@ -2782,6 +6100,13 @@ fn parse_utc_date_msc(value: &str) -> Result<i64, StoreError> {
     days_since_epoch
         .checked_mul(86_400_000)
         .ok_or_else(|| StoreError::new("history_date_invalid"))
+}
+
+fn current_utc_msc() -> Result<i64, StoreError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| StoreError::new("history_range_now_invalid"))?;
+    i64::try_from(duration.as_millis()).map_err(|_| StoreError::new("history_range_now_invalid"))
 }
 
 fn history_scope_values(terminal: &TerminalDescriptor) -> Vec<SqlValue> {
@@ -2889,6 +6214,51 @@ fn read_history_statistics(
     }))
 }
 
+fn read_history_cursor_statistics(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    request: &HistoryCursorPageRequest,
+    total: i64,
+    highwater_rowid: i64,
+) -> Result<serde_json::Value, StoreError> {
+    let bounded_prefix = " AND platform = ? AND rowid <= ? AND event_time_msc >= ? \
+                          AND event_time_msc < ?";
+    let statistics_request = HistoryPageRequest {
+        page: 1,
+        page_size: request.query.page_size,
+        include_deals: false,
+        evidence_position_ids: Vec::new(),
+        evidence_order_tickets: Vec::new(),
+        requested_range: Some(request.requested_range.clone()),
+        filter_sql: format!("{bounded_prefix}{}", request.filter_sql),
+        filter_values: Vec::new(),
+        capital_filter_sql: format!("{bounded_prefix}{}", request.capital_filter_sql),
+        capital_filter_values: {
+            let mut values = vec![
+                SqlValue::Text(terminal.platform.clone()),
+                SqlValue::Integer(highwater_rowid),
+                SqlValue::Integer(request.query.range_start_utc_msc),
+                SqlValue::Integer(request.query.range_end_utc_msc),
+            ];
+            values.extend(request.capital_filter_values.iter().cloned());
+            values
+        },
+    };
+    let mut filtered_values = history_scope_values(terminal);
+    filtered_values.push(SqlValue::Text(terminal.platform.clone()));
+    filtered_values.push(SqlValue::Integer(highwater_rowid));
+    filtered_values.push(SqlValue::Integer(request.query.range_start_utc_msc));
+    filtered_values.push(SqlValue::Integer(request.query.range_end_utc_msc));
+    filtered_values.extend(request.filter_values.iter().cloned());
+    read_history_statistics(
+        connection,
+        terminal,
+        &statistics_request,
+        total,
+        filtered_values,
+    )
+}
+
 fn validate_history_scope(
     terminal_instance_id: &str,
     account_ref: &AccountRef,
@@ -2907,6 +6277,76 @@ fn validate_history_cursor(cursor: &HistoryCursor) -> Result<(), StoreError> {
         || cursor.time_msc > 0 && cursor.ticket.is_empty()
     {
         return Err(StoreError::new("bridge_store_history_cursor_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_history_archive_batch_shape(batch: &HistoryArchiveBatch) -> Result<(), StoreError> {
+    validate_history_cursor(&batch.next_cursor)?;
+    if batch.observed_at_utc_msc <= 0
+        || batch.deals.len() > MAX_HISTORY_BATCH_ITEMS
+        || batch.history_orders.len() > MAX_HISTORY_BATCH_ITEMS
+        || batch.trades.len() > MAX_HISTORY_BATCH_ITEMS
+    {
+        return Err(StoreError::new("bridge_store_history_batch_invalid"));
+    }
+    Ok(())
+}
+
+fn history_scope_matches_terminal(scope: &HistoryScope, terminal: &TerminalDescriptor) -> bool {
+    scope.terminal_instance_id == terminal.terminal_instance_id
+        && scope.login_account == terminal.account_ref.login
+        && scope
+            .broker_server
+            .eq_ignore_ascii_case(&terminal.account_ref.broker_server)
+}
+
+fn validate_history_job_batch_cursor(
+    job: &HistorySyncJob,
+    next_cursor: &HistoryCursor,
+    has_more: bool,
+) -> Result<(), StoreError> {
+    validate_history_cursor(next_cursor)?;
+    let current = HistoryCursor {
+        time_msc: job.cursor_time_msc,
+        ticket: job.cursor_ticket.clone(),
+    };
+    if compare_history_cursor(next_cursor, &current) != std::cmp::Ordering::Greater
+        || next_cursor.time_msc < job.range_start_utc_msc
+        || next_cursor.time_msc > job.range_end_utc_msc
+    {
+        return Err(StoreError::new("bridge_store_history_cursor_regression"));
+    }
+    if has_more {
+        if next_cursor.time_msc >= job.range_end_utc_msc
+            || compare_decimal_strings(&next_cursor.ticket, "0") != std::cmp::Ordering::Greater
+        {
+            return Err(StoreError::new("bridge_store_history_cursor_invalid"));
+        }
+    } else if next_cursor.ticket != "0" {
+        return Err(StoreError::new("bridge_store_history_cursor_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_history_items_in_range(
+    items: &[serde_json::Value],
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+) -> Result<(), StoreError> {
+    for item in items {
+        let object = item
+            .as_object()
+            .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))?;
+        let event_time_msc = history_time_msc(object)?;
+        if event_time_msc < range_start_utc_msc || event_time_msc >= range_end_utc_msc {
+            return Err(StoreError::new("bridge_store_history_item_out_of_range"));
+        }
+        let payload_json = serde_json::to_string(item)
+            .map_err(|_| StoreError::new("bridge_store_history_item_invalid"))?;
+        if payload_json.len() > MAX_HISTORY_ITEM_BYTES {
+            return Err(StoreError::new("bridge_store_history_item_too_large"));
+        }
     }
     Ok(())
 }
@@ -3085,12 +6525,114 @@ fn read_history_state_locked(
         })
 }
 
-fn read_history_evidence(
+fn read_history_sync_metadata_locked(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    request: &HistoryPageRequest,
+    state: &HistoryArchiveState,
+    now_utc_msc: i64,
+) -> Result<serde_json::Value, StoreError> {
+    if now_utc_msc <= 0 {
+        return Err(StoreError::new("history_range_now_invalid"));
+    }
+    let scope = HistoryScope {
+        terminal_instance_id: terminal.terminal_instance_id.clone(),
+        broker_server: terminal.account_ref.broker_server.clone(),
+        login_account: terminal.account_ref.login.clone(),
+    };
+    let ranges = read_history_coverage_ranges_locked(connection, &scope)?;
+    const HOUR_MSC: i64 = 60 * 60 * 1_000;
+    let archive_complete = if terminal.platform.eq_ignore_ascii_case("mt5") {
+        let archive_end = now_utc_msc.div_euclid(HOUR_MSC) * HOUR_MSC;
+        archive_end >= HISTORY_COVERAGE_START_UTC_MSC
+            && history_ranges_cover(&ranges, HISTORY_COVERAGE_START_UTC_MSC, archive_end)
+    } else {
+        // MT4 still uses its legacy contiguous archive state.  The new
+        // coverage table is an MT5 range scheduler detail and must not alter
+        // the existing MT4 contract.
+        state.is_complete
+    };
+    let requested_range_complete = request.requested_range.as_ref().map(|range| {
+        if terminal.platform.eq_ignore_ascii_case("mt5") {
+            history_ranges_cover(&ranges, range.range_start_utc_msc, range.range_end_utc_msc)
+        } else {
+            // MT4 has no range coverage table yet.  Its existing complete
+            // flag represents the whole archive, so retain that global
+            // semantic for an explicit date request.
+            state.is_complete
+        }
+    });
+    let coverage_bounds = request.requested_range.as_ref().and_then(|range| {
+        if !terminal.platform.eq_ignore_ascii_case("mt5") || requested_range_complete != Some(true)
+        {
+            return None;
+        }
+        history_ranges_covering_bounds(&ranges, range.range_start_utc_msc, range.range_end_utc_msc)
+    });
+    let latest_job_progress = connection
+        .query_row(
+            "SELECT COALESCE(MAX(updated_at_utc_msc), 0) FROM history_sync_jobs
+             WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3;",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_state_query_failed"))?;
+    let latest_coverage_progress = ranges
+        .iter()
+        .map(|range| range.updated_at_utc_msc)
+        .max()
+        .unwrap_or(0);
+    let last_progress_at_utc_msc = state
+        .updated_at_utc_msc
+        .max(latest_job_progress)
+        .max(latest_coverage_progress);
+    let backfill_pending = !archive_complete || requested_range_complete == Some(false);
+    let (requested_start, requested_end, coverage_start, coverage_end) =
+        if let Some(range) = request.requested_range.as_ref() {
+            let coverage_start = coverage_bounds.map(|(start, _)| start);
+            let coverage_end = coverage_bounds.map(|(_, end)| end);
+            (
+                serde_json::Value::from(range.range_start_utc_msc),
+                serde_json::Value::from(range.range_end_utc_msc),
+                coverage_start.map_or(serde_json::Value::Null, serde_json::Value::from),
+                coverage_end.map_or(serde_json::Value::Null, serde_json::Value::from),
+            )
+        } else {
+            (
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+            )
+        };
+    Ok(serde_json::json!({
+        "complete": state.is_complete,
+        "cursor_time_msc": state.cursor.time_msc,
+        "updated_at_utc_msc": state.updated_at_utc_msc,
+        "requested_range_complete": requested_range_complete
+            .map_or(serde_json::Value::Null, serde_json::Value::from),
+        "requested_range_start_utc_msc": requested_start,
+        "requested_range_end_utc_msc": requested_end,
+        "archive_complete": archive_complete,
+        "coverage_start_utc_msc": coverage_start,
+        "coverage_end_utc_msc": coverage_end,
+        "backfill_pending": backfill_pending,
+        "last_progress_at_utc_msc": last_progress_at_utc_msc,
+    }))
+}
+
+fn read_history_evidence_for_page(
     connection: &Connection,
     terminal: &TerminalDescriptor,
     trades: &[serde_json::Value],
     requested_positions: &[String],
     requested_orders: &[String],
+    requested_range: Option<&HistoryRequestedRange>,
 ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, bool), StoreError> {
     let mut positions = requested_positions.to_vec();
     let mut orders = requested_orders.to_vec();
@@ -3112,9 +6654,22 @@ fn read_history_evidence(
     if positions.is_empty() && orders.is_empty() {
         return Ok((Vec::new(), Vec::new(), false));
     }
-    let deals = query_history_evidence(connection, terminal, "deal", &positions, &orders)?;
-    let history_orders =
-        query_history_evidence(connection, terminal, "history_order", &positions, &orders)?;
+    let deals = query_history_evidence(
+        connection,
+        terminal,
+        "deal",
+        &positions,
+        &orders,
+        requested_range,
+    )?;
+    let history_orders = query_history_evidence(
+        connection,
+        terminal,
+        "history_order",
+        &positions,
+        &orders,
+        requested_range,
+    )?;
     let truncated = deals.len() > MAX_HISTORY_EVIDENCE_ITEMS
         || history_orders.len() > MAX_HISTORY_EVIDENCE_ITEMS;
     Ok((
@@ -3131,6 +6686,7 @@ fn hydrate_history_trade_protection(
     connection: &Connection,
     terminal: &TerminalDescriptor,
     trades: &mut [serde_json::Value],
+    requested_range: Option<&HistoryRequestedRange>,
 ) -> Result<(), StoreError> {
     let mut opening_orders = trades
         .iter()
@@ -3146,15 +6702,22 @@ fn hydrate_history_trade_protection(
     let placeholders = std::iter::repeat_n("?", opening_orders.len())
         .collect::<Vec<_>>()
         .join(",");
+    let range_sql = requested_range
+        .map(|_| " AND event_time_msc >= ? AND event_time_msc < ?")
+        .unwrap_or("");
     let query = format!(
         "SELECT payload_json FROM history_archive_items \
          WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
            AND login_account = ? AND item_kind = 'history_order' \
-           AND (item_id IN ({placeholders}) OR order_ticket IN ({placeholders}));"
+           AND (item_id IN ({placeholders}) OR order_ticket IN ({placeholders})){range_sql};"
     );
     let mut values = history_scope_values(terminal);
     values.extend(opening_orders.iter().cloned().map(SqlValue::Text));
     values.extend(opening_orders.iter().cloned().map(SqlValue::Text));
+    if let Some(range) = requested_range {
+        values.push(SqlValue::Integer(range.range_start_utc_msc));
+        values.push(SqlValue::Integer(range.range_end_utc_msc));
+    }
     let mut statement = connection
         .prepare(&query)
         .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
@@ -3200,6 +6763,7 @@ fn query_history_evidence(
     kind: &str,
     positions: &[String],
     orders: &[String],
+    requested_range: Option<&HistoryRequestedRange>,
 ) -> Result<Vec<serde_json::Value>, StoreError> {
     let position_placeholders = std::iter::repeat_n("?", positions.len())
         .collect::<Vec<_>>()
@@ -3220,11 +6784,14 @@ fn query_history_evidence(
             predicates.push(format!("order_ticket IN ({order_placeholders})"));
         }
     }
+    let range_sql = requested_range
+        .map(|_| " AND event_time_msc >= ? AND event_time_msc < ?")
+        .unwrap_or("");
     let query = format!(
         "SELECT payload_json FROM history_archive_items \
          WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
            AND login_account = ? AND item_kind = ? AND ({}) \
-         ORDER BY event_time_msc, item_id LIMIT ?;",
+         {range_sql} ORDER BY event_time_msc, item_id LIMIT ?;",
         predicates.join(" OR ")
     );
     let mut values = vec![
@@ -3237,6 +6804,10 @@ fn query_history_evidence(
     values.extend(orders.iter().cloned().map(SqlValue::Text));
     if kind == "history_order" {
         values.extend(orders.iter().cloned().map(SqlValue::Text));
+    }
+    if let Some(range) = requested_range {
+        values.push(SqlValue::Integer(range.range_start_utc_msc));
+        values.push(SqlValue::Integer(range.range_end_utc_msc));
     }
     values.push(SqlValue::Integer((MAX_HISTORY_EVIDENCE_ITEMS + 1) as i64));
     let mut statement = connection
@@ -3258,6 +6829,10 @@ fn enforce_history_payload_budget(payload: &mut serde_json::Value) -> Result<(),
         return Err(StoreError::new("bridge_store_history_payload_invalid"));
     };
     object["history_sync"]["evidence_truncated"] = serde_json::Value::Bool(true);
+    object.insert(
+        "evidence_truncated".to_owned(),
+        serde_json::Value::Bool(true),
+    );
     for key in ["deals", "history_orders"] {
         loop {
             if encoded_len(&serde_json::Value::Object(object.clone()))?
@@ -3288,6 +6863,87 @@ fn table_exists(connection: &Connection, table: &str) -> Result<bool, StoreError
         .map_err(|_| StoreError::new("bridge_store_schema_query_failed"))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeSchemaStatus {
+    Complete,
+    NeedsMigration,
+    Incompatible,
+}
+
+fn configure_open_connection(connection: &Connection) -> Result<(), StoreError> {
+    let synchronous = connection
+        .query_row("PRAGMA synchronous;", [], |row| row.get::<_, i64>(0))
+        .map_err(|_| StoreError::new("bridge_store_synchronous_failed"))?;
+    if synchronous != 2 {
+        connection
+            .pragma_update(None, "synchronous", "FULL")
+            .map_err(|_| StoreError::new("bridge_store_synchronous_failed"))?;
+    }
+    let foreign_keys = connection
+        .query_row("PRAGMA foreign_keys;", [], |row| row.get::<_, i64>(0))
+        .map_err(|_| StoreError::new("bridge_store_foreign_keys_failed"))?;
+    if foreign_keys != 1 {
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .map_err(|_| StoreError::new("bridge_store_foreign_keys_failed"))?;
+    }
+    Ok(())
+}
+
+fn runtime_schema_status(connection: &Connection) -> Result<RuntimeSchemaStatus, StoreError> {
+    let mut needs_migration = false;
+    for (table, required_columns) in HISTORY_RUNTIME_REQUIRED_TABLES {
+        if !table_exists(connection, table)? {
+            needs_migration = true;
+            continue;
+        }
+        let columns = table_columns(connection, table)?;
+        if required_columns
+            .iter()
+            .any(|required| !columns.iter().any(|existing| existing == required))
+        {
+            return Ok(RuntimeSchemaStatus::Incompatible);
+        }
+    }
+
+    if !table_exists(connection, "native_command_ledger")? {
+        needs_migration = true;
+    } else {
+        let columns = table_columns(connection, "native_command_ledger")?;
+        if NATIVE_COMMAND_LEDGER_REQUIRED_COLUMNS
+            .iter()
+            .any(|required| !columns.iter().any(|existing| existing == required))
+        {
+            return Ok(RuntimeSchemaStatus::Incompatible);
+        }
+    }
+
+    for index in NATIVE_COMMAND_LEDGER_REQUIRED_INDEXES
+        .iter()
+        .chain(HISTORY_RUNTIME_REQUIRED_INDEXES.iter())
+    {
+        let exists = connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1
+                 );",
+                [*index],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value == 1)
+            .map_err(|_| StoreError::new("bridge_store_schema_query_failed"))?;
+        if !exists {
+            needs_migration = true;
+        }
+    }
+
+    Ok(if needs_migration {
+        RuntimeSchemaStatus::NeedsMigration
+    } else {
+        RuntimeSchemaStatus::Complete
+    })
+}
+
 fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, StoreError> {
     if !table
         .bytes()
@@ -3310,7 +6966,8 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn missing_database_is_safe_for_fresh_install() {
@@ -3354,6 +7011,13 @@ mod tests {
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )
             .expect("fresh schema connection");
+            for table in [
+                "account_initialization_state",
+                "history_sync_jobs",
+                "history_coverage_ranges",
+            ] {
+                assert!(table_exists(&connection, table).expect("runtime table"));
+            }
             for (table, expected_columns) in REQUIRED_SCHEMA {
                 assert_eq!(
                     table_columns(&connection, table).expect("fresh table columns"),
@@ -3378,10 +7042,15 @@ mod tests {
             assert_eq!(
                 indices,
                 vec![
+                    "idx_account_initialization_updated",
                     "idx_deals_pending_cursor",
                     "idx_execution_receipts_completed",
+                    "idx_history_archive_order",
                     "idx_history_archive_page",
                     "idx_history_archive_position",
+                    "idx_history_coverage_ranges_scope",
+                    "idx_history_sync_jobs_claim",
+                    "idx_history_sync_jobs_scope",
                     "idx_native_command_ledger_status",
                     "idx_outbox_ready",
                     "idx_outbox_retry_ready",
@@ -3393,6 +7062,52 @@ mod tests {
             drop(connection);
             fs::remove_dir_all(root).expect("remove fresh database fixture");
         }
+    }
+
+    #[test]
+    fn complete_schema_open_skips_schema_writes_while_another_handle_holds_write_lock() {
+        let root = unique_test_directory("schema-open-read-only-fast-path");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let first_store = OutboxStore::open_or_create(&path).expect("first store");
+        drop(first_store);
+
+        let mut writer = Connection::open(&path).expect("writer connection");
+        let transaction = writer
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("writer transaction");
+        let started_at = Instant::now();
+        let second_store = OutboxStore::open_existing(&path).expect("read-only fast path");
+        assert!(
+            started_at.elapsed() < Duration::from_millis(500),
+            "complete-schema open unexpectedly waited on a schema write lock"
+        );
+        drop(second_store);
+        transaction.rollback().expect("rollback writer transaction");
+        drop(writer);
+        fs::remove_dir_all(root).expect("remove schema lock fixture");
+    }
+
+    #[test]
+    fn partial_runtime_table_fails_closed_instead_of_being_treated_as_legacy() {
+        let root = unique_test_directory("partial-runtime-schema");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        Connection::open(&path)
+            .expect("partial schema connection")
+            .execute_batch(
+                "CREATE TABLE account_initialization_state (
+                   terminal_instance_id TEXT NOT NULL
+                 );",
+            )
+            .expect("partial runtime table");
+
+        let error = OutboxStore::open_existing(&path)
+            .err()
+            .expect("partial runtime schema must fail closed");
+        assert_eq!(error.code(), "bridge_store_schema_incompatible");
+        fs::remove_dir_all(root).expect("remove partial schema fixture");
     }
 
     #[test]
@@ -3812,6 +7527,41 @@ mod tests {
                 .iter()
                 .any(|order| order["ticket"] == 2001)
         );
+        let exact_evidence = store
+            .read_history_evidence_at(
+                &terminal,
+                &serde_json::json!({
+                    "range_start_utc_msc": 1_700_000_000_000_i64,
+                    "range_end_utc_msc": 1_700_000_000_130_i64,
+                    "evidence_position_ids": ["42"],
+                    "evidence_order_tickets": ["1001"]
+                }),
+                1_700_000_000_300,
+            )
+            .expect("exact scoped evidence");
+        assert_eq!(
+            exact_evidence["deals"]
+                .as_array()
+                .expect("exact deals")
+                .iter()
+                .map(|item| item["deal_ticket"].as_i64().expect("deal ticket"))
+                .collect::<Vec<_>>(),
+            vec![5001]
+        );
+        assert_eq!(
+            exact_evidence["history_orders"]
+                .as_array()
+                .expect("exact history orders")
+                .iter()
+                .map(|item| item["ticket"].as_i64().expect("order ticket"))
+                .collect::<Vec<_>>(),
+            vec![1001]
+        );
+        assert_eq!(
+            exact_evidence["history_sync"]["requested_range_start_utc_msc"],
+            1_700_000_000_000_i64
+        );
+        assert_eq!(exact_evidence["evidence_truncated"], false);
         assert_eq!(
             store
                 .read_history_archive_page(
@@ -3866,6 +7616,23 @@ mod tests {
         assert_eq!(other_page["pagination"]["total_count"], 0);
         assert!(other_page["orders"].as_array().expect("orders").is_empty());
         assert!(other_page["deals"].as_array().expect("deals").is_empty());
+        let other_evidence = store
+            .read_history_evidence_at(
+                &other_account,
+                &serde_json::json!({
+                    "range_start_utc_msc": 1_700_000_000_000_i64,
+                    "range_end_utc_msc": 1_700_000_000_200_i64,
+                    "evidence_position_ids": ["42"]
+                }),
+                1_700_000_000_300,
+            )
+            .expect("isolated empty evidence");
+        assert!(
+            other_evidence["deals"]
+                .as_array()
+                .expect("isolated deals")
+                .is_empty()
+        );
 
         let mut regressed = batch.clone();
         regressed.trades = vec![serde_json::json!({
@@ -3917,8 +7684,281 @@ mod tests {
                 .code(),
             "history_pagination_invalid"
         );
+        assert_eq!(
+            store
+                .read_history_archive_page(
+                    &terminal,
+                    &serde_json::json!({ "page": MAX_LEGACY_HISTORY_PAGE + 1, "page_size": 20 }),
+                )
+                .expect_err("deep legacy offset rejected")
+                .code(),
+            "history_pagination_invalid"
+        );
         drop(store);
         fs::remove_dir_all(root).expect("remove history fixture");
+    }
+
+    fn seed_cursor_history(
+        store: &OutboxStore,
+        terminal: &TerminalDescriptor,
+        range_start_utc_msc: i64,
+        range_end_utc_msc: i64,
+        count: usize,
+    ) {
+        let mut connection = store.connection.lock().expect("cursor store lock");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("cursor seed transaction");
+        transaction
+            .execute(
+                "INSERT INTO history_coverage_ranges (
+                   terminal_instance_id, broker_server, login_account,
+                   range_start_utc_msc, range_end_utc_msc,
+                   observed_at_utc_msc, updated_at_utc_msc
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT(terminal_instance_id, broker_server, login_account, range_start_utc_msc)
+                 DO UPDATE SET range_end_utc_msc = excluded.range_end_utc_msc,
+                   observed_at_utc_msc = excluded.observed_at_utc_msc,
+                   updated_at_utc_msc = excluded.updated_at_utc_msc;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    range_start_utc_msc,
+                    range_end_utc_msc,
+                    range_end_utc_msc,
+                ],
+            )
+            .expect("cursor seed coverage");
+        for index in 0..count {
+            let item_id = format!("{:08}", index + 1);
+            let event_time_msc = range_start_utc_msc + (index as i64 / 2);
+            let payload = serde_json::json!({
+                "deal_ticket": item_id,
+                "ticket": item_id,
+                "close_time_msc": event_time_msc,
+                "profit": if index % 2 == 0 { 1.0 } else { -1.0 },
+                "volume": 0.1,
+            });
+            transaction
+                .execute(
+                    "INSERT INTO history_archive_items (
+                       terminal_instance_id, broker_server, login_account, platform,
+                       item_kind, item_id, event_time_msc, position_id, order_ticket,
+                       symbol, payload_json, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, 'trade', ?5, ?6, NULL, NULL, 'XAUUSD', ?7, ?8);",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                        item_id,
+                        event_time_msc,
+                        payload.to_string(),
+                        range_end_utc_msc,
+                    ],
+                )
+                .expect("cursor seed item");
+        }
+        transaction.commit().expect("cursor seed commit");
+    }
+
+    #[test]
+    fn history_cursor_pages_are_keyset_bounded_and_snapshot_consistent() {
+        let root = unique_test_directory("history-cursor");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("cursor store");
+        let terminal = history_terminal("123456");
+        let range_start = 1_700_000_000_000_i64;
+        let range_end = range_start + 20_000;
+        seed_cursor_history(&store, &terminal, range_start, range_end, 10_000);
+
+        let base_parameters = serde_json::json!({
+            "range_start_utc_msc": range_start,
+            "range_end_utc_msc": range_end,
+            "page_size": 37,
+        });
+        let first = store
+            .read_history_cursor_page_at(&terminal, &base_parameters, range_end)
+            .expect("first cursor page");
+        let snapshot_id = first["history_snapshot_id"]
+            .as_str()
+            .expect("snapshot id")
+            .to_owned();
+        let first_cursor = first["next_cursor"]
+            .as_str()
+            .expect("first cursor")
+            .to_owned();
+        assert_eq!(first["pagination"]["total_count"], 10_000);
+        assert_eq!(first["has_more"], true);
+        assert!(first["deals"].as_array().expect("empty deals").is_empty());
+        assert!(
+            first["history_orders"]
+                .as_array()
+                .expect("empty history orders")
+                .is_empty()
+        );
+
+        let second_parameters = serde_json::json!({
+            "range_start_utc_msc": range_start,
+            "range_end_utc_msc": range_end,
+            "page_size": 37,
+            "snapshot_id": snapshot_id,
+            "cursor": first_cursor,
+        });
+        let second = store
+            .read_history_cursor_page_at(&terminal, &second_parameters, range_end)
+            .expect("second cursor page");
+        let second_repeat = store
+            .read_history_cursor_page_at(&terminal, &second_parameters, range_end)
+            .expect("repeat second cursor page");
+        assert_eq!(second["orders"], second_repeat["orders"]);
+        assert_eq!(second["next_cursor"], second_repeat["next_cursor"]);
+        assert_eq!(second["statistics"], first["statistics"]);
+        assert_eq!(second["pagination"]["total_count"], 10_000);
+
+        {
+            let connection = store.connection.lock().expect("insert new row lock");
+            connection
+                .execute(
+                    "INSERT INTO history_archive_items (
+                       terminal_instance_id, broker_server, login_account, platform,
+                       item_kind, item_id, event_time_msc, position_id, order_ticket,
+                       symbol, payload_json, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, 'trade', '99999999', ?5, NULL, NULL,
+                       'XAUUSD', ?6, ?7);",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                        range_end - 1,
+                        serde_json::json!({
+                            "deal_ticket": "99999999",
+                            "close_time_msc": range_end - 1,
+                            "profit": 999.0
+                        })
+                        .to_string(),
+                        range_end,
+                    ],
+                )
+                .expect("insert post-snapshot row");
+        }
+        let mut page_parameters = second_parameters.clone();
+        let mut cursor = second["next_cursor"].as_str().map(str::to_owned);
+        let mut seen = first["orders"]
+            .as_array()
+            .expect("first orders")
+            .iter()
+            .chain(second["orders"].as_array().expect("second orders").iter())
+            .map(|item| item["deal_ticket"].as_str().expect("ticket").to_owned())
+            .collect::<std::collections::HashSet<_>>();
+        while let Some(next) = cursor {
+            page_parameters["cursor"] = serde_json::Value::String(next);
+            let page = store
+                .read_history_cursor_page_at(&terminal, &page_parameters, range_end)
+                .expect("cursor continuation");
+            for item in page["orders"].as_array().expect("page orders") {
+                let ticket = item["deal_ticket"].as_str().expect("ticket").to_owned();
+                assert_ne!(ticket, "99999999");
+                assert!(seen.insert(ticket), "duplicate cursor item");
+            }
+            cursor = page["next_cursor"].as_str().map(str::to_owned);
+        }
+        assert_eq!(seen.len(), 10_000);
+
+        assert_eq!(
+            store
+                .read_history_cursor_page_at(
+                    &terminal,
+                    &serde_json::json!({
+                        "range_start_utc_msc": range_start + 1,
+                        "range_end_utc_msc": range_end,
+                        "page_size": 37,
+                        "snapshot_id": snapshot_id,
+                        "cursor": first["next_cursor"],
+                    }),
+                    range_end,
+                )
+                .expect_err("changed range rejected")
+                .code(),
+            "history_cursor_invalid"
+        );
+        assert_eq!(
+            store
+                .read_history_cursor_page_at(
+                    &history_terminal("654321"),
+                    &second_parameters,
+                    range_end,
+                )
+                .expect_err("cross-account snapshot rejected")
+                .code(),
+            "history_snapshot_invalid"
+        );
+        assert_eq!(
+            store
+                .read_history_cursor_page_at(
+                    &terminal,
+                    &serde_json::json!({
+                        "range_start_utc_msc": range_start,
+                        "range_end_utc_msc": range_end,
+                        "page_size": 37,
+                        "snapshot_id": "hs_forged",
+                    }),
+                    range_end,
+                )
+                .expect_err("forged snapshot rejected")
+                .code(),
+            "history_snapshot_invalid"
+        );
+        assert_eq!(
+            store
+                .read_history_cursor_page_at(
+                    &terminal,
+                    &serde_json::json!({
+                        "range_start_utc_msc": range_start,
+                        "range_end_utc_msc": range_end,
+                        "page_size": 37,
+                        "cursor": "hc_forged",
+                    }),
+                    range_end,
+                )
+                .expect_err("cursor without snapshot rejected")
+                .code(),
+            "history_cursor_invalid"
+        );
+        assert_eq!(
+            store
+                .read_history_cursor_page_at(
+                    &terminal,
+                    &serde_json::json!({
+                        "range_start_utc_msc": range_start,
+                        "range_end_utc_msc": range_end,
+                        "page_size": 37,
+                        "snapshot_id": snapshot_id,
+                    }),
+                    range_end + HISTORY_SNAPSHOT_TTL_MSC,
+                )
+                .expect_err("expired snapshots cleaned")
+                .code(),
+            "history_snapshot_invalid"
+        );
+
+        for _ in 0..(MAX_HISTORY_SNAPSHOTS + 8) {
+            store
+                .read_history_cursor_page_at(&terminal, &base_parameters, range_end + 1)
+                .expect("bounded snapshot creation");
+        }
+        assert!(
+            store
+                .history_snapshots
+                .lock()
+                .expect("snapshot map lock")
+                .len()
+                <= MAX_HISTORY_SNAPSHOTS
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove cursor fixture");
     }
 
     #[test]
@@ -4046,6 +8086,1026 @@ mod tests {
     }
 
     #[test]
+    fn history_requested_range_is_fixed_half_open_and_fail_closed_without_start() {
+        let now = parse_utc_date_msc("2026-08-08").expect("today") + 12 * 60 * 60 * 1_000;
+        let today = parse_history_requested_range(
+            &serde_json::json!({
+                "date_from": "2026-08-08",
+                "range_end_utc_msc": now + 1_000,
+            }),
+            now,
+        )
+        .expect("today range")
+        .expect("explicit range");
+        assert_eq!(
+            today.range_start_utc_msc,
+            parse_utc_date_msc("2026-08-08").unwrap()
+        );
+        assert_eq!(today.range_end_utc_msc, now + 1_000);
+
+        let date_to = parse_history_requested_range(
+            &serde_json::json!({
+                "date_from": "2026-08-01",
+                "date_to": "2026-08-02",
+            }),
+            now,
+        )
+        .expect("date range")
+        .expect("date range value");
+        assert_eq!(
+            date_to.range_end_utc_msc,
+            parse_utc_date_msc("2026-08-03").unwrap()
+        );
+
+        let explicit_end = parse_history_requested_range(
+            &serde_json::json!({
+                "date_from": "2026-08-01",
+                "date_to": "2026-08-02",
+                "range_end_utc_msc": parse_utc_date_msc("2026-08-02").unwrap() + 1,
+            }),
+            now,
+        )
+        .expect("explicit end")
+        .expect("explicit range");
+        assert_eq!(
+            explicit_end.range_end_utc_msc,
+            parse_utc_date_msc("2026-08-02").unwrap() + 1
+        );
+
+        assert!(
+            parse_history_requested_range(&serde_json::json!({ "date_to": "2026-08-02" }), now)
+                .expect("no date_from")
+                .is_none()
+        );
+        for parameters in [
+            serde_json::json!({
+                "date_from": "2026-08-01",
+                "range_end_utc_msc": now + 60_001,
+            }),
+            serde_json::json!({
+                "date_from": "2026-08-01",
+                "date_to": "2026-08-02",
+                "range_end_utc_msc": parse_utc_date_msc("2026-08-03").unwrap() + 1,
+            }),
+            serde_json::json!({
+                "date_from": "2026-08-08",
+                "range_end_utc_msc": parse_utc_date_msc("2026-08-08").unwrap(),
+            }),
+            serde_json::json!({
+                "date_from": "2026-08-01",
+                "range_end_utc_msc": "not-an-integer",
+            }),
+        ] {
+            assert!(
+                parse_history_requested_range(&parameters, now).is_err(),
+                "invalid range accepted: {parameters}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_history_range_is_strict_and_filters_the_half_open_interval() {
+        let now = 1_800_000_000_000_i64;
+        let start = now - 2_000;
+        let end = now - 1_000;
+        let exact = parse_history_requested_range(
+            &serde_json::json!({
+                "range_start_utc_msc": start,
+                "range_end_utc_msc": end,
+            }),
+            now,
+        )
+        .expect("exact range")
+        .expect("exact range value");
+        assert_eq!(
+            exact,
+            HistoryRequestedRange {
+                range_start_utc_msc: start,
+                range_end_utc_msc: end,
+            }
+        );
+        for parameters in [
+            serde_json::json!({ "range_start_utc_msc": start }),
+            serde_json::json!({ "range_end_utc_msc": end }),
+            serde_json::json!({
+                "range_start_utc_msc": start,
+                "range_end_utc_msc": end,
+                "date_from": "2026-01-01",
+            }),
+            serde_json::json!({
+                "range_start_utc_msc": start,
+                "range_end_utc_msc": now + 60_001,
+            }),
+            serde_json::json!({
+                "range_start_utc_msc": end,
+                "range_end_utc_msc": start,
+            }),
+            serde_json::json!({
+                "range_start_utc_msc": "not-an-integer",
+                "range_end_utc_msc": end,
+            }),
+        ] {
+            assert!(
+                parse_history_requested_range(&parameters, now).is_err(),
+                "invalid exact range accepted: {parameters}"
+            );
+        }
+
+        let root = unique_test_directory("history-exact-filter");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("exact range store");
+        let terminal = history_terminal("123456");
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![
+                        serde_json::json!({
+                            "deal_ticket": 7001,
+                            "ticket": 7001,
+                            "close_time_msc": start,
+                            "profit": 1.0,
+                        }),
+                        serde_json::json!({
+                            "deal_ticket": 7002,
+                            "ticket": 7002,
+                            "close_time_msc": end,
+                            "profit": 2.0,
+                        }),
+                    ],
+                    next_cursor: HistoryCursor {
+                        time_msc: end,
+                        ticket: "7002".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: now,
+                },
+            )
+            .expect("persist exact filter rows");
+        let page = store
+            .read_history_archive_page_at(
+                &terminal,
+                &serde_json::json!({
+                    "range_start_utc_msc": start,
+                    "range_end_utc_msc": end,
+                }),
+                now,
+            )
+            .expect("exact page");
+        assert_eq!(page["pagination"]["total_count"], 1);
+        assert_eq!(page["orders"][0]["deal_ticket"], 7001);
+        assert_eq!(page["history_sync"]["requested_range_start_utc_msc"], start);
+        assert_eq!(page["history_sync"]["requested_range_end_utc_msc"], end);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove exact filter fixture");
+    }
+
+    #[test]
+    fn allowed_history_claim_skips_legacy_backfill_and_rejects_invalid_lists() {
+        let root = unique_test_directory("history-allowed-claim");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("allowed claim store");
+        let scope = history_scope_for("123456");
+        let mut legacy = history_job_for("job_01JALLOW0001", &scope, 1_000, 2_000, "p1");
+        legacy.job_kind = "backfill".to_owned();
+        let recent = history_job_for("job_01JALLOW0002", &scope, 2_000, 3_000, "p2");
+        store.enqueue_history_job(&legacy).expect("legacy job");
+        store.enqueue_history_job(&recent).expect("recent job");
+
+        let claimed = store
+            .claim_history_job_with_allowed_kinds(
+                &scope,
+                1_700_000_000_001,
+                10_000,
+                &["recent", "on_demand", "recent"],
+            )
+            .expect("allowed claim")
+            .expect("recent claim");
+        assert_eq!(claimed.job_id, recent.job_id);
+        assert_eq!(claimed.job_kind, "on_demand");
+
+        let legacy_claim = store
+            .claim_history_job(&scope, 1_700_000_000_002, 10_000)
+            .expect("legacy compatible claim")
+            .expect("legacy claim");
+        assert_eq!(legacy_claim.job_id, legacy.job_id);
+        assert_eq!(legacy_claim.job_kind, "backfill");
+
+        for allowed in [
+            Vec::<&str>::new(),
+            vec!["archive_explicit"],
+            vec!["recent", "recent"],
+        ] {
+            if allowed == vec!["recent", "recent"] {
+                // Duplicate allowed kinds are normalized and remain valid.
+                continue;
+            }
+            assert_eq!(
+                store
+                    .claim_history_job_with_allowed_kinds(
+                        &scope,
+                        1_700_000_000_003,
+                        10_000,
+                        &allowed,
+                    )
+                    .expect_err("invalid allow list")
+                    .code(),
+                "bridge_store_history_allowed_job_kinds_invalid"
+            );
+        }
+        drop(store);
+        fs::remove_dir_all(root).expect("remove allowed claim fixture");
+    }
+
+    #[test]
+    fn atomic_history_planner_subtracts_coverage_and_active_ranges() {
+        let root = unique_test_directory("history-planner");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("planner store");
+        let scope = history_scope_for("123456");
+        {
+            let connection = store.connection.lock().expect("coverage lock");
+            connection
+                .execute(
+                    "INSERT INTO history_coverage_ranges (
+                       terminal_instance_id, broker_server, login_account,
+                       range_start_utc_msc, range_end_utc_msc,
+                       observed_at_utc_msc, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, 2000, 3000, ?4, ?4),
+                              (?1, ?2, ?3, 5000, 6000, ?4, ?4);",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        1_700_000_000_000_i64,
+                    ],
+                )
+                .expect("coverage rows");
+        }
+        let request = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "recent".to_owned(),
+            priority: "p2".to_owned(),
+            range_start_utc_msc: 1_000,
+            range_end_utc_msc: 10_000,
+            window_msc: 1_000,
+            now_utc_msc: 1_700_000_000_100,
+        };
+        let planned = store.plan_history_jobs(&request).expect("plan gaps");
+        assert_eq!(planned.attached_jobs, Vec::new());
+        assert_eq!(
+            planned
+                .created_jobs
+                .iter()
+                .map(|job| (job.range_start_utc_msc, job.range_end_utc_msc))
+                .collect::<Vec<_>>(),
+            vec![(1_000, 2_000), (3_000, 5_000), (6_000, 10_000)]
+        );
+        let repeated = store.plan_history_jobs(&request).expect("repeat plan");
+        assert!(repeated.created_jobs.is_empty());
+        assert_eq!(repeated.attached_jobs.len(), 3);
+
+        let p1_request = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "on_demand".to_owned(),
+            priority: "p1".to_owned(),
+            range_start_utc_msc: 1_500,
+            range_end_utc_msc: 6_500,
+            window_msc: 1_000,
+            now_utc_msc: 1_700_000_000_200,
+        };
+        let p1 = store.plan_history_jobs(&p1_request).expect("p1 bypass");
+        assert_eq!(
+            p1.created_jobs
+                .iter()
+                .map(|job| (job.range_start_utc_msc, job.range_end_utc_msc))
+                .collect::<Vec<_>>(),
+            vec![(1_500, 2_000), (6_000, 6_500)]
+        );
+        assert_eq!(
+            p1.attached_jobs
+                .iter()
+                .map(|job| (
+                    job.range_start_utc_msc,
+                    job.range_end_utc_msc,
+                    job.priority.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![(3_000, 5_000, "p1")]
+        );
+
+        for (kind, priority) in [
+            ("recent", "p1"),
+            ("recent", "p3"),
+            ("on_demand", "p2"),
+            ("backfill", "p3"),
+        ] {
+            let invalid = HistoryJobPlanningRequest {
+                scope: scope.clone(),
+                job_kind: kind.to_owned(),
+                priority: priority.to_owned(),
+                range_start_utc_msc: 20_000,
+                range_end_utc_msc: 21_000,
+                window_msc: 1_000,
+                now_utc_msc: 1_700_000_000_300,
+            };
+            assert_eq!(
+                store
+                    .plan_history_jobs(&invalid)
+                    .expect_err("invalid planning combination")
+                    .code(),
+                "bridge_store_history_planning_combination_invalid"
+            );
+        }
+        drop(store);
+        fs::remove_dir_all(root).expect("remove planner fixture");
+    }
+
+    #[test]
+    fn atomic_history_planner_promotes_exact_allowed_jobs_and_rejects_legacy_collision() {
+        let root = unique_test_directory("history-planner-promotion");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("promotion planner store");
+        let scope = history_scope_for("123456");
+        let p3 = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "on_demand".to_owned(),
+            priority: "p3".to_owned(),
+            range_start_utc_msc: 30_000,
+            range_end_utc_msc: 40_000,
+            window_msc: 5_000,
+            now_utc_msc: 1_700_000_000_400,
+        };
+        let planned = store.plan_history_jobs(&p3).expect("p3 plan");
+        let p3_job = planned.created_jobs.first().expect("p3 job").clone();
+        let running = store
+            .claim_history_job(&scope, 1_700_000_000_401, 50_000)
+            .expect("p3 claim")
+            .expect("p3 lease");
+        store
+            .checkpoint_history_job(
+                &running.job_id,
+                running.lease_generation,
+                35_000,
+                "35",
+                2_500,
+                1_700_000_000_402,
+            )
+            .expect("p3 checkpoint");
+        let before = store
+            .history_sync_job(&p3_job.job_id)
+            .expect("before lookup")
+            .expect("before job");
+        let p1 = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "on_demand".to_owned(),
+            priority: "p1".to_owned(),
+            range_start_utc_msc: 30_000,
+            range_end_utc_msc: 40_000,
+            window_msc: 9_000,
+            now_utc_msc: 1_700_000_000_403,
+        };
+        let promoted = store.plan_history_jobs(&p1).expect("promote exact");
+        assert!(promoted.created_jobs.is_empty());
+        assert_eq!(promoted.attached_jobs.len(), 1);
+        let after = promoted.attached_jobs.first().expect("promoted job");
+        assert_eq!(after.job_id, before.job_id);
+        assert_eq!(after.priority, "p1");
+        assert_eq!(after.lease_generation, before.lease_generation);
+        assert_eq!(
+            after.lease_expires_at_utc_msc,
+            before.lease_expires_at_utc_msc
+        );
+        assert_eq!(after.cursor_time_msc, before.cursor_time_msc);
+        assert_eq!(after.cursor_ticket, before.cursor_ticket);
+        assert_eq!(after.window_msc, before.window_msc);
+        assert_eq!(after.attempt_count, before.attempt_count);
+        assert_eq!(
+            after.next_attempt_at_utc_msc,
+            before.next_attempt_at_utc_msc.min(p1.now_utc_msc)
+        );
+        assert_eq!(after.updated_at_utc_msc, p1.now_utc_msc);
+
+        let legacy = history_job_for("job_01JPLANLEGACY1", &scope, 50_000, 60_000, "p3");
+        let mut legacy = legacy;
+        legacy.job_kind = "backfill".to_owned();
+        store
+            .enqueue_history_job(&legacy)
+            .expect("legacy collision row");
+        let collision = HistoryJobPlanningRequest {
+            scope,
+            job_kind: "on_demand".to_owned(),
+            priority: "p1".to_owned(),
+            range_start_utc_msc: 50_000,
+            range_end_utc_msc: 60_000,
+            window_msc: 1_000,
+            now_utc_msc: 1_700_000_000_404,
+        };
+        assert_eq!(
+            store
+                .plan_history_jobs(&collision)
+                .expect_err("legacy exact collision")
+                .code(),
+            "bridge_store_history_planning_legacy_collision"
+        );
+        let legacy_after = store
+            .history_sync_job(&legacy.job_id)
+            .expect("legacy lookup")
+            .expect("legacy row");
+        assert_eq!(legacy_after.job_kind, "backfill");
+        assert_eq!(legacy_after.priority, "p3");
+        assert_eq!(legacy_after.state, "queued");
+        drop(store);
+        fs::remove_dir_all(root).expect("remove promotion planner fixture");
+    }
+
+    #[test]
+    fn atomic_history_planner_promotion_releases_future_retry_without_clearing_state() {
+        let root = unique_test_directory("history-planner-retry-promotion");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("retry promotion planner store");
+        let scope = history_scope_for("654321");
+        let p3 = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "on_demand".to_owned(),
+            priority: "p3".to_owned(),
+            range_start_utc_msc: 70_000,
+            range_end_utc_msc: 80_000,
+            window_msc: 5_000,
+            now_utc_msc: 1_700_000_000_500,
+        };
+        let planned = store.plan_history_jobs(&p3).expect("p3 plan");
+        let job = planned.created_jobs.first().expect("p3 job").clone();
+        let running = store
+            .claim_history_job(&scope, 1_700_000_000_501, 50_000)
+            .expect("p3 claim")
+            .expect("p3 lease");
+        store
+            .checkpoint_history_job(
+                &running.job_id,
+                running.lease_generation,
+                75_000,
+                "75",
+                2_500,
+                1_700_000_000_502,
+            )
+            .expect("p3 checkpoint");
+        store
+            .retry_history_job(
+                &running.job_id,
+                running.lease_generation,
+                1_700_001_000_000,
+                "bridge_store_history_retry",
+                1_700_000_000_503,
+            )
+            .expect("future retry");
+        let before = store
+            .history_sync_job(&job.job_id)
+            .expect("before lookup")
+            .expect("before job");
+        assert_eq!(before.state, "retrying");
+        assert!(before.next_attempt_at_utc_msc > 1_700_000_000_504);
+
+        let p1 = HistoryJobPlanningRequest {
+            scope,
+            job_kind: "on_demand".to_owned(),
+            priority: "p1".to_owned(),
+            range_start_utc_msc: 70_000,
+            range_end_utc_msc: 80_000,
+            window_msc: 9_000,
+            now_utc_msc: 1_700_000_000_504,
+        };
+        let promoted = store.plan_history_jobs(&p1).expect("p1 promotion");
+        let after = promoted.attached_jobs.first().expect("promoted job");
+        assert_eq!(after.job_id, before.job_id);
+        assert_eq!(after.priority, "p1");
+        assert_eq!(after.next_attempt_at_utc_msc, p1.now_utc_msc);
+        assert_eq!(after.updated_at_utc_msc, p1.now_utc_msc);
+        assert_eq!(after.last_error_code, before.last_error_code);
+        assert_eq!(after.cursor_time_msc, before.cursor_time_msc);
+        assert_eq!(after.cursor_ticket, before.cursor_ticket);
+        assert_eq!(after.window_msc, before.window_msc);
+        assert_eq!(after.attempt_count, before.attempt_count);
+        assert_eq!(after.lease_generation, before.lease_generation);
+        assert_eq!(
+            after.lease_expires_at_utc_msc,
+            before.lease_expires_at_utc_msc
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove retry promotion planner fixture");
+    }
+
+    #[test]
+    fn history_page_reader_isolated_from_uncommitted_writer_and_cannot_write() {
+        let root = unique_test_directory("history-read-connection");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("read connection store");
+        let terminal = history_terminal("123456");
+        let committed_time = 1_800_000_000_000_i64;
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![serde_json::json!({
+                        "deal_ticket": 8001,
+                        "close_time_msc": committed_time,
+                        "profit": 1.0,
+                    })],
+                    next_cursor: HistoryCursor {
+                        time_msc: committed_time,
+                        ticket: "8001".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: committed_time,
+                },
+            )
+            .expect("committed history row");
+
+        let mut writer = store.connection.lock().expect("writer lock");
+        let transaction = writer
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("uncommitted writer transaction");
+        transaction
+            .execute(
+                "INSERT INTO history_archive_items (
+                   terminal_instance_id, broker_server, login_account, platform,
+                   item_kind, item_id, event_time_msc, position_id, order_ticket,
+                   symbol, payload_json, updated_at_utc_msc
+                 ) VALUES (?1, ?2, ?3, 'mt5', 'trade', '8002', ?4,
+                           NULL, NULL, NULL, ?5, ?4);",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    committed_time + 1_000,
+                    serde_json::json!({
+                        "deal_ticket": 8002,
+                        "close_time_msc": committed_time + 1_000,
+                        "profit": 2.0,
+                    })
+                    .to_string(),
+                ],
+            )
+            .expect("uncommitted history row");
+
+        let started = Instant::now();
+        let page = store
+            .read_history_archive_page_at(&terminal, &serde_json::json!({}), committed_time + 2_000)
+            .expect("reader sees committed snapshot");
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(page["pagination"]["total_count"], 1);
+        assert_eq!(page["orders"][0]["deal_ticket"], 8001);
+        {
+            let reader = store.history_read_connection.lock().expect("reader lock");
+            assert!(
+                reader
+                    .execute(
+                        "UPDATE history_archive_items SET payload_json = payload_json WHERE 1 = 0;",
+                        [],
+                    )
+                    .is_err(),
+                "history reader must remain read-only"
+            );
+        }
+        transaction.rollback().expect("rollback uncommitted row");
+        drop(writer);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove read connection fixture");
+    }
+
+    #[test]
+    fn history_sync_metadata_reports_requested_coverage_and_preserves_mt4_contract() {
+        let root = unique_test_directory("history-sync-metadata");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let terminal = history_terminal("123456");
+        let day_one = parse_utc_date_msc("2026-01-01").expect("day one");
+        let day_two = parse_utc_date_msc("2026-01-02").expect("day two");
+        let day_three = parse_utc_date_msc("2026-01-03").expect("day three");
+        let day_four = parse_utc_date_msc("2026-01-04").expect("day four");
+        {
+            let connection = store.connection.lock().expect("coverage lock");
+            connection
+                .execute(
+                    "INSERT INTO history_coverage_ranges (
+                       terminal_instance_id, broker_server, login_account,
+                       range_start_utc_msc, range_end_utc_msc,
+                       observed_at_utc_msc, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7),
+                              (?1, ?2, ?3, ?5, ?8, ?6, ?7);",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        day_one,
+                        day_two,
+                        1_700_000_000_000_i64,
+                        1_700_000_000_100_i64,
+                        day_three,
+                    ],
+                )
+                .expect("coverage fixture");
+        }
+        let contiguous = store
+            .read_history_archive_page_at(
+                &terminal,
+                &serde_json::json!({
+                    "date_from": "2026-01-01",
+                    "date_to": "2026-01-02",
+                    "page": 1,
+                }),
+                day_four,
+            )
+            .expect("contiguous metadata");
+        assert_eq!(contiguous["history_sync"]["complete"], false);
+        assert_eq!(contiguous["history_sync"]["requested_range_complete"], true);
+        assert_eq!(
+            contiguous["history_sync"]["requested_range_start_utc_msc"],
+            day_one
+        );
+        assert_eq!(
+            contiguous["history_sync"]["requested_range_end_utc_msc"],
+            day_three
+        );
+        assert_eq!(
+            contiguous["history_sync"]["coverage_start_utc_msc"],
+            day_one
+        );
+        assert_eq!(
+            contiguous["history_sync"]["coverage_end_utc_msc"],
+            day_three
+        );
+        assert_eq!(
+            contiguous["history_sync"]["last_progress_at_utc_msc"],
+            1_700_000_000_100_i64
+        );
+        assert_eq!(contiguous["history_sync"]["evidence_truncated"], false);
+        let contiguous_page_two = store
+            .read_history_archive_page_at(
+                &terminal,
+                &serde_json::json!({
+                    "date_from": "2026-01-01",
+                    "date_to": "2026-01-02",
+                    "page": 2,
+                }),
+                day_four,
+            )
+            .expect("second page metadata");
+        assert_eq!(
+            contiguous_page_two["history_sync"]["requested_range_end_utc_msc"],
+            contiguous["history_sync"]["requested_range_end_utc_msc"]
+        );
+        assert_eq!(
+            contiguous_page_two["history_sync"]["requested_range_complete"],
+            contiguous["history_sync"]["requested_range_complete"]
+        );
+
+        let hole = store
+            .read_history_chart_data_at(
+                &terminal,
+                &serde_json::json!({
+                    "date_from": "2026-01-01",
+                    "range_end_utc_msc": day_four,
+                }),
+                day_four,
+            )
+            .expect("hole metadata");
+        assert_eq!(hole["history_sync"]["requested_range_complete"], false);
+        assert_eq!(
+            hole["history_sync"]["coverage_start_utc_msc"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            hole["history_sync"]["coverage_end_utc_msc"],
+            serde_json::Value::Null
+        );
+        assert_eq!(hole["history_sync"]["backfill_pending"], true);
+        assert_eq!(
+            hole["history_sync"]["requested_range_end_utc_msc"],
+            day_four
+        );
+
+        let no_range = store
+            .read_history_chart_data_at(&terminal, &serde_json::json!({}), day_four)
+            .expect("unbounded metadata");
+        assert_eq!(
+            no_range["history_sync"]["requested_range_complete"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            no_range["history_sync"]["requested_range_start_utc_msc"],
+            serde_json::Value::Null
+        );
+        assert_eq!(no_range["history_sync"]["archive_complete"], false);
+
+        let mut mt4 = terminal.clone();
+        mt4.platform = "mt4".to_owned();
+        {
+            let connection = store.connection.lock().expect("legacy state lock");
+            connection
+                .execute(
+                    "INSERT INTO history_archive_state (
+                       terminal_instance_id, broker_server, login_account,
+                       cursor_value, is_complete, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, 1, ?5);",
+                    params![
+                        mt4.terminal_instance_id,
+                        mt4.account_ref.broker_server,
+                        mt4.account_ref.login,
+                        serde_json::json!({ "time_msc": day_three, "ticket": "0" }).to_string(),
+                        1_700_000_001_000_i64,
+                    ],
+                )
+                .expect("legacy state fixture");
+        }
+        let mt4_page = store
+            .read_history_archive_page_at(
+                &mt4,
+                &serde_json::json!({
+                    "date_from": "2026-01-01",
+                    "date_to": "2026-01-02",
+                }),
+                day_four,
+            )
+            .expect("mt4 metadata");
+        assert_eq!(mt4_page["history_sync"]["complete"], true);
+        assert_eq!(mt4_page["history_sync"]["archive_complete"], true);
+        assert_eq!(mt4_page["history_sync"]["requested_range_complete"], true);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove metadata fixture");
+    }
+
+    #[test]
+    fn history_job_yield_is_priority_handoff_without_retry_side_effects() {
+        let root = unique_test_directory("history-job-yield");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        let p2 = history_job_for("job_01JYIELD0001", &scope, 1_000, 2_000, "p2");
+        store.enqueue_history_job(&p2).expect("p2 enqueue");
+        let running = store
+            .claim_history_job(&scope, 1_700_000_000_001, 10_000)
+            .expect("p2 claim")
+            .expect("p2 running");
+        let before = running.clone();
+        assert!(
+            !store
+                .yield_history_job_if_higher_priority_waiting(
+                    &running.job_id,
+                    running.lease_generation,
+                    1_700_000_000_002,
+                )
+                .expect("no p1")
+        );
+
+        let p1 = history_job_for("job_01JYIELD0002", &scope, 2_000, 3_000, "p1");
+        store.enqueue_history_job(&p1).expect("p1 enqueue");
+        assert!(
+            store
+                .yield_history_job_if_higher_priority_waiting(
+                    &running.job_id,
+                    running.lease_generation,
+                    1_700_000_000_003,
+                )
+                .expect("yield p2")
+        );
+        let yielded = store
+            .history_sync_job(&running.job_id)
+            .expect("yielded lookup")
+            .expect("yielded job");
+        assert_eq!(yielded.state, "queued");
+        assert_eq!(yielded.lease_expires_at_utc_msc, None);
+        assert_eq!(yielded.next_attempt_at_utc_msc, 1_700_000_000_003);
+        assert_eq!(yielded.cursor_time_msc, before.cursor_time_msc);
+        assert_eq!(yielded.cursor_ticket, before.cursor_ticket);
+        assert_eq!(yielded.window_msc, before.window_msc);
+        assert_eq!(yielded.attempt_count, before.attempt_count);
+        assert_eq!(yielded.last_error_code, before.last_error_code);
+        let next = store
+            .claim_history_job(&scope, 1_700_000_000_004, 10_000)
+            .expect("p1 claim")
+            .expect("p1 running");
+        assert_eq!(next.job_id, p1.job_id);
+
+        let stale_generation = store
+            .yield_history_job_if_higher_priority_waiting(
+                &next.job_id,
+                next.lease_generation - 1,
+                1_700_000_000_005,
+            )
+            .expect_err("stale generation");
+        assert_eq!(
+            stale_generation.code(),
+            "bridge_store_history_lease_invalid"
+        );
+
+        let expiring = history_job_for("job_01JYIELD0003", &scope, 3_000, 4_000, "p2");
+        store
+            .enqueue_history_job(&expiring)
+            .expect("expiring enqueue");
+        let expiring = store
+            .claim_history_job(&scope, 1_700_000_000_006, 10)
+            .expect("expiring claim")
+            .expect("expiring running");
+        let expired = store
+            .yield_history_job_if_higher_priority_waiting(
+                &expiring.job_id,
+                expiring.lease_generation,
+                1_700_000_000_017,
+            )
+            .expect_err("expired lease");
+        assert_eq!(expired.code(), "bridge_store_history_lease_invalid");
+        drop(store);
+        fs::remove_dir_all(root).expect("remove yield fixture");
+    }
+
+    #[test]
+    fn history_p1_promotion_is_atomic_and_does_not_reset_completed_or_blocked_jobs() {
+        let root = unique_test_directory("history-p1-promotion");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+
+        let queued = history_job_for("job_01JPROMOTE001", &scope, 1_000, 2_000, "p2");
+        store.enqueue_history_job(&queued).expect("queued p2");
+        {
+            let connection = store.connection.lock().expect("queued lock");
+            connection
+                .execute(
+                    "UPDATE history_sync_jobs SET next_attempt_at_utc_msc = ?1
+                     WHERE job_id = ?2;",
+                    params![1_700_000_000_300_i64, queued.job_id],
+                )
+                .expect("future retry timestamp");
+        }
+        let mut queued_p1 = queued.clone();
+        queued_p1.job_id = "job_01JPROMOTE002".to_owned();
+        queued_p1.job_kind = "on_demand".to_owned();
+        queued_p1.priority = "p1".to_owned();
+        queued_p1.created_at_utc_msc = 1_700_000_000_200;
+        queued_p1.cursor_time_msc = 1_000;
+        queued_p1.window_msc = 250;
+        let promoted = store
+            .enqueue_or_promote_history_job(&queued_p1)
+            .expect("queued p1 promotion");
+        assert_eq!(promoted.job_id, queued.job_id);
+        assert_eq!(promoted.priority, "p1");
+        assert_eq!(
+            promoted.next_attempt_at_utc_msc,
+            queued_p1.created_at_utc_msc
+        );
+        assert_eq!(promoted.cursor_time_msc, queued.cursor_time_msc);
+        assert_eq!(promoted.window_msc, queued.window_msc);
+        let claimed = store
+            .claim_history_job(&scope, queued_p1.created_at_utc_msc, 10_000)
+            .expect("claim promoted p1")
+            .expect("promoted claim");
+        assert_eq!(claimed.job_id, queued.job_id);
+        assert_eq!(claimed.priority, "p1");
+
+        let running = history_job_for("job_01JPROMOTE003", &scope, 2_000, 3_000, "p2");
+        store.enqueue_history_job(&running).expect("running p2");
+        let running = store
+            .claim_history_job(&scope, 1_700_000_001_000, 10_000)
+            .expect("claim running p2")
+            .expect("running job");
+        store
+            .checkpoint_history_job(
+                &running.job_id,
+                running.lease_generation,
+                2_500,
+                "55",
+                500,
+                1_700_000_001_100,
+            )
+            .expect("running checkpoint");
+        let running_before = store
+            .history_sync_job(&running.job_id)
+            .expect("running lookup")
+            .expect("running row");
+        let mut running_p1 = history_job_for("job_01JPROMOTE004", &scope, 2_000, 3_000, "p1");
+        running_p1.created_at_utc_msc = 1_700_000_001_200;
+        let promoted_running = store
+            .enqueue_or_promote_history_job(&running_p1)
+            .expect("running p1 promotion");
+        assert_eq!(promoted_running.state, "running");
+        assert_eq!(promoted_running.priority, "p1");
+        assert_eq!(
+            promoted_running.lease_generation,
+            running_before.lease_generation
+        );
+        assert_eq!(
+            promoted_running.lease_expires_at_utc_msc,
+            running_before.lease_expires_at_utc_msc
+        );
+        assert_eq!(promoted_running.cursor_time_msc, 2_500);
+        assert_eq!(promoted_running.cursor_ticket, "55");
+        assert_eq!(promoted_running.window_msc, 500);
+        assert_eq!(promoted_running.attempt_count, running_before.attempt_count);
+
+        let completed = history_job_for("job_01JPROMOTE005", &scope, 3_000, 4_000, "p2");
+        store.enqueue_history_job(&completed).expect("completed p2");
+        let completed_claim = store
+            .claim_history_job(&scope, 1_700_000_002_000, 10_000)
+            .expect("claim completed p2")
+            .expect("completed lease");
+        let terminal = history_terminal_for(&scope);
+        let completed_result = store
+            .persist_history_job_batch(
+                &terminal,
+                &completed_claim.job_id,
+                completed_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 4_000,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: 1_700_000_002_100,
+                },
+                1_000,
+                1_700_000_002_100,
+            )
+            .expect("completed batch");
+        let completed_p1 = history_job_for("job_01JPROMOTE006", &scope, 3_000, 4_000, "p1");
+        let existing_completed = store
+            .enqueue_or_promote_history_job(&completed_p1)
+            .expect("completed remains immutable");
+        assert_eq!(existing_completed.job_id, completed_result.job.job_id);
+        assert_eq!(existing_completed.state, "completed");
+        assert_eq!(existing_completed.priority, "p2");
+        assert_eq!(
+            existing_completed.attempt_count,
+            completed_result.job.attempt_count
+        );
+
+        let blocked = history_job_for("job_01JPROMOTE007", &scope, 4_000, 5_000, "p2");
+        store.enqueue_history_job(&blocked).expect("blocked p2");
+        let blocked_claim = store
+            .claim_history_job(&scope, 1_700_000_003_000, 10_000)
+            .expect("claim blocked p2")
+            .expect("blocked lease");
+        store
+            .block_history_job(
+                &blocked_claim.job_id,
+                blocked_claim.lease_generation,
+                "history_range_invalid",
+                1_700_000_003_100,
+            )
+            .expect("block p2");
+        let blocked_p1 = history_job_for("job_01JPROMOTE008", &scope, 4_000, 5_000, "p1");
+        assert_eq!(
+            store
+                .enqueue_or_promote_history_job(&blocked_p1)
+                .expect_err("blocked promotion rejected")
+                .code(),
+            "bridge_store_history_job_promotion_invalid"
+        );
+        assert_eq!(
+            store
+                .history_sync_job(&blocked_claim.job_id)
+                .expect("blocked lookup")
+                .expect("blocked row")
+                .state,
+            "blocked"
+        );
+
+        let mut same_id_wrong_range = queued.clone();
+        same_id_wrong_range.priority = "p1".to_owned();
+        same_id_wrong_range.range_end_utc_msc = 2_500;
+        same_id_wrong_range.created_at_utc_msc = 1_700_000_003_200;
+        assert_eq!(
+            store
+                .enqueue_or_promote_history_job(&same_id_wrong_range)
+                .expect_err("same id range mismatch rejected")
+                .code(),
+            "bridge_store_history_job_conflict"
+        );
+
+        let mut ordinary_conflict = queued.clone();
+        ordinary_conflict.window_msc = queued.window_msc + 1;
+        assert_eq!(
+            store
+                .enqueue_or_promote_history_job(&ordinary_conflict)
+                .expect_err("ordinary enqueue retains immutable contract")
+                .code(),
+            "bridge_store_history_job_conflict"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove promotion fixture");
+    }
+
+    #[test]
     fn history_response_budget_discards_evidence_but_never_the_requested_page() {
         let oversized_evidence = "x".repeat(MAX_HISTORY_PAGE_PAYLOAD_BYTES);
         let mut payload = serde_json::json!({
@@ -4080,6 +9140,19 @@ mod tests {
             account_ref: AccountRef {
                 broker_server: "Broker-Demo".to_owned(),
                 login: login.to_owned(),
+            },
+            connection_epoch: 3,
+            worker_version: Some("3.0.0".to_owned()),
+        }
+    }
+
+    fn history_terminal_for(scope: &HistoryScope) -> TerminalDescriptor {
+        TerminalDescriptor {
+            terminal_instance_id: scope.terminal_instance_id.clone(),
+            platform: "mt5".to_owned(),
+            account_ref: AccountRef {
+                broker_server: scope.broker_server.clone(),
+                login: scope.login_account.clone(),
             },
             connection_epoch: 3,
             worker_version: Some("3.0.0".to_owned()),
@@ -4748,10 +9821,31 @@ mod tests {
             1
         );
 
-        let resolved = command_result(
+        let mut resolved = command_result(
             &command.command_id,
             "result_01JLEDGER002",
             1_700_000_000_010,
+        );
+        resolved.connection_epoch = command.connection_epoch + 1;
+        let mut stale_resolved = resolved.clone();
+        stale_resolved.message_id = "result_01JLEDGER002STALE".to_owned();
+        stale_resolved.connection_epoch = command.connection_epoch - 1;
+        assert_eq!(
+            store
+                .resolve_acknowledged_uncertain_receipt(&stale_resolved)
+                .expect_err("reconciliation epoch cannot move backwards")
+                .code(),
+            "bridge_store_reconciliation_transition_invalid"
+        );
+        let mut wrong_route = resolved.clone();
+        wrong_route.message_id = "result_01JLEDGER002ROUTE".to_owned();
+        wrong_route.account_ref.login = "999999".to_owned();
+        assert_eq!(
+            store
+                .resolve_acknowledged_uncertain_receipt(&wrong_route)
+                .expect_err("reconciliation account cannot change")
+                .code(),
+            "bridge_store_reconciliation_transition_invalid"
         );
         assert!(
             store
@@ -4945,6 +10039,1128 @@ mod tests {
 
         drop(store);
         fs::remove_dir_all(root).expect("remove receipt conflict fixture");
+    }
+
+    fn history_scope_for(login: &str) -> HistoryScope {
+        HistoryScope {
+            terminal_instance_id: "mt5_terminal_runtime_01".to_owned(),
+            broker_server: "Broker-Demo".to_owned(),
+            login_account: login.to_owned(),
+        }
+    }
+
+    fn history_job_for(
+        job_id: &str,
+        scope: &HistoryScope,
+        start: i64,
+        end: i64,
+        priority: &str,
+    ) -> NewHistorySyncJob {
+        NewHistorySyncJob {
+            job_id: job_id.to_owned(),
+            scope: scope.clone(),
+            job_kind: "on_demand".to_owned(),
+            priority: priority.to_owned(),
+            range_start_utc_msc: start,
+            range_end_utc_msc: end,
+            cursor_time_msc: start,
+            cursor_ticket: String::new(),
+            window_msc: end - start,
+            created_at_utc_msc: 1_700_000_000_000,
+        }
+    }
+
+    fn history_item_count(store: &OutboxStore, scope: &HistoryScope) -> i64 {
+        let connection = store.connection.lock().expect("history item count lock");
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3;",
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account
+                ],
+                |row| row.get(0),
+            )
+            .expect("history item count")
+    }
+
+    #[test]
+    fn compatible_legacy_database_gets_runtime_tables_and_idempotent_legacy_seed() {
+        let root = unique_test_directory("history-runtime-migration");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        {
+            let connection = Connection::open(&path).expect("legacy connection");
+            let insert_legacy = |login: &str, cursor_time: i64, ticket: &str, complete: i64| {
+                connection
+                    .execute(
+                        "INSERT INTO history_archive_state (
+                           terminal_instance_id, broker_server, login_account,
+                           cursor_value, is_complete, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+                        params![
+                            "mt5_terminal_runtime_01",
+                            "Broker-Demo",
+                            login,
+                            serde_json::json!({
+                                "time_msc": cursor_time,
+                                "ticket": ticket
+                            })
+                            .to_string(),
+                            complete,
+                            1_700_000_000_001_i64
+                        ],
+                    )
+                    .expect("legacy state");
+            };
+            insert_legacy("123456", HISTORY_COVERAGE_START_UTC_MSC + 10_000, "100", 0);
+            insert_legacy("654321", HISTORY_COVERAGE_START_UTC_MSC + 30_000, "300", 1);
+            insert_legacy("777777", 0, "", 0);
+            insert_legacy("888888", HISTORY_COVERAGE_START_UTC_MSC, "0", 1);
+        }
+        let store = OutboxStore::open_existing(&path).expect("incremental migration");
+        let scope = history_scope_for("123456");
+        assert_eq!(
+            store.history_coverage_ranges(&scope).expect("seed ranges"),
+            vec![HistoryCoverageRange {
+                scope: scope.clone(),
+                range_start_utc_msc: HISTORY_COVERAGE_START_UTC_MSC,
+                range_end_utc_msc: HISTORY_COVERAGE_START_UTC_MSC + 10_000,
+                observed_at_utc_msc: 1_700_000_000_001,
+                updated_at_utc_msc: 1_700_000_000_001,
+            }]
+        );
+        let complete_ranges = store
+            .history_coverage_ranges(&history_scope_for("654321"))
+            .expect("complete seed");
+        assert_eq!(complete_ranges.len(), 1);
+        assert_eq!(
+            complete_ranges[0].range_end_utc_msc,
+            HISTORY_COVERAGE_START_UTC_MSC + 30_000
+        );
+        assert!(
+            store
+                .history_coverage_ranges(&history_scope_for("777777"))
+                .expect("empty seed")
+                .is_empty()
+        );
+        assert!(
+            store
+                .history_coverage_ranges(&history_scope_for("888888"))
+                .expect("boundary seed")
+                .is_empty()
+        );
+        drop(store);
+        {
+            let connection = Connection::open(&path).expect("legacy update connection");
+            connection
+                .execute(
+                    "UPDATE history_archive_state
+                     SET cursor_value = ?1
+                     WHERE terminal_instance_id = ?2 AND login_account = ?3;",
+                    params![
+                        serde_json::json!({
+                            "time_msc": HISTORY_COVERAGE_START_UTC_MSC + 20_000,
+                            "ticket": "200"
+                        })
+                        .to_string(),
+                        "mt5_terminal_runtime_01",
+                        "123456"
+                    ],
+                )
+                .expect("legacy update");
+        }
+        let store = OutboxStore::open_existing(&path).expect("idempotent migration");
+        let ranges = store.history_coverage_ranges(&scope).expect("seed ranges");
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(
+            ranges[0].range_end_utc_msc,
+            HISTORY_COVERAGE_START_UTC_MSC + 20_000
+        );
+        for (login, expected_complete, expected_time) in [
+            ("654321", 1_i64, HISTORY_COVERAGE_START_UTC_MSC + 30_000),
+            ("777777", 0_i64, 0_i64),
+            ("888888", 1_i64, HISTORY_COVERAGE_START_UTC_MSC),
+        ] {
+            let (cursor_value, is_complete): (String, i64) = Connection::open(&path)
+                .expect("legacy state read connection")
+                .query_row(
+                    "SELECT cursor_value, CAST(is_complete AS INTEGER)
+                     FROM history_archive_state WHERE login_account = ?1;",
+                    [login],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("legacy state");
+            assert_eq!(is_complete, expected_complete);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&cursor_value).expect("legacy cursor")["time_msc"],
+                expected_time
+            );
+        }
+        let legacy_cursor: String = Connection::open(&path)
+            .expect("legacy read connection")
+            .query_row(
+                "SELECT cursor_value FROM history_archive_state WHERE terminal_instance_id = ?1;",
+                ["mt5_terminal_runtime_01"],
+                |row| row.get(0),
+            )
+            .expect("legacy cursor");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&legacy_cursor).expect("cursor json")["time_msc"],
+            HISTORY_COVERAGE_START_UTC_MSC + 20_000
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove migration fixture");
+    }
+
+    #[test]
+    fn initialization_state_is_account_scoped_and_validated() {
+        let root = unique_test_directory("initialization-state");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        let state = AccountInitializationState {
+            scope: scope.clone(),
+            platform: "mt5".to_owned(),
+            schema_version: 1,
+            state: "ready".to_owned(),
+            local_operational_ready: true,
+            last_error_code: None,
+            initialized_at_utc_msc: 1_700_000_000_001,
+            updated_at_utc_msc: 1_700_000_000_002,
+        };
+        store
+            .write_account_initialization_state(&state)
+            .expect("write initialization");
+        assert_eq!(
+            store
+                .read_account_initialization_state(&scope)
+                .expect("read initialization"),
+            Some(state.clone())
+        );
+        assert!(
+            store
+                .read_account_initialization_state(&history_scope_for("654321"))
+                .expect("other account")
+                .is_none()
+        );
+        let mut invalid = state.clone();
+        invalid.state = "unknown".to_owned();
+        assert_eq!(
+            store
+                .write_account_initialization_state(&invalid)
+                .expect_err("invalid state")
+                .code(),
+            "bridge_store_initialization_state_invalid"
+        );
+        let mut invalid_ready_flag = state.clone();
+        invalid_ready_flag.state = "retrying".to_owned();
+        assert_eq!(
+            store
+                .write_account_initialization_state(&invalid_ready_flag)
+                .expect_err("ready flag invariant")
+                .code(),
+            "bridge_store_initialization_state_invalid"
+        );
+        let mut invalid_ready_state = state;
+        invalid_ready_state.local_operational_ready = false;
+        assert_eq!(
+            store
+                .write_account_initialization_state(&invalid_ready_state)
+                .expect_err("ready state invariant")
+                .code(),
+            "bridge_store_initialization_state_invalid"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove initialization fixture");
+    }
+
+    #[test]
+    fn history_jobs_are_idempotent_claimable_and_scope_supersedable() {
+        let root = unique_test_directory("history-jobs");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        let job = history_job_for("job_01JHISTORY001", &scope, 1_000, 2_000, "p1");
+        let inserted = store.enqueue_history_job(&job).expect("enqueue");
+        assert_eq!(inserted.state, "queued");
+        assert_eq!(
+            store.enqueue_history_job(&job).expect("idempotent").job_id,
+            inserted.job_id
+        );
+        let mut case_variant_scope = job.clone();
+        case_variant_scope.scope.broker_server = "broker-demo".to_owned();
+        assert_eq!(
+            store
+                .enqueue_history_job(&case_variant_scope)
+                .expect("NOCASE idempotent")
+                .job_id,
+            inserted.job_id
+        );
+        for mut conflicting in [
+            {
+                let mut value = job.clone();
+                value.job_kind = "recent".to_owned();
+                value
+            },
+            {
+                let mut value = job.clone();
+                value.priority = "p2".to_owned();
+                value
+            },
+            {
+                let mut value = job.clone();
+                value.range_start_utc_msc = 1_001;
+                value.cursor_time_msc = 1_001;
+                value
+            },
+            {
+                let mut value = job.clone();
+                value.range_end_utc_msc = 2_001;
+                value
+            },
+            {
+                let mut value = job.clone();
+                value.cursor_time_msc = 1_001;
+                value
+            },
+            {
+                let mut value = job.clone();
+                value.cursor_ticket = "123".to_owned();
+                value
+            },
+            {
+                let mut value = job.clone();
+                value.window_msc = 500;
+                value
+            },
+            {
+                let mut value = job.clone();
+                value.created_at_utc_msc += 1;
+                value
+            },
+        ] {
+            conflicting.job_id = job.job_id.clone();
+            assert_eq!(
+                store
+                    .enqueue_history_job(&conflicting)
+                    .expect_err("immutable enqueue conflict")
+                    .code(),
+                "bridge_store_history_job_conflict"
+            );
+        }
+        let mut same_range_different_id = job.clone();
+        same_range_different_id.job_id = "job_01JHISTORY003".to_owned();
+        assert_eq!(
+            store
+                .enqueue_history_job(&same_range_different_id)
+                .expect("same range idempotent")
+                .job_id,
+            inserted.job_id
+        );
+        let claim = store
+            .claim_history_job(&scope, 1_700_000_000_100, 1_000)
+            .expect("claim")
+            .expect("claimed");
+        assert_eq!(claim.lease_generation, 1);
+        assert_eq!(claim.attempt_count, 1);
+        assert!(
+            store
+                .claim_history_job(&scope, 1_700_000_000_101, 1_000)
+                .expect("single claim")
+                .is_none()
+        );
+        store
+            .checkpoint_history_job(
+                &claim.job_id,
+                claim.lease_generation,
+                1_500,
+                "123",
+                500,
+                1_700_000_000_200,
+            )
+            .expect("checkpoint");
+        store
+            .retry_history_job(
+                &claim.job_id,
+                claim.lease_generation,
+                1_700_000_000_400,
+                "worker_request_timeout",
+                1_700_000_000_201,
+            )
+            .expect("retry");
+        assert_eq!(
+            store
+                .history_sync_job(&claim.job_id)
+                .expect("job")
+                .expect("job row")
+                .state,
+            "retrying"
+        );
+        let other_scope = history_scope_for("654321");
+        let other_job = history_job_for("job_01JHISTORY002", &other_scope, 1_000, 2_000, "p2");
+        store
+            .enqueue_history_job(&other_job)
+            .expect("other enqueue");
+        assert_eq!(
+            store
+                .supersede_history_scope(&scope, 1_700_000_000_300)
+                .expect("supersede"),
+            1
+        );
+        assert_eq!(
+            store
+                .history_sync_job(&claim.job_id)
+                .expect("superseded job")
+                .expect("superseded row")
+                .state,
+            "superseded"
+        );
+        assert_eq!(
+            store
+                .history_sync_job(&other_job.job_id)
+                .expect("other job")
+                .expect("other row")
+                .state,
+            "queued"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove jobs fixture");
+    }
+
+    #[test]
+    fn history_coverage_merges_adjacent_ranges_without_crossing_holes() {
+        let root = unique_test_directory("history-coverage");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        for (job_id, start, end) in [
+            ("job_01JCOVERAGE001", 1_000, 2_000),
+            ("job_01JCOVERAGE002", 2_000, 3_000),
+            ("job_01JCOVERAGE003", 4_000, 5_000),
+        ] {
+            let job = history_job_for(job_id, &scope, start, end, "p1");
+            store.enqueue_history_job(&job).expect("enqueue coverage");
+            let claim = store
+                .claim_history_job(&scope, 1_700_000_000_000 + start, 1_000_000_000)
+                .expect("claim coverage")
+                .expect("coverage lease");
+            let terminal = history_terminal_for(&scope);
+            if start == 1_000 {
+                assert_eq!(
+                    store
+                        .persist_history_job_batch(
+                            &terminal,
+                            &claim.job_id,
+                            claim.lease_generation,
+                            &HistoryArchiveBatch {
+                                deals: Vec::new(),
+                                history_orders: Vec::new(),
+                                trades: Vec::new(),
+                                next_cursor: HistoryCursor {
+                                    time_msc: end,
+                                    ticket: "1".to_owned(),
+                                },
+                                has_more: false,
+                                observed_at_utc_msc: 1_700_000_050_000,
+                            },
+                            end - start,
+                            1_700_000_050_000,
+                        )
+                        .expect_err("premature complete")
+                        .code(),
+                    "bridge_store_history_cursor_invalid"
+                );
+                assert!(
+                    store
+                        .history_coverage_ranges(&scope)
+                        .expect("coverage unchanged")
+                        .is_empty()
+                );
+            }
+            let result = store
+                .persist_history_job_batch(
+                    &terminal,
+                    &claim.job_id,
+                    claim.lease_generation,
+                    &HistoryArchiveBatch {
+                        deals: Vec::new(),
+                        history_orders: Vec::new(),
+                        trades: Vec::new(),
+                        next_cursor: HistoryCursor {
+                            time_msc: end,
+                            ticket: "0".to_owned(),
+                        },
+                        has_more: false,
+                        observed_at_utc_msc: 1_700_000_050_000 + start,
+                    },
+                    end - start,
+                    1_700_000_100_000 + end,
+                )
+                .expect("complete coverage");
+            assert_eq!(result.status, HistoryJobBatchStatus::Completed);
+        }
+        let ranges = store
+            .history_coverage_ranges(&scope)
+            .expect("coverage ranges");
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(
+            (ranges[0].range_start_utc_msc, ranges[0].range_end_utc_msc),
+            (1_000, 3_000)
+        );
+        assert_eq!(
+            (ranges[1].range_start_utc_msc, ranges[1].range_end_utc_msc),
+            (4_000, 5_000)
+        );
+        assert!(
+            store
+                .is_history_range_covered(&scope, 1_100, 2_900)
+                .expect("covered")
+        );
+        assert!(
+            !store
+                .is_history_range_covered(&scope, 1_000, 5_000)
+                .expect("hole")
+        );
+
+        let blocked_job = history_job_for("job_01JCOVERAGE004", &scope, 5_000, 6_000, "p2");
+        store
+            .enqueue_history_job(&blocked_job)
+            .expect("enqueue blocked");
+        let blocked = store
+            .claim_history_job(&scope, 1_700_000_200_000, 100_000)
+            .expect("claim blocked")
+            .expect("blocked lease");
+        store
+            .block_history_job(
+                &blocked.job_id,
+                blocked.lease_generation,
+                "history_range_invalid",
+                1_700_000_200_001,
+            )
+            .expect("block");
+        assert!(
+            !store
+                .is_history_range_covered(&scope, 5_000, 6_000)
+                .expect("blocked not covered")
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove coverage fixture");
+    }
+
+    #[test]
+    fn history_job_batch_persists_partial_and_final_atomically_without_legacy_progress() {
+        let root = unique_test_directory("history-job-batch");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let legacy_before = store
+            .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
+            .expect("legacy baseline");
+        let job = history_job_for("job_01JBATCH0001", &scope, 10_000, 20_000, "p1");
+        store.enqueue_history_job(&job).expect("enqueue batch");
+        let claim = store
+            .claim_history_job(&scope, 1_700_000_000_001, 1_000_000)
+            .expect("claim batch")
+            .expect("batch lease");
+
+        let partial = store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: vec![serde_json::json!({
+                        "deal_ticket": 1001,
+                        "time_msc": 12_000,
+                        "symbol": "EURUSD"
+                    })],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 15_000,
+                        ticket: "1001".to_owned(),
+                    },
+                    has_more: true,
+                    observed_at_utc_msc: 1_700_000_000_002,
+                },
+                5_000,
+                1_700_000_000_003,
+            )
+            .expect("partial batch");
+        assert_eq!(partial.status, HistoryJobBatchStatus::Checkpointed);
+        assert_eq!(partial.persisted_item_count, 1);
+        assert_eq!(partial.job.state, "running");
+        assert_eq!(partial.job.cursor_time_msc, 15_000);
+        assert_eq!(partial.job.cursor_ticket, "1001");
+        assert_eq!(history_item_count(&store, &scope), 1);
+        assert!(
+            store
+                .history_coverage_ranges(&scope)
+                .expect("partial coverage")
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
+                .expect("legacy after partial"),
+            legacy_before
+        );
+
+        let completed = store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: vec![serde_json::json!({
+                        "deal_ticket": 1002,
+                        "time_msc": 19_000,
+                        "symbol": "EURUSD"
+                    })],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 20_000,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: 1_700_000_000_004,
+                },
+                5_000,
+                1_700_000_000_005,
+            )
+            .expect("final batch");
+        assert_eq!(completed.status, HistoryJobBatchStatus::Completed);
+        assert_eq!(completed.persisted_item_count, 1);
+        assert_eq!(completed.job.state, "completed");
+        assert_eq!(completed.job.cursor_time_msc, 20_000);
+        assert!(completed.job.cursor_ticket.is_empty());
+        assert_eq!(completed.job.lease_expires_at_utc_msc, None);
+        assert_eq!(history_item_count(&store, &scope), 2);
+        assert!(
+            store
+                .is_history_range_covered(&scope, 10_000, 20_000)
+                .expect("final coverage")
+        );
+        assert_eq!(
+            store
+                .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
+                .expect("legacy after final"),
+            legacy_before
+        );
+
+        let subwindow_job = history_job_for("job_01JBATCH0002", &scope, 30_000, 50_000, "p1");
+        store
+            .enqueue_history_job(&subwindow_job)
+            .expect("enqueue subwindow");
+        let subwindow_claim = store
+            .claim_history_job(&scope, 1_700_000_000_010, 1_000_000)
+            .expect("claim subwindow")
+            .expect("subwindow lease");
+        let subwindow = store
+            .persist_history_job_batch(
+                &terminal,
+                &subwindow_claim.job_id,
+                subwindow_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 40_000,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: 1_700_000_000_011,
+                },
+                10_000,
+                1_700_000_000_012,
+            )
+            .expect("empty subwindow");
+        assert_eq!(subwindow.status, HistoryJobBatchStatus::Checkpointed);
+        assert_eq!(subwindow.job.state, "running");
+        assert_eq!(subwindow.job.cursor_time_msc, 40_000);
+        assert_eq!(subwindow.job.cursor_ticket, "0");
+        assert!(
+            !store
+                .is_history_range_covered(&scope, 30_000, 50_000)
+                .expect("subwindow not covered")
+        );
+        let subwindow_complete = store
+            .persist_history_job_batch(
+                &terminal,
+                &subwindow_claim.job_id,
+                subwindow_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 50_000,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: 1_700_000_000_013,
+                },
+                10_000,
+                1_700_000_000_014,
+            )
+            .expect("complete subwindow job");
+        assert_eq!(subwindow_complete.status, HistoryJobBatchStatus::Completed);
+        assert!(
+            store
+                .is_history_range_covered(&scope, 30_000, 50_000)
+                .expect("subwindow coverage")
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove batch fixture");
+    }
+
+    #[test]
+    fn history_job_batch_validation_and_lease_failures_leave_zero_side_effects() {
+        let root = unique_test_directory("history-job-batch-invalid");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let job = history_job_for("job_01JBATCH0003", &scope, 60_000, 70_000, "p1");
+        store
+            .enqueue_history_job(&job)
+            .expect("enqueue invalid batch");
+        let claim = store
+            .claim_history_job(&scope, 1_700_000_000_020, 100)
+            .expect("claim invalid batch")
+            .expect("invalid batch lease");
+
+        let invalid_id = store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: vec![
+                        serde_json::json!({
+                            "deal_ticket": 2001,
+                            "time_msc": 61_000,
+                            "symbol": "EURUSD"
+                        }),
+                        serde_json::json!({
+                            "deal_ticket": 0,
+                            "time_msc": 62_000,
+                            "symbol": "EURUSD"
+                        }),
+                    ],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 65_000,
+                        ticket: "2001".to_owned(),
+                    },
+                    has_more: true,
+                    observed_at_utc_msc: 1_700_000_000_021,
+                },
+                5_000,
+                1_700_000_000_022,
+            )
+            .expect_err("invalid item id");
+        assert_eq!(invalid_id.code(), "bridge_store_history_item_invalid");
+        assert_eq!(history_item_count(&store, &scope), 0);
+        let unchanged = store
+            .history_sync_job(&claim.job_id)
+            .expect("unchanged job")
+            .expect("unchanged row");
+        assert_eq!(unchanged.cursor_time_msc, 60_000);
+        assert_eq!(unchanged.cursor_ticket, "");
+        assert_eq!(unchanged.state, "running");
+        assert!(
+            store
+                .history_coverage_ranges(&scope)
+                .expect("invalid coverage")
+                .is_empty()
+        );
+
+        let out_of_range = store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: vec![serde_json::json!({
+                        "deal_ticket": 2002,
+                        "time_msc": 70_000,
+                        "symbol": "EURUSD"
+                    })],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 65_000,
+                        ticket: "2002".to_owned(),
+                    },
+                    has_more: true,
+                    observed_at_utc_msc: 1_700_000_000_023,
+                },
+                5_000,
+                1_700_000_000_024,
+            )
+            .expect_err("out of range item");
+        assert_eq!(
+            out_of_range.code(),
+            "bridge_store_history_item_out_of_range"
+        );
+        assert_eq!(history_item_count(&store, &scope), 0);
+
+        let cursor_regression = store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 60_000,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: 1_700_000_000_025,
+                },
+                5_000,
+                1_700_000_000_026,
+            )
+            .expect_err("cursor regression");
+        assert_eq!(
+            cursor_regression.code(),
+            "bridge_store_history_cursor_regression"
+        );
+        assert_eq!(history_item_count(&store, &scope), 0);
+
+        let expired = store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: vec![serde_json::json!({
+                        "deal_ticket": 2003,
+                        "time_msc": 63_000,
+                        "symbol": "EURUSD"
+                    })],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 65_000,
+                        ticket: "2003".to_owned(),
+                    },
+                    has_more: true,
+                    observed_at_utc_msc: 1_700_000_000_027,
+                },
+                5_000,
+                1_700_000_000_121,
+            )
+            .expect_err("expired lease");
+        assert_eq!(expired.code(), "bridge_store_history_lease_invalid");
+        assert_eq!(history_item_count(&store, &scope), 0);
+        let mismatch_terminal = TerminalDescriptor {
+            platform: "mt4".to_owned(),
+            ..terminal.clone()
+        };
+        let platform_error = store
+            .persist_history_job_batch(
+                &mismatch_terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 65_000,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: 1_700_000_000_028,
+                },
+                5_000,
+                1_700_000_000_029,
+            )
+            .expect_err("mt4 rejected");
+        assert_eq!(platform_error.code(), "bridge_store_history_scope_invalid");
+        drop(store);
+        fs::remove_dir_all(root).expect("remove invalid batch fixture");
+    }
+
+    #[test]
+    fn independent_store_handles_compete_for_only_one_history_claim() {
+        let root = unique_test_directory("history-claim-race");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let first_store = Arc::new(OutboxStore::open_or_create(&path).expect("first store"));
+        let second_store = Arc::new(OutboxStore::open_existing(&path).expect("second store"));
+        let scope = history_scope_for("123456");
+        first_store
+            .enqueue_history_job(&history_job_for(
+                "job_01JRACE0001",
+                &scope,
+                11_000,
+                12_000,
+                "p1",
+            ))
+            .expect("enqueue race");
+        let first_for_thread = Arc::clone(&first_store);
+        let second_for_thread = Arc::clone(&second_store);
+        let first_scope = scope.clone();
+        let second_scope = scope.clone();
+        let (first_result, second_result) = std::thread::scope(|threads| {
+            let first = threads.spawn(move || {
+                first_for_thread.claim_history_job(&first_scope, 1_700_000_000_000, 10_000)
+            });
+            let second = threads.spawn(move || {
+                second_for_thread.claim_history_job(&second_scope, 1_700_000_000_000, 10_000)
+            });
+            (
+                first.join().expect("first claim thread"),
+                second.join().expect("second claim thread"),
+            )
+        });
+        assert_eq!(
+            usize::from(first_result.as_ref().expect("first claim result").is_some())
+                + usize::from(
+                    second_result
+                        .as_ref()
+                        .expect("second claim result")
+                        .is_some()
+                ),
+            1
+        );
+        drop(first_store);
+        drop(second_store);
+        fs::remove_dir_all(root).expect("remove claim race fixture");
+    }
+
+    #[test]
+    fn expired_history_lease_can_be_reclaimed_but_old_generation_cannot_write() {
+        let root = unique_test_directory("history-lease");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        let job = history_job_for("job_01JLEASE0001", &scope, 7_000, 8_000, "p1");
+        store.enqueue_history_job(&job).expect("enqueue lease");
+        let first = store
+            .claim_history_job(&scope, 1_700_000_000_000, 10)
+            .expect("first claim")
+            .expect("first lease");
+        store
+            .checkpoint_history_job(
+                &first.job_id,
+                first.lease_generation,
+                7_500,
+                "123",
+                500,
+                1_700_000_000_005,
+            )
+            .expect("forward checkpoint");
+        assert_eq!(
+            store
+                .checkpoint_history_job(
+                    &first.job_id,
+                    first.lease_generation,
+                    7_400,
+                    "124",
+                    500,
+                    1_700_000_000_006,
+                )
+                .expect_err("cursor regression")
+                .code(),
+            "bridge_store_history_checkpoint_regression"
+        );
+        assert_eq!(
+            store
+                .checkpoint_history_job(
+                    &first.job_id,
+                    first.lease_generation,
+                    8_000,
+                    "1",
+                    500,
+                    1_700_000_000_007,
+                )
+                .expect_err("endpoint ticket")
+                .code(),
+            "bridge_store_history_checkpoint_invalid"
+        );
+        let second = store
+            .claim_history_job(&scope, 1_700_000_000_011, 10)
+            .expect("reclaim")
+            .expect("second lease");
+        assert_eq!(second.lease_generation, first.lease_generation + 1);
+        assert_eq!(
+            store
+                .checkpoint_history_job(
+                    &first.job_id,
+                    first.lease_generation,
+                    7_500,
+                    "123",
+                    500,
+                    1_700_000_000_012,
+                )
+                .expect_err("old checkpoint")
+                .code(),
+            "bridge_store_history_lease_invalid"
+        );
+        assert_eq!(
+            store
+                .persist_history_job_batch(
+                    &history_terminal_for(&scope),
+                    &first.job_id,
+                    first.lease_generation,
+                    &HistoryArchiveBatch {
+                        deals: Vec::new(),
+                        history_orders: Vec::new(),
+                        trades: Vec::new(),
+                        next_cursor: HistoryCursor {
+                            time_msc: 8_000,
+                            ticket: "0".to_owned(),
+                        },
+                        has_more: false,
+                        observed_at_utc_msc: 1_700_000_000_012,
+                    },
+                    1_000,
+                    1_700_000_000_012,
+                )
+                .expect_err("old complete")
+                .code(),
+            "bridge_store_history_lease_invalid"
+        );
+        let result = store
+            .persist_history_job_batch(
+                &history_terminal_for(&scope),
+                &second.job_id,
+                second.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 8_000,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: 1_700_000_000_013,
+                },
+                1_000,
+                1_700_000_000_013,
+            )
+            .expect("new complete");
+        assert_eq!(result.status, HistoryJobBatchStatus::Completed);
+        assert!(
+            store
+                .is_history_range_covered(&scope, 7_000, 8_000)
+                .expect("coverage")
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove lease fixture");
+    }
+
+    #[test]
+    fn history_lease_renewal_preserves_generation_and_rejects_stale_or_expired_leases() {
+        let root = unique_test_directory("history-renew");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        let job = history_job_for("job_01JRENEW0001", &scope, 9_000, 10_000, "p1");
+        store.enqueue_history_job(&job).expect("enqueue renew");
+        let claim = store
+            .claim_history_job(&scope, 1_700_000_000_000, 100)
+            .expect("claim renew")
+            .expect("renew lease");
+        let renewed = store
+            .renew_history_job(
+                &claim.job_id,
+                claim.lease_generation,
+                1_700_000_000_010,
+                200,
+            )
+            .expect("renew");
+        assert_eq!(renewed.lease_generation, claim.lease_generation);
+        assert_eq!(renewed.lease_expires_at_utc_msc, Some(1_700_000_000_210));
+        assert_eq!(
+            store
+                .renew_history_job(
+                    &claim.job_id,
+                    claim.lease_generation - 1,
+                    1_700_000_000_020,
+                    200,
+                )
+                .expect_err("stale generation")
+                .code(),
+            "bridge_store_history_lease_invalid"
+        );
+        assert_eq!(
+            store
+                .renew_history_job(
+                    &claim.job_id,
+                    claim.lease_generation,
+                    1_700_000_000_211,
+                    200,
+                )
+                .expect_err("expired lease")
+                .code(),
+            "bridge_store_history_lease_invalid"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove renew fixture");
+    }
+
+    #[test]
+    fn history_job_rejects_invalid_ranges_states_priorities_and_ids() {
+        let root = unique_test_directory("history-invalid");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("store");
+        let scope = history_scope_for("123456");
+        let mut invalid = history_job_for("job_01JINVALID01", &scope, 1_000, 2_000, "p1");
+        invalid.range_end_utc_msc = invalid.range_start_utc_msc;
+        assert_eq!(
+            store
+                .enqueue_history_job(&invalid)
+                .expect_err("range")
+                .code(),
+            "bridge_store_history_range_invalid"
+        );
+        let mut invalid_priority =
+            history_job_for("job_01JINVALID02", &scope, 1_000, 2_000, "urgent");
+        assert_eq!(
+            store
+                .enqueue_history_job(&invalid_priority)
+                .expect_err("priority")
+                .code(),
+            "bridge_store_history_priority_invalid"
+        );
+        invalid_priority.priority = "p1".to_owned();
+        invalid_priority.job_id = "bad id".to_owned();
+        assert_eq!(
+            store
+                .enqueue_history_job(&invalid_priority)
+                .expect_err("id")
+                .code(),
+            "bridge_store_history_job_id_invalid"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove invalid fixture");
     }
 
     fn unique_test_directory(suffix: &str) -> PathBuf {

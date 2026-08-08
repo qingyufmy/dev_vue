@@ -1090,6 +1090,121 @@ export function normalizeBridgePageSize(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, 200) : 20
 }
 
+export function boundedHistoryExportPageCount(value, maximumPages = 50) {
+  const parsed = Number(value ?? 1)
+  if (!Number.isSafeInteger(parsed) || parsed < 1
+    || !Number.isSafeInteger(maximumPages) || maximumPages < 1) {
+    return { ok:false, code:'history_export_pagination_invalid' }
+  }
+  if (parsed > maximumPages) {
+    return { ok:false, code:'history_export_range_too_large', total_pages:parsed }
+  }
+  return { ok:true, total_pages:parsed }
+}
+
+export const HISTORY_EXACT_RANGE_CAPABILITY = 'history_exact_range_v1'
+export const HISTORY_CURSOR_CAPABILITY = 'history_cursor_v1'
+
+export function hasHistoryExactRangeCapability(route) {
+  const capabilities = route?.capabilities
+  if (capabilities instanceof Set) return capabilities.has(HISTORY_EXACT_RANGE_CAPABILITY)
+  return Array.isArray(capabilities) && capabilities.includes(HISTORY_EXACT_RANGE_CAPABILITY)
+}
+
+export function hasHistoryCursorCapability(route) {
+  const capabilities = route?.capabilities
+  if (capabilities instanceof Set) return capabilities.has(HISTORY_CURSOR_CAPABILITY)
+  return Array.isArray(capabilities) && capabilities.includes(HISTORY_CURSOR_CAPABILITY)
+}
+
+function normalizedHistoryCursorToken(value) {
+  if (value == null || value === '') return null
+  const token = String(value).trim()
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw historyError('history_cursor_invalid')
+  return token
+}
+
+function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
+  const rangeStart = Number(params?.range_start_utc_msc)
+  const rangeEnd = Number(params?.range_end_utc_msc)
+  const ownershipStart = Number(resolvedRange?.ownership_start_utc_msc)
+  const maxRangeEnd = Number.isSafeInteger(nowUtcMsc) ? nowUtcMsc + 60_000 : NaN
+  if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
+    || !Number.isSafeInteger(ownershipStart) || !Number.isSafeInteger(maxRangeEnd)
+    || rangeStart < ownershipStart || rangeStart >= rangeEnd || rangeEnd > maxRangeEnd) {
+    throw historyError('history_cursor_invalid')
+  }
+  return {
+    ...resolvedRange,
+    range_start_utc_msc:rangeStart,
+    range_end_utc_msc:rangeEnd,
+  }
+}
+
+// Capture a single terminal-history upper bound for each request.  Date.now()
+// is normally a safe integer, but keeping the check here makes the transport
+// contract explicit and prevents a mocked/invalid clock value from widening a
+// history query to an unintended range.
+export function safeHistoryRangeEndUtcMsc(now = Date.now(), dateTo = null) {
+  const captured = Number.isSafeInteger(now) && now > 0 ? now : null
+  if (captured === null) return null
+  if (!validHistoryDate(dateTo)) return captured
+
+  // The native history parser treats date_to as an inclusive calendar date
+  // and rejects an explicit endpoint beyond the following UTC midnight.  A
+  // strict round-trip check avoids silently normalising invalid dates such as
+  // 2026-02-30; those remain invalid inputs for the native contract.
+  const parsed = Date.parse(`${dateTo}T00:00:00.000Z`)
+  if (!Number.isSafeInteger(parsed)) return captured
+  const parsedDate = new Date(parsed)
+  const [year, month, day] = String(dateTo).split('-').map(Number)
+  if (parsedDate.getUTCFullYear() !== year
+    || parsedDate.getUTCMonth() + 1 !== month
+    || parsedDate.getUTCDate() !== day) return captured
+  const exclusiveEnd = parsed + 86_400_000
+  return Number.isSafeInteger(exclusiveEnd) ? Math.min(captured, exclusiveEnd) : captured
+}
+
+/**
+ * Decide whether an export may claim a complete history set.
+ *
+ * A bounded platform/custom range is complete when the bridge confirms that
+ * requested range.  An all-time export is complete only when the archive is
+ * complete.  The new fields are intentionally optional so older bridge
+ * responses continue to use the legacy `complete` flag, while an explicit
+ * truncation marker always fails closed.
+ */
+export function isHistoryExportComplete({
+  range = {},
+  historySync = null,
+  result = null,
+} = {}) {
+  const sync = historySync && typeof historySync === 'object' ? historySync : {}
+  const response = result && typeof result === 'object' ? result : {}
+  if (response.evidence_truncated === true || sync.evidence_truncated === true) return false
+
+  const hasExactFields = range?.range_start_utc_msc !== undefined
+    || range?.rangeStartUtcMsc !== undefined
+    || range?.range_end_utc_msc !== undefined
+    || range?.rangeEndUtcMsc !== undefined
+  const explicitStart = Number(range?.range_start_utc_msc ?? range?.rangeStartUtcMsc)
+  const explicitEnd = Number(range?.range_end_utc_msc ?? range?.rangeEndUtcMsc)
+  const hasExactStart = Number.isSafeInteger(explicitStart) && explicitStart > 0
+  const hasExactEnd = Number.isSafeInteger(explicitEnd) && explicitEnd > explicitStart
+  const explicitDateFrom = range?.date_from ?? range?.dateFrom
+  const hasExplicitStart = hasExactStart || String(explicitDateFrom || '').trim().length > 0
+  const complete = typeof sync.complete === 'boolean' ? sync.complete : false
+  if (hasExactFields) return hasExactStart && hasExactEnd && sync.requested_range_complete === true
+  if (hasExplicitStart) {
+    return typeof sync.requested_range_complete === 'boolean'
+      ? sync.requested_range_complete
+      : complete
+  }
+  return typeof sync.archive_complete === 'boolean'
+    ? sync.archive_complete
+    : complete
+}
+
 function historyReference(value) {
   const normalized = String(value ?? '').trim()
   return normalized && normalized !== '0' ? normalized : null
@@ -1196,27 +1311,163 @@ async function enrichHistoryResultProtection(userId, tradingAccountId, result) {
   return result
 }
 
-async function resolveHistoryRange(userId, params = {}) {
-  const scope = ['all', 'platform', 'custom'].includes(params.history_scope) ? params.history_scope : 'all'
-  if (scope === 'all') return { scope, date_from: null, date_to: null }
-  if (scope === 'custom') {
-    const dateFrom = validHistoryDate(params.close_from) ? params.close_from : null
-    const dateTo = validHistoryDate(params.close_to) ? params.close_to : null
-    if (!dateFrom && !dateTo) throw new Error('custom_history_range_required')
-    if (dateFrom && dateTo && dateFrom > dateTo) throw new Error('invalid_history_range')
-    return { scope, date_from: dateFrom, date_to: dateTo }
+function historyError(code) {
+  const error = new Error(code)
+  error.code = code
+  return error
+}
+
+function parseStrictUtcDateBoundary(value) {
+  const text = String(value ?? '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null
+  const parsed = Date.parse(`${text}T00:00:00.000Z`)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return null
+  const date = new Date(parsed)
+  const [year, month, day] = text.split('-').map(Number)
+  if (date.getUTCFullYear() !== year
+    || date.getUTCMonth() + 1 !== month
+    || date.getUTCDate() !== day) return null
+  return parsed
+}
+
+function nextUtcDateBoundary(value) {
+  const parsed = parseStrictUtcDateBoundary(value)
+  if (parsed === null) return null
+  const next = parsed + 86_400_000
+  return Number.isSafeInteger(next) ? next : null
+}
+
+function historyRouteAccount(route) {
+  const terminalInstanceId = String(route?.terminal_instance_id || '').trim()
+  const brokerServer = String(route?.account_ref?.broker_server || '').trim()
+  const loginAccount = String(route?.account_ref?.login || '').trim()
+  if (!brokerServer || !loginAccount) {
+    throw historyError('bridge_history_route_required')
   }
-  const account = await queryOne(`SELECT DATE_FORMAT(COALESCE(ownership.started_at, ta.first_verified_at), '%Y-%m-%d') AS platform_connected_date
-    FROM trading_accounts ta
-    JOIN mt5_account_bindings bindings ON bindings.current_trading_account_id = ta.id
-      AND bindings.current_user_id = ta.user_id
-    LEFT JOIN mt5_account_ownership_history ownership ON ownership.trading_account_id = ta.id
-      AND ownership.user_id = ta.user_id AND ownership.ended_at IS NULL
-    WHERE ta.user_id = ? AND ta.is_deleted = 0
-    ORDER BY ta.identity_verified_at DESC, ta.id DESC LIMIT 1`, [userId])
-  if (!account?.platform_connected_date) throw new Error('platform_connection_time_unavailable')
-  const dateFrom = account.platform_connected_date
-  return { scope, date_from: dateFrom, date_to: null }
+  return { terminalInstanceId, brokerServer, loginAccount }
+}
+
+function assertHistoryExactRoute(route) {
+  const { terminalInstanceId } = historyRouteAccount(route)
+  if (!terminalInstanceId) throw historyError('bridge_history_route_required')
+  if (!hasHistoryExactRangeCapability(route)) {
+    throw historyError('bridge_history_exact_range_unsupported')
+  }
+  return route
+}
+
+function strictHistoryRouteForUser(userId, params = {}) {
+  let routes = (bridgeV3Business?.connectedTerminals(Number(userId)) || []).slice()
+  const terminalInstanceId = String(params?.terminal_instance_id || '').trim()
+  const tradingAccountId = Number(params?.trading_account_id)
+  const brokerServer = String(params?.broker_server || params?.account_ref?.broker_server || '').trim()
+  const loginAccount = String(params?.login || params?.account_login || params?.account_ref?.login || '').trim()
+  if (terminalInstanceId) {
+    routes = routes.filter(route => route.terminal_instance_id === terminalInstanceId)
+  }
+  if (Number.isSafeInteger(tradingAccountId) && tradingAccountId > 0) {
+    const bindings = bridgeV3TradingAccounts.get(Number(userId))
+    routes = routes.filter(route => Number(bindings?.get(route.terminal_instance_id)) === tradingAccountId)
+  }
+  if (brokerServer) {
+    routes = routes.filter(route => String(route?.account_ref?.broker_server || '').trim().toLowerCase()
+      === brokerServer.toLowerCase())
+  }
+  if (loginAccount) {
+    routes = routes.filter(route => String(route?.account_ref?.login || '').trim() === loginAccount)
+  }
+  if (routes.length === 0) throw historyError('bridge_history_route_required')
+  if (routes.length !== 1) throw historyError('bridge_history_route_ambiguous')
+  return routes[0]
+}
+
+function historyOwnershipStart(row) {
+  const start = Number(row?.ownership_start_utc_msc)
+  if (!Number.isSafeInteger(start) || start <= 0) {
+    throw historyError('bridge_history_ownership_unavailable')
+  }
+  return start
+}
+
+export async function resolveHistoryRange(
+  userId,
+  params = {},
+  route,
+  nowUtcMsc = Date.now(),
+) {
+  const numericUserId = Number(userId)
+  if (!Number.isSafeInteger(numericUserId) || numericUserId <= 0) {
+    throw historyError('bridge_history_ownership_unavailable')
+  }
+  const { brokerServer, loginAccount } = historyRouteAccount(route)
+  if (!Number.isSafeInteger(nowUtcMsc) || nowUtcMsc <= 0) {
+    throw historyError('bridge_history_range_invalid')
+  }
+
+  const ownership = await queryOne(`SELECT
+      bindings.current_trading_account_id AS trading_account_id,
+      CAST(UNIX_TIMESTAMP(COALESCE(ownership.started_at, ta.first_verified_at))*1000 AS UNSIGNED)
+        AS ownership_start_utc_msc,
+      ownership.id AS ownership_history_id
+    FROM mt5_account_bindings bindings
+    JOIN trading_accounts ta
+      ON ta.id = bindings.current_trading_account_id
+      AND ta.user_id = bindings.current_user_id
+      AND UPPER(ta.broker_server) = UPPER(bindings.broker_server_key)
+      AND ta.login_account = bindings.login_account
+      AND ta.is_deleted = 0
+    LEFT JOIN mt5_account_ownership_history ownership
+      ON ownership.trading_account_id = ta.id
+      AND ownership.user_id = bindings.current_user_id
+      AND UPPER(ownership.broker_server_key) = UPPER(bindings.broker_server_key)
+      AND ownership.login_account = bindings.login_account
+      AND ownership.ended_at IS NULL
+    WHERE bindings.current_user_id = ?
+      AND UPPER(bindings.broker_server_key) = UPPER(?)
+      AND bindings.login_account = ?
+    LIMIT 1`, [numericUserId, brokerServer, loginAccount])
+  const ownershipStart = historyOwnershipStart(ownership)
+  if (ownershipStart >= nowUtcMsc) throw historyError('bridge_history_range_invalid')
+
+  const requestedScope = params?.history_scope == null || params.history_scope === ''
+    ? 'recent' : String(params.history_scope).trim().toLowerCase()
+  if (!['recent', 'ownership', 'platform', 'all', 'custom'].includes(requestedScope)) {
+    throw historyError('bridge_history_scope_invalid')
+  }
+
+  let rangeStart
+  let rangeEnd = nowUtcMsc
+  if (requestedScope === 'custom') {
+    const closeFrom = parseStrictUtcDateBoundary(params?.close_from)
+    if (closeFrom === null) throw historyError('bridge_history_custom_start_invalid')
+    const closeTo = params?.close_to == null || params.close_to === ''
+      ? null : nextUtcDateBoundary(params.close_to)
+    if (params?.close_to != null && params.close_to !== '' && closeTo === null) {
+      throw historyError('bridge_history_custom_end_invalid')
+    }
+    rangeStart = Math.max(ownershipStart, closeFrom)
+    if (closeTo !== null) rangeEnd = Math.min(rangeEnd, closeTo)
+  } else if (requestedScope === 'recent') {
+    rangeStart = Math.max(ownershipStart, nowUtcMsc - 7 * 24 * 60 * 60 * 1_000)
+  } else {
+    // `platform` and `all` intentionally share the current ownership range;
+    // exposing a pre-ownership all-time archive would cross an account owner.
+    rangeStart = ownershipStart
+  }
+  if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
+    || rangeStart <= 0 || rangeEnd <= 0 || rangeStart >= rangeEnd) {
+    throw historyError('bridge_history_range_invalid')
+  }
+
+  return {
+    scope: requestedScope,
+    requested_scope: requestedScope,
+    range_start_utc_msc: rangeStart,
+    range_end_utc_msc: rangeEnd,
+    ownership_start_utc_msc: ownershipStart,
+    ownership_revision: ownership?.ownership_history_id == null
+      ? null : String(ownership.ownership_history_id),
+  }
 }
 
 export function sendToAdminBrowsers(data) {
@@ -1608,23 +1859,37 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'history': {
+        const exactRoute = assertHistoryExactRoute(dataRoute)
         const bridgeOk = dataUserId && isBridgeAlive(dataUserId)
         if (bridgeOk) {
-          // 直接透传前端参数给桥接软件（含分页、过滤）
+          const cursorMode = hasHistoryCursorCapability(exactRoute)
           const bridgeParams = {
-            page: normalizeBridgePage(params.page),
             page_size: normalizeBridgePageSize(params.page_size),
             direction: params.direction || '',
             profit_filter: params.profit_filter || '',
             force_refresh: params.force_refresh === true,
           }
+          if (cursorMode) {
+            const snapshotId = normalizedHistoryCursorToken(params.history_snapshot_id)
+            const cursor = normalizedHistoryCursorToken(params.cursor)
+            if (cursor && !snapshotId) throw historyError('history_cursor_invalid')
+            if (snapshotId) bridgeParams.history_snapshot_id = snapshotId
+            if (cursor) bridgeParams.cursor = cursor
+          } else {
+            bridgeParams.page = normalizeBridgePage(params.page)
+          }
+          const nowUtcMsc = Date.now()
+          const resolvedRange = await resolveHistoryRange(dataUserId, params, exactRoute, nowUtcMsc)
+          const range = cursorMode && bridgeParams.history_snapshot_id
+            ? historyCursorContinuationRange(params, resolvedRange, nowUtcMsc)
+            : resolvedRange
+          bridgeParams.range_start_utc_msc = range.range_start_utc_msc
+          bridgeParams.range_end_utc_msc = range.range_end_utc_msc
           if (validHistoryDate(params.entry_from)) bridgeParams.entry_from = params.entry_from
           if (validHistoryDate(params.entry_to)) bridgeParams.entry_to = params.entry_to
-          const range = await resolveHistoryRange(dataUserId, params)
-          if (range.date_from) bridgeParams.date_from = range.date_from
-          if (range.date_to) bridgeParams.date_to = range.date_to
 
-          result = await ai.mt5Bridge(dataUserId, 'history', routedParams(bridgeParams), { timeoutMs: 30000, noFallback: true })
+          result = await ai.mt5Bridge(dataUserId, cursorMode ? 'history_page' : 'history',
+            routedParams(bridgeParams), { timeoutMs: 30000, noFallback: true })
           if (result && typeof result === 'object') {
             const activeTradingAccountId = Number(observerContext?.channel?.trading_account_id)
               || Number(bridgeV3TradingAccounts.get(Number(dataUserId))?.get(dataRoute?.terminal_instance_id))
@@ -1639,13 +1904,15 @@ async function handleBrowserCommand(ws, userId, msg) {
         break
       }
       case 'history_chart_data': {
+        const exactRoute = assertHistoryExactRoute(dataRoute)
         const bridgeOk = dataUserId && isBridgeAlive(dataUserId)
         if (bridgeOk) {
           // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
           const chartParams = { force_refresh: params.force_refresh === true }
-          const range = await resolveHistoryRange(dataUserId, params)
-          if (range.date_from) chartParams.date_from = range.date_from
-          if (range.date_to) chartParams.date_to = range.date_to
+          const nowUtcMsc = Date.now()
+          const range = await resolveHistoryRange(dataUserId, params, exactRoute, nowUtcMsc)
+          chartParams.range_start_utc_msc = range.range_start_utc_msc
+          chartParams.range_end_utc_msc = range.range_end_utc_msc
           if (params.direction) chartParams.direction = params.direction
           if (params.profit_filter) chartParams.profit_filter = params.profit_filter
           result = await ai.mt5Bridge(dataUserId, 'chart_data', routedParams(chartParams), { timeoutMs: 30000, noFallback: true })
@@ -2209,36 +2476,85 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         const adminId = await getAdminUserId()
         let expUserId = adminId || userId
+        let exportRoute = null
         let bridgeOk = isBridgeAlive(expUserId)
         if (!bridgeOk && isBridgeAlive(userId)) {
           expUserId = userId; bridgeOk = true
         }
+        exportRoute = assertHistoryExactRoute(strictHistoryRouteForUser(expUserId, params))
         if (!bridgeOk) {
           result = { status: 'error', message: '桥接未连接，无法导出历史数据' }
           break
         }
-        // Fetch all orders from MT5 bridge
-        const exportRange = await resolveHistoryRange(expUserId, params)
-        const exportBridgeParams = { page: 1, page_size: 200 }
-        if (exportRange.date_from) exportBridgeParams.date_from = exportRange.date_from
-        if (exportRange.date_to) exportBridgeParams.date_to = exportRange.date_to
+        const exportNowUtcMsc = Date.now()
+        // Fetch all orders from the selected terminal using one fixed,
+        // ownership-clamped half-open range for every page.
+        const exportRange = await resolveHistoryRange(expUserId, params, exportRoute, exportNowUtcMsc)
+        const exportBridgeParams = {
+          page_size: 200,
+          ...bridgeRouteParams(exportRoute),
+          range_start_utc_msc: exportRange.range_start_utc_msc,
+          range_end_utc_msc: exportRange.range_end_utc_msc,
+        }
         let orders = []
         let exportFailed = false
+        let exportErrorCode = null
+        let expectedTotalPages = null
+        const exportCursorMode = hasHistoryCursorCapability(exportRoute)
+        let exportSnapshotId = null
+        let exportCursor = null
         for (let page = 1; page <= 50; page += 1) {
-          const expRes = await ai.mt5Bridge(expUserId, 'history', {
-            ...exportBridgeParams, page,
-          }, { timeoutMs:30000, noFallback:true })
+          const pageParams = exportCursorMode
+            ? { ...exportBridgeParams,
+                ...(exportSnapshotId ? { history_snapshot_id:exportSnapshotId } : {}),
+                ...(exportCursor ? { cursor:exportCursor } : {}) }
+            : { ...exportBridgeParams, page }
+          const expRes = await ai.mt5Bridge(expUserId, exportCursorMode ? 'history_page' : 'history', pageParams, {
+            timeoutMs:30000, noFallback:true,
+          })
           if (expRes?.status !== 'success' || !Array.isArray(expRes.orders)
-            || expRes.history_sync?.complete === false) {
+            || !isHistoryExportComplete({
+              range:exportRange,
+              result:expRes,
+              historySync:expRes.history_sync,
+            })) {
             exportFailed = true
             break
           }
+          const pagePlan = boundedHistoryExportPageCount(expRes.pagination?.total_pages)
+          if (!pagePlan.ok || (expectedTotalPages !== null
+            && expectedTotalPages !== pagePlan.total_pages)) {
+            exportFailed = true
+            exportErrorCode = pagePlan.ok
+              ? 'history_export_pagination_changed' : pagePlan.code
+            break
+          }
+          expectedTotalPages = pagePlan.total_pages
+          if (exportCursorMode) {
+            const responseSnapshotId = normalizedHistoryCursorToken(expRes.history_snapshot_id)
+            const responseCursor = normalizedHistoryCursorToken(expRes.next_cursor)
+            if (!responseSnapshotId
+              || (exportSnapshotId && responseSnapshotId !== exportSnapshotId)
+              || (page < expectedTotalPages && (!expRes.has_more || !responseCursor))
+              || (page >= expectedTotalPages && expRes.has_more)) {
+              exportFailed = true
+              exportErrorCode = 'history_export_cursor_invalid'
+              break
+            }
+            exportSnapshotId = responseSnapshotId
+            exportCursor = responseCursor
+          }
           orders.push(...expRes.orders)
-          const totalPages = Math.max(1, Math.min(50, Number(expRes.pagination?.total_pages || 1)))
-          if (page >= totalPages) break
+          if (page >= expectedTotalPages) break
         }
         if (exportFailed) {
-          result = { status: 'error', message: '获取历史订单失败' }
+          result = {
+            status:'error',
+            code:exportErrorCode || 'history_export_read_failed',
+            message:exportErrorCode === 'history_export_range_too_large'
+              ? '历史范围过大，请缩小范围后再导出'
+              : '获取历史订单失败',
+          }
           break
         }
         // Apply same filters as history page
@@ -2732,6 +3048,11 @@ async function handleBrowserCommand(ws, userId, msg) {
     reply(result || { status: 'error', message: 'No result' })
   } catch (err) {
     console.error('[BridgeWS] handleBrowserCommand error:', err.message)
+    const stableCode = String(err?.code || err?.message || '')
+    if (stableCode.startsWith('bridge_history_')) {
+      reply({ status:'error', code:stableCode, message:stableCode })
+      return
+    }
     reply({ status: 'error', message: '操作失败，请重试' })
   } finally {
     autoExecuteGuard?.dispose()

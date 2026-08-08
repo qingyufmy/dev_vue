@@ -30,6 +30,31 @@ function utcMsToBeijingDatetime(utcMs) {
   return shifted.toISOString().replace('T', ' ').slice(0, 19)
 }
 
+// Reconciliation requests use a single UTC calendar-day boundary for every
+// page and evidence batch.  Computing it once prevents a long-running scan
+// from changing its requested range at midnight between pages.
+export function utcDateToday(now = Date.now()) {
+  const date = new Date(now)
+  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null
+}
+
+function utcDateStartUtcMsc(value) {
+  const text = String(value || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null
+  const parsed = Date.parse(`${text}T00:00:00.000Z`)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || utcDateToday(parsed) !== text) return null
+  return parsed
+}
+
+function ownershipStartUtcMsc(outcome) {
+  const numeric = Number(outcome?.ownership_started_at_utc_msc ?? outcome?.ownership_start_utc_msc)
+  if (Number.isSafeInteger(numeric) && numeric > 0) return numeric
+  const text = outcome?.ownership_started_at ?? outcome?.ownership_start
+  if (typeof text !== 'string') return null
+  const parsed = Date.parse(`${text.trim().replace(' ', 'T')}Z`)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
 export function dealTimeForDatabase(deal) {
   const trustedUtcMs = Number(deal?.time_utc_msc)
   if (Number.isFinite(trustedUtcMs) && trustedUtcMs > 0) return utcMsToBeijingDatetime(trustedUtcMs)
@@ -292,16 +317,47 @@ function outcomeHistoryEvidenceBatches(outcomes = []) {
   return batches
 }
 
-async function loadOutcomeHistory(bridge, userId, dateFrom, evidenceBatches = []) {
+export async function loadOutcomeHistory(bridge, userId, rangeStartUtcMsc, rangeEndUtcMsc,
+  evidenceBatches = [], routeParams = {}) {
+  const validRange = Number.isSafeInteger(rangeStartUtcMsc) && rangeStartUtcMsc > 0
+    && Number.isSafeInteger(rangeEndUtcMsc) && rangeEndUtcMsc > rangeStartUtcMsc
+  const brokerServer = String(routeParams?.broker_server || '').trim()
+  const login = String(routeParams?.login || '').trim()
+  if (!validRange || !brokerServer || brokerServer.length > 100 || !/^\d{1,32}$/.test(login)
+    || !Array.isArray(evidenceBatches) || evidenceBatches.length === 0) return null
   const deals = []
   const historyOrders = []
   const seenDeals = new Set()
   const seenOrders = new Set()
-  let evidenceBatchIndex = 0
+  const normalizeBatch = batch => {
+    if (!batch || typeof batch !== 'object' || Array.isArray(batch)) return null
+    const unknown = Object.keys(batch).some(key => !['evidence_position_ids', 'evidence_order_tickets'].includes(key))
+    if (unknown) return null
+    const normalize = value => {
+      if (!Array.isArray(value)) return null
+      const refs = value.map(item => String(item ?? '').trim())
+      if (refs.some(item => !/^(?!0+$)\d{1,32}$/.test(item))) return null
+      return [...new Set(refs)]
+    }
+    const positions = normalize(batch.evidence_position_ids ?? [])
+    const orders = normalize(batch.evidence_order_tickets ?? [])
+    if (!positions || !orders || positions.length + orders.length === 0
+      || positions.length + orders.length > HISTORY_EVIDENCE_REF_LIMIT) return null
+    return { evidence_position_ids:positions, evidence_order_tickets:orders }
+  }
+  const batches = evidenceBatches.map(normalizeBatch)
+  if (batches.some(batch => !batch)) return null
   const mergeHistory = history => {
-    if (history?.status !== 'success' || !Array.isArray(history.deals)) return false
-    if (history.history_sync?.complete === false) return false
-    if (history.history_sync?.evidence_truncated === true) return false
+    if (history?.status !== 'success' || !Array.isArray(history.deals)
+      || !Array.isArray(history.history_orders)) return false
+    const historySync = history.history_sync
+    if (historySync?.requested_range_complete !== true
+      || historySync.requested_range_start_utc_msc !== rangeStartUtcMsc
+      || historySync.requested_range_end_utc_msc !== rangeEndUtcMsc
+      || historySync.evidence_truncated !== false
+      || history.evidence_truncated !== false) return false
+    if (history.deals.some(item => !item || typeof item !== 'object' || Array.isArray(item))
+      || history.history_orders.some(item => !item || typeof item !== 'object' || Array.isArray(item))) return false
     for (const deal of history.deals) {
       const key = String(deal?.deal_ticket || deal?.ticket || '')
       if (key && !seenDeals.has(key)) {
@@ -318,29 +374,19 @@ async function loadOutcomeHistory(bridge, userId, dateFrom, evidenceBatches = []
     }
     return true
   }
-  const requestHistoryPage = async (page, pageSize, evidenceScope = {}) => {
-    const baseParams = {
-      page, page_size:pageSize, include_deals:true,
-      ...(dateFrom ? { date_from:dateFrom } : {}),
+  for (const batch of batches) {
+    let history
+    try {
+      history = await bridge(userId, 'history_evidence', {
+        range_start_utc_msc:rangeStartUtcMsc,
+        range_end_utc_msc:rangeEndUtcMsc,
+        broker_server:brokerServer,
+        login,
+        ...batch,
+      }, { noFallback:true })
+    } catch {
+      return null
     }
-    let history = await bridge(userId, 'history', { ...baseParams, ...evidenceScope }, { noFallback:true })
-    const scoped = (evidenceScope.evidence_position_ids?.length || 0)
-      + (evidenceScope.evidence_order_tickets?.length || 0) > 0
-    if (scoped && history?.status !== 'success'
-      && String(history?.error || history?.message || '') === 'history_params_invalid') {
-      history = await bridge(userId, 'history', baseParams, { noFallback:true })
-    }
-    return history
-  }
-  for (let page = 1; page <= 25; page += 1) {
-    const evidenceScope = evidenceBatches[evidenceBatchIndex++] || {}
-    const history = await requestHistoryPage(page, 200, evidenceScope)
-    if (!mergeHistory(history)) return null
-    const totalPages = Math.max(1, Math.min(25, Number(history.pagination?.total_pages || 1)))
-    if (page >= totalPages) break
-  }
-  while (evidenceBatchIndex < evidenceBatches.length) {
-    const history = await requestHistoryPage(1, 1, evidenceBatches[evidenceBatchIndex++])
     if (!mergeHistory(history)) return null
   }
   return { status:'success', deals, history_orders:historyOrders }
@@ -348,22 +394,45 @@ async function loadOutcomeHistory(bridge, userId, dateFrom, evidenceBatches = []
 
 export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
   await reconcileTerminalPendingOutcomes()
-  const outcomes = await queryAll(`SELECT so.*, oi.bridge_command_ref, oi.approved_order_json
+  // Keep the UTC end boundary stable for all users/pages in this pass.
+  const reconciliationRangeEndUtcMsc = Date.now()
+  const outcomes = await queryAll(`SELECT so.*, oi.bridge_command_ref, oi.approved_order_json,
+      ownership.broker_server_key, ownership.login_account,
+      CAST(UNIX_TIMESTAMP(ownership.started_at) * 1000 AS UNSIGNED) AS ownership_started_at_utc_msc
     FROM signal_outcomes so JOIN order_intents oi ON oi.id = so.order_intent_id
+    JOIN mt5_account_ownership_history ownership
+      ON ownership.id = so.ownership_history_id
+      AND ownership.trading_account_id = so.trading_account_id
+      AND ownership.user_id = so.user_id
+      AND ownership.ended_at IS NULL
     WHERE so.status IN ('open','closing') ORDER BY so.user_id, so.id`)
-  const byUser = new Map()
+  const byAccountOwnership = new Map()
   for (const outcome of outcomes) {
-    if (!byUser.has(outcome.user_id)) byUser.set(outcome.user_id, [])
-    byUser.get(outcome.user_id).push(outcome)
+    const key = `${outcome.user_id}:${outcome.trading_account_id}:${outcome.ownership_history_id}`
+    if (!byAccountOwnership.has(key)) byAccountOwnership.set(key, [])
+    byAccountOwnership.get(key).push(outcome)
   }
   let closed = 0
-  for (const [userId, userOutcomes] of byUser) {
+  for (const userOutcomes of byAccountOwnership.values()) {
+    const userId = userOutcomes[0]?.user_id
+    const brokerServer = String(userOutcomes[0]?.broker_server_key || '').trim()
+    const login = String(userOutcomes[0]?.login_account || '').trim()
+    if (!userId || !brokerServer || !/^\d{1,32}$/.test(login)
+      || userOutcomes.some(item => String(item.broker_server_key || '').trim().toUpperCase() !== brokerServer.toUpperCase()
+        || String(item.login_account || '').trim() !== login)) continue
     let history, positions
     const earliestCreated = userOutcomes.map(item => String(item.created_at || '').slice(0, 10)).filter(Boolean).sort()[0]
+    const earliestDateStartUtcMsc = utcDateStartUtcMsc(earliestCreated)
+    const ownershipStarts = userOutcomes.map(ownershipStartUtcMsc)
+    const knownOwnershipStarts = ownershipStarts.filter(value => Number.isSafeInteger(value) && value > 0)
+    if (!earliestDateStartUtcMsc || knownOwnershipStarts.length !== ownershipStarts.length) continue
+    const ownershipClampedRangeStartUtcMsc = Math.max(earliestDateStartUtcMsc, Math.max(...knownOwnershipStarts))
     try {
       ;[history, positions] = await Promise.all([
-        loadOutcomeHistory(bridge, userId, earliestCreated, outcomeHistoryEvidenceBatches(userOutcomes)),
-        bridge(userId, 'positions', {}, { noFallback: true }),
+        loadOutcomeHistory(bridge, userId, ownershipClampedRangeStartUtcMsc,
+          reconciliationRangeEndUtcMsc, outcomeHistoryEvidenceBatches(userOutcomes),
+          { broker_server:brokerServer, login }),
+        bridge(userId, 'positions', { broker_server:brokerServer, login }, { noFallback: true }),
       ])
     } catch { continue }
     if (history?.status !== 'success' || !Array.isArray(history.deals) || positions?.status === 'error' || !Array.isArray(positions?.positions)) continue

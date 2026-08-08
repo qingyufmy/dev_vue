@@ -170,7 +170,9 @@ fn validate_nonce(value: &str) -> Result<(), WorkerHostError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{WORKER_IPC_VERSION, WorkerCapability, WorkerHello, WorkerRoute, write_frame};
+    use crate::{
+        WORKER_IPC_VERSION, WorkerCapability, WorkerHello, WorkerRole, WorkerRoute, write_frame,
+    };
     use bridge_contract::AccountRef;
     use std::collections::BTreeSet;
     use tokio::net::windows::named_pipe::ClientOptions;
@@ -208,6 +210,7 @@ mod tests {
                     session_nonce: worker_endpoint.session_nonce().to_owned(),
                     worker_version: "3.0.0-alpha.1".to_owned(),
                     route: route(),
+                    role: WorkerRole::Live,
                     capabilities: vec![WorkerCapability::QueryExecution],
                 },
             )
@@ -219,6 +222,7 @@ mod tests {
                 ExpectedWorker {
                     session_nonce: endpoint.session_nonce().to_owned(),
                     route: route(),
+                    role: WorkerRole::Live,
                     required_capabilities: BTreeSet::from([WorkerCapability::QueryExecution]),
                 },
                 Duration::from_secs(2),

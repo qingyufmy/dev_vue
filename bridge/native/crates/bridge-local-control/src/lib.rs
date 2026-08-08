@@ -454,6 +454,15 @@ pub struct UiTerminalStatus {
     pub broker_server: String,
     pub login: String,
     pub runtime_state: String,
+    /// Optional live-account initialization projection. Empty is retained for old clients.
+    #[serde(default)]
+    pub initialization_state: String,
+    #[serde(default)]
+    pub local_operational_ready: bool,
+    #[serde(default)]
+    pub history_backfill_pending: bool,
+    #[serde(default)]
+    pub history_attention_required: bool,
     pub error_code: Option<String>,
     pub observer_profile_id: Option<String>,
     pub terminal_trading_allowed: Option<bool>,
@@ -473,6 +482,18 @@ impl UiTerminalStatus {
                 self.runtime_state.as_str(),
                 "starting" | "running" | "restarting" | "stopped"
             )
+            && (self.initialization_state.is_empty()
+                || matches!(
+                    self.initialization_state.as_str(),
+                    "detected"
+                        | "verifying_identity"
+                        | "warming_realtime_snapshot"
+                        | "reconciling_local_commands"
+                        | "ready"
+                        | "retrying"
+                        | "blocked"
+                        | "superseded"
+                ))
             && self.error_code.as_deref().is_none_or(valid_status_code)
             && self.observer_profile_id.as_deref().is_none_or(|profile| {
                 validate_profile_id(Some(profile)).as_deref() == Ok(profile)
@@ -671,6 +692,10 @@ mod tests {
                 broker_server: "Broker-Demo".to_owned(),
                 login: "123456".to_owned(),
                 runtime_state: "running".to_owned(),
+                initialization_state: "ready".to_owned(),
+                local_operational_ready: true,
+                history_backfill_pending: true,
+                history_attention_required: false,
                 error_code: None,
                 observer_profile_id: None,
                 terminal_trading_allowed: Some(true),
@@ -866,6 +891,27 @@ mod tests {
     }
 
     #[test]
+    fn terminal_history_projection_is_backward_compatible_and_can_be_attention_required() {
+        let mut value = serde_json::to_value(state()).expect("state json");
+        let terminal = value["terminals"][0]
+            .as_object_mut()
+            .expect("terminal object");
+        terminal.remove("initialization_state");
+        terminal.remove("local_operational_ready");
+        terminal.remove("history_backfill_pending");
+        terminal.remove("history_attention_required");
+        let mut decoded: UiStateSnapshot =
+            serde_json::from_value(value).expect("old state remains readable");
+        assert_eq!(decoded.terminals[0].initialization_state, "");
+        assert!(!decoded.terminals[0].local_operational_ready);
+        decoded.terminals[0].initialization_state = "ready".to_owned();
+        decoded.terminals[0].local_operational_ready = true;
+        decoded.terminals[0].history_backfill_pending = true;
+        decoded.terminals[0].history_attention_required = true;
+        assert_eq!(decoded.validate(DEFAULT_PROFILE_ID), Ok(()));
+    }
+
+    #[test]
     fn administrator_state_keeps_observer_and_terminal_ownership_consistent() {
         let mut admin = state();
         admin.is_administrator = true;
@@ -889,6 +935,10 @@ mod tests {
             broker_server: "Broker-Demo".to_owned(),
             login: "654321".to_owned(),
             runtime_state: "running".to_owned(),
+            initialization_state: "ready".to_owned(),
+            local_operational_ready: true,
+            history_backfill_pending: false,
+            history_attention_required: false,
             error_code: None,
             observer_profile_id: Some("source-1".to_owned()),
             terminal_trading_allowed: Some(true),

@@ -8,7 +8,7 @@ export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
 
 export const BRIDGE_V3_DATA_REQUEST_ACTIONS = Object.freeze(new Set([
   'rates', 'symbol_snapshot', 'risk_snapshot', 'performance_daily',
-  'symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics',
+  'symbols', 'history', 'history_page', 'history_evidence', 'chart_data', 'pending_order_state', 'diagnostics',
 ]))
 
 export const BRIDGE_V3_COMMAND_ACTIONS = Object.freeze(new Set([
@@ -26,6 +26,7 @@ export const BRIDGE_V3_DATA_STREAMS = Object.freeze(new Set([
 const BRIDGE_V3_HEARTBEAT_STREAMS = new Set(['account', 'positions', 'orders', 'deals'])
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/
+const CAPABILITY_PATTERN = /^[A-Za-z0-9_]{1,64}$/
 const INSTALLATION_ID_PATTERN = /^install_[a-f0-9]{32}$/
 const UPDATE_REPORT_STATES = new Set(['healthy', 'rolled_back', 'failed'])
 
@@ -87,6 +88,21 @@ function validateHello(message, nowUtcMsc) {
   validateId(errors, 'session_id', message.session_id)
   const bridgeVersion = String(message.bridge_version || '').trim()
   if (!bridgeVersion || bridgeVersion.length > 64) errors.push('bridge_version:invalid')
+  if (message.capabilities !== undefined) {
+    if (!Array.isArray(message.capabilities) || message.capabilities.length > 32) {
+      errors.push('capabilities:invalid')
+    } else {
+      const uniqueCapabilities = new Set()
+      for (const capability of message.capabilities) {
+        if (typeof capability !== 'string' || !CAPABILITY_PATTERN.test(capability)
+          || uniqueCapabilities.has(capability)) {
+          errors.push('capabilities:invalid')
+          break
+        }
+        uniqueCapabilities.add(capability)
+      }
+    }
+  }
   if (message.installation_id !== undefined && message.installation_id !== null
     && (typeof message.installation_id !== 'string'
       || !INSTALLATION_ID_PATTERN.test(message.installation_id))) {
