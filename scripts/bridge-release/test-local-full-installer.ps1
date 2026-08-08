@@ -238,7 +238,7 @@ if ($executables | Where-Object {
 }
 $workerText = Get-Content -LiteralPath `
   (Join-Path $versionRoot 'modules\adapter.mt5.python\worker.py') -Raw -Encoding utf8
-if ($workerText -notmatch "(?m)^WORKER_VERSION = `"$([Regex]::Escape($releaseVersion))`"$") {
+if ($workerText -notmatch "(?m)^WORKER_VERSION = `"$([Regex]::Escape($releaseVersion))`"`r?$") {
   throw 'local_installer_version_mismatch'
 }
 

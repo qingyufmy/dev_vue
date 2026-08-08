@@ -1,9 +1,9 @@
 const VERIFIED_INSTALLER = Object.freeze({
   version:'3.0.0',
   buildDate:'2026-08-09',
-  fullUrl:'https://qiniu.acadfx.com/bridge/bootstrapper/e479c11b63491323b0871bd4c60aa73a665fd6112db0154f7cedd8e4ad3e54af/LiangjianBridgeSetup.exe',
-  fileSize:26692802,
-  sha256:'E479C11B63491323B0871BD4C60AA73A665FD6112DB0154F7CEDD8E4AD3E54AF',
+  fullUrl:'https://qiniu.acadfx.com/bridge/bootstrapper/1d3098693f6f220b368a9876da315bf2d6765bf0d43e510dec2feffb553d810e/LiangjianBridgeSetup.exe',
+  fileSize:26669199,
+  sha256:'1D3098693F6F220B368A9876DA315BF2D6765BF0D43E510DEC2FEFFB553D810E',
   v3:true,
 })
 
@@ -16,6 +16,19 @@ function validHttpsObjectUrl(value, sha256) {
   } catch {
     return false
   }
+}
+
+function compareReleaseVersion(left, right) {
+  const leftParts = left.split('.').map(BigInt)
+  const rightParts = right.split('.').map(BigInt)
+  const width = Math.max(leftParts.length, rightParts.length)
+  for (let index = 0; index < width; index += 1) {
+    const leftPart = leftParts[index] || 0n
+    const rightPart = rightParts[index] || 0n
+    if (leftPart > rightPart) return 1
+    if (leftPart < rightPart) return -1
+  }
+  return 0
 }
 
 export function resolveBridgeInstallerRelease(environment = process.env) {
@@ -33,7 +46,7 @@ export function resolveBridgeInstallerRelease(environment = process.env) {
     || !Number.isSafeInteger(fileSize) || fileSize <= 0 || fileSize > 512 * 1024 * 1024) {
     throw new Error('bridge_installer_release_configuration_invalid')
   }
-  return Object.freeze({
+  const configured = Object.freeze({
     version,
     buildDate,
     fullUrl:url,
@@ -41,4 +54,10 @@ export function resolveBridgeInstallerRelease(environment = process.env) {
     sha256,
     v3:true,
   })
+  const versionOrder = compareReleaseVersion(configured.version, VERIFIED_INSTALLER.version)
+  if (versionOrder > 0
+    || (versionOrder === 0 && configured.buildDate > VERIFIED_INSTALLER.buildDate)) {
+    return configured
+  }
+  return VERIFIED_INSTALLER
 }

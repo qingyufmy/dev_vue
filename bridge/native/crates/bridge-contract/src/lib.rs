@@ -6,6 +6,25 @@ pub const SERVER_PROTOCOL_VERSION: u16 = 3;
 pub const HISTORY_EXACT_RANGE_CAPABILITY: &str = "history_exact_range_v1";
 pub const HISTORY_CURSOR_CAPABILITY: &str = "history_cursor_v1";
 pub const HISTORY_EVIDENCE_CAPABILITY: &str = "history_evidence_v1";
+/// Actions accepted by the v3 data-request contract.
+///
+/// Keep this as the single source of truth for both wire validation and the
+/// core data handler.  Capability-specific actions are included here so a
+/// capability advertised by `HelloMessage` can never be rejected by the
+/// outer data-request contract.
+pub const DATA_REQUEST_ACTIONS: &[&str] = &[
+    "rates",
+    "symbol_snapshot",
+    "risk_snapshot",
+    "performance_daily",
+    "symbols",
+    "history",
+    "history_page",
+    "history_evidence",
+    "chart_data",
+    "pending_order_state",
+    "diagnostics",
+];
 pub const MAX_LOCAL_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const TRADE_QUEUE_CAPACITY: usize = 128;
 pub const QUOTE_QUEUE_CAPACITY: usize = 64;
@@ -13,6 +32,20 @@ pub const DATA_QUEUE_CAPACITY: usize = 32;
 pub const SERVER_MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 pub const SERVER_TRADE_QUEUE_CAPACITY: usize = 256;
 pub const SERVER_DATA_QUEUE_CAPACITY: usize = 2_048;
+
+pub fn is_supported_data_request_action(action: &str) -> bool {
+    DATA_REQUEST_ACTIONS.contains(&action)
+}
+
+/// Returns the data request action represented by a history capability.
+pub fn data_request_action_for_capability(capability: &str) -> Option<&'static str> {
+    match capability {
+        HISTORY_EXACT_RANGE_CAPABILITY => Some("history"),
+        HISTORY_CURSOR_CAPABILITY => Some("history_page"),
+        HISTORY_EVIDENCE_CAPABILITY => Some("history_evidence"),
+        _ => None,
+    }
+}
 
 pub const SUPPORTED_MESSAGE_TYPES: &[&str] = &[
     "hello",
@@ -574,7 +607,14 @@ pub struct DataRequestMessage {
 }
 
 impl DataRequestMessage {
-    pub fn validate(&self) -> Result<(), &'static str> {
+    /// Validates the request envelope and route fields without applying the
+    /// action/parameter business contract.
+    ///
+    /// Transport uses this first after decoding a data request.  That lets it
+    /// distinguish a malformed or unauthenticated route (session-fatal) from
+    /// a well-formed request whose action or params should be rejected without
+    /// tearing down the session.
+    pub fn validate_envelope(&self) -> Result<(), &'static str> {
         validate_typed_envelope(
             self.v,
             &self.message_type,
@@ -585,21 +625,15 @@ impl DataRequestMessage {
         validate_id(&self.request_id)?;
         validate_id(&self.terminal_instance_id)?;
         self.account_ref.validate()?;
-        if self.connection_epoch <= 0
-            || !matches!(
-                self.action.as_str(),
-                "rates"
-                    | "symbol_snapshot"
-                    | "risk_snapshot"
-                    | "performance_daily"
-                    | "symbols"
-                    | "history"
-                    | "chart_data"
-                    | "pending_order_state"
-                    | "diagnostics"
-            )
-            || !self.params.is_object()
-        {
+        if self.connection_epoch <= 0 {
+            return Err("bridge_data_request_invalid");
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.validate_envelope()?;
+        if !is_supported_data_request_action(&self.action) || !self.params.is_object() {
             return Err("bridge_data_request_invalid");
         }
         Ok(())
@@ -1033,6 +1067,106 @@ mod tests {
         assert_eq!(hello.validate(), Err("bridge_capabilities_invalid"));
         hello.capabilities = vec!["history-exact-range".to_owned()];
         assert_eq!(hello.validate(), Err("bridge_capabilities_invalid"));
+    }
+
+    #[test]
+    fn data_request_actions_are_single_source_for_wire_and_capability_contracts() {
+        let request = |action: &str| DataRequestMessage {
+            v: 3,
+            message_type: "data_request".to_owned(),
+            message_id: "message_01JDATAACTION".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_000,
+            request_id: "request_01JDATAACTION".to_owned(),
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            action: action.to_owned(),
+            params: serde_json::json!({}),
+        };
+
+        for action in DATA_REQUEST_ACTIONS {
+            assert!(is_supported_data_request_action(action));
+            request(action).validate().expect("supported action");
+        }
+        assert!(!is_supported_data_request_action("not_a_data_action"));
+        assert_eq!(
+            data_request_action_for_capability(HISTORY_CURSOR_CAPABILITY),
+            Some("history_page")
+        );
+        assert_eq!(
+            data_request_action_for_capability(HISTORY_EVIDENCE_CAPABILITY),
+            Some("history_evidence")
+        );
+        for capability in [HISTORY_CURSOR_CAPABILITY, HISTORY_EVIDENCE_CAPABILITY] {
+            let action = data_request_action_for_capability(capability).expect("history action");
+            assert!(is_supported_data_request_action(action));
+        }
+    }
+
+    #[test]
+    fn rust_data_request_contract_matches_the_cross_language_baseline() {
+        let baseline: Value =
+            serde_json::from_str(include_str!("../../../../contracts/data-request-v1.json"))
+                .expect("cross-language data request baseline");
+        assert_eq!(
+            baseline.get("protocol_version").and_then(Value::as_u64),
+            Some(SERVER_PROTOCOL_VERSION as u64)
+        );
+
+        let baseline_actions = baseline
+            .get("data_request_actions")
+            .and_then(Value::as_array)
+            .expect("baseline data request actions")
+            .iter()
+            .map(|action| action.as_str().expect("baseline action string").to_owned())
+            .collect::<Vec<_>>();
+        let mut expected_actions = DATA_REQUEST_ACTIONS
+            .iter()
+            .map(|action| (*action).to_owned())
+            .collect::<Vec<_>>();
+        let mut actual_actions = baseline_actions.clone();
+        actual_actions.sort();
+        expected_actions.sort();
+        assert_eq!(actual_actions, expected_actions);
+        let mut unique_actions = actual_actions.clone();
+        unique_actions.dedup();
+        assert_eq!(unique_actions.len(), actual_actions.len());
+        assert!(
+            baseline_actions
+                .iter()
+                .all(|action| is_supported_data_request_action(action))
+        );
+
+        let capability_actions = baseline
+            .get("history_capability_action_map")
+            .and_then(Value::as_object)
+            .expect("baseline history capability action map");
+        for (capability, expected_action) in [
+            (HISTORY_CURSOR_CAPABILITY, "history_page"),
+            (HISTORY_EVIDENCE_CAPABILITY, "history_evidence"),
+        ] {
+            let actions = capability_actions
+                .get(capability)
+                .and_then(|value| value.get("actions"))
+                .and_then(Value::as_array)
+                .expect("baseline capability actions");
+            assert!(
+                actions
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|action| action == expected_action)
+            );
+            assert!(
+                actions
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .all(is_supported_data_request_action)
+            );
+            assert!(is_supported_data_request_action(expected_action));
+        }
     }
 
     #[test]

@@ -175,7 +175,7 @@ try {
   New-Item -ItemType Directory -Path (Join-Path $moduleRoot 'adapter.mt4') -Force | Out-Null
   $nativeMt5Worker = Join-Path $nativeRoot 'workers\mt5'
   $workerSource = Get-Content -LiteralPath (Join-Path $nativeMt5Worker 'worker.py') -Raw
-  if ($workerSource -notmatch "(?m)^WORKER_VERSION = `"$([Regex]::Escape($ReleaseVersion))`"$") {
+  if ($workerSource -notmatch "(?m)^WORKER_VERSION = `"$([Regex]::Escape($ReleaseVersion))`"`r?$") {
     throw 'release_worker_version_mismatch'
   }
   Copy-Item -LiteralPath (Join-Path $nativeMt5Worker 'worker.py') `

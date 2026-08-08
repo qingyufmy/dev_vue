@@ -93,6 +93,7 @@ describe('bridge release tooling', () => {
     const lock = await readFile(new URL('../bridge/native/workers/mt5/requirements.lock.txt', import.meta.url), 'utf8')
     const runtimeBuilder = await readFile(new URL('../scripts/bridge-release/build-python-runtime.ps1', import.meta.url), 'utf8')
     const releaseBuilder = await readFile(new URL('../scripts/bridge-release/build-release.ps1', import.meta.url), 'utf8')
+    const localFullInstallerTest = await readFile(new URL('../scripts/bridge-release/test-local-full-installer.ps1', import.meta.url), 'utf8')
     expect(lock).toContain('MetaTrader5==5.0.5735')
     expect(lock).toContain('numpy==2.4.6')
     expect(lock.match(/--hash=sha256:[a-f0-9]{64}/g)).toHaveLength(2)
@@ -113,6 +114,8 @@ describe('bridge release tooling', () => {
     expect(releaseBuilder).not.toContain("bridge\\app\\AurumBridge\\AurumBridge.csproj")
     expect(releaseBuilder).toContain('release_core_version_mismatch')
     expect(releaseBuilder).toContain('release_worker_version_mismatch')
+    expect(releaseBuilder).toContain('`"`r?$')
+    expect(localFullInstallerTest).toContain('`"`r?$')
     const nativeCoreResource = await readFile(
       new URL('../bridge/native/apps/bridge-core/build.rs', import.meta.url),
       'utf8',

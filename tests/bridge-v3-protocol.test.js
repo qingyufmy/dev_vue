@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 import {
   assertBridgeV3Message,
   BRIDGE_PROTOCOL_VERSION,
+  BRIDGE_V3_DATA_REQUEST_ACTIONS,
   sameBridgeRoute,
   validateBridgeV3Message,
 } from '../server/bridge-v3/protocol.js'
+
+const dataRequestContract = JSON.parse(readFileSync(
+  new URL('../bridge/contracts/data-request-v1.json', import.meta.url), 'utf8'))
 
 const NOW = 1_800_000_000_000
 
@@ -29,6 +34,56 @@ function route(overrides = {}) {
 }
 
 describe('Bridge v3 protocol contract', () => {
+  it('keeps the JavaScript action and error classification in sync with the cross-language contract', () => {
+    expect(dataRequestContract.protocol_version).toBe(BRIDGE_PROTOCOL_VERSION)
+    expect(dataRequestContract.message_type).toBe('data_request')
+    expect([...BRIDGE_V3_DATA_REQUEST_ACTIONS].sort()).toEqual(
+      [...dataRequestContract.data_request_actions].sort())
+    expect(dataRequestContract.route.required_fields).toEqual([
+      'terminal_instance_id', 'account_ref', 'connection_epoch',
+    ])
+    expect(dataRequestContract.route.account_ref_required_fields).toEqual(['broker_server', 'login'])
+    expect(dataRequestContract.route.identity_key).toEqual([
+      'terminal_instance_id', 'account_ref.broker_server', 'account_ref.login', 'connection_epoch',
+    ])
+    expect(dataRequestContract.route.account_identity_key).toEqual([
+      'terminal_instance_id', 'account_ref.broker_server', 'account_ref.login', 'trading_account_id',
+    ])
+    expect(dataRequestContract.history_capability_action_map.history_cursor_v1.first_page.required_params)
+      .toEqual(['range_start_utc_msc', 'range_end_utc_msc'])
+    expect(dataRequestContract.history_capability_action_map.history_cursor_v1.continuation.required_params)
+      .toEqual(['range_start_utc_msc', 'range_end_utc_msc', 'history_snapshot_id', 'cursor'])
+    expect(dataRequestContract.history_capability_action_map.history_exact_range_v1.server_resolved_date_inputs)
+      .toEqual({ optional_params:['date_from', 'date_to'], server_resolves_exact_range:true })
+    expect(dataRequestContract.history_capability_action_map.history_exact_range_v1.legacy_date_compatibility)
+      .toBeUndefined()
+    expect(dataRequestContract.classification.session_fatal.categories)
+      .toEqual(expect.arrayContaining([
+        'malformed_envelope', 'unknown_fields_or_members', 'unsupported_protocol_version',
+        'unsupported_message_type', 'invalid_message_id_or_timestamp', 'invalid_terminal',
+        'invalid_account', 'invalid_connection_epoch', 'route_mismatch_or_connection_replaced',
+        'socket_or_auth_failure',
+      ]))
+    expect(dataRequestContract.classification.session_fatal.representative_error_codes)
+      .toEqual(expect.arrayContaining(['bridge_json_invalid', 'bridge_v3_message_invalid',
+        'bridge_message_route_mismatch', 'bridge_auth_failed']))
+    expect(dataRequestContract.classification.request_rejected.categories)
+      .toEqual(expect.arrayContaining([
+        'valid_route_unknown_action', 'params_invalid', 'handler_or_store_error',
+        'cursor_expired_or_invalid', 'range_incomplete_or_invalid', 'maintenance_unavailable',
+      ]))
+    expect(dataRequestContract.classification.request_rejected.representative_error_codes)
+      .toEqual(expect.arrayContaining(['bridge_v3_action_unsupported', 'history_params_invalid',
+        'history_cursor_invalid', 'bridge_history_temporarily_unavailable']))
+    expect(dataRequestContract.classification.transport_state.categories)
+      .toEqual(expect.arrayContaining(['timeout', 'send_failed', 'disconnected']))
+    expect(dataRequestContract.classification.transport_state.representative_error_codes)
+      .toEqual(expect.arrayContaining(['bridge_data_request_disconnected', 'bridge_data_request_timeout']))
+    expect(dataRequestContract.classification.request_rejected.transport_state).toBeUndefined()
+    expect(dataRequestContract.classification.request_rejected.representative_error_codes)
+      .not.toContain('bridge_data_request_disconnected')
+  })
+
   it('accepts one hello containing unique MT4 and MT5 terminal routes', () => {
     const hello = envelope('hello', {
       session_id:'session_01JBRIDGE01',

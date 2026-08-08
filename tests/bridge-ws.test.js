@@ -53,7 +53,8 @@ vi.mock('jsonwebtoken', () => ({
   },
 }))
 
-const { mockBridgeV3Business } = vi.hoisted(() => ({
+const { mockBridgeV3Business, mockHistoryReadsEnabled } = vi.hoisted(() => ({
+  mockHistoryReadsEnabled: vi.fn(() => true),
   mockBridgeV3Business: {
     hasConnectedTerminal: vi.fn(() => false),
     isTradeEnabled: vi.fn(() => false),
@@ -67,6 +68,11 @@ const { mockBridgeV3Business } = vi.hoisted(() => ({
 
 vi.mock('../server/bridge-v3/business-adapter.js', () => ({
   createBridgeV3BusinessAdapter: vi.fn(() => mockBridgeV3Business),
+  isBridgeHistoryReadsEnabled: mockHistoryReadsEnabled,
+  bridgeHistoryTemporarilyUnavailableResult: vi.fn(() => ({
+    status:'error', code:'bridge_history_temporarily_unavailable',
+    error:'bridge_history_temporarily_unavailable', message:'bridge_history_temporarily_unavailable',
+  })),
 }))
 
 import { WebSocketServer } from 'ws'
@@ -114,6 +120,8 @@ import {
   buildObserverBrowserPayload,
   createBrowserAutoExecuteGuard,
   isBrowserSocketRegistered,
+  buildBridgeTerminalIdentity,
+  classifyBridgeIdentityEvent,
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
@@ -394,6 +402,19 @@ describe('bridge history range/export completeness contract', () => {
       historySync:{ archive_complete:true, complete:true },
     })).toBe(false)
   })
+
+  it('classifies an unchanged terminal identity as a reconnect', () => {
+    const terminal = {
+      terminal_instance_id:'terminal_identity_1',
+      account_ref:{ broker_server:'Broker-Demo', login:'12345678' },
+    }
+    const identity = buildBridgeTerminalIdentity({ userId:42, terminal, accountId:7 })
+    expect(classifyBridgeIdentityEvent(identity, { ...identity })).toBe('bridge_reconnected')
+    expect(classifyBridgeIdentityEvent(identity, {
+      ...identity, login:'87654321',
+    })).toBe('account_switched')
+    expect(classifyBridgeIdentityEvent(null, identity)).toBe('account_switched')
+  })
 })
 
 describe('history protection display evidence', () => {
@@ -544,12 +565,14 @@ describe('history export signal association', () => {
 describe('initBridgeWS', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockHistoryReadsEnabled.mockReturnValue(true)
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
     mockBridgeV3Business.isTradeEnabled.mockReturnValue(false)
     mockBridgeV3Business.connectedTerminals.mockReturnValue([])
     mockBridgeV3Business.connectedUsers.mockReturnValue([])
   })
   afterEach(() => {
+    mockHistoryReadsEnabled.mockReturnValue(true)
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
     mockBridgeV3Business.isTradeEnabled.mockReturnValue(false)
     mockBridgeV3Business.connectedTerminals.mockReturnValue([])
@@ -704,6 +727,36 @@ describe('initBridgeWS', () => {
     const response = JSON.parse(browserWs.send.mock.calls.at(-1)[0])
     expect(response).toMatchObject({ status:'error', code:'bridge_history_exact_range_unsupported' })
     expect(mockBridgeV3Business.execute).not.toHaveBeenCalled()
+    browserWs.emit('close')
+  })
+
+  it('returns stable history maintenance without dispatching or closing the browser socket', async () => {
+    mockHistoryReadsEnabled.mockReturnValue(false)
+    queryOne.mockResolvedValue({
+      id:42, role:'admin', plan:'pro', plan_expires_at:null,
+      plan_source:null, connection_enabled:1,
+    })
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection').at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-maintenance', action:'history_chart_data', params:{},
+    }))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalled(), { timeout:5_000 })
+    expect(JSON.parse(browserWs.send.mock.calls.at(-1)[0])).toMatchObject({
+      status:'error', code:'bridge_history_temporarily_unavailable',
+    })
+    expect(mockBridgeV3Business.execute).not.toHaveBeenCalled()
+    expect(browserWs.close).not.toHaveBeenCalled()
     browserWs.emit('close')
   })
 

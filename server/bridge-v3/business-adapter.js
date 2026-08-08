@@ -20,6 +20,24 @@ const DEFAULT_FRESHNESS_MS = 30_000
 const MAX_HISTORY_EVIDENCE_REFS = 100
 const MAX_LEGACY_HISTORY_PAGE = 500
 const MAX_ORDER_LOOKUP_SECONDS = 30 * 24 * 60 * 60
+const HISTORY_READ_ACTIONS = new Set([
+  'history', 'history_page', 'history_evidence', 'chart_data', 'history_chart_data', 'export_history',
+])
+export const BRIDGE_HISTORY_TEMPORARILY_UNAVAILABLE = 'bridge_history_temporarily_unavailable'
+
+export function isBridgeHistoryReadsEnabled() {
+  const value = String(process.env.BRIDGE_HISTORY_READS_ENABLED ?? '').trim().toLowerCase()
+  return !['false', '0', 'off', 'disabled'].includes(value)
+}
+
+export function bridgeHistoryTemporarilyUnavailableResult() {
+  return {
+    status:'error',
+    code:BRIDGE_HISTORY_TEMPORARILY_UNAVAILABLE,
+    error:BRIDGE_HISTORY_TEMPORARILY_UNAVAILABLE,
+    message:BRIDGE_HISTORY_TEMPORARILY_UNAVAILABLE,
+  }
+}
 
 function adapterError(code) {
   return Object.assign(new Error(code), { code })
@@ -660,7 +678,8 @@ export function createBridgeV3BusinessAdapter({
       || !Number.isSafeInteger(allowed.range_end_utc_msc)
       || allowed.range_end_utc_msc <= 0
       || allowed.range_end_utc_msc > now() + 60_000)) {
-      // Compatibility mode for an older date_from + fixed endpoint request.
+      // Date inputs are resolved server-side; a fixed endpoint still requires
+      // the corresponding exact range boundary.
       throw adapterError('history_range_invalid')
     }
     if (action === 'pending_order_state' && !/^\d{1,32}$/.test(allowed.ticket || '')) {
@@ -906,6 +925,9 @@ export function createBridgeV3BusinessAdapter({
 
   async function execute(userId, action, params = {}, options = {}) {
     const timeoutMs = options.timeoutMs ?? 5_000
+    if (HISTORY_READ_ACTIONS.has(action) && !isBridgeHistoryReadsEnabled()) {
+      return bridgeHistoryTemporarilyUnavailableResult()
+    }
     if (!SUPPORTED_ACTIONS.has(action)) throw adapterError('bridge_v3_action_unsupported')
     try {
       if (action === 'toggle_trade') {
