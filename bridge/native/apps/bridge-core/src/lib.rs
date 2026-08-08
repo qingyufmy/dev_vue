@@ -6,7 +6,8 @@ use bridge_contract::{
     CommandResultMessage, DataRequestMessage, HISTORY_CURSOR_CAPABILITY,
     HISTORY_EVIDENCE_CAPABILITY, HISTORY_EXACT_RANGE_CAPABILITY, HelloMessage, QuoteRequestMessage,
     SERVER_DATA_QUEUE_CAPACITY, SERVER_PROTOCOL_VERSION, SERVER_TRADE_QUEUE_CAPACITY,
-    TerminalDescriptor, TerminalStreamFreshness,
+    TerminalDescriptor, TerminalStreamFreshness, is_supported_data_request_action,
+    same_terminal_route,
 };
 use bridge_foundation::{
     BridgeProfilePaths, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH, resolve_profile_paths,
@@ -574,6 +575,43 @@ impl ActiveMt5Sessions {
         }
         Ok(session)
     }
+
+    fn data_session_for_route<'a>(
+        &'a self,
+        request: &DataRequestMessage,
+    ) -> Result<PreparedDataSession<'a>, TransportError> {
+        if let Some(session) = self.mt4_sessions.get(&request.terminal_instance_id) {
+            if !same_terminal_route(
+                &session.handle.route().terminal_instance_id,
+                &session.handle.route().account_ref,
+                session.handle.route().connection_epoch,
+                &request.terminal_instance_id,
+                &request.account_ref,
+                request.connection_epoch,
+            ) {
+                return Err(TransportError::from_static_code(
+                    "bridge_message_route_mismatch",
+                ));
+            }
+            return Ok(PreparedDataSession::Mt4(session));
+        }
+
+        let session =
+            self.session_for_route(&request.terminal_instance_id, request.connection_epoch)?;
+        if !same_terminal_route(
+            &session.handle.route().terminal_instance_id,
+            &session.handle.route().account_ref,
+            session.handle.route().connection_epoch,
+            &request.terminal_instance_id,
+            &request.account_ref,
+            request.connection_epoch,
+        ) {
+            return Err(TransportError::from_static_code(
+                "bridge_message_route_mismatch",
+            ));
+        }
+        Ok(PreparedDataSession::Mt5(session))
+    }
 }
 
 impl TerminalFreshnessProvider for ActiveMt5Sessions {
@@ -631,6 +669,10 @@ impl InboundEventSink for ActiveMt5Sessions {
 }
 
 impl InboundDataHandler for ActiveMt5Sessions {
+    fn validate_route(&self, request: &DataRequestMessage) -> Result<(), TransportError> {
+        self.data_session_for_route(request).map(|_| ())
+    }
+
     fn handle<'a>(
         &'a self,
         request: &'a DataRequestMessage,
@@ -640,89 +682,38 @@ impl InboundDataHandler for ActiveMt5Sessions {
         >,
     > {
         let prepared = (|| {
-            if !matches!(
-                request.action.as_str(),
-                "history"
-                    | "history_page"
-                    | "history_evidence"
-                    | "rates"
-                    | "symbols"
-                    | "chart_data"
-                    | "symbol_snapshot"
-                    | "risk_snapshot"
-                    | "performance_daily"
-                    | "pending_order_state"
-                    | "diagnostics"
-            ) {
+            // Keep the exact route check shared with the transport's
+            // pre-dispatch validation.  Action and params are checked only
+            // after the route is authenticated so malformed requests cannot
+            // bypass the session boundary.
+            let session = self.data_session_for_route(request)?;
+            if core_data_action_handler(&request.action).is_none() {
                 return Err(TransportError::from_static_code(
                     "terminal_data_action_unavailable",
                 ));
             }
-            if let Some(session) = self.mt4_sessions.get(&request.terminal_instance_id) {
-                let route = session.handle.route();
-                if route.connection_epoch != request.connection_epoch
-                    || route.account_ref.login != request.account_ref.login
-                    || !route
-                        .account_ref
-                        .broker_server
-                        .eq_ignore_ascii_case(&request.account_ref.broker_server)
-                {
-                    return Err(TransportError::from_static_code(
-                        "bridge_message_route_mismatch",
-                    ));
-                }
-                if matches!(
-                    request.action.as_str(),
-                    "history" | "history_page" | "chart_data"
-                ) && request
-                    .params
-                    .get("force_refresh")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
-                {
-                    session.handle.request_history_refresh();
-                }
-                return Ok((
-                    Arc::clone(&self.store),
-                    TerminalDescriptor {
-                        terminal_instance_id: route.terminal_instance_id.clone(),
-                        platform: route.platform.clone(),
-                        account_ref: route.account_ref.clone(),
-                        connection_epoch: route.connection_epoch,
-                        worker_version: None,
-                    },
-                    request.params.clone(),
-                    request.request_id.clone(),
-                    request.action.clone(),
-                    PreparedDataSession::Mt4(session),
-                    if matches!(
-                        request.action.as_str(),
-                        "history" | "history_page" | "history_evidence" | "chart_data"
-                    ) {
-                        let now = (self.clock)();
-                        if now <= 0 {
-                            return Err(TransportError::from_static_code(
-                                "terminal_data_clock_invalid",
-                            ));
-                        }
-                        Some(now)
-                    } else {
-                        None
-                    },
+            if !request.params.is_object() {
+                return Err(TransportError::from_static_code(
+                    "bridge_data_request_invalid",
                 ));
             }
-            let session =
-                self.session_for_route(&request.terminal_instance_id, request.connection_epoch)?;
-            let route = session.handle.route();
-            if route.account_ref.login != request.account_ref.login
-                || !route
-                    .account_ref
-                    .broker_server
-                    .eq_ignore_ascii_case(&request.account_ref.broker_server)
+            let route = match session {
+                PreparedDataSession::Mt4(session) => session.handle.route(),
+                PreparedDataSession::Mt5(session) => session.handle.route(),
+            };
+            if matches!(
+                request.action.as_str(),
+                "history" | "history_page" | "chart_data"
+            ) && request
+                .params
+                .get("force_refresh")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
             {
-                return Err(TransportError::from_static_code(
-                    "bridge_message_route_mismatch",
-                ));
+                match session {
+                    PreparedDataSession::Mt4(session) => session.handle.request_history_refresh(),
+                    PreparedDataSession::Mt5(session) => session.handle.request_history_refresh(),
+                }
             }
             let history_now = if matches!(
                 request.action.as_str(),
@@ -750,7 +741,7 @@ impl InboundDataHandler for ActiveMt5Sessions {
                 request.params.clone(),
                 request.request_id.clone(),
                 request.action.clone(),
-                PreparedDataSession::Mt5(session),
+                session,
                 history_now,
             ))
         })();
@@ -984,6 +975,32 @@ fn validate_quote_route(
 
 fn data_action_is_cacheable(action: &str) -> bool {
     matches!(action, "rates" | "symbols" | "performance_daily")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CoreDataActionHandler {
+    HistoryArchive,
+    HistoryPage,
+    HistoryEvidence,
+    HistoryChart,
+    CachedTerminalData,
+    TerminalData,
+}
+
+fn core_data_action_handler(action: &str) -> Option<CoreDataActionHandler> {
+    match action {
+        "history" => Some(CoreDataActionHandler::HistoryArchive),
+        "history_page" => Some(CoreDataActionHandler::HistoryPage),
+        "history_evidence" => Some(CoreDataActionHandler::HistoryEvidence),
+        "chart_data" => Some(CoreDataActionHandler::HistoryChart),
+        action if data_action_is_cacheable(action) => {
+            Some(CoreDataActionHandler::CachedTerminalData)
+        }
+        action if is_supported_data_request_action(action) => {
+            Some(CoreDataActionHandler::TerminalData)
+        }
+        _ => None,
+    }
 }
 
 fn prepare_mt5_history_request(
@@ -2334,7 +2351,10 @@ fn random_id(prefix: &str) -> Result<String, TransportError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bridge_contract::{AccountRef, CommandMessage, DataDeltaMessage, ExecutionEvidence};
+    use bridge_contract::{
+        AccountRef, CommandMessage, DataDeltaMessage, ExecutionEvidence,
+        data_request_action_for_capability,
+    };
     use bridge_security_win::BridgeCredential;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2392,6 +2412,12 @@ mod tests {
                 .iter()
                 .any(|value| value == HISTORY_CURSOR_CAPABILITY)
         );
+        for capability in [HISTORY_CURSOR_CAPABILITY, HISTORY_EVIDENCE_CAPABILITY] {
+            let action =
+                data_request_action_for_capability(capability).expect("history capability action");
+            assert!(is_supported_data_request_action(action));
+            assert!(core_data_action_handler(action).is_some());
+        }
     }
 
     fn reconciliation_route_fixture(epoch: i64) -> WorkerRoute {

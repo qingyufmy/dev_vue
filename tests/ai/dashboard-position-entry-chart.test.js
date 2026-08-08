@@ -75,7 +75,7 @@ describe('dashboard current-position entry markers', () => {
     const navStart = app.lastIndexOf('document.querySelectorAll(".nav-item").forEach((button) => {')
     const navEnd = app.indexOf('document.querySelectorAll("[data-model-strategy-tab]")', navStart)
     const navBlock = app.slice(navStart, navEnd)
-    const refreshStart = app.indexOf('async function refreshTabData(tabId)')
+    const refreshStart = app.indexOf('async function refreshTabData(tabId, options = {})')
     const refreshEnd = app.indexOf('async function withBusy', refreshStart)
     const refreshBlock = app.slice(refreshStart, refreshEnd)
     expect(navBlock).toContain('button.dataset.tab === "ai-analyze" ? { selectLatest:true } : {}')
@@ -88,7 +88,7 @@ describe('dashboard current-position entry markers', () => {
   })
 
   it('restarts both dashboard K-line timers and validates the broker volume bar timestamp', () => {
-    const refreshStart = app.indexOf('async function refreshTabData(tabId)')
+    const refreshStart = app.indexOf('async function refreshTabData(tabId, options = {})')
     const refreshEnd = app.indexOf('async function withBusy', refreshStart)
     const refreshBlock = app.slice(refreshStart, refreshEnd)
     const dashboardStart = refreshBlock.indexOf('} else if (tabId === "dashboard")')
@@ -168,7 +168,7 @@ describe('shared current-position table contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const responsiveVersion = html.match(/responsive\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z._-]+)/i)?.[1]
-    expect(stylesheetVersion).toBe('20260807history1')
+    expect(stylesheetVersion).toBe('20260809historyreconnect1')
     expect(responsiveVersion).toBe(stylesheetVersion)
     expect(appVersion).toBe(stylesheetVersion)
   })

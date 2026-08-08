@@ -1,0 +1,122 @@
+{
+  "contract": "bridge-data-request-v1",
+  "protocol_version": 3,
+  "message_type": "data_request",
+  "data_request_actions": [
+    "rates",
+    "symbol_snapshot",
+    "risk_snapshot",
+    "performance_daily",
+    "symbols",
+    "history",
+    "history_page",
+    "history_evidence",
+    "chart_data",
+    "pending_order_state",
+    "diagnostics"
+  ],
+  "history_capability_action_map": {
+    "history_exact_range_v1": {
+      "actions": ["history", "history_page", "history_evidence", "chart_data"],
+      "required_route_fields": ["terminal_instance_id", "account_ref", "connection_epoch"],
+      "required_params": ["range_start_utc_msc", "range_end_utc_msc"],
+      "server_resolved_date_inputs": {
+        "optional_params": ["date_from", "date_to"],
+        "server_resolves_exact_range": true
+      }
+    },
+    "history_cursor_v1": {
+      "actions": ["history_page"],
+      "required_route_fields": ["terminal_instance_id", "account_ref", "connection_epoch"],
+      "first_page": {
+        "required_params": ["range_start_utc_msc", "range_end_utc_msc"]
+      },
+      "continuation": {
+        "required_params": ["range_start_utc_msc", "range_end_utc_msc", "history_snapshot_id", "cursor"]
+      }
+    },
+    "history_evidence_v1": {
+      "actions": ["history_evidence"],
+      "required_route_fields": ["terminal_instance_id", "account_ref", "connection_epoch"],
+      "required_params": ["range_start_utc_msc", "range_end_utc_msc"],
+      "requires_one_of": ["evidence_position_ids", "evidence_order_tickets"]
+    }
+  },
+  "route": {
+    "required_fields": ["terminal_instance_id", "account_ref", "connection_epoch"],
+    "account_ref_required_fields": ["broker_server", "login"],
+    "identity_key": ["terminal_instance_id", "account_ref.broker_server", "account_ref.login", "connection_epoch"],
+    "account_identity_key": ["terminal_instance_id", "account_ref.broker_server", "account_ref.login", "trading_account_id"]
+  },
+  "classification": {
+    "session_fatal": {
+      "categories": [
+        "malformed_envelope",
+        "unknown_fields_or_members",
+        "unsupported_protocol_version",
+        "unsupported_message_type",
+        "invalid_message_id_or_timestamp",
+        "invalid_terminal",
+        "invalid_account",
+        "invalid_connection_epoch",
+        "route_mismatch_or_connection_replaced",
+        "socket_or_auth_failure"
+      ],
+      "representative_error_codes": [
+        "bridge_json_invalid",
+        "bridge_v3_message_invalid",
+        "bridge_message_type_unexpected",
+        "bridge_terminal_id_invalid",
+        "bridge_account_ref_invalid",
+        "bridge_connection_epoch_invalid",
+        "bridge_message_route_mismatch",
+        "bridge_connection_replaced",
+        "bridge_hello_required",
+        "bridge_hello_duplicate",
+        "bridge_inbound_queue_overflow",
+        "bridge_auth_failed",
+        "bridge_ticket_required",
+        "bridge_session_revoked",
+        "bridge_membership_required",
+        "bridge_runtime_paused"
+      ]
+    },
+    "request_rejected": {
+      "categories": [
+        "valid_route_unknown_action",
+        "params_invalid",
+        "handler_or_store_error",
+        "cursor_expired_or_invalid",
+        "range_incomplete_or_invalid",
+        "maintenance_unavailable"
+      ],
+      "representative_error_codes": [
+        "bridge_v3_action_unsupported",
+        "history_params_invalid",
+        "history_pagination_invalid",
+        "bridge_snapshot_stale",
+        "bridge_snapshot_unavailable",
+        "bridge_history_route_required",
+        "bridge_history_route_ambiguous",
+        "bridge_history_exact_range_unsupported",
+        "bridge_history_range_invalid",
+        "history_range_invalid",
+        "history_cursor_invalid",
+        "bridge_history_ownership_unavailable",
+        "bridge_history_temporarily_unavailable",
+        "bridge_maintenance",
+        "bridge_maintenance_unavailable"
+      ]
+    },
+    "transport_state": {
+      "categories": ["timeout", "send_failed", "disconnected", "capacity_or_duplicate"],
+      "representative_error_codes": [
+        "bridge_data_request_timeout",
+        "bridge_data_request_send_failed",
+        "bridge_data_request_disconnected",
+        "bridge_data_request_capacity_exceeded",
+        "bridge_data_request_duplicate"
+      ]
+    }
+  }
+}

@@ -3,7 +3,7 @@ use crate::{DataAckDisposition, NativeCommandAdmission, OutboxPump, TransportErr
 use bridge_command::CommandDispatcher;
 use bridge_contract::{
     BridgeEnvelope, CommandMessage, DataRequestMessage, DataResponseMessage, QuoteMessage,
-    QuoteRequestMessage, TerminalDescriptor,
+    QuoteRequestMessage, TerminalDescriptor, is_supported_data_request_action,
 };
 use serde::Deserialize;
 use std::future::Future;
@@ -37,6 +37,14 @@ pub trait InboundEventSink: Send + Sync {
 }
 
 pub trait InboundDataHandler: Send + Sync {
+    /// Validate the request against the currently authenticated session route.
+    ///
+    /// This is deliberately separate from action/parameter validation.  The
+    /// router calls it before classifying an unknown action or malformed
+    /// params as a request-level rejection, so a forged terminal/account/epoch
+    /// can never be downgraded into a harmless data response.
+    fn validate_route(&self, request: &DataRequestMessage) -> Result<(), TransportError>;
+
     fn handle<'a>(
         &'a self,
         request: &'a DataRequestMessage,
@@ -246,15 +254,29 @@ impl NativeInboundRouter {
             "data_request" => {
                 let request: DataRequestMessage = serde_json::from_str(payload_json)
                     .map_err(|_| TransportError::new("bridge_data_request_invalid"))?;
-                request.validate().map_err(TransportError::new)?;
+                request.validate_envelope().map_err(TransportError::new)?;
                 let Some(handler) = &self.data_handler else {
                     return Err(TransportError::new("native_bridge_runtime_not_ready"));
+                };
+                // Route validation must precede action/params classification.
+                // Otherwise an invalid route could receive a correlated
+                // rejected response and remain on the session.
+                handler.validate_route(&request)?;
+                let request_error = if !is_supported_data_request_action(&request.action) {
+                    Some("terminal_data_action_unavailable")
+                } else if !request.params.is_object() {
+                    Some("bridge_data_request_invalid")
+                } else {
+                    None
                 };
                 let observed_at = (self.clock)();
                 if observed_at <= 0 {
                     return Err(TransportError::new("bridge_message_timestamp_invalid"));
                 }
-                let result = handler.handle(&request).await;
+                let result = match request_error {
+                    Some(error_code) => Err(TransportError::new(error_code)),
+                    None => handler.handle(&request).await,
+                };
                 let sequence = self.response_sequence.fetch_add(1, Ordering::Relaxed);
                 let response = match result {
                     Ok(payload) => DataResponseMessage {
@@ -563,6 +585,20 @@ mod tests {
     }
 
     impl InboundDataHandler for HistoryDataHandler {
+        fn validate_route(&self, request: &DataRequestMessage) -> Result<(), TransportError> {
+            if request.terminal_instance_id != "mt5_terminal_01"
+                || request.connection_epoch != 7
+                || request.account_ref.login != "123456"
+                || !request
+                    .account_ref
+                    .broker_server
+                    .eq_ignore_ascii_case("Broker-Demo")
+            {
+                return Err(TransportError::new("bridge_message_route_mismatch"));
+            }
+            Ok(())
+        }
+
         fn handle<'a>(
             &'a self,
             request: &'a DataRequestMessage,
@@ -571,6 +607,14 @@ mod tests {
             Box::pin(async move {
                 if request.action != "history" {
                     return Err(TransportError::new("terminal_data_action_unavailable"));
+                }
+                if request
+                    .params
+                    .get("reject")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                {
+                    return Err(TransportError::new("history_cursor_expired"));
                 }
                 Ok(serde_json::json!({
                     "orders": [],
@@ -618,6 +662,107 @@ mod tests {
             2
         );
         assert!(store.records.lock().expect("records").is_empty());
+    }
+
+    fn data_request_fixture(action: &str, params: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "v": 3,
+            "type": "data_request",
+            "message_id": "message_01JDATAREQ02",
+            "sent_at_utc_msc": 1_700_000_000_000_i64,
+            "request_id": "data_01JDATAREQ002",
+            "terminal_instance_id": "mt5_terminal_01",
+            "account_ref": { "broker_server": "Broker-Demo", "login": "123456" },
+            "connection_epoch": 7,
+            "action": action,
+            "params": params
+        })
+    }
+
+    #[tokio::test]
+    async fn data_request_business_rejections_are_correlated_and_do_not_use_outbox() {
+        let store = Arc::new(FakeOutbox::default());
+        let router = router(store.clone(), Arc::new(CapturingEvents::default()))
+            .with_data_handler(Arc::new(HistoryDataHandler));
+        for (request, expected_code) in [
+            (
+                data_request_fixture("future_action", serde_json::json!({})),
+                "terminal_data_action_unavailable",
+            ),
+            (
+                data_request_fixture("history", serde_json::json!(["not-an-object"])),
+                "bridge_data_request_invalid",
+            ),
+            (
+                data_request_fixture("history", serde_json::json!({ "reject": true })),
+                "history_cursor_expired",
+            ),
+        ] {
+            let request_for_validation: DataRequestMessage =
+                serde_json::from_value(request.clone()).expect("request");
+            let outbound = router
+                .route(&request.to_string())
+                .await
+                .expect("request-level rejection")
+                .expect("rejected response");
+            let response: DataResponseMessage =
+                serde_json::from_str(&outbound.payload_json).expect("data response");
+            response
+                .validate_for(&request_for_validation)
+                .expect("correlated rejection");
+            assert_eq!(response.status, "rejected");
+            assert_eq!(response.error_code.as_deref(), Some(expected_code));
+        }
+        assert!(store.records.lock().expect("records").is_empty());
+    }
+
+    #[tokio::test]
+    async fn data_request_route_mismatch_is_session_fatal_before_business_rejection() {
+        let router = router(
+            Arc::new(FakeOutbox::default()),
+            Arc::new(CapturingEvents::default()),
+        )
+        .with_data_handler(Arc::new(HistoryDataHandler));
+        let mut request = data_request_fixture("future_action", serde_json::json!({}));
+        request["connection_epoch"] = serde_json::json!(8);
+        assert_eq!(
+            router
+                .route(&request.to_string())
+                .await
+                .expect_err("route mismatch must close the session")
+                .code(),
+            "bridge_message_route_mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_data_request_is_session_fatal() {
+        let router = router(
+            Arc::new(FakeOutbox::default()),
+            Arc::new(CapturingEvents::default()),
+        )
+        .with_data_handler(Arc::new(HistoryDataHandler));
+        let mut unknown_field = data_request_fixture("history", serde_json::json!({}));
+        unknown_field["unexpected"] = serde_json::json!(true);
+        assert_eq!(
+            router
+                .route(&unknown_field.to_string())
+                .await
+                .expect_err("unknown fields are fatal")
+                .code(),
+            "bridge_data_request_invalid"
+        );
+
+        let mut invalid_id = data_request_fixture("history", serde_json::json!({}));
+        invalid_id["request_id"] = serde_json::json!("bad");
+        assert_eq!(
+            router
+                .route(&invalid_id.to_string())
+                .await
+                .expect_err("invalid request id is fatal")
+                .code(),
+            "bridge_message_id_invalid"
+        );
     }
 
     #[tokio::test]

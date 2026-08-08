@@ -1312,6 +1312,40 @@ describe('Bridge v3 websocket gateway', () => {
     expect(dependencies.createLedgerEntry).not.toHaveBeenCalled()
   })
 
+  it('resolves a rejected data response without disconnecting the registered bridge', async () => {
+    const { gateway, dependencies } = setup()
+    const ws = await connect(gateway)
+    ws.emit('message', Buffer.from(JSON.stringify(hello())))
+    await flush()
+
+    const rejectedRequest = dataRequest({ request_id:'data_01JGATEWAY_REJECTED' })
+    const rejected = gateway.requestData(42, rejectedRequest)
+    await flush()
+    ws.emit('message', Buffer.from(JSON.stringify(dataResponse({
+      request_id:rejectedRequest.request_id,
+      status:'rejected',
+      payload:undefined,
+      error_code:'bridge_history_temporarily_unavailable',
+    }))))
+    await expect(rejected).resolves.toMatchObject({
+      status:'rejected', error_code:'bridge_history_temporarily_unavailable',
+    })
+    expect(gateway.pendingDataRequests.size).toBe(0)
+    expect(gateway.listConnectedTerminals(42)).toEqual([
+      expect.objectContaining({ terminal_instance_id:'terminal_01JGATEWAY1' }),
+    ])
+    expect(dependencies.disconnectTerminals).not.toHaveBeenCalled()
+
+    const nextRequest = dataRequest({ request_id:'data_01JGATEWAY_NEXT' })
+    const next = gateway.requestData(42, nextRequest)
+    await flush()
+    ws.emit('message', Buffer.from(JSON.stringify(dataResponse({
+      request_id:nextRequest.request_id,
+    }))))
+    await expect(next).resolves.toMatchObject({ status:'succeeded' })
+    expect(gateway.listConnectedTerminals(42)).toHaveLength(1)
+  })
+
   it('rejects an offline or timed-out transient quote without persisting it', async () => {
     vi.useFakeTimers()
     try {

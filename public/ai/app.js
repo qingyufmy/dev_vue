@@ -106,6 +106,17 @@ let _historyChartCache = null; // { filters: string, data: object }
 let _historyCursorState = {
   key:null, snapshotId:null, rangeStart:null, rangeEnd:null, pageCursors:new Map([[1, null]]),
 };
+const _historyTableFlights = new Map();
+const _historyChartFlights = new Map();
+const _historyViewsFlights = new Map();
+const _historyCircuitBreakers = new Map();
+const _historyErrorNotices = new Map();
+const HISTORY_CIRCUIT_BREAKER_CODES = new Set([
+  'bridge_data_request_disconnected',
+  'bridge_history_route_required',
+  'bridge_history_temporarily_unavailable',
+]);
+const HISTORY_CIRCUIT_BREAKER_TTL_MS = 5000;
 let _prevPositionCount = 0;
 let _sessionInvalidating = false;
 
@@ -1442,6 +1453,10 @@ function clampPage(page, pageSize, total) {
 }
 
 const API_ERROR_MESSAGES = {
+  bridge_data_request_disconnected: "桥接连接已中断，历史数据读取未完成，请稍后重试",
+  browser_websocket_disconnected: "实时连接已中断，请稍后重试",
+  bridge_history_route_required: "当前账户路由尚未准备好，请稍后重试",
+  bridge_history_temporarily_unavailable: "历史数据正在维护，请稍后再试",
   model_task_status_unknown: "模型服务商状态暂不可确认，系统正在安全恢复并避免重复请求",
   model_task_active: "上一轮模型任务仍在运行，请等待完成",
   model_task_cooldown: "本轮模型任务已完成，请等待完整配置周期",
@@ -1821,6 +1836,9 @@ function stopRealtimeSync() {
 function clearAccountContextCaches() {
   _historyCache = null;
   _historyChartCache = null;
+  resetHistoryCursorState(null);
+  _historyCircuitBreakers.clear();
+  _historyErrorNotices.clear();
   state.lastQuote = null;
   state.bridgeAccountIdentity = null;
   state.mt5TimezoneOffsetMinutes = null;
@@ -1947,6 +1965,18 @@ async function handleAccountSwitched(msg = {}) {
   if (rejected) console.warn("[AccountSwitch] 部分账户数据刷新失败:", rejected.reason);
 }
 
+async function handleBridgeReconnected(msg = {}) {
+  if (msg.platform) updateBridgePlatformUI(msg.platform);
+  // A transport reconnect with the same terminal/account identity does not
+  // invalidate history cursors or account-scoped caches.  Refresh only the
+  // lightweight live state needed to paint the recovered connection.
+  _historyCircuitBreakers.clear();
+  _historyErrorNotices.clear();
+  await Promise.allSettled([
+    loadStatus(), loadAccount(), loadPositions(), loadPendingOrders(), refreshQuote(),
+  ]);
+}
+
 async function handleAccountTransferred(msg = {}) {
   if (msg.platform) updateBridgePlatformUI(msg.platform);
   state._accountContextGeneration = Number(state._accountContextGeneration || 0) + 1;
@@ -2068,6 +2098,8 @@ function connectBridgeStatusWs(onReady) {
         handleHeartbeat(msg);
       } else if (msg.type === 'disconnect') {
         handleDisconnect(msg);
+      } else if (msg.type === 'bridge_reconnected') {
+        handleBridgeReconnected(msg).catch(error => console.warn('[BridgeReconnect] 状态刷新失败:', error.message));
       } else if (msg.type === 'account_switched') {
         handleAccountSwitched(msg).catch(error => console.warn('[AccountSwitch] 刷新失败:', error.message));
       } else if (msg.type === 'account_transferred') {
@@ -2207,8 +2239,12 @@ function connectBridgeStatusWs(onReady) {
         if (pending) {
           clearTimeout(pending.timer);
           _wsPending.delete(msg.command_id);
-          if (msg.status === 'error') pending.reject(new Error(msg.message || 'Command failed'));
-          else pending.resolve(msg);
+          if (msg.status === 'error') {
+            const code = msg.code || msg.error_code || msg.message;
+            const error = new Error(apiErrorMessage(msg.message || msg.error || code || '操作失败'));
+            error.code = code;
+            pending.reject(error);
+          } else pending.resolve(msg);
         }
       }
     } catch (e) { console.error('[WS] message handler error:', e) }
@@ -2217,7 +2253,12 @@ function connectBridgeStatusWs(onReady) {
     if (state._hbTimer) { clearInterval(state._hbTimer); state._hbTimer = null; }
     if (state.bridgeWs === ws) state.bridgeWs = null;
     stopLiveQuoteRefreshTimer();
-    for (const [id, p] of _wsPending) { clearTimeout(p.timer); p.reject(new Error('WebSocket断开')); }
+    for (const [id, p] of _wsPending) {
+      clearTimeout(p.timer);
+      const error = new Error(apiErrorMessage('browser_websocket_disconnected'));
+      error.code = 'browser_websocket_disconnected';
+      p.reject(error);
+    }
     _wsPending.clear();
     _fireReady(); // ensure bootstrap() doesn't hang when WS fails to connect
     // Auth failure (server closed with 4002) -> don't retry
@@ -2396,8 +2437,8 @@ function handleBridgeData(msg) {
         state._posRefreshTimer = setTimeout(() => {
           loadPositions();
           loadAccount();
-          loadHistory();
-          loadHistoryChart();
+          loadHistory().catch(() => {});
+          loadHistoryChart().catch(() => {});
         }, 500);
       }
     }
@@ -4546,8 +4587,7 @@ function setWorkspaceSubtab(group, target) {
   initIcons();
 }
 
-async function refreshTabData(tabId) {
-  const options = arguments[1] || {};
+async function refreshTabData(tabId, options = {}) {
   if (!state.token) return;
   if (tabId === "trading") {
     await Promise.allSettled([loadAccount(), loadPositions(), loadStatus(), loadPendingOrders(), refreshQuote(), loadPositionManagement({ quiet:true, preserveSelection:true })]);
@@ -4565,7 +4605,11 @@ async function refreshTabData(tabId) {
     startLiveQuoteRefreshTimer();
   } else if (tabId === "history") {
     updateHistoryRangeUI();
-    await loadHistoryViews({ forceRefresh:true, includeAccount:true });
+    if (options.manualRefresh === true) {
+      await loadHistoryViews({ forceRefresh:true, includeAccount:true, manualRefresh:true });
+    } else {
+      await loadHistoryViews({ forceRefresh:true, includeAccount:true });
+    }
   } else if (tabId === "audit") {
     await loadAudit();
   } else if (tabId === "model-strategy") {
@@ -9299,7 +9343,95 @@ function updateHistoryRangeUI() {
   setText("historyRangeHint", `${hints[scope] || hints.recent}${mt4RangeWarning}`);
 }
 
-async function loadHistory(forceRefresh) {
+function historyRefreshContextKey({ forceRefresh = false } = {}) {
+  let range;
+  try {
+    range = getHistoryRangeParams();
+  } catch {
+    range = { history_scope: $("historyRangeMode")?.value || "recent" };
+  }
+  const filters = state.historyFilters || {};
+  return JSON.stringify({
+    generation:Number(state._accountContextGeneration || 0),
+    account:state.bridgeAccountIdentity || null,
+    platform:state.bridgePlatform || "mt5",
+    range,
+    filters:{
+      // Forced refreshes always share the first-page flight, even when a
+      // stale pagination state still points at a later page.
+      page:forceRefresh ? 1 : Number(filters.page || 1),
+      pageSize:Number(filters.pageSize || 20),
+      entry_from:$("filterEntryFrom")?.value || "",
+      entry_to:$("filterEntryTo")?.value || "",
+      direction:$("filterDirection")?.value || "",
+      profit_filter:$("filterProfit")?.value || "",
+    },
+  });
+}
+
+function historyErrorCode(error) {
+  return String(error?.code || error?.error_code || error?.message || "").trim();
+}
+
+function historyCircuitError(code) {
+  const error = new Error(apiErrorMessage(code));
+  error.code = code;
+  return error;
+}
+
+function historyCircuitAllows(key, { manualRefresh = false } = {}) {
+  const current = _historyCircuitBreakers.get(key);
+  if (!current) return true;
+  if (current.expiresAt <= Date.now()) {
+    _historyCircuitBreakers.delete(key);
+    return true;
+  }
+  if (manualRefresh && !current.manualRetried) {
+    current.manualRetried = true;
+    return true;
+  }
+  throw historyCircuitError(current.code);
+}
+
+function rememberHistoryFailure(key, error) {
+  const code = historyErrorCode(error);
+  if (!HISTORY_CIRCUIT_BREAKER_CODES.has(code)) return;
+  const previous = _historyCircuitBreakers.get(key);
+  _historyCircuitBreakers.set(key, {
+    code,
+    generation:Number(state._accountContextGeneration || 0),
+    expiresAt:Date.now() + HISTORY_CIRCUIT_BREAKER_TTL_MS,
+    manualRetried:previous?.code === code && previous.expiresAt > Date.now()
+      ? previous.manualRetried : false,
+  });
+}
+
+function clearHistoryCircuit(key) {
+  _historyCircuitBreakers.delete(key);
+  for (const [noticeKey, noticeFlightKey] of _historyErrorNotices.entries()) {
+    if (noticeFlightKey === key) _historyErrorNotices.delete(noticeKey);
+  }
+}
+
+function notifyHistoryFailure(key, error) {
+  const code = historyErrorCode(error);
+  if (!code) return;
+  const noticeKey = `${Number(state._accountContextGeneration || 0)}:${code}`;
+  if (_historyErrorNotices.has(noticeKey)) return;
+  _historyErrorNotices.set(noticeKey, key);
+  toast(apiErrorMessage(code || error.message || "历史数据读取失败"), "error");
+}
+
+function historyFlightKey(kind, options = {}) {
+  return `${kind}:${historyRefreshContextKey(options)}`;
+}
+
+function loadHistory(forceRefresh, options = {}) {
+  const key = historyFlightKey("table", { forceRefresh:Boolean(forceRefresh) });
+  const existing = _historyTableFlights.get(key);
+  if (existing) return existing;
+  const manualRefresh = options.manualRefresh === true;
+  const run = (async () => {
   try {
     const filters = state.historyFilters;
     const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
@@ -9337,6 +9469,7 @@ async function loadHistory(forceRefresh) {
       return;
     }
 
+    historyCircuitAllows(key, { manualRefresh });
     const cursor = _historyCursorState.pageCursors.get(filters.page) || null;
     const [data] = await Promise.all([
       wsApi("history", {
@@ -9380,11 +9513,20 @@ async function loadHistory(forceRefresh) {
       pageSize:filters.pageSize, snapshot:_historyCursorState.snapshotId });
     _historyCache = { filters:resolvedFilterKey, data };
     _applyHistoryData(data);
+    clearHistoryCircuit(key);
   } catch (e) {
     console.error("loadHistory:", e);
     if (_historyCursorState.snapshotId) resetHistoryCursorState(_historyCursorState.key);
-    toast(e.message || "历史数据读取失败", "error");
+    rememberHistoryFailure(key, e);
+    notifyHistoryFailure(key, e);
+    throw e;
   }
+  })();
+  _historyTableFlights.set(key, run);
+  run.finally(() => {
+    if (_historyTableFlights.get(key) === run) _historyTableFlights.delete(key);
+  }).catch(() => {});
+  return run;
 }
 
 function _applyHistoryData(data) {
@@ -9412,7 +9554,12 @@ function _applyHistoryData(data) {
 }
 
 // Chart and summary use the same explicit history scope as the table.
-async function loadHistoryChart(forceRefresh) {
+function loadHistoryChart(forceRefresh, options = {}) {
+  const key = historyFlightKey("chart", { forceRefresh:Boolean(forceRefresh) });
+  const existing = _historyChartFlights.get(key);
+  if (existing) return existing;
+  const manualRefresh = options.manualRefresh === true;
+  const run = (async () => {
   try {
     const params = getHistoryRangeParams();
 
@@ -9422,35 +9569,49 @@ async function loadHistoryChart(forceRefresh) {
       return;
     }
 
+    historyCircuitAllows(key, { manualRefresh });
     const data = await wsApi("history_chart_data", { ...params, force_refresh:Boolean(forceRefresh) });
     if (data?.status !== 'success') throw new Error(data?.message || data?.error || '历史图表读取失败');
     _historyChartCache = { filters: filterKey, data };
     await ensureChartJs();
     _renderHistoryChart(data);
-  } catch (e) { console.error("loadHistoryChart:", e); }
+    clearHistoryCircuit(key);
+  } catch (e) {
+    console.error("loadHistoryChart:", e);
+    rememberHistoryFailure(key, e);
+    notifyHistoryFailure(key, e);
+    throw e;
+  }
+  })();
+  _historyChartFlights.set(key, run);
+  run.finally(() => {
+    if (_historyChartFlights.get(key) === run) _historyChartFlights.delete(key);
+  }).catch(() => {});
+  return run;
 }
 
-let _historyViewsRefreshPromise = null;
-
-function loadHistoryViews({ forceRefresh = false, includeAccount = false } = {}) {
-  if (forceRefresh && _historyViewsRefreshPromise) return _historyViewsRefreshPromise;
+function loadHistoryViews({ forceRefresh = false, includeAccount = false, manualRefresh = false } = {}) {
+  const key = historyFlightKey("views", { forceRefresh:Boolean(forceRefresh) });
+  const existing = _historyViewsFlights.get(key);
+  if (existing) return existing;
+  const effectiveManualRefresh = manualRefresh;
   const refresh = (async () => {
     if (forceRefresh) {
       _historyCache = null;
       _historyChartCache = null;
     }
-    const initial = [loadHistory(forceRefresh)];
-    if (includeAccount) initial.unshift(loadAccount());
-    await Promise.allSettled(initial);
+    if (includeAccount) await loadAccount();
+    await loadHistory(forceRefresh, { manualRefresh:effectiveManualRefresh });
     // The table owns the single forced terminal sync. The chart then reads the
     // refreshed Bridge archive instead of starting a second simultaneous sync.
-    await loadHistoryChart(false);
+    await loadHistoryChart(false, { manualRefresh:effectiveManualRefresh });
   })();
-  if (!forceRefresh) return refresh;
-  _historyViewsRefreshPromise = refresh.finally(() => {
-    _historyViewsRefreshPromise = null;
+  _historyViewsFlights.set(key, refresh);
+  refresh.finally(() => {
+    if (_historyViewsFlights.get(key) === refresh) _historyViewsFlights.delete(key);
+  }).catch(() => {
   });
-  return _historyViewsRefreshPromise;
+  return refresh;
 }
 
 function historyProtectionCell(row, field) {
@@ -9644,7 +9805,7 @@ function _renderHistoryChart(data) {
         state.historyFilters.page = 1;
         _historyCache = null;
         _historyChartCache = null;
-        loadHistoryViews({ forceRefresh:true });
+        loadHistoryViews({ forceRefresh:true, manualRefresh:true }).catch(() => {});
       },
       plugins: {
         legend: { display: false },
@@ -10043,7 +10204,7 @@ async function refreshTradingPage() {
 }
 
 async function refreshHistoryPage() {
-  await loadHistoryViews({ forceRefresh:true, includeAccount:true });
+  await loadHistoryViews({ forceRefresh:true, includeAccount:true, manualRefresh:true });
 }
 
 async function exportHistory() {
@@ -10888,7 +11049,7 @@ function bindEvents() {
         loadSignalTable();
       } else if (pagerButton.dataset.pager === "history") {
         state.historyFilters.page = page;
-        loadHistory();
+        loadHistory().catch(() => {});
       } else if (pagerButton.dataset.pager === "audit") {
         state.auditFilters.page = page;
         renderAuditRows();
@@ -10919,7 +11080,7 @@ function bindEvents() {
           ? loadSignalTable()
           : loadSignals({ skipResultRender:true, loadDashboard:false }),
         "refresh-analysis-history": () => loadSignals({ skipResultRender:true, loadDashboard:false }),
-        "refresh-history": () => loadHistoryViews({ forceRefresh:true }),
+        "refresh-history": () => loadHistoryViews({ forceRefresh:true, manualRefresh:true }),
         "refresh-trading-page": refreshTradingPage,
         "refresh-history-page": refreshHistoryPage,
         "refresh-audit": loadAudit,
@@ -10946,21 +11107,21 @@ function bindEvents() {
     try { getHistoryRangeParams(); }
     catch (error) { toast(error.message, 'error'); return; }
     state.historyFilters.page = 1;
-    loadHistoryViews({ forceRefresh:true });
+    loadHistoryViews({ forceRefresh:true, manualRefresh:true }).catch(() => {});
   });
   updateHistoryRangeUI();
   // Table filters further narrow trade rows inside the selected history scope.
   document.getElementById('historyFilterApply')?.addEventListener('click', () => {
     state.historyFilters.page = 1;
     _historyCache = null;
-    loadHistory(true);
+    loadHistory(true, { manualRefresh:true }).catch(() => {});
   });
   document.getElementById('historyFilterReset')?.addEventListener('click', () => {
     ['filterEntryFrom','filterEntryTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
     state.historyFilters.page = 1;
     _historyCache = null;
-    loadHistory(true);
+    loadHistory(true, { manualRefresh:true }).catch(() => {});
   });
 }
 

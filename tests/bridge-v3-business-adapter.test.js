@@ -212,6 +212,34 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('fails closed during history maintenance without dispatching any history read', async () => {
+    const previous = process.env.BRIDGE_HISTORY_READS_ENABLED
+    process.env.BRIDGE_HISTORY_READS_ENABLED = 'false'
+    try {
+      const { adapter, gateway } = setup()
+      for (const action of [
+        'history', 'history_page', 'history_evidence', 'chart_data',
+        'history_chart_data', 'export_history',
+      ]) {
+        await expect(adapter.execute(42, action, {
+          page:1, page_size:20,
+          range_start_utc_msc:NOW - 86_400_000,
+          range_end_utc_msc:NOW,
+          history_snapshot_id:'a'.repeat(64),
+          cursor:'b'.repeat(64),
+          evidence_position_ids:['1001'],
+        })).resolves.toMatchObject({
+          status:'error', code:'bridge_history_temporarily_unavailable',
+          error:'bridge_history_temporarily_unavailable',
+        })
+      }
+      expect(gateway.requestData).not.toHaveBeenCalled()
+    } finally {
+      if (previous === undefined) delete process.env.BRIDGE_HISTORY_READS_ENABLED
+      else process.env.BRIDGE_HISTORY_READS_ENABLED = previous
+    }
+  })
+
   it('preserves a strict exact millisecond history range through the data adapter', async () => {
     const { adapter, gateway } = setup({ dataResponse:{
       status:'succeeded', payload:{ orders:[], pagination:{ total_count:0 }, source:'mt5' },

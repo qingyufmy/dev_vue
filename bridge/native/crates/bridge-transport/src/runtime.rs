@@ -403,9 +403,12 @@ async fn heartbeat_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{InboundEventSink, OutboxPersistence};
+    use crate::{InboundDataHandler, InboundEventSink, OutboxPersistence};
+    use bridge_contract::DataRequestMessage;
     use bridge_store::{OutboxRecord, StoreError};
     use std::collections::BTreeMap;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::Mutex;
     use tokio::sync::mpsc;
     use tokio::time::{sleep, timeout};
@@ -471,6 +474,32 @@ mod tests {
             _: crate::ReleaseAvailableNotification,
         ) -> Result<(), TransportError> {
             Ok(())
+        }
+    }
+
+    struct RuntimeDataHandler;
+
+    impl InboundDataHandler for RuntimeDataHandler {
+        fn validate_route(&self, request: &DataRequestMessage) -> Result<(), TransportError> {
+            if request.terminal_instance_id != "mt5_terminal_01"
+                || request.connection_epoch != 1
+                || request.account_ref.login != "123456"
+                || !request
+                    .account_ref
+                    .broker_server
+                    .eq_ignore_ascii_case("Broker-Demo")
+            {
+                return Err(TransportError::new("bridge_message_route_mismatch"));
+            }
+            Ok(())
+        }
+
+        fn handle<'a>(
+            &'a self,
+            _request: &'a DataRequestMessage,
+        ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, TransportError>> + Send + 'a>>
+        {
+            Box::pin(async { Ok(serde_json::json!({ "ok": true })) })
         }
     }
 
@@ -580,10 +609,10 @@ mod tests {
     fn runtime() -> SessionRuntime {
         let queue = PriorityMessageQueue::new(8, 8).expect("queue");
         let outbox = Arc::new(OutboxPump::new(Arc::new(EmptyOutbox), queue.clone(), None));
-        let inbound = Arc::new(NativeInboundRouter::new(
-            Arc::clone(&outbox),
-            Arc::new(EmptyEvents),
-        ));
+        let inbound = Arc::new(
+            NativeInboundRouter::new(Arc::clone(&outbox), Arc::new(EmptyEvents))
+                .with_data_handler(Arc::new(RuntimeDataHandler)),
+        );
         let freshness = Arc::new(|| {
             let mut streams = BTreeMap::new();
             streams.insert("account".to_owned(), 1_700_000_000_000);
@@ -636,6 +665,130 @@ mod tests {
             serde_json::from_str(sent.lock().expect("sent").first().expect("sent heartbeat"))
                 .expect("heartbeat json");
         heartbeat.validate().expect("heartbeat contract");
+        assert!(*closed.lock().expect("closed"));
+    }
+
+    #[tokio::test]
+    async fn rejected_data_request_keeps_session_alive_for_heartbeat_and_next_request() {
+        let (sender, receiver) = mpsc::channel(4);
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let closed = Arc::new(Mutex::new(false));
+        let channel = FakeChannel {
+            session_id: "session_01JRUNTIME".to_owned(),
+            inbound: receiver,
+            sent: Arc::clone(&sent),
+            closed: Arc::clone(&closed),
+            send_error: None,
+        };
+        let cancellation = SessionCancellation::default();
+        let run_cancellation = cancellation.clone();
+        let runtime = runtime();
+        let run = tokio::spawn(async move { runtime.run(channel, run_cancellation).await });
+        let data_request = |request_id: &str, action: &str| {
+            serde_json::json!({
+                "v": 3,
+                "type": "data_request",
+                "message_id": format!("message_{request_id}"),
+                "sent_at_utc_msc": 1_700_000_000_000_i64,
+                "request_id": request_id,
+                "terminal_instance_id": "mt5_terminal_01",
+                "account_ref": { "broker_server": "Broker-Demo", "login": "123456" },
+                "connection_epoch": 1,
+                "action": action,
+                "params": {}
+            })
+            .to_string()
+        };
+        sender
+            .send(Ok(data_request("data_01JREJECT", "unknown_action")))
+            .await
+            .expect("rejected request");
+        sender
+            .send(Ok(serde_json::json!({
+                "v": 3,
+                "type": "heartbeat",
+                "message_id": "heartbeat_01JRUNTIMEIN",
+                "sent_at_utc_msc": 1_700_000_000_002_i64,
+                "session_id": "session_01JRUNTIME",
+                "terminals": []
+            })
+            .to_string()))
+            .await
+            .expect("heartbeat");
+        sender
+            .send(Ok(data_request("data_01JACCEPT", "history")))
+            .await
+            .expect("valid request");
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let responses = sent
+                    .lock()
+                    .expect("sent")
+                    .iter()
+                    .filter(|payload| payload.contains("\"type\":\"data_response\""))
+                    .count();
+                if responses >= 2 {
+                    break;
+                }
+                sleep(Duration::from_millis(2)).await;
+            }
+        })
+        .await
+        .expect("both data responses");
+        assert!(!*closed.lock().expect("closed before cancellation"));
+        let responses = sent
+            .lock()
+            .expect("sent")
+            .iter()
+            .filter_map(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+            .filter(|payload| payload["type"] == "data_response")
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0]["status"], "rejected");
+        assert_eq!(responses[0]["request_id"], "data_01JREJECT");
+        assert_eq!(responses[1]["status"], "succeeded");
+        assert_eq!(responses[1]["request_id"], "data_01JACCEPT");
+
+        cancellation.cancel();
+        run.await.expect("join").expect("clean cancellation");
+        assert!(*closed.lock().expect("closed"));
+    }
+
+    #[tokio::test]
+    async fn fatal_data_route_mismatch_still_ends_the_session() {
+        let (sender, receiver) = mpsc::channel(1);
+        sender
+            .send(Ok(serde_json::json!({
+                "v": 3,
+                "type": "data_request",
+                "message_id": "message_01JROUTEMISMATCH",
+                "sent_at_utc_msc": 1_700_000_000_000_i64,
+                "request_id": "data_01JROUTEMISMATCH",
+                "terminal_instance_id": "mt5_terminal_01",
+                "account_ref": { "broker_server": "Broker-Demo", "login": "123456" },
+                "connection_epoch": 2,
+                "action": "unknown_action",
+                "params": {}
+            })
+            .to_string()))
+            .await
+            .expect("route mismatch");
+        let closed = Arc::new(Mutex::new(false));
+        let error = runtime()
+            .run(
+                FakeChannel {
+                    session_id: "session_01JRUNTIME".to_owned(),
+                    inbound: receiver,
+                    sent: Arc::new(Mutex::new(Vec::new())),
+                    closed: Arc::clone(&closed),
+                    send_error: None,
+                },
+                SessionCancellation::default(),
+            )
+            .await
+            .expect_err("route mismatch must be fatal");
+        assert_eq!(error.code(), "bridge_message_route_mismatch");
         assert!(*closed.lock().expect("closed"));
     }
 

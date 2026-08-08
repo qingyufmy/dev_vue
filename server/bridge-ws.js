@@ -14,7 +14,11 @@ import { getDefaultObserverSource, getDefaultObserverSourceClock, observerSource
 import { tokenVersionMatches } from './middleware/auth.js'
 import { BRIDGE_V3_WS_PATH, createBridgeV3Gateway } from './bridge-v3/gateway.js'
 import { setBridgeReleaseNotifier } from './bridge-v3/release-events.js'
-import { createBridgeV3BusinessAdapter } from './bridge-v3/business-adapter.js'
+import {
+  bridgeHistoryTemporarilyUnavailableResult,
+  createBridgeV3BusinessAdapter,
+  isBridgeHistoryReadsEnabled,
+} from './bridge-v3/business-adapter.js'
 import { createObserverQuoteFeedManager } from './observer-quote-feed.js'
 import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './routes/ai/terminal-clock.js'
 
@@ -38,6 +42,7 @@ let bridgeV3Business = null
 const bridgeV3MarketStates = new Map()
 const bridgeV3TradingAccounts = new Map()
 const bridgeV3PreferredTerminals = new Map()
+const bridgeV3LatestTerminalIdentities = new Map()
 let adminEventSeq = 0
 const adminEventThrottle = new Map()
 
@@ -172,6 +177,31 @@ function bridgeRouteParams(route) {
     terminal_instance_id:route.terminal_instance_id,
     account_ref:route.account_ref,
   } : {}
+}
+
+function bridgeTerminalIdentityKey(userId, terminalInstanceId) {
+  return `${Number(userId)}:${String(terminalInstanceId || '').trim()}`
+}
+
+export function buildBridgeTerminalIdentity({ userId, terminal, accountId } = {}) {
+  return {
+    userId:Number(userId),
+    terminal_instance_id:String(terminal?.terminal_instance_id || '').trim(),
+    broker_server:String(terminal?.account_ref?.broker_server || '').trim().toUpperCase(),
+    login:String(terminal?.account_ref?.login || '').trim(),
+    trading_account_id:Number(accountId) || null,
+  }
+}
+
+export function classifyBridgeIdentityEvent(previous, current) {
+  if (!previous) return 'account_switched'
+  const same = String(previous.terminal_instance_id || '')
+    === String(current?.terminal_instance_id || '')
+    && String(previous.broker_server || '').trim().toUpperCase()
+      === String(current?.broker_server || '').trim().toUpperCase()
+    && String(previous.login || '').trim() === String(current?.login || '').trim()
+    && Number(previous.trading_account_id || 0) === Number(current?.trading_account_id || 0)
+  return same ? 'bridge_reconnected' : 'account_switched'
 }
 
 function observerQuoteDescriptor(dataUserId, observerContext, dataRoute, symbol) {
@@ -314,14 +344,25 @@ async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectio
     queueAccountPerformanceSync(userId, identity.accountId, { recent:false, delayMs:250 })
     queueIncompleteRiskSnapshotRefresh(userId, ai)
   }
-  sendToBrowsers(Number(userId), {
-    type:'account_switched',
+  const latestIdentityKey = bridgeTerminalIdentityKey(userId, terminal.terminal_instance_id)
+  const currentIdentity = buildBridgeTerminalIdentity({
+    userId, terminal, accountId:identity.accountId,
+  })
+  const previousIdentity = bridgeV3LatestTerminalIdentities.get(latestIdentityKey) || null
+  bridgeV3LatestTerminalIdentities.set(latestIdentityKey, currentIdentity)
+  const identityEventType = identity.ownershipTransferred
+    ? 'account_switched'
+    : classifyBridgeIdentityEvent(previousIdentity, currentIdentity)
+  const identityEvent = {
     account:{ id:identity.accountId, server:account.server, login:account.login },
-    switched:Boolean(identity.switched),
+    switched:identityEventType === 'account_switched' && Boolean(identity.switched || previousIdentity),
     ownership_transferred:Boolean(identity.ownershipTransferred),
     verified:Boolean(identity.verified),
     anomaly_code:identity.anomalyCode || null,
-  })
+  }
+  sendToBrowsers(Number(userId), identityEventType === 'account_switched'
+    ? { ...identityEvent, type:'account_switched' }
+    : { ...identityEvent, type:'bridge_reconnected' })
   for (const previousUserId of identity.previousOwnerUserIds || []) {
     sendToBrowsers(previousUserId, {
       type:'account_transferred',
@@ -1567,6 +1608,9 @@ function notifyBridgeV3DataChanged(update = {}) {
 }
 
 const MANUAL_AUTO_EXECUTE_DISCONNECTED = 'manual_auto_execute_request_disconnected'
+const BRIDGE_HISTORY_BROWSER_ACTIONS = new Set([
+  'history', 'history_page', 'history_evidence', 'history_chart_data', 'export_history',
+])
 
 function browserSetForUser(userId) {
   return browsers.get(userId) || browsers.get(Number(userId)) || null
@@ -1663,6 +1707,13 @@ async function handleBrowserCommand(ws, userId, msg) {
         console.error(`[BridgeWS] browser command reply failed command=${command_id}:`, error.message)
       }
     }
+  }
+
+  // History maintenance is an explicit server-side switch.  Reject before
+  // resolving a terminal route so a disabled read cannot dispatch to Bridge,
+  // fall back to an older protocol, or close the browser session.
+  if (BRIDGE_HISTORY_BROWSER_ACTIONS.has(action) && !isBridgeHistoryReadsEnabled()) {
+    return reply(bridgeHistoryTemporarilyUnavailableResult())
   }
 
   try {

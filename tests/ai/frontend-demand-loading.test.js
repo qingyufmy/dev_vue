@@ -57,7 +57,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
   })
 
   it('loads analyst history on entry, while records view owns the paginated table', () => {
-    const tabRefresh = block('async function refreshTabData(tabId)', 'async function withBusy')
+    const tabRefresh = block('async function refreshTabData(tabId, options = {})', 'async function withBusy')
     expect(tabRefresh).toContain('{ selectLatest:true, loadDashboard:false }')
     expect(tabRefresh).toContain('{ skipResultRender:true, loadDashboard:false }')
     expect(tabRefresh).toContain('if (state.analystView === "records")')
@@ -91,7 +91,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
     expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
     expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
-    expect(html).toContain('/ai/app.js?v=20260807history1')
+    expect(html).toContain('/ai/app.js?v=20260809historyreconnect1')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {
