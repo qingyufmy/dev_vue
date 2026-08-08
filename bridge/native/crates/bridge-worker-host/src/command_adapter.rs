@@ -312,6 +312,14 @@ fn map_reconciliation_result(
     now: i64,
     sequence: &AtomicU64,
 ) -> Result<Option<CommandResultMessage>, CommandWorkerError> {
+    if !query_result.matches_reconciliation_route(original) {
+        return Err(CommandWorkerError::new(
+            "worker_reconciliation_result_route_mismatch",
+        ));
+    }
+    query_result
+        .validate()
+        .map_err(|_| CommandWorkerError::new("worker_reconciliation_result_invalid"))?;
     if now <= 0 || query_result.status != "succeeded" {
         return Err(CommandWorkerError::new(
             query_result
@@ -359,9 +367,9 @@ fn map_reconciliation_result(
         ),
         sent_at_utc_msc: now,
         command_id: original.command_id.clone(),
-        terminal_instance_id: original.terminal_instance_id.clone(),
-        account_ref: original.account_ref.clone(),
-        connection_epoch: original.connection_epoch,
+        terminal_instance_id: query_result.terminal_instance_id.clone(),
+        account_ref: query_result.account_ref.clone(),
+        connection_epoch: query_result.connection_epoch,
         status: status.to_owned(),
         completed_at_utc_msc: now,
         error_code,
@@ -440,7 +448,7 @@ mod tests {
     use super::*;
     use crate::{
         ExpectedWorker, WORKER_IPC_VERSION, WorkerCapability, WorkerHello, WorkerOperation,
-        WorkerResponse, read_frame, write_frame,
+        WorkerResponse, WorkerRole, read_frame, write_frame,
     };
     use bridge_contract::{AccountRef, ExecutionEvidence};
     use std::collections::BTreeSet;
@@ -539,6 +547,7 @@ mod tests {
                     session_nonce: NONCE.to_owned(),
                     worker_version: "3.0.0-alpha.1".to_owned(),
                     route: route(),
+                    role: WorkerRole::Live,
                     capabilities: vec![WorkerCapability::QueryExecution],
                 },
             )
@@ -563,6 +572,7 @@ mod tests {
                 ExpectedWorker {
                     session_nonce: NONCE.to_owned(),
                     route: route(),
+                    role: WorkerRole::Live,
                     required_capabilities: BTreeSet::from([WorkerCapability::QueryExecution]),
                 },
                 Duration::from_secs(1),
@@ -663,6 +673,50 @@ mod tests {
                 .as_ref()
                 .and_then(|raw| raw["reconciled"].as_bool()),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn reconciliation_result_uses_forward_worker_route_and_rejects_route_drift() {
+        let original = original_place_command();
+        let sequence = AtomicU64::new(0);
+        let mut succeeded = query_result(&query_command());
+        succeeded.raw_result = Some(serde_json::json!({
+            "found": true,
+            "complete": true,
+            "resolution": { "status": "succeeded" }
+        }));
+        succeeded.connection_epoch = original.connection_epoch + 1;
+        let resolved = map_reconciliation_result(&original, succeeded.clone(), NOW + 4, &sequence)
+            .expect("forward epoch")
+            .expect("resolved result");
+        assert_eq!(resolved.connection_epoch, succeeded.connection_epoch);
+        assert_eq!(
+            resolved.terminal_instance_id,
+            succeeded.terminal_instance_id
+        );
+        assert_eq!(resolved.account_ref, succeeded.account_ref);
+
+        let mut backwards = succeeded.clone();
+        backwards.connection_epoch = original.connection_epoch - 1;
+        assert_eq!(
+            map_reconciliation_result(&original, backwards, NOW + 5, &sequence)
+                .expect_err("epoch regression"),
+            CommandWorkerError::new("worker_reconciliation_result_route_mismatch")
+        );
+        let mut wrong_terminal = succeeded.clone();
+        wrong_terminal.terminal_instance_id = "mt5_terminal_other".to_owned();
+        assert_eq!(
+            map_reconciliation_result(&original, wrong_terminal, NOW + 6, &sequence)
+                .expect_err("terminal drift"),
+            CommandWorkerError::new("worker_reconciliation_result_route_mismatch")
+        );
+        let mut wrong_account = succeeded;
+        wrong_account.account_ref.login = "999999".to_owned();
+        assert_eq!(
+            map_reconciliation_result(&original, wrong_account, NOW + 7, &sequence)
+                .expect_err("account drift"),
+            CommandWorkerError::new("worker_reconciliation_result_route_mismatch")
         );
     }
 }

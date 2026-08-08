@@ -14,7 +14,7 @@ from typing import Any, BinaryIO
 
 from trade import Mt5TradeExecutor
 
-IPC_VERSION = 1
+IPC_VERSION = 2
 WORKER_VERSION = "3.0.0"
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_SNAPSHOT_ITEMS = 10_000
@@ -22,6 +22,7 @@ MAX_HISTORY_BATCH_ITEMS = 250
 MAX_HISTORY_CONTEXT_ITEMS = 4096
 MAX_HISTORY_FALLBACK_QUERIES = 4
 MAX_HISTORY_WINDOW_CACHE_ITEMS = 10_000
+MAX_HISTORY_RANGE_FUTURE_MSC = 60_000
 MAX_SYMBOL_ITEMS = 10_000
 HISTORY_WINDOW_MSC = 30 * 24 * 60 * 60 * 1000
 CLOCK_FRESHNESS_TOLERANCE_MS = 30_000
@@ -43,6 +44,11 @@ RATE_TIMEFRAMES = frozenset({
     "H1", "H2", "H3", "H4", "H6", "H8", "H12", "D1", "W1", "MN1",
 })
 DIAGNOSTIC_PATH_ENV = "AURUM_BRIDGE_DIAGNOSTIC_PATH"
+WORKER_ROLE_ENV = "AURUM_BRIDGE_WORKER_ROLE"
+LIVE_CAPABILITIES = (
+    "snapshot", "quote", "data", "execute_command", "query_execution"
+)
+ARCHIVE_CAPABILITIES = ("history_range_sync",)
 MAX_DIAGNOSTIC_BYTES = 1024 * 1024
 
 
@@ -210,6 +216,17 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _worker_role(value: str) -> str:
+    role = str(value or "").strip().lower()
+    if role not in {"live", "archive"}:
+        raise WorkerError("worker_environment_invalid")
+    return role
+
+
+def role_from_environment() -> str:
+    return _worker_role(_required_env(WORKER_ROLE_ENV))
+
+
 def route_from_environment() -> WorkerRoute:
     try:
         route = WorkerRoute(
@@ -279,6 +296,24 @@ def _plain(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_plain(item) for item in value]
     return str(value)
+
+
+def _history_item_in_utc_range(item: Any, range_start: int, range_end: int,
+                               keys: tuple[str, ...] = (
+                                   "time_utc_msc", "time_msc",
+                               )) -> bool:
+    if not isinstance(item, dict):
+        return False
+    for key in keys:
+        value = item.get(key)
+        if value is None:
+            continue
+        try:
+            timestamp = int(value)
+        except (TypeError, ValueError):
+            return False
+        return range_start <= timestamp < range_end
+    return False
 
 
 class BrokerClock:
@@ -396,6 +431,13 @@ class ReadOnlyMt5Adapter:
         self._history_window_end = 0
         self._history_window_truncated = False
         self._history_window_rows: list[tuple[int, int, dict[str, Any]]] = []
+        self._history_range_cache_key: tuple[int, int, int, int] | None = None
+        # Range pages are driven by both deal and history-order events.  The
+        # final tuple element is the event kind (0=deal, 1=order); the wire
+        # cursor remains the pair (time, ticket), and pages never split a
+        # compound pair so a same-time/same-ticket event cannot be skipped.
+        self._history_range_rows: list[tuple[int, int, int, dict[str, Any]]] = []
+        self._history_range_truncated = False
         self.login_wait_seconds = max(0.0, float(login_wait_seconds))
         self.login_poll_seconds = max(0.01, float(login_poll_seconds))
         self.clock_probe_seconds = max(0.0, float(clock_probe_seconds))
@@ -623,6 +665,8 @@ class ReadOnlyMt5Adapter:
             values = self.mt5.history_orders_get(order_from, order_to)
             if values is None:
                 raise WorkerError("mt5_history_orders_unavailable")
+            if len(values) > MAX_HISTORY_CONTEXT_ITEMS:
+                raise WorkerError("mt5_history_range_too_dense")
             raw_orders = [_plain(item) for item in values]
         batch = self._history_batch(
             [item[2] for item in selected], raw_orders,
@@ -635,6 +679,209 @@ class ReadOnlyMt5Adapter:
             self._history_window_cursor = None
             self._history_window_end = 0
             self._history_window_truncated = False
+        return batch
+
+    def history_range_sync(self, range_start_utc_msc: int, range_end_utc_msc: int,
+                           cursor: dict[str, Any], limit: int) -> dict[str, Any]:
+        """Read one explicit UTC half-open history range with a bounded cursor page."""
+        self._ensure_identity()
+        try:
+            values = (range_start_utc_msc, range_end_utc_msc, limit,
+                      cursor.get("time_msc"), cursor.get("ticket"))
+            if any(isinstance(value, bool) for value in values):
+                raise ValueError
+            range_start = int(range_start_utc_msc)
+            range_end = int(range_end_utc_msc)
+            cursor_time = int(cursor.get("time_msc"))
+            cursor_ticket = int(cursor.get("ticket"))
+            page_limit = int(limit)
+        except (AttributeError, TypeError, ValueError) as error:
+            raise WorkerError("worker_history_range_invalid") from error
+        now_msc = self.clock.now_utc_msc()
+        if (range_start <= 0 or range_end <= range_start
+                or range_end - range_start > HISTORY_WINDOW_MSC):
+            raise WorkerError("worker_history_range_invalid")
+        if now_msc <= 0 or range_end > now_msc + MAX_HISTORY_RANGE_FUTURE_MSC:
+            raise WorkerError("worker_history_range_future")
+        if (cursor_time < range_start or cursor_time > range_end
+                or cursor_ticket < 0
+                or (cursor_time == range_end and cursor_ticket != 0)):
+            raise WorkerError("worker_history_range_cursor_invalid")
+        if page_limit < 1 or page_limit > MAX_HISTORY_BATCH_ITEMS:
+            raise WorkerError("worker_history_limit_invalid")
+
+        self._calibrate_terminal_clock()
+        if cursor_time == range_end:
+            self._history_range_rows = []
+            self._history_range_cache_key = None
+            self._history_range_truncated = False
+            return self._history_batch([], [], range_end, 0, False, now_msc)
+        cache_key = (range_start, range_end, cursor_time, cursor_ticket)
+        range_cache_hit = self._history_range_cache_key == cache_key
+        if not range_cache_hit:
+            server_from = self.clock.server_from_utc(max(0, range_start - 1_000))
+            server_to = self.clock.server_from_utc(range_end + 999)
+            date_from = datetime.fromtimestamp(server_from / 1000, tz=timezone.utc)
+            date_to = datetime.fromtimestamp(server_to / 1000, tz=timezone.utc)
+            raw_deals = self.mt5.history_deals_get(date_from, date_to)
+            if raw_deals is None:
+                raise WorkerError("mt5_history_deals_unavailable")
+            raw_orders = self.mt5.history_orders_get(date_from, date_to)
+            if raw_orders is None:
+                raise WorkerError("mt5_history_orders_unavailable")
+            if len(raw_orders) > MAX_HISTORY_CONTEXT_ITEMS:
+                raise WorkerError("mt5_history_range_too_dense")
+            rows: list[tuple[int, int, int, dict[str, Any]]] = []
+            for value in raw_deals:
+                raw = _plain(value)
+                if not isinstance(raw, dict):
+                    raise WorkerError("mt5_history_deal_invalid")
+                try:
+                    ticket = int(raw.get("ticket") or 0)
+                    event_server_msc = int(
+                        raw.get("time_msc") or int(raw.get("time") or 0) * 1000
+                    )
+                except (TypeError, ValueError) as error:
+                    raise WorkerError("mt5_history_deal_invalid") from error
+                if ticket <= 0 or event_server_msc <= 0:
+                    raise WorkerError("mt5_history_deal_invalid")
+                event_utc_msc = self.clock.normalize(event_server_msc)
+                if (range_start <= event_utc_msc < range_end
+                        and (event_utc_msc, ticket) > (cursor_time, cursor_ticket)):
+                    rows.append((event_utc_msc, ticket, 0, raw))
+            seen_order_events: set[tuple[int, int]] = set()
+            for value in raw_orders:
+                raw = _plain(value)
+                if not isinstance(raw, dict):
+                    raise WorkerError("mt5_history_order_invalid")
+                try:
+                    ticket = int(raw.get("ticket") or 0)
+                    event_server_msc = int(
+                        raw.get("time_done_msc")
+                        or raw.get("time_setup_msc")
+                        or int(raw.get("time_done") or raw.get("time_setup") or 0) * 1000
+                    )
+                except (TypeError, ValueError) as error:
+                    raise WorkerError("mt5_history_order_invalid") from error
+                if ticket <= 0 or event_server_msc <= 0:
+                    raise WorkerError("mt5_history_order_invalid")
+                event_utc_msc = self.clock.normalize(event_server_msc)
+                event_key = (event_utc_msc, ticket)
+                if (range_start <= event_utc_msc < range_end
+                        and event_key > (cursor_time, cursor_ticket)
+                        and event_key not in seen_order_events):
+                    seen_order_events.add(event_key)
+                    rows.append((event_utc_msc, ticket, 1, raw))
+            rows.sort(key=lambda item: (item[0], item[1], item[2]))
+            if len(rows) > MAX_HISTORY_WINDOW_CACHE_ITEMS:
+                raise WorkerError("mt5_history_range_too_dense")
+            self._history_range_truncated = False
+            self._history_range_rows = rows
+            self._history_range_cache_key = cache_key
+
+        rows = self._history_range_rows
+        selected: list[tuple[int, int, int, dict[str, Any]]] = []
+        selected_deal_count = 0
+        selected_order_count = 0
+        index = 0
+        while index < len(rows):
+            group_key = rows[index][:2]
+            group_end = index + 1
+            while group_end < len(rows) and rows[group_end][:2] == group_key:
+                group_end += 1
+            group = rows[index:group_end]
+            group_deals = sum(item[2] == 0 for item in group)
+            group_orders = sum(item[2] == 1 for item in group)
+            if group_deals > page_limit or group_orders > page_limit:
+                raise WorkerError("mt5_history_range_too_dense")
+            if selected and (selected_deal_count + group_deals > page_limit
+                             or selected_order_count + group_orders > page_limit):
+                break
+            selected.extend(group)
+            selected_deal_count += group_deals
+            selected_order_count += group_orders
+            index = group_end
+            if selected_deal_count == page_limit and selected_order_count == page_limit:
+                break
+        remaining = rows[len(selected):]
+        has_more = bool(remaining or self._history_range_truncated)
+        if selected and has_more:
+            next_time, next_ticket = selected[-1][0], selected[-1][1]
+        else:
+            next_time, next_ticket = range_end, 0
+            has_more = False
+        raw_deals = [item[3] for item in selected if item[2] == 0]
+        raw_orders = [item[3] for item in selected if item[2] == 1]
+        if range_cache_hit and selected:
+            # Keep the existing bounded per-page bulk-order read semantics on
+            # cached deal rows.  The cached event list still drives pagination;
+            # this refresh only validates that the broker can provide the
+            # selected order evidence and avoids reintroducing unrelated rows.
+            order_from = datetime.fromtimestamp(
+                self.clock.server_from_utc(max(range_start, selected[0][0]) - 1_000) / 1000,
+                tz=timezone.utc,
+            )
+            order_to = datetime.fromtimestamp(
+                self.clock.server_from_utc(selected[-1][0] + 999) / 1000,
+                tz=timezone.utc,
+            )
+            values = self.mt5.history_orders_get(order_from, order_to)
+            if values is None:
+                raise WorkerError("mt5_history_orders_unavailable")
+            refreshed = {}
+            for value in values:
+                raw = _plain(value)
+                if not isinstance(raw, dict):
+                    raise WorkerError("mt5_history_order_invalid")
+                try:
+                    ticket = int(raw.get("ticket") or 0)
+                    event_server_msc = int(
+                        raw.get("time_done_msc")
+                        or raw.get("time_setup_msc")
+                        or int(raw.get("time_done") or raw.get("time_setup") or 0) * 1000
+                    )
+                except (TypeError, ValueError) as error:
+                    raise WorkerError("mt5_history_order_invalid") from error
+                if ticket > 0 and event_server_msc > 0:
+                    refreshed[(self.clock.normalize(event_server_msc), ticket)] = raw
+            raw_orders = [
+                refreshed.get((item[0], item[1]), item[3])
+                for item in selected if item[2] == 1
+            ]
+        batch = self._history_batch(
+            raw_deals, raw_orders,
+            next_time, next_ticket, has_more, now_msc,
+        )
+        batch["deals"] = [
+            item for item in batch["deals"]
+            if _history_item_in_utc_range(item, range_start, range_end)
+        ]
+        batch["history_orders"] = [
+            item for item in batch["history_orders"]
+            if _history_item_in_utc_range(item, range_start, range_end)
+        ]
+        batch["trades"] = [
+            item for item in batch["trades"]
+            if _history_item_in_utc_range(item, range_start, range_end,
+                                          keys=("close_time_utc_msc", "time_utc_msc"))
+        ]
+        for key in ("deals", "history_orders", "trades"):
+            # Never silently discard a fan-out item: the Rust contract treats
+            # each collection's page limit independently, so an oversized
+            # collection is a dense range that must be retried with a smaller
+            # window rather than marked complete.
+            if len(batch[key]) > page_limit:
+                raise WorkerError("mt5_history_range_too_dense")
+        if has_more:
+            self._history_range_rows = remaining
+            self._history_range_cache_key = (
+                range_start, range_end, next_time, next_ticket
+            )
+            self._history_range_truncated = False
+        else:
+            self._history_range_rows = []
+            self._history_range_cache_key = None
+            self._history_range_truncated = False
         return batch
 
     def data(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -1281,7 +1528,10 @@ class ReadOnlyMt5Adapter:
                 raise WorkerError("mt5_history_order_invalid") from error
             if ticket <= 0:
                 raise WorkerError("mt5_history_order_invalid")
-            orders_by_ticket[ticket] = self._history_order_row(value)
+            order_row = self._history_order_row(value)
+            orders_by_ticket[ticket] = order_row
+            if order_row not in history_orders:
+                history_orders.append(order_row)
 
         def consume_fallback_budget() -> None:
             nonlocal fallback_queries
@@ -1507,9 +1757,11 @@ class ReadOnlyMt5Adapter:
 
 
 class Mt5Worker:
-    def __init__(self, adapter: ReadOnlyMt5Adapter, route: WorkerRoute):
+    def __init__(self, adapter: ReadOnlyMt5Adapter, route: WorkerRoute,
+                 role: str = "live"):
         self.adapter = adapter
         self.route = route
+        self.role = _worker_role(role)
         self.restart_error_code: str | None = None
         self.consecutive_terminal_failures = 0
         self._request_terminal_failure = False
@@ -1566,6 +1818,7 @@ class Mt5Worker:
         try:
             self._validate_request(request)
             operation = request["operation"]
+            self._validate_role_operation(operation)
             body = request.get("payload")
             if not isinstance(body, dict):
                 raise WorkerError("worker_request_payload_invalid")
@@ -1601,6 +1854,23 @@ class Mt5Worker:
                 return self._complete_successful_request(self._response(request_id, "history_batch", {
                     "batch": self.adapter.history_sync(cursor, payload.get("limit"))
                 }))
+            if operation == "history_range_sync":
+                payload = self._request_payload(body)
+                if (set(payload) != {
+                        "range_start_utc_msc", "range_end_utc_msc", "cursor", "limit"
+                } or not isinstance(payload.get("cursor"), dict)):
+                    raise WorkerError("worker_request_payload_invalid")
+                cursor = payload["cursor"]
+                if set(cursor) != {"time_msc", "ticket"}:
+                    raise WorkerError("worker_history_range_cursor_invalid")
+                return self._complete_successful_request(self._response(
+                    request_id, "history_batch", {"batch": self.adapter.history_range_sync(
+                        payload.get("range_start_utc_msc"),
+                        payload.get("range_end_utc_msc"),
+                        cursor,
+                        payload.get("limit"),
+                    )}
+                ))
             if operation == "data":
                 payload = self._request_payload(body)
                 if set(payload) != {"action", "params"} or not isinstance(payload.get("params"), dict):
@@ -1642,6 +1912,14 @@ class Mt5Worker:
             raise WorkerError("worker_request_id_invalid")
         if request.get("route") != self.route.payload():
             raise WorkerError("worker_request_route_mismatch")
+
+    def _validate_role_operation(self, operation: Any) -> None:
+        if self.role == "live":
+            if operation in {"history_sync", "history_range_sync"}:
+                raise WorkerError("worker_role_operation_forbidden")
+            return
+        if operation != "history_range_sync":
+            raise WorkerError("worker_role_operation_forbidden")
 
     @staticmethod
     def _request_payload(body: dict[str, Any]) -> dict[str, Any]:
@@ -1690,12 +1968,13 @@ def run(mt5: Any) -> None:
     if int(_required_env("AURUM_BRIDGE_WORKER_IPC_VERSION")) != IPC_VERSION:
         raise WorkerError("worker_environment_invalid")
     route = route_from_environment()
+    role = role_from_environment()
     terminal_path = _required_env("AURUM_BRIDGE_WORKER_TERMINAL_PATH")
     adapter = ReadOnlyMt5Adapter(mt5, terminal_path, route, clock_state_path=_clock_state_path(route))
     adapter.connect()
     pipe_name = _required_env("AURUM_BRIDGE_WORKER_PIPE")
     nonce = _required_env("AURUM_BRIDGE_WORKER_NONCE")
-    worker = Mt5Worker(adapter, route)
+    worker = Mt5Worker(adapter, route, role=role)
     try:
         with open(rf"\\.\pipe\{pipe_name}", "r+b", buffering=0) as stream:
             write_frame(stream, {
@@ -1704,10 +1983,10 @@ def run(mt5: Any) -> None:
                 "session_nonce": nonce,
                 "worker_version": WORKER_VERSION,
                 "route": route.payload(),
-                "capabilities": [
-                    "snapshot", "quote", "data", "history_sync",
-                    "execute_command", "query_execution"
-                ],
+                "role": role,
+                "capabilities": list(
+                    ARCHIVE_CAPABILITIES if role == "archive" else LIVE_CAPABILITIES
+                ),
             })
             while True:
                 write_frame(stream, worker.handle(read_frame(stream)))

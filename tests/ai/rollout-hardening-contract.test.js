@@ -126,7 +126,8 @@ describe('rollout hardening contract', () => {
   })
 
   it('gives complete history queries a queue-aware Bridge timeout', () => {
-    expect(bridge).toContain("'history', routedParams(bridgeParams), { timeoutMs: 30000, noFallback: true }")
+    expect(bridge).toContain("cursorMode ? 'history_page' : 'history'")
+    expect(bridge).toContain('routedParams(bridgeParams), { timeoutMs: 30000, noFallback: true }')
     expect(bridge).toContain("'chart_data', routedParams(chartParams), { timeoutMs: 30000, noFallback: true }")
   })
 

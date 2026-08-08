@@ -12,12 +12,13 @@ const TRADE_ACTIONS = new Set([
 ])
 const SUPPORTED_ACTIONS = new Set([
   ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot', 'risk_snapshot',
-  'performance_daily', 'symbols', 'history', 'chart_data', 'order_lookup',
+  'performance_daily', 'symbols', 'history', 'history_page', 'history_evidence', 'chart_data', 'order_lookup',
   'pending_order_state', 'diagnostics', 'status', 'toggle_trade', 'set_quote_symbol',
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 const DEFAULT_FRESHNESS_MS = 30_000
 const MAX_HISTORY_EVIDENCE_REFS = 100
+const MAX_LEGACY_HISTORY_PAGE = 500
 const MAX_ORDER_LOOKUP_SECONDS = 30 * 24 * 60 * 60
 
 function adapterError(code) {
@@ -66,6 +67,13 @@ function normalizeHistoryEvidenceRefs(value) {
     throw adapterError('history_params_invalid')
   }
   return references.length ? references : undefined
+}
+
+function normalizeHistoryCursorToken(value) {
+  if (value == null || value === '') return undefined
+  const token = String(value).trim()
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw adapterError('history_cursor_invalid')
+  return token
 }
 
 function durableOrderComment(value) {
@@ -591,29 +599,69 @@ export function createBridgeV3BusinessAdapter({
           })
       : cleanObject({
           page:action === 'history' ? Number(params.page || 1) : undefined,
-          page_size:action === 'history' ? Number(params.page_size || 20) : undefined,
-          date_from:params.date_from || undefined,
-          date_to:params.date_to || undefined,
-          entry_from:action === 'history' ? params.entry_from || undefined : undefined,
-          entry_to:action === 'history' ? params.entry_to || undefined : undefined,
-          direction:params.direction || undefined,
-          profit_filter:params.profit_filter || undefined,
-          force_refresh:params.force_refresh === true || undefined,
+          page_size:['history', 'history_page'].includes(action) ? Number(params.page_size || 20) : undefined,
+          date_from:action === 'history_evidence' ? undefined : params.date_from || undefined,
+          date_to:action === 'history_evidence' ? undefined : params.date_to || undefined,
+          range_start_utc_msc:params.range_start_utc_msc,
+          range_end_utc_msc:params.range_end_utc_msc,
+          entry_from:['history', 'history_page'].includes(action) ? params.entry_from || undefined : undefined,
+          entry_to:['history', 'history_page'].includes(action) ? params.entry_to || undefined : undefined,
+          direction:action === 'history_evidence' ? undefined : params.direction || undefined,
+          profit_filter:action === 'history_evidence' ? undefined : params.profit_filter || undefined,
+          force_refresh:action === 'history_evidence' ? undefined
+            : params.force_refresh === true || undefined,
           include_deals:action === 'history' && params.include_deals === true || undefined,
           compact:action === 'history' && params.compact === true || undefined,
-          evidence_position_ids:action === 'history'
+          snapshot_id:action === 'history_page'
+            ? normalizeHistoryCursorToken(params.history_snapshot_id) : undefined,
+          cursor:action === 'history_page' ? normalizeHistoryCursorToken(params.cursor) : undefined,
+          evidence_position_ids:['history', 'history_evidence'].includes(action)
             ? normalizeHistoryEvidenceRefs(params.evidence_position_ids) : undefined,
-          evidence_order_tickets:action === 'history'
+          evidence_order_tickets:['history', 'history_evidence'].includes(action)
             ? normalizeHistoryEvidenceRefs(params.evidence_order_tickets) : undefined,
         })
     if (action === 'history' && (!Number.isSafeInteger(allowed.page) || allowed.page < 1
+      || allowed.page > MAX_LEGACY_HISTORY_PAGE
       || !Number.isSafeInteger(allowed.page_size) || allowed.page_size < 1 || allowed.page_size > 200)) {
       throw adapterError('history_pagination_invalid')
     }
-    if (action === 'history'
+    if (action === 'history_page' && (!Number.isSafeInteger(allowed.page_size)
+      || allowed.page_size < 1 || allowed.page_size > 200
+      || (Boolean(allowed.cursor) && !allowed.snapshot_id))) {
+      throw adapterError(allowed.cursor || allowed.snapshot_id
+        ? 'history_cursor_invalid' : 'history_pagination_invalid')
+    }
+    if (['history', 'history_evidence'].includes(action)
       && (allowed.evidence_position_ids?.length || 0) + (allowed.evidence_order_tickets?.length || 0)
         > MAX_HISTORY_EVIDENCE_REFS) {
       throw adapterError('history_params_invalid')
+    }
+    if (action === 'history_evidence'
+      && (allowed.evidence_position_ids?.length || 0) + (allowed.evidence_order_tickets?.length || 0)
+        === 0) {
+      throw adapterError('history_params_invalid')
+    }
+    const hasExactRangeStart = allowed.range_start_utc_msc !== undefined
+    const hasExactRangeEnd = allowed.range_end_utc_msc !== undefined
+    if (['history_page', 'history_evidence'].includes(action)
+      && (!hasExactRangeStart || !hasExactRangeEnd)) {
+      throw adapterError('history_range_invalid')
+    }
+    if (hasExactRangeStart) {
+      if (!hasExactRangeEnd || allowed.date_from || allowed.date_to
+        || !Number.isSafeInteger(allowed.range_start_utc_msc)
+        || !Number.isSafeInteger(allowed.range_end_utc_msc)
+        || allowed.range_start_utc_msc <= 0
+        || allowed.range_end_utc_msc <= allowed.range_start_utc_msc
+        || allowed.range_end_utc_msc > now() + 60_000) {
+        throw adapterError('history_range_invalid')
+      }
+    } else if (hasExactRangeEnd && (!allowed.date_from
+      || !Number.isSafeInteger(allowed.range_end_utc_msc)
+      || allowed.range_end_utc_msc <= 0
+      || allowed.range_end_utc_msc > now() + 60_000)) {
+      // Compatibility mode for an older date_from + fixed endpoint request.
+      throw adapterError('history_range_invalid')
     }
     if (action === 'pending_order_state' && !/^\d{1,32}$/.test(allowed.ticket || '')) {
       throw adapterError('ticket_required')
@@ -894,7 +942,7 @@ export function createBridgeV3BusinessAdapter({
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
       if (action === 'rates') return await requestRates(userId, route, params, timeoutMs)
-      if (['symbols', 'history', 'chart_data', 'pending_order_state', 'diagnostics'].includes(action)) {
+      if (['symbols', 'history', 'history_page', 'history_evidence', 'chart_data', 'pending_order_state', 'diagnostics'].includes(action)) {
         return await requestTerminalData(userId, route, action, params, timeoutMs)
       }
       if (action === 'symbol_snapshot') {

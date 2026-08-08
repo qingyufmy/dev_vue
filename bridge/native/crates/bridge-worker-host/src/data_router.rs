@@ -75,6 +75,30 @@ where
         }
     }
 
+    pub async fn history_range_sync(
+        &self,
+        route: WorkerRoute,
+        request_id: String,
+        range_start_utc_msc: i64,
+        range_end_utc_msc: i64,
+        cursor: WorkerHistoryCursor,
+        limit: u16,
+    ) -> Result<WorkerHistoryBatch, WorkerHostError> {
+        let request = WorkerRequest::history_range_sync(
+            route.clone(),
+            request_id,
+            range_start_utc_msc,
+            range_end_utc_msc,
+            cursor,
+            limit,
+        );
+        match self.request(route, request).await?.body {
+            WorkerResponseBody::HistoryBatch { batch } => Ok(*batch),
+            WorkerResponseBody::Error { error_code, .. } => Err(WorkerHostError::new(error_code)),
+            _ => Err(WorkerHostError::new("worker_response_operation_mismatch")),
+        }
+    }
+
     pub async fn data(
         &self,
         route: WorkerRoute,

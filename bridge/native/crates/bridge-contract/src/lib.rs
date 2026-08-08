@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const SERVER_PROTOCOL_VERSION: u16 = 3;
+pub const HISTORY_EXACT_RANGE_CAPABILITY: &str = "history_exact_range_v1";
+pub const HISTORY_CURSOR_CAPABILITY: &str = "history_cursor_v1";
+pub const HISTORY_EVIDENCE_CAPABILITY: &str = "history_evidence_v1";
 pub const MAX_LOCAL_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const TRADE_QUEUE_CAPACITY: usize = 128;
 pub const QUOTE_QUEUE_CAPACITY: usize = 64;
@@ -128,6 +131,8 @@ pub struct HelloMessage {
     pub sent_at_utc_msc: i64,
     pub session_id: String,
     pub bridge_version: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,6 +155,21 @@ impl HelloMessage {
             || self.bridge_version.trim() != self.bridge_version
         {
             return Err("bridge_version_invalid");
+        }
+        if self.capabilities.len() > 32 {
+            return Err("bridge_capabilities_invalid");
+        }
+        let mut capabilities = BTreeSet::new();
+        for capability in &self.capabilities {
+            if capability.is_empty()
+                || capability.len() > 64
+                || !capability
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                || !capabilities.insert(capability.as_str())
+            {
+                return Err("bridge_capabilities_invalid");
+            }
         }
         if self.terminals.is_empty() || self.terminals.len() > 32 {
             return Err("bridge_terminals_invalid");
@@ -354,6 +374,29 @@ impl CommandResultMessage {
                 &command.account_ref,
                 command.connection_epoch,
             )
+    }
+
+    /// Matches the terminal/account route during post-dispatch reconciliation.
+    /// A reconnect may advance the terminal connection epoch while the
+    /// original command is still being resolved, but the terminal identity and
+    /// account must remain unchanged.  Ordinary command/result matching
+    /// intentionally keeps its exact-route semantics in
+    /// [`Self::matches_command`].
+    pub fn matches_reconciliation_route(&self, command: &CommandMessage) -> bool {
+        self.terminal_instance_id == command.terminal_instance_id
+            && self.account_ref.login == command.account_ref.login
+            && self
+                .account_ref
+                .broker_server
+                .eq_ignore_ascii_case(&command.account_ref.broker_server)
+            && self.connection_epoch >= command.connection_epoch
+    }
+
+    /// Matches a final reconciliation result to its original command.  The
+    /// command id remains exact while the result route may be a later epoch;
+    /// use [`Self::matches_command`] for ordinary dispatch acknowledgements.
+    pub fn matches_reconciliation_command(&self, command: &CommandMessage) -> bool {
+        self.command_id == command.command_id && self.matches_reconciliation_route(command)
     }
 }
 
@@ -933,6 +976,7 @@ mod tests {
             sent_at_utc_msc: 1_700_000_000_000,
             session_id: "session_01JTEST01".to_owned(),
             bridge_version: "3.0.0-alpha.1".to_owned(),
+            capabilities: Vec::new(),
             installation_id: None,
             update_report: None,
             terminals: vec![TerminalDescriptor {
@@ -970,6 +1014,25 @@ mod tests {
             acknowledgement.validate_for(&hello),
             Err("bridge_hello_ack_route_mismatch")
         );
+    }
+
+    #[test]
+    fn hello_capabilities_are_optional_unique_and_wire_safe() {
+        let legacy = hello_fixture();
+        let mut value = serde_json::to_value(&legacy).expect("legacy hello json");
+        assert!(value.get("capabilities").is_none());
+        let decoded: HelloMessage = serde_json::from_value(value.take()).expect("legacy hello");
+        assert!(decoded.capabilities.is_empty());
+
+        let mut hello = hello_fixture();
+        hello.capabilities = vec![HISTORY_EXACT_RANGE_CAPABILITY.to_owned()];
+        hello.validate().expect("capability hello");
+        hello
+            .capabilities
+            .push(HISTORY_EXACT_RANGE_CAPABILITY.to_owned());
+        assert_eq!(hello.validate(), Err("bridge_capabilities_invalid"));
+        hello.capabilities = vec!["history-exact-range".to_owned()];
+        assert_eq!(hello.validate(), Err("bridge_capabilities_invalid"));
     }
 
     #[test]
@@ -1050,9 +1113,32 @@ mod tests {
         };
         result.validate().expect("result");
         assert!(result.matches_command(&command));
-        let mut wrong_account = result;
+        assert!(result.matches_reconciliation_route(&command));
+        assert!(result.matches_reconciliation_command(&command));
+        let mut wrong_account = result.clone();
         wrong_account.account_ref.login = "999999".to_owned();
         assert!(!wrong_account.matches_command(&command));
+        assert!(!wrong_account.matches_reconciliation_route(&command));
+        assert!(!wrong_account.matches_reconciliation_command(&command));
+
+        let mut forward_epoch = result.clone();
+        forward_epoch.connection_epoch += 1;
+        assert!(!forward_epoch.matches_command(&command));
+        assert!(forward_epoch.matches_reconciliation_route(&command));
+        assert!(forward_epoch.matches_reconciliation_command(&command));
+        forward_epoch.connection_epoch = command.connection_epoch - 1;
+        assert!(!forward_epoch.matches_reconciliation_route(&command));
+        assert!(!forward_epoch.matches_reconciliation_command(&command));
+
+        let mut wrong_terminal = result.clone();
+        wrong_terminal.terminal_instance_id = "mt5_terminal_02".to_owned();
+        assert!(!wrong_terminal.matches_reconciliation_route(&command));
+        assert!(!wrong_terminal.matches_reconciliation_command(&command));
+
+        let mut broker_case = result;
+        broker_case.account_ref.broker_server = "broker-demo".to_owned();
+        assert!(broker_case.matches_reconciliation_route(&command));
+        assert!(broker_case.matches_reconciliation_command(&command));
     }
 
     #[test]

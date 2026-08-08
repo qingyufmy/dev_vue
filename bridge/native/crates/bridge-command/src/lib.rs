@@ -160,7 +160,7 @@ impl CommandReconciler {
                 Ok(Ok(Ok(Some(result)))) => result,
             };
             if result.validate().is_err()
-                || !result.matches_command(&command)
+                || !result.matches_reconciliation_command(&command)
                 || !matches!(result.status.as_str(), "succeeded" | "rejected" | "failed")
             {
                 run.pending += 1;
@@ -602,6 +602,26 @@ mod tests {
         }
     }
 
+    struct ForwardRouteResolvingWorker;
+
+    impl ExecutionReconciliationWorker for ForwardRouteResolvingWorker {
+        fn reconcile(
+            &self,
+            command: CommandMessage,
+            _uncertain_receipt: Option<CommandResultMessage>,
+        ) -> BoxFuture<'_, Result<Option<CommandResultMessage>, CommandWorkerError>> {
+            Box::pin(async move {
+                let mut result = success(&command);
+                result.message_id = format!("reconciled_forward_{}", command.command_id);
+                result.connection_epoch = command.connection_epoch + 1;
+                result.sent_at_utc_msc = NOW + 100;
+                result.completed_at_utc_msc = NOW + 100;
+                result.evidence.observed_at_utc_msc = NOW + 100;
+                Ok(Some(result))
+            })
+        }
+    }
+
     struct PanickingReconciliationWorker;
 
     impl ExecutionReconciliationWorker for PanickingReconciliationWorker {
@@ -755,6 +775,50 @@ mod tests {
                 "succeeded"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn reconciler_accepts_a_forward_connection_epoch_for_final_result() {
+        let fixture = StoreFixture::new("reconciler-forward-route");
+        let command = command("command_01JRECONCILEFORWARD");
+        fixture
+            .store_ref()
+            .record_command(&command, NOW)
+            .expect("record interrupted");
+        fixture
+            .store_ref()
+            .mark_command_dispatched(&command.command_id, NOW + 1)
+            .expect("mark interrupted");
+        let reconciler = CommandReconciler::new(
+            fixture.store(),
+            Arc::new(ForwardRouteResolvingWorker),
+            Duration::from_secs(1),
+        )
+        .expect("reconciler");
+        assert_eq!(
+            reconciler.reconcile_once(10).await.expect("reconcile"),
+            ReconciliationRun {
+                inspected: 1,
+                resolved: 1,
+                pending: 0,
+                error_codes: Vec::new(),
+            }
+        );
+        let receipt = fixture
+            .store_ref()
+            .execution_receipt(&command.command_id)
+            .expect("receipt")
+            .expect("resolved receipt");
+        assert_eq!(receipt.connection_epoch, command.connection_epoch + 1);
+        assert_eq!(
+            fixture
+                .store_ref()
+                .command_ledger(&command.command_id)
+                .expect("ledger")
+                .expect("command")
+                .status,
+            "confirmed"
+        );
     }
 
     #[tokio::test]

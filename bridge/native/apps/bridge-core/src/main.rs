@@ -949,6 +949,29 @@ fn load_observer_terminal_statuses(
                     _ => "stopped",
                 }
                 .to_owned(),
+                initialization_state: if terminal.initialization_state.is_empty() {
+                    if terminal.data_ready {
+                        "ready".to_owned()
+                    } else if terminal.state == "starting" {
+                        "detected".to_owned()
+                    } else {
+                        "warming_realtime_snapshot".to_owned()
+                    }
+                } else {
+                    terminal.initialization_state.clone()
+                },
+                local_operational_ready: if terminal.initialization_state.is_empty() {
+                    terminal.data_ready
+                } else {
+                    terminal.local_operational_ready
+                },
+                history_backfill_pending: if terminal.platform == "mt4" {
+                    !matches!(terminal.history_state.as_str(), "ready" | "complete")
+                } else {
+                    terminal.history_state != "complete"
+                },
+                history_attention_required: terminal.history_attention_required
+                    || terminal.history_state == "blocked",
                 error_code: terminal.error_code.clone(),
                 observer_profile_id: Some(profile_id.to_owned()),
                 terminal_trading_allowed: permissions.terminal_trading_allowed,
@@ -4231,7 +4254,7 @@ fn runtime_status_fingerprint(snapshot: &NativeRuntimeStatusSnapshot) -> String 
         .iter()
         .map(|terminal| {
             format!(
-                "{}:{}:{}:{}:{}:{}:{}:{}:{}",
+                "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
                 terminal.terminal_instance_id,
                 terminal.state,
                 terminal.worker_state,
@@ -4239,6 +4262,10 @@ fn runtime_status_fingerprint(snapshot: &NativeRuntimeStatusSnapshot) -> String 
                 terminal.data_ready,
                 terminal.error_code.as_deref().unwrap_or(""),
                 terminal.history_state,
+                terminal.initialization_state,
+                terminal.local_operational_ready,
+                terminal.history_backfill_pending,
+                terminal.history_attention_required,
                 terminal.history_error_code.as_deref().unwrap_or(""),
                 terminal.mt4_expert_restart_required,
             )
@@ -4291,15 +4318,34 @@ fn log_runtime_status(logger: &BridgeLogger, snapshot: &NativeRuntimeStatusSnaps
             .iter()
             .filter_map(|terminal| terminal.history_error_code.as_deref()),
     );
+    let initialization_states = runtime_error_summary(
+        snapshot
+            .terminals
+            .iter()
+            .map(|terminal| terminal.initialization_state.as_str()),
+    );
+    let history_attention = snapshot
+        .terminals
+        .iter()
+        .filter(|terminal| terminal.history_attention_required)
+        .count();
+    let history_backfill_pending = snapshot
+        .terminals
+        .iter()
+        .filter(|terminal| terminal.history_backfill_pending)
+        .count();
     let message = format!(
-        "profile={} phase={} server={} terminals={} ready={} terminal_states={} history_states={} reconciliation_pending={} server_error={} terminal_errors={} history_errors={} reconciliation_errors={}",
+        "profile={} phase={} server={} terminals={} ready={} terminal_states={} initialization_states={} history_states={} history_backfill_pending={} history_attention={} reconciliation_pending={} server_error={} terminal_errors={} history_errors={} reconciliation_errors={}",
         snapshot.profile_id,
         snapshot.phase,
         snapshot.server_state,
         snapshot.terminals.len(),
         ready,
         terminal_states,
+        initialization_states,
         history_states,
+        history_backfill_pending,
+        history_attention,
         snapshot.reconciliation.pending,
         snapshot.server_error_code.as_deref().unwrap_or("none"),
         terminal_errors,
@@ -4310,7 +4356,15 @@ fn log_runtime_status(logger: &BridgeLogger, snapshot: &NativeRuntimeStatusSnaps
             snapshot.reconciliation.error_codes.join(",")
         }
     );
-    if snapshot.phase == "online" {
+    let archive_blocked = snapshot
+        .terminals
+        .iter()
+        .any(|terminal| terminal.history_state == "blocked");
+    if archive_blocked {
+        // Archive blockage is a secondary diagnostic. Keep the phase in the message as the
+        // live status and never turn a healthy realtime connection into `degraded` here.
+        logger.warning("native_history_status_attention", Some(&message));
+    } else if snapshot.phase == "online" {
         logger.info("native_runtime_status_changed", Some(&message));
     } else if snapshot.phase == "degraded" {
         logger.warning("native_runtime_status_changed", Some(&message));
@@ -4488,6 +4542,10 @@ mod tests {
             last_success_at_utc_msc: None,
             error_code: Some("worker_process_exit".to_owned()),
             history_state: "retrying".to_owned(),
+            initialization_state: "warming_realtime_snapshot".to_owned(),
+            local_operational_ready: false,
+            history_backfill_pending: true,
+            history_attention_required: false,
             history_consecutive_failures: 1,
             history_last_success_at_utc_msc: None,
             history_error_code: Some("history_sync_failed".to_owned()),
@@ -4504,6 +4562,9 @@ mod tests {
         assert_ne!(runtime_status_fingerprint(&snapshot), baseline);
         snapshot.terminals[0].history_error_code = Some("history_sync_failed".to_owned());
         snapshot.terminals[0].history_state = "ready".to_owned();
+        assert_ne!(runtime_status_fingerprint(&snapshot), baseline);
+        snapshot.terminals[0].history_state = "retrying".to_owned();
+        snapshot.terminals[0].history_attention_required = true;
         assert_ne!(runtime_status_fingerprint(&snapshot), baseline);
     }
 
@@ -4808,6 +4869,10 @@ mod tests {
                     broker_server: "DooTechnology-Demo".to_owned(),
                     login: "596520".to_owned(),
                     runtime_state: "running".to_owned(),
+                    initialization_state: "ready".to_owned(),
+                    local_operational_ready: true,
+                    history_backfill_pending: true,
+                    history_attention_required: false,
                     error_code: None,
                     observer_profile_id: Some("source-1".to_owned()),
                     terminal_trading_allowed: Some(true),
@@ -5200,6 +5265,10 @@ mod tests {
                 broker_server: "Broker-Demo".to_owned(),
                 login: "100001".to_owned(),
                 runtime_state: "running".to_owned(),
+                initialization_state: "ready".to_owned(),
+                local_operational_ready: true,
+                history_backfill_pending: true,
+                history_attention_required: false,
                 error_code: None,
                 observer_profile_id: None,
                 terminal_trading_allowed: Some(true),

@@ -33,12 +33,23 @@ describe('Bridge v3 protocol contract', () => {
     const hello = envelope('hello', {
       session_id:'session_01JBRIDGE01',
       bridge_version:'3.0.0',
+      capabilities:['history_exact_range_v1', 'history_cursor_v1'],
       terminals:[
         { ...route(), platform:'mt5' },
         { ...route({ terminal_instance_id:'terminal_01JBRIDGE0002' }), platform:'mt4' },
       ],
     })
     expect(validateBridgeV3Message(hello, { nowUtcMsc:NOW })).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({
+      ...hello, capabilities:['history_exact_range_v1', 'history_exact_range_v1'],
+    }, { nowUtcMsc:NOW })).toMatchObject({
+      ok:false, errors:expect.arrayContaining(['capabilities:invalid']),
+    })
+    expect(validateBridgeV3Message({
+      ...hello, capabilities:['history-exact-range'],
+    }, { nowUtcMsc:NOW })).toMatchObject({
+      ok:false, errors:expect.arrayContaining(['capabilities:invalid']),
+    })
     expect(validateBridgeV3Message({ ...hello, terminals:[hello.terminals[0], hello.terminals[0]] }))
       .toMatchObject({ ok:false, errors:expect.arrayContaining(['terminals.1.terminal_instance_id:duplicate']) })
   })
@@ -271,6 +282,24 @@ describe('Bridge v3 protocol contract', () => {
     expect(validateBridgeV3Message(request)).toEqual({ ok:true, errors:[] })
     expect(validateBridgeV3Message({
       ...request, action:'performance_daily', params:{ date_from:'2026-01-01', date_to:'2026-01-31' },
+    })).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({
+      ...request,
+      action:'history_evidence',
+      params:{
+        range_start_utc_msc:NOW - 60_000,
+        range_end_utc_msc:NOW,
+        evidence_order_tickets:['1001'],
+      },
+    })).toEqual({ ok:true, errors:[] })
+    expect(validateBridgeV3Message({
+      ...request,
+      action:'history_page',
+      params:{
+        range_start_utc_msc:NOW - 60_000,
+        range_end_utc_msc:NOW,
+        page_size:20,
+      },
     })).toEqual({ ok:true, errors:[] })
     expect(validateBridgeV3Message({ ...request, action:'shell' })).toMatchObject({
       ok:false, errors:expect.arrayContaining(['action:unsupported']),

@@ -1,6 +1,6 @@
 use crate::{
     ExpectedWorker, WorkerCapability, WorkerClient, WorkerEndpoint, WorkerHostError,
-    WorkerPipeListener, WorkerRoute,
+    WorkerPipeListener, WorkerRole, WorkerRoute,
 };
 use bridge_runtime_win::{ManagedProcess, ManagedProcessState, ProcessSpec};
 use std::collections::BTreeSet;
@@ -19,11 +19,13 @@ pub const WORKER_BROKER_SERVER_ENV: &str = "AURUM_BRIDGE_WORKER_BROKER_SERVER";
 pub const WORKER_LOGIN_ENV: &str = "AURUM_BRIDGE_WORKER_LOGIN";
 pub const WORKER_CONNECTION_EPOCH_ENV: &str = "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH";
 pub const WORKER_TERMINAL_PATH_ENV: &str = "AURUM_BRIDGE_WORKER_TERMINAL_PATH";
+pub const WORKER_ROLE_ENV: &str = "AURUM_BRIDGE_WORKER_ROLE";
 
 #[derive(Clone)]
 pub struct WorkerProgram {
     process: ProcessSpec,
     terminal_path: Option<PathBuf>,
+    role: WorkerRole,
 }
 
 impl WorkerProgram {
@@ -34,6 +36,7 @@ impl WorkerProgram {
         Ok(Self {
             process: ProcessSpec::new(executable, working_directory).map_err(runtime_error)?,
             terminal_path: None,
+            role: WorkerRole::Live,
         })
     }
 
@@ -57,6 +60,11 @@ impl WorkerProgram {
 
     pub fn show_window(mut self, show_window: bool) -> Self {
         self.process = self.process.show_window(show_window);
+        self
+    }
+
+    pub fn role(mut self, role: WorkerRole) -> Self {
+        self.role = role;
         self
     }
 
@@ -97,6 +105,13 @@ impl WorkerProgram {
             (
                 WORKER_CONNECTION_EPOCH_ENV,
                 route.connection_epoch.to_string(),
+            ),
+            (
+                WORKER_ROLE_ENV,
+                match self.role {
+                    WorkerRole::Live => "live".to_owned(),
+                    WorkerRole::Archive => "archive".to_owned(),
+                },
             ),
         ] {
             self.process = self.process.env(name, value).map_err(runtime_error)?;
@@ -141,11 +156,13 @@ impl WorkerProcessSession {
         }
         let listener = WorkerPipeListener::bind_new()?;
         let endpoint = listener.endpoint().clone();
+        let role = program.role;
         let process_spec = program.into_process_spec(&endpoint, &route)?;
         let process = ManagedProcess::spawn(&process_spec).map_err(runtime_error)?;
         let expected = ExpectedWorker {
             session_nonce: endpoint.session_nonce().to_owned(),
             route,
+            role,
             required_capabilities,
         };
         let client = listener.accept(expected, startup_timeout).await?;
@@ -199,7 +216,7 @@ mod tests {
     use super::*;
     use crate::{
         RegistryCommandWorker, SnapshotStream, WorkerDataRouter, WorkerHello, WorkerRegistry,
-        write_frame,
+        WorkerRole, write_frame,
     };
     use bridge_command::CommandWorker;
     use bridge_contract::{AccountRef, CommandMessage};
@@ -262,6 +279,11 @@ mod tests {
                             .expect("epoch env")
                             .parse()
                             .expect("epoch"),
+                    },
+                    role: match env::var(WORKER_ROLE_ENV).as_deref() {
+                        Ok("archive") => WorkerRole::Archive,
+                        Ok("live") => WorkerRole::Live,
+                        _ => panic!("role env"),
                     },
                     capabilities: vec![WorkerCapability::QueryExecution],
                 },

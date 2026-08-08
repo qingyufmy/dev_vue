@@ -311,14 +311,19 @@ where
         if !registry.is_current(&self.route, self.generation).await {
             return Err(WorkerHostError::new("worker_generation_changed"));
         }
-        let response = self
+        match self
             .client
             .request(request, now_utc_msc, request_timeout)
-            .await;
-        if !registry.is_current(&self.route, self.generation).await {
-            return Err(WorkerHostError::new("worker_generation_changed"));
+            .await
+        {
+            Ok(response) => {
+                if !registry.is_current(&self.route, self.generation).await {
+                    return Err(WorkerHostError::new("worker_generation_changed"));
+                }
+                Ok(response)
+            }
+            Err(error) => Err(error),
         }
-        response
     }
 }
 
@@ -327,7 +332,7 @@ mod tests {
     use super::*;
     use crate::{
         ExpectedWorker, WORKER_IPC_VERSION, WorkerCapability, WorkerHello, WorkerRequest,
-        WorkerResponse, read_frame, write_frame,
+        WorkerResponse, WorkerRole, read_frame, write_frame,
     };
     use bridge_contract::{AccountRef, CommandMessage, CommandResultMessage, ExecutionEvidence};
     use std::collections::BTreeSet;
@@ -407,6 +412,7 @@ mod tests {
                     session_nonce: nonce,
                     worker_version: "3.0.0-alpha.1".to_owned(),
                     route: hello_route,
+                    role: WorkerRole::Live,
                     capabilities: vec![WorkerCapability::ExecuteCommand],
                 },
             )
@@ -419,6 +425,7 @@ mod tests {
                 ExpectedWorker {
                     session_nonce: nonce_for(route.connection_epoch),
                     route,
+                    role: WorkerRole::Live,
                     required_capabilities: BTreeSet::from([WorkerCapability::ExecuteCommand]),
                 },
                 Duration::from_secs(1),
@@ -500,6 +507,7 @@ mod tests {
                     session_nonce: nonce,
                     worker_version: "3.0.0-alpha.1".to_owned(),
                     route: hello_route,
+                    role: WorkerRole::Live,
                     capabilities: vec![WorkerCapability::ExecuteCommand],
                 },
             )
@@ -526,6 +534,7 @@ mod tests {
                 ExpectedWorker {
                     session_nonce: nonce_for(1),
                     route: active_route.clone(),
+                    role: WorkerRole::Live,
                     required_capabilities: BTreeSet::from([WorkerCapability::ExecuteCommand]),
                 },
                 Duration::from_secs(1),
@@ -561,6 +570,82 @@ mod tests {
                 .expect_err("generation changed")
                 .code(),
             "worker_generation_changed"
+        );
+        worker_task.await.expect("worker");
+    }
+
+    #[tokio::test]
+    async fn replacement_after_an_inflight_client_error_preserves_the_original_error() {
+        let registry = Arc::new(WorkerRegistry::new());
+        let active_route = route(1);
+        let nonce = nonce_for(1);
+        let (core, mut worker) = duplex(64 * 1024);
+        let (request_seen_tx, request_seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let hello_route = active_route.clone();
+        let worker_task = tokio::spawn(async move {
+            write_frame(
+                &mut worker,
+                &WorkerHello {
+                    ipc_v: WORKER_IPC_VERSION,
+                    message_type: "worker_hello".to_owned(),
+                    session_nonce: nonce,
+                    worker_version: "3.0.0-alpha.1".to_owned(),
+                    route: hello_route,
+                    role: WorkerRole::Live,
+                    capabilities: vec![WorkerCapability::ExecuteCommand],
+                },
+            )
+            .await
+            .expect("hello");
+            let _request: WorkerRequest = read_frame(&mut worker).await.expect("request");
+            request_seen_tx.send(()).expect("request seen");
+            release_rx.await.expect("release request error");
+            // Dropping the worker side makes the in-flight client exchange fail
+            // with worker_pipe_closed without relying on a timer.
+        });
+        let first_client = Arc::new(
+            WorkerClient::handshake(
+                core,
+                ExpectedWorker {
+                    session_nonce: nonce_for(1),
+                    route: active_route.clone(),
+                    role: WorkerRole::Live,
+                    required_capabilities: BTreeSet::from([WorkerCapability::ExecuteCommand]),
+                },
+                Duration::from_secs(1),
+            )
+            .await
+            .expect("handshake"),
+        );
+        let lease = registry
+            .install(active_route.clone(), first_client)
+            .await
+            .expect("install");
+        let request = WorkerRequest::from_command(active_route.clone(), command(&active_route))
+            .expect("request");
+        let request_registry = Arc::clone(&registry);
+        let request_task = tokio::spawn(async move {
+            lease
+                .request(&request_registry, &request, NOW, Duration::from_secs(2))
+                .await
+        });
+        request_seen_rx.await.expect("request observed");
+        registry
+            .install(
+                active_route.clone(),
+                client(active_route.clone(), &nonce_for(1)).await,
+            )
+            .await
+            .expect("replacement");
+        release_tx.send(()).expect("release");
+        assert_eq!(
+            request_task
+                .await
+                .expect("request task")
+                .expect_err("client error")
+                .code(),
+            "worker_pipe_closed"
         );
         worker_task.await.expect("worker");
     }

@@ -94,6 +94,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     let ready = root.join("ready.json");
     let update_state_path = root.join("update-state.json");
     prepare_verifying_update_state(&update_state_path);
+    let ack_store = OutboxStore::open_existing(&paths.database_path).expect("open ack store");
     let worker_pid_file = root.join("worker.pid");
     let order_send_count_file = root.join("order-send-count.txt");
     let mut child = ChildGuard::spawn(
@@ -121,8 +122,8 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
             && server.saw_data_response("performance_daily")
             && server.saw_data_response("pending_order_state")
             && server.saw_data_response("diagnostics")
-            && command_is_acked(&paths.database_path)
-            && command_is_acked_by_id(&paths.database_path, RECOVERED_COMMAND_ID)
+            && command_is_acked(&ack_store)
+            && command_is_acked_by_id(&ack_store, RECOVERED_COMMAND_ID)
     });
     let worker_pid = fs::read_to_string(&worker_pid_file)
         .expect("worker pid")
@@ -130,6 +131,18 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         .parse::<u32>()
         .expect("worker pid integer");
     assert!(process_is_running(worker_pid), "worker should be running");
+    let archive_worker_pid_file = root.join("archive-worker.pid");
+    if archive_worker_pid_file.is_file() {
+        let archive_worker_pid = fs::read_to_string(archive_worker_pid_file)
+            .expect("archive worker pid")
+            .trim()
+            .parse::<u32>()
+            .expect("archive worker pid integer");
+        assert_ne!(
+            archive_worker_pid, worker_pid,
+            "archive worker must not overwrite the live worker pid"
+        );
+    }
     let payload: Value =
         serde_json::from_slice(&fs::read(&ready).expect("ready payload")).expect("ready json");
     assert_eq!(payload["ready"], true);
@@ -165,7 +178,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
         "server command did not complete through the native dispatcher"
     );
     assert!(
-        command_is_acked(&paths.database_path),
+        command_is_acked(&ack_store),
         "command result acknowledgement was not persisted"
     );
     assert!(
@@ -405,6 +418,7 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
     .expect("stopped status json");
     assert_eq!(stopped_status["phase"], "stopped");
 
+    drop(ack_store);
     server.stop();
     fs::remove_dir_all(root).expect("remove connected process fixture");
 }
@@ -426,6 +440,7 @@ fn native_core_update_drain_times_out_on_an_active_command_and_recovers_admissio
     let ready = root.join("drain-ready.json");
     let update_state_path = root.join("drain-update-state.json");
     let order_send_count_file = root.join("order-send-count.txt");
+    let ack_store = OutboxStore::open_existing(&paths.database_path).expect("open ack store");
     let mut child = ChildGuard::spawn_with_worker_delay(
         application.join("liangjian-bridge-core.exe"),
         &root,
@@ -466,7 +481,7 @@ fn native_core_update_drain_times_out_on_an_active_command_and_recovers_admissio
     );
 
     wait_until(&mut child, Duration::from_secs(10), || {
-        server.saw_succeeded_command_result() && command_is_acked(&paths.database_path)
+        server.saw_succeeded_command_result() && command_is_acked(&ack_store)
     });
     assert_eq!(
         request_local_control(
@@ -488,6 +503,7 @@ fn native_core_update_drain_times_out_on_an_active_command_and_recovers_admissio
     let output = child.wait_with_output();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
+    drop(ack_store);
     server.stop();
     fs::remove_dir_all(root).expect("remove drain process fixture");
 }
@@ -830,6 +846,7 @@ fn native_core_returns_and_acks_a_live_mt4_pretrade_rejection() {
     }));
     let application = prepare_application(&root);
     let paths = prepare_mt4_discovery_profile(&root, &server.control_url, &server.realtime_url);
+    let ack_store = OutboxStore::open_existing(&paths.database_path).expect("open ack store");
     let ready = root.join("mt4-rejection-ready.json");
     let update_state_path = root.join("mt4-rejection-update-state.json");
     let mut child = ChildGuard::spawn_for_discovery(
@@ -843,10 +860,10 @@ fn native_core_returns_and_acks_a_live_mt4_pretrade_rejection() {
     wait_until(&mut child, Duration::from_secs(30), || {
         ready.is_file()
             && server.saw_command_result("command_01JCONNECTED1", "rejected", "mt4_error_131")
-            && command_is_acked(&paths.database_path)
+            && command_is_acked(&ack_store)
     });
     assert!(server.saw_command_result("command_01JCONNECTED1", "rejected", "mt4_error_131",));
-    assert!(command_is_acked(&paths.database_path));
+    assert!(command_is_acked(&ack_store));
     let store = OutboxStore::open_existing(&paths.database_path).expect("open MT4 rejection store");
     let ledger = store
         .command_ledger("command_01JCONNECTED1")
@@ -879,6 +896,7 @@ fn native_core_returns_and_acks_a_live_mt4_pretrade_rejection() {
     let output = child.wait_with_output();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
+    drop(ack_store);
     server.stop();
     fs::remove_dir_all(root).expect("remove live MT4 rejection fixture");
 }
@@ -916,6 +934,7 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
     });
     let application = prepare_application(&root);
     let paths = prepare_mt4_discovery_profile(&root, &server.control_url, &server.realtime_url);
+    let ack_store = OutboxStore::open_existing(&paths.database_path).expect("open ack store");
     let ready = root.join("mt4-round-trip-ready.json");
     let update_state_path = root.join("mt4-round-trip-update-state.json");
     let mut child = ChildGuard::spawn_for_discovery(
@@ -932,10 +951,10 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_FINAL_COMMAND_ID, "succeeded", "none")
-            && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_FINAL_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, CONNECTED_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_CLOSE_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_CANCEL_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_FINAL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store =
@@ -1019,6 +1038,7 @@ fn native_core_opens_acks_and_closes_a_live_mt4_demo_position() {
     let output = child.wait_with_output();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
+    drop(ack_store);
     server.stop();
     fs::remove_dir_all(root).expect("remove live MT4 round-trip fixture");
 }
@@ -1056,6 +1076,7 @@ fn native_core_places_modifies_and_cancels_a_live_mt4_demo_order() {
     });
     let application = prepare_application(&root);
     let paths = prepare_mt4_discovery_profile(&root, &server.control_url, &server.realtime_url);
+    let ack_store = OutboxStore::open_existing(&paths.database_path).expect("open ack store");
     let ready = root.join("mt4-pending-round-trip-ready.json");
     let update_state_path = root.join("mt4-pending-round-trip-update-state.json");
     let mut child = ChildGuard::spawn_for_discovery(
@@ -1071,9 +1092,9 @@ fn native_core_places_modifies_and_cancels_a_live_mt4_demo_order() {
             && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
-            && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, CONNECTED_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_CLOSE_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_CANCEL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store = OutboxStore::open_existing(&paths.database_path)
@@ -1134,6 +1155,7 @@ fn native_core_places_modifies_and_cancels_a_live_mt4_demo_order() {
     let output = child.wait_with_output();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
+    drop(ack_store);
     server.stop();
     fs::remove_dir_all(root).expect("remove live MT4 pending round-trip fixture");
 }
@@ -1271,6 +1293,7 @@ fn native_core_returns_and_acks_a_live_mt5_pretrade_rejection() {
         &server.control_url,
         &server.realtime_url,
     );
+    let ack_store = OutboxStore::open_existing(&paths.database_path).expect("open ack store");
     let ready = root.join("mt5-rejection-ready.json");
     let update_state_path = root.join("mt5-rejection-update-state.json");
     let mut child = ChildGuard::spawn_for_discovery(
@@ -1288,14 +1311,14 @@ fn native_core_returns_and_acks_a_live_mt5_pretrade_rejection() {
                 "rejected",
                 "order_volume_below_minimum",
             )
-            && command_is_acked(&paths.database_path)
+            && command_is_acked(&ack_store)
     });
     assert!(server.saw_command_result(
         "command_01JCONNECTED1",
         "rejected",
         "order_volume_below_minimum",
     ));
-    assert!(command_is_acked(&paths.database_path));
+    assert!(command_is_acked(&ack_store));
     let ledger = OutboxStore::open_existing(&paths.database_path)
         .expect("open MT5 rejection store")
         .command_ledger("command_01JCONNECTED1")
@@ -1310,6 +1333,7 @@ fn native_core_returns_and_acks_a_live_mt5_pretrade_rejection() {
     let output = child.wait_with_output();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
+    drop(ack_store);
     server.stop();
     let after = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
     assert_eq!(after, before, "rejected command changed live MT5 state");
@@ -1363,6 +1387,7 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
         &server.control_url,
         &server.realtime_url,
     );
+    let ack_store = OutboxStore::open_existing(&paths.database_path).expect("open ack store");
     let ready = root.join("mt5-round-trip-ready.json");
     let update_state_path = root.join("mt5-round-trip-update-state.json");
     let mut child = ChildGuard::spawn_for_discovery(
@@ -1379,10 +1404,10 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_FINAL_COMMAND_ID, "succeeded", "none")
-            && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_FINAL_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, CONNECTED_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_CLOSE_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_CANCEL_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_FINAL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store =
@@ -1469,6 +1494,7 @@ fn native_core_opens_acks_and_closes_a_live_mt5_demo_position() {
     let output = child.wait_with_output();
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
+    drop(ack_store);
     server.stop();
     let after = mt5_active_trade_snapshot(&python_runtime, &terminal_path);
     assert_eq!(after, before, "MT5 round trip changed live terminal state");
@@ -1522,6 +1548,7 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
         &server.control_url,
         &server.realtime_url,
     );
+    let ack_store = OutboxStore::open_existing(&paths.database_path).expect("open ack store");
     let ready = root.join("mt5-pending-round-trip-ready.json");
     let update_state_path = root.join("mt5-pending-round-trip-update-state.json");
     let mut child = ChildGuard::spawn_for_discovery(
@@ -1537,9 +1564,9 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
             && server.saw_command_result(CONNECTED_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CLOSE_COMMAND_ID, "succeeded", "none")
             && server.saw_command_result(ROUND_TRIP_CANCEL_COMMAND_ID, "succeeded", "none")
-            && command_is_acked_by_id(&paths.database_path, CONNECTED_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CLOSE_COMMAND_ID)
-            && command_is_acked_by_id(&paths.database_path, ROUND_TRIP_CANCEL_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, CONNECTED_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_CLOSE_COMMAND_ID)
+            && command_is_acked_by_id(&ack_store, ROUND_TRIP_CANCEL_COMMAND_ID)
     });
     thread::sleep(Duration::from_millis(500));
     let store = OutboxStore::open_existing(&paths.database_path)
@@ -1614,6 +1641,7 @@ fn native_core_places_acks_and_cancels_a_live_mt5_demo_order() {
         after, before,
         "MT5 pending round trip changed live terminal state"
     );
+    drop(ack_store);
     fs::remove_dir_all(root).expect("remove live MT5 pending round-trip fixture");
 }
 
@@ -3149,14 +3177,14 @@ async fn serve_realtime(fixture: RealtimeFixture) {
     }
 }
 
-fn command_is_acked(database_path: &Path) -> bool {
-    command_is_acked_by_id(database_path, "command_01JCONNECTED1")
+fn command_is_acked(store: &OutboxStore) -> bool {
+    command_is_acked_by_id(store, "command_01JCONNECTED1")
 }
 
-fn command_is_acked_by_id(database_path: &Path, command_id: &str) -> bool {
-    OutboxStore::open_existing(database_path)
+fn command_is_acked_by_id(store: &OutboxStore, command_id: &str) -> bool {
+    store
+        .command_ledger(command_id)
         .ok()
-        .and_then(|store| store.command_ledger(command_id).ok())
         .flatten()
         .is_some_and(|record| record.status == "acked")
 }
@@ -3258,7 +3286,7 @@ fn prepare_application(root: &Path) -> PathBuf {
         .expect("fake worker entry")
         .replace(
             "from __future__ import annotations",
-            "from __future__ import annotations\n\nimport os\nfrom pathlib import Path\nPath(os.environ['AURUM_TEST_WORKER_PID_FILE']).write_text(str(os.getpid()), encoding='ascii')",
+            "from __future__ import annotations\n\nimport os\nfrom pathlib import Path\n_worker_role = os.environ.get('AURUM_BRIDGE_WORKER_ROLE')\nif _worker_role == 'live':\n    _worker_pid_path = Path(os.environ['AURUM_TEST_WORKER_PID_FILE'])\nelif _worker_role == 'archive':\n    _worker_pid_path = Path(os.environ['AURUM_TEST_WORKER_PID_FILE']).with_name('archive-worker.pid')\nelse:\n    raise RuntimeError(f'unknown worker role: {_worker_role}')\n_worker_pid_path.write_text(str(os.getpid()), encoding='ascii')",
         )
         .replace(
             "from worker import run",

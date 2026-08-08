@@ -212,6 +212,30 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('preserves a strict exact millisecond history range through the data adapter', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ orders:[], pagination:{ total_count:0 }, source:'mt5' },
+    } })
+    const rangeStart = NOW - 86_400_000
+    await expect(adapter.execute(42, 'history', {
+      page:1, page_size:20,
+      range_start_utc_msc:rangeStart,
+      range_end_utc_msc:NOW,
+    }, { timeoutMs:30_000 })).resolves.toMatchObject({ status:'success', orders:[] })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'history', params:expect.objectContaining({
+        range_start_utc_msc:rangeStart, range_end_utc_msc:NOW,
+      }),
+    }), { timeoutMs:30_000 })
+
+    gateway.requestData.mockClear()
+    await expect(adapter.execute(42, 'history', {
+      page:1, page_size:20, date_from:'2026-01-01',
+      range_start_utc_msc:rangeStart, range_end_utc_msc:NOW,
+    })).resolves.toMatchObject({ status:'error', error:'history_range_invalid' })
+    expect(gateway.requestData).not.toHaveBeenCalled()
+  })
+
   it('forwards bounded position and order references for open-position history evidence', async () => {
     const { adapter, gateway } = setup({ dataResponse:{
       status:'succeeded', payload:{ orders:[], deals:[], history_orders:[], source:'mt5' },
@@ -234,6 +258,72 @@ describe('Bridge v3 business compatibility adapter', () => {
     })).resolves.toMatchObject({ status:'error', error:'history_params_invalid' })
   })
 
+  it('routes exact indexed history evidence without ordinary page parameters', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ deals:[], history_orders:[], source:'mt5' },
+    } })
+    const rangeStart = NOW - 86_400_000
+    await expect(adapter.execute(42, 'history_evidence', {
+      range_start_utc_msc:rangeStart,
+      range_end_utc_msc:NOW,
+      evidence_position_ids:['694675577'],
+      evidence_order_tickets:['694675578'],
+    }, { timeoutMs:30_000 })).resolves.toMatchObject({ status:'success', deals:[] })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'history_evidence',
+      params:{
+        range_start_utc_msc:rangeStart,
+        range_end_utc_msc:NOW,
+        evidence_position_ids:['694675577'],
+        evidence_order_tickets:['694675578'],
+      },
+    }), { timeoutMs:30_000 })
+
+    gateway.requestData.mockClear()
+    await expect(adapter.execute(42, 'history_evidence', {
+      range_start_utc_msc:rangeStart,
+      range_end_utc_msc:NOW,
+    })).resolves.toMatchObject({ status:'error', error:'history_params_invalid' })
+    expect(gateway.requestData).not.toHaveBeenCalled()
+  })
+
+  it('routes opaque history cursors only with an exact range and bound snapshot', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ orders:[], history_snapshot_id:'a'.repeat(64),
+        next_cursor:'b'.repeat(64), has_more:true, source:'mt5_sqlite' },
+    } })
+    const rangeStart = NOW - 86_400_000
+    await expect(adapter.execute(42, 'history_page', {
+      page_size:20,
+      range_start_utc_msc:rangeStart,
+      range_end_utc_msc:NOW,
+      history_snapshot_id:'a'.repeat(64),
+      cursor:'b'.repeat(64),
+      direction:'BUY',
+    })).resolves.toMatchObject({ status:'success', has_more:true })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'history_page',
+      params:expect.objectContaining({
+        page_size:20,
+        range_start_utc_msc:rangeStart,
+        range_end_utc_msc:NOW,
+        snapshot_id:'a'.repeat(64),
+        cursor:'b'.repeat(64),
+        direction:'BUY',
+      }),
+    }), { timeoutMs:5_000 })
+
+    gateway.requestData.mockClear()
+    await expect(adapter.execute(42, 'history_page', {
+      page_size:20, range_start_utc_msc:rangeStart, range_end_utc_msc:NOW,
+      cursor:'b'.repeat(64),
+    })).resolves.toMatchObject({ status:'error', error:'history_cursor_invalid' })
+    await expect(adapter.execute(42, 'history_page', {
+      page_size:20, range_start_utc_msc:rangeStart,
+    })).resolves.toMatchObject({ status:'error', error:'history_range_invalid' })
+    expect(gateway.requestData).not.toHaveBeenCalled()
+  })
+
   it('rejects oversized history pages so evidence stays within the bridge frame budget', async () => {
     const { adapter, gateway } = setup({ dataResponse:{
       status:'succeeded', payload:{ orders:[], deals:[], history_orders:[], source:'mt5' },
@@ -241,6 +331,11 @@ describe('Bridge v3 business compatibility adapter', () => {
 
     await expect(adapter.execute(42, 'history', {
       page:1, page_size:5000, include_deals:true, date_from:'2026-01-01',
+    }, { timeoutMs:30_000 })).resolves.toMatchObject({
+      status:'error', error:'history_pagination_invalid',
+    })
+    await expect(adapter.execute(42, 'history', {
+      page:501, page_size:20, date_from:'2026-01-01',
     }, { timeoutMs:30_000 })).resolves.toMatchObject({
       status:'error', error:'history_pagination_invalid',
     })

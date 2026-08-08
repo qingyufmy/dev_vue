@@ -3,7 +3,8 @@ use bridge_command::{
     CommandWorkerError, ExecutionReconciliationWorker,
 };
 use bridge_contract::{
-    CommandResultMessage, DataRequestMessage, HelloMessage, QuoteRequestMessage,
+    CommandResultMessage, DataRequestMessage, HISTORY_CURSOR_CAPABILITY,
+    HISTORY_EVIDENCE_CAPABILITY, HISTORY_EXACT_RANGE_CAPABILITY, HelloMessage, QuoteRequestMessage,
     SERVER_DATA_QUEUE_CAPACITY, SERVER_PROTOCOL_VERSION, SERVER_TRADE_QUEUE_CAPACITY,
     TerminalDescriptor, TerminalStreamFreshness,
 };
@@ -17,7 +18,7 @@ use bridge_local_control::{
 use bridge_mt4::{EaIdentity, EaRegistrationHub, EaRegistrationHubHandle};
 use bridge_runtime_win::RestartPolicy;
 use bridge_security_win::CredentialStore;
-use bridge_store::{OutboxStore, TerminalBinding};
+use bridge_store::{HistoryScope, OutboxStore, TerminalBinding, parse_history_requested_range};
 use bridge_terminal_data::CollectorPolicy;
 use bridge_terminal_session::{
     Mt4SessionHandle, Mt4SessionManager, Mt4SessionSpec, Mt5SessionManager, Mt5SessionSpec,
@@ -201,7 +202,8 @@ pub struct ActiveMt5Sessions {
     mt4_sessions: BTreeMap<String, ActiveMt4Session>,
     mt4_registration: Option<EaRegistrationHubHandle>,
     mt4_registration_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    registry: Arc<WorkerRegistry<NamedPipeServer>>,
+    live_registry: Arc<WorkerRegistry<NamedPipeServer>>,
+    archive_registry: Arc<WorkerRegistry<NamedPipeServer>>,
     store: Arc<OutboxStore>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     latest_release: Mutex<Option<ReleaseAvailableNotification>>,
@@ -241,11 +243,12 @@ impl CommandWorker for RoutedCommandWorker {
                 .get(&command.terminal_instance_id)
             {
                 rebind_reconciliation_query(&mut command, session.handle.route())?;
-                return session
+                let result = session
                     .handle
                     .execute_command(command)
                     .await
                     .map_err(|error| CommandWorkerError::new(error.code()));
+                return result;
             }
             if let Some(session) = self
                 .active_sessions
@@ -268,11 +271,13 @@ fn rebind_reconciliation_query(
     {
         return Ok(());
     }
-    if command.account_ref.login != current_route.account_ref.login
+    if command.terminal_instance_id != current_route.terminal_instance_id
+        || command.account_ref.login != current_route.account_ref.login
         || !command
             .account_ref
             .broker_server
             .eq_ignore_ascii_case(&current_route.account_ref.broker_server)
+        || current_route.connection_epoch < command.connection_epoch
     {
         return Err(CommandWorkerError::new("worker_registry_route_mismatch"));
     }
@@ -296,7 +301,8 @@ impl ActiveMt5Sessions {
         store: Arc<OutboxStore>,
         clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     ) -> Result<Arc<Self>, CoreBootstrapError> {
-        let registry = Arc::new(WorkerRegistry::<NamedPipeServer>::new());
+        let live_registry = Arc::new(WorkerRegistry::<NamedPipeServer>::new());
+        let archive_registry = Arc::new(WorkerRegistry::<NamedPipeServer>::new());
         let mut sessions = BTreeMap::new();
         for prepared_session in prepared {
             let terminal_instance_id = prepared_session.spec.route.terminal_instance_id.clone();
@@ -305,9 +311,10 @@ impl ActiveMt5Sessions {
                 return Err(CoreBootstrapError::new("bridge_terminal_duplicate"));
             }
             let manager = Arc::new(
-                match Mt5SessionManager::new(
+                match Mt5SessionManager::with_registries(
                     terminal_instance_id.clone(),
-                    Arc::clone(&registry),
+                    Arc::clone(&live_registry),
+                    Arc::clone(&archive_registry),
                     Arc::clone(&store),
                     Arc::clone(&clock),
                 ) {
@@ -446,7 +453,8 @@ impl ActiveMt5Sessions {
             mt4_sessions,
             mt4_registration,
             mt4_registration_task: Mutex::new(mt4_registration_task),
-            registry,
+            live_registry,
+            archive_registry,
             store,
             clock,
             latest_release: Mutex::new(None),
@@ -498,7 +506,12 @@ impl ActiveMt5Sessions {
     }
 
     fn worker_registry(&self) -> Arc<WorkerRegistry<NamedPipeServer>> {
-        Arc::clone(&self.registry)
+        Arc::clone(&self.live_registry)
+    }
+
+    #[allow(dead_code)]
+    fn archive_worker_registry(&self) -> Arc<WorkerRegistry<NamedPipeServer>> {
+        Arc::clone(&self.archive_registry)
     }
 
     pub fn latest_release(
@@ -630,6 +643,8 @@ impl InboundDataHandler for ActiveMt5Sessions {
             if !matches!(
                 request.action.as_str(),
                 "history"
+                    | "history_page"
+                    | "history_evidence"
                     | "rates"
                     | "symbols"
                     | "chart_data"
@@ -656,12 +671,14 @@ impl InboundDataHandler for ActiveMt5Sessions {
                         "bridge_message_route_mismatch",
                     ));
                 }
-                if matches!(request.action.as_str(), "history" | "chart_data")
-                    && request
-                        .params
-                        .get("force_refresh")
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(true)
+                if matches!(
+                    request.action.as_str(),
+                    "history" | "history_page" | "chart_data"
+                ) && request
+                    .params
+                    .get("force_refresh")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
                 {
                     session.handle.request_history_refresh();
                 }
@@ -678,6 +695,20 @@ impl InboundDataHandler for ActiveMt5Sessions {
                     request.request_id.clone(),
                     request.action.clone(),
                     PreparedDataSession::Mt4(session),
+                    if matches!(
+                        request.action.as_str(),
+                        "history" | "history_page" | "history_evidence" | "chart_data"
+                    ) {
+                        let now = (self.clock)();
+                        if now <= 0 {
+                            return Err(TransportError::from_static_code(
+                                "terminal_data_clock_invalid",
+                            ));
+                        }
+                        Some(now)
+                    } else {
+                        None
+                    },
                 ));
             }
             let session =
@@ -693,15 +724,20 @@ impl InboundDataHandler for ActiveMt5Sessions {
                     "bridge_message_route_mismatch",
                 ));
             }
-            if matches!(request.action.as_str(), "history" | "chart_data")
-                && request
-                    .params
-                    .get("force_refresh")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
-            {
-                session.handle.request_history_refresh();
-            }
+            let history_now = if matches!(
+                request.action.as_str(),
+                "history" | "history_page" | "history_evidence" | "chart_data"
+            ) {
+                let now = (self.clock)();
+                if now <= 0 {
+                    return Err(TransportError::from_static_code(
+                        "terminal_data_clock_invalid",
+                    ));
+                }
+                Some(now)
+            } else {
+                None
+            };
             Ok((
                 Arc::clone(&self.store),
                 TerminalDescriptor {
@@ -715,21 +751,59 @@ impl InboundDataHandler for ActiveMt5Sessions {
                 request.request_id.clone(),
                 request.action.clone(),
                 PreparedDataSession::Mt5(session),
+                history_now,
             ))
         })();
         Box::pin(async move {
-            let (store, terminal, parameters, request_id, action, session) = prepared?;
+            let (store, terminal, parameters, request_id, action, session, history_now) = prepared?;
+            if let (PreparedDataSession::Mt5(session), Some(now)) = (&session, history_now) {
+                let store_for_request = Arc::clone(&store);
+                let history_handle = session.handle.clone();
+                let terminal_for_request = terminal.clone();
+                let parameters_for_request = parameters.clone();
+                tokio::task::spawn_blocking(move || {
+                    prepare_mt5_history_request(
+                        &store_for_request,
+                        &history_handle,
+                        &terminal_for_request,
+                        &parameters_for_request,
+                        now,
+                    )
+                })
+                .await
+                .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))??;
+            }
             if action == "history" {
-                return tokio::task::spawn_blocking(move || {
-                    store.read_history_archive_page(&terminal, &parameters)
+                return tokio::task::spawn_blocking(move || match history_now {
+                    Some(now) => store.read_history_archive_page_at(&terminal, &parameters, now),
+                    None => store.read_history_archive_page(&terminal, &parameters),
+                })
+                .await
+                .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
+                .map_err(|error| TransportError::from_static_code(error.code()));
+            }
+            if action == "history_page" {
+                return tokio::task::spawn_blocking(move || match history_now {
+                    Some(now) => store.read_history_cursor_page_at(&terminal, &parameters, now),
+                    None => store.read_history_cursor_page(&terminal, &parameters),
+                })
+                .await
+                .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
+                .map_err(|error| TransportError::from_static_code(error.code()));
+            }
+            if action == "history_evidence" {
+                return tokio::task::spawn_blocking(move || match history_now {
+                    Some(now) => store.read_history_evidence_at(&terminal, &parameters, now),
+                    None => store.read_history_evidence(&terminal, &parameters),
                 })
                 .await
                 .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
                 .map_err(|error| TransportError::from_static_code(error.code()));
             }
             if action == "chart_data" {
-                return tokio::task::spawn_blocking(move || {
-                    store.read_history_chart_data(&terminal, &parameters)
+                return tokio::task::spawn_blocking(move || match history_now {
+                    Some(now) => store.read_history_chart_data_at(&terminal, &parameters, now),
+                    None => store.read_history_chart_data(&terminal, &parameters),
                 })
                 .await
                 .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
@@ -910,6 +984,61 @@ fn validate_quote_route(
 
 fn data_action_is_cacheable(action: &str) -> bool {
     matches!(action, "rates" | "symbols" | "performance_daily")
+}
+
+fn prepare_mt5_history_request(
+    store: &OutboxStore,
+    session: &TerminalSessionHandle,
+    terminal: &TerminalDescriptor,
+    parameters: &serde_json::Value,
+    now_utc_msc: i64,
+) -> Result<(), TransportError> {
+    let requested = parse_history_requested_range(parameters, now_utc_msc)
+        .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+    let force_refresh = parameters
+        .get("force_refresh")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    let Some(requested) = requested else {
+        if force_refresh {
+            session.request_history_refresh();
+        }
+        return Ok(());
+    };
+    let scope = HistoryScope::new(&terminal.terminal_instance_id, &terminal.account_ref)
+        .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+    let covered = store
+        .is_history_range_covered(
+            &scope,
+            requested.range_start_utc_msc,
+            requested.range_end_utc_msc,
+        )
+        .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+    if force_refresh {
+        if covered {
+            // A fully covered fixed range is already complete; force refresh
+            // only wakes the scheduler and leaves the immutable completed job
+            // untouched.  An uncovered range is promoted to P1 below.
+            session.request_history_refresh();
+        } else {
+            session
+                .request_history_range(
+                    requested.range_start_utc_msc,
+                    requested.range_end_utc_msc,
+                    now_utc_msc,
+                )
+                .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+        }
+    } else if !covered {
+        session
+            .request_history_range(
+                requested.range_start_utc_msc,
+                requested.range_end_utc_msc,
+                now_utc_msc,
+            )
+            .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+    }
+    Ok(())
 }
 
 fn data_cache_max_age_msc(action: &str) -> i64 {
@@ -1105,6 +1234,11 @@ impl HelloProvider for CoreHelloProvider {
             sent_at_utc_msc: now,
             session_id: random_id("session_")?,
             bridge_version: env!("CARGO_PKG_VERSION").to_owned(),
+            capabilities: vec![
+                HISTORY_EXACT_RANGE_CAPABILITY.to_owned(),
+                HISTORY_CURSOR_CAPABILITY.to_owned(),
+                HISTORY_EVIDENCE_CAPABILITY.to_owned(),
+            ],
             installation_id: None,
             update_report: None,
             terminals: self.terminals.clone(),
@@ -1223,6 +1357,10 @@ pub struct NativeTerminalRuntimeStatus {
     pub last_success_at_utc_msc: Option<i64>,
     pub error_code: Option<String>,
     pub history_state: String,
+    pub initialization_state: String,
+    pub local_operational_ready: bool,
+    pub history_backfill_pending: bool,
+    pub history_attention_required: bool,
     pub history_consecutive_failures: u32,
     pub history_last_success_at_utc_msc: Option<i64>,
     pub history_error_code: Option<String>,
@@ -1503,12 +1641,17 @@ impl NativeRuntimeStatusHandle {
                     status,
                     observed_at_utc_msc,
                 );
+                let readiness = terminal_readiness_projection(&self.active_sessions.store, status);
                 UiTerminalStatus {
                     terminal_instance_id: status.route.terminal_instance_id.clone(),
                     platform: status.route.platform.clone(),
                     broker_server: status.route.account_ref.broker_server.clone(),
                     login: status.route.account_ref.login.clone(),
                     runtime_state: ui_terminal_runtime_state(status.state).to_owned(),
+                    initialization_state: readiness.initialization_state,
+                    local_operational_ready: readiness.local_operational_ready,
+                    history_backfill_pending: readiness.history_backfill_pending,
+                    history_attention_required: readiness.history_attention_required,
                     error_code: status
                         .error_code
                         .clone()
@@ -1585,28 +1728,35 @@ impl NativeRuntimeStatusHandle {
             .active_sessions
             .statuses()
             .into_iter()
-            .map(|status| NativeTerminalRuntimeStatus {
-                terminal_instance_id: status.route.terminal_instance_id,
-                platform: status.route.platform,
-                connection_epoch: status.route.connection_epoch,
-                state: terminal_state_name(status.state).to_owned(),
-                worker_state: worker_state_name(status.worker_state).to_owned(),
-                collector_state: collector_state_name(status.collector_state).to_owned(),
-                data_ready: status.data_ready,
-                worker_consecutive_failures: status.worker_consecutive_failures,
-                collector_consecutive_failures: status.collector_consecutive_failures,
-                last_success_at_utc_msc: status.last_success_at_utc_msc,
-                error_code: status
-                    .error_code
-                    .map(|code| sanitized_status_code(&code, "terminal_runtime_failed")),
-                history_state: history_state_name(status.history.state).to_owned(),
-                history_consecutive_failures: status.history.consecutive_failures,
-                history_last_success_at_utc_msc: status.history.last_success_at_utc_msc,
-                history_error_code: status
-                    .history
-                    .error_code
-                    .map(|code| sanitized_status_code(&code, "terminal_history_sync_failed")),
-                mt4_expert_restart_required: status.mt4_expert_restart_required,
+            .map(|status| {
+                let readiness = terminal_readiness_projection(&self.active_sessions.store, &status);
+                NativeTerminalRuntimeStatus {
+                    terminal_instance_id: status.route.terminal_instance_id,
+                    platform: status.route.platform,
+                    connection_epoch: status.route.connection_epoch,
+                    state: terminal_state_name(status.state).to_owned(),
+                    worker_state: worker_state_name(status.worker_state).to_owned(),
+                    collector_state: collector_state_name(status.collector_state).to_owned(),
+                    data_ready: status.data_ready,
+                    worker_consecutive_failures: status.worker_consecutive_failures,
+                    collector_consecutive_failures: status.collector_consecutive_failures,
+                    last_success_at_utc_msc: status.last_success_at_utc_msc,
+                    error_code: status
+                        .error_code
+                        .map(|code| sanitized_status_code(&code, "terminal_runtime_failed")),
+                    history_state: history_state_name(status.history.state).to_owned(),
+                    initialization_state: readiness.initialization_state,
+                    local_operational_ready: readiness.local_operational_ready,
+                    history_backfill_pending: readiness.history_backfill_pending,
+                    history_attention_required: readiness.history_attention_required,
+                    history_consecutive_failures: status.history.consecutive_failures,
+                    history_last_success_at_utc_msc: status.history.last_success_at_utc_msc,
+                    history_error_code: status
+                        .history
+                        .error_code
+                        .map(|code| sanitized_status_code(&code, "terminal_history_sync_failed")),
+                    mt4_expert_restart_required: status.mt4_expert_restart_required,
+                }
             })
             .collect::<Vec<_>>();
         let all_ready = !terminals.is_empty() && terminals.iter().all(|status| status.data_ready);
@@ -1703,10 +1853,64 @@ fn collector_state_name(state: bridge_terminal_data::CollectorLifecycleState) ->
 
 fn history_state_name(state: bridge_terminal_session::HistorySyncState) -> &'static str {
     match state {
+        bridge_terminal_session::HistorySyncState::NotStarted => "not_started",
+        bridge_terminal_session::HistorySyncState::SyncingRecent => "syncing_recent",
+        bridge_terminal_session::HistorySyncState::Partial => "partial",
+        bridge_terminal_session::HistorySyncState::Backfilling => "backfilling",
         bridge_terminal_session::HistorySyncState::Starting => "starting",
         bridge_terminal_session::HistorySyncState::Ready => "ready",
         bridge_terminal_session::HistorySyncState::Retrying => "retrying",
+        bridge_terminal_session::HistorySyncState::Paused => "paused",
+        bridge_terminal_session::HistorySyncState::Blocked => "blocked",
+        bridge_terminal_session::HistorySyncState::Complete => "complete",
         bridge_terminal_session::HistorySyncState::Stopped => "stopped",
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TerminalReadinessProjection {
+    initialization_state: String,
+    local_operational_ready: bool,
+    history_backfill_pending: bool,
+    history_attention_required: bool,
+}
+
+/// Read the persisted account-initialization projection without allowing archive progress to
+/// participate in the live readiness gate.  Older stores may not have a row yet, so the
+/// conservative fallback is derived solely from the current realtime snapshot readiness.
+fn terminal_readiness_projection(
+    store: &OutboxStore,
+    status: &TerminalSessionStatus,
+) -> TerminalReadinessProjection {
+    let persisted = HistoryScope::new(
+        &status.route.terminal_instance_id,
+        &status.route.account_ref,
+    )
+    .ok()
+    .and_then(|scope| store.account_initialization_state(&scope).ok().flatten())
+    .filter(|state| state.platform == status.route.platform);
+    let (initialization_state, local_operational_ready) = persisted
+        .map(|state| (state.state, state.local_operational_ready))
+        .unwrap_or_else(|| {
+            if status.data_ready {
+                ("ready".to_owned(), true)
+            } else if status.state == bridge_terminal_session::TerminalSessionState::Starting {
+                ("detected".to_owned(), false)
+            } else {
+                ("warming_realtime_snapshot".to_owned(), false)
+            }
+        });
+    let history_state = history_state_name(status.history.state);
+    let history_backfill_pending = if status.route.platform == "mt4" {
+        !matches!(history_state, "ready" | "complete")
+    } else {
+        history_state != "complete"
+    };
+    TerminalReadinessProjection {
+        initialization_state,
+        local_operational_ready,
+        history_backfill_pending,
+        history_attention_required: history_state == "blocked",
     }
 }
 
@@ -2130,10 +2334,111 @@ fn random_id(prefix: &str) -> Result<String, TransportError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bridge_contract::{AccountRef, DataDeltaMessage, ExecutionEvidence};
+    use bridge_contract::{AccountRef, CommandMessage, DataDeltaMessage, ExecutionEvidence};
     use bridge_security_win::BridgeCredential;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn reconciliation_query_fixture() -> CommandMessage {
+        CommandMessage {
+            v: 3,
+            message_type: "command".to_owned(),
+            message_id: "message_01JCOREQUERY01".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_000,
+            command_id: "command_01JCOREQUERY01".to_owned(),
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            issued_at_utc_msc: 1_700_000_000_000,
+            deadline_utc_msc: 1_700_000_010_000,
+            action: "query_execution".to_owned(),
+            params: serde_json::json!({
+                "expected_kind": "trade",
+                "original_command_id": "command_01JORIGINAL01"
+            }),
+        }
+    }
+
+    #[test]
+    fn hello_advertises_only_implemented_history_capabilities() {
+        let provider = CoreHelloProvider {
+            terminals: vec![TerminalDescriptor {
+                terminal_instance_id: "mt5_terminal_01".to_owned(),
+                platform: "mt5".to_owned(),
+                account_ref: AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                connection_epoch: 7,
+                worker_version: None,
+            }],
+            clock: Arc::new(|| 1_700_000_000_000),
+        };
+        let hello = provider.hello().expect("core hello");
+        assert_eq!(
+            hello.capabilities,
+            vec![
+                HISTORY_EXACT_RANGE_CAPABILITY.to_owned(),
+                HISTORY_CURSOR_CAPABILITY.to_owned(),
+                HISTORY_EVIDENCE_CAPABILITY.to_owned(),
+            ]
+        );
+        assert!(
+            hello
+                .capabilities
+                .iter()
+                .any(|value| value == HISTORY_CURSOR_CAPABILITY)
+        );
+    }
+
+    fn reconciliation_route_fixture(epoch: i64) -> WorkerRoute {
+        WorkerRoute {
+            terminal_instance_id: "mt5_terminal_01".to_owned(),
+            platform: "mt5".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "broker-demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: epoch,
+        }
+    }
+
+    #[test]
+    fn reconciliation_query_rebind_requires_same_terminal_account_and_forward_epoch() {
+        let mut command = reconciliation_query_fixture();
+        rebind_reconciliation_query(&mut command, &reconciliation_route_fixture(8))
+            .expect("forward route is eligible");
+        assert_eq!(command.connection_epoch, 8);
+
+        let mut stale = reconciliation_query_fixture();
+        assert_eq!(
+            rebind_reconciliation_query(&mut stale, &reconciliation_route_fixture(6))
+                .expect_err("current route cannot regress the query epoch")
+                .code(),
+            "worker_registry_route_mismatch"
+        );
+        let mut wrong_terminal = reconciliation_query_fixture();
+        let mut terminal_route = reconciliation_route_fixture(8);
+        terminal_route.terminal_instance_id = "mt5_terminal_other".to_owned();
+        assert_eq!(
+            rebind_reconciliation_query(&mut wrong_terminal, &terminal_route)
+                .expect_err("terminal identity drift")
+                .code(),
+            "worker_registry_route_mismatch"
+        );
+        let mut wrong_login = reconciliation_query_fixture();
+        let mut account_route = reconciliation_route_fixture(8);
+        account_route.account_ref.login = "999999".to_owned();
+        assert_eq!(
+            rebind_reconciliation_query(&mut wrong_login, &account_route)
+                .expect_err("account identity drift")
+                .code(),
+            "worker_registry_route_mismatch"
+        );
+    }
 
     #[test]
     fn connection_failure_preserves_only_the_stable_error_code_until_the_next_transition() {
@@ -2196,6 +2501,66 @@ mod tests {
             .code(),
             "bridge_runtime_status_invalid"
         );
+    }
+
+    #[test]
+    fn readiness_projection_uses_persisted_initialization_and_keeps_archive_secondary() {
+        let root = unique_test_directory("runtime-readiness-projection");
+        let store = OutboxStore::open_or_create(root.join("bridge.db")).expect("store");
+        let mut status = permission_status(
+            bridge_terminal_session::TerminalSessionState::Ready,
+            Some(1_800_000_000_000),
+        );
+        let scope = HistoryScope::new(
+            &status.route.terminal_instance_id,
+            &status.route.account_ref,
+        )
+        .expect("history scope");
+        store
+            .write_account_initialization_state(&bridge_store::AccountInitializationState {
+                scope,
+                platform: "mt5".to_owned(),
+                schema_version: 1,
+                state: "ready".to_owned(),
+                local_operational_ready: true,
+                last_error_code: None,
+                initialized_at_utc_msc: 1_800_000_000_000,
+                updated_at_utc_msc: 1_800_000_000_000,
+            })
+            .expect("initialization state");
+        status.history.state = bridge_terminal_session::HistorySyncState::Backfilling;
+        let projection = terminal_readiness_projection(&store, &status);
+        assert_eq!(projection.initialization_state, "ready");
+        assert!(projection.local_operational_ready);
+        assert!(projection.history_backfill_pending);
+        assert!(!projection.history_attention_required);
+
+        status.history.state = bridge_terminal_session::HistorySyncState::Blocked;
+        let blocked = terminal_readiness_projection(&store, &status);
+        assert!(blocked.local_operational_ready);
+        assert!(blocked.history_backfill_pending);
+        assert!(blocked.history_attention_required);
+
+        status.route.platform = "mt4".to_owned();
+        status.history.state = bridge_terminal_session::HistorySyncState::Ready;
+        let mt4 = terminal_readiness_projection(&store, &status);
+        assert!(!mt4.history_backfill_pending);
+        assert!(!mt4.history_attention_required);
+
+        status.data_ready = false;
+        let fallback_root = unique_test_directory("runtime-readiness-fallback");
+        let fallback_store =
+            OutboxStore::open_or_create(fallback_root.join("bridge.db")).expect("fallback store");
+        let fallback = terminal_readiness_projection(&fallback_store, &status);
+        assert_eq!(fallback.initialization_state, "warming_realtime_snapshot");
+        assert!(!fallback.local_operational_ready);
+        status.state = bridge_terminal_session::TerminalSessionState::Starting;
+        let detected = terminal_readiness_projection(&fallback_store, &status);
+        assert_eq!(detected.initialization_state, "detected");
+        drop(fallback_store);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove persisted fixture");
+        fs::remove_dir_all(fallback_root).expect("remove fallback fixture");
     }
 
     #[test]

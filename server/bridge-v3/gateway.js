@@ -428,6 +428,7 @@ export function createBridgeV3Gateway({
       throw error
     }
     connection.bridgeVersion = message.bridge_version
+    connection.capabilities = new Set(message.capabilities || [])
     connection.generation = ++connectionGeneration
     connection.lastSeen = now()
     connection.ready = true
@@ -689,6 +690,7 @@ export function createBridgeV3Gateway({
       authReady:false,
       ready:false,
       sessionId:null,
+      capabilities:new Set(),
       terminals:new Map(),
       initialSnapshotStreams:new Map(),
       closed:false,
@@ -1046,6 +1048,7 @@ export function createBridgeV3Gateway({
         connection_generation:connection.generation,
         last_seen_at_utc_msc:connection.lastSeen,
         bridge_version:connection.bridgeVersion || null,
+        capabilities:[...(connection.capabilities || [])],
         transport_rtt_msc:Number.isFinite(connection.transportRttMs)
           ? Math.round(connection.transportRttMs) : null,
         stream_observed_at_utc_msc:{ ...(terminal.stream_observed_at_utc_msc || {}) },

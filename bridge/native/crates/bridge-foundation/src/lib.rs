@@ -224,6 +224,16 @@ pub struct RuntimeTerminalStatus {
     pub error_code: Option<String>,
     #[serde(default)]
     pub history_state: String,
+    /// Optional account-initialization projection added after the v1 runtime contract.
+    /// Defaults keep snapshots written by older Bridge versions readable.
+    #[serde(default)]
+    pub initialization_state: String,
+    #[serde(default)]
+    pub local_operational_ready: bool,
+    #[serde(default)]
+    pub history_backfill_pending: bool,
+    #[serde(default)]
+    pub history_attention_required: bool,
     #[serde(default)]
     pub history_consecutive_failures: u32,
     #[serde(default)]
@@ -339,7 +349,29 @@ impl RuntimeStatusDocument {
                 || (!terminal.history_state.is_empty()
                     && !matches!(
                         terminal.history_state.as_str(),
-                        "starting" | "ready" | "retrying" | "stopped"
+                        "not_started"
+                            | "syncing_recent"
+                            | "partial"
+                            | "backfilling"
+                            | "starting"
+                            | "ready"
+                            | "retrying"
+                            | "paused"
+                            | "blocked"
+                            | "complete"
+                            | "stopped"
+                    ))
+                || (!terminal.initialization_state.is_empty()
+                    && !matches!(
+                        terminal.initialization_state.as_str(),
+                        "detected"
+                            | "verifying_identity"
+                            | "warming_realtime_snapshot"
+                            | "reconciling_local_commands"
+                            | "ready"
+                            | "retrying"
+                            | "blocked"
+                            | "superseded"
                     ))
                 || terminal
                     .last_success_at_utc_msc
@@ -1040,6 +1072,10 @@ mod tests {
         assert_eq!(document.terminals[0].collector_state, "retrying");
         assert_eq!(document.terminals[0].history_state, "retrying");
         assert_eq!(document.terminals[0].history_consecutive_failures, 2);
+        assert_eq!(document.terminals[0].initialization_state, "");
+        assert!(!document.terminals[0].local_operational_ready);
+        assert!(!document.terminals[0].history_backfill_pending);
+        assert!(!document.terminals[0].history_attention_required);
         assert_eq!(
             document.terminals[0].history_error_code.as_deref(),
             Some("terminal_history_store_worker_failed")
@@ -1099,6 +1135,39 @@ mod tests {
         );
 
         fs::remove_dir_all(root).expect("remove invalid status fixture");
+    }
+
+    #[test]
+    fn runtime_status_reader_accepts_all_history_progress_states() {
+        let root = unique_test_directory("runtime-status-history-states");
+        fs::create_dir_all(&root).expect("status fixture directory");
+        let output = root.join("runtime-status.json");
+        let now = 1_800_000_000_000_i64;
+        for state in [
+            "not_started",
+            "syncing_recent",
+            "partial",
+            "backfilling",
+            "starting",
+            "ready",
+            "retrying",
+            "paused",
+            "blocked",
+            "complete",
+            "stopped",
+        ] {
+            let mut fixture = runtime_status_fixture(now);
+            fixture["terminals"][0]["history_state"] = Value::String(state.to_owned());
+            fs::write(
+                &output,
+                serde_json::to_vec(&fixture).expect("history state fixture"),
+            )
+            .expect("write history state fixture");
+            let document = read_runtime_status_snapshot(&output, DEFAULT_PROFILE_ID, now)
+                .expect("history state is valid");
+            assert_eq!(document.terminals[0].history_state, state);
+        }
+        fs::remove_dir_all(root).expect("remove history state fixture");
     }
 
     fn runtime_status_fixture(observed_at_utc_msc: i64) -> Value {

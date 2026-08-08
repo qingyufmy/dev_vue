@@ -103,6 +103,9 @@ const MANUAL_ANALYSIS_TERMINAL_STATUSES = new Set([
 // ===== History Cache =====
 let _historyCache = null;      // { filters: string, data: object }
 let _historyChartCache = null; // { filters: string, data: object }
+let _historyCursorState = {
+  key:null, snapshotId:null, rangeStart:null, rangeEnd:null, pageCursors:new Map([[1, null]]),
+};
 let _prevPositionCount = 0;
 let _sessionInvalidating = false;
 
@@ -9260,12 +9263,12 @@ function setHistoryZeroClass(id, value) {
 }
 
 function getHistoryRangeParams() {
-  const scope = $("historyRangeMode")?.value || "platform";
+  const scope = $("historyRangeMode")?.value || "recent";
   const params = { history_scope: scope };
   if (scope === "custom") {
     const from = $("historyRangeFrom")?.value || "";
     const to = $("historyRangeTo")?.value || "";
-    if (!from && !to) throw new Error("请选择自定义历史日期");
+    if (!from) throw new Error("请选择自定义历史开始日期");
     if (from && to && from > to) throw new Error("历史开始日期不能晚于结束日期");
     if (from) params.close_from = from;
     if (to) params.close_to = to;
@@ -9273,21 +9276,27 @@ function getHistoryRangeParams() {
   return params;
 }
 
+function resetHistoryCursorState(key = null) {
+  _historyCursorState = {
+    key, snapshotId:null, rangeStart:null, rangeEnd:null, pageCursors:new Map([[1, null]]),
+  };
+}
+
 function updateHistoryRangeUI() {
-  const scope = $("historyRangeMode")?.value || "platform";
+  const scope = $("historyRangeMode")?.value || "recent";
   const custom = scope === "custom";
   $("historyRangeDates")?.classList.toggle("hidden", !custom);
   if ($("historyRangeFrom")) $("historyRangeFrom").disabled = !custom;
   if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
   const hints = {
-    all: `包含该 ${bridgePlatformLabel()} 账户的完整交易、入金、提款和信用记录。`,
-    platform: `从当前 ${bridgePlatformLabel()} 账户本次接入平台之日开始。`,
+    recent: `显示当前 ${bridgePlatformLabel()} 账户归属期内最近 7 天的记录。`,
+    ownership: `从当前 ${bridgePlatformLabel()} 账户本次接入平台的精确时间开始。`,
     custom: "按平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
   const mt4RangeWarning = bridgePlatformLabel() === "MT4"
     ? " MT4 历史范围取决于终端“账户历史”页已加载的时间范围；需要完整历史时，请先在 MT4 中选择“全部历史记录”。"
     : "";
-  setText("historyRangeHint", `${hints[scope] || hints.all}${mt4RangeWarning}`);
+  setText("historyRangeHint", `${hints[scope] || hints.recent}${mt4RangeWarning}`);
 }
 
 async function loadHistory(forceRefresh) {
@@ -9303,8 +9312,24 @@ async function loadHistory(forceRefresh) {
     if (direction) filterParams.direction = direction;
     if (profit) filterParams.profit_filter = profit;
 
+    const cursorKey = JSON.stringify({
+      ...filterParams,
+      pageSize:filters.pageSize,
+      platform:state.bridgePlatform,
+      account:state.bridgeAccountIdentity,
+    });
+    if (forceRefresh || _historyCursorState.key !== cursorKey) {
+      filters.page = 1;
+      resetHistoryCursorState(cursorKey);
+    }
+    if (filters.page > 1 && !_historyCursorState.pageCursors.has(filters.page)) {
+      filters.page = 1;
+      resetHistoryCursorState(cursorKey);
+    }
+
     // Cache check
-    const filterKey = JSON.stringify({ ...filterParams, page: filters.page, pageSize: filters.pageSize });
+    const filterKey = JSON.stringify({ ...filterParams, page: filters.page, pageSize: filters.pageSize,
+      snapshot:_historyCursorState.snapshotId });
     if (!forceRefresh && _historyCache && _historyCache.filters === filterKey) {
       _applyHistoryData(_historyCache.data);
       loadSignalTickets().catch(()=>{});
@@ -9312,15 +9337,54 @@ async function loadHistory(forceRefresh) {
       return;
     }
 
+    const cursor = _historyCursorState.pageCursors.get(filters.page) || null;
     const [data] = await Promise.all([
-      wsApi("history", { page: filters.page, page_size: filters.pageSize, force_refresh:Boolean(forceRefresh), ...filterParams }),
+      wsApi("history", {
+        page:filters.page,
+        page_size:filters.pageSize,
+        force_refresh:Boolean(forceRefresh),
+        ...filterParams,
+        ...(_historyCursorState.snapshotId
+          ? {
+              history_snapshot_id:_historyCursorState.snapshotId,
+              range_start_utc_msc:_historyCursorState.rangeStart,
+              range_end_utc_msc:_historyCursorState.rangeEnd,
+            } : {}),
+        ...(cursor ? { cursor } : {}),
+      }),
       loadSignalTickets(),
       loadCloseSignalTickets(),
     ]);
     if (data?.status !== 'success') throw new Error(data?.message || data?.error || '历史数据读取失败');
-    _historyCache = { filters: filterKey, data };
+    if (data.history_snapshot_id) {
+      const snapshotId = String(data.history_snapshot_id);
+      const rangeStart = Number(data.history_range?.range_start_utc_msc);
+      const rangeEnd = Number(data.history_range?.range_end_utc_msc);
+      if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
+        || rangeStart <= 0 || rangeStart >= rangeEnd) {
+        throw new Error('历史快照范围无效，请重新读取第一页');
+      }
+      if (_historyCursorState.snapshotId && _historyCursorState.snapshotId !== snapshotId) {
+        throw new Error('历史快照已变化，请重新读取第一页');
+      }
+      _historyCursorState.snapshotId = snapshotId;
+      _historyCursorState.rangeStart = rangeStart;
+      _historyCursorState.rangeEnd = rangeEnd;
+      if (data.has_more === true && data.next_cursor) {
+        _historyCursorState.pageCursors.set(filters.page + 1, String(data.next_cursor));
+      } else {
+        _historyCursorState.pageCursors.delete(filters.page + 1);
+      }
+    }
+    const resolvedFilterKey = JSON.stringify({ ...filterParams, page:filters.page,
+      pageSize:filters.pageSize, snapshot:_historyCursorState.snapshotId });
+    _historyCache = { filters:resolvedFilterKey, data };
     _applyHistoryData(data);
-  } catch (e) { console.error("loadHistory:", e); toast(e.message || "历史数据读取失败", "error"); }
+  } catch (e) {
+    console.error("loadHistory:", e);
+    if (_historyCursorState.snapshotId) resetHistoryCursorState(_historyCursorState.key);
+    toast(e.message || "历史数据读取失败", "error");
+  }
 }
 
 function _applyHistoryData(data) {

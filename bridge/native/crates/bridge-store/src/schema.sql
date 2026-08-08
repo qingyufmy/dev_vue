@@ -160,6 +160,11 @@ CREATE INDEX IF NOT EXISTS idx_history_archive_position
     terminal_instance_id, broker_server, login_account,
     item_kind, position_id, event_time_msc
   );
+CREATE INDEX IF NOT EXISTS idx_history_archive_order
+  ON history_archive_items (
+    terminal_instance_id, broker_server, login_account,
+    item_kind, order_ticket, event_time_msc, item_id
+  );
 CREATE TABLE IF NOT EXISTS history_archive_state (
   terminal_instance_id TEXT NOT NULL,
   broker_server TEXT COLLATE NOCASE NOT NULL,
@@ -169,3 +174,97 @@ CREATE TABLE IF NOT EXISTS history_archive_state (
   updated_at_utc_msc INTEGER NOT NULL,
   PRIMARY KEY (terminal_instance_id, broker_server, login_account)
 );
+
+CREATE TABLE IF NOT EXISTS account_initialization_state (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  schema_version INTEGER NOT NULL CHECK (schema_version > 0 AND schema_version <= 1000),
+  state TEXT NOT NULL CHECK (
+    state IN (
+      'detected', 'verifying_identity', 'warming_realtime_snapshot',
+      'reconciling_local_commands', 'ready', 'retrying', 'blocked', 'superseded'
+    )
+  ),
+  local_operational_ready INTEGER NOT NULL CHECK (local_operational_ready IN (0, 1)),
+  last_error_code TEXT,
+  initialized_at_utc_msc INTEGER NOT NULL CHECK (initialized_at_utc_msc > 0),
+  updated_at_utc_msc INTEGER NOT NULL CHECK (updated_at_utc_msc > 0),
+  CHECK (
+    (state = 'ready' AND local_operational_ready = 1)
+    OR (state <> 'ready' AND local_operational_ready = 0)
+  ),
+  PRIMARY KEY (terminal_instance_id, broker_server, login_account)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_initialization_updated
+  ON account_initialization_state (
+    terminal_instance_id, broker_server, login_account, updated_at_utc_msc DESC
+  );
+
+CREATE TABLE IF NOT EXISTS history_sync_jobs (
+  job_id TEXT PRIMARY KEY,
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  job_kind TEXT NOT NULL CHECK (job_kind IN ('recent', 'on_demand', 'backfill')),
+  priority TEXT NOT NULL CHECK (priority IN ('p1', 'p2', 'p3')),
+  range_start_utc_msc INTEGER NOT NULL CHECK (range_start_utc_msc > 0),
+  range_end_utc_msc INTEGER NOT NULL CHECK (
+    range_end_utc_msc > range_start_utc_msc
+  ),
+  cursor_time_msc INTEGER NOT NULL CHECK (cursor_time_msc > 0),
+  cursor_ticket TEXT NOT NULL CHECK (
+    length(cursor_ticket) <= 32
+    AND (cursor_ticket = '' OR cursor_ticket NOT GLOB '*[^0-9]*')
+  ),
+  window_msc INTEGER NOT NULL CHECK (window_msc > 0),
+  state TEXT NOT NULL CHECK (
+    state IN ('queued', 'running', 'retrying', 'blocked', 'superseded', 'completed')
+  ),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0 AND attempt_count <= 1000000),
+  next_attempt_at_utc_msc INTEGER NOT NULL CHECK (next_attempt_at_utc_msc > 0),
+  last_error_code TEXT,
+  lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+  lease_expires_at_utc_msc INTEGER CHECK (
+    lease_expires_at_utc_msc IS NULL OR lease_expires_at_utc_msc > 0
+  ),
+  created_at_utc_msc INTEGER NOT NULL CHECK (created_at_utc_msc > 0),
+  updated_at_utc_msc INTEGER NOT NULL CHECK (updated_at_utc_msc > 0),
+  UNIQUE (
+    terminal_instance_id, broker_server, login_account,
+    range_start_utc_msc, range_end_utc_msc
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_history_sync_jobs_claim
+  ON history_sync_jobs (
+    terminal_instance_id, broker_server, login_account,
+    state, priority, next_attempt_at_utc_msc, created_at_utc_msc
+  );
+CREATE INDEX IF NOT EXISTS idx_history_sync_jobs_scope
+  ON history_sync_jobs (
+    terminal_instance_id, broker_server, login_account, updated_at_utc_msc DESC
+  );
+
+CREATE TABLE IF NOT EXISTS history_coverage_ranges (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  range_start_utc_msc INTEGER NOT NULL CHECK (range_start_utc_msc > 0),
+  range_end_utc_msc INTEGER NOT NULL CHECK (
+    range_end_utc_msc > range_start_utc_msc
+  ),
+  observed_at_utc_msc INTEGER NOT NULL CHECK (observed_at_utc_msc > 0),
+  updated_at_utc_msc INTEGER NOT NULL CHECK (updated_at_utc_msc > 0),
+  PRIMARY KEY (
+    terminal_instance_id, broker_server, login_account, range_start_utc_msc
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_history_coverage_ranges_scope
+  ON history_coverage_ranges (
+    terminal_instance_id, broker_server, login_account,
+    range_start_utc_msc, range_end_utc_msc
+  );

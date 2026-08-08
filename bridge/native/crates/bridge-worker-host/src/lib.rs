@@ -11,16 +11,16 @@ mod windows_pipe;
 pub use client::{ExpectedWorker, WorkerClient};
 pub use command_adapter::{CommandReconciliationWorker, IpcCommandWorker, RegistryCommandWorker};
 pub use contract::{
-    HistorySyncRequest, QuoteRequest, SnapshotRequest, SnapshotStream, SnapshotStreams,
-    TerminalQuote, TerminalSnapshot, WORKER_IPC_VERSION, WorkerCapability, WorkerDataRequest,
-    WorkerDataResult, WorkerHello, WorkerHistoryBatch, WorkerHistoryCursor, WorkerOperation,
-    WorkerRequest, WorkerResponse, WorkerResponseBody, WorkerRoute,
+    HistoryRangeSyncRequest, HistorySyncRequest, QuoteRequest, SnapshotRequest, SnapshotStream,
+    SnapshotStreams, TerminalQuote, TerminalSnapshot, WORKER_IPC_VERSION, WorkerCapability,
+    WorkerDataRequest, WorkerDataResult, WorkerHello, WorkerHistoryBatch, WorkerHistoryCursor,
+    WorkerOperation, WorkerRequest, WorkerResponse, WorkerResponseBody, WorkerRole, WorkerRoute,
 };
 pub use data_router::WorkerDataRouter;
 pub use frame::{MAX_WORKER_FRAME_BYTES, read_frame, write_frame};
 pub use process_session::{
     WORKER_BROKER_SERVER_ENV, WORKER_CONNECTION_EPOCH_ENV, WORKER_IPC_VERSION_ENV,
-    WORKER_LOGIN_ENV, WORKER_NONCE_ENV, WORKER_PIPE_ENV, WORKER_PLATFORM_ENV,
+    WORKER_LOGIN_ENV, WORKER_NONCE_ENV, WORKER_PIPE_ENV, WORKER_PLATFORM_ENV, WORKER_ROLE_ENV,
     WORKER_TERMINAL_ID_ENV, WORKER_TERMINAL_PATH_ENV, WorkerProcessSession, WorkerProgram,
 };
 pub use registry::{WorkerClaim, WorkerLease, WorkerRegistry};
