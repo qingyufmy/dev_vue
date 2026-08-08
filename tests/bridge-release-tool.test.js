@@ -113,6 +113,7 @@ describe('bridge release tooling', () => {
     expect(releaseBuilder).not.toContain("bridge\\app\\AurumBridge\\AurumBridge.csproj")
     expect(releaseBuilder).toContain('release_core_version_mismatch')
     expect(releaseBuilder).toContain('release_worker_version_mismatch')
+    expect(releaseBuilder).toContain('`"`r?$')
     const nativeCoreResource = await readFile(
       new URL('../bridge/native/apps/bridge-core/build.rs', import.meta.url),
       'utf8',
