@@ -399,7 +399,9 @@ describe('bridge release tooling', () => {
       'utf8',
     )
     expect(launcherUninstaller).toContain('argument == "--uninstall"')
-    expect(launcherUninstaller).toContain('layout.is_default_install_root')
+    expect(launcherUninstaller).toContain('registered_install_root()?')
+    expect(launcherUninstaller).toContain('is_stable_launcher_path(&current_executable)')
+    expect(launcherUninstaller).toContain('ensure_protected_helper(&layout.install_root)?')
     expect(launcherUninstaller).toContain('remove_registration_and_shortcuts(layout)')
   })
 

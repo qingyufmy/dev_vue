@@ -36,6 +36,20 @@ if ($LASTEXITCODE -ne 0) { throw 'mt5_worker_python_compile_failed' }
 
 Push-Location $nativeRoot
 try {
+    $debugDirectory = Join-Path $nativeRoot 'target\x86_64-pc-windows-msvc\debug'
+    New-Item -ItemType Directory -Path $debugDirectory -Force | Out-Null
+    Copy-Item -LiteralPath $developmentEndpoints `
+        -Destination (Join-Path $debugDirectory 'server-endpoints.json') `
+        -Force
+    $debugPython = Join-Path $debugDirectory 'runtime\python\python.exe'
+    $debugWorker = Join-Path $debugDirectory 'modules\adapter.mt5.python\worker.py'
+    New-Item -ItemType Directory -Path (Split-Path $debugPython -Parent) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Split-Path $debugWorker -Parent) -Force | Out-Null
+    Copy-Item -LiteralPath $pythonCommand.Source -Destination $debugPython -Force
+    Copy-Item -LiteralPath (Join-Path $nativeRoot 'workers\mt5\worker.py') `
+        -Destination $debugWorker `
+        -Force
+
     & $cargo fmt --manifest-path $manifest --all --check
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

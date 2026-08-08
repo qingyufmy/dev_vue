@@ -93,8 +93,8 @@ fn record_launcher_promotion_failure(install_root: &Path, version: &str, code: &
 fn run_interactive_uninstall() -> Result<(), (&'static str, FailureMode)> {
     let executable =
         current_launcher_executable().map_err(|code| (code, FailureMode::Uninstall))?;
-    let layout =
-        InstallationLayout::current().map_err(|error| (error.code(), FailureMode::Uninstall))?;
+    let layout = InstallationLayout::from_launcher(&executable)
+        .map_err(|error| (error.code(), FailureMode::Uninstall))?;
     uninstall_preflight(&layout, &executable)
         .map_err(|error| (error.code(), FailureMode::Uninstall))?;
     let message = wide_null(
@@ -127,8 +127,8 @@ fn run_worker_uninstall(
             FailureMode::Uninstall,
         )
     })?;
-    let layout =
-        InstallationLayout::current().map_err(|error| (error.code(), FailureMode::Uninstall))?;
+    let layout = InstallationLayout::for_install_root(&request.install_root)
+        .map_err(|error| (error.code(), FailureMode::Uninstall))?;
     run_uninstall_worker(&request, &layout, &worker)
         .map_err(|error| (error.code(), FailureMode::Uninstall))?;
     show_message(

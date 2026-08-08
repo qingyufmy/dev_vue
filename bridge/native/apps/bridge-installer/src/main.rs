@@ -1,8 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use liangjian_bridge_installer::{
-    InstallerConfiguration, InstallerError, OfflineInstaller, default_install_root,
-    write_failure_log,
+    InstallerConfiguration, InstallerError, OfflineInstaller, write_failure_log_at,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -77,7 +76,7 @@ async fn main() {
         ),
         Err(error) => {
             if !request.rehearsal {
-                write_failure_log(error);
+                write_failure_log_at(&request.install_root, error);
             }
             (
                 1,
@@ -122,31 +121,38 @@ fn parse_request(arguments: &[std::ffi::OsString]) -> Result<InstallRequest, Ins
         .remove("offline-bundle-root")
         .map(PathBuf::from)
         .ok_or_else(|| InstallerError::new("bootstrap_arguments_invalid"))?;
-    let (install_root, result_path, rehearsal) = match (
-        values.remove("install-result"),
-        values.remove("rehearsal-install-root"),
-        values.remove("rehearsal-result"),
-    ) {
-        (Some(result), None, None) if values.is_empty() => {
-            let result = std::path::absolute(result)
-                .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?;
-            let expected = std::path::absolute(&bundle)
-                .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?
-                .join("install-result.json");
-            if !paths_equal(&result, &expected) {
-                return Err(InstallerError::new("bootstrap_arguments_invalid"));
+    let result = values.remove("install-result");
+    let install_root = values.remove("install-root");
+    let rehearsal_root = values.remove("rehearsal-install-root");
+    let rehearsal_result = values.remove("rehearsal-result");
+    let (install_root, result_path, rehearsal) =
+        match (result, install_root, rehearsal_root, rehearsal_result) {
+            (Some(result), Some(root), None, None) if values.is_empty() => {
+                let result = std::path::absolute(result)
+                    .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?;
+                let expected = std::path::absolute(&bundle)
+                    .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?
+                    .join("install-result.json");
+                if !paths_equal(&result, &expected) {
+                    return Err(InstallerError::new("bootstrap_arguments_invalid"));
+                }
+                let root = std::path::absolute(root)
+                    .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?;
+                (root, result, false)
             }
-            (default_install_root()?, result, false)
-        }
-        (None, Some(root), Some(result)) if values.is_empty() && TARGET_ENVIRONMENT == "test" => (
-            std::path::absolute(root)
-                .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?,
-            std::path::absolute(result)
-                .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?,
-            true,
-        ),
-        _ => return Err(InstallerError::new("bootstrap_arguments_invalid")),
-    };
+            (None, None, Some(root), Some(result))
+                if values.is_empty() && TARGET_ENVIRONMENT == "test" =>
+            {
+                (
+                    std::path::absolute(root)
+                        .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?,
+                    std::path::absolute(result)
+                        .map_err(|_| InstallerError::new("bootstrap_arguments_invalid"))?,
+                    true,
+                )
+            }
+            _ => return Err(InstallerError::new("bootstrap_arguments_invalid")),
+        };
     Ok(InstallRequest {
         offline_bundle_root: bundle,
         install_root,
@@ -169,4 +175,38 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
     left.to_string_lossy()
         .trim_end_matches(['\\', '/'])
         .eq_ignore_ascii_case(right.to_string_lossy().trim_end_matches(['\\', '/']))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn args(items: &[&str]) -> Vec<std::ffi::OsString> {
+        items.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn production_argument_contract_requires_explicit_install_root() {
+        let parsed = parse_request(&args(&[
+            "--offline-bundle-root",
+            r"C:\bundle",
+            "--install-root",
+            r"C:\Program Files\AURUM\LiangjianBridge",
+            "--install-result",
+            r"C:\bundle\install-result.json",
+        ]));
+        if TARGET_ENVIRONMENT == "production" {
+            assert!(parsed.is_ok());
+        }
+        let alias = parse_request(&args(&[
+            "--offline-bundle-root",
+            r"C:\bundle",
+            "--rehearsal-install-root",
+            r"C:\Program Files\AURUM\LiangjianBridge",
+            "--install-result",
+            r"C:\bundle\install-result.json",
+        ]));
+        assert!(alias.is_err());
+    }
 }

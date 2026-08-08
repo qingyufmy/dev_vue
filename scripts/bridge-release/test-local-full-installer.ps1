@@ -54,6 +54,27 @@ if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$serverUri) -or
 }
 $serverUrlValue = $serverUri.GetLeftPart([UriPartial]::Authority)
 $manifest = Read-Json $manifestFile 'local_installer_manifest_invalid'
+$buildScriptSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build-full-installer.ps1') -Raw -Encoding utf8
+foreach ($requiredTemplateText in @(
+  "'{autopf}\AURUM\LiangjianBridge'",
+  'DisableDirPage=$disableDirPage',
+  'PrivilegesRequired=$privilegesRequired',
+  'runasoriginaluser',
+  '{userdesktop}',
+  '{userprograms}',
+  '--install-root',
+  'RegQueryStringValue(HKCU'
+)) {
+  if ($buildScriptSource.IndexOf($requiredTemplateText, [StringComparison]::Ordinal) -lt 0) {
+    throw 'local_installer_inno_template_invalid'
+  }
+}
+$initializeWizardIndex = $buildScriptSource.IndexOf('procedure InitializeWizard;', [StringComparison]::Ordinal)
+$curStepChangedIndex = $buildScriptSource.IndexOf('procedure CurStepChanged', [StringComparison]::Ordinal)
+if ($initializeWizardIndex -lt 0 -or $curStepChangedIndex -lt 0 -or
+  $initializeWizardIndex -ge $curStepChangedIndex) {
+  throw 'local_installer_inno_template_invalid'
+}
 $releaseVersion = [string]$manifest.release_version
 $parsedVersion = $null
 if (-not [Version]::TryParse($releaseVersion, [ref]$parsedVersion) -or
@@ -111,6 +132,13 @@ if (-not (Test-Path -LiteralPath $installer -PathType Leaf) -or
 $metadata = Read-Json $metadataPath 'local_installer_metadata_invalid'
 $maximumInstallerBytes = [long]$MaximumInstallerSizeMiB * 1024 * 1024
 if ($metadata.schema_version -ne 1 -or $metadata.environment -ne 'test' -or
+  $metadata.default_install_root_kind -ne 'rehearsal' -or
+  $metadata.directory_selection_enabled -ne $false -or
+  $metadata.requires_admin -ne $false -or
+  $metadata.default_dir_name -ne '{tmp}\LiangjianBridgeRehearsal' -or
+  $metadata.disable_dir_page -ne 'yes' -or
+  $metadata.privileges_required -ne 'lowest' -or
+  $metadata.shortcut_scope -ne 'user' -or
   $metadata.release_version -ne $releaseVersion -or
   $metadata.installer_size_bytes -ne (Get-Item -LiteralPath $installer).Length -or
   [long]$metadata.installer_size_bytes -gt $maximumInstallerBytes -or
