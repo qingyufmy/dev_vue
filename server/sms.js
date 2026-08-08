@@ -1,6 +1,7 @@
 import Dysmsapi from '@alicloud/dysmsapi20170525'
 import * as OpenApi from '@alicloud/openapi-client'
 import { queryAll, queryRun } from './db.js'
+import { systemConfigRowsToMap } from './system-config-secrets.js'
 
 let cachedConfig = null
 
@@ -15,7 +16,7 @@ export async function loadSmsConfig() {
     throw new Error('[SMS] No sms config found in system_config')
   }
 
-  const map = Object.fromEntries(rows.map(r => [r.key, r.value]))
+  const map = systemConfigRowsToMap(rows)
 
   cachedConfig = {
     accessKeyId: map.access_key_id || '',
@@ -30,10 +31,16 @@ export async function loadSmsConfig() {
       change_password: map.template_code_reset || '',
       change_phone: map.template_code_bind || '',
       change_email: map.template_code_reset || '',
+      membership_expiry: map.template_code_membership_expiry || '',
+      membership_expired: map.template_code_membership_expired || '',
     },
   }
 
   return cachedConfig
+}
+
+export function resetSmsConfigCache() {
+  cachedConfig = null
 }
 
 export async function sendSms(phone, templateCode, templateParams = {}) {

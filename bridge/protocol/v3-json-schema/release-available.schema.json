@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/release-available.schema.json",
+  "title": "AURUM Bridge v3 release available wake notice",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": [
+    "v", "type", "message_id", "sent_at_utc_msc",
+    "release_id", "release_version", "rollout_channel", "reason"
+  ],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "release_available" },
+    "message_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sent_at_utc_msc": { "type": "integer", "minimum": 1 },
+    "release_id": {
+      "type": ["string", "null"],
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "release_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+(?:\\.\\d+){0,2}$"
+    },
+    "rollout_channel": { "enum": ["internal", "stable"] },
+    "reason": { "enum": ["published", "rollback"] }
+  },
+  "unevaluatedProperties": false
+}

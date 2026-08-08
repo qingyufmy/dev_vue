@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/envelope.schema.json",
+  "title": "AURUM Bridge v3 envelope",
+  "type": "object",
+  "required": ["v", "type", "message_id", "sent_at_utc_msc"],
+  "properties": {
+    "v": { "const": 3 },
+    "type": {
+      "enum": [
+        "hello", "hello_ack", "command", "command_result", "command_result_ack",
+        "quote_request", "quote", "data_request", "data_response",
+        "data_delta", "data_ack", "heartbeat", "release_available", "error"
+      ]
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sent_at_utc_msc": { "type": "integer", "minimum": 1 }
+  }
+}

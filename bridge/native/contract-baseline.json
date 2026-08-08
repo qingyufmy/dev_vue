@@ -1,0 +1,372 @@
+{
+  "baseline_name": "aurum-bridge-native-3.0.0-phase-0",
+  "source_branch": "refactor/aurum-bridge-v3",
+  "source_commit": "906b9f88faf736d285b1099b0c688277db3c0757",
+  "server_protocol": {
+    "version": 3,
+    "schema_directory": "../protocol/v3-json-schema",
+    "wire_format": "versioned-json"
+  },
+  "legacy_mt5_worker_protocol": {
+    "version": 3,
+    "wire_format": "little-endian-u32-length-prefixed-json",
+    "maximum_frame_bytes": 4194304
+  },
+  "native_worker_ipc_protocol": {
+    "version": 1,
+    "wire_format": "little-endian-u32-length-prefixed-json",
+    "maximum_frame_bytes": 4194304,
+    "session_nonce_required": true,
+    "route_fields": [
+      "terminal_instance_id",
+      "platform",
+      "account_ref",
+      "connection_epoch"
+    ],
+    "request_correlation_field": "request_id",
+    "query_execution_separate_operation": true,
+    "trade_command_params_validated_before_worker_io": true,
+    "trade_command_param_actions": [
+      "place_order",
+      "cancel_order",
+      "modify_order",
+      "modify_position",
+      "close_position",
+      "query_execution"
+    ],
+    "read_only_operations": ["collect_snapshot", "quote", "query_execution"],
+    "mt5_worker_capabilities": [
+      "snapshot",
+      "quote",
+      "execute_command",
+      "query_execution"
+    ],
+    "demo_trade_acceptance_script": "../../scripts/bridge-native/test-mt5-demo.py",
+    "demo_trade_acceptance_requires_empty_symbol_position": true,
+    "mt4_demo_trade_acceptance_example": "cargo run -p bridge-mt4 --example mt4_demo_acceptance --",
+    "mt4_demo_trade_acceptance_requires_demo_server": true,
+    "mt4_demo_trade_acceptance_requires_empty_symbol_position": true,
+    "mt4_demo_trade_acceptance_verifies_cleanup": true,
+    "demo_trade_management_matrix": [
+      "pending_place",
+      "pending_modify",
+      "pending_cancel",
+      "market_open",
+      "position_protection_modify",
+      "partial_close",
+      "full_close",
+      "unique_object_cleanup"
+    ],
+    "demo_trade_rejection_matrix": [
+      "local_volume_validation",
+      "broker_order_check_rejection",
+      "unique_object_cleanup"
+    ],
+    "demo_terminal_recovery_watch_is_read_only": true,
+    "terminal_session_loss_exits_worker_for_supervised_restart": true,
+    "account_route_mismatch_does_not_restart_worker": true,
+    "modify_order_requires_expected_state": true,
+    "partial_close_requires_exact_remaining_volume": true,
+    "fault_injection_unknown_results_are_not_replayed": true,
+    "windows_pipe_security": {
+      "dacl_scope": "current-user-sid-only",
+      "reject_remote_clients": true,
+      "first_pipe_instance": true,
+      "random_pipe_suffix": true
+    },
+    "startup_environment_fields": [
+      "AURUM_BRIDGE_WORKER_PIPE",
+      "AURUM_BRIDGE_WORKER_NONCE",
+      "AURUM_BRIDGE_WORKER_IPC_VERSION",
+      "AURUM_BRIDGE_WORKER_TERMINAL_ID",
+      "AURUM_BRIDGE_WORKER_PLATFORM",
+      "AURUM_BRIDGE_WORKER_BROKER_SERVER",
+      "AURUM_BRIDGE_WORKER_LOGIN",
+      "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH",
+      "AURUM_BRIDGE_WORKER_TERMINAL_PATH"
+    ],
+    "client_registry": {
+      "key": "terminal_instance_id",
+      "route_fields": ["account_ref", "connection_epoch", "platform"],
+      "monotonic_client_generation": true,
+      "request_pre_and_post_generation_fencing": true,
+      "terminal_claim_supersedes_previous_supervisor": true,
+      "stale_supervisor_cannot_remove_or_replace_current_client": true
+    }
+  },
+  "mt4_ea_protocol": {
+    "wire_format": "little-endian-u32-length-prefixed-binary",
+    "maximum_frame_bytes": 4194304
+  },
+  "launcher_arguments": [
+    "--health-check",
+    "--health-file",
+    "--ready-file",
+    "--expected-terminal",
+    "--start-minimized",
+    "--profile",
+    "--background"
+  ],
+  "credential_contract": {
+    "provider": "windows-dpapi-current-user",
+    "entropy_utf8": "AURUM Bridge v3 refresh credential",
+    "file_name": "credential.dat",
+    "lock_file_name": "credential.dat.lock",
+    "json_fields": ["RefreshToken", "ExpiresAtUtcMsc"],
+    "minimum_refresh_token_length": 40
+  },
+  "profile_contract": {
+    "default_profile_id": "default",
+    "default_instance_id": "AURUMBridge.v3",
+    "observer_directory": "profiles/{profile_id}",
+    "observer_instance_id": "AURUMBridge.v3.profile.{profile_id}"
+  },
+  "single_instance_contract": {
+    "lock_directory": "%LOCALAPPDATA%/AURUMBridge/locks",
+    "lock_file": "{instance_id}.lock",
+    "activation_event": "Local\\{instance_id}.activate",
+    "shutdown_event": "Local\\{instance_id}.shutdown"
+  },
+  "logging_contract": {
+    "directory": "{profile_data_directory}/logs",
+    "active_file": "bridge-{utc_yyyyMMdd}.log",
+    "format": "json-lines",
+    "fields": ["timestamp_utc", "level", "event_name", "message"],
+    "maximum_file_bytes": 5242880,
+    "retained_files": 10,
+    "secrets_redacted": true
+  },
+  "runtime_status_contract": {
+    "schema_version": 1,
+    "path": "{profile_data_directory}/runtime-status.json",
+    "atomic_replace": true,
+    "heartbeat_seconds": 5,
+    "maximum_bytes": 262144,
+    "phases": ["starting", "pairing_required", "connecting", "online", "degraded", "stopped"],
+    "server_states": ["stopped", "pairing_required", "connecting", "connected", "reconnecting"],
+    "includes_terminal_worker_collector_and_reconciliation_state": true,
+    "excludes_account_login_broker_server_and_credentials": true,
+    "read_only_ui_projection": true
+  },
+  "native_ui_contract": {
+    "account_action_control_type": "native_owner_draw_button",
+    "account_actions": ["start", "pause", "retry", "bind", "configure"],
+    "dotnet_account_action_geometry_preserved": true,
+    "keyboard_navigation_uses_dialog_message_routing": true,
+    "screen_reader_exposes_account_action_labels": true,
+    "account_list_scroll_control_type": "native_vertical_scrollbar",
+    "account_list_scroll_inputs": ["mouse_wheel", "scrollbar", "keyboard"],
+    "account_list_reserves_dotnet_scrollbar_gutter": true,
+    "account_list_clips_cards_to_viewport": true,
+    "account_list_clamps_scroll_after_resize_dpi_and_account_changes": true,
+    "user_exit_requires_confirmation": true,
+    "internal_shutdown_skips_user_confirmation": true,
+    "taskbar_created_readds_tray_icon": true,
+    "tray_failure_falls_back_to_taskbar": true,
+    "session_end_does_not_block_windows": true,
+    "modeless_child_windows_use_their_own_dialog_keyboard_routing": true,
+    "settings_accept_and_cancel_keys_match_dotnet": true,
+    "log_multiline_content_releases_tab_navigation": true,
+    "action_buttons_use_dotnet_hand_cursor": true,
+    "settings_buttons_draw_keyboard_focus": true
+  },
+  "worker_supervision_contract": {
+    "restart_delays_seconds": [1, 2, 4, 8, 10],
+    "stable_run_reset_seconds": 30,
+    "maximum_failure_counter": 8,
+    "retry_after_counter_cap": true,
+    "kill_process_tree_on_owner_exit": true
+  },
+  "terminal_collection_contract": {
+    "streams": ["account", "positions", "orders"],
+    "active_interval_milliseconds": 250,
+    "idle_interval_milliseconds": 1000,
+    "retry_initial_milliseconds": 500,
+    "retry_max_milliseconds": 10000,
+    "post_command_wake_control_available": true,
+    "full_snapshot_reconciliation": true,
+    "account_route_revalidated_before_projection": true,
+    "worker_restart_is_retriable": true
+  },
+  "terminal_session_contract": {
+    "manager_scope": "one-terminal-instance",
+    "account_change_requires_monotonic_epoch": true,
+    "replacement_order": ["stop_old_collector", "stop_old_worker", "start_new_session"],
+    "invalid_replacement_preserves_current_session": true,
+    "data_ready_requires_worker_and_collector_ready": true,
+    "stale_control_handle_rejected": true
+  },
+  "terminal_binding_contract": {
+    "authority": "profile_sqlite_terminal_bindings",
+    "identity_fields": ["terminal_instance_id", "platform", "terminal_path", "account_ref"],
+    "activation_advances_epoch_atomically": true,
+    "invalid_activation_does_not_consume_epoch": true,
+    "account_switch_prunes_only_stale_data_sync_state": true,
+    "same_platform_path_account_replacement_is_atomic": true,
+    "bindings_ordered_by_terminal_instance_id": true,
+    "runtime_change_detection_fields": ["terminal_instance_id", "platform", "terminal_path", "account_ref", "connection_epoch", "updated_at_utc_msc"]
+  },
+  "mt5_first_provisioning_contract": {
+    "fresh_profile_does_not_require_dotnet_seed_data": true,
+    "discovery_sources": ["running_process", "metaquotes_registry_hkcu", "metaquotes_registry_hklm_64", "metaquotes_registry_hklm_32", "metaquotes_terminal_data_origin"],
+    "running_installations_are_prioritized": true,
+    "probe_uses_packaged_python_and_mt5_worker": true,
+    "probe_timeout_seconds": 15,
+    "probe_output_maximum_bytes": 16384,
+    "probe_output_fields": ["probe_version", "terminal_path", "account_ref"],
+    "terminal_path_and_account_route_are_strictly_validated": true,
+    "successful_probe_activates_sqlite_binding": true,
+    "single_terminal_is_selected_automatically": true,
+    "multiple_terminals_require_user_selection": true,
+    "probe_is_read_only": true
+  },
+  "mt4_first_provisioning_contract": {
+    "fresh_profile_does_not_require_dotnet_seed_data": true,
+    "discovery_sources": ["running_process", "metaquotes_terminal_data_origin", "portable_installation"],
+    "running_installations_are_prioritized": true,
+    "single_terminal_is_selected_automatically": true,
+    "multiple_terminals_require_user_selection": true,
+    "expert_is_deployed_before_account_registration": true,
+    "manual_expert_repair_works_without_an_account_binding": true,
+    "global_registration_pipe_owner": "default_core",
+    "observer_profiles_never_claim_the_global_registration_pipe": true,
+    "observer_terminal_paths_are_reserved_before_default_fallback": true,
+    "paused_observer_registration_is_rejected": true,
+    "account_terminal_identity_fields": ["device_namespace", "terminal_data_path", "broker_server", "login"],
+    "successful_registration_activates_profile_sqlite_binding": true,
+    "same_path_account_switch_replaces_the_previous_binding": true,
+    "welcome_hands_the_ea_to_a_terminal_specific_reconnect_pipe": true,
+    "registration_does_not_execute_trades": true
+  },
+  "core_bootstrap_contract": {
+    "profile_paths_are_authoritative": true,
+    "credential_state_loaded_from_dpapi_store": true,
+    "sqlite_opened_before_terminal_preparation": true,
+    "mt5_runtime_required_only_when_mt5_is_bound": true,
+    "prepared_route_matches_persisted_binding": true,
+    "workers_start_only_with_server_runtime": true
+  },
+  "core_connected_runtime_contract": {
+    "credential_changes_detect_pair_and_logout": true,
+    "active_logout_closes_current_server_session": true,
+    "server_and_terminal_sessions_share_cancellation": true,
+    "terminal_shutdown_order_is_reverse_start_order": true,
+    "gap_requires_current_terminal_epoch": true,
+    "successful_persisted_command_wakes_collector_once": true,
+    "heartbeat_uses_terminal_collector_freshness": true,
+    "post_execution_observer_failure_does_not_change_receipt": true,
+    "mt5_command_dispatcher_enabled": true,
+    "trade_admission_requires_acknowledged_initial_account_positions_orders": true,
+    "every_server_reconnect_forces_new_initial_snapshots": true,
+    "runtime_binding_change_restarts_server_and_workers": true,
+    "runtime_binding_change_requires_higher_epoch": true,
+    "runtime_binding_change_does_not_replay_acked_commands": true,
+    "command_path": [
+      "websocket_inbound",
+      "sqlite_command_ledger",
+      "rust_dispatcher",
+      "named_pipe",
+      "mt5_python_worker",
+      "sqlite_execution_receipt_and_trade_outbox",
+      "websocket_command_result",
+      "server_ack_to_ledger_acked"
+    ]
+  },
+  "command_reconciliation_contract": {
+    "original_trade_command_is_never_replayed": true,
+    "eligible_states": [
+      "dispatched_without_receipt",
+      "acked_with_uncertain_receipt"
+    ],
+    "unacknowledged_uncertain_waits_for_server_ack": true,
+    "worker_query_failure_remains_pending": true,
+    "only_final_same_route_results_can_resolve": true,
+    "uncertain_resolution_is_monotonic": true,
+    "resolution_creates_new_trade_priority_outbox_message": true,
+    "resolved_result_requires_new_server_ack": true,
+    "periodic_service_implemented": true,
+    "mt5_query_adapter_implemented": true,
+    "mt5_query_uses_fresh_command_id": true,
+    "mt5_query_settlement_window_is_fail_closed": true,
+    "mt5_query_adapter_connected": true,
+    "startup_and_periodic_reconciliation_enabled": true,
+    "reconciliation_shutdown_is_cancellable": true
+  },
+  "core_process_lifecycle_contract": {
+    "missing_authorization_waits_without_opening_browser": true,
+    "workers_do_not_start_before_authorization": true,
+    "single_instance_shutdown_cancels_server_and_terminals": true,
+    "authorized_profile_requires_a_terminal": true,
+    "launcher_ready_requires_server_connected": true,
+    "launcher_ready_requires_expected_terminals_ready": true,
+    "launcher_ready_signal_is_atomic": true,
+    "loopback_process_test_covers_real_python_worker": true,
+    "loopback_process_test_covers_data_forwarding": true,
+    "loopback_process_test_covers_command_dispatch_and_result_ack": true,
+    "loopback_process_test_covers_interrupted_command_reconciliation_without_replay": true,
+    "loopback_process_test_covers_disconnect_reconnect": true,
+    "loopback_process_test_observes_reconnecting_status": true,
+    "loopback_process_test_covers_worker_termination_and_restart": true,
+    "loopback_process_test_covers_nonfatal_status_write_failure": true,
+    "loopback_process_test_verifies_worker_exit": true
+  },
+  "endpoint_authority_contract": {
+    "administrator_override_file": "%APPDATA%/AURUM/BridgeV3/endpoint-settings.json",
+    "packaged_default_file": "{application_directory}/server-endpoints.json",
+    "administrator_override_precedence": true,
+    "invalid_override_falls_back_to_packaged_default": true,
+    "packaged_default_required": true,
+    "single_server_url_derives_realtime_url": true,
+    "packaged_remote_plaintext_control_rejected": true,
+    "administrator_explicit_http_override_allowed": true,
+    "ordinary_user_realtime_compatibility_toggle": true,
+    "realtime_compatibility_keeps_control_https": true,
+    "json_maximum_bytes": 4096
+  },
+  "server_transport_contract": {
+    "protocol_version": 3,
+    "websocket_path": "/aurum-api/bridge/v3/ws",
+    "hello_timeout_seconds": 10,
+    "heartbeat_interval_seconds": 10,
+    "outbox_poll_interval_milliseconds": 200,
+    "maximum_message_bytes": 4194304,
+    "trade_queue_capacity": 256,
+    "data_queue_capacity": 2048,
+    "reconnect_delays_seconds": [1, 2, 4, 8, 10],
+    "outbox_retry_delays_seconds": [2, 4, 8, 16, 30],
+    "control_transport": "packaged-https-admin-explicit-http-or-https",
+    "realtime_transport": "configured-wss-or-ws-without-silent-downgrade",
+    "tls_backend": "rustls",
+    "native_tls_enabled": false,
+    "openssl_runtime_required": false,
+    "binary_websocket_messages_accepted": false
+  },
+  "sqlite_contract": {
+    "file_name": "bridge.db",
+    "journal_mode": "wal",
+    "synchronous": "full",
+    "single_writer": "bridge-core",
+    "native_fresh_database_initialization": true,
+    "partial_schema_repair_in_place": false,
+    "terminal_projection_restore": true,
+    "data_delta_atomic_with_outbox": true,
+    "gap_recovery_uses_store_revision": true,
+    "required_tables": [
+      "terminal_bindings",
+      "stream_revisions",
+      "account_latest",
+      "positions_latest",
+      "orders_latest",
+      "deals_pending",
+      "history_cursors",
+      "outbox_messages",
+      "execution_receipts",
+      "terminal_data_cache",
+      "module_versions",
+      "update_state",
+      "history_archive_items",
+      "history_archive_state"
+    ]
+  },
+  "migration_rule": "preserve-wire-and-storage-contracts-before-optimizing"
+}

@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   round2, round3, round5, clamp,
-  parseTimeframeTags, stripTimeframeTags,
+  parseTimeframeTags, parseLegacyTimeframeTags, stripTimeframeTags, stripStrategyControlTags,
   signalTtlSeconds, signalAgeSeconds, attachSignalTiming,
-  configPublic, timeframeIntervalMs,
-  compactRates, utcToMt5Time,
+  timeframeIntervalMs,
+  compactRates, terminalOffsetFromClockPairs, utcMscToTerminalTime, utcToMt5Time,
   aiFailureHold, parseJsonObject,
   DEFAULT_PROMPT, STRATEGY_TIMEFRAME_COUNTS
 } from '../../server/routes/ai/utils.js'
@@ -79,6 +79,19 @@ describe('stripTimeframeTags', () => {
   })
 })
 
+describe('legacy strategy control tags', () => {
+  it('imports mixed MTF/ATF/CTF tags in prompt order and deduplicates timeframes', () => {
+    expect(parseLegacyTimeframeTags('{{ATF:H1:80}} {{MTF:H4:50}} {{CTF:H1:120}}')).toEqual([
+      { tf: 'H1', count: 80 },
+      { tf: 'H4', count: 50 },
+    ])
+  })
+
+  it('removes timeframe and Chan control tags from stored prompts', () => {
+    expect(stripStrategyControlTags('分析行情\n{{ATF:H1:80}} {{USE_CHAN}}\n输出信号')).toBe('分析行情\n\n输出信号')
+  })
+})
+
 describe('signalTtlSeconds', () => {
   it('返回正确的TTL', () => {
     expect(signalTtlSeconds('M1')).toBe(20)
@@ -108,6 +121,13 @@ describe('signalAgeSeconds', () => {
   it('无效日期返回大值', () => {
     expect(signalAgeSeconds('invalid')).toBe(999999)
   })
+
+  it('优先使用数据库中的 UTC 毫秒计算信号年龄', () => {
+    const createdAtUtcMsc = Date.now() - 10_000
+    const age = signalAgeSeconds('invalid', createdAtUtcMsc)
+    expect(age).toBeGreaterThanOrEqual(9)
+    expect(age).toBeLessThanOrEqual(11)
+  })
 })
 
 describe('attachSignalTiming', () => {
@@ -119,28 +139,23 @@ describe('attachSignalTiming', () => {
     const result = attachSignalTiming(signal)
     expect(result.ttl_seconds).toBe(45)
     expect(result.is_stale).toBe(false)
-    expect(result.created_at_mt5).toBeTruthy()
-  })
-})
-
-describe('configPublic', () => {
-  it('隐藏 API key', () => {
-    const row = { id: 1, api_key_encrypted: 'sk-123', model_name: 'deepseek' }
-    const result = configPublic(row)
-    expect(result.has_api_key).toBe(true)
-    expect(result.masked_api_key).toBe('****')
-    expect(result.api_key_encrypted).toBeUndefined()
+    expect(result.created_at_mt5).toBeNull()
+    expect(attachSignalTiming({ timeframe:'M5', created_at:createdAt }, 180).created_at_mt5).toBeTruthy()
   })
 
-  it('无 API key', () => {
-    const row = { id: 1, api_key_encrypted: null }
-    const result = configPublic(row)
-    expect(result.has_api_key).toBe(false)
-    expect(result.masked_api_key).toBe(null)
+  it('使用 UTC 毫秒判定新鲜度，不依赖旧北京时间字符串', () => {
+    const result = attachSignalTiming({ timeframe:'M5', created_at:'invalid', created_at_utc_msc:Date.now() - 5_000 })
+    expect(result.is_stale).toBe(false)
   })
 
-  it('null 输入返回 null', () => {
-    expect(configPublic(null)).toBe(null)
+  it('模型刚完成时仍按原行情快照的执行期限判定为过期', () => {
+    const result = attachSignalTiming({
+      timeframe:'H1', created_at_utc_msc:Date.now(),
+      decision_json:JSON.stringify({ execution_valid_until_utc_msc:Date.now() - 1_000 }),
+    })
+    expect(result.age_seconds).toBeLessThan(1)
+    expect(result.is_stale).toBe(true)
+    expect(result.execution_valid_until_utc_msc).toBeLessThan(Date.now())
   })
 })
 
@@ -156,22 +171,57 @@ describe('timeframeIntervalMs', () => {
 describe('compactRates', () => {
   it('压缩K线数据', () => {
     const rates = [
-      { time: '2026-01-01', open: '1.23456789', high: '1.24', low: '1.22', close: '1.23', tick_volume: '100' }
+      { time: '2026-01-01', time_utc_msc:1784185200000, open: '1.23456789', high: '1.24', low: '1.22', close: '1.23', tick_volume: '100', spread:'3' }
     ]
     const result = compactRates(rates)
     expect(result[0].open).toBe(1.23457)
     expect(result[0].tick_volume).toBe(100)
+    expect(result[0]).toMatchObject({ time_utc_msc:1784185200000, spread:3 })
   })
 })
 
 describe('utcToMt5Time', () => {
-  it('北京时间转MT5时间（减5小时）', () => {
+  it('does not assume a terminal offset when none was verified', () => {
     const result = utcToMt5Time('2026-06-26 15:30:00')
-    expect(result).toBe('2026-06-26 10:30:00')
+    expect(result).toBeNull()
+  })
+
+  it('uses the calibrated MT5 offset and rolls the date forward', () => {
+    expect(utcToMt5Time('2026-06-26 23:30:00', 600)).toBe('2026-06-27 01:30:00')
   })
 
   it('null 返回 null', () => {
     expect(utcToMt5Time(null)).toBe(null)
+  })
+})
+
+describe('utcMscToTerminalTime', () => {
+  it('derives event terminal time from canonical UTC and the frozen event offset', () => {
+    expect(utcMscToTerminalTime(Date.UTC(2026, 7, 3, 8, 11, 49), 180))
+      .toBe('2026-08-03 11:11:49')
+  })
+
+  it('fails closed when terminal clock evidence is missing', () => {
+    expect(utcMscToTerminalTime(Date.UTC(2026, 7, 3, 8, 11, 49))).toBeNull()
+  })
+})
+
+describe('terminalOffsetFromClockPairs', () => {
+  it('recovers a frozen terminal offset only from two consistent UTC/server pairs', () => {
+    expect(terminalOffsetFromClockPairs([
+      { time_utc_msc:1_000_000, time_server_msc:11_800_000 },
+      { time_utc_msc:2_000_000, time_server_msc:12_800_000 },
+    ])).toBe(180)
+  })
+
+  it('rejects conflicting or incomplete clock evidence', () => {
+    expect(terminalOffsetFromClockPairs([
+      { time_utc_msc:1_000_000, time_server_msc:11_800_000 },
+      { time_utc_msc:2_000_000, time_server_msc:9_200_000 },
+    ])).toBeNull()
+    expect(terminalOffsetFromClockPairs([
+      { time_utc_msc:1_000_000, time_server_msc:11_800_000 },
+    ])).toBeNull()
   })
 })
 
@@ -180,7 +230,7 @@ describe('aiFailureHold', () => {
     const market = { symbol: 'XAUUSD', timeframe: 'M5' }
     const result = aiFailureHold(market, 'test_error')
     expect(result.signal_type).toBe('hold')
-    expect(result.confidence).toBe(0.5)
+    expect(result.confidence).toBe(0)
     expect(result._inference_source).toBe('ai_error_hold')
   })
 })
@@ -200,7 +250,8 @@ describe('parseJsonObject', () => {
 describe('常量', () => {
   it('DEFAULT_PROMPT 存在', () => {
     expect(DEFAULT_PROMPT).toBeTruthy()
-    expect(DEFAULT_PROMPT).toContain('signal_type')
+    expect(DEFAULT_PROMPT).toContain('strict JSON object')
+    expect(DEFAULT_PROMPT).not.toContain('recommended_volume')
   })
 
   it('STRATEGY_TIMEFRAME_COUNTS 包含必要时间框架', () => {

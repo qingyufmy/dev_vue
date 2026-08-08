@@ -2,17 +2,51 @@ import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
-import { queryOne, queryAll, queryRun, logAudit } from '../db.js'
+import { queryOne, queryAll, queryRun, withTransaction, logAudit } from '../db.js'
 import { generateToken, authMiddleware } from '../middleware/auth.js'
 import nodemailer from 'nodemailer'
+import { systemConfigRowsToMap } from '../system-config-secrets.js'
 import { sendVerificationSms } from '../sms.js'
 import { generateCaptcha, verifyCaptcha } from '../captcha.js'
+import { decorateMembership } from '../membership.js'
+import { disconnectUserSockets } from '../bridge-ws.js'
+import {
+  createBridgeConnectionTicket, useBridgeRefreshSession, revokeBridgeRefreshSessions,
+} from '../bridge-auth-session.js'
+import {
+  approveBridgePairing, consumeBridgePairing, createManagedObserverSession,
+  listManagedObserverSources, startBridgePairing,
+} from '../bridge-pairing.js'
 
 const router = Router()
 
 function normalizePhone(p) {
   if (!p) return p
   return p.replace(/^\+86/, '')
+}
+
+function transactionRows(result) {
+  if (Array.isArray(result) && Array.isArray(result[0])) return result[0]
+  return Array.isArray(result) ? result : []
+}
+
+function transactionChanges(result) {
+  const value = Array.isArray(result) ? result[0] : result
+  return Number(value?.affectedRows ?? value?.changes ?? 0)
+}
+
+async function transactionOne(run, sql, params = []) {
+  const rows = transactionRows(await run(sql, params))
+  return rows[0] || null
+}
+
+async function consumeVerificationRecord(run, id, conditionColumn = 'token_used') {
+  const result = await run(
+    `UPDATE verification_codes SET used = 1, token_used = 1
+     WHERE id = ? AND ${conditionColumn} = 0`,
+    [id]
+  )
+  return transactionChanges(result) === 1
 }
 
 const planLabelMap = { free: '免费版', plus: 'Plus', pro: 'Pro' }
@@ -40,8 +74,7 @@ async function getAuthToggles() {
 
 async function sendSmtpEmail(to, subject, html) {
   const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'smtp'")
-  const cfg = {}
-  for (const r of rows) cfg[r.key] = r.value
+  const cfg = systemConfigRowsToMap(rows)
   if (!cfg.host || !cfg.user) return false
   const transporter = nodemailer.createTransport({
     host: cfg.host,
@@ -162,7 +195,7 @@ router.post('/register', async (req, res) => {
 
     if (method === 'phone') {
       if (!phone || !password) return res.json({ ok: false, error: '手机号和密码不能为空' })
-      if (password.length < 8) return res.json({ ok: false, error: '密码至少8位' })
+      if (password.length < 8 || password.length > 32) return res.json({ ok: false, error: '密码长度需为8-32位' })
       if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) return res.json({ ok: false, error: '密码需包含字母和数字' })
       if (!verifyToken) return res.json({ ok: false, error: '请先完成手机验证' })
 
@@ -185,37 +218,67 @@ router.post('/register', async (req, res) => {
         if (referrer) referredBy = ref.toUpperCase()
       }
 
-      const result = await queryRun(`
-        INSERT INTO users (phone, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at, plan_source, auth_method, phone_verified)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ${gift.enabled ? `DATE_ADD(NOW(), INTERVAL ${gift.duration} ${gift.unit})` : 'NULL'}, ?, 'phone', 1)
-      `, [phone, hash, nickname || '手机用户', code, referredBy, 'WS' + String(Date.now()).slice(-6), regPlan, regPlanSource])
+      const registration = await withTransaction(async run => {
+        const lockedToken = await transactionOne(run,
+          'SELECT id FROM verification_codes WHERE id = ? AND token_used = 0 FOR UPDATE',
+          [tokenRecord.id])
+        if (!lockedToken) return { ok: false, reason: 'verification' }
 
-      const token = generateToken(result.insertId)
-      const user = await queryOne('SELECT id, uid, phone, nickname, avatar, role, plan, plan_source, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [result.insertId])
+        const duplicate = await transactionOne(run, 'SELECT id FROM users WHERE phone = ? OR phone = ? FOR UPDATE', [phone, phone])
+        if (duplicate) return { ok: false, reason: 'duplicate' }
+
+        const rawInsert = await run(`
+          INSERT INTO users (phone, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at, plan_source, auth_method, phone_verified)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ${gift.enabled ? `DATE_ADD(NOW(), INTERVAL ${gift.duration} ${gift.unit})` : 'NULL'}, ?, 'phone', 1)
+        `, [phone, hash, nickname || '手机用户', code, referredBy, 'WS' + String(Date.now()).slice(-6), regPlan, regPlanSource])
+        const insertId = Number((Array.isArray(rawInsert) ? rawInsert[0] : rawInsert)?.insertId)
+        const user = await transactionOne(run,
+          'SELECT id, uid, phone, nickname, avatar, role, plan, plan_source, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?',
+          [insertId])
+
+        if (referredBy) {
+          const referrer = await transactionOne(run, 'SELECT id FROM users WHERE referral_code = ?', [referredBy])
+          if (referrer) await run('INSERT INTO referrals (referrer_id, referred_id, status) VALUES (?, ?, ?)', [referrer.id, insertId, 'pending'])
+        }
+
+        const consumed = await consumeVerificationRecord(run, tokenRecord.id)
+        if (!consumed) throw new Error('verification_already_consumed')
+        await run('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [insertId, 'system', '欢迎加入量见课堂', '您的账户已创建成功，开始学习吧！'])
+        if (gift.enabled && regPlan !== 'free') {
+          await run('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [insertId, 'system', '🎁 新会员福利', `已为您赠送 ${gift.duration}${gift.unitLabel} ${planLabelMap[regPlan] || regPlan} 体验，尽享${planDescMap[regPlan] || '全部课程'}！`])
+        }
+        return { ok: true, insertId, user }
+      })
+
+      if (!registration.ok) {
+        return res.json({ ok: false, error: registration.reason === 'duplicate' ? '该手机号已注册' : '手机验证已过期，请重新验证' })
+      }
+
+      const token = generateToken(registration.insertId)
+      const user = registration.user
       user.name = user.nickname
       user.authMethod = 'phone'
       user.planExpiresAt = user.plan_expires_at || ''
       user.planSource = user.plan_source || null
+      Object.assign(user, decorateMembership(user))
 
-      if (referredBy) {
-        const referrer = await queryOne('SELECT id FROM users WHERE referral_code = ?', [referredBy])
-        if (referrer) await queryRun('INSERT INTO referrals (referrer_id, referred_id, status) VALUES (?, ?, ?)', [referrer.id, result.insertId, 'pending'])
-      }
-
-      await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
-      await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '欢迎加入量见课堂', '您的账户已创建成功，开始学习吧！'])
-      if (gift.enabled && regPlan !== 'free') {
-        await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', `已为您赠送 ${gift.duration}${gift.unitLabel} ${planLabelMap[regPlan] || regPlan} 体验，尽享${planDescMap[regPlan] || '全部课程'}！`])
-      }
-
-      logAudit({ userId: result.insertId, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
+      logAudit({ userId: registration.insertId, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
       return res.json({ ok: true, token, user })
     }
 
     // Email registration (original logic)
     if (!email || !password) return res.json({ ok: false, error: '邮箱和密码不能为空' })
-    if (password.length < 8) return res.json({ ok: false, error: '密码至少8位' })
+    if (password.length < 8 || password.length > 32) return res.json({ ok: false, error: '密码长度需为8-32位' })
     if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) return res.json({ ok: false, error: '密码需包含字母和数字' })
+    if (!verifyToken) return res.json({ ok: false, error: '请先完成邮箱验证' })
+
+    const tokenRecord = await queryOne(
+      `SELECT id FROM verification_codes
+       WHERE email = ? AND verify_token = ? AND purpose = ?
+         AND expires_at > NOW() AND token_used = 0`,
+      [email, verifyToken, 'register']
+    )
+    if (!tokenRecord) return res.json({ ok: false, error: '邮箱验证已过期，请重新验证' })
 
     const existing = await queryOne('SELECT id FROM users WHERE email = ?', [email])
     if (existing) return res.json({ ok: false, error: '该邮箱已注册' })
@@ -230,34 +293,192 @@ router.post('/register', async (req, res) => {
       if (referrer) referredBy = ref.toUpperCase()
     }
 
-    const result = await queryRun(`
-      INSERT INTO users (email, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at, plan_source, auth_method, email_verified)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ${gift.enabled ? `DATE_ADD(NOW(), INTERVAL ${gift.duration} ${gift.unit})` : 'NULL'}, ?, 'email', 1)
-    `, [email, hash, nickname || email.split('@')[0], code, referredBy, 'WS' + String(Date.now()).slice(-6), regPlan, regPlanSource])
+    const registration = await withTransaction(async run => {
+      const lockedToken = await transactionOne(run,
+        'SELECT id FROM verification_codes WHERE id = ? AND token_used = 0 FOR UPDATE',
+        [tokenRecord.id])
+      if (!lockedToken) return { ok: false, reason: 'verification' }
 
-    const token = generateToken(result.insertId)
-    const user = await queryOne('SELECT id, uid, email, nickname, avatar, role, plan, plan_source, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?', [result.insertId])
+      const duplicate = await transactionOne(run, 'SELECT id FROM users WHERE email = ? FOR UPDATE', [email])
+      if (duplicate) return { ok: false, reason: 'duplicate' }
+
+      const rawInsert = await run(`
+        INSERT INTO users (email, password, nickname, referral_code, referred_by, uid, plan, plan_expires_at, plan_source, auth_method, email_verified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ${gift.enabled ? `DATE_ADD(NOW(), INTERVAL ${gift.duration} ${gift.unit})` : 'NULL'}, ?, 'email', 1)
+      `, [email, hash, nickname || email.split('@')[0], code, referredBy, 'WS' + String(Date.now()).slice(-6), regPlan, regPlanSource])
+      const insertId = Number((Array.isArray(rawInsert) ? rawInsert[0] : rawInsert)?.insertId)
+      const user = await transactionOne(run,
+        'SELECT id, uid, email, nickname, avatar, role, plan, plan_source, plan_expires_at, referral_code, referral_credit FROM users WHERE id = ?',
+        [insertId])
+
+      if (referredBy) {
+        const referrer = await transactionOne(run, 'SELECT id FROM users WHERE referral_code = ?', [referredBy])
+        if (referrer) await run('INSERT INTO referrals (referrer_id, referred_id, status) VALUES (?, ?, ?)', [referrer.id, insertId, 'pending'])
+      }
+
+      const consumed = await consumeVerificationRecord(run, tokenRecord.id)
+      if (!consumed) throw new Error('verification_already_consumed')
+      await run('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [insertId, 'system', '欢迎加入量见课堂', '您的账户已创建成功，开始学习吧！'])
+      if (gift.enabled && regPlan !== 'free') {
+        await run('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [insertId, 'system', '🎁 新会员福利', `已为您赠送 ${gift.duration}${gift.unitLabel} ${planLabelMap[regPlan] || regPlan} 体验，尽享${planDescMap[regPlan] || '全部课程'}！`])
+      }
+      return { ok: true, insertId, user }
+    })
+
+    if (!registration.ok) {
+      return res.json({ ok: false, error: registration.reason === 'duplicate' ? '该邮箱已注册' : '邮箱验证已过期，请重新验证' })
+    }
+
+    const token = generateToken(registration.insertId)
+    const user = registration.user
     user.name = user.nickname
     user.authMethod = 'email'
     user.planExpiresAt = user.plan_expires_at || ''
     user.planSource = user.plan_source || null
+    Object.assign(user, decorateMembership(user))
 
-    if (referredBy) {
-      const referrer = await queryOne('SELECT id FROM users WHERE referral_code = ?', [referredBy])
-      if (referrer) await queryRun('INSERT INTO referrals (referrer_id, referred_id, status) VALUES (?, ?, ?)', [referrer.id, result.insertId, 'pending'])
-    }
-
-    await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '欢迎加入量见课堂', '您的账户已创建成功，开始学习吧！'])
-    if (gift.enabled && regPlan !== 'free') {
-      await queryRun('INSERT INTO notifications (user_id, type, title, message) VALUES (?, ?, ?, ?)', [result.insertId, 'system', '🎁 新会员福利', `已为您赠送 ${gift.duration}${gift.unitLabel} ${planLabelMap[regPlan] || regPlan} 体验，尽享${planDescMap[regPlan] || '全部课程'}！`])
-    }
-
-    logAudit({ userId: result.insertId, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
+    logAudit({ userId: registration.insertId, action: 'register', ip: req.ip, userAgent: req.get('user-agent') })
 
     res.json({ ok: true, token, user })
   } catch (err) {
     console.error('Register error:', err)
     res.json({ ok: false, error: '注册失败，请稍后重试' })
+  }
+})
+
+router.post('/auth/bridge-pair/start', async (req, res) => {
+  try {
+    const pairing = await startBridgePairing({
+      deviceName: req.body?.deviceName,
+      ip: req.ip,
+    })
+    res.status(201).json({ ok: true, ...pairing })
+  } catch (err) {
+    res.status(503).json({
+      ok: false,
+      code: err.code || 'bridge_pair_start_failed',
+      error: 'Bridge authorization could not be started. Please try again.',
+    })
+  }
+})
+
+router.post('/auth/bridge-pair/approve', authMiddleware, async (req, res) => {
+  try {
+    const approved = await approveBridgePairing(req.user, req.body?.userCode, {
+      ip:req.ip,
+      bridgeUserId:req.body?.bridgeUserId,
+    })
+    res.json({ ok:true, ...approved })
+  } catch (err) {
+    const membershipBlocked = err.code === 'bridge_membership_required'
+    const sourceBlocked = err.code === 'bridge_pair_source_forbidden'
+      || err.code === 'bridge_pair_source_invalid'
+    res.status(membershipBlocked || sourceBlocked ? 403 : 400).json({
+      ok: false,
+      code: err.code || 'bridge_pair_code_invalid',
+      error: membershipBlocked
+        ? 'The current membership cannot use Bridge.'
+        : sourceBlocked
+          ? 'The selected observer source cannot be authorized.'
+        : 'The authorization code is invalid or expired.',
+    })
+  }
+})
+
+router.post('/auth/bridge-pair/token', async (req, res) => {
+  try {
+    const pairing = await consumeBridgePairing(req.body?.deviceCode, {
+      userAgent: req.get('user-agent'),
+      ip: req.ip,
+    })
+    res.status(pairing.status === 'pending' ? 202 : 200).json({ ok: true, ...pairing })
+  } catch (err) {
+    res.status(400).json({
+      ok: false,
+      code: err.code || 'bridge_pair_failed',
+      error: 'Bridge authorization expired. Please start again.',
+    })
+  }
+})
+
+router.post('/auth/bridge-observer-sources', authMiddleware, async (req, res) => {
+  try {
+    const sources = await listManagedObserverSources(req.user)
+    res.json({ ok:true, sources })
+  } catch (err) {
+    const forbidden = err.code === 'bridge_observer_management_forbidden'
+    res.status(forbidden ? 403 : 503).json({
+      ok:false,
+      code:err.code || 'bridge_observer_sources_unavailable',
+      error:forbidden ? 'Only administrators can manage observer sources.' : 'Observer sources are temporarily unavailable.',
+    })
+  }
+})
+
+router.post('/auth/bridge-observer-session', authMiddleware, async (req, res) => {
+  try {
+    const session = await createManagedObserverSession(req.user, req.body?.bridgeUserId, {
+      terminalInstanceId:req.body?.terminalInstanceId,
+      userAgent:req.get('user-agent'), ip:req.ip,
+    })
+    res.json({ ok:true, ...session })
+  } catch (err) {
+    const forbidden = err.code === 'bridge_observer_management_forbidden'
+      || err.code === 'bridge_pair_source_invalid'
+      || err.code === 'bridge_observer_terminal_invalid'
+      || err.code === 'observer_source_account_mismatch'
+    const membershipBlocked = err.code === 'bridge_membership_required'
+    res.status(forbidden || membershipBlocked ? 403 : 503).json({
+      ok:false,
+      code:err.code || 'bridge_observer_session_failed',
+      error:forbidden
+        ? 'The selected observer source cannot be managed.'
+        : membershipBlocked
+          ? 'The selected observer source cannot use Bridge.'
+          : 'Observer source authorization could not be created.',
+    })
+  }
+})
+
+router.post('/auth/bridge-ticket', authMiddleware, async (req, res) => {
+  try {
+    const result = await createBridgeConnectionTicket(req.user)
+    res.json({ ok: true, ticket: result.ticket, expiresInSeconds: result.expiresInSeconds })
+  } catch (err) {
+    const membershipBlocked = err.code === 'bridge_membership_required'
+    res.status(membershipBlocked ? 403 : 503).json({
+      ok: false,
+      code: err.code || 'bridge_ticket_failed',
+      error: membershipBlocked ? '当前账号不能使用桥接' : '暂时无法创建桥接连接票据',
+    })
+  }
+})
+
+router.post('/auth/bridge-refresh', async (req, res) => {
+  try {
+    const session = await useBridgeRefreshSession(req.body?.refreshToken, {
+      userAgent: req.get('user-agent'), ip: req.ip,
+    })
+    res.json({
+      ok: true,
+      token: generateToken(session.user.id, session.user.token_version),
+      refreshExpiresInSeconds: session.expiresInSeconds,
+      bridgeRole:String(session.user.role || 'user'),
+    })
+  } catch (err) {
+    const code = String(err.code || '')
+    const membershipBlocked = code === 'bridge_membership_required'
+    const credentialInvalid = code === 'bridge_refresh_invalid' || code === 'bridge_refresh_revoked'
+    const unavailable = !membershipBlocked && !credentialInvalid
+    res.status(membershipBlocked ? 403 : credentialInvalid ? 401 : 503).json({
+      ok: false,
+      code: unavailable ? 'bridge_refresh_unavailable' : code,
+      error: membershipBlocked
+        ? '会员已过期或当前等级不能使用桥接软件'
+        : credentialInvalid
+          ? '桥接授权已失效，请重新授权'
+          : '桥接服务暂时不可用，软件将自动重试',
+    })
   }
 })
 
@@ -282,8 +503,8 @@ router.post('/login', async (req, res) => {
     }
 
     const user = phone
-      ? await queryOne('SELECT * FROM users WHERE phone = ?', [phone])
-      : await queryOne('SELECT * FROM users WHERE email = ?', [email])
+      ? await queryOne("SELECT * FROM users WHERE phone = ? AND deletion_status = 'active' AND deleted_at IS NULL", [phone])
+      : await queryOne("SELECT * FROM users WHERE email = ? AND deletion_status = 'active' AND deleted_at IS NULL", [email])
     if (!user) return res.json({ ok: false, error: '账号或密码错误' })
 
     let tokenRecord = null
@@ -311,24 +532,36 @@ router.post('/login', async (req, res) => {
       return res.json({ ok: false, error: '不支持的登录方式' })
     }
 
-    const token = generateToken(user.id)
-    const { password: _, ...safeUser } = user
+    const token = generateToken(user.id, user.token_version)
+    const { password: _, token_version: __, ...safeUser } = user
     safeUser.name = user.nickname
     safeUser.isAdmin = user.role === 'admin'
     safeUser.planExpiresAt = user.plan_expires_at || ''
     safeUser.planPeriod = user.plan_period || ''
     safeUser.planSource = user.plan_source || null
+    const membership = decorateMembership(user)
+    safeUser.membershipExpired = membership.membershipExpired
+    safeUser.effectivePlan = membership.effectivePlan
     safeUser.createdAt = user.created_at || ''
     safeUser.authMethod = user.auth_method || 'email'
     safeUser.telegramBinding = getTelegramBinding(user)
 
     if (method === 'code' && tokenRecord) {
-      await queryRun('UPDATE verification_codes SET token_used = 1 WHERE id = ?', [tokenRecord.id])
+      const codeLogin = await withTransaction(async run => {
+        const consumed = await consumeVerificationRecord(run, tokenRecord.id)
+        if (!consumed) return { ok: false }
+        return { ok: true }
+      })
+      if (!codeLogin.ok) return res.json({ ok: false, error: '验证已过期，请重新验证' })
     }
 
     logAudit({ userId: user.id, action: 'login', ip: req.ip, userAgent: req.get('user-agent') })
 
-    res.json({ ok: true, token, user: safeUser })
+    res.json({
+      ok: true,
+      token,
+      user: safeUser,
+    })
   } catch (err) {
     console.error('Login error:', err)
     res.json({ ok: false, error: '登录失败，请稍后重试' })
@@ -460,7 +693,14 @@ router.post('/verify-code', async (req, res) => {
 
     clearVerifyFailures(lockTarget)
     const verifyToken = uuidv4()
-    await queryRun('UPDATE verification_codes SET used = 1, verify_token = ? WHERE id = ?', [verifyToken, record.id])
+    const consumed = await queryRun(
+      'UPDATE verification_codes SET used = 1, verify_token = ? WHERE id = ? AND used = 0',
+      [verifyToken, record.id]
+    )
+    if (consumed.changes !== 1) {
+      recordVerifyFailure(lockTarget)
+      return res.json({ ok: false, error: '验证码无效或已过期' })
+    }
     res.json({ ok: true, message: '验证成功', token: verifyToken })
   } catch (err) {
     console.error('[verify-code]', err.message)
@@ -474,55 +714,63 @@ router.post('/reset-password', async (req, res) => {
     const targetEmail = email
     const targetPhone = normalizePhone(rawPhone)
     if ((!targetEmail && !targetPhone) || !newPassword) return res.json({ ok: false, error: '参数不完整' })
-    if (newPassword.length < 8) return res.json({ ok: false, error: '新密码至少8位' })
+    if (newPassword.length < 8 || newPassword.length > 32) return res.json({ ok: false, error: '新密码长度需为8-32位' })
     if (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) return res.json({ ok: false, error: '新密码需包含字母和数字' })
 
-    // verifyToken flow
-    if (verifyToken) {
-      const tokenRecord = targetPhone
-        ? await queryOne(
-            'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
-            [targetPhone, targetPhone, verifyToken, 'reset']
-          )
-        : await queryOne(
-            'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
-            [targetEmail, verifyToken, 'reset']
-          )
-      if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
-
-      const hash = await bcrypt.hash(newPassword, 10)
-      if (targetPhone) {
-        await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE phone = ? OR phone = ?", [hash, targetPhone, targetPhone])
-      } else {
-        await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, targetEmail])
-      }
-      await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
-      return res.json({ ok: true, message: '密码已重置' })
-    }
-
-    if (!code) return res.json({ ok: false, error: '请输入验证码' })
-
-    const record = targetPhone
-      ? await queryOne(`
-          SELECT * FROM verification_codes
-          WHERE (phone = ? OR phone = ?) AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > NOW()
-          ORDER BY created_at DESC LIMIT 1
-        `, [targetPhone, targetPhone, code])
-      : await queryOne(`
-          SELECT * FROM verification_codes
-          WHERE email = ? AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > NOW()
-          ORDER BY created_at DESC LIMIT 1
-        `, [targetEmail, code])
-
-    if (!record) return res.json({ ok: false, error: '验证码无效或已过期' })
-
     const hash = await bcrypt.hash(newPassword, 10)
-    if (targetPhone) {
-      await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE phone = ? OR phone = ?", [hash, targetPhone, targetPhone])
-    } else {
-      await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE email = ?", [hash, targetEmail])
+    if (!verifyToken && !code) return res.json({ ok: false, error: '请输入验证码' })
+
+    const resetResult = await withTransaction(async run => {
+      const record = verifyToken
+        ? targetPhone
+          ? await transactionOne(run,
+              `SELECT id FROM verification_codes
+               WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ?
+                 AND expires_at > NOW() AND token_used = 0
+               FOR UPDATE`,
+              [targetPhone, targetPhone, verifyToken, 'reset'])
+          : await transactionOne(run,
+              `SELECT id FROM verification_codes
+               WHERE email = ? AND verify_token = ? AND purpose = ?
+                 AND expires_at > NOW() AND token_used = 0
+               FOR UPDATE`,
+              [targetEmail, verifyToken, 'reset'])
+        : targetPhone
+          ? await transactionOne(run,
+              `SELECT id FROM verification_codes
+               WHERE (phone = ? OR phone = ?) AND code = ? AND purpose = 'reset'
+                 AND used = 0 AND expires_at > NOW()
+               ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+              [targetPhone, targetPhone, code])
+          : await transactionOne(run,
+              `SELECT id FROM verification_codes
+               WHERE email = ? AND code = ? AND purpose = 'reset'
+                 AND used = 0 AND expires_at > NOW()
+               ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+              [targetEmail, code])
+
+      if (!record) return { ok: false }
+
+      const resetUser = targetPhone
+        ? await transactionOne(run, 'SELECT id FROM users WHERE phone = ? OR phone = ? LIMIT 1 FOR UPDATE', [targetPhone, targetPhone])
+        : await transactionOne(run, 'SELECT id FROM users WHERE email = ? LIMIT 1 FOR UPDATE', [targetEmail])
+      if (!resetUser) return { ok: false }
+
+      await run(
+        'UPDATE users SET password = ?, token_version = token_version + 1, updated_at = NOW() WHERE id = ?',
+        [hash, resetUser.id]
+      )
+      await revokeBridgeRefreshSessions(resetUser.id, { run })
+      const consumed = await consumeVerificationRecord(run, record.id, verifyToken ? 'token_used' : 'used')
+      if (!consumed) throw new Error('verification_already_consumed')
+      return { ok: true, userId: resetUser.id }
+    })
+
+    if (!resetResult.ok) {
+      return res.json({ ok: false, error: verifyToken ? '验证已过期，请重新验证' : '验证码无效或已过期' })
     }
-    await queryRun('UPDATE verification_codes SET used = 1 WHERE id = ?', [record.id])
+
+    disconnectUserSockets(resetResult.userId, 'Password reset')
 
     res.json({ ok: true, message: '密码已重置' })
   } catch (err) {
@@ -535,24 +783,44 @@ router.post('/change-password', authMiddleware, async (req, res) => {
   try {
     const { oldPassword, newPassword, verifyToken } = req.body
     if (!newPassword) return res.json({ ok: false, error: '参数不完整' })
+    if (typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 32) return res.json({ ok:false, error:'新密码长度需为8-32位' })
+    if (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) return res.json({ ok:false, error:'新密码需包含字母和数字' })
 
-    const user = await queryOne('SELECT password FROM users WHERE id = ?', [req.user.id])
+    if (!oldPassword && !verifyToken) return res.json({ ok: false, error: '请提供原密码或验证码' })
+    const hash = await bcrypt.hash(newPassword, 10)
+    const changeResult = await withTransaction(async run => {
+      const user = await transactionOne(run, 'SELECT password FROM users WHERE id = ? FOR UPDATE', [req.user.id])
+      if (!user) return { ok: false, reason: 'user' }
 
-    if (oldPassword) {
-      if (!await bcrypt.compare(oldPassword, user.password)) return res.json({ ok: false, error: '原密码错误' })
-    } else if (!verifyToken) {
-      return res.json({ ok: false, error: '请提供原密码或验证码' })
-    } else {
-      const tokenRecord = await queryOne(
-        'SELECT id FROM verification_codes WHERE (email = ? OR phone = ?) AND verify_token = ? AND purpose IN (?, ?) AND expires_at > NOW() AND token_used = 0',
-        [req.user.email, req.user.phone, verifyToken, 'change', 'change_password']
+      if (oldPassword) {
+        if (!await bcrypt.compare(oldPassword, user.password)) return { ok: false, reason: 'password' }
+      } else {
+        const tokenRecord = await transactionOne(run,
+          `SELECT id FROM verification_codes
+           WHERE (email = ? OR phone = ?) AND verify_token = ? AND purpose IN (?, ?)
+             AND expires_at > NOW() AND token_used = 0
+           FOR UPDATE`,
+          [req.user.email, req.user.phone, verifyToken, 'change', 'change_password'])
+        if (!tokenRecord) return { ok: false, reason: 'verification' }
+        const consumed = await consumeVerificationRecord(run, tokenRecord.id)
+        if (!consumed) throw new Error('verification_already_consumed')
+      }
+
+      await run(
+        'UPDATE users SET password = ?, token_version = token_version + 1, updated_at = NOW() WHERE id = ?',
+        [hash, req.user.id]
       )
-      if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
-      await queryRun('UPDATE verification_codes SET token_used = 1 WHERE id = ?', [tokenRecord.id])
+      await revokeBridgeRefreshSessions(req.user.id, { run })
+      return { ok: true }
+    })
+
+    if (!changeResult.ok) {
+      if (changeResult.reason === 'password') return res.json({ ok: false, error: '原密码错误' })
+      if (changeResult.reason === 'verification') return res.json({ ok: false, error: '验证已过期，请重新验证' })
+      return res.json({ ok: false, error: '用户不存在' })
     }
 
-    const hash = await bcrypt.hash(newPassword, 10)
-    await queryRun("UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?", [hash, req.user.id])
+    disconnectUserSockets(req.user.id, 'Password changed')
 
     res.json({ ok: true, relogin: true, message: '密码已修改' })
   } catch (err) {
@@ -561,27 +829,53 @@ router.post('/change-password', authMiddleware, async (req, res) => {
   }
 })
 
+router.post('/auth/logout-all', authMiddleware, async (req, res) => {
+  try {
+    await withTransaction(async run => {
+      await run('UPDATE users SET token_version = token_version + 1, updated_at = NOW() WHERE id = ?', [req.user.id])
+      await revokeBridgeRefreshSessions(req.user.id, { run })
+    })
+    disconnectUserSockets(req.user.id, 'Signed out on all devices')
+    res.json({ ok:true })
+  } catch (err) {
+    console.error('[logout-all]', err.message)
+    res.status(500).json({ ok:false, error:'退出所有设备失败' })
+  }
+})
+
 router.post('/change-email', authMiddleware, async (req, res) => {
   try {
     const { oldPassword, newEmail, verifyToken } = req.body
     if (!newEmail || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
 
-    const user = await queryOne('SELECT password, email FROM users WHERE id = ?', [req.user.id])
-    if (!oldPassword || !await bcrypt.compare(oldPassword, user.password)) {
-      return res.json({ ok: false, error: '原密码错误' })
+    const changeResult = await withTransaction(async run => {
+      const user = await transactionOne(run, 'SELECT password FROM users WHERE id = ? FOR UPDATE', [req.user.id])
+      if (!user || !oldPassword || !await bcrypt.compare(oldPassword, user.password)) {
+        return { ok: false, reason: 'password' }
+      }
+
+      const existing = await transactionOne(run, 'SELECT id FROM users WHERE email = ? AND id != ? FOR UPDATE', [newEmail, req.user.id])
+      if (existing) return { ok: false, reason: 'duplicate' }
+
+      const tokenRecord = await transactionOne(run,
+        `SELECT id FROM verification_codes
+         WHERE email = ? AND verify_token = ? AND purpose = ?
+           AND expires_at > NOW() AND token_used = 0
+         FOR UPDATE`,
+        [newEmail, verifyToken, 'change_email'])
+      if (!tokenRecord) return { ok: false, reason: 'verification' }
+
+      await run('UPDATE users SET email = ?, email_verified = 1, updated_at = NOW() WHERE id = ?', [newEmail, req.user.id])
+      const consumed = await consumeVerificationRecord(run, tokenRecord.id)
+      if (!consumed) throw new Error('verification_already_consumed')
+      return { ok: true }
+    })
+
+    if (!changeResult.ok) {
+      if (changeResult.reason === 'password') return res.json({ ok: false, error: '原密码错误' })
+      if (changeResult.reason === 'duplicate') return res.json({ ok: false, error: '该邮箱已被其他账号使用' })
+      return res.json({ ok: false, error: '邮箱验证码无效或已过期' })
     }
-
-    const existing = await queryOne('SELECT id FROM users WHERE email = ? AND id != ?', [newEmail, req.user.id])
-    if (existing) return res.json({ ok: false, error: '该邮箱已被其他账号使用' })
-
-    const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
-      [newEmail, verifyToken, 'change_email']
-    )
-    if (!tokenRecord) return res.json({ ok: false, error: '邮箱验证码无效或已过期' })
-
-    await queryRun("UPDATE users SET email = ?, email_verified = 1, updated_at = NOW() WHERE id = ?", [newEmail, req.user.id])
-    await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
 
     res.json({ ok: true, message: '邮箱已更换' })
   } catch (err) {
@@ -596,22 +890,36 @@ router.post('/change-phone', authMiddleware, async (req, res) => {
     const newPhone = normalizePhone(rawNewPhone)
     if (!newPhone || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
 
-    const user = await queryOne('SELECT password, phone FROM users WHERE id = ?', [req.user.id])
-    if (!oldPassword || !await bcrypt.compare(oldPassword, user.password)) {
-      return res.json({ ok: false, error: '原密码错误' })
+    const changeResult = await withTransaction(async run => {
+      const user = await transactionOne(run, 'SELECT password FROM users WHERE id = ? FOR UPDATE', [req.user.id])
+      if (!user || !oldPassword || !await bcrypt.compare(oldPassword, user.password)) {
+        return { ok: false, reason: 'password' }
+      }
+
+      const existing = await transactionOne(run,
+        'SELECT id FROM users WHERE (phone = ? OR phone = ?) AND id != ? FOR UPDATE',
+        [newPhone, newPhone, req.user.id])
+      if (existing) return { ok: false, reason: 'duplicate' }
+
+      const tokenRecord = await transactionOne(run,
+        `SELECT id FROM verification_codes
+         WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ?
+           AND expires_at > NOW() AND token_used = 0
+         FOR UPDATE`,
+        [newPhone, newPhone, verifyToken, 'change_phone'])
+      if (!tokenRecord) return { ok: false, reason: 'verification' }
+
+      await run('UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?', [newPhone, req.user.id])
+      const consumed = await consumeVerificationRecord(run, tokenRecord.id)
+      if (!consumed) throw new Error('verification_already_consumed')
+      return { ok: true }
+    })
+
+    if (!changeResult.ok) {
+      if (changeResult.reason === 'password') return res.json({ ok: false, error: '原密码错误' })
+      if (changeResult.reason === 'duplicate') return res.json({ ok: false, error: '该手机号已被其他账号使用' })
+      return res.json({ ok: false, error: '手机验证码无效或已过期' })
     }
-
-    const existing = await queryOne('SELECT id FROM users WHERE (phone = ? OR phone = ?) AND id != ?', [newPhone, newPhone, req.user.id])
-    if (existing) return res.json({ ok: false, error: '该手机号已被其他账号使用' })
-
-    const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
-      [newPhone, newPhone, verifyToken, 'change_phone']
-    )
-    if (!tokenRecord) return res.json({ ok: false, error: '手机验证码无效或已过期' })
-
-    await queryRun("UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?", [newPhone, req.user.id])
-    await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
 
     res.json({ ok: true, message: '手机号已更换' })
   } catch (err) {
@@ -683,17 +991,30 @@ router.post('/bind-phone', authMiddleware, async (req, res) => {
     const phone = normalizePhone(rawPhone)
     if (!phone || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
 
-    const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
-      [phone, phone, verifyToken, 'bind']
-    )
-    if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
+    const bindResult = await withTransaction(async run => {
+      const tokenRecord = await transactionOne(run,
+        `SELECT id FROM verification_codes
+         WHERE (phone = ? OR phone = ?) AND verify_token = ? AND purpose = ?
+           AND expires_at > NOW() AND token_used = 0
+         FOR UPDATE`,
+        [phone, phone, verifyToken, 'bind'])
+      if (!tokenRecord) return { ok: false, reason: 'verification' }
 
-    const existing = await queryOne('SELECT id FROM users WHERE (phone = ? OR phone = ?) AND id != ?', [phone, phone, req.user.id])
-    if (existing) return res.json({ ok: false, error: '该手机号已被其他账号绑定' })
+      const existing = await transactionOne(run,
+        'SELECT id FROM users WHERE (phone = ? OR phone = ?) AND id != ? FOR UPDATE',
+        [phone, phone, req.user.id])
+      if (existing) return { ok: false, reason: 'duplicate' }
 
-    await queryRun("UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?", [phone, req.user.id])
-    await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
+      await run('UPDATE users SET phone = ?, phone_verified = 1, updated_at = NOW() WHERE id = ?', [phone, req.user.id])
+      const consumed = await consumeVerificationRecord(run, tokenRecord.id)
+      if (!consumed) throw new Error('verification_already_consumed')
+      return { ok: true }
+    })
+
+    if (!bindResult.ok) {
+      if (bindResult.reason === 'duplicate') return res.json({ ok: false, error: '该手机号已被其他账号绑定' })
+      return res.json({ ok: false, error: '验证已过期，请重新验证' })
+    }
 
     res.json({ ok: true, message: '手机绑定成功' })
   } catch (err) {
@@ -710,17 +1031,28 @@ router.post('/bind-email', authMiddleware, async (req, res) => {
     const { email, verifyToken } = req.body
     if (!email || !verifyToken) return res.json({ ok: false, error: '参数不完整' })
 
-    const tokenRecord = await queryOne(
-      'SELECT id FROM verification_codes WHERE email = ? AND verify_token = ? AND purpose = ? AND expires_at > NOW() AND token_used = 0',
-      [email, verifyToken, 'bind']
-    )
-    if (!tokenRecord) return res.json({ ok: false, error: '验证已过期，请重新验证' })
+    const bindResult = await withTransaction(async run => {
+      const tokenRecord = await transactionOne(run,
+        `SELECT id FROM verification_codes
+         WHERE email = ? AND verify_token = ? AND purpose = ?
+           AND expires_at > NOW() AND token_used = 0
+         FOR UPDATE`,
+        [email, verifyToken, 'bind'])
+      if (!tokenRecord) return { ok: false, reason: 'verification' }
 
-    const existing = await queryOne('SELECT id FROM users WHERE email = ? AND id != ?', [email, req.user.id])
-    if (existing) return res.json({ ok: false, error: '该邮箱已被其他账号绑定' })
+      const existing = await transactionOne(run, 'SELECT id FROM users WHERE email = ? AND id != ? FOR UPDATE', [email, req.user.id])
+      if (existing) return { ok: false, reason: 'duplicate' }
 
-    await queryRun("UPDATE users SET email = ?, email_verified = 1, updated_at = NOW() WHERE id = ?", [email, req.user.id])
-    await queryRun('UPDATE verification_codes SET used = 1, token_used = 1 WHERE id = ?', [tokenRecord.id])
+      await run('UPDATE users SET email = ?, email_verified = 1, updated_at = NOW() WHERE id = ?', [email, req.user.id])
+      const consumed = await consumeVerificationRecord(run, tokenRecord.id)
+      if (!consumed) throw new Error('verification_already_consumed')
+      return { ok: true }
+    })
+
+    if (!bindResult.ok) {
+      if (bindResult.reason === 'duplicate') return res.json({ ok: false, error: '该邮箱已被其他账号绑定' })
+      return res.json({ ok: false, error: '验证已过期，请重新验证' })
+    }
 
     res.json({ ok: true, message: '邮箱绑定成功' })
   } catch (err) {

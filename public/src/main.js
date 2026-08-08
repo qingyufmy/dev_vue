@@ -1,12 +1,12 @@
 import { episodes as staticEpisodes, categories } from './data/episodes.js?v=20260714i'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
-import { createCourseContent } from './lib/course-content.js'
+import { createCourseContent } from './lib/course-content.js?v=20260723attachments1'
 import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js?v=20260714f'
 import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260714f'
 import { getCourseProgramByView } from './data/course-programs.js?v=20260714h'
 import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260714h'
-import { getCoursesForCategory } from './lib/course-catalog.js?v=20260714i'
+import { getCoursePage } from './lib/course-catalog.js?v=20260803stream1'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
@@ -49,6 +49,7 @@ const courseCatalog = {
       knowledgeCount: Number(item.knowledgeCount || item.knowledge_count || 0),
       mindmapCount: Number(item.mindmapCount || item.mindmap_count || 0),
       structureCount: Number(item.structureCount || item.structure_count || 0),
+      attachmentCount: Number(item.attachmentCount || item.attachment_count || 0),
       status: item.status || 'published',
       sortOrder: Number(item.sortOrder || item.sort_order || id),
       createdAt: item.createdAt || item.created_at || '',
@@ -99,28 +100,86 @@ function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
-// ===== Rich HTML sanitizer (defense-in-depth for Quill editor output) =====
+// ===== Rich HTML sanitizer (defense-in-depth for stored Quill output) =====
+const RICH_TEXT_TAGS = new Set([
+  'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'blockquote',
+  'pre', 'code', 'ol', 'ul', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'a', 'img', 'span', 'div', 'sub', 'sup',
+])
+const RICH_TEXT_DROP_TAGS = new Set([
+  'script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea',
+  'button', 'meta', 'link', 'base', 'template', 'svg', 'math',
+])
+const RICH_TEXT_ATTRIBUTES = {
+  a:new Set(['href', 'title', 'target', 'rel']),
+  img:new Set(['src', 'alt', 'title', 'width', 'height', 'data-asset-id']),
+}
+
+function richTextUrlAllowed(value, tagName) {
+  const source = String(value || '').trim()
+  if (!source || /^[\u0000-\u001f]/.test(source)) return false
+  try {
+    const parsed = new URL(source, location.origin)
+    const schemes = tagName === 'a' ? new Set(['http:', 'https:', 'mailto:']) : new Set(['http:', 'https:'])
+    return schemes.has(parsed.protocol)
+  } catch {
+    return false
+  }
+}
+
 function sanitizeRichHtml(html) {
   if (!html || typeof html !== 'string') return ''
-  let out = html
-  out = out.replace(/<\s*\/?\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>|<\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*\/?\s*>/gi, '')
-  out = out.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-  out = out.replace(/(href|src|action)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi, '$1="#"')
-  return out
+  const documentFragment = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
+
+  const cleanChildren = parent => {
+    for (const node of [...parent.childNodes]) {
+      if (node.nodeType !== Node.ELEMENT_NODE) continue
+      const tagName = node.tagName.toLowerCase()
+      if (RICH_TEXT_DROP_TAGS.has(tagName)) {
+        node.remove()
+        continue
+      }
+      if (!RICH_TEXT_TAGS.has(tagName)) {
+        node.replaceWith(...node.childNodes)
+        cleanChildren(parent)
+        continue
+      }
+
+      const allowed = RICH_TEXT_ATTRIBUTES[tagName] || new Set()
+      for (const attribute of [...node.attributes]) {
+        const name = attribute.name.toLowerCase()
+        const keepQuillClass = name === 'class' && ['div', 'p', 'span', 'ol', 'ul', 'li', 'pre', 'code', 'blockquote'].includes(tagName)
+        if (!allowed.has(name) && !keepQuillClass) node.removeAttribute(attribute.name)
+      }
+
+      if (node.hasAttribute('class')) {
+        const classNames = [...node.classList].filter(name => /^ql-[a-z0-9-]+$/i.test(name))
+        if (classNames.length) node.className = classNames.join(' ')
+        else node.removeAttribute('class')
+      }
+      for (const attribute of ['href', 'src']) {
+        if (node.hasAttribute(attribute) && !richTextUrlAllowed(node.getAttribute(attribute), tagName)) {
+          node.removeAttribute(attribute)
+        }
+      }
+      if (tagName === 'a') {
+        if (node.getAttribute('target') === '_blank') node.setAttribute('rel', 'noopener noreferrer')
+        else {
+          node.removeAttribute('target')
+          node.removeAttribute('rel')
+        }
+      }
+      cleanChildren(node)
+    }
+  }
+
+  cleanChildren(documentFragment.body)
+  return documentFragment.body.innerHTML
 }
 
-function formatMinorUsd(dollars) {
+function formatUsdAmount(dollars) {
   const value = Number(dollars || 0)
   return `$${Math.max(0, value).toFixed(2)}`
-}
-
-function planLabel(plan, expiresAt) {
-  if (!plan || plan === 'free') return '<span class="admin-badge badge-free">免费</span>'
-  const label = plan === 'pro' ? 'Pro' : 'Plus'
-  const expStr = expiresAt instanceof Date ? expiresAt.toISOString().substring(0, 10) : String(expiresAt || '').substring(0, 10)
-  const expired = expStr && new Date(expStr + 'T23:59:59+08:00') < new Date()
-  if (expired) return `<span class="admin-badge badge-expired">${label} (已过期)</span>`
-  return `<span class="admin-badge badge-paid">${label}</span>`
 }
 
 let communityEditor = null
@@ -341,16 +400,43 @@ async function uploadReplyDraftImages(submitBtn) {
       submitBtn.textContent = `上传图片 ${index + 1}/${replyDraftImages.length}...`
     }
 
-    const response = await api.postForm('/api/post-images', formData)
-    if (!response.ok || !response.assetId || !response.url) {
-      throw new Error(response.error || '上传回复图片失败')
-    }
+    const response = await uploadPostImageWithStorage(image.file, formData, phase => { if (submitBtn) submitBtn.textContent = `${phase} ${index + 1}/${replyDraftImages.length}...` })
+    if (!response.ok || !response.assetId || !response.url) throw new Error(response.error || '上传回复图片失败')
 
     uploadedAssetIds.push(response.assetId)
     uploadedUrls.push(response.url)
   }
 
   return { assetIds: uploadedAssetIds, urls: uploadedUrls }
+}
+
+let postImageStorageProviderCache = null
+async function getPostImageStorageProvider() {
+  if (postImageStorageProviderCache && postImageStorageProviderCache.expiresAt > Date.now()) return postImageStorageProviderCache.provider
+  const result = await api.get('/api/post-images/storage-provider')
+  if (!result.ok || !['local', 'qiniu'].includes(result.provider)) throw new Error(result.error || '无法读取图片存储位置')
+  postImageStorageProviderCache = { provider:result.provider, expiresAt:Date.now() + 25_000 }
+  return result.provider
+}
+
+async function uploadPostImageWithStorage(file, multipart, onPhase) {
+  const provider = await getPostImageStorageProvider()
+  if (provider !== 'qiniu') {
+    onPhase?.('上传图片')
+    return api.postForm('/api/post-images', multipart)
+  }
+  onPhase?.('创建直传会话')
+  const session = await api.post('/api/post-images/upload-session', { originalName:file.name || 'post-image', mimeType:file.type || '', sizeBytes:file.size })
+  if (!session.ok || session.provider !== 'qiniu' || !session.uploadUrl || !session.token) return { ok:false, error:session.error || '七牛直传会话无效', code:session.code }
+  onPhase?.('七牛直传中')
+  const upload = new FormData()
+  upload.append('token', session.token)
+  upload.append('key', session.objectKey)
+  upload.append('file', file, file.name || 'post-image')
+  const uploaded = await fetch(session.uploadUrl, { method:'POST', body:upload })
+  if (!uploaded.ok) return { ok:false, error:'七牛直传上传失败', code:'storage_qiniu_upload_failed' }
+  onPhase?.('服务端确认')
+  return api.post('/api/post-images/confirm', { sessionId:session.sessionId, key:session.objectKey })
 }
 
 function closePostImageLightbox() {
@@ -491,10 +577,8 @@ async function uploadEditorImages(editorRoot, submitBtn) {
       submitBtn.textContent = `上传图片 ${index + 1}/${dataImages.length}...`
     }
 
-    const response = await api.postForm('/api/post-images', formData)
-    if (!response.ok || !response.assetId || !response.url) {
-      throw new Error(response.error || '上传图片失败')
-    }
+    const response = await uploadPostImageWithStorage(blob, formData, phase => { if (submitBtn) submitBtn.textContent = `${phase} ${index + 1}/${dataImages.length}...` })
+    if (!response.ok || !response.assetId || !response.url) throw new Error(response.error || '上传图片失败')
 
     uploadedAssetIds.push(response.assetId)
     image.setAttribute('src', response.url)
@@ -593,9 +677,6 @@ const state = {
   communityQuery: '',
   communityTag: '',
   communityTags: [],
-  adminCourses: [],
-  adminQuizQuestions: [],
-  adminQuizEpisodeId: null,
   replyPage: 1,
   replyTotal: 0,
   replyTotalPages: 1,
@@ -603,7 +684,6 @@ const state = {
   notificationUnread: 0,
   paidVideoEpisodes: [], // episode IDs with CF Stream paid videos
   videoAccessMap: {},    // { episodeId: access_level } — universal access control
-  adminRefreshTimer: null, // admin page auto-refresh timer
   authMode: 'login_password',
   authRegType: 'phone',
   authPrefillEmail: '',
@@ -625,9 +705,11 @@ const LOGIN_REQUIRED_APP_PREFIXES = [
   '/community',
   '/post',
   '/profile',
+  '/account',
   '/membership',
   '/quotes',
   '/admin',
+  '/ai',
 ]
 const LOGIN_REQUIRED_APP_VIEWS = new Set([
   'article',
@@ -641,6 +723,7 @@ const LOGIN_REQUIRED_APP_VIEWS = new Set([
   'profile',
   'membership',
   'quotes',
+  'bridgePair',
   'admin',
 ])
 
@@ -846,10 +929,23 @@ function getPlanExpiresAt(user = state.user) {
 
 function isPlanActiveClient(user = state.user) {
   if (!user || !user.plan || user.plan === 'free') return false
+  if (user.membershipExpired === true || Number(user.membership_expired) === 1) return false
   const expiresAt = getPlanExpiresAt(user)
-  if (!expiresAt) return false
+  // A null expiry represents a deliberately configured long-term membership.
+  if (!expiresAt) return true
   const expiresTime = new Date(`${expiresAt}T23:59:59+08:00`).getTime()
   return Number.isFinite(expiresTime) && expiresTime >= Date.now()
+}
+
+function isMembershipExpiredClient(user = state.user) {
+  const plan = user?.plan || 'free'
+  return (plan === 'plus' || plan === 'pro') && !isPlanActiveClient(user)
+}
+
+function getMembershipDisplayName(user = state.user) {
+  const rawPlan = user?.plan || 'free'
+  if (isMembershipExpiredClient(user)) return `${rawPlan === 'pro' ? '💎 Pro' : '⭐ Plus'} 已过期`
+  return ({ free:'体验版（免费）', plus:'⭐ Plus', pro:'💎 Pro' })[getEffectivePlan(user)] || '体验版（免费）'
 }
 
 function getEffectivePlan(user = state.user) {
@@ -858,6 +954,86 @@ function getEffectivePlan(user = state.user) {
     return isPlanActiveClient(user) ? plan : 'free'
   }
   return plan
+}
+
+let membershipExpiryReminderOpen = false
+
+async function acknowledgeMembershipExpiryReminder(reminderId, surface = 'main') {
+  try {
+    await api.post(`/api/membership-expiry-reminders/${Number(reminderId)}/read`, { surface })
+  } catch {
+    // The reminder may appear again after a network failure; renewal remains available.
+  }
+}
+
+function showMembershipExpiryReminder(reminder) {
+  if (!reminder || membershipExpiryReminderOpen) return
+  membershipExpiryReminderOpen = true
+  const previousFocus = document.activeElement
+  const overlay = document.createElement('div')
+  overlay.className = 'membership-expiry-overlay'
+  overlay.innerHTML = `
+    <section class="membership-expiry-dialog" role="dialog" aria-modal="true" aria-labelledby="membershipExpiryTitle" aria-describedby="membershipExpirySummary">
+      <button class="membership-expiry-close" type="button" aria-label="关闭会员到期提醒">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+      <div class="membership-expiry-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+      </div>
+      <p class="membership-expiry-eyebrow">会员到期提醒</p>
+      <h2 id="membershipExpiryTitle">${escapeHtml(reminder.title)}</h2>
+      <p id="membershipExpirySummary">${escapeHtml(reminder.summary)}</p>
+      <div class="membership-expiry-facts">
+        <span><small>当前会员</small><strong>${escapeHtml(reminder.plan_label)}</strong></span>
+        <span><small>到期日期</small><strong>${escapeHtml(reminder.expiry_date_text)}</strong></span>
+      </div>
+      <div class="membership-expiry-actions">
+        <button class="btn btn-primary membership-expiry-renew" type="button">前往续费</button>
+        <button class="btn btn-ghost membership-expiry-later" type="button">稍后处理</button>
+      </div>
+      <p class="membership-expiry-note">续费成功后会员有效期会自动更新，无需重复操作。</p>
+    </section>`
+  document.body.appendChild(overlay)
+
+  const dismiss = ({ renew = false } = {}) => {
+    if (!membershipExpiryReminderOpen) return
+    membershipExpiryReminderOpen = false
+    overlay.classList.remove('active')
+    void acknowledgeMembershipExpiryReminder(reminder.id, 'main')
+    setTimeout(() => overlay.remove(), 180)
+    if (renew) {
+      openMainAccountCenter('subscription')
+      mainAccountCenterPreviousFocus = previousFocus instanceof HTMLElement ? previousFocus : null
+    } else if (previousFocus instanceof HTMLElement) previousFocus.focus()
+  }
+  overlay.querySelector('.membership-expiry-close')?.addEventListener('click', () => dismiss())
+  overlay.querySelector('.membership-expiry-later')?.addEventListener('click', () => dismiss())
+  overlay.querySelector('.membership-expiry-renew')?.addEventListener('click', () => dismiss({ renew:true }))
+  overlay.addEventListener('click', event => { if (event.target === overlay) dismiss() })
+  overlay.addEventListener('keydown', event => {
+    if (event.key === 'Escape') return dismiss()
+    if (event.key !== 'Tab') return
+    const focusable = [...overlay.querySelectorAll('button:not([disabled]), a[href]')]
+    if (!focusable.length) return
+    const first = focusable[0], last = focusable.at(-1)
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+  })
+  requestAnimationFrame(() => {
+    overlay.classList.add('active')
+    overlay.querySelector('.membership-expiry-renew')?.focus()
+  })
+}
+
+async function checkMembershipExpiryReminder() {
+  if (!state.user || !api._token() || membershipExpiryReminderOpen) return
+  if (!['plus', 'pro'].includes(String(state.user.plan || '').toLowerCase())) return
+  try {
+    const result = await api.get('/api/membership-expiry-reminders?surface=main')
+    if (result.ok && result.reminder) showMembershipExpiryReminder(result.reminder)
+  } catch {
+    // Reminder loading must never block the rest of the site.
+  }
 }
 
 async function refreshCurrentUserProfile({ rerender = false, syncTelegram = false } = {}) {
@@ -879,6 +1055,7 @@ async function refreshCurrentUserProfile({ rerender = false, syncTelegram = fals
       updateAuthUI()
       refreshNotificationUnread()
       startPresenceHeartbeat()
+      void checkMembershipExpiryReminder()
       if (rerender || state.paymentStatus === 'success' || planChanged || adminChanged || bindingChanged) renderView()
       return r.user
     }
@@ -941,23 +1118,6 @@ function stopPresenceHeartbeat() {
     presenceHeartbeatTimer = null
   }
   lastPresenceHeartbeatAt = 0
-}
-
-// ===== Admin Auto-Refresh (60s) =====
-function startAdminAutoRefresh() {
-  stopAdminAutoRefresh()
-  state.adminRefreshTimer = setInterval(() => {
-    if (state.currentView !== 'admin') { stopAdminAutoRefresh(); return }
-    const tasks = [loadAdminCourses(), loadAdminReferrals(), loadAdminConfig()]
-    Promise.allSettled(tasks).catch(() => {})
-  }, 60000)
-}
-
-function stopAdminAutoRefresh() {
-  if (state.adminRefreshTimer) {
-    clearInterval(state.adminRefreshTimer)
-    state.adminRefreshTimer = null
-  }
 }
 
 // ===== Progress Tracking =====
@@ -1123,7 +1283,7 @@ const comments = {
       const data = this._getData()
       data[episodeId] = list.map(c => ({
         id: c.id,
-        user: c.user || { name: 'Unknown', email: '' },
+        user: c.user || { id: null, name: 'Unknown' },
         text: c.text,
         timestamp: c.timestamp ? new Date(c.timestamp).getTime() : Date.now(),
         likes: c.isLiked ? [state.user?.email] : [],
@@ -1131,7 +1291,7 @@ const comments = {
         _isLiked: c.isLiked || false,
         replies: (c.replies || []).map(r => ({
           id: r.id,
-          user: r.user || { name: 'Unknown', email: '' },
+          user: r.user || { id: null, name: 'Unknown' },
           text: r.text,
           timestamp: r.timestamp ? new Date(r.timestamp).getTime() : Date.now(),
           likes: r.isLiked ? [state.user?.email] : [],
@@ -1159,7 +1319,7 @@ const comments = {
     const data = this._getData()
     const comment = data[episodeId]?.[index]
     if (!comment?.id) return
-    if (!state.user || comment.user.email !== state.user.email) return
+    if (!state.user || Number(comment.user.id) !== Number(state.user.id)) return
     try {
       await api.del(`/api/comments?id=${comment.id}`)
       await this.fetchFromServer(episodeId)
@@ -1221,7 +1381,7 @@ const comments = {
     const data = this._getData()
     const reply = data[episodeId]?.[commentIndex]?.replies?.[replyIndex]
     if (!reply?.id) return
-    if (!state.user || reply.user.email !== state.user.email) return
+    if (!state.user || Number(reply.user.id) !== Number(state.user.id)) return
     try {
       await api.del(`/api/comments?id=${reply.id}`)
       await this.fetchFromServer(episodeId)
@@ -1301,7 +1461,7 @@ document.addEventListener('click', (e) => {
   }
 })
 
-function initLocalPlayer(videoUrl) {
+function initLocalPlayer(videoUrl, options = {}) {
   const ep = state.currentEpisode
   if (ep) {
     const p = progress.get(ep.id)
@@ -1311,10 +1471,41 @@ function initLocalPlayer(videoUrl) {
   const container = document.getElementById('videoContainer')
   if (!container) return
 
-  container.innerHTML = '<video id="localPlayer" controls preload="metadata" style="width:100%;height:100%;"><source src="' + escapeHtml(videoUrl) + '" type="video/mp4">您的浏览器不支持视频播放</video>'
+  container.innerHTML = '<video id="localPlayer" controls preload="metadata" playsinline style="width:100%;height:100%;aspect-ratio:16/9;object-fit:contain;"><source src="' + escapeHtml(videoUrl) + '" type="video/mp4">您的浏览器不支持视频播放</video>'
 
   const video = document.getElementById('localPlayer')
   if (!video) return
+
+  let refreshAttempted = false
+  video.addEventListener('error', async () => {
+    if (!options.managed || !ep || state.currentEpisode?.id !== ep.id) return
+    if (refreshAttempted) {
+      const message = document.createElement('div')
+      message.className = 'video-error'
+      message.textContent = '视频链接已失效，请刷新页面后重试'
+      container.replaceChildren(message)
+      return
+    }
+    refreshAttempted = true
+    const currentTime = Number(video.currentTime || 0)
+    const wasPlaying = !video.paused
+    try {
+      const refreshed = await api.get(`/api/video-stream?episode=${ep.id}`)
+      if (!refreshed?.playbackUrl || (refreshed.videoSource !== 'local_mp4' && refreshed.videoSource !== 'qiniu_mp4')) throw new Error('managed_video_refresh_invalid')
+      video.src = refreshed.playbackUrl
+      video.load()
+      video.addEventListener('loadedmetadata', () => {
+        try { video.currentTime = Math.min(currentTime, Number.isFinite(video.duration) ? video.duration : currentTime) } catch {}
+        if (wasPlaying) video.play().catch(() => {})
+      }, { once: true })
+    } catch {
+      if (state.currentEpisode?.id !== ep.id) return
+      const message = document.createElement('div')
+      message.className = 'video-error'
+      message.textContent = '视频链接已失效，请刷新页面后重试'
+      container.replaceChildren(message)
+    }
+  })
 
   video.addEventListener('play', () => startWatchTimer())
   video.addEventListener('pause', () => stopWatchTimer())
@@ -1339,9 +1530,9 @@ function initLocalPlayer(videoUrl) {
   })
 }
 
-function initQiniuPlayer(videoUrl) {
+function initQiniuPlayer(videoUrl, options = {}) {
   // Qiniu CDN serves standard MP4, use same as local player
-  initLocalPlayer(videoUrl)
+  initLocalPlayer(videoUrl, options)
 }
 
 function destroyPlayer() {
@@ -1420,6 +1611,67 @@ const modalOverlay = $('#modalOverlay')
 const modalTitle = $('#modalTitle')
 const modalBody = $('#modalBody')
 let authModalBackdropPress = false
+const mainAccountCenterModal = $('#mainAccountCenterModal')
+const mainAccountCenterFrame = $('#mainAccountCenterFrame')
+let mainAccountCenterPreviousFocus = null
+
+function getMainAccountTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'
+}
+
+function openMainAccountCenter(tab = 'overview') {
+  if (!requireLogin() || !mainAccountCenterModal || !mainAccountCenterFrame) return
+  mainAccountCenterPreviousFocus = document.activeElement
+  const theme = getMainAccountTheme()
+  const nextSrc = `/account/?embed=main&tab=${encodeURIComponent(tab)}&theme=${theme}`
+  if (!mainAccountCenterFrame.src || !mainAccountCenterFrame.src.includes('/account/')) {
+    mainAccountCenterFrame.src = nextSrc
+  } else {
+    mainAccountCenterFrame.contentWindow?.postMessage({ type:'account-center-tab',tab },window.location.origin)
+    mainAccountCenterFrame.contentWindow?.postMessage({ type:'account-center-theme',theme },window.location.origin)
+  }
+  mainAccountCenterModal.classList.remove('hidden')
+  mainAccountCenterModal.setAttribute('aria-hidden','false')
+  document.body.classList.add('main-account-center-open')
+  requestAnimationFrame(() => mainAccountCenterFrame.focus())
+}
+
+function closeMainAccountCenter() {
+  if (!mainAccountCenterModal || mainAccountCenterModal.classList.contains('hidden')) return
+  mainAccountCenterModal.classList.add('hidden')
+  mainAccountCenterModal.setAttribute('aria-hidden','true')
+  document.body.classList.remove('main-account-center-open')
+  if (mainAccountCenterPreviousFocus instanceof HTMLElement) mainAccountCenterPreviousFocus.focus()
+  mainAccountCenterPreviousFocus = null
+}
+
+function applyMainLoggedOutState() {
+  state.user = null
+  state.notificationUnread = 0
+  localStorage.removeItem('ws_user')
+  stopPresenceHeartbeat()
+  updateAuthUI()
+  renderView()
+}
+
+window.addEventListener('message',(event) => {
+  if (event.origin !== window.location.origin || event.source !== mainAccountCenterFrame?.contentWindow) return
+  if (event.data?.type === 'account-center-close') return closeMainAccountCenter()
+  if (event.data?.type === 'account-session-logout') {
+    closeMainAccountCenter()
+    applyMainLoggedOutState()
+    return
+  }
+  if (event.data?.type === 'account-profile-updated' && event.data.user) {
+    state.user = { ...state.user,...event.data.user }
+    localStorage.setItem('ws_user',JSON.stringify(state.user))
+    updateAuthUI()
+  }
+  if (event.data?.type === 'account-notifications-updated') {
+    state.notificationUnread = Number(event.data.unreadCount || 0)
+    updateAuthUI()
+  }
+})
 
 function normalizeReferralDisplayCode(code) {
   return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10)
@@ -1480,6 +1732,7 @@ async function init() {
   state.paymentStatus = paymentStatus
   const authGateNext = urlParams.get('auth') === 'login' ? urlParams.get('next') : null
   let initialLoginNext = null
+  let initialAuthMode = null
   if (paymentStatus) {
     // Clean URL
     window.history.replaceState({}, '', '/')
@@ -1496,12 +1749,14 @@ async function init() {
   } else {
     // Restore view from URL path on initial load
     const route = pathToRoute(window.location.pathname)
+    initialAuthMode = route.authMode || null
     state.currentView = route.view
     if (route.episode) state.currentEpisode = route.episode
     if (route.postId) state.currentPost = route.postId
     const routePath = route.canonicalPath || window.location.pathname
+    const routeUrl = `${routePath}${window.location.search}${window.location.hash}`
     if (isLoginRequiredAppPath(routePath) && !hasClientAuth()) {
-      initialLoginNext = routePath
+      initialLoginNext = routeUrl
       state.currentView = 'home'
       state.currentEpisode = null
       state.currentPost = null
@@ -1512,16 +1767,31 @@ async function init() {
         ? { view: 'home' }
         : { view: route.view, episodeId: route.episode?.id, postId: route.postId },
       '',
-      initialLoginNext ? '/' : routePath
+      initialLoginNext ? '/' : routeUrl
     )
   }
 
+  if (state.currentView === 'profile') {
+    const requestedSettingsTab = urlParams.get('tab')
+    if (['profile','account','notifications','subscription','credits'].includes(requestedSettingsTab)) settingsTab = requestedSettingsTab
+  }
   renderView()
   updateAuthUI()
   setupGlobalEvents()
   startPresenceHeartbeat()
   loadMarketMenu()
   if (await handleAuthGateRedirect(authGateNext) === 'redirect') return
+  if (initialAuthMode) {
+    const authReturnPath = getSafeLoginReturnPath(urlParams.get('next')) || '/account'
+    if (hasClientAuth()) {
+      const verifiedUser = await refreshCurrentUserProfile().catch(() => null)
+      if (verifiedUser) {
+        window.location.replace(authReturnPath)
+        return
+      }
+    }
+    showAuthModal(initialAuthMode, { nextUrl:authReturnPath })
+  }
   if (!authGateNext && initialLoginNext) {
     showLoginRequiredModal(initialLoginNext)
   }
@@ -1559,8 +1829,10 @@ function renderView() {
     courses: '课程体系 | 量见',
     courseCraft: '交易是一门手艺 | 量见',
     courseAi: 'AI铸剑 | 量见',
+    bridgePair: '连接量见智桥 | 量见',
   }
   document.title = pageTitles[state.currentView] || '量见'
+  if (state.currentView !== 'home') courseStream.disconnect()
   switch (state.currentView) {
     case 'home': renderHome(); break
     case 'courses': mainContent.innerHTML = renderCourseOverviewPage(); break
@@ -1579,7 +1851,6 @@ function renderView() {
     case 'community': renderCommunity(); break
     case 'post': renderPost(); break
     case 'trades': renderTrades(); break
-    case 'admin': renderAdmin(); break
   }
 }
 
@@ -1682,11 +1953,10 @@ function viewToPath(view, episode) {
     case 'tools': return '/tools'
     case 'community': return '/community'
     case 'post': return state.currentPost ? `/post/${state.currentPost}` : '/community'
-    case 'profile': return '/profile'
+    case 'profile': return '/account'
     case 'membership': return '/membership'
     case 'quotes': return '/quotes'
     case 'tos': return '/tos'
-    case 'admin': return '/admin'
     default: return '/'
   }
 }
@@ -1700,11 +1970,13 @@ function pathToRoute(path) {
   if (clean === '/trades') return { view: 'trades' }
   if (clean === '/tools') return { view: 'tools' }
   if (clean === '/community') return { view: 'community' }
-  if (clean === '/profile') return { view: 'profile' }
+  if (clean === '/account') return { view: 'profile' }
+  if (clean === '/profile') return { view: 'profile', canonicalPath:'/account' }
+  if (clean === '/auth' || clean === '/auth/login') return { view:'home', authMode:'login_password' }
+  if (clean === '/auth/register') return { view:'home', authMode:'register' }
   if (clean === '/membership') return { view: 'membership' }
   if (clean === '/quotes') return { view: 'quotes' }
   if (clean === '/tos') return { view: 'tos' }
-  if (clean === '/admin') return { view: 'admin' }
 
   const articleMatch = clean.match(/^\/article\/(\d+)$/)
   if (articleMatch) {
@@ -1760,7 +2032,6 @@ function navigate(view, episode = null, skipPush = false) {
   resetReplyDraftImages()
   releasePostImageObjectUrls()
   closePostImageLightbox()
-  stopAdminAutoRefresh()
   state.currentView = view
   if (episode) {
     state.currentEpisode = episode
@@ -1834,7 +2105,8 @@ window.addEventListener('popstate', (e) => {
 
 // ===== Home View =====
 function renderHome() {
-  const filtered = getFilteredEpisodes()
+  courseStream.prepare(state.currentCategory)
+  const page = getCoursePage(episodes, state.currentCategory, 0, courseStream.visibleCount)
   const statsHtml = renderSidebarStats()
   const quotesHtml = renderSidebarQuotes()
   const updatesHtml = renderSidebarUpdates()
@@ -1888,11 +2160,13 @@ function renderHome() {
           `).join('')}
         </div>
 
-        <div class="episode-grid">
-          ${filtered.map(ep => renderEpisodeCard(ep)).join('')}
+        <div class="episode-grid" id="courseStreamGrid">
+          ${page.items.map(ep => renderEpisodeCard(ep)).join('')}
         </div>
 
-        ${filtered.length === 0 ? '<p style="text-align:center; color:var(--text-3); padding:48px 0;">未找到匹配的课程</p>' : ''}
+        ${page.total === 0
+          ? '<p style="text-align:center; color:var(--text-3); padding:48px 0;">未找到匹配的课程</p>'
+          : renderCourseStreamFooter(page)}
 
         <div class="home-mobile-below-courses">
           ${mobileBelowCoursesHtml}
@@ -1907,7 +2181,73 @@ function renderHome() {
 
   // 异步从 API 加载最新更新（用真实数据替换静态后备）
   refreshSidebarUpdates()
+  setupCourseStreamObserver()
 
+}
+
+function renderCourseStreamFooter(page) {
+  if (!page.hasMore) {
+    return `<div class="course-stream-footer is-complete" id="courseStreamFooter" aria-live="polite">
+      已显示全部 ${page.total} 节课程
+    </div>`
+  }
+
+  return `<div class="course-stream-footer" id="courseStreamFooter" aria-live="polite">
+    <span class="course-stream-sentinel" id="courseStreamSentinel" aria-hidden="true"></span>
+    <button class="course-stream-more" id="courseStreamMore" type="button">
+      继续加载 <span>${Math.min(COURSE_STREAM_PAGE_SIZE, page.total - page.nextOffset)} 节</span>
+    </button>
+    <small>已显示 ${page.nextOffset} / ${page.total}</small>
+  </div>`
+}
+
+function setupCourseStreamObserver() {
+  courseStream.disconnect()
+  const sentinel = document.getElementById('courseStreamSentinel')
+  if (!sentinel || typeof IntersectionObserver !== 'function') return
+
+  courseStream.observer = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) loadMoreCourseStream()
+  }, { rootMargin: '280px 0px' })
+  courseStream.observer.observe(sentinel)
+}
+
+async function loadMoreCourseStream() {
+  if (courseStream.loading || state.currentView !== 'home') return
+  const category = state.currentCategory
+  const page = getCoursePage(episodes, category, courseStream.visibleCount, COURSE_STREAM_PAGE_SIZE)
+  if (!page.items.length) {
+    courseStream.disconnect()
+    return
+  }
+
+  courseStream.loading = true
+  const button = document.getElementById('courseStreamMore')
+  if (button) {
+    button.disabled = true
+    button.innerHTML = '<span class="course-stream-spinner" aria-hidden="true"></span> 正在加载…'
+  }
+
+  await new Promise(resolve => requestAnimationFrame(resolve))
+  if (state.currentView !== 'home' || state.currentCategory !== category) {
+    courseStream.loading = false
+    return
+  }
+
+  const grid = document.getElementById('courseStreamGrid')
+  const footer = document.getElementById('courseStreamFooter')
+  if (!grid || !footer) {
+    courseStream.loading = false
+    return
+  }
+
+  grid.insertAdjacentHTML('beforeend', page.items.map(ep => renderEpisodeCard(ep)).join(''))
+  courseStream.visibleCount = page.nextOffset
+  courseStream.loading = false
+
+  const current = getCoursePage(episodes, category, 0, courseStream.visibleCount)
+  footer.outerHTML = renderCourseStreamFooter(current)
+  setupCourseStreamObserver()
 }
 
 function getCardBackground(ep) {
@@ -2147,8 +2487,29 @@ function formatTimeAgo(timestamp) {
 
 // Category labels matching homepage tabs
 const COURSE_CATEGORY_IDS = ['morning', 'indicator', 'pattern', 'strategy', 'advanced']
-const CATEGORY_LABELS = { morning: '早盘解读', strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '技术模型' }
+const CATEGORY_LABELS = { morning: '早盘解读', strategy: '交易策略', indicator: '技术指标', pattern: '形态分析', advanced: '经济指标' }
 function getCategoryLabel(cat) { return CATEGORY_LABELS[cat] || cat || '' }
+
+const COURSE_STREAM_PAGE_SIZE = 9
+const courseStream = {
+  category: null,
+  visibleCount: COURSE_STREAM_PAGE_SIZE,
+  loading: false,
+  observer: null,
+
+  prepare(category) {
+    if (this.category === category) return
+    this.category = category
+    this.visibleCount = COURSE_STREAM_PAGE_SIZE
+    this.loading = false
+    this.disconnect()
+  },
+
+  disconnect() {
+    this.observer?.disconnect()
+    this.observer = null
+  },
+}
 
 function syncVideoAccessState(items = []) {
   state.paidVideoEpisodes = getVideoEpisodeIds(items)
@@ -2308,6 +2669,81 @@ function renderEpisodeActions(ep, progressRecord) {
   `
 }
 
+function formatCourseAttachmentSize(bytes) {
+  const value = Math.max(0, Number(bytes || 0))
+  if (!value) return '大小未知'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
+
+function courseAttachmentRegionHtml(ep) {
+  const count = Number(ep?.attachmentCount || 0)
+  if (!count) return ''
+  const hasAccess = canAccessVideo(ep.id)
+  return `
+    <section class="course-attachment-panel" id="courseAttachmentPanel" aria-labelledby="courseAttachmentsTitle">
+      <header class="course-attachment-head">
+        <div class="course-attachment-heading">
+          <span class="course-attachment-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v5h5M10 13h5M10 17h5"/></svg>
+          </span>
+          <div><span>配套课件</span><h2 id="courseAttachmentsTitle">课程附件</h2><p>${hasAccess ? '下载讲义、表格、模板与课程补充资料。' : '附件权限与本课程一致。'}</p></div>
+        </div>
+        <span class="course-attachment-count">${count} 个文件</span>
+      </header>
+      ${hasAccess
+        ? '<div class="course-attachment-list" id="courseAttachmentList" aria-live="polite"><div class="course-attachment-loading"><span></span><div><strong>正在读取课程附件</strong><small>请稍候…</small></div></div></div>'
+        : `<div class="course-attachment-locked"><strong>${!state.user ? '登录后即可下载' : '当前会员等级不可下载'}</strong><p>${!state.user ? '登录后系统会按课程权限开放附件。' : '升级会员后可下载本课程全部配套资料。'}</p><button class="btn btn-outline" id="goUpgradeAttachments" type="button">${!state.user ? '登录' : '查看会员方案'}</button></div>`}
+    </section>
+  `
+}
+
+async function hydrateCourseAttachments(ep) {
+  const panel = document.getElementById('courseAttachmentPanel')
+  const list = document.getElementById('courseAttachmentList')
+  if (!panel || !list || !canAccessVideo(ep.id)) return
+  const attachments = await courseContent.loadAttachments(ep.id)
+  if (state.currentEpisode?.id !== ep.id || !document.body.contains(panel)) return
+  if (!attachments.length) {
+    panel.remove()
+    return
+  }
+  const count = panel.querySelector('.course-attachment-count')
+  if (count) count.textContent = `${attachments.length} 个文件`
+  list.innerHTML = attachments.map(attachment => {
+    const extension = String(attachment.extension || '').replace(/^\./, '').toUpperCase() || 'FILE'
+    return `<button class="course-attachment-item" type="button" data-course-attachment-download="${escapeHtml(attachment.download_url)}" data-course-attachment-name="${escapeHtml(attachment.file_name || attachment.title || '课程附件')}">
+      <span class="course-attachment-type">${escapeHtml(extension.slice(0, 5))}</span>
+      <span class="course-attachment-copy"><strong>${escapeHtml(attachment.title || attachment.file_name || '课程附件')}</strong><small>${escapeHtml(extension)} · ${formatCourseAttachmentSize(attachment.file_size)}</small></span>
+      <span class="course-attachment-download">下载<span aria-hidden="true">↓</span></span>
+    </button>`
+  }).join('')
+}
+
+async function downloadCourseAttachment(url, fileName, button) {
+  if (!url || !button) return
+  const originalLabel = button.querySelector('.course-attachment-download')?.innerHTML || '下载'
+  button.disabled = true
+  const action = button.querySelector('.course-attachment-download')
+  if (action) action.textContent = '准备下载…'
+  try {
+    const objectUrl = await api.fetchBlobUrl(url)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = fileName || '课程附件'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  } catch (error) {
+    showToast(error.message || '附件下载失败', 'error')
+  } finally {
+    button.disabled = false
+    if (action) action.innerHTML = originalLabel
+  }
+}
+
 function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress, infoBeforeMedia = false }) {
   const progressRecord = state.user ? progress.get(ep.id) : null
   const percent = progressRecord
@@ -2339,12 +2775,10 @@ function renderEpisodeDetailShell({ ep, viewClass, mediaHtml, showProgress, info
       ` : ''}
 
       ${infoBeforeMedia ? '' : infoHtml}
+      ${courseAttachmentRegionHtml(ep)}
     </div>
   `
-}
-
-function getFilteredEpisodes() {
-  return getCoursesForCategory(episodes, state.currentCategory)
+  hydrateCourseAttachments(ep).catch(error => console.error('Course attachments render error:', error))
 }
 
 function renderArticle() {
@@ -2419,8 +2853,11 @@ function renderArticle() {
       if (state.currentEpisode?.id !== ep.id) return
       if (!r.ok) throw new Error(r.error || '视频加载失败')
 
-      // Priority: Bilibili > Local > Qiniu
-      if (r.bilibiliId) {
+      // Explicit managed source always wins over legacy external fields.
+      if ((r.videoSource === 'local_mp4' || r.videoSource === 'qiniu_mp4') && r.playbackUrl) {
+        if (r.videoSource === 'local_mp4') initLocalPlayer(r.playbackUrl, { managed: true, source: r.videoSource })
+        else initQiniuPlayer(r.playbackUrl, { managed: true, source: r.videoSource })
+      } else if (r.bilibiliId) {
         initBiliPlayer(r.bilibiliId)
       } else if (r.localPath) {
         initLocalPlayer(r.localPath)
@@ -2522,7 +2959,10 @@ function renderVideo() {
       if (state.currentEpisode?.id !== ep.id) return
       if (!r.ok) throw new Error(r.error || '视频加载失败')
 
-      if (r.bilibiliId) {
+      if ((r.videoSource === 'local_mp4' || r.videoSource === 'qiniu_mp4') && r.playbackUrl) {
+        if (r.videoSource === 'local_mp4') initLocalPlayer(r.playbackUrl, { managed: true, source: r.videoSource })
+        else initQiniuPlayer(r.playbackUrl, { managed: true, source: r.videoSource })
+      } else if (r.bilibiliId) {
         const container = document.getElementById('videoContainer')
         const safeBvid = /^BV[a-zA-Z0-9]+$/.test(r.bilibiliId) ? r.bilibiliId : ''
         if (container && safeBvid) {
@@ -3060,651 +3500,7 @@ function hydrateMindmapStructures() {
 }
 
 // ===== Admin Dashboard =====
-function renderAdmin() {
-  if (!isAdmin()) return navigate('home')
-
-  // Show loading state
-  mainContent.innerHTML = `
-    <div class="admin-dashboard fade-in">
-      <button class="back-btn" id="backHome">← 返回首页</button>
-      <h1 class="admin-title">📊 管理后台</h1>
-      <div class="loading-spinner" style="padding:60px 0;text-align:center;">加载数据中...</div>
-    </div>
-  `
-  document.getElementById('backHome')?.addEventListener('click', () => navigate('home'))
-
-  // Fetch real data from backend (page 1, 10 per page)
-  api.get('/api/admin-users?page=1&limit=10').then(data => {
-    if (!data.ok || !data.stats) {
-      mainContent.querySelector('.loading-spinner').textContent = '加载失败: ' + (data.error || '未知错误')
-      return
-    }
-    renderAdminContent(data)
-    refreshAdminUserTable()
-    startAdminAutoRefresh()
-  })
-}
-
-function renderCourseOptionList(selectedId = '') {
-  const list = state.adminCourses.length ? state.adminCourses : episodes
-  return list
-    .slice()
-    .sort((a, b) => (a.sortOrder || a.id) - (b.sortOrder || b.id))
-    .map(ep => {
-      const label = ep.title
-      return `<option value="${ep.id}" ${Number(selectedId) === ep.id ? 'selected' : ''}>${escapeHtml(label)}</option>`
-    }).join('')
-}
-
-function renderAdminCourseSection() {
-  return `
-    <div class="admin-section" id="adminCourseManager">
-      <div class="admin-section-header">
-        <h2>课程管理</h2>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <button class="btn btn-ghost btn-xs" id="refreshAdminCourses">刷新</button>
-          <button class="btn btn-primary btn-sm" id="addCourseBtn">+ 新增课程</button>
-        </div>
-      </div>
-      <div id="adminCourseList"></div>
-      <div class="stream-upload-result" id="adminCourseResult" style="display:none"></div>
-    </div>
-  `
-}
-
-function renderAdminQuizSection() {
-  return `
-    <div class="admin-section" id="adminQuizManager">
-      <div class="admin-section-header">
-        <h2>题库管理</h2>
-      </div>
-      <div class="stream-upload-form admin-quiz-toolbar">
-        <select class="stream-input" id="adminQuizEpisode">
-          ${renderCourseOptionList(state.adminQuizEpisodeId || episodes[0]?.id || '')}
-        </select>
-        <button class="btn btn-primary" id="loadAdminQuiz" type="button">加载题目</button>
-      </div>
-      <form class="admin-cms-form" id="adminQuizForm">
-        <input type="hidden" id="quizQuestionId">
-        <div class="admin-cms-grid">
-          <label>排序<input class="stream-input" id="quizSortOrder" type="number" min="0" value="0"></label>
-          <label>正确答案
-            <select class="stream-input" id="quizAnswer">
-              <option value="0">A</option>
-              <option value="1">B</option>
-              <option value="2">C</option>
-              <option value="3">D</option>
-            </select>
-          </label>
-          <label>状态
-            <select class="stream-input" id="quizStatus">
-              <option value="published">已发布</option>
-              <option value="draft">草稿</option>
-              <option value="archived">已归档</option>
-            </select>
-          </label>
-        </div>
-        <label>题干<textarea class="stream-input admin-cms-textarea" id="quizQuestion" rows="2" required></textarea></label>
-        <label>选项（每行一个）<textarea class="stream-input admin-cms-textarea" id="quizOptions" rows="4" required></textarea></label>
-        <label>逐项解析（每行对应一个选项）<textarea class="stream-input admin-cms-textarea" id="quizExplanations" rows="4"></textarea></label>
-        <label>通用解释<textarea class="stream-input admin-cms-textarea" id="quizExplanation" rows="2"></textarea></label>
-        <label>提示<textarea class="stream-input admin-cms-textarea" id="quizHint" rows="2"></textarea></label>
-        <div class="admin-cms-actions">
-          <button class="btn btn-primary" type="submit">保存题目</button>
-          <button class="btn btn-ghost" id="resetAdminQuiz" type="button">清空题目</button>
-        </div>
-        <div class="stream-upload-result" id="adminQuizResult" style="display:none"></div>
-      </form>
-      <div id="adminQuizList" class="admin-quiz-list">
-        <div class="comments-empty">选择课程后加载题目</div>
-      </div>
-    </div>
-  `
-}
-
-function renderAdminContent(data) {
-  const { stats, users: userList } = data
-  const realtimeOnlineUsers = Number(stats.realtimeOnlineUsers || 0)
-  const todayOnlineUsers = Number(stats.todayOnlineUsers || 0)
-  const weekOnlineUsers = Number(stats.weekOnlineUsers || 0)
-  const realtimeWindowMinutes = Number(stats.realtimeWindowMinutes || 5)
-  const plusCount = Number(stats.plusUsers || 0)
-  const proCount = Number(stats.proUsers || 0)
-  const memberUsers = userList.filter(u => u.plan === 'plus' || u.plan === 'pro')
-  const learningRanked = userList
-    .filter(u => u.progress?.completed > 0)
-    .sort((a, b) => (b.progress.completed - a.progress.completed) || (b.progress.quizPassed - a.progress.quizPassed))
-  const paidOrderRows = userList
-    .flatMap(u => (u.orders || [])
-      .filter(o => o.status === 'paid')
-      .map(o => ({ user: u, order: o }))
-    )
-    .sort((a, b) => String(b.order.paidAt || b.order.createdAt || '').localeCompare(String(a.order.paidAt || a.order.createdAt || '')))
-
-  // Plan label helper
-    // planLabel is now at module level
-
-
-  function orderPlanLabel(order) {
-    const plan = order.plan === 'pro' ? 'PRO' : order.plan === 'plus' ? 'Plus' : (order.plan || '-')
-    const period = order.period === 'yearly' ? '年付' : order.period === 'monthly' ? '月付' : (order.period || '')
-    return `${plan}${period ? ' ' + period : ''}`
-  }
-
-  function orderStatusLabel(status) {
-    if (status === 'paid') return '已完成'
-    if (status === 'processing') return '处理中'
-    if (status === 'pending') return '待支付'
-    if (status === 'expired') return '已过期'
-    return status || '-'
-  }
-
-  mainContent.innerHTML = `
-    <div class="admin-dashboard fade-in">
-      <button class="back-btn" id="backHome">← 返回首页</button>
-      <h1 class="admin-title">📊 管理后台</h1>
-
-      <div class="admin-board-tabs" role="tablist" aria-label="管理后台板块">
-        <button class="admin-board-tab active" type="button" data-admin-board="resources">课程资源</button>
-        <button class="admin-board-tab" type="button" data-admin-board="users">用户会员</button>
-        <button class="admin-board-tab" type="button" data-admin-board="referrals">返佣邀请</button>
-        <button class="admin-board-tab" type="button" data-admin-board="config">系统配置</button>
-      </div>
-
-      <div class="admin-presence-grid" aria-label="在线人数统计">
-        <div class="admin-presence-card">
-          <div class="admin-presence-label">实时在线人数</div>
-          <div class="admin-presence-value">${realtimeOnlineUsers}</div>
-          <div class="admin-presence-sub">最近 ${realtimeWindowMinutes} 分钟活跃</div>
-        </div>
-        <div class="admin-presence-card">
-          <div class="admin-presence-label">今天在线人数</div>
-          <div class="admin-presence-value">${todayOnlineUsers}</div>
-          <div class="admin-presence-sub">北京时间今日去重用户</div>
-        </div>
-        <div class="admin-presence-card">
-          <div class="admin-presence-label">本周在线人数</div>
-          <div class="admin-presence-value">${weekOnlineUsers}</div>
-          <div class="admin-presence-sub">北京时间本周去重用户</div>
-        </div>
-      </div>
-
-      <div class="admin-board admin-board-active" id="adminResourcesBoard">
-        ${renderAdminCourseSection()}
-      </div>
-
-      <div class="admin-board" id="adminUsersBoard" hidden>
-
-      <div class="admin-stats-grid">
-        <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="all">
-          <div class="admin-stat-icon">👥</div>
-          <div class="admin-stat-value">${stats.totalUsers}</div>
-          <div class="admin-stat-label">注册用户总数</div>
-          <div class="admin-stat-sub">今日新增 ${stats.todayNewUsers}</div>
-        </div>
-        <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="members">
-          <div class="admin-stat-icon">⭐</div>
-          <div class="admin-stat-value">${plusCount}</div>
-          <div class="admin-stat-label">Plus 会员</div>
-          <div class="admin-stat-sub">转化率 ${stats.totalUsers > 0 ? Math.round(plusCount / stats.totalUsers * 100) : 0}%</div>
-        </div>
-        <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="members">
-          <div class="admin-stat-icon">💎</div>
-          <div class="admin-stat-value">${proCount}</div>
-          <div class="admin-stat-label">Pro 会员</div>
-          <div class="admin-stat-sub">转化率 ${stats.totalUsers > 0 ? Math.round(proCount / stats.totalUsers * 100) : 0}%</div>
-        </div>
-        <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="orders">
-          <div class="admin-stat-icon">💵</div>
-          <div class="admin-stat-value">$${stats.totalRevenue.toLocaleString()}</div>
-          <div class="admin-stat-label">总收入</div>
-          <div class="admin-stat-sub">${stats.paidOrderCount} 笔订单</div>
-        </div>
-        <div class="admin-stat-card">
-          <div class="admin-stat-icon">📚</div>
-          <div class="admin-stat-value">${episodes.length}</div>
-          <div class="admin-stat-label">课程总数</div>
-          <div class="admin-stat-sub">${episodes.filter(hasEpisodeVideo).length} 期已上线</div>
-        </div>
-        <div class="admin-stat-card">
-          <div class="admin-stat-icon">💬</div>
-          <div class="admin-stat-value">${stats.totalComments || 0}</div>
-          <div class="admin-stat-label">总评论数</div>
-          <div class="admin-stat-sub">${stats.totalReplies || 0} 条回复</div>
-        </div>
-        <div class="admin-stat-card">
-          <div class="admin-stat-icon">📝</div>
-          <div class="admin-stat-value">${stats.totalPosts || 0}</div>
-          <div class="admin-stat-label">社区帖子</div>
-          <div class="admin-stat-sub">社区互动</div>
-        </div>
-        <div class="admin-stat-card admin-stat-clickable" data-admin-user-tab="learning">
-          <div class="admin-stat-icon">🏆</div>
-          <div class="admin-stat-value">${learningRanked.length}</div>
-          <div class="admin-stat-label">学习排行榜</div>
-          <div class="admin-stat-sub">${learningRanked.length > 0 ? '🥇 ' + escapeHtml(learningRanked[0].name || '未命名') + ' · ' + learningRanked[0].progress.completed + '课' : '暂无数据'}</div>
-        </div>
-      </div>
-
-      <div class="admin-board-tabs admin-user-subtabs" id="adminUserSubTabs" role="tablist" aria-label="用户会员子版块">
-        <button class="admin-board-tab active" type="button" data-admin-user-tab="all">全部用户列表</button>
-        <button class="admin-board-tab" type="button" data-admin-user-tab="members">会员列表</button>
-        <button class="admin-board-tab" type="button" data-admin-user-tab="orders">订单充值</button>
-        <button class="admin-board-tab" type="button" data-admin-user-tab="learning">学习进度排名</button>
-      </div>
-
-      <!-- 用户列表 -->
-      <div class="admin-section admin-user-panel" id="adminUserList" data-admin-user-panel="all">
-        <div class="admin-section-header">
-          <h2>全部用户列表</h2>
-          <div style="display:flex;gap:8px;align-items:center;">
-            <input type="text" id="adminUserSearch" class="admin-plan-input" placeholder="搜索邮箱或昵称..." style="width:200px;font-size:13px;padding:4px 8px;">
-            <span class="admin-section-badge" id="adminUserCount">${stats.totalUsers} 人</span>
-          </div>
-        </div>
-        <div class="admin-table-wrapper" id="adminUserTableWrapper">
-          <table class="admin-table">
-            <thead>
-              <tr>
-                <th>用户</th>
-                <th>账号</th>
-                <th>注册时间</th>
-                <th>会员</th>
-                <th>到期日</th>
-                <th>付费</th>
-                <th>学习/互动</th>
-                <th>最近</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="adminUserBody">
-              <tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:32px;">加载中...</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div id="adminUserPager" class="admin-pager"></div>
-      </div>
-
-      <!-- 会员列表 -->
-      <div class="admin-section admin-user-panel" id="adminMemberList" data-admin-user-panel="members" hidden>
-        <div class="admin-section-header">
-          <h2>会员列表</h2>
-          <span class="admin-section-badge" id="adminMemberCount">${plusCount + proCount} 人</span>
-        </div>
-        <div class="admin-table-wrapper">
-          <table class="admin-table">
-            <thead>
-              <tr>
-                <th>用户</th>
-                <th>账号</th>
-                <th>注册时间</th>
-                <th>会员</th>
-                <th>到期日</th>
-                <th>付费</th>
-                <th>学习/互动</th>
-                <th>最近</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody id="adminMemberBody"></tbody>
-          </table>
-        </div>
-        <div id="adminMemberPager" class="admin-pager"></div>
-      </div>
-
-      <!-- 订单充值 -->
-      <div class="admin-section admin-user-panel" id="adminPaidList" data-admin-user-panel="orders" hidden>
-        <div class="admin-section-header">
-          <h2>订单充值</h2>
-          <span class="admin-section-badge">${paidOrderRows.length} 笔</span>
-        </div>
-        ${paidOrderRows.length > 0
-          ? `<div class="admin-table-wrapper">
-              <table class="admin-table">
-                <thead><tr><th>用户</th><th>UID</th><th>方案</th><th>金额</th><th>状态</th><th>支付/创建时间</th></tr></thead>
-                <tbody>
-                  ${paidOrderRows.map(({ user: u, order: o }) => `
-                    <tr>
-                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}</div></div></div></td>
-                      <td class="admin-uid">${escapeHtml((u.uid || '').substring(0, 10))}</td>
-                      <td><span class="admin-badge badge-paid">${escapeHtml(orderPlanLabel(o))}</span></td>
-                      <td><strong>${formatMinorUsd(o.amountConfirmed || o.amount || 0)}</strong></td>
-                      <td><span class="admin-badge ${o.status === 'paid' ? 'badge-paid' : 'badge-free'}">${escapeHtml(orderStatusLabel(o.status))}</span></td>
-                      <td style="font-size:12px;white-space:nowrap;">${o.paidAt || o.createdAt ? formatDateTime(o.paidAt || o.createdAt) : '-'}</td>
-                    </tr>`).join('')}
-                </tbody>
-              </table>
-            </div>`
-          : '<div class="comments-empty">暂无付费记录</div>'
-        }
-      </div>
-
-      <!-- 学习排行榜 -->
-      <div class="admin-section admin-user-panel" id="adminLeaderboard" data-admin-user-panel="learning" hidden>
-        <div class="admin-section-header">
-          <h2>🏆 学习进度排名</h2>
-          <span class="admin-section-badge">${learningRanked.length} 人完成过课程</span>
-        </div>
-        ${learningRanked.length > 0
-          ? `<div class="admin-table-wrapper">
-              <table class="admin-table">
-                <thead><tr><th style="width:50px">排名</th><th>用户</th><th>UID</th><th>会员</th><th style="text-align:center">✅ 完成</th><th style="text-align:center">🎯 答题</th><th style="text-align:center">▶ 观看</th></tr></thead>
-                <tbody>
-                  ${learningRanked.map((u, i) => {
-                    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : ''
-                    return `
-                    <tr${i < 3 ? ' style="background:var(--bg-2);"' : ''}>
-                      <td style="text-align:center;font-weight:600;font-size:${i < 3 ? '18px' : '13px'};">${medal || (i + 1)}</td>
-                      <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}</div></div></div></td>
-                      <td class="admin-uid">${escapeHtml((u.uid || '').substring(0, 10))}</td>
-                      <td>${planLabel(u.plan, u.planExpiresAt)}</td>
-                      <td style="text-align:center;font-weight:700;font-size:16px;color:var(--accent);">${u.progress.completed}</td>
-                      <td style="text-align:center;">${u.progress.quizPassed || 0}</td>
-                      <td style="text-align:center;">${u.progress.total || 0}</td>
-                    </tr>`
-                  }).join('')}
-                </tbody>
-              </table>
-            </div>`
-          : '<div class="comments-empty">暂无学习记录</div>'
-        }
-      </div>
-
-      <!-- 订单详情弹窗 -->
-      <div class="admin-order-modal" id="adminOrderModal" style="display:none">
-        <div class="admin-order-modal-content">
-          <div class="admin-order-modal-header">
-            <h3 id="adminOrderModalTitle">订单详情</h3>
-            <button class="admin-order-modal-close" id="adminOrderModalClose">&times;</button>
-          </div>
-          <div id="adminOrderModalBody"></div>
-        </div>
-      </div>
-
-      <!-- 审计日志 -->
-      <div class="admin-section">
-        <div class="admin-section-header">
-          <h2>📋 审计日志</h2>
-        </div>
-        <div class="audit-filters">
-          <select id="auditDays" class="form-select">
-            <option value="all">全部时间</option>
-            <option value="1">最近1天</option>
-            <option value="7">最近7天</option>
-            <option value="30">最近30天</option>
-          </select>
-          <select id="auditActionType" class="form-select">
-            <option value="all">全部类型</option>
-            <option value="login">登录</option>
-            <option value="register">注册</option>
-            <option value="profile_update">修改资料</option>
-            <option value="comment_create">发表评论</option>
-            <option value="post_create">发帖</option>
-            <option value="reply_create">回复</option>
-            <option value="admin_change_plan">管理套餐</option>
-            <option value="trade_create">添加战绩</option>
-          </select>
-          <input type="text" id="auditSearch" class="form-input" placeholder="搜索用户邮箱、昵称、详情...">
-          <button class="btn btn-primary" id="loadAuditLogs">查询</button>
-        </div>
-        <div id="auditLogContainer" class="admin-audit-container">
-          <p style="color:var(--text-3);padding:12px 0;">点击「查询」查看操作记录</p>
-        </div>
-      </div>
-      </div>
-
-      <div class="admin-board" id="adminReferralsBoard" hidden>
-        ${renderAdminReferralsSection()}
-      </div>
-
-      <div class="admin-board" id="adminConfigBoard" hidden>
-        ${renderAdminConfigSection()}
-      </div>
-    </div>
-  `
-
-  setupAdminBoardTabs()
-  setupAdminUserTabs()
-  setupAdminUserSearch()
-  setupAdminCourseManager()
-  loadAdminReferrals()
-  loadAdminConfig()
-
-  // Audit log handler
-  const auditBtn = document.getElementById('loadAuditLogs')
-  if (auditBtn) {
-    let auditPage = 1
-    const loadAudit = async (page = 1) => {
-      const container = document.getElementById('auditLogContainer')
-      if (!container) return
-      container.innerHTML = '<div class="loading-spinner">加载中...</div>'
-      const days = document.getElementById('auditDays')?.value || 'all'
-      const action = document.getElementById('auditActionType')?.value || 'all'
-      const search = document.getElementById('auditSearch')?.value || ''
-      const r = await api.get(`/api/admin-audit?page=${page}&limit=30&days=${days}&action=${action}&search=${encodeURIComponent(search)}`)
-      if (!r.logs) {
-        container.innerHTML = `<p style="color:var(--text-3);padding:12px 0;">${escapeHtml(r.error || '加载失败')}</p>`
-        return
-      }
-      if (r.logs.length === 0) {
-        container.innerHTML = '<p style="color:var(--text-3);padding:12px 0;">暂无日志</p>'
-        return
-      }
-      const actionLabels = {
-        login: '登录', register: '注册', change_password: '修改密码',
-        profile_update: '修改资料', comment_create: '发表评论', comment_delete: '删除评论',
-        post_create: '发帖', post_delete: '删除帖子', reply_create: '回复',
-        reply_delete: '删除回复', admin_change_plan: '管理套餐',
-        admin_delete_comment: '管理员删评论', admin_delete_post: '管理员删帖',
-        admin_delete_reply: '管理员删回复', trade_create: '添加战绩',
-        course_resources_upload: '上传课程资料',
-        trade_delete: '删除战绩', mt5_credentials_access: '查看MT5账号',
-        smart_close: 'AI 智能平仓', smart_close_rule: 'AI 智能平仓',
-      }
-      container.innerHTML = `
-        <table class="admin-table" style="font-size:13px;">
-          <thead><tr><th>#</th><th>时间</th><th>操作者</th><th>IP</th><th>操作</th><th>详情</th></tr></thead>
-          <tbody>${r.logs.map((l, i) => `<tr>
-            <td>${(page - 1) * 30 + i + 1}</td>
-            <td style="white-space:nowrap;">${l.created_at ? formatDateTime(l.created_at) : '-'}</td>
-            <td>${escapeHtml(l.user_nickname || l.user_email || '-')}<br><span style="font-size:11px;color:var(--text-3);">${escapeHtml(l.user_email || '')}</span></td>
-            <td style="font-family:monospace;font-size:11px;">${escapeHtml(l.ip || '-')}</td>
-            <td>${escapeHtml(actionLabels[l.action] || l.action)}</td>
-            <td><button class="btn btn-ghost btn-xs audit-detail" data-id="${l.id}">详情</button></td>
-          </tr>`).join('')}</tbody>
-        </table>
-        <div style="display:flex;gap:8px;padding:12px 0;justify-content:center;">
-          ${page > 1 ? `<button class="btn btn-ghost btn-xs audit-page" data-page="${page - 1}">← 上一页</button>` : ''}
-          <span style="color:var(--text-3);font-size:13px;">第 ${page}/${r.totalPages} 页 (共 ${r.total} 条)</span>
-          ${page < r.totalPages ? `<button class="btn btn-ghost btn-xs audit-page" data-page="${page + 1}">下一页 →</button>` : ''}
-        </div>
-      `
-      container.querySelectorAll('.audit-page').forEach(btn => {
-        btn.addEventListener('click', () => loadAudit(Number(btn.dataset.page)))
-      })
-      container.querySelectorAll('.audit-detail').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const log = r.logs.find(l => l.id === Number(btn.dataset.id))
-          if (log) {
-            alert(`操作: ${actionLabels[log.action] || log.action}\n用户: ${log.user_nickname || log.user_email}\nIP: ${log.ip || '-'}\n时间: ${formatDateTime(log.created_at)}\n详情: ${log.detail || '-'}`)
-          }
-        })
-      })
-    }
-    auditBtn.addEventListener('click', () => loadAudit(1))
-  }
-
-  // Stream upload handlers
-  const fileInput = document.getElementById('streamFileInput')
-  const uploadBtn = document.getElementById('streamUploadBtn')
-
-  if (fileInput) {
-    fileInput.addEventListener('change', () => {
-      const file = fileInput.files[0]
-      if (file) {
-        document.getElementById('streamFileName').textContent = `${file.name} (${formatFileSize(file.size)})`
-        if (uploadBtn) uploadBtn.disabled = false
-        if (!document.getElementById('courseTitle')?.value) {
-          document.getElementById('courseTitle').value = file.name.replace(/\.[^.]+$/, '')
-        }
-      }
-    })
-  }
-
-  if (uploadBtn) {
-    uploadBtn.addEventListener('click', () => startStreamUpload())
-  }
-}
-
-
-function renderAdminReferralsSection() {
-  return `
-    <div class="admin-section">
-      <div class="admin-section-header">
-        <h2>返佣邀请管理</h2>
-        <button class="btn btn-ghost btn-xs" id="adminReferralRefresh">刷新</button>
-      </div>
-      <div id="adminReferralContent" class="admin-referral-content">
-        <div class="loading-spinner">加载中...</div>
-      </div>
-    </div>
-  `
-}
-
-function adminReferralStatusBadge(status) {
-  if (status === 'approved') return '<span class="admin-badge badge-paid">已审核</span>'
-  if (status === 'voided') return '<span class="admin-badge badge-expired">已作废</span>'
-  return '<span class="admin-badge badge-free">待确认</span>'
-}
-
-async function loadAdminReferrals() {
-  const container = document.getElementById('adminReferralContent')
-  if (!container) return
-  const currentStatus = document.getElementById('adminReferralStatusFilter')?.value || ''
-  container.innerHTML = '<div class="loading-spinner">加载中...</div>'
-  try {
-    const statusQuery = currentStatus ? `?status=${encodeURIComponent(currentStatus)}` : ''
-    const [overview, commissions, rules] = await Promise.all([
-      api.get('/api/admin/referrals/overview'),
-      api.get(`/api/admin/referrals/commissions${statusQuery}`),
-      api.get('/api/admin/referrals/rules'),
-    ])
-    if (!overview.ok || !commissions.ok || !rules.ok) {
-      container.innerHTML = `<div class="comments-empty">${escapeHtml(overview.error || commissions.error || rules.error || '加载失败')}</div>`
-      return
-    }
-    const stats = overview.stats || {}
-    const rows = commissions.commissions || []
-    const ruleRows = rules.rules || []
-    container.innerHTML = `
-      <div class="admin-stats-grid admin-referral-stats">
-        <div class="admin-stat-card"><div class="admin-stat-value">${Number(stats.total_invites || 0)}</div><div class="admin-stat-label">总邀请数</div></div>
-        <div class="admin-stat-card"><div class="admin-stat-value">${Number(stats.paid_invites || 0)}</div><div class="admin-stat-label">付费邀请</div></div>
-        <div class="admin-stat-card"><div class="admin-stat-value">${formatMinorUsd(stats.pending_credit_cents)}</div><div class="admin-stat-label">待确认返佣</div></div>
-        <div class="admin-stat-card"><div class="admin-stat-value">${formatMinorUsd(stats.available_credit_cents)}</div><div class="admin-stat-label">可用返佣</div></div>
-      </div>
-
-      <div class="admin-section admin-referral-inner">
-        <div class="admin-section-header">
-          <h2>返佣记录</h2>
-          <select class="admin-plan-select" id="adminReferralStatusFilter">
-            <option value="">全部状态</option>
-            <option value="pending" ${currentStatus === 'pending' ? 'selected' : ''}>待确认</option>
-            <option value="approved" ${currentStatus === 'approved' ? 'selected' : ''}>已审核</option>
-            <option value="voided" ${currentStatus === 'voided' ? 'selected' : ''}>已作废</option>
-          </select>
-        </div>
-        ${rows.length ? `
-          <div class="admin-table-wrapper">
-            <table class="admin-table">
-              <thead><tr><th>邀请人</th><th>被邀请用户</th><th>订单</th><th>现金实付</th><th>返佣金额</th><th>状态</th><th>可用时间</th><th>操作</th></tr></thead>
-              <tbody>
-                ${rows.map(row => `
-                  <tr>
-                    <td><div>${escapeHtml(row.referrer?.name || row.referrer?.uid || '-')}</div><div class="admin-uid">${escapeHtml(row.referrer?.email || '')}</div></td>
-                    <td><div>${escapeHtml(row.invited_user?.name || row.invited_user?.uid || '-')}</div><div class="admin-uid">${escapeHtml(row.invited_user?.email || '')}</div></td>
-                    <td><span class="admin-uid">${escapeHtml(String(row.order_id || '-'))}</span><br>${escapeHtml(row.plan || '')} ${escapeHtml(row.period || '')}</td>
-                    <td>${formatMinorUsd(row.source_cash_amount_cents)}</td>
-                    <td><strong>${formatMinorUsd(row.amount_cents)}</strong><br><span class="admin-uid">${Number(row.rate_bps || 0) / 100}%</span></td>
-                    <td>${adminReferralStatusBadge(row.status)}</td>
-                    <td class="admin-uid">${escapeHtml(row.available_at || '-')}</td>
-                    <td><div class="admin-actions">
-                      ${row.status === 'pending' ? `<button class="btn btn-primary btn-xs" data-referral-approve="${escapeHtml(row.id)}" >审核通过</button>` : ''}
-                      ${row.status !== 'voided' ? `<button class="btn btn-ghost btn-xs" data-referral-void="${escapeHtml(row.id)}" >作废</button>` : ''}
-                    </div></td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>` : '<div class="comments-empty">暂无返佣记录</div>'}
-      </div>
-
-      <div class="admin-section admin-referral-inner">
-        <div class="admin-section-header">
-          <h2>返佣比例规则</h2>
-          <span class="admin-section-badge">上限 20%</span>
-        </div>
-        <div class="admin-table-wrapper"><table class="admin-table">
-          <thead><tr><th>方案</th><th>周期</th><th>rate_bps</th><th>启用</th><th>操作</th></tr></thead>
-          <tbody>${ruleRows.map(rule => `
-            <tr>
-              <td>${escapeHtml(rule.plan)}</td>
-              <td>${escapeHtml(rule.period)}</td>
-              <td><input class="admin-plan-input admin-referral-rate" data-rule-rate="${escapeHtml(rule.plan)}_${escapeHtml(rule.period)}" value="${Number(rule.rate_bps || 0)}" type="number" min="0" max="2000" ></td>
-              <td><select class="admin-plan-select admin-referral-enabled" data-rule-enabled="${escapeHtml(rule.plan)}_${escapeHtml(rule.period)}" >
-                <option value="1" ${Number(rule.enabled) === 1 ? 'selected' : ''}>启用</option>
-                <option value="0" ${Number(rule.enabled) === 0 ? 'selected' : ''}>停用</option>
-              </select></td>
-              <td><button class="btn btn-primary btn-xs admin-referral-rule-save" data-plan="${escapeHtml(rule.plan)}" data-period="${escapeHtml(rule.period)}" >保存</button></td>
-            </tr>`).join('')}</tbody>
-        </table></div>
-      </div>`
-
-    document.getElementById('adminReferralRefresh')?.addEventListener('click', loadAdminReferrals)
-    document.getElementById('adminReferralStatusFilter')?.addEventListener('change', loadAdminReferrals)
-
-    container.querySelectorAll('[data-referral-approve]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        btn.disabled = true
-        const res = await api.patch(`/api/admin/referrals/commissions/${encodeURIComponent(btn.dataset.referralApprove)}`, { action: 'approve' })
-        if (!res.ok) showToast(res.error || '审核失败', 'error')
-        loadAdminReferrals()
-      })
-    })
-    container.querySelectorAll('[data-referral-void]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const reason = prompt('请输入作废原因')
-        if (!reason) return
-        btn.disabled = true
-        const res = await api.patch(`/api/admin/referrals/commissions/${encodeURIComponent(btn.dataset.referralVoid)}`, { action: 'void', reason })
-        if (!res.ok) showToast(res.error || '作废失败', 'error')
-        loadAdminReferrals()
-      })
-    })
-    container.querySelectorAll('.admin-referral-rule-save').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const plan = btn.dataset.plan
-        const period = btn.dataset.period
-        const key = `${plan}_${period}`
-        const rate = Number(container.querySelector(`[data-rule-rate="${key}"]`)?.value || 0)
-        const enabled = Number(container.querySelector(`[data-rule-enabled="${key}"]`)?.value || 0)
-        btn.disabled = true
-        const res = await api.put('/api/admin/referrals/rules', { rules: [{ plan, period, rate_bps: rate, enabled }] })
-        if (!res.ok) showToast(res.error || '保存失败', 'error')
-        loadAdminReferrals()
-      })
-    })
-  } catch (err) {
-    console.error('Load admin referrals error:', err)
-    container.innerHTML = '<div class="comments-empty">加载失败</div>'
-  }
-}
-
-// ===== System Config Section =====
-let adminConfigData = {}
-let adminConfigSubTab = 'plan_prices'
 let _planPricesCache = null
-
 async function getPlanPrices() {
   if (_planPricesCache) return _planPricesCache
   try {
@@ -3712,2019 +3508,6 @@ async function getPlanPrices() {
     if (res.ok && res.plans) { _planPricesCache = res.plans; return res.plans }
   } catch {}
   return { plus: { month: { current: 50, original: 100 }, year: { current: 500, original: 1000 } }, pro: { month: { current: 100, original: 200 }, year: { current: 1000, original: 2000 } } }
-}
-
-function renderAdminConfigSection() {
-  return `
-    <div class="admin-section">
-      <div class="admin-section-header">
-        <h2>系统配置</h2>
-        <button class="btn btn-ghost btn-xs" id="adminConfigRefresh">刷新</button>
-      </div>
-      <div class="admin-board-tabs admin-config-subtabs" role="tablist" aria-label="系统配置板块">
-        <button class="admin-board-tab active" type="button" data-config-tab="plan_prices">套餐配置</button>
-        <button class="admin-board-tab" type="button" data-config-tab="smtp">发件邮箱</button>
-        <button class="admin-board-tab" type="button" data-config-tab="qiniu">七牛云存储</button>
-        <button class="admin-board-tab" type="button" data-config-tab="toolbox">金融工具箱</button>
-        <button class="admin-board-tab" type="button" data-config-tab="market_menu">股票研究菜单</button>
-        <button class="admin-board-tab" type="button" data-config-tab="sms">短信服务</button>
-        <button class="admin-board-tab" type="button" data-config-tab="auth_toggle">登录注册</button>
-        <button class="admin-board-tab" type="button" data-config-tab="crypto_wallet">收款钱包</button>
-      </div>
-      <div id="adminConfigContent" class="admin-config-content">
-        <div class="loading-spinner">加载中...</div>
-      </div>
-    </div>
-  `
-}
-
-async function loadAdminConfig() {
-  try {
-    const res = await api.get('/api/system-config')
-    if (!res.ok) {
-      console.error('Load config error:', res.error)
-      return
-    }
-    adminConfigData = res.config || {}
-    renderAdminConfigContent()
-    setupAdminConfigTabs()
-  } catch (err) {
-    console.error('Load config error:', err)
-  }
-}
-
-function setupAdminConfigTabs() {
-  const tabs = [...document.querySelectorAll('[data-config-tab]')]
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      adminConfigSubTab = tab.dataset.configTab
-      tabs.forEach(t => t.classList.toggle('active', t === tab))
-      renderAdminConfigContent()
-    })
-  })
-  document.getElementById('adminConfigRefresh')?.addEventListener('click', loadAdminConfig)
-}
-
-function renderAdminConfigContent() {
-  const container = document.getElementById('adminConfigContent')
-  if (!container) return
-
-  switch (adminConfigSubTab) {
-    case 'plan_prices':
-      renderPlanPricesConfig(container)
-      break
-    case 'smtp':
-      renderSmtpConfig(container)
-      break
-    case 'qiniu':
-      renderQiniuConfig(container)
-      break
-    case 'toolbox':
-      renderToolboxConfig(container)
-      break
-    case 'market_menu':
-      renderMarketMenuConfig(container)
-      break
-    case 'sms':
-      renderSmsConfig(container)
-      break
-    case 'auth_toggle':
-      renderAuthToggleConfig(container)
-      break
-    case 'crypto_wallet':
-      renderCryptoWalletConfig(container)
-      break
-  }
-}
-
-function renderPlanPricesConfig(container) {
-  const items = adminConfigData.plan_prices || []
-  const getVal = (key) => items.find(i => i.key === key)?.value || ''
-
-  const plans = [
-    { id: 'plus', name: 'Plus', desc: '新视频即时解锁 + 图解 + 测验' },
-    { id: 'pro', name: 'Pro', desc: '全部权限 + AI信号 + 全自动交易' },
-  ]
-  const periods = [
-    { id: 'month', name: '月付' },
-    { id: 'year', name: '年付' },
-  ]
-
-  container.innerHTML = `
-    <div class="admin-config-form">
-      <h3 style="margin-bottom:16px;">套餐价格配置</h3>
-      <p style="font-size:13px; color:var(--text-3); margin-bottom:20px;">设置各套餐的原价和现价（单位：美分），前端自动计算折扣显示。</p>
-
-      ${plans.map(plan => `
-        <div style="margin-bottom:24px; padding:16px; background:var(--glass-light); border-radius:12px;">
-          <h4 style="margin-bottom:12px;">${plan.name} - ${plan.desc}</h4>
-          ${periods.map(period => `
-            <div style="display:flex; gap:12px; margin-bottom:8px; align-items:center;">
-              <span style="width:50px; font-size:13px;">${period.name}</span>
-              <div style="flex:1;">
-                <label style="font-size:11px; color:var(--text-3);">原价（美元）</label>
-                <input type="number" class="admin-plan-input plan-price-input" data-plan="${plan.id}" data-period="${period.id}" data-type="original" value="${escapeHtml(getVal(`${plan.id}_${period.id}_original`))}" placeholder="如 100">
-              </div>
-              <div style="flex:1;">
-                <label style="font-size:11px; color:var(--text-3);">现价（美元）</label>
-                <input type="number" class="admin-plan-input plan-price-input" data-plan="${plan.id}" data-period="${period.id}" data-type="current" value="${escapeHtml(getVal(`${plan.id}_${period.id}`))}" placeholder="如 50">
-              </div>
-              <div class="plan-discount-preview" data-plan="${plan.id}" data-period="${period.id}" style="min-width:60px; text-align:center;"></div>
-            </div>
-          `).join('')}
-        </div>
-      `).join('')}
-
-      <div class="admin-config-actions">
-        <button class="btn btn-primary" id="savePlanPrices">保存套餐配置</button>
-      </div>
-    </div>
-  `
-
-  function updateDiscountPreviews() {
-    container.querySelectorAll('.plan-discount-preview').forEach(el => {
-      const plan = el.dataset.plan
-      const period = el.dataset.period
-      const original = parseInt(container.querySelector(`[data-plan="${plan}"][data-period="${period}"][data-type="original"]`)?.value) || 0
-      const current = parseInt(container.querySelector(`[data-plan="${plan}"][data-period="${period}"][data-type="current"]`)?.value) || 0
-      if (original > 0 && current > 0 && current < original) {
-        const discount = Math.round((1 - current / original) * 100)
-        el.innerHTML = `<span style="color:var(--accent); font-weight:600;">-${discount}%</span>`
-      } else {
-        el.innerHTML = ''
-      }
-    })
-  }
-
-  container.querySelectorAll('.plan-price-input').forEach(input => {
-    input.addEventListener('input', updateDiscountPreviews)
-  })
-  updateDiscountPreviews()
-
-  document.getElementById('savePlanPrices')?.addEventListener('click', async () => {
-    const items = []
-    container.querySelectorAll('.plan-price-input').forEach(input => {
-      const { plan, period, type } = input.dataset
-      const value = input.value.trim()
-      if (value) {
-        const key = type === 'original' ? `${plan}_${period}_original` : `${plan}_${period}`
-        const label = type === 'original'
-          ? `${plan === 'plus' ? 'Plus' : 'Pro'} ${period === 'month' ? '月付' : '年付'} 原价`
-          : `${plan === 'plus' ? 'Plus' : 'Pro'} ${period === 'month' ? '月付' : '年付'} 现价`
-        items.push({ key, value, label, sort_order: 0 })
-      }
-    })
-
-    if (items.length === 0) {
-      showToast('请至少设置一个价格', 'error')
-      return
-    }
-
-    const res = await api.put('/api/system-config/plan_prices', { items })
-    if (res.ok) {
-      showToast('套餐配置已保存', 'success')
-      loadAdminConfig()
-    } else {
-      showToast(res.error || '保存失败', 'error')
-    }
-  })
-}
-
-function renderSmtpConfig(container) {
-  const items = adminConfigData.smtp || []
-  const getVal = (key) => items.find(i => i.key === key)?.value || ''
-
-  container.innerHTML = `
-    <div class="admin-config-form">
-      <div class="admin-config-row">
-        <label>SMTP 服务器</label>
-        <input type="text" class="admin-plan-input" id="smtpHost" value="${escapeHtml(getVal('host'))}" placeholder="smtp.qq.com">
-      </div>
-      <div class="admin-config-row">
-        <label>端口</label>
-        <input type="text" class="admin-plan-input" id="smtpPort" value="${escapeHtml(getVal('port'))}" placeholder="587">
-      </div>
-      <div class="admin-config-row">
-        <label>用户名</label>
-        <input type="text" class="admin-plan-input" id="smtpUser" value="${escapeHtml(getVal('user'))}" placeholder="your@email.com">
-      </div>
-      <div class="admin-config-row">
-        <label>密码</label>
-        <input type="password" class="admin-plan-input" id="smtpPass" value="${escapeHtml(getVal('pass'))}" placeholder="授权码">
-      </div>
-      <div class="admin-config-row">
-        <label>发件人邮箱</label>
-        <input type="text" class="admin-plan-input" id="smtpFrom" value="${escapeHtml(getVal('from'))}" placeholder="noreply@yourdomain.com">
-      </div>
-      <div class="admin-config-row">
-        <label>发件人名称</label>
-        <input type="text" class="admin-plan-input" id="smtpFromName" value="${escapeHtml(getVal('from_name') || '量见课堂')}" placeholder="量见课堂">
-      </div>
-      <div class="admin-config-row">
-        <label>SSL/TLS</label>
-        <select class="admin-plan-select" id="smtpSecure">
-          <option value="false" ${getVal('secure') === 'false' ? 'selected' : ''}>否 (STARTTLS)</option>
-          <option value="true" ${getVal('secure') === 'true' ? 'selected' : ''}>是 (SSL)</option>
-        </select>
-      </div>
-      <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveSmtpConfig">保存配置</button>
-        <button class="btn btn-ghost" id="testSmtpConfig">发送测试邮件</button>
-      </div>
-      <div id="smtpTestResult" class="admin-config-test-result"></div>
-    </div>
-  `
-
-  document.getElementById('saveSmtpConfig')?.addEventListener('click', async () => {
-    const items = [
-      { key: 'host', value: document.getElementById('smtpHost').value, label: 'SMTP 服务器', sort_order: 0 },
-      { key: 'port', value: document.getElementById('smtpPort').value, label: '端口', sort_order: 1 },
-      { key: 'user', value: document.getElementById('smtpUser').value, label: '用户名', sort_order: 2 },
-      { key: 'pass', value: document.getElementById('smtpPass').value, label: '密码', sort_order: 3 },
-      { key: 'from', value: document.getElementById('smtpFrom').value, label: '发件人邮箱', sort_order: 4 },
-      { key: 'from_name', value: document.getElementById('smtpFromName').value, label: '发件人名称', sort_order: 5 },
-      { key: 'secure', value: document.getElementById('smtpSecure').value, label: 'SSL/TLS', sort_order: 6 },
-    ]
-    const res = await api.put('/api/system-config/smtp', { items })
-    if (res.ok) {
-      showToast('SMTP 配置已保存', 'success')
-      loadAdminConfig()
-    } else {
-      showToast(res.error || '保存失败', 'error')
-    }
-  })
-
-  document.getElementById('testSmtpConfig')?.addEventListener('click', async () => {
-    const resultEl = document.getElementById('smtpTestResult')
-    const testEmail = prompt('请输入测试收件邮箱：')
-    if (!testEmail) return
-    resultEl.innerHTML = '<span style="color:var(--text-3)">发送中...</span>'
-    const res = await api.post('/api/system-config/smtp/test', { to: testEmail })
-    if (res.ok) {
-      resultEl.innerHTML = '<span style="color:#10b981">✓ 测试邮件已发送，请检查收件箱</span>'
-    } else {
-      resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
-    }
-  })
-}
-
-function renderQiniuConfig(container) {
-  const items = adminConfigData.qiniu || []
-  const getVal = (key) => items.find(i => i.key === key)?.value || ''
-
-  container.innerHTML = `
-    <div class="admin-config-form">
-      <div class="admin-config-row">
-        <label>Access Key</label>
-        <input type="text" class="admin-plan-input" id="qiniuAK" value="${escapeHtml(getVal('access_key'))}" placeholder="Access Key">
-      </div>
-      <div class="admin-config-row">
-        <label>Secret Key</label>
-        <input type="password" class="admin-plan-input" id="qiniuSK" value="${escapeHtml(getVal('secret_key'))}" placeholder="Secret Key">
-      </div>
-      <div class="admin-config-row">
-        <label>存储桶名称</label>
-        <input type="text" class="admin-plan-input" id="qiniuBucket" value="${escapeHtml(getVal('bucket'))}" placeholder="my-bucket">
-      </div>
-      <div class="admin-config-row">
-        <label>访问域名</label>
-        <input type="text" class="admin-plan-input" id="qiniuDomain" value="${escapeHtml(getVal('domain'))}" placeholder="https://cdn.example.com">
-      </div>
-      <div class="admin-config-row">
-        <label>区域</label>
-        <select class="admin-plan-select" id="qiniuRegion">
-          <option value="z0" ${getVal('region') === 'z0' ? 'selected' : ''}>华东 (z0)</option>
-          <option value="cn-east" ${getVal('region') === 'cn-east' ? 'selected' : ''}>华东 (cn-east)</option>
-          <option value="cn-south" ${getVal('region') === 'cn-south' ? 'selected' : ''}>华南 (cn-south)</option>
-          <option value="cn-north" ${getVal('region') === 'cn-north' ? 'selected' : ''}>华北 (cn-north)</option>
-          <option value="us-north" ${getVal('region') === 'us-north' ? 'selected' : ''}>北美 (us-north)</option>
-          <option value="ap-southeast" ${getVal('region') === 'ap-southeast' ? 'selected' : ''}>东南亚 (ap-southeast)</option>
-        </select>
-      </div>
-      <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveQiniuConfig">保存配置</button>
-      </div>
-    </div>
-  `
-
-  document.getElementById('saveQiniuConfig')?.addEventListener('click', async () => {
-    const items = [
-      { key: 'access_key', value: document.getElementById('qiniuAK').value, label: 'Access Key', sort_order: 0 },
-      { key: 'secret_key', value: document.getElementById('qiniuSK').value, label: 'Secret Key', sort_order: 1 },
-      { key: 'bucket', value: document.getElementById('qiniuBucket').value, label: '存储桶名称', sort_order: 2 },
-      { key: 'domain', value: document.getElementById('qiniuDomain').value, label: '访问域名', sort_order: 3 },
-      { key: 'region', value: document.getElementById('qiniuRegion').value, label: '区域', sort_order: 4 },
-    ]
-    const res = await api.put('/api/system-config/qiniu', { items })
-    if (res.ok) {
-      showToast('七牛云配置已保存', 'success')
-      loadAdminConfig()
-    } else {
-      showToast(res.error || '保存失败', 'error')
-    }
-  })
-}
-
-function renderToolboxConfig(container) {
-  const items = adminConfigData.toolbox || []
-  const toolboxItem = items.find(i => i.key === 'items')
-  let categories = []
-  try { categories = JSON.parse(toolboxItem?.value || '[]') } catch {}
-
-  container.innerHTML = `
-    <div class="admin-config-form">
-      <div class="admin-config-header-row">
-        <h3>金融工具箱配置</h3>
-        <button class="btn btn-primary btn-sm" id="addToolCategory">+ 添加分类</button>
-      </div>
-      <div id="toolboxCategories">
-        ${categories.map((cat, ci) => renderToolboxCategory(cat, ci)).join('')}
-      </div>
-      <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveToolboxConfig">保存全部</button>
-      </div>
-    </div>
-  `
-
-  setupToolboxEvents(categories)
-}
-
-function renderToolboxCategory(cat, ci) {
-  return `
-    <div class="admin-toolbox-category" data-cat-index="${ci}">
-      <div class="admin-toolbox-cat-header">
-        <input type="text" class="admin-plan-input admin-toolbox-cat-name" value="${escapeHtml(cat.category)}" placeholder="分类名称">
-        <button class="btn btn-ghost btn-xs admin-toolbox-cat-delete" data-ci="${ci}">删除分类</button>
-      </div>
-      <div class="admin-toolbox-items">
-        ${(cat.items || []).map((item, ii) => renderToolboxItem(item, ci, ii)).join('')}
-      </div>
-      <button class="btn btn-ghost btn-xs admin-toolbox-add-item" data-ci="${ci}">+ 添加工具</button>
-    </div>
-  `
-}
-
-function renderToolboxItem(item, ci, ii) {
-  return `
-    <div class="admin-toolbox-item" data-ci="${ci}" data-ii="${ii}">
-      <div class="admin-toolbox-item-grid">
-        <div class="admin-config-row">
-          <label>名称</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="name" value="${escapeHtml(item.name || '')}">
-        </div>
-        <div class="admin-config-row">
-          <label>图标</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="icon" value="${escapeHtml(item.icon || '')}" placeholder="🪙">
-        </div>
-        <div class="admin-config-row">
-          <label>链接</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="url" value="${escapeHtml(item.url || '')}">
-        </div>
-        <div class="admin-config-row">
-          <label>描述</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="desc" value="${escapeHtml(item.desc || '')}">
-        </div>
-        <div class="admin-config-row">
-          <label>标签</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="tag" value="${escapeHtml(item.tag || '')}" placeholder="可选">
-        </div>
-        <div class="admin-config-row">
-          <label>标签颜色</label>
-          <input type="color" class="admin-plan-input toolbox-field" data-field="tagColor" value="${escapeHtml(item.tagColor || '#2563eb')}" style="height:36px;padding:2px 4px;">
-        </div>
-        <div class="admin-config-row">
-          <label>邀请码</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="code" value="${escapeHtml(item.code || '')}" placeholder="可选">
-        </div>
-        <div class="admin-config-row">
-          <label>返佣</label>
-          <input type="text" class="admin-plan-input toolbox-field" data-field="rebate" value="${escapeHtml(item.rebate || '')}" placeholder="可选">
-        </div>
-      </div>
-      <button class="btn btn-ghost btn-xs admin-toolbox-delete-item" data-ci="${ci}" data-ii="${ii}">删除</button>
-    </div>
-  `
-}
-
-function setupToolboxEvents(categories) {
-  const getCategories = () => {
-    const cats = []
-    document.querySelectorAll('.admin-toolbox-category').forEach(catEl => {
-      const catName = catEl.querySelector('.admin-toolbox-cat-name')?.value || ''
-      const items = []
-      catEl.querySelectorAll('.admin-toolbox-item').forEach(itemEl => {
-        const item = {}
-        itemEl.querySelectorAll('.toolbox-field').forEach(f => {
-          item[f.dataset.field] = f.value
-        })
-        items.push(item)
-      })
-      cats.push({ category: catName, items })
-    })
-    return cats
-  }
-
-  document.getElementById('addToolCategory')?.addEventListener('click', () => {
-    categories.push({ category: '新分类', items: [] })
-    document.getElementById('toolboxCategories').innerHTML = categories.map((cat, ci) => renderToolboxCategory(cat, ci)).join('')
-    setupToolboxEvents(categories)
-  })
-
-  document.getElementById('toolboxCategories')?.addEventListener('click', (e) => {
-    const addBtn = e.target.closest('.admin-toolbox-add-item')
-    if (addBtn) {
-      const ci = Number(addBtn.dataset.ci)
-      categories = getCategories()
-      categories[ci].items.push({ name: '', icon: '', url: '', desc: '', tag: '', tagColor: '#2563eb', code: '', rebate: '' })
-      document.getElementById('toolboxCategories').innerHTML = categories.map((cat, i) => renderToolboxCategory(cat, i)).join('')
-      setupToolboxEvents(categories)
-      return
-    }
-    const delItem = e.target.closest('.admin-toolbox-delete-item')
-    if (delItem) {
-      categories = getCategories()
-      const ci = Number(delItem.dataset.ci)
-      const ii = Number(delItem.dataset.ii)
-      categories[ci].items.splice(ii, 1)
-      document.getElementById('toolboxCategories').innerHTML = categories.map((cat, i) => renderToolboxCategory(cat, i)).join('')
-      setupToolboxEvents(categories)
-      return
-    }
-    const delCat = e.target.closest('.admin-toolbox-cat-delete')
-    if (delCat) {
-      categories = getCategories()
-      const ci = Number(delCat.dataset.ci)
-      categories.splice(ci, 1)
-      document.getElementById('toolboxCategories').innerHTML = categories.map((cat, i) => renderToolboxCategory(cat, i)).join('')
-      setupToolboxEvents(categories)
-      return
-    }
-  })
-
-  document.getElementById('saveToolboxConfig')?.addEventListener('click', async () => {
-    categories = getCategories()
-    const items = [{ key: 'items', value: JSON.stringify(categories), label: '金融工具箱', sort_order: 0 }]
-    const res = await api.put('/api/system-config/toolbox', { items })
-    if (res.ok) {
-      showToast('金融工具箱配置已保存', 'success')
-      loadAdminConfig()
-    } else {
-      showToast(res.error || '保存失败', 'error')
-    }
-  })
-}
-
-function renderMarketMenuConfig(container) {
-  const items = adminConfigData.market_menu || []
-  const menuItem = items.find(i => i.key === 'items')
-  let menuItems = []
-  try { menuItems = JSON.parse(menuItem?.value || '[]') } catch {}
-
-  container.innerHTML = `
-    <div class="admin-config-form">
-      <div class="admin-config-header-row">
-        <h3>股票市场研究菜单</h3>
-        <button class="btn btn-primary btn-sm" id="addMenuItem">+ 添加菜单项</button>
-      </div>
-      <div id="marketMenuItems">
-        ${menuItems.map((item, i) => renderMarketMenuItem(item, i)).join('')}
-      </div>
-      <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveMarketMenuConfig">保存全部</button>
-      </div>
-    </div>
-  `
-
-  setupMarketMenuEvents(menuItems)
-}
-
-function renderMarketMenuItem(item, i) {
-  return `
-    <div class="admin-market-menu-item" data-index="${i}">
-      <div class="admin-toolbox-item-grid">
-        <div class="admin-config-row">
-          <label>名称</label>
-          <input type="text" class="admin-plan-input menu-field" data-field="name" value="${escapeHtml(item.name || '')}">
-        </div>
-        <div class="admin-config-row">
-          <label>图标</label>
-          <input type="text" class="admin-plan-input menu-field" data-field="icon" value="${escapeHtml(item.icon || '')}" placeholder="📅">
-        </div>
-        <div class="admin-config-row">
-          <label>链接</label>
-          <input type="text" class="admin-plan-input menu-field" data-field="url" value="${escapeHtml(item.url || '')}">
-        </div>
-      </div>
-      <button class="btn btn-ghost btn-xs admin-menu-delete-item" data-i="${i}">删除</button>
-    </div>
-  `
-}
-
-function setupMarketMenuEvents(menuItems) {
-  const getItems = () => {
-    const items = []
-    document.querySelectorAll('.admin-market-menu-item').forEach(el => {
-      const item = {}
-      el.querySelectorAll('.menu-field').forEach(f => {
-        item[f.dataset.field] = f.value
-      })
-      items.push(item)
-    })
-    return items
-  }
-
-  document.getElementById('addMenuItem')?.addEventListener('click', () => {
-    menuItems = getItems()
-    menuItems.push({ name: '', icon: '', url: '' })
-    document.getElementById('marketMenuItems').innerHTML = menuItems.map((item, i) => renderMarketMenuItem(item, i)).join('')
-    setupMarketMenuEvents(menuItems)
-  })
-
-  document.getElementById('marketMenuItems')?.addEventListener('click', (e) => {
-    const delBtn = e.target.closest('.admin-menu-delete-item')
-    if (delBtn) {
-      menuItems = getItems()
-      const i = Number(delBtn.dataset.i)
-      menuItems.splice(i, 1)
-      document.getElementById('marketMenuItems').innerHTML = menuItems.map((item, idx) => renderMarketMenuItem(item, idx)).join('')
-      setupMarketMenuEvents(menuItems)
-    }
-  })
-
-  document.getElementById('saveMarketMenuConfig')?.addEventListener('click', async () => {
-    menuItems = getItems()
-    const items = [{ key: 'items', value: JSON.stringify(menuItems), label: '股票市场研究菜单', sort_order: 0 }]
-    const res = await api.put('/api/system-config/market_menu', { items })
-    if (res.ok) {
-      showToast('菜单配置已保存', 'success')
-      loadAdminConfig()
-    } else {
-      showToast(res.error || '保存失败', 'error')
-    }
-  })
-}
-
-function renderSmsConfig(container) {
-  const items = adminConfigData.sms || []
-  const getVal = (key) => items.find(i => i.key === key)?.value || ''
-
-  container.innerHTML = `
-    <div class="admin-config-form">
-      <div class="admin-config-row">
-        <label>AccessKey ID</label>
-        <input type="text" class="admin-plan-input" id="smsAccessKeyId" value="${escapeHtml(getVal('access_key_id'))}" placeholder="阿里云 AccessKey ID">
-      </div>
-      <div class="admin-config-row">
-        <label>AccessKey Secret</label>
-        <input type="password" class="admin-plan-input" id="smsAccessKeySecret" value="${escapeHtml(getVal('access_key_secret'))}" placeholder="阿里云 AccessKey Secret">
-      </div>
-      <div class="admin-config-row">
-        <label>短信签名</label>
-        <input type="text" class="admin-plan-input" id="smsSignName" value="${escapeHtml(getVal('sign_name'))}" placeholder="量见课堂">
-      </div>
-      <div class="admin-config-row">
-        <label>登录验证码模板</label>
-        <input type="text" class="admin-plan-input" id="smsTemplateLogin" value="${escapeHtml(getVal('template_code_login'))}" placeholder="SMS_XXXXXX">
-      </div>
-      <div class="admin-config-row">
-        <label>注册验证码模板</label>
-        <input type="text" class="admin-plan-input" id="smsTemplateRegister" value="${escapeHtml(getVal('template_code_register'))}" placeholder="SMS_XXXXXX">
-      </div>
-      <div class="admin-config-row">
-        <label>重置密码模板</label>
-        <input type="text" class="admin-plan-input" id="smsTemplateReset" value="${escapeHtml(getVal('template_code_reset'))}" placeholder="SMS_XXXXXX">
-      </div>
-      <div class="admin-config-row">
-        <label>绑定验证码模板</label>
-        <input type="text" class="admin-plan-input" id="smsTemplateBind" value="${escapeHtml(getVal('template_code_bind'))}" placeholder="SMS_XXXXXX">
-      </div>
-      <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveSmsConfig">保存配置</button>
-        <button class="btn btn-ghost" id="testSmsConfig">发送测试短信</button>
-      </div>
-      <div id="smsTestResult" class="admin-config-test-result"></div>
-    </div>
-  `
-
-  document.getElementById('saveSmsConfig')?.addEventListener('click', async () => {
-    const items = [
-      { key: 'access_key_id', value: document.getElementById('smsAccessKeyId').value, label: 'AccessKey ID', sort_order: 0 },
-      { key: 'access_key_secret', value: document.getElementById('smsAccessKeySecret').value, label: 'AccessKey Secret', sort_order: 1 },
-      { key: 'sign_name', value: document.getElementById('smsSignName').value, label: '短信签名', sort_order: 2 },
-      { key: 'template_code_login', value: document.getElementById('smsTemplateLogin').value, label: '登录验证码模板', sort_order: 3 },
-      { key: 'template_code_register', value: document.getElementById('smsTemplateRegister').value, label: '注册验证码模板', sort_order: 4 },
-      { key: 'template_code_reset', value: document.getElementById('smsTemplateReset').value, label: '重置密码模板', sort_order: 5 },
-      { key: 'template_code_bind', value: document.getElementById('smsTemplateBind').value, label: '绑定验证码模板', sort_order: 6 },
-    ]
-    const res = await api.put('/api/system-config/sms', { items })
-    if (res.ok) {
-      showToast('短信配置已保存', 'success')
-      loadAdminConfig()
-    } else {
-      showToast(res.error || '保存失败', 'error')
-    }
-  })
-
-  document.getElementById('testSmsConfig')?.addEventListener('click', async () => {
-    const resultEl = document.getElementById('smsTestResult')
-    const testPhone = prompt('请输入测试手机号：')
-    if (!testPhone) return
-    resultEl.innerHTML = '<span style="color:var(--text-3)">发送中...</span>'
-    const res = await api.post('/api/system-config/sms/test', { to: testPhone })
-    if (res.ok) {
-      resultEl.innerHTML = '<span style="color:#10b981">✓ 测试短信已发送，请检查手机</span>'
-    } else {
-      resultEl.innerHTML = `<span style="color:#ef4444">✗ ${escapeHtml(res.error || '发送失败')}</span>`
-    }
-  })
-}
-
-function renderAuthToggleConfig(container) {
-  const items = adminConfigData.auth_toggle || []
-  const getVal = (key) => items.find(i => i.key === key)?.value || 'true'
-
-  container.innerHTML = `
-    <div class="admin-config-form">
-      <div class="admin-config-row">
-        <label>邮箱注册登录</label>
-        <select class="admin-plan-select" id="authEmailEnabled">
-          <option value="true" ${getVal('email_enabled') === 'true' ? 'selected' : ''}>开启</option>
-          <option value="false" ${getVal('email_enabled') === 'false' ? 'selected' : ''}>关闭</option>
-        </select>
-      </div>
-      <div class="admin-config-row">
-        <label>手机号注册登录</label>
-        <select class="admin-plan-select" id="authPhoneEnabled">
-          <option value="true" ${getVal('phone_enabled') === 'true' ? 'selected' : ''}>开启</option>
-          <option value="false" ${getVal('phone_enabled') === 'false' ? 'selected' : ''}>关闭</option>
-        </select>
-      </div>
-
-      <div class="admin-config-divider">注册赠送会员</div>
-
-      <div class="admin-config-row">
-        <label>注册赠送会员</label>
-        <select class="admin-plan-select" id="authGiftEnabled">
-          <option value="true" ${getVal('gift_enabled') !== 'false' ? 'selected' : ''}>开启</option>
-          <option value="false" ${getVal('gift_enabled') === 'false' ? 'selected' : ''}>关闭</option>
-        </select>
-      </div>
-      <div class="admin-config-row" id="giftPlanRow">
-        <label>赠送套餐类型</label>
-        <select class="admin-plan-select" id="authGiftPlan">
-          <option value="free" ${getVal('gift_plan') === 'free' ? 'selected' : ''}>免费版</option>
-          <option value="plus" ${getVal('gift_plan') === 'plus' ? 'selected' : ''}>Plus</option>
-          <option value="pro" ${getVal('gift_plan') !== 'free' && getVal('gift_plan') !== 'plus' ? 'selected' : ''}>Pro</option>
-        </select>
-      </div>
-      <div class="admin-config-row" id="giftDurationRow">
-        <label>赠送时长</label>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input type="number" class="form-input" id="authGiftDuration" value="${getVal('gift_duration') || '30'}" min="1" max="3650" style="width:80px">
-          <select class="admin-plan-select" id="authGiftDurationUnit">
-            <option value="days" ${getVal('gift_duration_unit') !== 'months' ? 'selected' : ''}>天</option>
-            <option value="months" ${getVal('gift_duration_unit') === 'months' ? 'selected' : ''}>月</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveAuthToggle">保存配置</button>
-      </div>
-    </div>
-  `
-
-  // Toggle gift fields visibility
-  const giftEnabled = document.getElementById('authGiftEnabled')
-  const giftPlanRow = document.getElementById('giftPlanRow')
-  const giftDurationRow = document.getElementById('giftDurationRow')
-  function updateGiftFields() {
-    const disabled = giftEnabled?.value === 'false'
-    if (giftPlanRow) giftPlanRow.style.opacity = disabled ? '0.4' : '1'
-    if (giftDurationRow) giftDurationRow.style.opacity = disabled ? '0.4' : '1'
-  }
-  giftEnabled?.addEventListener('change', updateGiftFields)
-  updateGiftFields()
-
-  document.getElementById('saveAuthToggle')?.addEventListener('click', async () => {
-    const items = [
-      { key: 'email_enabled', value: document.getElementById('authEmailEnabled').value, label: '邮箱注册登录', sort_order: 0 },
-      { key: 'phone_enabled', value: document.getElementById('authPhoneEnabled').value, label: '手机号注册登录', sort_order: 1 },
-      { key: 'gift_enabled', value: document.getElementById('authGiftEnabled').value, label: '注册赠送会员', sort_order: 2 },
-      { key: 'gift_plan', value: document.getElementById('authGiftPlan').value, label: '赠送套餐类型', sort_order: 3 },
-      { key: 'gift_duration', value: document.getElementById('authGiftDuration').value || '30', label: '赠送时长', sort_order: 4 },
-      { key: 'gift_duration_unit', value: document.getElementById('authGiftDurationUnit').value, label: '赠送时长单位', sort_order: 5 },
-    ]
-    const res = await api.put('/api/system-config/auth_toggle', { items })
-    if (res.ok) {
-      showToast('登录注册配置已保存', 'success')
-      loadAdminConfig()
-    } else {
-      showToast(res.error || '保存失败', 'error')
-    }
-  })
-}
-
-function renderCryptoWalletConfig(container) {
-  const items = adminConfigData.crypto_wallet || []
-  const getVal = (key) => items.find(i => i.key === key)?.value || ''
-  const currentMode = getVal('payment_mode') || 'dynamic'
-
-  const isDynamic = currentMode === 'dynamic'
-  const isFixed = currentMode === 'fixed'
-
-  container.innerHTML = `
-    <div class="admin-config-form">
-      <div class="admin-config-row">
-        <label>支付模式</label>
-        <select class="admin-plan-select" id="paymentMode">
-          <option value="dynamic" ${isDynamic ? 'selected' : ''}>动态地址（每个订单唯一地址）</option>
-          <option value="fixed" ${isFixed ? 'selected' : ''}>固定地址（唯一金额匹配）</option>
-        </select>
-        <span class="admin-config-hint">动态地址：自动对账，需归集资金。固定地址：单一地址收款，用金额区分订单。</span>
-      </div>
-
-      <div id="fixedAddressSection" style="display:${isFixed ? 'block' : 'none'}; background:var(--glass-light); border-radius:12px;">
-        <h4 style="margin-bottom:12px;">固定收款地址</h4>
-        <div class="admin-config-row">
-          <label>TRC-20 (Tron)</label>
-          <input type="text" class="admin-plan-input" id="fixedTronAddr" value="${escapeHtml(getVal('fixed_tron_address'))}" placeholder="T...">
-        </div>
-        <div class="admin-config-row">
-          <label>ERC-20 (Ethereum)</label>
-          <input type="text" class="admin-plan-input" id="fixedEthAddr" value="${escapeHtml(getVal('fixed_erc20_address'))}" placeholder="0x...">
-        </div>
-        <div class="admin-config-row">
-          <label>BEP-20 (BSC)</label>
-          <input type="text" class="admin-plan-input" id="fixedBscAddr" value="${escapeHtml(getVal('fixed_bep20_address'))}" placeholder="0x...">
-        </div>
-        <div class="admin-config-row">
-          <label>SOL (Solana)</label>
-          <input type="text" class="admin-plan-input" id="fixedSolAddr" value="${escapeHtml(getVal('fixed_sol_address'))}" placeholder="...">
-        </div>
-        <span class="admin-config-hint">用户付款时显示这些地址。系统会生成唯一金额（如 50.000001）来区分不同订单。</span>
-      </div>
-
-      <div class="admin-config-actions">
-        <button class="btn btn-primary" id="saveCryptoWallet">保存配置</button>
-      </div>
-      <div class="admin-config-info">
-        <p><strong>说明：</strong></p>
-        <ul>
-          <li><strong>动态地址</strong>：每个订单生成唯一地址，自动对账，需定期归集资金。助记词和 API Key 在服务器 .env 中配置</li>
-          <li><strong>固定地址</strong>：所有订单用同一地址，用唯一金额（如 50.000001）区分</li>
-        </ul>
-      </div>
-    </div>
-
-    <div id="sweepSection" class="admin-config-form" style="display:${isDynamic ? 'block' : 'none'}; margin-top:24px; border-top: 1px solid var(--glass-border); padding-top: 24px;">
-      <h3 style="margin-bottom:16px;">💰 资金归集 (TRC-20)</h3>
-      <p style="font-size:13px; color:var(--text-3); margin-bottom:16px;">将所有派生地址的 USDT 归集到主地址。每次转账消耗约 1-2 USDT 的 Energy/Bandwidth。</p>
-      <div id="sweepBalances">
-        <button class="btn btn-sm" id="loadSweepBalances">查询余额</button>
-      </div>
-      <div id="sweepResult" style="margin-top:12px;"></div>
-    </div>
-  `
-
-  document.getElementById('loadSweepBalances')?.addEventListener('click', async () => {
-    const el = document.getElementById('sweepBalances')
-    el.innerHTML = '<span style="color:var(--text-3)">查询中...</span>'
-    try {
-      const res = await api.get('/api/admin/crypto/sweep/balances')
-      if (!res.ok) { el.innerHTML = `<span style="color:red">${escapeHtml(res.error)}</span>`; return }
-
-      let html = `<p style="font-size:12px; color:var(--text-3); margin-bottom:8px;">主地址: ${escapeHtml(res.mainAddress)}</p>`
-      html += '<table style="width:100%; font-size:13px; border-collapse:collapse;">'
-      html += '<tr style="border-bottom:1px solid var(--glass-border);"><th style="text-align:left; padding:8px 0;">索引</th><th style="text-align:left; padding:8px 0;">地址</th><th style="text-align:right; padding:8px 0;">USDT</th><th style="text-align:right; padding:8px 0;">TRX</th><th style="text-align:right; padding:8px 0;">操作</th></tr>'
-
-      for (const item of res.balances) {
-        if (item.usdtBalance <= 0 && item.trxBalance <= 0) continue
-        html += `<tr style="border-bottom:1px solid var(--glass-border);">`
-        html += `<td style="padding:8px 0;">${item.index}</td>`
-        html += `<td style="padding:8px 0; font-family:monospace; font-size:11px;">${escapeHtml(item.address.slice(0, 8))}...${escapeHtml(item.address.slice(-6))}</td>`
-        html += `<td style="padding:8px 0; text-align:right;">${item.usdtBalance}</td>`
-        html += `<td style="padding:8px 0; text-align:right;">${item.trxBalance}</td>`
-        html += `<td style="padding:8px 0; text-align:right;">${item.canSweep ? `<button class="btn btn-sm btn-primary sweep-btn" data-index="${item.index}">归集</button>` : '<span style="color:var(--text-3)">-</span>'}</td>`
-        html += '</tr>'
-      }
-      html += '</table>'
-
-      if (res.balances.filter(b => b.canSweep).length > 0) {
-        html += `<button class="btn btn-primary" id="sweepAllBtn" style="margin-top:12px;">一键归集到主地址</button>`
-      }
-
-      el.innerHTML = html
-
-      el.querySelectorAll('.sweep-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          btn.disabled = true
-          btn.textContent = '处理中...'
-          const idx = btn.dataset.index
-          try {
-            const result = await api.post(`/api/admin/crypto/sweep/${idx}`)
-            const resultEl = document.getElementById('sweepResult')
-            if (result.ok) {
-              resultEl.innerHTML = `<div style="padding:12px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.3); border-radius:8px; font-size:13px;">✓ 归集成功<br>TxHash: <code>${escapeHtml(result.txHash)}</code><br>金额: ${result.amount} USDT</div>`
-            } else {
-              resultEl.innerHTML = `<div style="padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; font-size:13px;">✗ ${escapeHtml(result.error)}</div>`
-            }
-          } catch (err) {
-            document.getElementById('sweepResult').innerHTML = `<div style="padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; font-size:13px;">✗ 网络错误</div>`
-          }
-          document.getElementById('loadSweepBalances')?.click()
-        })
-      })
-
-      document.getElementById('sweepAllBtn')?.addEventListener('click', async () => {
-        if (!confirm('确认将所有地址的 USDT 归集到主地址？')) return
-        const resultEl = document.getElementById('sweepResult')
-        resultEl.innerHTML = '<span style="color:var(--text-3)">归集中，请稍候...</span>'
-        try {
-          const result = await api.post('/api/admin/crypto/sweep')
-          if (result.ok) {
-            let html = `<div style="padding:12px; background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.3); border-radius:8px; font-size:13px;">✓ 归集完成<br>总金额: ${result.totalSwept} USDT<br>`
-            for (const r of result.results) {
-              html += `<div style="margin-top:4px;">地址${r.index}: ${r.success ? `✓ ${r.amount} USDT` : `✗ ${r.error}`}</div>`
-            }
-            html += '</div>'
-            resultEl.innerHTML = html
-          } else {
-            resultEl.innerHTML = `<div style="padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; font-size:13px;">✗ ${escapeHtml(result.error)}</div>`
-          }
-        } catch (err) {
-          resultEl.innerHTML = `<div style="padding:12px; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:8px; font-size:13px;">✗ 网络错误</div>`
-        }
-        document.getElementById('loadSweepBalances')?.click()
-      })
-    } catch (err) {
-      el.innerHTML = `<span style="color:red">查询失败</span>`
-    }
-  })
-
-  document.getElementById('paymentMode')?.addEventListener('change', (e) => {
-    const mode = e.target.value
-    const isFixed = mode === 'fixed'
-
-    document.getElementById('fixedAddressSection').style.display = isFixed ? 'block' : 'none'
-    document.getElementById('sweepSection').style.display = isFixed ? 'none' : 'block'
-  })
-
-  document.getElementById('saveCryptoWallet')?.addEventListener('click', async () => {
-    const mode = document.getElementById('paymentMode').value
-    const fixedAddresses = {}
-    if (mode === 'fixed') {
-      fixedAddresses.tron = document.getElementById('fixedTronAddr')?.value || ''
-      fixedAddresses.eth = document.getElementById('fixedEthAddr')?.value || ''
-      fixedAddresses.bsc = document.getElementById('fixedBscAddr')?.value || ''
-      fixedAddresses.sol = document.getElementById('fixedSolAddr')?.value || ''
-    }
-
-    const modeRes = await api.post('/api/admin/crypto/payment-mode', {
-      mode,
-      fixed_addresses: fixedAddresses,
-    })
-
-    const items = [
-      { key: 'payment_mode', value: mode, label: '支付模式', sort_order: 0 },
-    ]
-    const res = await api.put('/api/system-config/crypto_wallet', { items })
-
-    if (modeRes.ok && res.ok) {
-      showToast('收款钱包配置已保存', 'success')
-      loadAdminConfig()
-    } else {
-      showToast(modeRes.error || res.error || '保存失败', 'error')
-    }
-  })
-}
-
-function setupAdminBoardTabs() {
-  const tabs = [...document.querySelectorAll('[data-admin-board]')]
-  const boards = {
-    resources: document.getElementById('adminResourcesBoard'),
-    users: document.getElementById('adminUsersBoard'),
-    referrals: document.getElementById('adminReferralsBoard'),
-    config: document.getElementById('adminConfigBoard'),
-  }
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      const target = tab.dataset.adminBoard
-      tabs.forEach(item => item.classList.toggle('active', item === tab))
-      Object.entries(boards).forEach(([key, board]) => {
-        if (!board) return
-        const active = key === target
-        board.hidden = !active
-        board.classList.toggle('admin-board-active', active)
-      })
-      localStorage.setItem('adminActiveBoard', target)
-      // Auto-activate first sub-tab when switching to users board
-      if (target === 'users') {
-        activateAdminUserTab('all')
-      }
-    })
-  })
-
-  // Restore active board from localStorage
-  const savedBoard = localStorage.getItem('adminActiveBoard')
-  if (savedBoard && boards[savedBoard]) {
-    tabs.forEach(item => item.classList.toggle('active', item.dataset.adminBoard === savedBoard))
-    Object.entries(boards).forEach(([key, board]) => {
-      if (!board) return
-      const active = key === savedBoard
-      board.hidden = !active
-      board.classList.toggle('admin-board-active', active)
-    })
-    // Restore sub-tab for users board
-    if (savedBoard === 'users') {
-      const savedUserTab = localStorage.getItem('adminActiveUserTab') || 'all'
-      activateAdminUserTab(savedUserTab)
-    }
-  }
-}
-
-function activateAdminUserTab(target, { scroll = false } = {}) {
-  const tabs = [...document.querySelectorAll('#adminUserSubTabs [data-admin-user-tab]')]
-  const panels = [...document.querySelectorAll('[data-admin-user-panel]')]
-  if (!tabs.length || !panels.length) return
-
-  tabs.forEach(tab => tab.classList.toggle('active', tab.dataset.adminUserTab === target))
-  panels.forEach(panel => {
-    const active = panel.dataset.adminUserPanel === target
-    panel.hidden = !active
-    panel.classList.toggle('admin-user-panel-active', active)
-  })
-  localStorage.setItem('adminActiveUserTab', target)
-
-  // 切换到会员tab时加载数据
-  if (target === 'members') refreshAdminMemberTable()
-
-  if (scroll) {
-    document.getElementById('adminUserSubTabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-}
-
-function setupAdminUserTabs() {
-  const tabs = [...document.querySelectorAll('#adminUserSubTabs [data-admin-user-tab]')]
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => activateAdminUserTab(tab.dataset.adminUserTab))
-  })
-}
-
-// Re-fetch and re-render the user table body (used after edit and for search)
-let _adminSearchTimer = null
-let _adminCurrentPage = 1
-let _adminCurrentSearch = ''
-let _adminMemberPage = 1
-
-function renderAdminRow(u) {
-  return `<tr>
-    <td><div class="admin-user-cell"><span class="admin-user-avatar">${escapeHtml((u.name || 'U')[0].toUpperCase())}</span><div><div>${escapeHtml(u.name || '未命名')}${u.isAdmin ? ' <span class="admin-badge badge-admin">管理员</span>' : ''}</div><div class="admin-uid" title="${escapeHtml(u.uid || '')}">${escapeHtml((u.uid || '').substring(0, 10))}</div></div></div></td>
-    <td class="admin-email" title="${escapeHtml(u.phone || u.email)}">${escapeHtml((u.phone || u.email).length > 22 ? (u.phone || u.email).substring(0, 20) + '..' : (u.phone || u.email))}</td>
-    <td style="font-size:12px;white-space:nowrap;">${u.createdAt ? formatDateTime(u.createdAt) : '-'}</td>
-    <td>${planLabel(u.plan, u.planExpiresAt)}</td>
-    <td style="font-size:12px;">${u.planExpiresAt ? formatDateTime(u.planExpiresAt) : '-'}</td>
-    <td>${u.totalPaid > 0 ? '<strong>' + formatMinorUsd(u.totalPaid) + '</strong>' : '-'}</td>
-    <td style="font-size:11px;white-space:nowrap;">${u.progress?.total > 0 ? `▶${u.progress.total} ` : ''}${u.progress?.completed > 0 ? `✅${u.progress.completed} ` : ''}${u.progress?.quizPassed > 0 ? `🎯${u.progress.quizPassed} ` : ''}${u.commentCount > 0 ? `💬${u.commentCount} ` : ''}${u.postCount > 0 ? `📝${u.postCount} ` : ''}${u.replyCount > 0 ? `↩${u.replyCount} ` : ''}${u.commentCount + u.postCount + u.replyCount === 0 && !u.progress?.total ? '-' : ''}</td>
-    <td style="font-size:12px;white-space:nowrap;">${u.lastActivity ? formatDateTime(u.lastActivity) : '-'}</td>
-    <td><div class="admin-actions"><button class="btn btn-primary btn-xs admin-edit-user" data-user-id="${u.id}" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}" data-email="${escapeHtml(u.email || '')}" data-phone="${escapeHtml(u.phone || '')}" data-plan="${u.plan || 'free'}" data-expires="${u.planExpiresAt || ''}">编辑</button><button class="btn btn-xs admin-view-orders" data-uid="${escapeHtml(u.uid || '')}" data-name="${escapeHtml(u.name || '')}">订单</button></div></td>
-  </tr>`
-}
-
-function renderPager(pagerId, data, onPageChange) {
-  const pager = document.getElementById(pagerId)
-  if (!pager) return
-  const { page = 1, totalPages = 1, total = 0 } = data
-  if (totalPages <= 1) { pager.innerHTML = ''; return }
-  let html = '<div class="admin-pager-inner">'
-  html += `<button class="admin-pager-btn" data-page="prev" ${page <= 1 ? 'disabled' : ''}>‹</button>`
-  for (let i = 1; i <= totalPages; i++) html += `<button class="admin-pager-btn${i === page ? ' active' : ''}" data-page="${i}">${i}</button>`
-  html += `<button class="admin-pager-btn" data-page="next" ${page >= totalPages ? 'disabled' : ''}>›</button>`
-  html += `<span class="admin-pager-info">第 ${page}/${totalPages} 页 · 共 ${total} 人</span></div>`
-  pager.innerHTML = html
-  pager.querySelectorAll('.admin-pager-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      let t = btn.dataset.page
-      if (t === 'prev') t = Math.max(1, page - 1)
-      else if (t === 'next') t = Math.min(totalPages, page + 1)
-      else t = Number(t)
-      if (t !== page) onPageChange(t)
-    })
-  })
-}
-
-async function refreshAdminUserTable(search = '', page = 1) {
-  try {
-    _adminCurrentSearch = search
-    _adminCurrentPage = page
-    const params = new URLSearchParams({ page: String(page), limit: '10' })
-    if (search) params.set('search', search)
-    const data = await api.get(`/api/admin-users?${params}`)
-    if (!data.ok || !data.users) return
-    const tbody = document.getElementById('adminUserBody')
-    if (!tbody) return
-    tbody.innerHTML = data.users.length > 0
-      ? data.users.map(u => renderAdminRow(u)).join('')
-      : '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:32px;">未找到匹配用户</td></tr>'
-    renderPager('adminUserPager', data, t => refreshAdminUserTable(_adminCurrentSearch, t))
-  } catch (e) {
-    console.error('refreshAdminUserTable error:', e)
-  }
-}
-
-async function refreshAdminMemberTable(page = 1) {
-  try {
-    _adminMemberPage = page
-    const params = new URLSearchParams({ page: String(page), limit: '10', plan: 'member' })
-    const data = await api.get(`/api/admin-users?${params}`)
-    if (!data.ok || !data.users) return
-    const tbody = document.getElementById('adminMemberBody')
-    if (!tbody) return
-    tbody.innerHTML = data.users.length > 0
-      ? data.users.map(u => renderAdminRow(u)).join('')
-      : '<tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:32px;">暂无会员</td></tr>'
-    renderPager('adminMemberPager', data, t => refreshAdminMemberTable(t))
-  } catch (e) {
-    console.error('refreshAdminMemberTable error:', e)
-  }
-}
-
-function setupAdminUserSearch() {
-  const input = document.getElementById('adminUserSearch')
-  if (!input) return
-  input.addEventListener('input', () => {
-    clearTimeout(_adminSearchTimer)
-    _adminSearchTimer = setTimeout(() => refreshAdminUserTable(input.value.trim(), 1), 300)
-  })
-}
-
-function setAdminInlineResult(id, message, ok = true) {
-  const el = document.getElementById(id)
-  if (!el) return
-  el.style.display = 'block'
-  el.innerHTML = `<div class="stream-result-success ${ok ? '' : 'error'}">${escapeHtml(message)}</div>`
-}
-
-function syncAdminResourceChoiceInputs() {
-  ;['attachQuiz', 'attachMindmap', 'attachInfographic'].forEach(id => {
-    const checkbox = document.getElementById(id)
-    checkbox?.closest('.admin-resource-choice')?.classList.toggle('disabled', !checkbox.checked)
-  })
-}
-
-function syncAdminVideoUploadMode() {
-  const isNewVideo = !getSelectedResourceEpisodeId()
-  const field = document.getElementById('adminVideoUploadField')
-  const input = document.getElementById('streamFileInput')
-  const label = document.getElementById('streamFileName')
-  const progress = document.getElementById('streamProgressWrap')
-  if (field) field.style.display = isNewVideo ? 'grid' : 'none'
-  if (!isNewVideo) {
-    if (input) input.value = ''
-    if (label) label.textContent = '上传新视频'
-    if (progress) progress.style.display = 'none'
-  }
-}
-
-function getAdminResourceUploadFiles() {
-  const folderFiles = [...(document.getElementById('resourceBundleFiles')?.files || [])]
-  const looseFiles = [...(document.getElementById('resourceLooseFiles')?.files || [])]
-  return [...folderFiles, ...looseFiles]
-}
-
-function updateResourceUploadFileLabels() {
-  const folderFiles = [...(document.getElementById('resourceBundleFiles')?.files || [])]
-  const looseFiles = [...(document.getElementById('resourceLooseFiles')?.files || [])]
-  const folderLabel = document.getElementById('resourceBundleFileName')
-  const looseLabel = document.getElementById('resourceLooseFileName')
-  if (folderLabel) {
-    const firstPath = folderFiles[0]?.webkitRelativePath || folderFiles[0]?.name || ''
-    const folderName = firstPath.split('/').filter(Boolean)[0]
-    folderLabel.textContent = folderFiles.length
-      ? `${folderName || '已选文件夹'} · ${folderFiles.length} 个文件`
-      : '选择 NotebookLM 文件夹'
-  }
-  if (looseLabel) {
-    looseLabel.textContent = looseFiles.length
-      ? `补充文件 · ${looseFiles.length} 个`
-      : '补充选择单个文件'
-  }
-  applyNotebookMetadata(folderFiles)
-}
-
-async function applyNotebookMetadata(files) {
-  const metadataFile = files.find(file => {
-    const path = file.webkitRelativePath || file.name || ''
-    return path.split('/').pop() === 'metadata.json'
-  })
-  if (!metadataFile) return
-  try {
-    const metadata = JSON.parse(await metadataFile.text())
-    const selectedEpisodeId = getSelectedResourceEpisodeId()
-    const titleInput = document.getElementById('courseTitle')
-    const numberInput = document.getElementById('courseNumber')
-    const title = metadata.title || metadata.sourceTitle || metadata.date
-    const number = String(metadata.episode || '').match(/\d+/)?.[0]
-    if (!selectedEpisodeId && titleInput && title && !titleInput.value.trim()) titleInput.value = title
-    if (!selectedEpisodeId && numberInput && number) numberInput.value = number
-  } catch (err) {
-    console.warn('Notebook metadata parse failed:', err)
-  }
-}
-
-function resetAdminCourseForm() {
-  // No-op: form is now in modal
-}
-
-function fillAdminCourseForm(course) {
-  openCourseModal(course)
-}
-
-function getAdminCoursePayload() {
-  const contentType = document.getElementById('courseContentType')?.value || 'video'
-  return {
-    episodeId: document.getElementById('courseEpisodeId')?.value || undefined,
-    number: Number(document.getElementById('courseNumber')?.value || 0),
-    title: document.getElementById('courseTitle')?.value || '',
-    description: document.getElementById('courseDescription')?.value || '',
-    category: document.getElementById('courseCategory')?.value || 'morning',
-    contentType,
-    status: document.getElementById('courseStatus')?.value || 'published',
-    accessLevel: document.getElementById('courseAccessLevel')?.value || 'free',
-    duration: document.getElementById('courseDuration')?.value || '',
-    bilibiliId: contentType === 'video' ? document.getElementById('courseBilibiliId')?.value || '' : '',
-    cover: document.getElementById('courseCover')?.value || '',
-    sortOrder: Number(document.getElementById('courseSortOrder')?.value || 0),
-    articleUrl: contentType === 'article' ? document.getElementById('courseArticleUrl')?.value || '' : '',
-    articleObjectKey: contentType === 'article' ? document.getElementById('courseArticleObjectKey')?.value || '' : '',
-  }
-}
-
-function syncAdminCourseContentType() {
-  const isArticle = document.getElementById('courseContentType')?.value === 'article'
-  const bilibiliField = document.getElementById('adminBilibiliField')
-  const articleField = document.getElementById('adminArticleField')
-  const videoField = document.getElementById('adminVideoField')
-  if (bilibiliField) bilibiliField.style.display = isArticle ? 'none' : 'grid'
-  if (articleField) articleField.style.display = isArticle ? 'grid' : 'none'
-  if (videoField) videoField.style.display = isArticle ? 'none' : 'grid'
-}
-
-function refreshAdminCourseSelects() {
-  const options = renderCourseOptionList(state.adminQuizEpisodeId || episodes[0]?.id || '')
-  const quizSelect = document.getElementById('adminQuizEpisode')
-  if (quizSelect) quizSelect.innerHTML = options
-}
-
-function getSelectedResourceEpisodeId() {
-  return Number(document.getElementById('courseEpisodeId')?.value || 0)
-}
-
-function getMindmapItemStats(items = []) {
-  const infoCount = items.filter(item =>
-    String(item.title || '').includes('信息图') ||
-    String(item.image || '').includes('信息图') ||
-    String(item.image || '').toLowerCase().includes('infographic')
-  ).length
-  const structureCount = items.filter(item => item.structure).length
-  const mindmapCount = items.filter(item =>
-    item.structure ||
-    String(item.title || '').includes('思维导图') ||
-    String(item.image || '').includes('思维导图') ||
-    String(item.image || '').toLowerCase().includes('mindmap')
-  ).length
-  return { infoCount, mindmapCount, structureCount }
-}
-
-function renderAdminResourceSummary(data, fallbackStats = null) {
-  const el = document.getElementById('adminResourceSummary')
-  if (!el) return
-  if (!data?.ok) {
-    el.textContent = data?.error || '资料状态加载失败'
-    return
-  }
-  const assets = data.assets || []
-  const uploadedInfoCount = assets.filter(item => item.assetType === 'infographic').length
-  const uploadedMindmapCount = assets.filter(item => item.assetType === 'mindmap_image').length
-  const uploadedStructureCount = assets.filter(item => item.assetType === 'mindmap_structure').length
-  const infoCount = uploadedInfoCount || fallbackStats?.infoCount || 0
-  const mindmapCount = uploadedMindmapCount || fallbackStats?.mindmapCount || 0
-  const structureCount = uploadedStructureCount || fallbackStats?.structureCount || 0
-  el.innerHTML = `
-    <span>题目 ${Number(data.quizCount || 0)}</span>
-    <span>信息图 ${infoCount}</span>
-    <span>思维导图 ${mindmapCount}</span>
-    <span>结构 JSON ${structureCount}</span>
-  `
-}
-
-async function loadAdminCourseResources(episodeId = getSelectedResourceEpisodeId()) {
-  const el = document.getElementById('adminResourceSummary')
-  if (!episodeId) {
-    if (el) el.textContent = '选择课程后查看资料状态'
-    return
-  }
-  if (el) el.textContent = '资料状态加载中...'
-  const data = await api.get(`/api/admin-course-resources?episode=${episodeId}`)
-  let fallbackStats = null
-  if (data?.ok && !(data.assets || []).length) {
-    const items = await courseContent.loadMindmaps(episodeId).catch(() => [])
-    fallbackStats = getMindmapItemStats(items)
-  }
-  renderAdminResourceSummary(data, fallbackStats)
-}
-
-function selectAdminCourse(episodeId) {
-  const id = Number(episodeId)
-  if (!id) {
-    state.adminQuizEpisodeId = null
-    return
-  }
-  state.adminQuizEpisodeId = id
-  const course = state.adminCourses.find(item => item.id === id) || episodes.find(item => item.id === id)
-  if (course) openCourseModal(course)
-}
-
-let adminCoursePage = 1
-const ADMIN_COURSE_PAGE_SIZE = 10
-
-function renderAdminCourseList(courses) {
-  const el = document.getElementById('adminCourseList')
-  if (!el) return
-  if (!courses.length) {
-    el.innerHTML = '<div class="comments-empty">暂无课程，点击“新增课程”创建</div>'
-    return
-  }
-  const totalPages = Math.ceil(courses.length / ADMIN_COURSE_PAGE_SIZE)
-  if (adminCoursePage > totalPages) adminCoursePage = totalPages
-  if (adminCoursePage < 1) adminCoursePage = 1
-  const start = (adminCoursePage - 1) * ADMIN_COURSE_PAGE_SIZE
-  const pageItems = courses.slice(start, start + ADMIN_COURSE_PAGE_SIZE)
-
-  el.innerHTML = `
-    <table class="admin-table">
-      <thead><tr><th>ID</th><th>课程</th><th>类型</th><th>发布栏目</th><th>发布时间</th><th>状态</th><th>操作</th></tr></thead>
-      <tbody>
-        ${pageItems.map(course => `
-          <tr>
-            <td class="admin-uid">#${course.id}</td>
-            <td>
-              <strong>${escapeHtml(course.title)}</strong>
-              <div class="admin-uid">${escapeHtml(course.duration || '-')}</div>
-            </td>
-            <td>${course.contentType === 'article' ? '文章' : '视频'}</td>
-            <td>${escapeHtml(getCategoryLabel(course.category) || '-')}</td>
-            <td style="font-size:12px;white-space:nowrap;">${escapeHtml(formatDateTime(course.createdAt))}</td>
-            <td><span class="admin-badge ${course.status === 'published' ? 'badge-paid' : course.status === 'draft' ? 'badge-free' : 'badge-expired'}">${course.status === 'published' ? '已发布' : course.status === 'draft' ? '草稿' : '已归档'}</span></td>
-            <td>
-              <div class="admin-actions">
-                <button class="btn btn-primary btn-xs admin-course-edit" data-course-id="${course.id}">编辑</button>
-                <button class="btn btn-ghost btn-xs admin-course-archive" data-course-id="${course.id}">删除</button>
-              </div>
-            </td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-    ${totalPages > 1 ? `
-      <div class="admin-course-pagination">
-        <button class="btn btn-ghost btn-xs" ${adminCoursePage <= 1 ? 'disabled' : ''} data-page="${adminCoursePage - 1}">上一页</button>
-        <span class="admin-course-page-info">${adminCoursePage} / ${totalPages}</span>
-        <button class="btn btn-ghost btn-xs" ${adminCoursePage >= totalPages ? 'disabled' : ''} data-page="${adminCoursePage + 1}">下一页</button>
-      </div>
-    ` : ''}
-  `
-  el.querySelectorAll('.admin-course-edit').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const course = state.adminCourses.find(item => item.id === Number(btn.dataset.courseId))
-      if (course) openCourseModal(course)
-    })
-  })
-  el.querySelectorAll('.admin-course-archive').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('确定删除这门课程？删除后不可恢复！')) return
-      const r = await api.del(`/api/admin-course-items?episode=${btn.dataset.courseId}`)
-      if (r.ok) {
-        await loadAdminCourses()
-        await reloadCourseCatalog()
-      } else showToast(r.error || '删除失败', 'error')
-    })
-  })
-  el.querySelectorAll('[data-page]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      adminCoursePage = Number(btn.dataset.page)
-      renderAdminCourseList(state.adminCourses)
-    })
-  })
-}
-
-function openCourseModal(course = null) {
-  const isEdit = !!course
-  const modal = document.createElement('div')
-  modal.className = 'course-modal-overlay'
-  modal.innerHTML = `
-    <div class="course-modal">
-      <div class="course-modal-header">
-        <h3>${isEdit ? '编辑课程' : '新增课程'}</h3>
-        <button class="course-modal-close" id="closeCourseModal">✕</button>
-      </div>
-      <div class="course-modal-body">
-        <input type="hidden" id="courseEpisodeId" value="${isEdit ? course.id : ''}">
-        <input type="hidden" id="courseNumber" value="${isEdit ? course.number || 0 : 0}">
-        <input type="hidden" id="courseDescription" value="${isEdit ? escapeHtml(course.description || '') : ''}">
-        <input type="hidden" id="courseStatus" value="${isEdit ? course.status : 'published'}">
-        <input type="hidden" id="courseDuration" value="${isEdit ? escapeHtml(course.duration || '') : ''}">
-        <input type="hidden" id="courseCover" value="${isEdit ? escapeHtml(course.cover || '') : ''}">
-        <input type="hidden" id="courseSortOrder" value="${isEdit ? course.sortOrder || course.id : 0}">
-        <input type="hidden" id="courseArticleObjectKey" value="${isEdit ? escapeHtml(course.articleObjectKey || '') : ''}">
-
-        <div class="course-form-grid">
-          <div class="course-form-group">
-            <label>标题 <span class="required">*</span></label>
-            <input class="stream-input" id="courseTitle" value="${isEdit ? escapeHtml(course.title) : ''}" placeholder="例如：第63期 交易计划" required>
-          </div>
-          <div class="course-form-row">
-            <div class="course-form-group">
-              <label>发布栏目</label>
-              <select class="stream-input" id="courseCategory">
-                ${COURSE_CATEGORY_IDS.map(v => `<option value="${v}" ${(isEdit ? course.category : 'morning') === v ? 'selected' : ''}>${CATEGORY_LABELS[v]}</option>`).join('')}
-              </select>
-            </div>
-            <div class="course-form-group">
-              <label>类型</label>
-              <select class="stream-input" id="courseContentType">
-                <option value="video" ${(!isEdit || course.contentType === 'video') ? 'selected' : ''}>视频</option>
-                <option value="article" ${(isEdit && course.contentType === 'article') ? 'selected' : ''}>文章</option>
-              </select>
-            </div>
-            <div class="course-form-group">
-              <label>权限</label>
-              <select class="stream-input" id="courseAccessLevel">
-                ${['free','logged_in','plus_pro','pro_only'].map(v => `<option value="${v}" ${(isEdit ? course.accessLevel : 'plus_pro') === v ? 'selected' : ''}>${{free:'公开免费',logged_in:'登录可看',plus_pro:'Plus/Pro',pro_only:'仅Pro'}[v]}</option>`).join('')}
-              </select>
-            </div>
-          </div>
-          <div class="course-form-group" id="adminBilibiliField">
-            <label>B站BV号</label>
-            <input class="stream-input" id="courseBilibiliId" value="${isEdit ? escapeHtml(course.bilibiliId || '') : ''}" placeholder="BV1xx411c7mD">
-          </div>
-          <div class="course-form-group" id="adminArticleField">
-            <label>文章链接</label>
-            <input class="stream-input" id="courseArticleUrl" value="${isEdit ? escapeHtml(course.articleUrl || '') : ''}" placeholder="https://... 或 /articles/xxx.html">
-          </div>
-          <div class="course-form-group" id="adminVideoField">
-            <label>视频文件</label>
-            <label class="stream-file-label" id="adminVideoUploadField">
-              <span id="streamFileName">点击选择视频文件</span>
-              <input type="file" id="streamFileInput" accept="video/*" style="display:none">
-            </label>
-            <div class="stream-progress-wrap" id="streamProgressWrap" style="display:none">
-              <div class="stream-progress-bar">
-                <div class="stream-progress-fill" id="streamProgressFill"></div>
-              </div>
-              <span class="stream-progress-text" id="streamProgressText">准备上传...</span>
-            </div>
-          </div>
-          <div class="course-form-group">
-            <label>课程资源（答题 / 导图 / 信息图）</label>
-            <div style="display:flex;gap:12px;margin-bottom:8px;">
-              <label class="admin-resource-choice"><input type="checkbox" id="attachQuiz" checked><span>答题</span></label>
-              <label class="admin-resource-choice"><input type="checkbox" id="attachMindmap" checked><span>导图</span></label>
-              <label class="admin-resource-choice"><input type="checkbox" id="attachInfographic" checked><span>信息图</span></label>
-            </div>
-            <label class="stream-file-label">
-              <span id="resourceBundleFileName">选择 NotebookLM 文件夹</span>
-              <input type="file" id="resourceBundleFiles" webkitdirectory directory multiple style="display:none">
-            </label>
-            <label class="stream-file-label secondary">
-              <span id="resourceLooseFileName">补充单个文件</span>
-              <input type="file" id="resourceLooseFiles" multiple accept=".json,application/json,image/*" style="display:none">
-            </label>
-            <div id="adminResourceSummary" class="admin-resource-summary" style="margin-top:8px;">${isEdit ? '加载中...' : ''}</div>
-          </div>
-        </div>
-      </div>
-      <div class="course-modal-footer">
-        <button class="btn btn-ghost" id="cancelCourseModal">取消</button>
-        <button class="btn btn-primary" id="saveResourceAll">保存</button>
-      </div>
-      <div class="stream-upload-result" id="adminCourseResult" style="display:none"></div>
-    </div>
-  `
-  document.body.appendChild(modal)
-  requestAnimationFrame(() => modal.classList.add('course-modal-visible'))
-
-  // Close handlers
-  const close = () => {
-    modal.classList.remove('course-modal-visible')
-    setTimeout(() => modal.remove(), 300)
-  }
-  modal.querySelector('#closeCourseModal').addEventListener('click', close)
-  modal.querySelector('#cancelCourseModal').addEventListener('click', close)
-  modal.addEventListener('click', e => { if (e.target === modal) close() })
-
-  // File label sync
-  const streamInput = document.getElementById('streamFileInput')
-  if (streamInput) streamInput.addEventListener('change', () => {
-    const label = document.getElementById('streamFileName')
-    if (label) label.textContent = streamInput.files?.[0]?.name || '点击选择视频文件'
-  })
-  syncAdminResourceChoiceInputs()
-  updateResourceUploadFileLabels()
-  syncAdminCourseContentType()
-  modal.querySelector('#courseContentType')?.addEventListener('change', syncAdminCourseContentType)
-
-  // Form submit
-  modal.querySelector('form#adminCourseFormInner')?.addEventListener('submit', e => e.preventDefault())
-  modal.querySelector('#saveResourceAll').addEventListener('click', async () => {
-    await saveAdminResourceBundle()
-  })
-
-  // Load resources if editing
-  if (isEdit) loadAdminCourseResources(course.id)
-}
-
-async function loadAdminCourses() {
-  const data = await api.get('/api/admin-course-items')
-  if (!data.ok || !Array.isArray(data.courses)) return
-  state.adminCourses = data.courses
-  renderAdminCourseList(data.courses)
-  refreshAdminCourseSelects()
-}
-
-async function reloadCourseCatalog() {
-  courseCatalog.loaded = false
-  courseCatalog.promise = null
-  await courseCatalog.load()
-}
-
-function setStreamProgress(message, percent = null, error = false) {
-  const wrap = document.getElementById('streamProgressWrap')
-  const fill = document.getElementById('streamProgressFill')
-  const text = document.getElementById('streamProgressText')
-  if (wrap) wrap.style.display = 'block'
-  if (text) text.textContent = message
-  if (fill && percent !== null) {
-    fill.style.width = `${Math.max(0, Math.min(100, percent))}%`
-    fill.style.background = error ? '#ef4444' : 'var(--accent-gradient)'
-  }
-}
-
-async function uploadStreamVideoForResource(file, title) {
-  setStreamProgress('正在上传视频...', 5)
-
-  const formData = new FormData()
-  formData.append('file', file, file.name || 'video.mp4')
-  formData.append('title', title || '')
-
-  const xhr = new XMLHttpRequest()
-  const uploadResult = await new Promise((resolve, reject) => {
-    xhr.upload.addEventListener('progress', event => {
-      if (event.lengthComputable) {
-        const pct = Math.round(event.loaded / event.total * 100)
-        setStreamProgress(`正在上传视频 ${pct}%`, pct)
-      }
-    })
-    xhr.addEventListener('load', () => {
-      if (xhr.status >= 200 && xhr.status < 400) {
-        try { resolve(JSON.parse(xhr.responseText)) }
-        catch { reject(new Error('上传响应解析失败')) }
-      } else reject(new Error(`上传失败: HTTP ${xhr.status}`))
-    })
-    xhr.addEventListener('error', () => reject(new Error('上传网络错误')))
-    xhr.addEventListener('abort', () => reject(new Error('上传已取消')))
-    xhr.open('POST', '/api/video-upload')
-    xhr.setRequestHeader('Authorization', 'Bearer ' + (localStorage.getItem('ws_token') || ''))
-    xhr.send(formData)
-  })
-
-  if (!uploadResult.ok) throw new Error(uploadResult.error || '上传失败')
-  setStreamProgress('上传完成', 100)
-  return uploadResult.url
-}
-
-function appendResourceFiles(form, episodeId, files) {
-  files.forEach(file => {
-    const path = file.webkitRelativePath || file.name
-    form.append('files', file, `ep${episodeId}/${path}`)
-  })
-}
-
-function collectSelectedResourceFiles(episodeId) {
-  const form = new FormData()
-  form.append('episodeId', episodeId)
-  const quizChecked = document.getElementById('attachQuiz')?.checked
-  const mindmapChecked = document.getElementById('attachMindmap')?.checked
-  const infoChecked = document.getElementById('attachInfographic')?.checked
-  const files = getAdminResourceUploadFiles()
-
-  if (!quizChecked && !mindmapChecked && !infoChecked && files.length) {
-    throw new Error('请选择要导入的内容类型')
-  }
-  form.append('includeQuiz', quizChecked ? '1' : '0')
-  form.append('includeMindmap', mindmapChecked ? '1' : '0')
-  form.append('includeInfographic', infoChecked ? '1' : '0')
-  appendResourceFiles(form, episodeId, files)
-  return { form, count: files.length }
-}
-
-async function saveAdminResourceBundle() {
-  const saveBtn = document.getElementById('saveResourceAll')
-  try {
-    const selectedEpisodeId = getSelectedResourceEpisodeId()
-    const contentType = document.getElementById('courseContentType')?.value || 'video'
-    const videoFile = contentType === 'video' ? document.getElementById('streamFileInput')?.files?.[0] : null
-    const bilibiliId = document.getElementById('courseBilibiliId')?.value?.trim()
-    const articleUrl = document.getElementById('courseArticleUrl')?.value?.trim()
-    const titleInput = document.getElementById('courseTitle')
-    if (videoFile && titleInput && !titleInput.value.trim()) {
-      titleInput.value = videoFile.name.replace(/\.[^.]+$/, '')
-    }
-    const mediaError = getCourseMediaValidationError({
-      contentType,
-      isExistingCourse: Boolean(selectedEpisodeId),
-      hasVideoFile: Boolean(videoFile),
-      bilibiliId,
-    })
-    if (mediaError) throw new Error(mediaError)
-    const articleError = getArticleContentValidationError({ contentType, articleUrl })
-    if (articleError) throw new Error(articleError)
-    if (!titleInput?.value.trim()) throw new Error('请填写标题')
-
-    saveBtn.disabled = true
-    saveBtn.textContent = '保存中...'
-
-    let streamUid = null
-    if (videoFile) {
-      setAdminInlineResult('adminCourseResult', '正在上传视频...')
-      streamUid = await uploadStreamVideoForResource(videoFile, titleInput.value.trim())
-    }
-
-    setAdminInlineResult('adminCourseResult', '正在保存课程...')
-    const courseRes = await api.post('/api/admin-course-items', getAdminCoursePayload())
-    if (!courseRes.ok || !courseRes.course) throw new Error(courseRes.error || '保存课程失败')
-
-    const episodeId = Number(courseRes.course.id)
-    document.getElementById('courseEpisodeId').value = episodeId
-    state.adminQuizEpisodeId = episodeId
-
-    if (streamUid) {
-      const link = await api.post('/api/video-stream', {
-        episodeId,
-        localPath: streamUid,
-        title: titleInput.value.trim(),
-        accessLevel: document.getElementById('courseAccessLevel')?.value || 'plus_pro',
-      })
-      if (!link.ok) throw new Error(link.error || '关联 Stream 视频失败')
-    }
-
-    const { form, count } = collectSelectedResourceFiles(episodeId)
-    if (count > 0) {
-      setAdminInlineResult('adminCourseResult', '正在上传资料...')
-      const resourceRes = await api.postForm('/api/admin-course-resources', form)
-      if (!resourceRes.ok) throw new Error(resourceRes.error || '上传资料失败')
-      const skipped = Array.isArray(resourceRes.skipped) ? resourceRes.skipped.length : 0
-      setAdminInlineResult('adminCourseResult',
-        `保存完成：题目 ${resourceRes.quizFiles || 0}，文件 ${resourceRes.assetFiles || 0}${skipped ? `，跳过 ${skipped}` : ''}`
-      )
-      courseContent.quizzes.delete(episodeId)
-      courseContent.mindmaps.delete(episodeId)
-      courseContent.structures.clear()
-    }
-
-    await loadAdminCourses()
-    await reloadCourseCatalog()
-    setAdminInlineResult('adminCourseResult', '保存完成')
-    // Close modal after successful save
-    const overlay = document.querySelector('.course-modal-overlay')
-    if (overlay) {
-      overlay.classList.remove('course-modal-visible')
-      setTimeout(() => overlay.remove(), 300)
-    }
-  } catch (err) {
-    console.error('[SaveAdminCourse] Error:', err)
-    const progressVisible = document.getElementById('streamProgressWrap')?.style.display === 'block'
-    if (progressVisible) setStreamProgress(err.message || '保存失败', 100, true)
-    setAdminInlineResult('adminCourseResult', err.message || '保存失败', false)
-  } finally {
-    if (saveBtn) {
-      saveBtn.disabled = false
-      saveBtn.textContent = '保存'
-    }
-  }
-}
-
-function setupAdminCourseManager() {
-  loadAdminCourses().catch(err => console.error('Admin course load error:', err))
-  document.getElementById('refreshAdminCourses')?.addEventListener('click', () => loadAdminCourses())
-  document.getElementById('addCourseBtn')?.addEventListener('click', () => openCourseModal())
-}
-
-function resetAdminQuizForm() {
-  const form = document.getElementById('adminQuizForm')
-  if (!form) return
-  form.reset()
-  document.getElementById('quizQuestionId').value = ''
-  document.getElementById('quizSortOrder').value = String(state.adminQuizQuestions.length || 0)
-  document.getElementById('quizStatus').value = 'published'
-  document.getElementById('adminQuizResult').style.display = 'none'
-}
-
-function fillAdminQuizForm(question) {
-  const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value ?? '' }
-  set('quizQuestionId', question.id || '')
-  set('quizSortOrder', question.sortOrder || 0)
-  set('quizAnswer', question.answer || 0)
-  set('quizStatus', question.status || 'published')
-  set('quizQuestion', question.question || '')
-  set('quizOptions', (question.options || []).join('\n'))
-  set('quizExplanations', (question.explanations || []).join('\n'))
-  set('quizExplanation', question.explanation || '')
-  set('quizHint', question.hint || '')
-  document.getElementById('adminQuizForm')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-}
-
-function renderAdminQuizList(questions) {
-  const el = document.getElementById('adminQuizList')
-  if (!el) return
-  if (!questions.length) {
-    el.innerHTML = '<div class="comments-empty">暂无题目</div>'
-    return
-  }
-  el.innerHTML = questions.map((question, index) => `
-    <div class="admin-quiz-item">
-      <div>
-        <strong>${index + 1}. ${escapeHtml(question.question)}</strong>
-        <div class="admin-uid">${escapeHtml((question.options || []).map((opt, i) => `${['A', 'B', 'C', 'D'][i] || i + 1}. ${opt}`).join(' / '))}</div>
-      </div>
-      <div class="admin-actions">
-        <span class="admin-badge ${question.status === 'published' ? 'badge-paid' : 'badge-free'}">${question.status === 'published' ? '已发布' : question.status}</span>
-        <button class="btn btn-primary btn-xs admin-quiz-edit" data-question-id="${question.id}">编辑</button>
-        <button class="btn btn-ghost btn-xs admin-quiz-delete" data-question-id="${question.id}">删除</button>
-      </div>
-    </div>
-  `).join('')
-  el.querySelectorAll('.admin-quiz-edit').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const q = state.adminQuizQuestions.find(item => String(item.id) === String(btn.dataset.questionId))
-      if (q) fillAdminQuizForm(q)
-    })
-  })
-  el.querySelectorAll('.admin-quiz-delete').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('确定删除这道题？')) return
-      const r = await api.del(`/api/admin-quiz?id=${encodeURIComponent(btn.dataset.questionId)}`)
-      if (r.ok) {
-        courseContent.quizzes.delete(Number(state.adminQuizEpisodeId))
-        await loadAdminQuiz()
-        await reloadCourseCatalog()
-      }
-      else showToast(r.error || '删除失败', 'error')
-    })
-  })
-}
-
-async function loadAdminQuiz() {
-  const episodeId = document.getElementById('adminQuizEpisode')?.value || state.adminQuizEpisodeId
-  if (!episodeId) return
-  state.adminQuizEpisodeId = Number(episodeId)
-  const el = document.getElementById('adminQuizList')
-  if (el) el.innerHTML = '<div class="loading-spinner">加载题目...</div>'
-  const data = await api.get(`/api/admin-quiz?episode=${episodeId}`)
-  if (!data.ok || !Array.isArray(data.questions)) {
-    if (el) el.innerHTML = `<div class="comments-empty">${escapeHtml(data.error || '加载题目失败')}</div>`
-    return
-  }
-  state.adminQuizQuestions = data.questions
-  renderAdminQuizList(data.questions)
-  resetAdminQuizForm()
-}
-
-function setupAdminQuizManager() {
-  document.getElementById('loadAdminQuiz')?.addEventListener('click', () => loadAdminQuiz())
-  document.getElementById('resetAdminQuiz')?.addEventListener('click', () => resetAdminQuizForm())
-  document.getElementById('adminQuizEpisode')?.addEventListener('change', event => {
-    state.adminQuizEpisodeId = Number(event.target.value)
-  })
-  document.getElementById('adminQuizForm')?.addEventListener('submit', async event => {
-    event.preventDefault()
-    const episodeId = document.getElementById('adminQuizEpisode')?.value
-    const options = (document.getElementById('quizOptions')?.value || '').split('\n').map(s => s.trim()).filter(Boolean)
-    const explanations = (document.getElementById('quizExplanations')?.value || '').split('\n').map(s => s.trim())
-    const payload = {
-      id: document.getElementById('quizQuestionId')?.value || undefined,
-      episodeId,
-      sortOrder: Number(document.getElementById('quizSortOrder')?.value || 0),
-      answer: Number(document.getElementById('quizAnswer')?.value || 0),
-      status: document.getElementById('quizStatus')?.value || 'published',
-      question: document.getElementById('quizQuestion')?.value || '',
-      options,
-      explanations,
-      explanation: document.getElementById('quizExplanation')?.value || '',
-      hint: document.getElementById('quizHint')?.value || '',
-    }
-    const r = await api.post('/api/admin-quiz', payload)
-    if (r.ok) {
-      setAdminInlineResult('adminQuizResult', '题目已保存')
-      courseContent.quizzes.delete(Number(episodeId))
-      await loadAdminQuiz()
-      await reloadCourseCatalog()
-    } else {
-      setAdminInlineResult('adminQuizResult', r.error || '保存题目失败', false)
-    }
-  })
-}
-
-function formatFileSize(bytes) {
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'
-  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB'
-  return (bytes / 1073741824).toFixed(2) + ' GB'
-}
-
-function formatDuration(seconds) {
-  if (!seconds) return '-'
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
-}
-
-async function startStreamUpload() {
-  const fileInput = document.getElementById('streamFileInput')
-  const file = fileInput?.files[0]
-  if (!file) return
-
-  const title = document.getElementById('streamVideoTitle')?.value?.trim() || file.name
-  const uploadBtn = document.getElementById('streamUploadBtn')
-  const progressWrap = document.getElementById('streamProgressWrap')
-  const progressFill = document.getElementById('streamProgressFill')
-  const progressText = document.getElementById('streamProgressText')
-  const resultDiv = document.getElementById('streamUploadResult')
-
-  uploadBtn.disabled = true
-  uploadBtn.textContent = '上传中...'
-  progressWrap.style.display = 'block'
-  resultDiv.style.display = 'none'
-
-  try {
-    // Step 1: Get direct upload URL from our backend
-    progressText.textContent = '获取上传链接...'
-    const createRes = await api.post('/api/stream', { title })
-    if (!createRes.ok && !createRes.uploadURL) {
-      throw new Error(createRes.error || '获取上传链接失败')
-    }
-
-    const { uploadURL, uid } = createRes
-
-    // Step 2: Upload file via XHR (for progress tracking)
-    progressText.textContent = '正在上传...'
-    const uploadResult = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          const pct = Math.round(e.loaded / e.total * 100)
-          progressFill.style.width = pct + '%'
-          progressText.textContent = `上传中... ${pct}% (${formatFileSize(e.loaded)} / ${formatFileSize(e.total)})`
-        }
-      })
-
-      xhr.addEventListener('load', () => {
-        if (xhr.status >= 200 && xhr.status < 400) {
-          try {
-            const resp = JSON.parse(xhr.responseText)
-            resolve(resp)
-          } catch { resolve() }
-        } else {
-          reject(new Error(`上传失败: HTTP ${xhr.status}`))
-        }
-      })
-
-      xhr.addEventListener('error', () => reject(new Error('网络错误')))
-      xhr.addEventListener('abort', () => reject(new Error('上传被取消')))
-
-      const formData = new FormData()
-      formData.append('file', file)
-
-      xhr.open('POST', uploadURL)
-      xhr.send(formData)
-    })
-
-    // Step 3: Show success - store upload info for linking
-    const uploadedVideo = { uid, duration: uploadResult?.duration || '', localPath: uploadResult?.url || '', cover: uploadResult?.cover || '' }
-    progressFill.style.width = '100%'
-    progressFill.style.background = 'var(--accent-gradient)'
-    progressText.textContent = '上传完成！视频正在处理中...'
-
-    resultDiv.style.display = 'block'
-    const linkableCourses = state.adminCourses.length ? state.adminCourses : episodes
-    const epOptions = linkableCourses.map(e => `<option value="${e.id}">${escapeHtml(e.title)}</option>`).join('')
-    resultDiv.innerHTML = `
-      <div class="stream-result-success">
-        <div class="stream-result-title">✅ 上传成功</div>
-        <div class="stream-result-row">
-          <span>Video ID:</span>
-          <code class="stream-uid-code">${uid}</code>
-          <button class="btn btn-ghost btn-xs" id="copyStreamUid">复制</button>
-        </div>
-        <div class="stream-result-row" style="margin-top:8px">
-          <span>关联到课程：</span>
-          <select id="streamLinkEpisode" class="stream-input" style="flex:1;min-width:120px">
-            <option value="">-- 选择集数 --</option>
-            ${epOptions}
-          </select>
-          <button class="btn btn-primary btn-xs" id="streamLinkBtn">关联</button>
-        </div>
-      </div>
-    `
-
-    document.getElementById('copyStreamUid')?.addEventListener('click', () => {
-      navigator.clipboard.writeText(uid).then(() => {
-        document.getElementById('copyStreamUid').textContent = '已复制!'
-        setTimeout(() => { document.getElementById('copyStreamUid').textContent = '复制' }, 2000)
-      })
-    })
-
-    document.getElementById('streamLinkBtn')?.addEventListener('click', async () => {
-      const epId = document.getElementById('streamLinkEpisode')?.value
-      if (!epId) { showToast('请选择集数', 'error'); return }
-      const linkBtn = document.getElementById('streamLinkBtn')
-      linkBtn.disabled = true; linkBtn.textContent = '关联中...'
-      const r = await api.post('/api/video-stream', {
-        episodeId: Number(epId),
-        title,
-        localPath: uploadedVideo.localPath,
-        duration: uploadedVideo.duration,
-        cover: uploadedVideo.cover,
-      })
-      if (r.ok) {
-        linkBtn.textContent = '✓ 已关联'
-        // Refresh paid video list + access map
-        const listRes = await api.get('/api/video-stream')
-        if (listRes.episodes) {
-          syncVideoAccessState(listRes.episodes)
-        }
-      } else { showToast(r.error || '关联失败', 'error'); linkBtn.disabled = false; linkBtn.textContent = '关联' }
-    })
-
-    // Refresh video list after a short delay
-    setTimeout(() => loadStreamVideos(), 3000)
-
-  } catch (err) {
-    console.error('Stream upload error:', err)
-    progressText.textContent = '上传失败: ' + err.message
-    progressFill.style.width = '100%'
-    progressFill.style.background = '#ef4444'
-  } finally {
-    uploadBtn.textContent = '上传视频'
-    uploadBtn.disabled = false
-  }
-}
-
-async function loadStreamVideos() {
-  const listEl = document.getElementById('streamVideoList')
-  if (!listEl) return
-
-  try {
-    const [res, mappingRes] = await Promise.all([
-      api.get('/api/stream'),
-      api.get('/api/video-stream'),
-    ])
-    const videos = res.videos || []
-    const epList = mappingRes.episodes || []
-    syncVideoAccessState(epList)
-
-    if (videos.length === 0) {
-      listEl.innerHTML = '<div class="comments-empty">暂无视频，上传第一个吧</div>'
-      return
-    }
-
-    // Build reverse map: cfStreamId → { episodeId, access_level }
-    let streamToEp = {}
-    let epToAccess = {}
-    try {
-      const mapRes = await api.get('/api/video-stream?list=all')
-      if (mapRes.mappings) mapRes.mappings.forEach(m => {
-        streamToEp[m.cf_stream_id] = m.episode_id
-        epToAccess[m.episode_id] = m.access_level || 'plus_pro'
-      })
-    } catch {}
-    const accessLevelOptions = `<option value="free">公开</option><option value="logged_in">登录可看</option><option value="plus_pro">Plus/Pro会员</option><option value="pro_only">仅Pro</option>`
-
-    const linkableCourses = state.adminCourses.length ? state.adminCourses : episodes
-    const epOptions = linkableCourses.map(e => `<option value="${e.id}">${escapeHtml(e.title)}</option>`).join('')
-
-    listEl.innerHTML = videos.map(v => {
-      const linkedEp = streamToEp[v.uid]
-      const linkedLabel = linkedEp ? '已关联' : ''
-      return `
-      <div class="stream-video-card" data-stream-uid="${v.uid}">
-        <div class="stream-video-thumb">
-          ${v.thumbnail ? `<img src="${escapeHtml(v.thumbnail)}" alt="${escapeHtml(v.name)}">` : '<div class="stream-thumb-placeholder">🎬</div>'}
-          ${v.readyToStream ? '<span class="stream-status-badge ready">可播放</span>' : `<span class="stream-status-badge processing">${v.status === 'inprogress' ? `处理中 ${v.pctComplete || ''}` : v.status}</span>`}
-        </div>
-        <div class="stream-video-info">
-          <div class="stream-video-name">${escapeHtml(v.name)}</div>
-          <div class="stream-video-meta">
-            <span>${formatDuration(v.duration)}</span>
-            <span>${formatFileSize(v.size)}</span>
-            <span>${v.created ? new Date(v.created).toLocaleDateString('zh-CN') : ''}</span>
-          </div>
-          <div class="stream-video-uid">
-            ${linkedEp
-              ? `<span style="color:var(--primary);font-weight:600">${linkedLabel}</span>
-                 <select class="stream-access-select" data-access-ep="${linkedEp}" style="font-size:12px;padding:2px 4px;border:1px solid #ddd;border-radius:4px;margin:0 4px">
-                   ${accessLevelOptions.replace(`value="${epToAccess[linkedEp] || 'plus_pro'}"`, `value="${epToAccess[linkedEp] || 'plus_pro'}" selected`)}
-                 </select>
-                 <button class="btn btn-ghost btn-xs stream-unlink-btn" data-unlink-ep="${linkedEp}" style="color:#ef4444">取消关联</button>`
-              : `<select class="stream-link-select" data-link-uid="${v.uid}" style="font-size:12px;padding:2px 4px;border:1px solid #ddd;border-radius:4px">
-                  <option value="">关联到集数</option>
-                  ${epOptions}
-                </select>
-                <button class="btn btn-ghost btn-xs stream-link-save-btn" data-link-uid="${v.uid}">关联</button>`}
-            <button class="btn btn-ghost btn-xs stream-copy-btn" data-copy-uid="${v.uid}">复制ID</button>
-            <button class="btn btn-ghost btn-xs stream-delete-btn" data-del-uid="${v.uid}" style="color:#ef4444">删除</button>
-          </div>
-        </div>
-      </div>`
-    }).join('')
-
-    // Link/unlink handlers
-    listEl.querySelectorAll('.stream-link-save-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation()
-        const uid = btn.dataset.linkUid
-        const select = listEl.querySelector(`.stream-link-select[data-link-uid="${uid}"]`)
-        const epId = select?.value
-        if (!epId) { showToast('请选择集数', 'error'); return }
-        btn.disabled = true; btn.textContent = '关联中...'
-        const r = await api.post('/api/video-stream', { episodeId: Number(epId), cfStreamId: uid })
-        if (r.ok) { loadStreamVideos() } else { showToast(r.error || '关联失败', 'error'); btn.disabled = false; btn.textContent = '关联' }
-      })
-    })
-
-    // Access level change handlers
-    listEl.querySelectorAll('.stream-access-select').forEach(sel => {
-      sel.addEventListener('change', async (e) => {
-        e.stopPropagation()
-        const epId = sel.dataset.accessEp
-        const newLevel = sel.value
-        const r = await api.patch(`/api/video-stream?episode=${epId}`, { accessLevel: newLevel })
-        if (r.ok) {
-          state.videoAccessMap[Number(epId)] = newLevel
-          sel.style.borderColor = 'var(--primary)'
-          setTimeout(() => { sel.style.borderColor = '#ddd' }, 1500)
-        } else { showToast(r.error || '修改失败', 'error') }
-      })
-    })
-
-    listEl.querySelectorAll('.stream-unlink-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation()
-        if (!confirm('确定取消关联？')) return
-        btn.disabled = true; btn.textContent = '取消中...'
-        const r = await api.del(`/api/video-stream?episode=${btn.dataset.unlinkEp}`)
-        if (r.ok) { loadStreamVideos() } else { showToast(r.error || '取消失败', 'error'); btn.disabled = false; btn.textContent = '取消关联' }
-      })
-    })
-
-    // Copy and delete handlers
-    listEl.querySelectorAll('.stream-copy-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation()
-        navigator.clipboard.writeText(btn.dataset.copyUid).then(() => {
-          btn.textContent = '已复制!'
-          setTimeout(() => { btn.textContent = '复制ID' }, 2000)
-        })
-      })
-    })
-
-    listEl.querySelectorAll('.stream-delete-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation()
-        if (!confirm('确定删除这个视频？删除后不可恢复。')) return
-        btn.textContent = '删除中...'
-        btn.disabled = true
-        try {
-          const res = await api.del(`/api/stream?uid=${btn.dataset.delUid}`)
-          if (res.ok || res.success) {
-            btn.closest('.stream-video-card')?.remove()
-          } else {
-            showToast(res.error || '删除失败', 'error')
-            btn.textContent = '删除'
-            btn.disabled = false
-          }
-        } catch (err) {
-          showToast('删除失败', 'error')
-          btn.textContent = '删除'
-          btn.disabled = false
-        }
-      })
-    })
-  } catch (err) {
-    console.error('Load stream videos error:', err)
-    listEl.innerHTML = '<div class="comments-empty">加载视频列表失败</div>'
-  }
 }
 
 // ===== Auth =====
@@ -5782,6 +3565,8 @@ async function refreshNotificationUnread() {
 // ===== Membership Page =====
 async function renderMembership() {
   const currentPlan = getEffectivePlan()
+  const membershipExpired = isMembershipExpiredClient()
+  const expiredPlanName = state.user?.plan === 'pro' ? 'Pro' : 'Plus'
   const currentPeriod = currentPlan === 'free' ? null : state.user?.planPeriod || null
 
   let planPrices = { plus: { month: { current: 50, original: 100 }, year: { current: 500, original: 1000 } }, pro: { month: { current: 100, original: 200 }, year: { current: 1000, original: 2000 } } }
@@ -5810,6 +3595,7 @@ async function renderMembership() {
       <div class="membership-header">
         <h1 class="membership-title">选择你的会员计划</h1>
         <p class="membership-subtitle">解锁量见全部技术分析课程，系统掌握交易技术</p>
+        ${membershipExpired ? `<div class="membership-expired-notice">当前 ${expiredPlanName} 会员已过期，您可以重新购买 Plus 或 Pro，付款后立即恢复对应权益。</div>` : ''}
       </div>
 
       <div id="membershipCreditSummary" class="membership-credit-summary">
@@ -5818,7 +3604,7 @@ async function renderMembership() {
 
       <div class="membership-cards">
         <!-- 体验版 -->
-        <div class="mem-card ${currentPlan === 'free' ? 'mem-current' : ''}">
+        <div class="mem-card ${currentPlan === 'free' && !membershipExpired ? 'mem-current' : ''}">
           <div class="mem-card-header mem-free">
             <span class="mem-icon">🆓</span>
             <h3 class="mem-plan-name">体验版</h3>
@@ -5838,7 +3624,7 @@ async function renderMembership() {
           </ul>
           <div class="mem-action">
             ${currentPlan === 'free'
-              ? '<button class="btn mem-btn mem-btn-current" disabled>当前方案</button>'
+              ? `<button class="btn mem-btn mem-btn-current" disabled>${membershipExpired ? '会员已过期' : '当前方案'}</button>`
               : '<button class="btn mem-btn mem-btn-free">当前已是更高方案</button>'}
           </div>
         </div>
@@ -5988,9 +3774,9 @@ async function loadMembershipCreditSummary() {
     }
     const stats = res.stats
     el.innerHTML = `
-      <div class="membership-credit-item"><span>待确认返佣</span><strong>${formatMinorUsd(stats.pending_credit_cents)}</strong></div>
-      <div class="membership-credit-item"><span>可用返佣</span><strong>${formatMinorUsd(stats.available_credit_cents)}</strong></div>
-      <div class="membership-credit-item"><span>已使用返佣</span><strong>${formatMinorUsd(stats.used_credit_cents)}</strong></div>
+      <div class="membership-credit-item"><span>待确认返佣</span><strong>${formatUsdAmount(stats.pending_credit_amount)}</strong></div>
+      <div class="membership-credit-item"><span>可用返佣</span><strong>${formatUsdAmount(stats.available_credit_amount)}</strong></div>
+      <div class="membership-credit-item"><span>已使用返佣</span><strong>${formatUsdAmount(stats.used_credit_amount)}</strong></div>
       <div class="membership-credit-link">开放后下单时自动计算可用返佣</div>`
   } catch {
     el.innerHTML = '<span>返佣邀请信息暂时无法读取</span>'
@@ -6687,7 +4473,8 @@ let settingsTab = 'profile'
 
 function renderProfile() {
   const currentPlan = getEffectivePlan()
-  const planNames = { free: '体验版（免费）', plus: '⭐ Plus', pro: '💎 Pro' }
+  const membershipExpired = isMembershipExpiredClient()
+  const membershipDisplayName = getMembershipDisplayName()
 
   mainContent.innerHTML = `
     <div class="settings-page fade-in">
@@ -6757,7 +4544,7 @@ function renderProfile() {
                 </div>
                 <div class="profile-info-item">
                   <span class="profile-info-label">当前方案</span>
-                  <span class="profile-info-value">${planNames[currentPlan] || '体验版'}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</span>
+                  <span class="profile-info-value">${membershipDisplayName}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</span>
                 </div>
                 <div class="profile-info-item">
                   <span class="profile-info-label">Telegram 绑定</span>
@@ -6960,18 +4747,18 @@ function renderProfile() {
               <div class="settings-card sub-current-card">
                 <div class="sub-current-header">
                   <div>
-                    <div class="sub-current-plan">${planNames[currentPlan] || '体验版'}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</div>
+                    <div class="sub-current-plan">${membershipDisplayName}${state.user?.planSource === 'gift' && currentPlan !== 'free' ? ' <span class="plan-gift-tag">体验版</span>' : ''}</div>
                     <div class="sub-current-desc">${currentPlan === 'free' ? '公开视频 + 语录' : currentPlan === 'plus' ? '新视频即时解锁 + 图解 + 测验' : '全部权限 + AI信号'}</div>
                     ${state.user?.planExpiresAt ? `<div class="sub-expires">到期时间：${formatDateTime(state.user.planExpiresAt)}</div>` : ''}
                   </div>
-                  <span class="sub-current-badge sub-badge-${currentPlan}">${currentPlan === 'free' ? '免费' : currentPlan === 'plus' ? 'Plus' : 'Pro'}</span>
+                  <span class="sub-current-badge ${membershipExpired ? 'sub-badge-expired' : `sub-badge-${currentPlan}`}">${membershipExpired ? '已过期' : currentPlan === 'free' ? '免费' : currentPlan === 'plus' ? 'Plus' : 'Pro'}</span>
                 </div>
               </div>
 
               <div class="settings-card">
                 <h3 class="settings-card-title">更改方案</h3>
                 <div class="sub-plans">
-                  <div class="sub-plan-row ${currentPlan === 'free' ? 'sub-plan-active' : ''}" data-plan="free">
+                  <div class="sub-plan-row ${currentPlan === 'free' && !membershipExpired ? 'sub-plan-active' : ''}" data-plan="free">
                     <div class="sub-plan-info">
                       <span class="sub-plan-icon">🆓</span>
                       <div>
@@ -6980,7 +4767,7 @@ function renderProfile() {
                       </div>
                     </div>
                     <div class="sub-plan-price">免费</div>
-                    ${currentPlan === 'free' ? '<span class="sub-plan-current">当前</span>' : ''}
+                    ${currentPlan === 'free' && !membershipExpired ? '<span class="sub-plan-current">当前</span>' : ''}
                   </div>
                   <div class="sub-plan-row ${currentPlan === 'plus' ? 'sub-plan-active' : ''} ${currentPlan === 'pro' ? 'sub-plan-disabled' : ''}" data-plan="plus">
                     <div class="sub-plan-info">
@@ -7034,6 +4821,8 @@ function renderProfile() {
   mainContent.querySelectorAll('.settings-nav-item').forEach(item => {
     item.addEventListener('click', () => {
       settingsTab = item.dataset.tab
+      const accountUrl = settingsTab === 'profile' ? '/account' : `/account?tab=${encodeURIComponent(settingsTab)}`
+      window.history.replaceState({ view:'profile' }, '', accountUrl)
       if (localStorage.getItem('ws_token')) {
         refreshCurrentUserProfile({ rerender: true }).catch(() => { renderProfile() })
       } else {
@@ -7760,7 +5549,7 @@ async function loadBillingHistory(container, page = 1) {
             <div class="billing-date">${displayDate}${orderIdShort ? ` · <span class="billing-oid" title="${o.orderId}">#${orderIdShort}</span>` : ''}</div>
           </div>
           <div class="billing-right">
-            <span class="billing-amount">${formatMinorUsd(paidAmount)}</span>
+            <span class="billing-amount">${formatUsdAmount(paidAmount)}</span>
             <span class="billing-status ${s.cls}">${s.label}</span>
           </div>
         </div>`
@@ -7836,18 +5625,18 @@ async function loadSubscriptionCreditCenter(container) {
       <div class="subscription-credit-grid">
         <div class="subscription-credit-stat"><span>邀请人数</span><strong>${Number(stats.invited_count || 0)}</strong></div>
         <div class="subscription-credit-stat"><span>付费邀请</span><strong>${Number(stats.paid_invited_count || 0)}</strong></div>
-        <div class="subscription-credit-stat"><span>待确认返佣</span><strong>${formatMinorUsd(stats.pending_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>可用返佣</span><strong>${formatMinorUsd(stats.available_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>处理中返佣</span><strong>${formatMinorUsd(stats.reserved_credit_cents)}</strong></div>
-        <div class="subscription-credit-stat"><span>已使用返佣</span><strong>${formatMinorUsd(stats.used_credit_cents)}</strong></div>
+        <div class="subscription-credit-stat"><span>待确认返佣</span><strong>${formatUsdAmount(stats.pending_credit_amount)}</strong></div>
+        <div class="subscription-credit-stat"><span>可用返佣</span><strong>${formatUsdAmount(stats.available_credit_amount)}</strong></div>
+        <div class="subscription-credit-stat"><span>处理中返佣</span><strong>${formatUsdAmount(stats.reserved_credit_amount)}</strong></div>
+        <div class="subscription-credit-stat"><span>已使用返佣</span><strong>${formatUsdAmount(stats.used_credit_amount)}</strong></div>
       </div>
       <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近返佣记录</h3>
         ${recent.length ? `<div class="subscription-credit-list">${recent.map(item => `
-          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.plan_label || '')}</strong><div class="billing-date">${formatDateTime(item.created_at) || ''} · ${escapeHtml(item.invited_user?.email_masked || '已邀请用户')}</div></div><div class="subscription-credit-row-right"><span>${formatMinorUsd(item.amount_cents)}</span><em>${escapeHtml(item.status_label || item.status || '')}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无返佣记录</div>'}
+          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.plan_label || '')}</strong><div class="billing-date">${formatDateTime(item.created_at) || ''} · ${escapeHtml(item.invited_user?.email_masked || '已邀请用户')}</div></div><div class="subscription-credit-row-right"><span>${formatUsdAmount(item.commission_amount)}</span><em>${escapeHtml(item.status_label || item.status || '')}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无返佣记录</div>'}
       </div>
       <div class="settings-card subscription-credit-inner"><h3 class="settings-card-title">最近邀请用户</h3>
         ${invited.length ? `<div class="subscription-credit-list">${invited.map(item => `
-          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.email_masked || item.uid || '已邀请用户')}</strong><div class="billing-date">${formatDateTime(item.attributed_at) || ''}</div></div><div class="subscription-credit-row-right"><span>${item.paid ? '已订阅' : '未订阅'}</span><em>${formatMinorUsd(item.credit_cents)}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无邀请用户</div>'}
+          <div class="subscription-credit-row"><div><strong>${escapeHtml(item.email_masked || item.uid || '已邀请用户')}</strong><div class="billing-date">${formatDateTime(item.attributed_at) || ''}</div></div><div class="subscription-credit-row-right"><span>${item.paid ? '已订阅' : '未订阅'}</span><em>${formatUsdAmount(item.credit_amount)}</em></div></div>`).join('')}</div>` : '<div class="billing-empty">暂无邀请用户</div>'}
       </div>`
     container.querySelector('#copyReferralLink')?.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(res.referral_link); showFormMsgProfile('邀请链接已复制', 'ok') }
@@ -8048,6 +5837,52 @@ function getPasswordRuleError(password) {
   return null
 }
 
+function getAuthPasswordRuleError(password) {
+  if (!password || password.length < 8 || password.length > 32) {
+    return '密码长度需要 8-32 个字符'
+  }
+  if (!/[A-Za-z]/.test(password)) {
+    return '密码需要包含至少一个字母'
+  }
+  if (!/[0-9]/.test(password)) {
+    return '密码需要包含至少一个数字'
+  }
+  return null
+}
+
+function updateAuthPasswordValidation(form) {
+  const passwordInput = form?.elements?.password
+  const confirmInput = form?.elements?.confirmPassword
+  const rulesHint = form?.querySelector('#pwdRules')
+  const confirmHint = form?.querySelector('#confirmPasswordHint')
+  if (!passwordInput || !rulesHint) return
+
+  const password = passwordInput.value
+  const passwordError = getAuthPasswordRuleError(password)
+  if (!password) {
+    rulesHint.textContent = '需满足：8-32 位，至少包含一个字母和一个数字'
+    rulesHint.className = 'form-hint pwd-rules'
+  } else if (passwordError) {
+    rulesHint.textContent = passwordError
+    rulesHint.className = 'form-hint pwd-rules form-hint-err'
+  } else {
+    rulesHint.textContent = '密码格式正确'
+    rulesHint.className = 'form-hint pwd-rules form-hint-ok'
+  }
+
+  if (!confirmInput || !confirmHint) return
+  if (!confirmInput.value) {
+    confirmHint.textContent = ''
+    confirmHint.className = 'form-hint'
+  } else if (confirmInput.value !== password) {
+    confirmHint.textContent = '两次输入的密码不一致'
+    confirmHint.className = 'form-hint form-hint-err'
+  } else {
+    confirmHint.textContent = '两次输入的密码一致'
+    confirmHint.className = 'form-hint form-hint-ok'
+  }
+}
+
 function showToast(msg, type = 'info') {
   const toast = document.createElement('div')
   toast.className = `profile-toast profile-toast-${type === 'error' ? 'err' : type === 'success' ? 'ok' : 'ok'}`
@@ -8130,7 +5965,7 @@ const AUTH_MODE_META = {
     submitLabel: '注册',
     codePurpose: 'register',
     passwordLabel: '密码',
-    passwordPlaceholder: '8-32位，含大写字母、数字、特殊字符',
+    passwordPlaceholder: '8-32位，至少包含字母和数字',
     showPasswordRules: true,
     showConfirmPassword: true,
     showTos: true,
@@ -8143,7 +5978,7 @@ const AUTH_MODE_META = {
     accountLabel: '账号',
     accountPlaceholder: '邮箱或手机号',
     passwordLabel: '新密码',
-    passwordPlaceholder: '8-32位，含大写字母、数字、特殊字符',
+    passwordPlaceholder: '8-32位，至少包含字母和数字',
     showPasswordRules: true,
     showConfirmPassword: true,
   },
@@ -8548,13 +6383,14 @@ function showAuthModal(mode, options = {}) {
         <div class="form-group">
           <label class="form-label">${meta.passwordLabel}</label>
           <input type="password" class="form-input" name="password" ${mode === 'login_password' ? 'required' : ''} placeholder="${meta.passwordPlaceholder}">
-          ${meta.showPasswordRules ? '<p class="form-hint pwd-rules" id="pwdRules">需包含：大写字母、数字、特殊字符（如 !@#$%）</p>' : ''}
+          ${meta.showPasswordRules ? '<p class="form-hint pwd-rules" id="pwdRules" aria-live="polite">需满足：8-32 位，至少包含一个字母和一个数字</p>' : ''}
         </div>
       ` : ''}
       ${meta.showConfirmPassword ? `
         <div class="form-group">
           <label class="form-label">确认密码</label>
           <input type="password" class="form-input" name="confirmPassword" required placeholder="请再次输入密码">
+          <p class="form-hint" id="confirmPasswordHint" aria-live="polite"></p>
         </div>
       ` : ''}
       ${meta.showTos ? `
@@ -8594,6 +6430,7 @@ function persistAuthSession(result, { syncProgress = false } = {}) {
   refreshNotificationUnread()
   startPresenceHeartbeat()
   closeModal()
+  void checkMembershipExpiryReminder()
 
   if (redirectAfterLogin) {
     if (syncProgress) progress.syncFromServer().catch(() => {})
@@ -9518,13 +7355,10 @@ function setupGlobalEvents() {
     toggleAIMenu()
   })
 
-  // Handle AI lab link click with auth check
-  aiMenu?.querySelector('.header-ai-dropdown-item:not(.header-ai-dropdown-disabled)')?.addEventListener('click', (e) => {
-    e.preventDefault()
+  // AI 实验室拥有独立认证前端；主站只负责导航，不在这里拦截登录。
+  aiMenu?.querySelector('.header-ai-dropdown-item:not(.header-ai-dropdown-disabled)')?.addEventListener('click', () => {
     closeAIMenu()
-    if (!requireLogin()) return
-    syncAuthCookieFromStorage()
-    window.open('/ai', '_blank')
+    if (localStorage.getItem('ws_token')) syncAuthCookieFromStorage()
   })
 
   function bindProtectedMarketNav(selector, targetPath) {
@@ -9564,7 +7398,7 @@ function setupGlobalEvents() {
 
   $('#loginBtn').addEventListener('click', () => showAuthModal('login_password'))
   $('#registerBtn').addEventListener('click', () => showAuthModal('register'))
-  $('#adminBtn').addEventListener('click', () => navigate('admin'))
+  $('#adminBtn').addEventListener('click', () => { window.location.href = '/admin/' })
 
   // User dropdown menu — click to toggle, click elsewhere to close
   $('#userMenuTrigger').addEventListener('click', (e) => {
@@ -9598,16 +7432,15 @@ function setupGlobalEvents() {
 
   $('#dropdownProfile').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    navigate('profile')
+    openMainAccountCenter('overview')
   })
   $('#dropdownNotifications').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    settingsTab = 'notifications'
-    navigate('profile')
+    openMainAccountCenter('notifications')
   })
   $('#dropdownAdmin').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    navigate('admin')
+    window.location.href = '/admin/'
   })
   // Dark mode toggle
   function applyTheme(dark) {
@@ -9621,6 +7454,7 @@ function setupGlobalEvents() {
     if (headerIcon) headerIcon.textContent = dark ? '☀️' : '🌙'
     if (headerLabel) headerLabel.textContent = dark ? '浅色' : '深色'
     syncArticleFrameTheme()
+    mainAccountCenterFrame?.contentWindow?.postMessage({ type:'account-center-theme',theme:dark ? 'dark' : 'light' },window.location.origin)
   }
   function toggleTheme() {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
@@ -9638,16 +7472,22 @@ function setupGlobalEvents() {
 
   $('#dropdownLogout').addEventListener('click', () => {
     userDropdown.classList.remove('active')
-    state.user = null
-    state.notificationUnread = 0
-    localStorage.removeItem('ws_user')
     localStorage.removeItem('ws_token')
     localStorage.removeItem('authToken')
+    localStorage.setItem('ws_session_event', JSON.stringify({ type:'logout', at:Date.now() }))
     clearAuthCookie()
-    stopPresenceHeartbeat()
-    updateAuthUI()
-    renderView()
+    closeMainAccountCenter()
+    applyMainLoggedOutState()
   })
+
+  window.addEventListener('storage', (event) => {
+    if (!['ws_session_event', 'ws_token', 'authToken'].includes(event.key)) return
+    if (localStorage.getItem('ws_token') || localStorage.getItem('authToken')) return
+    closeMainAccountCenter()
+    applyMainLoggedOutState()
+  })
+
+  mainAccountCenterModal?.querySelectorAll('[data-close-main-account]').forEach(node => node.addEventListener('click',closeMainAccountCenter))
 
   $('#modalClose').addEventListener('click', closeModal)
   modalOverlay.addEventListener('pointerdown', (e) => {
@@ -9669,7 +7509,10 @@ function setupGlobalEvents() {
   })
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModal()
+    if (e.key === 'Escape') {
+      closeMainAccountCenter()
+      closeModal()
+    }
   })
 
   modalBody.addEventListener('click', (e) => {
@@ -9717,6 +7560,9 @@ function setupGlobalEvents() {
         handleCodeVerify(val)
       }
     }
+    if (e.target.name === 'password' || e.target.name === 'confirmPassword') {
+      updateAuthPasswordValidation(e.target.form)
+    }
   })
 
   modalBody.addEventListener('submit', async (e) => {
@@ -9748,7 +7594,7 @@ function setupGlobalEvents() {
           return
         }
       }
-      const pwdError = getPasswordRuleError(data.password)
+      const pwdError = getAuthPasswordRuleError(data.password)
       if (pwdError) {
         showFormMsg(pwdError, 'err')
         return
@@ -9942,7 +7788,7 @@ function setupGlobalEvents() {
         resetPayload.email = loginId
       }
 
-      const pwdError = getPasswordRuleError(data.password)
+      const pwdError = getAuthPasswordRuleError(data.password)
       if (pwdError) {
         showFormMsg(pwdError, 'err')
         return
@@ -10058,349 +7904,26 @@ function setupGlobalEvents() {
       return
     }
 
+    if (target.closest('#courseStreamMore')) {
+      await loadMoreCourseStream()
+      return
+    }
+
     if (target.id === 'backHome') { navigate('home'); return }
     if (target.closest('.quotes-card')) { if (!requireLogin()) return; navigate('quotes'); return }
 
-    // 管理后台：点击统计卡片跳转到对应区域
-    const statCard = target.closest('.admin-stat-clickable')
-    if (statCard) {
-      if (statCard.dataset.adminUserTab) {
-        activateAdminUserTab(statCard.dataset.adminUserTab, { scroll: true })
-        return
-      }
-      const targetId = statCard.dataset.scrollTo
-      const el = document.getElementById(targetId)
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    const courseAttachmentButton = target.closest('[data-course-attachment-download]')
+    if (courseAttachmentButton) {
+      await downloadCourseAttachment(
+        courseAttachmentButton.dataset.courseAttachmentDownload,
+        courseAttachmentButton.dataset.courseAttachmentName,
+        courseAttachmentButton,
+      )
       return
     }
 
-    // 管理后台：打开编辑用户弹窗
-    const editUserBtn = target.closest('.admin-edit-user')
-    if (editUserBtn) {
-      const userId = Number(editUserBtn.dataset.userId)
-      const userUid = editUserBtn.dataset.uid
-      const userName = editUserBtn.dataset.name
-      const userEmail = editUserBtn.dataset.email
-      const userPhone = editUserBtn.dataset.phone || ''
-      const currentPlan = editUserBtn.dataset.plan || 'free'
-      const currentExpires = editUserBtn.dataset.expires || ''
-      const currentAvatar = editUserBtn.dataset.avatar || ''
-      const modal = document.getElementById('adminOrderModal')
-      const modalBody = document.getElementById('adminOrderModalBody')
-      const modalTitle = document.getElementById('adminOrderModalTitle')
-      if (!modal) return
-      modalTitle.textContent = `编辑用户 - ${userName} (${userUid})`
-      const defaultExpiry = new Date(Date.now() + 365 * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
-      modalBody.innerHTML = `
-        <div class="admin-plan-form" style="display:flex;flex-direction:column;gap:14px;">
-          <div class="admin-plan-field">
-            <label>UID：</label>
-            <span style="font-family:monospace;">${escapeHtml(userUid)}</span>
-          </div>
-          <div class="admin-plan-field">
-            <label for="editUserEmail">邮箱：</label>
-            <input type="email" id="editUserEmail" class="admin-plan-input" value="${escapeHtml(userEmail)}">
-          </div>
-          <div class="admin-plan-field">
-            <label for="editUserPhone">手机号：</label>
-            <input type="text" id="editUserPhone" class="admin-plan-input" value="${escapeHtml(userPhone)}" placeholder="未绑定">
-          </div>
-          <div class="admin-plan-field">
-            <label for="editUserNickname">昵称：</label>
-            <input type="text" id="editUserNickname" class="admin-plan-input" value="${escapeHtml(userName)}">
-          </div>
-          <div class="admin-plan-field">
-            <label for="editUserPassword">新密码（留空不修改）：</label>
-            <input type="password" id="editUserPassword" class="admin-plan-input" placeholder="留空则不修改">
-          </div>
-          <div class="admin-plan-field">
-            <label for="editUserPlan">套餐：</label>
-            <select id="editUserPlan" class="admin-plan-select">
-              <option value="free" ${currentPlan === 'free' ? 'selected' : ''}>免费 (Free)</option>
-              <option value="plus" ${currentPlan === 'plus' ? 'selected' : ''}>Plus 会员</option>
-              <option value="pro" ${currentPlan === 'pro' ? 'selected' : ''}>Pro 会员</option>
-            </select>
-          </div>
-          <div class="admin-plan-field" id="editUserExpiresField">
-            <label for="editUserExpires">到期日期：</label>
-            <input type="date" id="editUserExpires" class="admin-plan-input" value="${currentExpires || defaultExpiry}">
-            <div class="admin-plan-shortcuts">
-              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="30">+1个月</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="90">+3个月</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="180">+半年</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-target="editUserExpires" data-days="365">+1年</button>
-            </div>
-          </div>
-          <div class="admin-plan-actions">
-            <button class="btn btn-primary" id="adminEditUserSaveBtn" data-user-id="${userId}">保存</button>
-            <button class="btn btn-ghost" id="adminEditUserCancelBtn">取消</button>
-          </div>
-          <div style="border-top:1px solid var(--border-1);padding-top:12px;margin-top:4px;">
-            <button class="btn btn-xs" id="adminEditUserDeleteBtn" data-user-id="${userId}" data-name="${escapeHtml(userName)}" style="color:#ef4444;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);">删除用户</button>
-            <span id="adminDeleteConfirm" style="display:none;margin-left:8px;font-size:12px;">确认删除？此操作不可恢复！
-              <button class="btn btn-xs" id="adminDeleteConfirmYes" style="color:#fff;background:#ef4444;margin-left:4px;">确认删除</button>
-              <button class="btn btn-xs btn-ghost" id="adminDeleteConfirmNo">取消</button>
-            </span>
-          </div>
-          <div id="adminEditUserResult" style="display:none"></div>
-        </div>
-      `
-      modal.style.display = 'flex'
-
-      document.getElementById('adminEditUserCancelBtn')?.addEventListener('click', () => modal.style.display = 'none')
-      document.getElementById('adminEditUserSaveBtn')?.addEventListener('click', async () => {
-        const btn = document.getElementById('adminEditUserSaveBtn')
-        btn.disabled = true; btn.textContent = '保存中...'
-        const resultEl = document.getElementById('adminEditUserResult')
-        try {
-          const payload = { userId }
-          const email = document.getElementById('editUserEmail').value.trim()
-          const phone = document.getElementById('editUserPhone').value.trim()
-          const nickname = document.getElementById('editUserNickname').value.trim()
-          const password = document.getElementById('editUserPassword').value
-          const plan = document.getElementById('editUserPlan').value
-          const expiresAt = document.getElementById('editUserExpires').value
-          if (email) payload.email = email
-          payload.phone = phone
-          if (nickname) payload.nickname = nickname
-          if (password) {
-            if (password.length < 6) {
-              resultEl.style.display = 'block'
-              resultEl.innerHTML = '<div class="stream-result-success error">密码至少需要6位</div>'
-              btn.disabled = false; btn.textContent = '保存'
-              return
-            }
-            payload.password = password
-          }
-          payload.plan = plan
-          if (plan !== 'free') payload.expiresAt = expiresAt
-          const r = await api.put('/api/admin-users', payload)
-          if (r.ok) {
-            resultEl.style.display = 'block'
-            resultEl.innerHTML = '<div class="stream-result-success">保存成功</div>'
-            setTimeout(() => { modal.style.display = 'none'; refreshAdminUserTable() }, 800)
-          } else {
-            resultEl.style.display = 'block'
-            resultEl.innerHTML = `<div class="stream-result-success error">${escapeHtml(r.error || '保存失败')}</div>`
-          }
-        } catch (e) {
-          resultEl.style.display = 'block'
-          resultEl.innerHTML = `<div class="stream-result-success error">请求失败</div>`
-        }
-        btn.disabled = false; btn.textContent = '保存'
-      })
-
-      // Expiry shortcuts
-      modal.querySelectorAll('.admin-expires-shortcut').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const targetId = btn.dataset.target || 'adminExpiresInput'
-          const input = document.getElementById(targetId)
-          if (input) {
-            const d = new Date(Date.now() + Number(btn.dataset.days) * 86400000)
-            input.value = new Date(d.getTime() + 8 * 3600_000).toISOString().split('T')[0]
-          }
-        })
-      })
-
-      // Delete user
-      const deleteBtn = document.getElementById('adminEditUserDeleteBtn')
-      const deleteConfirm = document.getElementById('adminDeleteConfirm')
-      if (deleteBtn) {
-        deleteBtn.addEventListener('click', () => { deleteBtn.style.display = 'none'; deleteConfirm.style.display = 'inline' })
-      }
-      const deleteNo = document.getElementById('adminDeleteConfirmNo')
-      if (deleteNo) {
-        deleteNo.addEventListener('click', () => { deleteBtn.style.display = 'inline-block'; deleteConfirm.style.display = 'none' })
-      }
-      const deleteYes = document.getElementById('adminDeleteConfirmYes')
-      if (deleteYes) {
-        deleteYes.addEventListener('click', async () => {
-          deleteYes.disabled = true; deleteYes.textContent = '删除中...'
-          try {
-            const r = await api.del(`/api/admin-users/${userId}`)
-            if (r.ok) {
-              modal.style.display = 'none'
-              refreshAdminUserTable()
-            } else {
-              showToast(r.error || '删除失败', 'error')
-            }
-          } catch { showToast('删除失败', 'error') }
-        })
-      }
-      return
-    }
-
-    // 管理后台：打开套餐管理弹窗
-    const editPlanBtn = target.closest('.admin-edit-plan')
-    if (editPlanBtn) {
-      const userId = Number(editPlanBtn.dataset.userId)
-      const userName = editPlanBtn.dataset.name
-      const currentPlan = editPlanBtn.dataset.plan || 'free'
-      const currentExpires = editPlanBtn.dataset.expires || ''
-      const modal = document.getElementById('adminOrderModal')
-      const modalBody = document.getElementById('adminOrderModalBody')
-      const modalTitle = document.getElementById('adminOrderModalTitle')
-      if (!modal) return
-      modalTitle.textContent = `管理套餐 - ${userName} (ID: ${userId})`
-      // Default expiry: 1 year from now
-      const defaultExpiry = new Date(Date.now() + 365 * 86400000 + 8 * 3600_000).toISOString().split('T')[0]
-      modalBody.innerHTML = `
-        <div class="admin-plan-form">
-          <div class="admin-plan-field">
-            <label>当前状态：</label>
-            <span>${currentPlan === 'free' ? '免费用户' : currentPlan.toUpperCase() + ' 会员'}${currentExpires ? '，到期日 ' + currentExpires : ''}</span>
-          </div>
-          <div class="admin-plan-field">
-            <label for="adminPlanSelect">设置套餐：</label>
-            <select id="adminPlanSelect" class="admin-plan-select">
-              <option value="free" ${currentPlan === 'free' ? 'selected' : ''}>免费 (Free)</option>
-              <option value="plus" ${currentPlan === 'plus' ? 'selected' : ''}>Plus 会员</option>
-              <option value="pro" ${currentPlan === 'pro' ? 'selected' : ''}>Pro 会员</option>
-            </select>
-          </div>
-          <div class="admin-plan-field" id="adminExpiresField">
-            <label for="adminExpiresInput">到期日期：</label>
-            <input type="date" id="adminExpiresInput" class="admin-plan-input" value="${currentExpires || defaultExpiry}">
-            <div class="admin-plan-shortcuts">
-              <button class="btn btn-xs admin-expires-shortcut" data-days="30">+1个月</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-days="90">+3个月</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-days="180">+半年</button>
-              <button class="btn btn-xs admin-expires-shortcut" data-days="365">+1年</button>
-            </div>
-          </div>
-          <div class="admin-plan-actions">
-            <button class="btn btn-primary" id="adminPlanSaveBtn" data-user-id="${userId}">保存</button>
-            <button class="btn btn-ghost" id="adminPlanCancelBtn">取消</button>
-          </div>
-        </div>
-      `
-      modal.style.display = 'flex'
-      // Toggle expires field based on plan selection
-      const planSelect = document.getElementById('adminPlanSelect')
-      const expiresField = document.getElementById('adminExpiresField')
-      const toggleExpires = () => { expiresField.style.display = planSelect.value === 'free' ? 'none' : '' }
-      toggleExpires()
-      planSelect.addEventListener('change', toggleExpires)
-      return
-    }
-
-    // 管理后台：到期日期快捷按钮
-    const expiresShortcut = target.closest('.admin-expires-shortcut')
-    if (expiresShortcut) {
-      const days = Number(expiresShortcut.dataset.days)
-      const input = document.getElementById('adminExpiresInput')
-      if (input) {
-        const d = new Date(Date.now() + days * 86400000)
-        input.value = new Date(d.getTime() + 8 * 3600_000).toISOString().split('T')[0]
-      }
-      return
-    }
-
-    // 管理后台：保存套餐
-    if (target.id === 'adminPlanSaveBtn') {
-      const userId = Number(target.dataset.userId)
-      const plan = document.getElementById('adminPlanSelect')?.value
-      const expiresAt = document.getElementById('adminExpiresInput')?.value
-      if (!plan) return
-      target.disabled = true
-      target.textContent = '保存中...'
-      api.post('/api/admin-users', { userId, plan, expiresAt: plan === 'free' ? null : expiresAt }).then(r => {
-        if (r.ok) {
-          document.getElementById('adminOrderModal').style.display = 'none'
-          renderAdmin()
-        } else {
-          showToast('操作失败: ' + (r.error || '未知错误'), 'error')
-          target.disabled = false
-          target.textContent = '保存'
-        }
-      })
-      return
-    }
-
-    // 管理后台：取消弹窗
-    if (target.id === 'adminPlanCancelBtn') {
-      document.getElementById('adminOrderModal').style.display = 'none'
-      return
-    }
-
-    // 管理后台：查看用户订单
-    const viewOrdersBtn = target.closest('.admin-view-orders')
-    if (viewOrdersBtn) {
-      const uid = viewOrdersBtn.dataset.uid
-      const name = viewOrdersBtn.dataset.name
-      const modal = document.getElementById('adminOrderModal')
-      const modalBody = document.getElementById('adminOrderModalBody')
-      const modalTitle = document.getElementById('adminOrderModalTitle')
-      if (!modal || !uid) return
-      modalTitle.textContent = `${name} 的订单记录`
-      modalBody.innerHTML = '<div class="loading-spinner">加载中...</div>'
-      modal.style.display = 'flex'
-      api.get(`/api/orders?uid=${uid}`).then(r => {
-        if (!r.ok || !r.orders) {
-          modalBody.innerHTML = `<p style="color:var(--text-3);text-align:center;padding:20px;">${escapeHtml(r.error || '获取失败')}</p>`
-          return
-        }
-        if (r.orders.length === 0) {
-          modalBody.innerHTML = '<p style="color:var(--text-3);text-align:center;padding:20px;">暂无订单</p>'
-          return
-        }
-
-    const planNames = { plus: 'Plus', pro: 'Pro' }
-        const periodNames = { month: '月付', year: '年付', lifetime: '终身' }
-        const ADMIN_ORDER_PAGE = 10
-        let adminOrderPage = 1
-
-        function renderAdminOrders(orders, page) {
-          const total = orders.length
-          const totalPages = Math.ceil(total / ADMIN_ORDER_PAGE)
-          page = Math.max(1, Math.min(page, totalPages))
-          const start = (page - 1) * ADMIN_ORDER_PAGE
-          const pageOrders = orders.slice(start, start + ADMIN_ORDER_PAGE)
-
-          let html = `
-            <table class="admin-table" style="margin:0;">
-              <thead><tr><th>订单号</th><th>套餐</th><th>金额</th><th>状态</th><th>时间</th></tr></thead>
-              <tbody>
-                ${pageOrders.map(o => {
-                  const planLabel = planNames[o.plan] || o.planLabel || o.plan
-                  const periodLabel = periodNames[o.period] || o.periodLabel || ''
-                  return `<tr>
-                    <td style="font-size:12px;">${escapeHtml(o.orderId ? o.orderId.substring(0, 8) + '...' : '-')}</td>
-                    <td>${planLabel} ${periodLabel}</td>
-                    <td>${formatMinorUsd(o.amount)}</td>
-                    <td><span class="admin-badge ${o.status === 'paid' ? 'badge-paid' : o.status === 'pending' ? 'badge-pending' : 'badge-free'}">${escapeHtml(o.statusLabel)}</span></td>
-                    <td>${formatDateTime(o.paidAt || o.createdAt) || '-'}</td>
-                  </tr>`
-                }).join('')}
-              </tbody>
-            </table>`
-
-          if (totalPages > 1) {
-            html += `<div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;font-size:13px;">
-              <button class="btn btn-sm" ${page <= 1 ? 'disabled' : ''} onclick="window._adminOrderPrev()">上一页</button>
-              <span>${page} / ${totalPages}</span>
-              <button class="btn btn-sm" ${page >= totalPages ? 'disabled' : ''} onclick="window._adminOrderNext()">下一页</button>
-            </div>`
-          }
-
-          modalBody.innerHTML = html
-          window._adminOrderPrev = () => renderAdminOrders(orders, page - 1)
-          window._adminOrderNext = () => renderAdminOrders(orders, page + 1)
-        }
-
-        renderAdminOrders(r.orders, 1)
-      })
-      return
-    }
-
-    // 关闭订单弹窗
-    if (target.id === 'adminOrderModalClose' || target.classList.contains('admin-order-modal')) {
-      const modal = document.getElementById('adminOrderModal')
-      if (modal) modal.style.display = 'none'
-      return
-    }
     if (target.id === 'goUpgrade' || target.id === 'goUpgrade2' || target.id === 'goUpgradeCommunity' || target.id === 'goUpgradeCommunityReplies') { navigate('membership'); return }
-    if (target.id === 'goUpgradeVideo') { if (!state.user) { showAuthModal('login_password') } else { navigate('membership') }; return }
+    if (target.id === 'goUpgradeVideo' || target.id === 'goUpgradeAttachments') { if (!state.user) { showAuthModal('login_password') } else { navigate('membership') }; return }
 
     // Membership: subscribe button — USDT payment
     if (target.closest('.mem-btn-plus, .mem-btn-pro')) {

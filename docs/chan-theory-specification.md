@@ -1,5 +1,39 @@
 # 缠论结构计算说明文档
 
+## 背驰可靠性与时间定位补充（2026-07-17）
+
+- MACD 面积背驰阈值为 `area_cur / area_prev <= 0.85`，峰值背驰阈值为 `peak_cur / peak_prev <= 0.95`；接近相等的峰值不判背驰。
+- 输出 `area_ratio`、`peak_ratio`、`area_reduction_pct`、`peak_reduction_pct`，供模型与审计解释力度差异。
+- 实时判断仍使用末端稳定线段；`recent_divergences` 从至少两个独立分解结果支持的历史稳定结构链提取，按 UTC 离开段去重后保留最近 6 个。
+- 定位同时输出 UTC 毫秒时间、MT5 服务器时间、`stable_id` 与 `divergence_key`。
+- 只有行情时钟已校验、闭合 K 线 UTC 时间严格递增且历史完整时，绝对 UTC 定位才可靠。MT4 使用当前服务器偏移换算的时间一律不得标记为精确 UTC；仅当 EA 的偏移样本不超过 5 分钟、偏移合法且数据源已按“平台 + 账户 + 服务器 + 当前偏移”隔离时，才可把严格递增时间用作结构稳定键。休市缓存偏移、陈旧样本、身份缺失或偏移变化均按不可靠处理。
+- 多周期上下文输出请求、已用、缺失周期和 `context_status`；缺失任一周期时为 `partial`。
+- `forming_divergence` 只是候选线段证据，不能单独触发交易。智能平仓不在本阶段范围内。
+
+## 实用高级结构（第一阶段）
+
+### 走势状态 `trend_state`
+
+- `uptrend` / `downtrend`：最近两个中枢区间明确向上或向下分离。
+- `upward_breakout` / `downward_breakout`：已关闭中枢被确认线段突破，且当前价格仍在中枢外侧。
+- `consolidation`：中枢仍在延伸，或价格已经回到最近中枢。
+- `upward_exhaustion` / `downward_exhaustion`：确认离开段出现顶背驰或底背驰，只表示原方向衰竭和反转风险上升。
+- `structural_rise` / `structural_decline`：已有确认线段但没有足够中枢，置信度固定为低。
+
+输出同时包含 `direction`、`phase`、`reversal_bias`、`confidence` 和对应的中枢、线段编号。
+
+### 买卖点候选 `entry_candidates`
+
+- 一类买卖点来自确认底背驰或顶背驰。
+- 二类买卖点要求一类点后的回撤不创新低，或反弹不创新高。
+- 三类买卖点要求突破中枢后的回踩保持在上沿之上，或反弹保持在下沿之下。
+
+每个候选包含方向、来源、结构参考价、失效价、稳定编号和 `usable_for_entry`。`reference_price` 是结构定位价格，不是可以直接提交的订单价格。系统通过 `bars_since_point` 标记新鲜度，超过 20 根 K 线后为 `stale`；结构可靠性低、时间定位不可靠或候选过期时，候选仍可供观察，但 `usable_for_entry=false`。候选不是订单信号，不能绕过 AI 综合判断和风控。
+
+### 跨周期映射 `chan_timeframe_alignment`
+
+多周期上下文输出高周期方向、各周期走势阶段、一致性和冲突状态。`aligned_up` / `aligned_down` 表示至少两个可靠周期方向一致，`mixed` 表示可靠周期冲突，`insufficient` 表示证据不足。低可靠性周期进入 `excluded_low_reliability_timeframes`；买卖点候选标记 `alignment_with_higher`。该汇总的 `execution_policy` 固定为 `evidence_only`。
+
 ## 概述
 
 本系统在 `server/routes/ai/market-data.js` 中实现了**保守版缠论结构计算**，用于为 AI 模型提供真实的价格结构数据（分型→笔→线段→中枢→背驰），替代模型自行从 K 线推测结构。
@@ -11,7 +45,7 @@
 | 位置 | 职责 |
 |------|------|
 | `server/routes/ai/market-data.js` | 指标计算、包含处理、分型、笔、线段、中枢、背驰及统一结果组装 |
-| `server/routes/ai/utils.js` | `{{USE_CHAN}}`、周期标签解析、300/500 根历史常量及 K 线压缩 |
+| `server/routes/ai/utils.js` | `{{USE_CHAN}}`、周期标签解析、300/2000 根历史常量及 K 线压缩 |
 | `server/routes/ai/strategy.js` | 根据提示词周期构建策略上下文，按需补取缠论历史 |
 | `server/routes/ai/scheduler.js` | 自动推理周期调用策略上下文并把缠论结果交给模型 |
 | `server/routes/ai/llm.js` | 仅在提示词包含 `{{USE_CHAN}}` 时保留 payload 中的 `chan` 字段 |
@@ -31,9 +65,9 @@
   -> 有 {{USE_CHAN}} 时发送给模型，否则剥离 chan
 ```
 
-提示词包含 `{{USE_CHAN}}` 时，每个相关周期先获取 300 根历史 K 线用于结构计算；重同步后仍无完整线段时，仅对该周期补取到 500 根。发送给模型的原始 K 线仍按 `MTF/ATF` 标签数量截取，普通指标也只使用该截取窗口。结构计算排除最后一根尚未收盘的 K 线。
+提示词包含 `{{USE_CHAN}}` 时，每个相关周期先获取 300 根历史 K 线用于结构计算；仍无完整线段或中枢时，仅对该周期补取到 2000 根。发送给模型的原始 K 线仍按 `MTF/ATF` 标签数量截取，普通指标也只使用该截取窗口。结构计算排除最后一根尚未收盘的 K 线。
 
-手动推理和自动推理共用 `buildStrategyContextFromTags`，因此历史数量、补取条件、结构计算和降级口径一致。300/500 根只用于缠论结构，不会把模型要求的 80/50/100/60 根可见 K 线扩大到 300/500 根。
+手动推理和自动推理共用 `buildStrategyContextFromTags`，因此历史数量、补取条件、结构计算和降级口径一致。300/2000 根只用于缠论结构，不会把模型要求的 80/50/100/60 根可见 K 线扩大到 300/2000 根。
 
 `window_resynced` 是正常锚点元数据，不作为 warning。若桥接实际返回数量小于请求数量，则输出 `history_bars_below_requested`，并通过 `requested_history_count`、`received_history_count` 和 `history_sufficient` 说明降级原因。
 
@@ -48,7 +82,7 @@
 ## 常量配置
 
 ```js
-MIN_BARS_PER_BI = 5          // 成笔最少处理后 K 线数
+MIN_BARS_PER_BI = 5          // 新笔规则等价参数：极值原始索引差至少为 4
 MIN_BIS_PER_SEGMENT = 3      // 有效线段最少笔数
 FEED_LAST_N_BIS = 6          // 发送给模型的最近笔数
 MIN_KLINES_FOR_CHAN = 30     // K 线不足时返回 insufficient
@@ -124,11 +158,11 @@ HIST[i]  = DIF[i] - DEA[i]
 ### 规则
 
 1. 顶底交替才可能成笔
-2. 最小间隔：`MIN_BARS_PER_BI = 5`（处理后 K 线）
+2. 默认使用新笔规则：顶底极值原始 K 线索引之差至少为 4（中间至少 3 根原始 K 线）；包含处理后的标准 K 线仅用于分型，不用于缩短笔间距
 3. 价格方向校验：
    - 底→顶：`end_price > start_price`
    - 顶→底：`end_price < start_price`
-4. 间距不足的候选分型不进入活动端点链；价格方向不满足时计入 `invalidCount`，清空断点前的活动笔链，并从较新的分型重新起算
+4. 间距不足的候选分型不进入活动端点链；价格方向不满足时计入 `invalidCount`，关闭当前 `bi run` 并从较新的分型建立隔离的新 run。断点前确认笔保留供历史审计，但线段绝不跨 run 连接
 5. 由两个已确认分型构成的笔标记为 `confirmed: true`
 6. 未收盘 K 线不参与分型和正式笔构造
 7. 最后一个被笔构造接受的活动分型到其后全部 K 线（包括当前未收盘 K 线）的实时极值变化，单独输出为 `developing_bi`，不进入线段、中枢或背驰
@@ -143,9 +177,12 @@ HIST[i]  = DIF[i] - DEA[i]
   raw_start_idx, raw_end_idx,  // 原始 K 线区间
   start_price, end_price,
   high, low,
-  confirmed: boolean
+  confirmed: boolean,
+  run_id
 }
 ```
+
+组装结果另输出 `bi_run_count`、`active_bi_count`、`active_bi_run_id`、`bi_discontinuity_count` 和 `last_bi_discontinuity`。`recent_bis` 只包含当前活动 run，避免模型把跳空前后的笔拼成一条结构链；旧 run 的价格方向断裂仅作为审计诊断，不会降低当前活动 run 的可靠度。
 
 ---
 
@@ -158,15 +195,17 @@ HIST[i]  = DIF[i] - DEA[i]
 3. 特征序列先按方向处理包含关系，并按可确认前缀逐步寻找端点，确认后不允许后续元素跨端点重新合并
 4. 第一、第二特征元素无缺口时，特征序列分型直接确认线段端点
 5. 存在缺口时，从候选端点开始建立第二特征序列；只有出现相反分型才确认，原趋势先创新极值则候选失效
-6. 滚动窗口首个可检测端点仅用于初步重同步，不输出截断首段
-7. 从完整确认笔窗口以及待验证结构起点之前仍具备重同步空间的多个起点独立分段；只有至少两个能够生成完整线段的分解对连续两个或以上末端线段的首尾笔边界达成一致，才保留共同末端线段，单个共同线段不足以证明分段相位已经恢复
-8. 多起点分解存在边界冲突、可验证分解不足或候选结构缺少至少两个独立起点确认时，设置 `window_stable: false`，并禁止输出 `candidate_segment`、中枢和背驰
-9. 每个线段记录完整 `high`/`low` 和组成笔 ID
+6. 滚动窗口前两个可检测端点只用于重同步，不输出可能受截断前缀影响的线段
+7. 在同一历史窗口内从多个笔起点独立分段，末端连续两段必须获得严格多数且至少两个分解支持；更早的每一对相邻线段，也必须在所有能够覆盖该段对的分解器中取得严格多数且至少两票，才可并入确认前缀
+8. 无持久锚点时，还要在 300～2000 根的多个历史后缀窗口中对结构再次确认。窗口只有在其起始时间不晚于待验证结构起点时才具备投票资格。线段必须由同一批窗口对完整连续后缀及其中每一对相邻线段同时给出至少两票且严格多数，禁止把不同窗口的局部多数拼成一条结构链。中枢另以最初三条线段的稳定标识作为形成核心独立投票：支持票必须同时属于线段共识 cohort，分母则包含所有能够观察该核心的窗口；只有联合支持仍为至少两票且严格多数，且最长完整窗口也识别同一中枢相位，才从该核心沿共识链重建延伸或离开状态。短截断窗口只能确认，不能创建或覆盖完整窗口的中枢相位。不得仅凭公共线段后缀重新扫描并生成本地窗口从未共同确认的中枢。背驰把“明确无背驰”计为反对票，把 MACD 暖机区、引用缺失等不可判状态计为弃权；历史背驰和买卖点按可观察窗口的严格多数交集保留。持久锚点命中后可直接增量复用
+9. 首尾边界未收敛时返回 `segment_history_unresolved`，保留确认笔与只读笔级中枢，但清空线段级中枢、背驰、趋势和可执行买卖点，不再笼统归因于“市场没有结构”
+10. 每个线段记录完整 `high`/`low`、组成笔 ID、`segment_support_count / segment_validator_count`、相邻线段对支持数与跨窗口支持数
+11. 无可信锚点时优先补取 2000 根历史，并固定左边界分别回算最后第 3、第 2 和最新一根已收盘 K 线。只有三次回算均为完整、非低可靠、非过期结构，且 `中枢 core + 相邻进入段` 身份完全一致、最长完整窗口与具备至少 150 根进入段前置上下文的跨窗口联合投票均支持该身份、结构时间键可靠且缓存无缺口时，才把进入段起点保存为结构锚点。最长完整窗口决定并输出结构链，短窗口只提供确认票。冷启动采用两阶段提交：首次确认原子保存“进入段起点 + 进入段稳定 ID + 初始三段核心稳定 ID + 最后确认线段时间 + 观察时间”，并保持 `current_result_usable=false`；下一次必须完整匹配这些身份且最后确认线段不得回退，才允许公开依赖进入段的中枢、背驰和买卖点。锚定重建时，首条线段被明确保留为中枢进入段，初始三段核心从下一条线段开始，避免窗口滚动后相位前移。旧观察时间不得覆盖较新的完整锚点。重复请求不能增加票数，未收盘 K 线不参与时间稳定性验证。`center_entry_unconfirmed` 不否定中枢本身；`structure_anchor_bootstrap_pending` 会清空所有依赖进入段的确认背驰、形成中背驰、历史背驰及买卖点候选
 
 ### 输出
 
 ```js
-{ segments: [...], candidate: { dir, bi_ids, start_price, end_price } | null, resynced: boolean }
+{ segments: [...], candidate: { dir, bi_ids, start_price, end_price } | null, resynced: boolean, stable: boolean, supportCount, validatorCount, pairSupport }
 ```
 
 ---
@@ -183,13 +222,14 @@ HIST[i]  = DIF[i] - DEA[i]
 3. 关闭：重叠区间为空或仅单点接触时标记 `closed`，并记录 `closed_by_segment_id`
 4. `current_center` 始终指向最后一个中枢，包括已关闭中枢；`active_center` 仅指向尚未关闭的中枢
 5. `price_vs_center` 始终相对最后一个中枢的固定 `[ZL,ZH]` 判断，只有完全没有中枢时才为 `none`
+6. `center_count/current_center/latest_center` 始终表示线段级中枢。`bi_center_count/latest_bi_center` 是只读的低层笔级结构证据，禁止替代线段级中枢进入自动执行
 
 ### 中枢状态
 
 | 状态 | 含义 |
 |------|------|
 | `confirmed` | 刚形成 |
-| `extended` | 延伸中（交集更新） |
+| `extended` | 后续确认线段仍与固定核心区间重叠，波动区间继续更新 |
 | `closed` | 已关闭（不再重叠） |
 
 ---
@@ -262,7 +302,9 @@ HIST[i]  = DIF[i] - DEA[i]
 
 ```js
 {
-  status: 'ok' | 'partial' | 'insufficient_klines' | 'insufficient_bis' | 'unreliable_segments',
+  algorithm_version: 'chan_structure_v4',
+  rule_profile: 'new_bi_feature_sequence_quorum',
+  status: 'ok' | 'partial' | 'insufficient_klines' | 'insufficient_bis' | 'unreliable_segments' | 'segment_history_unresolved',
   reliability: 'high' | 'medium' | 'low',
   raw_bar_count, processed_bar_count,
   window_resynced, window_stable,
@@ -291,9 +333,9 @@ HIST[i]  = DIF[i] - DEA[i]
 
 | reliability | 条件 |
 |-------------|------|
-| `high` | 有效线段 + 有效中枢 |
-| `medium` | 有效线段，无中枢 |
-| `low` | 仅笔或候选段 |
+| `high` | 请求历史与已收盘历史完整、时间定位可靠、至少两条跨窗口确认线段、具有独立多数确认的线段级中枢，并且没有 warning |
+| `medium` | 历史数量完整且至少有一条跨窗口确认线段，但中枢、进入段、背驰证据或时间定位仍有待确认 |
+| `low` | 历史/缓存存在未补齐缺口、确认结构过旧、只有笔或候选线段，或线段窗口尚未收敛 |
 
 ### warnings 语义
 
@@ -302,12 +344,19 @@ HIST[i]  = DIF[i] - DEA[i]
 | `history_bars_below_requested` | 桥接返回数量少于请求数量 |
 | `raw_bars_too_few` | 排除未收盘柱后不足 30 根 |
 | `processed_bars_too_few` | 包含处理后有效柱过少 |
-| `invalid_bi_price_direction` | 检测到不满足价格方向的候选笔 |
 | `insufficient_confirmed_bis` | 已确认笔不足 3 笔 |
 | `segment_window_not_resynced` | 滚动窗口内尚未找到可用于重同步的线段端点 |
 | `segment_window_unstable` | 完整窗口与内部后缀窗口的末端线段边界不一致 |
 | `segments_not_confirmed` | 尚未形成可确认线段 |
 | `no_valid_center` | 已有线段但尚未形成有效中枢 |
+| `center_cross_window_unstable` | 可观察窗口未对同一组三线段中枢形成核心达成严格多数 |
+| `center_entry_unconfirmed` | 中枢核心已确认，但进入段不在跨窗口公共结构中；中枢可展示，背驰与依赖进入段的买卖点不可判 |
+| `structure_anchor_bootstrap_pending` | 尚未命中已持久化锚点；首次满足连续三根已收盘 K 线与跨窗口联合确认后只保存锚点，下一次精确命中前仍不公开依赖进入段的证据 |
+| `divergence_evidence_unavailable` | 可比较的有效 MACD 力度证据不足；这是不可判，不是确认无背驰 |
+| `divergence_cross_window_unstable` | 可判窗口对背驰方向或明确无背驰未达成严格多数 |
+| `forming_evidence_unavailable` | 形成中背驰的有效证据不足 |
+| `forming_cross_window_unstable` | 可判窗口对形成中背驰未达成严格多数 |
+| `mt4_historical_offset_unverified` | MT4 仅按当前或缓存偏移换算，绝对 UTC 定位未验证；只有新鲜且来源隔离的时间键可用于结构确认 |
 | `divergence_skipped_invalid_macd` | MACD 数据或面积无效，无法判定背驰 |
 
 正常的“没有背驰”、不在中枢离开段、未创新高低和力度未缩减不会降低结构可靠性。
@@ -316,8 +365,8 @@ HIST[i]  = DIF[i] - DEA[i]
 
 1. 最后一根 K 线视为未收盘柱，不进入正式分型、笔、线段、中枢和背驰。
 2. 未收盘柱只可用于 `developing_bi`，其变化不得重绘已确认结构。
-3. 普通指标只使用提示词指定的可见窗口；扩展到 300/500 根的历史只用于缠论。300 根尚无线段或尚无中枢时，单次补取至 500 根；同一进程内记住该“用户+品种+周期”需要最大历史，手动推理入口、自动调度入口和上下文构造器后续统一直接请求 500 根，避免重复获取 300+500 根。
-4. 分型必须顶底交替；笔必须方向交替且满足最少处理后 K 线间隔。
+3. 普通指标只使用提示词指定的可见窗口；扩展到 300/2000 根的历史只用于缠论。300 根尚无线段或尚无中枢时，单次补取至 2000 根；同一进程内记住该“用户+品种+周期”需要最大历史，手动推理入口、自动调度入口和上下文构造器后续统一直接请求 2000 根，避免重复获取 300+2000 根。
+4. 分型必须顶底交替；笔必须方向交替，且顶底极值满足最少原始 K 线间隔。
 5. 正式线段至少包含 3 笔，滚动窗口截断的首段不会输出。
 6. 中枢必须由至少 3 条确认线段的正宽度重叠形成，单点接触不算重叠。
 7. 背驰只比较同一中枢的直接进入段与直接离开段，不跨中枢配对。
@@ -362,7 +411,7 @@ DEBUG_LLM_PAYLOAD=1  # 打印 AI payload 截断
 
 - 中枢级别递归和高级别中枢自动合成。
 - 完整走势类型、走势必完美及同级别分解的全部递归定义。
-- 买卖点的一、二、三类完整自动判定。
+- 中枢级别递归下的一、二、三类完整买卖点判定；当前只输出保守、可审计且默认不可直接执行的候选证据。
 - 跨周期缠论结构的自动级别映射。
 
 因此本模块输出的是供 AI 参考的保守结构事实，不直接产生买卖指令。交易方向、止损、止盈和仓位仍由推理及后端风险规则共同决定。
@@ -379,8 +428,31 @@ DEBUG_LLM_PAYLOAD=1  # 打印 AI payload 截断
 | buildSegments | 多组 | 标准特征序列、两种破坏情况、缺口、重同步和结构不变量 |
 | buildCenters | 多组 | 核心区间、延伸、关闭和完整波动区间 |
 | detectDivergence | 多组 | 真实三线段中枢、直接进出段、价格极值和 MACD 面积 |
-| computeChan | 多组 | 未收盘柱隔离、300 根历史重同步、字段和告警 |
+| computeChan | 多组 | 未收盘柱隔离、300/2000 根历史重同步、字段和告警 |
 | calculateMacdSeries | 2 | 长度对齐、空数组 |
 | early return warnings | 1 | 多 warning 同时保留 |
 
 测试数量会随功能持续增长，以实际执行 `vitest run` 的结果为准，不在本文维护固定数量。
+
+---
+
+## 13. 背驰段定位输出
+
+背驰定位以原始 K 线索引为坐标，不使用包含处理后的临时索引。每个确认线段增加：
+
+- `start_index` / `end_index`：线段覆盖的原始 K 线下标。
+- `start_time` / `end_time`：对应桥接行情中的原始时间值。
+- `start_price` / `end_price` / `high` / `low`：用于图表定位和审计的价格范围。
+
+`divergence` 表示最新确认线段的背驰结果。确认背驰同时携带：
+
+- `state: confirmed`、`confirmed: true`。
+- `center_id`：对应中枢。
+- `entry_segment_id` / `departure_segment_id`：同一中枢的直接进入段和直接离开段。
+- `entry_segment` / `departure_segment`：两段完整的时间、索引和价格定位信息。
+
+`recent_divergences` 保存当前 300/2000 根历史窗口内最近 6 个已确认背驰段，只收录 `top` 或 `bottom`，不收录普通的“无背驰”结果。
+
+`forming_divergence` 只在候选线段紧接当前未闭合线段级中枢、且候选价格区间已经离开中枢时，临时把它视为候选离开段并执行相同力度比较；否则返回 `forming_departure_not_confirmed`。它始终输出 `state: forming`、`confirmed: false`，只能作为观察证据，不能称为已确认背驰，也不能单独触发交易。
+
+AI 系统提示会强制区分确认背驰和形成中背驰，并要求先检查 `status`、`reliability`、`window_stable` 与 `warnings`。背驰仍只是行情结构证据，不等同于反转已经确认。

@@ -57,6 +57,8 @@ describe('comments.js — GET /comments', () => {
     expect(json.comments[0].id).toBe(1)
     expect(json.comments[0].replies).toHaveLength(1)
     expect(json.comments[0].replies[0].text).toBe('回复')
+    expect(json.comments[0].user).toEqual({ id:10, nickname:'用户A', avatar:'a.png' })
+    expect(json.comments[0].replies[0].user).toEqual({ id:11, nickname:'用户B', avatar:'b.png' })
   })
 
   it('未登录用户评论 liked 为 false', async () => {

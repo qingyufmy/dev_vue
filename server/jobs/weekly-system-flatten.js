@@ -1,11 +1,10 @@
 import crypto from 'crypto'
 import { queryRun } from '../db.js'
 import { getRedis, isRedisAvailable } from '../redis.js'
-import { getAllBridges, sendBridgeCommand, sendToBrowsers } from '../bridge-ws.js'
+import { getAllBridges, getPlatformMarketClockState, sendBridgeCommand, sendToBrowsers } from '../bridge-ws.js'
 import { prepareAuditRecord } from '../audit-localization.js'
 import {
   isWeeklyFlattenWindow,
-  nextWeeklyFlattenStart,
   weeklyFlattenCycleId,
   weeklyFlattenEnabled,
 } from './weekly-risk-window.js'
@@ -14,6 +13,7 @@ const SYSTEM_MAGIC = 234000
 const LOCK_TTL_MS = 2 * 60 * 1000
 const COMPLETED_TTL_SECONDS = 14 * 24 * 60 * 60
 const ACTIVE_INTERVAL_MS = 15 * 1000
+const IDLE_INTERVAL_MS = 60 * 1000
 
 const RELEASE_LOCK_LUA = `
 if redis.call("get", KEYS[1]) == ARGV[1] then
@@ -41,6 +41,17 @@ let running = false
 let activeCycle = null
 const localCycleStates = new Map()
 const activeUserRuns = new Set()
+const activeUserRunCounts = new Map()
+
+function terminalClockOffset(clock = {}) {
+  if (clock.timezone_offset_minutes === null || clock.timezone_offset_minutes === undefined
+    || clock.timezone_offset_minutes === '') return null
+  const offset = Number(clock.timezone_offset_minutes)
+  const status = String(clock.clock_status || '').trim().toLowerCase()
+  if (!Number.isInteger(offset) || offset < -720 || offset > 840 || !status
+    || ['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(status)) return null
+  return offset
+}
 
 function logTime() {
   return new Date().toISOString()
@@ -57,6 +68,17 @@ function logUser(cycle, userId, message) {
 function userConcurrency() {
   const configured = Number.parseInt(process.env.WEEKLY_SYSTEM_FLATTEN_CONCURRENCY || '', 10)
   return Number.isFinite(configured) && configured > 0 ? Math.min(configured, 20) : 5
+}
+
+function inventoryExpectedState(item) {
+  const rawDirection = String(item?.side || item?.type || '').toLowerCase()
+  return {
+    ticket:String(item?.ticket ?? ''),
+    symbol:String(item?.symbol || ''),
+    direction:rawDirection.startsWith('buy') ? 'buy' : (rawDirection.startsWith('sell') ? 'sell' : ''),
+    magic:Number(item?.magic || 0),
+    volume:Number(item?.volume || 0),
+  }
 }
 
 async function mapWithConcurrency(items, limit, worker) {
@@ -120,17 +142,38 @@ async function rememberCycleResult(cycle, userId, result) {
   }
 }
 
-function runTrackedUserFlatten(userId, now = new Date(), clock = () => new Date()) {
-  const cycle = weeklyFlattenCycleId(now)
+function runTrackedUserFlatten(userId, now = new Date(), clock = () => new Date(), timezoneOffsetMinutes = null) {
+  const cycle = weeklyFlattenCycleId(now, timezoneOffsetMinutes)
   activeCycle = cycle
+  const normalizedUserId = Number(userId)
+  activeUserRunCounts.set(normalizedUserId, Number(activeUserRunCounts.get(normalizedUserId) || 0) + 1)
   const run = (async () => {
-    const result = await runWeeklySystemFlattenForUser(userId, now, clock)
-    await rememberCycleResult(cycle, userId, result)
+    const result = await runWeeklySystemFlattenForUser(
+      normalizedUserId, now, clock, timezoneOffsetMinutes)
+    await rememberCycleResult(cycle, normalizedUserId, result)
     return result
   })()
   activeUserRuns.add(run)
-  run.finally(() => activeUserRuns.delete(run)).catch(() => {})
+  run.finally(() => {
+    activeUserRuns.delete(run)
+    const remaining = Number(activeUserRunCounts.get(normalizedUserId) || 1) - 1
+    if (remaining > 0) activeUserRunCounts.set(normalizedUserId, remaining)
+    else activeUserRunCounts.delete(normalizedUserId)
+  }).catch(() => {})
   return run
+}
+
+export function getWeeklySystemFlattenState(userIds = []) {
+  const requested = new Set((userIds || []).map(Number))
+  const activeUserIds = [...activeUserRunCounts.keys()]
+  const affectedUserIds = activeUserIds.filter(userId => requested.size === 0 || requested.has(userId))
+  return {
+    running,
+    active_cycle:activeCycle,
+    active_user_ids:activeUserIds,
+    affected_user_ids:affectedUserIds,
+    affected:affectedUserIds.length > 0,
+  }
 }
 
 async function audit(userId, action, symbol, request, result, status) {
@@ -162,10 +205,15 @@ async function reportOnce(redis, key, ttlSeconds, callback) {
   return !!acquired
 }
 
-export async function runWeeklySystemFlattenForUser(userId, now = new Date(), clock = () => new Date()) {
-  if (!isWeeklyFlattenWindow(now)) return { status: 'outside_window' }
+export async function runWeeklySystemFlattenForUser(userId, now = new Date(), clock = () => new Date(), timezoneOffsetMinutes = null) {
+  if (timezoneOffsetMinutes === null || timezoneOffsetMinutes === undefined
+    || timezoneOffsetMinutes === '' || !Number.isInteger(Number(timezoneOffsetMinutes))) {
+    return { status:'terminal_clock_unverified' }
+  }
+  const offset = Number(timezoneOffsetMinutes)
+  if (!isWeeklyFlattenWindow(now, offset)) return { status: 'outside_window' }
   const redis = getRedis()
-  const cycle = weeklyFlattenCycleId(now)
+  const cycle = weeklyFlattenCycleId(now, offset)
   if (!redis || !isRedisAvailable()) {
     logUser(cycle, userId, '终止处理：Redis 不可用')
     return { status: 'redis_unavailable' }
@@ -235,13 +283,16 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 
     const failures = []
     for (const order of pendingOrders) {
-      if (!isWeeklyFlattenWindow(clock())) {
-        logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+      if (!isWeeklyFlattenWindow(clock(), offset)) {
+        logUser(cycle, userId, '停止处理：MT5 周六00:00任务窗口已经结束')
         return { status: 'window_ended', cycle, failures }
       }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
       logUser(cycle, userId, `开始取消系统挂单：品种=${order.symbol || '未知'}，ticket=${order.ticket}`)
-      const result = await sendBridgeCommand(userId, 'cancel_system_pending', { ticket: order.ticket }, 15000, { noFallback: true })
+      const result = await sendBridgeCommand(userId, 'cancel_system_pending', {
+        ticket:order.ticket,
+        expected_state:inventoryExpectedState(order),
+      }, 15000, { noFallback: true })
       const ok = result?.status === 'success'
       logUser(cycle, userId, `${ok ? '系统挂单取消成功' : '系统挂单取消失败'}：品种=${order.symbol || '未知'}，ticket=${order.ticket}${ok ? '' : `，原因=${result?.message || result?.status || '未知'}`}`)
       if (!ok) failures.push({ kind: 'pending', ticket: order.ticket, result })
@@ -267,13 +318,16 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
     }
 
     for (const position of positions) {
-      if (!isWeeklyFlattenWindow(clock())) {
-        logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+      if (!isWeeklyFlattenWindow(clock(), offset)) {
+        logUser(cycle, userId, '停止处理：MT5 周六00:00任务窗口已经结束')
         return { status: 'window_ended', cycle, failures }
       }
       if (!lockOwned) throw new Error('weekly_flatten_lock_lost')
       logUser(cycle, userId, `开始平掉系统持仓：品种=${position.symbol || '未知'}，ticket=${position.ticket}，手数=${position.volume ?? '未知'}`)
-      const result = await sendBridgeCommand(userId, 'close_system_position', { ticket: position.ticket }, 15000, { noFallback: true })
+      const result = await sendBridgeCommand(userId, 'close_system_position', {
+        ticket:position.ticket,
+        expected_state:inventoryExpectedState(position),
+      }, 15000, { noFallback: true })
       const ok = result?.status === 'success'
       logUser(cycle, userId, `${ok ? '系统持仓平仓成功' : '系统持仓平仓失败'}：品种=${position.symbol || '未知'}，ticket=${position.ticket}${ok ? '' : `，原因=${result?.message || result?.status || '未知'}`}`)
       if (!ok) failures.push({ kind: 'position', ticket: position.ticket, result })
@@ -281,8 +335,8 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
         { cycle, ticket: position.ticket, volume: position.volume, magic: SYSTEM_MAGIC }, result, ok ? 'success' : 'error')
     }
 
-    if (!isWeeklyFlattenWindow(clock())) {
-      logUser(cycle, userId, '停止处理：05:00 任务窗口已经结束')
+    if (!isWeeklyFlattenWindow(clock(), offset)) {
+      logUser(cycle, userId, '停止处理：MT5 周六00:00任务窗口已经结束')
       return { status: 'window_ended', cycle, failures }
     }
     logUser(cycle, userId, '正在复核清理结果')
@@ -341,12 +395,15 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 }
 
 export async function runWeeklySystemFlatten(now = new Date()) {
-  if (!isWeeklyFlattenWindow(now)) return { status: 'outside_window', users: [] }
   if (running) return { status: 'already_running', users: [] }
 
-  const cycle = weeklyFlattenCycleId(now)
-  activeCycle = cycle
   const users = getAllBridges().filter(item => item.connected && item.alive)
+    .map(item => ({ ...item, clock:getPlatformMarketClockState(item.userId) }))
+    .map(item => ({ ...item, timezoneOffsetMinutes:terminalClockOffset(item.clock) }))
+    .filter(item => isWeeklyFlattenWindow(now, item.timezoneOffsetMinutes))
+  if (!users.length) return { status: 'outside_window', users: [] }
+  const cycle = weeklyFlattenCycleId(now, users[0].timezoneOffsetMinutes)
+  activeCycle = cycle
   const cycleStartedAt = Date.now()
   logCycle(cycle, `本轮扫描开始：在线桥接账户 ${users.length} 个，并发数 ${userConcurrency()}`)
   if (!getRedis() || !isRedisAvailable()) {
@@ -359,7 +416,8 @@ export async function runWeeklySystemFlatten(now = new Date()) {
   try {
     const results = await mapWithConcurrency(users, userConcurrency(), async item => {
       try {
-        const result = await runTrackedUserFlatten(item.userId, now)
+        const result = await runTrackedUserFlatten(
+          item.userId, now, () => new Date(), item.timezoneOffsetMinutes)
         return { userId: item.userId, result }
       } catch (err) {
         console.error(`[WeeklyFlatten] Unhandled user failure user=${item.userId}:`, err.message)
@@ -380,7 +438,7 @@ export async function runWeeklySystemFlatten(now = new Date()) {
 export async function finalizeWeeklyFlattenCycle(cycle) {
   if (!cycle) return { status: 'no_cycle', users: [] }
 
-  logCycle(cycle, '05:00 任务窗口结束，开始汇总最终状态')
+  logCycle(cycle, 'MT5 周六00:00任务窗口结束，开始汇总最终状态')
 
   if (activeUserRuns.size > 0) {
     await Promise.allSettled([...activeUserRuns])
@@ -451,14 +509,24 @@ export async function finalizeWeeklyFlattenCycle(cycle) {
 
 function scheduleNext(now = new Date()) {
   if (timer) clearTimeout(timer)
-  const delay = isWeeklyFlattenWindow(now)
-    ? ACTIVE_INTERVAL_MS
-    : Math.max(1000, nextWeeklyFlattenStart(now).getTime() - now.getTime())
+  const anyActive = getAllBridges().some(item => {
+    const clock = getPlatformMarketClockState(item.userId)
+    const offset = terminalClockOffset(clock)
+    return item.connected && item.alive
+      && isWeeklyFlattenWindow(now, offset)
+  })
+  const delay = anyActive ? ACTIVE_INTERVAL_MS : IDLE_INTERVAL_MS
   timer = setTimeout(async () => {
     timer = null
     await runWeeklySystemFlatten().catch(err => console.error('[WeeklyFlatten] Cycle failed:', err.message))
     const afterRun = new Date()
-    if (activeCycle && !isWeeklyFlattenWindow(afterRun)) {
+    const stillActive = getAllBridges().some(item => {
+      const clock = getPlatformMarketClockState(item.userId)
+      const offset = terminalClockOffset(clock)
+      return item.connected && item.alive
+        && isWeeklyFlattenWindow(afterRun, offset)
+    })
+    if (activeCycle && !stillActive) {
       await finalizeWeeklyFlattenCycle(activeCycle).catch(err => console.error('[WeeklyFlatten] Deadline finalize failed:', err.message))
     }
     scheduleNext(afterRun)
@@ -467,20 +535,18 @@ function scheduleNext(now = new Date()) {
 }
 
 export async function triggerWeeklySystemFlattenForUser(userId, now = new Date()) {
-  if (!isWeeklyFlattenWindow(now)) return { status: 'outside_window' }
-  return runTrackedUserFlatten(userId, now)
+  const clock = getPlatformMarketClockState(userId)
+  const offset = terminalClockOffset(clock)
+  if (offset == null) return { status:'terminal_clock_unverified' }
+  if (!isWeeklyFlattenWindow(now, offset)) return { status: 'outside_window' }
+  return runTrackedUserFlatten(userId, now, () => new Date(), offset)
 }
 
 export function startWeeklySystemFlatten(now = new Date()) {
   if (timer || !weeklyFlattenEnabled()) return
-  if (isWeeklyFlattenWindow(now)) {
-    runWeeklySystemFlatten(now).catch(err => console.error('[WeeklyFlatten] Startup run failed:', err.message))
-  } else {
-    finalizeWeeklyFlattenCycle(weeklyFlattenCycleId(now))
-      .catch(err => console.error('[WeeklyFlatten] Startup deadline finalize failed:', err.message))
-  }
+  runWeeklySystemFlatten(now).catch(err => console.error('[WeeklyFlatten] Startup run failed:', err.message))
   scheduleNext(now)
-  console.log('[WeeklyFlatten] Scheduled: Saturday 04:00-05:00 Asia/Shanghai')
+  console.log('[WeeklyFlatten] Scheduled: Friday 23:00-Saturday 00:00 per terminal server time')
 }
 
 export function stopWeeklySystemFlatten() {

@@ -1,0 +1,358 @@
+import { describe, expect, it, vi } from 'vitest'
+
+import {
+  commandPayloadHash,
+  commandEnvelopeHash,
+  countOutstandingCommands,
+  createCommandLedgerEntry,
+  expireQueuedCommands,
+  markCommandDeliveryUncertain,
+  markCommandDispatched,
+  pruneFinalizedCommands,
+  recordCommandResult,
+  sha256Json,
+  stableJson,
+} from '../server/bridge-v3/command-ledger.js'
+
+const NOW = 1_800_000_000_000
+
+function command(overrides = {}) {
+  return {
+    v:3,
+    type:'command',
+    message_id:'msg_01JLEDGER00001',
+    sent_at_utc_msc:NOW,
+    command_id:'command_01JLEDGER00001',
+    terminal_instance_id:'terminal_01JLEDGER01',
+    account_ref:{ broker_server:'Broker-Demo', login:'12345678' },
+    connection_epoch:7,
+    issued_at_utc_msc:NOW,
+    deadline_utc_msc:NOW + 10_000,
+    action:'place_order',
+    params:{ symbol:'XAUUSD', volume:'0.01', side:'buy' },
+    ...overrides,
+  }
+}
+
+function ledgerRow(message = command(), overrides = {}) {
+  return {
+    command_id:message.command_id,
+    user_id:42,
+    terminal_instance_id:message.terminal_instance_id,
+    broker_server:message.account_ref.broker_server,
+    login_account:message.account_ref.login,
+    connection_epoch:message.connection_epoch,
+    action:message.action,
+    params_json:stableJson(message.params),
+    payload_hash:commandPayloadHash(message, 42),
+    status:'queued',
+    deadline_at_utc_msc:message.deadline_utc_msc,
+    dispatch_attempt_count:0,
+    ...overrides,
+  }
+}
+
+function legacyPayloadHash(message, userId = 42) {
+  return sha256Json({
+    user_id:Number(userId), command_id:message.command_id, terminal_instance_id:message.terminal_instance_id,
+    account_ref:message.account_ref, connection_epoch:message.connection_epoch,
+    issued_at_utc_msc:message.issued_at_utc_msc, deadline_utc_msc:message.deadline_utc_msc,
+    action:message.action, params:message.params,
+  })
+}
+
+function result(overrides = {}) {
+  return {
+    v:3,
+    type:'command_result',
+    message_id:'msg_01JLEDGER00002',
+    sent_at_utc_msc:NOW + 100,
+    command_id:'command_01JLEDGER00001',
+    terminal_instance_id:'terminal_01JLEDGER01',
+    account_ref:{ broker_server:'Broker-Demo', login:'12345678' },
+    connection_epoch:7,
+    status:'succeeded',
+    completed_at_utc_msc:NOW + 100,
+    evidence:{ observed_at_utc_msc:NOW + 100, order_tickets:['1001'], deal_tickets:['2001'] },
+    ...overrides,
+  }
+}
+
+function transactionWith(row) {
+  const run = vi.fn()
+    .mockResolvedValueOnce([[row], []])
+    .mockResolvedValue([[{ affectedRows:1 }], []])
+  return { run, transactionFn:fn => fn(run) }
+}
+
+function createTransaction({ initial = null, persisted = null } = {}) {
+  let ledgerSelectCount = 0
+  const run = vi.fn(async sql => {
+    if (sql.startsWith('SELECT') && sql.includes('bridge_v3_command_events')) {
+      return [[], []]
+    }
+    if (sql.startsWith('SELECT')) {
+      ledgerSelectCount += 1
+      return [[ledgerSelectCount === 1 ? (initial || persisted) : (persisted || initial)], []]
+    }
+    if (sql.startsWith('INSERT INTO bridge_v3_command_ledger')) {
+      return [{ affectedRows:initial ? 0 : 1, insertId:101 }, []]
+    }
+    return [{ affectedRows:1, insertId:101 }, []]
+  })
+  return { run, transactionFn:fn => fn(run) }
+}
+
+describe('Bridge v3 durable command ledger', () => {
+  it('counts only queued or dispatched commands in the exact maintenance scope', async () => {
+    const queryOneFn = vi.fn().mockResolvedValue({ count:2 })
+
+    await expect(countOutstandingCommands([
+      'terminal_01JLEDGER01',
+      'terminal_01JLEDGER02',
+    ], { queryOneFn })).resolves.toBe(2)
+
+    expect(queryOneFn.mock.calls[0][0]).toContain("status = 'dispatched' OR (status = 'queued' AND deadline_at_utc_msc > ?)")
+    expect(queryOneFn.mock.calls[0][1]).toEqual([
+      'terminal_01JLEDGER01',
+      'terminal_01JLEDGER02',
+      expect.any(Number),
+    ])
+    await expect(countOutstandingCommands(['short'], { queryOneFn }))
+      .rejects.toMatchObject({ code:'bridge_maintenance_terminal_scope_invalid' })
+  })
+
+  it('creates one immutable command and returns an identical retry', async () => {
+    const message = command()
+    const first = createTransaction({ persisted:ledgerRow(message) })
+    await expect(createCommandLedgerEntry(message, {
+      userId:42, nowUtcMsc:NOW, transactionFn:first.transactionFn,
+    })).resolves.toMatchObject({ created:true, command:{ status:'queued' } })
+    expect(first.run.mock.calls[0][0]).toContain('ON DUPLICATE KEY UPDATE command_id = command_id')
+
+    const retry = createTransaction({ initial:ledgerRow(message) })
+    await expect(createCommandLedgerEntry(message, {
+      userId:42, nowUtcMsc:NOW, transactionFn:retry.transactionFn,
+    })).resolves.toMatchObject({ created:false })
+  })
+
+  it('rejects reuse of a command ID with a different immutable payload', async () => {
+    const original = command()
+    const changed = command({ params:{ symbol:'XAUUSD', volume:'1.00', side:'buy' } })
+    await expect(createCommandLedgerEntry(changed, {
+      userId:42,
+      nowUtcMsc:NOW, transactionFn:createTransaction({ initial:ledgerRow(original) }).transactionFn,
+    })).rejects.toMatchObject({ code:'bridge_command_id_conflict' })
+  })
+
+  it('separates business identity from a new time envelope and connection epoch', async () => {
+    const original = command()
+    const retried = command({
+      connection_epoch:8, issued_at_utc_msc:NOW + 20_000, deadline_utc_msc:NOW + 30_000,
+    })
+    const updated = ledgerRow(retried, {
+      status:'queued', payload_hash:commandPayloadHash(original, 42),
+      envelope_hash:commandEnvelopeHash(retried), dispatch_attempt_count:0,
+    })
+    const tx = createTransaction({ initial:ledgerRow(original), persisted:updated })
+    await expect(createCommandLedgerEntry(retried, {
+      userId:42, nowUtcMsc:NOW, transactionFn:tx.transactionFn,
+    })).resolves.toMatchObject({ created:false, resumed:true, command:{
+      status:'queued', connection_epoch:8, deadline_at_utc_msc:NOW + 30_000,
+    } })
+    expect(tx.run.mock.calls.some(([sql]) => sql.includes("event_type, from_status, to_status")
+      || sql.includes('INSERT INTO bridge_v3_command_events'))).toBe(true)
+  })
+
+  it('resumes an expired command only when it has never been dispatched', async () => {
+    const original = command({ deadline_utc_msc:NOW - 1 })
+    const retried = command({ connection_epoch:9, issued_at_utc_msc:NOW, deadline_utc_msc:NOW + 20_000 })
+    const updated = ledgerRow(retried, {
+      status:'queued', payload_hash:commandPayloadHash(original, 42),
+      envelope_hash:commandEnvelopeHash(retried), dispatch_attempt_count:0,
+    })
+    const tx = createTransaction({ initial:ledgerRow(original, { status:'expired', completed_at_utc_msc:NOW }), persisted:updated })
+    await expect(createCommandLedgerEntry(retried, {
+      userId:42, nowUtcMsc:NOW, transactionFn:tx.transactionFn,
+    })).resolves.toMatchObject({ resumed:true, command:{ status:'queued', connection_epoch:9 } })
+    expect(tx.run.mock.calls.some(([sql]) => sql.includes('INSERT INTO bridge_v3_command_events'))).toBe(true)
+  })
+
+  it('rebuilds business identity before resuming a legacy envelope payload hash', async () => {
+    const original = command()
+    const retried = command({ connection_epoch:10, issued_at_utc_msc:NOW + 40_000, deadline_utc_msc:NOW + 50_000 })
+    const legacy = ledgerRow(original, { status:'expired', completed_at_utc_msc:NOW - 1,
+      payload_hash:legacyPayloadHash(original), dispatch_attempt_count:0 })
+    const persisted = ledgerRow(retried, { status:'queued', payload_hash:commandPayloadHash(original, 42),
+      envelope_hash:commandEnvelopeHash(retried), dispatch_attempt_count:0 })
+    const tx = createTransaction({ initial:legacy, persisted })
+    await expect(createCommandLedgerEntry(retried, {
+      userId:42, nowUtcMsc:NOW, transactionFn:tx.transactionFn,
+    })).resolves.toMatchObject({ resumed:true, command:{ status:'queued', connection_epoch:10 } })
+    const resumedEvent = tx.run.mock.calls.find(([sql, params]) => sql.includes('INSERT INTO bridge_v3_command_events')
+      && params?.[1] === 'resumed')
+    expect(resumedEvent?.[1]?.[4]).toContain('payload_hash')
+    expect(resumedEvent?.[1]?.[4]).toContain('envelope_hash')
+  })
+
+  it('does not resume an operation that was already dispatched', async () => {
+    const retried = command({ connection_epoch:9, issued_at_utc_msc:NOW, deadline_utc_msc:NOW + 20_000 })
+    const tx = createTransaction({ initial:ledgerRow(command(), { status:'dispatched', dispatch_attempt_count:1 }) })
+    await expect(createCommandLedgerEntry(retried, {
+      userId:42, nowUtcMsc:NOW, transactionFn:tx.transactionFn,
+    })).resolves.toMatchObject({ created:false, command:{ status:'dispatched' } })
+    expect(tx.run.mock.calls.filter(([sql]) => sql.startsWith('UPDATE'))).toHaveLength(0)
+  })
+
+  it.each([
+    ['params', { params:{ symbol:'EURUSD', volume:'0.01' } }],
+    ['account', { account_ref:{ broker_server:'Other-Demo', login:'12345678' } }],
+    ['terminal', { terminal_instance_id:'terminal_01JLEDGER99' }],
+    ['action', { action:'cancel_order' }],
+  ])('rejects a same command ID with a different business %s', async (_label, changed) => {
+    const tx = createTransaction({ initial:ledgerRow(command()) })
+    await expect(createCommandLedgerEntry(command(changed), {
+      userId:42, nowUtcMsc:NOW, transactionFn:tx.transactionFn,
+    })).rejects.toMatchObject({ code:'bridge_command_id_conflict' })
+  })
+
+  it('expires queued commands transactionally and records an expiry event', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce([[{ command_id:'command_01JLEDGER00001' }], []])
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+    const transactionFn = fn => fn(run)
+    await expect(expireQueuedCommands({ nowUtcMsc:NOW, transactionFn })).resolves.toEqual({ changes:1 })
+    expect(run.mock.calls[0][0]).toContain('FOR UPDATE')
+    expect(run.mock.calls[0][0]).toContain('LIMIT ?')
+    expect(run.mock.calls[0][1]).toEqual([NOW, 100])
+    expect(run.mock.calls[1][0]).toContain("SET status = 'expired'")
+    expect(run.mock.calls[2][0]).toContain('INSERT INTO bridge_v3_command_events')
+  })
+
+  it('prunes only old finalized command rows and their events in bounded batches', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce([[
+        { command_id:'command_01JLEDGER00001' },
+        { command_id:'command_01JLEDGER00002' },
+      ], []])
+      .mockResolvedValueOnce([{ affectedRows:4 }, []])
+      .mockResolvedValueOnce([{ affectedRows:2 }, []])
+    const transactionFn = fn => fn(run)
+
+    await expect(pruneFinalizedCommands({
+      nowUtcMsc:NOW,
+      retentionMs:30 * 24 * 60 * 60 * 1000,
+      limit:2,
+      transactionFn,
+    })).resolves.toEqual({ changes:2 })
+    expect(run.mock.calls[0][0]).toContain("status IN ('succeeded', 'rejected', 'failed')")
+    expect(run.mock.calls[0][0]).toContain("status = 'expired' AND dispatch_attempt_count = 0")
+    expect(run.mock.calls[0][0]).not.toContain("status = 'uncertain'")
+    expect(run.mock.calls[1][0]).toContain('DELETE FROM bridge_v3_command_events')
+    expect(run.mock.calls[2][0]).toContain('DELETE FROM bridge_v3_command_ledger')
+    expect(run.mock.calls[2][1]).toHaveLength(3)
+  })
+
+  it('persists dispatch before the websocket write can happen', async () => {
+    const { run, transactionFn } = transactionWith(ledgerRow())
+    await expect(markCommandDispatched('command_01JLEDGER00001', {
+      connectionEpoch:7, nowUtcMsc:NOW + 1, transactionFn,
+    })).resolves.toMatchObject({ status:'dispatched', dispatch_attempt_count:1 })
+    expect(run.mock.calls[1][0]).toContain("SET status = 'dispatched'")
+    expect(run.mock.calls[2][0]).toContain('INSERT INTO bridge_v3_command_events')
+  })
+
+  it('does not redispatch an in-flight command unless reconciliation explicitly authorizes it', async () => {
+    const inflight = ledgerRow(command(), { status:'dispatched', dispatch_attempt_count:1 })
+    const blocked = transactionWith(inflight)
+    await expect(markCommandDispatched(inflight.command_id, {
+      connectionEpoch:7, nowUtcMsc:NOW + 2, transactionFn:blocked.transactionFn,
+    })).rejects.toMatchObject({ code:'bridge_command_reconciliation_required' })
+    expect(blocked.run).toHaveBeenCalledTimes(1)
+
+    const authorized = transactionWith(inflight)
+    await expect(markCommandDispatched(inflight.command_id, {
+      connectionEpoch:7, allowRedispatch:true, nowUtcMsc:NOW + 2, transactionFn:authorized.transactionFn,
+    })).resolves.toMatchObject({ status:'dispatched', dispatch_attempt_count:2 })
+  })
+
+  it('expires an unsent command and rejects an old epoch', async () => {
+    const expired = ledgerRow(command(), { deadline_at_utc_msc:NOW - 1 })
+    const expiredTx = transactionWith(expired)
+    await expect(markCommandDispatched(expired.command_id, {
+      connectionEpoch:7, nowUtcMsc:NOW, transactionFn:expiredTx.transactionFn,
+    })).rejects.toMatchObject({ code:'bridge_command_expired' })
+    expect(expiredTx.run.mock.calls[1][0]).toContain("status = 'expired'")
+
+    const epochTx = transactionWith(ledgerRow())
+    await expect(markCommandDispatched('command_01JLEDGER00001', {
+      connectionEpoch:8, nowUtcMsc:NOW, transactionFn:epochTx.transactionFn,
+    })).rejects.toMatchObject({ code:'bridge_command_epoch_mismatch' })
+  })
+
+  it('moves a timed-out dispatched command to uncertain instead of retryable failure', async () => {
+    const { run, transactionFn } = transactionWith(ledgerRow(command(), { status:'dispatched', dispatch_attempt_count:1 }))
+    await expect(markCommandDeliveryUncertain('command_01JLEDGER00001', {
+      nowUtcMsc:NOW + 5_000, transactionFn,
+    })).resolves.toMatchObject({ duplicate:false, command:{ status:'uncertain' } })
+    expect(run.mock.calls[1][0]).toContain("SET status = 'uncertain'")
+  })
+
+  it('accepts a matching result once and treats the same replay as idempotent', async () => {
+    const message = result()
+    const first = transactionWith(ledgerRow(command(), { status:'dispatched', dispatch_attempt_count:1 }))
+    await expect(recordCommandResult(message, { nowUtcMsc:NOW + 200, transactionFn:first.transactionFn }))
+      .resolves.toMatchObject({ duplicate:false, command:{ status:'succeeded' } })
+    expect(first.run.mock.calls[1][0]).toContain('SET status = ?')
+
+    const hash = first.run.mock.calls[1][1][4]
+    const replay = transactionWith(ledgerRow(command(), {
+      status:'succeeded', result_status:'succeeded', result_hash:hash, result_json:stableJson(message),
+    }))
+    await expect(recordCommandResult(message, { nowUtcMsc:NOW + 300, transactionFn:replay.transactionFn }))
+      .resolves.toMatchObject({ duplicate:true })
+    expect(replay.run).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects results from another account, terminal, or connection epoch', async () => {
+    for (const changed of [
+      result({ account_ref:{ broker_server:'Broker-Demo', login:'999' } }),
+      result({ terminal_instance_id:'terminal_01JLEDGER99' }),
+      result({ connection_epoch:8 }),
+    ]) {
+      const tx = transactionWith(ledgerRow(command(), { status:'dispatched' }))
+      await expect(recordCommandResult(changed, { nowUtcMsc:NOW + 200, transactionFn:tx.transactionFn }))
+        .rejects.toMatchObject({ code:'bridge_command_route_mismatch' })
+      expect(tx.run).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('requires an explicit reconciliation path to replace an uncertain outcome', async () => {
+    const uncertainResult = result({ status:'uncertain', evidence:{ observed_at_utc_msc:NOW + 100 } })
+    const existing = ledgerRow(command(), {
+      status:'uncertain', result_status:'uncertain', result_hash:'a'.repeat(64), result_json:stableJson(uncertainResult),
+    })
+    const blocked = transactionWith(existing)
+    await expect(recordCommandResult(result(), { nowUtcMsc:NOW + 300, transactionFn:blocked.transactionFn }))
+      .rejects.toMatchObject({ code:'bridge_command_result_conflict' })
+
+    const reconciled = transactionWith(existing)
+    await expect(recordCommandResult(result(), {
+      nowUtcMsc:NOW + 300, allowUncertainResolution:true, transactionFn:reconciled.transactionFn,
+    })).resolves.toMatchObject({ duplicate:false, command:{ status:'succeeded' } })
+    expect(reconciled.run.mock.calls[2][1][1]).toBe('reconciled')
+  })
+
+  it('records delayed uncertain evidence idempotently after transport loss', async () => {
+    const uncertain = result({ status:'uncertain', evidence:{ observed_at_utc_msc:NOW + 100 } })
+    const first = transactionWith(ledgerRow(command(), {
+      status:'uncertain', result_status:'uncertain', result_hash:null, result_json:null,
+    }))
+
+    await expect(recordCommandResult(uncertain, {
+      nowUtcMsc:NOW + 300, allowUncertainResolution:true, transactionFn:first.transactionFn,
+    })).resolves.toMatchObject({ duplicate:false, command:{ status:'uncertain' } })
+    expect(first.run.mock.calls[2][1][1]).toBe('result_received')
+  })
+})

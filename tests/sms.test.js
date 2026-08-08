@@ -17,6 +17,8 @@ describe('loadSmsConfig', () => {
       { key: 'template_code_register', value: 'SMS_002' },
       { key: 'template_code_reset', value: 'SMS_003' },
       { key: 'template_code_bind', value: 'SMS_004' },
+      { key: 'template_code_membership_expiry', value: 'SMS_005' },
+      { key: 'template_code_membership_expired', value: 'SMS_006' },
     ])
   })
 
@@ -29,6 +31,8 @@ describe('loadSmsConfig', () => {
     expect(cfg.templateCodes.register).toBe('SMS_002')
     expect(cfg.templateCodes.reset).toBe('SMS_003')
     expect(cfg.templateCodes.bind).toBe('SMS_004')
+    expect(cfg.templateCodes.membership_expiry).toBe('SMS_005')
+    expect(cfg.templateCodes.membership_expired).toBe('SMS_006')
   })
 
   it('缓存生效后不再查 DB', async () => {

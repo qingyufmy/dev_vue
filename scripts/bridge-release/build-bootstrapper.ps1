@@ -1,0 +1,167 @@
+param(
+  [Parameter(Mandatory=$true)][string]$OutputDirectory,
+  [Parameter(Mandatory=$true)][string]$PublicKey,
+  [Parameter(Mandatory=$true)][string]$ServerUrl,
+  [string]$LauncherVersion = '1.0.0',
+  [ValidateSet('test','production')][string]$TargetEnvironment = 'test',
+  [string]$TestLoopbackServerUrl = 'http://127.0.0.1:3000',
+  [string]$AuthenticodeCertificateThumbprint = $env:AURUM_AUTHENTICODE_CERT_THUMBPRINT,
+  [string]$TimestampServer = 'http://timestamp.digicert.com',
+  [switch]$AllowUnsignedInstaller,
+  [switch]$DryRun
+)
+$ErrorActionPreference = 'Stop'
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$output = [IO.Path]::GetFullPath($OutputDirectory)
+$publicKeyPath = (Resolve-Path -LiteralPath $PublicKey).Path
+$uri = $null
+if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$uri)) {
+  throw 'bootstrap_server_url_invalid'
+}
+$localTestServer = $TargetEnvironment -eq 'test' -and
+  $uri.Scheme -eq 'http' -and $uri.IsLoopback
+if (($uri.Scheme -ne 'https' -and -not $localTestServer) -or
+  $uri.UserInfo -or $uri.Query -or $uri.Fragment -or $uri.AbsolutePath -ne '/') {
+  throw 'bootstrap_server_url_invalid'
+}
+if ($TargetEnvironment -eq 'test' -and -not $localTestServer) {
+  throw 'bootstrap_test_server_must_be_loopback'
+}
+$loopbackServerValue = ''
+if ($TargetEnvironment -eq 'test') {
+  $loopbackUri = $null
+  if (-not [Uri]::TryCreate($TestLoopbackServerUrl, [UriKind]::Absolute, [ref]$loopbackUri) -or
+    $loopbackUri.Scheme -ne 'http' -or -not $loopbackUri.IsLoopback -or
+    $loopbackUri.UserInfo -or $loopbackUri.Query -or $loopbackUri.Fragment -or
+    $loopbackUri.AbsolutePath -ne '/') {
+    throw 'bootstrap_loopback_server_url_invalid'
+  }
+  $loopbackServerValue = $loopbackUri.GetLeftPart([UriPartial]::Authority)
+}
+$parsedLauncherVersion = $null
+if (-not [Version]::TryParse($LauncherVersion, [ref]$parsedLauncherVersion)) {
+  throw 'bootstrap_launcher_version_invalid'
+}
+$publicKeyText = Get-Content -LiteralPath $publicKeyPath -Raw
+if ($publicKeyText -notmatch '-----BEGIN PUBLIC KEY-----' -or
+  $publicKeyText -notmatch '-----END PUBLIC KEY-----') {
+  throw 'bootstrap_public_key_invalid'
+}
+if (Test-Path -LiteralPath $output) { throw 'bootstrap_output_exists' }
+if ($TargetEnvironment -eq 'production' -and (git -C $repo status --porcelain)) {
+  throw 'bootstrap_production_worktree_dirty'
+}
+if ($AllowUnsignedInstaller -and $TargetEnvironment -ne 'production') {
+  throw 'bootstrap_unsigned_installer_confirmation_invalid'
+}
+if ($TargetEnvironment -eq 'production' -and -not $AuthenticodeCertificateThumbprint -and -not $AllowUnsignedInstaller) {
+  throw 'bootstrap_unsigned_installer_confirmation_required'
+}
+if ($DryRun) {
+  [pscustomobject]@{
+    ok=$true; operation='build-bootstrapper'; dry_run=$true
+    environment=$TargetEnvironment; output=$output; server=$uri.GetLeftPart([UriPartial]::Authority)
+    loopback_server=if ($loopbackServerValue) { $loopbackServerValue } else { $null }
+    launcher_version=$LauncherVersion
+    unsigned_installer_authorized=[bool]($TargetEnvironment -eq 'production' -and $AllowUnsignedInstaller)
+  } | ConvertTo-Json
+  exit 0
+}
+
+$cargo = if (Get-Command cargo -ErrorAction SilentlyContinue) {
+  (Get-Command cargo).Source
+} else {
+  Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+}
+if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) {
+  throw 'bootstrap_cargo_missing'
+}
+$work = Join-Path ([IO.Path]::GetTempPath()) "aurum-bootstrap-build-$([Guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Path $work | Out-Null
+New-Item -ItemType Directory -Path $output | Out-Null
+$succeeded = $false
+$previousCargoTarget = $env:CARGO_TARGET_DIR
+$previousPublicKey = $env:AURUM_BOOTSTRAPPER_PUBLIC_KEY_PATH
+$previousServerUrl = $env:AURUM_BOOTSTRAPPER_SERVER_URL
+$previousLauncherVersion = $env:AURUM_BOOTSTRAPPER_LAUNCHER_VERSION
+$previousTargetEnvironment = $env:AURUM_BOOTSTRAPPER_TARGET_ENVIRONMENT
+$previousWindowsVersion = $env:AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE
+try {
+  $env:CARGO_TARGET_DIR = Join-Path $work 'cargo-target'
+  $env:AURUM_BOOTSTRAPPER_PUBLIC_KEY_PATH = $publicKeyPath
+  $env:AURUM_BOOTSTRAPPER_SERVER_URL = $uri.GetLeftPart([UriPartial]::Authority)
+  $env:AURUM_BOOTSTRAPPER_LAUNCHER_VERSION = $LauncherVersion
+  $env:AURUM_BOOTSTRAPPER_TARGET_ENVIRONMENT = $TargetEnvironment
+  $env:AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE = $LauncherVersion
+  & $cargo build --locked --release --target x86_64-pc-windows-msvc `
+    -p liangjian-bridge-bootstrapper --manifest-path (Join-Path $repo 'bridge\native\Cargo.toml')
+  if ($LASTEXITCODE -ne 0) { throw 'bootstrap_native_build_failed' }
+  $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc\release\liangjian-bridge-bootstrapper.exe'
+  if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'bootstrap_native_build_failed' }
+  $launcherProductVersion = (Get-Item -LiteralPath $executable).VersionInfo.ProductVersion
+  $launcherFileVersion = $null
+  if (-not [Version]::TryParse(($launcherProductVersion -split '[+-]')[0], [ref]$launcherFileVersion) -or
+    $launcherFileVersion.Major -ne $parsedLauncherVersion.Major -or
+    $launcherFileVersion.Minor -ne $parsedLauncherVersion.Minor -or
+    $launcherFileVersion.Build -ne $parsedLauncherVersion.Build) {
+      throw 'bootstrap_launcher_version_mismatch'
+    }
+  $destination = Join-Path $output 'LiangjianBridgeSetup.exe'
+  Copy-Item -LiteralPath $executable -Destination $destination
+
+  $authenticodeSigned = $false
+  if ($AuthenticodeCertificateThumbprint) {
+    $normalizedThumbprint = ($AuthenticodeCertificateThumbprint -replace '[^a-fA-F0-9]', '').ToUpperInvariant()
+    $certificate = Get-ChildItem Cert:\CurrentUser\My | Where-Object {
+      $_.Thumbprint -eq $normalizedThumbprint -and $_.HasPrivateKey -and
+      $_.EnhancedKeyUsageList.ObjectId.Value -contains '1.3.6.1.5.5.7.3.3'
+    } | Select-Object -First 1
+    if (-not $certificate) { throw 'bootstrap_authenticode_certificate_invalid' }
+    $signature = Set-AuthenticodeSignature -FilePath $destination -Certificate $certificate -TimestampServer $TimestampServer -HashAlgorithm SHA256
+    if ($signature.Status -ne 'Valid') { throw 'bootstrap_authenticode_signing_failed' }
+    $authenticodeSigned = $true
+  }
+  if ($TargetEnvironment -eq 'production' -and -not $authenticodeSigned -and -not $AllowUnsignedInstaller) {
+    throw 'bootstrap_unsigned_installer_confirmation_required'
+  }
+  $unsignedInstallerAuthorized = $TargetEnvironment -eq 'production' -and
+    -not $authenticodeSigned -and $AllowUnsignedInstaller
+
+  $metadata = [ordered]@{
+    schema_version=1
+    environment=$TargetEnvironment
+    git_commit=(git -C $repo rev-parse HEAD)
+    server=$uri.GetLeftPart([UriPartial]::Authority)
+    loopback_server=if ($loopbackServerValue) { $loopbackServerValue } else { $null }
+    launcher_version=$LauncherVersion
+    implementation='rust-native'
+    single_runtime_installer=$true
+    public_key_sha256=(Get-FileHash -LiteralPath $publicKeyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    installer_size_bytes=(Get-Item -LiteralPath $destination).Length
+    installer_sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+    authenticode_signed=$authenticodeSigned
+    unsigned_installer_authorized=$unsignedInstallerAuthorized
+    generated_at_utc=(Get-Date).ToUniversalTime().ToString('o')
+  }
+  [IO.File]::WriteAllText(
+    (Join-Path $output 'bootstrapper-metadata.json'),
+    ($metadata | ConvertTo-Json -Depth 5),
+    [Text.UTF8Encoding]::new($false))
+  $succeeded = $true
+  [pscustomobject]@{
+    ok=$true; operation='build-bootstrapper'; output=$output
+    executable=$destination; sha256=$metadata.installer_sha256
+    authenticode_signed=$authenticodeSigned
+    unsigned_installer_authorized=$unsignedInstallerAuthorized
+  } | ConvertTo-Json
+}
+finally {
+  $env:CARGO_TARGET_DIR = $previousCargoTarget
+  $env:AURUM_BOOTSTRAPPER_PUBLIC_KEY_PATH = $previousPublicKey
+  $env:AURUM_BOOTSTRAPPER_SERVER_URL = $previousServerUrl
+  $env:AURUM_BOOTSTRAPPER_LAUNCHER_VERSION = $previousLauncherVersion
+  $env:AURUM_BOOTSTRAPPER_TARGET_ENVIRONMENT = $previousTargetEnvironment
+  $env:AURUM_WINDOWS_PRODUCT_VERSION_OVERRIDE = $previousWindowsVersion
+  if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
+  if (-not $succeeded -and (Test-Path -LiteralPath $output)) { Remove-Item -LiteralPath $output -Recurse -Force }
+}

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 const mockQueryAll = vi.fn()
 const mockWithTransaction = vi.fn()
@@ -37,8 +38,10 @@ describe('hold signal cleanup schedule', () => {
 })
 
 describe('deleteExpiredHoldSignals', () => {
-  it('deletes deliveries before signals in batches using the yesterday cutoff', async () => {
+  it('deletes inference artifacts and deliveries before signals in one transaction', async () => {
     const run = vi.fn()
+      .mockResolvedValueOnce([{ affectedRows: 2 }])
+      .mockResolvedValueOnce([{ affectedRows: 2 }])
       .mockResolvedValueOnce([{ affectedRows: 3 }])
       .mockResolvedValueOnce([{ affectedRows: 2 }])
     mockQueryAll
@@ -51,10 +54,28 @@ describe('deleteExpiredHoldSignals', () => {
 
     expect(mockQueryAll.mock.calls[0][0]).toContain("signal_type = 'hold'")
     expect(mockQueryAll.mock.calls[0][0]).toContain('DATE_SUB(CURDATE(), INTERVAL 1 DAY)')
-    expect(run.mock.calls[0][0]).toContain('DELETE FROM auto_signal_deliveries')
-    expect(run.mock.calls[1][0]).toContain('DELETE FROM ai_signals')
-    expect(run.mock.calls[1][0]).toContain("signal_type = 'hold'")
-    expect(result).toEqual({ deletedSignals: 2, deletedDeliveries: 3, batches: 1 })
+    expect(run.mock.calls.map(call => call[0])).toEqual([
+      expect.stringContaining('DELETE FROM memory_injection_logs'),
+      expect.stringContaining('DELETE FROM inference_snapshots'),
+      expect.stringContaining('DELETE FROM auto_signal_deliveries'),
+      expect.stringContaining('DELETE FROM ai_signals'),
+    ])
+    expect(run.mock.calls[3][0]).toContain("signal_type = 'hold'")
+    expect(result).toEqual({ deletedSignals: 2, deletedDeliveries: 3, deletedSnapshots: 2,
+      deletedMemoryLogs: 2, batches: 1 })
+  })
+})
+
+describe('orphan inference artifact migration', () => {
+  it('removes only snapshots that have neither a signal nor retained outcome/review evidence', () => {
+    const source = readFileSync(new URL('../server/migrations.js', import.meta.url), 'utf8')
+    const start = source.indexOf("id: '099_cleanup_orphan_inference_artifacts'")
+    const block = source.slice(start, source.indexOf('\n  }\n]', start))
+    expect(block).toContain('DELETE snapshot_row FROM inference_snapshots')
+    expect(block).toContain('outcome_row.id IS NULL AND review_row.id IS NULL')
+    expect(block).toContain('DELETE memory_log FROM memory_injection_logs')
+    expect(source).toContain("id: '135_remove_paired_inference_experiment'")
+    expect(source).toContain('DROP TABLE IF EXISTS ai_paired_inference_runs')
   })
 })
 

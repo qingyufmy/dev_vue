@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { decorateMembership } from '../membership.js'
 
 const router = Router()
 
@@ -9,12 +10,13 @@ router.get('/profile', authMiddleware, async (req, res) => {
     const row = await queryOne(`
       SELECT id, uid, email, phone, nickname, avatar, role, plan, plan_period, plan_expires_at, plan_source,
              phone_verified, email_verified, auth_method,
-             telegram_id, telegram_username, telegram_name
+             telegram_id, telegram_username, telegram_name, created_at
       FROM users WHERE id = ?
     `, [req.user.id])
 
     if (!row) return res.status(404).json({ ok: false, error: '用户不存在' })
 
+    const membership = decorateMembership(row)
     const user = {
       id: row.id,
       uid: row.uid,
@@ -28,6 +30,9 @@ router.get('/profile', authMiddleware, async (req, res) => {
       planPeriod: row.plan_period || '',
       planExpiresAt: row.plan_expires_at || '',
       planSource: row.plan_source || null,
+      membershipExpired: membership.membershipExpired,
+      effectivePlan: membership.effectivePlan,
+      accountCreatedAt: row.created_at || '',
       phoneVerified: !!row.phone_verified,
       emailVerified: !!row.email_verified,
       authMethod: row.auth_method || 'email',
@@ -64,6 +69,9 @@ router.put('/profile', authMiddleware, async (req, res) => {
       FROM users WHERE id = ?
     `, [req.user.id])
 
+    const membership = decorateMembership(user)
+    user.membershipExpired = membership.membershipExpired
+    user.effectivePlan = membership.effectivePlan
     user.name = user.nickname
     user.isAdmin = user.role === 'admin'
     user.phoneVerified = !!user.phone_verified
@@ -219,7 +227,7 @@ router.get('/referrals/me', authMiddleware, async (req, res) => {
 
     const invitedCount = referrals.length
     const paidCount = referrals.filter(r => r.status === 'approved').length
-    const pendingCredit = referrals.filter(r => r.status === 'pending').reduce((s, r) => s + (r.amount_cents || 0), 0)
+    const pendingCredit = referrals.filter(r => r.status === 'pending').reduce((sum, referral) => sum + Number(referral.commission || 0), 0)
     const availableCredit = user.referral_credit || 0
 
     res.json({
@@ -230,14 +238,14 @@ router.get('/referrals/me', authMiddleware, async (req, res) => {
       stats: {
         invited_count: invitedCount,
         paid_invited_count: paidCount,
-        pending_credit_cents: pendingCredit,
-        available_credit_cents: availableCredit,
-        reserved_credit_cents: 0,
-        used_credit_cents: 0,
+        pending_credit_amount: pendingCredit,
+        available_credit_amount: availableCredit,
+        reserved_credit_amount: 0,
+        used_credit_amount: 0,
       },
       recent_commissions: referrals.filter(r => r.status === 'approved').slice(0, 5).map(r => ({
         plan_label: r.plan_label || 'Plus',
-        amount_cents: r.amount_cents || 500,
+        commission_amount: Number(r.commission || 0),
         status: r.status,
         status_label: '已确认',
         created_at: r.created_at,
@@ -247,7 +255,7 @@ router.get('/referrals/me', authMiddleware, async (req, res) => {
         uid: r.referred_id,
         email_masked: (r.email || '').replace(/(.{2}).*(@.*)/, '$1***$2'),
         paid: r.status === 'approved',
-        credit_cents: r.amount_cents || 0,
+        credit_amount: Number(r.commission || 0),
         attributed_at: r.attributed_at || r.created_at,
       })),
     })

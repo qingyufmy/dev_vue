@@ -1,0 +1,210 @@
+import { readFileSync } from 'node:fs'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../server/db.js', () => ({
+  queryOne: vi.fn(),
+  queryRun: vi.fn(),
+  withTransaction: vi.fn(),
+}))
+
+vi.mock('../server/bridge-auth-session.js', () => ({
+  assertBridgeEligible: vi.fn(),
+  createBridgeRefreshSession: vi.fn(),
+}))
+
+import { queryOne, queryRun, withTransaction } from '../server/db.js'
+import { assertBridgeEligible, createBridgeRefreshSession } from '../server/bridge-auth-session.js'
+import {
+  approveBridgePairing, consumeBridgePairing, createManagedObserverSession,
+  listManagedObserverSources, startBridgePairing,
+} from '../server/bridge-pairing.js'
+
+describe('bridge device pairing', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('stores only hashes while returning separate device and user codes', async () => {
+    queryRun.mockResolvedValue({ changes: 1 })
+    const result = await startBridgePairing({ deviceName: 'Desk PC', ip: '127.0.0.1' })
+
+    expect(result.deviceCode.length).toBeGreaterThan(40)
+    expect(result.userCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
+    expect(result.verificationPath).toBe('/ai/bridge/pair')
+    const [sql, params] = queryRun.mock.calls[0]
+    expect(sql).toContain('INSERT INTO bridge_device_pairings')
+    expect(params[0]).toMatch(/^[a-f0-9]{64}$/)
+    expect(params[1]).toMatch(/^[a-f0-9]{64}$/)
+    expect(params).not.toContain(result.deviceCode)
+    expect(params).not.toContain(result.userCode)
+  })
+
+  it('approves one valid pending code for an eligible signed-in user', async () => {
+    queryRun.mockResolvedValue({ changes: 1 })
+    await expect(approveBridgePairing(
+      { id: 7, role: 'user', plan: 'pro' },
+      'ABCD-2345',
+      { ip: '1.2.3.4' },
+    )).resolves.toMatchObject({ approved:true, bridgeUserId:7 })
+
+    expect(assertBridgeEligible).toHaveBeenCalled()
+    expect(queryRun.mock.calls[0][0]).toContain("status = 'approved'")
+    expect(queryRun.mock.calls[0][1][3]).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('lets an administrator pair an isolated profile to an observer-source account', async () => {
+    queryRun.mockResolvedValue({ changes:1 })
+    queryOne.mockResolvedValue({
+      id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:2,
+    })
+
+    await expect(approveBridgePairing(
+      { id:1, role:'admin', plan:'pro' },
+      'ABCD-2345',
+      { bridgeUserId:42, ip:'1.2.3.4' },
+    )).resolves.toMatchObject({ approved:true, bridgeUserId:42, bridgePlanSource:'observer_source' })
+
+    expect(queryOne.mock.calls[0][0]).toContain("plan_source = 'observer_source'")
+    expect(queryRun.mock.calls[0][1][0]).toBe(42)
+  })
+
+  it('does not let a non-admin pair a profile to another account', async () => {
+    await expect(approveBridgePairing(
+      { id:7, role:'user', plan:'pro' },
+      'ABCD-2345',
+      { bridgeUserId:42 },
+    )).rejects.toMatchObject({ code:'bridge_pair_source_forbidden' })
+    expect(queryOne).not.toHaveBeenCalled()
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+
+  it('lists only administrator-managed observer-source identities', async () => {
+    const query = vi.fn().mockResolvedValue([{
+      bridge_user_id:42, email:'observer@example.com', source_name:'黄金默认行情',
+      trading_account_id:9, login_account:'860058', broker_server:'Broker-Demo',
+    }])
+
+    const result = await listManagedObserverSources(
+      { id:1, role:'admin' }, { query },
+    )
+
+    expect(result[0]).toMatchObject({ bridge_user_id:42, trading_account_id:9 })
+    expect(query.mock.calls[0][0]).toContain("users.plan_source = 'observer_source'")
+  })
+
+  it('issues a dedicated refresh credential for an administrator-selected observer account', async () => {
+    const target = {
+      id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:2,
+    }
+    const query = vi.fn().mockResolvedValue(target)
+    const run = vi.fn()
+    createBridgeRefreshSession.mockResolvedValue({
+      refreshToken:'o'.repeat(64), expiresInSeconds:7_776_000,
+    })
+
+    await expect(createManagedObserverSession(
+      { id:1, role:'admin' }, 42, {
+        terminalInstanceId:'mt5_0123456789abcdef01234567', query, run, ip:'1.2.3.4',
+      },
+    )).resolves.toMatchObject({ bridgeUserId:42, refreshToken:'o'.repeat(64) })
+    expect(createBridgeRefreshSession).toHaveBeenCalledWith(
+      target, expect.objectContaining({ run, ip:'1.2.3.4' }),
+    )
+  })
+
+  it('clears the stale read model when an administrator moves a terminal to an observer account', async () => {
+    const query = vi.fn().mockResolvedValue({
+      id:42, role:'user', plan:'pro', plan_source:'observer_source', token_version:2,
+    })
+    const run = vi.fn()
+      .mockResolvedValueOnce([[
+        {
+          terminal_instance_id:'mt5_0123456789abcdef01234567', user_id:1,
+          login_account:'860058', broker_server:'Broker-Demo',
+          expected_login_account:'860058', expected_broker_server:'Broker-Demo',
+        },
+      ], []])
+      .mockResolvedValue({ affectedRows:1 })
+    createBridgeRefreshSession.mockResolvedValue({
+      refreshToken:'o'.repeat(64), expiresInSeconds:7_776_000,
+    })
+
+    await createManagedObserverSession(
+      { id:1, role:'admin' }, 42,
+      { terminalInstanceId:'mt5_0123456789abcdef01234567', query, run },
+    )
+
+    expect(run.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining([
+      expect.stringContaining('DELETE FROM bridge_v3_terminal_sessions'),
+      expect.stringContaining('DELETE FROM bridge_v3_stream_revisions'),
+      expect.stringContaining('UPDATE bridge_v3_deals SET user_id'),
+    ]))
+  })
+
+  it('fails managed observer authorization closed for non-administrators', async () => {
+    await expect(createManagedObserverSession(
+      { id:7, role:'user' }, 42,
+    )).rejects.toMatchObject({ code:'bridge_observer_management_forbidden' })
+  })
+
+  it('returns pending without issuing a refresh credential', async () => {
+    const run = vi.fn().mockResolvedValueOnce([[
+      { pairing_id: 8, pairing_status: 'pending', pairing_expired: 0 },
+    ], []])
+    withTransaction.mockImplementation(callback => callback(run))
+
+    await expect(consumeBridgePairing('x'.repeat(48))).resolves.toEqual({ status: 'pending' })
+    expect(createBridgeRefreshSession).not.toHaveBeenCalled()
+  })
+
+  it('issues the refresh credential and consumes approval in one transaction', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce([[
+        {
+          pairing_id: 9, pairing_status: 'approved', pairing_expired: 0,
+          pairing_token_version: 3,
+          id: 7, role: 'user', plan: 'pro', plan_expires_at: null, token_version: 3,
+        },
+      ], []])
+      .mockResolvedValueOnce([{ affectedRows: 1 }, []])
+    withTransaction.mockImplementation(callback => callback(run))
+    createBridgeRefreshSession.mockResolvedValue({
+      refreshToken: 'r'.repeat(64), expiresInSeconds: 7776000,
+    })
+
+    await expect(consumeBridgePairing('d'.repeat(48), {
+      userAgent: 'AURUM', ip: '1.2.3.4',
+    })).resolves.toMatchObject({ status: 'approved', refreshToken: 'r'.repeat(64) })
+    expect(createBridgeRefreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 7 }),
+      expect.objectContaining({ run }),
+    )
+    expect(run.mock.calls[1][0]).toContain("status = 'consumed'")
+  })
+
+  it('does not issue a credential after password logout invalidates the approval', async () => {
+    const run = vi.fn().mockResolvedValueOnce([[
+      {
+        pairing_id: 10, pairing_status: 'approved', pairing_expired: 0,
+        pairing_token_version: 3,
+        id: 7, role: 'user', plan: 'pro', plan_expires_at: null, token_version: 4,
+      },
+    ], []])
+    withTransaction.mockImplementation(callback => callback(run))
+
+    await expect(consumeBridgePairing('z'.repeat(48)))
+      .rejects.toMatchObject({ code: 'bridge_pair_device_code_consumed' })
+    expect(createBridgeRefreshSession).not.toHaveBeenCalled()
+  })
+
+  it('rate-limits pairing starts independently without exhausting approval or polling quotas', () => {
+    const server = readFileSync(new URL('../server/index.js', import.meta.url), 'utf8')
+    const config = readFileSync(new URL('../server/config.js', import.meta.url), 'utf8')
+    expect(server).toContain("app.use('/api/auth/bridge-pair/start', bridgePairStartLimiter)")
+    expect(server).toContain("app.use('/api/auth/bridge-pair/approve', authLimiter)")
+    expect(server).toContain("app.use('/api/auth/bridge-pair/token', bridgeAuthLimiter)")
+    expect(server).toContain("app.use('/api/auth/bridge-refresh', bridgeAuthLimiter)")
+    expect(server).toContain("app.use('/api/auth/bridge-observer-session', bridgeAuthLimiter)")
+    expect(config).toContain("BRIDGE_AUTH_RATE_LIMIT_MAX = parseInt(process.env.BRIDGE_AUTH_RATE_LIMIT_MAX || '240')")
+    expect(config).toContain("BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS = parseInt(process.env.BRIDGE_PAIR_START_RATE_LIMIT_WINDOW_MS || '600000')")
+    expect(config).toContain("BRIDGE_PAIR_START_RATE_LIMIT_MAX = parseInt(process.env.BRIDGE_PAIR_START_RATE_LIMIT_MAX || '6')")
+  })
+})

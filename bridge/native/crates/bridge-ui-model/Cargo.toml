@@ -1,0 +1,10 @@
+[package]
+name = "bridge-ui-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bridge-foundation = { path = "../bridge-foundation" }
+bridge-local-control = { path = "../bridge-local-control" }

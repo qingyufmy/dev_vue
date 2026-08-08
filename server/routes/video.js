@@ -1,14 +1,21 @@
 import { Router } from 'express'
 import multer from 'multer'
-import { join, dirname, extname, resolve } from 'path'
+import { join, dirname, extname, resolve, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync, mkdirSync, unlinkSync, statSync, createReadStream } from 'fs'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware, optionalAuth, adminOnly } from '../middleware/auth.js'
 import { fetchBilibiliVideo } from '../utils.js'
+import { canAccessMembershipLevel, decorateMembership } from '../membership.js'
+import { buildSignedManagedVideoUrl, buildSignedVideoUrl, verifySignedVideoUrl } from '../video-access.js'
+import { PUBLIC_UPLOAD_DIR } from '../config.js'
+import managedVideoRouter from './video-managed.js'
+import { createStorageService } from '../storage/storage-service.js'
+import { loadStoredFile } from '../storage/stored-file-service.js'
+import { isSafeVideoSource } from '../storage/video-validator.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const uploadDir = join(__dirname, '..', 'uploads', 'videos')
+const uploadDir = join(PUBLIC_UPLOAD_DIR, 'videos')
 
 // Ensure video upload dir exists
 if (!existsSync(uploadDir)) mkdirSync(uploadDir, { recursive: true })
@@ -34,6 +41,11 @@ const upload = multer({
 })
 
 const router = Router()
+
+// Phase 4 managed video endpoints are registered first. Legacy handlers below
+// remain available for old rows and external Bilibili/YouTube integrations;
+// they are never used as a trust boundary for new qiniu confirmations.
+router.use(managedVideoRouter)
 
 // ===== Get video info for an episode =====
 router.get('/video-stream', optionalAuth, async (req, res) => {
@@ -62,32 +74,57 @@ router.get('/video-stream', optionalAuth, async (req, res) => {
     const stream = await queryOne('SELECT * FROM video_streams WHERE episode_id = ?', [episode])
     const course = await queryOne('SELECT youtube_id, bilibili_id, local_video_path, access_level FROM courses WHERE episode_id = ?', [episode])
 
+    const accessLevel = stream?.access_level || course?.access_level || 'free'
+    if (!canAccessMembershipLevel(req.user, accessLevel)) {
+      return res.status(403).json({ ok:false, error:'当前会员权限不可播放该课程' })
+    }
+
+    if (stream && stream.stored_file_id && isSafeVideoSource(stream.video_source)) {
+      res.setHeader('Cache-Control', 'private, no-store')
+      const stored = await loadStoredFile(stream.stored_file_id)
+      if (!stored || stored.status !== 'ready') return res.status(404).json({ ok: false, error: 'video_object_unavailable' })
+      let playbackUrl = ''
+      if (stream.video_source === 'local_mp4') playbackUrl = buildSignedManagedVideoUrl(stream.id, req.user?.id || 0)
+      else {
+        const storage = await createStorageService()
+        playbackUrl = await storage.createReadUrl({ provider: 'qiniu', objectKey: stored.object_key, purpose: 'video' }, { ttlSeconds: 300 })
+      }
+      const managedStream = {
+        id: stream.id, episodeId: stream.episode_id, videoSource: stream.video_source, source: stream.video_source,
+        playbackUrl, localPath: stream.video_source === 'local_mp4' ? playbackUrl : '', qiniuKey: '', quality: stream.quality,
+        duration: stream.duration, accessLevel,
+      }
+      return res.json({ ok: true, stream: managedStream, videoSource: stream.video_source, playbackUrl, localPath: managedStream.localPath, qiniuKey: '', bilibiliId: stream.bilibili_id || course?.bilibili_id || '', youtubeId: course?.youtube_id || null })
+    }
+
     if (stream) {
+      const localPath = buildSignedVideoUrl(stream.local_path || '', req.user?.id || 0)
       return res.json({
         ok: true,
         stream: {
           id: stream.id,
           episodeId: stream.episode_id,
           bilibiliId: stream.bilibili_id || course?.bilibili_id || '',
-          localPath: stream.local_path || '',
+          localPath,
           qiniuKey: stream.qiniu_key || '',
           quality: stream.quality,
           duration: stream.duration,
           accessLevel: stream.access_level,
         },
         bilibiliId: stream.bilibili_id || course?.bilibili_id || '',
-        localPath: stream.local_path || '',
+        localPath,
         qiniuKey: stream.qiniu_key || '',
         youtubeId: course?.youtube_id || null,
       })
     }
 
     // Fallback to course data
+    const localPath = buildSignedVideoUrl(course?.local_video_path || '', req.user?.id || 0)
     return res.json({
       ok: true,
       stream: null,
       bilibiliId: course?.bilibili_id || '',
-      localPath: course?.local_video_path || '',
+      localPath,
       youtubeId: course?.youtube_id || null,
     })
   } catch (err) {
@@ -123,7 +160,7 @@ router.post('/video-upload', authMiddleware, upload.single('file'), async (req, 
         const secs = Math.floor(seconds % 60)
         duration = `${mins}:${String(secs).padStart(2, '0')}`
         // Extract thumbnail at 5s or 10% of video duration
-        const coversDir = join(__dirname, '..', 'uploads', 'covers')
+        const coversDir = join(PUBLIC_UPLOAD_DIR, 'covers')
         if (!existsSync(coversDir)) { const { mkdirSync } = await import('fs'); mkdirSync(coversDir, { recursive: true }) }
         const coverFilename = `cover_${Date.now()}_${Math.random().toString(36).slice(2,6)}.jpg`
         const coverPath = join(coversDir, coverFilename)
@@ -158,19 +195,38 @@ router.post('/video-upload', authMiddleware, upload.single('file'), async (req, 
 })
 
 // ===== Serve video files with range request support =====
-router.get('/video-file/:filename', authMiddleware, async (req, res) => {
+router.get('/video-file/:filename', optionalAuth, async (req, res) => {
   try {
-    const filePath = resolve(join(uploadDir, req.params.filename))
-    if (!filePath.startsWith(resolve(uploadDir))) {
+    if (basename(req.params.filename) !== req.params.filename) {
       return res.status(403).json({ error: '禁止访问' })
     }
+    const filePath = resolve(join(uploadDir, req.params.filename))
     if (!existsSync(filePath)) return res.status(404).json({ error: '视频不存在' })
 
-    if (req.user.role !== 'admin') {
-      const fileName = req.params.filename.replace(/\.[^.]+$/, '')
-      const video = await queryOne('SELECT access_level FROM video_streams WHERE episode_id = ?', [parseInt(fileName.replace('ep', ''))])
-      if (video && video.access_level === 'pro' && req.user.plan !== 'pro') {
-        return res.status(403).json({ error: '需要 Pro 会员权限' })
+    let viewer = req.user || null
+    if (!viewer) {
+      const signedViewerId = verifySignedVideoUrl(req.params.filename, req.query)
+      if (signedViewerId === null) return res.status(401).json({ ok:false, error:'视频链接无效或已过期' })
+      if (signedViewerId > 0) {
+        const user = await queryOne(`SELECT id, role, plan, plan_expires_at,
+          (plan IN ('pro', 'plus') AND plan_expires_at IS NOT NULL AND plan_expires_at < NOW()) AS membership_expired
+          FROM users WHERE id = ? AND deletion_status = 'active' AND deleted_at IS NULL`, [signedViewerId])
+        if (!user) return res.status(401).json({ ok:false, error:'视频访问用户不存在' })
+        viewer = decorateMembership(user)
+      }
+    }
+
+    if (viewer?.role !== 'admin') {
+      const filename = req.params.filename
+      const publicPath = `/uploads/videos/${filename}`
+      const video = await queryOne(`SELECT COALESCE(vs.access_level, c.access_level) AS access_level
+        FROM courses c LEFT JOIN video_streams vs ON vs.episode_id = c.episode_id
+        WHERE vs.local_path = ? OR vs.local_path LIKE ? OR c.local_video_path = ? OR c.local_video_path LIKE ?
+        LIMIT 1`, [publicPath, `%/${filename}`, publicPath, `%/${filename}`])
+      if (!video?.access_level) return res.status(403).json({ error:'视频权限信息缺失，已拒绝访问' })
+      const accessLevel = String(video.access_level)
+      if (!canAccessMembershipLevel(viewer, accessLevel)) {
+        return res.status(403).json({ error: accessLevel === 'plus_pro' ? '需要 Plus 或 Pro 有效会员权限' : '需要 Pro 有效会员权限' })
       }
     }
 
@@ -181,7 +237,12 @@ router.get('/video-file/:filename', authMiddleware, async (req, res) => {
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-')
       const start = parseInt(parts[0], 10)
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
+      const requestedEnd = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
+      const end = Math.min(requestedEnd, fileSize - 1)
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start > end || start >= fileSize) {
+        res.setHeader('Content-Range', `bytes */${fileSize}`)
+        return res.status(416).end()
+      }
       const chunkSize = end - start + 1
 
       res.writeHead(206, {
@@ -189,6 +250,8 @@ router.get('/video-file/:filename', authMiddleware, async (req, res) => {
         'Accept-Ranges': 'bytes',
         'Content-Length': chunkSize,
         'Content-Type': 'video/mp4',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, no-store',
       })
       createReadStream(filePath, { start, end }).pipe(res)
     } else {
@@ -196,6 +259,8 @@ router.get('/video-file/:filename', authMiddleware, async (req, res) => {
         'Content-Length': fileSize,
         'Content-Type': 'video/mp4',
         'Accept-Ranges': 'bytes',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, no-store',
       })
       createReadStream(filePath).pipe(res)
     }

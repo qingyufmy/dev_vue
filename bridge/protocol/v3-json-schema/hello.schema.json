@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/hello.schema.json",
+  "title": "AURUM Bridge v3 hello",
+  "allOf": [
+    { "$ref": "envelope.schema.json" },
+    {
+      "if": {
+        "required": ["update_report"],
+        "properties": { "update_report": { "type": "object" } }
+      },
+      "then": {
+        "required": ["installation_id"],
+        "properties": { "installation_id": { "type": "string" } }
+      }
+    }
+  ],
+  "type": "object",
+  "required": ["v", "type", "message_id", "sent_at_utc_msc", "session_id", "bridge_version", "terminals"],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "hello" },
+    "session_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "bridge_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "installation_id": {
+      "type": ["string", "null"],
+      "pattern": "^install_[a-f0-9]{32}$"
+    },
+    "update_report": {
+      "type": ["object", "null"],
+      "required": ["release_id", "target_version", "state", "updated_at_utc_msc"],
+      "properties": {
+        "release_id": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+        "target_version": { "type": "string", "pattern": "^\\d+\\.\\d+(?:\\.\\d+){0,2}$" },
+        "state": { "enum": ["healthy", "rolled_back", "failed"] },
+        "started_at_utc_msc": { "type": ["integer", "null"], "minimum": 1 },
+        "updated_at_utc_msc": { "type": "integer", "minimum": 1 },
+        "error_code": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9_]{1,128}$" }
+      },
+      "if": { "properties": { "state": { "const": "failed" } }, "required": ["state"] },
+      "then": { "required": ["error_code"], "properties": { "error_code": { "type": "string" } } },
+      "additionalProperties": false
+    },
+    "terminals": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "required": ["terminal_instance_id", "platform", "account_ref", "connection_epoch"],
+        "properties": {
+          "terminal_instance_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+          "platform": { "enum": ["mt4", "mt5"] },
+          "account_ref": {
+            "type": "object",
+            "required": ["broker_server", "login"],
+            "properties": {
+              "broker_server": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "login": { "type": "string", "minLength": 1, "maxLength": 64 }
+            },
+            "additionalProperties": false
+          },
+          "worker_version": { "type": ["string", "null"], "maxLength": 64 },
+          "connection_epoch": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "unevaluatedProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/error.schema.json",
+  "title": "AURUM Bridge v3 protocol error",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": ["v", "type", "message_id", "sent_at_utc_msc", "error_code"],
+  "properties": {
+    "v": { "const": 3 },
+    "type": { "const": "error" },
+    "error_code": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "details": { "type": ["object", "array", "string", "number", "boolean", "null"] }
+  },
+  "unevaluatedProperties": false
+}

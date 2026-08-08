@@ -1,0 +1,489 @@
+use crate::{
+    ExpectedWorker, WorkerCapability, WorkerClient, WorkerEndpoint, WorkerHostError,
+    WorkerPipeListener, WorkerRoute,
+};
+use bridge_runtime_win::{ManagedProcess, ManagedProcessState, ProcessSpec};
+use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::windows::named_pipe::NamedPipeServer;
+
+pub const WORKER_PIPE_ENV: &str = "AURUM_BRIDGE_WORKER_PIPE";
+pub const WORKER_NONCE_ENV: &str = "AURUM_BRIDGE_WORKER_NONCE";
+pub const WORKER_IPC_VERSION_ENV: &str = "AURUM_BRIDGE_WORKER_IPC_VERSION";
+pub const WORKER_TERMINAL_ID_ENV: &str = "AURUM_BRIDGE_WORKER_TERMINAL_ID";
+pub const WORKER_PLATFORM_ENV: &str = "AURUM_BRIDGE_WORKER_PLATFORM";
+pub const WORKER_BROKER_SERVER_ENV: &str = "AURUM_BRIDGE_WORKER_BROKER_SERVER";
+pub const WORKER_LOGIN_ENV: &str = "AURUM_BRIDGE_WORKER_LOGIN";
+pub const WORKER_CONNECTION_EPOCH_ENV: &str = "AURUM_BRIDGE_WORKER_CONNECTION_EPOCH";
+pub const WORKER_TERMINAL_PATH_ENV: &str = "AURUM_BRIDGE_WORKER_TERMINAL_PATH";
+
+#[derive(Clone)]
+pub struct WorkerProgram {
+    process: ProcessSpec,
+    terminal_path: Option<PathBuf>,
+}
+
+impl WorkerProgram {
+    pub fn new(
+        executable: impl AsRef<Path>,
+        working_directory: impl AsRef<Path>,
+    ) -> Result<Self, WorkerHostError> {
+        Ok(Self {
+            process: ProcessSpec::new(executable, working_directory).map_err(runtime_error)?,
+            terminal_path: None,
+        })
+    }
+
+    pub fn arg(mut self, value: impl Into<OsString>) -> Self {
+        self.process = self.process.arg(value);
+        self
+    }
+
+    pub fn env(
+        mut self,
+        name: impl Into<OsString>,
+        value: impl Into<OsString>,
+    ) -> Result<Self, WorkerHostError> {
+        let name = name.into();
+        if reserved_environment(&name) {
+            return Err(WorkerHostError::new("worker_program_reserved_environment"));
+        }
+        self.process = self.process.env(name, value).map_err(runtime_error)?;
+        Ok(self)
+    }
+
+    pub fn show_window(mut self, show_window: bool) -> Self {
+        self.process = self.process.show_window(show_window);
+        self
+    }
+
+    pub fn terminal_path(
+        mut self,
+        terminal_path: impl AsRef<Path>,
+    ) -> Result<Self, WorkerHostError> {
+        let terminal_path = terminal_path
+            .as_ref()
+            .canonicalize()
+            .map_err(|_| WorkerHostError::new("worker_terminal_path_invalid"))?;
+        if !terminal_path.is_file() || !terminal_path.is_absolute() {
+            return Err(WorkerHostError::new("worker_terminal_path_invalid"));
+        }
+        self.terminal_path = Some(terminal_path);
+        Ok(self)
+    }
+
+    fn into_process_spec(
+        mut self,
+        endpoint: &WorkerEndpoint,
+        route: &WorkerRoute,
+    ) -> Result<ProcessSpec, WorkerHostError> {
+        for (name, value) in [
+            (WORKER_PIPE_ENV, endpoint.pipe_name().to_owned()),
+            (WORKER_NONCE_ENV, endpoint.session_nonce().to_owned()),
+            (
+                WORKER_IPC_VERSION_ENV,
+                crate::WORKER_IPC_VERSION.to_string(),
+            ),
+            (WORKER_TERMINAL_ID_ENV, route.terminal_instance_id.clone()),
+            (WORKER_PLATFORM_ENV, route.platform.clone()),
+            (
+                WORKER_BROKER_SERVER_ENV,
+                route.account_ref.broker_server.clone(),
+            ),
+            (WORKER_LOGIN_ENV, route.account_ref.login.clone()),
+            (
+                WORKER_CONNECTION_EPOCH_ENV,
+                route.connection_epoch.to_string(),
+            ),
+        ] {
+            self.process = self.process.env(name, value).map_err(runtime_error)?;
+        }
+        if let Some(terminal_path) = self.terminal_path {
+            self.process = self
+                .process
+                .env(WORKER_TERMINAL_PATH_ENV, terminal_path.into_os_string())
+                .map_err(runtime_error)?;
+        }
+        Ok(self.process)
+    }
+}
+
+pub struct WorkerProcessSession {
+    process: ManagedProcess,
+    client: Arc<WorkerClient<NamedPipeServer>>,
+    endpoint: WorkerEndpoint,
+}
+
+/// A compatibility-preserving process poll result. `is_running` remains available for existing
+/// callers, while supervisors that need a useful restart diagnostic can retain the exit code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerProcessState {
+    Running,
+    Exited { exit_code: Option<i32> },
+}
+
+impl WorkerProcessSession {
+    pub async fn launch(
+        program: WorkerProgram,
+        route: WorkerRoute,
+        required_capabilities: BTreeSet<WorkerCapability>,
+        startup_timeout: Duration,
+    ) -> Result<Self, WorkerHostError> {
+        route.validate()?;
+        if required_capabilities.is_empty() {
+            return Err(WorkerHostError::new("worker_start_capabilities_invalid"));
+        }
+        if startup_timeout.is_zero() {
+            return Err(WorkerHostError::new("worker_start_timeout_invalid"));
+        }
+        let listener = WorkerPipeListener::bind_new()?;
+        let endpoint = listener.endpoint().clone();
+        let process_spec = program.into_process_spec(&endpoint, &route)?;
+        let process = ManagedProcess::spawn(&process_spec).map_err(runtime_error)?;
+        let expected = ExpectedWorker {
+            session_nonce: endpoint.session_nonce().to_owned(),
+            route,
+            required_capabilities,
+        };
+        let client = listener.accept(expected, startup_timeout).await?;
+        Ok(Self {
+            process,
+            client: Arc::new(client),
+            endpoint,
+        })
+    }
+
+    pub fn client(&self) -> Arc<WorkerClient<NamedPipeServer>> {
+        Arc::clone(&self.client)
+    }
+
+    pub fn endpoint(&self) -> &WorkerEndpoint {
+        &self.endpoint
+    }
+
+    pub fn process_id(&self) -> u32 {
+        self.process.id()
+    }
+
+    pub fn state(&mut self) -> Result<WorkerProcessState, WorkerHostError> {
+        Ok(match self.process.state().map_err(runtime_error)? {
+            ManagedProcessState::Running => WorkerProcessState::Running,
+            ManagedProcessState::Exited { exit_code } => WorkerProcessState::Exited { exit_code },
+        })
+    }
+
+    pub fn is_running(&mut self) -> Result<bool, WorkerHostError> {
+        Ok(matches!(self.state()?, WorkerProcessState::Running))
+    }
+
+    pub fn terminate(&mut self) -> Result<(), WorkerHostError> {
+        self.process.terminate().map_err(runtime_error)
+    }
+}
+
+fn reserved_environment(name: &OsStr) -> bool {
+    name.to_string_lossy()
+        .to_ascii_uppercase()
+        .starts_with("AURUM_BRIDGE_WORKER_")
+}
+
+fn runtime_error(error: bridge_runtime_win::RuntimeError) -> WorkerHostError {
+    WorkerHostError::new(error.code())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        RegistryCommandWorker, SnapshotStream, WorkerDataRouter, WorkerHello, WorkerRegistry,
+        write_frame,
+    };
+    use bridge_command::CommandWorker;
+    use bridge_contract::{AccountRef, CommandMessage};
+    use std::env;
+    use std::fs;
+    use std::process::Command;
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    const HELPER_FLAG: &str = "AURUM_TEST_WORKER_HELPER";
+
+    fn route() -> WorkerRoute {
+        WorkerRoute {
+            terminal_instance_id: "mt5_terminal_process_01".to_owned(),
+            platform: "mt5".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 9,
+        }
+    }
+
+    #[test]
+    fn worker_process_helper_entry() {
+        if env::var(HELPER_FLAG).as_deref() != Ok("1") {
+            return;
+        }
+        let pipe_name = env::var(WORKER_PIPE_ENV).expect("pipe env");
+        let mut nonce = env::var(WORKER_NONCE_ENV).expect("nonce env");
+        if env::var("AURUM_TEST_WORKER_BAD_NONCE").as_deref() == Ok("1") {
+            nonce.push('0');
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async move {
+            let path = format!(r"\\.\pipe\{pipe_name}");
+            let mut stream = ClientOptions::new().open(path).expect("worker connect");
+            write_frame(
+                &mut stream,
+                &WorkerHello {
+                    ipc_v: env::var(WORKER_IPC_VERSION_ENV)
+                        .expect("version env")
+                        .parse()
+                        .expect("version"),
+                    message_type: "worker_hello".to_owned(),
+                    session_nonce: nonce,
+                    worker_version: "3.0.0-alpha.1".to_owned(),
+                    route: WorkerRoute {
+                        terminal_instance_id: env::var(WORKER_TERMINAL_ID_ENV)
+                            .expect("terminal env"),
+                        platform: env::var(WORKER_PLATFORM_ENV).expect("platform env"),
+                        account_ref: AccountRef {
+                            broker_server: env::var(WORKER_BROKER_SERVER_ENV).expect("broker env"),
+                            login: env::var(WORKER_LOGIN_ENV).expect("login env"),
+                        },
+                        connection_epoch: env::var(WORKER_CONNECTION_EPOCH_ENV)
+                            .expect("epoch env")
+                            .parse()
+                            .expect("epoch"),
+                    },
+                    capabilities: vec![WorkerCapability::QueryExecution],
+                },
+            )
+            .await
+            .expect("hello");
+            let lifetime_msc = env::var("AURUM_TEST_WORKER_LIFETIME_MSC")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(30_000);
+            tokio::time::sleep(Duration::from_millis(lifetime_msc)).await;
+        });
+    }
+
+    #[tokio::test]
+    async fn launched_worker_is_handshaken_and_killed_with_its_job() {
+        let executable = env::current_exe().expect("test executable");
+        let working_directory = executable.parent().expect("test directory");
+        let program = WorkerProgram::new(&executable, working_directory)
+            .expect("program")
+            .arg("process_session::tests::worker_process_helper_entry")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(HELPER_FLAG, "1")
+            .expect("helper env");
+        let mut session = WorkerProcessSession::launch(
+            program,
+            route(),
+            BTreeSet::from([WorkerCapability::QueryExecution]),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("worker session");
+        assert!(session.client().is_healthy());
+        assert!(session.is_running().expect("running"));
+        assert_ne!(session.process_id(), 0);
+        session.terminate().expect("terminate job");
+        assert!(!session.is_running().expect("stopped"));
+    }
+
+    #[tokio::test]
+    async fn natural_worker_exit_keeps_a_structured_exit_code() {
+        let executable = env::current_exe().expect("test executable");
+        let working_directory = executable.parent().expect("test directory");
+        let program = WorkerProgram::new(&executable, working_directory)
+            .expect("program")
+            .arg("process_session::tests::worker_process_helper_entry")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(HELPER_FLAG, "1")
+            .expect("helper env")
+            .env("AURUM_TEST_WORKER_LIFETIME_MSC", "20")
+            .expect("lifetime env");
+        let mut session = WorkerProcessSession::launch(
+            program,
+            route(),
+            BTreeSet::from([WorkerCapability::QueryExecution]),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("worker session");
+        let state = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match session.state().expect("worker state") {
+                    WorkerProcessState::Running => {
+                        tokio::time::sleep(Duration::from_millis(5)).await
+                    }
+                    WorkerProcessState::Exited { exit_code } => break exit_code,
+                }
+            }
+        })
+        .await
+        .expect("worker exit timeout");
+        assert_eq!(state, Some(0));
+    }
+
+    #[tokio::test]
+    async fn python_mt5_worker_interoperates_over_the_native_pipe() {
+        let where_output = Command::new("where.exe")
+            .arg("python.exe")
+            .output()
+            .expect("locate python");
+        assert!(
+            where_output.status.success(),
+            "python is required for worker tests"
+        );
+        let python = String::from_utf8(where_output.stdout)
+            .expect("python path utf8")
+            .lines()
+            .next()
+            .map(PathBuf::from)
+            .expect("python path");
+        let native_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("native root");
+        let worker_directory = native_root.join("workers").join("mt5");
+        let worker_entry = worker_directory.join("fake_worker_entry.py");
+        assert!(worker_entry.is_file(), "fake worker entry");
+        let test_directory = env::temp_dir().join(format!(
+            "aurum-mt5-worker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        fs::create_dir(&test_directory).expect("worker test directory");
+        let terminal_path = test_directory.join("terminal64.exe");
+        fs::write(&terminal_path, []).expect("fake terminal");
+
+        let program = WorkerProgram::new(&python, &worker_directory)
+            .expect("python program")
+            .arg(worker_entry.into_os_string())
+            .env("LOCALAPPDATA", test_directory.as_os_str())
+            .expect("isolated local app data")
+            .terminal_path(&terminal_path)
+            .expect("terminal path");
+        let active_route = route();
+        let mut session = WorkerProcessSession::launch(
+            program,
+            active_route.clone(),
+            BTreeSet::from([
+                WorkerCapability::Snapshot,
+                WorkerCapability::Quote,
+                WorkerCapability::ExecuteCommand,
+                WorkerCapability::QueryExecution,
+            ]),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("python worker session");
+        let registry = Arc::new(WorkerRegistry::new());
+        registry
+            .install(active_route.clone(), session.client())
+            .await
+            .expect("registry install");
+        let router = WorkerDataRouter::new(
+            Arc::clone(&registry),
+            Arc::new(|| 1_800_000_000_000),
+            Duration::from_secs(2),
+        )
+        .expect("data router");
+        let snapshot = router
+            .collect_snapshot(
+                active_route.clone(),
+                "request_01JMT5SNAPSHOT".to_owned(),
+                vec![
+                    SnapshotStream::Account,
+                    SnapshotStream::Positions,
+                    SnapshotStream::Orders,
+                ],
+            )
+            .await
+            .expect("snapshot");
+        assert_eq!(
+            snapshot
+                .streams
+                .account
+                .as_ref()
+                .and_then(|value| value["login"].as_u64()),
+            Some(123_456)
+        );
+        assert_eq!(snapshot.streams.positions.as_ref().map(Vec::len), Some(1));
+        assert_eq!(snapshot.streams.orders.as_ref().map(Vec::len), Some(1));
+        let quote = router
+            .quote(
+                active_route.clone(),
+                "request_01JMT5QUOTE01".to_owned(),
+                "XAUUSD".to_owned(),
+            )
+            .await
+            .expect("quote");
+        assert_eq!(quote.symbol, "XAUUSD.s");
+        assert_eq!(quote.clock_status, "verified");
+
+        let command_worker = RegistryCommandWorker::new(
+            registry,
+            Arc::new(|| 1_800_000_000_000),
+            Duration::from_secs(2),
+        )
+        .expect("command worker");
+        let result = command_worker
+            .execute(CommandMessage {
+                v: 3,
+                message_type: "command".to_owned(),
+                message_id: "message_01JMT5TRADE1".to_owned(),
+                sent_at_utc_msc: 1_800_000_000_000,
+                command_id: "command_01JMT5TRADE1".to_owned(),
+                terminal_instance_id: active_route.terminal_instance_id,
+                account_ref: active_route.account_ref,
+                connection_epoch: active_route.connection_epoch,
+                issued_at_utc_msc: 1_800_000_000_000,
+                deadline_utc_msc: 1_800_000_010_000,
+                action: "place_order".to_owned(),
+                params: serde_json::json!({
+                    "symbol": "XAUUSD",
+                    "side": "buy",
+                    "volume": 0.01,
+                    "comment": "IPC-TRADE-1"
+                }),
+            })
+            .await
+            .expect("trade result");
+        assert_eq!(result.status, "succeeded");
+        assert_eq!(result.evidence.broker_retcode, Some(10_009));
+        assert_eq!(result.evidence.order_tickets, ["1001"]);
+        assert_eq!(result.evidence.deal_tickets, ["2001"]);
+
+        session.terminate().expect("terminate python worker");
+        fs::remove_dir_all(test_directory).expect("remove worker test directory");
+    }
+
+    #[test]
+    fn reserved_worker_environment_cannot_be_overridden() {
+        let executable = env::current_exe().expect("test executable");
+        let working_directory = executable.parent().expect("test directory");
+        let error = WorkerProgram::new(&executable, working_directory)
+            .expect("program")
+            .env(WORKER_NONCE_ENV, "attacker-controlled")
+            .err()
+            .expect("reserved env");
+        assert_eq!(error.code(), "worker_program_reserved_environment");
+    }
+}

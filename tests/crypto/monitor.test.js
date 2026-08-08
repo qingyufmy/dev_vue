@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const mockQueryOne = vi.fn()
 const mockQueryRun = vi.fn()
 const mockQueryAll = vi.fn()
+const mockEnqueuePaymentSideEffect = vi.fn()
+const mockSchedulePaymentSideEffects = vi.fn()
 
 vi.mock('../../server/db.js', () => ({
   queryOne: (...args) => mockQueryOne(...args),
@@ -15,6 +17,11 @@ vi.mock('../../server/db.js', () => ({
     const d = new Date(String(s).replace(' ', 'T') + '+08:00')
     return isNaN(d.getTime()) ? null : d
   }),
+}))
+
+vi.mock('../../server/jobs/payment-side-effects.js', () => ({
+  enqueuePaymentSideEffect: (...args) => mockEnqueuePaymentSideEffect(...args),
+  schedulePaymentSideEffects: (...args) => mockSchedulePaymentSideEffects(...args),
 }))
 
 const mockAdapter = {
@@ -41,7 +48,7 @@ vi.mock('../../server/crypto/chains/index.js', () => ({
   }),
 }))
 
-let formatUsdtAmount, addWatchAddress, removeWatchAddress, startMonitor, stopMonitor
+let formatUsdtAmount, addWatchAddress, removeWatchAddress, scanTronPayment, startMonitor, stopMonitor, expirePendingOrder
 
 beforeEach(async () => {
   vi.clearAllMocks()
@@ -51,8 +58,10 @@ beforeEach(async () => {
   formatUsdtAmount = mod.formatUsdtAmount
   addWatchAddress = mod.addWatchAddress
   removeWatchAddress = mod.removeWatchAddress
+  scanTronPayment = mod.scanTronPayment
   startMonitor = mod.startMonitor
   stopMonitor = mod.stopMonitor
+  expirePendingOrder = mod.expirePendingOrder
 })
 
 afterEach(() => {
@@ -113,6 +122,55 @@ describe('addWatchAddress', () => {
   })
 })
 
+describe('scanTronPayment', () => {
+  it('matches confirmed TRC20 transfer by address, exact amount and order creation time', async () => {
+    const createdMs = new Date('2026-07-02T08:00:00+08:00').getTime()
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          { transaction_id: 'old', to: 'TAddr', value: '50000001', block_timestamp: createdMs - 1000 },
+          { transaction_id: 'wrong-amount', to: 'TAddr', value: '50000002', block_timestamp: createdMs + 1000 },
+          { transaction_id: 'matched', to: 'TAddr', value: '50000001', block_timestamp: createdMs + 2000 },
+        ],
+      }),
+    })
+
+    const result = await scanTronPayment(
+      { getApiBaseUrl: () => 'https://api.trongrid.io' },
+      'TAddr',
+      '50.000001',
+      '2026-07-02 08:00:00',
+      new Set()
+    )
+
+    expect(result).toEqual({ hash: 'matched', amount: 50.000001 })
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.stringContaining('limit=200&only_confirmed=true&min_timestamp='),
+      expect.any(Object)
+    )
+  })
+
+  it('does not match a transfer with a different micro-USDT amount', async () => {
+    const createdMs = new Date('2026-07-02T08:00:00+08:00').getTime()
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ transaction_id: 'wrong', to: 'TAddr', value: '50000002', block_timestamp: createdMs + 2000 }],
+      }),
+    })
+
+    const result = await scanTronPayment(
+      { getApiBaseUrl: () => 'https://api.trongrid.io' },
+      'TAddr',
+      '50.000001',
+      '2026-07-02 08:00:00',
+      new Set()
+    )
+    expect(result).toBeNull()
+  })
+})
+
 describe('removeWatchAddress', () => {
   it('deletes a watch address by id', async () => {
     mockQueryRun.mockResolvedValue({ changes: 1 })
@@ -150,7 +208,10 @@ describe('confirmation checker', () => {
     mockQueryAll.mockResolvedValue([
       { id: 1, chain: 'TRON', tx_hash: 'tx1', status: 'confirming', order_id: 'o1', user_id: 1, required_confirmations: 19 },
     ])
-    mockQueryRun.mockResolvedValue({ changes: 1 })
+    mockQueryRun.mockImplementation(sql => sql.includes('SELECT plan_expires_at')
+      ? Promise.resolve([[{ plan_expires_at:null }]])
+      : Promise.resolve({ changes:1 }))
+    mockQueryOne.mockResolvedValue({ plan: 'plus', period: 'month', plan_label: 'Plus', amount: 100, amount_confirmed:90 })
 
     startMonitor()
 
@@ -164,14 +225,25 @@ describe('confirmation checker', () => {
       expect.stringContaining('UPDATE crypto_watch_list'),
       [20, 1]
     )
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringMatching(/SELECT plan_expires_at[\s\S]*FOR UPDATE/),
+      [1]
+    )
+    expect(mockEnqueuePaymentSideEffect).toHaveBeenCalledWith(
+      mockQueryRun,
+      { orderId:'o1', userId:1 },
+    )
+    expect(mockSchedulePaymentSideEffects).toHaveBeenCalled()
   })
 
   it('updates order to paid when confirmations reach required', async () => {
     mockQueryAll.mockResolvedValue([
       { id: 1, chain: 'TRON', tx_hash: 'tx1', status: 'confirming', order_id: 'o1', user_id: 1, required_confirmations: 19 },
     ])
-    mockQueryRun.mockResolvedValue({ changes: 1 })
-    mockQueryOne.mockResolvedValue({ plan: 'plus', period: 'monthly' })
+    mockQueryRun.mockImplementation(sql => sql.includes('SELECT plan_expires_at')
+      ? Promise.resolve([[{ plan_expires_at:null }]])
+      : Promise.resolve({ changes:1 }))
+    mockQueryOne.mockResolvedValue({ plan: 'plus', period: 'monthly', amount_confirmed:100 })
 
     startMonitor()
 
@@ -182,12 +254,52 @@ describe('confirmation checker', () => {
       expect.arrayContaining(['o1'])
     )
   })
+
+  it('handles mysql transaction runner tuple when activating membership', async () => {
+    mockQueryAll.mockResolvedValue([
+      { id: 1, chain: 'TRON', tx_hash: 'tx1', status: 'confirming', order_id: 'o1', user_id: 1, required_confirmations: 19 },
+    ])
+    mockQueryRun.mockImplementation(sql => sql.includes('SELECT plan_expires_at')
+      ? Promise.resolve([[{ plan_expires_at:null }]])
+      : Promise.resolve([{ affectedRows:1 }]))
+    mockQueryOne.mockResolvedValue({ plan: 'plus', period: 'month', plan_label: 'Plus', amount: 100, amount_confirmed:90 })
+
+    startMonitor()
+    await vi.advanceTimersByTimeAsync(15000)
+
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE users SET plan'),
+      expect.any(Array)
+    )
+  })
 })
 
 describe('expiry checker', () => {
+  it('expires an order and restores exactly its persisted referral credit', async () => {
+    mockQueryRun.mockImplementation((sql) => {
+      if (sql.trim().startsWith('SELECT user_id')) {
+        return Promise.resolve([[{ user_id:7, status:'pending', referral_credit_applied:29 }]])
+      }
+      return Promise.resolve([{ affectedRows:1 }])
+    })
+
+    await expect(expirePendingOrder('test-order-1', { requirePendingWatch:true })).resolves.toBe(true)
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('referral_credit = referral_credit + ?'),
+      [29, 7]
+    )
+  })
+
   it('marks expired watch_list records', async () => {
-    mockQueryAll.mockResolvedValue([{ order_id: 'test-order-1' }])
-    mockQueryRun.mockResolvedValue({})
+    mockQueryAll.mockImplementation((sql) => sql.includes('expires_at <')
+      ? Promise.resolve([{ order_id:'test-order-1' }])
+      : Promise.resolve([]))
+    mockQueryRun.mockImplementation((sql) => {
+      if (sql.trim().startsWith('SELECT user_id')) {
+        return Promise.resolve([[{ user_id:7, status:'pending', referral_credit_applied:0 }]])
+      }
+      return Promise.resolve([{ affectedRows:1 }])
+    })
 
     startMonitor()
 
@@ -220,6 +332,10 @@ describe('fallback poller', () => {
 
     expect(mockQueryAll).toHaveBeenCalledWith(
       expect.stringContaining("status = 'pending'"),
+      expect.any(Array)
+    )
+    expect(mockQueryAll).toHaveBeenCalledWith(
+      expect.stringContaining("w.status = 'confirming'"),
       expect.any(Array)
     )
   })

@@ -20,7 +20,7 @@ vi.mock('../../server/middleware/auth.js', () => ({
   },
 }))
 
-import { queryAll } from '../../server/db.js'
+import { queryAll, queryOne } from '../../server/db.js'
 import { fetchBilibiliVideo } from '../../server/utils.js'
 import coursesRouter from '../../server/routes/courses.js'
 
@@ -65,6 +65,16 @@ describe('courses.js — GET /course-items', () => {
     expect(body.courses).toHaveLength(1)
     expect(body.courses[0].title).toBe('测试课程')
   })
+
+  it('未登录或会员过期时不下发受限课程资源地址', async () => {
+    queryAll.mockResolvedValueOnce([{
+      episode_id: 2, number: 2, title: '会员课程', content_type: 'video',
+      youtube_id: 'secret-youtube', bilibili_id: 'secret-bvid', article_url: 'https://secret.example.com',
+      article_object_key: 'private/article.md', access_level: 'plus_pro', has_stream_video: 1,
+    }])
+    const body = await httpGet(makeApp(), '/api/course-items')
+    expect(body.courses[0]).toMatchObject({ youtubeId:null, bilibiliId:'', articleUrl:'', articleObjectKey:'' })
+  })
 })
 
 describe('courses.js — GET /bilibili-info/:bvid', () => {
@@ -89,5 +99,41 @@ describe('courses.js — GET /bilibili-info/:bvid', () => {
 
     const body = await httpGet(makeApp(), '/api/bilibili-info/invalid')
     expect(body.ok).toBe(false)
+  })
+})
+
+describe('courses.js — course attachments', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns downloadable attachment metadata for an accessible course', async () => {
+    queryOne.mockResolvedValueOnce({ episode_id:6, access_level:'free', status:'published' })
+    queryAll.mockResolvedValueOnce([{
+      id:21,
+      episode_id:6,
+      type:'attachment',
+      title:'MACD 复盘模板.xlsx',
+      url:'course-attachment://ep6/1000_aabbcc.xlsx',
+      structure:JSON.stringify({ original_name:'MACD 复盘模板.xlsx', extension:'.xlsx', file_size:2048, mime_type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      sort_order:0,
+    }])
+
+    const body = await httpGet(makeApp(), '/api/course-items/6/attachments')
+
+    expect(body.ok).toBe(true)
+    expect(body.attachments).toEqual([expect.objectContaining({
+      id:21,
+      file_name:'MACD 复盘模板.xlsx',
+      file_size:2048,
+      download_url:'/api/course-items/6/attachments/21/download',
+    })])
+  })
+
+  it('does not expose attachment metadata without the course membership permission', async () => {
+    queryOne.mockResolvedValueOnce({ episode_id:6, access_level:'pro_only', status:'published' })
+
+    const body = await httpGet(makeApp(), '/api/course-items/6/attachments')
+
+    expect(body).toEqual({ ok:false, error:'当前会员权限不可下载该课程附件' })
+    expect(queryAll).not.toHaveBeenCalled()
   })
 })

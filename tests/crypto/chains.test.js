@@ -90,21 +90,17 @@ describe('TRON Adapter', () => {
 
   it('getTransaction calls TronGrid API', async () => {
     mockFetch({
-      ret: [{ contractResult: 'SUCCESS' }],
-      raw_data: {
-        contract: [{
-          parameter: { value: { amount: 1000000, ownerAddress: 'Txxx', toAddress: 'Tyyy' } },
-        }],
-      },
-      block_header: { raw_data: { number: 100 } },
+      id: 'abc123',
+      blockNumber: 100,
+      receipt: { result: 'SUCCESS' },
     })
     const { tronAdapter } = await import('../../server/crypto/chains/tron.js')
     const tx = await tronAdapter.getTransaction('abc123')
     expect(tx.hash).toBe('abc123')
     expect(tx.status).toBe('success')
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('trongrid.io/v1/transactions/abc123'),
-      expect.objectContaining({ headers: expect.any(Object) })
+      expect.stringContaining('trongrid.io/walletsolidity/gettransactioninfobyid'),
+      expect.objectContaining({ method: 'POST', headers: expect.any(Object) })
     )
   })
 

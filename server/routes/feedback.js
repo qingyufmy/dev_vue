@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import nodemailer from 'nodemailer'
+import { systemConfigRowsToMap } from '../system-config-secrets.js'
 import { queryOne, queryAll, queryRun } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 
@@ -49,9 +50,9 @@ router.post('/feedback', authMiddleware, async (req, res) => {
     const feedbackId = result.insertId
 
     // Load SMTP config
-    const smtpConfig = {}
+    let smtpConfig = {}
     const rows = await queryAll("SELECT `key`, `value` FROM system_config WHERE category = 'smtp'")
-    for (const r of rows) smtpConfig[r.key] = r.value
+    smtpConfig = systemConfigRowsToMap(rows)
 
     // Get admin email from users table (Plan A)
     let adminEmail = smtpConfig.from || smtpConfig.user

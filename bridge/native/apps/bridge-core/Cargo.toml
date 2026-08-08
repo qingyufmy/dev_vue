@@ -1,0 +1,32 @@
+[package]
+name = "liangjian-bridge-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bridge-command = { path = "../../crates/bridge-command" }
+bridge-contract = { path = "../../crates/bridge-contract" }
+bridge-foundation = { path = "../../crates/bridge-foundation" }
+bridge-local-control = { path = "../../crates/bridge-local-control" }
+bridge-mt4 = { path = "../../crates/bridge-mt4" }
+bridge-observability = { path = "../../crates/bridge-observability" }
+bridge-preferences = { path = "../../crates/bridge-preferences" }
+bridge-runtime-win = { path = "../../crates/bridge-runtime-win" }
+bridge-security-win = { path = "../../crates/bridge-security-win" }
+bridge-store = { path = "../../crates/bridge-store" }
+bridge-terminal-data = { path = "../../crates/bridge-terminal-data" }
+bridge-terminal-session = { path = "../../crates/bridge-terminal-session" }
+bridge-transport = { path = "../../crates/bridge-transport" }
+bridge-update = { path = "../../crates/bridge-update" }
+bridge-worker-host = { path = "../../crates/bridge-worker-host" }
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+windows-sys.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite.workspace = true

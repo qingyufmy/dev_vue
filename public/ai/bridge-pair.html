@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>连接量见智桥 · AI交易实验室</title>
+  <link rel="stylesheet" href="/ai/bridge-pair.css?v=20260726b">
+</head>
+<body>
+  <main class="pair-page">
+    <a class="brand" href="/ai/" aria-label="返回 AI交易实验室">
+      <span class="brand-mark">量</span>
+      <span><strong>AI交易实验室</strong><small>量见智桥授权</small></span>
+    </a>
+
+    <section class="pair-card" aria-labelledby="pairTitle">
+      <div class="eyebrow">本机连接确认</div>
+      <h1 id="pairTitle">连接量见智桥</h1>
+      <p class="intro">确认后，本机桥接软件可以为所选账户转发 MT4/MT5 数据并接收服务器交易指令。</p>
+
+      <div class="code-block">
+        <span>本次授权码</span>
+        <strong id="pairCode">----</strong>
+        <small>请确认与桥接软件显示的授权码一致</small>
+      </div>
+
+      <label class="source-field" id="sourceField" hidden>
+        <span>连接身份</span>
+        <select id="bridgeSource" aria-label="选择桥接连接身份"></select>
+        <small>管理员可以将独立桥接档案连接到不同观摩源。</small>
+      </label>
+
+      <div class="account-row">
+        <span>当前登录</span>
+        <strong id="currentAccount">正在读取…</strong>
+      </div>
+
+      <ul class="safety-list">
+        <li>授权凭证只保存在当前 Windows 用户中。</li>
+        <li>退出桥接账号后，必须再次手动点击“连接账号”才能发起授权。</li>
+        <li>每个观摩源使用独立桥接档案，数据和凭证相互隔离。</li>
+      </ul>
+
+      <div class="pair-status" id="pairStatus" role="status" aria-live="polite">
+        <span id="statusMark">…</span>
+        <div><strong id="statusTitle">正在检查登录状态</strong><p id="statusText">请稍候。</p></div>
+      </div>
+
+      <div class="actions">
+        <button id="approvePair" class="primary" type="button" disabled>确认连接</button>
+        <a class="secondary" href="/ai/">返回 AI交易实验室</a>
+      </div>
+    </section>
+  </main>
+  <script src="/shared/session.js?v=20260724wsfix1"></script>
+  <script src="/ai/bridge-pair.js?v=20260726b"></script>
+</body>
+</html>

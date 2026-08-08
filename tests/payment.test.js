@@ -2,12 +2,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockQueryOne = vi.fn()
 const mockQueryRun = vi.fn()
+const mockQueryAll = vi.fn()
 const mockWithTransaction = vi.fn()
+const mockLogAudit = vi.fn()
+const mockEnqueuePaymentSideEffect = vi.fn()
+const mockSchedulePaymentSideEffects = vi.fn()
 
 vi.mock('../server/db.js', () => ({
   get queryOne() { return mockQueryOne },
   get queryRun() { return mockQueryRun },
+  get queryAll() { return mockQueryAll },
   get withTransaction() { return mockWithTransaction },
+  get logAudit() { return mockLogAudit },
 }))
 
 vi.mock('../server/middleware/auth.js', () => ({
@@ -20,6 +26,7 @@ vi.mock('../server/crypto/wallet.js', () => ({
   getAddressCount: vi.fn(() => 0),
   saveAddress: vi.fn(),
   getRequiredConfirmations: vi.fn(() => 19),
+  validateAddress: vi.fn(() => true),
 }))
 
 vi.mock('../server/crypto/chains/index.js', () => ({
@@ -32,6 +39,11 @@ vi.mock('../server/crypto/qr.js', () => ({
 
 vi.mock('../server/crypto/monitor.js', () => ({
   addWatchAddress: vi.fn(() => Promise.resolve(1)),
+}))
+
+vi.mock('../server/jobs/payment-side-effects.js', () => ({
+  enqueuePaymentSideEffect: (...args) => mockEnqueuePaymentSideEffect(...args),
+  schedulePaymentSideEffects: (...args) => mockSchedulePaymentSideEffects(...args),
 }))
 
 const mockFetch = vi.fn(() => Promise.resolve({
@@ -77,8 +89,17 @@ describe('payment.js — GET /payment preview', () => {
   beforeEach(() => {
     mockQueryOne.mockReset()
     mockQueryRun.mockReset()
+    mockQueryRun.mockImplementation((sql) => {
+      if (sql.includes('FROM users WHERE id = ? FOR UPDATE')) {
+        return Promise.resolve([[{ plan:'free', plan_expires_at:null, referral_credit:0 }]])
+      }
+      if (sql.trim().startsWith('SELECT')) return Promise.resolve([[]])
+      return Promise.resolve([{ insertId:1, affectedRows:1 }])
+    })
+    mockQueryAll.mockReset()
+    mockQueryAll.mockResolvedValue([{ key: 'fixed_tron_address', value: 'TTestAddress12345678901234567890' }])
     mockWithTransaction.mockReset()
-    mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
+    mockWithTransaction.mockImplementation((fn) => fn(mockQueryRun))
   })
 
   it('缺少 preview 参数返回错误', async () => {
@@ -107,6 +128,13 @@ describe('payment.js — GET /payment preview', () => {
     expect(json.plan).toBe('pro')
   })
 
+  it.each(['plus', 'pro'])('过期会员可以重新购买 %s', async (targetPlan) => {
+    mockQueryOne.mockResolvedValue({ plan: 'pro', plan_expires_at: '2020-01-01 23:59:59', referral_credit: 0 })
+    const { json } = await callRoute('get', '/payment', { preview: '1', plan: targetPlan, period: 'month' })
+    expect(json.ok).toBe(true)
+    expect(json.plan).toBe(targetPlan)
+  })
+
   it('年付正确计算价格', async () => {
     mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('get', '/payment', { preview: '1', plan: 'pro', period: 'yearly' })
@@ -123,14 +151,33 @@ describe('payment.js — GET /payment preview', () => {
     expect(json.ok).toBe(true)
     expect(json.referral_credit_applied).toBe(5)
   })
+
+  it('推荐积分超过订单金额时仅显示实际可抵扣金额', async () => {
+    mockQueryOne.mockResolvedValue({ plan:'free', plan_expires_at:null, referral_credit:2900 })
+    const { json } = await callRoute('get', '/payment', {
+      preview:'1', plan:'plus', period:'month', use_referral_credit:'1',
+    })
+    expect(json).toMatchObject({ fullPrice:'29.00', finalAmount:'0.00', referral_credit_applied:29 })
+  })
 })
 
 describe('payment.js — POST /payment', () => {
   beforeEach(() => {
     mockQueryOne.mockReset()
     mockQueryRun.mockReset()
+    mockQueryAll.mockReset()
+    mockQueryAll.mockResolvedValue([{ key: 'fixed_tron_address', value: 'TTestAddress12345678901234567890' }])
     mockWithTransaction.mockReset()
-    mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
+    mockEnqueuePaymentSideEffect.mockReset()
+    mockSchedulePaymentSideEffects.mockReset()
+    mockQueryRun.mockImplementation((sql) => {
+      if (sql.includes('FROM users WHERE id = ? FOR UPDATE')) {
+        return Promise.resolve([[{ plan:'free', plan_expires_at:null, referral_credit:0 }]])
+      }
+      if (sql.trim().startsWith('SELECT')) return Promise.resolve([[]])
+      return Promise.resolve([{ insertId:1, affectedRows:1 }])
+    })
+    mockWithTransaction.mockImplementation((fn) => fn(mockQueryRun))
   })
 
   it('未知套餐返回错误', async () => {
@@ -151,11 +198,12 @@ describe('payment.js — POST /payment', () => {
   })
 
   it('全额积分抵扣直接支付成功', async () => {
-    const userObj = { plan: 'free', plan_expires_at: null, referral_credit: 2900 }
-    mockQueryOne.mockImplementation((sql) => {
-      if (sql.includes('referrals')) return Promise.resolve(null)
-      if (sql.includes('existing') || sql.includes('crypto_expires_at')) return Promise.resolve(null)
-      return Promise.resolve(userObj)
+    mockQueryRun.mockImplementation((sql) => {
+      if (sql.includes('FROM users WHERE id = ? FOR UPDATE')) {
+        return Promise.resolve([[{ plan:'free', plan_expires_at:null, referral_credit:2900 }]])
+      }
+      if (sql.trim().startsWith('SELECT')) return Promise.resolve([[]])
+      return Promise.resolve([{ insertId:1, affectedRows:1 }])
     })
     const { json } = await callRoute('post', '/payment', {
       plan: 'plus', period: 'month', crypto_chain: 'TRON', use_referral_credit: 1
@@ -163,13 +211,18 @@ describe('payment.js — POST /payment', () => {
     expect(json.ok).toBe(true)
     expect(json.paid_with_credit).toBe(true)
     expect(json.orderNo).toBeDefined()
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('referral_credit = referral_credit - ?'),
+      [29, 1, 29]
+    )
+    expect(mockEnqueuePaymentSideEffect).toHaveBeenCalledWith(
+      mockQueryRun,
+      expect.objectContaining({ userId:1 }),
+    )
+    expect(mockSchedulePaymentSideEffects).toHaveBeenCalled()
   })
 
   it('创建加密订单返回支付信息', async () => {
-    mockQueryOne.mockImplementation((sql) => {
-      if (sql.includes('crypto_expires_at')) return Promise.resolve(null)
-      return Promise.resolve({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
-    })
     const { json } = await callRoute('post', '/payment', {
       plan: 'pro', period: 'month', crypto_chain: 'TRON'
     })
@@ -181,24 +234,50 @@ describe('payment.js — POST /payment', () => {
     expect(json.crypto_amount).toBeGreaterThan(0)
     expect(json.expires_at).toBeDefined()
     expect(json.qr_code).toBeDefined()
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO crypto_watch_list'),
+      expect.arrayContaining(['TRON', 'TTestAddress12345678901234567890', 19])
+    )
   })
 
-  it('支持 ETH 链创建订单', async () => {
+  it('复用订单时返回订单中保存的实付金额，不按当前余额重算', async () => {
+    mockQueryRun.mockImplementation((sql) => {
+      if (sql.includes('FROM users WHERE id = ? FOR UPDATE')) {
+        return Promise.resolve([[{ plan:'free', plan_expires_at:null, referral_credit:999 }]])
+      }
+      if (sql.includes('FROM orders o')) {
+        return Promise.resolve([[{
+          order_id:'existing-id', order_no:'WSS-OLD', crypto_address:'TTestAddress12345678901234567890',
+          crypto_amount:'24.000001', crypto_expires_at:'2026-07-25 10:00:00', crypto_chain:'TRON',
+          amount_confirmed:24, referral_credit_applied:5,
+        }]])
+      }
+      if (sql.trim().startsWith('SELECT')) return Promise.resolve([[]])
+      return Promise.resolve([{ insertId:1, affectedRows:1 }])
+    })
+
+    const { json } = await callRoute('post', '/payment', {
+      plan:'plus', period:'month', crypto_chain:'TRON', use_referral_credit:1,
+    })
+
+    expect(json).toMatchObject({ ok:true, reused:true, usd_amount:'24.00', referral_credit_applied:5 })
+    expect(mockQueryRun).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO orders'), expect.anything())
+  })
+
+  it('拒绝 ETH 链创建订单', async () => {
     mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('post', '/payment', {
       plan: 'plus', period: 'month', crypto_chain: 'ETH'
     })
-    expect(json.ok).toBe(true)
-    expect(json.crypto_chain).toBe('ETH')
+    expect(json.ok).toBe(false)
   })
 
-  it('支持 SOL 链创建订单', async () => {
+  it('拒绝 SOL 链创建订单', async () => {
     mockQueryOne.mockResolvedValue({ plan: 'free', plan_expires_at: null, referral_credit: 0 })
     const { json } = await callRoute('post', '/payment', {
       plan: 'plus', period: 'yearly', crypto_chain: 'SOL'
     })
-    expect(json.ok).toBe(true)
-    expect(json.crypto_chain).toBe('SOL')
+    expect(json.ok).toBe(false)
   })
 })
 
@@ -206,6 +285,8 @@ describe('payment.js — GET /payment/status/:orderId', () => {
   beforeEach(() => {
     mockQueryOne.mockReset()
     mockQueryRun.mockReset()
+    mockQueryAll.mockReset()
+    mockQueryAll.mockResolvedValue([{ key: 'fixed_tron_address', value: 'TTestAddress12345678901234567890' }])
     mockWithTransaction.mockReset()
     mockWithTransaction.mockImplementation((fn) => fn(async (sql, params) => ({ insertId: 1 })))
   })
@@ -241,5 +322,42 @@ describe('payment.js — GET /payment/status/:orderId', () => {
     const { json } = await callRoute('get', '/payment/status/paid-001', {}, { id: 1 })
     expect(json.ok).toBe(true)
     expect(json.status).toBe('paid')
+  })
+})
+
+describe('payment.js — POST /payment/cancel/:orderId', () => {
+  beforeEach(() => {
+    mockQueryRun.mockReset()
+    mockWithTransaction.mockReset()
+    mockWithTransaction.mockImplementation((fn) => fn(mockQueryRun))
+  })
+
+  it('在同一事务中取消订单并返还精确记录的抵扣额', async () => {
+    mockQueryRun.mockImplementation((sql) => {
+      if (sql.trim().startsWith('SELECT order_id')) {
+        return Promise.resolve([[{ order_id:'order-1', status:'pending', referral_credit_applied:7 }]])
+      }
+      return Promise.resolve([{ affectedRows:1 }])
+    })
+
+    const { json } = await callRoute('post', '/payment/cancel/order-1', {}, { id:1 })
+
+    expect(json).toEqual({ ok:true })
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('referral_credit = referral_credit + ?'),
+      [7, 1]
+    )
+  })
+
+  it('已非待支付状态时不重复返还抵扣额', async () => {
+    mockQueryRun.mockResolvedValue([[{ order_id:'order-1', status:'cancelled', referral_credit_applied:7 }]])
+
+    const { json } = await callRoute('post', '/payment/cancel/order-1', {}, { id:1 })
+
+    expect(json).toEqual({ ok:false, error:'订单无法取消' })
+    expect(mockQueryRun).not.toHaveBeenCalledWith(
+      expect.stringContaining('referral_credit = referral_credit + ?'),
+      expect.any(Array)
+    )
   })
 })

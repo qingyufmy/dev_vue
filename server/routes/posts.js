@@ -1,44 +1,31 @@
 import { Router } from 'express'
 import multer from 'multer'
-import { join, dirname, extname } from 'path'
-import { fileURLToPath } from 'url'
+import { join } from 'path'
 import { existsSync, mkdirSync, unlinkSync } from 'fs'
-import { queryOne, queryAll, queryRun } from '../db.js'
+import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
 import { authMiddleware, optionalAuth } from '../middleware/auth.js'
+import { sanitizeRichContent } from '../html-sanitizer.js'
+import { createImageAssetName, detectImageType } from '../image-upload.js'
+import { PUBLIC_UPLOAD_DIR } from '../config.js'
+import { createStorageService } from '../storage/storage-service.js'
+import { createMultipartStoredFile, createDirectStorageSession, confirmDirectStorageSession, safeStorageError, loadStoredFile, STORED_FILE_OWNERS } from '../storage/stored-file-service.js'
+import { sendStoredFile } from '../storage/stored-file-response.js'
 
-const __postsDirname = dirname(fileURLToPath(import.meta.url))
-const __uploadDir = join(__postsDirname, '..', process.env.UPLOAD_DIR || 'uploads')
+const __uploadDir = PUBLIC_UPLOAD_DIR
 if (!existsSync(__uploadDir)) mkdirSync(__uploadDir, { recursive: true })
 
-const DANGEROUS_TAGS_RE = /<\s*\/?\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>|<\s*(script|style|iframe|object|embed|form|input|textarea|button|meta|link|base)\b[^>]*\/?\s*>/gi
-const EVENT_HANDLER_RE = /\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi
-const JS_URL_RE = /(href|src|action)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi
-const DATA_ATTR_RE = /\s+data-(?!(?:asset-id|reply-id|post-id|update-target|mindmap-structure|fallback-image|quote-reply|report-reply|post-report|post-pin|next-pin|user-id|referral-approve|referral-void|rule-rate|rule-enabled|board|field)\b)[a-z][\w-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi
-
 export function sanitizeContentHtml(html) {
-  if (!html || typeof html !== 'string') return ''
-  let out = html
-  out = out.replace(DANGEROUS_TAGS_RE, '')
-  out = out.replace(EVENT_HANDLER_RE, '')
-  out = out.replace(JS_URL_RE, '$1="#"')
-  out = out.replace(DATA_ATTR_RE, '')
-  return out
+  return sanitizeRichContent(html)
 }
 
-const postImageStorage = multer.diskStorage({
-  destination: __uploadDir,
-  filename(req, file, cb) {
-    const ext = extname(file.originalname) || '.jpg'
-    const assetId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    cb(null, assetId + ext)
-  },
-})
+const postImageStorage = multer.memoryStorage()
 const postImageUpload = multer({
   storage: postImageStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter(req, file, cb) {
-    if (/^image\/(jpeg|png|webp|gif)$/.test(file.mimetype)) cb(null, true)
-    else cb(new Error('仅支持 JPEG/PNG/WebP/GIF 格式'))
+    // Client MIME is advisory. The route validates the actual magic bytes
+    // with detectImageType after multer has buffered the upload.
+    cb(null, true)
   },
 })
 
@@ -52,7 +39,7 @@ router.get('/posts', optionalAuth, async (req, res) => {
     // Single post
     if (id) {
       const post = await queryOne(`
-        SELECT p.*, u.nickname, u.avatar, u.email, u.role as user_role,
+        SELECT p.*, u.nickname, u.avatar, u.role as user_role,
                ru.nickname as reply_user_name, ru.avatar as reply_user_avatar
         FROM posts p LEFT JOIN users u ON p.user_id = u.id
         LEFT JOIN users ru ON p.last_reply_user_id = ru.id
@@ -75,7 +62,7 @@ router.get('/posts', optionalAuth, async (req, res) => {
           board: post.board,
           title: post.title,
           content: post.content_text || post.content || '',
-          contentHtml: post.content_html || post.content || '',
+          contentHtml: sanitizeContentHtml(post.content_html || post.content || ''),
           contentText: post.content_text || '',
           contentFormat: post.content_html ? 'rich' : 'plain',
           tags: tagObjects,
@@ -99,7 +86,6 @@ router.get('/posts', optionalAuth, async (req, res) => {
             id: post.user_id,
             name: post.nickname || '匿名',
             avatar: post.avatar,
-            email: post.email,
             isAdmin: post.user_role === 'admin',
           },
           lastReplyUser: post.reply_user_name ? { name: post.reply_user_name, avatar: post.reply_user_avatar } : null,
@@ -130,7 +116,7 @@ router.get('/posts', optionalAuth, async (req, res) => {
     else orderBy += 'COALESCE(p.last_reply_at, p.created_at) DESC'
 
     const posts = await queryAll(`
-      SELECT p.*, u.nickname, u.avatar, u.email, u.role as user_role,
+      SELECT p.*, u.nickname, u.avatar, u.role as user_role,
              ru.nickname as reply_user_name, ru.avatar as reply_user_avatar
       FROM posts p LEFT JOIN users u ON p.user_id = u.id
       LEFT JOIN users ru ON p.last_reply_user_id = ru.id
@@ -188,7 +174,7 @@ router.get('/posts', optionalAuth, async (req, res) => {
           canModerate: isAdminUser,
           createdAt: p.created_at,
           lastRepliedAt: p.last_reply_at || p.created_at,
-          user: { id: p.user_id, name: p.nickname || '匿名', avatar: p.avatar, email: p.email, isAdmin: p.user_role === 'admin' },
+          user: { id: p.user_id, name: p.nickname || '匿名', avatar: p.avatar, isAdmin: p.user_role === 'admin' },
           lastReplyUser: p.reply_user_name ? { name: p.reply_user_name } : null,
           participants: participants[p.id] || [],
         }
@@ -294,7 +280,7 @@ router.get('/post-replies', optionalAuth, async (req, res) => {
     const offset = (Number(page) - 1) * limit
 
     const replies = await queryAll(`
-      SELECT r.*, u.nickname, u.avatar, u.email, u.role as user_role,
+      SELECT r.*, u.nickname, u.avatar, u.role as user_role,
              q.content as quote_content, q.user_id as quote_user_id, qu.nickname as quote_user_name,
              q.floor_number as quote_floor_number
       FROM post_replies r
@@ -314,14 +300,14 @@ router.get('/post-replies', optionalAuth, async (req, res) => {
       totalPages: Math.ceil(total / limit),
       replies: replies.map(r => ({
         id: r.id,
-        content: r.content_html || r.content,
+        content: sanitizeContentHtml(r.content_html || r.content),
         contentText: r.content_text || r.content,
-        contentHtml: r.content_html || '',
+        contentHtml: sanitizeContentHtml(r.content_html || ''),
         floorNumber: r.floor_number || 0,
         images: JSON.parse(r.images || '[]'),
         likes: r.likes,
         createdAt: r.created_at,
-        user: { id: r.user_id, name: r.nickname || '匿名', avatar: r.avatar, email: r.email, isAdmin: r.user_role === 'admin' },
+        user: { id: r.user_id, name: r.nickname || '匿名', avatar: r.avatar, isAdmin: r.user_role === 'admin' },
         quoteReply: r.quote_reply_id ? {
           id: r.quote_reply_id,
           contentText: r.quote_content,
@@ -419,20 +405,91 @@ router.post('/post-images', authMiddleware, postImageUpload.single('file'), asyn
   try {
     if (!req.file) return res.json({ ok: false, error: '未收到图片文件' })
 
-    const savedName = req.file.filename
-    const assetId = savedName.replace(/\.[^.]+$/, '')
-    const url = `/uploads/${savedName}`
-
-    await queryRun('INSERT INTO post_assets (asset_id, user_id, file_name, file_type, file_size, url) VALUES (?, ?, ?, ?, ?, ?)',
-      [assetId, req.user.id, req.file.originalname, req.file.mimetype, req.file.size, url])
-
-    res.json({ ok: true, assetId, url })
+    const imageType = detectImageType(req.file.buffer)
+    if (!imageType) return res.status(400).json({ ok:false, error:'仅支持真实的 JPEG、PNG、WebP 或 GIF 图片' })
+    const assetId = createImageAssetName('img')
+    const storage = await createStorageService()
+    const result = await createMultipartStoredFile({
+      storage, purpose:'image', body:req.file.buffer, originalName:req.file.originalname,
+      mimeType:imageType.mimeType, ownerType:STORED_FILE_OWNERS.POST_IMAGE, ownerId:req.user.id,
+      createdBy:req.user.id, visibility:'public', allowGif:imageType.mimeType === 'image/gif',
+      insertBusiness:async (run, context) => {
+        const url = `/api/post-images/${encodeURIComponent(assetId)}/file`
+        await run(`INSERT INTO post_assets (asset_id, user_id, file_name, file_type, file_size, url, stored_file_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`, [assetId, req.user.id, req.file.originalname, imageType.mimeType, req.file.size, url, context.storedFileId])
+        return { assetId, url }
+      },
+    })
+    res.json({ ok:true, assetId, url:result.business.url, storage_provider:result.provider, upload_phase:'confirmed' })
   } catch (err) {
     console.error('[Posts] Image upload error:', err)
-    if (req.file) {
-      try { unlinkSync(req.file.path) } catch {}
-    }
-    res.json({ ok: false, error: '上传失败' })
+    const safe = safeStorageError(err)
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, upload_phase:'failed' })
+  }
+})
+
+// Lightweight preflight used by the browser to avoid sending a multipart
+// body to the app when image storage is configured for qiniu.
+router.get('/post-images/storage-provider', authMiddleware, async (req, res) => {
+  try {
+    const storage = await createStorageService()
+    res.json({ ok:true, provider:storage.config.effectiveProviders?.image || storage.configuredProvider('image'), expiresAt:new Date(Date.now() + 30_000).toISOString() })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_provider_lookup_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code })
+  }
+})
+
+router.post('/post-images/upload-session', authMiddleware, async (req, res) => {
+  try {
+    const storage = await createStorageService()
+    const session = await createDirectStorageSession({
+      storage, purpose:'image', originalName:req.body?.originalName, mimeType:req.body?.mimeType,
+      sizeBytes:req.body?.sizeBytes, ownerType:STORED_FILE_OWNERS.POST_IMAGE, ownerId:req.user.id,
+      createdBy:req.user.id, visibility:'public', allowGif:true,
+    })
+    res.status(201).json({ ok:true, ...session, storage_provider:session.provider, upload_phase:'session_created' })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_session_create_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, upload_phase:'failed' })
+  }
+})
+
+router.post('/post-images/confirm', authMiddleware, async (req, res) => {
+  try {
+    const storage = await createStorageService()
+    const completed = await confirmDirectStorageSession({
+      storage, sessionId:String(req.body?.sessionId || ''), createdBy:req.user.id, result:{ key:req.body?.key },
+      validateSession:async session => {
+        if (session.owner_type !== STORED_FILE_OWNERS.POST_IMAGE || Number(session.owner_id) !== Number(req.user.id)) throw Object.assign(new Error('storage_session_owner_mismatch'), { code:'storage_session_owner_mismatch' })
+      },
+      insertBusiness:async (run, context) => {
+        const assetId = createImageAssetName('img')
+        const url = `/api/post-images/${encodeURIComponent(assetId)}/file`
+        await run(`INSERT INTO post_assets (asset_id, user_id, file_name, file_type, file_size, url, stored_file_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`, [assetId, req.user.id, context.metadata.originalName, context.metadata.mimeType, context.metadata.sizeBytes, url, context.storedFileId])
+        return { assetId, url }
+      },
+    })
+    res.status(201).json({ ok:true, ...completed.business, storage_provider:completed.provider, upload_phase:'confirmed' })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_confirm_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, cleanup_pending:!!safe.cleanupPending, upload_phase:'failed' })
+  }
+})
+
+router.get('/post-images/:assetId/file', async (req, res) => {
+  try {
+    const asset = await queryOne('SELECT * FROM post_assets WHERE asset_id = ? AND stored_file_id IS NOT NULL', [req.params.assetId])
+    if (!asset) return res.status(404).json({ ok:false, error:'图片不存在' })
+    const stored = await loadStoredFile(asset.stored_file_id)
+    if (!stored) return res.status(404).json({ ok:false, error:'图片文件不存在' })
+    const storage = await createStorageService()
+    const served = await sendStoredFile({ res, storage, row:stored })
+    if (!served && !res.headersSent) res.status(404).json({ ok:false, error:'图片文件不存在' })
+  } catch (error) {
+    console.error('[Posts] Image read error:', error)
+    if (!res.headersSent) res.status(404).json({ ok:false, error:'图片文件不存在' })
   }
 })
 
@@ -442,9 +499,30 @@ router.delete('/post-images', authMiddleware, async (req, res) => {
     const { id } = req.query
     const asset = await queryOne('SELECT * FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
     if (asset) {
-      const filePath = join(__uploadDir, asset.url?.replace(/^\/uploads\//, '') || '')
-      try { unlinkSync(filePath) } catch {}
-      await queryRun('DELETE FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+      if (asset.stored_file_id) {
+        const stored = await loadStoredFile(asset.stored_file_id, { includeDeleted:true })
+        await withTransaction(async run => {
+          await run('DELETE FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+          await run("UPDATE stored_files SET status = 'deleting', updated_at = NOW() WHERE id = ?", [asset.stored_file_id])
+        })
+        if (stored && !['deleted', 'failed'].includes(stored.status)) {
+          const storage = await createStorageService()
+          try { await storage.delete({ provider:stored.storage_provider, objectKey:stored.object_key, configVersion:stored.config_version }) } catch (error) {
+            const safe = safeStorageError(error, 'storage_delete_failed')
+            return res.status(400).json({ ok:false, error:safe.code, code:safe.code, cleanup_pending:true })
+          }
+        }
+        try { await queryRun("UPDATE stored_files SET status = 'deleted', deleted_at = NOW(), updated_at = NOW() WHERE id = ?", [asset.stored_file_id]) } catch {
+          return res.status(400).json({ ok:false, error:'storage_delete_state_pending', code:'storage_delete_state_pending', cleanup_pending:true })
+        }
+      } else {
+        const fileName = String(asset.url || '').replace(/^\/uploads\//, '')
+        if (fileName && !fileName.includes('/') && !fileName.includes('\\')) {
+          const filePath = join(__uploadDir, fileName)
+          try { unlinkSync(filePath) } catch {}
+        }
+        await queryRun('DELETE FROM post_assets WHERE asset_id = ? AND user_id = ?', [id, req.user.id])
+      }
     }
     res.json({ ok: true })
   } catch (err) { res.json({ ok: false, error: '删除失败' }) }

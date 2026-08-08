@@ -95,6 +95,17 @@ export async function queryRun(sql, params = []) {
   return { changes: result.affectedRows, insertId: result.insertId }
 }
 
+/** Execute work while holding one dedicated pooled connection. */
+export async function withConnection(fn) {
+  const connection = await getDB().getConnection()
+  try {
+    const runner = (sql, params = []) => connection.query(sql, params)
+    return await fn(runner)
+  } finally {
+    connection.release()
+  }
+}
+
 /** Execute a callback within a MySQL transaction */
 export async function withTransaction(fn) {
   const p = getDB()
@@ -154,10 +165,11 @@ export async function initDB() {
       telegram_joined_at DATETIME,
       telegram_last_invite_sent_at DATETIME,
       referral_code VARCHAR(50) UNIQUE,
-      referral_credit INT DEFAULT 0,
+      referral_credit DECIMAL(20,8) NOT NULL DEFAULT 0,
       referred_by VARCHAR(50),
       last_seen_at DATETIME,
       changelog_seen_version INT DEFAULT 0,
+      token_version INT NOT NULL DEFAULT 0,
       created_at DATETIME DEFAULT (NOW()),
       updated_at DATETIME DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -299,8 +311,9 @@ export async function initDB() {
       plan_label VARCHAR(50) DEFAULT '',
       period VARCHAR(20) DEFAULT 'month',
       period_label VARCHAR(50) DEFAULT '',
-      amount INT DEFAULT 0,
-      amount_confirmed INT DEFAULT 0,
+      amount DECIMAL(20,8) NOT NULL DEFAULT 0,
+      amount_confirmed DECIMAL(20,8) NOT NULL DEFAULT 0,
+      referral_credit_applied DECIMAL(20,8) NOT NULL DEFAULT 0,
       currency VARCHAR(10) DEFAULT 'USD',
       status VARCHAR(20) DEFAULT 'pending',
       status_label VARCHAR(50) DEFAULT '',
@@ -316,8 +329,26 @@ export async function initDB() {
       title VARCHAR(500) DEFAULT '',
       message VARCHAR(2000) DEFAULT '',
       link VARCHAR(500) DEFAULT '',
+      dedupe_key VARCHAR(191) DEFAULT NULL,
       is_read TINYINT DEFAULT 0,
-      created_at DATETIME DEFAULT (NOW())
+      created_at DATETIME DEFAULT (NOW()),
+      UNIQUE KEY uq_notifications_dedupe_key (dedupe_key)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+    `CREATE TABLE IF NOT EXISTS payment_side_effects (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      order_id VARCHAR(100) NOT NULL,
+      user_id INT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      attempt_count INT NOT NULL DEFAULT 0,
+      next_attempt_at DATETIME NOT NULL DEFAULT (NOW()),
+      locked_at DATETIME DEFAULT NULL,
+      completed_at DATETIME DEFAULT NULL,
+      last_error VARCHAR(1000) DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT (NOW()),
+      updated_at DATETIME NOT NULL DEFAULT (NOW()),
+      UNIQUE KEY uq_payment_side_effect_order (order_id),
+      KEY idx_payment_side_effect_ready (status, next_attempt_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS verification_codes (
@@ -359,12 +390,14 @@ export async function initDB() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       referrer_id INT NOT NULL,
       referred_id INT NOT NULL,
+      order_id VARCHAR(100) DEFAULT NULL,
       status VARCHAR(20) DEFAULT 'pending',
-      commission INT DEFAULT 0,
-      amount_cents INT DEFAULT 0,
+      commission DECIMAL(20,8) NOT NULL DEFAULT 0,
+      cash_amount DECIMAL(20,8) NOT NULL DEFAULT 0,
       plan_label VARCHAR(50) DEFAULT '',
       attributed_at DATETIME,
-      created_at DATETIME DEFAULT (NOW())
+      created_at DATETIME DEFAULT (NOW()),
+      UNIQUE KEY uq_referrals_order_id (order_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
     `CREATE TABLE IF NOT EXISTS video_streams (
@@ -447,13 +480,16 @@ export async function initDB() {
       signal_type VARCHAR(20) NOT NULL,
       confidence DOUBLE NOT NULL,
       recommended_volume DOUBLE NOT NULL,
+      position_size_tier VARCHAR(16) DEFAULT NULL,
+      position_size_factor DOUBLE DEFAULT NULL,
+      position_size_reason VARCHAR(255) DEFAULT NULL,
       analysis TEXT NOT NULL,
       reasoning TEXT NOT NULL,
       stop_loss_price DOUBLE,
       take_profit_1_price DOUBLE,
       take_profit_2_price DOUBLE,
       take_profit_3_price DOUBLE,
-      market_data_json TEXT NOT NULL,
+      market_data_json LONGTEXT NOT NULL,
       token_count INT DEFAULT 0,
       ai_model VARCHAR(100) NOT NULL DEFAULT 'deepseek-chat',
       ttl_seconds INT,
@@ -461,12 +497,16 @@ export async function initDB() {
       executed_at DATETIME,
       trade_ticket VARCHAR(100),
       execution_result TEXT,
-      entry_method VARCHAR(8) DEFAULT 'market',
+      entry_method VARCHAR(20) DEFAULT 'market',
       limit_price DOUBLE DEFAULT NULL,
       stop_limit_price DOUBLE DEFAULT NULL,
       pending_valid_until DATETIME DEFAULT NULL,
       order_state VARCHAR(12) DEFAULT NULL,
       pending_ticket VARCHAR(32) DEFAULT NULL,
+      created_at_utc_msc BIGINT DEFAULT NULL,
+      terminal_timezone_offset_minutes SMALLINT DEFAULT NULL,
+      terminal_clock_status VARCHAR(32) DEFAULT NULL,
+      terminal_clock_source VARCHAR(64) DEFAULT NULL,
       created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -478,6 +518,11 @@ export async function initDB() {
       request_json TEXT NOT NULL,
       result_json TEXT NOT NULL,
       status VARCHAR(20) NOT NULL,
+      trading_account_id INT DEFAULT NULL,
+      created_at_utc_msc BIGINT DEFAULT NULL,
+      terminal_timezone_offset_minutes SMALLINT DEFAULT NULL,
+      terminal_clock_status VARCHAR(32) DEFAULT NULL,
+      terminal_clock_source VARCHAR(64) DEFAULT NULL,
       created_at DATETIME NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -485,6 +530,9 @@ export async function initDB() {
       user_id INT PRIMARY KEY,
       trade_send_enabled TINYINT NOT NULL DEFAULT 1,
       auto_reasoning_enabled TINYINT NOT NULL DEFAULT 1,
+      connection_enabled TINYINT NOT NULL DEFAULT 1,
+      connection_control_revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
+      connection_control_changed_at DATETIME(3) DEFAULT NULL,
       updated_at DATETIME NOT NULL DEFAULT (NOW())
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 
@@ -494,6 +542,11 @@ export async function initDB() {
       description TEXT,
       system_prompt MEDIUMTEXT NOT NULL,
       symbols_json TEXT NOT NULL,
+      market_data_plan_json TEXT DEFAULT NULL,
+      strategy_policy_json LONGTEXT DEFAULT NULL,
+      entry_methods_json VARCHAR(255) NOT NULL DEFAULT '["market","limit","stop","stop_limit"]',
+      use_chan_analysis TINYINT NOT NULL DEFAULT 0,
+      use_ema34_filter TINYINT NOT NULL DEFAULT 0,
       interval_minutes INT NOT NULL DEFAULT 5,
       is_active TINYINT NOT NULL DEFAULT 1,
       sort_order INT NOT NULL DEFAULT 0,

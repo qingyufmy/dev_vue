@@ -7,6 +7,7 @@ vi.mock('../../server/db.js', () => ({
   queryAll: vi.fn(),
   queryRun: vi.fn(),
   withTransaction: vi.fn(),
+  logAudit: vi.fn(),
 }))
 
 vi.mock('../../server/middleware/auth.js', () => ({
@@ -21,7 +22,7 @@ vi.mock('../../server/utils.js', () => ({
   fetchBilibiliVideo: vi.fn(),
 }))
 
-import { queryOne, queryRun } from '../../server/db.js'
+import { queryOne, queryRun, logAudit } from '../../server/db.js'
 import adminRouter from '../../server/routes/admin.js'
 
 function makeApp() {
@@ -47,6 +48,21 @@ function httpPost(app, path, body) {
           server.close()
           resolve({ status: response.statusCode, body: JSON.parse(data) })
         })
+      })
+      request.on('error', reject)
+      request.write(JSON.stringify(body))
+      request.end()
+    })
+  })
+}
+
+function httpPut(app, path, body) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      const request = http.request({ hostname:'127.0.0.1', port:server.address().port, path, method:'PUT', headers:{ 'Content-Type':'application/json' } }, response => {
+        let data=''
+        response.on('data', chunk => { data += chunk })
+        response.on('end', () => { server.close(); resolve({ status:response.statusCode, body:JSON.parse(data) }) })
       })
       request.on('error', reject)
       request.write(JSON.stringify(body))
@@ -130,5 +146,23 @@ describe('admin course publishing category', () => {
 
     expect(result).toEqual({ status: 400, body: { ok: false, error: '无效的课程类型' } })
     expect(queryRun).not.toHaveBeenCalled()
+  })
+})
+
+describe('admin referral rule governance', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('rejects unsupported plans and out-of-range rates', async () => {
+    const result = await httpPut(makeApp(), '/api/admin/referrals/rules', { rules:[{ plan:'free', period:'monthly', rate_bps:12000, enabled:true }] })
+    expect(result.status).toBe(400)
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+
+  it('allows an explicit zero rate and records the management audit', async () => {
+    queryRun.mockResolvedValue({ affectedRows:1 })
+    const result = await httpPut(makeApp(), '/api/admin/referrals/rules', { rules:[{ plan:'pro', period:'yearly', rate_bps:0, enabled:false }] })
+    expect(result.status).toBe(200)
+    expect(queryRun).toHaveBeenCalledWith(expect.stringContaining('referral_rules'), ['pro','yearly',0,0])
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ action:'referral_rules_updated' }))
   })
 })

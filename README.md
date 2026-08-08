@@ -73,7 +73,6 @@
 ├── tests/                    # 单元测试（468 个）
 ├── AGENTS.md                 # 开发规范
 ├── CODE_REVIEW.md            # 代码审查清单
-├── DEPLOY.md                 # 部署教程
 ├── VERSION                   # 版本号（单一源）
 └── README.md
 ```
@@ -138,9 +137,9 @@ npm run dev
 
 ## 环境要求
 
-- **Node.js** >= 18
+- **Node.js** >= 22.12
 - **MySQL** >= 5.7
-- **Python** >= 3.8（桥接端，用于 MT5 通信）
+- **Python** 3.11 x64（桥接端开发及可复现构建环境）
 - **MetaTrader 5** 终端（桥接端需运行）
 - **Redis**（可选，用于缓存和调度锁）
 
@@ -150,7 +149,7 @@ npm run dev
 - **缓存**: Redis（可选，优雅降级）
 - **限流**: express-rate-limit
 - **前端**: 原生 HTML/CSS/JS + TradingView Lightweight Charts + Chart.js
-- **桥接**: Python + MetaTrader5 + numpy + websocket-client（Nuitka 打包）
+- **桥接**: Python + PySide6 + MetaTrader5 + numpy + websockets（Nuitka 打包）
 - **AI**: DeepSeek / GPT / Kimi / Qwen / 智谱 / 豆包 / Claude / Gemini
 - **支付**: USDT 链上支付（TRC-20/ERC-20/BEP-20/SPL）
 - **短信**: 阿里云 SMS

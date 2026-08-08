@@ -1,15 +1,25 @@
 import { Router } from 'express'
-import bcrypt from 'bcryptjs'
 import multer from 'multer'
-import { join, dirname, extname, basename } from 'path'
-import { fileURLToPath } from 'url'
-import { existsSync, mkdirSync, writeFileSync } from 'fs'
-import { queryOne, queryAll, queryRun, withTransaction } from '../db.js'
+import { join, basename } from 'path'
+import { existsSync, mkdirSync } from 'fs'
+import { queryOne, queryAll, queryRun, withTransaction, logAudit } from '../db.js'
 import { authMiddleware, adminOnly } from '../middleware/auth.js'
 import { fetchBilibiliVideo } from '../utils.js'
+import { translateAdminProfileError, updateAdminUserProfile } from '../admin/user-profile.js'
+import { anonymizeAdminUser } from '../admin/user-deletion.js'
+import {
+  COURSE_ATTACHMENT_ACCEPT,
+  validateCourseAttachmentMetadata,
+  deleteCourseAttachmentDirectory,
+  deleteCourseAttachmentFile,
+  serializeCourseAttachment,
+} from '../course-attachments.js'
+import { PUBLIC_UPLOAD_DIR } from '../config.js'
+import { createStorageService } from '../storage/storage-service.js'
+import { createMultipartStoredFile, createDirectStorageSession, confirmDirectStorageSession, safeStorageError, loadStoredFile, STORED_FILE_OWNERS } from '../storage/stored-file-service.js'
+import { detectImageType } from '../image-upload.js'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const resourceDir = join(__dirname, '..', 'uploads', 'resources')
+const resourceDir = join(PUBLIC_UPLOAD_DIR, 'resources')
 if (!existsSync(resourceDir)) mkdirSync(resourceDir, { recursive: true })
 
 const resourceUpload = multer({
@@ -25,6 +35,40 @@ const resourceUpload = multer({
 const router = Router()
 const COURSE_CATEGORIES = new Set(['morning', 'indicator', 'pattern', 'strategy', 'advanced'])
 const COURSE_CONTENT_TYPES = new Set(['video', 'article'])
+
+async function storeCourseVisualResource({ storage, file, episodeId, type, title, sortOrder, createdBy }) {
+  const imageType = detectImageType(file.buffer)
+  if (!imageType) throw Object.assign(new Error('仅支持真实的 JPEG、PNG、WebP 图片'), { code:'storage_image_signature_invalid' })
+  return createMultipartStoredFile({
+    storage, purpose:'image', body:file.buffer, originalName:file.originalname || title,
+    mimeType:imageType.mimeType, ownerType:STORED_FILE_OWNERS.COURSE_RESOURCE,
+    ownerId:episodeId, createdBy, visibility:'public',
+    allowGif:imageType.mimeType === 'image/gif',
+    insertBusiness:async (run, context) => {
+      const [inserted] = await run(`INSERT INTO course_resources (episode_id, type, title, url, structure, sort_order, stored_file_id)
+        VALUES (?, ?, ?, '', '', ?, ?)`, [episodeId, type, title, sortOrder, context.storedFileId])
+      const id = Number(inserted?.insertId)
+      const stableUrl = `/api/course-resources/${id}/file`
+      await run('UPDATE course_resources SET url = ? WHERE id = ?', [stableUrl, id])
+      return { id, episode_id:episodeId, type, title, url:stableUrl, structure:'', sort_order:sortOrder, stored_file_id:context.storedFileId, storage_provider:context.provider, original_name:context.metadata.originalName, mime_type:context.metadata.mimeType, size_bytes:context.metadata.sizeBytes }
+    },
+  })
+}
+
+async function storeCourseResourceDocument({ storage, body, originalName, mimeType, episodeId, type, title, structure, sortOrder, createdBy }) {
+  return createMultipartStoredFile({
+    storage, purpose:'resource', body, originalName, mimeType, ownerType:STORED_FILE_OWNERS.COURSE_RESOURCE,
+    ownerId:episodeId, createdBy, visibility:'public',
+    insertBusiness:async (run, context) => {
+      const [inserted] = await run(`INSERT INTO course_resources (episode_id, type, title, url, structure, sort_order, stored_file_id)
+        VALUES (?, ?, ?, '', ?, ?, ?)`, [episodeId, type, title, structure || '', sortOrder, context.storedFileId])
+      const id = Number(inserted?.insertId)
+      const stableUrl = `/api/course-resources/${id}/file`
+      await run('UPDATE course_resources SET url = ? WHERE id = ?', [stableUrl, id])
+      return { id, episode_id:episodeId, type, title, url:stableUrl, structure:structure || '', sort_order:sortOrder, stored_file_id:context.storedFileId, storage_provider:context.provider, original_name:context.metadata.originalName, mime_type:context.metadata.mimeType, size_bytes:context.metadata.sizeBytes }
+    },
+  })
+}
 
 function serializeAdminCourse(c) {
   return {
@@ -75,8 +119,8 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
       weekOnlineUsers = (await queryOne('SELECT COUNT(*) as c FROM users WHERE YEARWEEK(last_seen_at, 1) = YEARWEEK(NOW(), 1)')).c
     } catch (e) { console.error('[Admin] Online users query failed:', e.message) }
 
-    const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus'")).c
-    const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro'")).c
+    const plusUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'plus' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())")).c
+    const proUsers = (await queryOne("SELECT COUNT(*) as c FROM users WHERE plan = 'pro' AND (plan_expires_at IS NULL OR plan_expires_at >= NOW())")).c
 
     let totalRevenue = 0, paidOrderCount = 0
     try {
@@ -243,26 +287,14 @@ router.get('/admin-users', authMiddleware, adminOnly, async (req, res) => {
 router.post('/admin-users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { userId, plan, expiresAt, role, nickname } = req.body
-
-    const VALID_PLANS = ['free', 'plus', 'pro']
-    const VALID_ROLES = ['user', 'admin']
-
-    if (plan && !VALID_PLANS.includes(plan)) return res.json({ ok: false, error: '无效的套餐类型' })
-    if (role && !VALID_ROLES.includes(role)) return res.json({ ok: false, error: '无效的角色' })
-
-    if (plan) {
-      if (plan === 'free') {
-        await queryRun('UPDATE users SET plan = ?, plan_source = NULL, updated_at = NOW() WHERE id = ?', [plan, userId])
-      } else {
-        await queryRun('UPDATE users SET plan = ?, updated_at = NOW() WHERE id = ?', [plan, userId])
-      }
-    }
-    if (expiresAt !== undefined) await queryRun('UPDATE users SET plan_expires_at = ?, updated_at = NOW() WHERE id = ?', [expiresAt, userId])
-    if (role) await queryRun('UPDATE users SET role = ?, updated_at = NOW() WHERE id = ?', [role, userId])
-    if (nickname) await queryRun('UPDATE users SET nickname = ?, updated_at = NOW() WHERE id = ?', [nickname, userId])
-
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
+    const input = {}
+    if (plan !== undefined) input.plan = plan
+    if (expiresAt !== undefined) input.expires_at = expiresAt
+    if (role !== undefined) input.role = role
+    if (nickname !== undefined) input.nickname = nickname
+    const profile = await updateAdminUserProfile({ actorUserId:req.user.id, targetUserId:userId, input })
+    res.json({ ok: true, profile })
+  } catch (err) { res.json({ ok: false, error: translateAdminProfileError(err) }) }
 })
 
 router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
@@ -270,85 +302,22 @@ router.put('/admin-users', authMiddleware, adminOnly, async (req, res) => {
     const { id, userId, role, plan, nickname, email, phone, password, avatar, expiresAt } = req.body
     const uid = id || userId
     if (!uid) return res.json({ ok: false, error: '缺少用户ID' })
-
-    const VALID_PLANS = ['free', 'plus', 'pro']
-    const VALID_ROLES = ['user', 'admin']
-    if (plan && !VALID_PLANS.includes(plan)) return res.json({ ok: false, error: '无效的套餐类型' })
-    if (role && !VALID_ROLES.includes(role)) return res.json({ ok: false, error: '无效的角色' })
-
-    const updates = []
-    const params = []
-    if (email) { updates.push('email = ?'); params.push(email) }
-    if (phone !== undefined) { updates.push('phone = ?'); params.push(phone ? phone.replace(/^\+86/, '') : null) }
-    if (nickname) { updates.push('nickname = ?'); params.push(nickname) }
-    if (password) {
-      if (password.length < 6) return res.json({ ok: false, error: '密码至少需要6位' })
-      const pwHash = await bcrypt.hash(password, 10)
-      updates.push('password = ?'); params.push(pwHash)
+    const input = {}
+    for (const [key, value] of Object.entries({ role, plan, nickname, email, phone, password, avatar })) {
+      if (value !== undefined) input[key] = value
     }
-    if (avatar !== undefined) { updates.push('avatar = ?'); params.push(avatar) }
-    if (role) {
-      if (role !== 'admin' && role !== 'user') return res.json({ ok: false, error: '无效的角色' })
-      if (role !== 'admin') {
-        const adminCount = await queryOne('SELECT COUNT(*) as cnt FROM users WHERE role = ?', ['admin'])
-        if (adminCount && adminCount.cnt <= 1) return res.json({ ok: false, error: '不能降级最后一个管理员' })
-      }
-      updates.push('role = ?'); params.push(role)
-    }
-    if (plan) {
-      updates.push('plan = ?'); params.push(plan)
-      if (plan === 'free') {
-        updates.push('plan_expires_at = NULL')
-        updates.push('plan_source = NULL')
-      } else if (expiresAt) {
-        updates.push('plan_expires_at = ?'); params.push(expiresAt)
-      }
-    }
-    if (updates.length === 0) return res.json({ ok: false, error: '没有需要更新的字段' })
-    updates.push('updated_at = NOW()')
-    params.push(uid)
-    await queryRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params)
-    res.json({ ok: true })
+    if (expiresAt !== undefined) input.expires_at = expiresAt
+    const profile = await updateAdminUserProfile({ actorUserId:req.user.id, targetUserId:uid, input })
+    res.json({ ok: true, profile })
   } catch (err) {
     console.error('Admin update user error:', err)
-    let msg = '更新失败'
-    if (err.code === 'ER_DUP_ENTRY') msg = '邮箱已被其他用户使用'
-    else if (err.code === 'ER_DATA_TOO_LONG') msg = '数据超长'
-    res.json({ ok: false, error: msg })
+    res.json({ ok: false, error: translateAdminProfileError(err) })
   }
 })
 
 router.delete('/admin-users/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const userId = Number(req.params.id)
-    if (!userId) return res.json({ ok: false, error: '缺少用户ID' })
-    const user = await queryOne('SELECT id, email, role FROM users WHERE id = ?', [userId])
-    if (!user) return res.json({ ok: false, error: '用户不存在' })
-    if (user.role === 'admin') return res.json({ ok: false, error: '不能删除管理员账号' })
-    // 级联删除所有关联数据，使用事务确保原子性
-    await withTransaction(async (run) => {
-      await run('DELETE FROM notifications WHERE user_id = ?', [userId])
-      await run('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', [userId, userId])
-      await run('DELETE FROM orders WHERE user_id = ?', [userId])
-      await run('DELETE FROM verification_codes WHERE email = ?', [user.email])
-      await run('DELETE FROM progress WHERE user_id = ?', [userId])
-      await run('DELETE FROM comments WHERE user_id = ?', [userId])
-      await run('DELETE FROM comment_likes WHERE user_id = ?', [userId])
-      await run('DELETE FROM post_replies WHERE user_id = ?', [userId])
-      await run('DELETE FROM posts WHERE user_id = ?', [userId])
-      await run('DELETE FROM feedback WHERE user_id = ?', [userId])
-      await run('DELETE FROM ai_configs WHERE user_id = ?', [userId])
-      await run('DELETE FROM ai_signals WHERE user_id = ?', [userId])
-      await run('DELETE FROM auto_scheduler WHERE user_id = ?', [userId])
-      await run('DELETE FROM user_bridge_settings WHERE user_id = ?', [userId])
-      await run('DELETE FROM close_config WHERE user_id = ?', [userId])
-      await run('DELETE FROM trade_audit_logs WHERE user_id = ?', [userId])
-      await run('DELETE FROM crypto_watch_list WHERE user_id = ?', [userId])
-      await run('DELETE FROM auto_signal_deliveries WHERE user_id = ?', [userId])
-      await run('DELETE FROM bridge_connection_status WHERE user_id = ?', [userId])
-      await run('DELETE FROM close_signal_tickets WHERE user_id = ?', [userId])
-      await run('DELETE FROM users WHERE id = ?', [userId])
-    })
+    await anonymizeAdminUser({ actor:req.user, targetUserId:req.params.id })
     res.json({ ok: true })
   } catch (err) {
     console.error('Delete user error:', err)
@@ -390,15 +359,16 @@ router.get('/admin/referrals/overview', authMiddleware, adminOnly, async (req, r
     const total = (await queryOne('SELECT COUNT(*) as c FROM referrals')).c
     const pending = (await queryOne("SELECT COUNT(*) as c FROM referrals WHERE status = 'pending'")).c
     const approved = (await queryOne("SELECT COUNT(*) as c FROM referrals WHERE status = 'approved'")).c
-    const totalCommission = (await queryOne('SELECT COALESCE(SUM(commission), 0) as c FROM referrals')).c
+    const pendingCommission = (await queryOne("SELECT COALESCE(SUM(commission), 0) as c FROM referrals WHERE status = 'pending'")).c
+    const totalCommission = (await queryOne("SELECT COALESCE(SUM(commission), 0) as c FROM referrals WHERE status = 'approved'")).c
     res.json({
       ok: true,
       total, pending, approved, totalCommission,
       stats: {
         total_invites: total,
         paid_invites: approved,
-        pending_credit_cents: pending * 500,
-        available_credit_cents: totalCommission,
+        pending_credit_amount: Number(pendingCommission || 0),
+        available_credit_amount: Number(totalCommission || 0),
       },
     })
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
@@ -421,7 +391,7 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
       FROM referrals r 
       LEFT JOIN users u ON r.referrer_id = u.id 
       LEFT JOIN users u2 ON r.referred_id = u2.id
-      LEFT JOIN orders o ON o.user_id = r.referred_id AND o.status = 'paid'
+       LEFT JOIN orders o ON o.order_id = r.order_id
       WHERE ${where} ORDER BY r.created_at DESC LIMIT 100
     `, params)
 
@@ -432,9 +402,9 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
       order_id: r.order_id || null,
       plan: r.order_plan_label || r.plan_label || '',
       period: r.order_period_label || '',
-      source_cash_amount_cents: r.order_amount_confirmed || r.amount_cents || 0,
-      amount_cents: r.commission || 0,
-      rate_bps: r.amount_cents > 0 ? Math.round((r.commission / r.amount_cents) * 10000) : 500,
+      source_cash_amount: r.order_amount_confirmed ?? r.cash_amount ?? 0,
+      commission_amount: r.commission || 0,
+      rate_bps: r.cash_amount > 0 ? Math.round((r.commission / r.cash_amount) * 10000) : 500,
       status: r.status,
       available_at: r.attributed_at || r.created_at,
       created_at: r.created_at,
@@ -447,15 +417,26 @@ router.get('/admin/referrals/commissions', authMiddleware, adminOnly, async (req
 router.patch('/admin/referrals/commissions/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { action } = req.body
-    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : req.body.status
-    const referral = await queryOne('SELECT referrer_id, commission FROM referrals WHERE id = ?', [req.params.id])
-    if (!referral) return res.json({ ok: false, error: '记录不存在' })
-    await queryRun('UPDATE referrals SET status = ?, commission = CASE WHEN ? = \"voided\" THEN 0 ELSE commission END WHERE id = ?', [finalStatus, finalStatus, req.params.id])
-    if (finalStatus === 'approved' && referral.commission > 0) {
-      await queryRun('UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?', [referral.commission, referral.referrer_id])
-    }
-    res.json({ ok: true })
-  } catch (err) { res.json({ ok: false, error: '操作失败' }) }
+    const finalStatus = action === 'approve' ? 'approved' : action === 'void' ? 'voided' : ''
+    if (!finalStatus) return res.status(400).json({ ok:false, error:'无效的返佣操作' })
+    const result = await withTransaction(async run => {
+      const [rows] = await run('SELECT referrer_id, commission, status FROM referrals WHERE id = ? FOR UPDATE', [req.params.id])
+      const referral = rows[0]
+      if (!referral) return { ok:false, status:404, error:'返佣记录不存在' }
+      if (referral.status === finalStatus) return { ok:true, unchanged:true }
+      if (referral.status !== 'pending') return { ok:false, status:409, error:'该返佣已经处理，不能重复操作' }
+      await run('UPDATE referrals SET status = ?, commission = CASE WHEN ? = \"voided\" THEN 0 ELSE commission END WHERE id = ?', [finalStatus, finalStatus, req.params.id])
+      if (finalStatus === 'approved' && Number(referral.commission) > 0) {
+        await run('UPDATE users SET referral_credit = referral_credit + ?, updated_at = NOW() WHERE id = ?', [referral.commission, referral.referrer_id])
+      }
+      return { ok:true }
+    })
+    if (!result.ok) return res.status(result.status).json({ ok:false, error:result.error })
+    res.json({ ok:true, unchanged:Boolean(result.unchanged) })
+  } catch (err) {
+    console.error('[Admin] referral commission update failed:', err)
+    res.status(500).json({ ok:false, error:'返佣操作失败，请稍后重试' })
+  }
 })
 
 router.get('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
@@ -468,15 +449,32 @@ router.get('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res)
 router.put('/admin/referrals/rules', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { rules } = req.body
-    if (!Array.isArray(rules)) return res.json({ ok: false, error: '无效参数' })
-    for (const r of rules) {
+    if (!Array.isArray(rules)) return res.status(400).json({ ok:false, error:'规则列表格式无效' })
+    const allowedPlans = new Set(['plus', 'pro'])
+    const allowedPeriods = new Set(['monthly', 'yearly'])
+    const normalized = rules.map(rule => {
+      const plan = String(rule?.plan || '').trim().toLowerCase()
+      const period = String(rule?.period || '').trim().toLowerCase()
+      const rateBps = Number(rule?.rate_bps)
+      if (!allowedPlans.has(plan) || !allowedPeriods.has(period)) throw new Error('referral_rule_scope_invalid')
+      if (!Number.isInteger(rateBps) || rateBps < 0 || rateBps > 10000) throw new Error('referral_rule_rate_invalid')
+      return { plan, period, rate_bps:rateBps, enabled:Boolean(rule?.enabled) }
+    })
+    const unique = new Set(normalized.map(rule => `${rule.plan}:${rule.period}`))
+    if (unique.size !== normalized.length || normalized.length > 4) throw new Error('referral_rule_duplicate')
+    for (const rule of normalized) {
       await queryRun(
         'INSERT INTO referral_rules (plan, period, rate_bps, enabled) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE rate_bps = VALUES(rate_bps), enabled = VALUES(enabled)',
-        [r.plan, r.period, r.rate_bps || 1000, r.enabled ? 1 : 0]
+        [rule.plan, rule.period, rule.rate_bps, rule.enabled ? 1 : 0]
       )
     }
-    res.json({ ok: true, message: '规则已更新' })
-  } catch (err) { res.json({ ok: false, error: '更新失败' }) }
+    await logAudit({ userId:req.user.id, action:'referral_rules_updated', targetType:'referral_rules',
+      detail:JSON.stringify({ rules:normalized }), ip:req.ip, userAgent:req.get('user-agent') })
+    res.json({ ok:true, message:'返佣规则已更新' })
+  } catch (err) {
+    const messages={ referral_rule_scope_invalid:'仅支持 Plus/Pro 的月付与年付规则', referral_rule_rate_invalid:'返佣比例必须为 0% 到 100%', referral_rule_duplicate:'返佣规则存在重复项' }
+    res.status(err?.message?.startsWith('referral_rule_')?400:500).json({ ok:false, error:messages[err?.message] || '更新返佣规则失败' })
+  }
 })
 
 // Admin: course items
@@ -538,15 +536,33 @@ router.delete('/admin-course-items', authMiddleware, adminOnly, async (req, res)
     const course = await queryOne('SELECT * FROM courses WHERE episode_id = ?', [episode])
     if (!course) return res.json({ ok: false, error: '课程不存在' })
 
+    const linkedStoredFiles = await queryAll('SELECT sf.* FROM stored_files sf INNER JOIN course_resources cr ON cr.stored_file_id = sf.id WHERE cr.episode_id = ? AND sf.status NOT IN (\'deleted\', \'failed\')', [episode])
+
     // Delete related data in transaction
     await withTransaction(async (run) => {
       await run('DELETE FROM quiz_questions WHERE episode_id = ?', [episode])
       await run('DELETE FROM course_resources WHERE episode_id = ?', [episode])
+      for (const stored of linkedStoredFiles) await run("UPDATE stored_files SET status = 'deleting', updated_at = NOW() WHERE id = ?", [stored.id])
       await run('DELETE FROM video_streams WHERE episode_id = ?', [episode])
       await run('DELETE FROM progress WHERE episode_id = ?', [episode])
       await run('DELETE FROM comments WHERE episode_id = ?', [episode])
       await run('DELETE FROM courses WHERE episode_id = ?', [episode])
     })
+    try { deleteCourseAttachmentDirectory(episode) } catch (error) { console.error('Course attachment directory cleanup error:', error) }
+
+    const cleanupErrors = []
+    if (linkedStoredFiles.length) {
+      const storage = await createStorageService()
+      for (const stored of linkedStoredFiles) {
+        try {
+          await storage.delete({ provider:stored.storage_provider, objectKey:stored.object_key, configVersion:stored.config_version })
+          await queryRun("UPDATE stored_files SET status = 'deleted', deleted_at = NOW(), updated_at = NOW() WHERE id = ?", [stored.id])
+        } catch (error) {
+          cleanupErrors.push(safeStorageError(error, 'storage_delete_failed').code)
+        }
+      }
+    }
+    if (cleanupErrors.length) return res.status(400).json({ ok:false, error:'课程已删除，文件待清理', code:'storage_delete_cleanup_pending', cleanup_pending:true })
 
     res.json({ ok: true, message: '课程已删除' })
   } catch (err) {
@@ -559,16 +575,153 @@ router.delete('/admin-course-items', authMiddleware, adminOnly, async (req, res)
 router.get('/admin-course-resources', authMiddleware, adminOnly, async (req, res) => {
   try {
     const { episode } = req.query
-    const resources = await queryAll('SELECT * FROM course_resources WHERE episode_id = ? ORDER BY sort_order', [episode])
+    const resources = await queryAll('SELECT cr.*, sf.storage_provider, sf.original_name, sf.mime_type, sf.size_bytes FROM course_resources cr LEFT JOIN stored_files sf ON sf.id = cr.stored_file_id WHERE cr.episode_id = ? ORDER BY cr.sort_order', [episode])
+    const storage = await createStorageService()
     const quizCount = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episode])).c
+    const attachments = resources.filter(resource => resource.type === 'attachment').map(serializeCourseAttachment)
+    const learningResources = resources.filter(resource => resource.type !== 'attachment')
 
-    const assets = resources.map(r => ({
+    const assets = learningResources.map(r => ({
       id: r.id, type: r.type, title: r.title,
       assetType: r.type === 'mindmap' ? (r.structure ? 'mindmap_structure' : 'mindmap_image') : r.type,
     }))
 
-    res.json({ ok: true, quizCount, assets, resources })
+    res.json({ ok: true, quizCount, assets, resources:learningResources, attachments, attachmentAccept:COURSE_ATTACHMENT_ACCEPT, effective_providers:storage.config.effectiveProviders })
   } catch (err) { res.json({ ok: false, error: '获取失败' }) }
+})
+
+router.post('/admin-course-attachments', authMiddleware, adminOnly, resourceUpload.array('files', 10), async (req, res) => {
+  const savedRows = []
+  try {
+    const episodeId = Number(req.body.episodeId)
+    const course = Number.isInteger(episodeId) && episodeId > 0
+      ? await queryOne('SELECT episode_id FROM courses WHERE episode_id = ?', [episodeId])
+      : null
+    if (!course) return res.status(404).json({ ok:false, error:'课程不存在' })
+    const files = Array.isArray(req.files) ? req.files : []
+    if (!files.length) return res.status(400).json({ ok:false, error:'请选择要上传的附件' })
+    const maxSort = await queryOne("SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM course_resources WHERE episode_id = ? AND type = 'attachment'", [episodeId])
+    let sortOrder = Number(maxSort?.max_sort ?? -1) + 1
+    const attachments = []
+    const skipped = []
+    const storage = await createStorageService()
+    for (const file of files) {
+      try {
+        const attachmentMetadata = validateCourseAttachmentMetadata({ originalname:file.originalname, mimetype:file.mimetype, size:file.size || file.buffer?.length })
+        if (!attachmentMetadata.ok) throw Object.assign(new Error(attachmentMetadata.error), { code:'storage_attachment_invalid' })
+        const itemSortOrder = sortOrder++
+        const result = await createMultipartStoredFile({
+          storage, purpose:'attachment', body:file.buffer, originalName:file.originalname,
+          mimeType:file.mimetype, ownerType:STORED_FILE_OWNERS.COURSE_ATTACHMENT,
+          ownerId:episodeId, createdBy:req.user.id, visibility:'membership',
+          insertBusiness:async (run, context) => {
+            const structure = JSON.stringify({
+              original_name:context.metadata.originalName,
+              mime_type:context.metadata.mimeType,
+              file_size:context.metadata.sizeBytes,
+              extension:context.metadata.extension,
+              uploaded_at:new Date().toISOString(),
+            })
+            const [inserted] = await run(`INSERT INTO course_resources (episode_id, type, title, content, url, structure, sort_order, stored_file_id)
+              VALUES (?, 'attachment', ?, '', ?, ?, ?, ?)`, [episodeId, context.metadata.originalName, '', structure, itemSortOrder, context.storedFileId])
+            return { id:Number(inserted?.insertId), episode_id:episodeId, type:'attachment', title:context.metadata.originalName, structure, sort_order:itemSortOrder, stored_file_id:context.storedFileId, storage_provider:context.provider, original_name:context.metadata.originalName, mime_type:context.metadata.mimeType, size_bytes:context.metadata.sizeBytes }
+          },
+        })
+        attachments.push(serializeCourseAttachment(result.business))
+      } catch (error) {
+        const safe = safeStorageError(error)
+        skipped.push({ name:file.originalname || '未命名附件', reason:safe.code || '上传失败', code:safe.code, storage_provider:storage.configuredProvider('attachment'), upload_phase:'failed' })
+      }
+    }
+    if (!attachments.length) return res.status(400).json({ ok:false, error:skipped[0]?.reason || '附件上传失败', code:skipped[0]?.code || 'storage_upload_failed', skipped, storage_provider:storage.configuredProvider('attachment'), upload_phase:'failed' })
+    res.status(201).json({ ok:true, attachments, skipped, storage_provider:storage.configuredProvider('attachment'), upload_phase:'confirmed' })
+  } catch (error) {
+    for (const row of savedRows) {
+      try { deleteCourseAttachmentFile(row) } catch {}
+    }
+    console.error('Course attachment upload error:', error)
+    res.status(400).json({ ok:false, error:error.message || '附件上传失败' })
+  }
+})
+
+router.post('/admin-course-attachments/upload-session', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const episodeId = Number(req.body?.episodeId)
+    const course = Number.isInteger(episodeId) && episodeId > 0 ? await queryOne('SELECT episode_id FROM courses WHERE episode_id = ?', [episodeId]) : null
+    if (!course) return res.status(404).json({ ok:false, error:'课程不存在' })
+    const attachmentMetadata = validateCourseAttachmentMetadata({ originalname:req.body?.originalName, mimetype:req.body?.mimeType, size:req.body?.sizeBytes })
+    if (!attachmentMetadata.ok) throw Object.assign(new Error(attachmentMetadata.error), { code:'storage_attachment_invalid' })
+    const storage = await createStorageService()
+    const session = await createDirectStorageSession({
+      storage, purpose:'attachment', originalName:req.body?.originalName, mimeType:req.body?.mimeType,
+      sizeBytes:req.body?.sizeBytes, ownerType:STORED_FILE_OWNERS.COURSE_ATTACHMENT, ownerId:episodeId,
+      createdBy:req.user.id, visibility:'membership',
+    })
+    res.status(201).json({ ok:true, ...session, storage_provider:session.provider, upload_phase:'session_created' })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_session_create_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, upload_phase:'failed' })
+  }
+})
+
+router.post('/admin-course-attachments/confirm', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const episodeId = Number(req.body?.episodeId)
+    const storage = await createStorageService()
+    const maxSort = await queryOne("SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM course_resources WHERE episode_id = ? AND type = 'attachment'", [episodeId])
+    const sortOrder = Number(maxSort?.max_sort ?? -1) + 1
+    const completed = await confirmDirectStorageSession({
+      storage, sessionId:String(req.body?.sessionId || ''), createdBy:req.user.id,
+      result:{ key:req.body?.key },
+      validateSession:async session => {
+        if (session.owner_type !== STORED_FILE_OWNERS.COURSE_ATTACHMENT || Number(session.owner_id) !== episodeId) throw Object.assign(new Error('storage_session_owner_mismatch'), { code:'storage_session_owner_mismatch' })
+      },
+      insertBusiness:async (run, context) => {
+        const structure = JSON.stringify({ original_name:context.metadata.originalName, mime_type:context.metadata.mimeType, file_size:context.metadata.sizeBytes, extension:context.metadata.extension, uploaded_at:new Date().toISOString() })
+        const [inserted] = await run(`INSERT INTO course_resources (episode_id, type, title, content, url, structure, sort_order, stored_file_id)
+          VALUES (?, 'attachment', ?, '', ?, ?, ?, ?)`, [episodeId, context.metadata.originalName, '', structure, sortOrder, context.storedFileId])
+        return { id:Number(inserted?.insertId), episode_id:episodeId, type:'attachment', title:context.metadata.originalName, structure, sort_order:sortOrder, stored_file_id:context.storedFileId, storage_provider:context.provider, original_name:context.metadata.originalName, mime_type:context.metadata.mimeType, size_bytes:context.metadata.sizeBytes }
+      },
+    })
+    res.status(201).json({ ok:true, attachment:serializeCourseAttachment(completed.business), storage_provider:completed.provider, upload_phase:'confirmed' })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_confirm_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, cleanup_pending:!!safe.cleanupPending, upload_phase:'failed' })
+  }
+})
+
+router.delete('/admin-course-attachments/:attachmentId', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const attachment = await queryOne("SELECT * FROM course_resources WHERE id = ? AND type = 'attachment'", [req.params.attachmentId])
+    if (!attachment) return res.json({ ok:true, idempotent:true })
+    if (attachment.stored_file_id) {
+      const storage = await createStorageService()
+      const stored = await loadStoredFile(attachment.stored_file_id, { includeDeleted:true })
+      // First unlink the business row and mark the owned object deleting in
+      // one transaction. Provider I/O happens afterwards; a retry can use
+      // the stored_files owner/key without accepting an arbitrary URL.
+      await withTransaction(async run => {
+        await run("DELETE FROM course_resources WHERE id = ? AND type = 'attachment'", [attachment.id])
+        await run("UPDATE stored_files SET status = 'deleting', updated_at = NOW() WHERE id = ?", [attachment.stored_file_id])
+      })
+      if (stored && !['deleted', 'failed'].includes(stored.status)) {
+        try { await storage.delete({ provider:stored.storage_provider, objectKey:stored.object_key, configVersion:stored.config_version }) } catch (error) {
+          const safe = safeStorageError(error, 'storage_delete_failed')
+          return res.status(400).json({ ok:false, error:safe.code, code:safe.code, cleanup_pending:true })
+        }
+      }
+      try { await queryRun("UPDATE stored_files SET status = 'deleted', deleted_at = NOW(), updated_at = NOW() WHERE id = ?", [attachment.stored_file_id]) } catch (error) {
+        return res.status(400).json({ ok:false, error:'storage_delete_state_pending', code:'storage_delete_state_pending', cleanup_pending:true })
+      }
+    } else {
+      await queryRun("DELETE FROM course_resources WHERE id = ? AND type = 'attachment'", [attachment.id])
+      try { deleteCourseAttachmentFile(attachment) } catch (error) { console.error('Course attachment file cleanup error:', error) }
+    }
+    res.json({ ok:true, attachment:serializeCourseAttachment(attachment) })
+  } catch (error) {
+    console.error('Course attachment delete error:', error)
+    res.status(400).json({ ok:false, error:'附件删除失败' })
+  }
 })
 
 router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload.array('files', 50), async (req, res) => {
@@ -584,6 +737,7 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
     // Ensure episode dir exists
     const epDir = join(resourceDir, `ep${episodeId}`)
     if (!existsSync(epDir)) mkdirSync(epDir, { recursive: true })
+    const storage = await createStorageService()
 
     let quizFiles = 0, assetFiles = 0
     const skipped = []
@@ -592,7 +746,7 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
     const isQuizFile = (name) => /quiz|题目|答题|测验/i.test(name) && /\.json$/i.test(name)
     const isMindmapFile = (name) => /mindmap|导图|思维|structure/i.test(name)
     const isInfographicFile = (name) => /infographic|信息图|图解/i.test(name)
-    const isImageFile = (name) => /\.(png|jpg|jpeg|svg|webp)$/i.test(name)
+    const isImageFile = (name) => /\.(png|jpg|jpeg|webp|gif)$/i.test(name)
     const isJsonFile = (name) => /\.json$/i.test(name)
 
     for (const file of files) {
@@ -650,25 +804,20 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
             let structure
             try { structure = JSON.parse(content) } catch { skipped.push({ name: baseName, reason: 'JSON 解析失败' }); continue }
 
-            // Save file to disk
-            const savePath = join(epDir, baseName)
-            writeFileSync(savePath, content, 'utf-8')
-
-            await queryRun(`
-              INSERT INTO course_resources (episode_id, type, title, url, structure, sort_order)
-              VALUES (?, 'mindmap', ?, ?, ?, ?)
-            `, [episodeId, structure.title || baseName, `/uploads/resources/ep${episodeId}/${baseName}`, content, assetFiles])
+            // Structure JSON is intentionally kept in the existing DB field
+            // when the resource provider is qiniu. This preserves the old
+            // parsed-structure read contract without uploading a second copy
+            // through the website; binary images still use direct qiniu.
+            if (storage.configuredProvider('resource') === 'qiniu') {
+              await queryRun(`INSERT INTO course_resources (episode_id, type, title, url, structure, sort_order)
+                VALUES (?, 'mindmap', ?, '', ?, ?)`, [episodeId, structure.title || baseName, content, assetFiles])
+            } else {
+              await storeCourseResourceDocument({ storage, body:Buffer.from(content, 'utf8'), originalName:baseName, mimeType:'application/json', episodeId, type:'mindmap', title:structure.title || baseName, structure:content, sortOrder:assetFiles, createdBy:req.user.id })
+            }
             assetFiles++
           } else if (isImageFile(baseName)) {
             // Mindmap image
-            const ext = extname(baseName) || '.png'
-            const saveName = `mindmap_${Date.now()}${ext}`
-            writeFileSync(join(epDir, saveName), file.buffer)
-
-            await queryRun(`
-              INSERT INTO course_resources (episode_id, type, title, url, sort_order)
-              VALUES (?, 'mindmap', ?, ?, ?)
-            `, [episodeId, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles])
+            await storeCourseVisualResource({ storage, file, episodeId, type:'mindmap', title:baseName.replace(/\.[^.]+$/, ''), sortOrder:assetFiles, createdBy:req.user.id })
             assetFiles++
           } else {
             skipped.push({ name: baseName, reason: '不支持的思维导图格式' })
@@ -677,14 +826,7 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
         // === INFOGRAPHIC ===
         else if (includeInfographic && isInfographicFile(baseName)) {
           if (isImageFile(baseName)) {
-            const ext = extname(baseName) || '.png'
-            const saveName = `info_${Date.now()}${ext}`
-            writeFileSync(join(epDir, saveName), file.buffer)
-
-            await queryRun(`
-              INSERT INTO course_resources (episode_id, type, title, url, sort_order)
-              VALUES (?, 'knowledge', ?, ?, ?)
-            `, [episodeId, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles])
+            await storeCourseVisualResource({ storage, file, episodeId, type:'knowledge', title:baseName.replace(/\.[^.]+$/, ''), sortOrder:assetFiles, createdBy:req.user.id })
             assetFiles++
           } else {
             skipped.push({ name: baseName, reason: '信息图仅支持图片格式' })
@@ -712,14 +854,8 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
             }
             if (inserted > 0) { quizFiles++; const c = (await queryOne('SELECT COUNT(*) as c FROM quiz_questions WHERE episode_id = ?', [episodeId])).c; await queryRun('UPDATE courses SET quiz_count = ? WHERE episode_id = ?', [c, episodeId]) }
           } else if (isImageFile(baseName) && (includeMindmap || includeInfographic)) {
-            const ext = extname(baseName) || '.png'
-            const saveName = `res_${Date.now()}${ext}`
-            writeFileSync(join(epDir, saveName), file.buffer)
             const type = includeMindmap ? 'mindmap' : 'knowledge'
-            await queryRun(`
-              INSERT INTO course_resources (episode_id, type, title, url, sort_order)
-              VALUES (?, ?, ?, ?, ?)
-            `, [episodeId, type, baseName.replace(/\.[^.]+$/, ''), `/uploads/resources/ep${episodeId}/${saveName}`, assetFiles])
+            await storeCourseVisualResource({ storage, file, episodeId, type, title:baseName.replace(/\.[^.]+$/, ''), sortOrder:assetFiles, createdBy:req.user.id })
             assetFiles++
           } else {
             skipped.push({ name: baseName, reason: '无法识别文件类型' })
@@ -727,7 +863,8 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
         }
       } catch (fileErr) {
         console.error('File processing error:', fileErr)
-        skipped.push({ name: baseName, reason: '处理失败' })
+        const safe = safeStorageError(fileErr, 'storage_upload_failed')
+        skipped.push({ name: baseName, reason: safe.code === 'storage_direct_upload_required' ? '需要浏览器直传' : '处理失败', code:safe.code, storage_provider:storage.configuredProvider('image'), upload_phase:'failed' })
       }
     }
 
@@ -736,10 +873,60 @@ router.post('/admin-course-resources', authMiddleware, adminOnly, resourceUpload
     const knowledgeCount = (await queryOne("SELECT COUNT(*) as c FROM course_resources WHERE episode_id = ? AND type = 'knowledge'", [episodeId])).c
     await queryRun('UPDATE courses SET mindmap_count = ?, knowledge_count = ? WHERE episode_id = ?', [mindmapCount, knowledgeCount, episodeId])
 
-    res.json({ ok: true, quizFiles, assetFiles, skipped })
+    res.json({ ok: true, quizFiles, assetFiles, skipped, storage_provider:storage.configuredProvider('image'), upload_phase:'confirmed' })
   } catch (err) {
     console.error('Resource upload error:', err)
     res.json({ ok: false, error: '上传失败' })
+  }
+})
+
+router.post('/admin-course-resources/upload-session', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const episodeId = Number(req.body?.episodeId)
+    const resourceType = String(req.body?.resourceType || '').toLowerCase()
+    if (!Number.isInteger(episodeId) || episodeId <= 0 || !['mindmap', 'knowledge'].includes(resourceType)) return res.status(400).json({ ok:false, error:'资源类型无效' })
+    const course = await queryOne('SELECT episode_id FROM courses WHERE episode_id = ?', [episodeId])
+    if (!course) return res.status(404).json({ ok:false, error:'课程不存在' })
+    const storage = await createStorageService()
+    const session = await createDirectStorageSession({
+      storage, purpose:'image', originalName:req.body?.originalName, mimeType:req.body?.mimeType,
+      sizeBytes:req.body?.sizeBytes, ownerType:STORED_FILE_OWNERS.COURSE_RESOURCE, ownerId:episodeId,
+      createdBy:req.user.id, visibility:'public', allowGif:true,
+    })
+    res.status(201).json({ ok:true, resourceType, ...session, storage_provider:session.provider, upload_phase:'session_created' })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_session_create_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, upload_phase:'failed' })
+  }
+})
+
+router.post('/admin-course-resources/confirm', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const episodeId = Number(req.body?.episodeId)
+    const resourceType = String(req.body?.resourceType || '').toLowerCase()
+    const title = String(req.body?.title || req.body?.originalName || '课程资源').slice(0, 500)
+    if (!Number.isInteger(episodeId) || episodeId <= 0 || !['mindmap', 'knowledge'].includes(resourceType)) return res.status(400).json({ ok:false, error:'资源类型无效' })
+    const storage = await createStorageService()
+    const maxSort = await queryOne('SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM course_resources WHERE episode_id = ?', [episodeId])
+    const sortOrder = Number(maxSort?.max_sort ?? -1) + 1
+    const completed = await confirmDirectStorageSession({
+      storage, sessionId:String(req.body?.sessionId || ''), createdBy:req.user.id, result:{ key:req.body?.key },
+      validateSession:async session => {
+        if (session.owner_type !== STORED_FILE_OWNERS.COURSE_RESOURCE || Number(session.owner_id) !== episodeId || session.purpose !== 'image') throw Object.assign(new Error('storage_session_owner_mismatch'), { code:'storage_session_owner_mismatch' })
+      },
+      insertBusiness:async (run, context) => {
+        const [inserted] = await run(`INSERT INTO course_resources (episode_id, type, title, url, structure, sort_order, stored_file_id)
+          VALUES (?, ?, ?, '', '', ?, ?)`, [episodeId, resourceType, title, sortOrder, context.storedFileId])
+        const id = Number(inserted?.insertId)
+        const stableUrl = `/api/course-resources/${id}/file`
+        await run('UPDATE course_resources SET url = ? WHERE id = ?', [stableUrl, id])
+        return { id, episode_id:episodeId, type:resourceType, title, url:stableUrl, structure:'', sort_order:sortOrder, stored_file_id:context.storedFileId, storage_provider:context.provider, original_name:context.metadata.originalName, mime_type:context.metadata.mimeType, size_bytes:context.metadata.sizeBytes }
+      },
+    })
+    res.status(201).json({ ok:true, resource:completed.business, storage_provider:completed.provider, upload_phase:'confirmed' })
+  } catch (error) {
+    const safe = safeStorageError(error, 'storage_confirm_failed')
+    res.status(400).json({ ok:false, error:safe.code, code:safe.code, stage:safe.stage, cleanup_pending:!!safe.cleanupPending, upload_phase:'failed' })
   }
 })
 

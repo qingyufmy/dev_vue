@@ -3,6 +3,7 @@ export function createCourseContent(api) {
     quizzes: new Map(),
     knowledge: new Map(),
     mindmaps: new Map(),
+    attachments: new Map(),
     structures: new Map(),
     objectUrls: new Map(),
 
@@ -94,6 +95,30 @@ export function createCourseContent(api) {
       }
 
       this.mindmaps.set(id, [])
+      return []
+    },
+
+    getCachedAttachments(episodeId) {
+      return this.attachments.get(Number(episodeId)) || null
+    },
+
+    async loadAttachments(episodeId) {
+      const id = Number(episodeId)
+      if (this.attachments.has(id)) return this.attachments.get(id)
+      try {
+        const apiData = await api.get(`/api/course-items/${id}/attachments`)
+        if (apiData.ok && Array.isArray(apiData.attachments)) {
+          this.attachments.set(id, apiData.attachments)
+          return apiData.attachments
+        }
+        if ([401, 403, 404].includes(apiData.httpStatus)) {
+          this.attachments.set(id, [])
+          return []
+        }
+      } catch (err) {
+        console.error('Course attachments API load error:', err)
+      }
+      this.attachments.set(id, [])
       return []
     },
 

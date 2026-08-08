@@ -1,160 +1,113 @@
-# AGENTS.md — AURUM AI Trading System
+# Repository Guidelines
 
-## 修改约束（必须遵守）
+## 项目结构与模块划分
 
-**每一步修改都要确认影响边界，详细确认修改后造成的后果。不能影响现有的功能。每改一处都要自测，确认功能完好、用户使用正常。**
+- `server/` 是 Node.js ESM 后端；HTTP 路由位于 `server/routes/`，AI 推理、策略、风控、复盘、记忆和模型对比集中在 `server/routes/ai/`。
+- `public/` 存放静态前端资源。AI 交易实验室主要由 `public/ai/index.html`、`app.js` 和 `styles.css` 构成，无单独前端构建步骤。
+- `bridge/native/apps/bridge-ui/` 是量见智桥 Windows 界面与托盘程序；`bridge/native/` 包含 Rust 3.0 核心、启动器、安装器、MT4 通信、SQLite、传输和更新运行时；MT5 官方 Python 库只封装在 `bridge/native/workers/mt5/` Worker 中。
+- `scripts/bridge-native/` 用于本地原生链路验证，`scripts/bridge-release/` 用于构建安装器、生成更新包、签名、上传和发布。`public/ai/` 不再存放可执行桥接客户端源码或安装包。
+- `tests/` 按后端模块组织；AI、路由和加密货币相关测试分别位于 `tests/ai/`、`tests/routes/` 和 `tests/crypto/`。
+- 数据库变更统一写入 `server/migrations.js`；方案、实现记录和运维文档放在 `docs/`。
 
-- 改代码前先读相关文件，理解调用链
-- 改完后 `npm run dev` 启动验证，确认无 `[FATAL]` 错误
-- 涉及数据库字段变更必须在 `db.js:initDB()` 或 `migrations.js` 中添加
-- 涉及双表同步的（`auto_scheduler` + `user_bridge_settings`），两处都要写
+## 安装、测试与本地运行
 
-## Quick Start
-
-```bash
-cp server/.env.example server/.env   # fill MySQL + JWT_SECRET (required)
-npm install
-npm run dev             # runs: node --watch server/index.js
+```powershell
+npm install          # 安装依赖
+npm run dev          # 监听文件变化并启动 3000 端口服务
+npm start            # 以常规模式启动服务
+npm test             # 运行全部 Vitest 测试
+npm run test:watch   # 持续运行受影响的测试
 ```
 
-## Project Overview
+定向测试示例：`npx vitest run tests/ai/strategy.test.js`。验证量见智桥 3.0 使用 `powershell -File scripts/bridge-native/test-native.ps1 -SkipRelease`；完整安装器必须通过 `scripts/bridge-release/build-full-installer.ps1` 及发布脚本构建，禁止恢复旧 Python GUI、Nuitka 打包或把 EXE 放回 `public/ai/`。启动或重启项目、桥接软件时必须使用可见的 PowerShell 控制台，便于观察运行日志和异常。重启前不仅要停止对应服务或桥接进程，还必须关闭承载它的旧显式 PowerShell 控制台，禁止遗留空控制台窗口。项目重启前必须先检查 3000 端口；若仍有监听进程，先停止并再次确认端口已无监听，再启动新服务。启动后必须检查 `/health`，不得在旧服务尚未退出时直接重复启动。
 
-- **Stack**: Node.js (ESM) + Express + MySQL (mysql2/promise) + WebSocket (ws) + optional Redis
-- **Frontend**: Vanilla HTML/CSS/JS (no framework, no build step)
-- **Bridge**: Separate Python app (`aurum_bridge_gui.py`) — not part of npm; packaged with Nuitka (onefile mode)
-- **Entry point**: `server/index.js`
-- **Database**: MySQL, auto-migrates on startup via `initDB()` in `server/db.js` + tracked migrations in `server/migrations.js`
+## 编码与命名规范
 
-## Architecture
+JavaScript 使用两空格缩进、无分号风格和 ESM `import`/`export`。函数与变量使用 `camelCase`，类使用 `PascalCase`，模块文件使用 kebab-case。项目未配置统一格式化或 lint 工具，修改后应匹配相邻代码，并对 JavaScript 执行 `node --check`。前端文案使用中文，内部错误码保持稳定。SQL 必须使用参数占位符，禁止拼接用户输入。
 
-```
-Browser <-> Express (port 3000) <-> MySQL
-                 |                     ↕ Redis (optional cache)
-Browser <-> WebSocket (bridge-ws.js) <-> Python Bridge <-> MT5 Terminal
-```
+## 测试要求
 
-- `server/bridge-ws.js` — WebSocket server: bridges MT5 data to/from browsers. Per-user state in `bridges` and `browsers` Maps.
-- `server/db.js` — MySQL pool, query helpers (`query`, `queryOne`, `queryRun`, `queryAll`, `withTransaction`), auto-migration, Beijing time utils.
-- `server/migrations.js` — Tracked schema migrations via `schema_migrations` table (newer system, prefer over inline ALTER in `initDB()`).
-- `server/redis.js` — Optional Redis caching. No `REDIS_HOST` = no cache, graceful degradation. Exports `cacheGetJSON`, `cacheSetJSON`, `cacheDel`.
-- `server/middleware/auth.js` — JWT auth. Exports `authMiddleware` and `optionalAuth`. Auto-downgrades expired plans.
-- `server/config.js` — Loads `.env` via dotenv. **Exits if `JWT_SECRET` is missing.**
-- `server/routes/ai/index.js` — AI trading entry point + Router. Split into 7 modules: utils/market-data/llm/config/strategy/scheduler/index.
+测试框架为 Vitest，JavaScript 测试命名为 `*.test.js`；MT5 Worker 使用 `bridge/native/workers/mt5/tests/test_*.py`，Rust 使用 Cargo 工作区测试。修复问题时必须增加回归测试，重点覆盖权限、迁移、调度状态、MT4/MT5 时间、订单执行、SQLite 与缓存边界。先运行定向测试，再按影响范围运行 `npm test` 与 `scripts/bridge-native/test-native.ps1 -SkipRelease`；涉及服务运行链路时还需启动项目并检查 `/health`。
 
-## Dual API Prefix
+## 提交与合并要求
 
-Both `/api` and `/aurum-api` serve the same routes. `/aurum-api` is used by the bridge WS path:
-- Bridge WebSocket: `/aurum-api/bridge/ws?type=bridge&token=...`
-- Bridge download: `/ai/bridge/exe` or `/ai/bridge/setup`
+提交信息采用 Conventional Commit 风格，例如 `fix(ai): preserve pinned inference selection`。提交应保持单一职责。PR 需要说明行为变化、迁移或配置影响、测试结果和回滚风险；UI 修改需附截图，并关联对应任务。
 
-## Critical Gotchas
+## 安全与 Agent 专用约定
 
-1. **ESM only**: `package.json` has `"type": "module"`. Use `import/export`, not `require`.
-2. **JWT_SECRET required**: `server/config.js` calls `process.exit(1)` if unset. Must be in `server/.env`.
-3. **`.env` location**: Environment variables live in `server/.env`, loaded by `server/config.js` (dotenv) and `server/index.js` (manual fallback).
-4. **Beijing time hardcoded**: `db.js:beijingNow()` returns UTC+8. MT5 broker time is UTC+3 (convert with -5h offset).
-5. **Testing**: Vitest with 124 unit tests (`npm test`). No ESLint or CI pipeline. Additional verification: `npm run dev` and check for `[FATAL]` in console.
-6. **Multi-role access**: `admin > pro > plus > free`. Pro needs bridge connected for trading. Plus is read-only (observe mode). Free sees upgrade overlay.
-7. **Bridge status matters**: `bridge-ws.js` checks user role AND bridge connection. Many features gate on `bridge` status in user state.
-8. **Auto-scheduler dual-table**: Auto-scheduler state stored in both `auto_scheduler` and `user_bridge_settings` tables. Changes must write both.
-9. **Nuitka packaging**: Bridge uses Nuitka onefile mode. Build: `python public/ai/build_nuitka.py`. Requires MinGW-w64 (`winget install BrechtSanders.WinLibs.POSIX.UCRT`). `resource_path()` supports both PyInstaller (`sys._MEIPASS`) and Nuitka (`os.path.dirname(sys.executable)`). `.spec` files are gitignored.
-10. **No hot reload for frontend**: Static files served from `public/`. Edit HTML/JS directly; browser refresh.
-11. **Memory limit**: Deploy with `--max-old-space-size=256`. Without it, PM2 restarts from heap exhaustion.
-12. **Redis is optional**: If `REDIS_HOST` is not set, all cache calls silently return null. No crash.
-13. **Dual `.env` loading**: `config.js` uses dotenv. `index.js` also manually parses `.env` as fallback (line 33-43). If both run, `config.js` wins.
-14. **Static file paths**: `public/` → main site, `public/ai/` → mounted at `/ai`. Bridge EXE served from `/ai/bridge/exe`.
+从 `server/.env.example` 创建本地配置，禁止提交凭据。保持 `/api` 与 `/aurum-api` 兼容。工作区中已有的未提交文件属于用户，不得顺带修改或提交。修改前检查完整调用链，修改后执行回归验证。每次完成代码修改后推送到 Gitee 的 `dev_codex` 分支。
 
-## Dev Commands
+凡是向用户提交正式实施方案，必须在实施前对最终方案连续复审两遍，并把两轮结论、相应调整和剩余风险写入方案。第一轮核对需求覆盖、业务边界、现有能力复用、最小改动和是否设计过度；第二轮基于第一轮调整后的最终版本，检查兼容性、数据与迁移、并发与幂等、异常恢复、时间语义、安全、测试、回滚以及可能引入的连带 Bug。两轮复审必须独立且有实际检查内容，禁止用重复表述代替；如果第二轮仍发现实质问题，先修改方案并重新完成第二轮，确认符合需求后才能标记为可实施。
 
-| Command | What it does |
-|---------|-------------|
-| `npm run dev` | Dev server with file watch (`node --watch server/index.js`) |
-| `npm start` | Production server (`node server/index.js`) |
-| `npm test` | Run all unit tests (`vitest run`) |
-| `npm run test:watch` | Run tests in watch mode |
+实现任务由主 Agent 负责需求澄清、方案拆分、架构和安全判断、最终代码审查与验收；适合独立复核的明确编码、Bug 修复和重构可交给 `luna-worker`，但必须给出文件范围、验收标准、受保护行为和验证命令，并由主 Agent 复核实际 diff 与测试证据。共享文件、强依赖步骤或存在产品歧义时保持顺序执行，不为并行而并行。
 
-## Key Files
+调查单条 AI 信号的推理、风控、订单意图、Bridge 与 MT 结果链路时使用 `diagnose-aurum-signal` Skill，默认只读；检查、修复或清理日复盘与月复盘时使用 `operate-aurum-period-review` Skill，并严格区分检查、修复和删除授权。全面项目审计、网站部署和 Bridge 发布分别使用 `audit-aurum-project`、`deploy-aurum-release` 和 `release-liangjian-bridge`，不得互相扩大授权范围。
 
-| File | Purpose |
-|------|---------|
-| `server/index.js` | Express app, middleware, route registration, static serving |
-| `server/db.js` | MySQL pool, `initDB()` migration, query helpers, Beijing time |
-| `server/migrations.js` | Tracked schema migrations via `schema_migrations` table |
-| `server/redis.js` | Optional Redis caching (graceful degradation) |
-| `server/bridge-ws.js` | WebSocket server for MT5 bridge |
-| `server/config.js` | Env loading, JWT_SECRET validation |
-| `server/middleware/auth.js` | JWT authentication |
-| `server/routes/ai/index.js` | AI trading entry point + Router |
-| `server/routes/ai/utils.js` | Pure function utilities |
-| `server/routes/ai/market-data.js` | Market calculation + bridge |
-| `server/routes/ai/llm.js` | AI inference + signal normalization |
-| `server/routes/ai/config.js` | Config management + risk + audit |
-| `server/routes/ai/strategy.js` | Strategy context + execution |
-| `server/routes/ai/scheduler.js` | Auto scheduler + smart close |
-| `server/routes/admin.js` | Admin panel APIs |
-| `server/routes/auth.js` | Login/register |
-| `public/ai/app.js` | Frontend trading UI logic (4100+ lines) |
-| `public/ai/index.html` | AURUM AI trading page |
+浏览器实测时，管理员账号固定使用 Codex 内置浏览器；一号观摩源账号才使用用户的 Google Chrome 会话。浏览器检查默认只读，禁止为了查看页面切换订阅策略、执行模式、观摩源绑定或其他业务配置；确需修改时必须得到用户明确授权，并在操作后核对账号身份和最终配置。
 
-## Coding Conventions
+后续发现的项目级注意事项、固定运行方式、架构约束、重要需求决策和长期维护规则，应及时补充到本文件；不要把临时调试结论或一次性任务记录写入这里。
 
-- **Language**: Chinese comments and UI text throughout.
-- **Error handling**: Never use empty `catch {}` or bare `except`. Log errors with `[Module]` prefix.
-- **DB queries**: Always use parameterized queries (`?` placeholders), never string concatenation.
-- **Auth on routes**: Use `authMiddleware` from `middleware/auth.js`, never inline role checks.
-- **Timezone**: Use `beijingNow()` from `db.js` for all timestamps. MT5 time = Beijing - 5h.
-- **Permissions**: Check `req.user.plan` and `req.user.role` against allowed values. Use `PUBLIC_CATEGORIES` for unauthenticated routes.
-- **Dual-table sync**: When writing to `auto_scheduler` or `user_bridge_settings`, write both tables.
-- **Redis caching**: Use `cacheGetJSON`/`cacheSetJSON` for frequently accessed data (admin stats, system_config). Invalidate on write.
-- **No comments**: Don't add code comments unless explicitly asked.
+## Bridge 运行时硬边界
 
-## Code Review
+量见智桥只发现并连接用户已经启动的 MT4/MT5，禁止自动启动、自动恢复启动或关闭交易终端。退出、暂停、重启或卸载 Bridge 不得关闭 MT4/MT5，也不得改变终端保存的登录状态。首次安装默认选择 MT5；后续启动必须恢复用户已保存的平台选择。
 
-See `CODE_REVIEW.md` for the full review checklist. Key rules:
-- SQL injection, XSS, auth bypass, bare exceptions = must fix
-- Dual-table sync, N+1 queries, resource leaks = should fix
-- Every PR self-check against historical bug patterns in CODE_REVIEW.md
+MT4 EA、MT5 Worker、本地终端发现和数据采集独立于网站授权。网站授权只负责 Bridge 与服务器之间的身份认证和通信权限；未授权、授权失效或会员到期不得阻止本地终端识别和本地采集，但必须暂停服务器连接并向用户显示明确原因。MT4 的“安装/修复 EA”只负责复制、更新和检查 EA 文件，不得自动操作用户图表或交易终端。
 
-## Recent Improvements (2026-07-04)
+用户从网页主动关闭 Bridge 后，客户端必须保持服务器连接暂停，不得自动重连；只有用户再次主动开启后才能恢复。暂停期间网页进入观摩模式，本地 MT4/MT5 和其中已有订单不受影响。
 
-### Performance Indexes
-Added to `migrations.js`:
-- `users(last_seen_at)`, `ai_signals(user_id, created_at)`, `orders(user_id, status)`
-- `auto_scheduler(enabled)`, `audit_logs(user_id, action)`, `notifications(user_id, is_read)`, `trades(user_id)`
+历史交易首次从 MT4/MT5 按有界游标分批同步到每个档案独立的 SQLite，之后按分页和筛选条件读取；禁止重新引入无边界全量历史响应。SQLite 是可重建的本地读取模型、离线缓存和对账证据，不是经纪商交易真相。止损止盈应从对应开仓历史订单补齐；开仓订单同样为 `0` 时表示未设置，禁止根据备注、平仓原因或价格接近程度猜测。强制刷新用于唤醒同步和读取最新投影，不得通过清库掩盖源数据问题。
 
-### Code Quality
-- Fixed empty catch blocks in `admin.js` and `ai.js` — now log errors with `[Admin]`/`[AI]` prefix
-- Unified time functions: `bridge-ws.js` and `ai.js` now use `beijingNow()` from `db.js`
+Bridge 与 AI 交易实验室的内部排序、游标、过期时间和跨系统比较统一使用 UTC；交易业务日、K 线展示、风控窗口、复盘与订阅调度统一使用对应 `terminal_instance_id + broker_server + login` 的 MT4/MT5 终端服务器时间。MT5 只能用持续推进的新鲜报价与当前 UTC 校准时差；休市或报价不推进时只能沿用该终端上次已验证并持久化的时差，禁止从陈旧报价的时间差重新推断。首次安装且没有自身可信时差时，仅可临时继承与目标账户 `broker_server` 完全一致、最近 7 天内已校准的默认观摩源时差，并标记为 `observer_bootstrap`；不得把继承值持久化为当前终端的已验证时差，终端报价恢复推进后必须立即由自身校准结果替换。观摩源不匹配或证据过期时，所有依赖终端时间的动作必须暂停并明确标记时钟未校准，禁止回退到固定 `UTC+3`、北京时间、用户级或平台级共享时差。时间证据应同时保留 UTC、终端服务器时间、时差、校准状态和继承来源。
 
-### Bug Fixes
-- `upsertAutoConfig()` now syncs to `user_bridge_settings` (dual-table consistency)
-- `comments.js` batch loads likes (eliminated N+1 query)
-- `admin.js` deletes `user_bridge_settings` when deleting user
-- `payment.js` wraps order creation in transaction
+## 发布、更新与部署边界
 
-### Performance
-- `admin.js` dashboard stats cached 60s via Redis
-- `config.js` public configs cached 300s via Redis
-- Cache invalidated on write/update/delete
+网站部署、Bridge 安装器构建、模块更新包生成、七牛云上传、Bridge 下载元数据修改和正式发布是相互独立的授权边界。用户只要求部署网站时，不得自动重新打包、上传或发布 Bridge；用户只要求构建时，不得自动上传、修改线上接口或部署服务器。执行发布时使用 `release-liangjian-bridge` Skill，执行网站部署时使用 `deploy-aurum-release` Skill，并保留构建产物哈希、远端版本、健康检查和发布结果证据。
 
-### Architecture
-- `ai.js` split into 7 modules: utils/market-data/llm/config/strategy/scheduler/index
-- Bridge packaging switched from PyInstaller to Nuitka (lower AV false positives, 58.9MB vs 64.2MB)
-- `resource_path()` supports both PyInstaller and Nuitka runtimes
+Bridge 更新只能使用已签名清单和已签名模块包，并验证版本、大小、SHA-256 和签名。禁止仅凭下载地址或哈希执行更新，禁止加入静默接受未签名包的兼容逻辑。Bridge 应用版本、EA 版本和内部协议兼容号分别管理；只有明确发布或协议变更时才同步调整，不能为了重新打包随意改变。
 
-### Testing
-- Vitest framework with 124 unit tests
-- Coverage: ai/utils.js (28), ai/llm.js (17), ai/config.js (14), ai/market-data.js (14), ai/chan.js (45), ai/strategy.js (4), ai/scheduler.js (2)
-- Run: `npm test`
+Bridge Windows 安装器正式发布默认不购买或使用付费 Authenticode 代码签名证书，构建时明确使用发布脚本支持的未签名安装器选项；这只豁免 Windows 安装器的 Authenticode 签名，不得取消更新清单与模块包自身的密码学签名、SHA-256、大小和版本校验。正式安装包默认服务器地址固定为 `https://www.cnfxtrade.com/`；虚拟机 IP 仅用于安装后的测试环境手动配置，不得写入正式发布包。
 
-### Frontend Performance
-- Timer pause on page visibility change (reduces CPU/network when tab hidden)
-- K-line volume refresh reduced from 1s to 5s (80% less overhead)
-- MutationObserver/ResizeObserver lifecycle management (prevents memory leaks)
+本地开发和真实终端测试默认使用 `127.0.0.1:3000`；只有正式构建时才将官方域名写入发布包。管理员自定义服务器地址允许合法的 HTTP 或 HTTPS，包括局域网地址；实时通道根据基础地址生成 WS/WSS，不得重新加入强制 HTTPS 限制。默认地址、服务器返回地址和已发布更新包内置地址的变更必须分别验证。
 
-## Deployment
+MT5 账户归属以“经纪商服务器 + 登录账号”为唯一身份。具备账户交易权限的最新 Bridge 连接可自动接管归属；旧用户的相关订阅、自动推理与交易发送必须立即停用，并通过审计记录和实时前端事件保留完整切换链路。只读 MT5 登录不得接管账户。
+MT5 累计收益、入出金和平仓统计必须按 `mt5_account_ownership_history` 的用户归属期采集与汇总。账户换绑后，新用户只能看到自己接管后的数据；历史归属人的统计保留归档，但不得计入当前用户、运营中心或全局风控的汇总结果。
 
-- Production: `git pull origin main && npm install --production && restart PM2`
-- MySQL auto-migrates on startup via `initDB()` + `runMigrations()`
-- Bridge EXE: download from server `/ai/bridge/exe-file` endpoint
-- See `DEPLOY.md` for full server setup (宝塔 + Nginx reverse proxy + WebSocket upgrade)
+观摩模式采用“观摩频道 → 观摩源 → Bridge 数据账户”的显式路由。频道可按套餐或指定用户授权；默认频道一旦配置即为权威来源，离线时必须显示来源不可用，禁止静默切换到另一账户。账户、持仓、订单、历史和信号必须按频道来源隔离；通用行情与 K 线可继续复用平台缓存。观摩用户只读，任何写操作仍绑定其本人且由权限层拒绝。
+
+桥接源账户由管理员在观摩源管理中创建，固定为 `role=user`、`plan=pro`、`plan_source=observer_source` 的专用身份，禁止赋予管理员权限或混入普通 Pro 客户候选列表。创建后只返回非敏感账户信息并自动选中；密码只保存哈希，审计记录不得包含明文密码。
+
+观摩源账户在保持 `role=user` 的前提下拥有独立的平台 AI 内容能力：只能新建和维护平台策略，复盘结论只能沉淀为平台记忆；不得因此获得用户管理、全局风控、平台模型或其他管理员权限。普通 Pro 用户仍使用私有策略与个人记忆。
+
+同一台 Windows 主机运行多个观摩源时，由量见智桥 3.0 总控在同一界面管理隔离运行时；默认档案位于 `%APPDATA%\\AURUM\\BridgeV3`，命名观摩档案位于其 `profiles/<name>` 子目录。每个档案使用独立观摩源账号、终端绑定、凭据、SQLite 和日志，禁止多个来源共用默认档案或终端身份。
+
+管理员登录量见智桥后提供“新增观摩源”入口；新来源必须先验证 `plan_source=observer_source` 的专用账户，并绑定未被其他档案使用的独立终端目录和交易账户。观摩源由 3.0 核心以隔离档案运行，不再启动旧版子 Bridge 界面。普通用户不显示观摩源和管理员连接设置入口，且一个客户端只连接一个本人交易账户。
+
+自动推理在服务商请求进入终态后必须等待完整配置周期；慢推理期间错过的周期直接丢弃，不按固定时间槽补跑，也不得立即连续推理。失败退避长于配置周期时采用更长等待；尚未发起模型请求的前置条件检查才允许短周期重试。`inference_snapshots.klines_json` 兼容普通 JSON 与 `gzip-base64:` 压缩格式，读取必须统一使用 `parseSnapshotJson()`，不得直接 `JSON.parse()`。模型调用流量以 `ai_model_usage_logs` 中的请求字节、响应字节和耗时字段为准。
+模型结构化输出参数必须按供应商与协议白名单启用，不得向所有 OpenAI 兼容端点统一写死。DeepSeek Chat API 使用 `response_format: { type: 'json_object' }`；火山 Agent Plan Responses API 使用 `text.format: { type: 'json_object' }`。现有动态输出模板与后端字段校验仍是交易合同，JSON Mode 只负责保证 JSON 语法，不得替代业务校验。
+
+历史信号快照的模型对比必须锁定快照所属策略版本及当时可恢复的周期、入场方式、缠论和策略范围，禁止混入当前策略配置。统计指标的分子与分母必须来自同一响应集合；约束无效信号可参与模型方向和置信度评估，但不得进入成交回放。
+
+AI 交易实验室主导航按用户任务组织：策略与模型归入“AI策略师”，行情信号与推理详情统一归入“AI分析师”，交易、风控、复盘分别使用“AI交易员”“AI风控师”“AI复盘师”。`signals` 只保留旧跳转兼容，不得恢复为独立导航或重复页面。
+
+AI 不得给出绝对手数，只能从“不建仓、试探仓、轻仓、标准仓”四档中选择，对应用户单笔风险额度的 `0%、25%、50%、100%`。共享信号分发时，以用户账户风控的单笔最大手数为执行上限，再根据用户净值、止损真实亏损、仓位档位和 MT5 合约规格精算最终手数；加仓一律最多使用试探仓。审计必须记录仓位档位、完整风险额度、档位后风险额度、用户手数上限和最终手数。
+
+每个观摩源必须固定绑定一个平台策略。平台策略推理只可读取该观摩源中由当前策略产生的系统持仓与挂单参考，不得包含账号、余额、权益、盈亏、手数或人工订单；分发执行时再用每个订阅用户的真实持仓与挂单进行二次对齐。取消或替换挂单只能作用于当前策略历史交付且带系统 Magic 的订单，禁止触碰人工订单或其他策略订单。
+
+日复盘与月复盘按用户、账户、策略和复盘周期聚合，策略版本只用于来源追溯，不得作为复盘或记忆检索的硬隔离条件。短期记忆、长期记忆和压缩摘要都必须绑定策略，并按品种、周期、方向、入场方式、行情状态、波动状态及缠论结构等适用条件精确匹配；仅明确标记为通用原则的长期记忆可无条件候选，单次最多注入一条。记忆压缩必须按“类别 + 适用条件”聚类，禁止把互相矛盾的行情经验合并为同一摘要。
+
+付费会员到期前 7、3、2、1 天分别触发网页、邮件与短信提醒。通知必须按“用户 + 到期时间 + 提前天数 + 渠道”幂等去重并支持失败重试；主站与 AI 交易实验室使用独立网页已读状态，邮件和短信每个阶段只发送一次。续费变更到期时间后，旧提醒不得继续展示或发送。
+
+会员到期通知记录属于运营审计数据，不提供前端删除能力。运营中心必须以中文展示渠道、状态、失败原因和服务配置状态；只允许管理员手动重试仍处于有效提醒窗口内的邮件或短信失败记录，已成功、已阅读、已跳过和已失效记录不得重发。
+会员到期前按 7、3、2、1 天提醒，到期后按本次到期时间仅提醒一次；未绑定手机号的用户不得创建或尝试短信任务。到期前与已过期短信使用独立模板，避免模板变量和审核文案混用。
+
+支付订单清理由 `server/jobs/payment-order-cleanup.js` 定期执行：默认只删除已过期且超过 30 天保留期的 `orders.status = 'expired'` 记录及其加密支付监听记录；已支付、待支付、确认中和已取消订单不得清理。保留天数、执行间隔和批量大小通过 `PAYMENT_EXPIRED_ORDER_*` 环境变量调整。
+
+主站与 AI 交易实验室采用“两套业务界面、一个账号体系、一个账户中心、一个统一管理后台”。统一管理后台固定使用 `/admin/`；用户会员、商业运营、平台策略、平台模型、平台复盘与记忆、观摩频道、模型评测、全局风控、审计、内容和系统配置不得在主站或 AI 实验室再建第二套管理界面。新增管理接口优先使用 `/api/admin/...`；暂时复用的 `/api/ai/admin/...` 只视为后端兼容服务，不得恢复旧前端。用户档案修改必须复用 `server/admin/user-profile.js`，密码规则、最后一个管理员保护、观摩源账号锁定和桥接会话撤销不得在路由中重复实现。登录注册统一到 `/auth`，会员订阅和个人设置统一到 `/account`，AI 交易实验室只保留用户交易工作流与个人配置。
+
+## 设计上下文
+
+产品战略与视觉规范分别以根目录 `PRODUCT.md` 和 `DESIGN.md` 为准，Impeccable 扩展令牌位于 `.impeccable/design.json`。AI 交易实验室的创意主轴是“智能交易团队”：专业科技、亲切易懂、可信克制；界面必须结论优先、状态可解释、安全边界可见，并通过渐进披露兼顾小白与专业用户。用户可见文案使用自然中文，不直接暴露英文异常或内部规则码。视觉保持深蓝黑工作面、稀缺金色焦点和明确语义色，避免信息无优先级、卡片层层嵌套、游戏化霓虹、过量渐变、炫光和无意义动画。所有新界面与重构以 WCAG 2.1 AA 为基线，并支持键盘焦点、非颜色状态表达和 `prefers-reduced-motion`。
+
+## 前端边界与统一会话
+
+主站、AI 交易实验室和账户中心是三套独立前端，分别使用 `/`、`/ai/` 和 `/account/`；AI 登录注册使用 `/ai/auth/`，主站登录注册继续使用 `/auth/`。它们只能复用同一套后端认证、用户、订阅、支付和通知接口，不得互相依赖页面组件或路由状态。主站只通过普通导航链接进入 `/ai/`；主站与 AI 内的账户入口分别通过模态窗口承载 `/account/?embed=main` 和 `/account/?embed=ai`，其中主站嵌入模式必须实时跟随主站深浅主题。同源会话由 `/shared/session.js` 统一读写；任一前端退出时必须清除全部兼容令牌、广播退出事件，并使主站和 AI 同时失效。AI 退出后固定返回 `/ai/auth/`，不得跳回主站登录页。

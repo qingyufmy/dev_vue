@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { attachAtrAnchor, buildStrategyContextFromTags, resolveChanHistoryCount, __strategyTest } from '../../server/routes/ai/strategy.js'
+import { readFileSync } from 'node:fs'
+import { attachAtrAnchor, buildChanTimeframeAlignment, buildStrategyContextFromTags, chanNeedsMoreHistory, loadPrivatePortfolioContext, resolveChanHistoryCount, shouldPersistChanAnchor, __strategyTest } from '../../server/routes/ai/strategy.js'
 
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
   mt5Bridge: (...args) => mockMt5Bridge(...args),
+  platformRates: (userId, params) => mockMt5Bridge(userId, 'rates', params),
   computeAtr14: vi.fn(() => 12),
   calculateMarketData: vi.fn((symbol, timeframe, rates, _account, _positions, options = {}) => ({
     symbol, timeframe,
@@ -19,8 +21,18 @@ vi.mock('../../server/routes/ai/market-data.js', () => ({
     kline_count: rates.length, positions: { total_positions: 0, details: [] },
     account: { balance: 10000, equity: 10500 },
     ...(options.computeChan ? { chan: {
-      segment_count: rates[0]?.chan_segment_count ?? (rates.length >= 500 ? 1 : 0),
-      center_count: rates[0]?.chan_center_count ?? (rates.length >= 500 ? 1 : 0),
+      source_history_count: rates.length,
+      segment_count: rates[0]?.chan_segment_count ?? (rates.length >= 2000 ? 1 : 0),
+      center_count: rates[0]?.chan_center_count ?? (rates.length >= 2000 ? 1 : 0),
+      latest_center: rates[0]?.chan_center_count > 0 ? {
+        entry_segment_stable_id: rates[0]?.chan_entry_segment_stable_id ?? null,
+        entry_segment_id: rates[0]?.chan_entry_segment_id ?? null,
+      } : null,
+      structure_anchor: {
+        requested_time_utc_msc: rates[0]?.chan_requested_anchor_time_utc_msc ?? null,
+        matched: rates[0]?.chan_anchor_matched === true,
+        recommended_time_utc_msc: rates[0]?.chan_recommended_anchor_time_utc_msc ?? null,
+      },
     } } : {}),
   })),
 }))
@@ -59,8 +71,8 @@ describe('buildStrategyContextFromTags', () => {
     expect(mockMt5Bridge).not.toHaveBeenCalled()
   })
 
-  it('已有500根缠论回退数据时不会重复请求500根', async () => {
-    const rates = Array.from({ length: 500 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+  it('已有2000根缠论回退数据时不会重复请求2000根', async () => {
+    const rates = Array.from({ length: 2000 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
     await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'H1', rates, 'manual'
     )
@@ -77,55 +89,298 @@ describe('buildStrategyContextFromTags', () => {
 
   it('缠论使用扩展历史但模型K线保持标签数量', async () => {
     const rates = Array.from({ length: 300 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
-    mockMt5Bridge.mockResolvedValueOnce({ rates })
+    const extended = Array.from({ length: 2000 }, (_, i) => ({ time: `e${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    mockMt5Bridge.mockResolvedValueOnce({ rates }).mockResolvedValueOnce({ rates: extended })
     const result = await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
     )
     expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 300 }))
     expect(result.timeframes.H1.klines).toHaveLength(80)
-    expect(result.timeframes.H1.klines[0].time).toBe('t220')
+    expect(result.timeframes.H1.klines[0].time).toBe('e1920')
+    expect(result.visualization_klines.H1).toHaveLength(2000)
+    expect(result.visualization_klines.H1[0].time).toBe('e0')
+    expect(JSON.stringify(result)).not.toContain('visualization_klines')
   })
 
-  it('300根没有完整线段时仅对该周期自适应补取500根', async () => {
+  it('300根没有完整线段时仅对该周期自适应补取2000根', async () => {
     const rates300 = Array.from({ length: 300 }, (_, i) => ({ time: `a${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
-    const rates500 = Array.from({ length: 500 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
-    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValueOnce({ rates: rates500 })
+    const rates2000 = Array.from({ length: 2000 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValueOnce({ rates: rates2000 })
     const result = await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
     )
     expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 300 }))
-    expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
+    expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 2000 }))
     expect(result.timeframes.H1.klines).toHaveLength(80)
-    expect(result.timeframes.H1.klines[0].time).toBe('b420')
+    expect(result.timeframes.H1.klines[0].time).toBe('b1920')
+    expect(result.visualization_klines.H1).toHaveLength(2000)
   })
 
-  it('300根已有线段但没有中枢时自适应补取500根', async () => {
+  it('300根已有线段但没有中枢时自适应补取2000根', async () => {
     const rates300 = Array.from({ length: 300 }, (_, i) => ({
       time: `a${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100',
       chan_segment_count: 2, chan_center_count: 0,
     }))
-    const rates500 = Array.from({ length: 500 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
-    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValueOnce({ rates: rates500 })
+    const rates2000 = Array.from({ length: 2000 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValueOnce({ rates: rates2000 })
     const result = await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
     )
     expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 300 }))
-    expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
+    expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 2000 }))
     expect(result.timeframes.H1.klines).toHaveLength(80)
-    expect(result.timeframes.H1.klines[0].time).toBe('b420')
+    expect(result.timeframes.H1.klines[0].time).toBe('b1920')
   })
 
-  it('某品种周期补取过500根后下轮直接请求500根', async () => {
+  it('300根已有中枢但进入段与推荐锚点缺失时仍补取2000根', async () => {
+    const rates300 = Array.from({ length: 300 }, (_, i) => ({
+      time: `a${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100',
+      chan_segment_count: 3, chan_center_count: 1,
+    }))
+    const rates2000 = Array.from({ length: 2000 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValueOnce({ rates: rates2000 })
+    await buildStrategyContextFromTags(
+      1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
+    )
+    expect(mockMt5Bridge).toHaveBeenNthCalledWith(2, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 2000 }))
+  })
+
+  it('某品种周期补取过2000根后下轮直接请求2000根', async () => {
     const rates300 = Array.from({ length: 300 }, (_, i) => ({ time: `a${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
-    const rates500 = Array.from({ length: 500 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
-    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValue({ rates: rates500 })
+    const rates2000 = Array.from({ length: 2000 }, (_, i) => ({ time: `b${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValue({ rates: rates2000 })
     const args = [1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual']
     await buildStrategyContextFromTags(...args)
-    expect(resolveChanHistoryCount(1, 'XAUUSD', 'H1', 80, true)).toBe(500)
+    expect(resolveChanHistoryCount(1, 'XAUUSD', 'H1', 80, true)).toBe(2000)
     mockMt5Bridge.mockClear()
     await buildStrategyContextFromTags(...args)
     expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
-    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 500 }))
+    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 2000 }))
+  })
+  it('reports missing timeframes as a partial strategy context', async () => {
+    const fallbackRates = Array.from({ length: 100 }, (_, i) => ({
+      time: `m${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100',
+    }))
+    mockMt5Bridge.mockResolvedValue({ status: 'error', rates: [] })
+    const result = await buildStrategyContextFromTags(
+      1, 'XAUUSD', { balance: 10000 }, [], 'analyze {{MTF:M5:100}} {{MTF:H1:80}}', 'M5', fallbackRates, 'manual'
+    )
+    expect(result).toMatchObject({
+      context_status: 'partial',
+      required_timeframes: ['M5', 'H1'],
+      used_timeframes: ['M5'],
+      missing_timeframes: ['H1'],
+    })
+    expect(result.timeframes).toHaveProperty('M5')
+    expect(result.timeframes).not.toHaveProperty('H1')
+  })
+})
+
+describe('manual auto-execute guard', () => {
+  const strategySource = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+
+  it('reuses the guard for the final Bridge write gate', () => {
+    const executeBlock = strategySource.slice(strategySource.indexOf("const execResult = await executeOrder"))
+    expect(executeBlock).toContain('beforeBridgeSend:assertAutoExecuteBeforeSend')
+    expect(executeBlock).toContain('beforeWrite:assertAutoExecuteBeforeSend')
+  })
+
+  it('fails closed when no explicit guard is supplied', async () => {
+    await expect(__strategyTest.resolveAutoExecuteGuard()).resolves.toEqual({
+      status:'rejected', error_code:'manual_auto_execute_guard_required',
+      message:'自动执行缺少请求授权',
+    })
+  })
+
+  it('records a clear rejection when the guard returns false or throws', async () => {
+    await expect(__strategyTest.resolveAutoExecuteGuard(() => false)).resolves.toMatchObject({
+      status:'rejected', error_code:'manual_auto_execute_guard_rejected',
+    })
+    await expect(__strategyTest.resolveAutoExecuteGuard(() => {
+      throw Object.assign(new Error('socket closed'), { code:'manual_auto_execute_request_disconnected' })
+    })).resolves.toEqual({
+      status:'rejected', error_code:'manual_auto_execute_request_disconnected',
+      message:'发起自动执行请求的浏览器连接已断开',
+    })
+  })
+
+  it('allows execution only for an explicit true guard result', async () => {
+    await expect(__strategyTest.resolveAutoExecuteGuard(() => true)).resolves.toBeNull()
+    await expect(__strategyTest.resolveAutoExecuteGuard(() => ({ allowed:true }))).resolves.toMatchObject({
+      status:'rejected', error_code:'manual_auto_execute_guard_rejected',
+    })
+  })
+})
+
+describe('Chan structure anchor persistence', () => {
+  const persistableChan = () => ({
+    status:'partial', window_stable:true, segment_count:3,
+    source_history_count:2000,
+    history_sufficient:true,
+    closed_history_sufficient:true,
+    reliability:'medium',
+    warnings:[],
+    time_location_reliable:true,
+    cache_internal_gap_unresolved:false,
+    authoritative_terminal_chain_confirmed:true,
+    temporal_closed_bar_support:3,
+    temporal_closed_bar_validator_count:3,
+    temporal_identity_stable:true,
+    cross_window_entry_support_count:2,
+    cross_window_entry_validator_count:3,
+    latest_center:{ entry_segment_stable_id:'entry', entry_segment_id:1 },
+    structure_anchor:{
+      recommended_time_utc_msc:1784185200000,
+      full_window_authoritative:true,
+      bootstrap_state:'confirmed',
+      bootstrap_identity:'core|entry',
+      bootstrap_core_stable_id:'core',
+      bootstrap_entry_segment_stable_id:'entry',
+      bootstrap_entry_start_time_utc_msc:1784185200000,
+      last_confirmed_segment_time_utc_msc:1784188800000,
+      bootstrap_observation_time_utc_msc:1784189100000,
+    },
+  })
+
+  it('requests more history until a center entry and recommended anchor exist without a trusted match', () => {
+    expect(chanNeedsMoreHistory({
+      segment_count:3,
+      center_count:1,
+      latest_center:{ entry_segment_stable_id:null, entry_segment_id:null },
+      structure_anchor:{ matched:false, recommended_time_utc_msc:null },
+    })).toBe(true)
+    expect(chanNeedsMoreHistory({
+      segment_count:3,
+      center_count:1,
+      latest_center:{ entry_segment_stable_id:null, entry_segment_id:null },
+      structure_anchor:{ matched:true, requested_time_utc_msc:1784185200000, recommended_time_utc_msc:null },
+    })).toBe(false)
+  })
+
+  it('never persists a provisional anchor from an unresolved historical window', () => {
+    expect(shouldPersistChanAnchor(true, {
+      status:'segment_history_unresolved', window_stable:false, segment_count:0,
+      structure_anchor:{ recommended_time_utc_msc:1784185200000 },
+    }, { source_id:9 })).toBe(false)
+  })
+
+  it('persists only a stable multi-segment anchor with a stable source identity', () => {
+    expect(shouldPersistChanAnchor(true, persistableChan(), { source_id:9 })).toBe(true)
+  })
+
+  it('persists from the independently confirmed full-window entry even before the selected response remaps that center', () => {
+    const chan = persistableChan()
+    chan.latest_center = { entry_segment_stable_id:null, entry_segment_id:null }
+    expect(shouldPersistChanAnchor(true, chan, { source_id:9 })).toBe(true)
+  })
+
+  it('persists an MT4 source-scoped structure key without claiming exact historical UTC', () => {
+    const chan = persistableChan()
+    chan.time_location_reliable = false
+    chan.structure_time_key_reliable = true
+    chan.structure_time_key_basis = 'mt4_current_offset_source_scoped'
+    expect(shouldPersistChanAnchor(true, chan, { source_id:9 })).toBe(true)
+  })
+
+  it.each([
+    ['unreliable time', chan => { chan.time_location_reliable = false }],
+    ['unreliable structure key', chan => { chan.structure_time_key_reliable = false }],
+    ['unresolved cache gap', chan => { chan.cache_internal_gap_unresolved = true }],
+    ['non-authoritative full window', chan => { chan.structure_anchor.full_window_authoritative = false }],
+    ['insufficient closed-bar support', chan => { chan.temporal_closed_bar_support = 2 }],
+    ['insufficient closed-bar validators', chan => { chan.temporal_closed_bar_validator_count = 2 }],
+    ['unstable temporal identity', chan => { chan.temporal_identity_stable = false }],
+    ['minority entry identity', chan => { chan.cross_window_entry_support_count = 1 }],
+    ['short source history', chan => { chan.source_history_count = 300 }],
+    ['incomplete requested history', chan => { chan.history_sufficient = false }],
+    ['terminal phase absent from full window', chan => { chan.authoritative_terminal_chain_confirmed = false }],
+    ['missing bootstrap identity', chan => { chan.structure_anchor.bootstrap_identity = null }],
+    ['missing last confirmed segment time', chan => { chan.structure_anchor.last_confirmed_segment_time_utc_msc = null }],
+    ['missing bootstrap observation time', chan => { chan.structure_anchor.bootstrap_observation_time_utc_msc = null }],
+    ['observation before confirmed segment', chan => { chan.structure_anchor.bootstrap_observation_time_utc_msc = 1784187000000 }],
+  ])('does not persist when %s', (_label, mutate) => {
+    const chan = persistableChan()
+    mutate(chan)
+    expect(shouldPersistChanAnchor(true, chan, { source_id:9 })).toBe(false)
+  })
+
+  it('does not let a legacy fixed-age warning block an otherwise valid anchor', () => {
+    const chan = persistableChan()
+    chan.warnings = ['confirmed_structure_stale']
+    expect(shouldPersistChanAnchor(true, chan, { source_id:9 })).toBe(true)
+  })
+})
+
+describe('loadPrivatePortfolioContext', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('loads the owner positions and pending orders from the same bridge', async () => {
+    mockMt5Bridge.mockImplementation((_userId, action) => action === 'positions'
+      ? Promise.resolve({ status:'success', positions:[{ ticket:11, symbol:'XAUUSD' }] })
+      : Promise.resolve({ status:'success', orders:[{ ticket:22, symbol:'EURUSD' }] }))
+    await expect(loadPrivatePortfolioContext(7)).resolves.toEqual({
+      positions:[{ ticket:11, symbol:'XAUUSD' }],
+      pendingOrders:[{ ticket:22, symbol:'EURUSD' }],
+    })
+    expect(mockMt5Bridge).toHaveBeenCalledWith(7, 'positions', {}, { noFallback:true })
+    expect(mockMt5Bridge).toHaveBeenCalledWith(7, 'pending_list', {}, { noFallback:true })
+  })
+
+  it('fails closed when either private portfolio response is incomplete', async () => {
+    mockMt5Bridge.mockImplementation((_userId, action) => action === 'positions'
+      ? Promise.resolve({ status:'success', positions:[] })
+      : Promise.resolve({ status:'error', message:'offline' }))
+    await expect(loadPrivatePortfolioContext(7)).rejects.toThrow('private_portfolio_context_unavailable')
+  })
+})
+
+describe('buildChanTimeframeAlignment', () => {
+  const frame = (reliability, direction, state, entryCandidates = []) => ({
+    summary: { chan: {
+      reliability,
+      trend_state: { direction, state, phase: state.includes('trend') ? 'trend' : 'breakout', reversal_bias: 'none' },
+      entry_candidates: entryCandidates,
+    } },
+  })
+
+  it('reports aligned higher and execution timeframes', () => {
+    const result = buildChanTimeframeAlignment({
+      H4: frame('high', 'up', 'uptrend'),
+      H1: frame('medium', 'up', 'upward_breakout'),
+      M15: frame('medium', 'up', 'structural_rise', [{ type: 'third_buy', side: 'buy', usable_for_entry: true }]),
+    }, 'H1')
+    expect(result).toMatchObject({
+      status: 'complete', higher_timeframe: 'H4', higher_timeframe_direction: 'up',
+      agreement: 'aligned_up', direction: 'up', conflict: false, execution_policy: 'evidence_only',
+    })
+    expect(result.entry_candidates[0]).toMatchObject({ timeframe: 'M15', alignment_with_higher: 'aligned' })
+  })
+
+  it('marks opposing reliable timeframes and entry evidence as conflicted', () => {
+    const result = buildChanTimeframeAlignment({
+      H4: frame('high', 'down', 'downtrend'),
+      M15: frame('medium', 'up', 'upward_breakout', [{ type: 'first_buy', side: 'buy', usable_for_entry: true }]),
+      M5: frame('low', 'up', 'structural_rise'),
+    }, 'M15', 'partial')
+    expect(result).toMatchObject({ status: 'partial', agreement: 'mixed', conflict: true })
+    expect(result.excluded_low_reliability_timeframes).toEqual(['M5'])
+    expect(result.entry_candidates[0].alignment_with_higher).toBe('conflict')
+  })
+
+  it('safely ignores legacy Chan payloads without trend state', () => {
+    const result = buildChanTimeframeAlignment({ H1: { summary: { chan: { reliability: 'high' } } } }, 'H1')
+    expect(result).toMatchObject({ status: 'unavailable', agreement: 'insufficient', execution_policy: 'evidence_only' })
+  })
+
+  it('does not promote an all-low-reliability structure to higher-timeframe bias', () => {
+    const result = buildChanTimeframeAlignment({
+      H4: frame('low', 'up', 'structural_rise', [{ type: 'first_buy', side: 'buy', usable_for_entry: false }]),
+    }, 'H4')
+    expect(result).toMatchObject({
+      higher_timeframe: 'H4', higher_timeframe_direction: 'neutral', higher_timeframe_phase: 'unknown',
+      agreement: 'insufficient', direction: 'neutral',
+    })
+    expect(result.entry_candidates[0].alignment_with_higher).toBe('unconfirmed')
   })
 })
 

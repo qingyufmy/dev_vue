@@ -11,7 +11,7 @@ router.get('/comments', optionalAuth, async (req, res) => {
     if (!episode) return res.json({ ok: true, comments: [] })
 
     const comments = await queryAll(`
-      SELECT c.*, u.nickname, u.avatar, u.email
+      SELECT c.*, u.nickname, u.avatar
       FROM comments c
       LEFT JOIN users u ON c.user_id = u.id
       WHERE c.episode_id = ?
@@ -39,13 +39,13 @@ router.get('/comments', optionalAuth, async (req, res) => {
         likes: c.likes,
         liked: likedSet.has(c.id),
         createdAt: c.created_at,
-        user: { nickname: c.nickname || '匿名', avatar: c.avatar, email: c.email },
+        user: { id: c.user_id, nickname: c.nickname || '匿名', avatar: c.avatar },
         replies: replies.map(r => ({
           id: r.id,
           text: r.text,
           likes: r.likes,
           createdAt: r.created_at,
-          user: { nickname: r.nickname || '匿名', avatar: r.avatar, email: r.email }
+          user: { id: r.user_id, nickname: r.nickname || '匿名', avatar: r.avatar }
         }))
       }
     })

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cnfxtrade.com/schemas/bridge/v3/data-response.schema.json",
+  "title": "AURUM Bridge v3 transient data response",
+  "allOf": [{ "$ref": "envelope.schema.json" }],
+  "type": "object",
+  "required": ["v", "type", "message_id", "sent_at_utc_msc", "request_id", "terminal_instance_id", "account_ref", "connection_epoch", "action", "params", "observed_at_utc_msc", "status"],
+  "properties": {
+    "v": { "const": 3 }, "type": { "const": "data_response" },
+    "message_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "sent_at_utc_msc": { "type": "integer", "minimum": 1 },
+    "request_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "terminal_instance_id": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "account_ref": { "type": "object", "required": ["broker_server", "login"], "properties": { "broker_server": { "type": "string" }, "login": { "type": "string" } }, "additionalProperties": false },
+    "connection_epoch": { "type": "integer", "minimum": 1 }, "action": { "enum": ["rates", "symbol_snapshot", "risk_snapshot", "performance_daily", "symbols", "history", "chart_data", "pending_order_state", "diagnostics"] },
+    "params": { "type": "object" }, "observed_at_utc_msc": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["succeeded", "rejected"] }, "payload": { "type": "object" },
+    "error_code": { "type": "string", "minLength": 1, "maxLength": 128 }
+  },
+  "oneOf": [
+    { "properties": { "status": { "const": "succeeded" } }, "required": ["payload"] },
+    { "properties": { "status": { "const": "rejected" } }, "required": ["error_code"] }
+  ],
+  "unevaluatedProperties": false
+}

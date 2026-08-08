@@ -15,22 +15,32 @@ describe('calculatePlanExpiry', () => {
 
   it('year 从指定日期加一年', () => {
     const result = calculatePlanExpiry('year', '2026-01-15 10:00:00')
-    expect(result).toMatch(/^2027-01-1[45] \d{2}:00:00$/)
+    expect(result).toBe('2027-01-15 10:00:00')
   })
 
   it('month 从指定日期加一月', () => {
     const result = calculatePlanExpiry('month', '2026-01-15 10:00:00')
-    expect(result).toMatch(/^2026-02-1[45] \d{2}:00:00$/)
+    expect(result).toBe('2026-02-15 10:00:00')
   })
 
   it('month 跨年', () => {
     const result = calculatePlanExpiry('month', '2026-12-15 10:00:00')
-    expect(result).toMatch(/^2027-01-1[45] \d{2}:00:00$/)
+    expect(result).toBe('2027-01-15 10:00:00')
   })
 
   it('无 fromDate 使用当前时间', () => {
     const result = calculatePlanExpiry('month')
     expect(result).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+  })
+
+  it('preserves Beijing wall-clock time for an explicitly zoned renewal date', () => {
+    expect(calculatePlanExpiry('month', new Date('2026-08-24T23:59:59+08:00')))
+      .toBe('2026-09-24 23:59:59')
+  })
+
+  it('clamps month-end and leap-day renewals to the target calendar month', () => {
+    expect(calculatePlanExpiry('month', '2026-01-31 23:59:59')).toBe('2026-02-28 23:59:59')
+    expect(calculatePlanExpiry('year', '2024-02-29 23:59:59')).toBe('2025-02-28 23:59:59')
   })
 })
 
@@ -46,18 +56,18 @@ describe('processReferralCommission', () => {
 
   it('无推荐记录时跳过', async () => {
     queryOne.mockResolvedValueOnce(null)
-    await processReferralCommission(1, 100, 'plus', 'Plus 月付', 'monthly')
+    await processReferralCommission(1, 100, 'plus', 'Plus 月付', 'monthly', 'order-1')
     expect(queryOne).toHaveBeenCalledTimes(1)
     expect(queryRun).not.toHaveBeenCalled()
   })
 
   it('有推荐记录时计算返佣', async () => {
     queryOne
-      .mockResolvedValueOnce({ id: 1, referrer_id: 2 })
+      .mockResolvedValueOnce({ id: 1, referrer_id: 2, order_id:null })
       .mockResolvedValueOnce({ rate_bps: 1000 })
     queryRun.mockResolvedValue({ changes: 1 })
 
-    await processReferralCommission(1, 100, 'plus', 'Plus 月付', 'monthly')
+    await processReferralCommission(1, 100, 'plus', 'Plus 月付', 'monthly', 'order-1')
 
     expect(queryRun).toHaveBeenCalledTimes(2)
     const updateCall = queryRun.mock.calls[0]
@@ -66,16 +76,38 @@ describe('processReferralCommission', () => {
     expect(updateCall[1]).toContain(10) // commission = 100 * 1000 / 10000
   })
 
+  it('将订单 month 周期映射到后台 monthly 规则并兼容 MySQL DECIMAL 字符串', async () => {
+    queryOne
+      .mockResolvedValueOnce({ id:1, referrer_id:2, order_id:null })
+      .mockResolvedValueOnce({ rate_bps:'500' })
+    queryRun.mockResolvedValue({ changes:1 })
+
+    await processReferralCommission(1, '100.00', 'plus', 'Plus 月付', 'month', 'order-2')
+
+    expect(queryOne).toHaveBeenNthCalledWith(2,
+      expect.stringContaining('referral_rules'), ['plus', 'monthly'])
+    expect(queryRun.mock.calls[0][1]).toContain(5)
+    expect(queryRun.mock.calls[1][1][3]).toContain('$100.00')
+  })
+
   it('无规则时使用默认 1000 bps', async () => {
     queryOne
-      .mockResolvedValueOnce({ id: 1, referrer_id: 2 })
+      .mockResolvedValueOnce({ id: 1, referrer_id: 2, order_id:null })
       .mockResolvedValueOnce(null)
     queryRun.mockResolvedValue({ changes: 1 })
 
-    await processReferralCommission(1, 50, 'plus', 'Plus', 'monthly')
+    await processReferralCommission(1, 50, 'plus', 'Plus', 'monthly', 'order-3')
 
     const updateCall = queryRun.mock.calls[0]
     expect(updateCall[1]).toContain(5) // 50 * 1000 / 10000
+  })
+
+  it('does not overwrite a referral already attributed to the same order', async () => {
+    queryOne.mockResolvedValueOnce({ id:1, referrer_id:2, order_id:'order-4' })
+    await expect(processReferralCommission(1, 50, 'plus', 'Plus', 'monthly', 'order-4'))
+      .resolves.toEqual({ status:'already_recorded' })
+    expect(queryOne).toHaveBeenCalledTimes(1)
+    expect(queryRun).not.toHaveBeenCalled()
   })
 })
 

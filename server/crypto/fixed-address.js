@@ -33,7 +33,7 @@ export async function getFixedAddressForChain(chain) {
   return map[chain] || null
 }
 
-export async function generateUniqueAmount(baseAmount, orderId, plan, period) {
+export async function generateUniqueAmount(baseAmount, orderId, plan, period, options = {}) {
   const amountStr = baseAmount.toFixed(6)
   const baseNum = parseFloat(amountStr)
   const intPart = Math.floor(baseNum)
@@ -41,10 +41,20 @@ export async function generateUniqueAmount(baseAmount, orderId, plan, period) {
   let whereClause = `crypto_amount IS NOT NULL AND status = 'pending' AND crypto_amount >= ? AND crypto_amount < ?`
   const params = [intPart, intPart + 1]
 
-  const rows = await queryAll(
-    `SELECT crypto_amount FROM orders WHERE ${whereClause}`,
-    params
-  )
+  if (options.chain) {
+    whereClause += ' AND crypto_chain = ?'
+    params.push(options.chain)
+  }
+  if (options.address) {
+    whereClause += ' AND crypto_address = ?'
+    params.push(options.address)
+  }
+
+  const sql = `SELECT crypto_amount FROM orders WHERE ${whereClause}${options.run ? ' FOR UPDATE' : ''}`
+  const raw = options.run
+    ? await options.run(sql, params)
+    : await queryAll(sql, params)
+  const rows = options.run ? (raw?.[0] || []) : raw
 
   const usedDecimals = new Set()
   for (const row of rows) {

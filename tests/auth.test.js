@@ -4,6 +4,7 @@ vi.mock('../server/db.js', () => ({
   queryOne: vi.fn(),
   queryAll: vi.fn(),
   queryRun: vi.fn(),
+  withTransaction: vi.fn(),
   logAudit: vi.fn(),
 }))
 vi.mock('../server/middleware/auth.js', () => ({
@@ -17,10 +18,39 @@ vi.mock('../server/captcha.js', () => ({
   generateCaptcha: vi.fn(() => ({ id: 'cap-1', svg: '<svg/>' })),
   verifyCaptcha: vi.fn(() => true),
 }))
+vi.mock('../server/bridge-auth-session.js', () => ({
+  assertBridgeEligible: vi.fn(),
+  createBridgeConnectionTicket: vi.fn(async () => ({ ticket: 'ticket', expiresInSeconds: 30 })),
+  useBridgeRefreshSession: vi.fn(async () => ({ user: { id: 3 }, expiresInSeconds: 7776000 })),
+  revokeBridgeRefreshSessions: vi.fn(async () => {}),
+}))
+vi.mock('../server/bridge-pairing.js', () => ({
+  startBridgePairing: vi.fn(async () => ({
+    deviceCode: 'device-code', userCode: 'ABCD-2345', verificationPath: '/ai/bridge/pair',
+    expiresInSeconds: 600, intervalSeconds: 2,
+  })),
+  approveBridgePairing: vi.fn(async () => ({ approved: true })),
+  consumeBridgePairing: vi.fn(async () => ({ status: 'pending' })),
+}))
+vi.mock('../server/bridge-ws.js', () => ({
+  disconnectUserSockets:vi.fn(),
+}))
 
-import { queryOne, queryAll, queryRun } from '../server/db.js'
+import { queryOne, queryAll, queryRun, withTransaction } from '../server/db.js'
 import { verifyCaptcha } from '../server/captcha.js'
 import authRouter from '../server/routes/auth.js'
+import { useBridgeRefreshSession, revokeBridgeRefreshSessions } from '../server/bridge-auth-session.js'
+import { disconnectUserSockets } from '../server/bridge-ws.js'
+import { approveBridgePairing, consumeBridgePairing, startBridgePairing } from '../server/bridge-pairing.js'
+
+withTransaction.mockImplementation(callback => callback(async (sql, params = []) => {
+  if (/^\s*SELECT/i.test(sql)) {
+    const row = await queryOne(sql, params)
+    return [row ? [row] : [], []]
+  }
+  const result = await queryRun(sql, params)
+  return [{ affectedRows: result?.changes || 0, insertId: result?.insertId || 0 }, []]
+}))
 
 function callRoute(method, path, body = {}, user = null) {
   return new Promise((resolve) => {
@@ -48,13 +78,36 @@ describe('auth.js — register', () => {
   it('密码太短返回错误', async () => {
     queryAll.mockResolvedValue([])
     const { json } = await callRoute('post', '/register', { email: 'a@b.com', password: '123' })
-    expect(json).toMatchObject({ ok: false, error: '密码至少8位' })
+    expect(json).toMatchObject({ ok: false, error: '密码长度需为8-32位' })
+  })
+
+  it('密码超过32位返回错误', async () => {
+    queryAll.mockResolvedValue([])
+    const { json } = await callRoute('post', '/register', { email: 'a@b.com', password: `a1${'x'.repeat(31)}` })
+    expect(json).toMatchObject({ ok: false, error: '密码长度需为8-32位' })
   })
 
   it('手机号注册缺少验证token', async () => {
     queryAll.mockResolvedValue([])
     const { json } = await callRoute('post', '/register', { phone: '+8613800138000', password: 'abc12345' })
     expect(json).toMatchObject({ ok: false, error: '请先完成手机验证' })
+  })
+
+  it('邮箱注册缺少验证token', async () => {
+    queryAll.mockResolvedValue([])
+    const { json } = await callRoute('post', '/register', { email: 'a@b.com', password: 'abc12345' })
+    expect(json).toMatchObject({ ok: false, error: '请先完成邮箱验证' })
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+
+  it('邮箱注册拒绝已过期的验证token', async () => {
+    queryAll.mockResolvedValue([])
+    queryOne.mockResolvedValueOnce(null)
+    const { json } = await callRoute('post', '/register', {
+      email: 'a@b.com', password: 'abc12345', verifyToken: 'expired-token',
+    })
+    expect(json).toMatchObject({ ok: false, error: '邮箱验证已过期，请重新验证' })
+    expect(queryRun).not.toHaveBeenCalled()
   })
 })
 
@@ -79,6 +132,82 @@ describe('auth.js — login', () => {
     queryOne.mockResolvedValue({ id: 1, password: '$2a$10$x' })
     const { json } = await callRoute('post', '/login', { email: 'a@b.com', method: 'code' })
     expect(json).toMatchObject({ ok: false, error: '请先完成验证' })
+  })
+})
+
+describe('auth.js — reset password rules', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('新密码超过32位时在验证码校验前返回错误', async () => {
+    const { json } = await callRoute('post', '/reset-password', {
+      email: 'a@b.com',
+      newPassword: `a1${'x'.repeat(31)}`,
+      verifyToken: 'unused-token',
+    })
+    expect(json).toMatchObject({ ok: false, error: '新密码长度需为8-32位' })
+    expect(queryOne).not.toHaveBeenCalled()
+  })
+})
+
+describe('auth.js — Bridge sessions', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns a new short-lived token for a valid refresh credential', async () => {
+    const { json } = await callRoute('post', '/auth/bridge-refresh', { refreshToken: 'refresh-token' })
+    expect(json).toMatchObject({ ok: true, token: 'mock-token-123', bridgeRole:'user' })
+    expect(useBridgeRefreshSession).toHaveBeenCalledWith('refresh-token', expect.any(Object))
+  })
+
+  it('returns the authoritative administrator capability with a refreshed Bridge session', async () => {
+    useBridgeRefreshSession.mockResolvedValueOnce({
+      user:{ id:3, role:'admin', token_version:0 },
+      expiresInSeconds:7776000,
+    })
+
+    const { json } = await callRoute('post', '/auth/bridge-refresh', { refreshToken:'refresh-token' })
+
+    expect(json).toMatchObject({ ok:true, bridgeRole:'admin' })
+  })
+
+  it('returns 401 only when the device authorization was explicitly invalidated', async () => {
+    useBridgeRefreshSession.mockRejectedValueOnce(Object.assign(
+      new Error('revoked'), { code:'bridge_refresh_revoked' },
+    ))
+
+    const result = await callRoute('post', '/auth/bridge-refresh', { refreshToken:'revoked-token' })
+
+    expect(result.status).toBe(401)
+    expect(result.json).toMatchObject({ ok:false, code:'bridge_refresh_revoked' })
+  })
+
+  it('returns a retryable 503 without invalidating authorization on server failures', async () => {
+    useBridgeRefreshSession.mockRejectedValueOnce(new Error('database offline'))
+
+    const result = await callRoute('post', '/auth/bridge-refresh', { refreshToken:'valid-token' })
+
+    expect(result.status).toBe(503)
+    expect(result.json).toMatchObject({ ok:false, code:'bridge_refresh_unavailable' })
+  })
+
+  it('starts, approves, and polls browser pairing without putting a refresh token in the URL', async () => {
+    const started = await callRoute('post', '/auth/bridge-pair/start', { deviceName: 'Desk PC' })
+    expect(started.status).toBe(201)
+    expect(started.json).toMatchObject({ ok: true, verificationPath: '/ai/bridge/pair' })
+    expect(startBridgePairing).toHaveBeenCalled()
+
+    const approved = await callRoute('post', '/auth/bridge-pair/approve', { userCode: 'ABCD-2345' }, {
+      id: 3, role: 'user', plan: 'pro',
+    })
+    expect(approved.json).toMatchObject({ ok: true, approved: true })
+    expect(approveBridgePairing).toHaveBeenCalledWith(
+      expect.objectContaining({ id:3 }),
+      'ABCD-2345',
+      expect.objectContaining({ bridgeUserId:undefined }),
+    )
+
+    const polled = await callRoute('post', '/auth/bridge-pair/token', { deviceCode: 'device-code' })
+    expect(polled.status).toBe(202)
+    expect(consumeBridgePairing).toHaveBeenCalled()
   })
 })
 
@@ -114,6 +243,19 @@ describe('auth.js — verify-code', () => {
     const { json } = await callRoute('post', '/verify-code', {})
     expect(json).toMatchObject({ ok: false, error: '请输入邮箱或手机号' })
   })
+
+  it('only returns a verification token when the one-time code claim succeeds', async () => {
+    queryOne.mockResolvedValue({ id: 19 })
+    queryRun.mockResolvedValue({ changes: 0 })
+    const { json } = await callRoute('post', '/verify-code', {
+      email: 'a@b.com', code: '123456', purpose: 'reset',
+    })
+    expect(json).toMatchObject({ ok: false, error: '验证码无效或已过期' })
+    expect(queryRun).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE id = ? AND used = 0'),
+      [expect.any(String), 19]
+    )
+  })
 })
 
 describe('auth.js — reset-password', () => {
@@ -123,6 +265,19 @@ describe('auth.js — reset-password', () => {
     const { json } = await callRoute('post', '/reset-password', {})
     expect(json).toMatchObject({ ok: false, error: '参数不完整' })
   })
+
+  it('updates the password, revokes refresh sessions and consumes the token in one transaction', async () => {
+    queryOne.mockResolvedValueOnce({ id: 22 }).mockResolvedValueOnce({ id: 7 })
+    queryRun.mockResolvedValue({ changes: 1 })
+    const { json } = await callRoute('post', '/reset-password', {
+      email: 'a@b.com', newPassword: 'newpass123', verifyToken: 'verify-token',
+    })
+    expect(json.ok).toBe(true)
+    expect(withTransaction).toHaveBeenCalledTimes(1)
+    expect(revokeBridgeRefreshSessions).toHaveBeenCalledWith(7, { run: expect.any(Function) })
+    expect(disconnectUserSockets).toHaveBeenCalledWith(7, 'Password reset')
+    expect(queryRun).toHaveBeenCalledWith(expect.stringContaining('token_used = 1'), [22])
+  })
 })
 
 describe('auth.js — change-password', () => {
@@ -131,6 +286,26 @@ describe('auth.js — change-password', () => {
   it('缺少新密码', async () => {
     const { json } = await callRoute('post', '/change-password', {}, { id: 1 })
     expect(json).toMatchObject({ ok: false, error: '参数不完整' })
+  })
+
+  it('拒绝不符合统一规则的新密码', async () => {
+    const { json } = await callRoute('post', '/change-password', { newPassword:'short' }, { id:1 })
+    expect(json).toMatchObject({ ok:false, error:'新密码长度需为8-32位' })
+    expect(queryOne).not.toHaveBeenCalled()
+  })
+})
+
+describe('auth.js — logout all devices', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('increments the JWT version, revokes refresh sessions and disconnects sockets', async () => {
+    queryRun.mockResolvedValue({ changes:1 })
+    const { json } = await callRoute('post', '/auth/logout-all', {}, { id:7 })
+    expect(json).toEqual({ ok:true })
+    expect(queryRun).toHaveBeenCalledWith(expect.stringContaining('token_version = token_version + 1'), [7])
+    expect(withTransaction).toHaveBeenCalledTimes(1)
+    expect(revokeBridgeRefreshSessions).toHaveBeenCalledWith(7, { run: expect.any(Function) })
+    expect(disconnectUserSockets).toHaveBeenCalledWith(7, 'Signed out on all devices')
   })
 })
 
