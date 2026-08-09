@@ -1181,7 +1181,7 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
   if (!hasStart || !hasEnd
     || !Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
     || !Number.isSafeInteger(ownershipStart) || !Number.isSafeInteger(maxRangeEnd)
-    || rangeStart < ownershipStart || rangeStart >= rangeEnd || rangeEnd > maxRangeEnd) {
+    || rangeStart <= 0 || rangeEnd <= 0 || rangeStart >= rangeEnd || rangeEnd > maxRangeEnd) {
     throw historyError('history_cursor_invalid')
   }
 
@@ -1192,15 +1192,14 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
     .trim().toLowerCase()
   if (scope === 'custom') {
     const closeFrom = parseStrictUtcDateBoundary(params?.close_from)
-    const closeTo = params?.close_to == null || params.close_to === ''
-      ? null : nextUtcDateBoundary(params.close_to)
-    const minimumStart = closeFrom === null
-      ? ownershipStart : Math.max(ownershipStart, closeFrom)
-    if (rangeStart !== minimumStart || (closeTo !== null && rangeEnd > closeTo)) {
+    const hasCloseTo = params?.close_to != null && params.close_to !== ''
+    const closeTo = hasCloseTo ? nextUtcDateBoundary(params.close_to) : null
+    if (closeFrom === null || (hasCloseTo && closeTo === null)
+      || rangeStart !== closeFrom || (closeTo !== null && rangeEnd > closeTo)) {
       throw historyError('history_cursor_invalid')
     }
   } else if (scope === 'recent') {
-    const expectedStart = Math.max(ownershipStart, rangeEnd - 7 * 24 * 60 * 60 * 1_000)
+    const expectedStart = rangeEnd - 7 * 24 * 60 * 60 * 1_000
     if (rangeStart !== expectedStart) throw historyError('history_cursor_invalid')
   } else if (['ownership', 'platform', 'all'].includes(scope)) {
     if (rangeStart !== ownershipStart) throw historyError('history_cursor_invalid')
@@ -1519,10 +1518,10 @@ export async function resolveHistoryRange(
     if (params?.close_to != null && params.close_to !== '' && closeTo === null) {
       throw historyError('bridge_history_custom_end_invalid')
     }
-    rangeStart = Math.max(ownershipStart, closeFrom)
+    rangeStart = closeFrom
     if (closeTo !== null) rangeEnd = Math.min(rangeEnd, closeTo)
   } else if (requestedScope === 'recent') {
-    rangeStart = Math.max(ownershipStart, nowUtcMsc - 7 * 24 * 60 * 60 * 1_000)
+    rangeStart = nowUtcMsc - 7 * 24 * 60 * 60 * 1_000
   } else {
     // `platform` and `all` intentionally share the current ownership range;
     // exposing a pre-ownership all-time archive would cross an account owner.
@@ -2576,8 +2575,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           break
         }
         const exportNowUtcMsc = Date.now()
-        // Fetch all orders from the selected terminal using one fixed,
-        // ownership-clamped half-open range for every page.
+        // Fetch all orders from the selected terminal using one fixed
+        // half-open range for every page.
         const exportRange = await resolveHistoryRange(expUserId, params, exportRoute, exportNowUtcMsc)
         const exportBridgeParams = {
           page_size: 200,
