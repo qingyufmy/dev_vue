@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260809historyrange1" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260809historyrange1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260809history30d1" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260809history30d1" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -898,7 +898,7 @@
             </div>
             <div class="history-scope-bar">
               <label class="filter-field"><span class="filter-label">统计范围</span><select id="historyRangeMode" class="filter-select">
-                <option value="recent" selected>最近 7 天</option>
+                <option value="recent" selected>最近 30 天</option>
                 <option value="ownership">本次接入以来</option>
                 <option value="custom">自定义日期</option>
               </select></label>
@@ -908,7 +908,7 @@
                 <input type="date" id="historyRangeTo" class="filter-date" disabled aria-label="历史结束日期">
               </div>
               <button class="btn-filter-action" id="historyRangeApply" type="button"><i data-lucide="filter" size="12"></i>应用</button>
-              <span id="historyRangeHint" class="field-help">默认显示当前归属期内最近 7 天的交易、入金、提款和信用记录。</span>
+              <span id="historyRangeHint" class="field-help">默认显示当前归属期内最近 30 天的交易、入金、提款和信用记录。</span>
             </div>
             <div class="history-chart-wrap">
               <div class="chart-top-bar">
@@ -1283,7 +1283,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260809historyrange1"></script>
+    <script src="/ai/app.js?v=20260809history30d1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

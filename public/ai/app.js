@@ -9469,7 +9469,7 @@ function updateHistoryRangeUI() {
   if ($("historyRangeFrom")) $("historyRangeFrom").disabled = !custom;
   if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
   const hints = {
-    recent: `显示当前在线 ${bridgePlatformLabel()} 账户最近 7 天的记录。`,
+    recent: `显示当前在线 ${bridgePlatformLabel()} 账户最近 30 天的记录。`,
     ownership: `从当前 ${bridgePlatformLabel()} 账户本次接入平台的精确时间开始。`,
     custom: "按所选平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
