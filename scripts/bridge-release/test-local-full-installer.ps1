@@ -20,6 +20,16 @@ function Read-Json([string]$Path, [string]$ErrorCode) {
   }
 }
 
+function Read-AllBytes([string]$Path) {
+  $fullPath = [IO.Path]::GetFullPath($Path)
+  $readPath = if ($fullPath.StartsWith('\\')) {
+    "\\?\UNC\$($fullPath.Substring(2))"
+  } else {
+    "\\?\$fullPath"
+  }
+  return [IO.File]::ReadAllBytes($readPath)
+}
+
 function Invoke-Installer([string]$Executable, [string]$LogPath, [string]$ResultPath) {
   $logArgument = '/LOG="' + $LogPath + '"'
   $process = Start-Process -FilePath $Executable `
@@ -218,7 +228,7 @@ if ($allFiles | Where-Object {
 }
 $forbiddenHostFiles = [Collections.Generic.List[string]]::new()
 foreach ($file in $allFiles) {
-  $content = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($file.FullName))
+  $content = [Text.Encoding]::ASCII.GetString((Read-AllBytes $file.FullName))
   if ($content.IndexOf('cnfxtrade.com', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
     $forbiddenHostFiles.Add($file.FullName)
   }
