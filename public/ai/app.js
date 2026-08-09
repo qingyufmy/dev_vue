@@ -9469,9 +9469,9 @@ function updateHistoryRangeUI() {
   if ($("historyRangeFrom")) $("historyRangeFrom").disabled = !custom;
   if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
   const hints = {
-    recent: `显示当前 ${bridgePlatformLabel()} 账户归属期内最近 7 天的记录。`,
+    recent: `显示当前在线 ${bridgePlatformLabel()} 账户最近 7 天的记录。`,
     ownership: `从当前 ${bridgePlatformLabel()} 账户本次接入平台的精确时间开始。`,
-    custom: "按平仓日期统计；入金、提款和信用也按同一日期范围计算。",
+    custom: "按所选平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
   const mt4RangeWarning = bridgePlatformLabel() === "MT4"
     ? " MT4 历史范围取决于终端“账户历史”页已加载的时间范围；需要完整历史时，请先在 MT4 中选择“全部历史记录”。"

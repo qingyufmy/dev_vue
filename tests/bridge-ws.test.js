@@ -319,20 +319,20 @@ describe('bridge history range/export completeness contract', () => {
     expect(hasHistoryCursorCapability({ capabilities:['history_exact_range_v1'] })).toBe(false)
   })
 
-  it('resolves exact ownership-clamped ranges and proves route/account query ownership', async () => {
+  it('resolves exact history ranges and proves route/account query ownership', async () => {
     const route = {
       terminal_instance_id:'terminal-history-1',
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
       capabilities:['history_exact_range_v1'],
     }
-    const ownershipStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const ownershipStart = Date.parse('2026-08-08T12:30:00.000Z')
     const now = Date.parse('2026-08-10T12:30:00.000Z')
     queryOne.mockResolvedValue({ ownership_start_utc_msc:ownershipStart, ownership_history_id:77 })
 
     const recent = await resolveHistoryRange(42, {}, route, now)
     expect(recent).toMatchObject({
       scope:'recent', requested_scope:'recent',
-      range_start_utc_msc:ownershipStart, range_end_utc_msc:now,
+      range_start_utc_msc:now - 7 * 24 * 60 * 60 * 1_000, range_end_utc_msc:now,
       ownership_start_utc_msc:ownershipStart, ownership_revision:'77',
     })
     const [query, queryParams] = queryOne.mock.calls.at(-1)
@@ -344,10 +344,10 @@ describe('bridge history range/export completeness contract', () => {
 
     queryOne.mockResolvedValue({ ownership_start_utc_msc:ownershipStart, ownership_history_id:77 })
     const custom = await resolveHistoryRange(42, {
-      history_scope:'custom', close_from:'2026-08-06', close_to:'2026-08-09',
+      history_scope:'custom', close_from:'2026-07-01', close_to:'2026-08-09',
     }, route, now)
     expect(custom).toMatchObject({
-      scope:'custom', range_start_utc_msc:ownershipStart,
+      scope:'custom', range_start_utc_msc:Date.parse('2026-07-01T00:00:00.000Z'),
       range_end_utc_msc:Date.parse('2026-08-10T00:00:00.000Z'),
     })
 
@@ -369,7 +369,7 @@ describe('bridge history range/export completeness contract', () => {
       account_ref:{ broker_server:'Broker-Demo', login:'654321' },
       capabilities:['history_exact_range_v1'],
     }
-    const ownershipStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const ownershipStart = Date.parse('2026-08-08T12:30:00.000Z')
     const now = Date.parse('2026-08-10T12:30:00.000Z')
     for (const scope of ['ownership', 'platform', 'all']) {
       queryOne.mockResolvedValue({ ownership_start_utc_msc:ownershipStart, ownership_history_id:12 })
@@ -760,7 +760,7 @@ describe('initBridgeWS', () => {
     browserWs.emit('close')
   })
 
-  it('sends one exact ownership range to history without date-only fallback', async () => {
+  it('sends one exact custom range to history without date-only fallback', async () => {
     vi.useFakeTimers()
     const now = Date.parse('2026-08-10T12:30:00.000Z')
     vi.setSystemTime(now)
@@ -778,7 +778,7 @@ describe('initBridgeWS', () => {
     queryOne.mockImplementation(async sql => {
       if (String(sql).includes('FROM mt5_account_bindings')) {
         return {
-          ownership_start_utc_msc:Date.parse('2026-08-07T12:30:00.000Z'),
+          ownership_start_utc_msc:Date.parse('2026-08-08T12:30:00.000Z'),
           ownership_history_id:77,
         }
       }
@@ -799,13 +799,13 @@ describe('initBridgeWS', () => {
     })
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-exact', action:'history',
-      params:{ history_scope:'custom', close_from:'2026-08-06', close_to:'2026-08-09', date_from:'2020-01-01' },
+      params:{ history_scope:'custom', close_from:'2026-07-01', close_to:'2026-08-09', date_from:'2020-01-01' },
     }))
     await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalled(), { timeout:5_000 })
     const [, action, bridgeParams] = mockBridgeV3Business.execute.mock.calls.at(-1)
     expect(action).toBe('history')
     expect(bridgeParams).toMatchObject({
-      range_start_utc_msc:Date.parse('2026-08-07T12:30:00.000Z'),
+      range_start_utc_msc:Date.parse('2026-07-01T00:00:00.000Z'),
       range_end_utc_msc:Date.parse('2026-08-10T00:00:00.000Z'),
       terminal_instance_id:'terminal-history-exact',
     })
@@ -833,7 +833,7 @@ describe('initBridgeWS', () => {
       history_sync:{ requested_range_complete:true },
     })
     queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
-      ? { ownership_start_utc_msc:Date.parse('2026-08-07T12:30:00.000Z'), ownership_history_id:77 }
+      ? { ownership_start_utc_msc:Date.parse('2026-08-08T12:30:00.000Z'), ownership_history_id:77 }
       : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
           plan_source:null, connection_enabled:1 })
     const server = new EventEmitter()
@@ -849,7 +849,7 @@ describe('initBridgeWS', () => {
       headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
     })
     vi.setSystemTime(now + 5_000)
-    const snapshotRangeStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const snapshotRangeStart = now - 7 * 24 * 60 * 60 * 1_000
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-cursor', action:'history',
       params:{ page:2, page_size:20, history_scope:'recent',
@@ -876,7 +876,7 @@ describe('initBridgeWS', () => {
     vi.useFakeTimers()
     const firstNow = Date.parse('2026-08-10T12:30:00.000Z')
     vi.setSystemTime(firstNow)
-    const ownershipStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const ownershipStart = Date.parse('2026-08-08T12:30:00.000Z')
     const route = {
       terminal_instance_id:'terminal-history-fixed-retry', platform:'mt5',
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
@@ -920,17 +920,21 @@ describe('initBridgeWS', () => {
     await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(1))
     const firstCall = mockBridgeV3Business.execute.mock.calls[0]
     expect(firstCall[1]).toBe('history_page')
+    const firstRangeEnd = Number(firstCall[2].range_end_utc_msc)
+    const recentStart = firstRangeEnd - 7 * 24 * 60 * 60 * 1_000
     expect(firstCall[2]).toMatchObject({
-      range_start_utc_msc:ownershipStart,
+      range_start_utc_msc:recentStart,
       terminal_instance_id:route.terminal_instance_id,
     })
-    const firstRangeEnd = Number(firstCall[2].range_end_utc_msc)
+    expect(firstCall[2].range_start_utc_msc)
+      .toBe(firstRangeEnd - 7 * 24 * 60 * 60 * 1_000)
+    expect(firstCall[2].range_start_utc_msc).toBeLessThan(ownershipStart)
     expect(firstRangeEnd).toBeGreaterThanOrEqual(firstNow)
     expect(firstRangeEnd).toBeLessThanOrEqual(firstNow + 60_000)
     expect(firstCall[2]).not.toHaveProperty('history_snapshot_id')
     expect(JSON.parse(browserWs.send.mock.calls[0][0])).toMatchObject({
       status:'error', error:'history_cursor_range_incomplete',
-      history_range:{ range_start_utc_msc:ownershipStart, range_end_utc_msc:firstRangeEnd },
+      history_range:{ range_start_utc_msc:recentStart, range_end_utc_msc:firstRangeEnd },
     })
 
     const retryNow = firstRangeEnd + 5_000
@@ -938,13 +942,13 @@ describe('initBridgeWS', () => {
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-retry', action:'history',
       params:{ history_scope:'recent', page:1, page_size:20,
-        range_start_utc_msc:ownershipStart, range_end_utc_msc:firstRangeEnd },
+        range_start_utc_msc:recentStart, range_end_utc_msc:firstRangeEnd },
     }))
     await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2))
     const retryCall = mockBridgeV3Business.execute.mock.calls[1]
     expect(retryCall[1]).toBe('history_page')
     expect(retryCall[2]).toMatchObject({
-      range_start_utc_msc:ownershipStart,
+      range_start_utc_msc:recentStart,
       range_end_utc_msc:firstRangeEnd,
       terminal_instance_id:route.terminal_instance_id,
     })
@@ -953,11 +957,99 @@ describe('initBridgeWS', () => {
     vi.useRealTimers()
   })
 
+  it('accepts a fixed pre-ownership custom range on an incomplete retry', async () => {
+    vi.useFakeTimers()
+    const firstNow = Date.parse('2026-08-10T12:30:00.000Z')
+    vi.setSystemTime(firstNow)
+    const ownershipStart = Date.parse('2026-08-08T12:30:00.000Z')
+    const customStart = Date.parse('2026-07-01T00:00:00.000Z')
+    const route = {
+      terminal_instance_id:'terminal-history-custom-retry', platform:'mt5',
+      account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      capabilities:['history_exact_range_v1', 'history_cursor_v1'],
+    }
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.supports.mockReturnValue(true)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([route])
+    mockBridgeV3Business.execute
+      .mockResolvedValueOnce({
+        status:'error', error:'history_cursor_range_incomplete',
+        message:'history_cursor_range_incomplete',
+      })
+      .mockResolvedValueOnce({
+        status:'success', orders:[],
+        history_sync:{ requested_range_complete:true },
+      })
+    queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
+      ? { ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
+      : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
+          plan_source:null, connection_enabled:1 })
+
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection').at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+
+    const customParams = {
+      history_scope:'custom', close_from:'2026-07-01', close_to:'2026-08-09',
+      page:1, page_size:20,
+    }
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-custom-first', action:'history',
+      params:customParams,
+    }))
+    await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(1))
+    const firstCall = mockBridgeV3Business.execute.mock.calls[0]
+    const firstRangeEnd = Number(firstCall[2].range_end_utc_msc)
+    expect(firstCall[1]).toBe('history_page')
+    expect(firstCall[2]).toMatchObject({
+      range_start_utc_msc:customStart,
+      range_end_utc_msc:firstRangeEnd,
+      terminal_instance_id:route.terminal_instance_id,
+    })
+    expect(customStart).toBeLessThan(ownershipStart)
+    expect(firstRangeEnd).toBe(Date.parse('2026-08-10T00:00:00.000Z'))
+    expect(JSON.parse(browserWs.send.mock.calls[0][0])).toMatchObject({
+      status:'error', error:'history_cursor_range_incomplete',
+      history_range:{ range_start_utc_msc:customStart, range_end_utc_msc:firstRangeEnd },
+    })
+
+    vi.setSystemTime(firstRangeEnd + 5_000)
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-custom-retry', action:'history',
+      params:{ ...customParams,
+        range_start_utc_msc:customStart, range_end_utc_msc:firstRangeEnd },
+    }))
+    await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(2))
+    const retryCall = mockBridgeV3Business.execute.mock.calls[1]
+    expect(retryCall[1]).toBe('history_page')
+    expect(retryCall[2]).toMatchObject({
+      range_start_utc_msc:customStart,
+      range_end_utc_msc:firstRangeEnd,
+      terminal_instance_id:route.terminal_instance_id,
+    })
+    expect(retryCall[2].range_start_utc_msc).toBe(firstCall[2].range_start_utc_msc)
+    expect(retryCall[2].range_end_utc_msc).toBe(firstCall[2].range_end_utc_msc)
+    expect(JSON.parse(browserWs.send.mock.calls[1][0])).toMatchObject({ status:'success' })
+    browserWs.emit('close')
+    vi.useRealTimers()
+  })
+
   it('reuses a table fixed range for chart data and rejects a partial range', async () => {
     vi.useFakeTimers()
     const now = Date.parse('2026-08-10T12:30:00.000Z')
     vi.setSystemTime(now)
-    const ownershipStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const ownershipStart = Date.parse('2026-08-08T12:30:00.000Z')
     const route = {
       terminal_instance_id:'terminal-history-chart-fixed', platform:'mt5',
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
@@ -993,23 +1085,26 @@ describe('initBridgeWS', () => {
     await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(1))
     const tableRangeEnd = Number(mockBridgeV3Business.execute.mock.calls[0][2].range_end_utc_msc)
     vi.setSystemTime(now + 10_000)
+    const tableRangeStart = Number(mockBridgeV3Business.execute.mock.calls[0][2].range_start_utc_msc)
+    expect(tableRangeStart).toBeGreaterThanOrEqual(now - 7 * 24 * 60 * 60 * 1_000)
+    expect(tableRangeStart).toBeLessThanOrEqual(now - 7 * 24 * 60 * 60 * 1_000 + 60_000)
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-chart', action:'history_chart_data',
       params:{ history_scope:'recent',
-        range_start_utc_msc:ownershipStart, range_end_utc_msc:tableRangeEnd },
+        range_start_utc_msc:tableRangeStart, range_end_utc_msc:tableRangeEnd },
     }))
     await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2))
     const chartCall = mockBridgeV3Business.execute.mock.calls[1]
     expect(chartCall[1]).toBe('chart_data')
     expect(chartCall[2]).toMatchObject({
-      range_start_utc_msc:ownershipStart,
+      range_start_utc_msc:tableRangeStart,
       range_end_utc_msc:tableRangeEnd,
       terminal_instance_id:route.terminal_instance_id,
     })
 
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-chart-partial', action:'history_chart_data',
-      params:{ history_scope:'recent', range_start_utc_msc:ownershipStart },
+      params:{ history_scope:'recent', range_start_utc_msc:tableRangeStart },
     }))
     await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(3))
     expect(JSON.parse(browserWs.send.mock.calls[2][0])).toMatchObject({
@@ -1024,7 +1119,8 @@ describe('initBridgeWS', () => {
     vi.useFakeTimers()
     const now = Date.parse('2026-08-10T12:30:00.000Z')
     vi.setSystemTime(now)
-    const ownershipStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const ownershipStart = Date.parse('2026-08-08T12:30:00.000Z')
+    const recentStart = now - 7 * 24 * 60 * 60 * 1_000
     const route = {
       terminal_instance_id:'terminal-history-fixed-guards', platform:'mt5',
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
@@ -1053,9 +1149,9 @@ describe('initBridgeWS', () => {
     const invalidRanges = [
       { range_start_utc_msc:ownershipStart },
       { range_start_utc_msc:now, range_end_utc_msc:ownershipStart },
-      { range_start_utc_msc:ownershipStart - 1, range_end_utc_msc:now },
-      { range_start_utc_msc:ownershipStart, range_end_utc_msc:now + 120_000 },
-      { range_start_utc_msc:ownershipStart + 1, range_end_utc_msc:now },
+      { range_start_utc_msc:recentStart - 1, range_end_utc_msc:now },
+      { range_start_utc_msc:recentStart, range_end_utc_msc:now + 120_000 },
+      { range_start_utc_msc:recentStart + 1, range_end_utc_msc:now },
       { history_scope:'ownership', range_start_utc_msc:ownershipStart + 1,
         range_end_utc_msc:now },
     ]
