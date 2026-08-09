@@ -2003,10 +2003,32 @@ function historySummaryReadyForRequestedRange(sync = {}) {
     && sync.terminal_visible_history_complete === true;
 }
 
-function markHistoryDirty({ refreshActive = false } = {}) {
-  _historyDirty = true;
+function historyCursorRangeIsFixed(cursor = _historyCursorState) {
+  return Number.isSafeInteger(cursor?.rangeStart)
+    && Number.isSafeInteger(cursor?.rangeEnd)
+    && cursor.rangeStart > 0
+    && cursor.rangeStart < cursor.rangeEnd;
+}
+
+function resetHistorySnapshotState({ preserveRange = true } = {}) {
+  const previous = _historyCursorState || {};
   _historyCache = null;
   _historyChartCache = null;
+  _historyCursorState = {
+    key:preserveRange ? previous.key : null,
+    snapshotId:null,
+    rangeStart:preserveRange && historyCursorRangeIsFixed(previous) ? previous.rangeStart : null,
+    rangeEnd:preserveRange && historyCursorRangeIsFixed(previous) ? previous.rangeEnd : null,
+    pageCursors:new Map([[1, null]]),
+  };
+  if (state.historyFilters) state.historyFilters.page = 1;
+}
+
+function markHistoryDirty({ refreshActive = false } = {}) {
+  _historyDirty = true;
+  // A new close/history revision may extend the visible endpoint.  Reset the
+  // whole cursor so the next active-view refresh performs one explicit forced
+  // terminal sync and captures a new range that includes the new trade.
   resetHistoryCursorState(null);
   if (!refreshActive || activeTabId() !== "history") return;
   clearHistoryFreshnessRetry();
@@ -2015,7 +2037,7 @@ function markHistoryDirty({ refreshActive = false } = {}) {
     contextKey:historyRetryContextKey(),
     timer:setTimeout(() => {
       if (activeTabId() !== "history") return;
-      loadHistoryViews({ forceRefresh:true, historyRetryAttempt:true }).catch(() => {});
+      loadHistoryViews({ forceRefresh:true }).catch(() => {});
     }, HISTORY_FRESHNESS_RETRY_DELAYS_MS[0]),
   };
 }
@@ -2024,7 +2046,8 @@ function scheduleHistoryFreshnessRetry(data) {
   const sync = historySyncMetadata(data);
   const freshnessPending = ['refreshing', 'stale'].includes(String(sync.freshness_state || ''));
   const summaryPending = ['pending', 'rebuilding'].includes(String(sync.summary_status || ''));
-  if (!freshnessPending && !summaryPending) {
+  const rangePending = sync.requested_range_complete === false;
+  if (!freshnessPending && !summaryPending && !rangePending) {
     clearHistoryFreshnessRetry();
     return;
   }
@@ -2047,7 +2070,7 @@ function scheduleHistoryFreshnessRetry(data) {
       || retry.contextKey !== historyRetryContextKey()) return;
     retry.attempt += 1;
     try {
-      await loadHistoryViews({ forceRefresh:true, historyRetryAttempt:true });
+      await loadHistoryViews({ forceRefresh:false, historyRetryAttempt:true });
     } catch {}
   }, delay);
 }
@@ -9742,20 +9765,25 @@ function loadHistory(forceRefresh, options = {}) {
       error.history_range = data?.history_range || null;
       throw error;
     }
-    if (data.history_snapshot_id) {
-      const snapshotId = String(data.history_snapshot_id);
-      const rangeStart = Number(data.history_range?.range_start_utc_msc);
-      const rangeEnd = Number(data.history_range?.range_end_utc_msc);
-      if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
-        || rangeStart <= 0 || rangeStart >= rangeEnd) {
-        throw new Error('历史快照范围无效，请重新读取第一页');
+    const responseRange = historyRangeFromError(data);
+    const snapshotId = data.history_snapshot_id ? String(data.history_snapshot_id) : null;
+    if (snapshotId && !responseRange) {
+      throw new Error('历史快照范围无效，请重新读取第一页');
+    }
+    if (responseRange) {
+      if (historyCursorRangeIsFixed(_historyCursorState)
+        && (_historyCursorState.rangeStart !== responseRange.rangeStart
+          || _historyCursorState.rangeEnd !== responseRange.rangeEnd)) {
+        throw new Error('历史范围已变化，请重新读取第一页');
       }
+      _historyCursorState.rangeStart = responseRange.rangeStart;
+      _historyCursorState.rangeEnd = responseRange.rangeEnd;
+    }
+    if (snapshotId) {
       if (_historyCursorState.snapshotId && _historyCursorState.snapshotId !== snapshotId) {
         throw new Error('历史快照已变化，请重新读取第一页');
       }
       _historyCursorState.snapshotId = snapshotId;
-      _historyCursorState.rangeStart = rangeStart;
-      _historyCursorState.rangeEnd = rangeEnd;
       if (data.has_more === true && data.next_cursor) {
         _historyCursorState.pageCursors.set(filters.page + 1, String(data.next_cursor));
       } else {
@@ -9892,13 +9920,22 @@ function loadHistoryViews({ forceRefresh = false, includeAccount = false, manual
     && (activeTabId() !== "history" || _historyRangeRetryState.contextKey !== currentRetryContext)) {
     cancelHistoryRangeRetry();
   }
-  const effectiveForceRefresh = Boolean(forceRefresh || _historyDirty);
+  // Freshness/summary retries are read-only continuation requests.  They
+  // must not inherit `_historyDirty`'s first-page force refresh because that
+  // would drop the pinned range and make the server capture a new endpoint.
+  const automaticRetry = historyRetryAttempt === true && manualRefresh !== true;
+  const effectiveForceRefresh = Boolean(!automaticRetry && (forceRefresh || _historyDirty));
   const key = historyFlightKey("views", { forceRefresh:effectiveForceRefresh });
   const existing = _historyViewsFlights.get(key);
   if (existing) return existing;
   const effectiveManualRefresh = manualRefresh;
   const refresh = (async () => {
-    if (effectiveForceRefresh) {
+    if (automaticRetry) {
+      // Drop the old snapshot/cursors so the bridge reads the newest sync and
+      // summary state, while retaining the cursor key and exact range chosen
+      // by the successful first request.
+      resetHistorySnapshotState({ preserveRange:true });
+    } else if (effectiveForceRefresh) {
       _historyCache = null;
       _historyChartCache = null;
     }

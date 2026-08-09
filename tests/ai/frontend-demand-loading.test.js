@@ -20,6 +20,114 @@ function loadHistoryRangeFromError() {
   return new Function(`${app.slice(start, end)}\nreturn historyRangeFromError;`)()
 }
 
+function loadHistorySummaryReadyPredicate() {
+  const start = app.indexOf('function historySummaryReadyForRequestedRange')
+  const end = app.indexOf('function historyCursorRangeIsFixed', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`
+    const state = { bridgePlatform:'mt5' }
+    ${app.slice(start, end)}
+    return historySummaryReadyForRequestedRange
+  `)()
+}
+
+async function runHistoryCursorScenario() {
+  const helperStart = app.indexOf('function historyCursorRangeIsFixed')
+  const helperEnd = app.indexOf('function markHistoryDirty', helperStart)
+  const tableStart = app.indexOf('function loadHistory(forceRefresh')
+  const tableEnd = app.indexOf('function _applyHistoryData', tableStart)
+  const dirtyStart = app.indexOf('function markHistoryDirty', helperStart)
+  const dirtyEnd = app.indexOf('function scheduleHistoryFreshnessRetry', dirtyStart)
+  expect(helperStart).toBeGreaterThanOrEqual(0)
+  expect(helperEnd).toBeGreaterThan(helperStart)
+  expect(tableStart).toBeGreaterThanOrEqual(0)
+  expect(tableEnd).toBeGreaterThan(tableStart)
+  expect(dirtyStart).toBeGreaterThanOrEqual(0)
+  expect(dirtyEnd).toBeGreaterThan(dirtyStart)
+  const harness = new Function(`
+    const responses = [
+      {
+        status:'success', orders:[],
+        history_range:{ range_start_utc_msc:1000, range_end_utc_msc:2000 },
+        history_sync:{ freshness_state:'refreshing', summary_status:'ready', requested_range_complete:false },
+        statistics:{ total_profit:999 },
+      },
+      {
+        status:'success', orders:[], history_snapshot_id:'snapshot-new',
+        history_range:{ range_start_utc_msc:1000, range_end_utc_msc:2000 },
+        history_sync:{ freshness_state:'fresh', summary_status:'ready', requested_range_complete:true },
+        statistics:{ total_profit:123 },
+      },
+      {
+        status:'success', orders:[], history_snapshot_id:'snapshot-dirty',
+        history_range:{ range_start_utc_msc:1000, range_end_utc_msc:3000 },
+        history_sync:{ freshness_state:'fresh', summary_status:'ready', requested_range_complete:true },
+        statistics:{ total_profit:456 },
+      },
+    ]
+    const requests = []
+    let _historyCache = null
+    let _historyChartCache = null
+    let _historyCursorState = {
+      key:null, snapshotId:null, rangeStart:null, rangeEnd:null,
+      pageCursors:new Map([[1, null]]),
+    }
+    const _historyTableFlights = new Map()
+    const state = {
+      historyFilters:{ page:1, pageSize:20 },
+      bridgePlatform:'mt5',
+      bridgeAccountIdentity:{ brokerServerKey:'DEMO', loginAccount:'42' },
+    }
+    const document = { getElementById:() => ({ value:'' }) }
+    function getHistoryRangeParams() { return { history_scope:'all' } }
+    function historyFlightKey(kind, options) { return \`\${kind}:\${Boolean(options.forceRefresh)}\` }
+    function historyCircuitAllows() {}
+    function clearHistoryCircuit() {}
+    function historyErrorCode() { return '' }
+    function historyRangeFromError(error) {
+      const range = error?.history_range
+      if (!range) return null
+      const rangeStart = Number(range.range_start_utc_msc)
+      const rangeEnd = Number(range.range_end_utc_msc)
+      return Number.isSafeInteger(rangeStart) && Number.isSafeInteger(rangeEnd)
+        && rangeStart > 0 && rangeStart < rangeEnd ? { rangeStart, rangeEnd } : null
+    }
+    function isHistoryCursorRangeIncomplete() { return false }
+    function rememberHistoryFailure() {}
+    function notifyHistoryFailure() {}
+    function loadSignalTickets() { return Promise.resolve() }
+    function loadCloseSignalTickets() { return Promise.resolve() }
+    function _applyHistoryData() {}
+    function cancelHistoryRangeRetry() {}
+    function resetHistoryCursorState(key = null) {
+      _historyCursorState = { key, snapshotId:null, rangeStart:null, rangeEnd:null, pageCursors:new Map([[1, null]]) }
+    }
+    function wsApi(action, params) {
+      requests.push({ action, params:{ ...params } })
+      return Promise.resolve(responses.shift())
+    }
+    ${app.slice(helperStart, helperEnd)}
+    ${app.slice(dirtyStart, dirtyEnd)}
+    ${app.slice(tableStart, tableEnd)}
+    return (async () => {
+      await loadHistory(true)
+      const first = requests[0]
+      resetHistorySnapshotState({ preserveRange:true })
+      await loadHistory(false)
+      const second = requests[1]
+      markHistoryDirty({ refreshActive:false })
+      await loadHistory(true)
+      const dirty = requests[2]
+      return {
+        first, second, dirty,
+        firstRange:{ start:_historyCursorState.rangeStart, end:_historyCursorState.rangeEnd },
+      }
+    })()
+  `)
+  return harness()
+}
+
 describe('AI laboratory demand-driven frontend loading contract', () => {
   it('loads the dashboard in status, symbols, then dashboard-data order', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
@@ -99,7 +207,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
     expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
     expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
-    expect(html).toContain('/ai/app.js?v=20260809historyfast1')
+    expect(html).toContain('/ai/app.js?v=20260810historyfixedretry1')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {
@@ -168,7 +276,8 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(push).toContain('markHistoryDirty({ refreshActive:true })')
     expect(push).not.toContain('loadHistoryViews().catch(() => {})')
     expect(dirty).toContain("['refreshing', 'stale']")
-    expect(dirty).toContain('loadHistoryViews({ forceRefresh:true, historyRetryAttempt:true })')
+    expect(dirty).toContain('loadHistoryViews({ forceRefresh:true })')
+    expect(dirty).not.toContain('loadHistoryViews({ forceRefresh:true, historyRetryAttempt:true })')
     expect(views).toContain('if (sync.freshness_state === "fresh") _historyDirty = false')
     expect(views).toContain('scheduleHistoryFreshnessRetry(tableData)')
     expect(views).toContain('tableData?.chart_data')
@@ -178,5 +287,64 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(apply).toContain('historySummaryReadyForRequestedRange(sync)')
     expect(app).toContain('sync.requested_range_complete !== false')
     expect(app).toContain('sync.terminal_visible_history_complete === true')
+  })
+
+  it('keeps freshness retries on one fixed range while dropping stale snapshots', () => {
+    const freshness = block('function scheduleHistoryFreshnessRetry', 'async function handleBridgeReconnected')
+    const views = block('function loadHistoryViews(', 'function historyProtectionCell')
+    const table = block('function loadHistory(forceRefresh', 'function _applyHistoryData')
+    expect(freshness).toContain('const rangePending = sync.requested_range_complete === false')
+    expect(freshness).toContain('loadHistoryViews({ forceRefresh:false, historyRetryAttempt:true })')
+    expect(freshness).not.toContain('loadHistoryViews({ forceRefresh:true')
+    expect(views).toContain('const automaticRetry = historyRetryAttempt === true && manualRefresh !== true')
+    expect(views).toContain('const effectiveForceRefresh = Boolean(!automaticRetry && (forceRefresh || _historyDirty))')
+    expect(views).toContain('resetHistorySnapshotState({ preserveRange:true })')
+    expect(views).toContain('loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh })')
+    expect(table).toContain('range_start_utc_msc:_historyCursorState.rangeStart')
+    expect(table).toContain('range_end_utc_msc:_historyCursorState.rangeEnd')
+
+    const start = app.indexOf('function historyCursorRangeIsFixed')
+    const end = app.indexOf('function markHistoryDirty', start)
+    const resetState = new Function(`
+      let _historyCache = { filters:'old' }
+      let _historyChartCache = { filters:'old' }
+      let _historyCursorState = {
+        key:'scope:all', snapshotId:'snapshot-old', rangeStart:1000, rangeEnd:2000,
+        pageCursors:new Map([[1, null], [2, 'cursor-old']]),
+      }
+      const state = { historyFilters:{ page:2 } }
+      ${app.slice(start, end)}
+      resetHistorySnapshotState({ preserveRange:true })
+      return { _historyCache, _historyChartCache, _historyCursorState, page:state.historyFilters.page }
+    `)()
+    expect(resetState._historyCache).toBeNull()
+    expect(resetState._historyChartCache).toBeNull()
+    expect(resetState._historyCursorState).toMatchObject({
+      key:'scope:all', snapshotId:null, rangeStart:1000, rangeEnd:2000,
+    })
+    expect([...resetState._historyCursorState.pageCursors.entries()]).toEqual([[1, null]])
+    expect(resetState.page).toBe(1)
+  })
+
+  it('regresses partial success, fixed-endpoint retry, and dirty-push recapture', async () => {
+    const { first, second, dirty, firstRange } = await runHistoryCursorScenario()
+    expect(first.params.force_refresh).toBe(true)
+    expect(first.params).not.toHaveProperty('range_start_utc_msc')
+    expect(first.params).not.toHaveProperty('range_end_utc_msc')
+    expect(second.params.force_refresh).toBe(false)
+    expect(second.params.range_start_utc_msc).toBe(1000)
+    expect(second.params.range_end_utc_msc).toBe(2000)
+    expect(second.params).not.toHaveProperty('history_snapshot_id')
+    expect(dirty.params.force_refresh).toBe(true)
+    expect(dirty.params).not.toHaveProperty('range_start_utc_msc')
+    expect(dirty.params).not.toHaveProperty('range_end_utc_msc')
+    expect(firstRange).toEqual({ start:1000, end:3000 })
+
+    const apply = block('function _applyHistoryData(data)', '// Chart and summary use')
+    expect(apply).toContain('const stats = summaryReady && data.statistics')
+    expect(apply).toContain('已显示 ${rows.length} 笔 · 全量统计准备中')
+    const summaryReady = loadHistorySummaryReadyPredicate()
+    expect(summaryReady({ summary_status:'ready', requested_range_complete:false })).toBe(false)
+    expect(summaryReady({ summary_status:'ready', requested_range_complete:true })).toBe(true)
   })
 })
