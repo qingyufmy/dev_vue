@@ -1145,6 +1145,7 @@ export function boundedHistoryExportPageCount(value, maximumPages = 50) {
 
 export const HISTORY_EXACT_RANGE_CAPABILITY = 'history_exact_range_v1'
 export const HISTORY_CURSOR_CAPABILITY = 'history_cursor_v1'
+const RECENT_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000
 
 export function hasHistoryExactRangeCapability(route) {
   const capabilities = route?.capabilities
@@ -1199,7 +1200,7 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
       throw historyError('history_cursor_invalid')
     }
   } else if (scope === 'recent') {
-    const expectedStart = rangeEnd - 7 * 24 * 60 * 60 * 1_000
+    const expectedStart = rangeEnd - RECENT_HISTORY_WINDOW_MS
     if (rangeStart !== expectedStart) throw historyError('history_cursor_invalid')
   } else if (['ownership', 'platform', 'all'].includes(scope)) {
     if (rangeStart !== ownershipStart) throw historyError('history_cursor_invalid')
@@ -1521,7 +1522,7 @@ export async function resolveHistoryRange(
     rangeStart = closeFrom
     if (closeTo !== null) rangeEnd = Math.min(rangeEnd, closeTo)
   } else if (requestedScope === 'recent') {
-    rangeStart = nowUtcMsc - 7 * 24 * 60 * 60 * 1_000
+    rangeStart = nowUtcMsc - RECENT_HISTORY_WINDOW_MS
   } else {
     // `platform` and `all` intentionally share the current ownership range;
     // exposing a pre-ownership all-time archive would cross an account owner.

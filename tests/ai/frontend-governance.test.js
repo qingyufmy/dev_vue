@@ -482,13 +482,13 @@ describe('AI governance navigation and DOM contract', () => {
 
   it('uses an explicit shared history scope and keeps the platform start server-owned', () => {
     expect(html).toContain('id="historyRangeMode"')
-    expect(html).toContain('<option value="recent" selected>最近 7 天</option>')
+    expect(html).toContain('<option value="recent" selected>最近 30 天</option>')
     expect(html).toContain('<option value="ownership">本次接入以来</option>')
     expect(html).not.toContain('<option value="all">全账户历史</option>')
     expect(html).toContain('<option value="custom">自定义日期</option>')
     expect(app).toContain('history_scope: scope')
     expect(app.match(/\?\.value \|\| "recent"/g)?.length).toBeGreaterThanOrEqual(2)
-    expect(app).toContain('显示当前在线 ${bridgePlatformLabel()} 账户最近 7 天的记录。')
+    expect(app).toContain('显示当前在线 ${bridgePlatformLabel()} 账户最近 30 天的记录。')
     expect(app).toContain('按所选平仓日期统计；入金、提款和信用也按同一日期范围计算。')
     expect(app).toContain('MT4 历史范围取决于终端“账户历史”页已加载的时间范围')
     expect(app.replaceAll('\r\n', '\n')).toContain('} else if (tabId === "history") {\n    updateHistoryRangeUI();')
