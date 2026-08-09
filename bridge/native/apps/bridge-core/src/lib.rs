@@ -715,9 +715,13 @@ impl InboundDataHandler for ActiveMt5Sessions {
                         session
                             .handle
                             .request_history_refresh()
-                            .map_err(|error| TransportError::from_code(error.code().to_owned()))?
+                            .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
                     }
-                    PreparedDataSession::Mt5(session) => session.handle.request_history_refresh(),
+                    PreparedDataSession::Mt5(_) => {
+                        // MT5 exact-range preparation below owns both tail refresh
+                        // and uncovered-range promotion. Avoid planning the same
+                        // tail flight twice for one browser request.
+                    }
                 }
             }
             let history_now = if matches!(
@@ -1023,7 +1027,9 @@ fn prepare_mt5_history_request(
         == Some(true);
     let Some(requested) = requested else {
         if force_refresh {
-            session.request_history_refresh();
+            session
+                .request_history_refresh()
+                .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
         }
         return Ok(());
     };
@@ -1037,12 +1043,12 @@ fn prepare_mt5_history_request(
         )
         .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
     if force_refresh {
-        if covered {
-            // A fully covered fixed range is already complete; force refresh
-            // only wakes the scheduler and leaves the immutable completed job
-            // untouched.  An uncovered range is promoted to P1 below.
-            session.request_history_refresh();
-        } else {
+        // Coverage proves archive completeness, not freshness. Every explicit
+        // refresh plans a repeatable tail flight even for a covered range.
+        session
+            .request_history_refresh()
+            .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+        if !covered {
             session
                 .request_history_range(
                     requested.range_start_utc_msc,

@@ -9,7 +9,7 @@ use rusqlite::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -30,8 +30,12 @@ const MAX_HISTORY_CURSOR_PAGE_SIZE: i64 = 200;
 const MAX_HISTORY_SNAPSHOTS: usize = 256;
 const MAX_HISTORY_SNAPSHOT_CURSORS: usize = 512;
 const HISTORY_SNAPSHOT_TTL_MSC: i64 = 10 * 60 * 1_000;
+const HISTORY_TAIL_WINDOW_MSC: i64 = 7 * 24 * 60 * 60 * 1_000;
 const HISTORY_CURSOR_TOKEN_BYTES: usize = 32;
-pub const HISTORY_COVERAGE_START_UTC_MSC: i64 = 946_684_800_000;
+/// Earliest history timestamp that the native archive planner and request
+/// contract may accept.  Rows older than this are retained as rebuildable
+/// evidence, but are never included in a newly planned/query range.
+pub const HISTORY_COVERAGE_START_UTC_MSC: i64 = 1_735_689_600_000;
 const MT4_HISTORY_SOURCE_NOTE: &str = "mt4_account_history_tab_range";
 
 const NATIVE_COMMAND_LEDGER_REQUIRED_COLUMNS: &[&str] = &[
@@ -44,6 +48,23 @@ const NATIVE_COMMAND_LEDGER_REQUIRED_COLUMNS: &[&str] = &[
 ];
 
 const HISTORY_RUNTIME_REQUIRED_TABLES: &[(&str, &[&str])] = &[
+    (
+        "history_archive_items",
+        &[
+            "terminal_instance_id",
+            "broker_server",
+            "login_account",
+            "platform",
+            "item_kind",
+            "item_id",
+            "event_time_msc",
+            "position_id",
+            "order_ticket",
+            "symbol",
+            "payload_json",
+            "updated_at_utc_msc",
+        ],
+    ),
     (
         "account_initialization_state",
         &[
@@ -95,6 +116,57 @@ const HISTORY_RUNTIME_REQUIRED_TABLES: &[(&str, &[&str])] = &[
             "updated_at_utc_msc",
         ],
     ),
+    (
+        "history_scope_state",
+        &[
+            "terminal_instance_id",
+            "broker_server",
+            "login_account",
+            "platform",
+            "head_ready",
+            "head_range_start_utc_msc",
+            "head_range_end_utc_msc",
+            "coverage_complete",
+            "freshness_state",
+            "fresh_through_utc_msc",
+            "history_revision",
+            "summary_revision",
+            "summary_status",
+            "updated_at_utc_msc",
+        ],
+    ),
+    (
+        "history_daily_summary",
+        &[
+            "terminal_instance_id",
+            "broker_server",
+            "login_account",
+            "platform",
+            "generation",
+            "summary_day_utc_msc",
+            "item_kind",
+            "direction",
+            "profit_bucket",
+            "trade_count",
+            "net_profit",
+            "volume",
+            "deal_deposit",
+            "deal_withdrawal",
+            "deal_credit",
+        ],
+    ),
+    (
+        "history_summary_builds",
+        &[
+            "terminal_instance_id",
+            "broker_server",
+            "login_account",
+            "platform",
+            "active_generation",
+            "building_generation",
+            "updated_at_utc_msc",
+        ],
+    ),
 ];
 
 const NATIVE_COMMAND_LEDGER_REQUIRED_INDEXES: &[&str] = &["idx_native_command_ledger_status"];
@@ -104,6 +176,11 @@ const HISTORY_RUNTIME_REQUIRED_INDEXES: &[&str] = &[
     "idx_history_sync_jobs_claim",
     "idx_history_sync_jobs_scope",
     "idx_history_coverage_ranges_scope",
+    "idx_history_scope_state_updated",
+    "idx_history_archive_summary_scope",
+    "idx_history_archive_trade_filter",
+    "idx_history_daily_summary_active",
+    "idx_history_summary_builds_updated",
 ];
 
 pub const REQUIRED_SCHEMA: &[(&str, &[&str])] = &[
@@ -471,6 +548,11 @@ pub struct HistoryJobBatchResult {
     pub status: HistoryJobBatchStatus,
     pub job: HistorySyncJob,
     pub persisted_item_count: usize,
+    /// Number of rows whose payload or indexed identity columns actually
+    /// changed. Duplicate batches leave this at zero.
+    pub changed_item_count: usize,
+    pub history_changed: bool,
+    pub history_revision: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -507,6 +589,34 @@ pub struct HistoryArchiveState {
     pub cursor: HistoryCursor,
     pub is_complete: bool,
     pub updated_at_utc_msc: i64,
+}
+
+/// Runtime freshness/version state for one terminal account and platform.
+/// The legacy `history_archive_state` cursor remains for MT4 compatibility;
+/// this additive state drives new metadata, invalidation, and MT5 tail plans.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryScopeState {
+    pub scope: HistoryScope,
+    pub platform: String,
+    pub head_ready: bool,
+    pub head_range_start_utc_msc: Option<i64>,
+    pub head_range_end_utc_msc: Option<i64>,
+    pub coverage_complete: bool,
+    pub freshness_state: String,
+    pub fresh_through_utc_msc: Option<i64>,
+    pub history_revision: i64,
+    pub summary_revision: i64,
+    pub summary_status: String,
+    pub updated_at_utc_msc: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryTailRefreshRequest {
+    pub scope: HistoryScope,
+    pub platform: String,
+    pub range_start_utc_msc: i64,
+    pub range_end_utc_msc: i64,
+    pub now_utc_msc: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -647,6 +757,7 @@ struct HistoryCursorQuery {
     profit_filter: Option<String>,
 }
 
+#[derive(Clone)]
 struct HistoryCursorPageRequest {
     query: HistoryCursorQuery,
     requested_range: HistoryRequestedRange,
@@ -665,10 +776,15 @@ struct HistorySnapshotState {
     login_account: String,
     platform: String,
     query: HistoryCursorQuery,
+    effective_range_start_utc_msc: i64,
+    effective_range_end_utc_msc: i64,
     highwater_rowid: i64,
     total_count: i64,
     statistics: serde_json::Value,
     history_sync: serde_json::Value,
+    chart_data: serde_json::Value,
+    history_revision: i64,
+    summary_revision: i64,
     expires_at_utc_msc: i64,
     cursors: HashMap<String, HistorySnapshotCursor>,
     cursor_order: VecDeque<String>,
@@ -1048,8 +1164,9 @@ impl OutboxStore {
     /// Atomically subtract completed coverage and in-flight allowed jobs from
     /// a requested range, creating deterministic gap jobs and returning the
     /// jobs that were attached to by the request.  Only the semantic
-    /// combinations used by the new scheduler are accepted; legacy backfill
-    /// rows remain untouched and are never considered active work here.
+    /// combinations used by the new scheduler are accepted.  Backfill rows
+    /// created before the modern floor remain collision-safe and are only
+    /// considered when the caller is operating on a current/future clock.
     pub fn plan_history_jobs(
         &self,
         request: &HistoryJobPlanningRequest,
@@ -1079,6 +1196,8 @@ impl OutboxStore {
         if request.priority == "p1"
             && exact_existing.as_ref().is_some_and(|job| {
                 is_allowed_history_job_kind(&job.job_kind)
+                    && !(job.job_kind == "backfill"
+                        && request.now_utc_msc < HISTORY_COVERAGE_START_UTC_MSC)
                     && matches!(job.state.as_str(), "queued" | "retrying" | "running")
                     && matches!(job.priority.as_str(), "p2" | "p3")
             })
@@ -1097,7 +1216,7 @@ impl OutboxStore {
                        AND login_account = ?4
                        AND range_start_utc_msc = ?5
                        AND range_end_utc_msc = ?6
-                       AND job_kind IN ('recent', 'on_demand')
+                       AND job_kind IN ('recent', 'on_demand', 'backfill')
                        AND priority IN ('p2', 'p3')
                        AND state IN ('queued', 'retrying', 'running');",
                     params![
@@ -1133,6 +1252,8 @@ impl OutboxStore {
             .collect::<Vec<_>>();
         for job in &active_jobs {
             if !is_allowed_history_job_kind(&job.job_kind)
+                || (job.job_kind == "backfill"
+                    && request.now_utc_msc < HISTORY_COVERAGE_START_UTC_MSC)
                 || !matches!(job.state.as_str(), "queued" | "retrying" | "running")
             {
                 continue;
@@ -1209,6 +1330,8 @@ impl OutboxStore {
                 ));
             }
             if is_allowed_history_job_kind(&existing.job_kind)
+                && !(existing.job_kind == "backfill"
+                    && request.now_utc_msc < HISTORY_COVERAGE_START_UTC_MSC)
                 && matches!(existing.state.as_str(), "queued" | "retrying" | "running")
             {
                 if request.priority == "p1" && matches!(existing.priority.as_str(), "p2" | "p3") {
@@ -1253,6 +1376,190 @@ impl OutboxStore {
             .map_err(|_| StoreError::new("bridge_store_history_planning_commit_failed"))?;
         Ok(HistoryJobPlanningResult {
             created_jobs,
+            attached_jobs,
+        })
+    }
+
+    /// Plan a repeatable MT5 tail refresh.  Unlike coverage planning this
+    /// path intentionally ignores existing coverage ranges and may reactivate
+    /// a completed tail row.  Active overlapping tail flights are merged in
+    /// place and their endpoint is only ever extended, so a later trigger
+    /// cannot be lost.
+    pub fn plan_history_tail_refresh(
+        &self,
+        request: &HistoryTailRefreshRequest,
+    ) -> Result<HistoryJobPlanningResult, StoreError> {
+        validate_history_tail_refresh_request(request)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_planning_transaction_failed"))?;
+
+        // Keep completed tail rows bounded.  A small cap avoids an unbounded
+        // history_sync_jobs table while preserving recent audit evidence.
+        let prune_before = request.now_utc_msc.saturating_sub(10 * 60 * 1_000);
+        transaction
+            .execute(
+                "DELETE FROM history_sync_jobs
+                 WHERE job_id IN (
+                   SELECT job_id FROM history_sync_jobs
+                   WHERE terminal_instance_id = ?1
+                     AND broker_server = ?2 COLLATE NOCASE
+                     AND login_account = ?3
+                     AND job_id LIKE 'tail_refresh_%'
+                     AND state IN ('completed', 'superseded')
+                     AND updated_at_utc_msc < ?4
+                   ORDER BY updated_at_utc_msc LIMIT 100
+                 );",
+                params![
+                    request.scope.terminal_instance_id,
+                    request.scope.broker_server,
+                    request.scope.login_account,
+                    prune_before,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_tail_prune_failed"))?;
+
+        let mut statement = transaction
+            .prepare(&format!(
+                "{} FROM history_sync_jobs
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3
+                   AND job_id LIKE 'tail_refresh_%'
+                   AND state IN ('queued', 'retrying', 'running')
+                 ORDER BY range_start_utc_msc, range_end_utc_msc, job_id;",
+                history_sync_job_select()
+            ))
+            .map_err(|_| StoreError::new("bridge_store_history_tail_query_failed"))?;
+        let active_rows = statement
+            .query_map(
+                params![
+                    request.scope.terminal_instance_id,
+                    request.scope.broker_server,
+                    request.scope.login_account
+                ],
+                history_sync_job_row_from_sql,
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_tail_query_failed"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| StoreError::new("bridge_store_history_tail_query_failed"))?;
+        let active_rows = active_rows
+            .into_iter()
+            .map(history_sync_job_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        let mut attached_jobs = Vec::new();
+        if let Some(row) = active_rows.into_iter().find(|row| {
+            ranges_overlap(
+                row.range_start_utc_msc,
+                row.range_end_utc_msc,
+                request.range_start_utc_msc,
+                request.range_end_utc_msc,
+            )
+        }) {
+            let merged_start = row.range_start_utc_msc.min(request.range_start_utc_msc);
+            let merged_end = row.range_end_utc_msc.max(request.range_end_utc_msc);
+            if merged_start != row.range_start_utc_msc || merged_end != row.range_end_utc_msc {
+                let affected = transaction
+                    .execute(
+                        "UPDATE history_sync_jobs
+                         SET range_start_utc_msc = ?2, range_end_utc_msc = ?3,
+                             cursor_time_msc = CASE WHEN cursor_time_msc > ?2 THEN ?2 ELSE cursor_time_msc END,
+                             cursor_ticket = CASE WHEN cursor_time_msc > ?2 THEN '' ELSE cursor_ticket END,
+                             updated_at_utc_msc = ?4
+                         WHERE job_id = ?1 AND state IN ('queued', 'retrying', 'running');",
+                        params![row.job_id, merged_start, merged_end, request.now_utc_msc],
+                    )
+                    .map_err(|_| StoreError::new("bridge_store_history_tail_merge_failed"))?;
+                if affected != 1 {
+                    return Err(StoreError::new("bridge_store_history_tail_merge_failed"));
+                }
+            }
+            let merged = read_history_sync_job_by_id(&transaction, &row.job_id)?
+                .ok_or_else(|| StoreError::new("bridge_store_history_tail_query_failed"))?;
+            attached_jobs.push(merged);
+        } else {
+            let job_id = format!(
+                "tail_refresh_{}",
+                history_job_identity(
+                    &request.scope,
+                    "tail_refresh",
+                    request.range_start_utc_msc,
+                    request.range_end_utc_msc,
+                )
+            );
+            let existing = read_history_sync_job_by_range(
+                &transaction,
+                &request.scope,
+                request.range_start_utc_msc,
+                request.range_end_utc_msc,
+            )?;
+            let job = if let Some(existing) = existing {
+                if !existing.job_id.starts_with("tail_refresh_") {
+                    return Err(StoreError::new("bridge_store_history_tail_collision"));
+                }
+                if existing.state == "completed" || existing.state == "superseded" {
+                    transaction
+                        .execute(
+                            "UPDATE history_sync_jobs
+                             SET state = 'queued', cursor_time_msc = range_start_utc_msc,
+                                 cursor_ticket = '', attempt_count = 0,
+                                 next_attempt_at_utc_msc = ?2, last_error_code = NULL,
+                                 lease_expires_at_utc_msc = NULL, updated_at_utc_msc = ?2
+                             WHERE job_id = ?1;",
+                            params![existing.job_id, request.now_utc_msc],
+                        )
+                        .map_err(|_| StoreError::new("bridge_store_history_tail_requeue_failed"))?;
+                    read_history_sync_job_by_id(&transaction, &existing.job_id)?
+                        .ok_or_else(|| StoreError::new("bridge_store_history_tail_query_failed"))?
+                } else {
+                    existing
+                }
+            } else {
+                transaction
+                    .execute(
+                        "INSERT INTO history_sync_jobs (
+                           job_id, terminal_instance_id, broker_server, login_account,
+                           job_kind, priority, range_start_utc_msc, range_end_utc_msc,
+                           cursor_time_msc, cursor_ticket, window_msc, state, attempt_count,
+                           next_attempt_at_utc_msc, last_error_code, lease_generation,
+                           lease_expires_at_utc_msc, created_at_utc_msc, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, 'on_demand', 'p1', ?5, ?6, ?5, '',
+                                   ?7, 'queued', 0, ?8, NULL, 0, NULL, ?8, ?8);",
+                        params![
+                            job_id,
+                            request.scope.terminal_instance_id,
+                            request.scope.broker_server,
+                            request.scope.login_account,
+                            request.range_start_utc_msc,
+                            request.range_end_utc_msc,
+                            HISTORY_TAIL_WINDOW_MSC,
+                            request.now_utc_msc,
+                        ],
+                    )
+                    .map_err(|_| StoreError::new("bridge_store_history_tail_write_failed"))?;
+                read_history_sync_job_by_id(&transaction, &job_id)?
+                    .ok_or_else(|| StoreError::new("bridge_store_history_tail_write_failed"))?
+            };
+            attached_jobs.push(job);
+        }
+
+        let mut scope_state =
+            read_history_scope_state_locked(&transaction, &request.scope, &request.platform)?;
+        scope_state.freshness_state = "refreshing".to_owned();
+        scope_state.updated_at_utc_msc = request.now_utc_msc;
+        write_history_scope_state_tx(&transaction, &scope_state)?;
+        attached_jobs.sort_by(history_job_order);
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_planning_commit_failed"))?;
+        Ok(HistoryJobPlanningResult {
+            created_jobs: Vec::new(),
             attached_jobs,
         })
     }
@@ -1586,27 +1893,39 @@ impl OutboxStore {
             job.range_start_utc_msc,
             job.range_end_utc_msc,
         )?;
-        upsert_history_items(
+        let mut upsert_result = upsert_history_items(
             &transaction,
             terminal,
             "deal",
             &batch.deals,
             batch.observed_at_utc_msc,
         )?;
-        upsert_history_items(
+        let history_order_result = upsert_history_items(
             &transaction,
             terminal,
             "history_order",
             &batch.history_orders,
             batch.observed_at_utc_msc,
         )?;
-        upsert_history_items(
+        let trade_result = upsert_history_items(
             &transaction,
             terminal,
             "trade",
             &batch.trades,
             batch.observed_at_utc_msc,
         )?;
+        upsert_result.changed_item_count = upsert_result
+            .changed_item_count
+            .saturating_add(history_order_result.changed_item_count)
+            .saturating_add(trade_result.changed_item_count);
+        upsert_result
+            .affected_days
+            .extend(history_order_result.affected_days);
+        upsert_result
+            .affected_days
+            .extend(trade_result.affected_days);
+        upsert_result.affected_days.sort_unstable();
+        upsert_result.affected_days.dedup();
         // A no-more response can terminate either the current sub-window or
         // the complete job range.  Only the latter is allowed to write
         // coverage and transition the job to `completed`; sub-window
@@ -1627,6 +1946,94 @@ impl OutboxStore {
         } else {
             (batch.next_cursor.time_msc, batch.next_cursor.ticket.clone())
         };
+        let mut scope_state =
+            read_history_scope_state_locked(&transaction, &job.scope, &terminal.platform)?;
+        let history_changed = upsert_result.changed_item_count > 0;
+        let summary_was_ready = scope_state.summary_status == "ready"
+            && scope_state.summary_revision == scope_state.history_revision;
+        if history_changed {
+            scope_state.history_revision = scope_state
+                .history_revision
+                .checked_add(1)
+                .ok_or_else(|| StoreError::new("bridge_store_history_revision_exhausted"))?;
+            // Keep a ready active generation synchronized incrementally when
+            // possible.  A scope without one remains pending until the
+            // generation-safe rebuild API is invoked.
+            scope_state.summary_status = "pending".to_owned();
+            if summary_was_ready
+                && let Some(build) =
+                    read_history_summary_build_locked(&transaction, &job.scope, &terminal.platform)?
+                && let Some(generation) = build.active_generation
+            {
+                refresh_history_summary_days_tx(
+                    &transaction,
+                    &job.scope,
+                    &terminal.platform,
+                    generation,
+                    &upsert_result.affected_days,
+                )?;
+                scope_state.summary_revision = scope_state.history_revision;
+                scope_state.summary_status = "ready".to_owned();
+            }
+        }
+        let is_recent_flight = job.job_kind == "recent";
+        let is_tail_flight = job.job_id.starts_with("tail_refresh_");
+        let is_freshness_flight = is_recent_flight || is_tail_flight;
+        if is_freshness_flight {
+            if is_complete {
+                // Freshness describes the fixed endpoint that the completed
+                // recent/tail flight covered, not the timestamp attached to
+                // an intermediate batch.  Keep an already newer endpoint
+                // monotonic when an old retry completes late.
+                scope_state.fresh_through_utc_msc = Some(
+                    scope_state
+                        .fresh_through_utc_msc
+                        .unwrap_or(0)
+                        .max(job.range_end_utc_msc),
+                );
+                scope_state.freshness_state = "fresh".to_owned();
+            } else {
+                // A partial flight is still refreshing.  Do not advance
+                // fresh_through until its fixed endpoint has completed.
+                scope_state.freshness_state = "refreshing".to_owned();
+            }
+        }
+        if is_complete && job.job_kind == "recent" {
+            let start = scope_state
+                .head_range_start_utc_msc
+                .map_or(job.range_start_utc_msc, |value| {
+                    value.min(job.range_start_utc_msc)
+                });
+            let end = scope_state
+                .head_range_end_utc_msc
+                .map_or(job.range_end_utc_msc, |value| {
+                    value.max(job.range_end_utc_msc)
+                });
+            scope_state.head_ready = true;
+            scope_state.head_range_start_utc_msc = Some(start);
+            scope_state.head_range_end_utc_msc = Some(end);
+        } else if is_complete && job.job_id.starts_with("tail_refresh_") {
+            let start = scope_state
+                .head_range_start_utc_msc
+                .map_or(job.range_start_utc_msc, |value| {
+                    value.min(job.range_start_utc_msc)
+                });
+            let end = scope_state
+                .head_range_end_utc_msc
+                .map_or(job.range_end_utc_msc, |value| {
+                    value.max(job.range_end_utc_msc)
+                });
+            scope_state.head_ready = true;
+            scope_state.head_range_start_utc_msc = Some(start);
+            scope_state.head_range_end_utc_msc = Some(end);
+        }
+        let coverage_ranges = read_history_coverage_ranges_locked(&transaction, &job.scope)?;
+        scope_state.coverage_complete = scope_state.head_ready
+            && scope_state.head_range_end_utc_msc.is_some_and(|head_end| {
+                history_ranges_cover(&coverage_ranges, HISTORY_COVERAGE_START_UTC_MSC, head_end)
+            });
+        scope_state.updated_at_utc_msc = now_utc_msc;
+        write_history_scope_state_tx(&transaction, &scope_state)?;
         let affected = transaction
             .execute(
                 "UPDATE history_sync_jobs
@@ -1659,6 +2066,9 @@ impl OutboxStore {
         transaction
             .commit()
             .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))?;
+        if history_changed {
+            self.invalidate_history_home_snapshots(terminal)?;
+        }
         Ok(HistoryJobBatchResult {
             status: if is_complete {
                 HistoryJobBatchStatus::Completed
@@ -1669,6 +2079,9 @@ impl OutboxStore {
             persisted_item_count: batch.deals.len()
                 + batch.history_orders.len()
                 + batch.trades.len(),
+            changed_item_count: upsert_result.changed_item_count,
+            history_changed,
+            history_revision: scope_state.history_revision,
         })
     }
 
@@ -1744,11 +2157,16 @@ impl OutboxStore {
         if next_attempt_at_utc_msc <= 0 || now_utc_msc <= 0 {
             return Err(StoreError::new("bridge_store_history_retry_invalid"));
         }
-        let connection = self
+        let mut connection = self
             .connection
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
-        let affected = connection
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_transaction_failed"))?;
+        let job = read_history_sync_job_by_id(&transaction, job_id)?
+            .ok_or_else(|| StoreError::new("bridge_store_history_job_unknown"))?;
+        let affected = transaction
             .execute(
                 "UPDATE history_sync_jobs
                  SET state = 'retrying', next_attempt_at_utc_msc = ?3,
@@ -1769,7 +2187,30 @@ impl OutboxStore {
         if affected != 1 {
             return Err(StoreError::new("bridge_store_history_lease_invalid"));
         }
-        Ok(())
+        if let Some(platform) = transaction
+            .query_row(
+                "SELECT platform FROM terminal_bindings
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 LIMIT 1;",
+                params![
+                    job.scope.terminal_instance_id,
+                    job.scope.broker_server,
+                    job.scope.login_account
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_state_query_failed"))?
+        {
+            let mut state = read_history_scope_state_locked(&transaction, &job.scope, &platform)?;
+            state.freshness_state = "refreshing".to_owned();
+            state.updated_at_utc_msc = now_utc_msc;
+            write_history_scope_state_tx(&transaction, &state)?;
+        }
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))
     }
 
     pub fn block_history_job(
@@ -1785,11 +2226,16 @@ impl OutboxStore {
         if now_utc_msc <= 0 {
             return Err(StoreError::new("bridge_store_history_block_invalid"));
         }
-        let connection = self
+        let mut connection = self
             .connection
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
-        let affected = connection
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_transaction_failed"))?;
+        let job = read_history_sync_job_by_id(&transaction, job_id)?
+            .ok_or_else(|| StoreError::new("bridge_store_history_job_unknown"))?;
+        let affected = transaction
             .execute(
                 "UPDATE history_sync_jobs
                  SET state = 'blocked', last_error_code = ?3,
@@ -1803,7 +2249,30 @@ impl OutboxStore {
         if affected != 1 {
             return Err(StoreError::new("bridge_store_history_lease_invalid"));
         }
-        Ok(())
+        if let Some(platform) = transaction
+            .query_row(
+                "SELECT platform FROM terminal_bindings
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 LIMIT 1;",
+                params![
+                    job.scope.terminal_instance_id,
+                    job.scope.broker_server,
+                    job.scope.login_account
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_state_query_failed"))?
+        {
+            let mut state = read_history_scope_state_locked(&transaction, &job.scope, &platform)?;
+            state.freshness_state = "blocked".to_owned();
+            state.updated_at_utc_msc = now_utc_msc;
+            write_history_scope_state_tx(&transaction, &state)?;
+        }
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))
     }
 
     pub fn supersede_history_scope(
@@ -2283,6 +2752,346 @@ impl OutboxStore {
             })
     }
 
+    /// Read additive runtime state for the terminal's account/platform.  A
+    /// missing row is a valid pre-migration/never-synced state and returns the
+    /// conservative pending/stale defaults.
+    pub fn history_scope_state(
+        &self,
+        terminal: &TerminalDescriptor,
+    ) -> Result<HistoryScopeState, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        let scope = HistoryScope {
+            terminal_instance_id: terminal.terminal_instance_id.clone(),
+            broker_server: terminal.account_ref.broker_server.clone(),
+            login_account: terminal.account_ref.login.clone(),
+        };
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        read_history_scope_state_locked(&connection, &scope, &terminal.platform)
+    }
+
+    /// Scope-oriented alias used by schedulers that already have a normalized
+    /// account scope and platform string.
+    pub fn history_scope_state_for_scope(
+        &self,
+        scope: &HistoryScope,
+        platform: &str,
+    ) -> Result<HistoryScopeState, StoreError> {
+        validate_history_scope_values(scope)?;
+        validate_history_platform(platform)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        read_history_scope_state_locked(&connection, scope, platform)
+    }
+
+    /// Mark an archive flight as active without changing coverage ranges.
+    pub fn mark_history_scope_refreshing(
+        &self,
+        terminal: &TerminalDescriptor,
+        now_utc_msc: i64,
+    ) -> Result<HistoryScopeState, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        if now_utc_msc <= 0 {
+            return Err(StoreError::new(
+                "bridge_store_history_state_timestamp_invalid",
+            ));
+        }
+        let scope = HistoryScope {
+            terminal_instance_id: terminal.terminal_instance_id.clone(),
+            broker_server: terminal.account_ref.broker_server.clone(),
+            login_account: terminal.account_ref.login.clone(),
+        };
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_transaction_failed"))?;
+        let mut state = read_history_scope_state_locked(&transaction, &scope, &terminal.platform)?;
+        state.freshness_state = "refreshing".to_owned();
+        state.updated_at_utc_msc = now_utc_msc;
+        write_history_scope_state_tx(&transaction, &state)?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))?;
+        Ok(state)
+    }
+
+    /// Rebuild the account/platform summary into a new generation and switch
+    /// the active pointer only after the generation has been fully written.
+    /// A failed build leaves the previous active generation untouched and
+    /// records `unavailable` instead of exposing partial aggregates.
+    pub fn rebuild_history_summary(
+        &self,
+        terminal: &TerminalDescriptor,
+        now_utc_msc: i64,
+    ) -> Result<HistoryScopeState, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        if now_utc_msc <= 0 {
+            return Err(StoreError::new(
+                "bridge_store_history_summary_timestamp_invalid",
+            ));
+        }
+        let scope = HistoryScope {
+            terminal_instance_id: terminal.terminal_instance_id.clone(),
+            broker_server: terminal.account_ref.broker_server.clone(),
+            login_account: terminal.account_ref.login.clone(),
+        };
+        let build_generation = {
+            let mut connection = self
+                .connection
+                .lock()
+                .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|_| StoreError::new("bridge_store_history_summary_transaction_failed"))?;
+            let active_generation =
+                read_history_summary_build_locked(&transaction, &scope, &terminal.platform)?
+                    .and_then(|build| build.active_generation);
+            let maximum_generation = transaction
+                .query_row(
+                    "SELECT COALESCE(MAX(generation), 0) FROM history_daily_summary
+                     WHERE terminal_instance_id = ?1
+                       AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4;",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        terminal.platform
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_summary_query_failed"))?;
+            let next_generation = active_generation
+                .unwrap_or(0)
+                .max(maximum_generation)
+                .checked_add(1)
+                .ok_or_else(|| {
+                    StoreError::new("bridge_store_history_summary_generation_exhausted")
+                })?;
+            transaction
+                .execute(
+                    "INSERT INTO history_summary_builds (
+                       terminal_instance_id, broker_server, login_account, platform,
+                       active_generation, building_generation, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(terminal_instance_id, broker_server, login_account, platform)
+                     DO UPDATE SET building_generation = excluded.building_generation,
+                       updated_at_utc_msc = excluded.updated_at_utc_msc;",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        terminal.platform,
+                        active_generation,
+                        next_generation,
+                        now_utc_msc
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_summary_build_failed"))?;
+            let mut state =
+                read_history_scope_state_locked(&transaction, &scope, &terminal.platform)?;
+            state.summary_status = "rebuilding".to_owned();
+            state.updated_at_utc_msc = now_utc_msc;
+            write_history_scope_state_tx(&transaction, &state)?;
+            transaction
+                .commit()
+                .map_err(|_| StoreError::new("bridge_store_history_summary_commit_failed"))?;
+            next_generation
+        };
+
+        let build_result = (|| {
+            let mut connection = self
+                .connection
+                .lock()
+                .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|_| StoreError::new("bridge_store_history_summary_transaction_failed"))?;
+            transaction
+                .execute(
+                    "DELETE FROM history_daily_summary
+                     WHERE terminal_instance_id = ?1
+                       AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4 AND generation = ?5;",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        terminal.platform,
+                        build_generation
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_summary_build_failed"))?;
+            insert_history_summary_generation_tx(
+                &transaction,
+                &scope,
+                &terminal.platform,
+                build_generation,
+            )?;
+            validate_history_summary_generation_tx(
+                &transaction,
+                &scope,
+                &terminal.platform,
+                build_generation,
+            )?;
+            transaction
+                .execute(
+                    "DELETE FROM history_daily_summary
+                     WHERE terminal_instance_id = ?1
+                       AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4 AND generation <> ?5;",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        terminal.platform,
+                        build_generation
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_summary_cleanup_failed"))?;
+            transaction
+                .execute(
+                    "UPDATE history_summary_builds
+                     SET active_generation = ?5, building_generation = NULL,
+                         updated_at_utc_msc = ?6
+                     WHERE terminal_instance_id = ?1
+                       AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4;",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        terminal.platform,
+                        build_generation,
+                        now_utc_msc
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_summary_activate_failed"))?;
+            let mut state =
+                read_history_scope_state_locked(&transaction, &scope, &terminal.platform)?;
+            state.summary_revision = state.history_revision;
+            state.summary_status = "ready".to_owned();
+            state.updated_at_utc_msc = now_utc_msc;
+            write_history_scope_state_tx(&transaction, &state)?;
+            transaction
+                .commit()
+                .map_err(|_| StoreError::new("bridge_store_history_summary_commit_failed"))?;
+            Ok::<_, StoreError>(state)
+        })();
+        match build_result {
+            Ok(state) => Ok(state),
+            Err(error) => {
+                let _ =
+                    self.mark_history_summary_unavailable(&scope, &terminal.platform, now_utc_msc);
+                Err(error)
+            }
+        }
+    }
+
+    /// Ensure an active summary generation is available for this scope.  The
+    /// operation is idempotent when `summary_revision` already matches the
+    /// current `history_revision`.
+    pub fn ensure_history_summary(
+        &self,
+        terminal: &TerminalDescriptor,
+        now_utc_msc: i64,
+    ) -> Result<HistoryScopeState, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        let scope = HistoryScope {
+            terminal_instance_id: terminal.terminal_instance_id.clone(),
+            broker_server: terminal.account_ref.broker_server.clone(),
+            login_account: terminal.account_ref.login.clone(),
+        };
+        let state = self.history_scope_state(terminal)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let active = read_history_summary_build_locked(&connection, &scope, &terminal.platform)?
+            .and_then(|build| build.active_generation);
+        drop(connection);
+        if state.summary_status == "ready"
+            && state.summary_revision == state.history_revision
+            && active.is_some()
+        {
+            return Ok(state);
+        }
+        self.rebuild_history_summary(terminal, now_utc_msc)
+    }
+
+    fn mark_history_summary_unavailable(
+        &self,
+        scope: &HistoryScope,
+        platform: &str,
+        now_utc_msc: i64,
+    ) -> Result<(), StoreError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| StoreError::new("bridge_store_history_summary_transaction_failed"))?;
+        let mut state = read_history_scope_state_locked(&transaction, scope, platform)?;
+        state.summary_status = "unavailable".to_owned();
+        state.updated_at_utc_msc = now_utc_msc;
+        write_history_scope_state_tx(&transaction, &state)?;
+        transaction
+            .execute(
+                "UPDATE history_summary_builds
+                 SET building_generation = NULL, updated_at_utc_msc = ?5
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4;",
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account,
+                    platform,
+                    now_utc_msc
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_summary_state_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_summary_commit_failed"))
+    }
+
+    fn invalidate_history_home_snapshots(
+        &self,
+        terminal: &TerminalDescriptor,
+    ) -> Result<(), StoreError> {
+        let mut snapshots = self
+            .history_snapshots
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        snapshots.retain(|_, snapshot| {
+            !(snapshot.platform == terminal.platform
+                && snapshot.terminal_instance_id == terminal.terminal_instance_id
+                && snapshot
+                    .broker_server
+                    .eq_ignore_ascii_case(&terminal.account_ref.broker_server)
+                && snapshot.login_account == terminal.account_ref.login
+                && snapshot.cursors.is_empty())
+        });
+        Ok(())
+    }
+
     /// Mark an MT4 archive as pending before starting a full rescan of the
     /// terminal-visible Account History range.
     ///
@@ -2371,27 +3180,39 @@ impl OutboxStore {
         let transaction = connection
             .transaction()
             .map_err(|_| StoreError::new("bridge_store_history_transaction_failed"))?;
-        upsert_history_items(
+        let mut upsert_result = upsert_history_items(
             &transaction,
             terminal,
             "deal",
             &batch.deals,
             batch.observed_at_utc_msc,
         )?;
-        upsert_history_items(
+        let history_order_result = upsert_history_items(
             &transaction,
             terminal,
             "history_order",
             &batch.history_orders,
             batch.observed_at_utc_msc,
         )?;
-        upsert_history_items(
+        let trade_result = upsert_history_items(
             &transaction,
             terminal,
             "trade",
             &batch.trades,
             batch.observed_at_utc_msc,
         )?;
+        upsert_result.changed_item_count = upsert_result
+            .changed_item_count
+            .saturating_add(history_order_result.changed_item_count)
+            .saturating_add(trade_result.changed_item_count);
+        upsert_result
+            .affected_days
+            .extend(history_order_result.affected_days);
+        upsert_result
+            .affected_days
+            .extend(trade_result.affected_days);
+        upsert_result.affected_days.sort_unstable();
+        upsert_result.affected_days.dedup();
         let current = transaction
             .query_row(
                 "SELECT cursor_value, is_complete FROM history_archive_state \
@@ -2439,9 +3260,72 @@ impl OutboxStore {
                 ],
             )
             .map_err(|_| StoreError::new("bridge_store_history_state_write_failed"))?;
+        let scope = HistoryScope {
+            terminal_instance_id: terminal.terminal_instance_id.clone(),
+            broker_server: terminal.account_ref.broker_server.clone(),
+            login_account: terminal.account_ref.login.clone(),
+        };
+        let mut scope_state =
+            read_history_scope_state_locked(&transaction, &scope, &terminal.platform)?;
+        let summary_was_ready = scope_state.summary_status == "ready"
+            && scope_state.summary_revision == scope_state.history_revision;
+        if upsert_result.changed_item_count > 0 {
+            scope_state.history_revision = scope_state
+                .history_revision
+                .checked_add(1)
+                .ok_or_else(|| StoreError::new("bridge_store_history_revision_exhausted"))?;
+            scope_state.summary_status = "pending".to_owned();
+            if summary_was_ready
+                && let Some(build) =
+                    read_history_summary_build_locked(&transaction, &scope, &terminal.platform)?
+                && let Some(generation) = build.active_generation
+            {
+                refresh_history_summary_days_tx(
+                    &transaction,
+                    &scope,
+                    &terminal.platform,
+                    generation,
+                    &upsert_result.affected_days,
+                )?;
+                scope_state.summary_revision = scope_state.history_revision;
+                scope_state.summary_status = "ready".to_owned();
+            }
+        }
+        if batch.has_more {
+            scope_state.freshness_state = "refreshing".to_owned();
+        } else {
+            scope_state.fresh_through_utc_msc = Some(
+                scope_state
+                    .fresh_through_utc_msc
+                    .unwrap_or(0)
+                    .max(batch.next_cursor.time_msc)
+                    .max(batch.observed_at_utc_msc),
+            );
+            scope_state.freshness_state = "fresh".to_owned();
+        }
+        if !batch.has_more && batch.next_cursor.time_msc > HISTORY_COVERAGE_START_UTC_MSC {
+            scope_state.head_ready = true;
+            scope_state.head_range_start_utc_msc = Some(HISTORY_COVERAGE_START_UTC_MSC);
+            scope_state.head_range_end_utc_msc = Some(batch.next_cursor.time_msc);
+        }
+        let coverage_ranges = read_history_coverage_ranges_locked(&transaction, &scope)?;
+        scope_state.coverage_complete = history_ranges_cover(
+            &coverage_ranges,
+            HISTORY_COVERAGE_START_UTC_MSC,
+            batch
+                .next_cursor
+                .time_msc
+                .max(HISTORY_COVERAGE_START_UTC_MSC + 1),
+        );
+        scope_state.updated_at_utc_msc = batch.observed_at_utc_msc;
+        write_history_scope_state_tx(&transaction, &scope_state)?;
         transaction
             .commit()
-            .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))
+            .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))?;
+        if upsert_result.changed_item_count > 0 {
+            self.invalidate_history_home_snapshots(terminal)?;
+        }
+        Ok(())
     }
 
     pub fn read_history_archive_page(
@@ -2466,7 +3350,8 @@ impl OutboxStore {
             .history_read_connection
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
-        let scope = history_scope_values(terminal);
+        let mut scope = history_scope_values(terminal);
+        scope.push(SqlValue::Text(terminal.platform.clone()));
         let mut filtered_values = scope.clone();
         filtered_values.extend(request.filter_values.iter().cloned());
         let total = connection
@@ -2474,7 +3359,7 @@ impl OutboxStore {
                 &format!(
                     "SELECT COUNT(*) FROM history_archive_items \
                      WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
-                       AND login_account = ? AND item_kind = 'trade'{};",
+                       AND login_account = ? AND platform = ? AND item_kind = 'trade'{};",
                     request.filter_sql
                 ),
                 params_from_iter(filtered_values.clone()),
@@ -2485,7 +3370,7 @@ impl OutboxStore {
             .prepare(&format!(
                 "SELECT payload_json FROM history_archive_items \
                  WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
-                   AND login_account = ? AND item_kind = 'trade'{} \
+                   AND login_account = ? AND platform = ? AND item_kind = 'trade'{} \
                  ORDER BY event_time_msc DESC, item_id DESC LIMIT ? OFFSET ?;",
                 request.filter_sql
             ))
@@ -2636,8 +3521,8 @@ impl OutboxStore {
         let mut values = history_scope_values(terminal);
         values.push(SqlValue::Text(terminal.platform.clone()));
         values.push(SqlValue::Integer(snapshot.highwater_rowid));
-        values.push(SqlValue::Integer(request.query.range_start_utc_msc));
-        values.push(SqlValue::Integer(request.query.range_end_utc_msc));
+        values.push(SqlValue::Integer(snapshot.effective_range_start_utc_msc));
+        values.push(SqlValue::Integer(snapshot.effective_range_end_utc_msc));
         values.extend(request.filter_values.iter().cloned());
         if let Some((last_time_msc, last_item_id)) = page_boundary.as_ref() {
             values.push(SqlValue::Integer(*last_time_msc));
@@ -2743,6 +3628,9 @@ impl OutboxStore {
             "history_sync": snapshot.history_sync,
             "source": format!("{}_sqlite", terminal.platform),
         });
+        if page == 1 {
+            payload["chart_data"] = snapshot.chart_data.clone();
+        }
         enforce_history_payload_budget(&mut payload)?;
         Ok(payload)
     }
@@ -2766,6 +3654,8 @@ impl OutboxStore {
             requested_range: Some(request.requested_range.clone()),
             filter_sql: request.filter_sql.clone(),
             filter_values: request.filter_values.clone(),
+            direction: request.query.direction.clone(),
+            profit_filter: request.query.profit_filter.clone(),
             capital_filter_sql: request.capital_filter_sql.clone(),
             capital_filter_values: request.capital_filter_values.clone(),
         };
@@ -2784,9 +3674,27 @@ impl OutboxStore {
         } else {
             false
         };
-        if !range_is_complete {
+        let (effective_range_start_utc_msc, effective_range_end_utc_msc) = if range_is_complete {
+            (
+                request.query.range_start_utc_msc,
+                request.query.range_end_utc_msc,
+            )
+        } else if history_sync["head_ready"] == serde_json::Value::Bool(true) {
+            let head_start = history_sync["head_range_start_utc_msc"]
+                .as_i64()
+                .ok_or_else(|| StoreError::new("history_cursor_range_incomplete"))?;
+            let head_end = history_sync["head_range_end_utc_msc"]
+                .as_i64()
+                .ok_or_else(|| StoreError::new("history_cursor_range_incomplete"))?;
+            let effective_start = request.query.range_start_utc_msc.max(head_start);
+            let effective_end = request.query.range_end_utc_msc.min(head_end);
+            if effective_start >= effective_end {
+                return Err(StoreError::new("history_cursor_range_incomplete"));
+            }
+            (effective_start, effective_end)
+        } else {
             return Err(StoreError::new("history_cursor_range_incomplete"));
-        }
+        };
         let highwater_rowid = connection
             .query_row(
                 "SELECT COALESCE(MAX(rowid), 0) FROM history_archive_items \
@@ -2811,20 +3719,56 @@ impl OutboxStore {
         let mut total_values = history_scope_values(terminal);
         total_values.push(SqlValue::Text(terminal.platform.clone()));
         total_values.push(SqlValue::Integer(highwater_rowid));
-        total_values.push(SqlValue::Integer(request.query.range_start_utc_msc));
-        total_values.push(SqlValue::Integer(request.query.range_end_utc_msc));
+        total_values.push(SqlValue::Integer(effective_range_start_utc_msc));
+        total_values.push(SqlValue::Integer(effective_range_end_utc_msc));
         total_values.extend(request.filter_values.iter().cloned());
         let total = connection
             .query_row(&total_sql, params_from_iter(total_values), |row| {
                 row.get::<_, i64>(0)
             })
             .map_err(|_| StoreError::new("bridge_store_history_cursor_query_failed"))?;
-        let statistics =
-            read_history_cursor_statistics(&connection, terminal, request, total, highwater_rowid)?;
+        let mut statistics_request = request.clone();
+        statistics_request.query.range_start_utc_msc = effective_range_start_utc_msc;
+        statistics_request.query.range_end_utc_msc = effective_range_end_utc_msc;
+        let statistics = read_history_cursor_statistics(
+            &connection,
+            terminal,
+            &statistics_request,
+            total,
+            highwater_rowid,
+        )?;
+        let chart_data = {
+            let mut chart_request = metadata_request.clone();
+            chart_request.requested_range = Some(HistoryRequestedRange {
+                range_start_utc_msc: effective_range_start_utc_msc,
+                range_end_utc_msc: effective_range_end_utc_msc,
+            });
+            let scope = HistoryScope {
+                terminal_instance_id: terminal.terminal_instance_id.clone(),
+                broker_server: terminal.account_ref.broker_server.clone(),
+                login_account: terminal.account_ref.login.clone(),
+            };
+            match history_summary_ready_generation(&connection, &scope, &terminal.platform)? {
+                Some(generation) => read_history_chart_data_from_summary(
+                    &connection,
+                    terminal,
+                    &chart_request,
+                    generation,
+                    history_sync.clone(),
+                )?,
+                None => serde_json::Value::Null,
+            }
+        };
         drop(connection);
 
         let expires_at_utc_msc = now_utc_msc
             .checked_add(HISTORY_SNAPSHOT_TTL_MSC)
+            .ok_or_else(|| StoreError::new("history_snapshot_invalid"))?;
+        let snapshot_history_revision = history_sync["history_revision"]
+            .as_i64()
+            .ok_or_else(|| StoreError::new("history_snapshot_invalid"))?;
+        let snapshot_summary_revision = history_sync["summary_revision"]
+            .as_i64()
             .ok_or_else(|| StoreError::new("history_snapshot_invalid"))?;
         let snapshot = HistorySnapshotState {
             terminal_instance_id: terminal.terminal_instance_id.clone(),
@@ -2832,10 +3776,15 @@ impl OutboxStore {
             login_account: terminal.account_ref.login.clone(),
             platform: terminal.platform.clone(),
             query: request.query.clone(),
+            effective_range_start_utc_msc,
+            effective_range_end_utc_msc,
             highwater_rowid,
             total_count: total,
             statistics,
             history_sync,
+            chart_data,
+            history_revision: snapshot_history_revision,
+            summary_revision: snapshot_summary_revision,
             expires_at_utc_msc,
             cursors: HashMap::new(),
             cursor_order: VecDeque::new(),
@@ -2913,6 +3862,8 @@ impl OutboxStore {
             requested_range: Some(request.requested_range.clone()),
             filter_sql: String::new(),
             filter_values: Vec::new(),
+            direction: None,
+            profit_filter: None,
             capital_filter_sql: String::new(),
             capital_filter_values: Vec::new(),
         };
@@ -2960,121 +3911,16 @@ impl OutboxStore {
             .history_read_connection
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
-        let mut values = history_scope_values(terminal);
-        values.extend(request.filter_values.iter().cloned());
-        let net = "CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
-                   json_extract(payload_json, '$.profit'), 0) AS REAL)";
-        let mut daily_statement = connection
-            .prepare(&format!(
-                "SELECT strftime('%Y-%m-%d', event_time_msc / 1000, 'unixepoch') AS day, \
-                   COALESCE(SUM({net}), 0), COUNT(*), \
-                   COALESCE(SUM(CASE WHEN {net} > 0 THEN 1 ELSE 0 END), 0), \
-                   COALESCE(SUM(CASE WHEN {net} < 0 THEN 1 ELSE 0 END), 0) \
-                 FROM history_archive_items WHERE terminal_instance_id = ? \
-                   AND broker_server = ? COLLATE NOCASE AND login_account = ? \
-                   AND item_kind = 'trade'{} GROUP BY day ORDER BY day;",
-                request.filter_sql
-            ))
-            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
-        let daily = daily_statement
-            .query_map(params_from_iter(values.clone()), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                ))
-            })
-            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
-        let (total, gross_profit, gross_loss, win_count, loss_count, total_profit) = connection
-            .query_row(
-                &format!(
-                    "SELECT COUNT(*), \
-                       COALESCE(SUM(CASE WHEN {net} > 0 THEN {net} ELSE 0 END), 0), \
-                       COALESCE(SUM(CASE WHEN {net} < 0 THEN -{net} ELSE 0 END), 0), \
-                       COALESCE(SUM(CASE WHEN {net} > 0 THEN 1 ELSE 0 END), 0), \
-                       COALESCE(SUM(CASE WHEN {net} < 0 THEN 1 ELSE 0 END), 0), \
-                       COALESCE(SUM({net}), 0) \
-                     FROM history_archive_items WHERE terminal_instance_id = ? \
-                       AND broker_server = ? COLLATE NOCASE AND login_account = ? \
-                       AND item_kind = 'trade'{};",
-                    request.filter_sql
-                ),
-                params_from_iter(values),
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, f64>(1)?,
-                        row.get::<_, f64>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, f64>(5)?,
-                    ))
-                },
-            )
-            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
-        let balance = connection
-            .query_row(
-                "SELECT CAST(COALESCE(json_extract(payload_json, '$.balance'), 0) AS REAL) \
-                 FROM account_latest WHERE terminal_instance_id = ?1 \
-                   AND connection_epoch = ?2 LIMIT 1;",
-                params![terminal.terminal_instance_id, terminal.connection_epoch],
-                |row| row.get::<_, f64>(0),
-            )
-            .optional()
-            .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?
-            .unwrap_or(0.0);
-        let round = |value: f64| (value * 100.0).round() / 100.0;
-        let initial_capital = (balance - total_profit).max(0.0);
-        let mut running = 0.0;
-        let mut peak = initial_capital;
-        let mut maximum_drawdown: f64 = 0.0;
-        let mut cumulative = Vec::with_capacity(daily.len());
-        let mut drawdown = Vec::with_capacity(daily.len());
-        let daily = daily
-            .into_iter()
-            .map(|(date, profit, trade_count, wins, losses)| {
-                let profit = round(profit);
-                running = round(running + profit);
-                cumulative.push(running);
-                let equity = initial_capital + running;
-                peak = peak.max(equity);
-                let current_drawdown = if peak > 0.0 {
-                    round((1.0 - equity / peak) * 100.0)
-                } else {
-                    0.0
-                };
-                maximum_drawdown = maximum_drawdown.max(current_drawdown);
-                drawdown.push(current_drawdown);
-                serde_json::json!({
-                    "date": date,
-                    "profit": profit,
-                    "trade_count": trade_count,
-                    "wins": wins,
-                    "losses": losses,
-                })
-            })
-            .collect::<Vec<_>>();
-        let average_win = if win_count > 0 {
-            gross_profit / win_count as f64
-        } else {
-            0.0
+        // Materialized summaries are the only source for aggregate chart
+        // data.  A failed/pending build must fail closed rather than falling
+        // back to a payload JSON table scan or returning fabricated zeros.
+        let scope = HistoryScope {
+            terminal_instance_id: terminal.terminal_instance_id.clone(),
+            broker_server: terminal.account_ref.broker_server.clone(),
+            login_account: terminal.account_ref.login.clone(),
         };
-        let average_loss = if loss_count > 0 {
-            gross_loss / loss_count as f64
-        } else {
-            0.0
-        };
-        let profit_factor = if average_loss > 0.0 {
-            round(average_win / average_loss)
-        } else if average_win > 0.0 {
-            999.0
-        } else {
-            0.0
-        };
+        let summary_generation =
+            history_summary_ready_generation(&connection, &scope, &terminal.platform)?;
         let state = read_history_state_locked(&connection, terminal)?;
         let history_sync = read_history_sync_metadata_locked(
             &connection,
@@ -3083,21 +3929,23 @@ impl OutboxStore {
             &state,
             now_utc_msc,
         )?;
-        Ok(serde_json::json!({
-            "daily": daily,
-            "cumulative": cumulative,
-            "drawdown": drawdown,
-            "stats": {
-                "total_trades": total,
-                "win_rate": if total > 0 { round(win_count as f64 / total as f64 * 100.0) } else { 0.0 },
-                "profit_factor": profit_factor,
-                "max_drawdown": maximum_drawdown,
-                "gross_profit": round(gross_profit),
-                "gross_loss": round(gross_loss),
-            },
-            "history_sync": history_sync,
-            "source": format!("{}_sqlite", terminal.platform),
-        }))
+        let Some(generation) = summary_generation else {
+            return Ok(serde_json::json!({
+                "daily": [],
+                "cumulative": [],
+                "drawdown": [],
+                "stats": serde_json::Value::Null,
+                "history_sync": history_sync,
+                "source": format!("{}_sqlite", terminal.platform),
+            }));
+        };
+        read_history_chart_data_from_summary(
+            &connection,
+            terminal,
+            &request,
+            generation,
+            history_sync,
+        )
     }
 
     pub fn persist_data_delta(
@@ -4265,6 +5113,16 @@ CREATE INDEX IF NOT EXISTS idx_history_archive_order
     terminal_instance_id, broker_server, login_account,
     item_kind, order_ticket, event_time_msc, item_id
   );
+CREATE INDEX IF NOT EXISTS idx_history_archive_summary_scope
+  ON history_archive_items (
+    terminal_instance_id, broker_server, login_account, platform,
+    item_kind, summary_day_utc_msc, direction, event_time_msc, item_id
+  );
+CREATE INDEX IF NOT EXISTS idx_history_archive_trade_filter
+  ON history_archive_items (
+    terminal_instance_id, broker_server, login_account, platform,
+    item_kind, direction, net_profit, event_time_msc, item_id
+  );
 CREATE TABLE IF NOT EXISTS history_coverage_ranges (
   terminal_instance_id TEXT NOT NULL,
   broker_server TEXT COLLATE NOCASE NOT NULL,
@@ -4282,19 +5140,214 @@ CREATE INDEX IF NOT EXISTS idx_history_coverage_ranges_scope
     terminal_instance_id, broker_server, login_account,
     range_start_utc_msc, range_end_utc_msc
   );
+CREATE TABLE IF NOT EXISTS history_scope_state (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  head_ready INTEGER NOT NULL DEFAULT 0 CHECK (head_ready IN (0, 1)),
+  head_range_start_utc_msc INTEGER,
+  head_range_end_utc_msc INTEGER,
+  coverage_complete INTEGER NOT NULL DEFAULT 0 CHECK (coverage_complete IN (0, 1)),
+  freshness_state TEXT NOT NULL CHECK (freshness_state IN ('fresh', 'refreshing', 'stale', 'blocked')),
+  fresh_through_utc_msc INTEGER,
+  history_revision INTEGER NOT NULL DEFAULT 0 CHECK (history_revision >= 0),
+  summary_revision INTEGER NOT NULL DEFAULT 0 CHECK (summary_revision >= 0),
+  summary_status TEXT NOT NULL CHECK (summary_status IN ('pending', 'rebuilding', 'ready', 'unavailable')),
+  updated_at_utc_msc INTEGER NOT NULL DEFAULT 0 CHECK (updated_at_utc_msc >= 0),
+  CHECK (
+    (head_ready = 0 AND head_range_start_utc_msc IS NULL AND head_range_end_utc_msc IS NULL)
+    OR (head_ready = 1 AND head_range_start_utc_msc IS NOT NULL
+        AND head_range_end_utc_msc IS NOT NULL
+        AND head_range_end_utc_msc > head_range_start_utc_msc)
+  ),
+  CHECK (fresh_through_utc_msc IS NULL OR fresh_through_utc_msc > 0),
+  PRIMARY KEY (terminal_instance_id, broker_server, login_account, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_history_scope_state_updated
+  ON history_scope_state (
+    terminal_instance_id, broker_server, login_account, platform,
+    updated_at_utc_msc DESC
+  );
+CREATE TABLE IF NOT EXISTS history_daily_summary (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  generation INTEGER NOT NULL CHECK (generation > 0),
+  summary_day_utc_msc INTEGER NOT NULL CHECK (summary_day_utc_msc >= 0),
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('trade', 'deal')),
+  direction TEXT NOT NULL DEFAULT '',
+  profit_bucket TEXT NOT NULL DEFAULT '',
+  trade_count INTEGER NOT NULL DEFAULT 0 CHECK (trade_count >= 0),
+  net_profit REAL NOT NULL DEFAULT 0,
+  volume REAL NOT NULL DEFAULT 0,
+  deal_deposit REAL NOT NULL DEFAULT 0,
+  deal_withdrawal REAL NOT NULL DEFAULT 0,
+  deal_credit REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (
+    terminal_instance_id, broker_server, login_account, platform,
+    generation, summary_day_utc_msc, item_kind, direction, profit_bucket
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_history_daily_summary_active
+  ON history_daily_summary (
+    terminal_instance_id, broker_server, login_account, platform,
+    generation, summary_day_utc_msc, item_kind, direction, profit_bucket
+  );
+CREATE TABLE IF NOT EXISTS history_summary_builds (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  active_generation INTEGER CHECK (active_generation IS NULL OR active_generation > 0),
+  building_generation INTEGER CHECK (building_generation IS NULL OR building_generation > 0),
+  updated_at_utc_msc INTEGER NOT NULL CHECK (updated_at_utc_msc >= 0),
+  PRIMARY KEY (terminal_instance_id, broker_server, login_account, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_history_summary_builds_updated
+  ON history_summary_builds (
+    terminal_instance_id, broker_server, login_account, platform,
+    updated_at_utc_msc DESC
+  );
 "#;
 
 fn ensure_history_runtime_schema(connection: &mut Connection) -> Result<(), StoreError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|_| StoreError::new("bridge_store_history_schema_transaction_failed"))?;
+    let scalar_columns_added = ensure_history_archive_scalar_columns(&transaction)?;
+    if scalar_columns_added {
+        backfill_history_archive_scalar_columns(&transaction)?;
+    }
     transaction
         .execute_batch(HISTORY_RUNTIME_SCHEMA_SQL)
         .map_err(|_| StoreError::new("bridge_store_history_schema_failed"))?;
     seed_history_coverage_from_legacy(&transaction)?;
+    seed_history_scope_state_from_legacy(&transaction)?;
     transaction
         .commit()
         .map_err(|_| StoreError::new("bridge_store_history_schema_commit_failed"))
+}
+
+fn ensure_history_archive_scalar_columns(
+    transaction: &Transaction<'_>,
+) -> Result<bool, StoreError> {
+    let columns = table_columns(transaction, "history_archive_items")?;
+    let mut added = false;
+    for (column, definition) in [
+        ("direction", "TEXT"),
+        ("net_profit", "REAL"),
+        ("volume", "REAL"),
+        ("capital_kind", "TEXT"),
+        ("capital_amount", "REAL"),
+        ("summary_day_utc_msc", "INTEGER"),
+    ] {
+        if !columns.iter().any(|existing| existing == column) {
+            transaction
+                .execute(
+                    &format!("ALTER TABLE history_archive_items ADD COLUMN {column} {definition};"),
+                    [],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_scalar_migration_failed"))?;
+            added = true;
+        }
+    }
+    Ok(added)
+}
+
+fn backfill_history_archive_scalar_columns(
+    transaction: &Transaction<'_>,
+) -> Result<(), StoreError> {
+    transaction
+        .execute(
+            "UPDATE history_archive_items
+             SET direction = CASE
+                 WHEN item_kind = 'trade' THEN CASE UPPER(COALESCE(
+                     json_extract(payload_json, '$.type'),
+                     json_extract(payload_json, '$.side'), ''))
+                     WHEN '0' THEN 'BUY' WHEN '1' THEN 'SELL'
+                     ELSE UPPER(COALESCE(json_extract(payload_json, '$.type'),
+                                         json_extract(payload_json, '$.side'), '')) END
+                 ELSE NULL END,
+                 net_profit = CASE WHEN item_kind = 'trade' THEN CAST(COALESCE(
+                     json_extract(payload_json, '$.net_profit'),
+                     json_extract(payload_json, '$.profit'), 0) AS REAL) ELSE NULL END,
+                 volume = CASE WHEN item_kind = 'trade' THEN CAST(COALESCE(
+                     json_extract(payload_json, '$.volume'), 0) AS REAL) ELSE NULL END,
+                 capital_kind = CASE
+                     WHEN item_kind = 'deal'
+                          AND CAST(COALESCE(json_extract(payload_json, '$.type'),
+                                            json_extract(payload_json, '$.deal_type'), -1) AS INTEGER)
+                                IN (2, 6)
+                          AND CAST(COALESCE(json_extract(payload_json, '$.capital_amount'),
+                                            json_extract(payload_json, '$.amount'),
+                                            json_extract(payload_json, '$.profit'), 0) AS REAL) >= 0
+                       THEN 'deposit'
+                     WHEN item_kind = 'deal'
+                          AND CAST(COALESCE(json_extract(payload_json, '$.type'),
+                                            json_extract(payload_json, '$.deal_type'), -1) AS INTEGER)
+                                IN (2, 6)
+                          AND CAST(COALESCE(json_extract(payload_json, '$.capital_amount'),
+                                            json_extract(payload_json, '$.amount'),
+                                            json_extract(payload_json, '$.profit'), 0) AS REAL) < 0
+                       THEN 'withdrawal'
+                     WHEN item_kind = 'deal'
+                          AND CAST(COALESCE(json_extract(payload_json, '$.type'),
+                                            json_extract(payload_json, '$.deal_type'), -1) AS INTEGER)
+                                IN (3, 7)
+                       THEN 'credit'
+                     ELSE NULL END,
+                 capital_amount = CASE
+                     WHEN item_kind = 'deal'
+                          AND CAST(COALESCE(json_extract(payload_json, '$.type'),
+                                            json_extract(payload_json, '$.deal_type'), -1) AS INTEGER)
+                                IN (2, 6)
+                       THEN ABS(CAST(COALESCE(json_extract(payload_json, '$.capital_amount'),
+                                              json_extract(payload_json, '$.amount'),
+                                              json_extract(payload_json, '$.profit'), 0) AS REAL))
+                     WHEN item_kind = 'deal'
+                          AND CAST(COALESCE(json_extract(payload_json, '$.type'),
+                                            json_extract(payload_json, '$.deal_type'), -1) AS INTEGER)
+                                IN (3, 7)
+                       THEN CAST(COALESCE(json_extract(payload_json, '$.capital_amount'),
+                                          json_extract(payload_json, '$.amount'),
+                                          json_extract(payload_json, '$.profit'), 0) AS REAL)
+                     ELSE NULL END,
+                 summary_day_utc_msc = event_time_msc - (event_time_msc % 86400000);",
+            [],
+        )
+        .map(|_| ())
+        .map_err(|_| StoreError::new("bridge_store_history_scalar_backfill_failed"))
+}
+
+fn seed_history_scope_state_from_legacy(transaction: &Transaction<'_>) -> Result<(), StoreError> {
+    // A binding is the only legacy source that carries the platform.  Do not
+    // guess MT4/MT5 for orphaned rows; the new state is lazily created by the
+    // first platform-specific archive write instead.
+    transaction
+        .execute(
+            "INSERT INTO history_scope_state (
+               terminal_instance_id, broker_server, login_account, platform,
+               head_ready, head_range_start_utc_msc, head_range_end_utc_msc,
+               coverage_complete, freshness_state, fresh_through_utc_msc,
+               history_revision, summary_revision, summary_status, updated_at_utc_msc
+             )
+             SELECT s.terminal_instance_id, s.broker_server, s.login_account,
+                    LOWER(b.platform), 0, NULL, NULL, 0, 'stale', NULL, 0, 0,
+                    'pending', s.updated_at_utc_msc
+             FROM history_archive_state AS s
+             JOIN terminal_bindings AS b
+               ON b.terminal_instance_id = s.terminal_instance_id
+              AND b.broker_server = s.broker_server COLLATE NOCASE
+              AND b.login_account = s.login_account
+             WHERE LOWER(b.platform) IN ('mt4', 'mt5')
+             ON CONFLICT(terminal_instance_id, broker_server, login_account, platform)
+             DO NOTHING;",
+            [],
+        )
+        .map(|_| ())
+        .map_err(|_| StoreError::new("bridge_store_history_seed_write_failed"))
 }
 
 fn seed_history_coverage_from_legacy(transaction: &Transaction<'_>) -> Result<(), StoreError> {
@@ -4486,6 +5539,488 @@ fn validate_history_scope_values(scope: &HistoryScope) -> Result<(), StoreError>
     Ok(())
 }
 
+fn validate_history_platform(platform: &str) -> Result<(), StoreError> {
+    if !matches!(platform, "mt4" | "mt5") {
+        return Err(StoreError::new("bridge_store_history_platform_invalid"));
+    }
+    Ok(())
+}
+
+fn default_history_scope_state(scope: &HistoryScope, platform: &str) -> HistoryScopeState {
+    HistoryScopeState {
+        scope: scope.clone(),
+        platform: platform.to_owned(),
+        head_ready: false,
+        head_range_start_utc_msc: None,
+        head_range_end_utc_msc: None,
+        coverage_complete: false,
+        freshness_state: "stale".to_owned(),
+        fresh_through_utc_msc: None,
+        history_revision: 0,
+        summary_revision: 0,
+        summary_status: "pending".to_owned(),
+        updated_at_utc_msc: 0,
+    }
+}
+
+fn read_history_scope_state_locked(
+    connection: &Connection,
+    scope: &HistoryScope,
+    platform: &str,
+) -> Result<HistoryScopeState, StoreError> {
+    validate_history_scope_values(scope)?;
+    let platform = platform.trim().to_ascii_lowercase();
+    validate_history_platform(&platform)?;
+    let row = connection
+        .query_row(
+            "SELECT head_ready, head_range_start_utc_msc, head_range_end_utc_msc,
+                    coverage_complete, freshness_state, fresh_through_utc_msc,
+                    history_revision, summary_revision, summary_status, updated_at_utc_msc
+             FROM history_scope_state
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+             LIMIT 1;",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_state_query_failed"))?;
+    let Some((
+        head_ready,
+        head_start,
+        head_end,
+        coverage_complete,
+        freshness,
+        fresh_through,
+        history_revision,
+        summary_revision,
+        summary_status,
+        updated_at,
+    )) = row
+    else {
+        return Ok(default_history_scope_state(scope, &platform));
+    };
+    let state = HistoryScopeState {
+        scope: scope.clone(),
+        platform,
+        head_ready: match head_ready {
+            0 => false,
+            1 => true,
+            _ => return Err(StoreError::new("bridge_store_history_state_invalid")),
+        },
+        head_range_start_utc_msc: head_start,
+        head_range_end_utc_msc: head_end,
+        coverage_complete: match coverage_complete {
+            0 => false,
+            1 => true,
+            _ => return Err(StoreError::new("bridge_store_history_state_invalid")),
+        },
+        freshness_state: freshness,
+        fresh_through_utc_msc: fresh_through,
+        history_revision,
+        summary_revision,
+        summary_status,
+        updated_at_utc_msc: updated_at,
+    };
+    validate_history_scope_state(&state)?;
+    Ok(state)
+}
+
+fn validate_history_scope_state(state: &HistoryScopeState) -> Result<(), StoreError> {
+    validate_history_scope_values(&state.scope)?;
+    validate_history_platform(&state.platform)?;
+    if !matches!(
+        state.freshness_state.as_str(),
+        "fresh" | "refreshing" | "stale" | "blocked"
+    ) || !matches!(
+        state.summary_status.as_str(),
+        "pending" | "rebuilding" | "ready" | "unavailable"
+    ) || state.history_revision < 0
+        || state.summary_revision < 0
+        || state.updated_at_utc_msc < 0
+        || state.fresh_through_utc_msc.is_some_and(|value| value <= 0)
+        || state.head_ready
+            && (state.head_range_start_utc_msc.is_none()
+                || state.head_range_end_utc_msc.is_none()
+                || state.head_range_end_utc_msc <= state.head_range_start_utc_msc)
+        || !state.head_ready
+            && (state.head_range_start_utc_msc.is_some() || state.head_range_end_utc_msc.is_some())
+    {
+        return Err(StoreError::new("bridge_store_history_state_invalid"));
+    }
+    Ok(())
+}
+
+fn write_history_scope_state_tx(
+    transaction: &Transaction<'_>,
+    state: &HistoryScopeState,
+) -> Result<(), StoreError> {
+    validate_history_scope_state(state)?;
+    transaction
+        .execute(
+            "INSERT INTO history_scope_state (
+               terminal_instance_id, broker_server, login_account, platform,
+               head_ready, head_range_start_utc_msc, head_range_end_utc_msc,
+               coverage_complete, freshness_state, fresh_through_utc_msc,
+               history_revision, summary_revision, summary_status, updated_at_utc_msc
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(terminal_instance_id, broker_server, login_account, platform)
+             DO UPDATE SET
+               head_ready = excluded.head_ready,
+               head_range_start_utc_msc = excluded.head_range_start_utc_msc,
+               head_range_end_utc_msc = excluded.head_range_end_utc_msc,
+               coverage_complete = excluded.coverage_complete,
+               freshness_state = excluded.freshness_state,
+               fresh_through_utc_msc = excluded.fresh_through_utc_msc,
+               history_revision = excluded.history_revision,
+               summary_revision = excluded.summary_revision,
+               summary_status = excluded.summary_status,
+               updated_at_utc_msc = excluded.updated_at_utc_msc;",
+            params![
+                state.scope.terminal_instance_id,
+                state.scope.broker_server,
+                state.scope.login_account,
+                state.platform,
+                i64::from(state.head_ready),
+                state.head_range_start_utc_msc,
+                state.head_range_end_utc_msc,
+                i64::from(state.coverage_complete),
+                state.freshness_state,
+                state.fresh_through_utc_msc,
+                state.history_revision,
+                state.summary_revision,
+                state.summary_status,
+                state.updated_at_utc_msc,
+            ],
+        )
+        .map(|_| ())
+        .map_err(|_| StoreError::new("bridge_store_history_state_write_failed"))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HistorySummaryBuild {
+    active_generation: Option<i64>,
+    building_generation: Option<i64>,
+}
+
+fn read_history_summary_build_locked(
+    connection: &Connection,
+    scope: &HistoryScope,
+    platform: &str,
+) -> Result<Option<HistorySummaryBuild>, StoreError> {
+    connection
+        .query_row(
+            "SELECT active_generation, building_generation
+             FROM history_summary_builds
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4 LIMIT 1;",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform
+            ],
+            |row| {
+                Ok(HistorySummaryBuild {
+                    active_generation: row.get(0)?,
+                    building_generation: row.get(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_summary_query_failed"))
+}
+
+fn insert_history_summary_generation_tx(
+    transaction: &Transaction<'_>,
+    scope: &HistoryScope,
+    platform: &str,
+    generation: i64,
+) -> Result<(), StoreError> {
+    transaction
+        .execute(
+            "INSERT INTO history_daily_summary (
+               terminal_instance_id, broker_server, login_account, platform,
+               generation, summary_day_utc_msc, item_kind, direction, profit_bucket,
+               trade_count, net_profit, volume, deal_deposit, deal_withdrawal, deal_credit
+             )
+             SELECT ?1, ?2, ?3, ?4, ?5, summary_day_utc_msc, 'trade',
+                    COALESCE(direction, ''),
+                    CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
+                         WHEN COALESCE(net_profit, 0) < 0 THEN 'loss' ELSE 'flat' END,
+                    COUNT(*), COALESCE(SUM(COALESCE(net_profit, 0)), 0),
+                    COALESCE(SUM(COALESCE(volume, 0)), 0), 0, 0, 0
+             FROM history_archive_items
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND item_kind = 'trade' AND event_time_msc >= 1735689600000
+               AND summary_day_utc_msc IS NOT NULL
+             GROUP BY summary_day_utc_msc, COALESCE(direction, ''),
+                      CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
+                           WHEN COALESCE(net_profit, 0) < 0 THEN 'loss' ELSE 'flat' END
+             UNION ALL
+             SELECT ?1, ?2, ?3, ?4, ?5, summary_day_utc_msc, 'deal', '', capital_kind,
+                    0, 0, 0,
+                    COALESCE(SUM(CASE WHEN capital_kind = 'deposit' THEN capital_amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN capital_kind = 'withdrawal' THEN capital_amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN capital_kind = 'credit' THEN capital_amount ELSE 0 END), 0)
+             FROM history_archive_items
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND item_kind = 'deal' AND event_time_msc >= 1735689600000
+               AND capital_kind IS NOT NULL
+               AND summary_day_utc_msc IS NOT NULL
+             GROUP BY summary_day_utc_msc, capital_kind;",
+            params![scope.terminal_instance_id, scope.broker_server, scope.login_account, platform, generation],
+        )
+        .map(|_| ())
+        .map_err(|_| StoreError::new("bridge_store_history_summary_build_failed"))
+}
+
+fn validate_history_summary_generation_tx(
+    transaction: &Transaction<'_>,
+    scope: &HistoryScope,
+    platform: &str,
+    generation: i64,
+) -> Result<(), StoreError> {
+    let malformed_scalar_count = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM history_archive_items
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND event_time_msc >= ?5
+               AND ((item_kind = 'trade'
+                     AND (net_profit IS NULL OR volume IS NULL
+                          OR typeof(net_profit) NOT IN ('integer', 'real')
+                          OR typeof(volume) NOT IN ('integer', 'real')))
+                    OR (item_kind = 'deal' AND capital_kind IS NOT NULL
+                        AND (capital_amount IS NULL
+                             OR typeof(capital_amount) NOT IN ('integer', 'real'))));",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform,
+                HISTORY_COVERAGE_START_UTC_MSC
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_summary_validate_failed"))?;
+    if malformed_scalar_count > 0 {
+        return Err(StoreError::new(
+            "bridge_store_history_summary_validation_mismatch",
+        ));
+    }
+    let raw_trade = transaction
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(COALESCE(net_profit, 0)), 0),
+                    COALESCE(SUM(COALESCE(volume, 0)), 0)
+             FROM history_archive_items
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND item_kind = 'trade' AND event_time_msc >= ?5;",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform,
+                HISTORY_COVERAGE_START_UTC_MSC
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_summary_validate_failed"))?;
+    let summary_trade = transaction
+        .query_row(
+            "SELECT COALESCE(SUM(trade_count), 0), COALESCE(SUM(net_profit), 0),
+                    COALESCE(SUM(volume), 0)
+             FROM history_daily_summary
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND generation = ?5 AND item_kind = 'trade';",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform,
+                generation
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_summary_validate_failed"))?;
+    let raw_capital = transaction
+        .query_row(
+            "SELECT COALESCE(SUM(CASE WHEN capital_kind = 'deposit' THEN capital_amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN capital_kind = 'withdrawal' THEN capital_amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN capital_kind = 'credit' THEN capital_amount ELSE 0 END), 0)
+             FROM history_archive_items
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND item_kind = 'deal' AND event_time_msc >= ?5;",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform,
+                HISTORY_COVERAGE_START_UTC_MSC
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_summary_validate_failed"))?;
+    let summary_capital = transaction
+        .query_row(
+            "SELECT COALESCE(SUM(deal_deposit), 0), COALESCE(SUM(deal_withdrawal), 0),
+                    COALESCE(SUM(deal_credit), 0)
+             FROM history_daily_summary
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND generation = ?5 AND item_kind = 'deal';",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform,
+                generation
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_summary_validate_failed"))?;
+    let close = |left: f64, right: f64| {
+        let tolerance = 1.0e-9_f64.max(left.abs().max(right.abs()) * 1.0e-9);
+        (left - right).abs() <= tolerance
+    };
+    if raw_trade.0 != summary_trade.0
+        || !close(raw_trade.1, summary_trade.1)
+        || !close(raw_trade.2, summary_trade.2)
+        || !close(raw_capital.0, summary_capital.0)
+        || !close(raw_capital.1, summary_capital.1)
+        || !close(raw_capital.2, summary_capital.2)
+    {
+        return Err(StoreError::new(
+            "bridge_store_history_summary_validation_mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn refresh_history_summary_days_tx(
+    transaction: &Transaction<'_>,
+    scope: &HistoryScope,
+    platform: &str,
+    generation: i64,
+    days: &[i64],
+) -> Result<(), StoreError> {
+    for day in days {
+        transaction
+            .execute(
+                "DELETE FROM history_daily_summary
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND generation = ?5 AND summary_day_utc_msc = ?6;",
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account,
+                    platform,
+                    generation,
+                    day
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_summary_incremental_failed"))?;
+        transaction
+            .execute(
+                "INSERT INTO history_daily_summary (
+                   terminal_instance_id, broker_server, login_account, platform,
+                   generation, summary_day_utc_msc, item_kind, direction, profit_bucket,
+                   trade_count, net_profit, volume, deal_deposit, deal_withdrawal, deal_credit
+                 )
+                 SELECT ?1, ?2, ?3, ?4, ?5, summary_day_utc_msc, 'trade',
+                        COALESCE(direction, ''),
+                        CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
+                             WHEN COALESCE(net_profit, 0) < 0 THEN 'loss' ELSE 'flat' END,
+                        COUNT(*), COALESCE(SUM(COALESCE(net_profit, 0)), 0),
+                        COALESCE(SUM(COALESCE(volume, 0)), 0), 0, 0, 0
+                 FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND item_kind = 'trade' AND event_time_msc >= 1735689600000
+                   AND summary_day_utc_msc = ?6
+                 GROUP BY summary_day_utc_msc, COALESCE(direction, ''),
+                          CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
+                               WHEN COALESCE(net_profit, 0) < 0 THEN 'loss' ELSE 'flat' END
+                 UNION ALL
+                 SELECT ?1, ?2, ?3, ?4, ?5, summary_day_utc_msc, 'deal', '', capital_kind,
+                        0, 0, 0,
+                        COALESCE(SUM(CASE WHEN capital_kind = 'deposit' THEN capital_amount ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN capital_kind = 'withdrawal' THEN capital_amount ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN capital_kind = 'credit' THEN capital_amount ELSE 0 END), 0)
+                 FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND item_kind = 'deal' AND event_time_msc >= 1735689600000
+                   AND capital_kind IS NOT NULL
+                   AND summary_day_utc_msc = ?6
+                 GROUP BY summary_day_utc_msc, capital_kind;",
+                params![scope.terminal_instance_id, scope.broker_server, scope.login_account, platform, generation, day],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_summary_incremental_failed"))?;
+    }
+    Ok(())
+}
+
 fn history_scopes_equal(left: &HistoryScope, right: &HistoryScope) -> bool {
     left.terminal_instance_id == right.terminal_instance_id
         && left.login_account == right.login_account
@@ -4576,7 +6111,7 @@ fn validate_history_job_kind(job_kind: &str) -> Result<(), StoreError> {
 }
 
 fn is_allowed_history_job_kind(job_kind: &str) -> bool {
-    matches!(job_kind, "recent" | "on_demand")
+    matches!(job_kind, "recent" | "on_demand" | "backfill")
 }
 
 fn validate_history_job_planning_request(
@@ -4586,16 +6121,41 @@ fn validate_history_job_planning_request(
     validate_history_job_kind(&request.job_kind)?;
     validate_history_priority(&request.priority)?;
     validate_history_range(request.range_start_utc_msc, request.range_end_utc_msc)?;
+    if request.range_start_utc_msc < HISTORY_COVERAGE_START_UTC_MSC
+        && request.now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC
+    {
+        return Err(StoreError::new("bridge_store_history_range_before_floor"));
+    }
     if request.window_msc <= 0 || request.now_utc_msc <= 0 {
         return Err(StoreError::new("bridge_store_history_planning_invalid"));
     }
-    if !matches!(
+    let valid_combination = matches!(
         (request.job_kind.as_str(), request.priority.as_str()),
         ("recent", "p2") | ("on_demand", "p1") | ("on_demand", "p3")
-    ) {
+    ) || request.job_kind == "backfill"
+        && request.priority == "p3"
+        && request.now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC;
+    if !valid_combination {
         return Err(StoreError::new(
             "bridge_store_history_planning_combination_invalid",
         ));
+    }
+    Ok(())
+}
+
+fn validate_history_tail_refresh_request(
+    request: &HistoryTailRefreshRequest,
+) -> Result<(), StoreError> {
+    validate_history_scope_values(&request.scope)?;
+    validate_history_platform(&request.platform)?;
+    if request.platform != "mt5"
+        || (request.range_start_utc_msc < HISTORY_COVERAGE_START_UTC_MSC
+            && request.now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC)
+        || request.range_end_utc_msc <= request.range_start_utc_msc
+        || request.now_utc_msc <= 0
+        || request.range_end_utc_msc > request.now_utc_msc.saturating_add(60_000)
+    {
+        return Err(StoreError::new("bridge_store_history_tail_invalid"));
     }
     Ok(())
 }
@@ -4837,7 +6397,7 @@ fn read_active_history_jobs_locked(
              WHERE terminal_instance_id = ?1
                AND broker_server = ?2 COLLATE NOCASE
                AND login_account = ?3
-               AND job_kind IN ('recent', 'on_demand')
+               AND job_kind IN ('recent', 'on_demand', 'backfill')
                AND state IN ('queued', 'retrying', 'running')
              ORDER BY range_start_utc_msc, range_end_utc_msc, job_id;",
             history_sync_job_select()
@@ -5556,6 +7116,7 @@ fn scalar_ticket(value: &serde_json::Value) -> Result<String, StoreError> {
     Ok(ticket)
 }
 
+#[derive(Clone)]
 struct HistoryPageRequest {
     page: i64,
     page_size: i64,
@@ -5565,6 +7126,8 @@ struct HistoryPageRequest {
     requested_range: Option<HistoryRequestedRange>,
     filter_sql: String,
     filter_values: Vec<SqlValue>,
+    direction: Option<String>,
+    profit_filter: Option<String>,
     capital_filter_sql: String,
     capital_filter_values: Vec<SqlValue>,
 }
@@ -5647,7 +7210,7 @@ fn parse_history_cursor_page_request(
         .map(|value| {
             value
                 .as_str()
-                .filter(|value| matches!(*value, "profit" | "loss"))
+                .filter(|value| matches!(*value, "profit" | "loss" | "flat"))
                 .map(str::to_owned)
                 .ok_or_else(|| StoreError::new("history_profit_filter_invalid"))
         })
@@ -5672,22 +7235,14 @@ fn parse_history_cursor_page_request(
         filter_values.push(SqlValue::Integer(entry_to));
     }
     if let Some(direction) = direction.as_deref() {
-        filter_sql.push_str(
-            " AND UPPER(COALESCE(json_extract(payload_json, '$.type'), \
-             json_extract(payload_json, '$.side'), '')) = ?",
-        );
+        filter_sql.push_str(" AND direction = ?");
         filter_values.push(SqlValue::Text(direction.to_owned()));
     }
     if let Some(profit_filter) = profit_filter.as_deref() {
         filter_sql.push_str(match profit_filter {
-            "profit" => {
-                " AND CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
-                 json_extract(payload_json, '$.profit'), 0) AS REAL) > 0"
-            }
-            "loss" => {
-                " AND CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
-                 json_extract(payload_json, '$.profit'), 0) AS REAL) < 0"
-            }
+            "profit" => " AND net_profit > 0",
+            "loss" => " AND net_profit < 0",
+            "flat" => " AND net_profit = 0",
             _ => unreachable!("profit filter validated above"),
         });
     }
@@ -5738,6 +7293,11 @@ fn validate_history_snapshot_request(
             .eq_ignore_ascii_case(&terminal.account_ref.broker_server)
         && snapshot.platform == terminal.platform;
     if !same_scope {
+        return Err(StoreError::new("history_snapshot_invalid"));
+    }
+    if snapshot.history_sync["history_revision"].as_i64() != Some(snapshot.history_revision)
+        || snapshot.history_sync["summary_revision"].as_i64() != Some(snapshot.summary_revision)
+    {
         return Err(StoreError::new("history_snapshot_invalid"));
     }
     if snapshot.query != request.query {
@@ -5812,7 +7372,11 @@ pub fn parse_history_evidence_request(
     let max_endpoint = now_utc_msc
         .checked_add(60_000)
         .ok_or_else(|| StoreError::new("history_evidence_range_invalid"))?;
-    if range_start_utc_msc >= range_end_utc_msc || range_end_utc_msc > max_endpoint {
+    if (range_start_utc_msc < HISTORY_COVERAGE_START_UTC_MSC
+        && now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC)
+        || range_start_utc_msc >= range_end_utc_msc
+        || range_end_utc_msc > max_endpoint
+    {
         return Err(StoreError::new("history_evidence_range_invalid"));
     }
     let raw_position_count = object
@@ -5884,7 +7448,11 @@ pub fn parse_history_requested_range(
         let max_endpoint = now_utc_msc
             .checked_add(60_000)
             .ok_or_else(|| StoreError::new("history_range_end_invalid"))?;
-        if range_end_utc_msc > max_endpoint || range_start_utc_msc >= range_end_utc_msc {
+        if (range_start_utc_msc < HISTORY_COVERAGE_START_UTC_MSC
+            && now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC)
+            || range_end_utc_msc > max_endpoint
+            || range_start_utc_msc >= range_end_utc_msc
+        {
             return Err(StoreError::new("history_range_invalid"));
         }
         return Ok(Some(HistoryRequestedRange {
@@ -5937,7 +7505,10 @@ pub fn parse_history_requested_range(
     let range_end_utc_msc = explicit_range_end_utc_msc.unwrap_or_else(|| {
         date_to_end_utc_msc.map_or(now_utc_msc, |date_to_end| date_to_end.min(now_utc_msc))
     });
-    if range_end_utc_msc <= range_start_utc_msc {
+    if (range_start_utc_msc < HISTORY_COVERAGE_START_UTC_MSC
+        && now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC)
+        || range_end_utc_msc <= range_start_utc_msc
+    {
         return Err(StoreError::new("history_range_invalid"));
     }
     Ok(Some(HistoryRequestedRange {
@@ -6006,6 +7577,8 @@ fn parse_history_page_request(
     let mut values = Vec::new();
     let mut capital_clauses = Vec::new();
     let mut capital_values = Vec::new();
+    let mut direction = None;
+    let mut profit_filter = None;
     for (key, comparison, end_of_day) in [
         ("date_from", ">=", false),
         ("entry_from", ">=", false),
@@ -6055,31 +7628,22 @@ fn parse_history_page_request(
         capital_values.push(SqlValue::Integer(range_end));
     }
     if let Some(value) = object.get("direction") {
-        let direction = value
+        let parsed_direction = value
             .as_str()
             .filter(|value| matches!(*value, "BUY" | "SELL"))
             .ok_or_else(|| StoreError::new("history_direction_invalid"))?;
-        clauses.push(
-            " AND UPPER(COALESCE(json_extract(payload_json, '$.type'), \
-             json_extract(payload_json, '$.side'), '')) = ?"
-                .to_owned(),
-        );
-        values.push(SqlValue::Text(direction.to_owned()));
+        clauses.push(" AND direction = ?".to_owned());
+        values.push(SqlValue::Text(parsed_direction.to_owned()));
+        direction = Some(parsed_direction.to_owned());
     }
     if let Some(value) = object.get("profit_filter") {
         match value.as_str() {
-            Some("profit") => clauses.push(
-                " AND CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
-                 json_extract(payload_json, '$.profit'), 0) AS REAL) > 0"
-                    .to_owned(),
-            ),
-            Some("loss") => clauses.push(
-                " AND CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
-                 json_extract(payload_json, '$.profit'), 0) AS REAL) < 0"
-                    .to_owned(),
-            ),
+            Some("profit") => clauses.push(" AND net_profit > 0".to_owned()),
+            Some("loss") => clauses.push(" AND net_profit < 0".to_owned()),
+            Some("flat") => clauses.push(" AND net_profit = 0".to_owned()),
             _ => return Err(StoreError::new("history_profit_filter_invalid")),
-        }
+        };
+        profit_filter = value.as_str().map(str::to_owned);
     }
     let evidence_position_ids = history_reference_list(object.get("evidence_position_ids"))?;
     let evidence_order_tickets = history_reference_list(object.get("evidence_order_tickets"))?;
@@ -6098,6 +7662,8 @@ fn parse_history_page_request(
         requested_range,
         filter_sql: clauses.concat(),
         filter_values: values,
+        direction,
+        profit_filter,
         capital_filter_sql: capital_clauses.concat(),
         capital_filter_values: capital_values,
     })
@@ -6229,13 +7795,31 @@ fn read_history_statistics(
     total: i64,
     filtered_values: Vec<SqlValue>,
 ) -> Result<serde_json::Value, StoreError> {
+    let scope = HistoryScope {
+        terminal_instance_id: terminal.terminal_instance_id.clone(),
+        broker_server: terminal.account_ref.broker_server.clone(),
+        login_account: terminal.account_ref.login.clone(),
+    };
+    let summary_generation =
+        history_summary_ready_generation(connection, &scope, &terminal.platform)?;
+    let Some(summary_generation) = summary_generation else {
+        return Ok(serde_json::Value::Null);
+    };
+    if !request.filter_sql.contains("rowid <=") {
+        return read_history_statistics_from_summary(
+            connection,
+            terminal,
+            request,
+            summary_generation,
+            total,
+        );
+    }
     let (total_profit, total_volume) = connection
         .query_row(
             &format!(
                 "SELECT \
-                   COALESCE(SUM(CAST(COALESCE(json_extract(payload_json, '$.net_profit'), \
-                     json_extract(payload_json, '$.profit'), 0) AS REAL)), 0), \
-                   COALESCE(SUM(CAST(COALESCE(json_extract(payload_json, '$.volume'), 0) AS REAL)), 0) \
+                   COALESCE(SUM(COALESCE(net_profit, 0)), 0), \
+                   COALESCE(SUM(COALESCE(volume, 0)), 0) \
                  FROM history_archive_items WHERE terminal_instance_id = ? \
                    AND broker_server = ? COLLATE NOCASE AND login_account = ? \
                    AND item_kind = 'trade'{};",
@@ -6249,16 +7833,11 @@ fn read_history_statistics(
     capital_values.extend(request.capital_filter_values.iter().cloned());
     let (deposit, withdrawal, credit) = connection
         .query_row(
-            &format!(
+                &format!(
                 "SELECT \
-                   COALESCE(SUM(CASE WHEN CAST(COALESCE(json_extract(payload_json, '$.type'), -1) AS INTEGER) = 2 \
-                     AND CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) >= 0 \
-                     THEN CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) ELSE 0 END), 0), \
-                   COALESCE(SUM(CASE WHEN CAST(COALESCE(json_extract(payload_json, '$.type'), -1) AS INTEGER) = 2 \
-                     AND CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) < 0 \
-                     THEN -CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) ELSE 0 END), 0), \
-                   COALESCE(SUM(CASE WHEN CAST(COALESCE(json_extract(payload_json, '$.type'), -1) AS INTEGER) = 3 \
-                     THEN CAST(COALESCE(json_extract(payload_json, '$.profit'), 0) AS REAL) ELSE 0 END), 0) \
+                   COALESCE(SUM(CASE WHEN capital_kind = 'deposit' THEN capital_amount ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN capital_kind = 'withdrawal' THEN capital_amount ELSE 0 END), 0), \
+                   COALESCE(SUM(CASE WHEN capital_kind = 'credit' THEN capital_amount ELSE 0 END), 0) \
                  FROM history_archive_items WHERE terminal_instance_id = ? \
                    AND broker_server = ? COLLATE NOCASE AND login_account = ? \
                    AND item_kind = 'deal'{};",
@@ -6299,6 +7878,691 @@ fn read_history_statistics(
     }))
 }
 
+fn history_summary_ready_generation(
+    connection: &Connection,
+    scope: &HistoryScope,
+    platform: &str,
+) -> Result<Option<i64>, StoreError> {
+    let state = read_history_scope_state_locked(connection, scope, platform)?;
+    if state.summary_status != "ready" || state.summary_revision != state.history_revision {
+        return Ok(None);
+    }
+    read_history_summary_build_locked(connection, scope, platform)
+        .map(|build| build.and_then(|value| value.active_generation))
+}
+
+fn query_history_raw_statistics_segment(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    start: Option<i64>,
+    end: Option<i64>,
+    direction: Option<&str>,
+    profit_filter: Option<&str>,
+) -> Result<(i64, f64, f64), StoreError> {
+    let mut predicates = String::from(
+        " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+          AND login_account = ?3 AND platform = ?4 AND item_kind = 'trade'",
+    );
+    let mut values = vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(terminal.platform.clone()),
+    ];
+    let mut index = 5;
+    if let Some(start) = start {
+        predicates.push_str(&format!(" AND event_time_msc >= ?{index}"));
+        values.push(SqlValue::Integer(start));
+        index += 1;
+    }
+    if let Some(end) = end {
+        predicates.push_str(&format!(" AND event_time_msc < ?{index}"));
+        values.push(SqlValue::Integer(end));
+        index += 1;
+    }
+    if let Some(direction) = direction {
+        predicates.push_str(&format!(" AND direction = ?{index}"));
+        values.push(SqlValue::Text(direction.to_owned()));
+        index += 1;
+    }
+    if let Some(profit_filter) = profit_filter {
+        predicates.push_str(match profit_filter {
+            "profit" => " AND net_profit > 0",
+            "loss" => " AND net_profit < 0",
+            "flat" => " AND net_profit = 0",
+            _ => "",
+        });
+    }
+    let query = format!(
+        "SELECT COUNT(*), COALESCE(SUM(COALESCE(net_profit, 0)), 0),
+                COALESCE(SUM(COALESCE(volume, 0)), 0)
+         FROM history_archive_items{predicates};"
+    );
+    let _ = index;
+    connection
+        .query_row(&query, params_from_iter(values), |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_query_failed"))
+}
+
+fn query_history_raw_capital_segment(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    start: Option<i64>,
+    end: Option<i64>,
+) -> Result<(f64, f64, f64), StoreError> {
+    let mut predicates = String::from(
+        " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+          AND login_account = ?3 AND platform = ?4 AND item_kind = 'deal'",
+    );
+    let mut values = vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(terminal.platform.clone()),
+    ];
+    let mut index = 5;
+    if let Some(start) = start {
+        predicates.push_str(&format!(" AND event_time_msc >= ?{index}"));
+        values.push(SqlValue::Integer(start));
+        index += 1;
+    }
+    if let Some(end) = end {
+        predicates.push_str(&format!(" AND event_time_msc < ?{index}"));
+        values.push(SqlValue::Integer(end));
+    }
+    let query = format!(
+        "SELECT COALESCE(SUM(CASE WHEN capital_kind = 'deposit' THEN capital_amount ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN capital_kind = 'withdrawal' THEN capital_amount ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN capital_kind = 'credit' THEN capital_amount ELSE 0 END), 0)
+         FROM history_archive_items{predicates};"
+    );
+    connection
+        .query_row(&query, params_from_iter(values), |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_query_failed"))
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HistoryTradeAggregate {
+    trade_count: i64,
+    gross_profit: f64,
+    gross_loss: f64,
+    win_count: i64,
+    loss_count: i64,
+    total_profit: f64,
+}
+
+impl HistoryTradeAggregate {
+    fn add(&mut self, other: Self) {
+        self.trade_count = self.trade_count.saturating_add(other.trade_count);
+        self.gross_profit += other.gross_profit;
+        self.gross_loss += other.gross_loss;
+        self.win_count = self.win_count.saturating_add(other.win_count);
+        self.loss_count = self.loss_count.saturating_add(other.loss_count);
+        self.total_profit += other.total_profit;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HistoryDailyTrade {
+    profit: f64,
+    trade_count: i64,
+    wins: i64,
+    losses: i64,
+}
+
+impl HistoryDailyTrade {
+    fn add(&mut self, other: Self) {
+        self.profit += other.profit;
+        self.trade_count = self.trade_count.saturating_add(other.trade_count);
+        self.wins = self.wins.saturating_add(other.wins);
+        self.losses = self.losses.saturating_add(other.losses);
+    }
+}
+
+fn summary_trade_predicates(
+    index: &mut usize,
+    values: &mut Vec<SqlValue>,
+    direction: Option<&str>,
+    profit_filter: Option<&str>,
+) -> String {
+    let mut predicates = String::new();
+    if let Some(direction) = direction {
+        predicates.push_str(&format!(" AND direction = ?{index}"));
+        values.push(SqlValue::Text(direction.to_owned()));
+        *index += 1;
+    }
+    if let Some(profit_filter) = profit_filter {
+        predicates.push_str(&format!(" AND profit_bucket = ?{index}"));
+        values.push(SqlValue::Text(profit_filter.to_owned()));
+        *index += 1;
+    }
+    predicates
+}
+
+fn read_history_summary_trade_rows(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    generation: i64,
+    start: Option<i64>,
+    end: Option<i64>,
+    direction: Option<&str>,
+    profit_filter: Option<&str>,
+) -> Result<(BTreeMap<i64, HistoryDailyTrade>, HistoryTradeAggregate), StoreError> {
+    let mut values = vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(terminal.platform.clone()),
+        SqlValue::Integer(generation),
+    ];
+    let mut index = 6;
+    let mut predicates = String::from(
+        " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+          AND login_account = ?3 AND platform = ?4 AND generation = ?5
+          AND item_kind = 'trade'",
+    );
+    if let Some(start) = start {
+        predicates.push_str(&format!(" AND summary_day_utc_msc >= ?{index}"));
+        values.push(SqlValue::Integer(start));
+        index += 1;
+    }
+    if let Some(end) = end {
+        predicates.push_str(&format!(" AND summary_day_utc_msc < ?{index}"));
+        values.push(SqlValue::Integer(end));
+        index += 1;
+    }
+    predicates.push_str(&summary_trade_predicates(
+        &mut index,
+        &mut values,
+        direction,
+        profit_filter,
+    ));
+    let query = format!(
+        "SELECT summary_day_utc_msc, profit_bucket,
+                COALESCE(trade_count, 0), COALESCE(net_profit, 0),
+                COALESCE(volume, 0)
+         FROM history_daily_summary{predicates}
+         ORDER BY summary_day_utc_msc, direction, profit_bucket;"
+    );
+    let mut statement = connection
+        .prepare(&query)
+        .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+    let mut daily: BTreeMap<i64, HistoryDailyTrade> = BTreeMap::new();
+    let mut aggregate = HistoryTradeAggregate::default();
+    let rows = statement
+        .query_map(params_from_iter(values), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+    for row in rows {
+        let (day, bucket, count, profit, _volume) =
+            row.map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+        let day_entry = daily.entry(day).or_default();
+        day_entry.profit += profit;
+        day_entry.trade_count = day_entry.trade_count.saturating_add(count);
+        match bucket.as_str() {
+            "profit" => {
+                day_entry.wins = day_entry.wins.saturating_add(count);
+                aggregate.gross_profit += profit;
+                aggregate.win_count = aggregate.win_count.saturating_add(count);
+            }
+            "loss" => {
+                day_entry.losses = day_entry.losses.saturating_add(count);
+                aggregate.gross_loss += -profit;
+                aggregate.loss_count = aggregate.loss_count.saturating_add(count);
+            }
+            _ => {}
+        }
+        aggregate.trade_count = aggregate.trade_count.saturating_add(count);
+        aggregate.total_profit += profit;
+    }
+    Ok((daily, aggregate))
+}
+
+fn read_history_raw_trade_rows(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    start: i64,
+    end: i64,
+    direction: Option<&str>,
+    profit_filter: Option<&str>,
+) -> Result<(BTreeMap<i64, HistoryDailyTrade>, HistoryTradeAggregate), StoreError> {
+    let mut values = vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(terminal.platform.clone()),
+        SqlValue::Integer(start),
+        SqlValue::Integer(end),
+    ];
+    let index = 7;
+    let mut predicates = String::from(
+        " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+          AND login_account = ?3 AND platform = ?4 AND item_kind = 'trade'
+          AND event_time_msc >= ?5 AND event_time_msc < ?6",
+    );
+    if let Some(direction) = direction {
+        predicates.push_str(&format!(" AND direction = ?{index}"));
+        values.push(SqlValue::Text(direction.to_owned()));
+    }
+    if let Some(profit_filter) = profit_filter {
+        predicates.push_str(match profit_filter {
+            "profit" => " AND net_profit > 0",
+            "loss" => " AND net_profit < 0",
+            "flat" => " AND net_profit = 0",
+            _ => "",
+        });
+    }
+    let query = format!(
+        "SELECT COALESCE(summary_day_utc_msc,
+                   event_time_msc - (event_time_msc % 86400000)),
+                COUNT(*), COALESCE(SUM(COALESCE(net_profit, 0)), 0),
+                COALESCE(SUM(CASE WHEN COALESCE(net_profit, 0) > 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN COALESCE(net_profit, 0) < 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN COALESCE(net_profit, 0) > 0 THEN net_profit ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN COALESCE(net_profit, 0) < 0 THEN -net_profit ELSE 0 END), 0)
+         FROM history_archive_items{predicates}
+         GROUP BY COALESCE(summary_day_utc_msc,
+                   event_time_msc - (event_time_msc % 86400000))
+         ORDER BY 1;"
+    );
+    let mut statement = connection
+        .prepare(&query)
+        .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+    let rows = statement
+        .query_map(params_from_iter(values), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, f64>(5)?,
+                row.get::<_, f64>(6)?,
+            ))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+    let mut daily = BTreeMap::new();
+    let mut aggregate = HistoryTradeAggregate::default();
+    for row in rows {
+        let (day, count, profit, wins, losses, gross_profit, gross_loss) =
+            row.map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+        daily
+            .entry(day)
+            .or_insert_with(HistoryDailyTrade::default)
+            .add(HistoryDailyTrade {
+                profit,
+                trade_count: count,
+                wins,
+                losses,
+            });
+        aggregate.trade_count = aggregate.trade_count.saturating_add(count);
+        aggregate.total_profit += profit;
+        aggregate.win_count = aggregate.win_count.saturating_add(wins);
+        aggregate.loss_count = aggregate.loss_count.saturating_add(losses);
+        aggregate.gross_profit += gross_profit;
+        aggregate.gross_loss += gross_loss;
+    }
+    Ok((daily, aggregate))
+}
+
+fn history_chart_range_parts(
+    range: Option<&HistoryRequestedRange>,
+) -> (Option<i64>, Option<i64>, Vec<(i64, i64)>) {
+    const DAY_MSC: i64 = 86_400_000;
+    let Some(range) = range else {
+        return (None, None, Vec::new());
+    };
+    let summary_start = if range.range_start_utc_msc.rem_euclid(DAY_MSC) == 0 {
+        range.range_start_utc_msc
+    } else {
+        range
+            .range_start_utc_msc
+            .saturating_add(DAY_MSC - range.range_start_utc_msc.rem_euclid(DAY_MSC))
+    };
+    let summary_end = range.range_end_utc_msc - range.range_end_utc_msc.rem_euclid(DAY_MSC);
+    let mut raw_segments = Vec::with_capacity(2);
+    let first_end = summary_start.min(range.range_end_utc_msc);
+    if range.range_start_utc_msc < first_end {
+        raw_segments.push((range.range_start_utc_msc, first_end));
+    }
+    let second_start = summary_end.max(range.range_start_utc_msc);
+    if second_start < range.range_end_utc_msc {
+        raw_segments.push((second_start, range.range_end_utc_msc));
+    }
+    let (summary_start, summary_end) = if summary_start < summary_end {
+        (Some(summary_start), Some(summary_end))
+    } else {
+        (None, None)
+    };
+    (summary_start, summary_end, raw_segments)
+}
+
+fn read_history_chart_data_from_summary(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    request: &HistoryPageRequest,
+    generation: i64,
+    history_sync: serde_json::Value,
+) -> Result<serde_json::Value, StoreError> {
+    let (summary_start, summary_end, raw_segments) =
+        history_chart_range_parts(request.requested_range.as_ref());
+    let (mut daily, mut aggregate) = read_history_summary_trade_rows(
+        connection,
+        terminal,
+        generation,
+        summary_start,
+        summary_end,
+        request.direction.as_deref(),
+        request.profit_filter.as_deref(),
+    )?;
+    for (start, end) in raw_segments {
+        let (raw_daily, raw_aggregate) = read_history_raw_trade_rows(
+            connection,
+            terminal,
+            start,
+            end,
+            request.direction.as_deref(),
+            request.profit_filter.as_deref(),
+        )?;
+        for (day, value) in raw_daily {
+            daily.entry(day).or_default().add(value);
+        }
+        aggregate.add(raw_aggregate);
+    }
+    let balance = connection
+        .query_row(
+            "SELECT CAST(COALESCE(json_extract(payload_json, '$.balance'), 0) AS REAL)
+             FROM account_latest WHERE terminal_instance_id = ?1
+               AND connection_epoch = ?2 LIMIT 1;",
+            params![terminal.terminal_instance_id, terminal.connection_epoch],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?
+        .unwrap_or(0.0);
+    let round = |value: f64| (value * 100.0).round() / 100.0;
+    let initial_capital = (balance - aggregate.total_profit).max(0.0);
+    let mut running = 0.0;
+    let mut peak = initial_capital;
+    let mut maximum_drawdown: f64 = 0.0;
+    let mut cumulative = Vec::with_capacity(daily.len());
+    let mut drawdown = Vec::with_capacity(daily.len());
+    let daily = daily
+        .into_iter()
+        .map(|(day, value)| {
+            let profit = round(value.profit);
+            running = round(running + profit);
+            cumulative.push(running);
+            let equity = initial_capital + running;
+            peak = peak.max(equity);
+            let current_drawdown = if peak > 0.0 {
+                round((1.0 - equity / peak) * 100.0)
+            } else {
+                0.0
+            };
+            maximum_drawdown = maximum_drawdown.max(current_drawdown);
+            drawdown.push(current_drawdown);
+            let date = connection
+                .query_row(
+                    "SELECT strftime('%Y-%m-%d', ?1 / 1000, 'unixepoch');",
+                    params![day],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+            Ok::<_, StoreError>(serde_json::json!({
+                "date": date,
+                "profit": profit,
+                "trade_count": value.trade_count,
+                "wins": value.wins,
+                "losses": value.losses,
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let average_win = if aggregate.win_count > 0 {
+        aggregate.gross_profit / aggregate.win_count as f64
+    } else {
+        0.0
+    };
+    let average_loss = if aggregate.loss_count > 0 {
+        aggregate.gross_loss / aggregate.loss_count as f64
+    } else {
+        0.0
+    };
+    let profit_factor = if average_loss > 0.0 {
+        round(average_win / average_loss)
+    } else if average_win > 0.0 {
+        999.0
+    } else {
+        0.0
+    };
+    Ok(serde_json::json!({
+        "daily": daily,
+        "cumulative": cumulative,
+        "drawdown": drawdown,
+        "stats": {
+            "total_trades": aggregate.trade_count,
+            "win_rate": if aggregate.trade_count > 0 {
+                round(aggregate.win_count as f64 / aggregate.trade_count as f64 * 100.0)
+            } else {
+                0.0
+            },
+            "profit_factor": profit_factor,
+            "max_drawdown": maximum_drawdown,
+            "gross_profit": round(aggregate.gross_profit),
+            "gross_loss": round(aggregate.gross_loss),
+        },
+        "history_sync": history_sync,
+        "source": format!("{}_sqlite", terminal.platform),
+    }))
+}
+
+fn read_history_statistics_from_summary(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    request: &HistoryPageRequest,
+    generation: i64,
+    total_hint: i64,
+) -> Result<serde_json::Value, StoreError> {
+    const DAY_MSC: i64 = 86_400_000;
+    let range = request.requested_range.as_ref();
+    let (summary_start, summary_end, raw_segments) = if let Some(range) = range {
+        let summary_start = if range.range_start_utc_msc.rem_euclid(DAY_MSC) == 0 {
+            range.range_start_utc_msc
+        } else {
+            range
+                .range_start_utc_msc
+                .saturating_add(DAY_MSC - range.range_start_utc_msc.rem_euclid(DAY_MSC))
+        };
+        let summary_end = range.range_end_utc_msc - range.range_end_utc_msc.rem_euclid(DAY_MSC);
+        let segments = if summary_start < summary_end {
+            vec![
+                (range.range_start_utc_msc, Some(summary_start)),
+                (summary_end, Some(range.range_end_utc_msc)),
+            ]
+        } else {
+            vec![(range.range_start_utc_msc, Some(range.range_end_utc_msc))]
+        };
+        (Some(summary_start), Some(summary_end), segments)
+    } else {
+        (None, None, Vec::new())
+    };
+    let mut summary_predicate = String::from(
+        " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+          AND login_account = ?3 AND platform = ?4 AND generation = ?5
+          AND item_kind = 'trade'",
+    );
+    let mut summary_values = vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(terminal.platform.clone()),
+        SqlValue::Integer(generation),
+    ];
+    let mut index = 6;
+    if let (Some(start), Some(end)) = (summary_start, summary_end)
+        && start < end
+    {
+        summary_predicate.push_str(&format!(" AND summary_day_utc_msc >= ?{index}"));
+        summary_values.push(SqlValue::Integer(start));
+        index += 1;
+        summary_predicate.push_str(&format!(" AND summary_day_utc_msc < ?{index}"));
+        summary_values.push(SqlValue::Integer(end));
+        index += 1;
+    }
+    if let Some(direction) = request.direction.as_deref() {
+        summary_predicate.push_str(&format!(" AND direction = ?{index}"));
+        summary_values.push(SqlValue::Text(direction.to_owned()));
+        index += 1;
+    }
+    if let Some(bucket) = request.profit_filter.as_deref() {
+        summary_predicate.push_str(&format!(" AND profit_bucket = ?{index}"));
+        summary_values.push(SqlValue::Text(bucket.to_owned()));
+    }
+    let summary = connection
+        .query_row(
+            &format!(
+                "SELECT COALESCE(SUM(trade_count), 0), COALESCE(SUM(net_profit), 0),
+                        COALESCE(SUM(volume), 0)
+                 FROM history_daily_summary{summary_predicate};"
+            ),
+            params_from_iter(summary_values),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_summary_failed"))?;
+    let mut trade_count = summary.0;
+    let mut total_profit = summary.1;
+    let mut total_volume = summary.2;
+    let mut deposit = 0.0;
+    let mut withdrawal = 0.0;
+    let mut credit = 0.0;
+    if let (Some(start), Some(end)) = (summary_start, summary_end) {
+        if start < end {
+            let capital = connection
+                .query_row(
+                    "SELECT COALESCE(SUM(deal_deposit), 0),
+                            COALESCE(SUM(deal_withdrawal), 0),
+                            COALESCE(SUM(deal_credit), 0)
+                     FROM history_daily_summary
+                     WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4 AND generation = ?5
+                       AND item_kind = 'deal' AND summary_day_utc_msc >= ?6
+                       AND summary_day_utc_msc < ?7;",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                        generation,
+                        start,
+                        end
+                    ],
+                    |row| {
+                        Ok((
+                            row.get::<_, f64>(0)?,
+                            row.get::<_, f64>(1)?,
+                            row.get::<_, f64>(2)?,
+                        ))
+                    },
+                )
+                .map_err(|_| {
+                    StoreError::new("bridge_store_history_statistics_capital_range_failed")
+                })?;
+            deposit += capital.0;
+            withdrawal += capital.1;
+            credit += capital.2;
+        }
+    } else {
+        let capital = connection
+            .query_row(
+                "SELECT COALESCE(SUM(deal_deposit), 0), COALESCE(SUM(deal_withdrawal), 0),
+                        COALESCE(SUM(deal_credit), 0)
+                 FROM history_daily_summary
+                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4 AND generation = ?5
+                   AND item_kind = 'deal';",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.platform,
+                    generation
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_statistics_capital_failed"))?;
+        deposit = capital.0;
+        withdrawal = capital.1;
+        credit = capital.2;
+    }
+    for (start, end) in raw_segments {
+        let Some(end) = end else { continue };
+        if start >= end {
+            continue;
+        }
+        let raw = query_history_raw_statistics_segment(
+            connection,
+            terminal,
+            Some(start),
+            Some(end),
+            request.direction.as_deref(),
+            request.profit_filter.as_deref(),
+        )?;
+        trade_count += raw.0;
+        total_profit += raw.1;
+        total_volume += raw.2;
+        let capital =
+            query_history_raw_capital_segment(connection, terminal, Some(start), Some(end))?;
+        deposit += capital.0;
+        withdrawal += capital.1;
+        credit += capital.2;
+    }
+    // The materialized generation is authoritative for aggregate totals.  A
+    // caller-provided page COUNT is retained only for API compatibility and
+    // must never turn a partial/empty summary into a fabricated larger total.
+    let _ = total_hint;
+    let total = trade_count;
+    let balance = connection
+        .query_row(
+            "SELECT CAST(COALESCE(json_extract(payload_json, '$.balance'), 0) AS REAL)
+             FROM account_latest WHERE terminal_instance_id = ?1 AND connection_epoch = ?2 LIMIT 1;",
+            params![terminal.terminal_instance_id, terminal.connection_epoch],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_query_failed"))?
+        .unwrap_or(0.0);
+    let net_result = total_profit + credit + deposit - withdrawal;
+    let round = |value: f64| (value * 100.0).round() / 100.0;
+    Ok(serde_json::json!({
+        "account_principal": round(balance - net_result),
+        "account_balance": round(balance),
+        "total_profit": round(total_profit),
+        "credit": round(credit),
+        "deposit": round(deposit),
+        "withdrawal": round(withdrawal),
+        "net_result": round(net_result),
+        "trade_count": total,
+        "total_volume": round(total_volume),
+    }))
+}
+
 fn read_history_cursor_statistics(
     connection: &Connection,
     terminal: &TerminalDescriptor,
@@ -6317,6 +8581,8 @@ fn read_history_cursor_statistics(
         requested_range: Some(request.requested_range.clone()),
         filter_sql: format!("{bounded_prefix}{}", request.filter_sql),
         filter_values: Vec::new(),
+        direction: request.query.direction.clone(),
+        profit_filter: request.query.profit_filter.clone(),
         capital_filter_sql: format!("{bounded_prefix}{}", request.capital_filter_sql),
         capital_filter_values: {
             let mut values = vec![
@@ -6470,6 +8736,80 @@ fn history_scalar(
     })
 }
 
+fn history_number(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        object.get(*key).and_then(|value| {
+            value
+                .as_f64()
+                .or_else(|| value.as_i64().map(|number| number as f64))
+                .or_else(|| value.as_u64().map(|number| number as f64))
+                .or_else(|| value.as_str().and_then(|text| text.parse::<f64>().ok()))
+                .filter(|number| number.is_finite())
+        })
+    })
+}
+
+fn history_normalized_direction(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    history_scalar(object, &["type", "side"]).map(|value| {
+        match value.to_ascii_uppercase().as_str() {
+            // MT4/MT5 encode BUY/SELL as the first two deal/order type values.
+            "0" => "BUY".to_owned(),
+            "1" => "SELL".to_owned(),
+            value => value.to_owned(),
+        }
+    })
+}
+
+fn history_capital_columns(
+    item_kind: &str,
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> (Option<String>, Option<f64>) {
+    if item_kind != "deal" {
+        return (None, None);
+    }
+    // MT5 emits DEAL_TYPE_BALANCE/DEAL_TYPE_CREDIT (2/3), while the MT4 EA
+    // keeps the original OP_BALANCE/OP_CREDIT values in `deal_type` (6/7).
+    // Accept an already-normalized capital kind as well so replayed archive
+    // rows do not depend on one terminal's wire naming.
+    let explicit_kind = history_scalar(object, &["capital_kind"]).and_then(|value| {
+        match value.to_ascii_lowercase().as_str() {
+            "deposit" | "withdrawal" | "credit" => Some(value.to_ascii_lowercase()),
+            _ => None,
+        }
+    });
+    let amount = history_number(object, &["capital_amount", "amount", "profit"]).unwrap_or(0.0);
+    if let Some(kind) = explicit_kind {
+        let normalized_amount = if kind == "withdrawal" {
+            amount.abs()
+        } else {
+            amount
+        };
+        return (Some(kind), Some(normalized_amount));
+    }
+    let Some(type_code) = history_number(object, &["type", "deal_type"]) else {
+        return (None, None);
+    };
+    if (type_code - 2.0).abs() < f64::EPSILON || (type_code - 6.0).abs() < f64::EPSILON {
+        return (
+            Some(if amount >= 0.0 {
+                "deposit".to_owned()
+            } else {
+                "withdrawal".to_owned()
+            }),
+            Some(amount.abs()),
+        );
+    }
+    if (type_code - 3.0).abs() < f64::EPSILON || (type_code - 7.0).abs() < f64::EPSILON {
+        return (Some("credit".to_owned()), Some(amount));
+    }
+    (None, None)
+}
+
 fn history_time_msc(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<i64, StoreError> {
@@ -6480,13 +8820,20 @@ fn history_time_msc(
         .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct HistoryUpsertResult {
+    changed_item_count: usize,
+    affected_days: Vec<i64>,
+}
+
 fn upsert_history_items(
     transaction: &Transaction<'_>,
     terminal: &TerminalDescriptor,
     item_kind: &str,
     items: &[serde_json::Value],
     observed_at_utc_msc: i64,
-) -> Result<(), StoreError> {
+) -> Result<HistoryUpsertResult, StoreError> {
+    let mut result = HistoryUpsertResult::default();
     for item in items {
         let object = item
             .as_object()
@@ -6518,16 +8865,103 @@ fn upsert_history_items(
         if payload_json.len() > MAX_HISTORY_ITEM_BYTES {
             return Err(StoreError::new("bridge_store_history_item_too_large"));
         }
+        let direction = (item_kind == "trade")
+            .then(|| history_normalized_direction(object))
+            .flatten();
+        let net_profit = (item_kind == "trade")
+            .then(|| history_number(object, &["net_profit", "profit"]).unwrap_or(0.0));
+        let volume =
+            (item_kind == "trade").then(|| history_number(object, &["volume"]).unwrap_or(0.0));
+        let (capital_kind, capital_amount) = history_capital_columns(item_kind, object);
+        let summary_day_utc_msc = event_time_msc - event_time_msc.rem_euclid(86_400_000);
+        let existing = transaction
+            .query_row(
+                "SELECT platform, event_time_msc, position_id, order_ticket, symbol, payload_json,
+                        direction, net_profit, volume, capital_kind, capital_amount,
+                        summary_day_utc_msc
+                 FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND item_kind = ?4 AND item_id = ?5
+                 LIMIT 1;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    item_kind,
+                    item_id,
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<f64>>(7)?,
+                        row.get::<_, Option<f64>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<f64>>(10)?,
+                        row.get::<_, Option<i64>>(11)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_item_query_failed"))?;
+        let changed = existing.as_ref().is_none_or(
+            |(
+                existing_platform,
+                existing_time,
+                existing_position,
+                existing_order,
+                existing_symbol,
+                existing_payload,
+                existing_direction,
+                existing_net_profit,
+                existing_volume,
+                existing_capital_kind,
+                existing_capital_amount,
+                existing_summary_day,
+            )| {
+                *existing_platform != terminal.platform
+                    || *existing_time != event_time_msc
+                    || *existing_position != position_id
+                    || *existing_order != order_ticket
+                    || *existing_symbol != symbol
+                    || *existing_payload != payload_json
+                    || *existing_direction != direction
+                    || *existing_net_profit != net_profit
+                    || *existing_volume != volume
+                    || *existing_capital_kind != capital_kind
+                    || *existing_capital_amount != capital_amount
+                    || *existing_summary_day != Some(summary_day_utc_msc)
+            },
+        );
+        if changed {
+            if let Some(existing_day) = existing.as_ref().and_then(|row| row.11) {
+                result.affected_days.push(existing_day);
+            }
+            result.affected_days.push(summary_day_utc_msc);
+        }
         transaction
             .execute(
                 "INSERT INTO history_archive_items (\
                    terminal_instance_id, broker_server, login_account, platform, item_kind,\
-                   item_id, event_time_msc, position_id, order_ticket, symbol, payload_json, updated_at_utc_msc\
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)\
+                   item_id, event_time_msc, position_id, order_ticket, symbol, payload_json,\
+                   direction, net_profit, volume, capital_kind, capital_amount,\
+                   summary_day_utc_msc, updated_at_utc_msc\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,\
+                           ?13, ?14, ?15, ?16, ?17, ?18)\
                  ON CONFLICT(terminal_instance_id, broker_server, login_account, item_kind, item_id)\
                  DO UPDATE SET platform = excluded.platform, event_time_msc = excluded.event_time_msc,\
                    position_id = excluded.position_id, order_ticket = excluded.order_ticket,\
                    symbol = excluded.symbol, payload_json = excluded.payload_json,\
+                   direction = excluded.direction, net_profit = excluded.net_profit,
+                   volume = excluded.volume, capital_kind = excluded.capital_kind,
+                   capital_amount = excluded.capital_amount,
+                   summary_day_utc_msc = excluded.summary_day_utc_msc,
                    updated_at_utc_msc = excluded.updated_at_utc_msc;",
                 params![
                     terminal.terminal_instance_id,
@@ -6541,12 +8975,21 @@ fn upsert_history_items(
                     order_ticket,
                     symbol,
                     payload_json,
+                    direction,
+                    net_profit,
+                    volume,
+                    capital_kind,
+                    capital_amount,
+                    summary_day_utc_msc,
                     observed_at_utc_msc,
                 ],
             )
             .map_err(|_| StoreError::new("bridge_store_history_item_write_failed"))?;
+        if changed {
+            result.changed_item_count = result.changed_item_count.saturating_add(1);
+        }
     }
-    Ok(())
+    Ok(result)
 }
 
 fn read_json_rows<P: rusqlite::Params>(
@@ -6626,6 +9069,7 @@ fn read_history_sync_metadata_locked(
         login_account: terminal.account_ref.login.clone(),
     };
     let ranges = read_history_coverage_ranges_locked(connection, &scope)?;
+    let scope_state = read_history_scope_state_locked(connection, &scope, &terminal.platform)?;
     const HOUR_MSC: i64 = 60 * 60 * 1_000;
     let is_mt5 = terminal.platform.eq_ignore_ascii_case("mt5");
     let is_mt4 = terminal.platform == "mt4";
@@ -6681,6 +9125,8 @@ fn read_history_sync_metadata_locked(
         .max(latest_job_progress)
         .max(latest_coverage_progress);
     let backfill_pending = !archive_complete || requested_range_complete == Some(false);
+    let coverage_complete =
+        requested_range_complete.unwrap_or(archive_complete) && scope_state.coverage_complete;
     let (requested_start, requested_end, coverage_start, coverage_end) =
         if let Some(range) = request.requested_range.as_ref() {
             let coverage_start = coverage_bounds.map(|(start, _)| start);
@@ -6712,6 +9158,21 @@ fn read_history_sync_metadata_locked(
         "coverage_end_utc_msc": coverage_end,
         "backfill_pending": backfill_pending,
         "last_progress_at_utc_msc": last_progress_at_utc_msc,
+        "coverage_complete": coverage_complete,
+        "head_ready": scope_state.head_ready,
+        "head_range_start_utc_msc": scope_state
+            .head_range_start_utc_msc
+            .map_or(serde_json::Value::Null, serde_json::Value::from),
+        "head_range_end_utc_msc": scope_state
+            .head_range_end_utc_msc
+            .map_or(serde_json::Value::Null, serde_json::Value::from),
+        "freshness_state": scope_state.freshness_state,
+        "fresh_through_utc_msc": scope_state
+            .fresh_through_utc_msc
+            .map_or(serde_json::Value::Null, serde_json::Value::from),
+        "history_revision": scope_state.history_revision,
+        "summary_revision": scope_state.summary_revision,
+        "summary_status": scope_state.summary_status,
     });
     if is_mt4 {
         metadata["terminal_visible_history_complete"] = serde_json::Value::Bool(state.is_complete);
@@ -6803,10 +9264,11 @@ fn hydrate_history_trade_protection(
     let query = format!(
         "SELECT payload_json FROM history_archive_items \
          WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
-           AND login_account = ? AND item_kind = 'history_order' \
+           AND login_account = ? AND platform = ? AND item_kind = 'history_order' \
            AND (item_id IN ({placeholders}) OR order_ticket IN ({placeholders})){range_sql};"
     );
     let mut values = history_scope_values(terminal);
+    values.push(SqlValue::Text(terminal.platform.clone()));
     values.extend(opening_orders.iter().cloned().map(SqlValue::Text));
     values.extend(opening_orders.iter().cloned().map(SqlValue::Text));
     if let Some(range) = requested_range {
@@ -6885,7 +9347,7 @@ fn query_history_evidence(
     let query = format!(
         "SELECT payload_json FROM history_archive_items \
          WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
-           AND login_account = ? AND item_kind = ? AND ({}) \
+           AND login_account = ? AND platform = ? AND item_kind = ? AND ({}) \
          {range_sql} ORDER BY event_time_msc, item_id LIMIT ?;",
         predicates.join(" OR ")
     );
@@ -6893,6 +9355,7 @@ fn query_history_evidence(
         SqlValue::Text(terminal.terminal_instance_id.clone()),
         SqlValue::Text(terminal.account_ref.broker_server.clone()),
         SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(terminal.platform.clone()),
         SqlValue::Text(kind.to_owned()),
     ];
     values.extend(positions.iter().cloned().map(SqlValue::Text));
@@ -6998,6 +9461,23 @@ fn runtime_schema_status(connection: &Connection) -> Result<RuntimeSchemaStatus,
             .any(|required| !columns.iter().any(|existing| existing == required))
         {
             return Ok(RuntimeSchemaStatus::Incompatible);
+        }
+        // These scalar archive columns were added after the original history
+        // table and are repaired additively below.  Their absence is a normal
+        // migration state, not evidence that the user's database is corrupt.
+        if *table == "history_archive_items"
+            && [
+                "direction",
+                "net_profit",
+                "volume",
+                "capital_kind",
+                "capital_amount",
+                "summary_day_utc_msc",
+            ]
+            .iter()
+            .any(|required| !columns.iter().any(|existing| existing == required))
+        {
+            needs_migration = true;
         }
     }
 
@@ -7114,12 +9594,28 @@ mod tests {
                 assert!(table_exists(&connection, table).expect("runtime table"));
             }
             for (table, expected_columns) in REQUIRED_SCHEMA {
+                let mut expected = expected_columns
+                    .iter()
+                    .map(|column| (*column).to_owned())
+                    .collect::<Vec<_>>();
+                if *table == "history_archive_items" {
+                    expected.splice(
+                        expected.len() - 1..expected.len() - 1,
+                        [
+                            "direction",
+                            "net_profit",
+                            "volume",
+                            "capital_kind",
+                            "capital_amount",
+                            "summary_day_utc_msc",
+                        ]
+                        .into_iter()
+                        .map(str::to_owned),
+                    );
+                }
                 assert_eq!(
                     table_columns(&connection, table).expect("fresh table columns"),
-                    expected_columns
-                        .iter()
-                        .map(|column| (*column).to_owned())
-                        .collect::<Vec<_>>(),
+                    expected,
                     "fresh native schema drifted for {table}"
                 );
             }
@@ -7143,7 +9639,12 @@ mod tests {
                     "idx_history_archive_order",
                     "idx_history_archive_page",
                     "idx_history_archive_position",
+                    "idx_history_archive_summary_scope",
+                    "idx_history_archive_trade_filter",
                     "idx_history_coverage_ranges_scope",
+                    "idx_history_daily_summary_active",
+                    "idx_history_scope_state_updated",
+                    "idx_history_summary_builds_updated",
                     "idx_history_sync_jobs_claim",
                     "idx_history_sync_jobs_scope",
                     "idx_native_command_ledger_status",
@@ -7596,7 +10097,7 @@ mod tests {
         );
         assert_eq!(page["pagination"]["total_count"], 1);
         assert_eq!(page["source"], "mt5_sqlite");
-        assert_eq!(page["statistics"]["total_profit"], 12.5);
+        assert_eq!(page["statistics"], serde_json::Value::Null);
         let scoped_open_position = store
             .read_history_archive_page(
                 &terminal,
@@ -7684,7 +10185,7 @@ mod tests {
             )
             .expect("filtered history page");
         assert_eq!(filtered["pagination"]["total_count"], 0);
-        assert_eq!(filtered["statistics"]["total_profit"], 0.0);
+        assert_eq!(filtered["statistics"], serde_json::Value::Null);
         assert_eq!(
             store
                 .read_history_archive_page(
@@ -8121,6 +10622,9 @@ mod tests {
                 },
             )
             .expect("history chart batch");
+        store
+            .ensure_history_summary(&terminal, first_day + 4 * 86_400_000)
+            .expect("history chart summary");
 
         let chart = store
             .read_history_chart_data(&terminal, &serde_json::json!({}))
@@ -8161,7 +10665,7 @@ mod tests {
         let isolated = store
             .read_history_chart_data(&other, &serde_json::json!({}))
             .expect("isolated chart");
-        assert_eq!(isolated["stats"]["total_trades"], 0);
+        assert_eq!(isolated["stats"], serde_json::Value::Null);
         assert!(
             isolated["daily"]
                 .as_array()
@@ -9380,6 +11884,615 @@ mod tests {
             connection_epoch: 3,
             worker_version: Some("3.0.0".to_owned()),
         }
+    }
+
+    fn normalized_trade(
+        ticket: i64,
+        event_time_msc: i64,
+        direction: &str,
+        profit: f64,
+        volume: f64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "deal_ticket": ticket,
+            "ticket": ticket,
+            "time_msc": event_time_msc,
+            "type": direction,
+            "profit": profit,
+            "volume": volume,
+            "symbol": "EURUSD",
+        })
+    }
+
+    #[test]
+    fn legacy_history_scalars_migrate_backfill_and_respect_2025_summary_floor() {
+        let root = unique_test_directory("history-scalar-migration");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        let terminal = history_terminal("123456");
+        let old_time = HISTORY_COVERAGE_START_UTC_MSC - 86_400_000;
+        let current_time = HISTORY_COVERAGE_START_UTC_MSC + 86_400_000 + 123;
+        {
+            let connection = Connection::open(&path).expect("legacy connection");
+            for (item_id, event_time, direction, profit) in [
+                ("old", old_time, "BUY", 5.0),
+                ("new", current_time, "SELL", -2.0),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO history_archive_items (
+                           terminal_instance_id, broker_server, login_account, platform,
+                           item_kind, item_id, event_time_msc, position_id, order_ticket,
+                           symbol, payload_json, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, 'trade', ?5, ?6, NULL, NULL,
+                           'EURUSD', ?7, ?8);",
+                        params![
+                            terminal.terminal_instance_id,
+                            terminal.account_ref.broker_server,
+                            terminal.account_ref.login,
+                            terminal.platform,
+                            item_id,
+                            event_time,
+                            serde_json::json!({
+                                "deal_ticket": item_id,
+                                "time_msc": event_time,
+                                "type": direction,
+                                "profit": profit,
+                                "volume": 0.2,
+                            })
+                            .to_string(),
+                            current_time,
+                        ],
+                    )
+                    .expect("legacy archive row");
+            }
+        }
+        let store = OutboxStore::open_existing(&path).expect("additive scalar migration");
+        {
+            let connection = store.connection.lock().expect("scalar migration lock");
+            let columns =
+                table_columns(&connection, "history_archive_items").expect("scalar columns");
+            for column in [
+                "direction",
+                "net_profit",
+                "volume",
+                "capital_kind",
+                "capital_amount",
+                "summary_day_utc_msc",
+            ] {
+                assert!(columns.iter().any(|existing| existing == column));
+            }
+            let migrated = connection
+                .query_row(
+                    "SELECT direction, net_profit, volume, summary_day_utc_msc
+                     FROM history_archive_items WHERE item_id = 'new';",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, f64>(1)?,
+                            row.get::<_, f64>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )
+                .expect("migrated scalar values");
+            assert_eq!(migrated.0, "SELL");
+            assert_eq!(migrated.1, -2.0);
+            assert_eq!(migrated.2, 0.2);
+            assert_eq!(
+                migrated.3,
+                current_time - current_time.rem_euclid(86_400_000)
+            );
+        }
+        let state = store
+            .rebuild_history_summary(&terminal, current_time + 1_000)
+            .expect("summary rebuild after migration");
+        assert_eq!(state.summary_status, "ready");
+        let connection = store.connection.lock().expect("summary migration lock");
+        let (summary_count, summary_profit) = connection
+            .query_row(
+                "SELECT COALESCE(SUM(trade_count), 0), COALESCE(SUM(net_profit), 0)
+                 FROM history_daily_summary
+                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4 AND generation = ?5;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.platform,
+                    1_i64,
+                ],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+            )
+            .expect("summary floor query");
+        assert_eq!(summary_count, 1);
+        assert_eq!(summary_profit, -2.0);
+        drop(connection);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove scalar migration fixture");
+    }
+
+    #[test]
+    fn history_summary_generation_validation_keeps_old_active_on_failure() {
+        let root = unique_test_directory("history-summary-generation");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("summary generation store");
+        let terminal = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![normalized_trade(8001, floor + 1_000, "BUY", 2.5, 0.4)],
+                    next_cursor: HistoryCursor {
+                        time_msc: floor + 2_000,
+                        ticket: "8001".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: floor + 3_000,
+                },
+            )
+            .expect("summary source batch");
+        let first = store
+            .rebuild_history_summary(&terminal, floor + 4_000)
+            .expect("first summary generation");
+        assert_eq!(first.summary_status, "ready");
+        let active_generation = {
+            let connection = store.connection.lock().expect("generation lock");
+            connection
+                .query_row(
+                    "SELECT active_generation FROM history_summary_builds
+                     WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4;",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("active generation")
+        };
+        {
+            let connection = store.connection.lock().expect("corrupt scalar lock");
+            connection
+                .execute(
+                    "UPDATE history_archive_items SET net_profit = 'bad'
+                     WHERE terminal_instance_id = ?1 AND item_id = '8001';",
+                    params![terminal.terminal_instance_id],
+                )
+                .expect("corrupt scalar for validation");
+        }
+        let failed = store
+            .rebuild_history_summary(&terminal, floor + 5_000)
+            .expect_err("raw/summary mismatch must fail closed");
+        assert_eq!(
+            failed.code(),
+            "bridge_store_history_summary_validation_mismatch"
+        );
+        let unavailable = store
+            .history_scope_state(&terminal)
+            .expect("unavailable state");
+        assert_eq!(unavailable.summary_status, "unavailable");
+        let (active_after_failure, building_after_failure) = {
+            let connection = store.connection.lock().expect("generation after failure");
+            connection
+                .query_row(
+                    "SELECT active_generation, building_generation FROM history_summary_builds
+                     WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4;",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                    ],
+                    |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+                )
+                .expect("generation after failure")
+        };
+        assert_eq!(active_after_failure, Some(active_generation));
+        assert_eq!(building_after_failure, None);
+        {
+            let connection = store.connection.lock().expect("repair scalar lock");
+            connection
+                .execute(
+                    "UPDATE history_archive_items SET net_profit = 2.5
+                     WHERE terminal_instance_id = ?1 AND item_id = '8001';",
+                    params![terminal.terminal_instance_id],
+                )
+                .expect("repair scalar");
+        }
+        let repaired = store
+            .ensure_history_summary(&terminal, floor + 6_000)
+            .expect("rebuild after repair");
+        assert_eq!(repaired.summary_status, "ready");
+        assert_eq!(repaired.summary_revision, repaired.history_revision);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove generation fixture");
+    }
+
+    #[test]
+    fn ready_summary_duplicate_batch_is_stable_and_cross_day_changes_rebuild_both_days() {
+        let root = unique_test_directory("history-summary-incremental");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("incremental summary store");
+        let terminal = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let day_one = floor + 86_400_000;
+        let day_two = floor + 2 * 86_400_000;
+        let day_three = floor + 3 * 86_400_000;
+        let first_batch = HistoryArchiveBatch {
+            deals: Vec::new(),
+            history_orders: Vec::new(),
+            trades: vec![
+                normalized_trade(8101, day_one + 100, "BUY", 1.0, 0.1),
+                normalized_trade(8102, day_two + 100, "SELL", -0.5, 0.2),
+            ],
+            next_cursor: HistoryCursor {
+                time_msc: day_three,
+                ticket: "8102".to_owned(),
+            },
+            has_more: false,
+            observed_at_utc_msc: day_three + 100,
+        };
+        store
+            .persist_history_archive_batch(&terminal, &first_batch)
+            .expect("initial summary batch");
+        let ready = store
+            .ensure_history_summary(&terminal, day_three + 200)
+            .expect("initial summary ready");
+        assert_eq!(ready.summary_revision, ready.history_revision);
+        let before = store
+            .history_scope_state(&terminal)
+            .expect("before duplicate");
+        store
+            .persist_history_archive_batch(&terminal, &first_batch)
+            .expect("duplicate summary batch");
+        let after_duplicate = store
+            .history_scope_state(&terminal)
+            .expect("after duplicate");
+        assert_eq!(after_duplicate.history_revision, before.history_revision);
+        assert_eq!(after_duplicate.summary_revision, before.summary_revision);
+        let moved = HistoryArchiveBatch {
+            deals: Vec::new(),
+            history_orders: Vec::new(),
+            trades: vec![normalized_trade(8101, day_three + 100, "BUY", 1.0, 0.1)],
+            next_cursor: HistoryCursor {
+                time_msc: day_three + 200,
+                ticket: "8101".to_owned(),
+            },
+            has_more: false,
+            observed_at_utc_msc: day_three + 300,
+        };
+        store
+            .persist_history_archive_batch(&terminal, &moved)
+            .expect("cross-day replacement");
+        let after_move = store.history_scope_state(&terminal).expect("after move");
+        assert_eq!(after_move.history_revision, before.history_revision + 1);
+        assert_eq!(after_move.summary_revision, after_move.history_revision);
+        let connection = store.connection.lock().expect("incremental summary lock");
+        let generation = connection
+            .query_row(
+                "SELECT active_generation FROM history_summary_builds
+                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.platform,
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("incremental generation");
+        let old_day_count = connection
+            .query_row(
+                "SELECT COALESCE(SUM(trade_count), 0) FROM history_daily_summary
+                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4 AND generation = ?5
+                   AND summary_day_utc_msc = ?6 AND item_kind = 'trade';",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.platform,
+                    generation,
+                    day_one,
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("old day summary");
+        let new_day_count = connection
+            .query_row(
+                "SELECT COALESCE(SUM(trade_count), 0) FROM history_daily_summary
+                 WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4 AND generation = ?5
+                   AND summary_day_utc_msc = ?6 AND item_kind = 'trade';",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.platform,
+                    generation,
+                    day_three,
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("new day summary");
+        assert_eq!(old_day_count, 0);
+        assert_eq!(new_day_count, 1);
+        drop(connection);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove incremental summary fixture");
+    }
+
+    #[test]
+    fn summary_stats_and_chart_are_exact_for_millisecond_edges_and_filters() {
+        let root = unique_test_directory("history-summary-boundaries");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("boundary summary store");
+        let terminal = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let day_one = floor + 86_400_000;
+        let day_two = floor + 2 * 86_400_000;
+        let day_three = floor + 3 * 86_400_000;
+        let start = day_one + 1_000;
+        let end = day_three + 1_000;
+        let trades = vec![
+            normalized_trade(8200, day_one + 500, "BUY", 100.0, 1.0),
+            normalized_trade(8201, day_one + 1_234, "BUY", 2.0, 0.2),
+            normalized_trade(8202, day_two + 1_000, "BUY", 3.0, 0.3),
+            normalized_trade(8203, day_two + 2_000, "SELL", 4.0, 0.4),
+            normalized_trade(8204, day_three + 500, "BUY", 5.0, 0.5),
+            normalized_trade(8205, day_three + 2_000, "BUY", -9.0, 0.6),
+        ];
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades,
+                    next_cursor: HistoryCursor {
+                        time_msc: day_three + 3_000,
+                        ticket: "8205".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: day_three + 4_000,
+                },
+            )
+            .expect("boundary trades");
+        store
+            .ensure_history_summary(&terminal, day_three + 5_000)
+            .expect("boundary summary");
+        let parameters = serde_json::json!({
+            "range_start_utc_msc": start,
+            "range_end_utc_msc": end,
+            "direction": "BUY",
+            "profit_filter": "profit",
+            "page": 1,
+            "page_size": 20,
+        });
+        let page = store
+            .read_history_archive_page_at(&terminal, &parameters, end + 1)
+            .expect("boundary page");
+        assert_eq!(page["pagination"]["total_count"], 3);
+        assert_eq!(page["statistics"]["trade_count"], 3);
+        assert_eq!(page["statistics"]["total_profit"], 10.0);
+        assert_eq!(page["statistics"]["total_volume"], 1.0);
+        let chart_parameters = serde_json::json!({
+            "range_start_utc_msc": start,
+            "range_end_utc_msc": end,
+            "direction": "BUY",
+            "profit_filter": "profit",
+        });
+        let chart = store
+            .read_history_chart_data_at(&terminal, &chart_parameters, end + 1)
+            .expect("boundary chart");
+        assert_eq!(chart["stats"]["total_trades"], 3);
+        assert_eq!(chart["stats"]["gross_profit"], 10.0);
+        assert_eq!(chart["daily"].as_array().expect("boundary daily").len(), 3);
+        assert_eq!(chart["cumulative"], serde_json::json!([2.0, 5.0, 10.0]));
+        drop(store);
+        fs::remove_dir_all(root).expect("remove boundary fixture");
+    }
+
+    #[test]
+    fn pending_cursor_snapshot_has_null_aggregates_then_ready_first_page_has_one_chart() {
+        let root = unique_test_directory("history-cursor-summary");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("cursor summary store");
+        let terminal = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let range_end = floor + 3 * 86_400_000;
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![
+                        normalized_trade(8301, floor + 1_000, "BUY", 1.0, 0.1),
+                        normalized_trade(8302, floor + 86_400_000 + 1_000, "SELL", -2.0, 0.2),
+                        normalized_trade(8303, floor + 2 * 86_400_000 + 1_000, "BUY", 3.0, 0.3),
+                    ],
+                    next_cursor: HistoryCursor {
+                        time_msc: range_end,
+                        ticket: "8303".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: range_end + 1_000,
+                },
+            )
+            .expect("cursor summary source");
+        let parameters = serde_json::json!({
+            "range_start_utc_msc": floor,
+            "range_end_utc_msc": range_end,
+            "page_size": 2,
+        });
+        let pending = store
+            .read_history_cursor_page_at(&terminal, &parameters, range_end + 2_000)
+            .expect("pending cursor page");
+        assert_eq!(pending["statistics"], serde_json::Value::Null);
+        assert_eq!(pending["chart_data"], serde_json::Value::Null);
+        let snapshot_id = pending["history_snapshot_id"]
+            .as_str()
+            .expect("pending snapshot")
+            .to_owned();
+        let pending_cursor = pending["next_cursor"]
+            .as_str()
+            .expect("pending cursor")
+            .to_owned();
+        store
+            .ensure_history_summary(&terminal, range_end + 3_000)
+            .expect("cursor summary ready");
+        let ready = store
+            .read_history_cursor_page_at(&terminal, &parameters, range_end + 4_000)
+            .expect("ready cursor page");
+        assert!(ready["chart_data"].is_object());
+        assert_eq!(ready["chart_data"]["stats"]["total_trades"], 3);
+        let ready_snapshot_id = ready["history_snapshot_id"]
+            .as_str()
+            .expect("ready snapshot")
+            .to_owned();
+        let ready_cursor = ready["next_cursor"]
+            .as_str()
+            .expect("ready cursor")
+            .to_owned();
+        let continuation = store
+            .read_history_cursor_page_at(
+                &terminal,
+                &serde_json::json!({
+                    "range_start_utc_msc": floor,
+                    "range_end_utc_msc": range_end,
+                    "page_size": 2,
+                    "snapshot_id": ready_snapshot_id,
+                    "cursor": ready_cursor,
+                }),
+                range_end + 5_000,
+            )
+            .expect("ready cursor continuation");
+        assert!(continuation.get("chart_data").is_none());
+        assert!(!pending_cursor.is_empty());
+        assert!(!snapshot_id.is_empty());
+        drop(store);
+        fs::remove_dir_all(root).expect("remove cursor summary fixture");
+    }
+
+    #[test]
+    fn mt4_mt5_summary_scopes_are_isolated_for_same_account() {
+        let root = unique_test_directory("history-platform-scope");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("platform scope store");
+        let mut mt4 = history_terminal("123456");
+        mt4.platform = "mt4".to_owned();
+        let mt5 = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        for (terminal, ticket, profit) in [(&mt4, 8401, 4.0), (&mt5, 8402, 7.0)] {
+            store
+                .persist_history_archive_batch(
+                    terminal,
+                    &HistoryArchiveBatch {
+                        deals: Vec::new(),
+                        history_orders: Vec::new(),
+                        trades: vec![normalized_trade(ticket, floor + ticket, "BUY", profit, 0.1)],
+                        next_cursor: HistoryCursor {
+                            time_msc: floor + ticket + 1,
+                            ticket: ticket.to_string(),
+                        },
+                        has_more: false,
+                        observed_at_utc_msc: floor + ticket + 2,
+                    },
+                )
+                .expect("platform archive batch");
+            store
+                .ensure_history_summary(terminal, floor + ticket + 3)
+                .expect("platform summary");
+        }
+        let mt4_state = store.history_scope_state(&mt4).expect("mt4 state");
+        let mt5_state = store.history_scope_state(&mt5).expect("mt5 state");
+        assert_eq!(mt4_state.history_revision, 1);
+        assert_eq!(mt5_state.history_revision, 1);
+        assert_eq!(mt4_state.summary_revision, mt4_state.history_revision);
+        assert_eq!(mt5_state.summary_revision, mt5_state.history_revision);
+        let mt4_chart = store
+            .read_history_chart_data_at(&mt4, &serde_json::json!({}), floor + 1_000_000)
+            .expect("mt4 chart");
+        let mt5_chart = store
+            .read_history_chart_data_at(&mt5, &serde_json::json!({}), floor + 1_000_000)
+            .expect("mt5 chart");
+        assert_eq!(mt4_chart["stats"]["total_trades"], 1);
+        assert_eq!(mt5_chart["stats"]["total_trades"], 1);
+        assert_eq!(mt4_chart["stats"]["gross_profit"], 4.0);
+        assert_eq!(mt5_chart["stats"]["gross_profit"], 7.0);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove platform scope fixture");
+    }
+
+    #[test]
+    fn mt4_capital_events_normalize_into_materialized_summary() {
+        let root = unique_test_directory("history-mt4-capital-summary");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("MT4 capital summary store");
+        let mut terminal = history_terminal("123456");
+        terminal.platform = "mt4".to_owned();
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let day_end = floor + 86_400_000;
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: vec![
+                        serde_json::json!({
+                            "category": "capital",
+                            "ticket": 8501,
+                            "deal_type": 6,
+                            "amount": 100.0,
+                            "time_msc": floor + 100,
+                        }),
+                        serde_json::json!({
+                            "category": "capital",
+                            "ticket": 8502,
+                            "deal_type": 6,
+                            "amount": -20.0,
+                            "time_msc": floor + 200,
+                        }),
+                        serde_json::json!({
+                            "category": "capital",
+                            "ticket": 8503,
+                            "deal_type": 7,
+                            "amount": 3.0,
+                            "time_msc": floor + 300,
+                        }),
+                    ],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: day_end,
+                        ticket: "8503".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: day_end + 100,
+                },
+            )
+            .expect("MT4 capital batch");
+        store
+            .ensure_history_summary(&terminal, day_end + 200)
+            .expect("MT4 capital summary");
+        let page = store
+            .read_history_archive_page_at(&terminal, &serde_json::json!({}), day_end + 300)
+            .expect("MT4 capital stats");
+        assert_eq!(page["statistics"]["deposit"], 100.0);
+        assert_eq!(page["statistics"]["withdrawal"], 20.0);
+        assert_eq!(page["statistics"]["credit"], 3.0);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove MT4 capital summary fixture");
     }
 
     #[test]
@@ -10948,6 +14061,398 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove batch fixture");
+    }
+
+    #[test]
+    fn history_revision_is_idempotent_for_duplicates_and_advances_for_changes() {
+        let root = unique_test_directory("history-revision");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("revision store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let start = HISTORY_COVERAGE_START_UTC_MSC + 1_000;
+        let item_time = HISTORY_COVERAGE_START_UTC_MSC + 6_000;
+        let first = history_job_for("job_01JREVISION01", &scope, start, start + 9_000, "p1");
+        store
+            .enqueue_history_job(&first)
+            .expect("first revision job");
+        let first_claim = store
+            .claim_history_job(&scope, HISTORY_COVERAGE_START_UTC_MSC + 100_000, 100_000)
+            .expect("first claim")
+            .expect("first lease");
+        let original = serde_json::json!({
+            "deal_ticket": 7001,
+            "time_msc": item_time,
+            "symbol": "EURUSD",
+            "profit": 1.0
+        });
+        let first_result = store
+            .persist_history_job_batch(
+                &terminal,
+                &first_claim.job_id,
+                first_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: vec![original.clone()],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: first.range_end_utc_msc,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: HISTORY_COVERAGE_START_UTC_MSC + 110_000,
+                },
+                7_000,
+                HISTORY_COVERAGE_START_UTC_MSC + 120_000,
+            )
+            .expect("first persist");
+        assert_eq!(first_result.changed_item_count, 1);
+        assert_eq!(first_result.history_revision, 1);
+
+        let duplicate = history_job_for(
+            "job_01JREVISION02",
+            &scope,
+            item_time - 1_000,
+            item_time + 4_000,
+            "p1",
+        );
+        store
+            .enqueue_history_job(&duplicate)
+            .expect("duplicate revision job");
+        let duplicate_claim = store
+            .claim_history_job(&scope, HISTORY_COVERAGE_START_UTC_MSC + 130_000, 100_000)
+            .expect("duplicate claim")
+            .expect("duplicate lease");
+        let duplicate_result = store
+            .persist_history_job_batch(
+                &terminal,
+                &duplicate_claim.job_id,
+                duplicate_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: vec![original],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: duplicate.range_end_utc_msc,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: HISTORY_COVERAGE_START_UTC_MSC + 140_000,
+                },
+                5_000,
+                HISTORY_COVERAGE_START_UTC_MSC + 150_000,
+            )
+            .expect("duplicate persist");
+        assert_eq!(duplicate_result.changed_item_count, 0);
+        assert_eq!(duplicate_result.history_revision, 1);
+
+        let changed = history_job_for(
+            "job_01JREVISION03",
+            &scope,
+            item_time - 500,
+            item_time + 5_000,
+            "p1",
+        );
+        store
+            .enqueue_history_job(&changed)
+            .expect("changed revision job");
+        let changed_claim = store
+            .claim_history_job(&scope, HISTORY_COVERAGE_START_UTC_MSC + 160_000, 100_000)
+            .expect("changed claim")
+            .expect("changed lease");
+        let mut replacement = serde_json::json!({
+            "deal_ticket": 7001,
+            "time_msc": item_time,
+            "symbol": "GBPUSD",
+            "profit": 1.0
+        });
+        replacement["comment"] = serde_json::Value::String("revision".to_owned());
+        let changed_result = store
+            .persist_history_job_batch(
+                &terminal,
+                &changed_claim.job_id,
+                changed_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: vec![replacement],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: changed.range_end_utc_msc,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: HISTORY_COVERAGE_START_UTC_MSC + 170_000,
+                },
+                5_000,
+                HISTORY_COVERAGE_START_UTC_MSC + 180_000,
+            )
+            .expect("changed persist");
+        assert_eq!(changed_result.changed_item_count, 1);
+        assert_eq!(changed_result.history_revision, 2);
+        let state = store
+            .history_scope_state(&terminal)
+            .expect("revision state");
+        assert_eq!(state.history_revision, 2);
+        // An on-demand P1 revision is not a recent/tail freshness proof.
+        assert_eq!(state.freshness_state, "stale");
+        drop(store);
+        fs::remove_dir_all(root).expect("remove revision fixture");
+    }
+
+    #[test]
+    fn tail_refresh_ignores_coverage_merges_later_endpoint_and_marks_refreshing() {
+        let root = unique_test_directory("history-tail-planner");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("tail planner store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        {
+            let connection = store.connection.lock().expect("coverage lock");
+            connection
+                .execute(
+                    "INSERT INTO history_coverage_ranges (
+                       terminal_instance_id, broker_server, login_account,
+                       range_start_utc_msc, range_end_utc_msc,
+                       observed_at_utc_msc, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        floor,
+                        floor + 20_000,
+                        floor + 30_000
+                    ],
+                )
+                .expect("seed coverage");
+        }
+        let first = store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope: scope.clone(),
+                platform: "mt5".to_owned(),
+                range_start_utc_msc: floor + 1_000,
+                range_end_utc_msc: floor + 10_000,
+                now_utc_msc: floor + 10_000,
+            })
+            .expect("first tail plan");
+        assert_eq!(first.attached_jobs.len(), 1);
+        assert!(first.attached_jobs[0].job_id.starts_with("tail_refresh_"));
+        let second = store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope,
+                platform: "mt5".to_owned(),
+                range_start_utc_msc: floor + 2_000,
+                range_end_utc_msc: floor + 15_000,
+                now_utc_msc: floor + 15_000,
+            })
+            .expect("merged tail plan");
+        assert_eq!(second.attached_jobs.len(), 1);
+        assert_eq!(
+            second.attached_jobs[0].job_id,
+            first.attached_jobs[0].job_id
+        );
+        assert_eq!(second.attached_jobs[0].range_end_utc_msc, floor + 15_000);
+        assert_eq!(
+            store
+                .history_scope_state(&terminal)
+                .expect("tail state")
+                .freshness_state,
+            "refreshing"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove tail planner fixture");
+    }
+
+    #[test]
+    fn recent_freshness_waits_for_fixed_endpoint_and_backfill_does_not_fake_it() {
+        let root = unique_test_directory("history-freshness-boundary");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("freshness store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+
+        let mut backfill =
+            history_job_for("job_01JFRESHBACKFILL", &scope, floor, floor + 100, "p3");
+        backfill.job_kind = "backfill".to_owned();
+        store.enqueue_history_job(&backfill).expect("backfill job");
+        let backfill_claim = store
+            .claim_history_job(&scope, floor + 1_000, 100_000)
+            .expect("backfill claim")
+            .expect("backfill lease");
+        store
+            .persist_history_job_batch(
+                &terminal,
+                &backfill_claim.job_id,
+                backfill_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: backfill.range_end_utc_msc,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: floor + 1_100,
+                },
+                7_000,
+                floor + 1_200,
+            )
+            .expect("backfill persist");
+        let after_backfill = store
+            .history_scope_state(&terminal)
+            .expect("backfill state");
+        assert!(!after_backfill.head_ready);
+        assert!(!after_backfill.coverage_complete);
+        assert_eq!(after_backfill.freshness_state, "stale");
+        assert_eq!(after_backfill.fresh_through_utc_msc, None);
+
+        let mut recent = history_job_for(
+            "job_01JFRESHRECENT",
+            &scope,
+            floor + 100,
+            floor + 1_000,
+            "p2",
+        );
+        recent.job_kind = "recent".to_owned();
+        store.enqueue_history_job(&recent).expect("recent job");
+        let recent_claim = store
+            .claim_history_job(&scope, floor + 2_000, 100_000)
+            .expect("recent claim")
+            .expect("recent lease");
+        let partial = store
+            .persist_history_job_batch(
+                &terminal,
+                &recent_claim.job_id,
+                recent_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: floor + 500,
+                        ticket: "11".to_owned(),
+                    },
+                    has_more: true,
+                    observed_at_utc_msc: floor + 2_100,
+                },
+                7_000,
+                floor + 2_200,
+            )
+            .expect("recent partial persist");
+        assert_eq!(partial.status, HistoryJobBatchStatus::Checkpointed);
+        let refreshing = store
+            .history_scope_state(&terminal)
+            .expect("refreshing state");
+        assert_eq!(refreshing.freshness_state, "refreshing");
+        assert_eq!(refreshing.fresh_through_utc_msc, None);
+        assert!(!refreshing.head_ready);
+
+        store
+            .persist_history_job_batch(
+                &terminal,
+                &recent_claim.job_id,
+                recent_claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: recent.range_end_utc_msc,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: floor + 2_300,
+                },
+                7_000,
+                floor + 2_400,
+            )
+            .expect("recent completion persist");
+        let fresh = store.history_scope_state(&terminal).expect("fresh state");
+        assert_eq!(fresh.freshness_state, "fresh");
+        assert_eq!(fresh.fresh_through_utc_msc, Some(recent.range_end_utc_msc));
+        assert!(fresh.head_ready);
+        assert_eq!(
+            fresh.head_range_start_utc_msc,
+            Some(recent.range_start_utc_msc)
+        );
+        assert_eq!(fresh.head_range_end_utc_msc, Some(recent.range_end_utc_msc));
+        assert!(fresh.coverage_complete);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove freshness fixture");
+    }
+
+    #[test]
+    fn incomplete_full_range_cursor_uses_ready_head_without_pseudo_zero_or_leakage() {
+        let root = unique_test_directory("history-head-cursor");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("head cursor store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let job = NewHistorySyncJob {
+            job_id: "job_01JHEADREADY01".to_owned(),
+            scope: scope.clone(),
+            job_kind: "recent".to_owned(),
+            priority: "p2".to_owned(),
+            range_start_utc_msc: floor + 1_000,
+            range_end_utc_msc: floor + 10_000,
+            cursor_time_msc: floor + 1_000,
+            cursor_ticket: String::new(),
+            window_msc: 9_000,
+            created_at_utc_msc: floor + 100_000,
+        };
+        store.enqueue_history_job(&job).expect("head job");
+        let claim = store
+            .claim_history_job(&scope, floor + 101_000, 100_000)
+            .expect("head claim")
+            .expect("head lease");
+        store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![serde_json::json!({
+                        "deal_ticket": 8001,
+                        "time_msc": floor + 9_000,
+                        "symbol": "EURUSD",
+                        "profit": 2.0
+                    })],
+                    next_cursor: HistoryCursor {
+                        time_msc: floor + 10_000,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: floor + 102_000,
+                },
+                9_000,
+                floor + 103_000,
+            )
+            .expect("head persist");
+        let page = store
+            .read_history_cursor_page_at(
+                &terminal,
+                &serde_json::json!({
+                    "range_start_utc_msc": floor,
+                    "range_end_utc_msc": floor + 20_000,
+                    "page_size": 20
+                }),
+                floor + 20_000,
+            )
+            .expect("incomplete head page");
+        assert_eq!(page["orders"].as_array().map(Vec::len), Some(1));
+        assert_eq!(page["pagination"]["total_count"], 1);
+        assert_eq!(page["history_sync"]["coverage_complete"], false);
+        assert_eq!(page["history_sync"]["head_ready"], true);
+        assert_eq!(page["history_sync"]["summary_status"], "pending");
+        assert_eq!(page["has_more"], false);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove head cursor fixture");
     }
 
     #[test]

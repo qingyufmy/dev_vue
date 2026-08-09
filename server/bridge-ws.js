@@ -1146,8 +1146,10 @@ export function boundedHistoryExportPageCount(value, maximumPages = 50) {
 export const HISTORY_EXACT_RANGE_CAPABILITY = 'history_exact_range_v1'
 export const HISTORY_CURSOR_CAPABILITY = 'history_cursor_v1'
 // Keep this aligned with the native Bridge store's history archive coverage.
-// The all-account range is an exact half-open interval from 2000-01-01 UTC.
-export const HISTORY_COVERAGE_START_UTC_MSC = 946684800000
+// The supported all-account range is an exact half-open interval from
+// 2025-01-01 UTC. Older local rows are retained but are outside the product
+// query/export contract.
+export const HISTORY_COVERAGE_START_UTC_MSC = 1735689600000
 const RECENT_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000
 
 export function hasHistoryExactRangeCapability(route) {
@@ -1179,7 +1181,10 @@ function historyExactRangeFields(params = {}) {
 function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
   const rangeStart = Number(params?.range_start_utc_msc)
   const rangeEnd = Number(params?.range_end_utc_msc)
-  const platformStart = Number(resolvedRange?.platform_start_utc_msc)
+  const platformStart = Math.max(
+    HISTORY_COVERAGE_START_UTC_MSC,
+    Number(resolvedRange?.platform_start_utc_msc),
+  )
   const ownershipStart = Number(resolvedRange?.ownership_start_utc_msc)
   const maxRangeEnd = Number.isSafeInteger(nowUtcMsc) ? nowUtcMsc + 60_000 : NaN
   const { hasStart, hasEnd } = historyExactRangeFields(params)
@@ -1535,6 +1540,9 @@ export async function resolveHistoryRange(
   if (requestedScope === 'custom') {
     const closeFrom = parseStrictUtcDateBoundary(params?.close_from)
     if (closeFrom === null) throw historyError('bridge_history_custom_start_invalid')
+    if (closeFrom < HISTORY_COVERAGE_START_UTC_MSC) {
+      throw historyError('bridge_history_before_supported_start')
+    }
     const closeTo = params?.close_to == null || params.close_to === ''
       ? null : nextUtcDateBoundary(params.close_to)
     if (params?.close_to != null && params.close_to !== '' && closeTo === null) {
@@ -1545,7 +1553,7 @@ export async function resolveHistoryRange(
   } else if (requestedScope === 'recent') {
     rangeStart = nowUtcMsc - RECENT_HISTORY_WINDOW_MS
   } else if (requestedScope === 'platform') {
-    rangeStart = platformStart
+    rangeStart = Math.max(HISTORY_COVERAGE_START_UTC_MSC, platformStart)
   } else if (requestedScope === 'all') {
     rangeStart = HISTORY_COVERAGE_START_UTC_MSC
   } else if (requestedScope === 'ownership') {
@@ -1636,14 +1644,19 @@ export function broadcastAdminEvent(scope, reason, data = {}, options = {}) {
 
 export function buildBridgeDataChangedEvent(update = {}) {
   const stream = String(update.stream || '')
-  if (!['account', 'positions'].includes(stream)) return null
+  if (!['account', 'positions', 'history'].includes(stream)) return null
   const revision = Number(update.revision)
-  return {
+  const event = {
     type:'bridge_data_changed',
     streams:[stream],
     terminal_instance_id:String(update.terminal?.terminal_instance_id || ''),
     revision:Number.isSafeInteger(revision) && revision > 0 ? revision : null,
   }
+  if (stream === 'history') {
+    event.history_revision = event.revision
+    event.freshness_state = String(update.freshness_state || '') || null
+  }
+  return event
 }
 
 export function buildObserverBrowserPayload(data = {}) {
@@ -1657,9 +1670,15 @@ export function buildObserverBrowserPayload(data = {}) {
   }
   if (data.type === 'bridge_data_changed') {
     const streams = [...new Set((Array.isArray(data.streams) ? data.streams : [])
-      .map(value => String(value || '')).filter(value => ['account', 'positions'].includes(value)))]
+      .map(value => String(value || '')).filter(value => ['account', 'positions', 'history'].includes(value)))]
     if (!streams.length) return null
-    return { type:'bridge_data_changed', streams, _source: 'observer_channel' }
+    const payload = { type:'bridge_data_changed', streams, _source: 'observer_channel' }
+    if (streams.includes('history')) {
+      const revision = Number(data.history_revision ?? data.revision)
+      payload.history_revision = Number.isSafeInteger(revision) && revision > 0 ? revision : null
+      payload.freshness_state = String(data.freshness_state || '') || null
+    }
+    return payload
   }
   return null
 }

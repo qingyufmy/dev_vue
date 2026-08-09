@@ -380,6 +380,15 @@ describe('bridge history range/export completeness contract', () => {
       range_end_utc_msc:Date.parse('2026-08-10T00:00:00.000Z'),
     })
 
+    queryOne.mockResolvedValue({
+      platform_start_utc_msc:registrationStart,
+      ownership_start_utc_msc:ownershipStart,
+      ownership_history_id:77,
+    })
+    await expect(resolveHistoryRange(42, {
+      history_scope:'custom', close_from:'2024-12-31', close_to:'2026-01-01',
+    }, route, now)).rejects.toMatchObject({ code:'bridge_history_before_supported_start' })
+
     for (const params of [
       { history_scope:'custom' },
       { history_scope:'custom', close_from:'2026-02-30' },
@@ -442,7 +451,7 @@ describe('bridge history range/export completeness contract', () => {
     const all = await resolveHistoryRange(42, { history_scope:'all' }, route, now)
     const platform = await resolveHistoryRange(42, { history_scope:'platform' }, route, now)
     expect(all.range_start_utc_msc).toBe(HISTORY_COVERAGE_START_UTC_MSC)
-    expect(platform.range_start_utc_msc).toBe(firstConnected)
+    expect(platform.range_start_utc_msc).toBe(HISTORY_COVERAGE_START_UTC_MSC)
     expect(all.range_start_utc_msc).toBeLessThan(reboundOwnership)
     expect(platform.range_start_utc_msc).toBeLessThan(reboundOwnership)
   })
@@ -894,6 +903,7 @@ describe('initBridgeWS', () => {
     mockBridgeV3Business.execute.mockResolvedValue({
       status:'success', orders:[], history_snapshot_id:'a'.repeat(64),
       next_cursor:'b'.repeat(64), has_more:true,
+      chart_data:{ daily:[{ date:'2026-08-09', profit:12.5 }], cumulative:[12.5] },
       history_sync:{ requested_range_complete:true },
     })
     queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
@@ -932,6 +942,10 @@ describe('initBridgeWS', () => {
       terminal_instance_id:'terminal-history-cursor',
     })
     expect(bridgeParams).not.toHaveProperty('page')
+    expect(JSON.parse(browserWs.send.mock.calls.at(-1)[0])).toMatchObject({
+      status:'success',
+      chart_data:{ daily:[{ date:'2026-08-09', profit:12.5 }], cumulative:[12.5] },
+    })
     browserWs.emit('close')
     vi.useRealTimers()
   })
@@ -1594,13 +1608,21 @@ describe('sendToBrowsers', () => {
     expect(() => sendToBrowsers(1, { type: 'hb', mt5_connected: false })).not.toThrow()
   })
 
-  it('builds account and position refresh notifications only for live read-model streams', () => {
+  it('builds account, position, and revision-only history refresh notifications', () => {
     expect(buildBridgeDataChangedEvent({
       stream:'positions', revision:12,
       terminal:{ terminal_instance_id:'terminal-1' },
     })).toEqual({
       type:'bridge_data_changed', streams:['positions'],
       terminal_instance_id:'terminal-1', revision:12,
+    })
+    expect(buildBridgeDataChangedEvent({
+      stream:'history', revision:14, freshness_state:'fresh',
+      terminal:{ terminal_instance_id:'terminal-1' },
+    })).toEqual({
+      type:'bridge_data_changed', streams:['history'],
+      terminal_instance_id:'terminal-1', revision:14,
+      history_revision:14, freshness_state:'fresh',
     })
     expect(buildBridgeDataChangedEvent({ stream:'orders', revision:13 })).toBeNull()
   })
@@ -1616,6 +1638,13 @@ describe('sendToBrowsers', () => {
     })
     expect(JSON.stringify(payload)).not.toContain('terminal-private')
     expect(JSON.stringify(payload)).not.toContain('12345')
+    expect(buildObserverBrowserPayload({
+      type:'bridge_data_changed', streams:['history'], history_revision:21,
+      freshness_state:'refreshing', terminal_instance_id:'terminal-private',
+    })).toEqual({
+      type:'bridge_data_changed', streams:['history'], history_revision:21,
+      freshness_state:'refreshing', _source:'observer_channel',
+    })
     expect(buildObserverBrowserPayload({ type:'bridge_data_changed', streams:['orders'] })).toBeNull()
   })
 })
