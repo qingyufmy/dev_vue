@@ -395,6 +395,7 @@ describe('bridge release tooling', () => {
     expect(localInstallerLifecycle).toContain("'--health-check','--health-file'")
     expect(localInstallerLifecycle).toContain("IndexOf('cnfxtrade.com'")
     expect(localInstallerLifecycle).toContain("$fullPath.StartsWith('\\\\')")
+    expect(localInstallerLifecycle).toContain('return ,([IO.File]::ReadAllBytes($readPath))')
     expect(localInstallerLifecycle).toContain('Read-AllBytes $file.FullName')
     expect(fullInstallerBuilder).toContain('function ConvertFrom-CodePoints')
     expect(fullInstallerBuilder).toContain('0x91CF,0x89C1,0x667A,0x6865')

@@ -27,7 +27,7 @@ function Read-AllBytes([string]$Path) {
   } else {
     "\\?\$fullPath"
   }
-  return [IO.File]::ReadAllBytes($readPath)
+  return ,([IO.File]::ReadAllBytes($readPath))
 }
 
 function Invoke-Installer([string]$Executable, [string]$LogPath, [string]$ResultPath) {
