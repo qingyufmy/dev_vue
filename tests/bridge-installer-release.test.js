@@ -7,10 +7,10 @@ describe('bridge installer release descriptor', () => {
     expect(resolveBridgeInstallerRelease({})).toMatchObject({
       version:'3.0.0',
       v3:true,
-      buildDate:'2026-08-09',
-      fileSize:26694812,
-      sha256:'03C33DA9BF279E344EA3D867A8A68A41DCE0FAC5AAD38B6AA16197CAC89E54BF',
-      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'03c33da9bf279e344ea3d867a8a68a41dce0fac5aad38b6aa16197cac89e54bf'}/LiangjianBridgeSetup.exe`,
+      buildDate:'2026-08-10',
+      fileSize:26737887,
+      sha256:'5FE15621E99EE6D1270A39B9FF4966486DCF05FAB47B07FFE7CDF359D00364A2',
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'5fe15621e99ee6d1270a39b9ff4966486dcf05fab47b07ffe7cdf359d00364a2'}/LiangjianBridgeSetup.exe`,
     })
   })
 
@@ -37,9 +37,9 @@ describe('bridge installer release descriptor', () => {
       BRIDGE_INSTALLER_SHA256:'c'.repeat(64),
     })).toMatchObject({
       version:'3.0.0',
-      buildDate:'2026-08-09',
-      fileSize:26694812,
-      sha256:'03C33DA9BF279E344EA3D867A8A68A41DCE0FAC5AAD38B6AA16197CAC89E54BF',
+      buildDate:'2026-08-10',
+      fileSize:26737887,
+      sha256:'5FE15621E99EE6D1270A39B9FF4966486DCF05FAB47B07FFE7CDF359D00364A2',
     })
   })
 
@@ -47,11 +47,11 @@ describe('bridge installer release descriptor', () => {
     expect(resolveBridgeInstallerRelease({
       BRIDGE_INSTALLER_URL:`https://qiniu.acadfx.com/bridge/bootstrapper/${'d'.repeat(64)}/LiangjianBridgeSetup.exe`,
       BRIDGE_INSTALLER_RELEASE_VERSION:'3.0.0',
-      BRIDGE_INSTALLER_BUILD_DATE:'2026-08-09',
+      BRIDGE_INSTALLER_BUILD_DATE:'2026-08-10',
       BRIDGE_INSTALLER_SIZE_BYTES:'84044167',
       BRIDGE_INSTALLER_SHA256:'d'.repeat(64),
     })).toMatchObject({
-      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'03c33da9bf279e344ea3d867a8a68a41dce0fac5aad38b6aa16197cac89e54bf'}/LiangjianBridgeSetup.exe`,
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'5fe15621e99ee6d1270a39b9ff4966486dcf05fab47b07ffe7cdf359d00364a2'}/LiangjianBridgeSetup.exe`,
     })
   })
 
