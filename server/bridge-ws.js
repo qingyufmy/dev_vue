@@ -1497,12 +1497,14 @@ export async function resolveHistoryRange(
 
   const ownership = await queryOne(`SELECT
       bindings.current_trading_account_id AS trading_account_id,
-      CAST(UNIX_TIMESTAMP(COALESCE(bindings.first_connected_at, ta.first_verified_at, bindings.created_at))*1000 AS UNSIGNED)
+      CAST(UNIX_TIMESTAMP(binding_user.created_at)*1000 AS UNSIGNED)
         AS platform_start_utc_msc,
       CAST(UNIX_TIMESTAMP(ownership.started_at)*1000 AS UNSIGNED)
         AS ownership_start_utc_msc,
       ownership.id AS ownership_history_id
     FROM mt5_account_bindings bindings
+    JOIN users binding_user
+      ON binding_user.id = bindings.current_user_id
     JOIN trading_accounts ta
       ON ta.id = bindings.current_trading_account_id
       AND ta.user_id = bindings.current_user_id

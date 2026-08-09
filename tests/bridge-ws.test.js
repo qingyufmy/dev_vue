@@ -326,11 +326,11 @@ describe('bridge history range/export completeness contract', () => {
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
       capabilities:['history_exact_range_v1'],
     }
-    const platformStart = Date.parse('2026-01-01T00:00:00.000Z')
+    const registrationStart = Date.parse('2026-01-01T00:00:00.000Z')
     const ownershipStart = Date.parse('2026-08-08T12:30:00.000Z')
     const now = Date.parse('2026-08-10T12:30:00.000Z')
     queryOne.mockResolvedValue({
-      platform_start_utc_msc:platformStart,
+      platform_start_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
       ownership_history_id:77,
     })
@@ -339,30 +339,36 @@ describe('bridge history range/export completeness contract', () => {
     expect(all).toMatchObject({
       scope:'all', requested_scope:'all',
       range_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC, range_end_utc_msc:now,
-      platform_start_utc_msc:platformStart,
+      platform_start_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart, ownership_revision:'77',
     })
     const [query, queryParams] = queryOne.mock.calls.at(-1)
     expect(query).toContain('mt5_account_bindings')
     expect(query).toContain('trading_accounts')
     expect(query).toContain('mt5_account_ownership_history')
+    expect(query).toContain('JOIN users binding_user')
+    expect(query).toContain('binding_user.id = bindings.current_user_id')
+    expect(query).toContain('UNIX_TIMESTAMP(binding_user.created_at)')
+    expect(query).not.toContain('bindings.first_connected_at')
+    expect(query).not.toContain('ta.first_verified_at')
+    expect(query).not.toContain('bindings.created_at')
     expect(query).toContain('UPPER(bindings.broker_server_key) = UPPER(?)')
     expect(queryParams).toEqual([42, 'Broker-Demo', '123456'])
 
     queryOne.mockResolvedValue({
-      platform_start_utc_msc:platformStart,
+      platform_start_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
       ownership_history_id:77,
     })
     const platform = await resolveHistoryRange(42, { history_scope:'platform' }, route, now)
     expect(platform).toMatchObject({
-      scope:'platform', range_start_utc_msc:platformStart,
-      range_end_utc_msc:now, platform_start_utc_msc:platformStart,
+      scope:'platform', range_start_utc_msc:registrationStart,
+      range_end_utc_msc:now, platform_start_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
     })
 
     queryOne.mockResolvedValue({
-      platform_start_utc_msc:platformStart,
+      platform_start_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
       ownership_history_id:77,
     })
@@ -381,7 +387,7 @@ describe('bridge history range/export completeness contract', () => {
       { history_scope:'unknown' },
     ]) {
       queryOne.mockResolvedValue({
-        platform_start_utc_msc:platformStart,
+        platform_start_utc_msc:registrationStart,
         ownership_start_utc_msc:ownershipStart,
         ownership_history_id:77,
       })
