@@ -499,12 +499,12 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).not.toContain('id="chartDateFrom"')
   })
 
-  it('forces fresh history data when entering or refreshing the history page', () => {
+  it('keeps ordinary history navigation local and reserves terminal rescan for explicit refresh', () => {
     const refreshTabStart = app.indexOf('async function refreshTabData(tabId, options = {})')
     const refreshTabEnd = app.indexOf('async function withBusy', refreshTabStart)
     const historyTab = app.slice(refreshTabStart, refreshTabEnd)
-    expect(historyTab).toContain('loadHistoryViews({ forceRefresh:true, includeAccount:true })')
-    expect(historyTab).toMatch(/else \{\s+await loadHistoryViews\(\{ forceRefresh:true, includeAccount:true \}\)/)
+    expect(historyTab).toContain('loadHistoryViews({ forceRefresh:false, includeAccount:true })')
+    expect(historyTab).toMatch(/else \{\s+await loadHistoryViews\(\{ forceRefresh:false, includeAccount:true \}\)/)
 
     const refreshPageStart = app.indexOf('async function refreshHistoryPage()')
     const refreshPageEnd = app.indexOf('async function exportHistory()', refreshPageStart)
@@ -514,6 +514,11 @@ describe('AI governance navigation and DOM contract', () => {
     const actionMapStart = app.indexOf('const tasks = {')
     const actionMapEnd = app.indexOf('if (tasks[action])', actionMapStart)
     expect(app.slice(actionMapStart, actionMapEnd)).toContain('"refresh-history": () => loadHistoryViews({ forceRefresh:true, manualRefresh:true })')
+    const historyBindingsStart = app.indexOf("document.getElementById('historyRangeMode')")
+    const historyBindingsEnd = app.indexOf('document.addEventListener("DOMContentLoaded"', historyBindingsStart)
+    const historyBindings = app.slice(historyBindingsStart, historyBindingsEnd)
+    expect(historyBindings).toContain('loadHistoryViews({ forceRefresh:false }).catch(() => {})')
+    expect(historyBindings).not.toContain('forceRefresh:true')
     const sharedRefreshStart = app.indexOf('function loadHistoryViews(')
     const sharedRefreshEnd = app.indexOf('function historyProtectionCell(', sharedRefreshStart)
     const sharedRefresh = app.slice(sharedRefreshStart, sharedRefreshEnd)
@@ -546,8 +551,7 @@ describe('AI governance navigation and DOM contract', () => {
     const views = app.slice(viewsStart, viewsEnd)
     expect(views).not.toContain('Promise.allSettled')
     expect(views.indexOf('await loadHistory(')).toBeLessThan(views.indexOf('await loadHistoryChart('))
-    expect(app).toContain('loadHistoryViews({ forceRefresh:true, manualRefresh:true }).catch(() => {})')
-    expect(app).toContain('loadHistory(true, { manualRefresh:true }).catch(() => {})')
+    expect(app).not.toContain('loadHistory(true, { manualRefresh:true }).catch(() => {})')
 
     const reconnectStart = app.indexOf('async function handleBridgeReconnected')
     const reconnectEnd = app.indexOf('async function handleAccountTransferred', reconnectStart)

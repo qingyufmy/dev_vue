@@ -711,7 +711,12 @@ impl InboundDataHandler for ActiveMt5Sessions {
                 == Some(true)
             {
                 match session {
-                    PreparedDataSession::Mt4(session) => session.handle.request_history_refresh(),
+                    PreparedDataSession::Mt4(session) => {
+                        session
+                            .handle
+                            .request_history_refresh()
+                            .map_err(|error| TransportError::from_code(error.code().to_owned()))?
+                    }
                     PreparedDataSession::Mt5(session) => session.handle.request_history_refresh(),
                 }
             }

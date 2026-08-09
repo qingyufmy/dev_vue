@@ -1165,16 +1165,49 @@ function normalizedHistoryCursorToken(value) {
   return token
 }
 
+function historyExactRangeFields(params = {}) {
+  return {
+    hasStart:Object.prototype.hasOwnProperty.call(params, 'range_start_utc_msc'),
+    hasEnd:Object.prototype.hasOwnProperty.call(params, 'range_end_utc_msc'),
+  }
+}
+
 function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
   const rangeStart = Number(params?.range_start_utc_msc)
   const rangeEnd = Number(params?.range_end_utc_msc)
   const ownershipStart = Number(resolvedRange?.ownership_start_utc_msc)
   const maxRangeEnd = Number.isSafeInteger(nowUtcMsc) ? nowUtcMsc + 60_000 : NaN
-  if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
+  const { hasStart, hasEnd } = historyExactRangeFields(params)
+  if (!hasStart || !hasEnd
+    || !Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
     || !Number.isSafeInteger(ownershipStart) || !Number.isSafeInteger(maxRangeEnd)
     || rangeStart < ownershipStart || rangeStart >= rangeEnd || rangeEnd > maxRangeEnd) {
     throw historyError('history_cursor_invalid')
   }
+
+  // `recent` and the open-ended scopes intentionally move with the current
+  // clock. A retry must still use its previous fixed range, while custom
+  // calendar bounds remain stable and must contain that range.
+  const scope = String(resolvedRange?.scope || resolvedRange?.requested_scope || '')
+    .trim().toLowerCase()
+  if (scope === 'custom') {
+    const closeFrom = parseStrictUtcDateBoundary(params?.close_from)
+    const closeTo = params?.close_to == null || params.close_to === ''
+      ? null : nextUtcDateBoundary(params.close_to)
+    const minimumStart = closeFrom === null
+      ? ownershipStart : Math.max(ownershipStart, closeFrom)
+    if (rangeStart !== minimumStart || (closeTo !== null && rangeEnd > closeTo)) {
+      throw historyError('history_cursor_invalid')
+    }
+  } else if (scope === 'recent') {
+    const expectedStart = Math.max(ownershipStart, rangeEnd - 7 * 24 * 60 * 60 * 1_000)
+    if (rangeStart !== expectedStart) throw historyError('history_cursor_invalid')
+  } else if (['ownership', 'platform', 'all'].includes(scope)) {
+    if (rangeStart !== ownershipStart) throw historyError('history_cursor_invalid')
+  } else {
+    throw historyError('history_cursor_invalid')
+  }
+
   return {
     ...resolvedRange,
     range_start_utc_msc:rangeStart,
@@ -1931,7 +1964,8 @@ async function handleBrowserCommand(ws, userId, msg) {
           }
           const nowUtcMsc = Date.now()
           const resolvedRange = await resolveHistoryRange(dataUserId, params, exactRoute, nowUtcMsc)
-          const range = cursorMode && bridgeParams.history_snapshot_id
+          const { hasStart, hasEnd } = historyExactRangeFields(params)
+          const range = cursorMode && (hasStart || hasEnd || bridgeParams.history_snapshot_id)
             ? historyCursorContinuationRange(params, resolvedRange, nowUtcMsc)
             : resolvedRange
           bridgeParams.range_start_utc_msc = range.range_start_utc_msc
@@ -1961,7 +1995,11 @@ async function handleBrowserCommand(ws, userId, msg) {
           // 直接调用桥接的 chart_data 命令，返回聚合后的图表数据
           const chartParams = { force_refresh: params.force_refresh === true }
           const nowUtcMsc = Date.now()
-          const range = await resolveHistoryRange(dataUserId, params, exactRoute, nowUtcMsc)
+          const resolvedRange = await resolveHistoryRange(dataUserId, params, exactRoute, nowUtcMsc)
+          const { hasStart, hasEnd } = historyExactRangeFields(params)
+          const range = hasStart || hasEnd
+            ? historyCursorContinuationRange(params, resolvedRange, nowUtcMsc)
+            : resolvedRange
           chartParams.range_start_utc_msc = range.range_start_utc_msc
           chartParams.range_end_utc_msc = range.range_end_utc_msc
           if (params.direction) chartParams.direction = params.direction
@@ -3100,7 +3138,7 @@ async function handleBrowserCommand(ws, userId, msg) {
   } catch (err) {
     console.error('[BridgeWS] handleBrowserCommand error:', err.message)
     const stableCode = String(err?.code || err?.message || '')
-    if (stableCode.startsWith('bridge_history_')) {
+    if (stableCode.startsWith('bridge_history_') || stableCode.startsWith('history_cursor_')) {
       reply({ status:'error', code:stableCode, message:stableCode })
       return
     }

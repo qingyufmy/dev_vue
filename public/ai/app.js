@@ -111,6 +111,10 @@ const _historyChartFlights = new Map();
 const _historyViewsFlights = new Map();
 const _historyCircuitBreakers = new Map();
 const _historyErrorNotices = new Map();
+const HISTORY_CURSOR_RANGE_INCOMPLETE_CODE = 'history_cursor_range_incomplete';
+const HISTORY_RANGE_RETRY_INTERVAL_MS = 3000;
+const HISTORY_RANGE_RETRY_MAX_ATTEMPTS = 20;
+let _historyRangeRetryState = null;
 const HISTORY_CIRCUIT_BREAKER_CODES = new Set([
   'bridge_data_request_disconnected',
   'bridge_history_route_required',
@@ -1457,6 +1461,7 @@ const API_ERROR_MESSAGES = {
   browser_websocket_disconnected: "实时连接已中断，请稍后重试",
   bridge_history_route_required: "当前账户路由尚未准备好，请稍后重试",
   bridge_history_temporarily_unavailable: "历史数据正在维护，请稍后再试",
+  history_cursor_range_incomplete: "正在准备所选范围的交易记录，请稍后刷新",
   model_task_status_unknown: "模型服务商状态暂不可确认，系统正在安全恢复并避免重复请求",
   model_task_active: "上一轮模型任务仍在运行，请等待完成",
   model_task_cooldown: "本轮模型任务已完成，请等待完整配置周期",
@@ -2243,6 +2248,8 @@ function connectBridgeStatusWs(onReady) {
             const code = msg.code || msg.error_code || msg.message;
             const error = new Error(apiErrorMessage(msg.message || msg.error || code || '操作失败'));
             error.code = code;
+            error.history_range = msg.history_range || msg.details?.history_range || null;
+            error.details = msg.details || null;
             pending.reject(error);
           } else pending.resolve(msg);
         }
@@ -2437,8 +2444,7 @@ function handleBridgeData(msg) {
         state._posRefreshTimer = setTimeout(() => {
           loadPositions();
           loadAccount();
-          loadHistory().catch(() => {});
-          loadHistoryChart().catch(() => {});
+          loadHistoryViews().catch(() => {});
         }, 500);
       }
     }
@@ -4504,6 +4510,7 @@ function setTab(tabId, options = {}) {
     if (!options.silent) toast("观摩模式下不可访问该页面", "warning");
     tabId = "dashboard";
   }
+  if (tabId !== "history") cancelHistoryRangeRetry();
   closeMobileNav({ restoreFocus:false });
   if (tabId !== "dashboard") stopKlineRefreshTimers();
   if (tabId !== "review-memory") stopReviewDetailPolling();
@@ -4608,7 +4615,7 @@ async function refreshTabData(tabId, options = {}) {
     if (options.manualRefresh === true) {
       await loadHistoryViews({ forceRefresh:true, includeAccount:true, manualRefresh:true });
     } else {
-      await loadHistoryViews({ forceRefresh:true, includeAccount:true });
+      await loadHistoryViews({ forceRefresh:false, includeAccount:true });
     }
   } else if (tabId === "audit") {
     await loadAudit();
@@ -4986,8 +4993,7 @@ async function refreshAll() {
       // internal reconciliation.  Keep the full signal table available here
       // without making it part of normal bootstrap or the refresh button.
       loadSignals({ loadTable:true }),
-      loadHistory(),
-      loadHistoryChart(),
+      loadHistoryViews(),
       refreshQuote(),
       loadKlineData(),
     ];
@@ -8779,7 +8785,7 @@ function queueTradeStateRefresh(options) {
       if (generation !== tradeStateRefreshGeneration) return;
       await Promise.allSettled([loadPositions(), loadPendingOrders(), loadAccount(), loadStatus()]);
       if (tradeMutationReflected(options)) {
-        await Promise.allSettled([loadHistory(), loadHistoryChart()]);
+        await loadHistoryViews().catch(() => {});
         return;
       }
     }
@@ -8957,7 +8963,7 @@ async function submitManualOrder() {
     closeManualOrderModal();
     const resultMessage = localizeReason(result.error) || localizeReason(result.message);
     toast(resultMessage || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
-    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadStatus(), loadPendingOrders()]);
+    await Promise.allSettled([loadPositions(), loadAccount(), loadHistoryViews(), loadStatus(), loadPendingOrders()]);
     if (result.status === "success") {
       const isPending = order.meta.entryMethod !== "market" && order.meta.entryMethod !== "observe";
       queueTradeStateRefresh({
@@ -8989,7 +8995,7 @@ async function closePosition(ticket) {
     }, 30000);
     const resultMessage = localizeReason(result.error) || localizeReason(result.message);
     toast(resultMessage || `结果：${result.status}`, result.status === "success" ? "success" : "warning");
-    await Promise.allSettled([loadPositions(), loadAccount(), loadHistory(), loadHistoryChart(), loadStatus()]);
+    await Promise.allSettled([loadPositions(), loadAccount(), loadHistoryViews(), loadStatus()]);
     if (result.status === "success") {
       queueTradeStateRefresh({ kind: "position", ticket, expectPresent: false });
     }
@@ -9320,7 +9326,137 @@ function getHistoryRangeParams() {
   return params;
 }
 
+function historyPreparationMessage() {
+  return "正在准备所选范围的交易记录，完成后将自动刷新";
+}
+
+function renderHistoryPreparationStatus(message = historyPreparationMessage()) {
+  const body = $("historyBody");
+  if (!body) return;
+  body.innerHTML = `<tr class="empty-row history-preparing-row"><td colspan="13">${escapeHtml(message)}</td></tr>`;
+  setText("historyFilterCount", "");
+}
+
+function clearHistoryPreparationStatus() {
+  const body = $("historyBody");
+  if (!body?.querySelector(".history-preparing-row")) return;
+  body.innerHTML = "";
+  setText("historyFilterCount", "");
+}
+
+function cancelHistoryRangeRetry({ clearStatus = true } = {}) {
+  const retry = _historyRangeRetryState;
+  if (retry) {
+    retry.cancelled = true;
+    if (retry.timer) clearTimeout(retry.timer);
+  }
+  _historyRangeRetryState = null;
+  if (clearStatus) clearHistoryPreparationStatus();
+}
+
+function historyRangeFromError(error) {
+  const candidates = [
+    error?.history_range,
+    error?.details?.history_range,
+    error?.data?.history_range,
+    error?.payload?.history_range,
+  ];
+  for (const range of candidates) {
+    if (!range || typeof range !== "object") continue;
+    const rangeStart = Number(range.range_start_utc_msc);
+    const rangeEnd = Number(range.range_end_utc_msc);
+    if (Number.isSafeInteger(rangeStart) && Number.isSafeInteger(rangeEnd)
+      && rangeStart > 0 && rangeStart < rangeEnd) {
+      return { rangeStart, rangeEnd };
+    }
+  }
+  return null;
+}
+
+function historyRetryContextKey() {
+  return historyRefreshContextKey({ forceRefresh:false });
+}
+
+function isHistoryCursorRangeIncomplete(error) {
+  return historyErrorCode(error) === HISTORY_CURSOR_RANGE_INCOMPLETE_CODE;
+}
+
+function finishHistoryRangeRetry(retry, { exhausted = false } = {}) {
+  if (_historyRangeRetryState !== retry) return;
+  if (retry.timer) clearTimeout(retry.timer);
+  _historyRangeRetryState = null;
+  if (exhausted && activeTabId() === "history") {
+    const message = "历史记录准备时间较长，请稍后点击“刷新”重试";
+    renderHistoryPreparationStatus(message);
+    if (!retry.exhaustedNoticeShown) {
+      retry.exhaustedNoticeShown = true;
+      toast(message, "warning");
+    }
+  }
+}
+
+function scheduleHistoryRangeRetry({ contextKey = historyRetryContextKey() } = {}) {
+  if (activeTabId() !== "history" || !contextKey || contextKey !== historyRetryContextKey()) return;
+  let retry = _historyRangeRetryState;
+  if (!retry || retry.contextKey !== contextKey || retry.cancelled) {
+    cancelHistoryRangeRetry();
+    retry = {
+      contextKey,
+      attempts:0,
+      timer:null,
+      inFlight:false,
+      cancelled:false,
+      exhaustedNoticeShown:false,
+    };
+    _historyRangeRetryState = retry;
+  }
+  renderHistoryPreparationStatus();
+  if (retry.attempts >= HISTORY_RANGE_RETRY_MAX_ATTEMPTS) {
+    finishHistoryRangeRetry(retry, { exhausted:true });
+    return;
+  }
+  if (retry.timer || retry.inFlight) return;
+  retry.timer = setTimeout(async () => {
+    retry.timer = null;
+    if (_historyRangeRetryState !== retry || retry.cancelled
+      || activeTabId() !== "history" || contextKey !== historyRetryContextKey()) {
+      if (_historyRangeRetryState === retry) cancelHistoryRangeRetry();
+      return;
+    }
+    if (retry.attempts >= HISTORY_RANGE_RETRY_MAX_ATTEMPTS) {
+      finishHistoryRangeRetry(retry, { exhausted:true });
+      return;
+    }
+    retry.attempts += 1;
+    retry.inFlight = true;
+    try {
+      const result = await loadHistoryViews({
+        forceRefresh:false,
+        includeAccount:false,
+        manualRefresh:false,
+        historyRetryAttempt:true,
+      });
+      retry.inFlight = false;
+      if (_historyRangeRetryState !== retry || retry.cancelled) return;
+      if (result?.historyPending === true) {
+        scheduleHistoryRangeRetry({ contextKey });
+      } else {
+        finishHistoryRangeRetry(retry);
+      }
+    } catch (error) {
+      retry.inFlight = false;
+      if (_historyRangeRetryState !== retry || retry.cancelled) return;
+      if (isHistoryCursorRangeIncomplete(error)) {
+        scheduleHistoryRangeRetry({ contextKey });
+      } else {
+        finishHistoryRangeRetry(retry);
+      }
+    }
+  }, HISTORY_RANGE_RETRY_INTERVAL_MS);
+}
+
 function resetHistoryCursorState(key = null) {
+  cancelHistoryRangeRetry();
   _historyCursorState = {
     key, snapshotId:null, rangeStart:null, rangeEnd:null, pageCursors:new Map([[1, null]]),
   };
@@ -9431,6 +9567,7 @@ function loadHistory(forceRefresh, options = {}) {
   const existing = _historyTableFlights.get(key);
   if (existing) return existing;
   const manualRefresh = options.manualRefresh === true;
+  let requestCursorKey = null;
   const run = (async () => {
   try {
     const filters = state.historyFilters;
@@ -9450,6 +9587,7 @@ function loadHistory(forceRefresh, options = {}) {
       platform:state.bridgePlatform,
       account:state.bridgeAccountIdentity,
     });
+    requestCursorKey = cursorKey;
     if (forceRefresh || _historyCursorState.key !== cursorKey) {
       filters.page = 1;
       resetHistoryCursorState(cursorKey);
@@ -9471,24 +9609,39 @@ function loadHistory(forceRefresh, options = {}) {
 
     historyCircuitAllows(key, { manualRefresh });
     const cursor = _historyCursorState.pageCursors.get(filters.page) || null;
+    const rangeParams = Number.isSafeInteger(_historyCursorState.rangeStart)
+      && Number.isSafeInteger(_historyCursorState.rangeEnd)
+      && _historyCursorState.rangeStart > 0
+      && _historyCursorState.rangeStart < _historyCursorState.rangeEnd
+      ? {
+          range_start_utc_msc:_historyCursorState.rangeStart,
+          range_end_utc_msc:_historyCursorState.rangeEnd,
+        }
+      : {};
     const [data] = await Promise.all([
       wsApi("history", {
         page:filters.page,
         page_size:filters.pageSize,
         force_refresh:Boolean(forceRefresh),
         ...filterParams,
-        ...(_historyCursorState.snapshotId
+        ...(Object.keys(rangeParams).length
           ? {
-              history_snapshot_id:_historyCursorState.snapshotId,
-              range_start_utc_msc:_historyCursorState.rangeStart,
-              range_end_utc_msc:_historyCursorState.rangeEnd,
+              ...(_historyCursorState.snapshotId
+                ? { history_snapshot_id:_historyCursorState.snapshotId }
+                : {}),
+              ...rangeParams,
             } : {}),
         ...(cursor ? { cursor } : {}),
       }),
       loadSignalTickets(),
       loadCloseSignalTickets(),
     ]);
-    if (data?.status !== 'success') throw new Error(data?.message || data?.error || '历史数据读取失败');
+    if (data?.status !== 'success') {
+      const error = new Error(data?.message || data?.error || '历史数据读取失败');
+      error.code = data?.code || data?.error_code || data?.error || null;
+      error.history_range = data?.history_range || null;
+      throw error;
+    }
     if (data.history_snapshot_id) {
       const snapshotId = String(data.history_snapshot_id);
       const rangeStart = Number(data.history_range?.range_start_utc_msc);
@@ -9515,10 +9668,20 @@ function loadHistory(forceRefresh, options = {}) {
     _applyHistoryData(data);
     clearHistoryCircuit(key);
   } catch (e) {
-    console.error("loadHistory:", e);
-    if (_historyCursorState.snapshotId) resetHistoryCursorState(_historyCursorState.key);
+    const incomplete = isHistoryCursorRangeIncomplete(e);
+    const pendingRange = incomplete ? historyRangeFromError(e) : null;
+    if (_historyCursorState.snapshotId && !incomplete) resetHistoryCursorState(_historyCursorState.key);
+    if (_historyCursorState.snapshotId && incomplete) {
+      _historyCursorState.snapshotId = null;
+      _historyCursorState.pageCursors = new Map([[1, null]]);
+    }
+    if (pendingRange && requestCursorKey && _historyCursorState.key === requestCursorKey) {
+      _historyCursorState.rangeStart = pendingRange.rangeStart;
+      _historyCursorState.rangeEnd = pendingRange.rangeEnd;
+    }
+    if (!incomplete) console.error("loadHistory:", e);
     rememberHistoryFailure(key, e);
-    notifyHistoryFailure(key, e);
+    if (!incomplete) notifyHistoryFailure(key, e);
     throw e;
   }
   })();
@@ -9562,24 +9725,39 @@ function loadHistoryChart(forceRefresh, options = {}) {
   const run = (async () => {
   try {
     const params = getHistoryRangeParams();
+    const rangeParams = Number.isSafeInteger(_historyCursorState.rangeStart)
+      && Number.isSafeInteger(_historyCursorState.rangeEnd)
+      && _historyCursorState.rangeStart > 0
+      && _historyCursorState.rangeStart < _historyCursorState.rangeEnd
+      ? {
+          range_start_utc_msc:_historyCursorState.rangeStart,
+          range_end_utc_msc:_historyCursorState.rangeEnd,
+        }
+      : {};
+    const requestParams = { ...params, ...rangeParams };
 
-    const filterKey = JSON.stringify(params);
+    const filterKey = JSON.stringify(requestParams);
     if (!forceRefresh && _historyChartCache && _historyChartCache.filters === filterKey) {
       _renderHistoryChart(_historyChartCache.data);
       return;
     }
 
     historyCircuitAllows(key, { manualRefresh });
-    const data = await wsApi("history_chart_data", { ...params, force_refresh:Boolean(forceRefresh) });
-    if (data?.status !== 'success') throw new Error(data?.message || data?.error || '历史图表读取失败');
+    const data = await wsApi("history_chart_data", { ...requestParams, force_refresh:Boolean(forceRefresh) });
+    if (data?.status !== 'success') {
+      const error = new Error(data?.message || data?.error || '历史图表读取失败');
+      error.code = data?.code || data?.error_code || data?.error || null;
+      error.history_range = data?.history_range || null;
+      throw error;
+    }
     _historyChartCache = { filters: filterKey, data };
     await ensureChartJs();
     _renderHistoryChart(data);
     clearHistoryCircuit(key);
   } catch (e) {
-    console.error("loadHistoryChart:", e);
+    if (!isHistoryCursorRangeIncomplete(e)) console.error("loadHistoryChart:", e);
     rememberHistoryFailure(key, e);
-    notifyHistoryFailure(key, e);
+    if (!isHistoryCursorRangeIncomplete(e)) notifyHistoryFailure(key, e);
     throw e;
   }
   })();
@@ -9590,7 +9768,13 @@ function loadHistoryChart(forceRefresh, options = {}) {
   return run;
 }
 
-function loadHistoryViews({ forceRefresh = false, includeAccount = false, manualRefresh = false } = {}) {
+function loadHistoryViews({ forceRefresh = false, includeAccount = false, manualRefresh = false, historyRetryAttempt = false } = {}) {
+  if (manualRefresh) cancelHistoryRangeRetry();
+  const currentRetryContext = historyRetryContextKey();
+  if (_historyRangeRetryState
+    && (activeTabId() !== "history" || _historyRangeRetryState.contextKey !== currentRetryContext)) {
+    cancelHistoryRangeRetry();
+  }
   const key = historyFlightKey("views", { forceRefresh:Boolean(forceRefresh) });
   const existing = _historyViewsFlights.get(key);
   if (existing) return existing;
@@ -9601,10 +9785,39 @@ function loadHistoryViews({ forceRefresh = false, includeAccount = false, manual
       _historyChartCache = null;
     }
     if (includeAccount) await loadAccount();
-    await loadHistory(forceRefresh, { manualRefresh:effectiveManualRefresh });
+    const requestContextKey = historyRetryContextKey();
+    try {
+      await loadHistory(forceRefresh, { manualRefresh:effectiveManualRefresh });
+    } catch (error) {
+      if (isHistoryCursorRangeIncomplete(error)) {
+        if (activeTabId() !== "history" || requestContextKey !== historyRetryContextKey()) {
+          return { historyPending:false, historyStale:true };
+        }
+        renderHistoryPreparationStatus();
+        if (!historyRetryAttempt) scheduleHistoryRangeRetry({ contextKey:requestContextKey });
+        return { historyPending:true };
+      }
+      throw error;
+    }
+    if (_historyRangeRetryState?.contextKey === requestContextKey) {
+      finishHistoryRangeRetry(_historyRangeRetryState);
+    }
     // The table owns the single forced terminal sync. The chart then reads the
     // refreshed Bridge archive instead of starting a second simultaneous sync.
-    await loadHistoryChart(false, { manualRefresh:effectiveManualRefresh });
+    try {
+      await loadHistoryChart(false, { manualRefresh:effectiveManualRefresh });
+    } catch (error) {
+      if (!isHistoryCursorRangeIncomplete(error)) throw error;
+      const pendingRange = historyRangeFromError(error);
+      if (pendingRange && requestContextKey === historyRetryContextKey() && _historyCursorState.key) {
+        _historyCursorState.rangeStart = pendingRange.rangeStart;
+        _historyCursorState.rangeEnd = pendingRange.rangeEnd;
+      }
+      renderHistoryPreparationStatus();
+      if (!historyRetryAttempt) scheduleHistoryRangeRetry({ contextKey:requestContextKey });
+      return { historyPending:true };
+    }
+    return { historyPending:false };
   })();
   _historyViewsFlights.set(key, refresh);
   refresh.finally(() => {
@@ -9805,7 +10018,7 @@ function _renderHistoryChart(data) {
         state.historyFilters.page = 1;
         _historyCache = null;
         _historyChartCache = null;
-        loadHistoryViews({ forceRefresh:true, manualRefresh:true }).catch(() => {});
+        loadHistoryViews({ forceRefresh:false }).catch(() => {});
       },
       plugins: {
         legend: { display: false },
@@ -11049,7 +11262,7 @@ function bindEvents() {
         loadSignalTable();
       } else if (pagerButton.dataset.pager === "history") {
         state.historyFilters.page = page;
-        loadHistory().catch(() => {});
+        loadHistoryViews().catch(() => {});
       } else if (pagerButton.dataset.pager === "audit") {
         state.auditFilters.page = page;
         renderAuditRows();
@@ -11102,26 +11315,29 @@ function bindEvents() {
   });
 
   // History scope drives the table, summary and chart together.
-  document.getElementById('historyRangeMode')?.addEventListener('change', updateHistoryRangeUI);
+  document.getElementById('historyRangeMode')?.addEventListener('change', () => {
+    cancelHistoryRangeRetry();
+    updateHistoryRangeUI();
+  });
   document.getElementById('historyRangeApply')?.addEventListener('click', () => {
     try { getHistoryRangeParams(); }
     catch (error) { toast(error.message, 'error'); return; }
     state.historyFilters.page = 1;
-    loadHistoryViews({ forceRefresh:true, manualRefresh:true }).catch(() => {});
+    loadHistoryViews({ forceRefresh:false }).catch(() => {});
   });
   updateHistoryRangeUI();
   // Table filters further narrow trade rows inside the selected history scope.
   document.getElementById('historyFilterApply')?.addEventListener('click', () => {
     state.historyFilters.page = 1;
     _historyCache = null;
-    loadHistory(true, { manualRefresh:true }).catch(() => {});
+    loadHistoryViews({ forceRefresh:false }).catch(() => {});
   });
   document.getElementById('historyFilterReset')?.addEventListener('click', () => {
     ['filterEntryFrom','filterEntryTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     ['filterDirection','filterProfit'].forEach(id => { const el = document.getElementById(id); if (el) el.selectedIndex = 0; });
     state.historyFilters.page = 1;
     _historyCache = null;
-    loadHistory(true, { manualRefresh:true }).catch(() => {});
+    loadHistoryViews({ forceRefresh:false }).catch(() => {});
   });
 }
 
