@@ -575,6 +575,20 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app.slice(clearStart, clearEnd)).toContain('resetHistoryCursorState(null)')
   })
 
+  it('keeps history freshness polling pinned and non-forced', () => {
+    const freshnessStart = app.indexOf('function scheduleHistoryFreshnessRetry')
+    const freshnessEnd = app.indexOf('async function handleBridgeReconnected', freshnessStart)
+    const viewsStart = app.indexOf('function loadHistoryViews(')
+    const viewsEnd = app.indexOf('function historyProtectionCell(', viewsStart)
+    const freshness = app.slice(freshnessStart, freshnessEnd)
+    const views = app.slice(viewsStart, viewsEnd)
+    expect(freshness).toContain('requested_range_complete === false')
+    expect(freshness).toContain('loadHistoryViews({ forceRefresh:false, historyRetryAttempt:true })')
+    expect(freshness).not.toContain('loadHistoryViews({ forceRefresh:true')
+    expect(views).toContain('const automaticRetry = historyRetryAttempt === true && manualRefresh !== true')
+    expect(views).toContain('resetHistorySnapshotState({ preserveRange:true })')
+  })
+
   it('imports the database helper required by paginated execution decisions', () => {
     expect(routes).toContain("import { queryAll, queryOne, queryRun, withTransaction, beijingNow, logAudit } from '../../db.js'")
     expect(routes).toContain("queryOne('SELECT COUNT(*) AS total FROM order_intents")
