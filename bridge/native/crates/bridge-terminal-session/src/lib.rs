@@ -36,6 +36,11 @@ const HISTORY_INITIAL_WINDOW_MSC: i64 = 24 * 60 * 60 * 1_000;
 const HISTORY_MIN_WINDOW_MSC: i64 = 15 * 60 * 1_000;
 const HISTORY_MAX_WINDOW_MSC: i64 = 30 * 24 * 60 * 60 * 1_000;
 const HISTORY_DENSE_RETRY_THRESHOLD: u32 = 3;
+// A page can contain up to HISTORY_BATCH_LIMIT items and each item may need
+// multiple bounded evidence lookups.  Keep enough same-worker attempts for
+// the cache to converge while still giving a permanently incomplete range a
+// stable terminal state instead of looping forever.
+const HISTORY_EVIDENCE_PENDING_MAX_ATTEMPTS: u32 = 256;
 const HISTORY_CALL_WAIT: Duration = Duration::from_millis(100);
 const HISTORY_ACTIVE_DELAY: Duration = Duration::from_millis(50);
 const HISTORY_ACTIVE_LEASE_RENEW: Duration = Duration::from_secs(10);
@@ -1499,6 +1504,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
     let mut dense_failures = 0_u32;
+    let mut evidence_pending_attempts = 0_u32;
     loop {
         if *stop_rx.borrow() {
             return Err("history_scheduler_stopped".to_owned());
@@ -1583,6 +1589,7 @@ where
                 let code = error.code().to_owned();
                 let timeout = is_timeout(&code);
                 let next_dense_failures = if !timeout
+                    && !is_history_evidence_pending(&code)
                     && (job.window_msc / 2).max(HISTORY_MIN_WINDOW_MSC) == HISTORY_MIN_WINDOW_MSC
                 {
                     dense_failures.saturating_add(1)
@@ -1594,11 +1601,31 @@ where
                 let decision =
                     history_error_decision(job.window_msc, error_kind, min_timeout_count(&job));
                 let now = (clock)();
+                if matches!(error_kind, HistoryErrorKind::EvidencePending) {
+                    evidence_pending_attempts = evidence_pending_attempts.saturating_add(1);
+                    if history_evidence_pending_reached_limit(evidence_pending_attempts) {
+                        block_history_job(store, &job, "blocked_history_evidence_pending", now)
+                            .await?;
+                        status_tx.send_replace(HistorySyncStatus {
+                            state: HistorySyncState::Blocked,
+                            consecutive_failures: evidence_pending_attempts,
+                            last_success_at_utc_msc: history_last_success(status_tx),
+                            error_code: Some("blocked_history_evidence_pending".to_owned()),
+                        });
+                        return Ok(());
+                    }
+                    // The MT5 worker has already bounded this request's
+                    // targeted lookups.  Keep its archive process and range
+                    // cache alive so the next request can resolve the
+                    // remaining evidence without restarting the worker.
+                    set_history_phase(status_tx, &job, 0, Some(&code));
+                }
                 match decision {
                     HistoryErrorDecision::Block => {
                         let failures = match error_kind {
                             HistoryErrorKind::TooDense { consecutive_at_min } => consecutive_at_min,
                             HistoryErrorKind::Timeout => min_timeout_count(&job).saturating_add(1),
+                            HistoryErrorKind::EvidencePending => 0,
                             HistoryErrorKind::Other => 0,
                         };
                         block_history_job(store, &job, "blocked_dense_range", now).await?;
@@ -1673,6 +1700,7 @@ where
             Ok(updated) => {
                 job = updated;
                 dense_failures = 0;
+                evidence_pending_attempts = 0;
                 status_tx.send_replace(HistorySyncStatus {
                     state: if job.state == "completed" {
                         HistorySyncState::Complete
@@ -1697,8 +1725,10 @@ where
                 }
             }
             Err(error) => {
-                let _ = retry_claimed_history_job(store, &job, &error, clock).await;
-                return Ok(());
+                return history_persist_retry_result(
+                    &error,
+                    retry_claimed_history_job(store, &job, &error, clock).await,
+                );
             }
         }
     }
@@ -1716,10 +1746,15 @@ fn is_timeout(code: &str) -> bool {
     code.contains("timeout")
 }
 
+fn is_history_evidence_pending(code: &str) -> bool {
+    code == "mt5_history_evidence_pending"
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HistoryErrorKind {
     TooDense { consecutive_at_min: u32 },
     Timeout,
+    EvidencePending,
     Other,
 }
 
@@ -1733,6 +1768,8 @@ enum HistoryErrorDecision {
 fn history_error_kind(code: &str, consecutive_at_min: u32) -> HistoryErrorKind {
     if is_timeout(code) {
         HistoryErrorKind::Timeout
+    } else if is_history_evidence_pending(code) {
+        HistoryErrorKind::EvidencePending
     } else if is_dense_or_timeout(code) {
         HistoryErrorKind::TooDense { consecutive_at_min }
     } else {
@@ -1769,8 +1806,30 @@ fn history_error_decision(
                 HistoryErrorDecision::RestartArchive { window_msc: shrunk }
             }
         }
+        HistoryErrorKind::EvidencePending => HistoryErrorDecision::RetrySameProcess { window_msc },
         HistoryErrorKind::Other => HistoryErrorDecision::RestartArchive { window_msc },
     }
+}
+
+fn history_persist_retry_error(persist_error: &str, retry_error: &str) -> String {
+    normalize_history_error(&format!(
+        "history_persist_retry_failed_{}_{}",
+        persist_error, retry_error
+    ))
+}
+
+fn history_persist_retry_result(
+    persist_error: &str,
+    retry_result: Result<(), String>,
+) -> Result<(), String> {
+    match retry_result {
+        Ok(()) => Err(persist_error.to_owned()),
+        Err(retry_error) => Err(history_persist_retry_error(persist_error, &retry_error)),
+    }
+}
+
+fn history_evidence_pending_reached_limit(attempts: u32) -> bool {
+    attempts >= HISTORY_EVIDENCE_PENDING_MAX_ATTEMPTS
 }
 
 fn min_timeout_count(job: &HistorySyncJob) -> u32 {
@@ -3007,6 +3066,51 @@ mod tests {
             min_timeout_count_from_code(Some("history_timeout_min_3"))
                 >= HISTORY_DENSE_RETRY_THRESHOLD
         );
+    }
+
+    #[test]
+    fn evidence_pending_retries_in_the_same_archive_window() {
+        assert_eq!(
+            history_error_kind("mt5_history_evidence_pending", 0),
+            HistoryErrorKind::EvidencePending
+        );
+        assert_eq!(
+            history_error_decision(
+                HISTORY_MIN_WINDOW_MSC,
+                HistoryErrorKind::EvidencePending,
+                HISTORY_DENSE_RETRY_THRESHOLD,
+            ),
+            HistoryErrorDecision::RetrySameProcess {
+                window_msc: HISTORY_MIN_WINDOW_MSC,
+            }
+        );
+        assert_eq!(
+            history_persist_retry_error(
+                "bridge_store_history_batch_write_failed",
+                "bridge_store_history_lease_invalid",
+            ),
+            "history_persist_retry_failed_bridge_store_history_batch_write_failed_bridge_store_history_lease_invalid"
+        );
+        assert_eq!(
+            history_persist_retry_result("bridge_store_history_batch_write_failed", Ok(())),
+            Err("bridge_store_history_batch_write_failed".to_owned())
+        );
+        assert_eq!(
+            history_persist_retry_result(
+                "bridge_store_history_batch_write_failed",
+                Err("bridge_store_history_lease_invalid".to_owned()),
+            ),
+            Err(
+                "history_persist_retry_failed_bridge_store_history_batch_write_failed_bridge_store_history_lease_invalid"
+                    .to_owned()
+            )
+        );
+        assert!(!history_evidence_pending_reached_limit(
+            HISTORY_EVIDENCE_PENDING_MAX_ATTEMPTS - 1
+        ));
+        assert!(history_evidence_pending_reached_limit(
+            HISTORY_EVIDENCE_PENDING_MAX_ATTEMPTS
+        ));
     }
 
     #[test]
