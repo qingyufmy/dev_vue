@@ -19,7 +19,7 @@ use bridge_worker_host::{
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 use tokio::net::windows::named_pipe::NamedPipeServer;
@@ -199,6 +199,7 @@ pub struct Mt4SessionHandle {
     source: Arc<Mt4EaSnapshotSource>,
     collector: CollectorHandle,
     history: HistorySyncHandle,
+    store: Arc<OutboxStore>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     command_sequence: Arc<AtomicU64>,
 }
@@ -310,8 +311,23 @@ impl Mt4SessionHandle {
         Ok(())
     }
 
-    pub fn request_history_refresh(&self) {
-        self.history.wake();
+    pub fn request_history_refresh(&self) -> Result<(), TerminalSessionError> {
+        let now = (self.clock)();
+        if now <= 0 {
+            return Err(TerminalSessionError::new("terminal_session_clock_invalid"));
+        }
+        let terminal = bridge_contract::TerminalDescriptor {
+            terminal_instance_id: self.route.terminal_instance_id.clone(),
+            platform: self.route.platform.clone(),
+            account_ref: self.route.account_ref.clone(),
+            connection_epoch: self.route.connection_epoch,
+            worker_version: None,
+        };
+        self.store
+            .mark_mt4_history_rescan_pending(&terminal, now)
+            .map_err(|error| TerminalSessionError::new(error.code()))?;
+        self.history.request_rescan();
+        Ok(())
     }
 
     pub fn freshness(&self) -> TerminalStreamFreshness {
@@ -799,26 +815,30 @@ impl RunningMt4Session {
             connection_epoch: spec.route.connection_epoch,
             worker_version: None,
         };
-        let history_state = store
+        let mut history_state = store
             .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
             .map_err(|error| TerminalSessionError::new(error.code()))?;
-        let initial_cursor = if history_state.cursor == HistoryCursor::default() {
-            HistoryCursor {
-                time_msc: HISTORY_COVERAGE_START_UTC_MSC,
-                ticket: "0".to_owned(),
+        if history_state.updated_at_utc_msc == 0 {
+            let now = (clock)();
+            if now <= 0 {
+                return Err(TerminalSessionError::new("terminal_session_clock_invalid"));
             }
-        } else {
-            history_state.cursor
-        };
+            store
+                .mark_mt4_history_rescan_pending(&terminal, now)
+                .map_err(|error| TerminalSessionError::new(error.code()))?;
+            history_state = store
+                .history_archive_state(&terminal.terminal_instance_id, &terminal.account_ref)
+                .map_err(|error| TerminalSessionError::new(error.code()))?;
+        }
         let (history, history_task) = start_mt4_history_sync(
             Arc::clone(&source),
             Arc::clone(&store),
             terminal,
-            initial_cursor,
+            history_state.cursor,
             history_state.is_complete,
         );
-        let projector =
-            SnapshotProjector::restore(store, spec.route.clone()).map_err(projection_error)?;
+        let projector = SnapshotProjector::restore(Arc::clone(&store), spec.route.clone())
+            .map_err(projection_error)?;
         let (collector, collector_handle) = SnapshotCollector::new(
             Arc::clone(&source),
             projector,
@@ -833,6 +853,7 @@ impl RunningMt4Session {
                 source,
                 collector: collector_handle,
                 history,
+                store,
                 clock,
                 command_sequence: Arc::new(AtomicU64::new(0)),
             },
@@ -856,6 +877,7 @@ impl RunningMt4Session {
 struct HistorySyncHandle {
     stop_tx: watch::Sender<bool>,
     wake: Arc<Notify>,
+    rescan_requested: Arc<AtomicBool>,
     status_rx: watch::Receiver<HistorySyncStatus>,
 }
 
@@ -868,6 +890,7 @@ impl HistorySyncHandle {
             Self {
                 stop_tx,
                 wake,
+                rescan_requested: Arc::new(AtomicBool::new(false)),
                 status_rx,
             },
             status_tx,
@@ -880,6 +903,11 @@ impl HistorySyncHandle {
     }
 
     fn wake(&self) {
+        self.wake.notify_one();
+    }
+
+    fn request_rescan(&self) {
+        self.rescan_requested.store(true, Ordering::Release);
         self.wake.notify_one();
     }
 
@@ -1895,13 +1923,19 @@ fn start_mt4_history_sync(
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let (status_tx, status_rx) = watch::channel(HistorySyncStatus::default());
     let wake = Arc::new(Notify::new());
+    let rescan_requested = Arc::new(AtomicBool::new(false));
     let handle = HistorySyncHandle {
         stop_tx,
         wake: Arc::clone(&wake),
+        rescan_requested: Arc::clone(&rescan_requested),
         status_rx,
     };
     let task = tokio::spawn(async move {
         let mut cursor = initial_cursor;
+        let rescan_start_cursor = HistoryCursor {
+            time_msc: HISTORY_COVERAGE_START_UTC_MSC,
+            ticket: "0".to_owned(),
+        };
         let mut complete = initially_complete;
         let mut failures = 0_u32;
         loop {
@@ -1933,6 +1967,11 @@ fn start_mt4_history_sync(
             if *stop_rx.borrow() {
                 return;
             }
+            if rescan_requested.swap(false, Ordering::AcqRel) {
+                cursor = rescan_start_cursor.clone();
+                complete = false;
+                failures = 0;
+            }
             let cursor_ticket = match cursor.ticket.parse::<i64>() {
                 Ok(ticket) if ticket >= 0 => ticket,
                 _ => {
@@ -1961,6 +2000,13 @@ fn start_mt4_history_sync(
                     continue;
                 }
             };
+            if rescan_requested.load(Ordering::Acquire) {
+                let _ = rescan_requested.swap(false, Ordering::AcqRel);
+                cursor = rescan_start_cursor.clone();
+                complete = false;
+                failures = 0;
+                continue;
+            }
             let trades = batch
                 .items
                 .iter()
@@ -1992,6 +2038,12 @@ fn start_mt4_history_sync(
             .await;
             match persisted {
                 Ok(Ok(())) => {
+                    if rescan_requested.swap(false, Ordering::AcqRel) {
+                        cursor = rescan_start_cursor.clone();
+                        complete = false;
+                        failures = 0;
+                        continue;
+                    }
                     cursor = next_cursor;
                     complete = !has_more;
                     failures = 0;
@@ -2392,6 +2444,29 @@ mod tests {
             },
             connection_epoch: 3,
         };
+        let terminal_descriptor = bridge_contract::TerminalDescriptor {
+            terminal_instance_id: terminal_id.clone(),
+            platform: "mt4".to_owned(),
+            account_ref: route.account_ref.clone(),
+            connection_epoch: route.connection_epoch,
+            worker_version: None,
+        };
+        store
+            .persist_history_archive_batch(
+                &terminal_descriptor,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: 1_780_000_000_000,
+                        ticket: "999".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: 1_800_000_000_000,
+                },
+            )
+            .expect("seed completed MT4 history state");
         let manager = Mt4SessionManager::new(
             terminal_id.clone(),
             Arc::clone(&store),
@@ -2417,6 +2492,13 @@ mod tests {
             )
             .await
             .expect("MT4 session");
+        assert!(
+            store
+                .history_archive_state(&terminal_id, &route.account_ref)
+                .expect("startup history state")
+                .is_complete,
+            "a normal restart must preserve a completed MT4 cursor and remain incremental"
+        );
         let reconnect = reconnect_pipe_name(&terminal_id).expect("reconnect pipe");
         let ea_terminal_id = terminal_id.clone();
         let ea_terminal_data_path = terminal_data_path.clone();
@@ -2457,6 +2539,7 @@ mod tests {
                         .expect("message type bytes"),
                 );
                 if message_type == MessageType::DealsRequest as i32 {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                     write_frame(
                         &mut pipe,
                         &encode_deals(&DealsBatch {
@@ -2563,6 +2646,9 @@ mod tests {
             .expect("execute MT4 command");
         assert_eq!(trade.status, "succeeded");
         assert_eq!(trade.evidence.order_tickets, ["501"]);
+        handle
+            .wake_after_command()
+            .expect("incremental MT4 history wake after command");
         let projection = store
             .load_terminal_projection(&terminal_id, &route.account_ref, route.connection_epoch)
             .expect("projection");
@@ -2585,7 +2671,10 @@ mod tests {
                 let state = store
                     .history_archive_state(&terminal_id, &route.account_ref)
                     .expect("history state");
-                if state.is_complete {
+                if state.is_complete
+                    && state.cursor.time_msc == 1_785_333_000_000
+                    && state.cursor.ticket == "77"
+                {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2596,6 +2685,30 @@ mod tests {
         assert_eq!(handle.status().history.state, HistorySyncState::Ready);
         assert_eq!(handle.status().history.consecutive_failures, 0);
         assert!(handle.status().history.last_success_at_utc_msc.is_some());
+        handle
+            .request_history_refresh()
+            .expect("manual MT4 history refresh");
+        assert!(
+            !store
+                .history_archive_state(&terminal_id, &route.account_ref)
+                .expect("manual pending history state")
+                .is_complete,
+            "manual refresh must mark pending synchronously"
+        );
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if store
+                    .history_archive_state(&terminal_id, &route.account_ref)
+                    .expect("history state after manual refresh")
+                    .is_complete
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("MT4 manual history rescan");
         let history = store
             .read_history_archive_page(
                 &bridge_contract::TerminalDescriptor {

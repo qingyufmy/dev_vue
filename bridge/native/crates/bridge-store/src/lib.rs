@@ -32,6 +32,7 @@ const MAX_HISTORY_SNAPSHOT_CURSORS: usize = 512;
 const HISTORY_SNAPSHOT_TTL_MSC: i64 = 10 * 60 * 1_000;
 const HISTORY_CURSOR_TOKEN_BYTES: usize = 32;
 pub const HISTORY_COVERAGE_START_UTC_MSC: i64 = 946_684_800_000;
+const MT4_HISTORY_SOURCE_NOTE: &str = "mt4_account_history_tab_range";
 
 const NATIVE_COMMAND_LEDGER_REQUIRED_COLUMNS: &[&str] = &[
     "command_id",
@@ -2282,6 +2283,78 @@ impl OutboxStore {
             })
     }
 
+    /// Mark an MT4 archive as pending before starting a full rescan of the
+    /// terminal-visible Account History range.
+    ///
+    /// The persisted cursor is reset to the coverage boundary so an interrupted
+    /// manual rescan remains recoverable after a process restart. Existing
+    /// archive rows are retained and deterministically upserted by the scan.
+    pub fn mark_mt4_history_rescan_pending(
+        &self,
+        terminal: &TerminalDescriptor,
+        now_utc_msc: i64,
+    ) -> Result<(), StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        if terminal.platform != "mt4" {
+            return Err(StoreError::new("bridge_store_history_platform_invalid"));
+        }
+        if now_utc_msc <= 0 {
+            return Err(StoreError::new(
+                "bridge_store_history_state_timestamp_invalid",
+            ));
+        }
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| StoreError::new("bridge_store_history_transaction_failed"))?;
+        let cursor_json = serde_json::to_string(&HistoryCursor {
+            time_msc: HISTORY_COVERAGE_START_UTC_MSC,
+            ticket: "0".to_owned(),
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_cursor_invalid"))?;
+        transaction
+            .execute(
+                "INSERT INTO history_archive_state (\
+                   terminal_instance_id, broker_server, login_account, cursor_value, \
+                   is_complete, updated_at_utc_msc\
+                 ) VALUES (?1, ?2, ?3, ?4, 0, ?5)\
+                 ON CONFLICT(terminal_instance_id, broker_server, login_account) DO UPDATE SET \
+                   cursor_value = excluded.cursor_value, is_complete = 0, \
+                   updated_at_utc_msc = excluded.updated_at_utc_msc;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    cursor_json,
+                    now_utc_msc,
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_state_write_failed"))?;
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))?;
+        drop(connection);
+
+        let mut snapshots = self
+            .history_snapshots
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        snapshots.retain(|_, snapshot| {
+            !(snapshot.platform == terminal.platform
+                && snapshot.terminal_instance_id == terminal.terminal_instance_id
+                && snapshot
+                    .broker_server
+                    .eq_ignore_ascii_case(&terminal.account_ref.broker_server)
+                && snapshot.login_account == terminal.account_ref.login)
+        });
+        Ok(())
+    }
+
     pub fn persist_history_archive_batch(
         &self,
         terminal: &TerminalDescriptor,
@@ -2321,7 +2394,7 @@ impl OutboxStore {
         )?;
         let current = transaction
             .query_row(
-                "SELECT cursor_value FROM history_archive_state \
+                "SELECT cursor_value, is_complete FROM history_archive_state \
                  WHERE terminal_instance_id = ?1 \
                    AND broker_server = ?2 COLLATE NOCASE \
                    AND login_account = ?3 LIMIT 1;",
@@ -2330,14 +2403,19 @@ impl OutboxStore {
                     terminal.account_ref.broker_server,
                     terminal.account_ref.login
                 ],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
             )
             .optional()
             .map_err(|_| StoreError::new("bridge_store_history_state_query_failed"))?
-            .map(|value| parse_history_cursor(&value))
+            .map(|(value, complete)| {
+                if !matches!(complete, 0 | 1) {
+                    return Err(StoreError::new("bridge_store_history_state_invalid"));
+                }
+                Ok((parse_history_cursor(&value)?, complete == 1))
+            })
             .transpose()?
-            .unwrap_or_default();
-        if compare_history_cursor(&batch.next_cursor, &current).is_lt() {
+            .unwrap_or((HistoryCursor::default(), false));
+        if compare_history_cursor(&batch.next_cursor, &current.0).is_lt() {
             return Err(StoreError::new("bridge_store_history_cursor_regression"));
         }
         let cursor_json = serde_json::to_string(&batch.next_cursor)
@@ -2699,7 +2777,14 @@ impl OutboxStore {
             &state,
             now_utc_msc,
         )?;
-        if history_sync["requested_range_complete"] != serde_json::Value::Bool(true) {
+        let range_is_complete = if terminal.platform.eq_ignore_ascii_case("mt5") {
+            history_sync["requested_range_complete"] == serde_json::Value::Bool(true)
+        } else if terminal.platform == "mt4" {
+            history_sync["terminal_visible_history_complete"] == serde_json::Value::Bool(true)
+        } else {
+            false
+        };
+        if !range_is_complete {
             return Err(StoreError::new("history_cursor_range_incomplete"));
         }
         let highwater_rowid = connection
@@ -6542,29 +6627,33 @@ fn read_history_sync_metadata_locked(
     };
     let ranges = read_history_coverage_ranges_locked(connection, &scope)?;
     const HOUR_MSC: i64 = 60 * 60 * 1_000;
-    let archive_complete = if terminal.platform.eq_ignore_ascii_case("mt5") {
+    let is_mt5 = terminal.platform.eq_ignore_ascii_case("mt5");
+    let is_mt4 = terminal.platform == "mt4";
+    let archive_complete = if is_mt5 {
         let archive_end = now_utc_msc.div_euclid(HOUR_MSC) * HOUR_MSC;
         archive_end >= HISTORY_COVERAGE_START_UTC_MSC
             && history_ranges_cover(&ranges, HISTORY_COVERAGE_START_UTC_MSC, archive_end)
+    } else if is_mt4 {
+        // MT4's legacy flag only proves that the terminal reached the end of
+        // the currently visible Account History range.  It is not broker-wide
+        // coverage and must never satisfy exact-range completeness on its own.
+        false
     } else {
-        // MT4 still uses its legacy contiguous archive state.  The new
-        // coverage table is an MT5 range scheduler detail and must not alter
-        // the existing MT4 contract.
-        state.is_complete
+        false
     };
     let requested_range_complete = request.requested_range.as_ref().map(|range| {
-        if terminal.platform.eq_ignore_ascii_case("mt5") {
+        if is_mt5 {
             history_ranges_cover(&ranges, range.range_start_utc_msc, range.range_end_utc_msc)
+        } else if is_mt4 {
+            // MT4 has no broker-side range coverage proof.  Keep this false
+            // even after the terminal-visible scan reaches its current end.
+            false
         } else {
-            // MT4 has no range coverage table yet.  Its existing complete
-            // flag represents the whole archive, so retain that global
-            // semantic for an explicit date request.
             state.is_complete
         }
     });
     let coverage_bounds = request.requested_range.as_ref().and_then(|range| {
-        if !terminal.platform.eq_ignore_ascii_case("mt5") || requested_range_complete != Some(true)
-        {
+        if !is_mt5 || requested_range_complete != Some(true) {
             return None;
         }
         history_ranges_covering_bounds(&ranges, range.range_start_utc_msc, range.range_end_utc_msc)
@@ -6610,7 +6699,7 @@ fn read_history_sync_metadata_locked(
                 serde_json::Value::Null,
             )
         };
-    Ok(serde_json::json!({
+    let mut metadata = serde_json::json!({
         "complete": state.is_complete,
         "cursor_time_msc": state.cursor.time_msc,
         "updated_at_utc_msc": state.updated_at_utc_msc,
@@ -6623,7 +6712,13 @@ fn read_history_sync_metadata_locked(
         "coverage_end_utc_msc": coverage_end,
         "backfill_pending": backfill_pending,
         "last_progress_at_utc_msc": last_progress_at_utc_msc,
-    }))
+    });
+    if is_mt4 {
+        metadata["terminal_visible_history_complete"] = serde_json::Value::Bool(state.is_complete);
+        metadata["history_source_complete"] = serde_json::Value::Bool(false);
+        metadata["history_source_note"] = serde_json::Value::String(MT4_HISTORY_SOURCE_NOTE.into());
+    }
+    Ok(metadata)
 }
 
 fn read_history_evidence_for_page(
@@ -7816,7 +7911,6 @@ mod tests {
         assert_eq!(second["next_cursor"], second_repeat["next_cursor"]);
         assert_eq!(second["statistics"], first["statistics"]);
         assert_eq!(second["pagination"]["total_count"], 10_000);
-
         {
             let connection = store.connection.lock().expect("insert new row lock");
             connection
@@ -8834,10 +8928,139 @@ mod tests {
             )
             .expect("mt4 metadata");
         assert_eq!(mt4_page["history_sync"]["complete"], true);
-        assert_eq!(mt4_page["history_sync"]["archive_complete"], true);
-        assert_eq!(mt4_page["history_sync"]["requested_range_complete"], true);
+        assert_eq!(mt4_page["history_sync"]["archive_complete"], false);
+        assert_eq!(mt4_page["history_sync"]["requested_range_complete"], false);
+        assert_eq!(
+            mt4_page["history_sync"]["terminal_visible_history_complete"],
+            true
+        );
+        assert_eq!(mt4_page["history_sync"]["history_source_complete"], false);
+        assert_eq!(
+            mt4_page["history_sync"]["history_source_note"],
+            MT4_HISTORY_SOURCE_NOTE
+        );
+
+        let cursor_parameters = serde_json::json!({
+            "range_start_utc_msc": day_one,
+            "range_end_utc_msc": day_three,
+            "page_size": 20,
+        });
+        let cursor_page = store
+            .read_history_cursor_page_at(&mt4, &cursor_parameters, day_four)
+            .expect("mt4 terminal-visible cursor snapshot");
+        let snapshot_id = cursor_page["history_snapshot_id"]
+            .as_str()
+            .expect("mt4 snapshot id")
+            .to_owned();
+        store
+            .mark_mt4_history_rescan_pending(&mt4, day_four + 1)
+            .expect("mark mt4 history pending");
+        assert!(
+            !store
+                .history_archive_state(&mt4.terminal_instance_id, &mt4.account_ref)
+                .expect("pending state")
+                .is_complete
+        );
+        let mut continuation = cursor_parameters;
+        continuation["snapshot_id"] = serde_json::Value::String(snapshot_id);
+        assert_eq!(
+            store
+                .read_history_cursor_page_at(&mt4, &continuation, day_four + 1)
+                .expect_err("pending MT4 snapshot must be invalidated")
+                .code(),
+            "history_snapshot_invalid"
+        );
         drop(store);
         fs::remove_dir_all(root).expect("remove metadata fixture");
+    }
+
+    #[test]
+    fn mt4_rescan_marker_resets_cursor_and_all_platforms_reject_regression() {
+        let root = unique_test_directory("mt4-history-rescan-regression");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("rescan store");
+        let mut mt4 = history_terminal("123456");
+        mt4.platform = "mt4".to_owned();
+        let mt5 = history_terminal("654321");
+        {
+            let connection = store.connection.lock().expect("rescan state lock");
+            for terminal in [&mt4, &mt5] {
+                connection
+                    .execute(
+                        "INSERT INTO history_archive_state (
+                           terminal_instance_id, broker_server, login_account,
+                           cursor_value, is_complete, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+                        params![
+                            terminal.terminal_instance_id,
+                            terminal.account_ref.broker_server,
+                            terminal.account_ref.login,
+                            serde_json::json!({
+                                "time_msc": HISTORY_COVERAGE_START_UTC_MSC + 100_000,
+                                "ticket": "100"
+                            })
+                            .to_string(),
+                            1,
+                            1_700_000_000_000_i64,
+                        ],
+                    )
+                    .expect("rescan state fixture");
+            }
+        }
+        let regressed = HistoryArchiveBatch {
+            deals: Vec::new(),
+            history_orders: Vec::new(),
+            trades: vec![serde_json::json!({
+                "deal_ticket": 9001,
+                "close_time_msc": HISTORY_COVERAGE_START_UTC_MSC + 10_000,
+                "profit": 1.0,
+            })],
+            next_cursor: HistoryCursor {
+                time_msc: HISTORY_COVERAGE_START_UTC_MSC + 10_000,
+                ticket: "10".to_owned(),
+            },
+            has_more: true,
+            observed_at_utc_msc: 1_700_000_000_100,
+        };
+        store
+            .mark_mt4_history_rescan_pending(&mt4, 1_700_000_000_050)
+            .expect("mark MT4 rescan pending");
+        assert_eq!(
+            store
+                .history_archive_state(&mt4.terminal_instance_id, &mt4.account_ref)
+                .expect("mt4 state")
+                .cursor,
+            HistoryCursor {
+                time_msc: HISTORY_COVERAGE_START_UTC_MSC,
+                ticket: "0".to_owned(),
+            }
+        );
+        store
+            .persist_history_archive_batch(&mt4, &regressed)
+            .expect("MT4 rescan advances from the reset boundary");
+        assert_eq!(
+            store
+                .persist_history_archive_batch(&mt5, &regressed)
+                .expect_err("mt5 cursor regression must fail closed")
+                .code(),
+            "bridge_store_history_cursor_regression"
+        );
+        assert_eq!(
+            store
+                .mark_mt4_history_rescan_pending(&mt5, 1_700_000_000_200)
+                .expect_err("MT5 cannot use the MT4 rescan marker")
+                .code(),
+            "bridge_store_history_platform_invalid"
+        );
+        assert_eq!(
+            store
+                .mark_mt4_history_rescan_pending(&mt4, 0)
+                .expect_err("invalid rescan timestamp")
+                .code(),
+            "bridge_store_history_state_timestamp_invalid"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove rescan fixture");
     }
 
     #[test]

@@ -12,6 +12,14 @@ function block(startMarker, endMarker) {
   return app.slice(start, end)
 }
 
+function loadHistoryRangeFromError() {
+  const start = app.indexOf('function historyRangeFromError')
+  const end = app.indexOf('function historyRetryContextKey', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`${app.slice(start, end)}\nreturn historyRangeFromError;`)()
+}
+
 describe('AI laboratory demand-driven frontend loading contract', () => {
   it('loads the dashboard in status, symbols, then dashboard-data order', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
@@ -91,7 +99,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
     expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
     expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
-    expect(html).toContain('/ai/app.js?v=20260809historyreconnect1')
+    expect(html).toContain('/ai/app.js?v=20260809historyasync2')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {
@@ -111,5 +119,41 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(binding).not.toContain('refreshAll()')
     const timer = block('function startLiveQuoteRefreshTimer()', 'async function syncDefaultPlatformQuote')
     expect(timer).toContain('!state.symbols.length')
+  })
+
+  it('keeps an incomplete history cursor in a bounded pending retry state', () => {
+    const retry = block('function scheduleHistoryRangeRetry', 'function resetHistoryCursorState')
+    const views = block('function loadHistoryViews(', 'function historyProtectionCell')
+    const table = block('function loadHistory(forceRefresh', 'function _applyHistoryData')
+
+    expect(app).toContain("history_cursor_range_incomplete: \"正在准备所选范围的交易记录，请稍后刷新\"")
+    expect(app).toContain("const HISTORY_RANGE_RETRY_INTERVAL_MS = 3000")
+    expect(app).toContain("const HISTORY_RANGE_RETRY_MAX_ATTEMPTS = 20")
+    expect(app).toContain('error.history_range = msg.history_range || msg.details?.history_range || null')
+    expect(app).toContain('range_start_utc_msc:_historyCursorState.rangeStart')
+    expect(app).toContain('range_end_utc_msc:_historyCursorState.rangeEnd')
+    expect(table).toContain('if (!incomplete) console.error("loadHistory:", e)')
+    expect(table).toContain('if (!incomplete) notifyHistoryFailure(key, e)')
+    expect(retry).toContain('retry.timer || retry.inFlight')
+    expect(retry).toContain('historyRetryAttempt:true')
+    expect(retry).toContain('forceRefresh:false')
+    expect(retry).toContain('retry.attempts += 1')
+    expect(views).toContain('if (manualRefresh) cancelHistoryRangeRetry()')
+    expect(views).toContain('_historyRangeRetryState.contextKey !== currentRetryContext')
+    expect(views).toContain('finishHistoryRangeRetry(_historyRangeRetryState)')
+    expect(views.indexOf('await loadHistory(forceRefresh')).toBeLessThan(views.indexOf('await loadHistoryChart(false'))
+    expect(views).toContain('return { historyPending:true }')
+    expect(app).toContain('if (tabId !== "history") cancelHistoryRangeRetry()')
+    expect(app).toContain('function resetHistoryCursorState(key = null) {\n  cancelHistoryRangeRetry()')
+  })
+
+  it('accepts only a safe fixed range from an incomplete-history response', () => {
+    const historyRangeFromError = loadHistoryRangeFromError()
+    expect(historyRangeFromError({ history_range:{ range_start_utc_msc:1000, range_end_utc_msc:2000 } }))
+      .toEqual({ rangeStart:1000, rangeEnd:2000 })
+    expect(historyRangeFromError({ details:{ history_range:{ range_start_utc_msc:0, range_end_utc_msc:2000 } } }))
+      .toBeNull()
+    expect(historyRangeFromError({ history_range:{ range_start_utc_msc:'bad', range_end_utc_msc:2000 } }))
+      .toBeNull()
   })
 })

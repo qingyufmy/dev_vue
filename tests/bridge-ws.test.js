@@ -872,6 +872,208 @@ describe('initBridgeWS', () => {
     vi.useRealTimers()
   })
 
+  it('retries an incomplete cursor range with the first fixed endpoint before a snapshot exists', async () => {
+    vi.useFakeTimers()
+    const firstNow = Date.parse('2026-08-10T12:30:00.000Z')
+    vi.setSystemTime(firstNow)
+    const ownershipStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const route = {
+      terminal_instance_id:'terminal-history-fixed-retry', platform:'mt5',
+      account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      capabilities:['history_exact_range_v1', 'history_cursor_v1'],
+    }
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.supports.mockReturnValue(true)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([route])
+    mockBridgeV3Business.execute
+      .mockResolvedValueOnce({
+        status:'error', error:'history_cursor_range_incomplete',
+        message:'history_cursor_range_incomplete',
+      })
+      .mockResolvedValueOnce({
+        status:'success', orders:[],
+        history_sync:{ requested_range_complete:true },
+      })
+    queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
+      ? { ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
+      : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
+          plan_source:null, connection_enabled:1 })
+
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection').at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-first', action:'history',
+      params:{ history_scope:'recent', page:1, page_size:20 },
+    }))
+    await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(1))
+    const firstCall = mockBridgeV3Business.execute.mock.calls[0]
+    expect(firstCall[1]).toBe('history_page')
+    expect(firstCall[2]).toMatchObject({
+      range_start_utc_msc:ownershipStart,
+      terminal_instance_id:route.terminal_instance_id,
+    })
+    const firstRangeEnd = Number(firstCall[2].range_end_utc_msc)
+    expect(firstRangeEnd).toBeGreaterThanOrEqual(firstNow)
+    expect(firstRangeEnd).toBeLessThanOrEqual(firstNow + 60_000)
+    expect(firstCall[2]).not.toHaveProperty('history_snapshot_id')
+    expect(JSON.parse(browserWs.send.mock.calls[0][0])).toMatchObject({
+      status:'error', error:'history_cursor_range_incomplete',
+      history_range:{ range_start_utc_msc:ownershipStart, range_end_utc_msc:firstRangeEnd },
+    })
+
+    const retryNow = firstRangeEnd + 5_000
+    vi.setSystemTime(retryNow)
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-retry', action:'history',
+      params:{ history_scope:'recent', page:1, page_size:20,
+        range_start_utc_msc:ownershipStart, range_end_utc_msc:firstRangeEnd },
+    }))
+    await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2))
+    const retryCall = mockBridgeV3Business.execute.mock.calls[1]
+    expect(retryCall[1]).toBe('history_page')
+    expect(retryCall[2]).toMatchObject({
+      range_start_utc_msc:ownershipStart,
+      range_end_utc_msc:firstRangeEnd,
+      terminal_instance_id:route.terminal_instance_id,
+    })
+    expect(retryCall[2]).not.toHaveProperty('history_snapshot_id')
+    browserWs.emit('close')
+    vi.useRealTimers()
+  })
+
+  it('reuses a table fixed range for chart data and rejects a partial range', async () => {
+    vi.useFakeTimers()
+    const now = Date.parse('2026-08-10T12:30:00.000Z')
+    vi.setSystemTime(now)
+    const ownershipStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const route = {
+      terminal_instance_id:'terminal-history-chart-fixed', platform:'mt5',
+      account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      capabilities:['history_exact_range_v1', 'history_cursor_v1'],
+    }
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.supports.mockReturnValue(true)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([route])
+    mockBridgeV3Business.execute
+      .mockResolvedValueOnce({ status:'success', orders:[], history_sync:{ requested_range_complete:true } })
+      .mockResolvedValueOnce({ status:'success', statistics:{}, chart:[] })
+    queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
+      ? { ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
+      : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
+          plan_source:null, connection_enabled:1 })
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection').at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-table', action:'history',
+      params:{ history_scope:'recent', page:1, page_size:20 },
+    }))
+    await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(1))
+    const tableRangeEnd = Number(mockBridgeV3Business.execute.mock.calls[0][2].range_end_utc_msc)
+    vi.setSystemTime(now + 10_000)
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-chart', action:'history_chart_data',
+      params:{ history_scope:'recent',
+        range_start_utc_msc:ownershipStart, range_end_utc_msc:tableRangeEnd },
+    }))
+    await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2))
+    const chartCall = mockBridgeV3Business.execute.mock.calls[1]
+    expect(chartCall[1]).toBe('chart_data')
+    expect(chartCall[2]).toMatchObject({
+      range_start_utc_msc:ownershipStart,
+      range_end_utc_msc:tableRangeEnd,
+      terminal_instance_id:route.terminal_instance_id,
+    })
+
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-chart-partial', action:'history_chart_data',
+      params:{ history_scope:'recent', range_start_utc_msc:ownershipStart },
+    }))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(3))
+    expect(JSON.parse(browserWs.send.mock.calls[2][0])).toMatchObject({
+      status:'error', code:'history_cursor_invalid',
+    })
+    expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2)
+    browserWs.emit('close')
+    vi.useRealTimers()
+  })
+
+  it('fails closed for incomplete, reversed, ownership-crossing, and future fixed ranges', async () => {
+    vi.useFakeTimers()
+    const now = Date.parse('2026-08-10T12:30:00.000Z')
+    vi.setSystemTime(now)
+    const ownershipStart = Date.parse('2026-08-07T12:30:00.000Z')
+    const route = {
+      terminal_instance_id:'terminal-history-fixed-guards', platform:'mt5',
+      account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      capabilities:['history_exact_range_v1', 'history_cursor_v1'],
+    }
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.supports.mockReturnValue(true)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([route])
+    queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
+      ? { ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
+      : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
+          plan_source:null, connection_enabled:1 })
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection').at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+
+    const invalidRanges = [
+      { range_start_utc_msc:ownershipStart },
+      { range_start_utc_msc:now, range_end_utc_msc:ownershipStart },
+      { range_start_utc_msc:ownershipStart - 1, range_end_utc_msc:now },
+      { range_start_utc_msc:ownershipStart, range_end_utc_msc:now + 120_000 },
+      { range_start_utc_msc:ownershipStart + 1, range_end_utc_msc:now },
+      { history_scope:'ownership', range_start_utc_msc:ownershipStart + 1,
+        range_end_utc_msc:now },
+    ]
+    for (const [index, range] of invalidRanges.entries()) {
+      browserWs.emit('message', JSON.stringify({
+        type:'command', command_id:`history-invalid-${index}`, action:'history',
+        params:{ history_scope:'recent', ...range },
+      }))
+      await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(index + 1))
+      expect(JSON.parse(browserWs.send.mock.calls[index][0])).toMatchObject({
+        status:'error', code:'history_cursor_invalid',
+      })
+    }
+    expect(mockBridgeV3Business.execute).not.toHaveBeenCalled()
+    browserWs.emit('close')
+    vi.useRealTimers()
+  })
+
   it('includes authenticated admin sockets in user-wide session revocation', async () => {
     queryOne.mockResolvedValue({ id:42, role:'admin', token_version:0 })
     const server = new EventEmitter()
