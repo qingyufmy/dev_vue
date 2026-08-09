@@ -9313,7 +9313,7 @@ function setHistoryZeroClass(id, value) {
 }
 
 function getHistoryRangeParams() {
-  const scope = $("historyRangeMode")?.value || "recent";
+  const scope = $("historyRangeMode")?.value || "all";
   const params = { history_scope: scope };
   if (scope === "custom") {
     const from = $("historyRangeFrom")?.value || "";
@@ -9463,20 +9463,20 @@ function resetHistoryCursorState(key = null) {
 }
 
 function updateHistoryRangeUI() {
-  const scope = $("historyRangeMode")?.value || "recent";
+  const scope = $("historyRangeMode")?.value || "all";
   const custom = scope === "custom";
   $("historyRangeDates")?.classList.toggle("hidden", !custom);
   if ($("historyRangeFrom")) $("historyRangeFrom").disabled = !custom;
   if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
   const hints = {
-    recent: `显示当前在线 ${bridgePlatformLabel()} 账户最近 30 天的记录。`,
-    ownership: `从当前 ${bridgePlatformLabel()} 账户本次接入平台的精确时间开始。`,
+    all: `当前在线 ${bridgePlatformLabel()} 账户的全部可同步历史会异步准备，完成后自动刷新。`,
+    platform: `从当前在线 ${bridgePlatformLabel()} 账户首次接入平台的时间开始异步准备，完成后自动刷新。`,
     custom: "按所选平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
   const mt4RangeWarning = bridgePlatformLabel() === "MT4"
     ? " MT4 历史范围取决于终端“账户历史”页已加载的时间范围；需要完整历史时，请先在 MT4 中选择“全部历史记录”。"
     : "";
-  setText("historyRangeHint", `${hints[scope] || hints.recent}${mt4RangeWarning}`);
+  setText("historyRangeHint", `${hints[scope] || hints.all}${mt4RangeWarning}`);
 }
 
 function historyRefreshContextKey({ forceRefresh = false } = {}) {
@@ -9484,7 +9484,7 @@ function historyRefreshContextKey({ forceRefresh = false } = {}) {
   try {
     range = getHistoryRangeParams();
   } catch {
-    range = { history_scope: $("historyRangeMode")?.value || "recent" };
+    range = { history_scope: $("historyRangeMode")?.value || "all" };
   }
   const filters = state.historyFilters || {};
   return JSON.stringify({

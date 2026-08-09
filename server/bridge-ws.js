@@ -1145,6 +1145,9 @@ export function boundedHistoryExportPageCount(value, maximumPages = 50) {
 
 export const HISTORY_EXACT_RANGE_CAPABILITY = 'history_exact_range_v1'
 export const HISTORY_CURSOR_CAPABILITY = 'history_cursor_v1'
+// Keep this aligned with the native Bridge store's history archive coverage.
+// The all-account range is an exact half-open interval from 2000-01-01 UTC.
+export const HISTORY_COVERAGE_START_UTC_MSC = 946684800000
 const RECENT_HISTORY_WINDOW_MS = 30 * 24 * 60 * 60 * 1_000
 
 export function hasHistoryExactRangeCapability(route) {
@@ -1176,19 +1179,22 @@ function historyExactRangeFields(params = {}) {
 function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
   const rangeStart = Number(params?.range_start_utc_msc)
   const rangeEnd = Number(params?.range_end_utc_msc)
+  const platformStart = Number(resolvedRange?.platform_start_utc_msc)
   const ownershipStart = Number(resolvedRange?.ownership_start_utc_msc)
   const maxRangeEnd = Number.isSafeInteger(nowUtcMsc) ? nowUtcMsc + 60_000 : NaN
   const { hasStart, hasEnd } = historyExactRangeFields(params)
   if (!hasStart || !hasEnd
     || !Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
-    || !Number.isSafeInteger(ownershipStart) || !Number.isSafeInteger(maxRangeEnd)
+    || !Number.isSafeInteger(platformStart) || platformStart <= 0
+    || !Number.isSafeInteger(maxRangeEnd)
     || rangeStart <= 0 || rangeEnd <= 0 || rangeStart >= rangeEnd || rangeEnd > maxRangeEnd) {
     throw historyError('history_cursor_invalid')
   }
 
-  // `recent` and the open-ended scopes intentionally move with the current
-  // clock. A retry must still use its previous fixed range, while custom
-  // calendar bounds remain stable and must contain that range.
+  // `recent` remains a hidden compatibility scope and moves with the current
+  // clock. `all` and `platform` are fixed-origin scopes: retries must preserve
+  // their exact starts, while custom calendar bounds remain stable and must
+  // contain the requested range.
   const scope = String(resolvedRange?.scope || resolvedRange?.requested_scope || '')
     .trim().toLowerCase()
   if (scope === 'custom') {
@@ -1202,8 +1208,13 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
   } else if (scope === 'recent') {
     const expectedStart = rangeEnd - RECENT_HISTORY_WINDOW_MS
     if (rangeStart !== expectedStart) throw historyError('history_cursor_invalid')
-  } else if (['ownership', 'platform', 'all'].includes(scope)) {
-    if (rangeStart !== ownershipStart) throw historyError('history_cursor_invalid')
+  } else if (scope === 'platform') {
+    if (rangeStart !== platformStart) throw historyError('history_cursor_invalid')
+  } else if (scope === 'all') {
+    if (rangeStart !== HISTORY_COVERAGE_START_UTC_MSC) throw historyError('history_cursor_invalid')
+  } else if (scope === 'ownership') {
+    if (!Number.isSafeInteger(ownershipStart) || ownershipStart <= 0
+      || rangeStart !== ownershipStart) throw historyError('history_cursor_invalid')
   } else {
     throw historyError('history_cursor_invalid')
   }
@@ -1242,11 +1253,12 @@ export function safeHistoryRangeEndUtcMsc(now = Date.now(), dateTo = null) {
 /**
  * Decide whether an export may claim a complete history set.
  *
- * A bounded platform/custom range is complete when the bridge confirms that
- * requested range.  An all-time export is complete only when the archive is
- * complete.  The new fields are intentionally optional so older bridge
- * responses continue to use the legacy `complete` flag, while an explicit
- * truncation marker always fails closed.
+ * A bounded platform/custom range, including the fixed all-account range, is
+ * complete when the bridge confirms that requested range.  The archive proof
+ * remains the fallback for responses without explicit range fields.  The new
+ * fields are intentionally optional so older bridge responses continue to use
+ * the legacy `complete` flag, while an explicit truncation marker always fails
+ * closed.
  */
 export function isHistoryExportComplete({
   range = {},
@@ -1455,12 +1467,17 @@ function strictHistoryRouteForUser(userId, params = {}) {
   return routes[0]
 }
 
-function historyOwnershipStart(row) {
-  const start = Number(row?.ownership_start_utc_msc)
+function historyPlatformStart(row) {
+  const start = Number(row?.platform_start_utc_msc)
   if (!Number.isSafeInteger(start) || start <= 0) {
     throw historyError('bridge_history_ownership_unavailable')
   }
   return start
+}
+
+function historyOwnershipStart(row) {
+  const start = Number(row?.ownership_start_utc_msc)
+  return Number.isSafeInteger(start) && start > 0 ? start : null
 }
 
 export async function resolveHistoryRange(
@@ -1480,7 +1497,9 @@ export async function resolveHistoryRange(
 
   const ownership = await queryOne(`SELECT
       bindings.current_trading_account_id AS trading_account_id,
-      CAST(UNIX_TIMESTAMP(COALESCE(ownership.started_at, ta.first_verified_at))*1000 AS UNSIGNED)
+      CAST(UNIX_TIMESTAMP(COALESCE(bindings.first_connected_at, ta.first_verified_at, bindings.created_at))*1000 AS UNSIGNED)
+        AS platform_start_utc_msc,
+      CAST(UNIX_TIMESTAMP(ownership.started_at)*1000 AS UNSIGNED)
         AS ownership_start_utc_msc,
       ownership.id AS ownership_history_id
     FROM mt5_account_bindings bindings
@@ -1500,11 +1519,11 @@ export async function resolveHistoryRange(
       AND UPPER(bindings.broker_server_key) = UPPER(?)
       AND bindings.login_account = ?
     LIMIT 1`, [numericUserId, brokerServer, loginAccount])
+  const platformStart = historyPlatformStart(ownership)
   const ownershipStart = historyOwnershipStart(ownership)
-  if (ownershipStart >= nowUtcMsc) throw historyError('bridge_history_range_invalid')
 
   const requestedScope = params?.history_scope == null || params.history_scope === ''
-    ? 'recent' : String(params.history_scope).trim().toLowerCase()
+    ? 'all' : String(params.history_scope).trim().toLowerCase()
   if (!['recent', 'ownership', 'platform', 'all', 'custom'].includes(requestedScope)) {
     throw historyError('bridge_history_scope_invalid')
   }
@@ -1523,9 +1542,16 @@ export async function resolveHistoryRange(
     if (closeTo !== null) rangeEnd = Math.min(rangeEnd, closeTo)
   } else if (requestedScope === 'recent') {
     rangeStart = nowUtcMsc - RECENT_HISTORY_WINDOW_MS
-  } else {
-    // `platform` and `all` intentionally share the current ownership range;
-    // exposing a pre-ownership all-time archive would cross an account owner.
+  } else if (requestedScope === 'platform') {
+    rangeStart = platformStart
+  } else if (requestedScope === 'all') {
+    rangeStart = HISTORY_COVERAGE_START_UTC_MSC
+  } else if (requestedScope === 'ownership') {
+    // Hidden legacy ownership requests retain their current-owner range. New
+    // platform/all requests are resolved above and never use this timestamp.
+    if (!Number.isSafeInteger(ownershipStart)) {
+      throw historyError('bridge_history_ownership_unavailable')
+    }
     rangeStart = ownershipStart
   }
   if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
@@ -1538,6 +1564,7 @@ export async function resolveHistoryRange(
     requested_scope: requestedScope,
     range_start_utc_msc: rangeStart,
     range_end_utc_msc: rangeEnd,
+    platform_start_utc_msc: platformStart,
     ownership_start_utc_msc: ownershipStart,
     ownership_revision: ownership?.ownership_history_id == null
       ? null : String(ownership.ownership_history_id),
