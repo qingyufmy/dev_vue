@@ -145,6 +145,12 @@ CREATE TABLE IF NOT EXISTS history_archive_items (
   order_ticket TEXT,
   symbol TEXT,
   payload_json TEXT NOT NULL,
+  direction TEXT,
+  net_profit REAL,
+  volume REAL,
+  capital_kind TEXT,
+  capital_amount REAL,
+  summary_day_utc_msc INTEGER,
   updated_at_utc_msc INTEGER NOT NULL,
   PRIMARY KEY (
     terminal_instance_id, broker_server, login_account, item_kind, item_id
@@ -164,6 +170,16 @@ CREATE INDEX IF NOT EXISTS idx_history_archive_order
   ON history_archive_items (
     terminal_instance_id, broker_server, login_account,
     item_kind, order_ticket, event_time_msc, item_id
+  );
+CREATE INDEX IF NOT EXISTS idx_history_archive_summary_scope
+  ON history_archive_items (
+    terminal_instance_id, broker_server, login_account, platform,
+    item_kind, summary_day_utc_msc, direction, event_time_msc, item_id
+  );
+CREATE INDEX IF NOT EXISTS idx_history_archive_trade_filter
+  ON history_archive_items (
+    terminal_instance_id, broker_server, login_account, platform,
+    item_kind, direction, net_profit, event_time_msc, item_id
   );
 CREATE TABLE IF NOT EXISTS history_archive_state (
   terminal_instance_id TEXT NOT NULL,
@@ -267,4 +283,80 @@ CREATE INDEX IF NOT EXISTS idx_history_coverage_ranges_scope
   ON history_coverage_ranges (
     terminal_instance_id, broker_server, login_account,
     range_start_utc_msc, range_end_utc_msc
+  );
+
+-- Additive runtime state.  The broker key is NOCASE and platform is part of
+-- the primary key so MT4/MT5 (and accounts that reuse a login) never share a
+-- revision or freshness marker.
+CREATE TABLE IF NOT EXISTS history_scope_state (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  head_ready INTEGER NOT NULL DEFAULT 0 CHECK (head_ready IN (0, 1)),
+  head_range_start_utc_msc INTEGER,
+  head_range_end_utc_msc INTEGER,
+  coverage_complete INTEGER NOT NULL DEFAULT 0 CHECK (coverage_complete IN (0, 1)),
+  freshness_state TEXT NOT NULL CHECK (freshness_state IN ('fresh', 'refreshing', 'stale', 'blocked')),
+  fresh_through_utc_msc INTEGER,
+  history_revision INTEGER NOT NULL DEFAULT 0 CHECK (history_revision >= 0),
+  summary_revision INTEGER NOT NULL DEFAULT 0 CHECK (summary_revision >= 0),
+  summary_status TEXT NOT NULL CHECK (summary_status IN ('pending', 'rebuilding', 'ready', 'unavailable')),
+  updated_at_utc_msc INTEGER NOT NULL DEFAULT 0 CHECK (updated_at_utc_msc >= 0),
+  CHECK (
+    (head_ready = 0 AND head_range_start_utc_msc IS NULL AND head_range_end_utc_msc IS NULL)
+    OR (head_ready = 1 AND head_range_start_utc_msc IS NOT NULL
+        AND head_range_end_utc_msc IS NOT NULL
+        AND head_range_end_utc_msc > head_range_start_utc_msc)
+  ),
+  CHECK (fresh_through_utc_msc IS NULL OR fresh_through_utc_msc > 0),
+  PRIMARY KEY (terminal_instance_id, broker_server, login_account, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_history_scope_state_updated
+  ON history_scope_state (
+    terminal_instance_id, broker_server, login_account, platform,
+    updated_at_utc_msc DESC
+  );
+
+CREATE TABLE IF NOT EXISTS history_daily_summary (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  generation INTEGER NOT NULL CHECK (generation > 0),
+  summary_day_utc_msc INTEGER NOT NULL CHECK (summary_day_utc_msc >= 0),
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('trade', 'deal')),
+  direction TEXT NOT NULL DEFAULT '',
+  profit_bucket TEXT NOT NULL DEFAULT '',
+  trade_count INTEGER NOT NULL DEFAULT 0 CHECK (trade_count >= 0),
+  net_profit REAL NOT NULL DEFAULT 0,
+  volume REAL NOT NULL DEFAULT 0,
+  deal_deposit REAL NOT NULL DEFAULT 0,
+  deal_withdrawal REAL NOT NULL DEFAULT 0,
+  deal_credit REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (
+    terminal_instance_id, broker_server, login_account, platform,
+    generation, summary_day_utc_msc, item_kind, direction, profit_bucket
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_history_daily_summary_active
+  ON history_daily_summary (
+    terminal_instance_id, broker_server, login_account, platform,
+    generation, summary_day_utc_msc, item_kind, direction, profit_bucket
+  );
+
+CREATE TABLE IF NOT EXISTS history_summary_builds (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  active_generation INTEGER CHECK (active_generation IS NULL OR active_generation > 0),
+  building_generation INTEGER CHECK (building_generation IS NULL OR building_generation > 0),
+  updated_at_utc_msc INTEGER NOT NULL CHECK (updated_at_utc_msc >= 0),
+  PRIMARY KEY (terminal_instance_id, broker_server, login_account, platform)
+);
+CREATE INDEX IF NOT EXISTS idx_history_summary_builds_updated
+  ON history_summary_builds (
+    terminal_instance_id, broker_server, login_account, platform,
+    updated_at_utc_msc DESC
   );

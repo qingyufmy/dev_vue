@@ -115,6 +115,11 @@ const HISTORY_CURSOR_RANGE_INCOMPLETE_CODE = 'history_cursor_range_incomplete';
 const HISTORY_RANGE_RETRY_INTERVAL_MS = 3000;
 const HISTORY_RANGE_RETRY_MAX_ATTEMPTS = 20;
 let _historyRangeRetryState = null;
+let _historyDirty = true;
+let _historyFreshnessRetry = null;
+let _lastHistoryRevision = null;
+const HISTORY_FRESHNESS_RETRY_DELAYS_MS = [1000, 2000, 5000, 10000];
+const HISTORY_FRESHNESS_RETRY_MAX_ATTEMPTS = 60;
 const HISTORY_CIRCUIT_BREAKER_CODES = new Set([
   'bridge_data_request_disconnected',
   'bridge_history_route_required',
@@ -1461,6 +1466,7 @@ const API_ERROR_MESSAGES = {
   browser_websocket_disconnected: "实时连接已中断，请稍后重试",
   bridge_history_route_required: "当前账户路由尚未准备好，请稍后重试",
   bridge_history_temporarily_unavailable: "历史数据正在维护，请稍后再试",
+  bridge_history_before_supported_start: "交易历史仅支持查询 2025 年 1 月 1 日及之后的数据",
   history_cursor_range_incomplete: "正在准备所选范围的交易记录，请稍后刷新",
   model_task_status_unknown: "模型服务商状态暂不可确认，系统正在安全恢复并避免重复请求",
   model_task_active: "上一轮模型任务仍在运行，请等待完成",
@@ -1650,6 +1656,8 @@ function syncAiAccess(access) {
   if (changed) {
     _historyCache = null;
     _historyChartCache = null;
+    _historyDirty = true;
+    clearHistoryFreshnessRetry();
   }
   if (personalBridgeRestored) schedulePersonalBridgeRefresh();
   return { changed, personalBridgeRestored };
@@ -1713,6 +1721,8 @@ async function enterBridgeObserverMode({ paused = false, refresh = true } = {}) 
   state.positions = [];
   _historyCache = null;
   _historyChartCache = null;
+  _historyDirty = true;
+  clearHistoryFreshnessRetry();
   setText("quoteTime", "--");
   setText("mt5ServerTime", "--");
   renderPositionRows();
@@ -1841,6 +1851,9 @@ function stopRealtimeSync() {
 function clearAccountContextCaches() {
   _historyCache = null;
   _historyChartCache = null;
+  _historyDirty = true;
+  _lastHistoryRevision = null;
+  clearHistoryFreshnessRetry();
   resetHistoryCursorState(null);
   _historyCircuitBreakers.clear();
   _historyErrorNotices.clear();
@@ -1968,6 +1981,75 @@ async function handleAccountSwitched(msg = {}) {
   await refreshTabData(activeTabId()).catch(() => {});
   const rejected = results.find(item => item.status === "rejected");
   if (rejected) console.warn("[AccountSwitch] 部分账户数据刷新失败:", rejected.reason);
+}
+
+function clearHistoryFreshnessRetry() {
+  if (_historyFreshnessRetry?.timer) clearTimeout(_historyFreshnessRetry.timer);
+  _historyFreshnessRetry = null;
+}
+
+function historySyncMetadata(data) {
+  return data?.history_sync && typeof data.history_sync === "object"
+    ? data.history_sync : {};
+}
+
+function historySummaryReadyForRequestedRange(sync = {}) {
+  if (sync.summary_status && sync.summary_status !== "ready") return false;
+  if (sync.requested_range_complete !== false) return true;
+  // MT4 can only prove completion of the terminal-visible Account History.
+  // Preserve that explicit source boundary without presenting a partial MT5
+  // head snapshot as full-range statistics.
+  return String(state.bridgePlatform || "").toLowerCase() === "mt4"
+    && sync.terminal_visible_history_complete === true;
+}
+
+function markHistoryDirty({ refreshActive = false } = {}) {
+  _historyDirty = true;
+  _historyCache = null;
+  _historyChartCache = null;
+  resetHistoryCursorState(null);
+  if (!refreshActive || activeTabId() !== "history") return;
+  clearHistoryFreshnessRetry();
+  _historyFreshnessRetry = {
+    attempt:0,
+    contextKey:historyRetryContextKey(),
+    timer:setTimeout(() => {
+      if (activeTabId() !== "history") return;
+      loadHistoryViews({ forceRefresh:true, historyRetryAttempt:true }).catch(() => {});
+    }, HISTORY_FRESHNESS_RETRY_DELAYS_MS[0]),
+  };
+}
+
+function scheduleHistoryFreshnessRetry(data) {
+  const sync = historySyncMetadata(data);
+  const freshnessPending = ['refreshing', 'stale'].includes(String(sync.freshness_state || ''));
+  const summaryPending = ['pending', 'rebuilding'].includes(String(sync.summary_status || ''));
+  if (!freshnessPending && !summaryPending) {
+    clearHistoryFreshnessRetry();
+    return;
+  }
+  if (activeTabId() !== "history") return;
+  const contextKey = historyRetryContextKey();
+  let retry = _historyFreshnessRetry;
+  if (!retry || retry.contextKey !== contextKey) {
+    clearHistoryFreshnessRetry();
+    retry = { attempt:0, contextKey, timer:null };
+    _historyFreshnessRetry = retry;
+  }
+  if (retry.attempt >= HISTORY_FRESHNESS_RETRY_MAX_ATTEMPTS) return;
+  if (retry.timer) return;
+  const delay = HISTORY_FRESHNESS_RETRY_DELAYS_MS[
+    Math.min(retry.attempt, HISTORY_FRESHNESS_RETRY_DELAYS_MS.length - 1)
+  ];
+  retry.timer = setTimeout(async () => {
+    retry.timer = null;
+    if (_historyFreshnessRetry !== retry || activeTabId() !== "history"
+      || retry.contextKey !== historyRetryContextKey()) return;
+    retry.attempt += 1;
+    try {
+      await loadHistoryViews({ forceRefresh:true, historyRetryAttempt:true });
+    } catch {}
+  }, delay);
 }
 
 async function handleBridgeReconnected(msg = {}) {
@@ -2378,8 +2460,11 @@ function handleBridgeData(msg) {
   // Detect position close → invalidate history cache
   const currPosCount = (msg.positions || []).length;
   if (currPosCount < _prevPositionCount && _prevPositionCount > 0) {
-    _historyCache = null;
-    _historyChartCache = null;
+    // The position snapshot can change before the terminal exposes the
+    // corresponding deal/order history. Mark the view dirty now, but wait for
+    // the Bridge freshness/revision proof instead of creating a stale history
+    // snapshot immediately.
+    markHistoryDirty({ refreshActive:true });
   }
   _prevPositionCount = currPosCount;
 
@@ -2439,12 +2524,13 @@ function handleBridgeData(msg) {
       if (!newTickets.has(row.dataset.ticket)) {
         row.classList.add('fade-out');
         setTimeout(() => row.remove(), 300);
-        // Also trigger a full refresh to update account/history
+        // Account/positions can refresh immediately. History is refreshed by
+        // the bounded freshness retry started above after the Archive worker
+        // has had a chance to persist the close evidence.
         clearTimeout(state._posRefreshTimer);
         state._posRefreshTimer = setTimeout(() => {
           loadPositions();
           loadAccount();
-          loadHistoryViews().catch(() => {});
         }, 500);
       }
     }
@@ -2465,7 +2551,16 @@ const _bridgeDataRefreshStreams = new Set();
 
 function scheduleBridgeDataRefresh(msg = {}) {
   for (const stream of Array.isArray(msg.streams) ? msg.streams : []) {
-    if (stream === 'account' || stream === 'positions') _bridgeDataRefreshStreams.add(stream);
+    if (stream === 'history') {
+      const revision = Number(msg.history_revision ?? msg.revision);
+      if (Number.isSafeInteger(revision) && revision > 0) {
+        if (Number.isSafeInteger(_lastHistoryRevision) && revision <= _lastHistoryRevision) continue;
+        _lastHistoryRevision = revision;
+      }
+    }
+    if (stream === 'account' || stream === 'positions' || stream === 'history') {
+      _bridgeDataRefreshStreams.add(stream);
+    }
   }
   if (!_bridgeDataRefreshStreams.size || document.hidden
       || _bridgeDataRefreshTimer || _bridgeDataRefreshInFlight) return;
@@ -2484,6 +2579,7 @@ async function flushBridgeDataRefresh() {
     const refreshes = [];
     if (streams.has('account')) refreshes.push(loadAccount());
     if (streams.has('positions')) refreshes.push(loadPositions({ refreshSignalTickets:false, liveOnly:true }));
+    if (streams.has('history')) markHistoryDirty({ refreshActive:true });
     await Promise.allSettled(refreshes);
   } finally {
     _bridgeDataRefreshInFlight = false;
@@ -4510,7 +4606,10 @@ function setTab(tabId, options = {}) {
     if (!options.silent) toast("观摩模式下不可访问该页面", "warning");
     tabId = "dashboard";
   }
-  if (tabId !== "history") cancelHistoryRangeRetry();
+  if (tabId !== "history") {
+    cancelHistoryRangeRetry();
+    clearHistoryFreshnessRetry();
+  }
   closeMobileNav({ restoreFocus:false });
   if (tabId !== "dashboard") stopKlineRefreshTimers();
   if (tabId !== "review-memory") stopReviewDetailPolling();
@@ -9319,6 +9418,7 @@ function getHistoryRangeParams() {
     const from = $("historyRangeFrom")?.value || "";
     const to = $("historyRangeTo")?.value || "";
     if (!from) throw new Error("请选择自定义历史开始日期");
+    if (from < "2025-01-01") throw new Error("交易历史仅支持查询 2025 年 1 月 1 日及之后的数据");
     if (from && to && from > to) throw new Error("历史开始日期不能晚于结束日期");
     if (from) params.close_from = from;
     if (to) params.close_to = to;
@@ -9469,8 +9569,8 @@ function updateHistoryRangeUI() {
   if ($("historyRangeFrom")) $("historyRangeFrom").disabled = !custom;
   if ($("historyRangeTo")) $("historyRangeTo").disabled = !custom;
   const hints = {
-    all: `当前在线 ${bridgePlatformLabel()} 账户的全部可同步历史会异步准备，完成后自动刷新。`,
-    platform: `从当前在线 ${bridgePlatformLabel()} 账户首次接入平台的时间开始异步准备，完成后自动刷新。`,
+    all: `当前在线 ${bridgePlatformLabel()} 账户自 2025 年 1 月 1 日起的可同步历史会异步准备，完成后自动刷新。`,
+    platform: `从当前平台账号注册时间与 2025 年 1 月 1 日两者中较晚的时间开始异步准备，完成后自动刷新。`,
     custom: "按所选平仓日期统计；入金、提款和信用也按同一日期范围计算。",
   };
   const mt4RangeWarning = bridgePlatformLabel() === "MT4"
@@ -9604,7 +9704,7 @@ function loadHistory(forceRefresh, options = {}) {
       _applyHistoryData(_historyCache.data);
       loadSignalTickets().catch(()=>{});
       loadCloseSignalTickets().catch(()=>{});
-      return;
+      return _historyCache.data;
     }
 
     historyCircuitAllows(key, { manualRefresh });
@@ -9667,6 +9767,7 @@ function loadHistory(forceRefresh, options = {}) {
     _historyCache = { filters:resolvedFilterKey, data };
     _applyHistoryData(data);
     clearHistoryCircuit(key);
+    return data;
   } catch (e) {
     const incomplete = isHistoryCursorRangeIncomplete(e);
     const pendingRange = incomplete ? historyRangeFromError(e) : null;
@@ -9694,26 +9795,42 @@ function loadHistory(forceRefresh, options = {}) {
 
 function _applyHistoryData(data) {
   if (!data) return;
-  const stats = data.statistics || {};
-  state.historyNetResult = parseFloat(stats.net_result) || 0;
-  setText("historyProfit", fmt(stats.total_profit));
-  setText("historyCredit", fmt(stats.credit));
-  setText("historyDeposit", fmt(stats.deposit));
-  setText("historyWithdrawal", fmt(stats.withdrawal));
-  setText("historyNetResult", fmt(stats.net_result));
-  $("historyProfit").className = `num ${profitClass(stats.total_profit)}`;
-  $("historyNetResult").className = `num ${profitClass(stats.net_result)}`;
-  ["historyCredit", "historyDeposit", "historyWithdrawal"].forEach((id) => {
-    const key = id.replace("history", "").toLowerCase();
-    setHistoryZeroClass(id, stats[key]);
-  });
+  const sync = historySyncMetadata(data);
+  const summaryReady = historySummaryReadyForRequestedRange(sync);
+  const stats = summaryReady && data.statistics && typeof data.statistics === "object"
+    ? data.statistics : null;
+  if (stats) {
+    state.historyNetResult = Number.isFinite(Number(stats.net_result))
+      ? Number(stats.net_result) : null;
+    setText("historyProfit", fmt(stats.total_profit));
+    setText("historyCredit", fmt(stats.credit));
+    setText("historyDeposit", fmt(stats.deposit));
+    setText("historyWithdrawal", fmt(stats.withdrawal));
+    setText("historyNetResult", fmt(stats.net_result));
+    $("historyProfit").className = `num ${profitClass(stats.total_profit)}`;
+    $("historyNetResult").className = `num ${profitClass(stats.net_result)}`;
+    ["historyCredit", "historyDeposit", "historyWithdrawal"].forEach((id) => {
+      const key = id.replace("history", "").toLowerCase();
+      setHistoryZeroClass(id, stats[key]);
+    });
+  } else {
+    state.historyNetResult = null;
+    ["historyProfit", "historyCredit", "historyDeposit", "historyWithdrawal", "historyNetResult"]
+      .forEach(id => setText(id, "--"));
+  }
   const rows = data.orders || [];
   const tickets = state.signalTickets || {};
   const closeTickets = state.closeSignalTickets || {};
   _renderHistoryRows(rows, tickets, closeTickets);
   const pg = data.pagination || {};
-  renderPager("historyPager", pg.current_page || 1, pg.page_size || 20, pg.total_count || 0, "history");
-  setText("historyFilterCount", `${pg.total_count || rows.length} 笔`);
+  const totalCount = Number(pg.total_count);
+  if (Number.isSafeInteger(totalCount) && totalCount >= 0 && summaryReady) {
+    renderPager("historyPager", pg.current_page || 1, pg.page_size || 20, totalCount, "history");
+    setText("historyFilterCount", `${totalCount} 笔`);
+  } else {
+    if ($("historyPager")) $("historyPager").innerHTML = "";
+    setText("historyFilterCount", `已显示 ${rows.length} 笔 · 全量统计准备中`);
+  }
 }
 
 // Chart and summary use the same explicit history scope as the table.
@@ -9775,19 +9892,21 @@ function loadHistoryViews({ forceRefresh = false, includeAccount = false, manual
     && (activeTabId() !== "history" || _historyRangeRetryState.contextKey !== currentRetryContext)) {
     cancelHistoryRangeRetry();
   }
-  const key = historyFlightKey("views", { forceRefresh:Boolean(forceRefresh) });
+  const effectiveForceRefresh = Boolean(forceRefresh || _historyDirty);
+  const key = historyFlightKey("views", { forceRefresh:effectiveForceRefresh });
   const existing = _historyViewsFlights.get(key);
   if (existing) return existing;
   const effectiveManualRefresh = manualRefresh;
   const refresh = (async () => {
-    if (forceRefresh) {
+    if (effectiveForceRefresh) {
       _historyCache = null;
       _historyChartCache = null;
     }
     if (includeAccount) await loadAccount();
     const requestContextKey = historyRetryContextKey();
+    let tableData = null;
     try {
-      await loadHistory(forceRefresh, { manualRefresh:effectiveManualRefresh });
+      tableData = await loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh });
     } catch (error) {
       if (isHistoryCursorRangeIncomplete(error)) {
         if (activeTabId() !== "history" || requestContextKey !== historyRetryContextKey()) {
@@ -9802,8 +9921,31 @@ function loadHistoryViews({ forceRefresh = false, includeAccount = false, manual
     if (_historyRangeRetryState?.contextKey === requestContextKey) {
       finishHistoryRangeRetry(_historyRangeRetryState);
     }
+    const sync = historySyncMetadata(tableData);
+    const revision = Number(sync.history_revision);
+    if (Number.isSafeInteger(revision) && revision >= 0) _lastHistoryRevision = revision;
+    if (sync.freshness_state === "fresh") _historyDirty = false;
+    else if (sync.freshness_state) _historyDirty = true;
+    scheduleHistoryFreshnessRetry(tableData);
+    if (!historySummaryReadyForRequestedRange(sync)) {
+      return { historyPending:false, historyStale:_historyDirty, summaryPending:true };
+    }
+    if (tableData?.chart_data && typeof tableData.chart_data === "object") {
+      await ensureChartJs();
+      _renderHistoryChart(tableData.chart_data);
+      _historyChartCache = {
+        filters:`embedded:${historyRetryContextKey()}`,
+        data:tableData.chart_data,
+      };
+      return { historyPending:false, embeddedChart:true };
+    }
+    // Cursor continuations intentionally omit the already rendered chart to
+    // keep every later page minimal.
+    if (Number(state.historyFilters?.page || 1) > 1 && _historyChartCache) {
+      return { historyPending:false, embeddedChart:true };
+    }
     // The table owns the single forced terminal sync. The chart then reads the
-    // refreshed Bridge archive instead of starting a second simultaneous sync.
+    // refreshed Bridge archive only as a compatibility fallback.
     try {
       await loadHistoryChart(false, { manualRefresh:effectiveManualRefresh });
     } catch (error) {

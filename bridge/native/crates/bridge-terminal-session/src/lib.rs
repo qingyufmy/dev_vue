@@ -6,7 +6,8 @@ use bridge_mt4::{
 use bridge_runtime_win::RestartPolicy;
 use bridge_store::{
     AccountInitializationState, HISTORY_COVERAGE_START_UTC_MSC, HistoryArchiveBatch, HistoryCursor,
-    HistoryJobPlanningRequest, HistoryScope, HistorySyncJob, OutboxStore,
+    HistoryJobPlanningRequest, HistoryScope, HistorySyncJob, HistoryTailRefreshRequest,
+    OutboxStore,
 };
 use bridge_terminal_data::{
     CollectorHandle, CollectorLifecycleState, CollectorPolicy, SnapshotCollector, SnapshotProjector,
@@ -32,7 +33,7 @@ const HISTORY_LEASE: Duration = Duration::from_secs(30);
 const HISTORY_ARCHIVE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const HISTORY_ARCHIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const HISTORY_EMPTY_RETRY: Duration = Duration::from_secs(1);
-const HISTORY_INITIAL_WINDOW_MSC: i64 = 24 * 60 * 60 * 1_000;
+const HISTORY_INITIAL_WINDOW_MSC: i64 = 7 * 24 * 60 * 60 * 1_000;
 const HISTORY_MIN_WINDOW_MSC: i64 = 15 * 60 * 1_000;
 const HISTORY_MAX_WINDOW_MSC: i64 = 30 * 24 * 60 * 60 * 1_000;
 const HISTORY_DENSE_RETRY_THRESHOLD: u32 = 3;
@@ -48,7 +49,10 @@ const HISTORY_RETRY_MINIMUM: Duration = Duration::from_secs(2);
 const HISTORY_RETRY_MAXIMUM: Duration = Duration::from_secs(30);
 const HISTORY_COMPLETE_INTERVAL: Duration = Duration::from_secs(30);
 const HISTORY_HOUR_MSC: i64 = 60 * 60 * 1_000;
-const HISTORY_RECENT_MSC: i64 = 7 * 24 * HISTORY_HOUR_MSC;
+const HISTORY_RECENT_MSC: i64 = 30 * 24 * HISTORY_HOUR_MSC;
+const HISTORY_TAIL_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const HISTORY_TAIL_OVERLAP_MSC: i64 = 5 * 60 * 1_000;
+const HISTORY_TAIL_LOOKBACK_MSC: i64 = 48 * 60 * 60 * 1_000;
 const INITIALIZATION_SCHEMA_VERSION: i64 = 1;
 
 static HISTORY_CALL_BUDGET: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -196,6 +200,7 @@ pub struct TerminalSessionHandle {
     collector: CollectorHandle,
     history: HistorySyncHandle,
     store: Weak<OutboxStore>,
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 #[derive(Clone)]
@@ -402,7 +407,10 @@ impl TerminalSessionHandle {
     }
 
     pub fn wake_after_command(&self) -> Result<(), TerminalSessionError> {
-        self.collector.wake().map_err(projection_error)
+        self.collector.wake().map_err(projection_error)?;
+        self.plan_mt5_tail_refresh()?;
+        self.history.wake();
+        Ok(())
     }
 
     pub fn request_full_snapshot(&self, stream: &str) -> Result<(), TerminalSessionError> {
@@ -411,8 +419,10 @@ impl TerminalSessionHandle {
             .map_err(projection_error)
     }
 
-    pub fn request_history_refresh(&self) {
+    pub fn request_history_refresh(&self) -> Result<(), TerminalSessionError> {
+        self.plan_mt5_tail_refresh()?;
         self.history.wake();
+        Ok(())
     }
 
     /// Queue a bounded, high-priority history range without waiting for the native worker.
@@ -444,7 +454,9 @@ impl TerminalSessionHandle {
         now_utc_msc: i64,
         priority: &str,
     ) -> Result<(), TerminalSessionError> {
-        if now_utc_msc <= 0 || range_start_utc_msc <= 0 || range_end_utc_msc <= range_start_utc_msc
+        if now_utc_msc <= 0
+            || range_start_utc_msc < HISTORY_COVERAGE_START_UTC_MSC
+            || range_end_utc_msc <= range_start_utc_msc
         {
             return Err(TerminalSessionError::new("terminal_history_range_invalid"));
         }
@@ -465,6 +477,49 @@ impl TerminalSessionHandle {
             .plan_history_jobs(&request)
             .map_err(|error| TerminalSessionError::new(error.code()))?;
         self.history.wake();
+        Ok(())
+    }
+
+    fn plan_mt5_tail_refresh(&self) -> Result<(), TerminalSessionError> {
+        let now = (self.clock)();
+        if now <= 0 {
+            return Err(TerminalSessionError::new("terminal_session_clock_invalid"));
+        }
+        let store = self
+            .store
+            .upgrade()
+            .ok_or_else(|| TerminalSessionError::new("terminal_store_unavailable"))?;
+        let terminal = bridge_contract::TerminalDescriptor {
+            terminal_instance_id: self.route.terminal_instance_id.clone(),
+            platform: self.route.platform.clone(),
+            account_ref: self.route.account_ref.clone(),
+            connection_epoch: self.route.connection_epoch,
+            worker_version: None,
+        };
+        let state = store
+            .history_scope_state(&terminal)
+            .map_err(|error| TerminalSessionError::new(error.code()))?;
+        let lookback_start = now.saturating_sub(HISTORY_TAIL_LOOKBACK_MSC);
+        let prior = state.fresh_through_utc_msc.unwrap_or(lookback_start);
+        let range_start_utc_msc = HISTORY_COVERAGE_START_UTC_MSC.max(
+            prior
+                .saturating_sub(HISTORY_TAIL_OVERLAP_MSC)
+                .min(lookback_start),
+        );
+        if range_start_utc_msc >= now {
+            return Ok(());
+        }
+        let scope = HistoryScope::new(&self.route.terminal_instance_id, &self.route.account_ref)
+            .map_err(|error| TerminalSessionError::new(error.code()))?;
+        store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope,
+                platform: self.route.platform.clone(),
+                range_start_utc_msc,
+                range_end_utc_msc: now,
+                now_utc_msc: now,
+            })
+            .map_err(|error| TerminalSessionError::new(error.code()))?;
         Ok(())
     }
 
@@ -756,7 +811,7 @@ impl RunningSession {
             worker.clone(),
             collector_handle.clone(),
             history.clone(),
-            clock,
+            Arc::clone(&clock),
         );
         Ok(Self {
             handle: TerminalSessionHandle {
@@ -766,6 +821,7 @@ impl RunningSession {
                 collector: collector_handle,
                 history,
                 store: Arc::downgrade(&store),
+                clock,
             },
             worker_task,
             collector_task,
@@ -943,6 +999,7 @@ fn start_mt5_history_scheduler(
         let mut sequence = 0_u64;
         let mut planned_jobs = BTreeMap::<String, String>::new();
         let mut last_ensure_hour = 0_i64;
+        let mut last_tail_check = 0_i64;
         loop {
             if *stop_rx.borrow() {
                 publish_history_stopped(&status_tx);
@@ -993,6 +1050,32 @@ fn start_mt5_history_scheduler(
                     // hourly boundary; refresh_history_status removes it only
                     // after a terminal state is observed.
                     last_ensure_hour = boundary;
+                }
+            }
+
+            // A low-cost safety flight catches external closes, delayed
+            // commission/swap, and deposits even when no explicit wake event
+            // arrived.  Initial recent planning is allowed to claim first;
+            // subsequent checks run at most once per 30 seconds.
+            if last_tail_check == 0 {
+                last_tail_check = now;
+            } else if now.saturating_sub(last_tail_check)
+                >= HISTORY_TAIL_REFRESH_INTERVAL.as_millis() as i64
+            {
+                match ensure_history_tail_refresh(&store, &terminal, now).await {
+                    Ok(jobs) => {
+                        for job in jobs {
+                            planned_jobs.insert(job.job_id.clone(), job.job_kind.clone());
+                        }
+                        last_tail_check = now;
+                    }
+                    Err(error) => {
+                        publish_history_failure(
+                            &status_tx,
+                            history_consecutive_failures(&status_tx).saturating_add(1),
+                            &error,
+                        );
+                    }
                 }
             }
 
@@ -1170,7 +1253,11 @@ async fn wait_history_scheduler(
 }
 
 fn history_job_should_pause(priority: &str, active_positions_or_orders: bool) -> bool {
-    priority != "p1" && active_positions_or_orders
+    // Active positions/orders no longer stall P2/P3 archive work.  Keep the
+    // helper's arguments for API/test compatibility; P1 priority/yield is
+    // enforced by the claim ordering and yield checks below.
+    let _ = (priority, active_positions_or_orders);
+    false
 }
 
 /// Keep a claimed regular job leased while trading is active, without starting
@@ -1189,6 +1276,12 @@ async fn wait_for_regular_history_job(
     let mut collector_status = collector.subscribe_status();
     let mut next_lease_renewal = tokio::time::Instant::now();
     let mut check_p1 = true;
+    if !history_job_should_pause(
+        &job.priority,
+        collector_status.borrow().active_positions_or_orders,
+    ) {
+        return Ok(false);
+    }
     status_tx.send_replace(HistorySyncStatus {
         state: HistorySyncState::Paused,
         consecutive_failures: 0,
@@ -1303,7 +1396,9 @@ async fn ensure_history_jobs(
     if end <= HISTORY_COVERAGE_START_UTC_MSC {
         return Ok(Vec::new());
     }
-    let recent_start = end.saturating_sub(HISTORY_RECENT_MSC);
+    let recent_start = end
+        .saturating_sub(HISTORY_RECENT_MSC)
+        .max(HISTORY_COVERAGE_START_UTC_MSC);
     let request = HistoryJobPlanningRequest {
         scope: scope.clone(),
         job_kind: "recent".to_owned(),
@@ -1322,8 +1417,70 @@ async fn ensure_history_jobs(
     };
     let mut jobs = result.created_jobs;
     jobs.extend(result.attached_jobs);
+    // The backfill is intentionally planned only after the recent request.
+    // `plan_history_jobs` subtracts the recent coverage/flight, preserving a
+    // strict non-overlap while retaining P2-before-P3 claim ordering.
+    if recent_start > HISTORY_COVERAGE_START_UTC_MSC {
+        let backfill_request = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "backfill".to_owned(),
+            priority: "p3".to_owned(),
+            range_start_utc_msc: HISTORY_COVERAGE_START_UTC_MSC,
+            range_end_utc_msc: recent_start,
+            window_msc: HISTORY_INITIAL_WINDOW_MSC,
+            now_utc_msc: now,
+        };
+        let store = Arc::clone(store);
+        let backfill_result =
+            tokio::task::spawn_blocking(move || store.plan_history_jobs(&backfill_request))
+                .await
+                .map_err(|_| "history_job_planning_worker_failed".to_owned())?
+                .map_err(|error| error.code().to_owned())?;
+        jobs.extend(backfill_result.created_jobs);
+        jobs.extend(backfill_result.attached_jobs);
+    }
     jobs.sort_by(|left, right| left.job_id.cmp(&right.job_id));
     Ok(jobs)
+}
+
+async fn ensure_history_tail_refresh(
+    store: &Arc<OutboxStore>,
+    terminal: &bridge_contract::TerminalDescriptor,
+    now: i64,
+) -> Result<Vec<HistorySyncJob>, String> {
+    let store = Arc::clone(store);
+    let terminal = terminal.clone();
+    tokio::task::spawn_blocking(move || {
+        let state = store
+            .history_scope_state(&terminal)
+            .map_err(|error| error.code().to_owned())?;
+        let lookback_start = now.saturating_sub(HISTORY_TAIL_LOOKBACK_MSC);
+        let prior = state.fresh_through_utc_msc.unwrap_or(lookback_start);
+        let range_start_utc_msc = HISTORY_COVERAGE_START_UTC_MSC.max(
+            prior
+                .saturating_sub(HISTORY_TAIL_OVERLAP_MSC)
+                .min(lookback_start),
+        );
+        if range_start_utc_msc >= now {
+            return Ok(Vec::new());
+        }
+        let scope = HistoryScope::new(&terminal.terminal_instance_id, &terminal.account_ref)
+            .map_err(|error| error.code().to_owned())?;
+        let result = store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope,
+                platform: terminal.platform.clone(),
+                range_start_utc_msc,
+                range_end_utc_msc: now,
+                now_utc_msc: now,
+            })
+            .map_err(|error| error.code().to_owned())?;
+        let mut jobs = result.created_jobs;
+        jobs.extend(result.attached_jobs);
+        Ok(jobs)
+    })
+    .await
+    .map_err(|_| "history_tail_planning_worker_failed".to_owned())?
 }
 
 async fn claim_next_history_job(
@@ -1338,7 +1495,7 @@ async fn claim_next_history_job(
             &scope,
             now,
             HISTORY_LEASE.as_millis() as i64,
-            &["recent", "on_demand"],
+            &["recent", "on_demand", "backfill"],
         )
     })
     .await
@@ -1516,6 +1673,9 @@ where
         let _ = renew_history_job(store, &job, now, clock).await?;
         job = load_history_job(store, &job.job_id).await?;
         if job.state == "completed" {
+            if let Err(error) = ensure_history_summary_async(store, terminal, now).await {
+                publish_history_failure(status_tx, 1, &error);
+            }
             status_tx.send_replace(HistorySyncStatus {
                 state: HistorySyncState::Complete,
                 consecutive_failures: 0,
@@ -1716,6 +1876,9 @@ where
                     error_code: None,
                 });
                 if job.state == "completed" {
+                    if let Err(error) = ensure_history_summary_async(store, terminal, now).await {
+                        publish_history_failure(status_tx, 1, &error);
+                    }
                     return Ok(());
                 }
                 if priority != "p1"
@@ -1972,6 +2135,23 @@ async fn persist_history_job_batch(
     .map_err(|error| error.code().to_owned())
 }
 
+/// Summary generation runs on a blocking worker that is awaited by the
+/// archive task.  This keeps database handles tracked during shutdown while
+/// leaving realtime collector/command tasks independent of the rebuild.
+async fn ensure_history_summary_async(
+    store: &Arc<OutboxStore>,
+    terminal: &bridge_contract::TerminalDescriptor,
+    now_utc_msc: i64,
+) -> Result<(), String> {
+    let store = Arc::clone(store);
+    let terminal = terminal.clone();
+    tokio::task::spawn_blocking(move || store.ensure_history_summary(&terminal, now_utc_msc))
+        .await
+        .map_err(|_| "history_summary_worker_failed".to_owned())?
+        .map(|_| ())
+        .map_err(|error| error.code().to_owned())
+}
+
 fn start_mt4_history_sync(
     source: Arc<Mt4EaSnapshotSource>,
     store: Arc<OutboxStore>,
@@ -2106,6 +2286,13 @@ fn start_mt4_history_sync(
                     cursor = next_cursor;
                     complete = !has_more;
                     failures = 0;
+                    if !has_more
+                        && let Err(error) =
+                            ensure_history_summary_async(&store, &terminal, batch.source_time_msc)
+                                .await
+                    {
+                        publish_history_failure(&status_tx, failures.saturating_add(1), &error);
+                    }
                     status_tx.send_replace(HistorySyncStatus {
                         state: HistorySyncState::Ready,
                         consecutive_failures: 0,
@@ -2962,9 +3149,9 @@ mod tests {
     }
 
     #[test]
-    fn active_regular_history_jobs_pause_before_archive_start() {
-        assert!(history_job_should_pause("p2", true));
-        assert!(history_job_should_pause("p3", true));
+    fn active_regular_history_jobs_do_not_pause_archive_work() {
+        assert!(!history_job_should_pause("p2", true));
+        assert!(!history_job_should_pause("p3", true));
         assert!(!history_job_should_pause("p1", true));
         assert!(!history_job_should_pause("p2", false));
     }
@@ -3144,9 +3331,17 @@ mod tests {
         let first = ensure_history_jobs(&store, &scope, 1_800_000_000_000)
             .await
             .expect("first automatic plan");
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].job_kind, "recent");
-        assert_eq!(first[0].priority, "p2");
+        assert_eq!(first.len(), 2);
+        let recent = first
+            .iter()
+            .find(|job| job.job_kind == "recent")
+            .expect("recent first-stage job");
+        assert_eq!(recent.priority, "p2");
+        let backfill = first
+            .iter()
+            .find(|job| job.job_kind == "backfill")
+            .expect("backfill second-stage job");
+        assert_eq!(backfill.priority, "p3");
         let second = ensure_history_jobs(&store, &scope, 1_800_000_000_000)
             .await
             .expect("idempotent automatic plan");
