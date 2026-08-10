@@ -424,6 +424,103 @@ fn native_core_reaches_ready_reconnects_and_stops_as_one_process_tree() {
 }
 
 #[test]
+fn native_core_refresh_revoked_keeps_process_and_local_logout_idempotent() {
+    let root = unique_test_directory();
+    let profile_id = unique_profile_id();
+    let terminal_id = "mt5_aabbccddeeffaabbccdd1122";
+    let mut server = LoopbackBridgeServer::start_refresh_revoked();
+    let application = prepare_application(&root);
+    let paths = prepare_profile(
+        &root,
+        &profile_id,
+        terminal_id,
+        &server.control_url,
+        &server.realtime_url,
+    );
+    let ready = root.join("revoked-ready.json");
+    let update_state_path = root.join("revoked-update-state.json");
+    prepare_verifying_update_state(&update_state_path);
+    let credential_store = CredentialStore::new(&paths.credential_path).expect("credential store");
+    let worker_pid_file = root.join("worker.pid");
+    let mut child = ChildGuard::spawn(
+        application.join("liangjian-bridge-core.exe"),
+        &root,
+        &profile_id,
+        &ready,
+        terminal_id,
+        &update_state_path,
+    );
+    let core_pid = child.child_mut().id();
+
+    wait_until(&mut child, Duration::from_secs(20), || {
+        worker_pid_file.is_file()
+            && runtime_status_json(&paths.runtime_status_path).is_some_and(|status| {
+                status["phase"] == "pairing_required"
+                    && status["server_state"] == "pairing_required"
+                    && status["server_error_code"] == "bridge_refresh_revoked"
+            })
+            && credential_store
+                .load()
+                .is_ok_and(|credential| credential.is_none())
+            && local_control_profile_is_active(&profile_id)
+    });
+    assert!(
+        process_is_running(core_pid),
+        "Core must remain alive after revoke"
+    );
+    let worker_pid = fs::read_to_string(&worker_pid_file)
+        .expect("worker pid")
+        .trim()
+        .parse::<u32>()
+        .expect("worker pid integer");
+    assert!(
+        process_is_running(worker_pid),
+        "local worker must remain alive"
+    );
+
+    for _ in 0..3 {
+        assert_eq!(
+            request_local_control(&profile_id, LocalControlAction::Logout),
+            LocalControlResult::Accepted,
+            "Logout remains idempotent after the stale credential was cleared"
+        );
+        assert!(process_is_running(core_pid), "Logout must not stop Core");
+        assert!(
+            process_is_running(worker_pid),
+            "Logout must not stop MT worker"
+        );
+    }
+    assert_eq!(
+        credential_store.load().expect("credential after logout"),
+        None
+    );
+
+    server.restore_refresh();
+    credential_store
+        .save(&BridgeCredential {
+            refresh_token: "s".repeat(48),
+            expires_at_utc_msc: 1_900_000_000_000,
+        })
+        .expect("save replacement credential");
+    wait_until(&mut child, Duration::from_secs(20), || {
+        process_is_running(core_pid)
+            && process_is_running(worker_pid)
+            && server.websocket_connections() >= 1
+            && runtime_status_json(&paths.runtime_status_path)
+                .is_some_and(|status| status["phase"] == "online")
+    });
+
+    SingleInstanceGuard::request_shutdown(&profile_instance_id(&profile_id).expect("instance id"))
+        .expect("request revoked Core shutdown");
+    let output = child.wait_with_output();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+    wait_for_process_exit(worker_pid, Duration::from_secs(5));
+    server.stop();
+    fs::remove_dir_all(root).expect("remove revoked connected process fixture");
+}
+
+#[test]
 fn native_core_update_drain_times_out_on_an_active_command_and_recovers_admission() {
     let root = unique_test_directory();
     let profile_id = unique_profile_id();
@@ -1869,6 +1966,7 @@ struct LoopbackBridgeServer {
     control_url: String,
     realtime_url: String,
     disconnect_first: Arc<AtomicBool>,
+    refresh_revoked: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     websocket_connections: Arc<AtomicUsize>,
     message_types: Arc<Mutex<Vec<String>>>,
@@ -1879,6 +1977,10 @@ struct LoopbackBridgeServer {
 impl LoopbackBridgeServer {
     fn start() -> Self {
         Self::start_with_commands(true, None, None, false)
+    }
+
+    fn start_refresh_revoked() -> Self {
+        Self::start_with_commands_and_auth(true, None, None, false, true)
     }
 
     fn start_read_only() -> Self {
@@ -1904,7 +2006,24 @@ impl LoopbackBridgeServer {
         round_trip: Option<RoundTripCommand>,
         concurrent_read_only: bool,
     ) -> Self {
+        Self::start_with_commands_and_auth(
+            send_commands,
+            command_override,
+            round_trip,
+            concurrent_read_only,
+            false,
+        )
+    }
+
+    fn start_with_commands_and_auth(
+        send_commands: bool,
+        command_override: Option<Value>,
+        round_trip: Option<RoundTripCommand>,
+        concurrent_read_only: bool,
+        refresh_revoked_initially: bool,
+    ) -> Self {
         let disconnect_first = Arc::new(AtomicBool::new(false));
+        let refresh_revoked = Arc::new(AtomicBool::new(refresh_revoked_initially));
         let stop = Arc::new(AtomicBool::new(false));
         let websocket_connections = Arc::new(AtomicUsize::new(0));
         let command_sent = Arc::new(AtomicBool::new(false));
@@ -1913,6 +2032,7 @@ impl LoopbackBridgeServer {
         let (addresses_tx, addresses_rx) = mpsc::sync_channel(1);
         let thread = {
             let disconnect_first = Arc::clone(&disconnect_first);
+            let refresh_revoked = Arc::clone(&refresh_revoked);
             let stop = Arc::clone(&stop);
             let websocket_connections = Arc::clone(&websocket_connections);
             let command_sent = Arc::clone(&command_sent);
@@ -1937,7 +2057,12 @@ impl LoopbackBridgeServer {
                         ))
                         .expect("send addresses");
                     tokio::join!(
-                        serve_control(control, Arc::clone(&stop), maintenance_released,),
+                        serve_control(
+                            control,
+                            Arc::clone(&stop),
+                            maintenance_released,
+                            refresh_revoked,
+                        ),
                         serve_realtime_dispatch(
                             RealtimeFixture {
                                 listener: realtime,
@@ -1963,6 +2088,7 @@ impl LoopbackBridgeServer {
             control_url: format!("http://{control}"),
             realtime_url: format!("ws://{realtime}"),
             disconnect_first,
+            refresh_revoked,
             stop,
             websocket_connections,
             message_types,
@@ -1973,6 +2099,10 @@ impl LoopbackBridgeServer {
 
     fn disconnect_first(&self) {
         self.disconnect_first.store(true, Ordering::SeqCst);
+    }
+
+    fn restore_refresh(&self) {
+        self.refresh_revoked.store(false, Ordering::SeqCst);
     }
 
     fn websocket_connections(&self) -> usize {
@@ -2089,6 +2219,7 @@ async fn serve_control(
     listener: TcpListener,
     stop: Arc<AtomicBool>,
     maintenance_released: Arc<AtomicBool>,
+    refresh_revoked: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::SeqCst) {
         let accepted = tokio::select! {
@@ -2099,6 +2230,19 @@ async fn serve_control(
             continue;
         };
         let request = read_http_request(stream).await;
+        if refresh_revoked.load(Ordering::SeqCst)
+            && (request.1.starts_with("POST /api/auth/bridge-refresh ")
+                || request
+                    .1
+                    .starts_with("POST /api/auth/bridge-runtime-control/wait "))
+        {
+            write_http_json(
+                request.0,
+                r#"{"ok":false,"code":"bridge_refresh_revoked","error":"fixture refresh revoked"}"#,
+            )
+            .await;
+            continue;
+        }
         if request
             .1
             .starts_with("POST /api/auth/bridge-runtime-control/wait ")

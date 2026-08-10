@@ -31,6 +31,7 @@ pub struct UpdateBannerView {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObserverAction {
+    SwitchPrimary,
     Start,
     Pause,
     Retry,
@@ -138,23 +139,29 @@ where
         .as_deref()
         .map(platform_display_name)
         .map(str::to_owned);
-    let terminal_selector_label = if state.selected_platform.as_deref() == Some("mt4") {
-        "MT4 终端"
-    } else {
-        "MT5 账户"
-    }
-    .to_owned();
+    let terminal_selector_label = "选择要接入的终端".to_owned();
     let terminal_choices = state
         .terminal_candidates
         .iter()
+        .filter(|candidate| {
+            state
+                .selected_platform
+                .as_deref()
+                .is_none_or(|platform| candidate.platform == platform)
+        })
         .map(|candidate| TerminalChoiceView {
             terminal_instance_id: candidate.terminal_instance_id.clone(),
-            display_name: candidate
-                .display_name
-                .clone()
-                .unwrap_or_else(|| format!("{}  ·  {}", candidate.login, candidate.broker_server)),
+            display_name: terminal_choice_display_name(candidate),
         })
         .collect::<Vec<_>>();
+    let has_selected_primary_account = state.selected_terminal_instance_id.as_deref().is_some_and(
+        |selected_terminal_instance_id| {
+            state.terminals.iter().any(|terminal| {
+                terminal.observer_profile_id.is_none()
+                    && terminal.terminal_instance_id == selected_terminal_instance_id
+            })
+        },
+    );
     Ok(MainWindowView {
         window_title: if default_profile {
             PRODUCT_NAME.to_owned()
@@ -176,15 +183,12 @@ where
         runtime_summary: describe_runtime_summary(state, format_local_time),
         selected_platform_label,
         show_logout: state.selected_platform.is_some()
-            && !matches!(
-                state.phase.as_str(),
-                "pairing_required" | "platform_selection_required"
-            ),
+            && state.phase != "platform_selection_required",
         show_observer_sources: default_profile && state.can_manage_observer_sources,
         show_settings: default_profile && (state.is_administrator || !state.server_connected),
         show_pair: state.phase == "pairing_required",
         show_mt4_setup: state.selected_platform.as_deref() == Some("mt4"),
-        terminal_selector_visible: terminal_choices.len() > 1,
+        terminal_selector_visible: !has_selected_primary_account && !terminal_choices.is_empty(),
         terminal_selector_label,
         terminal_choices,
         selected_terminal_instance_id: state.selected_terminal_instance_id.clone(),
@@ -222,8 +226,10 @@ pub fn describe_status(state: &UiStateSnapshot) -> StatusCopy {
     }
     if matches!(
         state.detail_code.as_deref(),
-        Some("bridge_refresh_invalid" | "bridge_refresh_revoked" | "bridge_session_revoked")
-    ) {
+        Some("bridge_refresh_invalid" | "bridge_refresh_revoked")
+    ) || (state.phase == "pairing_required"
+        && state.detail_code.as_deref() == Some("bridge_session_revoked"))
+    {
         return status(
             "账号授权已失效",
             "请手动点击“连接账号”重新完成一次浏览器授权。",
@@ -443,7 +449,11 @@ fn account_card(
         Some(value) if value.trim().is_empty() => format!("{role}  ·  {identity}"),
         Some(value) => format!("{value}  ·  {identity}"),
     };
-    let primary_action = observer.and_then(|profile| resolve_observer_action(profile, terminal));
+    let primary_action = if observer.is_none() && role == "主账户" {
+        Some(ObserverAction::SwitchPrimary)
+    } else {
+        observer.and_then(|profile| resolve_observer_action(profile, terminal))
+    };
     AccountCardView {
         role: role.to_owned(),
         title,
@@ -485,12 +495,33 @@ fn resolve_observer_action(
 
 fn observer_action_text(action: ObserverAction) -> &'static str {
     match action {
+        ObserverAction::SwitchPrimary => "切换账户",
         ObserverAction::Start => "启动",
         ObserverAction::Pause => "暂停",
         ObserverAction::Retry => "重试",
         ObserverAction::Bind => "绑定",
         ObserverAction::Configure => "设置",
     }
+}
+
+fn terminal_choice_display_name(candidate: &bridge_local_control::UiTerminalCandidate) -> String {
+    if candidate.login.trim().is_empty() || candidate.broker_server.trim().is_empty() {
+        return format!(
+            "{}  ·  未登录/请先启动",
+            candidate
+                .display_name
+                .as_deref()
+                .unwrap_or_else(|| platform_display_name(&candidate.platform))
+        );
+    }
+    candidate.display_name.clone().unwrap_or_else(|| {
+        format!(
+            "{}  ·  {}  ·  {}",
+            platform_display_name(&candidate.platform),
+            candidate.login,
+            candidate.broker_server
+        )
+    })
 }
 
 fn describe_account_state(
@@ -753,9 +784,10 @@ fn describe_code(code: Option<&str>, fallback: &str) -> String {
         Some("bridge_refresh_unavailable") => {
             "服务器暂时不可用，程序会保留账号授权并自动重试。"
         }
-        Some("bridge_refresh_invalid" | "bridge_refresh_revoked" | "bridge_session_revoked") => {
+        Some("bridge_refresh_invalid" | "bridge_refresh_revoked") => {
             "当前设备授权已失效，需要重新连接量见账号。"
         }
+        Some("bridge_session_revoked") => "服务器会话已更新，程序正在保留授权并自动恢复连接。",
         _ => fallback,
     }
     .to_owned()
@@ -845,6 +877,14 @@ mod tests {
         );
         assert_eq!(view.account_count_text, "1 个");
         assert_eq!(view.accounts[0].title, "主账户  ·  MT5 · 123456");
+        assert_eq!(
+            view.accounts[0].primary_action,
+            Some(ObserverAction::SwitchPrimary)
+        );
+        assert_eq!(
+            view.accounts[0].primary_action_text.as_deref(),
+            Some("切换账户")
+        );
         assert_eq!(view.accounts[0].state, "Broker-Demo · 运行中");
         assert_eq!(
             view.accounts[0]
@@ -880,6 +920,160 @@ mod tests {
     }
 
     #[test]
+    fn account_choices_merge_all_platforms_but_hide_observers_and_disable_installations() {
+        let mut state = base_state();
+        state.terminal_candidates.push(UiTerminalCandidate {
+            terminal_instance_id: "mt4-installation".to_owned(),
+            platform: "mt4".to_owned(),
+            broker_server: String::new(),
+            login: String::new(),
+            display_name: Some("MetaTrader 4".to_owned()),
+        });
+        state.terminal_candidates.push(UiTerminalCandidate {
+            terminal_instance_id: "mt5-other".to_owned(),
+            platform: "mt5".to_owned(),
+            broker_server: "Broker-Live".to_owned(),
+            login: "654321".to_owned(),
+            display_name: None,
+        });
+        state.terminal_candidates.push(UiTerminalCandidate {
+            terminal_instance_id: "mt4-account".to_owned(),
+            platform: "mt4".to_owned(),
+            broker_server: "Broker-Demo".to_owned(),
+            login: "654321".to_owned(),
+            display_name: None,
+        });
+        state.terminals.push(UiTerminalStatus {
+            terminal_instance_id: "mt5-observer".to_owned(),
+            platform: "mt5".to_owned(),
+            broker_server: "Observer".to_owned(),
+            login: "999999".to_owned(),
+            runtime_state: "running".to_owned(),
+            initialization_state: "ready".to_owned(),
+            local_operational_ready: true,
+            history_backfill_pending: false,
+            history_attention_required: false,
+            error_code: None,
+            observer_profile_id: Some("source-1".to_owned()),
+            terminal_trading_allowed: Some(true),
+            program_trading_allowed: None,
+            account_trading_allowed: Some(true),
+            account_expert_trading_allowed: Some(true),
+            mt4_expert_restart_required: false,
+        });
+        state.can_manage_observer_sources = true;
+        state.is_administrator = true;
+        state.observer_profiles.push(UiObserverProfile {
+            observer_profile_id: "source-1".to_owned(),
+            platform: Some("mt5".to_owned()),
+            terminal_directory: None,
+            configured: true,
+            enabled: true,
+            terminal_instance_id: Some("mt5-observer".to_owned()),
+            bridge_user_id: Some(9),
+            observer_account_label: Some("观摩源".to_owned()),
+            trading_account_label: None,
+            runtime_phase: Some("online".to_owned()),
+            runtime_detail_code: None,
+        });
+        let view = build_main_window_view(&state, &BTreeSet::new(), |_| "13:19:09".to_owned())
+            .expect("main window");
+        assert_eq!(view.accounts.len(), 2);
+        assert_eq!(
+            view.accounts[0].primary_action,
+            Some(ObserverAction::SwitchPrimary)
+        );
+        assert!(!view.terminal_selector_visible);
+        assert_eq!(view.terminal_selector_label, "选择要接入的终端");
+        assert_eq!(view.terminal_choices.len(), 2);
+        assert!(
+            view.terminal_choices
+                .iter()
+                .all(|choice| choice.terminal_instance_id.starts_with("mt5-"))
+        );
+
+        state.selected_platform = Some("mt4".to_owned());
+        state.selected_terminal_instance_id = None;
+        let mt4_view = build_main_window_view(&state, &BTreeSet::new(), |_| "13:19:09".to_owned())
+            .expect("MT4 window");
+        assert_eq!(mt4_view.terminal_choices.len(), 2);
+        assert!(mt4_view.terminal_selector_visible);
+        assert_eq!(mt4_view.terminal_selector_label, "选择要接入的终端");
+        assert!(
+            mt4_view
+                .terminal_choices
+                .iter()
+                .any(|choice| choice.display_name.contains("未登录/请先启动"))
+        );
+    }
+
+    #[test]
+    fn terminal_selector_is_visible_before_a_real_primary_account_exists() {
+        let mut state = base_state();
+        state.terminals.clear();
+        state.selected_terminal_instance_id = None;
+
+        let view = build_main_window_view(&state, &BTreeSet::new(), |_| "13:19:09".to_owned())
+            .expect("first-connection window");
+
+        assert!(view.terminal_selector_visible);
+        assert_eq!(view.terminal_selector_label, "选择要接入的终端");
+        assert_eq!(view.terminal_choices.len(), 1);
+    }
+
+    #[test]
+    fn selected_installation_only_candidate_still_shows_terminal_selector() {
+        let mut state = base_state();
+        state.selected_platform = Some("mt4".to_owned());
+        state.selected_terminal_instance_id = Some("mt4-installation".to_owned());
+        state.terminals.clear();
+        state.terminal_candidates = vec![UiTerminalCandidate {
+            terminal_instance_id: "mt4-installation".to_owned(),
+            platform: "mt4".to_owned(),
+            broker_server: String::new(),
+            login: String::new(),
+            display_name: Some("MetaTrader 4".to_owned()),
+        }];
+
+        let view = build_main_window_view(&state, &BTreeSet::new(), |_| "13:19:09".to_owned())
+            .expect("installation-only window");
+
+        assert!(view.terminal_selector_visible);
+        assert_eq!(view.terminal_selector_label, "选择要接入的终端");
+        assert_eq!(
+            view.terminal_choices[0].terminal_instance_id,
+            "mt4-installation"
+        );
+    }
+
+    #[test]
+    fn observer_terminal_does_not_count_as_a_real_primary_account() {
+        let mut state = base_state();
+        state.terminals[0].observer_profile_id = Some("source-1".to_owned());
+        state.can_manage_observer_sources = true;
+        state.is_administrator = true;
+        state.observer_profiles.push(UiObserverProfile {
+            observer_profile_id: "source-1".to_owned(),
+            platform: Some("mt5".to_owned()),
+            terminal_directory: None,
+            configured: true,
+            enabled: true,
+            terminal_instance_id: Some("mt5-main".to_owned()),
+            bridge_user_id: Some(9),
+            observer_account_label: Some("观摩源".to_owned()),
+            trading_account_label: None,
+            runtime_phase: Some("online".to_owned()),
+            runtime_detail_code: None,
+        });
+
+        let view = build_main_window_view(&state, &BTreeSet::new(), |_| "13:19:09".to_owned())
+            .expect("observer window");
+
+        assert!(view.terminal_selector_visible);
+        assert_eq!(view.terminal_selector_label, "选择要接入的终端");
+    }
+
+    #[test]
     fn pairing_state_keeps_browser_action_manual_and_offline_settings_recoverable() {
         let mut state = base_state();
         state.phase = "pairing_required".to_owned();
@@ -897,7 +1091,7 @@ mod tests {
             "请手动点击“连接账号”；浏览器授权成功后会长期保持登录。"
         );
         assert!(view.show_pair);
-        assert!(!view.show_logout);
+        assert!(view.show_logout);
         assert!(view.show_settings);
         assert!(view.show_mt4_setup);
         assert_eq!(
@@ -920,6 +1114,11 @@ mod tests {
         let revoked = describe_status(&state);
         assert_eq!(revoked.title, "账号授权已失效");
         assert!(revoked.description.contains("连接账号"));
+
+        state.phase = "degraded".to_owned();
+        let session_recovery = describe_status(&state);
+        assert_eq!(session_recovery.title, "部分连接异常");
+        assert!(session_recovery.description.contains("自动恢复"));
     }
 
     #[test]

@@ -249,6 +249,26 @@ impl CredentialStore {
         Ok(())
     }
 
+    /// Remove the credential only when the on-disk refresh token still matches
+    /// the token that the caller observed.  The comparison and delete happen
+    /// while holding the same process lock used by `save`, so a newly paired
+    /// credential can never be deleted by a stale connection failure.
+    pub fn clear_if_matches(&self, expected_refresh_token: &str) -> Result<bool, SecurityError> {
+        let _lock = self.acquire_process_lock()?;
+        let Some(current) = self.load_core()? else {
+            return Ok(false);
+        };
+        if !fixed_time_equals(
+            current.refresh_token.as_bytes(),
+            expected_refresh_token.as_bytes(),
+        ) {
+            return Ok(false);
+        }
+        fs::remove_file(&self.credential_path)
+            .map_err(|_| SecurityError::new("bridge_credential_clear_failed"))?;
+        Ok(true)
+    }
+
     fn load_core(&self) -> Result<Option<BridgeCredential>, SecurityError> {
         if !self.credential_path.exists() {
             return Ok(None);
@@ -432,6 +452,85 @@ mod tests {
         );
         store.clear().expect("clear credential");
         assert_eq!(store.load().expect("cleared credential"), None);
+
+        drop(store);
+        fs::remove_dir_all(root).expect("remove credential fixture");
+    }
+
+    #[test]
+    fn stale_clear_does_not_remove_a_replaced_credential() {
+        let root = unique_test_directory("credential-store-stale-clear");
+        let path = root.join("credential.dat");
+        let store = CredentialStore::new(&path).expect("credential store");
+        let original = credential('a', 1785268800000);
+        let replacement = credential('b', 1785355200000);
+
+        store.save(&original).expect("save original");
+        assert!(
+            store
+                .save_if_current(&original, &replacement)
+                .expect("replace credential")
+        );
+        assert!(
+            !store
+                .clear_if_matches(&original.refresh_token)
+                .expect("stale clear")
+        );
+        assert_eq!(store.load().expect("load replacement"), Some(replacement));
+        assert!(
+            store
+                .clear_if_matches(&credential('b', 0).refresh_token)
+                .expect("matching clear")
+        );
+        assert_eq!(store.load().expect("cleared credential"), None);
+
+        drop(store);
+        fs::remove_dir_all(root).expect("remove credential fixture");
+    }
+
+    #[test]
+    fn concurrent_replace_and_stale_clear_cannot_delete_the_replacement() {
+        let root = unique_test_directory("credential-store-concurrent-clear");
+        let path = root.join("credential.dat");
+        let store = CredentialStore::new(&path).expect("credential store");
+        let original = credential('a', 1785268800000);
+        let replacement = credential('b', 1785355200000);
+        store.save(&original).expect("save original");
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let clear_store = store.clone();
+        let replace_store = store.clone();
+        let clear_barrier = std::sync::Arc::clone(&barrier);
+        let replace_barrier = std::sync::Arc::clone(&barrier);
+        let expected = original.refresh_token.clone();
+        let replacement_for_thread = replacement.clone();
+        let clear_thread = std::thread::spawn(move || {
+            clear_barrier.wait();
+            clear_store.clear_if_matches(&expected)
+        });
+        let replace_thread = std::thread::spawn(move || {
+            replace_barrier.wait();
+            replace_store.save_if_current(&original, &replacement_for_thread)
+        });
+        barrier.wait();
+        let cleared = clear_thread
+            .join()
+            .expect("clear thread")
+            .expect("clear result");
+        let replaced = replace_thread
+            .join()
+            .expect("replace thread")
+            .expect("replace result");
+
+        // The lock serializes the operations: either the stale clear wins, or
+        // the replacement wins, but a successful replacement is never deleted
+        // by a stale clear that observed the old token.
+        if replaced {
+            assert!(!cleared);
+            assert_eq!(store.load().expect("load replacement"), Some(replacement));
+        } else if cleared {
+            assert_eq!(store.load().expect("load cleared credential"), None);
+        }
 
         drop(store);
         fs::remove_dir_all(root).expect("remove credential fixture");

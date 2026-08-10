@@ -46,7 +46,7 @@ use liangjian_bridge_core::{
     NativeUpdateDrainHandle, ProfileCredentialSource, ProfileTerminalBindingSource,
     TerminalPermissionQuery, project_terminal_trading_permissions,
 };
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
@@ -156,6 +156,7 @@ struct InactiveStatus<'a> {
     server_state: &'a str,
     error_code: Option<&'a str>,
     preferences: Option<&'a BridgeUserPreferences>,
+    terminal_candidates: Option<&'a [UiTerminalCandidate]>,
 }
 
 struct SelectionUiContext<'a> {
@@ -181,6 +182,7 @@ struct RuntimeStatusMonitorContext {
     root_data_directory: PathBuf,
     ui_state: UiStateStore,
     preferences_store: BridgePreferencesStore,
+    terminal_candidates: Vec<UiTerminalCandidate>,
     logger: BridgeLogger,
 }
 
@@ -1294,6 +1296,7 @@ async fn run_connected_profile(
                     server_state: "stopped",
                     error_code: None,
                     preferences: Some(&final_preferences),
+                    terminal_candidates: None,
                 },
             );
             logger.info(
@@ -1314,6 +1317,7 @@ async fn run_connected_profile(
                     server_state: "stopped",
                     error_code: Some(&error_code),
                     preferences: Some(&final_preferences),
+                    terminal_candidates: None,
                 },
             );
             logger.error("native_runtime_failed", Some(&error_code));
@@ -2280,6 +2284,41 @@ async fn run_local_control_server(
                         },
                     }
                 }
+                LocalControlAction::SwitchPrimaryAccount {
+                    platform,
+                    terminal_instance_id,
+                } => {
+                    let result = (|| {
+                        let state = ui_state.snapshot()?;
+                        validate_primary_account_candidate(
+                            &state,
+                            &platform,
+                            &terminal_instance_id,
+                        )?;
+                        let terminal_path = resolve_primary_account_terminal_path(
+                            &root_data_directory,
+                            server.endpoint().profile_id(),
+                            &platform,
+                            &terminal_instance_id,
+                        )?;
+                        preferences_store
+                            .save_primary_account(
+                                &platform,
+                                &terminal_instance_id,
+                                terminal_path.as_deref(),
+                            )
+                            .map_err(|error| error.code())
+                    })();
+                    match result {
+                        Ok(()) => {
+                            signal_preference_change(&preference_change_sender);
+                            LocalControlResult::Accepted
+                        }
+                        Err(code) => LocalControlResult::Rejected {
+                            code: code.to_owned(),
+                        },
+                    }
+                }
                 LocalControlAction::SelectTerminal {
                     terminal_instance_id,
                 } => {
@@ -2970,6 +3009,43 @@ fn resolve_selected_mt4_binding<'a>(
         .ok_or("mt4_terminal_selection_required")
 }
 
+fn resolve_primary_account_terminal_path(
+    root_data_directory: &std::path::Path,
+    profile_id: &str,
+    platform: &str,
+    terminal_instance_id: &str,
+) -> Result<Option<PathBuf>, &'static str> {
+    let paths = resolve_profile_paths(root_data_directory, profile_id)?;
+    let store = OutboxStore::open_existing(&paths.database_path).map_err(|error| error.code())?;
+    store
+        .terminal_bindings()
+        .map_err(|error| error.code())?
+        .into_iter()
+        .find(|binding| {
+            binding.platform == platform && binding.terminal_instance_id == terminal_instance_id
+        })
+        .map(|binding| Some(binding.terminal_path))
+        .ok_or("bridge_primary_account_terminal_binding_missing")
+}
+
+fn validate_primary_account_candidate<'a>(
+    state: &'a UiStateSnapshot,
+    platform: &str,
+    terminal_instance_id: &str,
+) -> Result<&'a UiTerminalCandidate, &'static str> {
+    let candidate = state
+        .terminal_candidates
+        .iter()
+        .find(|candidate| {
+            candidate.platform == platform && candidate.terminal_instance_id == terminal_instance_id
+        })
+        .ok_or("bridge_primary_account_selection_invalid")?;
+    if candidate.login.trim().is_empty() || candidate.broker_server.trim().is_empty() {
+        return Err("bridge_primary_account_not_logged_in");
+    }
+    Ok(candidate)
+}
+
 async fn configure_observer_profile(
     create: bool,
     observer: ObserverProfileMutation,
@@ -3296,15 +3372,11 @@ async fn run_profile_lifecycle(
     } = runtime;
     loop {
         let preferences_before_bootstrap = preferences_store.load();
-        let mt4_installations = if preferences_before_bootstrap.platform.as_deref() == Some("mt4") {
-            profile_mt4_installations(
-                root_data_directory,
-                profile_id,
-                &preferences_before_bootstrap,
-            )
-        } else {
-            Vec::new()
-        };
+        let mt4_installations = profile_mt4_installations(
+            root_data_directory,
+            profile_id,
+            &preferences_before_bootstrap,
+        );
         let mt5_provision_error = if preferences_before_bootstrap.platform.as_deref() == Some("mt5")
         {
             provision_mt5_bindings_if_missing(
@@ -3322,6 +3394,19 @@ async fn run_profile_lifecycle(
         };
         let mut bootstrap =
             NativeProfileBootstrap::load(application_directory, root_data_directory, profile_id)?;
+        // Keep the account switcher account-first. Installation-only MT4 rows
+        // are a fallback for a profile that has not registered any MT4
+        // account yet; once account bindings exist, unrelated software paths
+        // must not make the account list environment-dependent.
+        let installation_candidates = if bootstrap.mt4_bindings.is_empty() {
+            mt4_installation_candidates(&mt4_installations)
+        } else {
+            Vec::new()
+        };
+        let known_terminal_candidates = merge_terminal_candidates(
+            bootstrap_terminal_candidates(&bootstrap, None),
+            installation_candidates,
+        );
         let preferences = preferences_store.load();
         let status_path = bootstrap.paths.runtime_status_path.clone();
         logger.info(
@@ -3351,6 +3436,7 @@ async fn run_profile_lifecycle(
                     "platform_selection_required",
                     None,
                     candidates,
+                    &known_terminal_candidates,
                 );
                 if !wait_for_preference_change(&mut preference_change_receiver, &stop).await? {
                     return Ok(());
@@ -3379,6 +3465,7 @@ async fn run_profile_lifecycle(
                     mt5_provision_error.unwrap_or("mt5_terminal_not_found")
                 }),
                 candidates,
+                &known_terminal_candidates,
             );
             if !wait_for_preference_change(&mut preference_change_receiver, &stop).await? {
                 return Ok(());
@@ -3407,6 +3494,7 @@ async fn run_profile_lifecycle(
                 "terminal_selection_required",
                 None,
                 candidates,
+                &known_terminal_candidates,
             );
             if !wait_for_preference_change(&mut preference_change_receiver, &stop).await? {
                 return Ok(());
@@ -3468,6 +3556,7 @@ async fn run_profile_lifecycle(
                 "terminal_not_found",
                 Some(detail),
                 candidates,
+                &known_terminal_candidates,
             );
             if !wait_for_preference_change(&mut preference_change_receiver, &stop).await? {
                 return Ok(());
@@ -3527,6 +3616,7 @@ async fn run_profile_lifecycle(
                     server_state: "pairing_required",
                     error_code: None,
                     preferences: Some(&preferences),
+                    terminal_candidates: Some(&known_terminal_candidates),
                 },
             );
             logger.info("native_runtime_pairing_required", None);
@@ -3549,6 +3639,7 @@ async fn run_profile_lifecycle(
                                 server_state: "pairing_required",
                                 error_code: None,
                                 preferences: Some(&preferences),
+                                terminal_candidates: Some(&known_terminal_candidates),
                             },
                         );
                     }
@@ -3579,6 +3670,7 @@ async fn run_profile_lifecycle(
                 server_state: "connecting",
                 error_code: None,
                 preferences: Some(&preferences),
+                terminal_candidates: Some(&known_terminal_candidates),
             },
         );
         let connected = NativeConnectedRuntime::connect(
@@ -3630,6 +3722,7 @@ async fn run_profile_lifecycle(
                 root_data_directory: root_data_directory.to_path_buf(),
                 ui_state: ui_state.clone(),
                 preferences_store: preferences_store.clone(),
+                terminal_candidates: known_terminal_candidates.clone(),
                 logger: logger.clone(),
             },
         ));
@@ -3669,6 +3762,7 @@ async fn run_profile_lifecycle(
             root_data_directory,
             &ui_state,
             &preferences_store,
+            &known_terminal_candidates,
         );
         status_stop.cancel();
         status_monitor
@@ -4024,6 +4118,40 @@ fn mt4_installation_candidates(installations: &[Mt4Installation]) -> Vec<UiTermi
         .collect()
 }
 
+fn merge_terminal_candidates(
+    account_candidates: Vec<UiTerminalCandidate>,
+    installation_candidates: Vec<UiTerminalCandidate>,
+) -> Vec<UiTerminalCandidate> {
+    let mut candidates = BTreeMap::new();
+    for candidate in account_candidates {
+        candidates.insert(
+            (
+                candidate.platform.clone(),
+                candidate.terminal_instance_id.clone(),
+            ),
+            candidate,
+        );
+    }
+    for candidate in installation_candidates {
+        candidates
+            .entry((
+                candidate.platform.clone(),
+                candidate.terminal_instance_id.clone(),
+            ))
+            .or_insert(candidate);
+    }
+    let mut candidates = candidates.into_values().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.platform
+            .cmp(&right.platform)
+            .then_with(|| left.login.cmp(&right.login))
+            .then_with(|| left.broker_server.cmp(&right.broker_server))
+            .then_with(|| left.terminal_instance_id.cmp(&right.terminal_instance_id))
+    });
+    candidates.truncate(64);
+    candidates
+}
+
 fn retain_selected_terminal(
     bootstrap: &mut NativeProfileBootstrap,
     platform: &str,
@@ -4066,6 +4194,7 @@ fn publish_selection_ui_state(
     phase: &str,
     detail_code: Option<&str>,
     terminal_candidates: Vec<UiTerminalCandidate>,
+    known_terminal_candidates: &[UiTerminalCandidate],
 ) {
     let SelectionUiContext {
         logger,
@@ -4074,12 +4203,18 @@ fn publish_selection_ui_state(
         root_data_directory,
         preferences,
     } = context;
+    let terminal_candidates = if known_terminal_candidates.is_empty() {
+        terminal_candidates
+    } else {
+        known_terminal_candidates.to_vec()
+    };
     let selected_terminal_instance_id = preferences
         .selected_terminal_instance_id()
         .filter(|selected| {
-            terminal_candidates
-                .iter()
-                .any(|candidate| candidate.terminal_instance_id == *selected)
+            terminal_candidates.iter().any(|candidate| {
+                candidate.platform == preferences.platform.as_deref().unwrap_or_default()
+                    && candidate.terminal_instance_id == *selected
+            })
         })
         .map(str::to_owned);
     let state = UiStateSnapshot {
@@ -4122,6 +4257,7 @@ async fn monitor_runtime_status(
         root_data_directory,
         ui_state,
         preferences_store,
+        terminal_candidates,
         logger,
     } = context;
     let mut last_fingerprint = None;
@@ -4149,6 +4285,7 @@ async fn monitor_runtime_status(
                 &root_data_directory,
                 &ui_state,
                 &preferences_store,
+                &terminal_candidates,
             );
             last_publish = Instant::now();
         }
@@ -4176,6 +4313,7 @@ fn publish_inactive_status(
         server_state,
         error_code,
         preferences,
+        terminal_candidates,
     } = status;
     let snapshot = match NativeRuntimeStatusSnapshot::inactive(
         profile_id,
@@ -4196,6 +4334,9 @@ fn publish_inactive_status(
         Ok(mut state) => {
             if let Some(preferences) = preferences {
                 apply_preferences_to_ui_state(&mut state, preferences, root_data_directory);
+            }
+            if let Some(terminal_candidates) = terminal_candidates {
+                state.terminal_candidates = terminal_candidates.to_vec();
             }
             if let Err(error_code) = ui_state.publish(state) {
                 logger.warning("native_ui_state_publish_failed", Some(error_code));
@@ -4232,9 +4373,13 @@ fn publish_active_ui_state_or_warn(
     root_data_directory: &std::path::Path,
     ui_state: &UiStateStore,
     preferences_store: &BridgePreferencesStore,
+    terminal_candidates: &[UiTerminalCandidate],
 ) {
     match handle.ui_snapshot(profile_id, VERSION, now_utc_msc(), 1) {
         Ok(mut state) => {
+            if !terminal_candidates.is_empty() {
+                state.terminal_candidates = terminal_candidates.to_vec();
+            }
             apply_preferences_to_ui_state(
                 &mut state,
                 &preferences_store.load(),
@@ -5390,6 +5535,68 @@ mod tests {
         assert!(preferences.load().auto_start_enabled);
         assert!(!preferences_path.exists());
         std::fs::remove_dir_all(root).expect("remove autostart selection fixture");
+    }
+
+    #[test]
+    fn merged_primary_candidates_are_deduplicated_sorted_and_keep_account_identity() {
+        let installation = UiTerminalCandidate {
+            terminal_instance_id: "mt4_same".to_owned(),
+            platform: "mt4".to_owned(),
+            broker_server: String::new(),
+            login: String::new(),
+            display_name: Some("MetaTrader 4".to_owned()),
+        };
+        let account = UiTerminalCandidate {
+            terminal_instance_id: "mt4_same".to_owned(),
+            platform: "mt4".to_owned(),
+            broker_server: "Broker-Demo".to_owned(),
+            login: "123456".to_owned(),
+            display_name: Some("123456 · Broker-Demo".to_owned()),
+        };
+        let other = UiTerminalCandidate {
+            terminal_instance_id: "mt5_other".to_owned(),
+            platform: "mt5".to_owned(),
+            broker_server: "Broker-Demo".to_owned(),
+            login: "100001".to_owned(),
+            display_name: None,
+        };
+        let merged = merge_terminal_candidates(vec![other.clone(), account], vec![installation]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].platform, "mt4");
+        assert_eq!(merged[0].login, "123456");
+        assert_eq!(merged[1], other);
+    }
+
+    #[test]
+    fn primary_account_path_resolution_requires_the_exact_platform_and_binding_id() {
+        let root = unique_test_directory("primary-account-path");
+        std::fs::create_dir_all(&root).expect("root");
+        let paths = resolve_profile_paths(&root, DEFAULT_PROFILE_ID).expect("profile paths");
+        let terminal_path = root.join("mt4-data");
+        std::fs::create_dir_all(&terminal_path).expect("MT4 data path");
+        OutboxStore::open_or_create(&paths.database_path)
+            .expect("store")
+            .activate_terminal_binding(
+                "mt4_account",
+                "mt4",
+                &terminal_path,
+                &AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                now_utc_msc(),
+            )
+            .expect("binding");
+        assert_eq!(
+            resolve_primary_account_terminal_path(&root, DEFAULT_PROFILE_ID, "mt4", "mt4_account",)
+                .expect("MT4 path"),
+            Some(terminal_path.clone())
+        );
+        assert_eq!(
+            resolve_primary_account_terminal_path(&root, DEFAULT_PROFILE_ID, "mt5", "mt4_account",),
+            Err("bridge_primary_account_terminal_binding_missing")
+        );
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     fn unique_test_directory(suffix: &str) -> PathBuf {

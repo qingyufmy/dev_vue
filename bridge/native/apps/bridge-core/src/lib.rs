@@ -1240,6 +1240,12 @@ impl CredentialSource for ProfileCredentialSource {
             }
         })
     }
+
+    fn invalidate_current(&self, expected_refresh_token: &str) -> Result<bool, TransportError> {
+        self.store
+            .clear_if_matches(expected_refresh_token)
+            .map_err(|error| TransportError::from_static_code(error.code()))
+    }
 }
 
 struct CoreHelloProvider {
@@ -3138,6 +3144,16 @@ mod tests {
         assert_eq!(
             CredentialSource::current(&source)
                 .expect("paired credential")
+                .as_deref(),
+            Some(credential.refresh_token.as_str())
+        );
+        assert!(
+            !CredentialSource::invalidate_current(&source, &"s".repeat(64))
+                .expect("stale invalidation")
+        );
+        assert_eq!(
+            CredentialSource::current(&source)
+                .expect("stale invalidation preserves credential")
                 .as_deref(),
             Some(credential.refresh_token.as_str())
         );

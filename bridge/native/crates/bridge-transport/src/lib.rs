@@ -2140,10 +2140,7 @@ impl SessionStateMachine {
 fn bridge_error_requires_pairing(error_code: &str) -> bool {
     matches!(
         error_code,
-        "bridge_not_paired"
-            | "bridge_refresh_invalid"
-            | "bridge_refresh_revoked"
-            | "bridge_session_revoked"
+        "bridge_not_paired" | "bridge_refresh_invalid" | "bridge_refresh_revoked"
     )
 }
 
@@ -2817,11 +2814,7 @@ mod tests {
             machine.failed("bridge_not_paired").state,
             ConnectionState::PairingRequired
         );
-        for code in [
-            "bridge_refresh_invalid",
-            "bridge_refresh_revoked",
-            "bridge_session_revoked",
-        ] {
+        for code in ["bridge_refresh_invalid", "bridge_refresh_revoked"] {
             assert_eq!(
                 machine.failed(code).state,
                 ConnectionState::PairingRequired,
@@ -2830,8 +2823,14 @@ mod tests {
             assert_eq!(machine.start(true).state, ConnectionState::Connecting);
         }
         assert_eq!(
+            machine.failed("bridge_session_revoked").state,
+            ConnectionState::Reconnecting,
+            "a short-lived session revocation must first retry the long-lived refresh credential"
+        );
+        assert_eq!(
             machine.failed("bridge_membership_required").state,
-            ConnectionState::Reconnecting
+            ConnectionState::Reconnecting,
+            "membership loss keeps the credential and uses bounded reconnects"
         );
         assert_eq!(machine.stop().state, ConnectionState::Stopped);
     }
