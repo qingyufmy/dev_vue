@@ -1479,6 +1479,8 @@ const API_ERROR_MESSAGES = {
   no_model_configured: "尚未配置可用模型，请先在“AI策略师 → 模型管理”中添加模型",
   no_platform_model: "平台尚未配置默认模型",
   bound_model_unavailable: "策略绑定的模型已停用或删除，请重新选择模型",
+  output_truncated: "模型连接已建立，但测试输出被截断，请检查最大输出上限或推理强度后重试",
+  ai_response_missing_json_object: "模型连接已建立，但未返回有效的结构化结果，请检查模型名称和相关设置后重试",
   credential_decryption_failed: "模型凭据无法解密，请联系管理员检查密钥版本",
   credential_not_encrypted: "检测到旧版明文凭据，请先完成凭据迁移",
   invalid_schedule_timezone: "运行时区无效",

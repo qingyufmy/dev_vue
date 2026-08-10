@@ -356,6 +356,10 @@ function connectAdminRealtime() {
 }
 
 function token() { return localStorage.getItem('ws_token') || localStorage.getItem('authToken') || '' }
+const ADMIN_AI_ERROR_MESSAGES = {
+  output_truncated: '模型连接已建立，但测试输出被截断，请检查最大输出上限或推理强度后重试',
+  ai_response_missing_json_object: '模型连接已建立，但未返回有效的结构化结果，请检查模型名称和相关设置后重试',
+}
 async function api(path, options = {}) {
   const formBody = typeof FormData !== 'undefined' && options.body instanceof FormData
   const headers = { ...(options.body && !formBody ? {'Content-Type':'application/json'} : {}), ...(options.headers || {}) }
@@ -370,7 +374,10 @@ async function api(path, options = {}) {
     location.href = '/'
     throw new Error('当前账号没有管理权限')
   }
-  if (!response.ok || data.ok === false) throw new Error(data.error || '请求失败，请稍后重试')
+  if (!response.ok || data.ok === false) {
+    const code = data.error || data.code || ''
+    throw new Error(ADMIN_AI_ERROR_MESSAGES[code] || code || '请求失败，请稍后重试')
+  }
   return data
 }
 
