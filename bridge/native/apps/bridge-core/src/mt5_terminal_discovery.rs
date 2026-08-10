@@ -24,6 +24,9 @@ use windows_sys::Win32::System::Registry::{
 use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindowThreadProcessId, IsWindow, SetForegroundWindow,
+};
 
 use crate::observer_terminal::mt5_terminal_instance_id;
 
@@ -51,12 +54,23 @@ pub(crate) struct Mt5ProbeResult {
     pub account_ref: AccountRef,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Mt5ProbeFailure {
+    pub code: String,
+    pub last_error: Option<i64>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Mt5ProbeDocument {
     probe_version: u32,
     terminal_path: String,
-    account_ref: AccountRef,
+    #[serde(default)]
+    account_ref: Option<AccountRef>,
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    last_error: Option<i64>,
 }
 
 pub(crate) fn discover_windows() -> Vec<Mt5Installation> {
@@ -90,71 +104,193 @@ pub(crate) fn probe_terminal(
     worker_script: &Path,
     terminal_executable: &Path,
     timeout: Duration,
-) -> Result<Mt5ProbeResult, &'static str> {
+) -> Result<Mt5ProbeResult, Mt5ProbeFailure> {
     if !python_executable.is_file() {
-        return Err("mt5_python_runtime_not_found");
+        return Err(probe_failure("mt5_python_runtime_not_found", None));
     }
     if !worker_script.is_file() {
-        return Err("mt5_worker_script_not_found");
+        return Err(probe_failure("mt5_worker_script_not_found", None));
     }
     if !terminal_executable.is_file() {
-        return Err("mt5_terminal_not_found");
+        return Err(probe_failure("mt5_terminal_not_found", None));
     }
-    let expected_path = absolute(terminal_executable).ok_or("mt5_terminal_not_found")?;
-    let mut child = Command::new(python_executable)
-        .arg("-B")
-        .arg(worker_script)
-        .arg("--probe")
-        .arg("--terminal")
-        .arg(&expected_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|_| "mt5_probe_process_start_failed")?;
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("mt5_probe_timeout");
+    let expected_path = absolute(terminal_executable)
+        .ok_or_else(|| probe_failure("mt5_terminal_not_found", None))?;
+    let previous_foreground = capture_foreground_window();
+    let result = (|| {
+        let mut child = Command::new(python_executable)
+            .arg("-B")
+            .arg(worker_script)
+            .arg("--probe")
+            .arg("--terminal")
+            .arg(&expected_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|_| probe_failure("mt5_probe_process_start_failed", None))?;
+
+        // Drain both streams while the process is running.  The worker's
+        // structured error stays on stdout, while stderr remains bounded and
+        // is never copied into UI text or logs.
+        let stdout_reader = child
+            .stdout
+            .take()
+            .map(|stdout| thread::spawn(move || read_probe_stream(stdout)));
+        let stderr_reader = child
+            .stderr
+            .take()
+            .map(|stderr| thread::spawn(move || read_probe_stream(stderr)));
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    join_probe_stream(stdout_reader)?;
+                    join_probe_stream(stderr_reader)?;
+                    return Err(probe_failure("mt5_probe_timeout", None));
+                }
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    join_probe_stream(stdout_reader)?;
+                    join_probe_stream(stderr_reader)?;
+                    return Err(probe_failure("mt5_probe_failed", None));
+                }
             }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("mt5_probe_failed");
-            }
+        };
+        let output = join_probe_stream(stdout_reader)?;
+        // Reading stderr is intentional even though its content is discarded;
+        // this avoids dropping the pipe and lets the structured stdout error
+        // be used for stable failure classification.
+        let _stderr = join_probe_stream(stderr_reader)?;
+        if output.is_empty() || output.len() as u64 > MAX_PROBE_OUTPUT_BYTES {
+            return Err(probe_failure("mt5_probe_response_invalid", None));
         }
-    };
+        let document = serde_json::from_slice::<Mt5ProbeDocument>(&output)
+            .map_err(|_| probe_failure("mt5_probe_response_invalid", None))?;
+        if document.probe_version != 1
+            || !paths_equal(&expected_path, Path::new(&document.terminal_path))
+        {
+            return Err(probe_failure(
+                "mt5_probe_identity_mismatch",
+                document.last_error,
+            ));
+        }
+        if let Some(error_code) = document.error_code.as_deref() {
+            return Err(probe_failure(
+                normalize_probe_error_code(error_code).unwrap_or("mt5_probe_failed"),
+                document.last_error,
+            ));
+        }
+        let last_error = document.last_error;
+        let account_ref = document
+            .account_ref
+            .filter(|account| account.validate().is_ok())
+            .ok_or_else(|| probe_failure("mt5_probe_identity_mismatch", last_error))?;
+        if !status.success() {
+            return Err(probe_failure("mt5_probe_failed", last_error));
+        }
+        Ok(Mt5ProbeResult {
+            executable_path: expected_path.clone(),
+            account_ref,
+        })
+    })();
+    restore_foreground_window_if_probe_active(previous_foreground, &expected_path);
+    result
+}
+
+fn probe_failure(code: &str, last_error: Option<i64>) -> Mt5ProbeFailure {
+    Mt5ProbeFailure {
+        code: code.to_owned(),
+        last_error,
+    }
+}
+
+fn normalize_probe_error_code(code: &str) -> Option<&'static str> {
+    match code {
+        "terminal_not_found" | "mt5_terminal_not_found" => Some("mt5_terminal_not_found"),
+        "terminal_not_running" | "mt5_terminal_not_running" => Some("mt5_terminal_not_running"),
+        "initialize_failed" | "mt5_initialize_failed" => Some("mt5_initialize_failed"),
+        "account_unavailable" | "mt5_account_unavailable" => Some("mt5_account_unavailable"),
+        "disconnected" | "terminal_disconnected" | "mt5_terminal_disconnected" => {
+            Some("mt5_terminal_disconnected")
+        }
+        _ => None,
+    }
+}
+
+fn read_probe_stream(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
     let mut output = Vec::new();
-    if let Some(stdout) = child.stdout.take() {
-        stdout
-            .take(MAX_PROBE_OUTPUT_BYTES + 1)
-            .read_to_end(&mut output)
-            .map_err(|_| "mt5_probe_response_invalid")?;
+    let mut buffer = [0_u8; 4 * 1024];
+    loop {
+        let count = stream.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        let remaining = (MAX_PROBE_OUTPUT_BYTES as usize + 1).saturating_sub(output.len());
+        if remaining > 0 {
+            output.extend_from_slice(&buffer[..count.min(remaining)]);
+        }
     }
-    if !status.success() {
-        return Err("mt5_probe_failed");
+    Ok(output)
+}
+
+fn join_probe_stream(
+    reader: Option<thread::JoinHandle<std::io::Result<Vec<u8>>>>,
+) -> Result<Vec<u8>, Mt5ProbeFailure> {
+    reader
+        .ok_or_else(|| probe_failure("mt5_probe_response_invalid", None))?
+        .join()
+        .map_err(|_| probe_failure("mt5_probe_response_invalid", None))?
+        .map_err(|_| probe_failure("mt5_probe_response_invalid", None))
+}
+
+fn capture_foreground_window() -> Option<windows_sys::Win32::Foundation::HWND> {
+    let window = unsafe { GetForegroundWindow() };
+    (!window.is_null()).then_some(window)
+}
+
+fn foreground_process_image_path(
+    window: Option<windows_sys::Win32::Foundation::HWND>,
+) -> Option<PathBuf> {
+    let window = window?;
+    let mut process_id = 0_u32;
+    if unsafe { GetWindowThreadProcessId(window, &mut process_id) } == 0 || process_id == 0 {
+        return None;
     }
-    if output.is_empty() || output.len() as u64 > MAX_PROBE_OUTPUT_BYTES {
-        return Err("mt5_probe_response_invalid");
+    process_image_path(process_id)
+}
+
+fn should_restore_foreground_window(
+    current_process_path: Option<&Path>,
+    probed_terminal_path: &Path,
+) -> bool {
+    current_process_path.is_some_and(|path| paths_equal(path, probed_terminal_path))
+}
+
+fn restore_foreground_window_if_probe_active(
+    previous_window: Option<windows_sys::Win32::Foundation::HWND>,
+    probed_terminal_path: &Path,
+) {
+    let current_process_path = foreground_process_image_path(capture_foreground_window());
+    if should_restore_foreground_window(current_process_path.as_deref(), probed_terminal_path) {
+        restore_foreground_window(previous_window);
     }
-    let document = serde_json::from_slice::<Mt5ProbeDocument>(&output)
-        .map_err(|_| "mt5_probe_response_invalid")?;
-    if document.probe_version != 1
-        || !paths_equal(&expected_path, Path::new(&document.terminal_path))
-        || document.account_ref.validate().is_err()
+}
+
+fn restore_foreground_window(window: Option<windows_sys::Win32::Foundation::HWND>) {
+    if let Some(window) = window
+        && unsafe { IsWindow(window) } != 0
     {
-        return Err("mt5_probe_identity_mismatch");
+        unsafe {
+            let _ = SetForegroundWindow(window);
+        }
     }
-    Ok(Mt5ProbeResult {
-        executable_path: expected_path,
-        account_ref: document.account_ref,
-    })
 }
 
 fn resolve_candidates(
@@ -418,10 +554,31 @@ fn absolute(path: &Path) -> Option<PathBuf> {
     std::path::absolute(path).ok()
 }
 
-fn paths_equal(left: &Path, right: &Path) -> bool {
+pub(crate) fn paths_equal(left: &Path, right: &Path) -> bool {
     left.to_string_lossy()
         .trim_end_matches(['\\', '/'])
         .eq_ignore_ascii_case(right.to_string_lossy().trim_end_matches(['\\', '/']))
+}
+
+pub(crate) fn safe_terminal_directory_name(path: &Path) -> String {
+    let fallback = "MT5终端";
+    let Some(raw) = path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|value| value.to_str())
+    else {
+        return fallback.to_owned();
+    };
+    let name = raw
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(96)
+        .collect::<String>();
+    if name.trim().is_empty() {
+        fallback.to_owned()
+    } else {
+        name
+    }
 }
 
 fn is_terminal_executable(path: &Path) -> bool {
@@ -431,6 +588,12 @@ fn is_terminal_executable(path: &Path) -> bool {
             value.eq_ignore_ascii_case("terminal64.exe")
                 || value.eq_ignore_ascii_case("terminal.exe")
         })
+}
+
+pub(crate) fn is_terminal64_executable(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("terminal64.exe"))
 }
 
 fn is_running_mt5_candidate(path: &Path) -> bool {
@@ -519,17 +682,61 @@ mod tests {
     }
 
     #[test]
+    fn only_terminal64_is_unambiguous_for_a_failed_mt5_placeholder() {
+        assert!(is_terminal64_executable(Path::new(
+            r"C:\Broker\terminal64.exe"
+        )));
+        assert!(!is_terminal64_executable(Path::new(
+            r"C:\Broker\terminal.exe"
+        )));
+    }
+
+    #[test]
     fn probe_document_is_strict_and_route_validated() {
         let valid = serde_json::from_str::<Mt5ProbeDocument>(
             r#"{"probe_version":1,"terminal_path":"C:\\Broker MT5\\terminal64.exe","account_ref":{"broker_server":"Broker-Demo","login":"123456"}}"#,
         )
         .expect("valid probe");
         assert_eq!(valid.probe_version, 1);
-        assert!(valid.account_ref.validate().is_ok());
+        assert!(
+            valid
+                .account_ref
+                .as_ref()
+                .is_some_and(|account| account.validate().is_ok())
+        );
         assert!(serde_json::from_str::<Mt5ProbeDocument>(
             r#"{"probe_version":1,"terminal_path":"C:\\terminal64.exe","account_ref":{"broker_server":"Broker-Demo","login":"123456"},"secret":"no"}"#,
         )
         .is_err());
+        let failure = serde_json::from_str::<Mt5ProbeDocument>(
+            r#"{"probe_version":1,"terminal_path":"C:\\Broker MT5\\terminal64.exe","error_code":"account_unavailable","last_error":-10004}"#,
+        )
+        .expect("structured failure probe");
+        assert_eq!(
+            normalize_probe_error_code(failure.error_code.as_deref().unwrap()),
+            Some("mt5_account_unavailable")
+        );
+        assert_eq!(failure.last_error, Some(-10004));
+    }
+
+    #[test]
+    fn foreground_restore_only_applies_while_the_probed_terminal_is_foreground() {
+        let terminal = Path::new(r"C:\Broker MT5\terminal64.exe");
+        assert!(should_restore_foreground_window(Some(terminal), terminal));
+        assert!(!should_restore_foreground_window(
+            Some(Path::new(r"C:\Windows\explorer.exe")),
+            terminal
+        ));
+        assert!(!should_restore_foreground_window(None, terminal));
+    }
+
+    #[test]
+    fn safe_terminal_directory_name_does_not_expose_parent_path_or_controls() {
+        let path = Path::new("C:\\Users\\secret\\Broker\u{7} MT5\\terminal64.exe");
+        let name = safe_terminal_directory_name(path);
+        assert_eq!(name, "Broker MT5");
+        assert!(!name.contains("secret"));
+        assert!(!name.chars().any(char::is_control));
     }
 
     #[test]
@@ -564,6 +771,40 @@ mod tests {
         assert_eq!(result.account_ref.login, "123456");
         assert!(paths_equal(&result.executable_path, &terminal));
         fs::remove_dir_all(root).expect("remove probe fixture");
+    }
+
+    #[test]
+    fn nonzero_probe_process_preserves_structured_failure_code_and_last_error() {
+        let output = Command::new("where.exe")
+            .arg("python.exe")
+            .output()
+            .expect("query python");
+        if !output.status.success() {
+            return;
+        }
+        let Some(python) = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(PathBuf::from)
+        else {
+            return;
+        };
+        let root = fixture_directory("probe-failure");
+        fs::create_dir_all(&root).expect("probe failure fixture");
+        let terminal = root.join("terminal64.exe");
+        let worker = root.join("probe.py");
+        fs::write(&terminal, b"terminal").expect("probe terminal");
+        fs::write(
+            &worker,
+            b"import json,sys\nprint(json.dumps({'probe_version':1,'terminal_path':sys.argv[-1],'error_code':'account_unavailable','last_error':-10004},separators=(',',':')))\nsys.exit(2)\n",
+        )
+        .expect("probe failure worker");
+        let failure = probe_terminal(&python, &worker, &terminal, Duration::from_secs(5))
+            .expect_err("structured probe failure");
+        assert_eq!(failure.code, "mt5_account_unavailable");
+        assert_eq!(failure.last_error, Some(-10004));
+        fs::remove_dir_all(root).expect("remove probe failure fixture");
     }
 
     #[test]

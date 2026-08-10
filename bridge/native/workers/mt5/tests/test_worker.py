@@ -25,8 +25,11 @@ from worker import (  # noqa: E402
     Mt5Worker,
     WorkerError,
     WorkerRoute,
+    _probe_error_code,
+    _probe_last_error,
     _normalized_terminal_path,
     _terminal_process_running,
+    main,
     probe_terminal,
     read_frame,
     role_from_environment,
@@ -260,6 +263,36 @@ class WorkerTests(unittest.TestCase):
             result["account_ref"],
         )
         self.assertFalse(self.mt5.initialized)
+
+    def test_probe_main_emits_stable_structured_failure_and_numeric_last_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            terminal = Path(directory) / "terminal64.exe"
+            terminal.write_bytes(b"terminal")
+            self.mt5.initialize = lambda **_kwargs: False
+            self.mt5.last_error = lambda: (-10004, "private diagnostic text")
+            output = io.StringIO()
+            with (
+                patch("sys.stdout", output),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                main(self.mt5, ["--probe", "--terminal", str(terminal)])
+
+        self.assertEqual(2, raised.exception.code)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(1, payload["probe_version"])
+        self.assertEqual("initialize_failed", payload["error_code"])
+        self.assertEqual(-10004, payload["last_error"])
+        self.assertNotIn("private diagnostic text", output.getvalue())
+
+    def test_probe_error_mapping_accepts_only_stable_codes(self):
+        self.mt5.last_error = lambda: (-10004, "private diagnostic text")
+        self.assertEqual("terminal_not_found", _probe_error_code("mt5_terminal_not_found"))
+        self.assertEqual("terminal_not_running", _probe_error_code("mt5_terminal_not_running"))
+        self.assertEqual("initialize_failed", _probe_error_code("mt5_initialize_failed"))
+        self.assertEqual("account_unavailable", _probe_error_code("mt5_account_unavailable"))
+        self.assertEqual("disconnected", _probe_error_code("mt5_terminal_disconnected"))
+        self.assertEqual("probe_failed", _probe_error_code("unexpected_internal_error"))
+        self.assertEqual(-10004, _probe_last_error(self.mt5))
 
     def test_connect_waits_for_saved_account_session_to_be_restored(self):
         with tempfile.TemporaryDirectory() as directory:
