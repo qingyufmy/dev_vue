@@ -64,6 +64,46 @@ const __dirname = dirname(__filename)
 const BRIDGE_VERSION = readFileSync(join(__dirname, '../../../VERSION'), 'utf-8').trim()
 const BRIDGE_RELEASE = resolveBridgeInstallerRelease()
 
+// Connection probes should be large enough for a short structured response,
+// while still respecting the profile's configured output ceiling. Thinking
+// models need more room for their internal reasoning than ordinary probes.
+export const CONNECTION_TEST_DEFAULT_MAX_TOKENS = 8_000
+export const CONNECTION_TEST_MIN_MAX_TOKENS = 100
+export const CONNECTION_TEST_THINKING_MAX_TOKENS = 4_096
+export const CONNECTION_TEST_NON_THINKING_MAX_TOKENS = 256
+
+export function normalizeModelThinkingEnabled(value) {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === '1' || normalized === 'true') return true
+    if (normalized === '0' || normalized === 'false' || normalized === '') return false
+  }
+  return value === true || value === 1
+}
+
+export function resolveModelConnectionTestMaxTokens(model = {}) {
+  const configured = Number.parseInt(model.max_tokens, 10)
+  const hardCap = Number.isInteger(configured) && configured > 0
+    ? Math.max(CONNECTION_TEST_MIN_MAX_TOKENS, configured)
+    : CONNECTION_TEST_DEFAULT_MAX_TOKENS
+  return Math.min(hardCap, normalizeModelThinkingEnabled(model.thinking_enabled)
+    ? CONNECTION_TEST_THINKING_MAX_TOKENS
+    : CONNECTION_TEST_NON_THINKING_MAX_TOKENS)
+}
+
+export function resolveModelConnectionTestConfig(model = {}) {
+  const provider = model.provider || model.api_provider
+  const thinkingEnabled = normalizeModelThinkingEnabled(model.thinking_enabled)
+  return {
+    provider,
+    protocol: modelProviderProtocol(provider),
+    maxTokens: resolveModelConnectionTestMaxTokens(model),
+    thinkingEnabled,
+    reasoningEffort: provider === 'kimi_code' && model.model_name === 'k3' ? 'max' : model.reasoning_effort,
+    allowFollowupRequests: false,
+  }
+}
+
 router.get('/bridge/version', (req, res, next) => {
   // This router is mounted at both /api and /aurum-api for AI compatibility.
   // Keep exactly one retired-client update surface.
@@ -352,18 +392,19 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
     const ownerId = req.user.role === 'admin' && req.body?.scope === 'platform' ? 0 : req.user.id
     const resolved = await resolveOwnedModelProfileForRuntime(Number(req.params.id), ownerId)
     if (!resolved.model) throw new Error(resolved.error || 'model_unavailable')
-    const provider = resolved.model.provider || resolved.model.api_provider
-    const protocol = modelProviderProtocol(provider)
+    const testConfig = resolveModelConnectionTestConfig(resolved.model)
+    const { provider, protocol } = testConfig
     const base = String(resolved.model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
     if (!base) throw new Error('unsupported_model_provider')
     const started = Date.now()
     const result = await requestJsonObject({ url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
       apiKey: resolved.model.api_key_encrypted, provider, model: resolved.model.model_name, temperature: 0,
-      maxTokens: 40, protocol,
+      maxTokens: testConfig.maxTokens, protocol,
       timeout: resolved.model.request_timeout_ms || 120000,
-      thinkingEnabled: Boolean(resolved.model.thinking_enabled),
-      reasoningEffort: provider === 'kimi_code' && resolved.model.model_name === 'k3' ? 'max' : resolved.model.reasoning_effort,
+      thinkingEnabled: testConfig.thinkingEnabled,
+      reasoningEffort: testConfig.reasoningEffort,
       messages: [{ role: 'system', content: 'Return JSON only.' }, { role: 'user', content: '{"ok":true}' }],
+      allowFollowupRequests: testConfig.allowFollowupRequests,
       usageContext: { userId: req.user.id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'manual', strategyId: null } })
     res.json({ ok: true, latency_ms: Date.now() - started, provider, model_name: resolved.model.model_name, response_valid: result?.ok === true })
   } catch (error) { reviewError(res, error) }
