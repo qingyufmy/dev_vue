@@ -649,7 +649,7 @@ function userRows(users) {
 }
 
 async function loadUsers() {
-  const params = new URLSearchParams({ page:String(state.page), page_size:'20', membership:state.membership })
+  const params = new URLSearchParams({ page:String(state.page), page_size:'10', membership:state.membership })
   if (state.search) params.set('search', state.search)
   const data = await api(`/api/admin/users?${params}`)
   state.users = data.users

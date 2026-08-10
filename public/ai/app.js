@@ -5605,7 +5605,9 @@ async function loadSymbols() {
 async function loadAccount() {
   const data = await wsApi("account");
   const rawServer = data.server || data.company || "服务器 --";
-  const server = rawServer;
+  const server = isObserverMode() && typeof rawServer === "string" && rawServer.endsWith("Demo")
+    ? `${rawServer.slice(0, -"Demo".length)}Live`
+    : rawServer;
   const currency = data.currency || "USD";
   state.accountBalance = parseFloat(data.balance) || 0;
   state.bridgeAccountIdentity = data.server && data.login != null ? {
@@ -7791,9 +7793,12 @@ function legacyInferenceEvidence(signal, timeframe) {
 
 function inferenceEvidenceFor(signal, timeframe) {
   const normalized = String(timeframe || "").trim().toUpperCase();
-  const legacy = legacyInferenceEvidence(signal, normalized);
-  if (legacy) return legacy;
-  return getSignalCacheEntry(_signalEvidenceCache, inferenceEvidenceCacheKey(signal?.id, normalized, signal?.inference_snapshot?.id)) || null;
+  const cached = getSignalCacheEntry(
+    _signalEvidenceCache,
+    inferenceEvidenceCacheKey(signal?.id, normalized, signal?.inference_snapshot?.id),
+  );
+  if (cached) return cached;
+  return legacyInferenceEvidence(signal, normalized);
 }
 
 async function ensureInferenceEvidence(signal, timeframe, renderVersion) {
@@ -8032,6 +8037,9 @@ function renderInferenceChart(signal, renderVersion) {
     ensureInferenceEvidence(signal, timeframe, renderVersion);
     return;
   }
+  // Evidence is ready: remove the first-pass loading/error placeholder before
+  // Lightweight Charts appends its own canvas and controls.
+  container.innerHTML = "";
   const chart = LightweightCharts.createChart(container, {
     width: container.clientWidth || 720,
     height: container.clientHeight || 340,
