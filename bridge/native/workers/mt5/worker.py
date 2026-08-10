@@ -58,6 +58,31 @@ class WorkerError(RuntimeError):
         self.code = code
 
 
+def _probe_error_code(code: str) -> str:
+    """Map internal worker errors to the small, stable probe contract."""
+    return {
+        "mt5_terminal_not_found": "terminal_not_found",
+        "mt5_terminal_not_running": "terminal_not_running",
+        "mt5_initialize_failed": "initialize_failed",
+        "mt5_account_unavailable": "account_unavailable",
+        "mt5_terminal_disconnected": "disconnected",
+    }.get(code, "probe_failed")
+
+
+def _probe_last_error(mt5: Any) -> int | None:
+    """Return only MetaTrader5's numeric last-error value, never its text."""
+    try:
+        value = mt5.last_error()
+    except Exception:
+        return None
+    if isinstance(value, (tuple, list)):
+        value = value[0] if value else None
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _report_unexpected_exception(stage: str, error: BaseException) -> None:
     """Persist only a redacted exception type; never serialize broker/user data or messages."""
     path = os.environ.get(DIAGNOSTIC_PATH_ENV, "").strip()
@@ -2003,16 +2028,26 @@ def probe_terminal(mt5: Any, terminal_path: str) -> dict[str, Any]:
     if not Path(resolved_path).is_file():
         raise WorkerError("mt5_terminal_not_found")
     _require_terminal_running(resolved_path)
-    if not mt5.initialize(path=resolved_path, timeout=10_000, portable=False):
+    try:
+        initialized = mt5.initialize(path=resolved_path, timeout=10_000, portable=False)
+    except Exception as error:
+        raise WorkerError("mt5_initialize_failed") from error
+    if not initialized:
         raise WorkerError("mt5_initialize_failed")
     try:
-        account = mt5.account_info()
-        terminal = mt5.terminal_info()
+        try:
+            account = mt5.account_info()
+        except Exception as error:
+            raise WorkerError("mt5_account_unavailable") from error
         broker_server = str(getattr(account, "server", "") or "").strip()
         login = str(getattr(account, "login", "") or "").strip()
-        if account is None or terminal is None or not broker_server or not login:
+        if account is None or not broker_server or not login:
             raise WorkerError("mt5_account_unavailable")
-        if not bool(getattr(terminal, "connected", False)):
+        try:
+            terminal = mt5.terminal_info()
+        except Exception as error:
+            raise WorkerError("mt5_terminal_disconnected") from error
+        if terminal is None or not bool(getattr(terminal, "connected", False)):
             raise WorkerError("mt5_terminal_disconnected")
         return {
             "probe_version": 1,
@@ -2020,15 +2055,29 @@ def probe_terminal(mt5: Any, terminal_path: str) -> dict[str, Any]:
             "account_ref": {"broker_server": broker_server, "login": login},
         }
     finally:
-        mt5.shutdown()
+        try:
+            mt5.shutdown()
+        except Exception:
+            # A failed cleanup must not replace the structured probe result.
+            pass
 
 
 def main(mt5: Any, arguments: list[str]) -> None:
     if arguments:
         if len(arguments) != 3 or arguments[0] != "--probe" or arguments[1] != "--terminal":
             raise WorkerError("worker_arguments_invalid")
-        print(json.dumps(probe_terminal(mt5, arguments[2]), ensure_ascii=False,
-                         separators=(",", ":")))
+        terminal_path = str(Path(arguments[2]).resolve())
+        try:
+            result = probe_terminal(mt5, arguments[2])
+        except WorkerError as error:
+            print(json.dumps({
+                "probe_version": 1,
+                "terminal_path": terminal_path,
+                "error_code": _probe_error_code(error.code),
+                "last_error": _probe_last_error(mt5),
+            }, ensure_ascii=False, separators=(",", ":")))
+            raise SystemExit(2) from error
+        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
         return
     run(mt5)
 

@@ -60,7 +60,7 @@ use mt4_expert_installer::{deploy_expert, resolve_expert_source};
 use mt4_registration_coordinator::Mt4RegistrationEvent;
 use mt4_terminal_discovery::Mt4Installation;
 use mt5_terminal_discovery::{
-    Mt5Installation, Mt5ProbeResult, probe_terminal, selected_or_discovered,
+    Mt5Installation, Mt5ProbeFailure, Mt5ProbeResult, probe_terminal, selected_or_discovered,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -3390,8 +3390,7 @@ async fn run_profile_lifecycle(
             profile_id,
             &preferences_before_bootstrap,
         );
-        let mt5_provision_error = if preferences_before_bootstrap.platform.as_deref() == Some("mt5")
-        {
+        let mt5_provision = if preferences_before_bootstrap.platform.as_deref() == Some("mt5") {
             provision_mt5_bindings_if_missing(
                 application_directory,
                 root_data_directory,
@@ -3402,10 +3401,10 @@ async fn run_profile_lifecycle(
                 force_mt5_redetect,
             )
             .await
-            .err()
         } else {
-            None
+            Mt5ProvisionOutcome::default()
         };
+        let mt5_provision_error = mt5_provision.error;
         let mut bootstrap =
             NativeProfileBootstrap::load(application_directory, root_data_directory, profile_id)?;
         // Keep the account switcher account-first. Installation-only MT4 rows
@@ -3419,7 +3418,7 @@ async fn run_profile_lifecycle(
         };
         let known_terminal_candidates = merge_terminal_candidates(
             bootstrap_terminal_candidates(&bootstrap, None),
-            installation_candidates,
+            merge_terminal_candidates(mt5_provision.failed_candidates, installation_candidates),
         );
         let preferences = preferences_store.load();
         let status_path = bootstrap.paths.runtime_status_path.clone();
@@ -3806,6 +3805,21 @@ enum Mt5ProvisionMode {
     FullDiscovery,
 }
 
+#[derive(Default)]
+struct Mt5ProvisionOutcome {
+    error: Option<&'static str>,
+    failed_candidates: Vec<UiTerminalCandidate>,
+}
+
+impl Mt5ProvisionOutcome {
+    fn failed(code: &'static str) -> Self {
+        Self {
+            error: Some(code),
+            failed_candidates: Vec::new(),
+        }
+    }
+}
+
 fn mt5_provision_mode(has_mt5_binding: bool, force_redetect: bool) -> Mt5ProvisionMode {
     if force_redetect {
         Mt5ProvisionMode::FullDiscovery
@@ -3828,6 +3842,16 @@ fn force_mt5_redetection_for_platform(platform: Option<&str>, requested: bool) -
     requested && platform == Some("mt5")
 }
 
+fn mt5_binding_reusable(binding: &TerminalBinding, installation: &Mt5Installation) -> bool {
+    binding.platform == "mt5"
+        && installation.is_running
+        && binding.terminal_instance_id == installation.terminal_instance_id
+        && mt5_terminal_discovery::paths_equal(
+            &binding.terminal_path,
+            &installation.executable_path,
+        )
+}
+
 async fn provision_mt5_bindings_if_missing(
     application_directory: &std::path::Path,
     root_data_directory: &std::path::Path,
@@ -3836,32 +3860,36 @@ async fn provision_mt5_bindings_if_missing(
     preferences: &BridgeUserPreferences,
     logger: &BridgeLogger,
     force_redetect: bool,
-) -> Result<(), &'static str> {
-    let paths = resolve_profile_paths(root_data_directory, profile_id)?;
-    let store = OutboxStore::open_or_create(&paths.database_path).map_err(|error| error.code())?;
-    let has_mt5_binding = store
-        .terminal_bindings()
-        .map_err(|error| error.code())?
+) -> Mt5ProvisionOutcome {
+    let paths = match resolve_profile_paths(root_data_directory, profile_id) {
+        Ok(paths) => paths,
+        Err(code) => return Mt5ProvisionOutcome::failed(code),
+    };
+    let store = match OutboxStore::open_or_create(&paths.database_path) {
+        Ok(store) => store,
+        Err(error) => return Mt5ProvisionOutcome::failed(error.code()),
+    };
+    let bindings = match store.terminal_bindings() {
+        Ok(bindings) => bindings,
+        Err(error) => return Mt5ProvisionOutcome::failed(error.code()),
+    };
+    let mt5_bindings = bindings
         .iter()
-        .any(|binding| binding.platform == "mt5");
+        .filter(|binding| binding.platform == "mt5")
+        .collect::<Vec<_>>();
+    let has_mt5_binding = !mt5_bindings.is_empty();
     let installations = match mt5_provision_mode(has_mt5_binding, force_redetect) {
-        Mt5ProvisionMode::SkipExistingBinding => return Ok(()),
+        Mt5ProvisionMode::SkipExistingBinding => return Mt5ProvisionOutcome::default(),
         Mt5ProvisionMode::SelectedOrDiscovered => {
             selected_or_discovered(preferences.mt5_terminal_path.as_deref())
         }
         Mt5ProvisionMode::FullDiscovery => mt5_terminal_discovery::discover_windows(),
     };
     if installations.is_empty() {
-        return Err("mt5_terminal_not_found");
+        return Mt5ProvisionOutcome::failed("mt5_terminal_not_found");
     }
     let python = application_directory.join(PYTHON_RELATIVE_PATH);
     let worker = application_directory.join(MT5_WORKER_RELATIVE_PATH);
-    if !python.is_file() {
-        return Err("mt5_python_runtime_not_found");
-    }
-    if !worker.is_file() {
-        return Err("mt5_worker_script_not_found");
-    }
     let preferred = if force_redetect {
         None
     } else {
@@ -3869,8 +3897,28 @@ async fn provision_mt5_bindings_if_missing(
     };
     let mut accepted = Vec::new();
     let mut last_error = "mt5_terminal_not_running";
+    let mut failed_candidates = Vec::new();
     for installation in installations {
         if preferred.is_some_and(|value| value != installation.terminal_instance_id) {
+            continue;
+        }
+
+        // A forced scan is intentionally path-aware: a running binding with
+        // the same terminal identity is already connected and must not be
+        // re-initialized (which would bump its epoch and may foreground MT5).
+        if force_redetect
+            && mt5_bindings
+                .iter()
+                .any(|binding| mt5_binding_reusable(binding, &installation))
+        {
+            logger.info(
+                "native_mt5_terminal_probe_reused_binding",
+                Some(&format!(
+                    "profile={profile_id};terminal_id={}",
+                    installation.terminal_instance_id
+                )),
+            );
+            accepted.push(installation.terminal_instance_id);
             continue;
         }
         if !installation.is_running {
@@ -3883,23 +3931,69 @@ async fn provision_mt5_bindings_if_missing(
             );
             continue;
         }
+        let unavailable_code = if !python.is_file() {
+            Some("mt5_python_runtime_not_found")
+        } else if !worker.is_file() {
+            Some("mt5_worker_script_not_found")
+        } else {
+            None
+        };
+        if let Some(code) = unavailable_code {
+            last_error = code;
+            if let Some(candidate) = mt5_probe_failure_candidate(&installation, code) {
+                failed_candidates.push(candidate);
+            }
+            logger.warning(
+                "native_mt5_terminal_probe_failed",
+                Some(&format!(
+                    "terminal_id={};code={code}",
+                    installation.terminal_instance_id
+                )),
+            );
+            continue;
+        }
         let python = python.clone();
         let worker = worker.clone();
         let terminal = installation.executable_path.clone();
         let result = tokio::task::spawn_blocking(move || {
             probe_terminal(&python, &worker, &terminal, MT5_PROBE_TIMEOUT)
         })
-        .await
-        .map_err(|_| "mt5_probe_join_failed")?;
-        let probe = match result {
-            Ok(probe) => probe,
-            Err(code) => {
-                last_error = code;
+        .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => {
+                last_error = "mt5_probe_join_failed";
+                if let Some(candidate) =
+                    mt5_probe_failure_candidate(&installation, "mt5_probe_join_failed")
+                {
+                    failed_candidates.push(candidate);
+                }
                 logger.warning(
                     "native_mt5_terminal_probe_failed",
                     Some(&format!(
-                        "terminal_id={};code={code}",
+                        "terminal_id={};code=mt5_probe_join_failed",
                         installation.terminal_instance_id
+                    )),
+                );
+                continue;
+            }
+        };
+        let probe = match result {
+            Ok(probe) => probe,
+            Err(failure) => {
+                last_error = probe_failure_code(&failure);
+                if let Some(candidate) = mt5_probe_failure_candidate(&installation, last_error) {
+                    failed_candidates.push(candidate);
+                }
+                let detail = failure
+                    .last_error
+                    .map(|value| format!(";last_error={value}"))
+                    .unwrap_or_default();
+                logger.warning(
+                    "native_mt5_terminal_probe_failed",
+                    Some(&format!(
+                        "terminal_id={};code={}{}",
+                        installation.terminal_instance_id, last_error, detail
                     )),
                 );
                 continue;
@@ -3907,6 +4001,9 @@ async fn provision_mt5_bindings_if_missing(
         };
         if let Err(code) = persist_mt5_probe(&store, &installation, &probe, now_utc_msc()) {
             last_error = code;
+            if let Some(candidate) = mt5_probe_failure_candidate(&installation, code) {
+                failed_candidates.push(candidate);
+            }
             continue;
         }
         logger.info(
@@ -3919,18 +4016,84 @@ async fn provision_mt5_bindings_if_missing(
         accepted.push(installation.terminal_instance_id);
     }
     if accepted.is_empty() {
-        return Err(if preferred.is_some() {
-            "mt5_probe_identity_mismatch"
-        } else {
-            last_error
-        });
+        return Mt5ProvisionOutcome {
+            error: Some(if preferred.is_some() {
+                "mt5_probe_identity_mismatch"
+            } else {
+                last_error
+            }),
+            failed_candidates,
+        };
     }
-    if accepted.len() == 1 && preferred.is_none() && !force_redetect {
-        preferences_store
-            .save_terminal("mt5", &accepted[0])
-            .map_err(|error| error.code())?;
+    if accepted.len() == 1
+        && preferred.is_none()
+        && !force_redetect
+        && let Err(error) = preferences_store.save_terminal("mt5", &accepted[0])
+    {
+        return Mt5ProvisionOutcome {
+            error: Some(error.code()),
+            failed_candidates,
+        };
     }
-    Ok(())
+    Mt5ProvisionOutcome {
+        error: None,
+        failed_candidates,
+    }
+}
+
+fn probe_failure_code(failure: &Mt5ProbeFailure) -> &'static str {
+    match failure.code.as_str() {
+        "mt5_terminal_not_found" => "mt5_terminal_not_found",
+        "mt5_terminal_not_running" => "mt5_terminal_not_running",
+        "mt5_initialize_failed" => "mt5_initialize_failed",
+        "mt5_account_unavailable" => "mt5_account_unavailable",
+        "mt5_terminal_disconnected" => "mt5_terminal_disconnected",
+        "mt5_python_runtime_not_found" => "mt5_python_runtime_not_found",
+        "mt5_worker_script_not_found" => "mt5_worker_script_not_found",
+        "mt5_probe_timeout" => "mt5_probe_timeout",
+        "mt5_probe_process_start_failed" => "mt5_probe_process_start_failed",
+        "mt5_probe_response_invalid" => "mt5_probe_response_invalid",
+        "mt5_probe_identity_mismatch" => "mt5_probe_identity_mismatch",
+        "mt5_probe_join_failed" => "mt5_probe_join_failed",
+        _ => "mt5_probe_failed",
+    }
+}
+
+fn mt5_probe_failure_candidate(
+    installation: &Mt5Installation,
+    code: &str,
+) -> Option<UiTerminalCandidate> {
+    mt5_terminal_discovery::is_terminal64_executable(&installation.executable_path).then_some(
+        UiTerminalCandidate {
+            terminal_instance_id: installation.terminal_instance_id.clone(),
+            platform: "mt5".to_owned(),
+            broker_server: String::new(),
+            login: String::new(),
+            display_name: Some(format!(
+                "{} · {}",
+                mt5_terminal_discovery::safe_terminal_directory_name(&installation.executable_path),
+                mt5_probe_failure_reason(code)
+            )),
+        },
+    )
+}
+
+fn mt5_probe_failure_reason(code: &str) -> &'static str {
+    match code {
+        "mt5_terminal_not_found" => "终端文件未找到",
+        "mt5_terminal_not_running" => "终端未运行",
+        "mt5_initialize_failed" => "初始化失败",
+        "mt5_account_unavailable" => "尚未登录交易账户",
+        "mt5_terminal_disconnected" => "未连接交易服务器",
+        "mt5_python_runtime_not_found" => "探测运行时不可用",
+        "mt5_worker_script_not_found" => "探测组件不可用",
+        "mt5_probe_timeout" => "探测超时",
+        "mt5_probe_process_start_failed" => "探测进程无法启动",
+        "mt5_probe_response_invalid" => "探测响应无效",
+        "mt5_probe_identity_mismatch" => "终端身份不一致",
+        "mt5_probe_join_failed" => "探测任务失败",
+        _ => "探测失败",
+    }
 }
 
 fn persist_mt5_probe(
@@ -5411,6 +5574,69 @@ mod tests {
             mt5_provision_mode(false, true),
             Mt5ProvisionMode::FullDiscovery
         );
+    }
+
+    #[test]
+    fn mt5_binding_reuse_requires_id_path_and_running_state() {
+        let terminal = std::env::temp_dir()
+            .join("bridge-mt5-reuse")
+            .join("terminal64.exe");
+        let binding = TerminalBinding {
+            terminal_instance_id: "mt5_reuse_terminal".to_owned(),
+            platform: "mt5".to_owned(),
+            terminal_path: terminal.clone(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 7,
+            updated_at_utc_msc: 1_800_000_000_000,
+        };
+        let installation = Mt5Installation {
+            executable_path: terminal,
+            terminal_instance_id: "mt5_reuse_terminal".to_owned(),
+            is_running: true,
+        };
+        assert!(mt5_binding_reusable(&binding, &installation));
+
+        let mut not_running = installation.clone();
+        not_running.is_running = false;
+        assert!(!mt5_binding_reusable(&binding, &not_running));
+
+        let mut wrong_id = installation.clone();
+        wrong_id.terminal_instance_id = "mt5_other_terminal".to_owned();
+        assert!(!mt5_binding_reusable(&binding, &wrong_id));
+
+        let mut wrong_path = installation.clone();
+        wrong_path.executable_path = std::env::temp_dir().join("other-terminal64.exe");
+        assert!(!mt5_binding_reusable(&binding, &wrong_path));
+
+        let mut wrong_platform = binding.clone();
+        wrong_platform.platform = "mt4".to_owned();
+        assert!(!mt5_binding_reusable(&wrong_platform, &installation));
+    }
+
+    #[test]
+    fn mt5_failed_placeholder_requires_terminal64_and_redacts_path() {
+        let terminal64 = Mt5Installation {
+            executable_path: PathBuf::from(r"C:\Users\secret\Broker MT5\terminal64.exe"),
+            terminal_instance_id: "mt5_terminal64_failure".to_owned(),
+            is_running: true,
+        };
+        let terminal = Mt5Installation {
+            executable_path: PathBuf::from(r"C:\Users\secret\Broker MT5\terminal.exe"),
+            terminal_instance_id: "mt5_terminal_failure".to_owned(),
+            is_running: true,
+        };
+        let candidate = mt5_probe_failure_candidate(&terminal64, "mt5_initialize_failed")
+            .expect("terminal64 failure placeholder");
+        assert_eq!(candidate.broker_server, "");
+        assert_eq!(candidate.login, "");
+        let display_name = candidate.display_name.expect("safe display name");
+        assert!(display_name.contains("Broker MT5"));
+        assert!(display_name.contains("初始化失败"));
+        assert!(!display_name.contains("Users"));
+        assert!(mt5_probe_failure_candidate(&terminal, "mt5_initialize_failed").is_none());
     }
 
     #[test]
