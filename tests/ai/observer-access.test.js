@@ -108,7 +108,7 @@ describe('AI observer access', () => {
 
   it('allows only observer page data over the browser WebSocket', () => {
     const access = buildAiAccessContext({ role:'user', plan:'plus' }, { ownBridgeConnected:false })
-    for (const action of ['health', 'account', 'positions', 'signals', 'history', 'rates']) {
+    for (const action of ['health', 'account', 'positions', 'signals', 'signal_detail', 'signal_evidence', 'history', 'rates']) {
       expect(observerWsActionAllowed(access, action)).toBe(true)
     }
     for (const action of ['analyze', 'open', 'execute', 'toggle_auto', 'audit_logs', 'admin_dashboard']) {

@@ -197,7 +197,8 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const openDetail = block('async function openAnalysisFromHistory(signalId, options = {})', 'function renderSignalRows()')
     expect(openDetail).toContain('if (navigate) {')
     expect(openDetail).toContain('await ensureAnalysisHistoryPageLoaded()')
-    expect(openDetail).toContain("signal = state.signals.find(item => String(item.id) === requestedId) || signal")
+    expect(openDetail).toContain('signal = mergeSignalListSummary(')
+    expect(openDetail).toContain('state.signals.find(item => String(item.id) === requestedId)')
     expect(openDetail.indexOf('await ensureAnalysisHistoryPageLoaded()')).toBeLessThan(openDetail.indexOf('wsApi("signal_detail"'))
 
     const byTicket = block('async function navigateToSignalByTicket(ticket)', 'async function cancelPendingOrder(ticket)')
@@ -207,7 +208,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
     expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
     expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
-    expect(html).toContain('/ai/app.js?v=20260810historyfixedretry1')
+    expect(html).toContain('/ai/app.js?v=20260810historyfixedretry1&build=signalbandwidth1')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {
@@ -346,5 +347,201 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const summaryReady = loadHistorySummaryReadyPredicate()
     expect(summaryReady({ summary_status:'ready', requested_range_complete:false })).toBe(false)
     expect(summaryReady({ summary_status:'ready', requested_range_complete:true })).toBe(true)
+  })
+
+  it('deduplicates evidence requests, fetches each timeframe once, and ignores stale responses', async () => {
+    const start = app.indexOf('const _signalEvidenceCache = new Map()')
+    const end = app.indexOf('function chanSummaryForTimeframe', start)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    const harness = new Function(`
+      const requests = []
+      const pending = []
+      const renderCalls = []
+      const state = {
+        selectedSignal:{ id:7 }, inferenceChartTimeframe:'M5',
+      }
+      const nodes = { analysisResult:{ dataset:{ signalId:'7', renderVersion:'1' } } }
+      function $(id) { return nodes[id] }
+      function signalMarketData() { return {} }
+      function wsApi(action, params) {
+        requests.push({ action, params })
+        return new Promise(resolve => pending.push(resolve))
+      }
+      function renderInferenceChart(signal) { renderCalls.push({ id:signal?.id, timeframe:state.inferenceChartTimeframe }) }
+      ${app.slice(start, end)}
+      return (async () => {
+        const signal = { id:7, inference_snapshot:{ id:2, available_timeframes:['M5','M15'] } }
+        const first = ensureInferenceEvidence(signal, 'M5', 1)
+        const duplicate = ensureInferenceEvidence(signal, 'M5', 1)
+        const sameFlight = requests.length
+        pending.shift()({ status:'success', evidence:{ id:2, klines:[{ time:1, open:1, high:2, low:1, close:2 }] } })
+        await Promise.all([first, duplicate])
+        const second = ensureInferenceEvidence(signal, 'M15', 1)
+        const stale = ensureInferenceEvidence({ id:8, inference_snapshot:{ id:3, available_timeframes:['M5'] } }, 'M5', 1)
+        pending.shift()({ status:'success', evidence:{ id:2, klines:[{ time:2, open:1, high:2, low:1, close:2 }] } })
+        state.selectedSignal = { id:8 }
+        pending.shift()({ status:'success', evidence:{ id:3, klines:[{ time:3, open:1, high:2, low:1, close:2 }] } })
+        await Promise.all([second, stale])
+        const again = ensureInferenceEvidence(signal, 'M5', 1)
+        return { requests, sameFlight, renders:renderCalls, again:await again }
+      })()
+    `)()
+    const result = await harness
+    expect(result.sameFlight).toBe(1)
+    expect(result.requests.map(item => item.params.timeframe)).toEqual(['M5', 'M15', 'M5'])
+    expect(result.renders).toEqual([{ id:7, timeframe:'M5' }])
+    expect(result.again.klines[0].time).toBe(1)
+  })
+
+  it('bounds evidence and detail caches with LRU eviction without touching flights', async () => {
+    const start = app.indexOf('const _signalEvidenceCache = new Map()')
+    const end = app.indexOf('function chanSummaryForTimeframe', start)
+    const harness = new Function(`
+      ${app.slice(start, end)}
+      for (let index = 0; index < SIGNAL_EVIDENCE_CACHE_LIMIT; index += 1) {
+        setSignalCacheEntry(_signalEvidenceCache, 'e' + index, { index }, SIGNAL_EVIDENCE_CACHE_LIMIT)
+      }
+      getSignalCacheEntry(_signalEvidenceCache, 'e0')
+      setSignalCacheEntry(_signalEvidenceCache, 'e-extra', { index: 'extra' }, SIGNAL_EVIDENCE_CACHE_LIMIT)
+      for (let index = 0; index < SIGNAL_DETAIL_CACHE_LIMIT; index += 1) {
+        setSignalCacheEntry(_signalDetailCache, 'd' + index, { index }, SIGNAL_DETAIL_CACHE_LIMIT)
+      }
+      setSignalCacheEntry(_signalDetailCache, 'd-extra', { index: 'extra' }, SIGNAL_DETAIL_CACHE_LIMIT)
+      _signalEvidenceFlights.set('active-evidence', Promise.resolve())
+      _signalDetailFlights.set('active-detail', Promise.resolve())
+      return {
+        evidenceSize: _signalEvidenceCache.size,
+        detailSize: _signalDetailCache.size,
+        evidenceTouched: getSignalCacheEntry(_signalEvidenceCache, 'e0')?.index,
+        evidenceEvicted: getSignalCacheEntry(_signalEvidenceCache, 'e1'),
+        evidenceFlightCount: _signalEvidenceFlights.size,
+        detailFlightCount: _signalDetailFlights.size,
+      }
+    `)()
+    const result = await harness
+    expect(result.evidenceSize).toBe(64)
+    expect(result.detailSize).toBe(128)
+    expect(result.evidenceTouched).toBe(0)
+    expect(result.evidenceEvicted).toBeNull()
+    expect(result.evidenceFlightCount).toBe(1)
+    expect(result.detailFlightCount).toBe(1)
+  })
+
+  it('reuses ordinary signal details while allowing explicit lightweight refresh', async () => {
+    const start = app.indexOf('function signalSnapshotRevision(signal)')
+    const end = app.indexOf('// The dashboard deliberately keeps only a one-row signal summary', start)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    const harness = new Function(`
+      const detailCache = new Map()
+      const detailFlights = new Map()
+      const evidenceCache = new Map()
+      const responses = []
+      const requests = []
+      const state = { signals:[{ id:7, symbol:'XAUUSD' }] }
+      function wsApi(action, params) {
+        requests.push({ action, params })
+        return new Promise(resolve => responses.push(resolve))
+      }
+      const _signalDetailCache = detailCache
+      const _signalDetailFlights = detailFlights
+      const _signalEvidenceCache = evidenceCache
+      const SIGNAL_DETAIL_CACHE_LIMIT = 128
+      function getSignalCacheEntry(cache, key) {
+        if (!cache.has(key)) return null
+        const value = cache.get(key)
+        cache.delete(key)
+        cache.set(key, value)
+        return value
+      }
+      function setSignalCacheEntry(cache, key, value, limit) {
+        cache.delete(key)
+        cache.set(key, value)
+        while (cache.size > limit) cache.delete(cache.keys().next().value)
+        return value
+      }
+      function clearSignalEvidence() {}
+      ${app.slice(start, end)}
+      return (async () => {
+        const first = loadSignalDetail(7)
+        const duplicate = loadSignalDetail(7)
+        responses.shift()({ status:'success', signal:{ id:7, inference_snapshot:{ id:4 }, analysis:'first' } })
+        const firstResult = await first
+        const duplicateResult = await duplicate
+        const cached = await loadSignalDetail(7)
+        const refreshed = loadSignalDetail(7, { forceRefresh:true })
+        responses.shift()({ status:'success', signal:{ id:7, inference_snapshot:{ id:4 }, analysis:'refreshed' } })
+        await refreshed
+        return { requests, firstResult, duplicateResult, cached, refreshed:detailCache.get('7') }
+      })()
+    `)()
+    const result = await harness
+    expect(result.requests).toHaveLength(2)
+    expect(result.firstResult.analysis).toBe('first')
+    expect(result.duplicateResult.analysis).toBe('first')
+    expect(result.cached.analysis).toBe('first')
+    expect(result.refreshed.analysis).toBe('refreshed')
+  })
+
+  it('merges the current list execution state over a cached detail without losing detail fields', async () => {
+    const start = app.indexOf('function signalSnapshotRevision(signal)')
+    const end = app.indexOf('function renderSignalRows()', start)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    const harness = new Function(`
+      let _analysisDetailRequestVersion = 0
+      const detailCache = new Map([['7', {
+        id:7, detail_loaded:true, analysis:'cached detail', pending_ticket:'old-ticket',
+        pending_state:'pending', inference_snapshot:{ id:4 }, market_data:{ latest_price:2000 },
+      }]])
+      const detailFlights = new Map()
+      const evidenceCache = new Map()
+      const state = {
+        signals:[{ id:7, symbol:'XAUUSD', pending_ticket:'new-ticket', pending_state:'filled', is_executed:true }],
+        selectedSignal:null,
+      }
+      const _signalDetailCache = detailCache
+      const _signalDetailFlights = detailFlights
+      const _signalEvidenceCache = evidenceCache
+      const SIGNAL_DETAIL_CACHE_LIMIT = 128
+      function getSignalCacheEntry(cache, key) {
+        if (!cache.has(key)) return null
+        const value = cache.get(key)
+        cache.delete(key)
+        cache.set(key, value)
+        return value
+      }
+      function setSignalCacheEntry(cache, key, value, limit) {
+        cache.delete(key)
+        cache.set(key, value)
+        while (cache.size > limit) cache.delete(cache.keys().next().value)
+        return value
+      }
+      function clearSignalEvidence() {}
+      function setAnalysisSelectionIntent() {}
+      function highlightActiveAnalysis() {}
+      function setTab() {}
+      function ensureAnalysisHistoryPageLoaded() { return Promise.resolve() }
+      function renderAnalysisDetailLoading() {}
+      function renderAnalysisHistory() {}
+      function renderSignal(signal) { state.rendered = signal }
+      function toast() {}
+      const document = { querySelector() { return null } }
+      function wsApi() { throw new Error('detail should not refetch') }
+      ${app.slice(start, end)}
+      return openAnalysisFromHistory(7, { navigate:false }).then(() => ({
+        selected:state.selectedSignal,
+        rendered:state.rendered,
+        requests:detailFlights.size,
+      }))
+    `)()
+    const result = await harness
+    expect(result.requests).toBe(0)
+    expect(result.selected).toMatchObject({
+      id:7, pending_ticket:'new-ticket', pending_state:'filled', is_executed:true,
+      analysis:'cached detail', inference_snapshot:{ id:4 }, market_data:{ latest_price:2000 },
+    })
+    expect(result.rendered).toMatchObject({ pending_ticket:'new-ticket', pending_state:'filled' })
   })
 })

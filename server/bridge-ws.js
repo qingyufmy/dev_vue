@@ -21,6 +21,7 @@ import {
 } from './bridge-v3/business-adapter.js'
 import { createObserverQuoteFeedManager } from './observer-quote-feed.js'
 import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './routes/ai/terminal-clock.js'
+import { getInferenceSnapshotEvidence, getInferenceVisualizationSnapshot } from './routes/ai/inference-snapshots.js'
 
 export { applyDefaultObserverClockBootstrap } from './routes/ai/terminal-clock.js'
 
@@ -1778,6 +1779,59 @@ export function buildBrowserCommandResult(commandId, data = {}) {
   return { ...data, type:'result', command_id:commandId }
 }
 
+// Signal detail and evidence deliberately share this visibility lookup.  A
+// signal id alone is never sufficient: shared deliveries, observer strategy
+// scope, and legacy owner/platform rows all participate in the same check.
+async function loadVisibleSignalRecord(signalId, detailUserId, observerStrategyId) {
+  const delivery = await queryOne(
+    `SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?
+      ${observerStrategyId ? 'AND prompt_type_id = ?' : ''}`,
+    [signalId, detailUserId, ...(observerStrategyId ? [observerStrategyId] : [])],
+  )
+  if (delivery) {
+    return {
+      delivery,
+      row: await queryOne('SELECT * FROM ai_signals WHERE id = ?', [signalId]),
+      source: 'auto_shared',
+    }
+  }
+  return {
+    delivery: null,
+    row: await queryOne(`SELECT * FROM ai_signals WHERE id = ? AND (user_id = ? OR user_id = 0)
+      ${observerStrategyId ? 'AND prompt_type_id = ?' : ''}`,
+    [signalId, detailUserId, ...(observerStrategyId ? [observerStrategyId] : [])]),
+    source: 'manual',
+  }
+}
+
+function applyVisibleSignalRecord(row, delivery, source, { includeLegacyMarketData = true } = {}) {
+  const result = { ...row }
+  // A frozen snapshot is the authoritative market object for new signals. Do
+  // not parse and serialize the legacy market_data_json alongside it; old rows
+  // without a snapshot retain the original field for compatibility.
+  if (includeLegacyMarketData) {
+    try { result.market_data = JSON.parse(result.market_data_json) } catch { result.market_data = {} }
+  }
+  delete result.market_data_json
+  if (delivery) {
+    result.is_executed = !!delivery.is_executed
+    result.executed_at = delivery.executed_at
+    result.trade_ticket = delivery.trade_ticket
+    result.pending_ticket = delivery.pending_ticket
+    result.pending_state = delivery.pending_state
+    result.pending_valid_until = delivery.pending_valid_until || result.pending_valid_until
+    result.execution_result = delivery.execution_result
+    result.approved_order_json = delivery.approved_order_json
+    result.execution_status = delivery.execution_status
+    result.delivery_id = delivery.id
+    result.prompt_type_id = delivery.prompt_type_id
+  } else {
+    result.is_executed = !!result.is_executed
+  }
+  result.source = delivery ? 'auto_shared' : (result.source || source)
+  return result
+}
+
 async function handleBrowserCommand(ws, userId, msg) {
   const { command_id, action, params = {} } = msg
   const autoExecuteGuard = action === 'analyze' && params?.auto_execute === true
@@ -2136,71 +2190,65 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         // In observation mode, delivery is stored under admin's userId
         const detailUserId = dataUserId || userId
-
-        // Check if user has a delivery for this signal
-        const delivery = await queryOne(
-          `SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?
-            ${observerStrategyId ? 'AND prompt_type_id = ?' : ''}`,
-          [signalId, detailUserId, ...(observerStrategyId ? [observerStrategyId] : [])]
-        )
-        if (delivery) {
-          const row = await queryOne('SELECT * FROM ai_signals WHERE id = ?', [signalId])
-          if (row) {
-            const item = { ...row }
-            try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
-            delete item.market_data_json
-            item.is_executed = !!delivery.is_executed
-            item.executed_at = delivery.executed_at
-            item.trade_ticket = delivery.trade_ticket
-            item.pending_ticket = delivery.pending_ticket
-            item.pending_state = delivery.pending_state
-            item.pending_valid_until = delivery.pending_valid_until || item.pending_valid_until
-            item.execution_result = delivery.execution_result
-            item.approved_order_json = delivery.approved_order_json
-            item.execution_status = delivery.execution_status
-            item.delivery_id = delivery.id
-            item.prompt_type_id = delivery.prompt_type_id
-            item.source = 'auto_shared'
-            item.pending_actions = await loadSignalPendingActions(detailUserId, signalId, delivery.execution_result)
-            item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
-            if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
-            ai.attachSignalTiming(item)
-            Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
-              requesterUserId: userId, requesterRole: user?.role || 'user',
-            })))
-            item.management_actions = await ai.loadSignalManagementActions(detailUserId, signalId, {
-              management:item.position_management,
-            })
-            result = { status: 'success', signal: item }
-          } else {
-            result = { status: 'error', message: 'signal not found' }
-          }
+        const visible = await loadVisibleSignalRecord(signalId, detailUserId, observerStrategyId)
+        if (!visible.row) {
+          result = { status: 'error', message: 'signal not found' }
           break
         }
-
-        // Fallback: old signal check
-        const row = await queryOne(`SELECT * FROM ai_signals WHERE id = ? AND (user_id = ? OR user_id = 0)
-          ${observerStrategyId ? 'AND prompt_type_id = ?' : ''}`,
-        [signalId, detailUserId, ...(observerStrategyId ? [observerStrategyId] : [])])
-        if (row) {
-          const item = { ...row }
-          try { item.market_data = JSON.parse(item.market_data_json) } catch { item.market_data = {} }
-          delete item.market_data_json
-          item.is_executed = !!item.is_executed
-          item.pending_actions = await loadSignalPendingActions(detailUserId, signalId, item.execution_result)
-          item.inference_snapshot = await ai.getInferenceVisualizationSnapshot(signalId)
-          if (item.inference_snapshot?.market_snapshot && !item.inference_snapshot.market_snapshot.evidence_ref) item.market_data = item.inference_snapshot.market_snapshot
-          ai.attachSignalTiming(item)
-          Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
-            requesterUserId: userId, requesterRole: user?.role || 'user',
-          })))
-          item.management_actions = await ai.loadSignalManagementActions(detailUserId, signalId, {
-            management:item.position_management,
-          })
-          result = { status: 'success', signal: item }
-        } else {
+        const snapshot = await getInferenceVisualizationSnapshot(signalId)
+        const item = applyVisibleSignalRecord(visible.row, visible.delivery, visible.source, {
+          includeLegacyMarketData: !snapshot,
+        })
+        item.pending_actions = await loadSignalPendingActions(
+          detailUserId, signalId, visible.delivery?.execution_result || item.execution_result,
+        )
+        item.inference_snapshot = snapshot
+        // Presentation helpers still accept the legacy market_data shape. Give
+        // them only the scalar reference price while deriving the response;
+        // remove it again so the wire payload contains no duplicate snapshot.
+        if (snapshot) item.market_data = snapshot.market_snapshot?.latest_price == null
+          ? {} : { latest_price: snapshot.market_snapshot.latest_price }
+        ai.attachSignalTiming(item)
+        Object.assign(item, ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(item, {
+          requesterUserId: userId, requesterRole: user?.role || 'user',
+        })))
+        item.management_actions = await ai.loadSignalManagementActions(detailUserId, signalId, {
+          management:item.position_management,
+        })
+        if (snapshot) delete item.market_data
+        result = { status: 'success', signal: item }
+        break
+      }
+      case 'signal_evidence': {
+        const signalId = Number(params.signal_id)
+        if (!signalId) return reply({ status: 'error', message: 'signal_id required' })
+        const detailUserId = dataUserId || userId
+        const visible = await loadVisibleSignalRecord(signalId, detailUserId, observerStrategyId)
+        if (!visible.row) {
           result = { status: 'error', message: 'signal not found' }
+          break
         }
+        let evidence
+        try {
+          evidence = await getInferenceSnapshotEvidence(signalId, params.timeframe)
+        } catch (error) {
+          if (error?.code === 'invalid_timeframe') {
+            result = { status: 'error', code: 'invalid_timeframe', message: 'timeframe invalid' }
+            break
+          }
+          throw error
+        }
+        if (!evidence) {
+          result = { status: 'error', code: 'snapshot_not_found', message: 'inference snapshot not found' }
+          break
+        }
+        const expectedSnapshotId = Number(params.snapshot_id)
+        if (Number.isSafeInteger(expectedSnapshotId) && expectedSnapshotId > 0
+          && Number(evidence.id) !== expectedSnapshotId) {
+          result = { status: 'error', code: 'snapshot_mismatch', message: 'inference snapshot changed' }
+          break
+        }
+        result = { status: 'success', evidence }
         break
       }
       case 'signals': {

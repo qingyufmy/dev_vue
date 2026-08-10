@@ -662,7 +662,7 @@ describe('AI governance navigation and DOM contract', () => {
     const versions = [
       html.match(/\/ai\/styles\.css\?v=([^"']+)/)?.[1],
       html.match(/\/ai\/responsive\.css\?v=([^"']+)/)?.[1],
-      html.match(/\/ai\/app\.js\?v=([^"']+)/)?.[1],
+      html.match(/\/ai\/app\.js\?v=([^&"']+)/)?.[1],
     ]
     expect(new Set(versions).size).toBe(1)
   })

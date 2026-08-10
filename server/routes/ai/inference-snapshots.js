@@ -11,6 +11,11 @@ const ACCOUNT_PRIVATE_KEY = new Set([
 ])
 const COMPRESSED_JSON_PREFIX = 'gzip-base64:'
 const SNAPSHOT_COMPRESSION_MIN_BYTES = 4096
+export const INFERENCE_EVIDENCE_TIMEFRAMES = Object.freeze([
+  'M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1',
+])
+const INFERENCE_EVIDENCE_TIMEFRAME_SET = new Set(INFERENCE_EVIDENCE_TIMEFRAMES)
+export const MAX_INFERENCE_EVIDENCE_BARS = 500
 
 export function sha256(value) {
   return crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex')
@@ -87,12 +92,18 @@ function extractKlines(market) {
 
 function stripEmbeddedKlines(market) {
   const result = clean(market || {})
-  const context = result?.strategy_context
-  if (!context || typeof context !== 'object') return result
-  delete context.visualization_klines
-  for (const value of Object.values(context.timeframes || {})) {
-    if (value && typeof value === 'object') delete value.klines
+  const visit = value => {
+    if (Array.isArray(value)) {
+      value.forEach(visit)
+      return
+    }
+    if (!value || typeof value !== 'object') return
+    for (const key of Object.keys(value)) {
+      if (key === 'klines' || key === 'visualization_klines') delete value[key]
+      else visit(value[key])
+    }
   }
+  visit(result)
   return result
 }
 
@@ -123,6 +134,25 @@ export function parseSnapshotJson(value, fallback = {}) {
   } catch {
     return fallback
   }
+}
+
+export function normalizeInferenceEvidenceTimeframe(value) {
+  const timeframe = String(value || '').trim().toUpperCase()
+  if (!INFERENCE_EVIDENCE_TIMEFRAME_SET.has(timeframe)) {
+    const error = new Error('invalid_timeframe')
+    error.code = 'invalid_timeframe'
+    throw error
+  }
+  return timeframe
+}
+
+function normalizeSnapshotKlines(value) {
+  const result = {}
+  for (const [rawTimeframe, rows] of Object.entries(value || {})) {
+    const timeframe = String(rawTimeframe || '').trim().toUpperCase()
+    if (INFERENCE_EVIDENCE_TIMEFRAME_SET.has(timeframe)) result[timeframe] = rows
+  }
+  return result
 }
 
 function fitKlinesToSnapshotBudget(stored, maxBytes, minimumBars = 50) {
@@ -258,11 +288,94 @@ export function inferenceVisualizationSnapshot(row) {
   }
 }
 
+/**
+ * Build the small, render-safe part of a frozen inference snapshot.
+ *
+ * Keep this separate from inferenceVisualizationSnapshot(): model/review
+ * tooling still needs the legacy full object, while browser signal_detail
+ * must never serialize all four K-line arrays.
+ */
+export function inferenceSnapshotSummary(row) {
+  if (!row) return null
+  const klines = normalizeSnapshotKlines(parseSnapshotJson(row.klines_json, {}))
+  const marketSnapshot = stripEmbeddedKlines(clean(parseSnapshotJson(row.market_snapshot_json, {})))
+  const frames = marketSnapshot?.strategy_context?.timeframes || {}
+  for (const value of Object.values(frames)) {
+    if (value && typeof value === 'object') delete value.klines
+  }
+  const availableTimeframes = []
+  const timeframeCounts = {}
+  for (const [rawTimeframe, rows] of Object.entries(klines || {})) {
+    const timeframe = String(rawTimeframe || '').trim().toUpperCase()
+    if (!INFERENCE_EVIDENCE_TIMEFRAME_SET.has(timeframe)) continue
+    const count = Array.isArray(rows) ? rows.length : 0
+    if (count <= 0) continue
+    availableTimeframes.push(timeframe)
+    timeframeCounts[timeframe] = count
+  }
+  availableTimeframes.sort((left, right) => INFERENCE_EVIDENCE_TIMEFRAMES.indexOf(left)
+    - INFERENCE_EVIDENCE_TIMEFRAMES.indexOf(right))
+  const strategyRuntime = parseSnapshotJson(row.strategy_runtime_json, null)
+  return {
+    id: Number(row.id),
+    snapshot_id: Number(row.id),
+    revision: row.content_hash || row.created_at || String(row.id),
+    signal_id: row.signal_id == null ? null : Number(row.signal_id),
+    strategy_id: row.strategy_id == null ? null : Number(row.strategy_id),
+    standard_symbol: row.standard_symbol || null,
+    market_source: row.market_source || null,
+    evidence_status: row.evidence_status || 'incomplete',
+    strategy_runtime: strategyRuntime,
+    strategy_runtime_mode: strategyRuntime?.mode || 'legacy_implicit',
+    omitted_fields: parseSnapshotJson(row.omitted_fields_json, []),
+    available_timeframes: availableTimeframes,
+    timeframe_counts: timeframeCounts,
+    market_snapshot: marketSnapshot,
+    content_hash: row.content_hash || null,
+    byte_size: row.byte_size == null ? null : Number(row.byte_size),
+    created_at: row.created_at || null,
+  }
+}
+
+export function inferenceSnapshotEvidence(row, timeframe) {
+  if (!row) return null
+  const normalizedTimeframe = normalizeInferenceEvidenceTimeframe(timeframe)
+  const klines = normalizeSnapshotKlines(parseSnapshotJson(row.klines_json, {}))
+  const rows = Array.isArray(klines?.[normalizedTimeframe]) ? klines[normalizedTimeframe] : []
+  const marketSnapshot = clean(parseSnapshotJson(row.market_snapshot_json, {}))
+  const frame = marketSnapshot?.strategy_context?.timeframes?.[normalizedTimeframe]
+  const summary = frame && typeof frame === 'object' ? stripEmbeddedKlines(frame) : null
+  return {
+    id: Number(row.id),
+    snapshot_id: Number(row.id),
+    signal_id: row.signal_id == null ? null : Number(row.signal_id),
+    standard_symbol: row.standard_symbol || null,
+    market_source: row.market_source || null,
+    evidence_status: row.evidence_status || 'incomplete',
+    timeframe: normalizedTimeframe,
+    total_count: rows.length,
+    count: Math.min(rows.length, MAX_INFERENCE_EVIDENCE_BARS),
+    klines: rows.slice(-MAX_INFERENCE_EVIDENCE_BARS),
+    timeframe_summary: summary,
+    created_at: row.created_at || null,
+  }
+}
+
 export async function getInferenceVisualizationSnapshot(signalId) {
   const id = Number(signalId)
   if (!id) return null
-  const row = await queryOne(`SELECT id, strategy_id, standard_symbol, market_source, evidence_status,
-    omitted_fields_json, klines_json, market_snapshot_json, strategy_runtime_json, created_at
+  const row = await queryOne(`SELECT id, signal_id, strategy_id, standard_symbol, market_source, evidence_status,
+    omitted_fields_json, klines_json, market_snapshot_json, strategy_runtime_json, content_hash, byte_size, created_at
     FROM inference_snapshots WHERE signal_id = ? ORDER BY id DESC LIMIT 1`, [id])
-  return inferenceVisualizationSnapshot(row)
+  return inferenceSnapshotSummary(row)
+}
+
+export async function getInferenceSnapshotEvidence(signalId, timeframe) {
+  const id = Number(signalId)
+  if (!id) return null
+  const normalizedTimeframe = normalizeInferenceEvidenceTimeframe(timeframe)
+  const row = await queryOne(`SELECT id, signal_id, standard_symbol, market_source, evidence_status,
+    klines_json, market_snapshot_json, created_at
+    FROM inference_snapshots WHERE signal_id = ? ORDER BY id DESC LIMIT 1`, [id])
+  return inferenceSnapshotEvidence(row, normalizedTimeframe)
 }
