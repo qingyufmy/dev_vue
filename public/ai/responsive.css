@@ -267,6 +267,14 @@
     display: none;
   }
 
+  .topbar-account-link .notification-badge {
+    display: inline-flex;
+  }
+
+  .topbar-account-link .notification-badge[hidden] {
+    display: none;
+  }
+
   .topbar-badges {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -1830,4 +1838,48 @@
 
 @media (max-width: 760px) {
   .ops-provider-health { justify-content:flex-start; }
+
+  /* Keep the notice attached to the wrapped topbar without touching the
+     trading grid or the mobile bottom navigation. */
+  .notification-banner {
+    top: 112px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    min-height: 48px;
+    max-height: 58px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 7px;
+    padding: 6px 8px;
+  }
+
+  .notification-banner-icon { width: 26px; height: 26px; }
+  .notification-banner-copy > strong { font-size: 10px; }
+  .notification-banner-copy > span { font-size: 12px; }
+  .notification-banner-copy > small#notificationBannerMessage { display: none; }
+  .notification-banner-copy > small#notificationBannerCount { font-size: 10px; }
+  .notification-banner-action { min-height: 44px; padding-inline: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notification-banner-action { transition: none; }
+}
+
+/* The tablet topbar wraps to a 104px rail; keep the fixed notice below it
+   without changing the app grid or covering the topbar controls. */
+@media (min-width: 761px) and (max-width: 1023px) {
+  .notification-banner {
+    top: 112px;
+    right: 16px;
+    width: min(520px, calc(100vw - 32px));
+    max-height: 72px;
+  }
+
+  .notification-banner-copy > small#notificationBannerMessage { display: none; }
+}
+
+/* Observer mode adds a third, full-width channel row to the wrapped topbar.
+   Keep the fixed notice below that row; normal mode retains the 112px offset. */
+@media (max-width: 1023px) {
+  body.ai-observer-mode .notification-banner { top: 176px; }
 }

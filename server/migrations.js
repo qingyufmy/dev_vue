@@ -5279,6 +5279,108 @@ const migrations = [
         if (!existing.length) await queryRun(`ALTER TABLE video_streams ADD INDEX ${indexName} (${expression})`)
       }
     }
+  },
+  {
+    id: '177_notification_center',
+    async up() {
+      // The notification center extends the legacy notifications table while
+      // preserving its is_read/dedupe_key contract.  Every ALTER is guarded
+      // by information_schema so a partially applied deployment can safely
+      // resume without relying on duplicate-column errors.
+      const columns = await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'notifications'`)
+      const names = new Set(columns.map(row => row.COLUMN_NAME))
+      const additions = [
+        ['campaign_id', 'BIGINT UNSIGNED DEFAULT NULL AFTER dedupe_key'],
+        ['priority', "VARCHAR(16) NOT NULL DEFAULT 'normal' AFTER message"],
+        ['requires_ack', 'TINYINT NOT NULL DEFAULT 0 AFTER priority'],
+        ['read_at', 'DATETIME DEFAULT NULL AFTER is_read'],
+        ['acknowledged_at', 'DATETIME DEFAULT NULL AFTER read_at'],
+      ]
+      for (const [name, definition] of additions) {
+        if (!names.has(name)) await queryRun(`ALTER TABLE notifications ADD COLUMN ${name} ${definition}`)
+      }
+
+      const notificationIndexes = [
+        ['idx_notifications_user_read_created', 'user_id, is_read, created_at'],
+        ['idx_notifications_campaign_user', 'campaign_id, user_id'],
+        ['idx_notifications_user_state', 'user_id, requires_ack, acknowledged_at, created_at'],
+      ]
+      for (const [indexName, expression] of notificationIndexes) {
+        const existing = await queryAll(`SELECT INDEX_NAME
+          FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'notifications' AND INDEX_NAME = ?`, [indexName])
+        if (!existing.length) await queryRun(`ALTER TABLE notifications ADD KEY ${indexName} (${expression})`)
+      }
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS notification_campaigns (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        title VARCHAR(100) NOT NULL,
+        message VARCHAR(1000) NOT NULL,
+        priority VARCHAR(16) NOT NULL DEFAULT 'normal',
+        requires_ack TINYINT NOT NULL DEFAULT 0,
+        link VARCHAR(500) DEFAULT NULL,
+        recipient_scope VARCHAR(16) NOT NULL,
+        recipient_filter_json MEDIUMTEXT NOT NULL,
+        preview_recipient_count INT NOT NULL DEFAULT 0,
+        recipient_count INT NOT NULL DEFAULT 0,
+        in_app_enabled TINYINT NOT NULL DEFAULT 1,
+        email_enabled TINYINT NOT NULL DEFAULT 0,
+        in_app_sent_count INT NOT NULL DEFAULT 0,
+        email_sent_count INT NOT NULL DEFAULT 0,
+        email_failed_count INT NOT NULL DEFAULT 0,
+        email_skipped_count INT NOT NULL DEFAULT 0,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        created_by INT NOT NULL,
+        idempotency_key VARCHAR(191) NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        started_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        cancelled_at DATETIME DEFAULT NULL,
+        last_error VARCHAR(500) DEFAULT NULL,
+        UNIQUE KEY uk_notification_campaign_idempotency (created_by, idempotency_key),
+        KEY idx_notification_campaign_status (status, created_at),
+        KEY idx_notification_campaign_creator (created_by, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS notification_deliveries (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        campaign_id BIGINT UNSIGNED NOT NULL,
+        user_id INT NOT NULL,
+        notification_id INT DEFAULT NULL,
+        channel VARCHAR(16) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'pending',
+        attempt_count INT NOT NULL DEFAULT 0,
+        next_attempt_at DATETIME DEFAULT NULL,
+        sent_at DATETIME DEFAULT NULL,
+        read_at DATETIME DEFAULT NULL,
+        acknowledged_at DATETIME DEFAULT NULL,
+        message_id VARCHAR(255) DEFAULT NULL,
+        provider_response_summary VARCHAR(500) DEFAULT NULL,
+        last_error VARCHAR(500) DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_notification_delivery (campaign_id, user_id, channel),
+        KEY idx_notification_delivery_ready (channel, status, next_attempt_at, id),
+        KEY idx_notification_delivery_campaign (campaign_id, channel, status),
+        KEY idx_notification_delivery_user (user_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // Create/cancel/retry are separate idempotency operations.  Keeping
+      // keys out of audit detail prevents request tokens from being logged.
+      await queryRun(`CREATE TABLE IF NOT EXISTS notification_idempotency_keys (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        actor_user_id INT NOT NULL,
+        operation VARCHAR(32) NOT NULL,
+        idempotency_key VARCHAR(191) NOT NULL,
+        campaign_id BIGINT UNSIGNED NOT NULL,
+        response_json MEDIUMTEXT DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_notification_idempotency (actor_user_id, operation, idempotency_key),
+        KEY idx_notification_idempotency_campaign (campaign_id, operation)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

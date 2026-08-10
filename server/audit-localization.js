@@ -69,6 +69,9 @@ const ACTION_LABELS = {
   global_kill_switch_enabled: '平台紧急停止已开启',
   global_kill_switch_disabled: '平台紧急停止已解除',
   release_notes_updated: '发布说明已更新',
+  notification_campaign_created: '通知活动已创建',
+  notification_campaign_cancelled: '通知活动已取消',
+  notification_email_retry_requested: '已请求重试通知邮件',
 }
 
 const ADMIN_TARGET_LABELS = {
@@ -91,6 +94,7 @@ const ADMIN_TARGET_LABELS = {
   global_position_management_control:'全局持仓管理',
   position_protection_job:'持仓保护任务',
   release_notes:'发布说明',
+  notification_campaign:'通知活动',
 }
 
 const ADMIN_DETAIL_LABELS = {
