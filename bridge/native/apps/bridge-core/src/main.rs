@@ -138,6 +138,7 @@ struct LocalControlContext {
     credential_store: CredentialStore,
     preferences_store: BridgePreferencesStore,
     preference_change_sender: watch::Sender<u64>,
+    mt5_redetect_requested: Arc<AtomicBool>,
     application_directory: PathBuf,
     root_data_directory: PathBuf,
     update_state_store: Option<BridgeUpdateStateStore>,
@@ -203,6 +204,7 @@ struct ProfileLifecycleRuntime {
     ui_state: UiStateStore,
     preferences_store: BridgePreferencesStore,
     preference_change_receiver: watch::Receiver<u64>,
+    mt5_redetect_requested: Arc<AtomicBool>,
     update_drain: RuntimeUpdateDrainSlot,
 }
 
@@ -1157,6 +1159,7 @@ async fn run_connected_profile(
         }
     }
     let (preference_change_sender, preference_change_receiver) = watch::channel(0_u64);
+    let mt5_redetect_requested = Arc::new(AtomicBool::new(false));
     let mt4_registration_tasks = if profile_id == DEFAULT_PROFILE_ID {
         let (event_sender, event_receiver) = mpsc::channel(32);
         let registration_task = tokio::spawn(mt4_registration_coordinator::run(
@@ -1210,6 +1213,7 @@ async fn run_connected_profile(
             credential_store: credential_store.clone(),
             preferences_store: preferences_store.clone(),
             preference_change_sender,
+            mt5_redetect_requested: Arc::clone(&mt5_redetect_requested),
             application_directory: application_directory.clone(),
             root_data_directory: root_data_directory.clone(),
             update_state_store,
@@ -1251,6 +1255,7 @@ async fn run_connected_profile(
             ui_state: ui_state.clone(),
             preferences_store: preferences_store.clone(),
             preference_change_receiver,
+            mt5_redetect_requested,
             update_drain,
         },
     )
@@ -2131,6 +2136,7 @@ async fn run_local_control_server(
         credential_store,
         preferences_store,
         preference_change_sender,
+        mt5_redetect_requested,
         application_directory,
         root_data_directory,
         update_state_store,
@@ -2367,6 +2373,7 @@ async fn run_local_control_server(
                     }
                 }
                 LocalControlAction::Redetect => {
+                    request_mt5_redetection(&mt5_redetect_requested);
                     signal_preference_change(&preference_change_sender);
                     LocalControlResult::Accepted
                 }
@@ -3368,10 +3375,16 @@ async fn run_profile_lifecycle(
         ui_state,
         preferences_store,
         mut preference_change_receiver,
+        mt5_redetect_requested,
         update_drain,
     } = runtime;
     loop {
         let preferences_before_bootstrap = preferences_store.load();
+        let redetect_requested = consume_mt5_redetection(&mt5_redetect_requested);
+        let force_mt5_redetect = force_mt5_redetection_for_platform(
+            preferences_before_bootstrap.platform.as_deref(),
+            redetect_requested,
+        );
         let mt4_installations = profile_mt4_installations(
             root_data_directory,
             profile_id,
@@ -3386,6 +3399,7 @@ async fn run_profile_lifecycle(
                 &preferences_store,
                 &preferences_before_bootstrap,
                 logger,
+                force_mt5_redetect,
             )
             .await
             .err()
@@ -3785,6 +3799,35 @@ async fn run_profile_lifecycle(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mt5ProvisionMode {
+    SkipExistingBinding,
+    SelectedOrDiscovered,
+    FullDiscovery,
+}
+
+fn mt5_provision_mode(has_mt5_binding: bool, force_redetect: bool) -> Mt5ProvisionMode {
+    if force_redetect {
+        Mt5ProvisionMode::FullDiscovery
+    } else if has_mt5_binding {
+        Mt5ProvisionMode::SkipExistingBinding
+    } else {
+        Mt5ProvisionMode::SelectedOrDiscovered
+    }
+}
+
+fn request_mt5_redetection(requested: &AtomicBool) {
+    requested.store(true, Ordering::Release);
+}
+
+fn consume_mt5_redetection(requested: &AtomicBool) -> bool {
+    requested.swap(false, Ordering::AcqRel)
+}
+
+fn force_mt5_redetection_for_platform(platform: Option<&str>, requested: bool) -> bool {
+    requested && platform == Some("mt5")
+}
+
 async fn provision_mt5_bindings_if_missing(
     application_directory: &std::path::Path,
     root_data_directory: &std::path::Path,
@@ -3792,18 +3835,22 @@ async fn provision_mt5_bindings_if_missing(
     preferences_store: &BridgePreferencesStore,
     preferences: &BridgeUserPreferences,
     logger: &BridgeLogger,
+    force_redetect: bool,
 ) -> Result<(), &'static str> {
     let paths = resolve_profile_paths(root_data_directory, profile_id)?;
     let store = OutboxStore::open_or_create(&paths.database_path).map_err(|error| error.code())?;
-    if store
+    let has_mt5_binding = store
         .terminal_bindings()
         .map_err(|error| error.code())?
         .iter()
-        .any(|binding| binding.platform == "mt5")
-    {
-        return Ok(());
-    }
-    let installations = selected_or_discovered(preferences.mt5_terminal_path.as_deref());
+        .any(|binding| binding.platform == "mt5");
+    let installations = match mt5_provision_mode(has_mt5_binding, force_redetect) {
+        Mt5ProvisionMode::SkipExistingBinding => return Ok(()),
+        Mt5ProvisionMode::SelectedOrDiscovered => {
+            selected_or_discovered(preferences.mt5_terminal_path.as_deref())
+        }
+        Mt5ProvisionMode::FullDiscovery => mt5_terminal_discovery::discover_windows(),
+    };
     if installations.is_empty() {
         return Err("mt5_terminal_not_found");
     }
@@ -3815,7 +3862,11 @@ async fn provision_mt5_bindings_if_missing(
     if !worker.is_file() {
         return Err("mt5_worker_script_not_found");
     }
-    let preferred = preferences.mt5_terminal_instance_id.as_deref();
+    let preferred = if force_redetect {
+        None
+    } else {
+        preferences.mt5_terminal_instance_id.as_deref()
+    };
     let mut accepted = Vec::new();
     let mut last_error = "mt5_terminal_not_running";
     for installation in installations {
@@ -3874,7 +3925,7 @@ async fn provision_mt5_bindings_if_missing(
             last_error
         });
     }
-    if accepted.len() == 1 && preferred.is_none() {
+    if accepted.len() == 1 && preferred.is_none() && !force_redetect {
         preferences_store
             .save_terminal("mt5", &accepted[0])
             .map_err(|error| error.code())?;
@@ -5340,6 +5391,47 @@ mod tests {
         );
         assert!(stale.terminals.is_empty());
         std::fs::remove_dir_all(root).expect("remove observer projection fixture");
+    }
+
+    #[test]
+    fn mt5_provision_skips_existing_bindings_without_force_but_forces_full_discovery() {
+        assert_eq!(
+            mt5_provision_mode(true, false),
+            Mt5ProvisionMode::SkipExistingBinding
+        );
+        assert_eq!(
+            mt5_provision_mode(true, true),
+            Mt5ProvisionMode::FullDiscovery
+        );
+        assert_eq!(
+            mt5_provision_mode(false, false),
+            Mt5ProvisionMode::SelectedOrDiscovered
+        );
+        assert_eq!(
+            mt5_provision_mode(false, true),
+            Mt5ProvisionMode::FullDiscovery
+        );
+    }
+
+    #[test]
+    fn mt5_redetect_request_is_merged_and_consumed_once() {
+        let requested = AtomicBool::new(false);
+        assert!(!consume_mt5_redetection(&requested));
+        request_mt5_redetection(&requested);
+        request_mt5_redetection(&requested);
+        assert!(consume_mt5_redetection(&requested));
+        assert!(!consume_mt5_redetection(&requested));
+    }
+
+    #[test]
+    fn mt5_redetect_request_does_not_remain_when_consumed_on_non_mt5_platform() {
+        let requested = AtomicBool::new(false);
+        request_mt5_redetection(&requested);
+        let consumed = consume_mt5_redetection(&requested);
+        assert!(consumed);
+        assert!(!force_mt5_redetection_for_platform(Some("mt4"), consumed));
+        assert!(!force_mt5_redetection_for_platform(Some("mt5"), false));
+        assert!(!consume_mt5_redetection(&requested));
     }
 
     #[test]
