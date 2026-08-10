@@ -202,8 +202,8 @@ class SelectionAndCardTests(unittest.TestCase):
         monthly_payload = MODULE.build_lark_card(monthly_detail, monthly_detail["versions"][0])
         daily_text = json.dumps(daily_payload, ensure_ascii=False)
         monthly_text = json.dumps(monthly_payload, ensure_ascii=False)
-        self.assertIn("日复盘｜策略甲", daily_text)
-        self.assertIn("月复盘｜策略乙", monthly_text)
+        self.assertIn("日复盘总结｜策略甲", daily_text)
+        self.assertIn("月复盘总结｜策略乙", monthly_text)
         self.assertIn("下月行动", monthly_text)
         self.assertNotIn("daily_lessons", monthly_text)
         self.assertNotIn("evidence", daily_text.lower())
@@ -217,6 +217,58 @@ class SelectionAndCardTests(unittest.TestCase):
         self.assertNotIn("a.user@example.com", text)
         self.assertNotIn("12345678", text)
         self.assertNotIn("13800138000", text)
+
+    def test_summary_keeps_all_review_lists(self):
+        item = case(11)
+        content = {
+            "period_summary": "完整总结",
+            "decision_quality": "mixed",
+            "confidence": 0.7,
+            "strengths": ["优点1", "优点2", "优点3", "优点4"],
+            "repeated_issues": ["问题1", "问题2", "问题3", "问题4", "问题5"],
+            "risk_observations": ["风险1", "风险2", "风险3", "风险4"],
+            "daily_lessons": ["行动1", "行动2", "行动3", "行动4", "行动5"],
+        }
+        summary = MODULE.build_lark_cards(detail(item, content), detail(item, content)["versions"][0])[0][1]
+        text = json.dumps(summary, ensure_ascii=False)
+        for value in ["优点1", "优点4", "问题1", "问题5", "风险1", "风险4", "行动1", "行动5"]:
+            self.assertIn(value, text)
+
+    def test_daily_detail_keeps_assessments_and_aggregates_chan(self):
+        item = case(12)
+        assessments = [{"outcome_id": index, "decision_quality": "good", "summary": f"交易总结{index}"} for index in range(1, 8)]
+        diagnoses = [{"status": "normal", "issue_source": "data", "explanation": "重复说明"} for _ in range(6)]
+        diagnoses.append({"status": "suspected_issue", "issue_source": "confirmation_lag", "explanation": "异常说明"})
+        content = {
+            "period_summary": "日总结", "decision_quality": "good", "confidence": 0.8,
+            "strengths": [], "repeated_issues": [], "risk_observations": [], "daily_lessons": [],
+            "trade_assessments": assessments, "chan_diagnoses": diagnoses,
+            "period_chan_assessment": {"status": "suspected_issue", "issue_source": "confirmation_lag", "explanation": "周期说明", "confidence": 0.6},
+        }
+        detail_card = MODULE.build_lark_cards(detail(item, content), detail(item, content)["versions"][0])[1][1]
+        text = json.dumps(detail_card, ensure_ascii=False)
+        for index in range(1, 8):
+            self.assertIn(f"交易总结{index}", text)
+        self.assertIn("周期说明", text)
+        self.assertIn("共 7 条", text)
+        self.assertIn("异常说明", text)
+        self.assertNotIn("重复说明", text)
+
+    def test_monthly_detail_keeps_daily_assessments_and_counts(self):
+        item = case(13, period_type="monthly")
+        assessments = [{"period_case_id": index, "decision_quality": "mixed", "summary": f"第{index}日总结"} for index in range(1, 6)]
+        content = {
+            "period_summary": "月总结", "decision_quality": "mixed", "confidence": 0.8,
+            "strengths": [], "recurring_patterns": [], "risk_observations": [], "next_month_actions": [],
+            "daily_assessments": assessments, "conflict_groups": [{"id": 1}, {"id": 2}],
+            "memory_candidates": [{"lesson": "a"}, {"lesson": "b"}, {"lesson": "c"}],
+        }
+        detail_card = MODULE.build_lark_cards(detail(item, content), detail(item, content)["versions"][0])[1][1]
+        text = json.dumps(detail_card, ensure_ascii=False)
+        for index in range(1, 6):
+            self.assertIn(f"第{index}日总结", text)
+        self.assertIn("冲突组：2 个", text)
+        self.assertIn("记忆候选：3 条", text)
 
 
 class StateAndSenderTests(unittest.TestCase):
@@ -297,13 +349,13 @@ class RunnerTests(unittest.TestCase):
             api = FakeApi({"daily": [one, two], "monthly": []}, {"1": detail(one), "2": detail(two)})
             sender, sleeps = FakeSender(), []
             summary = MODULE.PushRunner(config(directory), api=api, sender=sender, sleep=sleeps.append).run()
-            self.assertEqual(summary.sent, 2)
-            self.assertEqual(sleeps, [1])
+            self.assertEqual(summary.sent, 4)
+            self.assertEqual(sleeps, [1, 1, 1])
 
             one_only = case(3)
             api = FakeApi({"daily": [one_only], "monthly": []}, {"3": detail(one_only)})
             sleeps = []
-            summary = MODULE.PushRunner(config(directory, state_file=Path(directory) / "single.json"), api=api, sender=FakeSender(), sleep=sleeps.append).run()
+            summary = MODULE.PushRunner(config(directory, state_file=Path(directory) / "single.json", max_cards=1), api=api, sender=FakeSender(), sleep=sleeps.append).run()
             self.assertEqual(summary.sent, 1)
             self.assertEqual(sleeps, [])
 
@@ -315,7 +367,7 @@ class RunnerTests(unittest.TestCase):
             sender = FakeSender()
             value = config(directory)
             summary = MODULE.PushRunner(value, api=api, sender=sender, now=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc)).run(dry_run=True)
-            self.assertEqual(summary.sent, 2)
+            self.assertEqual(summary.sent, 4)
             self.assertEqual(sender.payloads, [])
             self.assertFalse(value.state_file.exists())
 
@@ -328,10 +380,11 @@ class RunnerTests(unittest.TestCase):
             second_version["versions"][0]["id"] = 12
             api.details["1"] = second_version
             first["current_version_id"] = 12
-            store.mark_sent("2:22")
+            store.mark_sent(MODULE.card_state_key("2", "22", "summary"))
+            store.mark_sent(MODULE.card_state_key("2", "22", "detail"))
             store.save()
             summary = MODULE.PushRunner(value, api=api, sender=sender, now=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc)).run(dry_run=True)
-            self.assertEqual(summary.sent, 1)
+            self.assertEqual(summary.sent, 2)
 
     def test_normal_run_marks_sent_and_unknown(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -339,13 +392,60 @@ class RunnerTests(unittest.TestCase):
             two = case(2, strategy_title="策略乙", version_id=22)
             api = FakeApi({"daily": [one, two], "monthly": []}, {"1": detail(one), "2": detail(two)})
             sender = FakeSender([None, MODULE.LarkSendError("unknown", unknown=True)])
-            value = config(directory)
+            value = config(directory, max_cards=2)
             summary = MODULE.PushRunner(value, api=api, sender=sender, now=lambda: datetime(2026, 8, 10, tzinfo=timezone.utc), sleep=lambda _: None).run()
             self.assertEqual(summary.sent, 1)
             self.assertEqual(summary.unknown, 1)
             state = json.loads(value.state_file.read_text(encoding="utf-8"))
-            self.assertIn("1:11", state["sent"])
-            self.assertIn("2:22", state["unknown"])
+            self.assertIn(MODULE.card_state_key("1", "11", "summary"), state["sent"])
+            self.assertIn(MODULE.card_state_key("1", "11", "detail"), state["unknown"])
+
+    def test_old_v1_state_does_not_block_v2_cards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            item = case(20)
+            api = FakeApi({"daily": [item], "monthly": []}, {"20": detail(item)})
+            sender = FakeSender()
+            value = config(directory)
+            value.state_file.write_text(json.dumps({"sent": {"20:11": {}}, "unknown": {}}), encoding="utf-8")
+            summary = MODULE.PushRunner(value, api=api, sender=sender, sleep=lambda _: None).run()
+            self.assertEqual(summary.sent, 2)
+            self.assertEqual(len(sender.payloads), 2)
+
+    def test_summary_sent_only_sends_detail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            item = case(21)
+            api = FakeApi({"daily": [item], "monthly": []}, {"21": detail(item)})
+            sender = FakeSender()
+            value = config(directory)
+            store = MODULE.StateStore(value.state_file)
+            store.load()
+            store.mark_sent(MODULE.card_state_key("21", "11", "summary"))
+            store.save()
+            summary = MODULE.PushRunner(value, api=api, sender=sender, sleep=lambda _: None).run()
+            self.assertEqual(summary.sent, 1)
+            self.assertEqual(len(sender.payloads), 1)
+            state = json.loads(value.state_file.read_text(encoding="utf-8"))
+            self.assertIn(MODULE.card_state_key("21", "11", "detail"), state["sent"])
+
+    def test_max_cards_is_actual_card_count_and_dry_run_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            one, two = case(30), case(31, strategy_title="策略乙", version_id=31)
+            api = FakeApi({"daily": [one, two], "monthly": []}, {"30": detail(one), "31": detail(two)})
+            sender = FakeSender()
+            value = config(directory, max_cards=3)
+            summary = MODULE.PushRunner(value, api=api, sender=sender, sleep=lambda _: None).run()
+            self.assertEqual(summary.sent, 3)
+            self.assertEqual(len(sender.payloads), 3)
+
+            dry_directory = Path(directory) / "dry"
+            dry_directory.mkdir()
+            dry_api = FakeApi({"daily": [one], "monthly": []}, {"30": detail(one)})
+            dry_sender = FakeSender()
+            dry_value = config(dry_directory)
+            dry_summary = MODULE.PushRunner(dry_value, api=dry_api, sender=dry_sender, sleep=lambda _: None).run(dry_run=True)
+            self.assertEqual(dry_summary.sent, 2)
+            self.assertEqual(dry_sender.payloads, [])
+            self.assertFalse(dry_value.state_file.exists())
 
 
 if __name__ == "__main__":

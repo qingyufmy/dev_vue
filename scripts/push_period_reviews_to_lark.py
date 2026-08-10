@@ -389,6 +389,10 @@ def _detail_eligible(review: Mapping[str, Any], candidate: Mapping[str, Any]) ->
 
 STATUS = {"approved": "已确认", "edited": "修订待确认", "draft": "待人工确认", "ready": "待人工确认"}
 QUALITY = {"good": "良好", "mixed": "有亮点也有问题", "poor": "需要改进", "insufficient_evidence": "证据不足"}
+CHAN_STATUS = {"normal": "正常", "suspected_issue": "疑似问题", "confirmed_issue": "确认问题", "insufficient_evidence": "证据不足"}
+CHAN_SOURCE = {"data": "数据", "calculation": "计算", "confirmation_lag": "确认延迟", "ai_interpretation": "AI 解读", "strategy_rule": "策略规则", "none": "无", "unknown": "未知"}
+CARD_SCHEMA_VERSION = 2
+CARD_ITEM_LIMIT = 50
 EMAIL = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 PHONE = re.compile(r"(?<!\d)(?:\+?\d[\d\s-]{7,}\d)(?!\d)")
 ACCOUNT = re.compile(r"(?i)(账户|account|login)\s*[:：#]?\s*\d{4,}")
@@ -418,7 +422,11 @@ def safe_text(value: Any, max_length: int = 600) -> str:
 def _items(value: Any) -> str:
     values = [part.strip() for part in value.splitlines() if part.strip()] if isinstance(value, str) else list(value or []) if isinstance(value, (list, tuple)) else ([] if value in (None, "") else [value])
     values = [safe_text(item, 300) for item in values if safe_text(item, 300)]
-    return "\n".join(f"• {item}" for item in values[:3]) or "暂无"
+    visible = values[:CARD_ITEM_LIMIT]
+    lines = [f"• {item}" for item in visible]
+    if len(values) > CARD_ITEM_LIMIT:
+        lines.append(f"• 另有{len(values) - CARD_ITEM_LIMIT}条未展示")
+    return "\n".join(lines) or "暂无"
 
 
 def _section(title: str, content: str) -> dict[str, Any]:
@@ -441,7 +449,7 @@ def _confidence(value: Any) -> str:
         return safe_text(value, 30) if value not in (None, "") else "未知"
 
 
-def build_lark_card(review: Mapping[str, Any], version: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+def _card_context(review: Mapping[str, Any], version: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     period_type = str(review.get("period_type", review.get("periodType", "daily"))).lower()
     monthly = period_type == "monthly"
     period_label, name = "月复盘" if monthly else "日复盘", safe_text(review.get("strategy_title") or review.get("strategy_name") or "未命名策略", 120)
@@ -466,18 +474,102 @@ def build_lark_card(review: Mapping[str, Any], version: Optional[Mapping[str, An
                f"**复盘版本**：v{version_no}{'，修订版' if revision else ''}\n"
                f"**状态**：{status}　**证据**：{'证据完整' if evidence == 'complete' else '证据未完整' if evidence else '未知'}\n"
                f"**样本数量**：{_sample(review, content)}　**综合判断**：{quality}　**置信度**：{_confidence(content.get('confidence'))}")
-    issue_key, next_key = ("recurring_patterns", "next_month_actions") if monthly else ("repeated_issues", "daily_lessons")
-    elements = [{"tag": "div", "text": {"tag": "lark_md", "content": details}},
-                _section("核心结论", safe_text(content.get("period_summary"), 1000)),
-                _section("做得好的地方", _items(content.get("strengths"))),
-                _section("需要关注的问题", _items(content.get(issue_key))),
-                _section("风控观察", _items(content.get("risk_observations"))),
-                _section("下一步行动", _items(content.get(next_key)))]
-    if monthly and isinstance(content.get("memory_candidates"), list):
-        elements.append(_section("记忆候选", f"{len(content['memory_candidates'])} 条（仅作候选，未表示已生效）"))
-    payload = {"msg_type": "interactive", "card": {"header": {"template": "blue", "title": {"tag": "plain_text", "content": safe_text(f"{period_label}｜{name}{revision}", 180)}}, "elements": elements}}
+    return {"period_type": period_type, "monthly": monthly, "period_label": period_label, "name": name,
+            "version": version, "content": content, "version_no": version_no, "revision": revision,
+            "details": details}
+
+
+def _assessment_text(item: Any, label: str) -> str:
+    if not isinstance(item, Mapping):
+        return safe_text(item, 400)
+    quality = QUALITY.get(str(item.get("decision_quality", "")).lower(), "未知")
+    summary = safe_text(item.get("summary") or item.get("description") or item.get("content"), 500) or "暂无"
+    return f"{label}：决策{quality}；总结：{summary}"
+
+
+def _chan_detail(content: Mapping[str, Any]) -> str:
+    period = content.get("period_chan_assessment")
+    if not isinstance(period, Mapping):
+        period = {}
+    status = CHAN_STATUS.get(str(period.get("status", "")).lower(), "未知")
+    source = CHAN_SOURCE.get(str(period.get("issue_source", "")).lower(), "未知")
+    explanation = safe_text(period.get("explanation"), 500) or "暂无"
+    confidence = _confidence(period.get("confidence"))
+    diagnoses = content.get("chan_diagnoses") if isinstance(content.get("chan_diagnoses"), list) else []
+    status_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    pairs: dict[tuple[str, str], int] = {}
+    for item in diagnoses:
+        if not isinstance(item, Mapping):
+            continue
+        raw_status, raw_source = str(item.get("status", "unknown")).lower(), str(item.get("issue_source", "unknown")).lower()
+        status_counts[raw_status] = status_counts.get(raw_status, 0) + 1
+        source_counts[raw_source] = source_counts.get(raw_source, 0) + 1
+        pairs[(raw_status, raw_source)] = pairs.get((raw_status, raw_source), 0) + 1
+    aggregate = [f"共 {len(diagnoses)} 条"]
+    if status_counts:
+        aggregate.append("状态：" + "、".join(f"{CHAN_STATUS.get(key, '未知')} {count}条" for key, count in status_counts.items()))
+    if source_counts:
+        aggregate.append("来源：" + "、".join(f"{CHAN_SOURCE.get(key, '未知')} {count}条" for key, count in source_counts.items()))
+    anomalies: list[str] = []
+    major_pair = max(pairs, key=pairs.get) if pairs else None
+    if major_pair:
+        for item in diagnoses:
+            if not isinstance(item, Mapping):
+                continue
+            pair = (str(item.get("status", "unknown")).lower(), str(item.get("issue_source", "unknown")).lower())
+            if pair == major_pair:
+                continue
+            anomalies.append(f"状态{CHAN_STATUS.get(pair[0], '未知')}、来源{CHAN_SOURCE.get(pair[1], '未知')}：{safe_text(item.get('explanation'), 300) or '暂无'}")
+    if anomalies:
+        aggregate.append("异常项：\n" + "\n".join(f"• {item}" for item in anomalies))
+    return (f"状态：{status}　来源：{source}　说明：{explanation}　置信度：{confidence}\n"
+            f"诊断聚合：{'；'.join(aggregate)}")
+
+
+def _build_card(kind: str, context: Mapping[str, Any]) -> dict[str, Any]:
+    monthly, content = context["monthly"], context["content"]
+    if kind == "summary":
+        issue_key, next_key = ("recurring_patterns", "next_month_actions") if monthly else ("repeated_issues", "daily_lessons")
+        elements = [{"tag": "div", "text": {"tag": "lark_md", "content": context["details"]}},
+                    _section("核心结论", safe_text(content.get("period_summary"), 1000)),
+                    _section("做得好的地方", _items(content.get("strengths"))),
+                    _section("需要关注的问题", _items(content.get(issue_key))),
+                    _section("风控观察", _items(content.get("risk_observations"))),
+                    _section("下一步行动", _items(content.get(next_key)))]
+        if monthly and isinstance(content.get("memory_candidates"), list):
+            elements.append(_section("记忆候选", f"{len(content['memory_candidates'])} 条（仅作候选，未表示已生效）"))
+    else:
+        if monthly:
+            assessments = content.get("daily_assessments") if isinstance(content.get("daily_assessments"), list) else []
+            lines = [_assessment_text(item, f"第{index}日") for index, item in enumerate(assessments, 1)]
+            elements = [{"tag": "div", "text": {"tag": "lark_md", "content": context["details"]}},
+                        _section("每日明细", "\n".join(f"• {line}" for line in lines) or "暂无"),
+                        _section("月度附加信息", f"冲突组：{len(content.get('conflict_groups') or []) if isinstance(content.get('conflict_groups'), list) else 0} 个；记忆候选：{len(content.get('memory_candidates') or []) if isinstance(content.get('memory_candidates'), list) else 0} 条（仅作候选，未表示已生效）")]
+        else:
+            assessments = content.get("trade_assessments") if isinstance(content.get("trade_assessments"), list) else []
+            lines = [_assessment_text(item, f"第{index}笔") for index, item in enumerate(assessments, 1)]
+            elements = [{"tag": "div", "text": {"tag": "lark_md", "content": context["details"]}},
+                        _section("逐笔明细", "\n".join(f"• {line}" for line in lines) or "暂无"),
+                        _section("周期缠论判断", _chan_detail(content))]
+    title = f"{context['period_label']}{'总结' if kind == 'summary' else '每日明细' if monthly else '逐笔明细'}｜{context['name']}{context['revision']}"
+    payload = {"msg_type": "interactive", "card": {"header": {"template": "blue", "title": {"tag": "plain_text", "content": safe_text(title, 180)}}, "elements": elements}}
     json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return payload
+
+
+def build_lark_cards(review: Mapping[str, Any], version: Optional[Mapping[str, Any]] = None) -> list[tuple[str, dict[str, Any]]]:
+    context = _card_context(review, version)
+    return [(kind, _build_card(kind, context)) for kind in ("summary", "detail")]
+
+
+def build_lark_card(review: Mapping[str, Any], version: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """Backward-compatible summary card helper."""
+    return build_lark_cards(review, version)[0][1]
+
+
+def card_state_key(case_value: Any, version_value: Any, kind: str) -> str:
+    return f"{case_value}:{version_value}:card-v{CARD_SCHEMA_VERSION}:{kind}"
 
 
 class StateStore:
@@ -614,10 +706,6 @@ class PushRunner:
         summary.candidates = len(candidates)
         pending = []
         for item in candidates:
-            key = item["_push_key"]
-            if store.contains(key):
-                summary.skipped += 1
-                continue
             try:
                 review = self.api.get_case(item["id"])
                 if not _detail_eligible(review, item):
@@ -628,26 +716,29 @@ class PushRunner:
                 version = find_current_version(review, version_id)
                 if not version_id or version is None:
                     raise ApiError("当前复盘版本不存在")
-                key = f"{detail_case_id}:{version_id}"
-                if store.contains(key):
-                    summary.skipped += 1
-                    continue
-                pending.append((item, review, version, key))
+                cards = build_lark_cards(review, version)
+                for kind, payload in cards:
+                    key = card_state_key(detail_case_id, version_id, kind)
+                    if store.contains(key):
+                        summary.skipped += 1
+                        continue
+                    pending.append((item, review, version, key, kind, payload))
+                    if len(pending) >= self.config.max_cards:
+                        break
             except Exception:
                 self.logger.error("读取复盘详情失败（case=%s）", case_id(item) or "?")
                 summary.failed += 1
             if len(pending) >= self.config.max_cards:
                 break
-        for index, (item, review, version, key) in enumerate(pending):
+        for index, (item, review, version, key, kind, payload) in enumerate(pending):
             try:
-                payload = build_lark_card(review, version)
                 if dry_run:
-                    self.logger.info("预览卡片：%s", _preview(review, version))
+                    self.logger.info("预览卡片：%s", _preview(review, version, kind))
                     summary.sent += 1
                     continue
                 assert self.sender is not None
                 self.sender.send(payload)
-                store.mark_sent(key, {"case_id": case_id(item), "version_id": str(version.get("id"))})
+                store.mark_sent(key, {"case_id": case_id(review), "version_id": str(version.get("id")), "card_kind": kind})
                 store.save()
                 summary.sent += 1
             except LarkSendError as exc:
@@ -655,7 +746,7 @@ class PushRunner:
                 if exc.unknown:
                     summary.unknown += 1
                     try:
-                        store.mark_unknown(key, {"case_id": case_id(item), "version_id": str(version.get("id"))})
+                        store.mark_unknown(key, {"case_id": case_id(review), "version_id": str(version.get("id")), "card_kind": kind})
                         store.save()
                     except StateError:
                         self.logger.error("未知发送状态无法写入状态文件")
@@ -672,10 +763,10 @@ class PushRunner:
         return summary
 
 
-def _preview(review: Mapping[str, Any], version: Mapping[str, Any]) -> str:
+def _preview(review: Mapping[str, Any], version: Mapping[str, Any], kind: str = "summary") -> str:
     period = "月" if str(review.get("period_type", "daily")) == "monthly" else "日"
     name = safe_text(review.get("strategy_title") or review.get("strategy_name") or "未命名策略", 80)
-    return f"{period}复盘｜{name}｜版本 v{safe_text(version.get('version_no') or 1, 20)}｜case={case_id(review) or '?'}"
+    return f"{period}复盘｜{name}｜{kind}｜版本 v{safe_text(version.get('version_no') or 1, 20)}｜case={case_id(review) or '?'}"
 
 
 def main(argv: Optional[list[str]] = None) -> int:
