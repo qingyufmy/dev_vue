@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs'
 import { beijingNow, logAudit, queryOne, queryRun, withTransaction } from '../db.js'
-import { revokeBridgeRefreshSessions } from '../bridge-auth-session.js'
-import { disconnectUserSockets } from '../bridge-ws.js'
+import { assertBridgeEligible, revokeBridgeRefreshSessions } from '../bridge-auth-session.js'
+import { disconnectUserBridgeConnections, disconnectUserSockets } from '../bridge-ws.js'
 
 const VALID_PLANS = new Set(['free', 'plus', 'pro'])
 const VALID_ROLES = new Set(['user', 'admin'])
@@ -31,6 +31,17 @@ function validatePassword(rawValue) {
   }
   if (password.length > 128) throw new Error('password_too_long')
   return password
+}
+
+function isBridgeEligible(user) {
+  try {
+    assertBridgeEligible(user)
+    return true
+  } catch (error) {
+    if (error?.code === 'bridge_membership_required'
+      || error?.message === 'bridge_membership_required') return false
+    throw error
+  }
 }
 
 export function translateAdminProfileError(error) {
@@ -112,11 +123,17 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
   const targetPlan = String(target.plan || 'free').trim().toLowerCase()
   const dateOnly = value => value == null || String(value).trim() === ''
     ? null : String(value).slice(0, 10)
-  const sensitiveChange = Boolean(password)
+  const securityCredentialChange = Boolean(password)
     || email !== targetEmail
     || role !== targetRole
-    || plan !== targetPlan
+  const membershipChange = plan !== targetPlan
     || dateOnly(expiry) !== dateOnly(targetPlan === 'free' ? null : currentExpiry)
+  const profileChange = phone !== target.phone
+    || nickname !== target.nickname
+    || avatar !== target.avatar
+  const finalBridgeEligible = membershipChange && !securityCredentialChange
+    ? isBridgeEligible({ role, plan, plan_expires_at:expiry })
+    : null
 
   const now = beijingNow()
   const updates = [
@@ -129,10 +146,11 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
     updates.push('password = ?')
     params.push(await bcrypt.hash(password, 10))
   }
-  if (sensitiveChange) updates.push('token_version = token_version + 1')
+  if (securityCredentialChange) updates.push('token_version = token_version + 1')
   params.push(uid)
   const updateSql = `UPDATE users SET ${updates.join(', ')} WHERE id = ?`
-  if (sensitiveChange) {
+  let bridgeMembershipDisconnectError = null
+  if (securityCredentialChange) {
     await withTransaction(async run => {
       await run(updateSql, params)
       await revokeBridgeRefreshSessions(uid, { run })
@@ -140,6 +158,20 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
     disconnectUserSockets(uid, password ? 'Password reset by administrator' : 'Account permissions changed')
   } else {
     await queryRun(updateSql, params)
+    if (membershipChange && finalBridgeEligible === false) {
+      try {
+        await Promise.resolve(disconnectUserBridgeConnections(uid, 'bridge_membership_required'))
+      } catch {
+        // The entitlement update is already committed. Let the gateway's
+        // periodic eligibility check close stale connections if this process
+        // cannot reach the live Bridge connection registry.
+        bridgeMembershipDisconnectError = 'bridge_membership_disconnect_failed'
+        console.warn('[AdminUserProfile] Bridge membership disconnect failed', {
+          userId:uid,
+          code:bridgeMembershipDisconnectError,
+        })
+      }
+    }
   }
 
   const changed = {
@@ -152,7 +184,14 @@ export async function updateAdminUserProfile({ actorUserId, targetUserId, input 
     email_changed:email !== target.email,
     phone_changed:phone !== target.phone,
     nickname_changed:nickname !== target.nickname,
+    role_changed:role !== targetRole,
     password_reset:Boolean(password),
+    security_credential_change:securityCredentialChange,
+    membership_change:membershipChange,
+    profile_change:profileChange,
+    security_session_revoked:securityCredentialChange,
+    bridge_membership_paused:membershipChange && !securityCredentialChange && finalBridgeEligible === false,
+    bridge_membership_disconnect_error:bridgeMembershipDisconnectError,
   }
   await logAudit({
     userId:Number(actorUserId) || null,

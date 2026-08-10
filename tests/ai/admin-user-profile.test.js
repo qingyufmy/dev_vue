@@ -1,15 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const db = vi.hoisted(() => ({
-  beijingNow:vi.fn(() => '2026-07-23 10:00:00'),
+  beijingNow:vi.fn(() => '2026-08-10 10:00:00'),
   queryOne:vi.fn(),
   queryRun:vi.fn(),
   withTransaction:vi.fn(),
   logAudit:vi.fn(),
 }))
 const transaction = vi.hoisted(() => ({ run:vi.fn() }))
-const bridge = vi.hoisted(() => ({ revokeBridgeRefreshSessions:vi.fn() }))
-const sockets = vi.hoisted(() => ({ disconnectUserSockets:vi.fn() }))
+const bridge = vi.hoisted(() => ({
+  assertBridgeEligible:vi.fn(user => {
+    const plan = String(user?.plan || 'free').toLowerCase()
+    const expiry = String(user?.plan_expires_at || '').slice(0, 10)
+    if (String(user?.role || '').toLowerCase() === 'admin') return
+    if (plan !== 'pro' || (expiry && expiry < '2026-08-10')) {
+      throw Object.assign(new Error('bridge_membership_required'), { code:'bridge_membership_required' })
+    }
+  }),
+  revokeBridgeRefreshSessions:vi.fn(),
+}))
+const sockets = vi.hoisted(() => ({
+  disconnectUserBridgeConnections:vi.fn(),
+  disconnectUserSockets:vi.fn(),
+}))
 const passwordHash = vi.hoisted(() => vi.fn())
 
 vi.mock('../../server/db.js', () => db)
@@ -53,15 +66,72 @@ describe('operations user profile editing', () => {
   it('clears expiry and membership source when switching to free', async () => {
     db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2026-12-31 23:59:59', plan_source:'paid' })
     await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ plan:'free', expires_at:'2027-01-01' } })
-    const [sql, params] = transaction.run.mock.calls[0]
+    const [sql, params] = db.queryRun.mock.calls[0]
     expect(sql).toContain('plan_source = NULL')
     const planIndex = sql.split(', ').findIndex(fragment => fragment.includes('plan = ?'))
     const expiryIndex = sql.split(', ').findIndex(fragment => fragment.includes('plan_expires_at = ?'))
     expect(params[planIndex]).toBe('free')
     expect(params[expiryIndex]).toBeNull()
+    expect(sql).not.toContain('token_version = token_version + 1')
     expect(passwordHash).not.toHaveBeenCalled()
-    expect(bridge.revokeBridgeRefreshSessions).toHaveBeenCalledWith(7, { run:transaction.run })
-    expect(sockets.disconnectUserSockets).toHaveBeenCalledWith(7, 'Account permissions changed')
+    expect(db.withTransaction).not.toHaveBeenCalled()
+    expect(bridge.revokeBridgeRefreshSessions).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserBridgeConnections).toHaveBeenCalledWith(7, 'bridge_membership_required')
+    expect(JSON.parse(db.logAudit.mock.calls[0][0].detail)).toMatchObject({
+      security_credential_change:false,
+      membership_change:true,
+      profile_change:false,
+      security_session_revoked:false,
+      bridge_membership_paused:true,
+      bridge_membership_disconnect_error:null,
+    })
+  })
+
+  it('keeps an active Bridge session when only extending membership expiry', async () => {
+    db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2026-12-31 23:59:59', plan_source:'paid' })
+    await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ expires_at:'2027-12-31' } })
+    expect(db.queryRun).toHaveBeenCalledTimes(1)
+    expect(db.withTransaction).not.toHaveBeenCalled()
+    expect(bridge.revokeBridgeRefreshSessions).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserBridgeConnections).not.toHaveBeenCalled()
+    expect(JSON.parse(db.logAudit.mock.calls[0][0].detail)).toMatchObject({
+      security_credential_change:false,
+      membership_change:true,
+      bridge_membership_paused:false,
+      bridge_membership_disconnect_error:null,
+    })
+  })
+
+  it('keeps an active Bridge session when shortening membership expiry but remaining valid', async () => {
+    db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2027-12-31 23:59:59', plan_source:'paid' })
+    await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ expires_at:'2027-08-31' } })
+    expect(db.withTransaction).not.toHaveBeenCalled()
+    expect(bridge.revokeBridgeRefreshSessions).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserBridgeConnections).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { plan:'free', expires_at:'2027-01-01' },
+    { expires_at:'2026-07-01' },
+  ])('only pauses Bridge connections when final membership is not eligible (%o)', async input => {
+    db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2026-12-31 23:59:59', plan_source:'paid' })
+    await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input })
+    expect(db.withTransaction).not.toHaveBeenCalled()
+    expect(bridge.revokeBridgeRefreshSessions).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserBridgeConnections).toHaveBeenCalledWith(7, 'bridge_membership_required')
+  })
+
+  it('restores an expired Pro membership without revoking its Bridge refresh session', async () => {
+    db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2026-07-01 23:59:59', plan_source:'paid' })
+    await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ expires_at:'2026-12-31' } })
+    expect(db.withTransaction).not.toHaveBeenCalled()
+    expect(bridge.revokeBridgeRefreshSessions).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
+    expect(sockets.disconnectUserBridgeConnections).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -89,6 +159,15 @@ describe('operations user profile editing', () => {
     expect(result).toMatchObject({ nickname:'新昵称', email:'new@example.com', phone:'13900000000', role:'user' })
     expect(transaction.run.mock.calls[0][0]).toContain('nickname = ?')
     expect(sockets.disconnectUserSockets).toHaveBeenCalledWith(7, 'Account permissions changed')
+  })
+
+  it('keeps security session revocation for role changes', async () => {
+    await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ role:'admin' } })
+    const [sql] = transaction.run.mock.calls[0]
+    expect(sql).toContain('token_version = token_version + 1')
+    expect(bridge.revokeBridgeRefreshSessions).toHaveBeenCalledWith(7, { run:transaction.run })
+    expect(sockets.disconnectUserSockets).toHaveBeenCalledWith(7, 'Account permissions changed')
+    expect(sockets.disconnectUserBridgeConnections).not.toHaveBeenCalled()
   })
 
   it('allows a phone-registered user to remain without a bound email', async () => {
@@ -128,6 +207,27 @@ describe('operations user profile editing', () => {
       .rejects.toThrow('profile transaction failed')
     expect(sockets.disconnectUserSockets).not.toHaveBeenCalled()
     expect(db.queryRun).not.toHaveBeenCalled()
+  })
+
+  it('does not disconnect Bridge connections when a membership update fails', async () => {
+    db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2026-12-31 23:59:59', plan_source:'paid' })
+    db.queryRun.mockRejectedValueOnce(new Error('membership update failed'))
+    await expect(updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ plan:'free' } }))
+      .rejects.toThrow('membership update failed')
+    expect(sockets.disconnectUserBridgeConnections).not.toHaveBeenCalled()
+    expect(db.logAudit).not.toHaveBeenCalled()
+  })
+
+  it('records a stable audit code when Bridge membership disconnect fails after commit', async () => {
+    db.queryOne.mockResolvedValue({ id:7, email:'user@example.com', phone:null, plan:'pro', plan_expires_at:'2027-12-31 23:59:59', plan_source:'paid' })
+    sockets.disconnectUserBridgeConnections.mockRejectedValueOnce(new Error('bridge registry unavailable'))
+    await updateAdminUserProfile({ actorUserId:1, targetUserId:7, input:{ plan:'free' } })
+    expect(db.queryRun).toHaveBeenCalledTimes(1)
+    expect(sockets.disconnectUserBridgeConnections).toHaveBeenCalledWith(7, 'bridge_membership_required')
+    expect(JSON.parse(db.logAudit.mock.calls[0][0].detail)).toMatchObject({
+      bridge_membership_paused:true,
+      bridge_membership_disconnect_error:'bridge_membership_disconnect_failed',
+    })
   })
 
   it('requires at least one login contact while keeping observer source email mandatory', async () => {

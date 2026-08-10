@@ -13,7 +13,7 @@ use bridge_foundation::{
 };
 use bridge_local_control::{
     LOCAL_CONTROL_SCHEMA_VERSION, LocalControlAction, LocalControlPipeClient, LocalControlRequest,
-    LocalControlResult, UiObserverProfile, UiStateSnapshot,
+    LocalControlResult, UiObserverProfile, UiStateSnapshot, UiTerminalCandidate,
 };
 use bridge_runtime_win::{
     InstanceAcquireResult, InstanceSignal, SingleInstanceGuard, default_lock_directory,
@@ -58,24 +58,25 @@ use windows_sys::Win32::UI::Shell::{
     ShellExecuteW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, BS_OWNERDRAW, CB_SETITEMHEIGHT, CBN_SELCHANGE, CBS_DROPDOWNLIST,
-    CBS_OWNERDRAWFIXED, CREATESTRUCTW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GA_ROOT, GWLP_USERDATA,
-    GetAncestor, GetClientRect, GetDlgCtrlID, GetMessageW, GetParent, GetScrollInfo,
-    GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    HICON, HMENU, HTCLIENT, IDC_ARROW, IDC_HAND, IDI_APPLICATION, IsDialogMessageW,
+    AdjustWindowRectEx, AppendMenuW, BS_OWNERDRAW, CB_SETITEMHEIGHT, CBN_SELCHANGE,
+    CBS_DROPDOWNLIST, CBS_OWNERDRAWFIXED, CREATESTRUCTW, CreateIconFromResourceEx, CreatePopupMenu,
+    CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GA_ROOT,
+    GWLP_USERDATA, GetAncestor, GetClientRect, GetCursorPos, GetDlgCtrlID, GetMessageW, GetParent,
+    GetScrollInfo, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, HICON, HMENU, HTCLIENT, IDC_ARROW, IDC_HAND, IDI_APPLICATION, IsDialogMessageW,
     IsWindowVisible, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
     MF_STRING, MINMAXINFO, MSG, MoveWindow, PostMessageW, RegisterClassExW, RegisterWindowMessageW,
     SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
     SB_THUMBTRACK, SB_TOP, SBS_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
     SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_MINIMIZE, SW_SHOW, SW_SHOWNORMAL, SetCursor,
-    SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TrackPopupMenu,
-    TranslateMessage, WHEEL_DELTA, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY,
-    WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY,
-    WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
-    WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
-    WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    SetWindowLongPtrW, SetWindowTextW, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TrackPopupMenu, TranslateMessage, WHEEL_DELTA, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE,
+    WM_DESTROY, WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_ERASEBKGND, WM_GETMINMAXINFO,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
+    WM_NCDESTROY, WM_NULL, WM_PAINT, WM_QUERYENDSESSION, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFONT,
+    WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_APPWINDOW, WS_EX_CONTROLPARENT, WS_MINIMIZEBOX, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
+    WS_VISIBLE,
 };
 
 const WINDOW_CLASS: &str = "LiangJianBridgeNativeUi";
@@ -96,6 +97,8 @@ const CONTROL_SETTINGS: i32 = 113;
 const CONTROL_EXIT: i32 = 114;
 const CONTROL_ACCOUNT_SCROLL: i32 = 115;
 const CONTROL_ACCOUNT_ACTION_BASE: i32 = 2_000;
+const MENU_PRIMARY_ACCOUNT_BASE: usize = 4_000;
+const MENU_PRIMARY_ACCOUNT_REDETECT: usize = MENU_PRIMARY_ACCOUNT_BASE + 64;
 const MENU_OPEN: usize = 201;
 const MENU_EXIT: usize = 202;
 const MENU_AUTOSTART: usize = 203;
@@ -1288,6 +1291,7 @@ fn create_button(hwnd: HWND, instance: HINSTANCE, id: i32, text: &str) -> HWND {
 
 fn account_action_code(action: ObserverAction) -> &'static str {
     match action {
+        ObserverAction::SwitchPrimary => "switch_primary",
         ObserverAction::Start => "start",
         ObserverAction::Pause => "pause",
         ObserverAction::Retry => "retry",
@@ -2469,6 +2473,10 @@ unsafe fn handle_account_action(
     if account.actions_busy {
         return;
     }
+    if action == ObserverAction::SwitchPrimary {
+        unsafe { open_primary_account_menu(hwnd, app) };
+        return;
+    }
     let profile_id = account.role.clone();
     if matches!(action, ObserverAction::Bind | ObserverAction::Configure) {
         unsafe { open_existing_observer_dialog(hwnd, app, &profile_id) };
@@ -2488,8 +2496,147 @@ unsafe fn handle_account_action(
     unsafe { begin_action(hwnd, app, local_action) };
 }
 
+fn primary_account_candidate_selectable(candidate: &UiTerminalCandidate) -> bool {
+    !candidate.login.trim().is_empty() && !candidate.broker_server.trim().is_empty()
+}
+
+fn primary_account_candidate_label(candidate: &UiTerminalCandidate) -> String {
+    let platform = if candidate.platform == "mt4" {
+        "MT4"
+    } else {
+        "MT5"
+    };
+    if !primary_account_candidate_selectable(candidate) {
+        return format!(
+            "{platform}  ·  {}  ·  未登录/请先启动",
+            candidate.display_name.as_deref().unwrap_or("终端")
+        );
+    }
+    format!(
+        "{platform}  ·  {}  ·  {}",
+        candidate.login, candidate.broker_server
+    )
+}
+
+unsafe fn open_primary_account_menu(hwnd: HWND, app: &mut AppState) {
+    let menu = unsafe { CreatePopupMenu() };
+    if menu.is_null() {
+        show_error(hwnd, "bridge_primary_account_menu_unavailable");
+        return;
+    }
+    let mut candidates = app.state.terminal_candidates.clone();
+    candidates.sort_by(|left, right| {
+        left.platform
+            .cmp(&right.platform)
+            .then_with(|| left.login.cmp(&right.login))
+            .then_with(|| left.broker_server.cmp(&right.broker_server))
+            .then_with(|| left.terminal_instance_id.cmp(&right.terminal_instance_id))
+    });
+    candidates.truncate(64);
+    let selected_platform = app.state.selected_platform.as_deref();
+    let selected_terminal = app.state.selected_terminal_instance_id.as_deref();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let mut flags = MF_STRING;
+        if !primary_account_candidate_selectable(candidate)
+            || (selected_platform == Some(candidate.platform.as_str())
+                && selected_terminal == Some(candidate.terminal_instance_id.as_str()))
+        {
+            flags |= MF_GRAYED;
+        }
+        if selected_platform == Some(candidate.platform.as_str())
+            && selected_terminal == Some(candidate.terminal_instance_id.as_str())
+        {
+            flags |= MF_CHECKED;
+        }
+        let label = wide(&primary_account_candidate_label(candidate));
+        unsafe {
+            AppendMenuW(
+                menu,
+                flags,
+                MENU_PRIMARY_ACCOUNT_BASE + index,
+                label.as_ptr(),
+            );
+        }
+    }
+    if candidates.is_empty() {
+        let label = wide("暂无已知账户");
+        unsafe {
+            AppendMenuW(
+                menu,
+                MF_STRING | MF_GRAYED,
+                MENU_PRIMARY_ACCOUNT_BASE,
+                label.as_ptr(),
+            );
+        }
+    }
+    unsafe {
+        AppendMenuW(menu, MF_SEPARATOR, 0, null());
+        let label = wide("重新检测");
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            MENU_PRIMARY_ACCOUNT_REDETECT,
+            label.as_ptr(),
+        );
+    }
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) } == 0 {
+        let mut bounds = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut bounds) };
+        point.x = bounds.left + (bounds.right - bounds.left) / 2;
+        point.y = bounds.top + (bounds.bottom - bounds.top) / 2;
+    }
+    let command = unsafe {
+        TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD,
+            point.x,
+            point.y,
+            0,
+            hwnd,
+            null(),
+        )
+    } as usize;
+    unsafe { DestroyMenu(menu) };
+    if command == MENU_PRIMARY_ACCOUNT_REDETECT {
+        unsafe { begin_action(hwnd, app, LocalControlAction::Redetect) };
+        return;
+    }
+    let Some(index) = command
+        .checked_sub(MENU_PRIMARY_ACCOUNT_BASE)
+        .filter(|index| *index < candidates.len())
+    else {
+        return;
+    };
+    let candidate = &candidates[index];
+    if !primary_account_candidate_selectable(candidate)
+        || (selected_platform == Some(candidate.platform.as_str())
+            && selected_terminal == Some(candidate.terminal_instance_id.as_str()))
+    {
+        return;
+    }
+    if !show_confirmation(
+        hwnd,
+        "切换桥接主账户？\n\n只会更改桥接主账户。旧账户将不再同步或接收命令；不会关闭 MT4/MT5，也不会处理持仓或挂单。",
+        "切换桥接主账户",
+    ) {
+        return;
+    }
+    unsafe {
+        begin_action(
+            hwnd,
+            app,
+            LocalControlAction::SwitchPrimaryAccount {
+                platform: candidate.platform.clone(),
+                terminal_instance_id: candidate.terminal_instance_id.clone(),
+            },
+        );
+    }
+}
+
 fn observer_local_action(profile_id: &str, action: ObserverAction) -> Option<LocalControlAction> {
     match action {
+        ObserverAction::SwitchPrimary => None,
         ObserverAction::Start => Some(LocalControlAction::ObserverStart {
             observer_profile_id: profile_id.to_owned(),
         }),
@@ -3152,6 +3299,23 @@ fn error_message(code: &str) -> &'static str {
         "bridge_pair_start_rate_limited" => {
             "授权请求过于频繁，请稍等几分钟后再试，请勿反复点击“连接账号”。"
         }
+        "bridge_not_paired" => "当前设备尚未连接量见账号，请点击“连接账号”完成授权。",
+        "bridge_membership_required" | "membership_required" => {
+            "当前会员暂不能使用桥接；续费或恢复有效会员后会自动重连，无需重新授权。"
+        }
+        "bridge_refresh_invalid" | "bridge_refresh_revoked" | "bridge_session_revoked" => {
+            "当前设备授权已失效，请点击“连接账号”重新完成授权。"
+        }
+        "bridge_primary_account_menu_unavailable" => "暂时无法打开账户列表，请稍后重试。",
+        "bridge_primary_account_selection_invalid" => {
+            "账户列表已经变化，请点击“重新检测”后再选择。"
+        }
+        "bridge_primary_account_not_logged_in" => {
+            "目标终端尚未登录交易账户，请先启动并登录后重新检测。"
+        }
+        "bridge_primary_account_terminal_binding_missing" => {
+            "目标账户的终端信息不完整，请重新检测后再试。"
+        }
         "mt4_platform_not_selected" => "请先将交易平台切换为 MT4。",
         "mt4_terminal_not_found" => "未发现 MT4，请先打开一次 MT4，然后点击“重新检测”。",
         "mt4_terminal_selection_required" => "检测到多个 MT4，请先选择需要安装 EA 的终端。",
@@ -3628,6 +3792,40 @@ mod tests {
     }
 
     #[test]
+    fn authorization_and_membership_errors_have_recovery_actions() {
+        for code in [
+            "bridge_not_paired",
+            "bridge_refresh_invalid",
+            "bridge_refresh_revoked",
+            "bridge_session_revoked",
+            "bridge_membership_required",
+        ] {
+            let message = error_message(code);
+            assert_ne!(message, error_message("unknown_error"), "{code}");
+            assert!(
+                message.contains("连接账号") || message.contains("自动重连"),
+                "{code}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_account_switch_errors_have_actionable_chinese_messages() {
+        for code in [
+            "bridge_primary_account_menu_unavailable",
+            "bridge_primary_account_selection_invalid",
+            "bridge_primary_account_not_logged_in",
+            "bridge_primary_account_terminal_binding_missing",
+        ] {
+            assert_ne!(
+                error_message(code),
+                error_message("unknown_error"),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
     fn formats_current_timestamp_in_local_time() {
         assert_ne!(format_local_time(now_utc_msc()), "--:--:--");
     }
@@ -3803,6 +4001,50 @@ mod tests {
         assert_eq!(fingerprint, account_action_fingerprint(&busy_accounts));
         busy_accounts[1].primary_action = Some(ObserverAction::Retry);
         assert_ne!(fingerprint, account_action_fingerprint(&busy_accounts));
+    }
+
+    #[test]
+    fn primary_account_button_maps_to_the_secondary_switch_action_and_popup_contract() {
+        let mut main = account_fixture(true, false, false);
+        main.primary_action = Some(ObserverAction::SwitchPrimary);
+        main.primary_action_text = Some("切换账户".to_owned());
+        let bindings = account_action_bindings(&[main]);
+        assert_eq!(
+            bindings,
+            vec![(
+                CONTROL_ACCOUNT_ACTION_BASE,
+                0,
+                ObserverAction::SwitchPrimary,
+                false
+            )]
+        );
+        assert_eq!(
+            account_action_code(ObserverAction::SwitchPrimary),
+            "switch_primary"
+        );
+
+        let account = UiTerminalCandidate {
+            terminal_instance_id: "mt5-account".to_owned(),
+            platform: "mt5".to_owned(),
+            broker_server: "Broker-Demo".to_owned(),
+            login: "123456".to_owned(),
+            display_name: None,
+        };
+        let installation = UiTerminalCandidate {
+            terminal_instance_id: "mt4-installation".to_owned(),
+            platform: "mt4".to_owned(),
+            broker_server: String::new(),
+            login: String::new(),
+            display_name: Some("MetaTrader 4".to_owned()),
+        };
+        assert!(primary_account_candidate_selectable(&account));
+        assert!(!primary_account_candidate_selectable(&installation));
+        assert!(primary_account_candidate_label(&account).contains("MT5"));
+        assert!(primary_account_candidate_label(&installation).contains("未登录/请先启动"));
+        assert_eq!(
+            MENU_PRIMARY_ACCOUNT_REDETECT,
+            MENU_PRIMARY_ACCOUNT_BASE + 64
+        );
     }
 
     #[test]
@@ -4012,7 +4254,7 @@ mod tests {
             build_main_window_view(&pairing, &BTreeSet::new(), demo_format_local_time)
                 .expect("pairing");
         assert!(pairing_view.show_pair);
-        assert!(!pairing_view.show_logout);
+        assert!(pairing_view.show_logout);
 
         let offline = demo_state(DEFAULT_PROFILE_ID, DemoScenario::ServerOffline);
         let offline_view =

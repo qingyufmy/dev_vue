@@ -1337,7 +1337,7 @@ function signalTakeProfitSelection(signal) {
 
 function updateSignalPriceFields(signal) {
   const dir = signalType(signal?.signal_type);
-  const market = signal?.market_data || {};
+  const market = signalMarketData(signal);
   const advice = signal ? signalExecutionAdvice(signal) : null;
   setText("sigReferencePrice", priceDisplay(market.latest_price));
   setText("sigCurrentPrice", signalCurrentPriceText(signal));
@@ -1589,7 +1589,7 @@ const API_ERROR_MESSAGES = {
 
 const OBSERVER_WS_READ_ACTIONS = new Set([
   "health", "account", "symbols", "quote", "positions", "rates",
-  "signals_latest_id", "signal_detail", "signals", "signal_tickets",
+  "signals_latest_id", "signal_detail", "signal_evidence", "signals", "signal_tickets",
   "close_signal_tickets", "history", "history_chart_data", "pending_list",
   "signal_by_ticket",
 ]);
@@ -1981,6 +1981,13 @@ async function handleAccountSwitched(msg = {}) {
   await refreshTabData(activeTabId()).catch(() => {});
   const rejected = results.find(item => item.status === "rejected");
   if (rejected) console.warn("[AccountSwitch] 部分账户数据刷新失败:", rejected.reason);
+}
+
+function signalMarketData(signal) {
+  const legacy = signal?.market_data;
+  if (legacy && typeof legacy === "object" && Object.keys(legacy).length) return legacy;
+  const snapshot = signal?.inference_snapshot?.market_snapshot;
+  return snapshot && typeof snapshot === "object" ? snapshot : {};
 }
 
 function clearHistoryFreshnessRetry() {
@@ -2770,9 +2777,9 @@ async function loadDashboardSignal(signalId, fallbackSignal = null, options = {}
   let signal = current ? { ...current, ...(fallbackSignal || {}) } : fallbackSignal;
   if (options.forceRefresh || !signal?.detail_loaded) {
     try {
-      const data = await wsApi("signal_detail", { signal_id:Number(signalId) });
-      if (data.status === "success" && data.signal) {
-        signal = { ...(signal || {}), ...data.signal, detail_loaded:true };
+      const loaded = await loadSignalDetail(signalId, { forceRefresh:options.forceRefresh === true });
+      if (loaded) {
+        signal = loaded;
         const index = state.signals.findIndex(item => sameSignalId(item.id, signalId));
         if (index >= 0) state.signals[index] = { ...state.signals[index], ...signal };
       }
@@ -7138,7 +7145,7 @@ function renderSignalMonitorDetails(signal) {
   const direction = signalType(signal.signal_type);
   const entryLabels = { market:"市价", limit:"限价", stop:"止损挂单", stop_limit:"止损限价" };
   const entryMethod = entryLabels[signal.entry_method] || (direction === "hold" ? "观望" : "待确认");
-  const plannedEntry = direction === "hold" ? null : (signal.limit_price || signal.market_data?.latest_price);
+  const plannedEntry = direction === "hold" ? null : (signal.limit_price || signalMarketData(signal).latest_price);
   const finalVolumeText = direction === "hold"
     ? "无需计算"
     : finalVolume == null ? "执行时计算" : volumeText(finalVolume);
@@ -7678,6 +7685,37 @@ let _inferenceChartResizeObserver = null;
 let _inferenceChartMutationObserver = null;
 let _inferenceChartFrame = null;
 let _inferenceChartRenderVersion = 0;
+const _signalEvidenceCache = new Map();
+const _signalEvidenceFlights = new Map();
+const _signalDetailCache = new Map();
+const _signalDetailFlights = new Map();
+const SIGNAL_EVIDENCE_CACHE_LIMIT = 64;
+const SIGNAL_DETAIL_CACHE_LIMIT = 128;
+
+// Keep historical browsing bounded while leaving in-flight requests alone.
+// Map insertion order supplies a small LRU without a second dependency.
+function getSignalCacheEntry(cache, key) {
+  if (!cache.has(key)) return null;
+  const value = cache.get(key);
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function setSignalCacheEntry(cache, key, value, limit) {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > limit) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+  return value;
+}
+
+function inferenceEvidenceCacheKey(signalId, timeframe, snapshotId = null) {
+  return `${String(signalId ?? "")}:${String(snapshotId ?? "none")}:${String(timeframe || "").trim().toUpperCase()}`;
+}
 
 function destroyInferenceChart() {
   if (_inferenceChartFrame !== null) {
@@ -7703,11 +7741,18 @@ function inferenceSnapshotContext(signal) {
   const snapshot = signal?.inference_snapshot || {};
   const market = snapshot.market_snapshot && typeof snapshot.market_snapshot === "object"
     ? snapshot.market_snapshot
-    : (signal?.market_data || {});
-  const frames = market?.strategy_context?.timeframes || signal?.market_data?.strategy_context?.timeframes || {};
+    : signalMarketData(signal);
+  const frames = market?.strategy_context?.timeframes || signalMarketData(signal)?.strategy_context?.timeframes || {};
   const klines = { ...(snapshot.klines || {}) };
   for (const [timeframe, value] of Object.entries(frames)) {
     if (!Array.isArray(klines[timeframe]) && Array.isArray(value?.klines)) klines[timeframe] = value.klines;
+  }
+  const signalKey = String(signal?.id ?? "");
+  for (const timeframe of Array.isArray(snapshot.available_timeframes) ? snapshot.available_timeframes : []) {
+    const evidence = getSignalCacheEntry(_signalEvidenceCache, inferenceEvidenceCacheKey(signalKey, timeframe, snapshot.id));
+    if (evidence && !Array.isArray(klines[timeframe])) {
+      klines[timeframe] = Array.isArray(evidence.klines) ? evidence.klines : [];
+    }
   }
   return { snapshot, market, frames, klines };
 }
@@ -7738,6 +7783,68 @@ function normalizeInferenceRates(rows) {
   return [...unique.values()].sort((a, b) => a.time - b.time).slice(-500);
 }
 
+function legacyInferenceEvidence(signal, timeframe) {
+  const context = inferenceSnapshotContext(signal);
+  const rows = context.klines?.[timeframe];
+  return Array.isArray(rows) && rows.length ? { timeframe, klines: rows.slice(-500), legacy:true } : null;
+}
+
+function inferenceEvidenceFor(signal, timeframe) {
+  const normalized = String(timeframe || "").trim().toUpperCase();
+  const legacy = legacyInferenceEvidence(signal, normalized);
+  if (legacy) return legacy;
+  return getSignalCacheEntry(_signalEvidenceCache, inferenceEvidenceCacheKey(signal?.id, normalized, signal?.inference_snapshot?.id)) || null;
+}
+
+async function ensureInferenceEvidence(signal, timeframe, renderVersion) {
+  const normalized = String(timeframe || "").trim().toUpperCase();
+  const signalId = Number(signal?.id);
+  if (!signalId || !normalized) return null;
+  const existing = inferenceEvidenceFor(signal, normalized);
+  if (existing) return existing;
+  const expectedSnapshotId = Number(signal?.inference_snapshot?.id) || null;
+  const key = inferenceEvidenceCacheKey(signalId, normalized, expectedSnapshotId);
+  if (_signalEvidenceFlights.has(key)) return _signalEvidenceFlights.get(key);
+  const flight = wsApi("signal_evidence", {
+    signal_id: signalId, timeframe: normalized, ...(expectedSnapshotId ? { snapshot_id: expectedSnapshotId } : {}),
+  })
+    .then(data => {
+      if (data?.status !== "success") throw new Error(data?.message || data?.code || "signal_evidence_failed");
+      const evidence = data.evidence || data;
+      if (!Array.isArray(evidence?.klines)) throw new Error("signal_evidence_empty");
+      if (expectedSnapshotId && Number(evidence.id || evidence.snapshot_id) !== expectedSnapshotId) {
+        throw new Error("snapshot_mismatch");
+      }
+      const cachedEvidence = setSignalCacheEntry(
+        _signalEvidenceCache, key, { ...evidence, timeframe: normalized, klines: evidence.klines.slice(-500) },
+        SIGNAL_EVIDENCE_CACHE_LIMIT,
+      );
+      if (
+        String(state.selectedSignal?.id ?? "") === String(signalId)
+        && state.inferenceChartTimeframe === normalized
+        && $("analysisResult")?.dataset.signalId === String(signalId)
+        && $("analysisResult")?.dataset.renderVersion === String(renderVersion)
+      ) renderInferenceChart(signal, renderVersion);
+      return cachedEvidence;
+    })
+    .catch(error => {
+      if (
+        String(state.selectedSignal?.id ?? "") === String(signalId)
+        && state.inferenceChartTimeframe === normalized
+        && $("analysisResult")?.dataset.signalId === String(signalId)
+        && $("analysisResult")?.dataset.renderVersion === String(renderVersion)
+      ) {
+        const host = $("inferenceKlineChart");
+        if (host) host.innerHTML = '<div class="inference-chart-error">当前周期证据暂时读取失败，文字详情仍可查看。</div>';
+      }
+      console.warn("[Inference] evidence load failed:", error?.message || error);
+      return null;
+    })
+    .finally(() => _signalEvidenceFlights.delete(key));
+  _signalEvidenceFlights.set(key, flight);
+  return flight;
+}
+
 function chanSummaryForTimeframe(context, timeframe) {
   return context.frames?.[timeframe]?.summary?.chan
     || context.market?.strategy_context?.timeframes?.[timeframe]?.summary?.chan
@@ -7763,7 +7870,10 @@ function availableInferenceTimeframes(klines) {
 
 function inferenceChartShell(signal) {
   const context = inferenceSnapshotContext(signal);
-  const available = availableInferenceTimeframes(context.klines);
+  const snapshotAvailable = Array.isArray(context.snapshot?.available_timeframes)
+    ? context.snapshot.available_timeframes.map(item => String(item || "").toUpperCase()).filter(Boolean)
+    : [];
+  const available = [...new Set([...snapshotAvailable, ...availableInferenceTimeframes(context.klines)])];
   if (!available.length) {
     return `<section class="inference-chart-panel is-empty" aria-labelledby="inferenceChartTitle">
       <div class="inference-chart-empty"><i data-lucide="candlestick-chart" size="20"></i><div><strong id="inferenceChartTitle">K 线与结构证据</strong><span>本次推理没有保存可视化 K 线，无法还原当时行情。</span></div></div>
@@ -7782,8 +7892,10 @@ function inferenceChartShell(signal) {
     : "推理时行情";
   const visibleCount = Array.isArray(context.klines[state.inferenceChartTimeframe])
     ? context.klines[state.inferenceChartTimeframe].length
-    : 0;
-  const evidenceLabel = snapshotStatus === "incomplete" ? `保留最近 ${visibleCount} 根` : `${visibleCount} 根证据完整`;
+    : Number(context.snapshot?.timeframe_counts?.[state.inferenceChartTimeframe] || 0);
+  const evidenceLabel = visibleCount
+    ? (snapshotStatus === "incomplete" ? `保留最近 ${Math.min(visibleCount, 500)} 根` : `${Math.min(visibleCount, 500)} 根证据完整`)
+    : "正在读取当前周期证据";
   const layerButtons = [
     ["segments", "线段"], ["centers", "中枢"], ["divergence", "背驰"], ["entries", "买卖点"], ["levels", "执行价位"],
   ].map(([key, label]) => `<button type="button" class="inference-layer-btn ${state.inferenceChartLayers[key] ? "active" : ""}" data-inference-layer="${key}" aria-pressed="${state.inferenceChartLayers[key]}">${label}</button>`).join("");
@@ -7853,6 +7965,33 @@ function inferenceChartTickLabel(seconds) {
   return full === "--" ? "--" : full.slice(5);
 }
 
+function bindInferenceChartControls(signal, renderVersion) {
+  document.querySelectorAll("[data-inference-timeframe]").forEach(button => { button.onclick = () => {
+    state.inferenceChartTimeframe = button.dataset.inferenceTimeframe;
+    document.querySelectorAll("[data-inference-timeframe]").forEach(item => {
+      item.classList.toggle("active", item === button);
+      item.setAttribute("aria-selected", String(item === button));
+    });
+    renderInferenceChart(signal, renderVersion);
+  }});
+  document.querySelectorAll("[data-inference-layer]").forEach(button => { button.onclick = () => {
+    const layer = button.dataset.inferenceLayer;
+    state.inferenceChartLayers[layer] = !state.inferenceChartLayers[layer];
+    button.classList.toggle("active", state.inferenceChartLayers[layer]);
+    button.setAttribute("aria-pressed", String(state.inferenceChartLayers[layer]));
+    renderInferenceChart(signal, renderVersion);
+  }});
+  const fullscreenButton = $("inferenceChartFullscreen");
+  if (fullscreenButton) fullscreenButton.onclick = async () => {
+    const panel = $("inferenceChartPanel");
+    if (!panel) return;
+    try {
+      if (document.fullscreenElement === panel) await document.exitFullscreen();
+      else await panel.requestFullscreen();
+    } catch (error) { toast(`无法进入全屏：${error.message}`, "warning"); }
+  };
+}
+
 function renderInferenceChart(signal, renderVersion) {
   const resultHost = $("analysisResult");
   const signalKey = String(signal?.id ?? "");
@@ -7863,7 +8002,8 @@ function renderInferenceChart(signal, renderVersion) {
   ) return;
   destroyInferenceChart();
   const container = $("inferenceKlineChart");
-  if (!container || typeof LightweightCharts === "undefined") return;
+  if (!container) return;
+  bindInferenceChartControls(signal, renderVersion);
   if (container.offsetWidth === 0 || container.offsetHeight === 0) {
     _inferenceChartResizeObserver = new ResizeObserver(() => {
       if (container.offsetWidth > 0 && container.offsetHeight > 0) renderInferenceChart(signal, renderVersion);
@@ -7875,7 +8015,21 @@ function renderInferenceChart(signal, renderVersion) {
   const timeframe = state.inferenceChartTimeframe;
   const candles = normalizeInferenceRates(context.klines?.[timeframe]);
   if (!candles.length) {
-    container.innerHTML = '<div class="inference-chart-error">K 线数据格式无效，无法绘制。</div>';
+    const available = Array.isArray(context.snapshot?.available_timeframes)
+      ? context.snapshot.available_timeframes : [];
+    if (available.includes(timeframe)) {
+      container.innerHTML = '<div class="inference-chart-loading">正在读取当前周期冻结证据…</div>';
+      ensureInferenceEvidence(signal, timeframe, renderVersion);
+    } else {
+      container.innerHTML = '<div class="inference-chart-error">K 线数据格式无效，无法绘制。</div>';
+    }
+    return;
+  }
+  if (typeof LightweightCharts === "undefined") return;
+  if (!inferenceEvidenceFor(signal, timeframe)) {
+    // A legacy embedded snapshot may have supplied the rows above. New
+    // lightweight details fetch only the selected period on demand.
+    ensureInferenceEvidence(signal, timeframe, renderVersion);
     return;
   }
   const chart = LightweightCharts.createChart(container, {
@@ -7978,27 +8132,6 @@ function renderInferenceChart(signal, renderVersion) {
   });
   _inferenceChartResizeObserver.observe(container);
 
-  document.querySelectorAll("[data-inference-timeframe]").forEach(button => { button.onclick = () => {
-    state.inferenceChartTimeframe = button.dataset.inferenceTimeframe;
-    document.querySelectorAll("[data-inference-timeframe]").forEach(item => { item.classList.toggle("active", item === button); item.setAttribute("aria-selected", String(item === button)); });
-    renderInferenceChart(signal, renderVersion);
-  }});
-  document.querySelectorAll("[data-inference-layer]").forEach(button => { button.onclick = () => {
-    const layer = button.dataset.inferenceLayer;
-    state.inferenceChartLayers[layer] = !state.inferenceChartLayers[layer];
-    button.classList.toggle("active", state.inferenceChartLayers[layer]);
-    button.setAttribute("aria-pressed", String(state.inferenceChartLayers[layer]));
-    renderInferenceChart(signal, renderVersion);
-  }});
-  const fullscreenButton = $("inferenceChartFullscreen");
-  if (fullscreenButton) fullscreenButton.onclick = async () => {
-    const panel = $("inferenceChartPanel");
-    if (!panel) return;
-    try {
-      if (document.fullscreenElement === panel) await document.exitFullscreen();
-      else await panel.requestFullscreen();
-    } catch (error) { toast(`无法进入全屏：${error.message}`, "warning"); }
-  };
 }
 
 function renderSignal(signal, elapsedMs = null, options = {}) {
@@ -8031,7 +8164,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   if (typeof executionPayload === "string") { try { executionPayload = JSON.parse(executionPayload); } catch { executionPayload = {}; } }
   const finalVolume = executionPayload?.risk?.approved_order?.volume ?? executionPayload?.approved_order?.volume ?? null;
   const takeProfitSelection = signalTakeProfitSelection(signal);
-  const rawMarket = signal.market_data || {};
+  const rawMarket = signalMarketData(signal);
   // CLOSE signals: market data nested in timeframes.X.summary
   const closeSummary = rawMarket.timeframes ? Object.values(rawMarket.timeframes)[0]?.summary || {} : {};
   const market = dir === "close" ? { ...closeSummary, latest_price: rawMarket.latest_price ?? closeSummary.latest_price } : rawMarket;
@@ -9192,6 +9325,60 @@ let _signalsListRequestVersion = 0;
 let _signalTableRequestVersion = 0;
 let _analysisHistoryLoadPromise = null;
 
+function signalSnapshotRevision(signal) {
+  const snapshot = signal?.inference_snapshot;
+  if (!snapshot) return "none";
+  return [snapshot.id, snapshot.revision, snapshot.content_hash, snapshot.created_at].map(value => String(value ?? "")).join(":");
+}
+
+function mergeSignalListSummary(detail, summary) {
+  if (!detail) return summary || null;
+  if (!summary) return detail;
+  const merged = { ...detail };
+  // The list is the freshest source for execution/pending state. Keep the
+  // detail-only snapshot and derived action fields when they are absent there.
+  const detailOnlyFields = new Set([
+    "market_data", "inference_snapshot", "pending_actions", "management_actions", "detail_loaded",
+  ]);
+  for (const [key, value] of Object.entries(summary)) {
+    if (value !== undefined && !detailOnlyFields.has(key)) merged[key] = value;
+  }
+  return merged;
+}
+
+function clearSignalEvidence(signalId) {
+  const prefix = `${String(signalId)}:`;
+  for (const key of _signalEvidenceCache.keys()) {
+    if (key.startsWith(prefix)) _signalEvidenceCache.delete(key);
+  }
+}
+
+function mergeSignalDetail(signal, detail) {
+  const previous = getSignalCacheEntry(_signalDetailCache, String(detail?.id ?? signal?.id)) || signal;
+  if (previous && signalSnapshotRevision(previous) !== signalSnapshotRevision(detail)) {
+    clearSignalEvidence(detail?.id ?? signal?.id);
+  }
+  const merged = { ...(signal || {}), ...(detail || {}), detail_loaded: true };
+  setSignalCacheEntry(_signalDetailCache, String(merged.id), merged, SIGNAL_DETAIL_CACHE_LIMIT);
+  return merged;
+}
+
+async function loadSignalDetail(signalId, { forceRefresh = false } = {}) {
+  const key = String(signalId);
+  if (_signalDetailFlights.has(key)) return _signalDetailFlights.get(key);
+  if (!forceRefresh) {
+    const cached = getSignalCacheEntry(_signalDetailCache, key);
+    if (cached) return cached;
+  }
+  const flight = wsApi("signal_detail", { signal_id: Number(signalId) })
+    .then(data => data?.status === "success" && data.signal ? mergeSignalDetail(
+      getSignalCacheEntry(_signalDetailCache, key) || state.signals.find(item => String(item.id) === key), data.signal,
+    ) : null)
+    .finally(() => _signalDetailFlights.delete(key));
+  _signalDetailFlights.set(key, flight);
+  return flight;
+}
+
 // The dashboard deliberately keeps only a one-row signal summary.  Entering
 // the analyst detail view is the demand boundary at which the first history
 // page is fetched.  Keep the in-flight promise shared so a ticket click and a
@@ -9233,8 +9420,9 @@ async function openAnalysisFromHistory(signalId, options = {}) {
   const requestedId = String(signalId);
   const requestVersion = ++_analysisDetailRequestVersion;
   const navigate = options.navigate !== false;
-  const forceRefresh = options.forceRefresh ?? navigate;
-  let signal = state.signals.find((item) => String(item.id) === requestedId);
+  const forceRefresh = options.forceRefresh === true;
+  const listSummary = state.signals.find((item) => String(item.id) === requestedId);
+  let signal = mergeSignalListSummary(getSignalCacheEntry(_signalDetailCache, requestedId), listSummary);
 
   if (!options.preserveSelectionMode) setAnalysisSelectionIntent(signalId, options);
 
@@ -9248,18 +9436,23 @@ async function openAnalysisFromHistory(signalId, options = {}) {
     try {
       await ensureAnalysisHistoryPageLoaded();
       if (requestVersion !== _analysisDetailRequestVersion) return;
-      signal = state.signals.find(item => String(item.id) === requestedId) || signal;
+      signal = mergeSignalListSummary(
+        signal, state.signals.find(item => String(item.id) === requestedId),
+      );
     } catch (error) {
       console.error('[Inference] signal history load failed:', error);
     }
   }
 
   if (!signal?.detail_loaded || forceRefresh) {
-    renderAnalysisDetailLoading(signalId);
+    if (!signal?.detail_loaded) renderAnalysisDetailLoading(signalId);
     try {
-      const data = await wsApi("signal_detail", { signal_id: Number(signalId) });
-      if (data.status === 'success' && data.signal) {
-        signal = { ...(signal || {}), ...data.signal, detail_loaded: true };
+      // loadSignalDetail deduplicates the underlying wsApi("signal_detail", …) request.
+      const loaded = await loadSignalDetail(signalId, { forceRefresh });
+      if (loaded) {
+        signal = mergeSignalListSummary(
+          loaded, state.signals.find(item => String(item.id) === requestedId),
+        );
         const index = state.signals.findIndex(item => String(item.id) === requestedId);
         if (index >= 0) state.signals[index] = signal;
         else state.signals.unshift(signal);

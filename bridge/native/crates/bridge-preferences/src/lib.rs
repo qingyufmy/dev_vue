@@ -186,6 +186,67 @@ impl BridgePreferencesStore {
         })
     }
 
+    /// Atomically changes the primary platform and its terminal binding.
+    ///
+    /// The other platform's binding is intentionally left untouched so a
+    /// switch can be reversed without another discovery round. Both MT4 and
+    /// MT5 bindings must carry their matching terminal path when they replace
+    /// a different binding; otherwise an existing path for the same id is
+    /// preserved.
+    pub fn save_primary_account(
+        &self,
+        platform: &str,
+        terminal_instance_id: &str,
+        terminal_path: Option<&Path>,
+    ) -> Result<(), PreferencesError> {
+        let platform = normalize_platform(Some(platform))
+            .ok_or_else(|| PreferencesError::new("bridge_preferences_platform_invalid"))?;
+        let id = normalize_terminal_id(Some(terminal_instance_id), &format!("{platform}_"))
+            .ok_or_else(|| PreferencesError::new("bridge_preferences_terminal_invalid"))?;
+        let path = terminal_path
+            .map(|value| {
+                value
+                    .to_str()
+                    .and_then(|text| {
+                        if platform == "mt4" {
+                            normalize_absolute_path(Some(text))
+                        } else {
+                            normalize_mt5_path(Some(text))
+                        }
+                    })
+                    .ok_or_else(|| {
+                        PreferencesError::new("bridge_preferences_terminal_path_invalid")
+                    })
+            })
+            .transpose()?;
+        let mut preferences = self.load();
+        if platform == "mt4" {
+            let same_binding = preferences.mt4_terminal_instance_id.as_deref() == Some(&id);
+            if path.is_none() && (!same_binding || preferences.mt4_terminal_path.is_none()) {
+                return Err(PreferencesError::new(
+                    "bridge_preferences_terminal_path_invalid",
+                ));
+            }
+            preferences.mt4_terminal_instance_id = Some(id);
+            if let Some(path) = path {
+                preferences.mt4_terminal_path = Some(path);
+            }
+        } else {
+            let same_binding = preferences.mt5_terminal_instance_id.as_deref() == Some(&id);
+            if path.is_none() && (!same_binding || preferences.mt5_terminal_path.is_none()) {
+                return Err(PreferencesError::new(
+                    "bridge_preferences_terminal_path_invalid",
+                ));
+            }
+            preferences.mt5_terminal_instance_id = Some(id);
+            if let Some(path) = path {
+                preferences.mt5_terminal_path = Some(path);
+            }
+        }
+        preferences.platform = Some(platform);
+        self.write(&preferences.normalize())
+    }
+
     pub fn save_observer_enabled(&self, enabled: bool) -> Result<(), PreferencesError> {
         self.update(|preferences| preferences.observer_enabled = enabled)
     }
@@ -526,6 +587,74 @@ mod tests {
                     .file_name()
                     .to_string_lossy()
                     .starts_with(&format!(".{file_name}.{}.", std::process::id())))
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn primary_account_switch_updates_platform_and_one_binding_but_preserves_the_other() {
+        let path = test_path("primary-account-switch");
+        let store = BridgePreferencesStore::new(&path).expect("store");
+        store
+            .save_terminal_installation("mt4", "mt4_0123456789abcdef01234567", r"C:\MT4\one")
+            .expect("save MT4");
+        store
+            .save_terminal_installation(
+                "mt5",
+                "mt5_89abcdef0123456701234567",
+                r"C:\MT5\one\terminal64.exe",
+            )
+            .expect("save MT5");
+
+        store
+            .save_primary_account(
+                "mt4",
+                "mt4_fedcba9876543210fedcba98",
+                Some(Path::new(r"C:\MT4\two")),
+            )
+            .expect("switch primary");
+        let loaded = store.load();
+        assert_eq!(loaded.platform.as_deref(), Some("mt4"));
+        assert_eq!(
+            loaded.mt4_terminal_instance_id.as_deref(),
+            Some("mt4_fedcba9876543210fedcba98")
+        );
+        assert_eq!(loaded.mt4_terminal_path.as_deref(), Some(r"C:\MT4\two"));
+        assert_eq!(
+            loaded.mt5_terminal_instance_id.as_deref(),
+            Some("mt5_89abcdef0123456701234567")
+        );
+        assert_eq!(
+            loaded.mt5_terminal_path.as_deref(),
+            Some(r"C:\MT5\one\terminal64.exe")
+        );
+        assert!(
+            store
+                .save_primary_account("mt4", "mt4_0123456789abcdef01234567", None)
+                .is_err()
+        );
+
+        store
+            .save_primary_account(
+                "mt5",
+                "mt5_76543210fedcba9876543210",
+                Some(Path::new(r"C:\MT5\two\terminal64.exe")),
+            )
+            .expect("switch MT5 primary");
+        let loaded = store.load();
+        assert_eq!(loaded.platform.as_deref(), Some("mt5"));
+        assert_eq!(
+            loaded.mt5_terminal_instance_id.as_deref(),
+            Some("mt5_76543210fedcba9876543210")
+        );
+        assert_eq!(
+            loaded.mt5_terminal_path.as_deref(),
+            Some(r"C:\MT5\two\terminal64.exe")
+        );
+        assert!(
+            store
+                .save_primary_account("mt5", "mt5_0123456789abcdef01234567", None)
+                .is_err()
         );
         let _ = fs::remove_file(path);
     }

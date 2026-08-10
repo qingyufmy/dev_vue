@@ -52,6 +52,10 @@ pub enum LocalControlAction {
     SelectTerminal {
         terminal_instance_id: String,
     },
+    SwitchPrimaryAccount {
+        platform: String,
+        terminal_instance_id: String,
+    },
     Redetect,
     InstallMt4Ea,
     ObserverCreate {
@@ -103,6 +107,12 @@ impl LocalControlAction {
             Self::SelectTerminal {
                 terminal_instance_id,
             } if !valid_identifier(terminal_instance_id, 128) => {
+                Err("bridge_local_control_request_invalid")
+            }
+            Self::SwitchPrimaryAccount {
+                platform,
+                terminal_instance_id,
+            } if !valid_platform(platform) || !valid_identifier(terminal_instance_id, 128) => {
                 Err("bridge_local_control_request_invalid")
             }
             Self::ObserverCreate { observer } | Self::ObserverUpdate { observer } => {
@@ -728,7 +738,46 @@ mod tests {
             },
         };
         let payload = serde_json::to_vec(&request).expect("serialize request");
-        assert_eq!(decode_request(&payload), Ok(request));
+        assert_eq!(decode_request(&payload), Ok(request.clone()));
+    }
+
+    #[test]
+    fn switch_primary_account_round_trips_and_validates_the_atomic_tuple() {
+        let request = LocalControlRequest {
+            schema_version: LOCAL_CONTROL_SCHEMA_VERSION,
+            request_id: "switch-primary".to_owned(),
+            profile_id: DEFAULT_PROFILE_ID.to_owned(),
+            action: LocalControlAction::SwitchPrimaryAccount {
+                platform: "mt4".to_owned(),
+                terminal_instance_id: "mt4_demo".to_owned(),
+            },
+        };
+        let payload = serde_json::to_vec(&request).expect("serialize switch request");
+        assert!(String::from_utf8_lossy(&payload).contains("switch_primary_account"));
+        assert_eq!(decode_request(&payload), Ok(request.clone()));
+
+        let invalid_platform = LocalControlRequest {
+            action: LocalControlAction::SwitchPrimaryAccount {
+                platform: "mt6".to_owned(),
+                terminal_instance_id: "mt4_demo".to_owned(),
+            },
+            ..request.clone()
+        };
+        assert_eq!(
+            invalid_platform.validate(),
+            Err("bridge_local_control_request_invalid")
+        );
+        let invalid_id = LocalControlRequest {
+            action: LocalControlAction::SwitchPrimaryAccount {
+                platform: "mt4".to_owned(),
+                terminal_instance_id: "bad id".to_owned(),
+            },
+            ..request
+        };
+        assert_eq!(
+            invalid_id.validate(),
+            Err("bridge_local_control_request_invalid")
+        );
     }
 
     #[test]

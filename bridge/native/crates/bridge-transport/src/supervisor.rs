@@ -8,9 +8,27 @@ use futures_util::future::BoxFuture;
 use std::sync::Arc;
 use tokio::time::sleep;
 
+const AUTH_RECOVERY_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn is_refresh_invalid(code: &str) -> bool {
+    matches!(code, "bridge_refresh_invalid" | "bridge_refresh_revoked")
+}
+
+fn is_session_revoked(code: &str) -> bool {
+    code == "bridge_session_revoked"
+}
+
 pub trait CredentialSource: Send + Sync {
     fn current(&self) -> Result<Option<String>, TransportError>;
     fn changed(&self) -> BoxFuture<'_, Result<(), TransportError>>;
+
+    /// Invalidate the credential only when the source still contains the
+    /// refresh token currently being used by the supervisor.  Core owns the
+    /// actual credential store; transport only requests this compare-and-clear
+    /// operation after an authoritative refresh-invalid/revoked response.
+    fn invalidate_current(&self, _expected_refresh_token: &str) -> Result<bool, TransportError> {
+        Ok(false)
+    }
 }
 
 pub trait SessionConnector: Send + Sync {
@@ -261,22 +279,54 @@ impl SessionSupervisor {
             };
 
             if control.revision == 0 {
-                control = tokio::select! {
+                let current = tokio::select! {
                     _ = stop.cancelled() => {
                         self.publish(machine.stop());
                         return Ok(());
                     }
-                    current = self.runtime_control.current(refresh_token) => current?,
+                    current = self.runtime_control.current(refresh_token) => current,
                     changed = self.credentials.changed() => {
                         changed?;
                         credential = self.read_credential()?;
                         continue 'supervision;
                     }
                 };
+                control = match current {
+                    Ok(control) => control,
+                    Err(error) if error.code() == "bridge_membership_required" => {
+                        self.states
+                            .transition_with_error(machine.paused(), error.code());
+                        RuntimeControlState {
+                            enabled: false,
+                            revision: 1,
+                        }
+                    }
+                    Err(error) if is_refresh_invalid(error.code()) => {
+                        credential = self
+                            .handle_refresh_failure(
+                                &mut machine,
+                                refresh_token,
+                                error.code(),
+                                &stop,
+                            )
+                            .await?;
+                        control.revision = 0;
+                        continue 'supervision;
+                    }
+                    Err(error) if is_session_revoked(error.code()) => RuntimeControlState {
+                        // A short-lived session revocation must still try the
+                        // long-lived refresh path before pairing is required.
+                        enabled: true,
+                        revision: 1,
+                    },
+                    Err(error) => return Err(error),
+                };
             }
 
             if !control.enabled {
-                self.publish(machine.paused());
+                if machine.state() != ConnectionState::Paused {
+                    self.publish(machine.paused());
+                }
                 tokio::select! {
                     _ = stop.cancelled() => {
                         self.publish(machine.stop());
@@ -288,9 +338,45 @@ impl SessionSupervisor {
                         control.revision = 0;
                     }
                     changed = self.runtime_control.changed(refresh_token, control.revision) => {
-                        control = changed?;
-                        if control.enabled {
-                            self.publish(machine.retry());
+                        match changed {
+                            Ok(next) => {
+                                control = next;
+                                if control.enabled {
+                                    self.publish(machine.retry());
+                                }
+                            }
+                            Err(error) if error.code() == "bridge_membership_required" => {
+                                if machine.state() != ConnectionState::Paused {
+                                    self.states
+                                        .transition_with_error(machine.paused(), error.code());
+                                }
+                                tokio::select! {
+                                    _ = stop.cancelled() => {
+                                        self.publish(machine.stop());
+                                        return Ok(());
+                                    }
+                                    _ = sleep(AUTH_RECOVERY_RETRY_INTERVAL) => {}
+                                }
+                            }
+                            Err(error) if is_refresh_invalid(error.code()) => {
+                                credential = self
+                                    .handle_refresh_failure(
+                                        &mut machine,
+                                        refresh_token,
+                                        error.code(),
+                                        &stop,
+                                    )
+                                    .await?;
+                                control.revision = 0;
+                            }
+                            Err(error) if is_session_revoked(error.code()) => {
+                                control = RuntimeControlState {
+                                    enabled: true,
+                                    revision: control.revision.max(1),
+                                };
+                                self.publish(machine.retry());
+                            }
+                            Err(error) => return Err(error),
                         }
                     }
                 }
@@ -303,9 +389,40 @@ impl SessionSupervisor {
                     return Ok(());
                 }
                 changed = self.runtime_control.changed(refresh_token, control.revision) => {
-                    control = changed?;
-                    if !control.enabled {
-                        self.publish(machine.paused());
+                    match changed {
+                        Ok(next) => {
+                            control = next;
+                            if !control.enabled {
+                                self.publish(machine.paused());
+                            }
+                        }
+                        Err(error) if error.code() == "bridge_membership_required" => {
+                            control = RuntimeControlState {
+                                enabled: false,
+                                revision: control.revision.max(1),
+                            };
+                            self.states
+                                .transition_with_error(machine.paused(), error.code());
+                        }
+                        Err(error) if is_refresh_invalid(error.code()) => {
+                            credential = self
+                                .handle_refresh_failure(
+                                    &mut machine,
+                                    refresh_token,
+                                    error.code(),
+                                    &stop,
+                                )
+                                .await?;
+                            control.revision = 0;
+                            continue 'supervision;
+                        }
+                        Err(error) if is_session_revoked(error.code()) => {
+                            credential = self
+                                .handle_failure(&mut machine, error.code(), &stop)
+                                .await?;
+                            continue 'supervision;
+                        }
+                        Err(error) => return Err(error),
                     }
                     continue 'supervision;
                 }
@@ -318,12 +435,49 @@ impl SessionSupervisor {
             let session = match session {
                 Ok(session) => session,
                 Err(error) => {
-                    if let Ok(current) = self.runtime_control.current(refresh_token).await {
-                        control = current;
-                        if !control.enabled {
-                            self.publish(machine.paused());
+                    if is_refresh_invalid(error.code()) {
+                        credential = self
+                            .handle_refresh_failure(
+                                &mut machine,
+                                refresh_token,
+                                error.code(),
+                                &stop,
+                            )
+                            .await?;
+                        control.revision = 0;
+                        continue 'supervision;
+                    }
+                    match self.runtime_control.current(refresh_token).await {
+                        Ok(current) => {
+                            control = current;
+                            if !control.enabled {
+                                self.publish(machine.paused());
+                                continue;
+                            }
+                        }
+                        Err(error) if error.code() == "bridge_membership_required" => {
+                            control = RuntimeControlState {
+                                enabled: false,
+                                revision: control.revision.max(1),
+                            };
+                            self.states
+                                .transition_with_error(machine.paused(), error.code());
                             continue;
                         }
+                        Err(error) if is_refresh_invalid(error.code()) => {
+                            credential = self
+                                .handle_refresh_failure(
+                                    &mut machine,
+                                    refresh_token,
+                                    error.code(),
+                                    &stop,
+                                )
+                                .await?;
+                            control.revision = 0;
+                            continue 'supervision;
+                        }
+                        Err(error) if is_session_revoked(error.code()) => {}
+                        Err(error) => return Err(error),
                     }
                     credential = self
                         .handle_failure(&mut machine, error.code(), &stop)
@@ -360,12 +514,50 @@ impl SessionSupervisor {
                         continue 'supervision;
                     }
                     changed = self.runtime_control.changed(refresh_token, control.revision) => {
-                        control = changed?;
-                        if !control.enabled {
-                            session_stop.cancel();
-                            let _ = session_run.await;
-                            self.publish(machine.paused());
-                            continue 'supervision;
+                        match changed {
+                            Ok(next) => {
+                                control = next;
+                                if !control.enabled {
+                                    session_stop.cancel();
+                                    let _ = session_run.await;
+                                    self.publish(machine.paused());
+                                    continue 'supervision;
+                                }
+                            }
+                            Err(error) if error.code() == "bridge_membership_required" => {
+                                session_stop.cancel();
+                                let _ = session_run.await;
+                                control = RuntimeControlState {
+                                    enabled: false,
+                                    revision: control.revision.max(1),
+                                };
+                                self.states
+                                    .transition_with_error(machine.paused(), error.code());
+                                continue 'supervision;
+                            }
+                            Err(error) if is_refresh_invalid(error.code()) => {
+                                session_stop.cancel();
+                                let _ = session_run.await;
+                                credential = self
+                                    .handle_refresh_failure(
+                                        &mut machine,
+                                        refresh_token,
+                                        error.code(),
+                                        &stop,
+                                    )
+                                    .await?;
+                                control.revision = 0;
+                                continue 'supervision;
+                            }
+                            Err(error) if is_session_revoked(error.code()) => {
+                                session_stop.cancel();
+                                let _ = session_run.await;
+                                credential = self
+                                    .handle_failure(&mut machine, error.code(), &stop)
+                                    .await?;
+                                continue 'supervision;
+                            }
+                            Err(error) => return Err(error),
                         }
                     }
                 }
@@ -373,17 +565,91 @@ impl SessionSupervisor {
             let error = outcome
                 .err()
                 .unwrap_or_else(|| TransportError::new("bridge_session_loop_stopped"));
-            if let Ok(current) = self.runtime_control.current(refresh_token).await {
-                control = current;
-                if !control.enabled {
-                    self.publish(machine.paused());
+            if is_refresh_invalid(error.code()) {
+                credential = self
+                    .handle_refresh_failure(&mut machine, refresh_token, error.code(), &stop)
+                    .await?;
+                control.revision = 0;
+                continue 'supervision;
+            }
+            match self.runtime_control.current(refresh_token).await {
+                Ok(current) => {
+                    control = current;
+                    if !control.enabled {
+                        self.publish(machine.paused());
+                        continue;
+                    }
+                }
+                Err(error) if error.code() == "bridge_membership_required" => {
+                    control = RuntimeControlState {
+                        enabled: false,
+                        revision: control.revision.max(1),
+                    };
+                    self.states
+                        .transition_with_error(machine.paused(), error.code());
                     continue;
                 }
+                Err(error) if is_refresh_invalid(error.code()) => {
+                    credential = self
+                        .handle_refresh_failure(&mut machine, refresh_token, error.code(), &stop)
+                        .await?;
+                    control.revision = 0;
+                    continue 'supervision;
+                }
+                Err(error) if is_session_revoked(error.code()) => {}
+                Err(error) => return Err(error),
             }
             credential = self
                 .handle_failure(&mut machine, error.code(), &stop)
                 .await?;
         }
+    }
+
+    async fn handle_refresh_failure(
+        &self,
+        machine: &mut SessionStateMachine,
+        expected_refresh_token: &str,
+        error_code: &str,
+        stop: &SessionCancellation,
+    ) -> Result<Option<String>, TransportError> {
+        // CredentialSource is Core's single writer boundary.  A clear failure
+        // must not turn an authoritative auth error into a process-fatal
+        // result, but it also must remain visible instead of being mistaken
+        // for a successful invalidation.  Keep the process alive in pairing,
+        // then retry after a stop-aware bounded delay.
+        if let Err(clear_error) = self.credentials.invalidate_current(expected_refresh_token) {
+            let transition = machine.failed(error_code);
+            self.states
+                .transition_with_error(transition, clear_error.code());
+            if let Ok(Some(current)) = self.read_credential()
+                && current != expected_refresh_token
+            {
+                self.publish(machine.start(true));
+                return Ok(Some(current));
+            }
+            tokio::select! {
+                _ = stop.cancelled() => return self.read_credential(),
+                changed = self.credentials.changed() => changed?,
+                _ = sleep(AUTH_RECOVERY_RETRY_INTERVAL) => {},
+            }
+            let current = self.read_credential()?;
+            if let Some(current) = current.as_deref()
+                && current != expected_refresh_token
+            {
+                self.publish(machine.start(true));
+            } else if current.is_some() {
+                self.states
+                    .transition_with_error(machine.retry(), clear_error.code());
+            }
+            return Ok(current);
+        }
+        if let Ok(Some(current)) = self.read_credential()
+            && current != expected_refresh_token
+        {
+            self.publish(machine.start(true));
+            return Ok(Some(current));
+        }
+        self.handle_failure(machine, error_code, stop).await
     }
 
     async fn handle_failure(
@@ -447,7 +713,7 @@ mod tests {
     };
     use bridge_store::{OutboxRecord, StoreError};
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::sync::watch;
     use tokio::time::timeout;
@@ -455,6 +721,8 @@ mod tests {
     struct CredentialSlot {
         value: Mutex<Option<String>>,
         revision: watch::Sender<u64>,
+        invalidations: AtomicUsize,
+        invalidate_error: AtomicBool,
     }
 
     struct RuntimeControlSlot {
@@ -502,18 +770,105 @@ mod tests {
         }
     }
 
+    struct CurrentErrorRuntimeControl {
+        code: &'static str,
+    }
+
+    impl RuntimeControlSource for CurrentErrorRuntimeControl {
+        fn current(
+            &self,
+            _refresh_token: &str,
+        ) -> BoxFuture<'_, Result<RuntimeControlState, TransportError>> {
+            let code = self.code;
+            Box::pin(async move { Err(TransportError::new(code)) })
+        }
+
+        fn changed(
+            &self,
+            _refresh_token: &str,
+            _after_revision: u64,
+        ) -> BoxFuture<'_, Result<RuntimeControlState, TransportError>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    struct MembershipRecoveryControl {
+        state: watch::Sender<RuntimeControlState>,
+        current_error: AtomicBool,
+    }
+
+    impl MembershipRecoveryControl {
+        fn new() -> Self {
+            let (state, _) = watch::channel(RuntimeControlState {
+                enabled: false,
+                revision: 1,
+            });
+            Self {
+                state,
+                current_error: AtomicBool::new(true),
+            }
+        }
+
+        fn recover(&self) {
+            self.state.send_replace(RuntimeControlState {
+                enabled: true,
+                revision: 2,
+            });
+        }
+    }
+
+    impl RuntimeControlSource for MembershipRecoveryControl {
+        fn current(
+            &self,
+            _refresh_token: &str,
+        ) -> BoxFuture<'_, Result<RuntimeControlState, TransportError>> {
+            if self.current_error.swap(false, Ordering::SeqCst) {
+                Box::pin(async { Err(TransportError::new("bridge_membership_required")) })
+            } else {
+                let state = *self.state.borrow();
+                Box::pin(async move { Ok(state) })
+            }
+        }
+
+        fn changed(
+            &self,
+            _refresh_token: &str,
+            after_revision: u64,
+        ) -> BoxFuture<'_, Result<RuntimeControlState, TransportError>> {
+            let mut receiver = self.state.subscribe();
+            Box::pin(async move {
+                loop {
+                    let state = *receiver.borrow();
+                    if state.revision != after_revision {
+                        return Ok(state);
+                    }
+                    receiver
+                        .changed()
+                        .await
+                        .map_err(|_| TransportError::new("bridge_runtime_control_watch_closed"))?;
+                }
+            })
+        }
+    }
+
     impl CredentialSlot {
         fn new(value: Option<String>) -> Self {
             let (revision, _) = watch::channel(0);
             Self {
                 value: Mutex::new(value),
                 revision,
+                invalidations: AtomicUsize::new(0),
+                invalidate_error: AtomicBool::new(false),
             }
         }
 
         fn set(&self, value: Option<String>) {
             *self.value.lock().expect("credential") = value;
             self.revision.send_modify(|revision| *revision += 1);
+        }
+
+        fn fail_invalidation(&self) {
+            self.invalidate_error.store(true, Ordering::SeqCst);
         }
     }
 
@@ -530,6 +885,17 @@ mod tests {
                     .await
                     .map_err(|_| TransportError::new("bridge_credential_watch_closed"))
             })
+        }
+
+        fn invalidate_current(
+            &self,
+            _expected_refresh_token: &str,
+        ) -> Result<bool, TransportError> {
+            self.invalidations.fetch_add(1, Ordering::SeqCst);
+            if self.invalidate_error.load(Ordering::SeqCst) {
+                return Err(TransportError::new("bridge_credential_clear_failed"));
+            }
+            Ok(false)
         }
     }
 
@@ -556,6 +922,29 @@ mod tests {
         connects: AtomicUsize,
         closes: Arc<AtomicUsize>,
         starts: Arc<AtomicUsize>,
+    }
+
+    struct RevokingConnector {
+        calls: AtomicUsize,
+        closes: Arc<AtomicUsize>,
+        starts: Arc<AtomicUsize>,
+    }
+
+    impl SessionConnector for RevokingConnector {
+        fn connect(
+            &self,
+            _refresh_token: &str,
+        ) -> BoxFuture<'_, Result<Box<dyn SessionChannel>, TransportError>> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 1 {
+                return Box::pin(async { Err(TransportError::new("bridge_session_revoked")) });
+            }
+            let closes = Arc::clone(&self.closes);
+            let starts = Arc::clone(&self.starts);
+            Box::pin(async move {
+                Ok(Box::new(BlockingChannel { closes, starts }) as Box<dyn SessionChannel>)
+            })
+        }
     }
 
     #[derive(Default)]
@@ -627,11 +1016,20 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct CapturingStates(Mutex<Vec<ConnectionState>>);
+    struct CapturingStates(Mutex<Vec<ConnectionState>>, Mutex<Vec<Option<String>>>);
 
     impl SupervisorStateSink for CapturingStates {
         fn transition(&self, transition: SessionTransition) {
             self.0.lock().expect("states").push(transition.state);
+            self.1.lock().expect("error codes").push(None);
+        }
+
+        fn transition_with_error(&self, transition: SessionTransition, error_code: &str) {
+            self.0.lock().expect("states").push(transition.state);
+            self.1
+                .lock()
+                .expect("error codes")
+                .push(Some(error_code.to_owned()));
         }
     }
 
@@ -901,6 +1299,209 @@ mod tests {
             .expect("prompt shutdown")
             .expect("join")
             .expect("stop");
+    }
+
+    #[tokio::test]
+    async fn runtime_control_refresh_revoked_enters_pairing_without_failing_supervisor() {
+        let stop = SessionCancellation::default();
+        let credentials = Arc::new(CredentialSlot::new(Some("refresh_fixture".to_owned())));
+        let connector = Arc::new(PendingConnector::default());
+        let states = Arc::new(CapturingStates::default());
+        let supervisor = SessionSupervisor::new(
+            credentials.clone(),
+            connector.clone(),
+            unused_runtime(),
+            states.clone(),
+        )
+        .with_runtime_control(Arc::new(CurrentErrorRuntimeControl {
+            code: "bridge_refresh_revoked",
+        }));
+        let task = tokio::spawn({
+            let stop = stop.clone();
+            async move { supervisor.run(stop).await }
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while !states
+                .0
+                .lock()
+                .expect("states")
+                .contains(&ConnectionState::PairingRequired)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pairing required");
+        assert_eq!(connector.0.load(Ordering::SeqCst), 0);
+        assert_eq!(credentials.invalidations.load(Ordering::SeqCst), 1);
+
+        // The Core owner may clear the stale token after observing PairingRequired;
+        // the supervisor remains alive and can be stopped cleanly afterwards.
+        credentials.set(None);
+        stop.cancel();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("prompt shutdown")
+            .expect("join")
+            .expect("auth errors are connection-level");
+        assert_eq!(
+            states.0.lock().expect("states").last().copied(),
+            Some(ConnectionState::Stopped)
+        );
+    }
+
+    #[tokio::test]
+    async fn credential_clear_failure_is_visible_but_stop_remains_prompt() {
+        let stop = SessionCancellation::default();
+        let credentials = Arc::new(CredentialSlot::new(Some("refresh_fixture".to_owned())));
+        credentials.fail_invalidation();
+        let connector = Arc::new(PendingConnector::default());
+        let states = Arc::new(CapturingStates::default());
+        let supervisor =
+            SessionSupervisor::new(credentials, connector, unused_runtime(), states.clone())
+                .with_runtime_control(Arc::new(CurrentErrorRuntimeControl {
+                    code: "bridge_refresh_revoked",
+                }));
+        let task = tokio::spawn({
+            let stop = stop.clone();
+            async move { supervisor.run(stop).await }
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while !states
+                .0
+                .lock()
+                .expect("states")
+                .contains(&ConnectionState::PairingRequired)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pairing required");
+        assert_eq!(
+            states
+                .1
+                .lock()
+                .expect("error codes")
+                .last()
+                .and_then(Option::as_deref),
+            Some("bridge_credential_clear_failed")
+        );
+        stop.cancel();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("clear failure must not block stop")
+            .expect("join")
+            .expect("clear failure remains connection-level");
+    }
+
+    #[tokio::test]
+    async fn membership_required_pauses_and_recovers_without_repairing_credentials() {
+        let stop = SessionCancellation::default();
+        let credentials = Arc::new(CredentialSlot::new(Some("refresh_fixture".to_owned())));
+        let connector = Arc::new(PendingConnector::default());
+        let states = Arc::new(CapturingStates::default());
+        let control = Arc::new(MembershipRecoveryControl::new());
+        let supervisor = SessionSupervisor::new(
+            credentials,
+            connector.clone(),
+            unused_runtime(),
+            states.clone(),
+        )
+        .with_runtime_control(control.clone());
+        let task = tokio::spawn({
+            let stop = stop.clone();
+            async move { supervisor.run(stop).await }
+        });
+
+        timeout(Duration::from_secs(1), async {
+            while !states
+                .0
+                .lock()
+                .expect("states")
+                .contains(&ConnectionState::Paused)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("membership pause");
+        assert_eq!(connector.0.load(Ordering::SeqCst), 0);
+
+        control.recover();
+        timeout(Duration::from_secs(1), async {
+            while connector.0.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("membership recovery reconnect");
+        assert!(
+            states
+                .0
+                .lock()
+                .expect("states")
+                .contains(&ConnectionState::Connecting)
+        );
+
+        stop.cancel();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("prompt shutdown")
+            .expect("join")
+            .expect("membership pause is recoverable");
+    }
+
+    #[tokio::test]
+    async fn session_revoked_retries_connector_without_invalidating_long_lived_credential() {
+        let stop = SessionCancellation::default();
+        let credentials = Arc::new(CredentialSlot::new(Some("refresh_fixture".to_owned())));
+        let closes = Arc::new(AtomicUsize::new(0));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let connector = Arc::new(RevokingConnector {
+            calls: AtomicUsize::new(0),
+            closes: Arc::clone(&closes),
+            starts: Arc::clone(&starts),
+        });
+        let states = Arc::new(CapturingStates::default());
+        let supervisor = SessionSupervisor::new(
+            credentials.clone(),
+            connector.clone(),
+            unused_runtime(),
+            states.clone(),
+        );
+        let task = tokio::spawn({
+            let stop = stop.clone();
+            async move { supervisor.run(stop).await }
+        });
+
+        timeout(Duration::from_secs(3), async {
+            while !states
+                .0
+                .lock()
+                .expect("states")
+                .contains(&ConnectionState::Connected)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("connector retry");
+        assert!(connector.calls.load(Ordering::SeqCst) >= 2);
+        assert_eq!(credentials.invalidations.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            credentials.current().expect("credential remains"),
+            Some("refresh_fixture".to_owned())
+        );
+
+        stop.cancel();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("prompt shutdown")
+            .expect("join")
+            .expect("session revocation is recoverable");
     }
 
     #[test]

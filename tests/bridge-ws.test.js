@@ -770,6 +770,48 @@ describe('initBridgeWS', () => {
     mockBridgeV3Business.connectedTerminals.mockReturnValue([])
   })
 
+  it('uses the signal visibility path before reading evidence and rejects snapshot replacement', async () => {
+    const visibleRow = { id:7, user_id:42, symbol:'XAUUSD', timeframe:'M5' }
+    let visible = true
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([{ terminal_instance_id:'terminal-1', platform:'mt5' }])
+    queryOne.mockImplementation(async sql => {
+      if (sql.includes('SELECT id, token_version FROM users')) return { id:42, token_version:0 }
+      if (sql.includes('SELECT plan, role, plan_expires_at, plan_source')) return { role:'user', plan:'pro', plan_expires_at:null, plan_source:null, connection_enabled:1 }
+      if (sql.includes('FROM auto_signal_deliveries')) return null
+      if (sql.includes('FROM ai_signals')) return visible ? visibleRow : null
+      if (sql.includes('FROM inference_snapshots')) return {
+        id:124, signal_id:7, standard_symbol:'XAUUSD', market_source:'platform_market_bridge', evidence_status:'complete',
+        klines_json:JSON.stringify({ M5:Array.from({ length:501 }, (_, index) => ({ time:index, open:1, high:2, low:1, close:2 })) }),
+        market_snapshot_json:JSON.stringify({ strategy_context:{ timeframes:{} } }), created_at:'2026-08-10 12:00:00',
+      }
+      return null
+    })
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls.filter(([event]) => event === 'connection').at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, { url:'/aurum-api/bridge/ws?type=browser', headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' } })
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'evidence-mismatch', action:'signal_evidence',
+      params:{ signal_id:7, timeframe:'M5', snapshot_id:123 },
+    }))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalled(), { timeout:5_000 })
+    expect(JSON.parse(browserWs.send.mock.calls.at(-1)[0])).toMatchObject({ status:'error', code:'snapshot_mismatch' })
+
+    visible = false
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'evidence-hidden', action:'signal_evidence',
+      params:{ signal_id:7, timeframe:'M5', snapshot_id:124 },
+    }))
+    await vi.waitFor(() => expect(browserWs.send.mock.calls.length).toBeGreaterThan(1), { timeout:5_000 })
+    expect(JSON.parse(browserWs.send.mock.calls.at(-1)[0])).toMatchObject({ status:'error', message:'signal not found' })
+    browserWs.emit('close')
+  })
+
   it('fails history closed when the selected route lacks exact-range capability', async () => {
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
     mockBridgeV3Business.connectedTerminals.mockReturnValue([{

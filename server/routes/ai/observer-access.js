@@ -10,7 +10,7 @@ export const PRO_OBSERVER_TABS = Object.freeze([
 
 export const OBSERVER_WS_READ_ACTIONS = Object.freeze(new Set([
   'health', 'account', 'symbols', 'quote', 'positions', 'rates',
-  'signals_latest_id', 'signal_detail', 'signals', 'signal_tickets',
+  'signals_latest_id', 'signal_detail', 'signal_evidence', 'signals', 'signal_tickets',
   'close_signal_tickets', 'history', 'history_chart_data', 'pending_list',
   'signal_by_ticket',
 ]))

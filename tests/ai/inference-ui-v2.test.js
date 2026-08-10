@@ -41,7 +41,8 @@ describe('inference workspace V2 contract', () => {
 
   it('defaults each inference chart to its smallest valid timeframe', () => {
     expect(app).toContain('function inferenceTimeframeMinutes(timeframe)')
-    expect(app).toContain('const available = availableInferenceTimeframes(context.klines)')
+    expect(app).toContain('const snapshotAvailable = Array.isArray(context.snapshot?.available_timeframes)')
+    expect(app).toContain('availableInferenceTimeframes(context.klines)')
     expect(app).toContain('state.inferenceChartTimeframe = available[0]')
     expect(app).toContain('state.inferenceChartSignalKey !== signalKey')
   })
@@ -55,7 +56,7 @@ describe('inference workspace V2 contract', () => {
 
   it('isolates async signal details and chart renders by the active selection', () => {
     expect(app).toContain('const requestVersion = ++_analysisDetailRequestVersion')
-    expect(app).toContain('const forceRefresh = options.forceRefresh ?? navigate')
+    expect(app).toContain('const forceRefresh = options.forceRefresh === true')
     expect(app).toContain('requestVersion !== _analysisDetailRequestVersion')
     expect(app).toContain('resultHost?.dataset.signalId !== signalKey')
     expect(app).toContain('resultHost?.dataset.renderVersion !== String(renderVersion)')

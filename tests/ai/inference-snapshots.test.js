@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   buildSharedMarketSnapshot,
   inferenceVisualizationSnapshot,
+  inferenceSnapshotSummary,
+  inferenceSnapshotEvidence,
+  normalizeInferenceEvidenceTimeframe,
   encodeSnapshotJson,
   parseSnapshotJson,
   prepareInferenceSnapshot,
@@ -68,6 +71,36 @@ describe('inference snapshot evidence', () => {
     expect(result.market_snapshot.strategy_context.timeframes.M5).not.toHaveProperty('klines')
     expect(result).not.toHaveProperty('system_prompt')
     expect(result).not.toHaveProperty('user_prompt')
+  })
+
+  it('returns lightweight snapshot metadata without K-lines', () => {
+    const rows = Object.fromEntries(['M5', 'M15', 'H1', 'H4'].map(timeframe => [timeframe,
+      Array.from({ length: 2000 }, (_, index) => ({ time: index, open: 1, high: 2, low: 0.5, close: 1.5 }))]))
+    const summary = inferenceSnapshotSummary({
+      id: 18, signal_id: 9, strategy_id: 3, standard_symbol: 'XAUUSD', market_source: 'platform_market_bridge',
+      evidence_status: 'complete', omitted_fields_json: '[]', klines_json: encodeSnapshotJson(rows),
+      market_snapshot_json: JSON.stringify({ strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } } }),
+      strategy_runtime_json: JSON.stringify({ mode: 'policy' }), content_hash: 'a'.repeat(64), byte_size: 1234,
+      created_at: '2026-07-17 09:01:00',
+    })
+    expect(summary.available_timeframes).toEqual(['M5', 'M15', 'H1', 'H4'])
+    expect(summary.timeframe_counts).toEqual({ M5: 2000, M15: 2000, H1: 2000, H4: 2000 })
+    expect(summary).not.toHaveProperty('klines')
+    expect(Buffer.byteLength(JSON.stringify(summary))).toBeLessThan(50 * 1024)
+  })
+
+  it('returns only the latest 500 bars from the same compressed frozen snapshot', () => {
+    const rows = { M5: Array.from({ length: 2000 }, (_, index) => ({ time: index, open: 1, high: 2, low: 0.5, close: 1.5 })) }
+    const evidence = inferenceSnapshotEvidence({
+      id: 19, signal_id: 10, standard_symbol: 'XAUUSD', market_source: 'platform_market_bridge', evidence_status: 'complete',
+      klines_json: encodeSnapshotJson(rows), market_snapshot_json: JSON.stringify({ strategy_context: { timeframes: {} } }),
+      created_at: '2026-07-17 09:01:00',
+    }, 'M5')
+    expect(evidence.klines).toHaveLength(500)
+    expect(evidence.klines[0].time).toBe(1500)
+    expect(evidence.klines.at(-1).time).toBe(1999)
+    expect(Buffer.byteLength(JSON.stringify(evidence))).toBeLessThan(150 * 1024)
+    expect(() => normalizeInferenceEvidenceTimeframe('W2')).toThrow('invalid_timeframe')
   })
 
   it('recursively strips credentials and Authorization headers', () => {
