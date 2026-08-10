@@ -117,6 +117,7 @@ import {
   enrichHistoryProtectionRows,
   wsMessageByteLength,
   buildBrowserCommandResult,
+  sendNotificationCreatedToUser,
   buildBridgeDataChangedEvent,
   buildObserverBrowserPayload,
   createBrowserAutoExecuteGuard,
@@ -768,6 +769,40 @@ describe('initBridgeWS', () => {
     })
     browserWs.emit('close')
     mockBridgeV3Business.connectedTerminals.mockReturnValue([])
+  })
+
+  it('addresses notification wake-ups only to the authenticated user socket', async () => {
+    queryOne.mockImplementation(async sql => {
+      if (sql.includes('SELECT id FROM users WHERE role')) return { id:42 }
+      if (sql.includes('SELECT id, token_version FROM users')) return { id:42, token_version:0 }
+      if (sql.includes('SELECT role, plan, plan_expires_at, plan_source FROM users')) {
+        return { role:'admin', plan:'pro', plan_expires_at:null, plan_source:null }
+      }
+      if (sql.includes('FROM strategy_subscriptions')) return { id:88 }
+      return null
+    })
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection')
+      .at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+    browserWs.send.mockClear()
+
+    expect(sendNotificationCreatedToUser(43, { notificationId:7, unreadCount:1 })).toBe(0)
+    expect(browserWs.send).not.toHaveBeenCalled()
+    expect(sendNotificationCreatedToUser(42, { notificationId:7, priority:'important', requiresAck:true, unreadCount:1 })).toBe(1)
+    expect(JSON.parse(browserWs.send.mock.calls[0][0])).toEqual({
+      type:'notification_created', notificationId:7, priority:'important', requiresAck:true, unreadCount:1,
+    })
+    browserWs.emit('close')
   })
 
   it('uses the signal visibility path before reading evidence and rejects snapshot replacement', async () => {

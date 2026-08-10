@@ -91,25 +91,40 @@ router.put('/profile', authMiddleware, async (req, res) => {
 
 router.get('/notifications', authMiddleware, async (req, res) => {
   try {
-    const { limit = 20 } = req.query
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20))
+    const cursor = decodeNotificationCursor(req.query.cursor)
+    const cursorWhere = cursor
+      ? ' AND (n.created_at < ? OR (n.created_at = ? AND n.id < ?))'
+      : ''
+    const cursorParams = cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : []
     const notifications = await queryAll(`
-      SELECT n.*
+      SELECT n.id, n.user_id, n.type, n.title, n.message, n.link, n.is_read, n.priority,
+             n.requires_ack, n.read_at, n.acknowledged_at, n.created_at
       FROM notifications n
-      WHERE n.user_id = ? ORDER BY n.created_at DESC LIMIT ?
-    `, [req.user.id, Number(limit)])
+      WHERE n.user_id = ?${cursorWhere}
+      ORDER BY n.created_at DESC, n.id DESC LIMIT ?
+    `, [req.user.id, ...cursorParams, limit + 1])
 
     const countRow = await queryOne('SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0', [req.user.id])
-    const unreadCount = countRow.c
+    const hasMore = notifications.length > limit
+    const pageRows = hasMore ? notifications.slice(0, limit) : notifications
+    const last = pageRows[pageRows.length - 1]
 
     res.json({
       ok: true,
-      unreadCount,
-      notifications: notifications.map(n => ({
+      unreadCount:Number(countRow?.c || 0),
+      nextCursor:hasMore && last ? encodeNotificationCursor(last.created_at, last.id) : null,
+      notifications: pageRows.map(n => ({
         id: n.id,
         type: n.type,
         title: n.title,
         message: n.message,
+        link:n.link || null,
+        priority:n.priority || 'normal',
+        requiresAck:Boolean(Number(n.requires_ack)),
         isRead: !!n.is_read,
+        readAt:n.read_at || null,
+        acknowledgedAt:n.acknowledged_at || null,
         createdAt: n.created_at,
       }))
     })
@@ -124,16 +139,98 @@ router.patch('/notifications', authMiddleware, async (req, res) => {
     const { markAll, id } = req.body
 
     if (markAll) {
-      await queryRun('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0', [req.user.id])
+      await queryRun('UPDATE notifications SET is_read = 1, read_at = COALESCE(read_at, NOW()) WHERE user_id = ? AND (is_read = 0 OR read_at IS NULL)', [req.user.id])
+      await queryRun(`UPDATE notification_deliveries d JOIN notifications n ON n.id = d.notification_id
+        SET d.read_at = COALESCE(d.read_at, NOW()), d.updated_at = NOW()
+        WHERE n.user_id = ? AND n.is_read = 1 AND d.channel = 'in_app'`, [req.user.id])
     } else if (id) {
-      await queryRun('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?', [id, req.user.id])
+      await queryRun('UPDATE notifications SET is_read = 1, read_at = COALESCE(read_at, NOW()) WHERE id = ? AND user_id = ?', [id, req.user.id])
+      await queryRun(`UPDATE notification_deliveries d JOIN notifications n ON n.id = d.notification_id
+        SET d.read_at = COALESCE(d.read_at, NOW()), d.updated_at = NOW()
+        WHERE n.id = ? AND n.user_id = ? AND d.channel = 'in_app'`, [id, req.user.id])
     }
 
     const countRow = await queryOne('SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0', [req.user.id])
-    const unreadCount = countRow.c
-    res.json({ ok: true, unreadCount })
+    res.json({ ok: true, unreadCount:Number(countRow?.c || 0) })
   } catch (err) {
     res.json({ ok: false, error: '操作失败' })
+  }
+})
+
+function encodeNotificationCursor(createdAt, id) {
+  return Buffer.from(JSON.stringify({ createdAt, id:Number(id) }), 'utf8').toString('base64url')
+}
+
+function decodeNotificationCursor(value) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(Buffer.from(String(value), 'base64url').toString('utf8'))
+    const id = Number(parsed?.id)
+    const createdAt = String(parsed?.createdAt || '')
+    if (!Number.isSafeInteger(id) || id <= 0 || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(createdAt)) return null
+    return { id, createdAt }
+  } catch { return null }
+}
+
+async function loadNotificationSummary(userId) {
+  const [counts, latestImportant] = await Promise.all([
+    queryOne(`SELECT
+      SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread_count,
+      SUM(CASE WHEN priority = 'important' AND requires_ack = 1 AND acknowledged_at IS NULL THEN 1 ELSE 0 END) AS important_unacknowledged_count
+      FROM notifications WHERE user_id = ?`, [userId]),
+    queryOne(`SELECT id, title, message, link, priority, requires_ack, is_read, read_at, acknowledged_at, created_at
+      FROM notifications WHERE user_id = ? AND priority = 'important' AND requires_ack = 1 AND acknowledged_at IS NULL
+      ORDER BY created_at DESC, id DESC LIMIT 1`, [userId]),
+  ])
+  return {
+    unreadCount:Number(counts?.unread_count || 0),
+    importantUnacknowledgedCount:Number(counts?.important_unacknowledged_count || 0),
+    latestImportant:latestImportant ? {
+      id:Number(latestImportant.id), title:latestImportant.title || '', message:latestImportant.message || '',
+      link:latestImportant.link || null, priority:latestImportant.priority || 'important',
+      requiresAck:Boolean(Number(latestImportant.requires_ack)), isRead:Boolean(Number(latestImportant.is_read)),
+      readAt:latestImportant.read_at || null, acknowledgedAt:latestImportant.acknowledged_at || null,
+      createdAt:latestImportant.created_at,
+    } : null,
+  }
+}
+
+router.get('/notifications/summary', authMiddleware, async (req, res) => {
+  try {
+    res.json({ ok:true, ...(await loadNotificationSummary(req.user.id)) })
+  } catch (err) {
+    console.error('[notifications/summary]', err.message)
+    res.status(500).json({ ok:false, error:'获取通知摘要失败' })
+  }
+})
+
+router.post('/notifications/:id/acknowledge', authMiddleware, async (req, res) => {
+  try {
+    const notificationId = Number(req.params.id)
+    if (!Number.isSafeInteger(notificationId) || notificationId <= 0) {
+      return res.status(400).json({ ok:false, error:'通知不存在' })
+    }
+    const existing = await queryOne(`SELECT id, requires_ack, acknowledged_at FROM notifications
+      WHERE id = ? AND user_id = ?`, [notificationId, req.user.id])
+    if (!existing) return res.status(404).json({ ok:false, error:'通知不存在' })
+    if (!Number(existing.requires_ack)) return res.status(400).json({ ok:false, error:'该通知无需确认' })
+    await queryRun(`UPDATE notifications SET is_read = 1, read_at = COALESCE(read_at, NOW()),
+      acknowledged_at = COALESCE(acknowledged_at, NOW())
+      WHERE id = ? AND user_id = ? AND requires_ack = 1 AND acknowledged_at IS NULL`, [notificationId, req.user.id])
+    await queryRun(`UPDATE notification_deliveries d JOIN notifications n ON n.id = d.notification_id
+      SET d.read_at = COALESCE(d.read_at, NOW()), d.acknowledged_at = COALESCE(d.acknowledged_at, NOW()), d.updated_at = NOW()
+      WHERE n.id = ? AND n.user_id = ? AND d.channel = 'in_app'`, [notificationId, req.user.id])
+    const updated = await queryOne(`SELECT id, title, message, link, priority, requires_ack, is_read, read_at, acknowledged_at, created_at
+      FROM notifications WHERE id = ? AND user_id = ?`, [notificationId, req.user.id])
+    const summary = await loadNotificationSummary(req.user.id)
+    res.json({ ok:true, ...summary, notification:updated ? {
+      id:Number(updated.id), title:updated.title || '', message:updated.message || '', link:updated.link || null,
+      priority:updated.priority || 'important', requiresAck:Boolean(Number(updated.requires_ack)), isRead:Boolean(Number(updated.is_read)),
+      readAt:updated.read_at || null, acknowledgedAt:updated.acknowledged_at || null, createdAt:updated.created_at,
+    } : null })
+  } catch (err) {
+    console.error('[notifications/acknowledge]', err.message)
+    res.status(500).json({ ok:false, error:'确认通知失败' })
   }
 })
 

@@ -2,6 +2,7 @@ const state = {
   view:'overview', profile:null, overview:null, users:[], pagination:null, search:'', membership:'all', page:1, selectedUser:null,
   realtime:{ ws:null, reconnectTimer:null, heartbeatTimer:null, adminPongWatchdogTimer:null, schedulerTimer:null, schedulerSyncTimer:null, schedulerSyncInFlight:false, schedulerSyncRequestSeq:0, reconnectAttempts:0, lastEventAt:0, lastPongAt:0, terminalTime:'', terminalUserId:0, terminalPlatform:'mt5', terminalTimezoneOffsetMinutes:null, pendingRefresh:false, refreshTimer:null, authFailed:false, aiOperationsRequestSeq:0, aiOperationsAbortController:null },
   commercialTab:'orders', commercialOverview:null,
+  notificationCenter:{tab:'compose',scope:'user',userId:'',userLabel:'',userSearch:'',userCandidates:[],userSearchTimer:null,userSearchRequestSeq:0,plans:[],title:'',message:'',priority:'normal',link:'',emailEnabled:false,preview:null,previewNotice:'',previewTimer:null,previewRequestSeq:0,createIdempotencyKey:'',campaigns:[],pagination:null,campaignPage:1,selectedCampaign:null,detailPage:1,detailPagination:null,loading:false},
   orderPage:1, orderSearch:'', orderStatus:'all',
   notificationPage:1, notificationSearch:'', notificationStatus:'all', notificationChannel:'all',
   referralStatus:'all',
@@ -15,6 +16,7 @@ const state = {
 const viewLabels = {
   overview:'运营总览',
   users:'用户与会员',
+  notifications:'通知中心',
   commercial:'商业运营',
   'ai-operations':'AI 运营',
   'risk-audit':'风控管理',
@@ -94,6 +96,7 @@ applyAdminTheme(getAdminTheme())
 const REALTIME_VIEW_SCOPES = {
   overview:new Set(['overview', 'bridge', 'market', 'risk', 'ai', 'commercial', 'users']),
   users:new Set(['users', 'bridge', 'commercial']),
+  notifications:new Set(['commercial', 'users']),
   commercial:new Set(['commercial', 'overview']),
   'ai-operations':new Set(['ai', 'bridge', 'market']),
   'risk-audit':new Set(['risk', 'bridge', 'market', 'ai']),
@@ -376,7 +379,11 @@ async function api(path, options = {}) {
   }
   if (!response.ok || data.ok === false) {
     const code = data.error || data.code || ''
-    throw new Error(ADMIN_AI_ERROR_MESSAGES[code] || code || '请求失败，请稍后重试')
+    const error = new Error(ADMIN_AI_ERROR_MESSAGES[code] || code || '请求失败，请稍后重试')
+    error.status = response.status
+    error.code = code
+    error.data = data
+    throw error
   }
   return data
 }
@@ -684,6 +691,436 @@ async function renderUsers() {
   await loadUsers()
 }
 
+/* Notification center ---------------------------------------------------- */
+const notificationScopeLabels = { user:'指定用户', plans:'按会员类型', all:'全部用户' }
+const notificationPlanLabels = { free:'免费用户', plus:'有效 Plus', pro:'有效 Pro', expired:'已过期会员' }
+const notificationCampaignStatusLabels = { queued:'排队中', materializing:'整理接收人', sending:'发送中', cancelling:'取消中', needs_review:'待复核', completed:'已完成', partial_failed:'部分失败', cancelled:'已取消', failed:'发送失败' }
+const notificationDeliveryStatusLabels = { pending:'待发送', sending:'发送中', sent:'已发送', unknown:'状态未知', failed:'发送失败', skipped:'已跳过', cancelled:'已取消', read:'已阅读', acknowledged:'已确认' }
+
+function notificationDraftPayload({ includePreview = false } = {}) {
+  const draft = state.notificationCenter
+  const recipientFilter = draft.scope === 'user'
+    ? { userId:Number(draft.userId) }
+    : draft.scope === 'plans'
+      ? { plans:[...draft.plans] }
+      : {}
+  const payload = {
+    recipientScope:draft.scope,
+    recipientFilter,
+    title:draft.title.trim(),
+    message:draft.message.trim(),
+    priority:draft.priority,
+    link:draft.link.trim() || undefined,
+    emailEnabled:Boolean(draft.emailEnabled),
+  }
+  if (includePreview && draft.preview) {
+    payload.previewToken = draft.preview.token
+    payload.confirmedRecipientCount = Number(draft.preview.recipientCount ?? draft.preview.recipient_count ?? 0)
+  }
+  return payload
+}
+
+function notificationTextLength(value) {
+  return Array.from(String(value || '')).length
+}
+
+function notificationDraftIsValid() {
+  const draft = state.notificationCenter
+  if (notificationTextLength(draft.title.trim()) < 1 || notificationTextLength(draft.title.trim()) > 100) return false
+  if (notificationTextLength(draft.message.trim()) < 1 || notificationTextLength(draft.message.trim()) > 1000) return false
+  if (draft.scope === 'user' && (!Number.isInteger(Number(draft.userId)) || Number(draft.userId) < 1)) return false
+  if (draft.scope === 'plans' && !draft.plans.length) return false
+  if (draft.link && !/^\/(?:$|account(?:[\/?]|$)|ai(?:[\/?]|$))/.test(draft.link.trim())) return false
+  return true
+}
+
+function notificationPreviewValue(preview, camel, snake = '') {
+  const value = preview?.[camel] ?? (snake ? preview?.[snake] : undefined)
+  return Number.isFinite(Number(value)) ? Number(value) : 0
+}
+
+function notificationIdempotencyKey(operation) {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return `${operation}-${uuid || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+}
+
+function notificationPreviewSummaryHtml() {
+  const draft = state.notificationCenter
+  const preview = draft.preview
+  if (draft.previewLoading) return '<div class="notification-summary-state" role="status">正在估算接收人…</div>'
+  if (draft.previewError) return `<div class="notification-summary-state is-error" role="alert">${escapeHtml(draft.previewError)}</div>`
+  if (!preview || !preview.token) return '<div class="notification-summary-state" role="status">填写接收范围和通知内容后，将在这里显示发送前估算。</div>'
+  const recipientCount = notificationPreviewValue(preview, 'recipientCount', 'recipient_count')
+  const inAppCount = notificationPreviewValue(preview, 'inAppCount', 'in_app_count')
+  const emailReachable = notificationPreviewValue(preview, 'emailReachableCount', 'email_reachable_count')
+  const emailSkipped = notificationPreviewValue(preview, 'emailSkippedCount', 'email_skipped_count')
+  const excluded = notificationPreviewValue(preview, 'excludedCount', 'excluded_count')
+  const sample = Array.isArray(preview.sample) ? preview.sample : []
+  const sampleHtml = sample.length
+    ? `<ul class="notification-sample-list" aria-label="接收人示例">${sample.slice(0,5).map(item => `<li><strong>${escapeHtml(item.nickname || item.name || `用户 #${item.id ?? item.userId ?? ''}`)}</strong><span>${escapeHtml(item.email || item.uid || item.phone || '联系方式未显示')}</span></li>`).join('')}</ul>`
+    : '<p class="notification-summary-note">暂无接收人示例</p>'
+  return `${draft.previewNotice ? `<div class="notification-preview-notice" role="status">${escapeHtml(draft.previewNotice)}</div>` : ''}<div class="notification-summary-facts"><div><span>预计接收</span><strong>${recipientCount.toLocaleString('zh-CN')}</strong><small>人</small></div><div><span>站内信</span><strong>${inAppCount.toLocaleString('zh-CN')}</strong><small>人</small></div><div><span>邮件可达</span><strong>${emailReachable.toLocaleString('zh-CN')}</strong><small>人</small></div><div><span>邮件跳过</span><strong>${emailSkipped.toLocaleString('zh-CN')}</strong><small>人</small></div></div><p class="notification-summary-note">${excluded ? `已排除 ${excluded.toLocaleString('zh-CN')} 个不符合条件的账号。` : '未发现额外排除账号。'}</p><div class="notification-sample"><span class="notification-summary-label">接收人示例</span>${sampleHtml}</div>`
+}
+
+function renderNotificationComposeSummary() {
+  const root = document.querySelector('#notificationSummary')
+  if (!root) return
+  root.innerHTML = `<header class="notification-summary-heading"><div><span class="eyebrow">发送前检查</span><h2>发送摘要</h2></div><span class="notification-summary-status" aria-hidden="true">${state.notificationCenter.previewLoading ? '估算中' : state.notificationCenter.preview?.token ? '已更新' : '待填写'}</span></header><div class="notification-summary-body" aria-live="polite">${notificationPreviewSummaryHtml()}</div><div class="notification-summary-actions"><p class="field-help">站内信固定创建；开启邮件后，仅向已验证邮箱投递。</p><button class="primary-button" id="notificationSendButton" type="submit" form="notificationComposeForm" ${!notificationDraftIsValid() || !state.notificationCenter.preview?.token || state.notificationCenter.previewLoading ? 'disabled' : ''}>确认并发送</button></div>`
+}
+
+function notificationComposeMarkup() {
+  const draft = state.notificationCenter
+  const checkedPlans = new Set(draft.plans)
+  return `<div class="notification-compose-layout"><form class="notification-editor" id="notificationComposeForm" novalidate><fieldset class="notification-fieldset"><legend>接收范围</legend><div class="notification-scope-options"><label class="notification-scope-option"><input type="radio" name="notificationScope" value="user" ${draft.scope === 'user' ? 'checked' : ''}><span><strong>指定用户</strong><small>搜索昵称、邮箱、手机号或 UID</small></span></label><label class="notification-scope-option"><input type="radio" name="notificationScope" value="plans" ${draft.scope === 'plans' ? 'checked' : ''}><span><strong>按会员类型</strong><small>选择一个或多个会员范围</small></span></label><label class="notification-scope-option"><input type="radio" name="notificationScope" value="all" ${draft.scope === 'all' ? 'checked' : ''}><span><strong>全部用户</strong><small>排除管理员和已匿名化账号</small></span></label></div><div class="notification-recipient-fields"><div class="field" id="notificationUserFields" ${draft.scope !== 'user' ? 'hidden' : ''}><label for="notificationUserSearch">搜索用户</label><div class="notification-user-picker"><input class="input" id="notificationUserSearch" type="search" autocomplete="off" value="${escapeHtml(draft.userSearch || draft.userLabel)}" placeholder="昵称、邮箱、手机号或 UID" aria-controls="notificationUserCandidates" aria-expanded="false"><button class="text-button notification-clear-user" id="notificationClearUser" type="button" ${draft.userId ? '' : 'hidden'}>清除</button><input id="notificationUserId" type="hidden" value="${escapeHtml(draft.userId)}"></div><div class="notification-user-candidates" id="notificationUserCandidates" role="listbox" hidden></div><span class="field-help" id="notificationUserHelp">${escapeHtml(draft.userLabel ? `${draft.userLabel}（用户 ID ${draft.userId}）` : '输入至少 2 个字符后显示候选；从用户详情进入时会自动预填。')}</span></div><fieldset class="notification-plan-fields" id="notificationPlanFields" ${draft.scope !== 'plans' ? 'hidden' : ''}><legend>会员类型（至少选择一项）</legend><div class="notification-plan-options">${Object.entries(notificationPlanLabels).map(([value,label]) => `<label><input type="checkbox" name="notificationPlan" value="${value}" ${checkedPlans.has(value) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div></fieldset><div class="notification-all-note" id="notificationAllFields" ${draft.scope !== 'all' ? 'hidden' : ''} role="note"><span data-icon="info" aria-hidden="true"></span><p>全部用户只包含普通用户，管理员、观摩源和已匿名化账号会被排除。发送前需要输入确认词。</p></div></div></fieldset><fieldset class="notification-fieldset notification-content-fieldset"><legend>通知内容</legend><div class="field"><label for="notificationTitle">标题</label><input class="input" id="notificationTitle" maxlength="100" required value="${escapeHtml(draft.title)}" placeholder="请输入通知标题"><small class="notification-character-count"><b id="notificationTitleCount">${notificationTextLength(draft.title)}</b> / 100</small></div><div class="field"><label for="notificationMessage">正文</label><textarea class="input notification-message-input" id="notificationMessage" maxlength="1000" required rows="8" placeholder="请输入纯文本通知内容">${escapeHtml(draft.message)}</textarea><small class="notification-character-count"><b id="notificationMessageCount">${notificationTextLength(draft.message)}</b> / 1000</small></div><fieldset class="notification-priority-field"><legend>通知级别</legend><div class="notification-inline-options"><label><input type="radio" name="notificationPriority" value="normal" ${draft.priority === 'normal' ? 'checked' : ''}><span>普通</span></label><label><input type="radio" name="notificationPriority" value="important" ${draft.priority === 'important' ? 'checked' : ''}><span>重要（需要用户确认）</span></label></div></fieldset><div class="field"><label for="notificationLink">内部链接（可选）</label><input class="input" id="notificationLink" inputmode="url" maxlength="240" value="${escapeHtml(draft.link)}" placeholder="例如 /account/ 或 /ai/"><span class="field-help">仅允许站内 /account/、/ai/ 和首页路径；不支持外部链接。</span></div></fieldset><fieldset class="notification-fieldset notification-channel-fieldset"><legend>发送渠道</legend><label class="notification-channel-row"><input type="checkbox" checked disabled><span><strong>站内信</strong><small>固定开启，确保用户在账户中心可查</small></span></label><label class="notification-channel-row"><input type="checkbox" id="notificationEmailEnabled" ${draft.emailEnabled ? 'checked' : ''}><span><strong>邮件</strong><small>只发送给已验证邮箱；失败会单独记录</small></span></label></fieldset><p class="notification-editor-note" role="note"><span data-icon="info" aria-hidden="true"></span>通知创建后内容、范围和渠道不可编辑；需要修改时请新建通知。</p></form><aside class="notification-summary-panel" id="notificationSummary" aria-label="发送摘要"></aside></div>`
+}
+
+function updateNotificationRecipientVisibility(root) {
+  const draft = state.notificationCenter
+  root.querySelector('#notificationUserFields')?.toggleAttribute('hidden', draft.scope !== 'user')
+  root.querySelector('#notificationPlanFields')?.toggleAttribute('hidden', draft.scope !== 'plans')
+  root.querySelector('#notificationAllFields')?.toggleAttribute('hidden', draft.scope !== 'all')
+}
+
+function notificationUserCandidateLabel(user) {
+  return user?.nickname || user?.email || user?.phone || user?.uid || `用户 #${user?.id || ''}`
+}
+
+function renderNotificationUserCandidates(root, stateInfo = '') {
+  const draft = state.notificationCenter
+  const list = root.querySelector('#notificationUserCandidates')
+  const input = root.querySelector('#notificationUserSearch')
+  if (!list || !input) return
+  if (stateInfo === 'loading') {
+    list.hidden = false
+    list.innerHTML = '<div class="notification-user-candidate-state" role="status">正在搜索用户…</div>'
+  } else if (stateInfo === 'error') {
+    list.hidden = false
+    list.innerHTML = '<div class="notification-user-candidate-state is-error" role="alert">用户搜索暂不可用，请稍后重试。</div>'
+  } else if (stateInfo === 'empty') {
+    list.hidden = false
+    list.innerHTML = '<div class="notification-user-candidate-state">没有找到可发送通知的普通用户。</div>'
+  } else if (!draft.userCandidates.length) {
+    list.hidden = true
+    list.innerHTML = ''
+  } else {
+    list.hidden = false
+    list.innerHTML = draft.userCandidates.map((user, index) => `<button class="notification-user-candidate" type="button" role="option" data-notification-user-index="${index}"><span class="user-avatar" aria-hidden="true">${escapeHtml(notificationUserCandidateLabel(user).slice(0,1))}</span><span><strong>${escapeHtml(notificationUserCandidateLabel(user))}</strong><small>${escapeHtml(user.email || user.phone || user.uid || `用户 #${user.id}`)}${user.plan ? ` · ${escapeHtml(planLabel(user))}` : ''}</small></span></button>`).join('')
+    list.querySelectorAll('[data-notification-user-index]').forEach(button => button.addEventListener('click', () => selectNotificationUser(Number(button.dataset.notificationUserIndex), root)))
+  }
+  input.setAttribute('aria-expanded', String(!list.hidden))
+}
+
+function selectNotificationUser(index, root) {
+  const draft = state.notificationCenter
+  const user = draft.userCandidates[index]
+  if (!user?.id) return
+  draft.userId = String(user.id)
+  draft.userLabel = `${notificationUserCandidateLabel(user)} · ${user.email || user.phone || user.uid || `用户 #${user.id}`}`
+  draft.userSearch = draft.userLabel
+  draft.userCandidates = []
+  root.querySelector('#notificationUserSearch').value = draft.userSearch
+  root.querySelector('#notificationUserId').value = draft.userId
+  root.querySelector('#notificationUserHelp').textContent = `已选择 ${draft.userLabel}（用户 ID ${draft.userId}）`
+  root.querySelector('#notificationClearUser').hidden = false
+  renderNotificationUserCandidates(root)
+  queueNotificationPreview()
+}
+
+function clearNotificationUser(root) {
+  const draft = state.notificationCenter
+  draft.userId = ''
+  draft.userLabel = ''
+  draft.userSearch = ''
+  draft.userCandidates = []
+  root.querySelector('#notificationUserSearch').value = ''
+  root.querySelector('#notificationUserId').value = ''
+  root.querySelector('#notificationUserHelp').textContent = '输入至少 2 个字符后显示候选；从用户详情进入时会自动预填。'
+  root.querySelector('#notificationClearUser').hidden = true
+  renderNotificationUserCandidates(root)
+  queueNotificationPreview()
+}
+
+async function requestNotificationUserSearch(root, query) {
+  const draft = state.notificationCenter
+  const requestSeq = ++draft.userSearchRequestSeq
+  try {
+    const params = new URLSearchParams({ search:query, page_size:'10' })
+    const data = await api(`/api/admin/users?${params}`)
+    if (requestSeq !== draft.userSearchRequestSeq || state.view !== 'notifications') return
+    draft.userCandidates = (data.users || []).filter(user => user.role !== 'admin' && user.plan_source !== 'observer_source')
+    renderNotificationUserCandidates(root, draft.userCandidates.length ? '' : 'empty')
+  } catch (error) {
+    if (requestSeq !== draft.userSearchRequestSeq) return
+    draft.userCandidates = []
+    renderNotificationUserCandidates(root, 'error')
+    if (error.status !== 401 && error.status !== 403) toast(error.message || '用户搜索暂不可用', 'error')
+  }
+}
+
+function queueNotificationUserSearch(root) {
+  const draft = state.notificationCenter
+  const input = root.querySelector('#notificationUserSearch')
+  if (!input) return
+  clearTimeout(draft.userSearchTimer)
+  draft.userSearchRequestSeq += 1
+  const query = input.value.trim()
+  draft.userSearch = input.value
+  draft.userId = ''
+  draft.userLabel = ''
+  root.querySelector('#notificationUserId').value = ''
+  root.querySelector('#notificationClearUser').hidden = true
+  draft.userCandidates = []
+  if (query.length < 2) {
+    renderNotificationUserCandidates(root)
+    queueNotificationPreview()
+    return
+  }
+  renderNotificationUserCandidates(root, 'loading')
+  draft.userSearchTimer = setTimeout(() => requestNotificationUserSearch(root, query), 280)
+  queueNotificationPreview()
+}
+
+function handleNotificationUserSearchKeydown(event, root) {
+  const list = root.querySelector('#notificationUserCandidates')
+  if (event.key === 'ArrowDown' && list && !list.hidden) {
+    event.preventDefault()
+    list.querySelector('button')?.focus()
+  } else if (event.key === 'Enter' && list && !list.hidden && state.notificationCenter.userCandidates.length) {
+    event.preventDefault()
+    selectNotificationUser(0, root)
+  } else if (event.key === 'Escape') {
+    renderNotificationUserCandidates(root)
+  }
+}
+
+function queueNotificationPreview() {
+  const draft = state.notificationCenter
+  clearTimeout(draft.previewTimer)
+  draft.previewRequestSeq += 1
+  draft.preview = null
+  draft.previewError = ''
+  draft.previewNotice = ''
+  draft.createIdempotencyKey = ''
+  draft.previewLoading = false
+  renderNotificationComposeSummary()
+  if (!notificationDraftIsValid()) return
+  draft.previewLoading = true
+  renderNotificationComposeSummary()
+  draft.previewTimer = setTimeout(() => requestNotificationPreview(), 280)
+}
+
+async function requestNotificationPreview() {
+  const draft = state.notificationCenter
+  const requestSeq = ++draft.previewRequestSeq
+  if (!notificationDraftIsValid()) return
+  try {
+    const data = await api('/api/admin/notifications/preview', { method:'POST', body:JSON.stringify(notificationDraftPayload()) })
+    if (requestSeq !== draft.previewRequestSeq || state.view !== 'notifications') return
+    draft.preview = data.preview || null
+    draft.previewError = ''
+    draft.previewNotice = ''
+  } catch (error) {
+    if (requestSeq !== draft.previewRequestSeq) return
+    draft.preview = null
+    draft.previewError = error.message || '接收人估算失败，请稍后重试'
+  } finally {
+    if (requestSeq === draft.previewRequestSeq) {
+      draft.previewLoading = false
+      renderNotificationComposeSummary()
+    }
+  }
+}
+
+function bindNotificationCompose(root) {
+  const draft = state.notificationCenter
+  const form = root.querySelector('#notificationComposeForm')
+  if (!form) return
+  const syncDraft = () => {
+    draft.title = root.querySelector('#notificationTitle').value
+    draft.message = root.querySelector('#notificationMessage').value
+    draft.link = root.querySelector('#notificationLink').value
+    draft.emailEnabled = root.querySelector('#notificationEmailEnabled').checked
+    draft.priority = root.querySelector('[name="notificationPriority"]:checked')?.value || 'normal'
+    draft.userId = root.querySelector('#notificationUserId')?.value || draft.userId
+    draft.plans = [...root.querySelectorAll('[name="notificationPlan"]:checked')].map(input => input.value)
+    root.querySelector('#notificationTitleCount').textContent = notificationTextLength(draft.title)
+    root.querySelector('#notificationMessageCount').textContent = notificationTextLength(draft.message)
+  }
+  root.querySelectorAll('[name="notificationScope"]').forEach(input => input.addEventListener('change', event => {
+    draft.scope = event.target.value
+    syncDraft()
+    updateNotificationRecipientVisibility(root)
+    queueNotificationPreview()
+  }))
+  form.querySelectorAll('input,textarea').forEach(input => {
+    if (input.id === 'notificationUserSearch') return
+    input.addEventListener('input', () => { syncDraft(); queueNotificationPreview() })
+  })
+  form.querySelectorAll('input[type="radio"],input[type="checkbox"]').forEach(input => input.addEventListener('change', () => { syncDraft(); queueNotificationPreview() }))
+  root.querySelector('#notificationUserSearch')?.addEventListener('input', () => queueNotificationUserSearch(root))
+  root.querySelector('#notificationUserSearch')?.addEventListener('keydown', event => handleNotificationUserSearchKeydown(event, root))
+  root.querySelector('#notificationClearUser')?.addEventListener('click', () => clearNotificationUser(root))
+  form.addEventListener('submit', submitNotificationCampaign)
+  renderIcons(root)
+  syncDraft()
+  updateNotificationRecipientVisibility(root)
+  renderNotificationComposeSummary()
+  if (notificationDraftIsValid()) queueNotificationPreview()
+}
+
+async function submitNotificationCampaign(event) {
+  event.preventDefault()
+  const draft = state.notificationCenter
+  const button = document.querySelector('#notificationSendButton')
+  if (!notificationDraftIsValid()) return toast('请完整填写接收范围和通知内容', 'error')
+  if (!draft.preview?.token) return toast('请等待接收人估算完成后再发送', 'error')
+  const recipientCount = notificationPreviewValue(draft.preview, 'recipientCount', 'recipient_count')
+  const scopeLabel = notificationScopeLabels[draft.scope]
+  const message = `将向${scopeLabel}发送“${draft.title.trim()}”，预计覆盖 ${recipientCount.toLocaleString('zh-CN')} 人；站内信固定开启${draft.emailEnabled ? '，并尝试投递邮件' : '，不发送邮件'}。发送后内容和范围不可编辑。`
+  const confirmAllText = draft.scope === 'all' ? '发送给全部用户' : ''
+  if (!await confirmAction('确认发送通知？', message, '发送通知', false, confirmAllText)) return
+  if (button) button.disabled = true
+  try {
+    const payload = notificationDraftPayload({ includePreview:true })
+    if (confirmAllText) payload.confirmAllText = confirmAllText
+    draft.createIdempotencyKey ||= notificationIdempotencyKey('notification-create')
+    await api('/api/admin/notifications/campaigns', { method:'POST', headers:{'Idempotency-Key':draft.createIdempotencyKey}, body:JSON.stringify(payload) })
+    toast('通知已创建，正在进入发送记录', 'success')
+    draft.createIdempotencyKey = ''
+    draft.tab = 'records'
+    draft.campaignPage = 1
+    draft.selectedCampaign = null
+    await renderNotificationTab()
+  } catch (error) {
+    if (error.status === 409 || /范围已变化|scope_changed|recipient_changed/i.test(`${error.message} ${error.code}`)) {
+      if (error.data?.preview) draft.preview = error.data.preview
+      draft.previewError = ''
+      draft.previewNotice = '接收范围已变化，摘要已更新；请重新确认后再发送。'
+      draft.previewLoading = false
+      renderNotificationComposeSummary()
+      toast('接收范围已变化，请重新确认', 'error')
+    } else handleError(error)
+  } finally {
+    if (button?.isConnected) button.disabled = !notificationDraftIsValid() || !draft.preview?.token
+  }
+}
+
+function notificationCampaignStatus(campaign) {
+  return campaign?.status || campaign?.state || 'queued'
+}
+
+function notificationCampaignMetric(campaign, camel, snake, nestedChannel = '') {
+  const direct = campaign?.[camel] ?? campaign?.[snake]
+  if (direct != null) return Number(direct || 0)
+  const summary = campaign?.channelSummary || campaign?.channel_summary || campaign?.channels || {}
+  if (nestedChannel && summary[nestedChannel]) {
+    const value = summary[nestedChannel].sent ?? summary[nestedChannel][camel] ?? summary[nestedChannel][snake]
+    if (value != null) return Number(value || 0)
+  }
+  return 0
+}
+
+function notificationCampaignRows(campaigns) {
+  if (!campaigns.length) return '<div class="empty-state notification-empty-state"><div><span class="notification-empty-icon" aria-hidden="true">◇</span><strong>还没有发送记录</strong><p>发送通知后，可在这里查看站内信、邮件以及用户阅读确认结果。</p></div></div>'
+  return `<div class="table-wrap"><table class="user-table notification-campaign-table"><thead><tr><th>通知</th><th>接收范围</th><th>渠道汇总</th><th>状态</th><th>创建时间</th><th></th></tr></thead><tbody>${campaigns.map(campaign => { const status=notificationCampaignStatus(campaign); const recipientCount=Number(campaign.recipientCount ?? campaign.recipient_count ?? 0); const inApp=notificationCampaignMetric(campaign,'inAppSentCount','in_app_sent_count','in_app'); const emailSent=notificationCampaignMetric(campaign,'emailSentCount','email_sent_count','email'); const emailFailed=notificationCampaignMetric(campaign,'emailFailedCount','email_failed_count','email'); const emailSkipped=notificationCampaignMetric(campaign,'emailSkippedCount','email_skipped_count','email'); return `<tr data-notification-campaign-row="${escapeHtml(campaign.id)}"><td><strong>${escapeHtml(campaign.title || '未命名通知')}</strong><div class="helper">${campaign.priority === 'important' ? '重要 · 需确认' : '普通通知'}</div></td><td>${escapeHtml(notificationScopeLabels[campaign.recipientScope || campaign.recipient_scope] || '指定范围')}<div class="helper">${recipientCount.toLocaleString('zh-CN')} 人</div></td><td><span class="notification-channel-summary">站内信 ${inApp.toLocaleString('zh-CN')} · 邮件 ${emailSent.toLocaleString('zh-CN')}</span><div class="helper">跳过 ${emailSkipped.toLocaleString('zh-CN')}${emailFailed ? ` · 失败 ${emailFailed.toLocaleString('zh-CN')}` : ''}</div></td><td>${statusBadge(status, notificationCampaignStatusLabels)}</td><td class="mono">${escapeHtml(formatDate(campaign.createdAt || campaign.created_at, true))}</td><td><button class="text-button" type="button" data-notification-campaign="${escapeHtml(campaign.id)}">查看详情</button></td></tr>` }).join('')}</tbody></table></div><div class="mobile-user-list notification-mobile-list">${campaigns.map(campaign => { const status=notificationCampaignStatus(campaign); const recipientCount=Number(campaign.recipientCount ?? campaign.recipient_count ?? 0); const emailFailed=notificationCampaignMetric(campaign,'emailFailedCount','email_failed_count','email'); const emailSkipped=notificationCampaignMetric(campaign,'emailSkippedCount','email_skipped_count','email'); return `<article class="mobile-user-card notification-campaign-card"><div class="mobile-user-card-head"><div><strong>${escapeHtml(campaign.title || '未命名通知')}</strong><div class="helper">${escapeHtml(notificationScopeLabels[campaign.recipientScope || campaign.recipient_scope] || '指定范围')} · ${recipientCount.toLocaleString('zh-CN')} 人</div></div>${statusBadge(status, notificationCampaignStatusLabels)}</div><div class="mobile-user-card-meta"><span>${campaign.priority === 'important' ? '重要通知' : '普通通知'}</span><span>跳过 ${emailSkipped}${emailFailed ? ` · 失败 ${emailFailed}` : ''}</span></div><button class="secondary-button compact-action" type="button" data-notification-campaign="${escapeHtml(campaign.id)}">查看详情</button></article>` }).join('')}</div>`
+}
+
+async function loadNotificationCampaigns() {
+  const root = document.querySelector('#notificationRecordsContent')
+  if (!root) return
+  const draft = state.notificationCenter
+  root.setAttribute('aria-busy', 'true')
+  try {
+    const params = new URLSearchParams({ page:String(draft.campaignPage), page_size:'10', pageSize:'10' })
+    const data = await api(`/api/admin/notifications/campaigns?${params}`)
+    draft.campaigns = data.campaigns || []
+    draft.pagination = data.pagination || { page:draft.campaignPage, total_pages:1, total:draft.campaigns.length }
+    const totalPagesValue = Number(draft.pagination.totalPages ?? draft.pagination.total_pages ?? 1)
+    root.innerHTML = `<div class="notification-record-list">${notificationCampaignRows(draft.campaigns)}</div><footer class="pagination notification-pagination"><button class="secondary-button" id="notificationCampaignPrev" type="button">上一页</button><span id="notificationCampaignPageLabel">第 ${Number(draft.pagination.page || draft.campaignPage)} / ${Math.max(1,totalPagesValue)} 页 · 共 ${Number(draft.pagination.total || draft.campaigns.length)} 条</span><button class="secondary-button" id="notificationCampaignNext" type="button">下一页</button></footer><section class="notification-detail" id="notificationDetail" aria-live="polite"></section>`
+    const totalPages = Math.max(1, totalPagesValue)
+    root.querySelector('#notificationCampaignPrev').disabled = draft.campaignPage <= 1
+    root.querySelector('#notificationCampaignNext').disabled = draft.campaignPage >= totalPages
+    root.querySelector('#notificationCampaignPrev').onclick = () => { draft.campaignPage -= 1; loadNotificationCampaigns().catch(handleError) }
+    root.querySelector('#notificationCampaignNext').onclick = () => { draft.campaignPage += 1; loadNotificationCampaigns().catch(handleError) }
+    root.querySelectorAll('[data-notification-campaign]').forEach(button => button.addEventListener('click', () => loadNotificationCampaignDetail(button.dataset.notificationCampaign).catch(handleError)))
+    if (draft.selectedCampaign?.id) await loadNotificationCampaignDetail(draft.selectedCampaign.id, draft.detailPage)
+  } catch (error) {
+    root.innerHTML = `<div class="notification-load-error" role="alert"><strong>发送记录暂时无法读取</strong><p>${escapeHtml(error.message || '请稍后重试')}</p><button class="secondary-button" id="retryNotificationRecords" type="button">重新读取</button></div>`
+    root.querySelector('#retryNotificationRecords')?.addEventListener('click', () => loadNotificationCampaigns().catch(handleError))
+  } finally { root.setAttribute('aria-busy', 'false') }
+}
+
+function notificationDeliveryRows(deliveries) {
+  if (!deliveries.length) return '<div class="empty-inline">暂无投递明细</div>'
+  return `<div class="table-wrap"><table class="user-table notification-delivery-table"><thead><tr><th>用户</th><th>渠道</th><th>状态</th><th>尝试次数</th><th>更新时间</th><th>原因</th></tr></thead><tbody>${deliveries.map(delivery => { const status=delivery.status || delivery.deliveryStatus || 'pending'; const channel=delivery.channel === 'email' ? '邮件' : '站内信'; const label=delivery.nickname || delivery.name || `用户 #${delivery.userId ?? delivery.user_id ?? ''}`; const cause=delivery.lastError || delivery.last_error || delivery.error || ''; return `<tr><td><strong>${escapeHtml(label)}</strong><div class="helper">${escapeHtml(delivery.emailMasked || delivery.email_masked || delivery.email || '联系方式已隐藏')}</div></td><td>${channel}</td><td>${statusBadge(status, notificationDeliveryStatusLabels)}${status === 'unknown' ? '<div class="notification-unknown-warning">可能已投递</div>' : ''}</td><td class="mono">${Number(delivery.attemptCount ?? delivery.attempt_count ?? 0)}</td><td class="mono">${escapeHtml(formatDate(delivery.updatedAt || delivery.updated_at || delivery.sentAt || delivery.sent_at, true))}</td><td>${cause ? `<span class="error-helper">${escapeHtml(cause)}</span>` : '<span class="helper">—</span>'}</td></tr>` }).join('')}</tbody></table></div>`
+}
+
+function notificationDetailHtml(campaign, deliveries, pagination) {
+  if (!campaign) return ''
+  const status=notificationCampaignStatus(campaign)
+  const unknownCount=deliveries.filter(item => item.status === 'unknown' && item.channel === 'email').length
+  const needsReviewNotice=status === 'needs_review'
+    ? '<div class="notification-needs-review-banner" role="alert"><strong>接收范围需要重新确认</strong><span>实际接收人数与确认值不一致，系统未开始投递；取消后按最新范围重新预览创建。</span></div>'
+    : ''
+  const recipientCount=Number(campaign.recipientCount ?? campaign.recipient_count ?? 0)
+  const emailSent=notificationCampaignMetric(campaign,'emailSentCount','email_sent_count','email')
+  const emailFailed=notificationCampaignMetric(campaign,'emailFailedCount','email_failed_count','email')
+  const emailSkipped=notificationCampaignMetric(campaign,'emailSkippedCount','email_skipped_count','email')
+  const detailTotalPages = Math.max(1, Number(pagination?.totalPages ?? pagination?.total_pages ?? 1))
+  return `<div class="notification-detail-heading"><div><span class="eyebrow">活动详情</span><h2>${escapeHtml(campaign.title || '未命名通知')}</h2><p>${escapeHtml(notificationScopeLabels[campaign.recipientScope || campaign.recipient_scope] || '指定范围')} · 创建于 ${escapeHtml(formatDate(campaign.createdAt || campaign.created_at, true))}</p></div><div class="notification-detail-actions">${['queued','materializing','sending','cancelling','needs_review'].includes(status) ? '<button class="secondary-button danger-outline" type="button" data-notification-campaign-cancel>取消未发送任务</button>' : ''}${emailFailed ? '<button class="secondary-button" type="button" data-notification-campaign-retry>重试失败邮件</button>' : ''}</div></div>${needsReviewNotice}${unknownCount ? '<div class="notification-unknown-banner" role="note"><strong>存在状态未知的邮件</strong><span>服务商响应未确认，人工重试可能造成重复邮件，请先核对收件箱。</span></div>' : ''}<dl class="notification-detail-facts"><div><dt>预计接收</dt><dd>${recipientCount.toLocaleString('zh-CN')} 人</dd></div><div><dt>站内信已生成</dt><dd>${notificationCampaignMetric(campaign,'inAppSentCount','in_app_sent_count','in_app').toLocaleString('zh-CN')} 条</dd></div><div><dt>邮件已发送</dt><dd>${emailSent.toLocaleString('zh-CN')} 条</dd></div><div><dt>邮件跳过</dt><dd>${emailSkipped.toLocaleString('zh-CN')} 条</dd></div><div><dt>邮件失败</dt><dd>${emailFailed.toLocaleString('zh-CN')} 条</dd></div></dl><p class="notification-detail-copy"><strong>${campaign.priority === 'important' ? '重要通知 · 用户需要确认' : '普通通知'}</strong>　${escapeHtml(campaign.message || '')}</p><div class="notification-delivery-region"><h3>投递明细</h3>${notificationDeliveryRows(deliveries)}</div><footer class="pagination notification-detail-pagination"><button class="secondary-button" id="notificationDetailPrev" type="button">上一页</button><span>第 ${Number(pagination?.page || 1)} / ${detailTotalPages} 页</span><button class="secondary-button" id="notificationDetailNext" type="button">下一页</button></footer>`
+}
+
+async function loadNotificationCampaignDetail(campaignId, page = 1) {
+  const root = document.querySelector('#notificationDetail')
+  if (!root) return
+  const draft = state.notificationCenter
+  root.innerHTML = '<div class="empty-state notification-detail-loading">正在读取活动详情…</div>'
+  const data = await api(`/api/admin/notifications/campaigns/${encodeURIComponent(campaignId)}?page=${Number(page)}&page_size=20&pageSize=20`)
+  draft.selectedCampaign = data.campaign || { id:campaignId }
+  draft.selectedCampaign.deliveries = data.deliveries || []
+  draft.detailPagination = data.pagination || { page, total_pages:1 }
+  draft.detailPage = Number(draft.detailPagination.page || page)
+  root.innerHTML = notificationDetailHtml(draft.selectedCampaign, draft.selectedCampaign.deliveries, draft.detailPagination)
+  const totalPages = Math.max(1, Number(draft.detailPagination.totalPages ?? draft.detailPagination.total_pages ?? 1))
+  root.querySelector('#notificationDetailPrev').disabled = draft.detailPage <= 1
+  root.querySelector('#notificationDetailNext').disabled = draft.detailPage >= totalPages
+  root.querySelector('#notificationDetailPrev').onclick = () => loadNotificationCampaignDetail(campaignId, draft.detailPage - 1).catch(handleError)
+  root.querySelector('#notificationDetailNext').onclick = () => loadNotificationCampaignDetail(campaignId, draft.detailPage + 1).catch(handleError)
+  root.querySelector('[data-notification-campaign-cancel]')?.addEventListener('click', async event => {
+    if (!await confirmAction('取消尚未发送的通知？', '已经生成的站内信和服务商已接受的邮件不会撤回，只会停止尚未取得任务的投递。', '确认取消', true)) return
+    event.currentTarget.disabled = true
+    try { await api(`/api/admin/notifications/campaigns/${encodeURIComponent(campaignId)}/cancel`, { method:'POST', headers:{'Idempotency-Key':notificationIdempotencyKey('notification-cancel')} }); toast('取消请求已提交', 'success'); await loadNotificationCampaigns() } catch (error) { handleError(error); event.currentTarget.disabled = false }
+  })
+  root.querySelector('[data-notification-campaign-retry]')?.addEventListener('click', async event => {
+    const unknown = draft.selectedCampaign.deliveries?.some(item => item.channel === 'email' && item.status === 'unknown')
+    const warning = unknown ? '其中有状态未知的邮件，服务商可能已经接受；人工重试可能造成重复邮件。' : '仅会重新尝试仍处于失败状态的邮件。'
+    if (!await confirmAction('重试失败邮件？', warning, '确认重试', unknown)) return
+    event.currentTarget.disabled = true
+    try { await api(`/api/admin/notifications/campaigns/${encodeURIComponent(campaignId)}/retry-failed-email`, { method:'POST', headers:{'Idempotency-Key':notificationIdempotencyKey('notification-email-retry')} }); toast('失败邮件已进入重试队列', 'success'); await loadNotificationCampaignDetail(campaignId, draft.detailPage); await loadNotificationCampaigns() } catch (error) { handleError(error); event.currentTarget.disabled = false }
+  })
+}
+
+async function renderNotificationRecords(root) {
+  root.innerHTML = '<section class="panel notification-record-panel" id="notificationRecordsContent" aria-busy="true"><div class="empty-state">正在读取发送记录…</div></section>'
+  await loadNotificationCampaigns()
+}
+
+async function renderNotificationTab() {
+  const root = document.querySelector('#notificationCenterContent')
+  if (!root) return
+  const draft = state.notificationCenter
+  document.querySelectorAll('[data-notification-center-tab]').forEach(button => { const active=button.dataset.notificationCenterTab===draft.tab; button.classList.toggle('is-active', active); button.setAttribute('aria-selected',String(active)) })
+  if (draft.tab === 'records') await renderNotificationRecords(root)
+  else { root.innerHTML = notificationComposeMarkup(); bindNotificationCompose(root) }
+}
+
+async function renderNotificationCenterPage() {
+  const main = document.querySelector('#adminMain')
+  main.innerHTML = `<header class="page-head notification-center-head"><div><span class="eyebrow">用户触达与审计</span><h1>通知中心</h1><p>编辑通知、预估接收范围，并跟踪站内信和邮件的实际投递结果。</p></div></header><nav class="segment-tabs notification-center-tabs" aria-label="通知中心分类"><button class="segment-tab" type="button" role="tab" aria-selected="false" data-notification-center-tab="compose">发送通知</button><button class="segment-tab" type="button" role="tab" aria-selected="false" data-notification-center-tab="records">发送记录</button></nav><div id="notificationCenterContent" role="tabpanel" aria-live="polite"></div>`
+  document.querySelectorAll('[data-notification-center-tab]').forEach(button => button.addEventListener('click', async () => { const next=button.dataset.notificationCenterTab; if (next===state.notificationCenter.tab) return; state.notificationCenter.tab=next; state.notificationCenter.selectedCampaign=null; await renderNotificationTab() }))
+  await renderNotificationTab()
+}
+
 function bindUserOpeners(root) {
   root.querySelectorAll('[data-user-id]').forEach(element => element.addEventListener('click', event => { event.stopPropagation(); openUser(Number(element.dataset.userId)) }))
   root.querySelectorAll('tr[data-user-id]').forEach(row => row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') openUser(Number(row.dataset.userId)) }))
@@ -818,12 +1255,13 @@ function renderUserDetail(tab) {
     body.innerHTML = `${tabs}<div class="summary-grid"><div class="summary-item"><span>自动分析</span><strong>${runtime.auto_reasoning_enabled ? '已开启' : '已关闭'}</strong></div><div class="summary-item"><span>交易发送</span><strong>${runtime.trade_send_enabled ? '已开启' : '已关闭'}</strong></div><div class="summary-item"><span>订阅策略</span><strong>${subscriptions.length} 条</strong></div></div><h3 style="margin-top:22px">MT5 账户</h3><div class="module-list">${accounts.length ? accounts.map(account => `<div class="module-row"><span class="module-icon">${icons.chart}</span><div><strong>${escapeHtml(account.mt5_login || '未知账号')} · ${escapeHtml(account.broker_server || '未知服务器')}</strong><small>${escapeHtml(account.nickname || '未设置账户名称')} · ${escapeHtml(account.observe_status || '状态未知')}</small></div></div>`).join('') : '<div class="notice">该用户尚未接入 MT5 账户。</div>'}</div>`
   } else {
     const expiry = String(user.plan_expires_at || '').slice(0,10)
-    body.innerHTML = `${tabs}<form class="profile-workspace" id="profileForm"><div class="profile-layout"><section class="profile-section profile-identity-section" aria-labelledby="profileIdentityTitle"><header class="profile-section-head"><span class="profile-section-icon">${icons.users}</span><div><h3 id="profileIdentityTitle">身份资料</h3><p>维护用户展示信息、联系方式与后台权限。</p></div></header><div class="profile-section-grid"><div class="field"><label for="profileNickname">用户昵称</label><input class="input" id="profileNickname" name="nickname" autocomplete="nickname" value="${escapeHtml(user.nickname)}" placeholder="请输入用户昵称"></div><div class="field"><label for="profileRole">账号角色</label><select class="select" id="profileRole" name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></div><div class="field"><label for="profileEmail">邮箱（可选）</label><input class="input" id="profileEmail" name="email" type="email" autocomplete="email" value="${escapeHtml(user.email)}" placeholder="未绑定邮箱"></div><div class="field"><label for="profilePhone">手机号（可选）</label><input class="input" id="profilePhone" name="phone" type="tel" autocomplete="tel" value="${escapeHtml(user.phone)}" placeholder="未绑定手机号"></div></div><div class="profile-section-note">${icons.info}<span>邮箱与手机号可以任意留空；已有联系方式的账号至少保留一项。</span></div></section><section class="profile-section profile-membership-section" aria-labelledby="profileMembershipTitle"><header class="profile-section-head"><span class="profile-section-icon">${icons.wallet}</span><div><h3 id="profileMembershipTitle">会员权益</h3><p>调整等级与有效期，保存后立即生效。</p></div></header><div class="profile-membership-summary" aria-live="polite"><div><span>当前选择</span><strong id="profileMembershipPlanState" data-plan="${escapeHtml(user.plan)}">${escapeHtml(planDisplayLabels[user.plan] || user.plan || '免费用户')}</strong></div><div><span>有效期限</span><strong id="profileMembershipExpiryState">${user.plan === 'free' ? '无需设置到期日期' : expiry ? `有效至 ${escapeHtml(new Date(`${expiry}T12:00:00`).toLocaleDateString('zh-CN'))}` : '长期有效'}</strong></div></div><div class="profile-membership-fields"><div class="field"><label for="profilePlan">会员等级</label><select class="select" id="profilePlan" name="plan"><option value="free">免费用户</option><option value="plus">Plus 会员</option><option value="pro">Pro 专业版</option></select></div><div class="field membership-expiry-field"><label for="profileExpiry">到期日期</label><input class="input" id="profileExpiry" name="expires_at" type="date" value="${escapeHtml(expiry)}"><div class="membership-expiry-presets" role="group" aria-label="快捷设置会员有效期"><button type="button" data-expiry-preset="half_month" aria-pressed="false">半个月</button><button type="button" data-expiry-preset="one_month" aria-pressed="false">一个月</button><button type="button" data-expiry-preset="three_months" aria-pressed="false">3个月</button><button type="button" data-expiry-preset="one_year" aria-pressed="false">一年</button><button type="button" data-expiry-preset="long_term" aria-pressed="false">长期有效</button></div><span class="helper" id="profileExpiryHelper" aria-live="polite">快捷期限从今天开始计算；也可以手动选择日期。</span></div></div></section><section class="profile-section profile-security-section" aria-labelledby="profileSecurityTitle"><header class="profile-section-head"><span class="profile-section-icon">${icons.key}</span><div><h3 id="profileSecurityTitle">账号安全</h3><p>仅在需要时重置密码，留空不会修改现有密码。</p></div></header><div class="field"><label for="profilePassword">设置新密码（可选）</label><input class="input" id="profilePassword" name="password" type="password" autocomplete="new-password" placeholder="至少 8 位，必须包含字母和数字"><span class="helper">保存新密码后，该用户的桥接长期登录会话会立即失效。</span></div></section></div><div class="profile-form-actions">${user.role!=='admin'?'<button class="text-button danger-text" id="deleteUserButton" type="button">匿名化删除账号</button>':''}<div class="profile-save-note">${icons.info}<span>所有修改仅在保存后生效</span></div><span class="action-spacer"></span><button class="secondary-button" type="button" data-close-modal>取消</button><button class="primary-button" id="saveProfileButton" type="submit">${icons.save}<span>保存档案</span></button></div></form>`
+    body.innerHTML = `${tabs}<form class="profile-workspace" id="profileForm"><div class="profile-layout"><section class="profile-section profile-identity-section" aria-labelledby="profileIdentityTitle"><header class="profile-section-head"><span class="profile-section-icon">${icons.users}</span><div><h3 id="profileIdentityTitle">身份资料</h3><p>维护用户展示信息、联系方式与后台权限。</p></div></header><div class="profile-section-grid"><div class="field"><label for="profileNickname">用户昵称</label><input class="input" id="profileNickname" name="nickname" autocomplete="nickname" value="${escapeHtml(user.nickname)}" placeholder="请输入用户昵称"></div><div class="field"><label for="profileRole">账号角色</label><select class="select" id="profileRole" name="role"><option value="user">普通用户</option><option value="admin">管理员</option></select></div><div class="field"><label for="profileEmail">邮箱（可选）</label><input class="input" id="profileEmail" name="email" type="email" autocomplete="email" value="${escapeHtml(user.email)}" placeholder="未绑定邮箱"></div><div class="field"><label for="profilePhone">手机号（可选）</label><input class="input" id="profilePhone" name="phone" type="tel" autocomplete="tel" value="${escapeHtml(user.phone)}" placeholder="未绑定手机号"></div></div><div class="profile-section-note">${icons.info}<span>邮箱与手机号可以任意留空；已有联系方式的账号至少保留一项。</span></div></section><section class="profile-section profile-membership-section" aria-labelledby="profileMembershipTitle"><header class="profile-section-head"><span class="profile-section-icon">${icons.wallet}</span><div><h3 id="profileMembershipTitle">会员权益</h3><p>调整等级与有效期，保存后立即生效。</p></div></header><div class="profile-membership-summary" aria-live="polite"><div><span>当前选择</span><strong id="profileMembershipPlanState" data-plan="${escapeHtml(user.plan)}">${escapeHtml(planDisplayLabels[user.plan] || user.plan || '免费用户')}</strong></div><div><span>有效期限</span><strong id="profileMembershipExpiryState">${user.plan === 'free' ? '无需设置到期日期' : expiry ? `有效至 ${escapeHtml(new Date(`${expiry}T12:00:00`).toLocaleDateString('zh-CN'))}` : '长期有效'}</strong></div></div><div class="profile-membership-fields"><div class="field"><label for="profilePlan">会员等级</label><select class="select" id="profilePlan" name="plan"><option value="free">免费用户</option><option value="plus">Plus 会员</option><option value="pro">Pro 专业版</option></select></div><div class="field membership-expiry-field"><label for="profileExpiry">到期日期</label><input class="input" id="profileExpiry" name="expires_at" type="date" value="${escapeHtml(expiry)}"><div class="membership-expiry-presets" role="group" aria-label="快捷设置会员有效期"><button type="button" data-expiry-preset="half_month" aria-pressed="false">半个月</button><button type="button" data-expiry-preset="one_month" aria-pressed="false">一个月</button><button type="button" data-expiry-preset="three_months" aria-pressed="false">3个月</button><button type="button" data-expiry-preset="one_year" aria-pressed="false">一年</button><button type="button" data-expiry-preset="long_term" aria-pressed="false">长期有效</button></div><span class="helper" id="profileExpiryHelper" aria-live="polite">快捷期限从今天开始计算；也可以手动选择日期。</span></div></div></section><section class="profile-section profile-security-section" aria-labelledby="profileSecurityTitle"><header class="profile-section-head"><span class="profile-section-icon">${icons.key}</span><div><h3 id="profileSecurityTitle">账号安全</h3><p>仅在需要时重置密码，留空不会修改现有密码。</p></div></header><div class="field"><label for="profilePassword">设置新密码（可选）</label><input class="input" id="profilePassword" name="password" type="password" autocomplete="new-password" placeholder="至少 8 位，必须包含字母和数字"><span class="helper">保存新密码后，该用户的桥接长期登录会话会立即失效。</span></div></section></div><div class="profile-form-actions">${user.role!=='admin'?'<button class="secondary-button" id="sendUserNotificationButton" type="button">发送通知</button>':''}${user.role!=='admin'?'<button class="text-button danger-text" id="deleteUserButton" type="button">匿名化删除账号</button>':''}<div class="profile-save-note">${icons.info}<span>所有修改仅在保存后生效</span></div><span class="action-spacer"></span><button class="secondary-button" type="button" data-close-modal>取消</button><button class="primary-button" id="saveProfileButton" type="submit">${icons.save}<span>保存档案</span></button></div></form>`
     body.querySelector('#profileRole').value = user.role
     body.querySelector('#profilePlan').value = user.plan
     bindMembershipExpiryPresets(body, user.plan)
     body.querySelector('#profileForm').addEventListener('submit', saveUserProfile)
     body.querySelector('#deleteUserButton')?.addEventListener('click',deleteSelectedUser)
+    body.querySelector('#sendUserNotificationButton')?.addEventListener('click', () => openNotificationCenterForUser(user))
     body.querySelector('[data-close-modal]').addEventListener('click', closeUserModal)
   }
   body.querySelectorAll('[data-detail-tab]').forEach(button => button.addEventListener('click', () => renderUserDetail(button.dataset.detailTab)))
@@ -860,6 +1298,21 @@ function closeUserModal() {
   document.querySelector('#userModal').hidden = true
   document.body.style.overflow = ''
   state.selectedUser = null
+}
+function openNotificationCenterForUser(user) {
+  if (!user?.id) return
+  const draft = state.notificationCenter
+  draft.tab = 'compose'
+  draft.scope = 'user'
+  draft.userId = String(user.id)
+  draft.userLabel = `${user.nickname || user.email || `用户 #${user.id}`} · ${user.email || user.phone || '联系方式未显示'}`
+  draft.userSearch = draft.userLabel
+  draft.plans = []
+  draft.preview = null
+  draft.previewError = ''
+  draft.previewNotice = ''
+  closeUserModal()
+  setView('notifications').then(() => document.querySelector('#notificationTitle')?.focus()).catch(handleError)
 }
 function confirmAction(title, message, confirmLabel = '确认', danger = false, requiredText = '') {
   const layer = document.querySelector('#confirmModal')
@@ -2446,6 +2899,7 @@ async function setView(view) {
   window.scrollTo(0,0)
   document.querySelector('#adminMain').classList.toggle('ai-operations-page', view === 'ai-operations')
   document.querySelector('#adminMain').classList.toggle('overview-page', view === 'overview')
+  document.querySelector('#adminMain').classList.toggle('notification-center-page', view === 'notifications')
   document.querySelector('#adminMain').classList.toggle('content-operations-page', view === 'content-operations')
   document.querySelector('#adminMain').classList.toggle('system-settings-page', view === 'system-settings')
   document.querySelectorAll('.nav-item[data-view]').forEach(item => {
@@ -2461,6 +2915,7 @@ async function setView(view) {
   document.querySelector('#drawerScrim').hidden = true
   try {
     if (view === 'users') await renderUsers()
+    else if (view === 'notifications') await renderNotificationCenterPage()
     else if (view === 'commercial') await renderCommercial()
     else if (view === 'ai-operations') await renderAiOperations()
     else if (view === 'risk-audit') await renderRiskAudit()
@@ -2596,7 +3051,14 @@ async function bootstrap() {
     connectAdminRealtime()
     const requested = new URLSearchParams(location.search).get('view')
     const legacyView = requested === 'content-system' ? 'content-operations' : requested
-    await setView(['users','commercial','ai-operations','risk-audit','management-audit','content-operations','system-settings'].includes(legacyView) ? legacyView : 'overview')
+    const requestedUserId = new URLSearchParams(location.search).get('userId')
+    if (legacyView === 'notifications' && /^\d+$/.test(String(requestedUserId || ''))) {
+      state.notificationCenter.scope = 'user'
+      state.notificationCenter.userId = String(requestedUserId)
+      state.notificationCenter.userSearch = `用户 #${requestedUserId}`
+      state.notificationCenter.tab = 'compose'
+    }
+    await setView(['users','notifications','commercial','ai-operations','risk-audit','management-audit','content-operations','system-settings'].includes(legacyView) ? legacyView : 'overview')
   } catch (error) { handleError(error) }
 }
 bootstrap()

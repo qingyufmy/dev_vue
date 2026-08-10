@@ -1779,6 +1779,32 @@ export function buildBrowserCommandResult(commandId, data = {}) {
   return { ...data, type:'result', command_id:commandId }
 }
 
+// Notification wake-ups are addressed only to the authenticated user's own
+// browser sockets.  Do not call sendToBrowsers here: that helper intentionally
+// forwards a small set of market/read-model events to observer channels, while
+// a user notification must never cross that boundary.
+export function sendNotificationCreatedToUser(userId, data = {}) {
+  const numericUserId = Number(userId)
+  if (!Number.isSafeInteger(numericUserId) || numericUserId <= 0) return 0
+  const set = browsers.get(numericUserId) || browsers.get(userId)
+  if (!set) return 0
+  const payload = {
+    type:'notification_created',
+    notificationId:Number(data.notificationId) || null,
+    priority:['normal', 'important'].includes(String(data.priority || '')) ? String(data.priority) : 'normal',
+    requiresAck:Boolean(data.requiresAck),
+    unreadCount:Math.max(0, Number(data.unreadCount) || 0),
+  }
+  const json = JSON.stringify(payload)
+  let delivered = 0
+  for (const ws of set) {
+    if (ws.readyState === 1) {
+      try { ws.send(json); delivered++ } catch {}
+    } else set.delete(ws)
+  }
+  return delivered
+}
+
 // Signal detail and evidence deliberately share this visibility lookup.  A
 // signal id alone is never sufficient: shared deliveries, observer strategy
 // scope, and legacy owner/platform rows all participate in the same check.

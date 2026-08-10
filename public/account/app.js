@@ -2,7 +2,14 @@ const $ = id => document.getElementById(id)
 const accountParams = new URLSearchParams(location.search)
 const embedMode = ['ai','main','admin'].includes(accountParams.get('embed')) ? accountParams.get('embed') : ''
 const embedded = Boolean(embedMode)
-const state = { user:null, plans:null, orders:null, referral:null, notifications:null, notificationUnread:0, period:'month', tab:'overview', paymentTimer:null, securityCooldown:null, securityFlow:null, securityReturnFocus:null }
+const notificationQueryId = accountParams.get('notification') || accountParams.get('notice') || ''
+const state = {
+  user:null, plans:null, orders:null, referral:null, notifications:null,
+  notificationUnread:0, notificationImportantUnacknowledgedCount:0,
+  notificationLatestImportant:null, notificationFocusId:notificationQueryId,
+  period:'month', tab:'overview', paymentTimer:null, securityCooldown:null,
+  securityFlow:null, securityReturnFocus:null, notificationSummaryFlight:null,
+}
 const TAB_META = {
   overview:['账户概览','查看会员状态和常用账户信息。'],
   profile:['个人资料','管理头像、昵称和账户基础信息。'],
@@ -75,6 +82,94 @@ function toast(message,type='') {
 
 function notifyParent(type,payload={}) {
   if (window.parent !== window) window.parent.postMessage({ type,...payload },location.origin)
+}
+
+function normalizeNotificationPriority(item={}) {
+  const value = String(item.priority ?? item.level ?? '').trim().toLowerCase()
+  return ['important','high','urgent'].includes(value) || item.requiresAck ? 'important' : 'normal'
+}
+
+function normalizeNotification(item={}) {
+  return {
+    id:item.id,
+    type:item.type || 'system',
+    title:item.title || '系统通知',
+    message:item.message || '',
+    link:item.link || '',
+    priority:normalizeNotificationPriority(item),
+    requiresAck:Boolean(item.requiresAck ?? item.requires_ack ?? normalizeNotificationPriority(item) === 'important'),
+    isRead:Boolean(item.isRead ?? item.is_read),
+    readAt:item.readAt ?? item.read_at ?? null,
+    acknowledgedAt:item.acknowledgedAt ?? item.acknowledged_at ?? null,
+    createdAt:item.createdAt ?? item.created_at ?? null,
+  }
+}
+
+function normalizeLatestImportant(item) {
+  if (!item || item.id == null) return null
+  const normalized = normalizeNotification(item)
+  return {
+    id:normalized.id,
+    title:normalized.title,
+    priority:normalized.priority,
+    requiresAck:normalized.requiresAck,
+    // The summary endpoint may include a short display message for the local
+    // AI banner. It is deliberately omitted from postMessage payloads below.
+    ...(item.message ? { message:String(item.message) } : {}),
+  }
+}
+
+function notificationSummaryFrom(result={}) {
+  const summary = result.summary && typeof result.summary === 'object' ? result.summary : result
+  const unreadValue = summary.unreadCount ?? summary.unread_count ?? result.unreadCount
+  const importantValue = summary.importantUnacknowledgedCount ?? summary.important_unacknowledged_count
+  const latestPresent = Object.prototype.hasOwnProperty.call(summary,'latestImportant') || Object.prototype.hasOwnProperty.call(summary,'latest_important')
+  const latest = summary.latestImportant ?? summary.latest_important ?? null
+  return {
+    unreadCount:unreadValue == null ? null : Number(unreadValue),
+    importantUnacknowledgedCount:importantValue == null ? null : Number(importantValue),
+    latestImportant:latestPresent ? normalizeLatestImportant(latest) : undefined,
+  }
+}
+
+function notificationSummaryPayload() {
+  const latest = state.notificationLatestImportant
+  return {
+    unreadCount:Number(state.notificationUnread || 0),
+    importantUnacknowledgedCount:Number(state.notificationImportantUnacknowledgedCount || 0),
+    latestImportant:latest ? {
+      id:latest.id,
+      title:latest.title,
+      priority:latest.priority,
+      requiresAck:Boolean(latest.requiresAck),
+    } : null,
+  }
+}
+
+function syncNotificationSummary(summary, { notify=true }={}) {
+  const next = summary || {}
+  if (next.unreadCount != null && Number.isFinite(Number(next.unreadCount))) state.notificationUnread = Math.max(0,Number(next.unreadCount))
+  if (next.importantUnacknowledgedCount != null && Number.isFinite(Number(next.importantUnacknowledgedCount))) state.notificationImportantUnacknowledgedCount = Math.max(0,Number(next.importantUnacknowledgedCount))
+  if (next.latestImportant !== undefined) state.notificationLatestImportant = normalizeLatestImportant(next.latestImportant)
+  if (notify) notifyParent('account-notifications-updated',notificationSummaryPayload())
+}
+
+function safeNotificationLink(value) {
+  const raw = String(value || '').trim()
+  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return ''
+  let url
+  try { url = new URL(raw,location.origin) } catch { return '' }
+  if (url.origin !== location.origin) return ''
+  let decodedPath
+  try { decodedPath = decodeURIComponent(url.pathname || '/') } catch { return '' }
+  if (decodedPath.startsWith('//') || decodedPath.includes('\\') || decodedPath.split('/').includes('..')) return ''
+  let canonicalUrl
+  try { canonicalUrl = new URL(decodedPath,location.origin) } catch { return '' }
+  if (canonicalUrl.origin !== location.origin) return ''
+  const pathname = canonicalUrl.pathname || '/'
+  if (pathname.startsWith('/admin') || pathname.startsWith('/api') || pathname.startsWith('/download')) return ''
+  if (pathname !== '/' && !pathname.startsWith('/account/') && !pathname.startsWith('/ai/')) return ''
+  return `${pathname}${url.search}${url.hash}`
 }
 
 function setSync(text='同步完成',ready=true) {
@@ -431,8 +526,111 @@ function ordersTemplate() {
 
 function notificationsTemplate() {
   if (!state.notifications) return '<div class="page-loading"><span></span><strong>正在读取消息通知</strong></div>'
-  if (!state.notifications.length) return '<div class="empty-state"><strong>暂时没有消息</strong><span>账户和社区的重要动态会显示在这里。</span></div>'
-  return `<article class="panel"><div class="section-heading"><div><h2>消息通知</h2><p>未读 ${Number(state.notificationUnread || 0)} 条</p></div>${state.notificationUnread ? '<button id="markNotificationsRead" class="button secondary">全部标为已读</button>' : ''}</div><div class="order-list">${state.notifications.map(item => `<div class="order-row"><div><strong>${escapeHtml(item.title || '系统通知')}</strong><small>${escapeHtml(item.message || '')}</small><small>${escapeHtml(formatDate(item.createdAt))}</small></div><span class="status-badge ${item.isRead ? '' : 'paid'}">${item.isRead ? '已读' : '未读'}</span></div>`).join('')}</div></article>`
+  if (!state.notifications.length) return '<div class="empty-state"><strong>暂时没有消息</strong><span>账户、服务与平台的重要动态会显示在这里。</span></div>'
+  return `<article class="panel notification-panel"><div class="section-heading"><div><h2>消息通知</h2><p>未读 ${Number(state.notificationUnread || 0)} 条${state.notificationImportantUnacknowledgedCount ? ` · 待确认 ${Number(state.notificationImportantUnacknowledgedCount)} 条` : ''}</p></div>${state.notificationUnread ? '<button id="markNotificationsRead" class="button secondary" type="button">全部标为已读</button>' : ''}</div><div class="order-list notification-list">${state.notifications.map(item => {
+    const important = item.priority === 'important' || item.requiresAck
+    const safeLink = safeNotificationLink(item.link)
+    const acknowledged = Boolean(item.acknowledgedAt)
+    const status = acknowledged ? '已确认' : item.requiresAck ? '待确认' : item.isRead ? '已读' : '未读'
+    const stateClass = acknowledged ? 'success' : item.requiresAck ? 'warning' : item.isRead ? '' : 'unread'
+    return `<article class="notification-item ${important ? 'is-important' : ''} ${item.isRead ? 'is-read' : 'is-unread'}" data-notification-id="${escapeHtml(item.id)}" tabindex="-1"><div class="notification-item-main"><div class="notification-item-heading"><button class="notification-open" data-notification-open="${escapeHtml(item.id)}" type="button" aria-label="${escapeHtml(`${item.isRead ? '查看' : '打开未读'}通知：${item.title || '系统通知'}`)}"><strong>${escapeHtml(item.title || '系统通知')}</strong></button><span class="notification-priority ${important ? 'important' : 'normal'}">${important ? '重要' : '普通'}</span></div><p>${escapeHtml(item.message || '')}</p><small>${escapeHtml(formatDate(item.createdAt))}</small>${safeLink ? `<a class="notification-link" data-notification-link="${escapeHtml(item.id)}" href="${escapeHtml(safeLink)}">查看详情</a>` : ''}</div><div class="notification-item-actions"><span class="status-badge notification-status ${stateClass}">${status}</span>${item.requiresAck && !acknowledged ? `<button class="button primary notification-acknowledge" data-notification-ack="${escapeHtml(item.id)}" type="button">我知道了</button>` : ''}</div></article>`
+  }).join('')}</div></article>`
+}
+
+function notificationById(id) {
+  return (state.notifications || []).find(item => String(item.id) === String(id)) || null
+}
+
+async function loadNotificationSummary({ notify=true }={}) {
+  if (state.notificationSummaryFlight) return state.notificationSummaryFlight
+  state.notificationSummaryFlight = api('/api/notifications/summary')
+    .then(result => {
+      syncNotificationSummary(notificationSummaryFrom(result),{ notify })
+      return result
+    })
+    .catch(error => {
+      // Older deployments do not expose the summary endpoint yet. The list
+      // response remains a useful compatibility fallback and must not block
+      // the account center.
+      return null
+    })
+    .finally(() => { state.notificationSummaryFlight = null })
+  return state.notificationSummaryFlight
+}
+
+function focusNotification(id) {
+  const row = [...document.querySelectorAll('[data-notification-id]')].find(node => String(node.dataset.notificationId) === String(id))
+  if (!row) return
+  row.scrollIntoView?.({ block:'center', behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+  row.focus({ preventScroll:true })
+  state.notificationFocusId = ''
+  void markNotificationRead(id,{ silent:true })
+}
+
+async function markNotificationRead(id,{ silent=false }={}) {
+  const item = notificationById(id)
+  if (!item || item.isRead) return true
+  try {
+    const result = await api('/api/notifications',{ method:'PATCH',body:{ id } })
+    item.isRead = true
+    item.readAt = new Date().toISOString()
+    const summary = notificationSummaryFrom(result)
+    if (Number.isFinite(summary.unreadCount)) state.notificationUnread = summary.unreadCount
+    else state.notificationUnread = Math.max(0,state.notificationUnread - 1)
+    syncNotificationSummary({
+      unreadCount:state.notificationUnread,
+      importantUnacknowledgedCount:state.notificationImportantUnacknowledgedCount,
+      latestImportant:state.notificationLatestImportant,
+    })
+    if (state.tab === 'notifications') renderTab()
+    return true
+  } catch (error) {
+    if (!silent) toast(error.message || '通知已读状态更新失败','error')
+    return false
+  }
+}
+
+async function openNotification(id) {
+  const item = notificationById(id)
+  if (!item) return
+  await markNotificationRead(id)
+  const link = safeNotificationLink(item.link)
+  if (link) location.assign(link)
+}
+
+async function openNotificationLink(event,link) {
+  event.preventDefault()
+  const id = link.dataset.notificationLink
+  const href = safeNotificationLink(link.getAttribute('href'))
+  if (!href) return
+  await markNotificationRead(id)
+  location.assign(href)
+}
+
+async function acknowledgeNotification(id,button) {
+  const item = notificationById(id)
+  if (!item || !item.requiresAck || item.acknowledgedAt) return
+  if (button) { button.disabled = true; button.textContent = '正在确认…' }
+  try {
+    const result = await api(`/api/notifications/${encodeURIComponent(id)}/acknowledge`,{ method:'POST',body:{} })
+    item.acknowledgedAt = result.acknowledgedAt ?? result.acknowledged_at ?? result.notification?.acknowledgedAt ?? result.notification?.acknowledged_at ?? new Date().toISOString()
+    item.isRead = true
+    const summary = notificationSummaryFrom(result)
+    const nextImportantCount = Number.isFinite(summary.importantUnacknowledgedCount)
+      ? summary.importantUnacknowledgedCount
+      : Math.max(0,state.notificationImportantUnacknowledgedCount - 1)
+    syncNotificationSummary({
+      unreadCount:Number.isFinite(summary.unreadCount) ? summary.unreadCount : state.notificationUnread,
+      importantUnacknowledgedCount:nextImportantCount,
+      latestImportant:summary.latestImportant === undefined ? (nextImportantCount ? state.notificationLatestImportant : null) : summary.latestImportant,
+    })
+    await loadNotificationSummary()
+    renderTab()
+    toast('重要通知已确认')
+  } catch (error) {
+    if (button) { button.disabled = false; button.textContent = '我知道了' }
+    toast(error.message || '确认通知失败','error')
+  }
 }
 
 function referralTemplate() {
@@ -448,6 +646,9 @@ function renderTab() {
   if (state.tab === 'orders' && !state.orders) void loadOrders()
   if (state.tab === 'notifications' && !state.notifications) void loadNotifications()
   if (state.tab === 'referral' && !state.referral) void loadReferral()
+  if (state.tab === 'notifications' && state.notifications && state.notificationFocusId) {
+    window.setTimeout(() => focusNotification(state.notificationFocusId),0)
+  }
 }
 
 function bindTabActions() {
@@ -458,6 +659,9 @@ function bindTabActions() {
   $('profileForm')?.addEventListener('submit',event => { event.preventDefault(); void saveProfile(event.currentTarget) })
   $('avatarInput')?.addEventListener('change',event => void saveAvatar(event.target.files?.[0]))
   $('markNotificationsRead')?.addEventListener('click',() => void markNotificationsRead())
+  document.querySelectorAll('[data-notification-open]').forEach(button => button.addEventListener('click',() => void openNotification(button.dataset.notificationOpen)))
+  document.querySelectorAll('[data-notification-ack]').forEach(button => button.addEventListener('click',() => void acknowledgeNotification(button.dataset.notificationAck,button)))
+  document.querySelectorAll('[data-notification-link]').forEach(link => link.addEventListener('click',event => void openNotificationLink(event,link)))
   $('copyReferralBtn')?.addEventListener('click',async () => { await navigator.clipboard.writeText($('referralLink').value); toast('邀请链接已复制') })
 }
 
@@ -498,11 +702,35 @@ async function loadOrders() {
   catch(error){ toast(error.message,'error'); state.orders=[]; if(state.tab==='orders') renderTab() }
 }
 async function loadNotifications() {
-  try { const result=await api('/api/notifications?limit=50'); state.notifications=result.notifications || []; state.notificationUnread=Number(result.unreadCount || 0); if(state.tab==='notifications') renderTab() }
+  try {
+    const result=await api('/api/notifications?limit=50')
+    const rows = Array.isArray(result.items) ? result.items : Array.isArray(result.notifications) ? result.notifications : []
+    state.notifications = Array.isArray(rows) ? rows.map(normalizeNotification) : []
+    const summary = notificationSummaryFrom(result)
+    syncNotificationSummary({
+      unreadCount:summary.unreadCount == null ? state.notificationUnread : summary.unreadCount,
+      importantUnacknowledgedCount:summary.importantUnacknowledgedCount,
+      latestImportant:summary.latestImportant,
+    })
+    // Some compatible list endpoints only expose the unread count. Fetch the
+    // richer summary separately so the important banner/ack state stays exact.
+    if (summary.importantUnacknowledgedCount == null || summary.latestImportant === undefined) void loadNotificationSummary()
+    if(state.tab==='notifications') renderTab()
+  }
   catch(error){ toast(error.message,'error'); state.notifications=[]; if(state.tab==='notifications') renderTab() }
 }
 async function markNotificationsRead() {
-  try { await api('/api/notifications',{ method:'PATCH',body:{ markAll:true } }); state.notifications=(state.notifications || []).map(item=>({ ...item,isRead:true })); state.notificationUnread=0; notifyParent('account-notifications-updated',{ unreadCount:0 }); renderTab(); toast('全部消息已标为已读') }
+  try {
+    const result = await api('/api/notifications',{ method:'PATCH',body:{ markAll:true } })
+    state.notifications=(state.notifications || []).map(item=>({ ...item,isRead:true,readAt:item.readAt || new Date().toISOString() }))
+    const summary = notificationSummaryFrom(result)
+    syncNotificationSummary({
+      unreadCount:summary.unreadCount == null ? 0 : summary.unreadCount,
+      importantUnacknowledgedCount:summary.importantUnacknowledgedCount,
+      latestImportant:summary.latestImportant,
+    })
+    renderTab(); toast('全部消息已标为已读')
+  }
   catch(error){ toast(error.message,'error') }
 }
 async function loadReferral() {
@@ -556,7 +784,9 @@ async function bootstrap() {
   try {
     const [profileResult,plansResult]=await Promise.all([api('/api/profile'),api('/api/plans')])
     state.user=profileResult.user; state.plans=plansResult.plans || {}; localStorage.setItem('ws_user',JSON.stringify(state.user))
-    renderIdentity(); setSync(); switchTab(new URLSearchParams(location.search).get('tab') || 'overview',{ push:false })
+    renderIdentity(); setSync();
+    void loadNotificationSummary()
+    switchTab(new URLSearchParams(location.search).get('tab') || 'overview',{ push:false })
   } catch(error) { $('accountContent').innerHTML=`<div class="empty-state"><strong>账户信息加载失败</strong><span>${escapeHtml(error.message)}</span><button class="button secondary" onclick="location.reload()">重新加载</button></div>`; setSync('同步失败',false) }
 }
 
@@ -569,9 +799,13 @@ document.querySelectorAll('[data-close-security-captcha]').forEach(button=>butto
 $('securityDialog').addEventListener('close',()=>{ clearSecurityCooldown(); const focus=state.securityReturnFocus; state.securityFlow=null; state.securityReturnFocus=null; if(focus?.isConnected) focus.focus() })
 window.addEventListener('keydown',event=>{ if(event.key==='Escape' && embedded && !$('securityDialog').open && !$('securityCaptchaDialog').open && !$('paymentDialog').open){ event.preventDefault(); notifyParent('account-center-close') } })
 window.addEventListener('storage',event=>{ if(event.key===AuthSession.eventKey && !AuthSession.token()) location.replace(embedMode === 'ai' ? '/ai/auth/?mode=login' : embedded ? '/auth/login?mode=login' : '/') })
+document.addEventListener('visibilitychange',() => { if (!document.hidden) void loadNotificationSummary() })
 window.addEventListener('message',event=>{
   if(event.origin!==location.origin || event.source!==window.parent) return
-  if(event.data?.type==='account-center-tab') switchTab(event.data.tab || 'overview')
+  if(event.data?.type==='account-center-tab') {
+    state.notificationFocusId = event.data.notificationId == null ? '' : String(event.data.notificationId)
+    switchTab(event.data.tab || 'overview')
+  }
   if(event.data?.type==='account-center-theme' && embedMode === 'main') document.body.classList.toggle('account-main-dark',event.data.theme === 'dark')
 })
 

@@ -1242,6 +1242,7 @@ button {
 }
 
 .topbar-account-link {
+  position: relative;
   width: auto;
   min-width: 76px;
   padding-inline: 12px;
@@ -1251,6 +1252,117 @@ button {
 .topbar-account-link i {
   color: var(--gold-primary);
 }
+
+.notification-badge {
+  position: absolute;
+  top: -4px;
+  right: -3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 2px solid var(--bg-topbar);
+  border-radius: 999px;
+  color: #07111f;
+  background: var(--color-info, #6baee8);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.notification-badge[hidden] { display: none !important; }
+
+/* Important notices are a fixed overlay so the trading grid never reflows. */
+.notification-banner {
+  position: fixed;
+  top: 64px;
+  right: clamp(180px, 16vw, 300px);
+  z-index: 130;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: min(540px, calc(100vw - 220px));
+  min-height: 56px;
+  max-height: 96px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 48%, var(--border-default));
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--color-warning, #f59e0b) 6%);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .34);
+}
+
+.notification-banner[hidden] { display: none !important; }
+
+.notification-banner-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--color-warning, #f59e0b);
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 14%, transparent);
+}
+
+.notification-banner-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  line-height: 1.35;
+}
+
+.notification-banner-copy > strong {
+  color: var(--color-warning, #f59e0b);
+  font-size: 11px;
+}
+
+.notification-banner-copy > span,
+.notification-banner-copy > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notification-banner-copy > span {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.notification-banner-copy > small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.notification-banner-copy > small#notificationBannerMessage {
+  display: -webkit-box;
+  max-width: 44ch;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.notification-banner-action {
+  min-height: 44px;
+  border: 1px solid color-mix(in srgb, var(--color-warning, #f59e0b) 44%, var(--border-default));
+  border-radius: var(--radius-sm);
+  padding: 0 11px;
+  color: #211504;
+  background: var(--color-warning, #f59e0b);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.notification-banner-action:hover { filter: brightness(1.08); }
+.notification-banner-action:focus-visible { outline: 2px solid var(--gold-primary); outline-offset: 2px; }
 
 #refreshAllBtn {
   width: 36px;

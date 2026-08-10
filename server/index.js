@@ -34,6 +34,7 @@ import sentimentRoutes from './routes/sentiment.js'
 import bridgeReleaseRoutes from './routes/bridge-release.js'
 import bridgeMaintenanceRoutes from './routes/bridge-maintenance.js'
 import bridgeRuntimeControlRoutes from './routes/bridge-runtime-control.js'
+import adminNotificationRoutes from './routes/admin-notifications.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON, getRedis } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker, startMemoryCompressionWorker, startManualAnalysisJobs,
@@ -53,6 +54,7 @@ import { startWeeklySystemFlatten } from './jobs/weekly-system-flatten.js'
 import { startMembershipExpiryNotificationWorker } from './membership-expiry-notifications.js'
 import { startPaymentOrderCleanup } from './jobs/payment-order-cleanup.js'
 import { startPaymentSideEffectWorker } from './jobs/payment-side-effects.js'
+import { startNotificationCenterWorker, stopNotificationCenterWorker } from './notification-center.js'
 import { startStorageMaintenance } from './storage/storage-operations.js'
 import { securityHeaders } from './security-headers.js'
 import { blockPrivateVideoStatic } from './video-access.js'
@@ -236,6 +238,7 @@ app.use('/api', sentimentRoutes)
 app.use('/api', bridgeReleaseRoutes)
 app.use('/api', bridgeMaintenanceRoutes)
 app.use('/api', bridgeRuntimeControlRoutes)
+app.use('/api', adminNotificationRoutes)
 app.use('/aurum-api', noCache, aiRoutes)
 
 
@@ -390,12 +393,14 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const autoStop = stopAutoSchedulers({ timeoutMs:timeout })
     const pendingStop = stopPendingReconciler()
     const orderIntentStop = stopOrderIntentReconciler()
+    const notificationStop = stopNotificationCenterWorker()
     clearShutdownTimers()
 
     await Promise.all([
       waitForShutdownTask(autoStop, 'automatic schedulers', timeout),
       waitForShutdownTask(pendingStop, 'pending reconciler', timeout),
       waitForShutdownTask(orderIntentStop, 'order-intent reconciler', timeout),
+      waitForShutdownTask(notificationStop, 'notification center worker', timeout),
     ])
 
     // Stop accepting HTTP work only after scheduler rounds have been fenced;
@@ -523,6 +528,7 @@ installGracefulShutdownHandlers()
   startPaymentOrderCleanup()
   trackShutdownTimer(startStorageMaintenance())
   startPaymentSideEffectWorker()
+  startNotificationCenterWorker()
   // Sentiment data: non-blocking initial fetch + 30-min refresh
   fetchSentiment().then(data => {
     const hasValid = data.some(d => d.longPct !== null)

@@ -25,6 +25,12 @@ const state = {
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
   accountBalance: 0,
+  notificationUnread: 0,
+  notificationImportantUnacknowledgedCount: 0,
+  latestImportant: null,
+  notificationSummaryFlight: null,
+  notificationSummaryLoaded: false,
+  notificationWsReady: false,
   bridgeAccountIdentity: null,
   mt5TimezoneOffsetMinutes: null,
   bridgePlatform: "mt5",
@@ -1801,6 +1807,105 @@ async function api(path, options = {}) {
   }
 }
 
+function normalizeNotificationSummary(data = {}) {
+  const summary = data.summary && typeof data.summary === "object" ? data.summary : data;
+  const unreadValue = summary.unreadCount ?? summary.unread_count ?? 0;
+  const importantValue = summary.importantUnacknowledgedCount ?? summary.important_unacknowledged_count ?? 0;
+  const latestRaw = summary.latestImportant ?? summary.latest_important ?? null;
+  const latestImportant = latestRaw && latestRaw.id != null ? {
+    id:latestRaw.id,
+    title:String(latestRaw.title || "重要通知"),
+    priority:String(latestRaw.priority || "important"),
+    requiresAck:Boolean(latestRaw.requiresAck ?? latestRaw.requires_ack ?? true),
+    ...(latestRaw.message ? { message:String(latestRaw.message) } : {}),
+  } : null;
+  return {
+    unreadCount:Math.max(0,Number(unreadValue) || 0),
+    importantUnacknowledgedCount:Math.max(0,Number(importantValue) || 0),
+    latestImportant,
+  };
+}
+
+function updateNotificationSummary(data = {}, { announce=true } = {}) {
+  const summary = normalizeNotificationSummary(data);
+  const previousLatestId = state.latestImportant?.id == null ? "" : String(state.latestImportant.id);
+  const previousImportantCount = Number(state.notificationImportantUnacknowledgedCount || 0);
+  state.notificationUnread = summary.unreadCount;
+  state.notificationImportantUnacknowledgedCount = summary.importantUnacknowledgedCount;
+  state.latestImportant = summary.latestImportant;
+  state.notificationSummaryLoaded = true;
+
+  const badge = $("notificationBadge");
+  const accountButton = $("accountCenterBtn");
+  if (badge) {
+    const count = state.notificationUnread;
+    badge.textContent = count >= 100 ? "99+" : count > 0 ? String(count) : "";
+    badge.hidden = count <= 0;
+    badge.setAttribute("aria-hidden", count > 0 ? "false" : "true");
+  }
+  if (accountButton) {
+    const count = state.notificationUnread;
+    accountButton.title = count > 0 ? `查看 ${count >= 100 ? "99+" : count} 条未读通知` : "账户、会员与账单";
+    accountButton.setAttribute("aria-label", count > 0 ? `账户中心，${count >= 100 ? "99+" : count} 条未读通知` : "打开账户中心");
+  }
+
+  const banner = $("notificationBanner");
+  const titleNode = $("notificationBannerTitle");
+  const messageNode = $("notificationBannerMessage");
+  const countNode = $("notificationBannerCount");
+  const latest = state.latestImportant;
+  const showBanner = state.notificationImportantUnacknowledgedCount > 0 && latest?.id != null;
+  if (banner) banner.hidden = !showBanner;
+  if (showBanner) {
+    if (titleNode) titleNode.textContent = latest.title || "重要通知";
+    if (messageNode) messageNode.textContent = latest.message || "请打开通知中心查看详情，并完成确认。";
+    if (countNode) countNode.textContent = state.notificationImportantUnacknowledgedCount > 1 ? `另有 ${state.notificationImportantUnacknowledgedCount - 1} 条待确认` : "需要确认";
+    if (announce && (String(latest.id) !== previousLatestId || state.notificationImportantUnacknowledgedCount > previousImportantCount)) {
+      // role=status + aria-live=polite is intentionally used instead of a
+      // forced alert. The same id is not announced twice in this session.
+      if (state._notificationAnnouncedId !== String(latest.id)) {
+        state._notificationAnnouncedId = String(latest.id);
+        banner.dataset.announcement = "new";
+      }
+    }
+  }
+  initIcons();
+  return summary;
+}
+
+function refreshNotificationSummary({ announce=true } = {}) {
+  if (!state.token) return Promise.resolve(null);
+  if (state.notificationSummaryFlight) return state.notificationSummaryFlight;
+  state.notificationSummaryFlight = api("/api/notifications/summary")
+    .then(result => updateNotificationSummary(result, { announce }))
+    .catch(error => {
+      if (Number(error?.status) !== 401) console.warn("[Notifications] 摘要刷新失败:", error?.message || error);
+      return null;
+    })
+    .finally(() => { state.notificationSummaryFlight = null; });
+  return state.notificationSummaryFlight;
+}
+
+function handleNotificationCreated(message = {}) {
+  const summary = message.summary && typeof message.summary === "object" ? message.summary : null;
+  if (summary) {
+    updateNotificationSummary(summary);
+    void refreshNotificationSummary();
+    return;
+  }
+  const unreadCount = message.unreadCount ?? message.unread_count;
+  const importantCount = message.importantUnacknowledgedCount ?? message.important_unacknowledged_count;
+  const latestImportant = message.latestImportant ?? message.latest_important;
+  if (unreadCount != null || importantCount != null || latestImportant) {
+    updateNotificationSummary({
+      unreadCount:unreadCount ?? state.notificationUnread,
+      importantUnacknowledgedCount:importantCount ?? state.notificationImportantUnacknowledgedCount,
+      latestImportant:latestImportant ?? state.latestImportant,
+    });
+  }
+  void refreshNotificationSummary();
+}
+
 // WebSocket API — primary channel for all MT5/AI data
 let _wsCmdId = 0;
 const _wsPending = new Map();
@@ -1922,6 +2027,13 @@ function invalidateSession() {
   clearAccountContextCaches();
   state.token = "";
   state.user = null;
+  state.notificationUnread = 0;
+  state.notificationImportantUnacknowledgedCount = 0;
+  state.latestImportant = null;
+  state._notificationAnnouncedId = "";
+  state.notificationSummaryLoaded = false;
+  state.notificationWsReady = false;
+  updateNotificationSummary({ unreadCount:0, importantUnacknowledgedCount:0, latestImportant:null }, { announce:false });
   state.aiAccess = null;
   state.observerChannels = [];
   state.selectedObserverChannelId = null;
@@ -2161,18 +2273,23 @@ function connectBridgeStatusWs(onReady) {
     } catch {}
   };
   ws.onopen = () => {
+    const wasNotificationWsReady = state.notificationWsReady;
+    state.notificationWsReady = true;
     state._reconnectAttempts = 0; // reset backoff on successful connection
 
     state._hbSeq = 0;
     if (state._hbTimer) clearInterval(state._hbTimer);
     sendHeartbeat();
     state._hbTimer = setInterval(sendHeartbeat, 30000);
+    if (wasNotificationWsReady) void refreshNotificationSummary();
     _fireReady();
   };
   ws.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'platform_market_tick') {
+      if (msg.type === 'notification_created') {
+        handleNotificationCreated(msg);
+      } else if (msg.type === 'platform_market_tick') {
         const quote = msg.quote || {};
         if (isObserverMode()) syncTerminalTimezoneOffset(quote);
         const selected = String($("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || getGlobalSymbol()).toUpperCase();
@@ -2716,6 +2833,7 @@ document.addEventListener("visibilitychange", () => {
     stopLiveQuoteRefreshTimer();
     stopKlineRefreshTimers();
   } else {
+    void refreshNotificationSummary();
     startUiTimer();
     startLiveQuoteRefreshTimer();
     scheduleBridgeDataRefresh();
@@ -4786,17 +4904,25 @@ async function withBusy(button, task) {
 
 let accountCenterPreviousFocus = null;
 
-function openAccountCenter(tab = "overview") {
+function openAccountCenter(tab = "overview", notificationId = "") {
   const modal = $("accountCenterModal");
   const frame = $("accountCenterFrame");
   if (!modal || !frame) return;
   accountCenterPreviousFocus = document.activeElement;
-  const nextSrc = `/account/?embed=ai&tab=${encodeURIComponent(tab)}`;
-  if (!frame.src || !frame.src.includes("/account/")) frame.src = nextSrc;
-  else frame.contentWindow?.postMessage({ type:"account-center-tab", tab }, window.location.origin);
+  const nextSrc = `/account/?embed=ai&tab=${encodeURIComponent(tab)}${notificationId != null && String(notificationId) ? `&notification=${encodeURIComponent(String(notificationId))}` : ""}`;
+  // A banner click carries a concrete notification id. Reloading the iframe
+  // with that query is deterministic even if a previous tab message raced
+  // the iframe's initial load; ordinary account clicks keep the live frame.
+  if (notificationId != null && String(notificationId)) frame.src = nextSrc;
+  else if (!frame.src || !frame.src.includes("/account/")) frame.src = nextSrc;
+  else frame.contentWindow?.postMessage({ type:"account-center-tab", tab, ...(notificationId ? { notificationId:String(notificationId) } : {}) }, window.location.origin);
   modal.classList.remove("hidden");
   modal.setAttribute("aria-hidden", "false");
   document.body.classList.add("account-center-open");
+}
+
+function openNotificationCenter(notificationId = "") {
+  openAccountCenter("notifications", notificationId);
 }
 
 function closeAccountCenter() {
@@ -4811,10 +4937,29 @@ function closeAccountCenter() {
 
 function handleAccountCenterMessage(event) {
   if (event.origin !== window.location.origin || event.source !== $("accountCenterFrame")?.contentWindow) return;
-  if (event.data?.type === "account-center-close") return closeAccountCenter();
-  if (event.data?.type === "account-session-logout") return logout();
-  if (event.data?.type === "account-profile-updated" && event.data.user) {
-    state.user = { ...state.user, ...event.data.user };
+  const data = event.data;
+  if (!data || typeof data !== "object" || typeof data.type !== "string") return;
+  if (data.type === "account-center-close") return closeAccountCenter();
+  if (data.type === "account-session-logout") return logout();
+  if (data.type === "account-profile-updated" && data.user) {
+    state.user = { ...state.user, ...data.user };
+  }
+  if (data.type === "account-notifications-updated") {
+    const latest = data.latestImportant && typeof data.latestImportant === "object" ? {
+      id:data.latestImportant.id,
+      title:String(data.latestImportant.title || "重要通知"),
+      priority:String(data.latestImportant.priority || "important"),
+      requiresAck:Boolean(data.latestImportant.requiresAck),
+    } : null;
+    updateNotificationSummary({
+      unreadCount:Number.isFinite(Number(data.unreadCount)) ? Number(data.unreadCount) : state.notificationUnread,
+      importantUnacknowledgedCount:Number.isFinite(Number(data.importantUnacknowledgedCount)) ? Number(data.importantUnacknowledgedCount) : state.notificationImportantUnacknowledgedCount,
+      latestImportant:latest,
+    }, { announce:false });
+    // The iframe intentionally sends only a minimal summary. Read the full
+    // latest notification in this page so the local banner can retain its
+    // short body without placing notification text in postMessage.
+    void refreshNotificationSummary({ announce:false });
   }
 }
 
@@ -5034,6 +5179,7 @@ async function bootstrap() {
     $('proOverlay')?.classList.add('hidden');
     await loadObserverChannels();
     showApp(true);
+    void refreshNotificationSummary({ announce:false });
     // Manual non-trading analysis jobs survive a closed modal or browser tab.
     // Restore the task id after authentication so a later page load can resume
     // status polling without submitting a second model request.
@@ -11021,7 +11167,8 @@ async function loadAudit() {
 function bindEvents() {
   $("logoutBtn").addEventListener("click", logout);
   $("membershipGateLogoutBtn")?.addEventListener("click", logout);
-  $("accountCenterBtn")?.addEventListener("click", () => openAccountCenter("overview"));
+  $("accountCenterBtn")?.addEventListener("click", () => openAccountCenter(state.notificationUnread > 0 ? "notifications" : "overview"));
+  $("notificationBannerOpen")?.addEventListener("click", () => openNotificationCenter(state.latestImportant?.id || ""));
   $("accountCenterModal")?.querySelectorAll("[data-close-account-center]").forEach(node => node.addEventListener("click", closeAccountCenter));
   window.addEventListener("message", handleAccountCenterMessage);
   window.addEventListener("storage", event => {
