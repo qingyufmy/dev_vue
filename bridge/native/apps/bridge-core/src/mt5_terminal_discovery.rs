@@ -62,14 +62,7 @@ struct Mt5ProbeDocument {
 pub(crate) fn discover_windows() -> Vec<Mt5Installation> {
     let mut candidates = running_terminal_paths()
         .into_iter()
-        .filter(|path| {
-            path.file_name()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("terminal64.exe"))
-                || path
-                    .parent()
-                    .is_some_and(|directory| directory.join("MQL5").is_dir())
-        })
+        .filter(|path| is_running_mt5_candidate(path))
         .map(|path| Mt5InstallationCandidate {
             path,
             is_running: true,
@@ -440,6 +433,10 @@ fn is_terminal_executable(path: &Path) -> bool {
         })
 }
 
+fn is_running_mt5_candidate(path: &Path) -> bool {
+    is_terminal_executable(path)
+}
+
 fn utf16_z(value: &[u16]) -> String {
     let length = value
         .iter()
@@ -508,6 +505,17 @@ mod tests {
             std::path::absolute(first.join("terminal64.exe")).unwrap()
         );
         fs::remove_dir_all(root).expect("remove candidate fixture");
+    }
+
+    #[test]
+    fn running_terminal_exe_is_a_candidate_without_an_mql5_directory() {
+        let root = fixture_directory("running-terminal-exe");
+        fs::create_dir_all(&root).expect("terminal directory");
+        let terminal = root.join("terminal.exe");
+        fs::write(&terminal, b"terminal").expect("terminal executable");
+        assert!(!root.join("MQL5").is_dir());
+        assert!(is_running_mt5_candidate(&terminal));
+        fs::remove_dir_all(root).expect("remove terminal fixture");
     }
 
     #[test]
