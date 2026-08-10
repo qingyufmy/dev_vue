@@ -1325,6 +1325,20 @@ impl OutboxStore {
                 continue;
             }
             if existing.job_kind == "backfill" {
+                // A dense-range backfill is deliberately terminal.  Once the
+                // modern coverage floor is in effect, an exact re-plan of
+                // that row is an attachment, not a legacy collision.  Keep
+                // the row completely untouched: in particular, do not
+                // promote, reset its cursor/window, or clear its block
+                // evidence.  Legacy clocks and all other backfill rows keep
+                // the conservative collision behavior below.
+                if request.now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC
+                    && existing.state == "blocked"
+                    && existing.last_error_code.as_deref() == Some("blocked_dense_range")
+                {
+                    attached_jobs.push(existing);
+                    continue;
+                }
                 return Err(StoreError::new(
                     "bridge_store_history_planning_legacy_collision",
                 ));
@@ -11117,6 +11131,99 @@ mod tests {
         assert_eq!(legacy_after.state, "queued");
         drop(store);
         fs::remove_dir_all(root).expect("remove promotion planner fixture");
+    }
+
+    #[test]
+    fn atomic_history_planner_attaches_modern_blocked_dense_backfill_without_mutation() {
+        let root = unique_test_directory("history-planner-blocked-dense");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("blocked planner store");
+        let scope = history_scope_for("123456");
+        let now = HISTORY_COVERAGE_START_UTC_MSC + 1_000_000;
+        let range_start = HISTORY_COVERAGE_START_UTC_MSC + 10_000;
+        let range_end = HISTORY_COVERAGE_START_UTC_MSC + 20_000;
+        let backfill = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "backfill".to_owned(),
+            priority: "p3".to_owned(),
+            range_start_utc_msc: range_start,
+            range_end_utc_msc: range_end,
+            window_msc: 5_000,
+            now_utc_msc: now,
+        };
+        let created = store
+            .plan_history_jobs(&backfill)
+            .expect("create modern backfill")
+            .created_jobs
+            .pop()
+            .expect("modern backfill job");
+        let running = store
+            .claim_history_job(&scope, now + 1, 60_000)
+            .expect("claim modern backfill")
+            .expect("modern backfill lease");
+        store
+            .block_history_job(
+                &running.job_id,
+                running.lease_generation,
+                "blocked_dense_range",
+                now + 2,
+            )
+            .expect("block dense modern backfill");
+        let before = store
+            .history_sync_job(&created.job_id)
+            .expect("blocked backfill lookup")
+            .expect("blocked backfill row");
+        assert_eq!(before.job_kind, "backfill");
+        assert_eq!(before.state, "blocked");
+        assert_eq!(
+            before.last_error_code.as_deref(),
+            Some("blocked_dense_range")
+        );
+
+        let on_demand = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "on_demand".to_owned(),
+            priority: "p1".to_owned(),
+            range_start_utc_msc: range_start,
+            range_end_utc_msc: range_end,
+            window_msc: 9_000,
+            now_utc_msc: now + 3,
+        };
+        let attached = store
+            .plan_history_jobs(&on_demand)
+            .expect("attach blocked dense backfill")
+            .attached_jobs;
+        assert_eq!(attached, vec![before.clone()]);
+        let after = store
+            .history_sync_job(&created.job_id)
+            .expect("blocked backfill after attach lookup")
+            .expect("blocked backfill after attach");
+        assert_eq!(
+            after, before,
+            "exact attachment must not mutate terminal job"
+        );
+
+        let replan = store
+            .plan_history_jobs(&backfill)
+            .expect("automatic backfill replan attachment")
+            .attached_jobs;
+        assert_eq!(replan, vec![before.clone()]);
+
+        // A different account may plan the same range independently; the
+        // blocked row above must not leak across the history scope key.
+        let other_scope = history_scope_for("654321");
+        let other = HistoryJobPlanningRequest {
+            scope: other_scope,
+            ..on_demand
+        };
+        let other_result = store
+            .plan_history_jobs(&other)
+            .expect("other account remains independent");
+        assert_eq!(other_result.attached_jobs, Vec::new());
+        assert_eq!(other_result.created_jobs.len(), 1);
+        assert_eq!(other_result.created_jobs[0].job_kind, "on_demand");
+        drop(store);
+        fs::remove_dir_all(root).expect("remove blocked planner fixture");
     }
 
     #[test]

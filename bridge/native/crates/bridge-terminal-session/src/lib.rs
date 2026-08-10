@@ -2551,6 +2551,7 @@ mod tests {
         encode_command_result, encode_deals, encode_hello, encode_message_type, encode_snapshot,
         read_frame, reconnect_pipe_name, write_frame,
     };
+    use bridge_store::NewHistorySyncJob;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -3351,6 +3352,74 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove planner test directory");
+    }
+
+    #[tokio::test]
+    async fn automatic_backfill_replanning_attaches_blocked_dense_range() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).expect("blocked planner test directory");
+        let store = Arc::new(
+            OutboxStore::open_or_create(root.join("bridge.db")).expect("blocked planner store"),
+        );
+        let scope = HistoryScope::new(
+            "mt5_terminal_history_01",
+            &AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+        )
+        .expect("blocked planner scope");
+        let end = HISTORY_COVERAGE_START_UTC_MSC + HISTORY_RECENT_MSC + HISTORY_HOUR_MSC;
+        let now = end + 123;
+        let recent_start = end - HISTORY_RECENT_MSC;
+        let blocked_job = store
+            .enqueue_history_job(&NewHistorySyncJob {
+                job_id: "job_01JBLOCKDENSE01".to_owned(),
+                scope: scope.clone(),
+                job_kind: "backfill".to_owned(),
+                priority: "p3".to_owned(),
+                range_start_utc_msc: HISTORY_COVERAGE_START_UTC_MSC,
+                range_end_utc_msc: recent_start,
+                cursor_time_msc: HISTORY_COVERAGE_START_UTC_MSC,
+                cursor_ticket: String::new(),
+                window_msc: HISTORY_INITIAL_WINDOW_MSC,
+                created_at_utc_msc: now,
+            })
+            .expect("enqueue blocked planner backfill");
+        let running = store
+            .claim_history_job(&scope, now + 1, 60_000)
+            .expect("claim blocked planner backfill")
+            .expect("blocked planner backfill lease");
+        store
+            .block_history_job(
+                &running.job_id,
+                running.lease_generation,
+                "blocked_dense_range",
+                now + 2,
+            )
+            .expect("block planner backfill");
+        let before = store
+            .history_sync_job(&blocked_job.job_id)
+            .expect("blocked planner backfill lookup")
+            .expect("blocked planner backfill row");
+
+        let jobs = ensure_history_jobs(&store, &scope, now + 3)
+            .await
+            .expect("automatic planner replan should attach blocked backfill");
+        let attached = jobs
+            .iter()
+            .find(|job| job.job_id == blocked_job.job_id)
+            .expect("blocked backfill returned by automatic planner");
+        assert_eq!(attached, &before);
+        assert_eq!(
+            store
+                .history_sync_job(&blocked_job.job_id)
+                .expect("blocked planner backfill after replan lookup")
+                .expect("blocked planner backfill after replan"),
+            before
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove blocked planner test directory");
     }
 
     fn unique_test_directory() -> PathBuf {
