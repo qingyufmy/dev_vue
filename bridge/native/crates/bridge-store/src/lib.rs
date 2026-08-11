@@ -34,6 +34,8 @@ const HISTORY_TAIL_WINDOW_MSC: i64 = 7 * 24 * 60 * 60 * 1_000;
 const HISTORY_CURSOR_TOKEN_BYTES: usize = 32;
 const HISTORY_DAY_MSC: i64 = 86_400_000;
 const HISTORY_HOUR_MSC: i64 = 60 * 60 * 1_000;
+const MT4_HISTORY_PROJECTION_REPAIR_ID: &str = "mt4_trade_close_time_v1";
+const MT4_HISTORY_PROJECTION_REPAIR_VERSION: i64 = 1;
 /// Earliest history timestamp that the native archive planner and request
 /// contract may accept.  Rows older than this are retained as rebuildable
 /// evidence, but are never included in a newly planned/query range.
@@ -172,6 +174,15 @@ const HISTORY_RUNTIME_REQUIRED_TABLES: &[(&str, &[&str])] = &[
             "active_generation",
             "building_generation",
             "updated_at_utc_msc",
+        ],
+    ),
+    (
+        "history_projection_repairs",
+        &[
+            "repair_id",
+            "repair_version",
+            "affected_scope_count",
+            "applied_at_utc_msc",
         ],
     ),
 ];
@@ -904,6 +915,7 @@ impl OutboxStore {
                 }
             }
         }
+        run_mt4_history_projection_repair(&mut connection)?;
         let history_read_connection = open_history_read_connection(path)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -5435,6 +5447,186 @@ fn initialize_fresh_database(path: &Path) -> Result<(), StoreError> {
     ensure_history_runtime_schema(&mut connection)
 }
 
+/// One-time repair for the MT4 history projection produced by 3.0.0/3.0.1.
+///
+/// Those EA versions could persist a `trade` row without immutable close-time
+/// evidence.  The archive is append-only during normal operation, so a later
+/// 3.0.2 payload for the same ticket would otherwise be retained as an
+/// immutable conflict and the history would remain incomplete.  This repair
+/// only selects scopes containing an incomplete, unsealed MT4 trade, then
+/// removes the rebuildable local projection for those scopes in one
+/// transaction.  It never reads or writes the server database, and MT5 rows
+/// (which carry an explicit platform key) are left untouched.
+fn run_mt4_history_projection_repair(connection: &mut Connection) -> Result<(), StoreError> {
+    let recorded_version = connection
+        .query_row(
+            "SELECT repair_version FROM history_projection_repairs
+             WHERE repair_id = ?1 LIMIT 1;",
+            [MT4_HISTORY_PROJECTION_REPAIR_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_repair_marker_query_failed"))?;
+    if recorded_version.is_some_and(|version| version >= MT4_HISTORY_PROJECTION_REPAIR_VERSION) {
+        return Ok(());
+    }
+
+    let applied_at_utc_msc = current_utc_msc()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|_| StoreError::new("bridge_store_history_repair_transaction_failed"))?;
+
+    // Re-check inside the write transaction so two Bridge starts cannot both
+    // perform the destructive projection reset.
+    let recorded_version = transaction
+        .query_row(
+            "SELECT repair_version FROM history_projection_repairs
+             WHERE repair_id = ?1 LIMIT 1;",
+            [MT4_HISTORY_PROJECTION_REPAIR_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_repair_marker_query_failed"))?;
+    if recorded_version.is_some_and(|version| version >= MT4_HISTORY_PROJECTION_REPAIR_VERSION) {
+        transaction
+            .commit()
+            .map_err(|_| StoreError::new("bridge_store_history_repair_commit_failed"))?;
+        return Ok(());
+    }
+
+    let mut statement = transaction
+        .prepare(
+            "SELECT DISTINCT terminal_instance_id, broker_server, login_account
+             FROM history_archive_items
+             WHERE platform = 'mt4' AND item_kind = 'trade'
+               AND (close_time_utc_msc IS NULL OR close_time_utc_msc <= 0
+                    OR COALESCE(immutable_state, '') <> 'sealed')
+             ORDER BY terminal_instance_id, broker_server, login_account;",
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_repair_scope_query_failed"))?;
+    let scopes = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_repair_scope_query_failed"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| StoreError::new("bridge_store_history_repair_scope_query_failed"))?;
+    drop(statement);
+
+    for (terminal_instance_id, broker_server, login_account) in &scopes {
+        // The MT4 archive is a rebuildable local read model.  Clear every
+        // history item for the affected MT4 scope so deals, capital events,
+        // history orders, and trades are resynchronized from one cursor.
+        transaction
+            .execute(
+                "DELETE FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = 'mt4';",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM history_archive_state
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3;",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM history_cursors
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3;",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM history_sync_jobs
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3;",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM history_coverage_ranges
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3;",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM history_scope_state
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = 'mt4';",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM history_daily_summary
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = 'mt4';",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM history_daily_summary_v2
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = 'mt4';",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+        transaction
+            .execute(
+                "DELETE FROM history_summary_builds
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = 'mt4';",
+                params![terminal_instance_id, broker_server, login_account],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_repair_delete_failed"))?;
+    }
+
+    transaction
+        .execute(
+            "INSERT INTO history_projection_repairs (
+               repair_id, repair_version, affected_scope_count, applied_at_utc_msc
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(repair_id) DO UPDATE SET
+               repair_version = excluded.repair_version,
+               affected_scope_count = excluded.affected_scope_count,
+               applied_at_utc_msc = excluded.applied_at_utc_msc;",
+            params![
+                MT4_HISTORY_PROJECTION_REPAIR_ID,
+                MT4_HISTORY_PROJECTION_REPAIR_VERSION,
+                i64::try_from(scopes.len())
+                    .map_err(|_| StoreError::new("bridge_store_history_repair_scope_invalid"))?,
+                applied_at_utc_msc,
+            ],
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_repair_marker_write_failed"))?;
+    transaction
+        .commit()
+        .map_err(|_| StoreError::new("bridge_store_history_repair_commit_failed"))
+}
+
 const HISTORY_RUNTIME_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS account_initialization_state (
   terminal_instance_id TEXT NOT NULL,
@@ -5639,6 +5831,12 @@ CREATE INDEX IF NOT EXISTS idx_history_daily_summary_v2_active
     terminal_instance_id, broker_server, login_account, platform,
     generation, business_date, item_kind, direction, profit_bucket
   );
+CREATE TABLE IF NOT EXISTS history_projection_repairs (
+  repair_id TEXT PRIMARY KEY,
+  repair_version INTEGER NOT NULL CHECK (repair_version > 0),
+  affected_scope_count INTEGER NOT NULL CHECK (affected_scope_count >= 0),
+  applied_at_utc_msc INTEGER NOT NULL CHECK (applied_at_utc_msc > 0)
+);
 "#;
 
 fn ensure_history_runtime_schema(connection: &mut Connection) -> Result<(), StoreError> {
@@ -15735,6 +15933,356 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove migration fixture");
+    }
+
+    #[test]
+    fn mt4_trade_close_projection_repair_is_scoped_and_idempotent() {
+        let root = unique_test_directory("mt4-trade-close-projection-repair");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        create_schema_fixture(&path, None);
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let bad_scope = ("mt4_bad_scope", "Broker-Demo", "4001");
+        let sealed_scope = ("mt4_sealed_scope", "Broker-Demo", "4002");
+        let mt5_scope = ("mt5_scope", "Broker-Demo", "4003");
+        {
+            let mut connection = Connection::open(&path).expect("legacy connection");
+            // `create_schema_fixture` intentionally models the old column-only
+            // contract.  Restore the legacy archive-state key so the post-
+            // repair batch can exercise the real append/upsert path.
+            connection
+                .execute_batch(
+                    "DROP TABLE history_archive_state;
+                     CREATE TABLE history_archive_state (
+                       terminal_instance_id TEXT NOT NULL,
+                       broker_server TEXT COLLATE NOCASE NOT NULL,
+                       login_account TEXT NOT NULL,
+                       cursor_value TEXT NOT NULL,
+                       is_complete INTEGER NOT NULL DEFAULT 0,
+                       updated_at_utc_msc INTEGER NOT NULL,
+                       PRIMARY KEY (terminal_instance_id, broker_server, login_account)
+                     );",
+                )
+                .expect("legacy archive state schema");
+            ensure_native_command_ledger_schema(&connection).expect("command ledger schema");
+            ensure_history_runtime_schema(&mut connection).expect("runtime schema");
+            connection
+                .execute("DROP TABLE history_projection_repairs;", [])
+                .expect("remove repair marker from legacy fixture");
+
+            let insert_archive = |scope: (&str, &str, &str),
+                                  platform: &str,
+                                  ticket: i64,
+                                  payload: serde_json::Value| {
+                connection
+                    .execute(
+                        "INSERT INTO history_archive_items (
+                           terminal_instance_id, broker_server, login_account, platform,
+                           item_kind, item_id, event_time_msc, position_id, order_ticket,
+                           symbol, payload_json, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, 'trade', ?5, ?6, ?7, ?5,
+                           'EURUSD', ?8, ?9);",
+                        params![
+                            scope.0,
+                            scope.1,
+                            scope.2,
+                            platform,
+                            ticket.to_string(),
+                            floor + ticket,
+                            ticket.to_string(),
+                            payload.to_string(),
+                            floor + 10_000,
+                        ],
+                    )
+                    .expect("archive row");
+            };
+            insert_archive(
+                bad_scope,
+                "mt4",
+                1001,
+                serde_json::json!({
+                    "ticket": 1001,
+                    "deal_ticket": 1001,
+                    "time_msc": floor + 1001,
+                    "type": "BUY",
+                    "profit": 1.0,
+                    "volume": 0.1,
+                }),
+            );
+            // A sealed row in the affected scope is also rebuildable projection
+            // data and must be removed with the scope reset.
+            insert_archive(
+                bad_scope,
+                "mt4",
+                1002,
+                normalized_trade(1002, floor + 1002, "SELL", -2.0, 0.2),
+            );
+            insert_archive(
+                sealed_scope,
+                "mt4",
+                2001,
+                normalized_trade(2001, floor + 2001, "BUY", 3.0, 0.3),
+            );
+            insert_archive(
+                mt5_scope,
+                "mt5",
+                3001,
+                normalized_trade(3001, floor + 3001, "BUY", 4.0, 0.4),
+            );
+            // A 3.0.1 database already has materialized scalar columns.  Keep
+            // the sealed fixture rows marked as such so the migration proves
+            // it does not select healthy MT4 or MT5 scopes.
+            for (scope, platform, ticket, close_time) in [
+                (sealed_scope, "mt4", 2001_i64, floor + 2001),
+                (mt5_scope, "mt5", 3001_i64, floor + 3001),
+            ] {
+                connection
+                    .execute(
+                        "UPDATE history_archive_items
+                         SET close_time_utc_msc = ?1, close_time_server_msc = ?1,
+                             close_timezone_offset_minutes = 0,
+                             close_business_date = '2000-01-01',
+                             summary_day_utc_msc = ?2, immutable_state = 'sealed'
+                         WHERE terminal_instance_id = ?3 AND platform = ?4
+                           AND item_id = ?5;",
+                        params![close_time, floor, scope.0, platform, ticket.to_string(),],
+                    )
+                    .expect("sealed archive scalar columns");
+            }
+
+            let seed_projection = |scope: (&str, &str, &str), platform: &str| {
+                let cursor = serde_json::json!({
+                    "time_msc": floor + 10_000,
+                    "ticket": "999"
+                })
+                .to_string();
+                connection
+                    .execute(
+                        "INSERT INTO history_archive_state (
+                           terminal_instance_id, broker_server, login_account,
+                           cursor_value, is_complete, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, 1, ?5);",
+                        params![scope.0, scope.1, scope.2, cursor, floor + 10_001],
+                    )
+                    .expect("archive state");
+                connection
+                    .execute(
+                        "INSERT INTO history_cursors (
+                           terminal_instance_id, broker_server, login_account, stream,
+                           cursor_value, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, 'history', ?4, ?5);",
+                        params![scope.0, scope.1, scope.2, cursor, floor + 10_001],
+                    )
+                    .expect("history cursor");
+                connection
+                    .execute(
+                        "INSERT INTO history_sync_jobs (
+                           job_id, terminal_instance_id, broker_server, login_account,
+                           job_kind, priority, range_start_utc_msc, range_end_utc_msc,
+                           cursor_time_msc, cursor_ticket, window_msc, state,
+                           attempt_count, next_attempt_at_utc_msc, last_error_code,
+                           lease_generation, lease_expires_at_utc_msc,
+                           created_at_utc_msc, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, 'recent', 'p1', ?5, ?6, ?5, '',
+                                   1000, 'queued', 0, ?7, NULL, 0, NULL, ?7, ?7);",
+                        params![
+                            format!("job_{}", scope.0),
+                            scope.0,
+                            scope.1,
+                            scope.2,
+                            floor,
+                            floor + 1_000,
+                            floor + 10_001,
+                        ],
+                    )
+                    .expect("history job");
+                connection
+                    .execute(
+                        "INSERT INTO history_coverage_ranges (
+                           terminal_instance_id, broker_server, login_account,
+                           range_start_utc_msc, range_end_utc_msc,
+                           observed_at_utc_msc, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);",
+                        params![
+                            scope.0,
+                            scope.1,
+                            scope.2,
+                            floor,
+                            floor + 1_000,
+                            floor + 10_001,
+                        ],
+                    )
+                    .expect("coverage range");
+                connection
+                    .execute(
+                        "INSERT INTO history_scope_state (
+                           terminal_instance_id, broker_server, login_account, platform,
+                           head_ready, coverage_complete, freshness_state,
+                           history_revision, summary_revision, summary_status,
+                           updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, 0, 1, 'fresh', 1, 1, 'ready', ?5);",
+                        params![scope.0, scope.1, scope.2, platform, floor + 10_001],
+                    )
+                    .expect("scope state");
+                connection
+                    .execute(
+                        "INSERT INTO history_daily_summary (
+                           terminal_instance_id, broker_server, login_account, platform,
+                           generation, summary_day_utc_msc, item_kind, direction,
+                           profit_bucket, trade_count, net_profit, volume
+                         ) VALUES (?1, ?2, ?3, ?4, 1, ?5, 'trade', 'BUY', 'profit', 1, 1, 0.1);",
+                        params![scope.0, scope.1, scope.2, platform, floor],
+                    )
+                    .expect("daily summary");
+                connection
+                    .execute(
+                        "INSERT INTO history_daily_summary_v2 (
+                           terminal_instance_id, broker_server, login_account, platform,
+                           generation, business_date, item_kind, direction,
+                           profit_bucket, trade_count, net_profit, volume
+                         ) VALUES (?1, ?2, ?3, ?4, 1, '2000-01-01', 'trade',
+                                   'BUY', 'profit', 1, 1, 0.1);",
+                        params![scope.0, scope.1, scope.2, platform],
+                    )
+                    .expect("daily summary v2");
+                connection
+                    .execute(
+                        "INSERT INTO history_summary_builds (
+                           terminal_instance_id, broker_server, login_account, platform,
+                           active_generation, building_generation, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, 1, NULL, ?5);",
+                        params![scope.0, scope.1, scope.2, platform, floor + 10_001],
+                    )
+                    .expect("summary build");
+            };
+            seed_projection(bad_scope, "mt4");
+            seed_projection(sealed_scope, "mt4");
+            seed_projection(mt5_scope, "mt5");
+        }
+
+        let store = OutboxStore::open_existing(&path).expect("run MT4 repair migration");
+        {
+            let connection = store.connection.lock().expect("repair query lock");
+            let marker = connection
+                .query_row(
+                    "SELECT repair_version, affected_scope_count
+                     FROM history_projection_repairs
+                     WHERE repair_id = ?1;",
+                    [MT4_HISTORY_PROJECTION_REPAIR_ID],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .expect("repair marker");
+            assert_eq!(marker, (MT4_HISTORY_PROJECTION_REPAIR_VERSION, 1));
+            let archive_count = |scope: (&str, &str, &str), platform: &str| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM history_archive_items
+                         WHERE terminal_instance_id = ?1
+                           AND broker_server = ?2 COLLATE NOCASE
+                           AND login_account = ?3 AND platform = ?4;",
+                        params![scope.0, scope.1, scope.2, platform],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("archive count")
+            };
+            assert_eq!(archive_count(bad_scope, "mt4"), 0);
+            assert_eq!(archive_count(sealed_scope, "mt4"), 1);
+            assert_eq!(archive_count(mt5_scope, "mt5"), 1);
+            for table in [
+                "history_archive_state",
+                "history_cursors",
+                "history_sync_jobs",
+                "history_coverage_ranges",
+            ] {
+                let query = format!(
+                    "SELECT COUNT(*) FROM {table}
+                     WHERE terminal_instance_id = ?1
+                       AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3;"
+                );
+                let bad_count: i64 = connection
+                    .query_row(
+                        &query,
+                        params![bad_scope.0, bad_scope.1, bad_scope.2],
+                        |row| row.get(0),
+                    )
+                    .expect("bad projection count");
+                let sealed_count: i64 = connection
+                    .query_row(
+                        &query,
+                        params![sealed_scope.0, sealed_scope.1, sealed_scope.2],
+                        |row| row.get(0),
+                    )
+                    .expect("sealed projection count");
+                let mt5_count: i64 = connection
+                    .query_row(
+                        &query,
+                        params![mt5_scope.0, mt5_scope.1, mt5_scope.2],
+                        |row| row.get(0),
+                    )
+                    .expect("MT5 projection count");
+                assert_eq!(bad_count, 0, "bad scope table {table}");
+                assert_eq!(sealed_count, 1, "sealed scope table {table}");
+                assert_eq!(mt5_count, 1, "MT5 scope table {table}");
+            }
+        }
+
+        let terminal = TerminalDescriptor {
+            terminal_instance_id: bad_scope.0.to_owned(),
+            platform: "mt4".to_owned(),
+            account_ref: AccountRef {
+                broker_server: bad_scope.1.to_owned(),
+                login: bad_scope.2.to_owned(),
+            },
+            connection_epoch: 3,
+            worker_version: Some("3.0.2".to_owned()),
+        };
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![normalized_trade(1001, floor + 5_000, "BUY", 5.0, 0.5)],
+                    next_cursor: HistoryCursor {
+                        time_msc: floor + 6_000,
+                        ticket: "1001".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: floor + 6_001,
+                },
+            )
+            .expect("new EA payload after repair");
+        {
+            let connection = store.connection.lock().expect("sealed payload lock");
+            let state: String = connection
+                .query_row(
+                    "SELECT immutable_state FROM history_archive_items
+                     WHERE terminal_instance_id = ?1 AND item_id = '1001';",
+                    [bad_scope.0],
+                    |row| row.get(0),
+                )
+                .expect("new sealed payload");
+            assert_eq!(state, "sealed");
+        }
+        drop(store);
+
+        // A normal restart sees the persisted marker, performs no second
+        // reset, and retains the newly sealed payload.
+        let store = OutboxStore::open_existing(&path).expect("idempotent MT4 repair");
+        let connection = store.connection.lock().expect("restart repair lock");
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM history_archive_items
+                 WHERE terminal_instance_id = ?1 AND item_id = '1001';",
+                [bad_scope.0],
+                |row| row.get(0),
+            )
+            .expect("repaired payload count");
+        assert_eq!(count, 1);
+        drop(connection);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove repair fixture");
     }
 
     #[test]

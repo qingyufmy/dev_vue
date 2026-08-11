@@ -12,7 +12,7 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.00"')
+    expect(source).toContain('#property version   "3.02"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
     expect(block).toContain('AppendUtf8(response, CurrentServerClockStatus())')
@@ -77,9 +77,10 @@ describe('MT4 EA reconnect contract', () => {
 })
 
 describe('MT4 EA extended data contract', () => {
-  it('advertises the official 3.0.0 version and handles every server data action', () => {
+  it('advertises the official 3.0.2 version and handles every server data action', () => {
     expect(source).toContain('#define BRIDGE_PROTOCOL_VERSION 3')
-    expect(source).toContain('#define ADAPTER_VERSION "3.0.0"')
+    expect(source).toContain('#define ADAPTER_VERSION "3.0.2"')
+    expect(source).toContain('#property version   "3.02"')
     expect(source).toContain('AppendInt32(hello, BRIDGE_PROTOCOL_VERSION)')
     expect(source).toContain('AppendUtf8(hello, ADAPTER_VERSION)')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')
@@ -162,6 +163,21 @@ describe('MT4 EA history paging performance contract', () => {
     expect(send).toContain('ArraySize(g_history_event_times)')
     expect(send).not.toContain('OrdersHistoryTotal()')
     expect(send).not.toContain('OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY)')
+  })
+
+  it('emits explicit MT4 trade close-time evidence from the selected order', () => {
+    const block = functionBlock('string BuildSelectedHistoryDealJson', 'bool EnsureHistoryCursorIndex')
+    expect(block).toContain('bool is_trade = order_type == OP_BUY || order_type == OP_SELL')
+    expect(block).toContain('((long)OrderOpenTime()) * 1000')
+    expect(block).toContain('((long)OrderCloseTime()) * 1000')
+    expect(block).toContain('entry_time_utc_msc')
+    expect(block).toContain('close_time_utc_msc')
+    expect(block).toContain('close_time_server_msc')
+    expect(block).toContain('close_timezone_offset_minutes')
+    expect(block).toContain('close_business_date')
+    expect(block).toContain('close_deal_ticket')
+    expect(block).toContain('ServerDateText(OrderCloseTime())')
+    expect(block).toContain('server_offset_msc')
   })
 })
 

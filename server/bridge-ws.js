@@ -1730,6 +1730,11 @@ function historyTerminalClock(userId, route) {
   return null
 }
 
+export function getHistoryTerminalClock(userId, route) {
+  const clock = historyTerminalClock(Number(userId), route)
+  return clock ? { ...clock } : null
+}
+
 export function captureHistoryTerminalNowUtcMsc(userId, route, serverNowUtcMsc = Date.now()) {
   if (!Number.isSafeInteger(serverNowUtcMsc) || serverNowUtcMsc <= 0) {
     throw historyError('bridge_history_range_invalid')

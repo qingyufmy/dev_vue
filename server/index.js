@@ -38,7 +38,7 @@ import adminNotificationRoutes from './routes/admin-notifications.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON, getRedis } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker, startMemoryCompressionWorker, startManualAnalysisJobs,
-  startHistoryCompareRecoveryWorker } from './routes/ai/index.js'
+  startHistoryCompareRecoveryWorker, startManualTradeReviewWorker, stopManualTradeReviewWorker } from './routes/ai/index.js'
 import { recoverAbandonedAutoInferenceTasks } from './routes/ai/model-task-runtime.js'
 import { recoverAbandonedPeriodReviewModelTasks } from './routes/ai/period-review.js'
 import { recoverAbandonedMemoryCompressionModelTasks } from './routes/ai/memory-system.js'
@@ -394,6 +394,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const pendingStop = stopPendingReconciler()
     const orderIntentStop = stopOrderIntentReconciler()
     const notificationStop = stopNotificationCenterWorker()
+    const manualTradeReviewStop = stopManualTradeReviewWorker()
     clearShutdownTimers()
 
     await Promise.all([
@@ -401,6 +402,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
       waitForShutdownTask(pendingStop, 'pending reconciler', timeout),
       waitForShutdownTask(orderIntentStop, 'order-intent reconciler', timeout),
       waitForShutdownTask(notificationStop, 'notification center worker', timeout),
+      waitForShutdownTask(manualTradeReviewStop, 'manual trade review worker', timeout),
     ])
 
     // Stop accepting HTTP work only after scheduler rounds have been fenced;
@@ -514,6 +516,7 @@ installGracefulShutdownHandlers()
   startAdminPositionProtectionWorker()
   startPeriodReviewWorker()
   startMemoryCompressionWorker()
+  startManualTradeReviewWorker()
   startManualAnalysisJobs()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()

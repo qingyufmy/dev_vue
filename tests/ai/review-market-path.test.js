@@ -78,4 +78,22 @@ describe('review holding market path', () => {
     expect(result.status).toBe('complete')
     expect(result.metrics.status).toBe('complete')
   })
+
+  it('cuts counterfactual evidence at the entry boundary without holding metrics or future candles', async () => {
+    const series = rates(120)
+    const entryTime = series[90].time_utc_msc
+    const deals = [
+      { entry_type:0, volume:1, price:4000, raw_json:JSON.stringify({ time_utc_msc:entryTime }) },
+      { entry_type:1, volume:1, price:4002, raw_json:JSON.stringify({ time_utc_msc:series[105].time_utc_msc }) },
+    ]
+    const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD', signal:{ timeframe:'M5', signal_type:'hold' },
+      snapshot:{ klines:{ M5:[] } }, deals, asOfUtcMsc:entryTime, includeHoldingMetrics:false,
+      fetchRates:async () => ({ status:'success', rates:[...series, { ...series.at(-1), time_utc_msc:series.at(-1).time_utc_msc + 300000 }],
+        market_meta:{ timezone_offset_minutes:0, clock_status:'verified' } }),
+    })
+    expect(result.status).toBe('complete')
+    expect(result.metrics).toBeNull()
+    expect(result.timeframes.M5.candles.length).toBeGreaterThan(20)
+    expect(result.timeframes.M5.candles.every(candle => candle.time_utc_msc + 300000 <= entryTime)).toBe(true)
+  })
 })

@@ -55,6 +55,10 @@ import { getPositionManagementSettings, getPositionManagementTask, listPositionM
 import { getPositionManagementWorkerStatus } from './position-management-worker.js'
 import { createManualAnalysisJob, getManualAnalysisJob, cancelManualAnalysisJob,
   startManualAnalysisJobs } from './manual-analysis-jobs.js'
+import { listEligibleManualTradeReviews, listManualTradeReviewStrategies, createManualTradeReview,
+  listManualTradeReviews, getManualTradeReview, getManualTradeReviewJobStatus, editManualTradeReview,
+  confirmManualTradeReview, retryManualTradeReview,
+  startManualTradeReviewWorker, stopManualTradeReviewWorker } from './manual-trade-review.js'
 
 const router = Router()
 
@@ -168,13 +172,19 @@ function reviewError(res, error) {
     console.error(`[AI API ${incidentId}]`, error)
     return res.status(500).json({ ok:false, error:'ai_internal_error', incident_id:incidentId })
   }
-  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required')) ? 403 : 400
+  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required') || code === 'manual_trade_review_forbidden') ? 403 : 400
   return res.status(status).json({ ok: false, error: code })
 }
 
 function requireAiAdmin(req, res) {
   if (req.user?.role === 'admin') return true
   res.status(403).json({ ok:false, error:'admin_only' })
+  return false
+}
+
+function requireManualTradeReviewManager(req, res) {
+  if (canManagePlatformAiContent(req.user)) return true
+  res.status(403).json({ ok:false, error:'manual_trade_review_forbidden' })
   return false
 }
 
@@ -1123,6 +1133,80 @@ router.post('/ai/period-reviews/:id/derivation/retry', authMiddleware, async (re
   catch (error) { reviewError(res, error) }
 })
 
+// Manual strategy review is independently owner-scoped even for platform
+// content managers. No route accepts an arbitrary actor/account override.
+router.get('/ai/manual-trade-reviews/strategies', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try { res.json({ ok:true, strategies:await listManualTradeReviewStrategies(req.user) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/manual-trade-reviews/eligible-trades', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try { res.json({ ok:true, ...(await listEligibleManualTradeReviews(req.user, req.query || {})) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/manual-trade-reviews', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const result = await createManualTradeReview(req.user, req.body || {})
+    await auditAiMutation(req, result.created ? 'manual_trade_review_created' : 'manual_trade_review_replayed',
+      'manual_trade_review_case', result.case?.id || null, { strategy_id:Number(req.body?.strategy_id) || null })
+    res.status(result.created ? 202 : 200).json({ ok:true, ...result })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/manual-trade-reviews', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try { res.json({ ok:true, ...(await listManualTradeReviews(req.user, req.query || {})) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/manual-trade-reviews/:id/job-status', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try { res.json({ ok:true, job:await getManualTradeReviewJobStatus(Number(req.params.id), req.user) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/manual-trade-reviews/:id', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try { res.json({ ok:true, review:await getManualTradeReview(Number(req.params.id), req.user) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/manual-trade-reviews/:id/edit', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const result = await editManualTradeReview({ caseId:Number(req.params.id), actor:req.user,
+      content:req.body?.content, expectedVersionId:req.body?.expected_version_id, changeNote:req.body?.change_note })
+    await auditAiMutation(req, 'manual_trade_review_edited', 'manual_trade_review_case', Number(req.params.id), { version_id:result.version?.id || null })
+    res.json({ ok:true, ...result })
+  }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/manual-trade-reviews/:id/confirm', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const result = await confirmManualTradeReview({ caseId:Number(req.params.id), actor:req.user,
+      versionId:req.body?.version_id, action:req.body?.action })
+    await auditAiMutation(req, 'manual_trade_review_confirmed', 'manual_trade_review_case', Number(req.params.id), { action:req.body?.action || 'approve', version_id:result.version_id || null })
+    res.json({ ok:true, ...result })
+  }
+  catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/manual-trade-reviews/:id/retry', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const result = await retryManualTradeReview(Number(req.params.id), req.user)
+    await auditAiMutation(req, 'manual_trade_review_retried', 'manual_trade_review_case', Number(req.params.id))
+    res.status(202).json({ ok:true, ...result })
+  }
+  catch (error) { reviewError(res, error) }
+})
+
 router.get('/ai/reviews/:id', authMiddleware, async (req, res) => {
   try { res.json({ ok: true, review: await getReviewCase(Number(req.params.id), req.user.id) }) }
   catch (error) { reviewError(res, error) }
@@ -1231,7 +1315,8 @@ router.delete('/ai/admin/platform-experience/:id', authMiddleware, async (req, r
   catch (error) { reviewError(res, error) }
 })
 
-export { initAutoSchedulers, startManualAnalysisJobs, startHistoryCompareRecoveryWorker }
+export { initAutoSchedulers, startManualAnalysisJobs, startHistoryCompareRecoveryWorker,
+  startManualTradeReviewWorker, stopManualTradeReviewWorker }
 
 export { mt5Bridge, platformRates } from './market-data.js'
 export { getPlatformMarketStatus } from './platform-market-data.js'

@@ -100,6 +100,44 @@ const state = {
   platformMemoryPolicies: [],
   platformMemoryEvaluation: {},
   selectedReviewId: null,
+  // Manual trade strategy review is deliberately isolated from the periodic
+  // review state above.  Its selector uses the Bridge cursor contract while
+  // review history continues to use the case list's offset pagination.
+  reviewMemoryView: "reviews",
+  manualTradeReviewView: "selection",
+  manualTradeReviewFilters: { pageSize:20, cursor:null, historySnapshotId:null, rangeStartUtcMsc:null, rangeEndUtcMsc:null, symbol:"", direction:"" },
+  manualTradeReviewCursorStack: [null],
+  manualTradeReviewCursorIndex: 0,
+  manualTradeReviewTrades: [],
+  manualTradeReviewSelectedTrades: [],
+  manualTradeReviewSelection: [],
+  manualTradeReviewNextCursor: null,
+  manualTradeReviewHasMore: false,
+  manualTradeReviewScannedSourcePages: 0,
+  manualTradeReviewSkippedEmptySourcePages: 0,
+  manualTradeReviewUnavailable: false,
+  manualTradeReviewEvidenceReason: "",
+  manualTradeReviewLoading: false,
+  manualTradeReviewLoaded: false,
+  manualTradeReviewError: "",
+  manualTradeReviewRequestVersion: 0,
+  manualTradeReviewStrategies: [],
+  manualTradeReviewStrategyLoading: false,
+  manualTradeReviewStrategyId: null,
+  manualTradeReviewSubmitting: false,
+  manualTradeReviewCases: [],
+  manualTradeReviewHistoryLoading: false,
+  manualTradeReviewHistoryLoaded: false,
+  manualTradeReviewHistoryError: "",
+  manualTradeReviewSelectedId: null,
+  selectedManualTradeReviewId: null,
+  manualTradeReviewDetail: null,
+  manualTradeReviewDetailLoading: false,
+  manualTradeReviewDetailError: "",
+  manualTradeReviewPollTimer: null,
+  manualTradeReviewPollGeneration: 0,
+  manualTradeReviewHistoryOffset: 0,
+  manualTradeReviewHistoryPageSize: 20,
   autoProgressCycles: {},
   autoProgressFlash: null,
   autoProgressVisual: {},
@@ -146,6 +184,14 @@ const _historyTicketMapCache = new Map();
 const _historyTicketMapFlights = new Map();
 const HISTORY_FRESHNESS_RETRY_DELAYS_MS = [1000, 2000, 5000, 10000];
 const HISTORY_FRESHNESS_RETRY_MAX_ATTEMPTS = 60;
+// MT4 legacy history can return the visible rows before its SQLite summary is
+// ready.  Keep this compatibility retry deliberately bounded: the backoff
+// covers a slow terminal archive build without becoming a background poller;
+// each attempt reuses the frozen range and the normal history-view flight guard
+// rather than issuing another forced full-history package.
+const HISTORY_LEGACY_SUMMARY_RETRY_DELAYS_MS = [2000, 5000, 10000, 20000, 30000, 60000, 90000];
+const HISTORY_LEGACY_SUMMARY_RETRY_MAX_ATTEMPTS = HISTORY_LEGACY_SUMMARY_RETRY_DELAYS_MS.length;
+let _historyLegacySummaryRetry = null;
 const HISTORY_CIRCUIT_BREAKER_CODES = new Set([
   'bridge_data_request_disconnected',
   'bridge_history_route_required',
@@ -1690,6 +1736,35 @@ const API_ERROR_MESSAGES = {
   trading_account_not_active: "当前交易账户不是活动账户，请确认桥接已连接且账户允许交易",
   trading_account_identity_immutable: "该交易账户已经完成身份验证，服务器和登录账号不能直接修改；如需更换账户，请删除后重新连接验证",
   ai_internal_error: "服务器处理失败，请稍后重试；如持续出现，请将错误编号提供给管理员",
+  manual_trade_review_forbidden: "只有平台内容管理员或观摩源账号可以使用手动交易复盘",
+  manual_trade_review_account_unavailable: "当前账号没有可用于复盘的活动交易账户",
+  manual_trade_review_bridge_unavailable: "当前交易终端未连接，暂时无法读取手动交易历史",
+  manual_trade_review_bridge_route_ambiguous: "当前交易账户对应多个终端连接，暂时无法安全复盘",
+  manual_trade_review_evidence_unavailable: "手动交易证据暂不可用，请连接终端并稍后重试",
+  manual_trade_review_history_range_invalid: "最近 7 天的交易快照已失效，请重新刷新交易记录",
+  manual_trade_review_counterfactual_invalid: "开仓前盲测结果格式无效，请重试生成",
+  manual_trade_review_counterfactual_immutable: "开仓前盲测结论已冻结，不能在事后人工改写",
+  history_incomplete: "交易历史完整性尚未确认，暂不能安全筛选手动交易",
+  clock_untrusted: "交易终端时间尚未校准，暂不能安全筛选手动交易",
+  history_evidence_unavailable: "交易历史的成交证据暂不可用，暂不能安全筛选手动交易",
+  history_cursor_unavailable: "交易历史游标暂不可用，已停止继续查找",
+  history_cursor_repeated: "交易历史游标重复，已停止继续查找以避免循环",
+  history_snapshot_changed: "交易历史快照发生变化，已停止继续查找，请刷新后重试",
+  history_page_unavailable: "交易历史下一页暂不可用，已停止继续查找",
+  system_association_lookup_unavailable: "系统关联证据暂不可用，已停止继续查找",
+  positions_unavailable: "当前持仓证据暂不可用，已停止继续查找",
+  manual_trade_review_selection_invalid: "请选择 1 笔最近 7 天的盈利未绑定信号订单",
+  manual_trade_review_selection_duplicate: "交易来源已变化或重复，请刷新后重新选择",
+  manual_trade_review_client_request_id_required: "任务请求编号缺失，请重试",
+  manual_trade_review_model_unavailable: "当前没有可用的复盘模型，请先配置平台模型",
+  manual_trade_review_retry_not_allowed: "当前复盘状态不支持重试",
+  manual_trade_review_not_found: "没有找到这条手动交易复盘",
+  manual_trade_review_version_required: "请先选择可确认的复盘版本",
+  manual_trade_review_version_conflict: "复盘已被更新，请刷新后再保存",
+  manual_trade_review_edit_not_allowed: "当前复盘状态不支持人工编辑",
+  manual_trade_review_action_invalid: "复盘确认动作无效",
+  manual_trade_review_generation_failed: "复盘模型生成失败，请检查模型配置后重试",
+  platform_strategy_required: "请选择一个可管理的 active 平台策略",
   admin_only: "仅管理员可以使用此功能",
   observer_channel_access_denied: "当前账号不能查看这个观摩频道",
   observer_source_offline: "当前观摩频道暂时离线，请稍后重试",
@@ -1853,6 +1928,7 @@ function syncAiAccess(access) {
     _historyChartCache = null;
     _historyDirty = true;
     clearHistoryFreshnessRetry();
+    cancelHistoryLegacySummaryRetry();
   }
   if (personalBridgeRestored) schedulePersonalBridgeRefresh();
   return { changed, personalBridgeRestored };
@@ -1918,6 +1994,7 @@ async function enterBridgeObserverMode({ paused = false, refresh = true } = {}) 
   _historyChartCache = null;
   _historyDirty = true;
   clearHistoryFreshnessRetry();
+  cancelHistoryLegacySummaryRetry();
   setText("quoteTime", "--");
   setText("mt5ServerTime", "--");
   renderPositionRows();
@@ -2003,6 +2080,7 @@ function setHistoryAccountIdentity(identity) {
   } : null;
   const previousKey = historyStableAccountKey(state.bridgeAccountIdentity);
   const nextKey = historyStableAccountKey(next);
+  if (previousKey !== nextKey) cancelHistoryLegacySummaryRetry();
   if (previousKey && nextKey && previousKey !== nextKey) {
     cancelHistoryPrepareRetry();
     _historyQueryGeneration += 1;
@@ -2173,6 +2251,7 @@ function stopRealtimeSync() {
 
 function clearAccountContextCaches() {
   cancelHistoryPrepareRetry();
+  cancelHistoryLegacySummaryRetry();
   _historyQueryGeneration += 1;
   state.historyQueryGeneration = _historyQueryGeneration;
   _historyQueryState = null;
@@ -2237,6 +2316,7 @@ function invalidateSession() {
   stopPositionProtectionPolling();
   stopManualAnalysisPolling();
   stopReviewDetailPolling();
+  stopManualTradeReviewPolling();
   if (state.reviewSummaryTimer) clearInterval(state.reviewSummaryTimer);
   state.reviewSummaryTimer = null;
   state.reviewListRequestVersion += 1;
@@ -2281,6 +2361,28 @@ function invalidateSession() {
   state.memorySettings = {};
   state.platformMemoryPolicies = [];
   state.platformMemoryEvaluation = {};
+  state.reviewMemoryView = "reviews";
+  state.manualTradeReviewView = "selection";
+  state.manualTradeReviewFilters = { pageSize:20, cursor:null, historySnapshotId:null, rangeStartUtcMsc:null, rangeEndUtcMsc:null, symbol:"", direction:"" };
+  state.manualTradeReviewCursorStack = [null];
+  state.manualTradeReviewCursorIndex = 0;
+  state.manualTradeReviewTrades = [];
+  state.manualTradeReviewSelectedTrades = [];
+  state.manualTradeReviewSelection = [];
+  state.manualTradeReviewNextCursor = null;
+  state.manualTradeReviewHasMore = false;
+  state.manualTradeReviewScannedSourcePages = 0;
+  state.manualTradeReviewSkippedEmptySourcePages = 0;
+  state.manualTradeReviewUnavailable = false;
+  state.manualTradeReviewEvidenceReason = "";
+  state.manualTradeReviewLoaded = false;
+  state.manualTradeReviewStrategies = [];
+  state.manualTradeReviewStrategyId = null;
+  state.manualTradeReviewCases = [];
+  state.manualTradeReviewHistoryLoaded = false;
+  state.manualTradeReviewSelectedId = null;
+  state.selectedManualTradeReviewId = null;
+  state.manualTradeReviewDetail = null;
   state.signalTickets = {};
   state.closeSignalTickets = {};
   clearManualAnalysisTask();
@@ -2337,6 +2439,129 @@ function signalMarketData(signal) {
 function clearHistoryFreshnessRetry() {
   if (_historyFreshnessRetry?.timer) clearTimeout(_historyFreshnessRetry.timer);
   _historyFreshnessRetry = null;
+  cancelHistoryLegacySummaryRetry();
+}
+
+function cancelHistoryLegacySummaryRetry() {
+  const retry = _historyLegacySummaryRetry;
+  if (!retry) return;
+  retry.cancelled = true;
+  if (retry.timer) clearTimeout(retry.timer);
+  _historyLegacySummaryRetry = null;
+}
+
+function finishHistoryLegacySummaryRetry(retry, { success = false, exhausted = false } = {}) {
+  if (_historyLegacySummaryRetry !== retry) return;
+  if (retry.timer) clearTimeout(retry.timer);
+  _historyLegacySummaryRetry = null;
+  if (!historyQueryIsCurrent(retry.query)) return;
+  retry.query.status = success ? "ready" : "unavailable";
+  if (success) {
+    renderHistorySyncStatus("历史记录已更新，范围统计已完成", { tone:"success", busy:false });
+    return;
+  }
+  const message = exhausted
+    ? "范围统计准备时间较长，请稍后点击“刷新”重试"
+    : "范围统计自动刷新失败，请稍后点击“刷新”重试";
+  renderHistorySyncStatus(message, { tone:"warning", busy:false });
+  if (exhausted && !retry.exhaustedNoticeShown) {
+    retry.exhaustedNoticeShown = true;
+    toast(message, "warning");
+  }
+}
+
+function scheduleHistoryLegacySummaryRetry(query) {
+  if (normalizeBridgePlatform(state.bridgePlatform) !== "mt4" || !historyQueryIsCurrent(query)) return;
+  const accountKey = historyStableAccountKey();
+  let retry = _historyLegacySummaryRetry;
+  if (!retry || retry.query !== query || retry.accountKey !== accountKey
+    || retry.platform !== normalizeBridgePlatform(state.bridgePlatform)) {
+    cancelHistoryLegacySummaryRetry();
+    retry = {
+      query,
+      generation:Number(query.generation),
+      accountKey,
+      platform:normalizeBridgePlatform(state.bridgePlatform),
+      attempts:0,
+      timer:null,
+      inFlight:false,
+      cancelled:false,
+      exhaustedNoticeShown:false,
+    };
+    _historyLegacySummaryRetry = retry;
+  }
+  if (retry.attempts >= HISTORY_LEGACY_SUMMARY_RETRY_MAX_ATTEMPTS) {
+    finishHistoryLegacySummaryRetry(retry, { exhausted:true });
+    return;
+  }
+  if (retry.timer || retry.inFlight) return;
+  renderHistorySyncStatus("交易记录已显示，范围统计仍在准备中，系统将继续自动重试", { tone:"warning", busy:true });
+  const delay = HISTORY_LEGACY_SUMMARY_RETRY_DELAYS_MS[
+    Math.min(retry.attempts, HISTORY_LEGACY_SUMMARY_RETRY_DELAYS_MS.length - 1)
+  ];
+  retry.timer = setTimeout(async () => {
+    retry.timer = null;
+    if (_historyLegacySummaryRetry !== retry || retry.cancelled
+      || !historyQueryIsCurrent(retry.query)
+      || retry.accountKey !== historyStableAccountKey()
+      || retry.platform !== normalizeBridgePlatform(state.bridgePlatform)) {
+      if (_historyLegacySummaryRetry === retry) cancelHistoryLegacySummaryRetry();
+      return;
+    }
+    if (retry.attempts >= HISTORY_LEGACY_SUMMARY_RETRY_MAX_ATTEMPTS) {
+      finishHistoryLegacySummaryRetry(retry, { exhausted:true });
+      return;
+    }
+    retry.attempts += 1;
+    retry.inFlight = true;
+    try {
+      // historyRetryAttempt keeps the frozen range and asks the compatibility
+      // layer for a lightweight continuation.  skipPrepare avoids falling back
+      // into the unsupported probe on every attempt; loadHistoryViewsLegacy's
+      // flight map still deduplicates a concurrent request for this context.
+      const result = await loadHistoryViews({
+        forceRefresh:false,
+        // The initial fallback may have loaded the account card alongside the
+        // table, but a background summary retry must stay history-only.
+        includeAccount:false,
+        manualRefresh:false,
+        historyRetryAttempt:true,
+        disableRangeRetry:true,
+        disableFreshnessRetry:true,
+        skipPrepare:true,
+      });
+      retry.inFlight = false;
+      if (_historyLegacySummaryRetry !== retry || retry.cancelled) return;
+      if (!historyQueryIsCurrent(retry.query)
+        || retry.accountKey !== historyStableAccountKey()
+        || retry.platform !== normalizeBridgePlatform(state.bridgePlatform)) {
+        cancelHistoryLegacySummaryRetry();
+        return;
+      }
+      const retrySucceeded = Boolean(result)
+        && result.historyPending === false
+        && result.summaryPending !== true
+        && result.historyStale !== true;
+      if (retrySucceeded) {
+        finishHistoryLegacySummaryRetry(retry, { success:true });
+      } else {
+        scheduleHistoryLegacySummaryRetry(retry.query);
+      }
+    } catch {
+      retry.inFlight = false;
+      if (_historyLegacySummaryRetry !== retry || retry.cancelled) return;
+      if (!historyQueryIsCurrent(retry.query)
+        || retry.accountKey !== historyStableAccountKey()
+        || retry.platform !== normalizeBridgePlatform(state.bridgePlatform)) {
+        cancelHistoryLegacySummaryRetry();
+        return;
+      }
+      // A transient Bridge/SQLite read error consumes one bounded attempt but
+      // does not turn a recoverable background refresh into a manual-only
+      // failure.  The next delayed attempt remains guarded by the same query.
+      scheduleHistoryLegacySummaryRetry(retry.query);
+    }
+  }, delay);
 }
 
 function historySyncMetadata(data) {
@@ -2500,6 +2725,9 @@ function historyQueryRangeParams(query = _historyQueryState) {
     system_start_utc_msc:Number(range.system_start_utc_msc),
     effective_start_utc_msc:Number(range.effective_start_utc_msc),
     captured_end_utc_msc:Number(range.captured_end_utc_msc),
+    ...(range.scope_start_override
+      ? { scope_start_override:String(range.scope_start_override) }
+      : {}),
   };
 }
 
@@ -2518,6 +2746,7 @@ function beginHistoryQuery(trigger = "enter") {
   cancelHistoryPrepareRetry();
   cancelHistoryRangeRetry();
   clearHistoryFreshnessRetry();
+  cancelHistoryLegacySummaryRetry();
   const generation = ++_historyQueryGeneration;
   state.historyQueryGeneration = generation;
   let scopeParams;
@@ -2619,9 +2848,13 @@ async function runHistoryLegacyFallback(query, options = {}) {
   query.fullReadCount += 1;
   renderHistorySyncStatus("当前桥接不支持轻量同步检查，正在读取历史记录…", { busy:true });
   const data = await loadHistoryViewsLegacy({
-    forceRefresh:true,
+    // Entering the tab and changing a range should read the local Bridge
+    // archive immediately. Only the explicit refresh action requests a
+    // terminal refresh; otherwise MT4's compatibility fallback can block the
+    // whole page while it replays an already persisted account history.
+    forceRefresh:options.forceRefresh === true,
     includeAccount:options.includeAccount === true,
-    manualRefresh:true,
+    manualRefresh:options.manualRefresh === true,
     disableRangeRetry:true,
     disableFreshnessRetry:true,
     skipPrepare:true,
@@ -2630,13 +2863,20 @@ async function runHistoryLegacyFallback(query, options = {}) {
     const historyPending = data?.historyPending === true;
     const summaryPending = data?.summaryPending === true;
     const unavailable = historyPending || summaryPending;
+    const autoSummaryRetry = summaryPending && !historyPending
+      && normalizeBridgePlatform(state.bridgePlatform) === "mt4";
     query.status = unavailable ? "unavailable" : "ready";
     const message = historyPending
       ? "历史记录仍在准备中，请稍后手动刷新"
       : summaryPending
-        ? "交易记录已显示，范围统计仍在准备中，请稍后点击刷新"
+        ? autoSummaryRetry
+          ? "交易记录已显示，范围统计仍在准备中，系统将自动重试"
+          : "交易记录已显示，范围统计仍在准备中，请稍后点击刷新"
         : "历史记录已更新";
-    renderHistorySyncStatus(message, { tone:unavailable ? "warning" : "success", busy:false });
+    renderHistorySyncStatus(message, { tone:unavailable ? "warning" : "success", busy:autoSummaryRetry });
+    if (autoSummaryRetry) {
+      scheduleHistoryLegacySummaryRetry(query);
+    }
   }
   return data;
 }
@@ -4817,6 +5057,518 @@ async function loadReviewMemory() {
   renderCachedMemoryWorkspace();
 }
 
+// ===== Manual trade strategy review (platform-content managers only) =====
+// This workflow intentionally has no relationship to the periodic review
+// queue above.  The selector is cursor based, while the review history is the
+// small owner-scoped case list returned by the manual-review API.
+const MANUAL_TRADE_REVIEW_PAGE_SIZE = 20;
+const MANUAL_TRADE_REVIEW_MAX_SELECTION = 1;
+const MANUAL_TRADE_REVIEW_POLL_INTERVAL_MS = 3000;
+const MANUAL_TRADE_REVIEW_TERMINAL_JOBS = new Set(["succeeded", "failed", "cancelled", "deferred"]);
+
+function manualTradeReviewStatusLabel(value) {
+  return ({
+    queued:"已进入队列", preparing:"准备证据", generating:"AI 分析中", counterfactual_analysis:"开仓前盲测",
+    outcome_review:"事后盈利复盘", validating:"校验结果",
+    repairing:"修复输出", retry_wait:"等待重试", completed:"生成完成", succeeded:"生成完成",
+    draft:"待确认", edited:"已修改", needs_revision:"需要修改", approved:"已确认",
+    failed:"生成失败", deferred:"稍后处理", evidence_pending:"等待证据", incomplete:"证据不足", partial:"证据不足",
+  })[String(value || "").toLowerCase()] || "状态待确认";
+}
+
+function manualTradeReviewStatusTone(value) {
+  const status = String(value || "").toLowerCase();
+  if (["approved", "succeeded", "completed"].includes(status)) return "success";
+  if (["failed", "needs_revision", "incomplete"].includes(status)) return "danger";
+  if (["draft", "edited", "queued", "preparing", "generating", "counterfactual_analysis", "outcome_review", "validating", "retry_wait"].includes(status)) return "warning";
+  return "info";
+}
+
+function manualTradeReviewDirectionLabel(value) {
+  return ({ buy:"做多", sell:"做空", long:"做多", short:"做空" })[String(value || "").toLowerCase()] || userVisibleText(value, "方向未知");
+}
+
+function manualTradeReviewFormatTime(value) {
+  if (!value) return "时间待确认";
+  const date = new Date(typeof value === "number" ? value : String(value).replace(" ", "T") + (String(value).includes("Z") ? "" : "+08:00"));
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("zh-CN", { hour12:false, month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+}
+
+function manualTradeReviewIdentity(trade) {
+  return String(trade?.source_identity_hash || trade?.trade_id || "").trim();
+}
+
+function manualTradeReviewSelectedMap() {
+  const selected = state.manualTradeReviewSelectedTrades?.length ? state.manualTradeReviewSelectedTrades : state.manualTradeReviewSelection;
+  return new Map((selected || []).map(item => [manualTradeReviewIdentity(item), item]));
+}
+
+function manualTradeReviewHandleForbidden(error) {
+  if (Number(error?.status) !== 403 && error?.code !== "manual_trade_review_forbidden") return false;
+  state.manualTradeReviewLoaded = false;
+  state.manualTradeReviewTrades = [];
+  state.manualTradeReviewSelectedTrades = [];
+  state.manualTradeReviewSelection = [];
+  state.manualTradeReviewCases = [];
+  state.manualTradeReviewDetail = null;
+  state.manualTradeReviewScannedSourcePages = 0;
+  state.manualTradeReviewSkippedEmptySourcePages = 0;
+  state.manualTradeReviewUnavailable = false;
+  state.manualTradeReviewEvidenceReason = "";
+  stopManualTradeReviewPolling();
+  applyRoleUI();
+  toast("当前账号没有手动交易复盘权限，已清空本地复盘状态", "warning");
+  return true;
+}
+
+function manualTradeReviewQuery({ forceRefresh = false } = {}) {
+  const filter = state.manualTradeReviewFilters || {};
+  const params = new URLSearchParams({ page_size:String(filter.pageSize || MANUAL_TRADE_REVIEW_PAGE_SIZE) });
+  if (filter.cursor) params.set("cursor", String(filter.cursor));
+  if (filter.historySnapshotId) params.set("history_snapshot_id", String(filter.historySnapshotId));
+  if (filter.rangeStartUtcMsc) params.set("range_start_utc_msc", String(filter.rangeStartUtcMsc));
+  if (filter.rangeEndUtcMsc) params.set("range_end_utc_msc", String(filter.rangeEndUtcMsc));
+  if (filter.symbol) params.set("symbol", String(filter.symbol));
+  if (filter.direction) params.set("direction", String(filter.direction));
+  if (forceRefresh) params.set("force_refresh", "1");
+  return `/api/ai/manual-trade-reviews/eligible-trades?${params.toString()}`;
+}
+
+function manualTradeReviewResetCursor() {
+  state.manualTradeReviewFilters.cursor = null;
+  state.manualTradeReviewFilters.historySnapshotId = null;
+  state.manualTradeReviewFilters.rangeStartUtcMsc = null;
+  state.manualTradeReviewFilters.rangeEndUtcMsc = null;
+  state.manualTradeReviewCursorStack = [null];
+  state.manualTradeReviewCursorIndex = 0;
+  state.manualTradeReviewNextCursor = null;
+  state.manualTradeReviewHasMore = false;
+}
+
+function manualTradeReviewReadFilters() {
+  state.manualTradeReviewFilters.symbol = String($("manualTradeReviewSymbol")?.value || "").trim();
+  state.manualTradeReviewFilters.direction = String($("manualTradeReviewDirection")?.value || "").trim();
+}
+
+function renderManualTradeReviewSelectionSummary() {
+  const selected = state.manualTradeReviewSelectedTrades || [];
+  const host = $("manualTradeReviewSelectedSummary");
+  if (host) {
+    const totalProfit = selected.reduce((sum, item) => sum + (Number(item.net_profit) || 0), 0);
+    host.innerHTML = `<div><span><i data-lucide="list-checks" size="15"></i>已选择</span><strong>${selected.length} 笔交易</strong><small>当前账户 · 创建时再次校验订单与信号绑定</small></div><div><span>订单净利润</span><strong class="${totalProfit > 0 ? "positive" : ""}">${fmt(totalProfit)}</strong><small>盈利结果不会泄露给开仓前盲测</small></div>`;
+  }
+  setText("manualTradeReviewSelectionCount", `已选 ${selected.length} / ${MANUAL_TRADE_REVIEW_MAX_SELECTION}`);
+  const next = document.querySelector('[data-manual-review-action="to-strategy"]');
+  if (next) next.disabled = selected.length < 1 || selected.length > MANUAL_TRADE_REVIEW_MAX_SELECTION;
+  const create = document.querySelector('[data-manual-review-action="create-review"]');
+  if (create) create.disabled = selected.length < 1 || !Number(state.manualTradeReviewStrategyId || $("manualTradeReviewStrategy")?.value || 0) || state.manualTradeReviewSubmitting;
+  initIcons();
+}
+
+function renderManualTradeReviewTrades() {
+  const host = $("manualTradeReviewTradeList");
+  if (!host) return;
+  const selected = manualTradeReviewSelectedMap();
+  if (state.manualTradeReviewLoading && !state.manualTradeReviewTrades.length) {
+    host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
+  } else if (state.manualTradeReviewUnavailable) {
+    host.innerHTML = `<div class="manual-review-empty error" role="alert"><i data-lucide="shield-alert" size="19"></i><div><strong>手动交易证据不可用</strong><span>${escapeHtml(state.manualTradeReviewError || "历史、终端时间或成交证据尚未完整，已停止继续查找。")}</span></div><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="refresh-trades">重试</button></div>`;
+  } else if (state.manualTradeReviewError) {
+    host.innerHTML = `<div class="manual-review-empty error" role="alert"><i data-lucide="circle-alert" size="19"></i><div><strong>手动交易历史读取失败</strong><span>${escapeHtml(state.manualTradeReviewError)}</span></div><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="refresh-trades">重试</button></div>`;
+  } else if (!state.manualTradeReviewTrades.length) {
+    const canContinue = state.manualTradeReviewHasMore && state.manualTradeReviewNextCursor;
+    const scanned = Number(state.manualTradeReviewScannedSourcePages || 0);
+    host.innerHTML = canContinue
+      ? `<div class="manual-review-empty"><i data-lucide="search-check" size="20"></i><div><strong>已检查当前范围，仍有更早记录</strong><span>本次已检查 ${scanned || 1} 个历史页，当前范围没有符合筛选的交易；继续查找会沿同一快照检查更早记录。</span></div></div>`
+      : '<div class="manual-review-empty"><i data-lucide="check-check" size="20"></i><div><strong>最近 7 天没有可复盘交易</strong><span>这里只显示盈利、完整平仓且开仓订单未绑定平台信号的记录。</span></div></div>';
+  } else {
+    host.innerHTML = state.manualTradeReviewTrades.map(trade => {
+      const identity = manualTradeReviewIdentity(trade);
+      const checked = selected.has(identity);
+      const profit = Number(trade.net_profit || 0);
+      return `<label class="manual-review-trade-row ${checked ? "is-selected" : ""}" data-manual-trade-row="${escapeHtml(identity)}"><span class="manual-review-trade-check"><input type="radio" name="manual-trade-review-selection" data-manual-trade-select="${escapeHtml(identity)}" ${checked ? "checked" : ""} aria-label="选择 ${escapeHtml(trade.symbol || "交易")} ${manualTradeReviewFormatTime(trade.close_time_utc_msc)}"></span><span class="manual-review-trade-main"><strong>${escapeHtml(trade.symbol || "未知品种")} <span class="status-chip info">${escapeHtml(manualTradeReviewDirectionLabel(trade.direction))}</span></strong><small>${escapeHtml(manualTradeReviewFormatTime(trade.entry_time_utc_msc))} → ${escapeHtml(manualTradeReviewFormatTime(trade.close_time_utc_msc))} · 未绑定平台信号</small><span class="manual-review-trade-meta"><span>订单 ${escapeHtml(trade.entry_order_ticket || trade.position_id || "--")}</span><span>入场 ${escapeHtml(raw(trade.entry_price))}</span><span>平仓 ${escapeHtml(raw(trade.close_price))}</span></span></span><strong class="manual-review-trade-profit positive">+${escapeHtml(fmt(profit))}</strong></label>`;
+    }).join("");
+  }
+  renderManualTradeReviewSelectionSummary();
+  initIcons();
+}
+
+function renderManualTradeReviewPager() {
+  const host = $("manualTradeReviewPager");
+  if (!host) return;
+  const previousDisabled = state.manualTradeReviewCursorIndex <= 0 || state.manualTradeReviewLoading;
+  const nextDisabled = !state.manualTradeReviewHasMore || !state.manualTradeReviewNextCursor || state.manualTradeReviewLoading;
+  const continueSearch = !state.manualTradeReviewTrades.length && state.manualTradeReviewHasMore;
+  const pageStatus = state.manualTradeReviewHasMore ? (continueSearch ? " · 仍有更早记录" : " · 还有更多") : " · 已检查完当前范围";
+  const scanSummary = Number(state.manualTradeReviewScannedSourcePages || 0) > 1 ? ` · 已检查 ${Number(state.manualTradeReviewScannedSourcePages)} 个历史页` : "";
+  host.innerHTML = `<button class="pager-btn" type="button" data-manual-review-action="previous-trades" ${previousDisabled ? "disabled" : ""}>上一页</button><span class="pager-info">游标页 ${state.manualTradeReviewCursorIndex + 1}${pageStatus}${scanSummary}</span><button class="pager-btn" type="button" data-manual-review-action="next-trades" ${nextDisabled ? "disabled" : ""}>${continueSearch ? "继续查找" : "下一页"}</button>`;
+}
+
+async function loadManualTradeReviewTrades({ reset = false, forceRefresh = false } = {}) {
+  if (!canManagePlatformAiContent() || !state.token) return [];
+  if (reset) {
+    state.manualTradeReviewRequestVersion += 1;
+    manualTradeReviewResetCursor();
+    state.manualTradeReviewTrades = [];
+    state.manualTradeReviewError = "";
+    state.manualTradeReviewUnavailable = false;
+    state.manualTradeReviewEvidenceReason = "";
+    state.manualTradeReviewScannedSourcePages = 0;
+    state.manualTradeReviewSkippedEmptySourcePages = 0;
+    state.manualTradeReviewLoaded = false;
+  }
+  if (state.manualTradeReviewLoading && !forceRefresh) return state.manualTradeReviewTrades;
+  const requestVersion = state.manualTradeReviewRequestVersion;
+  state.manualTradeReviewLoading = true;
+  state.manualTradeReviewError = "";
+  renderManualTradeReviewTrades();
+  renderManualTradeReviewPager();
+  try {
+    const data = await api(manualTradeReviewQuery({ forceRefresh }));
+    if (requestVersion !== state.manualTradeReviewRequestVersion) return state.manualTradeReviewTrades;
+    const pagination = data.pagination || {};
+    state.manualTradeReviewTrades = Array.isArray(data.trades) ? data.trades : [];
+    state.manualTradeReviewFilters.historySnapshotId = pagination.history_snapshot_id || data.history_snapshot_id || state.manualTradeReviewFilters.historySnapshotId || null;
+    state.manualTradeReviewFilters.rangeStartUtcMsc = pagination.range_start_utc_msc || data.range_start_utc_msc || state.manualTradeReviewFilters.rangeStartUtcMsc || null;
+    state.manualTradeReviewFilters.rangeEndUtcMsc = pagination.range_end_utc_msc || data.range_end_utc_msc || state.manualTradeReviewFilters.rangeEndUtcMsc || null;
+    state.manualTradeReviewNextCursor = pagination.next_cursor || data.next_cursor || null;
+    state.manualTradeReviewHasMore = Boolean(pagination.has_more ?? data.has_more);
+    state.manualTradeReviewScannedSourcePages = Number(pagination.scanned_source_pages ?? data.scanned_source_pages ?? 0) || 0;
+    state.manualTradeReviewSkippedEmptySourcePages = Number(pagination.skipped_empty_source_pages ?? data.skipped_empty_source_pages ?? 0) || 0;
+    state.manualTradeReviewUnavailable = Boolean(data.unavailable || data.evidence_status === "unavailable");
+    state.manualTradeReviewEvidenceReason = String(data.evidence_reason || data.error || "");
+    if (state.manualTradeReviewUnavailable) state.manualTradeReviewError = localizeReason(state.manualTradeReviewEvidenceReason || "manual_trade_review_evidence_unavailable");
+    else state.manualTradeReviewError = "";
+    state.manualTradeReviewLoaded = true;
+    const selected = manualTradeReviewSelectedMap();
+    state.manualTradeReviewSelectedTrades = state.manualTradeReviewSelectedTrades.filter(item => selected.has(manualTradeReviewIdentity(item)));
+    state.manualTradeReviewSelection = state.manualTradeReviewSelectedTrades;
+    return state.manualTradeReviewTrades;
+  } catch (error) {
+    if (requestVersion === state.manualTradeReviewRequestVersion) state.manualTradeReviewError = localizeReason(error.code || error.message);
+    if (manualTradeReviewHandleForbidden(error)) return [];
+    throw error;
+  } finally {
+    if (requestVersion === state.manualTradeReviewRequestVersion) {
+      state.manualTradeReviewLoading = false;
+      renderManualTradeReviewTrades();
+      renderManualTradeReviewPager();
+    }
+  }
+}
+
+async function moveManualTradeReviewCursor(direction) {
+  if (state.manualTradeReviewLoading) return;
+  if (direction === "next") {
+    if (!state.manualTradeReviewHasMore || !state.manualTradeReviewNextCursor) return;
+    state.manualTradeReviewCursorIndex += 1;
+    state.manualTradeReviewCursorStack[state.manualTradeReviewCursorIndex] = state.manualTradeReviewNextCursor;
+  } else {
+    if (state.manualTradeReviewCursorIndex <= 0) return;
+    state.manualTradeReviewCursorIndex -= 1;
+  }
+  state.manualTradeReviewFilters.cursor = state.manualTradeReviewCursorStack[state.manualTradeReviewCursorIndex] || null;
+  await loadManualTradeReviewTrades();
+}
+
+async function loadManualTradeReviewStrategies() {
+  if (!canManagePlatformAiContent() || !state.token) return [];
+  if (state.manualTradeReviewStrategyLoading) return state.manualTradeReviewStrategies;
+  state.manualTradeReviewStrategyLoading = true;
+  const select = $("manualTradeReviewStrategy");
+  if (select) { select.disabled = true; select.innerHTML = '<option value="">正在读取可管理的平台策略…</option>'; }
+  try {
+    const data = await api("/api/ai/manual-trade-reviews/strategies");
+    state.manualTradeReviewStrategies = (data.strategies || []).filter(item => item.scope === "platform" && item.visibility_status !== "archived" && Number(item.is_active ?? 1) !== 0);
+    if (select) {
+      select.innerHTML = '<option value="">请选择平台策略</option>' + state.manualTradeReviewStrategies.map(item => `<option value="${Number(item.id)}">${escapeHtml(item.title || `平台策略 #${item.id}`)} · v${Number(item.version || 1)}</option>`).join("");
+      if (state.manualTradeReviewStrategyId && state.manualTradeReviewStrategies.some(item => Number(item.id) === Number(state.manualTradeReviewStrategyId))) select.value = String(state.manualTradeReviewStrategyId);
+      select.disabled = false;
+    }
+    return state.manualTradeReviewStrategies;
+  } catch (error) {
+    if (select) { select.innerHTML = '<option value="">平台策略读取失败</option>'; select.disabled = true; }
+    if (manualTradeReviewHandleForbidden(error)) return [];
+    throw error;
+  } finally { state.manualTradeReviewStrategyLoading = false; renderManualTradeReviewSelectionSummary(); }
+}
+
+function setManualTradeReviewStage(target, { loadData = true } = {}) {
+  if (!canManagePlatformAiContent()) {
+    if (target === "manual-trades") toast("当前账号没有手动交易复盘权限", "warning");
+    return;
+  }
+  const next = ["selection", "strategy", "result"].includes(target) ? target : "selection";
+  state.manualTradeReviewView = next;
+  document.querySelectorAll("[data-manual-stage]").forEach(panel => {
+    const active = panel.dataset.manualStage === next;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+  });
+  const order = ["selection", "strategy", "result"];
+  document.querySelectorAll("[data-manual-step]").forEach(step => {
+    const index = order.indexOf(step.dataset.manualStep);
+    const current = order.indexOf(next);
+    step.classList.toggle("active", index === current);
+    step.classList.toggle("done", index < current);
+  });
+  if (next === "strategy" && loadData && !state.manualTradeReviewStrategyLoading && !state.manualTradeReviewStrategies.length) loadManualTradeReviewStrategies().catch(error => toast(localizeReason(error.code || error.message), "error"));
+  if (next === "result" && loadData) loadManualTradeReviewHistory({ reset:!state.manualTradeReviewHistoryLoaded }).catch(error => toast(localizeReason(error.code || error.message), "error"));
+  renderManualTradeReviewTrades();
+  initIcons();
+}
+
+async function loadManualTradeReviewWorkspace({ force = false } = {}) {
+  if (!canManagePlatformAiContent() || !state.token) return;
+  setManualTradeReviewStage(state.manualTradeReviewView || "selection", { loadData:false });
+  if (!state.manualTradeReviewLoaded || force) await loadManualTradeReviewTrades({ reset:true, forceRefresh:force });
+  if (state.manualTradeReviewView === "strategy" && !state.manualTradeReviewStrategies.length) await loadManualTradeReviewStrategies();
+  if (state.manualTradeReviewView === "result" && !state.manualTradeReviewHistoryLoaded) await loadManualTradeReviewHistory({ reset:true });
+  if (state.manualTradeReviewView === "result" && state.manualTradeReviewDetail) scheduleManualTradeReviewPolling(state.manualTradeReviewDetail);
+}
+
+function manualTradeReviewBuildClientRequestId() {
+  try { if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID(); } catch {}
+  return `manual-review-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function createManualTradeReviewTask() {
+  if (!canManagePlatformAiContent() || state.manualTradeReviewSubmitting) return;
+  const selected = state.manualTradeReviewSelectedTrades || [];
+  const strategyId = Number(state.manualTradeReviewStrategyId || $("manualTradeReviewStrategy")?.value || 0);
+  if (selected.length < 1 || selected.length > MANUAL_TRADE_REVIEW_MAX_SELECTION) throw new Error("manual_trade_review_selection_invalid");
+  if (!strategyId) throw new Error("platform_strategy_required");
+  state.manualTradeReviewSubmitting = true;
+  renderManualTradeReviewSelectionSummary();
+  try {
+    const data = await api("/api/ai/manual-trade-reviews", { method:"POST", timeout:30_000, body:{
+      client_request_id:manualTradeReviewBuildClientRequestId(), strategy_id:strategyId,
+      user_thesis_text:String($("manualTradeReviewThesis")?.value || "").trim(),
+      trades:selected.map(item => ({ trade_id:item.trade_id, source_identity_hash:item.source_identity_hash, trade_source_hash:item.trade_source_hash })),
+    } });
+    const id = Number(data.case?.id || 0);
+    state.manualTradeReviewSelectedId = id || null;
+    state.selectedManualTradeReviewId = state.manualTradeReviewSelectedId;
+    state.manualTradeReviewDetail = null;
+    state.manualTradeReviewHistoryLoaded = false;
+    setManualTradeReviewStage("result", { loadData:false });
+    await loadManualTradeReviewHistory({ reset:true });
+    if (id) await openManualTradeReviewDetail(id);
+    toast(data.created === false ? "已恢复已有手动交易复盘任务" : "复盘任务已创建，正在生成", "success");
+  } finally {
+    state.manualTradeReviewSubmitting = false;
+    renderManualTradeReviewSelectionSummary();
+  }
+}
+
+function manualTradeReviewCaseStatus(item) {
+  return item?.status || item?.progress_stage || item?.job_status || "queued";
+}
+
+function renderManualTradeReviewHistory() {
+  const host = $("manualTradeReviewHistoryList");
+  if (!host) return;
+  const rows = state.manualTradeReviewCases || [];
+  setText("manualTradeReviewHistoryCount", `${rows.length} 条`);
+  if (state.manualTradeReviewHistoryLoading && !rows.length) host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
+  else if (state.manualTradeReviewHistoryError) host.innerHTML = `<div class="manual-review-empty error" role="alert"><i data-lucide="circle-alert" size="17"></i><span>${escapeHtml(state.manualTradeReviewHistoryError)}</span><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="refresh-history">重试</button></div>`;
+  else if (!rows.length) host.innerHTML = '<div class="manual-review-empty compact"><i data-lucide="file-clock" size="18"></i><span>还没有手动交易复盘；从第一阶段创建一条任务。</span></div>';
+  else host.innerHTML = rows.map(item => {
+    const status = manualTradeReviewCaseStatus(item);
+    const active = Number(item.id) === Number(state.manualTradeReviewSelectedId);
+    return `<button type="button" class="manual-review-history-row ${active ? "active" : ""}" data-manual-review-action="open-history" data-manual-review-id="${Number(item.id)}"><span class="manual-review-history-icon ${manualTradeReviewStatusTone(status)}"><i data-lucide="${status === "failed" ? "circle-alert" : status === "approved" ? "check-circle-2" : "file-clock"}" size="16"></i></span><span><strong>复盘 #${Number(item.id)} · 策略 v${Number(item.strategy_version || 1)}</strong><small>${escapeHtml(manualTradeReviewStatusLabel(status))} · ${escapeHtml(manualTradeReviewFormatTime(item.updated_at || item.created_at))}</small></span><i data-lucide="chevron-right" size="15"></i></button>`;
+  }).join("");
+  const pager = $("manualTradeReviewHistoryPager");
+  if (pager) pager.innerHTML = `<button class="pager-btn" type="button" data-manual-review-action="previous-history" ${state.manualTradeReviewHistoryOffset <= 0 || state.manualTradeReviewHistoryLoading ? "disabled" : ""}>上一页</button><span class="pager-info">第 ${Math.floor(state.manualTradeReviewHistoryOffset / state.manualTradeReviewHistoryPageSize) + 1} 页</span><button class="pager-btn" type="button" data-manual-review-action="next-history" ${rows.length < state.manualTradeReviewHistoryPageSize || state.manualTradeReviewHistoryLoading ? "disabled" : ""}>下一页</button>`;
+  initIcons();
+}
+
+async function loadManualTradeReviewHistory({ reset = false } = {}) {
+  if (!canManagePlatformAiContent() || !state.token) return [];
+  if (reset) state.manualTradeReviewHistoryOffset = 0;
+  if (state.manualTradeReviewHistoryLoading) return state.manualTradeReviewCases;
+  state.manualTradeReviewHistoryLoading = true;
+  state.manualTradeReviewHistoryError = "";
+  renderManualTradeReviewHistory();
+  try {
+    const params = new URLSearchParams({ limit:String(state.manualTradeReviewHistoryPageSize), offset:String(state.manualTradeReviewHistoryOffset) });
+    const data = await api(`/api/ai/manual-trade-reviews?${params.toString()}`);
+    state.manualTradeReviewCases = Array.isArray(data.cases) ? data.cases : [];
+    state.manualTradeReviewHistoryLoaded = true;
+    return state.manualTradeReviewCases;
+  } catch (error) {
+    state.manualTradeReviewHistoryError = localizeReason(error.code || error.message);
+    if (manualTradeReviewHandleForbidden(error)) return [];
+    throw error;
+  } finally { state.manualTradeReviewHistoryLoading = false; renderManualTradeReviewHistory(); }
+}
+
+function stopManualTradeReviewPolling() {
+  if (state.manualTradeReviewPollTimer) clearTimeout(state.manualTradeReviewPollTimer);
+  state.manualTradeReviewPollTimer = null;
+  state.manualTradeReviewPollGeneration += 1;
+}
+
+function manualTradeReviewShouldPoll(detail) {
+  if (!detail) return false;
+  const jobStatus = String(detail.job_status || "").toLowerCase();
+  const caseStatus = String(detail.status || "").toLowerCase();
+  if (["draft", "edited", "needs_revision", "approved", "failed", "deferred"].includes(caseStatus)) return false;
+  return !MANUAL_TRADE_REVIEW_TERMINAL_JOBS.has(jobStatus);
+}
+
+function scheduleManualTradeReviewPolling(detail) {
+  stopManualTradeReviewPolling();
+  if (!manualTradeReviewShouldPoll(detail) || !state.manualTradeReviewSelectedId) return;
+  const generation = state.manualTradeReviewPollGeneration;
+  state.manualTradeReviewPollTimer = setTimeout(() => {
+    if (generation !== state.manualTradeReviewPollGeneration || document.visibilityState === "hidden") return;
+    pollManualTradeReviewJob(Number(state.manualTradeReviewSelectedId), generation).catch(() => {});
+  }, MANUAL_TRADE_REVIEW_POLL_INTERVAL_MS);
+}
+
+async function pollManualTradeReviewJob(caseId, generation = state.manualTradeReviewPollGeneration) {
+  if (!caseId || generation !== state.manualTradeReviewPollGeneration) return;
+  const data = await api(`/api/ai/manual-trade-reviews/${caseId}/job-status`);
+  if (generation !== state.manualTradeReviewPollGeneration || Number(state.manualTradeReviewSelectedId) !== Number(caseId)) return;
+  state.manualTradeReviewDetail = { ...(state.manualTradeReviewDetail || {}),
+    job_id:data.job?.id ?? state.manualTradeReviewDetail?.job_id,
+    job_status:data.job?.status ?? state.manualTradeReviewDetail?.job_status,
+    progress_stage:data.job?.progress_stage ?? state.manualTradeReviewDetail?.progress_stage,
+    attempt_count:data.job?.attempt_count ?? state.manualTradeReviewDetail?.attempt_count,
+    max_attempts:data.job?.max_attempts ?? state.manualTradeReviewDetail?.max_attempts,
+    last_error_code:data.job?.last_error_code ?? state.manualTradeReviewDetail?.last_error_code,
+  };
+  renderManualTradeReviewDetail();
+  if (data.job?.status === "succeeded" || data.job?.status === "failed") await openManualTradeReviewDetail(caseId, { silent:true });
+  else scheduleManualTradeReviewPolling(state.manualTradeReviewDetail);
+}
+
+function manualTradeReviewProgressHtml(detail) {
+  const current = String(detail?.progress_stage || detail?.job_status || detail?.status || "queued");
+  const stages = [["preparing", "准备证据"], ["counterfactual_analysis", "开仓前盲测"], ["outcome_review", "事后复盘"], ["completed", "完成"]];
+  const currentIndex = current === "completed" || detail?.status === "draft" ? 3 : Math.max(0, stages.findIndex(item => item[0] === current));
+  return `<div class="manual-review-progress" role="status" aria-live="polite"><div class="manual-review-progress-heading"><strong>生成进度</strong><span>${escapeHtml(manualTradeReviewStatusLabel(current))}</span></div><div class="manual-review-progress-track">${stages.map(([key,label], index) => `<div class="${index < currentIndex ? "done" : index === currentIndex ? "active" : ""}"><span>${index < currentIndex ? "✓" : index + 1}</span><small>${label}</small></div>`).join("")}</div></div>`;
+}
+
+function renderManualTradeReviewV2Detail({ detail, currentVersion, content, caseStatus, tone, editable, approved, sources }) {
+  const host = $("manualTradeReviewDetail");
+  const counterfactual = content.counterfactual_analysis || {};
+  const hypotheses = Array.isArray(content.strategy_optimization_hypotheses) ? content.strategy_optimization_hypotheses : [];
+  const rules = Array.isArray(content.rule_comparisons) ? content.rule_comparisons : [];
+  const source = sources[0]?.normalized_trade || {};
+  const evidenceBanner = detail.evidence_status !== "complete" ? `<div class="manual-review-evidence-banner warning" role="status"><i data-lucide="triangle-alert" size="16"></i><span><strong>证据不足</strong>：${escapeHtml(detail.evidence_reason || "行情或历史证据尚未完整")}</span></div>` : "";
+  const failedBanner = caseStatus === "failed" ? `<div class="manual-review-evidence-banner danger" role="alert"><i data-lucide="circle-alert" size="16"></i><span><strong>生成失败</strong>：${escapeHtml(localizeReason(detail.last_error_code || "manual_trade_review_generation_failed"))}</span><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="retry-review" data-manual-review-id="${Number(detail.id)}">重试生成</button></div>` : "";
+  host.innerHTML = `<header class="manual-review-detail-header"><div><span class="review-section-kicker">复盘 #${Number(detail.id)}</span><h4>${escapeHtml(detail.strategy_snapshot?.title || `平台策略 #${Number(detail.strategy_id || 0)}`)} · v${Number(detail.strategy_version || 1)}</h4><p>${escapeHtml(source.symbol || "订单")} · ${escapeHtml(source.identity?.entry_order_ticket || source.identity?.position_id || "--")} · 未绑定平台信号</p></div><span class="status-chip ${tone}">${escapeHtml(manualTradeReviewStatusLabel(caseStatus))}</span></header>${manualTradeReviewShouldPoll(detail) ? manualTradeReviewProgressHtml(detail) : ""}${evidenceBanner}${failedBanner}<section class="manual-review-conclusion"><div class="manual-review-conclusion-heading"><span class="review-section-kicker">结论</span><span>版本 ${Number(currentVersion.version_no || 1)} · 两阶段冻结</span></div><p>${escapeHtml(content.review_summary || "暂无复盘摘要")}</p><div class="manual-review-conclusion-metrics"><span><small>盲测决策</small><strong>${escapeHtml(counterfactual.decision || "insufficient_evidence")}</strong></span><span><small>与实际方向</small><strong>${escapeHtml(content.counterfactual_match || "insufficient_evidence")}</strong></span><span><small>策略符合度</small><strong>${escapeHtml(content.strategy_alignment || "unknown")}</strong></span><span><small>决策质量</small><strong>${escapeHtml(content.decision_quality || "insufficient_evidence")}</strong></span></div></section><section class="manual-review-result-section"><header><span><i data-lucide="scan-search" size="15"></i><strong>阶段 A · 开仓前盲测</strong></span><small>不含实际盈亏与方向</small></header><p>${escapeHtml(counterfactual.reasoning || "证据不足，无法形成开仓前判断")}</p>${manualTradeReviewListHtml("当时策略信号", counterfactual.strategy_signals, "activity")}${manualTradeReviewListHtml("阻断条件", counterfactual.blocking_rules, "shield-alert")}</section><section class="manual-review-result-section"><header><span><i data-lucide="receipt-text" size="15"></i><strong>阶段 B · 盈利归因</strong></span><small>查看完整结果后</small></header><p><b>为什么盈利：</b>${escapeHtml(content.why_profitable || "暂无说明")}</p><p><b>市场适配：</b>${escapeHtml(content.profit_attribution?.market_fit || "暂无说明")}</p><p><b>入场质量：</b>${escapeHtml(content.profit_attribution?.entry_quality || "暂无说明")}</p><p><b>退出质量：</b>${escapeHtml(content.profit_attribution?.exit_quality || "暂无说明")}</p><p><b>偶然因素：</b>${escapeHtml(content.profit_attribution?.luck_or_uncontrolled_factors || "暂无说明")}</p></section>${manualTradeReviewListHtml("策略规则对照", rules, "git-compare")}${manualTradeReviewListHtml("策略有效点", content.strengths, "badge-check")}${manualTradeReviewListHtml("问题与风险", content.issues, "triangle-alert")}${hypotheses.length ? `<section class="manual-review-result-section"><header><span><i data-lucide="flask-conical" size="15"></i><strong>待验证优化假设</strong></span><small>不自动改策略、不写入记忆</small></header><div class="manual-review-optimization-list">${hypotheses.map(item => `<article><div><strong>${escapeHtml(item.proposed_change || "观察假设")}</strong><span class="status-chip info">${escapeHtml(item.state || "hypothesis")}</span></div><p>目标规则：${escapeHtml(item.target_path || "仅观察")}</p><p>缺口：${escapeHtml(item.observed_gap || "暂无说明")}</p><p class="manual-review-risk">风险：${escapeHtml(item.risk_if_applied || "暂无说明")}</p><small>验证要求：${escapeHtml(item.validation_needed || "需要更多独立样本和人工验证")}</small></article>`).join("")}</div></section>` : ""}${editable ? `<section class="manual-review-editor"><header><span><i data-lucide="pencil" size="15"></i><strong>人工编辑</strong></span><small>保存为新版本，不改变冻结证据</small></header><textarea data-manual-content-editor rows="14" spellcheck="false">${escapeHtml(JSON.stringify(content, null, 2))}</textarea><div class="manual-review-editor-actions"><button class="btn btn-secondary" type="button" data-manual-review-action="save-edit" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">保存人工修订</button></div></section>` : ""}<footer class="manual-review-detail-actions"><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="open-strategy-editor" data-manual-review-id="${Number(detail.id)}">打开策略编辑器</button>${!approved ? `<button class="btn btn-ghost btn-sm" type="button" data-manual-review-action="defer-review" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">稍后处理</button><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="mark-problem" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">标记需要修改</button><button class="btn btn-primary btn-sm" type="button" data-manual-review-action="approve-review" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">确认复盘</button>` : '<span class="status-chip success">复盘已确认 · 未写入经验或策略</span>'}</footer>`;
+}
+
+function manualTradeReviewListHtml(title, items, icon = "list-checks") {
+  const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+  return `<section class="manual-review-result-section"><header><span><i data-lucide="${icon}" size="15"></i><strong>${escapeHtml(title)}</strong></span><small>${rows.length} 条</small></header>${rows.length ? `<ul>${rows.map(item => `<li>${escapeHtml(typeof item === "string" ? item : item.lesson || item.proposed_change || item.rule_summary || item.summary || "暂无说明")}</li>`).join("")}</ul>` : '<p class="manual-review-muted">暂无记录</p>'}</section>`;
+}
+
+function renderManualTradeReviewDetail() {
+  const host = $("manualTradeReviewDetail");
+  if (!host) return;
+  const detail = state.manualTradeReviewDetail;
+  if (state.manualTradeReviewDetailLoading && !detail) { host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>'; return; }
+  if (state.manualTradeReviewDetailError) { host.innerHTML = `<div class="manual-review-empty error" role="alert"><i data-lucide="circle-alert" size="19"></i><span>${escapeHtml(state.manualTradeReviewDetailError)}</span><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="reload-detail">重新加载</button></div>`; return; }
+  if (!detail || !detail.id) { host.innerHTML = '<div class="empty-state"><span class="review-empty-icon"><i data-lucide="file-search" size="20"></i></span><strong>选择一条复盘</strong><span>任务创建后会在这里显示冻结证据、反事实判断、盈利归因和策略优化假设。</span></div>'; return; }
+  const currentVersion = (detail.versions || []).find(version => Number(version.id) === Number(detail.current_version_id)) || (detail.versions || []).at(-1);
+  const content = currentVersion?.content || {};
+  const caseStatus = String(detail.status || detail.job_status || "queued");
+  const tone = manualTradeReviewStatusTone(caseStatus);
+  const evidenceComplete = detail.evidence_status === "complete" && content.evidence_quality !== "insufficient";
+  const editable = Boolean(currentVersion && ["draft", "edited", "needs_revision"].includes(caseStatus));
+  const approved = caseStatus === "approved";
+  // Historical v1 rows may contain experience candidates. Keep the old review
+  // readable, but never expose those candidates as an actionable UI path.
+  const candidates = [];
+  const eligibleCandidates = candidates.filter(item => item.eligibility === "eligible");
+  const assessments = Array.isArray(content.trade_assessments) ? content.trade_assessments : [];
+  const rules = Array.isArray(content.rule_comparisons) ? content.rule_comparisons : [];
+  const optimizations = Array.isArray(content.strategy_optimization_candidates) ? content.strategy_optimization_candidates : [];
+  const sources = Array.isArray(detail.sources) ? detail.sources : [];
+  if (currentVersion && content.output_contract_version === "manual-trade-review-v2") {
+    renderManualTradeReviewV2Detail({ detail, currentVersion, content, caseStatus, tone, editable, approved, sources });
+    initIcons();
+    return;
+  }
+  host.innerHTML = `<header class="manual-review-detail-header"><div><span class="review-section-kicker">复盘 #${Number(detail.id)}</span><h4>${escapeHtml(detail.strategy_snapshot?.title || `平台策略 #${Number(detail.strategy_id || 0)}`)} · v${Number(detail.strategy_version || detail.strategy_snapshot?.version || 1)}</h4><p>${sources.length || 0} 笔冻结交易 · 创建于 ${escapeHtml(manualTradeReviewFormatTime(detail.created_at))}</p></div><span class="status-chip ${tone}"><i data-lucide="${tone === "success" ? "check-circle-2" : tone === "danger" ? "circle-alert" : "clock-3"}" size="13"></i>${escapeHtml(manualTradeReviewStatusLabel(caseStatus))}</span></header>${manualTradeReviewShouldPoll(detail) ? manualTradeReviewProgressHtml(detail) : ""}${detail.evidence_status !== "complete" ? `<div class="manual-review-evidence-banner warning" role="status"><i data-lucide="triangle-alert" size="16"></i><span><strong>证据不足</strong>：${escapeHtml(detail.evidence_reason || "行情或历史证据尚未完整")}</span></div>` : ""}${caseStatus === "failed" ? `<div class="manual-review-evidence-banner danger" role="alert"><i data-lucide="circle-alert" size="16"></i><span><strong>生成失败</strong>：${escapeHtml(localizeReason(detail.last_error_code || "manual_trade_review_generation_failed"))}</span><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="retry-review" data-manual-review-id="${Number(detail.id)}">重试生成</button></div>` : ""}${currentVersion ? `<section class="manual-review-conclusion"><div class="manual-review-conclusion-heading"><span class="review-section-kicker">结论优先</span><span>版本 ${Number(currentVersion.version_no || 1)} · ${currentVersion.author_type === "model" ? "模型生成" : "人工修订"}</span></div><p>${escapeHtml(content.review_summary || "暂无复盘摘要")}</p><div class="manual-review-conclusion-metrics"><span><small>证据质量</small><strong>${escapeHtml(content.evidence_quality || (evidenceComplete ? "complete" : "insufficient"))}</strong></span><span><small>行情合理性</small><strong>${escapeHtml(content.market_alignment || "unknown")}</strong></span><span><small>策略符合度</small><strong>${escapeHtml(content.strategy_alignment || "unknown")}</strong></span><span><small>决策质量</small><strong>${escapeHtml(content.decision_quality || "insufficient_evidence")}</strong></span></div></section>${manualTradeReviewListHtml("优势", content.strengths, "badge-check")}${manualTradeReviewListHtml("问题与风险", content.issues, "triangle-alert")}<section class="manual-review-result-section"><header><span><i data-lucide="receipt-text" size="15"></i><strong>逐笔评估</strong></span><small>${assessments.length} 笔</small></header>${assessments.length ? `<div class="manual-review-assessment-list">${assessments.map(item => `<article><div class="manual-review-assessment-head"><strong>${escapeHtml(item.source_identity_hash || "交易来源")}</strong><span class="status-chip ${item.strategy_alignment === "aligned" ? "success" : item.strategy_alignment === "conflict" ? "danger" : "warning"}">${escapeHtml(item.strategy_alignment || "unknown")}</span></div><p><b>行情</b> ${escapeHtml(item.market_reason || "暂无说明")}</p><p><b>策略</b> ${escapeHtml(item.strategy_reason || "暂无说明")}</p><p><b>决策</b> ${escapeHtml(item.decision_reason || "暂无说明")}</p><small>盈亏独立性：${escapeHtml(item.outcome_independence_note || "未说明")}</small></article>`).join("")}</div>` : '<p class="manual-review-muted">暂无逐笔评估</p>'}</section>${manualTradeReviewListHtml("策略规则对照", rules, "git-compare")}${optimizations.length ? `<section class="manual-review-result-section"><header><span><i data-lucide="wand-sparkles" size="15"></i><strong>优化建议与风险</strong></span><small>${optimizations.length} 条 · 不会自动改策略</small></header><div class="manual-review-optimization-list">${optimizations.map(item => `<article><div><strong>${escapeHtml(item.proposed_change || "观察项")}</strong><span class="status-chip ${item.recommendation_state === "ready_for_human_review" ? "warning" : "info"}">${escapeHtml(item.recommendation_state || "observe")}</span></div><p>目标规则：${escapeHtml(item.target_path || "仅观察，不指定规则")}</p><p>适用时机：${escapeHtml(JSON.stringify(item.applicable_when || {}))}</p><p class="manual-review-risk">风险：${escapeHtml(item.risk_if_applied || "暂无说明")}</p></article>`).join("")}</div></section>` : ""}${candidates.length ? `<section class="manual-review-result-section manual-review-candidates"><header><span><i data-lucide="brain-circuit" size="15"></i><strong>平台经验候选</strong></span><small>${eligibleCandidates.length} 条可候选 · 需单独确认</small></header><p class="manual-review-muted">确认复盘不会自动创建候选；只有显式勾选合格内容后才会写入 candidate，仍不会直接发布为 active。</p><div class="manual-review-candidate-list">${candidates.map(item => { const eligible = item.eligibility === "eligible"; return `<label class="manual-review-candidate-row ${eligible ? "" : "is-disabled"}"><input type="checkbox" data-manual-candidate-select="${escapeHtml(item.candidate_id)}" ${eligible && approved ? "" : "disabled"} aria-label="选择经验候选 ${escapeHtml(item.candidate_id)}"><span><strong>${escapeHtml(item.lesson || item.candidate_id || "未命名候选")}</strong><small>${escapeHtml(item.eligibility_reason || (eligible ? "证据完整，可单独创建 candidate" : "证据不足，仅保留观察"))}</small></span><em>${eligible ? "可候选" : "不可候选"}</em></label>`; }).join("")}</div>${approved && eligibleCandidates.length ? '<button class="btn btn-secondary" type="button" data-manual-review-action="create-candidates" data-manual-review-id="' + Number(detail.id) + '"><i data-lucide="plus-circle" size="15"></i>创建已勾选 candidate</button>' : ""}</section>` : ""}${editable ? `<section class="manual-review-editor"><header><span><i data-lucide="pencil" size="15"></i><strong>人工编辑</strong></span><small>保存会创建新版本，不覆盖冻结证据</small></header><textarea data-manual-content-editor rows="14" spellcheck="false">${escapeHtml(JSON.stringify(content, null, 2))}</textarea><div class="manual-review-editor-actions"><button class="btn btn-secondary" type="button" data-manual-review-action="save-edit" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">保存人工修订</button></div></section>` : ""}<footer class="manual-review-detail-actions"><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="open-strategy-editor" data-manual-review-id="${Number(detail.id)}">打开策略编辑器</button>${!approved && currentVersion ? `<button class="btn btn-ghost btn-sm" type="button" data-manual-review-action="defer-review" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">稍后处理</button><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="mark-problem" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">标记需要修改</button><button class="btn btn-primary btn-sm" type="button" data-manual-review-action="approve-review" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}"><i data-lucide="check" size="14"></i>确认复盘</button>` : approved ? '<span class="status-chip success">复盘已确认 · 未自动发布经验</span>' : ""}</footer>` : `<div class="manual-review-empty"><i data-lucide="loader-circle" size="19"></i><span>任务尚未生成可编辑版本，后台会继续轮询。</span></div>`}`;
+  initIcons();
+}
+
+async function openManualTradeReviewDetail(caseId, { silent = false } = {}) {
+  const id = Number(caseId);
+  if (!id || !canManagePlatformAiContent()) return null;
+  stopManualTradeReviewPolling();
+  state.manualTradeReviewSelectedId = id;
+  state.selectedManualTradeReviewId = id;
+  state.manualTradeReviewDetailLoading = true;
+  state.manualTradeReviewDetailError = "";
+  if (!silent) renderManualTradeReviewHistory();
+  renderManualTradeReviewDetail();
+  try {
+    const data = await api(`/api/ai/manual-trade-reviews/${id}`);
+    state.manualTradeReviewDetail = data.review || null;
+    return state.manualTradeReviewDetail;
+  } catch (error) {
+    state.manualTradeReviewDetailError = localizeReason(error.code || error.message);
+    if (manualTradeReviewHandleForbidden(error)) return null;
+    throw error;
+  } finally {
+    state.manualTradeReviewDetailLoading = false;
+    renderManualTradeReviewHistory();
+    renderManualTradeReviewDetail();
+    if (state.manualTradeReviewDetail && Number(state.manualTradeReviewSelectedId) === id) scheduleManualTradeReviewPolling(state.manualTradeReviewDetail);
+  }
+}
+
+async function refreshManualTradeReviewTab() {
+  if (state.manualTradeReviewView === "result") {
+    await loadManualTradeReviewHistory({ reset:true });
+    if (state.manualTradeReviewSelectedId) await openManualTradeReviewDetail(state.manualTradeReviewSelectedId, { silent:true });
+  } else if (state.manualTradeReviewView === "strategy") {
+    await loadManualTradeReviewStrategies();
+  } else {
+    await loadManualTradeReviewTrades({ reset:true, forceRefresh:true });
+  }
+}
+
+async function refreshReviewMemoryTab() {
+  if (state.reviewMemoryView === "manual-trades") return refreshManualTradeReviewTab();
+  if (state.reviewMemoryView === "memories") {
+    const platformManager = canManagePlatformAiContent();
+    const data = await api(platformManager ? "/api/ai/admin/platform-experience" : "/api/ai/memory");
+    state.memoryItems = data.items || [];
+    state.memorySummaries = data.summaries || [];
+    state.memorySettings = data.settings || {};
+    state.platformMemoryPolicies = data.policies || [];
+    state.platformMemoryEvaluation = data.evaluation || {};
+    renderCachedMemoryWorkspace();
+    return;
+  }
+  await loadReviewCaseStream({ reset:true });
+  await loadReviewSummary({ announce:false });
+}
+
+async function openManualReviewStrategyEditor(detail) {
+  if (!canManagePlatformAiContent()) return;
+  const strategyId = Number(detail?.strategy_id || detail?.strategy_snapshot?.id || 0);
+  if (!strategyId) throw new Error("manual_trade_review_strategy_not_found");
+  // Load the current strategy through the ordinary strategy catalogue and
+  // open that exact record. The review suggestion itself is never copied into
+  // editable fields and no save request is issued on behalf of the user.
+  setTab("model-strategy", { skipRefresh:true });
+  await loadStrategyCatalog();
+  const strategy = (state.strategies || []).find(item => Number(item.id) === strategyId && item.scope === "platform");
+  if (!strategy) throw new Error("manual_trade_review_strategy_not_found");
+  openStrategyEditor(strategy);
+  const source = detail?.strategy_snapshot;
+  const boundary = $("strategyEditorBoundary");
+  if (boundary) boundary.textContent = `复盘来源仅供只读参考：${source?.title || `平台策略 #${Number(detail?.strategy_id || 0)}`} · v${Number(source?.version || detail?.strategy_version || 1)}。编辑器不会自动填充或保存任何复盘建议。`;
+}
+
 function renderCachedMemoryWorkspace() {
   if (canManagePlatformAiContent()) renderPlatformExperience(state.memoryItems, state.platformMemoryPolicies, state.platformMemoryEvaluation);
   else renderMemoryItems(state.memoryItems, state.memorySettings, state.memorySummaries);
@@ -5354,10 +6106,14 @@ function setTab(tabId, options = {}) {
     }
     cancelHistoryRangeRetry();
     clearHistoryFreshnessRetry();
+    cancelHistoryLegacySummaryRetry();
   }
   closeMobileNav({ restoreFocus:false });
   if (tabId !== "dashboard") stopKlineRefreshTimers();
-  if (tabId !== "review-memory") stopReviewDetailPolling();
+  if (tabId !== "review-memory") {
+    stopReviewDetailPolling();
+    stopManualTradeReviewPolling();
+  }
   document.querySelectorAll(".nav-item").forEach((button) => {
     const active = button.dataset.tab === tabId;
     button.classList.toggle("active", active);
@@ -5421,6 +6177,13 @@ function setModelStrategySubtab(target) {
 }
 
 function setWorkspaceSubtab(group, target) {
+  if (group === "review-memory") {
+    if (target === "manual-trades" && !canManagePlatformAiContent()) {
+      toast("当前账号没有手动交易复盘权限", "warning");
+      target = "reviews";
+    }
+    state.reviewMemoryView = target;
+  }
   document.querySelectorAll(`[data-workspace-tab="${group}"]`).forEach(button => {
     const active = button.dataset.workspaceTarget === target;
     button.classList.toggle("active", active);
@@ -5434,6 +6197,9 @@ function setWorkspaceSubtab(group, target) {
   });
   if (group === "trading" && target === "management" && state.token) {
     loadPositionManagement({ preserveSelection:true }).catch(error => toast(error.message, "error"));
+  }
+  if (group === "review-memory" && target === "manual-trades" && state.token && canManagePlatformAiContent()) {
+    loadManualTradeReviewWorkspace().catch(error => toast(localizeReason(error.code || error.message), "error"));
   }
   initIcons();
 }
@@ -5486,7 +6252,8 @@ async function refreshTabData(tabId, options = {}) {
   } else if (tabId === "risk-center") {
     await loadRiskCenter();
   } else if (tabId === "review-memory") {
-    await loadReviewMemory();
+    if (state.reviewMemoryView === "manual-trades" && canManagePlatformAiContent()) await loadManualTradeReviewWorkspace();
+    else await loadReviewMemory();
   }
 }
 
@@ -7799,6 +8566,23 @@ function applyRoleUI() {
   const platformManager = canManagePlatformAiContent();
   const observer = isObserverMode();
   const allowedTabs = new Set(state.aiAccess?.allowed_tabs || []);
+
+  if (!platformManager) {
+    stopManualTradeReviewPolling();
+    state.manualTradeReviewTrades = [];
+    state.manualTradeReviewSelectedTrades = [];
+    state.manualTradeReviewSelection = [];
+    state.manualTradeReviewCases = [];
+    state.manualTradeReviewDetail = null;
+    state.manualTradeReviewLoaded = false;
+    state.manualTradeReviewHistoryLoaded = false;
+    state.manualTradeReviewSelectedId = null;
+    state.selectedManualTradeReviewId = null;
+    state.manualTradeReviewScannedSourcePages = 0;
+    state.manualTradeReviewSkippedEmptySourcePages = 0;
+    state.manualTradeReviewUnavailable = false;
+    state.manualTradeReviewEvidenceReason = "";
+  }
 
   document.querySelectorAll('.admin-only').forEach(el => {
     el.style.display = isAdmin || (platformManager && el.classList.contains('platform-content-only')) ? '' : 'none';
@@ -10610,8 +11394,13 @@ function getHistoryRangeParams() {
     }
     if (end && from > end) throw new Error("开始日期不能晚于服务端结束日期");
     const system = meta.systemStartDate || "";
-    const saved = historyPreferenceStart(scope);
-    if (!(system && from === system && (!saved || saved === system))) {
+    // The displayed start is the request source of truth. If it already
+    // equals the server-confirmed system start, sending it again as a date
+    // override is redundant and can shift across the terminal timezone at
+    // the absolute floor (for example 2000-01-01 in UTC+3).
+    const usesSystemStart = Boolean(system && from === system);
+    const usesAllAllowedFloor = scope === "all" && from === allowed;
+    if (!usesSystemStart && !usesAllAllowedFloor) {
       params.scope_start_override = from;
     }
   }
@@ -11018,6 +11807,18 @@ function loadHistory(forceRefresh, options = {}) {
     }
     const responseRange = historyRangeFromError(data);
     applyHistoryScopeResponse(data);
+    // MT4 currently reaches this path through the legacy compatibility read
+    // because it does not implement history_prepare_status_v1. Every
+    // successful page-one read is therefore authoritative for both its opaque
+    // snapshot and its captured/allowed/system/effective boundaries. Re-pin
+    // the range when page one is read again so a newer snapshot is never paired
+    // with metadata from an earlier snapshot on Next.
+    if (_historyQueryState?.legacyFallback === true
+      && filters.page === 1
+      && historyQueryIsCurrent(_historyQueryState)) {
+      const legacyFrozenRange = historyPrepareRangeFromResponse(data);
+      if (legacyFrozenRange) _historyQueryState.frozenRange = legacyFrozenRange;
+    }
     const snapshotId = data.history_snapshot_id ? String(data.history_snapshot_id) : null;
     if (snapshotId && !responseRange) {
       throw new Error('历史快照范围无效，请重新读取第一页');
@@ -11182,7 +11983,10 @@ function loadHistoryChart(forceRefresh, options = {}) {
 }
 
 function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, manualRefresh = false, historyRetryAttempt = false, tableOnly = false, disableRangeRetry = false, disableFreshnessRetry = false } = {}) {
-  if (manualRefresh) cancelHistoryRangeRetry();
+  if (manualRefresh) {
+    cancelHistoryRangeRetry();
+    cancelHistoryLegacySummaryRetry();
+  }
   const currentRetryContext = historyRetryContextKey();
   if (_historyRangeRetryState
     && (activeTabId() !== "history" || _historyRangeRetryState.contextKey !== currentRetryContext)) {
@@ -12530,6 +13334,29 @@ function bindEvents() {
     if (event.target.closest("[data-review-field]")) syncReviewEditorFromFields();
     const userRiskInput = event.target.closest("[data-user-risk-field]");
     if (userRiskInput) updateUserRiskPreferencePreview(userRiskInput);
+    if (event.target.id === "manualTradeReviewThesis") renderManualTradeReviewSelectionSummary();
+  });
+  document.body.addEventListener("change", event => {
+    const tradeInput = event.target.closest("[data-manual-trade-select]");
+    if (tradeInput) {
+      const identity = String(tradeInput.dataset.manualTradeSelect || "");
+      const current = manualTradeReviewSelectedMap();
+      const trade = state.manualTradeReviewTrades.find(item => manualTradeReviewIdentity(item) === identity);
+      if (tradeInput.checked && trade) {
+        current.clear();
+        current.set(identity, trade);
+      } else current.delete(identity);
+      state.manualTradeReviewSelectedTrades = [...current.values()];
+      state.manualTradeReviewSelection = state.manualTradeReviewSelectedTrades;
+      document.querySelectorAll("[data-manual-trade-row]").forEach(row => row.classList.toggle("is-selected", current.has(String(row.dataset.manualTradeRow || ""))));
+      renderManualTradeReviewSelectionSummary();
+      renderManualTradeReviewTrades();
+      return;
+    }
+    if (event.target.id === "manualTradeReviewStrategy") {
+      state.manualTradeReviewStrategyId = Number(event.target.value || 0) || null;
+      renderManualTradeReviewSelectionSummary();
+    }
   });
   // Timeframe checkbox change → update confirm text
   // (removed old modal handlers)
@@ -12594,6 +13421,7 @@ function bindEvents() {
     const memoryTier = event.target.closest("[data-memory-tier]");
     const platformExperienceAction = event.target.closest("[data-platform-experience-action]");
     const platformPolicySave = event.target.closest("[data-platform-policy-save]");
+    const manualReviewAction = event.target.closest("[data-manual-review-action]");
     const riskSave = event.target.closest("[data-risk-save]");
     const killSwitch = event.target.closest("[data-kill-switch]");
     const strategyAction = event.target.closest("[data-strategy-action]");
@@ -12722,6 +13550,60 @@ function bindEvents() {
           await loadModelManagement();
         }
       } catch (error) { toast(localizeReason(error.message),"error"); } finally { modelAction.disabled = false; }
+      return;
+    }
+    if (manualReviewAction) {
+      const action = manualReviewAction.dataset.manualReviewAction;
+      const caseId = Number(manualReviewAction.dataset.manualReviewId || state.manualTradeReviewSelectedId || 0);
+      try {
+        if (action === "apply-filters") {
+          manualTradeReviewReadFilters();
+          loadManualTradeReviewTrades({ reset:true }).catch(error => toast(localizeReason(error.code || error.message), "error"));
+        } else if (action === "reset-filters") {
+          ["manualTradeReviewSymbol", "manualTradeReviewDirection"].forEach(id => { const node = $(id); if (node) node.value = ""; });
+          manualTradeReviewReadFilters();
+          loadManualTradeReviewTrades({ reset:true }).catch(error => toast(localizeReason(error.code || error.message), "error"));
+        } else if (action === "refresh-trades") {
+          manualTradeReviewReadFilters();
+          loadManualTradeReviewTrades({ reset:true, forceRefresh:true }).catch(error => toast(localizeReason(error.code || error.message), "error"));
+        } else if (action === "next-trades") moveManualTradeReviewCursor("next").catch(error => toast(localizeReason(error.code || error.message), "error"));
+        else if (action === "previous-trades") moveManualTradeReviewCursor("previous").catch(error => toast(localizeReason(error.code || error.message), "error"));
+        else if (action === "to-strategy") setManualTradeReviewStage("strategy");
+        else if (action === "back-selection") setManualTradeReviewStage("selection");
+        else if (action === "create-review") createManualTradeReviewTask().catch(error => toast(localizeReason(error.code || error.message), "error"));
+        else if (action === "new-review") {
+          stopManualTradeReviewPolling();
+          state.manualTradeReviewSelectedId = null;
+          state.selectedManualTradeReviewId = null;
+          state.manualTradeReviewDetail = null;
+          state.manualTradeReviewSelectedTrades = [];
+          state.manualTradeReviewSelection = [];
+          state.manualTradeReviewStrategyId = null;
+          state.manualTradeReviewHistoryLoaded = false;
+          setManualTradeReviewStage("selection", { loadData:false });
+          loadManualTradeReviewTrades({ reset:true }).catch(error => toast(localizeReason(error.code || error.message), "error"));
+        } else if (action === "refresh-history") loadManualTradeReviewHistory({ reset:true }).then(() => state.manualTradeReviewSelectedId ? openManualTradeReviewDetail(state.manualTradeReviewSelectedId, { silent:true }) : null).catch(error => toast(localizeReason(error.code || error.message), "error"));
+        else if (action === "previous-history" || action === "next-history") {
+          const delta = action === "next-history" ? state.manualTradeReviewHistoryPageSize : -state.manualTradeReviewHistoryPageSize;
+          state.manualTradeReviewHistoryOffset = Math.max(0, state.manualTradeReviewHistoryOffset + delta);
+          loadManualTradeReviewHistory().catch(error => toast(localizeReason(error.code || error.message), "error"));
+        } else if (action === "open-history") openManualTradeReviewDetail(caseId).catch(error => toast(localizeReason(error.code || error.message), "error"));
+        else if (action === "reload-detail") openManualTradeReviewDetail(caseId).catch(error => toast(localizeReason(error.code || error.message), "error"));
+        else if (action === "retry-review") {
+          manualReviewAction.disabled = true;
+          api(`/api/ai/manual-trade-reviews/${caseId}/retry`, { method:"POST" }).then(() => openManualTradeReviewDetail(caseId)).then(() => loadManualTradeReviewHistory()).then(() => toast("已重新进入生成队列", "success")).catch(error => toast(localizeReason(error.code || error.message), "error")).finally(() => { manualReviewAction.disabled = false; });
+        } else if (["approve-review", "mark-problem", "defer-review"].includes(action)) {
+          const reviewAction = action === "approve-review" ? "approve" : action === "mark-problem" ? "mark_problem" : "defer";
+          manualReviewAction.disabled = true;
+          api(`/api/ai/manual-trade-reviews/${caseId}/confirm`, { method:"POST", body:{ version_id:Number(manualReviewAction.dataset.manualVersionId || 0), action:reviewAction } }).then(() => openManualTradeReviewDetail(caseId)).then(() => loadManualTradeReviewHistory()).then(() => toast(reviewAction === "approve" ? "复盘已确认；未写入记忆或策略" : "复盘状态已更新", "success")).catch(error => toast(localizeReason(error.code || error.message), "error")).finally(() => { manualReviewAction.disabled = false; });
+        } else if (action === "save-edit") {
+          const editor = document.querySelector("[data-manual-content-editor]");
+          let content;
+          try { content = JSON.parse(editor?.value || "{}"); } catch { throw new Error("人工编辑内容不是有效 JSON"); }
+          manualReviewAction.disabled = true;
+          api(`/api/ai/manual-trade-reviews/${caseId}/edit`, { method:"POST", body:{ content, expected_version_id:Number(manualReviewAction.dataset.manualVersionId || 0), change_note:"用户在手动交易复盘页面修改" } }).then(() => openManualTradeReviewDetail(caseId)).then(() => loadManualTradeReviewHistory()).then(() => toast("人工修订已保存为新版本", "success")).catch(error => toast(localizeReason(error.code || error.message), "error")).finally(() => { manualReviewAction.disabled = false; });
+        } else if (action === "open-strategy-editor") await openManualReviewStrategyEditor(state.manualTradeReviewDetail);
+      } catch (error) { toast(localizeReason(error.code || error.message), "error"); }
       return;
     }
     if (reviewCase) { openPeriodReviewDetail(Number(reviewCase.dataset.reviewId)).catch(error => toast(error.message,"error")); return; }
@@ -12857,7 +13739,15 @@ function bindEvents() {
         state.signalFilters.page = page;
         loadSignalTable();
       } else if (pagerButton.dataset.pager === "history") {
+        const previousPage = Number(state.historyFilters.page || 1);
         state.historyFilters.page = page;
+        if (page === 1 && previousPage > 1) {
+          // Page one deliberately starts a new opaque snapshot. Keep the frozen
+          // query range, but discard the prior snapshot and its page cursors.
+          _historyCache = null;
+          _historyCursorState.snapshotId = null;
+          _historyCursorState.pageCursors = new Map([[1, null]]);
+        }
         loadHistoryViews({ tableOnly:true }).catch(() => {});
       } else if (pagerButton.dataset.pager === "audit") {
         state.auditFilters.page = page;
@@ -12889,13 +13779,13 @@ function bindEvents() {
           ? loadSignalTable()
           : loadSignals({ skipResultRender:true, loadDashboard:false }),
         "refresh-analysis-history": () => loadSignals({ skipResultRender:true, loadDashboard:false }),
-        "refresh-history": () => loadHistoryViews({ forceRefresh:true, manualRefresh:true }),
+         "refresh-history": () => loadHistoryViews({ forceRefresh:true, manualRefresh:true }),
         "refresh-trading-page": refreshTradingPage,
         "refresh-history-page": refreshHistoryPage,
         "refresh-audit": loadAudit,
         "export-history": exportHistory,
         "refresh-risk-center": loadRiskCenter,
-        "refresh-review-memory": loadReviewMemory,
+        "refresh-review-memory": refreshReviewMemoryTab,
         "retry-model-management": loadModelManagement,
         "refresh-position-management": () => loadPositionManagement({ preserveSelection:true }),
       };

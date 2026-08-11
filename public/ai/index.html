@@ -24,11 +24,11 @@
       })();
     </script>
     <title>AI交易实验室</title>
-    <link rel="icon" href="/favicon.ico?v=20260811frontend1" sizes="any">
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260811frontend1">
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260811frontend1">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260811frontend1" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260811frontend1" />
+    <link rel="icon" href="/favicon.ico?v=20260811frontend2" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260811frontend2">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260811frontend2">
+    <link rel="stylesheet" href="/ai/styles.css?v=20260811frontend2" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260811frontend2" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -886,11 +886,42 @@
             <header class="workspace-header calm-page-header"><div><span class="page-eyebrow">复盘、总结与策略记忆</span><h1>AI复盘师</h1><p>确认日月复盘，把真正有价值的结论沉淀为后续分析可用的策略记忆。</p></div><button class="btn btn-secondary" data-action="refresh-review-memory"><i data-lucide="refresh-cw" size="15"></i>刷新</button></header>
             <section class="insight-strip review-insight-strip" aria-label="复盘与记忆概览"><div class="insight-item primary"><span>待我处理</span><strong id="reviewPendingStat" class="num">--</strong><small>阅读并确认复盘结论</small></div><div id="reviewJobInsight" class="insight-item"><span>生成任务</span><strong class="review-job-counts"><span id="reviewGeneratingStat" class="num">--</span><em>/</em><span id="reviewFailedStat" class="num">--</span></strong><small>进行中 / 失败</small></div><div class="insight-item"><span id="memoryActiveLabel">有效记忆</span><strong id="memoryActiveStat" class="num">--</strong><small id="memoryActiveHelp">可用于后续分析</small></div></section>
             <div id="sharedCredentialNotice" class="source-notice hidden">当前任务可能使用平台共享凭据调用第三方模型，并受平台配额限制。管理员无法查看你的复盘正文与个人记忆。</div>
-            <div class="workspace-subtabs" role="tablist" aria-label="AI复盘师视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>待处理复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">策略记忆</span></button></div>
+            <div class="workspace-subtabs" role="tablist" aria-label="AI复盘师视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>待处理复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">策略记忆</span></button><button class="admin-only platform-content-only manual-trade-review-tab" type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="manual-trades" style="display:none"><i data-lucide="receipt-text" size="15"></i>手动交易复盘</button></div>
             <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-layout period-review-layout"><aside class="workspace-panel review-queue" aria-label="复盘队列"><div class="review-queue-heading"><div><span class="review-section-kicker">处理队列</span><h2>策略复盘</h2></div><span class="review-queue-hint">按日、按月沉淀</span></div><div class="review-period-tabs" role="tablist" aria-label="复盘周期筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-period="">全部 <span id="reviewAllCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="daily">日复盘 <span id="reviewDailyCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="monthly">月复盘 <span id="reviewMonthlyCount">0</span></button></div><div class="review-status-tabs" role="tablist" aria-label="复盘状态筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-filter="">全部</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="pending">待处理</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="draft">待确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="approved">已确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="needs_revision">有问题</button></div><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div></aside><aside id="reviewDetail" class="workspace-panel review-detail"><div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="calendar-search" size="22"></i></span><strong>选择一个复盘周期</strong><span>查看系统统计、校对 AI 结论，确认后再沉淀为策略记忆。</span></div></aside></div></section>
             <section class="workspace-subpanel" data-workspace-panel="review-memory" data-workspace-view="memories" hidden>
               <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的记忆，可以随时暂停或撤销。</p></div><label class="inline-switch user-only personal-memory-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="platformExperiencePolicies" class="platform-experience-policies admin-only platform-content-only" style="display:none"></div><div id="platformExperienceEvaluation" class="platform-experience-evaluation admin-only platform-content-only" style="display:none"></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
               <details class="workspace-panel quiet-disclosure settings-disclosure user-only personal-memory-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>记忆设置</strong><small>自动复盘、月度归纳与安全试运行</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人功能设置</h2><p>这些开关只能进一步关闭功能，不能绕过管理员设置。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span><strong>将确认记忆用于后续分析</strong><small>只使用你确认且与当前分析环境匹配的内容</small></span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span><strong>生成月度摘要与分类压缩</strong><small>按记忆类别和适用条件归纳，减少上下文占用</small></span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span><strong>安全试运行</strong><small>只评估检索效果，不注入模型</small></span></label></div></div></details>
+            </section>
+            <section class="workspace-subpanel admin-only platform-content-only manual-trade-review-panel" data-workspace-panel="review-memory" data-workspace-view="manual-trades" hidden style="display:none" aria-labelledby="manualTradeReviewTitle">
+              <div id="manualTradeReviewWorkspace" class="manual-trade-review-workspace">
+                <header class="manual-review-heading"><div><span class="review-section-kicker">平台内容治理 · 冻结证据</span><h2 id="manualTradeReviewTitle">盈利订单反事实复盘</h2><p>分析当前账号最近 7 天盈利且未绑定平台信号的订单：先做开仓前盲测，再解释实际盈利与策略差距。</p></div><span class="manual-review-safety"><i data-lucide="shield-check" size="15"></i><span>不写入经验</span></span></header>
+                <ol class="manual-review-stepper" aria-label="手动交易复盘步骤">
+                  <li data-manual-step="selection" class="active"><span>01</span><strong>选择订单</strong><small>单笔盈利未绑定信号</small></li>
+                  <li data-manual-step="strategy"><span>02</span><strong>补充逻辑</strong><small>平台策略与用户陈述</small></li>
+                  <li data-manual-step="result"><span>03</span><strong>查看复盘</strong><small>盲测、归因与优化假设</small></li>
+                </ol>
+
+                <section class="manual-review-stage" data-manual-stage="selection" aria-labelledby="manualTradeSelectionTitle">
+                  <div class="manual-review-stage-heading"><div><span class="section-kicker">第一阶段</span><h3 id="manualTradeSelectionTitle">选择最近 7 天盈利未绑定信号订单</h3><p>系统只显示已完整平仓、净利润大于 0，且开仓订单号未绑定任何平台信号的记录。每次只复盘一笔。</p></div><span id="manualTradeSelectionCount" class="status-chip info" aria-live="polite">已选 0 / 1</span></div>
+                  <div class="manual-review-filter-bar" role="group" aria-label="订单筛选"><label><span>品种</span><input id="manualTradeReviewSymbol" type="search" maxlength="32" placeholder="全部品种" autocomplete="off"></label><label><span>方向</span><select id="manualTradeReviewDirection"><option value="">全部方向</option><option value="buy">做多</option><option value="sell">做空</option></select></label><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="apply-filters"><i data-lucide="filter" size="14"></i>应用筛选</button><button class="btn btn-ghost btn-sm" type="button" data-manual-review-action="reset-filters">重置</button><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="refresh-trades"><i data-lucide="refresh-cw" size="14"></i>刷新交易记录</button></div>
+                  <div id="manualTradeReviewSourceNotice" class="manual-review-source-note" role="status" aria-live="polite"><i data-lucide="info" size="15"></i><span>“未绑定平台信号”不等同于已证明人工点击；外部 EA 若未接入平台信号，也会进入候选。创建任务时会再次复验订单绑定和完整成交链。</span></div>
+                  <div id="manualTradeReviewTradeList" class="manual-review-trade-list"><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div></div>
+                  <div class="manual-review-list-footer"><div id="manualTradeReviewPager" class="manual-review-pager" aria-label="手动交易游标分页"></div><button class="btn btn-primary" type="button" data-manual-review-action="to-strategy" disabled>下一步：选择平台策略</button></div>
+                </section>
+
+                <section class="manual-review-stage" data-manual-stage="strategy" aria-labelledby="manualTradeStrategyTitle" hidden>
+                  <div class="manual-review-stage-heading"><div><span class="section-kicker">第二阶段</span><h3 id="manualTradeStrategyTitle">选择平台策略并说明你的交易逻辑</h3><p>复盘使用创建时冻结的 active 平台策略版本。用户陈述只作为待核对背景，不是交易证据。</p></div><span class="status-chip warning">不会自动保存策略</span></div>
+                  <div class="manual-review-selection-summary" id="manualTradeReviewSelectedSummary"></div>
+                  <label class="manual-review-field"><span>对照平台策略</span><select id="manualTradeReviewStrategy" required><option value="">正在读取可管理的平台策略…</option></select><small class="field-help">仅显示当前可管理、active 的平台策略；私有策略不会出现在这里。</small></label>
+                  <label class="manual-review-field manual-review-thesis-field"><span>用户陈述 · 你的下单逻辑（非证据）</span><textarea id="manualTradeReviewThesis" rows="6" maxlength="2000" placeholder="例如：我认为回踩前高后动能恢复，因此在确认 K 线收盘后做多。模型会把这段文字标为用户陈述，并与成交和行情证据分开。"></textarea><small class="field-help">不要把这段文字当作系统已经验证的事实；留空时模型只能标记为“未提供用户逻辑”。</small></label>
+                  <div class="manual-review-action-row"><button class="btn btn-secondary" type="button" data-manual-review-action="back-selection">返回选择交易</button><button class="btn btn-primary" type="button" data-manual-review-action="create-review" disabled><i data-lucide="sparkles" size="15"></i>创建复盘任务</button></div>
+                </section>
+
+                <section class="manual-review-stage" data-manual-stage="result" aria-labelledby="manualTradeResultTitle" hidden>
+                  <div class="manual-review-stage-heading"><div><span class="section-kicker">第三阶段</span><h3 id="manualTradeResultTitle">复盘历史与结果</h3><p>开仓前盲测与事后盈利归因分阶段生成；策略建议仅为人工验证假设，不写入经验、记忆或策略。</p></div><div class="manual-review-result-actions"><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="new-review"><i data-lucide="plus" size="14"></i>新建复盘</button><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="refresh-history"><i data-lucide="refresh-cw" size="14"></i>刷新历史</button></div></div>
+                  <div class="manual-review-result-layout"><aside class="manual-review-history" aria-label="手动交易复盘历史"><div class="manual-review-history-heading"><strong>复盘历史</strong><span id="manualTradeReviewHistoryCount">0 条</span></div><div id="manualTradeReviewHistoryList" class="manual-review-history-list"><div class="workspace-skeleton"></div></div><div id="manualTradeReviewHistoryPager" class="manual-review-pager"></div></aside><article id="manualTradeReviewDetail" class="manual-review-detail" aria-live="polite"><div class="empty-state"><span class="review-empty-icon"><i data-lucide="file-search" size="20"></i></span><strong>选择一条复盘</strong><span>任务创建后会在这里显示开仓前盲测、盈利归因、策略对照和待验证优化假设。</span></div></article></div>
+                </section>
+              </div>
             </section>
           </div>
         </section>
@@ -1283,9 +1314,9 @@
       </section>
     </div>
 
-    <script src="lucide.js?v=20260811frontend1"></script>
-    <script src="/shared/session.js?v=20260811frontend1"></script>
-    <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260811frontend1"></script>
+    <script src="lucide.js?v=20260811frontend2"></script>
+    <script src="/shared/session.js?v=20260811frontend2"></script>
+    <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260811frontend2"></script>
     <script>
     // Lazy-load Chart.js on first use
     let _chartJsLoaded = false;
@@ -1293,14 +1324,14 @@
       if (_chartJsLoaded) return Promise.resolve();
       return new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        s.src = '/ai/js/chart.umd.min.js?v=20260811frontend1';
+        s.src = '/ai/js/chart.umd.min.js?v=20260811frontend2';
         s.onload = () => { _chartJsLoaded = true; resolve(); };
         s.onerror = reject;
         document.head.appendChild(s);
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260811frontend1&build=signalbandwidth1-notifications1"></script>
+    <script src="/ai/app.js?v=20260811frontend2&build=signalbandwidth1-notifications1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

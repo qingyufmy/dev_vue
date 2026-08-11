@@ -95,7 +95,7 @@ function compactRate(rate) {
 }
 
 export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, signal = {}, snapshot = {}, deals = [], fetchRates = null,
-  loadWindow = loadPeriodMarketWindow, timezoneOffsetMinutes = null } = {}) {
+  loadWindow = loadPeriodMarketWindow, timezoneOffsetMinutes = null, asOfUtcMsc = null, includeHoldingMetrics = true } = {}) {
   const snapshotKlines = snapshot?.klines && typeof snapshot.klines === 'object' ? snapshot.klines : {}
   const timeframes = [...new Set([signal.timeframe, ...Object.keys(snapshotKlines)]
     .map(value => String(value || '').toUpperCase()).filter(value => TIMEFRAME_MS[value]))]
@@ -121,7 +121,9 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       const initialExitTimes = deals.filter(deal => [1, 2, 3].includes(Number(deal.entry_type)))
         .map(deal => dealUtcMs(deal, defaultOffset)).filter(Number.isFinite)
       const initialEntryMs = initialEntryTimes.length ? Math.min(...initialEntryTimes) : null
-      const initialExitMs = initialExitTimes.length ? Math.max(...initialExitTimes) : null
+      const requestedCutoff = Number(asOfUtcMsc)
+      const initialExitMs = Number.isFinite(requestedCutoff) && requestedCutoff > 0
+        ? requestedCutoff : (initialExitTimes.length ? Math.max(...initialExitTimes) : null)
       if (!initialEntryMs || !initialExitMs) throw new Error('holding_deal_times_missing')
       let response
       let allRatesClosed = false
@@ -144,7 +146,8 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       const entryTimes = deals.filter(deal => [0, 2].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)
       const exitTimes = deals.filter(deal => [1, 2, 3].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)
       const entryMs = entryTimes.length ? Math.min(...entryTimes) : null
-      const exitMs = exitTimes.length ? Math.max(...exitTimes) : null
+      const exitMs = Number.isFinite(requestedCutoff) && requestedCutoff > 0
+        ? requestedCutoff : (exitTimes.length ? Math.max(...exitTimes) : null)
       const sourceId = Number(response.market_meta?.source_id)
       let databasePathTruncated = false
       if (sourceId > 0 && entryMs && exitMs) {
@@ -159,6 +162,9 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
           databasePathTruncated = stored.length > MAX_REVIEW_PATH_CANDLES
           allClosed = stored.slice(0, MAX_REVIEW_PATH_CANDLES).map(compactRate)
         }
+      }
+      if (Number.isFinite(requestedCutoff) && requestedCutoff > 0) {
+        allClosed = allClosed.filter(rate => Number(rate.time_utc_msc) + TIMEFRAME_MS[timeframe] <= requestedCutoff)
       }
       let closed = allClosed
       if (entryMs && exitMs) {
@@ -185,11 +191,12 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       evidence[timeframe] = { status: 'unavailable', candle_count: 0 }
     }
   }
-  const metrics = calculateHoldingPathMetrics({ rates: primaryRates, deals, direction: signal.signal_type,
-    offsetMinutes: primaryOffset, timeframeIntervalMs:TIMEFRAME_MS[timeframes[0]], signal })
-  if (primaryTruncated && metrics.status === 'complete') { metrics.status = 'partial'; metrics.reason = 'holding_path_truncated' }
-  const complete = metrics.status === 'complete' && Object.values(evidence).every(item => item.status === 'complete')
-  const result = { status: complete ? 'complete' : 'partial', reason: [...errors, metrics.reason].filter(Boolean).join(',') || null,
+  const metrics = includeHoldingMetrics ? calculateHoldingPathMetrics({ rates: primaryRates, deals, direction: signal.signal_type,
+    offsetMinutes: primaryOffset, timeframeIntervalMs:TIMEFRAME_MS[timeframes[0]], signal }) : null
+  if (primaryTruncated && metrics?.status === 'complete') { metrics.status = 'partial'; metrics.reason = 'holding_path_truncated' }
+  const metricsComplete = includeHoldingMetrics ? metrics?.status === 'complete' : true
+  const complete = metricsComplete && Object.values(evidence).every(item => item.status === 'complete')
+  const result = { status: complete ? 'complete' : 'partial', reason: [...errors, metrics?.reason].filter(Boolean).join(',') || null,
     primary_timeframe: timeframes[0], metrics, timeframes: evidence }
   return { ...result, hash: sha256(JSON.stringify(result)) }
 }

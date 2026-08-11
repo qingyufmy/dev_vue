@@ -1,4 +1,4 @@
-import { coursePrograms, getCourseConsultUrl } from '../data/course-programs.js?v=20260811frontend1'
+import { coursePrograms, getCourseConsultUrl } from '../data/course-programs.js?v=20260811frontend2'
 
 function renderArtifact(program) {
   if (program.slug === 'trading-craft') {
