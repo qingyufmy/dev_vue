@@ -4,6 +4,8 @@
 >
 > 编写日期：2026-08-11
 >
+> 最近修订：2026-08-11（允许查询平台接入前历史，并增加 `2000-01-01` 绝对安全下限）
+>
 > 适用范围：量见智桥 3.0、本地 SQLite 历史归档、网站 Bridge 历史接口、AI 交易实验室交易记录与历史统计
 >
 > 基线：`dev_codex` / `70de6d6fb76d42986b2991b62466341b73b0da9a`
@@ -22,6 +24,7 @@
 6. 不提高 250 条批次上限，不并行调用 MT5 历史接口，不让归档工作抢占实时行情、持仓、挂单或交易命令。
 7. 对 596520 这类大账户，优先通过取消重复 MT5 查询和 SQLite 批量查重降低同步耗时，而不是硬性限速或扩大并发。
 8. 前端把“统计范围”“明细平仓时间筛选”“最近 30 天图表窗口”作为三套独立状态：范围决定总体数据边界，筛选只收窄表格，图表点击只修改平仓时间筛选。
+9. “平台接入后”只定义默认统计起点，不是历史查询硬下限。用户可将开始日期保存到平台接入时间之前；所有模式统一受 `2000-01-01`、Bridge/终端可信可查询下限和当前固定结束水位约束。
 
 ## 2. 已确认的现状
 
@@ -305,29 +308,38 @@ Bridge Store 增加单一 trade history query builder，所有消费者复用：
 
 ### 8.1 服务端范围解析
 
-`resolveHistoryRange()` 的 `platform` 起点改为：
+`resolveHistoryRange()` 先解析三个彼此独立的边界：
 
 ```text
-MAX(HISTORY_COVERAGE_START_UTC_MSC,
-    mt5_account_bindings.first_connected_at)
+absolute_floor = 2000-01-01 00:00:00（终端服务器业务日期）
+query_floor    = MAX(absolute_floor,
+                     Bridge 支持下限,
+                     已可信确认的终端历史可见下限)
+system_start(all)      = query_floor
+system_start(platform) = MAX(query_floor,
+                             mt5_account_bindings.first_connected_at)
 ```
 
 删除 `users.created_at` 作为历史起点的临时逻辑。`ownership` 仅保留为隐藏审计兼容范围，不再用于默认交易历史和默认绩效。
 
-为支持 all/platform 保存一个更晚的开始日期，同时不伪装或修改系统起点，API 增加受服务器校验的 `scope_start_override`（终端业务日期）参数：
+其中 `system_start` 只表示该模式的默认起点。为支持用户保存更早或更晚的开始日期，同时不伪装或修改系统事实，API 增加受服务器校验的 `scope_start_override`（终端业务日期）参数：
 
 ```text
-system_start    = all/platform 的权威系统起点
-effective_start = max(system_start, validated_scope_start_override)
+allowed_start   = query_floor
+system_start    = all/platform 的权威默认起点
+effective_start = validated_scope_start_override ?? system_start
 captured_end    = 当前请求冻结的结束水位
 ```
 
-- `scope_start_override` 只允许用于 `all/platform`，必须是合法日期且严格早于 captured end。
+- `scope_start_override` 只允许用于 `all/platform`，必须是合法终端业务日期，并满足 `allowed_start <= override_start < captured_end`。
+- `platform` 的合法 override 可以早于 `first_connected_at`；这只扩展查询范围，不修改 `first_connected_at`、账号身份、ownership 或初始化默认优先范围。
+- 不允许静默 clamp 非法日期。服务端返回稳定错误码和权威 `allowed_range`，前端保留用户输入并给出明确中文原因；旧的非法保存值则丢弃并恢复默认起点。
 - custom 继续使用自身的 `close_from/close_to`，不与 override 混用。
-- 首次请求、续页、chart、summary 和 export 均由服务器返回并冻结 `system_range` 与 `effective_range`。
-- cursor token 同时绑定 scope、system start、effective start、captured end 和筛选摘要。
-- 客户端不得通过直接提交 `range_start_utc_msc` 绕过系统起点或扩展范围；续页精确起点必须等于首次已验证的 effective start。
+- 首次请求、续页、chart、summary 和 export 均由服务器返回并冻结 `allowed_range`、`system_range` 与 `effective_range`。
+- cursor token 同时绑定 scope、allowed start、system start、effective start、captured end 和筛选摘要。
+- 客户端不得通过直接提交 `range_start_utc_msc` 绕过 `query_floor` 或固定水位；续页精确起点必须等于首次已验证的 effective start。
 - 清除保存起点后，下一次首屏恢复 system start，不沿用旧 effective range。
+- 当用户请求的平台接入前范围尚未进入 SQLite coverage 时，复用现有有界 exact-range 按需准备链路；该用户主动请求优先于 P3 旧历史后台补齐，但仍不得阻塞实时行情、持仓、挂单和交易命令。
 
 ### 8.2 前端默认范围
 
@@ -342,17 +354,21 @@ captured_end    = 当前请求冻结的结束水位
 
 | 模式 | 系统开始日期 | 结束日期 | 可编辑与保存 |
 | --- | --- | --- | --- |
-| 全部 | Bridge 支持下限与 MT4 实际可见下限中较晚者 | 本次固定统计水位 | 开始日期可改为更晚日期并保存；结束日期只显示本次水位 |
-| 平台接入后 | 稳定账号 `first_connected_at` 与 Bridge 支持下限中较晚者 | 本次固定统计水位 | 开始日期可改为更晚日期并保存；结束日期只显示本次水位 |
-| 自定义日期 | 用户输入且不早于系统允许下限 | 用户输入或当前固定水位 | 保持现有起止日期编辑能力 |
+| 全部 | `query_floor` | 本次固定统计水位 | 开始日期可在允许范围内调整并保存；结束日期只显示本次水位 |
+| 平台接入后 | 稳定账号 `first_connected_at` 与 `query_floor` 中较晚者 | 本次固定统计水位 | 默认从接入时间开始，但允许向前扩展到 `query_floor` 或向后收窄并保存 |
+| 自定义日期 | 用户输入且不早于 `query_floor` | 用户输入或当前固定水位 | 保持现有起止日期编辑能力 |
 
 界面要求：
 
 - 范围下拉框后始终显示“开始日期 ～ 结束日期”。
-- `all/platform` 的系统解析值由第一次成功响应回填，加载时显示“正在确认范围”，不得先猜用户注册时间。
+- `all/platform` 的 allowed/system/effective 值由第一次成功响应回填，加载时显示“正在确认范围”，不得先猜用户注册时间、平台接入时间或终端可见下限。
 - 实际 UTC 毫秒边界和终端时区放在日期控件的可访问说明中，不向普通用户展示内部字段名。
-- 用户修改 `all/platform` 的开始日期时，只允许选择系统开始日期至结束日期之前的日期；这是“保存的开始日期覆盖”，不是修改账号真实首次接入时间。
-- 显示“已使用保存的开始日期”和“恢复系统起点”，避免仍标记“全部”却隐藏实际截断。
+- 日期控件使用服务端返回的 `query_floor` 作为 `min`，以当前固定结束水位所在的终端业务日期作为 `max`；底层仍按 `start_of_selected_terminal_day < captured_end` 校验，允许选择有数据的当天，禁止未来日期。
+- 固定绝对安全下限为 `2000-01-01`，不使用 2020 或 2025 这类可能截断合法老账户历史的任意业务年份。若 Bridge/终端可信下限更晚，以更晚者为准。
+- 前端 `min/max`、点击应用/保存时校验和服务端权威校验三层同时存在；不得仅靠 HTML 日期控件防越界。
+- 用户修改 `all/platform` 的开始日期时，只改变查询范围，不修改账号真实首次接入时间、默认初始化范围或历史 coverage 事实。
+- 保存值早于 platform system start 时，显示“已扩展至平台接入前：YYYY-MM-DD”；晚于默认起点时显示“已使用保存的开始日期”。“全部”被向后收窄时也必须明确显示实际起点，避免范围名称掩盖截断。
+- 提供“恢复系统起点”，恢复后 `platform` 回到 `first_connected_at` 默认边界，`all` 回到 `query_floor`。
 - “应用范围”只影响当前页面；“保存开始日期”才持久化，禁止输入时自动保存。
 - `all/platform` 的结束日期随每次新首屏固定水位更新，不持久化旧结束日期。
 
@@ -372,8 +388,8 @@ user_id + platform + normalize(broker_server) + login
 
 1. 等待当前用户和稳定账号身份确认。
 2. 读取对应账号的偏好；账号切换不得复用前一个账号的日期。
-3. 等待服务器返回当前 scope 的权威系统起点和固定结束点。
-4. 将保存日期作为 `scope_start_override` 发给服务器，由服务器再次校验并返回 system/effective range。
+3. 等待服务器返回当前 scope 的权威允许下限、系统默认起点和固定结束点。
+4. 将保存日期作为 `scope_start_override` 发给服务器，由服务器再次校验并返回 allowed/system/effective range。
 5. 只有服务端确认 `override_applied=true` 才显示为已保存范围；不合法则丢弃并提示已恢复系统范围。
 6. 手工刷新、页面刷新和断线恢复保持已保存开始日期；退出登录后数据可以保留，但其他 user ID 无法命中该键。
 
@@ -479,9 +495,10 @@ chart_range = intersection(statistics_scope_range,
 2. 账号换绑保持起点不变。
 3. `onTerminalReady` 主动准备平台 exact range。
 4. 前端默认和回退统一为 platform。
-5. API 返回 scope 权威实际起止日期和固定水位，供全部/平台模式显示与偏好校验。
+5. API 返回 scope 权威 allowed/system/effective 范围和固定水位，供全部/平台模式显示与偏好校验。
+6. 平台接入前的用户主动查询复用有界 exact-range 按需准备，不改变初始化 P1 的默认平台范围。
 
-验收门：同一 broker/login 从用户 A 换绑到用户 B 后，平台范围起点逐毫秒一致。
+验收门：同一 broker/login 从用户 A 换绑到用户 B 后，平台默认范围起点逐毫秒一致；合法的平台接入前 override 能建立独立快照并按需补齐，且 `first_connected_at` 不发生变化。
 
 ### 阶段 B：平仓时间强类型与 SQLite v2
 
@@ -570,9 +587,11 @@ chart_range = intersection(statistics_scope_range,
 - 长时间停留、重连、换绑后旧响应不能覆盖新账号页面。
 - all/platform/custom 三种模式都显示服务器确认后的实际开始和结束日期。
 - all/platform 保存的开始日期按 user + platform + broker + login 隔离，刷新后恢复，账号切换不串值。
-- 保存日期早于系统起点、晚于结束点、格式非法或 schema 版本不支持时丢弃并恢复系统值。
-- all/platform 的 override 不能通过原始 `range_start_utc_msc` 绕过；续页必须绑定首次冻结的 system/effective range。
+- platform 保存日期早于系统默认起点但不早于 `query_floor` 时允许，并明确显示“已扩展至平台接入前”。
+- 保存日期早于 `2000-01-01`、早于可信 `query_floor`、晚于结束点、格式非法或 schema 版本不支持时丢弃并恢复系统值。
+- all/platform 的 override 不能通过原始 `range_start_utc_msc` 绕过 allowed range；续页必须绑定首次冻结的 allowed/system/effective range。
 - all/platform 固定结束点刷新到新水位，但不会覆盖保存的合法开始日期。
+- 日期输入 `min/max`、应用、保存、刷新恢复和服务端校验均使用终端业务日期；浏览器本地时区不得导致前后偏移一天。
 - 平仓时间筛选与开仓时间筛选可以组合，筛选范围不能扩大统计 scope。
 - 图表只返回 scope 内最近 30 个终端业务日。
 - 点击 bar 只更新平仓筛选和表格，不修改 range mode、范围日期、summary 或 chart cache。
@@ -607,6 +626,7 @@ chart_range = intersection(statistics_scope_range,
 可分别关闭：
 
 - startup platform P1 主动准备；
+- platform-before-access 范围 override；
 - immutable insert-only；
 - summary v2 读取；
 - continuation orders cache；
@@ -617,6 +637,7 @@ chart_range = intersection(statistics_scope_range,
 - 不删除 SQLite 新列、v2 summary 或已归档历史。
 - 不恢复旧用户注册时间作为 platform 起点。
 - 不恢复 ownership 起点作为默认历史起点。
+- 若临时关闭 platform-before-access override，保留用户本地偏好但不应用，并明确显示“当前版本暂不支持扩展到平台接入前”；不得删除或改写 `first_connected_at`。
 - 如果 immutable 写入出现漏单，只暂停新封口并恢复未封口尾部采集；不得直接清库重同步。
 - 如果 summary v2 失败，显示不可用或临时读取 v1 并明确标记旧时间语义，不能返回伪零。
 
@@ -638,7 +659,7 @@ chart_range = intersection(statistics_scope_range,
 
 ### 15.1 检查结论
 
-初稿覆盖了历史不可变、平仓时间统一、平台范围优先和换绑不重置四项核心要求；加入前端范围展示、保存和图表下钻需求后，共发现六个需要调整的问题：
+初稿覆盖了历史不可变、平仓时间统一、平台范围优先和换绑不重置四项核心要求；加入前端范围展示、保存、平台接入前查询和图表下钻需求后，共发现七个需要调整的问题：
 
 1. 若把所有数据都强制解释为平仓时间，入金、出金和信用事件会失真。
 2. 若在 Bridge 新增一套“平台首次接入元数据表”，会与已有 `mt5_account_bindings.first_connected_at` 形成双真相源。
@@ -646,6 +667,7 @@ chart_range = intersection(statistics_scope_range,
 4. 若把用户保存的开始日期直接写回 `first_connected_at`，会破坏稳定账号接入事实。
 5. 若点击图表继续复用 custom scope，会让一次下钻永久改变范围统计和同步请求。
 6. 若为日期偏好立即新增服务器表和跨设备同步，会扩大迁移、权限和并发范围，超过本次需求。
+7. 若仍用 `max(system_start, override)` 校验保存日期，用户即使输入平台接入前日期也会被静默抬回 `first_connected_at`，与补充需求冲突。
 
 ### 15.2 已做调整
 
@@ -655,6 +677,7 @@ chart_range = intersection(statistics_scope_range,
 - 复用现有 P1/P2/P3、coverage、cursor、summary generation 和 `history_page` 准备链路，不新增调度服务。
 - 保留单 Worker、250 批次和单 MT 历史并发，避免性能优化演变为实时链路风险。
 - 将保存开始日期定义为按用户与稳定账号隔离的前端查询偏好，不修改服务端首次接入事实；首期使用 localStorage，避免新增偏好表。
+- 将模式默认起点与查询允许下限拆开：`platform` 默认仍是 `first_connected_at`，合法 override 可向前扩展到 `query_floor`；增加 `2000-01-01` 绝对安全下限，避免无意义年份而不截断 2020 年前的真实历史。
 - 将前端状态拆成 statistics scope、table close filter、chart 30-day window；柱状图下钻只触发表格读取。
 - all/platform 的结束点始终由服务器新快照刷新，不保存陈旧结束日期。
 
@@ -669,7 +692,7 @@ chart_range = intersection(statistics_scope_range,
 - 旧 Bridge 兼容仅允许明确 `close_time_msc`，禁止从通用 `time` 猜测。
 - 不要求当前方案直接执行生产 MySQL 迁移。
 - 日期偏好带 schema version 且严格校验；前端升级可以安全丢弃旧偏好，不影响历史数据。
-- 现有 cursor 校验要求 all/platform 使用固定系统起点；实施时必须升级为“固定的已验证 effective 起点”，并在 token 中同时保留 system start，禁止只放宽客户端起点判断。
+- 现有 cursor 校验要求 all/platform 使用固定系统起点；实施时必须升级为“固定的已验证 effective 起点”，并在 token 中同时保留 allowed start、system start，禁止只放宽客户端起点判断。
 
 ### 16.2 并发与幂等
 
@@ -678,6 +701,7 @@ chart_range = intersection(statistics_scope_range,
 - 相同新平仓的命令唤醒、持仓消失和周期检查必须合并为同一尾部 flight。
 - immutable conflict 不得推进 revision 或覆盖 summary。
 - scope override 的首次解析与 cursor 创建必须是同一请求快照；保存偏好变化只能创建新首屏，不能修改正在翻页的 snapshot。
+- 同一个 scope 的 platform-before-access override 与默认 platform 请求不得复用错误的首屏缓存键；cache key 必须包含 effective start 和账号稳定身份。
 
 ### 16.3 异常恢复
 
@@ -692,6 +716,7 @@ chart_range = intersection(statistics_scope_range,
 - 平仓时差必须随记录冻结，不能用今天的时差重新解释历史日期。
 - MT4 历史可见范围不足时不能把最早可见时间误当平台首次接入时间。
 - platform start 是账号首次接入系统的时间，不是用户注册、ownership、终端实例或 Profile 创建时间。
+- `first_connected_at` 只定义 platform 默认起点；用户向前扩展使用终端业务日期并受 `query_floor` 约束，不得反写或重解释该事实时间。
 - scope、表格平仓筛选和图表窗口都使用同一 frozen terminal-day/UTC 映射，但三者状态相互独立。
 - 最近 30 天以 scope 固定结束点为准，不随浏览器本地午夜或点击柱状图重新计算。
 
@@ -714,18 +739,23 @@ chart_range = intersection(statistics_scope_range,
 | P3 抢在平台范围前运行 | terminal ready 立即规划 P1；批次边界抢占；指标验证 P3 顺序 |
 | MySQL account performance 继续重读 MT | 默认用户统计切到 SQLite summary v2，旧 action 仅兼容且受指标监控 |
 | 保存日期在用户或账号之间串用 | localStorage key 绑定 user + platform + broker + login，身份确认后才读取 |
-| 保存起点早于平台接入或 Bridge 下限 | 服务器权威范围返回后再次校验，不合法则丢弃 |
+| 保存起点早于平台接入 | 允许；标记为“已扩展至平台接入前”，按需准备缺失 coverage，但不修改首次接入事实 |
+| 保存起点早于 2000-01-01 或可信 Bridge/终端下限 | 服务端按 `query_floor` 拒绝，前端丢弃旧保存值并恢复系统默认 |
+| 用户选择极早日期造成大范围同步 | 仍使用 250 条有界批次、单历史并发和实时优先调度；首屏显示准备进度，不一次返回或一次同步全量历史 |
 | 图表点击污染总体范围 | table filter 使用独立字段与独立 cache key，禁止写 range controls |
 | 最近 30 天与范围累计指标混淆 | UI 和响应分别命名 `chart_30d`、`scope_statistics` 并标明日期 |
 
-第二轮在加入前端保存起点后曾发现一个实质兼容问题：现有 all/platform continuation 校验要求请求起点严格等于系统起点，若只保存前端日期会导致新首屏或续页被判为非法。方案已经改为服务器校验 `scope_start_override`，响应和 cursor 同时冻结 system/effective range；随后重新检查了越界、旧 cursor、账号切换、并发翻页和清除偏好的路径，未再发现需要扩大架构的缺口。
+第二轮在加入前端保存起点后曾发现一个实质兼容问题：现有 all/platform continuation 校验要求请求起点严格等于系统起点，若只保存前端日期会导致新首屏或续页被判为非法。补充“允许平台接入前查询”后又重新核对该问题，确认不能使用 `max(system_start, override)`，否则需求会在服务端被抵消。最终方案改为服务端分别校验 `allowed_start`、`system_start` 和 `effective_start`，响应和 cursor 同时冻结 allowed/system/effective range；随后重新检查了绝对年份下限、终端业务日、平台前按需补齐、旧 cursor、账号切换、并发翻页、缓存隔离和清除偏好的路径，未再发现需要扩大架构的缺口。
 
-第二轮结论：方案在兼容迁移、幂等并发、异常恢复、时间语义、账户换绑、安全、测试与回滚方面闭环，可以实施。不能由静态方案消除的剩余风险只有两类：真实 MT4/MT5 对最新平仓的可见延迟，以及业务明确接受的券商事后修订不再自动回查。两者必须在灰度发布说明和真实终端验收中明确记录。
+第二轮结论：方案在兼容迁移、幂等并发、异常恢复、时间语义、账户换绑、安全、测试与回滚方面闭环，可以实施。不能由静态方案消除的剩余风险有三类：真实 MT4/MT5 对最新平仓的可见延迟、业务明确接受的券商事后修订不再自动回查，以及用户首次选择极早日期时需要等待有界历史补齐。三者必须在灰度发布说明和真实终端验收中明确记录；第三类只能通过进度反馈和实时优先调度缓解，不得用一次性全量响应或硬性提高并发解决。
 
 ## 17. 最终验收清单
 
 - [ ] platform 默认范围严格使用稳定 binding 的 `first_connected_at`。
 - [ ] 用户换绑前后 platform start 完全不变。
+- [ ] platform 保存起点可以早于 `first_connected_at`，且只改变查询范围、不改变首次接入事实与初始化默认范围。
+- [ ] 所有日期输入不得早于 `max(2000-01-01, Bridge/终端可信下限)`，不得晚于当前固定结束水位，并由服务端权威校验。
+- [ ] 平台接入前的大范围查询保持 250 条有界批次、单历史并发、实时优先和可见准备进度。
 - [ ] 平台范围 P1 在旧历史 P3 前完成或于单批次边界抢占。
 - [ ] 已 complete 范围刷新不产生 MT 历史查询。
 - [ ] trade 所有筛选、排序、游标、展示和聚合只使用 close time。
