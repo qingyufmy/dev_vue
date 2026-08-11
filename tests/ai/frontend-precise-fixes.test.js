@@ -220,9 +220,9 @@ describe('precise AI/admin frontend fixes', () => {
   })
 
   it('ships cache-busted app scripts while keeping each asset family on one key', () => {
-    expect(aiHtml).toContain('/ai/app.js?v=20260810inferencefix2&build=signalbandwidth1')
-    expect(aiHtml).toContain('/ai/styles.css?v=20260810inferencefix2')
-    expect(aiHtml).toContain('/ai/responsive.css?v=20260810inferencefix2')
+    expect(aiHtml).toContain('/ai/app.js?v=20260811bridgehistorydense1&build=signalbandwidth1-notifications1')
+    expect(aiHtml).toContain('/ai/styles.css?v=20260811bridgehistorydense1')
+    expect(aiHtml).toContain('/ai/responsive.css?v=20260811bridgehistorydense1')
     expect(adminHtml).toContain('/admin/styles.css?v=20260810userpage10fix2')
   })
 })
