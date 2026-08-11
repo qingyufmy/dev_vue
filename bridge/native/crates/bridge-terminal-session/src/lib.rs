@@ -6,8 +6,8 @@ use bridge_mt4::{
 use bridge_runtime_win::RestartPolicy;
 use bridge_store::{
     AccountInitializationState, HISTORY_COVERAGE_START_UTC_MSC, HISTORY_MIN_WINDOW_MSC,
-    HistoryArchiveBatch, HistoryCursor, HistoryJobPlanningRequest, HistoryScope, HistorySyncJob,
-    HistoryTailRefreshRequest, OutboxStore,
+    HistoryArchiveBatch, HistoryCursor, HistoryJobPlanningRequest, HistoryPrepareStatus,
+    HistoryRequestedRange, HistoryScope, HistorySyncJob, HistoryTailRefreshRequest, OutboxStore,
 };
 use bridge_terminal_data::{
     CollectorHandle, CollectorLifecycleState, CollectorPolicy, SnapshotCollector, SnapshotProjector,
@@ -424,6 +424,74 @@ impl TerminalSessionHandle {
         Ok(())
     }
 
+    /// Ensure the requested exact range has an immediately claimable P1 tail
+    /// flight, then return only the lightweight SQLite synchronization state.
+    ///
+    /// The planner is idempotent: covered ranges do not create work, while a
+    /// current/small tail gap is routed through the repeatable tail planner so
+    /// overlapping calls extend one flight instead of creating duplicate MT5
+    /// queries.  Older uncovered ranges retain the existing bounded on-demand
+    /// planner semantics.
+    pub fn prepare_history_status(
+        &self,
+        range_start_utc_msc: i64,
+        range_end_utc_msc: i64,
+        now_utc_msc: i64,
+    ) -> Result<HistoryPrepareStatus, TerminalSessionError> {
+        if self.route.platform != "mt5" {
+            return Err(TerminalSessionError::new(
+                "history_prepare_status_unsupported",
+            ));
+        }
+        if now_utc_msc <= 0
+            || range_start_utc_msc < HISTORY_COVERAGE_START_UTC_MSC
+            || range_end_utc_msc <= range_start_utc_msc
+        {
+            return Err(TerminalSessionError::new("terminal_history_range_invalid"));
+        }
+        let store = self
+            .store
+            .upgrade()
+            .ok_or_else(|| TerminalSessionError::new("terminal_store_unavailable"))?;
+        let terminal = bridge_contract::TerminalDescriptor {
+            terminal_instance_id: self.route.terminal_instance_id.clone(),
+            platform: self.route.platform.clone(),
+            account_ref: self.route.account_ref.clone(),
+            connection_epoch: self.route.connection_epoch,
+            worker_version: None,
+        };
+        let requested_range = HistoryRequestedRange {
+            range_start_utc_msc,
+            range_end_utc_msc,
+        };
+        let initial = store
+            .history_prepare_status(&terminal, &requested_range, now_utc_msc)
+            .map_err(|error| TerminalSessionError::new(error.code()))?;
+        if !initial.requested_range_complete {
+            let current_tail = initial.fresh_through_utc_msc > 0
+                && range_start_utc_msc <= initial.fresh_through_utc_msc
+                && range_end_utc_msc > initial.fresh_through_utc_msc;
+            let near_terminal_now =
+                range_end_utc_msc.saturating_add(HISTORY_TAIL_LOOKBACK_MSC) >= now_utc_msc;
+            if current_tail || near_terminal_now {
+                self.plan_mt5_tail_refresh_to(range_end_utc_msc, now_utc_msc)?;
+            } else {
+                self.plan_requested_history_range(
+                    range_start_utc_msc,
+                    range_end_utc_msc,
+                    now_utc_msc,
+                    "p1",
+                )?;
+            }
+            // A prepare request is a user-visible wake edge.  The scheduler's
+            // 30-second safety timer remains a fallback only.
+            self.history.wake();
+        }
+        store
+            .history_prepare_status(&terminal, &requested_range, now_utc_msc)
+            .map_err(|error| TerminalSessionError::new(error.code()))
+    }
+
     /// Queue a bounded, high-priority history range without waiting for the native worker.
     /// The scheduler claims it at the next batch boundary, ahead of P2/P3 jobs.
     pub fn request_history_range(
@@ -484,6 +552,20 @@ impl TerminalSessionHandle {
         if now <= 0 {
             return Err(TerminalSessionError::new("terminal_session_clock_invalid"));
         }
+        self.plan_mt5_tail_refresh_to(now, now)
+    }
+
+    fn plan_mt5_tail_refresh_to(
+        &self,
+        range_end_utc_msc: i64,
+        now: i64,
+    ) -> Result<(), TerminalSessionError> {
+        if now <= 0
+            || range_end_utc_msc <= HISTORY_COVERAGE_START_UTC_MSC
+            || range_end_utc_msc > now.saturating_add(60_000)
+        {
+            return Err(TerminalSessionError::new("terminal_history_range_invalid"));
+        }
         let store = self
             .store
             .upgrade()
@@ -498,7 +580,7 @@ impl TerminalSessionHandle {
         let state = store
             .history_scope_state(&terminal)
             .map_err(|error| TerminalSessionError::new(error.code()))?;
-        let lookback_start = now.saturating_sub(HISTORY_TAIL_LOOKBACK_MSC);
+        let lookback_start = range_end_utc_msc.saturating_sub(HISTORY_TAIL_LOOKBACK_MSC);
         let sealed_tail = store
             .latest_sealed_trade_cursor(&terminal)
             .map_err(|error| TerminalSessionError::new(error.code()))?
@@ -511,7 +593,7 @@ impl TerminalSessionHandle {
             .unwrap_or(lookback_start);
         let range_start_utc_msc =
             HISTORY_COVERAGE_START_UTC_MSC.max(prior.saturating_sub(HISTORY_TAIL_OVERLAP_MSC));
-        if range_start_utc_msc >= now {
+        if range_start_utc_msc >= range_end_utc_msc {
             return Ok(());
         }
         let scope = HistoryScope::new(&self.route.terminal_instance_id, &self.route.account_ref)
@@ -521,7 +603,7 @@ impl TerminalSessionHandle {
                 scope,
                 platform: self.route.platform.clone(),
                 range_start_utc_msc,
-                range_end_utc_msc: now,
+                range_end_utc_msc,
                 now_utc_msc: now,
             })
             .map_err(|error| TerminalSessionError::new(error.code()))?;

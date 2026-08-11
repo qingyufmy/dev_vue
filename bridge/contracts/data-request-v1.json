@@ -11,6 +11,7 @@
     "history",
     "history_page",
     "history_evidence",
+    "history_prepare_status_v1",
     "chart_data",
     "pending_order_state",
     "diagnostics"
@@ -40,6 +41,33 @@
       "required_route_fields": ["terminal_instance_id", "account_ref", "connection_epoch"],
       "required_params": ["range_start_utc_msc", "range_end_utc_msc"],
       "requires_one_of": ["evidence_position_ids", "evidence_order_tickets"]
+    },
+    "history_prepare_status_v1": {
+      "actions": ["history_prepare_status_v1"],
+      "required_route_fields": ["terminal_instance_id", "account_ref", "connection_epoch"],
+      "required_params": ["range_start_utc_msc", "range_end_utc_msc"],
+      "optional_params": [
+        "allowed_start_utc_msc",
+        "system_start_utc_msc",
+        "effective_start_utc_msc",
+        "captured_end_utc_msc"
+      ],
+      "captured_end_contract": "captured_end_utc_msc >= range_end_utc_msc and both endpoints are bounded by the current trusted terminal time",
+      "scope_endpoint_contract": "all/platform require captured_end_utc_msc == range_end_utc_msc; custom may retain a later captured_end_utc_msc",
+      "response_fields": [
+        "status",
+        "history_sync.requested_range_complete",
+        "history_sync.coverage_complete",
+        "history_sync.archive_complete",
+        "history_sync.summary_status",
+        "history_sync.freshness_state",
+        "history_sync.backfill_pending",
+        "history_sync.tail_refresh_pending",
+        "history_sync.fresh_through_utc_msc",
+        "history_sync.history_revision",
+        "history_sync.summary_revision"
+      ],
+      "excludes": ["orders", "statistics", "chart_data"]
     }
   },
   "route": {

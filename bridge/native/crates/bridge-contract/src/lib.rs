@@ -6,6 +6,7 @@ pub const SERVER_PROTOCOL_VERSION: u16 = 3;
 pub const HISTORY_EXACT_RANGE_CAPABILITY: &str = "history_exact_range_v1";
 pub const HISTORY_CURSOR_CAPABILITY: &str = "history_cursor_v1";
 pub const HISTORY_EVIDENCE_CAPABILITY: &str = "history_evidence_v1";
+pub const HISTORY_PREPARE_STATUS_CAPABILITY: &str = "history_prepare_status_v1";
 /// Actions accepted by the v3 data-request contract.
 ///
 /// Keep this as the single source of truth for both wire validation and the
@@ -21,6 +22,7 @@ pub const DATA_REQUEST_ACTIONS: &[&str] = &[
     "history",
     "history_page",
     "history_evidence",
+    "history_prepare_status_v1",
     "chart_data",
     "pending_order_state",
     "diagnostics",
@@ -43,6 +45,7 @@ pub fn data_request_action_for_capability(capability: &str) -> Option<&'static s
         HISTORY_EXACT_RANGE_CAPABILITY => Some("history"),
         HISTORY_CURSOR_CAPABILITY => Some("history_page"),
         HISTORY_EVIDENCE_CAPABILITY => Some("history_evidence"),
+        HISTORY_PREPARE_STATUS_CAPABILITY => Some("history_prepare_status_v1"),
         _ => None,
     }
 }
@@ -1100,10 +1103,17 @@ mod tests {
             data_request_action_for_capability(HISTORY_EVIDENCE_CAPABILITY),
             Some("history_evidence")
         );
+        assert_eq!(
+            data_request_action_for_capability(HISTORY_PREPARE_STATUS_CAPABILITY),
+            Some("history_prepare_status_v1")
+        );
         for capability in [HISTORY_CURSOR_CAPABILITY, HISTORY_EVIDENCE_CAPABILITY] {
             let action = data_request_action_for_capability(capability).expect("history action");
             assert!(is_supported_data_request_action(action));
         }
+        let action = data_request_action_for_capability(HISTORY_PREPARE_STATUS_CAPABILITY)
+            .expect("history prepare status action");
+        assert!(is_supported_data_request_action(action));
     }
 
     #[test]
@@ -1147,6 +1157,10 @@ mod tests {
         for (capability, expected_action) in [
             (HISTORY_CURSOR_CAPABILITY, "history_page"),
             (HISTORY_EVIDENCE_CAPABILITY, "history_evidence"),
+            (
+                HISTORY_PREPARE_STATUS_CAPABILITY,
+                "history_prepare_status_v1",
+            ),
         ] {
             let actions = capability_actions
                 .get(capability)

@@ -4,10 +4,10 @@ use bridge_command::{
 };
 use bridge_contract::{
     CommandResultMessage, DataRequestMessage, HISTORY_CURSOR_CAPABILITY,
-    HISTORY_EVIDENCE_CAPABILITY, HISTORY_EXACT_RANGE_CAPABILITY, HelloMessage, QuoteRequestMessage,
-    SERVER_DATA_QUEUE_CAPACITY, SERVER_PROTOCOL_VERSION, SERVER_TRADE_QUEUE_CAPACITY,
-    TerminalDescriptor, TerminalStreamFreshness, is_supported_data_request_action,
-    same_terminal_route,
+    HISTORY_EVIDENCE_CAPABILITY, HISTORY_EXACT_RANGE_CAPABILITY, HISTORY_PREPARE_STATUS_CAPABILITY,
+    HelloMessage, QuoteRequestMessage, SERVER_DATA_QUEUE_CAPACITY, SERVER_PROTOCOL_VERSION,
+    SERVER_TRADE_QUEUE_CAPACITY, TerminalDescriptor, TerminalStreamFreshness,
+    is_supported_data_request_action, same_terminal_route,
 };
 use bridge_foundation::{
     BridgeProfilePaths, MT5_WORKER_RELATIVE_PATH, PYTHON_RELATIVE_PATH, resolve_profile_paths,
@@ -19,7 +19,10 @@ use bridge_local_control::{
 use bridge_mt4::{EaIdentity, EaRegistrationHub, EaRegistrationHubHandle};
 use bridge_runtime_win::RestartPolicy;
 use bridge_security_win::CredentialStore;
-use bridge_store::{HistoryScope, OutboxStore, TerminalBinding, parse_history_requested_range};
+use bridge_store::{
+    HistoryScope, OutboxStore, TerminalBinding, parse_history_prepare_status_request,
+    parse_history_requested_range,
+};
 use bridge_terminal_data::CollectorPolicy;
 use bridge_terminal_session::{
     Mt4SessionHandle, Mt4SessionManager, Mt4SessionSpec, Mt5SessionManager, Mt5SessionSpec,
@@ -726,7 +729,11 @@ impl InboundDataHandler for ActiveMt5Sessions {
             }
             let history_now = if matches!(
                 request.action.as_str(),
-                "history" | "history_page" | "history_evidence" | "chart_data"
+                "history"
+                    | "history_page"
+                    | "history_evidence"
+                    | "history_prepare_status_v1"
+                    | "chart_data"
             ) {
                 let now = (self.clock)();
                 if now <= 0 {
@@ -756,6 +763,36 @@ impl InboundDataHandler for ActiveMt5Sessions {
         })();
         Box::pin(async move {
             let (store, terminal, parameters, request_id, action, session, history_now) = prepared?;
+            if action == "history_prepare_status_v1" {
+                let now = history_now.ok_or_else(|| {
+                    TransportError::from_static_code("terminal_data_clock_invalid")
+                })?;
+                let requested_range = parse_history_prepare_status_request(&parameters, now)
+                    .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+                let PreparedDataSession::Mt5(session) = session else {
+                    return Err(TransportError::from_static_code(
+                        "history_prepare_status_unsupported",
+                    ));
+                };
+                let history_handle = session.handle.clone();
+                let status = tokio::task::spawn_blocking(move || {
+                    history_handle.prepare_history_status(
+                        requested_range.range_start_utc_msc,
+                        requested_range.range_end_utc_msc,
+                        now,
+                    )
+                })
+                .await
+                .map_err(|_| TransportError::from_static_code("terminal_data_request_failed"))?
+                .map_err(|error| TransportError::from_code(error.code().to_owned()))?;
+                let history_sync = serde_json::to_value(status).map_err(|_| {
+                    TransportError::from_static_code("terminal_data_request_failed")
+                })?;
+                return Ok(serde_json::json!({
+                    "status": "success",
+                    "history_sync": history_sync,
+                }));
+            }
             if let (PreparedDataSession::Mt5(session), Some(now)) = (&session, history_now)
                 && history_request_requires_prepare(&action, &parameters)
             {
@@ -993,6 +1030,7 @@ enum CoreDataActionHandler {
     HistoryArchive,
     HistoryPage,
     HistoryEvidence,
+    HistoryPrepareStatus,
     HistoryChart,
     CachedTerminalData,
     TerminalData,
@@ -1003,6 +1041,7 @@ fn core_data_action_handler(action: &str) -> Option<CoreDataActionHandler> {
         "history" => Some(CoreDataActionHandler::HistoryArchive),
         "history_page" => Some(CoreDataActionHandler::HistoryPage),
         "history_evidence" => Some(CoreDataActionHandler::HistoryEvidence),
+        "history_prepare_status_v1" => Some(CoreDataActionHandler::HistoryPrepareStatus),
         "chart_data" => Some(CoreDataActionHandler::HistoryChart),
         action if data_action_is_cacheable(action) => {
             Some(CoreDataActionHandler::CachedTerminalData)
@@ -1273,6 +1312,12 @@ impl HelloProvider for CoreHelloProvider {
                 "bridge_message_timestamp_invalid",
             ));
         }
+        let capabilities = vec![
+            HISTORY_EXACT_RANGE_CAPABILITY.to_owned(),
+            HISTORY_CURSOR_CAPABILITY.to_owned(),
+            HISTORY_EVIDENCE_CAPABILITY.to_owned(),
+            HISTORY_PREPARE_STATUS_CAPABILITY.to_owned(),
+        ];
         let hello = HelloMessage {
             v: SERVER_PROTOCOL_VERSION,
             message_type: "hello".to_owned(),
@@ -1280,11 +1325,7 @@ impl HelloProvider for CoreHelloProvider {
             sent_at_utc_msc: now,
             session_id: random_id("session_")?,
             bridge_version: env!("CARGO_PKG_VERSION").to_owned(),
-            capabilities: vec![
-                HISTORY_EXACT_RANGE_CAPABILITY.to_owned(),
-                HISTORY_CURSOR_CAPABILITY.to_owned(),
-                HISTORY_EVIDENCE_CAPABILITY.to_owned(),
-            ],
+            capabilities,
             installation_id: None,
             update_report: None,
             terminals: self.terminals.clone(),
@@ -2433,6 +2474,7 @@ mod tests {
                 HISTORY_EXACT_RANGE_CAPABILITY.to_owned(),
                 HISTORY_CURSOR_CAPABILITY.to_owned(),
                 HISTORY_EVIDENCE_CAPABILITY.to_owned(),
+                HISTORY_PREPARE_STATUS_CAPABILITY.to_owned(),
             ]
         );
         assert!(
@@ -2441,12 +2483,72 @@ mod tests {
                 .iter()
                 .any(|value| value == HISTORY_CURSOR_CAPABILITY)
         );
-        for capability in [HISTORY_CURSOR_CAPABILITY, HISTORY_EVIDENCE_CAPABILITY] {
+        for capability in [
+            HISTORY_CURSOR_CAPABILITY,
+            HISTORY_EVIDENCE_CAPABILITY,
+            HISTORY_PREPARE_STATUS_CAPABILITY,
+        ] {
             let action =
                 data_request_action_for_capability(capability).expect("history capability action");
             assert!(is_supported_data_request_action(action));
             assert!(core_data_action_handler(action).is_some());
         }
+
+        let mt4_provider = CoreHelloProvider {
+            terminals: vec![TerminalDescriptor {
+                terminal_instance_id: "mt4_terminal_01".to_owned(),
+                platform: "mt4".to_owned(),
+                account_ref: AccountRef {
+                    broker_server: "Broker-Demo".to_owned(),
+                    login: "123456".to_owned(),
+                },
+                connection_epoch: 7,
+                worker_version: None,
+            }],
+            clock: Arc::new(|| 1_700_000_000_000),
+        };
+        assert!(
+            mt4_provider
+                .hello()
+                .expect("mt4 hello")
+                .capabilities
+                .iter()
+                .any(|value| value == HISTORY_PREPARE_STATUS_CAPABILITY)
+        );
+
+        let mixed_provider = CoreHelloProvider {
+            terminals: vec![
+                TerminalDescriptor {
+                    terminal_instance_id: "mt5_terminal_01".to_owned(),
+                    platform: "mt5".to_owned(),
+                    account_ref: AccountRef {
+                        broker_server: "Broker-Demo".to_owned(),
+                        login: "123456".to_owned(),
+                    },
+                    connection_epoch: 7,
+                    worker_version: None,
+                },
+                TerminalDescriptor {
+                    terminal_instance_id: "mt4_terminal_01".to_owned(),
+                    platform: "mt4".to_owned(),
+                    account_ref: AccountRef {
+                        broker_server: "Broker-Demo".to_owned(),
+                        login: "654321".to_owned(),
+                    },
+                    connection_epoch: 8,
+                    worker_version: None,
+                },
+            ],
+            clock: Arc::new(|| 1_700_000_000_000),
+        };
+        assert!(
+            mixed_provider
+                .hello()
+                .expect("mixed hello")
+                .capabilities
+                .iter()
+                .any(|value| value == HISTORY_PREPARE_STATUS_CAPABILITY)
+        );
     }
 
     #[test]
@@ -2969,6 +3071,39 @@ mod tests {
                 .len(),
             1
         );
+        let prepare_request = DataRequestMessage {
+            v: 3,
+            message_type: "data_request".to_owned(),
+            message_id: "message_01JACTIVEPREPARE01".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_100,
+            request_id: "request_01JACTIVEPREPARE01".to_owned(),
+            terminal_instance_id: "mt5_terminal_active_01".to_owned(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Demo".to_owned(),
+                login: "123456".to_owned(),
+            },
+            connection_epoch: 1,
+            action: "history_prepare_status_v1".to_owned(),
+            params: serde_json::json!({
+                "range_start_utc_msc": 1_699_999_990_000_i64,
+                "range_end_utc_msc": 1_700_000_000_000_i64,
+                "captured_end_utc_msc": 1_700_000_000_100_i64,
+            }),
+        };
+        let prepare_response = InboundDataHandler::handle(active.as_ref(), &prepare_request)
+            .await
+            .expect("MT5 history prepare response");
+        assert_eq!(prepare_response["status"], "success");
+        assert!(prepare_response["history_sync"].is_object());
+        assert!(prepare_response.get("orders").is_none());
+        assert!(prepare_response.get("statistics").is_none());
+        assert!(prepare_response.get("chart_data").is_none());
+        assert!(
+            serde_json::to_vec(&prepare_response)
+                .expect("history prepare response json")
+                .len()
+                < 1024
+        );
         assert_eq!(
             InboundEventSink::full_snapshot_required(
                 active.as_ref(),
@@ -3146,6 +3281,60 @@ mod tests {
         drop(active);
         drop(store);
         fs::remove_dir_all(root).expect("remove MT4 active fixture");
+    }
+
+    #[tokio::test]
+    async fn history_prepare_status_is_explicitly_unsupported_on_mt4_routes() {
+        let root = unique_test_directory("mt4-history-prepare");
+        let terminal_data_path = root.join("terminal-data");
+        fs::create_dir_all(&terminal_data_path).expect("terminal data directory");
+        let store = Arc::new(
+            OutboxStore::open_or_create(root.join("bridge.db")).expect("MT4 history store"),
+        );
+        let account_ref = AccountRef {
+            broker_server: "Broker-Demo".to_owned(),
+            login: "654321".to_owned(),
+        };
+        let binding = TerminalBinding {
+            terminal_instance_id: "mt4_terminal_history_01".to_owned(),
+            platform: "mt4".to_owned(),
+            terminal_path: terminal_data_path,
+            account_ref: account_ref.clone(),
+            connection_epoch: 4,
+            updated_at_utc_msc: 1_700_000_000_000,
+        };
+        let active = ActiveMt5Sessions::start_all(
+            Vec::new(),
+            vec![binding],
+            false,
+            Arc::clone(&store),
+            Arc::new(|| 1_700_000_000_100),
+        )
+        .await
+        .expect("MT4 history sessions");
+        let request = DataRequestMessage {
+            v: 3,
+            message_type: "data_request".to_owned(),
+            message_id: "message_01JMT4PREPARE01".to_owned(),
+            sent_at_utc_msc: 1_700_000_000_100,
+            request_id: "request_01JMT4PREPARE01".to_owned(),
+            terminal_instance_id: "mt4_terminal_history_01".to_owned(),
+            account_ref,
+            connection_epoch: 4,
+            action: "history_prepare_status_v1".to_owned(),
+            params: serde_json::json!({
+                "range_start_utc_msc": 1_699_999_000_000_i64,
+                "range_end_utc_msc": 1_700_000_000_000_i64,
+            }),
+        };
+        let error = InboundDataHandler::handle(active.as_ref(), &request)
+            .await
+            .expect_err("MT4 must not run the MT5 prepare planner");
+        assert_eq!(error.code(), "history_prepare_status_unsupported");
+        active.stop().await.expect("stop MT4 history sessions");
+        drop(active);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove MT4 history fixture");
     }
 
     #[tokio::test]

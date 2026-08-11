@@ -33,6 +33,7 @@ const HISTORY_SNAPSHOT_TTL_MSC: i64 = 10 * 60 * 1_000;
 const HISTORY_TAIL_WINDOW_MSC: i64 = 7 * 24 * 60 * 60 * 1_000;
 const HISTORY_CURSOR_TOKEN_BYTES: usize = 32;
 const HISTORY_DAY_MSC: i64 = 86_400_000;
+const HISTORY_HOUR_MSC: i64 = 60 * 60 * 1_000;
 /// Earliest history timestamp that the native archive planner and request
 /// contract may accept.  Rows older than this are retained as rebuildable
 /// evidence, but are never included in a newly planned/query range.
@@ -620,6 +621,24 @@ pub struct HistoryScopeState {
     pub duplicate_count: i64,
     pub immutable_conflict_count: i64,
     pub updated_at_utc_msc: i64,
+}
+
+/// The deliberately small state projection returned by the history prepare
+/// action.  This is a control-plane read: it may inspect coverage metadata,
+/// scope state, and active jobs, but it must never scan archive rows or build
+/// a history page/statistics/chart response.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HistoryPrepareStatus {
+    pub requested_range_complete: bool,
+    pub coverage_complete: bool,
+    pub archive_complete: bool,
+    pub summary_status: String,
+    pub freshness_state: String,
+    pub backfill_pending: bool,
+    pub tail_refresh_pending: bool,
+    pub fresh_through_utc_msc: i64,
+    pub history_revision: i64,
+    pub summary_revision: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1567,16 +1586,43 @@ impl OutboxStore {
         drop(statement);
 
         let mut attached_jobs = Vec::new();
-        if let Some(row) = active_rows.into_iter().find(|row| {
-            ranges_overlap(
-                row.range_start_utc_msc,
-                row.range_end_utc_msc,
-                request.range_start_utc_msc,
-                request.range_end_utc_msc,
-            )
-        }) {
-            let merged_start = row.range_start_utc_msc.min(request.range_start_utc_msc);
-            let merged_end = row.range_end_utc_msc.max(request.range_end_utc_msc);
+        let mut overlapping_rows = active_rows
+            .into_iter()
+            .filter(|row| {
+                ranges_overlap(
+                    row.range_start_utc_msc,
+                    row.range_end_utc_msc,
+                    request.range_start_utc_msc,
+                    request.range_end_utc_msc,
+                )
+            })
+            .collect::<Vec<_>>();
+        if !overlapping_rows.is_empty() {
+            // Prefer the oldest running flight as the canonical owner.  In
+            // normal operation there is only one active row because planning
+            // is serialized; selecting a stable owner also makes recovery
+            // deterministic if an older database already contains overlaps.
+            let canonical_index = overlapping_rows
+                .iter()
+                .position(|row| row.state == "running")
+                .unwrap_or(0);
+            let row = overlapping_rows.remove(canonical_index);
+            let merged_start = overlapping_rows
+                .iter()
+                .map(|other| other.range_start_utc_msc)
+                .chain(std::iter::once(request.range_start_utc_msc))
+                .fold(
+                    row.range_start_utc_msc.min(request.range_start_utc_msc),
+                    i64::min,
+                );
+            let merged_end = overlapping_rows
+                .iter()
+                .map(|other| other.range_end_utc_msc)
+                .chain(std::iter::once(request.range_end_utc_msc))
+                .fold(
+                    row.range_end_utc_msc.max(request.range_end_utc_msc),
+                    i64::max,
+                );
             if merged_start != row.range_start_utc_msc || merged_end != row.range_end_utc_msc {
                 let affected = transaction
                     .execute(
@@ -1591,6 +1637,22 @@ impl OutboxStore {
                     .map_err(|_| StoreError::new("bridge_store_history_tail_merge_failed"))?;
                 if affected != 1 {
                     return Err(StoreError::new("bridge_store_history_tail_merge_failed"));
+                }
+            }
+            // Queued/retrying overlap rows have not started an MT5 call and
+            // can safely be retired.  A running row keeps its lease and is
+            // left untouched; the planner never creates a new flight, so an
+            // already-running recovery task cannot be lost or replayed.
+            for duplicate in overlapping_rows {
+                if matches!(duplicate.state.as_str(), "queued" | "retrying") {
+                    transaction
+                        .execute(
+                            "UPDATE history_sync_jobs
+                             SET state = 'superseded', updated_at_utc_msc = ?2
+                             WHERE job_id = ?1 AND state IN ('queued', 'retrying');",
+                            params![duplicate.job_id, request.now_utc_msc],
+                        )
+                        .map_err(|_| StoreError::new("bridge_store_history_tail_merge_failed"))?;
                 }
             }
             let merged = read_history_sync_job_by_id(&transaction, &row.job_id)?
@@ -2919,6 +2981,71 @@ impl OutboxStore {
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
         read_history_scope_state_locked(&connection, &scope, &terminal.platform)
+    }
+
+    /// Read the control-plane state used by `history_prepare_status_v1`.
+    ///
+    /// Keep this path intentionally narrow: only coverage ranges, scope state,
+    /// and active sync-job metadata are read.  In particular, do not call any
+    /// history page/statistics/chart helper or query `history_archive_items`.
+    pub fn history_prepare_status(
+        &self,
+        terminal: &TerminalDescriptor,
+        requested_range: &HistoryRequestedRange,
+        now_utc_msc: i64,
+    ) -> Result<HistoryPrepareStatus, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        validate_history_prepare_status_range(requested_range, now_utc_msc)?;
+        let scope = HistoryScope {
+            terminal_instance_id: terminal.terminal_instance_id.clone(),
+            broker_server: terminal.account_ref.broker_server.clone(),
+            login_account: terminal.account_ref.login.clone(),
+        };
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        let ranges = read_history_coverage_ranges_locked(&connection, &scope)?;
+        let scope_state = read_history_scope_state_locked(&connection, &scope, &terminal.platform)?;
+        let is_mt5 = terminal.platform.eq_ignore_ascii_case("mt5");
+        let requested_range_complete = is_mt5
+            && history_ranges_cover(
+                &ranges,
+                requested_range.range_start_utc_msc,
+                requested_range.range_end_utc_msc,
+            );
+        let archive_complete = if is_mt5 {
+            let archive_end = now_utc_msc.div_euclid(HISTORY_HOUR_MSC) * HISTORY_HOUR_MSC;
+            archive_end >= HISTORY_COVERAGE_START_UTC_MSC
+                && history_ranges_cover(&ranges, HISTORY_COVERAGE_START_UTC_MSC, archive_end)
+        } else {
+            // MT4 has no broker-side range coverage proof.  Preserve the old
+            // visible-history contract instead of treating the legacy cursor
+            // as an archive completeness guarantee.
+            false
+        };
+        let tail_refresh_pending = active_tail_refresh_overlaps_locked(
+            &connection,
+            &scope,
+            requested_range.range_start_utc_msc,
+            requested_range.range_end_utc_msc,
+        )?;
+        Ok(HistoryPrepareStatus {
+            requested_range_complete,
+            coverage_complete: requested_range_complete && scope_state.coverage_complete,
+            archive_complete,
+            summary_status: scope_state.summary_status,
+            freshness_state: scope_state.freshness_state,
+            backfill_pending: !archive_complete
+                || !requested_range_complete
+                || tail_refresh_pending,
+            tail_refresh_pending,
+            fresh_through_utc_msc: scope_state.fresh_through_utc_msc.unwrap_or(0),
+            history_revision: scope_state.history_revision,
+            summary_revision: scope_state.summary_revision,
+        })
     }
 
     /// Return the newest immutable trade close cursor for this account.  The
@@ -6685,6 +6812,54 @@ fn validate_history_tail_refresh_request(
     Ok(())
 }
 
+fn validate_history_prepare_status_range(
+    requested_range: &HistoryRequestedRange,
+    now_utc_msc: i64,
+) -> Result<(), StoreError> {
+    if now_utc_msc <= 0
+        || requested_range.range_start_utc_msc < HISTORY_COVERAGE_START_UTC_MSC
+        || requested_range.range_end_utc_msc <= requested_range.range_start_utc_msc
+        || requested_range.range_end_utc_msc
+            > now_utc_msc
+                .checked_add(60_000)
+                .ok_or_else(|| StoreError::new("bridge_store_history_range_invalid"))?
+    {
+        return Err(StoreError::new("bridge_store_history_range_invalid"));
+    }
+    Ok(())
+}
+
+fn active_tail_refresh_overlaps_locked(
+    connection: &Connection,
+    scope: &HistoryScope,
+    range_start_utc_msc: i64,
+    range_end_utc_msc: i64,
+) -> Result<bool, StoreError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM history_sync_jobs
+               WHERE terminal_instance_id = ?1
+                 AND broker_server = ?2 COLLATE NOCASE
+                 AND login_account = ?3
+                 AND job_id LIKE 'tail_refresh_%'
+                 AND state IN ('queued', 'retrying', 'running')
+                 AND range_start_utc_msc < ?5
+                 AND range_end_utc_msc > ?4
+             );",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                range_start_utc_msc,
+                range_end_utc_msc,
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| value != 0)
+        .map_err(|_| StoreError::new("bridge_store_history_status_query_failed"))
+}
+
 fn normalize_history_job_kinds<K: AsRef<str>>(
     allowed_job_kinds: &[K],
 ) -> Result<Vec<String>, StoreError> {
@@ -8060,6 +8235,65 @@ pub fn parse_history_requested_range(
         range_start_utc_msc,
         range_end_utc_msc,
     }))
+}
+
+/// Parse the narrow exact-range contract accepted by
+/// `history_prepare_status_v1`.  The server resolves and authenticates the
+/// optional frozen metadata; native still rejects calendar/unbounded inputs so
+/// this action cannot accidentally become a broad history read.
+pub fn parse_history_prepare_status_request(
+    parameters: &serde_json::Value,
+    now_utc_msc: i64,
+) -> Result<HistoryRequestedRange, StoreError> {
+    if now_utc_msc <= 0 {
+        return Err(StoreError::new("history_range_now_invalid"));
+    }
+    let object = parameters
+        .as_object()
+        .ok_or_else(|| StoreError::new("history_prepare_status_params_invalid"))?;
+    const ALLOWED: &[&str] = &[
+        "range_start_utc_msc",
+        "range_end_utc_msc",
+        "allowed_start_utc_msc",
+        "system_start_utc_msc",
+        "effective_start_utc_msc",
+        "captured_end_utc_msc",
+    ];
+    if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+        return Err(StoreError::new("history_prepare_status_params_invalid"));
+    }
+    for field in ALLOWED {
+        if object
+            .get(*field)
+            .is_some_and(|value| value.as_i64().is_none_or(|number| number <= 0))
+        {
+            return Err(StoreError::new("history_prepare_status_params_invalid"));
+        }
+    }
+    let range_start_utc_msc = object
+        .get("range_start_utc_msc")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| StoreError::new("history_prepare_status_range_invalid"))?;
+    let range_end_utc_msc = object
+        .get("range_end_utc_msc")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| StoreError::new("history_prepare_status_range_invalid"))?;
+    let requested_range = HistoryRequestedRange {
+        range_start_utc_msc,
+        range_end_utc_msc,
+    };
+    validate_history_prepare_status_range(&requested_range, now_utc_msc)
+        .map_err(|_| StoreError::new("history_prepare_status_range_invalid"))?;
+    if object
+        .get("captured_end_utc_msc")
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|captured_end| {
+            captured_end < range_end_utc_msc || captured_end > now_utc_msc.saturating_add(60_000)
+        })
+    {
+        return Err(StoreError::new("history_prepare_status_range_invalid"));
+    }
+    Ok(requested_range)
 }
 
 fn parse_history_chart_request(
@@ -11936,6 +12170,47 @@ mod tests {
                 "invalid range accepted: {parameters}"
             );
         }
+    }
+
+    #[test]
+    fn history_prepare_status_parser_accepts_custom_captured_end_only_after_range_end() {
+        let now = 1_800_000_000_000_i64;
+        let start = now - 86_400_000;
+        let end = now - 1_000;
+        let parsed = parse_history_prepare_status_request(
+            &serde_json::json!({
+                "range_start_utc_msc": start,
+                "range_end_utc_msc": end,
+                "effective_start_utc_msc": start,
+                "captured_end_utc_msc": now,
+            }),
+            now,
+        )
+        .expect("custom captured range");
+        assert_eq!(parsed.range_start_utc_msc, start);
+        assert_eq!(parsed.range_end_utc_msc, end);
+        assert!(
+            parse_history_prepare_status_request(
+                &serde_json::json!({
+                    "range_start_utc_msc": start,
+                    "range_end_utc_msc": end,
+                    "captured_end_utc_msc": end - 1,
+                }),
+                now,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_history_prepare_status_request(
+                &serde_json::json!({
+                    "range_start_utc_msc": start,
+                    "range_end_utc_msc": end,
+                    "date_from": "2026-08-01",
+                }),
+                now,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -16150,6 +16425,21 @@ mod tests {
             .expect("first tail plan");
         assert_eq!(first.attached_jobs.len(), 1);
         assert!(first.attached_jobs[0].job_id.starts_with("tail_refresh_"));
+        let repeated = store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope: scope.clone(),
+                platform: "mt5".to_owned(),
+                range_start_utc_msc: floor + 1_000,
+                range_end_utc_msc: floor + 10_000,
+                now_utc_msc: floor + 11_000,
+            })
+            .expect("repeat tail plan");
+        assert_eq!(repeated.attached_jobs.len(), 1);
+        assert_eq!(
+            repeated.attached_jobs[0].job_id,
+            first.attached_jobs[0].job_id
+        );
+        assert_eq!(repeated.attached_jobs[0].range_end_utc_msc, floor + 10_000);
         let second = store
             .plan_history_tail_refresh(&HistoryTailRefreshRequest {
                 scope,
@@ -16174,6 +16464,109 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove tail planner fixture");
+    }
+
+    #[test]
+    fn running_tail_extension_does_not_complete_an_old_endpoint_batch() {
+        let root = unique_test_directory("history-tail-extension");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("tail extension store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let start = floor + 1_000;
+        let first_end = floor + 10_000;
+        let extended_end = floor + 20_000;
+        let first = store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope: scope.clone(),
+                platform: "mt5".to_owned(),
+                range_start_utc_msc: start,
+                range_end_utc_msc: first_end,
+                now_utc_msc: first_end,
+            })
+            .expect("initial tail plan");
+        let claim = store
+            .claim_history_job(&scope, first_end + 1_000, 100_000)
+            .expect("claim running tail")
+            .expect("running tail lease");
+        assert_eq!(claim.job_id, first.attached_jobs[0].job_id);
+        let extended = store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope: scope.clone(),
+                platform: "mt5".to_owned(),
+                range_start_utc_msc: start + 1_000,
+                range_end_utc_msc: extended_end,
+                now_utc_msc: first_end + 2_000,
+            })
+            .expect("extend running tail");
+        assert_eq!(extended.attached_jobs.len(), 1);
+        assert_eq!(extended.attached_jobs[0].job_id, claim.job_id);
+        assert_eq!(extended.attached_jobs[0].range_end_utc_msc, extended_end);
+
+        let old_endpoint = store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: first_end,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: first_end + 3_000,
+                },
+                5_000,
+                first_end + 3_000,
+            )
+            .expect("old endpoint checkpoint");
+        assert_eq!(old_endpoint.status, HistoryJobBatchStatus::Checkpointed);
+        assert_eq!(old_endpoint.job.state, "running");
+        assert_eq!(old_endpoint.job.range_end_utc_msc, extended_end);
+        assert_eq!(old_endpoint.job.cursor_time_msc, first_end);
+        assert_eq!(
+            store
+                .history_scope_state(&terminal)
+                .expect("checkpoint state")
+                .fresh_through_utc_msc,
+            None
+        );
+
+        let completed = store
+            .persist_history_job_batch(
+                &terminal,
+                &claim.job_id,
+                claim.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: extended_end,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: first_end + 4_000,
+                },
+                5_000,
+                first_end + 4_000,
+            )
+            .expect("extended endpoint completion");
+        assert_eq!(completed.status, HistoryJobBatchStatus::Completed);
+        assert_eq!(completed.job.state, "completed");
+        assert_eq!(
+            store
+                .history_scope_state(&terminal)
+                .expect("completed state")
+                .fresh_through_utc_msc,
+            Some(extended_end)
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove tail extension fixture");
     }
 
     #[test]
@@ -16371,6 +16764,192 @@ mod tests {
         assert_eq!(page["has_more"], false);
         drop(store);
         fs::remove_dir_all(root).expect("remove head cursor fixture");
+    }
+
+    #[test]
+    fn history_prepare_status_is_control_plane_only_and_preserves_archive_coverage() {
+        let root = unique_test_directory("history-prepare-status");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("prepare status store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let now = floor + 2 * HISTORY_HOUR_MSC + 5_000;
+        let archive_end = floor + 2 * HISTORY_HOUR_MSC;
+        {
+            let connection = store.connection.lock().expect("prepare status lock");
+            connection
+                .execute(
+                    "INSERT INTO history_coverage_ranges (
+                       terminal_instance_id, broker_server, login_account,
+                       range_start_utc_msc, range_end_utc_msc,
+                       observed_at_utc_msc, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        floor,
+                        archive_end,
+                        now,
+                    ],
+                )
+                .expect("seed archive coverage");
+        }
+        let requested = HistoryRequestedRange {
+            range_start_utc_msc: floor + 1_000,
+            range_end_utc_msc: now,
+        };
+        let before = store
+            .history_prepare_status(&terminal, &requested, now)
+            .expect("initial prepare status");
+        assert!(!before.requested_range_complete);
+        assert!(before.archive_complete);
+        assert!(!before.tail_refresh_pending);
+        assert_eq!(before.history_revision, 0);
+        assert_eq!(history_item_count(&store, &scope), 0);
+
+        let planned = store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope: scope.clone(),
+                platform: "mt5".to_owned(),
+                range_start_utc_msc: archive_end - 1_000,
+                range_end_utc_msc: now,
+                now_utc_msc: now,
+            })
+            .expect("plan prepare tail");
+        assert_eq!(planned.attached_jobs.len(), 1);
+        assert_eq!(planned.attached_jobs[0].priority, "p1");
+        let pending = store
+            .history_prepare_status(&terminal, &requested, now)
+            .expect("pending prepare status");
+        assert!(pending.archive_complete);
+        assert!(pending.tail_refresh_pending);
+        assert_eq!(pending.fresh_through_utc_msc, 0);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove prepare status fixture");
+    }
+
+    #[test]
+    fn history_prepare_status_for_covered_range_is_immediately_ready() {
+        let root = unique_test_directory("history-prepare-covered");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("covered prepare status store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let now = floor + HISTORY_HOUR_MSC;
+        {
+            let connection = store.connection.lock().expect("covered status lock");
+            connection
+                .execute(
+                    "INSERT INTO history_coverage_ranges (
+                       terminal_instance_id, broker_server, login_account,
+                       range_start_utc_msc, range_end_utc_msc,
+                       observed_at_utc_msc, updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6);",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        floor,
+                        now,
+                        now,
+                    ],
+                )
+                .expect("seed covered range");
+        }
+        let status = store
+            .history_prepare_status(
+                &terminal,
+                &HistoryRequestedRange {
+                    range_start_utc_msc: floor + 1_000,
+                    range_end_utc_msc: now - 1_000,
+                },
+                now,
+            )
+            .expect("covered prepare status");
+        assert!(status.requested_range_complete);
+        assert!(status.archive_complete);
+        assert!(!status.backfill_pending);
+        assert!(!status.tail_refresh_pending);
+        let mut mt4_terminal = terminal.clone();
+        mt4_terminal.platform = "mt4".to_owned();
+        let mt4_status = store
+            .history_prepare_status(
+                &mt4_terminal,
+                &HistoryRequestedRange {
+                    range_start_utc_msc: floor + 1_000,
+                    range_end_utc_msc: now - 1_000,
+                },
+                now,
+            )
+            .expect("MT4 conservative prepare status");
+        assert!(!mt4_status.requested_range_complete);
+        assert!(!mt4_status.archive_complete);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove covered prepare fixture");
+    }
+
+    #[test]
+    fn empty_tail_completion_advances_freshness_without_history_revision() {
+        let root = unique_test_directory("history-empty-tail-revision");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("empty tail store");
+        let scope = history_scope_for("123456");
+        let terminal = history_terminal_for(&scope);
+        let start = HISTORY_COVERAGE_START_UTC_MSC + 10_000;
+        let end = start + 20_000;
+        let planned = store
+            .plan_history_tail_refresh(&HistoryTailRefreshRequest {
+                scope: scope.clone(),
+                platform: "mt5".to_owned(),
+                range_start_utc_msc: start,
+                range_end_utc_msc: end,
+                now_utc_msc: end,
+            })
+            .expect("empty tail plan");
+        let job = planned.attached_jobs.first().expect("empty tail job");
+        let claimed = store
+            .claim_history_job(&scope, end + 1_000, 100_000)
+            .expect("empty tail claim")
+            .expect("empty tail lease");
+        assert_eq!(claimed.job_id, job.job_id);
+        let result = store
+            .persist_history_job_batch(
+                &terminal,
+                &claimed.job_id,
+                claimed.lease_generation,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: end,
+                        ticket: "0".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: end + 100,
+                },
+                end - start,
+                end + 200,
+            )
+            .expect("empty tail completion");
+        assert!(!result.history_changed);
+        assert_eq!(result.history_revision, 0);
+        let state = store
+            .history_scope_state(&terminal)
+            .expect("empty tail state");
+        assert_eq!(state.history_revision, 0);
+        assert_eq!(state.summary_revision, 0);
+        assert_eq!(state.fresh_through_utc_msc, Some(end));
+        assert!(
+            store
+                .is_history_range_covered(&scope, start, end)
+                .expect("empty tail coverage")
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove empty tail fixture");
     }
 
     #[test]
