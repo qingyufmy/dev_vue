@@ -1,0 +1,243 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const db = vi.hoisted(() => ({ queryAll:vi.fn(), queryOne:vi.fn() }))
+const bridge = vi.hoisted(() => ({ mt5Bridge:vi.fn() }))
+vi.mock('../../server/db.js', () => db)
+vi.mock('../../server/routes/ai/market-data.js', () => bridge)
+vi.mock('../../server/bridge-ws.js', () => ({
+  getBridgeRuntimeDiagnostics:() => ({ terminals:[{ terminal_instance_id:'terminal-1', broker_server:'Broker-Demo', login:'1001', platform:'mt5' }] }),
+  getHistoryTerminalClock:() => ({ timezone_offset_minutes:180, clock_status:'verified' }),
+  resolveHistoryRange:vi.fn(async () => ({ range_start_utc_msc:1, range_end_utc_msc:10_000 })),
+}))
+vi.mock('../../server/routes/ai/terminal-clock.js', () => ({ trustedTerminalClock:() => true }))
+vi.mock('../../server/routes/ai/review-market-path.js', () => ({ buildReviewMarketPath:vi.fn() }))
+
+import { listEligibleManualTrades } from '../../server/routes/ai/manual-trade-evidence.js'
+
+const accountRow = { id:5, user_id:7, broker_server:'Broker-Demo', login_account:'1001', observe_status:'active',
+  current_user_id:7, current_trading_account_id:5, account_currency:'USD' }
+
+const completeSync = { complete:true, requested_range_complete:true, coverage_complete:true,
+  clock_status:'verified', timezone_offset_minutes:180 }
+
+function emptyPage(cursor, { nextCursor = null, hasMore = false, sync = completeSync } = {}) {
+  return { status:'success', orders:[], deals:[], history_orders:[], history_snapshot_id:'snapshot-1',
+    next_cursor:nextCursor, has_more:hasMore, history_sync:{ ...sync }, cursor }
+}
+
+function validEvidencePage({ nextCursor = null, hasMore = false, symbol = 'EURUSD' } = {}) {
+  return { status:'success', deals:[
+    { deal_ticket:`d-${symbol}-1`, order_ticket:`o-${symbol}-1`, position_id:`p-${symbol}`, symbol,
+      type:'buy', entry_type:0, magic:0, reason:'client', volume:1, price:1.1, time_utc_msc:1_000 },
+    { deal_ticket:`d-${symbol}-2`, order_ticket:`o-${symbol}-2`, position_id:`p-${symbol}`, symbol,
+      type:'sell', entry_type:1, magic:0, reason:'client', volume:1, price:1.2, profit:10, time_utc_msc:2_000 },
+  ], history_orders:[
+    { order_ticket:`o-${symbol}-1`, position_id:`p-${symbol}`, symbol, magic:0, reason:'client', volume_initial:1, price_open:1.1 },
+    { order_ticket:`o-${symbol}-2`, position_id:`p-${symbol}`, symbol, magic:0, reason:'client', volume_initial:1, price_open:1.2 },
+  ], history_snapshot_id:'snapshot-1', next_cursor:nextCursor, has_more:hasMore, history_sync:{ ...completeSync } }
+}
+
+describe('manual trade review history cursor contract', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    db.queryOne.mockResolvedValue(accountRow)
+    db.queryAll.mockResolvedValue([])
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_page') return {
+        status:'success', orders:[{ order_ticket:'o1', position_id:'p1', symbol:'EURUSD', magic:0, reason:'client' }],
+        history_snapshot_id:'snapshot-1', next_cursor:'cursor-2', has_more:true,
+        history_sync:{ complete:true, requested_range_complete:true, coverage_complete:true, clock_status:'verified', timezone_offset_minutes:180 },
+      }
+      if (action === 'history_evidence') return {
+        status:'success', deals:[
+          { deal_ticket:'d1', order_ticket:'o1', position_id:'p1', symbol:'EURUSD', type:'buy', entry_type:0, magic:0, reason:'client', volume:1, price:1.1, time_utc_msc:1_000 },
+          { deal_ticket:'d2', order_ticket:'o2', position_id:'p1', symbol:'EURUSD', type:'sell', entry_type:1, magic:0, reason:'client', volume:1, price:1.2, profit:10, time_utc_msc:2_000 },
+        ],
+        history_orders:[
+          { order_ticket:'o1', position_id:'p1', symbol:'EURUSD', magic:0, reason:'client', volume_initial:1, price_open:1.1 },
+          { order_ticket:'o2', position_id:'p1', symbol:'EURUSD', magic:0, reason:'client', volume_initial:1, price_open:1.2 },
+        ], history_snapshot_id:'evidence-snapshot', next_cursor:'evidence-cursor', has_more:false,
+        history_sync:{ complete:true, requested_range_complete:true, coverage_complete:true, clock_status:'verified', timezone_offset_minutes:180 },
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+  })
+
+  it('enriches a compact cursor page by refs without page-number slicing or legacy history', async () => {
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result.unavailable).toBe(false)
+    expect(result.trades).toHaveLength(1)
+    expect(result.pagination).toMatchObject({ history_snapshot_id:'snapshot-1', next_cursor:'cursor-2', has_more:true })
+    const actions = bridge.mt5Bridge.mock.calls.map(([, action]) => action)
+    expect(actions).toEqual(['history_prepare_status_v1', 'history_page', 'history_evidence', 'positions'])
+    expect(bridge.mt5Bridge.mock.calls[2][2]).toMatchObject({ evidence_position_ids:['p1'], evidence_order_tickets:['o1'] })
+  })
+
+  it('refreshes the current seven-day SQLite snapshot without invoking legacy full history', async () => {
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20, force_refresh:'1' }, { nowUtcMsc:10_000 })
+    expect(result.unavailable).toBe(false)
+    expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual([
+      'history_prepare_status_v1', 'history_page', 'history_evidence', 'positions',
+    ])
+    expect(bridge.mt5Bridge.mock.calls.some(([, action]) => action === 'history')).toBe(false)
+  })
+
+  it('prepares the frozen recent range before reading its SQLite snapshot', async () => {
+    let prepareCalls = 0
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') {
+        prepareCalls += 1
+        return { status:'success', history_sync:{ requested_range_complete:prepareCalls > 1 } }
+      }
+      if (action === 'history_page') return validEvidencePage()
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result.unavailable).toBe(false)
+    expect(result.trades).toHaveLength(1)
+    expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual([
+      'history_prepare_status_v1', 'history_prepare_status_v1', 'history_page', 'positions',
+    ])
+  })
+
+  it('scans an empty source page and returns the first eligible trade from the same snapshot', async () => {
+    let sourcePage = 0
+    bridge.mt5Bridge.mockImplementation(async (_userId, action, request) => {
+      if (action === 'history_page') {
+        sourcePage += 1
+        if (sourcePage === 1) return emptyPage(null, { nextCursor:'cursor-2', hasMore:true })
+        return validEvidencePage({ nextCursor:'cursor-3', hasMore:true })
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result.trades).toHaveLength(1)
+    expect(result).toMatchObject({ scanned_source_pages:2, skipped_empty_source_pages:1,
+      next_cursor:'cursor-3', has_more:true, unavailable:false })
+    expect(result.pagination).toMatchObject({ scanned_source_pages:2, skipped_empty_source_pages:1,
+      next_cursor:'cursor-3', has_more:true })
+    expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'positions')).toHaveLength(1)
+    expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'history_page')[1][2]).toMatchObject({
+      history_snapshot_id:'snapshot-1', cursor:'cursor-2' })
+  })
+
+  it('keeps scanning consecutive empty pages until the cursor reaches the end', async () => {
+    let sourcePage = 0
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_page') {
+        sourcePage += 1
+        return sourcePage < 3
+          ? emptyPage(null, { nextCursor:`cursor-${sourcePage + 1}`, hasMore:true })
+          : emptyPage(null, { nextCursor:null, hasMore:false })
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ scanned_source_pages:3, skipped_empty_source_pages:3,
+      next_cursor:null, has_more:false, unavailable:false })
+    expect(result.pagination).toMatchObject({ scanned_source_pages:3, skipped_empty_source_pages:3,
+      next_cursor:null, has_more:false })
+  })
+
+  it('pauses after the bounded raw-page scan and leaves a continuation cursor', async () => {
+    let sourcePage = 0
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_page') {
+        sourcePage += 1
+        return emptyPage(null, { nextCursor:`cursor-${sourcePage + 1}`, hasMore:true })
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ scanned_source_pages:5, skipped_empty_source_pages:5,
+      next_cursor:'cursor-6', has_more:true, unavailable:false })
+    expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'history_page')).toHaveLength(5)
+  })
+
+  it('fails closed when Bridge repeats a continuation cursor', async () => {
+    let sourcePage = 0
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_page') {
+        sourcePage += 1
+        return emptyPage(null, { nextCursor:'cursor-2', hasMore:true })
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ unavailable:true, error:'manual_trade_review_history_cursor_repeated',
+      next_cursor:null, has_more:false, scanned_source_pages:2 })
+    expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'history_page')).toHaveLength(2)
+  })
+
+  it('does not scan when the source history is globally incomplete, including MT4 without source completeness proof', async () => {
+    let sourcePage = 0
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_page') {
+        sourcePage += 1
+        return emptyPage(null, { nextCursor:'cursor-2', hasMore:true,
+          sync:{ ...completeSync, platform:'mt4', history_source_complete:false } })
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ unavailable:true, error:'manual_trade_review_evidence_unavailable',
+      evidence_reason:'history_incomplete', next_cursor:null, has_more:false, scanned_source_pages:1 })
+    expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'history_page')).toHaveLength(1)
+  })
+
+  it('does not let evidence enrichment overwrite an MT4 source-completeness failure', async () => {
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_page') return {
+        status:'success', orders:[{ order_ticket:'o1', position_id:'p1', symbol:'EURUSD', magic:0, reason:'client' }],
+        history_snapshot_id:'snapshot-1', next_cursor:'cursor-2', has_more:true,
+        history_sync:{ ...completeSync, platform:'mt4', history_source_complete:false },
+      }
+      if (action === 'history_evidence') return {
+        ...validEvidencePage({ nextCursor:'cursor-3', hasMore:true }),
+        history_sync:{ ...completeSync, platform:'mt4', history_source_complete:true },
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ unavailable:true, error:'manual_trade_review_evidence_unavailable',
+      evidence_reason:'history_incomplete', next_cursor:null, has_more:false })
+    expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual([
+      'history_prepare_status_v1', 'history_page', 'history_evidence',
+    ])
+  })
+
+  it('applies user filters while scanning source pages and still fetches positions once', async () => {
+    let sourcePage = 0
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_page') {
+        sourcePage += 1
+        return sourcePage === 1
+          ? validEvidencePage({ nextCursor:'cursor-2', hasMore:true, symbol:'EURUSD' })
+          : validEvidencePage({ nextCursor:null, hasMore:false, symbol:'GBPUSD' })
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20, symbol:'GBPUSD' }, { nowUtcMsc:10_000 })
+    expect(result.trades).toHaveLength(1)
+    expect(result.trades[0].symbol).toBe('GBPUSD')
+    expect(result).toMatchObject({ scanned_source_pages:2, skipped_empty_source_pages:1, has_more:false })
+    expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'positions')).toHaveLength(1)
+  })
+})

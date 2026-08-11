@@ -5381,6 +5381,109 @@ const migrations = [
         KEY idx_notification_idempotency_campaign (campaign_id, operation)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '178_manual_trade_strategy_review',
+    async up() {
+      // Manual strategy review is an append-only evidence contract. It does
+      // not reuse trade_review_* rows, which are tied to AI signal outcomes.
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_cases (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        client_request_id VARCHAR(191) NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        strategy_id BIGINT UNSIGNED NOT NULL,
+        strategy_version INT NOT NULL,
+        strategy_scope VARCHAR(16) NOT NULL DEFAULT 'platform',
+        strategy_snapshot_json MEDIUMTEXT NOT NULL,
+        strategy_snapshot_hash CHAR(64) NOT NULL,
+        user_thesis_text TEXT DEFAULT NULL,
+        user_thesis_hash CHAR(64) DEFAULT NULL,
+        selection_hash CHAR(64) NOT NULL,
+        evidence_json MEDIUMTEXT DEFAULT NULL,
+        evidence_hash CHAR(64) DEFAULT NULL,
+        evidence_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        evidence_reason VARCHAR(128) DEFAULT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'evidence_pending',
+        current_version_id BIGINT UNSIGNED DEFAULT NULL,
+        approved_version_id BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_manual_review_client_request (user_id, client_request_id),
+        KEY idx_manual_review_owner_state (user_id, status, updated_at),
+        KEY idx_manual_review_account_created (trading_account_id, created_at),
+        KEY idx_manual_review_selection (selection_hash)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_sources (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        case_id BIGINT UNSIGNED NOT NULL,
+        source_identity_hash CHAR(64) NOT NULL,
+        trade_source_hash CHAR(64) NOT NULL,
+        trading_account_id INT NOT NULL,
+        terminal_instance_id VARCHAR(128) NOT NULL,
+        broker_server VARCHAR(100) NOT NULL,
+        login_account VARCHAR(50) NOT NULL,
+        position_id VARCHAR(64) DEFAULT NULL,
+        entry_order_ticket VARCHAR(64) DEFAULT NULL,
+        entry_time_utc_msc BIGINT DEFAULT NULL,
+        close_time_utc_msc BIGINT DEFAULT NULL,
+        symbol VARCHAR(64) DEFAULT NULL,
+        direction VARCHAR(8) DEFAULT NULL,
+        normalized_trade_json MEDIUMTEXT NOT NULL,
+        manual_classification_json TEXT NOT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_manual_review_source_identity (case_id, source_identity_hash),
+        KEY idx_manual_review_source_case (case_id, id),
+        KEY idx_manual_review_source_position (trading_account_id, position_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_versions (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        case_id BIGINT UNSIGNED NOT NULL,
+        version_no INT NOT NULL,
+        parent_version_id BIGINT UNSIGNED DEFAULT NULL,
+        author_type VARCHAR(16) NOT NULL,
+        author_user_id INT DEFAULT NULL,
+        content_json MEDIUMTEXT NOT NULL,
+        content_hash CHAR(64) NOT NULL,
+        change_note VARCHAR(500) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_manual_review_version (case_id, version_no),
+        KEY idx_manual_review_version_case (case_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_jobs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        case_id BIGINT UNSIGNED NOT NULL,
+        idempotency_key VARCHAR(191) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3,
+        lease_token CHAR(36) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        model_profile_id BIGINT UNSIGNED DEFAULT NULL,
+        credential_source VARCHAR(32) DEFAULT NULL,
+        model_task_id VARCHAR(128) DEFAULT NULL,
+        progress_stage VARCHAR(32) NOT NULL DEFAULT 'queued',
+        stage_updated_at DATETIME DEFAULT NULL,
+        last_error_code VARCHAR(128) DEFAULT NULL,
+        next_attempt_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_manual_review_job_key (idempotency_key),
+        UNIQUE KEY uk_manual_review_job_case (case_id),
+        KEY idx_manual_review_job_claim (status, lease_expires_at, next_attempt_at, updated_at),
+        KEY idx_manual_review_job_case (case_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      const sourceIndex = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'manual_trade_review_sources'
+          AND INDEX_NAME = 'idx_manual_review_source_account'`)
+      if (!sourceIndex.length) await queryRun(`ALTER TABLE manual_trade_review_sources
+        ADD KEY idx_manual_review_source_account (case_id, broker_server, login_account)`)
+    }
   }
 ]
 

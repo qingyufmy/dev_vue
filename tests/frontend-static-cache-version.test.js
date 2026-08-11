@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
-const CACHE_VERSION = '20260811frontend1'
+const CACHE_VERSION = '20260811frontend2'
 const FIRST_PARTY_ENTRY_FILES = [
   'public/index.html',
   'public/account/index.html',

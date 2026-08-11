@@ -1892,3 +1892,33 @@
 @media (max-width: 1023px) {
   body.ai-observer-mode .notification-banner { top: 176px; }
 }
+
+@media (max-width: 760px) {
+  .manual-review-heading,.manual-review-stage-heading { align-items: stretch; flex-direction: column; }
+  .manual-review-heading h2 { font-size: 21px; }
+  .manual-review-stepper { grid-template-columns: 1fr; gap: 6px; }
+  .manual-review-stepper li { grid-template-columns: auto minmax(0,1fr) auto; grid-template-rows: auto; min-height: 44px; }
+  .manual-review-stepper li > span { grid-row: auto; }
+  .manual-review-stepper small { text-align: right; }
+  .manual-review-filter-bar { align-items: stretch; }
+  .manual-review-filter-bar label,.manual-review-filter-bar label:first-child { flex: 1 1 100%; min-width: 0; }
+  .manual-review-filter-bar .btn { flex: 1 1 calc(50% - 5px); min-height: 44px; }
+  .manual-review-trade-row { grid-template-columns: auto minmax(0,1fr); min-height: 78px; padding: 11px 10px; }
+  .manual-review-trade-profit { grid-column: 2; min-width: 0; text-align: left; }
+  .manual-review-list-footer,.manual-review-action-row { align-items: stretch; flex-direction: column; }
+  .manual-review-list-footer > .btn,.manual-review-action-row > .btn { width: 100%; min-height: 44px; }
+  .manual-review-pager { justify-content: space-between; width: 100%; }
+  .manual-review-pager .pager-btn { min-width: 96px; min-height: 44px; }
+  .manual-review-selection-summary { grid-template-columns: 1fr; }
+  .manual-review-result-actions { width: 100%; }
+  .manual-review-result-actions .btn { flex: 1; min-height: 44px; }
+  .manual-review-result-layout { grid-template-columns: 1fr; }
+  .manual-review-history-list { max-height: 290px; }
+  .manual-review-detail { padding: 13px; }
+  .manual-review-detail-header { flex-direction: column; }
+  .manual-review-conclusion-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .manual-review-detail-actions { align-items: stretch; flex-direction: column; }
+  .manual-review-detail-actions .status-chip { margin-left: 0; }
+  .manual-review-detail-actions .btn { width: 100%; min-height: 44px; }
+  .manual-review-editor-actions .btn { width: 100%; min-height: 44px; }
+}

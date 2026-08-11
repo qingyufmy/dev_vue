@@ -69,6 +69,7 @@ async function runHistoryCursorScenario() {
     const requests = []
     let _historyCache = null
     let _historyChartCache = null
+    let _historyQueryState = null
     let _historyCursorState = {
       key:null, snapshotId:null, rangeStart:null, rangeEnd:null,
       pageCursors:new Map([[1, null]]),
@@ -213,7 +214,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
     expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
     expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
-    expect(html).toContain('/ai/app.js?v=20260811frontend1&build=signalbandwidth1-notifications1')
+    expect(html).toContain('/ai/app.js?v=20260811frontend2&build=signalbandwidth1-notifications1')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {

@@ -117,7 +117,7 @@ function loadHistoryQuerySingleReadHarness() {
   `)()
 }
 
-function loadHistoryLegacyFallbackHarness(result) {
+function loadHistoryLegacyFallbackHarness(result, options = {}) {
   const start = app.indexOf('async function runHistoryLegacyFallback')
   const end = app.indexOf('async function runHistoryQuery', start)
   expect(start).toBeGreaterThanOrEqual(0)
@@ -126,13 +126,16 @@ function loadHistoryLegacyFallbackHarness(result) {
     const state = { historyQueryGeneration:1 }
     let _historyQueryGeneration = 1
     const statuses = []
+    let legacyOptions = null
     const query = { generation:1, accountKey:'account', status:'preparing_time', fullReadCount:0 }
+    function normalizeBridgePlatform(value) { return String(value || '').trim().toLowerCase() === 'mt4' ? 'mt4' : 'mt5' }
     function historyQueryIsCurrent() { return true }
     function renderHistorySyncStatus(message, options) { statuses.push({ message, options }) }
-    async function loadHistoryViewsLegacy() { return ${JSON.stringify(result)} }
+    async function loadHistoryViewsLegacy(options) { legacyOptions = options; return ${JSON.stringify(result)} }
     ${app.slice(start, end)}
-    return runHistoryLegacyFallback(query).then(data => ({
+    return runHistoryLegacyFallback(query, ${JSON.stringify(options)}).then(data => ({
       data,
+      legacyOptions,
       status:query.status,
       fullReadCount:query.fullReadCount,
       message:statuses[statuses.length - 1]?.message || '',
@@ -185,6 +188,48 @@ function loadCursorResetHarness() {
   `)()
 }
 
+function loadHistoryLegacySummaryRetryHarness({ platform = 'mt4', responses = [] } = {}) {
+  const start = app.indexOf('function cancelHistoryLegacySummaryRetry')
+  const end = app.indexOf('function historySyncMetadata', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`
+    const state = { bridgePlatform:${JSON.stringify(platform)} }
+    let _historyLegacySummaryRetry = null
+    const timers = []
+    const calls = []
+    const statuses = []
+    const pending = ${JSON.stringify(responses)}.slice()
+    const HISTORY_LEGACY_SUMMARY_RETRY_DELAYS_MS = [2000, 5000, 10000, 20000, 30000, 60000, 90000]
+    const HISTORY_LEGACY_SUMMARY_RETRY_MAX_ATTEMPTS = HISTORY_LEGACY_SUMMARY_RETRY_DELAYS_MS.length
+    const query = { generation:1, accountKey:'account', includeAccount:false, status:'unavailable' }
+    function normalizeBridgePlatform(value) { return String(value || '').trim().toLowerCase() === 'mt4' ? 'mt4' : 'mt5' }
+    function historyQueryIsCurrent() { return true }
+    function historyStableAccountKey() { return 'account' }
+    function activeTabId() { return 'history' }
+    function renderHistorySyncStatus(message, options) { statuses.push({ message, options }) }
+    function toast() {}
+    function setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length }
+    function clearTimeout() {}
+    function loadHistoryViews(options) {
+      calls.push(options)
+      return Promise.resolve(pending.shift() || {})
+    }
+    ${app.slice(start, end)}
+    return (async () => {
+      scheduleHistoryLegacySummaryRetry(query)
+      const delays = []
+      while (timers.length) {
+        const timer = timers.shift()
+        delays.push(timer.delay)
+        await timer.callback()
+        if (!pending.length && !_historyLegacySummaryRetry) break
+      }
+      return { delays, calls, statuses, queryStatus:query.status, retryActive:Boolean(_historyLegacySummaryRetry) }
+    })()
+  `)()
+}
+
 describe('history scope frontend contract', () => {
   it('restores foreground timers without referencing table-only request state', () => {
     const visibilityStart = app.indexOf('document.addEventListener("visibilitychange"')
@@ -202,6 +247,25 @@ describe('history scope frontend contract', () => {
       meta:{ allowedStartDate:'2000-01-01', systemStartDate:'2024-01-01', actualEndDate:'2026-08-11' },
     })
     expect(params).toEqual({ history_scope:'platform' })
+  })
+
+  it('does not resend the confirmed all-history floor when an older preference exists', () => {
+    const params = loadRangeParamsHarness({
+      mode:'all',
+      from:'2000-01-01',
+      meta:{ allowedStartDate:'2000-01-01', systemStartDate:'2000-01-01', actualEndDate:'2026-08-11' },
+      starts:{ all:'2020-01-01' },
+    })
+    expect(params).toEqual({ history_scope:'all' })
+  })
+
+  it('does not convert the all-history allowed floor into a timezone-sensitive override', () => {
+    const params = loadRangeParamsHarness({
+      mode:'all',
+      from:'2000-01-01',
+      meta:{ allowedStartDate:'2000-01-01', systemStartDate:'', actualEndDate:'2026-08-11' },
+    })
+    expect(params).toEqual({ history_scope:'all' })
   })
 
   it('sends an early platform start only after the server has established the allowed floor', () => {
@@ -258,6 +322,12 @@ describe('history scope frontend contract', () => {
     expect(load).toContain('history_snapshot_id:_historyCursorState.snapshotId')
     expect(load).toContain('range_start_utc_msc:_historyCursorState.rangeStart')
     expect(load).toContain('range_end_utc_msc:_historyCursorState.rangeEnd')
+    expect(load).toContain('_historyQueryState?.legacyFallback === true')
+    expect(load).toContain('filters.page === 1')
+    expect(load).not.toContain('&& !_historyQueryState.frozenRange')
+    expect(load).toContain('const legacyFrozenRange = historyPrepareRangeFromResponse(data)')
+    expect(load).toContain('_historyQueryState.frozenRange = legacyFrozenRange')
+    expect(app).toContain('captured_end_utc_msc:Number(range.captured_end_utc_msc)')
   })
 
   it('starts table filter and chart drilldown requests with a new snapshot but preserves the scope endpoint', () => {
@@ -379,6 +449,23 @@ describe('history scope frontend contract', () => {
     expect(app).toContain('Preserve server-provided allowed/system/effective ends')
   })
 
+  it('preserves the server-confirmed start override on opaque cursor continuations', () => {
+    const range = loadPreparedRange({
+      history_range:{
+        scope:'platform',
+        range_start_utc_msc:1000,
+        range_end_utc_msc:3000,
+        captured_end_utc_msc:3000,
+        allowed_start_utc_msc:500,
+        system_start_utc_msc:2000,
+        effective_start_utc_msc:1000,
+        scope_start_override:'2026-07-27',
+      },
+    })
+    expect(range).toMatchObject({ scope_start_override:'2026-07-27' })
+    expect(app).toContain('{ scope_start_override:String(range.scope_start_override) }')
+  })
+
   it('never retries a second full history package after a ready-read range race', async () => {
     const result = await loadHistoryQuerySingleReadHarness()
     expect(result).toMatchObject({
@@ -404,6 +491,66 @@ describe('history scope frontend contract', () => {
     expect(result.message).toContain('范围统计仍在准备中')
   })
 
+  it('reads the local MT4 archive for entry and range changes but preserves explicit refresh', async () => {
+    const enter = await loadHistoryLegacyFallbackHarness({ historyPending:false, summaryPending:false })
+    expect(enter.legacyOptions).toMatchObject({ forceRefresh:false, manualRefresh:false })
+
+    const refresh = await loadHistoryLegacyFallbackHarness(
+      { historyPending:false, summaryPending:false },
+      { forceRefresh:true, manualRefresh:true },
+    )
+    expect(refresh.legacyOptions).toMatchObject({ forceRefresh:true, manualRefresh:true })
+  })
+
+  it('auto-retries only the MT4 legacy summary on a bounded backoff', async () => {
+    const result = await loadHistoryLegacySummaryRetryHarness({
+      platform:'mt4',
+      responses:[{ historyPending:false, summaryPending:true }, { historyPending:false, summaryPending:false }],
+    })
+    expect(result.delays).toEqual([2000, 5000])
+    expect(result.calls).toHaveLength(2)
+    expect(result.calls[0]).toMatchObject({ forceRefresh:false, historyRetryAttempt:true, skipPrepare:true })
+    expect(result.calls[0]).not.toHaveProperty('manualRefresh', true)
+    expect(result.queryStatus).toBe('ready')
+    expect(result.retryActive).toBe(false)
+    expect(result.statuses.at(-1).message).toContain('范围统计已完成')
+    expect(app).toContain('HISTORY_LEGACY_SUMMARY_RETRY_MAX_ATTEMPTS = HISTORY_LEGACY_SUMMARY_RETRY_DELAYS_MS.length')
+    expect(app).toContain('[2000, 5000, 10000, 20000, 30000, 60000, 90000]')
+  })
+
+  it('does not schedule the legacy summary retry for MT5', async () => {
+    const result = await loadHistoryLegacySummaryRetryHarness({
+      platform:'mt5',
+      responses:[{ historyPending:false, summaryPending:true }],
+    })
+    expect(result.delays).toEqual([])
+    expect(result.calls).toEqual([])
+    expect(result.retryActive).toBe(false)
+  })
+
+  it('does not treat an empty or stale retry response as success', async () => {
+    const result = await loadHistoryLegacySummaryRetryHarness({
+      platform:'mt4',
+      responses:[null, { historyPending:false, summaryPending:false, historyStale:true }, { historyPending:false, summaryPending:false, historyStale:false }],
+    })
+    expect(result.delays).toEqual([2000, 5000, 10000])
+    expect(result.calls).toHaveLength(3)
+    expect(result.queryStatus).toBe('ready')
+    expect(result.retryActive).toBe(false)
+  })
+
+  it('stops after seven pending legacy summary attempts', async () => {
+    const result = await loadHistoryLegacySummaryRetryHarness({
+      platform:'mt4',
+      responses:Array.from({ length:7 }, () => ({ historyPending:false, summaryPending:true })),
+    })
+    expect(result.delays).toEqual([2000, 5000, 10000, 20000, 30000, 60000, 90000])
+    expect(result.calls).toHaveLength(7)
+    expect(result.queryStatus).toBe('unavailable')
+    expect(result.retryActive).toBe(false)
+    expect(result.statuses.at(-1).message).toContain('准备时间较长')
+  })
+
   it('advances generations only for explicit history operations and invalidates stale responses', () => {
     expect(app).toContain('historyQueryGeneration: 0')
     expect(app).toContain('history_query_generation:Number(state.historyQueryGeneration || 0)')
@@ -417,6 +564,12 @@ describe('history scope frontend contract', () => {
 
   it('does not reuse a snapshot on page one and keeps ticket maps out of status checks', () => {
     expect(app).toContain('filters.page > 1 && _historyCursorState.snapshotId')
+    const pagerStart = app.indexOf('if (pagerButton && !pagerButton.disabled)')
+    const pagerEnd = app.indexOf('if (actionButton)', pagerStart)
+    const pager = app.slice(pagerStart, pagerEnd)
+    expect(pager).toContain('page === 1 && previousPage > 1')
+    expect(pager).toContain('_historyCursorState.snapshotId = null')
+    expect(pager).toContain('_historyCursorState.pageCursors = new Map([[1, null]])')
     const prepareStart = app.indexOf('async function runHistoryPrepare')
     const prepareEnd = app.indexOf('async function runHistoryLegacyFallback', prepareStart)
     const prepare = app.slice(prepareStart, prepareEnd)
