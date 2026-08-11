@@ -15,7 +15,7 @@ from typing import Any, BinaryIO
 from trade import Mt5TradeExecutor
 
 IPC_VERSION = 2
-WORKER_VERSION = "3.0.1"
+WORKER_VERSION = "3.0.2"
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_SNAPSHOT_ITEMS = 10_000
 MAX_HISTORY_BATCH_ITEMS = 250

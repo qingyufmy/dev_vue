@@ -1,9 +1,9 @@
 #property strict
-#property version   "3.00"
+#property version   "3.02"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.0.0"
+#define ADAPTER_VERSION "3.0.2"
 #define MAX_HISTORY_WINDOW_MSC 1576800000000
 #define QUERY_COMMENT_MAX_ROWS 500
 #define QUERY_COMMENT_LOOKBACK_MSC 2592000000
@@ -1086,9 +1086,30 @@ void SendPerformanceDailyResult(const string request_id, const int status,
 string BuildSelectedHistoryDealJson(const long event_utc_msc, const long server_offset_msc)
   {
    int order_type = OrderType();
-   string category = (order_type == OP_BUY || order_type == OP_SELL)
+   bool is_trade = order_type == OP_BUY || order_type == OP_SELL;
+   string category = is_trade
       ? "trade" : (order_type == 6 ? "balance" : (order_type == 7 ? "credit" : "account_event"));
    string side = order_type == OP_BUY ? "buy" : (order_type == OP_SELL ? "sell" : "none");
+   string trade_time_evidence = "";
+   if(is_trade)
+     {
+      // MT4 exposes history timestamps in the terminal server timezone.  A
+      // trade's immutable close-time evidence must use the selected order's
+      // own open/close timestamps plus the offset already validated from a
+      // fresh tick; never infer it from the generic cursor time_msc.
+      long entry_server_msc = ((long)OrderOpenTime()) * 1000;
+      long close_server_msc = ((long)OrderCloseTime()) * 1000;
+      long entry_utc_msc = entry_server_msc - server_offset_msc;
+      long close_utc_msc = close_server_msc - server_offset_msc;
+      int close_offset_minutes = (int)(server_offset_msc / 60000);
+      trade_time_evidence = "\"entry_time_server_msc\":" + JsonLong(entry_server_msc) + ","
+         + "\"entry_time_utc_msc\":" + JsonLong(entry_utc_msc) + ","
+         + "\"close_time_utc_msc\":" + JsonLong(close_utc_msc) + ","
+         + "\"close_time_server_msc\":" + JsonLong(close_server_msc) + ","
+         + "\"close_timezone_offset_minutes\":" + IntegerToString(close_offset_minutes) + ","
+         + "\"close_business_date\":\"" + ServerDateText(OrderCloseTime()) + "\","
+         + "\"close_deal_ticket\":" + IntegerToString(OrderTicket()) + ",";
+     }
    return("{"
       + "\"ticket\":\"" + IntegerToString(OrderTicket()) + "\","
       + "\"deal_ticket\":\"" + IntegerToString(OrderTicket()) + "\","
@@ -1098,6 +1119,7 @@ string BuildSelectedHistoryDealJson(const long event_utc_msc, const long server_
       + "\"time_msc\":" + JsonLong(event_utc_msc) + ","
       + "\"time_utc_msc\":" + JsonLong(event_utc_msc) + ","
       + "\"time_server_msc\":" + JsonLong(event_utc_msc + server_offset_msc) + ","
+      + trade_time_evidence
       + "\"type\":" + IntegerToString(order_type) + ","
       + "\"category\":\"" + category + "\","
       + "\"side\":\"" + side + "\","

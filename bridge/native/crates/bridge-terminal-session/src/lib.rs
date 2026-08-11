@@ -2917,10 +2917,12 @@ mod tests {
                                 "order_ticket": "77",
                                 "position_id": "77",
                                 "time_msc": 1_785_333_000_000_i64,
+                                "entry_time_utc_msc": 1_785_332_000_000_i64,
                                 "close_time_utc_msc": 1_785_333_000_000_i64,
                                 "close_time_server_msc": 1_785_333_000_000_i64,
                                 "close_timezone_offset_minutes": 0,
                                 "close_business_date": "2026-07-29",
+                                "close_deal_ticket": "77",
                                 "side": "buy",
                                 "symbol": "XAUUSD",
                                 "volume": 0.01,
@@ -3094,6 +3096,11 @@ mod tests {
         assert_eq!(history["orders"].as_array().expect("orders").len(), 1);
         assert_eq!(history["deals"].as_array().expect("deals").len(), 1);
         assert_eq!(history["orders"][0]["net_profit"], 0.9);
+        assert_eq!(
+            history["orders"][0]["entry_time_utc_msc"],
+            1_785_332_000_000_i64
+        );
+        assert_eq!(history["orders"][0]["close_deal_ticket"], "77");
 
         manager.stop().await.expect("stop MT4 manager");
         ea.await.expect("EA task");
