@@ -904,8 +904,8 @@
             </div>
             <div class="history-scope-bar">
               <label class="filter-field"><span class="filter-label">统计范围</span><select id="historyRangeMode" class="filter-select">
-                <option value="all" selected>全部可用历史（2025年起）</option>
-                <option value="platform">平台接入后</option>
+                <option value="all">全部可用历史（2025年起）</option>
+                <option value="platform" selected>平台接入后</option>
                 <option value="custom">自定义日期</option>
               </select></label>
               <div class="history-range-dates hidden" id="historyRangeDates">
@@ -914,7 +914,7 @@
                 <input type="date" id="historyRangeTo" class="filter-date" disabled aria-label="历史结束日期">
               </div>
               <button class="btn-filter-action" id="historyRangeApply" type="button"><i data-lucide="filter" size="12"></i>应用</button>
-              <span id="historyRangeHint" class="field-help">默认显示交易账户自 2025 年 1 月 1 日起的可同步历史；首次打开会异步准备，完成后自动刷新。</span>
+              <span id="historyRangeHint" class="field-help">从当前平台账号注册时间与 2025 年 1 月 1 日两者中较晚的时间开始异步准备，完成后自动刷新。</span>
             </div>
             <div class="history-chart-wrap">
               <div class="chart-top-bar">

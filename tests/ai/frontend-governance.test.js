@@ -483,8 +483,10 @@ describe('AI governance navigation and DOM contract', () => {
 
   it('uses an explicit shared history scope and keeps the platform start server-owned', () => {
     expect(html).toContain('id="historyRangeMode"')
-    expect(html).toContain('<option value="all" selected>全部可用历史（2025年起）</option>')
-    expect(html).toContain('<option value="platform">平台接入后</option>')
+    expect(html).toContain('<option value="all">全部可用历史（2025年起）</option>')
+    expect(html).not.toContain('<option value="all" selected>')
+    expect(html).toContain('<option value="platform" selected>平台接入后</option>')
+    expect(html).toContain('<span id="historyRangeHint" class="field-help">从当前平台账号注册时间与 2025 年 1 月 1 日两者中较晚的时间开始异步准备，完成后自动刷新。</span>')
     expect(html).toContain('<option value="custom">自定义日期</option>')
     expect(html).not.toContain('<option value="recent"')
     expect(html).not.toContain('<option value="ownership"')
