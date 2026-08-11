@@ -1,12 +1,12 @@
-import { episodes as staticEpisodes, categories } from './data/episodes.js?v=20260714i'
+import { episodes as staticEpisodes, categories } from './data/episodes.js?v=20260811frontend1'
 import { loadSiteUpdates } from './data/updates.js'
 import { api } from './lib/api.js'
-import { createCourseContent } from './lib/course-content.js?v=20260723attachments1'
-import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js?v=20260714f'
-import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260714f'
-import { getCourseProgramByView } from './data/course-programs.js?v=20260714h'
-import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260714h'
-import { getCoursePage } from './lib/course-catalog.js?v=20260803stream1'
+import { createCourseContent } from './lib/course-content.js?v=20260811frontend1'
+import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js?v=20260811frontend1'
+import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260811frontend1'
+import { getCourseProgramByView } from './data/course-programs.js?v=20260811frontend1'
+import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260811frontend1'
+import { getCoursePage } from './lib/course-catalog.js?v=20260811frontend1'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
 
