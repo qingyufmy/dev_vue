@@ -43,6 +43,31 @@ describe('shared market inference boundary', () => {
 })
 
 describe('inference snapshot evidence', () => {
+  it('freezes the Chan v6 policy, capabilities and continuity metadata', () => {
+    const result = prepareInferenceSnapshot({
+      systemPrompt:'system', userPrompt:'payload',
+      marketSnapshot:{ strategy_context:{ timeframes:{ M5:{ summary:{ chan:{
+        algorithm_version:'chan_structure_v6', history_sufficient:true,
+        closed_history_sufficient:true, cache_internal_gap_unresolved:false,
+        evidence_capabilities:{ data_complete:true, segment_direction_usable:true,
+          center_structure_usable:false, entry_structure_usable:false, divergence_usable:false,
+          reason_codes:['no_confirmed_center'] },
+        continuity_calendar_version:'xauusd-fixed-holiday-v1',
+        expected_closures:[{ classification:'holiday_closure', reason:'christmas_closure' }],
+      } } } } } },
+    })
+    expect(result.marketSnapshot.strategy_context.timeframes.M5.summary.chan).toMatchObject({
+      window_policy_version:'chan_window_v6', maximum_history_count:800,
+      validation_window_counts:[600, 700, 800],
+      evidence_capabilities:{ data_complete:true, center_structure_usable:false },
+      continuity:{
+        calendar_version:'xauusd-fixed-holiday-v1',
+        expected_closures:[expect.objectContaining({ classification:'holiday_closure' })],
+        cache_internal_gap_unresolved:false,
+      },
+    })
+  })
+
   it('compresses large K-line JSON and reads both compressed and legacy rows', () => {
     const value = { M5: Array.from({ length: 500 }, (_, index) => ({ time:index, open:4000, high:4002, low:3998, close:4001 })) }
     const encoded = encodeSnapshotJson(value)

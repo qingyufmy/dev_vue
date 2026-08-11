@@ -2,7 +2,8 @@
 
 import { queryOne, queryAll, queryRun, beijingNow, withTransaction } from '../../db.js'
 import { isTradeEnabled, sendToBrowsers } from '../../bridge-ws.js'
-import { STRATEGY_TIMEFRAME_COUNTS, CHAN_HISTORY_COUNT, CHAN_MAX_HISTORY_COUNT, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds, stripBrokerSuffix } from './utils.js'
+import { STRATEGY_TIMEFRAME_COUNTS, attachSignalTiming, parseTimeframeTags, compactRates, signalTtlSeconds, stripBrokerSuffix } from './utils.js'
+import { getChanWindowPolicy, CHAN_WINDOW_POLICY_VERSION } from './chan-window-policy.js'
 import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
@@ -29,8 +30,6 @@ import { modelTaskDeadlines } from './model-task-budget.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
-const CHAN_HISTORY_HINT_LIMIT = 512
-const _chanMaxHistoryHints = new Map()
 const TIMEFRAME_MINUTES = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440, W1: 10080 }
 const HISTORY_COMPARE_MIN_CONTEXT = 20
 const HISTORY_COMPARE_MAX_STEPS = 30
@@ -279,8 +278,12 @@ function compareVisibleRates(rates, decisionUtcMs, timeframe, count, includeChan
     const openUtcMs = compareRateUtcMs(rate)
     return openUtcMs != null && openUtcMs + durationMs <= decisionUtcMs
   })
-  const requested = Math.max(Number(count) || 100, includeChan ? CHAN_HISTORY_COUNT : 0)
-  return closed.slice(-Math.min(requested, CHAN_MAX_HISTORY_COUNT))
+  const policy = includeChan ? getChanWindowPolicy(timeframe) : null
+  const requested = Math.max(Number(count) || 100, policy?.target || 0)
+  // Historical comparison is frozen to the same period-specific Chan target
+  // used by live inference.  A strategy indicator may carry more history, but
+  // it must not make Chan reintroduce the old 2000-bar window.
+  return closed.slice(-requested)
 }
 
 function buildHistoryCompareSteps(klineCount, requestedSampleSize) {
@@ -399,27 +402,13 @@ async function loadHistorySymbolSnapshot(userId, symbol) {
   return { ...legacy, instrument:instrument || null, compatibility_fallback:true }
 }
 
-function rememberChanMaxHistory(key) {
-  _chanMaxHistoryHints.delete(key)
-  _chanMaxHistoryHints.set(key, true)
-  if (_chanMaxHistoryHints.size > CHAN_HISTORY_HINT_LIMIT) {
-    _chanMaxHistoryHints.delete(_chanMaxHistoryHints.keys().next().value)
-  }
-}
-
-function clearChanHistoryHints() {
-  _chanMaxHistoryHints.clear()
-}
-
-function chanHistoryHintKey(userId, symbol, timeframe) {
-  return `${userId}:${String(symbol).toUpperCase()}:${String(timeframe).toUpperCase()}`
-}
+// Kept as a no-op test/reset hook for callers that used to clear the removed
+// process-level sticky expansion map.
+function clearChanHistoryHints() {}
 
 export function resolveChanHistoryCount(userId, symbol, timeframe, requestedCount, useChan) {
   if (!useChan) return requestedCount
-  const preferred = _chanMaxHistoryHints.has(chanHistoryHintKey(userId, symbol, timeframe))
-    ? CHAN_MAX_HISTORY_COUNT
-    : CHAN_HISTORY_COUNT
+  const preferred = getChanWindowPolicy(timeframe).target
   return Math.max(requestedCount, preferred)
 }
 
@@ -429,23 +418,23 @@ export function chanNeedsMoreHistory(chan) {
   const trustedAnchorMatched = anchor.matched === true
     && Number(anchor.requested_time_utc_msc) > 0
   if (trustedAnchorMatched) return false
-  const sourceHistoryCount = Number(chan.source_history_count || chan.received_history_count || 0)
-  const centerEntryMissing = !chan.latest_center?.entry_segment_stable_id
-    || !(Number(chan.latest_center?.entry_segment_id) > 0)
-  const recommendedAnchorMissing = !(Number(anchor.recommended_time_utc_msc) > 0)
-  return sourceHistoryCount < CHAN_MAX_HISTORY_COUNT
-    || Number(chan.segment_count) === 0
-    || Number(chan.center_count) === 0
-    || centerEntryMissing
-    || recommendedAnchorMissing
+  // A missing center/entry/anchor is a structure state, not proof that more
+  // historical candles are needed.  v6 reaches its fixed target once and
+  // fails the relevant capability closed when evidence is unavailable.
+  return chan.history_sufficient === false || chan.closed_history_sufficient === false
 }
 
 export function shouldPersistChanAnchor(useChan, chan, chanDataQuality) {
   const anchor = chan?.structure_anchor || {}
+  const minimumHistory = Number(chan?.maximum_history_count) > 0
+    ? Number(chan.maximum_history_count)
+    : String(chan?.window_policy_version || '') === CHAN_WINDOW_POLICY_VERSION
+      ? getChanWindowPolicy(chan?.timeframe).target
+      : Number(chan?.source_history_count) || 0
   const structureTimeKeyReliable = chan?.structure_time_key_reliable === true
     || (chan?.structure_time_key_reliable == null && chan?.time_location_reliable === true)
   return Boolean(useChan && chan?.window_stable === true && Number(chan?.segment_count) >= 2
-    && Number(chan?.source_history_count) >= CHAN_MAX_HISTORY_COUNT
+    && Number(chan?.source_history_count) >= minimumHistory
     && chan?.history_sufficient === true
     && chan?.closed_history_sufficient === true
     && structureTimeKeyReliable
@@ -474,7 +463,12 @@ export function buildChanTimeframeAlignment(timeframes, primaryTimeframe, contex
     .map(([timeframe, value]) => ({ timeframe, chan: value?.summary?.chan }))
     .filter(item => item.chan?.trend_state && item.chan.trend_state.state !== 'unavailable')
     .sort((a, b) => (TIMEFRAME_MINUTES[b.timeframe] || 0) - (TIMEFRAME_MINUTES[a.timeframe] || 0))
-  const reliableFrames = frames.filter(item => item.chan.reliability !== 'low')
+  const reliableFrames = frames.filter(item => {
+    const capabilities = item.chan.evidence_capabilities
+    return capabilities
+      ? capabilities.segment_direction_usable === true
+      : item.chan.reliability !== 'low'
+  })
   const higher = reliableFrames[0] || frames[0] || null
   const directional = reliableFrames.filter(item => ['up', 'down'].includes(item.chan.trend_state?.direction))
   const directions = new Set(directional.map(item => item.chan.trend_state.direction))
@@ -489,7 +483,8 @@ export function buildChanTimeframeAlignment(timeframes, primaryTimeframe, contex
     direction = directional[0].chan.trend_state.direction
   }
   const higherDirection = reliableFrames.length > 0 ? higher?.chan?.trend_state?.direction || 'neutral' : 'neutral'
-  const candidates = frames.flatMap(frame => (frame.chan.entry_candidates || []).map(candidate => {
+  const candidates = frames.flatMap(frame => (frame.chan.evidence_capabilities?.entry_structure_usable === false
+    ? [] : (frame.chan.entry_candidates || [])).filter(candidate => candidate.usable_for_entry === true).map(candidate => {
     const candidateDirection = candidate.side === 'buy' ? 'up' : 'down'
     return {
       timeframe: frame.timeframe,
@@ -510,6 +505,8 @@ export function buildChanTimeframeAlignment(timeframes, primaryTimeframe, contex
     conflict: agreement === 'mixed',
     usable_timeframes: reliableFrames.map(item => item.timeframe),
     excluded_low_reliability_timeframes: frames.filter(item => item.chan.reliability === 'low').map(item => item.timeframe),
+    excluded_unusable_timeframes: frames.filter(item => item.chan.evidence_capabilities
+      && item.chan.evidence_capabilities.segment_direction_usable !== true).map(item => item.timeframe),
     frames: frames.map(item => ({
       timeframe: item.timeframe,
       reliability: item.chan.reliability,
@@ -576,7 +573,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   const policyIndicatorSources = {}
   const missingTimeframes = []
   for (const { tf, count } of tags) {
-    const historyHintKey = chanHistoryHintKey(userId, symbol, tf)
+    const chanPolicy = useChan ? getChanWindowPolicy(tf) : null
     const indicatorHistoryCount = Math.max(0, ...(compiledPolicy?.indicators || [])
       .filter(definition => definition.enabled && definition.source?.timeframe === tf)
       .map(indicatorRequiredHistory))
@@ -596,42 +593,32 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     let summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
       computeChan: useChan,
       chanRates: rates,
-      requestedChanHistoryCount: historyCount,
+      requestedChanHistoryCount: chanPolicy?.target || historyCount,
+      chanMaximumHistoryCount: chanPolicy?.target,
+      chanValidationWindowCounts: chanPolicy?.validators,
+      chanWindowPolicyVersion: chanPolicy?.windowPolicyVersion || CHAN_WINDOW_POLICY_VERSION,
       chanDataQuality,
     })
-    const needsMoreChanHistory = chanNeedsMoreHistory(summary.chan)
-    if (useChan && historyCount < CHAN_MAX_HISTORY_COUNT && (rates.length < historyCount || needsMoreChanHistory)) {
-      rememberChanMaxHistory(historyHintKey)
-      if (rates.length < CHAN_MAX_HISTORY_COUNT) {
-        const retry = await platformRates(userId, { symbol, timeframe: tf, count: CHAN_MAX_HISTORY_COUNT })
-        const retryRates = retry?.rates || []
-        if (retryRates.length > rates.length) {
-          rates = retryRates
-          chanDataQuality = retry?.market_meta || chanDataQuality
-          visibleRates = rates.slice(-count)
-          summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
-            computeChan: true,
-            chanRates: rates,
-            requestedChanHistoryCount: CHAN_MAX_HISTORY_COUNT,
-            chanDataQuality,
-          })
-        }
-      }
-    }
     if (shouldPersistChanAnchor(useChan, summary.chan, chanDataQuality)) {
       await saveChanStructureAnchor(chanDataQuality.source_id, symbol, tf, summary.chan.structure_anchor).catch(error => {
         console.warn(`[Chan] Failed to persist structure anchor for ${symbol} ${tf}: ${error.message}`)
       })
     }
     const { account: _acct, positions: _pos, symbol: _sym, timeframe: _tf, timestamp: _ts, ...slimSummary } = summary
-    timeframes[tf] = { summary: slimSummary, klines: compactRates(visibleRates) }
+    timeframes[tf] = {
+      summary: slimSummary,
+      klines: compactRates(visibleRates),
+      ...(useChan && chanPolicy?.supported === false
+        ? { chan_policy: { status:'unsupported', reason:chanPolicy.reason, timeframe:tf } }
+        : {}),
+    }
     policyIndicatorSources[tf] = {
       bars:compactRates(rates),
       lastBarClosed:typeof chanDataQuality?.last_bar_closed === 'boolean' ? chanDataQuality.last_bar_closed : null,
       internalGapUnresolved:chanDataQuality?.internal_gap_unresolved === true,
       marketSource:chanDataQuality?.source || chanDataQuality?.source_type || null,
     }
-    if (useChan) visualizationKlines[tf] = compactRates(rates)
+    if (useChan) visualizationKlines[tf] = compactRates(chanPolicy ? rates.slice(-chanPolicy.target) : rates)
   }
   const context = {
     strategy_sequence: tags.map(t => `${t.tf}(${t.count})`).join(' → '),
@@ -1768,7 +1755,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   let historyWindows = []
   try {
     historyWindows = dataSource === 'historical' ? await Promise.all(planItems.map(async item => {
-      const itemWarmupMs = TIMEFRAME_MINUTES[item.timeframe] * item.kline_count * 2 * 60_000
+      const chanPolicy = policy.useChanAnalysis ? getChanWindowPolicy(item.timeframe) : null
+      const warmupCount = Math.max(item.kline_count, chanPolicy?.target || 0)
+      const itemWarmupMs = TIMEFRAME_MINUTES[item.timeframe] * warmupCount * 2 * 60_000
       return {
         ...item,
         window:await loadPeriodMarketWindow(
@@ -1986,7 +1975,10 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       const summary = calculateMarketData(symbol, item.timeframe, visibleContextRates, null, [], {
         computeChan: policy.useChanAnalysis,
         chanRates: contextRates,
-        requestedChanHistoryCount: contextRates.length,
+        requestedChanHistoryCount:policy.useChanAnalysis ? getChanWindowPolicy(item.timeframe).target : contextRates.length,
+        chanMaximumHistoryCount:policy.useChanAnalysis ? getChanWindowPolicy(item.timeframe).target : null,
+        chanValidationWindowCounts:policy.useChanAnalysis ? getChanWindowPolicy(item.timeframe).validators : null,
+        chanWindowPolicyVersion:policy.useChanAnalysis ? CHAN_WINDOW_POLICY_VERSION : null,
         chanDataQuality: historicalDataQuality,
       })
       const { account: _account, positions: _positions, symbol: _symbol, timeframe: _timeframe, timestamp: _timestamp, ...slimSummary } = summary
@@ -2010,7 +2002,10 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     market = calculateMarketData(symbol, requestedTimeframe, primaryRates.slice(-selectedWindow.kline_count), null, [], {
       computeChan: policy.useChanAnalysis,
       chanRates: primaryRates,
-      requestedChanHistoryCount: primaryRates.length,
+      requestedChanHistoryCount:policy.useChanAnalysis ? getChanWindowPolicy(requestedTimeframe).target : primaryRates.length,
+      chanMaximumHistoryCount:policy.useChanAnalysis ? getChanWindowPolicy(requestedTimeframe).target : null,
+      chanValidationWindowCounts:policy.useChanAnalysis ? getChanWindowPolicy(requestedTimeframe).validators : null,
+      chanWindowPolicyVersion:policy.useChanAnalysis ? CHAN_WINDOW_POLICY_VERSION : null,
       chanDataQuality: primaryHistoricalDataQuality,
     })
     market.strategy_context = {

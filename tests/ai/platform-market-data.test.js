@@ -77,6 +77,22 @@ describe('platform market data', () => {
     })
   })
 
+  it('classifies only verified metal holiday windows and keeps other symbols suspicious', () => {
+    const beforeUtc = Date.parse('2025-12-24T17:00:00Z')
+    const afterUtc = Date.parse('2025-12-25T21:00:00Z')
+    const rows = [
+      { ...rate(0, 2000), time:'2025-12-24 17:00:00', time_utc_msc:beforeUtc },
+      { ...rate(1, 2001), time:'2025-12-25 21:00:00', time_utc_msc:afterUtc },
+    ]
+    expect(inspectRateContinuity(rows, 'H4', { standardSymbol:'XAUUSD' })).toMatchObject({
+      status:'ok',
+      expected_closures:[expect.objectContaining({ classification:'holiday_closure', reason:'christmas_closure' })],
+    })
+    expect(inspectRateContinuity(rows, 'H4', { standardSymbol:'EURUSD' })).toMatchObject({
+      status:'suspicious_gap', suspicious_gaps:[expect.objectContaining({ missing_bar_count:6 })],
+    })
+  })
+
   it('reports duplicate candle open times instead of silently deduplicating them', () => {
     const duplicate = { ...rate(0, 2001), close:2001 }
     const integrity = inspectRateContinuity([rate(0, 2000), duplicate, rate(1, 2002)], 'M1')
@@ -86,14 +102,14 @@ describe('platform market data', () => {
     })
   })
 
-  it('keeps a 2000-bar live Chan bootstrap request intact', async () => {
-    const key = buildRatesRequestKey(7, 1, { symbol:'XAUUSD', timeframe:'M15', count:2000 })
-    expect(key).toContain(':live:current:2000')
+  it('keeps the fixed M15 Chan bootstrap request intact', async () => {
+    const key = buildRatesRequestKey(7, 1, { symbol:'XAUUSD', timeframe:'M15', count:1000 })
+    expect(key).toContain(':live:current:1000')
     mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', rates:[rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
 
-    await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M15', count:2000 })
+    await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M15', count:1000 })
 
-    expect(mt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ count:2001 }), expect.any(Object))
+    expect(mt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ count:1001 }), expect.any(Object))
   })
 
   it('uses the default observer source for a supported browser symbol', async () => {
@@ -344,7 +360,7 @@ describe('platform market data', () => {
       chan_last_confirmed_segment_utc_msc:1784192400000,
     })
     expect(db.queryOne).toHaveBeenCalledWith(expect.stringContaining('algorithm_version = ?'), [
-      10, 'XAUUSD', 'M1', 'chan_structure_v5',
+      10, 'XAUUSD', 'M1', 'chan_structure_v6',
     ])
   })
 
@@ -371,7 +387,7 @@ describe('platform market data', () => {
       chan_last_confirmed_segment_utc_msc:1784192400000,
     })
     expect(db.queryOne).toHaveBeenCalledWith(expect.stringContaining('algorithm_version = ?'), [
-      10, 'XAUUSD', 'M1', 'chan_structure_v5',
+      10, 'XAUUSD', 'M1', 'chan_structure_v6',
     ])
   })
 
@@ -653,7 +669,7 @@ describe('platform market data', () => {
       7, 'Demo', '123456', 'mt5|demo|123456', 180, 'verified', 15,
     ])
     expect(db.queryOne).toHaveBeenCalledWith(expect.stringContaining('algorithm_version = ?'), [
-      17, 'XAUUSD', 'M5', 'chan_structure_v5',
+      17, 'XAUUSD', 'M5', 'chan_structure_v6',
     ])
     expect(result.market_meta).toMatchObject({
       source:'user_bridge_fallback', source_user_id:7, source_id:17,
@@ -721,7 +737,7 @@ describe('platform market data', () => {
       bootstrap_observation_time_utc_msc:1784190300000,
     })).resolves.toBe(true)
     expect(db.queryRun).toHaveBeenCalledWith(expect.stringContaining('algorithm_version = VALUES(algorithm_version)'), [
-      9, 'XAUUSD', 'M5', 'chan_structure_v5', 1784185500000, 1784190000000,
+      9, 'XAUUSD', 'M5', 'chan_structure_v6', 1784185500000, 1784190000000,
       'core-b', 'entry-b', 1784190300000,
     ])
     const anchorWriteSql = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO chan_structure_anchors'))?.[0]

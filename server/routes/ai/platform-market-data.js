@@ -4,6 +4,7 @@ import { getActivePlatformBridgeUserId, getBridgeDataRoute, getPlatformMarketClo
 import { mt5Bridge } from './market-data.js'
 import { CHAN_ALGORITHM_VERSION, stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 import { getDefaultObserverSource, observerSourceSupportsSymbol } from './observer-channels.js'
+import { classifyMarketClosure, MARKET_SESSION_CALENDAR_VERSION } from './market-session-calendar.js'
 
 const CACHE_LIMIT = 2000
 const CACHE_TTL_SECONDS = 24 * 60 * 60
@@ -212,7 +213,7 @@ function crossesWeekendUtc(startUtcMs, endUtcMs) {
   return false
 }
 
-export function inspectRateContinuity(rates, timeframe) {
+export function inspectRateContinuity(rates, timeframe, options = {}) {
   const intervalMs = timeframeIntervalMs(timeframe)
   const normalized = (Array.isArray(rates) ? rates : [])
     .map(rate => validRate(rate, 0))
@@ -247,14 +248,24 @@ export function inspectRateContinuity(rates, timeframe) {
     // may be missing data and must fail Chan reliability closed.
     const scheduledDailyClosure = crossesBrokerDate
       && gapMs >= 30 * 60 * 1000 && gapMs <= MAX_EXPECTED_DAILY_CLOSURE_MS
-    const expectedClosure = scheduledDailyClosure || crossesWeekendUtc(previousUtcMs, currentUtcMs)
+    const calendarClosure = classifyMarketClosure(previousUtcMs, currentUtcMs, timeframe, {
+      intervalMs,
+      standardSymbol:options.standardSymbol || options.symbol || '',
+    })
+    const expectedClosure = Boolean(calendarClosure) || scheduledDailyClosure || crossesWeekendUtc(previousUtcMs, currentUtcMs)
     const detail = {
       from_utc_msc: previousUtcMs,
       to_utc_msc: currentUtcMs,
       gap_ms: gapMs,
       missing_bar_count: Math.max(1, Math.round(gapMs / intervalMs) - 1),
     }
-    if (expectedClosure) expectedClosures.push(detail)
+    if (expectedClosure) expectedClosures.push({
+      ...detail,
+      classification:calendarClosure?.classification
+        || (crossesWeekendUtc(previousUtcMs, currentUtcMs) ? 'weekend_closure' : 'scheduled_daily_closure'),
+      reason:calendarClosure?.reason || (scheduledDailyClosure ? 'daily_rollover' : 'weekend'),
+      calendar_version:calendarClosure?.calendar_version || MARKET_SESSION_CALENDAR_VERSION,
+    })
     else suspicious.push(detail)
   }
   return {
@@ -445,7 +456,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         const sourceId = ensured.sourceId
         const written = await writeClosedWindowBestEffort(sourceId, brokerSymbol, timeframe, closedRates)
         const writeFailures = [...ensured.failures, ...written.failures]
-        const rangeIntegrity = inspectRateContinuity(closedRates, timeframe)
+        const rangeIntegrity = inspectRateContinuity(closedRates, timeframe, { standardSymbol:stripBrokerSuffix(symbol) })
         const rangeGapUnresolved = rangeIntegrity.status === 'suspicious_gap'
         return { ...response, rates:closedRates, market_meta:{
           source:'platform_admin_bridge_range', source_user_id:platformUserId, source_id:sourceId,
@@ -460,6 +471,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_internal_gap_detected:rangeGapUnresolved,
           cache_internal_gap_unresolved:rangeGapUnresolved,
           cache_internal_gap_details:rangeGapUnresolved ? rangeIntegrity.suspicious_gaps.slice(0, 3) : [],
+          continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
+          expected_closures:rangeIntegrity.expected_closures.slice(0, 8),
           range_start_utc_msc:rangeStartUtcMs, range_end_utc_msc:rangeEndUtcMs,
         } }
       }
@@ -487,7 +500,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
       }
       let closedRates = split.closedRates
-      const cachedIntegrity = inspectRateContinuity(cachedResult.rates, timeframe)
+      const cachedIntegrity = inspectRateContinuity(cachedResult.rates, timeframe, { standardSymbol })
       const effectiveIdentity = sourceIdentity(platformUserId, effectiveClock)
       let sourceIdentityChanged = Boolean(source.id && source.sourceKey && source.sourceKey !== effectiveIdentity.sourceKey)
       const boundaryGapDetected = probeOnly && !ratesJoinAtCacheBoundary(cachedResult.rates, closedRates)
@@ -513,7 +526,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         }
         closedRates = split.closedRates
       }
-      const freshIntegrity = inspectRateContinuity(closedRates, timeframe)
+      const freshIntegrity = inspectRateContinuity(closedRates, timeframe, { standardSymbol })
       const internalGapDetected = (!sourceIdentityChanged && cachedIntegrity.status === 'suspicious_gap') || freshIntegrity.status === 'suspicious_gap'
       const cachedGapStillStored = !windowRefillNeeded && cachedIntegrity.status === 'suspicious_gap'
       const internalGapUnresolved = freshIntegrity.status === 'suspicious_gap' || cachedGapStillStored
@@ -552,6 +565,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_internal_gap_refill_attempted: internalGapRefillAttempted,
           cache_internal_gap_unresolved: internalGapUnresolved,
           cache_internal_gap_details: internalGapUnresolved ? unresolvedGapDetails.slice(0, 3) : [],
+          continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
+          expected_closures:freshIntegrity.expected_closures.slice(0, 8),
           last_bar_closed: split.lastBarClosed,
           live_candle_cached: false,
           chan_structure_anchor_utc_msc:Number(effectiveStructureAnchor?.anchor_time_utc_msc) || null,
@@ -603,7 +618,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   const initialFallbackIdentity = sourceIdentity(requestUserId, effectiveFallbackClock)
   let fallbackIdentityChanged = Boolean(existingFallbackSource.id && existingFallbackSource.sourceKey
     && existingFallbackSource.sourceKey !== initialFallbackIdentity.sourceKey)
-  const fallbackCachedIntegrity = inspectRateContinuity(fallbackCached.rates, timeframe)
+  const fallbackCachedIntegrity = inspectRateContinuity(fallbackCached.rates, timeframe, { standardSymbol:fallbackStandardSymbol })
   const fallbackBoundaryGap = fallbackProbeOnly && !ratesJoinAtCacheBoundary(fallbackCached.rates, fallbackSplit.closedRates)
   const fallbackInternalRefill = fallbackProbeOnly && shouldAttemptInternalGapRefill(
     existingFallbackSource.id, fallbackStandardSymbol, timeframe, fallbackCachedIntegrity)
@@ -623,7 +638,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     fallbackOffset = effectiveFallbackClock.timezone_offset_minutes ?? null
     fallbackSplit = splitRatesByClosure(fallback.rates, timeframe, fallbackOffset)
   }
-  const fallbackIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe)
+  const fallbackIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe, { standardSymbol:fallbackStandardSymbol })
   const fallbackCachedGapStillStored = !fallbackReviewRange && !fallbackRefillNeeded
     && fallbackCachedIntegrity.status === 'suspicious_gap'
   const fallbackGapUnresolved = fallbackIntegrity.status === 'suspicious_gap' || fallbackCachedGapStillStored
@@ -663,6 +678,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       || fallbackIntegrity.status === 'suspicious_gap',
     cache_internal_gap_unresolved:fallbackGapUnresolved,
     cache_internal_gap_details:fallbackGapUnresolved ? fallbackGapDetails.slice(0, 3) : [],
+    continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
+    expected_closures:fallbackIntegrity.expected_closures.slice(0, 8),
     chan_structure_anchor_utc_msc:Number(fallbackStructureAnchor?.anchor_time_utc_msc) || null,
     chan_last_confirmed_segment_utc_msc:Number(fallbackStructureAnchor?.last_confirmed_segment_time_utc_msc) || null,
     chan_structure_anchor_core_stable_id:fallbackStructureAnchor?.bootstrap_core_stable_id || null,

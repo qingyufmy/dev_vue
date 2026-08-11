@@ -1,7 +1,8 @@
 import crypto from 'crypto'
 import { gzipSync, gunzipSync } from 'node:zlib'
 import { beijingNow, queryOne } from '../../db.js'
-import { stripBrokerSuffix } from './utils.js'
+import { stripBrokerSuffix, CHAN_ALGORITHM_VERSION } from './utils.js'
+import { getChanWindowPolicy, CHAN_WINDOW_POLICY_VERSION } from './chan-window-policy.js'
 
 export const MAX_INFERENCE_SNAPSHOT_BYTES = 512 * 1024
 const SECRET_KEY = /(api[_-]?key|authorization|credential|password|secret|token)/i
@@ -48,6 +49,43 @@ function stripAccountPrivateData(value) {
     out[key] = stripAccountPrivateData(item)
   }
   return out
+}
+
+function freezeChanPolicyEvidence(marketSnapshot) {
+  if (!marketSnapshot || typeof marketSnapshot !== 'object') return marketSnapshot
+  const context = marketSnapshot.strategy_context
+  const frames = context?.timeframes
+  if (!frames || typeof frames !== 'object') return marketSnapshot
+  for (const [rawTimeframe, frame] of Object.entries(frames)) {
+    const chan = frame?.summary?.chan
+    if (!chan || typeof chan !== 'object') continue
+    const timeframe = String(rawTimeframe || '').toUpperCase()
+    const policy = (String(chan.window_policy_version || '') === CHAN_WINDOW_POLICY_VERSION
+      || String(chan.algorithm_version || '') === CHAN_ALGORITHM_VERSION)
+      ? getChanWindowPolicy(timeframe) : null
+    if (policy) {
+      chan.window_policy_version = policy.windowPolicyVersion
+      chan.maximum_history_count = Number(chan.maximum_history_count) || policy.target
+      chan.validation_window_counts = Array.isArray(chan.validation_window_counts)
+        ? [...chan.validation_window_counts] : [...policy.validators]
+    }
+    chan.evidence_capabilities = chan.evidence_capabilities && typeof chan.evidence_capabilities === 'object'
+      ? { ...chan.evidence_capabilities }
+      : {
+          data_complete:chan.history_sufficient === true && chan.cache_internal_gap_unresolved !== true,
+          segment_direction_usable:false,
+          center_structure_usable:false,
+          entry_structure_usable:false,
+          divergence_usable:false,
+          reason_codes:['legacy_capabilities_unavailable'],
+        }
+    chan.continuity = {
+      calendar_version:chan.continuity_calendar_version || null,
+      expected_closures:Array.isArray(chan.expected_closures) ? chan.expected_closures.slice(0, 8) : [],
+      cache_internal_gap_unresolved:chan.cache_internal_gap_unresolved === true,
+    }
+  }
+  return marketSnapshot
 }
 
 export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, volumeMax, volumeStep = 0.01, marketSource = 'platform_market_bridge' } = {}) {
@@ -203,7 +241,7 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
   } : null
   const full = sanitizeInferenceEvidence({
     system_prompt: input.systemPrompt || '', user_prompt: input.userPrompt || '',
-    market_snapshot: input.marketSnapshot || {}, klines: input.klines || extractKlines(input.marketSnapshot),
+    market_snapshot: freezeChanPolicyEvidence(structuredClone(input.marketSnapshot || {})), klines: input.klines || extractKlines(input.marketSnapshot),
     strategy_runtime:strategyRuntime,
   })
   const contentHash = sha256(JSON.stringify(full))

@@ -3,6 +3,7 @@
 import { beijingNow } from '../../db.js'
 import { sendBridgeCommand } from '../../bridge-ws.js'
 import { CHAN_ALGORITHM_VERSION, round2, round3, round5, clamp, compactRates } from './utils.js'
+import { resolveChanWindowPolicy } from './chan-window-policy.js'
 
 export function computeAtr14(rates) {
   if (!Array.isArray(rates) || rates.length < 2) return 0
@@ -30,7 +31,6 @@ const DIVERGENCE_MIN_AREA_RATIO = 0.85
 const DIVERGENCE_MIN_PEAK_RATIO = 0.95
 const MACD_WARMUP_BARS = 40
 const CHAN_ENTRY_MAX_AGE_BARS = 20
-const CHAN_BOOTSTRAP_MAX_BARS = 2000
 // Four center segments, two resynchronization segments and MACD warm-up need
 // about 130 bars at the theoretical minimum. Keep a conservative 150-bar
 // prefix before center evidence so boundary-truncated windows do not vote.
@@ -1266,10 +1266,63 @@ function emptyDivergence(reason = 'structure_unavailable') {
   return divergenceResult(reason)
 }
 
+function buildChanEvidenceCapabilities(result, overrides = {}) {
+  const timeEvidenceComplete = result?.structure_time_key_reliable !== false
+    && result?.time_location_reliable !== false
+  const dataComplete = overrides.data_complete ?? (
+    result?.history_sufficient === true
+      && result?.closed_history_sufficient === true
+      && result?.cache_internal_gap_unresolved !== true
+      && timeEvidenceComplete
+  )
+  const segmentDirection = overrides.segment_direction_usable ?? (
+    dataComplete
+      && result?.window_stable === true
+      && result?.authoritative_terminal_chain_confirmed === true
+      && Number(result?.segment_count) > 0
+      && ['up', 'down'].includes(result?.trend_state?.direction)
+  )
+  const centerStructure = overrides.center_structure_usable ?? (
+    segmentDirection
+      && Number(result?.center_count) > 0
+      && result?.structure_topology_reliable === true
+  )
+  const entryStructure = overrides.entry_structure_usable ?? (
+    centerStructure
+      && result?.structure_anchor?.current_result_usable === true
+      && Boolean(result?.latest_center?.entry_segment_stable_id)
+      && Number(result?.latest_center?.entry_segment_id) > 0
+  )
+  const divergence = overrides.divergence_usable ?? (
+    entryStructure && Number(result?.closed_bar_count) >= MACD_WARMUP_BARS
+  )
+  const reasonCodes = new Set(Array.isArray(overrides.reason_codes) ? overrides.reason_codes : [])
+  if (!dataComplete) reasonCodes.add(result?.cache_internal_gap_unresolved === true
+    ? 'cache_internal_gap_unresolved' : 'data_incomplete')
+  if (!segmentDirection) reasonCodes.add('segment_direction_unusable')
+  if (!centerStructure) reasonCodes.add(Number(result?.center_count) > 0
+    ? 'center_structure_unusable' : 'no_confirmed_center')
+  if (!entryStructure) reasonCodes.add('entry_structure_unusable')
+  if (!divergence) reasonCodes.add('divergence_unusable')
+  return {
+    data_complete: Boolean(dataComplete),
+    segment_direction_usable: Boolean(segmentDirection),
+    center_structure_usable: Boolean(centerStructure),
+    entry_structure_usable: Boolean(entryStructure),
+    divergence_usable: Boolean(divergence),
+    reason_codes: [...reasonCodes],
+  }
+}
+
+function withChanEvidenceCapabilities(result, overrides = {}) {
+  return { ...result, evidence_capabilities: buildChanEvidenceCapabilities(result, overrides) }
+}
+
 function emptyChanResult(overrides = {}) {
   return {
     algorithm_version: CHAN_ALGORITHM_VERSION,
     rule_profile: CHAN_RULE_PROFILE,
+    timeframe: overrides.timeframe || null,
     center_level: 'segment',
     status: 'insufficient_klines',
     reliability: 'low',
@@ -1286,6 +1339,8 @@ function emptyChanResult(overrides = {}) {
     structure_topology_reliable: false,
     cache_gap_refilled: false,
     cache_internal_gap_unresolved: false,
+    continuity_calendar_version: null,
+    expected_closures: [],
     window_resynced: false,
     window_stable: false,
     segment_support_count: 0,
@@ -1346,6 +1401,14 @@ function emptyChanResult(overrides = {}) {
     recent_divergences: [],
     trend_state: emptyTrendState(),
     entry_candidates: [],
+    evidence_capabilities: {
+      data_complete: false,
+      segment_direction_usable: false,
+      center_structure_usable: false,
+      entry_structure_usable: false,
+      divergence_usable: false,
+      reason_codes: ['data_incomplete'],
+    },
     warnings: [],
     ...overrides,
   }
@@ -1414,6 +1477,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   if (closedRates.length < MIN_KLINES_FOR_CHAN) {
     return emptyChanResult({
       status: 'insufficient_klines',
+      timeframe,
       requested_history_count: requestedHistoryCount,
       received_history_count: rates?.length || 0,
       history_sufficient: historySufficient,
@@ -1426,6 +1490,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       structure_time_key_basis: structureTimeKeyBasis,
       cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
       cache_internal_gap_unresolved: cacheInternalGapUnresolved,
+      continuity_calendar_version: dataQuality?.continuity_calendar_version || null,
+      expected_closures: Array.isArray(dataQuality?.expected_closures) ? dataQuality.expected_closures.slice(0, 8) : [],
       window_start_time_utc_msc: windowStartTimeUtcMs,
       window_end_time_utc_msc: windowEndTimeUtcMs,
       raw_bar_count: rates?.length || 0,
@@ -1447,8 +1513,9 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   if (activeConfirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
     const lastBi = activeConfirmedBis.at(-1) || null
-    return emptyChanResult({
+    const insufficientResult = emptyChanResult({
       status: 'insufficient_bis',
+      timeframe,
       requested_history_count: requestedHistoryCount,
       received_history_count: rates.length,
       history_sufficient: historySufficient,
@@ -1461,6 +1528,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       structure_time_key_basis: structureTimeKeyBasis,
       cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
       cache_internal_gap_unresolved: cacheInternalGapUnresolved,
+      continuity_calendar_version: dataQuality?.continuity_calendar_version || null,
+      expected_closures: Array.isArray(dataQuality?.expected_closures) ? dataQuality.expected_closures.slice(0, 8) : [],
       window_start_time_utc_msc: windowStartTimeUtcMs,
       window_end_time_utc_msc: windowEndTimeUtcMs,
       raw_bar_count: rates.length,
@@ -1480,6 +1549,11 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       divergence: emptyDivergence('insufficient_bis'),
       warnings,
     })
+    // A complete fixed window remains complete data even when the price
+    // stream has not produced enough confirmed bis for higher structures.
+    // Keep structural capability failures separate from data completeness.
+    insufficientResult.evidence_capabilities = buildChanEvidenceCapabilities(insufficientResult)
+    return insufficientResult
   }
   const trustedStructureAnchor = options.trustedStructureAnchor && typeof options.trustedStructureAnchor === 'object'
     ? options.trustedStructureAnchor : {}
@@ -1643,6 +1717,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   const result = {
     algorithm_version: CHAN_ALGORITHM_VERSION,
     rule_profile: CHAN_RULE_PROFILE,
+    timeframe,
     center_level: 'segment',
     status, reliability,
     requested_history_count: requestedHistoryCount,
@@ -1660,6 +1735,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       && validSegs.length >= 2 && centers.length > 0),
     cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
     cache_internal_gap_unresolved: cacheInternalGapUnresolved,
+    continuity_calendar_version: dataQuality?.continuity_calendar_version || null,
+    expected_closures: Array.isArray(dataQuality?.expected_closures) ? dataQuality.expected_closures.slice(0, 8) : [],
     window_resynced: windowResynced,
     window_stable: windowStable,
     segment_support_count: segmentSupportCount,
@@ -1728,6 +1805,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     entry_candidates: entryCandidates,
     warnings,
   }
+  result.evidence_capabilities = buildChanEvidenceCapabilities(result)
   Object.defineProperty(result, '_confirmed_segments', {
     value:confirmedSegmentSummaries,
     enumerable:false,
@@ -2649,6 +2727,17 @@ function suppressUnconfirmedWindowStructure(primary) {
     recent_divergences: [],
     trend_state: emptyTrendState('segment_cross_window_unstable'),
     entry_candidates: [],
+    evidence_capabilities: {
+      data_complete: primary?.evidence_capabilities?.data_complete === true,
+      segment_direction_usable: false,
+      center_structure_usable: false,
+      entry_structure_usable: false,
+      divergence_usable: false,
+      reason_codes: [...new Set([
+        ...(primary?.evidence_capabilities?.reason_codes || []),
+        'fixed_window_not_converged',
+      ])],
+    },
     warnings,
   }
 }
@@ -2661,6 +2750,10 @@ function protectBootstrapDependentEvidence(selected, usable, reliability) {
       recent_divergences:selected.recent_divergences,
       trend_state:selected.trend_state,
       entry_candidates:selected.entry_candidates,
+      evidence_capabilities:buildChanEvidenceCapabilities(selected, {
+        entry_structure_usable:selected.evidence_capabilities?.entry_structure_usable,
+        divergence_usable:selected.evidence_capabilities?.divergence_usable,
+      }),
     }
   }
   const divergence = emptyDivergence('structure_anchor_bootstrap_pending')
@@ -2673,6 +2766,11 @@ function protectBootstrapDependentEvidence(selected, usable, reliability) {
       [selected?.latest_center].filter(Boolean),
       Number(selected?.latest_price), divergence, reliability),
     entry_candidates:[],
+    evidence_capabilities:buildChanEvidenceCapabilities(selected, {
+      entry_structure_usable:false,
+      divergence_usable:false,
+      reason_codes:['structure_anchor_bootstrap_pending'],
+    }),
   }
 }
 
@@ -2708,6 +2806,11 @@ function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationW
     confirmed_structure_age_semantics:'diagnostic_only_no_expiry',
     authoritative_terminal_chain_confirmed:false,
     ...protectedEvidence,
+    evidence_capabilities:buildChanEvidenceCapabilities(primary, {
+      entry_structure_usable:false,
+      divergence_usable:false,
+      reason_codes:['structure_anchor_bootstrap_pending'],
+    }),
     structure_anchor:{
       ...(primary.structure_anchor || {}),
       matched:false,
@@ -2733,18 +2836,83 @@ function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationW
 
 function computeChan(rates, timeframe, macdHist, options = {}) {
   const sourceHistoryCount = Array.isArray(rates) ? rates.length : 0
-  const calculationRates = sourceHistoryCount > CHAN_BOOTSTRAP_MAX_BARS
-    ? rates.slice(-CHAN_BOOTSTRAP_MAX_BARS) : rates
+  const policy = resolveChanWindowPolicy(timeframe, options)
+  if (policy.supported === false && !options.windowPolicy) {
+    return emptyChanResult({
+      timeframe,
+      algorithm_version: 'chan_structure_v5',
+      status: 'unsupported_policy',
+      warnings: ['chan_window_policy_unsupported_timeframe'],
+      source_history_count: sourceHistoryCount,
+      received_history_count: sourceHistoryCount,
+      raw_bar_count: sourceHistoryCount,
+      latest_price: Number.isFinite(Number(rates?.at?.(-1)?.close)) ? round5(Number(rates.at(-1).close)) : null,
+      evidence_capabilities: {
+        data_complete: false,
+        segment_direction_usable: false,
+        center_structure_usable: false,
+        entry_structure_usable: false,
+        divergence_usable: false,
+        reason_codes: ['unsupported_timeframe_policy'],
+      },
+    })
+  }
+  const maximumHistoryCount = Math.max(MIN_KLINES_FOR_CHAN,
+    Math.trunc(Number(options.maximumHistoryCount) || policy.target))
+  const validationWindowCounts = [...new Set((Array.isArray(options.validationWindowCounts)
+    ? options.validationWindowCounts : policy.validators)
+    .map(value => Math.trunc(Number(value)))
+    .filter(value => value >= MIN_KLINES_FOR_CHAN && value <= maximumHistoryCount))]
+    .sort((a, b) => a - b)
+  if (!validationWindowCounts.includes(maximumHistoryCount)) validationWindowCounts.push(maximumHistoryCount)
+  const windowPolicyVersion = String(options.windowPolicyVersion || policy.windowPolicyVersion)
+  // Indicators may ask the caller for a longer history. Chan is intentionally
+  // bounded to the last target bars so an unrelated prefix cannot alter the
+  // current structure.
+  const calculationRates = sourceHistoryCount > maximumHistoryCount
+    ? rates.slice(-maximumHistoryCount) : rates
   const calculationWindowCount = Array.isArray(calculationRates) ? calculationRates.length : 0
-  const calculationMacdHist = sourceHistoryCount > CHAN_BOOTSTRAP_MAX_BARS
+  const calculationMacdHist = sourceHistoryCount > maximumHistoryCount
     ? calculateMacdSeries(calculationRates.map(rate => Number(rate.close))).histSeries
-    : macdHist
+    : Array.isArray(macdHist) && macdHist.length >= calculationWindowCount
+      ? macdHist.slice(-calculationWindowCount)
+      : calculateMacdSeries(calculationRates.map(rate => Number(rate.close))).histSeries
+  const calculationStartUtcMs = Number(calculationRates?.[0]?.time_utc_msc)
+  const calculationEndUtcMs = Number(calculationRates?.at?.(-1)?.time_utc_msc)
+  const rawDataQuality = options.dataQuality && typeof options.dataQuality === 'object'
+    ? options.dataQuality : null
+  const withinCalculationWindow = item => {
+    const from = Number(item?.from_utc_msc)
+    const to = Number(item?.to_utc_msc)
+    if (!Number.isFinite(from) || !Number.isFinite(to)
+      || !Number.isFinite(calculationStartUtcMs) || !Number.isFinite(calculationEndUtcMs)) return true
+    return to >= calculationStartUtcMs && from <= calculationEndUtcMs
+  }
+  const scopedDataQuality = rawDataQuality ? {
+    ...rawDataQuality,
+    cache_internal_gap_details: Array.isArray(rawDataQuality.cache_internal_gap_details)
+      ? rawDataQuality.cache_internal_gap_details.filter(withinCalculationWindow)
+      : [],
+    expected_closures: Array.isArray(rawDataQuality.expected_closures)
+      ? rawDataQuality.expected_closures.filter(withinCalculationWindow)
+      : [],
+  } : rawDataQuality
+  if (rawDataQuality?.cache_internal_gap_unresolved === true
+    && Array.isArray(rawDataQuality.cache_internal_gap_details)
+    && rawDataQuality.cache_internal_gap_details.length > 0
+    && scopedDataQuality.cache_internal_gap_details.length === 0) {
+    scopedDataQuality.cache_internal_gap_unresolved = false
+  }
   const requestedHistoryCount = Number(options.requestedHistoryCount)
   const calculationOptions = {
     ...options,
+    dataQuality:scopedDataQuality,
     requestedHistoryCount:Number.isFinite(requestedHistoryCount) && requestedHistoryCount > 0
-      ? Math.min(requestedHistoryCount, CHAN_BOOTSTRAP_MAX_BARS)
-      : calculationWindowCount,
+      ? Math.min(requestedHistoryCount, maximumHistoryCount)
+      : maximumHistoryCount,
+    maximumHistoryCount,
+    validationWindowCounts,
+    windowPolicyVersion,
   }
   const requestedTrustedAnchor = options.trustedStructureAnchor && typeof options.trustedStructureAnchor === 'object'
     ? options.trustedStructureAnchor : {}
@@ -2786,18 +2954,36 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     trustedAnchorMatched = false
   }
   if (trustedAnchorMatched || options.fractalsForTest || !Array.isArray(calculationRates)) {
-    return { ...primary, source_history_count:sourceHistoryCount, calculation_window_count:calculationWindowCount, window_selection:trustedAnchorMatched ? 'trusted_anchor' : 'full_window' }
+    return {
+      ...primary,
+      authoritative_terminal_chain_confirmed: trustedAnchorMatched
+        && Number(primary.segment_count) >= 2,
+      evidence_capabilities:buildChanEvidenceCapabilities({
+        ...primary,
+        authoritative_terminal_chain_confirmed: trustedAnchorMatched
+          && Number(primary.segment_count) >= 2,
+      }),
+      source_history_count:sourceHistoryCount,
+      calculation_window_count:calculationWindowCount,
+      maximum_history_count:maximumHistoryCount,
+      validation_window_counts:validationWindowCounts,
+      window_policy_version:windowPolicyVersion,
+      window_selection:trustedAnchorMatched ? 'trusted_anchor' : 'full_window',
+    }
   }
   if (calculationWindowCount < 300) {
-    return protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationWindowCount)
+    return {
+      ...protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationWindowCount),
+      maximum_history_count:maximumHistoryCount,
+      validation_window_counts:validationWindowCounts,
+      window_policy_version:windowPolicyVersion,
+    }
   }
-  const maxWindow = calculationWindowCount
-  const shortWindowStep = maxWindow >= 600 ? 100 : Math.max(20, Math.floor((maxWindow / 5) / 10) * 10)
-  const minWindow = maxWindow >= 600 ? 300 : Math.max(120, Math.floor((maxWindow * 0.6) / 10) * 10)
-  const sizes = []
-  for (let size = maxWindow; size >= minWindow;) {
-    sizes.push(size)
-    size -= size > 1200 ? 200 : shortWindowStep
+  const sizes = validationWindowCounts.filter(size => size <= calculationWindowCount)
+  if (!sizes.includes(calculationWindowCount) && calculationWindowCount <= maximumHistoryCount) {
+    // A short source is still a valid fixed-window candidate only when its
+    // size is explicitly represented by the policy. Otherwise leave it out so
+    // validators never silently invent a new window size.
   }
   const candidates = sizes.map(size => {
     if (size === calculationWindowCount) return primary
@@ -2814,6 +3000,9 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       ...suppressUnconfirmedWindowStructure(primary),
       source_history_count:sourceHistoryCount,
       calculation_window_count:calculationWindowCount,
+      maximum_history_count:maximumHistoryCount,
+      validation_window_counts:validationWindowCounts,
+      window_policy_version:windowPolicyVersion,
       window_selection: 'full_window_unresolved',
     }
   }
@@ -2822,7 +3011,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     candidates, primary, temporalEvidence, CHAN_CENTER_MIN_CONTEXT_BARS)
   const primaryStructureTimeKeyReliable = primary.structure_time_key_reliable === true
     || (primary.structure_time_key_reliable == null && primary.time_location_reliable === true)
-  const promotionHistoryReady = calculationWindowCount >= CHAN_BOOTSTRAP_MAX_BARS
+  const promotionHistoryReady = calculationWindowCount >= maximumHistoryCount
     && primary.history_sufficient === true
     && primary.closed_history_sufficient === true
     && primaryStructureTimeKeyReliable
@@ -2878,12 +3067,15 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     },
     source_history_count:sourceHistoryCount,
     calculation_window_count: selected.raw_bar_count,
+    maximum_history_count:maximumHistoryCount,
+    validation_window_counts:validationWindowCounts,
+    window_policy_version:windowPolicyVersion,
     window_selection: 'full_window_cross_confirmed',
   }
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence }
+export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, buildChanEvidenceCapabilities, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
@@ -3046,6 +3238,9 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
         bootstrap_core_stable_id:options.chanDataQuality?.chan_structure_anchor_core_stable_id,
         bootstrap_entry_segment_stable_id:options.chanDataQuality?.chan_structure_anchor_entry_segment_stable_id,
       },
+      maximumHistoryCount:options.chanMaximumHistoryCount,
+      validationWindowCounts:options.chanValidationWindowCounts,
+      windowPolicyVersion:options.chanWindowPolicyVersion,
     })
     : undefined
 
@@ -3138,6 +3333,9 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
       cache_gap_refilled: Boolean(options.chanDataQuality.cache_gap_refilled),
       cache_internal_gap_detected: Boolean(options.chanDataQuality.cache_internal_gap_detected),
       cache_internal_gap_unresolved: Boolean(options.chanDataQuality.cache_internal_gap_unresolved),
+      continuity_calendar_version: options.chanDataQuality.continuity_calendar_version || null,
+      expected_closures: Array.isArray(options.chanDataQuality.expected_closures)
+        ? options.chanDataQuality.expected_closures.slice(0, 8) : [],
       last_bar_closed: Boolean(options.chanDataQuality.last_bar_closed),
     } : undefined,
     chan,

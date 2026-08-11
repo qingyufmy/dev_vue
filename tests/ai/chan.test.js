@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
+import { getChanWindowPolicy } from '../../server/routes/ai/chan-window-policy.js'
 
-const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence } = __chanTest
+const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, buildChanEvidenceCapabilities } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -14,6 +15,80 @@ function makeRates(n, base = 4000) {
   }
   return rates
 }
+
+describe('Chan v6 window policy', () => {
+  it.each([
+    ['M5', 800, [600, 700, 800]],
+    ['M15', 1000, [800, 900, 1000]],
+    ['H1', 1200, [1000, 1100, 1200]],
+    ['H4', 800, [600, 700, 800]],
+  ])('uses the fixed %s target and adjacent validators', (timeframe, target, validators) => {
+    expect(getChanWindowPolicy(timeframe)).toMatchObject({
+      supported:true, target, maximumHistoryCount:target,
+      validators, validationWindowCounts:validators,
+      windowPolicyVersion:'chan_window_v6',
+    })
+  })
+
+  it('does not silently assign a v6 window to an unsupported timeframe', () => {
+    expect(getChanWindowPolicy('M30')).toMatchObject({
+      supported:false, target:0, validators:[], windowPolicyVersion:'unsupported',
+    })
+  })
+
+  it('ignores a prefix outside the fixed target window', () => {
+    const tail = makeRates(800)
+    const withPrefix = [...makeRates(250, 9000), ...tail]
+    const first = computeChan(withPrefix, 'M5', [])
+    const second = computeChan(tail, 'M5', [])
+    expect(first).toMatchObject({ source_history_count:1050, calculation_window_count:800, raw_bar_count:800 })
+    expect(second).toMatchObject({ source_history_count:800, calculation_window_count:800, raw_bar_count:800 })
+    expect(first.current_segment).toEqual(second.current_segment)
+    expect(first.latest_center).toEqual(second.latest_center)
+  })
+
+  it('keeps data completeness separate from bi diagnostics and requires an authoritative chain for direction', () => {
+    const complete = buildChanEvidenceCapabilities({
+      history_sufficient:true, closed_history_sufficient:true,
+      cache_internal_gap_unresolved:false, time_location_reliable:true,
+      structure_time_key_reliable:true, bi_discontinuity_count:9,
+      window_stable:true, authoritative_terminal_chain_confirmed:false,
+      segment_count:3, trend_state:{ direction:'up' }, center_count:0,
+    })
+    expect(complete.data_complete).toBe(true)
+    expect(complete.segment_direction_usable).toBe(false)
+    expect(complete.center_structure_usable).toBe(false)
+    const authoritative = buildChanEvidenceCapabilities({
+      history_sufficient:true, closed_history_sufficient:true,
+      cache_internal_gap_unresolved:false, time_location_reliable:true,
+      structure_time_key_reliable:true, window_stable:true,
+      authoritative_terminal_chain_confirmed:true, segment_count:3,
+      trend_state:{ direction:'up' }, center_count:0,
+    })
+    expect(authoritative.segment_direction_usable).toBe(true)
+  })
+
+  it('ignores an unresolved gap whose details are outside the fixed Chan slice', () => {
+    const rates = makeRates(1000).map((rate, index) => ({
+      ...rate, time_utc_msc:1784185200000 + index * 300000,
+    }))
+    const result = computeChan(rates, 'M5', [], {
+      requestedHistoryCount:800,
+      dataQuality:{
+        source_id:1, platform:'mt5', clock_status:'verified', last_bar_closed:true,
+        cache_internal_gap_unresolved:true,
+        cache_internal_gap_details:[{
+          from_utc_msc:rates[0].time_utc_msc,
+          to_utc_msc:rates[1].time_utc_msc,
+          gap_ms:300000, missing_bar_count:1,
+        }],
+      },
+    })
+    expect(result.calculation_window_count).toBe(800)
+    expect(result.cache_internal_gap_unresolved).toBe(false)
+    expect(result.evidence_capabilities.data_complete).toBe(true)
+  })
+})
 
 describe('normalizeBarsForChan', () => {
   it('过滤无效K线', () => {
@@ -1081,7 +1156,7 @@ describe('computeChan', () => {
   it('reports read-only bi centers separately from execution-grade segment centers', () => {
     const rates = makeRates(50)
     const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(rate => Number(rate.close))).histSeries)
-    expect(result).toMatchObject({ algorithm_version: 'chan_structure_v5', center_level: 'segment' })
+    expect(result).toMatchObject({ algorithm_version: 'chan_structure_v6', center_level: 'segment' })
     expect(result.bi_center_count).toBeGreaterThan(0)
     expect(result.latest_bi_center).toMatchObject({ structure_level: 'bi' })
     expect(result.center_count).toBe(0)
@@ -1265,7 +1340,7 @@ describe('computeChan', () => {
     expect(result.entry_candidates).toEqual([])
   })
 
-  it('uses one authoritative bounded window when more than 2000 bars are supplied', () => {
+  it('uses one authoritative bounded window when more than the fixed target is supplied', () => {
     const rates = makeRates(2001).map((rate, index) => ({
       ...rate, time_utc_msc:1784185200000 + index * 300000,
     }))
@@ -1275,8 +1350,8 @@ describe('computeChan', () => {
     })
 
     expect(result.source_history_count).toBe(2001)
-    expect(result.calculation_window_count).toBe(2000)
-    expect(result.raw_bar_count).toBe(2000)
+    expect(result.calculation_window_count).toBe(800)
+    expect(result.raw_bar_count).toBe(800)
   })
 
   it('segment_count不等于bi_count', () => {
