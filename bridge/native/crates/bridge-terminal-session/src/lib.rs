@@ -5,9 +5,9 @@ use bridge_mt4::{
 };
 use bridge_runtime_win::RestartPolicy;
 use bridge_store::{
-    AccountInitializationState, HISTORY_COVERAGE_START_UTC_MSC, HistoryArchiveBatch, HistoryCursor,
-    HistoryJobPlanningRequest, HistoryScope, HistorySyncJob, HistoryTailRefreshRequest,
-    OutboxStore,
+    AccountInitializationState, HISTORY_COVERAGE_START_UTC_MSC, HISTORY_MIN_WINDOW_MSC,
+    HistoryArchiveBatch, HistoryCursor, HistoryJobPlanningRequest, HistoryScope, HistorySyncJob,
+    HistoryTailRefreshRequest, OutboxStore,
 };
 use bridge_terminal_data::{
     CollectorHandle, CollectorLifecycleState, CollectorPolicy, SnapshotCollector, SnapshotProjector,
@@ -34,7 +34,6 @@ const HISTORY_ARCHIVE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const HISTORY_ARCHIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const HISTORY_EMPTY_RETRY: Duration = Duration::from_secs(1);
 const HISTORY_INITIAL_WINDOW_MSC: i64 = 7 * 24 * 60 * 60 * 1_000;
-const HISTORY_MIN_WINDOW_MSC: i64 = 15 * 60 * 1_000;
 const HISTORY_MAX_WINDOW_MSC: i64 = 30 * 24 * 60 * 60 * 1_000;
 const HISTORY_DENSE_RETRY_THRESHOLD: u32 = 3;
 // A page can contain up to HISTORY_BATCH_LIMIT items and each item may need
@@ -2555,7 +2554,10 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn worker_error_code_takes_precedence_over_collector_fallback() {
@@ -3382,7 +3384,7 @@ mod tests {
                 range_end_utc_msc: recent_start,
                 cursor_time_msc: HISTORY_COVERAGE_START_UTC_MSC,
                 cursor_ticket: String::new(),
-                window_msc: HISTORY_INITIAL_WINDOW_MSC,
+                window_msc: 15 * 60 * 1_000,
                 created_at_utc_msc: now,
             })
             .expect("enqueue blocked planner backfill");
@@ -3410,13 +3412,76 @@ mod tests {
             .iter()
             .find(|job| job.job_id == blocked_job.job_id)
             .expect("blocked backfill returned by automatic planner");
-        assert_eq!(attached, &before);
+        assert_eq!(attached.job_id, before.job_id);
+        assert_eq!(attached.range_start_utc_msc, before.range_start_utc_msc);
+        assert_eq!(attached.range_end_utc_msc, before.range_end_utc_msc);
+        assert_eq!(attached.cursor_time_msc, before.cursor_time_msc);
+        assert_eq!(attached.cursor_ticket, before.cursor_ticket);
+        assert_eq!(attached.priority, before.priority);
+        assert_eq!(attached.attempt_count, before.attempt_count);
+        assert_eq!(attached.window_msc, HISTORY_MIN_WINDOW_MSC);
+        assert_eq!(attached.state, "queued");
+        assert_eq!(attached.last_error_code, None);
+        assert_eq!(attached.lease_generation, before.lease_generation);
+        assert_eq!(attached.lease_expires_at_utc_msc, None);
+        assert!(attached.updated_at_utc_msc > before.updated_at_utc_msc);
+
+        // The scheduler's normal claim path can now pick up the recovered
+        // backfill.  The recent P2 flight is claimed first; terminally block
+        // it in this fixture so the recovered P3 row can be verified next.
+        let recent_running = store
+            .claim_history_job(&scope, now + 4, 60_000)
+            .expect("claim recent flight")
+            .expect("recent flight lease");
+        assert_eq!(recent_running.job_kind, "recent");
+        store
+            .block_history_job(
+                &recent_running.job_id,
+                recent_running.lease_generation,
+                "blocked_history_evidence_pending",
+                now + 5,
+            )
+            .expect("block recent fixture flight");
+        let recovered_running = store
+            .claim_history_job(&scope, now + 6, 60_000)
+            .expect("claim recovered backfill")
+            .expect("recovered backfill lease");
+        assert_eq!(recovered_running.job_id, blocked_job.job_id);
+        assert_eq!(recovered_running.window_msc, HISTORY_MIN_WINDOW_MSC);
+        store
+            .block_history_job(
+                &recovered_running.job_id,
+                recovered_running.lease_generation,
+                "blocked_dense_range",
+                now + 7,
+            )
+            .expect("block recovered floor backfill");
+        let floor_blocked = store
+            .history_sync_job(&blocked_job.job_id)
+            .expect("floor blocked backfill lookup")
+            .expect("floor blocked backfill row");
+        let second_attached = store
+            .plan_history_jobs(&HistoryJobPlanningRequest {
+                scope: scope.clone(),
+                job_kind: "backfill".to_owned(),
+                priority: "p3".to_owned(),
+                range_start_utc_msc: HISTORY_COVERAGE_START_UTC_MSC,
+                range_end_utc_msc: recent_start,
+                window_msc: HISTORY_MIN_WINDOW_MSC,
+                now_utc_msc: now + 8,
+            })
+            .expect("floor blocked replan should attach only")
+            .attached_jobs
+            .into_iter()
+            .find(|job| job.job_id == blocked_job.job_id)
+            .expect("floor blocked backfill attached again");
+        assert_eq!(second_attached, floor_blocked.clone());
         assert_eq!(
             store
                 .history_sync_job(&blocked_job.job_id)
                 .expect("blocked planner backfill after replan lookup")
                 .expect("blocked planner backfill after replan"),
-            before
+            floor_blocked
         );
         drop(store);
         fs::remove_dir_all(root).expect("remove blocked planner test directory");
@@ -3427,8 +3492,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("test clock")
             .as_nanos();
+        let sequence = TEST_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "liangjian-terminal-session-{}-{stamp}",
+            "liangjian-terminal-session-{}-{sequence}-{stamp}",
             std::process::id()
         ))
     }

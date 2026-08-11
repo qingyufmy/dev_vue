@@ -36,6 +36,11 @@ const HISTORY_CURSOR_TOKEN_BYTES: usize = 32;
 /// contract may accept.  Rows older than this are retained as rebuildable
 /// evidence, but are never included in a newly planned/query range.
 pub const HISTORY_COVERAGE_START_UTC_MSC: i64 = 1_735_689_600_000;
+/// Smallest MT5 history sub-window accepted by the native scheduler.  Dense
+/// ranges are retried with progressively smaller positive UTC-millisecond
+/// windows; one second is the safety floor used to recover older blocked
+/// backfill rows without silently dropping evidence.
+pub const HISTORY_MIN_WINDOW_MSC: i64 = 1_000;
 const MT4_HISTORY_SOURCE_NOTE: &str = "mt4_account_history_tab_range";
 
 const NATIVE_COMMAND_LEDGER_REQUIRED_COLUMNS: &[&str] = &[
@@ -1165,8 +1170,9 @@ impl OutboxStore {
     /// a requested range, creating deterministic gap jobs and returning the
     /// jobs that were attached to by the request.  Only the semantic
     /// combinations used by the new scheduler are accepted.  Backfill rows
-    /// created before the modern floor remain collision-safe and are only
-    /// considered when the caller is operating on a current/future clock.
+    /// created before the modern floor remain collision-safe; a precise
+    /// modern backfill re-plan may requeue one blocked dense row at the new
+    /// minimum window, while all other terminal collisions stay fail-closed.
     pub fn plan_history_jobs(
         &self,
         request: &HistoryJobPlanningRequest,
@@ -1325,13 +1331,97 @@ impl OutboxStore {
                 continue;
             }
             if existing.job_kind == "backfill" {
-                // A dense-range backfill is deliberately terminal.  Once the
-                // modern coverage floor is in effect, an exact re-plan of
-                // that row is an attachment, not a legacy collision.  Keep
-                // the row completely untouched: in particular, do not
-                // promote, reset its cursor/window, or clear its block
-                // evidence.  Legacy clocks and all other backfill rows keep
-                // the conservative collision behavior below.
+                // A blocked dense backfill created with the old 15-minute
+                // floor gets exactly one recovery attempt after the modern
+                // floor is in effect.  Keep its identity, range, cursor,
+                // ticket, priority and attempt count; only make the smaller
+                // sub-window claimable again and clear the terminal error.
+                // The request must itself be the scheduler's backfill plan,
+                // so an on-demand read can never revive a terminal row.
+                if request.now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC
+                    && request.job_kind == "backfill"
+                    && existing.state == "blocked"
+                    && existing.last_error_code.as_deref() == Some("blocked_dense_range")
+                    && existing.window_msc > HISTORY_MIN_WINDOW_MSC
+                {
+                    let affected = transaction
+                        .execute(
+                            "UPDATE history_sync_jobs
+                             SET window_msc = ?1,
+                                 state = 'queued',
+                                 next_attempt_at_utc_msc = ?2,
+                                 last_error_code = NULL,
+                                 lease_expires_at_utc_msc = NULL,
+                                 updated_at_utc_msc = ?2
+                             WHERE job_id = ?3
+                               AND terminal_instance_id = ?4
+                               AND broker_server = ?5 COLLATE NOCASE
+                               AND login_account = ?6
+                               AND job_kind = 'backfill'
+                               AND state = 'blocked'
+                               AND last_error_code = 'blocked_dense_range'
+                               AND window_msc > ?1;",
+                            params![
+                                HISTORY_MIN_WINDOW_MSC,
+                                request.now_utc_msc,
+                                existing.job_id,
+                                request.scope.terminal_instance_id,
+                                request.scope.broker_server,
+                                request.scope.login_account,
+                            ],
+                        )
+                        .map_err(|_| {
+                            StoreError::new("bridge_store_history_planning_requeue_failed")
+                        })?;
+                    if affected != 1 {
+                        return Err(StoreError::new(
+                            "bridge_store_history_planning_requeue_failed",
+                        ));
+                    }
+                    // Match the ordinary retry path: once the terminal row is
+                    // claimable again, expose the scope as refreshing rather
+                    // than leaving the old terminal freshness marker visible
+                    // while the scheduler resumes the bounded archive flight.
+                    if let Some(platform) = transaction
+                        .query_row(
+                            "SELECT platform FROM terminal_bindings
+                             WHERE terminal_instance_id = ?1
+                               AND broker_server = ?2 COLLATE NOCASE
+                               AND login_account = ?3 LIMIT 1;",
+                            params![
+                                request.scope.terminal_instance_id,
+                                request.scope.broker_server,
+                                request.scope.login_account
+                            ],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .optional()
+                        .map_err(|_| {
+                            StoreError::new("bridge_store_history_planning_state_query_failed")
+                        })?
+                    {
+                        let mut state = read_history_scope_state_locked(
+                            &transaction,
+                            &request.scope,
+                            &platform,
+                        )?;
+                        state.freshness_state = "refreshing".to_owned();
+                        state.updated_at_utc_msc = request.now_utc_msc;
+                        write_history_scope_state_tx(&transaction, &state)?;
+                    }
+                    let resumed = read_history_sync_job_by_id(&transaction, &existing.job_id)?
+                        .ok_or_else(|| {
+                            StoreError::new("bridge_store_history_planning_requeue_failed")
+                        })?;
+                    attached_jobs.push(resumed);
+                    continue;
+                }
+                // A dense-range backfill is deliberately terminal once it
+                // has already reached the modern floor.  An exact re-plan is
+                // an attachment, not a legacy collision; keep every field
+                // untouched so a second planner pass cannot revive it in a
+                // loop.  Legacy clocks, non-dense terminal rows and all
+                // other backfill collisions keep the conservative contract.
                 if request.now_utc_msc >= HISTORY_COVERAGE_START_UTC_MSC
                     && existing.state == "blocked"
                     && existing.last_error_code.as_deref() == Some("blocked_dense_range")
@@ -11134,6 +11224,186 @@ mod tests {
     }
 
     #[test]
+    fn atomic_history_planner_requeues_old_blocked_dense_backfill_once() {
+        let root = unique_test_directory("history-planner-dense-recovery");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("dense recovery planner store");
+        let scope = history_scope_for("123456");
+        let now = HISTORY_COVERAGE_START_UTC_MSC + 1_000_000;
+        let range_start = HISTORY_COVERAGE_START_UTC_MSC + 10_000;
+        let range_end = HISTORY_COVERAGE_START_UTC_MSC + 20_000;
+        let old_window = 15 * 60 * 1_000;
+        let job = store
+            .enqueue_history_job(&NewHistorySyncJob {
+                job_id: "job_01JDENSEREC01".to_owned(),
+                scope: scope.clone(),
+                job_kind: "backfill".to_owned(),
+                priority: "p3".to_owned(),
+                range_start_utc_msc: range_start,
+                range_end_utc_msc: range_end,
+                cursor_time_msc: range_start + 1_000,
+                cursor_ticket: "100".to_owned(),
+                window_msc: old_window,
+                created_at_utc_msc: now,
+            })
+            .expect("enqueue old dense backfill");
+        let running = store
+            .claim_history_job(&scope, now + 1, 60_000)
+            .expect("claim old dense backfill")
+            .expect("old dense backfill lease");
+        store
+            .checkpoint_history_job(
+                &running.job_id,
+                running.lease_generation,
+                range_start + 4_000,
+                "400",
+                old_window,
+                now + 2,
+            )
+            .expect("checkpoint old dense backfill");
+        store
+            .block_history_job(
+                &running.job_id,
+                running.lease_generation,
+                "blocked_dense_range",
+                now + 3,
+            )
+            .expect("block old dense backfill");
+        let before = store
+            .history_sync_job(&job.job_id)
+            .expect("old dense lookup")
+            .expect("old dense row");
+        assert_eq!(before.window_msc, old_window);
+        assert_eq!(before.state, "blocked");
+        assert_eq!(before.attempt_count, 1);
+
+        let request = HistoryJobPlanningRequest {
+            scope: scope.clone(),
+            job_kind: "backfill".to_owned(),
+            priority: "p3".to_owned(),
+            range_start_utc_msc: range_start,
+            range_end_utc_msc: range_end,
+            window_msc: HISTORY_MIN_WINDOW_MSC,
+            now_utc_msc: now + 4,
+        };
+        let resumed = store
+            .plan_history_jobs(&request)
+            .expect("requeue old dense backfill")
+            .attached_jobs;
+        assert_eq!(resumed.len(), 1);
+        let resumed = &resumed[0];
+        assert_eq!(resumed.job_id, before.job_id);
+        assert_eq!(resumed.range_start_utc_msc, before.range_start_utc_msc);
+        assert_eq!(resumed.range_end_utc_msc, before.range_end_utc_msc);
+        assert_eq!(resumed.cursor_time_msc, before.cursor_time_msc);
+        assert_eq!(resumed.cursor_ticket, before.cursor_ticket);
+        assert_eq!(resumed.priority, before.priority);
+        assert_eq!(resumed.attempt_count, before.attempt_count);
+        assert_eq!(resumed.window_msc, HISTORY_MIN_WINDOW_MSC);
+        assert_eq!(resumed.state, "queued");
+        assert_eq!(resumed.last_error_code, None);
+        assert_eq!(resumed.lease_generation, before.lease_generation);
+        assert_eq!(resumed.lease_expires_at_utc_msc, None);
+        assert_eq!(resumed.updated_at_utc_msc, request.now_utc_msc);
+
+        let resumed_running = store
+            .claim_history_job(&scope, now + 5, 60_000)
+            .expect("claim resumed dense backfill")
+            .expect("resumed dense backfill lease");
+        assert_eq!(resumed_running.job_id, before.job_id);
+        assert_eq!(resumed_running.window_msc, HISTORY_MIN_WINDOW_MSC);
+        store
+            .block_history_job(
+                &resumed_running.job_id,
+                resumed_running.lease_generation,
+                "blocked_dense_range",
+                now + 6,
+            )
+            .expect("block resumed dense backfill");
+        let floor_blocked = store
+            .history_sync_job(&job.job_id)
+            .expect("floor blocked lookup")
+            .expect("floor blocked row");
+        assert_eq!(floor_blocked.window_msc, HISTORY_MIN_WINDOW_MSC);
+        assert_eq!(floor_blocked.state, "blocked");
+        assert_eq!(
+            floor_blocked.last_error_code.as_deref(),
+            Some("blocked_dense_range")
+        );
+        let attached = store
+            .plan_history_jobs(&HistoryJobPlanningRequest {
+                now_utc_msc: now + 7,
+                ..request.clone()
+            })
+            .expect("floor blocked exact attachment")
+            .attached_jobs;
+        assert_eq!(attached, vec![floor_blocked.clone()]);
+        assert_eq!(
+            store
+                .history_sync_job(&job.job_id)
+                .expect("floor blocked after attachment")
+                .expect("floor blocked after attachment row"),
+            floor_blocked,
+            "a floor-sized terminal row must not be revived repeatedly"
+        );
+
+        let other_scope = history_scope_for("654321");
+        let other = store
+            .plan_history_jobs(&HistoryJobPlanningRequest {
+                scope: other_scope.clone(),
+                now_utc_msc: now + 8,
+                ..request.clone()
+            })
+            .expect("other account independent dense plan");
+        assert!(other.attached_jobs.is_empty());
+        assert_eq!(other.created_jobs.len(), 1);
+        assert_eq!(other.created_jobs[0].scope, other_scope);
+
+        let other_error_job = store
+            .enqueue_history_job(&NewHistorySyncJob {
+                job_id: "job_01JDENSEERR01".to_owned(),
+                scope: scope.clone(),
+                job_kind: "backfill".to_owned(),
+                priority: "p3".to_owned(),
+                range_start_utc_msc: range_start + 30_000,
+                range_end_utc_msc: range_end + 30_000,
+                cursor_time_msc: range_start + 30_000,
+                cursor_ticket: String::new(),
+                window_msc: old_window,
+                created_at_utc_msc: now,
+            })
+            .expect("enqueue non-dense terminal row");
+        let other_error_running = store
+            .claim_history_job(&scope, now + 9, 60_000)
+            .expect("claim non-dense terminal row")
+            .expect("non-dense terminal row lease");
+        assert_eq!(other_error_running.job_id, other_error_job.job_id);
+        store
+            .block_history_job(
+                &other_error_running.job_id,
+                other_error_running.lease_generation,
+                "blocked_history_evidence_pending",
+                now + 10,
+            )
+            .expect("block non-dense terminal row");
+        assert_eq!(
+            store
+                .plan_history_jobs(&HistoryJobPlanningRequest {
+                    scope,
+                    range_start_utc_msc: range_start + 30_000,
+                    range_end_utc_msc: range_end + 30_000,
+                    now_utc_msc: now + 11,
+                    ..request
+                })
+                .expect_err("non-dense terminal collision")
+                .code(),
+            "bridge_store_history_planning_legacy_collision"
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove dense recovery planner fixture");
+    }
+
+    #[test]
     fn atomic_history_planner_attaches_modern_blocked_dense_backfill_without_mutation() {
         let root = unique_test_directory("history-planner-blocked-dense");
         let path = root.join(BRIDGE_DATABASE_FILE_NAME);
@@ -11148,7 +11418,7 @@ mod tests {
             priority: "p3".to_owned(),
             range_start_utc_msc: range_start,
             range_end_utc_msc: range_end,
-            window_msc: 5_000,
+            window_msc: HISTORY_MIN_WINDOW_MSC,
             now_utc_msc: now,
         };
         let created = store
