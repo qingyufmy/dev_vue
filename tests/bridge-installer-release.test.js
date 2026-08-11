@@ -3,14 +3,14 @@ import { readFile } from 'node:fs/promises'
 import { resolveBridgeInstallerRelease } from '../server/bridge-installer-release.js'
 
 describe('bridge installer release descriptor', () => {
-  it('keeps the verified static 3.0.0 installer when no dynamic descriptor is configured', () => {
+  it('keeps the verified static 3.0.1 installer when no dynamic descriptor is configured', () => {
     expect(resolveBridgeInstallerRelease({})).toMatchObject({
-      version:'3.0.0',
+      version:'3.0.1',
       v3:true,
-      buildDate:'2026-08-10',
-      fileSize:26763864,
-      sha256:'0E794E15EF623C3AD5996D43BCB23303C285A5662E81B13E902FEA9670037A36',
-      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'0e794e15ef623c3ad5996d43bcb23303c285a5662e81b13e902fea9670037a36'}/LiangjianBridgeSetup.exe`,
+      buildDate:'2026-08-11',
+      fileSize:26793842,
+      sha256:'8261AD50E75164E4A65B0434F37E9304ED5CB76991C9B5F8CB319DF54C1F0C31',
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'8261ad50e75164e4a65b0434f37e9304ed5cb76991c9b5f8cb319df54c1f0c31'}/LiangjianBridgeSetup.exe`,
     })
   })
 
@@ -36,22 +36,22 @@ describe('bridge installer release descriptor', () => {
       BRIDGE_INSTALLER_SIZE_BYTES:'84044167',
       BRIDGE_INSTALLER_SHA256:'c'.repeat(64),
     })).toMatchObject({
-      version:'3.0.0',
-      buildDate:'2026-08-10',
-      fileSize:26763864,
-      sha256:'0E794E15EF623C3AD5996D43BCB23303C285A5662E81B13E902FEA9670037A36',
+      version:'3.0.1',
+      buildDate:'2026-08-11',
+      fileSize:26793842,
+      sha256:'8261AD50E75164E4A65B0434F37E9304ED5CB76991C9B5F8CB319DF54C1F0C31',
     })
   })
 
   it('keeps the verified descriptor on a same-version same-date conflict', () => {
     expect(resolveBridgeInstallerRelease({
       BRIDGE_INSTALLER_URL:`https://qiniu.acadfx.com/bridge/bootstrapper/${'d'.repeat(64)}/LiangjianBridgeSetup.exe`,
-      BRIDGE_INSTALLER_RELEASE_VERSION:'3.0.0',
-      BRIDGE_INSTALLER_BUILD_DATE:'2026-08-10',
+      BRIDGE_INSTALLER_RELEASE_VERSION:'3.0.1',
+      BRIDGE_INSTALLER_BUILD_DATE:'2026-08-11',
       BRIDGE_INSTALLER_SIZE_BYTES:'84044167',
       BRIDGE_INSTALLER_SHA256:'d'.repeat(64),
     })).toMatchObject({
-      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'0e794e15ef623c3ad5996d43bcb23303c285a5662e81b13e902fea9670037a36'}/LiangjianBridgeSetup.exe`,
+      fullUrl:`https://qiniu.acadfx.com/bridge/bootstrapper/${'8261ad50e75164e4a65b0434f37e9304ed5cb76991c9b5f8cb319df54c1f0c31'}/LiangjianBridgeSetup.exe`,
     })
   })
 
