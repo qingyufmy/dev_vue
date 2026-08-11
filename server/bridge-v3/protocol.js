@@ -8,7 +8,8 @@ export const BRIDGE_V3_MESSAGE_TYPES = Object.freeze(new Set([
 
 export const BRIDGE_V3_DATA_REQUEST_ACTIONS = Object.freeze(new Set([
   'rates', 'symbol_snapshot', 'risk_snapshot', 'performance_daily',
-  'symbols', 'history', 'history_page', 'history_evidence', 'chart_data', 'pending_order_state', 'diagnostics',
+  'symbols', 'history', 'history_page', 'history_evidence', 'history_prepare_status_v1',
+  'chart_data', 'pending_order_state', 'diagnostics',
 ]))
 
 export const BRIDGE_V3_COMMAND_ACTIONS = Object.freeze(new Set([
