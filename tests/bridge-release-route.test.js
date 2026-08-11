@@ -144,7 +144,7 @@ describe('bridge release manifest route', () => {
     expect(verifyBridgeReleaseSignatures({ ...value, priority:'urgent' }, publicKey)).toBe(false)
   })
 
-  it('serves the bundled signed 3.0.0 release for updates and bootstrap', async () => {
+  it('serves the bundled signed 3.0.2 current release and 3.0.0 bootstrap', async () => {
     const router = createBridgeReleaseRouter({ now:() => 1_785_402_928_956 })
     const headers = {
       'X-Aurum-Installation-Id':'install_0123456789abcdef0123456789abcdef',
@@ -160,7 +160,7 @@ describe('bridge release manifest route', () => {
     expect(bootstrap.status).toBe(200)
     expect(JSON.parse(current.body)).toMatchObject({
       release_id:expectedCurrent.release_id,
-      release_version:'3.0.0',
+      release_version:'3.0.2',
       rollout_percentage:100,
     })
     expect(JSON.parse(bootstrap.body)).toMatchObject({
