@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260811bridgehistorydense1" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260811bridgehistorydense1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260811historyscope1" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260811historyscope1" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -904,28 +904,33 @@
             </div>
             <div class="history-scope-bar">
               <label class="filter-field"><span class="filter-label">统计范围</span><select id="historyRangeMode" class="filter-select">
-                <option value="all">全部可用历史（2025年起）</option>
+                <option value="all">全部可用历史</option>
                 <option value="platform" selected>平台接入后</option>
                 <option value="custom">自定义日期</option>
               </select></label>
-              <div class="history-range-dates hidden" id="historyRangeDates">
-                <input type="date" id="historyRangeFrom" class="filter-date" min="2025-01-01" disabled aria-label="历史开始日期">
+              <div class="history-range-dates" id="historyRangeDates">
+                <input type="date" id="historyRangeFrom" class="filter-date" min="2000-01-01" disabled aria-label="历史开始日期" aria-describedby="historyRangeHint">
                 <span class="filter-range-sep">~</span>
-                <input type="date" id="historyRangeTo" class="filter-date" disabled aria-label="历史结束日期">
+                <input type="date" id="historyRangeTo" class="filter-date" min="2000-01-01" disabled aria-label="历史结束日期" aria-describedby="historyRangeHint">
               </div>
-              <button class="btn-filter-action" id="historyRangeApply" type="button"><i data-lucide="filter" size="12"></i>应用</button>
-              <span id="historyRangeHint" class="field-help">从当前平台账号注册时间与 2025 年 1 月 1 日两者中较晚的时间开始异步准备，完成后自动刷新。</span>
+              <span id="historyRangeActual" class="history-range-actual" role="status" aria-live="polite">正在确认范围</span>
+              <button class="btn-filter-action" id="historyRangeApply" type="button"><i data-lucide="filter" size="12"></i>应用范围</button>
+              <button class="btn-filter-action history-range-save" id="historyRangeSave" type="button"><i data-lucide="save" size="12"></i>保存开始日期</button>
+              <button class="btn-filter-reset history-range-restore" id="historyRangeRestore" type="button">恢复系统起点</button>
+              <span id="historyRangeHint" class="field-help">正在确认当前终端的权威历史范围…</span>
             </div>
             <div class="history-chart-wrap">
               <div class="chart-top-bar">
+                <div class="history-chart-heading"><strong id="historyChartTitle">最近 30 天</strong><span id="historyChartRange">-- ～ --</span></div>
                 <div class="chart-stats-row">
-                  <div class="chart-stat"><span class="chart-stat-label">总交易</span><span id="chartTotalTrades" class="chart-stat-value">--</span></div>
-                  <div class="chart-stat"><span class="chart-stat-label">胜率</span><span id="chartWinRate" class="chart-stat-value">--</span></div>
-                  <div class="chart-stat"><span class="chart-stat-label">盈亏比</span><span id="chartProfitFactor" class="chart-stat-value">--</span></div>
-                  <div class="chart-stat"><span class="chart-stat-label">最大回撤</span><span id="chartMaxDD" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">30天总交易</span><span id="chartTotalTrades" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">30天胜率</span><span id="chartWinRate" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">30天盈亏比</span><span id="chartProfitFactor" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">30天最大回撤</span><span id="chartMaxDD" class="chart-stat-value">--</span></div>
                 </div>
               </div>
-              <canvas id="historyChart" height="160"></canvas>
+              <canvas id="historyChart" height="160" tabindex="0" role="img" aria-label="最近30天平仓盈亏图表"></canvas>
+              <div id="historyChartDrilldownStatus" class="history-chart-drilldown-status" role="status" aria-live="polite">点击柱状图或使用键盘选择某个平仓日查看明细</div>
             </div>
             <div class="history-stats">
               <div><span>盈利</span><strong id="historyProfit" class="num">--</strong></div>
@@ -940,6 +945,12 @@
                 <input type="date" id="filterEntryFrom" class="filter-date" aria-label="开仓开始日期">
                 <span class="filter-range-sep">~</span>
                 <input type="date" id="filterEntryTo" class="filter-date" aria-label="开仓结束日期">
+              </div>
+              <div class="filter-field">
+                <span class="filter-label" id="historyCloseRangeLabel">平仓时间</span>
+                <input type="date" id="filterCloseFrom" class="filter-date" aria-label="平仓开始日期">
+                <span class="filter-range-sep">~</span>
+                <input type="date" id="filterCloseTo" class="filter-date" aria-label="平仓结束日期">
               </div>
               <select id="filterDirection" class="filter-select" aria-label="交易方向">
                 <option value="">全部方向</option>
@@ -1289,7 +1300,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260811bridgehistorydense1&build=signalbandwidth1-notifications1"></script>
+    <script src="/ai/app.js?v=20260811historyscope1&build=signalbandwidth1-notifications1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

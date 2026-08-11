@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 const db = vi.hoisted(() => ({
   queryOne: vi.fn(),
@@ -15,11 +16,13 @@ import {
   saveAccountPerformanceChunk,
   getAccountPerformanceSummary,
   getAccountPerformanceSyncWindow,
+  LEGACY_ACCOUNT_PERFORMANCE_SOURCE,
+  getLegacyAccountPerformanceSummary,
 } from '../../server/routes/ai/account-performance.js'
 
 const context = {
   id:11, user_id:7, broker_server:'DooTechnology-Demo', login_account:'596520',
-  first_verified_at:'2026-01-01 10:00:00', ownership_history_id:91,
+  first_verified_at:'2026-01-01 10:00:00', first_connected_at:'2026-01-01 10:00:00', ownership_history_id:91,
   ownership_started_at:'2026-07-01 09:00:00', account_currency:'USD', synced_through_date:'2026-07-20',
 }
 
@@ -50,6 +53,22 @@ describe('MT5 account performance windows', () => {
   it('limits reconciliation to the current ownership period', () => {
     expect(recentPerformanceWindow({ firstConnectedAt:'2026-07-20', today:'2026-07-22', overlapDays:7 }))
       .toEqual({ date_from:'2026-07-20', date_to:'2026-07-22' })
+  })
+
+  it('keeps the stable binding start when ownership was rebound later', async () => {
+    const run = vi.fn(async sql => sql.includes('FROM trading_accounts ta')
+      ? [[{ ...context, first_connected_at:'2026-01-01 10:00:00', ownership_started_at:'2026-07-01 09:00:00',
+        synced_through_date:null,
+        timezone_offset_minutes:0, clock_status:'persisted' }], []]
+      : [{ affectedRows:1 }, []])
+    db.withTransaction.mockImplementation(fn => fn(run))
+
+    const window = await getAccountPerformanceSyncWindow(7, 11)
+    expect(window.first_connected_at).toBe('2026-01-01 10:00:00')
+    expect(window.date_from).toBe('2026-01-01')
+    const select = run.mock.calls.find(([sql]) => sql.includes('FROM trading_accounts ta'))[0]
+    expect(select).toContain('bindings.first_connected_at')
+    expect(select).not.toContain('ownership.started_at AS ownership_started_at')
   })
 
   it('rejects an inconsistent realized-net total', () => {
@@ -107,6 +126,25 @@ describe('MT5 account performance windows', () => {
 })
 
 describe('MT5 account performance persistence', () => {
+  it('marks the retained MySQL compatibility summary as legacy', async () => {
+    db.queryOne.mockResolvedValue({ ownership_period_count:1, realized_net:12 })
+    const result = await getLegacyAccountPerformanceSummary(11, 7)
+    expect(result).toMatchObject({ ownership_period_count:1, realized_net:12,
+      source:LEGACY_ACCOUNT_PERFORMANCE_SOURCE })
+  })
+
+  it('keeps the default risk-center path on Bridge SQLite summaries', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
+    const bridgeSource = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
+    const start = source.indexOf("router.get('/ai/risk-center', authMiddleware")
+    const end = source.indexOf("router.post('/ai/risk-center/refresh'", start)
+    const route = source.slice(start, end)
+    expect(route).toContain('getBridgePerformanceSummary')
+    expect(route).not.toContain('getAccountPerformanceSummary')
+    expect(route).toContain('Promise.all')
+    expect(bridgeSource).toContain("sendBridgeCommand(numericUserId, action, params, 5_000")
+  })
+
   it('scopes account totals and sync state to the requested owner', async () => {
     db.queryOne.mockResolvedValue({ ownership_period_count:1 })
 
@@ -137,7 +175,7 @@ describe('MT5 account performance persistence', () => {
 
     const dailyCall = run.mock.calls.find(([sql]) => sql.includes('INSERT INTO mt5_account_performance_daily'))
     expect(dailyCall[1].slice(0, 2)).toEqual([91, 11])
-    expect(syncParams.slice(0, 4)).toEqual([91, 11, '2026-07-01', '2026-07-20'])
+    expect(syncParams.slice(0, 4)).toEqual([91, 11, '2026-01-01', '2026-07-20'])
     expect(result.totals.net_account_change).toBe(110.5)
   })
 })

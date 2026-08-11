@@ -114,6 +114,10 @@ import {
   hasHistoryExactRangeCapability,
   hasHistoryCursorCapability,
   resolveHistoryRange,
+  historyQueryFloor,
+  HISTORY_ABSOLUTE_FLOOR_UTC_MSC,
+  mapBridgePerformanceSummaryResult,
+  getBridgePerformanceSummary,
   enrichHistoryProtectionRows,
   wsMessageByteLength,
   buildBrowserCommandResult,
@@ -127,7 +131,7 @@ import {
 } from '../server/bridge-ws.js'
 import { queryOne } from '../server/db.js'
 
-describe('bridge-ws.js — exported API shape', () => {
+describe('bridge-ws.js – exported API shape', () => {
   it('initBridgeWS is exported as function', () => {
     expect(typeof initBridgeWS).toBe('function')
   })
@@ -325,13 +329,15 @@ describe('bridge history range/export completeness contract', () => {
     const route = {
       terminal_instance_id:'terminal-history-1',
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
       capabilities:['history_exact_range_v1'],
+      history_supported_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC,
     }
     const registrationStart = Date.parse('2026-01-01T00:00:00.000Z')
     const ownershipStart = Date.parse('2026-08-08T12:30:00.000Z')
     const now = Date.parse('2026-08-10T12:30:00.000Z')
     queryOne.mockResolvedValue({
-      platform_start_utc_msc:registrationStart,
+      first_connected_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
       ownership_history_id:77,
     })
@@ -340,36 +346,36 @@ describe('bridge history range/export completeness contract', () => {
     expect(all).toMatchObject({
       scope:'all', requested_scope:'all',
       range_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC, range_end_utc_msc:now,
-      platform_start_utc_msc:registrationStart,
+      first_connected_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart, ownership_revision:'77',
     })
     const [query, queryParams] = queryOne.mock.calls.at(-1)
     expect(query).toContain('mt5_account_bindings')
     expect(query).toContain('trading_accounts')
     expect(query).toContain('mt5_account_ownership_history')
-    expect(query).toContain('JOIN users binding_user')
-    expect(query).toContain('binding_user.id = bindings.current_user_id')
-    expect(query).toContain('UNIX_TIMESTAMP(binding_user.created_at)')
-    expect(query).not.toContain('bindings.first_connected_at')
+    expect(query).toContain('bindings.first_connected_at')
+    expect(query).toContain('UNIX_TIMESTAMP(bindings.first_connected_at)')
+    expect(query).not.toContain('JOIN users binding_user')
+    expect(query).not.toContain('binding_user.created_at')
     expect(query).not.toContain('ta.first_verified_at')
     expect(query).not.toContain('bindings.created_at')
     expect(query).toContain('UPPER(bindings.broker_server_key) = UPPER(?)')
     expect(queryParams).toEqual([42, 'Broker-Demo', '123456'])
 
     queryOne.mockResolvedValue({
-      platform_start_utc_msc:registrationStart,
+      first_connected_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
       ownership_history_id:77,
     })
     const platform = await resolveHistoryRange(42, { history_scope:'platform' }, route, now)
     expect(platform).toMatchObject({
       scope:'platform', range_start_utc_msc:registrationStart,
-      range_end_utc_msc:now, platform_start_utc_msc:registrationStart,
+      range_end_utc_msc:now, first_connected_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
     })
 
     queryOne.mockResolvedValue({
-      platform_start_utc_msc:registrationStart,
+      first_connected_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
       ownership_history_id:77,
     })
@@ -382,7 +388,7 @@ describe('bridge history range/export completeness contract', () => {
     })
 
     queryOne.mockResolvedValue({
-      platform_start_utc_msc:registrationStart,
+      first_connected_utc_msc:registrationStart,
       ownership_start_utc_msc:ownershipStart,
       ownership_history_id:77,
     })
@@ -397,7 +403,7 @@ describe('bridge history range/export completeness contract', () => {
       { history_scope:'unknown' },
     ]) {
       queryOne.mockResolvedValue({
-        platform_start_utc_msc:registrationStart,
+        first_connected_utc_msc:registrationStart,
         ownership_start_utc_msc:ownershipStart,
         ownership_history_id:77,
       })
@@ -417,10 +423,10 @@ describe('bridge history range/export completeness contract', () => {
     for (const [scope, expectedStart] of [
       ['ownership', ownershipStart],
       ['platform', Date.parse('2026-01-01T00:00:00.000Z')],
-      ['all', HISTORY_COVERAGE_START_UTC_MSC],
+      ['all', HISTORY_ABSOLUTE_FLOOR_UTC_MSC],
     ]) {
       queryOne.mockResolvedValue({
-        platform_start_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'),
+        first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'),
         ownership_start_utc_msc:ownershipStart,
         ownership_history_id:12,
       })
@@ -432,7 +438,7 @@ describe('bridge history range/export completeness contract', () => {
       .rejects.toMatchObject({ code:'bridge_history_route_required' })
     queryOne.mockResolvedValue(null)
     await expect(resolveHistoryRange(42, {}, route, now))
-      .rejects.toMatchObject({ code:'bridge_history_ownership_unavailable' })
+      .rejects.toMatchObject({ code:'bridge_history_binding_unavailable' })
   })
 
   it('does not change all/platform history starts when the current ownership period is newer', async () => {
@@ -445,16 +451,57 @@ describe('bridge history range/export completeness contract', () => {
     const reboundOwnership = Date.parse('2026-08-08T12:30:00.000Z')
     const now = Date.parse('2026-08-10T12:30:00.000Z')
     queryOne.mockResolvedValue({
-      platform_start_utc_msc:firstConnected,
+      first_connected_utc_msc:firstConnected,
       ownership_start_utc_msc:reboundOwnership,
       ownership_history_id:88,
     })
     const all = await resolveHistoryRange(42, { history_scope:'all' }, route, now)
     const platform = await resolveHistoryRange(42, { history_scope:'platform' }, route, now)
-    expect(all.range_start_utc_msc).toBe(HISTORY_COVERAGE_START_UTC_MSC)
-    expect(platform.range_start_utc_msc).toBe(HISTORY_COVERAGE_START_UTC_MSC)
+    expect(all.range_start_utc_msc).toBe(HISTORY_ABSOLUTE_FLOOR_UTC_MSC)
+    expect(platform.range_start_utc_msc).toBe(firstConnected)
     expect(all.range_start_utc_msc).toBeLessThan(reboundOwnership)
     expect(platform.range_start_utc_msc).toBeLessThan(reboundOwnership)
+  })
+
+  it('freezes allowed/system/effective ranges and accepts a bounded pre-binding override', async () => {
+    const route = {
+      terminal_instance_id:'terminal-history-override', platform:'mt5',
+      account_ref:{ broker_server:'Broker-Demo', login:'555555' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
+      capabilities:['history_exact_range_v1', 'history_cursor_v1'],
+      history_visible_start_utc_msc:Date.parse('2025-01-01T00:00:00.000Z'),
+    }
+    const firstConnected = Date.parse('2026-01-10T12:00:00.000Z')
+    const now = Date.parse('2026-08-10T12:30:00.000Z')
+    queryOne.mockResolvedValue({ first_connected_utc_msc:firstConnected,
+      ownership_start_utc_msc:Date.parse('2026-08-08T12:30:00.000Z'), ownership_history_id:77 })
+
+    expect(historyQueryFloor(route)).toBe(HISTORY_COVERAGE_START_UTC_MSC)
+    expect(historyQueryFloor({ history_visible_start_utc_msc:Date.parse('2026-01-01T00:00:00.000Z') }))
+      .toBe(Date.parse('2026-01-01T00:00:00.000Z'))
+    expect(HISTORY_ABSOLUTE_FLOOR_UTC_MSC).toBe(Date.parse('2000-01-01T00:00:00.000Z'))
+
+    const range = await resolveHistoryRange(42, {
+      history_scope:'platform', scope_start_override:'2025-02-01',
+      filter_close_from:'2025-03-01', filter_close_to:'2025-04-01',
+    }, route, now)
+    expect(range).toMatchObject({
+      allowed_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC,
+      system_start_utc_msc:firstConnected,
+      effective_start_utc_msc:Date.parse('2025-02-01T00:00:00.000Z'),
+      captured_end_utc_msc:now,
+      override_applied:true,
+      effective_range:{ start_utc_msc:Date.parse('2025-02-01T00:00:00.000Z'), end_utc_msc:now },
+    })
+    expect(range.filter_close_from_utc_msc).toBe(Date.parse('2025-03-01T00:00:00.000Z'))
+    expect(range.filter_close_to_utc_msc).toBe(Date.parse('2025-04-02T00:00:00.000Z'))
+
+    await expect(resolveHistoryRange(42, {
+      history_scope:'platform', scope_start_override:'1999-12-31',
+    }, route, now)).rejects.toMatchObject({ code:'bridge_history_scope_start_out_of_range' })
+    await expect(resolveHistoryRange(42, {
+      history_scope:'platform', scope_start_override:'2026-08-11',
+    }, route, now)).rejects.toMatchObject({ code:'bridge_history_scope_start_out_of_range' })
   })
 
   it('uses requested_range_complete for exact export ranges', () => {
@@ -476,6 +523,101 @@ describe('bridge history range/export completeness contract', () => {
     })).toBe(false)
   })
 
+  it('resolves date bounds at the terminal business-day boundary for UTC+3 and UTC-5', async () => {
+    const now = Date.parse('2026-08-12T12:00:00.000Z')
+    const binding = {
+      first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'),
+      ownership_start_utc_msc:Date.parse('2026-08-01T00:00:00.000Z'), ownership_history_id:77,
+    }
+    for (const [offset, expectedStart, expectedEnd] of [
+      [180, Date.parse('2026-08-09T21:00:00.000Z'), Date.parse('2026-08-10T21:00:00.000Z')],
+      [-300, Date.parse('2026-08-10T05:00:00.000Z'), Date.parse('2026-08-11T05:00:00.000Z')],
+    ]) {
+      const route = {
+        terminal_instance_id:`terminal-clock-${offset}`, platform:'mt5',
+        account_ref:{ broker_server:'Broker-Demo', login:`${offset}` },
+        clock:{ timezone_offset_minutes:offset, clock_status:'persisted' },
+        capabilities:['history_exact_range_v1'],
+      }
+      queryOne.mockResolvedValue(binding)
+      const range = await resolveHistoryRange(42, {
+        history_scope:'custom', close_from:'2026-08-10', close_to:'2026-08-10',
+        filter_close_from:'2026-08-10', filter_close_to:'2026-08-10',
+      }, route, now)
+      expect(range.range_start_utc_msc).toBe(expectedStart)
+      expect(range.range_end_utc_msc).toBe(expectedEnd)
+      expect(range.filter_close_from_utc_msc).toBe(expectedStart)
+      expect(range.filter_close_to_utc_msc).toBe(expectedEnd)
+      expect(range).toMatchObject({ timezone_offset_minutes:offset, clock_status:'persisted' })
+    }
+  })
+
+  it('fails closed when date bounds have no trusted terminal clock', async () => {
+    queryOne.mockResolvedValue({
+      first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'),
+      ownership_start_utc_msc:Date.parse('2026-08-01T00:00:00.000Z'), ownership_history_id:77,
+    })
+    const promise = resolveHistoryRange(42, {
+      history_scope:'custom', close_from:'2026-08-10',
+    }, {
+      terminal_instance_id:'terminal-clock-missing',
+      account_ref:{ broker_server:'Broker-Demo', login:'clock-missing' },
+      capabilities:['history_exact_range_v1'],
+    }, Date.parse('2026-08-12T12:00:00.000Z'))
+    await expect(promise)
+      .rejects.toMatchObject({ code:'bridge_history_terminal_clock_unavailable' })
+  })
+
+  it('maps a ready Bridge SQLite summary without fabricating legacy totals', () => {
+    const range = {
+      scope:'platform', range_start_utc_msc:Date.parse('2026-08-01T21:00:00.000Z'),
+      range_end_utc_msc:Date.parse('2026-08-12T21:00:00.000Z'),
+      allowed_start_utc_msc:Date.parse('2000-01-01T00:00:00.000Z'),
+      system_start_utc_msc:Date.parse('2026-01-01T21:00:00.000Z'),
+      effective_start_utc_msc:Date.parse('2026-08-01T21:00:00.000Z'),
+      captured_end_utc_msc:Date.parse('2026-08-12T21:00:00.000Z'),
+      timezone_offset_minutes:180, clock_status:'persisted',
+    }
+    const result = mapBridgePerformanceSummaryResult({
+      status:'success',
+      statistics:{ account_principal:900, account_balance:1_000, total_profit:25,
+        credit:3, deposit:100, withdrawal:20, net_result:108, trade_count:4, total_volume:2.5 },
+      history_sync:{ requested_range_complete:true, coverage_complete:true,
+        summary_status:'ready', history_revision:9, summary_revision:9 },
+    }, range)
+    expect(result).toMatchObject({ source:'bridge_sqlite_summary_v2', data_complete:true,
+      status:'success', trade_profit:25, realized_net:25, net_account_change:108,
+      net_funding:83, exit_deal_count:4, closed_volume:2.5,
+      period_start_date:'2026-08-02', period_end_date:'2026-08-12',
+      revision:{ history:9, summary:9 } })
+    expect(result.performance.source).toBe('bridge_sqlite_summary_v2')
+    expect(result.commission).toBeNull()
+  })
+
+  it('fails closed for incomplete coverage and mismatched summary revisions', () => {
+    const range = { scope:'platform', range_start_utc_msc:1_700_000_000_000,
+      range_end_utc_msc:1_700_000_100_000, captured_end_utc_msc:1_700_000_100_000 }
+    expect(mapBridgePerformanceSummaryResult({ status:'success', statistics:{ total_profit:0 },
+      history_sync:{ requested_range_complete:false, coverage_complete:false,
+        summary_status:'ready', history_revision:1, summary_revision:1 } }, range))
+      .toMatchObject({ source:'bridge_sqlite_summary_v2', data_complete:false,
+        error:'bridge_sqlite_summary_coverage_incomplete' })
+    expect(mapBridgePerformanceSummaryResult({ status:'success', statistics:{ total_profit:0 },
+      history_sync:{ requested_range_complete:true, coverage_complete:true,
+        summary_status:'ready', history_revision:2, summary_revision:1 } }, range))
+      .toMatchObject({ source:'bridge_sqlite_summary_v2', data_complete:false,
+        error:'bridge_sqlite_summary_not_ready' })
+  })
+
+  it('returns an explicit offline summary error and never falls back to MySQL', async () => {
+    queryOne.mockClear()
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(false)
+    const result = await getBridgePerformanceSummary(42, 77)
+    expect(result).toMatchObject({ source:'bridge_sqlite_summary_v2', data_complete:false,
+      status:'error', error:'bridge_sqlite_summary_bridge_offline' })
+    expect(queryOne).not.toHaveBeenCalled()
+  })
+
   it('classifies an unchanged terminal identity as a reconnect', () => {
     const terminal = {
       terminal_instance_id:'terminal_identity_1',
@@ -487,6 +629,14 @@ describe('bridge history range/export completeness contract', () => {
       ...identity, login:'87654321',
     })).toBe('account_switched')
     expect(classifyBridgeIdentityEvent(null, identity)).toBe('account_switched')
+  })
+
+  it('does not schedule legacy performance_daily refreshes during terminal readiness', () => {
+    const source = readFileSync(new URL('../server/bridge-ws.js', import.meta.url), 'utf8')
+    expect(source).not.toContain('queueAccountPerformanceSync')
+    expect(source).not.toContain("'performance_daily'")
+    expect(source).toContain('preparePlatformHistoryOnTerminalReady')
+    expect(source).toContain('force_refresh:true')
   })
 })
 
@@ -918,6 +1068,7 @@ describe('initBridgeWS', () => {
     const route = {
       terminal_instance_id:'terminal-history-exact', platform:'mt5',
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
       capabilities:['history_exact_range_v1'],
     }
     mockBridgeV3Business.connectedTerminals.mockReturnValue([route])
@@ -927,7 +1078,7 @@ describe('initBridgeWS', () => {
     queryOne.mockImplementation(async sql => {
       if (String(sql).includes('FROM mt5_account_bindings')) {
         return {
-          platform_start_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'),
+          first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'),
           ownership_start_utc_msc:Date.parse('2026-08-08T12:30:00.000Z'),
           ownership_history_id:77,
         }
@@ -984,7 +1135,7 @@ describe('initBridgeWS', () => {
       history_sync:{ requested_range_complete:true },
     })
     queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
-      ? { platform_start_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:Date.parse('2026-08-08T12:30:00.000Z'), ownership_history_id:77 }
+      ? { first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:Date.parse('2026-08-08T12:30:00.000Z'), ownership_history_id:77 }
       : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
           plan_source:null, connection_enabled:1 })
     const server = new EventEmitter()
@@ -1005,7 +1156,8 @@ describe('initBridgeWS', () => {
       type:'command', command_id:'history-cursor', action:'history',
       params:{ page:2, page_size:20, history_scope:'platform',
         history_snapshot_id:'a'.repeat(64), cursor:'b'.repeat(64),
-        range_start_utc_msc:snapshotRangeStart, range_end_utc_msc:now },
+        range_start_utc_msc:snapshotRangeStart, range_end_utc_msc:now,
+        captured_end_utc_msc:now },
     }))
     await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalled(), { timeout:5_000 })
     const [, action, bridgeParams] = mockBridgeV3Business.execute.mock.calls.at(-1)
@@ -1043,14 +1195,14 @@ describe('initBridgeWS', () => {
     mockBridgeV3Business.execute
       .mockResolvedValueOnce({
         status:'error', error:'history_cursor_range_incomplete',
-        message:'history_cursor_range_incomplete',
+        message:'history_cursor_range_incomplete', history_snapshot_id:'a'.repeat(64),
       })
       .mockResolvedValueOnce({
         status:'success', orders:[],
         history_sync:{ requested_range_complete:true },
       })
     queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
-      ? { platform_start_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
+      ? { first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
       : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
           plan_source:null, connection_enabled:1 })
 
@@ -1077,17 +1229,17 @@ describe('initBridgeWS', () => {
     expect(firstCall[1]).toBe('history_page')
     const firstRangeEnd = Number(firstCall[2].range_end_utc_msc)
     expect(firstCall[2]).toMatchObject({
-      range_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC,
+      range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC,
       terminal_instance_id:route.terminal_instance_id,
     })
-    expect(firstCall[2].range_start_utc_msc).toBe(HISTORY_COVERAGE_START_UTC_MSC)
+    expect(firstCall[2].range_start_utc_msc).toBe(HISTORY_ABSOLUTE_FLOOR_UTC_MSC)
     expect(firstCall[2].range_start_utc_msc).toBeLessThan(ownershipStart)
     expect(firstRangeEnd).toBeGreaterThanOrEqual(firstNow)
     expect(firstRangeEnd).toBeLessThanOrEqual(firstNow + 60_000)
     expect(firstCall[2]).not.toHaveProperty('history_snapshot_id')
     expect(JSON.parse(browserWs.send.mock.calls[0][0])).toMatchObject({
       status:'error', error:'history_cursor_range_incomplete',
-      history_range:{ range_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC, range_end_utc_msc:firstRangeEnd },
+      history_range:{ range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC, range_end_utc_msc:firstRangeEnd },
     })
 
     const retryNow = firstRangeEnd + 5_000
@@ -1095,18 +1247,20 @@ describe('initBridgeWS', () => {
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-retry', action:'history',
       params:{ history_scope:'all', page:1, page_size:20,
-        range_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC, range_end_utc_msc:firstRangeEnd },
+        range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC, range_end_utc_msc:firstRangeEnd,
+        history_snapshot_id:'a'.repeat(64), captured_end_utc_msc:firstRangeEnd },
     }))
     await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2))
     const retryCall = mockBridgeV3Business.execute.mock.calls[1]
     expect(retryCall[1]).toBe('history_page')
     expect(retryCall[2]).toMatchObject({
-      range_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC,
+      range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC,
       range_end_utc_msc:firstRangeEnd,
+      history_snapshot_id:'a'.repeat(64),
       terminal_instance_id:route.terminal_instance_id,
     })
-    expect(retryCall[2].range_start_utc_msc).toBe(HISTORY_COVERAGE_START_UTC_MSC)
-    expect(retryCall[2]).not.toHaveProperty('history_snapshot_id')
+    expect(retryCall[2].range_start_utc_msc).toBe(HISTORY_ABSOLUTE_FLOOR_UTC_MSC)
+    expect(retryCall[2].history_snapshot_id).toBe('a'.repeat(64))
     browserWs.emit('close')
     vi.useRealTimers()
   })
@@ -1120,6 +1274,7 @@ describe('initBridgeWS', () => {
     const route = {
       terminal_instance_id:'terminal-history-custom-retry', platform:'mt5',
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
       capabilities:['history_exact_range_v1', 'history_cursor_v1'],
     }
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
@@ -1135,7 +1290,7 @@ describe('initBridgeWS', () => {
         history_sync:{ requested_range_complete:true },
       })
     queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
-      ? { platform_start_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
+      ? { first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
       : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
           plan_source:null, connection_enabled:1 })
 
@@ -1207,6 +1362,7 @@ describe('initBridgeWS', () => {
     const route = {
       terminal_instance_id:'terminal-history-chart-fixed', platform:'mt5',
       account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
       capabilities:['history_exact_range_v1', 'history_cursor_v1'],
     }
     mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
@@ -1216,7 +1372,7 @@ describe('initBridgeWS', () => {
       .mockResolvedValueOnce({ status:'success', orders:[], history_sync:{ requested_range_complete:true } })
       .mockResolvedValueOnce({ status:'success', statistics:{}, chart:[] })
     queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
-      ? { platform_start_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
+      ? { first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
       : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
           plan_source:null, connection_enabled:1 })
     const server = new EventEmitter()
@@ -1234,27 +1390,30 @@ describe('initBridgeWS', () => {
 
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-table', action:'history',
-      params:{ history_scope:'recent', page:1, page_size:20 },
+      params:{ history_scope:'all', page:1, page_size:20,
+        filter_close_from:'2026-08-01' },
     }))
     await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(1))
     const tableRangeEnd = Number(mockBridgeV3Business.execute.mock.calls[0][2].range_end_utc_msc)
     vi.setSystemTime(now + 10_000)
     const tableRangeStart = Number(mockBridgeV3Business.execute.mock.calls[0][2].range_start_utc_msc)
-    expect(tableRangeStart).toBeGreaterThanOrEqual(now - 30 * 24 * 60 * 60 * 1_000)
-    expect(tableRangeStart).toBeLessThanOrEqual(now - 30 * 24 * 60 * 60 * 1_000 + 60_000)
+    expect(tableRangeStart).toBe(HISTORY_ABSOLUTE_FLOOR_UTC_MSC)
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-chart', action:'history_chart_data',
-      params:{ history_scope:'recent',
+      params:{ history_scope:'all', filter_close_from:'2026-08-02',
         range_start_utc_msc:tableRangeStart, range_end_utc_msc:tableRangeEnd },
     }))
     await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2))
     const chartCall = mockBridgeV3Business.execute.mock.calls[1]
     expect(chartCall[1]).toBe('chart_data')
     expect(chartCall[2]).toMatchObject({
-      range_start_utc_msc:tableRangeStart,
       range_end_utc_msc:tableRangeEnd,
       terminal_instance_id:route.terminal_instance_id,
     })
+    expect(chartCall[2]).not.toHaveProperty('filter_close_from')
+    expect(chartCall[2]).not.toHaveProperty('filter_close_to')
+    expect(chartCall[2].range_start_utc_msc).toBeGreaterThanOrEqual(tableRangeStart)
+    expect(chartCall[2].range_start_utc_msc).toBeLessThan(chartCall[2].range_end_utc_msc)
 
     browserWs.emit('message', JSON.stringify({
       type:'command', command_id:'history-chart-partial', action:'history_chart_data',
@@ -1284,7 +1443,7 @@ describe('initBridgeWS', () => {
     mockBridgeV3Business.supports.mockReturnValue(true)
     mockBridgeV3Business.connectedTerminals.mockReturnValue([route])
     queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
-      ? { platform_start_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
+      ? { first_connected_utc_msc:Date.parse('2026-01-01T00:00:00.000Z'), ownership_start_utc_msc:ownershipStart, ownership_history_id:77 }
       : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
           plan_source:null, connection_enabled:1 })
     const server = new EventEmitter()
@@ -1304,11 +1463,12 @@ describe('initBridgeWS', () => {
       { range_start_utc_msc:ownershipStart },
       { range_start_utc_msc:now, range_end_utc_msc:ownershipStart },
       { range_start_utc_msc:recentStart - 1, range_end_utc_msc:now },
+      { range_start_utc_msc:recentStart, range_end_utc_msc:now + 1 },
       { range_start_utc_msc:recentStart, range_end_utc_msc:now + 120_000 },
       { range_start_utc_msc:recentStart + 1, range_end_utc_msc:now },
       { history_scope:'ownership', range_start_utc_msc:ownershipStart + 1,
         range_end_utc_msc:now },
-      { history_scope:'all', range_start_utc_msc:HISTORY_COVERAGE_START_UTC_MSC + 1,
+      { history_scope:'all', range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC + 1,
         range_end_utc_msc:now },
       { history_scope:'platform', range_start_utc_msc:Date.parse('2026-01-01T00:00:00.001Z'),
         range_end_utc_msc:now },
@@ -1323,6 +1483,16 @@ describe('initBridgeWS', () => {
         status:'error', code:'history_cursor_invalid',
       })
     }
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-cursor-without-snapshot', action:'history',
+      params:{ history_scope:'all', page:2, page_size:20,
+        range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC,
+        range_end_utc_msc:now, cursor:'b'.repeat(64) },
+    }))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(invalidRanges.length + 1))
+    expect(JSON.parse(browserWs.send.mock.calls.at(-1)[0])).toMatchObject({
+      status:'error', code:'history_cursor_invalid',
+    })
     expect(mockBridgeV3Business.execute).not.toHaveBeenCalled()
     browserWs.emit('close')
     vi.useRealTimers()

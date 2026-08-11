@@ -661,6 +661,9 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, len(second_batch["trades"]))
         self.assertAlmostEqual(9.7, second_batch["trades"][0]["net_profit"])
         self.assertEqual(3002, second_batch["trades"][0]["order_ticket"])
+        self.assertEqual(4002, second_batch["trades"][0]["close_deal_ticket"])
+        self.assertIn("close_time_utc_msc", second_batch["trades"][0])
+        self.assertIn("close_business_date", second_batch["trades"][0])
         self.assertEqual(2285.0, second_batch["trades"][0]["stop_loss"])
         self.assertEqual(2315.0, second_batch["trades"][0]["take_profit"])
         self.assertEqual(
@@ -668,7 +671,7 @@ class WorkerTests(unittest.TestCase):
             [item["ticket"] for item in second_batch["history_orders"]],
         )
         self.assertEqual(1, len(self.mt5.history_deal_queries))
-        self.assertEqual(2, len(self.mt5.history_order_queries))
+        self.assertEqual(1, len(self.mt5.history_order_queries))
         self.assertTrue(all(not kwargs for _, kwargs in self.mt5.history_deal_queries))
         self.assertTrue(all(not kwargs for _, kwargs in self.mt5.history_order_queries))
 

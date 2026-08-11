@@ -743,6 +743,7 @@ class ReadOnlyMt5Adapter:
             return self._history_batch([], [], range_end, 0, False, now_msc)
         cache_key = (range_start, range_end, cursor_time, cursor_ticket)
         range_cache_hit = self._history_range_cache_key == cache_key
+        bulk_raw_orders: list[dict[str, Any]] = []
         if not range_cache_hit:
             server_from = self.clock.server_from_utc(max(0, range_start - 1_000))
             server_to = self.clock.server_from_utc(range_end + 999)
@@ -756,6 +757,21 @@ class ReadOnlyMt5Adapter:
                 raise WorkerError("mt5_history_orders_unavailable")
             if len(raw_orders) > MAX_HISTORY_CONTEXT_ITEMS:
                 raise WorkerError("mt5_history_range_too_dense")
+            bulk_raw_orders = [_plain(item) for item in raw_orders]
+            for value in bulk_raw_orders:
+                if not isinstance(value, dict):
+                    raise WorkerError("mt5_history_order_invalid")
+                try:
+                    ticket = int(value.get("ticket") or 0)
+                except (TypeError, ValueError) as error:
+                    raise WorkerError("mt5_history_order_invalid") from error
+                if ticket <= 0:
+                    raise WorkerError("mt5_history_order_invalid")
+                self._remember_history_context(
+                    self._history_orders_by_ticket,
+                    ticket,
+                    self._history_order_row(value),
+                )
             rows: list[tuple[int, int, int, dict[str, Any]]] = []
             for value in raw_deals:
                 raw = _plain(value)
@@ -836,43 +852,11 @@ class ReadOnlyMt5Adapter:
             next_time, next_ticket = range_end, 0
             has_more = False
         raw_deals = [item[3] for item in selected if item[2] == 0]
+        # The immutable fixed-range snapshot already fetched all order
+        # evidence on its first page.  Continuations reuse the cached order
+        # rows (and still emit standalone order rows selected on that page)
+        # instead of issuing another history_orders_get call.
         raw_orders = [item[3] for item in selected if item[2] == 1]
-        if range_cache_hit and selected:
-            # Keep the existing bounded per-page bulk-order read semantics on
-            # cached deal rows.  The cached event list still drives pagination;
-            # this refresh only validates that the broker can provide the
-            # selected order evidence and avoids reintroducing unrelated rows.
-            order_from = datetime.fromtimestamp(
-                self.clock.server_from_utc(max(range_start, selected[0][0]) - 1_000) / 1000,
-                tz=timezone.utc,
-            )
-            order_to = datetime.fromtimestamp(
-                self.clock.server_from_utc(selected[-1][0] + 999) / 1000,
-                tz=timezone.utc,
-            )
-            values = self.mt5.history_orders_get(order_from, order_to)
-            if values is None:
-                raise WorkerError("mt5_history_orders_unavailable")
-            refreshed = {}
-            for value in values:
-                raw = _plain(value)
-                if not isinstance(raw, dict):
-                    raise WorkerError("mt5_history_order_invalid")
-                try:
-                    ticket = int(raw.get("ticket") or 0)
-                    event_server_msc = int(
-                        raw.get("time_done_msc")
-                        or raw.get("time_setup_msc")
-                        or int(raw.get("time_done") or raw.get("time_setup") or 0) * 1000
-                    )
-                except (TypeError, ValueError) as error:
-                    raise WorkerError("mt5_history_order_invalid") from error
-                if ticket > 0 and event_server_msc > 0:
-                    refreshed[(self.clock.normalize(event_server_msc), ticket)] = raw
-            raw_orders = [
-                refreshed.get((item[0], item[1]), item[3])
-                for item in selected if item[2] == 1
-            ]
         batch = self._history_batch(
             raw_deals, raw_orders,
             next_time, next_ticket, has_more, now_msc,
@@ -1555,6 +1539,8 @@ class ReadOnlyMt5Adapter:
                 raise WorkerError("mt5_history_order_invalid")
             order_row = self._history_order_row(value)
             orders_by_ticket[ticket] = order_row
+            self._remember_history_context(
+                self._history_orders_by_ticket, ticket, order_row)
             if order_row not in history_orders:
                 history_orders.append(order_row)
 
@@ -1630,6 +1616,10 @@ class ReadOnlyMt5Adapter:
                     "origin": origin,
                     "protection_order": protection_order,
                 })
+            close_server_msc = int(
+                raw.get("time_msc") or int(raw.get("time") or 0) * 1000
+            )
+            close_utc_msc = self.clock.normalize(close_server_msc)
             trades.append({
                 "ticket": origin.get("order") or position_id or raw.get("ticket"),
                 "deal_ticket": raw.get("ticket"),
@@ -1654,12 +1644,13 @@ class ReadOnlyMt5Adapter:
                 "entry_time_utc_msc": self.clock.normalize(int(
                     origin.get("time_msc") or int(origin.get("time") or 0) * 1000)),
                 "close_time": self._history_time(raw.get("time")),
-                "close_time_server_msc": int(raw.get("time_msc")
-                                             or int(raw.get("time") or 0) * 1000),
-                "close_time_utc_msc": self.clock.normalize(int(
-                    raw.get("time_msc") or int(raw.get("time") or 0) * 1000)),
-                "close_time_msc": self.clock.normalize(int(
-                    raw.get("time_msc") or int(raw.get("time") or 0) * 1000)),
+                "close_time_server_msc": close_server_msc,
+                "close_time_utc_msc": close_utc_msc,
+                "close_time_msc": close_utc_msc,
+                "close_deal_ticket": raw.get("ticket"),
+                "close_timezone_offset_minutes": self.clock.offset_minutes,
+                "close_business_date": datetime.fromtimestamp(
+                    close_server_msc / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
                 "time": self._history_time(raw.get("time")),
                 "time_server_msc": int(raw.get("time_msc")
                                        or int(raw.get("time") or 0) * 1000),

@@ -606,6 +606,15 @@ export function createBridgeV3BusinessAdapter({
   }
 
   async function requestTerminalData(userId, route, action, params, timeoutMs) {
+    if (['history', 'history_page'].includes(action)
+      && (params.filter_close_from != null || params.filter_close_to != null)
+      && route.history_close_filter_supported === false) {
+      // A deliberately marked legacy Bridge must not receive a filter it
+      // cannot apply before pagination.  The caller can show this stable
+      // compatibility error instead of silently post-filtering a partial
+      // page.
+      throw adapterError('bridge_history_close_filter_unsupported')
+    }
     const allowed = ['symbols', 'diagnostics'].includes(action)
       ? {}
       : action === 'pending_order_state'
@@ -622,6 +631,17 @@ export function createBridgeV3BusinessAdapter({
           date_to:action === 'history_evidence' ? undefined : params.date_to || undefined,
           range_start_utc_msc:params.range_start_utc_msc,
           range_end_utc_msc:params.range_end_utc_msc,
+          // Frozen server-resolved range metadata is carried alongside the
+          // exact half-open interval.  Bridge Store treats these as
+          // validation evidence, never as a client-controlled widening.
+          allowed_start_utc_msc:params.allowed_start_utc_msc,
+          system_start_utc_msc:params.system_start_utc_msc,
+          effective_start_utc_msc:params.effective_start_utc_msc,
+          captured_end_utc_msc:params.captured_end_utc_msc,
+          filter_close_from:['history', 'history_page'].includes(action)
+            ? params.filter_close_from || undefined : undefined,
+          filter_close_to:['history', 'history_page'].includes(action)
+            ? params.filter_close_to || undefined : undefined,
           entry_from:['history', 'history_page'].includes(action) ? params.entry_from || undefined : undefined,
           entry_to:['history', 'history_page'].includes(action) ? params.entry_to || undefined : undefined,
           direction:action === 'history_evidence' ? undefined : params.direction || undefined,
@@ -682,13 +702,38 @@ export function createBridgeV3BusinessAdapter({
       // the corresponding exact range boundary.
       throw adapterError('history_range_invalid')
     }
+    for (const key of ['allowed_start_utc_msc', 'system_start_utc_msc',
+      'effective_start_utc_msc', 'captured_end_utc_msc']) {
+      if (allowed[key] === undefined) continue
+      if (!Number.isSafeInteger(allowed[key]) || allowed[key] <= 0) {
+        throw adapterError('history_range_invalid')
+      }
+    }
+    if (allowed.allowed_start_utc_msc !== undefined
+      && allowed.system_start_utc_msc !== undefined
+      && allowed.allowed_start_utc_msc > allowed.system_start_utc_msc) {
+      throw adapterError('history_range_invalid')
+    }
+    if (allowed.effective_start_utc_msc !== undefined
+      && allowed.allowed_start_utc_msc !== undefined
+      && allowed.effective_start_utc_msc < allowed.allowed_start_utc_msc) {
+      throw adapterError('history_range_invalid')
+    }
+    if (allowed.captured_end_utc_msc !== undefined
+      && hasExactRangeEnd && allowed.captured_end_utc_msc !== allowed.range_end_utc_msc) {
+      throw adapterError('history_range_invalid')
+    }
     if (action === 'pending_order_state' && !/^\d{1,32}$/.test(allowed.ticket || '')) {
       throw adapterError('ticket_required')
     }
-    for (const key of ['date_from', 'date_to', 'entry_from', 'entry_to']) {
-      if (allowed[key] && !/^\d{4}-\d{2}-\d{2}$/.test(String(allowed[key]))) {
-        throw adapterError('history_date_invalid')
-      }
+    for (const key of ['date_from', 'date_to', 'entry_from', 'entry_to',
+      'filter_close_from', 'filter_close_to']) {
+      if (allowed[key] === undefined || allowed[key] === null || allowed[key] === '') continue
+      const numeric = Number(allowed[key])
+      const numericBoundary = Number.isSafeInteger(numeric) && numeric > 0
+      const dateBoundary = typeof allowed[key] === 'string'
+        && /^\d{4}-\d{2}-\d{2}$/.test(allowed[key])
+      if (!numericBoundary && !dateBoundary) throw adapterError('history_date_invalid')
     }
     if (allowed.direction && !['BUY', 'SELL'].includes(String(allowed.direction))) {
       throw adapterError('history_direction_invalid')

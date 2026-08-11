@@ -756,7 +756,9 @@ impl InboundDataHandler for ActiveMt5Sessions {
         })();
         Box::pin(async move {
             let (store, terminal, parameters, request_id, action, session, history_now) = prepared?;
-            if let (PreparedDataSession::Mt5(session), Some(now)) = (&session, history_now) {
+            if let (PreparedDataSession::Mt5(session), Some(now)) = (&session, history_now)
+                && history_request_requires_prepare(&action, &parameters)
+            {
                 let store_for_request = Arc::clone(&store);
                 let history_handle = session.handle.clone();
                 let terminal_for_request = terminal.clone();
@@ -1010,6 +1012,16 @@ fn core_data_action_handler(action: &str) -> Option<CoreDataActionHandler> {
         }
         _ => None,
     }
+}
+
+fn history_request_requires_prepare(action: &str, parameters: &serde_json::Value) -> bool {
+    matches!(
+        action,
+        "history" | "history_page" | "history_evidence" | "chart_data"
+    ) && parameters
+        .get("force_refresh")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
 }
 
 fn prepare_mt5_history_request(
@@ -2435,6 +2447,28 @@ mod tests {
             assert!(is_supported_data_request_action(action));
             assert!(core_data_action_handler(action).is_some());
         }
+    }
+
+    #[test]
+    fn history_reads_are_passive_until_refresh_is_explicit() {
+        for action in ["history", "history_page", "history_evidence", "chart_data"] {
+            assert!(!history_request_requires_prepare(
+                action,
+                &serde_json::json!({})
+            ));
+            assert!(!history_request_requires_prepare(
+                action,
+                &serde_json::json!({ "force_refresh": false })
+            ));
+            assert!(history_request_requires_prepare(
+                action,
+                &serde_json::json!({ "force_refresh": true })
+            ));
+        }
+        assert!(!history_request_requires_prepare(
+            "positions",
+            &serde_json::json!({ "force_refresh": true })
+        ));
     }
 
     fn reconciliation_route_fixture(epoch: i64) -> WorkerRoute {

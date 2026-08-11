@@ -264,6 +264,60 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(gateway.requestData).not.toHaveBeenCalled()
   })
 
+  it('forwards close-time filters and frozen range evidence before pagination', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ orders:[], pagination:{ total_count:0 }, source:'mt5' },
+    } })
+    const rangeStart = NOW - 86_400_000
+    await expect(adapter.execute(42, 'history_page', {
+      page_size:20, range_start_utc_msc:rangeStart, range_end_utc_msc:NOW,
+      allowed_start_utc_msc:NOW - 30 * 86_400_000,
+      system_start_utc_msc:rangeStart,
+      effective_start_utc_msc:rangeStart,
+      captured_end_utc_msc:NOW,
+      filter_close_from:'2026-01-01', filter_close_to:'2026-01-02',
+      history_snapshot_id:'a'.repeat(64), cursor:'b'.repeat(64),
+    })).resolves.toMatchObject({ status:'success' })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'history_page', params:expect.objectContaining({
+        range_start_utc_msc:rangeStart, range_end_utc_msc:NOW,
+        allowed_start_utc_msc:NOW - 30 * 86_400_000,
+        system_start_utc_msc:rangeStart, effective_start_utc_msc:rangeStart,
+        captured_end_utc_msc:NOW,
+        filter_close_from:'2026-01-01', filter_close_to:'2026-01-02',
+      }),
+    }), { timeoutMs:5_000 })
+
+    const legacy = setup({ routes:[route({ history_close_filter_supported:false })] })
+    await expect(legacy.adapter.execute(42, 'history', {
+      page:1, page_size:20, range_start_utc_msc:rangeStart, range_end_utc_msc:NOW,
+      filter_close_from:'2026-01-01',
+    })).resolves.toMatchObject({ status:'error', error:'bridge_history_close_filter_unsupported' })
+    expect(legacy.gateway.requestData).not.toHaveBeenCalled()
+  })
+
+  it('accepts numeric terminal-time filter bounds after server business-day resolution', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{ orders:[], pagination:{ total_count:0 }, source:'mt5' },
+    } })
+    const rangeStart = NOW - 86_400_000
+    await expect(adapter.execute(42, 'history_page', {
+      page_size:1, range_start_utc_msc:rangeStart, range_end_utc_msc:NOW,
+      filter_close_from:rangeStart + 3_600_000,
+      filter_close_to:NOW - 1,
+      entry_from:rangeStart + 1_000,
+      entry_to:NOW - 1,
+    })).resolves.toMatchObject({ status:'success' })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'history_page', params:expect.objectContaining({
+        filter_close_from:rangeStart + 3_600_000,
+        filter_close_to:NOW - 1,
+        entry_from:rangeStart + 1_000,
+        entry_to:NOW - 1,
+      }),
+    }), { timeoutMs:5_000 })
+  })
+
   it('forwards bounded position and order references for open-position history evidence', async () => {
     const { adapter, gateway } = setup({ dataResponse:{
       status:'succeeded', payload:{ orders:[], deals:[], history_orders:[], source:'mt5' },

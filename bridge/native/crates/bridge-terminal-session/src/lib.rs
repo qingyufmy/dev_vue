@@ -499,12 +499,18 @@ impl TerminalSessionHandle {
             .history_scope_state(&terminal)
             .map_err(|error| TerminalSessionError::new(error.code()))?;
         let lookback_start = now.saturating_sub(HISTORY_TAIL_LOOKBACK_MSC);
-        let prior = state.fresh_through_utc_msc.unwrap_or(lookback_start);
-        let range_start_utc_msc = HISTORY_COVERAGE_START_UTC_MSC.max(
-            prior
-                .saturating_sub(HISTORY_TAIL_OVERLAP_MSC)
-                .min(lookback_start),
-        );
+        let sealed_tail = store
+            .latest_sealed_trade_cursor(&terminal)
+            .map_err(|error| TerminalSessionError::new(error.code()))?
+            .map(|cursor| cursor.time_msc);
+        let prior = sealed_tail
+            .into_iter()
+            .chain(state.fresh_through_utc_msc)
+            .chain(std::iter::once(lookback_start))
+            .max()
+            .unwrap_or(lookback_start);
+        let range_start_utc_msc =
+            HISTORY_COVERAGE_START_UTC_MSC.max(prior.saturating_sub(HISTORY_TAIL_OVERLAP_MSC));
         if range_start_utc_msc >= now {
             return Ok(());
         }
@@ -1454,12 +1460,18 @@ async fn ensure_history_tail_refresh(
             .history_scope_state(&terminal)
             .map_err(|error| error.code().to_owned())?;
         let lookback_start = now.saturating_sub(HISTORY_TAIL_LOOKBACK_MSC);
-        let prior = state.fresh_through_utc_msc.unwrap_or(lookback_start);
-        let range_start_utc_msc = HISTORY_COVERAGE_START_UTC_MSC.max(
-            prior
-                .saturating_sub(HISTORY_TAIL_OVERLAP_MSC)
-                .min(lookback_start),
-        );
+        let sealed_tail = store
+            .latest_sealed_trade_cursor(&terminal)
+            .map_err(|error| error.code().to_owned())?
+            .map(|cursor| cursor.time_msc);
+        let prior = sealed_tail
+            .into_iter()
+            .chain(state.fresh_through_utc_msc)
+            .chain(std::iter::once(lookback_start))
+            .max()
+            .unwrap_or(lookback_start);
+        let range_start_utc_msc =
+            HISTORY_COVERAGE_START_UTC_MSC.max(prior.saturating_sub(HISTORY_TAIL_OVERLAP_MSC));
         if range_start_utc_msc >= now {
             return Ok(Vec::new());
         }
@@ -2490,9 +2502,32 @@ fn build_mt4_history_trade(item: &serde_json::Value) -> serde_json::Value {
         "close_time": item.get("close_time").and_then(serde_json::Value::as_str).unwrap_or_default(),
         "time": item.get("close_time").and_then(serde_json::Value::as_str).unwrap_or_default(),
         "time_msc": item.get("time_msc").and_then(serde_json::Value::as_i64).unwrap_or_default(),
+        // MT4 history trades must carry the same immutable close-time
+        // evidence as MT5.  Missing fields remain null and are rejected by
+        // the store; the old event-time field is never used as a close-time
+        // fallback.
+        "entry_time_utc_msc": history_i64_any(item, "entry_time_utc_msc"),
+        "close_time_utc_msc": history_i64_any(item, "close_time_utc_msc"),
+        "close_time_server_msc": history_i64_any(item, "close_time_server_msc"),
+        "close_timezone_offset_minutes": history_i64_any(item, "close_timezone_offset_minutes"),
+        "close_business_date": item.get("close_business_date").cloned().unwrap_or(serde_json::Value::Null),
+        "close_deal_ticket": history_scalar(item, "close_deal_ticket"),
         "comment": item.get("comment").and_then(serde_json::Value::as_str).unwrap_or_default(),
         "take_profit": history_number(item, "tp"),
         "stop_loss": history_number(item, "sl")
+    })
+}
+
+fn history_i64_any(item: &serde_json::Value, name: &str) -> Option<i64> {
+    item.get(name).and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+            .or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<i64>().ok())
+            })
     })
 }
 
@@ -2800,6 +2835,10 @@ mod tests {
                                 "order_ticket": "77",
                                 "position_id": "77",
                                 "time_msc": 1_785_333_000_000_i64,
+                                "close_time_utc_msc": 1_785_333_000_000_i64,
+                                "close_time_server_msc": 1_785_333_000_000_i64,
+                                "close_timezone_offset_minutes": 0,
+                                "close_business_date": "2026-07-29",
                                 "side": "buy",
                                 "symbol": "XAUUSD",
                                 "volume": 0.01,

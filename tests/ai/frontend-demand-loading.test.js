@@ -81,6 +81,11 @@ async function runHistoryCursorScenario() {
     }
     const document = { getElementById:() => ({ value:'' }) }
     function getHistoryRangeParams() { return { history_scope:'all' } }
+    function historyRefreshContextKey({ forceRefresh = false } = {}) {
+      return JSON.stringify({ forceRefresh, page:state.historyFilters.page, range:getHistoryRangeParams() })
+    }
+    function historyRangeContextMatches() { return true }
+    function applyHistoryScopeResponse() {}
     function historyFlightKey(kind, options) { return \`\${kind}:\${Boolean(options.forceRefresh)}\` }
     function historyCircuitAllows() {}
     function clearHistoryCircuit() {}
@@ -208,7 +213,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
     expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
     expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
-    expect(html).toContain('/ai/app.js?v=20260811bridgehistorydense1&build=signalbandwidth1')
+    expect(html).toContain('/ai/app.js?v=20260811historyscope1&build=signalbandwidth1-notifications1')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {
@@ -255,7 +260,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const leaveHistory = block('if (tabId !== "history") {', 'closeMobileNav(')
     expect(leaveHistory).toContain('cancelHistoryRangeRetry()')
     expect(leaveHistory).toContain('clearHistoryFreshnessRetry()')
-    expect(app).toContain('function resetHistoryCursorState(key = null) {\n  cancelHistoryRangeRetry()')
+    expect(app).toContain('function resetHistoryCursorState(key = null, { preserveRange = false } = {}) {\n  cancelHistoryRangeRetry()')
   })
 
   it('accepts only a safe fixed range from an incomplete-history response', () => {
@@ -282,7 +287,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(views).toContain('if (sync.freshness_state === "fresh") _historyDirty = false')
     expect(views).toContain('scheduleHistoryFreshnessRetry(tableData)')
     expect(views).toContain('tableData?.chart_data')
-    expect(views).toContain('_renderHistoryChart(tableData.chart_data)')
+    expect(views).toContain('_renderHistoryChart(embeddedChart)')
     expect(views).toContain('Number(state.historyFilters?.page || 1) > 1 && _historyChartCache')
     expect(apply).toContain('已显示 ${rows.length} 笔 · 全量统计准备中')
     expect(apply).toContain('historySummaryReadyForRequestedRange(sync)')
@@ -298,9 +303,9 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(freshness).toContain('loadHistoryViews({ forceRefresh:false, historyRetryAttempt:true })')
     expect(freshness).not.toContain('loadHistoryViews({ forceRefresh:true')
     expect(views).toContain('const automaticRetry = historyRetryAttempt === true && manualRefresh !== true')
-    expect(views).toContain('const effectiveForceRefresh = Boolean(!automaticRetry && (forceRefresh || _historyDirty))')
+    expect(views).toContain('const effectiveForceRefresh = Boolean(!tableOnly && !automaticRetry && (forceRefresh || _historyDirty))')
     expect(views).toContain('resetHistorySnapshotState({ preserveRange:true })')
-    expect(views).toContain('loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh })')
+    expect(views).toContain('loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh, tableOnly })')
     expect(table).toContain('range_start_utc_msc:_historyCursorState.rangeStart')
     expect(table).toContain('range_end_utc_msc:_historyCursorState.rangeEnd')
 

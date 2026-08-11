@@ -4569,6 +4569,46 @@ input:checked + .slider::before { transform: translateX(18px); }
   font-weight: 600;
 }
 
+/* History scope and close-time drill-down state */
+.history-range-actual {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.history-range-save,
+.history-range-restore {
+  white-space: nowrap;
+}
+.history-chart-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+}
+.history-chart-heading strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.history-chart-heading span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.history-chart-drilldown-status {
+  min-height: 20px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+#historyChart:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--gold-primary) 60%, transparent);
+  outline-offset: 3px;
+}
+
 .analysis-result {
   min-height: 360px;
 }

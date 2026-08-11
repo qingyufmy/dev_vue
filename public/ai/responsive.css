@@ -1628,6 +1628,19 @@
     min-height: 44px;
   }
 
+  .history-scope-bar .history-range-actual,
+  .history-scope-bar .history-range-save,
+  .history-scope-bar .history-range-restore {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  .history-chart-heading {
+    width: 100%;
+  }
+
   .chart-stats-row {
     display: grid;
     width: 100%;

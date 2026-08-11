@@ -21,6 +21,7 @@ async function runAccountDisplayCases() {
     let observer = false
     const displayed = {}
     const state = { accountBalance:0, bridgeAccountIdentity:null }
+    function setHistoryAccountIdentity(identity) { state.bridgeAccountIdentity = identity }
     function wsApi(action) {
       if (action !== 'account') throw new Error('unexpected action')
       return Promise.resolve(response)
@@ -220,9 +221,9 @@ describe('precise AI/admin frontend fixes', () => {
   })
 
   it('ships cache-busted app scripts while keeping each asset family on one key', () => {
-    expect(aiHtml).toContain('/ai/app.js?v=20260811bridgehistorydense1&build=signalbandwidth1-notifications1')
-    expect(aiHtml).toContain('/ai/styles.css?v=20260811bridgehistorydense1')
-    expect(aiHtml).toContain('/ai/responsive.css?v=20260811bridgehistorydense1')
+    expect(aiHtml).toContain('/ai/app.js?v=20260811historyscope1&build=signalbandwidth1-notifications1')
+    expect(aiHtml).toContain('/ai/styles.css?v=20260811historyscope1')
+    expect(aiHtml).toContain('/ai/responsive.css?v=20260811historyscope1')
     expect(adminHtml).toContain('/admin/styles.css?v=20260810userpage10fix2')
   })
 })

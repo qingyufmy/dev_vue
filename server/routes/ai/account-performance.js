@@ -11,6 +11,9 @@ const addDays = (value, days) => isoDate(Date.parse(`${value}T00:00:00Z`) + days
 const minDate = (left, right) => left <= right ? left : right
 const todayDate = () => new Date().toISOString().slice(0, 10)
 const UNTRUSTED_CLOCK_STATUSES = new Set(['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'])
+export const LEGACY_ACCOUNT_PERFORMANCE_SOURCE = 'legacy_mysql_snapshot'
+const datePart = value => value instanceof Date
+  ? value.toISOString().slice(0, 10) : String(value || '').slice(0, 10)
 
 function terminalClock(account) {
   if (account?.timezone_offset_minutes == null || account.timezone_offset_minutes === '') {
@@ -76,7 +79,7 @@ async function accountSyncContext(run, userId, accountId, lock = false) {
   const suffix = lock ? ' FOR UPDATE' : ''
   const account = await txOne(run, `SELECT ta.id, ta.user_id, ta.broker_server, ta.login_account,
       ta.first_verified_at, bindings.first_connected_at, bindings.last_connected_at, bindings.account_currency,
-      ownership.id AS ownership_history_id, ownership.started_at AS ownership_started_at,
+      ownership.id AS ownership_history_id,
       state.synced_through_date, state.sync_status,
       (SELECT mds.timezone_offset_minutes FROM market_data_sources mds
         WHERE mds.bridge_user_id = ta.user_id
@@ -96,6 +99,7 @@ async function accountSyncContext(run, userId, accountId, lock = false) {
     LEFT JOIN mt5_account_performance_sync_state state ON state.ownership_history_id = ownership.id
     WHERE ta.id = ? AND ta.user_id = ? AND ta.is_deleted = 0${suffix}`, [accountId, userId])
   if (!account) throw new Error('performance_account_not_current_owner')
+  if (!account.first_connected_at) throw new Error('performance_binding_start_unavailable')
   return account
 }
 
@@ -104,7 +108,10 @@ export async function getAccountPerformanceSyncWindow(userId, accountId, { recen
     const account = await accountSyncContext(run, userId, accountId, true)
     const effectiveClock = await resolveDefaultObserverClockBootstrap(account)
     const clock = terminalClock(effectiveClock)
-    const firstConnectedAt = account.ownership_started_at || account.first_verified_at
+    // Performance windows follow the stable account binding.  Ownership is
+    // retained only as a compatibility/storage partition for existing daily
+    // rows; rebinding must not truncate the account's cumulative history.
+    const firstConnectedAt = account.first_connected_at
     const firstConnectedUtcMs = firstConnectedAt instanceof Date
       ? firstConnectedAt.getTime() : parseBeijing(firstConnectedAt)?.getTime()
     const firstConnectedDate = Number.isFinite(firstConnectedUtcMs)
@@ -121,13 +128,15 @@ export async function getAccountPerformanceSyncWindow(userId, accountId, { recen
       VALUES (?, ?, ?, ?, 'syncing', ?, ?, ?)
       ON DUPLICATE KEY UPDATE sync_status = 'syncing', last_error = NULL,
         last_attempt_at = VALUES(last_attempt_at), updated_at = VALUES(updated_at)`,
-    [account.ownership_history_id, accountId, String(firstConnectedAt).slice(0, 10), account.synced_through_date || null, now, now, now])
+    [account.ownership_history_id, accountId, firstConnectedDate, account.synced_through_date || null, now, now, now])
     return { ...window, account:{ id:Number(account.id), server:account.broker_server,
       login:String(account.login_account), currency:account.account_currency || null },
-      first_connected_at:firstConnectedAt, timezone_offset_minutes:clock.offsetMinutes,
+      first_connected_at:firstConnectedAt, stable_binding_start:firstConnectedAt,
+      timezone_offset_minutes:clock.offsetMinutes,
       clock_status:clock.status,
       clock_source:effectiveClock.clock_source || 'account_terminal',
-      source_clock_status:effectiveClock.source_clock_status || null }
+      source_clock_status:effectiveClock.source_clock_status || null,
+      source:LEGACY_ACCOUNT_PERFORMANCE_SOURCE }
   })
 }
 
@@ -218,7 +227,8 @@ export async function saveAccountPerformanceChunk(userId, accountId, payload = {
         timezone_offset_minutes = VALUES(timezone_offset_minutes), sync_status = VALUES(sync_status),
         last_error = VALUES(last_error), last_attempt_at = VALUES(last_attempt_at),
         last_success_at = VALUES(last_success_at), updated_at = VALUES(updated_at)`,
-    [context.ownership_history_id, accountId, String(context.ownership_started_at || context.first_verified_at).slice(0, 10), syncedThroughDate,
+    [context.ownership_history_id, accountId,
+      datePart(context.first_connected_at), syncedThroughDate,
       payload.timezone_offset_minutes != null && payload.timezone_offset_minutes !== ''
         && Number.isFinite(Number(payload.timezone_offset_minutes))
         ? Math.trunc(Number(payload.timezone_offset_minutes)) : null,
@@ -228,7 +238,9 @@ export async function saveAccountPerformanceChunk(userId, accountId, payload = {
       last_connected_at = ?, updated_at = ? WHERE current_trading_account_id = ? AND current_user_id = ?`,
     [currency, now, now, accountId, userId])
     return { account_id:Number(accountId), date_from:dateFrom, date_to:dateTo,
-      row_count:rows.length, data_complete:complete, totals:{ ...totals, net_funding:netFunding, net_account_change:netAccountChange } }
+      row_count:rows.length, data_complete:complete,
+      source:LEGACY_ACCOUNT_PERFORMANCE_SOURCE,
+      totals:{ ...totals, net_funding:netFunding, net_account_change:netAccountChange } }
   })
 }
 
@@ -242,13 +254,14 @@ export async function recordAccountPerformanceSyncFailure(userId, accountId, err
       VALUES (?, ?, ?, 'failed', ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE sync_status = 'failed', last_error = VALUES(last_error),
         last_attempt_at = VALUES(last_attempt_at), updated_at = VALUES(updated_at)`,
-    [context.ownership_history_id, accountId, String(context.ownership_started_at || context.first_verified_at).slice(0, 10), message, now, now, now])
-    return { account_id:Number(accountId), error:message }
+    [context.ownership_history_id, accountId,
+      datePart(context.first_connected_at), message, now, now, now])
+    return { account_id:Number(accountId), error:message, source:LEGACY_ACCOUNT_PERFORMANCE_SOURCE }
   })
 }
 
 export async function getAccountPerformanceSummary(accountId, userId) {
-  return queryOne(`SELECT COUNT(*) AS ownership_period_count,
+  const summary = await queryOne(`SELECT COUNT(*) AS ownership_period_count,
       MIN(totals.period_start_date) AS period_start_date,
       MAX(totals.period_end_date) AS period_end_date, MAX(totals.account_currency) AS account_currency,
       COALESCE(SUM(totals.realized_net), 0) AS realized_net,
@@ -277,4 +290,15 @@ export async function getAccountPerformanceSummary(accountId, userId) {
     JOIN mt5_account_ownership_history owner ON owner.id = totals.ownership_history_id
     WHERE totals.trading_account_id = ? AND owner.user_id = ?`,
   [accountId, userId, accountId, userId, accountId, userId, accountId, userId])
+  return summary
+    ? { ...summary, source:LEGACY_ACCOUNT_PERFORMANCE_SOURCE }
+    : { source:LEGACY_ACCOUNT_PERFORMANCE_SOURCE, data_complete:false }
 }
+
+// Explicit names for callers that still need the deprecated MySQL snapshot
+// path.  The user-facing risk-center route deliberately uses the Bridge
+// SQLite summary helper instead of any of these compatibility functions.
+export const getLegacyAccountPerformanceSyncWindow = getAccountPerformanceSyncWindow
+export const saveLegacyAccountPerformanceChunk = saveAccountPerformanceChunk
+export const recordLegacyAccountPerformanceSyncFailure = recordAccountPerformanceSyncFailure
+export const getLegacyAccountPerformanceSummary = getAccountPerformanceSummary

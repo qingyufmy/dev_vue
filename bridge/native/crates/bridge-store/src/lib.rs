@@ -32,10 +32,11 @@ const MAX_HISTORY_SNAPSHOT_CURSORS: usize = 512;
 const HISTORY_SNAPSHOT_TTL_MSC: i64 = 10 * 60 * 1_000;
 const HISTORY_TAIL_WINDOW_MSC: i64 = 7 * 24 * 60 * 60 * 1_000;
 const HISTORY_CURSOR_TOKEN_BYTES: usize = 32;
+const HISTORY_DAY_MSC: i64 = 86_400_000;
 /// Earliest history timestamp that the native archive planner and request
 /// contract may accept.  Rows older than this are retained as rebuildable
 /// evidence, but are never included in a newly planned/query range.
-pub const HISTORY_COVERAGE_START_UTC_MSC: i64 = 1_735_689_600_000;
+pub const HISTORY_COVERAGE_START_UTC_MSC: i64 = 946_684_800_000;
 /// Smallest MT5 history sub-window accepted by the native scheduler.  Dense
 /// ranges are retried with progressively smaller positive UTC-millisecond
 /// windows; one second is the safety floor used to recover older blocked
@@ -184,7 +185,9 @@ const HISTORY_RUNTIME_REQUIRED_INDEXES: &[&str] = &[
     "idx_history_scope_state_updated",
     "idx_history_archive_summary_scope",
     "idx_history_archive_trade_filter",
+    "idx_history_archive_trade_close",
     "idx_history_daily_summary_active",
+    "idx_history_daily_summary_v2_active",
     "idx_history_summary_builds_updated",
 ];
 
@@ -558,6 +561,8 @@ pub struct HistoryJobBatchResult {
     pub changed_item_count: usize,
     pub history_changed: bool,
     pub history_revision: i64,
+    pub duplicate_item_count: usize,
+    pub immutable_conflict_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -612,6 +617,8 @@ pub struct HistoryScopeState {
     pub history_revision: i64,
     pub summary_revision: i64,
     pub summary_status: String,
+    pub duplicate_count: i64,
+    pub immutable_conflict_count: i64,
     pub updated_at_utc_msc: i64,
 }
 
@@ -758,6 +765,8 @@ struct HistoryCursorQuery {
     page_size: i64,
     entry_from_utc_msc: Option<i64>,
     entry_to_utc_msc: Option<i64>,
+    close_from_utc_msc: Option<i64>,
+    close_to_utc_msc: Option<i64>,
     direction: Option<String>,
     profit_filter: Option<String>,
 }
@@ -1983,16 +1992,19 @@ impl OutboxStore {
         }
         validate_history_job_batch_cursor(&job, &batch.next_cursor, batch.has_more)?;
         validate_history_items_in_range(
+            "deal",
             &batch.deals,
             job.range_start_utc_msc,
             job.range_end_utc_msc,
         )?;
         validate_history_items_in_range(
+            "history_order",
             &batch.history_orders,
             job.range_start_utc_msc,
             job.range_end_utc_msc,
         )?;
         validate_history_items_in_range(
+            "trade",
             &batch.trades,
             job.range_start_utc_msc,
             job.range_end_utc_msc,
@@ -2022,6 +2034,19 @@ impl OutboxStore {
             .changed_item_count
             .saturating_add(history_order_result.changed_item_count)
             .saturating_add(trade_result.changed_item_count);
+        upsert_result.sealed_trade_changed_count = trade_result.sealed_trade_changed_count;
+        upsert_result.capital_changed_count = upsert_result
+            .capital_changed_count
+            .saturating_add(trade_result.capital_changed_count)
+            .saturating_add(history_order_result.capital_changed_count);
+        upsert_result.duplicate_item_count = upsert_result
+            .duplicate_item_count
+            .saturating_add(history_order_result.duplicate_item_count)
+            .saturating_add(trade_result.duplicate_item_count);
+        upsert_result.immutable_conflict_count = upsert_result
+            .immutable_conflict_count
+            .saturating_add(history_order_result.immutable_conflict_count)
+            .saturating_add(trade_result.immutable_conflict_count);
         upsert_result
             .affected_days
             .extend(history_order_result.affected_days);
@@ -2052,10 +2077,18 @@ impl OutboxStore {
         };
         let mut scope_state =
             read_history_scope_state_locked(&transaction, &job.scope, &terminal.platform)?;
+        scope_state.duplicate_count = scope_state
+            .duplicate_count
+            .saturating_add(upsert_result.duplicate_item_count as i64);
+        scope_state.immutable_conflict_count = scope_state
+            .immutable_conflict_count
+            .saturating_add(upsert_result.immutable_conflict_count as i64);
         let history_changed = upsert_result.changed_item_count > 0;
+        let summary_changed =
+            upsert_result.sealed_trade_changed_count > 0 || upsert_result.capital_changed_count > 0;
         let summary_was_ready = scope_state.summary_status == "ready"
             && scope_state.summary_revision == scope_state.history_revision;
-        if history_changed {
+        if upsert_result.sealed_trade_changed_count > 0 {
             scope_state.history_revision = scope_state
                 .history_revision
                 .checked_add(1)
@@ -2064,21 +2097,29 @@ impl OutboxStore {
             // possible.  A scope without one remains pending until the
             // generation-safe rebuild API is invoked.
             scope_state.summary_status = "pending".to_owned();
-            if summary_was_ready
-                && let Some(build) =
-                    read_history_summary_build_locked(&transaction, &job.scope, &terminal.platform)?
-                && let Some(generation) = build.active_generation
-            {
-                refresh_history_summary_days_tx(
-                    &transaction,
-                    &job.scope,
-                    &terminal.platform,
-                    generation,
-                    &upsert_result.affected_days,
-                )?;
-                scope_state.summary_revision = scope_state.history_revision;
-                scope_state.summary_status = "ready".to_owned();
-            }
+        }
+        if summary_changed
+            && summary_was_ready
+            && let Some(build) =
+                read_history_summary_build_locked(&transaction, &job.scope, &terminal.platform)?
+            && let Some(generation) = build.active_generation
+        {
+            refresh_history_summary_days_tx(
+                &transaction,
+                &job.scope,
+                &terminal.platform,
+                generation,
+                &upsert_result.affected_days,
+            )?;
+            refresh_history_summary_v2_days_tx(
+                &transaction,
+                &job.scope,
+                &terminal.platform,
+                generation,
+                &upsert_result.affected_days,
+            )?;
+            scope_state.summary_revision = scope_state.history_revision;
+            scope_state.summary_status = "ready".to_owned();
         }
         let is_recent_flight = job.job_kind == "recent";
         let is_tail_flight = job.job_id.starts_with("tail_refresh_");
@@ -2186,6 +2227,8 @@ impl OutboxStore {
             changed_item_count: upsert_result.changed_item_count,
             history_changed,
             history_revision: scope_state.history_revision,
+            duplicate_item_count: upsert_result.duplicate_item_count,
+            immutable_conflict_count: upsert_result.immutable_conflict_count,
         })
     }
 
@@ -2878,6 +2921,47 @@ impl OutboxStore {
         read_history_scope_state_locked(&connection, &scope, &terminal.platform)
     }
 
+    /// Return the newest immutable trade close cursor for this account.  The
+    /// tail scheduler uses this boundary to refresh only the bounded mutable
+    /// suffix instead of re-reading an arbitrary historical overlap.
+    pub fn latest_sealed_trade_cursor(
+        &self,
+        terminal: &TerminalDescriptor,
+    ) -> Result<Option<HistoryCursor>, StoreError> {
+        terminal
+            .validate()
+            .map_err(|_| StoreError::new("bridge_store_history_scope_invalid"))?;
+        let connection = self
+            .history_read_connection
+            .lock()
+            .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
+        connection
+            .query_row(
+                "SELECT close_time_utc_msc, item_id
+                 FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND item_kind = 'trade' AND immutable_state = 'sealed'
+                   AND close_time_utc_msc IS NOT NULL
+                 ORDER BY close_time_utc_msc DESC, item_id DESC LIMIT 1;",
+                params![
+                    terminal.terminal_instance_id,
+                    terminal.account_ref.broker_server,
+                    terminal.account_ref.login,
+                    terminal.platform
+                ],
+                |row| {
+                    Ok(HistoryCursor {
+                        time_msc: row.get(0)?,
+                        ticket: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_cursor_query_failed"))
+    }
+
     /// Scope-oriented alias used by schedulers that already have a normalized
     /// account scope and platform string.
     pub fn history_scope_state_for_scope(
@@ -3039,7 +3123,28 @@ impl OutboxStore {
                     ],
                 )
                 .map_err(|_| StoreError::new("bridge_store_history_summary_build_failed"))?;
+            transaction
+                .execute(
+                    "DELETE FROM history_daily_summary_v2
+                     WHERE terminal_instance_id = ?1
+                       AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4 AND generation = ?5;",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        terminal.platform,
+                        build_generation
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_summary_build_failed"))?;
             insert_history_summary_generation_tx(
+                &transaction,
+                &scope,
+                &terminal.platform,
+                build_generation,
+            )?;
+            insert_history_summary_v2_generation_tx(
                 &transaction,
                 &scope,
                 &terminal.platform,
@@ -3054,6 +3159,21 @@ impl OutboxStore {
             transaction
                 .execute(
                     "DELETE FROM history_daily_summary
+                     WHERE terminal_instance_id = ?1
+                       AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4 AND generation <> ?5;",
+                    params![
+                        scope.terminal_instance_id,
+                        scope.broker_server,
+                        scope.login_account,
+                        terminal.platform,
+                        build_generation
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_summary_cleanup_failed"))?;
+            transaction
+                .execute(
+                    "DELETE FROM history_daily_summary_v2
                      WHERE terminal_instance_id = ?1
                        AND broker_server = ?2 COLLATE NOCASE
                        AND login_account = ?3 AND platform = ?4 AND generation <> ?5;",
@@ -3309,6 +3429,19 @@ impl OutboxStore {
             .changed_item_count
             .saturating_add(history_order_result.changed_item_count)
             .saturating_add(trade_result.changed_item_count);
+        upsert_result.sealed_trade_changed_count = trade_result.sealed_trade_changed_count;
+        upsert_result.capital_changed_count = upsert_result
+            .capital_changed_count
+            .saturating_add(trade_result.capital_changed_count)
+            .saturating_add(history_order_result.capital_changed_count);
+        upsert_result.duplicate_item_count = upsert_result
+            .duplicate_item_count
+            .saturating_add(history_order_result.duplicate_item_count)
+            .saturating_add(trade_result.duplicate_item_count);
+        upsert_result.immutable_conflict_count = upsert_result
+            .immutable_conflict_count
+            .saturating_add(history_order_result.immutable_conflict_count)
+            .saturating_add(trade_result.immutable_conflict_count);
         upsert_result
             .affected_days
             .extend(history_order_result.affected_days);
@@ -3371,29 +3504,46 @@ impl OutboxStore {
         };
         let mut scope_state =
             read_history_scope_state_locked(&transaction, &scope, &terminal.platform)?;
+        scope_state.duplicate_count = scope_state
+            .duplicate_count
+            .saturating_add(upsert_result.duplicate_item_count as i64);
+        scope_state.immutable_conflict_count = scope_state
+            .immutable_conflict_count
+            .saturating_add(upsert_result.immutable_conflict_count as i64);
+        let history_changed = upsert_result.changed_item_count > 0;
+        let summary_changed =
+            upsert_result.sealed_trade_changed_count > 0 || upsert_result.capital_changed_count > 0;
         let summary_was_ready = scope_state.summary_status == "ready"
             && scope_state.summary_revision == scope_state.history_revision;
-        if upsert_result.changed_item_count > 0 {
+        if upsert_result.sealed_trade_changed_count > 0 {
             scope_state.history_revision = scope_state
                 .history_revision
                 .checked_add(1)
                 .ok_or_else(|| StoreError::new("bridge_store_history_revision_exhausted"))?;
             scope_state.summary_status = "pending".to_owned();
-            if summary_was_ready
-                && let Some(build) =
-                    read_history_summary_build_locked(&transaction, &scope, &terminal.platform)?
-                && let Some(generation) = build.active_generation
-            {
-                refresh_history_summary_days_tx(
-                    &transaction,
-                    &scope,
-                    &terminal.platform,
-                    generation,
-                    &upsert_result.affected_days,
-                )?;
-                scope_state.summary_revision = scope_state.history_revision;
-                scope_state.summary_status = "ready".to_owned();
-            }
+        }
+        if summary_changed
+            && summary_was_ready
+            && let Some(build) =
+                read_history_summary_build_locked(&transaction, &scope, &terminal.platform)?
+            && let Some(generation) = build.active_generation
+        {
+            refresh_history_summary_days_tx(
+                &transaction,
+                &scope,
+                &terminal.platform,
+                generation,
+                &upsert_result.affected_days,
+            )?;
+            refresh_history_summary_v2_days_tx(
+                &transaction,
+                &scope,
+                &terminal.platform,
+                generation,
+                &upsert_result.affected_days,
+            )?;
+            scope_state.summary_revision = scope_state.history_revision;
+            scope_state.summary_status = "ready".to_owned();
         }
         if batch.has_more {
             scope_state.freshness_state = "refreshing".to_owned();
@@ -3426,7 +3576,7 @@ impl OutboxStore {
         transaction
             .commit()
             .map_err(|_| StoreError::new("bridge_store_history_commit_failed"))?;
-        if upsert_result.changed_item_count > 0 {
+        if history_changed {
             self.invalidate_history_home_snapshots(terminal)?;
         }
         Ok(())
@@ -3463,7 +3613,9 @@ impl OutboxStore {
                 &format!(
                     "SELECT COUNT(*) FROM history_archive_items \
                      WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
-                       AND login_account = ? AND platform = ? AND item_kind = 'trade'{};",
+                       AND login_account = ? AND platform = ? AND item_kind = 'trade' \
+                       AND close_time_utc_msc >= 946684800000 \
+                       AND close_time_utc_msc IS NOT NULL{};",
                     request.filter_sql
                 ),
                 params_from_iter(filtered_values.clone()),
@@ -3474,8 +3626,10 @@ impl OutboxStore {
             .prepare(&format!(
                 "SELECT payload_json FROM history_archive_items \
                  WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
-                   AND login_account = ? AND platform = ? AND item_kind = 'trade'{} \
-                 ORDER BY event_time_msc DESC, item_id DESC LIMIT ? OFFSET ?;",
+                   AND login_account = ? AND platform = ? AND item_kind = 'trade' \
+                   AND close_time_utc_msc >= 946684800000 \
+                   AND close_time_utc_msc IS NOT NULL{} \
+                 ORDER BY close_time_utc_msc DESC, item_id DESC LIMIT ? OFFSET ?;",
                 request.filter_sql
             ))
             .map_err(|_| StoreError::new("bridge_store_history_page_query_failed"))?;
@@ -3612,16 +3766,19 @@ impl OutboxStore {
             .lock()
             .map_err(|_| StoreError::new("bridge_store_lock_poisoned"))?;
         let mut query = String::from(
-            "SELECT payload_json, event_time_msc, item_id FROM history_archive_items \
+            "SELECT payload_json, close_time_utc_msc, item_id FROM history_archive_items \
              WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
                AND login_account = ? AND platform = ? AND item_kind = 'trade' \
-               AND rowid <= ? AND event_time_msc >= ? AND event_time_msc < ?",
+               AND close_time_utc_msc IS NOT NULL \
+               AND rowid <= ? AND close_time_utc_msc >= ? AND close_time_utc_msc < ?",
         );
         query.push_str(&request.filter_sql);
         if page_boundary.is_some() {
-            query.push_str(" AND (event_time_msc < ? OR (event_time_msc = ? AND item_id < ?))");
+            query.push_str(
+                " AND (close_time_utc_msc < ? OR (close_time_utc_msc = ? AND item_id < ?))",
+            );
         }
-        query.push_str(" ORDER BY event_time_msc DESC, item_id DESC LIMIT ?;");
+        query.push_str(" ORDER BY close_time_utc_msc DESC, item_id DESC LIMIT ?;");
         let mut values = history_scope_values(terminal);
         values.push(SqlValue::Text(terminal.platform.clone()));
         values.push(SqlValue::Integer(snapshot.highwater_rowid));
@@ -3817,7 +3974,8 @@ impl OutboxStore {
             "SELECT COUNT(*) FROM history_archive_items \
              WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE \
                AND login_account = ? AND platform = ? AND item_kind = 'trade' \
-               AND rowid <= ? AND event_time_msc >= ? AND event_time_msc < ?",
+               AND close_time_utc_msc IS NOT NULL \
+               AND rowid <= ? AND close_time_utc_msc >= ? AND close_time_utc_msc < ?",
         );
         total_sql.push_str(&request.filter_sql);
         let mut total_values = history_scope_values(terminal);
@@ -3852,12 +4010,15 @@ impl OutboxStore {
                 broker_server: terminal.account_ref.broker_server.clone(),
                 login_account: terminal.account_ref.login.clone(),
             };
+            let summary_v2_generation =
+                history_summary_v2_ready_generation(&connection, &scope, &terminal.platform)?;
             match history_summary_ready_generation(&connection, &scope, &terminal.platform)? {
                 Some(generation) => read_history_chart_data_from_summary(
                     &connection,
                     terminal,
                     &chart_request,
                     generation,
+                    summary_v2_generation == Some(generation),
                     history_sync.clone(),
                 )?,
                 None => serde_json::Value::Null,
@@ -4023,6 +4184,8 @@ impl OutboxStore {
             broker_server: terminal.account_ref.broker_server.clone(),
             login_account: terminal.account_ref.login.clone(),
         };
+        let summary_v2_generation =
+            history_summary_v2_ready_generation(&connection, &scope, &terminal.platform)?;
         let summary_generation =
             history_summary_ready_generation(&connection, &scope, &terminal.platform)?;
         let state = read_history_state_locked(&connection, terminal)?;
@@ -4048,6 +4211,7 @@ impl OutboxStore {
             terminal,
             &request,
             generation,
+            summary_v2_generation == Some(generation),
             history_sync,
         )
     }
@@ -5217,6 +5381,11 @@ CREATE INDEX IF NOT EXISTS idx_history_archive_order
     terminal_instance_id, broker_server, login_account,
     item_kind, order_ticket, event_time_msc, item_id
   );
+CREATE INDEX IF NOT EXISTS idx_history_archive_trade_close
+  ON history_archive_items (
+    terminal_instance_id, broker_server, login_account, platform,
+    item_kind, close_time_utc_msc DESC, item_id DESC
+  );
 CREATE INDEX IF NOT EXISTS idx_history_archive_summary_scope
   ON history_archive_items (
     terminal_instance_id, broker_server, login_account, platform,
@@ -5258,6 +5427,8 @@ CREATE TABLE IF NOT EXISTS history_scope_state (
   history_revision INTEGER NOT NULL DEFAULT 0 CHECK (history_revision >= 0),
   summary_revision INTEGER NOT NULL DEFAULT 0 CHECK (summary_revision >= 0),
   summary_status TEXT NOT NULL CHECK (summary_status IN ('pending', 'rebuilding', 'ready', 'unavailable')),
+  duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count >= 0),
+  immutable_conflict_count INTEGER NOT NULL DEFAULT 0 CHECK (immutable_conflict_count >= 0),
   updated_at_utc_msc INTEGER NOT NULL DEFAULT 0 CHECK (updated_at_utc_msc >= 0),
   CHECK (
     (head_ready = 0 AND head_range_start_utc_msc IS NULL AND head_range_end_utc_msc IS NULL)
@@ -5314,6 +5485,33 @@ CREATE INDEX IF NOT EXISTS idx_history_summary_builds_updated
     terminal_instance_id, broker_server, login_account, platform,
     updated_at_utc_msc DESC
   );
+
+CREATE TABLE IF NOT EXISTS history_daily_summary_v2 (
+  terminal_instance_id TEXT NOT NULL,
+  broker_server TEXT COLLATE NOCASE NOT NULL,
+  login_account TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('mt4', 'mt5')),
+  generation INTEGER NOT NULL CHECK (generation > 0),
+  business_date TEXT NOT NULL CHECK (business_date GLOB '????-??-??'),
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('trade', 'deal')),
+  direction TEXT NOT NULL DEFAULT '',
+  profit_bucket TEXT NOT NULL DEFAULT '',
+  trade_count INTEGER NOT NULL DEFAULT 0 CHECK (trade_count >= 0),
+  net_profit REAL NOT NULL DEFAULT 0,
+  volume REAL NOT NULL DEFAULT 0,
+  deal_deposit REAL NOT NULL DEFAULT 0,
+  deal_withdrawal REAL NOT NULL DEFAULT 0,
+  deal_credit REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (
+    terminal_instance_id, broker_server, login_account, platform,
+    generation, business_date, item_kind, direction, profit_bucket
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_history_daily_summary_v2_active
+  ON history_daily_summary_v2 (
+    terminal_instance_id, broker_server, login_account, platform,
+    generation, business_date, item_kind, direction, profit_bucket
+  );
 "#;
 
 fn ensure_history_runtime_schema(connection: &mut Connection) -> Result<(), StoreError> {
@@ -5324,6 +5522,7 @@ fn ensure_history_runtime_schema(connection: &mut Connection) -> Result<(), Stor
     if scalar_columns_added {
         backfill_history_archive_scalar_columns(&transaction)?;
     }
+    ensure_history_scope_state_columns(&transaction)?;
     transaction
         .execute_batch(HISTORY_RUNTIME_SCHEMA_SQL)
         .map_err(|_| StoreError::new("bridge_store_history_schema_failed"))?;
@@ -5332,6 +5531,29 @@ fn ensure_history_runtime_schema(connection: &mut Connection) -> Result<(), Stor
     transaction
         .commit()
         .map_err(|_| StoreError::new("bridge_store_history_schema_commit_failed"))
+}
+
+fn ensure_history_scope_state_columns(transaction: &Transaction<'_>) -> Result<(), StoreError> {
+    if !table_exists(transaction, "history_scope_state")? {
+        return Ok(());
+    }
+    let columns = table_columns(transaction, "history_scope_state")?;
+    for (column, definition) in [
+        ("duplicate_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("immutable_conflict_count", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        if !columns.iter().any(|existing| existing == column) {
+            transaction
+                .execute(
+                    &format!("ALTER TABLE history_scope_state ADD COLUMN {column} {definition};"),
+                    [],
+                )
+                .map_err(|_| {
+                    StoreError::new("bridge_store_history_scope_state_migration_failed")
+                })?;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_history_archive_scalar_columns(
@@ -5346,6 +5568,11 @@ fn ensure_history_archive_scalar_columns(
         ("capital_kind", "TEXT"),
         ("capital_amount", "REAL"),
         ("summary_day_utc_msc", "INTEGER"),
+        ("close_time_utc_msc", "INTEGER"),
+        ("close_time_server_msc", "INTEGER"),
+        ("close_timezone_offset_minutes", "INTEGER"),
+        ("close_business_date", "TEXT"),
+        ("immutable_state", "TEXT NOT NULL DEFAULT 'legacy'"),
     ] {
         if !columns.iter().any(|existing| existing == column) {
             transaction
@@ -5418,7 +5645,50 @@ fn backfill_history_archive_scalar_columns(
                                           json_extract(payload_json, '$.amount'),
                                           json_extract(payload_json, '$.profit'), 0) AS REAL)
                      ELSE NULL END,
-                 summary_day_utc_msc = event_time_msc - (event_time_msc % 86400000);",
+                 summary_day_utc_msc = CASE
+                     WHEN item_kind = 'trade'
+                          AND CAST(COALESCE(
+                              json_extract(payload_json, '$.close_time_server_msc'),
+                              json_extract(payload_json, '$.close_time_utc_msc'),
+                              json_extract(payload_json, '$.close_time_msc'), 0) AS INTEGER) > 0
+                       THEN CAST(strftime('%s', COALESCE(
+                           json_extract(payload_json, '$.close_business_date'),
+                           json_extract(payload_json, '$.business_date'),
+                           strftime('%Y-%m-%d', CAST(COALESCE(
+                               json_extract(payload_json, '$.close_time_server_msc'),
+                               json_extract(payload_json, '$.close_time_utc_msc'),
+                               json_extract(payload_json, '$.close_time_msc'), 0) AS INTEGER)
+                               / 1000, 'unixepoch'))) AS INTEGER) * 1000
+                     ELSE event_time_msc - (event_time_msc % 86400000)
+                 END,
+                 close_time_utc_msc = CASE WHEN item_kind = 'trade' THEN CAST(COALESCE(
+                     json_extract(payload_json, '$.close_time_utc_msc'),
+                     json_extract(payload_json, '$.close_time_msc')) AS INTEGER) ELSE NULL END,
+                 close_time_server_msc = CASE WHEN item_kind = 'trade' THEN CAST(COALESCE(
+                     json_extract(payload_json, '$.close_time_server_msc'),
+                     json_extract(payload_json, '$.close_time_utc_msc'),
+                     json_extract(payload_json, '$.close_time_msc')) AS INTEGER) ELSE NULL END,
+                 close_timezone_offset_minutes = CASE WHEN item_kind = 'trade' THEN CAST(COALESCE(
+                     json_extract(payload_json, '$.close_timezone_offset_minutes'),
+                     json_extract(payload_json, '$.timezone_offset_minutes'),
+                     (CAST(COALESCE(json_extract(payload_json, '$.close_time_server_msc'),
+                                    json_extract(payload_json, '$.close_time_utc_msc'),
+                                    json_extract(payload_json, '$.close_time_msc'), 0) AS INTEGER)
+                      - CAST(COALESCE(json_extract(payload_json, '$.close_time_utc_msc'),
+                                      json_extract(payload_json, '$.close_time_msc'), 0) AS INTEGER))
+                     / 60000, 0) AS INTEGER) ELSE NULL END,
+                 close_business_date = CASE WHEN item_kind = 'trade' THEN COALESCE(
+                     json_extract(payload_json, '$.close_business_date'),
+                     json_extract(payload_json, '$.business_date'),
+                     strftime('%Y-%m-%d',
+                       CAST(COALESCE(json_extract(payload_json, '$.close_time_server_msc'),
+                                     json_extract(payload_json, '$.close_time_utc_msc'),
+                                     json_extract(payload_json, '$.close_time_msc'), 0) AS INTEGER)
+                       / 1000, 'unixepoch')) ELSE NULL END,
+                 immutable_state = CASE WHEN item_kind = 'trade'
+                     AND CAST(json_extract(payload_json, '$.close_time_utc_msc') AS INTEGER) > 0
+                     AND CAST(json_extract(payload_json, '$.close_time_server_msc') AS INTEGER) > 0
+                     THEN 'sealed' ELSE 'legacy_incomplete' END;",
             [],
         )
         .map(|_| ())
@@ -5663,6 +5933,8 @@ fn default_history_scope_state(scope: &HistoryScope, platform: &str) -> HistoryS
         history_revision: 0,
         summary_revision: 0,
         summary_status: "pending".to_owned(),
+        duplicate_count: 0,
+        immutable_conflict_count: 0,
         updated_at_utc_msc: 0,
     }
 }
@@ -5679,7 +5951,8 @@ fn read_history_scope_state_locked(
         .query_row(
             "SELECT head_ready, head_range_start_utc_msc, head_range_end_utc_msc,
                     coverage_complete, freshness_state, fresh_through_utc_msc,
-                    history_revision, summary_revision, summary_status, updated_at_utc_msc
+                    history_revision, summary_revision, summary_status,
+                    duplicate_count, immutable_conflict_count, updated_at_utc_msc
              FROM history_scope_state
              WHERE terminal_instance_id = ?1
                AND broker_server = ?2 COLLATE NOCASE
@@ -5703,6 +5976,8 @@ fn read_history_scope_state_locked(
                     row.get::<_, i64>(7)?,
                     row.get::<_, String>(8)?,
                     row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
                 ))
             },
         )
@@ -5718,6 +5993,8 @@ fn read_history_scope_state_locked(
         history_revision,
         summary_revision,
         summary_status,
+        duplicate_count,
+        immutable_conflict_count,
         updated_at,
     )) = row
     else {
@@ -5743,6 +6020,8 @@ fn read_history_scope_state_locked(
         history_revision,
         summary_revision,
         summary_status,
+        duplicate_count,
+        immutable_conflict_count,
         updated_at_utc_msc: updated_at,
     };
     validate_history_scope_state(&state)?;
@@ -5760,6 +6039,8 @@ fn validate_history_scope_state(state: &HistoryScopeState) -> Result<(), StoreEr
         "pending" | "rebuilding" | "ready" | "unavailable"
     ) || state.history_revision < 0
         || state.summary_revision < 0
+        || state.duplicate_count < 0
+        || state.immutable_conflict_count < 0
         || state.updated_at_utc_msc < 0
         || state.fresh_through_utc_msc.is_some_and(|value| value <= 0)
         || state.head_ready
@@ -5785,8 +6066,9 @@ fn write_history_scope_state_tx(
                terminal_instance_id, broker_server, login_account, platform,
                head_ready, head_range_start_utc_msc, head_range_end_utc_msc,
                coverage_complete, freshness_state, fresh_through_utc_msc,
-               history_revision, summary_revision, summary_status, updated_at_utc_msc
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+               history_revision, summary_revision, summary_status,
+               duplicate_count, immutable_conflict_count, updated_at_utc_msc
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(terminal_instance_id, broker_server, login_account, platform)
              DO UPDATE SET
                head_ready = excluded.head_ready,
@@ -5798,6 +6080,8 @@ fn write_history_scope_state_tx(
                history_revision = excluded.history_revision,
                summary_revision = excluded.summary_revision,
                summary_status = excluded.summary_status,
+               duplicate_count = excluded.duplicate_count,
+               immutable_conflict_count = excluded.immutable_conflict_count,
                updated_at_utc_msc = excluded.updated_at_utc_msc;",
             params![
                 state.scope.terminal_instance_id,
@@ -5813,6 +6097,8 @@ fn write_history_scope_state_tx(
                 state.history_revision,
                 state.summary_revision,
                 state.summary_status,
+                state.duplicate_count,
+                state.immutable_conflict_count,
                 state.updated_at_utc_msc,
             ],
         )
@@ -5878,7 +6164,8 @@ fn insert_history_summary_generation_tx(
              WHERE terminal_instance_id = ?1
                AND broker_server = ?2 COLLATE NOCASE
                AND login_account = ?3 AND platform = ?4
-               AND item_kind = 'trade' AND event_time_msc >= 1735689600000
+               AND item_kind = 'trade' AND close_time_utc_msc >= 946684800000
+               AND immutable_state = 'sealed'
                AND summary_day_utc_msc IS NOT NULL
              GROUP BY summary_day_utc_msc, COALESCE(direction, ''),
                       CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
@@ -5893,10 +6180,61 @@ fn insert_history_summary_generation_tx(
              WHERE terminal_instance_id = ?1
                AND broker_server = ?2 COLLATE NOCASE
                AND login_account = ?3 AND platform = ?4
-               AND item_kind = 'deal' AND event_time_msc >= 1735689600000
+               AND item_kind = 'deal' AND event_time_msc >= 946684800000
                AND capital_kind IS NOT NULL
                AND summary_day_utc_msc IS NOT NULL
              GROUP BY summary_day_utc_msc, capital_kind;",
+            params![scope.terminal_instance_id, scope.broker_server, scope.login_account, platform, generation],
+        )
+        .map(|_| ())
+        .map_err(|_| StoreError::new("bridge_store_history_summary_build_failed"))
+}
+
+fn insert_history_summary_v2_generation_tx(
+    transaction: &Transaction<'_>,
+    scope: &HistoryScope,
+    platform: &str,
+    generation: i64,
+) -> Result<(), StoreError> {
+    transaction
+        .execute(
+            "INSERT INTO history_daily_summary_v2 (
+               terminal_instance_id, broker_server, login_account, platform,
+               generation, business_date, item_kind, direction, profit_bucket,
+               trade_count, net_profit, volume, deal_deposit, deal_withdrawal, deal_credit
+             )
+             SELECT ?1, ?2, ?3, ?4, ?5, close_business_date, 'trade',
+                    COALESCE(direction, ''),
+                    CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
+                         WHEN COALESCE(net_profit, 0) < 0 THEN 'loss' ELSE 'flat' END,
+                    COUNT(*), COALESCE(SUM(COALESCE(net_profit, 0)), 0),
+                    COALESCE(SUM(COALESCE(volume, 0)), 0), 0, 0, 0
+             FROM history_archive_items
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND item_kind = 'trade' AND close_time_utc_msc >= 946684800000
+               AND immutable_state = 'sealed'
+               AND close_business_date IS NOT NULL
+             GROUP BY close_business_date, COALESCE(direction, ''),
+                      CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
+                           WHEN COALESCE(net_profit, 0) < 0 THEN 'loss' ELSE 'flat' END
+             UNION ALL
+             SELECT ?1, ?2, ?3, ?4, ?5,
+                    strftime('%Y-%m-%d', summary_day_utc_msc / 1000, 'unixepoch'),
+                    'deal', '', capital_kind,
+                    0, 0, 0,
+                    COALESCE(SUM(CASE WHEN capital_kind = 'deposit' THEN capital_amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN capital_kind = 'withdrawal' THEN capital_amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN capital_kind = 'credit' THEN capital_amount ELSE 0 END), 0)
+             FROM history_archive_items
+             WHERE terminal_instance_id = ?1
+               AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4
+               AND item_kind = 'deal' AND event_time_msc >= 946684800000
+               AND capital_kind IS NOT NULL
+               AND summary_day_utc_msc IS NOT NULL
+             GROUP BY strftime('%Y-%m-%d', summary_day_utc_msc / 1000, 'unixepoch'), capital_kind;",
             params![scope.terminal_instance_id, scope.broker_server, scope.login_account, platform, generation],
         )
         .map(|_| ())
@@ -5915,7 +6253,9 @@ fn validate_history_summary_generation_tx(
              WHERE terminal_instance_id = ?1
                AND broker_server = ?2 COLLATE NOCASE
                AND login_account = ?3 AND platform = ?4
-               AND event_time_msc >= ?5
+               AND ((item_kind = 'trade' AND close_time_utc_msc >= ?5
+                     AND immutable_state = 'sealed')
+                    OR (item_kind = 'deal' AND event_time_msc >= ?5))
                AND ((item_kind = 'trade'
                      AND (net_profit IS NULL OR volume IS NULL
                           OR typeof(net_profit) NOT IN ('integer', 'real')
@@ -5946,7 +6286,8 @@ fn validate_history_summary_generation_tx(
              WHERE terminal_instance_id = ?1
                AND broker_server = ?2 COLLATE NOCASE
                AND login_account = ?3 AND platform = ?4
-               AND item_kind = 'trade' AND event_time_msc >= ?5;",
+               AND item_kind = 'trade' AND close_time_utc_msc >= ?5
+               AND immutable_state = 'sealed';",
             params![
                 scope.terminal_instance_id,
                 scope.broker_server,
@@ -6099,7 +6440,8 @@ fn refresh_history_summary_days_tx(
                  WHERE terminal_instance_id = ?1
                    AND broker_server = ?2 COLLATE NOCASE
                    AND login_account = ?3 AND platform = ?4
-                   AND item_kind = 'trade' AND event_time_msc >= 1735689600000
+                   AND item_kind = 'trade' AND close_time_utc_msc >= 946684800000
+                   AND immutable_state = 'sealed'
                    AND summary_day_utc_msc = ?6
                  GROUP BY summary_day_utc_msc, COALESCE(direction, ''),
                           CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
@@ -6114,11 +6456,90 @@ fn refresh_history_summary_days_tx(
                  WHERE terminal_instance_id = ?1
                    AND broker_server = ?2 COLLATE NOCASE
                    AND login_account = ?3 AND platform = ?4
-                   AND item_kind = 'deal' AND event_time_msc >= 1735689600000
+                   AND item_kind = 'deal' AND event_time_msc >= 946684800000
                    AND capital_kind IS NOT NULL
                    AND summary_day_utc_msc = ?6
                  GROUP BY summary_day_utc_msc, capital_kind;",
                 params![scope.terminal_instance_id, scope.broker_server, scope.login_account, platform, generation, day],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_summary_incremental_failed"))?;
+    }
+    Ok(())
+}
+
+fn refresh_history_summary_v2_days_tx(
+    transaction: &Transaction<'_>,
+    scope: &HistoryScope,
+    platform: &str,
+    generation: i64,
+    days: &[i64],
+) -> Result<(), StoreError> {
+    for day in days {
+        let business_date = business_date_from_server_msc(*day)?;
+        transaction
+            .execute(
+                "DELETE FROM history_daily_summary_v2
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND generation = ?5 AND business_date = ?6;",
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account,
+                    platform,
+                    generation,
+                    business_date
+                ],
+            )
+            .map_err(|_| StoreError::new("bridge_store_history_summary_incremental_failed"))?;
+        transaction
+            .execute(
+                "INSERT INTO history_daily_summary_v2 (
+                   terminal_instance_id, broker_server, login_account, platform,
+                   generation, business_date, item_kind, direction, profit_bucket,
+                   trade_count, net_profit, volume, deal_deposit, deal_withdrawal, deal_credit
+                 )
+                 SELECT ?1, ?2, ?3, ?4, ?5, close_business_date, 'trade',
+                        COALESCE(direction, ''),
+                        CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
+                             WHEN COALESCE(net_profit, 0) < 0 THEN 'loss' ELSE 'flat' END,
+                        COUNT(*), COALESCE(SUM(COALESCE(net_profit, 0)), 0),
+                        COALESCE(SUM(COALESCE(volume, 0)), 0), 0, 0, 0
+                 FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND item_kind = 'trade' AND close_time_utc_msc >= 946684800000
+                   AND immutable_state = 'sealed'
+                   AND close_business_date = ?6
+                 GROUP BY close_business_date, COALESCE(direction, ''),
+                          CASE WHEN COALESCE(net_profit, 0) > 0 THEN 'profit'
+                               WHEN COALESCE(net_profit, 0) < 0 THEN 'loss' ELSE 'flat' END
+                 UNION ALL
+                 SELECT ?1, ?2, ?3, ?4, ?5,
+                        strftime('%Y-%m-%d', summary_day_utc_msc / 1000, 'unixepoch'),
+                        'deal', '', capital_kind,
+                        0, 0, 0,
+                        COALESCE(SUM(CASE WHEN capital_kind = 'deposit' THEN capital_amount ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN capital_kind = 'withdrawal' THEN capital_amount ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN capital_kind = 'credit' THEN capital_amount ELSE 0 END), 0)
+                 FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND item_kind = 'deal' AND event_time_msc >= 946684800000
+                   AND capital_kind IS NOT NULL
+                   AND strftime('%Y-%m-%d', summary_day_utc_msc / 1000, 'unixepoch') = ?6
+                 GROUP BY strftime('%Y-%m-%d', summary_day_utc_msc / 1000, 'unixepoch'), capital_kind;",
+                params![
+                    scope.terminal_instance_id,
+                    scope.broker_server,
+                    scope.login_account,
+                    platform,
+                    generation,
+                    business_date
+                ],
             )
             .map_err(|_| StoreError::new("bridge_store_history_summary_incremental_failed"))?;
     }
@@ -7249,9 +7670,15 @@ fn parse_history_cursor_page_request(
     const ALLOWED: &[&str] = &[
         "range_start_utc_msc",
         "range_end_utc_msc",
+        "allowed_start_utc_msc",
+        "system_start_utc_msc",
+        "effective_start_utc_msc",
+        "captured_end_utc_msc",
         "page_size",
         "entry_from",
         "entry_to",
+        "filter_close_from",
+        "filter_close_to",
         "direction",
         "profit_filter",
         "force_refresh",
@@ -7275,28 +7702,24 @@ fn parse_history_cursor_page_request(
     let page_size = history_integer(object.get("page_size"), 20, 1, MAX_HISTORY_CURSOR_PAGE_SIZE)?;
     let entry_from_utc_msc = object
         .get("entry_from")
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or_else(|| StoreError::new("history_date_invalid"))
-                .and_then(parse_utc_date_msc)
-        })
+        .map(|value| parse_history_filter_bound(value, false))
         .transpose()?;
     let entry_to_utc_msc = object
         .get("entry_to")
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or_else(|| StoreError::new("history_date_invalid"))
-                .and_then(parse_utc_date_msc)
-                .and_then(|value| {
-                    value
-                        .checked_add(86_400_000 - 1)
-                        .ok_or_else(|| StoreError::new("history_date_invalid"))
-                })
-        })
+        .map(|value| parse_history_filter_bound(value, true))
+        .transpose()?;
+    let close_from_utc_msc = object
+        .get("filter_close_from")
+        .map(|value| parse_history_filter_bound(value, false))
+        .transpose()?;
+    let close_to_utc_msc = object
+        .get("filter_close_to")
+        .map(|value| parse_history_filter_bound(value, true))
         .transpose()?;
     if entry_from_utc_msc.is_some_and(|start| entry_to_utc_msc.is_some_and(|end| start > end)) {
+        return Err(StoreError::new("history_range_invalid"));
+    }
+    if close_from_utc_msc.is_some_and(|start| close_to_utc_msc.is_some_and(|end| start > end)) {
         return Err(StoreError::new("history_range_invalid"));
     }
     let direction = object
@@ -7331,12 +7754,24 @@ fn parse_history_cursor_page_request(
     let mut filter_sql = String::new();
     let mut filter_values = Vec::new();
     if let Some(entry_from) = entry_from_utc_msc {
-        filter_sql.push_str(" AND event_time_msc >= ?");
+        filter_sql.push_str(
+            " AND CAST(json_extract(payload_json, '$.entry_time_utc_msc') AS INTEGER) >= ?",
+        );
         filter_values.push(SqlValue::Integer(entry_from));
     }
     if let Some(entry_to) = entry_to_utc_msc {
-        filter_sql.push_str(" AND event_time_msc <= ?");
+        filter_sql.push_str(
+            " AND CAST(json_extract(payload_json, '$.entry_time_utc_msc') AS INTEGER) <= ?",
+        );
         filter_values.push(SqlValue::Integer(entry_to));
+    }
+    if let Some(close_from) = close_from_utc_msc {
+        filter_sql.push_str(" AND close_time_utc_msc >= ?");
+        filter_values.push(SqlValue::Integer(close_from));
+    }
+    if let Some(close_to) = close_to_utc_msc {
+        filter_sql.push_str(" AND close_time_utc_msc <= ?");
+        filter_values.push(SqlValue::Integer(close_to));
     }
     if let Some(direction) = direction.as_deref() {
         filter_sql.push_str(" AND direction = ?");
@@ -7356,6 +7791,8 @@ fn parse_history_cursor_page_request(
         page_size,
         entry_from_utc_msc,
         entry_to_utc_msc,
+        close_from_utc_msc,
+        close_to_utc_msc,
         direction,
         profit_filter,
     };
@@ -7457,6 +7894,10 @@ pub fn parse_history_evidence_request(
     const ALLOWED: &[&str] = &[
         "range_start_utc_msc",
         "range_end_utc_msc",
+        "allowed_start_utc_msc",
+        "system_start_utc_msc",
+        "effective_start_utc_msc",
+        "captured_end_utc_msc",
         "evidence_position_ids",
         "evidence_order_tickets",
     ];
@@ -7633,6 +8074,10 @@ fn parse_history_chart_request(
         "date_to",
         "range_start_utc_msc",
         "range_end_utc_msc",
+        "allowed_start_utc_msc",
+        "system_start_utc_msc",
+        "effective_start_utc_msc",
+        "captured_end_utc_msc",
         "direction",
         "profit_filter",
         "force_refresh",
@@ -7656,8 +8101,14 @@ fn parse_history_page_request(
         "date_from",
         "date_to",
         "range_start_utc_msc",
+        "allowed_start_utc_msc",
+        "system_start_utc_msc",
+        "effective_start_utc_msc",
+        "captured_end_utc_msc",
         "entry_from",
         "entry_to",
+        "filter_close_from",
+        "filter_close_to",
         "direction",
         "profit_filter",
         "force_refresh",
@@ -7690,14 +8141,13 @@ fn parse_history_page_request(
         ("entry_to", "<=", true),
     ] {
         if let Some(value) = object.get(key) {
-            let text = value
-                .as_str()
-                .ok_or_else(|| StoreError::new("history_date_invalid"))?;
-            let mut timestamp = parse_utc_date_msc(text)?;
-            if end_of_day {
-                timestamp = timestamp.saturating_add(86_400_000 - 1);
-            }
-            clauses.push(format!(" AND event_time_msc {comparison} ?"));
+            let timestamp = parse_history_filter_bound(value, end_of_day)?;
+            let trade_expression = if key.starts_with("entry_") {
+                "CAST(json_extract(payload_json, '$.entry_time_utc_msc') AS INTEGER)"
+            } else {
+                "close_time_utc_msc"
+            };
+            clauses.push(format!(" AND {trade_expression} {comparison} ?"));
             values.push(SqlValue::Integer(timestamp));
             if matches!(key, "date_from" | "date_to") {
                 capital_clauses.push(format!(" AND event_time_msc {comparison} ?"));
@@ -7705,13 +8155,23 @@ fn parse_history_page_request(
             }
         }
     }
+    for (key, comparison, end_of_day) in [
+        ("filter_close_from", ">=", false),
+        ("filter_close_to", "<=", true),
+    ] {
+        if let Some(value) = object.get(key) {
+            let timestamp = parse_history_filter_bound(value, end_of_day)?;
+            clauses.push(format!(" AND close_time_utc_msc {comparison} ?"));
+            values.push(SqlValue::Integer(timestamp));
+        }
+    }
     if object.contains_key("range_start_utc_msc") {
         let range = requested_range
             .as_ref()
             .ok_or_else(|| StoreError::new("history_range_invalid"))?;
-        clauses.push(" AND event_time_msc >= ?".to_owned());
+        clauses.push(" AND close_time_utc_msc >= ?".to_owned());
         values.push(SqlValue::Integer(range.range_start_utc_msc));
-        clauses.push(" AND event_time_msc < ?".to_owned());
+        clauses.push(" AND close_time_utc_msc < ?".to_owned());
         values.push(SqlValue::Integer(range.range_end_utc_msc));
         capital_clauses.push(" AND event_time_msc >= ?".to_owned());
         capital_values.push(SqlValue::Integer(range.range_start_utc_msc));
@@ -7726,7 +8186,7 @@ fn parse_history_page_request(
             .as_ref()
             .map(|range| range.range_end_utc_msc)
             .ok_or_else(|| StoreError::new("history_range_invalid"))?;
-        clauses.push(" AND event_time_msc < ?".to_owned());
+        clauses.push(" AND close_time_utc_msc < ?".to_owned());
         values.push(SqlValue::Integer(range_end));
         capital_clauses.push(" AND event_time_msc < ?".to_owned());
         capital_values.push(SqlValue::Integer(range_end));
@@ -7857,6 +8317,35 @@ fn parse_utc_date_msc(value: &str) -> Result<i64, StoreError> {
         .ok_or_else(|| StoreError::new("history_date_invalid"))
 }
 
+fn parse_history_filter_bound(
+    value: &serde_json::Value,
+    end_of_day: bool,
+) -> Result<i64, StoreError> {
+    let timestamp = if let Some(number) = value.as_i64() {
+        number
+    } else if let Some(number) = value.as_u64() {
+        i64::try_from(number).map_err(|_| StoreError::new("history_date_invalid"))?
+    } else if let Some(text) = value.as_str() {
+        if let Ok(number) = text.trim().parse::<i64>() {
+            number
+        } else {
+            let date = parse_utc_date_msc(text.trim())?;
+            if end_of_day {
+                date.checked_add(HISTORY_DAY_MSC - 1)
+                    .ok_or_else(|| StoreError::new("history_date_invalid"))?
+            } else {
+                date
+            }
+        }
+    } else {
+        return Err(StoreError::new("history_date_invalid"));
+    };
+    if timestamp < HISTORY_COVERAGE_START_UTC_MSC {
+        return Err(StoreError::new("history_date_invalid"));
+    }
+    Ok(timestamp)
+}
+
 fn current_utc_msc() -> Result<i64, StoreError> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -7904,12 +8393,27 @@ fn read_history_statistics(
         broker_server: terminal.account_ref.broker_server.clone(),
         login_account: terminal.account_ref.login.clone(),
     };
+    let summary_v2_generation =
+        history_summary_v2_ready_generation(connection, &scope, &terminal.platform)?;
     let summary_generation =
         history_summary_ready_generation(connection, &scope, &terminal.platform)?;
     let Some(summary_generation) = summary_generation else {
         return Ok(serde_json::Value::Null);
     };
-    if !request.filter_sql.contains("rowid <=") {
+    // A materialized summary can answer unfiltered totals, but table filters
+    // (including close-time and entry-time predicates) must be evaluated on
+    // the archive rows before aggregation so the counts cannot drift from the
+    // page query.
+    if request.filter_sql.is_empty() {
+        if let Some(summary_v2_generation) = summary_v2_generation {
+            return read_history_statistics_from_summary_v2(
+                connection,
+                terminal,
+                request,
+                summary_v2_generation,
+                total,
+            );
+        }
         return read_history_statistics_from_summary(
             connection,
             terminal,
@@ -7926,7 +8430,10 @@ fn read_history_statistics(
                    COALESCE(SUM(COALESCE(volume, 0)), 0) \
                  FROM history_archive_items WHERE terminal_instance_id = ? \
                    AND broker_server = ? COLLATE NOCASE AND login_account = ? \
-                   AND item_kind = 'trade'{};",
+                   AND platform = ? AND item_kind = 'trade'
+                   AND close_time_utc_msc >= 946684800000
+                   AND close_time_utc_msc IS NOT NULL
+                   AND immutable_state = 'sealed'{};",
                 request.filter_sql
             ),
             params_from_iter(filtered_values),
@@ -7934,6 +8441,7 @@ fn read_history_statistics(
         )
         .map_err(|_| StoreError::new("bridge_store_history_statistics_query_failed"))?;
     let mut capital_values = history_scope_values(terminal);
+    capital_values.push(SqlValue::Text(terminal.platform.clone()));
     capital_values.extend(request.capital_filter_values.iter().cloned());
     let (deposit, withdrawal, credit) = connection
         .query_row(
@@ -7944,7 +8452,7 @@ fn read_history_statistics(
                    COALESCE(SUM(CASE WHEN capital_kind = 'credit' THEN capital_amount ELSE 0 END), 0) \
                  FROM history_archive_items WHERE terminal_instance_id = ? \
                    AND broker_server = ? COLLATE NOCASE AND login_account = ? \
-                   AND item_kind = 'deal'{};",
+                   AND platform = ? AND item_kind = 'deal'{};",
                 request.capital_filter_sql
             ),
             params_from_iter(capital_values),
@@ -7969,6 +8477,11 @@ fn read_history_statistics(
         .unwrap_or(0.0);
     let net_result = total_profit + credit + deposit - withdrawal;
     let round = |value: f64| (value * 100.0).round() / 100.0;
+    let time_semantics = if request.requested_range.is_some() {
+        "exact_close_utc"
+    } else {
+        "server_business_date"
+    };
     Ok(serde_json::json!({
         "account_principal": round(balance - net_result),
         "account_balance": round(balance),
@@ -7979,6 +8492,8 @@ fn read_history_statistics(
         "net_result": round(net_result),
         "trade_count": total,
         "total_volume": round(total_volume),
+        "summary_source": "sqlite_archive_raw_close_time",
+        "time_semantics": time_semantics,
     }))
 }
 
@@ -7995,6 +8510,87 @@ fn history_summary_ready_generation(
         .map(|build| build.and_then(|value| value.active_generation))
 }
 
+/// Return the active summary generation only when the v2 materialization is
+/// present for this scope.  The v1 build marker predates the business-date
+/// table, so it is not sufficient evidence that v2 is ready (notably on an
+/// additive migration of an older database).  Callers must explicitly mark a
+/// v1 fallback instead of silently mixing the two time semantics.
+fn history_summary_v2_ready_generation(
+    connection: &Connection,
+    scope: &HistoryScope,
+    platform: &str,
+) -> Result<Option<i64>, StoreError> {
+    let Some(generation) = history_summary_ready_generation(connection, scope, platform)? else {
+        return Ok(None);
+    };
+    if !table_exists(connection, "history_daily_summary_v2")? {
+        return Ok(None);
+    }
+    let has_rows = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM history_daily_summary_v2
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND generation = ?5
+            );",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform,
+                generation
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_summary_v2_query_failed"))?;
+    if has_rows == 1 {
+        return Ok(Some(generation));
+    }
+    // An empty account can legitimately have no v2 rows.  Treat that as a
+    // ready empty generation only when there are no eligible sealed trades or
+    // capital events that the missing rows would hide; otherwise fall back to
+    // v1 explicitly rather than returning fabricated v2 zeros.
+    let has_eligible_archive = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM history_archive_items
+                 WHERE terminal_instance_id = ?1
+                   AND broker_server = ?2 COLLATE NOCASE
+                   AND login_account = ?3 AND platform = ?4
+                   AND ((item_kind = 'trade' AND immutable_state = 'sealed'
+                         AND close_time_utc_msc >= ?5)
+                        OR (item_kind = 'deal' AND event_time_msc >= ?5
+                            AND capital_kind IS NOT NULL))
+            );",
+            params![
+                scope.terminal_instance_id,
+                scope.broker_server,
+                scope.login_account,
+                platform,
+                HISTORY_COVERAGE_START_UTC_MSC,
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_summary_v2_query_failed"))?;
+    Ok((has_eligible_archive == 0).then_some(generation))
+}
+
+fn history_summary_source(
+    connection: &Connection,
+    scope: &HistoryScope,
+    platform: &str,
+) -> Result<(&'static str, &'static str), StoreError> {
+    if history_summary_v2_ready_generation(connection, scope, platform)?.is_some() {
+        Ok(("sqlite_summary_v2", "server_business_date"))
+    } else if history_summary_ready_generation(connection, scope, platform)?.is_some() {
+        Ok(("sqlite_summary_v1", "legacy_utc_day"))
+    } else {
+        Ok(("unavailable", "unavailable"))
+    }
+}
+
 fn query_history_raw_statistics_segment(
     connection: &Connection,
     terminal: &TerminalDescriptor,
@@ -8005,7 +8601,8 @@ fn query_history_raw_statistics_segment(
 ) -> Result<(i64, f64, f64), StoreError> {
     let mut predicates = String::from(
         " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
-          AND login_account = ?3 AND platform = ?4 AND item_kind = 'trade'",
+          AND login_account = ?3 AND platform = ?4 AND item_kind = 'trade'
+          AND immutable_state = 'sealed'",
     );
     let mut values = vec![
         SqlValue::Text(terminal.terminal_instance_id.clone()),
@@ -8015,12 +8612,12 @@ fn query_history_raw_statistics_segment(
     ];
     let mut index = 5;
     if let Some(start) = start {
-        predicates.push_str(&format!(" AND event_time_msc >= ?{index}"));
+        predicates.push_str(&format!(" AND close_time_utc_msc >= ?{index}"));
         values.push(SqlValue::Integer(start));
         index += 1;
     }
     if let Some(end) = end {
-        predicates.push_str(&format!(" AND event_time_msc < ?{index}"));
+        predicates.push_str(&format!(" AND close_time_utc_msc < ?{index}"));
         values.push(SqlValue::Integer(end));
         index += 1;
     }
@@ -8233,6 +8830,84 @@ fn read_history_summary_trade_rows(
     Ok((daily, aggregate))
 }
 
+fn read_history_summary_trade_rows_v2(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    generation: i64,
+    direction: Option<&str>,
+    profit_filter: Option<&str>,
+) -> Result<(BTreeMap<i64, HistoryDailyTrade>, HistoryTradeAggregate), StoreError> {
+    let mut values = vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(terminal.platform.clone()),
+        SqlValue::Integer(generation),
+    ];
+    let mut index = 6;
+    let mut predicates = String::from(
+        " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+          AND login_account = ?3 AND platform = ?4 AND generation = ?5
+          AND item_kind = 'trade'",
+    );
+    if let Some(direction) = direction {
+        predicates.push_str(&format!(" AND direction = ?{index}"));
+        values.push(SqlValue::Text(direction.to_owned()));
+        index += 1;
+    }
+    if let Some(profit_filter) = profit_filter {
+        predicates.push_str(&format!(" AND profit_bucket = ?{index}"));
+        values.push(SqlValue::Text(profit_filter.to_owned()));
+    }
+    let query = format!(
+        "SELECT business_date, profit_bucket,
+                COALESCE(trade_count, 0), COALESCE(net_profit, 0),
+                COALESCE(volume, 0)
+         FROM history_daily_summary_v2{predicates}
+         ORDER BY business_date, direction, profit_bucket;"
+    );
+    let mut statement = connection
+        .prepare(&query)
+        .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+    let mut daily: BTreeMap<i64, HistoryDailyTrade> = BTreeMap::new();
+    let mut aggregate = HistoryTradeAggregate::default();
+    let rows = statement
+        .query_map(params_from_iter(values), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, f64>(4)?,
+            ))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+    for row in rows {
+        let (business_date, bucket, count, profit, _volume) =
+            row.map_err(|_| StoreError::new("bridge_store_history_chart_query_failed"))?;
+        let day = parse_utc_date_msc(&business_date)?;
+        let day_entry = daily.entry(day).or_default();
+        day_entry.profit += profit;
+        day_entry.trade_count = day_entry.trade_count.saturating_add(count);
+        match bucket.as_str() {
+            "profit" => {
+                day_entry.wins = day_entry.wins.saturating_add(count);
+                aggregate.gross_profit += profit;
+                aggregate.win_count = aggregate.win_count.saturating_add(count);
+            }
+            "loss" => {
+                day_entry.losses = day_entry.losses.saturating_add(count);
+                aggregate.gross_loss += -profit;
+                aggregate.loss_count = aggregate.loss_count.saturating_add(count);
+            }
+            _ => {}
+        }
+        aggregate.trade_count = aggregate.trade_count.saturating_add(count);
+        aggregate.total_profit += profit;
+    }
+    Ok((daily, aggregate))
+}
+
 fn read_history_raw_trade_rows(
     connection: &Connection,
     terminal: &TerminalDescriptor,
@@ -8253,7 +8928,8 @@ fn read_history_raw_trade_rows(
     let mut predicates = String::from(
         " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
           AND login_account = ?3 AND platform = ?4 AND item_kind = 'trade'
-          AND event_time_msc >= ?5 AND event_time_msc < ?6",
+          AND close_time_utc_msc >= ?5 AND close_time_utc_msc < ?6
+          AND immutable_state = 'sealed'",
     );
     if let Some(direction) = direction {
         predicates.push_str(&format!(" AND direction = ?{index}"));
@@ -8269,7 +8945,7 @@ fn read_history_raw_trade_rows(
     }
     let query = format!(
         "SELECT COALESCE(summary_day_utc_msc,
-                   event_time_msc - (event_time_msc % 86400000)),
+                   close_time_utc_msc - (close_time_utc_msc % 86400000)),
                 COUNT(*), COALESCE(SUM(COALESCE(net_profit, 0)), 0),
                 COALESCE(SUM(CASE WHEN COALESCE(net_profit, 0) > 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN COALESCE(net_profit, 0) < 0 THEN 1 ELSE 0 END), 0),
@@ -8277,7 +8953,7 @@ fn read_history_raw_trade_rows(
                 COALESCE(SUM(CASE WHEN COALESCE(net_profit, 0) < 0 THEN -net_profit ELSE 0 END), 0)
          FROM history_archive_items{predicates}
          GROUP BY COALESCE(summary_day_utc_msc,
-                   event_time_msc - (event_time_msc % 86400000))
+                   close_time_utc_msc - (close_time_utc_msc % 86400000))
          ORDER BY 1;"
     );
     let mut statement = connection
@@ -8357,33 +9033,66 @@ fn read_history_chart_data_from_summary(
     terminal: &TerminalDescriptor,
     request: &HistoryPageRequest,
     generation: i64,
+    use_summary_v2: bool,
     history_sync: serde_json::Value,
 ) -> Result<serde_json::Value, StoreError> {
-    let (summary_start, summary_end, raw_segments) =
-        history_chart_range_parts(request.requested_range.as_ref());
-    let (mut daily, mut aggregate) = read_history_summary_trade_rows(
-        connection,
-        terminal,
-        generation,
-        summary_start,
-        summary_end,
-        request.direction.as_deref(),
-        request.profit_filter.as_deref(),
-    )?;
-    for (start, end) in raw_segments {
-        let (raw_daily, raw_aggregate) = read_history_raw_trade_rows(
+    let mut history_sync = history_sync;
+    if use_summary_v2 && request.requested_range.is_some() {
+        history_sync["summary_source"] =
+            serde_json::Value::String("sqlite_archive_raw_close_time".to_owned());
+        history_sync["time_semantics"] = serde_json::Value::String("exact_close_utc".to_owned());
+    }
+    let (daily, aggregate) = if use_summary_v2 {
+        if let Some(range) = request.requested_range.as_ref() {
+            // v2 groups by terminal business date. A numeric UTC range can
+            // cut through a business-day boundary, so preserve exact close
+            // semantics with one bounded raw segment instead of guessing a
+            // conversion from UTC midnight.
+            read_history_raw_trade_rows(
+                connection,
+                terminal,
+                range.range_start_utc_msc,
+                range.range_end_utc_msc,
+                request.direction.as_deref(),
+                request.profit_filter.as_deref(),
+            )?
+        } else {
+            read_history_summary_trade_rows_v2(
+                connection,
+                terminal,
+                generation,
+                request.direction.as_deref(),
+                request.profit_filter.as_deref(),
+            )?
+        }
+    } else {
+        let (summary_start, summary_end, raw_segments) =
+            history_chart_range_parts(request.requested_range.as_ref());
+        let (mut daily, mut aggregate) = read_history_summary_trade_rows(
             connection,
             terminal,
-            start,
-            end,
+            generation,
+            summary_start,
+            summary_end,
             request.direction.as_deref(),
             request.profit_filter.as_deref(),
         )?;
-        for (day, value) in raw_daily {
-            daily.entry(day).or_default().add(value);
+        for (start, end) in raw_segments {
+            let (raw_daily, raw_aggregate) = read_history_raw_trade_rows(
+                connection,
+                terminal,
+                start,
+                end,
+                request.direction.as_deref(),
+                request.profit_filter.as_deref(),
+            )?;
+            for (day, value) in raw_daily {
+                daily.entry(day).or_default().add(value);
+            }
+            aggregate.add(raw_aggregate);
         }
-        aggregate.add(raw_aggregate);
-    }
+        (daily, aggregate)
+    };
     let balance = connection
         .query_row(
             "SELECT CAST(COALESCE(json_extract(payload_json, '$.balance'), 0) AS REAL)
@@ -8450,6 +9159,20 @@ fn read_history_chart_data_from_summary(
     } else {
         0.0
     };
+    let summary_source = if use_summary_v2 && request.requested_range.is_some() {
+        "sqlite_archive_raw_close_time"
+    } else if use_summary_v2 {
+        "sqlite_summary_v2"
+    } else {
+        "sqlite_summary_v1"
+    };
+    let time_semantics = if use_summary_v2 && request.requested_range.is_some() {
+        "exact_close_utc"
+    } else if use_summary_v2 {
+        "server_business_date"
+    } else {
+        "legacy_utc_day"
+    };
     Ok(serde_json::json!({
         "daily": daily,
         "cumulative": cumulative,
@@ -8467,7 +9190,155 @@ fn read_history_chart_data_from_summary(
             "gross_loss": round(aggregate.gross_loss),
         },
         "history_sync": history_sync,
+        "summary_source": summary_source,
+        "time_semantics": time_semantics,
         "source": format!("{}_sqlite", terminal.platform),
+    }))
+}
+
+fn read_history_statistics_from_summary_v2(
+    connection: &Connection,
+    terminal: &TerminalDescriptor,
+    request: &HistoryPageRequest,
+    generation: i64,
+    total_hint: i64,
+) -> Result<serde_json::Value, StoreError> {
+    if let Some(range) = request.requested_range.as_ref() {
+        // A numeric range can cut through a terminal business day.  v2 only
+        // stores the business-date bucket, so keep exact range statistics on
+        // the immutable close/event timestamps rather than widening to the
+        // whole active generation.
+        let (trade_count, total_profit, total_volume) = query_history_raw_statistics_segment(
+            connection,
+            terminal,
+            Some(range.range_start_utc_msc),
+            Some(range.range_end_utc_msc),
+            request.direction.as_deref(),
+            request.profit_filter.as_deref(),
+        )?;
+        let (deposit, withdrawal, credit) = query_history_raw_capital_segment(
+            connection,
+            terminal,
+            Some(range.range_start_utc_msc),
+            Some(range.range_end_utc_msc),
+        )?;
+        let balance = connection
+            .query_row(
+                "SELECT CAST(COALESCE(json_extract(payload_json, '$.balance'), 0) AS REAL)
+                 FROM account_latest WHERE terminal_instance_id = ?1 AND connection_epoch = ?2 LIMIT 1;",
+                params![terminal.terminal_instance_id, terminal.connection_epoch],
+                |row| row.get::<_, f64>(0),
+            )
+            .optional()
+            .map_err(|_| StoreError::new("bridge_store_history_statistics_query_failed"))?
+            .unwrap_or(0.0);
+        let net_result = total_profit + credit + deposit - withdrawal;
+        let round = |value: f64| (value * 100.0).round() / 100.0;
+        let _ = total_hint;
+        return Ok(serde_json::json!({
+            "account_principal": round(balance - net_result),
+            "account_balance": round(balance),
+            "total_profit": round(total_profit),
+            "credit": round(credit),
+            "deposit": round(deposit),
+            "withdrawal": round(withdrawal),
+            "net_result": round(net_result),
+            "trade_count": trade_count,
+            "total_volume": round(total_volume),
+            "summary_source": "sqlite_archive_raw_close_time",
+            "time_semantics": "exact_close_utc",
+        }));
+    }
+    let mut trade_values = vec![
+        SqlValue::Text(terminal.terminal_instance_id.clone()),
+        SqlValue::Text(terminal.account_ref.broker_server.clone()),
+        SqlValue::Text(terminal.account_ref.login.clone()),
+        SqlValue::Text(terminal.platform.clone()),
+        SqlValue::Integer(generation),
+    ];
+    let mut trade_predicates = String::from(
+        " WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+          AND login_account = ?3 AND platform = ?4 AND generation = ?5
+          AND item_kind = 'trade'",
+    );
+    let mut index = 6;
+    if let Some(direction) = request.direction.as_deref() {
+        trade_predicates.push_str(&format!(" AND direction = ?{index}"));
+        trade_values.push(SqlValue::Text(direction.to_owned()));
+        index += 1;
+    }
+    if let Some(profit_filter) = request.profit_filter.as_deref() {
+        trade_predicates.push_str(&format!(" AND profit_bucket = ?{index}"));
+        trade_values.push(SqlValue::Text(profit_filter.to_owned()));
+    }
+    let (trade_count, total_profit, total_volume) = connection
+        .query_row(
+            &format!(
+                "SELECT COALESCE(SUM(trade_count), 0),
+                        COALESCE(SUM(net_profit), 0),
+                        COALESCE(SUM(volume), 0)
+                 FROM history_daily_summary_v2{trade_predicates};"
+            ),
+            params_from_iter(trade_values),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_summary_v2_failed"))?;
+    let (deposit, withdrawal, credit) = connection
+        .query_row(
+            "SELECT COALESCE(SUM(deal_deposit), 0),
+                    COALESCE(SUM(deal_withdrawal), 0),
+                    COALESCE(SUM(deal_credit), 0)
+             FROM history_daily_summary_v2
+             WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+               AND login_account = ?3 AND platform = ?4 AND generation = ?5
+               AND item_kind = 'deal';",
+            params![
+                terminal.terminal_instance_id,
+                terminal.account_ref.broker_server,
+                terminal.account_ref.login,
+                terminal.platform,
+                generation
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_summary_v2_failed"))?;
+    let balance = connection
+        .query_row(
+            "SELECT CAST(COALESCE(json_extract(payload_json, '$.balance'), 0) AS REAL)
+             FROM account_latest WHERE terminal_instance_id = ?1 AND connection_epoch = ?2 LIMIT 1;",
+            params![terminal.terminal_instance_id, terminal.connection_epoch],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()
+        .map_err(|_| StoreError::new("bridge_store_history_statistics_summary_v2_failed"))?
+        .unwrap_or(0.0);
+    let net_result = total_profit + credit + deposit - withdrawal;
+    let round = |value: f64| (value * 100.0).round() / 100.0;
+    let _ = total_hint;
+    Ok(serde_json::json!({
+        "account_principal": round(balance - net_result),
+        "account_balance": round(balance),
+        "total_profit": round(total_profit),
+        "credit": round(credit),
+        "deposit": round(deposit),
+        "withdrawal": round(withdrawal),
+        "net_result": round(net_result),
+        "trade_count": trade_count,
+        "total_volume": round(total_volume),
+        "summary_source": "sqlite_summary_v2",
+        "time_semantics": "server_business_date",
     }))
 }
 
@@ -8664,6 +9535,8 @@ fn read_history_statistics_from_summary(
         "net_result": round(net_result),
         "trade_count": total,
         "total_volume": round(total_volume),
+        "summary_source": "sqlite_summary_v1",
+        "time_semantics": "legacy_utc_day",
     }))
 }
 
@@ -8674,8 +9547,10 @@ fn read_history_cursor_statistics(
     total: i64,
     highwater_rowid: i64,
 ) -> Result<serde_json::Value, StoreError> {
-    let bounded_prefix = " AND platform = ? AND rowid <= ? AND event_time_msc >= ? \
-                          AND event_time_msc < ?";
+    let bounded_prefix = " AND rowid <= ? AND close_time_utc_msc >= ? \
+                          AND close_time_utc_msc < ?";
+    let capital_bounded_prefix = " AND rowid <= ? AND event_time_msc >= ? \
+                                  AND event_time_msc < ?";
     let statistics_request = HistoryPageRequest {
         page: 1,
         page_size: request.query.page_size,
@@ -8687,10 +9562,9 @@ fn read_history_cursor_statistics(
         filter_values: Vec::new(),
         direction: request.query.direction.clone(),
         profit_filter: request.query.profit_filter.clone(),
-        capital_filter_sql: format!("{bounded_prefix}{}", request.capital_filter_sql),
+        capital_filter_sql: format!("{capital_bounded_prefix}{}", request.capital_filter_sql),
         capital_filter_values: {
             let mut values = vec![
-                SqlValue::Text(terminal.platform.clone()),
                 SqlValue::Integer(highwater_rowid),
                 SqlValue::Integer(request.query.range_start_utc_msc),
                 SqlValue::Integer(request.query.range_end_utc_msc),
@@ -8785,6 +9659,7 @@ fn validate_history_job_batch_cursor(
 }
 
 fn validate_history_items_in_range(
+    item_kind: &str,
     items: &[serde_json::Value],
     range_start_utc_msc: i64,
     range_end_utc_msc: i64,
@@ -8793,7 +9668,7 @@ fn validate_history_items_in_range(
         let object = item
             .as_object()
             .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))?;
-        let event_time_msc = history_time_msc(object)?;
+        let event_time_msc = history_time_fields(item_kind, object)?.event_time_msc;
         if event_time_msc < range_start_utc_msc || event_time_msc >= range_end_utc_msc {
             return Err(StoreError::new("bridge_store_history_item_out_of_range"));
         }
@@ -8856,6 +9731,145 @@ fn history_number(
     })
 }
 
+fn history_i64(object: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        object.get(*key).and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .and_then(|text| text.trim().parse::<i64>().ok())
+                })
+                .filter(|number| *number > 0)
+        })
+    })
+}
+
+fn history_i64_any(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<i64> {
+    keys.iter().find_map(|key| {
+        object.get(*key).and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+                .or_else(|| {
+                    value
+                        .as_str()
+                        .and_then(|text| text.trim().parse::<i64>().ok())
+                })
+        })
+    })
+}
+
+fn business_date_from_server_msc(server_msc: i64) -> Result<String, StoreError> {
+    if server_msc <= 0 {
+        return Err(StoreError::new("bridge_store_history_item_invalid"));
+    }
+    // Convert a Unix-millisecond day number to an ISO date without relying on
+    // the host timezone.  The same civil-date algorithm is used by the
+    // persisted server-time evidence and summary v2.
+    let days = server_msc.div_euclid(HISTORY_DAY_MSC);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let day = doy - (153 * mp + 2).div_euclid(5) + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    Ok(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistoryTimeFields {
+    event_time_msc: i64,
+    close_time_utc_msc: Option<i64>,
+    close_time_server_msc: Option<i64>,
+    close_timezone_offset_minutes: Option<i64>,
+    close_business_date: Option<String>,
+    immutable_state: &'static str,
+}
+
+fn history_time_fields(
+    item_kind: &str,
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<HistoryTimeFields, StoreError> {
+    if item_kind == "trade" {
+        let explicit_close_utc = history_i64(object, &["close_time_utc_msc"]);
+        // `close_time_msc` is the explicit compatibility field emitted by old
+        // Bridge workers.  It is never inferred from generic `time_msc` or
+        // entry time, and is accepted only as a legacy close-time contract.
+        let close_time_utc_msc =
+            explicit_close_utc.or_else(|| history_i64(object, &["close_time_msc"]));
+        let Some(close_time_utc_msc) = close_time_utc_msc else {
+            return Err(StoreError::new(
+                "bridge_store_history_trade_close_time_missing",
+            ));
+        };
+        let close_time_server_msc =
+            history_i64(object, &["close_time_server_msc"]).or(Some(close_time_utc_msc));
+        let close_timezone_offset_minutes = history_i64_any(
+            object,
+            &["close_timezone_offset_minutes", "timezone_offset_minutes"],
+        )
+        .or_else(|| {
+            close_time_server_msc
+                .zip(Some(close_time_utc_msc))
+                .map(|(server, utc)| (server - utc).div_euclid(60_000))
+        });
+        let close_business_date = history_scalar(object, &["close_business_date", "business_date"])
+            .or_else(|| {
+                close_time_server_msc.and_then(|value| business_date_from_server_msc(value).ok())
+            });
+        if close_time_utc_msc <= 0
+            || close_time_server_msc.is_none()
+            || close_timezone_offset_minutes.is_none()
+            || close_business_date.is_none()
+        {
+            return Err(StoreError::new(
+                "bridge_store_history_trade_close_time_invalid",
+            ));
+        }
+        let immutable_state = if explicit_close_utc.is_some()
+            && object.contains_key("close_time_server_msc")
+            && (object.contains_key("close_timezone_offset_minutes")
+                || object.contains_key("timezone_offset_minutes"))
+            && (object.contains_key("close_business_date") || object.contains_key("business_date"))
+        {
+            "sealed"
+        } else {
+            // Explicit old `close_time_msc` remains readable for compatibility;
+            // it is marked legacy so a later migration can distinguish it from
+            // a fully evidenced close-time row.
+            "legacy_incomplete"
+        };
+        return Ok(HistoryTimeFields {
+            event_time_msc: close_time_utc_msc,
+            close_time_utc_msc: Some(close_time_utc_msc),
+            close_time_server_msc,
+            close_timezone_offset_minutes,
+            close_business_date,
+            immutable_state,
+        });
+    }
+    let event_time_msc = history_i64(object, &["time_msc", "event_time_msc"])
+        .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))?;
+    Ok(HistoryTimeFields {
+        event_time_msc,
+        close_time_utc_msc: None,
+        close_time_server_msc: None,
+        close_timezone_offset_minutes: None,
+        close_business_date: None,
+        immutable_state: "sealed",
+    })
+}
+
 fn history_normalized_direction(
     object: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
@@ -8914,20 +9928,56 @@ fn history_capital_columns(
     (None, None)
 }
 
-fn history_time_msc(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Result<i64, StoreError> {
-    ["time_msc", "close_time_msc", "event_time_msc"]
-        .iter()
-        .find_map(|key| object.get(*key).and_then(serde_json::Value::as_i64))
-        .filter(|value| *value > 0)
-        .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))
-}
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct HistoryUpsertResult {
     changed_item_count: usize,
+    sealed_trade_changed_count: usize,
+    capital_changed_count: usize,
+    duplicate_item_count: usize,
+    immutable_conflict_count: usize,
     affected_days: Vec<i64>,
+}
+
+#[derive(Clone, Debug)]
+struct ExistingHistoryArchiveItem {
+    payload_json: String,
+}
+
+fn prefetch_history_items(
+    transaction: &Transaction<'_>,
+    terminal: &TerminalDescriptor,
+    item_kind: &str,
+    item_ids: &[String],
+) -> Result<HashMap<String, ExistingHistoryArchiveItem>, StoreError> {
+    let mut existing = HashMap::new();
+    if item_ids.is_empty() {
+        return Ok(existing);
+    }
+    let placeholders = std::iter::repeat_n("?", item_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!(
+        "SELECT item_id, payload_json FROM history_archive_items
+         WHERE terminal_instance_id = ? AND broker_server = ? COLLATE NOCASE
+           AND login_account = ? AND item_kind = ? AND item_id IN ({placeholders});"
+    );
+    let mut values = history_scope_values(terminal);
+    values.push(SqlValue::Text(item_kind.to_owned()));
+    values.extend(item_ids.iter().cloned().map(SqlValue::Text));
+    let mut statement = transaction
+        .prepare(&query)
+        .map_err(|_| StoreError::new("bridge_store_history_item_query_failed"))?;
+    let rows = statement
+        .query_map(params_from_iter(values), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|_| StoreError::new("bridge_store_history_item_query_failed"))?;
+    for row in rows {
+        let (item_id, payload_json) =
+            row.map_err(|_| StoreError::new("bridge_store_history_item_query_failed"))?;
+        existing.insert(item_id, ExistingHistoryArchiveItem { payload_json });
+    }
+    Ok(existing)
 }
 
 fn upsert_history_items(
@@ -8938,6 +9988,7 @@ fn upsert_history_items(
     observed_at_utc_msc: i64,
 ) -> Result<HistoryUpsertResult, StoreError> {
     let mut result = HistoryUpsertResult::default();
+    let mut item_ids = Vec::with_capacity(items.len());
     for item in items {
         let object = item
             .as_object()
@@ -8954,7 +10005,29 @@ fn upsert_history_items(
                 && value.bytes().any(|byte| byte != b'0')
         })
         .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))?;
-        let event_time_msc = history_time_msc(object)?;
+        item_ids.push(item_id);
+    }
+    item_ids.sort();
+    item_ids.dedup();
+    let mut existing_items = prefetch_history_items(transaction, terminal, item_kind, &item_ids)?;
+    for item in items {
+        let object = item
+            .as_object()
+            .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))?;
+        let item_id = match item_kind {
+            "deal" => history_scalar(object, &["deal_ticket", "ticket"]),
+            "history_order" => history_scalar(object, &["ticket", "order"]),
+            "trade" => history_scalar(object, &["deal_ticket", "ticket", "order"]),
+            _ => None,
+        }
+        .filter(|value| {
+            value.len() <= 32
+                && value.bytes().all(|byte| byte.is_ascii_digit())
+                && value.bytes().any(|byte| byte != b'0')
+        })
+        .ok_or_else(|| StoreError::new("bridge_store_history_item_invalid"))?;
+        let time_fields = history_time_fields(item_kind, object)?;
+        let event_time_msc = time_fields.event_time_msc;
         let position_id = history_scalar(object, &["position_id", "position"]);
         let order_ticket = history_scalar(object, &["order_ticket", "order"]);
         let symbol = history_scalar(object, &["symbol"]);
@@ -8977,121 +10050,72 @@ fn upsert_history_items(
         let volume =
             (item_kind == "trade").then(|| history_number(object, &["volume"]).unwrap_or(0.0));
         let (capital_kind, capital_amount) = history_capital_columns(item_kind, object);
-        let summary_day_utc_msc = event_time_msc - event_time_msc.rem_euclid(86_400_000);
-        let existing = transaction
-            .query_row(
-                "SELECT platform, event_time_msc, position_id, order_ticket, symbol, payload_json,
-                        direction, net_profit, volume, capital_kind, capital_amount,
-                        summary_day_utc_msc
-                 FROM history_archive_items
-                 WHERE terminal_instance_id = ?1
-                   AND broker_server = ?2 COLLATE NOCASE
-                   AND login_account = ?3 AND item_kind = ?4 AND item_id = ?5
-                 LIMIT 1;",
-                params![
-                    terminal.terminal_instance_id,
-                    terminal.account_ref.broker_server,
-                    terminal.account_ref.login,
-                    item_kind,
-                    item_id,
-                ],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, Option<String>>(6)?,
-                        row.get::<_, Option<f64>>(7)?,
-                        row.get::<_, Option<f64>>(8)?,
-                        row.get::<_, Option<String>>(9)?,
-                        row.get::<_, Option<f64>>(10)?,
-                        row.get::<_, Option<i64>>(11)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(|_| StoreError::new("bridge_store_history_item_query_failed"))?;
-        let changed = existing.as_ref().is_none_or(
-            |(
-                existing_platform,
-                existing_time,
-                existing_position,
-                existing_order,
-                existing_symbol,
-                existing_payload,
-                existing_direction,
-                existing_net_profit,
-                existing_volume,
-                existing_capital_kind,
-                existing_capital_amount,
-                existing_summary_day,
-            )| {
-                *existing_platform != terminal.platform
-                    || *existing_time != event_time_msc
-                    || *existing_position != position_id
-                    || *existing_order != order_ticket
-                    || *existing_symbol != symbol
-                    || *existing_payload != payload_json
-                    || *existing_direction != direction
-                    || *existing_net_profit != net_profit
-                    || *existing_volume != volume
-                    || *existing_capital_kind != capital_kind
-                    || *existing_capital_amount != capital_amount
-                    || *existing_summary_day != Some(summary_day_utc_msc)
-            },
-        );
-        if changed {
-            if let Some(existing_day) = existing.as_ref().and_then(|row| row.11) {
-                result.affected_days.push(existing_day);
+        let summary_day_utc_msc = if let Some(date) = time_fields.close_business_date.as_deref() {
+            parse_utc_date_msc(date)?
+        } else {
+            event_time_msc - event_time_msc.rem_euclid(HISTORY_DAY_MSC)
+        };
+        let Some(existing) = existing_items.remove(&item_id) else {
+            transaction
+                .execute(
+                    "INSERT INTO history_archive_items (
+                       terminal_instance_id, broker_server, login_account, platform, item_kind,
+                       item_id, event_time_msc, position_id, order_ticket, symbol, payload_json,
+                       direction, net_profit, volume, capital_kind, capital_amount,
+                       summary_day_utc_msc, close_time_utc_msc, close_time_server_msc,
+                       close_timezone_offset_minutes, close_business_date, immutable_state,
+                       updated_at_utc_msc
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                               ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23);",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                        item_kind,
+                        item_id,
+                        event_time_msc,
+                        position_id,
+                        order_ticket,
+                        symbol,
+                        payload_json,
+                        direction,
+                        net_profit,
+                        volume,
+                        capital_kind,
+                        capital_amount,
+                        summary_day_utc_msc,
+                        time_fields.close_time_utc_msc,
+                        time_fields.close_time_server_msc,
+                        time_fields.close_timezone_offset_minutes,
+                        time_fields.close_business_date,
+                        time_fields.immutable_state,
+                        observed_at_utc_msc,
+                    ],
+                )
+                .map_err(|_| StoreError::new("bridge_store_history_item_write_failed"))?;
+            result.changed_item_count = result.changed_item_count.saturating_add(1);
+            if item_kind == "trade" && time_fields.immutable_state == "sealed" {
+                result.sealed_trade_changed_count =
+                    result.sealed_trade_changed_count.saturating_add(1);
+            }
+            if item_kind == "deal" && capital_kind.is_some() {
+                result.capital_changed_count = result.capital_changed_count.saturating_add(1);
             }
             result.affected_days.push(summary_day_utc_msc);
+            existing_items.insert(item_id, ExistingHistoryArchiveItem { payload_json });
+            continue;
+        };
+        if existing.payload_json == payload_json {
+            result.duplicate_item_count = result.duplicate_item_count.saturating_add(1);
+        } else {
+            // Archive rows are sealed evidence.  A later source payload is
+            // observable but cannot overwrite the local truth or revision.
+            result.immutable_conflict_count = result.immutable_conflict_count.saturating_add(1);
         }
-        transaction
-            .execute(
-                "INSERT INTO history_archive_items (\
-                   terminal_instance_id, broker_server, login_account, platform, item_kind,\
-                   item_id, event_time_msc, position_id, order_ticket, symbol, payload_json,\
-                   direction, net_profit, volume, capital_kind, capital_amount,\
-                   summary_day_utc_msc, updated_at_utc_msc\
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,\
-                           ?13, ?14, ?15, ?16, ?17, ?18)\
-                 ON CONFLICT(terminal_instance_id, broker_server, login_account, item_kind, item_id)\
-                 DO UPDATE SET platform = excluded.platform, event_time_msc = excluded.event_time_msc,\
-                   position_id = excluded.position_id, order_ticket = excluded.order_ticket,\
-                   symbol = excluded.symbol, payload_json = excluded.payload_json,\
-                   direction = excluded.direction, net_profit = excluded.net_profit,
-                   volume = excluded.volume, capital_kind = excluded.capital_kind,
-                   capital_amount = excluded.capital_amount,
-                   summary_day_utc_msc = excluded.summary_day_utc_msc,
-                   updated_at_utc_msc = excluded.updated_at_utc_msc;",
-                params![
-                    terminal.terminal_instance_id,
-                    terminal.account_ref.broker_server,
-                    terminal.account_ref.login,
-                    terminal.platform,
-                    item_kind,
-                    item_id,
-                    event_time_msc,
-                    position_id,
-                    order_ticket,
-                    symbol,
-                    payload_json,
-                    direction,
-                    net_profit,
-                    volume,
-                    capital_kind,
-                    capital_amount,
-                    summary_day_utc_msc,
-                    observed_at_utc_msc,
-                ],
-            )
-            .map_err(|_| StoreError::new("bridge_store_history_item_write_failed"))?;
-        if changed {
-            result.changed_item_count = result.changed_item_count.saturating_add(1);
-        }
+        // Keep the first immutable payload in the in-batch lookup so repeated
+        // IDs in one page cannot turn a duplicate/conflict into an insert.
+        existing_items.insert(item_id, existing);
     }
     Ok(result)
 }
@@ -9174,6 +10198,8 @@ fn read_history_sync_metadata_locked(
     };
     let ranges = read_history_coverage_ranges_locked(connection, &scope)?;
     let scope_state = read_history_scope_state_locked(connection, &scope, &terminal.platform)?;
+    let (summary_source, time_semantics) =
+        history_summary_source(connection, &scope, &terminal.platform)?;
     const HOUR_MSC: i64 = 60 * 60 * 1_000;
     let is_mt5 = terminal.platform.eq_ignore_ascii_case("mt5");
     let is_mt4 = terminal.platform == "mt4";
@@ -9277,6 +10303,12 @@ fn read_history_sync_metadata_locked(
         "history_revision": scope_state.history_revision,
         "summary_revision": scope_state.summary_revision,
         "summary_status": scope_state.summary_status,
+        "summary_source": summary_source,
+        "time_semantics": time_semantics,
+        "history_duplicate_count": scope_state.duplicate_count,
+        "history_immutable_conflict_count": scope_state.immutable_conflict_count,
+        "duplicate_count": scope_state.duplicate_count,
+        "immutable_conflict_count": scope_state.immutable_conflict_count,
     });
     if is_mt4 {
         metadata["terminal_visible_history_complete"] = serde_json::Value::Bool(state.is_complete);
@@ -9566,6 +10598,13 @@ fn runtime_schema_status(connection: &Connection) -> Result<RuntimeSchemaStatus,
         {
             return Ok(RuntimeSchemaStatus::Incompatible);
         }
+        if *table == "history_scope_state"
+            && ["duplicate_count", "immutable_conflict_count"]
+                .iter()
+                .any(|required| !columns.iter().any(|existing| existing == required))
+        {
+            needs_migration = true;
+        }
         // These scalar archive columns were added after the original history
         // table and are repaired additively below.  Their absence is a normal
         // migration state, not evidence that the user's database is corrupt.
@@ -9577,6 +10616,11 @@ fn runtime_schema_status(connection: &Connection) -> Result<RuntimeSchemaStatus,
                 "capital_kind",
                 "capital_amount",
                 "summary_day_utc_msc",
+                "close_time_utc_msc",
+                "close_time_server_msc",
+                "close_timezone_offset_minutes",
+                "close_business_date",
+                "immutable_state",
             ]
             .iter()
             .any(|required| !columns.iter().any(|existing| existing == required))
@@ -9716,6 +10760,17 @@ mod tests {
                         .into_iter()
                         .map(str::to_owned),
                     );
+                    expected.extend(
+                        [
+                            "close_time_utc_msc",
+                            "close_time_server_msc",
+                            "close_timezone_offset_minutes",
+                            "close_business_date",
+                            "immutable_state",
+                        ]
+                        .into_iter()
+                        .map(str::to_owned),
+                    );
                 }
                 assert_eq!(
                     table_columns(&connection, table).expect("fresh table columns"),
@@ -9744,9 +10799,11 @@ mod tests {
                     "idx_history_archive_page",
                     "idx_history_archive_position",
                     "idx_history_archive_summary_scope",
+                    "idx_history_archive_trade_close",
                     "idx_history_archive_trade_filter",
                     "idx_history_coverage_ranges_scope",
                     "idx_history_daily_summary_active",
+                    "idx_history_daily_summary_v2_active",
                     "idx_history_scope_state_updated",
                     "idx_history_summary_builds_updated",
                     "idx_history_sync_jobs_claim",
@@ -10436,6 +11493,12 @@ mod tests {
             let payload = serde_json::json!({
                 "deal_ticket": item_id,
                 "ticket": item_id,
+                "entry_time_utc_msc": event_time_msc,
+                "close_time_utc_msc": event_time_msc,
+                "close_time_server_msc": event_time_msc,
+                "close_timezone_offset_minutes": 0,
+                "close_business_date": business_date_from_server_msc(event_time_msc)
+                    .expect("cursor seed business date"),
                 "close_time_msc": event_time_msc,
                 "profit": if index % 2 == 0 { 1.0 } else { -1.0 },
                 "volume": 0.1,
@@ -10445,8 +11508,11 @@ mod tests {
                     "INSERT INTO history_archive_items (
                        terminal_instance_id, broker_server, login_account, platform,
                        item_kind, item_id, event_time_msc, position_id, order_ticket,
-                       symbol, payload_json, updated_at_utc_msc
-                     ) VALUES (?1, ?2, ?3, ?4, 'trade', ?5, ?6, NULL, NULL, 'XAUUSD', ?7, ?8);",
+                       symbol, payload_json, updated_at_utc_msc,
+                       close_time_utc_msc, close_time_server_msc,
+                       close_timezone_offset_minutes, close_business_date, immutable_state
+                     ) VALUES (?1, ?2, ?3, ?4, 'trade', ?5, ?6, NULL, NULL, 'XAUUSD', ?7, ?8,
+                               ?6, ?6, 0, ?9, 'sealed');",
                     params![
                         terminal.terminal_instance_id,
                         terminal.account_ref.broker_server,
@@ -10456,6 +11522,8 @@ mod tests {
                         event_time_msc,
                         payload.to_string(),
                         range_end_utc_msc,
+                        business_date_from_server_msc(event_time_msc)
+                            .expect("cursor seed business date"),
                     ],
                 )
                 .expect("cursor seed item");
@@ -10703,6 +11771,11 @@ mod tests {
                 "order_ticket": ticket + 1_000,
                 "position_id": ticket + 2_000,
                 "close_time_msc": close_time_msc,
+                "close_time_utc_msc": close_time_msc,
+                "close_time_server_msc": close_time_msc,
+                "close_timezone_offset_minutes": 0,
+                "close_business_date": business_date_from_server_msc(close_time_msc)
+                    .expect("close business date"),
                 "symbol": "XAUUSD.s",
                 "type": direction,
                 "volume": 0.01,
@@ -11027,6 +12100,7 @@ mod tests {
         let path = root.join(BRIDGE_DATABASE_FILE_NAME);
         let store = OutboxStore::open_or_create(&path).expect("planner store");
         let scope = history_scope_for("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
         {
             let connection = store.connection.lock().expect("coverage lock");
             connection
@@ -11035,13 +12109,17 @@ mod tests {
                        terminal_instance_id, broker_server, login_account,
                        range_start_utc_msc, range_end_utc_msc,
                        observed_at_utc_msc, updated_at_utc_msc
-                     ) VALUES (?1, ?2, ?3, 2000, 3000, ?4, ?4),
-                              (?1, ?2, ?3, 5000, 6000, ?4, ?4);",
+                     ) VALUES (?1, ?2, ?3, ?5, ?6, ?4, ?4),
+                              (?1, ?2, ?3, ?7, ?8, ?4, ?4);",
                     params![
                         scope.terminal_instance_id,
                         scope.broker_server,
                         scope.login_account,
                         1_700_000_000_000_i64,
+                        floor + 2_000,
+                        floor + 3_000,
+                        floor + 5_000,
+                        floor + 6_000,
                     ],
                 )
                 .expect("coverage rows");
@@ -11050,8 +12128,8 @@ mod tests {
             scope: scope.clone(),
             job_kind: "recent".to_owned(),
             priority: "p2".to_owned(),
-            range_start_utc_msc: 1_000,
-            range_end_utc_msc: 10_000,
+            range_start_utc_msc: floor + 1_000,
+            range_end_utc_msc: floor + 10_000,
             window_msc: 1_000,
             now_utc_msc: 1_700_000_000_100,
         };
@@ -11063,7 +12141,11 @@ mod tests {
                 .iter()
                 .map(|job| (job.range_start_utc_msc, job.range_end_utc_msc))
                 .collect::<Vec<_>>(),
-            vec![(1_000, 2_000), (3_000, 5_000), (6_000, 10_000)]
+            vec![
+                (floor + 1_000, floor + 2_000),
+                (floor + 3_000, floor + 5_000),
+                (floor + 6_000, floor + 10_000),
+            ]
         );
         let repeated = store.plan_history_jobs(&request).expect("repeat plan");
         assert!(repeated.created_jobs.is_empty());
@@ -11073,8 +12155,8 @@ mod tests {
             scope: scope.clone(),
             job_kind: "on_demand".to_owned(),
             priority: "p1".to_owned(),
-            range_start_utc_msc: 1_500,
-            range_end_utc_msc: 6_500,
+            range_start_utc_msc: floor + 1_500,
+            range_end_utc_msc: floor + 6_500,
             window_msc: 1_000,
             now_utc_msc: 1_700_000_000_200,
         };
@@ -11084,7 +12166,10 @@ mod tests {
                 .iter()
                 .map(|job| (job.range_start_utc_msc, job.range_end_utc_msc))
                 .collect::<Vec<_>>(),
-            vec![(1_500, 2_000), (6_000, 6_500)]
+            vec![
+                (floor + 1_500, floor + 2_000),
+                (floor + 6_000, floor + 6_500)
+            ]
         );
         assert_eq!(
             p1.attached_jobs
@@ -11095,21 +12180,21 @@ mod tests {
                     job.priority.as_str()
                 ))
                 .collect::<Vec<_>>(),
-            vec![(3_000, 5_000, "p1")]
+            vec![(floor + 3_000, floor + 5_000, "p1")]
         );
 
         for (kind, priority) in [
             ("recent", "p1"),
             ("recent", "p3"),
             ("on_demand", "p2"),
-            ("backfill", "p3"),
+            ("backfill", "p2"),
         ] {
             let invalid = HistoryJobPlanningRequest {
                 scope: scope.clone(),
                 job_kind: kind.to_owned(),
                 priority: priority.to_owned(),
-                range_start_utc_msc: 20_000,
-                range_end_utc_msc: 21_000,
+                range_start_utc_msc: floor + 20_000,
+                range_end_utc_msc: floor + 21_000,
                 window_msc: 1_000,
                 now_utc_msc: 1_700_000_000_300,
             };
@@ -11131,12 +12216,13 @@ mod tests {
         let path = root.join(BRIDGE_DATABASE_FILE_NAME);
         let store = OutboxStore::open_or_create(&path).expect("promotion planner store");
         let scope = history_scope_for("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
         let p3 = HistoryJobPlanningRequest {
             scope: scope.clone(),
             job_kind: "on_demand".to_owned(),
             priority: "p3".to_owned(),
-            range_start_utc_msc: 30_000,
-            range_end_utc_msc: 40_000,
+            range_start_utc_msc: floor + 30_000,
+            range_end_utc_msc: floor + 40_000,
             window_msc: 5_000,
             now_utc_msc: 1_700_000_000_400,
         };
@@ -11150,7 +12236,7 @@ mod tests {
             .checkpoint_history_job(
                 &running.job_id,
                 running.lease_generation,
-                35_000,
+                floor + 35_000,
                 "35",
                 2_500,
                 1_700_000_000_402,
@@ -11164,8 +12250,8 @@ mod tests {
             scope: scope.clone(),
             job_kind: "on_demand".to_owned(),
             priority: "p1".to_owned(),
-            range_start_utc_msc: 30_000,
-            range_end_utc_msc: 40_000,
+            range_start_utc_msc: floor + 30_000,
+            range_end_utc_msc: floor + 40_000,
             window_msc: 9_000,
             now_utc_msc: 1_700_000_000_403,
         };
@@ -11190,7 +12276,13 @@ mod tests {
         );
         assert_eq!(after.updated_at_utc_msc, p1.now_utc_msc);
 
-        let legacy = history_job_for("job_01JPLANLEGACY1", &scope, 50_000, 60_000, "p3");
+        let legacy = history_job_for(
+            "job_01JPLANLEGACY1",
+            &scope,
+            floor + 50_000,
+            floor + 60_000,
+            "p3",
+        );
         let mut legacy = legacy;
         legacy.job_kind = "backfill".to_owned();
         store
@@ -11200,10 +12292,10 @@ mod tests {
             scope,
             job_kind: "on_demand".to_owned(),
             priority: "p1".to_owned(),
-            range_start_utc_msc: 50_000,
-            range_end_utc_msc: 60_000,
+            range_start_utc_msc: floor + 50_000,
+            range_end_utc_msc: floor + 60_000,
             window_msc: 1_000,
-            now_utc_msc: 1_700_000_000_404,
+            now_utc_msc: floor - 1,
         };
         assert_eq!(
             store
@@ -11502,12 +12594,13 @@ mod tests {
         let path = root.join(BRIDGE_DATABASE_FILE_NAME);
         let store = OutboxStore::open_or_create(&path).expect("retry promotion planner store");
         let scope = history_scope_for("654321");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
         let p3 = HistoryJobPlanningRequest {
             scope: scope.clone(),
             job_kind: "on_demand".to_owned(),
             priority: "p3".to_owned(),
-            range_start_utc_msc: 70_000,
-            range_end_utc_msc: 80_000,
+            range_start_utc_msc: floor + 70_000,
+            range_end_utc_msc: floor + 80_000,
             window_msc: 5_000,
             now_utc_msc: 1_700_000_000_500,
         };
@@ -11521,7 +12614,7 @@ mod tests {
             .checkpoint_history_job(
                 &running.job_id,
                 running.lease_generation,
-                75_000,
+                floor + 75_000,
                 "75",
                 2_500,
                 1_700_000_000_502,
@@ -11547,8 +12640,8 @@ mod tests {
             scope,
             job_kind: "on_demand".to_owned(),
             priority: "p1".to_owned(),
-            range_start_utc_msc: 70_000,
-            range_end_utc_msc: 80_000,
+            range_start_utc_msc: floor + 70_000,
+            range_end_utc_msc: floor + 80_000,
             window_msc: 9_000,
             now_utc_msc: 1_700_000_000_504,
         };
@@ -12274,6 +13367,13 @@ mod tests {
             "deal_ticket": ticket,
             "ticket": ticket,
             "time_msc": event_time_msc,
+            "entry_time_utc_msc": event_time_msc,
+            "close_time_utc_msc": event_time_msc,
+            "close_time_server_msc": event_time_msc,
+            "close_timezone_offset_minutes": 0,
+            "close_business_date": business_date_from_server_msc(event_time_msc)
+                .expect("normalized trade business date"),
+            "close_deal_ticket": ticket,
             "type": direction,
             "profit": profit,
             "volume": volume,
@@ -12282,7 +13382,339 @@ mod tests {
     }
 
     #[test]
-    fn legacy_history_scalars_migrate_backfill_and_respect_2025_summary_floor() {
+    fn trade_pages_filter_and_order_by_immutable_close_time() {
+        let root = unique_test_directory("history-close-time-page");
+        let path = root.join(BRIDGE_DATABASE_FILE_NAME);
+        let store = OutboxStore::open_or_create(&path).expect("close-time store");
+        let terminal = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let rows = [
+            (1_i64, floor + 100, floor + 300),
+            (2_i64, floor + 200, floor + 100),
+            (3_i64, floor + 50, floor + 200),
+        ];
+        {
+            let connection = store.connection.lock().expect("close-time lock");
+            for (ticket, event_time, close_time) in rows {
+                let payload = serde_json::json!({
+                    "deal_ticket": ticket,
+                    "ticket": ticket,
+                    "entry_time_utc_msc": event_time,
+                    "close_time_utc_msc": close_time,
+                    "close_time_server_msc": close_time,
+                    "close_timezone_offset_minutes": 0,
+                    "close_business_date": business_date_from_server_msc(close_time)
+                        .expect("close business date"),
+                    "profit": ticket as f64,
+                    "volume": 0.1,
+                });
+                connection
+                    .execute(
+                        "INSERT INTO history_archive_items (
+                           terminal_instance_id, broker_server, login_account, platform,
+                           item_kind, item_id, event_time_msc, payload_json,
+                           close_time_utc_msc, close_time_server_msc,
+                           close_timezone_offset_minutes, close_business_date,
+                           immutable_state, updated_at_utc_msc
+                         ) VALUES (?1, ?2, ?3, ?4, 'trade', ?5, ?6, ?7, ?8, ?8, 0, ?9,
+                                   'sealed', ?8);",
+                        params![
+                            terminal.terminal_instance_id,
+                            terminal.account_ref.broker_server,
+                            terminal.account_ref.login,
+                            terminal.platform,
+                            ticket.to_string(),
+                            event_time,
+                            payload.to_string(),
+                            close_time,
+                            business_date_from_server_msc(close_time).expect("close business date"),
+                        ],
+                    )
+                    .expect("close-time row");
+            }
+        }
+        let page = store
+            .read_history_archive_page_at(
+                &terminal,
+                &serde_json::json!({
+                    "range_start_utc_msc": floor,
+                    "range_end_utc_msc": floor + 1_000,
+                    "filter_close_from": floor + 200,
+                    "page_size": 20,
+                }),
+                floor + 2_000,
+            )
+            .expect("close-time page");
+        assert_eq!(page["pagination"]["total_count"], 2);
+        let orders = page["orders"].as_array().expect("trade page orders");
+        assert_eq!(orders[0]["deal_ticket"], 1);
+        assert_eq!(orders[1]["deal_ticket"], 3);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove close-time fixture");
+    }
+
+    #[test]
+    fn trade_close_filters_use_utc_even_when_server_business_date_crosses_day() {
+        let root = unique_test_directory("history-close-utc-offset");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("close offset store");
+        let terminal = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let close_before_midnight = floor + 86_400_000 - 30_000;
+        let close_after_midnight = floor + 86_400_000 + 30_000;
+        let trade = |ticket: i64, close_utc: i64, server_utc: i64| {
+            serde_json::json!({
+                "deal_ticket": ticket,
+                "ticket": ticket,
+                "entry_time_utc_msc": close_utc,
+                "close_time_utc_msc": close_utc,
+                "close_time_server_msc": server_utc,
+                "close_timezone_offset_minutes": (server_utc - close_utc) / 60_000,
+                "close_business_date": business_date_from_server_msc(server_utc)
+                    .expect("offset business date"),
+                "type": "BUY",
+                "profit": ticket as f64,
+                "volume": 0.1,
+            })
+        };
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![
+                        trade(
+                            1,
+                            close_before_midnight,
+                            close_before_midnight + 2 * 3_600_000,
+                        ),
+                        trade(
+                            2,
+                            close_after_midnight,
+                            close_after_midnight - 2 * 3_600_000,
+                        ),
+                    ],
+                    next_cursor: HistoryCursor {
+                        time_msc: close_after_midnight,
+                        ticket: "2".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: close_after_midnight + 1_000,
+                },
+            )
+            .expect("offset trades");
+        let page = store
+            .read_history_archive_page_at(
+                &terminal,
+                &serde_json::json!({
+                    "date_from": "2000-01-02",
+                    "date_to": "2000-01-02",
+                    "filter_close_from": close_after_midnight,
+                    "filter_close_to": close_after_midnight,
+                    "entry_from": close_after_midnight,
+                    "entry_to": close_after_midnight,
+                    "page_size": 20,
+                }),
+                close_after_midnight + 2_000,
+            )
+            .expect("offset close page");
+        assert_eq!(page["pagination"]["total_count"], 1);
+        assert_eq!(page["orders"][0]["deal_ticket"], 2);
+        drop(store);
+        fs::remove_dir_all(root).expect("remove close offset fixture");
+    }
+
+    #[test]
+    fn summary_v2_is_default_and_v1_fallback_is_explicit() {
+        let root = unique_test_directory("history-summary-v2-source");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("summary source store");
+        let terminal = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let close_utc = floor + 86_400_000 - 30 * 60_000;
+        let close_server = close_utc + 3 * 60 * 60_000;
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![serde_json::json!({
+                        "deal_ticket": 9001,
+                        "ticket": 9001,
+                        "entry_time_utc_msc": close_utc,
+                        "close_time_utc_msc": close_utc,
+                        "close_time_server_msc": close_server,
+                        "close_timezone_offset_minutes": 180,
+                        "close_business_date": business_date_from_server_msc(close_server)
+                            .expect("server business date"),
+                        "type": "BUY",
+                        "profit": 7.0,
+                        "volume": 0.7,
+                    })],
+                    next_cursor: HistoryCursor {
+                        time_msc: close_utc,
+                        ticket: "9001".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: close_utc + 1_000,
+                },
+            )
+            .expect("summary source batch");
+        store
+            .ensure_history_summary(&terminal, close_utc + 2_000)
+            .expect("summary source ready");
+        let page = store
+            .read_history_archive_page_at(&terminal, &serde_json::json!({}), close_utc + 3_000)
+            .expect("v2 summary page");
+        assert_eq!(page["statistics"]["summary_source"], "sqlite_summary_v2");
+        assert_eq!(page["statistics"]["time_semantics"], "server_business_date");
+        assert_eq!(page["history_sync"]["summary_source"], "sqlite_summary_v2");
+        assert_eq!(
+            page["history_sync"]["time_semantics"],
+            "server_business_date"
+        );
+        let chart = store
+            .read_history_chart_data_at(&terminal, &serde_json::json!({}), close_utc + 3_000)
+            .expect("v2 summary chart");
+        assert_eq!(chart["summary_source"], "sqlite_summary_v2");
+        assert_eq!(chart["time_semantics"], "server_business_date");
+        assert_eq!(chart["daily"][0]["date"], "2000-01-02");
+
+        let generation = {
+            let connection = store.connection.lock().expect("summary source lock");
+            connection
+                .query_row(
+                    "SELECT active_generation FROM history_summary_builds
+                     WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4;",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("summary source generation")
+        };
+        {
+            let connection = store
+                .connection
+                .lock()
+                .expect("summary source mismatch lock");
+            connection
+                .execute(
+                    "UPDATE history_daily_summary_v2 SET generation = ?1
+                     WHERE terminal_instance_id = ?2 AND broker_server = ?3 COLLATE NOCASE
+                       AND login_account = ?4 AND platform = ?5 AND generation = ?6;",
+                    params![
+                        generation + 1,
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                        generation,
+                    ],
+                )
+                .expect("mismatch v2 generation");
+        }
+        let fallback = store
+            .read_history_archive_page_at(&terminal, &serde_json::json!({}), close_utc + 4_000)
+            .expect("v1 fallback page");
+        assert_eq!(
+            fallback["statistics"]["summary_source"],
+            "sqlite_summary_v1"
+        );
+        assert_eq!(fallback["statistics"]["time_semantics"], "legacy_utc_day");
+        assert_eq!(
+            fallback["history_sync"]["summary_source"],
+            "sqlite_summary_v1"
+        );
+        assert_eq!(fallback["history_sync"]["time_semantics"], "legacy_utc_day");
+        drop(store);
+        fs::remove_dir_all(root).expect("remove summary source fixture");
+    }
+
+    #[test]
+    fn summary_v2_exact_range_uses_close_utc_raw_edges_for_timezone_offsets() {
+        let root = unique_test_directory("history-summary-v2-range-offset");
+        let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
+            .expect("summary range store");
+        let terminal = history_terminal("123456");
+        let floor = HISTORY_COVERAGE_START_UTC_MSC;
+        let older_close_utc = floor + 86_400_000 + 10_000;
+        let target_close_utc = floor + 2 * 86_400_000 + 10_000;
+        let make_trade = |ticket: i64, close_utc: i64, offset_minutes: i64| {
+            let server = close_utc + offset_minutes * 60_000;
+            serde_json::json!({
+                "deal_ticket": ticket,
+                "ticket": ticket,
+                "entry_time_utc_msc": close_utc,
+                "close_time_utc_msc": close_utc,
+                "close_time_server_msc": server,
+                "close_timezone_offset_minutes": offset_minutes,
+                "close_business_date": business_date_from_server_msc(server)
+                    .expect("offset business date"),
+                "type": "BUY",
+                "profit": ticket as f64,
+                "volume": 0.1,
+            })
+        };
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: Vec::new(),
+                    history_orders: Vec::new(),
+                    trades: vec![
+                        make_trade(9101, older_close_utc, -300),
+                        make_trade(9102, target_close_utc, 180),
+                    ],
+                    next_cursor: HistoryCursor {
+                        time_msc: target_close_utc,
+                        ticket: "9102".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: target_close_utc + 1_000,
+                },
+            )
+            .expect("offset range batch");
+        store
+            .ensure_history_summary(&terminal, target_close_utc + 2_000)
+            .expect("offset range summary");
+        let chart = store
+            .read_history_chart_data_at(
+                &terminal,
+                &serde_json::json!({
+                    "range_start_utc_msc": target_close_utc - 1,
+                    "range_end_utc_msc": target_close_utc + 1,
+                }),
+                target_close_utc + 3_000,
+            )
+            .expect("offset range chart");
+        assert_eq!(chart["summary_source"], "sqlite_archive_raw_close_time");
+        assert_eq!(chart["time_semantics"], "exact_close_utc");
+        assert_eq!(
+            chart["history_sync"]["summary_source"],
+            "sqlite_archive_raw_close_time"
+        );
+        assert_eq!(chart["history_sync"]["time_semantics"], "exact_close_utc");
+        assert_eq!(chart["stats"]["total_trades"], 1);
+        assert_eq!(chart["stats"]["gross_profit"], 9102.0);
+        assert_eq!(chart["daily"].as_array().expect("offset daily").len(), 1);
+        assert_eq!(
+            chart["daily"][0]["date"],
+            business_date_from_server_msc(target_close_utc + 180 * 60_000)
+                .expect("target business date")
+        );
+        drop(store);
+        fs::remove_dir_all(root).expect("remove offset range fixture");
+    }
+
+    #[test]
+    fn legacy_history_scalars_migrate_backfill_and_respect_2000_summary_floor() {
         let root = unique_test_directory("history-scalar-migration");
         fs::create_dir_all(&root).expect("fixture directory");
         let path = root.join(BRIDGE_DATABASE_FILE_NAME);
@@ -12290,11 +13722,14 @@ mod tests {
         let terminal = history_terminal("123456");
         let old_time = HISTORY_COVERAGE_START_UTC_MSC - 86_400_000;
         let current_time = HISTORY_COVERAGE_START_UTC_MSC + 86_400_000 + 123;
+        let cross_utc_time = HISTORY_COVERAGE_START_UTC_MSC + 2 * 86_400_000 - 30_000;
+        let cross_server_time = cross_utc_time + 2 * 3_600_000;
         {
             let connection = Connection::open(&path).expect("legacy connection");
-            for (item_id, event_time, direction, profit) in [
-                ("old", old_time, "BUY", 5.0),
-                ("new", current_time, "SELL", -2.0),
+            for (item_id, event_time, server_time, direction, profit) in [
+                ("old", old_time, old_time, "BUY", 5.0),
+                ("new", current_time, current_time, "SELL", -2.0),
+                ("cross", cross_utc_time, cross_server_time, "BUY", 3.0),
             ] {
                 connection
                     .execute(
@@ -12314,6 +13749,8 @@ mod tests {
                             serde_json::json!({
                                 "deal_ticket": item_id,
                                 "time_msc": event_time,
+                                "close_time_utc_msc": event_time,
+                                "close_time_server_msc": server_time,
                                 "type": direction,
                                 "profit": profit,
                                 "volume": 0.2,
@@ -12342,7 +13779,8 @@ mod tests {
             }
             let migrated = connection
                 .query_row(
-                    "SELECT direction, net_profit, volume, summary_day_utc_msc
+                    "SELECT direction, net_profit, volume, summary_day_utc_msc,
+                            close_timezone_offset_minutes, close_business_date, immutable_state
                      FROM history_archive_items WHERE item_id = 'new';",
                     [],
                     |row| {
@@ -12351,6 +13789,9 @@ mod tests {
                             row.get::<_, f64>(1)?,
                             row.get::<_, f64>(2)?,
                             row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, String>(5)?,
+                            row.get::<_, String>(6)?,
                         ))
                     },
                 )
@@ -12362,6 +13803,12 @@ mod tests {
                 migrated.3,
                 current_time - current_time.rem_euclid(86_400_000)
             );
+            assert_eq!(migrated.4, 0);
+            assert_eq!(
+                migrated.5,
+                business_date_from_server_msc(current_time).expect("derived business date")
+            );
+            assert_eq!(migrated.6, "sealed");
         }
         let state = store
             .rebuild_history_summary(&terminal, current_time + 1_000)
@@ -12384,8 +13831,31 @@ mod tests {
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
             )
             .expect("summary floor query");
-        assert_eq!(summary_count, 1);
-        assert_eq!(summary_profit, -2.0);
+        assert_eq!(summary_count, 2);
+        assert_eq!(summary_profit, 1.0);
+        let cross_summary_day = connection
+            .query_row(
+                "SELECT summary_day_utc_msc, close_business_date, immutable_state
+                 FROM history_archive_items WHERE item_id = 'cross';",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .expect("cross-day migration row");
+        assert_eq!(
+            cross_summary_day.0,
+            HISTORY_COVERAGE_START_UTC_MSC + 2 * 86_400_000
+        );
+        assert_eq!(
+            cross_summary_day.1,
+            business_date_from_server_msc(cross_server_time).expect("cross business date")
+        );
+        assert_eq!(cross_summary_day.2, "sealed");
         drop(connection);
         drop(store);
         fs::remove_dir_all(root).expect("remove scalar migration fixture");
@@ -12525,6 +13995,27 @@ mod tests {
             .ensure_history_summary(&terminal, day_three + 200)
             .expect("initial summary ready");
         assert_eq!(ready.summary_revision, ready.history_revision);
+        {
+            let connection = store.connection.lock().expect("v2 summary lock");
+            let v2_count = connection
+                .query_row(
+                    "SELECT COALESCE(SUM(trade_count), 0)
+                     FROM history_daily_summary_v2
+                     WHERE terminal_instance_id = ?1 AND broker_server = ?2 COLLATE NOCASE
+                       AND login_account = ?3 AND platform = ?4 AND generation = ?5
+                       AND item_kind = 'trade';",
+                    params![
+                        terminal.terminal_instance_id,
+                        terminal.account_ref.broker_server,
+                        terminal.account_ref.login,
+                        terminal.platform,
+                        ready.summary_revision,
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("v2 summary count");
+            assert_eq!(v2_count, 2);
+        }
         let before = store
             .history_scope_state(&terminal)
             .expect("before duplicate");
@@ -12551,7 +14042,8 @@ mod tests {
             .persist_history_archive_batch(&terminal, &moved)
             .expect("cross-day replacement");
         let after_move = store.history_scope_state(&terminal).expect("after move");
-        assert_eq!(after_move.history_revision, before.history_revision + 1);
+        assert_eq!(after_move.history_revision, before.history_revision);
+        assert_eq!(after_move.immutable_conflict_count, 1);
         assert_eq!(after_move.summary_revision, after_move.history_revision);
         let connection = store.connection.lock().expect("incremental summary lock");
         let generation = connection
@@ -12602,8 +14094,8 @@ mod tests {
                 |row| row.get::<_, i64>(0),
             )
             .expect("new day summary");
-        assert_eq!(old_day_count, 0);
-        assert_eq!(new_day_count, 1);
+        assert_eq!(old_day_count, 1);
+        assert_eq!(new_day_count, 0);
         drop(connection);
         drop(store);
         fs::remove_dir_all(root).expect("remove incremental summary fixture");
@@ -12663,6 +14155,11 @@ mod tests {
         assert_eq!(page["statistics"]["trade_count"], 3);
         assert_eq!(page["statistics"]["total_profit"], 10.0);
         assert_eq!(page["statistics"]["total_volume"], 1.0);
+        assert_eq!(
+            page["statistics"]["summary_source"],
+            "sqlite_archive_raw_close_time"
+        );
+        assert_eq!(page["statistics"]["time_semantics"], "exact_close_utc");
         let chart_parameters = serde_json::json!({
             "range_start_utc_msc": start,
             "range_end_utc_msc": end,
@@ -12868,6 +14365,40 @@ mod tests {
         assert_eq!(page["statistics"]["deposit"], 100.0);
         assert_eq!(page["statistics"]["withdrawal"], 20.0);
         assert_eq!(page["statistics"]["credit"], 3.0);
+        let before = store
+            .history_scope_state(&terminal)
+            .expect("capital state before append");
+        store
+            .persist_history_archive_batch(
+                &terminal,
+                &HistoryArchiveBatch {
+                    deals: vec![serde_json::json!({
+                        "category": "capital",
+                        "ticket": 8504,
+                        "deal_type": 6,
+                        "amount": 50.0,
+                        "time_msc": floor + 400,
+                    })],
+                    history_orders: Vec::new(),
+                    trades: Vec::new(),
+                    next_cursor: HistoryCursor {
+                        time_msc: day_end + 1,
+                        ticket: "8504".to_owned(),
+                    },
+                    has_more: false,
+                    observed_at_utc_msc: day_end + 400,
+                },
+            )
+            .expect("append capital event");
+        let after = store
+            .history_scope_state(&terminal)
+            .expect("capital state after append");
+        assert_eq!(after.history_revision, before.history_revision);
+        assert_eq!(after.summary_revision, before.summary_revision);
+        let refreshed = store
+            .read_history_archive_page_at(&terminal, &serde_json::json!({}), day_end + 500)
+            .expect("refreshed capital stats");
+        assert_eq!(refreshed["statistics"]["deposit"], 150.0);
         drop(store);
         fs::remove_dir_all(root).expect("remove MT4 capital summary fixture");
     }
@@ -13779,7 +15310,7 @@ mod tests {
             cursor_time_msc: start,
             cursor_ticket: String::new(),
             window_msc: end - start,
-            created_at_utc_msc: 1_700_000_000_000,
+            created_at_utc_msc: HISTORY_COVERAGE_START_UTC_MSC + 1_000,
         }
     }
 
@@ -14441,7 +15972,7 @@ mod tests {
     }
 
     #[test]
-    fn history_revision_is_idempotent_for_duplicates_and_advances_for_changes() {
+    fn history_revision_ignores_deal_duplicates_and_conflicts() {
         let root = unique_test_directory("history-revision");
         let store = OutboxStore::open_or_create(root.join(BRIDGE_DATABASE_FILE_NAME))
             .expect("revision store");
@@ -14484,7 +16015,7 @@ mod tests {
             )
             .expect("first persist");
         assert_eq!(first_result.changed_item_count, 1);
-        assert_eq!(first_result.history_revision, 1);
+        assert_eq!(first_result.history_revision, 0);
 
         let duplicate = history_job_for(
             "job_01JREVISION02",
@@ -14521,7 +16052,8 @@ mod tests {
             )
             .expect("duplicate persist");
         assert_eq!(duplicate_result.changed_item_count, 0);
-        assert_eq!(duplicate_result.history_revision, 1);
+        assert_eq!(duplicate_result.duplicate_item_count, 1);
+        assert_eq!(duplicate_result.history_revision, 0);
 
         let changed = history_job_for(
             "job_01JREVISION03",
@@ -14564,12 +16096,15 @@ mod tests {
                 HISTORY_COVERAGE_START_UTC_MSC + 180_000,
             )
             .expect("changed persist");
-        assert_eq!(changed_result.changed_item_count, 1);
-        assert_eq!(changed_result.history_revision, 2);
+        assert_eq!(changed_result.changed_item_count, 0);
+        assert_eq!(changed_result.immutable_conflict_count, 1);
+        assert_eq!(changed_result.history_revision, 0);
         let state = store
             .history_scope_state(&terminal)
             .expect("revision state");
-        assert_eq!(state.history_revision, 2);
+        assert_eq!(state.history_revision, 0);
+        assert_eq!(state.duplicate_count, 1);
+        assert_eq!(state.immutable_conflict_count, 1);
         // An on-demand P1 revision is not a recent/tail freshness proof.
         assert_eq!(state.freshness_state, "stale");
         drop(store);
@@ -14797,6 +16332,12 @@ mod tests {
                     trades: vec![serde_json::json!({
                         "deal_ticket": 8001,
                         "time_msc": floor + 9_000,
+                        "entry_time_utc_msc": floor + 8_000,
+                        "close_time_utc_msc": floor + 9_000,
+                        "close_time_server_msc": floor + 9_000,
+                        "close_timezone_offset_minutes": 0,
+                        "close_business_date": business_date_from_server_msc(floor + 9_000)
+                            .expect("head trade business date"),
                         "symbol": "EURUSD",
                         "profit": 2.0
                     })],

@@ -13,7 +13,7 @@ import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistory
   cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
   buildStrategyContextFromTags, startHistoryCompareRecoveryWorker } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
-import { applyBridgeRuntimeState, getBridgeDiagnostics, isBridgeAlive } from '../../bridge-ws.js'
+import { applyBridgeRuntimeState, getBridgeDiagnostics, getBridgePerformanceSummary, isBridgeAlive } from '../../bridge-ws.js'
 import { createAiAccessMiddleware } from './observer-access.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource,
   listObserverChannelAssignments, listObserverChannels, listObserverChannelsForUser, listObserverSources,
@@ -38,7 +38,6 @@ import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStr
 import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, normalizePlatformRiskConfig, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
 import { setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 import { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
-import { getAccountPerformanceSummary } from './account-performance.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 import { resolveBridgeInstallerRelease } from '../../bridge-installer-release.js'
@@ -686,16 +685,17 @@ router.get('/ai/risk-center', authMiddleware, async (req, res) => {
     const accounts = (await listTradingAccounts(req.user.id))
       .filter(account => Number(account.is_active) === 1)
     const subscriptions = await listSubscriptions(req.user.id, req.user.role)
-    const rows = []
-    for (const account of accounts) {
-      const riskState = await queryAll(`SELECT halt_status, halt_reason, drawdown_pct, consecutive_losses,
-        cooldown_until, user_kill_switch, data_complete, data_incomplete_reason, last_risk_snapshot_at
-        FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id])
-      rows.push({ account, risk_state: riskState[0] || null,
-        performance:await getAccountPerformanceSummary(account.id, req.user.id),
-        effective: await resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }),
-        subscriptions: subscriptions.filter(item => Number(item.trading_account_id) === Number(account.id)) })
-    }
+    const rows = await Promise.all(accounts.map(async account => {
+      const [riskState, performance, effective] = await Promise.all([
+        queryAll(`SELECT halt_status, halt_reason, drawdown_pct, consecutive_losses,
+          cooldown_until, user_kill_switch, data_complete, data_incomplete_reason, last_risk_snapshot_at
+          FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id]),
+        getBridgePerformanceSummary(req.user.id, account.id),
+        resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }),
+      ])
+      return { account, risk_state: riskState[0] || null, performance, effective,
+        subscriptions: subscriptions.filter(item => Number(item.trading_account_id) === Number(account.id)) }
+    }))
     res.json({ ok: true, accounts: rows, rule_metadata: RISK_RULES })
   } catch (error) { reviewError(res, error) }
 })
@@ -1279,7 +1279,10 @@ export { calculateAccountRiskMetrics, aggregateClosedPositions,
 export { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
 export { normalizePerformanceDay, nextPerformanceWindow, recentPerformanceWindow,
   getAccountPerformanceSyncWindow, saveAccountPerformanceChunk,
-  recordAccountPerformanceSyncFailure, getAccountPerformanceSummary } from './account-performance.js'
+  recordAccountPerformanceSyncFailure, getAccountPerformanceSummary,
+  LEGACY_ACCOUNT_PERFORMANCE_SOURCE,
+  getLegacyAccountPerformanceSyncWindow, saveLegacyAccountPerformanceChunk,
+  recordLegacyAccountPerformanceSyncFailure, getLegacyAccountPerformanceSummary } from './account-performance.js'
 export { analyzeOutcomeAttribution, resolveOutcomeClosureTransition,
   reconcileSignalOutcomes, startOutcomeMonitor, stopOutcomeMonitor } from './signal-outcomes.js'
 export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome,
