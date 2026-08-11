@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 
 function loadRangeParamsHarness({ mode = 'platform', from = '', to = '', meta = null, starts = {} } = {}) {
   const start = app.indexOf('function getHistoryRangeParams()')
@@ -52,6 +53,91 @@ function loadScopeMeta(data) {
     }
     ${app.slice(start, end)}
     return historyScopeMetaFromResponse(${JSON.stringify(data)})
+  `)()
+}
+
+function loadHistoryPrepareReady(data) {
+  const start = app.indexOf('function historySyncMetadata')
+  const end = app.indexOf('function historyQueryIsCurrent', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`
+    ${app.slice(start, end)}
+    return historyPrepareReady(${JSON.stringify(data)})
+  `)()
+}
+
+function loadPreparedRange(data) {
+  const start = app.indexOf('function historyPrepareRangeFromResponse')
+  const end = app.indexOf('function historyPrepareReady', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`
+    ${app.slice(start, end)}
+    return historyPrepareRangeFromResponse(${JSON.stringify(data)})
+  `)()
+}
+
+function loadHistoryQuerySingleReadHarness() {
+  const start = app.indexOf('async function runHistoryQuery')
+  const end = app.indexOf('function historySummaryReadyForRequestedRange', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`
+    const HISTORY_PREPARE_UNSUPPORTED_CODE = 'history_prepare_status_unsupported'
+    const state = { historyQueryGeneration:1 }
+    let _historyQueryGeneration = 1
+    let reads = 0
+    const statuses = []
+    const query = {
+      generation:1, accountKey:'account', promise:null, includeAccount:false,
+      status:'preparing_time', fullReadCount:0,
+    }
+    function historyQueryIsCurrent() { return true }
+    async function runHistoryPrepare() { return true }
+    function isHistoryCursorRangeIncomplete(error) { return error?.code === 'history_cursor_range_incomplete' }
+    function loadHistoryViewsLegacy() {
+      reads += 1
+      const error = new Error('incomplete')
+      error.code = 'history_cursor_range_incomplete'
+      return Promise.reject(error)
+    }
+    function renderHistorySyncStatus(message, options) { statuses.push({ message, options }) }
+    function clearHistoryPresentation() {}
+    function apiErrorMessage(code) { return String(code) }
+    function historyErrorCode(error) { return String(error?.code || '') }
+    ${app.slice(start, end)}
+    return runHistoryQuery(query).catch(error => ({
+      reads,
+      fullReadCount:query.fullReadCount,
+      status:query.status,
+      code:error.code,
+      message:statuses[statuses.length - 1]?.message || '',
+    }))
+  `)()
+}
+
+function loadHistoryLegacyFallbackHarness(result) {
+  const start = app.indexOf('async function runHistoryLegacyFallback')
+  const end = app.indexOf('async function runHistoryQuery', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`
+    const state = { historyQueryGeneration:1 }
+    let _historyQueryGeneration = 1
+    const statuses = []
+    const query = { generation:1, accountKey:'account', status:'preparing_time', fullReadCount:0 }
+    function historyQueryIsCurrent() { return true }
+    function renderHistorySyncStatus(message, options) { statuses.push({ message, options }) }
+    async function loadHistoryViewsLegacy() { return ${JSON.stringify(result)} }
+    ${app.slice(start, end)}
+    return runHistoryLegacyFallback(query).then(data => ({
+      data,
+      status:query.status,
+      fullReadCount:query.fullReadCount,
+      message:statuses[statuses.length - 1]?.message || '',
+      tone:statuses[statuses.length - 1]?.options?.tone || '',
+    }))
   `)()
 }
 
@@ -186,15 +272,23 @@ describe('history scope frontend contract', () => {
     const filters = app.slice(filterStart, filterEnd)
     expect(filters).toContain('historyFilterApply')
     expect(filters).toContain('historyFilterReset')
-    expect(filters.match(/resetHistoryCursorState\(null, \{ preserveRange:true \}\)/g)?.length).toBe(2)
-    expect(filters).toContain('loadHistoryViews({ forceRefresh:false, tableOnly:true })')
+    expect(filters).toContain('loadHistoryViews({ newQuery:true, trigger:"filter"')
+    expect(filters).toContain('loadHistoryViews({ newQuery:true, trigger:"reset"')
 
     const applyStart = app.indexOf("document.getElementById('historyRangeApply')")
     const applyEnd = app.indexOf("document.getElementById('historyRangeSave')", applyStart)
-    expect(app.slice(applyStart, applyEnd)).toContain('resetHistoryCursorState(null)')
+    expect(app.slice(applyStart, applyEnd)).toContain('loadHistoryViews({ newQuery:true, trigger:"apply"')
     const restoreStart = app.indexOf("document.getElementById('historyRangeRestore')")
     const restoreEnd = app.indexOf('updateHistoryRangeUI();', restoreStart)
-    expect(app.slice(restoreStart, restoreEnd)).toContain('resetHistoryCursorState(null)')
+    expect(app.slice(restoreStart, restoreEnd)).toContain('loadHistoryViews({ newQuery:true, trigger:"reset"')
+
+    const scopeStart = app.indexOf("document.getElementById('historyRangeMode')?.addEventListener('change'")
+    const scopeEnd = app.indexOf("document.getElementById('historyRangeApply')", scopeStart)
+    const scopeChange = app.slice(scopeStart, scopeEnd)
+    expect(scopeStart).toBeGreaterThanOrEqual(0)
+    expect(scopeEnd).toBeGreaterThan(scopeStart)
+    expect(scopeChange).toContain('loadHistoryViews({ newQuery:true, trigger:"scope", forceRefresh:false })')
+    expect(scopeChange).not.toContain('updateHistoryRangeUI({ pending:false })')
 
     const chartStart = app.indexOf('function loadHistoryChart')
     const chartEnd = app.indexOf('function loadHistoryViews', chartStart)
@@ -202,5 +296,139 @@ describe('history scope frontend contract', () => {
     expect(chart).toContain('range_start_utc_msc:_historyCursorState.rangeStart')
     expect(chart).toContain('range_end_utc_msc:_historyCursorState.rangeEnd')
     expect(chart).not.toContain('history_snapshot_id')
+  })
+
+  it('disables range mutation actions while a frozen range is being prepared', () => {
+    const start = app.indexOf('function updateHistoryRangeUI')
+    const end = app.indexOf('function historyRefreshContextKey', start)
+    const update = app.slice(start, end)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    expect(update).toContain('if (apply) apply.disabled = Boolean(pending)')
+    expect(update).toContain('if (save) save.disabled = Boolean(pending)')
+    expect(update).toContain('if (restore) restore.disabled = Boolean(pending)')
+  })
+
+  it('keeps chart bars and summary cards on the complete selected history scope', () => {
+    const normalizeStart = app.indexOf('function normalizeHistoryChartData')
+    const renderStart = app.indexOf('function _renderHistoryChart', normalizeStart)
+    expect(normalizeStart).toBeGreaterThanOrEqual(0)
+    expect(renderStart).toBeGreaterThan(normalizeStart)
+    const normalize = app.slice(normalizeStart, renderStart)
+    expect(normalize).toContain('data?.chart_data')
+    expect(normalize).not.toContain('chart_30d')
+    expect(normalize).not.toContain('daily.length > 30')
+    expect(html).toContain('>总交易<')
+    expect(html).toContain('>胜率<')
+    expect(html).toContain('>盈亏比<')
+    expect(html).toContain('>最大回撤<')
+    expect(html).not.toContain('30天')
+    expect(html).not.toContain('最近 30 天')
+    expect(html).not.toContain('history-chart-heading')
+    expect(html).not.toContain('historyChartTitle')
+    expect(html).not.toContain('historyChartRange')
+    expect(app).not.toContain('setText("historyChartRange"')
+  })
+
+  it('uses one frozen prepare/status generation before the single full history read', () => {
+    expect(app).toContain('history_prepare_status_v1')
+    expect(app).toContain('HISTORY_PREPARE_RETRY_DELAYS_MS = [200, 400, 800, 1000]')
+    expect(app).toContain('historyPrepareParams(query)')
+    expect(app).toContain('query.frozenRange = frozen')
+    expect(app).toContain('disableFreshnessRetry:true')
+    expect(app).toContain('loadHistoryViewsLegacy({\n          forceRefresh:false')
+    expect(app).toContain('history_prepare_status_unsupported')
+    expect(app).toContain('runHistoryLegacyFallback')
+  })
+
+  it('fails closed until prepare status proves both exact range and summary readiness', () => {
+    expect(loadHistoryPrepareReady({ history_sync:{} })).toBe(false)
+    expect(loadHistoryPrepareReady({ history_sync:{ requested_range_complete:true } })).toBe(false)
+    expect(loadHistoryPrepareReady({ history_sync:{ summary_status:'ready' } })).toBe(false)
+    expect(loadHistoryPrepareReady({ history_sync:{ requested_range_complete:false, summary_status:'ready' } })).toBe(false)
+    expect(loadHistoryPrepareReady({ history_sync:{ requested_range_complete:true, summary_status:'pending' } })).toBe(false)
+    expect(loadHistoryPrepareReady({ history_sync:{ requested_range_complete:true, summary_status:'ready', history_revision:7, summary_revision:7 } })).toBe(true)
+    expect(loadHistoryPrepareReady({ history_sync:{ requested_range_complete:true, summary_status:'complete', history_revision:0, summary_revision:0 } })).toBe(true)
+    expect(loadHistoryPrepareReady({ history_sync:{ requested_range_complete:true, summary_status:'ready', history_revision:7, summary_revision:6 } })).toBe(false)
+    expect(loadHistoryPrepareReady({ history_sync:{ requested_range_complete:true, summary_status:'ready', history_revision:'bad', summary_revision:7 } })).toBe(false)
+    expect(app).toContain('sync.requested_range_complete !== true')
+    expect(app).toContain('summary_status || ""')
+    expect(app).toContain('Number.isSafeInteger(historyRevision)')
+    expect(app).toContain('historyRevision !== summaryRevision')
+  })
+
+  it('preserves custom captured endpoint separately from system and effective ends', () => {
+    const range = loadPreparedRange({
+      history_range:{
+        range_start_utc_msc:1000,
+        range_end_utc_msc:2000,
+        captured_end_utc_msc:3000,
+        allowed_range:{ start_utc_msc:500, end_utc_msc:4000 },
+        system_range:{ start_utc_msc:700, end_utc_msc:5000 },
+        effective_range:{ start_utc_msc:1000, end_utc_msc:2000, captured_end_utc_msc:3000 },
+      },
+      history_sync:{ requested_range_complete:true, summary_status:'ready' },
+    })
+    expect(range).toMatchObject({
+      range_start_utc_msc:1000,
+      range_end_utc_msc:2000,
+      captured_end_utc_msc:3000,
+      system_range:{ start_utc_msc:700, end_utc_msc:5000 },
+      effective_range:{ start_utc_msc:1000, end_utc_msc:2000, captured_end_utc_msc:3000 },
+    })
+    expect(app).toContain('Preserve server-provided allowed/system/effective ends')
+  })
+
+  it('never retries a second full history package after a ready-read range race', async () => {
+    const result = await loadHistoryQuerySingleReadHarness()
+    expect(result).toMatchObject({
+      reads:1,
+      fullReadCount:1,
+      status:'unavailable',
+      code:'history_cursor_range_incomplete',
+    })
+    expect(result.message).toContain('读取期间历史范围发生变化')
+    const query = app.slice(app.indexOf('async function runHistoryQuery'), app.indexOf('function historySummaryReadyForRequestedRange'))
+    const race = query.slice(query.indexOf('if (isHistoryCursorRangeIncomplete(error)'), query.indexOf('if (!historyQueryIsCurrent(query)) return null;', query.indexOf('if (isHistoryCursorRangeIncomplete(error)')))
+    expect(race).not.toContain('loadHistoryViewsLegacy(')
+  })
+
+  it('does not report legacy fallback success while range statistics are still pending', async () => {
+    const result = await loadHistoryLegacyFallbackHarness({ historyPending:false, summaryPending:true })
+    expect(result).toMatchObject({
+      status:'unavailable',
+      fullReadCount:1,
+      tone:'warning',
+    })
+    expect(result.message).toContain('交易记录已显示')
+    expect(result.message).toContain('范围统计仍在准备中')
+  })
+
+  it('advances generations only for explicit history operations and invalidates stale responses', () => {
+    expect(app).toContain('historyQueryGeneration: 0')
+    expect(app).toContain('history_query_generation:Number(state.historyQueryGeneration || 0)')
+    expect(app).toContain('loadHistoryViews({ newQuery:true, trigger:"enter"')
+    expect(app).toContain('loadHistoryViews({ newQuery:true, trigger:"apply"')
+    expect(app).toContain('loadHistoryViews({ newQuery:true, trigger:"filter"')
+    expect(app).toContain('loadHistoryViews({ newQuery:true, trigger:"reset"')
+    expect(app).toContain('activeTabId() === "history"')
+    expect(app).toContain('clearHistoryPresentation({ syncing:true })')
+  })
+
+  it('does not reuse a snapshot on page one and keeps ticket maps out of status checks', () => {
+    expect(app).toContain('filters.page > 1 && _historyCursorState.snapshotId')
+    const prepareStart = app.indexOf('async function runHistoryPrepare')
+    const prepareEnd = app.indexOf('async function runHistoryLegacyFallback', prepareStart)
+    const prepare = app.slice(prepareStart, prepareEnd)
+    expect(prepare).not.toContain('loadSignalTickets')
+    expect(prepare).not.toContain('loadCloseSignalTickets')
+    expect(app).toContain('_historyTicketMapCache')
+    expect(app).toContain('_historyTicketMapFlights')
+    const tableStart = app.indexOf('function loadHistory(forceRefresh')
+    const tableEnd = app.indexOf('function _applyHistoryData', tableStart)
+    const table = app.slice(tableStart, tableEnd)
+    expect(table).toContain('loadSignalTickets()')
+    expect(table).toContain('loadCloseSignalTickets()')
+    expect(table).toContain('Promise.all([')
   })
 })

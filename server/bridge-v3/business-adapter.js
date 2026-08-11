@@ -13,6 +13,7 @@ const TRADE_ACTIONS = new Set([
 const SUPPORTED_ACTIONS = new Set([
   ...READ_ACTIONS, ...TRADE_ACTIONS, 'quote', 'rates', 'symbol_snapshot', 'risk_snapshot',
   'performance_daily', 'symbols', 'history', 'history_page', 'history_evidence', 'chart_data', 'order_lookup',
+  'history_prepare_status_v1',
   'pending_order_state', 'diagnostics', 'status', 'toggle_trade', 'set_quote_symbol',
 ])
 const RATE_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
@@ -22,6 +23,7 @@ const MAX_LEGACY_HISTORY_PAGE = 500
 const MAX_ORDER_LOOKUP_SECONDS = 30 * 24 * 60 * 60
 const HISTORY_READ_ACTIONS = new Set([
   'history', 'history_page', 'history_evidence', 'chart_data', 'history_chart_data', 'export_history',
+  'history_prepare_status_v1',
 ])
 export const BRIDGE_HISTORY_TEMPORARILY_UNAVAILABLE = 'bridge_history_temporarily_unavailable'
 
@@ -644,9 +646,11 @@ export function createBridgeV3BusinessAdapter({
             ? params.filter_close_to || undefined : undefined,
           entry_from:['history', 'history_page'].includes(action) ? params.entry_from || undefined : undefined,
           entry_to:['history', 'history_page'].includes(action) ? params.entry_to || undefined : undefined,
-          direction:action === 'history_evidence' ? undefined : params.direction || undefined,
-          profit_filter:action === 'history_evidence' ? undefined : params.profit_filter || undefined,
-          force_refresh:action === 'history_evidence' ? undefined
+          direction:['history', 'history_page', 'chart_data'].includes(action)
+            ? params.direction || undefined : undefined,
+          profit_filter:['history', 'history_page', 'chart_data'].includes(action)
+            ? params.profit_filter || undefined : undefined,
+          force_refresh:['history_evidence', 'history_prepare_status_v1'].includes(action) ? undefined
             : params.force_refresh === true || undefined,
           include_deals:action === 'history' && params.include_deals === true || undefined,
           compact:action === 'history' && params.compact === true || undefined,
@@ -681,7 +685,7 @@ export function createBridgeV3BusinessAdapter({
     }
     const hasExactRangeStart = allowed.range_start_utc_msc !== undefined
     const hasExactRangeEnd = allowed.range_end_utc_msc !== undefined
-    if (['history_page', 'history_evidence'].includes(action)
+    if (['history_page', 'history_evidence', 'history_prepare_status_v1'].includes(action)
       && (!hasExactRangeStart || !hasExactRangeEnd)) {
       throw adapterError('history_range_invalid')
     }
@@ -720,7 +724,8 @@ export function createBridgeV3BusinessAdapter({
       throw adapterError('history_range_invalid')
     }
     if (allowed.captured_end_utc_msc !== undefined
-      && hasExactRangeEnd && allowed.captured_end_utc_msc !== allowed.range_end_utc_msc) {
+      && hasExactRangeEnd && (allowed.captured_end_utc_msc < allowed.range_end_utc_msc
+        || allowed.captured_end_utc_msc > now() + 60_000)) {
       throw adapterError('history_range_invalid')
     }
     if (action === 'pending_order_state' && !/^\d{1,32}$/.test(allowed.ticket || '')) {
@@ -1009,7 +1014,8 @@ export function createBridgeV3BusinessAdapter({
       if (READ_ACTIONS.has(action)) return await readCollection(route, action, params)
       if (action === 'quote') return await requestQuote(userId, route, params, timeoutMs)
       if (action === 'rates') return await requestRates(userId, route, params, timeoutMs)
-      if (['symbols', 'history', 'history_page', 'history_evidence', 'chart_data', 'pending_order_state', 'diagnostics'].includes(action)) {
+      if (['symbols', 'history', 'history_page', 'history_evidence', 'chart_data',
+        'history_prepare_status_v1', 'pending_order_state', 'diagnostics'].includes(action)) {
         return await requestTerminalData(userId, route, action, params, timeoutMs)
       }
       if (action === 'symbol_snapshot') {

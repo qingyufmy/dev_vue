@@ -4583,21 +4583,22 @@ input:checked + .slider::before { transform: translateX(18px); }
 .history-range-restore {
   white-space: nowrap;
 }
-.history-chart-heading {
+.history-sync-status {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 150px;
-}
-.history-chart-heading strong {
-  color: var(--text-primary);
-  font-size: 14px;
-}
-.history-chart-heading span {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
+  align-items: center;
+  min-height: 30px;
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(96,165,250,.2);
+  border-radius: 8px;
+  color: #bfdbfe;
+  background: rgba(37,99,235,.06);
   font-size: 11px;
+  line-height: 1.45;
 }
+.history-sync-status[data-tone="success"] { border-color: rgba(52,211,153,.2); color: #a7f3d0; background: rgba(16,185,129,.06); }
+.history-sync-status[data-tone="warning"] { border-color: rgba(251,191,36,.22); color: #fde68a; background: rgba(245,158,11,.06); }
+.history-sync-status[data-tone="danger"] { border-color: rgba(251,113,133,.22); color: #fecdd3; background: rgba(244,63,94,.06); }
 .history-chart-drilldown-status {
   min-height: 20px;
   margin-top: 6px;

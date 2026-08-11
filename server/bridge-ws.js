@@ -232,16 +232,24 @@ async function preparePlatformHistoryOnTerminalReady(userId, route, accountId) {
     const nowUtcMsc = Date.now()
     const range = await resolveHistoryRange(Number(userId), { history_scope:'platform' }, route, nowUtcMsc)
     const cursorMode = hasHistoryCursorCapability(route)
+    const prepareStatusMode = hasHistoryPrepareStatusCapability(route)
     const params = {
-      page_size:normalizeBridgePageSize(20),
+      ...(prepareStatusMode ? {} : { page_size:normalizeBridgePageSize(20) }),
       range_start_utc_msc:range.range_start_utc_msc,
       range_end_utc_msc:range.range_end_utc_msc,
-      force_refresh:true,
+      allowed_start_utc_msc:range.allowed_start_utc_msc,
+      system_start_utc_msc:range.system_start_utc_msc,
+      effective_start_utc_msc:range.effective_start_utc_msc,
+      captured_end_utc_msc:range.captured_end_utc_msc,
+      ...(prepareStatusMode ? {} : { force_refresh:true }),
       terminal_instance_id:route.terminal_instance_id,
       account_ref:route.account_ref,
     }
-    const result = await bridgeV3Business.execute(Number(userId), cursorMode ? 'history_page' : 'history', params, {
-      timeoutMs:30_000,
+    const action = prepareStatusMode
+      ? 'history_prepare_status_v1'
+      : (cursorMode ? 'history_page' : 'history')
+    const result = await bridgeV3Business.execute(Number(userId), action, params, {
+      timeoutMs:prepareStatusMode ? 5_000 : 30_000,
       noFallback:true,
     })
     return { status:result?.status || 'error', history_range:range,
@@ -1116,6 +1124,7 @@ export function boundedHistoryExportPageCount(value, maximumPages = 50) {
 
 export const HISTORY_EXACT_RANGE_CAPABILITY = 'history_exact_range_v1'
 export const HISTORY_CURSOR_CAPABILITY = 'history_cursor_v1'
+export const HISTORY_PREPARE_STATUS_CAPABILITY = 'history_prepare_status_v1'
 // Product-level safety boundary.  The currently published Bridge archive may
 // expose a newer floor, but user-provided dates must never be accepted before
 // this absolute boundary.
@@ -1182,6 +1191,12 @@ export function hasHistoryCursorCapability(route) {
   return Array.isArray(capabilities) && capabilities.includes(HISTORY_CURSOR_CAPABILITY)
 }
 
+export function hasHistoryPrepareStatusCapability(route) {
+  const capabilities = route?.capabilities
+  if (capabilities instanceof Set) return capabilities.has(HISTORY_PREPARE_STATUS_CAPABILITY)
+  return Array.isArray(capabilities) && capabilities.includes(HISTORY_PREPARE_STATUS_CAPABILITY)
+}
+
 function normalizedHistoryCursorToken(value) {
   if (value == null || value === '') return null
   const token = String(value).trim()
@@ -1211,6 +1226,7 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
     ?? frozen?.effective_range?.start_utc_msc)
   const rangeEnd = Number(params?.range_end_utc_msc ?? frozen?.range_end_utc_msc
     ?? frozen?.captured_end_utc_msc ?? frozen?.effective_range?.end_utc_msc)
+  const { hasStart, hasEnd } = historyExactRangeFields(params)
   // Starts are authoritative only when resolved from the current binding and
   // route.  Client-provided frozen values are comparisons, never inputs.
   const allowedStart = positiveHistoryUtcMsc(resolvedRange?.allowed_start_utc_msc)
@@ -1246,11 +1262,7 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
   const capturedRaw = historyFrozenField(params, frozen, [
     'captured_end_utc_msc', 'captured_range_end_utc_msc', 'captured_end',
   ])
-  const capturedEffectiveRaw = !capturedRaw.present && frozen?.effective_range
-    && typeof frozen.effective_range === 'object'
-    ? { present:Object.prototype.hasOwnProperty.call(frozen.effective_range, 'end_utc_msc'),
-      value:frozen.effective_range.end_utc_msc }
-    : capturedRaw
+  const capturedEffectiveRaw = capturedRaw
   // The route/binding resolution owns the current capture endpoint.  An older
   // frozen endpoint may be carried by an opaque Bridge snapshot/cursor, which
   // binds it again inside Bridge.  A no-snapshot first page may reuse only an
@@ -1263,19 +1275,23 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
   const hasCursor = Boolean(params?.cursor ?? frozen?.cursor)
   const opaqueContinuation = hasSnapshot || hasCursor
   if (hasCursor && !hasSnapshot) throw historyError('history_cursor_invalid')
-  const capturedEnd = opaqueContinuation ? clientCapturedEnd : resolvedCapturedEnd
+  const explicitFrozenRange = hasStart && hasEnd && capturedEffectiveRaw.present
+  const capturedEnd = (opaqueContinuation || explicitFrozenRange)
+    ? clientCapturedEnd
+    : (hasStart && hasEnd ? rangeEnd : resolvedCapturedEnd)
+  const resolvedEffectiveEnd = positiveHistoryUtcMsc(resolvedRange?.range_end_utc_msc)
   const ownershipStart = Number(resolvedRange?.ownership_start_utc_msc)
   const maxRangeEnd = Number.isSafeInteger(nowUtcMsc) ? nowUtcMsc + 60_000 : NaN
-  const { hasStart, hasEnd } = historyExactRangeFields(params)
   if (!hasStart || !hasEnd
     || !Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
     || !Number.isSafeInteger(allowedStart) || allowedStart <= 0
     || !Number.isSafeInteger(systemStart) || systemStart <= 0
     || !Number.isSafeInteger(effectiveStart) || effectiveStart <= 0
     || !Number.isSafeInteger(capturedEnd) || capturedEnd <= 0
+    || !Number.isSafeInteger(resolvedEffectiveEnd) || resolvedEffectiveEnd <= 0
     || !Number.isSafeInteger(maxRangeEnd)
     || rangeStart < allowedStart || rangeEnd <= 0 || rangeStart >= rangeEnd
-    || rangeEnd > maxRangeEnd) {
+    || rangeEnd > capturedEnd || capturedEnd > maxRangeEnd) {
     throw historyError('history_cursor_invalid')
   }
   if ((clientAllowedRangeRaw.present && clientAllowedStart === null)
@@ -1285,13 +1301,14 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
     || (opaqueContinuation && !capturedEffectiveRaw.present)) {
     throw historyError('history_cursor_invalid')
   }
-  if (opaqueContinuation && (rangeEnd !== capturedEnd
+  if (opaqueContinuation && (rangeEnd > capturedEnd
     || capturedEnd <= effectiveStart || capturedEnd > maxRangeEnd)) {
     throw historyError('history_cursor_invalid')
   }
   if (!opaqueContinuation && (rangeStart !== effectiveStart
-    || rangeEnd > (resolvedCapturedEnd || 0)
-    || (capturedEffectiveRaw.present && clientCapturedEnd !== rangeEnd))) {
+    || rangeEnd > resolvedEffectiveEnd
+    || capturedEnd > (resolvedCapturedEnd || 0)
+    || (capturedEffectiveRaw.present && clientCapturedEnd !== capturedEnd))) {
     throw historyError('history_cursor_invalid')
   }
 
@@ -1303,7 +1320,7 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
     [clientAllowedStart, allowedStart],
     [clientSystemStart, systemStart],
     [clientEffectiveStart, effectiveStart],
-    [opaqueContinuation ? clientCapturedEnd : null, capturedEnd],
+    [capturedEffectiveRaw.present ? clientCapturedEnd : null, capturedEnd],
   ]) {
     if (value !== null && value !== undefined && Number(value) !== expected) {
       throw historyError('history_cursor_invalid')
@@ -1359,13 +1376,12 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
     allowed_start_utc_msc:allowedStart,
     system_start_utc_msc:systemStart,
     effective_start_utc_msc:effectiveStart,
-    captured_end_utc_msc:opaqueContinuation ? capturedEnd : rangeEnd,
-    allowed_range:{ start_utc_msc:allowedStart,
-      end_utc_msc:opaqueContinuation ? capturedEnd : rangeEnd },
+    captured_end_utc_msc:capturedEnd,
+    allowed_range:{ start_utc_msc:allowedStart, end_utc_msc:capturedEnd },
     system_range:{ start_utc_msc:systemStart,
-      end_utc_msc:opaqueContinuation ? capturedEnd : rangeEnd },
+      end_utc_msc:scope === 'custom' ? rangeEnd : capturedEnd },
     effective_range:{ start_utc_msc:effectiveStart,
-      end_utc_msc:opaqueContinuation ? capturedEnd : rangeEnd },
+      end_utc_msc:rangeEnd },
     range_start_utc_msc:rangeStart,
     range_end_utc_msc:rangeEnd,
   }
@@ -1587,6 +1603,35 @@ function assertHistoryExactRoute(route) {
   return route
 }
 
+function assertHistoryPrepareStatusRoute(route) {
+  const exactRoute = assertHistoryExactRoute(route)
+  if (!hasHistoryPrepareStatusCapability(exactRoute)) {
+    throw historyError('history_prepare_status_unsupported')
+  }
+  return exactRoute
+}
+
+function compactHistoryPrepareRange(range) {
+  return {
+    scope:range.scope,
+    requested_scope:range.requested_scope,
+    range_start_utc_msc:range.range_start_utc_msc,
+    range_end_utc_msc:range.range_end_utc_msc,
+    captured_end_utc_msc:range.captured_end_utc_msc,
+    allowed_start_utc_msc:range.allowed_start_utc_msc,
+    system_start_utc_msc:range.system_start_utc_msc,
+    effective_start_utc_msc:range.effective_start_utc_msc,
+    allowed_range:range.allowed_range,
+    system_range:range.system_range,
+    effective_range:range.effective_range,
+    scope_start_override:range.scope_start_override,
+    override_applied:Boolean(range.override_applied),
+    timezone_offset_minutes:range.timezone_offset_minutes,
+    clock_status:range.clock_status,
+    clock_source:range.clock_source,
+  }
+}
+
 function strictHistoryRouteForUser(userId, params = {}) {
   let routes = (bridgeV3Business?.connectedTerminals(Number(userId)) || []).slice()
   const terminalInstanceId = String(params?.terminal_instance_id || '').trim()
@@ -1649,47 +1694,65 @@ function historyOrderCloseUtcMsc(row = {}) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
-function historyChartRange(range, route = null) {
-  const end = positiveHistoryUtcMsc(range?.captured_end_utc_msc
-    ?? range?.range_end_utc_msc)
-  const scopeStart = positiveHistoryUtcMsc(range?.range_start_utc_msc)
-  if (end === null || scopeStart === null) return { start_utc_msc:scopeStart, end_utc_msc:end }
-  const offset = Number(route?.timezone_offset_minutes
-    ?? route?.clock?.timezone_offset_minutes ?? 0)
-  const safeOffset = Number.isInteger(offset) && offset >= -720 && offset <= 840 ? offset : 0
-  // Anchor the 30-day window at terminal local-day midnight.  The upper
-  // bound remains the frozen capture so an in-progress business day is not
-  // extended by a browser clock or a later chart request.
-  const localDayStart = Math.floor((end + safeOffset * 60_000) / HISTORY_DAY_MS) * HISTORY_DAY_MS
-  const start = localDayStart - 29 * HISTORY_DAY_MS - safeOffset * 60_000
-  return {
-    start_utc_msc:Math.max(scopeStart, start),
-    end_utc_msc:end,
-  }
-}
-
 function historyTerminalClock(userId, route) {
   const market = bridgeV3MarketStateForContext(userId, null, route?.terminal_instance_id)
   const candidates = [
     market && {
       timezone_offset_minutes:market.timezoneOffsetMinutes,
       clock_status:market.clockStatus,
+      clock_source:market.clockSource,
+      observed_at_utc_msc:market.observedAtUtcMsc,
+      received_at_utc_msc:market.lastTickMs,
     },
     route?.clock,
     route && {
       timezone_offset_minutes:route.timezone_offset_minutes,
       clock_status:route.clock_status,
     },
+    applyDefaultObserverClockBootstrap({
+      broker_server:route?.account_ref?.broker_server || null,
+      timezone_offset_minutes:null,
+      clock_status:'unavailable',
+    }, defaultObserverClockCache),
   ].filter(Boolean)
   for (const candidate of candidates) {
     if (!trustedTerminalClock(candidate)) continue
     return {
       timezone_offset_minutes:Number(candidate.timezone_offset_minutes),
       clock_status:String(candidate.clock_status || candidate.source_clock_status || '').trim(),
-      clock_source:candidate.clock_source || null,
+      clock_source:candidate.clock_source
+        || (positiveHistoryUtcMsc(candidate.observed_at_utc_msc)
+          ? 'terminal_observed_utc' : 'verified_terminal_offset'),
+      observed_at_utc_msc:positiveHistoryUtcMsc(candidate.observed_at_utc_msc),
+      received_at_utc_msc:positiveHistoryUtcMsc(candidate.received_at_utc_msc),
     }
   }
   return null
+}
+
+export function captureHistoryTerminalNowUtcMsc(userId, route, serverNowUtcMsc = Date.now()) {
+  if (!Number.isSafeInteger(serverNowUtcMsc) || serverNowUtcMsc <= 0) {
+    throw historyError('bridge_history_range_invalid')
+  }
+  const clock = historyTerminalClock(userId, route)
+  if (!clock) throw historyError('bridge_history_terminal_clock_unavailable')
+
+  // A live terminal observation is the preferred UTC anchor.  Advance it only
+  // by the elapsed server monotonic wall time since receipt; never reinterpret
+  // the terminal's local wall clock or browser time as UTC.
+  const observedAt = positiveHistoryUtcMsc(clock.observed_at_utc_msc)
+  const receivedAt = positiveHistoryUtcMsc(clock.received_at_utc_msc)
+  if (observedAt !== null && receivedAt !== null
+    && observedAt <= serverNowUtcMsc + 60_000 && receivedAt <= serverNowUtcMsc + 60_000) {
+    const anchored = observedAt + Math.max(0, serverNowUtcMsc - receivedAt)
+    if (Number.isSafeInteger(anchored) && anchored > 0
+      && Math.abs(anchored - serverNowUtcMsc) <= 5 * 60_000) return anchored
+  }
+
+  // During a quiet/closed market the verified persisted terminal offset is
+  // sufficient to map business-day dates.  The UTC instant itself comes from
+  // the server clock and is independent of the server's local timezone.
+  return serverNowUtcMsc
 }
 
 function historyDateInputUtcMsc(value, clock, { endOfDay = false, exclusive = false } = {}) {
@@ -1767,6 +1830,7 @@ export async function resolveHistoryRange(
 
   let systemStart
   let effectiveStart
+  const capturedEnd = nowUtcMsc
   let rangeEnd = nowUtcMsc
   let closeFrom = null
   let closeTo = null
@@ -1833,11 +1897,13 @@ export async function resolveHistoryRange(
   let filterCloseTo = null
   const filterCloseFromValue = params?.filter_close_from ?? nestedRange?.filter_close_from
   const filterCloseToValue = params?.filter_close_to ?? nestedRange?.filter_close_to
-  if (filterCloseFromValue !== undefined && filterCloseFromValue !== '') {
+  if (filterCloseFromValue !== undefined && filterCloseFromValue !== null
+    && filterCloseFromValue !== '') {
     filterCloseFrom = historyDateInputUtcMsc(filterCloseFromValue, terminalClock)
     if (filterCloseFrom === null) throw historyError('bridge_history_filter_close_start_invalid')
   }
-  if (filterCloseToValue !== undefined && filterCloseToValue !== '') {
+  if (filterCloseToValue !== undefined && filterCloseToValue !== null
+    && filterCloseToValue !== '') {
     filterCloseTo = historyDateInputUtcMsc(filterCloseToValue, terminalClock, { exclusive:true })
     if (filterCloseTo === null) throw historyError('bridge_history_filter_close_end_invalid')
   }
@@ -1848,15 +1914,16 @@ export async function resolveHistoryRange(
   }
 
   const effectiveRange = { start_utc_msc:effectiveStart, end_utc_msc:rangeEnd }
-  const systemRange = { start_utc_msc:systemStart, end_utc_msc:rangeEnd }
-  const allowedRange = { start_utc_msc:allowedStart, end_utc_msc:rangeEnd }
+  const systemRange = { start_utc_msc:systemStart,
+    end_utc_msc:requestedScope === 'custom' ? rangeEnd : capturedEnd }
+  const allowedRange = { start_utc_msc:allowedStart, end_utc_msc:capturedEnd }
 
   return {
     scope: requestedScope,
     requested_scope: requestedScope,
     range_start_utc_msc: effectiveStart,
     range_end_utc_msc: rangeEnd,
-    captured_end_utc_msc: rangeEnd,
+    captured_end_utc_msc: capturedEnd,
     allowed_start_utc_msc: allowedStart,
     system_start_utc_msc: systemStart,
     effective_start_utc_msc: effectiveStart,
@@ -2191,6 +2258,7 @@ function notifyBridgeV3DataChanged(update = {}) {
 const MANUAL_AUTO_EXECUTE_DISCONNECTED = 'manual_auto_execute_request_disconnected'
 const BRIDGE_HISTORY_BROWSER_ACTIONS = new Set([
   'history', 'history_page', 'history_evidence', 'history_chart_data', 'export_history',
+  'history_prepare_status_v1',
 ])
 
 function browserSetForUser(userId) {
@@ -2589,7 +2657,15 @@ async function handleBrowserCommand(ws, userId, msg) {
           } else {
             bridgeParams.page = normalizeBridgePage(params.page)
           }
-          const nowUtcMsc = Date.now()
+          // Keep the first history read on the same trusted UTC anchor used by
+          // history_prepare_status_v1. A terminal observation can legitimately
+          // be a few milliseconds ahead of the server wall clock; recapturing
+          // with bare Date.now() would then reject the just-frozen endpoint as
+          // history_cursor_invalid before Bridge receives the request.
+          const serverNowUtcMsc = Date.now()
+          const nowUtcMsc = historyTerminalClock(dataUserId, exactRoute)
+            ? captureHistoryTerminalNowUtcMsc(dataUserId, exactRoute, serverNowUtcMsc)
+            : serverNowUtcMsc
           const resolvedRange = await resolveHistoryRange(dataUserId, params, exactRoute, nowUtcMsc)
           const { hasStart, hasEnd } = historyExactRangeFields(params)
           const range = (hasStart || hasEnd || bridgeParams.history_snapshot_id)
@@ -2639,6 +2715,52 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         break
       }
+      case 'history_prepare_status_v1': {
+        const exactRoute = assertHistoryPrepareStatusRoute(dataRoute)
+        const bridgeOk = dataUserId && isBridgeAlive(dataUserId)
+        if (bridgeOk) {
+          if (params.history_snapshot_id || params.cursor
+            || params.history_range?.history_snapshot_id || params.history_range?.cursor) {
+            throw historyError('history_cursor_invalid')
+          }
+          const nowUtcMsc = captureHistoryTerminalNowUtcMsc(dataUserId, exactRoute, Date.now())
+          const resolvedRange = await resolveHistoryRange(dataUserId, params, exactRoute, nowUtcMsc)
+          const { hasStart, hasEnd } = historyExactRangeFields(params)
+          const range = (hasStart || hasEnd)
+            ? historyCursorContinuationRange(params, resolvedRange, nowUtcMsc)
+            : resolvedRange
+          const bridgeParams = {
+            range_start_utc_msc:range.range_start_utc_msc,
+            range_end_utc_msc:range.range_end_utc_msc,
+            allowed_start_utc_msc:range.allowed_start_utc_msc,
+            system_start_utc_msc:range.system_start_utc_msc,
+            effective_start_utc_msc:range.effective_start_utc_msc,
+            captured_end_utc_msc:range.captured_end_utc_msc,
+          }
+          const bridgeResult = await ai.mt5Bridge(dataUserId, 'history_prepare_status_v1',
+            routedParams(bridgeParams), { timeoutMs:5000, noFallback:true })
+          const responseRange = compactHistoryPrepareRange(range)
+          // This endpoint is deliberately status-only.  Keep the response
+          // bounded even if a future Bridge accidentally includes a history
+          // page in its payload.
+          result = {
+            status:bridgeResult?.status || 'error',
+            ...(bridgeResult?.code ? { code:bridgeResult.code } : {}),
+            ...(bridgeResult?.error ? { error:bridgeResult.error } : {}),
+            ...(bridgeResult?.message ? { message:bridgeResult.message } : {}),
+            ...(bridgeResult?.source ? { source:bridgeResult.source } : {}),
+            history_sync:bridgeResult?.history_sync && typeof bridgeResult.history_sync === 'object'
+              ? bridgeResult.history_sync : null,
+            history_range:responseRange,
+            scope_range:responseRange.effective_range,
+            observer_source:access.read_only,
+          }
+        } else {
+          result = { status:'error', code:'bridge_terminal_not_connected',
+            error:'bridge_terminal_not_connected', message:'bridge_terminal_not_connected' }
+        }
+        break
+      }
       case 'history_chart_data': {
         const exactRoute = assertHistoryExactRoute(dataRoute)
         const bridgeOk = dataUserId && isBridgeAlive(dataUserId)
@@ -2659,21 +2781,11 @@ async function handleBrowserCommand(ws, userId, msg) {
           const range = hasStart || hasEnd
             ? historyCursorContinuationRange(params, resolvedRange, nowUtcMsc)
             : resolvedRange
-          // Prefer the terminal's trusted market-state clock when available;
-          // browser/UTC time must not decide the business-day boundary.
-          const terminalMarketState = bridgeV3MarketStateForContext(
-            dataUserId,
-            Number(observerContext?.channel?.trading_account_id) || null,
-            exactRoute.terminal_instance_id,
-          )
-          const chartWindow = historyChartRange(range, {
-            ...exactRoute,
-            timezone_offset_minutes:terminalMarketState?.timezoneOffsetMinutes
-              ?? exactRoute.timezone_offset_minutes
-              ?? exactRoute.clock?.timezone_offset_minutes,
-          })
-          const chartStart = chartWindow.start_utc_msc
-          const chartEnd = chartWindow.end_utc_msc
+          // Reuse the resolved effective/frozen scope exactly.  The chart is
+          // an alternate view of the selected history range, not a separate
+          // recent-days window.
+          const chartStart = range.range_start_utc_msc
+          const chartEnd = range.range_end_utc_msc
           chartParams.range_start_utc_msc = chartStart
           chartParams.range_end_utc_msc = chartEnd
           chartParams.allowed_start_utc_msc = range.allowed_start_utc_msc
@@ -3823,8 +3935,9 @@ async function handleBrowserCommand(ws, userId, msg) {
   } catch (err) {
     console.error('[BridgeWS] handleBrowserCommand error:', err.message)
     const stableCode = String(err?.code || err?.message || '')
-    if (stableCode.startsWith('bridge_history_') || stableCode.startsWith('history_cursor_')) {
-      reply({ status:'error', code:stableCode, message:stableCode })
+    if (stableCode.startsWith('bridge_history_') || stableCode.startsWith('history_cursor_')
+      || stableCode.startsWith('history_prepare_status_')) {
+      reply({ status:'error', code:stableCode, error:stableCode, message:stableCode })
       return
     }
     reply({ status: 'error', message: '操作失败，请重试' })

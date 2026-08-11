@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260714a" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260714a">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260714a">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260811historyscope1" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260811historyscope1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260811historyperf3" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260811historyperf3" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -919,17 +919,17 @@
               <button class="btn-filter-reset history-range-restore" id="historyRangeRestore" type="button">恢复系统起点</button>
               <span id="historyRangeHint" class="field-help">正在确认当前终端的权威历史范围…</span>
             </div>
+            <div id="historySyncStatus" class="history-sync-status" role="status" aria-live="polite" aria-atomic="true" hidden></div>
             <div class="history-chart-wrap">
               <div class="chart-top-bar">
-                <div class="history-chart-heading"><strong id="historyChartTitle">最近 30 天</strong><span id="historyChartRange">-- ～ --</span></div>
                 <div class="chart-stats-row">
-                  <div class="chart-stat"><span class="chart-stat-label">30天总交易</span><span id="chartTotalTrades" class="chart-stat-value">--</span></div>
-                  <div class="chart-stat"><span class="chart-stat-label">30天胜率</span><span id="chartWinRate" class="chart-stat-value">--</span></div>
-                  <div class="chart-stat"><span class="chart-stat-label">30天盈亏比</span><span id="chartProfitFactor" class="chart-stat-value">--</span></div>
-                  <div class="chart-stat"><span class="chart-stat-label">30天最大回撤</span><span id="chartMaxDD" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">总交易</span><span id="chartTotalTrades" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">胜率</span><span id="chartWinRate" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">盈亏比</span><span id="chartProfitFactor" class="chart-stat-value">--</span></div>
+                  <div class="chart-stat"><span class="chart-stat-label">最大回撤</span><span id="chartMaxDD" class="chart-stat-value">--</span></div>
                 </div>
               </div>
-              <canvas id="historyChart" height="160" tabindex="0" role="img" aria-label="最近30天平仓盈亏图表"></canvas>
+              <canvas id="historyChart" height="160" tabindex="0" role="img" aria-label="平仓盈亏图表"></canvas>
               <div id="historyChartDrilldownStatus" class="history-chart-drilldown-status" role="status" aria-live="polite">点击柱状图或使用键盘选择某个平仓日查看明细</div>
             </div>
             <div class="history-stats">
@@ -1300,7 +1300,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260811historyscope1&build=signalbandwidth1-notifications1"></script>
+    <script src="/ai/app.js?v=20260811historyperf3&build=signalbandwidth1-notifications1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

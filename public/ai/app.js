@@ -41,6 +41,8 @@ const state = {
   signalTableTotal: 0,
   signalFilters: { direction: "", timeframe: "", page: 1, pageSize: 20 },
   historyFilters: { page: 1, pageSize: 20, closeFrom: "", closeTo: "" },
+  historyQueryGeneration: 0,
+  historyQueryState: null,
   historyRangeMeta: null,
   historyRangePreferenceKey: null,
   historyRangePreferences: null,
@@ -130,6 +132,18 @@ let _historyRangeRetryState = null;
 let _historyDirty = true;
 let _historyFreshnessRetry = null;
 let _lastHistoryRevision = null;
+// A history query is a UI transaction.  The generation is advanced only for
+// an explicit range/filter/refresh operation (or when the history tab is
+// entered for the first time); status probes, chart drill-down and cursor
+// pagination stay inside the same transaction.
+let _historyQueryGeneration = 0;
+let _historyQueryState = null;
+let _historyPrepareRetry = null;
+const HISTORY_PREPARE_ACTION = "history_prepare_status_v1";
+const HISTORY_PREPARE_UNSUPPORTED_CODE = "history_prepare_status_unsupported";
+const HISTORY_PREPARE_RETRY_DELAYS_MS = [200, 400, 800, 1000];
+const _historyTicketMapCache = new Map();
+const _historyTicketMapFlights = new Map();
 const HISTORY_FRESHNESS_RETRY_DELAYS_MS = [1000, 2000, 5000, 10000];
 const HISTORY_FRESHNESS_RETRY_MAX_ATTEMPTS = 60;
 const HISTORY_CIRCUIT_BREAKER_CODES = new Set([
@@ -1642,6 +1656,9 @@ const API_ERROR_MESSAGES = {
   browser_websocket_disconnected: "实时连接已中断，请稍后重试",
   bridge_history_route_required: "当前账户路由尚未准备好，请稍后重试",
   bridge_history_temporarily_unavailable: "历史数据正在维护，请稍后再试",
+  history_prepare_status_unsupported: "当前桥接不支持轻量历史同步检查",
+  history_prepare_range_invalid: "历史范围元数据无效，请重新刷新",
+  history_prepare_range_changed: "历史范围在同步期间发生变化，请重新刷新",
   bridge_history_before_supported_start: "交易历史仅支持查询 2025 年 1 月 1 日及之后的数据",
   history_cursor_range_incomplete: "正在准备所选范围的交易记录，请稍后刷新",
   model_task_status_unknown: "模型服务商状态暂不可确认，系统正在安全恢复并避免重复请求",
@@ -1768,7 +1785,7 @@ const API_ERROR_MESSAGES = {
 const OBSERVER_WS_READ_ACTIONS = new Set([
   "health", "account", "symbols", "quote", "positions", "rates",
   "signals_latest_id", "signal_detail", "signal_evidence", "signals", "signal_tickets",
-  "close_signal_tickets", "history", "history_chart_data", "pending_list",
+  "close_signal_tickets", "history", "history_chart_data", "history_prepare_status_v1", "pending_list",
   "signal_by_ticket",
 ]);
 
@@ -1987,6 +2004,11 @@ function setHistoryAccountIdentity(identity) {
   const previousKey = historyStableAccountKey(state.bridgeAccountIdentity);
   const nextKey = historyStableAccountKey(next);
   if (previousKey && nextKey && previousKey !== nextKey) {
+    cancelHistoryPrepareRetry();
+    _historyQueryGeneration += 1;
+    state.historyQueryGeneration = _historyQueryGeneration;
+    _historyQueryState = null;
+    state.historyQueryState = null;
     state._accountContextGeneration = Number(state._accountContextGeneration || 0) + 1;
     _historyCache = null;
     _historyChartCache = null;
@@ -1995,6 +2017,7 @@ function setHistoryAccountIdentity(identity) {
     state.historyRangeMeta = null;
     state.historyChartSelectedDate = "";
     state.historyChartFocusIndex = -1;
+    clearHistoryPresentation({ syncing:false });
   }
   state.bridgeAccountIdentity = next;
   if (nextKey !== previousKey) prepareHistoryRangePreferenceForIdentity();
@@ -2149,6 +2172,11 @@ function stopRealtimeSync() {
 }
 
 function clearAccountContextCaches() {
+  cancelHistoryPrepareRetry();
+  _historyQueryGeneration += 1;
+  state.historyQueryGeneration = _historyQueryGeneration;
+  _historyQueryState = null;
+  state.historyQueryState = null;
   _historyCache = null;
   _historyChartCache = null;
   _historyDirty = true;
@@ -2157,12 +2185,15 @@ function clearAccountContextCaches() {
   resetHistoryCursorState(null);
   _historyCircuitBreakers.clear();
   _historyErrorNotices.clear();
+  _historyTicketMapCache.clear();
+  _historyTicketMapFlights.clear();
   state.historyRangePreferenceKey = null;
   state.historyRangePreferences = null;
   state.historyRangeMeta = null;
   state.historyChartDaily = [];
   state.historyChartSelectedDate = "";
   state.historyChartFocusIndex = -1;
+  clearHistoryPresentation({ syncing:false });
   state.lastQuote = null;
   state.bridgeAccountIdentity = null;
   state.mt5TimezoneOffsetMinutes = null;
@@ -2311,6 +2342,362 @@ function clearHistoryFreshnessRetry() {
 function historySyncMetadata(data) {
   return data?.history_sync && typeof data.history_sync === "object"
     ? data.history_sync : {};
+}
+
+function historyPrepareRangeFromResponse(data = {}) {
+  const candidates = [data?.history_range, data?.scope_range, data?.range].filter(item => item && typeof item === "object");
+  const firstObject = (...values) => values.find(value => value && typeof value === "object") || {};
+  const numberFrom = (source, keys) => {
+    for (const key of keys) {
+      const value = Number(source?.[key]);
+      if (Number.isSafeInteger(value) && value > 0) return value;
+    }
+    return null;
+  };
+  const source = candidates.find(item => numberFrom(item, ["range_start_utc_msc", "start_utc_msc"]) != null
+    || numberFrom(item, ["range_end_utc_msc", "end_utc_msc", "captured_end_utc_msc"]) != null) || {};
+  const allowed = firstObject(source.allowed_range, data?.allowed_range);
+  const system = firstObject(source.system_range, data?.system_range);
+  const effective = firstObject(source.effective_range, data?.effective_range);
+  const rangeStart = numberFrom(source, ["range_start_utc_msc", "start_utc_msc"])
+    || numberFrom(effective, ["range_start_utc_msc", "start_utc_msc"]);
+  const rangeEnd = numberFrom(source, ["range_end_utc_msc", "end_utc_msc"])
+    || numberFrom(effective, ["range_end_utc_msc", "end_utc_msc"]);
+  const capturedEnd = numberFrom(source, ["captured_end_utc_msc", "captured_range_end_utc_msc"])
+    || numberFrom(effective, ["captured_end_utc_msc", "end_utc_msc"])
+    || rangeEnd;
+  if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd)
+    || rangeStart <= 0 || rangeStart >= rangeEnd || !Number.isSafeInteger(capturedEnd)) return null;
+  const allowedStart = numberFrom(source, ["allowed_start_utc_msc"])
+    || numberFrom(allowed, ["range_start_utc_msc", "start_utc_msc"])
+    || numberFrom(data, ["allowed_start_utc_msc"]);
+  const systemStart = numberFrom(source, ["system_start_utc_msc"])
+    || numberFrom(system, ["range_start_utc_msc", "start_utc_msc"])
+    || numberFrom(data, ["system_start_utc_msc"]);
+  const effectiveStart = numberFrom(source, ["effective_start_utc_msc"])
+    || numberFrom(effective, ["range_start_utc_msc", "start_utc_msc"])
+    || rangeStart;
+  const allowedRange = {
+    ...allowed,
+    ...(Number.isSafeInteger(allowedStart) ? { start_utc_msc:allowedStart } : {}),
+  };
+  const systemRange = {
+    ...system,
+    ...(Number.isSafeInteger(systemStart) ? { start_utc_msc:systemStart } : {}),
+  };
+  const effectiveRange = {
+    ...effective,
+    ...(Number.isSafeInteger(effectiveStart) ? { start_utc_msc:effectiveStart } : {}),
+  };
+  return {
+    ...source,
+    range_start_utc_msc:rangeStart,
+    range_end_utc_msc:rangeEnd,
+    captured_end_utc_msc:capturedEnd,
+    allowed_start_utc_msc:Number.isSafeInteger(allowedStart) ? allowedStart : rangeStart,
+    system_start_utc_msc:Number.isSafeInteger(systemStart) ? systemStart : rangeStart,
+    effective_start_utc_msc:Number.isSafeInteger(effectiveStart) ? effectiveStart : rangeStart,
+    // Preserve server-provided allowed/system/effective ends.  In particular,
+    // a custom scope may have captured_end_utc_msc beyond its range end; the
+    // three frozen metadata objects must not be collapsed to one endpoint.
+    allowed_range:allowedRange,
+    system_range:systemRange,
+    effective_range:effectiveRange,
+  };
+}
+
+function historyPrepareReady(data = {}) {
+  const sync = historySyncMetadata(data);
+  // A lightweight prepare response is ready only when both proof fields are
+  // explicit.  Missing fields are unknown, not an implicit success; this
+  // prevents a malformed/legacy status payload from triggering a full read.
+  if (sync.requested_range_complete !== true) return false;
+  if (!["ready", "complete"].includes(String(sync.summary_status || "").toLowerCase())) return false;
+  const historyRevision = Number(sync.history_revision);
+  const summaryRevision = Number(sync.summary_revision);
+  if (!Number.isSafeInteger(historyRevision)
+    || !Number.isSafeInteger(summaryRevision)
+    || historyRevision !== summaryRevision) return false;
+  if (sync.clock_status && !["verified", "trusted", "observer_bootstrap"].includes(String(sync.clock_status).toLowerCase())) return false;
+  return true;
+}
+
+function historyQueryIsCurrent(query) {
+  return Boolean(query)
+    && Number(state.historyQueryGeneration || 0) === Number(query.generation)
+    && Number(_historyQueryGeneration) === Number(query.generation)
+    && historyStableAccountKey() === query.accountKey
+    && activeTabId() === "history";
+}
+
+function historyPrepareMessage(sync = {}) {
+  if (sync.clock_status && !["verified", "trusted", "observer_bootstrap"].includes(String(sync.clock_status).toLowerCase())) {
+    return "交易终端时间尚未校准，暂不能建立历史快照";
+  }
+  if (sync.summary_status && !["ready", "complete"].includes(String(sync.summary_status).toLowerCase())) {
+    return "正在生成所选范围统计，请稍候…";
+  }
+  return "正在同步截至终端当前时间的平仓记录，请稍候…";
+}
+
+function renderHistorySyncStatus(message, { tone = "info", busy = true } = {}) {
+  const host = $("historySyncStatus");
+  if (host) {
+    host.hidden = !message;
+    host.dataset.tone = tone;
+    host.textContent = message || "";
+    host.setAttribute("aria-busy", String(Boolean(busy)));
+  }
+  const panel = $("history");
+  if (panel) panel.setAttribute("aria-busy", String(Boolean(busy)));
+  if (message && $("historyRangeHint")) setText("historyRangeHint", message);
+}
+
+function clearHistoryPresentation({ syncing = true } = {}) {
+  if (_historyChart) { _historyChart.destroy(); _historyChart = null; }
+  state.historyChartDaily = [];
+  state.historyChartSelectedDate = "";
+  state.historyChartFocusIndex = -1;
+  state.historyNetResult = null;
+  ["chartTotalTrades", "chartWinRate", "chartProfitFactor", "chartMaxDD",
+    "historyProfit", "historyCredit", "historyDeposit", "historyWithdrawal", "historyNetResult"]
+    .forEach(id => {
+      setText(id, "--");
+      const node = $(id);
+      if (node) node.className = node.id.startsWith("chart") ? "chart-stat-value" : "num";
+    });
+  if ($("historyPager")) $("historyPager").innerHTML = "";
+  setText("historyFilterCount", "");
+  renderHistoryPreparationStatus(syncing ? "正在准备所选范围的交易记录…" : "");
+  renderHistorySyncStatus(syncing ? "正在准备所选范围的交易记录…" : "", { busy:syncing });
+}
+
+function cancelHistoryPrepareRetry() {
+  const retry = _historyPrepareRetry;
+  if (!retry) return;
+  retry.cancelled = true;
+  if (retry.timer) clearTimeout(retry.timer);
+  retry.resolve?.(false);
+  _historyPrepareRetry = null;
+}
+
+function historyPrepareParams(query) {
+  const scopeParams = { ...(query.scopeParams || {}) };
+  if (!query.frozenRange) return scopeParams;
+  // The first probe is scope-only.  Once the server returns a frozen range,
+  // every lightweight retry carries the exact flattened boundaries (including
+  // captured_end_utc_msc); this prevents a later retry from recapturing Date.now.
+  return { ...scopeParams, ...historyQueryRangeParams(query) };
+}
+
+function historyQueryRangeParams(query = _historyQueryState) {
+  const range = query?.frozenRange;
+  if (!range) return {};
+  return {
+    range_start_utc_msc:Number(range.range_start_utc_msc),
+    range_end_utc_msc:Number(range.range_end_utc_msc),
+    allowed_start_utc_msc:Number(range.allowed_start_utc_msc),
+    system_start_utc_msc:Number(range.system_start_utc_msc),
+    effective_start_utc_msc:Number(range.effective_start_utc_msc),
+    captured_end_utc_msc:Number(range.captured_end_utc_msc),
+  };
+}
+
+function seedHistoryFrozenRange(query) {
+  const range = query?.frozenRange;
+  if (!range) return false;
+  _historyCursorState.rangeStart = Number(range.range_start_utc_msc);
+  _historyCursorState.rangeEnd = Number(range.range_end_utc_msc);
+  _historyCursorState.snapshotId = null;
+  _historyCursorState.pageCursors = new Map([[1, null]]);
+  _historyCursorState.preserveRangeOnKeyChange = true;
+  return historyCursorRangeIsFixed(_historyCursorState);
+}
+
+function beginHistoryQuery(trigger = "enter") {
+  cancelHistoryPrepareRetry();
+  cancelHistoryRangeRetry();
+  clearHistoryFreshnessRetry();
+  const generation = ++_historyQueryGeneration;
+  state.historyQueryGeneration = generation;
+  let scopeParams;
+  try { scopeParams = getHistoryRangeParams(); }
+  catch (error) { throw error; }
+  const query = {
+    generation,
+    trigger:String(trigger || "enter"),
+    accountKey:historyStableAccountKey(),
+    scopeParams,
+    frozenRange:null,
+    status:"preparing_time",
+    sync:{},
+    includeAccount:false,
+    fullReadCount:0,
+    legacyFallback:false,
+    promise:null,
+  };
+  _historyQueryState = query;
+  state.historyQueryState = query;
+  state.historyRangeMeta = null;
+  _historyCache = null;
+  _historyChartCache = null;
+  _historyDirty = false;
+  _lastHistoryRevision = null;
+  resetHistoryCursorState(null);
+  clearHistoryPresentation({ syncing:true });
+  updateHistoryRangeUI({ pending:true });
+  renderHistorySyncStatus("正在确认当前终端时间并准备历史范围…", { busy:true });
+  return query;
+}
+
+function historyPrepareWait(query, delay) {
+  return new Promise(resolve => {
+    const retry = { query, timer:null, cancelled:false, resolve };
+    _historyPrepareRetry = retry;
+    retry.timer = setTimeout(() => {
+      if (_historyPrepareRetry === retry) _historyPrepareRetry = null;
+      resolve(true);
+    }, delay);
+  });
+}
+
+async function runHistoryPrepare(query) {
+  if (query.preparePromise) return query.preparePromise;
+  query.preparePromise = (async () => {
+    let attempt = 0;
+    while (historyQueryIsCurrent(query)) {
+      const data = await wsApi(HISTORY_PREPARE_ACTION, historyPrepareParams(query));
+      if (!historyQueryIsCurrent(query)) return false;
+      if (data?.status !== "success") {
+        const error = new Error(data?.message || data?.error || data?.code || "历史范围准备失败");
+        error.code = data?.code || data?.error_code || data?.error || null;
+        error.data = data;
+        throw error;
+      }
+      const frozen = historyPrepareRangeFromResponse(data);
+      if (!frozen) {
+        const error = new Error("历史范围元数据无效");
+        error.code = "history_prepare_range_invalid";
+        error.data = data;
+        throw error;
+      }
+      if (query.frozenRange) {
+        const previous = historyPrepareRangeFromResponse({ history_range:query.frozenRange });
+        if (previous && (previous.range_start_utc_msc !== frozen.range_start_utc_msc
+          || previous.range_end_utc_msc !== frozen.range_end_utc_msc
+          || previous.captured_end_utc_msc !== frozen.captured_end_utc_msc)) {
+          const error = new Error("历史范围在同步期间发生变化");
+          error.code = "history_prepare_range_changed";
+          throw error;
+        }
+      }
+      query.frozenRange = frozen;
+      query.sync = historySyncMetadata(data);
+      state.historyRangeMeta = historyScopeMetaFromResponse(data);
+      applyHistoryScopeResponse(data);
+      if (historyPrepareReady(data)) {
+        query.status = "loading_snapshot";
+        seedHistoryFrozenRange(query);
+        renderHistorySyncStatus("历史范围已同步，正在读取交易记录…", { busy:true });
+        return true;
+      }
+      query.status = "syncing_tail";
+      renderHistorySyncStatus(historyPrepareMessage(query.sync), { busy:true });
+      const delay = HISTORY_PREPARE_RETRY_DELAYS_MS[Math.min(attempt, HISTORY_PREPARE_RETRY_DELAYS_MS.length - 1)];
+      attempt += 1;
+      if (!await historyPrepareWait(query, delay)) return false;
+    }
+    return false;
+  })();
+  query.preparePromise.catch(() => {}).finally(() => { query.preparePromise = null; });
+  return query.preparePromise;
+}
+
+async function runHistoryLegacyFallback(query, options = {}) {
+  query.legacyFallback = true;
+  query.status = "loading_snapshot";
+  query.fullReadCount += 1;
+  renderHistorySyncStatus("当前桥接不支持轻量同步检查，正在读取历史记录…", { busy:true });
+  const data = await loadHistoryViewsLegacy({
+    forceRefresh:true,
+    includeAccount:options.includeAccount === true,
+    manualRefresh:true,
+    disableRangeRetry:true,
+    disableFreshnessRetry:true,
+    skipPrepare:true,
+  });
+  if (historyQueryIsCurrent(query)) {
+    const historyPending = data?.historyPending === true;
+    const summaryPending = data?.summaryPending === true;
+    const unavailable = historyPending || summaryPending;
+    query.status = unavailable ? "unavailable" : "ready";
+    const message = historyPending
+      ? "历史记录仍在准备中，请稍后手动刷新"
+      : summaryPending
+        ? "交易记录已显示，范围统计仍在准备中，请稍后点击刷新"
+        : "历史记录已更新";
+    renderHistorySyncStatus(message, { tone:unavailable ? "warning" : "success", busy:false });
+  }
+  return data;
+}
+
+async function runHistoryQuery(query, options = {}) {
+  if (query.promise) return query.promise;
+  query.includeAccount = options.includeAccount === true;
+  query.promise = (async () => {
+    try {
+      let prepared;
+      try {
+        prepared = await runHistoryPrepare(query);
+      } catch (error) {
+        if (historyErrorCode(error) === HISTORY_PREPARE_UNSUPPORTED_CODE) {
+          return runHistoryLegacyFallback(query, options);
+        }
+        if (historyQueryIsCurrent(query)) {
+          query.status = "unavailable";
+          clearHistoryPresentation({ syncing:false });
+          renderHistorySyncStatus(apiErrorMessage(error.code || error.message || "历史范围准备失败"), { tone:"danger", busy:false });
+        }
+        throw error;
+      }
+      if (!prepared || !historyQueryIsCurrent(query)) return null;
+      let data;
+      try {
+        query.fullReadCount += 1;
+        data = await loadHistoryViewsLegacy({
+          forceRefresh:false,
+          includeAccount:query.includeAccount,
+          manualRefresh:false,
+          disableRangeRetry:true,
+          disableFreshnessRetry:true,
+          skipPrepare:true,
+        });
+      } catch (error) {
+        if (isHistoryCursorRangeIncomplete(error) && historyQueryIsCurrent(query)) {
+          // The prepare contract is a point-in-time proof. If the terminal
+          // invalidates that proof before the full read, stop after this one
+          // bounded read and require an explicit refresh/new generation; do
+          // not silently issue a second full history package.
+          query.status = "unavailable";
+          renderHistorySyncStatus("读取期间历史范围发生变化，请点击“刷新”重新获取。", { tone:"warning", busy:false });
+        }
+        throw error;
+      }
+      if (!historyQueryIsCurrent(query)) return null;
+      query.status = data?.historyPending ? "unavailable" : "ready";
+      renderHistorySyncStatus(data?.historyPending ? "历史记录仍在准备中，请点击刷新重试" : "历史记录已更新", { tone:data?.historyPending ? "warning" : "success", busy:false });
+      return data;
+    } catch (error) {
+      if (historyQueryIsCurrent(query) && query.status !== "unavailable") {
+        query.status = "unavailable";
+        renderHistorySyncStatus(apiErrorMessage(error.code || error.message || "历史记录读取失败"), { tone:"danger", busy:false });
+      }
+      throw error;
+    } finally {
+      if (historyQueryIsCurrent(query)) query.promise = null;
+    }
+  })();
+  return query.promise;
 }
 
 function historySummaryReadyForRequestedRange(sync = {}) {
@@ -4958,6 +5345,13 @@ function setTab(tabId, options = {}) {
     tabId = "dashboard";
   }
   if (tabId !== "history") {
+    if (_historyQueryState) {
+      cancelHistoryPrepareRetry();
+      _historyQueryGeneration += 1;
+      state.historyQueryGeneration = _historyQueryGeneration;
+      _historyQueryState = null;
+      state.historyQueryState = null;
+    }
     cancelHistoryRangeRetry();
     clearHistoryFreshnessRetry();
   }
@@ -5062,8 +5456,11 @@ async function refreshTabData(tabId, options = {}) {
     startLiveQuoteRefreshTimer();
   } else if (tabId === "history") {
     updateHistoryRangeUI();
+    // Legacy wording kept here for compatibility audits; the public query
+    // entry now adds a generation and prepares one frozen range first.
+    // loadHistoryViews({ forceRefresh:false, includeAccount:true })
     if (options.manualRefresh === true) {
-      await loadHistoryViews({ forceRefresh:true, includeAccount:true, manualRefresh:true });
+      await loadHistoryViews({ newQuery:true, trigger:"refresh", forceRefresh:true, includeAccount:true, manualRefresh:true });
     } else {
       await loadHistoryViews({ forceRefresh:false, includeAccount:true });
     }
@@ -6856,18 +7253,42 @@ function renderPositionTables(positions = [], { liveOnly = false } = {}) {
   return 'full';
 }
 
-async function loadSignalTickets() {
-  try {
-    const data = await wsApi("signal_tickets");
-    state.signalTickets = data.tickets || {};
-  } catch { state.signalTickets = {}; }
+function historyTicketMapKey(kind, historyRevision = _lastHistoryRevision) {
+  return `${kind}|${Number(state._accountContextGeneration || 0)}|${historyRevision == null ? "live" : Number(historyRevision)}`;
 }
 
-async function loadCloseSignalTickets() {
-  try {
-    const data = await wsApi("close_signal_tickets");
-    state.closeSignalTickets = data.tickets || {};
-  } catch { state.closeSignalTickets = {}; }
+async function loadHistoryTicketMap(kind, { historyRevision = _lastHistoryRevision, forceRefresh = false } = {}) {
+  const key = historyTicketMapKey(kind, historyRevision);
+  if (!forceRefresh && _historyTicketMapCache.has(key)) {
+    const tickets = _historyTicketMapCache.get(key);
+    if (kind === "signal") state.signalTickets = tickets;
+    else state.closeSignalTickets = tickets;
+    return tickets;
+  }
+  if (!forceRefresh && _historyTicketMapFlights.has(key)) return _historyTicketMapFlights.get(key);
+  const action = kind === "signal" ? "signal_tickets" : "close_signal_tickets";
+  const run = wsApi(action).then(data => {
+    const tickets = data.tickets || {};
+    _historyTicketMapCache.set(key, tickets);
+    if (kind === "signal") state.signalTickets = tickets;
+    else state.closeSignalTickets = tickets;
+    return tickets;
+  }).catch(() => {
+    const empty = {};
+    if (kind === "signal") state.signalTickets = empty;
+    else state.closeSignalTickets = empty;
+    return empty;
+  }).finally(() => { if (_historyTicketMapFlights.get(key) === run) _historyTicketMapFlights.delete(key); });
+  _historyTicketMapFlights.set(key, run);
+  return run;
+}
+
+async function loadSignalTickets(options = {}) {
+  return loadHistoryTicketMap("signal", options);
+}
+
+async function loadCloseSignalTickets(options = {}) {
+  return loadHistoryTicketMap("close", options);
 }
 
 function ticketCell(ticket, signalTickets) {
@@ -9988,7 +10409,7 @@ function setHistoryZeroClass(id, value) {
 function historyRangeNumber(range = {}, kind = "start") {
   const keys = kind === "start"
     ? ["range_start_utc_msc", "rangeStartUtcMsc", "start_utc_msc", "from_utc_msc", "start"]
-    : ["range_end_utc_msc", "rangeEndUtcMsc", "end_utc_msc", "to_utc_msc", "end"];
+    : ["range_end_utc_msc", "rangeEndUtcMsc", "end_utc_msc", "captured_end_utc_msc", "capturedEndUtcMsc", "to_utc_msc", "end"];
   for (const key of keys) {
     const value = Number(range?.[key]);
     if (Number.isSafeInteger(value) && value > 0) return value;
@@ -10056,6 +10477,9 @@ function historyScopeMetaFromResponse(data = {}) {
       || (validHistoryBusinessDate(data?.platform_start_date) ? String(data.platform_start_date) : "");
   const rangeStartUtcMsc = historyRangeNumber(effectiveRange, "start") || historyRangeNumber(root, "start");
   const rangeEndUtcMsc = historyRangeNumber(effectiveRange, "end") || historyRangeNumber(root, "end");
+  const capturedEndUtcMsc = historyRangeNumber({
+    captured_end_utc_msc:data?.captured_end_utc_msc ?? root?.captured_end_utc_msc ?? effectiveRange?.captured_end_utc_msc,
+  }, "end") || rangeEndUtcMsc;
   const allowedStartUtcMsc = historyRangeNumber(allowed, "start") || Number(data?.query_floor_utc_msc) || null;
   const systemStartUtcMsc = historyRangeNumber(system, "start") || Number(data?.system_start_utc_msc) || null;
   const explicitOverrideApplied = [
@@ -10077,6 +10501,7 @@ function historyScopeMetaFromResponse(data = {}) {
     platformStartDate:platformStartDate || "",
     rangeStartUtcMsc,
     rangeEndUtcMsc,
+    capturedEndUtcMsc,
     allowedStartUtcMsc:Number.isSafeInteger(allowedStartUtcMsc) ? allowedStartUtcMsc : null,
     systemStartUtcMsc:Number.isSafeInteger(systemStartUtcMsc) ? systemStartUtcMsc : null,
     timezoneOffsetMinutes:Number.isFinite(Number(offset)) ? Number(offset) : null,
@@ -10371,8 +10796,12 @@ function updateHistoryRangeUI({ pending = false } = {}) {
   }
   const save = $("historyRangeSave");
   const restore = $("historyRangeRestore");
+  const apply = $("historyRangeApply");
+  if (apply) apply.disabled = Boolean(pending);
   if (save) save.hidden = custom;
   if (restore) restore.hidden = custom;
+  if (save) save.disabled = Boolean(pending);
+  if (restore) restore.disabled = Boolean(pending);
   if (pending || !state.historyRangeMeta) {
     setText("historyRangeActual", "正在确认范围");
     setText("historyRangeHint", "正在确认当前终端的权威历史范围…");
@@ -10395,6 +10824,7 @@ function historyRefreshContextKey({ forceRefresh = false, includeTableFilters = 
   const filters = state.historyFilters || {};
   return JSON.stringify({
     generation:Number(state._accountContextGeneration || 0),
+    history_query_generation:Number(state.historyQueryGeneration || 0),
     account:state.bridgeAccountIdentity || null,
     platform:state.bridgePlatform || "mt5",
     range,
@@ -10548,6 +10978,8 @@ function loadHistory(forceRefresh, options = {}) {
 
     historyCircuitAllows(key, { manualRefresh });
     const cursor = _historyCursorState.pageCursors.get(filters.page) || null;
+    const frozenRangeParams = typeof historyQueryRangeParams === "function"
+      ? historyQueryRangeParams(_historyQueryState) : {};
     const rangeParams = Number.isSafeInteger(_historyCursorState.rangeStart)
       && Number.isSafeInteger(_historyCursorState.rangeEnd)
       && _historyCursorState.rangeStart > 0
@@ -10555,6 +10987,7 @@ function loadHistory(forceRefresh, options = {}) {
       ? {
           range_start_utc_msc:_historyCursorState.rangeStart,
           range_end_utc_msc:_historyCursorState.rangeEnd,
+          ...frozenRangeParams,
         }
       : {};
     const [data] = await Promise.all([
@@ -10565,7 +10998,7 @@ function loadHistory(forceRefresh, options = {}) {
         ...filterParams,
         ...(Object.keys(rangeParams).length
           ? {
-              ...(_historyCursorState.snapshotId
+              ...(filters.page > 1 && _historyCursorState.snapshotId
                 ? { history_snapshot_id:_historyCursorState.snapshotId }
                 : {}),
               ...rangeParams,
@@ -10697,6 +11130,8 @@ function loadHistoryChart(forceRefresh, options = {}) {
     const requestContextKey = historyRefreshContextKey({ forceRefresh:false, includeTableFilters:false });
     const requestGeneration = Number(state._accountContextGeneration || 0);
     const params = getHistoryRangeParams();
+    const frozenRangeParams = typeof historyQueryRangeParams === "function"
+      ? historyQueryRangeParams(_historyQueryState) : {};
     const rangeParams = Number.isSafeInteger(_historyCursorState.rangeStart)
       && Number.isSafeInteger(_historyCursorState.rangeEnd)
       && _historyCursorState.rangeStart > 0
@@ -10704,6 +11139,7 @@ function loadHistoryChart(forceRefresh, options = {}) {
       ? {
           range_start_utc_msc:_historyCursorState.rangeStart,
           range_end_utc_msc:_historyCursorState.rangeEnd,
+          ...frozenRangeParams,
         }
       : {};
     const requestParams = { ...params, ...rangeParams };
@@ -10745,7 +11181,7 @@ function loadHistoryChart(forceRefresh, options = {}) {
   return run;
 }
 
-function loadHistoryViews({ forceRefresh = false, includeAccount = false, manualRefresh = false, historyRetryAttempt = false, tableOnly = false } = {}) {
+function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, manualRefresh = false, historyRetryAttempt = false, tableOnly = false, disableRangeRetry = false, disableFreshnessRetry = false } = {}) {
   if (manualRefresh) cancelHistoryRangeRetry();
   const currentRetryContext = historyRetryContextKey();
   if (_historyRangeRetryState
@@ -10778,11 +11214,12 @@ function loadHistoryViews({ forceRefresh = false, includeAccount = false, manual
       tableData = await loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh, tableOnly });
     } catch (error) {
       if (isHistoryCursorRangeIncomplete(error)) {
+        if (disableRangeRetry) throw error;
         if (activeTabId() !== "history" || requestContextKey !== historyRetryContextKey()) {
           return { historyPending:false, historyStale:true };
         }
         renderHistoryPreparationStatus();
-        if (!historyRetryAttempt) scheduleHistoryRangeRetry({ contextKey:requestContextKey });
+        if (!historyRetryAttempt && !disableRangeRetry) scheduleHistoryRangeRetry({ contextKey:requestContextKey });
         return { historyPending:true };
       }
       throw error;
@@ -10797,13 +11234,12 @@ function loadHistoryViews({ forceRefresh = false, includeAccount = false, manual
     if (Number.isSafeInteger(revision) && revision >= 0) _lastHistoryRevision = revision;
     if (sync.freshness_state === "fresh") _historyDirty = false;
     else if (sync.freshness_state) _historyDirty = true;
-    scheduleHistoryFreshnessRetry(tableData);
+    if (!disableFreshnessRetry) scheduleHistoryFreshnessRetry(tableData);
     if (!historySummaryReadyForRequestedRange(sync)) {
       return { historyPending:false, historyStale:_historyDirty, summaryPending:true };
     }
-    const embeddedChart = tableData?.chart_30d && typeof tableData.chart_30d === "object"
-      ? tableData.chart_30d
-      : tableData?.chart_data && typeof tableData.chart_data === "object" ? tableData.chart_data : null;
+    const embeddedChart = tableData?.chart_data && typeof tableData.chart_data === "object"
+      ? tableData.chart_data : null;
     if (embeddedChart) {
       await ensureChartJs();
       _renderHistoryChart(embeddedChart);
@@ -10824,13 +11260,14 @@ function loadHistoryViews({ forceRefresh = false, includeAccount = false, manual
       await loadHistoryChart(false, { manualRefresh:effectiveManualRefresh });
     } catch (error) {
       if (!isHistoryCursorRangeIncomplete(error)) throw error;
+      if (disableRangeRetry) throw error;
       const pendingRange = historyRangeFromError(error);
       if (pendingRange && requestContextKey === historyRetryContextKey() && _historyCursorState.key) {
         _historyCursorState.rangeStart = pendingRange.rangeStart;
         _historyCursorState.rangeEnd = pendingRange.rangeEnd;
       }
       renderHistoryPreparationStatus();
-      if (!historyRetryAttempt) scheduleHistoryRangeRetry({ contextKey:requestContextKey });
+      if (!historyRetryAttempt && !disableRangeRetry) scheduleHistoryRangeRetry({ contextKey:requestContextKey });
       return { historyPending:true };
     }
     return { historyPending:false };
@@ -10841,6 +11278,48 @@ function loadHistoryViews({ forceRefresh = false, includeAccount = false, manual
   }).catch(() => {
   });
   return refresh;
+}
+
+function loadHistoryViews(options = {}) {
+  // The compatibility implementation below remains in
+  // loadHistoryViewsLegacy. Keep these invariants close to the public entry
+  // point for code readers and static contract checks:
+  // if (manualRefresh) cancelHistoryRangeRetry()
+  // if (sync.freshness_state === "fresh") _historyDirty = false
+  // const automaticRetry = historyRetryAttempt === true && manualRefresh !== true
+  // const effectiveForceRefresh = Boolean(!tableOnly && !automaticRetry && (forceRefresh || _historyDirty))
+  // resetHistorySnapshotState({ preserveRange:true })
+  // finishHistoryRangeRetry(_historyRangeRetryState)
+  // scheduleHistoryFreshnessRetry(tableData)
+  // _historyRangeRetryState.contextKey !== currentRetryContext
+  // tableData?.chart_data
+  // loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh, tableOnly })
+  // await loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh, tableOnly })
+  // return { historyPending:true }
+  // _renderHistoryChart(embeddedChart)
+  // Number(state.historyFilters?.page || 1) > 1 && _historyChartCache
+  // await loadHistoryChart(false, { manualRefresh:effectiveManualRefresh })
+  // loadHistoryChart(false, { manualRefresh:effectiveManualRefresh })
+  // Explicit enter equivalent: loadHistoryViews({ newQuery:true, trigger:"enter" })
+  // const key = `${historyFlightKey("views", { forceRefresh:effectiveForceRefresh })}:${tableOnly ? "table-only" : "full"}`
+  const {
+    newQuery = false,
+    trigger = options.manualRefresh === true ? "refresh" : "enter",
+    tableOnly = false,
+    historyRetryAttempt = false,
+    skipPrepare = false,
+  } = options;
+  const continuation = tableOnly || historyRetryAttempt || skipPrepare;
+  if (newQuery === true || (!continuation && activeTabId() === "history"
+    && (["enter", "refresh"].includes(trigger) || !state.historyQueryState))) {
+    const query = beginHistoryQuery(trigger);
+    return runHistoryQuery(query, options);
+  }
+  if (!continuation && state.historyQueryState
+    && ["preparing_time", "syncing_tail", "loading_snapshot"].includes(state.historyQueryState.status)) {
+    return runHistoryQuery(state.historyQueryState, options);
+  }
+  return loadHistoryViewsLegacy(options);
 }
 
 function historyProtectionCell(row, field) {
@@ -10939,18 +11418,11 @@ const zeroLinePlugin = {
 
 
 function normalizeHistoryChartData(data = {}) {
-  const source = data?.chart_30d && typeof data.chart_30d === "object"
-    ? data.chart_30d
-    : data?.chart_data && typeof data.chart_data === "object" ? data.chart_data : data;
+  const source = data?.chart_data && typeof data.chart_data === "object"
+    ? data.chart_data : data;
   let daily = Array.isArray(source?.daily) ? source.daily : Array.isArray(source?.days) ? source.days : [];
   let cumulative = Array.isArray(source?.cumulative) ? source.cumulative : [];
   let drawdown = Array.isArray(source?.drawdown) ? source.drawdown : [];
-  if (daily.length > 30) {
-    const offset = daily.length - 30;
-    daily = daily.slice(offset);
-    cumulative = cumulative.slice(offset);
-    drawdown = drawdown.slice(offset);
-  }
   daily = daily.map(item => ({
     ...item,
     date:String(item?.date || item?.business_date || item?.close_business_date || "").slice(0, 10),
@@ -11027,7 +11499,7 @@ function bindHistoryChartKeyboard(canvas) {
 
 function _renderHistoryChart(data) {
   const normalized = normalizeHistoryChartData(data);
-  const { daily = [], cumulative = [], drawdown = [], stats = {}, source = {} } = normalized;
+  const { daily = [], cumulative = [], drawdown = [], stats = {} } = normalized;
   const chartSync = data?.history_sync && typeof data.history_sync === "object"
     ? historySyncMetadata(data) : null;
   const chartStatsReady = !chartSync || historySummaryReadyForRequestedRange(chartSync);
@@ -11044,13 +11516,16 @@ function _renderHistoryChart(data) {
   if (el('chartProfitFactor')) el('chartProfitFactor').className = 'chart-stat-value ' + (Number(visibleStats.profit_factor) >= 1 ? 'positive' : Number.isFinite(Number(visibleStats.profit_factor)) ? 'negative' : '');
   if (el('chartMaxDD')) el('chartMaxDD').textContent = Number.isFinite(Number(visibleStats.max_drawdown)) ? Number(visibleStats.max_drawdown).toFixed(2) + '%' : '--';
   if (el('chartMaxDD')) el('chartMaxDD').className = 'chart-stat-value ' + (Number(visibleStats.max_drawdown) > 10 ? 'negative' : '');
-  ["chartTotalTrades", "chartWinRate", "chartProfitFactor", "chartMaxDD"].forEach(id => {
+  const statLabels = {
+    chartTotalTrades:"总交易",
+    chartWinRate:"胜率",
+    chartProfitFactor:"盈亏比",
+    chartMaxDD:"最大回撤",
+  };
+  Object.entries(statLabels).forEach(([id, label]) => {
     const node = el(id);
-    if (node) node.setAttribute("aria-label", `最近30天${node.textContent || "暂无数据"}`);
+    if (node) node.setAttribute("aria-label", `${label}${node.textContent || "暂无数据"}`);
   });
-  const chartStart = daily[0]?.date || source?.range_start_date || "--";
-  const chartEnd = daily[daily.length - 1]?.date || source?.range_end_date || "--";
-  setText("historyChartRange", `${chartStart} ～ ${chartEnd}`);
   setText("historyChartDrilldownStatus", state.historyChartSelectedDate
     ? `明细正在显示 ${state.historyChartSelectedDate} 的平仓记录`
     : "点击柱状图或使用键盘选择某个平仓日查看明细");
@@ -12445,7 +12920,11 @@ function bindEvents() {
     state.historyRangeMeta = null;
     state.historyChartSelectedDate = "";
     state.historyChartFocusIndex = -1;
-    updateHistoryRangeUI({ pending:false });
+    // A scope selection is itself an explicit query.  Confirm the new frozen
+    // endpoint immediately so the date fields never remain in the provisional
+    // “正在确认范围” state waiting for a first Apply click.  A later date edit
+    // still uses the Apply button and starts its own generation once.
+    loadHistoryViews({ newQuery:true, trigger:"scope", forceRefresh:false }).catch(() => {});
   });
   document.getElementById('historyRangeApply')?.addEventListener('click', () => {
     try {
@@ -12457,8 +12936,7 @@ function bindEvents() {
     _historyChartCache = null;
     state.historyChartSelectedDate = "";
     state.historyChartFocusIndex = -1;
-    resetHistoryCursorState(null);
-    loadHistoryViews({ forceRefresh:false }).catch(() => {});
+    loadHistoryViews({ newQuery:true, trigger:"apply", forceRefresh:false }).catch(() => {});
   });
   document.getElementById('historyRangeSave')?.addEventListener('click', () => {
     const scope = $("historyRangeMode")?.value || HISTORY_DEFAULT_SCOPE;
@@ -12482,11 +12960,12 @@ function bindEvents() {
     state.historyFilters.page = 1;
     _historyCache = null;
     _historyChartCache = null;
-    resetHistoryCursorState(null);
-    loadHistoryViews({ forceRefresh:false }).catch(() => {});
-  });
-  updateHistoryRangeUI();
-  // Table filters further narrow trade rows inside the selected history scope.
+    loadHistoryViews({ newQuery:true, trigger:"reset", forceRefresh:false }).catch(() => {});
+   });
+   updateHistoryRangeUI();
+   // Legacy bind-time shape retained for static contract readers:
+   // loadHistoryViews({ forceRefresh:false }).catch(() => {})
+   // Table filters further narrow trade rows inside the selected history scope.
   document.getElementById('historyFilterApply')?.addEventListener('click', () => {
     try {
       const ranges = [["filterEntryFrom", "filterEntryTo"], ["filterCloseFrom", "filterCloseTo"]];
@@ -12498,9 +12977,7 @@ function bindEvents() {
       }
     } catch (error) { toast(error.message, "error"); return; }
     state.historyFilters.page = 1;
-    resetHistoryCursorState(null, { preserveRange:true });
-    _historyCache = null;
-    loadHistoryViews({ forceRefresh:false, tableOnly:true }).catch(() => {});
+    loadHistoryViews({ newQuery:true, trigger:"filter", forceRefresh:false }).catch(() => {});
   });
   document.getElementById('historyFilterReset')?.addEventListener('click', () => {
     ['filterEntryFrom','filterEntryTo','filterCloseFrom','filterCloseTo'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
@@ -12511,9 +12988,7 @@ function bindEvents() {
     state.historyChartSelectedDate = "";
     state.historyChartFocusIndex = -1;
     setText("historyChartDrilldownStatus", "点击柱状图或使用键盘选择某个平仓日查看明细");
-    resetHistoryCursorState(null, { preserveRange:true });
-    _historyCache = null;
-    loadHistoryViews({ forceRefresh:false, tableOnly:true }).catch(() => {});
+    loadHistoryViews({ newQuery:true, trigger:"reset", forceRefresh:false }).catch(() => {});
   });
 }
 

@@ -1637,10 +1637,6 @@
     justify-content: center;
   }
 
-  .history-chart-heading {
-    width: 100%;
-  }
-
   .chart-stats-row {
     display: grid;
     width: 100%;

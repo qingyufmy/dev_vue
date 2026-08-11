@@ -219,7 +219,7 @@ describe('Bridge v3 business compatibility adapter', () => {
       const { adapter, gateway } = setup()
       for (const action of [
         'history', 'history_page', 'history_evidence', 'chart_data',
-        'history_chart_data', 'export_history',
+        'history_chart_data', 'export_history', 'history_prepare_status_v1',
       ]) {
         await expect(adapter.execute(42, action, {
           page:1, page_size:20,
@@ -260,6 +260,44 @@ describe('Bridge v3 business compatibility adapter', () => {
     await expect(adapter.execute(42, 'history', {
       page:1, page_size:20, date_from:'2026-01-01',
       range_start_utc_msc:rangeStart, range_end_utc_msc:NOW,
+    })).resolves.toMatchObject({ status:'error', error:'history_range_invalid' })
+    expect(gateway.requestData).not.toHaveBeenCalled()
+  })
+
+  it('routes lightweight history preparation with only frozen range evidence', async () => {
+    const { adapter, gateway } = setup({ dataResponse:{
+      status:'succeeded', payload:{
+        history_sync:{ requested_range_complete:false, backfill_pending:true }, source:'mt5_sqlite',
+      },
+    } })
+    const rangeStart = NOW - 86_400_000
+    const effectiveEnd = NOW - 3_600_000
+    await expect(adapter.execute(42, 'history_prepare_status_v1', {
+      range_start_utc_msc:rangeStart,
+      range_end_utc_msc:effectiveEnd,
+      allowed_start_utc_msc:rangeStart,
+      system_start_utc_msc:rangeStart,
+      effective_start_utc_msc:rangeStart,
+      captured_end_utc_msc:NOW,
+      page:9, page_size:200, direction:'SELL', profit_filter:'loss', force_refresh:true,
+    }, { timeoutMs:30_000 })).resolves.toMatchObject({
+      status:'success', history_sync:{ requested_range_complete:false, backfill_pending:true },
+    })
+    expect(gateway.requestData).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'history_prepare_status_v1',
+      params:{
+        range_start_utc_msc:rangeStart,
+        range_end_utc_msc:effectiveEnd,
+        allowed_start_utc_msc:rangeStart,
+        system_start_utc_msc:rangeStart,
+        effective_start_utc_msc:rangeStart,
+        captured_end_utc_msc:NOW,
+      },
+    }), { timeoutMs:30_000 })
+
+    gateway.requestData.mockClear()
+    await expect(adapter.execute(42, 'history_prepare_status_v1', {
+      range_start_utc_msc:rangeStart,
     })).resolves.toMatchObject({ status:'error', error:'history_range_invalid' })
     expect(gateway.requestData).not.toHaveBeenCalled()
   })
