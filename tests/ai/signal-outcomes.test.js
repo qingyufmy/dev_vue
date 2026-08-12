@@ -14,6 +14,7 @@ import {
   isSystemManagedOutcomeSource,
   reconcileTerminalPendingOutcomes,
   reconcileSignalOutcomes,
+  outcomeReconciliationRangeEndUtcMsc,
   resolveOutcomeClosureTransition,
   loadOutcomeHistory,
   utcDateToday,
@@ -32,6 +33,14 @@ const deal = (overrides = {}) => ({
 })
 
 describe('signal outcome attribution', () => {
+  it('uses the last sealed UTC hour for durable outcome evidence', () => {
+    const now = Date.parse('2026-08-12T01:47:59.999Z')
+    expect(outcomeReconciliationRangeEndUtcMsc(now)).toBe(Date.parse('2026-08-12T01:00:00.000Z'))
+    expect(outcomeReconciliationRangeEndUtcMsc(now)).not.toBe(now)
+    expect(outcomeReconciliationRangeEndUtcMsc(Number.NaN)).toBeNull()
+    expect(outcomeReconciliationRangeEndUtcMsc(1)).toBeNull()
+  })
+
   it('does not register direct user orders as AI-managed outcomes', async () => {
     const run = vi.fn()
     await expect(createSignalOutcomeTx(run, {
@@ -287,6 +296,7 @@ describe('position outcome monitor durability', () => {
       expect.objectContaining({ broker_server:'BROKER-A', login:'7788' }),
       expect.objectContaining({ broker_server:'BROKER-B', login:'8899' }),
     ]))
+    expect(evidenceParams.every(params => params.range_end_utc_msc % 3600000 === 0)).toBe(true)
     expect(positionsParams).toEqual(expect.arrayContaining([
       { broker_server:'BROKER-A', login:'7788' },
       { broker_server:'BROKER-B', login:'8899' },
