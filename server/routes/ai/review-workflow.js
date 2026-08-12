@@ -183,10 +183,25 @@ export async function ensureReviewCaseForOutcome(outcomeId, { queueGeneration = 
     (outcome_id, signal_id, user_id, trading_account_id, status, evidence_status, evidence_reason,
      evidence_json, evidence_hash, path_evidence_status, path_evidence_reason, path_evidence_hash, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE signal_id = VALUES(signal_id), status = IF(status IN ('approved','draft','edited','needs_revision','deferred'), status, VALUES(status)),
-      evidence_status = VALUES(evidence_status), evidence_reason = VALUES(evidence_reason), evidence_json = VALUES(evidence_json),
-      evidence_hash = VALUES(evidence_hash), path_evidence_status = VALUES(path_evidence_status),
-      path_evidence_reason = VALUES(path_evidence_reason), path_evidence_hash = VALUES(path_evidence_hash), updated_at = VALUES(updated_at)`, [
+    ON DUPLICATE KEY UPDATE signal_id = VALUES(signal_id),
+      status = IF(status IN ('approved','draft','edited','needs_revision','deferred')
+        OR (evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete'), status, VALUES(status)),
+      evidence_status = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete',
+        evidence_status, VALUES(evidence_status)),
+      evidence_reason = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete',
+        evidence_reason, VALUES(evidence_reason)),
+      evidence_json = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete',
+        evidence_json, VALUES(evidence_json)),
+      evidence_hash = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete',
+        evidence_hash, VALUES(evidence_hash)),
+      path_evidence_status = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete',
+        path_evidence_status, VALUES(path_evidence_status)),
+      path_evidence_reason = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete',
+        path_evidence_reason, VALUES(path_evidence_reason)),
+      path_evidence_hash = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete',
+        path_evidence_hash, VALUES(path_evidence_hash)),
+      updated_at = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete',
+        updated_at, VALUES(updated_at))`, [
     evidence.row.id, evidence.row.signal_id || null, evidence.row.user_id, evidence.row.trading_account_id,
     status, evidence.assessment.complete ? 'complete' : 'incomplete', evidence.assessment.reasons.join(',') || null,
     json(evidence.bundle), evidence.evidenceHash, evidence.bundle.post_trade.path_evidence.status,

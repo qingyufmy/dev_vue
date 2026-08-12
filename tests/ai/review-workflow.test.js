@@ -104,6 +104,12 @@ describe('review durability and privacy guards', () => {
     expect(service).toContain('if (queueGeneration && generationEnabled')
   })
 
+  it('does not downgrade complete trade evidence during a transient Bridge gap', () => {
+    expect(service).toContain("evidence_status = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete'")
+    expect(service).toContain("status = IF(status IN ('approved','draft','edited','needs_revision','deferred')\n        OR (evidence_status = 'complete'")
+    expect(service).toContain("updated_at = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete'")
+  })
+
   it('binds approval to the exact current version and retries model failures without touching trading', () => {
     expect(service).toContain('Number(reviewCase.current_version_id) !== Number(versionId)')
     expect(service).toContain("approved_version_id = ?")
