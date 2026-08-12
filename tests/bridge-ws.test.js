@@ -1563,6 +1563,110 @@ describe('initBridgeWS', () => {
     vi.useRealTimers()
   })
 
+  it('continues a platform history page from the server-saved account start without an override', async () => {
+    vi.useFakeTimers()
+    const now = Date.parse('2026-08-10T12:30:00.000Z')
+    vi.setSystemTime(now)
+    const savedStart = Date.parse('2026-06-01T00:00:00.000Z')
+    const systemStart = Date.parse('2026-07-16T00:00:00.000Z')
+    mockBridgeV3Business.hasConnectedTerminal.mockReturnValue(true)
+    mockBridgeV3Business.supports.mockReturnValue(true)
+    const route = {
+      terminal_instance_id:'terminal-history-saved-start', platform:'mt5',
+      account_ref:{ broker_server:'Broker-Demo', login:'123456' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
+      capabilities:['history_exact_range_v1', 'history_cursor_v1'],
+    }
+    mockBridgeV3Business.connectedTerminals.mockReturnValue([route])
+    mockBridgeV3Business.execute.mockResolvedValue({
+      status:'success', orders:[], history_snapshot_id:'a'.repeat(64),
+      next_cursor:'b'.repeat(64), has_more:true,
+      history_sync:{ requested_range_complete:true },
+    })
+    queryOne.mockImplementation(async sql => String(sql).includes('FROM mt5_account_bindings')
+      ? { first_connected_utc_msc:systemStart, ownership_start_utc_msc:Date.parse('2026-08-08T12:30:00.000Z'),
+          ownership_history_id:77, saved_platform_start_date:'2026-06-01' }
+      : { id:42, role:'admin', plan:'pro', plan_expires_at:null,
+          plan_source:null, connection_enabled:1 })
+    const server = new EventEmitter()
+    initBridgeWS(server)
+    const connectionHandler = mockWss.on.mock.calls
+      .filter(([event]) => event === 'connection').at(-1)?.[1]
+    const browserWs = new EventEmitter()
+    browserWs.readyState = 1
+    browserWs.send = vi.fn()
+    browserWs.close = vi.fn()
+    await connectionHandler(browserWs, {
+      url:'/aurum-api/bridge/ws?type=browser',
+      headers:{ origin:'http://localhost:3000', cookie:'ws_token=session-token' },
+    })
+
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-saved-start-first', action:'history',
+      params:{ page:1, page_size:20, history_scope:'platform' },
+    }))
+    await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(1))
+    const firstCall = mockBridgeV3Business.execute.mock.calls[0]
+    const firstParams = firstCall[2]
+    const capturedEnd = Number(firstParams.captured_end_utc_msc)
+    expect(firstCall[1]).toBe('history_page')
+    expect(firstParams).toMatchObject({
+      range_start_utc_msc:savedStart,
+      allowed_start_utc_msc:expect.any(Number),
+      system_start_utc_msc:systemStart,
+      effective_start_utc_msc:savedStart,
+      captured_end_utc_msc:capturedEnd,
+    })
+    expect(capturedEnd).toBeGreaterThanOrEqual(now)
+    expect(capturedEnd).toBeLessThanOrEqual(now + 60_000)
+    expect(firstParams.range_end_utc_msc).toBe(capturedEnd)
+    const firstReply = JSON.parse(browserWs.send.mock.calls[0][0])
+    expect(firstReply).toMatchObject({
+      status:'success', history_snapshot_id:'a'.repeat(64), next_cursor:'b'.repeat(64),
+      history_range:{ range_start_utc_msc:savedStart, effective_start_utc_msc:savedStart,
+        range_end_utc_msc:capturedEnd, captured_end_utc_msc:capturedEnd,
+        system_start_utc_msc:systemStart },
+    })
+
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-saved-start-next', action:'history',
+      params:{ page:2, page_size:20, history_scope:'platform',
+        history_snapshot_id:'a'.repeat(64), cursor:'b'.repeat(64),
+        range_start_utc_msc:savedStart, range_end_utc_msc:capturedEnd,
+        allowed_start_utc_msc:firstParams.allowed_start_utc_msc,
+        system_start_utc_msc:systemStart, effective_start_utc_msc:savedStart,
+        captured_end_utc_msc:capturedEnd },
+    }))
+    await vi.waitFor(() => expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(2))
+    const secondCall = mockBridgeV3Business.execute.mock.calls[1]
+    expect(secondCall[1]).toBe('history_page')
+    expect(secondCall[2]).toMatchObject({
+      history_snapshot_id:'a'.repeat(64), cursor:'b'.repeat(64),
+      range_start_utc_msc:savedStart, system_start_utc_msc:systemStart,
+      effective_start_utc_msc:savedStart, captured_end_utc_msc:capturedEnd,
+    })
+    expect(JSON.parse(browserWs.send.mock.calls[1][0])).toMatchObject({ status:'success' })
+
+    browserWs.emit('message', JSON.stringify({
+      type:'command', command_id:'history-saved-start-tampered', action:'history',
+      params:{ page:2, page_size:20, history_scope:'platform',
+        history_snapshot_id:'a'.repeat(64), cursor:'b'.repeat(64),
+        range_start_utc_msc:savedStart + 86_400_000, range_end_utc_msc:capturedEnd,
+        allowed_start_utc_msc:firstParams.allowed_start_utc_msc,
+        system_start_utc_msc:systemStart, effective_start_utc_msc:savedStart,
+        captured_end_utc_msc:capturedEnd },
+    }))
+    await vi.waitFor(() => expect(browserWs.send).toHaveBeenCalledTimes(3))
+    expect(JSON.parse(browserWs.send.mock.calls[2][0])).toMatchObject({
+      status:'error', code:'history_cursor_invalid',
+    })
+    expect(mockBridgeV3Business.execute).toHaveBeenCalledTimes(2)
+    browserWs.emit('close')
+    vi.useRealTimers()
+  })
+
   it('retries an incomplete cursor range with the first fixed endpoint before a snapshot exists', async () => {
     vi.useFakeTimers()
     const firstNow = Date.parse('2026-08-10T12:30:00.000Z')

@@ -1356,14 +1356,14 @@ function historyCursorContinuationRange(params, resolvedRange, nowUtcMsc) {
       if (rangeStart !== effectiveStart || effectiveStart < allowedStart || effectiveStart >= rangeEnd) {
         throw historyError('history_cursor_invalid')
       }
-    } else if (rangeStart !== systemStart) throw historyError('history_cursor_invalid')
+    } else if (rangeStart !== effectiveStart) throw historyError('history_cursor_invalid')
   } else if (scope === 'all') {
     const overrideValue = params?.scope_start_override ?? frozen?.scope_start_override
     if (overrideValue) {
       if (rangeStart !== effectiveStart || effectiveStart < allowedStart || effectiveStart >= rangeEnd) {
         throw historyError('history_cursor_invalid')
       }
-    } else if (rangeStart !== systemStart) throw historyError('history_cursor_invalid')
+    } else if (rangeStart !== effectiveStart) throw historyError('history_cursor_invalid')
   } else if (scope === 'ownership') {
     if (!Number.isSafeInteger(ownershipStart) || ownershipStart <= 0
       || rangeStart !== ownershipStart) throw historyError('history_cursor_invalid')
