@@ -31,7 +31,8 @@ import { getPlatformExperiencePolicies, createPlatformExperienceCandidateFromApp
   updatePlatformExperiencePolicy } from './platform-experience.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelProfileDeletionImpact, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
-  resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
+  resolveOwnedModelProfileForRuntime, resolveAiTaskModel, saveModelProfileWithValidation } from './model-profiles.js'
+import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription } from './strategy-ownership.js'
@@ -67,13 +68,11 @@ const __dirname = dirname(__filename)
 const BRIDGE_VERSION = readFileSync(join(__dirname, '../../../VERSION'), 'utf-8').trim()
 const BRIDGE_RELEASE = resolveBridgeInstallerRelease()
 
-// Connection probes should be large enough for a short structured response,
-// while still respecting the profile's configured output ceiling. Thinking
-// models need more room for their internal reasoning than ordinary probes.
-export const CONNECTION_TEST_DEFAULT_MAX_TOKENS = 8_000
-export const CONNECTION_TEST_MIN_MAX_TOKENS = 100
-export const CONNECTION_TEST_THINKING_MAX_TOKENS = 4_096
-export const CONNECTION_TEST_NON_THINKING_MAX_TOKENS = 256
+// Connection validation uses the pending profile's physical maximum output.
+// It deliberately has no separate thinking budget or hidden probe cap: the
+// provider receives the same thinking setting and output contract that will be
+// stored after a successful validation.
+export const CONNECTION_TEST_DEFAULT_MAX_TOKENS = 393_216
 
 export function normalizeModelThinkingEnabled(value) {
   if (typeof value === 'string') {
@@ -85,13 +84,9 @@ export function normalizeModelThinkingEnabled(value) {
 }
 
 export function resolveModelConnectionTestMaxTokens(model = {}) {
-  const configured = Number.parseInt(model.max_tokens, 10)
-  const hardCap = Number.isInteger(configured) && configured > 0
-    ? Math.max(CONNECTION_TEST_MIN_MAX_TOKENS, configured)
-    : CONNECTION_TEST_DEFAULT_MAX_TOKENS
-  return Math.min(hardCap, normalizeModelThinkingEnabled(model.thinking_enabled)
-    ? CONNECTION_TEST_THINKING_MAX_TOKENS
-    : CONNECTION_TEST_NON_THINKING_MAX_TOKENS)
+  const configured = Number(model.max_output_tokens)
+  return Number.isSafeInteger(configured) && configured > 0
+    ? configured : CONNECTION_TEST_DEFAULT_MAX_TOKENS
 }
 
 export function resolveModelConnectionTestConfig(model = {}) {
@@ -174,6 +169,50 @@ function reviewError(res, error) {
   }
   const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required') || code === 'manual_trade_review_forbidden') ? 403 : 400
   return res.status(status).json({ ok: false, error: code })
+}
+
+export function modelConnectionValidationError(error) {
+  const providerStatus = Number(error?.providerStatus || error?.httpStatus)
+  if (providerStatus === 401 || providerStatus === 403) return 'model_connection_auth_failed'
+  if (providerStatus === 429) return 'model_connection_rate_limited'
+  if (providerStatus === 404) return 'model_connection_model_unavailable'
+  if (providerStatus === 400) return 'model_connection_request_rejected'
+  const raw = String(error?.code || error?.message || '')
+  if (raw === 'output_truncated' || raw === 'ai_response_missing_json_object'
+      || raw === 'ai_response_not_object' || raw === 'model_connection_probe_invalid_response'
+      || raw.startsWith('ai_response_invalid_')) return 'model_connection_output_incomplete'
+  if (raw.includes('API key') || raw.includes('api_key')) return 'model_connection_invalid_api_key'
+  return 'model_connection_unavailable'
+}
+
+/** Execute exactly one provider request for a pending model profile. */
+export async function verifyPendingModelProfile(model = {}) {
+  const provider = model.provider || model.api_provider
+  const protocol = modelProviderProtocol(provider)
+  const base = String(model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
+  if (!base) throw new Error('unsupported_model_provider')
+  const testConfig = resolveModelConnectionTestConfig({ ...model, max_output_tokens:model.max_output_tokens })
+  try {
+    const result = await requestJsonObject({
+      url:`${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
+      apiKey:model.api_key_encrypted, provider, model:model.model_name, temperature:0,
+      maxTokens:testConfig.maxTokens, protocol, timeout:model.request_timeout_ms || 120000,
+      thinkingEnabled:testConfig.thinkingEnabled, reasoningEffort:testConfig.reasoningEffort,
+      messages:[{ role:'system', content:'Return exactly {"ok":true} as JSON.' }, { role:'user', content:'{"ok":true}' }],
+      allowFollowupRequests:false, usageContext:null,
+    })
+    if (!result || typeof result !== 'object' || Array.isArray(result) || result.ok !== true) {
+      throw new Error('model_connection_probe_invalid_response')
+    }
+    return { ok:true }
+  } catch (error) {
+    const stableCode = modelConnectionValidationError(error)
+    const stable = new Error(stableCode)
+    stable.code = stableCode
+    stable.providerStatus = error?.providerStatus
+    stable.cause = error
+    throw stable
+  }
 }
 
 function requireAiAdmin(req, res) {
@@ -348,7 +387,8 @@ router.get('/ai/model-profiles', authMiddleware, async (req, res) => {
 
 router.post('/ai/model-profiles', authMiddleware, async (req, res) => {
   try {
-    const profile = await createModelProfile(req.user.id, req.body || {}, req.user.role)
+    const profile = await saveModelProfileWithValidation({ userId:req.user.id, payload:req.body || {},
+      callerRole:req.user.role, verify:verifyPendingModelProfile })
     await auditAiMutation(req, 'ai_model_profile_created', 'ai_model_profile', profile.id, {
       scope:profile.scope, provider:profile.provider, model_name:profile.model_name,
     })
@@ -359,7 +399,9 @@ router.post('/ai/model-profiles', authMiddleware, async (req, res) => {
 
 router.put('/ai/model-profiles/:id', authMiddleware, async (req, res) => {
   try {
-    const profile = await updateModelProfile(Number(req.params.id), req.body?.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id, req.body || {})
+    const profile = await saveModelProfileWithValidation({ id:Number(req.params.id),
+      userId:req.body?.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id,
+      callerRole:req.user.role, payload:req.body || {}, verify:verifyPendingModelProfile })
     await auditAiMutation(req, 'ai_model_profile_updated', 'ai_model_profile', profile.id, {
       scope:profile.scope, provider:profile.provider, model_name:profile.model_name,
       credential_rotated:Boolean(req.body?.api_key),
@@ -401,7 +443,8 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
     const ownerId = req.user.role === 'admin' && req.body?.scope === 'platform' ? 0 : req.user.id
     const resolved = await resolveOwnedModelProfileForRuntime(Number(req.params.id), ownerId)
     if (!resolved.model) throw new Error(resolved.error || 'model_unavailable')
-    const testConfig = resolveModelConnectionTestConfig(resolved.model)
+    const capabilities = await getModelProviderCapabilities(resolved.model_profile_id)
+    const testConfig = resolveModelConnectionTestConfig({ ...resolved.model, ...capabilities })
     const { provider, protocol } = testConfig
     const base = String(resolved.model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
     if (!base) throw new Error('unsupported_model_provider')

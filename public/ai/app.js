@@ -562,6 +562,34 @@ const REASON_MAP = {
   kimi_code_request_rejected: "Kimi Code 拒绝了本次请求，请检查内容与账户状态",
   kimi_code_request_invalid: "Kimi Code 请求参数不兼容，请检查模型与思考设置",
   kimi_code_service_unavailable: "Kimi Code 服务暂时不可用，请稍后再试",
+  model_token_limits_invalid: "最大输入和最大输出不能超过上下文窗口，请修改后重试",
+  model_context_window_invalid: "上下文窗口配置无效，请按模型文档修改为正整数",
+  model_max_input_tokens_invalid: "最大输入配置无效，请按模型文档修改为正整数",
+  model_max_output_tokens_invalid: "最大输出配置无效，请按模型文档修改为正整数",
+  model_token_limits_rejected: "当前模型不接受所填限制，请修改上下文窗口、最大输入或最大输出",
+  model_input_limit_exceeded: "当前输入超过模型的最大输入限制，请增大配置或减少本次输入",
+  model_context_limit_exceeded: "当前请求超过模型上下文窗口，请修改上下文窗口或减少本次输入",
+  model_output_limit_exceeded: "当前模型不接受所填最大输出，请按模型文档修改最大输出",
+  model_name_invalid: "模型名称不可用，请核对模型名称和接口类型",
+  model_protocol_unsupported: "模型调用协议不可用，请核对接口类型和模型服务商",
+  model_request_unauthorized: "认证失败，请检查 API Key 或订阅权限",
+  model_request_forbidden: "认证失败，请检查 API Key 或订阅权限",
+  model_authentication_failed: "认证失败，请检查 API Key 或订阅权限",
+  model_rate_limited: "服务商限流，配置尚未完成验证，请稍后再次保存",
+  model_request_rate_limited: "服务商限流，配置尚未完成验证，请稍后再次保存",
+  model_service_unavailable: "服务暂时不可用，配置尚未完成验证",
+  model_connection_unavailable: "服务暂时不可用，配置尚未完成验证",
+  model_connection_timeout: "服务暂时不可用，配置尚未完成验证",
+  model_dns_failed: "服务暂时不可用，请检查接口地址后再次保存",
+  model_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
+  model_validation_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
+  model_connection_auth_failed: "认证失败，请检查 API Key 或订阅权限",
+  model_connection_invalid_api_key: "认证失败，请检查 API Key 或订阅权限",
+  model_connection_rate_limited: "服务商限流，配置尚未完成验证，请稍后再次保存",
+  model_connection_model_unavailable: "模型或调用协议不可用，请核对模型名称和接口类型",
+  model_connection_request_rejected: "模型服务拒绝了当前请求，请核对模型名称、调用协议和三个 Token 限制",
+  model_connection_token_limits_rejected: "当前模型不接受所填限制，请修改上下文窗口、最大输入或最大输出",
+  model_connection_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
   unsupported_model_provider: "不支持这个模型服务商",
   model_endpoint_invalid_url: "模型接口地址格式不正确",
   model_endpoint_credentials_forbidden: "模型接口地址不能包含用户名或密码",
@@ -1663,8 +1691,36 @@ const API_ERROR_MESSAGES = {
   no_model_configured: "尚未配置可用模型，请先在“AI策略师 → 模型管理”中添加模型",
   no_platform_model: "平台尚未配置默认模型",
   bound_model_unavailable: "策略绑定的模型已停用或删除，请重新选择模型",
-  output_truncated: "模型连接已建立，但测试输出被截断，请检查最大输出上限或推理强度后重试",
-  ai_response_missing_json_object: "模型连接已建立，但未返回有效的结构化结果，请检查模型名称和相关设置后重试",
+  model_token_limits_invalid: "最大输入和最大输出不能超过上下文窗口，请修改后重试",
+  model_context_window_invalid: "上下文窗口配置无效，请按模型文档修改为正整数",
+  model_max_input_tokens_invalid: "最大输入配置无效，请按模型文档修改为正整数",
+  model_max_output_tokens_invalid: "最大输出配置无效，请按模型文档修改为正整数",
+  model_token_limits_rejected: "当前模型不接受所填限制，请修改上下文窗口、最大输入或最大输出",
+  model_input_limit_exceeded: "当前输入超过模型的最大输入限制，请增大配置或减少本次输入",
+  model_context_limit_exceeded: "当前请求超过模型上下文窗口，请修改上下文窗口或减少本次输入",
+  model_output_limit_exceeded: "当前模型不接受所填最大输出，请按模型文档修改最大输出",
+  model_name_invalid: "模型名称不可用，请核对模型名称和接口类型",
+  model_protocol_unsupported: "模型调用协议不可用，请核对接口类型和模型服务商",
+  model_request_unauthorized: "认证失败，请检查 API Key 或订阅权限",
+  model_request_forbidden: "认证失败，请检查 API Key 或订阅权限",
+  model_authentication_failed: "认证失败，请检查 API Key 或订阅权限",
+  model_rate_limited: "服务商限流，配置尚未完成验证，请稍后再次保存",
+  model_request_rate_limited: "服务商限流，配置尚未完成验证，请稍后再次保存",
+  model_service_unavailable: "服务暂时不可用，配置尚未完成验证",
+  model_connection_unavailable: "服务暂时不可用，配置尚未完成验证",
+  model_connection_timeout: "服务暂时不可用，配置尚未完成验证",
+  model_dns_failed: "服务暂时不可用，请检查接口地址后再次保存",
+  model_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
+  model_validation_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
+  model_connection_auth_failed: "认证失败，请检查 API Key 或订阅权限",
+  model_connection_invalid_api_key: "认证失败，请检查 API Key 或订阅权限",
+  model_connection_rate_limited: "服务商限流，配置尚未完成验证，请稍后再次保存",
+  model_connection_model_unavailable: "模型或调用协议不可用，请核对模型名称和接口类型",
+  model_connection_request_rejected: "模型服务拒绝了当前请求，请核对模型名称、调用协议和三个 Token 限制",
+  model_connection_token_limits_rejected: "当前模型不接受所填限制，请修改上下文窗口、最大输入或最大输出",
+  model_connection_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
+  output_truncated: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
+  ai_response_missing_json_object: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
   credential_decryption_failed: "模型凭据无法解密，请联系管理员检查密钥版本",
   credential_not_encrypted: "检测到旧版明文凭据，请先完成凭据迁移",
   invalid_schedule_timezone: "运行时区无效",
@@ -3853,6 +3909,38 @@ const MODEL_PROVIDER_LABELS = {
   openai_compatible: "自定义 OpenAI 兼容",
 };
 
+const DEFAULT_MODEL_TOKEN_LIMITS = Object.freeze({
+  context_window_tokens: 1048576,
+  max_input_tokens: 1048576,
+  max_output_tokens: 393216,
+});
+
+function modelTokenLimits(profile = {}) {
+  const source = profile.token_limits || profile.capabilities || profile.model_capabilities || {};
+  const value = key => {
+    const raw = profile[key] ?? source[key];
+    const number = Number(raw);
+    return Number.isInteger(number) && number > 0 ? number : DEFAULT_MODEL_TOKEN_LIMITS[key];
+  };
+  return {
+    context_window_tokens: value("context_window_tokens"),
+    max_input_tokens: value("max_input_tokens"),
+    max_output_tokens: value("max_output_tokens"),
+  };
+}
+
+function modelTokenStatus(profile = {}) {
+  const source = profile.token_limits || profile.capabilities || profile.model_capabilities || {};
+  const raw = String(profile.token_limits_status ?? source.token_limits_status ?? source.status ?? "").toLowerCase();
+  if (["confirmed", "manual_confirmed", "verified"].includes(raw)) return { label: "已人工确认", tone: "success" };
+  if (["stale", "needs_confirmation"].includes(raw)) return { label: "待重新确认", tone: "warning" };
+  return { label: "待人工确认", tone: "warning" };
+}
+
+function formatModelTokenCount(value) {
+  return Number(value || 0).toLocaleString("zh-CN");
+}
+
 function modelProviderLabel(provider) { return MODEL_PROVIDER_LABELS[provider] || provider; }
 
 function updateModelProviderHelp(provider) {
@@ -3883,11 +3971,15 @@ function renderModelProfiles() {
       : '<div class="workspace-panel empty-state"><strong>还没有可用模型</strong><span>添加一个自己的模型；若管理员已开放共享，也可由系统按用途自动选用平台模型。</span></div>';
     return;
   }
-  host.innerHTML = state.modelProfiles.map(profile => `
+  host.innerHTML = state.modelProfiles.map(profile => {
+    const limits = modelTokenLimits(profile);
+    const tokenStatus = modelTokenStatus(profile);
+    return `
     <article class="workspace-row model-profile-card" data-model-id="${Number(profile.id)}">
-      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span>${profile.provider === 'kimi_code' ? `<span class="status-chip warning">${state.user?.role === 'admin' ? '订阅模型 · 可按用途共享' : '个人订阅'}</span>` : ''}</div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(modelProviderLabel(profile.provider))}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>最大输出硬上限 ${Number(profile.max_tokens || 0)} tokens</span><span>思考模式 ${Number(profile.thinking_enabled) ? '开启' : '关闭'}</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span>${profile.request_timeout_ms ? `<span>连接测试超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ''}</div></details></div>
+      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span>${profile.provider === 'kimi_code' ? `<span class="status-chip warning">${state.user?.role === 'admin' ? '订阅模型 · 可按用途共享' : '个人订阅'}</span>` : ''}</div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(modelProviderLabel(profile.provider))}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>上下文窗口 ${formatModelTokenCount(limits.context_window_tokens)} tokens</span><span>最大输入 ${formatModelTokenCount(limits.max_input_tokens)} tokens</span><span>最大输出 ${formatModelTokenCount(limits.max_output_tokens)} tokens</span><span>能力状态 <em class="status-chip ${tokenStatus.tone}">${tokenStatus.label}</em></span><span>思考模式 ${Number(profile.thinking_enabled) ? '开启' : '关闭'}</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span>${profile.request_timeout_ms ? `<span>连接测试超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ''}</div></details></div>
       <div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" data-model-action="default" ${profile.is_default ? 'disabled' : ''}>设为默认</button><button class="btn btn-secondary btn-sm" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" data-model-action="delete" aria-label="删除 ${escapeHtml(profile.model_name)}"><i data-lucide="trash-2" size="14"></i></button></div>
-    </article>`).join("");
+    </article>`;
+  }).join("");
   initIcons();
 }
 
@@ -3939,13 +4031,17 @@ function openModelEditor(profile = null) {
   const editor = $("modelProfileEditor");
   if (!editor) return;
   editor.dataset.modelId = profile?.id || "";
+  editor.dataset.expectedUpdatedAt = profile?.updated_at || "";
   $("modelEditorTitle").textContent = profile ? "编辑模型" : "添加模型";
   $("profileProvider").value = profile?.provider || "deepseek";
   $("profileModelName").value = profile?.model_name || "deepseek-chat";
   $("profileBaseUrl").value = profile?.api_base_url || PROVIDER_PRESETS[profile?.provider || "deepseek"]?.url || "";
   $("profileApiKey").value = "";
   $("profileTemperature").value = profile?.temperature ?? 0.3;
-  $("profileMaxTokens").value = profile?.max_tokens ?? 2000;
+  const limits = modelTokenLimits(profile || {});
+  $("profileContextWindowTokens").value = limits.context_window_tokens;
+  $("profileMaxInputTokens").value = limits.max_input_tokens;
+  $("profileMaxOutputTokens").value = limits.max_output_tokens;
   $("profileRequestTimeout").value = profile?.request_timeout_ms ? Math.round(profile.request_timeout_ms / 1000) : "";
   $("profileThinkingEnabled").checked = profile ? Boolean(Number(profile.thinking_enabled)) : true;
   updateModelProviderHelp(profile?.provider || "deepseek");
@@ -3955,18 +4051,51 @@ function openModelEditor(profile = null) {
 async function saveModelProfile() {
   const editor = $("modelProfileEditor");
   const id = Number(editor?.dataset.modelId || 0);
-  const body = { provider: $("profileProvider").value, model_name: $("profileModelName").value.trim(), api_base_url: $("profileBaseUrl").value.trim(), temperature: Number($("profileTemperature").value), max_tokens: Number($("profileMaxTokens").value), thinking_enabled: $("profileThinkingEnabled").checked };
+  const button = $("saveModelProfileBtn");
+  const body = {
+    provider: $("profileProvider").value,
+    model_name: $("profileModelName").value.trim(),
+    api_base_url: $("profileBaseUrl").value.trim(),
+    temperature: Number($("profileTemperature").value),
+    context_window_tokens: Number($("profileContextWindowTokens").value),
+    max_input_tokens: Number($("profileMaxInputTokens").value),
+    max_output_tokens: Number($("profileMaxOutputTokens").value),
+    thinking_enabled: $("profileThinkingEnabled").checked,
+  };
   const timeoutSec = Number($("profileRequestTimeout").value);
   if (timeoutSec > 0) body.request_timeout_ms = timeoutSec * 1000;
   if (body.provider === "kimi_code" && body.model_name === "k3" && body.thinking_enabled) body.reasoning_effort = "max";
   const key = $("profileApiKey").value.trim();
   if (key) body.api_key = key;
   if (state.user?.role === "admin") body.scope = "platform";
-  await api(id ? `/api/ai/model-profiles/${id}` : "/api/ai/model-profiles", { method: id ? "PUT" : "POST", body });
-  $("profileApiKey").value = "";
-  closeFormModal(editor, false);
-  toast("模型已保存", "success");
-  await loadModelManagement();
+  if (id && editor?.dataset.expectedUpdatedAt) body.expected_updated_at = editor.dataset.expectedUpdatedAt;
+  if (!Object.values({
+    context_window_tokens: body.context_window_tokens,
+    max_input_tokens: body.max_input_tokens,
+    max_output_tokens: body.max_output_tokens,
+  }).every(value => Number.isInteger(value) && value > 0)) {
+    const error = new Error(apiErrorMessage("model_token_limits_invalid"));
+    error.code = "model_token_limits_invalid";
+    throw error;
+  }
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "正在验证…";
+  }
+  try {
+    await api(id ? `/api/ai/model-profiles/${id}` : "/api/ai/model-profiles", { method: id ? "PUT" : "POST", body });
+    $("profileApiKey").value = "";
+    closeFormModal(editor, false);
+    toast("模型已验证并保存", "success");
+    await loadModelManagement();
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.textContent = "保存并验证";
+    }
+  }
 }
 
 async function loadPlatformPolicy() {

@@ -4,13 +4,18 @@ import crypto from 'node:crypto'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { encryptCredential, decryptCredential, isEncryptionAvailable, isEncryptedEnvelope, getActiveKeyVersion } from '../../ai-credential.js'
 import { recordCredentialMigration } from './rollout-governance.js'
-import { isPlatformShareableProvider, normalizeModelProviderProfile } from './model-providers.js'
+import { isPlatformShareableProvider, modelProviderProtocol, normalizeModelProviderProfile } from './model-providers.js'
+import { MODEL_PROVIDER_CAPABILITY_KEYS, MODEL_TOKEN_LIMIT_DEFAULTS,
+  getModelProviderCapabilities, saveModelProviderCapabilities } from './model-provider-capabilities.js'
 import { getEffectivePlan } from '../../membership.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
 export const USAGES = ['manual', 'model_compare', 'auto_private', 'auto_platform', 'review', 'memory_compression']
 const MODEL_REQUEST_TIMEOUT_MIN_MS = 30000
 const MODEL_REQUEST_TIMEOUT_MAX_MS = 600000
+const MODEL_TOKEN_LIMIT_MAX = 2147483647
+
+export { MODEL_TOKEN_LIMIT_DEFAULTS }
 
 function normalizeRequestTimeout(value, fallback = null) {
   if (value === undefined) return fallback
@@ -27,6 +32,36 @@ function normalizeMaxTokens(value, fallback = null) {
   const tokens = Number(value)
   if (!Number.isInteger(tokens) || tokens < 100) throw new Error('model_max_tokens_invalid')
   return tokens
+}
+
+function normalizeTokenLimit(value, field, fallback) {
+  if (value === undefined || value === null || value === '') return fallback
+  const tokens = Number(value)
+  if (!Number.isSafeInteger(tokens) || tokens <= 0 || tokens > MODEL_TOKEN_LIMIT_MAX) {
+    const errorCode = field === 'context_window_tokens'
+      ? 'model_context_window_invalid'
+      : field === 'max_input_tokens' ? 'model_max_input_tokens_invalid' : 'model_max_output_tokens_invalid'
+    throw new Error(errorCode)
+  }
+  return tokens
+}
+
+/** Normalize the three user-facing physical model limits. */
+export function normalizeModelTokenLimits(payload = {}, existing = {}) {
+  const limits = {
+    context_window_tokens:normalizeTokenLimit(payload.context_window_tokens, 'context_window_tokens',
+      existing.context_window_tokens ?? MODEL_TOKEN_LIMIT_DEFAULTS.context_window_tokens),
+    max_input_tokens:normalizeTokenLimit(payload.max_input_tokens, 'max_input_tokens',
+      existing.max_input_tokens ?? MODEL_TOKEN_LIMIT_DEFAULTS.max_input_tokens),
+    max_output_tokens:normalizeTokenLimit(payload.max_output_tokens, 'max_output_tokens',
+      existing.max_output_tokens ?? MODEL_TOKEN_LIMIT_DEFAULTS.max_output_tokens),
+    context_limit_semantics:'shared_context',
+  }
+  if (limits.max_input_tokens > limits.context_window_tokens
+      || limits.max_output_tokens > limits.context_window_tokens) {
+    throw new Error('model_token_limits_invalid')
+  }
+  return limits
 }
 
 function parseAllowedPlans(value) {
@@ -51,6 +86,190 @@ export async function assertModelProfileSchemaReady() {
   for (const table of requiredTables) {
     await queryOne(`SELECT 1 AS ok FROM ${table} LIMIT 1`)
   }
+}
+
+function modelIdentity(providerConfig, provider) {
+  return {
+    provider:String(providerConfig.provider || provider || ''),
+    model_name:String(providerConfig.model_name || ''),
+    api_base_url:String(providerConfig.api_base_url || ''),
+  }
+}
+
+function modelIdentityChanged(existingCapability, identity, existingProfile = {}) {
+  if (!existingCapability || !existingCapability.provider) return false
+  return ['provider', 'model_name', 'api_base_url'].some(key =>
+    String(existingCapability[key] || '') !== String(identity[key] || ''))
+    || (existingCapability.protocol && existingCapability.protocol !== identity.protocol)
+    || String(existingProfile.provider || '') !== String(identity.provider || '')
+    || String(existingProfile.model_name || '') !== String(identity.model_name || '')
+    || String(existingProfile.api_base_url || '') !== String(identity.api_base_url || '')
+}
+
+function tokenCapabilityFields(capability, tokenLimits, actorUserId, identity,
+  providerVerification = 'unverified', identityChanged = false) {
+  return {
+    ...(identityChanged ? {} : (capability || {})),
+    ...identity,
+    context_window_tokens:tokenLimits.context_window_tokens,
+    max_input_tokens:tokenLimits.max_input_tokens,
+    max_output_tokens:tokenLimits.max_output_tokens,
+    context_limit_semantics:'shared_context',
+    token_limits_source:'manual_confirmed',
+    token_limits_status:'confirmed',
+    token_limits_updated_by:Number(actorUserId) || null,
+    token_limits_updated_at_utc_msc:Date.now(),
+    verification_status:identityChanged ? 'unverified' : (capability?.verification_status || providerVerification),
+    verified_at_utc_msc:identityChanged ? null : (capability?.verified_at_utc_msc || null),
+  }
+}
+
+function capabilityValues(capability = {}) {
+  return MODEL_PROVIDER_CAPABILITY_KEYS.map(key => capability[key] ? 1 : 0)
+}
+
+async function upsertModelProfileCapability(run, profileId, capability, actorUserId) {
+  const values = capabilityValues(capability)
+  const params = [Number(profileId), ...values,
+    capability.context_window_tokens, capability.max_input_tokens, capability.max_output_tokens,
+    capability.context_limit_semantics || 'shared_context', capability.token_limits_source || 'generic_default',
+    capability.token_limits_status || 'default_unconfirmed', capability.token_limits_note || null,
+    capability.token_limits_updated_by || Number(actorUserId) || null,
+    capability.token_limits_updated_at_utc_msc || Date.now(), capability.provider || null,
+    capability.model_name || null, capability.api_base_url || null, capability.protocol || null,
+    capability.verification_status || 'unverified', Number(actorUserId) || null,
+    capability.verified_at_utc_msc || null, Date.now()]
+  const raw = await run(`INSERT INTO ai_model_provider_capabilities
+    (model_profile_id, supports_stream, supports_request_id, supports_poll, supports_cancel,
+     supports_idempotency, supports_structured_output, supports_usage_split,
+     context_window_tokens, max_input_tokens, max_output_tokens, context_limit_semantics,
+     token_limits_source, token_limits_status, token_limits_note, token_limits_updated_by,
+     token_limits_updated_at_utc_msc, provider, model_name, api_base_url, protocol,
+     verification_status, verified_by_user_id, verified_at_utc_msc, updated_at_utc_msc)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE supports_stream = VALUES(supports_stream),
+      supports_request_id = VALUES(supports_request_id), supports_poll = VALUES(supports_poll),
+      supports_cancel = VALUES(supports_cancel), supports_idempotency = VALUES(supports_idempotency),
+      supports_structured_output = VALUES(supports_structured_output), supports_usage_split = VALUES(supports_usage_split),
+      context_window_tokens = VALUES(context_window_tokens), max_input_tokens = VALUES(max_input_tokens),
+      max_output_tokens = VALUES(max_output_tokens), context_limit_semantics = VALUES(context_limit_semantics),
+      token_limits_source = VALUES(token_limits_source), token_limits_status = VALUES(token_limits_status),
+      token_limits_note = VALUES(token_limits_note), token_limits_updated_by = VALUES(token_limits_updated_by),
+      token_limits_updated_at_utc_msc = VALUES(token_limits_updated_at_utc_msc),
+      provider = VALUES(provider), model_name = VALUES(model_name), api_base_url = VALUES(api_base_url),
+      protocol = VALUES(protocol), verification_status = VALUES(verification_status),
+      verified_by_user_id = VALUES(verified_by_user_id), verified_at_utc_msc = VALUES(verified_at_utc_msc),
+      updated_at_utc_msc = VALUES(updated_at_utc_msc)`, params)
+  return Array.isArray(raw) ? raw[0] : raw
+}
+
+/**
+ * Resolve and locally validate the complete configuration that is about to be
+ * saved. This function performs no writes and is intentionally separate from
+ * the provider request so a failed validation cannot replace an active row.
+ */
+export async function prepareModelProfileForSave({ id = null, userId, payload = {}, callerRole } = {}) {
+  const existing = id == null
+    ? null
+    : await queryOne('SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL', [id])
+  if (id != null && !existing) throw new Error('model_profile_not_found')
+  if (existing && Number(existing.owner_user_id) !== Number(userId)) throw new Error('model_profile_access_denied')
+  const suppliedExpectedUpdatedAt = payload.expected_profile_updated_at
+    ?? payload.expected_updated_at ?? payload.updated_at
+  if (existing && suppliedExpectedUpdatedAt !== undefined && suppliedExpectedUpdatedAt !== null
+      && String(suppliedExpectedUpdatedAt) !== String(existing.updated_at)) {
+    throw new Error('model_profile_conflict')
+  }
+
+  const requestedScope = payload.scope || existing?.scope || MODEL_PROFILE_SCOPE.USER
+  if (requestedScope === MODEL_PROFILE_SCOPE.PLATFORM && callerRole !== 'admin') {
+    throw new Error('platform_scope_requires_admin')
+  }
+  if (existing && requestedScope !== existing.scope) throw new Error('model_profile_scope_immutable')
+  const scope = existing?.scope || requestedScope
+  const ownerUserId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
+  const providerConfig = normalizeModelProviderProfile(payload, existing || {})
+  const requestTimeoutMs = normalizeRequestTimeout(payload.request_timeout_ms, existing?.request_timeout_ms)
+  const oldCapability = existing ? await getModelProviderCapabilities(existing.id) : null
+  const identity = { ...modelIdentity(providerConfig), protocol:modelProviderProtocol(providerConfig.provider) }
+  const identityChanged = modelIdentityChanged(oldCapability, identity, existing || {})
+  const tokenLimits = normalizeModelTokenLimits(payload,
+    identityChanged ? MODEL_TOKEN_LIMIT_DEFAULTS : (oldCapability || MODEL_TOKEN_LIMIT_DEFAULTS))
+
+  let encryptedKey = existing?.api_key_encrypted || null
+  let keyVersion = existing?.key_version || null
+  let apiKey = payload.api_key
+  if (apiKey) {
+    if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
+    encryptedKey = encryptCredential(apiKey)
+    keyVersion = getActiveKeyVersion()
+  } else if (encryptedKey) {
+    if (!isEncryptionAvailable() || !isEncryptedEnvelope(encryptedKey)) throw new Error('credential_not_encrypted')
+    apiKey = decryptCredential(encryptedKey)
+  }
+  if (!apiKey) throw new Error('model_api_key_required')
+  let legacyMaxTokens = existing?.max_tokens ?? 2000
+  if (payload.max_tokens !== undefined && payload.max_tokens !== null && payload.max_tokens !== '') {
+    legacyMaxTokens = normalizeMaxTokens(payload.max_tokens, legacyMaxTokens)
+  }
+
+  return {
+    id:id == null ? null : Number(id), existing, scope, ownerUserId, providerConfig,
+    requestTimeoutMs, tokenLimits, identity, identityChanged, oldCapability,
+    encryptedKey, keyVersion, apiKey, legacyMaxTokens,
+    temperature:payload.temperature ?? existing?.temperature ?? 0.3,
+    expectedUpdatedAt:suppliedExpectedUpdatedAt ?? existing?.updated_at ?? null,
+    runtimeModel:{
+      id:existing?.id || null, provider:providerConfig.provider, api_provider:providerConfig.provider,
+      model_name:providerConfig.model_name, api_base_url:providerConfig.api_base_url,
+      api_key_encrypted:apiKey, key_version:keyVersion, temperature:payload.temperature ?? existing?.temperature ?? 0.3,
+      max_tokens:tokenLimits.max_output_tokens, max_output_tokens:tokenLimits.max_output_tokens,
+      context_window_tokens:tokenLimits.context_window_tokens, max_input_tokens:tokenLimits.max_input_tokens,
+      thinking_enabled:providerConfig.thinking_enabled, reasoning_effort:providerConfig.reasoning_effort,
+      request_timeout_ms:requestTimeoutMs, owner_user_id:ownerUserId,
+    },
+  }
+}
+
+/** Verify once, then commit the profile and its manually confirmed limits. */
+export async function saveModelProfileWithValidation({ id = null, userId, payload = {}, callerRole, verify } = {}) {
+  const prepared = await prepareModelProfileForSave({ id, userId, payload, callerRole })
+  if (typeof verify !== 'function') throw new Error('model_profile_verification_required')
+  await verify(prepared.runtimeModel, prepared)
+
+  const now = beijingNow()
+  const capability = tokenCapabilityFields(prepared.oldCapability, prepared.tokenLimits, userId,
+    prepared.identity, prepared.oldCapability?.verification_status || 'unverified', prepared.identityChanged)
+  let profileId = prepared.id
+  await withTransaction(async run => {
+    if (prepared.id == null) {
+      const raw = await run(`INSERT INTO ai_model_profiles
+        (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
+         temperature, max_tokens, thinking_enabled, reasoning_effort, request_timeout_ms, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`, [
+        prepared.ownerUserId, prepared.scope, prepared.providerConfig.provider, prepared.providerConfig.model_name,
+        prepared.providerConfig.api_base_url, prepared.encryptedKey, prepared.keyVersion, prepared.temperature,
+        prepared.legacyMaxTokens, prepared.providerConfig.thinking_enabled, prepared.providerConfig.reasoning_effort,
+        prepared.requestTimeoutMs, now, now])
+      const result = Array.isArray(raw) ? raw[0] : raw
+      profileId = Number(result?.insertId || 0)
+      if (!profileId) throw new Error('model_profile_save_failed')
+    } else {
+      const raw = await run(`UPDATE ai_model_profiles SET
+        provider = ?, model_name = ?, api_base_url = ?, api_key_encrypted = ?, key_version = ?,
+        temperature = ?, max_tokens = ?, thinking_enabled = ?, reasoning_effort = ?, request_timeout_ms = ?,
+        updated_at = ?
+       WHERE id = ? AND deleted_at IS NULL AND updated_at = ?`, [
+        prepared.providerConfig.provider, prepared.providerConfig.model_name, prepared.providerConfig.api_base_url,
+        prepared.encryptedKey, prepared.keyVersion, prepared.temperature, prepared.legacyMaxTokens,
+        prepared.providerConfig.thinking_enabled, prepared.providerConfig.reasoning_effort, prepared.requestTimeoutMs,
+        now, prepared.id, prepared.expectedUpdatedAt])
+      const result = Array.isArray(raw) ? raw[0] : raw
+      if (!Number(result?.affectedRows ?? result?.changes ?? 0)) throw new Error('model_profile_conflict')
+    }
+    await upsertModelProfileCapability(run, profileId, capability, userId)
+  })
+  return await getModelProfileById(profileId)
 }
 
 // ─── Model Profiles CRUD ───
@@ -94,13 +313,20 @@ export async function createModelProfile(userId, payload, callerRole) {
       now, now,
     ]
   )
+  await saveModelProviderCapabilities(result.insertId, {
+    ...modelIdentity(providerConfig),
+    protocol:modelProviderProtocol(providerConfig.provider),
+    ...MODEL_TOKEN_LIMIT_DEFAULTS,
+    token_limits_source:'generic_default', token_limits_status:'default_unconfirmed',
+    verification_status:'unverified', capability_source:'profile_default',
+  }, ownerUserId)
   return await getModelProfileById(result.insertId)
 }
 
 export async function getModelProfileById(id) {
   const row = await queryOne('SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL', [id])
   if (!row) return null
-  return sanitizeProfile(row)
+  return await sanitizeProfileWithCapabilities(row)
 }
 
 export async function getUserModelProfiles(userId) {
@@ -108,7 +334,7 @@ export async function getUserModelProfiles(userId) {
     'SELECT * FROM ai_model_profiles WHERE owner_user_id = ? AND deleted_at IS NULL ORDER BY is_default DESC, updated_at DESC',
     [userId]
   )
-  return rows.map(sanitizeProfile)
+  return await Promise.all(rows.map(row => sanitizeProfileWithCapabilities(row)))
 }
 
 export async function upsertDefaultModelProfileFromLegacyInput(userId, callerRole, payload = {}, scope = 'user') {
@@ -171,6 +397,18 @@ export async function updateModelProfile(id, userId, payload) {
       now, id,
     ]
   )
+  const previousCapability = await getModelProviderCapabilities(id)
+  const identity = {
+    ...modelIdentity(providerConfig),
+    protocol:modelProviderProtocol(providerConfig.provider),
+  }
+  const changed = modelIdentityChanged(previousCapability, identity, existing)
+  await saveModelProviderCapabilities(id, {
+    ...(changed ? {} : previousCapability), ...identity,
+    ...(changed ? { ...MODEL_TOKEN_LIMIT_DEFAULTS, token_limits_source:'generic_default', token_limits_status:'default_unconfirmed' } : {}),
+    verification_status:changed ? 'unverified' : (previousCapability.verification_status || 'unverified'),
+    verified_at_utc_msc:changed ? null : previousCapability.verified_at_utc_msc,
+  }, userId)
   return await getModelProfileById(id)
 }
 
@@ -638,6 +876,26 @@ function sanitizeProfile(row) {
   out.masked_api_key = out.has_api_key ? '****' : null
   delete out.api_key_encrypted
   return out
+}
+
+async function sanitizeProfileWithCapabilities(row) {
+  const profile = sanitizeProfile(row)
+  const capabilities = await getModelProviderCapabilities(row.id)
+  return {
+    ...profile,
+    context_window_tokens:capabilities.context_window_tokens,
+    max_input_tokens:capabilities.max_input_tokens,
+    max_output_tokens:capabilities.max_output_tokens,
+    context_limit_semantics:capabilities.context_limit_semantics,
+    token_limits_source:capabilities.token_limits_source,
+    token_limits_status:capabilities.token_limits_status,
+    token_limits_note:capabilities.token_limits_note,
+    token_limits_updated_by:capabilities.token_limits_updated_by,
+    token_limits_updated_at_utc_msc:capabilities.token_limits_updated_at_utc_msc,
+    verification_status:capabilities.verification_status,
+    provider_verification_status:capabilities.verification_status,
+    provider_capability_source:capabilities.capability_source || null,
+  }
 }
 
 // ─── Legacy Migration Helpers ───

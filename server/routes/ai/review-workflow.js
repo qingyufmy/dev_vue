@@ -2,6 +2,8 @@ import crypto from 'crypto'
 import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../../db.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
+import { estimateModelInputTokens, selectModelTaskBudget } from './model-task-budget.js'
+import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { parseSnapshotJson, sha256 } from './inference-snapshots.js'
 import { isAiFeatureEnabled } from './rollout-governance.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
@@ -289,10 +291,32 @@ async function generateReview(reviewCase, requestModel = requestJsonObject) {
   const endpoint = modelEndpoint(resolved.model)
   const system = `你是严格的交易复盘分析器。只依据提供的证据判断，不得把亏损直接等同于决策错误，也不得把盈利直接等同于决策正确。区分推理时证据与交易后结果；无法判断时使用 insufficient_evidence。只返回 JSON。除 JSON 字段名和规定枚举值外，summary、outcome_summary、description、strengths、lessons 等全部用户可见内容必须使用简体中文，禁止内部错误码、英文状态或整句英文；品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。`
   const shape = { summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence', outcome_summary: 'string', trade_process_issues: [{ code: 'string', severity: 'low|medium|high|critical', description: 'string', evidence_refs: ['ref key'] }], strengths: ['string'], lessons: ['string'], evidence_refs: ['ref key'], confidence: 0.5 }
+  let capabilities = {}
+  try {
+    capabilities = await getModelProviderCapabilities(resolved.model_profile_id) || {}
+  } catch (error) {
+    console.warn('[TradeReview] provider capability lookup unavailable:', safeError(error))
+  }
+  const messages = [{ role: 'system', content: system }, { role: 'user', content: `输出结构：${json(shape)}\n\n证据包：${json(evidence)}` }]
+  const budget = selectModelTaskBudget({
+    taskKind:'manual_analysis',
+    profileHardCap:Number(resolved.model.max_tokens) || 3000,
+    providerOutputCap:capabilities.max_output_tokens,
+    contextWindowTokens:capabilities.context_window_tokens,
+    maxInputTokens:capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens,
+    contextLimitSemantics:capabilities.context_limit_semantics,
+    capabilities,
+    profile:resolved.model,
+    estimatedInputTokens:estimateModelInputTokens(messages),
+    schemaNeedTokens:0,
+    legacyExactProfileCap:true,
+  })
+  if (budget.reason === 'model_input_limit_exceeded' || budget.inputLimitExceeded) throw new Error('model_input_limit_exceeded')
+  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
   const content = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider, model: resolved.model.model_name,
-    temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens: resolved.model.max_tokens || 3000,
+    temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens: budget.selectedMaxOutputTokens,
     thinkingEnabled: resolved.model.thinking_enabled, reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
-    messages: [{ role: 'system', content: system }, { role: 'user', content: `输出结构：${json(shape)}\n\n证据包：${json(evidence)}` }],
+    messages, modelTaskBudget:budget,
     usageContext: { userId: reviewCase.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId },
   })
   return { content: validateReviewContent(content, evidence.evidence_refs), resolved }

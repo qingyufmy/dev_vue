@@ -1527,14 +1527,32 @@ describe('route permissions and credential redaction', () => {
     expect(adminApp).not.toContain('payload.strategy_policy')
   })
 
-  it('explains automatic task budgets and the model output hard cap in both model editors', () => {
-    expect(html).toContain('任务预算')
-    expect(html).toContain('模型输出硬上限')
-    expect(html).toContain('不会每次固定申请')
-    expect(html).toContain('连接测试超时（秒）')
-    expect(html).toContain('仅用于“测试连接”')
-    expect(adminApp).toContain('任务预算：自动管理')
-    expect(adminApp).toContain("textContent='模型输出硬上限'")
-    expect(adminApp).toContain("textContent='连接测试超时（毫秒）'")
+  it('uses physical token capabilities and validates before saving in both model editors', () => {
+    for (const field of ['profileContextWindowTokens', 'profileMaxInputTokens', 'profileMaxOutputTokens']) {
+      expect(html).toContain(`id="${field}"`)
+    }
+    expect(html).toContain('默认值来自 DeepSeek 初始能力')
+    expect(html).toContain('思维链会占用最大输出额度')
+    expect(html).toContain('保存并验证')
+    expect(html).not.toContain('模型输出硬上限')
+    expect(html).not.toContain('profileMaxTokens')
+    expect(app).toContain('context_window_tokens: Number($("profileContextWindowTokens").value)')
+    expect(app).toContain('max_input_tokens: Number($("profileMaxInputTokens").value)')
+    expect(app).toContain('max_output_tokens: Number($("profileMaxOutputTokens").value)')
+    expect(app).not.toContain('max_tokens:')
+    expect(app).toContain('button.textContent = "正在验证…"')
+    expect(app).toContain('toast("模型已验证并保存", "success")')
+    expect(adminApp).toContain('id="platformModelContextWindowTokens"')
+    expect(adminApp).toContain('id="platformModelMaxInputTokens"')
+    expect(adminApp).toContain('id="platformModelMaxOutputTokens"')
+    expect(adminApp).toContain('保存并验证')
+    expect(adminApp).not.toContain('platformModelMaxTokens')
+    expect(adminApp).not.toContain('max_tokens:')
+    expect(adminApp).toContain("button.textContent='正在验证…'")
+    expect(adminApp).toContain("toast('模型已验证并保存','success')")
+    for (const code of ['model_token_limits_invalid', 'model_request_unauthorized', 'model_rate_limited', 'model_service_unavailable', 'model_output_incomplete', 'model_connection_auth_failed', 'model_connection_invalid_api_key', 'model_connection_rate_limited', 'model_connection_model_unavailable', 'model_connection_request_rejected', 'model_connection_token_limits_rejected', 'model_connection_output_incomplete', 'model_connection_unavailable']) {
+      expect(app).toContain(code)
+      expect(adminApp).toContain(code)
+    }
   })
 })

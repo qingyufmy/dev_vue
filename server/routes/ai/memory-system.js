@@ -64,12 +64,23 @@ async function prepareMemoryCompressionModelCall(resolved, messages, {
     profileHardCap:Number(resolved?.model?.max_tokens) || undefined,
     providerOutputCap:capabilities.max_output_tokens,
     contextWindowTokens:capabilities.context_window_tokens,
+    maxInputTokens:capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens,
+    contextLimitSemantics:capabilities.context_limit_semantics,
+    capabilities,
+    profile:resolved?.model,
     estimatedInputTokens:estimateModelInputTokens(messages),
     schemaNeedTokens:Math.max(1_200, Math.ceil(JSON.stringify(messages).length / 8)),
   })
-  // Keep profile/provider/context limits as hard caps and fail explicitly
-  // when they cannot satisfy the output contract.
-  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
+  if (budget.reason === 'model_input_limit_exceeded' || budget.inputLimitExceeded) {
+    const error = new Error('model_input_limit_exceeded')
+    error.code = error.message
+    throw error
+  }
+  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) {
+    const error = new Error('output_budget_insufficient')
+    error.code = error.message
+    throw error
+  }
   const rawDeadlines = modelTaskDeadlines('memory_compression', { nowUtcMs, businessDeadlineUtcMs })
   const deadlines = {
     ...rawDeadlines,
@@ -1305,7 +1316,7 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       onProviderUsage:event => tracker.onProviderUsage(event),
       onProviderActivity:event => tracker.onProviderActivity(event),
       onProviderQuiet:event => tracker.onProviderQuiet(event),
-      messages,
+      messages, modelTaskBudget:modelCall.budget,
       usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'memory_compression', strategyId: null },
     })
     const outputIds = Array.isArray(output.source_memory_ids) ? output.source_memory_ids.map(Number).sort((a, b) => a - b) : []

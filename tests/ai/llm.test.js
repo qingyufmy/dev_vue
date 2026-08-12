@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, resolveConfirmedRequestMaxTokens, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
 import { compactRates, DEFAULT_PROMPT } from '../../server/routes/ai/utils.js'
 import { POSITION_MANAGEMENT_CONTRACT_VERSION } from '../../server/routes/ai/position-management.js'
 
@@ -10,6 +10,15 @@ describe('model output budgets', () => {
     expect(configuredModelMaxTokens({ _usage:'auto_private', max_tokens:150000 })).toBe(150000)
     expect(configuredModelMaxTokens({ _usage:'manual', max_tokens:30000 })).toBe(30000)
     expect(configuredModelMaxTokens({ _usage:'auto_platform' })).toBe(2000)
+  })
+
+  it('recomputes shared-context room for both initial and repair messages', () => {
+    const budget = { tokenLimitsStatus:'confirmed', maxInputTokens:1000,
+      contextWindowTokens:100, providerOutputCap:80, contextLimitSemantics:'shared_context' }
+    const initial = [{ role:'user', content:'a'.repeat(32) }]
+    const repair = [...initial, { role:'user', content:'b'.repeat(160) }]
+    expect(resolveConfirmedRequestMaxTokens(initial, 80, budget)).toBe(80)
+    expect(resolveConfirmedRequestMaxTokens(repair, 80, budget)).toBeLessThan(80)
   })
 })
 
@@ -388,6 +397,16 @@ describe('requestJsonObject', () => {
     expect(onProviderActivity).toHaveBeenCalledWith(expect.objectContaining({
       state:'response_headers', providerRequestId:'req-success', responseReceived:true,
     }))
+  })
+
+  it('rejects confirmed physical input overflow before making a provider request', async () => {
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:80,
+      messages:[{ role:'user', content:'test input' }],
+      modelTaskBudget:{ tokenLimitsStatus:'confirmed', maxInputTokens:1,
+        contextWindowTokens:1000, contextLimitSemantics:'shared_context' },
+    })).rejects.toMatchObject({ code:'model_input_limit_exceeded', message:'model_input_limit_exceeded' })
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('records split token usage without learning output budget from total tokens', () => {

@@ -140,13 +140,24 @@ export async function persistModelTaskBudget(task, budget = {}) {
     ? Math.trunc(Number(budget.contextWindowTokens)) : null
   const providerOutputCap = Number(budget.providerOutputCap) > 0
     ? Math.trunc(Number(budget.providerOutputCap)) : null
+  const providerMaxInputTokens = Number(budget.providerMaxInputTokens ?? budget.maxInputTokens) > 0
+    ? Math.trunc(Number(budget.providerMaxInputTokens ?? budget.maxInputTokens)) : null
+  const contextLimitSemantics = ['shared_context', 'separate'].includes(String(budget.contextLimitSemantics || '').trim())
+    ? String(budget.contextLimitSemantics).trim() : 'shared_context'
+  const tokenLimitsSource = budget.tokenLimitsSource == null ? null : String(budget.tokenLimitsSource).slice(0, 64)
+  const tokenLimitsStatus = budget.tokenLimitsStatus == null ? null : String(budget.tokenLimitsStatus).slice(0, 32)
+  const tokenLimitsUpdatedAt = Number(budget.tokenLimitsUpdatedAtUtcMs ?? budget.token_limits_updated_at_utc_msc) > 0
+    ? Math.trunc(Number(budget.tokenLimitsUpdatedAtUtcMs ?? budget.token_limits_updated_at_utc_msc)) : null
   const result = await queryRun(`UPDATE ai_model_tasks SET estimated_input_tokens = ?,
     selected_output_budget = ?, schema_need_tokens = ?, context_window_tokens = ?,
-    provider_output_cap = ?, last_activity_at_utc_msc = ?, updated_at_utc_msc = ?
+    provider_output_cap = ?, provider_max_input_tokens = ?, context_limit_semantics = ?,
+    token_limits_source = ?, token_limits_status = ?, token_limits_updated_at_utc_msc = ?,
+    last_activity_at_utc_msc = ?, updated_at_utc_msc = ?
     WHERE task_id = ? AND lease_token = ? AND fencing_token = ?
-      AND status = 'preparing'`,
+    AND status = 'preparing'`,
   [estimatedInputTokens, selectedOutputBudget, schemaNeedTokens, contextWindowTokens,
-    providerOutputCap, now, now, task.task_id, task.lease_token, Number(task.fencing_token)])
+    providerOutputCap, providerMaxInputTokens, contextLimitSemantics, tokenLimitsSource, tokenLimitsStatus,
+    tokenLimitsUpdatedAt, now, now, task.task_id, task.lease_token, Number(task.fencing_token)])
   if (Number(result?.affectedRows ?? result?.changes ?? 0) !== 1) throw new Error('model_task_fence_lost')
   const persisted = {
     estimatedInputTokens,
@@ -154,6 +165,12 @@ export async function persistModelTaskBudget(task, budget = {}) {
     schemaNeedTokens,
     contextWindowTokens,
     providerOutputCap,
+    providerMaxInputTokens,
+    maxInputTokens:providerMaxInputTokens,
+    contextLimitSemantics,
+    tokenLimitsSource,
+    tokenLimitsStatus,
+    tokenLimitsUpdatedAtUtcMs:tokenLimitsUpdatedAt,
   }
   await appendModelTaskEvent(task.task_id, 'budget_persisted', persisted)
   return { ...task, ...persisted }

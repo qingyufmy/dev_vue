@@ -124,7 +124,7 @@
 | `context_window_tokens` | 人工保存的上下文窗口；初始 1048576 |
 | `max_input_tokens` | 人工保存的最大输入；初始 1048576 |
 | `max_output_tokens` | 人工保存的最大输出；初始 393216；协议若合计思维链，则思维链占用此额度 |
-| `context_limit_semantics` | `shared_context` 或 `separate`；初始为较保守的 `shared_context` |
+| `context_limit_semantics` | 内部解析字段，`shared_context` 或 `separate`；不作为第四个人工表单项，未知时按较保守的 `shared_context` |
 | `token_limits_source` | `manual_confirmed`、`generic_default`、`legacy_unverified` |
 | `token_limits_status` | `default_unconfirmed`、`confirmed`、`stale` |
 | `token_limits_note` | 人工填写的服务商文档说明或内部备注；禁止凭据 |
@@ -154,7 +154,7 @@
 - `PUT /api/ai/model-profiles/:id`
 - 平台模型继续通过统一管理后台调用同一服务层，owner 为 0；普通用户只能操作自己的资料。
 
-请求增加 `context_window_tokens`、`max_input_tokens`、`max_output_tokens` 和 `context_limit_semantics`。三个 token 字段都必须是数据库可表示的正整数；校验只防止空值、非整数、负数、语义冲突和溢出，不设置比人工值更小的 AURUM 隐藏上限。
+请求只增加 `context_window_tokens`、`max_input_tokens` 和 `max_output_tokens`。三个字段都必须是数据库可表示的正整数；校验只防止空值、非整数、负数、语义冲突和溢出，不设置比人工值更小的 AURUM 隐藏上限。`context_limit_semantics` 由后端根据 provider/protocol 内部解析，未知时采用 `shared_context`，不要求用户理解或填写第四项。
 
 ### 5.2 默认值与确认
 
@@ -198,7 +198,6 @@
 - 上下文窗口；
 - 最大输入；
 - 最大输出；
-- 上下文限制语义；
 - 状态：通用初始值/已人工确认/模型资料变化后待重新确认；
 - 最近确认人和时间；
 - 固定提示：“默认值不是服务商官方规格，请按当前模型文档核对。”；
@@ -401,7 +400,7 @@ separate input/output limits:
 ## 13. 实施顺序
 
 1. 扩展能力表与能力服务。
-2. 扩展模型资料 API，支持上下文、最大输入、最大输出和上下文语义的人工配置。
+2. 扩展模型资料 API，只支持上下文窗口、最大输入和最大输出三项人工配置；上下文语义由后端内部解析。
 3. 实现单请求保存验证、验证成功后落库和失败不写入。
 4. 改造个人与平台模型界面，统一为“保存并验证”。
 5. 补齐所有 active profile 的物理能力并逐个完成保存验证。

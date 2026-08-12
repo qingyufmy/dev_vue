@@ -71,4 +71,73 @@ describe('model task adaptive budget', () => {
   it('uses a conservative input estimate', () => {
     expect(estimateModelInputTokens('中'.repeat(3200))).toBe(1000)
   })
+
+  it('uses the confirmed physical output even when task history and schema need are smaller', () => {
+    const result = selectModelTaskBudget({ taskKind:'auto_inference', profileHardCap:8_000,
+      estimatedInputTokens:10_000, schemaNeedTokens:1_200, historicalOutputP95:4_000,
+      truncatedOutputHighWatermark:2_000, capabilities:{
+        token_limits_status:'confirmed', token_limits_source:'manual_confirmed',
+        context_window_tokens:1_048_576, max_input_tokens:1_048_576,
+        max_output_tokens:393_216, context_limit_semantics:'shared_context',
+      } })
+    expect(result.selectedMaxOutputTokens).toBe(393_216)
+    expect(result.legacyFallback).toBe(false)
+    expect(result.tokenLimitsStatus).toBe('confirmed')
+  })
+
+  it('deducts estimated input from a confirmed shared context only', () => {
+    const result = selectModelTaskBudget({ taskKind:'manual_analysis', profileHardCap:2_000,
+      estimatedInputTokens:90, schemaNeedTokens:50, capabilities:{
+        token_limits_status:'confirmed', context_window_tokens:100, max_input_tokens:100,
+        max_output_tokens:80, context_limit_semantics:'shared_context',
+      } })
+    expect(result.selectedMaxOutputTokens).toBe(10)
+    expect(result.contextRoomTokens).toBe(10)
+    const separate = selectModelTaskBudget({ taskKind:'manual_analysis', profileHardCap:2_000,
+      estimatedInputTokens:90, capabilities:{
+        token_limits_status:'confirmed', context_window_tokens:100, max_input_tokens:100,
+        max_output_tokens:80, context_limit_semantics:'separate',
+      } })
+    expect(separate.selectedMaxOutputTokens).toBe(80)
+  })
+
+  it('fails with stable input and output budget reasons under confirmed limits', () => {
+    const input = selectModelTaskBudget({ taskKind:'manual_analysis', estimatedInputTokens:101,
+      capabilities:{ token_limits_status:'confirmed', context_window_tokens:1000,
+        max_input_tokens:100, max_output_tokens:80, context_limit_semantics:'shared_context' } })
+    expect(input.reason).toBe('model_input_limit_exceeded')
+    expect(input.sufficient).toBe(false)
+    const output = selectModelTaskBudget({ taskKind:'manual_analysis', estimatedInputTokens:1000,
+      capabilities:{ token_limits_status:'confirmed', context_window_tokens:1000,
+        max_input_tokens:2000, max_output_tokens:80, context_limit_semantics:'shared_context' } })
+    expect(output.reason).toBe('output_budget_insufficient')
+    expect(output.sufficient).toBe(false)
+  })
+
+  it('marks the migration path and keeps profile max_tokens as the legacy fallback', () => {
+    const result = selectModelTaskBudget({ taskKind:'manual_analysis', profileHardCap:7_777,
+      estimatedInputTokens:100, schemaNeedTokens:1_200, capabilities:{
+        token_limits_status:'default_unconfirmed', context_window_tokens:1_048_576,
+        max_input_tokens:1_048_576, max_output_tokens:393_216,
+      } })
+    expect(result.selectedMaxOutputTokens).toBe(2_000)
+    expect(result.legacyFallback).toBe(true)
+    expect(result.tokenLimitsStatus).toBe('default_unconfirmed')
+  })
+
+  it('keeps manual trade review legacy cap shaping while confirmed limits ignore it', () => {
+    const legacyProfileCap = Math.min(4_096, Math.max(1_200, 8_000))
+    const legacy = selectModelTaskBudget({ taskKind:'manual_analysis', profileHardCap:legacyProfileCap,
+      estimatedInputTokens:100, capabilities:{ token_limits_status:'default_unconfirmed' },
+      legacyExactProfileCap:true })
+    expect(legacy.selectedMaxOutputTokens).toBe(4_096)
+    expect(legacy.legacyFallback).toBe(true)
+    const confirmed = selectModelTaskBudget({ taskKind:'manual_analysis', profileHardCap:legacyProfileCap,
+      estimatedInputTokens:100, capabilities:{ token_limits_status:'confirmed',
+        context_window_tokens:1_048_576, max_input_tokens:1_048_576,
+        max_output_tokens:393_216, context_limit_semantics:'shared_context' },
+      legacyExactProfileCap:true })
+    expect(confirmed.selectedMaxOutputTokens).toBe(393_216)
+    expect(confirmed.legacyFallback).toBe(false)
+  })
 })

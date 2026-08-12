@@ -496,12 +496,14 @@
                 <label><span>API 地址</span><input id="profileBaseUrl" value="https://api.deepseek.com" autocomplete="off"></label>
                 <label><span>API Key</span><input id="profileApiKey" type="password" autocomplete="new-password" placeholder="编辑时留空表示不更换"></label>
                 <label><span>Temperature</span><input id="profileTemperature" type="number" min="0" max="2" step="0.1" value="0.3"></label>
-                <label class="is-readonly"><span>任务预算</span><input value="自动管理" readonly aria-readonly="true"><small class="field-help">按任务类型、输入长度、输出合同和已验证模型能力自动选择。</small></label>
-                <label><span>模型输出硬上限</span><input id="profileMaxTokens" type="number" min="100" step="100" value="8000"><small class="field-help">系统按任务复杂度自动选择本次预算；30000 表示最多可用 30000，不会每次固定申请。实际能力仍以服务商已验证限制为准。</small></label>
+                <div class="field-help span-2 model-token-capability-note">默认值来自 DeepSeek 初始能力：上下文窗口 1024K、最大输入 1024K、最大输出 384K。其他模型请按当前服务商和模型文档核对后修改；如果思考模型的协议把思维链计入输出，思维链会占用最大输出额度。</div>
+                <label><span>上下文窗口（tokens）</span><input id="profileContextWindowTokens" type="number" min="1" step="1" value="1048576"><small class="field-help">模型一次请求可使用的上下文总量。</small></label>
+                <label><span>最大输入（tokens）</span><input id="profileMaxInputTokens" type="number" min="1" step="1" value="1048576"><small class="field-help">按当前模型文档填写可接受的最大输入。</small></label>
+                <label><span>最大输出（tokens）</span><input id="profileMaxOutputTokens" type="number" min="1" step="1" value="393216"><small class="field-help">回答与协议计入的思维链共用此额度。</small></label>
                 <label><span>连接测试超时（秒）</span><input id="profileRequestTimeout" type="number" min="30" max="600" step="10" value="" placeholder="默认 120"><small class="field-help">仅用于“测试连接”；正式推理由自动分析、手动分析和复盘各自的任务级安全期限控制。</small></label>
                 <label class="inline-check-card"><input id="profileThinkingEnabled" type="checkbox" checked><span><strong>启用深度思考</strong><small id="profileThinkingHelp">复杂行情判断更稳，但分析耗时更长</small></span></label>
               </div>
-              <div class="form-actions form-modal-actions"><button id="saveModelProfileBtn" class="btn btn-primary">保存模型</button></div>
+              <div class="form-actions form-modal-actions"><button id="saveModelProfileBtn" class="btn btn-primary" type="button">保存并验证</button></div>
             </section>
             </div>
             <div id="modelProfilesList" class="workspace-list"><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div></div>
@@ -1331,7 +1333,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260812historypref2&build=signalbandwidth1-notifications1-analysisloading1"></script>
+    <script src="/ai/app.js?v=20260812historypref2&build=signalbandwidth1-notifications1-analysisloading1-tokenlimits1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

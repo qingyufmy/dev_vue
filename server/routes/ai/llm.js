@@ -931,6 +931,35 @@ async function emitModelProgress(onProgress, stage) {
   try { await onProgress(stage) } catch (error) { console.error('[LLM] Progress callback failed:', error.message) }
 }
 
+/** Keep every initial or repair request inside the confirmed physical limits. */
+export function resolveConfirmedRequestMaxTokens(messages, requestedMaxTokens, modelTaskBudget = null) {
+  const requested = Math.max(0, Math.trunc(Number(requestedMaxTokens) || 0))
+  if (modelTaskBudget?.tokenLimitsStatus !== 'confirmed') return requested
+  const actualInputTokens = estimateModelInputTokens(messages)
+  const maxInput = Number(modelTaskBudget.maxInputTokens ?? modelTaskBudget.providerMaxInputTokens)
+  if (!Number.isInteger(maxInput) || maxInput <= 0 || actualInputTokens > maxInput) {
+    const error = new Error('model_input_limit_exceeded')
+    error.code = error.message
+    throw error
+  }
+  let physicalRoom = Number.POSITIVE_INFINITY
+  if (modelTaskBudget.contextLimitSemantics === 'shared_context') {
+    const contextWindow = Number(modelTaskBudget.contextWindowTokens)
+    if (!Number.isInteger(contextWindow) || contextWindow <= 0) physicalRoom = 0
+    else physicalRoom = Math.max(0, contextWindow - actualInputTokens)
+  }
+  const providerOutput = Number(modelTaskBudget.providerOutputCap)
+  const effective = Math.min(requested,
+    Number.isInteger(providerOutput) && providerOutput > 0 ? providerOutput : Number.POSITIVE_INFINITY,
+    physicalRoom)
+  if (!Number.isFinite(effective) || effective <= 0) {
+    const error = new Error('output_budget_insufficient')
+    error.code = error.message
+    throw error
+  }
+  return Math.trunc(effective)
+}
+
 export async function requestJsonObject({
   url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled,
   reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null,
@@ -940,11 +969,13 @@ export async function requestJsonObject({
   providerQuietAfterMs = 60_000, repairContext = null,
   allowFollowupRequests = true, deadlineAtMs = null,
   followupValidUntilMs = null, minimumFollowupWindowMs = 15_000,
+  modelTaskBudget = null,
 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
   signal?.throwIfAborted()
+  const initialMaxTokens = resolveConfirmedRequestMaxTokens(messages, maxTokens, modelTaskBudget)
   const taskDeadlineAtMs = deadlineAtMs != null && Number.isFinite(Number(deadlineAtMs))
     ? Number(deadlineAtMs)
     : Date.now() + Math.max(1, Math.trunc(Number(timeout) || 120000))
@@ -969,9 +1000,9 @@ export async function requestJsonObject({
     }
   }
   const supportsStream = resolvedCapabilities?.supports_stream === true
-  const body = buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort,
+  const body = buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens:initialMaxTokens, messages, thinkingEnabled, reasoningEffort,
     supportsStream })
-  const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + Math.max(0, Number(maxTokens) || 0)
+  const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + initialMaxTokens
   await emitModelProgress(onProgress, 'model_request')
   const { response, data } = await trackedModelRequest({
     url, apiKey, body, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
@@ -995,11 +1026,12 @@ export async function requestJsonObject({
       ...messages,
       { role:'user', content:'上一次响应正文为空。请重新完成原任务，只返回一个完整、合法的 JSON 对象，不要 Markdown 或解释。' },
     ]
+    const emptyRetryMaxTokens = resolveConfirmedRequestMaxTokens(emptyRetryMessages, maxTokens, modelTaskBudget)
     const emptyRetryBody = buildLlmRequestBody({
-      protocol, provider, model, temperature:0, maxTokens, messages:emptyRetryMessages,
+      protocol, provider, model, temperature:0, maxTokens:emptyRetryMaxTokens, messages:emptyRetryMessages,
       thinkingEnabled, reasoningEffort, supportsStream,
     })
-    const emptyRetryEstimate = Math.ceil(JSON.stringify(emptyRetryMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
+    const emptyRetryEstimate = Math.ceil(JSON.stringify(emptyRetryMessages).length / 4) + emptyRetryMaxTokens
     const { data: emptyRetryData } = await trackedModelRequest({
       url, apiKey, body:emptyRetryBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
       estimatedTokens:emptyRetryEstimate, phase:'repair', provider, signal, onProviderRequest, onProviderUsage,
@@ -1043,11 +1075,12 @@ export async function requestJsonObject({
       { role:'assistant', content:content.substring(0, 6000) },
       { role:'user', content:`上一次输出未通过系统校验，错误代码为：${exc.message}。请严格按照最初要求的字段名、数据类型、枚举值和完整覆盖范围修正。必须补齐所有必填字段，只返回修正后的一个 JSON 对象，不要 Markdown，不要解释，不要增加外层包装字段。` },
     ]
+    const repairMaxTokens = resolveConfirmedRequestMaxTokens(repairMessages, maxTokens, modelTaskBudget)
     const repairBody = buildLlmRequestBody({
-      protocol, provider, model, temperature: 0, maxTokens, messages: repairMessages,
+      protocol, provider, model, temperature: 0, maxTokens:repairMaxTokens, messages: repairMessages,
       thinkingEnabled, reasoningEffort, supportsStream,
     })
-    const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + Math.max(0, Number(maxTokens) || 0)
+    const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + repairMaxTokens
     const { data: repairedData } = await trackedModelRequest({
       url, apiKey, body: repairBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
       estimatedTokens: repairEstimate, phase: 'repair', provider, signal, onProviderRequest, onProviderUsage,
@@ -1290,12 +1323,25 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       profileHardCap:configuredModelMaxTokens(config),
       providerOutputCap:capabilities.max_output_tokens,
       contextWindowTokens:capabilities.context_window_tokens,
+      maxInputTokens:capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens,
+      contextLimitSemantics:capabilities.context_limit_semantics,
+      capabilities,
+      profile:config,
       estimatedInputTokens,
       schemaNeedTokens:Math.max(1200, Math.ceil(outputFormat.length / 2.5)),
       historicalOutputP95:outputHistory.historicalOutputP95,
       truncatedOutputHighWatermark:outputHistory.truncatedOutputHighWatermark,
     })
-    if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
+    if (budget.reason === 'model_input_limit_exceeded' || budget.inputLimitExceeded) {
+      const error = new Error('model_input_limit_exceeded')
+      error.code = error.message
+      throw error
+    }
+    if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) {
+      const error = new Error('output_budget_insufficient')
+      error.code = error.message
+      throw error
+    }
     config._selectedOutputBudget = budget
     const deadlines = modelTaskDeadlines(taskKind, {
       nowUtcMs:Date.now(),
@@ -1331,6 +1377,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
         { role: 'user', content: renderedUserPrompt },
       ],
       usageContext,
+      modelTaskBudget:budget,
       signal: config._abortSignal || null,
       onProviderRequest:config._onProviderRequest || null,
       onProviderUsage:config._onProviderUsage || null,

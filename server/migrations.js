@@ -5507,6 +5507,100 @@ const migrations = [
         CONSTRAINT chk_history_range_preference_scope CHECK (scope IN ('all', 'platform'))
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '180_model_physical_token_limits',
+    async up() {
+      // Token limits are manual model facts and must not share the transport
+      // provider verification flag. Keep the old max_tokens profile column as
+      // legacy audit data; runtime callers will use these capability fields.
+      const capabilityColumns = {
+        max_input_tokens: 'INT DEFAULT NULL AFTER context_window_tokens',
+        context_limit_semantics: "VARCHAR(24) NOT NULL DEFAULT 'shared_context' AFTER max_output_tokens",
+        token_limits_source: "VARCHAR(32) NOT NULL DEFAULT 'generic_default' AFTER context_limit_semantics",
+        token_limits_status: "VARCHAR(32) NOT NULL DEFAULT 'default_unconfirmed' AFTER token_limits_source",
+        token_limits_note: 'VARCHAR(512) DEFAULT NULL AFTER token_limits_status',
+        token_limits_updated_by: 'INT DEFAULT NULL AFTER token_limits_note',
+        token_limits_updated_at_utc_msc: 'BIGINT DEFAULT NULL AFTER token_limits_updated_by',
+        provider: 'VARCHAR(64) DEFAULT NULL AFTER model_profile_id',
+        model_name: 'VARCHAR(191) DEFAULT NULL AFTER provider',
+        api_base_url: 'VARCHAR(512) DEFAULT NULL AFTER model_name',
+        protocol: 'VARCHAR(32) DEFAULT NULL AFTER api_base_url',
+      }
+      const existingCapabilityColumns = new Set((await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'ai_model_provider_capabilities'`)).map(row => row.COLUMN_NAME))
+      for (const [name, definition] of Object.entries(capabilityColumns)) {
+        if (!existingCapabilityColumns.has(name)) {
+          await queryRun(`ALTER TABLE ai_model_provider_capabilities ADD COLUMN ${name} ${definition}`)
+        }
+      }
+
+      // Existing capability rows predate the manual token contract. Reset
+      // non-manual values to the conservative generic defaults, while keeping
+      // an explicitly manual confirmation intact. This statement is safe to
+      // rerun after a partially applied migration.
+      await queryRun(`UPDATE ai_model_provider_capabilities
+        SET context_window_tokens = CASE WHEN token_limits_source = 'manual_confirmed'
+          THEN context_window_tokens ELSE 1048576 END,
+            max_input_tokens = CASE WHEN token_limits_source = 'manual_confirmed'
+          THEN max_input_tokens ELSE 1048576 END,
+            max_output_tokens = CASE WHEN token_limits_source = 'manual_confirmed'
+          THEN max_output_tokens ELSE 393216 END,
+            context_limit_semantics = COALESCE(NULLIF(context_limit_semantics, ''), 'shared_context'),
+            token_limits_source = COALESCE(NULLIF(token_limits_source, ''), 'generic_default'),
+            token_limits_status = CASE WHEN token_limits_source = 'manual_confirmed'
+          THEN COALESCE(NULLIF(token_limits_status, ''), 'confirmed') ELSE 'default_unconfirmed' END`)
+
+      const profiles = await queryAll(`SELECT id, provider, model_name, api_base_url
+        FROM ai_model_profiles WHERE deleted_at IS NULL`)
+      for (const profile of profiles) {
+        const capability = await queryOne(`SELECT model_profile_id, token_limits_source
+          FROM ai_model_provider_capabilities WHERE model_profile_id = ? LIMIT 1`, [profile.id])
+        if (!capability) {
+          await queryRun(`INSERT INTO ai_model_provider_capabilities
+            (model_profile_id, context_window_tokens, max_input_tokens, max_output_tokens,
+             context_limit_semantics, token_limits_source, token_limits_status,
+             provider, model_name, api_base_url, protocol, updated_at_utc_msc)
+            VALUES (?, 1048576, 1048576, 393216, 'shared_context', 'generic_default',
+              'default_unconfirmed', ?, ?, ?, NULL, ?)`,
+          [profile.id, profile.provider, profile.model_name, profile.api_base_url, Date.now()])
+        } else {
+          await queryRun(`UPDATE ai_model_provider_capabilities
+            SET provider = ?, model_name = ?, api_base_url = ?,
+                context_window_tokens = CASE WHEN token_limits_source = 'manual_confirmed'
+                  THEN context_window_tokens ELSE 1048576 END,
+                max_input_tokens = CASE WHEN token_limits_source = 'manual_confirmed'
+                  THEN max_input_tokens ELSE 1048576 END,
+                max_output_tokens = CASE WHEN token_limits_source = 'manual_confirmed'
+                  THEN max_output_tokens ELSE 393216 END,
+                context_limit_semantics = COALESCE(NULLIF(context_limit_semantics, ''), 'shared_context'),
+                token_limits_source = CASE WHEN token_limits_source = 'manual_confirmed'
+                  THEN token_limits_source ELSE 'generic_default' END,
+                token_limits_status = CASE WHEN token_limits_source = 'manual_confirmed'
+                  THEN COALESCE(NULLIF(token_limits_status, ''), 'confirmed') ELSE 'default_unconfirmed' END,
+                updated_at_utc_msc = ?
+            WHERE model_profile_id = ?`,
+          [profile.provider, profile.model_name, profile.api_base_url, Date.now(), profile.id])
+        }
+      }
+
+      const taskColumns = {
+        provider_max_input_tokens: 'INT DEFAULT NULL AFTER context_window_tokens',
+        context_limit_semantics: "VARCHAR(24) DEFAULT NULL AFTER provider_max_input_tokens",
+        token_limits_source: 'VARCHAR(32) DEFAULT NULL AFTER context_limit_semantics',
+        token_limits_status: 'VARCHAR(32) DEFAULT NULL AFTER token_limits_source',
+        token_limits_updated_at_utc_msc: 'BIGINT DEFAULT NULL AFTER token_limits_status',
+      }
+      const existingTaskColumns = new Set((await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'ai_model_tasks'`)).map(row => row.COLUMN_NAME))
+      for (const [name, definition] of Object.entries(taskColumns)) {
+        if (!existingTaskColumns.has(name)) {
+          await queryRun(`ALTER TABLE ai_model_tasks ADD COLUMN ${name} ${definition}`)
+        }
+      }
+    }
   }
 ]
 

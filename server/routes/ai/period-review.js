@@ -99,6 +99,10 @@ async function preparePeriodReviewModelCall(taskKind, resolved, messages, schema
     profileHardCap:Number(resolved?.model?.max_tokens) || undefined,
     providerOutputCap:capabilities.max_output_tokens,
     contextWindowTokens:capabilities.context_window_tokens,
+    maxInputTokens:capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens,
+    contextLimitSemantics:capabilities.context_limit_semantics,
+    capabilities,
+    profile:resolved?.model,
     estimatedInputTokens,
     schemaNeedTokens,
     historicalOutputP95:outputHistory.historicalOutputP95,
@@ -107,7 +111,16 @@ async function preparePeriodReviewModelCall(taskKind, resolved, messages, schema
   // The profile/provider/context limits are hard caps. Fail explicitly when
   // those caps cannot satisfy the output contract; never restore a fixed
   // legacy size or send a request that is known to be undersized.
-  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
+  if (budget.reason === 'model_input_limit_exceeded' || budget.inputLimitExceeded) {
+    const error = new Error('model_input_limit_exceeded')
+    error.code = error.message
+    throw error
+  }
+  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) {
+    const error = new Error('output_budget_insufficient')
+    error.code = error.message
+    throw error
+  }
   const rawDeadlines = modelTaskDeadlines(taskKind, { nowUtcMs, businessDeadlineUtcMs })
   const deadlines = {
     ...rawDeadlines,
@@ -1743,7 +1756,7 @@ async function generateDailyReview(job, requestModel) {
     timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
     followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs,
     signal:requestSignal,
-    messages,
+    messages, modelTaskBudget:modelCall.budget,
     usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
     onProviderRequest:periodReviewProviderRequestCallback(job, tracker),
     onProviderUsage:event => tracker.onProviderUsage(event),
@@ -1932,7 +1945,7 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
     reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
     timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
     followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs, signal:requestSignal,
-    messages,
+    messages, modelTaskBudget:modelCall.budget,
     usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
     // Chunk retries are accounted by their fenced checkpoint. The parent
     // business attempt is reserved for the final monthly merge; otherwise a
@@ -2017,7 +2030,7 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
     reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
     timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
     followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs, signal:requestSignal,
-    messages,
+    messages, modelTaskBudget:modelCall.budget,
     usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
     onProviderRequest:periodReviewProviderRequestCallback(job, tracker), onProviderUsage:event => tracker.onProviderUsage(event),
     onProviderActivity:event => tracker.onProviderActivity(event), onProviderQuiet:event => tracker.onProviderQuiet(event),

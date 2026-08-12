@@ -26,8 +26,11 @@ import {
   finishModelUsage,
   getModelProfileDeletionImpact,
   migrateLegacyConfigs,
+  normalizeModelTokenLimits,
+  prepareModelProfileForSave,
   recoverStaleModelUsageReservations,
   resolveAiTaskModel,
+  saveModelProfileWithValidation,
   setDefaultModelProfile,
   updateModelProfile,
 } from '../../server/routes/ai/model-profiles.js'
@@ -245,6 +248,39 @@ describe('resolveAiTaskModel', () => {
 })
 
 describe('model profile authorization and defaults', () => {
+  it('normalizes the three physical token fields with conservative defaults', () => {
+    expect(normalizeModelTokenLimits()).toMatchObject({
+      context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216,
+      context_limit_semantics:'shared_context',
+    })
+    expect(() => normalizeModelTokenLimits({ context_window_tokens:0 })).toThrow('model_context_window_invalid')
+    expect(() => normalizeModelTokenLimits({ max_input_tokens:2147483648 })).toThrow('model_max_input_tokens_invalid')
+    expect(() => normalizeModelTokenLimits({ max_output_tokens:2097152 })).toThrow('model_token_limits_invalid')
+    expect(() => normalizeModelTokenLimits({ context_window_tokens:100, max_input_tokens:101 }))
+      .toThrow('model_token_limits_invalid')
+  })
+
+  it('rejects a stale expected profile timestamp before provider verification', async () => {
+    const existing = profile({ updated_at:'2026-07-15 12:00:00' })
+    mockQueryOne.mockResolvedValueOnce(existing)
+    await expect(prepareModelProfileForSave({ id:existing.id, userId:1, callerRole:'pro',
+      payload:{ expected_profile_updated_at:'2026-07-15 11:59:59' } })).rejects.toThrow('model_profile_conflict')
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('does not write a new profile when the one-shot provider validation fails', async () => {
+    const verify = vi.fn().mockRejectedValue(new Error('model_connection_request_rejected'))
+    await expect(saveModelProfileWithValidation({ userId:1, callerRole:'pro', verify,
+      payload:{ provider:'deepseek', model_name:'deepseek-chat', api_key:'pending-key',
+        context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216 } }))
+      .rejects.toThrow('model_connection_request_rejected')
+    expect(verify).toHaveBeenCalledOnce()
+    expect(verify.mock.calls[0][0]).toMatchObject({ max_output_tokens:393216 })
+    expect(mockWithTransaction).not.toHaveBeenCalled()
+    expect(mockQueryRun).not.toHaveBeenCalled()
+    expect(mockTx).not.toHaveBeenCalled()
+  })
+
   it('rejects platform scope from a non-admin caller', async () => {
     await expect(createModelProfile(1, { scope: 'platform', api_key: 'test' }, 'pro'))
       .rejects.toThrow('platform_scope_requires_admin')

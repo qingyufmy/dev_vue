@@ -2,6 +2,8 @@ import crypto from 'node:crypto'
 import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../../db.js'
 import { canManagePlatformAiContent } from './platform-content-access.js'
 import { requestJsonObject } from './llm.js'
+import { estimateModelInputTokens, selectModelTaskBudget } from './model-task-budget.js'
+import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { sha256 } from './inference-snapshots.js'
@@ -69,6 +71,34 @@ function modelEndpoint(model) {
   const base = String(model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
   if (!base) throw new Error('manual_trade_review_model_provider_unavailable')
   return { protocol, url:`${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}` }
+}
+
+async function prepareManualTradeReviewBudget(resolved, messages) {
+  let capabilities = {}
+  try {
+    capabilities = await getModelProviderCapabilities(resolved?.model_profile_id) || {}
+  } catch (error) {
+    console.warn('[ManualTradeReview] provider capability lookup unavailable:', error.message)
+  }
+  const budget = selectModelTaskBudget({
+    taskKind:'manual_analysis',
+    // Preserve the pre-capability migration behavior for legacy/unconfirmed
+    // profiles.  Confirmed physical limits take the other branch and ignore
+    // this value entirely.
+    profileHardCap:Math.min(4_096, Math.max(1_200, Number(resolved?.model?.max_tokens) || 2_000)),
+    providerOutputCap:capabilities.max_output_tokens,
+    contextWindowTokens:capabilities.context_window_tokens,
+    maxInputTokens:capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens,
+    contextLimitSemantics:capabilities.context_limit_semantics,
+    capabilities,
+    profile:resolved?.model,
+    estimatedInputTokens:estimateModelInputTokens(messages),
+    schemaNeedTokens:0,
+    legacyExactProfileCap:true,
+  })
+  if (budget.reason === 'model_input_limit_exceeded' || budget.inputLimitExceeded) throw new Error('model_input_limit_exceeded')
+  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
+  return budget
 }
 
 function managerOrThrow(actor) {
@@ -497,21 +527,27 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
     if (!resolved.model) throw new Error(resolved.error || 'manual_trade_review_model_unavailable')
     const endpoint = modelEndpoint(resolved.model)
+    const counterfactualMessages = counterfactualPrompt(reviewCase, sources)
+    const counterfactualBudget = await prepareManualTradeReviewBudget(resolved, counterfactualMessages)
     await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'counterfactual_analysis', stage_updated_at = ?, updated_at = ?
       WHERE id = ? AND lease_token = ?`, [beijingNow(), beijingNow(), job.id, job.lease_token])
     const counterfactualRaw = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted, provider:resolved.model.provider,
-      model:resolved.model.model_name, temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens:Math.min(4_096, Math.max(1_200, Number(resolved.model.max_tokens || 2_000))),
+      model:resolved.model.model_name, temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens:counterfactualBudget.selectedMaxOutputTokens,
       thinkingEnabled:resolved.model.thinking_enabled, reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
-      messages:counterfactualPrompt(reviewCase, sources), usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
+      messages:counterfactualMessages, modelTaskBudget:counterfactualBudget,
+      usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
       allowFollowupRequests:false,
       validateObject:validateCounterfactualAnalysis })
     const counterfactual = validateCounterfactualAnalysis(counterfactualRaw)
     await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'outcome_review', stage_updated_at = ?, updated_at = ?
       WHERE id = ? AND lease_token = ?`, [beijingNow(), beijingNow(), job.id, job.lease_token])
+    const outcomeMessages = outcomeReviewPrompt(reviewCase, sources, counterfactual)
+    const outcomeBudget = await prepareManualTradeReviewBudget(resolved, outcomeMessages)
     const outcomeRaw = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted, provider:resolved.model.provider,
-      model:resolved.model.model_name, temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens:Math.min(4_096, Math.max(1_200, Number(resolved.model.max_tokens || 2_000))),
+      model:resolved.model.model_name, temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens:outcomeBudget.selectedMaxOutputTokens,
       thinkingEnabled:resolved.model.thinking_enabled, reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
-      messages:outcomeReviewPrompt(reviewCase, sources, counterfactual), usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
+      messages:outcomeMessages, modelTaskBudget:outcomeBudget,
+      usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
       allowFollowupRequests:false,
       validateObject:value => validateManualTradeReviewContent({ ...value, counterfactual_analysis:counterfactual }, sources,
         parse(reviewCase.strategy_snapshot_json, {}), { evidenceStatus:reviewCase.evidence_status }) })
