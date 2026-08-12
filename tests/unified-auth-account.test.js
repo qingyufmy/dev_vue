@@ -85,7 +85,7 @@ describe('unified authentication and account entry points', () => {
     expect(aiAuthApp).toContain("fieldFeedback(confirmId,'两次输入的密码一致','success')")
     expect(aiAuthCss).toContain('.password-rule-list li[data-state="valid"]')
     expect(aiAuthCss).toContain('.password-guidance[data-state="invalid"]')
-    expect(aiAuthHtml).toContain('20260811frontend2')
+    expect(aiAuthHtml).toContain('20260812historypref2')
   })
 
   it('uses the AI auth password rules and live confirmation feedback on main-site registration and recovery', () => {
@@ -98,7 +98,7 @@ describe('unified authentication and account entry points', () => {
     expect(main).toContain("confirmHint.textContent = '两次输入的密码不一致'")
     expect(main).toContain("confirmHint.textContent = '两次输入的密码一致'")
     expect(main.match(/getAuthPasswordRuleError\(data\.password\)/g)).toHaveLength(2)
-    expect(mainHtml).toContain('20260811frontend2')
+    expect(mainHtml).toContain('20260812historypref2')
   })
 
   it('shows server-authoritative membership access states after AI login', () => {

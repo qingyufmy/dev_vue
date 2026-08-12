@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
+const styles = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 
 function loadRangeParamsHarness({ mode = 'platform', from = '', to = '', meta = null, starts = {} } = {}) {
   const start = app.indexOf('function getHistoryRangeParams()')
@@ -268,11 +269,20 @@ describe('history scope frontend contract', () => {
     expect(params).toEqual({ history_scope:'all' })
   })
 
-  it('sends an early platform start only after the server has established the allowed floor', () => {
+  it('does not resend a server-confirmed account preference as a transient override', () => {
     const params = loadRangeParamsHarness({
       from:'2020-01-01',
       meta:{ allowedStartDate:'2000-01-01', systemStartDate:'2024-01-01', actualEndDate:'2026-08-11' },
       starts:{ platform:'2020-01-01' },
+    })
+    expect(params).toEqual({ history_scope:'platform' })
+  })
+
+  it('still sends an unsaved date edit as a transient range override', () => {
+    const params = loadRangeParamsHarness({
+      from:'2020-01-01',
+      meta:{ allowedStartDate:'2000-01-01', systemStartDate:'2024-01-01', actualEndDate:'2026-08-11' },
+      starts:{ platform:'2021-01-01' },
     })
     expect(params).toMatchObject({ history_scope:'platform', scope_start_override:'2020-01-01' })
   })
@@ -294,6 +304,37 @@ describe('history scope frontend contract', () => {
     expect(meta.actualStartDate).toBe('2023-12-01')
     expect(meta.actualEndDate).toBe('2026-08-11')
     expect(meta.timezoneOffsetMinutes).toBe(480)
+  })
+
+  it('reads the persisted source-account start returned by the server', () => {
+    const meta = loadScopeMeta({
+      history_scope:'platform',
+      preference:{ scope:'platform', start_date:'2026-06-01', source:'server_account' },
+      history_range:{
+        allowed_range:{ range_start_utc_msc:Date.UTC(2000, 0, 1) },
+        system_range:{ range_start_utc_msc:Date.UTC(2026, 6, 27) },
+        effective_range:{ range_start_utc_msc:Date.UTC(2026, 5, 1), range_end_utc_msc:Date.UTC(2026, 7, 11) },
+      },
+    })
+    expect(meta.preferenceKnown).toBe(true)
+    expect(meta.savedStartDate).toBe('2026-06-01')
+    expect(meta.preferenceSource).toBe('server_account')
+  })
+
+  it('stores history starts only through the server and hides mutation controls in observer mode', () => {
+    expect(app).not.toContain('aurum.ai.history-range')
+    expect(app).not.toContain('historyPreferenceStorageKey')
+    expect(app).not.toContain('readHistoryRangePreferences')
+    expect(app).not.toContain('writeHistoryRangePreferences')
+    expect(app).toContain('wsApi("history_range_preference_set"')
+    expect(app).toContain('start_date:null')
+    expect(app).toContain('save.hidden = custom || observer')
+    expect(app).toContain('restore.hidden = custom || observer')
+    expect(styles).toContain('.history-range-save[hidden],')
+    expect(styles).toContain('.history-range-restore[hidden]')
+    expect(styles).toContain('display: none !important;')
+    expect(app).toContain('开始日期由观摩源账户设置')
+    expect(app).not.toContain('"history_range_preference_set", "pending_list"')
   })
 
   it('keeps a frozen scope range while handing a filter change a fresh cursor key', () => {
