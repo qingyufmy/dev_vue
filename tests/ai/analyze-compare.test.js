@@ -1170,6 +1170,7 @@ describe('handleHistoryCompare', () => {
         api_base_url_sha256:expect.stringMatching(/^[a-f0-9]{64}$/),
         runtime_config_sha256:expect.stringMatching(/^[a-f0-9]{64}$/),
       })
+      expect(result.results[0].runtime_model).not.toHaveProperty('max_tokens')
       expect(result.results[0].provider_usage).toMatchObject({
         provider_request_count:8,
         repair_request_count:0,
@@ -1443,6 +1444,28 @@ describe('historical comparison frontend contract', () => {
     const insert = backend.indexOf('INSERT INTO ai_signals')
     expect(fence).toBeGreaterThanOrEqual(0)
     expect(insert).toBeGreaterThan(fence)
+  })
+
+  it('keeps the manual ai_signals INSERT columns, values, and parameters aligned', () => {
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    const insert = backend.indexOf('INSERT INTO ai_signals(')
+    expect(insert).toBeGreaterThanOrEqual(0)
+    const sqlEnd = backend.indexOf('`', insert)
+    const sql = backend.slice(insert, sqlEnd)
+    const columns = sql.match(/INSERT INTO ai_signals\(([^)]*)\)/)?.[1]
+      ?.split(',').map(value => value.trim()).filter(Boolean) || []
+    const values = sql.match(/VALUES \(([^)]*)\)/)?.[1]
+      ?.split(',').map(value => value.trim()).filter(Boolean) || []
+    const paramsStart = backend.indexOf('[', sqlEnd)
+    const paramsEnd = backend.indexOf('])', paramsStart)
+    const params = backend.slice(paramsStart + 1, paramsEnd)
+      .split(',').map(value => value.trim()).filter(Boolean)
+    const placeholders = values.filter(value => value === '?')
+    expect(columns).toHaveLength(35)
+    expect(values).toHaveLength(columns.length)
+    expect(values.filter(value => value === "'manual'")).toHaveLength(1)
+    expect(placeholders).toHaveLength(34)
+    expect(params).toHaveLength(placeholders.length)
   })
 
   it('deletes comparison checkpoints and their terminal job atomically', () => {

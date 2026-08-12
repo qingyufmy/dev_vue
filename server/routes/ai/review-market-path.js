@@ -4,6 +4,7 @@ import { queryAll, queryOne } from '../../db.js'
 import { stripBrokerSuffix } from './utils.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
 import { resolveDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
+import { getChanWindowPolicy } from './chan-window-policy.js'
 
 const parse = (value, fallback = {}) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const TIMEFRAME_MS = { M1: 60000, M5: 300000, M15: 900000, M30: 1800000, H1: 3600000, H4: 14400000, D1: 86400000 }
@@ -80,14 +81,7 @@ async function reviewMarketOffset(userId, tradingAccountId) {
 
 function slimChan(chan) {
   if (!chan) return null
-  return {
-    status: chan.status, reliability: chan.reliability, warnings: chan.warnings || [],
-    bi_count: chan.bi_count, segment_count: chan.segment_count, center_count: chan.center_count,
-    current_bi: chan.current_bi, current_segment: chan.current_segment, prev_segment: chan.prev_segment,
-    current_center: chan.current_center, active_center: chan.active_center, price_vs_center: chan.price_vs_center,
-    divergence: chan.divergence, recent_divergences: chan.recent_divergences,
-    trend_state: chan.trend_state, entry_candidates: chan.entry_candidates,
-  }
+  return { ...chan, warnings:Array.isArray(chan.warnings) ? chan.warnings : [] }
 }
 
 function compactRate(rate) {
@@ -95,7 +89,8 @@ function compactRate(rate) {
 }
 
 export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, signal = {}, snapshot = {}, deals = [], fetchRates = null,
-  loadWindow = loadPeriodMarketWindow, timezoneOffsetMinutes = null, asOfUtcMsc = null, includeHoldingMetrics = true } = {}) {
+  loadWindow = loadPeriodMarketWindow, timezoneOffsetMinutes = null, asOfUtcMsc = null, includeHoldingMetrics = true,
+  chanRequirement = undefined } = {}) {
   const snapshotKlines = snapshot?.klines && typeof snapshot.klines === 'object' ? snapshot.klines : {}
   const timeframes = [...new Set([signal.timeframe, ...Object.keys(snapshotKlines)]
     .map(value => String(value || '').toUpperCase()).filter(value => TIMEFRAME_MS[value]))]
@@ -106,6 +101,13 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
   let primaryOffset = 0
   let primaryTruncated = false
   const errors = []
+  // Chan is opt-in only.  An omitted or malformed requirement is unresolved;
+  // historical callers must not silently inherit the current timeframe plan.
+  const effectiveChanRequirement = chanRequirement && typeof chanRequirement === 'object'
+    ? chanRequirement
+    : { status:'unknown', source:'unresolved', timeframes:[] }
+  const chanEnabled = effectiveChanRequirement.status === 'enabled'
+  const chanTimeframeSet = new Set((effectiveChanRequirement.timeframes || []).map(item => String(item).toUpperCase()))
   const hasRequestedOffset = timezoneOffsetMinutes !== null && timezoneOffsetMinutes !== undefined
     && timezoneOffsetMinutes !== '' && Number.isInteger(Number(timezoneOffsetMinutes))
   const defaultOffset = hasRequestedOffset
@@ -127,13 +129,18 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       if (!initialEntryMs || !initialExitMs) throw new Error('holding_deal_times_missing')
       let response
       let allRatesClosed = false
+      const chanPolicy = chanEnabled && chanTimeframeSet.has(timeframe) ? getChanWindowPolicy(timeframe) : null
       if (fetchRates) {
-        response = await fetchRates(userId, { symbol, timeframe, count: 1000 })
+        response = await fetchRates(userId, { symbol, timeframe, count: chanPolicy?.target || 1000,
+          ...(chanPolicy ? { requestedChanHistoryCount:chanPolicy.target, chanMaximumHistoryCount:chanPolicy.maximumHistoryCount,
+            chanValidationWindowCounts:chanPolicy.validationWindowCounts, chanWindowPolicyVersion:chanPolicy.windowPolicyVersion } : {}) })
       } else {
-        const contextBars = Math.max(80, Array.isArray(snapshotKlines[timeframe]) ? snapshotKlines[timeframe].length : 0)
+        const contextBars = chanPolicy?.target || Math.max(80, Array.isArray(snapshotKlines[timeframe]) ? snapshotKlines[timeframe].length : 0)
         const loaded = await loadWindow(userId, symbol, timeframe,
           initialEntryMs - contextBars * TIMEFRAME_MS[timeframe],
-          initialExitMs + TIMEFRAME_MS[timeframe], { alignToPeriodStart:false })
+          initialExitMs + TIMEFRAME_MS[timeframe], { alignToPeriodStart:false,
+            chanHistoryTarget:chanPolicy?.target || 0, chanMaximumHistoryCount:chanPolicy?.maximumHistoryCount || 0,
+            includeChanHistory:Boolean(chanPolicy), strictSessionPolicy:true, standardSymbol:stripBrokerSuffix(symbol) })
         response = { status:'success', rates:loaded.rates, market_meta:loaded.marketMeta || {} }
         allRatesClosed = true
       }
@@ -143,6 +150,7 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
         ? defaultOffset : Number(responseOffset)
       let allClosed = (allRatesClosed ? response.rates : response.rates.slice(0, -1))
         .filter(rate => Number.isFinite(Number(rate.time_utc_msc))).map(compactRate)
+      let chanHistory = allClosed.slice()
       const entryTimes = deals.filter(deal => [0, 2].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)
       const exitTimes = deals.filter(deal => [1, 2, 3].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)
       const entryMs = entryTimes.length ? Math.min(...entryTimes) : null
@@ -165,6 +173,7 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       }
       if (Number.isFinite(requestedCutoff) && requestedCutoff > 0) {
         allClosed = allClosed.filter(rate => Number(rate.time_utc_msc) + TIMEFRAME_MS[timeframe] <= requestedCutoff)
+        chanHistory = chanHistory.filter(rate => Number(rate.time_utc_msc) + TIMEFRAME_MS[timeframe] <= requestedCutoff)
       }
       let closed = allClosed
       if (entryMs && exitMs) {
@@ -175,15 +184,21 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       const truncatedBeforeEntry = databasePathTruncated || Boolean(entryMs && allClosed[0]?.time_utc_msc > entryMs)
       const truncatedBeforeExit = Boolean(exitMs && allClosed.at(-1)?.time_utc_msc < exitMs - TIMEFRAME_MS[timeframe])
       const sentinel = closed.length ? { ...closed.at(-1), time_utc_msc: Number(closed.at(-1).time_utc_msc) + TIMEFRAME_MS[timeframe] } : null
+      const chanRates = chanPolicy ? (chanHistory.length ? chanHistory : allClosed) : []
       const market = calculateMarketData(symbol, timeframe, sentinel ? [...closed, sentinel] : closed, {}, [], {
-        computeChan: true, chanRates: sentinel ? [...closed, sentinel] : closed, requestedChanHistoryCount: closed.length,
+        computeChan: Boolean(chanPolicy?.supported),
+        ...(chanPolicy ? { chanRates, requestedChanHistoryCount:chanPolicy.target,
+          chanMaximumHistoryCount:chanPolicy.maximumHistoryCount,
+          chanValidationWindowCounts:chanPolicy.validationWindowCounts,
+          chanWindowPolicyVersion:chanPolicy.windowPolicyVersion } : {}),
         chanDataQuality: response.market_meta || {},
       })
       evidence[timeframe] = {
         status: closed.length >= 20 && !truncatedBeforeEntry && !truncatedBeforeExit ? 'complete' : 'partial', candle_count: closed.length,
         source_candle_count: allClosed.length, truncated_before_entry: truncatedBeforeEntry, truncated_before_exit: truncatedBeforeExit,
         first_time_utc_msc: closed[0]?.time_utc_msc || null, last_time_utc_msc: closed.at(-1)?.time_utc_msc || null,
-        candles: closed, indicators: { atr_14: market.atr_14, rsi_14: market.rsi_14, macd: market.macd }, chan: slimChan(market.chan),
+        candles: closed, indicators: { atr_14: market.atr_14, rsi_14: market.rsi_14, macd: market.macd },
+        ...(chanPolicy ? { chan: slimChan(market.chan) } : {}),
       }
       if (timeframe === timeframes[0]) { primaryRates = closed; primaryOffset = offset; primaryTruncated = truncatedBeforeEntry || truncatedBeforeExit }
     } catch (error) {

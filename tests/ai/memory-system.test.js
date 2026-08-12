@@ -319,10 +319,12 @@ describe('memory persistence, invalidation and inference boundaries', () => {
     expect(memory).toContain("status = 'revalidation'")
   })
 
-  it('uses source-set hashes, leases, bounded summaries and versioned rollback', () => {
+  it('uses source-set hashes, leases, safe-length summaries and versioned rollback', () => {
     expect(migration).toContain('UNIQUE KEY uk_memory_compression_source (user_id, scope_key, source_set_hash)')
     expect(memory).toContain("usage: 'memory_compression'")
-    expect(memory).toContain('tokenCount(summaryText) > SUMMARY_MAX_TOKENS')
+    expect(memory).not.toContain('SUMMARY_MAX_TOKENS')
+    expect(memory).not.toContain('summary: \'string <= 1200 tokens\'')
+    expect(memory).toContain('if (!summaryText)')
     expect(memory).toContain('FOR UPDATE')
     expect(memory).toContain('rollbackMemorySummary')
   })

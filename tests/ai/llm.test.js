@@ -1,15 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { requestJsonObject, resolveConfirmedRequestMaxTokens, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
+const providerCapabilitiesMock = vi.hoisted(() => ({
+  resolveModelProviderCapabilities:vi.fn(async () => ({
+    supports_stream:false, supports_request_id:false,
+    token_limits_status:'confirmed', token_limits_source:'manual_confirmed',
+    context_window_tokens:1_048_576, max_input_tokens:1_048_576,
+    max_output_tokens:393_216, context_limit_semantics:'shared_context',
+  })),
+}))
+vi.mock('../../server/routes/ai/model-provider-capabilities.js', () => providerCapabilitiesMock)
+import { requestJsonObject, resolveConfirmedRequestMaxTokens, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
 import { compactRates, DEFAULT_PROMPT } from '../../server/routes/ai/utils.js'
 import { POSITION_MANAGEMENT_CONTRACT_VERSION } from '../../server/routes/ai/position-management.js'
 
 describe('model output budgets', () => {
-  it('uses the configured model profile value for automated and manual inference', () => {
-    expect(configuredModelMaxTokens({ _usage:'auto_platform', max_tokens:30000 })).toBe(30000)
-    expect(configuredModelMaxTokens({ _usage:'auto_private', max_tokens:150000 })).toBe(150000)
-    expect(configuredModelMaxTokens({ _usage:'manual', max_tokens:30000 })).toBe(30000)
-    expect(configuredModelMaxTokens({ _usage:'auto_platform' })).toBe(2000)
+  it('does not expose a profile max_tokens runtime helper', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/llm.js', import.meta.url), 'utf8')
+    expect(source).not.toContain('configuredModelMaxTokens')
   })
 
   it('recomputes shared-context room for both initial and repair messages', () => {
@@ -1013,7 +1020,7 @@ describe('OpenAI-compatible provider URL', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions')
   })
 
-  it('routes Kimi Code through its subscription endpoint with an adaptive budget below the configured hard cap', async () => {
+  it('routes Kimi Code through its subscription endpoint with the confirmed physical output budget', async () => {
     vi.clearAllMocks()
     mockFetch.mockResolvedValue({
       ok: true,
@@ -1029,7 +1036,7 @@ describe('OpenAI-compatible provider URL', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.kimi.com/coding/v1/chat/completions')
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.thinking.type).toBe('disabled')
-    expect(body.max_tokens).toBe(2000)
+    expect(body.max_tokens).toBe(393216)
   })
 
   it('does not turn an externally cancelled inference into a HOLD signal', async () => {

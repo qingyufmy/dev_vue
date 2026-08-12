@@ -168,7 +168,7 @@ describe('unified admin console contract', () => {
     expect(app).toContain('data-ai-jump="scheduler"')
     expect(app).not.toContain('data-ai-tab="strategies"')
     expect(app).not.toContain('data-ai-tab="models"')
-    expect(app).not.toContain('data-ai-tab="memory"')
+    expect(app).toContain('data-ai-tab="memory"')
     expect(aiLabHtml).toContain('data-tab="model-strategy"')
     expect(aiLabHtml).toContain('data-tab="review-memory"')
     expect(css).toContain('.ai-command-status')
@@ -242,8 +242,8 @@ describe('unified admin console contract', () => {
     expect(css).toContain('.strategy-governance-editor')
   })
 
-  it('keeps review and memory work in the AI lab instead of the operations console', () => {
-    expect(app).not.toContain('data-ai-tab="memory"')
+  it('keeps review work in the AI lab while exposing platform memory governance in operations', () => {
+    expect(app).toContain('data-ai-tab="memory"')
     expect(aiLabHtml).toContain('data-workspace-tab="review-memory"')
     expect(app).toContain("api('/api/ai/strategy-memories')")
     expect(app).toContain('function renderPlatformMemory()')

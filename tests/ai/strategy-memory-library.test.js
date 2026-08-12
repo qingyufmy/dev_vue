@@ -23,8 +23,12 @@ import {
   sanitizeStrategyMemoryText,
   saveStrategyMemoryLibrary,
   enqueueApprovedStrategyMemoryUpdate,
+  recordStrategyMemoryConflictEvidence,
+  sanitizeStrategyMemoryPrompt,
   applyStrategyMemoryCompressionJob,
   failStrategyMemoryCompressionJob,
+  getStrategyMemoryCompressionJobStatus,
+  getLatestStrategyMemoryCompressionJobStatus,
   strategyMemoryCharCount,
 } from '../../server/routes/ai/strategy-memory-library.js'
 
@@ -52,6 +56,10 @@ describe('unified strategy memory primitives', () => {
     const librarySource = readFileSync(new URL('../../server/routes/ai/strategy-memory-library.js', import.meta.url), 'utf8')
     const compressionSource = readFileSync(new URL('../../server/routes/ai/strategy-memory-compression.js', import.meta.url), 'utf8')
     expect(migrations).toContain("id: '181_unified_strategy_memory_library'")
+    expect(migrations).toContain("id: '182_strategy_memory_merge_integrity'")
+    for (const column of ['result_content_hash', 'result_validation_status', 'result_validation_json']) {
+      expect(migrations).toContain(column)
+    }
     for (const table of ['strategy_memory_libraries', 'strategy_memory_library_revisions',
       'strategy_memory_pending_updates', 'strategy_memory_conflicts',
       'strategy_memory_conflict_occurrences', 'strategy_memory_compression_jobs',
@@ -76,9 +84,115 @@ describe('unified strategy memory primitives', () => {
     expect(buildStrategyMemoryConflictKey(input)).toBe(buildStrategyMemoryConflictKey({ ...input }))
     expect(buildStrategyMemoryConflictKey(input)).toMatch(/^[a-f0-9]{64}$/)
   })
+
+  it('does not echo legacy conditional memory text into a review prompt', () => {
+    const result = sanitizeStrategyMemoryPrompt({ content_text:'applicable_when: trend', char_count:20, estimated_token_count:5 })
+    expect(result.content_text).toBe('')
+    expect(result.char_count).toBe(0)
+    expect(result.estimated_token_count).toBe(0)
+  })
 })
 
 describe('unified strategy memory access and CAS', () => {
+  it('returns an authorized redacted compression-job summary with stage and version evidence', async () => {
+    const sourceHash = 'b'.repeat(64)
+    mockQueryOne
+      .mockResolvedValueOnce(privateStrategy())
+      .mockResolvedValueOnce({ id:9, strategy_id:5, status:'leased', source_version_no:2,
+        source_content_hash:sourceHash, target_chars:100, result_revision_id:31,
+        result_validation_status:'accepted', result_validation_json:'{"result_char_count":4}',
+        last_error_code:'provider_status_unknown', model_task_id:'secret-task-id',
+        created_at:'2026-08-12 15:00:00', updated_at:'2026-08-12 15:01:00', completed_at:null,
+        lease_token:'secret-lease-token', model_response:'secret-prompt' })
+      .mockResolvedValueOnce({ status:'applying' })
+      .mockResolvedValueOnce({ strategy_id:5, version_no:3, char_count:4, content_hash:'c'.repeat(64) })
+      .mockResolvedValueOnce({ id:22, strategy_id:5, version_no:2, char_count:8, content_hash:sourceHash })
+      .mockResolvedValueOnce({ id:31, strategy_id:5, version_no:3, char_count:4, content_hash:'c'.repeat(64) })
+
+    const result = await getStrategyMemoryCompressionJobStatus({
+      strategyId:5, jobId:9, actor:{ userId:7, role:'user' },
+    })
+    expect(result).toMatchObject({ id:9, strategy_id:5, status:'running', presentation_stage:'applying',
+      source_version_no:2, result_revision_id:31, target_chars:100,
+      result_validation_status:'accepted', last_error_code:'provider_status_unknown',
+      source:{ revision_id:22, version_no:2, char_count:8 },
+      result:{ revision_id:31, version_no:3, char_count:4 },
+      current:{ version_no:3, char_count:4 }, source_char_count:8,
+      result_char_count:4, current_char_count:4, result_version:3, current_version:3 })
+    expect(result).not.toHaveProperty('lease_token')
+    expect(result).not.toHaveProperty('model_task_id')
+    expect(result).not.toHaveProperty('result_validation_json')
+  })
+
+  it('rejects a missing job under an authorized strategy without leaking another strategy job', async () => {
+    mockQueryOne.mockResolvedValueOnce(privateStrategy()).mockResolvedValueOnce(null)
+    await expect(getStrategyMemoryCompressionJobStatus({ strategyId:5, jobId:99,
+      actor:{ userId:7, role:'user' } })).rejects.toThrow('strategy_memory_compression_job_not_found')
+    expect(mockQueryOne).toHaveBeenCalledTimes(2)
+    expect(String(mockQueryOne.mock.calls[1][0])).toContain('strategy_id = ?')
+  })
+
+  it('recovers the latest authorized compression job after a page reload', async () => {
+    const sourceHash = 'b'.repeat(64)
+    mockQueryOne
+      .mockResolvedValueOnce(privateStrategy())
+      .mockResolvedValueOnce({ id:9 })
+      .mockResolvedValueOnce(privateStrategy())
+      .mockResolvedValueOnce({ id:9, strategy_id:5, status:'succeeded_noop', source_version_no:2,
+        source_content_hash:sourceHash, target_chars:100, result_revision_id:null,
+        result_validation_status:'noop', result_validation_json:'{"result_char_count":8}',
+        last_error_code:null, created_at:null, updated_at:null, completed_at:null, model_task_id:null })
+      .mockResolvedValueOnce({ strategy_id:5, version_no:2, char_count:8, content_hash:sourceHash })
+      .mockResolvedValueOnce({ id:22, strategy_id:5, version_no:2, char_count:8, content_hash:sourceHash })
+    const result = await getLatestStrategyMemoryCompressionJobStatus({ strategyId:5,
+      actor:{ userId:7, role:'user' } })
+    expect(result).toMatchObject({ id:9, strategy_id:5, status:'succeeded_noop', result_char_count:8 })
+    expect(String(mockQueryOne.mock.calls[1][0])).toContain('ORDER BY id DESC LIMIT 1')
+  })
+
+  it.each([
+    ['provider_status_unknown', 'status_unknown'],
+    ['provider_status_unknown_after_recovery', 'status_unknown'],
+    ['strategy_memory_compression_stale', 'stale'],
+    ['strategy_memory_pending_update_stale', 'stale'],
+    ['model_task_recovery_stale', 'stale'],
+    ['ordinary_failure', 'failed'],
+  ])('maps persisted failed job error %s to presentation status %s', async (errorCode, expectedStatus) => {
+    const sourceHash = 'd'.repeat(64)
+    mockQueryOne
+      .mockResolvedValueOnce(privateStrategy())
+      .mockResolvedValueOnce({ id:14, strategy_id:5, status:'failed', source_version_no:2,
+        source_content_hash:sourceHash, target_chars:100, result_revision_id:null,
+        result_validation_status:'rejected', result_validation_json:null,
+        last_error_code:errorCode, created_at:null, updated_at:null, completed_at:null,
+        model_task_id:null })
+      .mockResolvedValueOnce({ strategy_id:5, version_no:2, char_count:8, content_hash:sourceHash })
+      .mockResolvedValueOnce({ id:22, strategy_id:5, version_no:2, char_count:8, content_hash:sourceHash })
+
+    const result = await getStrategyMemoryCompressionJobStatus({ strategyId:5, jobId:14,
+      actor:{ userId:7, role:'user' } })
+    expect(result).toMatchObject({ status:expectedStatus, presentation_stage:expectedStatus,
+      last_error_code:errorCode })
+  })
+
+  it('does not claim the source version as a succeeded-noop result after the library advances', async () => {
+    const sourceHash = 'e'.repeat(64)
+    mockQueryOne
+      .mockResolvedValueOnce(privateStrategy())
+      .mockResolvedValueOnce({ id:15, strategy_id:5, status:'succeeded_noop', source_version_no:2,
+        source_content_hash:sourceHash, target_chars:100, result_revision_id:null,
+        result_validation_status:'accepted', result_validation_json:'{"result_char_count":4}',
+        last_error_code:null, created_at:null, updated_at:null, completed_at:null,
+        model_task_id:null })
+      .mockResolvedValueOnce({ strategy_id:5, version_no:3, char_count:12, content_hash:'f'.repeat(64) })
+      .mockResolvedValueOnce({ id:22, strategy_id:5, version_no:2, char_count:8, content_hash:sourceHash })
+
+    const result = await getStrategyMemoryCompressionJobStatus({ strategyId:5, jobId:15,
+      actor:{ userId:7, role:'user' } })
+    expect(result).toMatchObject({ status:'succeeded_noop', result_char_count:4, result_version:null,
+      result:{ revision_id:null, version_no:null, char_count:4 }, current_version:3 })
+  })
+
   it('keeps updates that arrived after a compression job and queues the next frozen set', async () => {
     const job = { id:9, strategy_id:5, status:'leased', lease_token:'lease-9', trigger_type:'capacity',
       source_version_no:2, source_content_hash:'a'.repeat(64), pending_update_ids_json:'[11]', target_chars:100 }
@@ -123,13 +237,26 @@ describe('unified strategy memory access and CAS', () => {
       return [{ affectedRows:1, insertId:0 }, []]
     })
     mockWithTransaction.mockImplementationOnce(fn => fn(run))
-    const result = await applyStrategyMemoryCompressionJob({ jobId:10, leaseToken:'lease-10', content_text:'压缩后的旧库' })
+    const result = await applyStrategyMemoryCompressionJob({ jobId:10, leaseToken:'lease-10', content_text:'压缩后的旧库',
+      result_validation:{ semantic_manifest_hash:'a'.repeat(64), source_block_ids:['block-1'],
+        coverage_map:[{ source_block_id:'block-1', disposition:'preserved', result_section:'must-not-persist' }],
+        unresolved_conflicts:['conflict-1'], removed_redundancies:['redundancy-1'],
+        content_text:'must-not-persist' } })
     expect(result).toMatchObject({ status:'succeeded', revision_id:33 })
     const revisionCall = run.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO strategy_memory_library_revisions'))
     expect(String(revisionCall?.[1]?.[5] || '')).toContain('月复盘确认经验')
     expect(String(revisionCall?.[1]?.[5] || '')).toContain('等待收盘确认')
     const jobCall = run.mock.calls.find(([sql]) => String(sql).includes('SET status = ?, result_revision_id'))
     expect(jobCall?.[1]).toContain('accepted')
+    const validation = JSON.parse(jobCall?.[1]?.[4] || '{}')
+    expect(validation).toMatchObject({ semantic_manifest_hash:'a'.repeat(64), source_block_ids:['block-1'],
+      coverage_map:[{ source_block_id:'block-1', disposition:'preserved',
+        result_section_hash:crypto.createHash('sha256').update('must-not-persist', 'utf8').digest('hex') }],
+      unresolved_conflict_hashes:[crypto.createHash('sha256').update('conflict-1', 'utf8').digest('hex')],
+      removed_redundancy_hashes:[crypto.createHash('sha256').update('redundancy-1', 'utf8').digest('hex')],
+      validation_status:'accepted' })
+    expect(validation).not.toHaveProperty('content_text')
+    expect(JSON.stringify(validation)).not.toContain('must-not-persist')
   })
 
   it('returns succeeded_noop without creating a duplicate revision for an identical result', async () => {
@@ -225,6 +352,10 @@ describe('unified strategy memory access and CAS', () => {
       content_hash:'a'.repeat(64), compression_status:'queued' })
     const run = vi.fn(async (sql) => {
       const text = String(sql)
+      if (text.includes('FROM period_review_cases cases')) return [[{ id:1201, strategy_id:5,
+        period_type:'monthly', status:'approved', current_version_id:39, approved_version_id:39,
+        canonical_version_id:39, canonical_version_case_id:1201,
+        evidence_json:JSON.stringify({ sources:[{ period_case_id:1101 }, { period_case_id:1102 }] }) }], []]
       if (text.includes('SELECT * FROM strategy_memory_libraries')) return [[queuedLibrary], []]
       if (text.includes('FROM strategy_memory_pending_updates')) return [[], []]
       if (text.includes('INSERT INTO strategy_memory_pending_updates')) return [{ insertId:21, affectedRows:1 }, []]
@@ -248,5 +379,47 @@ describe('unified strategy memory access and CAS', () => {
     expect(revisionCall?.[1]?.[2]).toBe('monthly_review_append')
     const libraryUpdate = run.mock.calls.find(([sql]) => String(sql).includes('UPDATE strategy_memory_libraries'))
     expect(libraryUpdate?.[1]).toContain('queued')
+  })
+
+  it('reloads the approved case/version and rejects forged conflict source references', async () => {
+    mockQueryOne.mockResolvedValueOnce(privateStrategy())
+    const run = vi.fn(async sql => {
+      const text = String(sql)
+      if (text.includes('FROM period_review_cases cases')) return [[{ id:1201, strategy_id:5,
+        period_type:'daily', status:'approved', current_version_id:39, approved_version_id:39,
+        canonical_version_id:39, canonical_version_case_id:1201,
+        evidence_json:JSON.stringify({ sources:[{ outcome_id:101 }] }) }], []]
+      if (text.includes('SELECT * FROM strategy_memory_libraries')) return [[library()], []]
+      if (text.includes('FROM strategy_memory_conflicts')) return [[], []]
+      if (text.includes('INSERT INTO strategy_memory_conflicts')) return [{ insertId:77, affectedRows:1 }, []]
+      if (text.includes('FROM strategy_memory_conflict_occurrences')) return [[], []]
+      if (text.includes('INSERT INTO strategy_memory_conflict_occurrences')) return [{ insertId:88, affectedRows:1 }, []]
+      if (text.includes('UPDATE strategy_memory_conflicts')) return [{ affectedRows:1 }, []]
+      throw new Error(`unexpected_sql:${sql}`)
+    })
+    mockWithTransaction.mockImplementationOnce(fn => fn(run))
+    await expect(recordStrategyMemoryConflictEvidence({
+      strategyId:5, actor:{ serverOwned:true, userId:7 }, serverOwned:true,
+      strategyScope:'private', strategyOwnerUserId:7,
+      validatedReviewCase:{ id:1201, strategy_id:5, approved_version_id:39, status:'approved' },
+      approved:true, period_review_version_id:39, period_review_case_id:1201,
+      conflict_key:'conflict-1', description:'结构矛盾', source_refs:['outcome:101', 'unknown:forged'],
+    })).rejects.toThrow('strategy_memory_source_ref_invalid')
+    expect(run.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO strategy_memory_conflicts'))).toBe(false)
+  })
+
+  it('rejects conflict evidence when the durable case is not approved/current', async () => {
+    mockQueryOne.mockResolvedValueOnce(privateStrategy())
+    const run = vi.fn(async sql => {
+      if (String(sql).includes('FROM period_review_cases cases')) return [[], []]
+      throw new Error(`unexpected_sql:${sql}`)
+    })
+    mockWithTransaction.mockImplementationOnce(fn => fn(run))
+    await expect(recordStrategyMemoryConflictEvidence({
+      strategyId:5, actor:{ serverOwned:true, userId:7 }, serverOwned:true,
+      strategyScope:'private', strategyOwnerUserId:7, approved:true,
+      period_review_version_id:39, period_review_case_id:1201,
+      conflict_key:'conflict-1', description:'结构矛盾', source_refs:['outcome:101'],
+    })).rejects.toThrow('strategy_memory_approved_review_not_canonical')
   })
 })

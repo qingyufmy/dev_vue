@@ -11,7 +11,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { initDB, getDB, queryOne, queryRun } from './db.js'
 import { runMigrations } from './migrations.js'
 import { isEncryptionAvailable } from './ai-credential.js'
-import { assertModelProfileSchemaReady, migrateLegacyConfigs, recoverStaleModelUsageReservations } from './routes/ai/model-profiles.js'
+import { assertModelProfileSchemaReady, recoverStaleModelUsageReservations } from './routes/ai/model-profiles.js'
 import { migrateLegacySystemConfigSecrets } from './system-config-secrets.js'
 import { assertAiGovernanceSchemaReady } from './routes/ai/rollout-governance.js'
 import { BILIBILI_HEADERS } from './utils.js'
@@ -447,7 +447,6 @@ installGracefulShutdownHandlers()
   await assertAiGovernanceSchemaReady()
   if (isEncryptionAvailable()) {
     await assertModelProfileSchemaReady()
-    await migrateLegacyConfigs()
     const systemCredentialMigration = await migrateLegacySystemConfigSecrets()
     if (systemCredentialMigration.migrated > 0) console.log(`[Config] Encrypted ${systemCredentialMigration.migrated} legacy system credentials`)
   } else {

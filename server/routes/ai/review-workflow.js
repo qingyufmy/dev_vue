@@ -1,12 +1,5 @@
-import crypto from 'crypto'
 import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../../db.js'
-import { resolveAiTaskModel } from './model-profiles.js'
-import { requestJsonObject } from './llm.js'
-import { estimateModelInputTokens, selectModelTaskBudget } from './model-task-budget.js'
-import { getModelProviderCapabilities } from './model-provider-capabilities.js'
-import { parseSnapshotJson, sha256 } from './inference-snapshots.js'
-import { isAiFeatureEnabled } from './rollout-governance.js'
-import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
+import { parseSnapshotJson, sha256, resolveFrozenChanRequirement } from './inference-snapshots.js'
 import { buildReviewMarketPath } from './review-market-path.js'
 import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
 
@@ -14,15 +7,9 @@ const REVIEW_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidenc
 const ISSUE_SEVERITIES = new Set(['low', 'medium', 'high', 'critical'])
 const PROCESS_STATUSES = new Set(['unreviewed', 'issue', 'no_issue', 'uncertain'])
 const REVIEW_CONTENT_STATUSES = new Set(['pending', 'accurate', 'needs_revision', 'deferred'])
-let workerTimer = null
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const json = value => JSON.stringify(value)
 const safeError = error => String(error?.message || error || 'review_failed').replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').slice(0, 128)
-
-function afterSeconds(seconds) {
-  const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
-  return date.toISOString().replace('T', ' ').slice(0, 19)
-}
 
 function isTruePrompt(value) {
   const text = String(value || '').trim()
@@ -94,6 +81,42 @@ export function assessReviewEvidence(row, deals = []) {
   return { complete: reasons.length === 0, reasons }
 }
 
+export function assessChanEvidenceStatus(requirementOrStatus, timeframeValues = []) {
+  const requirement = requirementOrStatus && typeof requirementOrStatus === 'object'
+    ? requirementOrStatus : { status:requirementOrStatus }
+  const requirementStatus = requirement.status
+  if (requirementStatus === 'disabled') return { status:'not_applicable', reason:null }
+  if (requirementStatus === 'unknown') return { status:'unknown', reason:'chan_requirement_unknown' }
+  if (Array.isArray(requirement.unsupported_timeframes) && requirement.unsupported_timeframes.length) {
+    return { status:'unsupported', reason:'chan_timeframe_unsupported' }
+  }
+  const chans = timeframeValues.map(value => value?.chan).filter(Boolean)
+  if (!chans.length) return { status:'unavailable', reason:'chan_evidence_unavailable' }
+  const unsupported = chans.some(chan => {
+    const codes = chan?.evidence_capabilities?.reason_codes
+    return ['unsupported', 'unsupported_policy', 'unsupported_timeframe_policy'].includes(String(chan?.status || '').toLowerCase())
+      || (Array.isArray(codes) && codes.some(code => String(code).toLowerCase().includes('unsupported')))
+  })
+  if (unsupported) return { status:'unsupported', reason:'chan_timeframe_unsupported' }
+  const incomplete = chans.some(chan => {
+    const capabilities = chan?.evidence_capabilities
+    if (capabilities && capabilities.data_complete === false) return true
+    if (chan.history_sufficient === false || chan.closed_history_sufficient === false) return true
+    if (chan.window_stable === false || chan.cache_internal_gap_unresolved === true) return true
+    if (chan.time_location_reliable === false || chan.structure_time_key_reliable === false) return true
+    if (chan.clock_trust_level && ['unknown', 'untrusted'].includes(String(chan.clock_trust_level).toLowerCase())) return true
+    const continuity = chan.continuity && typeof chan.continuity === 'object' ? chan.continuity : null
+    if (continuity && (continuity.known === false || continuity.reliable === false
+      || continuity.status === 'unknown_session' || continuity.status === 'suspicious_gap'
+      || continuity.cache_internal_gap_unresolved === true)) return true
+    if (['unknown_session', 'suspicious_gap', 'policy_missing'].includes(String(chan.continuity_status || '').toLowerCase())) return true
+    return false
+  })
+  if (incomplete) return { status:'partial', reason:'chan_evidence_incomplete' }
+  const complete = chans.every(chan => ['complete', 'ok'].includes(String(chan?.status || '').toLowerCase()))
+  return complete ? { status:'complete', reason:null } : { status:'partial', reason:'chan_evidence_partial' }
+}
+
 async function loadEvidence(outcomeId) {
   const row = await queryOne(`SELECT so.*, s.signal_type, s.confidence, s.recommended_volume, s.analysis,
       s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price,
@@ -104,8 +127,8 @@ async function loadEvidence(outcomeId) {
       snap.strategy_scope AS snapshot_strategy_scope,
       snap.model_profile_id AS inference_model_profile_id, snap.provider AS inference_provider,
       snap.model_name AS inference_model_name, snap.credential_source AS inference_credential_source,
-      snap.klines_json, snap.market_snapshot_json, snap.evidence_status AS snapshot_evidence_status,
-      snap.omitted_fields_json, snap.content_hash AS snapshot_content_hash,
+       snap.klines_json, snap.market_snapshot_json, snap.evidence_status AS snapshot_evidence_status,
+       snap.omitted_fields_json, snap.content_hash AS snapshot_content_hash, snap.strategy_runtime_json,
       oi.request_json, oi.original_order_json, oi.approved_order_json, oi.bridge_payload_json,
       oi.result_json, oi.status AS execution_status, oi.bridge_command_ref,
       rd.policy_version_ids_json, rd.rule_results_json, rd.decision_status AS risk_decision_status,
@@ -124,17 +147,24 @@ async function loadEvidence(outcomeId) {
     strategy_version: Number(row.snapshot_strategy_version || 1), strategy_scope: row.snapshot_strategy_scope,
     system_prompt: row.system_prompt, user_prompt: row.user_prompt, prompt_hash: row.prompt_hash,
     model_profile_id: row.inference_model_profile_id, provider: row.inference_provider,
-    model_name: row.inference_model_name, credential_source: row.inference_credential_source,
-    market_snapshot: parse(row.market_snapshot_json, {}), klines: parseSnapshotJson(row.klines_json, {}), content_hash: row.snapshot_content_hash } : null
+     model_name: row.inference_model_name, credential_source: row.inference_credential_source,
+     market_snapshot: parse(row.market_snapshot_json, {}), klines: parseSnapshotJson(row.klines_json, {}),
+     strategy_runtime:parseSnapshotJson(row.strategy_runtime_json, null), content_hash: row.snapshot_content_hash } : null
   const signal = row.signal_id ? { id: row.signal_id, signal_type: row.signal_type, timeframe: row.signal_timeframe,
     confidence: row.confidence, recommended_volume: row.recommended_volume, analysis: row.analysis, reasoning: row.reasoning,
     stop_loss_price: row.stop_loss_price, take_profit_1_price: row.take_profit_1_price,
-    take_profit_2_price: row.take_profit_2_price, take_profit_3_price: row.take_profit_3_price, created_at: row.signal_created_at } : null
+     take_profit_2_price: row.take_profit_2_price, take_profit_3_price: row.take_profit_3_price, created_at: row.signal_created_at } : null
+  const chanRequirement = resolveFrozenChanRequirement(snapshot, {
+    signal_market_data_json:row.signal_market_data_json,
+    inference_time:{ snapshot },
+  })
   let marketPath = { status: 'partial', reason: 'market_path_unavailable', timeframes: {}, metrics: null, hash: null }
   try { marketPath = await buildReviewMarketPath({ userId: row.user_id,
-    tradingAccountId:row.trading_account_id, symbol: row.symbol,
-    signal: signal || {}, snapshot: snapshot || {}, deals }) }
+     tradingAccountId:row.trading_account_id, symbol: row.symbol,
+     signal: signal || {}, snapshot: snapshot || {}, deals, chanRequirement }) }
   catch (error) { marketPath.reason = safeError(error) }
+  const chanEvidence = assessChanEvidenceStatus(chanRequirement, Object.values(marketPath.timeframes || {}))
+  const chanEvidenceStatus = chanEvidence.status
   const assessment = {
     complete:coreAssessment.complete && marketPath.status === 'complete',
     reasons:[...coreAssessment.reasons, ...(marketPath.status === 'complete' ? [] : ['holding_market_path_incomplete'])],
@@ -163,19 +193,27 @@ async function loadEvidence(outcomeId) {
       deals: deals.map(deal => ({ deal_ticket: deal.deal_ticket, position_id: deal.position_id, order_ticket: deal.order_ticket, entry_type: deal.entry_type, magic: deal.magic, reason: deal.reason, volume: deal.volume, price: deal.price, profit: deal.profit, commission: deal.commission, swap: deal.swap, fee: deal.fee, deal_time: deal.deal_time })),
       path_metrics: marketPath.metrics,
       post_trade_klines: Object.fromEntries(Object.entries(marketPath.timeframes || {}).map(([timeframe, value]) => [timeframe, value.candles || []])),
-      post_trade_structure: Object.fromEntries(Object.entries(marketPath.timeframes || {}).map(([timeframe, value]) => [timeframe, { indicators: value.indicators || null, chan: value.chan || null }])),
-      path_evidence: { status: marketPath.status, reason: marketPath.reason, primary_timeframe: marketPath.primary_timeframe,
+       post_trade_structure: Object.fromEntries(Object.entries(marketPath.timeframes || {}).map(([timeframe, value]) => [timeframe, {
+         indicators: value.indicators || null,
+         ...(Object.prototype.hasOwnProperty.call(value, 'chan') ? { chan:value.chan } : {}),
+       }])),
+       path_evidence: { status: marketPath.status, reason: marketPath.reason, primary_timeframe: marketPath.primary_timeframe,
+         chan_requirement_status:chanRequirement.status, chan_evidence_status:chanEvidenceStatus,
+          chan_evidence_reason:chanEvidence.reason,
+         chan_requirement:chanRequirement,
         coverage: Object.fromEntries(Object.entries(marketPath.timeframes || {}).map(([timeframe, value]) => [timeframe, {
           status: value.status, candle_count: value.candle_count, source_candle_count: value.source_candle_count,
-          truncated_before_entry: value.truncated_before_entry, truncated_before_exit: value.truncated_before_exit,
-        }])) },
+           truncated_before_entry: value.truncated_before_entry, truncated_before_exit: value.truncated_before_exit,
+            chan_status:value.chan ? (value.chan.status || 'partial') : null,
+            chan_evidence_status:value.chan ? assessChanEvidenceStatus(chanRequirement, [value]).status : null,
+         }])) },
     },
     evidence_refs: refs,
   }
   return { row, assessment, bundle, evidenceHash: sha256(json(bundle)) }
 }
 
-export async function ensureReviewCaseForOutcome(outcomeId, { queueGeneration = false } = {}) {
+export async function ensureReviewCaseForOutcome(outcomeId, { queueGeneration: _queueGeneration = false } = {}) {
   const evidence = await loadEvidence(outcomeId)
   const eligibility = assessReviewStrategyEligibility(evidence.row)
   if (!eligibility.eligible) return { skipped: true, reason: eligibility.reason, outcome_id: Number(outcomeId) }
@@ -210,187 +248,26 @@ export async function ensureReviewCaseForOutcome(outcomeId, { queueGeneration = 
     evidence.bundle.post_trade.path_evidence.reason, evidence.bundle.evidence_refs.holding_market_path.hash, now, now,
   ])
   const reviewCase = await queryOne('SELECT * FROM trade_review_cases WHERE outcome_id = ?', [outcomeId])
-  const generationEnabled = evidence.assessment.complete && await isAiFeatureEnabled('review_generation_enabled', evidence.row.user_id)
-  if (queueGeneration && generationEnabled && !reviewCase.current_version_id && !['approved', 'deferred'].includes(reviewCase.status)) {
-    await queryRun(`INSERT IGNORE INTO trade_review_jobs
-      (case_id, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
-      VALUES (?, ?, 'queued', 0, 3, ?, ?)`, [reviewCase.id, `review:${reviewCase.id}:${evidence.evidenceHash}`, now, now])
-  }
+  // Legacy per-trade model generation is retired. Period reviews still reuse
+  // this immutable evidence case, but no caller may enqueue trade_review_jobs.
   return await queryOne('SELECT * FROM trade_review_cases WHERE id = ?', [reviewCase.id])
 }
 
 export async function enqueueEligibleReviewCases(limit = 50) {
-  const platformManagerSql = platformAiContentManagerSql('u')
-  await queryRun(`UPDATE trade_review_jobs jobs
-    JOIN trade_review_cases rc ON rc.id = jobs.case_id
-    JOIN inference_snapshots snap ON snap.signal_id = rc.signal_id
-    JOIN users u ON u.id = rc.user_id
-    SET jobs.status = 'skipped', jobs.last_error_code = 'platform_strategy_user_review_disabled',
-      jobs.lease_token = NULL, jobs.lease_expires_at = NULL, jobs.updated_at = ?
-    WHERE snap.strategy_scope = 'platform' AND NOT ${platformManagerSql} AND jobs.status IN ('queued','leased')`, [beijingNow()])
-  await queryRun(`UPDATE trade_review_cases rc
-    JOIN inference_snapshots snap ON snap.signal_id = rc.signal_id
-    JOIN users u ON u.id = rc.user_id
-    SET rc.status = 'ineligible', rc.evidence_status = 'ineligible',
-      rc.evidence_reason = 'platform_strategy_user_review_disabled', rc.updated_at = ?
-    WHERE snap.strategy_scope = 'platform' AND NOT ${platformManagerSql} AND rc.current_version_id IS NULL
-      AND rc.status NOT IN ('approved','deferred')`, [beijingNow()])
-  const outcomes = await queryAll(`SELECT so.id FROM signal_outcomes so
-    JOIN users u ON u.id = so.user_id
-    LEFT JOIN trade_review_cases rc ON rc.outcome_id = so.id
-    WHERE so.status = 'closed' AND so.review_eligible_at IS NOT NULL
-      AND EXISTS (SELECT 1 FROM inference_snapshots snap WHERE snap.signal_id = so.signal_id
-        AND ((snap.strategy_scope = 'private' AND NOT ${platformManagerSql})
-          OR (snap.strategy_scope = 'platform' AND ${platformManagerSql})))
-      AND (rc.id IS NULL OR rc.evidence_status <> 'complete') ORDER BY so.review_eligible_at LIMIT ?`, [Number(limit)])
-  const result = { scanned: outcomes.length, ready: 0, incomplete: 0, skipped: 0 }
-  for (const outcome of outcomes) {
-    try {
-      const reviewCase = await ensureReviewCaseForOutcome(outcome.id)
-      if (reviewCase.skipped) { result.skipped++; continue }
-      result[reviewCase.evidence_status === 'complete' ? 'ready' : 'incomplete']++
-    } catch (error) { console.error('[TradeReview] Evidence preparation failed:', safeError(error)) }
-  }
-  return result
+  void limit
+  return { retired:true, scanned:0, ready:0, incomplete:0, skipped:0 }
 }
 
-async function claimReviewJob() {
-  return withTransaction(async run => {
-    const [rows] = await run(`SELECT jobs.*, rc.user_id AS review_user_id FROM trade_review_jobs jobs
-      JOIN trade_review_cases rc ON rc.id = jobs.case_id
-      WHERE (jobs.status = 'queued' OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
-        AND jobs.attempt_count < jobs.max_attempts AND ${reviewEligibilitySql('rc')}
-      ORDER BY jobs.updated_at, jobs.id LIMIT 1 FOR UPDATE`, [beijingNow()])
-    const job = rows[0]
-    if (!job) return null
-    const token = crypto.randomUUID()
-    await run(`UPDATE trade_review_jobs SET status = 'leased', lease_token = ?, lease_expires_at = ?,
-      attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`, [token, afterSeconds(180), beijingNow(), job.id])
-    await run(`UPDATE trade_review_cases SET status = 'generating', updated_at = ?
-      WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), job.case_id])
-    return { ...job, lease_token: token, attempt_count: Number(job.attempt_count) + 1 }
-  })
+export async function runReviewWorkerOnce() {
+  return { claimed:false, retired:true }
 }
 
-function modelEndpoint(model) {
-  const provider = model.provider || model.api_provider
-  const protocol = modelProviderProtocol(provider)
-  const base = String(model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
-  if (!base) throw new Error('unsupported_review_model_provider')
-  return { protocol, url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}` }
-}
-
-async function generateReview(reviewCase, requestModel = requestJsonObject) {
-  if (reviewCase.evidence_status !== 'complete') throw new Error('review_evidence_incomplete')
-  const evidence = parse(reviewCase.evidence_json, null)
-  if (!evidence) throw new Error('review_evidence_invalid')
-  const strategyId = Number(evidence?.inference_time?.snapshot?.strategy_id) || null
-  if (!strategyId) throw new Error('review_strategy_id_missing')
-  const resolved = await resolveAiTaskModel({ userId: reviewCase.user_id, strategyId, usage: 'review' })
-  if (!resolved.model) throw new Error(resolved.error || 'review_model_unavailable')
-  const endpoint = modelEndpoint(resolved.model)
-  const system = `你是严格的交易复盘分析器。只依据提供的证据判断，不得把亏损直接等同于决策错误，也不得把盈利直接等同于决策正确。区分推理时证据与交易后结果；无法判断时使用 insufficient_evidence。只返回 JSON。除 JSON 字段名和规定枚举值外，summary、outcome_summary、description、strengths、lessons 等全部用户可见内容必须使用简体中文，禁止内部错误码、英文状态或整句英文；品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。`
-  const shape = { summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence', outcome_summary: 'string', trade_process_issues: [{ code: 'string', severity: 'low|medium|high|critical', description: 'string', evidence_refs: ['ref key'] }], strengths: ['string'], lessons: ['string'], evidence_refs: ['ref key'], confidence: 0.5 }
-  let capabilities = {}
-  try {
-    capabilities = await getModelProviderCapabilities(resolved.model_profile_id) || {}
-  } catch (error) {
-    console.warn('[TradeReview] provider capability lookup unavailable:', safeError(error))
-  }
-  const messages = [{ role: 'system', content: system }, { role: 'user', content: `输出结构：${json(shape)}\n\n证据包：${json(evidence)}` }]
-  const budget = selectModelTaskBudget({
-    taskKind:'manual_analysis',
-    profileHardCap:Number(resolved.model.max_tokens) || 3000,
-    providerOutputCap:capabilities.max_output_tokens,
-    contextWindowTokens:capabilities.context_window_tokens,
-    maxInputTokens:capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens,
-    contextLimitSemantics:capabilities.context_limit_semantics,
-    capabilities,
-    profile:resolved.model,
-    estimatedInputTokens:estimateModelInputTokens(messages),
-    schemaNeedTokens:0,
-    legacyExactProfileCap:true,
-  })
-  if (budget.reason === 'model_input_limit_exceeded' || budget.inputLimitExceeded) throw new Error('model_input_limit_exceeded')
-  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
-  const content = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider, model: resolved.model.model_name,
-    temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens: budget.selectedMaxOutputTokens,
-    thinkingEnabled: resolved.model.thinking_enabled, reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
-    messages, modelTaskBudget:budget,
-    usageContext: { userId: reviewCase.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId },
-  })
-  return { content: validateReviewContent(content, evidence.evidence_refs), resolved }
-}
-
-async function finishJobSuccess(job, content, resolved) {
-  await withTransaction(async run => {
-    const [jobs] = await run('SELECT * FROM trade_review_jobs WHERE id = ? FOR UPDATE', [job.id])
-    if (!jobs[0] || jobs[0].status !== 'leased' || jobs[0].lease_token !== job.lease_token) throw new Error('review_job_lease_lost')
-    const [cases] = await run('SELECT * FROM trade_review_cases WHERE id = ? FOR UPDATE', [job.case_id])
-    const reviewCase = cases[0]
-    if (!reviewCase || reviewCase.current_version_id) {
-      await run(`UPDATE trade_review_jobs SET status = 'succeeded', completed_at = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`, [beijingNow(), beijingNow(), job.id])
-      return
-    }
-    const [versions] = await run('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM trade_review_versions WHERE case_id = ? FOR UPDATE', [job.case_id])
-    const now = beijingNow()
-    const [insert] = await run(`INSERT INTO trade_review_versions
-      (case_id, version_no, parent_version_id, author_type, author_user_id, content_json, content_hash, change_note, created_at)
-      VALUES (?, ?, NULL, 'ai', NULL, ?, ?, 'AI initial draft', ?)`, [job.case_id, Number(versions[0].max_version) + 1, json(content), sha256(json(content)), now])
-    await run(`UPDATE trade_review_cases SET status = 'draft', current_version_id = ?, review_content_status = 'pending', updated_at = ? WHERE id = ?`, [insert.insertId, now, job.case_id])
-    await run(`UPDATE trade_review_jobs SET status = 'succeeded', model_profile_id = ?, credential_source = ?,
-      completed_at = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`, [resolved.model_profile_id, resolved.credential_source, now, now, job.id])
-  })
-}
-
-async function finishJobFailure(job, error) {
-  const exhausted = job.attempt_count >= Number(job.max_attempts)
-  await withTransaction(async run => {
-    await run(`UPDATE trade_review_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
-      lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?`, [exhausted ? 'failed' : 'queued', safeError(error), beijingNow(), job.id, job.lease_token])
-    await run(`UPDATE trade_review_cases SET status = ?, updated_at = ? WHERE id = ? AND current_version_id IS NULL`, [exhausted ? 'failed' : 'ready', beijingNow(), job.case_id])
-  })
-}
-
-export async function runReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
-  const job = await claimReviewJob()
-  if (!job) return { claimed: false }
-  try {
-    if (!await isAiFeatureEnabled('review_generation_enabled', job.review_user_id)) {
-      await queryRun(`UPDATE trade_review_jobs SET status = 'skipped', last_error_code = 'review_generation_disabled',
-        lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
-      [beijingNow(), beijingNow(), job.id, job.lease_token])
-      await queryRun(`UPDATE trade_review_cases SET status = 'ready', updated_at = ? WHERE id = ? AND current_version_id IS NULL`, [beijingNow(), job.case_id])
-      return { claimed: true, caseId: job.case_id, status: 'skipped', reason: 'review_generation_disabled' }
-    }
-    const reviewCase = await queryOne('SELECT * FROM trade_review_cases WHERE id = ?', [job.case_id])
-    const generated = await generateReview(reviewCase, requestModel)
-    await finishJobSuccess(job, generated.content, generated.resolved)
-    return { claimed: true, caseId: job.case_id, status: 'succeeded' }
-  } catch (error) {
-    await finishJobFailure(job, error)
-    return { claimed: true, caseId: job.case_id, status: 'failed', error: safeError(error) }
-  }
-}
-
-export function startReviewWorker(intervalMs = 30_000) {
-  if (workerTimer) return false
-  const tick = async () => {
-    try {
-      if (!await isAiFeatureEnabled('review_generation_enabled')) return
-      await enqueueEligibleReviewCases(); await runReviewWorkerOnce()
-    }
-    catch (error) { console.error('[TradeReview] Worker cycle failed:', safeError(error)) }
-  }
-  workerTimer = setInterval(tick, Math.max(5_000, Number(intervalMs)))
-  workerTimer.unref?.()
-  void tick()
-  return true
+export function startReviewWorker() {
+  return false
 }
 
 export function stopReviewWorker() {
-  if (!workerTimer) return false
-  clearInterval(workerTimer); workerTimer = null; return true
+  return false
 }
 
 export async function listReviewCases(userId, { limit = 50, offset = 0, status = null } = {}) {
@@ -452,21 +329,9 @@ export async function confirmReviewCase({ caseId, userId, versionId, action, tra
 }
 
 export async function retryReviewCase(caseId, userId) {
-  return withTransaction(async run => {
-    const [cases] = await run(`SELECT rc.* FROM trade_review_cases rc WHERE rc.id = ? AND rc.user_id = ? AND ${reviewEligibilitySql('rc')} FOR UPDATE`, [caseId, userId])
-    const reviewCase = cases[0]
-    if (!reviewCase) throw new Error('review_case_not_found')
-    if (reviewCase.evidence_status !== 'complete') throw new Error('review_evidence_incomplete')
-    if (reviewCase.current_version_id) throw new Error('review_already_generated')
-    const [jobs] = await run('SELECT * FROM trade_review_jobs WHERE case_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE', [caseId])
-    const now = beijingNow()
-    if (jobs[0]) await run(`UPDATE trade_review_jobs SET status = 'queued', attempt_count = 0, last_error_code = NULL,
-      lease_token = NULL, lease_expires_at = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`, [now, jobs[0].id])
-    else await run(`INSERT INTO trade_review_jobs (case_id, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
-      VALUES (?, ?, 'queued', 0, 3, ?, ?)`, [caseId, `review:${caseId}:${reviewCase.evidence_hash}:retry:${crypto.randomUUID()}`, now, now])
-    await run(`UPDATE trade_review_cases SET status = 'ready', updated_at = ? WHERE id = ?`, [now, caseId])
-    return { queued: true }
-  })
+  void caseId
+  void userId
+  throw new Error('legacy_trade_review_disabled')
 }
 
 export async function getReviewAdminHealth() {

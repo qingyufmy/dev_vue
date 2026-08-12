@@ -39,11 +39,6 @@ export const INFERENCE_KLINE_FIELDS = Object.freeze([
 const COMPACT_MARKET_INPUT_RULE = `## 市场数据紧凑编码
 strategy_context.input_encoding 说明模型输入的无损编码。各周期 klines 中每个数组元素严格依次对应 kline_fields；字段包括原始时间、UTC 毫秒时间、交易服务器毫秒时间、采集 UTC 毫秒时间、开高低收、Tick 成交量和点差，null 表示该原始字段未提供，数组元素数量就是 K 线根数。对象 {"$ref":"#/..."} 是 JSON Pointer，表示与所指对象完全相同；分析时必须按原对象展开理解，不得视为数据缺失。`
 
-export function configuredModelMaxTokens(config = {}) {
-  const configured = Number.parseInt(config.max_tokens, 10)
-  return Number.isInteger(configured) && configured > 0 ? configured : 2_000
-}
-
 function jsonPointerToken(value) {
   return String(value).replace(/~/g, '~0').replace(/\//g, '~1')
 }
@@ -490,6 +485,51 @@ export const MODEL_PROVIDER_SSE_LIMITS = Object.freeze({
   maxLineBytes:256 * 1024,
 })
 
+// A provider may emit one SSE event per token (or split a token across several
+// deltas). Keep a generous, request-specific envelope instead of allowing the
+// old 20k/16 MiB defaults to truncate a physically valid 384K-output request.
+// The absolute caps are deliberately finite: malformed providers must not be
+// able to turn a model request into an unbounded in-memory stream.
+const MODEL_PROVIDER_SSE_ABSOLUTE_MAX_EVENTS = 4_000_000
+const MODEL_PROVIDER_SSE_ABSOLUTE_MAX_BYTES = 128 * 1024 * 1024
+const SSE_EVENTS_PER_OUTPUT_TOKEN = 4
+const SSE_BYTES_PER_OUTPUT_TOKEN = 256
+
+function positiveInteger(value, fallback) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+/**
+ * Derive bounded SSE parser limits from the physical output allowance sent on
+ * this request. Direct parser callers can continue using MODEL_PROVIDER_SSE_LIMITS;
+ * requestJsonObject/trackedModelRequest pass this derived envelope for streams.
+ */
+export function deriveProviderSseLimits(physicalMaxOutputTokens, baseLimits = MODEL_PROVIDER_SSE_LIMITS) {
+  const baseEvents = positiveInteger(baseLimits?.maxEvents, MODEL_PROVIDER_SSE_LIMITS.maxEvents)
+  const baseBytes = positiveInteger(baseLimits?.maxBytes, MODEL_PROVIDER_SSE_LIMITS.maxBytes)
+  const maxLineBytes = Math.min(
+    MODEL_PROVIDER_SSE_LIMITS.maxLineBytes,
+    positiveInteger(baseLimits?.maxLineBytes, MODEL_PROVIDER_SSE_LIMITS.maxLineBytes),
+  )
+  const outputTokens = positiveInteger(physicalMaxOutputTokens, 0)
+  if (!outputTokens) {
+    return {
+      maxEvents:Math.min(MODEL_PROVIDER_SSE_ABSOLUTE_MAX_EVENTS, baseEvents),
+      maxBytes:Math.min(MODEL_PROVIDER_SSE_ABSOLUTE_MAX_BYTES, baseBytes),
+      maxLineBytes,
+    }
+  }
+
+  const outputEventBudget = outputTokens * SSE_EVENTS_PER_OUTPUT_TOKEN + 64
+  const outputByteBudget = outputTokens * SSE_BYTES_PER_OUTPUT_TOKEN + baseBytes
+  return {
+    maxEvents:Math.min(MODEL_PROVIDER_SSE_ABSOLUTE_MAX_EVENTS, Math.max(baseEvents, outputEventBudget)),
+    maxBytes:Math.min(MODEL_PROVIDER_SSE_ABSOLUTE_MAX_BYTES, Math.max(baseBytes, outputByteBudget)),
+    maxLineBytes,
+  }
+}
+
 function providerStreamError(code, detail = '') {
   const error = new Error(detail ? `${code}:${detail}` : code)
   error.code = code
@@ -519,9 +559,12 @@ export async function parseProviderSseResponse(response, {
     ? body[Symbol.asyncIterator]() : null
   if (!reader && !iterator) throw providerStreamError('provider_sse_body_unavailable')
 
-  const maxEvents = Math.max(1, Number(limits?.maxEvents) || MODEL_PROVIDER_SSE_LIMITS.maxEvents)
-  const maxBytes = Math.max(1, Number(limits?.maxBytes) || MODEL_PROVIDER_SSE_LIMITS.maxBytes)
-  const maxLineBytes = Math.max(1, Number(limits?.maxLineBytes) || MODEL_PROVIDER_SSE_LIMITS.maxLineBytes)
+  const maxEvents = Math.min(MODEL_PROVIDER_SSE_ABSOLUTE_MAX_EVENTS,
+    Math.max(1, Number(limits?.maxEvents) || MODEL_PROVIDER_SSE_LIMITS.maxEvents))
+  const maxBytes = Math.min(MODEL_PROVIDER_SSE_ABSOLUTE_MAX_BYTES,
+    Math.max(1, Number(limits?.maxBytes) || MODEL_PROVIDER_SSE_LIMITS.maxBytes))
+  const maxLineBytes = Math.min(MODEL_PROVIDER_SSE_LIMITS.maxLineBytes,
+    Math.max(1, Number(limits?.maxLineBytes) || MODEL_PROVIDER_SSE_LIMITS.maxLineBytes))
   const decoder = new TextDecoder('utf-8', { fatal:true })
   let responseBytes = 0
   let lineBuffer = ''
@@ -808,6 +851,7 @@ async function trackedModelRequest({
     if (streamingResponse) {
       const parsed = await parseProviderSseResponse(response, {
         protocol,
+        limits:deriveProviderSseLimits(body?.max_output_tokens ?? body?.max_tokens),
         onEvent:async event => {
           responseBytes = Math.max(responseBytes, Number(event?.responseBytes) || 0)
           const eventType = event.done ? '[DONE]' : String(event.eventType || event.data?.type || 'provider.event')
@@ -934,7 +978,13 @@ async function emitModelProgress(onProgress, stage) {
 /** Keep every initial or repair request inside the confirmed physical limits. */
 export function resolveConfirmedRequestMaxTokens(messages, requestedMaxTokens, modelTaskBudget = null) {
   const requested = Math.max(0, Math.trunc(Number(requestedMaxTokens) || 0))
-  if (modelTaskBudget?.tokenLimitsStatus !== 'confirmed') return requested
+  if (modelTaskBudget && modelTaskBudget.tokenLimitsStatus !== 'confirmed') {
+    const error = new Error(modelTaskBudget.tokenLimitsStatus === 'stale'
+      ? 'model_token_limits_stale' : 'model_token_limits_unconfirmed')
+    error.code = error.message
+    throw error
+  }
+  if (!modelTaskBudget) return requested
   const actualInputTokens = estimateModelInputTokens(messages)
   const maxInput = Number(modelTaskBudget.maxInputTokens ?? modelTaskBudget.providerMaxInputTokens)
   if (!Number.isInteger(maxInput) || maxInput <= 0 || actualInputTokens > maxInput) {
@@ -1313,12 +1363,11 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
         ])
         outputHistory = summarizeModelOutputHistory(historyRows)
       } catch (error) {
-        console.warn('[LLM] Model output history unavailable, using task floor:', error.message)
+        console.warn('[LLM] Model output history unavailable; physical provider limits remain authoritative:', error.message)
       }
     }
     const budget = selectModelTaskBudget({
       taskKind,
-      profileHardCap:configuredModelMaxTokens(config),
       providerOutputCap:capabilities.max_output_tokens,
       contextWindowTokens:capabilities.context_window_tokens,
       maxInputTokens:capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens,
@@ -1330,6 +1379,11 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
       historicalOutputP95:outputHistory.historicalOutputP95,
       truncatedOutputHighWatermark:outputHistory.truncatedOutputHighWatermark,
     })
+    if (budget.reason === 'model_token_limits_unconfirmed' || budget.reason === 'model_token_limits_stale') {
+      const error = new Error(budget.reason)
+      error.code = error.message
+      throw error
+    }
     if (budget.reason === 'model_input_limit_exceeded' || budget.inputLimitExceeded) {
       const error = new Error('model_input_limit_exceeded')
       error.code = error.message

@@ -174,6 +174,206 @@ export function parseSnapshotJson(value, fallback = {}) {
   }
 }
 
+const FROZEN_CHAN_TIMEFRAMES = new Set(['M5', 'M15', 'H1', 'H4'])
+
+function parsedObject(value, fallback = null) {
+  const parsed = parseSnapshotJson(value, fallback)
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback
+}
+
+function normalizeFrozenChanTimeframes(...values) {
+  const result = []
+  const add = value => {
+    if (Array.isArray(value)) {
+      for (const item of value) add(item)
+      return
+    }
+    if (value && typeof value === 'object') {
+      if (value.timeframe) add(value.timeframe)
+      if (value.timeframes) add(value.timeframes)
+      for (const [key, item] of Object.entries(value)) {
+        if (item === true || item?.enabled === true || item?.chan === true) add(key)
+      }
+      return
+    }
+    const timeframe = String(value || '').trim().toUpperCase()
+    if (FROZEN_CHAN_TIMEFRAMES.has(timeframe) && !result.includes(timeframe)) result.push(timeframe)
+  }
+  values.forEach(add)
+  return result
+}
+
+function normalizeKnownTimeframes(...values) {
+  const result = []
+  const add = value => {
+    if (Array.isArray(value)) { value.forEach(add); return }
+    if (value && typeof value === 'object') {
+      if (value.timeframe) add(value.timeframe)
+      if (value.timeframes) add(value.timeframes)
+      for (const [key, item] of Object.entries(value)) {
+        if (item === true || item?.enabled === true || item?.chan === true) add(key)
+      }
+      return
+    }
+    const timeframe = String(value || '').trim().toUpperCase()
+    if (INFERENCE_EVIDENCE_TIMEFRAME_SET.has(timeframe) && !result.includes(timeframe)) result.push(timeframe)
+  }
+  values.forEach(add)
+  return result
+}
+
+function frozenRuntimeFrom(snapshot, evidence) {
+  const candidates = [
+    snapshot?.strategy_runtime,
+    snapshot?.strategyRuntime,
+    snapshot?.strategy_runtime_json,
+    snapshot?.strategyRuntimeJson,
+    evidence?.strategy_runtime,
+    evidence?.strategyRuntime,
+    evidence?.strategy_runtime_json,
+    evidence?.strategyRuntimeJson,
+    evidence?.inference_time?.snapshot?.strategy_runtime,
+    evidence?.inference_time?.snapshot?.strategy_runtime_json,
+  ]
+  for (const candidate of candidates) {
+    const runtime = parsedObject(candidate, null)
+    if (runtime) return runtime
+  }
+  return null
+}
+
+function rawChanEvidence(snapshot, evidence, fallbackSource = 'inference_snapshot_raw_chan') {
+  const roots = [
+    snapshot?.market_snapshot,
+    snapshot?.marketSnapshot,
+    evidence?.market_snapshot,
+    evidence?.marketSnapshot,
+    evidence?.signal_market_data,
+    evidence?.signal?.market_data,
+    evidence?.post_trade?.post_trade_structure,
+    evidence?.post_trade_structure,
+    evidence?.inference_time?.snapshot?.market_snapshot,
+    evidence?.inference_time?.snapshot?.marketSnapshot,
+  ].map(value => parsedObject(value, null)).filter(Boolean)
+  for (const root of roots) {
+    const context = root.strategy_context || root.strategyContext || root
+    if (context.chan && typeof context.chan === 'object') {
+      const allTimeframes = normalizeKnownTimeframes(context.timeframe || root.timeframe)
+      return { timeframes:normalizeFrozenChanTimeframes(allTimeframes), unsupportedTimeframes:allTimeframes.filter(item => !FROZEN_CHAN_TIMEFRAMES.has(item)), source:fallbackSource, frames:{} }
+    }
+    const frames = context?.timeframes || (context === root ? context : null)
+    if (frames && typeof frames === 'object') {
+      const timeframes = []
+      for (const [rawTimeframe, frame] of Object.entries(frames)) {
+        const chan = frame?.summary?.chan || frame?.summary?.chan_structure || frame?.chan
+        if (chan && typeof chan === 'object') timeframes.push(String(rawTimeframe).toUpperCase())
+      }
+      if (timeframes.length) {
+        const allTimeframes = normalizeKnownTimeframes(timeframes)
+        return { timeframes:normalizeFrozenChanTimeframes(allTimeframes), unsupportedTimeframes:allTimeframes.filter(item => !FROZEN_CHAN_TIMEFRAMES.has(item)), source:'inference_snapshot_raw_chan', frames }
+      }
+    }
+    if (context?.chan_timeframe_alignment || context?.chan_structures) {
+      const allTimeframes = normalizeKnownTimeframes(
+        context.chan_timeframe_alignment?.timeframes,
+        context.chan_structures?.timeframes,
+        Object.keys(context.chan_timeframe_alignment || {}),
+        Object.keys(context.chan_structures || {}),
+        Object.keys(context.timeframes || {}),
+      )
+      return { timeframes:normalizeFrozenChanTimeframes(allTimeframes), unsupportedTimeframes:allTimeframes.filter(item => !FROZEN_CHAN_TIMEFRAMES.has(item)), source:'legacy_snapshot_marker' }
+    }
+  }
+  return null
+}
+
+/**
+ * Resolve Chan capability from the evidence frozen with a signal.
+ *
+ * The current strategy is deliberately not consulted here: a later edit must
+ * never change the evidence contract of an already-created signal.
+ */
+export function resolveFrozenChanRequirement(snapshot = {}, evidence = {}) {
+  const sourceSnapshot = parsedObject(snapshot, {}) || {}
+  const sourceEvidence = parsedObject(evidence, {}) || {}
+  const runtime = frozenRuntimeFrom(sourceSnapshot, sourceEvidence)
+  const strategyVersionRaw = runtime?.strategy_version
+    ?? sourceSnapshot.strategy_version
+    ?? sourceSnapshot.strategyVersion
+    ?? sourceEvidence.strategy_version
+  const strategyVersion = Number.isFinite(Number(strategyVersionRaw)) ? Number(strategyVersionRaw) : 1
+  const runtimeHasChan = runtime && Object.prototype.hasOwnProperty.call(runtime, 'use_chan_analysis')
+  const runtimeWindowVersion = runtime?.window_policy_version
+    || runtime?.chan_window_policy_version
+    || runtime?.chanWindowPolicyVersion
+    || null
+  const runtimeTimeframesAll = normalizeKnownTimeframes(
+    runtime?.chan_timeframes,
+    runtime?.chanTimeframes,
+    runtime?.chan_timeframe,
+    runtime?.market_data_plan?.timeframes,
+  )
+  const runtimeTimeframes = normalizeFrozenChanTimeframes(runtimeTimeframesAll)
+  const runtimeUnsupportedTimeframes = runtimeTimeframesAll.filter(item => !FROZEN_CHAN_TIMEFRAMES.has(item))
+  if (runtimeHasChan) {
+    const enabled = runtime.use_chan_analysis === true || runtime.use_chan_analysis === 1 || runtime.use_chan_analysis === '1'
+      || String(runtime.use_chan_analysis).trim().toLowerCase() === 'true'
+    const disabled = runtime.use_chan_analysis === false || runtime.use_chan_analysis === 0 || runtime.use_chan_analysis === '0'
+      || String(runtime.use_chan_analysis).trim().toLowerCase() === 'false'
+    if (enabled || disabled) {
+      return {
+        status: enabled ? 'enabled' : 'disabled',
+        source: enabled ? 'inference_snapshot_strategy_runtime' : 'explicit_frozen_disabled',
+        timeframes: enabled ? runtimeTimeframes : [],
+        unsupported_timeframes: enabled ? runtimeUnsupportedTimeframes : [],
+        strategy_version: strategyVersion,
+        window_policy_version: runtimeWindowVersion,
+      }
+    }
+  }
+  const embeddedRequirement = sourceEvidence?.chan_requirement
+    || sourceEvidence?.post_trade?.path_evidence?.chan_requirement
+    || sourceEvidence?.inference_time?.chan_requirement
+  if (embeddedRequirement && ['enabled', 'disabled', 'unknown'].includes(String(embeddedRequirement.status))) {
+    const embeddedStatus = String(embeddedRequirement.status)
+    const embeddedTimeframesAll = normalizeKnownTimeframes(embeddedRequirement.timeframes, embeddedRequirement.unsupported_timeframes)
+    return {
+      status:embeddedStatus,
+      source:embeddedRequirement.source || (embeddedStatus === 'disabled' ? 'explicit_frozen_disabled' : 'inference_snapshot_strategy_runtime'),
+      timeframes:embeddedStatus === 'enabled' ? normalizeFrozenChanTimeframes(embeddedTimeframesAll) : [],
+      unsupported_timeframes:embeddedStatus === 'enabled'
+        ? embeddedTimeframesAll.filter(item => !FROZEN_CHAN_TIMEFRAMES.has(item)) : [],
+      strategy_version:strategyVersion,
+      window_policy_version:embeddedRequirement.window_policy_version || runtimeWindowVersion || null,
+    }
+  }
+  const raw = rawChanEvidence(sourceSnapshot, sourceEvidence)
+  if (raw) {
+    const chanVersions = Object.values(raw.frames || {}).map(frame => frame?.summary?.chan || frame?.chan)
+      .map(chan => chan?.window_policy_version || chan?.chan_window_policy_version).filter(Boolean)
+    return {
+      status:'enabled', source:raw.source, timeframes:raw.timeframes,
+      unsupported_timeframes:raw.unsupportedTimeframes || [],
+      strategy_version:strategyVersion,
+      window_policy_version:runtimeWindowVersion || chanVersions[0] || null,
+    }
+  }
+  const signalData = parsedObject(sourceEvidence?.market_data_json || sourceEvidence?.signal_market_data_json, null)
+  const signalRaw = rawChanEvidence({}, { signal_market_data:signalData }, 'signal_market_data')
+  if (signalRaw) {
+    return {
+      status:'enabled', source:'signal_market_data', timeframes:signalRaw.timeframes,
+      unsupported_timeframes:signalRaw.unsupportedTimeframes || [],
+      strategy_version:strategyVersion,
+      window_policy_version:runtimeWindowVersion || null,
+    }
+  }
+  return {
+    status:'unknown', source:'unresolved', timeframes:[], strategy_version:strategyVersion,
+    window_policy_version:runtimeWindowVersion,
+  }
+}
+
 export function normalizeInferenceEvidenceTimeframe(value) {
   const timeframe = String(value || '').trim().toUpperCase()
   if (!INFERENCE_EVIDENCE_TIMEFRAME_SET.has(timeframe)) {
@@ -227,7 +427,15 @@ function fitKlinesToSnapshotBudget(stored, maxBytes, minimumBars = 50) {
 export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHOT_BYTES) {
   const strategyRuntime = input.strategyRuntime ? {
     ...input.strategyRuntime,
-    runtime_config_hash:sha256(JSON.stringify({
+    runtime_config_hash:input.strategyRuntime.runtime_config_hash || sha256(JSON.stringify({
+      strategy_id:input.strategyRuntime.strategy_id || null,
+      strategy_version:input.strategyRuntime.strategy_version || null,
+      scope:input.strategyRuntime.scope || null,
+      market_data_plan:input.strategyRuntime.market_data_plan || null,
+      entry_methods:input.strategyRuntime.entry_methods || null,
+      use_chan_analysis:input.strategyRuntime.use_chan_analysis,
+      chan_timeframes:input.strategyRuntime.chan_timeframes || [],
+      window_policy_version:input.strategyRuntime.window_policy_version || null,
       schema_version:input.strategyRuntime.schema_version || null,
       mode:input.strategyRuntime.mode || null,
       policy_hash:input.strategyRuntime.policy_hash || null,

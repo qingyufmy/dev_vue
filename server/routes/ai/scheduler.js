@@ -20,7 +20,7 @@ import { getObserverSourceForStrategy } from './observer-channels.js'
 import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
-import { prepareStrategyPolicyRuntime } from './strategy-policy.js'
+import { prepareStrategyPolicyRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
 import { validateWorkflowTrace, workflowGateEvaluation } from './strategy-workflow-engine.js'
 import { applyConstraintAction, evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 import { registerAutoSchedulerState } from './runtime-state-registry.js'
@@ -2522,7 +2522,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         modelName: config.model_name,
         credentialSource: config._credential_source,
         memoryMode:'strategy_library',
-        strategyRuntime:strategyPolicyRuntime,
+        strategyRuntime:buildStrategyRuntimeSnapshot({ strategy:pt, policy:config._strategy_policy || {
+          marketDataPlan:config._market_data_plan, entryMethods:config._allowed_entry_methods,
+          useChanAnalysis:config._use_chan_analysis, policyMode:'off', compiledPolicy:null,
+        }, strategyPolicyRuntime, source:'automatic' }),
         createdAt,
       })
       await createTradeThesisTx(run, {

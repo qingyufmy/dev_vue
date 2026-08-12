@@ -3,8 +3,9 @@
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow, logAudit } from '../../db.js'
 import { parsePromptSymbols } from './config.js'
 import { getModelProfileById } from './model-profiles.js'
+import { modelProviderProtocol } from './model-providers.js'
 import { stripBrokerSuffix, stripStrategyControlTags } from './utils.js'
-import { normalizeEntryMethods, normalizeMarketDataPlan, normalizeUseChanAnalysis, normalizeUseEma34Filter } from './strategy-policy.js'
+import { normalizeEntryMethods, normalizeMarketDataPlan, normalizeUseChanAnalysis, normalizeUseEma34Filter, validateChanTimeframes } from './strategy-policy.js'
 import { normalizeSubscriptionSchedule } from './subscription-schedule.js'
 
 const VALID_SCOPES = new Set(['platform', 'private'])
@@ -116,6 +117,7 @@ async function validateModelBinding(scope, ownerUserId, modelProfileId) {
     if (profile.scope !== 'platform' || Number(profile.owner_user_id || 0) !== 0) {
       throw new Error('model_profile_access_denied')
     }
+    assertConfirmedModelTokenLimits(profile)
     return { modelProfileId: id, inferenceMode: 'platform_bound_model' }
   }
   if (modelProfileId == null || modelProfileId === '') {
@@ -127,7 +129,33 @@ async function validateModelBinding(scope, ownerUserId, modelProfileId) {
   if (profile.scope !== 'user' || Number(profile.owner_user_id) !== ownerUserId) {
     throw new Error('model_profile_access_denied')
   }
+  assertConfirmedModelTokenLimits(profile)
   return { modelProfileId: id, inferenceMode: 'owner_model' }
+}
+
+function assertConfirmedModelTokenLimits(profile) {
+  const context = Number(profile?.context_window_tokens)
+  const input = Number(profile?.max_input_tokens)
+  const output = Number(profile?.max_output_tokens)
+  const identity = {
+    provider:profile?.capability_provider,
+    model_name:profile?.capability_model_name,
+    api_base_url:profile?.capability_api_base_url,
+    protocol:profile?.capability_protocol,
+  }
+  const hasIdentity = Object.values(identity).some(value => value != null && String(value) !== '')
+  const identityMatches = !hasIdentity || (
+    String(identity.provider || '') === String(profile?.provider || '')
+    && String(identity.model_name || '') === String(profile?.model_name || '')
+    && String(identity.api_base_url || '') === String(profile?.api_base_url || '')
+    && String(identity.protocol || '') === modelProviderProtocol(profile?.provider)
+  )
+  if (String(profile?.token_limits_status || '') === 'confirmed'
+      && Number.isSafeInteger(context) && context > 0
+      && Number.isSafeInteger(input) && input > 0 && input <= context
+      && Number.isSafeInteger(output) && output > 0 && output <= context
+      && identityMatches) return
+  throw new Error('model_token_limits_unconfirmed')
 }
 
 function canViewStrategy(strategy, userId, userRole) {
@@ -207,6 +235,7 @@ export async function createStrategy(userId, userRole, payload = {}) {
   const marketDataPlan = normalizeMarketDataPlan(payload.market_data_plan, { prompt: rawPrompt })
   const entryMethods = normalizeEntryMethods(payload.entry_methods)
   const useChanAnalysis = normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
+  validateChanTimeframes(marketDataPlan, useChanAnalysis)
   const useEma34Filter = normalizeUseEma34Filter(payload.use_ema34_filter)
   const includePortfolioContext = normalizePortfolioContext(scope, payload.include_portfolio_context)
   const systemPrompt = stripStrategyControlTags(rawPrompt)
@@ -282,6 +311,7 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
   const useChanAnalysis = payload.use_chan_analysis !== undefined
     ? normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
     : normalizeUseChanAnalysis(existing.use_chan_analysis, { prompt: existing.system_prompt })
+  validateChanTimeframes(marketDataPlan, useChanAnalysis)
   const useEma34Filter = payload.use_ema34_filter !== undefined
     ? normalizeUseEma34Filter(payload.use_ema34_filter)
     : normalizeUseEma34Filter(existing.use_ema34_filter)

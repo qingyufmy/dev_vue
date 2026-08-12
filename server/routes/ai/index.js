@@ -25,6 +25,7 @@ import { canManagePlatformAiContent, isObserverSourceAccount } from './platform-
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { dismissStrategyMemoryConflict, getOrCreateStrategyMemoryLibrary,
   listStrategyMemoryConflicts, listStrategyMemoryLibraries, listStrategyMemoryLibraryRevisions,
+  getStrategyMemoryCompressionJobStatus, getLatestStrategyMemoryCompressionJobStatus,
   queueStrategyMemoryCompressionJob, reopenStrategyMemoryConflict, resolveStrategyMemoryConflict,
   restoreStrategyMemoryLibraryRevision, saveStrategyMemoryLibrary } from './strategy-memory-library.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelProfileDeletionImpact, deleteModelProfile,
@@ -1346,6 +1347,25 @@ router.post('/ai/strategy-memories/:strategyId/compress', authMiddleware, async 
   catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/strategy-memories/:strategyId/compression-jobs/:jobId', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const jobId = Number(req.params.jobId)
+    const job = await getStrategyMemoryCompressionJobStatus({ strategyId, jobId, actor:req.user })
+    res.json({ ok:true, job })
+  }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategy-memories/:strategyId/compression-jobs-latest', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const job = await getLatestStrategyMemoryCompressionJobStatus({ strategyId, actor:req.user })
+    res.json({ ok:true, job })
+  }
+  catch (error) { reviewError(res, error) }
+})
+
 router.post('/ai/strategy-memories/:strategyId/revisions/:revisionId/restore', authMiddleware, async (req, res) => {
   try {
     const strategyId = Number(req.params.strategyId)
@@ -1447,12 +1467,6 @@ export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome
   enqueueEligibleReviewCases, runReviewWorkerOnce, startReviewWorker, stopReviewWorker,
   listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
   getReviewAdminHealth } from './review-workflow.js'
-export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
-  createMemoryFromApprovedReview, createMemoryFromApprovedPeriodReview,
-  setMemorySettings, getMemorySettings, listMemoryItems, listMemorySummaries,
-  confirmLongTermMemory, revokeLongTermMemory,
-  revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
-  maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary } from './memory-system.js'
 export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, runPeriodReviewCycle,
   runPeriodReviewDerivationOnce, resumePeriodReviewDerivationJobs,
@@ -1460,10 +1474,6 @@ export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
   markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
   retryPeriodReviewDerivation } from './period-review.js'
-export { sanitizePlatformExperienceText, createPlatformExperienceCandidateFromApprovedReview,
-  createPlatformExperienceCandidateFromApprovedPeriodReview,
-  listPlatformExperience, getPlatformExperiencePolicies, updatePlatformExperiencePolicy,
-  updatePlatformExperienceItem, retrievePlatformExperience, attachPlatformExperienceSignal } from './platform-experience.js'
 
 export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatureFlags,
   updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'

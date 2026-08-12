@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
 const bridge = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
 const migrations = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
+const config = readFileSync(new URL('../../server/routes/ai/config.js', import.meta.url), 'utf8')
 
 describe('disabled smart-close runtime', () => {
   it('does not keep retired scheduler state or callable stubs', () => {
@@ -30,5 +31,14 @@ describe('disabled smart-close runtime', () => {
   it('clears previously enabled database configurations', () => {
     expect(migrations).toContain("id: '106_disable_smart_close_runtime'")
     expect(migrations).toContain('UPDATE close_config SET enabled = 0 WHERE enabled <> 0')
+  })
+
+  it('does not write retired close configuration or its legacy token cap', () => {
+    const start = config.indexOf('export async function saveCloseConfig')
+    expect(start).toBeGreaterThan(-1)
+    const source = config.slice(start, config.indexOf('\n}', start) + 2)
+    expect(source).toContain("smart_close_feature_retired")
+    expect(source).not.toContain('queryRun(')
+    expect(source).not.toContain('max_tokens')
   })
 })

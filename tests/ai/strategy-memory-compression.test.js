@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   selectModelTaskBudget:vi.fn(), estimateModelInputTokens:vi.fn(), modelTaskDeadlines:vi.fn(),
   applyStrategyMemoryCompressionJob:vi.fn(), claimStrategyMemoryCompressionJob:vi.fn(),
   failStrategyMemoryCompressionJob:vi.fn(), renewStrategyMemoryCompressionLease:vi.fn(),
+  createStrategyMemoryInjectionLog:vi.fn(),
 }))
 
 vi.mock('../../server/db.js', () => ({
@@ -36,6 +37,7 @@ vi.mock('../../server/routes/ai/strategy-memory-library.js', () => ({
   claimStrategyMemoryCompressionJob:(...args) => mocks.claimStrategyMemoryCompressionJob(...args),
   failStrategyMemoryCompressionJob:(...args) => mocks.failStrategyMemoryCompressionJob(...args),
   renewStrategyMemoryCompressionLease:(...args) => mocks.renewStrategyMemoryCompressionLease(...args),
+  createStrategyMemoryInjectionLog:(...args) => mocks.createStrategyMemoryInjectionLog(...args),
   sanitizeStrategyMemoryText:value => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ''),
   strategyMemoryCharCount:value => Array.from(String(value ?? '')).length,
 }))
@@ -92,6 +94,7 @@ function configureModel({ request = null, tracker = null } = {}) {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.renewStrategyMemoryCompressionLease.mockResolvedValue({ status:'leased' })
+  mocks.createStrategyMemoryInjectionLog.mockResolvedValue({ id:81 })
   mocks.queryRun.mockResolvedValue({ affectedRows:1 })
 })
 
@@ -121,16 +124,56 @@ describe('strategy memory compression worker', () => {
   it('tracks and applies a successful compression result', async () => {
     const tracker = configureModel({ request:async options => {
       expect(options.maxTokens).toBe(2000)
-      return { content_text:'# 压缩后的经验' }
+      const prompt = JSON.parse(options.messages[1].content)
+      return {
+        content_text:'# 压缩后的经验\n\n待确认',
+        coverage_map:prompt.semantic_manifest.source_blocks.map(block => ({
+          source_block_id:block.id, result_section:'# 压缩后的经验\n\n待确认', disposition:'preserved',
+        })),
+        unresolved_conflicts:[], removed_redundancies:[],
+      }
     } })
     const result = await runStrategyMemoryCompressionOnce({ requestModel:mocks.requestJsonObject })
     expect(result.status).toBe('succeeded')
     expect(mocks.resolveAiTaskModel).toHaveBeenCalledWith({ userId:7, strategyId:5, usage:'memory_compression' })
     expect(tracker.persistBudget).toHaveBeenCalled()
-    expect(mocks.applyStrategyMemoryCompressionJob).toHaveBeenCalledWith(expect.objectContaining({
-      jobId:11, leaseToken:'lease-11', content_text:'# 压缩后的经验',
+    expect(mocks.createStrategyMemoryInjectionLog).toHaveBeenCalledWith(expect.objectContaining({
+      strategyId:5, injectionKind:'memory_compression', library,
     }))
+    expect(mocks.applyStrategyMemoryCompressionJob).toHaveBeenCalledWith(expect.objectContaining({
+      jobId:11, leaseToken:'lease-11', content_text:'# 压缩后的经验待确认',
+      result_validation:expect.objectContaining({
+        status:'accepted', validation_status:'accepted', result_char_count:expect.any(Number),
+        result_content_hash:expect.stringMatching(/^[a-f0-9]{64}$/),
+        semantic_manifest_hash:expect.stringMatching(/^[a-f0-9]{64}$/),
+        source_block_ids:expect.arrayContaining([expect.stringMatching(/^[a-f0-9]{64}$/)]),
+        coverage_map:expect.arrayContaining([expect.objectContaining({ disposition:'preserved' })]),
+        unresolved_conflicts:[], removed_redundancies:[],
+      }),
+    }))
+    const validation = mocks.applyStrategyMemoryCompressionJob.mock.calls[0][0].result_validation
+    expect(validation).not.toHaveProperty('content_text')
     expect(tracker.succeeded).toHaveBeenCalled()
+  })
+
+  it('uses the current version rather than a null revision in a succeeded_noop task reference', async () => {
+    const tracker = configureModel({ request:async options => {
+      const prompt = JSON.parse(options.messages[1].content)
+      const content = prompt.current_memory_library.content_text
+      return {
+        content_text:content,
+        coverage_map:prompt.semantic_manifest.source_blocks.map(block => ({
+          source_block_id:block.id, result_section:'# 已确认经验- 等待确认', disposition:'preserved',
+        })),
+        unresolved_conflicts:[], removed_redundancies:[],
+      }
+    } })
+    mocks.applyStrategyMemoryCompressionJob.mockResolvedValue({ revision_id:null, status:'succeeded_noop',
+      library:{ version_no:3 } })
+    const result = await runStrategyMemoryCompressionOnce({ requestModel:mocks.requestJsonObject })
+    expect(result.status).toBe('succeeded_noop')
+    expect(tracker.succeeded).toHaveBeenCalledWith({ resultRef:'strategy_memory:5:version:3' })
+    expect(tracker.succeeded.mock.calls[0][0].resultRef).not.toContain('revision:null')
   })
 
   it('marks provider status unknown as non-retryable', async () => {

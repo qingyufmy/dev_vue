@@ -20,8 +20,15 @@ import {
   failStrategyMemoryCompressionJob,
   renewStrategyMemoryCompressionLease,
   sanitizeStrategyMemoryText,
-  strategyMemoryCharCount,
+  createStrategyMemoryInjectionLog,
 } from './strategy-memory-library.js'
+import {
+  buildStrategyMemorySourceManifest,
+  semanticManifestHash,
+  validateStrategyMemoryCompressionOutput,
+} from './strategy-memory-semantics.js'
+
+export { buildStrategyMemorySourceManifest, validateStrategyMemoryCompressionOutput }
 
 export const STRATEGY_MEMORY_COMPRESSION_LEASE_MS = 15 * 60_000
 export const STRATEGY_MEMORY_COMPRESSION_HEARTBEAT_MS = 30_000
@@ -116,18 +123,24 @@ export async function loadStrategyMemoryCompressionInputs(job) {
 }
 
 export function buildStrategyMemoryCompressionMessages({ strategy, strategyText, library, pendingUpdates,
-  pendingIds = [], targetChars, includePendingUpdates = true }) {
+  pendingIds = [], targetChars, includePendingUpdates = true, sourceManifest = null }) {
   const target = Math.max(1, Math.trunc(Number(targetChars) || 0))
   const currentText = sanitizeStrategyMemoryText(library?.content_text || '')
+  const semanticManifest = sourceManifest || buildStrategyMemorySourceManifest({
+    content_text:currentText,
+    pendingUpdates:includePendingUpdates ? pendingUpdates : [],
+    includePendingUpdates,
+  })
   const updates = (Array.isArray(pendingUpdates) ? pendingUpdates : []).map(row => ({
     id:Number(row.id), update_kind:String(row.update_kind || ''),
     content_text:sanitizeStrategyMemoryText(row.content_text || ''),
-    source_refs:parseJson(row.source_refs_json, null),
   }))
   const system = [
-    '你负责压缩单个策略的统一记忆库。只返回一个 JSON 对象，字段必须是 content_text。',
+    '你负责整理并压缩单个策略的统一记忆库。只返回一个 JSON 对象，且只能包含 content_text、coverage_map、unresolved_conflicts、removed_redundancies。',
     'content_text 必须是 Markdown 字符串，字符数不得超过 target_chars。',
     '只能整理、合并和压缩已经给出的内容；不得创造新的交易规则、改变风险边界或替策略做决定。',
+    'semantic_manifest 中的每个 source block 必须在 coverage_map 中恰好覆盖一次。preserved 表示正文保留该块；merged_duplicate 只能表示与其他 source block 等价的重复内容，且对应锚点仍须存在于正文。',
+    'coverage_map.result_section 必须是输出正文中实际存在的短标题或短文本。不得用 removed_redundancies 授权删除任何非重复规则。',
     '保留有意义的自然语言边界、反例、冲突与不确定性；禁止生成或保留 applicable_when/avoid_when JSON、原始 applicability JSON、迁移表名或迁移来源内部 ID。',
     '当前策略是唯一行为约束。记忆经验不能覆盖策略、风险政策或人工配置。',
   ].join('\n')
@@ -138,7 +151,9 @@ export function buildStrategyMemoryCompressionMessages({ strategy, strategyText,
     current_memory_library:{ version_no:Number(library?.version_no || 0), content_hash:library?.content_hash || null,
       content_text:currentText },
     frozen_pending_updates:includePendingUpdates ? { ids:pendingIds, updates } : { ids:[], updates:[] },
-    output_contract:{ content_text:'string', max_characters:target },
+    semantic_manifest:semanticManifest,
+    output_contract:{ content_text:'string', coverage_map:'array', unresolved_conflicts:'array',
+      removed_redundancies:'array', max_characters:target },
   })
   return [
     { role:'system', content:system },
@@ -160,7 +175,8 @@ export async function prepareStrategyMemoryCompressionModelCall(resolved, messag
     // The profile's legacy max_tokens is deliberately not passed as a cap.
     profile:null,
     estimatedInputTokens:estimateModelInputTokens(messages),
-    schemaNeedTokens:Math.max(1_200, Math.ceil(JSON.stringify({ content_text:'string' }).length / 2)),
+    schemaNeedTokens:Math.max(1_200, Math.ceil(JSON.stringify({ content_text:'string', coverage_map:[],
+      unresolved_conflicts:[], removed_redundancies:[] }).length / 2)),
   })
   if (budget.reason === 'model_token_limits_unconfirmed' || budget.reason === 'model_token_limits_stale') {
     throw errorWithCode(budget.reason)
@@ -289,8 +305,14 @@ export async function runStrategyMemoryCompressionOnce({ requestModel = requestJ
     // A queued capacity job may carry updates that are not current yet. They
     // are deliberately excluded from the provider prompt: the server appends
     // those frozen rows after compressing only the old library.
+    const includePendingUpdates = inputs.pendingIds.length === 0
+    const sourceManifest = buildStrategyMemorySourceManifest({
+      content_text:inputs.library?.content_text || '',
+      pendingUpdates:includePendingUpdates ? inputs.pendingUpdates : [],
+      includePendingUpdates,
+    })
     const messages = buildStrategyMemoryCompressionMessages({ ...inputs, targetChars,
-      includePendingUpdates:inputs.pendingIds.length === 0 })
+      includePendingUpdates, sourceManifest })
     const nowUtcMs = Date.now()
     const deadlines = await prepareStrategyMemoryCompressionModelCall(resolved, messages, {
       nowUtcMs, capabilities:null,
@@ -298,7 +320,8 @@ export async function runStrategyMemoryCompressionOnce({ requestModel = requestJ
     await clearTerminalModelTaskLink(job)
     const endpoint = modelEndpoint(resolved.model)
     const sourceHash = sha256(JSON.stringify({ strategy_id:Number(job.strategy_id), source_version_no:Number(job.source_version_no),
-      source_content_hash:job.source_content_hash, pending_ids:inputs.pendingIds }))
+      source_content_hash:job.source_content_hash, pending_ids:inputs.pendingIds,
+      source_manifest_hash:semanticManifestHash(sourceManifest) }))
     const idempotencyKey = job._priorIdempotencyKey
       || `strategy_memory_compression:${job.id}:${sourceHash}:attempt:${Math.max(1, Number(job.attempt_count) || 1)}`
     const taskDeadline = Math.min(deadlines.taskDeadlineUtcMs, deadlines.attemptSafetyDeadlineUtcMs + 45 * 60_000)
@@ -307,16 +330,28 @@ export async function runStrategyMemoryCompressionOnce({ requestModel = requestJ
       strategyId:Number(job.strategy_id), domainType:'strategy_memory_compression_job', domainId:job.id,
       idempotencyKey, snapshotHash:sourceHash, inputHash:sha256(JSON.stringify(messages)),
       promptHash:sha256(messages.map(message => message.content).join('\n')),
-      outputContractHash:sha256('{"content_text":"string"}'),
+      outputContractHash:sha256('{"content_text":"string","coverage_map":[],"unresolved_conflicts":[],"removed_redundancies":[]}'),
       provider:resolved.model.provider, model:resolved.model.model_name,
       modelProfileId:resolved.model_profile_id, protocol:endpoint.protocol,
       credentialSource:resolved.credential_source,
       frozenContext:{ strategy_id:Number(job.strategy_id), source_version_no:Number(job.source_version_no),
-        source_content_hash:job.source_content_hash, pending_update_ids:inputs.pendingIds, target_chars:targetChars },
+        source_content_hash:job.source_content_hash, pending_update_ids:inputs.pendingIds, target_chars:targetChars,
+        source_manifest_hash:semanticManifestHash(sourceManifest), source_block_ids:sourceManifest.source_block_ids },
       maxAttempts:Number(job.max_attempts) || 3, taskDeadlineAtUtcMs:taskDeadline,
     }, { workerId:`strategy-memory-compression:${process.pid}`, leaseMs:STRATEGY_MEMORY_COMPRESSION_LEASE_MS,
       linkTask:taskId => linkModelTask(job, taskId) })
     await tracker.persistBudget(deadlines.budget)
+    // Record the exact frozen library version before the provider request.
+    // This keeps compression under the same auditable injection contract as
+    // manual analysis, automatic inference and period reviews.
+    await createStrategyMemoryInjectionLog({
+      strategyId:Number(job.strategy_id),
+      actor:{ serverOwned:true, userId:ownerUserId, strategyScope:inputs.strategy.scope,
+        strategyOwnerUserId:Number(inputs.strategy.owner_user_id || 0) },
+      library:inputs.library,
+      injectionKind:'memory_compression',
+      modelTaskId:tracker.taskId || null,
+    })
     const providerSignal = AbortSignal.any([lease.signal, tracker.signal])
     const output = await requestModel({
       url:endpoint.url, apiKey:resolved.model.api_key_encrypted, provider:resolved.model.provider,
@@ -335,29 +370,50 @@ export async function runStrategyMemoryCompressionOnce({ requestModel = requestJ
       onProviderActivity:event => tracker.onProviderActivity(event),
       onProviderQuiet:event => tracker.onProviderQuiet(event),
       validateObject:value => {
-        if (!value || typeof value !== 'object' || !Object.prototype.hasOwnProperty.call(value, 'content_text')
-            || typeof value.content_text !== 'string') throw errorWithCode('strategy_memory_compression_output_invalid')
-        const normalized = sanitizeStrategyMemoryText(value.content_text)
-        if (strategyMemoryCharCount(normalized) > targetChars) throw errorWithCode('strategy_memory_compression_output_exceeds_target')
-        return { content_text:normalized }
+        try {
+          return validateStrategyMemoryCompressionOutput({ output:value, sourceManifest, targetChars }).output
+        } catch (validationError) {
+          throw errorWithCode(validationError?.code || 'strategy_memory_compression_output_invalid')
+        }
       },
     })
-    if (!output || typeof output.content_text !== 'string') {
-      throw errorWithCode('strategy_memory_compression_output_invalid')
+    let checkedOutput
+    try {
+      checkedOutput = validateStrategyMemoryCompressionOutput({ output, sourceManifest, targetChars }).output
+    } catch (validationError) {
+      throw errorWithCode(validationError?.code || 'strategy_memory_compression_output_invalid')
     }
-    const content = sanitizeStrategyMemoryText(output.content_text)
-    if (strategyMemoryCharCount(content) > targetChars) throw errorWithCode('strategy_memory_compression_output_exceeds_target')
+    const content = sanitizeStrategyMemoryText(checkedOutput.content_text)
     await tracker.resultReady({ resultHash:sha256(content) })
     lease.assertOwned(); tracker.assertOwned()
     await tracker.applying()
     lease.assertOwned(); tracker.assertOwned()
+    const resultValidation = {
+      status:'accepted',
+      validation_status:'accepted',
+      source_version_no:Number(job.source_version_no),
+      source_content_hash:job.source_content_hash,
+      result_content_hash:sha256(content),
+      result_char_count:Array.from(content).length,
+      pending_update_ids:[...inputs.pendingIds],
+      semantic_manifest_hash:semanticManifestHash(sourceManifest),
+      source_block_ids:[...sourceManifest.source_block_ids],
+      coverage_map:checkedOutput.coverage_map,
+      unresolved_conflicts:checkedOutput.unresolved_conflicts,
+      removed_redundancies:checkedOutput.removed_redundancies,
+    }
     const applied = await applyStrategyMemoryCompressionJob({
-      jobId:job.id, leaseToken:job.lease_token, content_text:content,
+      jobId:job.id, leaseToken:job.lease_token, content_text:content, result_validation:resultValidation,
       actor:{ serverOwned:true, userId:ownerUserId, strategyScope:inputs.strategy.scope,
         strategyOwnerUserId:Number(inputs.strategy.owner_user_id || 0) },
     })
-    await tracker.succeeded({ resultRef:`strategy_memory:${job.strategy_id}:revision:${applied.revision_id}` })
-    return { claimed:true, status:'succeeded', strategyId:Number(job.strategy_id), jobId:Number(job.id), applied }
+    const resultRef = applied.status === 'succeeded_noop'
+      ? `strategy_memory:${job.strategy_id}:version:${Number(applied.library?.version_no || inputs.library?.version_no || job.source_version_no)}`
+      : applied.revision_id
+        ? `strategy_memory:${job.strategy_id}:revision:${applied.revision_id}`
+        : `strategy_memory:${job.strategy_id}:job:${job.id}`
+    await tracker.succeeded({ resultRef })
+    return { claimed:true, status:applied.status || 'succeeded', strategyId:Number(job.strategy_id), jobId:Number(job.id), applied }
   } catch (error) {
     const code = String(error?.code || error?.message || 'strategy_memory_compression_failed').split(':')[0]
     let modelTask = null

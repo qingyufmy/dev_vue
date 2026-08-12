@@ -77,6 +77,27 @@ describe('platform market data', () => {
     })
   })
 
+  it('fails closed for a gap that continues after the Sunday session opens', () => {
+    const sundayOpen = Date.parse('2026-07-19T22:00:00Z')
+    const integrity = inspectRateContinuity([
+      { ...rate(0, 2000), time:'2026-07-19 21:00:00', time_utc_msc:sundayOpen - 3600000 },
+      { ...rate(1, 2001), time:'2026-07-19 23:00:00', time_utc_msc:sundayOpen + 3600000 },
+    ], 'H1', { standardSymbol:'XAUUSD', timezoneOffsetMinutes:0, clockStatus:'verified', strictSessionPolicy:true })
+    expect(integrity).toMatchObject({
+      status:'suspicious_gap', continuity_status:'reliable',
+      suspicious_gaps:[expect.objectContaining({ missing_bar_count:1 })],
+    })
+  })
+
+  it('exposes unknown session policy when strict continuity lacks clock and timezone evidence', () => {
+    const startUtc = Date.parse('2026-07-14T04:00:00Z')
+    const integrity = inspectRateContinuity([
+      { ...rate(0, 2000), time_utc_msc:startUtc },
+      { ...rate(1, 2001), time_utc_msc:startUtc + 8 * 60 * 60 * 1000 },
+    ], 'H4', { standardSymbol:'XAUUSD', strictSessionPolicy:true })
+    expect(integrity).toMatchObject({ status:'suspicious_gap', continuity_status:'unknown_session', continuity_reason:'market_session_policy_unavailable' })
+  })
+
   it('classifies only verified metal holiday windows and keeps other symbols suspicious', () => {
     const beforeUtc = Date.parse('2025-12-24T17:00:00Z')
     const afterUtc = Date.parse('2025-12-25T21:00:00Z')

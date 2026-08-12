@@ -21,6 +21,7 @@ const TEST_KEY = randomBytes(32).toString('base64')
 import {
   beginModelUsage,
   assertModelProfileSchemaReady,
+  checkPlatformQuota,
   createModelProfile,
   deleteModelProfile,
   finishModelUsage,
@@ -53,10 +54,16 @@ const profile = (overrides = {}) => ({
   scope: 'user',
   provider: 'qwen',
   model_name: 'qwen-plus',
+  api_base_url: 'https://example.test/v1',
   api_key_encrypted: encryptCredential('user-key'),
   key_version: '1',
   temperature: 0.3,
   max_tokens: 2000,
+  context_window_tokens: 1048576,
+  max_input_tokens: 1048576,
+  max_output_tokens: 393216,
+  token_limits_source: 'manual_confirmed',
+  token_limits_status: 'confirmed',
   thinking_enabled: 0,
   reasoning_effort: 'max',
   status: 'active',
@@ -197,7 +204,7 @@ describe('resolveAiTaskModel', () => {
 
   it('uses the model bound to a private strategy for review', async () => {
     mockQueryOne
-      .mockResolvedValueOnce({ id: 123, scope: 'private', owner_user_id: 1, model_profile_id: 77 })
+      .mockResolvedValueOnce({ id: 123, scope: 'private', owner_user_id: 1, model_profile_id: 77, visibility_status:'active', is_active:1 })
       .mockResolvedValueOnce(profile({ id: 77 }))
     const result = await resolveAiTaskModel({ userId: 1, strategyId: 123, usage: 'review' })
     expect(result).toMatchObject({ credential_source:'user', reason:'strategy_binding', strategy_id:123, model_profile_id:77 })
@@ -205,10 +212,18 @@ describe('resolveAiTaskModel', () => {
 
   it('uses the platform strategy model for administrator review', async () => {
     mockQueryOne
-      .mockResolvedValueOnce({ id: 12, scope: 'platform', owner_user_id: 0, model_profile_id: null })
+      .mockResolvedValueOnce({ id: 12, scope: 'platform', owner_user_id: 0, model_profile_id: null, visibility_status:'active', is_active:1 })
       .mockResolvedValueOnce(profile({ id: 88, owner_user_id: 0, scope: 'platform' }))
     const result = await resolveAiTaskModel({ userId: 1, strategyId: 12, usage: 'review' })
     expect(result).toMatchObject({ credential_source:'platform_primary', usage:'review', strategy_id:12, model_profile_id:88 })
+  })
+
+  it('uses the model bound to a private strategy for unified memory compression', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id:123, scope:'private', owner_user_id:1, model_profile_id:77, visibility_status:'active', is_active:1 })
+      .mockResolvedValueOnce(profile({ id:77 }))
+    const result = await resolveAiTaskModel({ userId:1, strategyId:123, usage:'memory_compression' })
+    expect(result).toMatchObject({ credential_source:'user', reason:'strategy_binding', strategy_id:123, model_profile_id:77 })
   })
 
   it('returns the primary platform model for auto_platform', async () => {
@@ -234,6 +249,45 @@ describe('resolveAiTaskModel', () => {
     const result = await resolveAiTaskModel({ userId: 1, strategyId: 12, usage: 'auto_platform' })
     expect(result.error).toBe('bound_model_unavailable')
     expect(mockQueryOne).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses the confirmed platform default for manual platform strategies without a binding', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 1, scope: 'platform', owner_user_id: 0, model_profile_id: null,
+        visibility_status: 'active', is_active: 1 })
+      .mockResolvedValueOnce(profile({ id: 12, owner_user_id: 0, scope: 'platform', model_name: 'K3' }))
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 1, usage: 'manual' })
+    expect(result).toMatchObject({ credential_source:'platform_primary', strategy_id:1,
+      model_profile_id:12, reason:'platform_primary', model:{ model_name:'K3' } })
+    expect(mockQueryOne).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses an explicit confirmed platform model bound to a manual platform strategy', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 1, scope: 'platform', owner_user_id: 0, model_profile_id: 88,
+        visibility_status: 'active', is_active: 1 })
+      .mockResolvedValueOnce(profile({ id: 88, owner_user_id: 0, scope: 'platform', model_name: 'K3-bound' }))
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 1, usage: 'manual' })
+    expect(result).toMatchObject({ credential_source:'platform_primary', reason:'strategy_binding',
+      strategy_id:1, model_profile_id:88, model:{ model_name:'K3-bound' } })
+  })
+
+  it('does not fall back when a manual platform strategy binding is unavailable', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ id: 1, scope: 'platform', owner_user_id: 0, model_profile_id: 88,
+        visibility_status: 'active', is_active: 1 })
+      .mockResolvedValueOnce(null)
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 1, usage: 'manual' })
+    expect(result).toMatchObject({ error:'bound_model_unavailable', strategy_id:1, model_profile_id:88 })
+    expect(mockQueryOne).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects an inactive manual platform strategy before resolving any model', async () => {
+    mockQueryOne.mockResolvedValueOnce({ id: 1, scope: 'platform', owner_user_id: 0, model_profile_id: null,
+      visibility_status: 'draft', is_active: 0 })
+    const result = await resolveAiTaskModel({ userId: 1, strategyId: 1, usage: 'manual' })
+    expect(result).toMatchObject({ error:'platform_strategy_not_active', strategy_id:1 })
+    expect(mockQueryOne).toHaveBeenCalledTimes(1)
   })
 
   it('rejects unknown usages', async () => {
@@ -286,76 +340,62 @@ describe('model profile authorization and defaults', () => {
       .rejects.toThrow('platform_scope_requires_admin')
   })
 
-  it('stores admin-created platform profiles with owner 0', async () => {
-    mockQueryRun.mockResolvedValueOnce({ insertId: 7 })
-    mockQueryOne.mockResolvedValueOnce(null)
-    await createModelProfile(55, { scope: 'platform', api_key: 'test' }, 'admin')
-    expect(mockQueryRun.mock.calls[0][1][0]).toBe(0)
-  })
-
-  it('stores DeepSeek profiles with the configured base URL and user settings', async () => {
-    mockQueryRun.mockResolvedValueOnce({ insertId: 8 })
-    mockQueryOne.mockResolvedValueOnce(null)
-    await createModelProfile(1, {
-      provider: 'deepseek', model_name: 'deepseek-chat', api_key: 'test',
-      thinking_enabled: false,
-    }, 'pro')
-    const params = mockQueryRun.mock.calls[0][1]
-    expect(params[2]).toBe('deepseek')
-    expect(params[4]).toBe('https://api.deepseek.com')
-    expect(params[9]).toBe(0)
-  })
-
-  it('keeps Kimi Code profiles on the subscription endpoint and preserves the thinking switch', async () => {
-    mockQueryRun.mockResolvedValueOnce({ insertId: 9 })
-    mockQueryOne.mockResolvedValueOnce(null)
-    await createModelProfile(1, {
-      provider: 'kimi_code', model_name: 'kimi-for-coding', api_key: 'test',
-      thinking_enabled: false,
-    }, 'pro')
-    const params = mockQueryRun.mock.calls[0][1]
-    expect(params[2]).toBe('kimi_code')
-    expect(params[4]).toBe('https://api.kimi.com/coding/v1')
-    expect(params[9]).toBe(0)
-  })
-
-  it('validates model request timeout bounds', async () => {
-    await expect(createModelProfile(1, {
-      provider: 'deepseek', model_name: 'deepseek-chat', request_timeout_ms: 29999,
-    }, 'pro')).rejects.toThrow('model_request_timeout_out_of_range')
-    await expect(createModelProfile(1, {
-      provider: 'deepseek', model_name: 'deepseek-chat', request_timeout_ms: 600001,
-    }, 'pro')).rejects.toThrow('model_request_timeout_out_of_range')
-  })
-
-  it('accepts an operator-configured output cap above 30000 without a hidden ceiling', async () => {
-    mockQueryRun.mockResolvedValueOnce({ insertId: 10 })
-    mockQueryOne.mockResolvedValueOnce(null)
-    await createModelProfile(1, {
-      provider:'deepseek', model_name:'deepseek-chat', max_tokens:50000,
-    }, 'pro')
-    expect(mockQueryRun.mock.calls[0][1][8]).toBe(50000)
-  })
-
-  it('rejects invalid model output caps before writing the profile', async () => {
-    await expect(createModelProfile(1, {
-      provider:'deepseek', model_name:'deepseek-chat', max_tokens:0,
-    }, 'pro')).rejects.toThrow('model_max_tokens_invalid')
+  it('does not allow the legacy create entry point to write an active profile', async () => {
+    await expect(createModelProfile(55, { scope: 'platform', api_key: 'test' }, 'admin'))
+      .rejects.toThrow('model_profile_verification_required')
     expect(mockQueryRun).not.toHaveBeenCalled()
   })
 
-  it('preserves request timeout during partial profile updates', async () => {
+  it('does not allow legacy provider create payloads to bypass validation', async () => {
+    await expect(createModelProfile(1, {
+      provider: 'deepseek', model_name: 'deepseek-chat', api_key: 'test', thinking_enabled: false,
+    }, 'pro')).rejects.toThrow('model_profile_verification_required')
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('does not allow legacy provider update payloads to bypass validation', async () => {
+    const existing = profile()
+    mockQueryOne.mockResolvedValueOnce(existing)
+    await expect(updateModelProfile(existing.id, existing.owner_user_id, {
+      provider:'kimi_code', model_name:'kimi-for-coding', api_key:'test', thinking_enabled:false,
+    })).rejects.toThrow('model_profile_verification_required')
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('does not allow legacy timeout payloads to write a profile', async () => {
+    await expect(createModelProfile(1, {
+      provider: 'deepseek', model_name: 'deepseek-chat', request_timeout_ms: 29999,
+    }, 'pro')).rejects.toThrow('model_profile_verification_required')
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('never accepts max_tokens as a new profile setting', async () => {
+    await expect(createModelProfile(1, {
+      provider:'deepseek', model_name:'deepseek-chat', max_tokens:50000,
+    }, 'pro')).rejects.toThrow('model_profile_verification_required')
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('rejects legacy output caps through the retired entry point', async () => {
+    await expect(createModelProfile(1, {
+      provider:'deepseek', model_name:'deepseek-chat', max_tokens:0,
+    }, 'pro')).rejects.toThrow('model_profile_verification_required')
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('does not update legacy profiles without save-and-verify', async () => {
     const existing = profile({ request_timeout_ms: 180000 })
-    mockQueryOne
-      .mockResolvedValueOnce(existing)
-      .mockResolvedValueOnce(existing)
-    mockQueryRun.mockResolvedValueOnce({ affectedRows: 1 })
-    await updateModelProfile(existing.id, existing.owner_user_id, { model_name: 'qwen-plus-new' })
-    expect(mockQueryRun.mock.calls[0][1][9]).toBe(180000)
+    mockQueryOne.mockResolvedValueOnce(existing)
+    await expect(updateModelProfile(existing.id, existing.owner_user_id, { model_name: 'qwen-plus-new' }))
+      .rejects.toThrow('model_profile_verification_required')
+    expect(mockQueryRun).not.toHaveBeenCalled()
   })
 
   it('updates both default representations in one transaction', async () => {
-    mockQueryOne.mockResolvedValueOnce({ id: 5, owner_user_id: 1, status: 'active' })
+    mockQueryOne.mockResolvedValueOnce({ id: 5, owner_user_id: 1, status: 'active',
+      provider:'qwen', model_name:'qwen-plus', api_base_url:'https://example.test/v1',
+      context_window_tokens: 1048576, max_input_tokens: 1048576,
+      max_output_tokens: 393216, token_limits_status: 'confirmed' })
     mockTx.mockResolvedValue([{ affectedRows: 1 }])
     await setDefaultModelProfile(1, 5)
     expect(mockWithTransaction).toHaveBeenCalledTimes(1)
@@ -435,7 +475,7 @@ describe('model usage accounting', () => {
     expect(mockQueryRun.mock.calls[1][1]).toContain('request')
   })
 
-  it('atomically reserves platform quota under a user row lock', async () => {
+  it('admits platform usage under a user row lock without reserving output tokens', async () => {
     mockTx
       .mockResolvedValueOnce([[{ id: 2, plan: 'pro' }]])
       .mockResolvedValueOnce([[policy({ share_for_manual: 1 })]])
@@ -444,8 +484,10 @@ describe('model usage accounting', () => {
     const result = await beginModelUsage({
       userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 2500,
     })
-    expect(result).toEqual({ logId: 44, reservedTokens: 2500 })
+    expect(result).toEqual({ logId: 44, reservedTokens: 0 })
     expect(mockTx.mock.calls[0][0]).toContain('FOR UPDATE')
+    const insertSql = mockTx.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO ai_model_usage_logs'))?.[0]
+    expect(insertSql).toContain('VALUES (?, ?, \'platform_shared\', ?, ?, ?, 0, \'reserved\', NULL, ?)')
   })
 
   it('keeps repair requests in the shared quota aggregate', async () => {
@@ -491,14 +533,28 @@ describe('model usage accounting', () => {
     })).rejects.toThrow('platform_sharing_disabled')
   })
 
-  it('rejects a platform request when its reservation exceeds token quota', async () => {
+  it('does not reject a platform request when actual token usage exceeds the reporting threshold', async () => {
     mockTx
       .mockResolvedValueOnce([[{ id: 2, plan: 'pro' }]])
       .mockResolvedValueOnce([[policy({ share_for_manual: 1, daily_tokens_per_user: 2000 })]])
       .mockResolvedValueOnce([[{ cnt: 1, tokens: 1500 }]])
+      .mockResolvedValueOnce([{ insertId: 46 }])
     await expect(beginModelUsage({
       userId: 2, profileId: 99, credentialSource: 'platform_shared', usage: 'manual', estimatedTokens: 600,
-    })).rejects.toThrow('daily_token_limit')
+    })).resolves.toEqual({ logId: 46, reservedTokens: 0 })
+  })
+
+  it('keeps checkPlatformQuota allowed when token reporting threshold is exceeded', async () => {
+    mockQueryOne
+      .mockResolvedValueOnce({ cnt: 4, tokens: 2500 })
+      .mockResolvedValueOnce(policy({ daily_requests_per_user: 100, daily_tokens_per_user: 2000 }))
+    await expect(checkPlatformQuota(2, 'manual')).resolves.toMatchObject({
+      allowed: true,
+      warning: 'daily_token_limit',
+      tokenQuotaExceeded: true,
+      used: 2500,
+      limit: 2000,
+    })
   })
 
   it('requires a concrete user for platform-shared quota', async () => {
@@ -518,7 +574,7 @@ describe('model usage accounting', () => {
         '{"reason":"max_output_tokens"}', 'settled', 1200, 300, 4500, 44])
   })
 
-  it('recovers abandoned reservations without discarding their reserved quota', async () => {
+  it('recovers abandoned reservations without rewriting their token accounting', async () => {
     mockQueryRun.mockResolvedValueOnce({ affectedRows: 3 })
     await expect(recoverStaleModelUsageReservations(30)).resolves.toBe(3)
     expect(mockQueryRun).toHaveBeenCalledWith(
@@ -536,34 +592,22 @@ describe('model usage accounting', () => {
 })
 
 describe('legacy credential migration', () => {
-  it('encrypts legacy keys, creates a user default, and never stores plaintext in the profile', async () => {
-    mockQueryAll
-      .mockResolvedValueOnce([{
-        id: 8, user_id: 2, api_key_encrypted: 'legacy-secret', api_provider: 'qwen',
-        model_name: 'qwen-plus', api_base_url: 'https://example.test/v1', temperature: 0.2, max_tokens: 3000,
-      }])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
-    mockQueryOne
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(null)
-    mockQueryRun
-      .mockResolvedValueOnce({ insertId: 30 })
-      .mockResolvedValueOnce({ changes: 1 })
-      .mockResolvedValueOnce({ changes: 1 })
+  it('does not recreate active profiles from legacy configuration rows', async () => {
+    mockQueryAll.mockResolvedValueOnce([{
+      id: 8, user_id: 2, api_key_encrypted: 'legacy-secret', api_provider: 'qwen',
+      model_name: 'qwen-plus', api_base_url: 'https://example.test/v1', temperature: 0.2, max_tokens: 3000,
+    }])
 
-    const result = await migrateLegacyConfigs()
-
-    expect(result).toEqual([{ source: 'ai_configs', id: 8, user_id: 2 }])
-    const insertParams = mockQueryRun.mock.calls[0][1]
-    expect(insertParams).not.toContain('legacy-secret')
-    expect(JSON.parse(insertParams[5])).toMatchObject({ v: '1' })
-    expect(mockQueryRun.mock.calls.some(([sql]) => sql.includes('user_model_defaults'))).toBe(true)
+    await expect(migrateLegacyConfigs()).resolves.toEqual([])
+    expect(mockQueryRun).not.toHaveBeenCalled()
+    expect(mockQueryAll).not.toHaveBeenCalled()
   })
 
-  it('propagates a legacy migration read failure', async () => {
+  it('does not touch the legacy tables during startup migration', async () => {
     mockQueryAll.mockRejectedValueOnce(new Error('legacy db down'))
-    await expect(migrateLegacyConfigs()).rejects.toThrow('legacy db down')
+    await expect(migrateLegacyConfigs()).resolves.toEqual([])
+    expect(mockQueryAll).not.toHaveBeenCalled()
+    expect(mockQueryRun).not.toHaveBeenCalled()
   })
 })
 

@@ -15,7 +15,7 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
-  periodReviewCreationWindowState } from '../../server/routes/ai/period-review.js'
+  periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -37,6 +37,33 @@ describe('period review lease heartbeat', () => {
     expect(heartbeat.signal.aborted).toBe(false)
     expect(() => heartbeat.assertOwned()).not.toThrow()
     await heartbeat.stop()
+  })
+})
+
+describe('period review strategy-memory application status', () => {
+  it('distinguishes queued, applied, compression failure preservation and completion', () => {
+    const base = { approved_version_id:39, memory_source_update_count:1 }
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'queued' })).toBe('queued')
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'leased' })).toBe('applying')
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'succeeded', memory_pending_update_count_for_review:1 })).toBe('applying')
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'succeeded', memory_source_revision_matches:1,
+      memory_compression_job_status:'queued' })).toBe('compression_queued')
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'succeeded', memory_source_revision_matches:1,
+      memory_compression_job_status:'leased' })).toBe('compression_running')
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'succeeded', memory_source_revision_matches:1,
+      memory_compression_job_status:'failed' })).toBe('compression_failed_memory_preserved')
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'succeeded', memory_source_revision_matches:1,
+      memory_compression_job_status:'succeeded' })).toBe('completed')
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'succeeded', memory_merged_revision_id:3,
+      memory_source_revision_matches:0, memory_compression_job_status:'succeeded' })).toBe('failed')
+    expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'failed' })).toBe('failed')
+  })
+
+  it('retires personal and platform derivation targets from the active worker', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    expect(source).toContain("job.target_type !== 'strategy_memory_library'")
+    expect(source).toContain("row.target_type === 'strategy_memory_library'")
+    expect(source).not.toContain("['strategy_memory_library', 'personal_memory', 'platform_experience'].includes(job.target_type)")
   })
 })
 
@@ -412,6 +439,31 @@ describe('daily review model boundary', () => {
     expect(value.period_summary).toBe('当日两笔交易均按计划退出')
     expect(value).not.toHaveProperty('summary')
   })
+
+  it('fails closed for Chan-restricted daily content and requires canonical model refs', () => {
+    const base = {
+      period_summary:'日复盘', decision_quality:'good',
+      trade_assessments:[{ outcome_id:1, decision_quality:'good', summary:'执行正常', issue_codes:[] }],
+      repeated_issues:[], strengths:[], daily_lessons:[], risk_observations:[],
+      memory_updates:[], strategy_conflicts:[], confidence:0.8,
+    }
+    const disabled = validateDailyReviewContent(base, [1], {
+      chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+    })
+    expect(disabled).not.toHaveProperty('chan_diagnoses')
+    expect(disabled).not.toHaveProperty('period_chan_assessment')
+    expect(() => validateDailyReviewContent({ ...base, chan_diagnoses:[{}] }, [1], {
+      chan_requirement:{ status:'unknown' }, chan_evidence_status:'unknown',
+    })).toThrow('strategy_memory_chan_evidence_invalid')
+    expect(() => validateDailyReviewContent({ ...base, memory_updates:[{
+      text:'经验', category:'general', source_refs:['outcome:999'],
+    }] }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }))
+      .toThrow('strategy_memory_source_ref_invalid')
+    expect(() => validateDailyReviewContent({ ...base, memory_updates:[{
+      text:'经验', category:'general',
+    }] }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }))
+      .toThrow('strategy_memory_source_ref_invalid')
+  })
 })
 
 describe('monthly review aggregation', () => {
@@ -585,6 +637,29 @@ describe('monthly review model boundary', () => {
     expect(() => validateMonthlyReviewContent(input, [11, 12], [11])).toThrow('invalid_monthly_memory_candidate')
   })
 
+  it('removes restricted Chan fields and rejects Chan or undersupported candidates', () => {
+    const input = { period_summary:'月度总结', decision_quality:'mixed',
+      daily_assessments:[
+        { period_case_id:11, decision_quality:'good', summary:'证据一致', issue_codes:[] },
+        { period_case_id:12, decision_quality:'poor', summary:'确认过早', issue_codes:[] },
+      ], recurring_patterns:[], strengths:[], risk_observations:[], next_month_actions:[],
+      memory_candidates:[], strategy_conflicts:[], confidence:0.7 }
+    const restricted = validateMonthlyReviewContent(input, [11, 12], [11, 12], {
+      chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+    })
+    expect(restricted).not.toHaveProperty('chan_issue_summary')
+    expect(() => validateMonthlyReviewContent({ ...input, memory_candidates:[{
+      lesson:'结构经验', anti_pattern:'', memory_category:'chan_structure',
+      supporting_period_case_ids:[11, 12], confidence:0.8,
+    }] }, [11, 12], [11, 12], { chan_requirement:{ status:'unknown' }, chan_evidence_status:'unknown' }))
+      .toThrow('strategy_memory_chan_evidence_invalid')
+    expect(() => validateMonthlyReviewContent({ ...input, memory_candidates:[{
+      lesson:'单日经验', anti_pattern:'', memory_category:'general',
+      supporting_period_case_ids:[11], confidence:0.8,
+    }] }, [11, 12], [11, 12], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }))
+      .toThrow('invalid_monthly_memory_candidate')
+  })
+
   it('keeps verified chunk conflicts even when the merge model omits them', () => {
     const input = { period_summary:'月度总结', decision_quality:'mixed',
       daily_assessments:[{ period_case_id:11, decision_quality:'mixed', summary:'存在分歧', issue_codes:[] }],
@@ -613,6 +688,18 @@ describe('monthly review model boundary', () => {
       daily_assessments:[{ period_case_id:11, decision_quality:'good', summary:'执行稳定' }, { period_case_id:12, decision_quality:'mixed', summary:'确认偏早' }],
       local_patterns:[{ ...context, supporting_period_case_ids:[99] }], strengths:[], risks:[], chan_observations:[], action_candidates:[], conflict_groups:[], confidence:0.8 }, [11, 12]))
       .toThrow('monthly_review_chunk_support_invalid')
+  })
+
+  it('omits Chan chunk output when the frozen monthly source context is unknown', () => {
+    const context = { text:'趋势中确认稳定', supporting_period_case_ids:[11], market_regime:'trend', confidence:0.8 }
+    const value = validateMonthlyReviewChunkContent({ period_summary:'分块总结', decision_quality:'good',
+      daily_assessments:[{ period_case_id:11, decision_quality:'good', summary:'执行稳定' }],
+      local_patterns:[context], strengths:[], risks:[], action_candidates:[], conflict_groups:[], confidence:0.8,
+    }, [11], { chan_requirement:{ status:'unknown' }, chan_evidence_status:'partial' })
+    expect(value).not.toHaveProperty('chan_observations')
+    expect(() => validateMonthlyReviewChunkContent({ ...value, chan_observations:[context] }, [11], {
+      chan_requirement:{ status:'unknown' }, chan_evidence_status:'partial',
+    })).toThrow('strategy_memory_chan_evidence_invalid')
   })
 
   it('blocks manual monthly retry while a chunk checkpoint is unresolved', async () => {
@@ -736,7 +823,9 @@ describe('period market evidence', () => {
     expect(isReviewGridAligned(start + 3 * 3600000, start, 'H4')).toBe(false)
     const evidenceSource = readFileSync(new URL('../../server/routes/ai/period-market-evidence.js', import.meta.url), 'utf8')
     const bridgeSource = readFileSync(new URL('../../bridge/native/workers/mt5/worker.py', import.meta.url), 'utf8')
-    expect(evidenceSource).toContain('start_utc_msc:startUtcMs - CHAN_LOOKBACK_BARS * interval')
+    expect(evidenceSource).toContain('const REVIEW_CONTEXT_LOOKBACK_BARS = 200')
+    expect(evidenceSource).toContain('const historyLookback = Math.max(REVIEW_CONTEXT_LOOKBACK_BARS, requestedChanLookback)')
+    expect(evidenceSource).toContain('start_utc_msc:startUtcMs - historyLookback * interval')
     expect(bridgeSource).toContain('copy_rates_range')
   })
 

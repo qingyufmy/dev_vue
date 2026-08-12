@@ -284,8 +284,81 @@ function normalizeSourceRefs(value) {
   return refs
 }
 
+const STRATEGY_MEMORY_FORBIDDEN_CONDITION_KEYS = /(?:^|[^a-z])(applicability|applicable_when|avoid_when)(?:$|[^a-z])/i
+
+function assertStrategyMemoryBodyHasNoConditions(value) {
+  if (STRATEGY_MEMORY_FORBIDDEN_CONDITION_KEYS.test(String(value || ''))) {
+    throw new Error('strategy_memory_applicability_forbidden')
+  }
+}
+
+function parseReviewJson(value) {
+  if (!value) return {}
+  if (typeof value === 'object') return value
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function canonicalReviewSourceRefs(reviewCase) {
+  const refs = new Set()
+  const evidence = parseReviewJson(reviewCase?.evidence_json)
+  const sources = Array.isArray(evidence.sources) ? evidence.sources : []
+  if (String(reviewCase?.period_type || '') === 'daily') {
+    for (const source of sources) {
+      const outcomeId = Number(source?.outcome_id ?? source?.outcomeId)
+      if (Number.isSafeInteger(outcomeId) && outcomeId > 0) refs.add(`outcome:${outcomeId}`)
+    }
+  } else if (String(reviewCase?.period_type || '') === 'monthly') {
+    for (const source of sources) {
+      const periodCaseId = Number(source?.period_case_id ?? source?.periodCaseId)
+      if (Number.isSafeInteger(periodCaseId) && periodCaseId > 0) refs.add(`period_review_case:${periodCaseId}`)
+    }
+  }
+  return refs
+}
+
+function normalizeCanonicalReviewSourceRefs(value, reviewCase) {
+  const explicitlySupplied = value !== undefined && value !== null
+  if (explicitlySupplied && (value === '' || (Array.isArray(value) && !value.length))) {
+    throw new Error('strategy_memory_source_ref_invalid')
+  }
+  const raw = normalizeSourceRefs(value)
+  const supplied = raw == null ? [] : raw
+  if (raw !== null && raw !== undefined && !supplied.length) throw new Error('strategy_memory_source_ref_invalid')
+  if (supplied.length && supplied.some(ref => String(ref ?? '').trim() === '')) {
+    throw new Error('strategy_memory_source_ref_invalid')
+  }
+  const allowed = canonicalReviewSourceRefs(reviewCase)
+  const caseId = Number(reviewCase?.id)
+  const versionId = Number(reviewCase?.approved_version_id)
+  if (Number.isSafeInteger(caseId) && caseId > 0) allowed.add(`period_review_case:${caseId}`)
+  if (Number.isSafeInteger(versionId) && versionId > 0) allowed.add(`period_review_version:${versionId}`)
+  const refs = []
+  for (const valueRef of supplied) {
+    const ref = String(valueRef || '').trim()
+    if (!ref || !allowed.has(ref)) throw new Error('strategy_memory_source_ref_invalid')
+    if (!refs.includes(ref)) refs.push(ref)
+  }
+  // Current review identity is always authoritative and is never left to a
+  // provider/model supplied source list.
+  const currentRefs = [`period_review_case:${caseId}`, `period_review_version:${versionId}`]
+  for (const ref of currentRefs) {
+    if (!refs.includes(ref)) refs.push(ref)
+  }
+  const preservedCurrent = currentRefs.filter(ref => refs.includes(ref))
+  const historical = refs.filter(ref => !preservedCurrent.includes(ref))
+  return [...historical.slice(0, Math.max(0, MAX_SOURCE_REFS - preservedCurrent.length)), ...preservedCurrent]
+}
+
 function validateContent(content, capacityChars) {
   const normalized = sanitizeStrategyMemoryText(content)
+  // Runtime memory is intentionally a plain human-readable body. Condition
+  // JSON from review/model payloads must never cross this persistence gate.
+  assertStrategyMemoryBodyHasNoConditions(normalized)
   const chars = strategyMemoryCharCount(normalized)
   if (chars > capacityChars) throw new Error('strategy_memory_capacity_exceeded')
   return {
@@ -360,6 +433,20 @@ async function getLibraryRow(strategyId) {
 function publicLibrary(library) {
   if (!library) return null
   return normalizeLibrary(library)
+}
+
+// Old approved libraries may predate the plain-Markdown memory contract. Do
+// not echo a legacy conditional payload into a new review prompt; it can be
+// ignored for this run while the durable historical revision remains intact.
+export function sanitizeStrategyMemoryPrompt(library) {
+  if (!library || typeof library !== 'object') return library
+  const result = { ...library }
+  if (STRATEGY_MEMORY_FORBIDDEN_CONDITION_KEYS.test(String(result.content_text || ''))) {
+    result.content_text = ''
+    result.char_count = 0
+    result.estimated_token_count = 0
+  }
+  return result
 }
 
 export async function assertStrategyMemoryAccess(strategyId, actor, action = 'manage') {
@@ -451,6 +538,177 @@ export async function listStrategyMemoryLibraryRevisions(strategyIdOrInput, acto
       WHERE strategy_id = ? ORDER BY version_no DESC, id DESC LIMIT ${limit}`,
     [strategy.id]
   )
+}
+
+const STRATEGY_MEMORY_COMPRESSION_TERMINAL_STATUSES = new Set([
+  'succeeded', 'succeeded_noop', 'failed', 'stale', 'status_unknown',
+])
+
+// The persisted compression job state predates the presentation-safe status
+// contract.  Recovery can therefore leave a job as `failed` while retaining a
+// stable code that proves it was actually unknown or stale.  Keep this map
+// deliberately allow-listed; arbitrary provider/error text must never change
+// the user-facing terminal state.
+const STRATEGY_MEMORY_COMPRESSION_STATUS_UNKNOWN_ERROR_CODES = new Set([
+  'provider_status_unknown', 'provider_status_unknown_after_recovery',
+])
+const STRATEGY_MEMORY_COMPRESSION_STALE_ERROR_CODES = new Set([
+  'strategy_memory_compression_stale',
+  'strategy_memory_pending_update_stale',
+  'model_task_recovery_stale',
+])
+
+function safeCompressionErrorCode(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  const code = raw.split(':', 1)[0]
+  return /^[a-z][a-z0-9_.-]{1,127}$/i.test(code) ? code : 'strategy_memory_compression_failed'
+}
+
+function safeCompressionValidationStatus(value) {
+  const raw = String(value || '').trim()
+  return /^[a-z][a-z0-9_.-]{0,31}$/i.test(raw) ? raw : null
+}
+
+function compressionRevisionSummary(row) {
+  if (!row) return null
+  return {
+    revision_id: Number(row.id || 0) || null,
+    version_no: integer(row.version_no, 0),
+    char_count: Math.max(0, integer(row.char_count, 0)),
+  }
+}
+
+function parseCompressionValidation(value) {
+  if (value && typeof value === 'object') return value
+  if (typeof value !== 'string' || !value.trim()) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function compressionPresentationStatus(job, task = null) {
+  const raw = String(job?.status || '')
+  const errorCode = safeCompressionErrorCode(job?.last_error_code)
+  if (raw === 'failed' && STRATEGY_MEMORY_COMPRESSION_STATUS_UNKNOWN_ERROR_CODES.has(errorCode)) {
+    return { status:'status_unknown', presentation_stage:'status_unknown' }
+  }
+  if (raw === 'failed' && STRATEGY_MEMORY_COMPRESSION_STALE_ERROR_CODES.has(errorCode)) {
+    return { status:'stale', presentation_stage:'stale' }
+  }
+  if (raw === 'queued') return { status:'queued', presentation_stage:'queued' }
+  if (raw === 'leased') {
+    const taskStatus = String(task?.status || '')
+    const presentationStage = taskStatus === 'applying' ? 'applying'
+      : ['validating', 'repairing', 'result_ready'].includes(taskStatus) ? 'validating' : 'running'
+    return { status:'running', presentation_stage:presentationStage }
+  }
+  if (STRATEGY_MEMORY_COMPRESSION_TERMINAL_STATUSES.has(raw)) {
+    return { status:raw, presentation_stage:raw }
+  }
+  return { status:'status_unknown', presentation_stage:'status_unknown' }
+}
+
+/**
+ * Read one compression job for its strategy owner.  This intentionally
+ * returns only presentation-safe metadata: lease tokens, model task IDs,
+ * provider responses and prompt material never leave the service layer.
+ */
+export async function getStrategyMemoryCompressionJobStatus(inputOrStrategyId, actorArg = null, payloadArg = null) {
+  const input = compressionInput(inputOrStrategyId, actorArg, payloadArg)
+  const strategy = await getAuthorizedStrategy(input.strategyId, input.actor, 'manage', input)
+  const jobId = positiveId(input.jobId ?? input.job_id, 'strategy_memory_compression_job_not_found')
+  const job = await queryOne(
+    `SELECT id, strategy_id, status, source_version_no, source_content_hash,
+            target_chars, last_error_code, result_revision_id,
+            result_validation_status, result_validation_json,
+            created_at, updated_at, completed_at, model_task_id
+       FROM strategy_memory_compression_jobs
+      WHERE id = ? AND strategy_id = ? LIMIT 1`, [jobId, strategy.id]
+  )
+  if (!job) throw new Error('strategy_memory_compression_job_not_found')
+
+  // A model-task row is consulted only while the business job is leased.  It
+  // can refine the presentation stage, but it never becomes the job status
+  // authority and its internal identifier is not returned.
+  const task = job.status === 'leased' && job.model_task_id
+    ? await queryOne('SELECT status FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [job.model_task_id])
+    : null
+  const currentRow = await queryOne(
+    `SELECT strategy_id, version_no, char_count, content_hash
+       FROM strategy_memory_libraries WHERE strategy_id = ? LIMIT 1`, [strategy.id]
+  )
+  const sourceVersionNo = integer(job.source_version_no, 0)
+  const sourceRevisionRow = await queryOne(
+    `SELECT id, strategy_id, version_no, char_count, content_hash
+       FROM strategy_memory_library_revisions
+      WHERE strategy_id = ? AND version_no = ? ORDER BY id DESC LIMIT 1`, [strategy.id, sourceVersionNo]
+  )
+  const resultRevisionRow = Number(job.result_revision_id || 0) > 0
+    ? await queryOne(
+      `SELECT id, strategy_id, version_no, char_count, content_hash
+         FROM strategy_memory_library_revisions
+        WHERE id = ? AND strategy_id = ? LIMIT 1`, [job.result_revision_id, strategy.id]
+    )
+    : null
+  const sourceRevision = compressionRevisionSummary(sourceRevisionRow)
+    || (sourceVersionNo === 0 && String(job.source_content_hash || '') === EMPTY_CONTENT_HASH
+      ? { revision_id:null, version_no:0, char_count:0 } : null)
+  const current = currentRow ? compressionRevisionSummary({
+    id:null, version_no:currentRow.version_no, char_count:currentRow.char_count,
+  }) : null
+  let result = compressionRevisionSummary(resultRevisionRow)
+  const validation = parseCompressionValidation(job.result_validation_json)
+  if (!result && ['succeeded', 'succeeded_noop'].includes(String(job.status || ''))) {
+    const currentMatchesSource = currentRow
+      && Number(currentRow.version_no) === sourceVersionNo
+      && String(currentRow.content_hash || '') === String(job.source_content_hash || '')
+    const validatedChars = Number(validation?.result_char_count)
+    if (currentMatchesSource) {
+      result = { revision_id:null, version_no:current.version_no, char_count:current.char_count }
+    } else if (Number.isSafeInteger(validatedChars) && validatedChars >= 0) {
+      // A later library version means the old source version is no longer a
+      // truthful result version.  Keep the validated character count useful,
+      // but leave version_no null until a result revision proves its lineage.
+      result = { revision_id:null, version_no:null, char_count:validatedChars }
+    }
+  }
+  const status = compressionPresentationStatus(job, task)
+  return {
+    id:Number(job.id), strategy_id:Number(strategy.id), ...status,
+    source_version_no:sourceVersionNo,
+    result_revision_id:Number(job.result_revision_id || 0) || null,
+    target_chars:Math.max(0, integer(job.target_chars, 0)),
+    result_validation_status:safeCompressionValidationStatus(job.result_validation_status),
+    last_error_code:safeCompressionErrorCode(job.last_error_code),
+    created_at:job.created_at || null, updated_at:job.updated_at || null,
+    completed_at:job.completed_at || null,
+    source:sourceRevision,
+    result,
+    current,
+    source_char_count:sourceRevision?.char_count ?? null,
+    result_char_count:result?.char_count ?? null,
+    current_char_count:current?.char_count ?? null,
+    source_version:sourceRevision?.version_no ?? sourceVersionNo,
+    result_version:result?.version_no ?? null,
+    current_version:current?.version_no ?? null,
+  }
+}
+
+export const getStrategyMemoryCompressionJob = getStrategyMemoryCompressionJobStatus
+
+export async function getLatestStrategyMemoryCompressionJobStatus(inputOrStrategyId, actorArg = null, payloadArg = null) {
+  const input = compressionInput(inputOrStrategyId, actorArg, payloadArg)
+  const strategy = await getAuthorizedStrategy(input.strategyId, input.actor, 'manage', input)
+  const latest = await queryOne(
+    `SELECT id FROM strategy_memory_compression_jobs
+      WHERE strategy_id = ? ORDER BY id DESC LIMIT 1`, [strategy.id]
+  )
+  if (!latest) return null
+  return getStrategyMemoryCompressionJobStatus({ ...input, strategyId:Number(strategy.id), jobId:Number(latest.id) })
 }
 
 export async function saveStrategyMemoryLibrary(strategyIdOrInput, actorArg = null, payloadArg = null) {
@@ -574,6 +832,7 @@ export function combineStrategyMemoryText(current, addition) {
 function deterministicReviewUpdateText(content, updateKind) {
   const normalized = sanitizeStrategyMemoryText(content).trim()
   if (!normalized) return ''
+  assertStrategyMemoryBodyHasNoConditions(normalized)
   if (/^##\s+/u.test(normalized)) return normalized
   const title = updateKind === 'monthly_review' ? '## 月复盘确认经验' : '## 日复盘确认经验'
   return `${title}\n\n${normalized}`
@@ -594,6 +853,34 @@ function compressionTargetForPending({ capacityChars, targetRatio, pendingText, 
   return target - pendingChars - (DETERMINISTIC_UPDATE_SEPARATOR_CHARS * Math.max(1, Number(pendingCount) || 1))
 }
 
+function safeCompressionValidationManifest(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const result = {}
+  const hash = String(input.semantic_manifest_hash || '').trim()
+  if (/^[a-f0-9]{64}$/i.test(hash)) result.semantic_manifest_hash = hash.toLowerCase()
+  const blockIds = [...new Set((Array.isArray(input.source_block_ids) ? input.source_block_ids : [])
+    .map(item => String(item ?? '').trim()).filter(item => /^[a-z0-9:_-]{1,128}$/i.test(item)))].slice(0, 500)
+  result.source_block_ids = blockIds
+  const auditHashes = key => [...new Set((Array.isArray(input[key]) ? input[key] : [])
+    .map(item => sha256(typeof item === 'string' ? item : stableJson(item))))].slice(0, 500)
+  // Provider explanations are useful while validating, but the job row must
+  // not become a second memory store. Persist only stable audit hashes.
+  result.unresolved_conflict_hashes = auditHashes('unresolved_conflicts')
+  result.removed_redundancy_hashes = auditHashes('removed_redundancies')
+  const dispositions = new Set(['preserved', 'merged_duplicate'])
+  if (Array.isArray(input.coverage_map)) {
+    result.coverage_map = input.coverage_map.slice(0, 500).map(row => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return null
+      const sourceBlockId = String(row.source_block_id || '').trim()
+      const disposition = String(row.disposition || '').trim()
+      if (!/^[a-z0-9:_-]{1,128}$/i.test(sourceBlockId) || !dispositions.has(disposition)) return null
+      return { source_block_id:sourceBlockId, disposition,
+        result_section_hash:sha256(String(row.result_section || '')) }
+    }).filter(Boolean)
+  }
+  return result
+}
+
 async function insertCompressionJobTx(run, options) {
   const updateIds = (options.sourceUpdateIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0)
   const sourceSetHash = options.sourceSetHash || sha256(stableJson({
@@ -610,8 +897,10 @@ async function insertCompressionJobTx(run, options) {
       (strategy_id, trigger_type, source_version_no, source_content_hash, source_set_hash,
        pending_update_ids_json, target_chars, status, attempt_count, lease_token,
        lease_expires_at, next_attempt_at, model_task_id, last_error_code,
-       result_revision_id, created_at, updated_at, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, NULL, NULL, NULL, ?, NULL, NULL, ?, ?, NULL)
+       result_revision_id, result_content_hash, result_validation_status,
+       result_validation_json, created_at, updated_at, completed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, NULL, NULL, NULL, ?, NULL, NULL,
+       NULL, 'pending', NULL, ?, ?, NULL)
      ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = VALUES(updated_at)`,
     [options.strategyId, options.triggerType || options.trigger, options.sourceVersionNo, options.sourceContentHash || null,
       sourceSetHash, JSON.stringify(updateIds), targetChars, options.modelTaskId || null, now, now]
@@ -626,13 +915,45 @@ export async function enqueueApprovedStrategyMemoryUpdate(strategyIdOrInput, act
   const strategy = await getAuthorizedStrategy(input.strategyId, input.actor, 'server_update', input)
   const periodReviewVersionId = positiveId(input.period_review_version_id ?? input.periodReviewVersionId,
     'strategy_memory_period_review_version_required')
+  const periodReviewCaseId = positiveId(input.period_review_case_id ?? input.periodReviewCaseId,
+    'strategy_memory_period_review_case_required')
   const updateKind = normalizeUpdateKind(input.update_kind ?? input.updateKind)
   const contentText = deterministicReviewUpdateText(
     input.content_text ?? input.content ?? input.memory_update ?? '', updateKind)
   if (!contentText.trim()) throw new Error('strategy_memory_update_empty')
-  const sourceRefs = normalizeSourceRefs(input.source_refs ?? input.sourceRefs)
+  let sourceRefs = null
   let result = null
   await withTransaction(async run => {
+    // The caller's `approved` flag and validated object are only hints. Reload
+    // the durable case/version identity under the same transaction that writes
+    // the update so stale or forged approvals cannot reach the library.
+    const canonical = await txOne(run,
+      `SELECT cases.*, versions.id AS canonical_version_id,
+              versions.period_case_id AS canonical_version_case_id,
+              versions.content_hash AS canonical_version_content_hash
+         FROM period_review_cases cases
+         JOIN period_review_versions versions
+           ON versions.id = cases.approved_version_id
+          AND versions.period_case_id = cases.id
+        WHERE cases.id = ? AND cases.approved_version_id = ?
+          AND cases.current_version_id = cases.approved_version_id
+          AND cases.status = 'approved'
+        LIMIT 1 FOR UPDATE`, [periodReviewCaseId, periodReviewVersionId])
+    if (!canonical || Number(canonical.strategy_id) !== Number(strategy.id)
+      || Number(canonical.canonical_version_id) !== periodReviewVersionId
+      || Number(canonical.canonical_version_case_id) !== periodReviewCaseId) {
+      throw new Error('strategy_memory_approved_review_not_canonical')
+    }
+    const validated = input.validatedReviewCase || input.validated_case || null
+    if (validated && (
+      (validated.id != null && Number(validated.id) !== periodReviewCaseId)
+      || (validated.strategy_id != null && Number(validated.strategy_id) !== Number(strategy.id))
+      || (validated.approved_version_id != null && Number(validated.approved_version_id) !== periodReviewVersionId)
+      || (validated.status != null && String(validated.status).toLowerCase() !== 'approved')
+    )) throw new Error('strategy_memory_approved_review_not_canonical')
+    sourceRefs = normalizeCanonicalReviewSourceRefs(input.source_refs ?? input.sourceRefs, {
+      ...canonical, approved_version_id:periodReviewVersionId,
+    })
     const current = await ensureLibraryTx(run, strategy, { actor:input.actor })
     const existing = await txOne(run,
       `SELECT * FROM strategy_memory_pending_updates
@@ -693,7 +1014,7 @@ export async function enqueueApprovedStrategyMemoryUpdate(strategyIdOrInput, act
          content_text, content_hash, source_refs_json, status, merged_revision_id,
          created_at, updated_at, completed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL)`,
-      [strategy.id, updateKind, optionalPositiveId(input.period_review_case_id ?? input.periodReviewCaseId),
+      [strategy.id, updateKind, periodReviewCaseId,
         periodReviewVersionId, contentText, sha256(contentText), jsonText(sourceRefs), now, now]
     )
     const pendingId = Number(txResult(insert).insertId || 0) || null
@@ -705,8 +1026,8 @@ export async function enqueueApprovedStrategyMemoryUpdate(strategyIdOrInput, act
         strategyId:strategy.id, versionNo:nextVersion, parentVersionNo:current.version_no,
         content, reason:updateKind === 'monthly_review' ? 'monthly_review_append' : 'daily_review_append',
         sourcePeriodReviewVersionId:periodReviewVersionId,
-        sourceRefs, sourceMetadata:{ pending_update_ids:[pendingId], source_period_review_version_id:periodReviewVersionId,
-          source_period_review_case_id:optionalPositiveId(input.period_review_case_id ?? input.periodReviewCaseId) },
+         sourceRefs, sourceMetadata:{ pending_update_ids:[pendingId], source_period_review_version_id:periodReviewVersionId,
+           source_period_review_case_id:periodReviewCaseId },
         authorUserId:actorUserId(input.actor), createdAt:now,
       })
       // Monthly review persistence is deliberately independent from the
@@ -800,6 +1121,36 @@ export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, ac
   const suggestedAction = sanitizeStrategyMemoryText(input.suggested_action || input.suggestedAction || '')
   let result = null
   await withTransaction(async run => {
+    // Conflict evidence has the same second-layer approval gate as a memory
+    // append.  Never let an `approved` flag or stale validated object create a
+    // third occurrence for an unrelated case/version.
+    const canonical = await txOne(run,
+      `SELECT cases.*, versions.id AS canonical_version_id,
+              versions.period_case_id AS canonical_version_case_id,
+              versions.content_hash AS canonical_version_content_hash
+         FROM period_review_cases cases
+         JOIN period_review_versions versions
+           ON versions.id = cases.approved_version_id
+          AND versions.period_case_id = cases.id
+        WHERE cases.id = ? AND cases.approved_version_id = ?
+          AND cases.current_version_id = cases.approved_version_id
+          AND cases.status = 'approved'
+        LIMIT 1 FOR UPDATE`, [periodReviewCaseId, periodReviewVersionId])
+    if (!canonical || Number(canonical.strategy_id) !== Number(strategy.id)
+      || Number(canonical.canonical_version_id) !== periodReviewVersionId
+      || Number(canonical.canonical_version_case_id) !== periodReviewCaseId) {
+      throw new Error('strategy_memory_approved_review_not_canonical')
+    }
+    const validated = input.validatedReviewCase || input.validated_case || null
+    if (validated && (
+      (validated.id != null && Number(validated.id) !== periodReviewCaseId)
+      || (validated.strategy_id != null && Number(validated.strategy_id) !== Number(strategy.id))
+      || (validated.approved_version_id != null && Number(validated.approved_version_id) !== periodReviewVersionId)
+      || (validated.status != null && String(validated.status).toLowerCase() !== 'approved')
+    )) throw new Error('strategy_memory_approved_review_not_canonical')
+    const sourceRefs = normalizeCanonicalReviewSourceRefs(input.source_refs ?? input.sourceRefs, {
+      ...canonical, approved_version_id:periodReviewVersionId,
+    })
     const currentLibrary = await ensureLibraryTx(run, strategy, { actor:input.actor })
     let conflict = await txOne(run,
       `SELECT * FROM strategy_memory_conflicts
@@ -837,7 +1188,7 @@ export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, ac
        VALUES (?, ?, ?, ?, ?, ?)`,
       [conflict.id, strategy.id, periodReviewCaseId, periodReviewVersionId,
         jsonText({ summary:description, strategy_excerpt:strategyExcerpt, suggested_change:suggestedAction,
-          source_refs:normalizeSourceRefs(input.source_refs ?? input.sourceRefs) }), now]
+          source_refs:sourceRefs }), now]
     )
     const count = Number(conflict.evidence_count || 0) + 1
     const currentStatus = String(conflict.status || 'observing')
@@ -1159,7 +1510,9 @@ export async function applyStrategyMemoryCompressionJob(input = {}) {
       })
     }
     const finalStatus = contentChanged ? 'succeeded' : 'succeeded_noop'
-    const resultValidation = JSON.stringify({ source_version_no:Number(library.version_no),
+    const semanticValidation = safeCompressionValidationManifest(input.result_validation ?? input.resultValidation)
+    const resultValidation = JSON.stringify({ ...semanticValidation,
+      source_version_no:Number(library.version_no),
       source_content_hash:library.content_hash, result_content_hash:finalContent.content_hash,
       result_char_count:finalContent.char_count, pending_update_ids:ids,
       validation_status:finalStatus === 'succeeded_noop' ? 'noop' : 'accepted' })

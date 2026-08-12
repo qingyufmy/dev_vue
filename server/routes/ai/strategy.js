@@ -12,7 +12,7 @@ import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime,
   updateStrategyMemoryInjectionLog } from './strategy-memory-library.js'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
-import { parseStrategyPolicy, prepareStrategyPolicyRuntime } from './strategy-policy.js'
+import { parseStrategyPolicy, prepareStrategyPolicyRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
 import { validateWorkflowTrace, workflowGateEvaluation } from './strategy-workflow-engine.js'
 import { applyConstraintAction, evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
@@ -160,7 +160,6 @@ function comparisonModelSnapshot(modelId, resolved) {
     model_name:model.model_name || null,
     api_base_url_sha256:comparisonFingerprint(model.api_base_url || ''),
     temperature:Number(model.temperature ?? 0.3),
-    max_tokens:Number(model.max_tokens || 0),
     thinking_enabled:model.thinking_enabled !== 0 && model.thinking_enabled !== false,
     reasoning_effort:model.reasoning_effort || null,
     request_timeout_ms:Number(model.request_timeout_ms || 120000),
@@ -525,10 +524,11 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   const missingTimeframes = []
   for (const { tf, count } of tags) {
     const chanPolicy = useChan ? getChanWindowPolicy(tf) : null
+    const chanEnabledForTimeframe = Boolean(useChan && chanPolicy?.supported !== false)
     const indicatorHistoryCount = Math.max(0, ...(compiledPolicy?.indicators || [])
       .filter(definition => definition.enabled && definition.source?.timeframe === tf)
       .map(indicatorRequiredHistory))
-    const historyCount = Math.max(resolveChanHistoryCount(userId, symbol, tf, count, useChan), indicatorHistoryCount)
+    const historyCount = Math.max(resolveChanHistoryCount(userId, symbol, tf, count, chanEnabledForTimeframe), indicatorHistoryCount)
     let rates
     let chanDataQuality = null
     if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= historyCount) {
@@ -542,15 +542,15 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     if (rates.length === 0) { missingTimeframes.push(tf); continue }
     let visibleRates = rates.slice(-count)
     let summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
-      computeChan: useChan,
+      computeChan: chanEnabledForTimeframe,
       chanRates: rates,
-      requestedChanHistoryCount: chanPolicy?.target || historyCount,
-      chanMaximumHistoryCount: chanPolicy?.target,
-      chanValidationWindowCounts: chanPolicy?.validators,
-      chanWindowPolicyVersion: chanPolicy?.windowPolicyVersion || CHAN_WINDOW_POLICY_VERSION,
+      requestedChanHistoryCount: chanEnabledForTimeframe ? chanPolicy.target : null,
+      chanMaximumHistoryCount: chanEnabledForTimeframe ? chanPolicy.maximumHistoryCount : null,
+      chanValidationWindowCounts: chanEnabledForTimeframe ? chanPolicy.validationWindowCounts : null,
+      chanWindowPolicyVersion: chanEnabledForTimeframe ? chanPolicy.windowPolicyVersion : null,
       chanDataQuality,
     })
-    if (shouldPersistChanAnchor(useChan, summary.chan, chanDataQuality)) {
+    if (shouldPersistChanAnchor(chanEnabledForTimeframe, summary.chan, chanDataQuality)) {
       await saveChanStructureAnchor(chanDataQuality.source_id, symbol, tf, summary.chan.structure_anchor).catch(error => {
         console.warn(`[Chan] Failed to persist structure anchor for ${symbol} ${tf}: ${error.message}`)
       })
@@ -569,7 +569,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
       internalGapUnresolved:chanDataQuality?.internal_gap_unresolved === true,
       marketSource:chanDataQuality?.source || chanDataQuality?.source_type || null,
     }
-    if (useChan) visualizationKlines[tf] = compactRates(chanPolicy ? rates.slice(-chanPolicy.target) : rates)
+    if (chanEnabledForTimeframe) visualizationKlines[tf] = compactRates(rates.slice(-chanPolicy.target))
   }
   const context = {
     strategy_sequence: tags.map(t => `${t.tf}(${t.count})`).join(' → '),
@@ -807,7 +807,7 @@ export async function handleAnalyze(userId, params, options = {}) {
       market_data_json, token_count, ai_model, ttl_seconds, created_at,
       created_at_utc_msc, terminal_timezone_offset_minutes, terminal_clock_status, terminal_clock_source,
       entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json, inference_task_id)
-      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [userId, Number(strategy.id), session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.position_size_tier || null, signal.position_size_factor ?? null, signal.position_size_reason || null,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
@@ -825,7 +825,7 @@ export async function handleAnalyze(userId, params, options = {}) {
       modelProfileId: config?._model_profile_id, provider: config?.api_provider,
       modelName: config?.model_name, credentialSource: config?._credential_source,
       memoryMode:'strategy_library',
-      strategyRuntime:strategyPolicyRuntime, createdAt,
+       strategyRuntime:buildStrategyRuntimeSnapshot({ strategy, policy, strategyPolicyRuntime, source:'manual' }), createdAt,
     })
     await createTradeThesisTx(run, {
       signalId:result.insertId,
