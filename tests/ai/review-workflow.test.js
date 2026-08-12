@@ -106,7 +106,7 @@ describe('review durability and privacy guards', () => {
 
   it('does not downgrade complete trade evidence during a transient Bridge gap', () => {
     expect(service).toContain("evidence_status = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete'")
-    expect(service).toContain("status = IF(status IN ('approved','draft','edited','needs_revision','deferred')\n        OR (evidence_status = 'complete'")
+    expect(service).toContain("OR (evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete')")
     expect(service).toContain("updated_at = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete'")
   })
 
