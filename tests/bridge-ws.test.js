@@ -117,6 +117,7 @@ import {
   hasHistoryPrepareStatusCapability,
   captureHistoryTerminalNowUtcMsc,
   resolveHistoryRange,
+  setHistoryRangePreference,
   historyQueryFloor,
   HISTORY_ABSOLUTE_FLOOR_UTC_MSC,
   mapBridgePerformanceSummaryResult,
@@ -132,7 +133,7 @@ import {
   buildBridgeTerminalIdentity,
   classifyBridgeIdentityEvent,
 } from '../server/bridge-ws.js'
-import { queryOne } from '../server/db.js'
+import { queryOne, withTransaction } from '../server/db.js'
 
 describe('bridge-ws.js – exported API shape', () => {
   it('initBridgeWS is exported as function', () => {
@@ -182,6 +183,26 @@ describe('bridge-ws.js – exported API shape', () => {
   it('admin realtime broadcast helpers are exported as functions', () => {
     expect(typeof sendToAdminBrowsers).toBe('function')
     expect(typeof broadcastAdminEvent).toBe('function')
+  })
+})
+
+describe('history range preference migration contract', () => {
+  it('appends migration 179 with source-account scope uniqueness', () => {
+    const source = readFileSync(new URL('../server/migrations.js', import.meta.url), 'utf8')
+    expect(source).toContain("id: '179_history_range_preferences'")
+    expect(source.lastIndexOf("id: '179_history_range_preferences'")).toBeGreaterThan(
+      source.lastIndexOf("id: '178_manual_trade_strategy_review'"),
+    )
+    expect(source).toContain('CREATE TABLE IF NOT EXISTS history_range_preferences')
+    expect(source).toContain('start_date DATE NOT NULL')
+    expect(source).toContain(
+      'UNIQUE KEY uk_history_range_preference_account_scope (user_id, trading_account_id, scope)',
+    )
+  })
+
+  it('keeps the preference write outside the observer read allowlist', () => {
+    const observerAccess = readFileSync(new URL('../server/routes/ai/observer-access.js', import.meta.url), 'utf8')
+    expect(observerAccess).not.toContain("'history_range_preference_set'")
   })
 })
 
@@ -585,6 +606,152 @@ describe('bridge history range/export completeness contract', () => {
     }, Date.parse('2026-08-12T12:00:00.000Z'))
     await expect(promise)
       .rejects.toMatchObject({ code:'bridge_history_terminal_clock_unavailable' })
+  })
+
+  it('applies the current account server preference per all/platform scope', async () => {
+    const route = {
+      terminal_instance_id:'terminal-preference-scope',
+      account_ref:{ broker_server:'Broker-Demo', login:'246810' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
+      capabilities:['history_exact_range_v1'],
+    }
+    const now = Date.parse('2026-08-12T12:00:00.000Z')
+    queryOne.mockResolvedValue({
+      trading_account_id:901,
+      first_connected_utc_msc:Date.parse('2026-06-01T00:00:00.000Z'),
+      ownership_start_utc_msc:Date.parse('2026-07-01T00:00:00.000Z'),
+      ownership_history_id:11,
+      saved_all_start_date:'2026-05-01',
+      saved_platform_start_date:'2026-07-15',
+    })
+    const all = await resolveHistoryRange(42, { history_scope:'all' }, route, now)
+    expect(all).toMatchObject({
+      trading_account_id:901,
+      range_start_utc_msc:Date.parse('2026-05-01T00:00:00.000Z'),
+      saved_start_date:'2026-05-01', preference_source:'server_account',
+      preference_applied:true, preference_invalid:false,
+    })
+
+    const platform = await resolveHistoryRange(42, { history_scope:'platform' }, route, now)
+    expect(platform).toMatchObject({
+      range_start_utc_msc:Date.parse('2026-07-15T00:00:00.000Z'),
+      saved_start_date:'2026-07-15', preference_source:'server_account',
+      preference_applied:true,
+    })
+  })
+
+  it('ignores a stale server preference and reports the system fallback', async () => {
+    const route = {
+      terminal_instance_id:'terminal-preference-invalid',
+      account_ref:{ broker_server:'Broker-Demo', login:'135790' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
+      capabilities:['history_exact_range_v1'],
+    }
+    const now = Date.parse('2026-08-12T12:00:00.000Z')
+    queryOne.mockResolvedValue({
+      trading_account_id:902,
+      first_connected_utc_msc:Date.parse('2026-06-01T00:00:00.000Z'),
+      ownership_start_utc_msc:null,
+      ownership_history_id:null,
+      saved_all_start_date:'1999-12-31',
+    })
+    const range = await resolveHistoryRange(42, { history_scope:'all' }, route, now)
+    expect(range).toMatchObject({
+      trading_account_id:902,
+      range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC,
+      saved_start_date:null,
+      preference_source:'system', preference_applied:false,
+      preference_invalid:true,
+      preference_invalid_reason:'out_of_range',
+    })
+  })
+
+  it('validates, saves, resets, and scopes preference writes to the resolved account', async () => {
+    const route = {
+      terminal_instance_id:'terminal-preference-write',
+      account_ref:{ broker_server:'Broker-Demo', login:'112233' },
+      clock:{ timezone_offset_minutes:0, clock_status:'persisted' },
+      capabilities:['history_exact_range_v1'],
+    }
+    const now = Date.parse('2026-08-12T12:00:00.000Z')
+    queryOne.mockResolvedValue({
+      trading_account_id:903,
+      first_connected_utc_msc:Date.parse('2026-06-01T00:00:00.000Z'),
+      ownership_start_utc_msc:null,
+      ownership_history_id:null,
+    })
+    const transactionRun = vi.fn(async sql => String(sql).includes('FOR UPDATE')
+      ? [[{ trading_account_id:903 }], []] : [{ affectedRows:1 }, []])
+    withTransaction.mockImplementation(async callback => callback(transactionRun))
+    const saved = await setHistoryRangePreference(42, route, {
+      scope:'platform', start_date:'2026-05-15',
+      user_id:999, trading_account_id:999,
+    }, now)
+    expect(saved).toMatchObject({
+      status:'success', preference:{ scope:'platform', start_date:'2026-05-15' },
+      history_range:{ range_start_utc_msc:Date.parse('2026-05-15T00:00:00.000Z'),
+        saved_start_date:'2026-05-15', preference_source:'server_account' },
+    })
+    expect(withTransaction).toHaveBeenCalledTimes(1)
+    expect(transactionRun.mock.calls[0][0]).toContain('FOR UPDATE')
+    expect(transactionRun.mock.calls[0][0]).toContain('mt5_account_bindings')
+    expect(transactionRun.mock.calls[0][0]).toContain('trading_accounts')
+    expect(transactionRun.mock.calls[1][0]).toContain('INSERT INTO history_range_preferences')
+    expect(transactionRun.mock.calls[1][1]).toEqual([
+      42, 903, 'platform', '2026-05-15', expect.any(String), expect.any(String),
+    ])
+
+    queryOne.mockResolvedValue({
+      trading_account_id:903,
+      first_connected_utc_msc:Date.parse('2026-06-01T00:00:00.000Z'),
+      ownership_start_utc_msc:null,
+      ownership_history_id:null,
+      saved_platform_start_date:'2026-05-15',
+    })
+    const reset = await setHistoryRangePreference(42, route, {
+      scope:'platform', start_date:null, user_id:999, trading_account_id:999,
+    }, now)
+    expect(reset).toMatchObject({
+      status:'success', preference:{ scope:'platform', start_date:null },
+      history_range:{ range_start_utc_msc:Date.parse('2026-06-01T00:00:00.000Z'),
+        saved_start_date:null, preference_source:'system', preference_applied:false },
+    })
+    expect(withTransaction).toHaveBeenCalledTimes(2)
+    expect(transactionRun.mock.calls[2][0]).toContain('FOR UPDATE')
+    expect(transactionRun.mock.calls[3][0]).toContain('DELETE FROM history_range_preferences')
+    expect(transactionRun.mock.calls[3][1]).toEqual([42, 903, 'platform'])
+    await expect(setHistoryRangePreference(42, route,
+      { scope:'all', start_date:'2026-02-30' }, now))
+      .rejects.toMatchObject({ code:'history_range_preference_date_invalid' })
+  })
+
+  it('treats the all-history floor business date as a reset under a positive offset', async () => {
+    const route = {
+      terminal_instance_id:'terminal-preference-floor-reset',
+      account_ref:{ broker_server:'Broker-Demo', login:'445566' },
+      clock:{ timezone_offset_minutes:180, clock_status:'persisted' },
+      capabilities:['history_exact_range_v1'],
+    }
+    const now = Date.parse('2026-08-12T12:00:00.000Z')
+    queryOne.mockResolvedValue({
+      trading_account_id:904,
+      first_connected_utc_msc:Date.parse('2026-06-01T00:00:00.000Z'),
+      ownership_start_utc_msc:null,
+      ownership_history_id:null,
+    })
+    const transactionRun = vi.fn(async sql => String(sql).includes('FOR UPDATE')
+      ? [[{ trading_account_id:904 }], []] : [{ affectedRows:1 }, []])
+    withTransaction.mockImplementation(async callback => callback(transactionRun))
+
+    const result = await setHistoryRangePreference(42, route,
+      { scope:'all', start_date:'2000-01-01' }, now)
+    expect(result).toMatchObject({
+      preference:{ scope:'all', start_date:null },
+      history_range:{ range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC,
+        saved_start_date:null, preference_source:'system' },
+    })
+    expect(transactionRun.mock.calls.at(-1)[0]).toContain('DELETE FROM history_range_preferences')
+    expect(transactionRun.mock.calls.at(-1)[1]).toEqual([42, 904, 'all'])
   })
 
   it('maps a ready Bridge SQLite summary without fabricating legacy totals', () => {
@@ -1196,7 +1363,9 @@ describe('initBridgeWS', () => {
     expect(firstReply).toMatchObject({
       status:'success', history_sync:{ requested_range_complete:false, backfill_pending:true },
       history_range:{ range_start_utc_msc:HISTORY_ABSOLUTE_FLOOR_UTC_MSC,
-        range_end_utc_msc:frozenEnd, captured_end_utc_msc:frozenEnd },
+        range_end_utc_msc:frozenEnd, captured_end_utc_msc:frozenEnd,
+        saved_start_date:null, preference_source:'system',
+        preference_applied:false, preference_invalid:false },
     })
     expect(firstReply).not.toHaveProperty('orders')
     expect(firstReply).not.toHaveProperty('statistics')

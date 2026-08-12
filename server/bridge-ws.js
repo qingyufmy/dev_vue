@@ -1603,6 +1603,170 @@ function assertHistoryExactRoute(route) {
   return route
 }
 
+function assertHistoryPreferenceRoute(route) {
+  const { terminalInstanceId } = historyRouteAccount(route)
+  if (!terminalInstanceId) throw historyError('bridge_history_route_required')
+  return route
+}
+
+function normalizedHistoryPreferenceScope(params = {}) {
+  const nested = params?.history_range && typeof params.history_range === 'object'
+    ? params.history_range : null
+  const raw = params?.scope ?? params?.history_scope ?? nested?.scope ?? nested?.requested_scope
+  const scope = String(raw == null || raw === '' ? '' : raw).trim().toLowerCase()
+  if (!['all', 'platform'].includes(scope)) {
+    throw historyError('history_range_preference_scope_invalid')
+  }
+  return scope
+}
+
+function normalizedHistoryPreferenceDate(value) {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value !== 'string') throw historyError('history_range_preference_date_invalid')
+  const date = value.trim()
+  if (!date) return null
+  if (parseStrictUtcDateBoundary(date) === null) {
+    throw historyError('history_range_preference_date_invalid')
+  }
+  return date
+}
+
+function historyBusinessDateForRangeStart(range = {}) {
+  const utcMsc = Number(range.system_start_utc_msc)
+  const offsetMinutes = Number(range.timezone_offset_minutes)
+  if (!Number.isSafeInteger(utcMsc) || utcMsc <= 0
+    || !Number.isSafeInteger(offsetMinutes) || offsetMinutes < -840 || offsetMinutes > 840) {
+    return null
+  }
+  try {
+    return new Date(utcMsc + offsetMinutes * 60_000).toISOString().slice(0, 10)
+  } catch {
+    return null
+  }
+}
+
+function historyRangeWithSavedPreference(range, scope, startDate) {
+  const next = { ...range }
+  next.scope_start_override = null
+  next.override_applied = false
+  next.saved_start_date = startDate
+  next.preference_start_date = startDate
+  next.preference_source = startDate ? 'server_account' : 'system'
+  next.preference_applied = Boolean(startDate)
+  next.preference_invalid = false
+  next.preference_invalid_reason = null
+  if (startDate) return next
+
+  // A reset removes the saved start. Re-project the already validated range
+  // to the system boundary without changing its frozen end/clock evidence.
+  const systemStart = Number(range.system_start_utc_msc)
+  if (!Number.isSafeInteger(systemStart) || systemStart <= 0
+    || systemStart >= Number(range.range_end_utc_msc)) return next
+  next.range_start_utc_msc = systemStart
+  next.effective_start_utc_msc = systemStart
+  next.effective_range = { ...(range.effective_range || {}), start_utc_msc:systemStart }
+  next.filter_close_from_utc_msc = Math.max(systemStart,
+    Number(range.filter_close_from_utc_msc) || systemStart)
+  next.scope = scope
+  next.requested_scope = scope
+  return next
+}
+
+/**
+ * Persist one all/platform history start for the current exact route.
+ * Identity is deliberately supplied by the authenticated caller and route;
+ * no user_id or trading_account_id request parameter participates in writes.
+ */
+export async function setHistoryRangePreference(
+  userId,
+  route,
+  params = {},
+  nowUtcMsc = Date.now(),
+) {
+  const numericUserId = Number(userId)
+  if (!Number.isSafeInteger(numericUserId) || numericUserId <= 0) {
+    throw historyError('bridge_history_binding_unavailable')
+  }
+  const exactRoute = assertHistoryPreferenceRoute(route)
+  const scope = normalizedHistoryPreferenceScope(params)
+  const nested = params?.history_range && typeof params.history_range === 'object'
+    ? params.history_range : null
+  const startDate = normalizedHistoryPreferenceDate(
+    Object.prototype.hasOwnProperty.call(params || {}, 'start_date')
+      ? params.start_date : nested?.start_date,
+  )
+  if (!Number.isSafeInteger(nowUtcMsc) || nowUtcMsc <= 0) {
+    throw historyError('bridge_history_range_invalid')
+  }
+  const { brokerServer, loginAccount } = historyRouteAccount(exactRoute)
+
+  return withTransaction(async run => {
+    // Lock the exact current binding and its identity row before validating
+    // or writing.  A reconnect/account switch cannot race this operation and
+    // redirect a preference to an account that is no longer current.
+    const [lockedRows] = await run(`SELECT
+        bindings.current_trading_account_id AS trading_account_id
+      FROM mt5_account_bindings bindings
+      JOIN trading_accounts ta
+        ON ta.id = bindings.current_trading_account_id
+        AND ta.user_id = bindings.current_user_id
+        AND UPPER(ta.broker_server) = UPPER(bindings.broker_server_key)
+        AND ta.login_account = bindings.login_account
+        AND ta.is_deleted = 0
+      WHERE bindings.current_user_id = ?
+        AND UPPER(bindings.broker_server_key) = UPPER(?)
+        AND bindings.login_account = ?
+      LIMIT 1 FOR UPDATE`, [numericUserId, brokerServer, loginAccount])
+    const lockedAccountId = Number(lockedRows?.[0]?.trading_account_id)
+    if (!Number.isSafeInteger(lockedAccountId) || lockedAccountId <= 0) {
+      throw historyError('bridge_history_binding_unavailable')
+    }
+
+    // First resolve the unmodified system range. A date equal to the
+    // system-start terminal business date means "use the default"; treating
+    // it as an explicit UTC override would incorrectly move a positive-offset
+    // all-history floor into the previous UTC day.
+    const baselineRange = await resolveHistoryRange(numericUserId, {
+      history_scope:scope,
+    }, exactRoute, nowUtcMsc)
+    const systemStartDate = historyBusinessDateForRangeStart(baselineRange)
+    const persistedStartDate = startDate && startDate === systemStartDate ? null : startDate
+
+    // A non-null value must pass the same allowed_start/range_end validation
+    // as a temporary scope_start_override. The validation query also proves
+    // the route/account ownership; compare its account id with the locked row
+    // before using the transaction runner for the write.
+    const validationRange = persistedStartDate ? await resolveHistoryRange(numericUserId, {
+      history_scope:scope,
+      scope_start_override:persistedStartDate,
+    }, exactRoute, nowUtcMsc) : baselineRange
+    const tradingAccountId = Number(validationRange.trading_account_id)
+    if (!Number.isSafeInteger(tradingAccountId) || tradingAccountId <= 0
+      || tradingAccountId !== lockedAccountId) {
+      throw historyError('bridge_history_binding_unavailable')
+    }
+
+    if (persistedStartDate) {
+      const now = beijingNow()
+      await run(`INSERT INTO history_range_preferences
+        (user_id, trading_account_id, scope, start_date, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE start_date = VALUES(start_date), updated_at = VALUES(updated_at)`,
+      [numericUserId, lockedAccountId, scope, persistedStartDate, now, now])
+    } else {
+      await run(`DELETE FROM history_range_preferences
+        WHERE user_id = ? AND trading_account_id = ? AND scope = ?`,
+      [numericUserId, lockedAccountId, scope])
+    }
+
+    return {
+      status:'success',
+      preference:{ scope, start_date:persistedStartDate },
+      history_range:historyRangeWithSavedPreference(validationRange, scope, persistedStartDate),
+    }
+  })
+}
+
 function assertHistoryPrepareStatusRoute(route) {
   const exactRoute = assertHistoryExactRoute(route)
   if (!hasHistoryPrepareStatusCapability(exactRoute)) {
@@ -1626,6 +1790,10 @@ function compactHistoryPrepareRange(range) {
     effective_range:range.effective_range,
     scope_start_override:range.scope_start_override,
     override_applied:Boolean(range.override_applied),
+    saved_start_date:range.saved_start_date || null,
+    preference_source:range.preference_source || 'system',
+    preference_applied:Boolean(range.preference_applied),
+    preference_invalid:Boolean(range.preference_invalid),
     timezone_offset_minutes:range.timezone_offset_minutes,
     clock_status:range.clock_status,
     clock_source:range.clock_source,
@@ -1799,7 +1967,9 @@ export async function resolveHistoryRange(
         AS first_connected_utc_msc,
       CAST(UNIX_TIMESTAMP(ownership.started_at)*1000 AS UNSIGNED)
         AS ownership_start_utc_msc,
-      ownership.id AS ownership_history_id
+      ownership.id AS ownership_history_id,
+      history_pref_all.start_date AS saved_all_start_date,
+      history_pref_platform.start_date AS saved_platform_start_date
     FROM mt5_account_bindings bindings
     JOIN trading_accounts ta
       ON ta.id = bindings.current_trading_account_id
@@ -1813,6 +1983,14 @@ export async function resolveHistoryRange(
       AND UPPER(ownership.broker_server_key) = UPPER(bindings.broker_server_key)
       AND ownership.login_account = bindings.login_account
       AND ownership.ended_at IS NULL
+    LEFT JOIN history_range_preferences history_pref_all
+      ON history_pref_all.user_id = bindings.current_user_id
+      AND history_pref_all.trading_account_id = bindings.current_trading_account_id
+      AND history_pref_all.scope = 'all'
+    LEFT JOIN history_range_preferences history_pref_platform
+      ON history_pref_platform.user_id = bindings.current_user_id
+      AND history_pref_platform.trading_account_id = bindings.current_trading_account_id
+      AND history_pref_platform.scope = 'platform'
     WHERE bindings.current_user_id = ?
       AND UPPER(bindings.broker_server_key) = UPPER(?)
       AND bindings.login_account = ?
@@ -1840,6 +2018,12 @@ export async function resolveHistoryRange(
   let closeFrom = null
   let closeTo = null
   let overrideApplied = false
+  let preferenceApplied = false
+  let preferenceInvalid = false
+  let preferenceInvalidReason = null
+  let preferenceSource = 'system'
+  let savedStartDate = null
+  let savedPreferenceStart = null
   if (requestedScope === 'custom') {
     const customCloseFrom = params?.close_from ?? nestedRange?.close_from
     const customCloseTo = params?.close_to ?? nestedRange?.close_to
@@ -1874,6 +2058,61 @@ export async function resolveHistoryRange(
     throw historyError('bridge_history_range_invalid')
   }
 
+  // Server preferences are intentionally read from the current binding row
+  // above.  The route and user are the ownership proof; a client-provided
+  // account/user id is never part of this lookup.  A stale or malformed
+  // preference must not make every subsequent history read fail closed: drop
+  // it for this request, report the invalid state, and use the system start.
+  if (['all', 'platform'].includes(requestedScope)) {
+    const rawSavedStart = requestedScope === 'all'
+      ? (ownership.saved_all_start_date
+        ?? ownership.history_preference_all_start_date
+        ?? ownership.saved_start_date
+        ?? ownership.preference_start_date
+        ?? ownership.start_date)
+      : (ownership.saved_platform_start_date
+        ?? ownership.history_preference_platform_start_date
+        ?? ownership.saved_start_date
+        ?? ownership.preference_start_date
+        ?? ownership.start_date)
+    if (rawSavedStart !== undefined && rawSavedStart !== null && rawSavedStart !== '') {
+      const candidate = rawSavedStart instanceof Date && !Number.isNaN(rawSavedStart.getTime())
+        ? rawSavedStart.toISOString().slice(0, 10) : String(rawSavedStart).trim()
+      const parsedCandidate = parseStrictUtcDateBoundary(candidate)
+      if (parsedCandidate === null) {
+        preferenceInvalid = true
+        preferenceInvalidReason = 'date_invalid'
+      } else if (candidate === historyBusinessDateForRangeStart({
+        system_start_utc_msc:systemStart,
+        timezone_offset_minutes:terminalClock?.timezone_offset_minutes,
+      })) {
+        // Canonicalize a legacy row that stores the system business date. It
+        // is semantically the reset/default state, even if the row predates
+        // the write-path reset rule.
+        savedStartDate = null
+        savedPreferenceStart = null
+      } else {
+        try {
+          const parsedStart = historyDateInputUtcMsc(candidate, terminalClock)
+          if (parsedStart < allowedStart || parsedStart >= rangeEnd) {
+            preferenceInvalid = true
+            preferenceInvalidReason = 'out_of_range'
+          } else {
+            savedStartDate = candidate
+            savedPreferenceStart = parsedStart
+          }
+        } catch (error) {
+          // A saved date is not allowed to turn an otherwise valid default
+          // range into a permanent clock error.  Keep the error as an
+          // observable invalid-preference reason and fall back below.
+          preferenceInvalid = true
+          preferenceInvalidReason = error?.code === 'bridge_history_terminal_clock_unavailable'
+            ? 'clock_unavailable' : 'date_invalid'
+        }
+      }
+    }
+  }
+
   // Start overrides are query-only.  They can expand a platform/all scope
   // toward the allowed floor, but may never rewrite first_connected_at or be
   // used with custom/legacy ownership scopes.
@@ -1892,7 +2131,11 @@ export async function resolveHistoryRange(
     effectiveStart = override
     overrideApplied = true
   } else {
-    effectiveStart = systemStart
+    effectiveStart = savedPreferenceStart ?? systemStart
+    if (savedPreferenceStart !== null) {
+      preferenceApplied = true
+      preferenceSource = 'server_account'
+    }
   }
 
   // `filter_close_*` narrows table/chart rows only.  Keep scope boundaries
@@ -1926,6 +2169,7 @@ export async function resolveHistoryRange(
   return {
     scope: requestedScope,
     requested_scope: requestedScope,
+    trading_account_id: Number(ownership.trading_account_id) || null,
     range_start_utc_msc: effectiveStart,
     range_end_utc_msc: rangeEnd,
     captured_end_utc_msc: capturedEnd,
@@ -1939,6 +2183,12 @@ export async function resolveHistoryRange(
     query_floor_utc_msc:allowedStart,
     scope_start_override:hasOverride ? String(overrideValue) : null,
     override_applied:overrideApplied,
+    saved_start_date:savedStartDate,
+    preference_start_date:savedStartDate,
+    preference_source:preferenceSource,
+    preference_applied:preferenceApplied,
+    preference_invalid:preferenceInvalid,
+    preference_invalid_reason:preferenceInvalidReason,
     first_connected_utc_msc: platformStart,
     platform_start_utc_msc: platformStart,
     ownership_start_utc_msc: ownershipStart,
@@ -2640,6 +2890,16 @@ async function handleBrowserCommand(ws, userId, msg) {
           if (existing) await queryRun('UPDATE system_config SET `value` = ? WHERE `key` = ?', [symbol, key])
           else await queryRun('INSERT INTO system_config (category, `key`, `value`) VALUES (?, ?, ?)', ['quote_symbol', key, symbol])
         }
+        break
+      }
+      case 'history_range_preference_set': {
+        // Observer writes never reach this switch: the access gate above
+        // permits only OBSERVER_WS_READ_ACTIONS for read-only sessions.  For
+        // an owner, dataRoute is selected from the authenticated user's
+        // current preferred terminal; request identity fields are ignored by
+        // setHistoryRangePreference and cannot retarget another account.
+        const exactRoute = assertHistoryPreferenceRoute(dataRoute)
+        result = await setHistoryRangePreference(userId, exactRoute, params, Date.now())
         break
       }
       case 'history': {
@@ -3941,7 +4201,8 @@ async function handleBrowserCommand(ws, userId, msg) {
     console.error('[BridgeWS] handleBrowserCommand error:', err.message)
     const stableCode = String(err?.code || err?.message || '')
     if (stableCode.startsWith('bridge_history_') || stableCode.startsWith('history_cursor_')
-      || stableCode.startsWith('history_prepare_status_')) {
+      || stableCode.startsWith('history_prepare_status_')
+      || stableCode.startsWith('history_range_preference_')) {
       reply({ status:'error', code:stableCode, error:stableCode, message:stableCode })
       return
     }

@@ -198,8 +198,6 @@ const HISTORY_CIRCUIT_BREAKER_CODES = new Set([
   'bridge_history_temporarily_unavailable',
 ]);
 const HISTORY_CIRCUIT_BREAKER_TTL_MS = 5000;
-const HISTORY_RANGE_PREFERENCE_VERSION = 1;
-const HISTORY_RANGE_PREFERENCE_PREFIX = "aurum.ai.history-range";
 const HISTORY_ABSOLUTE_FLOOR_DATE = "2000-01-01";
 const HISTORY_DEFAULT_SCOPE = "platform";
 const HISTORY_INVALID_OVERRIDE_CODES = new Set([
@@ -246,13 +244,6 @@ function historyStableAccountKey(identity = state.bridgeAccountIdentity) {
   return `${platform}|${broker}|${login}`;
 }
 
-function historyPreferenceStorageKey(identity = state.bridgeAccountIdentity) {
-  const userId = state.user?.id ?? state.user?.user_id;
-  const accountKey = historyStableAccountKey(identity);
-  if (userId == null || !accountKey) return "";
-  return `${HISTORY_RANGE_PREFERENCE_PREFIX}:v${HISTORY_RANGE_PREFERENCE_VERSION}:${String(userId)}:${accountKey}`;
-}
-
 function validHistoryBusinessDate(value) {
   const text = String(value || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
@@ -261,50 +252,8 @@ function validHistoryBusinessDate(value) {
   return parsed.toISOString().slice(0, 10) === text;
 }
 
-function readHistoryRangePreferences(identity = state.bridgeAccountIdentity) {
-  const key = historyPreferenceStorageKey(identity);
-  if (!key) return null;
-  try {
-    const rawValue = localStorage.getItem(key);
-    if (!rawValue) return null;
-    const parsed = JSON.parse(rawValue);
-    if (!parsed || Number(parsed.version) !== HISTORY_RANGE_PREFERENCE_VERSION) return null;
-    const starts = parsed.starts && typeof parsed.starts === "object" ? parsed.starts : {};
-    const validStart = value => validHistoryBusinessDate(value) ? String(value) : "";
-    return {
-      version:HISTORY_RANGE_PREFERENCE_VERSION,
-      mode:["all", "platform", "custom"].includes(String(parsed.mode || "")) ? String(parsed.mode) : HISTORY_DEFAULT_SCOPE,
-      starts:{ all:validStart(starts.all), platform:validStart(starts.platform), custom:validStart(starts.custom) },
-      updatedAt:Number(parsed.updatedAt) || 0,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function writeHistoryRangePreferences(preferences, identity = state.bridgeAccountIdentity) {
-  const key = historyPreferenceStorageKey(identity);
-  if (!key) return false;
-  try {
-    localStorage.setItem(key, JSON.stringify({
-      version:HISTORY_RANGE_PREFERENCE_VERSION,
-      mode:["all", "platform", "custom"].includes(String(preferences?.mode || ""))
-        ? String(preferences.mode) : HISTORY_DEFAULT_SCOPE,
-      starts:{
-        all:validHistoryBusinessDate(preferences?.starts?.all) ? String(preferences.starts.all) : "",
-        platform:validHistoryBusinessDate(preferences?.starts?.platform) ? String(preferences.starts.platform) : "",
-        custom:validHistoryBusinessDate(preferences?.starts?.custom) ? String(preferences.starts.custom) : "",
-      },
-      updatedAt:Date.now(),
-    }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function prepareHistoryRangePreferenceForIdentity() {
-  const key = historyPreferenceStorageKey();
+  const key = historyStableAccountKey();
   if (!key) {
     state.historyRangePreferenceKey = null;
     state.historyRangePreferences = null;
@@ -317,14 +266,13 @@ function prepareHistoryRangePreferenceForIdentity() {
   }
   if (state.historyRangePreferenceKey === key) return;
   state.historyRangePreferenceKey = key;
-  state.historyRangePreferences = readHistoryRangePreferences() || {
-    version:HISTORY_RANGE_PREFERENCE_VERSION,
-    mode:HISTORY_DEFAULT_SCOPE,
+  // Persistent history starts are owned by the server. Keep only the values
+  // confirmed for the active source account in memory so changing browsers,
+  // users or observer channels cannot fork the preference.
+  state.historyRangePreferences = {
     starts:{ all:"", platform:"", custom:"" },
-    updatedAt:0,
   };
-  const mode = ["all", "platform", "custom"].includes(String(state.historyRangePreferences.mode || ""))
-    ? String(state.historyRangePreferences.mode) : HISTORY_DEFAULT_SCOPE;
+  const mode = HISTORY_DEFAULT_SCOPE;
   const rangeMode = $("historyRangeMode");
   if (rangeMode) rangeMode.value = mode;
   const savedStart = state.historyRangePreferences.starts?.[mode] || "";
@@ -344,32 +292,27 @@ function historyPreferenceStart(scope) {
     ? state.historyRangePreferences.starts[scope] : "";
 }
 
-function historySaveStart(scope, date) {
-  if (!(scope === "all" || scope === "platform") || !validHistoryBusinessDate(date)) return false;
+function historyRememberServerStart(scope, date) {
+  if (!(scope === "all" || scope === "platform")) return false;
   const preferences = state.historyRangePreferences || {
-    version:HISTORY_RANGE_PREFERENCE_VERSION,
-    mode:scope,
     starts:{ all:"", platform:"", custom:"" },
-    updatedAt:0,
   };
-  preferences.mode = scope;
-  preferences.starts = { all:"", platform:"", custom:"", ...(preferences.starts || {}), [scope]:String(date) };
+  preferences.starts = {
+    all:"", platform:"", custom:"", ...(preferences.starts || {}),
+    [scope]:validHistoryBusinessDate(date) ? String(date) : "",
+  };
   state.historyRangePreferences = preferences;
-  return writeHistoryRangePreferences(preferences);
+  return true;
 }
 
 function historyClearSavedStart(scope) {
   if (!(scope === "all" || scope === "platform")) return false;
   const preferences = state.historyRangePreferences || {
-    version:HISTORY_RANGE_PREFERENCE_VERSION,
-    mode:scope,
     starts:{ all:"", platform:"", custom:"" },
-    updatedAt:0,
   };
   preferences.starts = { all:"", platform:"", custom:"", ...(preferences.starts || {}), [scope]:"" };
-  preferences.mode = scope;
   state.historyRangePreferences = preferences;
-  return writeHistoryRangePreferences(preferences);
+  return true;
 }
 
 function renderGatewayConnectionBadge(isLive, usingFallback) {
@@ -1705,7 +1648,9 @@ const API_ERROR_MESSAGES = {
   history_prepare_status_unsupported: "当前桥接不支持轻量历史同步检查",
   history_prepare_range_invalid: "历史范围元数据无效，请重新刷新",
   history_prepare_range_changed: "历史范围在同步期间发生变化，请重新刷新",
-  bridge_history_before_supported_start: "交易历史仅支持查询 2025 年 1 月 1 日及之后的数据",
+  bridge_history_before_supported_start: "交易历史仅支持查询 2000 年 1 月 1 日及之后的数据",
+  history_range_preference_scope_invalid: "只有“全部可用历史”和“平台接入后”可以保存开始日期",
+  history_range_preference_date_invalid: "开始日期格式无效，请重新选择",
   history_cursor_range_incomplete: "正在准备所选范围的交易记录，请稍后刷新",
   model_task_status_unknown: "模型服务商状态暂不可确认，系统正在安全恢复并避免重复请求",
   model_task_active: "上一轮模型任务仍在运行，请等待完成",
@@ -8648,6 +8593,7 @@ function applyRoleUI() {
   }
 
   document.querySelectorAll('.observer-action-panel').forEach(panel => setObserverPanelLock(panel, observer));
+  updateHistoryRangeUI();
 
   if (observer) {
     if (state.aiAccess?.reason === "bridge_offline") {
@@ -11225,6 +11171,7 @@ function historyRangeCandidate(data = {}, keys = []) {
 
 function historyScopeMetaFromResponse(data = {}) {
   const root = historyRangeCandidate(data, ["history_range", "scope_range", "range"]);
+  const preference = data?.preference && typeof data.preference === "object" ? data.preference : {};
   const allowed = Object.keys(historyRangeCandidate(data, ["allowed_range", "allowedRange"])).length
     ? historyRangeCandidate(data, ["allowed_range", "allowedRange"])
     : historyRangeCandidate(root, ["allowed_range", "allowedRange"]);
@@ -11275,6 +11222,14 @@ function historyScopeMetaFromResponse(data = {}) {
   const overrideApplied = typeof explicitOverrideApplied === "boolean"
     ? explicitOverrideApplied
     : Boolean(effectiveStartDate && systemStartDate && effectiveStartDate !== systemStartDate);
+  const preferenceKnown = [data, root].some(source => source
+    && (Object.prototype.hasOwnProperty.call(source, "saved_start_date")
+      || Object.prototype.hasOwnProperty.call(source, "preference_start_date")))
+    || Object.prototype.hasOwnProperty.call(preference, "start_date");
+  const savedStartValue = preference.start_date
+    ?? data?.saved_start_date ?? data?.preference_start_date
+    ?? root?.saved_start_date ?? root?.preference_start_date ?? null;
+  const savedStartDate = validHistoryBusinessDate(savedStartValue) ? String(savedStartValue) : "";
   return {
     scope:String(root?.scope || data?.history_scope || data?.scope || $("historyRangeMode")?.value || HISTORY_DEFAULT_SCOPE).trim().toLowerCase(),
     allowedStartDate:allowedStartDate || HISTORY_ABSOLUTE_FLOOR_DATE,
@@ -11290,6 +11245,9 @@ function historyScopeMetaFromResponse(data = {}) {
     systemStartUtcMsc:Number.isSafeInteger(systemStartUtcMsc) ? systemStartUtcMsc : null,
     timezoneOffsetMinutes:Number.isFinite(Number(offset)) ? Number(offset) : null,
     overrideApplied:Boolean(overrideApplied),
+    preferenceKnown,
+    savedStartDate,
+    preferenceSource:String(data?.preference_source || root?.preference_source || preference?.source || ""),
     pending:Boolean(data?.pending || data?.history_pending || data?.history_sync?.requested_range_complete === false),
     raw:data,
   };
@@ -11297,36 +11255,14 @@ function historyScopeMetaFromResponse(data = {}) {
 
 function applyHistoryScopeResponse(data = {}) {
   const scope = $("historyRangeMode")?.value || HISTORY_DEFAULT_SCOPE;
-  const requestedStart = $("historyRangeFrom")?.value || "";
-  const savedStart = scope === "all" || scope === "platform" ? historyPreferenceStart(scope) : "";
-  const responseRoot = historyRangeCandidate(data, ["history_range", "scope_range", "range"]);
   const meta = historyScopeMetaFromResponse(data);
-  // A restored preference is provisional until the server confirms that the
-  // override was applied.  A successful response that explicitly declines it
-  // is treated like an invalid saved value: remove the old preference and use
-  // the authoritative system start for the next request.
-  const savedOverrideDeclined = Boolean(
-    savedStart && requestedStart === savedStart
-      && (scope === "all" || scope === "platform")
-      && meta.overrideApplied === false
-      && meta.systemStartDate
-      && requestedStart !== meta.systemStartDate
-      && [data?.override_applied, data?.scope_start_override_applied,
-        responseRoot?.override_applied, responseRoot?.scope_start_override_applied]
-        .some(value => value === false),
-  );
-  if (savedOverrideDeclined) {
-    historyClearSavedStart(scope);
-    if ($("historyRangeFrom")) $("historyRangeFrom").value = meta.systemStartDate;
-    setText("historyRangeHint", `已保存的开始日期未获服务端确认，已恢复系统起点：${meta.systemStartDate}`);
-    toast("已保存的开始日期不可用，已恢复系统起点", "warning");
+  if ((scope === "all" || scope === "platform") && meta.preferenceKnown) {
+    historyRememberServerStart(scope, meta.savedStartDate);
   }
   state.historyRangeMeta = meta;
   const from = $("historyRangeFrom");
   const to = $("historyRangeTo");
-  const effectiveStart = savedOverrideDeclined
-    ? meta.systemStartDate
-    : meta.actualStartDate || meta.effectiveStartDate;
+  const effectiveStart = meta.actualStartDate || meta.effectiveStartDate;
   if (from && effectiveStart) from.value = effectiveStart;
   if (to && meta.actualEndDate) to.value = meta.actualEndDate;
   if (from && meta.allowedStartDate) from.min = meta.allowedStartDate;
@@ -11359,6 +11295,9 @@ function renderHistoryRangeMeta(meta = state.historyRangeMeta, scope = $("histor
     message += ` · 平台接入时间：${meta.platformStartDate}`;
   }
   message += ` · 可查询起点：${allowed}`;
+  if (isObserverMode() && (scope === "platform" || scope === "all")) {
+    message += " · 开始日期由观摩源账户设置";
+  }
   setText("historyRangeHint", message);
 }
 
@@ -11400,7 +11339,9 @@ function getHistoryRangeParams() {
     // the absolute floor (for example 2000-01-01 in UTC+3).
     const usesSystemStart = Boolean(system && from === system);
     const usesAllAllowedFloor = scope === "all" && from === allowed;
-    if (!usesSystemStart && !usesAllAllowedFloor) {
+    const usesSavedServerStart = Boolean(historyPreferenceStart(scope)
+      && from === historyPreferenceStart(scope));
+    if (!usesSystemStart && !usesAllAllowedFloor && !usesSavedServerStart) {
       params.scope_start_override = from;
     }
   }
@@ -11586,9 +11527,10 @@ function updateHistoryRangeUI({ pending = false } = {}) {
   const save = $("historyRangeSave");
   const restore = $("historyRangeRestore");
   const apply = $("historyRangeApply");
+  const observer = isObserverMode();
   if (apply) apply.disabled = Boolean(pending);
-  if (save) save.hidden = custom;
-  if (restore) restore.hidden = custom;
+  if (save) save.hidden = custom || observer;
+  if (restore) restore.hidden = custom || observer;
   if (save) save.disabled = Boolean(pending);
   if (restore) restore.disabled = Boolean(pending);
   if (pending || !state.historyRangeMeta) {
@@ -13828,29 +13770,57 @@ function bindEvents() {
     state.historyChartFocusIndex = -1;
     loadHistoryViews({ newQuery:true, trigger:"apply", forceRefresh:false }).catch(() => {});
   });
-  document.getElementById('historyRangeSave')?.addEventListener('click', () => {
+  document.getElementById('historyRangeSave')?.addEventListener('click', async () => {
+    if (isObserverMode()) { toast(observerMessage(), 'warning'); return; }
     const scope = $("historyRangeMode")?.value || HISTORY_DEFAULT_SCOPE;
     if (!(scope === "all" || scope === "platform")) return;
     const from = $("historyRangeFrom")?.value || "";
     try { getHistoryRangeParams(); }
     catch (error) { toast(error.message, 'error'); return; }
-    if (!historySaveStart(scope, from)) {
-      toast("开始日期保存失败，请稍后重试", "error");
-      return;
+    const button = $("historyRangeSave");
+    if (button) button.disabled = true;
+    try {
+      const result = await wsApi("history_range_preference_set", {
+        history_scope:scope,
+        start_date:from,
+      });
+      historyRememberServerStart(scope, result?.preference?.start_date || result?.saved_start_date || from);
+      state.historyFilters.page = 1;
+      _historyCache = null;
+      _historyChartCache = null;
+      await loadHistoryViews({ newQuery:true, trigger:"save", forceRefresh:false });
+      toast("开始日期已保存到当前交易账户", "success");
+    } catch (error) {
+      toast(apiErrorMessage(error?.message || "开始日期保存失败，请稍后重试"), "error");
+    } finally {
+      updateHistoryRangeUI();
     }
-    toast("开始日期已保存；点击“应用范围”后生效", "success");
   });
-  document.getElementById('historyRangeRestore')?.addEventListener('click', () => {
+  document.getElementById('historyRangeRestore')?.addEventListener('click', async () => {
+    if (isObserverMode()) { toast(observerMessage(), 'warning'); return; }
     const scope = $("historyRangeMode")?.value || HISTORY_DEFAULT_SCOPE;
     if (!(scope === "all" || scope === "platform")) return;
-    historyClearSavedStart(scope);
-    const systemStart = state.historyRangeMeta?.systemStartDate || "";
-    if ($("historyRangeFrom")) $("historyRangeFrom").value = systemStart;
-    if ($("historyRangeTo")) $("historyRangeTo").value = "";
-    state.historyFilters.page = 1;
-    _historyCache = null;
-    _historyChartCache = null;
-    loadHistoryViews({ newQuery:true, trigger:"reset", forceRefresh:false }).catch(() => {});
+    const button = $("historyRangeRestore");
+    if (button) button.disabled = true;
+    try {
+      await wsApi("history_range_preference_set", {
+        history_scope:scope,
+        start_date:null,
+      });
+      historyClearSavedStart(scope);
+      const systemStart = state.historyRangeMeta?.systemStartDate || "";
+      if ($("historyRangeFrom")) $("historyRangeFrom").value = systemStart;
+      if ($("historyRangeTo")) $("historyRangeTo").value = "";
+      state.historyFilters.page = 1;
+      _historyCache = null;
+      _historyChartCache = null;
+      await loadHistoryViews({ newQuery:true, trigger:"reset", forceRefresh:false });
+      toast("已恢复当前交易账户的系统起点", "success");
+    } catch (error) {
+      toast(apiErrorMessage(error?.message || "恢复系统起点失败，请稍后重试"), "error");
+    } finally {
+      updateHistoryRangeUI();
+    }
    });
    updateHistoryRangeUI();
    // Legacy bind-time shape retained for static contract readers:

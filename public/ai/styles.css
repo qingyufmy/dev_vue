@@ -4705,6 +4705,10 @@ input:checked + .slider::before { transform: translateX(18px); }
 .history-range-restore {
   white-space: nowrap;
 }
+.history-range-save[hidden],
+.history-range-restore[hidden] {
+  display: none !important;
+}
 .history-sync-status {
   display: flex;
   align-items: center;

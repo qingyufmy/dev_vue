@@ -5484,6 +5484,29 @@ const migrations = [
       if (!sourceIndex.length) await queryRun(`ALTER TABLE manual_trade_review_sources
         ADD KEY idx_manual_review_source_account (case_id, broker_server, login_account)`)
     }
+  },
+  {
+    id: '179_history_range_preferences',
+    async up() {
+      // A saved history start is a query preference, not a rewrite of the
+      // binding's first_connected_at or the Bridge coverage facts.  Keep the
+      // key tied to the source user and the currently bound trading account;
+      // a new account therefore starts with an empty preference.  The scope
+      // check is enforced again by the server write path so this table cannot
+      // become a generic per-user setting.
+      await queryRun(`CREATE TABLE IF NOT EXISTS history_range_preferences (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        scope VARCHAR(16) NOT NULL,
+        start_date DATE NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_history_range_preference_account_scope (user_id, trading_account_id, scope),
+        KEY idx_history_range_preference_account (trading_account_id, user_id, updated_at),
+        CONSTRAINT chk_history_range_preference_scope CHECK (scope IN ('all', 'platform'))
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

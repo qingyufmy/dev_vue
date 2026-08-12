@@ -112,7 +112,8 @@ describe('AI observer access', () => {
       'history', 'history_chart_data', 'history_prepare_status_v1', 'rates']) {
       expect(observerWsActionAllowed(access, action)).toBe(true)
     }
-    for (const action of ['analyze', 'open', 'execute', 'toggle_auto', 'audit_logs', 'admin_dashboard']) {
+    for (const action of ['analyze', 'open', 'execute', 'toggle_auto', 'audit_logs', 'admin_dashboard',
+      'history_range_preference_set']) {
       expect(observerWsActionAllowed(access, action)).toBe(false)
     }
   })
