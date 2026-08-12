@@ -3540,13 +3540,15 @@ async function refreshForNewSignal(signalId, signalMeta = null) {
 
   state.latestSignalId = signalId;
   _lastSignalId = signalId;
-  await loadSignals(isAnalyst
+  const refreshedSignals = await loadSignals(isAnalyst
     ? { skipResultRender:true, loadDashboard:false }
     : activeTabId() === "dashboard"
       ? { limit:1, summaryOnly:true, skipResultRender:true, announceDashboardSignal:true }
       : { limit:1, summaryOnly:true, skipResultRender:true });
 
-  const incoming = state.signals.find(item => sameSignalId(item.id, signalId)) || signalMeta;
+  const incoming = (refreshedSignals || []).find(item => sameSignalId(item.id, signalId))
+    || state.signals.find(item => sameSignalId(item.id, signalId))
+    || signalMeta;
   if (incoming) showSignalNotification(incoming);
   if (!autoFollow || !incoming) {
     highlightActiveAnalysis(state.selectedSignal?.id);
@@ -6184,6 +6186,7 @@ async function refreshTabData(tabId, options = {}) {
       await loadSignalTable();
       return;
     }
+    if (!state.analysisHistoryPageLoaded) renderAnalysisHistoryLoading();
     const selectLatest = options.selectLatest === true;
     const tasks = [loadSignals(selectLatest
       ? { selectLatest:true, loadDashboard:false }
@@ -8794,11 +8797,10 @@ function initSignalMonitor() {
 }
 
 function updateSignalDisplay(signal, options = {}) {
-  const card = $("signalCard");
-  if (!card) return;
-
   const previousSignalId = state.dashboardSignal?.id;
   state.dashboardSignal = signal || null;
+  const card = $("signalCard");
+  if (!card) return;
 
   if (!signal) {
     setSignalBadge(null);
@@ -10782,6 +10784,7 @@ function signalStatusLabel(signal) {
 function renderAnalysisHistory(signals, options = {}) {
   const host = $("analysisHistoryBody");
   if (!host) return;
+  host.removeAttribute("aria-busy");
   if (options.append) {
     // Append new items to existing list (remove sentinel first if exists)
     const sentinel = host.querySelector(".history-sentinel");
@@ -10831,6 +10834,7 @@ function highlightActiveAnalysis(signalId) {
 
 let _analysisDetailRequestVersion = 0;
 let _signalsListRequestVersion = 0;
+let _signalSummaryRequestVersion = 0;
 let _signalTableRequestVersion = 0;
 let _analysisHistoryLoadPromise = null;
 
@@ -10860,6 +10864,13 @@ function clearSignalEvidence(signalId) {
   for (const key of _signalEvidenceCache.keys()) {
     if (key.startsWith(prefix)) _signalEvidenceCache.delete(key);
   }
+}
+
+function renderAnalysisHistoryLoading() {
+  const host = $("analysisHistoryBody");
+  if (!host) return;
+  host.setAttribute("aria-busy", "true");
+  host.innerHTML = `<div class="history-empty" role="status" aria-live="polite">正在加载历史分析…</div>`;
 }
 
 function mergeSignalDetail(signal, detail) {
@@ -10895,6 +10906,7 @@ async function loadSignalDetail(signalId, { forceRefresh = false } = {}) {
 async function ensureAnalysisHistoryPageLoaded() {
   if (state.analysisHistoryPageLoaded) return;
   if (_analysisHistoryLoadPromise) return _analysisHistoryLoadPromise;
+  renderAnalysisHistoryLoading();
   _analysisHistoryLoadPromise = loadSignals({
     limit: ANALYSIS_HISTORY_PAGE_SIZE,
     skipResultRender: true,
@@ -11033,13 +11045,31 @@ async function loadSignals(options = {}) {
   const summaryOnly = options.summaryOnly === true;
   const loadDashboard = options.loadDashboard !== false && !summaryOnly;
   const loadTable = options.loadTable === true;
-  const requestVersion = options.append ? _signalsListRequestVersion : ++_signalsListRequestVersion;
+  const requestVersion = summaryOnly
+    ? ++_signalSummaryRequestVersion
+    : options.append
+      ? _signalsListRequestVersion
+      : ++_signalsListRequestVersion;
   const loadedIds = options.append ? state.signals.map(item => Number(item.id)).filter(Number.isFinite) : [];
   const beforeId = loadedIds.length ? Math.min(...loadedIds) : null;
   const data = await wsApi("signals", { limit, offset:beforeId ? 0 : offset, ...(beforeId ? { before_id:beforeId } : {}) });
-  if (requestVersion !== _signalsListRequestVersion) return;
+  const requestIsCurrent = summaryOnly
+    ? requestVersion === _signalSummaryRequestVersion
+    : requestVersion === _signalsListRequestVersion;
+  if (!requestIsCurrent) return [];
   const signals = data.signals || [];
   const hasMore = data.has_more !== undefined ? data.has_more : signals.length >= limit;
+
+  // Dashboard refreshes intentionally fetch only one lightweight row. Keep
+  // that summary in its own state so it cannot replace the analyst history
+  // list or reset its paging metadata while the user is reading a detail.
+  if (summaryOnly) {
+    const summarySignal = signals[0] || null;
+    state.latestSignalId = summarySignal?.id ?? null;
+    _lastSignalId = state.latestSignalId;
+    updateSignalDisplay(summarySignal, { announceNew:options.announceDashboardSignal === true });
+    return signals;
+  }
 
   if (options.append) {
     const known = new Set(state.signals.map(item => String(item.id)));
@@ -11050,7 +11080,7 @@ async function loadSignals(options = {}) {
   state.analysisHistoryOffset = state.signals.length;
   state.analysisHistoryHasMore = hasMore;
   if (!options.append) {
-    state.analysisHistoryPageLoaded = !summaryOnly && limit >= ANALYSIS_HISTORY_PAGE_SIZE;
+    state.analysisHistoryPageLoaded = limit >= ANALYSIS_HISTORY_PAGE_SIZE;
   }
 
   // The server-sorted first row is the canonical latest signal. Keep it
@@ -11060,19 +11090,10 @@ async function loadSignals(options = {}) {
     state.latestSignalId = state.signals[0].id;
     _lastSignalId = state.signals[0].id;
   }
-  if (!options.append) {
-    if (state.signals[0]) {
-      if (summaryOnly) {
-        // Dashboard summary rows are deliberately lightweight. Do not turn
-        // the homepage limit:1 request into a heavyweight signal_detail
-        // fetch; the analyst page loads details only when it selects a row.
-        updateSignalDisplay(state.signals[0], { announceNew:options.announceDashboardSignal === true });
-      } else if (loadDashboard) {
-        await loadDashboardSignal(state.signals[0].id, state.signals[0], { announceNew:options.announceDashboardSignal === true });
-      }
-    } else if (summaryOnly || loadDashboard) {
-      updateSignalDisplay(null);
-    }
+  if (!options.append && state.signals[0] && loadDashboard) {
+    await loadDashboardSignal(state.signals[0].id, state.signals[0], { announceNew:options.announceDashboardSignal === true });
+  } else if (!options.append && loadDashboard) {
+    updateSignalDisplay(null);
   }
 
   // Preserve selected signal if it still exists, otherwise use latest
@@ -11110,6 +11131,7 @@ async function loadSignals(options = {}) {
   // explicit internal reconciliation call. A homepage/analyst history
   // refresh must never pull the second signals endpoint implicitly.
   if (!options.append && loadTable) await loadSignalTable();
+  return signals;
 }
 
 // Load signal table data (server-side filtering + pagination, 20/page)

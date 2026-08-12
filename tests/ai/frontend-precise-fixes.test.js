@@ -221,7 +221,7 @@ describe('precise AI/admin frontend fixes', () => {
   })
 
   it('ships cache-busted app scripts while keeping each asset family on one key', () => {
-    expect(aiHtml).toContain('/ai/app.js?v=20260812historypref2&build=signalbandwidth1-notifications1')
+    expect(aiHtml).toContain('/ai/app.js?v=20260812historypref2&build=signalbandwidth1-notifications1-analysisloading1')
     expect(aiHtml).toContain('/ai/styles.css?v=20260812historypref2')
     expect(aiHtml).toContain('/ai/responsive.css?v=20260812historypref2')
     expect(adminHtml).toContain('/admin/styles.css?v=20260812historypref2')
