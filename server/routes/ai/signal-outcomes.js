@@ -8,6 +8,7 @@ const SYSTEM_MAGIC = 234000
 const OPEN_STATUSES = ['open', 'closing']
 const PROTECTION_INCIDENTS = ['missing_stop_loss', 'invalid_stop_loss_direction']
 const HISTORY_EVIDENCE_REF_LIMIT = 100
+const HOUR_MSC = 60 * 60 * 1000
 let monitorTimer = null
 
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0
@@ -36,6 +37,18 @@ function utcMsToBeijingDatetime(utcMs) {
 export function utcDateToday(now = Date.now()) {
   const date = new Date(now)
   return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null
+}
+
+// Bridge history coverage is recorded against fixed endpoints.  Using the
+// instantaneous wall clock would move the exact evidence range forward on
+// every monitor pass and make an otherwise complete archive look incomplete.
+// The current UTC hour is intentionally excluded so reconciliation only reads
+// sealed history and naturally picks up very recent closes on the next hour.
+export function outcomeReconciliationRangeEndUtcMsc(now = Date.now()) {
+  const value = Number(now)
+  if (!Number.isSafeInteger(value) || value <= 0) return null
+  const rangeEndUtcMsc = Math.floor(value / HOUR_MSC) * HOUR_MSC
+  return Number.isSafeInteger(rangeEndUtcMsc) && rangeEndUtcMsc > 0 ? rangeEndUtcMsc : null
 }
 
 function utcDateStartUtcMsc(value) {
@@ -394,8 +407,9 @@ export async function loadOutcomeHistory(bridge, userId, rangeStartUtcMsc, range
 
 export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
   await reconcileTerminalPendingOutcomes()
-  // Keep the UTC end boundary stable for all users/pages in this pass.
-  const reconciliationRangeEndUtcMsc = Date.now()
+  // Keep one sealed UTC end boundary stable for all users/pages in this pass.
+  const reconciliationRangeEndUtcMsc = outcomeReconciliationRangeEndUtcMsc()
+  if (!reconciliationRangeEndUtcMsc) return 0
   const outcomes = await queryAll(`SELECT so.*, oi.bridge_command_ref, oi.approved_order_json,
       ownership.broker_server_key, ownership.login_account,
       CAST(UNIX_TIMESTAMP(ownership.started_at) * 1000 AS UNSIGNED) AS ownership_started_at_utc_msc
