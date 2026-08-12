@@ -345,8 +345,8 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
   if (provider === 'deepseek') {
     body.response_format = { type:'json_object' }
   }
-  // Thinking providers have different wire contracts. Kimi Code accepts
-  // enabled or disabled inside the thinking object.
+  // Thinking providers have different wire contracts. Kimi Code and
+  // DeepSeek accept enabled or disabled inside the thinking object.
   if (thinkingEnabled) {
     body.thinking = provider === 'kimi_code'
       ? (model === 'k3' ? { type: 'enabled', effort: 'max' } : { type: 'enabled' })
