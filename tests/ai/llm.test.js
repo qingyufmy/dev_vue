@@ -474,7 +474,7 @@ describe('requestJsonObject', () => {
 
     await requestJsonObject({
       url:'https://api.deepseek.com/chat/completions', apiKey:'test-key', provider:'deepseek',
-      model:'deepseek-v4-pro', maxTokens:selectedMaxOutputTokens, thinkingEnabled,
+      model:'deepseek-v4-pro', temperature:0.3, maxTokens:selectedMaxOutputTokens, thinkingEnabled,
       reasoningEffort:'high', messages:[{ role:'user', content:'test' }],
     })
 
@@ -484,9 +484,11 @@ describe('requestJsonObject', () => {
     if (thinkingEnabled) {
       expect(requestBody.thinking).toEqual({ type:'enabled' })
       expect(requestBody.reasoning_effort).toBe('high')
+      expect(requestBody).not.toHaveProperty('temperature')
     } else {
-      expect(requestBody.thinking).toBeUndefined()
+      expect(requestBody.thinking).toEqual({ type:'disabled' })
       expect(requestBody.reasoning_effort).toBeUndefined()
+      expect(requestBody.temperature).toBe(0.3)
     }
   })
 

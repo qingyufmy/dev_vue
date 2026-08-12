@@ -363,6 +363,7 @@ function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens
     body.thinking = { type: 'disabled' }
     body.max_tokens = maxTokens
   } else {
+    if (provider === 'deepseek') body.thinking = { type:'disabled' }
     body.temperature = temperature
     body.max_tokens = maxTokens
   }
