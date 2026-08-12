@@ -178,6 +178,85 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(signals).not.toContain('if (!options.append) loadSignalTable()')
   })
 
+  it('keeps dashboard summaries out of the analyst history state and isolates request versions', async () => {
+    const start = app.indexOf('let _analysisDetailRequestVersion = 0')
+    const end = app.indexOf('// Load signal table data', start)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(end).toBeGreaterThan(start)
+    const harness = new Function(`
+      const historyRenders = []
+      const dashboardRenders = []
+      const pending = []
+      const host = { setAttribute(){}, removeAttribute(){}, innerHTML:'' }
+      const state = {
+        signals:[{ id:5 }, { id:4 }], selectedSignal:{ id:4 }, dashboardSignal:{ id:5 },
+        latestSignalId:5, analysisHistoryOffset:2, analysisHistoryHasMore:true,
+        analysisHistoryPageLoaded:true,
+      }
+      let _lastSignalId = 5
+      const ANALYSIS_HISTORY_PAGE_SIZE = 10
+      function $(id) { return id === 'analysisHistoryBody' ? host : null }
+      function updateSignalDisplay(signal) { state.dashboardSignal = signal || null; dashboardRenders.push(signal) }
+      function renderAnalysisHistory(signals) { historyRenders.push(signals) }
+      function wsApi(action, params) {
+        pending.push({ action, params })
+        return new Promise(resolve => pending.at(-1).resolve = resolve)
+      }
+      ${app.slice(start, end)}
+      return (async () => {
+        const summary = loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })
+        const list = loadSignals({ limit:10, skipResultRender:true, loadDashboard:false })
+        pending[1].resolve({ signals:[{ id:9 }, { id:8 }], has_more:true })
+        const listResult = await list
+        pending[0].resolve({ signals:[{ id:6 }], has_more:true })
+        const summaryResult = await summary
+        return {
+          listResult, summaryResult, state, historyRenders, dashboardRenders,
+        }
+      })()
+    `)()
+    const result = await harness
+    expect(result.listResult.map(item => item.id)).toEqual([9, 8])
+    expect(result.summaryResult.map(item => item.id)).toEqual([6])
+    expect(result.state.signals.map(item => item.id)).toEqual([9, 8])
+    expect(result.state.analysisHistoryOffset).toBe(2)
+    expect(result.state.analysisHistoryHasMore).toBe(true)
+    expect(result.state.analysisHistoryPageLoaded).toBe(true)
+    expect(result.state.dashboardSignal.id).toBe(6)
+    expect(result.state.latestSignalId).toBe(6)
+    expect(result.historyRenders).toHaveLength(1)
+    expect(result.dashboardRenders.map(item => item.id)).toEqual([6])
+  })
+
+  it('shows a status loading placeholder for an unloaded analyst history and clears it on render', () => {
+    const loadingStart = app.indexOf('function renderAnalysisHistory(signals, options = {})')
+    const loadingEnd = app.indexOf('function mergeSignalDetail', loadingStart)
+    expect(loadingStart).toBeGreaterThanOrEqual(0)
+    expect(loadingEnd).toBeGreaterThan(loadingStart)
+    const harness = new Function(`
+      const attrs = new Map()
+      const host = {
+        innerHTML:'',
+        setAttribute(name, value) { attrs.set(name, value) },
+        removeAttribute(name) { attrs.delete(name) },
+        querySelector() { return null },
+        insertAdjacentHTML(_, html) { this.innerHTML += html },
+      }
+      const state = { analysisHistoryHasMore:false }
+      function $(id) { return id === 'analysisHistoryBody' ? host : null }
+      function buildHistoryItemHTML() { return '' }
+      ${app.slice(loadingStart, loadingEnd)}
+      renderAnalysisHistoryLoading()
+      const loading = { html:host.innerHTML, busy:attrs.get('aria-busy') }
+      renderAnalysisHistory([])
+      return { loading, complete:{ html:host.innerHTML, busy:attrs.get('aria-busy') } }
+    `)()
+    expect(harness.loading.html).toContain('正在加载历史分析')
+    expect(harness.loading.busy).toBe('true')
+    expect(harness.complete.html).toContain('暂无推理记录')
+    expect(harness.complete.busy).toBeUndefined()
+  })
+
   it('loads analyst history on entry, while records view owns the paginated table', () => {
     const tabRefresh = block('async function refreshTabData(tabId, options = {})', 'async function withBusy')
     expect(tabRefresh).toContain('{ selectLatest:true, loadDashboard:false }')
@@ -198,7 +277,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(ensureHistory).toContain('skipResultRender: true')
     expect(ensureHistory).toContain('loadDashboard: false')
     const signals = block('async function loadSignals(options = {})', '// Load signal table data')
-    expect(signals).toContain('state.analysisHistoryPageLoaded = !summaryOnly && limit >= ANALYSIS_HISTORY_PAGE_SIZE')
+    expect(signals).toContain('state.analysisHistoryPageLoaded = limit >= ANALYSIS_HISTORY_PAGE_SIZE')
 
     const openDetail = block('async function openAnalysisFromHistory(signalId, options = {})', 'function renderSignalRows()')
     expect(openDetail).toContain('if (navigate) {')
@@ -214,7 +293,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
     expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
     expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
-    expect(html).toContain('/ai/app.js?v=20260812historypref2&build=signalbandwidth1-notifications1')
+    expect(html).toContain('/ai/app.js?v=20260812historypref2&build=signalbandwidth1-notifications1-analysisloading1')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {
