@@ -187,6 +187,38 @@ describe('buildStrategyContextFromTags', () => {
   })
 })
 
+describe('历史快照 Chan runtime detection', () => {
+  it('recognizes the new per-timeframe raw Chan shape', () => {
+    const samples = [{ market_snapshot: { strategy_context: {
+      timeframes: { H1: { summary: { chan: { status:'ok' } } } },
+    } } }]
+    expect(__strategyTest.resolveSnapshotChanEnabled(samples)).toBe(true)
+  })
+
+  it('recognizes new raw Chan when nullable legacy markers are also present', () => {
+    expect(__strategyTest.resolveSnapshotChanEnabled([{ market_snapshot: { strategy_context: {
+      chan_timeframe_alignment:null, chan_structures:null,
+      timeframes:{ H1:{ summary:{ chan:{} } } },
+    } } }])).toBe(true)
+  })
+
+  it.each([
+    { chan_timeframe_alignment:{ agreement:'mixed' } },
+    { chan_structures:{ H1:{ status:'ok' } } },
+  ])('recognizes legacy Chan snapshot marker %j', legacyContext => {
+    expect(__strategyTest.resolveSnapshotChanEnabled([{ market_snapshot: { strategy_context: legacyContext } }])).toBe(true)
+  })
+
+  it('does not enable Chan for a snapshot without any Chan evidence', () => {
+    expect(__strategyTest.resolveSnapshotChanEnabled([{ market_snapshot: {
+      strategy_context: {
+        chan_timeframe_alignment:null, chan_structures:null,
+        timeframes: { H1: { summary: { rsi_14:55 } } },
+      },
+    } }])).toBe(false)
+  })
+})
+
 describe('manual auto-execute guard', () => {
   const strategySource = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
 

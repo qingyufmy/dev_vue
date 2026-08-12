@@ -8,8 +8,8 @@ import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './m
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
 import { resolveOwnedModelProfileForRuntime } from './model-profiles.js'
-import { retrievePersonalMemory, attachMemoryInjectionSignal, buildPersonalMemoryRetrievalContext } from './memory-system.js'
-import { attachPlatformExperienceSignal, retrievePlatformExperience } from './platform-experience.js'
+import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime,
+  updateStrategyMemoryInjectionLog } from './strategy-memory-library.js'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
 import { parseStrategyPolicy, prepareStrategyPolicyRuntime } from './strategy-policy.js'
@@ -458,8 +458,21 @@ export function shouldPersistChanAnchor(useChan, chan, chanDataQuality) {
     && Number(chanDataQuality?.source_id) > 0)
 }
 
+function snapshotContextHasChan(strategyContext) {
+  if (!strategyContext || typeof strategyContext !== 'object') return false
+  if (strategyContext.chan_timeframe_alignment || strategyContext.chan_structures) return true
+  return Object.values(strategyContext.timeframes || {}).some(timeframe =>
+    timeframe?.summary && typeof timeframe.summary === 'object' && timeframe.summary.chan != null)
+}
+
+function resolveSnapshotChanEnabled(samples) {
+  return Array.isArray(samples) && samples.some(sample =>
+    snapshotContextHasChan(sample?.market_snapshot?.strategy_context))
+}
+
 export const __strategyTest = {
   clearChanHistoryHints,
+  snapshotContextHasChan, resolveSnapshotChanEnabled,
   buildAutoExecuteGuardRejection, resolveAutoExecuteGuard,
 }
 
@@ -711,43 +724,24 @@ export async function handleAnalyze(userId, params, options = {}) {
   } catch (error) {
     console.error('[Analyze] Position management context unavailable; continuing with new signal only:', error.message)
   }
-  let memory = { promptBlock: '', mode: 'off', logId: null }
+  let memory = { contentText:'', versionNo:0, contentHash:null, logId:null }
   try {
-    if (strategy.scope === 'platform') {
-      memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), strategyVersion:Number(strategy.version || 1), symbol, timeframe: primaryTf,
-        market, allowedEntryMethods:policy.entryMethods })
-    } else {
-      const subscriptionMode = params.memory_mode || (await queryOne(`SELECT memory_mode FROM strategy_subscriptions
-        WHERE user_id = ? AND strategy_id = ? AND is_deleted = 0 ORDER BY updated_at DESC LIMIT 1`,
-      [userId, strategy.id]))?.memory_mode || 'personal'
-      if (subscriptionMode !== 'off' && subscriptionMode !== 'platform_only') {
-        const retrievalContext = buildPersonalMemoryRetrievalContext(market, primaryTf, policy.entryMethods)
-        memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1),
-          symbol, timeframe: primaryTf, direction: retrievalContext.direction,
-          entryMethod: retrievalContext.entryMethod, allowedEntryMethods:policy.entryMethods, marketRegime: retrievalContext.marketRegime,
-          volatilityBucket:retrievalContext.volatilityBucket, chanReliability:retrievalContext.chanReliability,
-          chanTrendState:retrievalContext.chanTrendState, chanSegmentDirection:retrievalContext.chanSegmentDirection,
-          chanDivergence:retrievalContext.chanDivergence, chanCenterState:retrievalContext.chanCenterState,
-          mode: subscriptionMode === 'shadow' ? 'shadow' : 'active' })
-      }
-    }
+    const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:Number(strategy.id), userId, role:'user' })
+    const library = resolvedMemory.library
+    const injection = await createStrategyMemoryInjectionLog({ strategyId:Number(strategy.id),
+      actor:{ userId, role:'user' }, library, injectionKind:'manual_analysis', modelTaskId:options.taskId || null })
+    memory = { contentText:library.content_text || '', versionNo:Number(library.version_no || 0),
+      contentHash:library.content_hash || null, logId:injection.id }
   } catch (error) {
-    console.error('[Analyze] Experience retrieval failed; continuing without it:', error.message)
+    console.error('[Analyze] Strategy memory library unavailable:', error.message)
+    throw Object.assign(new Error('strategy_memory_library_unavailable'), { cause:error })
   }
   if (config) {
-    if (strategy.scope === 'platform') config._platformExperienceContext = memory.promptBlock
-    else config._memoryContext = memory.promptBlock
-    config._experienceSelection = { source:strategy.scope === 'platform' ? 'platform' : 'personal',
-      selectedItemIds:memory.promptBlock ? (memory.selectedItemIds || []) : [],
-      selectedRefs:memory.promptBlock ? (strategy.scope === 'platform'
-        ? (memory.selectedItemIds || []).map(id => `platform:${Number(id)}`)
-        : [
-            ...(memory.selectedLongMemoryIds || []).map(id => `long:${Number(id)}`),
-            ...(memory.selectedSummaryIds || []).map(id => `summary:${Number(id)}`),
-            ...(memory.selectedItemIds || []).map(id => `short:${Number(id)}`),
-          ]) : [],
-      selectionDetails:memory.promptBlock ? (memory.selectionDetails || []) : [] }
-    config._memoryMode = strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off')
+    config._strategyMemoryLibraryContext = memory.contentText
+    config._strategyMemoryLibraryVersion = memory.versionNo
+    config._strategyMemoryLibraryHash = memory.contentHash
+    config._experienceSelection = { source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] }
+    config._memoryMode = 'strategy_library'
   }
   let renderedEvidence = null
   if (config) config._onInferencePrepared = async evidence => {
@@ -830,7 +824,7 @@ export async function handleAnalyze(userId, params, options = {}) {
       outputSchemaVersion: renderedEvidence.outputSchemaVersion, marketSnapshot: market,
       modelProfileId: config?._model_profile_id, provider: config?.api_provider,
       modelName: config?.model_name, credentialSource: config?._credential_source,
-      memoryMode: strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off'),
+      memoryMode:'strategy_library',
       strategyRuntime:strategyPolicyRuntime, createdAt,
     })
     await createTradeThesisTx(run, {
@@ -864,13 +858,10 @@ export async function handleAnalyze(userId, params, options = {}) {
         { status:'error', message:error.message }, 'error')
     }
   }
-  if (strategy.scope === 'private' && memory.logId) {
-    try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId) }
-    catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
-  } else if (strategy.scope === 'platform' && memory.logId) {
-    try { await attachPlatformExperienceSignal(memory.logId, signal.id, persisted.snapshotId) }
-    catch (error) { console.error('[Analyze] Platform memory attribution failed:', error.message) }
-  }
+  if (memory.logId) try {
+    await updateStrategyMemoryInjectionLog(memory.logId, { signalId:signal.id,
+      inferenceSnapshotId:persisted.snapshotId, modelTaskId:options.taskId || null })
+  } catch (error) { console.error('[Analyze] Strategy memory attribution failed:', error.message) }
   signal.symbol = symbol
   signal.user_id = userId
   signal.timeframe = primaryTf
@@ -1005,6 +996,16 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
   const strategy = await getStrategyById(Number(strategy_id), userId, actor?.role || 'user', { forExecution: false })
   if (!strategy) return { ok: false, error: 'strategy_not_found' }
 
+  let compareMemory
+  try {
+    const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:Number(strategy.id),
+      userId, role:actor?.role || 'user' })
+    compareMemory = resolvedMemory.library
+  } catch (error) {
+    console.error('[AnalyzeCompare] Strategy memory library unavailable:', error.message)
+    return { ok:false, error:'strategy_memory_library_unavailable' }
+  }
+
   const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
   if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { ok: false, error: 'symbol_not_supported_by_strategy' }
 
@@ -1100,6 +1101,11 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
       _ai_volume_max: aiVolumeRange.max,
       _ai_volume_step: aiVolumeRange.step,
       _comparison_mode:true,
+      _strategyMemoryLibraryContext:compareMemory.content_text || '',
+      _strategyMemoryLibraryVersion:Number(compareMemory.version_no || 0),
+      _strategyMemoryLibraryHash:compareMemory.content_hash || null,
+      _memoryMode:'strategy_library',
+      _experienceSelection:{ source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] },
     }
     const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
     if (strategyPolicyRuntime) {
@@ -1153,6 +1159,9 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
         throw error
       }
       liveTrackers.add(tracker)
+      await createStrategyMemoryInjectionLog({ strategyId:Number(strategy.id),
+        actor:{ userId, role:actor?.role || 'user' }, library:compareMemory,
+        injectionKind:'model_compare_live', modelTaskId:tracker.taskId })
       if (liveBatchAbortController.signal.aborted) {
         throw liveBatchAbortController.signal.reason || new Error('model_compare_batch_aborted')
       }
@@ -1630,9 +1639,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   }
   evaluatorStrategySnapshot.runtime_config_sha256 = comparisonFingerprint(evaluatorStrategySnapshot)
   const snapshotPromptPlan = snapshotRun ? snapshotPromptTimeframePlan(snapshotRun.samples[0]) : []
-  const snapshotChanEnabled = Boolean(snapshotRun?.samples?.some(sample =>
-    sample?.market_snapshot?.strategy_context?.chan_timeframe_alignment
-    || sample?.market_snapshot?.strategy_context?.chan_structures))
+  const snapshotChanEnabled = resolveSnapshotChanEnabled(snapshotRun?.samples)
   const snapshotPlan = snapshotRun ? {
     primary_timeframe:requestedTimeframe,
     timeframes:snapshotPromptPlan.length ? snapshotPromptPlan

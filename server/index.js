@@ -37,11 +37,11 @@ import bridgeRuntimeControlRoutes from './routes/bridge-runtime-control.js'
 import adminNotificationRoutes from './routes/admin-notifications.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON, getRedis } from './redis.js'
-import { initAutoSchedulers, startPeriodReviewWorker, startMemoryCompressionWorker, startManualAnalysisJobs,
-  startHistoryCompareRecoveryWorker, startManualTradeReviewWorker, stopManualTradeReviewWorker } from './routes/ai/index.js'
+import { initAutoSchedulers, startPeriodReviewWorker, startManualAnalysisJobs,
+  startHistoryCompareRecoveryWorker, startManualTradeReviewWorker, stopManualTradeReviewWorker,
+  startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker } from './routes/ai/index.js'
 import { recoverAbandonedAutoInferenceTasks } from './routes/ai/model-task-runtime.js'
 import { recoverAbandonedPeriodReviewModelTasks } from './routes/ai/period-review.js'
-import { recoverAbandonedMemoryCompressionModelTasks } from './routes/ai/memory-system.js'
 import { startOrderIntentReconciler, stopOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { stopAutoSchedulers, stopPendingReconciler } from './routes/ai/scheduler.js'
 import { startPositionManagementWorker } from './routes/ai/position-management-worker.js'
@@ -395,6 +395,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const orderIntentStop = stopOrderIntentReconciler()
     const notificationStop = stopNotificationCenterWorker()
     const manualTradeReviewStop = stopManualTradeReviewWorker()
+    const strategyMemoryCompressionStop = stopStrategyMemoryCompressionWorker()
     clearShutdownTimers()
 
     await Promise.all([
@@ -403,6 +404,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
       waitForShutdownTask(orderIntentStop, 'order-intent reconciler', timeout),
       waitForShutdownTask(notificationStop, 'notification center worker', timeout),
       waitForShutdownTask(manualTradeReviewStop, 'manual trade review worker', timeout),
+      Promise.resolve(strategyMemoryCompressionStop),
     ])
 
     // Stop accepting HTTP work only after scheduler rounds have been fenced;
@@ -498,15 +500,12 @@ installGracefulShutdownHandlers()
   autoInferenceRecoveryTimer.unref?.()
   const recoverBackgroundModelTasks = async () => {
     try {
-      const [periodReview, memoryCompression] = await Promise.all([
-        recoverAbandonedPeriodReviewModelTasks(), recoverAbandonedMemoryCompressionModelTasks(),
-      ])
-      if (periodReview.succeeded || periodReview.requeued || periodReview.statusUnknown || periodReview.stale
-        || memoryCompression.succeeded || memoryCompression.requeued || memoryCompression.statusUnknown || memoryCompression.stale) {
-        console.warn('[AI] Reconciled abandoned period/memory model tasks:', { periodReview, memoryCompression })
+      const periodReview = await recoverAbandonedPeriodReviewModelTasks()
+      if (periodReview.succeeded || periodReview.requeued || periodReview.statusUnknown || periodReview.stale) {
+        console.warn('[AI] Reconciled abandoned period review model tasks:', { periodReview })
       }
     } catch (error) {
-      console.error('[AI] Period/memory model task recovery failed:', error.message)
+      console.error('[AI] Period review model task recovery failed:', error.message)
     }
   }
   await recoverBackgroundModelTasks()
@@ -515,7 +514,7 @@ installGracefulShutdownHandlers()
   startPositionManagementWorker()
   startAdminPositionProtectionWorker()
   startPeriodReviewWorker()
-  startMemoryCompressionWorker()
+  startStrategyMemoryCompressionWorker()
   startManualTradeReviewWorker()
   startManualAnalysisJobs()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))

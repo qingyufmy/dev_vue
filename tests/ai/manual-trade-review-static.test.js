@@ -39,6 +39,12 @@ describe('manual trade review backend boundaries', () => {
     expect((worker.match(/await requestModel\(/g) || [])).toHaveLength(2)
     expect(worker).toContain("progress_stage = 'counterfactual_analysis'")
     expect(worker).toContain("progress_stage = 'outcome_review'")
+    expect(worker).toContain("modelTaskDeadlines('manual_analysis'")
+    expect(worker).toContain('job._taskDeadlineAtMs')
+    expect(worker).toContain('counterfactualDeadline.attemptSafetyDeadlineUtcMs')
+    expect(worker).toContain('outcomeDeadline.attemptSafetyDeadlineUtcMs')
+    expect(worker).toContain('createModelTaskTracker')
+    expect(worker).toContain('startManualTradeReviewLeaseHeartbeat')
     expect(review).toContain('manual_trade_review_counterfactual_immutable')
   })
 

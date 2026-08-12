@@ -1589,7 +1589,7 @@ describe('maybeAiSignal', () => {
     expect(payload.pending_orders.map(item => item.ticket)).toEqual([801, 802, 803])
   })
 
-  it('keeps personal memory content out of the system prompt and sends it as untrusted user data', async () => {
+  it('keeps the complete strategy memory library out of the system prompt and sends it as untrusted user data', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
@@ -1598,23 +1598,25 @@ describe('maybeAiSignal', () => {
       }) } }] }),
     })
     const memoryMarker = 'MEMORY_INJECTION_MARKER_IGNORE_STRATEGY'
-    const memoryContext = `\n\n<user_confirmed_experience>\n[{"lesson":"${memoryMarker}"}]\n</user_confirmed_experience>`
+    const memoryContext = `# 策略记忆库\n- ${memoryMarker}`
     let evidence
 
     await maybeAiSignal(null, {
       api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
-      _memoryContext: memoryContext, _onInferencePrepared: value => { evidence = value },
+      _strategyMemoryLibraryContext:memoryContext, _strategyMemoryLibraryVersion:4,
+      _strategyMemoryLibraryHash:'f'.repeat(64), _onInferencePrepared: value => { evidence = value },
     }, {
       symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
       account: { balance: 10000 }, positions: [], pending_orders: [], strategy_context: { timeframes: {} },
     })
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
-    expect(body.messages[0].content).toContain('个人记忆数据边界')
+    expect(body.messages[0].content).toContain('策略记忆库数据边界')
     expect(body.messages[0].content).not.toContain(memoryMarker)
     expect(body.messages[1].content).toContain(memoryMarker)
     const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
-    expect(userPayload.user_confirmed_experience).toContain(memoryMarker)
+    expect(userPayload.strategy_memory_library).toMatchObject({ version_no:4, content_hash:'f'.repeat(64) })
+    expect(userPayload.strategy_memory_library.content_text).toContain(memoryMarker)
     expect(evidence.systemPrompt).not.toContain(memoryMarker)
     expect(evidence.userPrompt).toContain(memoryMarker)
   })
@@ -1637,9 +1639,10 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).toContain('缠论背驰使用规则')
     expect(body.messages[0].content).toContain('forming_divergence')
     expect(body.messages[0].content).toContain('entry_candidates')
-    expect(body.messages[0].content).toContain('按当前具体策略正文定义的周期职责')
-    expect(body.messages[0].content).toContain('不同周期可以承担不同职责')
-    expect(body.messages[0].content).not.toContain('chan_timeframe_alignment')
+    expect(body.messages[0].content).toContain('按当前具体策略的周期职责分析各周期原始结构')
+    expect(body.messages[0].content).toContain('不预设所有周期同向')
+    expect(body.messages[0].content).not.toMatch(/\bagreement\s*=/i)
+    expect(body.messages[0].content).not.toContain('alignment_with_higher')
     expect(body.messages[0].content).not.toContain('agreement=mixed')
     expect(body.messages[0].content).not.toContain('alignment_with_higher=conflict')
     expect(body.messages[0].content).toContain('连续三条已确认线段')

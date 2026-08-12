@@ -59,7 +59,7 @@ describe('rollout hardening contract', () => {
     expect(analyze).toContain("VALUES (?, ?, 'manual'")
     expect(analyze).toContain("signal._inference_source === 'ai_error_hold'")
     expect(analyze).toContain("error_code: 'ai_inference_failed'")
-    expect(analyze).toContain('attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId)')
+    expect(analyze).toContain('updateStrategyMemoryInjectionLog(memory.logId, { signalId:signal.id')
     expect(analyze).not.toContain('pairedExperimentEnabled')
     expect(analyze).not.toContain('recordPairedInferenceRun')
     expect(scheduler).not.toContain('pairedExperimentEnabled')

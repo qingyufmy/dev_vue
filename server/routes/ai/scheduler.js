@@ -11,8 +11,8 @@ import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
-import { retrievePersonalMemory, attachMemoryInjectionSignal, buildPersonalMemoryRetrievalContext } from './memory-system.js'
-import { attachPlatformExperienceSignal, retrievePlatformExperience } from './platform-experience.js'
+import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime,
+  updateStrategyMemoryInjectionLog } from './strategy-memory-library.js'
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 import { isSubscriptionScheduleActive } from './subscription-schedule.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
@@ -171,7 +171,7 @@ function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAt
   const marketJson = JSON.stringify(market || {})
   const evidencePrompt = renderedEvidence
     ? `${renderedEvidence.systemPrompt || ''}\n${renderedEvidence.userPrompt || ''}`
-    : `${config?.system_prompt || ''}\n${config?._strategyPolicyPrompt || ''}\n${config?._memoryContext || ''}\n${config?._platformExperienceContext || ''}`
+    : `${config?.system_prompt || ''}\n${config?._strategyPolicyPrompt || ''}\n${config?._strategyMemoryLibraryContext || ''}`
   const outputContractHash = sha256(`${SIGNAL_SCHEMA_VERSION}:${JSON.stringify(config?._allowed_entry_methods || [])}`)
   const snapshotHash = sha256(marketJson)
   const inputHash = sha256(JSON.stringify({
@@ -2166,12 +2166,6 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
   const inferenceWeeklyWindow = () => bridgeWeeklyWindow(
     inferenceUserId, fallbackBridge?.source?.trading_account_id)
   if (inferenceWeeklyWindow()) return { status:'blocked', reason:'weekly_flatten_window' }
-  const configuredMemoryMode = isPrivate
-    ? (await queryOne(`SELECT memory_mode FROM strategy_subscriptions
-        WHERE user_id = ? AND strategy_id = ? AND is_deleted = 0 ORDER BY updated_at DESC LIMIT 1`,
-      [inferenceUserId, promptTypeId]))?.memory_mode || 'personal'
-    : 'platform_only'
-
   // 2. Resolve platform-primary or private owner model without runtime fallback.
   let config = preflight.config || null
   if (!config) {
@@ -2289,45 +2283,24 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     }
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
-    let memory = { promptBlock: '', mode: 'off', logId: null }
-    if (isPrivate && configuredMemoryMode !== 'off' && configuredMemoryMode !== 'platform_only') {
-      try {
-        const retrievalContext = buildPersonalMemoryRetrievalContext(market, primaryTf, config._allowed_entry_methods)
-        memory = await retrievePersonalMemory({ userId: inferenceUserId, strategyId: promptTypeId,
-          strategyVersion: Number(pt.version || 1), symbol, timeframe: primaryTf,
-          direction: retrievalContext.direction, entryMethod: retrievalContext.entryMethod,
-          allowedEntryMethods:config._allowed_entry_methods,
-          marketRegime:retrievalContext.marketRegime, volatilityBucket:retrievalContext.volatilityBucket,
-          chanReliability:retrievalContext.chanReliability, chanTrendState:retrievalContext.chanTrendState,
-          chanSegmentDirection:retrievalContext.chanSegmentDirection, chanDivergence:retrievalContext.chanDivergence,
-          chanCenterState:retrievalContext.chanCenterState,
-          mode: configuredMemoryMode === 'shadow' ? 'shadow' : 'active' })
-        config._memoryContext = memory.promptBlock
-        config._memoryMode = memory.mode
-      } catch (error) {
-        l(`personal memory unavailable; continuing without it (${error.message})`)
-      }
-    } else if (!isPrivate) {
-      try {
-        memory = await retrievePlatformExperience({ strategyId: promptTypeId, strategyVersion:Number(pt.version || 1), symbol, timeframe: primaryTf,
-          market, allowedEntryMethods:config._allowed_entry_methods })
-        config._platformExperienceContext = memory.promptBlock
-        config._memoryMode = `platform_${memory.mode}`
-      } catch (error) {
-        l(`platform experience unavailable; continuing without it (${error.message})`)
-      }
+    let memory = { contentText:'', versionNo:0, contentHash:null, logId:null }
+    try {
+      const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:promptTypeId,
+        userId:inferenceUserId, role:'user' })
+      const library = resolvedMemory.library
+      const injection = await createStrategyMemoryInjectionLog({ strategyId:promptTypeId,
+        actor:{ userId:inferenceUserId, role:'user' }, library, injectionKind:'auto_inference' })
+      memory = { contentText:library.content_text || '', versionNo:Number(library.version_no || 0),
+        contentHash:library.content_hash || null, logId:injection.id }
+    } catch (error) {
+      l(`strategy memory library unavailable; inference cancelled (${error.message})`)
+      throw Object.assign(new Error('strategy_memory_library_unavailable'), { cause:error })
     }
-
-    config._experienceSelection = { source:isPrivate ? 'personal' : 'platform',
-      selectedItemIds:memory.promptBlock ? (memory.selectedItemIds || []) : [],
-      selectedRefs:memory.promptBlock ? (isPrivate
-        ? [
-            ...(memory.selectedLongMemoryIds || []).map(id => `long:${Number(id)}`),
-            ...(memory.selectedSummaryIds || []).map(id => `summary:${Number(id)}`),
-            ...(memory.selectedItemIds || []).map(id => `short:${Number(id)}`),
-          ]
-        : (memory.selectedItemIds || []).map(id => `platform:${Number(id)}`)) : [],
-      selectionDetails:memory.promptBlock ? (memory.selectionDetails || []) : [] }
+    config._strategyMemoryLibraryContext = memory.contentText
+    config._strategyMemoryLibraryVersion = memory.versionNo
+    config._strategyMemoryLibraryHash = memory.contentHash
+    config._memoryMode = 'strategy_library'
+    config._experienceSelection = { source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] }
 
     // Enforce mode: create one durable envelope before the first provider
     // callback.  The task freezes the cycle inputs and is also the fencing
@@ -2548,7 +2521,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         provider: config.api_provider,
         modelName: config.model_name,
         credentialSource: config._credential_source,
-        memoryMode: isPrivate ? (memory.mode || 'off') : `platform_${memory.mode || 'off'}`,
+        memoryMode:'strategy_library',
         strategyRuntime:strategyPolicyRuntime,
         createdAt,
       })
@@ -2609,13 +2582,10 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
           { status:'error', message:error.message }, 'error')
       }
     }
-    if (isPrivate && memory.logId) {
-      try { await attachMemoryInjectionSignal(memory.logId, inferenceUserId, signalId, snapshotId) }
-      catch (error) { l(`memory attribution failed (${error.message})`) }
-    } else if (!isPrivate && memory.logId) {
-      try { await attachPlatformExperienceSignal(memory.logId, signalId, snapshotId) }
-      catch (error) { l(`platform memory attribution failed (${error.message})`) }
-    }
+    if (memory.logId) try {
+      await updateStrategyMemoryInjectionLog(memory.logId, { signalId, inferenceSnapshotId:snapshotId,
+        modelTaskId:modelTaskTracker?.taskId || null })
+    } catch (error) { l(`strategy memory attribution failed (${error.message})`) }
     signal.symbol = symbol
     signal.timeframe = primaryTf
     signal.created_at = createdAt

@@ -6,6 +6,8 @@ const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.me
 const mockQueryOne = vi.fn()
 const mockQueryRun = vi.fn()
 const mockQueryAll = vi.fn()
+const mockGetStrategyMemoryLibraryForRuntime = vi.fn()
+const mockCreateStrategyMemoryInjectionLog = vi.fn()
 
 vi.mock('../../server/db.js', () => ({
   queryOne: (...args) => mockQueryOne(...args),
@@ -103,6 +105,12 @@ vi.mock('../../server/routes/ai/memory-system.js', () => ({
 
 vi.mock('../../server/routes/ai/platform-experience.js', () => ({
   retrievePlatformExperience: vi.fn(async () => ({ promptBlock: '', mode: 'off', logId: null })),
+}))
+
+vi.mock('../../server/routes/ai/strategy-memory-library.js', () => ({
+  getStrategyMemoryLibraryForRuntime:(...args) => mockGetStrategyMemoryLibraryForRuntime(...args),
+  createStrategyMemoryInjectionLog:(...args) => mockCreateStrategyMemoryInjectionLog(...args),
+  updateStrategyMemoryInjectionLog:vi.fn(),
 }))
 
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({
@@ -260,6 +268,9 @@ describe('handleAnalyzeCompare', () => {
     })
     mockMt5Bridge.mockResolvedValue({ rates: makeRates(100), market_meta: { source: 'platform_admin_bridge', timezone_offset_minutes: -480 } })
     mockResolveOwnedModelProfileForRuntime.mockImplementation(async (id) => mockModelProfile(id))
+    mockGetStrategyMemoryLibraryForRuntime.mockResolvedValue({ library:{ version_no:7,
+      content_hash:'m'.repeat(64), content_text:'完整策略记忆' } })
+    mockCreateStrategyMemoryInjectionLog.mockResolvedValue({ id:91 })
   })
 
   describe('input validation', () => {
@@ -323,7 +334,12 @@ describe('handleAnalyzeCompare', () => {
         _usage:'model_compare',
         _strategyId:1,
         _comparison_mode:true,
+        _strategyMemoryLibraryContext:'完整策略记忆',
+        _strategyMemoryLibraryVersion:7,
+        _strategyMemoryLibraryHash:'m'.repeat(64),
       }), expect.any(Object), expect.any(String))
+      expect(mockGetStrategyMemoryLibraryForRuntime).toHaveBeenCalledTimes(1)
+      expect(mockCreateStrategyMemoryInjectionLog).toHaveBeenCalledTimes(2)
       expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
         model_name:'deepseek-chat-20',
         _usage:'model_compare',

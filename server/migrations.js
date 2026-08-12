@@ -5601,6 +5601,257 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '181_unified_strategy_memory_library',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_libraries (
+        strategy_id INT NOT NULL PRIMARY KEY,
+        strategy_scope VARCHAR(16) NOT NULL,
+        owner_user_id INT NOT NULL DEFAULT 0,
+        content_text LONGTEXT NOT NULL,
+        version_no INT NOT NULL DEFAULT 0,
+        content_hash CHAR(64) NOT NULL,
+        char_count INT NOT NULL DEFAULT 0,
+        estimated_token_count INT NOT NULL DEFAULT 0,
+        capacity_chars INT NOT NULL DEFAULT 120000,
+        compression_target_ratio DECIMAL(5,4) NOT NULL DEFAULT 0.6000,
+        conflict_alert_threshold INT NOT NULL DEFAULT 3,
+        pending_update_count INT NOT NULL DEFAULT 0,
+        compression_status VARCHAR(24) NOT NULL DEFAULT 'idle',
+        last_compacted_at DATETIME DEFAULT NULL,
+        updated_by_user_id INT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        KEY idx_strategy_memory_owner (owner_user_id, strategy_scope, updated_at),
+        KEY idx_strategy_memory_compression (compression_status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_library_revisions (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        strategy_id INT NOT NULL,
+        version_no INT NOT NULL,
+        change_reason VARCHAR(32) NOT NULL,
+        source_type VARCHAR(32) DEFAULT NULL,
+        source_id BIGINT DEFAULT NULL,
+        content_text LONGTEXT NOT NULL,
+        content_hash CHAR(64) NOT NULL,
+        char_count INT NOT NULL,
+        estimated_token_count INT NOT NULL,
+        actor_user_id INT DEFAULT NULL,
+        source_metadata_json LONGTEXT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_strategy_memory_revision (strategy_id, version_no),
+        KEY idx_strategy_memory_revision_created (strategy_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_pending_updates (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        strategy_id INT NOT NULL,
+        update_kind VARCHAR(32) NOT NULL,
+        source_period_case_id BIGINT DEFAULT NULL,
+        source_period_review_version_id BIGINT NOT NULL,
+        content_text LONGTEXT NOT NULL,
+        content_hash CHAR(64) NOT NULL,
+        source_refs_json LONGTEXT DEFAULT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        merged_revision_id BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_strategy_memory_review_update
+          (strategy_id, source_period_review_version_id, update_kind),
+        KEY idx_strategy_memory_pending (strategy_id, status, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_conflicts (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        strategy_id INT NOT NULL,
+        conflict_key CHAR(64) NOT NULL,
+        conflict_category VARCHAR(32) NOT NULL DEFAULT 'general',
+        conflict_summary TEXT NOT NULL,
+        strategy_excerpt TEXT DEFAULT NULL,
+        suggested_change TEXT DEFAULT NULL,
+        evidence_count INT NOT NULL DEFAULT 0,
+        alert_threshold INT NOT NULL DEFAULT 3,
+        status VARCHAR(24) NOT NULL DEFAULT 'observing',
+        first_observed_at DATETIME NOT NULL,
+        last_observed_at DATETIME NOT NULL,
+        resolved_at DATETIME DEFAULT NULL,
+        resolved_by_user_id INT DEFAULT NULL,
+        resolution_note TEXT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_strategy_memory_conflict (strategy_id, conflict_key),
+        KEY idx_strategy_memory_conflict_status (strategy_id, status, evidence_count, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_conflict_occurrences (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        conflict_id BIGINT UNSIGNED NOT NULL,
+        strategy_id INT NOT NULL,
+        period_review_case_id BIGINT NOT NULL,
+        period_review_version_id BIGINT NOT NULL,
+        evidence_json LONGTEXT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_strategy_memory_conflict_review (conflict_id, period_review_version_id),
+        KEY idx_strategy_memory_conflict_occurrence (strategy_id, period_review_case_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_compression_jobs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        strategy_id INT NOT NULL,
+        trigger_type VARCHAR(32) NOT NULL,
+        source_version_no INT NOT NULL,
+        source_content_hash CHAR(64) NOT NULL,
+        source_set_hash CHAR(64) NOT NULL,
+        pending_update_ids_json LONGTEXT NOT NULL,
+        target_chars INT NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3,
+        lease_token CHAR(36) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        next_attempt_at DATETIME DEFAULT NULL,
+        model_task_id CHAR(36) DEFAULT NULL,
+        last_error_code VARCHAR(128) DEFAULT NULL,
+        result_revision_id BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_strategy_memory_compression_source
+          (strategy_id, trigger_type, source_version_no, source_set_hash),
+        KEY idx_strategy_memory_compression_claim (status, lease_expires_at, next_attempt_at, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_injection_logs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        strategy_id INT NOT NULL,
+        library_version_no INT NOT NULL,
+        library_content_hash CHAR(64) NOT NULL,
+        char_count INT NOT NULL DEFAULT 0,
+        estimated_token_count INT NOT NULL DEFAULT 0,
+        usage_kind VARCHAR(32) NOT NULL,
+        user_id INT DEFAULT NULL,
+        signal_id BIGINT DEFAULT NULL,
+        inference_snapshot_id BIGINT DEFAULT NULL,
+        period_review_case_id BIGINT DEFAULT NULL,
+        model_task_id CHAR(36) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        KEY idx_strategy_memory_injection_signal (signal_id),
+        KEY idx_strategy_memory_injection_review (period_review_case_id, created_at),
+        KEY idx_strategy_memory_injection_library (strategy_id, library_version_no, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // A monthly review is processed one chunk per worker turn. Persist the
+      // exact strategy and memory-library snapshot so every chunk, retry and
+      // final merge sees the same evidence even after a restart.
+      const reviewJobColumns = {
+        memory_library_version_no: 'INT DEFAULT NULL',
+        memory_library_content_hash: 'CHAR(64) DEFAULT NULL',
+        memory_library_snapshot_text: 'LONGTEXT DEFAULT NULL',
+        memory_strategy_snapshot_text: 'LONGTEXT DEFAULT NULL',
+      }
+      const existingReviewJobColumns = new Set((await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'period_review_jobs'`)).map(row => row.COLUMN_NAME))
+      for (const [name, definition] of Object.entries(reviewJobColumns)) {
+        if (!existingReviewJobColumns.has(name)) {
+          await queryRun(`ALTER TABLE period_review_jobs ADD COLUMN ${name} ${definition}`)
+        }
+      }
+
+      // Import only currently effective, unambiguously strategy-bound legacy
+      // knowledge. Old rows remain untouched and therefore stay available for
+      // audit or an application rollback. GROUP_CONCAT is intentionally not
+      // used because its server limit can silently truncate memory text.
+      const strategies = await queryAll(`SELECT id, scope, owner_user_id
+        FROM auto_prompt_types WHERE deleted_at IS NULL ORDER BY id`)
+      const hash = value => crypto.createHash('sha256').update(String(value || '')).digest('hex')
+      const clean = value => String(value || '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ').trim()
+      const appendSection = (parts, title, rows, textField, type) => {
+        const usable = rows.filter(row => clean(row[textField]))
+        if (!usable.length) return
+        parts.push(`## ${title}`)
+        for (const row of usable) {
+          const source = `${type} #${Number(row.id)}`
+          const context = clean(row.applicability_json || row.conditions_json || row.context_json)
+          parts.push(`- ${clean(row[textField])}${context ? `\n  - 适用条件：${context}` : ''}\n  - 迁移来源：${source}`)
+        }
+      }
+      for (const strategy of strategies) {
+        const existing = await queryOne(`SELECT strategy_id, version_no, content_text,
+          content_hash, char_count, estimated_token_count
+          FROM strategy_memory_libraries WHERE strategy_id = ? LIMIT 1`, [strategy.id])
+        if (existing && Number(existing.version_no || 0) > 1) continue
+        const parts = ['# 策略记忆库', '', '> 以下内容由旧记忆系统中仍有效且归属明确的记录一次性导入。']
+        const personalItems = await queryAll(`SELECT id, lesson_text, applicability_json, conditions_json
+          FROM experience_memory_items WHERE strategy_id = ? AND status = 'active' ORDER BY id`, [strategy.id])
+        const personalLong = await queryAll(`SELECT id, summary_text, applicability_json, conditions_json
+          FROM experience_long_term_memories WHERE strategy_id = ? AND status = 'active' ORDER BY id`, [strategy.id])
+        const personalSummaries = await queryAll(`SELECT id, summary_text, applicability_json
+          FROM experience_memory_summaries WHERE strategy_id = ? AND status = 'active' ORDER BY id`, [strategy.id])
+        const platformItems = await queryAll(`SELECT id, lesson_text, applicability_json, context_json
+          FROM platform_strategy_experience_items WHERE strategy_id = ? AND status = 'active' ORDER BY id`, [strategy.id])
+        appendSection(parts, '已确认复盘经验', personalItems, 'lesson_text', 'personal_item')
+        appendSection(parts, '稳定经验', personalLong, 'summary_text', 'personal_long')
+        appendSection(parts, '历史压缩结论', personalSummaries, 'summary_text', 'personal_summary')
+        appendSection(parts, '平台已发布经验', platformItems, 'lesson_text', 'platform_item')
+        if (parts.length === 3) parts.length = 0
+        const content = clean(parts.join('\n\n'))
+        const now = beijingNow()
+        const version = content ? 1 : 0
+        const contentHash = hash(content)
+        const charCount = [...content].length
+        const estimatedTokens = content ? Math.max(1, Math.ceil(Buffer.byteLength(content, 'utf8') / 4)) : 0
+        await queryRun(`INSERT IGNORE INTO strategy_memory_libraries
+          (strategy_id, strategy_scope, owner_user_id, content_text, version_no, content_hash,
+           char_count, estimated_token_count, capacity_chars, compression_target_ratio,
+           conflict_alert_threshold, pending_update_count, compression_status,
+           updated_by_user_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 120000, 0.6000, 3, 0, 'idle', NULL, ?, ?)`,
+          [strategy.id, strategy.scope, Number(strategy.owner_user_id || 0), content, version,
+          contentHash, charCount, estimatedTokens, now, now])
+        const current = existing || { version_no:version, content_text:content, content_hash:contentHash,
+          char_count:charCount, estimated_token_count:estimatedTokens }
+        if (Number(current.version_no || 0) === 1) await queryRun(`INSERT IGNORE INTO strategy_memory_library_revisions
+          (strategy_id, version_no, change_reason, source_type, source_id, content_text,
+           content_hash, char_count, estimated_token_count, actor_user_id,
+           source_metadata_json, created_at)
+          VALUES (?, 1, 'legacy_import', 'legacy_memory_tables', NULL, ?, ?, ?, ?, NULL, ?, ?)`,
+        [strategy.id, current.content_text, current.content_hash, Number(current.char_count || 0),
+          Number(current.estimated_token_count || 0),
+          JSON.stringify({ imported_by_migration:'181_unified_strategy_memory_library' }), now])
+      }
+
+      // The old compression worker must not keep mutating legacy summaries
+      // after the new current-library contract becomes authoritative.
+      await queryRun(`UPDATE memory_compression_jobs SET status = 'retired', lease_token = NULL,
+        lease_expires_at = NULL, last_error_code = 'unified_strategy_memory_library',
+        completed_at = COALESCE(completed_at, ?), updated_at = ?
+        WHERE status IN ('queued','leased','failed','status_unknown')`, [beijingNow(), beijingNow()])
+    }
+  },
+  {
+    id: '182_strategy_memory_merge_integrity',
+    async up() {
+      // Migration 181 is already deployed in some environments. Add only the
+      // result-validation fields required to distinguish durable merge from a
+      // compression request outcome; never rewrite existing memory content.
+      const columns = {
+        result_content_hash: 'CHAR(64) DEFAULT NULL AFTER result_revision_id',
+        result_validation_status: "VARCHAR(24) DEFAULT NULL AFTER result_content_hash",
+        result_validation_json: 'LONGTEXT DEFAULT NULL AFTER result_validation_status',
+      }
+      const existing = new Set((await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'strategy_memory_compression_jobs'`)).map(row => row.COLUMN_NAME))
+      for (const [name, definition] of Object.entries(columns)) {
+        if (!existing.has(name)) {
+          await queryRun(`ALTER TABLE strategy_memory_compression_jobs ADD COLUMN ${name} ${definition}`)
+        }
+      }
+    }
   }
 ]
 

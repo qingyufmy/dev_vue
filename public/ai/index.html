@@ -24,11 +24,11 @@
       })();
     </script>
     <title>AI交易实验室</title>
-    <link rel="icon" href="/favicon.ico?v=20260812historypref2" sizes="any">
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260812historypref2">
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260812historypref2">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260812historypref2" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260812historypref2" />
+    <link rel="icon" href="/favicon.ico?v=20260812memory4" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260812memory4">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260812memory4">
+    <link rel="stylesheet" href="/ai/styles.css?v=20260812memory4" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260812memory4" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -500,7 +500,7 @@
                 <label><span>上下文窗口（tokens）</span><input id="profileContextWindowTokens" type="number" min="1" step="1" value="1048576"><small class="field-help">模型一次请求可使用的上下文总量。</small></label>
                 <label><span>最大输入（tokens）</span><input id="profileMaxInputTokens" type="number" min="1" step="1" value="1048576"><small class="field-help">按当前模型文档填写可接受的最大输入。</small></label>
                 <label><span>最大输出（tokens）</span><input id="profileMaxOutputTokens" type="number" min="1" step="1" value="393216"><small class="field-help">回答与协议计入的思维链共用此额度。</small></label>
-                <label><span>连接测试超时（秒）</span><input id="profileRequestTimeout" type="number" min="30" max="600" step="10" value="" placeholder="默认 120"><small class="field-help">仅用于“测试连接”；正式推理由自动分析、手动分析和复盘各自的任务级安全期限控制。</small></label>
+                <label><span>模型请求超时（秒）</span><input id="profileRequestTimeout" type="number" min="30" max="600" step="10" value="" placeholder="默认 120"><small class="field-help">用于保存时的单次验证和独立“测试连接”；默认 120 秒。正式推理由自动分析、手动分析和复盘各自的任务级安全期限控制。</small></label>
                 <label class="inline-check-card"><input id="profileThinkingEnabled" type="checkbox" checked><span><strong>启用深度思考</strong><small id="profileThinkingHelp">复杂行情判断更稳，但分析耗时更长</small></span></label>
               </div>
               <div class="form-actions form-modal-actions"><button id="saveModelProfileBtn" class="btn btn-primary" type="button">保存并验证</button></div>
@@ -891,8 +891,8 @@
             <div class="workspace-subtabs" role="tablist" aria-label="AI复盘师视图"><button class="active" type="button" role="tab" aria-selected="true" data-workspace-tab="review-memory" data-workspace-target="reviews"><i data-lucide="calendar-check-2" size="15"></i>待处理复盘</button><button type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="memories"><i data-lucide="brain" size="15"></i><span id="memoryTabLabel">策略记忆</span></button><button class="admin-only platform-content-only manual-trade-review-tab" type="button" role="tab" aria-selected="false" data-workspace-tab="review-memory" data-workspace-target="manual-trades" style="display:none"><i data-lucide="receipt-text" size="15"></i>手动交易复盘</button></div>
             <section class="workspace-subpanel active" data-workspace-panel="review-memory" data-workspace-view="reviews"><div class="review-layout period-review-layout"><aside class="workspace-panel review-queue" aria-label="复盘队列"><div class="review-queue-heading"><div><span class="review-section-kicker">处理队列</span><h2>策略复盘</h2></div><span class="review-queue-hint">按日、按月沉淀</span></div><div class="review-period-tabs" role="tablist" aria-label="复盘周期筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-period="">全部 <span id="reviewAllCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="daily">日复盘 <span id="reviewDailyCount">0</span></button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-period="monthly">月复盘 <span id="reviewMonthlyCount">0</span></button></div><div class="review-status-tabs" role="tablist" aria-label="复盘状态筛选"><button class="active" type="button" role="tab" aria-selected="true" tabindex="0" data-review-filter="">全部</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="pending">待处理</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="draft">待确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="approved">已确认</button><button type="button" role="tab" aria-selected="false" tabindex="-1" data-review-filter="needs_revision">有问题</button></div><div id="reviewCaseList" class="workspace-list review-list"><div class="workspace-skeleton"></div></div></aside><aside id="reviewDetail" class="workspace-panel review-detail"><div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="calendar-search" size="22"></i></span><strong>选择一个复盘周期</strong><span>查看系统统计、校对 AI 结论，确认后再沉淀为策略记忆。</span></div></aside></div></section>
             <section class="workspace-subpanel" data-workspace-panel="review-memory" data-workspace-view="memories" hidden>
-              <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">我的交易记忆</h2><p id="memorySectionDescription">这里只保留你已经确认的记忆，可以随时暂停或撤销。</p></div><label class="inline-switch user-only personal-memory-only"><input id="memoryEnabled" type="checkbox"><span>启用个人记忆</span></label></div><div id="platformExperiencePolicies" class="platform-experience-policies admin-only platform-content-only" style="display:none"></div><div id="platformExperienceEvaluation" class="platform-experience-evaluation admin-only platform-content-only" style="display:none"></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
-              <details class="workspace-panel quiet-disclosure settings-disclosure user-only personal-memory-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>记忆设置</strong><small>自动复盘、月度归纳与安全试运行</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人功能设置</h2><p>这些开关只能进一步关闭功能，不能绕过管理员设置。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label><label><input id="userExperienceMemoryFlag" type="checkbox"><span><strong>将确认记忆用于后续分析</strong><small>只使用你确认且与当前分析环境匹配的内容</small></span></label><label><input id="userMemoryCompressionFlag" type="checkbox"><span><strong>生成月度摘要与分类压缩</strong><small>按记忆类别和适用条件归纳，减少上下文占用</small></span></label><label><input id="userRetrievalShadowFlag" type="checkbox"><span><strong>安全试运行</strong><small>只评估检索效果，不注入模型</small></span></label></div></div></details>
+              <section class="workspace-panel memory-section"><div class="section-heading"><div><h2 id="memorySectionTitle">策略记忆库</h2><p id="memorySectionDescription">每个策略只维护一份完整记忆；分析与复盘始终读取当前已保存版本。</p></div></div><div id="memoryItemsList" class="workspace-list"><div class="workspace-skeleton"></div></div></section>
+              <details class="workspace-panel quiet-disclosure settings-disclosure user-only personal-memory-only"><summary><span><i data-lucide="settings-2" size="16"></i><strong>复盘设置</strong><small>控制周期复盘的自动生成</small></span><i data-lucide="chevron-down" size="16"></i></summary><div class="quiet-disclosure-body"><div class="section-heading"><div><h2>个人复盘设置</h2><p>记忆库不再区分短期、长期或影子检索；确认后的经验会进入对应策略记忆库。</p></div><button id="saveUserFeatureFlagsBtn" class="btn btn-secondary btn-sm">保存设置</button></div><div class="policy-switches setting-switches"><label><input id="userReviewGenerationFlag" type="checkbox"><span><strong>自动生成交易复盘</strong><small>订单平仓且证据完整后生成</small></span></label></div></div></details>
             </section>
             <section class="workspace-subpanel admin-only platform-content-only manual-trade-review-panel" data-workspace-panel="review-memory" data-workspace-view="manual-trades" hidden style="display:none" aria-labelledby="manualTradeReviewTitle">
               <div id="manualTradeReviewWorkspace" class="manual-trade-review-workspace">
@@ -1316,9 +1316,9 @@
       </section>
     </div>
 
-    <script src="lucide.js?v=20260812historypref2"></script>
-    <script src="/shared/session.js?v=20260812historypref2"></script>
-    <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260812historypref2"></script>
+    <script src="lucide.js?v=20260812memory4"></script>
+    <script src="/shared/session.js?v=20260812memory4"></script>
+    <script src="/ai/js/lightweight-charts.standalone.production.js?v=20260812memory4"></script>
     <script>
     // Lazy-load Chart.js on first use
     let _chartJsLoaded = false;
@@ -1326,14 +1326,14 @@
       if (_chartJsLoaded) return Promise.resolve();
       return new Promise((resolve, reject) => {
         const s = document.createElement('script');
-        s.src = '/ai/js/chart.umd.min.js?v=20260812historypref2';
+        s.src = '/ai/js/chart.umd.min.js?v=20260812memory4';
         s.onload = () => { _chartJsLoaded = true; resolve(); };
         s.onerror = reject;
         document.head.appendChild(s);
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260812historypref2&build=signalbandwidth1-notifications1-analysisloading1-tokenlimits1"></script>
+    <script src="/ai/app.js?v=20260812memory4&build=signalbandwidth1-notifications1-analysisloading1-tokenlimits1-memoryintegrity1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

@@ -50,6 +50,13 @@ function loadPeriodReviewEffectiveStatus() {
 }
 
 describe('AI governance navigation and DOM contract', () => {
+  it('uses truthful unified-memory application states without retired personal or platform candidates', () => {
+    expect(app).toContain('memory_application_status')
+    expect(app).toContain('compression_failed_memory_preserved')
+    expect(app).toContain('复盘经验已经安全写入')
+    expect(app).not.toContain('已生成平台记忆候选')
+    expect(app).not.toContain('已写入个人记忆体系')
+  })
   it('treats a persisted period-review version as authoritative over a stale leased job', () => {
     const effectiveStatus = loadPeriodReviewEffectiveStatus()
     expect(effectiveStatus({ current_version_id:191, status:'draft', job_status:'leased', progress_stage:'model_request' })).toBe('draft')
@@ -389,7 +396,10 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('periodReviewProgressHtml')
     expect(html).toContain('id="reviewNavBadge"')
     expect(html).toContain('id="reviewNavFailureDot"')
-    expect(app).toContain('api("/api/ai/memory")')
+    expect(app).toContain('api("/api/ai/strategy-memories")')
+    expect(app).toContain('renderStrategyMemoryLibrary()')
+    expect(html).toContain('每个策略只维护一份完整记忆')
+    expect(html).not.toContain('id="memoryEnabled"')
     expect(routes).toContain("WHERE id = ? AND user_id = ?")
     expect(app).toContain('Number(summary.daily_total || 0)')
     expect(app).toContain('Number(summary.monthly_total || 0)')
@@ -400,11 +410,11 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('class="review-case-metrics"')
     expect(css).toContain('#review-memory .review-case-button {')
     expect(css).toContain('.review-case-metrics {')
-    expect(app).toContain('function memoryApplicabilityView(item = {})')
-    expect(app).toContain('按当前品种、周期、方向、行情与缠论结构精确匹配')
-    expect(app).toContain('renderCachedMemoryWorkspace();')
-    expect(css).toContain('.memory-context-chip.avoid')
-    expect(css).toContain('.personal-memory-archive')
+    expect(app).not.toContain('function memoryApplicabilityView(item = {})')
+    expect(app).not.toContain('按当前品种、周期、方向、行情与缠论结构精确匹配')
+    expect(app).not.toContain('renderCachedMemoryWorkspace();')
+    expect(app).toContain('strategyMemoryDetail: null')
+    expect(css).toContain('.strategy-memory-library {')
   })
 
   it('uses cursor pagination and request versions to prevent stale inference list data', () => {
@@ -610,7 +620,7 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('uses exact review language and separates process issue from content confirmation', () => {
-    expect(app).toContain('内容准确并加入记忆')
+    expect(app).toContain('内容准确并沉淀到策略记忆库')
     expect(app).toContain('内容有问题，继续修改')
     expect(app).toContain('交易流程问题')
     expect(app).toContain('复盘内容确认')
@@ -637,12 +647,14 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).not.toContain('统一管理平台复盘与记忆')
     expect(app).toContain('api(`/api/ai/model-profiles${profileScopeQuery()}`)')
     expect(app).toContain('if (state.user?.role === "admin") body.scope = "platform"')
-    expect(app).toContain('api("/api/ai/admin/platform-experience")')
-    expect(app).toContain('renderPlatformExperience(state.memoryItems')
+    expect(app).toContain('api("/api/ai/strategy-memories")')
+    expect(app).toContain('function renderStrategyMemoryLibrary()')
+    expect(app).toContain('data-strategy-memory-action="save"')
+    expect(app).toContain('data-strategy-memory-action="compress"')
     expect(app).toContain('function isObserverSourceAccount()')
     expect(app).toContain('function canManagePlatformAiContent()')
-    expect(html).toContain('id="platformExperiencePolicies"')
-    expect(html).toContain('id="platformExperienceEvaluation"')
+    expect(html).not.toContain('id="platformExperiencePolicies"')
+    expect(html).not.toContain('id="platformExperienceEvaluation"')
   })
 
   it('keeps opaque history cursors bound to one filter and account snapshot', () => {
@@ -657,14 +669,14 @@ describe('AI governance navigation and DOM contract', () => {
     expect(bridgeWs).toContain('hasHistoryCursorCapability(exactRoute)')
   })
 
-  it('shows active and shadow retrieval facts without turning an empty window into 0% effect', () => {
-    expect(app).toContain('const total = Number(retrieval.total || 0)')
-    expect(app).toContain('const activeTotal = Number(retrieval.active_total || 0)')
-    expect(app).toContain('const shadowTotal = Number(retrieval.shadow_total || 0)')
-    expect(app).toContain('return count > 0 ? `${Math.round(Number(hits || 0) / count * 100)}%` : "暂无检索"')
-    expect(app).toContain('${Number(row.hits || 0)} / ${Number(row.retrievals || 0)}')
-    expect(css).toContain('.platform-evaluation-breakdown { display: flex;')
-    expect(css).toContain('.platform-evaluation-breakdown { flex-direction: column;')
+  it('retires retrieval evaluation and loads one complete library per strategy', () => {
+    expect(app).not.toContain('const total = Number(retrieval.total || 0)')
+    expect(app).not.toContain('const activeTotal = Number(retrieval.active_total || 0)')
+    expect(app).not.toContain('const shadowTotal = Number(retrieval.shadow_total || 0)')
+    expect(app).toContain('api("/api/ai/strategy-memories")')
+    expect(app).toContain('api(`/api/ai/strategy-memories/${state.selectedStrategyMemoryId}`)')
+    expect(app).toContain('完整记忆库（Markdown）')
+    expect(css).toContain('.strategy-memory-editor textarea')
     const versions = [
       html.match(/\/ai\/styles\.css\?v=([^"']+)/)?.[1],
       html.match(/\/ai\/responsive\.css\?v=([^"']+)/)?.[1],

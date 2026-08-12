@@ -7,8 +7,12 @@ import { requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { buildDailyPeriodMarketEvidence, monthlyPeriodMarketDigest } from './period-market-evidence.js'
 import { isAiFeatureEnabled } from './rollout-governance.js'
-import { createMemoryFromApprovedPeriodReview } from './memory-system.js'
-import { createPlatformExperienceCandidateFromApprovedPeriodReview } from './platform-experience.js'
+import {
+  getStrategyMemoryLibraryForRuntime,
+  createStrategyMemoryInjectionLog,
+  enqueueApprovedStrategyMemoryUpdate,
+  recordStrategyMemoryConflictEvidence,
+} from './strategy-memory-library.js'
 import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
 import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
@@ -220,6 +224,77 @@ export function isPeriodReviewEvidenceStable(rows = [], asOfUtcMs = Date.now()) 
   return Number(asOfUtcMs) - newest >= PERIOD_REVIEW_EVIDENCE_STABILITY_MS
 }
 
+export function deriveStrategyMemoryApplicationStatus(row) {
+  if (!row || row.approved_version_id == null) return null
+  const derivation = String(row.derivation_status || '')
+  const pending = Number(row.memory_pending_update_count_for_review ?? row.memory_pending_update_count ?? 0)
+  const sourceUpdates = Number(row.memory_source_update_count ?? 0)
+  const mergedRevisionId = Number(row.memory_merged_revision_id || 0)
+  const sourceRevisionMatches = row.memory_source_revision_matches === true
+    || Number(row.memory_source_revision_matches || 0) === 1
+    || mergedRevisionId > 0
+  const compression = String(row.memory_compression_job_status
+    || row.memory_latest_compression_job_status || row.memory_compression_status || '')
+  if (derivation === 'queued' || derivation === 'retry_wait' || derivation === 'paused') return 'queued'
+  if (derivation === 'leased' || derivation === 'applying') return 'applying'
+  if (derivation === 'failed') return 'failed'
+  if (pending > 0) return derivation === 'succeeded' ? 'applying' : 'queued'
+  if (compression === 'leased' || compression === 'running') {
+    return sourceRevisionMatches ? 'compression_running' : 'applying'
+  }
+  if (compression === 'queued' || compression === 'retry_wait') {
+    return sourceRevisionMatches ? 'compression_queued' : 'applying'
+  }
+  if (compression === 'failed' || compression === 'status_unknown' || compression === 'stale') {
+    return sourceRevisionMatches ? 'compression_failed_memory_preserved' : 'failed'
+  }
+  if (sourceRevisionMatches && compression === 'succeeded') return 'completed'
+  if (sourceRevisionMatches) return 'applied'
+  // A confirmed review that produced no memory update is complete without a
+  // synthetic revision; an expected update that has no real source revision is
+  // a failed durable application, never a false success.
+  if (derivation === 'succeeded' && sourceUpdates === 0) return 'completed'
+  return 'failed'
+}
+
+function strategyMemoryStateSelectSql(caseAlias = 'cases', libraryAlias = 'memory_library') {
+  return `
+      ${libraryAlias}.version_no AS memory_current_version_no,
+      ${libraryAlias}.content_hash AS memory_current_content_hash,
+      ${libraryAlias}.pending_update_count AS memory_pending_update_count,
+      (SELECT COUNT(*) FROM strategy_memory_pending_updates pending_for_review
+        WHERE pending_for_review.strategy_id = ${caseAlias}.strategy_id
+          AND pending_for_review.source_period_review_version_id = ${caseAlias}.approved_version_id
+          AND pending_for_review.status = 'pending') AS memory_pending_update_count_for_review,
+      (SELECT COUNT(*) FROM strategy_memory_pending_updates source_updates
+        WHERE source_updates.strategy_id = ${caseAlias}.strategy_id
+          AND source_updates.source_period_review_version_id = ${caseAlias}.approved_version_id
+          AND source_updates.status IN ('pending','merged')) AS memory_source_update_count,
+      (SELECT MAX(source_updates.merged_revision_id) FROM strategy_memory_pending_updates source_updates
+        WHERE source_updates.strategy_id = ${caseAlias}.strategy_id
+          AND source_updates.source_period_review_version_id = ${caseAlias}.approved_version_id
+          AND source_updates.status = 'merged'
+          AND source_updates.merged_revision_id IS NOT NULL) AS memory_merged_revision_id,
+      (SELECT MAX(merged_revisions.version_no)
+         FROM strategy_memory_pending_updates source_updates
+         JOIN strategy_memory_library_revisions merged_revisions
+           ON merged_revisions.id = source_updates.merged_revision_id
+        WHERE source_updates.strategy_id = ${caseAlias}.strategy_id
+          AND source_updates.source_period_review_version_id = ${caseAlias}.approved_version_id
+          AND source_updates.status = 'merged') AS memory_merged_revision_version_no,
+      (SELECT compression.status FROM strategy_memory_compression_jobs compression
+        WHERE compression.strategy_id = ${caseAlias}.strategy_id
+          AND compression.source_version_no = ${libraryAlias}.version_no
+        ORDER BY compression.id DESC LIMIT 1) AS memory_compression_job_status,
+      (SELECT compression.last_error_code FROM strategy_memory_compression_jobs compression
+        WHERE compression.strategy_id = ${caseAlias}.strategy_id
+          AND compression.source_version_no = ${libraryAlias}.version_no
+        ORDER BY compression.id DESC LIMIT 1) AS memory_compression_error_code,
+      (SELECT compression.status FROM strategy_memory_compression_jobs compression
+        WHERE compression.strategy_id = ${caseAlias}.strategy_id
+        ORDER BY compression.id DESC LIMIT 1) AS memory_latest_compression_job_status`
+}
+
 export function normalizePeriodReviewState(row) {
   if (!row || Number(row.current_version_id || 0) <= 0) return row
   const normalized = { ...row }
@@ -235,6 +310,10 @@ export function normalizePeriodReviewState(row) {
     if (Object.prototype.hasOwnProperty.call(normalized, 'next_attempt_at')) normalized.next_attempt_at = null
     if (Object.prototype.hasOwnProperty.call(normalized, 'last_error_code')) normalized.last_error_code = null
   }
+  const memoryStatus = deriveStrategyMemoryApplicationStatus(normalized)
+  if (memoryStatus) normalized.memory_application_status = memoryStatus
+  normalized.memory_applied = ['applied', 'completed', 'compression_queued', 'compression_running',
+    'compression_failed_memory_preserved'].includes(memoryStatus)
   return normalized
 }
 
@@ -597,6 +676,42 @@ const DAILY_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence
 const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_interpretation', 'strategy_rule', 'none', 'unknown'])
 const MEMORY_CATEGORIES = new Set(['general', 'market_regime', 'entry_setup', 'chan_structure', 'risk_execution'])
 
+function normalizeStrategyMemoryUpdates(input) {
+  const updates = input?.memory_updates == null ? [] : input.memory_updates
+  if (!Array.isArray(updates)) throw new Error('invalid_strategy_memory_updates')
+  return updates.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('invalid_strategy_memory_update')
+    const text = String(item.text || item.lesson || '').trim()
+    if (!text) throw new Error('strategy_memory_update_text_missing')
+    const category = MEMORY_CATEGORIES.has(item.category || item.memory_category) ? (item.category || item.memory_category) : 'general'
+    const refs = Array.isArray(item.source_refs || item.evidence_refs)
+      ? [...new Set((item.source_refs || item.evidence_refs).map(ref => String(ref || '').trim()).filter(Boolean))].slice(0, 50)
+      : []
+    return { text, category, source_refs:refs }
+  })
+}
+
+function normalizeStrategyConflicts(input) {
+  const conflicts = input?.strategy_conflicts == null ? [] : input.strategy_conflicts
+  if (!Array.isArray(conflicts)) throw new Error('invalid_strategy_conflicts')
+  return conflicts.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('invalid_strategy_conflict')
+    const description = String(item.description || item.summary || '').trim()
+    if (!description) throw new Error('strategy_conflict_description_missing')
+    const sourceRefs = Array.isArray(item.source_refs || item.evidence_refs)
+      ? [...new Set((item.source_refs || item.evidence_refs).map(ref => String(ref || '').trim()).filter(Boolean))].slice(0, 50)
+      : []
+    return {
+      conflict_key:String(item.conflict_key || '').trim() || null,
+      category:String(item.category || 'general').trim() || 'general',
+      description,
+      strategy_excerpt:String(item.strategy_excerpt || '').trim(),
+      suggested_action:String(item.suggested_action || item.suggested_change || '').trim(),
+      source_refs:sourceRefs,
+    }
+  })
+}
+
 function normalizeMonthlyConflictGroups(input, known) {
   if (input == null) return []
   if (!Array.isArray(input)) throw new Error('invalid_monthly_review_conflict_groups')
@@ -675,6 +790,8 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
     ? input.period_chan_assessment : { status:'insufficient_evidence', issue_source:'unknown', explanation:'', affected_outcome_ids:[], confidence:0 }
   const affectedOutcomeIds = [...new Set((Array.isArray(periodChan.affected_outcome_ids) ? periodChan.affected_outcome_ids : []).map(Number))]
   if (!CHAN_SOURCES.has(periodChan.issue_source) || affectedOutcomeIds.some(id => !known.has(id))) throw new Error('invalid_daily_period_chan_assessment')
+  const memoryUpdates = normalizeStrategyMemoryUpdates(input)
+  const strategyConflicts = normalizeStrategyConflicts(input)
   return {
     period_summary: periodSummary, decision_quality: input.decision_quality, trade_assessments: assessments,
     repeated_issues: input.repeated_issues.map(String), strengths: input.strengths.map(String), daily_lessons: input.daily_lessons.map(String),
@@ -682,6 +799,7 @@ export function validateDailyReviewContent(input, outcomeIds = []) {
     period_chan_assessment:{ status:String(periodChan.status || 'insufficient_evidence'), issue_source:periodChan.issue_source,
       explanation:String(periodChan.explanation || '').trim(), affected_outcome_ids:affectedOutcomeIds,
       confidence:Math.min(1, Math.max(0, Number(periodChan.confidence || 0))) }, confidence: Number(input.confidence),
+    memory_updates:memoryUpdates, strategy_conflicts:strategyConflicts,
   }
 }
 
@@ -726,12 +844,15 @@ export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedD
       supporting_period_case_ids: support, confidence: Math.min(1, Math.max(0, Number(item.confidence || 0))) }
   })
   const conflictGroups = normalizeMonthlyConflictGroups(input.conflict_groups, known)
+  const memoryUpdates = normalizeStrategyMemoryUpdates(input)
+  const strategyConflicts = normalizeStrategyConflicts(input)
   return {
     period_summary: periodSummary, decision_quality: input.decision_quality, daily_assessments: assessments,
     recurring_patterns: input.recurring_patterns.map(String), strengths: input.strengths.map(String),
     risk_observations: input.risk_observations.map(String), chan_issue_summary: input.chan_issue_summary.map(String),
     next_month_actions: input.next_month_actions.map(String), memory_candidates: memoryCandidates,
     conflict_groups: conflictGroups, confidence: Number(input.confidence),
+    memory_updates:memoryUpdates, strategy_conflicts:strategyConflicts,
   }
 }
 
@@ -1386,6 +1507,7 @@ export function validateMonthlyReviewChunkContent(input, expectedPeriodCaseIds =
     chan_observations:normalizeChunkContextArray(value, 'chan_observations', expectedSet, ['observation', 'text', 'summary']),
     action_candidates:normalizeChunkContextArray(value, 'action_candidates', expectedSet, ['action', 'text', 'summary']),
     conflict_groups:normalizeChunkConflictGroups(value, expectedSet),
+    strategy_conflicts:normalizeStrategyConflicts(value),
     confidence:Math.min(1, Math.max(0, Number(value.confidence ?? 0))),
   }
   if (!Number.isFinite(Number(value.confidence)) || Number(value.confidence) < 0 || Number(value.confidence) > 1) throw new Error('invalid_monthly_review_chunk_confidence')
@@ -1711,17 +1833,84 @@ async function claimDailyReviewJob() {
   })
 }
 
+async function getReviewStrategyMemorySnapshot(job) {
+  if (job._strategyMemorySnapshot) return job._strategyMemorySnapshot
+  if (job.memory_library_version_no !== null && job.memory_library_version_no !== undefined
+    && job.memory_library_content_hash && job.memory_library_snapshot_text !== null
+    && job.memory_library_snapshot_text !== undefined
+    && job.memory_strategy_snapshot_text !== null && job.memory_strategy_snapshot_text !== undefined) {
+    job._strategyMemorySnapshot = {
+      strategy_text:String(job.memory_strategy_snapshot_text),
+      library:{
+        strategy_id:Number(job.strategy_id),
+        version_no:Number(job.memory_library_version_no),
+        content_hash:String(job.memory_library_content_hash),
+        content_text:String(job.memory_library_snapshot_text),
+        char_count:Array.from(String(job.memory_library_snapshot_text)).length,
+      },
+    }
+    return job._strategyMemorySnapshot
+  }
+  const snapshot = await getStrategyMemoryLibraryForRuntime({
+    strategyId:job.strategy_id,
+    actor:{ userId:job.user_id, role:job.user_role || 'user' },
+  })
+  const result = await queryRun(`UPDATE period_review_jobs
+      SET memory_library_version_no = ?, memory_library_content_hash = ?,
+          memory_library_snapshot_text = ?, memory_strategy_snapshot_text = ?, updated_at = ?
+    WHERE id = ? AND memory_library_version_no IS NULL`,
+  [snapshot.library.version_no, snapshot.library.content_hash, snapshot.library.content_text,
+    snapshot.strategy_text || '', beijingNow(), job.id])
+  if (!Number(result.changes || result.affectedRows || 0)) {
+    const frozen = await queryOne(`SELECT memory_library_version_no, memory_library_content_hash,
+        memory_library_snapshot_text, memory_strategy_snapshot_text
+      FROM period_review_jobs WHERE id = ?`, [job.id])
+    if (!frozen || frozen.memory_library_version_no === null) throw new Error('period_review_memory_snapshot_freeze_failed')
+    job.memory_library_version_no = frozen.memory_library_version_no
+    job.memory_library_content_hash = frozen.memory_library_content_hash
+    job.memory_library_snapshot_text = frozen.memory_library_snapshot_text
+    job.memory_strategy_snapshot_text = frozen.memory_strategy_snapshot_text
+    return getReviewStrategyMemorySnapshot(job)
+  }
+  job.memory_library_version_no = snapshot.library.version_no
+  job.memory_library_content_hash = snapshot.library.content_hash
+  job.memory_library_snapshot_text = snapshot.library.content_text
+  job.memory_strategy_snapshot_text = snapshot.strategy_text || ''
+  job._strategyMemorySnapshot = snapshot
+  return snapshot
+}
+
+async function logReviewStrategyMemoryInjection(job, snapshot, usageKind = 'review') {
+  try {
+    return await createStrategyMemoryInjectionLog({
+      strategyId:job.strategy_id,
+      actor:{ userId:job.user_id, role:job.user_role || 'user' },
+      library:snapshot.library,
+      injectionKind:usageKind,
+      periodReviewCaseId:job.period_case_id,
+      modelTaskId:job.model_task_id || job._modelTracker?.taskId || null,
+    })
+  } catch (error) {
+    console.warn(`[PeriodReview case=${job.period_case_id}] strategy memory injection log unavailable:`, safeError(error))
+    return null
+  }
+}
+
 async function generateDailyReview(job, requestModel) {
   const evidence = parse(job.evidence_json, null)
   if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('daily_review_evidence_invalid')
   const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review' })
   if (!resolved.model) throw new Error(resolved.error || 'daily_review_model_unavailable')
+  const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const endpoint = modelEndpoint(resolved.model)
   const outcomeIds = evidence.sources.map(item => Number(item.outcome_id))
   const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
     trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
     repeated_issues: ['string'], strengths: ['string'], daily_lessons: ['string'], risk_observations: ['string'],
-    chan_diagnoses: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, status: 'normal|suspected_issue|confirmed_issue|insufficient_evidence', issue_source: 'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown', impact_on_decision: 'none|minor|material|unknown', explanation: 'string', confidence: 0.5 })), confidence: 0.5 }
+    chan_diagnoses: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, status: 'normal|suspected_issue|confirmed_issue|insufficient_evidence', issue_source: 'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown', impact_on_decision: 'none|minor|material|unknown', explanation: 'string', confidence: 0.5 })),
+    memory_updates:[{ text:'string', category:'general|market_regime|entry_setup|chan_structure|risk_execution', source_refs:['string'] }],
+    strategy_conflicts:[{ conflict_key:'string', category:'general', description:'string', strategy_excerpt:'string', suggested_action:'string', source_refs:['string'] }],
+    confidence: 0.5 }
   shape.period_chan_assessment = { status:'normal|suspected_issue|confirmed_issue|insufficient_evidence',
     issue_source:'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown',
     explanation:'string', affected_outcome_ids:outcomeIds, confidence:0.5 }
@@ -1731,11 +1920,12 @@ async function generateDailyReview(job, requestModel) {
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     `trade_assessments 和 chan_diagnoses 必须各包含 ${outcomeIds.length} 项，并且 outcome_id 只能且必须完整覆盖：${outcomeIds.join(', ')}。`,
-    '不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。',
+    '不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。memory_updates 和 strategy_conflicts 没有可靠结论时必须返回空数组；每个对象的文本和引用字段必须符合 required_output。',
   ].join('\n')
   const messages = [
     { role: 'system', content: `你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情，缠论结构已基于完整窗口计算；必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
-    { role: 'user', content: JSON.stringify({ required_output: shape, evidence }) },
+    { role: 'user', content: JSON.stringify({ required_output: shape, current_strategy:strategyMemorySnapshot.strategy_text,
+      strategy_memory_library:strategyMemorySnapshot.library, evidence }) },
   ]
   const modelCall = await preparePeriodReviewModelCall('daily_review', resolved, messages,
     Math.max(3000, Math.ceil(JSON.stringify(shape).length / 2.5)), {
@@ -1767,6 +1957,7 @@ async function generateDailyReview(job, requestModel) {
   })
   const content = validateDailyReviewContent(output, outcomeIds)
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
+  await logReviewStrategyMemoryInjection(job, strategyMemorySnapshot, 'daily_review')
   return { content, resolved }
 }
 
@@ -1896,6 +2087,7 @@ async function claimMonthlyReviewJob() {
 async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) {
   const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
+  const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const endpoint = modelEndpoint(resolved.model)
   const checkpointLease = startMonthlyReviewCheckpointLeaseHeartbeat(checkpoint)
   job._checkpointLease = checkpointLease
@@ -1912,6 +2104,7 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
       { text:'string', market_regime:'trend', applicability:{ applicable_when:{ universal:false }, avoid_when:{} }, supporting_period_case_ids:expectedIds.slice(0, 1) },
       { text:'string', market_regime:'range', applicability:{ applicable_when:{ universal:false }, avoid_when:{} }, supporting_period_case_ids:expectedIds.slice(0, 1) },
     ] }],
+    strategy_conflicts:[{ conflict_key:'string', category:'general', description:'string', strategy_excerpt:'string', suggested_action:'string', source_refs:['string'] }],
     confidence:0.5,
   }
   const contract = [
@@ -1924,7 +2117,9 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
   ].join('\n')
   const messages = [
     { role:'system', content:`你是严格的交易月度复盘分块分析器。只能分析本分块已冻结的日复盘和行情摘要，不得自行补造统计。\n\n${contract}` },
-    { role:'user', content:JSON.stringify({ required_output:shape, chunk }) },
+    { role:'user', content:JSON.stringify({ required_output:shape,
+      current_strategy:strategyMemorySnapshot.strategy_text,
+      strategy_memory_library:strategyMemorySnapshot.library, chunk }) },
   ]
   const modelCall = await preparePeriodReviewModelCall('monthly_review_chunk', resolved, messages,
     Math.max(3500, Math.ceil(JSON.stringify(shape).length / 2.5)), {
@@ -1960,6 +2155,7 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
   })
   const content = validateMonthlyReviewChunkContent(output, expectedIds)
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
+  await logReviewStrategyMemoryInjection(job, strategyMemorySnapshot, 'monthly_review_chunk')
   return { content, resolved, tracker, checkpointLease }
 }
 
@@ -1971,6 +2167,8 @@ function verifiedMonthlyMergeEvidence(evidence, checkpointResult) {
   }))
   const conflictGroups = chunks.flatMap(chunk => Array.isArray(chunk.content?.conflict_groups)
     ? chunk.content.conflict_groups.map(group => ({ ...group, chunk_index:chunk.chunk_index, checkpoint_id:chunk.checkpoint_id })) : [])
+  const strategyConflicts = chunks.flatMap(chunk => Array.isArray(chunk.content?.strategy_conflicts)
+    ? chunk.content.strategy_conflicts.map(conflict => ({ ...conflict, chunk_index:chunk.chunk_index, checkpoint_id:chunk.checkpoint_id })) : [])
   return {
     evidence_hash:evidence.evidence_hash,
     period:evidence.period,
@@ -1982,12 +2180,14 @@ function verifiedMonthlyMergeEvidence(evidence, checkpointResult) {
     verified_daily_assessments:checkpointResult.assessments,
     verified_chunks:chunks,
     conflict_groups:conflictGroups,
+    strategy_conflicts:strategyConflicts,
   }
 }
 
 async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpointResult) {
   const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
+  const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const endpoint = modelEndpoint(resolved.model)
   const dailyCaseIds = checkpointResult.expectedPeriodCaseIds
   const approvedDailyCaseIds = evidence.sources.filter(item => item.review_status === 'approved')
@@ -1999,18 +2199,23 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
     next_month_actions:['string'], memory_candidates:approvedDailyCaseIds.length >= 2 ? [{ lesson:'string', anti_pattern:'string',
       memory_category:'general|market_regime|entry_setup|chan_structure|risk_execution', applicability:{ applicable_when:{ universal:false, market_regimes:['trend|range|breakout|pullback|reversal'] }, avoid_when:{} },
       supporting_period_case_ids:approvedDailyCaseIds.slice(0, 2), confidence:0.5 }] : [],
-    conflict_groups:mergeEvidence.conflict_groups, confidence:0.5 }
+    conflict_groups:mergeEvidence.conflict_groups,
+    memory_updates:[{ text:'string', category:'general|market_regime|entry_setup|chan_structure|risk_execution', source_refs:['string'] }],
+    strategy_conflicts:[{ conflict_key:'string', category:'general', description:'string', strategy_excerpt:'string', suggested_action:'string', source_refs:['string'] }],
+    confidence:0.5 }
   const contract = [
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
     '必须原样使用 required_output 的字段名；基础统计、已验证日复盘和 conflict_groups 只可作为输入依据。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。',
     'daily_assessments 必须恰好覆盖全部且仅覆盖 expected_period_case_ids；不得遗漏、重复、合并或虚构日复盘。',
-    'memory_candidates 必须仅引用已确认日复盘且每项至少两个不同日复盘支持；不满足时返回空数组。',
+    'memory_candidates 必须仅引用已确认日复盘且每项至少两个不同日复盘支持；不满足时返回空数组。memory_updates 和 strategy_conflicts 没有可靠结论时必须返回空数组。',
     '冲突行情经验必须保留为独立 conflict_groups.candidates，分别写明 market_regime、applicability 与 supporting_period_case_ids，不得静默合并。',
   ].join('\n')
   const messages = [
     { role:'system', content:`你是严格的交易月度复盘汇总分析器。只能使用 verified_chunks、verified_daily_assessments 和确定性统计/元数据；不得读取或重建未验证来源。\n\n${contract}` },
-    { role:'user', content:JSON.stringify({ required_output:shape, evidence:mergeEvidence }) },
+    { role:'user', content:JSON.stringify({ required_output:shape,
+      current_strategy:strategyMemorySnapshot.strategy_text,
+      strategy_memory_library:strategyMemorySnapshot.library, evidence:mergeEvidence }) },
   ]
   const modelCall = await preparePeriodReviewModelCall('monthly_review_merge', resolved, messages,
     Math.max(4000, Math.ceil(JSON.stringify(shape).length / 2.5)), {
@@ -2041,6 +2246,7 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
   const content = validateMonthlyReviewMergeContent(output, dailyCaseIds, approvedDailyCaseIds,
     mergeEvidence.conflict_groups)
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
+  await logReviewStrategyMemoryInjection(job, strategyMemorySnapshot, 'monthly_review_merge')
   return { content, resolved, tracker }
 }
 
@@ -2094,6 +2300,9 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
     if (!await isAiFeatureEnabled('review_generation_enabled', job.user_id)) return skipDisabledPeriodReviewJob(job)
     const evidence = parse(job.evidence_json, null)
     if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('monthly_review_evidence_invalid')
+    // The snapshot is persisted on period_review_jobs, so every chunk, retry
+    // and the final merge uses exactly the same strategy and memory version.
+    await getReviewStrategyMemorySnapshot(job)
     const plan = buildMonthlyReviewChunks(evidence, { maxDays:8, evidenceHash:job.evidence_hash })
     const materialized = await ensureMonthlyReviewCheckpoints({ periodReviewJobId:Number(job.id), evidence,
       evidenceHash:plan.evidenceHash, maxDays:8 })
@@ -2251,12 +2460,14 @@ export async function listPeriodReviewCases(actor, { periodType = null, status =
       jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at, jobs.attempt_count, jobs.max_attempts,
       jobs.last_error_code, jobs.next_attempt_at,
       derivation.status AS derivation_status, derivation.last_error_code AS derivation_error_code,
+      ${strategyMemoryStateSelectSql()},
       CASE WHEN cases.current_version_id IS NOT NULL AND (seen.last_seen_version_id IS NULL OR seen.last_seen_version_id <> cases.current_version_id) THEN 1 ELSE 0 END AS is_unread
     FROM period_review_cases cases
     LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
+    LEFT JOIN strategy_memory_libraries memory_library ON memory_library.strategy_id = cases.strategy_id
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = ? ${where}
     ORDER BY cases.created_at DESC, cases.id DESC LIMIT ? OFFSET ?`, params)
   const logicalRows = []
@@ -2296,12 +2507,14 @@ export async function getPeriodReviewCase(periodCaseId, actor) {
       derivation.id AS derivation_job_id, derivation.status AS derivation_status,
       derivation.attempt_count AS derivation_attempt_count, derivation.max_attempts AS derivation_max_attempts,
       derivation.last_error_code AS derivation_error_code, derivation.completed_at AS derivation_completed_at,
+      ${strategyMemoryStateSelectSql()},
       CASE WHEN cases.current_version_id IS NOT NULL AND (seen.last_seen_version_id IS NULL OR seen.last_seen_version_id <> cases.current_version_id) THEN 1 ELSE 0 END AS is_unread
     FROM period_review_cases cases
     LEFT JOIN auto_prompt_types strategies ON strategies.id = cases.strategy_id
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
+    LEFT JOIN strategy_memory_libraries memory_library ON memory_library.strategy_id = cases.strategy_id
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = ?
     WHERE cases.id = ? AND ${access.sql}`, [access.userId, periodCaseId, ...access.params])
   if (!reviewCase) throw new Error('period_review_not_found')
@@ -2323,12 +2536,14 @@ export async function getPeriodReviewSummary(actor) {
   const access = periodReviewAccessScope(actor)
   const rows = await queryAll(`SELECT cases.id, cases.user_id, cases.period_type, cases.period_key, cases.trading_account_id,
       cases.strategy_id, cases.status, cases.current_version_id,
-      seen.last_seen_version_id, jobs.status AS job_status, derivation.status AS derivation_status
+      cases.approved_version_id, seen.last_seen_version_id, jobs.status AS job_status,
+      derivation.status AS derivation_status, ${strategyMemoryStateSelectSql()}
     FROM period_review_cases cases
     LEFT JOIN period_review_user_states seen ON seen.period_case_id = cases.id AND seen.user_id = ?
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
+    LEFT JOIN strategy_memory_libraries memory_library ON memory_library.strategy_id = cases.strategy_id
     WHERE ${access.sql} AND cases.status <> 'superseded'`, [access.userId, ...access.params])
   const summary = { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0,
     total:0, daily_total:0, monthly_total:0,
@@ -2384,15 +2599,17 @@ export async function markPeriodReviewRead(periodCaseId, actor, versionId) {
 export async function getPeriodReviewJobStatus(periodCaseId, actor) {
   const access = periodReviewAccessScope(actor)
   const status = await queryOne(`SELECT cases.id, cases.period_type, cases.status, cases.current_version_id,
+      cases.approved_version_id,
       jobs.id AS job_id, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
       jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at,
       derivation.status AS derivation_status, derivation.attempt_count AS derivation_attempt_count,
       derivation.max_attempts AS derivation_max_attempts, derivation.last_error_code AS derivation_error_code,
-      derivation.completed_at AS derivation_completed_at
+      derivation.completed_at AS derivation_completed_at, ${strategyMemoryStateSelectSql()}
     FROM period_review_cases cases
     LEFT JOIN period_review_jobs jobs ON jobs.period_case_id = cases.id AND jobs.job_slot = 0
     LEFT JOIN period_review_derivation_jobs derivation ON derivation.period_case_id = cases.id
       AND derivation.period_version_id = cases.approved_version_id
+    LEFT JOIN strategy_memory_libraries memory_library ON memory_library.strategy_id = cases.strategy_id
     WHERE cases.id = ? AND ${access.sql}`, [periodCaseId, ...access.params])
   if (!status) throw new Error('period_review_not_found')
   const events = await queryAll(`SELECT id, attempt_no, stage, event_status, message_code, metadata_json, created_at
@@ -2439,7 +2656,7 @@ export async function confirmPeriodReviewCase({ periodCaseId, actor, versionId, 
     [status, action === 'approve' ? versionId : null, now, periodCaseId])
     let derivationJobId = null
     if (action === 'approve') {
-      const targetType = reviewCase.strategy_scope === 'platform' ? 'platform_experience' : 'personal_memory'
+      const targetType = 'strategy_memory_library'
       await run(`INSERT IGNORE INTO period_review_derivation_jobs
         (period_case_id, period_version_id, user_id, target_type, status, attempt_count, max_attempts, created_at, updated_at)
         VALUES (?, ?, ?, ?, 'queued', 0, 5, ?, ?)`, [periodCaseId, versionId, access.userId, targetType, now, now])
@@ -2503,15 +2720,49 @@ export async function runPeriodReviewDerivationOnce() {
   const job = await claimPeriodReviewDerivationJob()
   if (!job) return { claimed:false }
   try {
-    if (job.target_type === 'personal_memory') {
-      if (!await isAiFeatureEnabled('experience_memory_enabled', job.user_id)) return pausePeriodReviewDerivationJob(job, 'experience_memory_disabled')
-      if (job.period_type === 'monthly' && !await isAiFeatureEnabled('memory_compression_enabled', job.user_id)) {
-        return pausePeriodReviewDerivationJob(job, 'memory_compression_disabled')
-      }
-      await createMemoryFromApprovedPeriodReview(job.period_case_id, job.user_id)
-    } else if (job.target_type === 'platform_experience') {
-      await createPlatformExperienceCandidateFromApprovedPeriodReview(job.period_case_id, job.user_id)
-    } else throw new Error('invalid_period_review_derivation_target')
+    if (!['strategy_memory_library', 'personal_memory', 'platform_experience'].includes(job.target_type)) {
+      throw new Error('invalid_period_review_derivation_target')
+    }
+    const approved = await queryOne(`SELECT cases.*, versions.content_json AS approved_content_json,
+        versions.id AS approved_version_id, apt.scope AS strategy_scope, apt.owner_user_id
+      FROM period_review_cases cases
+      JOIN period_review_versions versions ON versions.id = cases.approved_version_id
+      JOIN auto_prompt_types apt ON apt.id = cases.strategy_id AND apt.deleted_at IS NULL
+      WHERE cases.id = ? AND cases.status = 'approved' AND cases.approved_version_id IS NOT NULL`, [job.period_case_id])
+    if (!approved) throw new Error('approved_period_review_required')
+    const content = parse(approved.approved_content_json, {}) || {}
+    const updateKind = approved.period_type === 'monthly' ? 'monthly_review' : 'daily_review'
+    const updates = Array.isArray(content.memory_updates) && content.memory_updates.length
+      ? content.memory_updates.map(item => `${item.text || item.lesson || ''}`.trim()).filter(Boolean)
+      : approved.period_type === 'daily'
+        ? (Array.isArray(content.daily_lessons) ? content.daily_lessons.map(String) : [])
+        : [
+          ...(Array.isArray(content.memory_candidates) ? content.memory_candidates.map(item => item.lesson || item.text || '') : []),
+          ...(Array.isArray(content.recurring_patterns) ? content.recurring_patterns.map(String) : []),
+          ...(Array.isArray(content.next_month_actions) ? content.next_month_actions.map(String) : []),
+        ].map(String).filter(Boolean)
+    const updateText = updates.map(item => `- ${item}`).join('\n')
+    if (updateText) {
+      await enqueueApprovedStrategyMemoryUpdate({
+        strategyId:approved.strategy_id, actor:{ serverOwned:true, userId:job.user_id },
+        serverOwned:true, strategyScope:approved.strategy_scope, strategyOwnerUserId:Number(approved.owner_user_id || 0),
+        validatedReviewCase:{ ...approved, strategy_id:approved.strategy_id, scope:approved.strategy_scope,
+          owner_user_id:Number(approved.owner_user_id || 0), status:'approved' },
+        approved:true, review_status:'approved', period_review_version_id:approved.approved_version_id,
+        period_review_case_id:approved.id, update_kind:updateKind, content_text:updateText,
+        source_refs:[`period_review_case:${approved.id}`, `period_review_version:${approved.approved_version_id}`],
+      })
+    }
+    for (const conflict of (Array.isArray(content.strategy_conflicts) ? content.strategy_conflicts : [])) {
+      await recordStrategyMemoryConflictEvidence({
+        strategyId:approved.strategy_id, actor:{ serverOwned:true, userId:job.user_id },
+        serverOwned:true, strategyScope:approved.strategy_scope, strategyOwnerUserId:Number(approved.owner_user_id || 0),
+        validatedReviewCase:{ ...approved, strategy_id:approved.strategy_id, scope:approved.strategy_scope,
+          owner_user_id:Number(approved.owner_user_id || 0), status:'approved' },
+        approved:true, review_status:'approved', period_review_version_id:approved.approved_version_id,
+        period_review_case_id:approved.id, ...conflict,
+      })
+    }
     const now = beijingNow()
     await queryRun(`UPDATE period_review_derivation_jobs SET status = 'succeeded', last_error_code = NULL,
       lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?

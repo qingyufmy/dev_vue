@@ -189,15 +189,17 @@ describe('platform strategy experience boundary', () => {
     expect(result).not.toHaveProperty('paired')
   })
 
-  it('keeps platform experience separate from personal memory in runtime code', () => {
+  it('retires platform retrieval and uses the same complete library runtime contract', () => {
     const llm = readFileSync(new URL('../../server/routes/ai/llm.js', import.meta.url), 'utf8')
     const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
     const migration = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
-    expect(llm).toContain("config._market_only && typeof config._platformExperienceContext === 'string'")
-    expect(scheduler).toContain('retrievePlatformExperience')
+    expect(llm).toContain("typeof config._strategyMemoryLibraryContext === 'string'")
+    expect(llm).toContain('aiPayload.strategy_memory_library = {')
+    expect(scheduler).not.toContain('retrievePlatformExperience')
+    expect(scheduler).toContain('getStrategyMemoryLibraryForRuntime')
     expect(scheduler).toContain('const snapshotId = await persistInferenceSnapshotTx(run, {')
     expect(scheduler).toContain('return { signalId:insertedSignalId, snapshotId }')
-    expect(scheduler).toContain('attachPlatformExperienceSignal(memory.logId, signalId, snapshotId)')
+    expect(scheduler).toContain('updateStrategyMemoryInjectionLog(memory.logId, { signalId')
     expect(migration).toContain('077_platform_strategy_experience')
     expect(migration).toContain("ss.memory_mode = 'platform_only'")
   })

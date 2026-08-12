@@ -9,6 +9,9 @@ vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject:vi.fn() }))
 vi.mock('../../server/routes/ai/model-providers.js', () => ({ MODEL_PROVIDER_DEFAULTS:{}, modelProviderProtocol:() => 'chat' }))
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel:vi.fn() }))
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({ sha256:value => `hash:${String(value)}` }))
+vi.mock('../../server/routes/ai/strategy-memory-library.js', () => ({
+  getStrategyMemoryLibraryForRuntime:vi.fn(), createStrategyMemoryInjectionLog:vi.fn(),
+}))
 vi.mock('../../server/routes/ai/manual-trade-evidence.js', () => ({
   MANUAL_TRADE_SELECTION_MAX:1,
   getCurrentManualReviewAccount:vi.fn(), listEligibleManualTrades:vi.fn(), readManualTradeEvidence:vi.fn(),
@@ -84,22 +87,29 @@ describe('manual profitable trade counterfactual review contract', () => {
         outcome_path:{ status:'complete', metrics:{ exit_price:1.2 } },
       } } } }),
     }
-    const messages = __manualTradeReviewTest.counterfactualPrompt(reviewCase, [source])
+    const messages = __manualTradeReviewTest.counterfactualPrompt(reviewCase, [source], {
+      version_no:8, content_hash:'memory-hash', content_text:'等待结构确认',
+    })
     expect(messages[1].content).toContain('pre_entry_market_data')
     expect(messages[1].content).not.toContain('I knew it would profit')
     expect(messages[1].content).not.toContain('exit_price')
     expect(messages[1].content).not.toContain('"direction":"buy"')
     expect(messages[1].content).not.toContain('net_profit')
+    expect(messages[1].content).toContain('strategy_memory_library')
+    expect(messages[1].content).toContain('等待结构确认')
   })
 
   it('freezes stage A into the outcome prompt together with actual outcome evidence', () => {
     const messages = __manualTradeReviewTest.outcomeReviewPrompt({
       strategy_snapshot_json:'{}', user_thesis_text:'my thesis', evidence_status:'complete',
       evidence_json:JSON.stringify({ market_data:{ hash:'market-hash', trades:{ 'trade-a':{ outcome_path:{ metrics:{ exit_price:1.2 } } } } } }),
-    }, [source], validateCounterfactualAnalysis(counterfactual))
+    }, [source], validateCounterfactualAnalysis(counterfactual), {
+      version_no:8, content_hash:'memory-hash', content_text:'等待结构确认',
+    })
     expect(messages[1].content).toContain('frozen_counterfactual')
     expect(messages[1].content).toContain('exit_price')
     expect(messages[1].content).toContain('my thesis')
+    expect(messages[1].content).toContain('等待结构确认')
   })
 
   it('fails closed after an expired two-stage provider lease', async () => {

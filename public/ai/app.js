@@ -93,12 +93,9 @@ const state = {
   manualAnalysisPollGeneration: 0,
   manualAnalysisSubmitting: false,
   manualAnalysisCancelling: false,
-  memoryTierFilter: "all",
-  memoryItems: [],
-  memorySummaries: [],
-  memorySettings: {},
-  platformMemoryPolicies: [],
-  platformMemoryEvaluation: {},
+  strategyMemoryStrategies: [],
+  selectedStrategyMemoryId: null,
+  strategyMemoryDetail: null,
   selectedReviewId: null,
   // Manual trade strategy review is deliberately isolated from the periodic
   // review state above.  Its selector uses the Bridge cursor contract while
@@ -563,6 +560,14 @@ const REASON_MAP = {
   kimi_code_request_invalid: "Kimi Code 请求参数不兼容，请检查模型与思考设置",
   kimi_code_service_unavailable: "Kimi Code 服务暂时不可用，请稍后再试",
   model_token_limits_invalid: "最大输入和最大输出不能超过上下文窗口，请修改后重试",
+  strategy_memory_version_conflict: "记忆库已被其他操作更新，请刷新后重新编辑",
+  strategy_memory_capacity_exceeded: "记忆库已超过容量上限，请先压缩后再保存",
+  strategy_memory_compression_output_invalid: "模型返回的压缩结果无效，请重试或人工整理记忆库",
+  strategy_memory_compression_stale: "记忆库在压缩期间已更新，本次结果未应用，请重新压缩",
+  strategy_memory_library_unavailable: "统一记忆库暂不可用，本次分析已安全取消，请稍后重试",
+  strategy_memory_forbidden: "无权访问该策略的记忆库",
+  strategy_memory_platform_forbidden: "只有平台内容管理员可以修改平台策略记忆库",
+  strategy_memory_strategy_not_active: "该策略当前不可用，无法读取记忆库",
   model_context_window_invalid: "上下文窗口配置无效，请按模型文档修改为正整数",
   model_max_input_tokens_invalid: "最大输入配置无效，请按模型文档修改为正整数",
   model_max_output_tokens_invalid: "最大输出配置无效，请按模型文档修改为正整数",
@@ -1692,6 +1697,14 @@ const API_ERROR_MESSAGES = {
   no_platform_model: "平台尚未配置默认模型",
   bound_model_unavailable: "策略绑定的模型已停用或删除，请重新选择模型",
   model_token_limits_invalid: "最大输入和最大输出不能超过上下文窗口，请修改后重试",
+  strategy_memory_version_conflict: "记忆库已被其他操作更新，请刷新后重新编辑",
+  strategy_memory_capacity_exceeded: "记忆库已超过容量上限，请先压缩后再保存",
+  strategy_memory_compression_output_invalid: "模型返回的压缩结果无效，请重试或人工整理记忆库",
+  strategy_memory_compression_stale: "记忆库在压缩期间已更新，本次结果未应用，请重新压缩",
+  strategy_memory_library_unavailable: "统一记忆库暂不可用，本次分析已安全取消，请稍后重试",
+  strategy_memory_forbidden: "无权访问该策略的记忆库",
+  strategy_memory_platform_forbidden: "只有平台内容管理员可以修改平台策略记忆库",
+  strategy_memory_strategy_not_active: "该策略当前不可用，无法读取记忆库",
   model_context_window_invalid: "上下文窗口配置无效，请按模型文档修改为正整数",
   model_max_input_tokens_invalid: "最大输入配置无效，请按模型文档修改为正整数",
   model_max_output_tokens_invalid: "最大输出配置无效，请按模型文档修改为正整数",
@@ -2357,11 +2370,9 @@ function invalidateSession() {
   state.reviewCases = [];
   state.reviewSummary = { pending:0, issues:0, unread:0, pending_confirmation:0, generating:0, failed:0, total:0, daily_total:0, monthly_total:0, daily_attention:0, monthly_attention:0 };
   state.reviewSummaryInitialized = false;
-  state.memoryItems = [];
-  state.memorySummaries = [];
-  state.memorySettings = {};
-  state.platformMemoryPolicies = [];
-  state.platformMemoryEvaluation = {};
+  state.strategyMemoryStrategies = [];
+  state.selectedStrategyMemoryId = null;
+  state.strategyMemoryDetail = null;
   state.reviewMemoryView = "reviews";
   state.manualTradeReviewView = "selection";
   state.manualTradeReviewFilters = { pageSize:20, cursor:null, historySnapshotId:null, rangeStartUtcMsc:null, rangeEndUtcMsc:null, symbol:"", direction:"" };
@@ -5115,22 +5126,24 @@ async function loadReviewCaseStream({ reset = false } = {}) {
 async function loadReviewMemory() {
   const platformManager = canManagePlatformAiContent();
   const [, memoryData, profileData, featureData] = platformManager
-    ? await Promise.all([loadReviewCaseStream({ reset:true }), api("/api/ai/admin/platform-experience"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
-    : await Promise.all([loadReviewCaseStream({ reset:true }), api("/api/ai/memory"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
-  state.memoryItems = memoryData.items || [];
-  state.memorySummaries = memoryData.summaries || [];
-  state.memorySettings = memoryData.settings || {};
-  state.platformMemoryPolicies = memoryData.policies || [];
-  state.platformMemoryEvaluation = memoryData.evaluation || {};
+    ? await Promise.all([loadReviewCaseStream({ reset:true }), api("/api/ai/strategy-memories"), Promise.resolve({ profiles:[] }), Promise.resolve({ flags:{ user:{} } })])
+    : await Promise.all([loadReviewCaseStream({ reset:true }), api("/api/ai/strategy-memories"), api(`/api/ai/model-profiles${profileScopeQuery()}`), api("/api/ai/feature-flags")]);
+  state.strategyMemoryStrategies = memoryData.strategies || [];
+  const availableIds = new Set(state.strategyMemoryStrategies.map(item => Number(item.strategy_id)));
+  if (!availableIds.has(Number(state.selectedStrategyMemoryId))) state.selectedStrategyMemoryId = Number(state.strategyMemoryStrategies[0]?.strategy_id || 0) || null;
+  state.strategyMemoryDetail = state.selectedStrategyMemoryId
+    ? await api(`/api/ai/strategy-memories/${state.selectedStrategyMemoryId}`) : null;
+  setText("memoryActiveStat", state.strategyMemoryStrategies.length
+    ? `v${Number(state.strategyMemoryDetail?.library?.version_no || 0)}` : "--");
   await loadReviewSummary({ announce:false });
   $("sharedCredentialNotice")?.classList.toggle("hidden", platformManager || (profileData.profiles || []).some(item => item.is_default && item.has_api_key));
   const userFlags = featureData.flags?.user || {};
-  const featureInputs = { userReviewGenerationFlag:"review_generation_enabled", userExperienceMemoryFlag:"experience_memory_enabled", userMemoryCompressionFlag:"memory_compression_enabled", userRetrievalShadowFlag:"retrieval_shadow_enabled" };
+  const featureInputs = { userReviewGenerationFlag:"review_generation_enabled" };
   for (const [id,key] of Object.entries(featureInputs)) if ($(id)) {
     $(id).checked = userFlags[key] ?? true;
   }
   renderReviewCases();
-  renderCachedMemoryWorkspace();
+  renderStrategyMemoryLibrary();
 }
 
 // ===== Manual trade strategy review (platform-content managers only) =====
@@ -5614,14 +5627,7 @@ async function refreshManualTradeReviewTab() {
 async function refreshReviewMemoryTab() {
   if (state.reviewMemoryView === "manual-trades") return refreshManualTradeReviewTab();
   if (state.reviewMemoryView === "memories") {
-    const platformManager = canManagePlatformAiContent();
-    const data = await api(platformManager ? "/api/ai/admin/platform-experience" : "/api/ai/memory");
-    state.memoryItems = data.items || [];
-    state.memorySummaries = data.summaries || [];
-    state.memorySettings = data.settings || {};
-    state.platformMemoryPolicies = data.policies || [];
-    state.platformMemoryEvaluation = data.evaluation || {};
-    renderCachedMemoryWorkspace();
+    await loadReviewMemory();
     return;
   }
   await loadReviewCaseStream({ reset:true });
@@ -5645,16 +5651,9 @@ async function openManualReviewStrategyEditor(detail) {
   if (boundary) boundary.textContent = `复盘来源仅供只读参考：${source?.title || `平台策略 #${Number(detail?.strategy_id || 0)}`} · v${Number(source?.version || detail?.strategy_version || 1)}。编辑器不会自动填充或保存任何复盘建议。`;
 }
 
-function renderCachedMemoryWorkspace() {
-  if (canManagePlatformAiContent()) renderPlatformExperience(state.memoryItems, state.platformMemoryPolicies, state.platformMemoryEvaluation);
-  else renderMemoryItems(state.memoryItems, state.memorySettings, state.memorySummaries);
-}
-
 async function saveUserFeatureFlags() {
-  await api("/api/ai/feature-flags", { method:"PUT", body:{ review_generation_enabled:$("userReviewGenerationFlag").checked,
-    experience_memory_enabled:$("userExperienceMemoryFlag").checked, memory_compression_enabled:$("userMemoryCompressionFlag").checked,
-    retrieval_shadow_enabled:$("userRetrievalShadowFlag").checked } });
-  toast("个人复盘与记忆设置已保存", "success"); await loadReviewMemory();
+  await api("/api/ai/feature-flags", { method:"PUT", body:{ review_generation_enabled:$("userReviewGenerationFlag").checked } });
+  toast("个人复盘设置已保存", "success"); await loadReviewMemory();
 }
 
 function renderReviewCases() {
@@ -5716,8 +5715,8 @@ async function openReviewDetail(id) {
   const content = current?.content || {};
   const issueSummary = (content.trade_process_issues || []).map(item => userVisibleText(item.description || item.code, "交易流程存在未说明问题")).filter(Boolean);
   const isAdmin = state.user?.role === "admin";
-  const lessonHelp = isAdmin ? "每行一条；确认后先进入平台记忆候选区，发布后才用于绑定策略" : "每行一条，将用于生成个人记忆";
-  const approveLabel = isAdmin ? "内容准确并加入平台记忆候选" : "内容准确并加入记忆";
+  const lessonHelp = "每行一条；确认后的有效经验会进入对应策略记忆库";
+  const approveLabel = "内容准确并沉淀到策略记忆库";
   const netProfit = Number(outcome.net_profit);
   const profitClass = Number.isFinite(netProfit) ? netProfit > 0 ? "positive" : netProfit < 0 ? "negative" : "neutral" : "neutral";
   const confidence = Number(content.confidence);
@@ -5819,7 +5818,8 @@ function periodReviewProgressHtml(review) {
 function schedulePeriodReviewDetailPoll(review) {
   stopReviewDetailPolling();
   const generatingReview = review && ["queued", "leased"].includes(review.job_status) && !Number(review.current_version_id || 0);
-  const derivingMemory = review && ["queued", "leased"].includes(review.derivation_status);
+  const memoryStatus = review?.memory_application_status || review?.derivation_status || "";
+  const derivingMemory = review && ["queued", "applying", "compression_queued", "compression_running"].includes(memoryStatus);
   if (!generatingReview && !derivingMemory) return;
   const caseId = Number(review.id), timezoneOffset = review.timezone_offset_minutes != null
     && review.timezone_offset_minutes !== "" && Number.isInteger(Number(review.timezone_offset_minutes))
@@ -5833,11 +5833,11 @@ function schedulePeriodReviewDetailPoll(review) {
       const data = await api(`/api/ai/period-reviews/${caseId}/job-status`), job = { ...(data.job || {}), timezone_offset_minutes:timezoneOffset };
       const nextKey = `${job.job_status}:${job.progress_stage}:${job.attempt_count}:${job.next_attempt_at || ''}:${job.current_version_id || ''}`;
       if ((generatingReview && (job.current_version_id || ["failed", "succeeded"].includes(job.job_status)))
-        || (derivingMemory && !["queued", "leased"].includes(job.derivation_status))) {
+        || (derivingMemory && !["queued", "applying", "compression_queued", "compression_running"].includes(job.memory_application_status || job.derivation_status))) {
         await loadReviewMemory();
         await openPeriodReviewDetail(caseId, { silent:true });
         if (generatingReview && job.current_version_id) toast(`${job.period_type === 'monthly' ? '月' : '日'}复盘已生成，等待确认`, "success");
-        if (derivingMemory && job.derivation_status === "succeeded") toast("复盘经验已沉淀完成", "success");
+        if (derivingMemory && ["applied", "completed", "succeeded"].includes(job.memory_application_status || job.derivation_status)) toast("复盘经验已沉淀完成", "success");
         return;
       }
       const progress = $("periodReviewProgress");
@@ -5922,14 +5922,22 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     : `${bridgePlatformLabel()} 时间 ${review.period_key || '--'} 00:00–24:00 · 已结束周期`;
   const nextPeriodHint = isMonthly ? "本月结束后的交易将进入下月复盘" : "本周期结束后的平仓将进入下一份日复盘";
   const strategyProvenance = reviewStrategyProvenance(review);
-  const derivationLabels = { queued:"经验等待处理", leased:"正在沉淀经验", paused:"经验处理已暂停", failed:"经验处理失败", succeeded:"经验已沉淀" };
-  const derivationStatus = review.derivation_status || "";
-  const derivationClass = derivationStatus === "succeeded" ? "complete" : derivationStatus === "failed" ? "warning" : "";
+  const memoryStatus = review.memory_application_status || review.derivation_status || "";
+  const derivationLabels = { queued:"记忆等待写入", applying:"正在写入策略记忆库", applied:"经验已写入",
+    compression_queued:"经验已写入，等待整理", compression_running:"经验已写入，正在整理",
+    compression_failed_memory_preserved:"经验已保存，整理失败", completed:"经验已沉淀",
+    paused:"记忆写入已暂停", failed:"记忆写入失败", succeeded:"经验已沉淀" };
+  const derivationStatus = memoryStatus;
+  const derivationClass = ["applied", "completed", "succeeded"].includes(derivationStatus) ? "complete"
+    : ["failed", "compression_failed_memory_preserved"].includes(derivationStatus) ? "warning" : "";
   const derivationDetail = derivationStatus === "paused"
     ? "相关记忆功能当前已关闭，重新启用后会自动继续"
     : derivationStatus === "failed" ? periodReviewFailureText(review.derivation_error_code)
-      : derivationStatus === "succeeded" ? (state.user?.role === "admin" ? "已生成平台记忆候选" : "已写入个人记忆体系")
-        : "后台任务会自动完成，无需重复确认";
+      : derivationStatus === "compression_failed_memory_preserved" ? "复盘经验已经安全写入；仅后台整理失败，可重试且不会丢失经验"
+        : ["applied", "compression_queued", "compression_running"].includes(derivationStatus)
+          ? "复盘经验已经写入当前策略记忆库；后台整理不会回滚已保存内容"
+          : ["completed", "succeeded"].includes(derivationStatus) ? "已写入对应策略的当前记忆版本"
+            : "后台任务会自动完成，无需重复确认";
   const editableGroups = isMonthly
     ? [
       ["recurring_patterns", "重复出现的模式"], ["strengths", "稳定有效的做法"],
@@ -5954,7 +5962,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       <div><span>结论置信度</span><strong>${confidencePercent}%</strong><small>AI 对复盘结论的把握</small></div>
     </section>
     <div class="period-review-source ${review.evidence_status === 'complete' ? 'complete' : 'warning'}"><i data-lucide="${review.evidence_status === 'complete' ? 'shield-check' : 'triangle-alert'}" size="16"></i><div><strong>${sourceLabel}</strong><span>${escapeHtml(sourceDetail)}；${escapeHtml(nextPeriodHint)}</span></div></div>
-    ${review.status === 'approved' && derivationStatus ? `<div class="period-review-source ${derivationClass}"><i data-lucide="${derivationStatus === 'succeeded' ? 'brain-circuit' : derivationStatus === 'failed' ? 'circle-alert' : 'loader-circle'}" size="16"></i><div><strong>${escapeHtml(derivationLabels[derivationStatus] || derivationStatus)}</strong><span>${escapeHtml(derivationDetail)}</span></div>${derivationStatus === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry-derivation">重试经验处理</button>' : ''}</div>` : ''}
+    ${review.status === 'approved' && derivationStatus ? `<div class="period-review-source ${derivationClass}"><i data-lucide="${["applied","completed","succeeded"].includes(derivationStatus) ? 'brain-circuit' : ["failed","compression_failed_memory_preserved"].includes(derivationStatus) ? 'circle-alert' : 'loader-circle'}" size="16"></i><div><strong>${escapeHtml(derivationLabels[derivationStatus] || derivationStatus)}</strong><span>${escapeHtml(derivationDetail)}</span></div>${["failed","compression_failed_memory_preserved"].includes(derivationStatus) ? '<button class="btn btn-secondary btn-sm" data-review-action="retry-derivation">重试经验处理</button>' : ''}</div>` : ''}
     ${current ? `<section class="period-review-editor">
       <div class="period-review-section-heading"><div><span class="review-section-kicker">核心结论</span><h3>${isMonthly ? '本月策略表现' : '当日策略表现'}</h3></div><span>第 ${Number(current.version_no || 1)} 次修订</span></div>
       <label class="review-field"><span>复盘摘要</span><textarea data-period-review-field="period_summary" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(userVisibleText(content.period_summary, "暂无复盘摘要"))}</textarea></label>
@@ -5964,10 +5972,10 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     </section>` : `<div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="${review.status === 'failed' ? 'circle-alert' : 'loader-circle'}" size="20"></i></span><strong>${review.status === 'failed' ? '复盘生成失败' : '复盘正在准备'}</strong><span>${escapeHtml(review.status === 'failed' ? periodReviewFailureText(review.last_error_code) : periodReviewEvidenceReasonText(review.evidence_reason))}</span></div>`}
     ${current ? `<section class="period-review-evidence-grid">
       ${periodReviewListBlock(isMonthly ? '跨日模式' : '逐笔判断', assessments.map(item => `${isMonthly ? item.period_case_id : item.outcome_id} · ${periodDecisionLabels[item.decision_quality] || item.decision_quality}：${item.summary || ''}`), isMonthly ? 'calendar-range' : 'receipt-text')}
-      ${isMonthly ? periodReviewListBlock('长期记忆候选', (content.memory_candidates || []).map(item => item.lesson), 'brain-circuit') : periodReviewListBlock('缠论结构诊断', diagnostics.map(item => `${chanIssueLabels[item.issue_source] || item.issue_source}：${item.explanation || '无补充说明'}`), 'git-branch')}
+      ${isMonthly ? periodReviewListBlock('记忆库更新候选', (content.memory_candidates || []).map(item => item.lesson), 'brain-circuit') : periodReviewListBlock('缠论结构诊断', diagnostics.map(item => `${chanIssueLabels[item.issue_source] || item.issue_source}：${item.explanation || '无补充说明'}`), 'git-branch')}
     </section>
     <details class="quiet-disclosure review-evidence-disclosure"><summary><span><i data-lucide="database" size="15"></i><strong>证据来源与系统字段</strong><small>基础统计只读，避免修改后与真实成交数据不一致</small></span><i data-lucide="chevron-down" size="15"></i></summary><div class="quiet-disclosure-body"><div class="review-evidence"><div><span>账户 / 策略</span><strong>#${Number(review.trading_account_id || 0)} / #${Number(review.strategy_id || 0)}</strong></div><div><span>统计时区</span><strong>${escapeHtml(terminalTimezoneLabel(review.timezone_offset_minutes))}</strong></div><div><span>来源策略配置</span><strong>${escapeHtml(reviewStrategyVersions(review).length ? reviewStrategyVersions(review).map(value => `v${value}`).join('、') : '已记录')}</strong></div><div><span>来源数量</span><strong>${Number(review.source_count || 0)}</strong></div><div><span>生成时间</span><strong>${escapeHtml(formatReviewEventTime(current.created_at, review.timezone_offset_minutes))}</strong></div></div></div></details>
-    <footer class="review-actions"><div class="review-action-context"><i data-lucide="shield-check" size="17"></i><span><strong>确认后才会进入记忆体系</strong><small>${isMonthly ? '月复盘负责压缩跨日模式并产生长期记忆候选' : '日复盘先形成短期策略记忆，月底再统一压缩'}</small></span></div>${editable ? `<div class="review-action-buttons"><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">标记有问题</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}"><i data-lucide="check" size="15"></i>确认并沉淀经验</button></div>` : '<span class="status-chip success">内容已锁定</span>'}</footer>` : ''}`;
+    <footer class="review-actions"><div class="review-action-context"><i data-lucide="shield-check" size="17"></i><span><strong>确认后才会更新策略记忆库</strong><small>${isMonthly ? '月复盘会合并跨日模式并触发记忆库压缩' : '日复盘确认后将可靠经验加入对应策略记忆库'}</small></span></div>${editable ? `<div class="review-action-buttons"><button class="text-action" data-review-action="defer" data-version-id="${current.id}">稍后处理</button><button class="btn btn-secondary" data-review-action="needs_revision" data-version-id="${current.id}">标记有问题</button><button class="btn btn-secondary" data-review-action="save" data-version-id="${current.id}">保存修改</button><button class="btn btn-primary" data-review-action="approve" data-version-id="${current.id}"><i data-lucide="check" size="15"></i>确认并沉淀经验</button></div>` : '<span class="status-chip success">内容已锁定</span>'}</footer>` : ''}`;
   initIcons();
   if (current && Number(review.is_unread)) {
     api(`/api/ai/period-reviews/${id}/read`, { method:"POST", body:{ version_id:current.id } }).then(() => {
@@ -5984,184 +5992,6 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   schedulePeriodReviewDetailPoll(review);
   return review;
 }
-
-const memoryCategoryLabels = {
-  general:"通用原则", market_regime:"行情状态", entry_setup:"入场条件", chan_structure:"缠论结构", risk_execution:"风控执行",
-};
-
-const memoryContextFieldLabels = {
-  symbols:"品种", timeframes:"周期", directions:"方向", trend_direction:"方向", entry_methods:"入场方式",
-  market_regimes:"行情", volatility_buckets:"波动", chan_reliabilities:"缠论可信度", chan_trend_states:"缠论趋势",
-  chan_segment_directions:"线段方向", chan_divergences:"背驰", chan_center_states:"中枢",
-};
-
-function memoryContextValues(value) {
-  return [...new Set((Array.isArray(value) ? value : value == null || value === "" ? [] : [value]).map(item => String(item).trim()).filter(Boolean))];
-}
-
-function memoryContextValueLabel(field, value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  const labels = {
-    buy:"做多", long:"做多", bullish:"偏多", up:"向上", sell:"做空", short:"做空", bearish:"偏空", down:"向下", hold:"观望",
-    market:"市价", limit:"限价", stop:"止损挂单", stop_limit:"止损限价",
-    trend:"趋势", trending:"趋势", range:"震荡", ranging:"震荡", sideways:"横盘", breakout:"突破", reversal:"反转", mixed:"混合行情",
-    low:"低", medium:"中", normal:"正常", high:"高", reliable:"可靠", unreliable:"不可靠", none:"无", confirmed:"已确认", forming:"形成中",
-  };
-  if (field === "symbols" || field === "timeframes") return String(value).toUpperCase();
-  return labels[normalized] || userVisibleText(value, "未说明");
-}
-
-function memoryApplicabilityView(item = {}) {
-  const stored = parseJsonField(item.applicability_json, null);
-  const fallback = parseJsonField(item.conditions_json, parseJsonField(item.context_json, {})) || {};
-  const source = stored && typeof stored === "object" ? stored : fallback;
-  const applicable = source.applicable_when && typeof source.applicable_when === "object" ? source.applicable_when : source;
-  const avoid = parseJsonField(item.avoid_when_json, null) || (source.avoid_when && typeof source.avoid_when === "object" ? source.avoid_when : {});
-  const aliases = {
-    symbols:["symbols","symbol"], timeframes:["timeframes","timeframe"], directions:["directions","direction","trend_direction"],
-    entry_methods:["entry_methods","entry_method","allowed_entry_methods"], market_regimes:["market_regimes","market_regime"],
-    volatility_buckets:["volatility_buckets","volatility_bucket"], chan_reliabilities:["chan_reliabilities","chan_reliability"],
-    chan_trend_states:["chan_trend_states","chan_trend_state"], chan_segment_directions:["chan_segment_directions","chan_segment_direction"],
-    chan_divergences:["chan_divergences","chan_divergence"], chan_center_states:["chan_center_states","chan_center_state"],
-  };
-  const entries = (record) => Object.entries(aliases).flatMap(([field, keys]) => {
-    const value = keys.map(key => record?.[key]).find(candidate => candidate != null);
-    const values = memoryContextValues(value);
-    return values.length ? [{ field, label:memoryContextFieldLabels[field], values:values.map(itemValue => memoryContextValueLabel(field, itemValue)) }] : [];
-  });
-  return { universal:Boolean(applicable?.universal), applicable:entries(applicable), avoid:entries(avoid) };
-}
-
-function memoryContextHtml(item = {}) {
-  const category = memoryCategoryLabels[String(item.memory_category || "general").toLowerCase()] || "通用原则";
-  const context = memoryApplicabilityView(item);
-  const applicable = context.universal && !context.applicable.length
-    ? '<span class="memory-context-chip universal">适用于该策略的通用原则</span>'
-    : context.applicable.map(entry => `<span class="memory-context-chip"><strong>${escapeHtml(entry.label)}</strong>${escapeHtml(entry.values.join('、'))}</span>`).join("");
-  const avoid = context.avoid.map(entry => `<span class="memory-context-chip avoid"><strong>避开${escapeHtml(entry.label)}</strong>${escapeHtml(entry.values.join('、'))}</span>`).join("");
-  return `<div class="memory-context"><div class="memory-context-heading"><span class="memory-category-chip">${escapeHtml(category)}</span><span>${context.universal ? '通用规则' : '按当前分析环境精确匹配'}</span></div><div class="memory-context-chips">${applicable || '<span class="memory-context-chip pending">适用条件待补充</span>'}${avoid}</div></div>`;
-}
-
-function memoryTierTabsHtml({ includeSummary = false, shortCount = 0, summaryCount = 0, longCount = 0 } = {}) {
-  const tab = (value, label, count) => `<button type="button" role="tab" aria-selected="${state.memoryTierFilter === value}" class="${state.memoryTierFilter === value ? 'active' : ''}" data-memory-tier="${value}">${label}${count == null ? '' : ` ${Number(count)}`}</button>`;
-  return `<div class="memory-tier-tabs" role="tablist" aria-label="记忆层级筛选">${tab('all', '全部', null)}${tab('short', '短期记忆', shortCount)}${includeSummary ? tab('summary', '月度摘要', summaryCount) : ''}${tab('long', '长期记忆', longCount)}</div>`;
-}
-
-function renderMemoryItems(items, settings, summaries = []) {
-  const memoryEnabled = settings.enabled !== false;
-  if ($("memoryEnabled")) $("memoryEnabled").checked = memoryEnabled;
-  const shortItems = items.filter(item => item.memory_tier !== "long");
-  const longItems = items.filter(item => item.memory_tier === "long");
-  const activeShort = shortItems.filter(item => item.status === "active").length;
-  const activeLong = longItems.filter(item => item.status === "active").length;
-  const activeSummaries = summaries.filter(item => item.status === "active").length;
-  const longCandidates = longItems.filter(item => item.status === "candidate").length;
-  setText("memoryActiveStat", activeShort + activeLong + activeSummaries);
-  const host = $("memoryItemsList"); if (!host) return;
-  const statusLabels = { active:"正在使用", candidate:"待确认长期使用", duplicate_candidate:"待确认重复经验", revoked:"已撤销", stale:"待更新", expired:"已到期", revalidation:"待重新验证", archival:"已归档" };
-  const visibleItems = (state.memoryTierFilter === "all" ? items : items.filter(item => item.memory_tier === state.memoryTierFilter));
-  const archivedItems = visibleItems.filter(item => ["revoked","expired","archival"].includes(item.status));
-  const currentItems = visibleItems.filter(item => !["revoked","expired","archival"].includes(item.status));
-  const cards = currentItems.map(item => {
-    const isLong = item.memory_tier === "long";
-    const statusClass = item.status === "active" ? "success" : "warning";
-    const icon = isLong ? "book-marked" : item.status === "active" ? "zap" : "circle-help";
-    const content = isLong ? (item.summary_text || item.lesson_text) : item.lesson_text;
-    const scope = `策略 #${Number(item.strategy_id || 0)} · ${item.symbol || "通用品种"} · ${item.timeframe || "全周期"}`;
-    const lifecycle = isLong
-      ? `${Number(item.support_count || 0)} 次复盘支持 · 已匹配 ${Number(item.match_count || 0)} 次`
-      : `${item.expires_at ? `有效至 ${item.expires_at}` : "持续有效"} · 已匹配 ${Number(item.match_count || 0)} 次`;
-    const actions = isLong
-      ? `${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-memory-action="confirm-long" data-memory-id="${item.id}"><i data-lucide="check" size="14"></i>确认长期使用</button>` : ""}${!['revoked'].includes(item.status) ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke-long" data-memory-id="${item.id}">撤销</button>` : ""}`
-      : `${item.status === "duplicate_candidate" ? `<button class="btn btn-primary btn-sm" data-memory-action="activate" data-memory-id="${item.id}">确认使用</button>` : ""}${!['revoked','expired'].includes(item.status) ? `<button class="btn btn-secondary btn-sm" data-memory-action="revoke" data-memory-id="${item.id}">撤销</button>` : ""}`;
-    return `<article class="personal-memory-card memory-tier-${isLong ? 'long' : 'short'} is-${escapeHtml(item.status)}">
-      <header><span class="personal-memory-icon ${statusClass}"><i data-lucide="${icon}" size="17"></i></span><div><strong>${isLong ? "长期记忆" : "短期记忆"} #${Number(item.id)}</strong><span>${escapeHtml(scope)}</span></div><span class="status-chip ${statusClass}">${escapeHtml(statusLabels[item.status] || '状态待确认')}</span></header>
-      <div class="personal-memory-lesson"><span>${isLong ? "稳定经验" : "近期复盘经验"}</span><p>${escapeHtml(content || "暂无内容")}</p>${item.candidate_reason ? `<small>${escapeHtml(userVisibleText(item.candidate_reason, "等待进一步验证"))}</small>` : ""}</div>
-      ${memoryContextHtml(item)}
-      <footer><div class="personal-memory-meta"><span><i data-lucide="clock-3" size="13"></i>${escapeHtml(lifecycle)}</span><span><i data-lucide="braces" size="13"></i>约 ${Number(item.token_count || 0)} 个上下文词元</span><span><i data-lucide="git-branch" size="13"></i>来源配置 v${Number(item.strategy_version || 1)}</span></div><div class="personal-memory-actions">${actions}</div></footer>
-    </article>`;
-  }).join("");
-  const visibleSummaries = (state.memoryTierFilter === "all" || state.memoryTierFilter === "summary") ? summaries : [];
-  const archivedSummaries = visibleSummaries.filter(item => ["stale","revoked","archival"].includes(item.status));
-  const summaryCards = visibleSummaries.filter(item => !["stale","revoked","archival"].includes(item.status)).map(item => `<article class="personal-memory-card memory-tier-summary is-${escapeHtml(item.status)}">
-    <header><span class="personal-memory-icon ${item.status === 'active' ? 'success' : 'warning'}"><i data-lucide="file-stack" size="17"></i></span><div><strong>月度记忆摘要 · ${escapeHtml(item.period_key || `第 ${item.version_no} 次压缩`)}</strong><span>策略 #${Number(item.strategy_id || 0)} · 摘要 #${Number(item.id)}</span></div><span class="status-chip ${item.status === 'active' ? 'success' : 'warning'}">${item.status === 'active' ? '正在使用' : '状态待确认'}</span></header>
-    <div class="personal-memory-lesson"><span>分类压缩结论</span><p>${escapeHtml(item.summary_text || '暂无内容')}</p></div>${memoryContextHtml(item)}<footer><div class="personal-memory-meta"><span><i data-lucide="calendar-range" size="13"></i>${escapeHtml(item.period_key || '自动压缩')}</span><span><i data-lucide="braces" size="13"></i>约 ${Number(item.token_count || 0)} 个上下文词元</span></div></footer>
-  </article>`).join("");
-  const archived = [...archivedItems.map(item => ({ ...item, display_text:item.summary_text || item.lesson_text, display_type:item.memory_tier === 'long' ? '长期记忆' : '短期记忆' })),
-    ...archivedSummaries.map(item => ({ ...item, display_text:item.summary_text, display_type:'月度摘要' }))];
-  const archiveHtml = archived.length ? `<details class="personal-memory-archive"><summary><span><i data-lucide="archive" size="15"></i><strong>已失效与已撤销记录</strong><small>${archived.length} 条，仅用于追溯</small></span><i data-lucide="chevron-down" size="15"></i></summary><div>${archived.map(item => `<article class="personal-memory-archive-row"><div><strong>${escapeHtml(item.display_type)} #${Number(item.id)}</strong><span>${escapeHtml(statusLabels[item.status] || '已归档')}</span><p>${escapeHtml(item.display_text || '暂无内容')}</p></div></article>`).join('')}</div></details>` : '';
-  host.innerHTML = `<section class="personal-memory-section ${memoryEnabled ? "" : "is-disabled"}">
-    <header class="personal-memory-header"><div class="personal-memory-title"><span class="personal-memory-main-icon"><i data-lucide="brain-circuit" size="19"></i></span><div><span class="review-section-kicker">分层经验</span><h3>我的策略记忆</h3><p>短期、长期和月度摘要都绑定策略，并按当前品种、周期、方向、行情与缠论结构精确匹配。</p></div></div><div class="personal-memory-stats"><span><strong>${activeLong}</strong> 长期有效</span><span><strong>${activeShort}</strong> 短期有效</span><span><strong>${activeSummaries}</strong> 摘要有效</span><span><strong>${longCandidates}</strong> 待确认</span></div></header>
-    <div class="personal-memory-state ${memoryEnabled ? "is-on" : "is-off"}"><i data-lucide="${memoryEnabled ? 'shield-check' : 'shield-off'}" size="15"></i><span><strong>个人记忆${memoryEnabled ? '已启用' : '已关闭'}</strong> · 系统按当前分析环境精确匹配，不会因为策略正常升级而自动失效。</span></div>
-    ${memoryTierTabsHtml({ includeSummary:true, shortCount:shortItems.filter(item => !['revoked','expired','archival'].includes(item.status)).length, summaryCount:summaries.filter(item => !['stale','revoked','archival'].includes(item.status)).length, longCount:longItems.filter(item => !['revoked','expired','archival'].includes(item.status)).length })}
-    <div class="personal-memory-grid">${summaryCards}${cards}${!summaryCards && !cards ? '<div class="personal-memory-empty empty-state"><span class="review-empty-icon"><i data-lucide="brain" size="20"></i></span><strong>当前层级还没有可用记忆</strong><span>日复盘确认后形成短期记忆，月复盘确认后形成分类摘要与长期候选。</span></div>' : ''}</div>${archiveHtml}
-  </section>`;
-  initIcons();
-}
-
-function renderPlatformExperience(items = [], policies = [], evaluation = {}) {
-  const activeItems = items.filter(item => item.status === "active");
-  const candidateItems = items.filter(item => item.status === "candidate");
-  setText("memoryActiveStat", activeItems.length);
-
-  const policyHost = $("platformExperiencePolicies");
-  if (policyHost) {
-    const modeLabels = { off:"已关闭", shadow:"影子评估", active:"正式使用" };
-    policyHost.innerHTML = `<section class="platform-governance-card">
-      <header class="platform-governance-head"><div><span class="review-section-kicker">策略绑定</span><h3>平台记忆运行模式</h3><p>每条记忆只参与对应策略；影子评估只记录匹配，不注入正式推理。</p></div><div class="platform-memory-summary"><span><strong>${policies.filter(item => item.mode === "active").length}</strong> 正式使用</span><span><strong>${policies.filter(item => item.mode === "shadow").length}</strong> 影子评估</span></div></header>
-      <div class="platform-policy-list">${policies.length ? policies.map(policy => `<article class="platform-policy-row" data-platform-policy-strategy="${Number(policy.strategy_id)}">
-        <div class="platform-policy-name"><strong>${escapeHtml(policy.strategy_title || `策略 #${policy.strategy_id}`)}</strong><small>策略 #${Number(policy.strategy_id)} · 修订 ${Number(policy.policy_version || 1)} · ${escapeHtml(modeLabels[policy.mode] || "状态待确认")}</small></div>
-        <label><span>运行模式</span><select data-platform-policy-mode><option value="off" ${policy.mode === "off" ? "selected" : ""}>关闭</option><option value="shadow" ${policy.mode === "shadow" ? "selected" : ""}>影子评估</option><option value="active" ${policy.mode === "active" ? "selected" : ""}>正式使用</option></select></label>
-        <label><span>最多命中</span><input data-platform-policy-items type="number" min="1" max="10" value="${Number(policy.max_items || 5)}"></label>
-        <label><span>令牌预算</span><input data-platform-policy-budget type="number" min="100" max="1600" step="100" value="${Number(policy.runtime_token_budget || 800)}"></label>
-        <button class="btn btn-secondary btn-sm" data-platform-policy-save><i data-lucide="save" size="14"></i>保存</button>
-      </article>`).join("") : '<div class="empty-state"><strong>暂无平台策略</strong><span>创建平台策略后，可以在这里配置记忆运行模式。</span></div>'}</div>
-    </section>`;
-  }
-
-  const evaluationHost = $("platformExperienceEvaluation");
-  if (evaluationHost) {
-    const retrieval = evaluation.retrieval || {};
-    const ratioLabel = (hits, total) => {
-      const count = Number(total || 0);
-      return count > 0 ? `${Math.round(Number(hits || 0) / count * 100)}%` : "暂无检索";
-    };
-    const total = Number(retrieval.total || 0);
-    const hits = Number(retrieval.hits || 0);
-    const activeTotal = Number(retrieval.active_total || 0);
-    const activeHits = Number(retrieval.active_hits || 0);
-    const shadowTotal = Number(retrieval.shadow_total || 0);
-    const shadowHits = Number(retrieval.shadow_hits || 0);
-    evaluationHost.innerHTML = `<section class="platform-governance-card">
-      <header class="platform-governance-head"><div><span class="review-section-kicker">效果评估</span><h3>最近 ${Number(evaluation.window_days || 30)} 天</h3><p>命中率只衡量匹配效果，不代表收益提升。</p></div></header>
-      <div class="platform-evaluation-metrics"><div><span>检索总次数</span><strong>${total}</strong></div><div><span>命中次数</span><strong>${hits}</strong></div><div><span>综合命中率</span><strong>${ratioLabel(hits, total)}</strong></div></div>
-      <div class="platform-evaluation-breakdown"><span>正式使用 <strong>${activeHits} / ${activeTotal}</strong> · ${ratioLabel(activeHits, activeTotal)}</span><span>影子评估 <strong>${shadowHits} / ${shadowTotal}</strong> · ${ratioLabel(shadowHits, shadowTotal)}</span></div>
-      <div class="platform-strategy-evaluation">${(evaluation.strategies || []).slice(0, 8).map(row => `<div><span>${escapeHtml(row.strategy_title || `策略 #${row.strategy_id}`)}</span><strong>${Number(row.hits || 0)} / ${Number(row.retrievals || 0)}</strong></div>`).join("") || '<div class="empty-inline">尚无可评估的检索记录</div>'}</div>
-    </section>`;
-  }
-
-  const host = $("memoryItemsList");
-  if (!host) return;
-  const tierOf = item => item.memory_tier === "long" ? "long" : "short";
-  const visible = state.memoryTierFilter === "all" ? items : items.filter(item => tierOf(item) === state.memoryTierFilter);
-  const current = visible.filter(item => item.status !== "revoked");
-  const archived = visible.filter(item => item.status === "revoked");
-  const statusLabels = { candidate:"待发布", active:"已发布", revoked:"已撤销" };
-  const card = item => `<article class="platform-memory-card is-${escapeHtml(item.status)}" data-platform-memory-id="${Number(item.id)}">
-    <header><div><span class="memory-tier-mark ${tierOf(item)}">${tierOf(item) === "long" ? "长期" : "短期"}</span><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</strong></div><span class="status-chip ${item.status === "active" ? "success" : "warning"}">${escapeHtml(statusLabels[item.status] || "状态待确认")}</span></header>
-    <p>${escapeHtml(item.lesson_text || "暂无记忆内容")}</p>${memoryContextHtml(item)}
-    <footer><span>记忆 #${Number(item.id)} · 来源复盘修订 #${escapeHtml(item.period_review_version_id || item.review_version_id || "--")}${item.platform_version ? ` · 发布批次 ${Number(item.platform_version)}` : ""}</span><div>${item.status === "candidate" ? `<button class="btn btn-primary btn-sm" data-platform-experience-action="publish" data-platform-experience-id="${Number(item.id)}">发布</button>` : ""}${item.status === "active" ? `<button class="btn btn-secondary btn-sm" data-platform-experience-action="revoke" data-platform-experience-id="${Number(item.id)}">撤销</button>` : ""}</div></footer>
-  </article>`;
-  host.innerHTML = `<section class="platform-memory-library">
-    <header class="platform-governance-head"><div><span class="review-section-kicker">审核发布</span><h3>平台记忆库</h3><p>日复盘形成短期记忆，月复盘形成长期记忆；发布后才可被策略读取。</p></div><div class="platform-memory-summary"><span><strong>${candidateItems.length}</strong> 待发布</span><span><strong>${activeItems.length}</strong> 已发布</span></div></header>
-    ${memoryTierTabsHtml({ shortCount:items.filter(item => tierOf(item) === "short" && item.status !== "revoked").length, longCount:items.filter(item => tierOf(item) === "long" && item.status !== "revoked").length })}
-    <div class="platform-memory-grid">${current.map(card).join("") || '<div class="empty-state"><strong>当前层级暂无平台记忆</strong><span>确认平台策略复盘后，记忆会先进入待发布区。</span></div>'}</div>
-    ${archived.length ? `<details class="platform-memory-archive"><summary>已撤销归档 <span>${archived.length} 条</span></summary><div>${archived.map(item => `<article><div><strong>${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)} · 记忆 #${Number(item.id)}</strong><p>${escapeHtml(item.lesson_text || "暂无内容")}</p></div><button class="btn btn-danger-ghost btn-sm" data-platform-experience-action="delete" data-platform-experience-id="${Number(item.id)}">永久删除</button></article>`).join("")}</div></details>` : ""}
-  </section>`;
-  initIcons();
-}
-
-let _adminRiskLoadSequence = 0;
 
 function setTab(tabId, options = {}) {
   const legacySignalsTarget = tabId === "signals";
@@ -6278,6 +6108,55 @@ function setWorkspaceSubtab(group, target) {
     loadManualTradeReviewWorkspace().catch(error => toast(localizeReason(error.code || error.message), "error"));
   }
   initIcons();
+}
+
+function strategyMemoryStatusLabel(value) {
+  return ({ idle:"已保存", queued:"等待压缩", leased:"正在压缩", succeeded:"压缩完成", failed:"压缩失败" })[String(value || "idle")] || "状态待确认";
+}
+
+function strategyMemoryReasonLabel(value) {
+  return ({ manual_edit:"人工编辑", restore:"恢复历史版本", daily_review_append:"日复盘沉淀",
+    monthly_review_compression:"月复盘压缩", capacity_compression:"容量压缩", legacy_import:"旧记忆一次性迁移" })[String(value || "")] || "系统更新";
+}
+
+function renderStrategyMemoryLibrary() {
+  const host = $("memoryItemsList"); if (!host) return;
+  const strategies = state.strategyMemoryStrategies || [];
+  if (!strategies.length) {
+    host.innerHTML = '<div class="strategy-memory-empty empty-state"><span class="review-empty-icon"><i data-lucide="library" size="20"></i></span><strong>还没有可管理的策略</strong><span>创建策略后，系统会为它建立唯一的记忆库。</span></div>';
+    initIcons(); return;
+  }
+  const selectedId = Number(state.selectedStrategyMemoryId || strategies[0].strategy_id);
+  const selected = strategies.find(item => Number(item.strategy_id) === selectedId) || strategies[0];
+  const detail = state.strategyMemoryDetail || {};
+  const library = detail.library || selected.library || { version_no:0, content_text:"", char_count:0, capacity_chars:120000, pending_update_count:0, compression_status:"idle" };
+  const revisions = detail.revisions || [];
+  const conflicts = detail.conflicts || [];
+  const alerts = conflicts.filter(item => item.status === "attention_required");
+  const observing = conflicts.filter(item => item.status === "observing");
+  const usage = Math.min(100, Math.round(Number(library.char_count || 0) / Math.max(1, Number(library.capacity_chars || 120000)) * 100));
+  const options = strategies.map(item => `<option value="${Number(item.strategy_id)}" ${Number(item.strategy_id) === Number(selected.strategy_id) ? "selected" : ""}>${escapeHtml(item.title || `策略 #${item.strategy_id}`)} · ${item.strategy_scope === "platform" ? "平台" : "私有"}</option>`).join("");
+  const conflictRows = [...alerts, ...observing].map(item => `<article class="strategy-memory-conflict is-${escapeHtml(item.status)}">
+    <div><span class="status-chip ${item.status === 'attention_required' ? 'danger' : 'warning'}">${item.status === 'attention_required' ? '需要人工检查策略' : `观察中 ${Number(item.evidence_count || 0)}/${Number(item.alert_threshold || 3)}`}</span><strong>${escapeHtml(item.conflict_summary || "发现记忆与策略可能冲突")}</strong>${item.strategy_excerpt ? `<p>策略原文：${escapeHtml(item.strategy_excerpt)}</p>` : ""}${item.suggested_change ? `<p>建议核对：${escapeHtml(item.suggested_change)}</p>` : ""}</div>
+    <div class="strategy-memory-row-actions"><button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="dismiss">忽略</button><button class="btn btn-primary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="resolve">已处理</button></div>
+  </article>`).join("");
+  const revisionRows = revisions.slice(0, 20).map(item => `<li><div><strong>版本 ${Number(item.version_no)}</strong><span>${escapeHtml(strategyMemoryReasonLabel(item.change_reason))} · ${escapeHtml(formatTime(item.created_at))}</span></div>${Number(item.version_no) !== Number(library.version_no) ? `<button class="text-button" type="button" data-strategy-memory-restore="${Number(item.id)}">恢复此版本</button>` : '<span class="status-chip success">当前</span>'}</li>`).join("");
+  host.innerHTML = `<section class="strategy-memory-library">
+    <header class="strategy-memory-toolbar"><label><span>选择策略</span><select id="strategyMemorySelector">${options}</select></label><div class="strategy-memory-summary"><span><strong>v${Number(library.version_no || 0)}</strong> 当前版本</span><span><strong>${Number(library.char_count || 0).toLocaleString("zh-CN")}</strong> / ${Number(library.capacity_chars || 120000).toLocaleString("zh-CN")} 字</span><span class="status-chip ${library.compression_status === 'failed' ? 'danger' : library.compression_status === 'idle' ? 'success' : 'warning'}">${escapeHtml(strategyMemoryStatusLabel(library.compression_status))}</span></div></header>
+    <div class="strategy-memory-capacity" aria-label="记忆库容量已使用 ${usage}%"><span style="width:${usage}%"></span></div>
+    ${alerts.length ? `<div class="strategy-memory-alert" role="alert"><i data-lucide="triangle-alert" size="17"></i><div><strong>${alerts.length} 项策略冲突已达到提醒阈值</strong><span>系统只做提醒，不会自动修改策略。请核对下方证据后人工决定。</span></div></div>` : ""}
+    <label class="strategy-memory-editor"><span>完整记忆库（Markdown）</span><textarea id="strategyMemoryContent" rows="22" spellcheck="false" aria-describedby="strategyMemoryHelp">${escapeHtml(library.content_text || "")}</textarea><small id="strategyMemoryHelp">保存后成为该策略唯一的当前记忆版本，并在后续分析、日复盘和月复盘中完整传入。超出容量时不能保存；达到上限时系统会自动排队压缩。</small></label>
+    <div class="strategy-memory-actions"><button class="btn btn-secondary" type="button" data-strategy-memory-action="compress" ${library.compression_status === 'queued' || library.compression_status === 'leased' ? 'disabled' : ''}><i data-lucide="combine" size="15"></i>立即压缩</button><button class="btn btn-primary" type="button" data-strategy-memory-action="save"><i data-lucide="save" size="15"></i>保存新版本</button></div>
+    ${conflictRows ? `<section class="strategy-memory-conflicts"><header><div><h3>策略冲突提醒</h3><p>同一冲突必须在至少 ${Number(library.conflict_alert_threshold || 3)} 次不同且已确认的复盘中出现，才会要求人工检查策略。</p></div><span>${alerts.length} 项需处理 · ${observing.length} 项观察中</span></header>${conflictRows}</section>` : ""}
+    <details class="strategy-memory-revisions"><summary><span><i data-lucide="history" size="15"></i><strong>版本历史</strong><small>保存、复盘沉淀与压缩都会形成可恢复版本</small></span><i data-lucide="chevron-down" size="15"></i></summary><ol>${revisionRows || '<li class="strategy-memory-empty-row">尚无历史版本</li>'}</ol></details>
+  </section>`;
+  initIcons();
+  $("strategyMemorySelector")?.addEventListener("change", async event => {
+    state.selectedStrategyMemoryId = Number(event.target.value);
+    host.innerHTML = '<div class="workspace-skeleton"></div>';
+    try { state.strategyMemoryDetail = await api(`/api/ai/strategy-memories/${state.selectedStrategyMemoryId}`); renderStrategyMemoryLibrary(); }
+    catch (error) { toast(localizeReason(error.message), "error"); }
+  });
 }
 
 async function refreshTabData(tabId, options = {}) {
@@ -8668,13 +8547,13 @@ function applyRoleUI() {
     const platformPersonalControl = el.classList.contains('personal-memory-only');
     el.style.display = isAdmin || (platformManager && platformPersonalControl) ? 'none' : '';
   });
-  setText("memoryTabLabel", platformManager ? "平台记忆" : "策略记忆");
-  setText("memoryActiveLabel", platformManager ? "已发布记忆" : "有效记忆");
-  setText("memoryActiveHelp", platformManager ? "可用于平台策略" : "可用于后续分析");
-  setText("memorySectionTitle", platformManager ? "平台策略记忆" : "我的策略记忆");
+  setText("memoryTabLabel", "策略记忆库");
+  setText("memoryActiveLabel", "当前记忆版本");
+  setText("memoryActiveHelp", "完整传入分析与复盘");
+  setText("memorySectionTitle", "策略记忆库");
   setText("memorySectionDescription", platformManager
-    ? "来自观摩账户复盘的策略记忆先进入候选区，经发布后才会用于其绑定的平台策略。"
-    : "这里只保留你已经确认的经验，可以随时暂停或撤销。");
+    ? "每个可管理的平台策略只有一份完整记忆库；保存后直接用于分析、日复盘与月复盘。"
+    : "每个策略只有一份完整记忆库；保存后直接用于分析、日复盘与月复盘。");
   if ($("addPrivateStrategyBtn") && !$("addPrivateStrategyBtn").disabled) {
     $("addPrivateStrategyBtn").textContent = platformManager ? "新建平台策略" : "新建自定义策略";
   }
@@ -13357,10 +13236,6 @@ function bindEvents() {
       renderPositionProtectionChangeState();
     }
   });
-  $("memoryEnabled")?.addEventListener("change", async event => {
-    try { await api("/api/ai/memory/settings", { method:"PUT", body:{ enabled:event.target.checked, runtime_token_budget:800 } }); toast(event.target.checked ? "个人记忆已启用" : "个人记忆已关闭", "success"); }
-    catch (error) { event.target.checked = !event.target.checked; toast(error.message, "error"); }
-  });
   $("profileProvider")?.addEventListener("change", event => {
     const preset = PROVIDER_PRESETS[event.target.value]; if (!preset) return;
     $("profileBaseUrl").value = preset.url; if (preset.models?.[0]) $("profileModelName").value = preset.models[0];
@@ -13510,10 +13385,9 @@ function bindEvents() {
     const modelAction = event.target.closest("[data-model-action]");
     const reviewCase = event.target.closest("[data-review-id]");
     const reviewAction = event.target.closest("[data-review-action]");
-    const memoryAction = event.target.closest("[data-memory-action]");
-    const memoryTier = event.target.closest("[data-memory-tier]");
-    const platformExperienceAction = event.target.closest("[data-platform-experience-action]");
-    const platformPolicySave = event.target.closest("[data-platform-policy-save]");
+    const strategyMemoryAction = event.target.closest("[data-strategy-memory-action]");
+    const strategyMemoryRestore = event.target.closest("[data-strategy-memory-restore]");
+    const strategyMemoryConflict = event.target.closest("[data-strategy-memory-conflict]");
     const manualReviewAction = event.target.closest("[data-manual-review-action]");
     const riskSave = event.target.closest("[data-risk-save]");
     const killSwitch = event.target.closest("[data-kill-switch]");
@@ -13521,6 +13395,59 @@ function bindEvents() {
     const subscriptionAction = event.target.closest("[data-subscription-action]");
     const openWorkspaceTab = event.target.closest("[data-open-workspace-tab]");
     const positionManagementDetail = event.target.closest("[data-position-management-id]");
+
+    if (strategyMemoryAction) {
+      const strategyId = Number(state.selectedStrategyMemoryId || 0);
+      const library = state.strategyMemoryDetail?.library;
+      if (!strategyId || !library) return;
+      strategyMemoryAction.disabled = true;
+      try {
+        if (strategyMemoryAction.dataset.strategyMemoryAction === "save") {
+          const content = $("strategyMemoryContent")?.value ?? "";
+          const data = await api(`/api/ai/strategy-memories/${strategyId}`, { method:"PUT", body:{
+            content_text:content, expected_version_no:Number(library.version_no),
+            capacity_chars:Number(library.capacity_chars),
+            compression_target_ratio:Number(library.compression_target_ratio),
+            conflict_alert_threshold:Number(library.conflict_alert_threshold),
+          } });
+          toast(`记忆库已保存为版本 ${Number(data.library?.version_no || 0)}`, "success");
+        } else {
+          await api(`/api/ai/strategy-memories/${strategyId}/compress`, { method:"POST" });
+          toast("压缩任务已进入队列", "success");
+        }
+        state.strategyMemoryDetail = await api(`/api/ai/strategy-memories/${strategyId}`);
+        const overview = state.strategyMemoryStrategies.find(item => Number(item.strategy_id) === strategyId);
+        if (overview) overview.library = state.strategyMemoryDetail.library;
+        renderStrategyMemoryLibrary();
+      } catch (error) { toast(localizeReason(error.message), "error"); strategyMemoryAction.disabled = false; }
+      return;
+    }
+    if (strategyMemoryRestore) {
+      const strategyId = Number(state.selectedStrategyMemoryId || 0);
+      const revisionId = Number(strategyMemoryRestore.dataset.strategyMemoryRestore);
+      const library = state.strategyMemoryDetail?.library;
+      if (!strategyId || !revisionId || !library) return;
+      const confirmed = await showConfirm("恢复记忆库历史版本", "当前内容不会被删除，而是保留在版本历史中；恢复操作会创建一个新的当前版本。", { confirmText:"恢复为新版本" });
+      if (!confirmed) return;
+      try {
+        await api(`/api/ai/strategy-memories/${strategyId}/revisions/${revisionId}/restore`, { method:"POST", body:{ expected_version_no:Number(library.version_no) } });
+        toast("历史内容已恢复为新版本", "success");
+        state.strategyMemoryDetail = await api(`/api/ai/strategy-memories/${strategyId}`);
+        renderStrategyMemoryLibrary();
+      } catch (error) { toast(localizeReason(error.message), "error"); }
+      return;
+    }
+    if (strategyMemoryConflict) {
+      const conflictId = Number(strategyMemoryConflict.dataset.strategyMemoryConflict);
+      const action = strategyMemoryConflict.dataset.strategyMemoryConflictAction;
+      try {
+        await api(`/api/ai/strategy-memory-conflicts/${conflictId}/${action}`, { method:"POST", body:{} });
+        toast(action === "resolve" ? "冲突已标记为人工处理" : "冲突提醒已忽略", "success");
+        state.strategyMemoryDetail = await api(`/api/ai/strategy-memories/${Number(state.selectedStrategyMemoryId)}`);
+        renderStrategyMemoryLibrary();
+      } catch (error) { toast(localizeReason(error.message), "error"); }
+      return;
+    }
 
     if (editProtectionButton) {
       openPositionProtectionModal(editProtectionButton.dataset.editProtectionTicket);
@@ -13538,11 +13465,6 @@ function bindEvents() {
       return;
     }
 
-    if (memoryTier) {
-      state.memoryTierFilter = memoryTier.dataset.memoryTier || "all";
-      renderCachedMemoryWorkspace();
-      return;
-    }
 
     if (openWorkspaceTab) {
       setWorkspaceSubtab(openWorkspaceTab.dataset.openWorkspaceTab, openWorkspaceTab.dataset.openWorkspaceTarget);
@@ -13735,52 +13657,6 @@ function bindEvents() {
         await loadReviewMemory(); await openPeriodReviewDetail(caseId);
       } catch (error) { toast(error.message,"error"); }
       finally { reviewAction.disabled = false; }
-      return;
-    }
-    if (memoryAction) {
-      try {
-        const action = memoryAction.dataset.memoryAction;
-        const id = Number(memoryAction.dataset.memoryId);
-        const endpoint = action === "confirm-long" ? `/api/ai/memory/long/${id}/confirm`
-          : action === "revoke-long" ? `/api/ai/memory/long/${id}/revoke`
-            : `/api/ai/memory/${id}/${action}`;
-        memoryAction.disabled = true;
-        await api(endpoint, { method:"POST" });
-        toast(action === "confirm-long" ? "已加入长期记忆" : "记忆状态已更新", "success");
-        await loadReviewMemory();
-      }
-      catch (error) { toast(error.message,"error"); } return;
-    }
-    if (platformExperienceAction) {
-      try {
-        const itemId = Number(platformExperienceAction.dataset.platformExperienceId);
-        const action = platformExperienceAction.dataset.platformExperienceAction;
-        if (action === "delete") {
-          const confirmed = await showConfirm("永久删除已撤销记忆", `平台记忆 #${itemId} 将从归档中永久删除，且无法恢复。`, { confirmText:"永久删除", danger:true });
-          if (!confirmed) return;
-          await api(`/api/ai/admin/platform-experience/${itemId}`, { method:"DELETE" });
-          toast("已撤销记忆已永久删除", "success");
-        } else {
-          await api(`/api/ai/admin/platform-experience/${itemId}/${action}`, { method:"POST" });
-          toast(action === "publish" ? "平台记忆已发布" : "平台记忆已撤销", "success");
-        }
-        await loadReviewMemory();
-      } catch (error) { toast(error.message, "error"); }
-      return;
-    }
-    if (platformPolicySave) {
-      const row = platformPolicySave.closest("[data-platform-policy-strategy]");
-      try {
-        platformPolicySave.disabled = true;
-        await api(`/api/ai/admin/platform-experience/policies/${Number(row.dataset.platformPolicyStrategy)}`, { method:"PUT", body:{
-          mode:row.querySelector("[data-platform-policy-mode]").value,
-          max_items:Number(row.querySelector("[data-platform-policy-items]").value),
-          runtime_token_budget:Number(row.querySelector("[data-platform-policy-budget]").value),
-        } });
-        toast("平台记忆运行模式已保存", "success");
-        await loadReviewMemory();
-      } catch (error) { toast(error.message, "error"); }
-      finally { platformPolicySave.disabled = false; }
       return;
     }
     if (killSwitch) {
