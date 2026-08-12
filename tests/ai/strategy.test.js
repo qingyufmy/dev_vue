@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { attachAtrAnchor, buildChanTimeframeAlignment, buildStrategyContextFromTags, chanNeedsMoreHistory, loadPrivatePortfolioContext, resolveChanHistoryCount, shouldPersistChanAnchor, __strategyTest } from '../../server/routes/ai/strategy.js'
+import { attachAtrAnchor, buildStrategyContextFromTags, chanNeedsMoreHistory, loadPrivatePortfolioContext, resolveChanHistoryCount, shouldPersistChanAnchor, __strategyTest } from '../../server/routes/ai/strategy.js'
 
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
@@ -28,6 +28,7 @@ vi.mock('../../server/routes/ai/market-data.js', () => ({
         entry_segment_stable_id: rates[0]?.chan_entry_segment_stable_id ?? null,
         entry_segment_id: rates[0]?.chan_entry_segment_id ?? null,
       } : null,
+      raw_structure_marker: rates[0]?.chan_marker ?? null,
       structure_anchor: {
         requested_time_utc_msc: rates[0]?.chan_requested_anchor_time_utc_msc ?? null,
         matched: rates[0]?.chan_anchor_matched === true,
@@ -99,6 +100,19 @@ describe('buildStrategyContextFromTags', () => {
     expect(result.visualization_klines.H1).toHaveLength(1200)
     expect(result.visualization_klines.H1[0].time).toBe('t0')
     expect(JSON.stringify(result)).not.toContain('visualization_klines')
+  })
+
+  it('直接传递各周期原始缠论结构且不生成跨周期汇总字段', async () => {
+    const rates = Array.from({ length:800 }, (_, i) => ({
+      time:`raw-${i}`, open:'2000', high:'2010', low:'1990', close:'2005', tick_volume:'100',
+      chan_marker:'M5-raw-structure',
+    }))
+    const result = await buildStrategyContextFromTags(
+      1, 'XAUUSD', { balance:10000 }, [], '分析 {{MTF:M5:100}} {{USE_CHAN}}', 'M5', rates, 'manual'
+    )
+    expect(result.timeframes.M5.summary.chan).toMatchObject({ raw_structure_marker:'M5-raw-structure' })
+    expect(result.timeframes.M5.summary).not.toHaveProperty('chan_timeframe_alignment')
+    expect(result).not.toHaveProperty('chan_timeframe_alignment')
   })
 
   it('固定目标历史不足时不旁路重试或扩容', async () => {
@@ -330,69 +344,6 @@ describe('loadPrivatePortfolioContext', () => {
       ? Promise.resolve({ status:'success', positions:[] })
       : Promise.resolve({ status:'error', message:'offline' }))
     await expect(loadPrivatePortfolioContext(7)).rejects.toThrow('private_portfolio_context_unavailable')
-  })
-})
-
-describe('buildChanTimeframeAlignment', () => {
-  const frame = (reliability, direction, state, entryCandidates = [], capabilities = null) => ({
-    summary: { chan: {
-      reliability,
-      trend_state: { direction, state, phase: state.includes('trend') ? 'trend' : 'breakout', reversal_bias: 'none' },
-      entry_candidates: entryCandidates,
-      ...(capabilities ? { evidence_capabilities: capabilities } : {}),
-    } },
-  })
-
-  it('reports aligned higher and execution timeframes', () => {
-    const result = buildChanTimeframeAlignment({
-      H4: frame('high', 'up', 'uptrend'),
-      H1: frame('medium', 'up', 'upward_breakout'),
-      M15: frame('medium', 'up', 'structural_rise', [{ type: 'third_buy', side: 'buy', usable_for_entry: true }]),
-    }, 'H1')
-    expect(result).toMatchObject({
-      status: 'complete', higher_timeframe: 'H4', higher_timeframe_direction: 'up',
-      agreement: 'aligned_up', direction: 'up', conflict: false, execution_policy: 'evidence_only',
-    })
-    expect(result.entry_candidates[0]).toMatchObject({ timeframe: 'M15', alignment_with_higher: 'aligned' })
-  })
-
-  it('marks opposing reliable timeframes and entry evidence as conflicted', () => {
-    const result = buildChanTimeframeAlignment({
-      H4: frame('high', 'down', 'downtrend'),
-      M15: frame('medium', 'up', 'upward_breakout', [{ type: 'first_buy', side: 'buy', usable_for_entry: true }]),
-      M5: frame('low', 'up', 'structural_rise'),
-    }, 'M15', 'partial')
-    expect(result).toMatchObject({ status: 'partial', agreement: 'mixed', conflict: true })
-    expect(result.excluded_low_reliability_timeframes).toEqual(['M5'])
-    expect(result.entry_candidates[0].alignment_with_higher).toBe('conflict')
-  })
-
-  it('safely ignores legacy Chan payloads without trend state', () => {
-    const result = buildChanTimeframeAlignment({ H1: { summary: { chan: { reliability: 'high' } } } }, 'H1')
-    expect(result).toMatchObject({ status: 'unavailable', agreement: 'insufficient', execution_policy: 'evidence_only' })
-  })
-
-  it('does not promote an all-low-reliability structure to higher-timeframe bias', () => {
-    const result = buildChanTimeframeAlignment({
-      H4: frame('low', 'up', 'structural_rise', [{ type: 'first_buy', side: 'buy', usable_for_entry: false }]),
-    }, 'H4')
-    expect(result).toMatchObject({
-      higher_timeframe: 'H4', higher_timeframe_direction: 'neutral', higher_timeframe_phase: 'unknown',
-      agreement: 'insufficient', direction: 'neutral',
-    })
-    expect(result.entry_candidates).toEqual([])
-  })
-
-  it('requires explicit segment direction capability before using a timeframe for alignment', () => {
-    const result = buildChanTimeframeAlignment({
-      H4: frame('high', 'up', 'uptrend', [{ type:'first_buy', side:'buy', usable_for_entry:true }], {
-        data_complete:true, segment_direction_usable:false, center_structure_usable:false,
-        entry_structure_usable:false, divergence_usable:false,
-      }),
-    }, 'H4')
-    expect(result.usable_timeframes).toEqual([])
-    expect(result.higher_timeframe_direction).toBe('neutral')
-    expect(result.entry_candidates).toEqual([])
   })
 })
 

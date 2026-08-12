@@ -38,9 +38,11 @@
 
 每个候选包含方向、来源、结构参考价、失效价、稳定编号和 `usable_for_entry`。`reference_price` 是结构定位价格，不是可以直接提交的订单价格。系统通过 `bars_since_point` 标记新鲜度，超过 20 根 K 线后为 `stale`；结构可靠性低、时间定位不可靠或候选过期时，候选仍可供观察，但 `usable_for_entry=false`。候选不是订单信号，不能绕过 AI 综合判断和风控。
 
-### 跨周期映射 `chan_timeframe_alignment`
+### 跨周期原始结构合同 `strategy_context.timeframes[].summary.chan`
 
-多周期上下文输出高周期方向、各周期走势阶段、一致性和冲突状态。`aligned_up` / `aligned_down` 表示至少两个可靠周期方向一致，`mixed` 表示可靠周期冲突，`insufficient` 表示证据不足。低可靠性周期进入 `excluded_low_reliability_timeframes`；买卖点候选标记 `alignment_with_higher`。该汇总的 `execution_policy` 固定为 `evidence_only`。
+服务端不再生成通用的跨周期方向汇总或冲突裁决。策略上下文按策略配置的周期逐项传递每个周期的原始 `summary.chan`，模型必须按照当前具体策略正文定义的周期职责、方向关系和入场条件自行解释这些结构；不同周期可以承担不同职责，不假定所有周期必须同向。`evidence_capabilities`、`status`、`reliability`、`warnings` 和 `context_status` 仍是原始证据质量与数据完整性字段，不代表服务端替策略做出的方向结论。
+
+上下文仍输出 `required_timeframes`、`used_timeframes`、`missing_timeframes` 和 `context_status`；缺失周期时为 `partial`，只表示输入数据不完整。新构建的上下文和推理快照不包含 `chan_timeframe_alignment`。读取历史模型对比快照时，可以仅将旧版 `chan_timeframe_alignment` 作为“当时启用过缠论”的兼容标记，不重新生成、解释或驱动当前策略结论。
 
 ## 概述
 
@@ -70,9 +72,9 @@
   -> 获取可见 K 线与缠论历史 K 线
   -> calculateMarketData
   -> computeChan
-  -> strategy_context.timeframes[周期].summary.chan
-  -> maybeAiSignal
-  -> 有 {{USE_CHAN}} 时发送给模型，否则剥离 chan
+  -> strategy_context.timeframes[周期].summary.chan（逐周期原始结构）
+  -> maybeAiSignal 按当前策略正文传递给模型
+  -> 有 {{USE_CHAN}} 时发送原始 chan，否则剥离 chan
 ```
 
 提示词包含 `{{USE_CHAN}}` 时，每个相关周期按 v6 政策获取固定目标历史 K 线；没有完整线段或中枢时不再扩展到更长窗口。发送给模型的原始 K 线仍按 `MTF/ATF` 标签数量截取，普通指标也只使用该截取窗口。结构计算排除最后一根尚未收盘的 K 线。

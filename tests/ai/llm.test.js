@@ -1092,6 +1092,23 @@ describe('normalizeAiSignal', () => {
     expect(result.signal_type).toBe('buy')
   })
 
+  it('历史 mixed 缠论汇总字段不影响当前模型仓位档位', () => {
+    const parsed = {
+      signal_type:'buy', entry_method:'market', confidence:0.9, position_size_tier:'standard',
+      position_size_reason:'趋势结构支持标准仓', position_action:'open', pending_action:'none',
+      pending_action_reason:'', management_direction:'none', stop_loss_price:1990, take_profit_1_price:2010,
+    }
+    const result = normalizeAiSignal(parsed, baseConfig, {
+      ...baseMarket,
+      strategy_context:{
+        context_status:'complete', missing_timeframes:[],
+        chan_timeframe_alignment:{ agreement:'mixed', conflict:true },
+      },
+    })
+    expect(result.position_size_tier).toBe('standard')
+    expect(result.position_size_factor).toBe(1)
+  })
+
   it('风险等级不再参与信号降级', () => {
     const highRiskConfig = { ...baseConfig, risk_level: 'high' }
     const parsed = { signal_type: 'buy', confidence: 0.3, recommended_volume: 0.03,
@@ -1620,7 +1637,11 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).toContain('缠论背驰使用规则')
     expect(body.messages[0].content).toContain('forming_divergence')
     expect(body.messages[0].content).toContain('entry_candidates')
-    expect(body.messages[0].content).toContain('chan_timeframe_alignment')
+    expect(body.messages[0].content).toContain('按当前具体策略正文定义的周期职责')
+    expect(body.messages[0].content).toContain('不同周期可以承担不同职责')
+    expect(body.messages[0].content).not.toContain('chan_timeframe_alignment')
+    expect(body.messages[0].content).not.toContain('agreement=mixed')
+    expect(body.messages[0].content).not.toContain('alignment_with_higher=conflict')
     expect(body.messages[0].content).toContain('连续三条已确认线段')
     expect(body.messages[0].content).toContain('候选线段、单笔重叠和未确认结构不得称为中枢')
     expect(body.messages[0].content).toContain('bi_center_count')
