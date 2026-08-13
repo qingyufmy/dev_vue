@@ -50,6 +50,7 @@ describe('review holding market path', () => {
     ]
     const result = await buildReviewMarketPath({ userId: 7, symbol: 'XAUUSD', signal: { signal_type: 'buy_limit', timeframe: 'M5' },
       snapshot: { klines: { M5: [] } }, deals,
+      chanRequirement:{ status:'enabled', source:'test_frozen_enabled', timeframes:['M5'], window_policy_version:'chan_window_v6' },
       fetchRates: async () => ({ status: 'success', rates: [...series, { ...series.at(-1), time_utc_msc: series.at(-1).time_utc_msc + 300000 }], market_meta: { timezone_offset_minutes: 180, clock_status: 'calibrated' } }),
     })
     expect(result.primary_timeframe).toBe('M5')
@@ -68,6 +69,7 @@ describe('review holding market path', () => {
     let requestedWindow = null
     const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD',
       signal:{ signal_type:'buy_limit', timeframe:'M5' }, snapshot:{ klines:{ M5:series.slice(-60) } }, deals,
+      chanRequirement:{ status:'enabled', source:'test_frozen_enabled', timeframes:['M5'], window_policy_version:'chan_window_v6' },
       timezoneOffsetMinutes:180,
       loadWindow:async (_userId, _symbol, timeframe, startUtcMs, endUtcMs, options) => {
         requestedWindow = { timeframe, startUtcMs, endUtcMs, options }
@@ -88,6 +90,7 @@ describe('review holding market path', () => {
     ]
     const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD', signal:{ timeframe:'M5', signal_type:'hold' },
       snapshot:{ klines:{ M5:[] } }, deals, asOfUtcMsc:entryTime, includeHoldingMetrics:false,
+      chanRequirement:{ status:'disabled', source:'test_frozen_disabled', timeframes:[] },
       fetchRates:async () => ({ status:'success', rates:[...series, { ...series.at(-1), time_utc_msc:series.at(-1).time_utc_msc + 300000 }],
         market_meta:{ timezone_offset_minutes:0, clock_status:'verified' } }),
     })
@@ -95,5 +98,20 @@ describe('review holding market path', () => {
     expect(result.metrics).toBeNull()
     expect(result.timeframes.M5.candles.length).toBeGreaterThan(20)
     expect(result.timeframes.M5.candles.every(candle => candle.time_utc_msc + 300000 <= entryTime)).toBe(true)
+  })
+
+  it('does not compute or emit Chan evidence for a frozen disabled requirement', async () => {
+    const series = rates(120)
+    const deals = [
+      { entry_type:0, volume:1, price:4000, raw_json:JSON.stringify({ time_utc_msc:series[90].time_utc_msc }) },
+      { entry_type:1, volume:1, price:4002, raw_json:JSON.stringify({ time_utc_msc:series[105].time_utc_msc }) },
+    ]
+    const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD', signal:{ timeframe:'M5', signal_type:'buy' },
+      snapshot:{ klines:{ M5:[] } }, deals,
+      chanRequirement:{ status:'disabled', source:'explicit_frozen_disabled', timeframes:[] },
+      fetchRates:async () => ({ status:'success', rates:[...series, { ...series.at(-1), time_utc_msc:series.at(-1).time_utc_msc + 300000 }],
+        market_meta:{ timezone_offset_minutes:180, clock_status:'calibrated' } }),
+    })
+    expect(result.timeframes.M5).not.toHaveProperty('chan')
   })
 })

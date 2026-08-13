@@ -55,6 +55,17 @@ describe('manual trade review frontend contract', () => {
     expect(pager).toContain('!state.manualTradeReviewHasMore')
   })
 
+  it('shows the explicit MT4 terminal-visible history boundary instead of a generic execution error', () => {
+    const rendering = block('function renderManualTradeReviewTrades', 'function renderManualTradeReviewPager')
+    expect(app).toContain('manual_trade_review_mt4_visible_history_incomplete')
+    expect(app).toContain('manual_trade_review_mt4_visible_history_unknown')
+    expect(app).toContain('history_cursor_range_incomplete')
+    expect(rendering).toContain('manualTradeReviewHistorySourceLimited')
+    expect(rendering).toContain('账户历史')
+    expect(rendering).toContain('全部历史')
+    expect(rendering).toContain('不会宣称券商全量历史')
+  })
+
   it('keeps review confirmation separate and removes experience candidate creation', () => {
     const create = block('async function createManualTradeReviewTask', 'function manualTradeReviewCaseStatus')
     expect(create).not.toContain('experience-candidates')
@@ -64,7 +75,7 @@ describe('manual trade review frontend contract', () => {
     expect(app).toContain('未写入经验或策略')
     expect(app).toContain('manual-trade-review-v2')
     expect(app).toContain('不会自动填充或保存')
-    const strategyEditor = block('async function openManualReviewStrategyEditor', 'function renderCachedMemoryWorkspace')
+    const strategyEditor = block('async function openManualReviewStrategyEditor', 'async function saveUserFeatureFlags')
     expect(strategyEditor).toContain('await loadStrategyCatalog()')
     expect(strategyEditor).toContain('Number(item.id) === strategyId')
     expect(strategyEditor).toContain('openStrategyEditor(strategy)')
@@ -72,7 +83,8 @@ describe('manual trade review frontend contract', () => {
   })
 
   it('ships a cache key and mobile controls with a 44px touch target', () => {
-    expect(html).toContain('20260812historypref2')
+    expect(html).toContain('20260812memory4')
+    expect(html).toContain('manualmt4history1')
     expect(css).toContain('.manual-review-trade-row')
     expect(responsive).toContain('.manual-review-filter-bar .btn')
     expect(responsive).toContain('min-height: 44px')

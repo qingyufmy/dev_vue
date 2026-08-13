@@ -222,6 +222,8 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
   const ordered = mergeRates([], normalized, CACHE_LIMIT)
   const suspicious = []
   const expectedClosures = []
+  const continuityReasons = new Set()
+  let unknownSessionGapCount = 0
   for (let index = 1; index < normalized.length; index++) {
     if (Number(normalized[index - 1].time_utc_msc) === Number(normalized[index].time_utc_msc)) {
       suspicious.push({
@@ -243,16 +245,34 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
     const previousDate = brokerDate(previous)
     const currentDate = brokerDate(current)
     const crossesBrokerDate = previousDate && currentDate && previousDate !== currentDate
-    // Without a broker-session calendar, only a bounded rollover gap or a
-    // weekend is safe to classify as an expected closure. A long weekday gap
-    // may be missing data and must fail Chan reliability closed.
+    const strictSessionPolicy = options.strictSessionPolicy === true
+    // The strict path accepts only a closure returned by the versioned session
+    // classifier.  The compatibility path is retained for old callers that
+    // have not supplied clock/session metadata yet; production market reads
+    // pass strictSessionPolicy with the terminal clock evidence.
     const scheduledDailyClosure = crossesBrokerDate
       && gapMs >= 30 * 60 * 1000 && gapMs <= MAX_EXPECTED_DAILY_CLOSURE_MS
     const calendarClosure = classifyMarketClosure(previousUtcMs, currentUtcMs, timeframe, {
       intervalMs,
       standardSymbol:options.standardSymbol || options.symbol || '',
+      strictSessionPolicy,
+      timezoneOffsetMinutes:options.timezoneOffsetMinutes ?? options.timezone_offset_minutes,
+      sessionTimezone:options.sessionTimezone || options.session_timezone,
+      clockStatus:options.clockStatus || options.clock_status,
+      policyVersion:options.policyVersion || options.marketSessionPolicyVersion,
     })
-    const expectedClosure = Boolean(calendarClosure) || scheduledDailyClosure || crossesWeekendUtc(previousUtcMs, currentUtcMs)
+    if (strictSessionPolicy && (calendarClosure?.classification === 'unknown_session' || calendarClosure?.known === false)) {
+      unknownSessionGapCount += 1
+      continuityReasons.add(calendarClosure.reason || 'market_session_policy_unavailable')
+    } else if (strictSessionPolicy && !calendarClosure && scheduledDailyClosure) {
+      // The versioned calendar deliberately does not guess broker-specific
+      // daily maintenance. Keep the gap fail-closed, but expose why it was
+      // not silently treated as an ordinary internal hole.
+      continuityReasons.add('daily_session_policy_missing')
+    }
+    const expectedClosure = strictSessionPolicy
+      ? Boolean(calendarClosure?.known === true && ['weekend_closure', 'holiday_closure'].includes(calendarClosure.classification))
+      : Boolean(calendarClosure?.known === true) || scheduledDailyClosure || crossesWeekendUtc(previousUtcMs, currentUtcMs)
     const detail = {
       from_utc_msc: previousUtcMs,
       to_utc_msc: currentUtcMs,
@@ -266,12 +286,21 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
       reason:calendarClosure?.reason || (scheduledDailyClosure ? 'daily_rollover' : 'weekend'),
       calendar_version:calendarClosure?.calendar_version || MARKET_SESSION_CALENDAR_VERSION,
     })
-    else suspicious.push(detail)
+    else suspicious.push({ ...detail,
+      ...(continuityReasons.size ? { reason: [...continuityReasons][0] } : {}),
+    })
   }
+  const continuityStatus = continuityReasons.size
+    ? (unknownSessionGapCount > 0 ? 'unknown_session' : 'policy_missing')
+    : 'reliable'
   return {
     status: suspicious.length ? 'suspicious_gap' : 'ok',
     suspicious_gaps: suspicious,
     expected_closures: expectedClosures,
+    continuity_status:continuityStatus,
+    continuity_reason:[...continuityReasons][0] || null,
+    continuity_reasons:[...continuityReasons],
+    unknown_session_gap_count:unknownSessionGapCount,
   }
 }
 
@@ -456,7 +485,12 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         const sourceId = ensured.sourceId
         const written = await writeClosedWindowBestEffort(sourceId, brokerSymbol, timeframe, closedRates)
         const writeFailures = [...ensured.failures, ...written.failures]
-        const rangeIntegrity = inspectRateContinuity(closedRates, timeframe, { standardSymbol:stripBrokerSuffix(symbol) })
+        const rangeIntegrity = inspectRateContinuity(closedRates, timeframe, {
+          standardSymbol:stripBrokerSuffix(symbol), strictSessionPolicy:true,
+          timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+          sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
+          clockStatus:effectiveClock.clock_status,
+        })
         const rangeGapUnresolved = rangeIntegrity.status === 'suspicious_gap'
         return { ...response, rates:closedRates, market_meta:{
           source:'platform_admin_bridge_range', source_user_id:platformUserId, source_id:sourceId,
@@ -471,9 +505,13 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_internal_gap_detected:rangeGapUnresolved,
           cache_internal_gap_unresolved:rangeGapUnresolved,
           cache_internal_gap_details:rangeGapUnresolved ? rangeIntegrity.suspicious_gaps.slice(0, 3) : [],
-          continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
-          expected_closures:rangeIntegrity.expected_closures.slice(0, 8),
-          range_start_utc_msc:rangeStartUtcMs, range_end_utc_msc:rangeEndUtcMs,
+           continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
+           expected_closures:rangeIntegrity.expected_closures.slice(0, 8),
+           continuity_status:rangeIntegrity.continuity_status,
+           continuity_reason:rangeIntegrity.continuity_reason,
+           continuity_reasons:rangeIntegrity.continuity_reasons,
+           unknown_session_gap_count:rangeIntegrity.unknown_session_gap_count,
+           range_start_utc_msc:rangeStartUtcMs, range_end_utc_msc:rangeEndUtcMs,
         } }
       }
       if (response?.status && response.status !== 'success') return response
@@ -500,7 +538,11 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
       }
       let closedRates = split.closedRates
-      const cachedIntegrity = inspectRateContinuity(cachedResult.rates, timeframe, { standardSymbol })
+      const cachedIntegrity = inspectRateContinuity(cachedResult.rates, timeframe, {
+        standardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+        sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
+        clockStatus:effectiveClock.clock_status,
+      })
       const effectiveIdentity = sourceIdentity(platformUserId, effectiveClock)
       let sourceIdentityChanged = Boolean(source.id && source.sourceKey && source.sourceKey !== effectiveIdentity.sourceKey)
       const boundaryGapDetected = probeOnly && !ratesJoinAtCacheBoundary(cachedResult.rates, closedRates)
@@ -526,7 +568,11 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         }
         closedRates = split.closedRates
       }
-      const freshIntegrity = inspectRateContinuity(closedRates, timeframe, { standardSymbol })
+      const freshIntegrity = inspectRateContinuity(closedRates, timeframe, {
+        standardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+        sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
+        clockStatus:effectiveClock.clock_status,
+      })
       const internalGapDetected = (!sourceIdentityChanged && cachedIntegrity.status === 'suspicious_gap') || freshIntegrity.status === 'suspicious_gap'
       const cachedGapStillStored = !windowRefillNeeded && cachedIntegrity.status === 'suspicious_gap'
       const internalGapUnresolved = freshIntegrity.status === 'suspicious_gap' || cachedGapStillStored
@@ -565,9 +611,13 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_internal_gap_refill_attempted: internalGapRefillAttempted,
           cache_internal_gap_unresolved: internalGapUnresolved,
           cache_internal_gap_details: internalGapUnresolved ? unresolvedGapDetails.slice(0, 3) : [],
-          continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
-          expected_closures:freshIntegrity.expected_closures.slice(0, 8),
-          last_bar_closed: split.lastBarClosed,
+           continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
+           expected_closures:freshIntegrity.expected_closures.slice(0, 8),
+           continuity_status:freshIntegrity.continuity_status,
+           continuity_reason:freshIntegrity.continuity_reason,
+           continuity_reasons:freshIntegrity.continuity_reasons,
+           unknown_session_gap_count:freshIntegrity.unknown_session_gap_count,
+           last_bar_closed: split.lastBarClosed,
           live_candle_cached: false,
           chan_structure_anchor_utc_msc:Number(effectiveStructureAnchor?.anchor_time_utc_msc) || null,
           chan_last_confirmed_segment_utc_msc:Number(effectiveStructureAnchor?.last_confirmed_segment_time_utc_msc) || null,
@@ -618,7 +668,11 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   const initialFallbackIdentity = sourceIdentity(requestUserId, effectiveFallbackClock)
   let fallbackIdentityChanged = Boolean(existingFallbackSource.id && existingFallbackSource.sourceKey
     && existingFallbackSource.sourceKey !== initialFallbackIdentity.sourceKey)
-  const fallbackCachedIntegrity = inspectRateContinuity(fallbackCached.rates, timeframe, { standardSymbol:fallbackStandardSymbol })
+  const fallbackCachedIntegrity = inspectRateContinuity(fallbackCached.rates, timeframe, {
+    standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:fallbackOffset,
+    sessionTimezone:effectiveFallbackClock.session_timezone || effectiveFallbackClock.timezone_name || effectiveFallbackClock.broker_timezone,
+    clockStatus:effectiveFallbackClock.clock_status,
+  })
   const fallbackBoundaryGap = fallbackProbeOnly && !ratesJoinAtCacheBoundary(fallbackCached.rates, fallbackSplit.closedRates)
   const fallbackInternalRefill = fallbackProbeOnly && shouldAttemptInternalGapRefill(
     existingFallbackSource.id, fallbackStandardSymbol, timeframe, fallbackCachedIntegrity)
@@ -638,7 +692,11 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     fallbackOffset = effectiveFallbackClock.timezone_offset_minutes ?? null
     fallbackSplit = splitRatesByClosure(fallback.rates, timeframe, fallbackOffset)
   }
-  const fallbackIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe, { standardSymbol:fallbackStandardSymbol })
+  const fallbackIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe, {
+    standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:fallbackOffset,
+    sessionTimezone:effectiveFallbackClock.session_timezone || effectiveFallbackClock.timezone_name || effectiveFallbackClock.broker_timezone,
+    clockStatus:effectiveFallbackClock.clock_status,
+  })
   const fallbackCachedGapStillStored = !fallbackReviewRange && !fallbackRefillNeeded
     && fallbackCachedIntegrity.status === 'suspicious_gap'
   const fallbackGapUnresolved = fallbackIntegrity.status === 'suspicious_gap' || fallbackCachedGapStillStored
@@ -680,6 +738,10 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     cache_internal_gap_details:fallbackGapUnresolved ? fallbackGapDetails.slice(0, 3) : [],
     continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
     expected_closures:fallbackIntegrity.expected_closures.slice(0, 8),
+    continuity_status:fallbackIntegrity.continuity_status,
+    continuity_reason:fallbackIntegrity.continuity_reason,
+    continuity_reasons:fallbackIntegrity.continuity_reasons,
+    unknown_session_gap_count:fallbackIntegrity.unknown_session_gap_count,
     chan_structure_anchor_utc_msc:Number(fallbackStructureAnchor?.anchor_time_utc_msc) || null,
     chan_last_confirmed_segment_utc_msc:Number(fallbackStructureAnchor?.last_confirmed_segment_time_utc_msc) || null,
     chan_structure_anchor_core_stable_id:fallbackStructureAnchor?.bootstrap_core_stable_id || null,

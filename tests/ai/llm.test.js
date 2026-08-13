@@ -1,15 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { requestJsonObject, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, configuredModelMaxTokens, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
+const providerCapabilitiesMock = vi.hoisted(() => ({
+  resolveModelProviderCapabilities:vi.fn(async () => ({
+    supports_stream:false, supports_request_id:false,
+    token_limits_status:'confirmed', token_limits_source:'manual_confirmed',
+    context_window_tokens:1_048_576, max_input_tokens:1_048_576,
+    max_output_tokens:393_216, context_limit_semantics:'shared_context',
+  })),
+}))
+vi.mock('../../server/routes/ai/model-provider-capabilities.js', () => providerCapabilitiesMock)
+import { requestJsonObject, resolveConfirmedRequestMaxTokens, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
 import { compactRates, DEFAULT_PROMPT } from '../../server/routes/ai/utils.js'
 import { POSITION_MANAGEMENT_CONTRACT_VERSION } from '../../server/routes/ai/position-management.js'
 
 describe('model output budgets', () => {
-  it('uses the configured model profile value for automated and manual inference', () => {
-    expect(configuredModelMaxTokens({ _usage:'auto_platform', max_tokens:30000 })).toBe(30000)
-    expect(configuredModelMaxTokens({ _usage:'auto_private', max_tokens:150000 })).toBe(150000)
-    expect(configuredModelMaxTokens({ _usage:'manual', max_tokens:30000 })).toBe(30000)
-    expect(configuredModelMaxTokens({ _usage:'auto_platform' })).toBe(2000)
+  it('does not expose a profile max_tokens runtime helper', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/llm.js', import.meta.url), 'utf8')
+    expect(source).not.toContain('configuredModelMaxTokens')
+  })
+
+  it('recomputes shared-context room for both initial and repair messages', () => {
+    const budget = { tokenLimitsStatus:'confirmed', maxInputTokens:1000,
+      contextWindowTokens:100, providerOutputCap:80, contextLimitSemantics:'shared_context' }
+    const initial = [{ role:'user', content:'a'.repeat(32) }]
+    const repair = [...initial, { role:'user', content:'b'.repeat(160) }]
+    expect(resolveConfirmedRequestMaxTokens(initial, 80, budget)).toBe(80)
+    expect(resolveConfirmedRequestMaxTokens(repair, 80, budget)).toBeLessThan(80)
   })
 })
 
@@ -388,6 +404,16 @@ describe('requestJsonObject', () => {
     expect(onProviderActivity).toHaveBeenCalledWith(expect.objectContaining({
       state:'response_headers', providerRequestId:'req-success', responseReceived:true,
     }))
+  })
+
+  it('rejects confirmed physical input overflow before making a provider request', async () => {
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:80,
+      messages:[{ role:'user', content:'test input' }],
+      modelTaskBudget:{ tokenLimitsStatus:'confirmed', maxInputTokens:1,
+        contextWindowTokens:1000, contextLimitSemantics:'shared_context' },
+    })).rejects.toMatchObject({ code:'model_input_limit_exceeded', message:'model_input_limit_exceeded' })
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('records split token usage without learning output budget from total tokens', () => {
@@ -994,7 +1020,7 @@ describe('OpenAI-compatible provider URL', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.deepseek.com/chat/completions')
   })
 
-  it('routes Kimi Code through its subscription endpoint with an adaptive budget below the configured hard cap', async () => {
+  it('routes Kimi Code through its subscription endpoint with the confirmed physical output budget', async () => {
     vi.clearAllMocks()
     mockFetch.mockResolvedValue({
       ok: true,
@@ -1010,7 +1036,7 @@ describe('OpenAI-compatible provider URL', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.kimi.com/coding/v1/chat/completions')
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.thinking.type).toBe('disabled')
-    expect(body.max_tokens).toBe(2000)
+    expect(body.max_tokens).toBe(393216)
   })
 
   it('does not turn an externally cancelled inference into a HOLD signal', async () => {
@@ -1071,6 +1097,23 @@ describe('normalizeAiSignal', () => {
       stop_loss_price:1990, take_profit_1_price:2010 }
     const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.signal_type).toBe('buy')
+  })
+
+  it('历史 mixed 缠论汇总字段不影响当前模型仓位档位', () => {
+    const parsed = {
+      signal_type:'buy', entry_method:'market', confidence:0.9, position_size_tier:'standard',
+      position_size_reason:'趋势结构支持标准仓', position_action:'open', pending_action:'none',
+      pending_action_reason:'', management_direction:'none', stop_loss_price:1990, take_profit_1_price:2010,
+    }
+    const result = normalizeAiSignal(parsed, baseConfig, {
+      ...baseMarket,
+      strategy_context:{
+        context_status:'complete', missing_timeframes:[],
+        chan_timeframe_alignment:{ agreement:'mixed', conflict:true },
+      },
+    })
+    expect(result.position_size_tier).toBe('standard')
+    expect(result.position_size_factor).toBe(1)
   })
 
   it('风险等级不再参与信号降级', () => {
@@ -1553,7 +1596,7 @@ describe('maybeAiSignal', () => {
     expect(payload.pending_orders.map(item => item.ticket)).toEqual([801, 802, 803])
   })
 
-  it('keeps personal memory content out of the system prompt and sends it as untrusted user data', async () => {
+  it('keeps the complete strategy memory library out of the system prompt and sends it as untrusted user data', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ choices: [{ message: { content: JSON.stringify({
@@ -1562,23 +1605,25 @@ describe('maybeAiSignal', () => {
       }) } }] }),
     })
     const memoryMarker = 'MEMORY_INJECTION_MARKER_IGNORE_STRATEGY'
-    const memoryContext = `\n\n<user_confirmed_experience>\n[{"lesson":"${memoryMarker}"}]\n</user_confirmed_experience>`
+    const memoryContext = `# 策略记忆库\n- ${memoryMarker}`
     let evidence
 
     await maybeAiSignal(null, {
       api_key_encrypted: 'test-key', api_provider: 'deepseek', model_name: 'deepseek-chat',
-      _memoryContext: memoryContext, _onInferencePrepared: value => { evidence = value },
+      _strategyMemoryLibraryContext:memoryContext, _strategyMemoryLibraryVersion:4,
+      _strategyMemoryLibraryHash:'f'.repeat(64), _onInferencePrepared: value => { evidence = value },
     }, {
       symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
       account: { balance: 10000 }, positions: [], pending_orders: [], strategy_context: { timeframes: {} },
     })
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
-    expect(body.messages[0].content).toContain('个人记忆数据边界')
+    expect(body.messages[0].content).toContain('策略记忆库数据边界')
     expect(body.messages[0].content).not.toContain(memoryMarker)
     expect(body.messages[1].content).toContain(memoryMarker)
     const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
-    expect(userPayload.user_confirmed_experience).toContain(memoryMarker)
+    expect(userPayload.strategy_memory_library).toMatchObject({ version_no:4, content_hash:'f'.repeat(64) })
+    expect(userPayload.strategy_memory_library.content_text).toContain(memoryMarker)
     expect(evidence.systemPrompt).not.toContain(memoryMarker)
     expect(evidence.userPrompt).toContain(memoryMarker)
   })
@@ -1601,7 +1646,12 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).toContain('缠论背驰使用规则')
     expect(body.messages[0].content).toContain('forming_divergence')
     expect(body.messages[0].content).toContain('entry_candidates')
-    expect(body.messages[0].content).toContain('chan_timeframe_alignment')
+    expect(body.messages[0].content).toContain('按当前具体策略的周期职责分析各周期原始结构')
+    expect(body.messages[0].content).toContain('不预设所有周期同向')
+    expect(body.messages[0].content).not.toMatch(/\bagreement\s*=/i)
+    expect(body.messages[0].content).not.toContain('alignment_with_higher')
+    expect(body.messages[0].content).not.toContain('agreement=mixed')
+    expect(body.messages[0].content).not.toContain('alignment_with_higher=conflict')
     expect(body.messages[0].content).toContain('连续三条已确认线段')
     expect(body.messages[0].content).toContain('候选线段、单笔重叠和未确认结构不得称为中枢')
     expect(body.messages[0].content).toContain('bi_center_count')

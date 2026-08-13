@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const db = vi.hoisted(() => ({ queryAll:vi.fn(), queryOne:vi.fn() }))
 const bridge = vi.hoisted(() => ({ mt5Bridge:vi.fn() }))
+const bridgeRuntime = vi.hoisted(() => ({ platform:'mt5' }))
 vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/market-data.js', () => bridge)
 vi.mock('../../server/bridge-ws.js', () => ({
-  getBridgeRuntimeDiagnostics:() => ({ terminals:[{ terminal_instance_id:'terminal-1', broker_server:'Broker-Demo', login:'1001', platform:'mt5' }] }),
+  getBridgeRuntimeDiagnostics:() => ({ terminals:[{ terminal_instance_id:'terminal-1', broker_server:'Broker-Demo', login:'1001', platform:bridgeRuntime.platform }] }),
   getHistoryTerminalClock:() => ({ timezone_offset_minutes:180, clock_status:'verified' }),
   resolveHistoryRange:vi.fn(async () => ({ range_start_utc_msc:1, range_end_utc_msc:10_000 })),
 }))
@@ -40,9 +41,11 @@ function validEvidencePage({ nextCursor = null, hasMore = false, symbol = 'EURUS
 describe('manual trade review history cursor contract', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    bridgeRuntime.platform = 'mt5'
     db.queryOne.mockResolvedValue(accountRow)
     db.queryAll.mockResolvedValue([])
     bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
       if (action === 'history_page') return {
         status:'success', orders:[{ order_ticket:'o1', position_id:'p1', symbol:'EURUSD', magic:0, reason:'client' }],
         history_snapshot_id:'snapshot-1', next_cursor:'cursor-2', has_more:true,
@@ -103,9 +106,21 @@ describe('manual trade review history cursor contract', () => {
     ])
   })
 
+  it('keeps MT5 fail-closed when prepare status omits the exact range proof', async () => {
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ complete:true, coverage_complete:true } }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ unavailable:true, evidence_reason:'history_cursor_range_incomplete' })
+    expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual(['history_prepare_status_v1'])
+  })
+
   it('scans an empty source page and returns the first eligible trade from the same snapshot', async () => {
     let sourcePage = 0
     bridge.mt5Bridge.mockImplementation(async (_userId, action, request) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
       if (action === 'history_page') {
         sourcePage += 1
         if (sourcePage === 1) return emptyPage(null, { nextCursor:'cursor-2', hasMore:true })
@@ -129,6 +144,7 @@ describe('manual trade review history cursor contract', () => {
   it('keeps scanning consecutive empty pages until the cursor reaches the end', async () => {
     let sourcePage = 0
     bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
       if (action === 'history_page') {
         sourcePage += 1
         return sourcePage < 3
@@ -149,6 +165,7 @@ describe('manual trade review history cursor contract', () => {
   it('pauses after the bounded raw-page scan and leaves a continuation cursor', async () => {
     let sourcePage = 0
     bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
       if (action === 'history_page') {
         sourcePage += 1
         return emptyPage(null, { nextCursor:`cursor-${sourcePage + 1}`, hasMore:true })
@@ -166,6 +183,7 @@ describe('manual trade review history cursor contract', () => {
   it('fails closed when Bridge repeats a continuation cursor', async () => {
     let sourcePage = 0
     bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
       if (action === 'history_page') {
         sourcePage += 1
         return emptyPage(null, { nextCursor:'cursor-2', hasMore:true })
@@ -181,8 +199,10 @@ describe('manual trade review history cursor contract', () => {
   })
 
   it('does not scan when the source history is globally incomplete, including MT4 without source completeness proof', async () => {
+    bridgeRuntime.platform = 'mt4'
     let sourcePage = 0
     bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'error', message:'history_prepare_status_unsupported' }
       if (action === 'history_page') {
         sourcePage += 1
         return emptyPage(null, { nextCursor:'cursor-2', hasMore:true,
@@ -194,11 +214,12 @@ describe('manual trade review history cursor contract', () => {
 
     const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
     expect(result).toMatchObject({ unavailable:true, error:'manual_trade_review_evidence_unavailable',
-      evidence_reason:'history_incomplete', next_cursor:null, has_more:false, scanned_source_pages:1 })
+      evidence_reason:'manual_trade_review_mt4_visible_history_unknown', next_cursor:null, has_more:false, scanned_source_pages:1 })
     expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'history_page')).toHaveLength(1)
   })
 
   it('does not let evidence enrichment overwrite an MT4 source-completeness failure', async () => {
+    bridgeRuntime.platform = 'mt4'
     bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
       if (action === 'history_page') return {
         status:'success', orders:[{ order_ticket:'o1', position_id:'p1', symbol:'EURUSD', magic:0, reason:'client' }],
@@ -215,15 +236,40 @@ describe('manual trade review history cursor contract', () => {
 
     const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
     expect(result).toMatchObject({ unavailable:true, error:'manual_trade_review_evidence_unavailable',
-      evidence_reason:'history_incomplete', next_cursor:null, has_more:false })
+      evidence_reason:'manual_trade_review_mt4_visible_history_unknown', next_cursor:null, has_more:false })
     expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual([
       'history_prepare_status_v1', 'history_page', 'history_evidence',
+    ])
+  })
+
+  it('admits MT4 terminal-visible history while preserving that it is not broker-wide history', async () => {
+    bridgeRuntime.platform = 'mt4'
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'error', message:'history_prepare_status_unsupported' }
+      if (action === 'history_page') return {
+        ...validEvidencePage(),
+        history_sync:{ ...completeSync, platform:'mt4', requested_range_complete:false,
+          terminal_visible_history_complete:true, history_source_complete:false },
+      }
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ unavailable:false, evidence_status:'complete',
+      history_source_limited:true })
+    expect(result.history_scope_note).toContain('MT4')
+    expect(result.history_scope_note).toContain('全部历史')
+    expect(result.trades).toHaveLength(1)
+    expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual([
+      'history_prepare_status_v1', 'history_page', 'positions',
     ])
   })
 
   it('applies user filters while scanning source pages and still fetches positions once', async () => {
     let sourcePage = 0
     bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
       if (action === 'history_page') {
         sourcePage += 1
         return sourcePage === 1

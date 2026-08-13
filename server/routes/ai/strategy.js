@@ -8,11 +8,11 @@ import { mt5Bridge, platformRates, calculateMarketData, computeAtr14 } from './m
 import { maybeAiSignal } from './llm.js'
 import { getAnalyzeApiKey, insertAudit, signalOrderPayload, executeOrderCore, DEFAULT_MAX_POSITION_SIZE, parsePromptSymbols } from './config.js'
 import { resolveOwnedModelProfileForRuntime } from './model-profiles.js'
-import { retrievePersonalMemory, attachMemoryInjectionSignal, buildPersonalMemoryRetrievalContext } from './memory-system.js'
-import { attachPlatformExperienceSignal, retrievePlatformExperience } from './platform-experience.js'
+import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime,
+  updateStrategyMemoryInjectionLog } from './strategy-memory-library.js'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
-import { parseStrategyPolicy, prepareStrategyPolicyRuntime } from './strategy-policy.js'
+import { parseStrategyPolicy, prepareStrategyPolicyRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
 import { validateWorkflowTrace, workflowGateEvaluation } from './strategy-workflow-engine.js'
 import { applyConstraintAction, evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
@@ -22,6 +22,7 @@ import { normalizeBacktestOptions, simulateVirtualAccount } from './model-backte
 import { resolveModelSnapshotSelection } from './model-snapshot-samples.js'
 import { resolvePlatformAiVolumeRange } from './risk-policy.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
+import { modelProviderProtocol } from './model-providers.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import { indicatorRequiredHistory } from './indicator-registry.js'
@@ -134,6 +135,63 @@ function comparisonFingerprint(value) {
   return crypto.createHash('sha256').update(serialized).digest('hex')
 }
 
+function compareMemoryIdentity(library, { missingCode = 'strategy_memory_library_unavailable', invalidCode = 'history_compare_memory_snapshot_invalid' } = {}) {
+  if (!library) throw Object.assign(new Error(missingCode), { code:missingCode })
+  const versionNo = Number(library.version_no)
+  const hasContent = Object.hasOwn(library, 'content_text')
+    && library.content_text !== null && library.content_text !== undefined
+  const contentText = hasContent ? String(library.content_text) : ''
+  const contentHash = String(library.content_hash || '')
+  if (!Number.isSafeInteger(versionNo) || versionNo < 0
+    || !hasContent
+    || !/^[a-f0-9]{64}$/i.test(contentHash)
+    || comparisonFingerprint(contentText) !== contentHash) {
+    throw Object.assign(new Error(invalidCode), { code:invalidCode })
+  }
+  return { version_no:versionNo, content_hash:contentHash.toLowerCase(), content_text:contentText }
+}
+
+function modelIdentityFromConfig(config = {}) {
+  const provider = config.api_provider || config.provider || null
+  return {
+    provider:provider ? String(provider) : null,
+    model:config.model_name || config.model ? String(config.model_name || config.model) : null,
+    modelProfileId:Number(config._model_profile_id || config.model_profile_id) || null,
+    protocol:config.protocol || config._protocol || modelProviderProtocol(provider) || null,
+    credentialSource:config._credential_source || config.credential_source || null,
+  }
+}
+
+function assertExpectedModelIdentity(config, expected) {
+  if (!expected) return
+  const actual = modelIdentityFromConfig(config)
+  const fields = ['provider', 'model', 'modelProfileId', 'protocol', 'credentialSource']
+  if (fields.some(field => String(actual[field] ?? '') !== String(expected[field] ?? ''))) {
+    throw Object.assign(new Error('manual_analysis_model_stale'), { code:'manual_analysis_model_stale' })
+  }
+}
+
+// Injection logs are intentionally append-only audit rows and the existing
+// schema does not provide a uniqueness constraint.  A compare unit can be
+// resumed after the worker has already created its model task, so reuse the
+// exact task/version/usage row before inserting another audit record.
+async function ensureCompareStrategyMemoryInjectionLog({ strategyId, actor, library, modelTaskId,
+  usageKind = 'model_compare_history' }) {
+  const taskId = String(modelTaskId || '').trim()
+  if (!taskId) throw new Error('model_compare_memory_task_missing')
+  const versionNo = Number(library?.version_no || 0)
+  const contentHash = String(library?.content_hash || '')
+  const existing = await queryOne(`SELECT * FROM strategy_memory_injection_logs
+    WHERE strategy_id = ? AND library_version_no = ? AND library_content_hash = ?
+      AND usage_kind = ? AND period_review_case_id IS NULL AND model_task_id = ?
+    ORDER BY id LIMIT 1`, [Number(strategyId), versionNo, contentHash, usageKind, taskId])
+  if (existing) return existing
+  const created = await createStrategyMemoryInjectionLog({ strategyId:Number(strategyId), actor,
+    library, injectionKind:usageKind, modelTaskId:taskId })
+  if (!created?.id) throw new Error('model_compare_memory_injection_log_failed')
+  return created
+}
+
 function comparisonRatesEvidence(timeframe, rates = []) {
   const normalized = (Array.isArray(rates) ? rates : []).map(rate => ({
     time_utc_msc:compareRateUtcMs(rate),
@@ -160,7 +218,6 @@ function comparisonModelSnapshot(modelId, resolved) {
     model_name:model.model_name || null,
     api_base_url_sha256:comparisonFingerprint(model.api_base_url || ''),
     temperature:Number(model.temperature ?? 0.3),
-    max_tokens:Number(model.max_tokens || 0),
     thinking_enabled:model.thinking_enabled !== 0 && model.thinking_enabled !== false,
     reasoning_effort:model.reasoning_effort || null,
     request_timeout_ms:Number(model.request_timeout_ms || 120000),
@@ -458,70 +515,21 @@ export function shouldPersistChanAnchor(useChan, chan, chanDataQuality) {
     && Number(chanDataQuality?.source_id) > 0)
 }
 
-export function buildChanTimeframeAlignment(timeframes, primaryTimeframe, contextStatus = 'complete') {
-  const frames = Object.entries(timeframes || {})
-    .map(([timeframe, value]) => ({ timeframe, chan: value?.summary?.chan }))
-    .filter(item => item.chan?.trend_state && item.chan.trend_state.state !== 'unavailable')
-    .sort((a, b) => (TIMEFRAME_MINUTES[b.timeframe] || 0) - (TIMEFRAME_MINUTES[a.timeframe] || 0))
-  const reliableFrames = frames.filter(item => {
-    const capabilities = item.chan.evidence_capabilities
-    return capabilities
-      ? capabilities.segment_direction_usable === true
-      : item.chan.reliability !== 'low'
-  })
-  const higher = reliableFrames[0] || frames[0] || null
-  const directional = reliableFrames.filter(item => ['up', 'down'].includes(item.chan.trend_state?.direction))
-  const directions = new Set(directional.map(item => item.chan.trend_state.direction))
-  let agreement = 'insufficient'
-  let direction = 'neutral'
-  if (directional.length >= 2 && directions.size === 1) {
-    direction = directional[0].chan.trend_state.direction
-    agreement = direction === 'up' ? 'aligned_up' : 'aligned_down'
-  } else if (directions.size > 1) {
-    agreement = 'mixed'
-  } else if (directional.length === 1) {
-    direction = directional[0].chan.trend_state.direction
-  }
-  const higherDirection = reliableFrames.length > 0 ? higher?.chan?.trend_state?.direction || 'neutral' : 'neutral'
-  const candidates = frames.flatMap(frame => (frame.chan.evidence_capabilities?.entry_structure_usable === false
-    ? [] : (frame.chan.entry_candidates || [])).filter(candidate => candidate.usable_for_entry === true).map(candidate => {
-    const candidateDirection = candidate.side === 'buy' ? 'up' : 'down'
-    return {
-      timeframe: frame.timeframe,
-      ...candidate,
-      alignment_with_higher: higherDirection === 'neutral'
-        ? 'unconfirmed'
-        : candidateDirection === higherDirection ? 'aligned' : 'conflict',
-    }
-  }))
-  return {
-    status: frames.length === 0 ? 'unavailable' : contextStatus === 'partial' ? 'partial' : 'complete',
-    primary_timeframe: String(primaryTimeframe || '').toUpperCase() || null,
-    higher_timeframe: higher?.timeframe || null,
-    higher_timeframe_direction: higherDirection,
-    higher_timeframe_phase: reliableFrames.length > 0 ? higher?.chan?.trend_state?.phase || 'unknown' : 'unknown',
-    agreement,
-    direction,
-    conflict: agreement === 'mixed',
-    usable_timeframes: reliableFrames.map(item => item.timeframe),
-    excluded_low_reliability_timeframes: frames.filter(item => item.chan.reliability === 'low').map(item => item.timeframe),
-    excluded_unusable_timeframes: frames.filter(item => item.chan.evidence_capabilities
-      && item.chan.evidence_capabilities.segment_direction_usable !== true).map(item => item.timeframe),
-    frames: frames.map(item => ({
-      timeframe: item.timeframe,
-      reliability: item.chan.reliability,
-      state: item.chan.trend_state.state,
-      direction: item.chan.trend_state.direction,
-      phase: item.chan.trend_state.phase,
-      reversal_bias: item.chan.trend_state.reversal_bias,
-    })),
-    entry_candidates: candidates,
-    execution_policy: 'evidence_only',
-  }
+function snapshotContextHasChan(strategyContext) {
+  if (!strategyContext || typeof strategyContext !== 'object') return false
+  if (strategyContext.chan_timeframe_alignment || strategyContext.chan_structures) return true
+  return Object.values(strategyContext.timeframes || {}).some(timeframe =>
+    timeframe?.summary && typeof timeframe.summary === 'object' && timeframe.summary.chan != null)
+}
+
+function resolveSnapshotChanEnabled(samples) {
+  return Array.isArray(samples) && samples.some(sample =>
+    snapshotContextHasChan(sample?.market_snapshot?.strategy_context))
 }
 
 export const __strategyTest = {
-  clearChanHistoryHints, buildChanTimeframeAlignment,
+  clearChanHistoryHints,
+  snapshotContextHasChan, resolveSnapshotChanEnabled,
   buildAutoExecuteGuardRejection, resolveAutoExecuteGuard,
 }
 
@@ -574,10 +582,11 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   const missingTimeframes = []
   for (const { tf, count } of tags) {
     const chanPolicy = useChan ? getChanWindowPolicy(tf) : null
+    const chanEnabledForTimeframe = Boolean(useChan && chanPolicy?.supported !== false)
     const indicatorHistoryCount = Math.max(0, ...(compiledPolicy?.indicators || [])
       .filter(definition => definition.enabled && definition.source?.timeframe === tf)
       .map(indicatorRequiredHistory))
-    const historyCount = Math.max(resolveChanHistoryCount(userId, symbol, tf, count, useChan), indicatorHistoryCount)
+    const historyCount = Math.max(resolveChanHistoryCount(userId, symbol, tf, count, chanEnabledForTimeframe), indicatorHistoryCount)
     let rates
     let chanDataQuality = null
     if (tf === (fallbackTimeframe || '').toUpperCase() && fallbackRates && fallbackRates.length >= historyCount) {
@@ -591,15 +600,15 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     if (rates.length === 0) { missingTimeframes.push(tf); continue }
     let visibleRates = rates.slice(-count)
     let summary = calculateMarketData(symbol, tf, visibleRates, account, positions, {
-      computeChan: useChan,
+      computeChan: chanEnabledForTimeframe,
       chanRates: rates,
-      requestedChanHistoryCount: chanPolicy?.target || historyCount,
-      chanMaximumHistoryCount: chanPolicy?.target,
-      chanValidationWindowCounts: chanPolicy?.validators,
-      chanWindowPolicyVersion: chanPolicy?.windowPolicyVersion || CHAN_WINDOW_POLICY_VERSION,
+      requestedChanHistoryCount: chanEnabledForTimeframe ? chanPolicy.target : null,
+      chanMaximumHistoryCount: chanEnabledForTimeframe ? chanPolicy.maximumHistoryCount : null,
+      chanValidationWindowCounts: chanEnabledForTimeframe ? chanPolicy.validationWindowCounts : null,
+      chanWindowPolicyVersion: chanEnabledForTimeframe ? chanPolicy.windowPolicyVersion : null,
       chanDataQuality,
     })
-    if (shouldPersistChanAnchor(useChan, summary.chan, chanDataQuality)) {
+    if (shouldPersistChanAnchor(chanEnabledForTimeframe, summary.chan, chanDataQuality)) {
       await saveChanStructureAnchor(chanDataQuality.source_id, symbol, tf, summary.chan.structure_anchor).catch(error => {
         console.warn(`[Chan] Failed to persist structure anchor for ${symbol} ${tf}: ${error.message}`)
       })
@@ -618,7 +627,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
       internalGapUnresolved:chanDataQuality?.internal_gap_unresolved === true,
       marketSource:chanDataQuality?.source || chanDataQuality?.source_type || null,
     }
-    if (useChan) visualizationKlines[tf] = compactRates(chanPolicy ? rates.slice(-chanPolicy.target) : rates)
+    if (chanEnabledForTimeframe) visualizationKlines[tf] = compactRates(rates.slice(-chanPolicy.target))
   }
   const context = {
     strategy_sequence: tags.map(t => `${t.tf}(${t.count})`).join(' → '),
@@ -626,7 +635,6 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
     used_timeframes: Object.keys(timeframes),
     missing_timeframes: missingTimeframes,
     context_status: missingTimeframes.length === 0 ? 'complete' : 'partial',
-    ...(useChan ? { chan_timeframe_alignment: buildChanTimeframeAlignment(timeframes, fallbackTimeframe, missingTimeframes.length === 0 ? 'complete' : 'partial') } : {}),
     timeframes,
   }
   // Snapshot-only evidence: keep it out of model payloads, ai_signals JSON and
@@ -690,6 +698,7 @@ export async function handleAnalyze(userId, params, options = {}) {
   if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { status: 'error', message: 'symbol_not_supported_by_strategy' }
   const policy = parseStrategyPolicy(strategy)
   const config = await getAnalyzeApiKey(userId, session_id, Number(strategy.id))
+  assertExpectedModelIdentity(config, options.expectedModelIdentity)
   config._allowed_entry_methods = policy.entryMethods
   config._market_data_plan = policy.marketDataPlan
   config._use_chan_analysis = policy.useChanAnalysis
@@ -774,43 +783,24 @@ export async function handleAnalyze(userId, params, options = {}) {
   } catch (error) {
     console.error('[Analyze] Position management context unavailable; continuing with new signal only:', error.message)
   }
-  let memory = { promptBlock: '', mode: 'off', logId: null }
+  let memory = { contentText:'', versionNo:0, contentHash:null, logId:null }
   try {
-    if (strategy.scope === 'platform') {
-      memory = await retrievePlatformExperience({ strategyId: Number(strategy.id), strategyVersion:Number(strategy.version || 1), symbol, timeframe: primaryTf,
-        market, allowedEntryMethods:policy.entryMethods })
-    } else {
-      const subscriptionMode = params.memory_mode || (await queryOne(`SELECT memory_mode FROM strategy_subscriptions
-        WHERE user_id = ? AND strategy_id = ? AND is_deleted = 0 ORDER BY updated_at DESC LIMIT 1`,
-      [userId, strategy.id]))?.memory_mode || 'personal'
-      if (subscriptionMode !== 'off' && subscriptionMode !== 'platform_only') {
-        const retrievalContext = buildPersonalMemoryRetrievalContext(market, primaryTf, policy.entryMethods)
-        memory = await retrievePersonalMemory({ userId, strategyId: Number(strategy.id), strategyVersion: Number(strategy.version || 1),
-          symbol, timeframe: primaryTf, direction: retrievalContext.direction,
-          entryMethod: retrievalContext.entryMethod, allowedEntryMethods:policy.entryMethods, marketRegime: retrievalContext.marketRegime,
-          volatilityBucket:retrievalContext.volatilityBucket, chanReliability:retrievalContext.chanReliability,
-          chanTrendState:retrievalContext.chanTrendState, chanSegmentDirection:retrievalContext.chanSegmentDirection,
-          chanDivergence:retrievalContext.chanDivergence, chanCenterState:retrievalContext.chanCenterState,
-          mode: subscriptionMode === 'shadow' ? 'shadow' : 'active' })
-      }
-    }
+    const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:Number(strategy.id), userId, role:'user' })
+    const library = resolvedMemory.library
+    const injection = await createStrategyMemoryInjectionLog({ strategyId:Number(strategy.id),
+      actor:{ userId, role:'user' }, library, injectionKind:'manual_analysis', modelTaskId:options.taskId || null })
+    memory = { contentText:library.content_text || '', versionNo:Number(library.version_no || 0),
+      contentHash:library.content_hash || null, logId:injection.id }
   } catch (error) {
-    console.error('[Analyze] Experience retrieval failed; continuing without it:', error.message)
+    console.error('[Analyze] Strategy memory library unavailable:', error.message)
+    throw Object.assign(new Error('strategy_memory_library_unavailable'), { cause:error })
   }
   if (config) {
-    if (strategy.scope === 'platform') config._platformExperienceContext = memory.promptBlock
-    else config._memoryContext = memory.promptBlock
-    config._experienceSelection = { source:strategy.scope === 'platform' ? 'platform' : 'personal',
-      selectedItemIds:memory.promptBlock ? (memory.selectedItemIds || []) : [],
-      selectedRefs:memory.promptBlock ? (strategy.scope === 'platform'
-        ? (memory.selectedItemIds || []).map(id => `platform:${Number(id)}`)
-        : [
-            ...(memory.selectedLongMemoryIds || []).map(id => `long:${Number(id)}`),
-            ...(memory.selectedSummaryIds || []).map(id => `summary:${Number(id)}`),
-            ...(memory.selectedItemIds || []).map(id => `short:${Number(id)}`),
-          ]) : [],
-      selectionDetails:memory.promptBlock ? (memory.selectionDetails || []) : [] }
-    config._memoryMode = strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off')
+    config._strategyMemoryLibraryContext = memory.contentText
+    config._strategyMemoryLibraryVersion = memory.versionNo
+    config._strategyMemoryLibraryHash = memory.contentHash
+    config._experienceSelection = { source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] }
+    config._memoryMode = 'strategy_library'
   }
   let renderedEvidence = null
   if (config) config._onInferencePrepared = async evidence => {
@@ -876,7 +866,7 @@ export async function handleAnalyze(userId, params, options = {}) {
       market_data_json, token_count, ai_model, ttl_seconds, created_at,
       created_at_utc_msc, terminal_timezone_offset_minutes, terminal_clock_status, terminal_clock_source,
       entry_method, limit_price, stop_limit_price, pending_valid_until, schema_version, decision_json, inference_task_id)
-      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+      VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [userId, Number(strategy.id), session_id, symbol, primaryTf, signal.signal_type, signal.confidence, signal.recommended_volume,
         signal.position_size_tier || null, signal.position_size_factor ?? null, signal.position_size_reason || null,
         signal.analysis, signal.reasoning, signal.stop_loss_price || null,
@@ -893,8 +883,8 @@ export async function handleAnalyze(userId, params, options = {}) {
       outputSchemaVersion: renderedEvidence.outputSchemaVersion, marketSnapshot: market,
       modelProfileId: config?._model_profile_id, provider: config?.api_provider,
       modelName: config?.model_name, credentialSource: config?._credential_source,
-      memoryMode: strategy.scope === 'platform' ? `platform_${memory.mode || 'off'}` : (memory.mode || 'off'),
-      strategyRuntime:strategyPolicyRuntime, createdAt,
+      memoryMode:'strategy_library',
+       strategyRuntime:buildStrategyRuntimeSnapshot({ strategy, policy, strategyPolicyRuntime, source:'manual' }), createdAt,
     })
     await createTradeThesisTx(run, {
       signalId:result.insertId,
@@ -927,13 +917,10 @@ export async function handleAnalyze(userId, params, options = {}) {
         { status:'error', message:error.message }, 'error')
     }
   }
-  if (strategy.scope === 'private' && memory.logId) {
-    try { await attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId) }
-    catch (error) { console.error('[Analyze] Memory injection attribution failed:', error.message) }
-  } else if (strategy.scope === 'platform' && memory.logId) {
-    try { await attachPlatformExperienceSignal(memory.logId, signal.id, persisted.snapshotId) }
-    catch (error) { console.error('[Analyze] Platform memory attribution failed:', error.message) }
-  }
+  if (memory.logId) try {
+    await updateStrategyMemoryInjectionLog(memory.logId, { signalId:signal.id,
+      inferenceSnapshotId:persisted.snapshotId, modelTaskId:options.taskId || null })
+  } catch (error) { console.error('[Analyze] Strategy memory attribution failed:', error.message) }
   signal.symbol = symbol
   signal.user_id = userId
   signal.timeframe = primaryTf
@@ -1068,6 +1055,20 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
   const strategy = await getStrategyById(Number(strategy_id), userId, actor?.role || 'user', { forExecution: false })
   if (!strategy) return { ok: false, error: 'strategy_not_found' }
 
+  let compareMemory
+  try {
+    const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:Number(strategy.id),
+      userId, role:actor?.role || 'user' })
+    compareMemory = compareMemoryIdentity(resolvedMemory?.library, {
+      missingCode:'strategy_memory_library_unavailable',
+      invalidCode:'strategy_memory_library_unavailable',
+    })
+  } catch (error) {
+    console.error('[AnalyzeCompare] Strategy memory library unavailable:', error.message)
+    return { ok:false, error:error?.code === 'history_compare_memory_snapshot_invalid'
+      ? 'history_compare_memory_snapshot_invalid' : 'strategy_memory_library_unavailable' }
+  }
+
   const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
   if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { ok: false, error: 'symbol_not_supported_by_strategy' }
 
@@ -1163,6 +1164,11 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
       _ai_volume_max: aiVolumeRange.max,
       _ai_volume_step: aiVolumeRange.step,
       _comparison_mode:true,
+      _strategyMemoryLibraryContext:compareMemory.content_text || '',
+      _strategyMemoryLibraryVersion:Number(compareMemory.version_no || 0),
+      _strategyMemoryLibraryHash:compareMemory.content_hash || null,
+      _memoryMode:'strategy_library',
+      _experienceSelection:{ source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] },
     }
     const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
     if (strategyPolicyRuntime) {
@@ -1176,7 +1182,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
       snapshotHash:liveCompareCheckpointContext.snapshotFingerprint,
       outputContractHash:liveCompareCheckpointContext.outputContractHash,
       marketEvidenceHash:liveCompareCheckpointContext.marketEvidenceHash,
-      decisionUtcMs:Date.now(),
+      decisionUtcMs:Date.now(), strategyMemory:compareMemory,
     })
     let tracker = null
     let restoreCallbacks = null
@@ -1216,6 +1222,9 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
         throw error
       }
       liveTrackers.add(tracker)
+      await ensureCompareStrategyMemoryInjectionLog({ strategyId:Number(strategy.id),
+        actor:{ userId, role:actor?.role || 'user' }, library:compareMemory,
+        modelTaskId:tracker.taskId, usageKind:'model_compare_live' })
       if (liveBatchAbortController.signal.aborted) {
         throw liveBatchAbortController.signal.reason || new Error('model_compare_batch_aborted')
       }
@@ -1400,7 +1409,7 @@ function compareUnitIdempotencyKey({ jobId, mode, unitKey, modelId, inputHash, m
 
 function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, modelId,
   inputHash, promptHash, snapshotHash, outputContractHash, marketEvidenceHash,
-  decisionUtcMs, resultValidUntilUtcMs = null }) {
+  decisionUtcMs, resultValidUntilUtcMs = null, strategyMemory = null }) {
   const nowUtcMs = Date.now()
   const deadlines = modelTaskDeadlines('model_compare', { nowUtcMs })
   const modelConfigFingerprint = comparisonFingerprint({
@@ -1415,7 +1424,9 @@ function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, 
     reasoning_effort:config?.reasoning_effort || null,
   })
   const sourceHash = inputHash || comparisonFingerprint({ jobId, mode, unitKey, modelId,
-    promptHash, modelConfigFingerprint, snapshotHash, marketEvidenceHash })
+    promptHash, modelConfigFingerprint, snapshotHash, marketEvidenceHash,
+    memory_library_version_no:strategyMemory?.version_no ?? null,
+    memory_library_content_hash:strategyMemory?.content_hash || null })
   return {
     modelConfigFingerprint,
     deadlines,
@@ -1443,6 +1454,10 @@ function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, 
         model_id:Number(modelId), decision_time_utc_msc:Number(decisionUtcMs) || null,
         input_hash:sourceHash, prompt_hash:promptHash || null,
         snapshot_hash:snapshotHash || null, market_evidence_hash:marketEvidenceHash || null,
+        ...(strategyMemory ? {
+          memory_library_version_no:Number(strategyMemory.version_no || 0),
+          memory_library_content_hash:strategyMemory.content_hash || null,
+        } : {}),
       },
       scheduledAtUtcMs:nowUtcMs,
       // The generic task envelope retains the longer task deadline. The LLM
@@ -1693,9 +1708,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   }
   evaluatorStrategySnapshot.runtime_config_sha256 = comparisonFingerprint(evaluatorStrategySnapshot)
   const snapshotPromptPlan = snapshotRun ? snapshotPromptTimeframePlan(snapshotRun.samples[0]) : []
-  const snapshotChanEnabled = Boolean(snapshotRun?.samples?.some(sample =>
-    sample?.market_snapshot?.strategy_context?.chan_timeframe_alignment
-    || sample?.market_snapshot?.strategy_context?.chan_structures))
+  const snapshotChanEnabled = resolveSnapshotChanEnabled(snapshotRun?.samples)
   const snapshotPlan = snapshotRun ? {
     primary_timeframe:requestedTimeframe,
     timeframes:snapshotPromptPlan.length ? snapshotPromptPlan
@@ -1906,9 +1919,54 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   }
   const modelRuntimeSnapshots = Object.fromEntries(validModels.map(({ modelId, resolved }) =>
     [modelId, comparisonModelSnapshot(modelId, resolved)]))
+  // Historical replay freezes the complete unified strategy memory exactly
+  // once per compare job. A resumed job uses the manifest copy rather than a
+  // newer live library. Snapshot replay deliberately skips this branch: its
+  // persisted prompt is the sole historical input.
+  let historyMemorySnapshot = null
+  if (dataSource === 'historical') {
+    const manifest = expectedCheckpointManifest
+    const hasFrozenMemory = manifest
+      && manifest.memory_library_version_no !== null
+      && manifest.memory_library_version_no !== undefined
+      && manifest.memory_library_content_hash
+      && manifest.memory_library_content_text !== null
+      && manifest.memory_library_content_text !== undefined
+    if (manifest && !hasFrozenMemory) {
+      // A resumed historical job must never fall back to today's library. Old
+      // manifests without the frozen memory snapshot are not replay-safe.
+      return { status:'error', message:'history_compare_checkpoint_source_stale' }
+    }
+    if (hasFrozenMemory) {
+      const frozenText = String(manifest.memory_library_content_text)
+      try {
+        historyMemorySnapshot = compareMemoryIdentity({
+          version_no:manifest.memory_library_version_no,
+          content_hash:manifest.memory_library_content_hash,
+          content_text:frozenText,
+        })
+      } catch {
+        return { status:'error', message:'history_compare_memory_snapshot_invalid' }
+      }
+    } else {
+      try {
+        const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:Number(strategy.id),
+          userId, role:'admin' })
+        historyMemorySnapshot = compareMemoryIdentity(resolvedMemory?.library, {
+          missingCode:'strategy_memory_library_unavailable',
+          invalidCode:'history_compare_memory_snapshot_invalid',
+        })
+      } catch (error) {
+        console.error('[HistoryCompare] Strategy memory library unavailable:', error.message)
+        return { status:'error', message:error?.code === 'history_compare_memory_snapshot_invalid'
+          ? 'history_compare_memory_snapshot_invalid' : 'strategy_memory_library_unavailable' }
+      }
+    }
+  }
   const checkpointManifest = buildHistoryCompareCheckpointManifest({
     strategy, strategyRuntimeSnapshot, snapshotRun, dataSource, validModels,
     modelRuntimeSnapshots, decisionPoints, marketDataEvidence, prompt,
+    memorySnapshot:historyMemorySnapshot,
   })
   if (expectedCheckpointManifest
     && !historyCompareCheckpointManifestMatches(expectedCheckpointManifest, checkpointManifest)) {
@@ -2114,9 +2172,21 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _ai_volume_max:Number(snapshotVolumeRange.max ?? currentAiVolumeRange.max),
         _ai_volume_step:Number(snapshotVolumeRange.step ?? currentAiVolumeRange.step),
         _comparison_mode:true,
-        _comparison_replay_system_prompt:decisionPoint.snapshotSample?.system_prompt,
-        _comparison_replay_user_prompt:decisionPoint.snapshotSample?.user_prompt,
+        _comparison_replay_system_prompt:decisionPoint.snapshotSample
+          ? String(decisionPoint.snapshotSample.system_prompt || '') : undefined,
+        // An explicit string (including an empty one) tells llm.js that this
+        // is a snapshot replay and prevents any live strategy-memory payload
+        // from being appended to the historical user prompt.
+        _comparison_replay_user_prompt:decisionPoint.snapshotSample
+          ? String(decisionPoint.snapshotSample.user_prompt || '') : undefined,
         _comparison_replay_output_schema_version:decisionPoint.snapshotSample?.output_schema_version,
+        ...(!decisionPoint.snapshotSample && historyMemorySnapshot ? {
+          _strategyMemoryLibraryContext:historyMemorySnapshot.content_text,
+          _strategyMemoryLibraryVersion:Number(historyMemorySnapshot.version_no),
+          _strategyMemoryLibraryHash:historyMemorySnapshot.content_hash,
+          _memoryMode:'strategy_library',
+          _experienceSelection:{ source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] },
+        } : {}),
       }
       const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
       if (strategyPolicyRuntime) {
@@ -2134,6 +2204,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         model_config_fingerprint:modelRuntimeSnapshots[modelId]?.runtime_config_sha256 || '',
         output_contract_hash:checkpointManifest.output_contract_hash,
         market_evidence_hash:checkpointManifest.market_evidence_hash,
+        memory_library_version_no:historyMemorySnapshot?.version_no ?? null,
+        memory_library_content_hash:historyMemorySnapshot?.content_hash || null,
       })
       const taskEnvelope = compareUnitTaskInput({
         userId, strategy, config, jobId:compareJobId, mode:'history', unitKey:checkpointUnitKey,
@@ -2142,7 +2214,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         snapshotHash:checkpointManifest.snapshot_fingerprint,
         outputContractHash:checkpointManifest.output_contract_hash,
         marketEvidenceHash:checkpointManifest.market_evidence_hash,
-        decisionUtcMs,
+        decisionUtcMs, strategyMemory:historyMemorySnapshot,
       })
       let tracker = null
       let restoreCallbacks = null
@@ -2168,6 +2240,13 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           throw error
         }
         historyStepTrackers.add(tracker)
+        if (!decisionPoint.snapshotSample && historyMemorySnapshot) {
+          await ensureCompareStrategyMemoryInjectionLog({
+            strategyId:Number(strategy.id), actor:{ userId, role:'admin' },
+            library:historyMemorySnapshot, modelTaskId:tracker.taskId,
+            usageKind:'model_compare_history',
+          })
+        }
         if (historyStepAbortSignal?.aborted) {
           throw historyStepAbortSignal.reason || new Error('history_compare_batch_aborted')
         }
@@ -2919,7 +2998,8 @@ function historyCompareCheckpointManifestFingerprint(manifest) {
 }
 
 function buildHistoryCompareCheckpointManifest({ strategy, strategyRuntimeSnapshot, snapshotRun,
-  dataSource, validModels, modelRuntimeSnapshots, decisionPoints, marketDataEvidence, prompt }) {
+  dataSource, validModels, modelRuntimeSnapshots, decisionPoints, marketDataEvidence, prompt,
+  memorySnapshot = null }) {
   const strategyFingerprint = strategyRuntimeSnapshot?.runtime_config_sha256
     || comparisonFingerprint(strategyRuntimeSnapshot || {})
   const promptHash = strategyRuntimeSnapshot?.system_prompt_sha256 || comparisonFingerprint(prompt || '')
@@ -2956,6 +3036,11 @@ function buildHistoryCompareCheckpointManifest({ strategy, strategyRuntimeSnapsh
     market_evidence_hash:marketEvidenceHash,
     market_evidence:marketDataEvidence || [],
     units,
+    ...(dataSource === 'historical' && memorySnapshot ? {
+      memory_library_version_no:Number(memorySnapshot.version_no || 0),
+      memory_library_content_hash:memorySnapshot.content_hash || null,
+      memory_library_content_text:String(memorySnapshot.content_text || ''),
+    } : {}),
   }
   return { ...manifest, manifest_fingerprint:historyCompareCheckpointManifestFingerprint(manifest) }
 }

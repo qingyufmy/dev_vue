@@ -4,6 +4,8 @@ import { calculatePolicyIndicators } from './indicator-registry.js'
 import { buildPreInferenceWorkflowState } from './strategy-workflow-engine.js'
 import { renderStrategyPolicyPrompt } from './strategy-prompt-renderer.js'
 import { evaluateStrategyConstraints } from './strategy-constraint-engine.js'
+import { CHAN_WINDOW_POLICY_VERSION } from './chan-window-policy.js'
+import crypto from 'node:crypto'
 
 export const VALID_TIMEFRAMES = STRATEGY_POLICY_TIMEFRAMES
 export const VALID_ENTRY_METHODS = Object.freeze(['market', 'limit', 'stop', 'stop_limit'])
@@ -11,6 +13,8 @@ export const DEFAULT_ENTRY_METHODS = Object.freeze([...VALID_ENTRY_METHODS])
 
 const timeframeSet = new Set(VALID_TIMEFRAMES)
 const entryMethodSet = new Set(VALID_ENTRY_METHODS)
+export const CHAN_SUPPORTED_TIMEFRAMES = Object.freeze(['M5', 'M15', 'H1', 'H4'])
+const chanTimeframeSet = new Set(CHAN_SUPPORTED_TIMEFRAMES)
 
 const HARDCODED_EMA34_POLICY = Object.freeze({
   schema_version:'strategy-policy-v1',
@@ -109,6 +113,19 @@ export function normalizeMarketDataPlan(value, { prompt = '', fallbackTimeframe 
   return { primary_timeframe: primaryTimeframe, timeframes }
 }
 
+export function validateChanTimeframes(marketDataPlan, useChanAnalysis) {
+  if (!useChanAnalysis) return { valid:true, unsupported:[] }
+  const timeframes = (marketDataPlan?.timeframes || []).map(item => String(item?.timeframe || '').trim().toUpperCase())
+  const unsupported = [...new Set(timeframes.filter(timeframe => !chanTimeframeSet.has(timeframe)))]
+  if (unsupported.length) {
+    const error = new Error('chan_timeframe_unsupported')
+    error.code = 'chan_timeframe_unsupported'
+    error.timeframes = unsupported
+    throw error
+  }
+  return { valid:true, unsupported:[] }
+}
+
 export function parseStrategyPolicy(strategy = {}) {
   const useEma34Filter = normalizeUseEma34Filter(strategy.use_ema34_filter)
   let marketDataPlan = normalizeMarketDataPlan(strategy.market_data_plan_json || strategy.market_data_plan, {
@@ -117,18 +134,60 @@ export function parseStrategyPolicy(strategy = {}) {
   if (useEma34Filter) marketDataPlan = ensureEma34MarketData(marketDataPlan)
   const compiledPolicy = useEma34Filter
     ? compileStrategyPolicy(HARDCODED_EMA34_POLICY, { marketDataPlan }) : null
+  const useChanAnalysis = normalizeUseChanAnalysis(
+    strategy.use_chan_analysis ?? strategy.market_data_plan?.use_chan_analysis,
+    { prompt: strategy.system_prompt || '' },
+  )
+  validateChanTimeframes(marketDataPlan, useChanAnalysis)
   return {
     entryMethods: normalizeEntryMethods(strategy.entry_methods_json || strategy.entry_methods || DEFAULT_ENTRY_METHODS),
     marketDataPlan,
-    useChanAnalysis: normalizeUseChanAnalysis(
-      strategy.use_chan_analysis ?? strategy.market_data_plan?.use_chan_analysis,
-      { prompt: strategy.system_prompt || '' },
-    ),
+    useChanAnalysis,
     useEma34Filter,
     strategyPolicy:null,
     compiledPolicy,
     policyMode:useEma34Filter ? 'enforce' : 'off',
   }
+}
+
+function runtimeHash(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex')
+}
+
+/**
+ * Build the always-present, historical strategy capability snapshot.  The
+ * optional compiler runtime is merged into this object; it never determines
+ * whether the base snapshot exists.
+ */
+export function buildStrategyRuntimeSnapshot({ strategy = {}, policy = {}, strategyPolicyRuntime = null, source = 'inference' } = {}) {
+  const marketDataPlan = policy.marketDataPlan || {}
+  const useChanAnalysis = Boolean(policy.useChanAnalysis)
+  const chanTimeframes = useChanAnalysis
+    ? [...new Set((marketDataPlan.timeframes || []).map(item => String(item?.timeframe || '').toUpperCase())
+      .filter(timeframe => chanTimeframeSet.has(timeframe)))]
+    : []
+  const base = {
+    strategy_runtime_version:1,
+    strategy_id:Number(strategy.id || strategy.strategy_id || 0) || null,
+    strategy_version:Number(strategy.version || strategy.strategy_version || 1),
+    scope:strategy.scope || strategy.strategy_scope || null,
+    source,
+    market_data_plan:marketDataPlan,
+    entry_methods:policy.entryMethods || [],
+    use_chan_analysis:useChanAnalysis,
+    chan_timeframes:chanTimeframes,
+    window_policy_version:useChanAnalysis ? CHAN_WINDOW_POLICY_VERSION : CHAN_WINDOW_POLICY_VERSION,
+    chan_window_policy_version:useChanAnalysis ? CHAN_WINDOW_POLICY_VERSION : CHAN_WINDOW_POLICY_VERSION,
+    strategy_policy_mode:policy.policyMode || strategyPolicyRuntime?.mode || 'off',
+    strategy_policy_hash:strategyPolicyRuntime?.policy_hash || policy.compiledPolicy?.policy_hash || null,
+  }
+  const runtime = { ...(strategyPolicyRuntime || {}), ...base }
+  const hashInput = { ...runtime }
+  delete hashInput.runtime_config_hash
+  delete hashInput.strategy_runtime_hash
+  runtime.runtime_config_hash = runtimeHash(hashInput)
+  runtime.strategy_runtime_hash = runtime.runtime_config_hash
+  return runtime
 }
 
 export function prepareStrategyPolicyRuntime(policy, strategyContext, { rawPolicy = null } = {}) {

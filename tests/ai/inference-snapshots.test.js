@@ -10,6 +10,7 @@ import {
   prepareInferenceSnapshot,
   persistInferenceSnapshotTx,
   sanitizeInferenceEvidence,
+  resolveFrozenChanRequirement,
 } from '../../server/routes/ai/inference-snapshots.js'
 
 describe('shared market inference boundary', () => {
@@ -43,6 +44,23 @@ describe('shared market inference boundary', () => {
 })
 
 describe('inference snapshot evidence', () => {
+  it('resolves frozen Chan capability without consulting current strategy state', () => {
+    expect(resolveFrozenChanRequirement({ strategy_runtime:{ use_chan_analysis:false } }, {})).toMatchObject({
+      status:'disabled', source:'explicit_frozen_disabled', timeframes:[],
+    })
+    expect(resolveFrozenChanRequirement({ strategy_runtime:{ use_chan_analysis:true, chan_timeframes:['M15'], strategy_version:4,
+      window_policy_version:'chan_window_v6' } }, {})).toMatchObject({
+      status:'enabled', source:'inference_snapshot_strategy_runtime', timeframes:['M15'], strategy_version:4,
+      window_policy_version:'chan_window_v6',
+    })
+    expect(resolveFrozenChanRequirement({ strategy_runtime:{ use_chan_analysis:true, chan_timeframes:['M30', 'M5'], strategy_version:4 } }, {})).toMatchObject({
+      status:'enabled', timeframes:['M5'], unsupported_timeframes:['M30'],
+    })
+    expect(resolveFrozenChanRequirement({ market_snapshot:{ strategy_context:{ timeframes:{ H1:{ summary:{ chan:{ status:'ok' } } } } } } }, {})).toMatchObject({
+      status:'enabled', source:'inference_snapshot_raw_chan', timeframes:['H1'],
+    })
+    expect(resolveFrozenChanRequirement({}, {})).toMatchObject({ status:'unknown', source:'unresolved' })
+  })
   it('freezes the Chan v6 policy, capabilities and continuity metadata', () => {
     const result = prepareInferenceSnapshot({
       systemPrompt:'system', userPrompt:'payload',

@@ -1,5 +1,6 @@
 import { WebSocketServer } from 'ws'
 import jwt from 'jsonwebtoken'
+import crypto from 'node:crypto'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from './db.js'
 import { ADMIN_CACHE_TTL_MS, CORS_ORIGINS } from './config.js'
 import { isCorsOriginAllowed } from './cors-origin.js'
@@ -2601,6 +2602,82 @@ export function buildBrowserCommandResult(commandId, data = {}) {
   return { ...data, type:'result', command_id:commandId }
 }
 
+export async function runBrowserAutoExecuteWithModelTask(ai, userId, params, commandId, guard, dependencies = {}) {
+  const { createModelTaskTracker } = dependencies.createModelTaskTracker
+    ? dependencies : await import('./routes/ai/model-task-tracker.js')
+  const { modelTaskDeadlines } = dependencies.modelTaskDeadlines
+    ? dependencies : await import('./routes/ai/model-task-budget.js')
+  const { modelProviderProtocol } = dependencies.modelProviderProtocol
+    ? dependencies : await import('./routes/ai/model-providers.js')
+  const nowUtcMs = Date.now()
+  const deadlines = modelTaskDeadlines('manual_analysis', { nowUtcMs })
+  const requestParams = { ...(params || {}), auto_execute:true }
+  const frozenParams = {
+    session_id:String(requestParams.session_id || 'default').trim().slice(0, 191) || 'default',
+    symbol:String(requestParams.symbol || '').trim().slice(0, 64),
+    strategy_id:Number(requestParams.strategy_id) || 0,
+    auto_execute:true,
+  }
+  const inputHash = crypto.createHash('sha256').update(JSON.stringify({
+    ...frozenParams,
+  })).digest('hex')
+  const requestKey = String(commandId || '').trim() || inputHash
+  const modelConfig = await ai.getAnalyzeApiKey(userId, String(requestParams.session_id || 'default'),
+    Number(requestParams.strategy_id))
+  const provider = modelConfig?.api_provider || modelConfig?.provider
+  const model = modelConfig?.model_name || modelConfig?.model
+  const modelProfileId = Number(modelConfig?._model_profile_id || modelConfig?.model_profile_id) || null
+  const protocol = modelConfig?.protocol || modelConfig?._protocol || modelProviderProtocol(provider) || 'chat_completions'
+  const credentialSource = modelConfig?._credential_source || modelConfig?.credential_source || null
+  if (!provider || !model || !modelProfileId || !protocol || !credentialSource) {
+    throw Object.assign(new Error('manual_analysis_model_identity_unavailable'),
+      { code:'manual_analysis_model_identity_unavailable' })
+  }
+  const tracker = await createModelTaskTracker({
+    taskKind:'manual_analysis', queueClass:'interactive', ownerUserId:Number(userId) || 0,
+    strategyId:Number(params?.strategy_id) || null, domainType:'manual_analysis_ws',
+    domainId:String(commandId || inputHash).slice(0, 191), idempotencyKey:`manual_ws:${Number(userId)}:${requestKey.slice(0, 150)}`,
+    inputHash, promptHash:null, outputContractHash:null, provider, model,
+    modelProfileId, protocol, credentialSource,
+    frozenContext:{ request_params:frozenParams, auto_execute:true },
+    taskDeadlineAtUtcMs:deadlines.taskDeadlineUtcMs,
+    resultValidUntilUtcMs:deadlines.taskDeadlineUtcMs, maxAttempts:1,
+  }, { workerId:`manual-analysis-ws:${process.pid}` })
+  const mergedSignal = typeof AbortSignal?.any === 'function'
+    ? AbortSignal.any([guard.signal, tracker.signal]) : guard.signal
+  try {
+    guard.assertConnected()
+    const result = await ai.handleAnalyze(userId, requestParams, {
+      taskId:tracker.taskId, abortSignal:mergedSignal,
+      expectedModelIdentity:{ provider:String(provider), model:String(model), modelProfileId,
+        protocol:String(protocol), credentialSource:String(credentialSource) },
+      assertAutoExecute:guard.assertConnected,
+      taskDeadlineAtUtcMs:Number(tracker.task?.task_deadline_at_utc_msc) || deadlines.attemptSafetyDeadlineUtcMs,
+      resultValidUntilUtcMs:Number(tracker.task?.result_valid_until_utc_msc) || deadlines.attemptSafetyDeadlineUtcMs,
+      onInferencePrepared:evidence => tracker.persistBudget(evidence?.modelTaskBudget),
+      onProviderRequest:event => tracker.onProviderRequest(event),
+      onProviderUsage:event => tracker.onProviderUsage(event),
+      onProviderActivity:event => tracker.onProviderActivity(event),
+      onProviderQuiet:event => tracker.onProviderQuiet(event),
+    })
+    if (result?.status === 'success') {
+      await tracker.resultReady({ resultHash:crypto.createHash('sha256').update(JSON.stringify(result.signal || result)).digest('hex') })
+      await tracker.applying()
+      await tracker.succeeded({ resultRef:`ai_signals:${result.signal?.id || tracker.taskId}` })
+    } else {
+      const failure = Object.assign(new Error(result?.error_code || result?.message || 'manual_analysis_failed'),
+        { code:result?.error_code || 'manual_analysis_failed' })
+      await tracker.failed(failure, true)
+    }
+    return result
+  } catch (error) {
+    await tracker.failed(error, true).catch(() => {})
+    throw error
+  } finally {
+    try { await tracker.stop?.() } catch {}
+  }
+}
+
 // Notification wake-ups are addressed only to the authenticated user's own
 // browser sockets.  Do not call sendToBrowsers here: that helper intentionally
 // forwards a small set of market/read-model events to observer channels, while
@@ -2682,7 +2759,11 @@ function applyVisibleSignalRecord(row, delivery, source, { includeLegacyMarketDa
 
 async function handleBrowserCommand(ws, userId, msg) {
   const { command_id, action, params = {} } = msg
-  const autoExecuteGuard = action === 'analyze' && params?.auto_execute === true
+  const autoExecuteRequested = params?.auto_execute === true
+    || String(params?.auto_execute || '').toLowerCase() === 'true'
+  const analyzeParams = action === 'analyze'
+    ? { ...(params || {}), auto_execute:autoExecuteRequested } : params
+  const autoExecuteGuard = action === 'analyze' && autoExecuteRequested
     ? createBrowserAutoExecuteGuard(userId, ws) : null
   const reply = (data) => {
     if (ws.readyState === 1) {
@@ -3086,10 +3167,9 @@ async function handleBrowserCommand(ws, userId, msg) {
         result = await ai.mt5Bridge(dataUserId, 'diagnostics', routedParams(), { noFallback:true })
         break
       case 'analyze':
-        result = await ai.handleAnalyze(userId, params, autoExecuteGuard ? {
-          abortSignal:autoExecuteGuard.signal,
-          assertAutoExecute:autoExecuteGuard.assertConnected,
-        } : {})
+        result = autoExecuteGuard
+          ? await runBrowserAutoExecuteWithModelTask(ai, userId, analyzeParams, command_id, autoExecuteGuard)
+          : await ai.handleAnalyze(userId, analyzeParams, {})
         if (result?.signal) {
           result.signal = ai.attachSignalPresentation(ai.restrictSignalExperienceUsage(result.signal, {
             requesterUserId: userId, requesterRole: user?.role || 'user',

@@ -23,15 +23,16 @@ import { createObserverSourceAccount } from './observer-source-accounts.js'
 import { synchronizeObserverSourceRuntime } from './observer-source-runtime.js'
 import { canManagePlatformAiContent, isObserverSourceAccount } from './platform-content-access.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
-import { listMemoryItems, listMemorySummaries, revokeMemoryItem, activateDuplicateMemory,
-  getMemorySettings, setMemorySettings, rollbackMemorySummary, confirmLongTermMemory,
-  revokeLongTermMemory, createMemoryFromApprovedPeriodReview } from './memory-system.js'
-import { getPlatformExperiencePolicies, createPlatformExperienceCandidateFromApprovedPeriodReview, listPlatformExperience,
-  deleteRevokedPlatformExperienceItem, getPlatformExperienceEvaluation, updatePlatformExperienceItem,
-  updatePlatformExperiencePolicy } from './platform-experience.js'
+import { dismissStrategyMemoryConflict, getOrCreateStrategyMemoryLibrary,
+  getStrategyMemoryLibraryPreview,
+  listStrategyMemoryConflicts, listStrategyMemoryLibraries, listStrategyMemoryLibraryRevisions,
+  getStrategyMemoryCompressionJobStatus, getLatestStrategyMemoryCompressionJobStatus,
+  queueStrategyMemoryCompressionJob, reopenStrategyMemoryConflict, resolveStrategyMemoryConflict,
+  restoreStrategyMemoryLibraryRevision, saveStrategyMemoryLibrary } from './strategy-memory-library.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelProfileDeletionImpact, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
-  resolveOwnedModelProfileForRuntime, resolveAiTaskModel } from './model-profiles.js'
+  resolveOwnedModelProfileForRuntime, resolveAiTaskModel, saveModelProfileWithValidation } from './model-profiles.js'
+import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription } from './strategy-ownership.js'
@@ -55,6 +56,13 @@ import { getPositionManagementSettings, getPositionManagementTask, listPositionM
 import { getPositionManagementWorkerStatus } from './position-management-worker.js'
 import { createManualAnalysisJob, getManualAnalysisJob, cancelManualAnalysisJob,
   startManualAnalysisJobs } from './manual-analysis-jobs.js'
+import { startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker,
+  runStrategyMemoryCompressionOnce, recoverAbandonedStrategyMemoryCompressionModelTasks,
+  requestStrategyMemoryCompressionCycle } from './strategy-memory-compression.js'
+import { getLatestStrategyMemoryConsistencyJob, getStrategyMemoryConsistencyJob,
+  queueStrategyMemoryConsistencyCheck, requestStrategyMemoryConsistencyCycle,
+  runStrategyMemoryConsistencyOnce, startStrategyMemoryConsistencyWorker,
+  stopStrategyMemoryConsistencyWorker } from './strategy-memory-consistency.js'
 import { listEligibleManualTradeReviews, listManualTradeReviewStrategies, createManualTradeReview,
   listManualTradeReviews, getManualTradeReview, getManualTradeReviewJobStatus, editManualTradeReview,
   confirmManualTradeReview, retryManualTradeReview,
@@ -67,13 +75,11 @@ const __dirname = dirname(__filename)
 const BRIDGE_VERSION = readFileSync(join(__dirname, '../../../VERSION'), 'utf-8').trim()
 const BRIDGE_RELEASE = resolveBridgeInstallerRelease()
 
-// Connection probes should be large enough for a short structured response,
-// while still respecting the profile's configured output ceiling. Thinking
-// models need more room for their internal reasoning than ordinary probes.
-export const CONNECTION_TEST_DEFAULT_MAX_TOKENS = 8_000
-export const CONNECTION_TEST_MIN_MAX_TOKENS = 100
-export const CONNECTION_TEST_THINKING_MAX_TOKENS = 4_096
-export const CONNECTION_TEST_NON_THINKING_MAX_TOKENS = 256
+// Connection validation uses the pending profile's physical maximum output.
+// It deliberately has no separate thinking budget or hidden probe cap: the
+// provider receives the same thinking setting and output contract that will be
+// stored after a successful validation.
+export const CONNECTION_TEST_DEFAULT_MAX_TOKENS = 393_216
 
 export function normalizeModelThinkingEnabled(value) {
   if (typeof value === 'string') {
@@ -85,13 +91,9 @@ export function normalizeModelThinkingEnabled(value) {
 }
 
 export function resolveModelConnectionTestMaxTokens(model = {}) {
-  const configured = Number.parseInt(model.max_tokens, 10)
-  const hardCap = Number.isInteger(configured) && configured > 0
-    ? Math.max(CONNECTION_TEST_MIN_MAX_TOKENS, configured)
-    : CONNECTION_TEST_DEFAULT_MAX_TOKENS
-  return Math.min(hardCap, normalizeModelThinkingEnabled(model.thinking_enabled)
-    ? CONNECTION_TEST_THINKING_MAX_TOKENS
-    : CONNECTION_TEST_NON_THINKING_MAX_TOKENS)
+  const configured = Number(model.max_output_tokens)
+  return Number.isSafeInteger(configured) && configured > 0
+    ? configured : CONNECTION_TEST_DEFAULT_MAX_TOKENS
 }
 
 export function resolveModelConnectionTestConfig(model = {}) {
@@ -172,8 +174,52 @@ function reviewError(res, error) {
     console.error(`[AI API ${incidentId}]`, error)
     return res.status(500).json({ ok:false, error:'ai_internal_error', incident_id:incidentId })
   }
-  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required') || code === 'manual_trade_review_forbidden') ? 403 : 400
+  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('forbidden') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required') || code === 'manual_trade_review_forbidden') ? 403 : 400
   return res.status(status).json({ ok: false, error: code })
+}
+
+export function modelConnectionValidationError(error) {
+  const providerStatus = Number(error?.providerStatus || error?.httpStatus)
+  if (providerStatus === 401 || providerStatus === 403) return 'model_connection_auth_failed'
+  if (providerStatus === 429) return 'model_connection_rate_limited'
+  if (providerStatus === 404) return 'model_connection_model_unavailable'
+  if (providerStatus === 400) return 'model_connection_request_rejected'
+  const raw = String(error?.code || error?.message || '')
+  if (raw === 'output_truncated' || raw === 'ai_response_missing_json_object'
+      || raw === 'ai_response_not_object' || raw === 'model_connection_probe_invalid_response'
+      || raw.startsWith('ai_response_invalid_')) return 'model_connection_output_incomplete'
+  if (raw.includes('API key') || raw.includes('api_key')) return 'model_connection_invalid_api_key'
+  return 'model_connection_unavailable'
+}
+
+/** Execute exactly one provider request for a pending model profile. */
+export async function verifyPendingModelProfile(model = {}) {
+  const provider = model.provider || model.api_provider
+  const protocol = modelProviderProtocol(provider)
+  const base = String(model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
+  if (!base) throw new Error('unsupported_model_provider')
+  const testConfig = resolveModelConnectionTestConfig({ ...model, max_output_tokens:model.max_output_tokens })
+  try {
+    const result = await requestJsonObject({
+      url:`${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
+      apiKey:model.api_key_encrypted, provider, model:model.model_name, temperature:0,
+      maxTokens:testConfig.maxTokens, protocol, timeout:model.request_timeout_ms || 120000,
+      thinkingEnabled:testConfig.thinkingEnabled, reasoningEffort:testConfig.reasoningEffort,
+      messages:[{ role:'system', content:'Return exactly {"ok":true} as JSON.' }, { role:'user', content:'{"ok":true}' }],
+      allowFollowupRequests:false, usageContext:null,
+    })
+    if (!result || typeof result !== 'object' || Array.isArray(result) || result.ok !== true) {
+      throw new Error('model_connection_probe_invalid_response')
+    }
+    return { ok:true }
+  } catch (error) {
+    const stableCode = modelConnectionValidationError(error)
+    const stable = new Error(stableCode)
+    stable.code = stableCode
+    stable.providerStatus = error?.providerStatus
+    stable.cause = error
+    throw stable
+  }
 }
 
 function requireAiAdmin(req, res) {
@@ -348,7 +394,8 @@ router.get('/ai/model-profiles', authMiddleware, async (req, res) => {
 
 router.post('/ai/model-profiles', authMiddleware, async (req, res) => {
   try {
-    const profile = await createModelProfile(req.user.id, req.body || {}, req.user.role)
+    const profile = await saveModelProfileWithValidation({ userId:req.user.id, payload:req.body || {},
+      callerRole:req.user.role, verify:verifyPendingModelProfile })
     await auditAiMutation(req, 'ai_model_profile_created', 'ai_model_profile', profile.id, {
       scope:profile.scope, provider:profile.provider, model_name:profile.model_name,
     })
@@ -359,7 +406,9 @@ router.post('/ai/model-profiles', authMiddleware, async (req, res) => {
 
 router.put('/ai/model-profiles/:id', authMiddleware, async (req, res) => {
   try {
-    const profile = await updateModelProfile(Number(req.params.id), req.body?.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id, req.body || {})
+    const profile = await saveModelProfileWithValidation({ id:Number(req.params.id),
+      userId:req.body?.scope === 'platform' && req.user.role === 'admin' ? 0 : req.user.id,
+      callerRole:req.user.role, payload:req.body || {}, verify:verifyPendingModelProfile })
     await auditAiMutation(req, 'ai_model_profile_updated', 'ai_model_profile', profile.id, {
       scope:profile.scope, provider:profile.provider, model_name:profile.model_name,
       credential_rotated:Boolean(req.body?.api_key),
@@ -401,7 +450,8 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
     const ownerId = req.user.role === 'admin' && req.body?.scope === 'platform' ? 0 : req.user.id
     const resolved = await resolveOwnedModelProfileForRuntime(Number(req.params.id), ownerId)
     if (!resolved.model) throw new Error(resolved.error || 'model_unavailable')
-    const testConfig = resolveModelConnectionTestConfig(resolved.model)
+    const capabilities = await getModelProviderCapabilities(resolved.model_profile_id)
+    const testConfig = resolveModelConnectionTestConfig({ ...resolved.model, ...capabilities })
     const { provider, protocol } = testConfig
     const base = String(resolved.model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
     if (!base) throw new Error('unsupported_model_provider')
@@ -580,11 +630,17 @@ router.put('/ai/strategies/:id', authMiddleware, async (req, res) => {
       if (!existing || existing.scope !== 'platform') return res.status(404).json({ ok:false, error:'strategy_not_found' })
     }
     const strategy = await updateStrategy(Number(req.params.id), req.user.id, strategyRole, req.body || {})
+    let consistencyJob = null
+    try {
+      consistencyJob = await queueStrategyMemoryConsistencyCheck({ strategyId:strategy.id,
+        strategyVersion:strategy.version, triggerType:'strategy_save' })
+      if (consistencyJob.created) requestStrategyMemoryConsistencyCycle()
+    } catch (error) { console.error('[StrategyMemory] consistency queue after strategy save:', error.message) }
     const runtime_sync = await reconcileAiRuntime()
     await auditAiMutation(req, 'ai_strategy_updated', 'ai_strategy', strategy.id, {
       scope:strategy.scope, visibility_status:strategy.visibility_status, version:strategy.version,
     })
-    res.json({ ok:true, strategy, runtime_sync })
+    res.json({ ok:true, strategy, runtime_sync, consistency_job_id:consistencyJob?.id || null })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -1239,84 +1295,193 @@ router.get('/ai/admin/reviews/health', authMiddleware, async (req, res) => {
 })
 
 router.get('/ai/memory', authMiddleware, async (req, res) => {
-  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
+  res.status(410).json({ ok:false, error:'legacy_tiered_memory_retired', use_endpoint:'/api/ai/strategy-memories' })
+})
+
+router.put('/ai/memory/settings', authMiddleware, async (req, res) => {
+  res.status(410).json({ ok:false, error:'legacy_tiered_memory_retired', use_endpoint:'/api/ai/strategy-memories' })
+})
+
+router.post('/ai/memory/:id/revoke', authMiddleware, async (req, res) => {
+  res.status(410).json({ ok:false, error:'legacy_tiered_memory_retired', use_endpoint:'/api/ai/strategy-memories' })
+})
+
+router.post('/ai/memory/:id/activate', authMiddleware, async (req, res) => {
+  res.status(410).json({ ok:false, error:'legacy_tiered_memory_retired', use_endpoint:'/api/ai/strategy-memories' })
+})
+
+router.post('/ai/memory/long/:id/confirm', authMiddleware, async (req, res) => {
+  res.status(410).json({ ok:false, error:'legacy_tiered_memory_retired', use_endpoint:'/api/ai/strategy-memories' })
+})
+
+router.post('/ai/memory/long/:id/revoke', authMiddleware, async (req, res) => {
+  res.status(410).json({ ok:false, error:'legacy_tiered_memory_retired', use_endpoint:'/api/ai/strategy-memories' })
+})
+
+router.post('/ai/memory/summaries/:id/rollback', authMiddleware, async (req, res) => {
+  res.status(410).json({ ok:false, error:'legacy_tiered_memory_retired', use_endpoint:'/api/ai/strategy-memories' })
+})
+
+router.get('/ai/strategy-memories', authMiddleware, async (req, res) => {
+  try { res.json({ ok:true, strategies:await listStrategyMemoryLibraries({ actor:req.user }) }) }
+  catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategy-memories/:strategyId', authMiddleware, async (req, res) => {
   try {
-    const [items, summaries, settings] = await Promise.all([
-      listMemoryItems(req.user.id, req.query), listMemorySummaries(req.user.id, req.query), getMemorySettings(req.user.id),
+    const strategyId = Number(req.params.strategyId)
+    const [library, revisions, conflicts] = await Promise.all([
+      getOrCreateStrategyMemoryLibrary({ strategyId, actor:req.user }),
+      listStrategyMemoryLibraryRevisions({ strategyId, actor:req.user, limit:req.query.limit }),
+      listStrategyMemoryConflicts({ strategyId, actor:req.user }),
     ])
-    res.json({ ok: true, items, summaries, settings })
+    res.json({ ok:true, library, revisions, conflicts })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategy-memories/:strategyId/preview', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const preview = await getStrategyMemoryLibraryPreview({ strategyId, actor:req.user,
+      version_no:req.query.version_no })
+    const consistencyCheck = await getLatestStrategyMemoryConsistencyJob({ strategyId,
+      strategyVersion:preview.library_identity.strategy_version,
+      libraryVersionNo:preview.library_identity.version_no })
+    res.json({ ok:true, ...preview, consistency_check:consistencyCheck || null })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/strategy-memories/:strategyId/consistency-checks', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    await getOrCreateStrategyMemoryLibrary({ strategyId, actor:req.user })
+    const job = await queueStrategyMemoryConsistencyCheck({ strategyId,
+      libraryVersionNo:req.body?.expected_version_no, triggerType:req.body?.trigger_type || 'manual_check',
+      forceNew:req.body?.force_new === true })
+    if (job.created) requestStrategyMemoryConsistencyCycle()
+    await auditAiMutation(req, 'strategy_memory_consistency_check_queued', 'ai_strategy', strategyId,
+      { job_id:job.id, created:job.created, replayed:job.replayed })
+    res.status(job.created ? 202 : 200).json({ ok:true, created:job.created, replayed:job.replayed, job })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategy-memories/:strategyId/consistency-checks/latest', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    await getOrCreateStrategyMemoryLibrary({ strategyId, actor:req.user })
+    res.json({ ok:true, job:await getLatestStrategyMemoryConsistencyJob({ strategyId }) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategy-memories/:strategyId/consistency-checks/:jobId', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    await getOrCreateStrategyMemoryLibrary({ strategyId, actor:req.user })
+    const job = await getStrategyMemoryConsistencyJob({ strategyId, jobId:Number(req.params.jobId) })
+    res.json({ ok:true, job })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/strategy-memories/:strategyId', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const library = await saveStrategyMemoryLibrary({ strategyId, actor:req.user, ...(req.body || {}) })
+    let consistencyJob = null
+    try {
+      consistencyJob = await queueStrategyMemoryConsistencyCheck({ strategyId,
+        libraryVersionNo:library.version_no, triggerType:'manual_save' })
+      if (consistencyJob.created) requestStrategyMemoryConsistencyCycle()
+    } catch (error) { console.error('[StrategyMemory] consistency queue after save:', error.message) }
+    await auditAiMutation(req, 'strategy_memory_library_updated', 'ai_strategy', strategyId, { version_no:library.version_no })
+    res.json({ ok:true, library, consistency_job_id:consistencyJob?.id || null })
   }
   catch (error) { reviewError(res, error) }
 })
 
-router.put('/ai/memory/settings', authMiddleware, async (req, res) => {
-  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
-  try { res.json({ ok: true, settings: await setMemorySettings(req.user.id, req.body || {}) }) }
+router.post('/ai/strategy-memories/:strategyId/compress', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const job = await queueStrategyMemoryCompressionJob({ strategyId, actor:req.user, trigger:'manual' })
+    if (job.created || job.library_status_updated) requestStrategyMemoryCompressionCycle()
+    const terminal = ['succeeded', 'succeeded_noop', 'failed'].includes(String(job.status || ''))
+    await auditAiMutation(req, terminal ? 'strategy_memory_compression_replayed' : 'strategy_memory_compression_queued',
+      'ai_strategy', strategyId, { job_id:job.id, status:job.status, created:job.created, replayed:job.replayed })
+    res.status(terminal ? 200 : 202).json({ ok:true, job })
+  }
   catch (error) { reviewError(res, error) }
 })
 
-router.post('/ai/memory/:id/revoke', authMiddleware, async (req, res) => {
-  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
-  try { res.json({ ok: true, ...(await revokeMemoryItem(Number(req.params.id), req.user.id)) }) }
+router.get('/ai/strategy-memories/:strategyId/compression-jobs/:jobId', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const jobId = Number(req.params.jobId)
+    const job = await getStrategyMemoryCompressionJobStatus({ strategyId, jobId, actor:req.user })
+    res.json({ ok:true, job })
+  }
   catch (error) { reviewError(res, error) }
 })
 
-router.post('/ai/memory/:id/activate', authMiddleware, async (req, res) => {
-  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
-  try { res.json({ ok: true, item: await activateDuplicateMemory(Number(req.params.id), req.user.id) }) }
+router.get('/ai/strategy-memories/:strategyId/compression-jobs-latest', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const job = await getLatestStrategyMemoryCompressionJobStatus({ strategyId, actor:req.user })
+    res.json({ ok:true, job })
+  }
   catch (error) { reviewError(res, error) }
 })
 
-router.post('/ai/memory/long/:id/confirm', authMiddleware, async (req, res) => {
-  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
-  try { res.json({ ok: true, item: await confirmLongTermMemory(Number(req.params.id), req.user.id) }) }
+router.post('/ai/strategy-memories/:strategyId/revisions/:revisionId/restore', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const revisionId = Number(req.params.revisionId)
+    const library = await restoreStrategyMemoryLibraryRevision({ strategyId, revisionId, actor:req.user, ...(req.body || {}) })
+    let consistencyJob = null
+    try {
+      consistencyJob = await queueStrategyMemoryConsistencyCheck({ strategyId,
+        libraryVersionNo:library.version_no, triggerType:'restore' })
+      if (consistencyJob.created) requestStrategyMemoryConsistencyCycle()
+    } catch (error) { console.error('[StrategyMemory] consistency queue after restore:', error.message) }
+    await auditAiMutation(req, 'strategy_memory_library_restored', 'ai_strategy', strategyId, { revision_id:revisionId, version_no:library.version_no })
+    res.json({ ok:true, library, consistency_job_id:consistencyJob?.id || null })
+  }
   catch (error) { reviewError(res, error) }
 })
 
-router.post('/ai/memory/long/:id/revoke', authMiddleware, async (req, res) => {
-  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
-  try { res.json({ ok: true, ...(await revokeLongTermMemory(Number(req.params.id), req.user.id)) }) }
-  catch (error) { reviewError(res, error) }
-})
-
-router.post('/ai/memory/summaries/:id/rollback', authMiddleware, async (req, res) => {
-  if (canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_personal_memory_disabled' })
-  try { res.json({ ok: true, ...(await rollbackMemorySummary(Number(req.params.id), req.user.id)) }) }
+router.post('/ai/strategy-memory-conflicts/:id/:action', authMiddleware, async (req, res) => {
+  const actions = { resolve:resolveStrategyMemoryConflict, dismiss:dismissStrategyMemoryConflict, reopen:reopenStrategyMemoryConflict }
+  const action = actions[req.params.action]
+  if (!action) return res.status(400).json({ ok:false, error:'strategy_memory_conflict_action_invalid' })
+  try {
+    const conflictId = Number(req.params.id)
+    const conflict = await action({ conflictId, actor:req.user, ...(req.body || {}) })
+    await auditAiMutation(req, `strategy_memory_conflict_${req.params.action}`, 'strategy_memory_conflict', conflictId)
+    res.json({ ok:true, conflict })
+  }
   catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/admin/platform-experience', authMiddleware, async (req, res) => {
-  if (!canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_only' })
-  try {
-    const [items, policies, evaluation] = await Promise.all([
-      listPlatformExperience(req.query), getPlatformExperiencePolicies(), getPlatformExperienceEvaluation(req.query),
-    ])
-    res.json({ ok: true, items, policies, evaluation })
-  } catch (error) { reviewError(res, error) }
+  res.status(410).json({ ok:false, error:'legacy_platform_experience_retired', use_endpoint:'/api/ai/strategy-memories' })
 })
 
 router.put('/ai/admin/platform-experience/policies/:strategyId', authMiddleware, async (req, res) => {
-  if (!canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_only' })
-  try { res.json({ ok: true, policy: await updatePlatformExperiencePolicy(Number(req.params.strategyId), req.user.id, req.body || {}) }) }
-  catch (error) { reviewError(res, error) }
+  res.status(410).json({ ok:false, error:'legacy_platform_experience_retired', use_endpoint:'/api/ai/strategy-memories' })
 })
 
 router.post('/ai/admin/platform-experience/:id/:action', authMiddleware, async (req, res) => {
-  if (!canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_only' })
-  const status = req.params.action === 'publish' ? 'active' : req.params.action === 'revoke' ? 'revoked' : null
-  if (!status) return res.status(400).json({ ok: false, error: 'invalid_platform_experience_action' })
-  try { res.json({ ok: true, item: await updatePlatformExperienceItem(Number(req.params.id), req.user.id, status) }) }
-  catch (error) { reviewError(res, error) }
+  res.status(410).json({ ok:false, error:'legacy_platform_experience_retired', use_endpoint:'/api/ai/strategy-memories' })
 })
 
 router.delete('/ai/admin/platform-experience/:id', authMiddleware, async (req, res) => {
-  if (!canManagePlatformAiContent(req.user)) return res.status(403).json({ ok: false, error: 'admin_only' })
-  try { res.json({ ok:true, ...(await deleteRevokedPlatformExperienceItem(Number(req.params.id))) }) }
-  catch (error) { reviewError(res, error) }
+  res.status(410).json({ ok:false, error:'legacy_platform_experience_retired', use_endpoint:'/api/ai/strategy-memories' })
 })
 
 export { initAutoSchedulers, startManualAnalysisJobs, startHistoryCompareRecoveryWorker,
-  startManualTradeReviewWorker, stopManualTradeReviewWorker }
+  startManualTradeReviewWorker, stopManualTradeReviewWorker,
+  startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker,
+  runStrategyMemoryCompressionOnce, recoverAbandonedStrategyMemoryCompressionModelTasks,
+  startStrategyMemoryConsistencyWorker, stopStrategyMemoryConsistencyWorker,
+  runStrategyMemoryConsistencyOnce }
 
 export { mt5Bridge, platformRates } from './market-data.js'
 export { getPlatformMarketStatus } from './platform-market-data.js'
@@ -1374,13 +1539,6 @@ export { validateReviewContent, assessReviewEvidence, ensureReviewCaseForOutcome
   enqueueEligibleReviewCases, runReviewWorkerOnce, startReviewWorker, stopReviewWorker,
   listReviewCases, getReviewCase, editReviewCase, confirmReviewCase, retryReviewCase,
   getReviewAdminHealth } from './review-workflow.js'
-export { sanitizeMemoryText, memorySimilarity, rankMemoryCandidates,
-  createMemoryFromApprovedReview, createMemoryFromApprovedPeriodReview,
-  setMemorySettings, getMemorySettings, listMemoryItems, listMemorySummaries,
-  confirmLongTermMemory, revokeLongTermMemory,
-  revokeMemoryItem, activateDuplicateMemory, retrievePersonalMemory, attachMemoryInjectionSignal,
-  maybeQueueCompression, runMemoryCompressionOnce, rollbackMemorySummary,
-  startMemoryCompressionWorker, stopMemoryCompressionWorker } from './memory-system.js'
 export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, runPeriodReviewCycle,
   runPeriodReviewDerivationOnce, resumePeriodReviewDerivationJobs,
@@ -1388,10 +1546,6 @@ export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
   markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
   retryPeriodReviewDerivation } from './period-review.js'
-export { sanitizePlatformExperienceText, createPlatformExperienceCandidateFromApprovedReview,
-  createPlatformExperienceCandidateFromApprovedPeriodReview,
-  listPlatformExperience, getPlatformExperiencePolicies, updatePlatformExperiencePolicy,
-  updatePlatformExperienceItem, retrievePlatformExperience, attachPlatformExperienceSignal } from './platform-experience.js'
 
 export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatureFlags,
   updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'

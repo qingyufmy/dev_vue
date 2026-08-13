@@ -6,7 +6,7 @@ vi.mock('../../server/db.js', () => ({
   queryRun: vi.fn(),
 }))
 
-import { resolveModelProviderCapabilities } from '../../server/routes/ai/model-provider-capabilities.js'
+import { normalizeProviderCapabilities, resolveModelProviderCapabilities } from '../../server/routes/ai/model-provider-capabilities.js'
 
 describe('runtime model provider capability resolver', () => {
   beforeEach(() => queryOne.mockReset())
@@ -22,7 +22,9 @@ describe('runtime model provider capability resolver', () => {
     })).resolves.toMatchObject({ supports_stream:true, supports_request_id:true })
     await expect(resolveModelProviderCapabilities({
       provider:'deepseek', protocol:'chat_completions', url:'https://proxy.example.test/chat/completions',
-    })).resolves.toMatchObject({ supports_stream:false, supports_request_id:false, verification_status:'unverified' })
+    })).resolves.toMatchObject({ supports_stream:false, supports_request_id:false, verification_status:'unverified',
+      context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216,
+      token_limits_source:'generic_default', token_limits_status:'default_unconfirmed' })
     await expect(resolveModelProviderCapabilities({
       provider:'kimi_code', protocol:'chat_completions', url:'https://api.kimi.com/coding/v1/chat/completions',
     })).resolves.toMatchObject({ supports_stream:false })
@@ -40,5 +42,16 @@ describe('runtime model provider capability resolver', () => {
       max_output_tokens:1024, capability_source:'db_verified',
     })
     expect(queryOne).toHaveBeenCalledWith(expect.stringContaining('ai_model_provider_capabilities'), [17])
+  })
+
+  it('preserves manual token limits even when provider transport is unverified', () => {
+    expect(normalizeProviderCapabilities({
+      verification_status:'unverified', supports_stream:1,
+      context_window_tokens:128000, max_input_tokens:120000, max_output_tokens:64000,
+      token_limits_source:'manual_confirmed', token_limits_status:'confirmed',
+    })).toMatchObject({
+      supports_stream:false, context_window_tokens:128000, max_input_tokens:120000,
+      max_output_tokens:64000, token_limits_source:'manual_confirmed', token_limits_status:'confirmed',
+    })
   })
 })

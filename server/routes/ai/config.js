@@ -6,7 +6,7 @@ import { DEFAULT_API_BASE_URL } from '../../config.js'
 import { mt5Bridge, computeAtr14 } from './market-data.js'
 import { buildSafeExecutionOutcome, prepareAuditRecord, shouldSkipHoldAudit } from '../../audit-localization.js'
 import { isEncryptionAvailable } from '../../ai-credential.js'
-import { resolveAiTaskModel, upsertDefaultModelProfileFromLegacyInput } from './model-profiles.js'
+import { resolveAiTaskModel } from './model-profiles.js'
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
 import { DEFAULT_AI_VOLUME_STEP, evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy, resolvePlatformAiVolumeRange } from './risk-policy.js'
 import { normalizePositionSizeTier, positionSizeFactor } from './position-sizing.js'
@@ -565,26 +565,9 @@ export async function getCloseConfig(userId) {
 }
 
 export async function saveCloseConfig(userId, cfg) {
-  const now = beijingNow()
-  if (cfg.api_key) await upsertDefaultModelProfileFromLegacyInput(userId, 'user', cfg, 'user')
-  const keyEnc = null
-  await queryRun(`INSERT INTO close_config (user_id, enabled, check_interval_seconds, model_name, api_provider, api_base_url, api_key_encrypted, temperature, max_tokens, system_prompt,
-    rule_soft_sl, rule_soft_tp, rule_timeout_minutes, rule_max_loss_pct, rule_reverse_signal, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-    enabled = VALUES(enabled), check_interval_seconds = VALUES(check_interval_seconds),
-    model_name = VALUES(model_name), api_provider = VALUES(api_provider), api_base_url = VALUES(api_base_url),
-    api_key_encrypted = VALUES(api_key_encrypted), temperature = VALUES(temperature), max_tokens = VALUES(max_tokens),
-    system_prompt = VALUES(system_prompt),
-    rule_soft_sl = VALUES(rule_soft_sl), rule_soft_tp = VALUES(rule_soft_tp),
-    rule_timeout_minutes = VALUES(rule_timeout_minutes), rule_max_loss_pct = VALUES(rule_max_loss_pct),
-    rule_reverse_signal = VALUES(rule_reverse_signal), updated_at = VALUES(updated_at)`,
-    [userId, cfg.enabled ? 1 : 0, cfg.check_interval_seconds || 60, cfg.model_name || 'deepseek-chat',
-      cfg.api_provider || 'deepseek', cfg.api_base_url || DEFAULT_API_BASE_URL, keyEnc,
-      cfg.temperature ?? DEFAULT_TEMPERATURE, cfg.max_tokens ?? DEFAULT_MAX_TOKENS,
-      cfg.system_prompt || null, cfg.rule_soft_sl ?? null, cfg.rule_soft_tp ?? null,
-      cfg.rule_timeout_minutes ?? null, cfg.rule_max_loss_pct ?? null, cfg.rule_reverse_signal ? 1 : 0, now])
-  return await getCloseConfig(userId)
+  // Smart-close is retired. Keep the read path and table for historical compatibility,
+  // but never accept a legacy payload or write its obsolete output cap.
+  throw new Error('smart_close_feature_retired')
 }
 
 export async function getCloseSignalTickets(userId) {

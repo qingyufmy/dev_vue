@@ -11,18 +11,24 @@ describe('model provider capabilities and adapters', () => {
     })
   })
 
-  it('does not trust capability flags or token limits until the profile is verified', () => {
+  it('does not trust transport flags but preserves independently confirmed token limits', () => {
     expect(normalizeProviderCapabilities({
       verification_status:'unverified',
       supports_stream:1,
       supports_poll:1,
       context_window_tokens:128000,
+      max_input_tokens:96000,
       max_output_tokens:32000,
+      token_limits_source:'manual_confirmed',
+      token_limits_status:'confirmed',
     })).toMatchObject({
       supports_stream:false,
       supports_poll:false,
-      context_window_tokens:null,
-      max_output_tokens:null,
+      context_window_tokens:128000,
+      max_input_tokens:96000,
+      max_output_tokens:32000,
+      token_limits_source:'manual_confirmed',
+      token_limits_status:'confirmed',
       verification_status:'unverified',
     })
   })

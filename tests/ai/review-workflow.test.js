@@ -9,7 +9,7 @@ vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel: vi.fn() }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
-import { assessReviewEvidence, assessReviewStrategyEligibility, validateReviewContent } from '../../server/routes/ai/review-workflow.js'
+import { assessChanEvidenceStatus, assessReviewEvidence, assessReviewStrategyEligibility, validateReviewContent } from '../../server/routes/ai/review-workflow.js'
 
 const completeRow = (overrides = {}) => ({
   status: 'closed', review_eligible_at: '2026-07-15 12:00:00', attribution_status: 'attributed',
@@ -25,6 +25,14 @@ const content = (overrides = {}) => ({
 })
 
 describe('trade review evidence completeness', () => {
+  it('separates unsupported or incomplete Chan evidence from ordinary review evidence', () => {
+    expect(assessChanEvidenceStatus({ status:'enabled', unsupported_timeframes:['M30'] }, [])).toEqual({
+      status:'unsupported', reason:'chan_timeframe_unsupported',
+    })
+    expect(assessChanEvidenceStatus({ status:'enabled' }, [{ chan:{ status:'complete', evidence_capabilities:{ data_complete:false } } }]))
+      .toEqual({ status:'partial', reason:'chan_evidence_incomplete' })
+  })
+
   it('accepts only exact, closed evidence with the original historical prompt', () => {
     expect(assessReviewEvidence(completeRow(), deals)).toEqual({ complete: true, reasons: [] })
   })
@@ -92,16 +100,20 @@ describe('review durability and privacy guards', () => {
     expect(routes).toContain("req.user.role !== 'admin'")
   })
 
-  it('filters platform-strategy reviews for ordinary users at scan, queue and read boundaries', () => {
-    expect(service).toContain("snap.strategy_scope = 'platform' AND NOT ${platformManagerSql}")
+  it('filters platform-strategy reviews for ordinary users at evidence and read boundaries', () => {
+    expect(service).toContain("strategyScope === 'platform'")
     expect(service).toContain("eligibility_snap.strategy_scope = 'platform' AND ${platformManagerSql}")
     expect(service).toContain("platformAiContentManagerSql('eligibility_user')")
     expect(service).toContain('platform_strategy_user_review_disabled')
   })
 
   it('allows period reviews to prepare immutable trade evidence without queueing a legacy model job', () => {
-    expect(service).toContain('ensureReviewCaseForOutcome(outcomeId, { queueGeneration = false } = {})')
-    expect(service).toContain('if (queueGeneration && generationEnabled')
+    expect(service).toContain('ensureReviewCaseForOutcome(outcomeId, { queueGeneration: _queueGeneration = false } = {})')
+    expect(service).not.toContain('INSERT IGNORE INTO trade_review_jobs')
+    expect(service).not.toContain('lease_expires_at < ?')
+    expect(service).not.toContain('requestJsonObject')
+    expect(service).toContain('return { claimed:false, retired:true }')
+    expect(service).toContain("throw new Error('legacy_trade_review_disabled')")
   })
 
   it('does not downgrade complete trade evidence during a transient Bridge gap', () => {
@@ -110,10 +122,10 @@ describe('review durability and privacy guards', () => {
     expect(service).toContain("updated_at = IF(evidence_status = 'complete' AND VALUES(evidence_status) <> 'complete'")
   })
 
-  it('binds approval to the exact current version and retries model failures without touching trading', () => {
+  it('binds approval to the exact current version and keeps the retired generator away from trading', () => {
     expect(service).toContain('Number(reviewCase.current_version_id) !== Number(versionId)')
     expect(service).toContain("approved_version_id = ?")
-    expect(service).toContain("exhausted ? 'failed' : 'queued'")
+    expect(service).not.toContain("exhausted ? 'failed' : 'queued'")
     expect(service).not.toContain('prepareAndExecuteOrderIntent')
   })
 
@@ -126,14 +138,14 @@ describe('review durability and privacy guards', () => {
     expect(migration).toContain('path_evidence_status')
   })
 
-  it('resolves review models from the immutable strategy snapshot', () => {
-    expect(service).toContain('evidence?.inference_time?.snapshot?.strategy_id')
-    expect(service).toContain('strategyId, usage: \'review\'')
-    expect(service).toContain('strategyId },')
+  it('does not retain a model resolver in the retired per-trade workflow', () => {
+    expect(service).not.toContain('resolveAiTaskModel')
+    expect(service).not.toContain('modelTaskDeadlines')
+    expect(service).not.toContain('maxTokens:')
   })
 
-  it('requires every user-visible review field to be written in Chinese', () => {
-    expect(service).toContain('全部用户可见内容必须使用简体中文')
-    expect(service).toContain('禁止内部错误码、英文状态或整句英文')
+  it('does not retain a user-visible model prompt in the retired generator', () => {
+    expect(service).not.toContain('你是严格的交易复盘分析器')
+    expect(service).not.toContain('输出结构：')
   })
 })

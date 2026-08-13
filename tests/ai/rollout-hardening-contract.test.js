@@ -15,6 +15,8 @@ const strategy = readFileSync(new URL('../../server/routes/ai/strategy.js', impo
 const strategyOwnership = readFileSync(new URL('../../server/routes/ai/strategy-ownership.js', import.meta.url), 'utf8')
 const preferences = readFileSync(new URL('../../server/routes/ai/inference-preferences.js', import.meta.url), 'utf8')
 const userDeletion = readFileSync(new URL('../../server/admin/user-deletion.js', import.meta.url), 'utf8')
+const aiIndex = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
+const serverIndex = readFileSync(new URL('../../server/index.js', import.meta.url), 'utf8')
 
 describe('rollout hardening contract', () => {
   it('persists every supported entry method without truncation', () => {
@@ -59,7 +61,7 @@ describe('rollout hardening contract', () => {
     expect(analyze).toContain("VALUES (?, ?, 'manual'")
     expect(analyze).toContain("signal._inference_source === 'ai_error_hold'")
     expect(analyze).toContain("error_code: 'ai_inference_failed'")
-    expect(analyze).toContain('attachMemoryInjectionSignal(memory.logId, userId, signal.id, persisted.snapshotId)')
+    expect(analyze).toContain('updateStrategyMemoryInjectionLog(memory.logId, { signalId:signal.id')
     expect(analyze).not.toContain('pairedExperimentEnabled')
     expect(analyze).not.toContain('recordPairedInferenceRun')
     expect(scheduler).not.toContain('pairedExperimentEnabled')
@@ -99,7 +101,8 @@ describe('rollout hardening contract', () => {
     expect(bridge).not.toContain("case 'save_config'")
     expect(bridge).not.toContain("case 'get_auto_config'")
     expect(bridge).not.toContain('UPDATE ai_configs SET session_id = session_id')
-    expect(config).toContain("upsertDefaultModelProfileFromLegacyInput(userId, 'user'")
+    expect(config).not.toContain("upsertDefaultModelProfileFromLegacyInput(userId, 'user'")
+    expect(config).toContain("throw new Error('smart_close_feature_retired')")
   })
 
   it('applies the persisted trade switch while authenticating every V3 Bridge', () => {
@@ -164,5 +167,27 @@ describe('rollout hardening contract', () => {
     expect(migrations).toContain('CREATE TABLE IF NOT EXISTS mt5_account_bindings')
     expect(migrations).toContain('PRIMARY KEY (broker_server_key, login_account)')
     expect(migrations).toContain('current_trading_account_id')
+  })
+
+  it('retires legacy memory and platform-experience APIs while preserving unified strategy memory', () => {
+    expect(aiIndex).not.toContain("from './memory-system.js'")
+    expect(aiIndex).not.toContain("from './platform-experience.js'")
+
+    expect(aiIndex).toContain("router.get('/ai/memory', authMiddleware")
+    expect(aiIndex).toContain("router.put('/ai/memory/settings', authMiddleware")
+    expect(aiIndex).toContain("router.get('/ai/admin/platform-experience', authMiddleware")
+    expect(aiIndex).toContain("res.status(410).json({ ok:false, error:'legacy_tiered_memory_retired', use_endpoint:'/api/ai/strategy-memories' })")
+    expect(aiIndex).toContain("res.status(410).json({ ok:false, error:'legacy_platform_experience_retired', use_endpoint:'/api/ai/strategy-memories' })")
+
+    expect(aiIndex).toContain("router.get('/ai/strategy-memories', authMiddleware")
+    expect(aiIndex).toContain("router.put('/ai/strategy-memories/:strategyId', authMiddleware")
+    expect(aiIndex).toContain("router.post('/ai/strategy-memories/:strategyId/compress', authMiddleware")
+    expect(aiIndex).toContain('startStrategyMemoryCompressionWorker')
+    expect(aiIndex).toContain('runStrategyMemoryCompressionOnce')
+    expect(serverIndex).not.toContain("from './routes/ai/memory-system.js'")
+    expect(serverIndex).not.toContain('startMemoryCompressionWorker')
+    expect(serverIndex).not.toContain('runMemoryCompressionOnce')
+    expect(serverIndex).toContain('startStrategyMemoryCompressionWorker()')
+    expect(serverIndex).toContain('stopStrategyMemoryCompressionWorker()')
   })
 })

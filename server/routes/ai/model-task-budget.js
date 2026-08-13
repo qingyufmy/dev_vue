@@ -1,11 +1,12 @@
 const TASK_POLICIES = Object.freeze({
-  auto_inference:{ floor:2_000, defaultCap:30_000, attemptMs:10 * 60_000, taskMs:10 * 60_000 },
-  manual_analysis:{ floor:2_000, defaultCap:30_000, attemptMs:15 * 60_000, taskMs:30 * 60_000 },
-  daily_review:{ floor:3_000, defaultCap:30_000, attemptMs:20 * 60_000, taskMs:60 * 60_000 },
-  monthly_review_chunk:{ floor:3_000, defaultCap:30_000, attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
-  monthly_review_merge:{ floor:4_000, defaultCap:30_000, attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
-  model_compare:{ floor:2_000, defaultCap:30_000, attemptMs:15 * 60_000, taskMs:24 * 60 * 60_000 },
-  memory_compression:{ floor:1_600, defaultCap:12_000, attemptMs:15 * 60_000, taskMs:60 * 60_000 },
+  auto_inference:{ attemptMs:10 * 60_000, taskMs:10 * 60_000 },
+  manual_analysis:{ attemptMs:15 * 60_000, taskMs:30 * 60_000 },
+  daily_review:{ attemptMs:20 * 60_000, taskMs:60 * 60_000 },
+  monthly_review_chunk:{ attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
+  monthly_review_merge:{ attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
+  model_compare:{ attemptMs:15 * 60_000, taskMs:24 * 60 * 60_000 },
+  memory_compression:{ attemptMs:15 * 60_000, taskMs:60 * 60_000 },
+  strategy_memory_consistency:{ attemptMs:15 * 60_000, taskMs:60 * 60_000 },
 })
 
 export function modelTaskPolicy(taskKind) {
@@ -18,40 +19,114 @@ export function estimateModelInputTokens(messages, calibratedCharsPerToken = 3.2
   return Math.max(1, Math.ceil(chars / divisor))
 }
 
-export function selectModelTaskBudget({ taskKind, profileHardCap, providerOutputCap = null,
-  contextWindowTokens = null, estimatedInputTokens = 0, schemaNeedTokens = 0,
-  historicalOutputP95 = 0, truncatedOutputHighWatermark = 0, safetyReserveRatio = 0.15 } = {}) {
-  const policy = modelTaskPolicy(taskKind)
-  const profileCap = Math.max(1, Math.trunc(Number(profileHardCap) || policy.defaultCap))
-  const providerCap = Number(providerOutputCap) > 0 ? Math.trunc(Number(providerOutputCap)) : Number.POSITIVE_INFINITY
-  const contextWindow = Number(contextWindowTokens) > 0 ? Math.trunc(Number(contextWindowTokens)) : null
-  const safetyReserve = contextWindow ? Math.ceil(contextWindow * Math.max(0.1, Number(safetyReserveRatio) || 0.15)) : 0
-  const contextRoom = contextWindow
-    ? Math.max(0, contextWindow - Math.max(0, Math.trunc(Number(estimatedInputTokens) || 0)) - safetyReserve)
-    : Number.POSITIVE_INFINITY
-  const schemaNeed = Math.max(0, Math.ceil(Number(schemaNeedTokens) || 0))
-  const historyNeed = Math.max(0, Math.ceil((Number(historicalOutputP95) || 0) * 1.35))
-  const truncationNeed = Math.max(0, Math.ceil((Number(truncatedOutputHighWatermark) || 0) * 2))
-  const taskNeed = Math.max(policy.floor, schemaNeed, historyNeed, truncationNeed)
-  // The database profile is the operator-controlled output hard cap. Do not
-  // add an invisible task-level ceiling on top of it; verified provider and
-  // context-window limits remain authoritative safety bounds.
-  const hardLimit = Math.min(profileCap, providerCap, contextRoom)
-  const selected = Math.max(0, Math.min(hardLimit, taskNeed))
+function positiveInteger(value) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+/**
+ * Resolve the provider's manually maintained physical token contract.
+ *
+ * `verification_status` describes protocol capabilities and is deliberately
+ * not consulted here.  Token limits become authoritative only after the
+ * separate token-limits confirmation state is `confirmed`; until then formal
+ * model work is rejected rather than silently falling back to an AURUM cap.
+ */
+export function resolveEffectiveModelTokenLimits(profile = {}, capabilities = {}, requestInput = {}) {
+  const tokenLimitsStatus = String(capabilities.token_limits_status || 'default_unconfirmed').trim().toLowerCase()
+  const tokenLimitsSource = String(capabilities.token_limits_source || capabilities.capability_source || 'legacy_unverified').trim()
+  const tokenLimitsUpdatedAtUtcMs = positiveInteger(capabilities.token_limits_updated_at_utc_msc
+    ?? capabilities.tokenLimitsUpdatedAtUtcMs)
+  const contextWindowTokens = positiveInteger(capabilities.context_window_tokens ?? requestInput.contextWindowTokens)
+  const maxInputTokens = positiveInteger(capabilities.max_input_tokens
+    ?? capabilities.provider_max_input_tokens ?? requestInput.maxInputTokens)
+  const maxOutputTokens = positiveInteger(capabilities.max_output_tokens
+    ?? requestInput.providerOutputCap)
+  const contextLimitSemantics = String(capabilities.context_limit_semantics
+    || requestInput.contextLimitSemantics || 'shared_context').trim().toLowerCase() === 'separate'
+    ? 'separate' : 'shared_context'
+  // The profile is intentionally not read: ai_model_profiles.max_tokens is no
+  // longer a runtime contract. Physical provider limits are the only formal
+  // request boundary once the capability record is confirmed.
+  void profile
   return {
-    selectedMaxOutputTokens:selected,
+    tokenLimitsStatus,
+    tokenLimitsSource,
+    tokenLimitsUpdatedAtUtcMs,
+    contextWindowTokens,
+    maxInputTokens,
+    maxOutputTokens,
+    contextLimitSemantics,
+    confirmed:tokenLimitsStatus === 'confirmed',
+  }
+}
+
+export function selectModelTaskBudget({ taskKind, providerOutputCap = null,
+  contextWindowTokens = null, maxInputTokens = null, contextLimitSemantics = null,
+  tokenLimitsStatus = 'default_unconfirmed', tokenLimitsSource = 'legacy_unverified',
+  maxOutputTokens = null, profile = null, capabilities = null, estimatedInputTokens = 0, schemaNeedTokens = 0,
+  historicalOutputP95 = 0, truncatedOutputHighWatermark = 0 } = {}) {
+  void taskKind
+  void schemaNeedTokens
+  const fallbackCapabilities = {
+    token_limits_status:tokenLimitsStatus,
+    token_limits_source:tokenLimitsSource,
+    context_window_tokens:contextWindowTokens,
+    max_input_tokens:maxInputTokens,
+    max_output_tokens:maxOutputTokens ?? providerOutputCap,
+    context_limit_semantics:contextLimitSemantics,
+  }
+  const resolvedLimits = resolveEffectiveModelTokenLimits(profile || {}, {
+    ...fallbackCapabilities, ...(capabilities || {}),
+  }, { providerOutputCap, contextWindowTokens, maxInputTokens, contextLimitSemantics })
+  const estimated = Math.max(0, Math.trunc(Number(estimatedInputTokens) || 0))
+  const schemaNeed = Math.max(0, Math.ceil(Number(schemaNeedTokens) || 0))
+  const historical = Math.max(0, Math.ceil(Number(historicalOutputP95) || 0))
+  const truncated = Math.max(0, Math.ceil(Number(truncatedOutputHighWatermark) || 0))
+  const base = {
+    selectedMaxOutputTokens:0,
     schemaNeedTokens:schemaNeed,
-    estimatedInputTokens:Math.max(0, Math.trunc(Number(estimatedInputTokens) || 0)),
+    estimatedInputTokens:estimated,
+    contextRoomTokens:null,
+    contextWindowTokens:resolvedLimits.contextWindowTokens,
+    providerOutputCap:resolvedLimits.maxOutputTokens,
+    providerMaxInputTokens:resolvedLimits.maxInputTokens,
+    maxInputTokens:resolvedLimits.maxInputTokens,
+    contextLimitSemantics:resolvedLimits.contextLimitSemantics,
+    tokenLimitsStatus:resolvedLimits.tokenLimitsStatus,
+    tokenLimitsSource:resolvedLimits.tokenLimitsSource,
+    tokenLimitsUpdatedAtUtcMs:resolvedLimits.tokenLimitsUpdatedAtUtcMs,
+    inputLimitExceeded:false,
+    sufficient:false,
+    historicalOutputP95:historical,
+    truncatedOutputHighWatermark:truncated,
+  }
+  if (!resolvedLimits.confirmed) {
+    return { ...base,
+      reason:resolvedLimits.tokenLimitsStatus === 'stale'
+        ? 'model_token_limits_stale' : 'model_token_limits_unconfirmed' }
+  }
+  const inputLimitExceeded = !resolvedLimits.maxInputTokens || estimated > resolvedLimits.maxInputTokens
+  const contextRoom = resolvedLimits.contextLimitSemantics === 'shared_context'
+    ? (resolvedLimits.contextWindowTokens ? resolvedLimits.contextWindowTokens - estimated : 0)
+    : Number.POSITIVE_INFINITY
+  const outputBudget = Math.min(
+    resolvedLimits.maxOutputTokens || 0,
+    Number.isFinite(contextRoom) ? Math.max(0, contextRoom) : Number.POSITIVE_INFINITY,
+  )
+  const selected = inputLimitExceeded ? 0 : Math.max(0, Math.trunc(outputBudget))
+  const reason = inputLimitExceeded ? 'model_input_limit_exceeded'
+    : selected <= 0 ? 'output_budget_insufficient'
+      : resolvedLimits.contextLimitSemantics === 'shared_context'
+        && Number.isFinite(contextRoom) && contextRoom < (resolvedLimits.maxOutputTokens || 0)
+        ? 'shared_context_room' : 'physical_output_cap'
+  return {
+    ...base,
+    selectedMaxOutputTokens:selected,
     contextRoomTokens:Number.isFinite(contextRoom) ? contextRoom : null,
-    contextWindowTokens:contextWindow,
-    profileHardCap:profileCap,
-    providerOutputCap:Number.isFinite(providerCap) ? providerCap : null,
-    taskCap:null,
-    sufficient:selected >= schemaNeed,
-    reason:selected < schemaNeed ? 'output_budget_insufficient'
-      : truncationNeed >= Math.max(policy.floor, schemaNeed, historyNeed) ? 'output_truncation_growth'
-      : historyNeed >= Math.max(policy.floor, schemaNeed) ? 'historical_p95'
-        : schemaNeed >= policy.floor ? 'output_contract' : 'task_floor',
+    inputLimitExceeded,
+    sufficient:!inputLimitExceeded && selected > 0,
+    reason,
   }
 }
 

@@ -5,6 +5,8 @@ export const AI_FEATURE_KEYS = [
   'experience_memory_enabled',
   'memory_compression_enabled',
   'retrieval_shadow_enabled',
+  'strategy_memory_markdown_preview_enabled',
+  'strategy_memory_consistency_checks_enabled',
 ]
 
 export const FORCED_ENFORCE_RULES = new Set([
@@ -27,6 +29,8 @@ const REQUIRED_MIGRATIONS = [
   '067_manual_inference_snapshots', '068_inference_preferences', '135_remove_paired_inference_experiment',
   '126_position_management_foundation', '149_chan_structure_anchor_version',
   '150_chan_structure_anchor_identity', '153_strategy_policy_runtime', '154_hardcoded_ema34_filter',
+  '181_unified_strategy_memory_library',
+  '183_strategy_memory_conflict_bindings_and_checks',
 ]
 
 const REQUIRED_TABLES = [
@@ -35,6 +39,10 @@ const REQUIRED_TABLES = [
   'risk_policy_versions', 'risk_decisions', 'risk_account_state', 'inference_snapshots', 'signal_outcomes',
   'trade_review_cases', 'trade_review_jobs', 'experience_memory_items', 'memory_compression_jobs',
   'memory_injection_logs', 'ai_feature_flags', 'risk_rule_rollouts', 'credential_migration_runs',
+  'strategy_memory_libraries', 'strategy_memory_library_revisions', 'strategy_memory_pending_updates',
+  'strategy_memory_conflicts', 'strategy_memory_conflict_occurrences',
+  'strategy_memory_compression_jobs', 'strategy_memory_injection_logs',
+  'strategy_memory_conflict_bindings', 'strategy_memory_consistency_jobs',
   'ai_inference_preferences',
   'ai_trade_theses', 'ai_position_management_tasks', 'ai_position_management_commands',
   'ai_position_management_events', 'user_position_management_settings', 'global_position_management_control',
@@ -51,6 +59,11 @@ const REQUIRED_COLUMNS = {
   ai_position_management_tasks: ['task_key','state_version','lease_token','fencing_token','precondition_hash'],
   trade_review_cases: ['evidence_json','current_version_id','approved_version_id'],
   experience_memory_items: ['review_version_id','content_hash','status','token_count'],
+  strategy_memory_libraries: ['content_text','version_no','content_hash','capacity_chars','compression_status'],
+  strategy_memory_compression_jobs: ['source_version_no','source_content_hash','pending_update_ids_json','model_task_id'],
+  strategy_memory_conflicts: ['identity_version','conflict_kind','strategy_rule_hash','canonical_lineage_key','detection_count','verification_status'],
+  strategy_memory_consistency_jobs: ['strategy_text_snapshot','memory_content_snapshot','strategy_content_hash','detector_contract_version','result_json'],
+  period_review_jobs: ['memory_library_version_no','memory_library_content_hash','memory_library_snapshot_text','memory_strategy_snapshot_text'],
   users: ['deletion_status','deleted_at'],
   ai_inference_preferences: ['user_id','session_id','system_prompt','max_position_size'],
   chan_structure_anchors: [
@@ -65,6 +78,10 @@ const REQUIRED_INDEXES = [
   ['order_intents','idx_order_intent_lease'], ['risk_decisions','uk_risk_decision_intent'],
   ['trade_review_jobs','idx_trade_review_job_claim'], ['memory_compression_jobs','idx_memory_compression_claim'],
   ['memory_injection_logs','idx_memory_injection_user'], ['users','idx_users_deletion_status'],
+  ['strategy_memory_compression_jobs','idx_strategy_memory_compression_claim'],
+  ['strategy_memory_injection_logs','idx_strategy_memory_injection_library'],
+  ['strategy_memory_conflict_bindings','idx_strategy_memory_binding_snapshot'],
+  ['strategy_memory_consistency_jobs','idx_strategy_memory_consistency_claim'],
   ['ai_inference_preferences','uk_inference_preference_user_session'],
   ['ai_position_management_tasks','uk_position_management_task'],
   ['ai_position_management_commands','uk_position_management_operation'],
@@ -178,8 +195,9 @@ export async function getAiRolloutHealth() {
       FROM signal_outcomes WHERE status IN ('open','pending')`),
     metric(`SELECT status, COUNT(*) AS count FROM trade_review_jobs WHERE status IN ('queued','leased','failed') GROUP BY status`),
     metric(`SELECT status, COUNT(*) AS count, COALESCE(MAX(TIMESTAMPDIFF(SECOND, updated_at, NOW())), 0) AS oldest_seconds
-      FROM memory_compression_jobs WHERE status IN ('queued','leased','failed') GROUP BY status`),
-    metric(`SELECT status, COUNT(*) AS count, COALESCE(SUM(token_count), 0) AS tokens FROM experience_memory_items GROUP BY status`),
+      FROM strategy_memory_compression_jobs WHERE status IN ('queued','leased','failed') GROUP BY status`),
+    metric(`SELECT compression_status AS status, COUNT(*) AS count,
+      COALESCE(SUM(estimated_token_count), 0) AS tokens FROM strategy_memory_libraries GROUP BY compression_status`),
     metric(`SELECT credential_source, COUNT(*) AS requests, COALESCE(SUM(token_count), 0) AS tokens,
       COALESCE(SUM(request_bytes), 0) AS request_bytes, COALESCE(SUM(response_bytes), 0) AS response_bytes,
       COALESCE(AVG(duration_ms), 0) AS avg_duration_ms FROM ai_model_usage_logs

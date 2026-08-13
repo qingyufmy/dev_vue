@@ -47,9 +47,15 @@ describe('model task runtime state and fencing', () => {
     const task = { task_id:'task-budget', status:'preparing', lease_token:'lease-budget', fencing_token:8 }
     await expect(persistModelTaskBudget(task, {
       estimatedInputTokens:321, selectedMaxOutputTokens:2048, schemaNeedTokens:1500,
-      contextWindowTokens:16384, providerOutputCap:4096,
-    })).resolves.toMatchObject({ estimatedInputTokens:321, selectedMaxOutputTokens:2048 })
+      contextWindowTokens:16384, providerOutputCap:4096, providerMaxInputTokens:12000,
+      contextLimitSemantics:'shared_context', tokenLimitsSource:'manual_confirmed',
+      tokenLimitsStatus:'confirmed', tokenLimitsUpdatedAtUtcMs:123456,
+    })).resolves.toMatchObject({ estimatedInputTokens:321, selectedMaxOutputTokens:2048,
+      providerMaxInputTokens:12000, maxInputTokens:12000, contextLimitSemantics:'shared_context',
+      tokenLimitsSource:'manual_confirmed', tokenLimitsStatus:'confirmed', tokenLimitsUpdatedAtUtcMs:123456 })
     expect(mockQueryRun.mock.calls[0][0]).toContain('estimated_input_tokens = ?')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('provider_max_input_tokens = ?')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('token_limits_status = ?')
     expect(mockQueryRun.mock.calls[0][0]).toContain('task_id = ? AND lease_token = ? AND fencing_token = ?')
     expect(mockQueryRun.mock.calls[0][1].slice(-3)).toEqual(['task-budget', 'lease-budget', 8])
     expect(mockQueryRun.mock.calls[1][1]).toContain('budget_persisted')

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { parseProviderSseResponse, requestJsonObject } from '../../server/routes/ai/llm.js'
+import { deriveProviderSseLimits, parseProviderSseResponse, requestJsonObject } from '../../server/routes/ai/llm.js'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -86,6 +86,30 @@ describe('official provider SSE requests', () => {
     await expect(parseProviderSseResponse(response(streamBody(['data: {"ok":true}\n\n', 'data: [DONE]\n\n'])), {
       limits:{ maxEvents:1, maxBytes:1024, maxLineBytes:1024 },
     })).rejects.toMatchObject({ code:'provider_sse_event_limit_exceeded' })
+  })
+
+  it('derives bounded stream limits from the physical output allowance', () => {
+    const limits = deriveProviderSseLimits(393216)
+    expect(limits.maxEvents).toBeGreaterThan(20_000)
+    expect(limits.maxBytes).toBeGreaterThan(16 * 1024 * 1024)
+    expect(limits.maxEvents).toBeLessThanOrEqual(4_000_000)
+    expect(limits.maxBytes).toBeLessThanOrEqual(128 * 1024 * 1024)
+    expect(limits.maxLineBytes).toBe(256 * 1024)
+  })
+
+  it('does not truncate a physically valid stream after the old 20k event default', async () => {
+    const parts = ['data: {"choices":[{"delta":{"content":"{\\"ok\\":true"}}]}\n\n']
+    for (let index = 0; index < 20_050; index++) {
+      parts.push('data: {"choices":[{"delta":{"content":" "}}]}\n\n')
+    }
+    parts.push('data: {"choices":[{"delta":{"content":"}"},"finish_reason":"stop"}]}\n\n')
+    parts.push('data: [DONE]\n\n')
+    mockFetch.mockResolvedValue(response(streamBody(parts)))
+
+    await expect(requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', provider:'deepseek', apiKey:'key', model:'deepseek-chat',
+      maxTokens:393216, messages:[{ role:'user', content:'test' }],
+    })).resolves.toEqual({ ok:true })
   })
 
   it('closes the provider iterator after both a terminal event and a parser failure', async () => {

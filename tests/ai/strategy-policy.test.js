@@ -4,6 +4,7 @@ import {
   normalizeMarketDataPlan,
   normalizeUseChanAnalysis,
   parseStrategyPolicy,
+  buildStrategyRuntimeSnapshot,
   signalTypesForEntryMethods,
 } from '../../server/routes/ai/strategy-policy.js'
 
@@ -54,5 +55,22 @@ describe('strategy policy', () => {
   it('uses the structured Chan switch as the authority over legacy prompt tags', () => {
     expect(normalizeUseChanAnalysis(1)).toBe(true)
     expect(parseStrategyPolicy({ system_prompt: '{{USE_CHAN}}', use_chan_analysis: 0 }).useChanAnalysis).toBe(false)
+  })
+
+  it('rejects unsupported Chan periods while retaining them for ordinary market data when disabled', () => {
+    expect(() => parseStrategyPolicy({ use_chan_analysis:1, market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } }))
+      .toThrow('chan_timeframe_unsupported')
+    expect(parseStrategyPolicy({ use_chan_analysis:0, market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } }).marketDataPlan.timeframes[0].timeframe)
+      .toBe('M1')
+  })
+
+  it('builds a frozen base runtime even when the policy compiler is off', () => {
+    const runtime = buildStrategyRuntimeSnapshot({ strategy:{ id:7, version:3, scope:'private' }, policy:{
+      marketDataPlan:{ primary_timeframe:'M1', timeframes:[{ timeframe:'M1', kline_count:100 }] },
+      entryMethods:['market'], useChanAnalysis:false, policyMode:'off', compiledPolicy:null,
+    } })
+    expect(runtime).toMatchObject({ strategy_id:7, strategy_version:3, scope:'private', use_chan_analysis:false,
+      entry_methods:['market'], window_policy_version:'chan_window_v6' })
+    expect(runtime.runtime_config_hash).toMatch(/^[a-f0-9]{64}$/)
   })
 })

@@ -90,7 +90,8 @@ beforeEach(() => {
   db.queryOne.mockImplementation(defaultQueryOne)
   db.queryAll.mockResolvedValue([])
   db.queryRun.mockResolvedValue({ insertId: 2, changes: 1 })
-  models.getModelProfileById.mockResolvedValue({ id: 8, scope: 'user', owner_user_id: 2, status: 'active' })
+  models.getModelProfileById.mockResolvedValue({ id: 8, scope: 'user', owner_user_id: 2, status: 'active',
+    context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216, token_limits_status:'confirmed' })
   txRun = vi.fn(defaultTx)
   db.withTransaction.mockImplementation(fn => fn(txRun))
 })
@@ -216,7 +217,8 @@ describe('strategy visibility and mutation permissions', () => {
   })
 
   it('allows an active platform model binding and rejects user models on platform strategies', async () => {
-    models.getModelProfileById.mockResolvedValueOnce({ id: 8, scope: 'platform', owner_user_id: 0, status: 'active' })
+    models.getModelProfileById.mockResolvedValueOnce({ id: 8, scope: 'platform', owner_user_id: 0, status: 'active',
+      context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216, token_limits_status:'confirmed' })
     await expect(createStrategy(1, 'admin', { scope: 'platform', model_profile_id: 8, symbols: ['XAUUSD'] })).resolves.toBeTruthy()
     expect(latestStrategyInsert()[1]).toContain('platform_bound_model')
 
@@ -225,6 +227,22 @@ describe('strategy visibility and mutation permissions', () => {
       .rejects.toThrow('model_profile_access_denied')
     await expect(createStrategy(2, 'user', { scope: 'platform', symbols: ['XAUUSD'] }))
       .rejects.toThrow('platform_requires_admin')
+  })
+
+  it('rejects a model binding until physical token limits are confirmed', async () => {
+    models.getModelProfileById.mockResolvedValue({ id:8, scope:'user', owner_user_id:2,
+      status:'active', context_window_tokens:1048576, max_input_tokens:1048576,
+      max_output_tokens:393216, token_limits_status:'default_unconfirmed' })
+    await expect(createStrategy(2, 'user', { scope:'private', model_profile_id:8, symbols:['XAUUSD'] }))
+      .rejects.toThrow('model_token_limits_unconfirmed')
+  })
+
+  it('rejects Chan-incompatible timeframes at save time but permits them when Chan is off', async () => {
+    await expect(createStrategy(2, 'user', { scope:'private', symbols:['XAUUSD'], use_chan_analysis:true,
+      market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } }))
+      .rejects.toThrow('chan_timeframe_unsupported')
+    await expect(createStrategy(2, 'user', { scope:'private', symbols:['XAUUSD'], use_chan_analysis:false,
+      market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } })).resolves.toBeTruthy()
   })
 
   it('administrator cannot modify or delete somebody else private strategy', async () => {

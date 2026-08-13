@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
+import crypto from 'node:crypto'
+
+const historyMemoryContent = '\u5b8c\u6574\u7b56\u7565\u8bb0\u5fc6'
+const historyMemoryHash = crypto.createHash('sha256').update(historyMemoryContent, 'utf8').digest('hex')
 
 const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
 
 const mockQueryOne = vi.fn()
 const mockQueryRun = vi.fn()
 const mockQueryAll = vi.fn()
+const mockGetStrategyMemoryLibraryForRuntime = vi.fn()
+const mockCreateStrategyMemoryInjectionLog = vi.fn()
 
 vi.mock('../../server/db.js', () => ({
   queryOne: (...args) => mockQueryOne(...args),
@@ -103,6 +109,12 @@ vi.mock('../../server/routes/ai/memory-system.js', () => ({
 
 vi.mock('../../server/routes/ai/platform-experience.js', () => ({
   retrievePlatformExperience: vi.fn(async () => ({ promptBlock: '', mode: 'off', logId: null })),
+}))
+
+vi.mock('../../server/routes/ai/strategy-memory-library.js', () => ({
+  getStrategyMemoryLibraryForRuntime:(...args) => mockGetStrategyMemoryLibraryForRuntime(...args),
+  createStrategyMemoryInjectionLog:(...args) => mockCreateStrategyMemoryInjectionLog(...args),
+  updateStrategyMemoryInjectionLog:vi.fn(),
 }))
 
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({
@@ -260,6 +272,9 @@ describe('handleAnalyzeCompare', () => {
     })
     mockMt5Bridge.mockResolvedValue({ rates: makeRates(100), market_meta: { source: 'platform_admin_bridge', timezone_offset_minutes: -480 } })
     mockResolveOwnedModelProfileForRuntime.mockImplementation(async (id) => mockModelProfile(id))
+    mockGetStrategyMemoryLibraryForRuntime.mockResolvedValue({ library:{ version_no:7,
+      content_hash:historyMemoryHash, content_text:historyMemoryContent } })
+    mockCreateStrategyMemoryInjectionLog.mockResolvedValue({ id:91 })
   })
 
   describe('input validation', () => {
@@ -323,7 +338,12 @@ describe('handleAnalyzeCompare', () => {
         _usage:'model_compare',
         _strategyId:1,
         _comparison_mode:true,
+        _strategyMemoryLibraryContext:'完整策略记忆',
+        _strategyMemoryLibraryVersion:7,
+        _strategyMemoryLibraryHash:historyMemoryHash,
       }), expect.any(Object), expect.any(String))
+      expect(mockGetStrategyMemoryLibraryForRuntime).toHaveBeenCalledTimes(1)
+      expect(mockCreateStrategyMemoryInjectionLog).toHaveBeenCalledTimes(2)
       expect(maybeAiSignal).toHaveBeenCalledWith(null, expect.objectContaining({
         model_name:'deepseek-chat-20',
         _usage:'model_compare',
@@ -538,9 +558,13 @@ describe('POST /ai/analyze-compare route', () => {
 
 describe('handleHistoryCompare', () => {
   const mockAdminWithTerminalClock = () => {
-    mockQueryOne.mockImplementation(async sql => String(sql).includes('timezone_offset_minutes')
-      ? { timezone_offset_minutes:180, clock_status:'progressing_tick' }
-      : { role:'admin' })
+    mockQueryOne.mockImplementation(async sql => {
+      const text = String(sql)
+      if (text.includes('strategy_memory_injection_logs')) return null
+      return text.includes('timezone_offset_minutes')
+        ? { timezone_offset_minutes:180, clock_status:'progressing_tick' }
+        : { role:'admin' }
+    })
   }
 
   beforeEach(() => {
@@ -556,6 +580,9 @@ describe('handleHistoryCompare', () => {
       return tracker
     })
     mockResolveOwnedModelProfileForRuntime.mockImplementation(async (id) => mockModelProfile(id))
+    mockGetStrategyMemoryLibraryForRuntime.mockResolvedValue({ library:{ version_no:7,
+      content_hash:historyMemoryHash, content_text:historyMemoryContent } })
+    mockCreateStrategyMemoryInjectionLog.mockResolvedValue({ id:91 })
   })
 
   describe('admin check', () => {
@@ -711,6 +738,62 @@ describe('handleHistoryCompare', () => {
       expect(submitting.length).toBeGreaterThan(0)
       expect(submitting.some(item => typeof item.telemetry?.model_task_id === 'string')).toBe(true)
       expect(mockTrackerInstances.length).toBe(result.meta.evaluation_count * 2)
+      expect(mockTrackerInstances.every(({ input }) => Number.isInteger(input.frozenContext.memory_library_version_no)
+        && typeof input.frozenContext.memory_library_content_hash === 'string')).toBe(true)
+      expect(mockTrackerInstances.every(({ input }) => !Object.hasOwn(input.frozenContext, 'memory_library_content_text'))).toBe(true)
+    })
+
+    it('freezes one validated memory identity and logs it before each provider request', async () => {
+      const order = []
+      mockCreateStrategyMemoryInjectionLog.mockImplementation(async input => {
+        order.push(`log:${input.modelTaskId}`)
+        return { id:order.length }
+      })
+      maybeAiSignal.mockImplementation(async (_db, config) => {
+        order.push(`provider:${config._modelTaskId}`)
+        return defaultMaybeAiSignalImplementation(_db, config, {}, '')
+      })
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      })
+      expect(result.status).toBe('success')
+      expect(mockCreateStrategyMemoryInjectionLog).toHaveBeenCalledTimes(mockTrackerInstances.length)
+      for (const { input, tracker } of mockTrackerInstances) {
+        expect(input.frozenContext).toMatchObject({ memory_library_version_no:7, memory_library_content_hash:historyMemoryHash })
+        const logIndex = order.indexOf(`log:${tracker.taskId}`)
+        const providerIndex = order.indexOf(`provider:${tracker.taskId}`)
+        expect(logIndex).toBeGreaterThanOrEqual(0)
+        expect(providerIndex).toBeGreaterThan(logIndex)
+      }
+    })
+
+    it('fails closed before providers when the fresh memory identity is invalid', async () => {
+      mockGetStrategyMemoryLibraryForRuntime.mockResolvedValueOnce({ library:{ version_no:0, content_hash:'bad', content_text:'' } })
+      const result = await handleHistoryCompare(1, {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      })
+      expect(result).toEqual({ status:'error', message:'history_compare_memory_snapshot_invalid' })
+      expect(maybeAiSignal).not.toHaveBeenCalled()
+      expect(mockCreateModelTaskTracker).not.toHaveBeenCalled()
+    })
+
+    it('includes the frozen memory identity in each unit input hash', async () => {
+      const params = {
+        symbol:'XAUUSD', model_ids:[10, 20], strategy_id:1,
+        start_time:'2026-07-01', end_time:'2026-07-02', sample_size:4,
+      }
+      await handleHistoryCompare(1, params)
+      const firstHash = mockTrackerInstances[0]?.input.inputHash
+      const changedText = `${historyMemoryContent}-changed`
+      const changedHash = crypto.createHash('sha256').update(changedText, 'utf8').digest('hex')
+      mockTrackerInstances.length = 0
+      mockGetStrategyMemoryLibraryForRuntime.mockResolvedValueOnce({ library:{ version_no:8,
+        content_hash:changedHash, content_text:changedText } })
+      await handleHistoryCompare(1, params)
+      expect(mockTrackerInstances[0]?.input.inputHash).not.toBe(firstHash)
+      expect(mockTrackerInstances[0]?.input.frozenContext.memory_library_content_hash).toBe(changedHash)
     })
 
     it('waits for every history unit before surfacing a checkpoint initialization failure', async () => {
@@ -957,6 +1040,9 @@ describe('handleHistoryCompare', () => {
         _use_chan_analysis:true,
         _market_only:false,
       }), expect.any(Object), expect.any(String))
+      const snapshotConfig = maybeAiSignal.mock.calls[0][1]
+      expect(snapshotConfig._strategyMemoryLibraryContext).toBeUndefined()
+      expect(snapshotConfig._strategyMemoryLibraryVersion).toBeUndefined()
     })
 
     it('passes a shared abort signal to every model and exits when it is cancelled', async () => {
@@ -1154,6 +1240,7 @@ describe('handleHistoryCompare', () => {
         api_base_url_sha256:expect.stringMatching(/^[a-f0-9]{64}$/),
         runtime_config_sha256:expect.stringMatching(/^[a-f0-9]{64}$/),
       })
+      expect(result.results[0].runtime_model).not.toHaveProperty('max_tokens')
       expect(result.results[0].provider_usage).toMatchObject({
         provider_request_count:8,
         repair_request_count:0,
@@ -1427,6 +1514,28 @@ describe('historical comparison frontend contract', () => {
     const insert = backend.indexOf('INSERT INTO ai_signals')
     expect(fence).toBeGreaterThanOrEqual(0)
     expect(insert).toBeGreaterThan(fence)
+  })
+
+  it('keeps the manual ai_signals INSERT columns, values, and parameters aligned', () => {
+    const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    const insert = backend.indexOf('INSERT INTO ai_signals(')
+    expect(insert).toBeGreaterThanOrEqual(0)
+    const sqlEnd = backend.indexOf('`', insert)
+    const sql = backend.slice(insert, sqlEnd)
+    const columns = sql.match(/INSERT INTO ai_signals\(([^)]*)\)/)?.[1]
+      ?.split(',').map(value => value.trim()).filter(Boolean) || []
+    const values = sql.match(/VALUES \(([^)]*)\)/)?.[1]
+      ?.split(',').map(value => value.trim()).filter(Boolean) || []
+    const paramsStart = backend.indexOf('[', sqlEnd)
+    const paramsEnd = backend.indexOf('])', paramsStart)
+    const params = backend.slice(paramsStart + 1, paramsEnd)
+      .split(',').map(value => value.trim()).filter(Boolean)
+    const placeholders = values.filter(value => value === '?')
+    expect(columns).toHaveLength(35)
+    expect(values).toHaveLength(columns.length)
+    expect(values.filter(value => value === "'manual'")).toHaveLength(1)
+    expect(placeholders).toHaveLength(34)
+    expect(params).toHaveLength(placeholders.length)
   })
 
   it('deletes comparison checkpoints and their terminal job atomically', () => {

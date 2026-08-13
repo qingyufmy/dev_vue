@@ -4,13 +4,18 @@ import crypto from 'node:crypto'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { encryptCredential, decryptCredential, isEncryptionAvailable, isEncryptedEnvelope, getActiveKeyVersion } from '../../ai-credential.js'
 import { recordCredentialMigration } from './rollout-governance.js'
-import { isPlatformShareableProvider, normalizeModelProviderProfile } from './model-providers.js'
+import { isPlatformShareableProvider, modelProviderProtocol, normalizeModelProviderProfile } from './model-providers.js'
+import { MODEL_PROVIDER_CAPABILITY_KEYS, MODEL_TOKEN_LIMIT_DEFAULTS,
+  getModelProviderCapabilities, normalizeProviderCapabilities } from './model-provider-capabilities.js'
 import { getEffectivePlan } from '../../membership.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
-export const USAGES = ['manual', 'model_compare', 'auto_private', 'auto_platform', 'review', 'memory_compression']
+export const USAGES = ['manual', 'model_compare', 'auto_private', 'auto_platform', 'review', 'memory_compression', 'memory_consistency']
 const MODEL_REQUEST_TIMEOUT_MIN_MS = 30000
 const MODEL_REQUEST_TIMEOUT_MAX_MS = 600000
+const MODEL_TOKEN_LIMIT_MAX = 2147483647
+
+export { MODEL_TOKEN_LIMIT_DEFAULTS }
 
 function normalizeRequestTimeout(value, fallback = null) {
   if (value === undefined) return fallback
@@ -22,11 +27,34 @@ function normalizeRequestTimeout(value, fallback = null) {
   return timeout
 }
 
-function normalizeMaxTokens(value, fallback = null) {
+function normalizeTokenLimit(value, field, fallback) {
   if (value === undefined || value === null || value === '') return fallback
   const tokens = Number(value)
-  if (!Number.isInteger(tokens) || tokens < 100) throw new Error('model_max_tokens_invalid')
+  if (!Number.isSafeInteger(tokens) || tokens <= 0 || tokens > MODEL_TOKEN_LIMIT_MAX) {
+    const errorCode = field === 'context_window_tokens'
+      ? 'model_context_window_invalid'
+      : field === 'max_input_tokens' ? 'model_max_input_tokens_invalid' : 'model_max_output_tokens_invalid'
+    throw new Error(errorCode)
+  }
   return tokens
+}
+
+/** Normalize the three user-facing physical model limits. */
+export function normalizeModelTokenLimits(payload = {}, existing = {}) {
+  const limits = {
+    context_window_tokens:normalizeTokenLimit(payload.context_window_tokens, 'context_window_tokens',
+      existing.context_window_tokens ?? MODEL_TOKEN_LIMIT_DEFAULTS.context_window_tokens),
+    max_input_tokens:normalizeTokenLimit(payload.max_input_tokens, 'max_input_tokens',
+      existing.max_input_tokens ?? MODEL_TOKEN_LIMIT_DEFAULTS.max_input_tokens),
+    max_output_tokens:normalizeTokenLimit(payload.max_output_tokens, 'max_output_tokens',
+      existing.max_output_tokens ?? MODEL_TOKEN_LIMIT_DEFAULTS.max_output_tokens),
+    context_limit_semantics:'shared_context',
+  }
+  if (limits.max_input_tokens > limits.context_window_tokens
+      || limits.max_output_tokens > limits.context_window_tokens) {
+    throw new Error('model_token_limits_invalid')
+  }
+  return limits
 }
 
 function parseAllowedPlans(value) {
@@ -53,54 +81,277 @@ export async function assertModelProfileSchemaReady() {
   }
 }
 
+function modelIdentity(providerConfig, provider) {
+  return {
+    provider:String(providerConfig.provider || provider || ''),
+    model_name:String(providerConfig.model_name || ''),
+    api_base_url:String(providerConfig.api_base_url || ''),
+  }
+}
+
+function modelIdentityChanged(existingCapability, identity, existingProfile = {}) {
+  if (!existingCapability || !existingCapability.provider) return false
+  return ['provider', 'model_name', 'api_base_url'].some(key =>
+    String(existingCapability[key] || '') !== String(identity[key] || ''))
+    || (existingCapability.protocol && existingCapability.protocol !== identity.protocol)
+    || String(existingProfile.provider || '') !== String(identity.provider || '')
+    || String(existingProfile.model_name || '') !== String(identity.model_name || '')
+    || String(existingProfile.api_base_url || '') !== String(identity.api_base_url || '')
+}
+
+function modelTokenLimitsError(capabilities = {}) {
+  const status = String(capabilities.token_limits_status || '')
+  const source = String(capabilities.token_limits_source || '')
+  const context = Number(capabilities.context_window_tokens)
+  const input = Number(capabilities.max_input_tokens)
+  const output = Number(capabilities.max_output_tokens)
+  if (status === 'confirmed'
+      && Number.isSafeInteger(context) && context > 0
+      && Number.isSafeInteger(input) && input > 0 && input <= context
+      && Number.isSafeInteger(output) && output > 0 && output <= context) return null
+  const error = new Error('model_token_limits_unconfirmed')
+  error.code = 'model_token_limits_unconfirmed'
+  error.token_limits_status = status || 'default_unconfirmed'
+  error.token_limits_source = source || 'generic_default'
+  return error
+}
+
+function getProfileTokenCapabilities(profile = {}) {
+  if (Object.hasOwn(profile, 'token_limits_status') || Object.hasOwn(profile, 'token_limits_source')) {
+    const hasStoredIdentity = ['capability_provider', 'capability_model_name',
+      'capability_api_base_url', 'capability_protocol'].some(key => Object.hasOwn(profile, key))
+    return normalizeProviderCapabilities({
+      ...profile,
+      ...(hasStoredIdentity ? {
+        provider:profile.capability_provider,
+        model_name:profile.capability_model_name,
+        api_base_url:profile.capability_api_base_url,
+        protocol:profile.capability_protocol,
+      } : {
+        // Rows assembled by older callers do not carry the capability identity;
+        // use the profile identity only for that compatibility shape. SQL joins
+        // below use capability_* aliases so a real stale identity is rejected.
+        protocol:modelProviderProtocol(profile.provider),
+      }),
+    })
+  }
+  return null
+}
+
+function modelCapabilityIdentityMatches(profile = {}, capabilities = {}) {
+  const expected = {
+    provider:String(profile.provider || ''),
+    model_name:String(profile.model_name || ''),
+    api_base_url:String(profile.api_base_url || ''),
+    protocol:modelProviderProtocol(profile.provider),
+  }
+  const actual = {
+    provider:String(capabilities.provider || ''),
+    model_name:String(capabilities.model_name || ''),
+    api_base_url:String(capabilities.api_base_url || ''),
+    protocol:String(capabilities.protocol || ''),
+  }
+  return Object.values(actual).every(Boolean)
+    && Object.keys(expected).every(key => expected[key] === actual[key])
+}
+
+async function assertConfirmedModelProfile(profile) {
+  const capabilities = getProfileTokenCapabilities(profile) || await getModelProviderCapabilities(profile?.id)
+  const error = modelTokenLimitsError(capabilities)
+    || (!modelCapabilityIdentityMatches(profile, capabilities) ? modelTokenLimitsError({ ...capabilities, token_limits_status:'stale' }) : null)
+  if (error) throw error
+  if (profile && capabilities) {
+    for (const key of ['context_window_tokens', 'max_input_tokens', 'max_output_tokens',
+      'context_limit_semantics', 'token_limits_source', 'token_limits_status',
+      'token_limits_note', 'token_limits_updated_by', 'token_limits_updated_at_utc_msc']) {
+      profile[key] = capabilities[key]
+    }
+  }
+  return capabilities
+}
+
+function tokenCapabilityFields(capability, tokenLimits, actorUserId, identity,
+  providerVerification = 'unverified', identityChanged = false) {
+  return {
+    ...(identityChanged ? {} : (capability || {})),
+    ...identity,
+    context_window_tokens:tokenLimits.context_window_tokens,
+    max_input_tokens:tokenLimits.max_input_tokens,
+    max_output_tokens:tokenLimits.max_output_tokens,
+    context_limit_semantics:'shared_context',
+    token_limits_source:'manual_confirmed',
+    token_limits_status:'confirmed',
+    token_limits_updated_by:Number(actorUserId) || null,
+    token_limits_updated_at_utc_msc:Date.now(),
+    verification_status:identityChanged ? 'unverified' : (capability?.verification_status || providerVerification),
+    verified_at_utc_msc:identityChanged ? null : (capability?.verified_at_utc_msc || null),
+  }
+}
+
+function capabilityValues(capability = {}) {
+  return MODEL_PROVIDER_CAPABILITY_KEYS.map(key => capability[key] ? 1 : 0)
+}
+
+async function upsertModelProfileCapability(run, profileId, capability, actorUserId) {
+  const values = capabilityValues(capability)
+  const params = [Number(profileId), ...values,
+    capability.context_window_tokens, capability.max_input_tokens, capability.max_output_tokens,
+    capability.context_limit_semantics || 'shared_context', capability.token_limits_source || 'generic_default',
+    capability.token_limits_status || 'default_unconfirmed', capability.token_limits_note || null,
+    capability.token_limits_updated_by || Number(actorUserId) || null,
+    capability.token_limits_updated_at_utc_msc || Date.now(), capability.provider || null,
+    capability.model_name || null, capability.api_base_url || null, capability.protocol || null,
+    capability.verification_status || 'unverified', Number(actorUserId) || null,
+    capability.verified_at_utc_msc || null, Date.now()]
+  const raw = await run(`INSERT INTO ai_model_provider_capabilities
+    (model_profile_id, supports_stream, supports_request_id, supports_poll, supports_cancel,
+     supports_idempotency, supports_structured_output, supports_usage_split,
+     context_window_tokens, max_input_tokens, max_output_tokens, context_limit_semantics,
+     token_limits_source, token_limits_status, token_limits_note, token_limits_updated_by,
+     token_limits_updated_at_utc_msc, provider, model_name, api_base_url, protocol,
+     verification_status, verified_by_user_id, verified_at_utc_msc, updated_at_utc_msc)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE supports_stream = VALUES(supports_stream),
+      supports_request_id = VALUES(supports_request_id), supports_poll = VALUES(supports_poll),
+      supports_cancel = VALUES(supports_cancel), supports_idempotency = VALUES(supports_idempotency),
+      supports_structured_output = VALUES(supports_structured_output), supports_usage_split = VALUES(supports_usage_split),
+      context_window_tokens = VALUES(context_window_tokens), max_input_tokens = VALUES(max_input_tokens),
+      max_output_tokens = VALUES(max_output_tokens), context_limit_semantics = VALUES(context_limit_semantics),
+      token_limits_source = VALUES(token_limits_source), token_limits_status = VALUES(token_limits_status),
+      token_limits_note = VALUES(token_limits_note), token_limits_updated_by = VALUES(token_limits_updated_by),
+      token_limits_updated_at_utc_msc = VALUES(token_limits_updated_at_utc_msc),
+      provider = VALUES(provider), model_name = VALUES(model_name), api_base_url = VALUES(api_base_url),
+      protocol = VALUES(protocol), verification_status = VALUES(verification_status),
+      verified_by_user_id = VALUES(verified_by_user_id), verified_at_utc_msc = VALUES(verified_at_utc_msc),
+      updated_at_utc_msc = VALUES(updated_at_utc_msc)`, params)
+  return Array.isArray(raw) ? raw[0] : raw
+}
+
+/**
+ * Resolve and locally validate the complete configuration that is about to be
+ * saved. This function performs no writes and is intentionally separate from
+ * the provider request so a failed validation cannot replace an active row.
+ */
+export async function prepareModelProfileForSave({ id = null, userId, payload = {}, callerRole } = {}) {
+  const existing = id == null
+    ? null
+    : await queryOne('SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL', [id])
+  if (id != null && !existing) throw new Error('model_profile_not_found')
+  if (existing && Number(existing.owner_user_id) !== Number(userId)) throw new Error('model_profile_access_denied')
+  const suppliedExpectedUpdatedAt = payload.expected_profile_updated_at
+    ?? payload.expected_updated_at ?? payload.updated_at
+  if (existing && suppliedExpectedUpdatedAt !== undefined && suppliedExpectedUpdatedAt !== null
+      && String(suppliedExpectedUpdatedAt) !== String(existing.updated_at)) {
+    throw new Error('model_profile_conflict')
+  }
+
+  const requestedScope = payload.scope || existing?.scope || MODEL_PROFILE_SCOPE.USER
+  if (requestedScope === MODEL_PROFILE_SCOPE.PLATFORM && callerRole !== 'admin') {
+    throw new Error('platform_scope_requires_admin')
+  }
+  if (existing && requestedScope !== existing.scope) throw new Error('model_profile_scope_immutable')
+  const scope = existing?.scope || requestedScope
+  const ownerUserId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
+  const providerConfig = normalizeModelProviderProfile(payload, existing || {})
+  const requestTimeoutMs = normalizeRequestTimeout(payload.request_timeout_ms, existing?.request_timeout_ms)
+  const oldCapability = existing ? await getModelProviderCapabilities(existing.id) : null
+  const identity = { ...modelIdentity(providerConfig), protocol:modelProviderProtocol(providerConfig.provider) }
+  const identityChanged = modelIdentityChanged(oldCapability, identity, existing || {})
+  const tokenLimits = normalizeModelTokenLimits(payload,
+    identityChanged ? MODEL_TOKEN_LIMIT_DEFAULTS : (oldCapability || MODEL_TOKEN_LIMIT_DEFAULTS))
+
+  let encryptedKey = existing?.api_key_encrypted || null
+  let keyVersion = existing?.key_version || null
+  let apiKey = payload.api_key
+  if (apiKey) {
+    if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
+    encryptedKey = encryptCredential(apiKey)
+    keyVersion = getActiveKeyVersion()
+  } else if (encryptedKey) {
+    if (!isEncryptionAvailable() || !isEncryptedEnvelope(encryptedKey)) throw new Error('credential_not_encrypted')
+    apiKey = decryptCredential(encryptedKey)
+  }
+  if (!apiKey) throw new Error('model_api_key_required')
+  // max_tokens is retained only as an immutable legacy audit column. Never
+  // accept it from a new payload and never use it as a physical capability.
+  const legacyMaxTokens = existing?.max_tokens ?? 2000
+
+  return {
+    id:id == null ? null : Number(id), existing, scope, ownerUserId, providerConfig,
+    requestTimeoutMs, tokenLimits, identity, identityChanged, oldCapability,
+    encryptedKey, keyVersion, apiKey, legacyMaxTokens,
+    temperature:payload.temperature ?? existing?.temperature ?? 0.3,
+    expectedUpdatedAt:suppliedExpectedUpdatedAt ?? existing?.updated_at ?? null,
+    runtimeModel:{
+      id:existing?.id || null, provider:providerConfig.provider, api_provider:providerConfig.provider,
+      model_name:providerConfig.model_name, api_base_url:providerConfig.api_base_url,
+      api_key_encrypted:apiKey, key_version:keyVersion, temperature:payload.temperature ?? existing?.temperature ?? 0.3,
+      max_output_tokens:tokenLimits.max_output_tokens,
+      context_window_tokens:tokenLimits.context_window_tokens, max_input_tokens:tokenLimits.max_input_tokens,
+      thinking_enabled:providerConfig.thinking_enabled, reasoning_effort:providerConfig.reasoning_effort,
+      request_timeout_ms:requestTimeoutMs, owner_user_id:ownerUserId,
+    },
+  }
+}
+
+/** Verify once, then commit the profile and its manually confirmed limits. */
+export async function saveModelProfileWithValidation({ id = null, userId, payload = {}, callerRole, verify } = {}) {
+  const prepared = await prepareModelProfileForSave({ id, userId, payload, callerRole })
+  if (typeof verify !== 'function') throw new Error('model_profile_verification_required')
+  await verify(prepared.runtimeModel, prepared)
+
+  const now = beijingNow()
+  const capability = tokenCapabilityFields(prepared.oldCapability, prepared.tokenLimits, userId,
+    prepared.identity, prepared.oldCapability?.verification_status || 'unverified', prepared.identityChanged)
+  let profileId = prepared.id
+  await withTransaction(async run => {
+    if (prepared.id == null) {
+      const raw = await run(`INSERT INTO ai_model_profiles
+        (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
+         temperature, max_tokens, thinking_enabled, reasoning_effort, request_timeout_ms, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`, [
+        prepared.ownerUserId, prepared.scope, prepared.providerConfig.provider, prepared.providerConfig.model_name,
+        prepared.providerConfig.api_base_url, prepared.encryptedKey, prepared.keyVersion, prepared.temperature,
+        prepared.legacyMaxTokens, prepared.providerConfig.thinking_enabled, prepared.providerConfig.reasoning_effort,
+        prepared.requestTimeoutMs, now, now])
+      const result = Array.isArray(raw) ? raw[0] : raw
+      profileId = Number(result?.insertId || 0)
+      if (!profileId) throw new Error('model_profile_save_failed')
+    } else {
+      const raw = await run(`UPDATE ai_model_profiles SET
+        provider = ?, model_name = ?, api_base_url = ?, api_key_encrypted = ?, key_version = ?,
+        temperature = ?, max_tokens = ?, thinking_enabled = ?, reasoning_effort = ?, request_timeout_ms = ?,
+        updated_at = ?
+       WHERE id = ? AND deleted_at IS NULL AND updated_at = ?`, [
+        prepared.providerConfig.provider, prepared.providerConfig.model_name, prepared.providerConfig.api_base_url,
+        prepared.encryptedKey, prepared.keyVersion, prepared.temperature, prepared.legacyMaxTokens,
+        prepared.providerConfig.thinking_enabled, prepared.providerConfig.reasoning_effort, prepared.requestTimeoutMs,
+        now, prepared.id, prepared.expectedUpdatedAt])
+      const result = Array.isArray(raw) ? raw[0] : raw
+      if (!Number(result?.affectedRows ?? result?.changes ?? 0)) throw new Error('model_profile_conflict')
+    }
+    await upsertModelProfileCapability(run, profileId, capability, userId)
+  })
+  return await getModelProfileById(profileId)
+}
+
 // ─── Model Profiles CRUD ───
 
 export async function createModelProfile(userId, payload, callerRole) {
-  const now = beijingNow()
-  const scope = payload.scope || MODEL_PROFILE_SCOPE.USER
-  // [P1-2] Platform scope requires admin role
+  const scope = payload?.scope || MODEL_PROFILE_SCOPE.USER
   if (scope === MODEL_PROFILE_SCOPE.PLATFORM && callerRole !== 'admin') {
     throw new Error('platform_scope_requires_admin')
   }
-  const ownerUserId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
-  const providerConfig = normalizeModelProviderProfile(payload)
-  const requestTimeoutMs = normalizeRequestTimeout(payload.request_timeout_ms)
-  const maxTokens = normalizeMaxTokens(payload.max_tokens, 8000)
-  let keyEnc = null
-  let keyVersion = null
-  if (payload.api_key) {
-    if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
-    keyEnc = encryptCredential(payload.api_key)
-    keyVersion = getActiveKeyVersion()
-  }
-  const result = await queryRun(
-    `INSERT INTO ai_model_profiles
-      (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
-       temperature, max_tokens, thinking_enabled, reasoning_effort, request_timeout_ms, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-    [
-      ownerUserId,
-      scope,
-      providerConfig.provider,
-      providerConfig.model_name,
-      providerConfig.api_base_url,
-      keyEnc,
-      keyVersion,
-      payload.temperature ?? 0.3,
-      maxTokens,
-      providerConfig.thinking_enabled,
-      providerConfig.reasoning_effort,
-      requestTimeoutMs,
-      now, now,
-    ]
-  )
-  return await getModelProfileById(result.insertId)
+  // This function is intentionally retained as a compatibility export for
+  // older callers. It is not a write path: only saveModelProfileWithValidation
+  // may create an active model after one provider verification request.
+  throw new Error('model_profile_verification_required')
 }
 
 export async function getModelProfileById(id) {
   const row = await queryOne('SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL', [id])
   if (!row) return null
-  return sanitizeProfile(row)
+  return await sanitizeProfileWithCapabilities(row)
 }
 
 export async function getUserModelProfiles(userId) {
@@ -108,20 +359,13 @@ export async function getUserModelProfiles(userId) {
     'SELECT * FROM ai_model_profiles WHERE owner_user_id = ? AND deleted_at IS NULL ORDER BY is_default DESC, updated_at DESC',
     [userId]
   )
-  return rows.map(sanitizeProfile)
+  return await Promise.all(rows.map(row => sanitizeProfileWithCapabilities(row)))
 }
 
 export async function upsertDefaultModelProfileFromLegacyInput(userId, callerRole, payload = {}, scope = 'user') {
   if (!payload.api_key) return null
   if (scope === MODEL_PROFILE_SCOPE.PLATFORM && callerRole !== 'admin') throw new Error('platform_scope_requires_admin')
-  const ownerId = scope === MODEL_PROFILE_SCOPE.PLATFORM ? 0 : userId
-  const current = await queryOne(`SELECT id FROM ai_model_profiles WHERE owner_user_id = ? AND scope = ?
-    AND status = 'active' AND deleted_at IS NULL ORDER BY is_default DESC, updated_at DESC LIMIT 1`, [ownerId, scope])
-  let profile
-  if (current) profile = await updateModelProfile(current.id, ownerId, payload)
-  else profile = await createModelProfile(userId, { ...payload, scope }, callerRole)
-  await setDefaultModelProfile(ownerId, profile.id)
-  return profile
+  throw new Error('model_profile_verification_required')
 }
 
 /** Runtime-only credential resolution for an owner testing a specific profile. */
@@ -133,45 +377,10 @@ export async function resolveOwnedModelProfileForRuntime(id, userId) {
 }
 
 export async function updateModelProfile(id, userId, payload) {
-  const now = beijingNow()
   const existing = await queryOne('SELECT * FROM ai_model_profiles WHERE id = ? AND deleted_at IS NULL', [id])
   if (!existing) throw new Error('model_profile_not_found')
   if (existing.owner_user_id !== userId) throw new Error('model_profile_access_denied')
-  const providerConfig = normalizeModelProviderProfile(payload, existing)
-  const requestTimeoutMs = normalizeRequestTimeout(payload.request_timeout_ms, existing.request_timeout_ms)
-  const maxTokens = normalizeMaxTokens(payload.max_tokens)
-
-  let keyEnc = existing.api_key_encrypted
-  let keyVersion = existing.key_version
-  // [P1-4] Only update key_version when api_key actually changes
-  if (payload.api_key) {
-    if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
-    keyEnc = encryptCredential(payload.api_key)
-    keyVersion = getActiveKeyVersion()
-  }
-  await queryRun(
-    `UPDATE ai_model_profiles SET
-      provider = COALESCE(?, provider), model_name = COALESCE(?, model_name),
-      api_base_url = COALESCE(?, api_base_url), api_key_encrypted = COALESCE(?, api_key_encrypted),
-      key_version = ?,
-      temperature = COALESCE(?, temperature), max_tokens = COALESCE(?, max_tokens),
-      thinking_enabled = COALESCE(?, thinking_enabled), reasoning_effort = COALESCE(?, reasoning_effort),
-      request_timeout_ms = ?,
-      updated_at = ?
-     WHERE id = ? AND deleted_at IS NULL`,
-    [
-      providerConfig.provider, providerConfig.model_name,
-      providerConfig.api_base_url,
-      keyEnc !== undefined ? keyEnc : null,
-      keyVersion,
-      payload.temperature ?? null, maxTokens,
-      providerConfig.thinking_enabled,
-      providerConfig.reasoning_effort,
-      requestTimeoutMs,
-      now, id,
-    ]
-  )
-  return await getModelProfileById(id)
+  throw new Error('model_profile_verification_required')
 }
 
 export async function getModelProfileDeletionImpact(id, userId) {
@@ -242,10 +451,20 @@ export async function deleteModelProfile(id, userId, confirmation = {}) {
 export async function setDefaultModelProfile(userId, profileId) {
   const now = beijingNow()
   const profile = await queryOne(
-    'SELECT * FROM ai_model_profiles WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL AND status = "active"',
+    `SELECT mp.*, c.context_window_tokens, c.max_input_tokens, c.max_output_tokens,
+            c.context_limit_semantics, c.token_limits_source, c.token_limits_status,
+            c.token_limits_updated_by, c.token_limits_updated_at_utc_msc,
+            c.verification_status AS provider_verification_status,
+            c.provider AS capability_provider, c.model_name AS capability_model_name,
+            c.api_base_url AS capability_api_base_url, c.protocol AS capability_protocol
+       FROM ai_model_profiles mp
+       LEFT JOIN ai_model_provider_capabilities c ON c.model_profile_id = mp.id
+      WHERE mp.id = ? AND mp.owner_user_id = ? AND mp.deleted_at IS NULL AND mp.status = 'active'`,
     [profileId, userId]
   )
   if (!profile) throw new Error('model_profile_not_found_or_inactive')
+  await assertConfirmedModelProfile({ ...profile,
+    verification_status:profile.provider_verification_status || profile.verification_status })
   await withTransaction(async run => {
     await run('UPDATE ai_model_profiles SET is_default = 0 WHERE owner_user_id = ? AND deleted_at IS NULL', [userId])
     await run('UPDATE ai_model_profiles SET is_default = 1, updated_at = ? WHERE id = ?', [now, profileId])
@@ -263,13 +482,21 @@ export async function setDefaultModelProfile(userId, profileId) {
 export async function getUserModelDefault(userId) {
   const row = await queryOne(
     `SELECT ump.*, mp.provider, mp.model_name, mp.api_base_url, mp.api_key_encrypted, mp.key_version,
-            mp.temperature, mp.max_tokens, mp.thinking_enabled, mp.reasoning_effort, mp.status
+            mp.temperature, mp.max_tokens, mp.thinking_enabled, mp.reasoning_effort, mp.status,
+            c.context_window_tokens, c.max_input_tokens, c.max_output_tokens,
+            c.context_limit_semantics, c.token_limits_source, c.token_limits_status,
+            c.token_limits_updated_by, c.token_limits_updated_at_utc_msc,
+            c.verification_status AS provider_verification_status,
+            c.provider AS capability_provider, c.model_name AS capability_model_name,
+            c.api_base_url AS capability_api_base_url, c.protocol AS capability_protocol
      FROM user_model_defaults ump
      JOIN ai_model_profiles mp ON mp.id = ump.model_profile_id
+     LEFT JOIN ai_model_provider_capabilities c ON c.model_profile_id = mp.id
      WHERE ump.user_id = ? AND mp.deleted_at IS NULL AND mp.status = 'active'`,
     [userId]
   )
-  return row || null
+  if (!row) return null
+  return { ...row, verification_status:row.provider_verification_status || row.verification_status }
 }
 
 export async function setUserModelDefault(userId, profileId) {
@@ -333,12 +560,11 @@ export async function logModelUsage(userId, profileId, credentialSource, usage, 
 
 /**
  * Create one usage row before an outbound model request. Platform-shared calls
- * reserve their worst-case token budget under a per-user row lock so concurrent
- * requests cannot all pass the same quota check.
+ * still use a per-user row lock for request-count admission and policy checks,
+ * but token_count stays zero until the provider reports actual usage.
  */
 export async function beginModelUsage({ userId, profileId, credentialSource, usage, strategyId = null,
   estimatedTokens = 0, requestPhase = 'request' }) {
-  const safeEstimate = Math.max(0, Math.trunc(Number(estimatedTokens) || 0))
   const normalizedRequestPhase = requestPhase === 'repair' ? 'repair' : 'request'
   if (credentialSource !== 'platform_shared') {
     const result = await queryRun(
@@ -368,7 +594,8 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
       daily_requests_per_user: 100,
       daily_tokens_per_user: 500000,
     }
-    const shareKey = `share_for_${usage === 'auto_private' ? 'auto' : usage}`
+    const shareUsage = usage === 'memory_consistency' ? 'memory_compression' : usage
+    const shareKey = `share_for_${shareUsage === 'auto_private' ? 'auto' : shareUsage}`
     if (!policy[shareKey]) throw new Error('platform_sharing_disabled')
     const allowedPlans = parseAllowedPlans(policy.allowed_plans)
     if (!allowedPlans.includes(getEffectivePlan(lockedUsers[0]))) throw new Error('platform_plan_not_allowed')
@@ -380,17 +607,17 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
       [userId, usage]
     )
     const usedRequests = Number(rows[0]?.cnt || 0)
-    const usedTokens = Number(rows[0]?.tokens || 0)
     if (usedRequests >= Number(policy.daily_requests_per_user)) throw new Error('daily_request_limit')
-    if (usedTokens + safeEstimate > Number(policy.daily_tokens_per_user)) throw new Error('daily_token_limit')
 
     const [insert] = await run(
       `INSERT INTO ai_model_usage_logs
         (user_id, model_profile_id, credential_source, \`usage\`, strategy_id, request_phase, token_count, request_status, error_code, created_at)
-       VALUES (?, ?, 'platform_shared', ?, ?, ?, ?, 'reserved', NULL, ?)`,
-      [userId, profileId || null, usage, strategyId, normalizedRequestPhase, safeEstimate, beijingNow()]
+       VALUES (?, ?, 'platform_shared', ?, ?, ?, 0, 'reserved', NULL, ?)`,
+      [userId, profileId || null, usage, strategyId, normalizedRequestPhase, beijingNow()]
     )
-    return { logId: insert.insertId, reservedTokens: safeEstimate }
+    // Token quota is an accounting/reporting policy, not a pre-submit gate.
+    // The reservation must stay at zero until the provider reports actual use.
+    return { logId: insert.insertId, reservedTokens: 0 }
   })
 }
 
@@ -451,7 +678,18 @@ export async function checkPlatformQuota(userId, usage) {
     return { allowed: false, reason: 'daily_request_limit', used: row.cnt, limit: policy.daily_requests_per_user }
   }
   if (row.tokens >= policy.daily_tokens_per_user) {
-    return { allowed: false, reason: 'daily_token_limit', used: row.tokens, limit: policy.daily_tokens_per_user }
+    // Keep the historical token fields for admin/UI compatibility, but do not
+    // turn an accounting threshold into a model-call admission failure. The
+    // request-count limit above remains the only daily hard stop here.
+    return {
+      allowed: true,
+      warning: 'daily_token_limit',
+      tokenQuotaExceeded: true,
+      used: row.tokens,
+      limit: policy.daily_tokens_per_user,
+      requestsUsed: row.cnt,
+      tokensUsed: row.tokens,
+    }
   }
   return { allowed: true, requestsUsed: row.cnt, tokensUsed: row.tokens }
 }
@@ -461,14 +699,18 @@ export async function checkPlatformQuota(userId, usage) {
 export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   if (!USAGES.includes(usage)) throw new Error(`invalid_usage:${usage}`)
 
-  if (usage === 'review' && strategyId) {
+  if ((usage === 'review' || usage === 'memory_compression' || usage === 'memory_consistency') && strategyId) {
     const strategy = await queryOne(
-      `SELECT id, scope, owner_user_id, model_profile_id
-       FROM auto_prompt_types WHERE id = ?`,
+      `SELECT id, scope, owner_user_id, model_profile_id, visibility_status, is_active
+       FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL`,
       [strategyId]
     )
     if (!strategy || (strategy.scope === 'private' && Number(strategy.owner_user_id) !== Number(userId))) {
       return { model: null, credential_source: 'none', error: 'strategy_access_denied', usage, strategy_id: strategyId }
+    }
+    if (strategy.visibility_status !== 'active' || !Number(strategy.is_active)) {
+      return { model:null, credential_source:'none', error:strategy.scope === 'platform'
+        ? 'platform_strategy_not_active' : 'private_strategy_not_active', usage, strategy_id:strategyId }
     }
     if (strategy.model_profile_id) {
       const platform = strategy.scope === 'platform'
@@ -481,6 +723,8 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
       if (!bound || !bound.api_key_encrypted) {
         return { model: null, credential_source: 'none', error: 'bound_model_unavailable', usage, strategy_id: strategyId, model_profile_id: strategy.model_profile_id }
       }
+      try { await assertConfirmedModelProfile(bound) }
+      catch (error) { return { model:null, credential_source:'none', error:error.message, usage, strategy_id:strategyId, model_profile_id:strategy.model_profile_id } }
       return { ...buildResult(bound, platform ? 'platform_primary' : 'user', usage, 'strategy_binding'), strategy_id: strategyId }
     }
     if (strategy.scope === 'platform') {
@@ -511,13 +755,69 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
         if (!bound || !bound.api_key_encrypted) {
           return { model: null, credential_source: 'none', error: 'bound_model_unavailable', usage, strategy_id: strategyId, model_profile_id: strategy.model_profile_id }
         }
+        try { await assertConfirmedModelProfile(bound) }
+        catch (error) { return { model:null, credential_source:'none', error:error.message, usage, strategy_id:strategyId, model_profile_id:strategy.model_profile_id } }
         return { ...buildResult(bound, 'platform_primary', usage, 'strategy_binding'), strategy_id: strategyId }
       }
     }
     return await resolvePlatformModel(usage)
   }
 
-  if (usage === 'auto_private' || (usage === 'manual' && strategyId)) {
+  if (usage === 'manual' && strategyId) {
+    const strategy = await queryOne(
+      `SELECT id, scope, owner_user_id, model_profile_id, visibility_status, is_active
+       FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL`,
+      [strategyId]
+    )
+    if (!strategy
+      || (strategy.scope !== 'platform' && strategy.scope !== 'private')
+      || (strategy.scope === 'private' && Number(strategy.owner_user_id) !== Number(userId))) {
+      return { model: null, credential_source: 'none', error: 'strategy_access_denied', usage, strategy_id: strategyId }
+    }
+    if (strategy.visibility_status !== 'active' || !Number(strategy.is_active)) {
+      return {
+        model: null,
+        credential_source: 'none',
+        error: strategy.scope === 'platform' ? 'platform_strategy_not_active' : 'private_strategy_not_active',
+        usage,
+        strategy_id: strategyId,
+      }
+    }
+    if (strategy.model_profile_id) {
+      const platform = strategy.scope === 'platform'
+      const bound = await queryOne(
+        `SELECT * FROM ai_model_profiles
+         WHERE id = ? AND scope = ? AND owner_user_id = ?
+           AND status = 'active' AND deleted_at IS NULL`,
+        [strategy.model_profile_id, platform ? 'platform' : 'user', platform ? 0 : userId]
+      )
+      if (!bound || !bound.api_key_encrypted) {
+        // An explicit binding is an operator decision. Never conceal its
+        // deletion/disablement by silently spending another model.
+        return {
+          model: null,
+          credential_source: 'none',
+          error: 'bound_model_unavailable',
+          usage,
+          strategy_id: strategyId,
+          model_profile_id: strategy.model_profile_id,
+        }
+      }
+      try { await assertConfirmedModelProfile(bound) }
+      catch (error) {
+        return { model:null, credential_source:'none', error:error.message, usage,
+          strategy_id:strategyId, model_profile_id:strategy.model_profile_id }
+      }
+      return { ...buildResult(bound, platform ? 'platform_primary' : 'user', usage, 'strategy_binding'), strategy_id: strategyId }
+    }
+    if (strategy.scope === 'platform') {
+      // Platform strategies without an explicit binding use the confirmed
+      // platform default. Do not continue into the requesting user's default.
+      return { ...(await resolvePlatformModel(usage)), strategy_id: strategyId }
+    }
+  }
+
+  if (usage === 'auto_private') {
     if (!strategyId) {
       return { model: null, credential_source: 'none', error: 'strategy_id_required', usage }
     }
@@ -552,6 +852,11 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
           model_profile_id: strategy.model_profile_id,
         }
       }
+      try { await assertConfirmedModelProfile(bound) }
+      catch (error) {
+        return { model:null, credential_source:'none', error:error.message, usage,
+          strategy_id:strategyId, model_profile_id:strategy.model_profile_id }
+      }
       return { ...buildResult(bound, 'user', usage, 'strategy_binding'), strategy_id: strategyId }
     }
   }
@@ -559,18 +864,23 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   // Step 1: User's own model (via user_model_defaults)
   const userDefault = await getUserModelDefault(userId)
   if (userDefault && userDefault.api_key_encrypted) {
+    try { await assertConfirmedModelProfile(userDefault) }
+    catch (error) { return { model:null, credential_source:'none', error:error.message, usage, strategy_id:strategyId || null } }
     return { ...buildResult(userDefault, 'user', usage, 'user_default'), strategy_id: strategyId || null }
   }
 
   // Step 2: Admin platform shared model
   const policy = await getPlatformUsagePolicy()
-  const shareKey = `share_for_${usage === 'auto_private' ? 'auto' : usage}`
+  const shareUsage = usage === 'memory_consistency' ? 'memory_compression' : usage
+  const shareKey = `share_for_${shareUsage === 'auto_private' ? 'auto' : shareUsage}`
   if (policy[shareKey]) {
     const platformModel = await getPlatformModelForSharing()
     if (platformModel && platformModel.api_key_encrypted && isPlatformShareableProvider(platformModel.provider)) {
       const user = await queryOne('SELECT plan, plan_expires_at FROM users WHERE id = ?', [userId])
       const allowedPlans = parseAllowedPlans(policy.allowed_plans)
       if (user && allowedPlans.includes(getEffectivePlan(user))) {
+        try { await assertConfirmedModelProfile(platformModel) }
+        catch (error) { return { model:null, credential_source:'none', error:error.message, usage, strategy_id:strategyId || null } }
         return { ...buildResult(platformModel, 'platform_shared', usage, 'platform_fallback'), strategy_id: strategyId || null }
       }
     }
@@ -584,6 +894,8 @@ async function resolvePlatformModel(usage = 'auto_platform') {
   if (!row || !row.api_key_encrypted) {
     return { model: null, credential_source: 'none', error: 'no_platform_model', usage }
   }
+  try { await assertConfirmedModelProfile(row) }
+  catch (error) { return { model:null, credential_source:'none', error:error.message, usage } }
   return buildResult(row, 'platform_primary', usage, 'platform_primary')
 }
 
@@ -606,6 +918,8 @@ function buildResult(profile, source, usage, reason) {
     console.error(`[ModelProfiles] Failed to decrypt key for profile ${profile.id}:`, e.message)
     return { model: null, credential_source: source, error: 'credential_decryption_failed', usage, reason }
   }
+  const tokenCapabilities = getProfileTokenCapabilities(profile)
+    || normalizeProviderCapabilities(profile)
   return {
     model: {
       id: profile.id,
@@ -616,10 +930,15 @@ function buildResult(profile, source, usage, reason) {
       api_key_encrypted: decryptedKey,
       key_version: profile.key_version,
       temperature: profile.temperature,
-      max_tokens: profile.max_tokens,
       thinking_enabled: profile.thinking_enabled,
       reasoning_effort: profile.reasoning_effort,
       request_timeout_ms: profile.request_timeout_ms,
+      context_window_tokens:tokenCapabilities.context_window_tokens,
+      max_input_tokens:tokenCapabilities.max_input_tokens,
+      max_output_tokens:tokenCapabilities.max_output_tokens,
+      context_limit_semantics:tokenCapabilities.context_limit_semantics,
+      token_limits_source:tokenCapabilities.token_limits_source,
+      token_limits_status:tokenCapabilities.token_limits_status,
       owner_user_id: profile.owner_user_id,
       profile_updated_at: profile.updated_at || null,
     },
@@ -640,120 +959,47 @@ function sanitizeProfile(row) {
   return out
 }
 
+async function sanitizeProfileWithCapabilities(row) {
+  const profile = sanitizeProfile(row)
+  const capabilities = await getModelProviderCapabilities(row.id)
+  const result = {
+    ...profile,
+    context_window_tokens:capabilities.context_window_tokens,
+    max_input_tokens:capabilities.max_input_tokens,
+    max_output_tokens:capabilities.max_output_tokens,
+    context_limit_semantics:capabilities.context_limit_semantics,
+    token_limits_source:capabilities.token_limits_source,
+    token_limits_status:capabilities.token_limits_status,
+    token_limits_note:capabilities.token_limits_note,
+    token_limits_updated_by:capabilities.token_limits_updated_by,
+    token_limits_updated_at_utc_msc:capabilities.token_limits_updated_at_utc_msc,
+    verification_status:capabilities.verification_status,
+    provider_verification_status:capabilities.verification_status,
+    provider_capability_source:capabilities.capability_source || null,
+  }
+  // Keep the capability identity available to server-side binding checks while
+  // avoiding a new public credential/configuration field in the JSON response.
+  for (const [key, value] of Object.entries({
+    capability_provider:capabilities.provider || null,
+    capability_model_name:capabilities.model_name || null,
+    capability_api_base_url:capabilities.api_base_url || null,
+    capability_protocol:capabilities.protocol || null,
+  })) {
+    Object.defineProperty(result, key, { value, enumerable:false, configurable:true })
+  }
+  return result
+}
+
 // ─── Legacy Migration Helpers ───
 
-async function ensureMigratedDefault(scope, ownerUserId, profileId, now) {
-  if (scope === MODEL_PROFILE_SCOPE.PLATFORM) {
-    const current = await queryOne(
-      "SELECT id FROM ai_model_profiles WHERE scope = 'platform' AND is_default = 1 AND status = 'active' AND deleted_at IS NULL LIMIT 1"
-    )
-    if (!current) await queryRun('UPDATE ai_model_profiles SET is_default = 1, updated_at = ? WHERE id = ?', [now, profileId])
-    return
-  }
-  const inserted = await queryRun(
-    `INSERT IGNORE INTO user_model_defaults (user_id, model_profile_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?)`,
-    [ownerUserId, profileId, now, now]
-  )
-  if (inserted.changes > 0) {
-    await queryRun('UPDATE ai_model_profiles SET is_default = 1, updated_at = ? WHERE id = ?', [now, profileId])
-  }
-}
-
-async function migrateOneProfile({ ownerUserId, scope, provider, modelName, baseUrl, apiKey, temperature, maxTokens, now }) {
-  const normalizedProvider = provider || 'deepseek'
-  const normalizedModel = modelName || 'deepseek-chat'
-  let profile = await queryOne(
-    `SELECT id FROM ai_model_profiles
-     WHERE owner_user_id = ? AND scope = ? AND provider = ? AND model_name = ? AND deleted_at IS NULL`,
-    [ownerUserId, scope, normalizedProvider, normalizedModel]
-  )
-  let created = false
-  if (!profile) {
-    const encrypted = isEncryptedEnvelope(apiKey) ? apiKey : encryptCredential(apiKey)
-    const result = await queryRun(
-      `INSERT INTO ai_model_profiles
-        (owner_user_id, scope, provider, model_name, api_base_url, api_key_encrypted, key_version,
-         temperature, max_tokens, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-      [ownerUserId, scope, normalizedProvider, normalizedModel, baseUrl || null, encrypted,
-       JSON.parse(encrypted).v, temperature ?? 0.3, maxTokens ?? 2000, now, now]
-    )
-    profile = { id: result.insertId }
-    created = true
-  }
-  await ensureMigratedDefault(scope, ownerUserId, profile.id, now)
-  return { profileId: profile.id, created }
-}
-
 export async function migrateLegacyConfigs() {
-  if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
-  const results = []
-  const now = beijingNow()
-
-  const configs = await queryAll(
-    `SELECT id, user_id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens
-     FROM ai_configs WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted != ''
-     ORDER BY updated_at DESC`
-  )
-  for (const cfg of configs) {
-    const migrated = await migrateOneProfile({
-      ownerUserId: cfg.user_id, scope: MODEL_PROFILE_SCOPE.USER, provider: cfg.api_provider,
-      modelName: cfg.model_name, baseUrl: cfg.api_base_url, apiKey: cfg.api_key_encrypted,
-      temperature: cfg.temperature, maxTokens: cfg.max_tokens, now,
-    })
-    if (migrated.created) results.push({ source: 'ai_configs', id: cfg.id, user_id: cfg.user_id })
-  }
-
-  const gac = await queryOne(
-    "SELECT id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens FROM global_auto_config WHERE id = 1 AND api_key_encrypted IS NOT NULL AND api_key_encrypted != ''"
-  )
-  if (gac) {
-    const migrated = await migrateOneProfile({
-      ownerUserId: 0, scope: MODEL_PROFILE_SCOPE.PLATFORM, provider: gac.api_provider,
-      modelName: gac.model_name, baseUrl: gac.api_base_url, apiKey: gac.api_key_encrypted,
-      temperature: gac.temperature, maxTokens: gac.max_tokens, now,
-    })
-    if (migrated.created) results.push({ source: 'global_auto_config', id: gac.id })
-  }
-
-  const allSysConfigs = await queryAll(
-    "SELECT `key`, `value` FROM system_config WHERE category = 'ai_provider' AND `value` != ''"
-  )
-  const providerMap = {}
-  for (const row of allSysConfigs) {
-    const match = row.key.match(/^(.*)_(api_key|model|base_url)$/)
-    if (!match) continue
-    const [, provider, field] = match
-    if (!providerMap[provider]) providerMap[provider] = {}
-    providerMap[provider][field] = row.value
-  }
-  for (const [provider, cfg] of Object.entries(providerMap)) {
-    if (!cfg.api_key) continue
-    const migrated = await migrateOneProfile({
-      ownerUserId: 0, scope: MODEL_PROFILE_SCOPE.PLATFORM, provider,
-      modelName: cfg.model, baseUrl: cfg.base_url, apiKey: cfg.api_key,
-      temperature: 0.3, maxTokens: 2000, now,
-    })
-    if (migrated.created) results.push({ source: 'system_config', provider })
-  }
-
-  const closeConfigs = await queryAll(
-    `SELECT user_id, api_key_encrypted, api_provider, model_name, api_base_url, temperature, max_tokens
-     FROM close_config WHERE api_key_encrypted IS NOT NULL AND api_key_encrypted != ''
-     ORDER BY updated_at DESC`
-  )
-  for (const cfg of closeConfigs) {
-    const migrated = await migrateOneProfile({
-      ownerUserId: cfg.user_id, scope: MODEL_PROFILE_SCOPE.USER, provider: cfg.api_provider,
-      modelName: cfg.model_name, baseUrl: cfg.api_base_url, apiKey: cfg.api_key_encrypted,
-      temperature: cfg.temperature, maxTokens: cfg.max_tokens, now,
-    })
-    if (migrated.created) results.push({ source: 'close_config', user_id: cfg.user_id })
-  }
-
-  console.log(`[ModelProfiles] Legacy migration: ${results.length} profiles created`)
-  return results
+  // Legacy tables remain untouched. In particular, do not recreate an active
+  // profile from an old encrypted key on every startup: that would make an
+  // unverified model selectable without the explicit save-and-verify flow.
+  // The legacy rows and keys are retained for an explicitly authorized,
+  // audited migration tool; no provider call or database write occurs here.
+  console.log('[ModelProfiles] Legacy profile migration is disabled; awaiting explicit save-and-verify')
+  return []
 }
 
 function sameSecret(left, right) {

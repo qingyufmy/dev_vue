@@ -100,12 +100,14 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('stillExists || previousSelected || state.signals[0] || null')
   })
 
-  it('keeps inactive personal memory archived and exposes platform archive governance', () => {
-    expect(app).toContain('const archivedItems = visibleItems.filter(item => ["revoked","expired","archival"].includes(item.status))')
-    expect(app).toContain('const currentItems = visibleItems.filter(item => !["revoked","expired","archival"].includes(item.status))')
-    expect(app).toContain("tab('long', '长期记忆'")
-    expect(app).toContain('data-platform-experience-action="delete"')
-    expect(app).toContain('function renderPlatformExperience(items = [], policies = [], evaluation = {})')
+  it('exposes one editable and restorable memory library instead of tiered archives', () => {
+    expect(app).not.toContain('const archivedItems = visibleItems.filter')
+    expect(app).not.toContain("tab('long', '长期记忆'")
+    expect(app).not.toContain('data-platform-experience-action="delete"')
+    expect(app).toContain('function renderStrategyMemoryLibrary()')
+    expect(app).toContain('data-strategy-memory-restore')
+    expect(app).toContain('完整记忆库原文（Markdown）')
+    expect(app).toContain('data-strategy-memory-mode="preview"')
   })
 
   it('renders pending cancellation outcomes in signal details', () => {

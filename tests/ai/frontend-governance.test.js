@@ -49,7 +49,43 @@ function loadPeriodReviewEffectiveStatus() {
   return new Function(`${normalizedApp.slice(start, end)}\nreturn periodReviewEffectiveStatus;`)()
 }
 
+function loadModelRequestTransportTimeoutMs() {
+  const start = app.indexOf('const MODEL_REQUEST_TRANSPORT_MARGIN_MS')
+  const end = app.indexOf('\n\nasync function api', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`${app.slice(start, end)}\nreturn modelRequestTransportTimeoutMs;`)()
+}
+
+function loadModelTaskAttemptTransportTimeoutMs() {
+  const start = app.indexOf('const MODEL_REQUEST_TRANSPORT_MARGIN_MS')
+  const end = app.indexOf('\n\nasync function api', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`${app.slice(start, end)}\nreturn modelTaskAttemptTransportTimeoutMs;`)()
+}
+
+function loadAdminModelRequestTransportTimeoutMs() {
+  const start = adminApp.indexOf('const ADMIN_MODEL_REQUEST_TIMEOUT_MIN_MS')
+  const end = adminApp.indexOf('\nasync function api', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`${adminApp.slice(start, end)}\nreturn adminModelRequestTransportTimeoutMs;`)()
+}
+
 describe('AI governance navigation and DOM contract', () => {
+  it('uses truthful unified-memory application states without retired personal or platform candidates', () => {
+    expect(app).toContain('memory_application_status')
+    expect(app).toContain('compression_failed_memory_preserved')
+    expect(app).toContain('复盘经验已经安全写入')
+    expect(app).toContain('monthly_review_append:"月复盘沉淀"')
+    expect(app).toContain('corrective_memory_merge:"完整性纠正"')
+    expect(app).toContain('来源复盘版本 #')
+    expect(app).toContain('failed:"压缩失败，记忆已保留"')
+    expect(app).toContain('已确认复盘尚未形成可验证的记忆修订')
+    expect(app).not.toContain('已生成平台记忆候选')
+    expect(app).not.toContain('已写入个人记忆体系')
+  })
   it('treats a persisted period-review version as authoritative over a stale leased job', () => {
     const effectiveStatus = loadPeriodReviewEffectiveStatus()
     expect(effectiveStatus({ current_version_id:191, status:'draft', job_status:'leased', progress_stage:'model_request' })).toBe('draft')
@@ -389,7 +425,10 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('periodReviewProgressHtml')
     expect(html).toContain('id="reviewNavBadge"')
     expect(html).toContain('id="reviewNavFailureDot"')
-    expect(app).toContain('api("/api/ai/memory")')
+    expect(app).toContain('api("/api/ai/strategy-memories")')
+    expect(app).toContain('renderStrategyMemoryLibrary()')
+    expect(html).toContain('每个策略只维护一份完整记忆')
+    expect(html).not.toContain('id="memoryEnabled"')
     expect(routes).toContain("WHERE id = ? AND user_id = ?")
     expect(app).toContain('Number(summary.daily_total || 0)')
     expect(app).toContain('Number(summary.monthly_total || 0)')
@@ -400,11 +439,11 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('class="review-case-metrics"')
     expect(css).toContain('#review-memory .review-case-button {')
     expect(css).toContain('.review-case-metrics {')
-    expect(app).toContain('function memoryApplicabilityView(item = {})')
-    expect(app).toContain('按当前品种、周期、方向、行情与缠论结构精确匹配')
-    expect(app).toContain('renderCachedMemoryWorkspace();')
-    expect(css).toContain('.memory-context-chip.avoid')
-    expect(css).toContain('.personal-memory-archive')
+    expect(app).not.toContain('function memoryApplicabilityView(item = {})')
+    expect(app).not.toContain('按当前品种、周期、方向、行情与缠论结构精确匹配')
+    expect(app).not.toContain('renderCachedMemoryWorkspace();')
+    expect(app).toContain('strategyMemoryDetail: null')
+    expect(css).toContain('.strategy-memory-library {')
   })
 
   it('uses cursor pagination and request versions to prevent stale inference list data', () => {
@@ -515,6 +554,28 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).toContain('id="historyChart"')
   })
 
+  it('gives model save and test requests a transport margin without changing the ordinary API timeout', () => {
+    const modelTimeout = loadModelRequestTransportTimeoutMs()
+    expect(modelTimeout(30_000)).toBe(35_000)
+    expect(modelTimeout(600_000)).toBe(605_000)
+    expect(modelTimeout()).toBe(125_000)
+    expect(app).toContain('const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000)')
+  })
+
+  it('keeps legacy WebSocket model waits aligned with formal single-attempt deadlines', () => {
+    const modelTaskTimeout = loadModelTaskAttemptTransportTimeoutMs()
+    expect(modelTaskTimeout('manual_analysis')).toBe(905_000)
+    expect(modelTaskTimeout('model_compare')).toBe(905_000)
+    expect(app).toContain('manual_analysis: 15 * 60_000')
+    expect(app).toContain('model_compare: 15 * 60_000')
+    expect(app).toContain('_timeout:modelTaskAttemptTransportTimeoutMs("manual_analysis")')
+    expect(app).toContain('_timeout:modelTaskAttemptTransportTimeoutMs("model_compare")')
+    expect(app).not.toContain('_timeout:120000')
+    expect(app).not.toContain('_timeout: 120000')
+    expect(app).not.toContain('_timeout:180000')
+    expect(app).not.toContain('_timeout: 180000')
+  })
+
   it('keeps ordinary history navigation local and reserves terminal rescan for explicit refresh', () => {
     const refreshTabStart = app.indexOf('async function refreshTabData(tabId, options = {})')
     const refreshTabEnd = app.indexOf('async function withBusy', refreshTabStart)
@@ -610,7 +671,7 @@ describe('AI governance navigation and DOM contract', () => {
   })
 
   it('uses exact review language and separates process issue from content confirmation', () => {
-    expect(app).toContain('内容准确并加入记忆')
+    expect(app).toContain('内容准确并沉淀到策略记忆库')
     expect(app).toContain('内容有问题，继续修改')
     expect(app).toContain('交易流程问题')
     expect(app).toContain('复盘内容确认')
@@ -637,12 +698,28 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).not.toContain('统一管理平台复盘与记忆')
     expect(app).toContain('api(`/api/ai/model-profiles${profileScopeQuery()}`)')
     expect(app).toContain('if (state.user?.role === "admin") body.scope = "platform"')
-    expect(app).toContain('api("/api/ai/admin/platform-experience")')
-    expect(app).toContain('renderPlatformExperience(state.memoryItems')
+    expect(app).toContain('api("/api/ai/strategy-memories")')
+    expect(app).toContain('function renderStrategyMemoryLibrary()')
+    expect(app).toContain('data-strategy-memory-action="save"')
+    expect(app).toContain('data-strategy-memory-action="compress"')
     expect(app).toContain('function isObserverSourceAccount()')
     expect(app).toContain('function canManagePlatformAiContent()')
-    expect(html).toContain('id="platformExperiencePolicies"')
-    expect(html).toContain('id="platformExperienceEvaluation"')
+    expect(html).not.toContain('id="platformExperiencePolicies"')
+    expect(html).not.toContain('id="platformExperienceEvaluation"')
+  })
+
+  it('makes the administrator unified-memory tab reachable and refreshable', () => {
+    expect(adminApp).toContain('data-ai-tab="memory"')
+    expect(adminApp).toContain("if (state.aiTab === 'memory')")
+    expect(adminApp).toContain('loadPlatformMemory()')
+    const tabBindingStart = adminApp.indexOf('function bindAiTabs()')
+    const tabBindingEnd = adminApp.indexOf('function bindAiJumpActions', tabBindingStart)
+    expect(adminApp.slice(tabBindingStart, tabBindingEnd)).toContain('loadPlatformMemory()')
+    expect(adminApp).toContain('else if (state.aiTab === \'memory\') await loadPlatformMemory()')
+    expect(adminApp).toContain('pausePlatformMemoryCompressionPolling()')
+    expect(adminApp).toContain("state.aiTab = 'memory'")
+    expect(adminHtml).toContain('compressionobs2')
+    expect(html).toContain('compressionobs2')
   })
 
   it('keeps opaque history cursors bound to one filter and account snapshot', () => {
@@ -657,17 +734,24 @@ describe('AI governance navigation and DOM contract', () => {
     expect(bridgeWs).toContain('hasHistoryCursorCapability(exactRoute)')
   })
 
-  it('shows active and shadow retrieval facts without turning an empty window into 0% effect', () => {
-    expect(app).toContain('const total = Number(retrieval.total || 0)')
-    expect(app).toContain('const activeTotal = Number(retrieval.active_total || 0)')
-    expect(app).toContain('const shadowTotal = Number(retrieval.shadow_total || 0)')
-    expect(app).toContain('return count > 0 ? `${Math.round(Number(hits || 0) / count * 100)}%` : "暂无检索"')
-    expect(app).toContain('${Number(row.hits || 0)} / ${Number(row.retrievals || 0)}')
-    expect(css).toContain('.platform-evaluation-breakdown { display: flex;')
-    expect(css).toContain('.platform-evaluation-breakdown { flex-direction: column;')
+  it('retires retrieval evaluation and loads one complete library per strategy', () => {
+    expect(app).not.toContain('const total = Number(retrieval.total || 0)')
+    expect(app).not.toContain('const activeTotal = Number(retrieval.active_total || 0)')
+    expect(app).not.toContain('const shadowTotal = Number(retrieval.shadow_total || 0)')
+    expect(app).toContain('api("/api/ai/strategy-memories")')
+    expect(app).toContain('api(`/api/ai/strategy-memories/${state.selectedStrategyMemoryId}`)')
+    expect(app).toContain('完整记忆库原文（Markdown）')
+    expect(app).toContain('data-strategy-memory-mode="preview"')
+    expect(app).toContain('/preview`')
+    expect(app).toContain('data-strategy-memory-conflict-only')
+    expect(app).toContain('resumeStrategyMemoryConsistencyPolling()')
+    expect(app).toContain('放弃未保存的记忆原文？')
+    expect(css).toContain('.strategy-memory-editor textarea')
+    expect(css).toContain('.strategy-memory-preview-block.is-attention_required')
+    expect(css).toContain('.strategy-memory-preview-block.is-observing')
     const versions = [
-      html.match(/\/ai\/styles\.css\?v=([^"']+)/)?.[1],
-      html.match(/\/ai\/responsive\.css\?v=([^"']+)/)?.[1],
+      html.match(/\/ai\/styles\.css\?v=([^&"']+)/)?.[1],
+      html.match(/\/ai\/responsive\.css\?v=([^&"']+)/)?.[1],
       html.match(/\/ai\/app\.js\?v=([^&"']+)/)?.[1],
     ]
     expect(new Set(versions).size).toBe(1)
@@ -1527,14 +1611,110 @@ describe('route permissions and credential redaction', () => {
     expect(adminApp).not.toContain('payload.strategy_policy')
   })
 
-  it('explains automatic task budgets and the model output hard cap in both model editors', () => {
-    expect(html).toContain('任务预算')
-    expect(html).toContain('模型输出硬上限')
-    expect(html).toContain('不会每次固定申请')
-    expect(html).toContain('连接测试超时（秒）')
-    expect(html).toContain('仅用于“测试连接”')
-    expect(adminApp).toContain('任务预算：自动管理')
-    expect(adminApp).toContain("textContent='模型输出硬上限'")
-    expect(adminApp).toContain("textContent='连接测试超时（毫秒）'")
+  it('uses physical token capabilities and validates before saving in both model editors', () => {
+    for (const field of ['profileContextWindowTokens', 'profileMaxInputTokens', 'profileMaxOutputTokens']) {
+      expect(html).toContain(`id="${field}"`)
+    }
+    expect(html).toContain('默认值来自 DeepSeek 初始能力')
+    expect(html).toContain('思维链会占用最大输出额度')
+    expect(html).toContain('模型请求超时（秒）')
+    expect(html).toContain('保存时的单次验证和独立“测试连接”')
+    expect(html).toContain('保存并验证')
+    expect(html).not.toContain('模型输出硬上限')
+    expect(html).not.toContain('profileMaxTokens')
+    expect(app).toContain('context_window_tokens: Number($("profileContextWindowTokens").value)')
+    expect(app).toContain('max_input_tokens: Number($("profileMaxInputTokens").value)')
+    expect(app).toContain('max_output_tokens: Number($("profileMaxOutputTokens").value)')
+    expect(app).not.toContain('max_tokens:')
+    expect(app).toContain('button.textContent = "正在验证…"')
+    expect(app).toContain('toast("模型已验证并保存", "success")')
+    expect(app).toContain('const MODEL_REQUEST_TRANSPORT_MARGIN_MS = 5_000')
+    expect(app).toContain('options.timeout || 15000')
+    expect(app).toContain('timeout: modelRequestTransportTimeoutMs(requestTimeoutMs)')
+    expect(app).toContain('timeout:modelRequestTransportTimeoutMs(profile?.request_timeout_ms)')
+    expect(adminApp).toContain('id="platformModelContextWindowTokens"')
+    expect(adminApp).toContain('id="platformModelMaxInputTokens"')
+    expect(adminApp).toContain('id="platformModelMaxOutputTokens"')
+    expect(adminApp).toContain('保存并验证')
+    expect(adminApp).not.toContain('platformModelMaxTokens')
+    expect(adminApp).not.toContain('max_tokens:')
+    expect(adminApp).toContain("button.textContent='正在验证…'")
+    expect(adminApp).toContain("toast('模型已验证并保存','success')")
+    expect(adminApp).toContain('每日令牌告警阈值 / 用户')
+    expect(adminApp).toContain('仅用于用量统计和告警，不会阻止模型调用')
+    expect(adminApp).toContain('timeout:adminModelRequestTransportTimeoutMs(payload.request_timeout_ms)')
+    expect(adminApp).toContain("timeoutError.code = 'model_connection_timeout'")
+    const adminTimeout = loadAdminModelRequestTransportTimeoutMs()
+    expect(adminTimeout(30_000)).toBe(35_000)
+    expect(adminTimeout(600_000)).toBe(605_000)
+    expect(adminTimeout()).toBe(125_000)
+    for (const code of ['model_token_limits_invalid', 'model_token_limits_unconfirmed', 'model_token_limits_stale', 'model_request_unauthorized', 'model_rate_limited', 'model_service_unavailable', 'model_output_incomplete', 'model_connection_auth_failed', 'model_connection_invalid_api_key', 'model_connection_rate_limited', 'model_connection_model_unavailable', 'model_connection_request_rejected', 'model_connection_token_limits_rejected', 'model_connection_output_incomplete', 'model_connection_unavailable']) {
+      expect(app).toContain(code)
+      expect(adminApp).toContain(code)
+    }
+    expect(app).toContain('该模型限制尚未确认，请编辑模型并保存验证后再使用、设为默认或绑定策略')
+    expect(adminApp).toContain('该模型限制尚未确认，请编辑模型并保存验证后再使用、设为默认或绑定策略')
+    expect(app).toContain('模型身份或限制已变化，请重新编辑并保存验证')
+    expect(adminApp).toContain('模型身份或限制已变化，请重新编辑并保存验证')
+  })
+
+  it('recovers the latest compression job after reload in both memory consoles', () => {
+    expect(app).toContain('/compression-jobs-latest')
+    expect(app).toContain('state.strategyMemoryCompressionJob = latestCompression.job || null')
+    expect(adminApp).toContain('/compression-jobs-latest')
+    expect(adminApp).toContain('state.platformMemoryCompressionJob=latestCompression.job||null')
+  })
+
+  it('keeps the administrator memory console preview-first and consistency-aware', () => {
+    expect(adminApp).toContain("const ADMIN_STRATEGY_MEMORY_MARKDOWN_LABEL = '完整记忆库原文（Markdown）'")
+    expect(adminApp).toContain('data-platform-memory-mode="preview"')
+    expect(adminApp).toContain('data-platform-memory-mode="source"')
+    expect(adminApp).toContain('data-platform-memory-conflict-only')
+    expect(adminApp).toContain('只看冲突')
+    expect(adminApp).toContain('/preview`')
+    expect(adminApp).toContain('/consistency-checks/latest')
+    expect(adminApp).toContain('/consistency-checks/${jobId}')
+    expect(adminApp).toContain('expected_updated_at')
+    expect(adminApp).toContain('document.hidden')
+    expect(adminApp).toContain('resumePlatformMemoryConsistencyPolling()')
+    expect(adminApp).toContain('strategy-memory-preview-block')
+    expect(adminCss).toContain('.strategy-memory-preview-block.is-attention_required')
+    expect(adminCss).toContain('.strategy-memory-preview-block.is-observing')
+    expect(adminCss).toContain('.strategy-memory-preview-block.is-location-stale')
+    expect(adminCss).toContain('.strategy-memory-preview-status.is-attention_required')
+    expect(adminCss).toContain('.strategy-memory-conflict.is-location-stale')
+    expect(adminHtml).toContain('20260812memory4')
+    expect(adminHtml).toContain('memory-workbench3')
+  })
+
+  it('keeps strategy memory document workbenches preview-first and accessible in both consoles', () => {
+    for (const source of [app, adminApp]) {
+      expect(source).toContain('阅读预览')
+      expect(source).toContain('编辑原文')
+      expect(source).toContain('取消编辑')
+      expect(source).toContain('保存新版本')
+      expect(source).toContain('strategy-memory-layout')
+      expect(source).toContain('<section class="strategy-memory-document"')
+      expect(source).not.toContain('<main class="strategy-memory-document"')
+      expect(source).toContain('aria-live')
+      expect(source).toContain('strategy-memory-filter-toggle')
+      expect(source).toContain('strategy-memory-filter-control')
+    }
+    expect(app).toContain('data-strategy-memory-conflict-only')
+    expect(adminApp).toContain('data-platform-memory-conflict-only')
+    for (const source of [css, adminCss]) {
+      expect(source).toContain('.strategy-memory-sidebar')
+      expect(source).toContain('@media (max-width:1040px)')
+      expect(source).toContain('@media (max-width:720px)')
+      expect(source).toContain('@media (max-width:375px)')
+      expect(source).toContain('prefers-reduced-motion:reduce')
+      expect(source).toContain('.strategy-memory-preview-block + .strategy-memory-preview-block')
+      expect(source).toContain('.strategy-memory-revisions li .text-button')
+      expect(source).toContain('.strategy-memory-side-card > button')
+    }
+    expect(app).toContain('data-lucide="triangle-alert"')
+    expect(adminApp).toContain("attention_required: ['triangle-alert'")
+    expect(html).toContain('20260812memory4')
+    expect(html).toContain('memory-workbench3')
   })
 })

@@ -39,6 +39,12 @@ describe('manual trade review backend boundaries', () => {
     expect((worker.match(/await requestModel\(/g) || [])).toHaveLength(2)
     expect(worker).toContain("progress_stage = 'counterfactual_analysis'")
     expect(worker).toContain("progress_stage = 'outcome_review'")
+    expect(worker).toContain("modelTaskDeadlines('manual_analysis'")
+    expect(worker).toContain('job._taskDeadlineAtMs')
+    expect(worker).toContain('counterfactualDeadline.attemptSafetyDeadlineUtcMs')
+    expect(worker).toContain('outcomeDeadline.attemptSafetyDeadlineUtcMs')
+    expect(worker).toContain('createModelTaskTracker')
+    expect(worker).toContain('startManualTradeReviewLeaseHeartbeat')
     expect(review).toContain('manual_trade_review_counterfactual_immutable')
   })
 
@@ -49,6 +55,20 @@ describe('manual trade review backend boundaries', () => {
     expect(index).toContain("startManualTradeReviewWorker()")
     const aiIndex = read('server/routes/ai/index.js')
     expect(aiIndex).toContain('startManualTradeReviewWorker, stopManualTradeReviewWorker')
+  })
+
+  it('wakes the worker immediately only after a new review case is durably created', () => {
+    const review = read('server/routes/ai/manual-trade-review.js')
+    const createStart = review.indexOf('export async function createManualTradeReview')
+    const createEnd = review.indexOf('\nasync function getCaseForActorByRequest', createStart)
+    const createFlow = review.slice(createStart, createEnd)
+    expect(createFlow).toContain('if (result.created) requestManualTradeReviewCycle()')
+    expect(createFlow.indexOf('if (result.created) requestManualTradeReviewCycle()')).toBeGreaterThan(
+      createFlow.indexOf('const result = await withTransaction'),
+    )
+    expect(createFlow.indexOf('if (result.created) requestManualTradeReviewCycle()')).toBeLessThan(
+      createFlow.indexOf('const saved = await getCaseForActor(result.id, actorId)'),
+    )
   })
 
   it('does not expose a path from single-trade review into platform experience', () => {

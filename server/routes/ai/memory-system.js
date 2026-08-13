@@ -15,7 +15,6 @@ const DEFAULT_BUDGET = 800
 const MAX_BUDGET = 1600
 const SUMMARY_TRIGGER_ITEMS = 20
 const SUMMARY_TRIGGER_TOKENS = 4000
-const SUMMARY_MAX_TOKENS = 1200
 const SHORT_MEMORY_TTL_DAYS = 30
 const LONG_MEMORY_MIN_SUPPORT = 3
 const LONG_MEMORY_MIN_SPAN_DAYS = 7
@@ -61,15 +60,30 @@ async function prepareMemoryCompressionModelCall(resolved, messages, {
   }
   const budget = selectModelTaskBudget({
     taskKind:'memory_compression',
-    profileHardCap:Number(resolved?.model?.max_tokens) || undefined,
     providerOutputCap:capabilities.max_output_tokens,
     contextWindowTokens:capabilities.context_window_tokens,
+    maxInputTokens:capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens,
+    contextLimitSemantics:capabilities.context_limit_semantics,
+    capabilities,
+    profile:resolved?.model,
     estimatedInputTokens:estimateModelInputTokens(messages),
     schemaNeedTokens:Math.max(1_200, Math.ceil(JSON.stringify(messages).length / 8)),
   })
-  // Keep profile/provider/context limits as hard caps and fail explicitly
-  // when they cannot satisfy the output contract.
-  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) throw new Error('output_budget_insufficient')
+  if (budget.reason === 'model_token_limits_unconfirmed' || budget.reason === 'model_token_limits_stale') {
+    const error = new Error(budget.reason)
+    error.code = error.message
+    throw error
+  }
+  if (budget.reason === 'model_input_limit_exceeded' || budget.inputLimitExceeded) {
+    const error = new Error('model_input_limit_exceeded')
+    error.code = error.message
+    throw error
+  }
+  if (!budget.sufficient || budget.selectedMaxOutputTokens <= 0) {
+    const error = new Error('output_budget_insufficient')
+    error.code = error.message
+    throw error
+  }
   const rawDeadlines = modelTaskDeadlines('memory_compression', { nowUtcMs, businessDeadlineUtcMs })
   const deadlines = {
     ...rawDeadlines,
@@ -627,7 +641,7 @@ async function createMonthlyMemoryFromApprovedReview(periodCaseId, userId) {
     ...(content.strengths || []).map(item => `有效做法：${item}`),
     ...(content.next_month_actions || []).map(item => `后续行动：${item}`),
   ].filter(Boolean).join('。'), 12000)
-  if (!summaryText || tokenCount(summaryText) > SUMMARY_MAX_TOKENS) throw new Error('invalid_monthly_memory_summary')
+  if (!summaryText) throw new Error('invalid_monthly_memory_summary')
   const monthlyResult = await withTransaction(async run => {
     const [locked] = await run('SELECT * FROM period_review_cases WHERE id = ? FOR UPDATE', [reviewCase.id])
     if (!locked[0] || locked[0].status !== 'approved' || Number(locked[0].approved_version_id) !== Number(version.id)) throw new Error('approved_period_review_changed')
@@ -1256,7 +1270,7 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     const applicability = mergeMemoryApplicability(current)
     const messages = [
       { role: 'system', content: '把用户确认的交易经验压缩成保留适用条件和冲突边界的摘要。不得创造新规则，不得提高仓位或风险。只返回 JSON。' },
-      { role: 'user', content: JSON.stringify({ output: { summary: 'string <= 1200 tokens', source_memory_ids: ids }, memories: input }) },
+      { role: 'user', content: JSON.stringify({ output: { summary: 'string', source_memory_ids: ids }, memories: input }) },
     ]
     const modelCall = await prepareMemoryCompressionModelCall(resolved, messages, {
       nowUtcMs:Date.now(), businessDeadlineUtcMs:job._deadlineAtMs,
@@ -1305,12 +1319,12 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
       onProviderUsage:event => tracker.onProviderUsage(event),
       onProviderActivity:event => tracker.onProviderActivity(event),
       onProviderQuiet:event => tracker.onProviderQuiet(event),
-      messages,
+      messages, modelTaskBudget:modelCall.budget,
       usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'memory_compression', strategyId: null },
     })
     const outputIds = Array.isArray(output.source_memory_ids) ? output.source_memory_ids.map(Number).sort((a, b) => a - b) : []
     const summaryText = sanitizeMemoryText(output.summary, 12000)
-    if (!summaryText || tokenCount(summaryText) > SUMMARY_MAX_TOKENS || JSON.stringify(outputIds) !== JSON.stringify(ids)) throw new Error('invalid_compression_output')
+    if (!summaryText || JSON.stringify(outputIds) !== JSON.stringify(ids)) throw new Error('invalid_compression_output')
     await tracker.resultReady({ resultHash:sha256(JSON.stringify(output)) })
     lease.assertOwned()
     tracker.assertOwned()

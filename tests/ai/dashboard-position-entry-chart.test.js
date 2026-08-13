@@ -168,7 +168,7 @@ describe('shared current-position table contract', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const responsiveVersion = html.match(/responsive\.css\?v=([0-9a-z._-]+)/i)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z._-]+)/i)?.[1]
-    expect(stylesheetVersion).toBe('20260812historypref2')
+    expect(stylesheetVersion).toBe('20260812memory4')
     expect(responsiveVersion).toBe(stylesheetVersion)
     expect(appVersion).toBe(stylesheetVersion)
   })
