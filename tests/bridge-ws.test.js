@@ -125,6 +125,7 @@ import {
   enrichHistoryProtectionRows,
   wsMessageByteLength,
   buildBrowserCommandResult,
+  runBrowserAutoExecuteWithModelTask,
   sendNotificationCreatedToUser,
   buildBridgeDataChangedEvent,
   buildObserverBrowserPayload,
@@ -968,6 +969,100 @@ describe('history export signal association', () => {
     expect(index.get('1001')?.[0].analysis).toBe('inference result')
     expect(index.get('2002')?.[0].id).toBe(9)
     expect(index.get('3003')?.[0].id).toBe(9)
+  })
+})
+
+describe('browser auto-execute model-task boundary', () => {
+  function deps(tracker) {
+    const state = { lastInput:null }
+    return {
+      createModelTaskTracker:vi.fn(async input => {
+        state.lastInput = input
+        return tracker
+      }),
+      modelTaskDeadlines:vi.fn(() => ({ taskDeadlineUtcMs:Date.now() + 60_000, attemptSafetyDeadlineUtcMs:Date.now() + 30_000 })),
+      modelProviderProtocol:vi.fn(() => 'chat_completions'),
+      state,
+    }
+  }
+
+  it('creates a durable task, passes taskId and frozen identity, and records signal result ref', async () => {
+    const tracker = {
+      taskId:'ws-model-task-1', task:{ task_deadline_at_utc_msc:Date.now() + 60_000, result_valid_until_utc_msc:Date.now() + 60_000 },
+      signal:new AbortController().signal, persistBudget:vi.fn(), onProviderRequest:vi.fn(), onProviderUsage:vi.fn(),
+      onProviderActivity:vi.fn(), onProviderQuiet:vi.fn(), resultReady:vi.fn(), applying:vi.fn(), succeeded:vi.fn(),
+      failed:vi.fn(async () => {}), stop:vi.fn(async () => {}),
+    }
+    const trackerDeps = deps(tracker)
+    const guard = { signal:new AbortController().signal, assertConnected:vi.fn() }
+    const ai = {
+      getAnalyzeApiKey:vi.fn(async () => ({ api_provider:'deepseek', model_name:'deepseek-chat', _model_profile_id:7,
+        _protocol:'chat_completions', _credential_source:'user' })),
+      handleAnalyze:vi.fn(async (_userId, _params, options) => {
+        expect(options.taskId).toBe('ws-model-task-1')
+        expect(options.expectedModelIdentity).toEqual({ provider:'deepseek', model:'deepseek-chat', modelProfileId:7,
+          protocol:'chat_completions', credentialSource:'user' })
+        await options.onProviderRequest({ providerRequestId:'req-1' })
+        await options.onProviderUsage({ status:'success', responseReceived:true, httpStatus:200 })
+        return { status:'success', signal:{ id:88 } }
+      }),
+    }
+    const result = await runBrowserAutoExecuteWithModelTask(ai, 42,
+      { session_id:'s1', symbol:'XAUUSD', strategy_id:3, auto_execute:true }, 'cmd-1', guard, trackerDeps)
+    expect(result).toMatchObject({ status:'success', signal:{ id:88 } })
+    expect(trackerDeps.createModelTaskTracker).toHaveBeenCalledTimes(1)
+    expect(trackerDeps.state.lastInput).toMatchObject({ provider:'deepseek', model:'deepseek-chat', modelProfileId:7,
+      protocol:'chat_completions', credentialSource:'user', frozenContext:{ auto_execute:true } })
+    expect(tracker.succeeded).toHaveBeenCalledWith({ resultRef:'ai_signals:88' })
+    expect(tracker.failed).not.toHaveBeenCalled()
+  })
+
+  it('fails the tracker and never succeeds after browser disconnect guard trips', async () => {
+    const tracker = {
+      taskId:'ws-model-task-closed', task:{ task_deadline_at_utc_msc:Date.now() + 60_000, result_valid_until_utc_msc:Date.now() + 60_000 },
+      signal:new AbortController().signal, persistBudget:vi.fn(), onProviderRequest:vi.fn(), onProviderUsage:vi.fn(),
+      onProviderActivity:vi.fn(), onProviderQuiet:vi.fn(), resultReady:vi.fn(), applying:vi.fn(), succeeded:vi.fn(),
+      failed:vi.fn(async () => {}), stop:vi.fn(async () => {}),
+    }
+    const trackerDeps = deps(tracker)
+    const guard = { signal:new AbortController().signal, assertConnected:vi.fn(() => { throw new Error('manual_auto_execute_request_disconnected') }) }
+    const ai = {
+      getAnalyzeApiKey:vi.fn(async () => ({ api_provider:'deepseek', model_name:'deepseek-chat', _model_profile_id:7,
+        _protocol:'chat_completions', _credential_source:'user' })),
+      handleAnalyze:vi.fn(),
+    }
+    await expect(runBrowserAutoExecuteWithModelTask(ai, 42,
+      { session_id:'s1', symbol:'XAUUSD', strategy_id:3, auto_execute:true }, 'cmd-closed', guard, trackerDeps))
+      .rejects.toThrow('manual_auto_execute_request_disconnected')
+    expect(ai.handleAnalyze).not.toHaveBeenCalled()
+    expect(tracker.succeeded).not.toHaveBeenCalled()
+    expect(tracker.failed).toHaveBeenCalled()
+    expect(tracker.stop).toHaveBeenCalled()
+  })
+
+  it('propagates a stale reread identity before provider callbacks', async () => {
+    const tracker = {
+      taskId:'ws-model-task-stale', task:{ task_deadline_at_utc_msc:Date.now() + 60_000, result_valid_until_utc_msc:Date.now() + 60_000 },
+      signal:new AbortController().signal, persistBudget:vi.fn(), onProviderRequest:vi.fn(), onProviderUsage:vi.fn(),
+      onProviderActivity:vi.fn(), onProviderQuiet:vi.fn(), resultReady:vi.fn(), applying:vi.fn(), succeeded:vi.fn(),
+      failed:vi.fn(async () => {}), stop:vi.fn(async () => {}),
+    }
+    const trackerDeps = deps(tracker)
+    const guard = { signal:new AbortController().signal, assertConnected:vi.fn() }
+    const ai = {
+      getAnalyzeApiKey:vi.fn(async () => ({ api_provider:'deepseek', model_name:'deepseek-chat', _model_profile_id:7,
+        _protocol:'chat_completions', _credential_source:'user' })),
+      handleAnalyze:vi.fn(async (_userId, _params, options) => {
+        expect(options.expectedModelIdentity.model).toBe('deepseek-chat')
+        throw Object.assign(new Error('manual_analysis_model_stale'), { code:'manual_analysis_model_stale' })
+      }),
+    }
+    await expect(runBrowserAutoExecuteWithModelTask(ai, 42,
+      { session_id:'s1', symbol:'XAUUSD', strategy_id:3, auto_execute:true }, 'cmd-stale', guard, trackerDeps))
+      .rejects.toThrow('manual_analysis_model_stale')
+    expect(tracker.succeeded).not.toHaveBeenCalled()
+    expect(tracker.failed).toHaveBeenCalled()
+    expect(tracker.onProviderRequest).not.toHaveBeenCalled()
   })
 })
 

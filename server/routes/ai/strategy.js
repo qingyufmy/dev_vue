@@ -22,6 +22,7 @@ import { normalizeBacktestOptions, simulateVirtualAccount } from './model-backte
 import { resolveModelSnapshotSelection } from './model-snapshot-samples.js'
 import { resolvePlatformAiVolumeRange } from './risk-policy.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
+import { modelProviderProtocol } from './model-providers.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import { indicatorRequiredHistory } from './indicator-registry.js'
@@ -132,6 +133,63 @@ function boundedComparisonError(value, fallback = 'history_compare_failed', maxi
 function comparisonFingerprint(value) {
   const serialized = typeof value === 'string' ? value : JSON.stringify(value)
   return crypto.createHash('sha256').update(serialized).digest('hex')
+}
+
+function compareMemoryIdentity(library, { missingCode = 'strategy_memory_library_unavailable', invalidCode = 'history_compare_memory_snapshot_invalid' } = {}) {
+  if (!library) throw Object.assign(new Error(missingCode), { code:missingCode })
+  const versionNo = Number(library.version_no)
+  const hasContent = Object.hasOwn(library, 'content_text')
+    && library.content_text !== null && library.content_text !== undefined
+  const contentText = hasContent ? String(library.content_text) : ''
+  const contentHash = String(library.content_hash || '')
+  if (!Number.isSafeInteger(versionNo) || versionNo < 0
+    || !hasContent
+    || !/^[a-f0-9]{64}$/i.test(contentHash)
+    || comparisonFingerprint(contentText) !== contentHash) {
+    throw Object.assign(new Error(invalidCode), { code:invalidCode })
+  }
+  return { version_no:versionNo, content_hash:contentHash.toLowerCase(), content_text:contentText }
+}
+
+function modelIdentityFromConfig(config = {}) {
+  const provider = config.api_provider || config.provider || null
+  return {
+    provider:provider ? String(provider) : null,
+    model:config.model_name || config.model ? String(config.model_name || config.model) : null,
+    modelProfileId:Number(config._model_profile_id || config.model_profile_id) || null,
+    protocol:config.protocol || config._protocol || modelProviderProtocol(provider) || null,
+    credentialSource:config._credential_source || config.credential_source || null,
+  }
+}
+
+function assertExpectedModelIdentity(config, expected) {
+  if (!expected) return
+  const actual = modelIdentityFromConfig(config)
+  const fields = ['provider', 'model', 'modelProfileId', 'protocol', 'credentialSource']
+  if (fields.some(field => String(actual[field] ?? '') !== String(expected[field] ?? ''))) {
+    throw Object.assign(new Error('manual_analysis_model_stale'), { code:'manual_analysis_model_stale' })
+  }
+}
+
+// Injection logs are intentionally append-only audit rows and the existing
+// schema does not provide a uniqueness constraint.  A compare unit can be
+// resumed after the worker has already created its model task, so reuse the
+// exact task/version/usage row before inserting another audit record.
+async function ensureCompareStrategyMemoryInjectionLog({ strategyId, actor, library, modelTaskId,
+  usageKind = 'model_compare_history' }) {
+  const taskId = String(modelTaskId || '').trim()
+  if (!taskId) throw new Error('model_compare_memory_task_missing')
+  const versionNo = Number(library?.version_no || 0)
+  const contentHash = String(library?.content_hash || '')
+  const existing = await queryOne(`SELECT * FROM strategy_memory_injection_logs
+    WHERE strategy_id = ? AND library_version_no = ? AND library_content_hash = ?
+      AND usage_kind = ? AND period_review_case_id IS NULL AND model_task_id = ?
+    ORDER BY id LIMIT 1`, [Number(strategyId), versionNo, contentHash, usageKind, taskId])
+  if (existing) return existing
+  const created = await createStrategyMemoryInjectionLog({ strategyId:Number(strategyId), actor,
+    library, injectionKind:usageKind, modelTaskId:taskId })
+  if (!created?.id) throw new Error('model_compare_memory_injection_log_failed')
+  return created
 }
 
 function comparisonRatesEvidence(timeframe, rates = []) {
@@ -640,6 +698,7 @@ export async function handleAnalyze(userId, params, options = {}) {
   if (!supportedSymbols.has(stripBrokerSuffix(symbol).toUpperCase())) return { status: 'error', message: 'symbol_not_supported_by_strategy' }
   const policy = parseStrategyPolicy(strategy)
   const config = await getAnalyzeApiKey(userId, session_id, Number(strategy.id))
+  assertExpectedModelIdentity(config, options.expectedModelIdentity)
   config._allowed_entry_methods = policy.entryMethods
   config._market_data_plan = policy.marketDataPlan
   config._use_chan_analysis = policy.useChanAnalysis
@@ -1000,10 +1059,14 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
   try {
     const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:Number(strategy.id),
       userId, role:actor?.role || 'user' })
-    compareMemory = resolvedMemory.library
+    compareMemory = compareMemoryIdentity(resolvedMemory?.library, {
+      missingCode:'strategy_memory_library_unavailable',
+      invalidCode:'strategy_memory_library_unavailable',
+    })
   } catch (error) {
     console.error('[AnalyzeCompare] Strategy memory library unavailable:', error.message)
-    return { ok:false, error:'strategy_memory_library_unavailable' }
+    return { ok:false, error:error?.code === 'history_compare_memory_snapshot_invalid'
+      ? 'history_compare_memory_snapshot_invalid' : 'strategy_memory_library_unavailable' }
   }
 
   const supportedSymbols = new Set(parsePromptSymbols(strategy.symbols_json).map(item => stripBrokerSuffix(String(item)).toUpperCase()))
@@ -1119,7 +1182,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
       snapshotHash:liveCompareCheckpointContext.snapshotFingerprint,
       outputContractHash:liveCompareCheckpointContext.outputContractHash,
       marketEvidenceHash:liveCompareCheckpointContext.marketEvidenceHash,
-      decisionUtcMs:Date.now(),
+      decisionUtcMs:Date.now(), strategyMemory:compareMemory,
     })
     let tracker = null
     let restoreCallbacks = null
@@ -1159,9 +1222,9 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
         throw error
       }
       liveTrackers.add(tracker)
-      await createStrategyMemoryInjectionLog({ strategyId:Number(strategy.id),
+      await ensureCompareStrategyMemoryInjectionLog({ strategyId:Number(strategy.id),
         actor:{ userId, role:actor?.role || 'user' }, library:compareMemory,
-        injectionKind:'model_compare_live', modelTaskId:tracker.taskId })
+        modelTaskId:tracker.taskId, usageKind:'model_compare_live' })
       if (liveBatchAbortController.signal.aborted) {
         throw liveBatchAbortController.signal.reason || new Error('model_compare_batch_aborted')
       }
@@ -1346,7 +1409,7 @@ function compareUnitIdempotencyKey({ jobId, mode, unitKey, modelId, inputHash, m
 
 function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, modelId,
   inputHash, promptHash, snapshotHash, outputContractHash, marketEvidenceHash,
-  decisionUtcMs, resultValidUntilUtcMs = null }) {
+  decisionUtcMs, resultValidUntilUtcMs = null, strategyMemory = null }) {
   const nowUtcMs = Date.now()
   const deadlines = modelTaskDeadlines('model_compare', { nowUtcMs })
   const modelConfigFingerprint = comparisonFingerprint({
@@ -1361,7 +1424,9 @@ function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, 
     reasoning_effort:config?.reasoning_effort || null,
   })
   const sourceHash = inputHash || comparisonFingerprint({ jobId, mode, unitKey, modelId,
-    promptHash, modelConfigFingerprint, snapshotHash, marketEvidenceHash })
+    promptHash, modelConfigFingerprint, snapshotHash, marketEvidenceHash,
+    memory_library_version_no:strategyMemory?.version_no ?? null,
+    memory_library_content_hash:strategyMemory?.content_hash || null })
   return {
     modelConfigFingerprint,
     deadlines,
@@ -1389,6 +1454,10 @@ function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, 
         model_id:Number(modelId), decision_time_utc_msc:Number(decisionUtcMs) || null,
         input_hash:sourceHash, prompt_hash:promptHash || null,
         snapshot_hash:snapshotHash || null, market_evidence_hash:marketEvidenceHash || null,
+        ...(strategyMemory ? {
+          memory_library_version_no:Number(strategyMemory.version_no || 0),
+          memory_library_content_hash:strategyMemory.content_hash || null,
+        } : {}),
       },
       scheduledAtUtcMs:nowUtcMs,
       // The generic task envelope retains the longer task deadline. The LLM
@@ -1850,9 +1919,54 @@ export async function handleHistoryCompare(userId, params, options = {}) {
   }
   const modelRuntimeSnapshots = Object.fromEntries(validModels.map(({ modelId, resolved }) =>
     [modelId, comparisonModelSnapshot(modelId, resolved)]))
+  // Historical replay freezes the complete unified strategy memory exactly
+  // once per compare job. A resumed job uses the manifest copy rather than a
+  // newer live library. Snapshot replay deliberately skips this branch: its
+  // persisted prompt is the sole historical input.
+  let historyMemorySnapshot = null
+  if (dataSource === 'historical') {
+    const manifest = expectedCheckpointManifest
+    const hasFrozenMemory = manifest
+      && manifest.memory_library_version_no !== null
+      && manifest.memory_library_version_no !== undefined
+      && manifest.memory_library_content_hash
+      && manifest.memory_library_content_text !== null
+      && manifest.memory_library_content_text !== undefined
+    if (manifest && !hasFrozenMemory) {
+      // A resumed historical job must never fall back to today's library. Old
+      // manifests without the frozen memory snapshot are not replay-safe.
+      return { status:'error', message:'history_compare_checkpoint_source_stale' }
+    }
+    if (hasFrozenMemory) {
+      const frozenText = String(manifest.memory_library_content_text)
+      try {
+        historyMemorySnapshot = compareMemoryIdentity({
+          version_no:manifest.memory_library_version_no,
+          content_hash:manifest.memory_library_content_hash,
+          content_text:frozenText,
+        })
+      } catch {
+        return { status:'error', message:'history_compare_memory_snapshot_invalid' }
+      }
+    } else {
+      try {
+        const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:Number(strategy.id),
+          userId, role:'admin' })
+        historyMemorySnapshot = compareMemoryIdentity(resolvedMemory?.library, {
+          missingCode:'strategy_memory_library_unavailable',
+          invalidCode:'history_compare_memory_snapshot_invalid',
+        })
+      } catch (error) {
+        console.error('[HistoryCompare] Strategy memory library unavailable:', error.message)
+        return { status:'error', message:error?.code === 'history_compare_memory_snapshot_invalid'
+          ? 'history_compare_memory_snapshot_invalid' : 'strategy_memory_library_unavailable' }
+      }
+    }
+  }
   const checkpointManifest = buildHistoryCompareCheckpointManifest({
     strategy, strategyRuntimeSnapshot, snapshotRun, dataSource, validModels,
     modelRuntimeSnapshots, decisionPoints, marketDataEvidence, prompt,
+    memorySnapshot:historyMemorySnapshot,
   })
   if (expectedCheckpointManifest
     && !historyCompareCheckpointManifestMatches(expectedCheckpointManifest, checkpointManifest)) {
@@ -2058,9 +2172,21 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         _ai_volume_max:Number(snapshotVolumeRange.max ?? currentAiVolumeRange.max),
         _ai_volume_step:Number(snapshotVolumeRange.step ?? currentAiVolumeRange.step),
         _comparison_mode:true,
-        _comparison_replay_system_prompt:decisionPoint.snapshotSample?.system_prompt,
-        _comparison_replay_user_prompt:decisionPoint.snapshotSample?.user_prompt,
+        _comparison_replay_system_prompt:decisionPoint.snapshotSample
+          ? String(decisionPoint.snapshotSample.system_prompt || '') : undefined,
+        // An explicit string (including an empty one) tells llm.js that this
+        // is a snapshot replay and prevents any live strategy-memory payload
+        // from being appended to the historical user prompt.
+        _comparison_replay_user_prompt:decisionPoint.snapshotSample
+          ? String(decisionPoint.snapshotSample.user_prompt || '') : undefined,
         _comparison_replay_output_schema_version:decisionPoint.snapshotSample?.output_schema_version,
+        ...(!decisionPoint.snapshotSample && historyMemorySnapshot ? {
+          _strategyMemoryLibraryContext:historyMemorySnapshot.content_text,
+          _strategyMemoryLibraryVersion:Number(historyMemorySnapshot.version_no),
+          _strategyMemoryLibraryHash:historyMemorySnapshot.content_hash,
+          _memoryMode:'strategy_library',
+          _experienceSelection:{ source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] },
+        } : {}),
       }
       const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
       if (strategyPolicyRuntime) {
@@ -2078,6 +2204,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         model_config_fingerprint:modelRuntimeSnapshots[modelId]?.runtime_config_sha256 || '',
         output_contract_hash:checkpointManifest.output_contract_hash,
         market_evidence_hash:checkpointManifest.market_evidence_hash,
+        memory_library_version_no:historyMemorySnapshot?.version_no ?? null,
+        memory_library_content_hash:historyMemorySnapshot?.content_hash || null,
       })
       const taskEnvelope = compareUnitTaskInput({
         userId, strategy, config, jobId:compareJobId, mode:'history', unitKey:checkpointUnitKey,
@@ -2086,7 +2214,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         snapshotHash:checkpointManifest.snapshot_fingerprint,
         outputContractHash:checkpointManifest.output_contract_hash,
         marketEvidenceHash:checkpointManifest.market_evidence_hash,
-        decisionUtcMs,
+        decisionUtcMs, strategyMemory:historyMemorySnapshot,
       })
       let tracker = null
       let restoreCallbacks = null
@@ -2112,6 +2240,13 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           throw error
         }
         historyStepTrackers.add(tracker)
+        if (!decisionPoint.snapshotSample && historyMemorySnapshot) {
+          await ensureCompareStrategyMemoryInjectionLog({
+            strategyId:Number(strategy.id), actor:{ userId, role:'admin' },
+            library:historyMemorySnapshot, modelTaskId:tracker.taskId,
+            usageKind:'model_compare_history',
+          })
+        }
         if (historyStepAbortSignal?.aborted) {
           throw historyStepAbortSignal.reason || new Error('history_compare_batch_aborted')
         }
@@ -2863,7 +2998,8 @@ function historyCompareCheckpointManifestFingerprint(manifest) {
 }
 
 function buildHistoryCompareCheckpointManifest({ strategy, strategyRuntimeSnapshot, snapshotRun,
-  dataSource, validModels, modelRuntimeSnapshots, decisionPoints, marketDataEvidence, prompt }) {
+  dataSource, validModels, modelRuntimeSnapshots, decisionPoints, marketDataEvidence, prompt,
+  memorySnapshot = null }) {
   const strategyFingerprint = strategyRuntimeSnapshot?.runtime_config_sha256
     || comparisonFingerprint(strategyRuntimeSnapshot || {})
   const promptHash = strategyRuntimeSnapshot?.system_prompt_sha256 || comparisonFingerprint(prompt || '')
@@ -2900,6 +3036,11 @@ function buildHistoryCompareCheckpointManifest({ strategy, strategyRuntimeSnapsh
     market_evidence_hash:marketEvidenceHash,
     market_evidence:marketDataEvidence || [],
     units,
+    ...(dataSource === 'historical' && memorySnapshot ? {
+      memory_library_version_no:Number(memorySnapshot.version_no || 0),
+      memory_library_content_hash:memorySnapshot.content_hash || null,
+      memory_library_content_text:String(memorySnapshot.content_text || ''),
+    } : {}),
   }
   return { ...manifest, manifest_fingerprint:historyCompareCheckpointManifestFingerprint(manifest) }
 }

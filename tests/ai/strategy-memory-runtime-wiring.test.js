@@ -7,6 +7,10 @@ describe('unified strategy memory runtime wiring', () => {
   it('links automatic inference attribution to the durable tracker task', () => {
     const scheduler = read('server/routes/ai/scheduler.js')
     expect(scheduler).toContain('modelTaskId:modelTaskTracker?.taskId || null')
+    const trackerCreated = scheduler.indexOf('modelTaskTracker = await createTracker')
+    const injectionCreated = scheduler.indexOf("injectionKind:'auto_inference', modelTaskId:modelTaskTracker.taskId")
+    expect(trackerCreated).toBeGreaterThan(0)
+    expect(injectionCreated).toBeGreaterThan(trackerCreated)
     expect(scheduler).not.toContain('modelTaskId:modelTask?.task_id || null')
   })
 
@@ -17,7 +21,8 @@ describe('unified strategy memory runtime wiring', () => {
     expect(load).toBeGreaterThan(0)
     expect(load).toBeLessThan(batch)
     expect(strategy).toContain('_strategyMemoryLibraryContext:compareMemory.content_text')
-    expect(strategy).toContain("injectionKind:'model_compare_live'")
+    expect(strategy).toContain('await ensureCompareStrategyMemoryInjectionLog({ strategyId:Number(strategy.id)')
+    expect(strategy).toContain("usageKind:'model_compare_live'")
   })
 
   it('uses one frozen library in both manual-trade review model stages', () => {
@@ -32,5 +37,15 @@ describe('unified strategy memory runtime wiring', () => {
     const llm = read('server/routes/ai/llm.js')
     expect(llm).toContain("typeof config._comparison_replay_user_prompt !== 'string'")
     expect(llm).toContain("typeof config._comparison_replay_user_prompt === 'string'")
+  })
+
+  it('starts and stops the durable memory consistency worker', () => {
+    const server = read('server/index.js')
+    const routes = read('server/routes/ai/index.js')
+    expect(server).toContain('startStrategyMemoryConsistencyWorker()')
+    expect(server).toContain('stopStrategyMemoryConsistencyWorker()')
+    expect(routes).toContain('startStrategyMemoryConsistencyWorker, stopStrategyMemoryConsistencyWorker')
+    expect(routes).toContain("router.post('/ai/strategy-memories/:strategyId/consistency-checks'")
+    expect(routes).toContain("router.get('/ai/strategy-memories/:strategyId/preview'")
   })
 })

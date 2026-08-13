@@ -2283,15 +2283,13 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     }
     l(`market calc done (${Date.now()-t2}ms, price=${market.latest_price})`)
 
-    let memory = { contentText:'', versionNo:0, contentHash:null, logId:null }
+    let memory = { contentText:'', versionNo:0, contentHash:null, library:null, logId:null }
     try {
       const resolvedMemory = await getStrategyMemoryLibraryForRuntime({ strategyId:promptTypeId,
         userId:inferenceUserId, role:'user' })
       const library = resolvedMemory.library
-      const injection = await createStrategyMemoryInjectionLog({ strategyId:promptTypeId,
-        actor:{ userId:inferenceUserId, role:'user' }, library, injectionKind:'auto_inference' })
       memory = { contentText:library.content_text || '', versionNo:Number(library.version_no || 0),
-        contentHash:library.content_hash || null, logId:injection.id }
+        contentHash:library.content_hash || null, library, logId:null }
     } catch (error) {
       l(`strategy memory library unavailable; inference cancelled (${error.message})`)
       throw Object.assign(new Error('strategy_memory_library_unavailable'), { cause:error })
@@ -2325,6 +2323,15 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       const error = new Error('model_task_tracker_inactive')
       error.code = 'model_task_tracker_inactive'
       throw error
+    }
+    try {
+      const injection = await createStrategyMemoryInjectionLog({ strategyId:promptTypeId,
+        actor:{ userId:inferenceUserId, role:'user' }, library:memory.library,
+        injectionKind:'auto_inference', modelTaskId:modelTaskTracker.taskId })
+      memory.logId = injection.id
+    } catch (error) {
+      l(`strategy memory attribution unavailable; inference cancelled (${error.message})`)
+      throw Object.assign(new Error('strategy_memory_injection_attribution_failed'), { cause:error })
     }
     config._modelTaskId = modelTaskTracker.taskId
     config._taskDeadlineAtUtcMs = taskDeadlineAtUtcMsc
