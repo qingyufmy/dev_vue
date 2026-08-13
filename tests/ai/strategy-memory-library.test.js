@@ -21,7 +21,10 @@ import {
   getStrategyMemoryLibraryForRuntime,
   normalizeStrategyMemoryConflictThreshold,
   sanitizeStrategyMemoryText,
+  sanitizeLegacyStrategyMemoryContent,
+  sanitizeStrategyMemoryReviewPackaging,
   saveStrategyMemoryLibrary,
+  restoreStrategyMemoryLibraryRevision,
   enqueueApprovedStrategyMemoryUpdate,
   recordStrategyMemoryConflictEvidence,
   sanitizeStrategyMemoryPrompt,
@@ -58,6 +61,18 @@ describe('unified strategy memory primitives', () => {
     const compressionSource = readFileSync(new URL('../../server/routes/ai/strategy-memory-compression.js', import.meta.url), 'utf8')
     expect(migrations).toContain("id: '181_unified_strategy_memory_library'")
     expect(migrations).toContain("id: '182_strategy_memory_merge_integrity'")
+    expect(migrations).toContain("id: '184_strategy_memory_legacy_applicability_cleanup'")
+    expect(migrations).toContain("id: '185_strategy_memory_review_packaging_cleanup'")
+    expect(migrations.match(/id: '184_strategy_memory_legacy_applicability_cleanup'/g)).toHaveLength(1)
+    const cleanupMigration = migrations.slice(migrations.lastIndexOf("id: '184_strategy_memory_legacy_applicability_cleanup'"))
+    expect(cleanupMigration).toContain('INSERT INTO strategy_memory_library_revisions')
+    expect(cleanupMigration).toContain("change_reason = 'legacy_import'")
+    expect(cleanupMigration).toContain('WHERE strategy_id = ? AND version_no = ? AND content_hash = ?')
+    expect(cleanupMigration).not.toContain('strategy_memory_compression_jobs SET status')
+    const packagingMigration = migrations.slice(migrations.lastIndexOf("id: '185_strategy_memory_review_packaging_cleanup'"))
+    expect(packagingMigration).toContain("change_reason IN ('daily_review_append', 'monthly_review_append')")
+    expect(packagingMigration).toContain('review_packaging_cleanup')
+    expect(packagingMigration).toContain('INSERT INTO strategy_memory_library_revisions')
     for (const column of ['result_content_hash', 'result_validation_status', 'result_validation_json']) {
       expect(migrations).toContain(column)
     }
@@ -91,6 +106,77 @@ describe('unified strategy memory primitives', () => {
     expect(result.content_text).toBe('')
     expect(result.char_count).toBe(0)
     expect(result.estimated_token_count).toBe(0)
+    expect(result.content_hash).toBeUndefined()
+  })
+
+  it('cleans multiple inline legacy fields while retaining the surrounding lesson', () => {
+    const result = sanitizeLegacyStrategyMemoryContent(
+      '- 回调确认 applicable_when: {"symbols":["XAUUSD"]}; avoid_when: {"market_regimes":["range"]}; 保留结论',
+    )
+    expect(result.content).toBe('- 回调确认 保留结论')
+    expect(result.changed).toBe(true)
+    expect(result.removed).toBe(2)
+  })
+
+  it('does not remove natural-language applicability wording', () => {
+    const source = '仅在适用条件明确时执行；avoid_when is discussed as a field name。'
+    expect(sanitizeLegacyStrategyMemoryContent(source)).toMatchObject({ content:source, changed:false, removed:0 })
+  })
+
+  it('removes Markdown applicability blocks and keeps later trading rules', () => {
+    const result = sanitizeLegacyStrategyMemoryContent(
+      '## applicability\n- symbols: ["XAUUSD"]\n- timeframes: ["H1"]\n## 交易规则\n- 突破后等待回踩',
+    )
+    expect(result.content).toContain('## 交易规则')
+    expect(result.content).toContain('突破后等待回踩')
+    expect(result.content).not.toMatch(/applicability|symbols|timeframes/i)
+  })
+
+  it('preserves non-condition fields in an inline JSON object', () => {
+    const result = sanitizeLegacyStrategyMemoryContent(
+      '{"lesson":"保留结论","applicable_when":{"symbols":["XAUUSD"]}}',
+    )
+    expect(result.content).toBe('{"lesson":"保留结论"}')
+  })
+
+  it('removes a condition-only JSON object without leaving an empty object', () => {
+    const result = sanitizeLegacyStrategyMemoryContent(
+      '{"applicable_when":{"symbols":["XAUUSD"]},"avoid_when":{"market_regimes":["range"]}}',
+    )
+    expect(result.content).toBe('')
+    expect(result.changed).toBe(true)
+  })
+
+  it('keeps ordinary fields inside a fenced JSON block while removing conditions', () => {
+    const result = sanitizeLegacyStrategyMemoryContent(
+      '```json\n{"lesson":"保留结论","applicable_when":{"symbols":["XAUUSD"]}}\n```',
+    )
+    expect(result.content).toContain('{"lesson":"保留结论"}')
+    expect(result.content).not.toContain('applicable_when')
+  })
+
+  it('removes only known review wrappers and preserves user Markdown/natural language', () => {
+    const result = sanitizeStrategyMemoryReviewPackaging([
+      '# 策略记忆库',
+      '> 以下内容由旧记忆系统中仍有效且归属明确的记录一次性导入。',
+      '## 已确认复盘经验',
+      '- [general] 等待确认',
+      '  - 来源：outcome:1、period_review_case:2',
+      '  - 置信度：0.8',
+      '## 用户自己的标题',
+      '[general] 普通自然语言不应被移除',
+      '- 自然 [general] 文字',
+      '来源：普通说明',
+      '置信度：较高',
+    ].join('\n'))
+    expect(result.content).toContain('- 等待确认')
+    expect(result.content).toContain('## 用户自己的标题')
+    expect(result.content).toContain('[general] 普通自然语言不应被移除')
+    expect(result.content).toContain('- 自然 [general] 文字')
+    expect(result.content).toContain('来源：普通说明')
+    expect(result.content).toContain('置信度：较高')
+    expect(result.content).not.toContain('outcome:1')
+    expect(result.content).not.toContain('置信度：0.8')
   })
 })
 
@@ -462,8 +548,74 @@ describe('unified strategy memory access and CAS', () => {
       compression_job_id:23, library:{ compression_status:'queued' } })
     const revisionCall = run.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO strategy_memory_library_revisions'))
     expect(revisionCall?.[1]?.[2]).toBe('monthly_review_append')
+    expect(revisionCall?.[1]?.[5]).toBe('旧记忆\n\n等待收盘确认')
+    expect(JSON.parse(revisionCall?.[1]?.[10] || '{}').source_refs).toEqual([
+      'period_review_case:1201', 'period_review_version:39',
+    ])
     const libraryUpdate = run.mock.calls.find(([sql]) => String(sql).includes('UPDATE strategy_memory_libraries'))
     expect(libraryUpdate?.[1]).toContain('queued')
+  })
+
+  it('creates a corrective revision before appending a review to a legacy library', async () => {
+    mockQueryOne.mockResolvedValueOnce(privateStrategy())
+    const legacyText = '## 旧经验\n- 回调确认 applicable_when: {"symbols":["XAUUSD"]}; avoid_when: {"market_regimes":["range"]}'
+    const legacyLibrary = library({ content_text:legacyText, version_no:1, content_hash:'a'.repeat(64),
+      char_count:legacyText.length })
+    const run = vi.fn(async sql => {
+      const text = String(sql)
+      if (text.includes('FROM period_review_cases cases')) return [[{ id:1201, strategy_id:5,
+        period_type:'daily', status:'approved', current_version_id:39, approved_version_id:39,
+        canonical_version_id:39, canonical_version_case_id:1201,
+        evidence_json:JSON.stringify({ sources:[{ outcome_id:101 }] }) }], []]
+      if (text.includes('SELECT * FROM strategy_memory_libraries')) return [[legacyLibrary], []]
+      if (text.includes('FROM strategy_memory_pending_updates')) return [[], []]
+      if (text.includes('INSERT INTO strategy_memory_pending_updates')) return [{ insertId:31, affectedRows:1 }, []]
+      if (text.includes('INSERT INTO strategy_memory_library_revisions')) {
+        const count = run.mock.calls.filter(([statement]) => String(statement).includes('INSERT INTO strategy_memory_library_revisions')).length
+        return [{ insertId:count === 1 ? 30 : 32, affectedRows:1 }, []]
+      }
+      if (text.includes('UPDATE strategy_memory_libraries')) return [{ affectedRows:1 }, []]
+      if (text.includes('UPDATE strategy_memory_pending_updates')) return [{ affectedRows:1 }, []]
+      throw new Error(`unexpected_sql:${sql}`)
+    })
+    mockWithTransaction.mockImplementationOnce(fn => fn(run))
+    const result = await enqueueApprovedStrategyMemoryUpdate({
+      strategyId:5, actor:{ serverOwned:true, userId:7 }, serverOwned:true,
+      strategyScope:'private', strategyOwnerUserId:7,
+      validatedReviewCase:{ strategy_id:5, scope:'private', owner_user_id:7, status:'approved' },
+      approved:true, period_review_version_id:39, period_review_case_id:1201,
+      update_kind:'daily_review', content_text:'等待收盘确认',
+    })
+    expect(result).toMatchObject({ merged:true, pending:false, revision_id:32, library:{ version_no:3 } })
+    const revisions = run.mock.calls.filter(([statement]) => String(statement).includes('INSERT INTO strategy_memory_library_revisions'))
+    expect(revisions).toHaveLength(2)
+    expect(revisions[0][1][2]).toBe('legacy_applicability_cleanup')
+    expect(revisions[1][1][2]).toBe('daily_review_append')
+    expect(revisions[0][1][5]).not.toMatch(/applicable_when|avoid_when/i)
+    expect(revisions[1][1][5]).not.toMatch(/applicable_when|avoid_when/i)
+  })
+
+  it('cleans a legacy revision at restore boundary and records the cleaned restore', async () => {
+    mockQueryOne.mockResolvedValueOnce(privateStrategy())
+    const run = vi.fn(async sql => {
+      const text = String(sql)
+      if (text.includes('SELECT * FROM strategy_memory_libraries')) return [[library({ version_no:2 })], []]
+      if (text.includes('FROM strategy_memory_library_revisions')) return [[{
+        id:11, strategy_id:5, version_no:1,
+        content_text:'## 经验\n- 回调 applicable_when: {"symbols":["XAUUSD"]}',
+        source_metadata_json:null,
+      }], []]
+      if (text.includes('INSERT INTO strategy_memory_library_revisions')) return [{ insertId:33, affectedRows:1 }, []]
+      if (text.includes('UPDATE strategy_memory_libraries')) return [{ affectedRows:1 }, []]
+      throw new Error(`unexpected_sql:${sql}`)
+    })
+    mockWithTransaction.mockImplementationOnce(fn => fn(run))
+    const result = await restoreStrategyMemoryLibraryRevision({ strategyId:5,
+      actor:{ userId:7, role:'user' }, expected_version_no:2, revision_id:11 })
+    expect(result).toMatchObject({ revision_id:33, version_no:3 })
+    const revision = run.mock.calls.find(([statement]) => String(statement).includes('INSERT INTO strategy_memory_library_revisions'))
+    expect(revision?.[1]?.[2]).toBe('restore_legacy_cleaned')
+    expect(revision?.[1]?.[5]).not.toMatch(/applicable_when|avoid_when/i)
   })
 
   it('reloads the approved case/version and rejects forged conflict source references', async () => {

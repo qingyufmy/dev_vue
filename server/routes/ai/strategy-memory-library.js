@@ -9,6 +9,10 @@ import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../..
 import { canManagePlatformAiContent } from './platform-content-access.js'
 import { buildStrategyMemorySourceManifest, normalizeStrategyMemoryMarkdownBlock } from './strategy-memory-semantics.js'
 import { renderStrategyMemoryMarkdownPreview } from './strategy-memory-markdown.js'
+import { containsLegacyStrategyMemoryConditions, sanitizeLegacyStrategyMemoryContent,
+  sanitizeStrategyMemoryReviewPackaging } from './strategy-memory-legacy.js'
+
+export { sanitizeLegacyStrategyMemoryContent, sanitizeStrategyMemoryReviewPackaging }
 
 export const STRATEGY_MEMORY_DEFAULT_CAPACITY_CHARS = 120000
 export const STRATEGY_MEMORY_DEFAULT_COMPRESSION_TARGET_RATIO = 0.60
@@ -304,10 +308,8 @@ function normalizeSourceRefs(value) {
   return refs
 }
 
-const STRATEGY_MEMORY_FORBIDDEN_CONDITION_KEYS = /(?:^|[^a-z])(applicability|applicable_when|avoid_when)(?:$|[^a-z])/i
-
 function assertStrategyMemoryBodyHasNoConditions(value) {
-  if (STRATEGY_MEMORY_FORBIDDEN_CONDITION_KEYS.test(String(value || ''))) {
+  if (containsLegacyStrategyMemoryConditions(value)) {
     throw new Error('strategy_memory_applicability_forbidden')
   }
 }
@@ -446,6 +448,48 @@ async function ensureLibraryTx(run, strategy, options = {}) {
   return defaults
 }
 
+// Legacy unified-library rows may contain the structured applicability payload
+// imported by migration 181. Correct it through the same append-only revision
+// path used by normal edits, so the old revision remains restorable/auditable.
+// This helper is intentionally called before an approved review append (and by
+// the startup migration), never from a read path.
+async function repairLegacyStrategyMemoryLibraryTx(run, strategy, current, actor = null) {
+  // The current-row repair is limited to legacy applicability. Review/import
+  // packaging is cleaned only by migration 185, where durable review-revision
+  // lineage proves that the wrapper was system-generated. This avoids
+  // deleting an identically named heading authored by a user during an append.
+  const cleaned = sanitizeLegacyStrategyMemoryContent(current?.content_text || '')
+  if (!cleaned.changed) return { library:current, correction:null }
+  const content = validateContent(cleaned.content, current.capacity_chars)
+  const nextVersion = Number(current.version_no || 0) + 1
+  const now = beijingNow()
+  const revisionId = await insertRevisionTx(run, {
+    strategyId:Number(strategy.id), versionNo:nextVersion, parentVersionNo:current.version_no,
+    content, reason:'legacy_applicability_cleanup', sourceType:'legacy_cleanup',
+    sourceId:Number(current.version_no || 0) || null, sourceRefs:null,
+    sourceMetadata:{ cleanup_contract:'strategy-memory-legacy-v1', removed_items:cleaned.removed,
+      previous_version_no:Number(current.version_no || 0), previous_content_hash:current.content_hash },
+    authorUserId:actorUserId(actor), createdAt:now,
+  })
+  const compressionStatus = current.compression_status || 'idle'
+  const update = await run(
+    `UPDATE strategy_memory_libraries
+        SET content_text = ?, version_no = ?, content_hash = ?, char_count = ?,
+            estimated_token_count = ?, compression_status = ?, updated_at = ?, updated_by_user_id = ?
+      WHERE strategy_id = ? AND version_no = ? AND content_hash = ?`,
+    [content.content_text, nextVersion, content.content_hash, content.char_count,
+      content.estimated_token_count, compressionStatus, now, actorUserId(actor),
+      strategy.id, current.version_no, current.content_hash]
+  )
+  if (!affected(update)) throw new Error('strategy_memory_version_conflict')
+  return {
+    library:{ ...current, ...content, version_no:nextVersion, compression_status:compressionStatus,
+      updated_by_user_id:actorUserId(actor) },
+    correction:{ revision_id:revisionId, previous_version_no:Number(current.version_no || 0),
+      version_no:nextVersion, removed_items:cleaned.removed },
+  }
+}
+
 async function getLibraryRow(strategyId) {
   return await queryOne('SELECT * FROM strategy_memory_libraries WHERE strategy_id = ?', [strategyId])
 }
@@ -461,7 +505,10 @@ function publicLibrary(library) {
 export function sanitizeStrategyMemoryPrompt(library) {
   if (!library || typeof library !== 'object') return library
   const result = { ...library }
-  if (STRATEGY_MEMORY_FORBIDDEN_CONDITION_KEYS.test(String(result.content_text || ''))) {
+  // Read paths must not synthesize a new body/hash for the same persisted
+  // version. Until the append-only migration or a write-path correction has
+  // committed, fail closed and omit the legacy body from model input.
+  if (containsLegacyStrategyMemoryConditions(result.content_text || '')) {
     result.content_text = ''
     result.char_count = 0
     result.estimated_token_count = 0
@@ -826,13 +873,17 @@ export async function restoreStrategyMemoryLibraryRevision(strategyIdOrInput, ac
       `SELECT * FROM strategy_memory_library_revisions
         WHERE id = ? AND strategy_id = ? FOR UPDATE`, [revisionId, strategy.id])
     if (!revision) throw new Error('strategy_memory_revision_not_found')
-    const content = validateContent(revision.content_text || '', current.capacity_chars)
+    const cleaned = sanitizeLegacyStrategyMemoryContent(revision.content_text || '', { reviewPackaging:true })
+    const content = validateContent(cleaned.changed ? cleaned.content : (revision.content_text || ''), current.capacity_chars)
     const nextVersion = expected + 1
     const now = beijingNow()
     const newRevisionId = await insertRevisionTx(run, {
       strategyId:strategy.id, versionNo:nextVersion, parentVersionNo:expected,
-      content, reason:'restore', sourceType:'restore', sourceId:revision.id,
-      sourceRefs:revision.source_metadata_json, authorUserId:actorId, createdAt:now,
+      content, reason:cleaned.changed ? 'restore_legacy_cleaned' : 'restore',
+      sourceType:'restore', sourceId:revision.id, sourceRefs:revision.source_metadata_json,
+      sourceMetadata:cleaned.changed ? { cleanup_contract:'strategy-memory-legacy-v1',
+        removed_items:cleaned.removed, restored_from_revision_id:Number(revision.id) } : null,
+      authorUserId:actorId, createdAt:now,
     })
     const update = await run(
       `UPDATE strategy_memory_libraries
@@ -870,13 +921,12 @@ export function combineStrategyMemoryText(current, addition) {
 // Keep the source text human-readable and stable. Structured applicability
 // remains in review evidence/source metadata; it is deliberately not copied
 // into the runtime memory正文.
-function deterministicReviewUpdateText(content, updateKind) {
-  const normalized = sanitizeStrategyMemoryText(content).trim()
+function deterministicReviewUpdateText(content) {
+  const packaged = sanitizeStrategyMemoryReviewPackaging(sanitizeStrategyMemoryText(content).trim())
+  const normalized = packaged.content.trim()
   if (!normalized) return ''
   assertStrategyMemoryBodyHasNoConditions(normalized)
-  if (/^##\s+/u.test(normalized)) return normalized
-  const title = updateKind === 'monthly_review' ? '## 月复盘确认经验' : '## 日复盘确认经验'
-  return `${title}\n\n${normalized}`
+  return normalized
 }
 
 function parsePendingUpdateIds(value) {
@@ -1002,7 +1052,7 @@ export async function enqueueApprovedStrategyMemoryUpdate(strategyIdOrInput, act
     'strategy_memory_period_review_case_required')
   const updateKind = normalizeUpdateKind(input.update_kind ?? input.updateKind)
   const contentText = deterministicReviewUpdateText(
-    input.content_text ?? input.content ?? input.memory_update ?? '', updateKind)
+    input.content_text ?? input.content ?? input.memory_update ?? '')
   if (!contentText.trim()) throw new Error('strategy_memory_update_empty')
   let sourceRefs = null
   let result = null
@@ -1037,7 +1087,9 @@ export async function enqueueApprovedStrategyMemoryUpdate(strategyIdOrInput, act
     sourceRefs = normalizeCanonicalReviewSourceRefs(input.source_refs ?? input.sourceRefs, {
       ...canonical, approved_version_id:periodReviewVersionId,
     })
-    const current = await ensureLibraryTx(run, strategy, { actor:input.actor })
+    let current = await ensureLibraryTx(run, strategy, { actor:input.actor })
+    const repaired = await repairLegacyStrategyMemoryLibraryTx(run, strategy, current, input.actor)
+    current = repaired.library
     const existing = await txOne(run,
       `SELECT * FROM strategy_memory_pending_updates
         WHERE strategy_id = ? AND source_period_review_version_id = ? AND update_kind = ?

@@ -16,7 +16,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
-  periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus } from '../../server/routes/ai/period-review.js'
+  periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
+  periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
@@ -43,6 +44,21 @@ describe('period review lease heartbeat', () => {
 })
 
 describe('period review strategy-memory application status', () => {
+  it('persists only experience bullets while keeping anti-pattern/risk semantics', () => {
+    const text = deterministicReviewMemoryMarkdown([
+      { text:'等待回踩确认', category:'entry_setup', source_refs:['outcome:1'], confidence:0.8 },
+      { text:'不追涨', anti_pattern:'追涨后立即入场', risk:'波动扩大时暂停', memory_category:'risk_execution' },
+    ])
+    expect(text).toBe('- 等待回踩确认\n- 不追涨\n  - 反模式：追涨后立即入场\n  - 风险：波动扩大时暂停')
+    expect(text).not.toMatch(/\[entry_setup\]|来源：|置信度：|日复盘确认经验|月复盘确认经验/)
+  })
+
+  it('requires frozen snapshots only when approved content has conflict evidence', () => {
+    expect(periodReviewConflictSnapshotsRequired({ daily_lessons:['保留经验'] })).toBe(false)
+    expect(periodReviewConflictSnapshotsRequired({ strategy_conflicts:[] })).toBe(false)
+    expect(periodReviewConflictSnapshotsRequired({ strategy_conflicts:[{ description:'策略冲突' }] })).toBe(true)
+  })
+
   it('distinguishes queued, applied, compression failure preservation and completion', () => {
     const base = { approved_version_id:39, memory_source_update_count:1 }
     expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'queued' })).toBe('queued')
