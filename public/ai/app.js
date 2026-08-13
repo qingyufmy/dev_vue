@@ -9107,6 +9107,7 @@ function renderSignalMonitorDetails(signal) {
       <section class="signal-monitor-summary monitor-surface">
         <div class="monitor-section-heading"><span><i data-lucide="sparkles" size="16"></i>核心结论</span><small>AI 对当前行情的直接判断</small></div>
         <strong>${escapeHtml(decision.summary)}</strong>
+        ${renderDecisionDiagnostics(decision.diagnostics)}
         ${renderDirectionBias(decision)}
       </section>
       <div class="signal-monitor-evidence">
@@ -9355,6 +9356,7 @@ function signalDecision(signal) {
   const bullish = Number(signal?.bullish_score ?? stored.bullish_score);
   const bearish = Number(signal?.bearish_score ?? stored.bearish_score);
   const experienceUsage = signal?.experience_usage || stored.experience_usage || {};
+  const diagnostics = signal?.decision_diagnostics || stored.decision_diagnostics || null;
   const hasDirectionBias = Number.isFinite(bullish) && Number.isFinite(bearish) && bullish >= 0 && bearish >= 0 && bullish + bearish > 0;
   const total = hasDirectionBias ? bullish + bearish : 0;
   return {
@@ -9367,7 +9369,36 @@ function signalDecision(signal) {
     bearishScore: hasDirectionBias ? Math.round(bearish / total * 1000) / 10 : null,
     candidateEntry: signal?.candidate_entry || stored.candidate_entry || null,
     experienceUsage,
+    diagnostics: diagnostics && typeof diagnostics === "object" ? diagnostics : null,
   };
+}
+
+function renderDecisionDiagnostics(diagnostics) {
+  if (!diagnostics || typeof diagnostics !== "object") return "";
+  const labels = {
+    market_data_unreliable:"行情连续性未确认",
+    structure_unconfirmed:"缠论结构尚未确认",
+    timeframe_direction_conflict:"可靠周期方向存在分歧",
+    strategy_entry_conditions_unmet:"策略入场条件未满足",
+    risk_constraint:"风险约束未满足",
+    model_hold:"模型主动观望",
+  };
+  const originLabels = {
+    model:"模型原始结论",
+    schema_normalized:"服务端结构校验",
+    constraint_engine:"策略约束引擎",
+  };
+  const reasons = [...new Set((Array.isArray(diagnostics.contributing_reasons) ? diagnostics.contributing_reasons : [])
+    .map(reason => labels[String(reason || "").toLowerCase()]).filter(Boolean))];
+  const timeframes = [...new Set((Array.isArray(diagnostics.affected_timeframes) ? diagnostics.affected_timeframes : [])
+    .map(value => String(value || "").toUpperCase()).filter(value => /^(?:M1|M5|M15|M30|H1|H4|D1|W1|MN1)$/.test(value)))];
+  const origin = originLabels[String(diagnostics.decision_origin || "").toLowerCase()] || "系统诊断";
+  if (!reasons.length && !timeframes.length && String(diagnostics.decision_origin || "").toLowerCase() === "model") return "";
+  return `<section class="decision-diagnostics" aria-label="观望原因诊断">
+    <div class="decision-diagnostics-head"><span><i data-lucide="scan-search" size="15"></i>判定依据</span><small>${escapeHtml(origin)}</small></div>
+    ${reasons.length ? `<div class="decision-diagnostics-reasons">${reasons.map(reason => `<span>${escapeHtml(reason)}</span>`).join("")}</div>` : ""}
+    ${timeframes.length ? `<p>涉及周期：${escapeHtml(timeframes.join(" / "))}</p>` : ""}
+  </section>`;
 }
 
 function stopLossDistanceSummary(signal, market = {}) {
@@ -10184,6 +10215,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     ${renderSignalManagementActions(signal)}
     ${renderSignalPendingActions(signal)}
     <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
+    ${renderDecisionDiagnostics(decision.diagnostics)}
     ${renderDirectionBias(decision)}
     ${renderCandidateEntryReference(decision.candidateEntry)}
     <div class="analysis-status-strip">

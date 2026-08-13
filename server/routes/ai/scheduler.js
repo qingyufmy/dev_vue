@@ -16,6 +16,7 @@ import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime,
 import { attachOutcomeDelivery, recordPendingOutcomeFill, startOutcomeMonitor } from './signal-outcomes.js'
 import { isSubscriptionScheduleActive } from './subscription-schedule.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
+import { buildDecisionDiagnostics } from './decision-diagnostics.js'
 import { getObserverSourceForStrategy } from './observer-channels.js'
 import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
@@ -2389,6 +2390,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     else delete config._onInferencePrepared
     market.inference_source = signal._inference_source || 'unknown'
     const aiSource = signal._inference_source
+    const modelSignalType = signal.signal_type
     delete signal._inference_source
     const executionWindowExpired = Date.now() > resultValidUntilUtcMsc
     signal.execution_valid_until_utc_msc = resultValidUntilUtcMsc
@@ -2423,6 +2425,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         { status: 'error', reason: 'ai_failed', message: signal.reasoning || '' }, 'error')
       return { status: 'blocked', reason: 'ai_failed' }
     }
+
+    signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, strategyPolicyRuntime, modelSignalType })
 
     await modelTaskTracker.resultReady({
       resultHash:sha256(JSON.stringify(signal)),

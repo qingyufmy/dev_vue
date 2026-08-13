@@ -86,6 +86,39 @@ describe('inference snapshot evidence', () => {
     })
   })
 
+  it('freezes the exact continuity policy identity and classification result for retries', () => {
+    const result = prepareInferenceSnapshot({
+      systemPrompt:'system', userPrompt:'payload',
+      marketSnapshot:{ strategy_context:{ timeframes:{ H1:{ summary:{
+        market_data_quality:{ continuity_policy_id:'broker-metals', continuity_policy_version:3,
+          continuity_policy_hash:'b'.repeat(64), continuity_engine_version:'market-session-policy-engine-v1',
+          source_id:17, source_key:'mt5|broker-demo|9001', platform:'mt5', broker_server:'Broker-Demo', account_login:'9001',
+          continuity_policy_match:true, continuity_status:'reliable',
+          continuity_result:{ classification:'composite_closure', expected:true, components:[{ kind:'daily_maintenance' }] } },
+        chan:{ algorithm_version:'chan_structure_v6', history_sufficient:true,
+          cache_internal_gap_unresolved:false, evidence_capabilities:{ data_complete:true },
+        },
+      } } } } },
+    })
+    const frame = result.marketSnapshot.strategy_context.timeframes.H1.summary
+    expect(frame.market_data_quality.continuity).toMatchObject({
+      continuity_policy_id:'broker-metals', continuity_policy_version:3,
+      continuity_policy_hash:'b'.repeat(64), continuity_engine_version:'market-session-policy-engine-v1',
+      continuity_policy_match:true, result:{ classification:'composite_closure', expected:true },
+      source_identity:{ source_id:17, source_key:'mt5|broker-demo|9001', platform:'mt5', broker_server:'Broker-Demo', account_login:'9001' },
+    })
+    expect(frame.chan.continuity).toMatchObject({
+      continuity_policy_id:'broker-metals', continuity_policy_version:3,
+      continuity_policy_hash:'b'.repeat(64), continuity_engine_version:'market-session-policy-engine-v1',
+      result:{ classification:'composite_closure', expected:true },
+    })
+    const retrySnapshot = prepareInferenceSnapshot({
+      systemPrompt:result.systemPrompt, userPrompt:result.userPrompt,
+      marketSnapshot:result.marketSnapshot, klines:result.klines,
+    })
+    expect(retrySnapshot.contentHash).toBe(result.contentHash)
+  })
+
   it('compresses large K-line JSON and reads both compressed and legacy rows', () => {
     const value = { M5: Array.from({ length: 500 }, (_, index) => ({ time:index, open:4000, high:4002, low:3998, close:4001 })) }
     const encoded = encodeSnapshotJson(value)

@@ -4,7 +4,8 @@ import { getActivePlatformBridgeUserId, getBridgeDataRoute, getPlatformMarketClo
 import { mt5Bridge } from './market-data.js'
 import { CHAN_ALGORITHM_VERSION, stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 import { getDefaultObserverSource, observerSourceSupportsSymbol } from './observer-channels.js'
-import { classifyMarketClosure, MARKET_SESSION_CALENDAR_VERSION } from './market-session-calendar.js'
+import { classifyMarketClosure, MARKET_SESSION_CALENDAR_VERSION, MARKET_SESSION_ENGINE_VERSION } from './market-session-calendar.js'
+import { getMarketSessionPolicyMode, resolveMarketSessionPolicy } from './market-session-policy.js'
 
 const CACHE_LIMIT = 2000
 const CACHE_TTL_SECONDS = 24 * 60 * 60
@@ -18,6 +19,41 @@ const inFlightRates = new Map()
 const internalGapRefillAttempts = new Map()
 const closedCacheWrites = new Map()
 let lastCleanupAt = 0
+
+function continuityMeta(integrity) {
+  const policy = integrity?.policy || {}
+  return {
+    continuity_engine_version:integrity?.engine_version || MARKET_SESSION_ENGINE_VERSION,
+    continuity_policy_id:policy.policy_id || null,
+    continuity_policy_version:policy.policy_version || null,
+    continuity_policy_hash:policy.policy_hash || null,
+    continuity_policy_match:Boolean(policy.matched || integrity?.policy_match),
+    closure_components:Array.isArray(integrity?.components)
+      ? integrity.components.slice(0, 16) : [],
+    uncovered_ranges:Array.isArray(integrity?.uncovered_ranges)
+      ? integrity.uncovered_ranges.slice(0, 16) : [],
+    // Short aliases make the frozen market metadata usable by newer callers
+    // without removing the explicit continuity_* fields used by old callers.
+    policy,
+    engine:integrity?.engine_version || MARKET_SESSION_ENGINE_VERSION,
+    components:Array.isArray(integrity?.components) ? integrity.components.slice(0, 16) : [],
+    uncovered:Array.isArray(integrity?.uncovered_ranges) ? integrity.uncovered_ranges.slice(0, 16) : [],
+    audit_expected_closures:Array.isArray(integrity?.audit_expected_closures)
+      ? integrity.audit_expected_closures.slice(0, 16) : [],
+    audit_suspicious_gaps:Array.isArray(integrity?.audit_suspicious_gaps)
+      ? integrity.audit_suspicious_gaps.slice(0, 16) : [],
+    continuity_policy_mode:policy.mode || getMarketSessionPolicyMode(),
+  }
+}
+
+function marketSourceIdentityMeta(bridgeUserId, clock = {}) {
+  const identity = sourceIdentity(bridgeUserId, clock)
+  return {
+    broker_server:identity.brokerServer === 'unknown' ? null : identity.brokerServer,
+    account_login:identity.accountLogin === '0' ? null : identity.accountLogin,
+    source_key:hasStableSourceIdentity(identity) ? identity.sourceKey : null,
+  }
+}
 
 function validTimezoneOffsetMinutes(value) {
   if (value === null || value === undefined || value === '') return null
@@ -215,6 +251,21 @@ function crossesWeekendUtc(startUtcMs, endUtcMs) {
 
 export function inspectRateContinuity(rates, timeframe, options = {}) {
   const intervalMs = timeframeIntervalMs(timeframe)
+  const configuredMode = options.marketSessionPolicyMode || options.market_session_policy_mode
+    || getMarketSessionPolicyMode(options.env || process.env)
+  const initialPolicyMatch = resolveMarketSessionPolicy({
+    platform:options.platform,
+    broker_server:options.brokerServer || options.broker_server,
+    standard_symbol:options.standardSymbol || options.standard_symbol || options.symbol,
+  }, { env:options.env || process.env })
+  const initialPolicy = {
+    mode:configuredMode,
+    matched:Boolean(initialPolicyMatch?.matched),
+    policy_id:initialPolicyMatch?.policy_id || null,
+    policy_version:initialPolicyMatch?.policy_version || null,
+    policy_hash:initialPolicyMatch?.policy_hash || null,
+    reason:initialPolicyMatch?.reason || null,
+  }
   const normalized = (Array.isArray(rates) ? rates : [])
     .map(rate => validRate(rate, 0))
     .filter(Boolean)
@@ -222,10 +273,15 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
   const ordered = mergeRates([], normalized, CACHE_LIMIT)
   const suspicious = []
   const expectedClosures = []
+  const closureComponents = []
+  const uncoveredRanges = []
+  const auditExpectedClosures = []
+  const auditSuspiciousGaps = []
   const continuityReasons = new Set()
   let unknownSessionGapCount = 0
   for (let index = 1; index < normalized.length; index++) {
     if (Number(normalized[index - 1].time_utc_msc) === Number(normalized[index].time_utc_msc)) {
+      continuityReasons.add('duplicate_open_time')
       suspicious.push({
         reason:'duplicate_open_time',
         from_utc_msc:Number(normalized[index - 1].time_utc_msc),
@@ -255,24 +311,48 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
     const calendarClosure = classifyMarketClosure(previousUtcMs, currentUtcMs, timeframe, {
       intervalMs,
       standardSymbol:options.standardSymbol || options.symbol || '',
+      platform:options.platform,
+      brokerServer:options.brokerServer || options.broker_server,
       strictSessionPolicy,
+      marketSessionPolicyMode:options.marketSessionPolicyMode || options.market_session_policy_mode,
+      env:options.env || process.env,
       timezoneOffsetMinutes:options.timezoneOffsetMinutes ?? options.timezone_offset_minutes,
       sessionTimezone:options.sessionTimezone || options.session_timezone,
       clockStatus:options.clockStatus || options.clock_status,
       policyVersion:options.policyVersion || options.marketSessionPolicyVersion,
+      startBrokerTime:previous.time,
+      endBrokerTime:current.time,
     })
+    const policyEnforced = calendarClosure?.policy_enforced === true
+    const policyExpected = policyEnforced && calendarClosure?.expected === true
+    const auditPolicyMatched = calendarClosure?.audit_only === true && calendarClosure?.policy_match === true
+    if (auditPolicyMatched) {
+      const auditDetail = { from_utc_msc:previousUtcMs, to_utc_msc:currentUtcMs, gap_ms:gapMs,
+        missing_bar_count:Math.max(1, Math.round(gapMs / intervalMs) - 1),
+        classification:calendarClosure.classification, reason:calendarClosure.reason,
+        components:calendarClosure.components || [], uncovered_ranges:calendarClosure.uncovered_ranges || [],
+      }
+      if (calendarClosure.expected === true) auditExpectedClosures.push(auditDetail)
+      else auditSuspiciousGaps.push(auditDetail)
+    }
+    const legacyExpected = Boolean(calendarClosure?.known === true
+      && ['weekend_closure', 'holiday_closure'].includes(calendarClosure.classification))
     if (strictSessionPolicy && (calendarClosure?.classification === 'unknown_session' || calendarClosure?.known === false)) {
       unknownSessionGapCount += 1
       continuityReasons.add(calendarClosure.reason || 'market_session_policy_unavailable')
-    } else if (strictSessionPolicy && !calendarClosure && scheduledDailyClosure) {
+    } else if (strictSessionPolicy && !policyEnforced && !calendarClosure && scheduledDailyClosure) {
       // The versioned calendar deliberately does not guess broker-specific
       // daily maintenance. Keep the gap fail-closed, but expose why it was
       // not silently treated as an ordinary internal hole.
       continuityReasons.add('daily_session_policy_missing')
     }
     const expectedClosure = strictSessionPolicy
-      ? Boolean(calendarClosure?.known === true && ['weekend_closure', 'holiday_closure'].includes(calendarClosure.classification))
+      ? (configuredMode === 'enforce' ? policyExpected : legacyExpected)
       : Boolean(calendarClosure?.known === true) || scheduledDailyClosure || crossesWeekendUtc(previousUtcMs, currentUtcMs)
+    if (strictSessionPolicy && configuredMode === 'audit' && calendarClosure?.audit_only === true
+      && calendarClosure.expected === true && !expectedClosure) {
+      continuityReasons.add('daily_session_policy_missing')
+    }
     const detail = {
       from_utc_msc: previousUtcMs,
       to_utc_msc: currentUtcMs,
@@ -285,14 +365,45 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
         || (crossesWeekendUtc(previousUtcMs, currentUtcMs) ? 'weekend_closure' : 'scheduled_daily_closure'),
       reason:calendarClosure?.reason || (scheduledDailyClosure ? 'daily_rollover' : 'weekend'),
       calendar_version:calendarClosure?.calendar_version || MARKET_SESSION_CALENDAR_VERSION,
+      ...(calendarClosure?.components ? { components:calendarClosure.components } : {}),
+      ...(calendarClosure?.policy ? { policy:calendarClosure.policy } : {}),
     })
-    else suspicious.push({ ...detail,
-      ...(continuityReasons.size ? { reason: [...continuityReasons][0] } : {}),
-    })
+    else {
+      const reason = calendarClosure?.reason
+        || (strictSessionPolicy && configuredMode === 'audit' && calendarClosure?.expected === true
+          ? 'daily_session_policy_missing' : 'market_open_bars_missing')
+      const suspiciousGap = { ...detail, reason }
+      if (calendarClosure?.policy) suspiciousGap.policy = calendarClosure.policy
+      if (calendarClosure?.uncovered_ranges?.length) {
+        suspiciousGap.uncovered_ranges = calendarClosure.uncovered_ranges
+        calendarClosure.uncovered_ranges.forEach(range => {
+          const previousRange = uncoveredRanges.at(-1)
+          if (previousRange && range.from_utc_msc <= previousRange.to_utc_msc + intervalMs) {
+            previousRange.to_utc_msc = Math.max(previousRange.to_utc_msc, range.to_utc_msc)
+            previousRange.missing_bar_count += range.missing_bar_count
+          } else uncoveredRanges.push({ ...range })
+        })
+      } else if (reason === 'market_open_bars_missing') {
+        uncoveredRanges.push({ from_utc_msc:previousUtcMs + intervalMs, to_utc_msc:currentUtcMs - intervalMs,
+          missing_bar_count:detail.missing_bar_count })
+      }
+      suspicious.push(suspiciousGap)
+    }
+    if (Array.isArray(calendarClosure?.components)) {
+      for (const component of calendarClosure.components) {
+        const existing = closureComponents.find(item => item.kind === component.kind && item.reason === component.reason)
+        if (existing) existing.count += Number(component.count) || 1
+        else closureComponents.push({ ...component })
+      }
+    }
   }
-  const continuityStatus = continuityReasons.size
-    ? (unknownSessionGapCount > 0 ? 'unknown_session' : 'policy_missing')
-    : 'reliable'
+  const continuityStatus = unknownSessionGapCount > 0
+    ? 'unknown_session'
+    : suspicious.length > 0 ? 'suspicious_gap'
+      : continuityReasons.size > 0 ? 'policy_missing' : 'reliable'
+  const firstClosure = expectedClosures[0] || null
+  const firstSuspicious = suspicious[0] || null
+  const firstPolicy = firstClosure?.policy || firstSuspicious?.policy || null
   return {
     status: suspicious.length ? 'suspicious_gap' : 'ok',
     suspicious_gaps: suspicious,
@@ -301,7 +412,20 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
     continuity_reason:[...continuityReasons][0] || null,
     continuity_reasons:[...continuityReasons],
     unknown_session_gap_count:unknownSessionGapCount,
+    engine_version:calendarClosureEngineVersion(options),
+    engine:calendarClosureEngineVersion(options),
+    policy:firstPolicy || initialPolicy,
+    policy_match:Boolean(firstPolicy?.matched ?? initialPolicy.matched),
+    components:closureComponents,
+    uncovered_ranges:uncoveredRanges,
+    uncovered:uncoveredRanges,
+    audit_expected_closures:auditExpectedClosures,
+    audit_suspicious_gaps:auditSuspiciousGaps,
   }
+}
+
+function calendarClosureEngineVersion(options = {}) {
+  return options.marketSessionEngineVersion || MARKET_SESSION_ENGINE_VERSION
 }
 
 function shouldAttemptInternalGapRefill(sourceId, standardSymbol, timeframe, integrity, now = Date.now()) {
@@ -487,6 +611,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         const writeFailures = [...ensured.failures, ...written.failures]
         const rangeIntegrity = inspectRateContinuity(closedRates, timeframe, {
           standardSymbol:stripBrokerSuffix(symbol), strictSessionPolicy:true,
+          platform:effectiveClock.platform,
+          brokerServer:effectiveClock.broker_server,
           timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
           sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
           clockStatus:effectiveClock.clock_status,
@@ -496,6 +622,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           source:'platform_admin_bridge_range', source_user_id:platformUserId, source_id:sourceId,
           broker_symbol:brokerSymbol, timeframe, timezone_offset_minutes:effectiveClock.timezone_offset_minutes,
           platform:effectiveClock.platform || null,
+          ...marketSourceIdentityMeta(platformUserId, effectiveClock),
           clock_status:effectiveClock.clock_status, closed_candles_persisted:closedRates.length,
           clock_sample_age_ms:effectiveClock.clock_sample_age_ms,
           closed_candles_written:written.persistedCount, cache_layer:'exact_range', live_candle_cached:false,
@@ -505,6 +632,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_internal_gap_detected:rangeGapUnresolved,
           cache_internal_gap_unresolved:rangeGapUnresolved,
           cache_internal_gap_details:rangeGapUnresolved ? rangeIntegrity.suspicious_gaps.slice(0, 3) : [],
+          ...continuityMeta(rangeIntegrity),
            continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
            expected_closures:rangeIntegrity.expected_closures.slice(0, 8),
            continuity_status:rangeIntegrity.continuity_status,
@@ -540,6 +668,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       let closedRates = split.closedRates
       const cachedIntegrity = inspectRateContinuity(cachedResult.rates, timeframe, {
         standardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+        platform:effectiveClock.platform,
+        brokerServer:effectiveClock.broker_server,
         sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
         clockStatus:effectiveClock.clock_status,
       })
@@ -570,6 +700,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       }
       const freshIntegrity = inspectRateContinuity(closedRates, timeframe, {
         standardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+        platform:effectiveClock.platform,
+        brokerServer:effectiveClock.broker_server,
         sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
         clockStatus:effectiveClock.clock_status,
       })
@@ -596,6 +728,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           source: 'platform_admin_bridge', source_user_id: platformUserId,
           source_id: sourceId, broker_symbol: brokerSymbol, timeframe,
           platform: effectiveClock.platform || null,
+          ...marketSourceIdentityMeta(platformUserId, effectiveClock),
           timezone_offset_minutes: effectiveClock.timezone_offset_minutes,
           clock_status: effectiveClock.clock_status,
           clock_sample_age_ms:effectiveClock.clock_sample_age_ms,
@@ -611,6 +744,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_internal_gap_refill_attempted: internalGapRefillAttempted,
           cache_internal_gap_unresolved: internalGapUnresolved,
           cache_internal_gap_details: internalGapUnresolved ? unresolvedGapDetails.slice(0, 3) : [],
+          ...continuityMeta(freshIntegrity),
            continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
            expected_closures:freshIntegrity.expected_closures.slice(0, 8),
            continuity_status:freshIntegrity.continuity_status,
@@ -670,6 +804,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     && existingFallbackSource.sourceKey !== initialFallbackIdentity.sourceKey)
   const fallbackCachedIntegrity = inspectRateContinuity(fallbackCached.rates, timeframe, {
     standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:fallbackOffset,
+    platform:effectiveFallbackClock.platform,
+    brokerServer:effectiveFallbackClock.broker_server,
     sessionTimezone:effectiveFallbackClock.session_timezone || effectiveFallbackClock.timezone_name || effectiveFallbackClock.broker_timezone,
     clockStatus:effectiveFallbackClock.clock_status,
   })
@@ -694,6 +830,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   }
   const fallbackIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe, {
     standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:fallbackOffset,
+    platform:effectiveFallbackClock.platform,
+    brokerServer:effectiveFallbackClock.broker_server,
     sessionTimezone:effectiveFallbackClock.session_timezone || effectiveFallbackClock.timezone_name || effectiveFallbackClock.broker_timezone,
     clockStatus:effectiveFallbackClock.clock_status,
   })
@@ -718,6 +856,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   fallback.market_meta = {
     source:'user_bridge_fallback', source_user_id:requestUserId, broker_symbol:fallbackBrokerSymbol,
     source_id:fallbackSourceId, platform:effectiveFallbackClock.platform || null,
+    ...marketSourceIdentityMeta(requestUserId, effectiveFallbackClock),
     timeframe, timezone_offset_minutes:fallbackOffset,
     clock_status:effectiveFallbackClock.clock_status || 'unknown',
     clock_sample_age_ms:effectiveFallbackClock.clock_sample_age_ms,
@@ -736,6 +875,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       || fallbackIntegrity.status === 'suspicious_gap',
     cache_internal_gap_unresolved:fallbackGapUnresolved,
     cache_internal_gap_details:fallbackGapUnresolved ? fallbackGapDetails.slice(0, 3) : [],
+    ...continuityMeta(fallbackIntegrity),
     continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
     expected_closures:fallbackIntegrity.expected_closures.slice(0, 8),
     continuity_status:fallbackIntegrity.continuity_status,

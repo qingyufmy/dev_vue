@@ -16,6 +16,7 @@ import { parseStrategyPolicy, prepareStrategyPolicyRuntime, buildStrategyRuntime
 import { validateWorkflowTrace, workflowGateEvaluation } from './strategy-workflow-engine.js'
 import { applyConstraintAction, evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
+import { buildDecisionDiagnostics } from './decision-diagnostics.js'
 import { saveChanStructureAnchor } from './platform-market-data.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
 import { normalizeBacktestOptions, simulateVirtualAccount } from './model-backtest.js'
@@ -821,6 +822,7 @@ export async function handleAnalyze(userId, params, options = {}) {
       message: `AI 推理失败：${signal.reasoning || '模型未返回有效结果'}`,
     }
   }
+  const modelSignalType = signal.signal_type
   delete signal._inference_source
 
   if (strategyPolicyRuntime) {
@@ -845,6 +847,8 @@ export async function handleAnalyze(userId, params, options = {}) {
       signal = applyConstraintAction(signal, postInference).signal
     }
   }
+
+  signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, strategyPolicyRuntime, modelSignalType })
 
   const createdAt = beijingNow()
   const createdAtUtcMsc = Date.now()
@@ -1246,6 +1250,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
         telemetry:{ model_task_id:tracker.taskId },
       })
       let signal = await maybeAiSignal(null, config, market, prompt)
+      const modelSignalType = signal.signal_type
       const inferenceSource = signal?._inference_source || 'unknown'
       if (inferenceSource !== 'ai') {
         const error = new Error(signal?.reasoning || 'inference_failed')
@@ -1271,6 +1276,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
           signal = applyConstraintAction(signal, postInference).signal
         }
       }
+      signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, strategyPolicyRuntime, modelSignalType })
       const profile = resolved.model
       const result = {
         model_id: modelId,
@@ -2301,6 +2307,9 @@ export async function handleHistoryCompare(userId, params, options = {}) {
               signal = applyConstraintAction(signal, postInference).signal
             }
           }
+          signal.decision_diagnostics = buildDecisionDiagnostics({
+            signal, market, strategyPolicyRuntime, modelSignalType:rawSignalType,
+          })
           const telemetry = Object.fromEntries(Object.keys(modelTelemetry[modelId]).map(key => [
             key, Math.max(0, Number(modelTelemetry[modelId][key]) - Number(telemetryBefore[key] || 0)),
           ]))

@@ -2,6 +2,15 @@ import { auditValueLabel, formatRiskReason } from '../../audit-localization.js'
 import { normalizeExperienceAttribution, normalizeExperienceRefs } from './experience-attribution.js'
 
 const SIGNAL_SCHEMA_VERSION = 5
+const DECISION_DIAGNOSTIC_REASONS = new Set([
+  'market_data_unreliable',
+  'structure_unconfirmed',
+  'timeframe_direction_conflict',
+  'strategy_entry_conditions_unmet',
+  'risk_constraint',
+  'model_hold',
+])
+const DECISION_ORIGINS = new Set(['model', 'schema_normalized', 'constraint_engine'])
 
 function cleanText(value, maxLength = 240) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
@@ -21,6 +30,34 @@ function directionScores(signal) {
   const total = bullish + bearish
   const bullishScore = Math.round(bullish / total * 1000) / 10
   return { bullish_score: bullishScore, bearish_score: Math.round((100 - bullishScore) * 10) / 10 }
+}
+
+function decisionDiagnostics(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const origin = String(value.decision_origin || '').trim().toLowerCase()
+  const reasons = [...new Set((Array.isArray(value.contributing_reasons) ? value.contributing_reasons : [])
+    .map(item => String(item || '').trim().toLowerCase()).filter(item => DECISION_DIAGNOSTIC_REASONS.has(item)))].slice(0, 8)
+  const timeframes = [...new Set((Array.isArray(value.affected_timeframes) ? value.affected_timeframes : [])
+    .map(item => cleanText(item, 8).toUpperCase()).filter(item => /^(?:M1|M5|M15|M30|H1|H4|D1|W1|MN1)$/.test(item)))].slice(0, 9)
+  const details = (Array.isArray(value.reason_details) ? value.reason_details : []).map(item => {
+    const code = String(item?.code || '').trim().toLowerCase()
+    if (!DECISION_DIAGNOSTIC_REASONS.has(code)) return null
+    return {
+      code,
+      timeframes:[...new Set((Array.isArray(item.timeframes) ? item.timeframes : [])
+        .map(timeframe => cleanText(timeframe, 8).toUpperCase())
+        .filter(timeframe => /^(?:M1|M5|M15|M30|H1|H4|D1|W1|MN1)$/.test(timeframe)))].slice(0, 9),
+      source_codes:cleanList(item.source_codes, 12, 80),
+    }
+  }).filter(Boolean).slice(0, 8)
+  if (!DECISION_ORIGINS.has(origin)) return null
+  return {
+    decision_diagnostics_version:1,
+    decision_origin:origin,
+    contributing_reasons:reasons,
+    affected_timeframes:timeframes,
+    reason_details:details,
+  }
 }
 
 function candidateEntry(signal) {
@@ -212,6 +249,8 @@ export function normalizeDecisionFields(signal = {}) {
     stop_loss_diagnostics:stopLossDiagnostics(signal),
     position_management:positionManagementDecision(signal),
     experience_usage:experienceUsage(signal),
+    ...(decisionDiagnostics(signal.decision_diagnostics)
+      ? { decision_diagnostics:decisionDiagnostics(signal.decision_diagnostics) } : {}),
     ...directionScores(signal),
   }
 }

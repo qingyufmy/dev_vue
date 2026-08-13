@@ -19,12 +19,42 @@ describe('signal presentation', () => {
   it('does not present an unavailable confidence sentinel as a measured zero percent', () => {
     expect(app).toContain('if (rounded === 0) return { value: 0, label: "不可用" }')
   })
+  it('renders localized server diagnostics without exposing internal reason details', () => {
+    expect(app).toContain('function renderDecisionDiagnostics(diagnostics)')
+    expect(app).toContain('行情连续性未确认')
+    expect(app).toContain('策略入场条件未满足')
+    expect(app).toContain('模型主动观望')
+    expect(app).not.toContain('diagnostics.reason_details')
+  })
   it('normalizes model fields and limits untrusted arrays', () => {
     const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', bullish_score: 63, bearish_score: 37, key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
     expect(result.schema_version).toBe(5)
     expect(result.decision_summary).toBe('顺势做多')
     expect(result.key_reasons).toHaveLength(4)
     expect(result).toMatchObject({ bullish_score: 63, bearish_score: 37 })
+  })
+
+  it('persists only bounded server-owned decision diagnostics', () => {
+    const result = normalizeDecisionFields({ signal_type:'hold', decision_diagnostics:{
+      decision_diagnostics_version:999,
+      decision_origin:'constraint_engine',
+      contributing_reasons:['market_data_unreliable', 'invented_reason'],
+      affected_timeframes:['M5', 'BAD'],
+      reason_details:[{ code:'market_data_unreliable', timeframes:['M5', 'BAD'],
+        source_codes:['market_open_bars_missing', '<script>alert(1)</script>'] }],
+    } })
+    expect(result.decision_diagnostics).toEqual({
+      decision_diagnostics_version:1,
+      decision_origin:'constraint_engine',
+      contributing_reasons:['market_data_unreliable'],
+      affected_timeframes:['M5'],
+      reason_details:[{ code:'market_data_unreliable', timeframes:['M5'],
+        source_codes:['market_open_bars_missing', '<script>alert(1)</script>'] }],
+    })
+  })
+
+  it('keeps legacy signals free of synthetic decision diagnostics', () => {
+    expect(normalizeDecisionFields({ signal_type:'hold' })).not.toHaveProperty('decision_diagnostics')
   })
 
   it('derives stop-loss distance and ATR context from existing signal evidence', () => {

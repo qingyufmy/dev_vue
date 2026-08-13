@@ -19,7 +19,7 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
   periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog } from '../../server/routes/ai/period-review.js'
-import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
+import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
   it('aborts the model attempt and fences writes when lease renewal is rejected', async () => {
@@ -941,6 +941,89 @@ describe('period market evidence', () => {
     ], weekendStart, mondayEnd, 'H1')).toMatchObject({ complete:true, endpoint_complete:true })
   })
 
+  it('carries broker time and exact source identity into a stored review window', async () => {
+    periodReviewDb.queryAll.mockClear()
+    periodReviewDb.queryOne.mockClear()
+    const start = Date.parse('2026-07-20T00:00:00Z')
+    const end = start + 2 * 3600000
+    periodReviewDb.queryOne.mockResolvedValue({ id:17, broker_server:'Broker-Demo', account_login:123,
+      source_key:'mt5|broker-demo|123', timezone_offset_minutes:180, clock_status:'verified' })
+    periodReviewDb.queryAll.mockResolvedValue([
+      { source_id:17, broker_time:'2026-07-20 03:00:00', time_utc_msc:start, open:1, high:2, low:0.5, close:1.5, tick_volume:10, spread:1 },
+      { source_id:17, broker_time:'2026-07-20 04:00:00', time_utc_msc:start + 3600000, open:1.5, high:2.5, low:1, close:2, tick_volume:12, spread:1 },
+    ])
+    const result = await loadPeriodMarketWindow(7, 'XAUUSD', 'H1', start, end, { strictSessionPolicy:true })
+    expect(result.rates.map(row => ({ time:row.time, broker_time:row.broker_time }))).toEqual([
+      { time:'2026-07-20 03:00:00', broker_time:'2026-07-20 03:00:00' },
+      { time:'2026-07-20 04:00:00', broker_time:'2026-07-20 04:00:00' },
+    ])
+    expect(result.marketMeta.source_identity).toMatchObject({ source_id:17, source_key:'mt5|broker-demo|123', platform:'mt5', account_login:'123' })
+    expect(periodReviewDb.queryAll.mock.calls[0][0]).toContain('broker_time')
+    expect(periodReviewDb.queryAll.mock.calls.some(([sql]) => sql.includes('broker_server = ?'))).toBe(false)
+  })
+
+  it('freezes continuity policy metadata and keeps open-session gaps fail closed', () => {
+    const start = Date.parse('2026-07-20T00:00:00Z')
+    const coverage = assessReviewCandleCoverage([
+      { time_utc_msc:start, broker_time:'2026-07-20 03:00:00' },
+      { time_utc_msc:start + 3 * 3600000, broker_time:'2026-07-20 06:00:00' },
+    ], start, start + 4 * 3600000, 'H1', {
+      standardSymbol:'XAUUSD', strictSessionPolicy:true, platform:'mt5', brokerServer:'Broker-Demo',
+      continuityEngineVersion:'market-session-policy-engine-v1', continuityPolicyId:'broker-metals',
+      continuityPolicyVersion:3, continuityPolicyHash:'a'.repeat(64), continuityPolicyMatch:true,
+      timezoneOffsetMinutes:180, clockStatus:'verified',
+    })
+    expect(coverage).toMatchObject({ complete:false, internal_gap_count:1,
+      continuity_status:'suspicious_gap', continuity_reason:'market_open_bars_missing', continuity_engine_version:'market-session-policy-engine-v1',
+      continuity_policy_id:'broker-metals', continuity_policy_version:3,
+      continuity_policy_hash:'a'.repeat(64), continuity_policy_match:true })
+    expect(coverage.suspicious_gaps[0]).toMatchObject({ missing_bar_count:2 })
+  })
+
+  it('uses the versioned broker-time policy for a daily maintenance gap', () => {
+    const start = Date.parse('2026-07-20T20:55:00Z')
+    const end = Date.parse('2026-07-20T22:05:00Z')
+    const policy = {
+      policy_id:'broker-metals', version:3, platform:'mt5', broker_server:'Broker-Demo', symbols:['XAUUSD'],
+      daily_closures:[{ weekdays:[1, 2, 3, 4, 5], from:'00:00', to:'01:00', reason:'daily_maintenance' }],
+      weekly_closures:[], holiday_closures:[], dst_transitions:[], clock_basis:'broker_time',
+    }
+    const coverage = assessReviewCandleCoverage([
+      { time_utc_msc:start, broker_time:'2026-07-20 23:55:00' },
+      { time_utc_msc:Date.parse('2026-07-20T22:00:00Z'), broker_time:'2026-07-21 01:00:00' },
+    ], start, end, 'M5', {
+      standardSymbol:'XAUUSD', strictSessionPolicy:true, platform:'mt5', brokerServer:'Broker-Demo',
+      timezoneOffsetMinutes:180, clockStatus:'verified', marketSessionPolicyMode:'enforce',
+      env:{ AI_MARKET_SESSION_POLICY_MODE:'enforce', AI_MARKET_SESSION_POLICIES_JSON:JSON.stringify([policy]) },
+    })
+    expect(coverage).toMatchObject({ complete:true, internal_gap_count:0,
+      continuity_policy_id:'broker-metals', continuity_policy_version:3,
+      continuity_policy_match:true })
+    expect(coverage.expected_closures[0]).toMatchObject({ classification:'daily_maintenance', expected:true })
+  })
+
+  it('keeps audit mode observational for review coverage', () => {
+    const start = Date.parse('2026-07-20T20:55:00Z')
+    const end = Date.parse('2026-07-20T22:05:00Z')
+    const policy = {
+      policy_id:'broker-metals', version:3, platform:'mt5', broker_server:'Broker-Demo', symbols:['XAUUSD'],
+      daily_closures:[{ weekdays:[1, 2, 3, 4, 5], from:'00:00', to:'01:00', reason:'daily_maintenance' }],
+      weekly_closures:[], holiday_closures:[], dst_transitions:[], clock_basis:'broker_time',
+    }
+    const coverage = assessReviewCandleCoverage([
+      { time_utc_msc:start, broker_time:'2026-07-20 23:55:00' },
+      { time_utc_msc:Date.parse('2026-07-20T22:00:00Z'), broker_time:'2026-07-21 01:00:00' },
+    ], start, end, 'M5', {
+      standardSymbol:'XAUUSD', strictSessionPolicy:true, platform:'mt5', brokerServer:'Broker-Demo',
+      timezoneOffsetMinutes:180, clockStatus:'verified', marketSessionPolicyMode:'audit',
+      env:{ AI_MARKET_SESSION_POLICY_MODE:'audit', AI_MARKET_SESSION_POLICIES_JSON:JSON.stringify([policy]) },
+    })
+    expect(coverage).toMatchObject({ complete:false, internal_gap_count:1,
+      continuity_policy_mode:'audit', continuity_policy_id:'broker-metals' })
+    expect(coverage.audit_expected_closures).toHaveLength(1)
+    expect(coverage.expected_closures).toHaveLength(0)
+  })
+
   it('removes raw daily candles from the monthly digest but preserves structural conclusions', () => {
     const digest = monthlyPeriodMarketDigest([{ id:4, period_key:'2026-07-16', evidence_json:JSON.stringify({ period_market:{ status:'complete', symbols:{ XAUUSD:{ M15:{ status:'complete', candle_count:96, expected_candle_count:96, first_time_utc_msc:1, last_time_utc_msc:2, full_period_candles:[{ t:1 }], summary:{ chan:{ status:'ok', segment_count:3 } } } } } } }) }])
     expect(digest[0].symbols.XAUUSD.M15.summary.chan.segment_count).toBe(3)
@@ -949,9 +1032,13 @@ describe('period market evidence', () => {
 
   it('keeps replay references while removing repeated prompt and candle payloads from each trade', () => {
     const compact = compactPeriodTradeEvidence({ schema_version:2, inference_time:{ signal:{ id:9 }, snapshot:{ id:7,
-      system_prompt:'large', user_prompt:'large', market_snapshot:{ large:true }, klines:{ M5:[1,2] }, prompt_hash:'hash', content_hash:'content' },
+      system_prompt:'large', user_prompt:'large', market_snapshot:{ strategy_context:{ timeframes:{ M5:{ summary:{
+        market_data_quality:{ continuity:{ source_identity:{ source_id:17, source_key:'mt5|broker-demo|9001',
+          platform:'mt5', broker_server:'Broker-Demo', account_login:'9001' } } },
+      } } } } }, klines:{ M5:[1,2] }, prompt_hash:'hash', content_hash:'content' },
     risk_decision:{ status:'pass' } }, post_trade:{ outcome:{ id:3 }, post_trade_klines:{ M5:[1,2] }, post_trade_structure:{ M5:{ chan:{ status:'ok' } } } }, evidence_refs:{ inference_snapshot:{ id:7 } } })
     expect(compact.inference_time.snapshot_ref).toMatchObject({ id:7, prompt_hash:'hash', content_hash:'content' })
+    expect(compact.inference_time.snapshot_ref.source_identity).toMatchObject({ source_id:17, source_key:'mt5|broker-demo|9001' })
     expect(compact.inference_time).not.toHaveProperty('snapshot')
     expect(compact.post_trade).not.toHaveProperty('post_trade_klines')
     expect(compact.evidence_refs.inference_snapshot.id).toBe(7)

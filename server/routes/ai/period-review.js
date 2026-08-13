@@ -1108,6 +1108,18 @@ export function compactPeriodTradeEvidence(evidence) {
   if (!evidence || typeof evidence !== 'object') return null
   const inference = evidence.inference_time || {}
   const snapshot = inference.snapshot || {}
+  const frozenSourceIdentities = [...new Map(Object.values(snapshot?.market_snapshot?.strategy_context?.timeframes || {})
+    .map(frame => frame?.summary?.market_data_quality?.continuity?.source_identity
+      || frame?.summary?.market_data_quality?.source_identity
+      || frame?.summary?.market_data_quality)
+    .filter(identity => identity && (identity.source_id || identity.source_key))
+    .map(identity => [identity.source_key || `id:${identity.source_id}`, {
+      source_id:Number(identity.source_id) || null,
+      source_key:identity.source_key || null,
+      platform:identity.platform || null,
+      broker_server:identity.broker_server || null,
+      account_login:identity.account_login == null ? null : String(identity.account_login),
+    }])).values()]
   const postTrade = evidence.post_trade || {}
   return {
     schema_version:evidence.schema_version,
@@ -1116,7 +1128,10 @@ export function compactPeriodTradeEvidence(evidence) {
       snapshot_ref:snapshot ? { id:snapshot.id, strategy_id:snapshot.strategy_id, strategy_version:snapshot.strategy_version,
         strategy_scope:snapshot.strategy_scope, prompt_hash:snapshot.prompt_hash, model_profile_id:snapshot.model_profile_id,
         provider:snapshot.provider, model_name:snapshot.model_name, credential_source:snapshot.credential_source,
-        content_hash:snapshot.content_hash } : null,
+        content_hash:snapshot.content_hash,
+        source_identity:frozenSourceIdentities.length === 1 ? frozenSourceIdentities[0] : null,
+        source_identities:frozenSourceIdentities,
+      } : null,
       risk_decision:inference.risk_decision || null, original_order:inference.original_order || null,
       approved_order:inference.approved_order || null,
     },

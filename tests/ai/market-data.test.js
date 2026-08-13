@@ -32,6 +32,31 @@ describe('calculateMarketData', () => {
     expect(result.kline_count).toBe(50)
   })
 
+  it('freezes versioned continuity policy evidence in the timeframe summary', () => {
+    const result = calculateMarketData('XAUUSD', 'M5', generateRates(50), baseAccount, basePositions, {
+      chanDataQuality:{
+        source_id:17, source_key:'mt5|broker-demo|9001', platform:'mt5',
+        broker_server:'Broker-Demo', account_login:'9001',
+        clock_status:'verified', cache_internal_gap_unresolved:false,
+        continuity_engine_version:'market-session-policy-engine-v1',
+        continuity_policy_id:'broker-metals', continuity_policy_version:3,
+        continuity_policy_hash:'a'.repeat(64), continuity_policy_match:true,
+        continuity_policy_mode:'audit', continuity_status:'reliable',
+        closure_components:[{ kind:'daily_maintenance', reason:'daily_maintenance' }],
+        uncovered_ranges:[], expected_closures:[], last_bar_closed:true,
+      },
+    })
+    expect(result.market_data_quality).toMatchObject({
+      continuity_engine_version:'market-session-policy-engine-v1',
+      source_id:17, source_key:'mt5|broker-demo|9001', platform:'mt5',
+      broker_server:'Broker-Demo', account_login:'9001',
+      continuity_policy_id:'broker-metals', continuity_policy_version:3,
+      continuity_policy_hash:'a'.repeat(64), continuity_policy_match:true,
+      continuity_policy_mode:'audit', continuity_status:'reliable',
+      closure_components:[{ kind:'daily_maintenance', reason:'daily_maintenance' }],
+    })
+  })
+
   it('计算技术指标', () => {
     const rates = generateRates(100)
     const result = calculateMarketData('XAUUSD', 'H1', rates, baseAccount, basePositions)

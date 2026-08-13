@@ -77,6 +77,21 @@ describe('platform market data', () => {
     })
   })
 
+  it('freezes the exact session policy identity even when a window has no gaps', () => {
+    const policyEnv = {
+      AI_MARKET_SESSION_POLICY_MODE:'enforce',
+      AI_MARKET_SESSION_POLICIES_JSON:JSON.stringify([{
+        policy_id:'demo-metals', version:1, platform:'mt5', broker_server:'Demo', symbols:['XAUUSD'],
+        daily_closures:[{ weekdays:[1, 2, 3, 4, 5], from:'00:00', to:'01:00' }],
+      }]),
+    }
+    const intact = inspectRateContinuity([rate(0, 2000), rate(1, 2001)], 'M1', {
+      standardSymbol:'XAUUSD', platform:'mt5', brokerServer:'Demo', clockStatus:'verified', env:policyEnv,
+    })
+    expect(intact).toMatchObject({ status:'ok', policy_match:true, policy:{ mode:'enforce', matched:true,
+      policy_id:'demo-metals', policy_version:1, policy_hash:expect.any(String) } })
+  })
+
   it('fails closed for a gap that continues after the Sunday session opens', () => {
     const sundayOpen = Date.parse('2026-07-19T22:00:00Z')
     const integrity = inspectRateContinuity([
@@ -84,7 +99,7 @@ describe('platform market data', () => {
       { ...rate(1, 2001), time:'2026-07-19 23:00:00', time_utc_msc:sundayOpen + 3600000 },
     ], 'H1', { standardSymbol:'XAUUSD', timezoneOffsetMinutes:0, clockStatus:'verified', strictSessionPolicy:true })
     expect(integrity).toMatchObject({
-      status:'suspicious_gap', continuity_status:'reliable',
+      status:'suspicious_gap', continuity_status:'suspicious_gap',
       suspicious_gaps:[expect.objectContaining({ missing_bar_count:1 })],
     })
   })

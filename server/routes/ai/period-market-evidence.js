@@ -5,6 +5,7 @@ import { sha256 } from './inference-snapshots.js'
 import { resolveFrozenChanRequirement } from './inference-snapshots.js'
 import { getChanWindowPolicy, CHAN_WINDOW_POLICY_VERSION } from './chan-window-policy.js'
 import { classifyContinuityGap, MARKET_SESSION_CALENDAR_VERSION } from './market-session-calendar.js'
+import { resolveMarketSessionPolicy } from './market-session-policy.js'
 
 export const REVIEW_TIMEFRAME_MS = { M1:60000, M5:300000, M15:900000, M30:1800000, H1:3600000, H4:14400000, D1:86400000 }
 const MAX_REVIEW_WINDOW_CANDLES = 5000
@@ -14,7 +15,70 @@ const REVIEW_CONTEXT_LOOKBACK_BARS = 200
 const DAILY_MAINTENANCE_TOLERANCE_MS = 2 * 3600000
 
 const parse = (value, fallback = null) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
-const compactRate = rate => ({ t:Number(rate.time_utc_msc), o:Number(rate.open), h:Number(rate.high), l:Number(rate.low), c:Number(rate.close), v:Number(rate.tick_volume || 0) })
+const compactRate = rate => ({ t:Number(rate.time_utc_msc), bt:rate.broker_time || rate.time || null,
+  o:Number(rate.open), h:Number(rate.high), l:Number(rate.low), c:Number(rate.close), v:Number(rate.tick_volume || 0) })
+
+function sourceIdentityFromRow(row = {}) {
+  const sourceKey = String(row.source_key || '').trim() || null
+  const keyParts = sourceKey ? sourceKey.split('|') : []
+  return {
+    source_id:Number(row.id || row.source_id) || null,
+    source_key:sourceKey,
+    platform:String(row.platform || keyParts[0] || '').trim().toLowerCase() || null,
+    broker_server:row.broker_server || null,
+    account_login:row.account_login == null ? null : String(row.account_login),
+  }
+}
+
+function frozenSourceIdentities(sources = []) {
+  const result = []
+  const seen = new Set()
+  const visit = value => {
+    if (!value || typeof value !== 'object') return
+    const referenceIdentities = [value?.source_identity, ...(Array.isArray(value?.source_identities) ? value.source_identities : [])]
+    for (const identity of referenceIdentities) {
+      if (!identity || typeof identity !== 'object') continue
+      const normalized = sourceIdentityFromRow(identity)
+      if (!normalized.source_id && !normalized.source_key) continue
+      const identityKey = normalized.source_key || `id:${normalized.source_id}`
+      if (!seen.has(identityKey)) { seen.add(identityKey); result.push(normalized) }
+    }
+    const frames = value?.market_snapshot?.strategy_context?.timeframes
+      || value?.marketSnapshot?.strategy_context?.timeframes
+      || value?.strategy_context?.timeframes
+      || null
+    for (const frame of Object.values(frames || {})) {
+      const quality = frame?.summary?.market_data_quality || frame?.market_data_quality || {}
+      const identity = sourceIdentityFromRow(quality)
+      if (!identity.source_id && !identity.source_key) continue
+      const key = identity.source_key || `id:${identity.source_id}`
+      if (!seen.has(key)) { seen.add(key); result.push(identity) }
+    }
+    for (const child of [value?.inference_time?.snapshot, value?.inference_time?.snapshot_ref,
+      value?.snapshot, value?.snapshot_ref, value?.evidence]) visit(child)
+  }
+  for (const source of sources || []) visit(source)
+  return result
+}
+
+function continuityPolicyFields(result = {}, options = {}) {
+  const pick = (...values) => values.find(value => value !== undefined && value !== null && value !== '') ?? null
+  const policy = result.policy && typeof result.policy === 'object' ? result.policy : {}
+  return {
+    continuity_engine_version:pick(result.continuity_engine_version, result.engine_version,
+      options.continuityEngineVersion, options.continuity_engine_version),
+    continuity_policy_id:pick(result.continuity_policy_id, result.policy_id,
+      policy.policy_id, options.continuityPolicyId, options.continuity_policy_id),
+    continuity_policy_version:pick(result.continuity_policy_version, result.policy_version,
+      policy.policy_version, policy.version, options.continuityPolicyVersion, options.continuity_policy_version),
+    continuity_policy_hash:pick(result.continuity_policy_hash, result.policy_hash,
+      policy.policy_hash, options.continuityPolicyHash, options.continuity_policy_hash),
+    continuity_policy_match:pick(result.continuity_policy_match, result.policy_match,
+      options.continuityPolicyMatch, options.continuity_policy_match),
+    continuity_policy_mode:pick(result.continuity_policy_mode, result.policy_mode, policy.mode,
+      options.marketSessionPolicyMode, options.market_session_policy_mode),
+  }
+}
 
 export function requiredReviewCandleCount(startUtcMs, endUtcMs, timeframe, options = {}) {
   const interval = REVIEW_TIMEFRAME_MS[String(timeframe || '').toUpperCase()]
@@ -46,49 +110,111 @@ function crossesWeekend(startUtcMs, endUtcMs) {
 export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timeframe, options = {}) {
   const interval = REVIEW_TIMEFRAME_MS[String(timeframe || '').toUpperCase()]
   const sorted = [...(rates || [])]
-    .map(row => Number(row?.time_utc_msc))
-    .filter(Number.isFinite)
-    .filter(time => time >= Number(startUtcMs) && time < Number(endUtcMs))
-    .sort((a, b) => a - b)
-    .filter((time, index, values) => index === 0 || time !== values[index - 1])
+    .map(row => ({ time:Number(row?.time_utc_msc), broker_time:row?.broker_time || row?.time || null }))
+    .filter(row => Number.isFinite(row.time))
+    .filter(row => row.time >= Number(startUtcMs) && row.time < Number(endUtcMs))
+    .sort((a, b) => a.time - b.time)
+    .filter((row, index, values) => index === 0 || row.time !== values[index - 1].time)
   if (!interval || !sorted.length) return { complete:false, endpoint_complete:false, internal_gap_count:0, max_gap_ms:0,
     continuity_status:'unavailable', continuity_reason:'period_market_candles_missing', continuity_reasons:['period_market_candles_missing'] }
   const strictSessionPolicy = options.strictSessionPolicy === true
   const standardSymbol = stripBrokerSuffix(options.standardSymbol || options.symbol || '')
   const continuityReasons = new Set()
+  const expectedClosures = []
+  const suspiciousGaps = []
+  const continuityResults = []
+  const auditExpectedClosures = []
+  const auditSuspiciousGaps = []
+  const policyMatch = resolveMarketSessionPolicy({
+    platform:options.platform,
+    broker_server:options.brokerServer || options.broker_server,
+    standard_symbol:standardSymbol,
+  }, { env:options.env || process.env })
+  const policyFields = { ...continuityPolicyFields({ policy:{
+    mode:policyMatch.mode,
+    matched:policyMatch.matched,
+    policy_id:policyMatch.policy_id,
+    policy_version:policyMatch.policy_version,
+    policy_hash:policyMatch.policy_hash,
+  }, policy_match:policyMatch.matched }, options), continuity_calendar_version:options.calendarVersion
+    || options.continuityCalendarVersion || options.continuity_calendar_version || MARKET_SESSION_CALENDAR_VERSION }
   let unknownSessionGapCount = 0
   const maybeDailyPolicyGap = (from, to) => {
     const gap = Number(to) - Number(from)
     return strictSessionPolicy && gap > Math.max(interval, 30 * 60 * 1000)
       && gap <= DAILY_MAINTENANCE_TOLERANCE_MS
   }
-  const closure = (from, to) => classifyContinuityGap(from, to, timeframe, {
+  const closure = (from, to, fromBrokerTime = null, toBrokerTime = null) => classifyContinuityGap(from, to, timeframe, {
     intervalMs:interval, standardSymbol, strictSessionPolicy,
     timezoneOffsetMinutes:options.timezoneOffsetMinutes ?? options.timezone_offset_minutes,
     sessionTimezone:options.sessionTimezone || options.session_timezone,
     clockStatus:options.clockStatus || options.clock_status,
     policyVersion:options.policyVersion || options.marketSessionPolicyVersion || MARKET_SESSION_CALENDAR_VERSION,
+    sourceId:options.sourceId || options.source_id || null,
+    sourceKey:options.sourceKey || options.source_key || null,
+    platform:options.platform || null,
+    brokerServer:options.brokerServer || options.broker_server || null,
+    accountLogin:options.accountLogin || options.account_login || null,
+    fromBrokerTime, toBrokerTime, start_broker_time:fromBrokerTime, end_broker_time:toBrokerTime,
+    marketSessionPolicyMode:options.marketSessionPolicyMode || options.market_session_policy_mode || options.continuity_policy_mode,
+    env:options.env,
   })
-  const closureComplete = (from, to) => {
-    const result = closure(from, to)
-    if (result?.classification === 'unknown_session' || result?.known === false) {
-      unknownSessionGapCount += 1
-      continuityReasons.add(result.reason || 'market_session_policy_unavailable')
-    } else if (!result && maybeDailyPolicyGap(from, to)) {
-      continuityReasons.add('daily_session_policy_missing')
+  const recordClosure = (from, to, fromBrokerTime = null, toBrokerTime = null) => {
+    const result = closure(from, to, fromBrokerTime, toBrokerTime)
+    Object.assign(policyFields, continuityPolicyFields(result || {}, options))
+    if (result?.calendar_version) policyFields.continuity_calendar_version = result.calendar_version
+    if (result) continuityResults.push({ from_utc_msc:from, to_utc_msc:to, ...result })
+    const effectiveResult = result?.audit_only === true
+      ? classifyContinuityGap(from, to, timeframe, {
+        intervalMs:interval, standardSymbol, strictSessionPolicy,
+        timezoneOffsetMinutes:options.timezoneOffsetMinutes ?? options.timezone_offset_minutes,
+        sessionTimezone:options.sessionTimezone || options.session_timezone,
+        clockStatus:options.clockStatus || options.clock_status,
+        policyVersion:options.policyVersion || options.marketSessionPolicyVersion || MARKET_SESSION_CALENDAR_VERSION,
+        sourceId:options.sourceId || options.source_id || null,
+        sourceKey:options.sourceKey || options.source_key || null,
+        platform:options.platform || null,
+        brokerServer:options.brokerServer || options.broker_server || null,
+        accountLogin:options.accountLogin || options.account_login || null,
+        startBrokerTime:fromBrokerTime, endBrokerTime:toBrokerTime,
+        marketSessionPolicyMode:'off', env:options.env,
+      })
+      : result
+    const detail = { from_utc_msc:from, to_utc_msc:to, gap_ms:to - from,
+      missing_bar_count:Math.max(1, Math.round((to - from) / interval) - 1) }
+    if (result?.audit_only === true) {
+      const collection = result?.known === true && result?.expected !== false
+        ? auditExpectedClosures : auditSuspiciousGaps
+      collection.push({ ...detail, ...result })
     }
-    return result?.known === true
+    if (effectiveResult?.known === true && effectiveResult?.expected !== false) {
+      expectedClosures.push({ ...detail, ...effectiveResult })
+    }
+    if (effectiveResult?.classification === 'unknown_session' || effectiveResult?.known === false) {
+      unknownSessionGapCount += 1
+      continuityReasons.add(effectiveResult.reason || 'market_session_policy_unavailable')
+    } else if (effectiveResult?.expected === false || effectiveResult?.classification === 'suspicious_gap') {
+      continuityReasons.add(effectiveResult.reason || 'market_open_bars_missing')
+    } else if (!effectiveResult) {
+      continuityReasons.add(maybeDailyPolicyGap(from, to)
+        ? 'daily_session_policy_missing' : 'market_open_bars_missing')
+    }
+    return { policyResult:result, effectiveResult }
   }
+  const closureComplete = (from, to, fromBrokerTime = null, toBrokerTime = null) =>
+    recordClosure(from, to, fromBrokerTime, toBrokerTime)?.effectiveResult?.known === true
   // Historical ranges are hydrated directly from MT5 before this check. In
   // strict mode only an explicitly known closure can cover an endpoint gap.
   const startTolerance = Math.max(interval, DAILY_MAINTENANCE_TOLERANCE_MS)
   const endTolerance = Math.max(interval * 2, DAILY_MAINTENANCE_TOLERANCE_MS)
   const startCovered = strictSessionPolicy
-    ? sorted[0] <= Number(startUtcMs) || closureComplete(Number(startUtcMs) - interval, sorted[0])
-    : sorted[0] <= Number(startUtcMs) + startTolerance || crossesWeekend(Number(startUtcMs), sorted[0])
+    ? sorted[0].time <= Number(startUtcMs) || closureComplete(Number(startUtcMs) - interval, sorted[0].time,
+      null, sorted[0].broker_time)
+    : sorted[0].time <= Number(startUtcMs) + startTolerance || crossesWeekend(Number(startUtcMs), sorted[0].time)
   const endCovered = strictSessionPolicy
-    ? sorted.at(-1) + interval >= Number(endUtcMs) || closureComplete(sorted.at(-1), Number(endUtcMs))
-    : sorted.at(-1) >= Number(endUtcMs) - endTolerance || crossesWeekend(sorted.at(-1), Number(endUtcMs))
+    ? sorted.at(-1).time + interval >= Number(endUtcMs) || closureComplete(sorted.at(-1).time, Number(endUtcMs),
+      sorted.at(-1).broker_time, null)
+    : sorted.at(-1).time >= Number(endUtcMs) - endTolerance || crossesWeekend(sorted.at(-1).time, Number(endUtcMs))
   const endpointComplete = startCovered && endCovered
   // 黄金、外汇每天可能存在短暂维护休市。只把超过两小时且不跨周末的缺口视为异常，
   // 避免将正常休市误判成缓存损坏，同时仍能识别桥接长时间断开造成的大段缺失。
@@ -96,20 +222,33 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
   let internalGapCount = 0
   let maxGapMs = 0
   for (let index = 1; index < sorted.length; index += 1) {
-    const gap = sorted[index] - sorted[index - 1]
-    const knownClosure = gap > interval && closureComplete(sorted[index - 1], sorted[index])
-    const tolerated = strictSessionPolicy ? knownClosure : gap <= toleratedGap || crossesWeekend(sorted[index - 1], sorted[index])
+    const previous = sorted[index - 1]
+    const current = sorted[index]
+    const gap = current.time - previous.time
+    const closureResult = gap > interval ? recordClosure(previous.time, current.time, previous.broker_time, current.broker_time) : null
+    const effectiveClosure = closureResult?.effectiveResult
+    const knownClosure = gap > interval && effectiveClosure?.known === true && effectiveClosure?.expected !== false
+    const tolerated = strictSessionPolicy ? knownClosure : gap <= toleratedGap || crossesWeekend(previous.time, current.time)
     if (gap > interval && !tolerated) {
       internalGapCount += 1
       maxGapMs = Math.max(maxGapMs, gap)
+      suspiciousGaps.push({ from_utc_msc:previous.time, to_utc_msc:current.time, gap_ms:gap,
+        missing_bar_count:Math.max(1, Math.round(gap / interval) - 1),
+        ...(effectiveClosure?.reason ? { reason:effectiveClosure.reason } : {}) })
     }
   }
-  const continuityStatus = continuityReasons.size
-    ? (unknownSessionGapCount > 0 ? 'unknown_session' : 'policy_missing')
-    : 'reliable'
+  const continuityStatus = unknownSessionGapCount > 0
+    ? 'unknown_session'
+    : suspiciousGaps.length > 0 ? 'suspicious_gap'
+      : continuityReasons.size > 0 ? 'policy_missing' : 'reliable'
   return { complete:endpointComplete && internalGapCount === 0, endpoint_complete:endpointComplete, internal_gap_count:internalGapCount,
     max_gap_ms:maxGapMs, continuity_status:continuityStatus,
-    continuity_reason:[...continuityReasons][0] || null, continuity_reasons:[...continuityReasons], unknown_session_gap_count:unknownSessionGapCount }
+    continuity_reason:[...continuityReasons][0] || null, continuity_reasons:[...continuityReasons], unknown_session_gap_count:unknownSessionGapCount,
+    expected_closures:expectedClosures.slice(0, 32), suspicious_gaps:suspiciousGaps.slice(0, 32),
+    continuity_results:continuityResults.slice(0, 32),
+    audit_expected_closures:auditExpectedClosures.slice(0, 32),
+    audit_suspicious_gaps:auditSuspiciousGaps.slice(0, 32),
+    ...policyFields }
 }
 
 function slimChan(chan) {
@@ -149,7 +288,7 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
   const readStored = async sourceIds => {
     const ids = [...new Set((Array.isArray(sourceIds) ? sourceIds : [sourceIds]).map(Number).filter(id => id > 0))]
     if (!ids.length) return []
-    const rows = await queryAll(`SELECT source_id, open_time_utc_msc AS time_utc_msc, open_price AS open, high_price AS high,
+    const rows = await queryAll(`SELECT source_id, broker_time, open_time_utc_msc AS time_utc_msc, open_price AS open, high_price AS high,
       low_price AS low, close_price AS close, tick_volume, spread
     FROM market_candles WHERE source_id IN (${ids.map(() => '?').join(',')}) AND standard_symbol = ? AND timeframe = ?
       AND open_time_utc_msc >= ? AND open_time_utc_msc < ? ORDER BY open_time_utc_msc LIMIT ?`, [
@@ -157,36 +296,55 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
     endUtcMs, MAX_REVIEW_WINDOW_CANDLES * 4,
   ])
     const merged = new Map()
-    for (const row of rows) merged.set(Number(row.time_utc_msc), row)
+    for (const row of rows) {
+      const brokerTime = String(row.broker_time || '').trim() || null
+      merged.set(Number(row.time_utc_msc), { ...row, broker_time:brokerTime, time:brokerTime })
+    }
     return [...merged.values()].sort((a, b) => Number(a.time_utc_msc) - Number(b.time_utc_msc))
   }
-  const existingSource = await queryOne(`SELECT mds.id, mds.broker_server, mds.timezone_offset_minutes, mds.clock_status
+  const requestedSourceId = Number(options.sourceId || options.source_id) > 0
+    ? Number(options.sourceId || options.source_id) : null
+  const requestedSourceKey = String(options.sourceKey || options.source_key || '').trim()
+  const sourceSelector = requestedSourceId ? 'AND mds.id = ?' : requestedSourceKey ? 'AND mds.source_key = ?' : ''
+  const sourceSelectorParams = requestedSourceId ? [requestedSourceId] : requestedSourceKey ? [requestedSourceKey] : []
+  const existingSource = await queryOne(`SELECT mds.id, mds.broker_server, mds.account_login, mds.source_key,
+      mds.timezone_offset_minutes, mds.clock_status
     FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
     WHERE u.role = 'admin' AND EXISTS (SELECT 1 FROM market_candles candles
       WHERE candles.source_id = mds.id AND candles.standard_symbol = ? AND candles.timeframe = ? LIMIT 1)
-    ORDER BY (mds.clock_status = 'calibrated') DESC, mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`, [stripBrokerSuffix(symbol), timeframe])
+      ${sourceSelector}
+    ORDER BY (mds.clock_status = 'calibrated') DESC, mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`,
+  [stripBrokerSuffix(symbol), timeframe, ...sourceSelectorParams])
   let sourceId = Number(existingSource?.id)
-  let relatedSourceIds = []
-  if (sourceId) relatedSourceIds = (await queryAll(`SELECT mds.id FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
-    WHERE u.role = 'admin' AND mds.broker_server = ? ORDER BY mds.last_calibrated_at, mds.id`, [existingSource.broker_server])).map(row => Number(row.id))
-  let rows = relatedSourceIds.length ? await readStored(relatedSourceIds) : []
+  // A source is identified by its exact platform/source_key/account identity.
+  // Never merge candles from another terminal merely because broker_server is equal.
+  let rows = sourceId ? await readStored([sourceId]) : []
   let periodRows = rows.filter(row => Number(row.time_utc_msc) >= startUtcMs && Number(row.time_utc_msc) < endUtcMs)
+  const existingIdentity = sourceIdentityFromRow(existingSource || {})
   let marketMeta = existingSource ? { source:'mysql_period_cache', source_id:sourceId,
+    source_key:existingIdentity.source_key, platform:existingIdentity.platform,
+    broker_server:existingIdentity.broker_server, account_login:existingIdentity.account_login,
+    source_identity:existingIdentity,
     timezone_offset_minutes:existingSource.timezone_offset_minutes, clock_status:existingSource.clock_status } : {}
   let coverage = assessReviewCandleCoverage(periodRows, startUtcMs, endUtcMs, timeframe, {
     ...marketMeta, strictSessionPolicy:options.strictSessionPolicy === true,
-    standardSymbol:stripBrokerSuffix(symbol),
+    standardSymbol:stripBrokerSuffix(symbol), sourceId, sourceKey:existingIdentity.source_key,
   })
   if (!coverage.complete) {
     const hydrated = await platformRates(userId, { symbol, timeframe, count, review_window:true,
       start_utc_msc:startUtcMs - historyLookback * interval, end_utc_msc:endUtcMs })
     sourceId = Number(hydrated?.market_meta?.source_id)
     if (hydrated?.status === 'error' || !sourceId) throw new Error(hydrated?.error || hydrated?.message || 'period_market_source_unavailable')
-    const hydratedSource = await queryOne('SELECT broker_server FROM market_data_sources WHERE id = ?', [sourceId])
-    relatedSourceIds = hydratedSource?.broker_server ? (await queryAll(`SELECT mds.id FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
-      WHERE u.role = 'admin' AND mds.broker_server = ? ORDER BY mds.last_calibrated_at, mds.id`, [hydratedSource.broker_server])).map(row => Number(row.id)) : [sourceId]
-    rows = await readStored(relatedSourceIds)
-    marketMeta = hydrated.market_meta || {}
+    const hydratedSource = await queryOne(`SELECT id, broker_server, account_login, source_key, timezone_offset_minutes, clock_status
+      FROM market_data_sources WHERE id = ?`, [sourceId])
+    rows = await readStored([sourceId])
+    const hydratedIdentity = sourceIdentityFromRow(hydratedSource || { id:sourceId })
+    marketMeta = { ...(hydrated.market_meta || {}), source_id:sourceId,
+      source_key:hydratedIdentity.source_key || hydrated.market_meta?.source_key || null,
+      platform:hydratedIdentity.platform || hydrated.market_meta?.platform || null,
+      broker_server:hydratedIdentity.broker_server || hydrated.market_meta?.broker_server || null,
+      account_login:hydratedIdentity.account_login || hydrated.market_meta?.account_login || null,
+      source_identity:hydratedIdentity.source_id ? hydratedIdentity : hydrated.market_meta?.source_identity || null }
   }
   // Daily/monthly reviews use a fixed period boundary and may require strict
   // grid alignment. Model comparison accepts arbitrary minute ranges, so its
@@ -200,9 +358,27 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
   if (!periodRates.length) throw new Error('period_market_candles_unavailable')
   coverage = assessReviewCandleCoverage(periodRates, startUtcMs, endUtcMs, timeframe, {
     ...marketMeta, strictSessionPolicy:options.strictSessionPolicy === true,
-    standardSymbol:stripBrokerSuffix(symbol),
+    standardSymbol:stripBrokerSuffix(symbol), sourceId, sourceKey:marketMeta.source_key,
   })
-  return { sourceId, interval, rates, periodRates, marketMeta, coverage }
+  const continuityMeta = {
+    ...marketMeta,
+    cache_internal_gap_detected:Boolean(marketMeta.cache_internal_gap_detected || !coverage.complete),
+    cache_internal_gap_unresolved:Boolean(marketMeta.cache_internal_gap_unresolved || !coverage.complete),
+    cache_internal_gap_details:Array.isArray(coverage.suspicious_gaps) ? coverage.suspicious_gaps : [],
+    continuity_calendar_version:coverage.continuity_calendar_version || marketMeta.continuity_calendar_version || null,
+    continuity_engine_version:coverage.continuity_engine_version || marketMeta.continuity_engine_version || null,
+    continuity_policy_id:coverage.continuity_policy_id || marketMeta.continuity_policy_id || null,
+    continuity_policy_version:coverage.continuity_policy_version || marketMeta.continuity_policy_version || null,
+    continuity_policy_hash:coverage.continuity_policy_hash || marketMeta.continuity_policy_hash || null,
+    continuity_policy_match:coverage.continuity_policy_match ?? marketMeta.continuity_policy_match ?? null,
+    continuity_policy_mode:coverage.continuity_policy_mode || marketMeta.continuity_policy_mode || null,
+    expected_closures:coverage.expected_closures || marketMeta.expected_closures || [],
+    continuity_status:coverage.continuity_status || marketMeta.continuity_status || null,
+    continuity_reason:coverage.continuity_reason || marketMeta.continuity_reason || null,
+    continuity_reasons:coverage.continuity_reasons || marketMeta.continuity_reasons || [],
+    unknown_session_gap_count:Number(coverage.unknown_session_gap_count || marketMeta.unknown_session_gap_count || 0),
+  }
+  return { sourceId, interval, rates, periodRates, marketMeta:continuityMeta, coverage }
 }
 
 export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbols = [], startUtcMs, endUtcMs, sources = [] } = {}) {
@@ -232,6 +408,7 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbo
   const windowPolicyVersion = [...new Set(enabled.map(item => item.requirement.window_policy_version).filter(Boolean))][0]
     || CHAN_WINDOW_POLICY_VERSION
   const uniqueSymbols = [...new Set((symbols || []).map(stripBrokerSuffix).filter(Boolean))]
+  const sourceIdentities = frozenSourceIdentities(sources)
   const chanRequirement = {
     status:chanStatus, enabled_outcome_ids:enabledOutcomeIds, disabled_outcome_ids:disabledOutcomeIds,
     unknown_outcome_ids:unknownOutcomeIds, unsupported_outcome_ids:unsupportedOutcomeIds,
@@ -251,11 +428,15 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbo
     result.symbols[symbol] = {}
     for (const timeframe of timeframes) {
       try {
+        if (sourceIdentities.length > 1) throw new Error('period_market_source_identity_ambiguous')
+        const frozenIdentity = sourceIdentities[0] || null
         const chanPolicy = shouldComputeChan && chanTimeframeSet.has(timeframe) ? getChanWindowPolicy(timeframe) : null
         const loaded = await loadPeriodMarketWindow(userId, symbol, timeframe, startUtcMs, endUtcMs, {
           chanHistoryTarget:chanPolicy?.target || 0,
           includeChanHistory:Boolean(chanPolicy),
           strictSessionPolicy:true,
+          sourceId:frozenIdentity?.source_id || null,
+          sourceKey:frozenIdentity?.source_key || null,
         })
         const sentinel = { ...loaded.rates.at(-1), time_utc_msc:loaded.rates.at(-1).time_utc_msc + loaded.interval }
         const market = calculateMarketData(symbol, timeframe, [...loaded.rates, sentinel], {}, [], {
@@ -276,11 +457,28 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbo
         result.symbols[symbol][timeframe] = {
           status:complete ? 'complete' : 'partial', candle_count:loaded.periodRates.length, expected_candle_count:expected,
           first_time_utc_msc:first, last_time_utc_msc:last, full_period_candles:loaded.periodRates.map(compactRate),
+          source_identity:loaded.marketMeta?.source_identity || {
+            source_id:loaded.marketMeta?.source_id || loaded.sourceId || null,
+            source_key:loaded.marketMeta?.source_key || null,
+            platform:loaded.marketMeta?.platform || null,
+            broker_server:loaded.marketMeta?.broker_server || null,
+            account_login:loaded.marketMeta?.account_login || null,
+          },
            coverage:{ endpoint_complete:loaded.coverage.endpoint_complete, internal_gap_count:loaded.coverage.internal_gap_count,
              max_gap_ms:loaded.coverage.max_gap_ms, continuity_status:loaded.coverage.continuity_status || null,
              continuity_reason:loaded.coverage.continuity_reason || null,
              continuity_reasons:loaded.coverage.continuity_reasons || [],
-             unknown_session_gap_count:Number(loaded.coverage.unknown_session_gap_count || 0) },
+             unknown_session_gap_count:Number(loaded.coverage.unknown_session_gap_count || 0),
+             expected_closures:loaded.coverage.expected_closures || [],
+             suspicious_gaps:loaded.coverage.suspicious_gaps || [],
+             continuity_results:loaded.coverage.continuity_results || [],
+             continuity_calendar_version:loaded.coverage.continuity_calendar_version || null,
+             continuity_engine_version:loaded.coverage.continuity_engine_version || null,
+             continuity_policy_id:loaded.coverage.continuity_policy_id || null,
+             continuity_policy_version:loaded.coverage.continuity_policy_version || null,
+             continuity_policy_hash:loaded.coverage.continuity_policy_hash || null,
+             continuity_policy_match:loaded.coverage.continuity_policy_match ?? null,
+             continuity_policy_mode:loaded.coverage.continuity_policy_mode || null },
           summary:{ open:loaded.periodRates[0].open, high:Math.max(...highs), low:Math.min(...lows), close:loaded.periodRates.at(-1).close,
             atr_14:market.atr_14, rsi_14:market.rsi_14, macd:market.macd,
             ...(chanPolicy ? { chan:slimChan(market.chan) } : {}), },
@@ -329,7 +527,8 @@ export function monthlyPeriodMarketDigest(dailyCases = []) {
     for (const [symbol, frames] of Object.entries(market.symbols || {})) {
       symbols[symbol] = Object.fromEntries(Object.entries(frames || {}).map(([timeframe, value]) => [timeframe, {
         status:value.status, candle_count:value.candle_count, expected_candle_count:value.expected_candle_count,
-        first_time_utc_msc:value.first_time_utc_msc, last_time_utc_msc:value.last_time_utc_msc, summary:value.summary || null,
+        first_time_utc_msc:value.first_time_utc_msc, last_time_utc_msc:value.last_time_utc_msc,
+        source_identity:value.source_identity || null, coverage:value.coverage || null, summary:value.summary || null,
       }]))
     }
     return { period_case_id:Number(row.id), period_key:row.period_key, status:market.status || 'unavailable', symbols }

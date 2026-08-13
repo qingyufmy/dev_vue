@@ -51,6 +51,78 @@ function stripAccountPrivateData(value) {
   return out
 }
 
+function freezeContinuityEvidence(...sources) {
+  const roots = sources.filter(value => value && typeof value === 'object')
+  const nested = roots.map(value => value.continuity).find(value => value && typeof value === 'object') || {}
+  const policy = [...roots.map(value => value.policy), nested.policy]
+    .find(value => value && typeof value === 'object') || {}
+  const pick = (...values) => values.find(value => value !== undefined && value !== null && value !== '') ?? null
+  const list = (...values) => {
+    const value = values.find(item => Array.isArray(item))
+    return value ? value.slice(0, 32) : []
+  }
+  const result = pick(nested.result, nested.results,
+    ...roots.flatMap(value => [value.continuity_result, value.continuity_results, value.coverage_result]))
+  const fields = {
+    continuity_engine_version:pick(nested.continuity_engine_version, nested.engine_version,
+      ...roots.flatMap(value => [value.continuity_engine_version, value.engine_version])),
+    continuity_policy_id:pick(nested.continuity_policy_id, nested.policy_id,
+      policy.policy_id, ...roots.flatMap(value => [value.continuity_policy_id, value.policy_id])),
+    continuity_policy_version:pick(nested.continuity_policy_version, nested.policy_version,
+      policy.policy_version, policy.version, ...roots.flatMap(value => [value.continuity_policy_version, value.policy_version])),
+    continuity_policy_hash:pick(nested.continuity_policy_hash, nested.policy_hash,
+      policy.policy_hash, ...roots.flatMap(value => [value.continuity_policy_hash, value.policy_hash])),
+    continuity_policy_match:pick(nested.continuity_policy_match, nested.policy_match,
+      ...roots.flatMap(value => [value.continuity_policy_match, value.policy_match])),
+    continuity_calendar_version:pick(nested.continuity_calendar_version, nested.calendar_version,
+      ...roots.flatMap(value => [value.continuity_calendar_version, value.calendar_version])),
+    continuity_status:pick(nested.continuity_status, nested.status,
+      ...roots.flatMap(value => [value.continuity_status, value.status])),
+    continuity_reason:pick(nested.continuity_reason, nested.reason,
+      ...roots.flatMap(value => [value.continuity_reason, value.reason])),
+    continuity_reasons:list(nested.continuity_reasons, nested.reasons,
+      ...roots.flatMap(value => [value.continuity_reasons, value.reasons])),
+    expected_closures:list(nested.expected_closures, ...roots.map(value => value.expected_closures)),
+    suspicious_gaps:list(nested.suspicious_gaps, nested.uncovered_ranges,
+      ...roots.flatMap(value => [value.suspicious_gaps, value.uncovered_ranges])),
+    continuity_results:list(nested.continuity_results,
+      ...roots.map(value => value.continuity_results)),
+    closure_components:list(nested.closure_components, nested.components,
+      ...roots.flatMap(value => [value.closure_components, value.components])),
+    uncovered_ranges:list(nested.uncovered_ranges, nested.uncovered,
+      ...roots.flatMap(value => [value.uncovered_ranges, value.uncovered])),
+    audit_expected_closures:list(nested.audit_expected_closures,
+      ...roots.map(value => value.audit_expected_closures)),
+    audit_suspicious_gaps:list(nested.audit_suspicious_gaps,
+      ...roots.map(value => value.audit_suspicious_gaps)),
+    continuity_policy_mode:pick(nested.continuity_policy_mode, nested.mode,
+      ...roots.flatMap(value => [value.continuity_policy_mode, value.mode])),
+    source_identity:{
+      source_id:Number(pick(nested.source_id, ...roots.map(value => value.source_id))) || null,
+      source_key:pick(nested.source_key, ...roots.map(value => value.source_key)),
+      platform:pick(nested.platform, ...roots.map(value => value.platform)),
+      broker_server:pick(nested.broker_server, ...roots.map(value => value.broker_server)),
+      account_login:pick(nested.account_login, ...roots.map(value => value.account_login)),
+    },
+    unknown_session_gap_count:Number(pick(nested.unknown_session_gap_count,
+      ...roots.map(value => value.unknown_session_gap_count)) || 0),
+    cache_internal_gap_unresolved:Boolean(pick(nested.cache_internal_gap_unresolved,
+      ...roots.map(value => value.cache_internal_gap_unresolved)) === true),
+  }
+  return {
+    ...fields,
+    // Keep the original calendar field for existing snapshot readers while
+    // storing the richer policy identity under the canonical names above.
+    calendar_version:fields.continuity_calendar_version,
+    engine_version:fields.continuity_engine_version,
+    policy_id:fields.continuity_policy_id,
+    policy_version:fields.continuity_policy_version,
+    policy_hash:fields.continuity_policy_hash,
+    policy_match:fields.continuity_policy_match,
+    ...(result && typeof result === 'object' ? { result } : {}),
+  }
+}
+
 function freezeChanPolicyEvidence(marketSnapshot) {
   if (!marketSnapshot || typeof marketSnapshot !== 'object') return marketSnapshot
   const context = marketSnapshot.strategy_context
@@ -58,8 +130,12 @@ function freezeChanPolicyEvidence(marketSnapshot) {
   if (!frames || typeof frames !== 'object') return marketSnapshot
   for (const [rawTimeframe, frame] of Object.entries(frames)) {
     const chan = frame?.summary?.chan
-    if (!chan || typeof chan !== 'object') continue
+    const marketQuality = frame?.summary?.market_data_quality
+    if ((!chan || typeof chan !== 'object') && (!marketQuality || typeof marketQuality !== 'object')) continue
     const timeframe = String(rawTimeframe || '').toUpperCase()
+    const continuity = freezeContinuityEvidence(chan, marketQuality)
+    if (marketQuality && typeof marketQuality === 'object') marketQuality.continuity = continuity
+    if (!chan || typeof chan !== 'object') continue
     const policy = (String(chan.window_policy_version || '') === CHAN_WINDOW_POLICY_VERSION
       || String(chan.algorithm_version || '') === CHAN_ALGORITHM_VERSION)
       ? getChanWindowPolicy(timeframe) : null
@@ -80,9 +156,11 @@ function freezeChanPolicyEvidence(marketSnapshot) {
           reason_codes:['legacy_capabilities_unavailable'],
         }
     chan.continuity = {
-      calendar_version:chan.continuity_calendar_version || null,
-      expected_closures:Array.isArray(chan.expected_closures) ? chan.expected_closures.slice(0, 8) : [],
-      cache_internal_gap_unresolved:chan.cache_internal_gap_unresolved === true,
+      ...continuity,
+      continuity_calendar_version:continuity.continuity_calendar_version || chan.continuity_calendar_version || null,
+      expected_closures:continuity.expected_closures.length ? continuity.expected_closures
+        : (Array.isArray(chan.expected_closures) ? chan.expected_closures.slice(0, 32) : []),
+      cache_internal_gap_unresolved:continuity.cache_internal_gap_unresolved || chan.cache_internal_gap_unresolved === true,
     }
   }
   return marketSnapshot

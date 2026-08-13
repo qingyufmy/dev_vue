@@ -63,6 +63,7 @@ import { installFatalProcessHandlers, listenHttpServer } from './runtime-lifecyc
 import { createBridgePairStartLimiter } from './bridge-pair-rate-limit.js'
 import { pruneFinalizedCommands } from './bridge-v3/command-ledger.js'
 import { createAutoInferenceRecoveryLogDeduper } from './ai-recovery-log.js'
+import { readMarketSessionPolicyConfig } from './routes/ai/market-session-policy.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -445,6 +446,9 @@ installFatalProcessHandlers()
 installGracefulShutdownHandlers()
 
 ;(async () => {
+  // Fail closed before touching runtime state when a configured market-session
+  // policy is malformed or ambiguous. server/config.js has already loaded .env.
+  readMarketSessionPolicyConfig()
   await initDB()
   await runMigrations()
   await assertAiGovernanceSchemaReady()

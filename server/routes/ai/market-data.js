@@ -3329,11 +3329,32 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
       close:round5(parseFloat(lastClosedRate.close || 0)),
     } : null,
     market_data_quality: options.chanDataQuality ? {
+      source_id:Number(options.chanDataQuality.source_id) || null,
+      source_key:options.chanDataQuality.source_key || null,
+      platform:options.chanDataQuality.platform || null,
+      broker_server:options.chanDataQuality.broker_server || null,
+      account_login:options.chanDataQuality.account_login == null
+        ? null : String(options.chanDataQuality.account_login),
       clock_status: options.chanDataQuality.clock_status || 'unknown',
       cache_gap_refilled: Boolean(options.chanDataQuality.cache_gap_refilled),
       cache_internal_gap_detected: Boolean(options.chanDataQuality.cache_internal_gap_detected),
       cache_internal_gap_unresolved: Boolean(options.chanDataQuality.cache_internal_gap_unresolved),
       continuity_calendar_version: options.chanDataQuality.continuity_calendar_version || null,
+      continuity_engine_version: options.chanDataQuality.continuity_engine_version || options.chanDataQuality.engine || null,
+      continuity_policy_id: options.chanDataQuality.continuity_policy_id || options.chanDataQuality.policy?.policy_id || null,
+      continuity_policy_version: options.chanDataQuality.continuity_policy_version || options.chanDataQuality.policy?.policy_version || null,
+      continuity_policy_hash: options.chanDataQuality.continuity_policy_hash || options.chanDataQuality.policy?.policy_hash || null,
+      continuity_policy_match: options.chanDataQuality.continuity_policy_match
+        ?? options.chanDataQuality.policy?.matched ?? null,
+      continuity_policy_mode: options.chanDataQuality.continuity_policy_mode || options.chanDataQuality.policy?.mode || null,
+      continuity_status: options.chanDataQuality.continuity_status || null,
+      continuity_reason: options.chanDataQuality.continuity_reason || null,
+      continuity_reasons: Array.isArray(options.chanDataQuality.continuity_reasons)
+        ? options.chanDataQuality.continuity_reasons.slice(0, 8) : [],
+      closure_components: Array.isArray(options.chanDataQuality.closure_components || options.chanDataQuality.components)
+        ? (options.chanDataQuality.closure_components || options.chanDataQuality.components).slice(0, 16) : [],
+      uncovered_ranges: Array.isArray(options.chanDataQuality.uncovered_ranges || options.chanDataQuality.uncovered)
+        ? (options.chanDataQuality.uncovered_ranges || options.chanDataQuality.uncovered).slice(0, 16) : [],
       expected_closures: Array.isArray(options.chanDataQuality.expected_closures)
         ? options.chanDataQuality.expected_closures.slice(0, 8) : [],
       last_bar_closed: Boolean(options.chanDataQuality.last_bar_closed),
