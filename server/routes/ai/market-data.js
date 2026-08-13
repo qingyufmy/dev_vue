@@ -1267,20 +1267,40 @@ function emptyDivergence(reason = 'structure_unavailable') {
 }
 
 function buildChanEvidenceCapabilities(result, overrides = {}) {
-  const timeEvidenceComplete = result?.structure_time_key_reliable !== false
-    && result?.time_location_reliable !== false
-  const dataComplete = overrides.data_complete ?? (
+  // Keep the three data-quality dimensions explicit.  A source can have a
+  // stable, account-scoped structure key while its historical UTC location is
+  // still approximate (for example MT4's current-offset conversion).  The
+  // latter must not make otherwise valid price topology disappear.
+  const historyComplete = overrides.history_complete ?? (result?.history_complete ?? (
     result?.history_sufficient === true
       && result?.closed_history_sufficient === true
-      && result?.cache_internal_gap_unresolved !== true
-      && timeEvidenceComplete
-  )
+  ))
+  const structureTimeKeyReliable = result?.structure_time_key_reliable === true
+  const continuityStatus = String(result?.continuity_status || '').trim().toLowerCase()
+  const continuityComplete = overrides.continuity_complete ?? (result?.continuity_complete ?? (
+    result?.cache_internal_gap_unresolved !== true
+      && Number(result?.unknown_session_gap_count || 0) === 0
+      && !['suspicious_gap', 'unknown_session', 'policy_missing'].includes(continuityStatus)
+  ))
+  const topologyInputComplete = overrides.topology_input_complete ?? (result?.topology_input_complete ?? (
+    historyComplete
+      && continuityComplete
+      && structureTimeKeyReliable
+  ))
+  const absoluteTimeLocationReliable = overrides.absolute_time_location_reliable
+    ?? (result?.absolute_time_location_reliable ?? result?.time_location_reliable === true)
+  const dataComplete = overrides.data_complete ?? topologyInputComplete
+  const currentSegmentDirection = result?.current_segment?.dir
+  const segmentDirectionValue = ['up', 'down'].includes(currentSegmentDirection)
+    ? currentSegmentDirection : result?.trend_state?.direction
   const segmentDirection = overrides.segment_direction_usable ?? (
-    dataComplete
+    historyComplete
+      && continuityComplete
+      && structureTimeKeyReliable
       && result?.window_stable === true
       && result?.authoritative_terminal_chain_confirmed === true
       && Number(result?.segment_count) > 0
-      && ['up', 'down'].includes(result?.trend_state?.direction)
+      && ['up', 'down'].includes(segmentDirectionValue)
   )
   const centerStructure = overrides.center_structure_usable ?? (
     segmentDirection
@@ -1293,18 +1313,37 @@ function buildChanEvidenceCapabilities(result, overrides = {}) {
       && Boolean(result?.latest_center?.entry_segment_stable_id)
       && Number(result?.latest_center?.entry_segment_id) > 0
   )
+  const divergenceReason = String(result?.divergence?.reason || '')
+  const hasDivergenceEvidence = Boolean(result?.divergence
+    && typeof result.divergence === 'object' && divergenceReason)
+  const divergenceEvidenceUnavailable = new Set([
+    'no_macd_data', 'insufficient_valid_segments', 'no_valid_center',
+    'no_cross_window_center', 'center_reference_mismatch', 'no_entry_segment',
+    'not_after_center', 'macd_warmup_overlap', 'invalid_macd_area',
+    'divergence_evidence_unavailable', 'divergence_cross_window_unstable',
+  ]).has(divergenceReason) || !hasDivergenceEvidence
   const divergence = overrides.divergence_usable ?? (
-    entryStructure && Number(result?.closed_bar_count) >= MACD_WARMUP_BARS
+    entryStructure
+      && Number(result?.closed_bar_count) >= MACD_WARMUP_BARS
+      && !divergenceEvidenceUnavailable
   )
   const reasonCodes = new Set(Array.isArray(overrides.reason_codes) ? overrides.reason_codes : [])
   if (!dataComplete) reasonCodes.add(result?.cache_internal_gap_unresolved === true
     ? 'cache_internal_gap_unresolved' : 'data_incomplete')
+  if (!continuityComplete) reasonCodes.add('continuity_incomplete')
+  if (!absoluteTimeLocationReliable) reasonCodes.add('absolute_time_location_unreliable')
   if (!segmentDirection) reasonCodes.add('segment_direction_unusable')
   if (!centerStructure) reasonCodes.add(Number(result?.center_count) > 0
     ? 'center_structure_unusable' : 'no_confirmed_center')
-  if (!entryStructure) reasonCodes.add('entry_structure_unusable')
-  if (!divergence) reasonCodes.add('divergence_unusable')
+  if (!entryStructure) reasonCodes.add(result?.latest_center
+    ? 'entry_structure_unconfirmed' : 'entry_structure_unusable')
+  if (!divergence) reasonCodes.add(divergenceEvidenceUnavailable
+    ? 'divergence_evidence_unavailable' : 'divergence_unusable')
   return {
+    history_complete: Boolean(historyComplete),
+    continuity_complete: Boolean(continuityComplete),
+    topology_input_complete: Boolean(topologyInputComplete),
+    absolute_time_location_reliable: Boolean(absoluteTimeLocationReliable),
     data_complete: Boolean(dataComplete),
     segment_direction_usable: Boolean(segmentDirection),
     center_structure_usable: Boolean(centerStructure),
@@ -1334,9 +1373,15 @@ function emptyChanResult(overrides = {}) {
     clock_status: 'unknown',
     clock_trust_level: 'untrusted',
     time_location_reliable: false,
+    absolute_time_location_reliable: false,
     structure_time_key_reliable: false,
     structure_time_key_basis: 'untrusted',
     structure_topology_reliable: false,
+    continuity_complete: false,
+    continuity_status: null,
+    continuity_reason: null,
+    continuity_reasons: [],
+    unknown_session_gap_count: 0,
     cache_gap_refilled: false,
     cache_internal_gap_unresolved: false,
     continuity_calendar_version: null,
@@ -1402,6 +1447,10 @@ function emptyChanResult(overrides = {}) {
     trend_state: emptyTrendState(),
     entry_candidates: [],
     evidence_capabilities: {
+      history_complete: false,
+      continuity_complete: false,
+      topology_input_complete: false,
+      absolute_time_location_reliable: false,
       data_complete: false,
       segment_direction_usable: false,
       center_structure_usable: false,
@@ -1473,6 +1522,17 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   if (dataQuality && utcLocationComplete && !utcSequenceMonotonic) warnings.push('utc_time_sequence_invalid')
   const cacheInternalGapUnresolved = Boolean(dataQuality?.cache_internal_gap_unresolved)
   if (cacheInternalGapUnresolved) warnings.push('cache_internal_gap_unresolved')
+  const continuityStatus = String(dataQuality?.continuity_status || '').trim().toLowerCase()
+  const continuityReason = dataQuality?.continuity_reason || null
+  const continuityReasons = Array.isArray(dataQuality?.continuity_reasons)
+    ? dataQuality.continuity_reasons.slice(0, 8) : []
+  const unknownSessionGapCount = Number(dataQuality?.unknown_session_gap_count) || 0
+  const continuityComplete = dataQuality == null || (
+    dataQuality.continuity_complete !== false
+      && unknownSessionGapCount === 0
+      && !['suspicious_gap', 'unknown_session', 'policy_missing'].includes(continuityStatus)
+      && (continuityStatus || continuityReasons.length === 0))
+  if (!continuityComplete) warnings.push('continuity_incomplete')
   const closedMacdHist = Array.isArray(macdHist) ? macdHist.slice(0, closedRates.length) : []
   if (closedRates.length < MIN_KLINES_FOR_CHAN) {
     return emptyChanResult({
@@ -1486,10 +1546,16 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       clock_status: clockStatus,
       clock_trust_level: clockTrustLevel,
       time_location_reliable: timeLocationReliable,
+      absolute_time_location_reliable: timeLocationReliable,
       structure_time_key_reliable: structureTimeKeyReliable,
       structure_time_key_basis: structureTimeKeyBasis,
       cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
       cache_internal_gap_unresolved: cacheInternalGapUnresolved,
+      continuity_complete: continuityComplete,
+      continuity_status: continuityStatus || null,
+      continuity_reason: continuityReason,
+      continuity_reasons: continuityReasons,
+      unknown_session_gap_count: unknownSessionGapCount,
       continuity_calendar_version: dataQuality?.continuity_calendar_version || null,
       expected_closures: Array.isArray(dataQuality?.expected_closures) ? dataQuality.expected_closures.slice(0, 8) : [],
       window_start_time_utc_msc: windowStartTimeUtcMs,
@@ -1524,10 +1590,16 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       clock_status: clockStatus,
       clock_trust_level: clockTrustLevel,
       time_location_reliable: timeLocationReliable,
+      absolute_time_location_reliable: timeLocationReliable,
       structure_time_key_reliable: structureTimeKeyReliable,
       structure_time_key_basis: structureTimeKeyBasis,
       cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
       cache_internal_gap_unresolved: cacheInternalGapUnresolved,
+      continuity_complete: continuityComplete,
+      continuity_status: continuityStatus || null,
+      continuity_reason: continuityReason,
+      continuity_reasons: continuityReasons,
+      unknown_session_gap_count: unknownSessionGapCount,
       continuity_calendar_version: dataQuality?.continuity_calendar_version || null,
       expected_closures: Array.isArray(dataQuality?.expected_closures) ? dataQuality.expected_closures.slice(0, 8) : [],
       window_start_time_utc_msc: windowStartTimeUtcMs,
@@ -1728,13 +1800,20 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     clock_status: clockStatus,
     clock_trust_level: clockTrustLevel,
     time_location_reliable: timeLocationReliable,
+    absolute_time_location_reliable: timeLocationReliable,
     structure_time_key_reliable: structureTimeKeyReliable,
     structure_time_key_basis: structureTimeKeyBasis,
     structure_topology_reliable:Boolean(windowStable && structureTimeKeyReliable
+      && continuityComplete
       && !cacheInternalGapUnresolved
       && validSegs.length >= 2 && centers.length > 0),
     cache_gap_refilled: Boolean(dataQuality?.cache_gap_refilled),
     cache_internal_gap_unresolved: cacheInternalGapUnresolved,
+    continuity_complete: continuityComplete,
+    continuity_status: continuityStatus || null,
+    continuity_reason: continuityReason,
+    continuity_reasons: continuityReasons,
+    unknown_session_gap_count: unknownSessionGapCount,
     continuity_calendar_version: dataQuality?.continuity_calendar_version || null,
     expected_closures: Array.isArray(dataQuality?.expected_closures) ? dataQuality.expected_closures.slice(0, 8) : [],
     window_resynced: windowResynced,
@@ -2497,6 +2576,9 @@ function selectStableChanResult(candidates, options = {}) {
   const centerCandidates = latestConsensusCenter ? centerConsensus.latestCandidates : []
   const consensusCenterEntryConfirmed = Boolean(latestConsensusCenter
     && latestConsensusCenter.entry_segment_stable_id && latestConsensusCenter.entry_segment_id != null)
+  const consensusAnchorState = !latestConsensusCenter
+    ? 'unavailable'
+    : consensusCenterEntryConfirmed ? 'candidate' : 'unconfirmed'
   const divergenceCandidates = derivedCandidates.map(candidate => {
     const divergence = candidate?.divergence
     if (!latestConsensusCenter) return { ...candidate, divergence:emptyDivergence('no_cross_window_center') }
@@ -2613,6 +2695,7 @@ function selectStableChanResult(candidates, options = {}) {
       : 'low'
   const structureTopologyReliable = selected.history_sufficient && selected.closed_history_sufficient
     && selected.structure_time_key_reliable === true
+    && selected.continuity_complete !== false
     && selected.cache_internal_gap_unresolved !== true
     && consensus.segments.length >= 2 && summarizedCenters.length > 0
   const latestPrice = Number(selected.latest_price)
@@ -2649,7 +2732,7 @@ function selectStableChanResult(candidates, options = {}) {
       temporal_identity_stable:false,
       temporal_closed_bar_support:0,
       temporal_closed_bar_validator_count:0,
-      bootstrap_state:'pending',
+      bootstrap_state:consensusAnchorState,
     },
     divergence:consensusDivergence || emptyDivergence(divergenceFailureReason),
     forming_divergence:consensusFormingDivergence || emptyDivergence(formingFailureReason),
@@ -2728,6 +2811,11 @@ function suppressUnconfirmedWindowStructure(primary) {
     trend_state: emptyTrendState('segment_cross_window_unstable'),
     entry_candidates: [],
     evidence_capabilities: {
+      history_complete: primary?.evidence_capabilities?.history_complete === true,
+      continuity_complete: primary?.evidence_capabilities?.continuity_complete === true,
+      topology_input_complete: primary?.evidence_capabilities?.topology_input_complete === true,
+      absolute_time_location_reliable: primary?.absolute_time_location_reliable
+        ?? primary?.time_location_reliable === true,
       data_complete: primary?.evidence_capabilities?.data_complete === true,
       segment_direction_usable: false,
       center_structure_usable: false,
@@ -2742,7 +2830,22 @@ function suppressUnconfirmedWindowStructure(primary) {
   }
 }
 
-function protectBootstrapDependentEvidence(selected, usable, reliability) {
+function resolveUnanchoredStructureReason(result) {
+  const warnings = new Set(Array.isArray(result?.warnings) ? result.warnings : [])
+  if (!result?.latest_center) {
+    if (warnings.has('center_cross_window_unstable')) return 'center_cross_window_unstable'
+    if (warnings.has('no_valid_center')) return 'no_valid_center'
+    if (Number(result?.center_count) > 0) return 'center_cross_window_unstable'
+    return 'no_confirmed_center'
+  }
+  const entryConfirmed = Boolean(result.latest_center.entry_segment_stable_id
+    && Number(result.latest_center.entry_segment_id) > 0)
+  if (!entryConfirmed || warnings.has('center_entry_unconfirmed')) return 'center_entry_unconfirmed'
+  if (warnings.has('center_cross_window_unstable')) return 'center_cross_window_unstable'
+  return 'entry_structure_unconfirmed'
+}
+
+function protectBootstrapDependentEvidence(selected, usable, reliability, unavailableReason = null) {
   if (usable) {
     return {
       divergence:selected.divergence,
@@ -2756,10 +2859,11 @@ function protectBootstrapDependentEvidence(selected, usable, reliability) {
       }),
     }
   }
-  const divergence = emptyDivergence('structure_anchor_bootstrap_pending')
+  const reason = String(unavailableReason || resolveUnanchoredStructureReason(selected))
+  const divergence = emptyDivergence(reason)
   return {
     divergence,
-    forming_divergence:emptyDivergence('structure_anchor_bootstrap_pending'),
+    forming_divergence:emptyDivergence(reason),
     recent_divergences:[],
     trend_state:classifyChanTrend(
       [selected?.prev_segment, selected?.current_segment].filter(Boolean),
@@ -2769,14 +2873,15 @@ function protectBootstrapDependentEvidence(selected, usable, reliability) {
     evidence_capabilities:buildChanEvidenceCapabilities(selected, {
       entry_structure_usable:false,
       divergence_usable:false,
-      reason_codes:['structure_anchor_bootstrap_pending'],
+      reason_codes:[reason],
     }),
   }
 }
 
 function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationWindowCount) {
   const reliability = primary.reliability === 'high' ? 'medium' : primary.reliability
-  const warnings = [...new Set([...(primary.warnings || []), 'structure_anchor_bootstrap_pending'])]
+  const unavailableReason = resolveUnanchoredStructureReason(primary)
+  const warnings = [...new Set([...(primary.warnings || []), unavailableReason])]
   const hasEntryDependentStructure = Number(primary.segment_count) > 0
     || Number(primary.center_count) > 0
     || primary.divergence?.type === 'top' || primary.divergence?.type === 'bottom'
@@ -2784,7 +2889,7 @@ function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationW
     || (Array.isArray(primary.recent_divergences) && primary.recent_divergences.length > 0)
     || (Array.isArray(primary.entry_candidates) && primary.entry_candidates.length > 0)
   const protectedEvidence = hasEntryDependentStructure
-    ? protectBootstrapDependentEvidence(primary, false, reliability)
+    ? protectBootstrapDependentEvidence(primary, false, reliability, unavailableReason)
     : {
       divergence:primary.divergence,
       forming_divergence:primary.forming_divergence,
@@ -2809,7 +2914,7 @@ function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationW
     evidence_capabilities:buildChanEvidenceCapabilities(primary, {
       entry_structure_usable:false,
       divergence_usable:false,
-      reason_codes:['structure_anchor_bootstrap_pending'],
+      reason_codes:[unavailableReason],
     }),
     structure_anchor:{
       ...(primary.structure_anchor || {}),
@@ -2825,12 +2930,12 @@ function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationW
       bootstrap_core_stable_id:null,
       bootstrap_entry_segment_stable_id:null,
       bootstrap_entry_start_time_utc_msc:null,
-      bootstrap_state:'pending',
+      bootstrap_state:'unavailable',
       current_result_usable:false,
     },
     source_history_count:sourceHistoryCount,
     calculation_window_count:calculationWindowCount,
-    window_selection:'full_window_bootstrap_pending',
+    window_selection:'full_window_unanchored',
   }
 }
 
@@ -2848,6 +2953,10 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       raw_bar_count: sourceHistoryCount,
       latest_price: Number.isFinite(Number(rates?.at?.(-1)?.close)) ? round5(Number(rates.at(-1).close)) : null,
       evidence_capabilities: {
+        history_complete: false,
+        continuity_complete: false,
+        topology_input_complete: false,
+        absolute_time_location_reliable: false,
         data_complete: false,
         segment_direction_usable: false,
         center_structure_usable: false,
@@ -3023,14 +3132,22 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     && crossWindowBootstrap.stable
   // The unanchored calculation is phase one only: it may recommend and persist
   // an independently confirmed boundary, but it never publishes entry-dependent
-  // evidence. A later calculation must reload and exactly match that boundary.
-  const bootstrapUsableNow = false
+  // evidence.  `pending` is reserved for that exact two-phase hand-off.  A
+  // missing/unstable center or entry is an unavailable state, not a promise
+  // that another request will complete an anchor.
   const recommendedAnchorTime = promotionReady
     ? Number(temporalEvidence.temporal_entry_start_time_utc_msc) || null : null
-  const bootstrapWarning = bootstrapUsableNow ? [] : ['structure_anchor_bootstrap_pending']
+  const bootstrapCandidate = Boolean(promotionReady
+    && Number(recommendedAnchorTime) > 0
+    && temporalEvidence.temporal_core_stable_id
+    && temporalEvidence.temporal_entry_segment_stable_id)
+  const bootstrapUsableNow = false
+  const anchorUnavailableReason = bootstrapCandidate
+    ? 'structure_anchor_bootstrap_pending' : resolveUnanchoredStructureReason(selected)
+  const bootstrapWarning = bootstrapCandidate ? ['structure_anchor_bootstrap_pending'] : [anchorUnavailableReason]
   const warnings = [...new Set([...(selected.warnings || []), ...bootstrapWarning])]
   const reliability = !bootstrapUsableNow && selected.reliability === 'high' ? 'medium' : selected.reliability
-  const protectedEvidence = protectBootstrapDependentEvidence(selected, bootstrapUsableNow, reliability)
+  const protectedEvidence = protectBootstrapDependentEvidence(selected, bootstrapUsableNow, reliability, anchorUnavailableReason)
   return {
     ...selected,
     status:warnings.length > 0 ? 'partial' : selected.status,
@@ -3053,16 +3170,17 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       temporal_closed_bar_validator_count:temporalEvidence.temporal_closed_bar_validator_count,
       cross_window_entry_support_count:crossWindowBootstrap.supportCount,
       cross_window_entry_validator_count:crossWindowBootstrap.validatorCount,
-      bootstrap_identity:promotionReady ? JSON.stringify({
+      bootstrap_identity:bootstrapCandidate ? JSON.stringify({
         core_stable_id:temporalEvidence.temporal_core_stable_id,
         entry_segment_stable_id:temporalEvidence.temporal_entry_segment_stable_id,
       }) : null,
-      bootstrap_core_stable_id:promotionReady ? temporalEvidence.temporal_core_stable_id : null,
-      bootstrap_entry_segment_stable_id:promotionReady ? temporalEvidence.temporal_entry_segment_stable_id : null,
-      bootstrap_entry_start_time_utc_msc:promotionReady
+      bootstrap_core_stable_id:bootstrapCandidate ? temporalEvidence.temporal_core_stable_id : null,
+      bootstrap_entry_segment_stable_id:bootstrapCandidate ? temporalEvidence.temporal_entry_segment_stable_id : null,
+      bootstrap_entry_start_time_utc_msc:bootstrapCandidate
         ? temporalEvidence.temporal_entry_start_time_utc_msc : null,
       bootstrap_observation_time_utc_msc:Number(primary.structure_anchor?.bootstrap_observation_time_utc_msc) || null,
-      bootstrap_state:promotionReady ? 'confirmed' : 'pending',
+      bootstrap_state:bootstrapCandidate ? 'confirmed'
+        : selected.latest_center ? 'unconfirmed' : 'unavailable',
       current_result_usable:bootstrapUsableNow,
     },
     source_history_count:sourceHistoryCount,

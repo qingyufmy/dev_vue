@@ -68,6 +68,54 @@ describe('Chan v6 window policy', () => {
     expect(authoritative.segment_direction_usable).toBe(true)
   })
 
+  it('keeps stable segment direction usable when only absolute UTC location is unreliable', () => {
+    const result = buildChanEvidenceCapabilities({
+      history_sufficient:true, closed_history_sufficient:true,
+      cache_internal_gap_unresolved:false, time_location_reliable:false,
+      structure_time_key_reliable:true, window_stable:true,
+      authoritative_terminal_chain_confirmed:true, segment_count:5,
+      trend_state:{ direction:'down' }, center_count:0,
+    })
+    expect(result).toMatchObject({
+      history_complete:true, topology_input_complete:true,
+      data_complete:true, absolute_time_location_reliable:false,
+      segment_direction_usable:true, center_structure_usable:false,
+      entry_structure_usable:false, divergence_usable:false,
+    })
+    expect(result.reason_codes).toContain('absolute_time_location_unreliable')
+  })
+
+  it('fails center, entry and divergence independently', () => {
+    const centerOnly = buildChanEvidenceCapabilities({
+      history_sufficient:true, closed_history_sufficient:true,
+      cache_internal_gap_unresolved:false, structure_time_key_reliable:true,
+      time_location_reliable:true, window_stable:true,
+      authoritative_terminal_chain_confirmed:true, segment_count:4,
+      trend_state:{ direction:'up' }, center_count:1,
+      structure_topology_reliable:true,
+      latest_center:{ entry_segment_id:null, entry_segment_stable_id:null },
+      structure_anchor:{ current_result_usable:false }, closed_bar_count:100,
+      divergence:{ reason:'macd_no_divergence' },
+    })
+    expect(centerOnly.center_structure_usable).toBe(true)
+    expect(centerOnly.entry_structure_usable).toBe(false)
+    expect(centerOnly.divergence_usable).toBe(false)
+  })
+
+  it('fails the structural direction capability on an unresolved continuity state', () => {
+    const result = buildChanEvidenceCapabilities({
+      history_sufficient:true, closed_history_sufficient:true,
+      continuity_complete:false, continuity_status:'suspicious_gap',
+      cache_internal_gap_unresolved:false, structure_time_key_reliable:true,
+      time_location_reliable:true, window_stable:true,
+      authoritative_terminal_chain_confirmed:true, segment_count:5,
+      trend_state:{ direction:'down' }, center_count:0,
+    })
+    expect(result.continuity_complete).toBe(false)
+    expect(result.segment_direction_usable).toBe(false)
+    expect(result.reason_codes).toContain('continuity_incomplete')
+  })
+
   it('ignores an unresolved gap whose details are outside the fixed Chan slice', () => {
     const rates = makeRates(1000).map((rate, index) => ({
       ...rate, time_utc_msc:1784185200000 + index * 300000,
@@ -1090,6 +1138,63 @@ describe('computeChan', () => {
     expect(result.warnings).toContain('market_clock_unverified')
   })
 
+  it('keeps a stable H1 segment direction usable without a center or anchor', () => {
+    const rates = Array.from({ length: 1200 }, (_, index) => {
+      const close = 100 + Math.sin(index * 0.19) * 10 + Math.sin(index * 0.037) * 30
+      return {
+        time:`2026-01-01 ${String(index).padStart(4, '0')}:00:00`,
+        time_utc_msc:1784185200000 + index * 3600000,
+        open:close, high:close + 3, low:close - 3, close, tick_volume:1,
+      }
+    })
+    const result = computeChan(rates, 'H1', [], {
+      dataQuality:{
+        platform:'mt4', source_id:9, timezone_offset_minutes:180,
+        clock_status:'mt4_current_offset', clock_sample_age_ms:0, last_bar_closed:true,
+      },
+    })
+    expect(result).toMatchObject({
+      center_count:0,
+      trend_state:{ direction:'down' },
+      evidence_capabilities:{
+        absolute_time_location_reliable:false,
+        segment_direction_usable:true,
+        center_structure_usable:false,
+        entry_structure_usable:false,
+        divergence_usable:false,
+      },
+      structure_anchor:{ bootstrap_state:'unavailable', current_result_usable:false },
+    })
+    expect(result.warnings).not.toContain('structure_anchor_bootstrap_pending')
+  })
+
+  it('reports pending only for a confirmed two-phase anchor candidate', () => {
+    const rates = Array.from({ length: 800 }, (_, index) => {
+      const close = 100 + Math.sin(index * 0.02) * 20
+        + Math.sin(index * 0.06) * 10 + Math.sin(index * 0.35) * 3
+      return {
+        time:`2026-01-01 ${String(index).padStart(4, '0')}:00:00`,
+        time_utc_msc:1784185200000 + index * 300000,
+        open:close, high:close + 1, low:close - 1, close, tick_volume:1,
+      }
+    })
+    const result = computeChan(rates, 'M5', [], {
+      dataQuality:{ platform:'mt5', source_id:9, clock_status:'verified', last_bar_closed:true },
+    })
+    expect(result).toMatchObject({
+      center_count:1,
+      evidence_capabilities:{ segment_direction_usable:true },
+      structure_anchor:{
+        bootstrap_state:'confirmed', current_result_usable:false,
+        recommended_time_utc_msc:expect.any(Number),
+        bootstrap_identity:expect.any(String),
+      },
+    })
+    expect(result.warnings).toContain('structure_anchor_bootstrap_pending')
+    expect(result.divergence.reason).toBe('structure_anchor_bootstrap_pending')
+    expect(result.entry_candidates).toEqual([])
+  })
+
   it('accepts a fresh MT4 current-offset key only for source-scoped structure identity', () => {
     const rates = makeRates(50).map((rate, index) => ({
       ...rate,
@@ -1330,12 +1435,13 @@ describe('computeChan', () => {
       dataQuality:{ clock_status:'verified', last_bar_closed:true },
     })
 
-    expect(result.window_selection).toBe('full_window_bootstrap_pending')
+    expect(result.window_selection).toBe('full_window_unanchored')
     expect(result.structure_anchor).toMatchObject({
-      bootstrap_state:'pending', current_result_usable:false, recommended_time_utc_msc:null,
+      bootstrap_state:'unavailable', current_result_usable:false, recommended_time_utc_msc:null,
     })
-    expect(result.divergence).toMatchObject({ type:'none', reason:'structure_anchor_bootstrap_pending' })
-    expect(result.forming_divergence).toMatchObject({ type:'none', reason:'structure_anchor_bootstrap_pending' })
+    expect(result.warnings).not.toContain('structure_anchor_bootstrap_pending')
+    expect(result.divergence.type).toBe('none')
+    expect(result.forming_divergence.type).toBe('none')
     expect(result.recent_divergences).toEqual([])
     expect(result.entry_candidates).toEqual([])
   })
@@ -2299,7 +2405,7 @@ describe('persistent Chan structure anchor', () => {
     ], authoritative, temporal)).toEqual({ stable:false, supportCount:1, validatorCount:3 })
   })
 
-  it('fails closed for every entry-dependent field while bootstrap is pending', () => {
+  it('fails closed for every entry-dependent field without inventing bootstrap pending', () => {
     const selected = {
       latest_price:100,
       prev_segment:{ dir:'down' }, current_segment:{ dir:'up' }, latest_center:{ zl:95, zh:105 },
@@ -2310,10 +2416,26 @@ describe('persistent Chan structure anchor', () => {
       entry_candidates:[{ type:'first_buy', usable_for_entry:true }],
     }
     const protectedResult = protectBootstrapDependentEvidence(selected, false, 'medium')
-    expect(protectedResult.divergence).toMatchObject({ type:'none', reason:'structure_anchor_bootstrap_pending' })
-    expect(protectedResult.forming_divergence).toMatchObject({ type:'none', reason:'structure_anchor_bootstrap_pending' })
+    expect(protectedResult.divergence).toMatchObject({ type:'none', reason:'center_entry_unconfirmed' })
+    expect(protectedResult.forming_divergence).toMatchObject({ type:'none', reason:'center_entry_unconfirmed' })
     expect(protectedResult.recent_divergences).toEqual([])
     expect(protectedResult.entry_candidates).toEqual([])
+  })
+
+  it('uses bootstrap pending only when an explicit confirmed candidate awaits the next round', () => {
+    const selected = {
+      latest_price:100,
+      prev_segment:{ dir:'down' }, current_segment:{ dir:'up' },
+      latest_center:{ zl:95, zh:105, entry_segment_id:1, entry_segment_stable_id:'entry' },
+    }
+    const protectedResult = protectBootstrapDependentEvidence(
+      selected, false, 'medium', 'structure_anchor_bootstrap_pending')
+    expect(protectedResult.divergence).toMatchObject({
+      type:'none', reason:'structure_anchor_bootstrap_pending',
+    })
+    expect(protectedResult.forming_divergence).toMatchObject({
+      type:'none', reason:'structure_anchor_bootstrap_pending',
+    })
   })
 
   it('keeps confirmed segment boundaries after the market window shifts from a supplied stable boundary', () => {
