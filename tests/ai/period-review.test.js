@@ -17,7 +17,7 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
   periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
-  periodReviewConflictSnapshotsRequired } from '../../server/routes/ai/period-review.js'
+  periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
@@ -44,6 +44,15 @@ describe('period review lease heartbeat', () => {
 })
 
 describe('period review strategy-memory application status', () => {
+  it('persists only experience bullets while keeping anti-pattern/risk semantics', () => {
+    const text = deterministicReviewMemoryMarkdown([
+      { text:'等待回踩确认', category:'entry_setup', source_refs:['outcome:1'], confidence:0.8 },
+      { text:'不追涨', anti_pattern:'追涨后立即入场', risk:'波动扩大时暂停', memory_category:'risk_execution' },
+    ])
+    expect(text).toBe('- 等待回踩确认\n- 不追涨\n  - 反模式：追涨后立即入场\n  - 风险：波动扩大时暂停')
+    expect(text).not.toMatch(/\[entry_setup\]|来源：|置信度：|日复盘确认经验|月复盘确认经验/)
+  })
+
   it('requires frozen snapshots only when approved content has conflict evidence', () => {
     expect(periodReviewConflictSnapshotsRequired({ daily_lessons:['保留经验'] })).toBe(false)
     expect(periodReviewConflictSnapshotsRequired({ strategy_conflicts:[] })).toBe(false)

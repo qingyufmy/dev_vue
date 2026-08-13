@@ -9,9 +9,10 @@ import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../..
 import { canManagePlatformAiContent } from './platform-content-access.js'
 import { buildStrategyMemorySourceManifest, normalizeStrategyMemoryMarkdownBlock } from './strategy-memory-semantics.js'
 import { renderStrategyMemoryMarkdownPreview } from './strategy-memory-markdown.js'
-import { containsLegacyStrategyMemoryConditions, sanitizeLegacyStrategyMemoryContent } from './strategy-memory-legacy.js'
+import { containsLegacyStrategyMemoryConditions, sanitizeLegacyStrategyMemoryContent,
+  sanitizeStrategyMemoryReviewPackaging } from './strategy-memory-legacy.js'
 
-export { sanitizeLegacyStrategyMemoryContent }
+export { sanitizeLegacyStrategyMemoryContent, sanitizeStrategyMemoryReviewPackaging }
 
 export const STRATEGY_MEMORY_DEFAULT_CAPACITY_CHARS = 120000
 export const STRATEGY_MEMORY_DEFAULT_COMPRESSION_TARGET_RATIO = 0.60
@@ -453,6 +454,10 @@ async function ensureLibraryTx(run, strategy, options = {}) {
 // This helper is intentionally called before an approved review append (and by
 // the startup migration), never from a read path.
 async function repairLegacyStrategyMemoryLibraryTx(run, strategy, current, actor = null) {
+  // The current-row repair is limited to legacy applicability. Review/import
+  // packaging is cleaned only by migration 185, where durable review-revision
+  // lineage proves that the wrapper was system-generated. This avoids
+  // deleting an identically named heading authored by a user during an append.
   const cleaned = sanitizeLegacyStrategyMemoryContent(current?.content_text || '')
   if (!cleaned.changed) return { library:current, correction:null }
   const content = validateContent(cleaned.content, current.capacity_chars)
@@ -868,7 +873,7 @@ export async function restoreStrategyMemoryLibraryRevision(strategyIdOrInput, ac
       `SELECT * FROM strategy_memory_library_revisions
         WHERE id = ? AND strategy_id = ? FOR UPDATE`, [revisionId, strategy.id])
     if (!revision) throw new Error('strategy_memory_revision_not_found')
-    const cleaned = sanitizeLegacyStrategyMemoryContent(revision.content_text || '')
+    const cleaned = sanitizeLegacyStrategyMemoryContent(revision.content_text || '', { reviewPackaging:true })
     const content = validateContent(cleaned.changed ? cleaned.content : (revision.content_text || ''), current.capacity_chars)
     const nextVersion = expected + 1
     const now = beijingNow()
@@ -916,13 +921,12 @@ export function combineStrategyMemoryText(current, addition) {
 // Keep the source text human-readable and stable. Structured applicability
 // remains in review evidence/source metadata; it is deliberately not copied
 // into the runtime memory正文.
-function deterministicReviewUpdateText(content, updateKind) {
-  const normalized = sanitizeStrategyMemoryText(content).trim()
+function deterministicReviewUpdateText(content) {
+  const packaged = sanitizeStrategyMemoryReviewPackaging(sanitizeStrategyMemoryText(content).trim())
+  const normalized = packaged.content.trim()
   if (!normalized) return ''
   assertStrategyMemoryBodyHasNoConditions(normalized)
-  if (/^##\s+/u.test(normalized)) return normalized
-  const title = updateKind === 'monthly_review' ? '## 月复盘确认经验' : '## 日复盘确认经验'
-  return `${title}\n\n${normalized}`
+  return normalized
 }
 
 function parsePendingUpdateIds(value) {
@@ -1048,7 +1052,7 @@ export async function enqueueApprovedStrategyMemoryUpdate(strategyIdOrInput, act
     'strategy_memory_period_review_case_required')
   const updateKind = normalizeUpdateKind(input.update_kind ?? input.updateKind)
   const contentText = deterministicReviewUpdateText(
-    input.content_text ?? input.content ?? input.memory_update ?? '', updateKind)
+    input.content_text ?? input.content ?? input.memory_update ?? '')
   if (!contentText.trim()) throw new Error('strategy_memory_update_empty')
   let sourceRefs = null
   let result = null

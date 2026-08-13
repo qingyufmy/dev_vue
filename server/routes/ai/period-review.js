@@ -2988,28 +2988,18 @@ function reviewSourceIds(approved, type) {
   return refs
 }
 
-function deterministicReviewMemoryMarkdown(entries, { periodType, periodCaseId, versionId } = {}) {
-  const title = periodType === 'monthly' ? '## 月复盘确认经验' : '## 日复盘确认经验'
-  const currentRefs = [`period_review_case:${Number(periodCaseId)}`, `period_review_version:${Number(versionId)}`]
-  const lines = [title]
+export function deterministicReviewMemoryMarkdown(entries) {
+  const lines = []
   for (const entry of entries || []) {
     const text = memoryMarkdownText(entry.text || entry.lesson)
     if (!text) continue
-    const category = memoryMarkdownText(entry.category || entry.memory_category || 'general') || 'general'
-    lines.push(`- [${category}] ${text}`)
+    lines.push(`- ${text}`)
     const antiPattern = memoryMarkdownText(entry.anti_pattern)
     const risk = memoryMarkdownText(entry.risk || entry.risk_observation)
     if (antiPattern) lines.push(`  - 反模式：${antiPattern}`)
     if (risk) lines.push(`  - 风险：${risk}`)
-    const supportRefs = [...new Set((entry.supporting_period_case_ids || []).map(Number)
-      .filter(id => Number.isSafeInteger(id) && id > 0).map(id => `period_review_case:${id}`))]
-    const sourceRefs = [...new Set([...(entry.source_refs || []), ...supportRefs, ...currentRefs]
-      .map(memoryMarkdownText).filter(Boolean))]
-    if (sourceRefs.length) lines.push(`  - 来源：${sourceRefs.join('、')}`)
-    const confidence = Number(entry.confidence)
-    if (Number.isFinite(confidence) && confidence >= 0 && confidence <= 1) lines.push(`  - 置信度：${confidence}`)
   }
-  return lines.length > 1 ? lines.join('\n') : ''
+  return lines.join('\n')
 }
 
 function derivationMemoryEntries(approved, content) {
@@ -3100,9 +3090,7 @@ export async function runPeriodReviewDerivationOnce() {
     const content = parse(approved.approved_content_json, {}) || {}
     const updateKind = approved.period_type === 'monthly' ? 'monthly_review' : 'daily_review'
     const entries = derivationMemoryEntries(approved, content)
-    const updateText = deterministicReviewMemoryMarkdown(entries, {
-      periodType:approved.period_type, periodCaseId:approved.id, versionId:approved.approved_version_id,
-    })
+    const updateText = deterministicReviewMemoryMarkdown(entries)
     let memoryUpdateResult = null
     if (updateText) {
       memoryUpdateResult = await enqueueApprovedStrategyMemoryUpdate({

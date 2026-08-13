@@ -17,6 +17,71 @@ const CONDITION_VALUE_FIELDS = new Set([
   'regimes', 'sessions', 'entry_modes', 'avoid', 'exclude',
 ])
 
+const LEGACY_MEMORY_CATEGORIES = new Set([
+  'general', 'market_regime', 'entry_setup', 'chan_structure', 'risk_execution',
+])
+
+const FIXED_LEGACY_MEMORY_HEADINGS = new Set([
+  '# 策略记忆库',
+  '## 已确认复盘经验', '## 稳定经验', '## 历史压缩结论', '## 平台已发布经验',
+  '## 日复盘确认经验', '## 月复盘确认经验',
+])
+
+const LEGACY_IMPORT_QUOTE = '> 以下内容由旧记忆系统中仍有效且归属明确的记录一次性导入。'
+
+function isLegacyReviewHeading(line) {
+  const value = String(line || '').trim()
+  if (FIXED_LEGACY_MEMORY_HEADINGS.has(value)) return true
+  return /^##\s+(?:\d{4}[-年]\d{1,2}(?:[-月]\d{1,2}日?)?\s*)?(?:日|月)复盘确认经验$/u.test(value)
+}
+
+function isLegacySourceLine(line) {
+  const value = String(line || '').trim().replace(/^[-+*•]\s+/u, '')
+  const match = value.match(/^(迁移来源|来源)\s*[：:]\s*(.+)$/u)
+  if (!match) return false
+  const source = match[2].trim()
+  if (/^\s*(?:personal_item|personal_long|personal_summary|platform_item)\s*#\d+\s*$/iu.test(source)) return true
+  return /^(?:(?:outcome|period_review_case|period_review_version):\d+)(?:\s*[、,，]\s*(?:(?:outcome|period_review_case|period_review_version):\d+))*\s*$/iu.test(source)
+}
+
+function isLegacyConfidenceLine(line) {
+  const value = String(line || '').trim().replace(/^[-+*•]\s+/u, '')
+  return /^置信度\s*[：:]\s*(?:0(?:\.\d+)?|1(?:\.0+)?)\s*$/u.test(value)
+}
+
+function removeLegacyCategoryPrefix(line) {
+  const value = String(line)
+  const match = value.match(/^(\s*[-+*•]\s+)(?:\[([a-z_]+)\])\s*/iu)
+  if (!match || !LEGACY_MEMORY_CATEGORIES.has(String(match[2]).toLowerCase())) {
+    return { text:value, removed:0 }
+  }
+  return { text:`${match[1]}${value.slice(match[0].length)}`, removed:1 }
+}
+
+/**
+ * Remove only the exact wrappers emitted by the former review/import writer.
+ * This intentionally leaves arbitrary user headings, [general] prose in the
+ * middle of a sentence, and natural-language 来源/置信度 text untouched.
+ */
+export function sanitizeStrategyMemoryReviewPackaging(value) {
+  const normalized = String(value ?? '').replace(/\r\n?/g, '\n')
+  const kept = []
+  let removed = 0
+  for (const line of normalized.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed === LEGACY_IMPORT_QUOTE || isLegacyReviewHeading(line)
+        || isLegacySourceLine(line) || isLegacyConfidenceLine(line)) {
+      removed += 1
+      continue
+    }
+    const category = removeLegacyCategoryPrefix(line)
+    removed += category.removed
+    kept.push(category.text)
+  }
+  const content = removed ? kept.join('\n').replace(/\n{3,}/g, '\n\n') : normalized
+  return { content, changed:removed > 0, removed }
+}
+
 function hasLegacyConditionKey(value) {
   if (!value || typeof value !== 'object') return false
   if (Array.isArray(value)) return value.some(hasLegacyConditionKey)
@@ -191,7 +256,7 @@ function removeLegacyFence(lines, index) {
  * suitable for a new revision and can be safely passed through the existing
  * no-condition validator.
  */
-export function sanitizeLegacyStrategyMemoryContent(value) {
+export function sanitizeLegacyStrategyMemoryContent(value, { reviewPackaging = false } = {}) {
   const normalized = String(value ?? '').replace(/\r\n?/g, '\n')
   const lines = normalized.split('\n')
   const kept = []
@@ -231,8 +296,11 @@ export function sanitizeLegacyStrategyMemoryContent(value) {
     if (cleanedLine.trim()) kept.push(cleanedLine)
     else if (line.trim()) kept.push(cleanedLine)
   }
-  const content = removed ? kept.join('\n').replace(/\n{3,}/g, '\n\n') : normalized
-  return { content, changed:removed > 0, removed }
+  const baseContent = removed ? kept.join('\n').replace(/\n{3,}/g, '\n\n') : normalized
+  if (!reviewPackaging) return { content:baseContent, changed:removed > 0, removed }
+  const packaged = sanitizeStrategyMemoryReviewPackaging(baseContent)
+  return { content:packaged.content, changed:removed > 0 || packaged.changed,
+    removed:removed + packaged.removed }
 }
 
 export function containsLegacyStrategyMemoryConditions(value) {

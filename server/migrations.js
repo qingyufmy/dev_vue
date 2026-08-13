@@ -6086,6 +6086,83 @@ const migrations = [
         })
       }
     }
+  },
+  {
+    id: '185_strategy_memory_review_packaging_cleanup',
+    async up() {
+      // Review append revisions are the only durable proof that these exact
+      // system wrappers came from the former review writer. Do not rewrite a
+      // user/manual or legacy-import-only Markdown library here.
+      const hash = value => crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex')
+      const rowsOf = raw => Array.isArray(raw?.[0]) ? raw[0] : []
+      const resultOf = raw => Array.isArray(raw) ? (raw[0] || {}) : (raw || {})
+      const candidates = await queryAll(`SELECT lib.strategy_id, lib.content_text, lib.content_hash, lib.version_no
+        FROM strategy_memory_libraries lib
+       WHERE lib.content_text IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM strategy_memory_library_revisions review_revision
+            WHERE review_revision.strategy_id = lib.strategy_id
+              AND review_revision.version_no <= lib.version_no
+              AND review_revision.change_reason IN ('daily_review_append', 'monthly_review_append')
+         )
+       ORDER BY lib.strategy_id`)
+      for (const candidate of candidates) {
+        if (!sanitizeLegacyStrategyMemoryContent(candidate.content_text || '', { reviewPackaging:true }).changed) continue
+        await withTransaction(async run => {
+          const locked = rowsOf(await run(
+            'SELECT * FROM strategy_memory_libraries WHERE strategy_id = ? FOR UPDATE', [candidate.strategy_id]))[0]
+          if (!locked) return
+          const cleaned = sanitizeLegacyStrategyMemoryContent(locked.content_text || '', { reviewPackaging:true })
+          if (!cleaned.changed) return
+          const residual = sanitizeLegacyStrategyMemoryContent(cleaned.content, { reviewPackaging:true })
+          if (residual.changed) throw new Error('strategy_memory_review_packaging_cleanup_validation_failed')
+          const capacity = Number(locked.capacity_chars || 120000)
+          const charCount = [...cleaned.content].length
+          if (!Number.isSafeInteger(capacity) || capacity <= 0 || charCount > capacity) {
+            throw new Error('strategy_memory_review_packaging_cleanup_capacity_exceeded')
+          }
+          const contentHash = hash(cleaned.content)
+          const previousVersion = Number(locked.version_no || 0)
+          const nextVersion = previousVersion + 1
+          const previousHash = String(locked.content_hash || hash(locked.content_text || ''))
+          const existingRevision = rowsOf(await run(
+            `SELECT id, content_hash, content_text FROM strategy_memory_library_revisions
+              WHERE strategy_id = ? AND version_no = ? LIMIT 1 FOR UPDATE`,
+            [locked.strategy_id, nextVersion]))[0]
+          if (existingRevision && (String(existingRevision.content_hash || '') !== contentHash
+              || String(existingRevision.content_text || '') !== cleaned.content)) {
+            throw new Error('strategy_memory_review_packaging_cleanup_revision_conflict')
+          }
+          if (!existingRevision) {
+            const revision = resultOf(await run(`INSERT INTO strategy_memory_library_revisions
+              (strategy_id, version_no, change_reason, source_type, source_id, content_text,
+               content_hash, char_count, estimated_token_count, actor_user_id,
+               source_metadata_json, created_at)
+             VALUES (?, ?, 'review_packaging_cleanup', 'migration', NULL, ?, ?, ?, ?, NULL, ?, ?)`,
+            [locked.strategy_id, nextVersion, cleaned.content, contentHash, charCount,
+              cleaned.content ? Math.max(1, Math.ceil(Buffer.byteLength(cleaned.content, 'utf8') / 4)) : 0,
+              JSON.stringify({ migration_id:'185_strategy_memory_review_packaging_cleanup',
+                cleanup_contract:'strategy-memory-review-packaging-v1', removed_items:cleaned.removed,
+                previous_version_no:previousVersion, previous_content_hash:previousHash }), beijingNow()]))
+            if (!Number(revision.insertId || 0)) throw new Error('strategy_memory_review_packaging_cleanup_revision_create_failed')
+          }
+          const updated = resultOf(await run(`UPDATE strategy_memory_libraries
+            SET content_text = ?, version_no = ?, content_hash = ?, char_count = ?,
+                estimated_token_count = ?, updated_at = ?
+            WHERE strategy_id = ? AND version_no = ? AND content_hash = ?`,
+          [cleaned.content, nextVersion, contentHash, charCount,
+            cleaned.content ? Math.max(1, Math.ceil(Buffer.byteLength(cleaned.content, 'utf8') / 4)) : 0,
+            beijingNow(), locked.strategy_id, previousVersion, previousHash]))
+          if (Number(updated.affectedRows ?? updated.changes ?? 0) !== 1) {
+            const latest = rowsOf(await run(
+              'SELECT content_text FROM strategy_memory_libraries WHERE strategy_id = ? LIMIT 1', [locked.strategy_id]))[0]
+            if (!latest || sanitizeLegacyStrategyMemoryContent(latest.content_text || '', { reviewPackaging:true }).changed) {
+              throw new Error('strategy_memory_review_packaging_cleanup_library_cas_failed')
+            }
+          }
+        })
+      }
+    }
   }
 ]
 

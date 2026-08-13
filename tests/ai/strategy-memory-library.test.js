@@ -22,6 +22,7 @@ import {
   normalizeStrategyMemoryConflictThreshold,
   sanitizeStrategyMemoryText,
   sanitizeLegacyStrategyMemoryContent,
+  sanitizeStrategyMemoryReviewPackaging,
   saveStrategyMemoryLibrary,
   restoreStrategyMemoryLibraryRevision,
   enqueueApprovedStrategyMemoryUpdate,
@@ -61,12 +62,17 @@ describe('unified strategy memory primitives', () => {
     expect(migrations).toContain("id: '181_unified_strategy_memory_library'")
     expect(migrations).toContain("id: '182_strategy_memory_merge_integrity'")
     expect(migrations).toContain("id: '184_strategy_memory_legacy_applicability_cleanup'")
+    expect(migrations).toContain("id: '185_strategy_memory_review_packaging_cleanup'")
     expect(migrations.match(/id: '184_strategy_memory_legacy_applicability_cleanup'/g)).toHaveLength(1)
     const cleanupMigration = migrations.slice(migrations.lastIndexOf("id: '184_strategy_memory_legacy_applicability_cleanup'"))
     expect(cleanupMigration).toContain('INSERT INTO strategy_memory_library_revisions')
     expect(cleanupMigration).toContain("change_reason = 'legacy_import'")
     expect(cleanupMigration).toContain('WHERE strategy_id = ? AND version_no = ? AND content_hash = ?')
     expect(cleanupMigration).not.toContain('strategy_memory_compression_jobs SET status')
+    const packagingMigration = migrations.slice(migrations.lastIndexOf("id: '185_strategy_memory_review_packaging_cleanup'"))
+    expect(packagingMigration).toContain("change_reason IN ('daily_review_append', 'monthly_review_append')")
+    expect(packagingMigration).toContain('review_packaging_cleanup')
+    expect(packagingMigration).toContain('INSERT INTO strategy_memory_library_revisions')
     for (const column of ['result_content_hash', 'result_validation_status', 'result_validation_json']) {
       expect(migrations).toContain(column)
     }
@@ -147,6 +153,30 @@ describe('unified strategy memory primitives', () => {
     )
     expect(result.content).toContain('{"lesson":"保留结论"}')
     expect(result.content).not.toContain('applicable_when')
+  })
+
+  it('removes only known review wrappers and preserves user Markdown/natural language', () => {
+    const result = sanitizeStrategyMemoryReviewPackaging([
+      '# 策略记忆库',
+      '> 以下内容由旧记忆系统中仍有效且归属明确的记录一次性导入。',
+      '## 已确认复盘经验',
+      '- [general] 等待确认',
+      '  - 来源：outcome:1、period_review_case:2',
+      '  - 置信度：0.8',
+      '## 用户自己的标题',
+      '[general] 普通自然语言不应被移除',
+      '- 自然 [general] 文字',
+      '来源：普通说明',
+      '置信度：较高',
+    ].join('\n'))
+    expect(result.content).toContain('- 等待确认')
+    expect(result.content).toContain('## 用户自己的标题')
+    expect(result.content).toContain('[general] 普通自然语言不应被移除')
+    expect(result.content).toContain('- 自然 [general] 文字')
+    expect(result.content).toContain('来源：普通说明')
+    expect(result.content).toContain('置信度：较高')
+    expect(result.content).not.toContain('outcome:1')
+    expect(result.content).not.toContain('置信度：0.8')
   })
 })
 
@@ -518,6 +548,10 @@ describe('unified strategy memory access and CAS', () => {
       compression_job_id:23, library:{ compression_status:'queued' } })
     const revisionCall = run.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO strategy_memory_library_revisions'))
     expect(revisionCall?.[1]?.[2]).toBe('monthly_review_append')
+    expect(revisionCall?.[1]?.[5]).toBe('旧记忆\n\n等待收盘确认')
+    expect(JSON.parse(revisionCall?.[1]?.[10] || '{}').source_refs).toEqual([
+      'period_review_case:1201', 'period_review_version:39',
+    ])
     const libraryUpdate = run.mock.calls.find(([sql]) => String(sql).includes('UPDATE strategy_memory_libraries'))
     expect(libraryUpdate?.[1]).toContain('queued')
   })
