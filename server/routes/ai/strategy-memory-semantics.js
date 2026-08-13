@@ -264,6 +264,18 @@ function splitMarkdownBlocks(value) {
   return blocks
 }
 
+// Keep the Markdown block boundaries in one place for compression, preview
+// rendering, and conflict-location validation.  The implementation remains
+// private so callers cannot accidentally mutate the manifest internals; this
+// public wrapper returns a fresh array of normalized block strings.
+export function splitStrategyMemoryMarkdownBlocks(value) {
+  return splitMarkdownBlocks(value).slice()
+}
+
+export function normalizeStrategyMemoryMarkdownBlock(value) {
+  return normalizeBlockText(value)
+}
+
 function sourceEntries(input = {}) {
   if (typeof input === 'string') input = { content_text:input }
   if (Array.isArray(input.sources)) {

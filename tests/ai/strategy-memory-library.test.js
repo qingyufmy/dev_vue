@@ -27,6 +27,7 @@ import {
   sanitizeStrategyMemoryPrompt,
   applyStrategyMemoryCompressionJob,
   failStrategyMemoryCompressionJob,
+  queueStrategyMemoryCompressionJob,
   getStrategyMemoryCompressionJobStatus,
   getLatestStrategyMemoryCompressionJobStatus,
   strategyMemoryCharCount,
@@ -94,6 +95,90 @@ describe('unified strategy memory primitives', () => {
 })
 
 describe('unified strategy memory access and CAS', () => {
+  function configureCompressionQueue({ existing = null, insertResult = { insertId:23, affectedRows:1 }, libraryOverrides = {} } = {}) {
+    mockQueryOne.mockResolvedValueOnce(privateStrategy())
+    const run = vi.fn(async sql => {
+      const text = String(sql)
+      if (text.includes('SELECT * FROM strategy_memory_libraries')) return [[library(libraryOverrides)], []]
+      if (text.includes('INSERT INTO strategy_memory_compression_jobs')) return [insertResult, []]
+      if (text.includes('SELECT id, strategy_id, trigger_type, source_version_no') && text.includes('WHERE id = ?')) {
+        return [existing ? [existing] : [], []]
+      }
+      if (text.includes('SELECT id, strategy_id, trigger_type, source_version_no')) {
+        return [existing ? [existing] : [], []]
+      }
+      if (text.includes('UPDATE strategy_memory_libraries')) return [{ affectedRows:1 }, []]
+      throw new Error(`unexpected_sql:${sql}`)
+    })
+    mockWithTransaction.mockImplementationOnce(fn => fn(run))
+    return run
+  }
+
+  it('marks a newly created compression request queued and reports created=true', async () => {
+    const run = configureCompressionQueue()
+    const result = await queueStrategyMemoryCompressionJob({ strategyId:5,
+      actor:{ userId:7, role:'user' }, trigger:'manual' })
+    expect(result).toMatchObject({ id:23, status:'queued', created:true, replayed:false,
+      library_status_updated:true })
+    expect(run.mock.calls.filter(([sql]) => String(sql).includes('UPDATE strategy_memory_libraries'))).toHaveLength(1)
+  })
+
+  it.each(['succeeded', 'succeeded_noop'])('replays terminal compression status %s without re-queueing the library', async status => {
+    const run = configureCompressionQueue({
+      existing:{ id:23, strategy_id:5, status, source_version_no:2, source_content_hash:'a'.repeat(64),
+        source_set_hash:'b'.repeat(64), target_chars:100, attempt_count:1, max_attempts:3,
+        last_error_code:null, next_attempt_at:null },
+      insertResult:{ insertId:23, affectedRows:0 },
+      libraryOverrides:{ compression_status:'idle' },
+    })
+    const result = await queueStrategyMemoryCompressionJob({ strategyId:5,
+      actor:{ userId:7, role:'user' }, trigger:'manual' })
+    expect(result).toMatchObject({ id:23, status, created:false, replayed:true,
+      library_status_updated:false })
+    expect(run.mock.calls.filter(([sql]) => String(sql).includes('UPDATE strategy_memory_libraries'))).toHaveLength(0)
+  })
+
+  it('reuses an active leased compression task without issuing a duplicate queue transition', async () => {
+    const run = configureCompressionQueue({
+      existing:{ id:23, strategy_id:5, status:'leased', source_version_no:2, source_content_hash:'a'.repeat(64),
+        source_set_hash:'b'.repeat(64), target_chars:100, attempt_count:1, max_attempts:3,
+        lease_expires_at:'2099-01-01 00:00:00', next_attempt_at:null, last_error_code:null },
+      insertResult:{ insertId:23, affectedRows:0 },
+    })
+    const result = await queueStrategyMemoryCompressionJob({ strategyId:5,
+      actor:{ userId:7, role:'user' }, trigger:'manual' })
+    expect(result).toMatchObject({ id:23, status:'leased', created:false, replayed:true,
+      library_status_updated:false })
+    expect(run.mock.calls.filter(([sql]) => String(sql).includes('UPDATE strategy_memory_libraries'))).toHaveLength(0)
+  })
+
+  it('only re-queues a failed compression task when its retry window is claimable', async () => {
+    const claimableRun = configureCompressionQueue({
+      existing:{ id:23, strategy_id:5, status:'failed', source_version_no:2, source_content_hash:'a'.repeat(64),
+        source_set_hash:'b'.repeat(64), target_chars:100, attempt_count:1, max_attempts:3,
+        next_attempt_at:'2026-08-12 15:00:00', last_error_code:'provider_timeout' },
+      insertResult:{ insertId:23, affectedRows:0 },
+      libraryOverrides:{ compression_status:'failed' },
+    })
+    const claimable = await queueStrategyMemoryCompressionJob({ strategyId:5,
+      actor:{ userId:7, role:'user' }, trigger:'manual' })
+    expect(claimable).toMatchObject({ status:'queued', library_status_updated:true })
+    expect(claimableRun.mock.calls.filter(([sql]) => String(sql).includes('UPDATE strategy_memory_libraries'))).toHaveLength(1)
+
+    vi.clearAllMocks()
+    const exhaustedRun = configureCompressionQueue({
+      existing:{ id:24, strategy_id:5, status:'failed', source_version_no:2, source_content_hash:'a'.repeat(64),
+        source_set_hash:'b'.repeat(64), target_chars:100, attempt_count:3, max_attempts:3,
+        next_attempt_at:'2026-08-12 15:00:00', last_error_code:'provider_timeout' },
+      insertResult:{ insertId:24, affectedRows:0 },
+      libraryOverrides:{ compression_status:'failed' },
+    })
+    const exhausted = await queueStrategyMemoryCompressionJob({ strategyId:5,
+      actor:{ userId:7, role:'user' }, trigger:'manual' })
+    expect(exhausted).toMatchObject({ status:'failed', library_status_updated:false })
+    expect(exhaustedRun.mock.calls.filter(([sql]) => String(sql).includes('UPDATE strategy_memory_libraries'))).toHaveLength(0)
+  })
+
   it('returns an authorized redacted compression-job summary with stage and version evidence', async () => {
     const sourceHash = 'b'.repeat(64)
     mockQueryOne

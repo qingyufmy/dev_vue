@@ -14,6 +14,7 @@ import {
   enqueueApprovedStrategyMemoryUpdate,
   recordStrategyMemoryConflictEvidence,
 } from './strategy-memory-library.js'
+import { queueStrategyMemoryConsistencyCheck, requestStrategyMemoryConsistencyCycle } from './strategy-memory-consistency.js'
 import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
 import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
@@ -820,7 +821,8 @@ function normalizeStrategyMemoryUpdates(input, {
 }
 
 function normalizeStrategyConflicts(input, {
-  allowedSourceRefs = null, requireSourceRefs = false,
+  allowedSourceRefs = null, requireSourceRefs = false, strategyText = null,
+  memoryText = null, proposedExperiences = [],
 } = {}) {
   const conflicts = input?.strategy_conflicts == null ? [] : input.strategy_conflicts
   if (!Array.isArray(conflicts)) throw new Error('invalid_strategy_conflicts')
@@ -840,11 +842,32 @@ function normalizeStrategyConflicts(input, {
     if (allowedSourceRefs && sourceRefs.some(ref => !allowedSourceRefs.has(ref))) {
       throw new Error('strategy_memory_source_ref_invalid')
     }
+    const conflictTarget = String(item.conflict_target || '').trim()
+    if (!['existing_memory', 'proposed_experience'].includes(conflictTarget)) {
+      throw new Error('strategy_memory_conflict_target_invalid')
+    }
+    const strategyExcerpt = String(item.strategy_excerpt || '').trim()
+    const memoryExcerpt = String(item.memory_excerpt || '').trim()
+    if (!strategyExcerpt || !memoryExcerpt) throw new Error('strategy_memory_conflict_excerpt_missing')
+    if (strategyText != null && !String(strategyText).includes(strategyExcerpt)) {
+      throw new Error('strategy_memory_conflict_strategy_excerpt_invalid')
+    }
+    const sourceText = conflictTarget === 'existing_memory' ? String(memoryText || '') : null
+    if (sourceText != null && !sourceText.includes(memoryExcerpt)) {
+      throw new Error('strategy_memory_conflict_memory_excerpt_invalid')
+    }
+    if (conflictTarget === 'proposed_experience'
+      && !proposedExperiences.some(value => String(value || '').includes(memoryExcerpt))) {
+      throw new Error('strategy_memory_conflict_proposed_excerpt_invalid')
+    }
+    const category = String(item.category || 'general').trim().toLowerCase()
+    if (!MEMORY_CATEGORIES.has(category)) throw new Error('strategy_memory_conflict_category_invalid')
     return {
-      conflict_key:String(item.conflict_key || '').trim() || null,
-      category:String(item.category || 'general').trim() || 'general',
+      conflict_target:conflictTarget,
+      category,
       description,
-      strategy_excerpt:String(item.strategy_excerpt || '').trim(),
+      strategy_excerpt:strategyExcerpt,
+      memory_excerpt:memoryExcerpt,
       suggested_action:String(item.suggested_action || item.suggested_change || '').trim(),
       source_refs:sourceRefs,
     }
@@ -896,7 +919,7 @@ function firstReviewText(input, keys) {
   return ''
 }
 
-export function validateDailyReviewContent(input, outcomeIds = [], chanContext) {
+export function validateDailyReviewContent(input, outcomeIds = [], chanContext, conflictContext = {}) {
   input = unwrapReviewContent(input, ['daily_review', 'review'])
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_daily_review_content')
   // Models sometimes add harmless explanatory keys. Normalize to the strict
@@ -940,6 +963,8 @@ export function validateDailyReviewContent(input, outcomeIds = [], chanContext) 
   })
   const strategyConflicts = normalizeStrategyConflicts(input, {
     allowedSourceRefs:allowedMemoryRefs, requireSourceRefs:normalizedChanContext.mode !== 'legacy',
+    strategyText:conflictContext.strategyText, memoryText:conflictContext.memoryText,
+    proposedExperiences:memoryUpdates.map(item => item.text),
   })
   const result = {
     period_summary: periodSummary, decision_quality: input.decision_quality, trade_assessments: assessments,
@@ -956,7 +981,8 @@ export function validateDailyReviewContent(input, outcomeIds = [], chanContext) 
   return result
 }
 
-export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedDailyCaseIds = dailyCaseIds, chanContext) {
+export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedDailyCaseIds = dailyCaseIds, chanContext,
+  conflictContext = {}) {
   input = unwrapReviewContent(input, ['monthly_review', 'review'])
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_monthly_review_content')
   const periodSummary = firstReviewText(input, ['period_summary', 'monthly_summary', 'review_summary', 'summary'])
@@ -997,6 +1023,8 @@ export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedD
   const allowedMemoryRefs = new Set([...known].map(id => `period_review_case:${id}`))
   const strategyConflicts = normalizeStrategyConflicts(input, {
     allowedSourceRefs:allowedMemoryRefs, requireSourceRefs:normalizedChanContext.mode !== 'legacy',
+    strategyText:conflictContext.strategyText, memoryText:conflictContext.memoryText,
+    proposedExperiences:memoryCandidates.flatMap(item => [item.lesson, item.anti_pattern]).filter(Boolean),
   })
   const result = {
     period_summary: periodSummary, decision_quality: input.decision_quality, daily_assessments: assessments,
@@ -1011,12 +1039,12 @@ export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedD
 }
 
 export function validateMonthlyReviewMergeContent(input, dailyCaseIds = [], approvedDailyCaseIds = dailyCaseIds,
-  verifiedConflictGroups = [], chanContext) {
+  verifiedConflictGroups = [], chanContext, verifiedStrategyConflicts = [], conflictContext = {}) {
   // Chunk conclusions are already source-validated. Keep those conflicts
   // server-owned so the merge model cannot silently omit or collapse
   // contradictory market-regime evidence.
-  return validateMonthlyReviewContent({ ...(input || {}), conflict_groups:verifiedConflictGroups },
-    dailyCaseIds, approvedDailyCaseIds, chanContext)
+  return validateMonthlyReviewContent({ ...(input || {}), conflict_groups:verifiedConflictGroups,
+    strategy_conflicts:verifiedStrategyConflicts }, dailyCaseIds, approvedDailyCaseIds, chanContext, conflictContext)
 }
 
 async function eligibleOutcomeRows(limit) {
@@ -1634,7 +1662,7 @@ function normalizeChunkConflictGroups(input, expectedSet) {
  * Every local conclusion carries the exact source IDs that the merge model
  * must preserve rather than silently combine.
  */
-export function validateMonthlyReviewChunkContent(input, expectedPeriodCaseIds = [], chanContext) {
+export function validateMonthlyReviewChunkContent(input, expectedPeriodCaseIds = [], chanContext, conflictContext = {}) {
   const expected = [...new Set(expectedPeriodCaseIds.map(Number))].sort((left, right) => left - right)
   const coverage = validateMonthlyReviewCheckpointContent(input, expected)
   const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
@@ -1665,6 +1693,7 @@ export function validateMonthlyReviewChunkContent(input, expectedPeriodCaseIds =
     conflict_groups:normalizeChunkConflictGroups(value, expectedSet),
     strategy_conflicts:normalizeStrategyConflicts(value, {
       allowedSourceRefs:allowedChunkRefs, requireSourceRefs:normalizedChanContext.mode !== 'legacy',
+      strategyText:conflictContext.strategyText, memoryText:conflictContext.memoryText,
     }),
     confidence:Math.min(1, Math.max(0, Number(value.confidence ?? 0))),
   }
@@ -1781,6 +1810,16 @@ export async function recoverAbandonedPeriodReviewModelTasks({ nowUtcMs = Date.n
   })
 }
 
+export function buildPeriodReviewModelTaskFrozenContext(job, extras = {}) {
+  const memoryVersionNo = Number(job.memory_library_version_no || 0)
+  const memoryContentHash = String(job.memory_library_content_hash || '') || null
+  return {
+    ...extras,
+    memory_library_version_no:job.memory_library_version_no == null ? null : memoryVersionNo,
+    memory_library_content_hash:memoryContentHash,
+  }
+}
+
 async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, taskKind) {
   const tracker = await createModelTaskTracker({
     taskKind,
@@ -1797,7 +1836,9 @@ async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, tas
     modelProfileId:resolved.model_profile_id,
     protocol:endpoint.protocol,
     credentialSource:resolved.credential_source,
-    frozenContext:{ period_case_id:Number(job.period_case_id), evidence_hash:job.evidence_hash },
+    frozenContext:buildPeriodReviewModelTaskFrozenContext(job, {
+      period_case_id:Number(job.period_case_id), evidence_hash:job.evidence_hash,
+    }),
     maxAttempts:Number(job.max_attempts) || 3,
     taskDeadlineAtUtcMs:job._deadlineAtMs,
   }, {
@@ -1955,10 +1996,10 @@ async function startMonthlyReviewChunkModelTask(job, resolved, endpoint, checkpo
     modelProfileId:resolved.model_profile_id,
     protocol:endpoint.protocol,
     credentialSource:resolved.credential_source,
-    frozenContext:{ period_review_job_id:Number(job.id), period_case_id:Number(job.period_case_id),
+    frozenContext:buildPeriodReviewModelTaskFrozenContext(job, { period_review_job_id:Number(job.id), period_case_id:Number(job.period_case_id),
       checkpoint_id:Number(checkpoint.id), evidence_hash:chunkEvidence.evidence_hash,
       source_hash:chunkEvidence.source_hash, chunk_index:chunkEvidence.chunk_index,
-      expected_period_case_ids:chunkEvidence.expected_period_case_ids },
+      expected_period_case_ids:chunkEvidence.expected_period_case_ids }),
     maxAttempts:Number(checkpoint.max_attempts || 3),
     taskDeadlineAtUtcMs:job._deadlineAtMs,
   }, {
@@ -2039,21 +2080,40 @@ async function getReviewStrategyMemorySnapshot(job) {
   return snapshot
 }
 
-async function logReviewStrategyMemoryInjection(job, snapshot, usageKind = 'review') {
-  try {
-    return await createStrategyMemoryInjectionLog({
-      strategyId:job.strategy_id,
-      actor:{ userId:job.user_id, role:job.user_role || 'user' },
-      library:snapshot.library,
-      injectionKind:usageKind,
-      periodReviewCaseId:job.period_case_id,
-      modelTaskId:job.model_task_id || job._modelTracker?.taskId || null,
-    })
-  } catch (error) {
-    console.warn(`[PeriodReview case=${job.period_case_id}] strategy memory injection log unavailable:`, safeError(error))
-    return null
-  }
+async function ensurePeriodReviewStrategyMemoryInjectionLog(job, snapshot, usageKind = 'review', modelTaskId = null, deps = {}) {
+  const taskId = String(modelTaskId || job._modelTracker?.taskId || job.model_task_id || '').trim()
+  if (!taskId) throw new Error('period_review_memory_task_missing')
+  const rawVersionNo = snapshot?.library?.version_no
+  const versionNo = Number(rawVersionNo)
+  const contentHash = String(snapshot?.library?.content_hash || '')
+  const hasContent = snapshot?.library && Object.hasOwn(snapshot.library, 'content_text')
+    && snapshot.library.content_text !== null && snapshot.library.content_text !== undefined
+  const contentText = hasContent ? String(snapshot.library.content_text) : ''
+  if (rawVersionNo === null || rawVersionNo === undefined
+    || !Number.isSafeInteger(versionNo) || versionNo < 0 || !hasContent
+    || !/^[a-f0-9]{64}$/i.test(contentHash)
+    || sha256(contentText) !== contentHash) throw new Error('period_review_memory_snapshot_invalid')
+  const findExisting = typeof deps.findExisting === 'function' ? deps.findExisting : queryOne
+  const existing = await findExisting(`SELECT * FROM strategy_memory_injection_logs
+    WHERE strategy_id = ? AND library_version_no = ? AND library_content_hash = ?
+      AND usage_kind = ? AND period_review_case_id = ? AND model_task_id = ?
+    ORDER BY id LIMIT 1`, [Number(job.strategy_id), versionNo, contentHash, usageKind,
+    Number(job.period_case_id), taskId])
+  if (existing) return existing
+  const createLog = typeof deps.createLog === 'function' ? deps.createLog : createStrategyMemoryInjectionLog
+  const created = await createLog({
+    strategyId:job.strategy_id,
+    actor:{ userId:job.user_id, role:job.user_role || 'user' },
+    library:snapshot.library,
+    injectionKind:usageKind,
+    periodReviewCaseId:job.period_case_id,
+    modelTaskId:taskId,
+  })
+  if (!created?.id) throw new Error('period_review_memory_injection_log_failed')
+  return created
 }
+
+export const __testEnsurePeriodReviewStrategyMemoryInjectionLog = ensurePeriodReviewStrategyMemoryInjectionLog
 
 async function generateDailyReview(job, requestModel) {
   const evidence = parse(job.evidence_json, null)
@@ -2073,7 +2133,10 @@ async function generateDailyReview(job, requestModel) {
     trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
     repeated_issues: ['string'], strengths: ['string'], daily_lessons: ['string'], risk_observations: ['string'],
     memory_updates:[{ text:'string', category:memoryCategoryEnum, source_refs:['string'] }],
-    strategy_conflicts:[{ conflict_key:'string', category:'general', description:'string', strategy_excerpt:'string', suggested_action:'string', source_refs:['string'] }],
+    strategy_conflicts:[{ conflict_target:'existing_memory|proposed_experience', category:memoryCategoryEnum,
+      summary:'string', strategy_excerpt:'必须逐字来自 current_strategy',
+      memory_excerpt:'必须逐字来自 strategy_memory_library 或同响应 memory_updates',
+      suggested_change:'string', source_refs:['string'] }],
     confidence: 0.5 }
   if (chanAllowed) {
     shape.chan_diagnoses = outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, status: 'normal|suspected_issue|confirmed_issue|insufficient_evidence', issue_source: 'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown', impact_on_decision: 'none|minor|material|unknown', explanation: 'string', confidence: 0.5 }))
@@ -2093,7 +2156,7 @@ async function generateDailyReview(job, requestModel) {
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     tradeCoverageContract,
-    `不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。memory_updates 和 strategy_conflicts 没有可靠结论时必须返回空数组；每个对象的文本和引用字段必须符合 required_output。source_refs 只能引用服务器提供的 outcome:<id>，不得编造其他来源。${memoryCategoryContract}`,
+    `不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。memory_updates 和 strategy_conflicts 没有可靠结论时必须返回空数组；每个对象的文本和引用字段必须符合 required_output。source_refs 只能引用服务器提供的 outcome:<id>，不得编造其他来源。strategy_excerpt 必须逐字来自 current_strategy；existing_memory 的 memory_excerpt 必须逐字来自 strategy_memory_library.content_text；proposed_experience 的 memory_excerpt 必须逐字来自同响应 memory_updates.text。${memoryCategoryContract}`,
     chanAllowed ? '只有冻结证据明确启用缠论且 Chan 证据完整时才可输出缠论诊断；缠论记忆类别必须有可靠结构证据。'
       : '冻结证据未同时满足缠论启用和完整条件；禁止输出任何缠论字段、缠论诊断或 chan_structure 记忆。',
   ].join('\n')
@@ -2113,6 +2176,7 @@ async function generateDailyReview(job, requestModel) {
   job._attemptDeadlineAtMs = modelCall.attemptSafetyDeadlineUtcMs
   job._modelBudget = modelCall.budget
   const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review')
+  await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'daily_review', tracker.taskId)
   await tracker.persistBudget(modelCall.budget)
   const requestSignal = job._abortSignal && tracker.signal
     ? AbortSignal.any([job._abortSignal, tracker.signal])
@@ -2131,11 +2195,16 @@ async function generateDailyReview(job, requestModel) {
     onProviderActivity:event => tracker.onProviderActivity(event),
     onProviderQuiet:event => tracker.onProviderQuiet(event),
     onProgress: stage => setPeriodReviewJobStage(job, stage),
-     validateObject: value => validateDailyReviewContent(value, outcomeIds, chanContext),
+     validateObject: value => validateDailyReviewContent(value, outcomeIds, chanContext, {
+       strategyText:strategyMemorySnapshot.strategy_text,
+       memoryText:strategyMemorySnapshot.library.content_text,
+     }),
   })
-  const content = validateDailyReviewContent(output, outcomeIds, chanContext)
+  const content = validateDailyReviewContent(output, outcomeIds, chanContext, {
+    strategyText:strategyMemorySnapshot.strategy_text,
+    memoryText:strategyMemorySnapshot.library.content_text,
+  })
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
-  await logReviewStrategyMemoryInjection(job, strategyMemorySnapshot, 'daily_review')
   return { content, resolved }
 }
 
@@ -2284,7 +2353,9 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
       { text:'string', market_regime:'trend', supporting_period_case_ids:expectedIds.slice(0, 1) },
       { text:'string', market_regime:'range', supporting_period_case_ids:expectedIds.slice(0, 1) },
     ] }],
-    strategy_conflicts:[{ conflict_key:'string', category:'general', description:'string', strategy_excerpt:'string', suggested_action:'string', source_refs:['string'] }],
+    strategy_conflicts:[{ conflict_target:'existing_memory', category:'general|market_regime|entry_setup|chan_structure|risk_execution',
+      summary:'string', strategy_excerpt:'必须逐字来自 current_strategy',
+      memory_excerpt:'必须逐字来自 strategy_memory_library.content_text', suggested_change:'string', source_refs:['string'] }],
     confidence:0.5,
   }
   if (chanAllowed) shape.chan_observations = [{ text:'string', supporting_period_case_ids:expectedIds.slice(0, 1), market_regime:'trend', confidence:0.5 }]
@@ -2294,7 +2365,7 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
     '除 JSON 字段名和规定枚举值外，分块内的用户可见字符串与数组内容使用简体中文；不得输出内部错误码、英文状态或整句英文。',
     `daily_assessments 必须恰好包含 ${expectedIds.length} 项，并完整覆盖且仅覆盖：${expectedIds.join(', ')}。`,
     `${chanAllowed ? 'local_patterns、strengths、risks、chan_observations、action_candidates' : 'local_patterns、strengths、risks、action_candidates'} 的每项必须是结构化对象，带 supporting_period_case_ids 和 market_regime；支持 ID 只能来自本分块。`,
-    '互相矛盾的行情经验必须分别放在 conflict_groups.candidates 中，不能合并成一条；每个候选仍需保留自己的行情状态和支持 ID。',
+    '互相矛盾的行情经验必须分别放在 conflict_groups.candidates 中，不能合并成一条；每个候选仍需保留自己的行情状态和支持 ID。strategy_conflicts 只允许 existing_memory，两个 excerpt 都必须逐字复制对应冻结原文。',
   ].join('\n')
   const messages = [
     { role:'system', content:`你是严格的交易月度复盘分块分析器。只能分析本分块已冻结的日复盘和行情摘要，不得自行补造统计。\n\n${contract}` },
@@ -2311,6 +2382,7 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
   job._modelBudget = modelCall.budget
   const tracker = await startMonthlyReviewChunkModelTask(job, resolved, endpoint, checkpoint, chunk)
   job._modelTracker = tracker
+  await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'monthly_review_chunk', tracker.taskId)
   await tracker.persistBudget(modelCall.budget)
   const requestSignal = [job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean).length > 1
     ? AbortSignal.any([job._abortSignal, checkpointLease.signal, tracker.signal].filter(Boolean))
@@ -2332,11 +2404,16 @@ async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) 
     onProviderQuiet:event => tracker.onProviderQuiet(event),
     onProgress:stage => setPeriodReviewJobStage(job, `monthly_chunk_${Number(chunk.chunk_index)}`,
       'info', stage),
-     validateObject:value => validateMonthlyReviewChunkContent(value, expectedIds, chanContext),
+     validateObject:value => validateMonthlyReviewChunkContent(value, expectedIds, chanContext, {
+       strategyText:strategyMemorySnapshot.strategy_text,
+       memoryText:strategyMemorySnapshot.library.content_text,
+     }),
   })
-  const content = validateMonthlyReviewChunkContent(output, expectedIds, chanContext)
+  const content = validateMonthlyReviewChunkContent(output, expectedIds, chanContext, {
+    strategyText:strategyMemorySnapshot.strategy_text,
+    memoryText:strategyMemorySnapshot.library.content_text,
+  })
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
-  await logReviewStrategyMemoryInjection(job, strategyMemorySnapshot, 'monthly_review_chunk')
   return { content, resolved, tracker, checkpointLease }
 }
 
@@ -2386,7 +2463,7 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
       memory_category:memoryCategoryEnum,
       supporting_period_case_ids:approvedDailyCaseIds.slice(0, 2), confidence:0.5 }] : [],
     conflict_groups:mergeEvidence.conflict_groups,
-    strategy_conflicts:[{ conflict_key:'string', category:'general', description:'string', strategy_excerpt:'string', suggested_action:'string', source_refs:['string'] }],
+    strategy_conflicts:mergeEvidence.strategy_conflicts,
     confidence:0.5 }
   if (chanContext.mode === 'enabled_complete') shape.chan_issue_summary = ['string']
   const contract = [
@@ -2398,7 +2475,7 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
     chanContext.mode === 'enabled_complete'
       ? '冻结月度来源中的 Chan 证据全部启用且完整，才可输出 Chan 字段或 chan_structure 记忆。'
       : '冻结月度来源中的 Chan 证据未同时满足启用和完整条件；required_output 不包含 Chan 字段，禁止输出 Chan 内容或 chan_structure 记忆。',
-    'strategy_conflicts 的 source_refs 只能引用服务器提供的 period_review_case:<id> 来源，不得编造其他来源。',
+    'strategy_conflicts 是服务器已验证的分块冲突，必须原样保留；不得删除、改写、补造或用新的描述覆盖。',
     '冲突行情经验必须保留为独立 conflict_groups.candidates，分别写明 market_regime 与 supporting_period_case_ids，不得静默合并。',
   ].join('\n')
   const messages = [
@@ -2416,6 +2493,7 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
   job._modelBudget = modelCall.budget
   const tracker = await startPeriodReviewModelTask(job, resolved, endpoint,
     verifiedMonthlyMergeEvidence(evidence, checkpointResult), 'monthly_review_merge')
+  await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'monthly_review_merge', tracker.taskId)
   await tracker.persistBudget(modelCall.budget)
   const requestSignal = job._abortSignal && tracker.signal
     ? AbortSignal.any([job._abortSignal, tracker.signal]) : tracker.signal || job._abortSignal || null
@@ -2431,12 +2509,17 @@ async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpoin
     onProviderActivity:event => tracker.onProviderActivity(event), onProviderQuiet:event => tracker.onProviderQuiet(event),
     onProgress:stage => setPeriodReviewJobStage(job, stage),
      validateObject:value => validateMonthlyReviewMergeContent(value, dailyCaseIds, approvedDailyCaseIds,
-      mergeEvidence.conflict_groups, chanContext),
+      mergeEvidence.conflict_groups, chanContext, mergeEvidence.strategy_conflicts, {
+        strategyText:strategyMemorySnapshot.strategy_text,
+        memoryText:strategyMemorySnapshot.library.content_text,
+      }),
   })
   const content = validateMonthlyReviewMergeContent(output, dailyCaseIds, approvedDailyCaseIds,
-    mergeEvidence.conflict_groups, chanContext)
+    mergeEvidence.conflict_groups, chanContext, mergeEvidence.strategy_conflicts, {
+      strategyText:strategyMemorySnapshot.strategy_text,
+      memoryText:strategyMemorySnapshot.library.content_text,
+    })
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
-  await logReviewStrategyMemoryInjection(job, strategyMemorySnapshot, 'monthly_review_merge')
   return { content, resolved, tracker }
 }
 
@@ -2998,10 +3081,16 @@ export async function runPeriodReviewDerivationOnce() {
       throw new Error('invalid_period_review_derivation_target')
     }
     const approved = await queryOne(`SELECT cases.*, versions.content_json AS approved_content_json,
-        versions.id AS approved_version_id, apt.scope AS strategy_scope, apt.owner_user_id
+        versions.id AS approved_version_id, apt.scope AS strategy_scope, apt.owner_user_id,
+        generation_job.memory_library_version_no, generation_job.memory_library_content_hash,
+        generation_job.memory_library_snapshot_text, generation_job.memory_strategy_snapshot_text
       FROM period_review_cases cases
       JOIN period_review_versions versions ON versions.id = cases.approved_version_id
       JOIN auto_prompt_types apt ON apt.id = cases.strategy_id AND apt.deleted_at IS NULL
+      LEFT JOIN period_review_jobs generation_job ON generation_job.id = (
+        SELECT MAX(candidate_job.id) FROM period_review_jobs candidate_job
+        WHERE candidate_job.period_case_id = cases.id AND candidate_job.status = 'succeeded'
+      )
       WHERE cases.id = ? AND cases.status = 'approved' AND cases.approved_version_id IS NOT NULL`, [job.period_case_id])
     if (!approved) throw new Error('approved_period_review_required')
     const content = parse(approved.approved_content_json, {}) || {}
@@ -3010,8 +3099,9 @@ export async function runPeriodReviewDerivationOnce() {
     const updateText = deterministicReviewMemoryMarkdown(entries, {
       periodType:approved.period_type, periodCaseId:approved.id, versionId:approved.approved_version_id,
     })
+    let memoryUpdateResult = null
     if (updateText) {
-      await enqueueApprovedStrategyMemoryUpdate({
+      memoryUpdateResult = await enqueueApprovedStrategyMemoryUpdate({
         strategyId:approved.strategy_id, actor:{ serverOwned:true, userId:job.user_id },
         serverOwned:true, strategyScope:approved.strategy_scope, strategyOwnerUserId:Number(approved.owner_user_id || 0),
         validatedReviewCase:{ ...approved, strategy_id:approved.strategy_id, scope:approved.strategy_scope,
@@ -3021,6 +3111,11 @@ export async function runPeriodReviewDerivationOnce() {
         source_refs:[...new Set(entries.flatMap(entry => entry.source_refs || []))],
       })
     }
+    const frozenMemory = approved.memory_library_snapshot_text
+    const frozenStrategy = approved.memory_strategy_snapshot_text
+    if (frozenMemory == null || frozenStrategy == null) throw new Error('strategy_memory_conflict_frozen_snapshot_missing')
+    const proposedExperiences = derivationMemoryEntries(approved, content)
+      .flatMap(item => [item.text, item.lesson, item.anti_pattern]).filter(Boolean)
     for (const conflict of (Array.isArray(content.strategy_conflicts) ? content.strategy_conflicts : [])) {
       const canonicalConflictRefs = [...new Set([
         ...reviewSourceIds(approved, approved.period_type),
@@ -3034,7 +3129,22 @@ export async function runPeriodReviewDerivationOnce() {
           owner_user_id:Number(approved.owner_user_id || 0), status:'approved' },
         approved:true, review_status:'approved', period_review_version_id:approved.approved_version_id,
         period_review_case_id:approved.id, ...conflict, source_refs:canonicalConflictRefs,
+        frozen_strategy_text:frozenStrategy, frozen_memory_text:frozenMemory,
+        proposed_experiences:proposedExperiences,
       })
+    }
+    if (memoryUpdateResult?.merged) {
+      try {
+        const consistency = await queueStrategyMemoryConsistencyCheck({
+          strategyId:Number(approved.strategy_id),
+          strategyVersion:Number(approved.strategy_version || 0) || undefined,
+          libraryVersionNo:Number(memoryUpdateResult.library?.version_no || 0) || undefined,
+          triggerType:'review_merge',
+        })
+        if (consistency.created) requestStrategyMemoryConsistencyCycle()
+      } catch (error) {
+        console.error('[StrategyMemory] consistency queue after review merge:', error.message)
+      }
     }
     const now = beijingNow()
     await queryRun(`UPDATE period_review_derivation_jobs SET status = 'succeeded', last_error_code = NULL,

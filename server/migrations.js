@@ -5852,6 +5852,151 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '183_strategy_memory_conflict_bindings_and_checks',
+    async up() {
+      // This migration only adds the structures needed to locate a conflict
+      // in an exact strategy/library snapshot and to persist asynchronous
+      // consistency checks. It deliberately does not scan or rewrite any
+      // existing memory/conflict rows and never calls a model provider.
+      const addColumns = async (table, definitions) => {
+        const existing = new Set((await queryAll(`SELECT COLUMN_NAME
+          FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = ?`, [table])).map(row => String(row.COLUMN_NAME)))
+        for (const [name, definition] of Object.entries(definitions)) {
+          if (!existing.has(name)) {
+            await queryRun(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`)
+          }
+        }
+      }
+
+      const addIndex = async (table, indexName, definition) => {
+        const existing = new Set((await queryAll(`SELECT DISTINCT INDEX_NAME
+          FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = ?`, [table])).map(row => String(row.INDEX_NAME)))
+        if (!existing.has(indexName)) await queryRun(`ALTER TABLE ${table} ADD ${definition}`)
+      }
+
+      await addColumns('strategy_memory_conflicts', {
+        identity_version: 'SMALLINT NOT NULL DEFAULT 1',
+        conflict_kind: 'VARCHAR(32) DEFAULT NULL',
+        strategy_rule_hash: 'CHAR(64) DEFAULT NULL',
+        canonical_lineage_key: 'CHAR(64) DEFAULT NULL',
+        detection_count: 'INT NOT NULL DEFAULT 0',
+        verification_status: "VARCHAR(24) NOT NULL DEFAULT 'location_stale'",
+        last_detected_at: 'DATETIME DEFAULT NULL',
+        last_validated_at: 'DATETIME DEFAULT NULL',
+      })
+
+      await addColumns('strategy_memory_conflict_occurrences', {
+        binding_id: 'BIGINT UNSIGNED DEFAULT NULL',
+        strategy_version: 'INT DEFAULT NULL',
+        library_version_no: 'INT DEFAULT NULL',
+        library_content_hash: 'CHAR(64) DEFAULT NULL',
+        memory_block_id: 'CHAR(64) DEFAULT NULL',
+        memory_block_hash: 'CHAR(64) DEFAULT NULL',
+        memory_excerpt: 'TEXT DEFAULT NULL',
+        conflict_kind: 'VARCHAR(32) DEFAULT NULL',
+      })
+
+      await addColumns('ai_feature_flags', {
+        strategy_memory_markdown_preview_enabled: 'TINYINT(1) NOT NULL DEFAULT 1',
+        strategy_memory_consistency_checks_enabled: 'TINYINT(1) NOT NULL DEFAULT 1',
+      })
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_conflict_bindings (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        conflict_id BIGINT UNSIGNED NOT NULL,
+        strategy_id INT NOT NULL,
+        strategy_version INT NOT NULL,
+        library_version_no INT NOT NULL,
+        library_content_hash CHAR(64) NOT NULL,
+        memory_block_id CHAR(64) NOT NULL,
+        memory_block_hash CHAR(64) NOT NULL,
+        memory_excerpt TEXT NOT NULL,
+        memory_claim_hash CHAR(64) NOT NULL,
+        strategy_excerpt TEXT NOT NULL,
+        strategy_rule_hash CHAR(64) NOT NULL,
+        location_status VARCHAR(24) NOT NULL DEFAULT 'matched',
+        detector_contract_version VARCHAR(64) NOT NULL DEFAULT 'strategy-memory-consistency-v1',
+        consistency_job_id BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        validated_at DATETIME DEFAULT NULL,
+        superseded_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_strategy_memory_binding_snapshot
+          (conflict_id, strategy_version, library_version_no, memory_block_id),
+        KEY idx_strategy_memory_binding_snapshot
+          (strategy_id, strategy_version, library_version_no, location_status),
+        KEY idx_strategy_memory_binding_conflict (conflict_id, location_status),
+        KEY idx_strategy_memory_binding_job (consistency_job_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS strategy_memory_consistency_jobs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        strategy_id INT NOT NULL,
+        strategy_version INT NOT NULL,
+        library_version_no INT NOT NULL,
+        library_content_hash CHAR(64) NOT NULL,
+        strategy_content_hash CHAR(64) NOT NULL,
+        strategy_text_snapshot LONGTEXT NOT NULL,
+        memory_content_snapshot LONGTEXT NOT NULL,
+        trigger_type VARCHAR(32) NOT NULL,
+        input_set_hash CHAR(64) NOT NULL,
+        detector_contract_version VARCHAR(64) NOT NULL DEFAULT 'strategy-memory-consistency-v1',
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3,
+        next_attempt_at DATETIME DEFAULT NULL,
+        lease_token CHAR(36) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        model_task_id CHAR(36) DEFAULT NULL,
+        conflict_count INT NOT NULL DEFAULT 0,
+        matched_count INT NOT NULL DEFAULT 0,
+        stale_count INT NOT NULL DEFAULT 0,
+        result_hash CHAR(64) DEFAULT NULL,
+        result_json LONGTEXT DEFAULT NULL,
+        last_error_code VARCHAR(128) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_strategy_memory_consistency_input
+          (strategy_id, strategy_version, library_version_no, input_set_hash),
+        KEY idx_strategy_memory_consistency_claim
+          (status, lease_expires_at, next_attempt_at, updated_at),
+        KEY idx_strategy_memory_consistency_strategy
+          (strategy_id, strategy_version, library_version_no, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // A deployment may have created the table from an earlier 183 build.
+      // Reconcile missing snapshot/result columns without touching queued rows.
+      await addColumns('strategy_memory_consistency_jobs', {
+        strategy_content_hash: 'CHAR(64) DEFAULT NULL',
+        strategy_text_snapshot: 'LONGTEXT DEFAULT NULL',
+        memory_content_snapshot: 'LONGTEXT DEFAULT NULL',
+        detector_contract_version: "VARCHAR(64) NOT NULL DEFAULT 'strategy-memory-consistency-v1'",
+        result_json: 'LONGTEXT DEFAULT NULL',
+      })
+
+      const detectorColumns = await queryAll(`SELECT TABLE_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+        FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+          AND COLUMN_NAME = 'detector_contract_version'
+          AND TABLE_NAME IN ('strategy_memory_conflict_bindings', 'strategy_memory_consistency_jobs')`)
+      for (const column of detectorColumns) {
+        if (String(column.DATA_TYPE).toLowerCase() !== 'varchar' || Number(column.CHARACTER_MAXIMUM_LENGTH || 0) < 64) {
+          await queryRun(`ALTER TABLE ${column.TABLE_NAME} MODIFY COLUMN detector_contract_version
+            VARCHAR(64) NOT NULL DEFAULT 'strategy-memory-consistency-v1'`)
+        }
+      }
+
+      // The table creation above is idempotent, but these checks make the
+      // expected lookup indexes explicit when a partially-applied deployment
+      // created an older version of either table.
+      await addIndex('strategy_memory_conflict_bindings', 'idx_strategy_memory_binding_snapshot',
+        'KEY idx_strategy_memory_binding_snapshot (strategy_id, strategy_version, library_version_no, location_status)')
+      await addIndex('strategy_memory_consistency_jobs', 'idx_strategy_memory_consistency_claim',
+        'KEY idx_strategy_memory_consistency_claim (status, lease_expires_at, next_attempt_at, updated_at)')
+    }
   }
 ]
 

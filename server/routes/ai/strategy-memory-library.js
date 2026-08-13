@@ -7,6 +7,8 @@
 import crypto from 'node:crypto'
 import { queryOne, queryAll, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { canManagePlatformAiContent } from './platform-content-access.js'
+import { buildStrategyMemorySourceManifest, normalizeStrategyMemoryMarkdownBlock } from './strategy-memory-semantics.js'
+import { renderStrategyMemoryMarkdownPreview } from './strategy-memory-markdown.js'
 
 export const STRATEGY_MEMORY_DEFAULT_CAPACITY_CHARS = 120000
 export const STRATEGY_MEMORY_DEFAULT_COMPRESSION_TARGET_RATIO = 0.60
@@ -40,6 +42,24 @@ function stableJson(value) {
     return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
   }
   return JSON.stringify(value)
+}
+
+function normalizeConflictExcerpt(value) {
+  return normalizeStrategyMemoryMarkdownBlock(sanitizeStrategyMemoryText(value))
+}
+
+function exactExcerptMatch(source, excerpt) {
+  const normalizedSource = normalizeConflictExcerpt(source)
+  const normalizedExcerpt = normalizeConflictExcerpt(excerpt)
+  if (!normalizedExcerpt) return false
+  const first = normalizedSource.indexOf(normalizedExcerpt)
+  return first >= 0 && normalizedSource.indexOf(normalizedExcerpt, first + normalizedExcerpt.length) < 0
+}
+
+function normalizedConflictCategory(value) {
+  const category = String(value || 'general').trim().toLowerCase()
+  return ['general', 'market_regime', 'entry_setup', 'chan_structure', 'risk_execution'].includes(category)
+    ? category : 'general'
 }
 
 function jsonText(value) {
@@ -485,7 +505,22 @@ export async function listStrategyMemoryLibraries(actorOrInput, roleArg = null, 
             lib.char_count, lib.estimated_token_count, lib.capacity_chars,
             lib.compression_target_ratio, lib.conflict_alert_threshold,
             lib.pending_update_count, lib.compression_status, lib.last_compacted_at,
-            lib.updated_at, lib.updated_by_user_id
+            lib.updated_at, lib.updated_by_user_id,
+            (SELECT COUNT(*) FROM strategy_memory_conflicts conflicts
+              WHERE conflicts.strategy_id = apt.id AND conflicts.status = 'attention_required'
+                AND conflicts.verification_status = 'matched') AS attention_required_count,
+            (SELECT COUNT(*) FROM strategy_memory_conflicts conflicts
+              WHERE conflicts.strategy_id = apt.id AND conflicts.status = 'observing'
+                AND conflicts.evidence_count > 0 AND conflicts.verification_status = 'matched') AS observing_count,
+            (SELECT COUNT(*) FROM strategy_memory_conflicts conflicts
+              WHERE conflicts.strategy_id = apt.id AND conflicts.status = 'observing'
+                AND conflicts.evidence_count = 0 AND conflicts.verification_status = 'matched') AS unverified_count,
+            (SELECT COUNT(*) FROM strategy_memory_conflicts conflicts
+              WHERE conflicts.strategy_id = apt.id AND conflicts.verification_status = 'location_stale') AS location_stale_count,
+            (SELECT jobs.status FROM strategy_memory_consistency_jobs jobs
+              WHERE jobs.strategy_id = apt.id ORDER BY jobs.id DESC LIMIT 1) AS consistency_check_status,
+            (SELECT jobs.completed_at FROM strategy_memory_consistency_jobs jobs
+              WHERE jobs.strategy_id = apt.id ORDER BY jobs.id DESC LIMIT 1) AS last_consistency_checked_at
        FROM auto_prompt_types apt
        LEFT JOIN strategy_memory_libraries lib ON lib.strategy_id = apt.id
       WHERE apt.deleted_at IS NULL
@@ -499,6 +534,12 @@ export async function listStrategyMemoryLibraries(actorOrInput, roleArg = null, 
     strategy_id: Number(row.strategy_id), strategy_scope: row.strategy_scope, owner_user_id: Number(row.owner_user_id || 0),
     title: row.title || null, strategy_version: row.strategy_version == null ? null : Number(row.strategy_version),
     visibility_status: row.visibility_status || null, is_active: Boolean(Number(row.is_active)),
+    attention_required_count:Number(row.attention_required_count || 0),
+    observing_count:Number(row.observing_count || 0),
+    unverified_count:Number(row.unverified_count || 0),
+    location_stale_count:Number(row.location_stale_count || 0),
+    consistency_check_status:row.consistency_check_status || null,
+    last_consistency_checked_at:row.last_consistency_checked_at || null,
     library: row.version_no == null ? null : publicLibrary({ ...row, strategy_id:row.strategy_id }),
   }))
 }
@@ -892,6 +933,21 @@ async function insertCompressionJobTx(run, options) {
     : Math.floor(Number(options.capacityChars) * Number(options.targetRatio))
   if (targetChars <= 0) throw new Error('strategy_memory_compression_capacity_insufficient')
   const now = options.now || beijingNow()
+  const lookupExisting = async () => await txOne(run,
+    `SELECT id, strategy_id, trigger_type, source_version_no, source_content_hash,
+            source_set_hash, target_chars, status, attempt_count, max_attempts,
+            lease_expires_at, next_attempt_at, model_task_id, last_error_code,
+            result_revision_id, result_content_hash, result_validation_status,
+            created_at, updated_at, completed_at
+       FROM strategy_memory_compression_jobs
+      WHERE strategy_id = ? AND trigger_type = ? AND source_version_no = ?
+        AND source_set_hash = ? LIMIT 1 FOR UPDATE`,
+    [options.strategyId, options.triggerType || options.trigger, options.sourceVersionNo, sourceSetHash])
+  // Read the existing unique-key row before the upsert when the caller needs
+  // replay metadata.  This is deliberately opt-in because the worker's
+  // internal follow-up jobs only need an ID and should keep their single-write
+  // transaction path.
+  let existing = options.readExisting ? await lookupExisting() : null
   const raw = await run(
     `INSERT INTO strategy_memory_compression_jobs
       (strategy_id, trigger_type, source_version_no, source_content_hash, source_set_hash,
@@ -901,12 +957,39 @@ async function insertCompressionJobTx(run, options) {
        result_validation_json, created_at, updated_at, completed_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, NULL, NULL, NULL, ?, NULL, NULL,
        NULL, 'pending', NULL, ?, ?, NULL)
-     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = VALUES(updated_at)`,
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
     [options.strategyId, options.triggerType || options.trigger, options.sourceVersionNo, options.sourceContentHash || null,
       sourceSetHash, JSON.stringify(updateIds), targetChars, options.modelTaskId || null, now, now]
   )
-  const insertId = Number(txResult(raw).insertId || 0)
-  return { id:insertId || null, sourceSetHash, targetChars }
+  const result = txResult(raw)
+  const insertId = Number(result.insertId || 0)
+  // MySQL reports one affected row for a fresh insert and two (or zero when
+  // every value is identical) for the ON DUPLICATE KEY UPDATE path.  The
+  // queue endpoint needs the existing row's durable status so a replay of a
+  // terminal no-op cannot make the library look queued again.  Keep the
+  // lookup opt-in: the internal compression transitions only need the ID and
+  // should not pay for an extra SELECT on every newly-created follow-up job.
+  const created = Number(result.affectedRows ?? result.changes ?? 0) === 1
+  if (!existing && !created && options.readExisting) {
+    // The row may have been inserted by a concurrent transaction after the
+    // initial lookup.  Resolve it by the deterministic ID returned through
+    // LAST_INSERT_ID, then fall back to the unique key for conservative
+    // drivers that do not expose that value on duplicate updates.
+    existing = insertId
+      ? await txOne(run,
+        `SELECT id, strategy_id, trigger_type, source_version_no, source_content_hash,
+                source_set_hash, target_chars, status, attempt_count, max_attempts,
+                lease_expires_at, next_attempt_at, model_task_id, last_error_code,
+                result_revision_id, result_content_hash, result_validation_status,
+                created_at, updated_at, completed_at
+           FROM strategy_memory_compression_jobs
+          WHERE id = ? LIMIT 1 FOR UPDATE`, [insertId])
+      : await lookupExisting()
+  }
+  return { id:insertId || Number(existing?.id) || null, sourceSetHash, targetChars,
+    created:options.readExisting ? created && !existing : undefined,
+    replayed:options.readExisting ? Boolean(existing) : undefined,
+    existing }
 }
 
 export async function enqueueApprovedStrategyMemoryUpdate(strategyIdOrInput, actorArg = null, payloadArg = null) {
@@ -1091,19 +1174,63 @@ export async function enqueueApprovedStrategyMemoryUpdate(strategyIdOrInput, act
 export const enqueueApprovedReviewMemoryUpdate = enqueueApprovedStrategyMemoryUpdate
 
 function conflictKeyFromInput(input) {
-  const explicit = String(input.conflict_key ?? input.conflictKey ?? '').trim()
-  if (explicit) return explicit.length <= 64 ? explicit : sha256(explicit)
-  const value = {
-    category:input.category || input.conflict_type || input.conflictType || '',
-    description:sanitizeStrategyMemoryText(input.description || input.conflict_description || ''),
-    strategy_excerpt:sanitizeStrategyMemoryText(input.strategy_excerpt || input.strategyExcerpt || ''),
-    suggested_action:sanitizeStrategyMemoryText(input.suggested_action || input.suggestedAction || ''),
-  }
-  return sha256(stableJson(value))
+  const category = normalizedConflictCategory(input.category || input.conflict_type || input.conflictType)
+  const strategyExcerpt = normalizeConflictExcerpt(input.strategy_excerpt || input.strategyExcerpt)
+  const memoryExcerpt = normalizeConflictExcerpt(input.memory_excerpt || input.memoryExcerpt
+    || input.description || input.conflict_description)
+  const strategyRuleHash = sha256(strategyExcerpt)
+  const memoryClaimHash = sha256(memoryExcerpt)
+  const canonicalLineageKey = sha256(`${String(input.conflict_target || input.conflictTarget || 'existing_memory')}\u0000${memoryClaimHash}`)
+  // A model-supplied conflict_key is deliberately ignored. Identity is owned
+  // by the server and only derives from exact, validated excerpts.
+  return sha256(stableJson({ identity_version:1, strategy_id:Number(input.strategyId || input.strategy_id || 0),
+    category, strategy_rule_hash:strategyRuleHash, canonical_lineage_key:canonicalLineageKey }))
 }
 
 export function buildStrategyMemoryConflictKey(input = {}) {
   return conflictKeyFromInput(input)
+}
+
+export function validateStrategyMemoryConflictCandidate(input = {}, context = {}) {
+  const conflictTarget = String(input.conflict_target || input.conflictTarget || '').trim()
+  if (!['existing_memory', 'proposed_experience'].includes(conflictTarget)) {
+    throw new Error('strategy_memory_conflict_target_invalid')
+  }
+  const category = normalizedConflictCategory(input.category || input.conflict_type || input.conflictType)
+  const strategyExcerpt = normalizeConflictExcerpt(input.strategy_excerpt || input.strategyExcerpt)
+  const memoryExcerpt = normalizeConflictExcerpt(input.memory_excerpt || input.memoryExcerpt)
+  if (!strategyExcerpt || !exactExcerptMatch(context.strategyText, strategyExcerpt)) {
+    throw new Error('strategy_memory_conflict_strategy_excerpt_invalid')
+  }
+  if (!memoryExcerpt) throw new Error('strategy_memory_conflict_memory_excerpt_invalid')
+  const memoryManifest = buildStrategyMemorySourceManifest({
+    content_text:context.memoryText || '', namespace:'current_library', includePendingUpdates:false,
+  })
+  let sourceBlock = null
+  if (conflictTarget === 'existing_memory') {
+    const matches = memoryManifest.source_blocks.filter(block => exactExcerptMatch(block.text, memoryExcerpt))
+    if (matches.length !== 1) throw new Error('strategy_memory_conflict_memory_excerpt_invalid')
+    sourceBlock = matches[0]
+  } else {
+    const proposed = (Array.isArray(context.proposedExperiences) ? context.proposedExperiences : [])
+      .map(normalizeConflictExcerpt).filter(Boolean)
+    if (proposed.filter(text => exactExcerptMatch(text, memoryExcerpt)).length !== 1) {
+      throw new Error('strategy_memory_conflict_proposed_excerpt_invalid')
+    }
+  }
+  const strategyRuleHash = sha256(strategyExcerpt)
+  const memoryClaimHash = sha256(memoryExcerpt)
+  const canonicalLineageKey = sha256(`${conflictTarget}\u0000${sourceBlock?.hash || memoryClaimHash}`)
+  const conflictKey = sha256(stableJson({ identity_version:1,
+    strategy_id:Number(context.strategyId || input.strategyId || input.strategy_id || 0), category,
+    strategy_rule_hash:strategyRuleHash, canonical_lineage_key:canonicalLineageKey }))
+  return {
+    conflict_key:conflictKey, identity_version:1, conflict_kind:`${conflictTarget}_vs_strategy`,
+    conflict_target:conflictTarget, category, strategy_excerpt:strategyExcerpt,
+    memory_excerpt:memoryExcerpt, strategy_rule_hash:strategyRuleHash,
+    memory_claim_hash:memoryClaimHash, canonical_lineage_key:canonicalLineageKey,
+    source_block_id:sourceBlock?.id || null, source_block_hash:sourceBlock?.hash || null,
+  }
 }
 
 export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, actorArg = null, payloadArg = null) {
@@ -1115,9 +1242,7 @@ export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, ac
   const periodReviewCaseId = positiveId(input.period_review_case_id ?? input.periodReviewCaseId
     ?? input.validatedReviewCase?.id ?? input.validatedReviewCase?.period_case_id,
   'strategy_memory_period_review_case_required')
-  const key = conflictKeyFromInput(input)
   const description = sanitizeStrategyMemoryText(input.description || input.conflict_description || input.conflict || '')
-  const strategyExcerpt = sanitizeStrategyMemoryText(input.strategy_excerpt || input.strategyExcerpt || '')
   const suggestedAction = sanitizeStrategyMemoryText(input.suggested_action || input.suggestedAction || '')
   let result = null
   await withTransaction(async run => {
@@ -1152,6 +1277,13 @@ export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, ac
       ...canonical, approved_version_id:periodReviewVersionId,
     })
     const currentLibrary = await ensureLibraryTx(run, strategy, { actor:input.actor })
+    const verified = validateStrategyMemoryConflictCandidate(input, {
+      strategyId:strategy.id,
+      strategyText:input.frozen_strategy_text ?? input.frozenStrategyText ?? strategyText(strategy),
+      memoryText:input.frozen_memory_text ?? input.frozenMemoryText ?? currentLibrary.content_text,
+      proposedExperiences:input.proposed_experiences ?? input.proposedExperiences,
+    })
+    const key = verified.conflict_key
     let conflict = await txOne(run,
       `SELECT * FROM strategy_memory_conflicts
         WHERE strategy_id = ? AND conflict_key = ? FOR UPDATE`, [strategy.id, key])
@@ -1160,18 +1292,40 @@ export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, ac
         `INSERT INTO strategy_memory_conflicts
           (strategy_id, conflict_key, conflict_category, conflict_summary, strategy_excerpt,
            suggested_change, evidence_count, alert_threshold, status, first_observed_at,
-           last_observed_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'observing', ?, ?, ?, ?)`,
-        [strategy.id, key, input.category || input.conflict_type || input.conflictType || 'general',
-          description, strategyExcerpt, suggestedAction, currentLibrary.conflict_alert_threshold,
-          beijingNow(), beijingNow(), beijingNow(), beijingNow()]
+           last_observed_at, created_at, updated_at, identity_version, conflict_kind,
+           strategy_rule_hash, canonical_lineage_key, verification_status, last_validated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'observing', ?, ?, ?, ?, ?, ?, ?, ?, 'matched', ?)`,
+        [strategy.id, key, verified.category,
+          description, verified.strategy_excerpt, suggestedAction, currentLibrary.conflict_alert_threshold,
+          beijingNow(), beijingNow(), beijingNow(), beijingNow(), verified.identity_version,
+          verified.conflict_kind, verified.strategy_rule_hash, verified.canonical_lineage_key, beijingNow()]
       )
       conflict = {
         id:Number(txResult(inserted).insertId || 0) || null,
-        strategy_id:Number(strategy.id), conflict_key:key, conflict_category:input.category || 'general',
-        conflict_summary:description, strategy_excerpt:strategyExcerpt, suggested_change:suggestedAction,
+        strategy_id:Number(strategy.id), conflict_key:key, conflict_category:verified.category,
+        conflict_summary:description, strategy_excerpt:verified.strategy_excerpt, suggested_change:suggestedAction,
         evidence_count:0, alert_threshold:currentLibrary.conflict_alert_threshold, status:'observing',
       }
+    }
+    let bindingId = null
+    if (verified.source_block_id) {
+      const now = beijingNow()
+      await run(`INSERT INTO strategy_memory_conflict_bindings
+        (conflict_id, strategy_id, strategy_version, library_version_no, library_content_hash,
+         memory_block_id, memory_block_hash, memory_excerpt, memory_claim_hash,
+         strategy_excerpt, strategy_rule_hash, location_status, detector_contract_version,
+         consistency_job_id, created_at, validated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'matched', 'v1', NULL, ?, ?)
+       ON DUPLICATE KEY UPDATE memory_excerpt = VALUES(memory_excerpt), memory_claim_hash = VALUES(memory_claim_hash),
+         strategy_excerpt = VALUES(strategy_excerpt), strategy_rule_hash = VALUES(strategy_rule_hash),
+         location_status = 'matched', validated_at = VALUES(validated_at), superseded_at = NULL`,
+      [conflict.id, strategy.id, Number(strategy.version || 1), currentLibrary.version_no, currentLibrary.content_hash,
+        verified.source_block_id, verified.source_block_hash, verified.memory_excerpt, verified.memory_claim_hash,
+        verified.strategy_excerpt, verified.strategy_rule_hash, now, now])
+      const binding = await txOne(run, `SELECT id FROM strategy_memory_conflict_bindings
+        WHERE conflict_id = ? AND strategy_version = ? AND library_version_no = ? AND memory_block_id = ? LIMIT 1`,
+      [conflict.id, Number(strategy.version || 1), currentLibrary.version_no, verified.source_block_id])
+      bindingId = Number(binding?.id || 0) || null
     }
     const occurrence = await txOne(run,
       `SELECT * FROM strategy_memory_conflict_occurrences
@@ -1184,11 +1338,15 @@ export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, ac
     const now = beijingNow()
     await run(
       `INSERT INTO strategy_memory_conflict_occurrences
-        (conflict_id, strategy_id, period_review_case_id, period_review_version_id, evidence_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+        (conflict_id, strategy_id, period_review_case_id, period_review_version_id, evidence_json, created_at,
+         binding_id, strategy_version, library_version_no, library_content_hash, memory_block_id,
+         memory_block_hash, memory_excerpt, conflict_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [conflict.id, strategy.id, periodReviewCaseId, periodReviewVersionId,
-        jsonText({ summary:description, strategy_excerpt:strategyExcerpt, suggested_change:suggestedAction,
-          source_refs:sourceRefs }), now]
+        jsonText({ summary:description, strategy_excerpt:verified.strategy_excerpt,
+          memory_excerpt:verified.memory_excerpt, suggested_change:suggestedAction, source_refs:sourceRefs }), now,
+        bindingId, Number(strategy.version || 1), currentLibrary.version_no, currentLibrary.content_hash,
+        verified.source_block_id, verified.source_block_hash, verified.memory_excerpt, verified.conflict_kind]
     )
     const count = Number(conflict.evidence_count || 0) + 1
     const currentStatus = String(conflict.status || 'observing')
@@ -1222,10 +1380,167 @@ export async function listStrategyMemoryConflicts(strategyIdOrInput, actorArg = 
   const input = requestWithActor(strategyIdOrInput, actorArg, options)
   const strategy = await getAuthorizedStrategy(input.strategyId, input.actor, 'manage', input)
   return await queryAll(
-    `SELECT * FROM strategy_memory_conflicts
-      WHERE strategy_id = ? ORDER BY CASE status WHEN 'attention_required' THEN 0 WHEN 'observing' THEN 1 ELSE 2 END, updated_at DESC, id DESC`,
+    `SELECT conflicts.*,
+            binding.id AS binding_id, binding.strategy_version AS binding_strategy_version,
+            binding.library_version_no AS binding_library_version_no,
+            binding.library_content_hash AS binding_library_content_hash,
+            binding.memory_block_id, binding.memory_block_hash, binding.memory_excerpt,
+            binding.location_status
+       FROM strategy_memory_conflicts conflicts
+       LEFT JOIN strategy_memory_conflict_bindings binding ON binding.id = (
+         SELECT MAX(candidate.id) FROM strategy_memory_conflict_bindings candidate
+          WHERE candidate.conflict_id = conflicts.id AND candidate.location_status = 'matched'
+       )
+      WHERE conflicts.strategy_id = ? ORDER BY CASE conflicts.status WHEN 'attention_required' THEN 0 WHEN 'observing' THEN 1 ELSE 2 END, conflicts.updated_at DESC, conflicts.id DESC`,
     [strategy.id]
   )
+}
+
+function conflictPresentationState(conflict) {
+  if (['resolved', 'dismissed'].includes(String(conflict.status || ''))) return null
+  if (String(conflict.location_status || '') !== 'matched') return null
+  if (String(conflict.status || '') === 'attention_required') return 'attention_required'
+  if (Number(conflict.evidence_count || 0) > 0) return 'observing'
+  return 'unverified'
+}
+
+export async function getStrategyMemoryLibraryPreview(strategyIdOrInput, actorArg = null, options = {}) {
+  const input = requestWithActor(strategyIdOrInput, actorArg, options)
+  let previewFlag = null
+  try {
+    previewFlag = await queryOne("SELECT strategy_memory_markdown_preview_enabled AS enabled FROM ai_feature_flags WHERE scope = 'global' AND user_id = 0 LIMIT 1")
+  } catch (error) {
+    // Keep old/partially-migrated test and rollback environments readable.
+    // The rollout flag only disables preview when it can be read explicitly.
+    previewFlag = null
+  }
+  if (previewFlag?.enabled != null && !Boolean(Number(previewFlag.enabled))) {
+    throw new Error('strategy_memory_markdown_preview_disabled')
+  }
+  const strategy = await getAuthorizedStrategy(input.strategyId, input.actor, 'manage', input)
+  const current = publicLibrary(await getLibraryRow(strategy.id) || strategyMemoryDefaults(strategy))
+  let library = current
+  const requestedVersion = input.version_no ?? input.versionNo
+  if (requestedVersion !== undefined && requestedVersion !== null && requestedVersion !== '') {
+    const versionNo = integer(requestedVersion, -1)
+    if (versionNo < 0) throw new Error('strategy_memory_revision_not_found')
+    if (versionNo !== Number(current.version_no)) {
+      const revision = await queryOne(`SELECT * FROM strategy_memory_library_revisions
+        WHERE strategy_id = ? AND version_no = ? ORDER BY id DESC LIMIT 1`, [strategy.id, versionNo])
+      if (!revision) throw new Error('strategy_memory_revision_not_found')
+      library = publicLibrary({ ...current, ...revision, strategy_id:strategy.id, version_no:versionNo })
+    }
+  }
+  const rendered = renderStrategyMemoryMarkdownPreview({ content_text:library.content_text,
+    namespace:'current_library' })
+  if (rendered.content_hash !== library.content_hash) throw new Error('strategy_memory_preview_hash_mismatch')
+  const conflicts = await listStrategyMemoryConflicts({ strategyId:strategy.id, actor:input.actor })
+  const byBlock = new Map()
+  for (const conflict of conflicts) {
+    if (Number(conflict.binding_strategy_version) !== Number(strategy.version)
+      || Number(conflict.binding_library_version_no) !== Number(library.version_no)
+      || String(conflict.binding_library_content_hash || '') !== String(library.content_hash || '')) continue
+    const state = conflictPresentationState(conflict)
+    if (!state || !conflict.memory_block_id) continue
+    const rows = byBlock.get(String(conflict.memory_block_id)) || []
+    rows.push(conflict)
+    byBlock.set(String(conflict.memory_block_id), rows)
+  }
+  const rank = { attention_required:3, observing:2, unverified:1 }
+  const blocks = rendered.blocks.map(block => {
+    const rows = byBlock.get(block.block_id) || []
+    const states = rows.map(conflictPresentationState).filter(Boolean)
+    const conflictState = states.sort((left, right) => rank[right] - rank[left])[0] || null
+    return { block_id:block.block_id, block_hash:block.block_hash, order:block.order,
+      html:block.html, conflict_state:conflictState, conflict_ids:rows.map(row => Number(row.id)),
+      conflicts:rows.map(row => ({ id:Number(row.id), status:row.status,
+        verification_status:row.verification_status, evidence_count:Number(row.evidence_count || 0),
+        alert_threshold:Number(row.alert_threshold || current.conflict_alert_threshold),
+        summary:row.conflict_summary, strategy_excerpt:row.strategy_excerpt,
+        memory_excerpt:row.memory_excerpt, suggested_change:row.suggested_change })) }
+  })
+  const summary = { attention_required:0, observing:0, unverified:0, location_stale:0 }
+  for (const conflict of conflicts) {
+    const state = conflictPresentationState(conflict)
+    if (state) summary[state] += 1
+    else if (String(conflict.verification_status || 'location_stale') === 'location_stale') summary.location_stale += 1
+  }
+  return { library_identity:{ strategy_id:Number(strategy.id), strategy_version:Number(strategy.version || 0),
+    version_no:Number(library.version_no), content_hash:library.content_hash },
+  render_schema_version:rendered.render_schema_version, blocks, summary }
+}
+
+export async function applyStrategyMemoryConsistencyFindings({ job, candidates } = {}) {
+  if (!job || !Array.isArray(candidates)) throw new Error('strategy_memory_consistency_result_invalid')
+  const strategy = await loadStrategy(job.strategy_id)
+  const now = beijingNow()
+  let matched = 0
+  await withTransaction(async run => {
+    const currentLibrary = await txOne(run,
+      'SELECT * FROM strategy_memory_libraries WHERE strategy_id = ? FOR UPDATE', [strategy.id])
+    if (!currentLibrary || Number(currentLibrary.version_no) !== Number(job.library_version_no)
+      || String(currentLibrary.content_hash || '') !== String(job.library_content_hash || '')
+      || Number(strategy.version || 0) !== Number(job.strategy_version)) {
+      throw new Error('strategy_memory_consistency_source_stale')
+    }
+    const foundKeys = []
+    for (const candidate of candidates) {
+      const verified = validateStrategyMemoryConflictCandidate({
+        ...candidate, conflict_target:'existing_memory',
+      }, { strategyId:strategy.id, strategyText:job.strategy_text_snapshot,
+        memoryText:job.memory_content_snapshot })
+      foundKeys.push(verified.conflict_key)
+      let conflict = await txOne(run, `SELECT * FROM strategy_memory_conflicts
+        WHERE strategy_id = ? AND conflict_key = ? FOR UPDATE`, [strategy.id, verified.conflict_key])
+      if (!conflict) {
+        const inserted = await run(`INSERT INTO strategy_memory_conflicts
+          (strategy_id, conflict_key, conflict_category, conflict_summary, strategy_excerpt,
+           suggested_change, evidence_count, alert_threshold, status, first_observed_at,
+           last_observed_at, created_at, updated_at, identity_version, conflict_kind,
+           strategy_rule_hash, canonical_lineage_key, detection_count, verification_status,
+           last_detected_at, last_validated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'observing', ?, ?, ?, ?, ?, ?, ?, ?, 1, 'matched', ?, ?)`,
+        [strategy.id, verified.conflict_key, verified.category,
+          sanitizeStrategyMemoryText(candidate.summary || ''), verified.strategy_excerpt,
+          sanitizeStrategyMemoryText(candidate.suggested_change || ''),
+          currentLibrary.conflict_alert_threshold, now, now, now, now, verified.identity_version,
+          verified.conflict_kind, verified.strategy_rule_hash, verified.canonical_lineage_key, now, now])
+        conflict = { id:Number(txResult(inserted).insertId), status:'observing', evidence_count:0 }
+      } else if (String(conflict.status || '') !== 'dismissed') {
+        await run(`UPDATE strategy_memory_conflicts SET conflict_summary = ?, strategy_excerpt = ?,
+          suggested_change = ?, detection_count = detection_count + 1, verification_status = 'matched',
+          last_detected_at = ?, last_validated_at = ?, updated_at = ? WHERE id = ?`,
+        [sanitizeStrategyMemoryText(candidate.summary || conflict.conflict_summary || ''), verified.strategy_excerpt,
+          sanitizeStrategyMemoryText(candidate.suggested_change || conflict.suggested_change || ''), now, now, now, conflict.id])
+      }
+      await run(`INSERT INTO strategy_memory_conflict_bindings
+        (conflict_id, strategy_id, strategy_version, library_version_no, library_content_hash,
+         memory_block_id, memory_block_hash, memory_excerpt, memory_claim_hash, strategy_excerpt,
+         strategy_rule_hash, location_status, detector_contract_version, consistency_job_id,
+         created_at, validated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'matched', ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE memory_excerpt = VALUES(memory_excerpt), memory_claim_hash = VALUES(memory_claim_hash),
+         strategy_excerpt = VALUES(strategy_excerpt), strategy_rule_hash = VALUES(strategy_rule_hash),
+         location_status = 'matched', detector_contract_version = VALUES(detector_contract_version),
+         consistency_job_id = VALUES(consistency_job_id), validated_at = VALUES(validated_at), superseded_at = NULL`,
+      [conflict.id, strategy.id, job.strategy_version, job.library_version_no, job.library_content_hash,
+        verified.source_block_id, verified.source_block_hash, verified.memory_excerpt,
+        verified.memory_claim_hash, verified.strategy_excerpt, verified.strategy_rule_hash,
+        String(job.detector_contract_version || 'strategy-memory-consistency-v1'), Number(job.id), now, now])
+      matched += 1
+    }
+    const active = txRows(await run(`SELECT id, conflict_key FROM strategy_memory_conflicts
+      WHERE strategy_id = ? AND verification_status = 'matched' FOR UPDATE`, [strategy.id]))
+    const staleIds = active.filter(row => !foundKeys.includes(String(row.conflict_key))).map(row => Number(row.id))
+    if (staleIds.length) {
+      await run(`UPDATE strategy_memory_conflicts SET verification_status = 'location_stale',
+        last_validated_at = ?, updated_at = ? WHERE id IN (${staleIds.map(() => '?').join(',')})`, [now, now, ...staleIds])
+      await run(`UPDATE strategy_memory_conflict_bindings SET location_status = 'location_stale',
+        superseded_at = ? WHERE conflict_id IN (${staleIds.map(() => '?').join(',')})
+        AND location_status = 'matched'`, [now, ...staleIds])
+    }
+  })
+  return { matched_count:matched }
 }
 
 export async function updateStrategyMemoryConflict(conflictIdOrInput, actorArg = null, payloadArg = null) {
@@ -1233,6 +1548,11 @@ export async function updateStrategyMemoryConflict(conflictIdOrInput, actorArg =
   const action = String(input.action || '').toLowerCase()
   if (!['resolve', 'dismiss', 'reopen'].includes(action)) throw new Error('strategy_memory_conflict_action_invalid')
   const conflict = await conflictForActor(input.conflict_id ?? input.conflictId ?? conflictIdOrInput, input.actor, input)
+  const expectedUpdatedAt = input.expected_updated_at ?? input.expectedUpdatedAt
+  if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== null
+    && String(expectedUpdatedAt) !== String(conflict.updated_at || '')) {
+    throw new Error('strategy_memory_conflict_version_conflict')
+  }
   const status = action === 'resolve' ? 'resolved' : action === 'dismiss' ? 'dismissed'
     : (Number(conflict.evidence_count || 0) >= Number(conflict.alert_threshold || STRATEGY_MEMORY_DEFAULT_CONFLICT_ALERT_THRESHOLD) ? 'attention_required' : 'observing')
   const now = beijingNow()
@@ -1240,11 +1560,13 @@ export async function updateStrategyMemoryConflict(conflictIdOrInput, actorArg =
   const result = await queryRun(
     `UPDATE strategy_memory_conflicts
         SET status = ?, resolution_note = ?, resolved_by_user_id = ?, resolved_at = ?, updated_at = ?
-      WHERE id = ?`,
+      WHERE id = ?${expectedUpdatedAt !== undefined && expectedUpdatedAt !== null ? ' AND updated_at = ?' : ''}`,
     [status, input.note || input.resolution_note || null, action === 'reopen' ? null : actorId,
-      action === 'reopen' ? null : now, now, conflict.id]
+      action === 'reopen' ? null : now, now, conflict.id,
+      ...(expectedUpdatedAt !== undefined && expectedUpdatedAt !== null ? [expectedUpdatedAt] : [])]
   )
-  if (!affected(result)) throw new Error('strategy_memory_conflict_not_found')
+  if (!affected(result)) throw new Error(expectedUpdatedAt !== undefined && expectedUpdatedAt !== null
+    ? 'strategy_memory_conflict_version_conflict' : 'strategy_memory_conflict_not_found')
   return { ...conflict, status, resolution_note:input.note || input.resolution_note || null,
     resolved_by_user_id:action === 'reopen' ? null : actorId, resolved_at:action === 'reopen' ? null : now }
 }
@@ -1316,6 +1638,24 @@ function compressionInput(inputOrStrategyId, actorArg = null, payloadArg = null)
   return { ...input, strategyId:input.strategyId ?? input.strategy_id }
 }
 
+function compressionJobCanKeepLibraryQueued(job, now) {
+  const status = String(job?.status || '')
+  const errorCode = String(job?.last_error_code || '')
+  const nonRetryable = STRATEGY_MEMORY_COMPRESSION_STATUS_UNKNOWN_ERROR_CODES.has(errorCode)
+    || STRATEGY_MEMORY_COMPRESSION_STALE_ERROR_CODES.has(errorCode)
+  // A live lease is already being processed; its original queue transition
+  // owns the library state.  Only an expired lease is claimable again and
+  // therefore eligible to restore a stale library status to queued.
+  if (status === 'leased') return Boolean(job.lease_expires_at && String(job.lease_expires_at) <= String(now))
+  if (status === 'queued') {
+    return Number(job.attempt_count || 0) < Number(job.max_attempts || 3) && !nonRetryable
+  }
+  if (status !== 'failed') return false
+  if (Number(job.attempt_count || 0) >= Number(job.max_attempts || 3)) return false
+  if (nonRetryable) return false
+  return !job.next_attempt_at || String(job.next_attempt_at) <= String(now)
+}
+
 export async function queueStrategyMemoryCompressionJob(inputOrStrategyId, actorArg = null, payloadArg = null) {
   const input = compressionInput(inputOrStrategyId, actorArg, payloadArg)
   const strategy = await getAuthorizedStrategy(input.strategyId, input.actor, input.serverOwned ? 'server_update' : 'manage', input)
@@ -1331,9 +1671,28 @@ export async function queueStrategyMemoryCompressionJob(inputOrStrategyId, actor
       sourceUpdateIds, sourceSetHash:input.source_set_hash ?? input.sourceSetHash,
       capacityChars:current.capacity_chars, targetRatio:current.compression_target_ratio,
       modelTaskId:input.model_task_id ?? input.modelTaskId,
+      readExisting:true,
     })
-    await run(`UPDATE strategy_memory_libraries SET compression_status = 'queued', updated_at = ? WHERE strategy_id = ?`, [beijingNow(), strategy.id])
-    result = { ...job, strategy_id:Number(strategy.id), trigger, source_version_no:sourceVersionNo, source_content_hash:sourceContentHash, status:'queued' }
+    const now = beijingNow()
+    const replayed = Boolean(job.existing)
+    const persistedStatus = replayed ? String(job.existing.status || 'status_unknown') : 'queued'
+    const markQueued = !replayed || compressionJobCanKeepLibraryQueued(job.existing, now)
+    const status = markQueued && ['failed', 'leased'].includes(persistedStatus) ? 'queued' : persistedStatus
+    if (markQueued) {
+      await run(`UPDATE strategy_memory_libraries SET compression_status = 'queued', updated_at = ? WHERE strategy_id = ?`, [now, strategy.id])
+    }
+    const persistedSourceVersionNo = replayed && job.existing.source_version_no != null
+      ? Number(job.existing.source_version_no) : sourceVersionNo
+    const persistedSourceContentHash = replayed && job.existing.source_content_hash
+      ? job.existing.source_content_hash : sourceContentHash
+    const persistedTrigger = replayed && job.existing.trigger_type
+      ? job.existing.trigger_type : trigger
+    const persistedTargetChars = replayed && job.existing.target_chars != null
+      ? Number(job.existing.target_chars) : job.targetChars
+    result = { id:job.id || Number(job.existing?.id) || null, sourceSetHash:job.sourceSetHash,
+      targetChars:persistedTargetChars, strategy_id:Number(strategy.id), trigger:persistedTrigger,
+      source_version_no:persistedSourceVersionNo, source_content_hash:persistedSourceContentHash, status,
+      created:replayed ? false : true, replayed, library_status_updated:markQueued }
   })
   return result
 }
@@ -1347,10 +1706,15 @@ export async function claimStrategyMemoryCompressionJob(input = {}) {
   let result = null
   await withTransaction(async run => {
     const now = beijingNow()
+    const nonRetryableErrorCodes = [
+      ...STRATEGY_MEMORY_COMPRESSION_STATUS_UNKNOWN_ERROR_CODES,
+      ...STRATEGY_MEMORY_COMPRESSION_STALE_ERROR_CODES,
+    ]
+    const retryableErrorClause = `COALESCE(last_error_code, '') NOT IN (${nonRetryableErrorCodes.map(() => '?').join(',')})`
     const where = jobId != null
-      ? `id = ? AND attempt_count < max_attempts AND COALESCE(last_error_code, '') <> 'provider_status_unknown'
+      ? `id = ? AND attempt_count < max_attempts AND ${retryableErrorClause}
           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`
-      : `attempt_count < max_attempts AND COALESCE(last_error_code, '') <> 'provider_status_unknown'
+      : `attempt_count < max_attempts AND ${retryableErrorClause}
           AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
           AND (model_task_id IS NULL OR NOT EXISTS (
             SELECT 1 FROM ai_model_tasks tasks WHERE tasks.task_id = strategy_memory_compression_jobs.model_task_id
@@ -1359,8 +1723,8 @@ export async function claimStrategyMemoryCompressionJob(input = {}) {
           ))
           AND (status = 'queued' OR status = 'failed' OR (status = 'leased' AND lease_expires_at < ?))`
     const params = jobId != null
-      ? [positiveId(jobId, 'strategy_memory_compression_job_not_found'), now]
-      : [now, now]
+      ? [positiveId(jobId, 'strategy_memory_compression_job_not_found'), ...nonRetryableErrorCodes, now]
+      : [...nonRetryableErrorCodes, now, now]
     const job = await txOne(run,
       `SELECT * FROM strategy_memory_compression_jobs WHERE ${where} ORDER BY id ASC LIMIT 1 FOR UPDATE`, params)
     if (!job) return

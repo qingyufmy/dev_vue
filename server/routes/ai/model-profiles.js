@@ -10,7 +10,7 @@ import { MODEL_PROVIDER_CAPABILITY_KEYS, MODEL_TOKEN_LIMIT_DEFAULTS,
 import { getEffectivePlan } from '../../membership.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
-export const USAGES = ['manual', 'model_compare', 'auto_private', 'auto_platform', 'review', 'memory_compression']
+export const USAGES = ['manual', 'model_compare', 'auto_private', 'auto_platform', 'review', 'memory_compression', 'memory_consistency']
 const MODEL_REQUEST_TIMEOUT_MIN_MS = 30000
 const MODEL_REQUEST_TIMEOUT_MAX_MS = 600000
 const MODEL_TOKEN_LIMIT_MAX = 2147483647
@@ -594,7 +594,8 @@ export async function beginModelUsage({ userId, profileId, credentialSource, usa
       daily_requests_per_user: 100,
       daily_tokens_per_user: 500000,
     }
-    const shareKey = `share_for_${usage === 'auto_private' ? 'auto' : usage}`
+    const shareUsage = usage === 'memory_consistency' ? 'memory_compression' : usage
+    const shareKey = `share_for_${shareUsage === 'auto_private' ? 'auto' : shareUsage}`
     if (!policy[shareKey]) throw new Error('platform_sharing_disabled')
     const allowedPlans = parseAllowedPlans(policy.allowed_plans)
     if (!allowedPlans.includes(getEffectivePlan(lockedUsers[0]))) throw new Error('platform_plan_not_allowed')
@@ -698,7 +699,7 @@ export async function checkPlatformQuota(userId, usage) {
 export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   if (!USAGES.includes(usage)) throw new Error(`invalid_usage:${usage}`)
 
-  if ((usage === 'review' || usage === 'memory_compression') && strategyId) {
+  if ((usage === 'review' || usage === 'memory_compression' || usage === 'memory_consistency') && strategyId) {
     const strategy = await queryOne(
       `SELECT id, scope, owner_user_id, model_profile_id, visibility_status, is_active
        FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL`,
@@ -870,7 +871,8 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
 
   // Step 2: Admin platform shared model
   const policy = await getPlatformUsagePolicy()
-  const shareKey = `share_for_${usage === 'auto_private' ? 'auto' : usage}`
+  const shareUsage = usage === 'memory_consistency' ? 'memory_compression' : usage
+  const shareKey = `share_for_${shareUsage === 'auto_private' ? 'auto' : shareUsage}`
   if (policy[shareKey]) {
     const platformModel = await getPlatformModelForSharing()
     if (platformModel && platformModel.api_key_encrypted && isPlatformShareableProvider(platformModel.provider)) {

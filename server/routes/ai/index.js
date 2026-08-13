@@ -24,6 +24,7 @@ import { synchronizeObserverSourceRuntime } from './observer-source-runtime.js'
 import { canManagePlatformAiContent, isObserverSourceAccount } from './platform-content-access.js'
 import { listReviewCases, getReviewCase, ensureReviewCaseForOutcome, getReviewAdminHealth } from './review-workflow.js'
 import { dismissStrategyMemoryConflict, getOrCreateStrategyMemoryLibrary,
+  getStrategyMemoryLibraryPreview,
   listStrategyMemoryConflicts, listStrategyMemoryLibraries, listStrategyMemoryLibraryRevisions,
   getStrategyMemoryCompressionJobStatus, getLatestStrategyMemoryCompressionJobStatus,
   queueStrategyMemoryCompressionJob, reopenStrategyMemoryConflict, resolveStrategyMemoryConflict,
@@ -56,7 +57,12 @@ import { getPositionManagementWorkerStatus } from './position-management-worker.
 import { createManualAnalysisJob, getManualAnalysisJob, cancelManualAnalysisJob,
   startManualAnalysisJobs } from './manual-analysis-jobs.js'
 import { startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker,
-  runStrategyMemoryCompressionOnce, recoverAbandonedStrategyMemoryCompressionModelTasks } from './strategy-memory-compression.js'
+  runStrategyMemoryCompressionOnce, recoverAbandonedStrategyMemoryCompressionModelTasks,
+  requestStrategyMemoryCompressionCycle } from './strategy-memory-compression.js'
+import { getLatestStrategyMemoryConsistencyJob, getStrategyMemoryConsistencyJob,
+  queueStrategyMemoryConsistencyCheck, requestStrategyMemoryConsistencyCycle,
+  runStrategyMemoryConsistencyOnce, startStrategyMemoryConsistencyWorker,
+  stopStrategyMemoryConsistencyWorker } from './strategy-memory-consistency.js'
 import { listEligibleManualTradeReviews, listManualTradeReviewStrategies, createManualTradeReview,
   listManualTradeReviews, getManualTradeReview, getManualTradeReviewJobStatus, editManualTradeReview,
   confirmManualTradeReview, retryManualTradeReview,
@@ -624,11 +630,17 @@ router.put('/ai/strategies/:id', authMiddleware, async (req, res) => {
       if (!existing || existing.scope !== 'platform') return res.status(404).json({ ok:false, error:'strategy_not_found' })
     }
     const strategy = await updateStrategy(Number(req.params.id), req.user.id, strategyRole, req.body || {})
+    let consistencyJob = null
+    try {
+      consistencyJob = await queueStrategyMemoryConsistencyCheck({ strategyId:strategy.id,
+        strategyVersion:strategy.version, triggerType:'strategy_save' })
+      if (consistencyJob.created) requestStrategyMemoryConsistencyCycle()
+    } catch (error) { console.error('[StrategyMemory] consistency queue after strategy save:', error.message) }
     const runtime_sync = await reconcileAiRuntime()
     await auditAiMutation(req, 'ai_strategy_updated', 'ai_strategy', strategy.id, {
       scope:strategy.scope, visibility_status:strategy.visibility_status, version:strategy.version,
     })
-    res.json({ ok:true, strategy, runtime_sync })
+    res.json({ ok:true, strategy, runtime_sync, consistency_job_id:consistencyJob?.id || null })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -1327,12 +1339,61 @@ router.get('/ai/strategy-memories/:strategyId', authMiddleware, async (req, res)
   } catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/strategy-memories/:strategyId/preview', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    const preview = await getStrategyMemoryLibraryPreview({ strategyId, actor:req.user,
+      version_no:req.query.version_no })
+    const consistencyCheck = await getLatestStrategyMemoryConsistencyJob({ strategyId,
+      strategyVersion:preview.library_identity.strategy_version,
+      libraryVersionNo:preview.library_identity.version_no })
+    res.json({ ok:true, ...preview, consistency_check:consistencyCheck || null })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/strategy-memories/:strategyId/consistency-checks', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    await getOrCreateStrategyMemoryLibrary({ strategyId, actor:req.user })
+    const job = await queueStrategyMemoryConsistencyCheck({ strategyId,
+      libraryVersionNo:req.body?.expected_version_no, triggerType:req.body?.trigger_type || 'manual_check',
+      forceNew:req.body?.force_new === true })
+    if (job.created) requestStrategyMemoryConsistencyCycle()
+    await auditAiMutation(req, 'strategy_memory_consistency_check_queued', 'ai_strategy', strategyId,
+      { job_id:job.id, created:job.created, replayed:job.replayed })
+    res.status(job.created ? 202 : 200).json({ ok:true, created:job.created, replayed:job.replayed, job })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategy-memories/:strategyId/consistency-checks/latest', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    await getOrCreateStrategyMemoryLibrary({ strategyId, actor:req.user })
+    res.json({ ok:true, job:await getLatestStrategyMemoryConsistencyJob({ strategyId }) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategy-memories/:strategyId/consistency-checks/:jobId', authMiddleware, async (req, res) => {
+  try {
+    const strategyId = Number(req.params.strategyId)
+    await getOrCreateStrategyMemoryLibrary({ strategyId, actor:req.user })
+    const job = await getStrategyMemoryConsistencyJob({ strategyId, jobId:Number(req.params.jobId) })
+    res.json({ ok:true, job })
+  } catch (error) { reviewError(res, error) }
+})
+
 router.put('/ai/strategy-memories/:strategyId', authMiddleware, async (req, res) => {
   try {
     const strategyId = Number(req.params.strategyId)
     const library = await saveStrategyMemoryLibrary({ strategyId, actor:req.user, ...(req.body || {}) })
+    let consistencyJob = null
+    try {
+      consistencyJob = await queueStrategyMemoryConsistencyCheck({ strategyId,
+        libraryVersionNo:library.version_no, triggerType:'manual_save' })
+      if (consistencyJob.created) requestStrategyMemoryConsistencyCycle()
+    } catch (error) { console.error('[StrategyMemory] consistency queue after save:', error.message) }
     await auditAiMutation(req, 'strategy_memory_library_updated', 'ai_strategy', strategyId, { version_no:library.version_no })
-    res.json({ ok:true, library })
+    res.json({ ok:true, library, consistency_job_id:consistencyJob?.id || null })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -1341,8 +1402,11 @@ router.post('/ai/strategy-memories/:strategyId/compress', authMiddleware, async 
   try {
     const strategyId = Number(req.params.strategyId)
     const job = await queueStrategyMemoryCompressionJob({ strategyId, actor:req.user, trigger:'manual' })
-    await auditAiMutation(req, 'strategy_memory_compression_queued', 'ai_strategy', strategyId, { job_id:job.id })
-    res.status(202).json({ ok:true, job })
+    if (job.created || job.library_status_updated) requestStrategyMemoryCompressionCycle()
+    const terminal = ['succeeded', 'succeeded_noop', 'failed'].includes(String(job.status || ''))
+    await auditAiMutation(req, terminal ? 'strategy_memory_compression_replayed' : 'strategy_memory_compression_queued',
+      'ai_strategy', strategyId, { job_id:job.id, status:job.status, created:job.created, replayed:job.replayed })
+    res.status(terminal ? 200 : 202).json({ ok:true, job })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -1371,8 +1435,14 @@ router.post('/ai/strategy-memories/:strategyId/revisions/:revisionId/restore', a
     const strategyId = Number(req.params.strategyId)
     const revisionId = Number(req.params.revisionId)
     const library = await restoreStrategyMemoryLibraryRevision({ strategyId, revisionId, actor:req.user, ...(req.body || {}) })
+    let consistencyJob = null
+    try {
+      consistencyJob = await queueStrategyMemoryConsistencyCheck({ strategyId,
+        libraryVersionNo:library.version_no, triggerType:'restore' })
+      if (consistencyJob.created) requestStrategyMemoryConsistencyCycle()
+    } catch (error) { console.error('[StrategyMemory] consistency queue after restore:', error.message) }
     await auditAiMutation(req, 'strategy_memory_library_restored', 'ai_strategy', strategyId, { revision_id:revisionId, version_no:library.version_no })
-    res.json({ ok:true, library })
+    res.json({ ok:true, library, consistency_job_id:consistencyJob?.id || null })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -1409,7 +1479,9 @@ router.delete('/ai/admin/platform-experience/:id', authMiddleware, async (req, r
 export { initAutoSchedulers, startManualAnalysisJobs, startHistoryCompareRecoveryWorker,
   startManualTradeReviewWorker, stopManualTradeReviewWorker,
   startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker,
-  runStrategyMemoryCompressionOnce, recoverAbandonedStrategyMemoryCompressionModelTasks }
+  runStrategyMemoryCompressionOnce, recoverAbandonedStrategyMemoryCompressionModelTasks,
+  startStrategyMemoryConsistencyWorker, stopStrategyMemoryConsistencyWorker,
+  runStrategyMemoryConsistencyOnce }
 
 export { mt5Bridge, platformRates } from './market-data.js'
 export { getPlatformMarketStatus } from './platform-market-data.js'

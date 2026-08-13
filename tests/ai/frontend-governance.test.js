@@ -740,11 +740,18 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).not.toContain('const shadowTotal = Number(retrieval.shadow_total || 0)')
     expect(app).toContain('api("/api/ai/strategy-memories")')
     expect(app).toContain('api(`/api/ai/strategy-memories/${state.selectedStrategyMemoryId}`)')
-    expect(app).toContain('完整记忆库（Markdown）')
+    expect(app).toContain('完整记忆库原文（Markdown）')
+    expect(app).toContain('data-strategy-memory-mode="preview"')
+    expect(app).toContain('/preview`')
+    expect(app).toContain('data-strategy-memory-conflict-only')
+    expect(app).toContain('resumeStrategyMemoryConsistencyPolling()')
+    expect(app).toContain('放弃未保存的记忆原文？')
     expect(css).toContain('.strategy-memory-editor textarea')
+    expect(css).toContain('.strategy-memory-preview-block.is-attention_required')
+    expect(css).toContain('.strategy-memory-preview-block.is-observing')
     const versions = [
-      html.match(/\/ai\/styles\.css\?v=([^"']+)/)?.[1],
-      html.match(/\/ai\/responsive\.css\?v=([^"']+)/)?.[1],
+      html.match(/\/ai\/styles\.css\?v=([^&"']+)/)?.[1],
+      html.match(/\/ai\/responsive\.css\?v=([^&"']+)/)?.[1],
       html.match(/\/ai\/app\.js\?v=([^&"']+)/)?.[1],
     ]
     expect(new Set(versions).size).toBe(1)
@@ -1656,5 +1663,27 @@ describe('route permissions and credential redaction', () => {
     expect(app).toContain('state.strategyMemoryCompressionJob = latestCompression.job || null')
     expect(adminApp).toContain('/compression-jobs-latest')
     expect(adminApp).toContain('state.platformMemoryCompressionJob=latestCompression.job||null')
+  })
+
+  it('keeps the administrator memory console preview-first and consistency-aware', () => {
+    expect(adminApp).toContain("const ADMIN_STRATEGY_MEMORY_MARKDOWN_LABEL = '完整记忆库（Markdown）'")
+    expect(adminApp).toContain('data-platform-memory-mode="preview"')
+    expect(adminApp).toContain('data-platform-memory-mode="source"')
+    expect(adminApp).toContain('data-platform-memory-conflict-only')
+    expect(adminApp).toContain('只看冲突')
+    expect(adminApp).toContain('/preview`')
+    expect(adminApp).toContain('/consistency-checks/latest')
+    expect(adminApp).toContain('/consistency-checks/${jobId}')
+    expect(adminApp).toContain('expected_updated_at')
+    expect(adminApp).toContain('document.hidden')
+    expect(adminApp).toContain('resumePlatformMemoryConsistencyPolling()')
+    expect(adminApp).toContain('strategy-memory-preview-block')
+    expect(adminCss).toContain('.strategy-memory-preview-block.is-attention_required')
+    expect(adminCss).toContain('.strategy-memory-preview-block.is-observing')
+    expect(adminCss).toContain('.strategy-memory-preview-block.is-location-stale')
+    expect(adminCss).toContain('.strategy-memory-preview-status.is-attention_required')
+    expect(adminCss).toContain('.strategy-memory-conflict.is-location-stale')
+    expect(adminHtml).toContain('20260812memory4')
+    expect(adminHtml).toContain('memory-preview1')
   })
 })

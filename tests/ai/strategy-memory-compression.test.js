@@ -217,4 +217,28 @@ describe('strategy memory compression worker', () => {
       taskKinds:['memory_compression'], nowUtcMs:100, limit:2,
     }))
   })
+
+  it('recovers a succeeded_noop business job with a stable source-version reference', async () => {
+    mocks.recoverAbandonedBusinessModelTasks.mockResolvedValue({ scanned:1, succeeded:1 })
+    mocks.queryOne.mockReset()
+    mocks.queryOne.mockResolvedValue({ id:11, strategy_id:5, status:'succeeded_noop', source_version_no:3,
+      result_revision_id:null, model_task_id:'task-11', attempt_count:1, max_attempts:3 })
+    await recoverAbandonedStrategyMemoryCompressionModelTasks({ nowUtcMs:100, limit:2 })
+    const inspect = mocks.recoverAbandonedBusinessModelTasks.mock.calls[0][0].inspectBusiness
+    const business = await inspect({ task_id:'task-11' })
+    expect(business).toMatchObject({ succeeded:true, resultRef:'strategy_memory:5:version:3' })
+    expect(business.resultRef).not.toContain('revision:null')
+  })
+
+  it('keeps the worker cycle single-flight and exposes an immediate wake path', () => {
+    const compression = readFileSync(new URL('../../server/routes/ai/strategy-memory-compression.js', import.meta.url), 'utf8')
+    const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
+    expect(compression).toContain('export function requestStrategyMemoryCompressionCycle()')
+    expect(compression).toContain('if (workerRunning || workerImmediate) return false')
+    expect(compression).toContain('while (workerWake)')
+    expect(compression).toContain('workerRunning = true')
+    expect(compression).toContain('workerRunning = false')
+    expect(routes).toContain('if (job.created || job.library_status_updated) requestStrategyMemoryCompressionCycle()')
+    expect(routes).toContain("terminal ? 'strategy_memory_compression_replayed' : 'strategy_memory_compression_queued'")
+  })
 })

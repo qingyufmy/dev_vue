@@ -22,6 +22,7 @@ import {
   sanitizeStrategyMemoryText,
   createStrategyMemoryInjectionLog,
 } from './strategy-memory-library.js'
+import { queueStrategyMemoryConsistencyCheck, requestStrategyMemoryConsistencyCycle } from './strategy-memory-consistency.js'
 import {
   buildStrategyMemorySourceManifest,
   semanticManifestHash,
@@ -413,6 +414,13 @@ export async function runStrategyMemoryCompressionOnce({ requestModel = requestJ
         ? `strategy_memory:${job.strategy_id}:revision:${applied.revision_id}`
         : `strategy_memory:${job.strategy_id}:job:${job.id}`
     await tracker.succeeded({ resultRef })
+    try {
+      const consistency = await queueStrategyMemoryConsistencyCheck({ strategyId:Number(job.strategy_id),
+        libraryVersionNo:Number(applied.library?.version_no || 0), triggerType:'compression' })
+      if (consistency.created) requestStrategyMemoryConsistencyCycle()
+    } catch (consistencyError) {
+      console.error(`[StrategyMemoryCompression job=${job.id}] consistency queue:`, safeError(consistencyError))
+    }
     return { claimed:true, status:applied.status || 'succeeded', strategyId:Number(job.strategy_id), jobId:Number(job.id), applied }
   } catch (error) {
     const code = String(error?.code || error?.message || 'strategy_memory_compression_failed').split(':')[0]
@@ -436,11 +444,25 @@ export async function runStrategyMemoryCompressionOnce({ requestModel = requestJ
 }
 
 async function inspectStrategyMemoryCompressionModelTask(task) {
-  const job = await queryOne(`SELECT id, strategy_id, status, model_task_id, attempt_count, max_attempts
+  const job = await queryOne(`SELECT id, strategy_id, status, source_version_no, result_revision_id,
+      model_task_id, attempt_count, max_attempts
       FROM strategy_memory_compression_jobs WHERE model_task_id = ? LIMIT 1`, [task.task_id])
   if (!job) return null
-  const succeeded = String(job.status) === 'succeeded'
-  return { job, succeeded, resultRef:succeeded ? `strategy_memory:${job.strategy_id}` : null }
+  const status = String(job.status || '')
+  const succeeded = status === 'succeeded' || status === 'succeeded_noop'
+  let resultRef = null
+  if (succeeded) {
+    const revisionId = Number(job.result_revision_id || 0)
+    const sourceVersionNo = Number(job.source_version_no)
+    if (revisionId > 0) resultRef = `strategy_memory:${job.strategy_id}:revision:${revisionId}`
+    else if (Number.isSafeInteger(sourceVersionNo) && sourceVersionNo >= 0) {
+      // A no-op deliberately creates no revision.  Its durable result is the
+      // frozen source version, which is stable across recovery and avoids the
+      // misleading `revision:null` reference used by the old reconciler.
+      resultRef = `strategy_memory:${job.strategy_id}:version:${sourceVersionNo}`
+    } else resultRef = `strategy_memory:${job.strategy_id}:job:${job.id}`
+  }
+  return { job, succeeded, resultRef }
 }
 
 async function transitionStrategyMemoryCompressionBusiness({ action, task, business, reason }) {
@@ -450,16 +472,16 @@ async function transitionStrategyMemoryCompressionBusiness({ action, task, busin
   if (action === 'requeued') {
     await queryRun(`UPDATE strategy_memory_compression_jobs SET status = 'queued', model_task_id = NULL,
       last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = ?
-      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed')`, [now, jobId, task.task_id])
+      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','succeeded_noop','failed')`, [now, jobId, task.task_id])
   } else if (action === 'status_unknown') {
     await queryRun(`UPDATE strategy_memory_compression_jobs SET status = 'failed',
       last_error_code = 'provider_status_unknown', lease_token = NULL, lease_expires_at = NULL,
-      updated_at = ? WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed')`, [now, jobId, task.task_id])
+      updated_at = ? WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','succeeded_noop','failed')`, [now, jobId, task.task_id])
   } else if (action === 'stale') {
     await queryRun(`UPDATE strategy_memory_compression_jobs SET status = 'failed',
       last_error_code = ?, lease_token = NULL, lease_expires_at = NULL,
       completed_at = COALESCE(completed_at, ?), updated_at = ?
-      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed')`,
+      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','succeeded_noop','failed')`,
     [String(reason || 'model_task_recovery_stale').slice(0, 128), now, now, jobId, task.task_id])
   }
 }
@@ -473,20 +495,39 @@ export async function recoverAbandonedStrategyMemoryCompressionModelTasks({ nowU
 }
 
 let workerTimer = null
+let workerRunning = false
+let workerWake = false
+let workerImmediate = null
+
+export function requestStrategyMemoryCompressionCycle() {
+  workerWake = true
+  if (workerRunning || workerImmediate) return false
+  workerImmediate = setImmediate(async () => {
+    workerImmediate = null
+    if (workerRunning) return
+    workerRunning = true
+    try {
+      while (workerWake) {
+        workerWake = false
+        await recoverAbandonedStrategyMemoryCompressionModelTasks()
+        await runStrategyMemoryCompressionOnce()
+      }
+    } catch (error) {
+      console.error('[StrategyMemoryCompression] cycle failed:', safeError(error))
+    } finally {
+      workerRunning = false
+      if (workerWake) requestStrategyMemoryCompressionCycle()
+    }
+  })
+  return true
+}
 
 export function startStrategyMemoryCompressionWorker(intervalMs = STRATEGY_MEMORY_COMPRESSION_DEFAULT_INTERVAL_MS) {
   if (workerTimer) return false
-  const cycle = async () => {
-    try {
-      await recoverAbandonedStrategyMemoryCompressionModelTasks()
-      await runStrategyMemoryCompressionOnce()
-    } catch (error) {
-      console.error('[StrategyMemoryCompression] cycle failed:', safeError(error))
-    }
-  }
-  workerTimer = setInterval(() => { void cycle() }, Math.max(5_000, Number(intervalMs) || STRATEGY_MEMORY_COMPRESSION_DEFAULT_INTERVAL_MS))
+  workerTimer = setInterval(requestStrategyMemoryCompressionCycle,
+    Math.max(5_000, Number(intervalMs) || STRATEGY_MEMORY_COMPRESSION_DEFAULT_INTERVAL_MS))
   workerTimer.unref?.()
-  void cycle()
+  requestStrategyMemoryCompressionCycle()
   return true
 }
 
@@ -494,5 +535,8 @@ export function stopStrategyMemoryCompressionWorker() {
   if (!workerTimer) return false
   clearInterval(workerTimer)
   workerTimer = null
+  if (workerImmediate) clearImmediate(workerImmediate)
+  workerImmediate = null
+  workerWake = false
   return true
 }

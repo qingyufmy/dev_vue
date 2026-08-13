@@ -6,6 +6,7 @@ const TASK_POLICIES = Object.freeze({
   monthly_review_merge:{ attemptMs:20 * 60_000, taskMs:6 * 60 * 60_000 },
   model_compare:{ attemptMs:15 * 60_000, taskMs:24 * 60 * 60_000 },
   memory_compression:{ attemptMs:15 * 60_000, taskMs:60 * 60_000 },
+  strategy_memory_consistency:{ attemptMs:15 * 60_000, taskMs:60 * 60_000 },
 })
 
 export function modelTaskPolicy(taskKind) {

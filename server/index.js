@@ -39,7 +39,8 @@ import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON, getRedis } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker, startManualAnalysisJobs,
   startHistoryCompareRecoveryWorker, startManualTradeReviewWorker, stopManualTradeReviewWorker,
-  startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker } from './routes/ai/index.js'
+  startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker,
+  startStrategyMemoryConsistencyWorker, stopStrategyMemoryConsistencyWorker } from './routes/ai/index.js'
 import { recoverAbandonedAutoInferenceTasks } from './routes/ai/model-task-runtime.js'
 import { recoverAbandonedPeriodReviewModelTasks } from './routes/ai/period-review.js'
 import { startOrderIntentReconciler, stopOrderIntentReconciler } from './routes/ai/order-intents.js'
@@ -396,6 +397,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const notificationStop = stopNotificationCenterWorker()
     const manualTradeReviewStop = stopManualTradeReviewWorker()
     const strategyMemoryCompressionStop = stopStrategyMemoryCompressionWorker()
+    const strategyMemoryConsistencyStop = stopStrategyMemoryConsistencyWorker()
     clearShutdownTimers()
 
     await Promise.all([
@@ -405,6 +407,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
       waitForShutdownTask(notificationStop, 'notification center worker', timeout),
       waitForShutdownTask(manualTradeReviewStop, 'manual trade review worker', timeout),
       Promise.resolve(strategyMemoryCompressionStop),
+      Promise.resolve(strategyMemoryConsistencyStop),
     ])
 
     // Stop accepting HTTP work only after scheduler rounds have been fenced;
@@ -514,6 +517,7 @@ installGracefulShutdownHandlers()
   startAdminPositionProtectionWorker()
   startPeriodReviewWorker()
   startStrategyMemoryCompressionWorker()
+  startStrategyMemoryConsistencyWorker()
   startManualTradeReviewWorker()
   startManualAnalysisJobs()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))

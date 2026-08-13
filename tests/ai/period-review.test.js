@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'fs'
+import crypto from 'node:crypto'
 
 const periodReviewDb = vi.hoisted(() => ({
   queryAll:vi.fn(), queryOne:vi.fn(), queryRun:vi.fn(), withTransaction:vi.fn(),
@@ -16,6 +17,7 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
   periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus } from '../../server/routes/ai/period-review.js'
+import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -83,6 +85,57 @@ describe('period review model attempt accounting', () => {
     expect(periodReviewDb.queryRun).toHaveBeenCalledTimes(1)
     expect(periodReviewDb.queryRun.mock.calls[0][0]).toContain('attempt_count = attempt_count + 1')
   })
+})
+
+describe('period review memory task boundary', () => {
+  const emptyHash = crypto.createHash('sha256').update('', 'utf8').digest('hex')
+  const baseJob = { id:9, period_case_id:42, strategy_id:3, user_id:7, user_role:'user', memory_library_version_no:0,
+    memory_library_content_hash:emptyHash }
+
+  it('freezes version/hash without memory body for daily, chunk and merge task contexts', () => {
+    for (const extras of [
+      { period_case_id:42 },
+      { period_review_job_id:9, checkpoint_id:2, chunk_index:0 },
+      { period_case_id:42, merge:true },
+    ]) {
+      const context = buildPeriodReviewModelTaskFrozenContext(baseJob, extras)
+      expect(context).toMatchObject({ ...extras, memory_library_version_no:0, memory_library_content_hash:emptyHash })
+      expect(Object.hasOwn(context, 'memory_library_content_text')).toBe(false)
+    }
+  })
+
+  it('accepts empty v0 memory and reuses an existing task/case log without insert', async () => {
+    periodReviewDb.queryOne.mockResolvedValueOnce({ id:77, model_task_id:'task-1' })
+    const createLog = vi.fn()
+    const result = await __testEnsurePeriodReviewStrategyMemoryInjectionLog(baseJob,
+      { library:{ version_no:0, content_hash:emptyHash, content_text:'' } }, 'daily_review', 'task-1', {
+        createLog, findExisting:periodReviewDb.queryOne,
+      })
+    expect(result).toEqual({ id:77, model_task_id:'task-1' })
+    expect(createLog).not.toHaveBeenCalled()
+    expect(periodReviewDb.queryOne).toHaveBeenCalledWith(expect.stringContaining('strategy_memory_injection_logs'),
+      [3, 0, emptyHash, 'daily_review', 42, 'task-1'])
+  })
+
+  it('fails closed on an invalid injection snapshot', async () => {
+    periodReviewDb.queryOne.mockClear()
+    await expect(__testEnsurePeriodReviewStrategyMemoryInjectionLog(baseJob,
+      { library:{ version_no:0, content_hash:'bad', content_text:'' } }, 'daily_review', 'task-2'))
+      .rejects.toThrow('period_review_memory_snapshot_invalid')
+    expect(periodReviewDb.queryOne).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when creating a new injection row fails', async () => {
+    const createLog = vi.fn().mockRejectedValue(new Error('injection_write_failed'))
+    const findExisting = vi.fn().mockResolvedValue(null)
+    await expect(__testEnsurePeriodReviewStrategyMemoryInjectionLog(baseJob,
+      { library:{ version_no:0, content_hash:emptyHash, content_text:'' } }, 'daily_review', 'task-3', {
+        createLog, findExisting,
+      })).rejects.toThrow('injection_write_failed')
+    expect(findExisting).toHaveBeenCalledTimes(1)
+    expect(createLog).toHaveBeenCalledTimes(1)
+  })
+
 })
 
 describe('period review model-task recovery and retry', () => {
@@ -463,6 +516,12 @@ describe('daily review model boundary', () => {
       text:'经验', category:'general',
     }] }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }))
       .toThrow('strategy_memory_source_ref_invalid')
+    expect(() => validateDailyReviewContent({ ...base, strategy_conflicts:[{
+      conflict_target:'existing_memory', category:'invented', summary:'冲突',
+      strategy_excerpt:'策略原文', memory_excerpt:'记忆原文', source_refs:['outcome:1'],
+    }] }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }, {
+      strategyText:'策略原文', memoryText:'记忆原文',
+    })).toThrow('strategy_memory_conflict_category_invalid')
   })
 })
 
@@ -783,6 +842,8 @@ describe('period review runtime integration', () => {
     expect(periodReview).toContain('cases.strategy_compatibility_hash IS NOT NULL')
     expect(periodReview).toContain('must not silently')
     expect(periodReview).toContain('runPeriodReviewDerivationOnce')
+    expect(periodReview).toContain("triggerType:'review_merge'")
+    expect(periodReview).toContain('requestStrategyMemoryConsistencyCycle()')
     expect(periodReview).toContain('monthlyReviewSourceHash')
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
   })

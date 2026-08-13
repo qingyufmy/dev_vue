@@ -106,7 +106,8 @@ describe('inference workspace V2 contract', () => {
     expect(app).not.toContain('data-platform-experience-action="delete"')
     expect(app).toContain('function renderStrategyMemoryLibrary()')
     expect(app).toContain('data-strategy-memory-restore')
-    expect(app).toContain('完整记忆库（Markdown）')
+    expect(app).toContain('完整记忆库原文（Markdown）')
+    expect(app).toContain('data-strategy-memory-mode="preview"')
   })
 
   it('renders pending cancellation outcomes in signal details', () => {
