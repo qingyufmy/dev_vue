@@ -6,6 +6,7 @@
 import { queryOne, queryAll, queryRun, withConnection, withTransaction, beijingNow } from './db.js'
 import crypto from 'node:crypto'
 import { terminalOffsetFromClockPairs } from './routes/ai/utils.js'
+import { sanitizeLegacyStrategyMemoryContent } from './routes/ai/strategy-memory-legacy.js'
 
 export function applyPendingLifecycleSchema(schema) {
   return {
@@ -5996,6 +5997,94 @@ const migrations = [
         'KEY idx_strategy_memory_binding_snapshot (strategy_id, strategy_version, library_version_no, location_status)')
       await addIndex('strategy_memory_consistency_jobs', 'idx_strategy_memory_consistency_claim',
         'KEY idx_strategy_memory_consistency_claim (status, lease_expires_at, next_attempt_at, updated_at)')
+    }
+  },
+  {
+    id: '184_strategy_memory_legacy_applicability_cleanup',
+    async up() {
+      // Migration 181 imported applicability into the Markdown body. Repair
+      // only rows that still contain recognizable structured residue. Every
+      // correction gets a new revision; old revisions remain untouched for
+      // audit and restore. No derivation/compression job is retried here.
+      const hash = value => crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex')
+      const rowsOf = raw => Array.isArray(raw?.[0]) ? raw[0] : []
+      const resultOf = raw => Array.isArray(raw) ? (raw[0] || {}) : (raw || {})
+      const candidates = await queryAll(`SELECT lib.strategy_id, lib.content_text, lib.content_hash, lib.version_no
+        FROM strategy_memory_libraries lib
+       WHERE lib.content_text IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM strategy_memory_library_revisions imported
+            WHERE imported.strategy_id = lib.strategy_id
+              AND imported.version_no <= lib.version_no
+              AND imported.change_reason = 'legacy_import'
+         )
+       ORDER BY lib.strategy_id`)
+      for (const candidate of candidates) {
+        if (!sanitizeLegacyStrategyMemoryContent(candidate.content_text || '').changed) continue
+        await withTransaction(async run => {
+          const locked = rowsOf(await run(
+            'SELECT * FROM strategy_memory_libraries WHERE strategy_id = ? FOR UPDATE', [candidate.strategy_id]))[0]
+          if (!locked) return
+          const cleaned = sanitizeLegacyStrategyMemoryContent(locked.content_text || '')
+          if (!cleaned.changed) return
+          if (sanitizeLegacyStrategyMemoryContent(cleaned.content).changed) {
+            throw new Error('strategy_memory_legacy_cleanup_validation_failed')
+          }
+          const capacity = Number(locked.capacity_chars || 120000)
+          const charCount = [...cleaned.content].length
+          if (!Number.isSafeInteger(capacity) || capacity <= 0 || charCount > capacity) {
+            throw new Error('strategy_memory_legacy_cleanup_capacity_exceeded')
+          }
+          const contentHash = hash(cleaned.content)
+          const previousVersion = Number(locked.version_no || 0)
+          const nextVersion = previousVersion + 1
+          const previousHash = String(locked.content_hash || hash(locked.content_text || ''))
+          const existingRevision = rowsOf(await run(
+            `SELECT id, content_hash, content_text FROM strategy_memory_library_revisions
+              WHERE strategy_id = ? AND version_no = ? LIMIT 1 FOR UPDATE`,
+            [locked.strategy_id, nextVersion]))[0]
+          let revisionId = Number(existingRevision?.id || 0) || null
+          if (existingRevision) {
+            if (String(existingRevision.content_hash || '') !== contentHash
+                || String(existingRevision.content_text || '') !== cleaned.content) {
+              throw new Error('strategy_memory_legacy_cleanup_revision_conflict')
+            }
+          } else {
+            const revision = resultOf(await run(`INSERT INTO strategy_memory_library_revisions
+              (strategy_id, version_no, change_reason, source_type, source_id, content_text,
+               content_hash, char_count, estimated_token_count, actor_user_id,
+               source_metadata_json, created_at)
+             VALUES (?, ?, 'legacy_applicability_cleanup', 'migration', NULL, ?, ?, ?, ?, NULL, ?, ?)`,
+            [locked.strategy_id, nextVersion, cleaned.content, contentHash, charCount,
+              cleaned.content ? Math.max(1, Math.ceil(Buffer.byteLength(cleaned.content, 'utf8') / 4)) : 0,
+              JSON.stringify({ migration_id:'184_strategy_memory_legacy_applicability_cleanup',
+                cleanup_contract:'strategy-memory-legacy-v1', removed_items:cleaned.removed,
+                previous_version_no:previousVersion, previous_content_hash:previousHash }), beijingNow()]))
+            revisionId = Number(revision.insertId || 0) || null
+            if (!revisionId) throw new Error('strategy_memory_legacy_cleanup_revision_create_failed')
+          }
+          const updated = resultOf(await run(`UPDATE strategy_memory_libraries
+            SET content_text = ?, version_no = ?, content_hash = ?, char_count = ?,
+                estimated_token_count = ?, updated_at = ?
+            WHERE strategy_id = ? AND version_no = ? AND content_hash = ?`,
+          [cleaned.content, nextVersion, contentHash, charCount,
+            cleaned.content ? Math.max(1, Math.ceil(Buffer.byteLength(cleaned.content, 'utf8') / 4)) : 0,
+            beijingNow(), locked.strategy_id, previousVersion, previousHash]))
+          if (Number(updated.affectedRows ?? updated.changes ?? 0) !== 1) {
+            // A concurrent writer may have already completed the same repair.
+            // Re-read under the migration lock and leave it untouched if the
+            // durable current row is now clean; never create a second revision.
+            const latest = rowsOf(await run(
+              'SELECT content_text FROM strategy_memory_libraries WHERE strategy_id = ? LIMIT 1', [locked.strategy_id]))[0]
+            if (!latest || sanitizeLegacyStrategyMemoryContent(latest.content_text || '').changed) {
+              throw new Error('strategy_memory_legacy_cleanup_library_cas_failed')
+            }
+          }
+          // Keep this local variable intentionally referenced in the audit path
+          // above; the migration does not enqueue or mutate any job row.
+          void revisionId
+        })
+      }
     }
   }
 ]
