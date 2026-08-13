@@ -1684,7 +1684,7 @@ describe('route permissions and credential redaction', () => {
     expect(adminCss).toContain('.strategy-memory-preview-status.is-attention_required')
     expect(adminCss).toContain('.strategy-memory-conflict.is-location-stale')
     expect(adminHtml).toContain('20260812memory4')
-    expect(adminHtml).toContain('memory-workbench2')
+    expect(adminHtml).toContain('memory-workbench3')
   })
 
   it('keeps strategy memory document workbenches preview-first and accessible in both consoles', () => {
@@ -1697,17 +1697,24 @@ describe('route permissions and credential redaction', () => {
       expect(source).toContain('<section class="strategy-memory-document"')
       expect(source).not.toContain('<main class="strategy-memory-document"')
       expect(source).toContain('aria-live')
+      expect(source).toContain('strategy-memory-filter-toggle')
+      expect(source).toContain('strategy-memory-filter-control')
     }
+    expect(app).toContain('data-strategy-memory-conflict-only')
+    expect(adminApp).toContain('data-platform-memory-conflict-only')
     for (const source of [css, adminCss]) {
       expect(source).toContain('.strategy-memory-sidebar')
       expect(source).toContain('@media (max-width:1040px)')
       expect(source).toContain('@media (max-width:720px)')
       expect(source).toContain('@media (max-width:375px)')
       expect(source).toContain('prefers-reduced-motion:reduce')
+      expect(source).toContain('.strategy-memory-preview-block + .strategy-memory-preview-block')
+      expect(source).toContain('.strategy-memory-revisions li .text-button')
+      expect(source).toContain('.strategy-memory-side-card > button')
     }
     expect(app).toContain('data-lucide="triangle-alert"')
     expect(adminApp).toContain("attention_required: ['triangle-alert'")
     expect(html).toContain('20260812memory4')
-    expect(html).toContain('memory-workbench2')
+    expect(html).toContain('memory-workbench3')
   })
 })
