@@ -57,11 +57,10 @@ describe('signal presentation', () => {
   it('does not present an unavailable confidence sentinel as a measured zero percent', () => {
     expect(app).toContain('if (rounded === 0) return { value: 0, label: "不可用" }')
   })
-  it('renders localized server diagnostics without exposing internal reason details', () => {
-    expect(app).toContain('function renderDecisionDiagnostics(diagnostics)')
-    expect(app).toContain('行情连续性未确认')
-    expect(app).toContain('策略入场条件未满足')
-    expect(app).toContain('模型主动观望')
+  it('does not render server diagnostics in signal details', () => {
+    expect(app).not.toContain('function renderDecisionDiagnostics(diagnostics)')
+    expect(app).not.toContain('数据与系统状态')
+    expect(app).not.toContain('旧版系统诊断')
     expect(app).not.toContain('diagnostics.reason_details')
   })
   it('normalizes model fields and limits untrusted arrays', () => {

@@ -904,11 +904,14 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('const modelDecision = signal?.model_decision || stored.model_decision || {}')
     expect(app).toContain('function renderExecutionValidation(validation)')
     expect(app).toContain('>执行校验</small>')
-    expect(app).toContain('>数据与系统状态</span>')
+    expect(app).not.toContain('数据与系统状态')
+    expect(app).not.toContain('旧版系统诊断')
+    expect(app).not.toContain('renderDecisionDiagnostics')
     expect(app).not.toContain('structure_unconfirmed:"缠论结构尚未确认"')
-    expect(css).toContain('.analysis-system-status')
+    expect(css).not.toContain('.analysis-system-status')
+    expect(css).not.toContain('.decision-diagnostics')
     expect(css).toContain('.execution-validation.ineligible')
-    expect(html).toContain('20260813strategy-authority1')
+    expect(html).toContain('no-legacy-diagnostics1')
   })
 
   it('runs administrator model comparison from immutable signal snapshots', () => {

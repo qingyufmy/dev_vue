@@ -9112,7 +9112,6 @@ function renderSignalMonitorDetails(signal) {
         </div>
       </section>
       ${renderExecutionValidation(decision.executionValidation)}
-      ${renderDecisionDiagnostics(decision.diagnostics)}
       <section class="monitor-surface signal-monitor-targets">
         <div class="monitor-section-heading"><span>止盈候选</span><small>${escapeHtml(recommendedTierLabel)}</small></div>
         <div>${[1, 2, 3].map(tier => `<span class="${takeProfit.tier === tier ? "selected" : ""} ${takeProfit.recommendedTier === tier ? "recommended" : ""}"><small>TP${tier}</small><strong class="num">${escapeHtml(priceDisplay(signal[`take_profit_${tier}_price`]))}</strong></span>`).join("")}</div>
@@ -9340,9 +9339,6 @@ function signalDecision(signal) {
   const bullish = Number(modelDecision.bullish_score ?? signal?.bullish_score ?? stored.bullish_score);
   const bearish = Number(modelDecision.bearish_score ?? signal?.bearish_score ?? stored.bearish_score);
   const experienceUsage = signal?.experience_usage || stored.experience_usage || {};
-  const diagnostics = signal?.decision_diagnostics || stored.decision_diagnostics || null;
-  const hasCurrentModelDecision = modelDecision && typeof modelDecision === "object"
-    && Object.keys(modelDecision).length > 0;
   const hasDirectionBias = Number.isFinite(bullish) && Number.isFinite(bearish) && bullish >= 0 && bearish >= 0 && bullish + bearish > 0;
   const total = hasDirectionBias ? bullish + bearish : 0;
   return {
@@ -9356,41 +9352,8 @@ function signalDecision(signal) {
     bearishScore: hasDirectionBias ? Math.round(bearish / total * 1000) / 10 : null,
     candidateEntry: signal?.candidate_entry || stored.candidate_entry || null,
     experienceUsage,
-    diagnostics: diagnostics && typeof diagnostics === "object"
-      ? { ...diagnostics, legacy_system_diagnostics:!hasCurrentModelDecision }
-      : null,
     executionValidation:signal?.execution_validation || stored.execution_validation || null,
   };
-}
-
-function renderDecisionDiagnostics(diagnostics) {
-  if (!diagnostics || typeof diagnostics !== "object") return "";
-  const labels = {
-    market_data_unreliable:"行情连续性未确认",
-    strategy_entry_conditions_unmet:"策略入场条件未满足",
-    risk_constraint:"风险约束未满足",
-    model_hold:"模型主动观望",
-    structure_unconfirmed:"旧版结构状态",
-    timeframe_direction_conflict:"旧版周期方向状态",
-  };
-  const originLabels = {
-    model:"模型原始结论",
-    schema_normalized:"服务端结构校验",
-    constraint_engine:"策略约束引擎",
-  };
-  const reasons = [...new Set((Array.isArray(diagnostics.contributing_reasons) ? diagnostics.contributing_reasons : [])
-    .map(reason => labels[String(reason || "").toLowerCase()]).filter(Boolean))];
-  const timeframes = [...new Set((Array.isArray(diagnostics.affected_timeframes) ? diagnostics.affected_timeframes : [])
-    .map(value => String(value || "").toUpperCase()).filter(value => /^(?:M1|M5|M15|M30|H1|H4|D1|W1|MN1)$/.test(value)))];
-  const origin = diagnostics.legacy_system_diagnostics === true
-    ? "旧版系统诊断"
-    : originLabels[String(diagnostics.decision_origin || "").toLowerCase()] || "系统诊断";
-  if (!reasons.length && !timeframes.length && String(diagnostics.decision_origin || "").toLowerCase() === "model") return "";
-  return `<section class="decision-diagnostics" aria-label="数据与系统状态">
-    <div class="decision-diagnostics-head"><span><i data-lucide="database-zap" size="15"></i>数据与系统状态</span><small>${escapeHtml(origin)}</small></div>
-    ${reasons.length ? `<div class="decision-diagnostics-reasons">${reasons.map(reason => `<span>${escapeHtml(reason)}</span>`).join("")}</div>` : ""}
-    ${timeframes.length ? `<p>涉及周期：${escapeHtml(timeframes.join(" / "))}</p>` : ""}
-  </section>`;
 }
 
 function renderExecutionValidation(validation) {
@@ -10255,10 +10218,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>
       <section><div class="analysis-section-title"><i data-lucide="triangle-alert" size="15"></i>市场风险</div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
     </div>
-    <div class="analysis-system-status">
-      ${renderExecutionValidation(decision.executionValidation)}
-      ${renderDecisionDiagnostics(decision.diagnostics)}
-    </div>
+    ${renderExecutionValidation(decision.executionValidation)}
     ${renderExperienceUsage(signal, decision.experienceUsage)}
     ${(decision.trigger || decision.invalidation) ? `<div class="decision-conditions">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</div>` : ""}
     ${inferenceChartShell(signal)}
