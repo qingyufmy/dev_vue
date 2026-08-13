@@ -112,7 +112,7 @@ describe('isAutoSchedulerRunning', () => {
 })
 
 describe('execution validation delivery gate', () => {
-  it('does not create a shared delivery row for explicit ineligible output', () => {
+  it('keeps an explicit ineligible conclusion visible but terminally skipped', () => {
     const rows = __schedulerTest.buildSignalDeliveryRows({
       signalId:10, userIds:[7], onlineUserIds:new Set([7]), promptTypeId:3, symbol:'XAUUSD',
       createdAt:'2026-08-13 12:00:00', signalType:'buy', pendingAction:'none',
@@ -121,7 +121,40 @@ describe('execution validation delivery gate', () => {
         validation:{ status:'ineligible', eligible:false, reason_codes:['strategy_blocked'] },
       },
     })
-    expect(rows).toEqual([])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      userId:7,
+      deliveryStatus:'delivered',
+      executionStatus:'skipped',
+    })
+    expect(JSON.parse(rows[0].executionResult)).toMatchObject({
+      status:'skipped',
+      reason:'execution_validation_ineligible',
+      execution_validation:{ status:'ineligible', eligible:false, reason_codes:['strategy_blocked'] },
+      history_available:true,
+    })
+  })
+
+  it('keeps malformed execution validation visible but terminally skipped', () => {
+    const rows = __schedulerTest.buildSignalDeliveryRows({
+      signalId:12, userIds:[7], onlineUserIds:new Set(), promptTypeId:3, symbol:'XAUUSD',
+      createdAt:'2026-08-13 12:00:00', signalType:'sell', pendingAction:'none',
+      executionValidation:{
+        explicit:true,
+        validation:{ status:'invalid_output', eligible:false, reason_codes:['execution_validation_status_invalid'] },
+      },
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ deliveryStatus:'stored_offline', executionStatus:'skipped' })
+    expect(JSON.parse(rows[0].executionResult).execution_validation.status).toBe('invalid_output')
+  })
+
+  it('does not make an ineligible delivery actionable during recovery', () => {
+    const result = __schedulerTest.signalDeliveryRecoveryActionable(
+      { signal_type:'buy' },
+      { execution_validation:{ status:'ineligible', eligible:false, reason_codes:['strategy_blocked'] } },
+    )
+    expect(result).toMatchObject({ actionable:false, reason:'execution_validation_ineligible' })
   })
 
   it('keeps legacy signals recoverable', () => {

@@ -2443,8 +2443,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     // and all per-user deliveries.
     const executionValidation = readExecutionValidation(signal)
     const st = autoSchedulerState[key]
-    const allSubscribers = executionValidation.validation.eligible === true
-      ? (st?.subscribers || new Set()) : new Set()
+    // Persist and publish every successful model conclusion to the frozen
+    // subscriber set.  Execution eligibility is an independent fail-closed
+    // gate; it must not make an otherwise visible signal disappear from the
+    // subscriber's history.
+    const allSubscribers = st?.subscribers || new Set()
     if (executionValidation.validation.eligible !== true) {
       l(`execution validation blocked shared delivery (${executionValidation.validation.status})`)
     }
@@ -2697,7 +2700,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       await finishModelTaskAfterSignalGate('rejected', 'model_task_business_gate_failed')
       return { status:'error', reason:'model_task_business_gate_failed' }
     }
-    if (!executionWindowExpired && (signal.signal_type !== 'hold' || signal.pending_action === 'cancel')
+    if (executionValidation.validation.eligible === true
+      && !executionWindowExpired && (signal.signal_type !== 'hold' || signal.pending_action === 'cancel')
       && aiSource === 'ai' && !signal.is_stale) {
       // Single JOIN query instead of N+1 per subscriber
       const onlineUserIds = [...onlineSubscribers]
@@ -4074,9 +4078,28 @@ function buildSignalDeliveryRows({ signalId, userIds, onlineUserIds, promptTypeI
     ? executionValidation
     : readExecutionValidation(executionValidation || {})
   const validationRejected = validationState.validation.eligible !== true
-  if (validationRejected) return []
   return [...new Set(userIds || [])].map(userId => {
     const isOnline = online.has(userId)
+    if (validationRejected) {
+      return {
+        signalId,
+        userId,
+        promptTypeId,
+        symbol,
+        deliveryStatus:isOnline ? 'delivered' : 'stored_offline',
+        // The signal remains visible, but an ineligible or malformed model
+        // execution envelope is terminally skipped and can never enter the
+        // recovery queue or auto-trade path.
+        executionStatus:'skipped',
+        executionResult:JSON.stringify({
+          status:'skipped',
+          reason:'execution_validation_ineligible',
+          execution_validation:validationState.validation,
+          history_available:true,
+        }),
+        createdAt,
+      }
+    }
     if (executionExpired) {
       return {
         signalId,
