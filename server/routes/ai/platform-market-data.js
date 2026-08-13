@@ -11,12 +11,16 @@ const CACHE_LIMIT = 2000
 const CACHE_TTL_SECONDS = 24 * 60 * 60
 const WRITE_BATCH_SIZE = 250
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
-const INTERNAL_GAP_REFILL_COOLDOWN_MS = 6 * 60 * 60 * 1000
+const VERIFIED_SOURCE_GAP_TTL_MS = 24 * 60 * 60 * 1000
+const MAX_VERIFIED_SOURCE_GAPS = 2048
 const MAX_EXPECTED_DAILY_CLOSURE_MS = 4 * 60 * 60 * 1000
 const FUTURE_RATE_TOLERANCE_MS = 2 * 60 * 1000
 const recentSampleAt = new Map()
 const inFlightRates = new Map()
-const internalGapRefillAttempts = new Map()
+// A cache gap that the same terminal has independently returned is an
+// observed source property, not a cache corruption. Keep that verification
+// in-process so every probe does not issue the same bounded Bridge request.
+const verifiedSourceGaps = new Map()
 const closedCacheWrites = new Map()
 let lastCleanupAt = 0
 
@@ -42,7 +46,7 @@ function continuityMeta(integrity) {
       ? integrity.audit_expected_closures.slice(0, 16) : [],
     audit_suspicious_gaps:Array.isArray(integrity?.audit_suspicious_gaps)
       ? integrity.audit_suspicious_gaps.slice(0, 16) : [],
-    continuity_policy_mode:policy.mode || getMarketSessionPolicyMode(),
+    continuity_policy_mode:policy.mode || 'off',
   }
 }
 
@@ -251,13 +255,14 @@ function crossesWeekendUtc(startUtcMs, endUtcMs) {
 
 export function inspectRateContinuity(rates, timeframe, options = {}) {
   const intervalMs = timeframeIntervalMs(timeframe)
+  const ignoreSessionPolicy = options.ignoreMarketSessionPolicy === true
   const configuredMode = options.marketSessionPolicyMode || options.market_session_policy_mode
-    || getMarketSessionPolicyMode(options.env || process.env)
+    || (ignoreSessionPolicy ? 'off' : getMarketSessionPolicyMode(options.env || process.env))
   const initialPolicyMatch = resolveMarketSessionPolicy({
     platform:options.platform,
     broker_server:options.brokerServer || options.broker_server,
     standard_symbol:options.standardSymbol || options.standard_symbol || options.symbol,
-  }, { env:options.env || process.env })
+  }, { env:ignoreSessionPolicy ? {} : (options.env || process.env) })
   const initialPolicy = {
     mode:configuredMode,
     matched:Boolean(initialPolicyMatch?.matched),
@@ -308,7 +313,7 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
     // pass strictSessionPolicy with the terminal clock evidence.
     const scheduledDailyClosure = crossesBrokerDate
       && gapMs >= 30 * 60 * 1000 && gapMs <= MAX_EXPECTED_DAILY_CLOSURE_MS
-    const calendarClosure = classifyMarketClosure(previousUtcMs, currentUtcMs, timeframe, {
+    const calendarClosure = ignoreSessionPolicy ? null : classifyMarketClosure(previousUtcMs, currentUtcMs, timeframe, {
       intervalMs,
       standardSymbol:options.standardSymbol || options.symbol || '',
       platform:options.platform,
@@ -323,7 +328,7 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
       startBrokerTime:previous.time,
       endBrokerTime:current.time,
     })
-    const policyEnforced = calendarClosure?.policy_enforced === true
+    const policyEnforced = !ignoreSessionPolicy && calendarClosure?.policy_enforced === true
     const policyExpected = policyEnforced && calendarClosure?.expected === true
     const auditPolicyMatched = calendarClosure?.audit_only === true && calendarClosure?.policy_match === true
     if (auditPolicyMatched) {
@@ -335,18 +340,18 @@ export function inspectRateContinuity(rates, timeframe, options = {}) {
       if (calendarClosure.expected === true) auditExpectedClosures.push(auditDetail)
       else auditSuspiciousGaps.push(auditDetail)
     }
-    const legacyExpected = Boolean(calendarClosure?.known === true
+    const legacyExpected = !ignoreSessionPolicy && Boolean(calendarClosure?.known === true
       && ['weekend_closure', 'holiday_closure'].includes(calendarClosure.classification))
-    if (strictSessionPolicy && (calendarClosure?.classification === 'unknown_session' || calendarClosure?.known === false)) {
+    if (!ignoreSessionPolicy && strictSessionPolicy && (calendarClosure?.classification === 'unknown_session' || calendarClosure?.known === false)) {
       unknownSessionGapCount += 1
       continuityReasons.add(calendarClosure.reason || 'market_session_policy_unavailable')
-    } else if (strictSessionPolicy && !policyEnforced && !calendarClosure && scheduledDailyClosure) {
+    } else if (!ignoreSessionPolicy && strictSessionPolicy && !policyEnforced && !calendarClosure && scheduledDailyClosure) {
       // The versioned calendar deliberately does not guess broker-specific
       // daily maintenance. Keep the gap fail-closed, but expose why it was
       // not silently treated as an ordinary internal hole.
       continuityReasons.add('daily_session_policy_missing')
     }
-    const expectedClosure = strictSessionPolicy
+    const expectedClosure = ignoreSessionPolicy ? false : strictSessionPolicy
       ? (configuredMode === 'enforce' ? policyExpected : legacyExpected)
       : Boolean(calendarClosure?.known === true) || scheduledDailyClosure || crossesWeekendUtc(previousUtcMs, currentUtcMs)
     if (strictSessionPolicy && configuredMode === 'audit' && calendarClosure?.audit_only === true
@@ -428,19 +433,159 @@ function calendarClosureEngineVersion(options = {}) {
   return options.marketSessionEngineVersion || MARKET_SESSION_ENGINE_VERSION
 }
 
-function shouldAttemptInternalGapRefill(sourceId, standardSymbol, timeframe, integrity, now = Date.now()) {
-  const gap = integrity?.suspicious_gaps?.[0]
-  if (!sourceId || !gap) return false
-  if (internalGapRefillAttempts.size > 512) {
-    for (const [key, attemptedAt] of internalGapRefillAttempts) {
-      if (now - attemptedAt >= INTERNAL_GAP_REFILL_COOLDOWN_MS) internalGapRefillAttempts.delete(key)
+function timeGapDetails(integrity) {
+  return (Array.isArray(integrity?.suspicious_gaps) ? integrity.suspicious_gaps : [])
+    .filter(gap => Number(gap?.gap_ms) > 0 && gap?.reason !== 'duplicate_open_time'
+      && Number.isFinite(Number(gap?.from_utc_msc)) && Number.isFinite(Number(gap?.to_utc_msc)))
+}
+
+function duplicateGapDetected(integrity) {
+  return (Array.isArray(integrity?.suspicious_gaps) ? integrity.suspicious_gaps : [])
+    .some(gap => gap?.reason === 'duplicate_open_time')
+}
+
+function sourceGapKey(sourceId, sourceKey, standardSymbol, timeframe, gap) {
+  return [sourceId || 0, sourceKey || '', standardSymbol, timeframe,
+    Number(gap.from_utc_msc), Number(gap.to_utc_msc)].join(':')
+}
+
+function getVerifiedSourceGap(key, now = Date.now()) {
+  const record = verifiedSourceGaps.get(key)
+  if (!record) return null
+  if (now - Number(record.verified_at || 0) >= VERIFIED_SOURCE_GAP_TTL_MS) {
+    verifiedSourceGaps.delete(key)
+    return null
+  }
+  return record
+}
+
+function rememberVerifiedSourceGap(key, record) {
+  if (verifiedSourceGaps.size >= MAX_VERIFIED_SOURCE_GAPS) {
+    const oldest = [...verifiedSourceGaps.entries()]
+      .sort((left, right) => Number(left[1]?.verified_at || 0) - Number(right[1]?.verified_at || 0))[0]
+    if (oldest) verifiedSourceGaps.delete(oldest[0])
+  }
+  verifiedSourceGaps.set(key, record)
+}
+
+function expectedGapTimes(gap, intervalMs) {
+  const from = Number(gap?.from_utc_msc)
+  const to = Number(gap?.to_utc_msc)
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || !intervalMs) return null
+  const steps = (to - from) / intervalMs
+  if (!Number.isInteger(steps) || steps < 2 || steps > CACHE_LIMIT - 1) return null
+  const times = []
+  for (let cursor = from + intervalMs; cursor < to; cursor += intervalMs) times.push(cursor)
+  return times
+}
+
+function normalizeGapVerificationRates(response, clock, symbol, timeframe, startUtcMs, endUtcMs,
+  expectedObservedTimes = [], expectedMissingTimes = []) {
+  if (response?.status !== 'success' || !Array.isArray(response.rates) || !response.rates.length) {
+    return { error:'rates_gap_verification_failed' }
+  }
+  const normalized = response.rates.map(rate => validRate(rate, clock.timezone_offset_minutes)).filter(Boolean)
+  if (normalized.length !== response.rates.length) return { error:'rates_gap_verification_invalid_timestamp' }
+  normalized.sort((left, right) => Number(left.time_utc_msc) - Number(right.time_utc_msc))
+  for (let index = 1; index < normalized.length; index += 1) {
+    if (Number(normalized[index].time_utc_msc) === Number(normalized[index - 1].time_utc_msc)) {
+      return { error:'rates_gap_verification_duplicate_open_time' }
     }
   }
-  const key = `${sourceId}:${standardSymbol}:${timeframe}:${gap.from_utc_msc}-${gap.to_utc_msc}`
-  const previous = internalGapRefillAttempts.get(key) || 0
-  if (now - previous < INTERNAL_GAP_REFILL_COOLDOWN_MS) return false
-  internalGapRefillAttempts.set(key, now)
-  return true
+  const symbolBase = stripBrokerSuffix(symbol).toUpperCase()
+  if (response.symbol && stripBrokerSuffix(response.symbol).toUpperCase() !== symbolBase) {
+    return { error:'rates_gap_verification_symbol_changed' }
+  }
+  const inWindow = normalized.filter(rate => Number(rate.time_utc_msc) >= startUtcMs
+    && Number(rate.time_utc_msc) < endUtcMs)
+  if (!inWindow.length || !inWindow.some(rate => Number(rate.time_utc_msc) === startUtcMs)
+    || !inWindow.some(rate => Number(rate.time_utc_msc) === endUtcMs - timeframeIntervalMs(timeframe))) {
+    return { error:'rates_gap_verification_window_incomplete' }
+  }
+  const bridgeTimes = new Set(inWindow.map(rate => Number(rate.time_utc_msc)))
+  const missingObservedTimes = expectedObservedTimes
+    .map(Number).filter(time => Number.isFinite(time) && !bridgeTimes.has(time))
+  if (missingObservedTimes.length) return { error:'rates_gap_verification_source_mismatch' }
+  const intervalMs = timeframeIntervalMs(timeframe)
+  const spanSteps = (endUtcMs - startUtcMs) / intervalMs
+  if (!Number.isInteger(spanSteps) || spanSteps < 1 || spanSteps > CACHE_LIMIT) {
+    return { error:'rates_gap_verification_window_invalid' }
+  }
+  const theoreticalTimes = []
+  for (let cursor = startUtcMs; cursor < endUtcMs; cursor += intervalMs) theoreticalTimes.push(cursor)
+  const expectedMissing = new Set(expectedMissingTimes.map(Number).filter(Number.isFinite))
+  const unexpectedMissingTimes = theoreticalTimes.filter(time => !bridgeTimes.has(time) && !expectedMissing.has(time))
+  if (unexpectedMissingTimes.length) return { error:'rates_gap_verification_source_mismatch' }
+  return { rates:inWindow, missing_times:theoreticalTimes.filter(time => !bridgeTimes.has(time)) }
+}
+
+/**
+ * Verify cache-only gaps with the exact same Bridge source. A source that
+ * returns the same missing opens is recorded as observed-only; a response
+ * containing those opens repairs the cache. No broad count refill is used.
+ */
+async function verifyCachedGapsWithBridge(bridgeUserId, symbol, timeframe, gaps, clock, source,
+  platformRoute = {}, observedRates = []) {
+  const intervalMs = timeframeIntervalMs(timeframe)
+  const validGaps = (Array.isArray(gaps) ? gaps : [])
+    .filter(gap => expectedGapTimes(gap, intervalMs))
+  if (validGaps.length !== (Array.isArray(gaps) ? gaps.length : 0)) {
+    return { error:'rates_gap_verification_window_invalid' }
+  }
+  if (!validGaps.length) return { status:'none', rates:[], source_gaps:[], filled_gaps:[] }
+  const identity = sourceIdentity(bridgeUserId, clock)
+  if (!hasStableSourceIdentity(identity)
+    || (source?.sourceKey && source.sourceKey !== identity.sourceKey)) {
+    return { error:'rates_gap_verification_source_identity_changed' }
+  }
+  const standardSymbol = stripBrokerSuffix(symbol)
+  // The two cached candles that bound the gap are sufficient to prove that
+  // the terminal is answering for the same window. Extending one interval
+  // before the left boundary can cross a separate market closure and turn a
+  // valid source gap into a false "window incomplete" result.
+  const startUtcMs = Math.min(...validGaps.map(gap => Number(gap.from_utc_msc)))
+  const endUtcMs = Math.max(...validGaps.map(gap => Number(gap.to_utc_msc) + intervalMs))
+  const count = Math.min(CACHE_LIMIT, Math.max(2, Math.ceil((endUtcMs - startUtcMs) / intervalMs) + 1))
+  const expectedMissingTimes = [...new Set(validGaps.flatMap(gap => expectedGapTimes(gap, intervalMs) || []))]
+  const expectedObservedTimes = [...new Set((Array.isArray(observedRates) ? observedRates : [])
+    .map(rate => Number(rate?.time_utc_msc))
+    .filter(time => Number.isFinite(time) && time >= startUtcMs && time < endUtcMs))]
+  const keys = validGaps.map(gap => sourceGapKey(source?.id, identity.sourceKey, standardSymbol, timeframe, gap))
+  const cachedResults = validGaps.map((gap, index) => getVerifiedSourceGap(keys[index]) ? gap : null).filter(Boolean)
+  const pending = validGaps.filter((gap, index) => !getVerifiedSourceGap(keys[index]))
+  if (!pending.length) return { status:'verified_source_gap', rates:[], source_gaps:cachedResults, filled_gaps:[] }
+
+  const response = await mt5Bridge(bridgeUserId, 'rates', {
+    symbol, timeframe, count, start_utc_msc:startUtcMs, end_utc_msc:endUtcMs, ...platformRoute,
+  }, { timeoutMs:30000, noFallback:true })
+  const effectiveClock = effectiveResponseClock(clock, response, response?.rates)
+  const responseIdentity = sourceIdentity(bridgeUserId, effectiveClock)
+  if (!hasStableSourceIdentity(responseIdentity) || responseIdentity.sourceKey !== identity.sourceKey) {
+    return { error:'rates_gap_verification_source_identity_changed' }
+  }
+  const normalized = normalizeGapVerificationRates(response, effectiveClock, symbol, timeframe, startUtcMs, endUtcMs,
+    expectedObservedTimes, expectedMissingTimes)
+  if (normalized.error) return { error:normalized.error }
+  const ratesByTime = new Map(normalized.rates.map(rate => [Number(rate.time_utc_msc), rate]))
+  const sourceGaps = [...cachedResults]
+  const filledGaps = []
+  for (const gap of pending) {
+    const expected = expectedGapTimes(gap, intervalMs)
+    const missing = expected.filter(time => !ratesByTime.has(time))
+    if (missing.length === expected.length) {
+      sourceGaps.push(gap)
+      rememberVerifiedSourceGap(sourceGapKey(source?.id, identity.sourceKey, standardSymbol, timeframe, gap), {
+        verified_at:Date.now(), missing_times:missing,
+      })
+    } else if (missing.length === 0) {
+      filledGaps.push(gap)
+    } else {
+      return { error:'rates_gap_verification_window_incomplete' }
+    }
+  }
+  return { status:sourceGaps.length ? 'verified_source_gap' : 'filled', rates:normalized.rates,
+    source_gaps:sourceGaps, filled_gaps:filledGaps, source_identity:responseIdentity,
+    clock:effectiveClock, start_utc_msc:startUtcMs, end_utc_msc:endUtcMs }
 }
 
 async function persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRates) {
@@ -593,16 +738,30 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         ...platformRoute,
         start_utc_msc:rangeStartUtcMs, end_utc_msc:rangeEndUtcMs }, { timeoutMs:30000, noFallback:true })
       if (response?.status === 'success' && Array.isArray(response.rates) && response.rates.length) {
+        if (response.range_complete !== true) {
+          return { status:'error', error:'rates_range_incomplete', message:'桥接未确认请求范围读取完成' }
+        }
         const effectiveClock = effectiveResponseClock(clock, response, response.rates)
-        const closureCutoffUtcMs = Math.min(rangeEndUtcMs, Date.now())
+        const closureCutoffUtcMs = Math.min(rangeEndUtcMs, Math.floor(Date.now() / timeframeIntervalMs(timeframe)) * timeframeIntervalMs(timeframe))
         const intervalMs = timeframeIntervalMs(timeframe)
-        const closedRates = response.rates.map(rate => validRate(rate, effectiveClock.timezone_offset_minutes))
-          .filter(rate => rate
-            && rate.time_utc_msc >= rangeStartUtcMs
+        const normalizedRates = response.rates.map(rate => validRate(rate, effectiveClock.timezone_offset_minutes))
+        if (normalizedRates.some(rate => !rate)) {
+          return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
+        }
+        const normalizedTimesInOrder = normalizedRates.map(rate => Number(rate.time_utc_msc))
+        if (new Set(normalizedTimesInOrder).size !== normalizedTimesInOrder.length) {
+          return { status:'error', error:'rates_gap_verification_duplicate_open_time', message:'行情包含重复开盘时间' }
+        }
+        const closedRates = normalizedRates
+          .filter(rate => rate.time_utc_msc >= rangeStartUtcMs
             && rate.time_utc_msc < rangeEndUtcMs
             && rate.time_utc_msc + intervalMs <= closureCutoffUtcMs)
         if (!closedRates.length) {
           return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
+        }
+        const normalizedTimes = new Set(normalizedRates.map(rate => Number(rate.time_utc_msc)))
+        if (!normalizedTimes.has(rangeStartUtcMs)) {
+          return { status:'error', error:'rates_range_incomplete', message:'桥接返回的 K 线未覆盖请求范围起点' }
         }
         const brokerSymbol = response.symbol || symbol
         const ensured = await ensureSourceBestEffort(platformUserId, effectiveClock, response.rates.at(-1))
@@ -610,14 +769,32 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         const written = await writeClosedWindowBestEffort(sourceId, brokerSymbol, timeframe, closedRates)
         const writeFailures = [...ensured.failures, ...written.failures]
         const rangeIntegrity = inspectRateContinuity(closedRates, timeframe, {
-          standardSymbol:stripBrokerSuffix(symbol), strictSessionPolicy:true,
+          standardSymbol:stripBrokerSuffix(symbol), strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{},
           platform:effectiveClock.platform,
           brokerServer:effectiveClock.broker_server,
           timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
           sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
           clockStatus:effectiveClock.clock_status,
         })
-        const rangeGapUnresolved = rangeIntegrity.status === 'suspicious_gap'
+        if (duplicateGapDetected(rangeIntegrity)) {
+          return { status:'error', error:'rates_gap_verification_duplicate_open_time', message:'行情包含重复开盘时间' }
+        }
+        const rangeSourceGaps = timeGapDetails(rangeIntegrity)
+        const rangeVerifiedIntegrity = {
+          ...rangeIntegrity,
+          status:'ok',
+          continuity_status:rangeSourceGaps.length ? 'verified_source_gap' : 'verified_source_range',
+          continuity_reason:rangeSourceGaps.length ? 'verified_source_gap' : 'verified_source_range',
+          continuity_reasons:[...new Set([...(rangeIntegrity.continuity_reasons || []),
+            rangeSourceGaps.length ? 'verified_source_gap' : 'verified_source_range'])],
+          suspicious_gaps:[], uncovered_ranges:[], uncovered:[],
+          audit_suspicious_gaps:[...(rangeIntegrity.audit_suspicious_gaps || []), ...rangeSourceGaps],
+        }
+        const rangeSourceIdentity = sourceIdentity(platformUserId, effectiveClock)
+        for (const gap of rangeSourceGaps) {
+          rememberVerifiedSourceGap(sourceGapKey(sourceId, rangeSourceIdentity.sourceKey,
+            stripBrokerSuffix(symbol), timeframe, gap), { verified_at:Date.now(), missing_times:expectedGapTimes(gap, intervalMs) })
+        }
         return { ...response, rates:closedRates, market_meta:{
           source:'platform_admin_bridge_range', source_user_id:platformUserId, source_id:sourceId,
           broker_symbol:brokerSymbol, timeframe, timezone_offset_minutes:effectiveClock.timezone_offset_minutes,
@@ -629,16 +806,21 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_write_degraded:writeFailures.length > 0,
           cache_write_failure_layers:writeFailures,
           last_bar_closed:true,
-          cache_internal_gap_detected:rangeGapUnresolved,
-          cache_internal_gap_unresolved:rangeGapUnresolved,
-          cache_internal_gap_details:rangeGapUnresolved ? rangeIntegrity.suspicious_gaps.slice(0, 3) : [],
-          ...continuityMeta(rangeIntegrity),
+          cache_internal_gap_detected:rangeSourceGaps.length > 0,
+          cache_internal_gap_unresolved:false,
+          cache_internal_gap_status:rangeSourceGaps.length ? 'verified_source_gap' : 'verified_source_range',
+          cache_internal_gap_verified_source:true,
+          cache_internal_gap_details:rangeSourceGaps.slice(0, 3),
+          range_coverage_verified:true,
+          range_bridge_authoritative:true,
+          endpoint_coverage_verified:true,
+          ...continuityMeta(rangeVerifiedIntegrity),
            continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
-           expected_closures:rangeIntegrity.expected_closures.slice(0, 8),
-           continuity_status:rangeIntegrity.continuity_status,
-           continuity_reason:rangeIntegrity.continuity_reason,
-           continuity_reasons:rangeIntegrity.continuity_reasons,
-           unknown_session_gap_count:rangeIntegrity.unknown_session_gap_count,
+           expected_closures:rangeVerifiedIntegrity.expected_closures.slice(0, 8),
+           continuity_status:rangeVerifiedIntegrity.continuity_status,
+           continuity_reason:rangeVerifiedIntegrity.continuity_reason,
+           continuity_reasons:rangeVerifiedIntegrity.continuity_reasons,
+           unknown_session_gap_count:rangeVerifiedIntegrity.unknown_session_gap_count,
            range_start_utc_msc:rangeStartUtcMs, range_end_utc_msc:rangeEndUtcMs,
         } }
       }
@@ -667,7 +849,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       }
       let closedRates = split.closedRates
       const cachedIntegrity = inspectRateContinuity(cachedResult.rates, timeframe, {
-        standardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+        standardSymbol, strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{}, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
         platform:effectiveClock.platform,
         brokerServer:effectiveClock.broker_server,
         sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
@@ -675,10 +857,47 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       })
       const effectiveIdentity = sourceIdentity(platformUserId, effectiveClock)
       let sourceIdentityChanged = Boolean(source.id && source.sourceKey && source.sourceKey !== effectiveIdentity.sourceKey)
-      const boundaryGapDetected = probeOnly && !ratesJoinAtCacheBoundary(cachedResult.rates, closedRates)
-      const internalGapRefillAttempted = probeOnly
-        && shouldAttemptInternalGapRefill(source.id, standardSymbol, timeframe, cachedIntegrity)
-      const windowRefillNeeded = sourceIdentityChanged || boundaryGapDetected || internalGapRefillAttempted
+      // A short probe may expose the cached boundary as its still-forming last
+      // bar.  It is still authoritative overlap for continuity purposes; do
+      // not force a broad refill merely because splitRatesByClosure classified
+      // that boundary row as live.
+      const probeRates = [...split.closedRates, ...split.liveRates]
+      const boundaryGapDetected = probeOnly && !ratesJoinAtCacheBoundary(cachedResult.rates, probeRates)
+      const initialFreshIntegrity = inspectRateContinuity(closedRates, timeframe, {
+        standardSymbol, strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{}, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+        platform:effectiveClock.platform,
+        brokerServer:effectiveClock.broker_server,
+        sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
+        clockStatus:effectiveClock.clock_status,
+      })
+      if (duplicateGapDetected(cachedIntegrity) || duplicateGapDetected(initialFreshIntegrity)) {
+        return { status:'error', error:'rates_gap_verification_duplicate_open_time', message:'行情包含重复开盘时间' }
+      }
+      const cacheTimeGaps = timeGapDetails(cachedIntegrity)
+      const freshTimeGaps = timeGapDetails(initialFreshIntegrity)
+      const gapsToVerify = boundaryGapDetected ? [] : [...new Map([...cacheTimeGaps, ...freshTimeGaps]
+        .map(gap => [`${gap.from_utc_msc}:${gap.to_utc_msc}`, gap])).values()]
+      if (sourceIdentityChanged && gapsToVerify.length) {
+        return { status:'error', error:'rates_gap_verification_source_identity_changed', message:'行情来源身份已变化，缓存缺口无法核验' }
+      }
+      let gapVerification = { status:'none', rates:[], source_gaps:[], filled_gaps:[] }
+      if (gapsToVerify.length) {
+        gapVerification = await verifyCachedGapsWithBridge(platformUserId, symbol, timeframe,
+          gapsToVerify, effectiveClock, source, platformRoute,
+          [...cachedResult.rates, ...closedRates])
+        if (gapVerification.error) {
+          return { status:'error', error:gapVerification.error, message:'Bridge 未能覆盖并核验缓存缺口' }
+        }
+        if (gapVerification.clock) {
+          effectiveClock = gapVerification.clock
+          const verificationIdentity = sourceIdentity(platformUserId, effectiveClock)
+          sourceIdentityChanged = Boolean(source.id && source.sourceKey
+            && source.sourceKey !== verificationIdentity.sourceKey)
+        }
+      }
+      // A missing cache boundary cannot be safely inferred from a short probe.
+      // Only the exact gap verifier may repair a known internal hole.
+      const windowRefillNeeded = sourceIdentityChanged || boundaryGapDetected
       if (windowRefillNeeded) {
         const refill = await mt5Bridge(platformUserId, 'rates', {
           symbol, timeframe, count:count + 1, ...platformRoute,
@@ -699,19 +918,61 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         closedRates = split.closedRates
       }
       const freshIntegrity = inspectRateContinuity(closedRates, timeframe, {
-        standardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+        standardSymbol, strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{}, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
         platform:effectiveClock.platform,
         brokerServer:effectiveClock.broker_server,
         sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
         clockStatus:effectiveClock.clock_status,
       })
-      const internalGapDetected = (!sourceIdentityChanged && cachedIntegrity.status === 'suspicious_gap') || freshIntegrity.status === 'suspicious_gap'
-      const cachedGapStillStored = !windowRefillNeeded && cachedIntegrity.status === 'suspicious_gap'
-      const internalGapUnresolved = freshIntegrity.status === 'suspicious_gap' || cachedGapStillStored
-      const unresolvedGapDetails = freshIntegrity.status === 'suspicious_gap'
-        ? freshIntegrity.suspicious_gaps : cachedIntegrity.suspicious_gaps
+      if (duplicateGapDetected(freshIntegrity)) {
+        return { status:'error', error:'rates_gap_verification_duplicate_open_time', message:'行情包含重复开盘时间' }
+      }
+      const verifiedGapKeys = new Set([...gapVerification.source_gaps, ...gapVerification.filled_gaps]
+        .map(gap => `${gap.from_utc_msc}:${gap.to_utc_msc}`))
+      const postRefillGaps = timeGapDetails(freshIntegrity)
+        .filter(gap => !verifiedGapKeys.has(`${gap.from_utc_msc}:${gap.to_utc_msc}`))
+      if (postRefillGaps.length) {
+        if (sourceIdentityChanged) {
+          return { status:'error', error:'rates_gap_verification_source_identity_changed', message:'行情来源身份已变化，缓存缺口无法核验' }
+        }
+        const postVerification = await verifyCachedGapsWithBridge(platformUserId, symbol, timeframe,
+          postRefillGaps, effectiveClock, source, platformRoute, [...cachedResult.rates, ...closedRates])
+        if (postVerification.error) {
+          return { status:'error', error:postVerification.error, message:'Bridge 未能覆盖并核验缓存缺口' }
+        }
+        gapVerification = {
+          ...gapVerification,
+          rates:mergeRates(gapVerification.rates || [], postVerification.rates || [], CACHE_LIMIT),
+          source_gaps:[...(gapVerification.source_gaps || []), ...(postVerification.source_gaps || [])],
+          filled_gaps:[...(gapVerification.filled_gaps || []), ...(postVerification.filled_gaps || [])],
+        }
+      }
       const brokerSymbol = response.symbol || symbol
-      const stored = mergeRates(windowRefillNeeded ? [] : cachedResult.rates, closedRates, CACHE_LIMIT)
+      const verificationRates = Array.isArray(gapVerification.rates) ? gapVerification.rates : []
+      const stored = mergeRates(windowRefillNeeded ? [] : cachedResult.rates,
+        [...verificationRates, ...closedRates], CACHE_LIMIT)
+      const storedIntegrity = inspectRateContinuity(stored, timeframe, {
+        standardSymbol, strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{}, timezoneOffsetMinutes:effectiveClock.timezone_offset_minutes,
+        platform:effectiveClock.platform,
+        brokerServer:effectiveClock.broker_server,
+        sessionTimezone:effectiveClock.session_timezone || effectiveClock.timezone_name || effectiveClock.broker_timezone,
+        clockStatus:effectiveClock.clock_status,
+      })
+      const verifiedSourceGap = gapVerification.source_gaps.length > 0
+      const internalGapDetected = gapsToVerify.length > 0
+      const internalGapUnresolved = false
+      const gapDetails = gapVerification.source_gaps.length
+        ? gapVerification.source_gaps : [...gapVerification.filled_gaps]
+      const continuityIntegrity = verifiedSourceGap ? {
+        ...storedIntegrity,
+        status:'ok',
+        continuity_status:'verified_source_gap',
+        continuity_reason:'verified_source_gap',
+        continuity_reasons:[...new Set([...(storedIntegrity.continuity_reasons || []), 'verified_source_gap'])],
+        suspicious_gaps:[],
+        uncovered_ranges:[], uncovered:[],
+        audit_suspicious_gaps:[...(storedIntegrity.audit_suspicious_gaps || []), ...gapDetails],
+      } : storedIntegrity
       const ensured = await ensureSourceBestEffort(platformUserId, effectiveClock, rates.at(-1))
       const sourceId = ensured.sourceId
       const finalSourceIdentityChanged = Boolean(sourceId)
@@ -719,7 +980,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       const effectiveStructureAnchor = finalSourceIdentityChanged
         ? await loadChanStructureAnchor(sourceId, standardSymbol, timeframe)
         : structureAnchor
-      const written = await writeClosedWindowBestEffort(sourceId, brokerSymbol, timeframe, closedRates, stored)
+      const written = await writeClosedWindowBestEffort(sourceId, brokerSymbol, timeframe,
+        mergeRates(verificationRates, closedRates, CACHE_LIMIT), stored)
       const writeFailures = [...ensured.failures, ...written.failures]
       return {
         ...response,
@@ -737,20 +999,23 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_layer: sourceIdentityChanged ? 'cold' : cachedResult.layer,
           cache_write_degraded: writeFailures.length > 0,
           cache_write_failure_layers: writeFailures,
-          cache_gap_refilled: windowRefillNeeded,
+          cache_gap_refilled: windowRefillNeeded || gapVerification.filled_gaps.length > 0,
+          cache_gap_verified: gapsToVerify.length > 0,
+          cache_internal_gap_status:verifiedSourceGap ? 'verified_source_gap' : (gapsToVerify.length ? 'filled' : null),
+          cache_internal_gap_verified_source:verifiedSourceGap,
           cache_source_identity_refilled: sourceIdentityChanged,
           cache_boundary_gap_refilled: boundaryGapDetected,
           cache_internal_gap_detected: internalGapDetected,
-          cache_internal_gap_refill_attempted: internalGapRefillAttempted,
+          cache_internal_gap_refill_attempted: false,
           cache_internal_gap_unresolved: internalGapUnresolved,
-          cache_internal_gap_details: internalGapUnresolved ? unresolvedGapDetails.slice(0, 3) : [],
-          ...continuityMeta(freshIntegrity),
+          cache_internal_gap_details:gapDetails.slice(0, 3),
+          ...continuityMeta(continuityIntegrity),
            continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
-           expected_closures:freshIntegrity.expected_closures.slice(0, 8),
-           continuity_status:freshIntegrity.continuity_status,
-           continuity_reason:freshIntegrity.continuity_reason,
-           continuity_reasons:freshIntegrity.continuity_reasons,
-           unknown_session_gap_count:freshIntegrity.unknown_session_gap_count,
+           expected_closures:continuityIntegrity.expected_closures.slice(0, 8),
+           continuity_status:continuityIntegrity.continuity_status,
+           continuity_reason:continuityIntegrity.continuity_reason,
+           continuity_reasons:continuityIntegrity.continuity_reasons,
+           unknown_session_gap_count:continuityIntegrity.unknown_session_gap_count,
            last_bar_closed: split.lastBarClosed,
           live_candle_cached: false,
           chan_structure_anchor_utc_msc:Number(effectiveStructureAnchor?.anchor_time_utc_msc) || null,
@@ -784,36 +1049,80 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     ...(fallbackReviewRange ? { start_utc_msc:fallbackRangeStart, end_utc_msc:fallbackRangeEnd } : {}) },
   { timeoutMs:fallbackReviewRange ? 30000 : 15000, noFallback:true })
   if (fallback?.status !== 'success' || !Array.isArray(fallback.rates) || fallback.rates.length === 0) return fallback
+  if (fallbackReviewRange && fallback.range_complete !== true) {
+    return { status:'error', error:'rates_range_incomplete', message:'桥接未确认请求范围读取完成' }
+  }
 
   let effectiveFallbackClock = effectiveResponseClock(fallbackClock, fallback, fallback.rates)
   let fallbackOffset = effectiveFallbackClock.timezone_offset_minutes ?? null
   let fallbackSplit = splitRatesByClosure(fallback.rates, timeframe, fallbackOffset)
   if (fallbackReviewRange) {
     const intervalMs = timeframeIntervalMs(timeframe)
-    const closureCutoffUtcMs = Math.min(fallbackRangeEnd, Date.now())
-    const closedRates = fallback.rates.map(rate => validRate(rate, fallbackOffset))
-      .filter(rate => rate && rate.time_utc_msc >= fallbackRangeStart && rate.time_utc_msc < fallbackRangeEnd
+    const closureCutoffUtcMs = Math.min(fallbackRangeEnd, Math.floor(Date.now() / timeframeIntervalMs(timeframe)) * timeframeIntervalMs(timeframe))
+    const normalizedFallbackRates = fallback.rates.map(rate => validRate(rate, fallbackOffset))
+    if (normalizedFallbackRates.some(rate => !rate)) {
+      return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
+    }
+    const normalizedFallbackTimes = normalizedFallbackRates.map(rate => Number(rate.time_utc_msc))
+    if (new Set(normalizedFallbackTimes).size !== normalizedFallbackTimes.length) {
+      return { status:'error', error:'rates_gap_verification_duplicate_open_time', message:'行情包含重复开盘时间' }
+    }
+    const closedRates = normalizedFallbackRates
+      .filter(rate => rate.time_utc_msc >= fallbackRangeStart && rate.time_utc_msc < fallbackRangeEnd
         && rate.time_utc_msc + intervalMs <= closureCutoffUtcMs)
     fallbackSplit = { closedRates, liveRates:[], lastBarClosed:true }
   }
   if (!fallbackSplit.closedRates.length && !fallbackSplit.liveRates.length) {
     return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
   }
+  if (fallbackReviewRange && !fallback.rates.some(rate => Number(validRate(rate, fallbackOffset)?.time_utc_msc) === fallbackRangeStart)) {
+    return { status:'error', error:'rates_range_incomplete', message:'桥接返回的 K 线未覆盖请求范围起点' }
+  }
   const initialFallbackIdentity = sourceIdentity(requestUserId, effectiveFallbackClock)
   let fallbackIdentityChanged = Boolean(existingFallbackSource.id && existingFallbackSource.sourceKey
     && existingFallbackSource.sourceKey !== initialFallbackIdentity.sourceKey)
   const fallbackCachedIntegrity = inspectRateContinuity(fallbackCached.rates, timeframe, {
-    standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:fallbackOffset,
+    standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{}, timezoneOffsetMinutes:fallbackOffset,
     platform:effectiveFallbackClock.platform,
     brokerServer:effectiveFallbackClock.broker_server,
     sessionTimezone:effectiveFallbackClock.session_timezone || effectiveFallbackClock.timezone_name || effectiveFallbackClock.broker_timezone,
     clockStatus:effectiveFallbackClock.clock_status,
   })
-  const fallbackBoundaryGap = fallbackProbeOnly && !ratesJoinAtCacheBoundary(fallbackCached.rates, fallbackSplit.closedRates)
-  const fallbackInternalRefill = fallbackProbeOnly && shouldAttemptInternalGapRefill(
-    existingFallbackSource.id, fallbackStandardSymbol, timeframe, fallbackCachedIntegrity)
+  const fallbackProbeRates = [...fallbackSplit.closedRates, ...fallbackSplit.liveRates]
+  const fallbackBoundaryGap = fallbackProbeOnly && !ratesJoinAtCacheBoundary(fallbackCached.rates, fallbackProbeRates)
+  const fallbackInitialIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe, {
+    standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{}, timezoneOffsetMinutes:fallbackOffset,
+    platform:effectiveFallbackClock.platform,
+    brokerServer:effectiveFallbackClock.broker_server,
+    sessionTimezone:effectiveFallbackClock.session_timezone || effectiveFallbackClock.timezone_name || effectiveFallbackClock.broker_timezone,
+    clockStatus:effectiveFallbackClock.clock_status,
+  })
+  if (duplicateGapDetected(fallbackCachedIntegrity) || duplicateGapDetected(fallbackInitialIntegrity)) {
+    return { status:'error', error:'rates_gap_verification_duplicate_open_time', message:'行情包含重复开盘时间' }
+  }
+  const fallbackGaps = [...new Map([...timeGapDetails(fallbackCachedIntegrity), ...timeGapDetails(fallbackInitialIntegrity)]
+    .map(gap => [`${gap.from_utc_msc}:${gap.to_utc_msc}`, gap])).values()]
+  if (fallbackIdentityChanged && fallbackGaps.length) {
+    return { status:'error', error:'rates_gap_verification_source_identity_changed', message:'行情来源身份已变化，缓存缺口无法核验' }
+  }
+  let fallbackGapVerification = { status:'none', rates:[], source_gaps:[], filled_gaps:[] }
+  if (fallbackGaps.length) {
+    fallbackGapVerification = await verifyCachedGapsWithBridge(requestUserId, symbol, timeframe,
+      fallbackGaps, effectiveFallbackClock, existingFallbackSource, {},
+      [...fallbackCached.rates, ...fallbackSplit.closedRates])
+    if (fallbackGapVerification.error) {
+      return { status:'error', error:fallbackGapVerification.error, message:'Bridge 未能覆盖并核验缓存缺口' }
+    }
+    if (fallbackGapVerification.clock) {
+      effectiveFallbackClock = fallbackGapVerification.clock
+      fallbackOffset = effectiveFallbackClock.timezone_offset_minutes ?? null
+      const verificationIdentity = sourceIdentity(requestUserId, effectiveFallbackClock)
+      fallbackIdentityChanged = Boolean(existingFallbackSource.id && existingFallbackSource.sourceKey
+        && existingFallbackSource.sourceKey !== verificationIdentity.sourceKey)
+    }
+  }
   const fallbackRefillNeeded = !fallbackReviewRange
-    && (fallbackIdentityChanged || fallbackBoundaryGap || fallbackInternalRefill)
+    && (fallbackIdentityChanged || fallbackBoundaryGap)
   if (fallbackRefillNeeded) {
     const refill = await mt5Bridge(requestUserId, 'rates', { symbol, timeframe, count:count + 1 },
       { timeoutMs:15000, noFallback:true })
@@ -829,25 +1138,66 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     fallbackSplit = splitRatesByClosure(fallback.rates, timeframe, fallbackOffset)
   }
   const fallbackIntegrity = inspectRateContinuity(fallbackSplit.closedRates, timeframe, {
-    standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, timezoneOffsetMinutes:fallbackOffset,
+    standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{}, timezoneOffsetMinutes:fallbackOffset,
     platform:effectiveFallbackClock.platform,
     brokerServer:effectiveFallbackClock.broker_server,
     sessionTimezone:effectiveFallbackClock.session_timezone || effectiveFallbackClock.timezone_name || effectiveFallbackClock.broker_timezone,
     clockStatus:effectiveFallbackClock.clock_status,
   })
-  const fallbackCachedGapStillStored = !fallbackReviewRange && !fallbackRefillNeeded
-    && fallbackCachedIntegrity.status === 'suspicious_gap'
-  const fallbackGapUnresolved = fallbackIntegrity.status === 'suspicious_gap' || fallbackCachedGapStillStored
-  const fallbackGapDetails = fallbackIntegrity.status === 'suspicious_gap'
-    ? fallbackIntegrity.suspicious_gaps : fallbackCachedIntegrity.suspicious_gaps
+  if (duplicateGapDetected(fallbackIntegrity)) {
+    return { status:'error', error:'rates_gap_verification_duplicate_open_time', message:'行情包含重复开盘时间' }
+  }
+  const fallbackVerifiedGapKeys = new Set([...(fallbackGapVerification.source_gaps || []), ...(fallbackGapVerification.filled_gaps || [])]
+    .map(gap => `${gap.from_utc_msc}:${gap.to_utc_msc}`))
+  const fallbackPostRefillGaps = timeGapDetails(fallbackIntegrity)
+    .filter(gap => !fallbackVerifiedGapKeys.has(`${gap.from_utc_msc}:${gap.to_utc_msc}`))
+  if (fallbackPostRefillGaps.length) {
+    if (fallbackIdentityChanged) {
+      return { status:'error', error:'rates_gap_verification_source_identity_changed', message:'行情来源身份已变化，缓存缺口无法核验' }
+    }
+    const postVerification = await verifyCachedGapsWithBridge(requestUserId, symbol, timeframe,
+      fallbackPostRefillGaps, effectiveFallbackClock, existingFallbackSource, {},
+      [...fallbackCached.rates, ...fallbackSplit.closedRates])
+    if (postVerification.error) {
+      return { status:'error', error:postVerification.error, message:'Bridge 未能覆盖并核验缓存缺口' }
+    }
+    fallbackGapVerification = {
+      ...fallbackGapVerification,
+      rates:mergeRates(fallbackGapVerification.rates || [], postVerification.rates || [], CACHE_LIMIT),
+      source_gaps:[...(fallbackGapVerification.source_gaps || []), ...(postVerification.source_gaps || [])],
+      filled_gaps:[...(fallbackGapVerification.filled_gaps || []), ...(postVerification.filled_gaps || [])],
+    }
+  }
   const fallbackBrokerSymbol = fallback.symbol || symbol
   const ensuredFallback = await ensureSourceBestEffort(requestUserId, effectiveFallbackClock, fallback.rates.at(-1))
   const fallbackSourceId = ensuredFallback.sourceId
+  const fallbackVerificationRates = Array.isArray(fallbackGapVerification.rates) ? fallbackGapVerification.rates : []
   const fallbackStored = fallbackReviewRange
     ? fallbackSplit.closedRates
-    : mergeRates(fallbackRefillNeeded ? [] : fallbackCached.rates, fallbackSplit.closedRates, CACHE_LIMIT)
+    : mergeRates(fallbackRefillNeeded ? [] : fallbackCached.rates,
+      [...fallbackVerificationRates, ...fallbackSplit.closedRates], CACHE_LIMIT)
+  const fallbackStoredIntegrity = inspectRateContinuity(fallbackStored, timeframe, {
+    standardSymbol:fallbackStandardSymbol, strictSessionPolicy:true, ignoreMarketSessionPolicy:true, env:{}, timezoneOffsetMinutes:fallbackOffset,
+    platform:effectiveFallbackClock.platform,
+    brokerServer:effectiveFallbackClock.broker_server,
+    sessionTimezone:effectiveFallbackClock.session_timezone || effectiveFallbackClock.timezone_name || effectiveFallbackClock.broker_timezone,
+    clockStatus:effectiveFallbackClock.clock_status,
+  })
+  const fallbackRangeSourceGaps = fallbackReviewRange ? timeGapDetails(fallbackStoredIntegrity) : []
+  const fallbackVerifiedSourceGap = fallbackGapVerification.source_gaps.length > 0
+    || fallbackRangeSourceGaps.length > 0
+  const fallbackGapDetails = fallbackGapVerification.source_gaps.length
+    ? fallbackGapVerification.source_gaps
+    : fallbackRangeSourceGaps.length ? fallbackRangeSourceGaps : fallbackGapVerification.filled_gaps
+  const fallbackContinuityIntegrity = fallbackVerifiedSourceGap ? {
+    ...fallbackStoredIntegrity,
+    status:'ok', continuity_status:'verified_source_gap', continuity_reason:'verified_source_gap',
+    continuity_reasons:[...new Set([...(fallbackStoredIntegrity.continuity_reasons || []), 'verified_source_gap'])],
+    suspicious_gaps:[], uncovered_ranges:[], uncovered:[],
+    audit_suspicious_gaps:[...(fallbackStoredIntegrity.audit_suspicious_gaps || []), ...fallbackGapDetails],
+  } : fallbackStoredIntegrity
   const writtenFallback = await writeClosedWindowBestEffort(fallbackSourceId, fallbackBrokerSymbol, timeframe,
-    fallbackSplit.closedRates, fallbackReviewRange ? null : fallbackStored)
+    mergeRates(fallbackVerificationRates, fallbackSplit.closedRates, CACHE_LIMIT), fallbackReviewRange ? null : fallbackStored)
   const fallbackWriteFailures = [...ensuredFallback.failures, ...writtenFallback.failures]
   const resolvedFallbackStandardSymbol = stripBrokerSuffix(fallbackBrokerSymbol)
   const fallbackStructureAnchor = await loadChanStructureAnchor(
@@ -865,23 +1215,25 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     cache_layer:fallbackIdentityChanged ? 'cold' : fallbackCached.layer,
     cache_write_degraded:fallbackWriteFailures.length > 0,
     cache_write_failure_layers:fallbackWriteFailures,
-    cache_gap_refilled:fallbackRefillNeeded,
+    cache_gap_refilled:fallbackRefillNeeded || fallbackGapVerification.filled_gaps.length > 0,
+    cache_gap_verified:fallbackGaps.length > 0,
+    cache_internal_gap_status:fallbackVerifiedSourceGap ? 'verified_source_gap' : (fallbackGaps.length ? 'filled' : null),
+    cache_internal_gap_verified_source:fallbackVerifiedSourceGap,
     cache_source_identity_refilled:fallbackIdentityChanged,
     cache_boundary_gap_refilled:fallbackBoundaryGap,
-    cache_internal_gap_refill_attempted:fallbackInternalRefill,
+    cache_internal_gap_refill_attempted:false,
     live_candle_cached:false,
     last_bar_closed:fallbackSplit.lastBarClosed,
-    cache_internal_gap_detected:(!fallbackIdentityChanged && fallbackCachedIntegrity.status === 'suspicious_gap')
-      || fallbackIntegrity.status === 'suspicious_gap',
-    cache_internal_gap_unresolved:fallbackGapUnresolved,
-    cache_internal_gap_details:fallbackGapUnresolved ? fallbackGapDetails.slice(0, 3) : [],
-    ...continuityMeta(fallbackIntegrity),
+    cache_internal_gap_detected:fallbackGaps.length > 0,
+    cache_internal_gap_unresolved:false,
+    cache_internal_gap_details:fallbackGapDetails.slice(0, 3),
+    ...continuityMeta(fallbackContinuityIntegrity),
     continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
-    expected_closures:fallbackIntegrity.expected_closures.slice(0, 8),
-    continuity_status:fallbackIntegrity.continuity_status,
-    continuity_reason:fallbackIntegrity.continuity_reason,
-    continuity_reasons:fallbackIntegrity.continuity_reasons,
-    unknown_session_gap_count:fallbackIntegrity.unknown_session_gap_count,
+    expected_closures:fallbackContinuityIntegrity.expected_closures.slice(0, 8),
+    continuity_status:fallbackContinuityIntegrity.continuity_status,
+    continuity_reason:fallbackContinuityIntegrity.continuity_reason,
+    continuity_reasons:fallbackContinuityIntegrity.continuity_reasons,
+    unknown_session_gap_count:fallbackContinuityIntegrity.unknown_session_gap_count,
     chan_structure_anchor_utc_msc:Number(fallbackStructureAnchor?.anchor_time_utc_msc) || null,
     chan_last_confirmed_segment_utc_msc:Number(fallbackStructureAnchor?.last_confirmed_segment_time_utc_msc) || null,
     chan_structure_anchor_core_stable_id:fallbackStructureAnchor?.bootstrap_core_stable_id || null,

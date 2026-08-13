@@ -118,6 +118,11 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
   if (!interval || !sorted.length) return { complete:false, endpoint_complete:false, internal_gap_count:0, max_gap_ms:0,
     continuity_status:'unavailable', continuity_reason:'period_market_candles_missing', continuity_reasons:['period_market_candles_missing'] }
   const strictSessionPolicy = options.strictSessionPolicy === true
+  const ignoreSessionPolicy = options.ignoreMarketSessionPolicy === true
+  const verifiedSourceGap = options.verifiedSourceGap === true
+    || options.rangeBridgeAuthoritative === true
+    || options.range_bridge_authoritative === true
+    || String(options.cache_internal_gap_status || options.continuity_status || '').toLowerCase() === 'verified_source_gap'
   const standardSymbol = stripBrokerSuffix(options.standardSymbol || options.symbol || '')
   const continuityReasons = new Set()
   const expectedClosures = []
@@ -125,7 +130,7 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
   const continuityResults = []
   const auditExpectedClosures = []
   const auditSuspiciousGaps = []
-  const policyMatch = resolveMarketSessionPolicy({
+  const policyMatch = ignoreSessionPolicy ? { mode:'off', matched:false } : resolveMarketSessionPolicy({
     platform:options.platform,
     broker_server:options.brokerServer || options.broker_server,
     standard_symbol:standardSymbol,
@@ -144,7 +149,7 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
     return strictSessionPolicy && gap > Math.max(interval, 30 * 60 * 1000)
       && gap <= DAILY_MAINTENANCE_TOLERANCE_MS
   }
-  const closure = (from, to, fromBrokerTime = null, toBrokerTime = null) => classifyContinuityGap(from, to, timeframe, {
+  const closure = (from, to, fromBrokerTime = null, toBrokerTime = null) => ignoreSessionPolicy ? null : classifyContinuityGap(from, to, timeframe, {
     intervalMs:interval, standardSymbol, strictSessionPolicy,
     timezoneOffsetMinutes:options.timezoneOffsetMinutes ?? options.timezone_offset_minutes,
     sessionTimezone:options.sessionTimezone || options.session_timezone,
@@ -207,11 +212,12 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
   // strict mode only an explicitly known closure can cover an endpoint gap.
   const startTolerance = Math.max(interval, DAILY_MAINTENANCE_TOLERANCE_MS)
   const endTolerance = Math.max(interval * 2, DAILY_MAINTENANCE_TOLERANCE_MS)
-  const startCovered = strictSessionPolicy
+  const rangeBridgeAuthoritative = options.rangeBridgeAuthoritative === true || options.range_bridge_authoritative === true
+  const startCovered = verifiedSourceGap ? true : strictSessionPolicy
     ? sorted[0].time <= Number(startUtcMs) || closureComplete(Number(startUtcMs) - interval, sorted[0].time,
       null, sorted[0].broker_time)
     : sorted[0].time <= Number(startUtcMs) + startTolerance || crossesWeekend(Number(startUtcMs), sorted[0].time)
-  const endCovered = strictSessionPolicy
+  const endCovered = verifiedSourceGap ? true : strictSessionPolicy
     ? sorted.at(-1).time + interval >= Number(endUtcMs) || closureComplete(sorted.at(-1).time, Number(endUtcMs),
       sorted.at(-1).broker_time, null)
     : sorted.at(-1).time >= Number(endUtcMs) - endTolerance || crossesWeekend(sorted.at(-1).time, Number(endUtcMs))
@@ -228,7 +234,8 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
     const closureResult = gap > interval ? recordClosure(previous.time, current.time, previous.broker_time, current.broker_time) : null
     const effectiveClosure = closureResult?.effectiveResult
     const knownClosure = gap > interval && effectiveClosure?.known === true && effectiveClosure?.expected !== false
-    const tolerated = strictSessionPolicy ? knownClosure : gap <= toleratedGap || crossesWeekend(previous.time, current.time)
+    const tolerated = verifiedSourceGap || (ignoreSessionPolicy ? false
+      : (strictSessionPolicy ? knownClosure : gap <= toleratedGap || crossesWeekend(previous.time, current.time)))
     if (gap > interval && !tolerated) {
       internalGapCount += 1
       maxGapMs = Math.max(maxGapMs, gap)
@@ -237,13 +244,20 @@ export function assessReviewCandleCoverage(rates, startUtcMs, endUtcMs, timefram
         ...(effectiveClosure?.reason ? { reason:effectiveClosure.reason } : {}) })
     }
   }
-  const continuityStatus = unknownSessionGapCount > 0
+  const continuityStatus = rangeBridgeAuthoritative
+    ? 'verified_source_range'
+    : verifiedSourceGap
+      ? 'verified_source_gap'
+    : unknownSessionGapCount > 0
     ? 'unknown_session'
     : suspiciousGaps.length > 0 ? 'suspicious_gap'
       : continuityReasons.size > 0 ? 'policy_missing' : 'reliable'
   return { complete:endpointComplete && internalGapCount === 0, endpoint_complete:endpointComplete, internal_gap_count:internalGapCount,
     max_gap_ms:maxGapMs, continuity_status:continuityStatus,
-    continuity_reason:[...continuityReasons][0] || null, continuity_reasons:[...continuityReasons], unknown_session_gap_count:unknownSessionGapCount,
+    continuity_reason:rangeBridgeAuthoritative ? 'verified_source_range'
+      : verifiedSourceGap ? 'verified_source_gap' : ([...continuityReasons][0] || null),
+    continuity_reasons:rangeBridgeAuthoritative ? [...new Set([...continuityReasons, 'verified_source_range'])]
+      : verifiedSourceGap ? [...new Set([...continuityReasons, 'verified_source_gap'])] : [...continuityReasons], unknown_session_gap_count:unknownSessionGapCount,
     expected_closures:expectedClosures.slice(0, 32), suspicious_gaps:suspiciousGaps.slice(0, 32),
     continuity_results:continuityResults.slice(0, 32),
     audit_expected_closures:auditExpectedClosures.slice(0, 32),
@@ -328,6 +342,7 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
     timezone_offset_minutes:existingSource.timezone_offset_minutes, clock_status:existingSource.clock_status } : {}
   let coverage = assessReviewCandleCoverage(periodRows, startUtcMs, endUtcMs, timeframe, {
     ...marketMeta, strictSessionPolicy:options.strictSessionPolicy === true,
+    ignoreMarketSessionPolicy:true, env:{},
     standardSymbol:stripBrokerSuffix(symbol), sourceId, sourceKey:existingIdentity.source_key,
   })
   if (!coverage.complete) {
@@ -358,12 +373,18 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
   if (!periodRates.length) throw new Error('period_market_candles_unavailable')
   coverage = assessReviewCandleCoverage(periodRates, startUtcMs, endUtcMs, timeframe, {
     ...marketMeta, strictSessionPolicy:options.strictSessionPolicy === true,
+    ignoreMarketSessionPolicy:true, env:{},
     standardSymbol:stripBrokerSuffix(symbol), sourceId, sourceKey:marketMeta.source_key,
   })
   const continuityMeta = {
     ...marketMeta,
     cache_internal_gap_detected:Boolean(marketMeta.cache_internal_gap_detected || !coverage.complete),
-    cache_internal_gap_unresolved:Boolean(marketMeta.cache_internal_gap_unresolved || !coverage.complete),
+    cache_internal_gap_unresolved:coverage.continuity_status === 'verified_source_gap'
+      ? false : Boolean(marketMeta.cache_internal_gap_unresolved || !coverage.complete),
+    cache_internal_gap_status:coverage.continuity_status === 'verified_source_gap'
+      ? 'verified_source_gap' : (marketMeta.cache_internal_gap_status || null),
+    cache_internal_gap_verified_source:coverage.continuity_status === 'verified_source_gap'
+      || marketMeta.cache_internal_gap_verified_source === true,
     cache_internal_gap_details:Array.isArray(coverage.suspicious_gaps) ? coverage.suspicious_gaps : [],
     continuity_calendar_version:coverage.continuity_calendar_version || marketMeta.continuity_calendar_version || null,
     continuity_engine_version:coverage.continuity_engine_version || marketMeta.continuity_engine_version || null,
@@ -435,6 +456,8 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbo
           chanHistoryTarget:chanPolicy?.target || 0,
           includeChanHistory:Boolean(chanPolicy),
           strictSessionPolicy:true,
+          ignoreMarketSessionPolicy:true,
+          env:{},
           sourceId:frozenIdentity?.source_id || null,
           sourceKey:frozenIdentity?.source_key || null,
         })

@@ -223,7 +223,7 @@ describe('platform market data', () => {
     expect(redis.set).not.toHaveBeenCalled()
   })
 
-  it('fails Chan data quality closed when an exact review range has an internal candle gap', async () => {
+  it('marks an exact Bridge range gap as a verified source gap', async () => {
     const start = rate(0, 2000).time_utc_msc
     const end = rate(4, 2004).time_utc_msc
     mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', range_complete:true,
@@ -234,7 +234,10 @@ describe('platform market data', () => {
 
     expect(result.market_meta).toMatchObject({
       cache_internal_gap_detected:true,
-      cache_internal_gap_unresolved:true,
+      cache_internal_gap_status:'verified_source_gap',
+      cache_internal_gap_verified_source:true,
+      cache_internal_gap_unresolved:false,
+      range_bridge_authoritative:true,
     })
     expect(result.market_meta.cache_internal_gap_details).toHaveLength(1)
   })
@@ -563,6 +566,7 @@ describe('platform market data', () => {
   })
 
   it('refills a suspicious intraday hole but accepts daily and weekend closures', async () => {
+    db.queryOne.mockResolvedValue({ id:76 })
     const intraday = [rate(0, 2000), rate(1, 2001), rate(3, 2003)]
     const dailyClose = [
       { ...rate(0, 2000), time: '2026-07-16 23:55:00' },
@@ -577,19 +581,21 @@ describe('platform market data', () => {
     redis.get.mockResolvedValue(intraday)
     mt5Bridge
       .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(3, 2003), rate(4, 2004), rate(5, 2005)] })
-      .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(2, 2002), rate(3, 2003), rate(4, 2004), rate(5, 2005)] })
+      .mockResolvedValueOnce({ status: 'success', symbol: 'XAUUSD.a', rates: [rate(0, 2000), rate(1, 2001), rate(3, 2003), rate(4, 2004)] })
     const result = await getPlatformRates(7, { symbol: 'XAUUSD', timeframe: 'M1', count: 3 })
     expect(mt5Bridge).toHaveBeenCalledTimes(2)
     expect(result.market_meta).toMatchObject({
-      cache_gap_refilled: true,
+      cache_gap_refilled: false,
       cache_boundary_gap_refilled: false,
       cache_internal_gap_detected: true,
-      cache_internal_gap_refill_attempted: true,
+      cache_internal_gap_status: 'verified_source_gap',
+      cache_internal_gap_verified_source: true,
+      cache_internal_gap_refill_attempted: false,
       cache_internal_gap_unresolved: false,
     })
   })
 
-  it('keeps an unresolved administrator-cache gap failed closed during the refill cooldown', async () => {
+  it('accepts an administrator-cache gap verified by the same Bridge source', async () => {
     db.queryOne.mockResolvedValue({ id:77 })
     let cache = [rate(0, 2000), rate(1, 2001), rate(3, 2003), rate(4, 2004), rate(5, 2005)]
     redis.get.mockImplementation(async () => cache)
@@ -603,22 +609,21 @@ describe('platform market data', () => {
 
     const first = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:5 })
     const second = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:5 })
-
     expect(first.market_meta).toMatchObject({
-      cache_internal_gap_refill_attempted:true,
-      cache_internal_gap_unresolved:true,
+      cache_internal_gap_verified_source:true,
+      cache_internal_gap_status:'verified_source_gap',
+      cache_internal_gap_unresolved:false,
     })
     expect(second.market_meta).toMatchObject({
-      cache_internal_gap_refill_attempted:false,
-      cache_internal_gap_unresolved:true,
+      cache_internal_gap_verified_source:true,
+      cache_internal_gap_status:'verified_source_gap',
+      cache_internal_gap_unresolved:false,
     })
-    expect(second.market_meta.cache_internal_gap_details).toEqual([
-      expect.objectContaining({ missing_bar_count:1 }),
-    ])
+    expect(second.market_meta.cache_internal_gap_details).toEqual([expect.objectContaining({ missing_bar_count:1 })])
     expect(mt5Bridge).toHaveBeenCalledTimes(3)
   })
 
-  it('keeps an unresolved user-fallback cache gap failed closed during the refill cooldown', async () => {
+  it('accepts a user-fallback cache gap verified by the same Bridge source', async () => {
     bridge.activeId.mockResolvedValue(null)
     db.queryOne.mockResolvedValue({ id:78 })
     let cache = [rate(0, 2000), rate(1, 2001), rate(3, 2003), rate(4, 2004), rate(5, 2005)]
@@ -635,17 +640,50 @@ describe('platform market data', () => {
     const second = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:5 })
 
     expect(first.market_meta).toMatchObject({
-      source:'user_bridge_fallback', cache_internal_gap_refill_attempted:true,
-      cache_internal_gap_unresolved:true,
+      source:'user_bridge_fallback', cache_internal_gap_verified_source:true,
+      cache_internal_gap_status:'verified_source_gap', cache_internal_gap_unresolved:false,
     })
     expect(second.market_meta).toMatchObject({
-      source:'user_bridge_fallback', cache_internal_gap_refill_attempted:false,
-      cache_internal_gap_unresolved:true,
+      source:'user_bridge_fallback', cache_internal_gap_verified_source:true,
+      cache_internal_gap_status:'verified_source_gap', cache_internal_gap_unresolved:false,
     })
-    expect(second.market_meta.cache_internal_gap_details).toEqual([
-      expect.objectContaining({ missing_bar_count:1 }),
-    ])
+    expect(second.market_meta.cache_internal_gap_details).toEqual([expect.objectContaining({ missing_bar_count:1 })])
     expect(mt5Bridge).toHaveBeenCalledTimes(3)
+  })
+
+  it('persists a candle when Bridge fills a cached gap', async () => {
+    db.queryOne.mockResolvedValue({ id:79 })
+    redis.get.mockResolvedValue([rate(0, 2000), rate(1, 2001), rate(3, 2003), rate(4, 2004), rate(5, 2005)])
+    mt5Bridge
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[rate(3, 2003), rate(4, 2004), rate(5, 2005)] })
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        rate(0, 2000), rate(1, 2001), rate(2, 2002), rate(3, 2003), rate(4, 2004),
+      ] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:5 })
+
+    expect(result).toMatchObject({ status:'success', market_meta: {
+      cache_gap_refilled:true,
+      cache_internal_gap_status:'filled',
+      cache_internal_gap_verified_source:false,
+      cache_internal_gap_unresolved:false,
+    } })
+    expect(redis.set.mock.calls.at(-1)[1].map(item => item.time_utc_msc))
+      .toContain(rate(2, 2002).time_utc_msc)
+    expect(mt5Bridge).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when Bridge cannot verify a cached gap', async () => {
+    db.queryOne.mockResolvedValue({ id:80 })
+    redis.get.mockResolvedValue([rate(0, 2000), rate(1, 2001), rate(3, 2003), rate(4, 2004), rate(5, 2005)])
+    mt5Bridge
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[rate(3, 2003), rate(4, 2004), rate(5, 2005)] })
+      .mockResolvedValueOnce({ status:'error', error:'bridge_unavailable' })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:5 })
+
+    expect(result).toMatchObject({ status:'error', error:'rates_gap_verification_failed' })
+    expect(result.market_meta).toBeUndefined()
   })
 
   it('uses a partial hot cache as the baseline and refreshes the full window', async () => {

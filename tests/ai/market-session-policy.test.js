@@ -68,12 +68,10 @@ describe('market session policy engine', () => {
     })).toBe('off')
   })
 
-  it('validates configured policies before database startup', () => {
+  it('does not make server startup depend on the retired session-policy configuration', () => {
     const source = readFileSync(new URL('../../server/index.js', import.meta.url), 'utf8')
-    const validateIndex = source.indexOf('readMarketSessionPolicyConfig()')
-    const databaseIndex = source.indexOf('await initDB()')
-    expect(validateIndex).toBeGreaterThan(0)
-    expect(databaseIndex).toBeGreaterThan(validateIndex)
+    expect(source).not.toContain('readMarketSessionPolicyConfig')
+    expect(source).toContain('await initDB()')
   })
 
   it('freezes the process configuration until restart', () => {
