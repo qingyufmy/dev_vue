@@ -69,14 +69,15 @@ describe('generic strategy policy compiler', () => {
       .toThrow(/policy_reference_field_forbidden/)
   })
 
-  it('ignores legacy policy JSON when the dedicated EMA34 switch is disabled', () => {
+  it('compiles explicit policy JSON independently of the legacy EMA34 switch', () => {
     const disabled = policyFixture()
     const parsed = parseStrategyPolicy({
       market_data_plan_json:JSON.stringify(plan('M30', 'D1')),
       strategy_policy_json:JSON.stringify(disabled),
       use_ema34_filter:0,
     })
-    expect(parsed).toMatchObject({ useEma34Filter:false, policyMode:'off', strategyPolicy:null, compiledPolicy:null })
+    expect(parsed).toMatchObject({ useEma34Filter:false, policyMode:'enforce', strategyPolicy:disabled,
+      compiledPolicy:{ mode:'enforce', indicators:[{ id:'entry_average' }] } })
   })
 
   it.each([
@@ -143,6 +144,25 @@ describe('generic strategy policy compiler', () => {
     input.workflow.stages[1].run_if = undefined
     expect(() => compileStrategyPolicy(input, { marketDataPlan:plan('M30', 'D1') }))
       .toThrow(/policy_workflow_forward_reference/)
+  })
+})
+
+describe('generic execution boundary', () => {
+  it('does not run strategy indicator constraints as an order-send gate', () => {
+    const configSource = readFileSync(new URL('../../server/routes/ai/config.js', import.meta.url), 'utf8')
+    const strategySource = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')
+    const schedulerSource = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
+    expect(configSource).not.toContain('evaluateSignalStrategyPolicyBeforeSubmission')
+    expect(configSource).not.toContain('strategy_policy_pre_submit_blocked')
+    expect(configSource).toContain('evaluateCoreRisk')
+    expect(configSource).toContain('evaluateStatefulRiskTx')
+    for (const source of [strategySource, schedulerSource]) {
+      expect(source).not.toContain('evaluateStrategyConstraints')
+      expect(source).not.toContain('validateWorkflowTrace')
+      expect(source).not.toContain('_strategyPolicyPrompt')
+      expect(source).not.toContain('strategy_policy_decision')
+      expect(source).toContain('prepareStrategyDataRuntime')
+    }
   })
 })
 

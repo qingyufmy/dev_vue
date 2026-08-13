@@ -141,7 +141,8 @@ vi.mock('../../server/routes/ai/strategy-policy.js', () => ({
     },
     useChanAnalysis: false,
   })),
-  prepareStrategyPolicyRuntime: vi.fn(() => null),
+  prepareStrategyDataRuntime: vi.fn(() => null),
+  buildStrategyRuntimeSnapshot: vi.fn(() => null),
   normalizeEntryMethods: vi.fn(() => ['market']),
   signalTypesForEntryMethods: vi.fn(() => ['buy', 'sell', 'hold']),
 }))

@@ -21,9 +21,7 @@ import { getObserverSourceForStrategy } from './observer-channels.js'
 import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
-import { prepareStrategyPolicyRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
-import { validateWorkflowTrace } from './strategy-workflow-engine.js'
-import { evaluateStrategyConstraints } from './strategy-constraint-engine.js'
+import { prepareStrategyDataRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
 import { registerAutoSchedulerState } from './runtime-state-registry.js'
 import {
   beginBridgeDeliveryExecution,
@@ -169,11 +167,11 @@ export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinut
 
 function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAtMs, strategy,
   config, market, marketMeta, primaryTimeframe, intervalMinutes, resultValidUntilUtcMsc,
-  taskDeadlineAtUtcMsc = null, renderedEvidence = null }) {
+  taskDeadlineAtUtcMsc = null, renderedEvidence = null, strategyDataRuntime = null }) {
   const marketJson = JSON.stringify(market || {})
   const evidencePrompt = renderedEvidence
     ? `${renderedEvidence.systemPrompt || ''}\n${renderedEvidence.userPrompt || ''}`
-    : `${config?.system_prompt || ''}\n${config?._strategyPolicyPrompt || ''}\n${config?._strategyMemoryLibraryContext || ''}`
+    : `${config?.system_prompt || ''}\n${config?._strategyMemoryLibraryContext || ''}`
   const outputContractHash = sha256(`${SIGNAL_SCHEMA_VERSION}:${JSON.stringify(config?._allowed_entry_methods || [])}`)
   const snapshotHash = sha256(marketJson)
   const inputHash = sha256(JSON.stringify({
@@ -209,6 +207,9 @@ function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAt
     terminal_clock_status:trustedClock?.clock_status || null,
     terminal_clock_source:trustedClock?.clock_source || trustedClock?.source || null,
     market_source:marketMeta?.source || null,
+    strategy_data_runtime_version:strategyDataRuntime?.data_runtime_version || null,
+    strategy_policy_hash:strategyDataRuntime?.policy_hash || null,
+    indicator_evidence_hashes:strategyDataRuntime?.audit_identity?.indicator_evidence_hashes || {},
   }
   return {
     taskKind:'auto_inference',
@@ -2225,14 +2226,12 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     await broadcastAutoProgress(promptTypeId, symbol, { stage: 'market', label: '计算指标与市场结构', progress_percent: 31 })
     const t2 = Date.now()
     let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto', config._market_data_plan, useChanAnalysis, ratesResp.market_meta, config._strategy_policy?.compiledPolicy)
-    const strategyPolicyRuntime = prepareStrategyPolicyRuntime(config._strategy_policy, market.strategy_context, {
+    const declaredPolicy = config._strategy_policy?.policyMode === 'off' ? null : config._strategy_policy?.compiledPolicy
+    market.strategy_context = await buildStrategyContextFromTags(inferenceUserId, symbol, account, positions, prompt, primaryTf, rates, 'auto', config._market_data_plan, useChanAnalysis, ratesResp.market_meta, declaredPolicy)
+    const strategyDataRuntime = prepareStrategyDataRuntime(config._strategy_policy, market.strategy_context, {
       rawPolicy:config._strategy_policy?.strategyPolicy,
     })
-    if (strategyPolicyRuntime) {
-      config._strategyPolicyRuntime = strategyPolicyRuntime
-      if (strategyPolicyRuntime.mode === 'enforce') config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
-    }
+    if (strategyDataRuntime?.indicators) market.strategy_context.indicators = strategyDataRuntime.indicators
     if (useChanAnalysis) market.chan = market.strategy_context?.timeframes?.[primaryTf]?.summary?.chan
     market.primary_timeframe = primaryTf
     await attachAtrAnchor(inferenceUserId, symbol, market, primaryTf)
@@ -2316,6 +2315,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       promptTypeId, symbol, cycleId, cycleStartedAtMs, strategy:pt, config,
       market, marketMeta:ratesResp.market_meta, primaryTimeframe:primaryTf,
       intervalMinutes, resultValidUntilUtcMsc, taskDeadlineAtUtcMsc,
+      strategyDataRuntime,
     })
     const createTracker = getAutoModelTaskTrackerFactory()
     modelTaskTracker = await createTracker(modelTaskInput, {
@@ -2395,22 +2395,6 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     delete signal._inference_source
     const executionWindowExpired = Date.now() > resultValidUntilUtcMsc
     signal.execution_valid_until_utc_msc = resultValidUntilUtcMsc
-    if (strategyPolicyRuntime) {
-      const workflow = validateWorkflowTrace(config._strategy_policy.compiledPolicy, signal, {
-        indicators:strategyPolicyRuntime.indicators,
-        signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
-      })
-      strategyPolicyRuntime.workflow_state = workflow
-      const postInference = evaluateStrategyConstraints(config._strategy_policy.compiledPolicy, {
-        stages:workflow.stages,
-        decision:workflow.decision,
-        indicators:strategyPolicyRuntime.indicators,
-        signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
-        market,
-      }, 'post_inference')
-      strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-      if (strategyPolicyRuntime.mode === 'enforce') signal.strategy_policy_decision = workflow.decision
-    }
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
     if (aiSource === 'ai_error_hold') {
       l(`BLOCKED: AI inference failed (${signal.reasoning || 'unknown error'})`)
@@ -2422,7 +2406,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       return { status: 'blocked', reason: 'ai_failed' }
     }
 
-    signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, strategyPolicyRuntime, modelSignalType })
+    signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, modelSignalType })
 
     await modelTaskTracker.resultReady({
       resultHash:sha256(JSON.stringify(signal)),
@@ -2540,7 +2524,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         strategyRuntime:buildStrategyRuntimeSnapshot({ strategy:pt, policy:config._strategy_policy || {
           marketDataPlan:config._market_data_plan, entryMethods:config._allowed_entry_methods,
           useChanAnalysis:config._use_chan_analysis, policyMode:'off', compiledPolicy:null,
-        }, strategyPolicyRuntime, source:'automatic' }),
+        }, strategyDataRuntime, source:'automatic' }),
         createdAt,
       })
       await createTradeThesisTx(run, {

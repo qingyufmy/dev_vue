@@ -14,7 +14,6 @@ import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state
 import { getRiskRuleRolloutModes } from './rollout-governance.js'
 import { getInferencePreference } from './inference-preferences.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
-import { evaluateSignalStrategyPolicyBeforeSubmission } from './strategy-policy-execution.js'
 import { subscriptionAllowsExecution, subscriptionAllowsInference } from './subscription-schedule.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
@@ -687,16 +686,6 @@ export async function executeOrderCore(userId, config, request, action, options 
     buildBridgeCall: buildBridgeOrderCall,
     beforeBridgeSend: async ({ bridgeAction, request:approved }) => {
       if (sourceType !== 'manual' && bridgeAction === 'pending') await assertAiPendingOrderEnabled()
-      const strategyGate = await evaluateSignalStrategyPolicyBeforeSubmission({
-        userId,
-        signalId,
-        request:approved,
-      })
-      if (!strategyGate.allowed) {
-        throw new RiskReject('strategy_policy_pre_submit_blocked', {
-          strategy_policy_gate:strategyGate,
-        })
-      }
       if (typeof options.beforeBridgeSend === 'function') {
         await options.beforeBridgeSend({ bridgeAction, request:approved })
       }

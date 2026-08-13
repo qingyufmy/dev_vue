@@ -12,9 +12,7 @@ import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime,
   updateStrategyMemoryInjectionLog } from './strategy-memory-library.js'
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
-import { parseStrategyPolicy, prepareStrategyPolicyRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
-import { validateWorkflowTrace } from './strategy-workflow-engine.js'
-import { evaluateStrategyConstraints } from './strategy-constraint-engine.js'
+import { parseStrategyPolicy, prepareStrategyDataRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { buildDecisionDiagnostics } from './decision-diagnostics.js'
 import { saveChanStructureAnchor } from './platform-market-data.js'
@@ -747,12 +745,10 @@ export async function handleAnalyze(userId, params, options = {}) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), account, positions, { pending_orders: pendingOrders })
-  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta, policy.compiledPolicy)
-  const strategyPolicyRuntime = prepareStrategyPolicyRuntime(policy, market.strategy_context, { rawPolicy:policy.strategyPolicy })
-  if (strategyPolicyRuntime) {
-    config._strategyPolicyRuntime = strategyPolicyRuntime
-    if (policy.policyMode === 'enforce') config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
-  }
+  const declaredPolicy = policy.policyMode === 'off' ? null : policy.compiledPolicy
+  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, account, positions, prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta, declaredPolicy)
+  const strategyDataRuntime = prepareStrategyDataRuntime(policy, market.strategy_context, { rawPolicy:policy.strategyPolicy })
+  if (strategyDataRuntime) market.strategy_context.indicators = strategyDataRuntime.indicators
   market.requested_timeframes = market.strategy_context.required_timeframes
   market.used_timeframes = market.strategy_context.used_timeframes
   market.missing_timeframes = market.strategy_context.missing_timeframes
@@ -826,25 +822,7 @@ export async function handleAnalyze(userId, params, options = {}) {
   const modelSignalType = signal.signal_type
   delete signal._inference_source
 
-  if (strategyPolicyRuntime) {
-    const workflow = validateWorkflowTrace(policy.compiledPolicy, signal, {
-      indicators:strategyPolicyRuntime.indicators,
-      signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
-    })
-    strategyPolicyRuntime.workflow_state = workflow
-    const constraintContext = {
-      stages:workflow.stages,
-      decision:workflow.decision,
-      indicators:strategyPolicyRuntime.indicators,
-      signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
-      market,
-    }
-    const postInference = evaluateStrategyConstraints(policy.compiledPolicy, constraintContext, 'post_inference')
-    strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-    if (policy.policyMode === 'enforce') signal.strategy_policy_decision = workflow.decision
-  }
-
-  signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, strategyPolicyRuntime, modelSignalType })
+  signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, modelSignalType })
 
   const createdAt = beijingNow()
   const createdAtUtcMsc = Date.now()
@@ -884,7 +862,7 @@ export async function handleAnalyze(userId, params, options = {}) {
       modelProfileId: config?._model_profile_id, provider: config?.api_provider,
       modelName: config?.model_name, credentialSource: config?._credential_source,
       memoryMode:'strategy_library',
-       strategyRuntime:buildStrategyRuntimeSnapshot({ strategy, policy, strategyPolicyRuntime, source:'manual' }), createdAt,
+       strategyRuntime:buildStrategyRuntimeSnapshot({ strategy, policy, strategyDataRuntime, source:'manual' }), createdAt,
     })
     await createTradeThesisTx(run, {
       signalId:result.insertId,
@@ -1098,8 +1076,10 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
   if (!Array.isArray(rates) || rates.length === 0) return { status: 'error', message: 'No rate data' }
 
   let market = calculateMarketData(symbol, primaryTf, rates.slice(-primaryCount), null, [], {})
-  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, null, [], prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta, policy.compiledPolicy)
-  const baseStrategyPolicyRuntime = prepareStrategyPolicyRuntime(policy, market.strategy_context, { rawPolicy:policy.strategyPolicy })
+  const declaredPolicy = policy.policyMode === 'off' ? null : policy.compiledPolicy
+  market.strategy_context = await buildStrategyContextFromTags(userId, symbol, null, [], prompt, primaryTf, rates, 'manual', policy.marketDataPlan, policy.useChanAnalysis, ratesResp.market_meta, declaredPolicy)
+  const baseStrategyDataRuntime = prepareStrategyDataRuntime(policy, market.strategy_context, { rawPolicy:policy.strategyPolicy })
+  if (baseStrategyDataRuntime) market.strategy_context.indicators = baseStrategyDataRuntime.indicators
   market.requested_timeframes = market.strategy_context.required_timeframes
   market.used_timeframes = market.strategy_context.used_timeframes
   market.missing_timeframes = market.strategy_context.missing_timeframes
@@ -1180,11 +1160,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
       _memoryMode:'strategy_library',
       _experienceSelection:{ source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] },
     }
-    const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
-    if (strategyPolicyRuntime) {
-      config._strategyPolicyRuntime = strategyPolicyRuntime
-      if (strategyPolicyRuntime.mode === 'enforce') config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
-    }
+    const strategyDataRuntime = baseStrategyDataRuntime ? structuredClone(baseStrategyDataRuntime) : null
     const unitKey = `live:${modelId}`
     const taskEnvelope = compareUnitTaskInput({
       userId, strategy, config, jobId, mode:'live', unitKey, modelId,
@@ -1192,7 +1168,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
       snapshotHash:liveCompareCheckpointContext.snapshotFingerprint,
       outputContractHash:liveCompareCheckpointContext.outputContractHash,
       marketEvidenceHash:liveCompareCheckpointContext.marketEvidenceHash,
-      decisionUtcMs:Date.now(), strategyMemory:compareMemory,
+      decisionUtcMs:Date.now(), strategyMemory:compareMemory, strategyDataRuntime,
     })
     let tracker = null
     let restoreCallbacks = null
@@ -1264,20 +1240,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
         throw error
       }
       delete signal._inference_source
-      if (strategyPolicyRuntime) {
-        const workflow = validateWorkflowTrace(policy.compiledPolicy, signal, {
-          indicators:strategyPolicyRuntime.indicators,
-          signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
-        })
-        strategyPolicyRuntime.workflow_state = workflow
-        const postInference = evaluateStrategyConstraints(policy.compiledPolicy, {
-          stages:workflow.stages, decision:workflow.decision, indicators:strategyPolicyRuntime.indicators,
-          signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' }, market,
-        }, 'post_inference')
-        strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-        if (strategyPolicyRuntime.mode === 'enforce') signal.strategy_policy_decision = workflow.decision
-      }
-      signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, strategyPolicyRuntime, modelSignalType })
+      signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, modelSignalType })
       const profile = resolved.model
       const result = {
         model_id: modelId,
@@ -1290,7 +1253,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
         analysis: signal.analysis,
         reasoning: signal.reasoning,
         latest_price: market.latest_price,
-        strategy_policy_runtime:strategyPolicyRuntime,
+        strategy_data_runtime:strategyDataRuntime,
       }
       await tracker.resultReady({ resultRef:`model_compare:${jobId}:${unitKey}`, resultHash:comparisonFingerprint(result) })
       await tracker.applying()
@@ -1416,7 +1379,7 @@ function compareUnitIdempotencyKey({ jobId, mode, unitKey, modelId, inputHash, m
 
 function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, modelId,
   inputHash, promptHash, snapshotHash, outputContractHash, marketEvidenceHash,
-  decisionUtcMs, resultValidUntilUtcMs = null, strategyMemory = null }) {
+  decisionUtcMs, resultValidUntilUtcMs = null, strategyMemory = null, strategyDataRuntime = null }) {
   const nowUtcMs = Date.now()
   const deadlines = modelTaskDeadlines('model_compare', { nowUtcMs })
   const modelConfigFingerprint = comparisonFingerprint({
@@ -1433,7 +1396,11 @@ function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, 
   const sourceHash = inputHash || comparisonFingerprint({ jobId, mode, unitKey, modelId,
     promptHash, modelConfigFingerprint, snapshotHash, marketEvidenceHash,
     memory_library_version_no:strategyMemory?.version_no ?? null,
-    memory_library_content_hash:strategyMemory?.content_hash || null })
+    memory_library_content_hash:strategyMemory?.content_hash || null,
+    strategy_data_runtime_version:strategyDataRuntime?.data_runtime_version || null,
+    strategy_policy_hash:strategyDataRuntime?.policy_hash || null,
+    indicator_evidence_hashes:strategyDataRuntime?.indicator_evidence_hashes
+      || strategyDataRuntime?.audit_identity?.indicator_evidence_hashes || {} })
   return {
     modelConfigFingerprint,
     deadlines,
@@ -1465,6 +1432,10 @@ function compareUnitTaskInput({ userId, strategy, config, jobId, mode, unitKey, 
           memory_library_version_no:Number(strategyMemory.version_no || 0),
           memory_library_content_hash:strategyMemory.content_hash || null,
         } : {}),
+        strategy_data_runtime_version:strategyDataRuntime?.data_runtime_version || null,
+        strategy_policy_hash:strategyDataRuntime?.policy_hash || null,
+        indicator_evidence_hashes:strategyDataRuntime?.indicator_evidence_hashes
+          || strategyDataRuntime?.audit_identity?.indicator_evidence_hashes || {},
       },
       scheduledAtUtcMs:nowUtcMs,
       // The generic task envelope retains the longer task deadline. The LLM
@@ -2088,12 +2059,12 @@ export async function handleHistoryCompare(userId, params, options = {}) {
     if (policy.useChanAnalysis) market.chan = strategyTimeframes[requestedTimeframe]?.summary?.chan
     }
 
-    const baseStrategyPolicyRuntime = decisionPoint.snapshotSample
+    const baseStrategyDataRuntime = decisionPoint.snapshotSample
       ? (decisionPoint.snapshotSample.strategy_runtime ? structuredClone(decisionPoint.snapshotSample.strategy_runtime) : null)
-      : prepareStrategyPolicyRuntime({
-        compiledPolicy:runtimePolicy.compiledPolicy,
-        strategyPolicy:policy.strategyPolicy,
-      }, market.strategy_context, { rawPolicy:policy.strategyPolicy })
+      : prepareStrategyDataRuntime(runtimePolicy, market.strategy_context, { rawPolicy:policy.strategyPolicy })
+    if (!decisionPoint.snapshotSample && baseStrategyDataRuntime?.indicators) {
+      market.strategy_context.indicators = structuredClone(baseStrategyDataRuntime.indicators)
+    }
 
     const persistCheckpointState = async (modelId, state = {}) => {
       const modelSnapshot = modelRuntimeSnapshots[modelId]
@@ -2195,13 +2166,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           _experienceSelection:{ source:'strategy_library', selectedItemIds:[], selectedRefs:[], selectionDetails:[] },
         } : {}),
       }
-      const strategyPolicyRuntime = baseStrategyPolicyRuntime ? structuredClone(baseStrategyPolicyRuntime) : null
-      if (strategyPolicyRuntime) {
-        config._strategyPolicyRuntime = strategyPolicyRuntime
-        if (!decisionPoint.snapshotSample && strategyPolicyRuntime.mode === 'enforce') {
-          config._strategyPolicyPrompt = strategyPolicyRuntime.rendered_prompt
-        }
-      }
+      const strategyDataRuntime = baseStrategyDataRuntime ? structuredClone(baseStrategyDataRuntime) : null
       const unitInputHash = comparisonFingerprint({
         job_id:compareJobId, mode:'history', unit_key:checkpointUnitKey,
         decision_time_utc_msc:decisionUtcMs, snapshot_id:decisionPoint.snapshotSample?.snapshot_id || null,
@@ -2213,6 +2178,10 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         market_evidence_hash:checkpointManifest.market_evidence_hash,
         memory_library_version_no:historyMemorySnapshot?.version_no ?? null,
         memory_library_content_hash:historyMemorySnapshot?.content_hash || null,
+        strategy_data_runtime_version:strategyDataRuntime?.data_runtime_version || null,
+        strategy_policy_hash:strategyDataRuntime?.policy_hash || null,
+        indicator_evidence_hashes:strategyDataRuntime?.indicator_evidence_hashes
+          || strategyDataRuntime?.audit_identity?.indicator_evidence_hashes || {},
       })
       const taskEnvelope = compareUnitTaskInput({
         userId, strategy, config, jobId:compareJobId, mode:'history', unitKey:checkpointUnitKey,
@@ -2221,7 +2190,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         snapshotHash:checkpointManifest.snapshot_fingerprint,
         outputContractHash:checkpointManifest.output_contract_hash,
         marketEvidenceHash:checkpointManifest.market_evidence_hash,
-        decisionUtcMs, strategyMemory:historyMemorySnapshot,
+        decisionUtcMs, strategyMemory:historyMemorySnapshot, strategyDataRuntime,
       })
       let tracker = null
       let restoreCallbacks = null
@@ -2290,21 +2259,8 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         try {
           let signal = await maybeAiSignal(null, config, market, prompt)
           const rawSignalType = signal.signal_type
-          if (strategyPolicyRuntime && runtimePolicy.compiledPolicy) {
-            const workflow = validateWorkflowTrace(runtimePolicy.compiledPolicy, signal, {
-              indicators:strategyPolicyRuntime.indicators,
-              signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' },
-            })
-            strategyPolicyRuntime.workflow_state = workflow
-            const postInference = evaluateStrategyConstraints(runtimePolicy.compiledPolicy, {
-              stages:workflow.stages, decision:workflow.decision, indicators:strategyPolicyRuntime.indicators,
-              signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' }, market,
-            }, 'post_inference')
-            strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-            if (runtimePolicy.policyMode === 'enforce') signal.strategy_policy_decision = workflow.decision
-          }
           signal.decision_diagnostics = buildDecisionDiagnostics({
-            signal, market, strategyPolicyRuntime, modelSignalType:rawSignalType,
+            signal, market, modelSignalType:rawSignalType,
           })
           const telemetry = Object.fromEntries(Object.keys(modelTelemetry[modelId]).map(key => [
             key, Math.max(0, Number(modelTelemetry[modelId][key]) - Number(telemetryBefore[key] || 0)),
@@ -2320,7 +2276,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
             latencyMs: Date.now() - startedAt,
             signal: { ...signal, _inference_source: signal._inference_source || 'unknown' },
             rawSignalType,
-            strategyPolicyRuntime,
+            strategyDataRuntime,
             preparedEvidence,
             telemetry,
             tracker,
@@ -2513,11 +2469,12 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         execution_validation:executionValidation,
         execution_eligible:executionEligible,
         raw_model_direction:comparisonDirection(result.rawSignalType),
-        policy_compliant_direction:direction,
-        workflow_compliant:result.strategyPolicyRuntime?.workflow_state?.compliant ?? null,
-        constraint_passed:result.strategyPolicyRuntime?.constraint_results?.post_inference?.passed ?? null,
-        strategy_policy_mode:result.strategyPolicyRuntime?.mode || 'legacy_implicit',
-        strategy_policy_hash:result.strategyPolicyRuntime?.policy_hash || null,
+        policy_compliant_direction:null,
+        workflow_compliant:null,
+        constraint_passed:null,
+        strategy_policy_mode:result.strategyDataRuntime?.mode || 'off',
+        strategy_policy_hash:result.strategyDataRuntime?.policy_hash || null,
+        strategy_data_runtime_version:result.strategyDataRuntime?.data_runtime_version || null,
         decision_summary:boundedComparisonError(signal.decision_summary || signal.analysis || '', '', 600),
         reasoning:boundedComparisonError(signal.reasoning || '', '', 800),
         snapshot_sample:decisionPoint.snapshotSample ? {

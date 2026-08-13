@@ -4,9 +4,23 @@ import {
   normalizeMarketDataPlan,
   normalizeUseChanAnalysis,
   parseStrategyPolicy,
+  prepareStrategyDataRuntime,
   buildStrategyRuntimeSnapshot,
   signalTypesForEntryMethods,
 } from '../../server/routes/ai/strategy-policy.js'
+
+function declaredEmaPolicy(mode = 'enforce') {
+  return {
+    schema_version:'strategy-policy-v1', mode,
+    indicators:[{
+      id:'entry_ema34', kind:'ema', enabled:true,
+      source:{ timeframe:'M5', field:'close', bar_scope:'closed_only' },
+      params:{ period:34, minimum_bars:34, warmup_target_bars:34 },
+    }],
+    workflow:{ stages:[], selectors:[], default_decision:'allow' },
+    constraints:[], prompt_rules:[], ui:{ groups:[] },
+  }
+}
 
 describe('strategy policy', () => {
   it('normalizes and deduplicates supported entry methods', () => {
@@ -62,6 +76,73 @@ describe('strategy policy', () => {
       .toThrow('chan_timeframe_unsupported')
     expect(parseStrategyPolicy({ use_chan_analysis:0, market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } }).marketDataPlan.timeframes[0].timeframe)
       .toBe('M1')
+  })
+
+  it('compiles an explicit declaration and computes only its generic indicator data', () => {
+    const strategyPolicy = declaredEmaPolicy()
+    const strategy = {
+      market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
+      strategy_policy_json:JSON.stringify(strategyPolicy), use_ema34_filter:0,
+    }
+    const parsed = parseStrategyPolicy(strategy)
+    expect(parsed.policyMode).toBe('enforce')
+    expect(parsed.compiledPolicy).toMatchObject({ mode:'enforce', indicators:[{ id:'entry_ema34', kind:'ema', source:{ timeframe:'M5' } }] })
+    const bars = Array.from({ length:34 }, (_, index) => ({
+      time_utc_msc:1_000 + index * 300_000, open:index + 1, high:index + 1, low:index + 1, close:index + 1,
+    }))
+    const context = { policyIndicatorSources:{ M5:{ bars, lastBarClosed:true, marketSource:'fixture' } } }
+    const runtime = prepareStrategyDataRuntime(parsed, context)
+    expect(runtime).toMatchObject({ data_runtime_version:'strategy-data-runtime-v1', mode:'enforce', policy_hash:parsed.compiledPolicy.policy_hash,
+      indicators:{ entry_ema34:{ ready:true, source:{ timeframe:'M5', market_source:'fixture' } } },
+      input_sources:{ M5:{ timeframe:'M5', bar_count:34, market_source:'fixture', last_bar_closed:true } },
+      audit_identity:{ policy_hash:parsed.compiledPolicy.policy_hash, indicator_algorithm_version:expect.any(String) } })
+    expect(context).not.toHaveProperty('indicators')
+  })
+
+  it('does not inject data for an undeclared policy or the legacy EMA switch', () => {
+    const parsed = parseStrategyPolicy({
+      market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
+      use_ema34_filter:1,
+    })
+    expect(parsed).toMatchObject({ policyMode:'off', strategyPolicy:null, compiledPolicy:null, useEma34Filter:true })
+    expect(prepareStrategyDataRuntime(parsed, { policyIndicatorSources:{} })).toBeNull()
+  })
+
+  it('fails closed for an explicitly invalid policy instead of treating it as off', () => {
+    expect(() => parseStrategyPolicy({
+      market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
+      strategy_policy_json:JSON.stringify({ schema_version:'unsupported', mode:'enforce' }),
+    })).toThrow('policy_schema_unsupported')
+    expect(() => parseStrategyPolicy({
+      strategy_policy_json:'{not-json',
+    })).toThrow('policy_json_invalid')
+  })
+
+  it('does not calculate indicators for an explicitly off policy', () => {
+    const parsed = parseStrategyPolicy({ strategy_policy_json:JSON.stringify(declaredEmaPolicy('off')),
+      market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] } })
+    expect(parsed.policyMode).toBe('off')
+    expect(parsed.compiledPolicy).toMatchObject({ mode:'off' })
+    expect(prepareStrategyDataRuntime(parsed, { policyIndicatorSources:{} })).toBeNull()
+  })
+
+  it('freezes the data runtime in the strategy snapshot without adding policy decisions', () => {
+    const parsed = parseStrategyPolicy({
+      market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
+      strategy_policy_json:JSON.stringify(declaredEmaPolicy()),
+    })
+    const bars = Array.from({ length:34 }, (_, index) => ({
+      time_utc_msc:1_000 + index * 300_000, open:index + 1, high:index + 1, low:index + 1, close:index + 1,
+    }))
+    const dataRuntime = prepareStrategyDataRuntime(parsed, { policyIndicatorSources:{
+      M5:{ bars, lastBarClosed:true, marketSource:'fixture' },
+    } })
+    const snapshot = buildStrategyRuntimeSnapshot({ strategy:{ id:1, version:2 }, policy:parsed, strategyDataRuntime:dataRuntime })
+    expect(snapshot).toMatchObject({ data_runtime_version:'strategy-data-runtime-v1', compiled_policy:{ policy_hash:parsed.compiledPolicy.policy_hash },
+      indicators:{ entry_ema34:{ ready:true } }, input_sources:{ M5:{ bar_count:34 } } })
+    expect(snapshot.workflow_state).toBeUndefined()
+    expect(snapshot.constraint_results).toBeUndefined()
+    expect(snapshot.prompt_renderer).toBeUndefined()
   })
 
   it('builds a frozen base runtime even when the policy compiler is off', () => {

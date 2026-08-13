@@ -42,6 +42,19 @@ describe('shared market inference boundary', () => {
     expect(snapshot.klines.M5).toHaveLength(1)
   })
 
+  it('keeps declared indicator facts in the frozen model and snapshot boundary', () => {
+    const indicators = { entry_ema34:{ ready:true, kind:'ema', source:{ timeframe:'M5', bar_scope:'closed_only' },
+      value:2048.5, evidence_hash:'a'.repeat(64) } }
+    const shared = buildSharedMarketSnapshot({ symbol:'XAUUSD', strategy_context:{ indicators, timeframes:{} } })
+    expect(shared.strategy_context.indicators).toEqual(indicators)
+    const frozen = prepareInferenceSnapshot({ marketSnapshot:shared, strategyRuntime:{
+      data_runtime_version:'strategy-data-runtime-v1', policy_hash:'b'.repeat(64), indicators,
+    } })
+    expect(frozen.marketSnapshot.strategy_context.indicators).toEqual(indicators)
+    expect(frozen.strategyRuntime).toMatchObject({ data_runtime_version:'strategy-data-runtime-v1',
+      policy_hash:'b'.repeat(64), indicators })
+  })
+
   it('does not expose server judgment scores or undeclared ATR anchors to the model snapshot', () => {
     const result = buildSharedMarketSnapshot({
       symbol:'XAUUSD', timeframe:'M5', atr_14:8,

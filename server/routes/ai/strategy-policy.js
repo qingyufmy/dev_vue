@@ -1,6 +1,6 @@
 import { hasLegacyUseChanTag, parseLegacyTimeframeTags } from './utils.js'
-import { STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
-import { calculatePolicyIndicators } from './indicator-registry.js'
+import { compileStrategyPolicy, StrategyPolicyValidationError, STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
+import { calculatePolicyIndicators, INDICATOR_ALGORITHM_VERSION } from './indicator-registry.js'
 import { buildPreInferenceWorkflowState } from './strategy-workflow-engine.js'
 import { renderStrategyPolicyPrompt } from './strategy-prompt-renderer.js'
 import { evaluateStrategyConstraints } from './strategy-constraint-engine.js'
@@ -92,17 +92,45 @@ export function parseStrategyPolicy(strategy = {}) {
     { prompt: strategy.system_prompt || '' },
   )
   validateChanTimeframes(marketDataPlan, useChanAnalysis)
+
+  // A policy is an explicit declaration, rather than a hint that can be
+  // silently discarded.  Compile it even when its mode is `off` so malformed
+  // persisted JSON fails closed and its canonical hash remains available for
+  // audit.  The data runtime below deliberately skips off-mode policies.
+  // Treat an explicitly persisted `null` JSON column as a clear operation;
+  // only fall back to the legacy alias when the JSON column is absent or
+  // undefined.  This avoids resurrecting an old alias after a policy was
+  // intentionally removed.
+  const rawPolicyValue = strategy.strategy_policy_json !== undefined
+    ? strategy.strategy_policy_json : strategy.strategy_policy
+  const hasExplicitPolicy = rawPolicyValue !== undefined && rawPolicyValue !== null
+    && !(typeof rawPolicyValue === 'string' && rawPolicyValue.trim() === '')
+  let strategyPolicy = null
+  if (hasExplicitPolicy) {
+    if (typeof rawPolicyValue === 'string') {
+      try { strategyPolicy = JSON.parse(rawPolicyValue) } catch {
+        // Keep the public error stable; parser details must not turn a client
+        // validation failure into an internal-error response.
+        throw new StrategyPolicyValidationError('policy_json_invalid', '$')
+      }
+    } else {
+      strategyPolicy = structuredClone(rawPolicyValue)
+    }
+  }
+  const compiledPolicy = hasExplicitPolicy
+    ? compileStrategyPolicy(rawPolicyValue, { marketDataPlan })
+    : null
   return {
     entryMethods: normalizeEntryMethods(strategy.entry_methods_json || strategy.entry_methods || DEFAULT_ENTRY_METHODS),
     marketDataPlan,
     useChanAnalysis,
     useEma34Filter,
-    strategyPolicy:null,
+    strategyPolicy,
     // use_ema34_filter is retained only as a legacy audit/read field. It must
     // never create a runtime policy, add a market-data window, render prompt
     // instructions, or enable enforcement for new inference tasks.
-    compiledPolicy:null,
-    policyMode:'off',
+    compiledPolicy,
+    policyMode:compiledPolicy?.mode || 'off',
   }
 }
 
@@ -115,7 +143,7 @@ function runtimeHash(value) {
  * optional compiler runtime is merged into this object; it never determines
  * whether the base snapshot exists.
  */
-export function buildStrategyRuntimeSnapshot({ strategy = {}, policy = {}, strategyPolicyRuntime = null, source = 'inference' } = {}) {
+export function buildStrategyRuntimeSnapshot({ strategy = {}, policy = {}, strategyPolicyRuntime = null, strategyDataRuntime = null, source = 'inference' } = {}) {
   const marketDataPlan = policy.marketDataPlan || {}
   const useChanAnalysis = Boolean(policy.useChanAnalysis)
   const chanTimeframes = useChanAnalysis
@@ -134,16 +162,112 @@ export function buildStrategyRuntimeSnapshot({ strategy = {}, policy = {}, strat
     chan_timeframes:chanTimeframes,
     window_policy_version:useChanAnalysis ? CHAN_WINDOW_POLICY_VERSION : CHAN_WINDOW_POLICY_VERSION,
     chan_window_policy_version:useChanAnalysis ? CHAN_WINDOW_POLICY_VERSION : CHAN_WINDOW_POLICY_VERSION,
-    strategy_policy_mode:policy.policyMode || strategyPolicyRuntime?.mode || 'off',
-    strategy_policy_hash:strategyPolicyRuntime?.policy_hash || policy.compiledPolicy?.policy_hash || null,
+    strategy_policy_mode:strategyDataRuntime?.mode || policy.policyMode || strategyPolicyRuntime?.mode || 'off',
+    strategy_policy_hash:strategyDataRuntime?.policy_hash || strategyPolicyRuntime?.policy_hash || policy.compiledPolicy?.policy_hash || null,
   }
-  const runtime = { ...(strategyPolicyRuntime || {}), ...base }
+  // New snapshots carry the data-only runtime.  Keep the old runtime merge for
+  // historical callers during the migration window, but never let it replace
+  // an explicitly supplied data runtime.
+  const runtime = { ...(strategyPolicyRuntime || {}), ...(strategyDataRuntime || {}), ...base }
   const hashInput = { ...runtime }
   delete hashInput.runtime_config_hash
   delete hashInput.strategy_runtime_hash
   runtime.runtime_config_hash = runtimeHash(hashInput)
   runtime.strategy_runtime_hash = runtime.runtime_config_hash
   return runtime
+}
+
+function summarizeIndicatorInputSource(timeframe, source = {}) {
+  const bars = Array.isArray(source.bars) ? source.bars : Array.isArray(source.klines) ? source.klines : []
+  const first = bars[0]
+  const last = bars.at(-1)
+  const timeOf = bar => {
+    const numeric = Number(bar?.time_utc_msc ?? bar?.time_msc ?? bar?.time_server_msc)
+    if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric
+    const parsed = Date.parse(String(bar?.time || ''))
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return {
+    timeframe,
+    market_source:source.marketSource || source.market_source || null,
+    source_id:Number(source.sourceId ?? source.source_id) || null,
+    source_type:source.sourceType || source.source_type || null,
+    timezone_offset_minutes:Number.isFinite(Number(source.timezoneOffsetMinutes ?? source.timezone_offset_minutes))
+      ? Number(source.timezoneOffsetMinutes ?? source.timezone_offset_minutes) : null,
+    bar_count:bars.length,
+    first_bar_time_utc_msc:timeOf(first),
+    last_bar_time_utc_msc:timeOf(last),
+    last_bar_closed:typeof source.lastBarClosed === 'boolean'
+      ? source.lastBarClosed : typeof source.last_bar_closed === 'boolean' ? source.last_bar_closed : null,
+    internal_gap_unresolved:source.internalGapUnresolved === true || source.internal_gap_unresolved === true,
+  }
+}
+
+/**
+ * Prepare only the neutral facts declared by a compiled policy.  This is the
+ * fresh-inference data boundary: it never evaluates workflow/constraints,
+ * renders prompt instructions, or mutates the caller's strategy context.
+ */
+export function prepareStrategyDataRuntime(policy, strategyContext, { rawPolicy = null } = {}) {
+  const compiledPolicy = policy && Object.prototype.hasOwnProperty.call(policy, 'compiledPolicy')
+    ? policy.compiledPolicy : policy
+  if (!compiledPolicy || compiledPolicy.mode === 'off') return null
+
+  const declaredSources = strategyContext?.policyIndicatorSources || {}
+  // The private source map is the authoritative indicator input, while the
+  // visible timeframe summary may carry additional broker/source identity
+  // fields.  Join those metadata fields here without exposing extra bars or
+  // changing the calculation inputs.
+  const frameSources = Object.fromEntries(Object.entries(declaredSources).map(([timeframe, source]) => {
+    const quality = strategyContext?.timeframes?.[timeframe]?.summary?.market_data_quality || {}
+    const has = (key, alias) => source?.[key] !== undefined ? source[key] : source?.[alias] !== undefined ? source[alias] : quality[alias]
+    return [timeframe, {
+      ...quality,
+      ...(source || {}),
+      sourceId:has('sourceId', 'source_id'),
+      sourceType:has('sourceType', 'source_type') || quality.platform || null,
+      timezoneOffsetMinutes:has('timezoneOffsetMinutes', 'timezone_offset_minutes'),
+      marketSource:has('marketSource', 'market_source') || quality.source_type || quality.platform || null,
+      lastBarClosed:has('lastBarClosed', 'last_bar_closed'),
+      internalGapUnresolved:source?.internalGapUnresolved !== undefined
+        ? source.internalGapUnresolved : source?.internal_gap_unresolved !== undefined
+          ? source.internal_gap_unresolved : Boolean(quality.cache_internal_gap_unresolved),
+    }]
+  }))
+  const indicators = calculatePolicyIndicators(compiledPolicy, frameSources)
+  const indicatorSourceTimeframes = [...new Set((compiledPolicy.indicators || [])
+    .filter(definition => definition.enabled !== false)
+    .map(definition => definition.source.timeframe))]
+  const inputSources = Object.fromEntries(indicatorSourceTimeframes.map(timeframe => [
+    timeframe, summarizeIndicatorInputSource(timeframe, frameSources[timeframe] || {}),
+  ]))
+  const auditIdentity = {
+    data_runtime_version:'strategy-data-runtime-v1',
+    policy_hash:compiledPolicy.policy_hash || null,
+    schema_version:compiledPolicy.schema_version || null,
+    engine_version:compiledPolicy.engine_version || null,
+    indicator_algorithm_version:INDICATOR_ALGORITHM_VERSION,
+    indicator_source_timeframes:indicatorSourceTimeframes,
+    indicator_evidence_hashes:Object.fromEntries(Object.entries(indicators)
+      .map(([id, evidence]) => [id, evidence?.evidence_hash || null])),
+  }
+  return {
+    data_runtime_version:'strategy-data-runtime-v1',
+    schema_version:compiledPolicy.schema_version,
+    mode:compiledPolicy.mode,
+    policy_hash:compiledPolicy.policy_hash,
+    indicator_algorithm_version:INDICATOR_ALGORITHM_VERSION,
+    indicator_source_timeframes:indicatorSourceTimeframes,
+    indicator_evidence_hashes:auditIdentity.indicator_evidence_hashes,
+    raw_policy:rawPolicy || policy?.strategyPolicy || null,
+    compiled_policy:compiledPolicy,
+    indicators,
+    input_sources:inputSources,
+    // Keep a descriptive alias for consumers that use the registry's
+    // terminology; both fields are the same projected, non-bar source data.
+    indicator_sources:inputSources,
+    audit_identity:auditIdentity,
+  }
 }
 
 export function prepareStrategyPolicyRuntime(policy, strategyContext, { rawPolicy = null } = {}) {

@@ -518,6 +518,8 @@ describe('durable automatic model-task gate', () => {
       market:{ symbol:'XAUUSD', latest_price:2000 },
       marketMeta:{ timezone_offset_minutes:180, clock_status:'progressing_tick', source:'bridge' },
       primaryTimeframe:'M5', resultValidUntilUtcMsc:120_000,
+      strategyDataRuntime:{ data_runtime_version:'strategy-data-runtime-v1', policy_hash:'a'.repeat(64),
+        audit_identity:{ indicator_evidence_hashes:{ entry_ema34:'b'.repeat(64) } } },
     })
     expect(input).toMatchObject({
       taskKind:'auto_inference', queueClass:'execution_critical', domainType:'strategy_symbol',
@@ -527,7 +529,9 @@ describe('durable automatic model-task gate', () => {
     expect(input.inputHash).toMatch(/^[a-f0-9]{64}$/)
     expect(input.promptHash).toMatch(/^[a-f0-9]{64}$/)
     expect(input.outputContractHash).toMatch(/^[a-f0-9]{64}$/)
-    expect(input.frozenContext).toMatchObject({ strategy_version:3, provider:'deepseek', model:'deepseek-chat', interval_minutes:5 })
+    expect(input.frozenContext).toMatchObject({ strategy_version:3, provider:'deepseek', model:'deepseek-chat', interval_minutes:5,
+      strategy_data_runtime_version:'strategy-data-runtime-v1', strategy_policy_hash:'a'.repeat(64),
+      indicator_evidence_hashes:{ entry_ema34:'b'.repeat(64) } })
     expect(input.taskDeadlineAtUtcMs).toBe(601_000)
   })
 

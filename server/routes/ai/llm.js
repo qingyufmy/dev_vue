@@ -136,8 +136,8 @@ const CHAN_DIVERGENCE_RULE = `
 ## 缠论数据字典
 以下内容只解释输入字段和数据状态，不替代当前策略正文。
 chan.status、usable、confirmed、unresolved 表示缠论数据的总体可用性和确认状态；它们是数据状态，不是交易结论。
-chan.structure_topology_reliable 与 chan.time_location_reliable 分别表示结构拓扑和绝对时间定位的可靠性，二者含义独立。segment_count、center_count、bi_center_count 等字段是对应结构的计数或只读摘要；候选结构和确认结构应按字段自身状态区分。
-evidence_capabilities.data_complete、segment_direction_usable、center_structure_usable、entry_structure_usable、divergence_usable 表示各类数据能力是否可供读取；能力字段不表示方向、胜率或执行资格。
+chan.structure_topology_reliable 与 chan.absolute_time_location_reliable 分别表示结构拓扑和绝对时间定位的可靠性，二者含义独立。旧字段 time_location_reliable 与 absolute_time_location_reliable 同义。segment_count、center_count、bi_center_count 等字段是对应结构的计数或只读摘要；候选结构和确认结构应按字段自身状态区分。
+evidence_capabilities.history_complete、continuity_complete、topology_input_complete、absolute_time_location_reliable、segment_direction_usable、center_structure_usable、entry_structure_usable、divergence_usable 表示各层数据能力是否可供读取；能力字段彼此独立，不表示方向、胜率或执行资格。尤其是 entry_structure_usable=false 或 divergence_usable=false 时，不得据此否定 segment_direction_usable=true 的已确认线段方向。
 chan.divergence、chan.forming_divergence、chan.recent_divergences 和 chan.entry_candidates 分别表示确认结果、候选结果、历史结果和候选列表；type、state、confirmed、usable_for_entry、evidence_refs 等字段保留其原始枚举和引用关系。
 chan.trend_state、upward_breakout_pending、downward_breakout_pending、structure_anchor_bootstrap_pending、segment_history_unresolved、center_cross_window_unstable、center_entry_unconfirmed、divergence_evidence_unavailable 等字段只描述当前数据状态或诊断状态。
 confirmed_structure_age_bars 是距最近确认线段终点的 K 线根数诊断值；confirmed_structure_stale 仅是旧版历史快照的兼容字段，不代表当前引擎状态。
@@ -291,18 +291,6 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   }
   schema.reasoning = `中文，依据当前策略正文说明信号方向和为何从策略允许的入场方式（${methods.map(item => labels[item]).join('、')}）中选择当前方式。${hasPending ? '如涉及挂单，再说明策略对挂单的判断。' : '本策略未声明挂单能力，不得返回挂单类型。'}`
   return { outputFormat: JSON.stringify(schema, null, 2), hasPending }
-}
-
-function attachStrategyPolicyOutputFormat(baseFormat, runtime) {
-  const hasWorkflowStages = Array.isArray(runtime?.compiled_policy?.workflow?.stages)
-    && runtime.compiled_policy.workflow.stages.length > 0
-  if (!runtime || runtime.mode !== 'enforce' || !hasWorkflowStages) return baseFormat
-  let schema
-  try { schema = JSON.parse(baseFormat) } catch { return baseFormat }
-  schema.strategy_policy_trace = {
-    stages:'必须按 compiled_policy.workflow.stages 的 id 返回对象。激活阶段返回 state 或 passed/evidence_count/evidence_refs；未激活阶段只能返回 skipped=true。',
-  }
-  return JSON.stringify(schema, null, 2)
 }
 
 function usesNativeJsonMode(provider, protocol) {
@@ -1217,7 +1205,6 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const schemaSource = 'code'
     const strategySchema = buildStrategyOutputFormat(outputFormat, config._allowed_entry_methods, config._experienceSelection)
     outputFormat = strategySchema.outputFormat
-    outputFormat = attachStrategyPolicyOutputFormat(outputFormat, config._strategyPolicyRuntime)
     const positionManagementContext = config._positionManagementContext
     const positionManagementEnabled = hasActivePositionManagementGroups(positionManagementContext)
     if (positionManagementEnabled) {
@@ -1243,9 +1230,12 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
 
 ## 持仓与挂单管理输出合同
 position_management_context 是服务端提供的去身份化实时事实。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。如何判断保留、取消、持有或退出只以当前策略正文和输入事实为准。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、手数或盈亏。` : ''
-    const strategyPolicyRule = typeof config._strategyPolicyPrompt === 'string' && config._strategyPolicyPrompt
-      ? `\n\n${config._strategyPolicyPrompt}` : ''
-    const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + strategyMemoryRule + strategyPolicyRule + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
+    const declaredIndicators = market?.strategy_context?.indicators
+    const declaredIndicatorRule = declaredIndicators && typeof declaredIndicators === 'object'
+      && Object.keys(declaredIndicators).length > 0
+      ? '\n\n## 策略声明指标数据\nstrategy_context.indicators 仅包含当前策略显式声明、由服务端通用指标工具计算的中性事实。ready、reason、source、bar、value、analysis 与 evidence_hash 都是数据证据，不是服务端交易结论。如何解释这些指标、采用哪个周期以及是否交易，只以当前策略正文为准；不得自行增加策略未声明的指标、门槛或周期职责。'
+      : ''
+    const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + strategyMemoryRule + declaredIndicatorRule + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
 
     // Check if prompt wants Chan theory data
     const useChan = config._use_chan_analysis === undefined
