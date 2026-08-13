@@ -6272,7 +6272,7 @@ function renderStrategyMemoryCompressionStatus(job = state.strategyMemoryCompres
     compressButton.classList.toggle("is-active", active);
     compressButton.innerHTML = `<i data-lucide="${active ? "loader-circle" : "combine"}" size="15"></i>${active ? "正在整理" : "整理并压缩"}`;
   }
-  if (saveButton) saveButton.disabled = active;
+  if (saveButton) saveButton.disabled = active || !state.strategyMemoryEditorDirty;
   document.querySelectorAll("[data-strategy-memory-restore]").forEach(button => { button.disabled = active; });
   initIcons();
 }
@@ -6455,14 +6455,37 @@ function startStrategyMemoryConsistencyPolling(strategyId, job) {
   void poll();
 }
 
+function strategyMemoryConflictPresentation(stateName) {
+  const key = String(stateName || "").replace(/-/g, "_");
+  const labels = {
+    attention_required: { icon:"triangle-alert", text:"需要人工检查策略", tone:"danger" },
+    observing: { icon:"eye", text:"观察中", tone:"warning" },
+    unverified: { icon:"circle-help", text:"检查发现，等待复盘验证", tone:"warning" },
+    location_stale: { icon:"map-pin-off", text:"原文位置已变化，待复核", tone:"neutral" },
+    resolved: { icon:"circle-check", text:"已处理", tone:"success" },
+    dismissed: { icon:"minus", text:"已忽略", tone:"neutral" },
+    healthy: { icon:"circle-check", text:"状态正常", tone:"success" },
+  };
+  return labels[key] ? { ...labels[key], key } : null;
+}
+
+function strategyMemoryConflictStatusMarkup(stateName, count = 0, className = "") {
+  const presentation = strategyMemoryConflictPresentation(stateName);
+  if (!presentation) return "";
+  const suffix = Number(count || 0) > 0 ? ` · ${Number(count)} 项` : "";
+  return `<span class="strategy-memory-status-badge is-${presentation.key} ${presentation.tone} ${className}" role="status"><span class="strategy-memory-status-icon" aria-hidden="true"><i data-lucide="${presentation.icon}" size="14"></i></span><strong>${presentation.text}${suffix}</strong></span>`;
+}
+
 function strategyMemoryPreviewMarkup(preview) {
-  if (!preview) return `<div class="strategy-memory-preview-error" role="alert"><strong>预览暂不可用</strong><span>${escapeHtml(state.strategyMemoryPreviewError || "请重试预览，原文仍可查看。")}</span><button class="text-button" type="button" data-strategy-memory-mode="source">查看原文</button></div>`;
+  if (!preview) return `<div class="strategy-memory-preview-error" role="alert"><strong>预览暂不可用</strong><span>${escapeHtml(state.strategyMemoryPreviewError || "请重试预览，原文仍可查看。")}</span><button class="text-button" type="button" data-strategy-memory-mode="source">编辑原文</button></div>`;
   if (!(preview.blocks || []).length) return '<div class="strategy-memory-preview-empty"><strong>尚无已沉淀经验</strong><span>确认日/月复盘后会形成第一版记忆。</span></div>';
-  const blocks = (preview.blocks || []).filter(block => !state.strategyMemoryConflictOnly || block.conflict_ids?.length);
+  const blocks = (preview.blocks || []).filter(block => !state.strategyMemoryConflictOnly || block.conflict_ids?.length || block.conflict_state);
   return `<div class="strategy-memory-preview-body">${blocks.map(block => {
-    const tone = block.conflict_state ? ` is-${escapeHtml(block.conflict_state)}` : "";
+    const conflictState = String(block.conflict_state || "").replace(/-/g, "_");
+    const tone = conflictState ? ` is-${escapeHtml(conflictState)}` : "";
+    const marker = strategyMemoryConflictStatusMarkup(conflictState, (block.conflicts || []).length);
     const conflicts = (block.conflicts || []).map(item => `<details class="strategy-memory-inline-conflict"><summary>${escapeHtml(item.summary || "策略冲突候选")} · ${Number(item.evidence_count || 0)}/${Number(item.alert_threshold || 3)}</summary><p>策略原文：${escapeHtml(item.strategy_excerpt || "-")}</p><p>记忆原文：${escapeHtml(item.memory_excerpt || "-")}</p>${item.suggested_change ? `<p>建议核对：${escapeHtml(item.suggested_change)}</p>` : ""}</details>`).join("");
-    return `<article class="strategy-memory-preview-block${tone}" data-memory-block-id="${escapeHtml(block.block_id)}">${block.html}${conflicts}</article>`;
+    return `<article class="strategy-memory-preview-block${tone}" data-memory-block-id="${escapeHtml(block.block_id)}">${marker}${block.html}${conflicts}</article>`;
   }).join("") || '<div class="strategy-memory-preview-empty"><span>当前版本没有可定位冲突。</span></div>'}</div>`;
 }
 
@@ -6494,30 +6517,45 @@ function renderStrategyMemoryLibrary() {
   const observing = conflicts.filter(item => item.status === "observing" && currentLocation(item));
   const activeConflictIds = new Set([...alerts, ...observing].map(item => Number(item.id)));
   const inactiveConflicts = conflicts.filter(item => !activeConflictIds.has(Number(item.id)));
+  const stale = inactiveConflicts.filter(item => String(item.verification_status || "") === "location_stale");
   const usage = Math.min(100, Math.round(Number(library.char_count || 0) / Math.max(1, Number(library.capacity_chars || 120000)) * 100));
   const options = strategies.map(item => `<option value="${Number(item.strategy_id)}" ${Number(item.strategy_id) === Number(selected.strategy_id) ? "selected" : ""}>${escapeHtml(item.title || `策略 #${item.strategy_id}`)} · ${item.strategy_scope === "platform" ? "平台" : "私有"}</option>`).join("");
-  const conflictRows = [...alerts, ...observing, ...inactiveConflicts].map(item => { const inactive = ["resolved", "dismissed"].includes(String(item.status || "")); return `<article class="strategy-memory-conflict is-${escapeHtml(item.verification_status === 'location_stale' ? 'location-stale' : item.status)}">
-    <div><span class="status-chip ${item.status === 'attention_required' ? 'danger' : inactive ? 'success' : 'warning'}">${item.verification_status === 'location_stale' ? '原文位置已变化' : item.status === 'attention_required' ? '需要人工检查策略' : item.status === 'resolved' ? '已处理' : item.status === 'dismissed' ? '已忽略' : `观察中 ${Number(item.evidence_count || 0)}/${Number(item.alert_threshold || 3)}`}</span><strong>${escapeHtml(item.conflict_summary || "发现记忆与策略可能冲突")}</strong>${item.strategy_excerpt ? `<p>策略原文：${escapeHtml(item.strategy_excerpt)}</p>` : ""}${item.memory_excerpt ? `<p>记忆原文：${escapeHtml(item.memory_excerpt)}</p>` : ""}${item.suggested_change ? `<p>建议核对：${escapeHtml(item.suggested_change)}</p>` : ""}</div>
-    <div class="strategy-memory-row-actions">${inactive ? `<button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="reopen">重新打开</button>` : `<button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="dismiss">忽略</button><button class="btn btn-primary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="resolve">已处理</button>`}</div>
+  const conflictRows = [...alerts, ...observing, ...inactiveConflicts].map(item => {
+    const inactive = ["resolved", "dismissed"].includes(String(item.status || ""));
+    const staleRow = String(item.verification_status || "") === "location_stale";
+    const stateName = staleRow ? "location_stale" : item.status;
+    const badge = strategyMemoryConflictStatusMarkup(stateName, stateName === "observing" ? Number(item.evidence_count || 0) : 0);
+    const rowClass = stateName === "location_stale" ? "location-stale" : stateName;
+    const actionButtons = inactive || staleRow
+      ? `<button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="reopen">重新打开</button>`
+      : `<button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="dismiss">忽略</button><button class="btn btn-primary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="resolve">已处理</button>`;
+    return `<article class="strategy-memory-conflict is-${escapeHtml(rowClass)}">
+    <div><div class="strategy-memory-conflict-state">${badge}</div><strong>${escapeHtml(item.conflict_summary || "发现记忆与策略可能冲突")}</strong>${item.strategy_excerpt ? `<p>策略原文：${escapeHtml(item.strategy_excerpt)}</p>` : ""}${item.memory_excerpt ? `<p>记忆原文：${escapeHtml(item.memory_excerpt)}</p>` : ""}${item.suggested_change ? `<p>建议核对：${escapeHtml(item.suggested_change)}</p>` : ""}</div>
+    <div class="strategy-memory-row-actions">${actionButtons}</div>
   </article>`; }).join("");
   const revisionRows = revisions.slice(0, 20).map(item => { const sourceReview = String(item.source_type || "") === "period_review_version" && Number(item.source_id || 0) > 0 ? ` · 来源复盘版本 #${Number(item.source_id)}` : ""; return `<li><div><strong>版本 ${Number(item.version_no)}</strong><span>${escapeHtml(strategyMemoryReasonLabel(item.change_reason))}${escapeHtml(sourceReview)} · ${escapeHtml(formatTime(item.created_at))}</span></div>${Number(item.version_no) !== Number(library.version_no) ? `<button class="text-button" type="button" data-strategy-memory-restore="${Number(item.id)}">恢复此版本</button>` : '<span class="status-chip success">当前</span>'}</li>`; }).join("");
   const sourceMode = state.strategyMemoryViewMode === "source";
   const consistencyLabel = strategyMemoryConsistencyLabel(state.strategyMemoryConsistencyJob);
-  host.innerHTML = `<section class="strategy-memory-library">
-    <header class="strategy-memory-toolbar"><label><span>选择策略</span><select id="strategyMemorySelector">${options}</select></label><div class="strategy-memory-summary"><span><strong>v${Number(library.version_no || 0)}</strong> 当前版本</span><span><strong>${Number(library.char_count || 0).toLocaleString("zh-CN")}</strong> / ${Number(library.capacity_chars || 120000).toLocaleString("zh-CN")} 字</span><span id="strategyMemoryCompressionStatus" class="status-chip ${compressionPresentation.active ? 'warning' : compressionPresentation.status === 'failed' || compressionPresentation.status === 'stale' || compressionPresentation.status === 'status_unknown' ? 'danger' : compressionPresentation.status === 'idle' || compressionPresentation.status === 'succeeded' || compressionPresentation.status === 'succeeded_noop' ? 'success' : 'warning'}" role="status">${escapeHtml(compressionPresentation.text)}</span></div></header>
-    <div class="strategy-memory-capacity" aria-label="记忆库容量已使用 ${usage}%"><span style="width:${usage}%"></span></div>
-    ${alerts.length ? `<div class="strategy-memory-alert" role="alert"><i data-lucide="triangle-alert" size="17"></i><div><strong>${alerts.length} 项策略冲突已达到提醒阈值</strong><span>系统只做提醒，不会自动修改策略。请核对下方证据后人工决定。</span></div></div>` : ""}
-    <div class="strategy-memory-viewbar"><div class="strategy-memory-view-switch" role="tablist" aria-label="记忆库查看模式"><button type="button" role="tab" aria-selected="${!sourceMode}" data-strategy-memory-mode="preview" class="${!sourceMode ? 'active' : ''}">预览</button><button type="button" role="tab" aria-selected="${sourceMode}" data-strategy-memory-mode="source" class="${sourceMode ? 'active' : ''}">查看原文</button></div><div class="strategy-memory-view-tools"><span class="strategy-memory-consistency-status" role="status" aria-live="polite">${escapeHtml(consistencyLabel)}</span>${!sourceMode ? `<label><input type="checkbox" data-strategy-memory-conflict-only ${state.strategyMemoryConflictOnly ? 'checked' : ''}>只看冲突</label>` : ""}<button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-action="consistency">重新检查</button></div></div>
-    ${!sourceMode && state.strategyMemoryEditorDirty ? '<div class="strategy-memory-draft-notice" role="status">当前显示的是已保存版本预览；原文中还有未保存修改。</div>' : ''}
-    ${sourceMode ? `<label class="strategy-memory-editor"><span>完整记忆库原文（Markdown）</span><textarea id="strategyMemoryContent" rows="22" spellcheck="false" aria-describedby="strategyMemoryHelp">${escapeHtml(state.strategyMemoryEditorDirty ? (state.strategyMemoryEditorDraft ?? library.content_text ?? "") : (library.content_text || ""))}</textarea><small id="strategyMemoryHelp">保存后成为该策略唯一的当前记忆版本，并在后续分析、日复盘和月复盘中完整传入。当前保存版本有 ${Number((state.strategyMemoryPreview?.summary?.attention_required || 0) + (state.strategyMemoryPreview?.summary?.observing || 0))} 个定位冲突；切换预览查看。</small></label>` : strategyMemoryPreviewMarkup(state.strategyMemoryPreview)}
-    <div class="strategy-memory-actions"><button class="btn btn-secondary" type="button" data-strategy-memory-action="compress" ${compressionPresentation.active ? 'disabled' : ''}><i data-lucide="combine" size="15"></i>整理并压缩</button>${sourceMode ? `<button class="btn btn-primary" type="button" data-strategy-memory-action="save" ${compressionPresentation.active ? 'disabled' : ''}><i data-lucide="save" size="15"></i>保存新版本</button>` : ""}</div>
-    ${conflictRows ? `<section class="strategy-memory-conflicts"><header><div><h3>策略冲突提醒</h3><p>同一冲突必须在至少 ${Number(library.conflict_alert_threshold || 3)} 次不同且已确认的复盘中出现，才会要求人工检查策略。</p></div><span>${alerts.length} 项需处理 · ${observing.length} 项观察中</span></header>${conflictRows}</section>` : ""}
-    <details class="strategy-memory-revisions"><summary><span><i data-lucide="history" size="15"></i><strong>版本历史</strong><small>保存、复盘沉淀与压缩都会形成可恢复版本</small></span><i data-lucide="chevron-down" size="15"></i></summary><ol>${revisionRows || '<li class="strategy-memory-empty-row">尚无历史版本</li>'}</ol></details>
+  const healthLabel = alerts.length ? `需要人工检查 ${alerts.length} 项` : observing.length ? `观察中 ${observing.length} 项` : "状态正常";
+  const healthTone = alerts.length ? "danger" : observing.length ? "warning" : "success";
+  const conflictCountRows = `<div class="strategy-memory-side-metrics"><div><span>需人工检查</span><strong>${alerts.length}</strong><small>达到提醒阈值</small></div><div><span>观察中</span><strong>${observing.length}</strong><small>等待更多证据</small></div><div><span>待复核</span><strong>${stale.length}</strong><small>原文位置变化</small></div></div>`;
+  host.innerHTML = `<section class="strategy-memory-library strategy-memory-workspace">
+    <header class="strategy-memory-toolbar"><label><span>选择策略</span><select id="strategyMemorySelector">${options}</select></label><div class="strategy-memory-summary"><span><strong>v${Number(library.version_no || 0)}</strong> 当前版本</span><span class="strategy-memory-health ${healthTone}"><strong>${escapeHtml(healthLabel)}</strong></span></div></header>
+    ${alerts.length ? `<div class="strategy-memory-alert" role="alert"><span class="strategy-memory-status-icon" aria-hidden="true"><i data-lucide="triangle-alert" size="15"></i></span><div><strong>${alerts.length} 项策略冲突已达到提醒阈值</strong><span>系统只做提醒，不会自动修改策略。请核对下方证据后人工决定。</span></div></div>` : ""}
+    <div class="strategy-memory-layout"><section class="strategy-memory-document" aria-label="策略记忆 Markdown 文档"><header class="strategy-memory-document-heading"><div><span class="strategy-memory-kicker">唯一完整记忆库</span><h2>策略记忆文档</h2><p>当前版本会完整传入后续分析、日复盘和月复盘。</p></div><span class="strategy-memory-version">v${Number(library.version_no || 0)} · ${Number(library.char_count || 0).toLocaleString("zh-CN")} 字</span></header>
+      <div class="strategy-memory-viewbar"><div class="strategy-memory-view-switch" role="tablist" aria-label="记忆库查看模式"><button type="button" role="tab" aria-selected="${!sourceMode}" aria-controls="strategyMemoryDocumentStage" data-strategy-memory-mode="preview" class="${!sourceMode ? 'active' : ''}">阅读预览</button><button type="button" role="tab" aria-selected="${sourceMode}" aria-controls="strategyMemoryDocumentStage" data-strategy-memory-mode="source" class="${sourceMode ? 'active' : ''}">编辑原文</button></div><div class="strategy-memory-view-tools">${!sourceMode ? `<label><input type="checkbox" data-strategy-memory-conflict-only ${state.strategyMemoryConflictOnly ? 'checked' : ''}>只看冲突</label>` : ""}</div></div>
+      ${!sourceMode && state.strategyMemoryEditorDirty ? '<div class="strategy-memory-draft-notice" role="status">当前显示的是已保存版本预览；原文中还有未保存修改。</div>' : ''}
+      <div id="strategyMemoryDocumentStage" class="strategy-memory-document-stage">${sourceMode ? `<label class="strategy-memory-editor"><span>编辑完整记忆库原文 <span class="sr-only">完整记忆库原文（Markdown）</span></span><textarea id="strategyMemoryContent" rows="22" spellcheck="false" aria-describedby="strategyMemoryHelp">${escapeHtml(state.strategyMemoryEditorDirty ? (state.strategyMemoryEditorDraft ?? library.content_text ?? "") : (library.content_text || ""))}</textarea><small id="strategyMemoryHelp">这是该策略唯一的完整 Markdown 记忆库。保存会形成可恢复的新版本；不保存不会写入服务端。</small></label>` : strategyMemoryPreviewMarkup(state.strategyMemoryPreview)}</div>
+      ${sourceMode ? `<div class="strategy-memory-actions strategy-memory-editor-actions"><button class="btn btn-secondary" type="button" data-strategy-memory-action="cancel">取消编辑</button><button class="btn btn-primary" type="button" data-strategy-memory-action="save" ${!state.strategyMemoryEditorDirty || compressionPresentation.active ? 'disabled' : ''}>保存新版本</button></div>` : ""}
+      ${conflictRows ? `<section class="strategy-memory-conflicts"><header><div><h3>策略冲突提醒</h3><p>同一冲突必须在至少 ${Number(library.conflict_alert_threshold || 3)} 次不同且已确认的复盘中出现，才会要求人工检查策略。</p></div><span>${alerts.length} 项需处理 · ${observing.length} 项观察中 · ${stale.length} 项待复核</span></header>${conflictRows}</section>` : ""}
+    </section><aside class="strategy-memory-sidebar" aria-label="记忆库维护状态"><section class="strategy-memory-side-card strategy-memory-capacity-card"><header><div><span class="strategy-memory-side-kicker">维护状态</span><h3>容量</h3></div><strong>${usage}%</strong></header><div class="strategy-memory-capacity" aria-label="记忆库容量已使用 ${usage}%"><span style="width:${usage}%"></span></div><p><strong>${Number(library.char_count || 0).toLocaleString("zh-CN")}</strong> / ${Number(library.capacity_chars || 120000).toLocaleString("zh-CN")} 字</p></section><section class="strategy-memory-side-card strategy-memory-task-card"><header><div><span class="strategy-memory-side-kicker">维护任务</span><h3>整理压缩</h3></div><span id="strategyMemoryCompressionStatus" class="status-chip" role="status" aria-live="polite">${escapeHtml(compressionPresentation.text)}</span></header><p>达到容量或月复盘确认时整理，原记忆始终可恢复。</p><button class="btn btn-secondary" type="button" data-strategy-memory-action="compress" ${compressionPresentation.active ? 'disabled' : ''}><i data-lucide="combine" size="15"></i>${compressionPresentation.active ? '正在整理' : '整理并压缩'}</button></section><section class="strategy-memory-side-card strategy-memory-task-card"><header><div><span class="strategy-memory-side-kicker">维护检查</span><h3>一致性</h3></div><span class="strategy-memory-consistency-status" role="status" aria-live="polite">${escapeHtml(consistencyLabel)}</span></header><p>核对策略原文与记忆块的来源和位置，不会自动修改策略。</p><button class="btn btn-secondary" type="button" data-strategy-memory-action="consistency">重新检查</button></section><section class="strategy-memory-side-card strategy-memory-conflict-card"><header><div><span class="strategy-memory-side-kicker">人工处理</span><h3>冲突计数</h3></div>${strategyMemoryConflictStatusMarkup(alerts.length ? "attention_required" : observing.length ? "observing" : "healthy")}</header>${conflictCountRows}</section><details class="strategy-memory-revisions strategy-memory-side-card"><summary><span><i data-lucide="history" size="15"></i><strong>版本历史</strong><small>可恢复版本</small></span><i data-lucide="chevron-down" size="15"></i></summary><ol>${revisionRows || '<li class="strategy-memory-empty-row">尚无历史版本</li>'}</ol></details></aside></div>
   </section>`;
   initIcons();
   $("strategyMemoryContent")?.addEventListener("input", event => {
     state.strategyMemoryEditorDirty = event.currentTarget.value !== state.strategyMemoryEditorBaseline;
     state.strategyMemoryEditorDraft = event.currentTarget.value;
+    const saveButton = document.querySelector('[data-strategy-memory-action="save"]');
+    if (saveButton) saveButton.disabled = !state.strategyMemoryEditorDirty || strategyMemoryCompressionActive(state.strategyMemoryCompressionJob);
   });
   renderStrategyMemoryCompressionStatus(compressionJob);
   $("strategyMemorySelector")?.addEventListener("change", async event => {
@@ -13809,6 +13847,17 @@ function bindEvents() {
       const strategyId = Number(state.selectedStrategyMemoryId || 0);
       const library = state.strategyMemoryDetail?.library;
       if (!strategyId || !library) return;
+      if (strategyMemoryAction.dataset.strategyMemoryAction === "cancel") {
+        if (state.strategyMemoryEditorDirty) {
+          const confirmed = await showConfirm("放弃未保存的记忆原文？", "取消编辑会丢弃当前草稿并返回已保存的阅读预览。", { confirmText:"放弃编辑", danger:true });
+          if (!confirmed) return;
+        }
+        state.strategyMemoryEditorDirty = false;
+        state.strategyMemoryEditorDraft = null;
+        state.strategyMemoryViewMode = "preview";
+        renderStrategyMemoryLibrary();
+        return;
+      }
       if (strategyMemoryCompressionActive(state.strategyMemoryCompressionJob)
         && strategyMemoryAction.dataset.strategyMemoryAction !== "consistency") {
         renderStrategyMemoryCompressionStatus(state.strategyMemoryCompressionJob);

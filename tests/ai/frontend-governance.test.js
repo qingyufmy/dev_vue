@@ -1666,7 +1666,7 @@ describe('route permissions and credential redaction', () => {
   })
 
   it('keeps the administrator memory console preview-first and consistency-aware', () => {
-    expect(adminApp).toContain("const ADMIN_STRATEGY_MEMORY_MARKDOWN_LABEL = '完整记忆库（Markdown）'")
+    expect(adminApp).toContain("const ADMIN_STRATEGY_MEMORY_MARKDOWN_LABEL = '完整记忆库原文（Markdown）'")
     expect(adminApp).toContain('data-platform-memory-mode="preview"')
     expect(adminApp).toContain('data-platform-memory-mode="source"')
     expect(adminApp).toContain('data-platform-memory-conflict-only')
@@ -1684,6 +1684,30 @@ describe('route permissions and credential redaction', () => {
     expect(adminCss).toContain('.strategy-memory-preview-status.is-attention_required')
     expect(adminCss).toContain('.strategy-memory-conflict.is-location-stale')
     expect(adminHtml).toContain('20260812memory4')
-    expect(adminHtml).toContain('memory-preview1')
+    expect(adminHtml).toContain('memory-workbench2')
+  })
+
+  it('keeps strategy memory document workbenches preview-first and accessible in both consoles', () => {
+    for (const source of [app, adminApp]) {
+      expect(source).toContain('阅读预览')
+      expect(source).toContain('编辑原文')
+      expect(source).toContain('取消编辑')
+      expect(source).toContain('保存新版本')
+      expect(source).toContain('strategy-memory-layout')
+      expect(source).toContain('<section class="strategy-memory-document"')
+      expect(source).not.toContain('<main class="strategy-memory-document"')
+      expect(source).toContain('aria-live')
+    }
+    for (const source of [css, adminCss]) {
+      expect(source).toContain('.strategy-memory-sidebar')
+      expect(source).toContain('@media (max-width:1040px)')
+      expect(source).toContain('@media (max-width:720px)')
+      expect(source).toContain('@media (max-width:375px)')
+      expect(source).toContain('prefers-reduced-motion:reduce')
+    }
+    expect(app).toContain('data-lucide="triangle-alert"')
+    expect(adminApp).toContain("attention_required: ['triangle-alert'")
+    expect(html).toContain('20260812memory4')
+    expect(html).toContain('memory-workbench2')
   })
 })
