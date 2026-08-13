@@ -37,7 +37,8 @@ describe('manual trade evidence admission', () => {
 
   it('fails closed for incomplete history or an untrusted terminal clock', () => {
     expect(isTrustedManualTradeClock({ clock_status:'unknown', timezone_offset_minutes:180 })).toBe(false)
-    expect(buildEligibleManualTrades(payload({ history_sync:{ complete:true, clock_status:'unknown', timezone_offset_minutes:180 } }), { account }))
+    expect(buildEligibleManualTrades(payload({ history_sync:{ complete:true, requested_range_complete:true,
+      clock_status:'unknown', timezone_offset_minutes:180 } }), { account }))
       .toMatchObject({ trades:[], evidence_status:'unavailable', evidence_reason:'clock_untrusted' })
     expect(buildEligibleManualTrades(payload({ history_sync:{ complete:false, requested_range_complete:false,
       clock_status:'verified', timezone_offset_minutes:180 } }), { account }))
@@ -51,6 +52,40 @@ describe('manual trade evidence admission', () => {
     } }), { account, positions:[], systemReferences:new Map() })
     expect(result.evidence_status).toBe('complete')
     expect(result.trades).toHaveLength(1)
+  })
+
+  it('admits MT4 only with explicit terminal-visible completion and preserves the limited source boundary', () => {
+    const mt4Payload = payload({ history_sync:{
+      platform:'mt4', requested_range_complete:false, terminal_visible_history_complete:true,
+      history_source_complete:false, evidence_truncated:false,
+      clock_status:'verified', timezone_offset_minutes:180,
+    } })
+    const accepted = buildEligibleManualTrades(mt4Payload,
+      { account:{ ...account, platform:'mt4' }, positions:[], systemReferences:new Map() })
+    expect(accepted).toMatchObject({ evidence_status:'complete', history_sync:{
+      platform:'mt4', terminal_visible_history_complete:true, history_source_complete:false,
+    } })
+    expect(accepted.trades).toHaveLength(1)
+
+    for (const terminalVisible of [false, undefined]) {
+      const historySync = { ...mt4Payload.history_sync }
+      if (terminalVisible === undefined) delete historySync.terminal_visible_history_complete
+      else historySync.terminal_visible_history_complete = terminalVisible
+      expect(buildEligibleManualTrades(payload({ history_sync:historySync }),
+        { account:{ ...account, platform:'mt4' } })).toMatchObject({
+          evidence_status:'unavailable',
+          evidence_reason:terminalVisible === false
+            ? 'manual_trade_review_mt4_visible_history_incomplete'
+            : 'manual_trade_review_mt4_visible_history_unknown',
+        })
+    }
+  })
+
+  it('does not accept MT5 global flags without the exact requested-range proof', () => {
+    expect(buildEligibleManualTrades(payload({ history_sync:{
+      platform:'mt5', complete:true, coverage_complete:true, evidence_truncated:false,
+      clock_status:'verified', timezone_offset_minutes:180,
+    } }), { account })).toMatchObject({ evidence_status:'unavailable', evidence_reason:'history_incomplete' })
   })
 
   it('accepts an empty proven range without requiring an unrelated live clock', () => {

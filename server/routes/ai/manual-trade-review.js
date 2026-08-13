@@ -325,6 +325,7 @@ export async function createManualTradeReview(actor, input = {}, options = {}) {
       VALUES (?, ?, 'queued', 'queued', 0, 3, ?, ?)`, [insert.insertId, jobKey, now, now])
     return { created:true, id:Number(insert.insertId) }
   })
+  if (result.created) requestManualTradeReviewCycle()
   const saved = await getCaseForActor(result.id, actorId)
   return { created:result.created, case:publicCase(saved) }
 }

@@ -57,6 +57,20 @@ describe('manual trade review backend boundaries', () => {
     expect(aiIndex).toContain('startManualTradeReviewWorker, stopManualTradeReviewWorker')
   })
 
+  it('wakes the worker immediately only after a new review case is durably created', () => {
+    const review = read('server/routes/ai/manual-trade-review.js')
+    const createStart = review.indexOf('export async function createManualTradeReview')
+    const createEnd = review.indexOf('\nasync function getCaseForActorByRequest', createStart)
+    const createFlow = review.slice(createStart, createEnd)
+    expect(createFlow).toContain('if (result.created) requestManualTradeReviewCycle()')
+    expect(createFlow.indexOf('if (result.created) requestManualTradeReviewCycle()')).toBeGreaterThan(
+      createFlow.indexOf('const result = await withTransaction'),
+    )
+    expect(createFlow.indexOf('if (result.created) requestManualTradeReviewCycle()')).toBeLessThan(
+      createFlow.indexOf('const saved = await getCaseForActor(result.id, actorId)'),
+    )
+  })
+
   it('does not expose a path from single-trade review into platform experience', () => {
     const routes = read('server/routes/ai/index.js')
     const review = read('server/routes/ai/manual-trade-review.js')

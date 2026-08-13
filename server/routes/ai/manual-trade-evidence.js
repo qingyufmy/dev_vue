@@ -11,6 +11,9 @@ export const MANUAL_TRADE_SELECTION_MAX = 1
 export const MANUAL_TRADE_LOOKBACK_MSC = 7 * 24 * 60 * 60 * 1000
 const MANUAL_TRADE_PREPARE_POLL_ATTEMPTS = 8
 const MANUAL_TRADE_PREPARE_POLL_INTERVAL_MS = 250
+const MT4_VISIBLE_HISTORY_INCOMPLETE = 'manual_trade_review_mt4_visible_history_incomplete'
+const MT4_VISIBLE_HISTORY_UNKNOWN = 'manual_trade_review_mt4_visible_history_unknown'
+const MT4_HISTORY_SCOPE_NOTE = 'MT4 手动复盘只覆盖终端当前可见历史；请在 MT4“账户历史”中选择“全部历史”后刷新。系统不会宣称券商全量历史。'
 // A selector request may inspect a small number of raw Bridge pages when a
 // page contains only automated, incomplete, or otherwise filtered records.
 // Keep this bounded: the endpoint is still an on-demand cursor read, not an
@@ -150,22 +153,17 @@ function normalizeOrder(row) {
 function historySyncComplete(sync = {}) {
   if (!sync || typeof sync !== 'object') return false
   if (sync.evidence_truncated === true) return false
-  // MT4 cannot prove broker-wide history completeness. A caller must provide
-  // an explicit source-complete flag before such rows are admitted.
-  if (String(sync.platform || '').toLowerCase() === 'mt4'
-    && sync.history_source_complete !== true) return false
-  // A manual-review selector only reads its frozen recent-seven-day range.
-  // New Bridge versions therefore report requested_range_complete=true even
-  // while the account-wide archive/summary is still being backfilled. Global
-  // complete, coverage_complete and backfill_pending flags must not hide a
-  // range that the Bridge has explicitly proven complete.
-  if (typeof sync.requested_range_complete === 'boolean') {
-    return sync.requested_range_complete === true
+  const platform = String(sync.platform || '').trim().toLowerCase()
+  // MT4 cannot prove broker-wide history completeness. It may only be used
+  // when the terminal explicitly proves that its currently visible account
+  // history is complete. This deliberately does not require or rewrite
+  // history_source_complete: that field remains false for terminal-scoped data.
+  if (platform === 'mt4') {
+    return sync.terminal_visible_history_complete === true
   }
-  // Legacy Bridges do not expose an exact-range proof. Keep their original
-  // conservative gate instead of guessing from partially available rows.
-  if (sync.backfill_pending === true || sync.coverage_complete === false || sync.complete === false) return false
-  return sync.coverage_complete === true || sync.complete === true
+  // MT5 has an exact-range proof contract. Do not infer readiness from global
+  // complete/coverage flags or from a legacy response that omits the proof.
+  return sync.requested_range_complete === true
 }
 
 export function isTrustedManualTradeClock(sync = {}) {
@@ -271,6 +269,8 @@ export function buildEligibleManualTrades(payload = {}, {
       ?? payload.history_sync?.backfill_pending ?? payload.historySync?.backfill_pending,
     history_source_complete:payload.history_source_complete
       ?? payload.history_sync?.history_source_complete ?? payload.historySync?.history_source_complete,
+    terminal_visible_history_complete:payload.terminal_visible_history_complete
+      ?? payload.history_sync?.terminal_visible_history_complete ?? payload.historySync?.terminal_visible_history_complete,
     platform:payload.platform || payload.history_sync?.platform || payload.historySync?.platform,
     clock_status:payload.clock_status || payload.terminal_clock_status || payload.source_clock_status
       || payload.history_sync?.clock_status || payload.history_sync?.terminal_clock_status
@@ -279,7 +279,11 @@ export function buildEligibleManualTrades(payload = {}, {
       ?? payload.history_sync?.timezone_offset_minutes ?? payload.historySync?.timezone_offset_minutes,
   }
   if (requireComplete && !historySyncComplete({ ...sync, platform:sync.platform || account.platform })) {
-    return { trades:[], excluded:[{ reason:'history_incomplete' }], evidence_status:'unavailable', evidence_reason:'history_incomplete' }
+    const platform = accountPlatform(account, sync)
+    const reason = platform === 'mt4'
+      ? (sync.terminal_visible_history_complete === false ? MT4_VISIBLE_HISTORY_INCOMPLETE : MT4_VISIBLE_HISTORY_UNKNOWN)
+      : 'history_incomplete'
+    return { trades:[], excluded:[{ reason }], evidence_status:'unavailable', evidence_reason:reason }
   }
   const rawDeals = Array.isArray(payload.deals) ? payload.deals : []
   const rawOrders = Array.isArray(payload.history_orders) ? payload.history_orders : (Array.isArray(payload.orders) ? payload.orders : [])
@@ -519,11 +523,21 @@ async function bridgeHistory(account, params = {}, { evidence = false, range:pro
 }
 
 function bridgeActionUnsupported(result = {}) {
-  const code = text(result?.error || result?.code).toLowerCase()
+  const code = text(result?.error || result?.code || result?.message).toLowerCase()
   return code.includes('unsupported') || code.includes('unknown_action') || code.includes('unexpected_action')
 }
 
+function accountPlatform(account = {}, sync = {}) {
+  return text(account?.platform || sync?.platform).toLowerCase()
+}
+
+function manualTradeHistoryScope(account = {}, sync = {}) {
+  if (accountPlatform(account, sync) !== 'mt4') return { history_scope_note:null, history_source_limited:false }
+  return { history_scope_note:MT4_HISTORY_SCOPE_NOTE, history_source_limited:true }
+}
+
 async function prepareManualTradeRange(account, range) {
+  const platform = accountPlatform(account)
   for (let attempt = 0; attempt < MANUAL_TRADE_PREPARE_POLL_ATTEMPTS; attempt += 1) {
     let result
     try {
@@ -533,30 +547,66 @@ async function prepareManualTradeRange(account, range) {
         range_end_utc_msc:range.range_end_utc_msc,
       }, { timeoutMs:5_000, noFallback:true, tradingAccountId:account.id })
     } catch (error) {
-      return { supported:true, ready:false, reason:text(error?.message) || 'history_prepare_status_failed' }
+      return { supported:true, ready:false,
+        reason:platform === 'mt4' ? MT4_VISIBLE_HISTORY_UNKNOWN : text(error?.message) || 'history_prepare_status_failed',
+        ...manualTradeHistoryScope(account) }
     }
-    if (bridgeActionUnsupported(result)) return { supported:false, ready:null, reason:null }
+    if (bridgeActionUnsupported(result)) {
+      if (platform === 'mt4') {
+        // MT4 cannot provide an exact-range prepare proof. Its bounded
+        // history_page response is authoritative for the weaker, explicitly
+        // terminal-visible scope and must carry
+        // terminal_visible_history_complete=true before admission.
+        return { supported:false, ready:null, reason:null, ...manualTradeHistoryScope(account) }
+      }
+      return { supported:true, ready:false, reason:'history_cursor_range_incomplete' }
+    }
     if (!result || result.status === 'error' || result.error) {
-      return { supported:true, ready:false, reason:text(result?.error) || 'history_prepare_status_failed' }
+      return { supported:true, ready:false,
+        reason:platform === 'mt4' ? MT4_VISIBLE_HISTORY_UNKNOWN : text(result?.error) || 'history_prepare_status_failed',
+        ...manualTradeHistoryScope(account) }
     }
-    const sync = historySyncFromPayload(result)
-    if (sync.requested_range_complete === true) return { supported:true, ready:true, reason:null, history_sync:sync }
-    // Older Bridges may acknowledge the action without the exact-range proof.
-    // Fall back to their existing history-page contract rather than treating
-    // an absent boolean as a proven incomplete range.
-    if (typeof sync.requested_range_complete !== 'boolean') return { supported:false, ready:null, reason:null }
+    const nestedSync = historySyncFromPayload(result)
+    const sync = {
+      ...nestedSync,
+      platform:nestedSync.platform || result.platform || platform || null,
+      terminal_visible_history_complete:nestedSync.terminal_visible_history_complete
+        ?? result.terminal_visible_history_complete,
+      requested_range_complete:nestedSync.requested_range_complete
+        ?? result.requested_range_complete,
+    }
+    const scope = manualTradeHistoryScope(account, sync)
+    if (platform === 'mt4') {
+      if (sync.terminal_visible_history_complete === true) {
+        return { supported:true, ready:true, reason:null, history_sync:sync, ...scope }
+      }
+      if (sync.terminal_visible_history_complete === false) {
+        return { supported:true, ready:false, reason:MT4_VISIBLE_HISTORY_INCOMPLETE,
+          history_sync:sync, ...scope }
+      }
+      return { supported:true, ready:false, reason:MT4_VISIBLE_HISTORY_UNKNOWN,
+        history_sync:sync, ...scope }
+    }
+    if (sync.requested_range_complete === true) {
+      return { supported:true, ready:true, reason:null, history_sync:sync, ...scope }
+    }
+    // MT5 must explicitly prove the requested range. A missing proof is not
+    // compatible with a successful read; keep the failure visible to callers.
+    if (typeof sync.requested_range_complete !== 'boolean') {
+      return { supported:true, ready:false, reason:'history_cursor_range_incomplete', history_sync:sync, ...scope }
+    }
     if (attempt + 1 < MANUAL_TRADE_PREPARE_POLL_ATTEMPTS) {
       await new Promise(resolve => setTimeout(resolve, MANUAL_TRADE_PREPARE_POLL_INTERVAL_MS))
     }
   }
-  return { supported:true, ready:false, reason:'history_cursor_range_incomplete' }
+  return { supported:true, ready:false, reason:'history_cursor_range_incomplete', ...manualTradeHistoryScope(account) }
 }
 
 function manualTradePageSize(params = {}) {
   return Math.min(MANUAL_TRADE_PAGE_MAX, Math.max(1, Number(params.page_size) || MANUAL_TRADE_PAGE_DEFAULT))
 }
 
-function manualTradeUnavailable({ pageSize, historySnapshotId = null, reason = 'manual_trade_review_evidence_unavailable', error = 'manual_trade_review_evidence_unavailable', scannedSourcePages = 0, skippedEmptySourcePages = 0 } = {}) {
+function manualTradeUnavailable({ pageSize, historySnapshotId = null, reason = 'manual_trade_review_evidence_unavailable', error = 'manual_trade_review_evidence_unavailable', scannedSourcePages = 0, skippedEmptySourcePages = 0, history_scope_note = null, history_source_limited = false } = {}) {
   const pagination = {
     page_size:pageSize,
     total:0,
@@ -572,6 +622,8 @@ function manualTradeUnavailable({ pageSize, historySnapshotId = null, reason = '
     scanned_source_pages:scannedSourcePages,
     skipped_empty_source_pages:skippedEmptySourcePages,
     unavailable:true, evidence_status:'unavailable', error, evidence_reason:reason,
+    ...(history_scope_note ? { history_scope_note } : {}),
+    history_source_limited:Boolean(history_source_limited),
   }
 }
 
@@ -584,7 +636,7 @@ function mergeHistoryEvidencePage(page = {}, enriched = {}) {
   const enrichedSync = historySyncFromPayload(enriched)
   const mergedSync = { ...pageSync, ...enrichedSync }
   const completenessFlags = ['complete', 'requested_range_complete', 'coverage_complete',
-    'evidence_truncated', 'backfill_pending', 'history_source_complete']
+    'evidence_truncated', 'backfill_pending', 'history_source_complete', 'terminal_visible_history_complete']
   for (const key of completenessFlags) {
     if (pageSync[key] === false || enrichedSync[key] === false) mergedSync[key] = false
   }
@@ -743,11 +795,16 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
     return manualTradeUnavailable({ pageSize:safeSize, reason:error?.message || 'manual_trade_review_history_range_invalid',
       error:'manual_trade_review_history_range_invalid' })
   }
+  let historyScope = manualTradeHistoryScope(account)
   if (!options.history && !params.history_snapshot_id && !params.cursor) {
     const prepared = await prepareManualTradeRange(account, range)
+    historyScope = { ...historyScope,
+      history_scope_note:prepared.history_scope_note || historyScope.history_scope_note,
+      history_source_limited:prepared.history_source_limited ?? historyScope.history_source_limited }
     if (prepared.supported && !prepared.ready) {
       return manualTradeUnavailable({ pageSize:safeSize,
-        reason:prepared.reason || 'history_cursor_range_incomplete', error:'manual_trade_review_evidence_unavailable' })
+        reason:prepared.reason || 'history_cursor_range_incomplete', error:'manual_trade_review_evidence_unavailable',
+        ...historyScope })
     }
   }
   let result = options.history || await bridgeHistory(account, params, { range })
@@ -767,20 +824,22 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
     if (enrichedPage.unavailable) {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:enrichedPage.reason || 'history_evidence_unavailable',
-        error:'manual_trade_review_evidence_unavailable', scannedSourcePages, skippedEmptySourcePages })
+        error:'manual_trade_review_evidence_unavailable', scannedSourcePages, skippedEmptySourcePages,
+        ...historyScope })
     }
     result = enrichedPage.result || {}
+    historyScope = { ...historyScope, ...manualTradeHistoryScope(account, historySyncFromPayload(result)) }
     const pageSnapshotId = result.history_snapshot_id || historySnapshotId || null
     if (historySnapshotId && pageSnapshotId && String(pageSnapshotId) !== String(historySnapshotId)) {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:'history_snapshot_changed', error:'manual_trade_review_history_snapshot_changed',
-        scannedSourcePages, skippedEmptySourcePages })
+        scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
     historySnapshotId = pageSnapshotId
     if (!result || result.status === 'error' || result.error) {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:result?.error || 'manual_trade_review_evidence_unavailable',
-        error:'manual_trade_review_evidence_unavailable', scannedSourcePages, skippedEmptySourcePages })
+        error:'manual_trade_review_evidence_unavailable', scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
 
     const refs = collectManualTradeEvidenceRefs(result)
@@ -790,7 +849,7 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
     } catch {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:'system_association_lookup_unavailable', error:'manual_trade_review_evidence_unavailable',
-        scannedSourcePages, skippedEmptySourcePages })
+        scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
     // Check global history/clock completeness before making the account
     // positions request. An unavailable source must stop here and must not
@@ -799,14 +858,14 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
     if (evidenceGate.evidence_status !== 'complete') {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:evidenceGate.evidence_reason || 'manual_trade_review_evidence_unavailable',
-        error:'manual_trade_review_evidence_unavailable', scannedSourcePages, skippedEmptySourcePages })
+        error:'manual_trade_review_evidence_unavailable', scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
     if (!positions) {
       const positionsResult = await mt5Bridge(actor.id, 'positions', { ...account.route }, { timeoutMs:15_000, noFallback:true, tradingAccountId:account.id })
       if (positionsResult?.status !== 'success') {
         return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
           reason:'positions_unavailable', error:'manual_trade_review_evidence_unavailable',
-          scannedSourcePages, skippedEmptySourcePages })
+          scannedSourcePages, skippedEmptySourcePages, ...historyScope })
       }
       positions = positionsResult.positions || []
     }
@@ -816,7 +875,7 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
     if (built.evidence_status !== 'complete') {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:built.evidence_reason || 'manual_trade_review_evidence_unavailable',
-        error:'manual_trade_review_evidence_unavailable', scannedSourcePages, skippedEmptySourcePages })
+        error:'manual_trade_review_evidence_unavailable', scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
     const filtered = built.trades.filter(item => (!filterSymbol || text(item.symbol).toLowerCase() === filterSymbol)
       && (!filterDirection || item.direction === filterDirection)
@@ -829,14 +888,14 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
     if (hasMore && (!historySnapshotId || !nextCursor)) {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:'history_cursor_unavailable', error:'manual_trade_review_history_cursor_unavailable',
-        scannedSourcePages, skippedEmptySourcePages })
+        scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
     // If the caller already supplied this cursor, accepting it again would
     // expose a continuation that loops back to the same source page.
     if (hasMore && seenCursors.has(String(nextCursor))) {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:'history_cursor_repeated', error:'manual_trade_review_history_cursor_repeated',
-        scannedSourcePages, skippedEmptySourcePages })
+        scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
     if (filtered.length) {
       // Keep the original cursor field names explicit for older callers:
@@ -850,7 +909,8 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
         history_snapshot_id:historySnapshotId, next_cursor:visibleNext, has_more:Boolean(visibleNext),
         range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
         scanned_source_pages:scannedSourcePages, skipped_empty_source_pages:skippedEmptySourcePages,
-        unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded }
+        unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded,
+        ...historyScope }
     }
 
     skippedEmptySourcePages += 1
@@ -865,7 +925,8 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
         history_snapshot_id:historySnapshotId, next_cursor:null, has_more:false,
         range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
         scanned_source_pages:scannedSourcePages, skipped_empty_source_pages:skippedEmptySourcePages,
-        unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded }
+        unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded,
+        ...historyScope }
     }
     // Stop after a bounded number of raw pages. Returning the final cursor
     // lets the user explicitly continue searching without showing a dead
@@ -878,13 +939,14 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
         history_snapshot_id:historySnapshotId, next_cursor:nextCursor, has_more:true,
         range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
         scanned_source_pages:scannedSourcePages, skipped_empty_source_pages:skippedEmptySourcePages,
-        unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded }
+        unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded,
+        ...historyScope }
     }
     const cursor = String(nextCursor)
     if (seenCursors.has(cursor)) {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:'history_cursor_repeated', error:'manual_trade_review_history_cursor_repeated',
-        scannedSourcePages, skippedEmptySourcePages })
+        scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
     seenCursors.add(cursor)
     try {
@@ -892,7 +954,7 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
     } catch {
       return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
         reason:'history_page_unavailable', error:'manual_trade_review_evidence_unavailable',
-        scannedSourcePages, skippedEmptySourcePages })
+        scannedSourcePages, skippedEmptySourcePages, ...historyScope })
     }
   }
 }
@@ -916,20 +978,24 @@ export async function readManualTradeEvidence(actor, account, selected = [], opt
   }
   if (!options.history) {
     const prepared = await prepareManualTradeRange(account, recentRange)
-    if (prepared.supported && !prepared.ready) throw new Error('manual_trade_review_evidence_unavailable')
+    if (prepared.supported && !prepared.ready) {
+      throw new Error(prepared.reason || 'manual_trade_review_evidence_unavailable')
+    }
   }
   const result = options.history || await bridgeHistory(account, {
     evidence_position_ids:positions, evidence_order_tickets:orders,
   }, { evidence:true, range:recentRange })
-  if (!result || result.status === 'error' || result.error) throw new Error('manual_trade_review_evidence_unavailable')
+  if (!result || result.status === 'error' || result.error) {
+    throw new Error(text(result?.error) || 'manual_trade_review_evidence_unavailable')
+  }
   const refs = collectManualTradeEvidenceRefs(result)
   let systemReferences
   try { systemReferences = await findSystemReferences({ userId:actor.id, tradingAccountId:account.id, refs }) }
   catch { throw new Error('manual_trade_review_evidence_unavailable') }
   const positionsResult = await mt5Bridge(actor.id, 'positions', { ...account.route }, { timeoutMs:15_000, noFallback:true, tradingAccountId:account.id })
-  if (positionsResult?.status !== 'success') throw new Error('manual_trade_review_evidence_unavailable')
+  if (positionsResult?.status !== 'success') throw new Error(text(positionsResult?.error) || 'manual_trade_review_evidence_unavailable')
   const built = buildEligibleManualTrades(result, { account, systemReferences, positions:positionsResult.positions || [] })
-  if (built.evidence_status !== 'complete') throw new Error('manual_trade_review_evidence_unavailable')
+  if (built.evidence_status !== 'complete') throw new Error(built.evidence_reason || 'manual_trade_review_evidence_unavailable')
   const wanted = new Map(selected.map(item => [item.source_identity_hash || item.trade_id, item.trade_source_hash]))
   const matched = built.trades.filter(trade => wanted.has(trade.source_identity_hash))
   if (matched.length !== wanted.size) throw new Error('manual_trade_review_source_changed')
@@ -943,13 +1009,14 @@ export async function readManualTradeEvidence(actor, account, selected = [], opt
   const marketData = await buildManualTradeMarketEvidence({ actor, account, trades:frozenTrades,
     strategySnapshot:options.strategySnapshot || {}, buildPath:options.buildPath || buildReviewMarketPath })
   const evidenceStatus = marketData.status === 'complete' ? 'complete' : 'partial'
+  const historyScope = manualTradeHistoryScope(account, historySyncFromPayload(result))
   return { account:{ id:account.id, terminal_instance_id:account.terminal_instance_id,
     broker_server:account.broker_server, login_account:account.login_account },
     history_sync:result.history_sync || null, trades:frozenTrades,
     trade_source_hashes:matched.map(item => ({ source_identity_hash:item.source_identity_hash, trade_source_hash:item.trade_source_hash })),
     market_data:marketData, generated_at_utc_msc:Date.now(), timezone_offset_minutes:built.timezone_offset_minutes,
     clock_status:built.clock_status, evidence_status:evidenceStatus,
-    evidence_reason:evidenceStatus === 'complete' ? null : 'market_evidence_incomplete' }
+    evidence_reason:evidenceStatus === 'complete' ? null : 'market_evidence_incomplete', ...historyScope }
 }
 
 export { historySyncComplete, findSystemReferences, normalizeDeal, normalizeOrder }
