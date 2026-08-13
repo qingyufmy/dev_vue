@@ -20,6 +20,7 @@ import { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
 import { auditTradingAccountId, buildAuditClockSnapshot } from './audit-clock.js'
+import { executionValidationRejection, readExecutionValidation } from './signal-execution-validation.js'
 
 export { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 export const DEFAULT_TAKE_PROFIT_MODE = 'ai_recommended'
@@ -71,6 +72,7 @@ export function buildBridgeOrderCall(request) {
       tp_selection_source: _tpSelectionSource,
       take_profit_candidates: _takeProfitCandidates,
       normalization_info: _normalizationInfo,
+      execution_validation: _executionValidation,
       mt5_timezone_offset_minutes: _mt5TimezoneOffsetMinutes,
       mt5_clock_status: _mt5ClockStatus,
       ...bridgeParams
@@ -547,6 +549,8 @@ export function signalOrderPayload(signal, config, market, confirm) {
     signal_created_at: signalCreatedAt,
     entry_method: entryMethod,
   }
+  const executionValidation = readExecutionValidation(signal)
+  if (executionValidation.explicit) payload.execution_validation = executionValidation.validation
 
   // Pending order fields
   if (entryMethod !== 'market' && entryMethod !== 'observe') {
@@ -605,6 +609,29 @@ export async function executeOrderCore(userId, config, request, action, options 
   options = { ...options, noFallback: true }
   const signalId = request.signal_id ?? options.signalId ?? null
   const sourceType = options.sourceType || (options.deliveryId ? 'auto_delivery' : signalId ? 'signal' : 'manual')
+  if (sourceType !== 'manual' || signalId != null) {
+    let validationStates = []
+    try {
+      if (request && Object.prototype.hasOwnProperty.call(request, 'execution_validation')) {
+        validationStates.push(readExecutionValidation(request))
+      }
+      if (signalId != null) {
+        const row = await queryOne('SELECT decision_json FROM ai_signals WHERE id = ?', [signalId])
+        validationStates.push(readExecutionValidation(row || {}, { legacyAllowed:true }))
+      }
+      if (validationStates.length === 0) validationStates.push(readExecutionValidation({}, { legacyAllowed:true }))
+    } catch (error) {
+      validationStates = [readExecutionValidation({ execution_validation:null })]
+      console.error(`[Execute] execution validation lookup failed for signal ${signalId || 'unknown'}:`, error.message)
+    }
+    const validationState = validationStates.find(state => state.validation.eligible !== true)
+      || validationStates[0]
+    if (validationStates.some(state => state.validation.eligible !== true)) {
+      const result = executionValidationRejection(validationState)
+      await insertAudit(null, userId, action, request?.symbol, request, result, 'rejected')
+      return result
+    }
+  }
   if (isAiPendingOrderRequest(request, sourceType)) {
     try {
       await assertAiPendingOrderEnabled()

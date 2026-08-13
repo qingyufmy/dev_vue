@@ -171,8 +171,8 @@ export function buildSharedMarketSnapshot(market, { standardSymbol, volumeMin, v
     'timestamp', 'latest_price', 'price_change', 'price_change_pct', 'sma_20', 'sma_50', 'ema_12', 'ema_26',
     'avg_volatility', 'recent_high_20', 'recent_low_20', 'range_position_20', 'sma_distance_pct',
     'momentum_3_pct', 'momentum_10_pct', 'momentum_20_pct', 'volatility_pct', 'macd', 'rsi_14',
-    'bollinger', 'atr_14', 'atr_14_closed', 'atr_anchor', 'atr_anchor_tf', 'support_resistance',
-    'kline_patterns', 'volume', 'strategy_score', 'kline_count', 'strategy_context',
+    'bollinger', 'atr_14', 'atr_14_closed', 'support_resistance',
+    'kline_patterns', 'volume', 'kline_count', 'strategy_context',
     'strategy_reference_portfolio',
     'primary_timeframe', 'requested_timeframes', 'used_timeframes', 'missing_timeframes',
   ]

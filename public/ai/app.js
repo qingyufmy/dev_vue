@@ -4338,22 +4338,6 @@ function renderStrategyModelOptions(scope, selectedId = "") {
   if (help) help.textContent = platform ? "可绑定一个平台模型用于自动分析；留空时使用平台默认模型。" : "可绑定自己的模型；留空时按模型管理中的默认与共享规则自动选择。";
 }
 
-function syncStrategyEma34Filter() {
-  const toggle = $("strategyUseEma34Filter");
-  if (!toggle) return;
-  if (toggle.checked) {
-    const m5 = document.querySelector('[data-strategy-timeframe="M5"]');
-    const primary = document.querySelector('input[name="strategyPrimaryTimeframe"][value="M5"]');
-    if (m5 && !m5.checked) {
-      m5.checked = true;
-      const count = document.querySelector('[data-strategy-kline="M5"]');
-      if (count) count.disabled = false;
-      if (primary) primary.disabled = false;
-      toast("已自动启用 M5 行情，用于计算 EMA34", "info");
-    }
-  }
-}
-
 function openStrategyEditor(strategy = null) {
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || "";
@@ -4367,7 +4351,6 @@ function openStrategyEditor(strategy = null) {
   $("strategyTitle").value = strategy?.title || ""; $("strategySymbols").value = parseJsonField(strategy?.symbols_json, []).join(", ");
   $("strategyDescription").value = strategy?.description || "";
   $("strategyPrompt").value = strategy?.system_prompt || ""; $("strategyInterval").value = strategy?.interval_minutes || 5;
-  $("strategyUseEma34Filter").checked = Boolean(Number(strategy?.use_ema34_filter || 0));
   const plan = strategyMarketPlan(strategy);
   document.querySelectorAll("[data-strategy-timeframe]").forEach(input => { input.checked = plan.timeframes.some(item => item.timeframe === input.dataset.strategyTimeframe); });
   document.querySelectorAll("[data-strategy-kline]").forEach(input => { const item = plan.timeframes.find(row => row.timeframe === input.dataset.strategyKline); input.value = item?.kline_count || 100; input.disabled = !item; });
@@ -4401,7 +4384,6 @@ async function saveStrategyEditor() {
     description:$("strategyDescription").value.trim(), system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
     market_data_plan:{ primary_timeframe:primaryTimeframe, timeframes }, entry_methods:entryMethods,
     use_chan_analysis:$("strategyUseChanAnalysis").checked,
-    use_ema34_filter:$("strategyUseEma34Filter").checked,
     include_portfolio_context:scope === "private" && $("strategyIncludePortfolioContext").checked,
     is_active:visibilityStatus === "active",
     model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,
@@ -9096,8 +9078,8 @@ function renderSignalMonitorDetails(signal) {
   const finalVolumeText = direction === "hold"
     ? "无需计算"
     : finalVolume == null ? "执行时计算" : volumeText(finalVolume);
-  const analysis = userVisibleText(signal.analysis, "暂无行情分析正文");
-  const reasoning = userVisibleText(signal.reasoning, "");
+  const analysis = userVisibleText(decision.modelDecision?.analysis || signal.analysis, "暂无行情分析正文");
+  const reasoning = userVisibleText(decision.modelDecision?.reasoning || signal.reasoning, "");
   const strategyLabel = signal.prompt_type_name || signal.strategy_name || signal.strategy_title || "当前交易策略";
   const modelLabel = signal.model_name || signal.model_used || signal.model || "按策略配置";
   const recommendedTierLabel = takeProfit.recommendedTier ? `AI 推荐 TP${takeProfit.recommendedTier}` : "暂无推荐档位";
@@ -9107,7 +9089,6 @@ function renderSignalMonitorDetails(signal) {
       <section class="signal-monitor-summary monitor-surface">
         <div class="monitor-section-heading"><span><i data-lucide="sparkles" size="16"></i>核心结论</span><small>AI 对当前行情的直接判断</small></div>
         <strong>${escapeHtml(decision.summary)}</strong>
-        ${renderDecisionDiagnostics(decision.diagnostics)}
         ${renderDirectionBias(decision)}
       </section>
       <div class="signal-monitor-evidence">
@@ -9130,6 +9111,8 @@ function renderSignalMonitorDetails(signal) {
           <div><span>风控最终手数</span><strong class="num">${escapeHtml(finalVolumeText)}</strong></div>
         </div>
       </section>
+      ${renderExecutionValidation(decision.executionValidation)}
+      ${renderDecisionDiagnostics(decision.diagnostics)}
       <section class="monitor-surface signal-monitor-targets">
         <div class="monitor-section-heading"><span>止盈候选</span><small>${escapeHtml(recommendedTierLabel)}</small></div>
         <div>${[1, 2, 3].map(tier => `<span class="${takeProfit.tier === tier ? "selected" : ""} ${takeProfit.recommendedTier === tier ? "recommended" : ""}"><small>TP${tier}</small><strong class="num">${escapeHtml(priceDisplay(signal[`take_profit_${tier}_price`]))}</strong></span>`).join("")}</div>
@@ -9350,26 +9333,33 @@ function renderPendingSignalInfo(signal, market) {
 function signalDecision(signal) {
   let stored = signal?.decision || signal?.decision_json || {};
   if (typeof stored === "string") { try { stored = JSON.parse(stored); } catch { stored = {}; } }
-  const dir = signalType(signal?.signal_type);
-  const sourceReasons = signal?.key_reasons || stored.key_reasons;
-  const sourceRisks = signal?.risk_factors || stored.risk_factors;
-  const bullish = Number(signal?.bullish_score ?? stored.bullish_score);
-  const bearish = Number(signal?.bearish_score ?? stored.bearish_score);
+  const modelDecision = signal?.model_decision || stored.model_decision || {};
+  const dir = signalType(modelDecision.signal_type || signal?.signal_type);
+  const sourceReasons = modelDecision.key_reasons || signal?.key_reasons || stored.key_reasons;
+  const sourceRisks = modelDecision.risk_factors || signal?.risk_factors || stored.risk_factors;
+  const bullish = Number(modelDecision.bullish_score ?? signal?.bullish_score ?? stored.bullish_score);
+  const bearish = Number(modelDecision.bearish_score ?? signal?.bearish_score ?? stored.bearish_score);
   const experienceUsage = signal?.experience_usage || stored.experience_usage || {};
   const diagnostics = signal?.decision_diagnostics || stored.decision_diagnostics || null;
+  const hasCurrentModelDecision = modelDecision && typeof modelDecision === "object"
+    && Object.keys(modelDecision).length > 0;
   const hasDirectionBias = Number.isFinite(bullish) && Number.isFinite(bearish) && bullish >= 0 && bearish >= 0 && bullish + bearish > 0;
   const total = hasDirectionBias ? bullish + bearish : 0;
   return {
-    summary: userVisibleText(signal?.decision_summary || stored.decision_summary, dir === "hold" ? "当前条件不足，建议继续观望。" : `${dir === "buy" ? "偏多" : "偏空"}机会成立，等待风控复核。`),
-    trigger: userVisibleText(signal?.trigger_condition || stored.trigger_condition, ""),
-    invalidation: userVisibleText(signal?.invalidation_condition || stored.invalidation_condition, ""),
+    modelDecision,
+    summary: userVisibleText(modelDecision.decision_summary || signal?.decision_summary || stored.decision_summary, dir === "hold" ? "模型建议观望。" : `${dir === "buy" ? "偏多" : "偏空"}机会成立，等待执行校验与风控复核。`),
+    trigger: userVisibleText(modelDecision.trigger_condition || signal?.trigger_condition || stored.trigger_condition, ""),
+    invalidation: userVisibleText(modelDecision.invalidation_condition || signal?.invalidation_condition || stored.invalidation_condition, ""),
     reasons: Array.isArray(sourceReasons) ? sourceReasons.slice(0, 4).map(item => userVisibleText(item, "系统未提供中文依据")) : [],
     risks: Array.isArray(sourceRisks) ? sourceRisks.slice(0, 4).map(item => userVisibleText(item, "系统未提供中文风险说明")) : [],
     bullishScore: hasDirectionBias ? Math.round(bullish / total * 1000) / 10 : null,
     bearishScore: hasDirectionBias ? Math.round(bearish / total * 1000) / 10 : null,
     candidateEntry: signal?.candidate_entry || stored.candidate_entry || null,
     experienceUsage,
-    diagnostics: diagnostics && typeof diagnostics === "object" ? diagnostics : null,
+    diagnostics: diagnostics && typeof diagnostics === "object"
+      ? { ...diagnostics, legacy_system_diagnostics:!hasCurrentModelDecision }
+      : null,
+    executionValidation:signal?.execution_validation || stored.execution_validation || null,
   };
 }
 
@@ -9377,11 +9367,11 @@ function renderDecisionDiagnostics(diagnostics) {
   if (!diagnostics || typeof diagnostics !== "object") return "";
   const labels = {
     market_data_unreliable:"行情连续性未确认",
-    structure_unconfirmed:"缠论结构尚未确认",
-    timeframe_direction_conflict:"可靠周期方向存在分歧",
     strategy_entry_conditions_unmet:"策略入场条件未满足",
     risk_constraint:"风险约束未满足",
     model_hold:"模型主动观望",
+    structure_unconfirmed:"旧版结构状态",
+    timeframe_direction_conflict:"旧版周期方向状态",
   };
   const originLabels = {
     model:"模型原始结论",
@@ -9392,12 +9382,42 @@ function renderDecisionDiagnostics(diagnostics) {
     .map(reason => labels[String(reason || "").toLowerCase()]).filter(Boolean))];
   const timeframes = [...new Set((Array.isArray(diagnostics.affected_timeframes) ? diagnostics.affected_timeframes : [])
     .map(value => String(value || "").toUpperCase()).filter(value => /^(?:M1|M5|M15|M30|H1|H4|D1|W1|MN1)$/.test(value)))];
-  const origin = originLabels[String(diagnostics.decision_origin || "").toLowerCase()] || "系统诊断";
+  const origin = diagnostics.legacy_system_diagnostics === true
+    ? "旧版系统诊断"
+    : originLabels[String(diagnostics.decision_origin || "").toLowerCase()] || "系统诊断";
   if (!reasons.length && !timeframes.length && String(diagnostics.decision_origin || "").toLowerCase() === "model") return "";
-  return `<section class="decision-diagnostics" aria-label="观望原因诊断">
-    <div class="decision-diagnostics-head"><span><i data-lucide="scan-search" size="15"></i>判定依据</span><small>${escapeHtml(origin)}</small></div>
+  return `<section class="decision-diagnostics" aria-label="数据与系统状态">
+    <div class="decision-diagnostics-head"><span><i data-lucide="database-zap" size="15"></i>数据与系统状态</span><small>${escapeHtml(origin)}</small></div>
     ${reasons.length ? `<div class="decision-diagnostics-reasons">${reasons.map(reason => `<span>${escapeHtml(reason)}</span>`).join("")}</div>` : ""}
     ${timeframes.length ? `<p>涉及周期：${escapeHtml(timeframes.join(" / "))}</p>` : ""}
+  </section>`;
+}
+
+function renderExecutionValidation(validation) {
+  if (!validation || typeof validation !== "object") return "";
+  const eligible = validation.eligible === true && validation.status === "eligible";
+  const reasonLabels = {
+    model_hold:"模型本轮未提出新订单",
+    position_action_hold_no_add:"模型建议不新增仓位",
+    entry_method_not_allowed_by_strategy:"入场方式不在策略声明范围内",
+    pending_price_required:"挂单缺少有效价格",
+    pending_reference_price_unavailable:"缺少可核验的当前价格",
+    pending_price_direction_invalid:"挂单价格方向不符合订单类型",
+    stop_limit_price_required:"止损限价单缺少限价",
+    stop_limit_price_relation_invalid:"触发价与限价关系无效",
+    execution_reference_price_unavailable:"缺少订单校验参考价",
+    stop_loss_missing:"缺少止损价格",
+    invalid_stop_loss_direction:"止损价格方向无效",
+    take_profit_target_missing:"缺少第一止盈目标",
+    invalid_take_profit_direction:"止盈价格方向无效",
+    take_profit_order_invalid:"多档止盈顺序无效",
+    invalid_recommended_take_profit_tier:"推荐止盈档位不可用",
+  };
+  const reasons = [...new Set((Array.isArray(validation.reason_codes) ? validation.reason_codes : [])
+    .map(code => reasonLabels[String(code || "").toLowerCase()]).filter(Boolean))];
+  return `<section class="execution-validation ${eligible ? "eligible" : "ineligible"}" aria-label="执行校验">
+    <div><i data-lucide="${eligible ? "badge-check" : "shield-alert"}" size="17"></i><span><small>执行校验</small><strong>${eligible ? "参数校验通过" : "不会进入下单流程"}</strong></span></div>
+    ${reasons.length ? `<ul>${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : `<p>${eligible ? "仍需经过账户权限、独立风控与 Bridge 校验。" : "模型结论已保留，可查看原始分析与参数。"}</p>`}
   </section>`;
 }
 
@@ -10159,14 +10179,14 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     : (market.positions || {});
   const result = $("analysisResult");
   const freshnessClass = signal.is_stale ? "expired" : signal.is_executed ? "executed" : "live";
-  const reasoningText = userVisibleText(signal.reasoning, "");
+  const reasoningText = userVisibleText(decision.modelDecision?.reasoning || signal.reasoning, "");
   // Try to parse structured positions data (CLOSE signals store JSON array)
   let closePositions = null;
   try {
     const raw = String(signal.analysis || "").trim();
     if (raw.startsWith("[")) { const arr = JSON.parse(raw); if (Array.isArray(arr) && arr.length > 0 && arr[0].ticket) closePositions = arr; }
   } catch {}
-  let escapedAnalysis = closePositions ? "" : escapeHtml(userVisibleText(signal.analysis, "暂无行情分析"));
+  let escapedAnalysis = closePositions ? "" : escapeHtml(userVisibleText(decision.modelDecision?.analysis || signal.analysis, "暂无行情分析"));
   // Build analysis block: table for structured data, plain text otherwise
   let analysisBlock = "";
   if (closePositions) {
@@ -10215,7 +10235,6 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     ${renderSignalManagementActions(signal)}
     ${renderSignalPendingActions(signal)}
     <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
-    ${renderDecisionDiagnostics(decision.diagnostics)}
     ${renderDirectionBias(decision)}
     ${renderCandidateEntryReference(decision.candidateEntry)}
     <div class="analysis-status-strip">
@@ -10235,6 +10254,10 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     <div class="decision-evidence-grid">
       <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>
       <section><div class="analysis-section-title"><i data-lucide="triangle-alert" size="15"></i>市场风险</div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
+    </div>
+    <div class="analysis-system-status">
+      ${renderExecutionValidation(decision.executionValidation)}
+      ${renderDecisionDiagnostics(decision.diagnostics)}
     </div>
     ${renderExperienceUsage(signal, decision.experienceUsage)}
     ${(decision.trigger || decision.invalidation) ? `<div class="decision-conditions">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</div>` : ""}
@@ -13542,11 +13565,6 @@ function bindEvents() {
       const nextPrimary = next && document.querySelector(`input[name="strategyPrimaryTimeframe"][value="${next.dataset.strategyTimeframe}"]`);
       if (nextPrimary) nextPrimary.checked = true;
     }
-    if (tf === "M5" && !input.checked && $("strategyUseEma34Filter")?.checked) {
-      $("strategyUseEma34Filter").checked = false;
-      syncStrategyEma34Filter();
-      toast("已关闭 EMA34 入场过滤，因为 M5 行情已停用", "info");
-    }
   }));
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);
@@ -13652,7 +13670,6 @@ function bindEvents() {
   $("addPrivateStrategyBtn")?.addEventListener("click", () => openStrategyEditor());
   $("cancelStrategyEditorBtn")?.addEventListener("click", () => closeFormModal($("strategyEditor")));
   $("saveStrategyBtn")?.addEventListener("click", () => saveStrategyEditor().catch(error => toast(error.message, "error")));
-  $("strategyUseEma34Filter")?.addEventListener("change", syncStrategyEma34Filter);
   $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => closeFormModal($("subscriptionEditor")));
   $("saveSubscriptionBtn")?.addEventListener("click", () => saveSubscriptionEditor().catch(error => toast(error.message, "error")));
   $("subscriptionStrategy")?.addEventListener("change", handleSubscriptionStrategyChange);

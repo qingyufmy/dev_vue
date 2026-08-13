@@ -148,6 +148,9 @@ describe('calculateMarketData', () => {
     expect(result.strategy_score.trend_strength).toBeGreaterThanOrEqual(0)
     expect(result.strategy_score.trend_strength).toBeLessThanOrEqual(1)
     expect([-1, 0, 1]).toContain(result.strategy_score.momentum_alignment)
+    expect(Object.getOwnPropertyDescriptor(result, 'strategy_score')).toMatchObject({ enumerable:false })
+    expect(Object.keys(result)).not.toContain('strategy_score')
+    expect(JSON.stringify(result)).not.toContain('strategy_score')
   })
 
   it('计算持仓信息', () => {

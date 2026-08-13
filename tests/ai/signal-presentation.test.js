@@ -1,10 +1,48 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields, restrictSignalExperienceUsage } from '../../server/routes/ai/signal-presentation.js'
+import { attachExecutionValidation, attachExecutionValidationToDecision, executionValidationRejection, normalizeExecutionValidation, readExecutionValidation } from '../../server/routes/ai/signal-execution-validation.js'
 
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 
 describe('signal presentation', () => {
+  it('normalizes the independent eligible contract', () => {
+    expect(normalizeExecutionValidation({
+      status:'eligible', eligible:true, reason_codes:['strategy_policy_passed', 'strategy_policy_passed'],
+    })).toEqual({ status:'eligible', eligible:true, reason_codes:['strategy_policy_passed'] })
+    expect(normalizeExecutionValidation({ status:'ineligible', eligible:false, reason_codes:['risk_blocked'] }))
+      .toEqual({ status:'ineligible', eligible:false, reason_codes:['risk_blocked'] })
+  })
+
+  it('treats malformed explicit output as invalid instead of legacy eligible', () => {
+    const state = readExecutionValidation({ execution_validation:{ status:'eligible', eligible:false } })
+    expect(state).toMatchObject({ explicit:true, legacy:false, validation:{ status:'invalid_output', eligible:false } })
+    expect(executionValidationRejection(state)).toMatchObject({
+      status:'rejected', error_code:'execution_validation_ineligible',
+      message:'执行资格校验未通过，本次不会发送交易指令',
+      details:{ execution_validation:{ status:'invalid_output', eligible:false } },
+    })
+  })
+
+  it('keeps legacy records on an explicit compatibility path', () => {
+    const state = readExecutionValidation({ signal_type:'buy' })
+    expect(state).toMatchObject({ explicit:false, legacy:true, validation:{ status:'eligible', eligible:true } })
+    expect(readExecutionValidation({}, { legacyAllowed:false }).validation).toMatchObject({
+      status:'invalid_output', eligible:false, reason_codes:['execution_validation_missing'],
+    })
+  })
+
+  it('reads persisted decision_json and attaches only explicit values to decisions', () => {
+    const signal = { signal_type:'sell', decision_json:JSON.stringify({
+      execution_validation:{ status:'ineligible', eligible:false, reason_codes:['strategy_blocked'] },
+    }) }
+    expect(attachExecutionValidation(signal).execution_validation).toMatchObject({ status:'ineligible', eligible:false })
+    expect(attachExecutionValidationToDecision({ decision_summary:'保留模型结论' }, signal)).toMatchObject({
+      decision_summary:'保留模型结论',
+      execution_validation:{ status:'ineligible', eligible:false, reason_codes:['strategy_blocked'] },
+    })
+  })
+
   it('shows platform usage only to admins and personal usage only to its owner', () => {
     const platform = { user_id:0, experience_usage:{ source:'platform', considered_ids:[3], used_ids:[3], influence:'采用平台经验' } }
     expect(restrictSignalExperienceUsage(platform, { requesterUserId:7, requesterRole:'user' }).experience_usage).toBeUndefined()
@@ -28,7 +66,7 @@ describe('signal presentation', () => {
   })
   it('normalizes model fields and limits untrusted arrays', () => {
     const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', bullish_score: 63, bearish_score: 37, key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
-    expect(result.schema_version).toBe(5)
+    expect(result.schema_version).toBe(6)
     expect(result.decision_summary).toBe('顺势做多')
     expect(result.key_reasons).toHaveLength(4)
     expect(result).toMatchObject({ bullish_score: 63, bearish_score: 37 })
@@ -175,6 +213,36 @@ describe('signal presentation', () => {
     expect(buildExecutionAdvice({ signal_type: 'hold' })).toMatchObject({ state: 'observe', executable: false })
   })
 
+  it('keeps model conclusion separate while blocking an explicit ineligible signal', () => {
+    const result = attachSignalPresentation({
+      signal_type:'buy', entry_method:'market', position_action:'open',
+      execution_validation:{ status:'ineligible', eligible:false, reason_codes:['strategy_policy_blocked'] },
+    })
+    expect(result.signal_type).toBe('buy')
+    expect(result.execution_validation).toMatchObject({ status:'ineligible', eligible:false })
+    expect(result.execution_advice).toMatchObject({ state:'unavailable', executable:false })
+  })
+
+  it('does not rewrite a current no-add model direction in presentation', () => {
+    const result = attachSignalPresentation({
+      signal_type:'buy_limit', entry_method:'limit', position_action:'hold_no_add', limit_price:4109,
+      model_decision:{ signal_type:'buy_limit', entry_method:'limit', confidence:0.67,
+        position_action:'hold_no_add', analysis:'模型仍判断偏多' },
+      execution_validation:{ status:'ineligible', eligible:false, reason_codes:['position_action_hold_no_add'] },
+    })
+    expect(result).toMatchObject({
+      signal_type:'buy_limit', entry_method:'limit', limit_price:4109,
+      model_decision:{ signal_type:'buy_limit', analysis:'模型仍判断偏多' },
+      execution_advice:{ state:'unavailable', executable:false },
+    })
+  })
+
+  it('keeps legacy presentation free of a fabricated validation field', () => {
+    const result = attachSignalPresentation({ signal_type:'buy', entry_method:'market', position_action:'open' })
+    expect(result).not.toHaveProperty('execution_validation')
+    expect(normalizeDecisionFields({ signal_type:'buy', entry_method:'market' })).not.toHaveProperty('execution_validation')
+  })
+
   it('presents a legacy trade-shaped no-add signal as hold with candidate levels', () => {
     const result = attachSignalPresentation({
       id:6127, signal_type:'buy_limit', entry_method:'limit', limit_price:4109,
@@ -283,7 +351,7 @@ describe('signal presentation', () => {
 
   it('keeps legacy rows without a decision payload non-executable', () => {
     const result = attachSignalPresentation({ id: 1, signal_type: 'sell', entry_method: 'market' })
-    expect(result.decision.schema_version).toBe(5)
+    expect(result.decision.schema_version).toBe(6)
     expect(result.decision.position_action).toBe('')
     expect(result.execution_advice).toMatchObject({ state:'unavailable', executable:false })
   })

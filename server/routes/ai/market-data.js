@@ -3114,9 +3114,30 @@ export async function platformRates(userId, params = {}) {
   return getPlatformRates(userId, params)
 }
 
+/**
+ * Keep the pre-boundary score available to internal experience attribution
+ * code, but do not expose it through ordinary market JSON payloads.  Model
+ * payload builders must explicitly omit this legacy key as well.
+ * The score is a legacy derived judgment and is not part of the generic
+ * analysis contract.  Consumers that need it must use the direct property
+ * explicitly; object spread/JSON serialization omits it by design.
+ */
+function attachInternalLegacyStrategyScore(market, score) {
+  Object.defineProperty(market, 'strategy_score', {
+    value: score,
+    enumerable: false,
+    configurable: true,
+    writable: false,
+  })
+  return market
+}
+
 export function calculateMarketData(symbol, timeframe, rates, account, positions, options = {}) {
   if (!rates || rates.length === 0) {
-    return { symbol, timeframe, latest_price: 0, strategy_score: { trend_strength: 0, data_confidence: 0.1 }, error: 'no_rates' }
+    return attachInternalLegacyStrategyScore(
+      { symbol, timeframe, latest_price: 0, error: 'no_rates' },
+      { trend_strength: 0, data_confidence: 0.1 },
+    )
   }
   const closes = rates.map(r => parseFloat(r.close))
   const highs = rates.map(r => parseFloat(r.high))
@@ -3244,7 +3265,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
     })
     : undefined
 
-  return {
+  const market = {
     symbol, timeframe,
     timestamp: beijingNow(),
     latest_price: round5(latest),
@@ -3296,12 +3317,6 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
       },
     },
     volume: { current: lastVolume, average: Math.round(avgVolume), ratio: round2(volumeRatio) },
-    strategy_score: {
-      trend_strength: round3(trendStrength),
-      momentum_alignment: momentumAlignment,
-      data_confidence: dataConfidence,
-      noise_penalty: round3(noisePenalty),
-    },
     kline_count: n,
     positions: {
       total_positions: positions.length,
@@ -3361,4 +3376,10 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
     } : undefined,
     chan,
   }
+  return attachInternalLegacyStrategyScore(market, {
+    trend_strength: round3(trendStrength),
+    momentum_alignment: momentumAlignment,
+    data_confidence: dataConfidence,
+    noise_penalty: round3(noisePenalty),
+  })
 }

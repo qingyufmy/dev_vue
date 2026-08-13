@@ -3,23 +3,14 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.4'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.5'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
 export const AUTO_EXIT_CONFIRMATIONS_REQUIRED = 2
 
-// v1.4 evaluates only whether the current market still aligns with the
-// direction and entry logic that created the live position/pending order.
-// Protective prices and account outcomes remain terminal facts for audit, but
-// can never become a model exit/cancel reason.
-export const POSITION_EXIT_REASON_CODES = ['market_misaligned']
-const POSITION_EXIT_REASON_CODE_SET = new Set(POSITION_EXIT_REASON_CODES)
 const MARKET_ALIGNMENT_VALUES = new Set(['aligned', 'misaligned', 'uncertain'])
-// A model can mark a group misaligned while still explaining a protective or
-// P&L trigger. Those explanations are outside v1.4's contract and must fail
-// closed instead of becoming an executable action.
-const NON_ALIGNMENT_REASON_PATTERN = /(?:盈利保护|保护盈利|保本|止损|止盈|浮盈|浮亏|盈亏|利润|回撤|风险降低|降低风险|模型判断|模型认为|泛化判断|主观判断|risk\s*reduction|model\s*judg(?:e|ment)|generic\s*judg(?:e|ment)|profit\s*protection|break[- ]?even|stop\s*loss|take\s*profit|drawdown|profit|p&l|到期|过期|超时|expired|expiry|timeout)/i
+const MANAGEMENT_REASON_CODE = /^[a-z][a-z0-9_]{0,63}$/
 
 const SYSTEM_MAGIC = 234000
 const MODE_RANK = new Map(POSITION_MANAGEMENT_MODES.map((mode, index) => [mode, index]))
@@ -460,19 +451,19 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
     pending_evaluations:(context.pending_groups || []).map(group => ({
       management_group_id:group.management_group_id,
       action:'仅允许 keep | cancel',
-      market_alignment:'仅允许 aligned | misaligned | uncertain；aligned/uncertain 必须 keep，misaligned 才能 cancel',
-      cancel_reason_code:'仅当 market_alignment=misaligned 且 action=cancel 时填写 market_misaligned；其他情况必须为 null',
-      reason:'只能说明当前行情与原挂单方向/入场逻辑是否一致；不得以到期、止损止盈、盈利保护、风险降低或泛化判断撤单',
+      market_alignment:'仅允许 aligned | misaligned | uncertain，作为当前策略判断的描述字段，不决定 action',
+      cancel_reason_code:'action=cancel 时填写当前策略定义的 lowercase_snake_case 原因码；keep 时为 null',
+      reason:'简体中文说明当前策略为何保留或取消该挂单',
       evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
     })),
     position_evaluations:(context.position_groups || []).map(group => ({
       management_group_id:group.management_group_id,
       thesis_id:group.thesis_id,
       action:'仅允许 hold | exit',
-      market_alignment:'仅允许 aligned | misaligned | uncertain；aligned/uncertain 必须 hold，misaligned 才能 exit',
-      exit_reason_code:'仅当 market_alignment=misaligned 且 action=exit 时填写 market_misaligned；其他情况必须为 null',
+      market_alignment:'仅允许 aligned | misaligned | uncertain，作为当前策略判断的描述字段，不决定 action',
+      exit_reason_code:'action=exit 时填写当前策略定义的 lowercase_snake_case 原因码；hold 时为 null',
       reversal_candidate:'布尔值，仅为解释性判断，不是执行命令',
-      reason:'只能说明当前行情与原持仓方向/入场逻辑是否一致；不得以止损止盈、盈利保护、风险降低或泛化判断平仓',
+      reason:'简体中文说明当前策略为何继续持有或退出该持仓',
       evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
     })),
     analysis:'简体中文行情分析',
@@ -483,7 +474,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
 function validateAsOf(value, context) {
   // A response and its server context must be from the same contract
   // generation.  In particular, do not allow a rolling deployment to combine
-  // a prior-contract thesis/context with a v1.4 current-state response.
+  // a prior-contract thesis/context with the current-state response.
   if (String(context?.contract_version || '') !== POSITION_MANAGEMENT_CONTRACT_VERSION
     || String(value?.contract_version || '') !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
     throw new Error('position_management_contract_version_mismatch')
@@ -605,14 +596,8 @@ export function validatePositionManagementResponse(value, context, validateMarke
       const rawCancelReasonCode = item?.cancel_reason_code
       const hasCancelReasonCode = rawCancelReasonCode !== undefined && rawCancelReasonCode !== null
         && String(rawCancelReasonCode).trim() !== ''
-      if (action === 'cancel' && marketAlignment !== 'misaligned') {
-        throw new Error('pending_action_alignment_mismatch')
-      }
-      if (action === 'keep' && marketAlignment === 'misaligned') {
-        throw new Error('pending_action_alignment_mismatch')
-      }
       if (action === 'cancel' && (!hasCancelReasonCode
-        || String(rawCancelReasonCode).trim().toLowerCase() !== 'market_misaligned')) {
+        || !MANAGEMENT_REASON_CODE.test(String(rawCancelReasonCode).trim().toLowerCase()))) {
         throw new Error('pending_cancel_reason_code_required')
       }
       if (action !== 'cancel' && hasCancelReasonCode
@@ -621,14 +606,8 @@ export function validatePositionManagementResponse(value, context, validateMarke
       }
       const cancelReasonCode = action === 'cancel'
         ? String(rawCancelReasonCode).trim().toLowerCase() : null
-      if (cancelReasonCode && cancelReasonCode !== 'market_misaligned') {
-        throw new Error('pending_cancel_reason_code_invalid')
-      }
       const reason = text(item.reason, 1000)
       if (!reason) throw new Error('pending_reason_required')
-      if (action === 'cancel' && NON_ALIGNMENT_REASON_PATTERN.test(reason)) {
-        throw new Error('pending_reason_not_market_alignment')
-      }
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
       seenPending.add(group.management_group_id)
       pendingEvaluations.push({ management_group_id:group.management_group_id, action,
@@ -651,13 +630,7 @@ export function validatePositionManagementResponse(value, context, validateMarke
       const hasExitReasonCode = rawExitReasonCode !== undefined && rawExitReasonCode !== null
         && String(rawExitReasonCode).trim() !== ''
       const exitReasonCode = hasExitReasonCode ? String(rawExitReasonCode).trim().toLowerCase() : null
-      if (action === 'exit' && marketAlignment !== 'misaligned') {
-        throw new Error('position_action_alignment_mismatch')
-      }
-      if (action === 'hold' && marketAlignment === 'misaligned') {
-        throw new Error('position_action_alignment_mismatch')
-      }
-      if (action === 'exit' && (!exitReasonCode || !POSITION_EXIT_REASON_CODE_SET.has(exitReasonCode))) {
+      if (action === 'exit' && (!exitReasonCode || !MANAGEMENT_REASON_CODE.test(exitReasonCode))) {
         throw new Error('position_exit_reason_code_required')
       }
       if (action === 'hold' && hasExitReasonCode && exitReasonCode !== 'null') {
@@ -665,9 +638,6 @@ export function validatePositionManagementResponse(value, context, validateMarke
       }
       const reason = text(item.reason, 1000)
       if (!reason) throw new Error('position_reason_required')
-      if (action === 'exit' && NON_ALIGNMENT_REASON_PATTERN.test(reason)) {
-        throw new Error('position_reason_not_market_alignment')
-      }
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
       seenPosition.add(group.management_group_id)
       positionEvaluations.push({
@@ -787,30 +757,16 @@ export function resolveAutomaticExitConfirmation(current, previous = null) {
   if (action !== 'exit') {
     return { validation_status:'valid', confirmation_count:0, reset_reason:'automatic_inference_hold' }
   }
-  // The current inference must be an explicit market-misalignment exit. Keep
-  // this check ahead of legacy-history handling so an invalid current output
-  // can never become a first confirmation.
-  if (normalizeMarketAlignment(current?.market_alignment) !== 'misaligned') {
-    return { validation_status:'invalid', confirmation_count:0, reset_reason:'market_alignment_action_mismatch' }
-  }
   if (previousContract && previousContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
     return { validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' }
   }
   if (previous && !previousContract) {
     // Legacy/unknown evaluation rows are audit history only.  They cannot be
-    // paired with a v1.4 current-state inference for automatic execution.
+    // paired with a current-state inference for automatic execution.
     return { validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' }
-  }
-  // Only a compatible v1.4 previous exit is eligible for the alignment
-  // validation below. Legacy/unknown previous rows were handled above and
-  // intentionally count only as audit history.
-  if (previous && String(previous?.action || '').toLowerCase() === 'exit'
-    && normalizeMarketAlignment(previous?.market_alignment) !== 'misaligned') {
-    return { validation_status:'invalid', confirmation_count:0, reset_reason:'market_alignment_action_mismatch' }
   }
   const previousExit = String(previous?.validation_status || '').toLowerCase() === 'valid'
     && String(previous?.action || '').toLowerCase() === 'exit'
-    && normalizeMarketAlignment(previous?.market_alignment) === 'misaligned'
   if (!previousExit) {
     return { validation_status:'valid', confirmation_count:1, reset_reason:null }
   }
@@ -1041,7 +997,7 @@ async function advanceAutomaticExitCandidate({ signalId, context, target, evalua
   if (task && task.status === 'CANDIDATE') {
     const taskContract = managementContractVersion(parseManagementJson(task.model_evaluation_json, {}))
     if (taskContract !== POSITION_MANAGEMENT_CONTRACT_VERSION) {
-      // A pre-v1.4 candidate is audit history, never the second half of a
+      // A prior-contract candidate is audit history, never the second half of a
       // current-state confirmation.  Retire it before creating a fresh task
       // so two historical candidates cannot execute the same position.
       const now = beijingNow()
@@ -1098,18 +1054,15 @@ function normalizePersistedManagementEvaluation(evaluation, group, section) {
   const reason = text(evaluation?.reason, 1000)
   const reasonCode = String(section === 'position'
     ? evaluation?.exit_reason_code : evaluation?.cancel_reason_code || '').trim().toLowerCase()
-  const invalid = !groupCurrentFactsAvailable(group)
-    || !alignment
-    || (section === 'position'
-      ? !(['hold', 'exit'].includes(action)
-        && ((action === 'exit' && alignment === 'misaligned' && reasonCode === 'market_misaligned')
-          || (action === 'hold' && ['aligned', 'uncertain'].includes(alignment)
-            && (!reasonCode || reasonCode === 'null' || reasonCode === 'none'))))
-      : !(['keep', 'cancel'].includes(action)
-        && ((action === 'cancel' && alignment === 'misaligned' && reasonCode === 'market_misaligned')
-          || (action === 'keep' && ['aligned', 'uncertain'].includes(alignment)
-            && (!reasonCode || reasonCode === 'null' || reasonCode === 'none')))))
-    || ((action === 'exit' || action === 'cancel') && NON_ALIGNMENT_REASON_PATTERN.test(reason))
+  const actionAllowed = section === 'position'
+    ? ['hold', 'exit'].includes(action)
+    : ['keep', 'cancel'].includes(action)
+  const executionAction = action === 'exit' || action === 'cancel'
+  const reasonCodeValid = executionAction
+    ? MANAGEMENT_REASON_CODE.test(reasonCode)
+    : !reasonCode || reasonCode === 'null' || reasonCode === 'none'
+  const invalid = !groupCurrentFactsAvailable(group) || !alignment || !actionAllowed
+    || !reason || !reasonCodeValid
   if (!invalid) return { ...evaluation, market_alignment:alignment }
   if (section === 'position') return safePositionEvaluation(
     evaluation?.management_group_id, group?.thesis_id,

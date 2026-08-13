@@ -16,7 +16,7 @@ function frame({ dataComplete = true, directionUsable = true, direction = 'up', 
 }
 
 describe('decision diagnostics', () => {
-  it('separates data quality and unconfirmed structure without inventing a generic direction conflict', () => {
+  it('reports neutral data quality without inferring a strategy hold from Chan capabilities', () => {
     const result = buildDecisionDiagnostics({
       signal:{ signal_type:'hold', entry_method:'observe' },
       market:{ strategy_context:{ timeframes:{
@@ -29,12 +29,28 @@ describe('decision diagnostics', () => {
     expect(result).toMatchObject({
       decision_diagnostics_version:1,
       decision_origin:'model',
-      contributing_reasons:[
-        'market_data_unreliable', 'structure_unconfirmed',
-      ],
-      affected_timeframes:['M5', 'H1'],
+      contributing_reasons:['market_data_unreliable'],
+      affected_timeframes:['M5'],
     })
     expect(result.reason_details[0]).toMatchObject({ code:'market_data_unreliable', timeframes:['M5'] })
+    expect(JSON.stringify(result)).not.toContain('structure_unconfirmed')
+  })
+
+  it('does not infer a strategy reason from usable data with unavailable Chan capabilities', () => {
+    const result = buildDecisionDiagnostics({
+      signal:{ signal_type:'hold', entry_method:'observe' },
+      market:{ strategy_context:{ timeframes:{
+        H1:frame({ directionUsable:false, reasons:[
+          'no_confirmed_center', 'entry_structure_unusable', 'divergence_unusable',
+        ] }),
+      } } },
+    })
+    expect(result).toMatchObject({
+      decision_origin:'model',
+      contributing_reasons:['model_hold'],
+      affected_timeframes:[],
+    })
+    expect(result.reason_details.some(item => item.code === 'structure_unconfirmed')).toBe(false)
   })
 
   it('attributes an enforced workflow hold to the constraint engine', () => {
@@ -72,5 +88,19 @@ describe('decision diagnostics', () => {
       market:{ strategy_context:{ timeframes:{ H1:frame({ directionUsable:false, reasons:['no_confirmed_center'] }) } } },
     })
     expect(result).toMatchObject({ decision_origin:'model', contributing_reasons:[], affected_timeframes:[] })
+  })
+
+  it('does not use legacy market scoring to explain or rewrite a model decision', () => {
+    const input = { signal:{ signal_type:'hold', entry_method:'observe' } }
+    const baseline = buildDecisionDiagnostics({
+      ...input,
+      market:{ strategy_score:{ trend_strength:0, data_confidence:0.05, momentum_alignment:-1 } },
+    })
+    const highScore = buildDecisionDiagnostics({
+      ...input,
+      market:{ strategy_score:{ trend_strength:1, data_confidence:0.95, momentum_alignment:1 } },
+    })
+    expect(highScore).toEqual(baseline)
+    expect(highScore).toMatchObject({ decision_origin:'model', contributing_reasons:['model_hold'] })
   })
 })

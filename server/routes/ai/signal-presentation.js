@@ -1,7 +1,8 @@
 import { auditValueLabel, formatRiskReason } from '../../audit-localization.js'
 import { normalizeExperienceAttribution, normalizeExperienceRefs } from './experience-attribution.js'
+import { attachExecutionValidation, readExecutionValidation } from './signal-execution-validation.js'
 
-const SIGNAL_SCHEMA_VERSION = 5
+const SIGNAL_SCHEMA_VERSION = 6
 const DECISION_DIAGNOSTIC_REASONS = new Set([
   'market_data_unreliable',
   'structure_unconfirmed',
@@ -223,12 +224,15 @@ function executionDescription(execution, fallback) {
 }
 
 export function normalizeDecisionFields(signal = {}) {
-  const direction = String(signal.signal_type || 'hold').toLowerCase()
-  const isHold = direction === 'hold' || String(signal.entry_method || '') === 'observe'
+  const modelDecision = signal.model_decision && typeof signal.model_decision === 'object'
+    && !Array.isArray(signal.model_decision) ? { ...signal.model_decision } : null
+  const direction = String(modelDecision?.signal_type || signal.signal_type || 'hold').toLowerCase()
+  const isHold = direction === 'hold' || String(modelDecision?.entry_method || signal.entry_method || '') === 'observe'
   const executionValidUntilUtcMsc = Number(signal.execution_valid_until_utc_msc)
   const summaryFallback = isHold
     ? '当前条件不足，建议继续观望。'
     : `${direction.startsWith('buy') ? '偏多' : '偏空'}机会成立，等待风控复核后执行。`
+  const validationState = readExecutionValidation(signal)
   return {
     schema_version: SIGNAL_SCHEMA_VERSION,
     decision_summary: cleanText(signal.decision_summary, 200) || summaryFallback,
@@ -252,6 +256,8 @@ export function normalizeDecisionFields(signal = {}) {
     ...(decisionDiagnostics(signal.decision_diagnostics)
       ? { decision_diagnostics:decisionDiagnostics(signal.decision_diagnostics) } : {}),
     ...directionScores(signal),
+    ...(modelDecision ? { model_decision:modelDecision } : {}),
+    ...(validationState.explicit ? { execution_validation:validationState.validation } : {}),
   }
 }
 
@@ -270,6 +276,17 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
     execution?.details?.pending_action_reason || signal.pending_action_reason || storedDecision.pending_action_reason,
     320
   )
+  const executionValidation = readExecutionValidation({ ...signal, decision_json:signal.decision_json }).validation
+
+  if (executionValidation.eligible !== true) {
+    const invalid = executionValidation.status === 'invalid_output'
+    return {
+      state:'unavailable',
+      title:invalid ? '执行资格校验失败' : '执行资格未通过',
+      description:'该模型结论不会进入下单流程，请重新分析或检查策略输出。',
+      executable:false,
+    }
+  }
 
   if (execution?.status === 'success' && execution?.reason === 'pending_cancelled') return {
     state:'cancelled', title:'旧挂单已取消',
@@ -324,7 +341,9 @@ export function attachSignalPresentation(signal = {}) {
   const stored = parseJson(signal.decision_json) || {}
   const positionAction = String(signal.position_action || stored.position_action || '').toLowerCase()
   const signalType = String(signal.signal_type || '').toLowerCase()
-  const noAddTrade = positionAction === 'hold_no_add' && (signalType.startsWith('buy') || signalType.startsWith('sell'))
+  const explicitModelDecision = signal.model_decision || stored.model_decision
+  const noAddTrade = !explicitModelDecision && positionAction === 'hold_no_add'
+    && (signalType.startsWith('buy') || signalType.startsWith('sell'))
   const legacyCandidate = noAddTrade ? candidateEntry({ candidate_entry:{
     signal_type:signalType,
     entry_method:String(signal.entry_method || '').toLowerCase(),
@@ -350,7 +369,8 @@ export function attachSignalPresentation(signal = {}) {
       decision_summary:'当前已有同向持仓，策略建议继续持有，暂不加仓。',
       candidate_entry:presentationSignal.candidate_entry,
     } : {}) })
-  return { ...presentationSignal, ...decision, decision, execution_advice: buildExecutionAdvice(presentationSignal) }
+  const withValidation = attachExecutionValidation({ ...presentationSignal, ...decision, decision, decision_json:signal.decision_json })
+  return { ...withValidation, execution_advice: buildExecutionAdvice(withValidation) }
 }
 
 export { SIGNAL_SCHEMA_VERSION }

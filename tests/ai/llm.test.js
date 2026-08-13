@@ -51,9 +51,11 @@ describe('model usage phase accounting contract', () => {
     expect(source).not.toContain('legacyPendingReason')
   })
 
-  it('treats Chan structure age as diagnostics and legacy stale fields as non-current', () => {
-    expect(source).toContain('confirmed_structure_age_bars 仅是距最近确认线段终点的K线根数诊断值')
-    expect(source).toContain('confirmed_structure_stale，只能将其视为旧版历史快照的兼容字段')
+  it('keeps Chan diagnostics as data-dictionary fields and legacy stale fields non-current', () => {
+    expect(source).toContain('confirmed_structure_age_bars 是距最近确认线段终点的 K 线根数诊断值')
+    expect(source).toContain('confirmed_structure_stale 仅是旧版历史快照的兼容字段')
+    expect(source).toContain('缠论数据字典')
+    expect(source).not.toContain('按当前具体策略的周期职责分析各周期原始结构')
   })
 })
 
@@ -127,9 +129,20 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema).not.toHaveProperty('cancel_pending')
     expect(schema.stop_loss_price).not.toMatch(/风险等级|low=|medium=|high=|自动修正|M15|H1/)
     expect(schema.limit_price).not.toMatch(/M15|H1/)
-    expect(schema.stop_loss_price).toContain('strategy_context')
-    expect(schema.stop_loss_price).toContain('invalidation_condition')
-    expect(schema.position_action).toContain('退出持仓只能通过 position_evaluations')
+    expect(schema.stop_loss_price).toContain('当前策略正文')
+    expect(schema.stop_loss_price).not.toMatch(/周期角色|关键结构|波动证据/)
+    expect(schema.position_action).toContain('表达当前策略')
+  })
+
+  it('does not encode generic analysis doctrine in the output contract', () => {
+    const rendered = buildStrategyOutputFormat(null, ['market', 'limit']).outputFormat
+    expect(rendered).not.toContain('EMA34')
+    expect(rendered).not.toMatch(/BUY\/SELL弱优势|HOLD时|0\.52-0\.62|0\.63-0\.74/)
+    expect(rendered).not.toContain('R:R')
+    expect(rendered).not.toContain('按以下顺序')
+    expect(rendered).not.toContain('方向优势不清晰')
+    expect(rendered).toContain('signal_type')
+    expect(rendered).toContain('entry_method')
   })
 
   it('removes all pending-order fields from a market-only strategy', () => {
@@ -156,10 +169,10 @@ describe('buildStrategyOutputFormat', () => {
     const schema = JSON.parse(buildStrategyOutputFormat(null, ['limit']).outputFormat)
     const rendered = JSON.stringify(schema)
     expect(rendered).not.toContain('最多1笔')
-    expect(schema.pending_action).toContain('可以同时存在多笔挂单')
-    expect(schema.pending_action).toContain('系统不按数量限制')
+    expect(schema.pending_action).not.toContain('可以同时存在多笔挂单')
+    expect(schema.pending_action).not.toContain('系统不按数量限制')
     expect(schema.pending_action).toContain('none 表示本轮不管理现有挂单')
-    expect(schema.pending_action).toContain('keep 表示保留现有挂单且本轮不新增')
+    expect(schema.pending_action).toContain('keep 表示保留模型选中的挂单')
   })
 
   it('requires the model to report usage only for retrieved experience ids', () => {
@@ -917,23 +930,26 @@ describe('validateAiSignalResponse', () => {
       .toThrow('ai_response_entry_method_mismatch')
   })
 
-  it('rejects methods excluded by the selected strategy', () => {
-    expect(() => validateAiSignalResponse({
+  it('preserves methods excluded by the selected strategy for independent execution validation', () => {
+    const value = {
       ...hold, signal_type: 'buy_limit', entry_method: 'limit', recommended_volume: 0.01,
-    }, ['market'])).toThrow('ai_response_invalid_signal_type')
+      position_size_tier:'light', position_action:'open',
+      invalidation_condition:'跌破失效位后建议失效',
+    }
+    expect(validateAiSignalResponse(value, ['market'])).toBe(value)
   })
 
-  it('requires a concrete reason when the model cancels an existing pending order', () => {
-    expect(() => validateAiSignalResponse({
+  it('preserves pending cancellation narratives for independent execution validation', () => {
+    const value = {
       ...hold, pending_action:'cancel', management_direction:'buy', pending_action_reason:'',
-    }, ['market'])).toThrow('ai_response_pending_action_reason_required')
+    }
+    expect(validateAiSignalResponse(value, ['market'])).toBe(value)
 
     const legacy = {
       ...hold, pending_action:'cancel', management_direction:'buy',
       cancel_pending:[{ symbol:'XAUUSD', reason:'M15 跌破 4102 支撑，原买入依据已经失效' }],
     }
-    expect(() => validateAiSignalResponse(legacy, ['market']))
-      .toThrow('ai_response_pending_action_reason_required')
+    expect(validateAiSignalResponse(legacy, ['market'])).toBe(legacy)
   })
 
   it('requires invalidation_condition for trades but leaves display narratives optional', () => {
@@ -1097,6 +1113,14 @@ describe('normalizeAiSignal', () => {
       stop_loss_price:1990, take_profit_1_price:2010 }
     const result = normalizeAiSignal(parsed, baseConfig, baseMarket)
     expect(result.signal_type).toBe('buy')
+  })
+
+  it('preserves model confidence instead of recalculating it from strategy score', () => {
+    const result = normalizeAiSignal({ signal_type:'buy', confidence:0.2, recommended_volume:0.03,
+      stop_loss_price:1990, take_profit_1_price:2010 }, baseConfig, {
+      ...baseMarket, strategy_score:{ data_confidence:1, trend_strength:1 }, volatility_pct:0,
+    })
+    expect(result.confidence).toBe(0.2)
   })
 
   it('历史 mixed 缠论汇总字段不影响当前模型仓位档位', () => {
@@ -1391,7 +1415,7 @@ describe('maybeAiSignal', () => {
     expect(result._position_management.position_evaluations[0].action).toBe('hold')
   })
 
-  it('renders the v1.4 market-alignment boundary and omits legacy reasons/protection status', async () => {
+  it('renders the generic position-management contract without service trading doctrine', async () => {
     const asOf = {
       decision_timeframe:'M15', closed_bar_time_utc_ms:1784736900000,
       market_snapshot_hash:'sha256:position-management-prompt-test',
@@ -1443,10 +1467,10 @@ describe('maybeAiSignal', () => {
     })
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     const systemPrompt = body.messages[0].content
-    expect(systemPrompt).toContain('持仓管理 v1.4')
+    expect(systemPrompt).toContain('持仓与挂单管理输出合同')
     expect(systemPrompt).toContain('market_alignment')
-    expect(systemPrompt).toContain('只有明确 market_alignment=misaligned')
-    expect(systemPrompt).toContain('禁止因到期、有效期、盈利保护')
+    expect(systemPrompt).not.toContain('只有明确 market_alignment=misaligned')
+    expect(systemPrompt).not.toContain('禁止因到期、有效期、盈利保护')
     expect(systemPrompt).not.toContain('risk_reduction')
     expect(systemPrompt).not.toContain('model_judgment')
     expect(systemPrompt).not.toContain('protection_status')
@@ -1503,7 +1527,7 @@ describe('maybeAiSignal', () => {
       atr_14: 10, ai_volume_range: { min: 0.01, max: 0.05 }, strategy_context: { timeframes: {} },
     }
     await maybeAiSignal(null, config, market)
-    expect(evidence.systemPrompt).toContain('共享市场推理边界')
+    expect(evidence.systemPrompt).toContain('共享市场事实边界')
     expect(evidence.systemPrompt).not.toContain('\u6682\u4e0d\u5efa\u8bae\u81ea\u52a8\u5e73\u4ed3')
     expect(evidence.userPrompt).not.toContain('"ai_volume_range"')
     expect(evidence.userPrompt).not.toContain('account')
@@ -1548,6 +1572,39 @@ describe('maybeAiSignal', () => {
       .toEqual(['outcome:801', 'outcome:802', 'outcome:803'])
   })
 
+  it('keeps service-generated strategy scores and ATR anchors out of generic model input', async () => {
+    mockFetch.mockResolvedValue({
+      ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify({
+        signal_type:'hold', entry_method:'observe', confidence:0.6,
+        position_size_tier:'observe', position_size_reason:'等待', position_action:'observe',
+        pending_action:'none', pending_action_reason:'', management_direction:'none',
+        analysis:'等待', reasoning:'等待',
+      }) } }] }),
+    })
+    let evidence
+    await maybeAiSignal(null, {
+      api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      _market_only:true, _onInferencePrepared:value => { evidence = value },
+    }, {
+      symbol:'XAUUSD', standard_symbol:'XAUUSD', timeframe:'M5', latest_price:2000,
+      strategy_score:{ data_confidence:0.9, trend_strength:0.8 },
+      atr_anchor:15, atr_anchor_tf:'H1',
+      strategy_context:{ timeframes:{ M5:{ summary:{ strategy_score:{ trend_strength:0.8 }, chan:{ status:'ok' } }, klines:[] } } },
+    })
+    expect(evidence.systemPrompt).not.toContain('strategy_score')
+    expect(evidence.systemPrompt).not.toContain('atr_anchor')
+    expect(evidence.systemPrompt).not.toContain('atr_anchor_tf')
+    expect(evidence.systemPrompt).not.toContain('EMA34')
+    expect(evidence.systemPrompt).not.toContain('0.52-0.62')
+    expect(evidence.systemPrompt).not.toContain('R:R')
+    expect(evidence.systemPrompt).not.toContain('按以下顺序')
+    expect(evidence.systemPrompt).not.toContain('方向优势不清晰')
+    expect(evidence.userPrompt).not.toContain('strategy_score')
+    expect(evidence.userPrompt).not.toContain('atr_anchor')
+    expect(evidence.userPrompt).not.toContain('atr_anchor_tf')
+  })
+
   it('does not discourage automatic close in private portfolio boundaries', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -1564,7 +1621,7 @@ describe('maybeAiSignal', () => {
       symbol: 'XAUUSD', timeframe: 'M5', latest_price: 2000,
       account: { balance: 10000 }, positions: [], pending_orders: [], strategy_context: { timeframes: {} },
     })
-    expect(evidence.systemPrompt).toContain('私有策略账户上下文')
+    expect(evidence.systemPrompt).toContain('私有策略账户事实')
     expect(evidence.systemPrompt).not.toContain('\u6682\u4e0d\u5efa\u8bae\u81ea\u52a8\u5e73\u4ed3')
   })
 
@@ -1643,22 +1700,20 @@ describe('maybeAiSignal', () => {
     await maybeAiSignal(null, config, market)
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.messages[0].content).not.toContain('{{USE_CHAN}}')
-    expect(body.messages[0].content).toContain('缠论背驰使用规则')
+    expect(body.messages[0].content).toContain('缠论数据字典')
     expect(body.messages[0].content).toContain('forming_divergence')
     expect(body.messages[0].content).toContain('entry_candidates')
-    expect(body.messages[0].content).toContain('按当前具体策略的周期职责分析各周期原始结构')
-    expect(body.messages[0].content).toContain('不预设所有周期同向')
+    expect(body.messages[0].content).not.toContain('周期职责')
+    expect(body.messages[0].content).not.toContain('证据权重')
+    expect(body.messages[0].content).not.toContain('观望条件')
     expect(body.messages[0].content).not.toMatch(/\bagreement\s*=/i)
     expect(body.messages[0].content).not.toContain('alignment_with_higher')
     expect(body.messages[0].content).not.toContain('agreement=mixed')
     expect(body.messages[0].content).not.toContain('alignment_with_higher=conflict')
-    expect(body.messages[0].content).toContain('连续三条已确认线段')
-    expect(body.messages[0].content).toContain('候选线段、单笔重叠和未确认结构不得称为中枢')
     expect(body.messages[0].content).toContain('bi_center_count')
     expect(body.messages[0].content).toContain('segment_history_unresolved')
-    expect(body.messages[0].content).toContain('必须区分“结构拓扑可靠”和“绝对时间定位精度”')
-    expect(body.messages[0].content).toContain('structure_topology_reliable=true')
-    expect(body.messages[0].content).toContain('不得仅因 time_location_reliable=false')
+    expect(body.messages[0].content).toContain('structure_topology_reliable')
+    expect(body.messages[0].content).toContain('time_location_reliable')
   })
 
   it('结构化开关启用时payload保留chan', async () => {
@@ -1678,7 +1733,8 @@ describe('maybeAiSignal', () => {
     const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeDefined()
     expect(userPayload.strategy_context).not.toHaveProperty('visualization_klines')
-    expect(userPayload).toMatchObject({ atr_anchor: 15, atr_anchor_tf: 'H1' })
+    expect(userPayload).not.toHaveProperty('atr_anchor')
+    expect(userPayload).not.toHaveProperty('atr_anchor_tf')
   })
 
   it('手动覆盖提示词决定模型指令并保留缠论数据', async () => {
@@ -1797,6 +1853,22 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     expect(result.entry_method).toBe('observe')
     expect(result.confidence).toBeGreaterThan(0)
     expect(result.normalization_info?.type).not.toBe('l5_schema_hold')
+    expect(result.execution_validation).toEqual({ status:'ineligible', eligible:false, reason_codes:['model_hold'] })
+  })
+
+  it('does not synthesize missing TP2 or TP3 for a current model result', () => {
+    const result = normalizeAiSignal({
+      _inference_source:'ai', signal_type:'buy', entry_method:'market', confidence:0.67,
+      ...strictTradeFields, recommended_volume:0.02,
+      stop_loss_price:1990, take_profit_1_price:2020, recommended_take_profit_tier:1,
+      analysis:'模型原始分析', reasoning:'模型原始理由',
+    }, config, market)
+    expect(result).toMatchObject({
+      signal_type:'buy', confidence:0.67, analysis:'模型原始分析', reasoning:'模型原始理由',
+      take_profit_1_price:2020, take_profit_2_price:null, take_profit_3_price:null,
+      execution_validation:{ status:'eligible', eligible:true, reason_codes:[] },
+      model_decision:{ signal_type:'buy', confidence:0.67, analysis:'模型原始分析', reasoning:'模型原始理由' },
+    })
   })
 
   it('keeps the localized evidence for an AI pending-order cancellation', () => {
@@ -1813,7 +1885,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     })
   })
 
-  it('turns a trade-shaped no-add decision into hold while preserving non-executable candidate levels', () => {
+  it('preserves a trade-shaped no-add model conclusion but marks it ineligible', () => {
     const result = normalizeAiSignal({
       _inference_source:'ai', signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
       position_size_tier:'probe', position_size_reason:'等待回踩', position_action:'hold_no_add',
@@ -1823,34 +1895,35 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       analysis:'偏多但不加仓', reasoning:'已有同向持仓',
     }, { ...config, _allowed_entry_methods:['limit'] }, market)
     expect(result).toMatchObject({
-      signal_type:'hold', entry_method:'observe', recommended_volume:0,
-      position_size_tier:'observe', position_action:'hold_no_add', limit_price:null,
-      stop_loss_price:null, take_profit_1_price:null,
-      decision_summary:'当前已有同向持仓，策略建议继续持有，暂不加仓。',
-      candidate_entry:{ signal_type:'buy_limit', entry_method:'limit', entry_price:1995, stop_loss_price:1985, take_profit_1_price:2010 },
-      normalization_info:{ type:'existing_position_hold_no_add', original_signal_type:'buy_limit' },
+      signal_type:'buy_limit', entry_method:'limit', recommended_volume:0,
+      position_size_tier:'probe', position_action:'hold_no_add', limit_price:1995,
+      stop_loss_price:1985, take_profit_1_price:2010,
+      model_decision:{ signal_type:'buy_limit', entry_method:'limit', position_action:'hold_no_add' },
+      execution_validation:{ status:'ineligible', eligible:false,
+        reason_codes:['position_action_hold_no_add'] },
     })
   })
 
-  it('invalid explicit entry_method degrades to hold instead of market', () => {
+  it('preserves an invalid explicit entry method without granting execution', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'instant', confidence: 0.8,
       ...strictTradeFields,
       recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2020,
     }, config, market)
-    expect(result).toMatchObject({ signal_type: 'hold', entry_method: 'observe', recommended_volume: 0, normalization_info: { type: 'l5_schema_hold' } })
+    expect(result).toMatchObject({ signal_type:'buy', entry_method:'instant', recommended_volume:0,
+      execution_validation:{ status:'ineligible', eligible:false,
+        reason_codes:expect.arrayContaining(['entry_method_not_allowed_by_strategy']) } })
   })
 
-  it('degrades a model response that uses an entry method disabled by the strategy', () => {
+  it('preserves a model response that uses a disabled entry method but blocks execution', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy_limit', entry_method: 'limit', confidence: 0.8,
       ...strictTradeFields,
       recommended_volume: 0.02, limit_price: 1995, stop_loss_price: 1985, take_profit_1_price: 2015,
     }, { ...config, _allowed_entry_methods: ['market'] }, market)
-    expect(result).toMatchObject({
-      signal_type: 'hold', entry_method: 'observe', recommended_volume: 0,
-      normalization_info: { type: 'l5_schema_hold', reason: 'entry_method_not_allowed_by_strategy' },
-    })
+    expect(result).toMatchObject({ signal_type:'buy_limit', entry_method:'limit', recommended_volume:0,
+      execution_validation:{ status:'ineligible', eligible:false,
+        reason_codes:expect.arrayContaining(['entry_method_not_allowed_by_strategy']) } })
   })
 
   it('ignores a legacy absolute model volume in the current tier contract', () => {
@@ -1883,45 +1956,39 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     expect(result).toMatchObject({ signal_type: 'buy', recommended_volume:0, position_size_tier:'light', position_size_factor:0.5 })
   })
 
-  it('requires an explicit AI take-profit recommendation for executable signals', () => {
+  it('preserves a missing AI take-profit recommendation but blocks execution', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'buy', entry_method: 'market', confidence: 0.8,
       ...strictTradeFields,
       recommended_volume: 0.02, stop_loss_price: 1990, take_profit_1_price: 2020,
     }, config, market)
-    expect(result).toMatchObject({
-      signal_type: 'hold', recommended_volume: 0,
-      normalization_info: { type: 'l5_schema_hold', reason: 'invalid_recommended_take_profit_tier' },
-    })
+    expect(result).toMatchObject({ signal_type:'buy', recommended_volume:0,
+      execution_validation:{ status:'ineligible', eligible:false,
+        reason_codes:expect.arrayContaining(['invalid_recommended_take_profit_tier']) } })
   })
 
-  it('degrades a sell stop-limit whose trigger is above the current market price', () => {
+  it('preserves a sell stop-limit with invalid trigger direction but blocks execution', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'sell_stop_limit', entry_method: 'stop_limit', confidence: 0.8,
       ...strictTradeFields,
       recommended_volume: 0.02, limit_price: 2005, stop_limit_price: 2010,
       stop_loss_price: 2020, take_profit_1_price: 1980, recommended_take_profit_tier: 1,
     }, { ...config, _allowed_entry_methods: ['stop_limit'] }, market)
-    expect(result).toMatchObject({
-      signal_type: 'hold', entry_method: 'observe', recommended_volume: 0,
-      decision_summary: '挂单价格结构不符合当前行情规则，本次暂不执行。',
-      normalization_info: {
-        reason: 'pending_price_direction_invalid', trigger_price: 2005, reference_price: 2000,
-      },
-    })
+    expect(result).toMatchObject({ signal_type:'sell_stop_limit', entry_method:'stop_limit', recommended_volume:0,
+      execution_validation:{ status:'ineligible', eligible:false,
+        reason_codes:expect.arrayContaining(['pending_price_direction_invalid']) } })
   })
 
-  it('degrades a sell stop-limit whose post-trigger limit is below its trigger', () => {
+  it('preserves a sell stop-limit with invalid post-trigger relation but blocks execution', () => {
     const result = normalizeAiSignal({
       _inference_source: 'ai', signal_type: 'sell_stop_limit', entry_method: 'stop_limit', confidence: 0.8,
       ...strictTradeFields,
       recommended_volume: 0.02, limit_price: 1995, stop_limit_price: 1990,
       stop_loss_price: 2020, take_profit_1_price: 1980, recommended_take_profit_tier: 1,
     }, { ...config, _allowed_entry_methods: ['stop_limit'] }, market)
-    expect(result).toMatchObject({
-      signal_type: 'hold', entry_method: 'observe', recommended_volume: 0,
-      normalization_info: { reason: 'stop_limit_price_relation_invalid' },
-    })
+    expect(result).toMatchObject({ signal_type:'sell_stop_limit', entry_method:'stop_limit', recommended_volume:0,
+      execution_validation:{ status:'ineligible', eligible:false,
+        reason_codes:expect.arrayContaining(['stop_limit_price_relation_invalid']) } })
   })
 
   it('keeps a valid sell stop-limit and stores its validity as UTC', () => {

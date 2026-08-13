@@ -41,6 +41,18 @@ describe('shared market inference boundary', () => {
     const snapshot = prepareInferenceSnapshot({ marketSnapshot: result })
     expect(snapshot.klines.M5).toHaveLength(1)
   })
+
+  it('does not expose server judgment scores or undeclared ATR anchors to the model snapshot', () => {
+    const result = buildSharedMarketSnapshot({
+      symbol:'XAUUSD', timeframe:'M5', atr_14:8,
+      atr_anchor:12, atr_anchor_tf:'H1',
+      strategy_score:{ trend_strength:0.9, momentum_alignment:1 },
+    })
+    expect(result).toMatchObject({ symbol:'XAUUSD', timeframe:'M5', atr_14:8 })
+    expect(result).not.toHaveProperty('strategy_score')
+    expect(result).not.toHaveProperty('atr_anchor')
+    expect(result).not.toHaveProperty('atr_anchor_tf')
+  })
 })
 
 describe('inference snapshot evidence', () => {

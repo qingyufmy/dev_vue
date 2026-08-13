@@ -111,6 +111,28 @@ describe('isAutoSchedulerRunning', () => {
   })
 })
 
+describe('execution validation delivery gate', () => {
+  it('does not create a shared delivery row for explicit ineligible output', () => {
+    const rows = __schedulerTest.buildSignalDeliveryRows({
+      signalId:10, userIds:[7], onlineUserIds:new Set([7]), promptTypeId:3, symbol:'XAUUSD',
+      createdAt:'2026-08-13 12:00:00', signalType:'buy', pendingAction:'none',
+      executionValidation:{
+        explicit:true,
+        validation:{ status:'ineligible', eligible:false, reason_codes:['strategy_blocked'] },
+      },
+    })
+    expect(rows).toEqual([])
+  })
+
+  it('keeps legacy signals recoverable', () => {
+    const rows = __schedulerTest.buildSignalDeliveryRows({
+      signalId:11, userIds:[7], onlineUserIds:new Set([7]), promptTypeId:3, symbol:'XAUUSD',
+      createdAt:'2026-08-13 12:00:00', signalType:'buy', pendingAction:'none',
+    })
+    expect(rows[0].executionStatus).toBe('not_attempted')
+  })
+})
+
 describe('automatic-analysis control state', () => {
   beforeEach(() => {
     vi.clearAllMocks()

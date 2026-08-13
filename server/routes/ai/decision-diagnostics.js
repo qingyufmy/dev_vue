@@ -1,17 +1,6 @@
 export const DECISION_DIAGNOSTICS_VERSION = 1
 
 const TIMEFRAME_ORDER = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1', 'MN1']
-const STRUCTURE_REASON_CODES = new Set([
-  'segment_direction_unusable',
-  'no_confirmed_center',
-  'center_structure_unusable',
-  'entry_structure_unusable',
-  'divergence_unusable',
-  'structure_anchor_bootstrap_pending',
-  'segment_cross_window_unstable',
-  'segment_history_unresolved',
-])
-
 function objectValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null
 }
@@ -63,9 +52,11 @@ function normalizedBySchema(signal = {}) {
 }
 
 /**
- * Build bounded, deterministic diagnostics from server-owned evidence only.
- * Model prose is deliberately not inspected and this function never changes
- * the trading decision itself.
+ * Build bounded, deterministic diagnostics from model/schema outcomes and
+ * explicit strategy-policy constraints.  The market argument is used only to
+ * report a neutral data-quality status; Chan capabilities never explain why a
+ * model chose to hold and are deliberately not converted into decision
+ * reasons here.
  */
 export function buildDecisionDiagnostics({ signal = {}, market = {}, strategyPolicyRuntime = null,
   modelSignalType = null } = {}) {
@@ -94,14 +85,6 @@ export function buildDecisionDiagnostics({ signal = {}, market = {}, strategyPol
       ])
       continue
     }
-
-    const structureCodes = reasonCodes.filter(code => STRUCTURE_REASON_CODES.has(code))
-    if (isHold && capabilities.data_complete === true && (
-      capabilities.segment_direction_usable === false
-      || capabilities.center_structure_usable === false
-      || capabilities.entry_structure_usable === false
-      || structureCodes.length > 0
-    )) add('structure_unconfirmed', [timeframe], structureCodes)
 
   }
 

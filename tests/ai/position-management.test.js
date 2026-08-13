@@ -80,7 +80,7 @@ function response(overrides = {}) {
   }
 }
 
-describe('position management v1.4 market-alignment contract', () => {
+describe('position management strategy-authoritative contract', () => {
   it('uses the explicit last closed bar instead of the forming candle', () => {
     const result = buildPositionManagementAsOf({
       timestamp:'2026-07-24 12:30:00',
@@ -286,60 +286,44 @@ describe('position management v1.4 market-alignment contract', () => {
 
   it.each([
     ['aligned', 'cancel'], ['uncertain', 'cancel'], ['misaligned', 'keep'],
-  ])('fails closed for pending market_alignment=%s action=%s', (marketAlignment, action) => {
+  ])('preserves strategy-selected pending action independently from market_alignment=%s action=%s', (marketAlignment, action) => {
     const value = response({ pending_evaluations:[{
       ...response().pending_evaluations[0], action, market_alignment:marketAlignment,
       cancel_reason_code:action === 'cancel' ? 'market_misaligned' : null,
     }] })
     const result = validatePositionManagementResponse(value, context,
       plan => ({ ...plan, confidence:0.8 }))
-    expect(result._position_management.pending_evaluations[0]).toMatchObject({
-      action:'keep', market_alignment:'uncertain', validation_source:'server_fail_closed',
-    })
-    expect(result._position_management.validation.errors).toEqual(expect.arrayContaining([
-      expect.objectContaining({ section:'pending', code:'pending_action_alignment_mismatch' }),
-    ]))
+    expect(result._position_management.pending_evaluations[0]).toMatchObject({ action, market_alignment:marketAlignment })
+    expect(result._position_management.validation.errors).toEqual([])
   })
 
   it.each(['expired', 'thesis_invalidated', 'risk_reduction', 'model_judgment'])
-    ('rejects retired pending reason code %s', cancelReasonCode => {
+    ('accepts strategy-defined pending reason code %s', cancelReasonCode => {
       const result = validatePositionManagementResponse(response({ pending_evaluations:[{
         ...response().pending_evaluations[0], cancel_reason_code:cancelReasonCode,
       }] }), context, plan => ({ ...plan, confidence:0.8 }))
-      expect(result._position_management.pending_evaluations[0]).toMatchObject({
-        action:'keep', market_alignment:'uncertain', validation_source:'server_fail_closed',
-      })
-      expect(result._position_management.validation.errors).toEqual(expect.arrayContaining([
-        expect.objectContaining({ section:'pending' }),
-      ]))
+      expect(result._position_management.pending_evaluations[0]).toMatchObject({ action:'cancel', cancel_reason_code:cancelReasonCode })
+      expect(result._position_management.validation.errors).toEqual([])
     })
 
   it.each(['current_thesis_invalidated', 'trend_reversal', 'risk_reduction', 'model_judgment'])
-    ('rejects retired position reason code %s', exitReasonCode => {
+    ('accepts strategy-defined position reason code %s', exitReasonCode => {
       const result = validatePositionManagementResponse(response({ position_evaluations:[{
         ...response().position_evaluations[0], exit_reason_code:exitReasonCode,
       }] }), context, plan => ({ ...plan, confidence:0.8 }))
-      expect(result._position_management.position_evaluations[0]).toMatchObject({
-        action:'hold', market_alignment:'uncertain', validation_source:'server_fail_closed',
-      })
-      expect(result._position_management.validation.errors).toEqual(expect.arrayContaining([
-        expect.objectContaining({ section:'position' }),
-      ]))
+      expect(result._position_management.position_evaluations[0]).toMatchObject({ action:'exit', exit_reason_code:exitReasonCode })
+      expect(result._position_management.validation.errors).toEqual([])
     })
 
-  it('rejects a protective or P&L explanation even when alignment says misaligned', () => {
+  it('does not reject a strategy explanation based on service trading doctrine', () => {
     const result = validatePositionManagementResponse(response({
       position_evaluations:[{
         ...response().position_evaluations[0], market_alignment:'misaligned',
         exit_reason_code:'market_misaligned', reason:'跌破保本止损，盈利保护触发',
       }],
     }), context, plan => ({ ...plan, confidence:0.8 }))
-    expect(result._position_management.position_evaluations[0]).toMatchObject({
-      action:'hold', market_alignment:'uncertain', validation_source:'server_fail_closed',
-    })
-    expect(result._position_management.validation.errors).toContainEqual(
-      expect.objectContaining({ code:'position_reason_not_market_alignment' }),
-    )
+    expect(result._position_management.position_evaluations[0]).toMatchObject({ action:'exit', market_alignment:'misaligned' })
+    expect(result._position_management.validation.errors).toEqual([])
   })
 
   it('fails closed and preserves groups when terminal facts are unavailable', () => {
@@ -372,10 +356,7 @@ describe('position management v1.4 market-alignment contract', () => {
     expect(parsed.market_plan.position_action).toBeUndefined()
     expect(schema).toContain('exit_reason_code')
     expect(schema).toContain('market_alignment')
-    expect(schema).toContain('market_misaligned')
-    expect(schema).not.toContain('risk_reduction')
-    expect(schema).not.toContain('model_judgment')
-    expect(schema).not.toContain('expired')
+    expect(schema).toContain('lowercase_snake_case')
     expect(schema).not.toContain('matched_condition_id')
     expect(schema).not.toContain('cancel_replace')
     expect(schema).not.toContain('"reverse"')
@@ -383,7 +364,7 @@ describe('position management v1.4 market-alignment contract', () => {
 })
 
 describe('consecutive automatic-inference exit confirmation', () => {
-  it('requires two distinct v1.4 inferences and current snapshots', () => {
+  it('requires two distinct current-contract inferences and snapshots', () => {
     expect(AUTO_EXIT_CONFIRMATIONS_REQUIRED).toBe(2)
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, null))
@@ -405,7 +386,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
     })
   })
 
-  it('does not combine a legacy or unknown previous contract with v1.4', () => {
+  it('does not combine a legacy or unknown previous contract with the current contract', () => {
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:102,
       market_snapshot_hash:'sha256:snapshot-b', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
       action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:101,
@@ -418,7 +399,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
     })).toMatchObject({ validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' })
   })
 
-  it('does not pair a v1.3 candidate with a v1.4 confirmation', () => {
+  it('does not pair a prior-contract candidate with a current-contract confirmation', () => {
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:104,
       market_snapshot_hash:'sha256:snapshot-d', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
       action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:103,

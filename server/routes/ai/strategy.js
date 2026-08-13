@@ -13,8 +13,8 @@ import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime,
 import { buildSharedMarketSnapshot, persistInferenceSnapshotTx } from './inference-snapshots.js'
 import { getStrategyById } from './strategy-ownership.js'
 import { parseStrategyPolicy, prepareStrategyPolicyRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
-import { validateWorkflowTrace, workflowGateEvaluation } from './strategy-workflow-engine.js'
-import { applyConstraintAction, evaluateStrategyConstraints } from './strategy-constraint-engine.js'
+import { validateWorkflowTrace } from './strategy-workflow-engine.js'
+import { evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { buildDecisionDiagnostics } from './decision-diagnostics.js'
 import { saveChanStructureAnchor } from './platform-market-data.js'
@@ -29,6 +29,7 @@ import { createTradeThesisTx, hasActivePositionManagementGroups,
 import { indicatorRequiredHistory } from './indicator-registry.js'
 import { resolveDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
 import { modelTaskDeadlines } from './model-task-budget.js'
+import { attachExecutionValidationToDecision, executionValidationRejection, readExecutionValidation } from './signal-execution-validation.js'
 import crypto from 'node:crypto'
 
 const ATR_ANCHOR_PRIORITY = ['H1', 'H4']
@@ -840,12 +841,7 @@ export async function handleAnalyze(userId, params, options = {}) {
     }
     const postInference = evaluateStrategyConstraints(policy.compiledPolicy, constraintContext, 'post_inference')
     strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-    if (policy.policyMode === 'enforce') {
-      signal.strategy_policy_decision = workflow.decision
-      signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
-      signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
-      signal = applyConstraintAction(signal, postInference).signal
-    }
+    if (policy.policyMode === 'enforce') signal.strategy_policy_decision = workflow.decision
   }
 
   signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, strategyPolicyRuntime, modelSignalType })
@@ -857,7 +853,7 @@ export async function handleAnalyze(userId, params, options = {}) {
   const terminalClockStatus = marketClock ? String(marketClock.clock_status || '').trim().toLowerCase() : null
   const terminalClockSource = marketClock ? String(marketClock.clock_source || marketClock.source || 'market_snapshot') : null
   const marketJson = JSON.stringify(market)
-  const decision = normalizeDecisionFields(signal)
+  const decision = attachExecutionValidationToDecision(normalizeDecisionFields(signal), signal)
   const decisionJson = JSON.stringify(decision)
   const tokenCount = Math.round(((signal.analysis || '').length + (signal.reasoning || '').length + marketJson.length) / 4)
   if (!renderedEvidence) throw new Error('inference_evidence_missing')
@@ -950,89 +946,99 @@ export async function handleAnalyze(userId, params, options = {}) {
   })
 
   if (signal.signal_type !== 'hold' && config && config.enable_auto_trade) {
-    const guardRejection = await resolveAutoExecuteGuard(options.assertAutoExecute, {
-      userId, signal, market,
-    })
-    if (guardRejection) {
-      signal.execution_result = guardRejection
-      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(guardRejection), signal.id])
+    const executionValidation = readExecutionValidation(signal)
+    if (executionValidation.validation.eligible !== true) {
+      const rejection = executionValidationRejection(executionValidation)
+      signal.execution_result = rejection
+      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(rejection), signal.id])
       await insertAudit(null, userId, 'ai_execute', signal.symbol,
-        { signal_id:signal.id, source:'analyze_auto', reason:guardRejection.error_code },
-        guardRejection, 'rejected')
-      sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'rejected' })
-    } else if (!isTradeEnabled(userId)) {
-      console.log(`[Analyze] Auto-execute blocked: trade_send_enabled=0`)
-      await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', reason: 'trade_send_disabled' }, { status: 'rejected', message: '交易发送已关闭' }, 'rejected')
-      signal.execution_result = { status: 'rejected', message: '交易发送已关闭' }
-      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
-      sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'rejected' })
+        { signal_id:signal.id, source:'analyze_auto', reason:rejection.error_code }, rejection, 'rejected')
+      sendToBrowsers(userId, { type:'signal_execution_updated', signal_id:signal.id, status:'rejected' })
     } else {
-    try {
-      const riskCfg = {
-        enable_auto_trade: true,
-        take_profit_mode: 'ai_recommended',
-        max_position_size: config.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
-      }
-      const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
-      const assertAutoExecuteBeforeSend = async () => {
-        const rejection = await resolveAutoExecuteGuard(options.assertAutoExecute, {
-          userId, signal, market,
-        })
-        if (rejection) throw Object.assign(new Error(rejection.error_code), {
-          code:rejection.error_code,
-        })
-        return true
-      }
-
-      const execResult = await executeOrder(userId, riskCfg, orderPayload, 'ai_execute', {
-        sourceType:'manual_ai',
-        beforeBridgeSend:assertAutoExecuteBeforeSend,
-        beforeWrite:assertAutoExecuteBeforeSend,
+      const guardRejection = await resolveAutoExecuteGuard(options.assertAutoExecute, {
+        userId, signal, market,
       })
-      signal.execution_result = execResult
-      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(execResult || {}), signal.id])
-      if (execResult && execResult.status === 'success') {
-        const isPending = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
-        const ticket = isPending
-          ? (execResult.order || execResult.pending_ticket || execResult.ticket || null)
-          : (execResult.position_id || execResult.position || execResult.trade_ticket || execResult.ticket || execResult.order || null)
-        if (isPending) {
-          const pendingState = ['pending', 'partially_filled', 'filled', 'cancelled', 'expired']
-            .includes(String(execResult.pending_state || '').toLowerCase())
-            ? String(execResult.pending_state).toLowerCase() : 'pending'
-          const pendingExecuted = ['partially_filled', 'filled'].includes(pendingState)
-          await queryRun(`UPDATE ai_signals SET pending_ticket = ?, pending_state = ?, is_executed = ?,
-            executed_at = CASE WHEN ? = 1 THEN COALESCE(executed_at, ?) ELSE executed_at END WHERE id = ?`,
-          [String(ticket), pendingState, pendingExecuted ? 1 : 0, pendingExecuted ? 1 : 0, beijingNow(), signal.id])
-          signal.pending_ticket = String(ticket)
-          signal.pending_state = pendingState
-          signal.is_executed = pendingExecuted
-          if (pendingExecuted && !signal.executed_at) signal.executed_at = beijingNow()
-        } else {
-          await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
-            [beijingNow(), ticket, signal.id])
-          signal.is_executed = true
-          signal.executed_at = beijingNow()
-          signal.trade_ticket = ticket
-        }
-        signal.auto_executed = true
-        sendToBrowsers(userId, {
-          type: 'signal_execution_updated', signal_id: signal.id, status: 'success',
-          pending_ticket: isPending ? String(ticket) : null, trade_ticket: isPending ? null : ticket,
-        })
+      if (guardRejection) {
+        signal.execution_result = guardRejection
+        await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(guardRejection), signal.id])
+        await insertAudit(null, userId, 'ai_execute', signal.symbol,
+          { signal_id:signal.id, source:'analyze_auto', reason:guardRejection.error_code },
+          guardRejection, 'rejected')
+        sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'rejected' })
+      } else if (!isTradeEnabled(userId)) {
+        console.log(`[Analyze] Auto-execute blocked: trade_send_enabled=0`)
+        await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', reason: 'trade_send_disabled' }, { status: 'rejected', message: '交易发送已关闭' }, 'rejected')
+        signal.execution_result = { status: 'rejected', message: '交易发送已关闭' }
+        await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
+        sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'rejected' })
       } else {
-        const executionStatus = execResult?.status === 'rejected'
-          ? 'rejected'
-          : execResult?.status === 'uncertain' ? 'uncertain' : 'failed'
-        sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: executionStatus })
+        try {
+          const riskCfg = {
+            enable_auto_trade: true,
+            take_profit_mode: 'ai_recommended',
+            max_position_size: config.max_position_size ?? DEFAULT_MAX_POSITION_SIZE,
+          }
+          const orderPayload = signalOrderPayload(signal, riskCfg, market, true)
+          const assertAutoExecuteBeforeSend = async () => {
+            const rejection = await resolveAutoExecuteGuard(options.assertAutoExecute, {
+              userId, signal, market,
+            })
+            if (rejection) throw Object.assign(new Error(rejection.error_code), {
+              code:rejection.error_code,
+            })
+            return true
+          }
+
+          const execResult = await executeOrder(userId, riskCfg, orderPayload, 'ai_execute', {
+            sourceType:'manual_ai',
+            beforeBridgeSend:assertAutoExecuteBeforeSend,
+            beforeWrite:assertAutoExecuteBeforeSend,
+          })
+          signal.execution_result = execResult
+          await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(execResult || {}), signal.id])
+          if (execResult && execResult.status === 'success') {
+            const isPending = orderPayload.entry_method && orderPayload.entry_method !== 'market' && orderPayload.entry_method !== 'observe'
+            const ticket = isPending
+              ? (execResult.order || execResult.pending_ticket || execResult.ticket || null)
+              : (execResult.position_id || execResult.position || execResult.trade_ticket || execResult.ticket || execResult.order || null)
+            if (isPending) {
+              const pendingState = ['pending', 'partially_filled', 'filled', 'cancelled', 'expired']
+                .includes(String(execResult.pending_state || '').toLowerCase())
+                ? String(execResult.pending_state).toLowerCase() : 'pending'
+              const pendingExecuted = ['partially_filled', 'filled'].includes(pendingState)
+              await queryRun(`UPDATE ai_signals SET pending_ticket = ?, pending_state = ?, is_executed = ?,
+                executed_at = CASE WHEN ? = 1 THEN COALESCE(executed_at, ?) ELSE executed_at END WHERE id = ?`,
+              [String(ticket), pendingState, pendingExecuted ? 1 : 0, pendingExecuted ? 1 : 0, beijingNow(), signal.id])
+              signal.pending_ticket = String(ticket)
+              signal.pending_state = pendingState
+              signal.is_executed = pendingExecuted
+              if (pendingExecuted && !signal.executed_at) signal.executed_at = beijingNow()
+            } else {
+              await queryRun('UPDATE ai_signals SET is_executed = 1, executed_at = ?, trade_ticket = ? WHERE id = ?',
+                [beijingNow(), ticket, signal.id])
+              signal.is_executed = true
+              signal.executed_at = beijingNow()
+              signal.trade_ticket = ticket
+            }
+            signal.auto_executed = true
+            sendToBrowsers(userId, {
+              type: 'signal_execution_updated', signal_id: signal.id, status: 'success',
+              pending_ticket: isPending ? String(ticket) : null, trade_ticket: isPending ? null : ticket,
+            })
+          } else {
+            const executionStatus = execResult?.status === 'rejected'
+              ? 'rejected'
+              : execResult?.status === 'uncertain' ? 'uncertain' : 'failed'
+            sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: executionStatus })
+          }
+          await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', tp_tier_requested: orderPayload.tp_tier_requested, tp_tier_used: orderPayload.tp_tier_used, normalization_info: orderPayload.normalization_info }, execResult, execResult?.status || 'error')
+        } catch (e) {
+          console.error('[Analyze] Auto-execute failed:', e.message)
+          signal.execution_result = { status: 'error', message: e.message || '自动执行失败' }
+          await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
+          sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'failed' })
+        }
       }
-      await insertAudit(null, userId, 'ai_execute', signal.symbol, { signal_id: signal.id, source: 'analyze_auto', tp_tier_requested: orderPayload.tp_tier_requested, tp_tier_used: orderPayload.tp_tier_used, normalization_info: orderPayload.normalization_info }, execResult, execResult?.status || 'error')
-    } catch (e) {
-      console.error('[Analyze] Auto-execute failed:', e.message)
-      signal.execution_result = { status: 'error', message: e.message || '自动执行失败' }
-      await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(signal.execution_result), signal.id])
-      sendToBrowsers(userId, { type: 'signal_execution_updated', signal_id: signal.id, status: 'failed' })
-    }
     }
   }
 
@@ -1269,12 +1275,7 @@ async function executeAnalyzeCompare(userId, params, options = {}) {
           signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' }, market,
         }, 'post_inference')
         strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-        if (strategyPolicyRuntime.mode === 'enforce') {
-          signal.strategy_policy_decision = workflow.decision
-          signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
-          signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
-          signal = applyConstraintAction(signal, postInference).signal
-        }
+        if (strategyPolicyRuntime.mode === 'enforce') signal.strategy_policy_decision = workflow.decision
       }
       signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, strategyPolicyRuntime, modelSignalType })
       const profile = resolved.model
@@ -2300,12 +2301,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
               signal:{ ...signal, side:String(signal.signal_type || '').startsWith('buy') ? 'buy' : String(signal.signal_type || '').startsWith('sell') ? 'sell' : 'hold' }, market,
             }, 'post_inference')
             strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-            if (runtimePolicy.policyMode === 'enforce') {
-              signal.strategy_policy_decision = workflow.decision
-              signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
-              signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
-              signal = applyConstraintAction(signal, postInference).signal
-            }
+            if (runtimePolicy.policyMode === 'enforce') signal.strategy_policy_decision = workflow.decision
           }
           signal.decision_diagnostics = buildDecisionDiagnostics({
             signal, market, strategyPolicyRuntime, modelSignalType:rawSignalType,
@@ -2496,6 +2492,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
       if (direction === 'buy') nextBarMove = closePrice - openPrice
       else if (direction === 'sell') nextBarMove = openPrice - closePrice
       const comparisonValidation = signal.comparison_validation || null
+      const executionValidation = signal.execution_validation || null
       const constraintInvalid = direction !== 'hold' && comparisonValidation?.status === 'invalid'
       const decisionClass = direction === 'hold' && signal.normalization_info
         ? 'system_downgraded'
@@ -2503,6 +2500,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
           : constraintInvalid ? 'constraint_invalid' : 'actionable'
       const executionEligible = (direction === 'buy' || direction === 'sell')
         && comparisonValidation?.execution_eligible !== false
+        && executionValidation?.eligible !== false
 
       const modelSignal = {
         decision_time:new Date(decisionUtcMs).toISOString(), outcome_time:outcomeTime, time:outcomeTime,
@@ -2512,6 +2510,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         latency_ms: result.latencyMs || 0,
         normalization_info:signal.normalization_info || null,
         comparison_validation:comparisonValidation,
+        execution_validation:executionValidation,
         execution_eligible:executionEligible,
         raw_model_direction:comparisonDirection(result.rawSignalType),
         policy_compliant_direction:direction,

@@ -900,6 +900,17 @@ describe('AI governance navigation and DOM contract', () => {
     expect(appVersion).toBe(stylesheetVersion)
   })
 
+  it('separates model conclusions from data and execution validation in signal details', () => {
+    expect(app).toContain('const modelDecision = signal?.model_decision || stored.model_decision || {}')
+    expect(app).toContain('function renderExecutionValidation(validation)')
+    expect(app).toContain('>执行校验</small>')
+    expect(app).toContain('>数据与系统状态</span>')
+    expect(app).not.toContain('structure_unconfirmed:"缠论结构尚未确认"')
+    expect(css).toContain('.analysis-system-status')
+    expect(css).toContain('.execution-validation.ineligible')
+    expect(html).toContain('20260813strategy-authority1')
+  })
+
   it('runs administrator model comparison from immutable signal snapshots', () => {
     expect(adminApp).toContain('data-ai-tab="model-compare"')
     expect(adminApp).toContain("data_source:'snapshots'")
@@ -1593,20 +1604,20 @@ describe('route permissions and credential redaction', () => {
     expect(routes).not.toContain('detail:JSON.stringify(req.body)')
   })
 
-  it('presents EMA34 as one direct switch backed by a dedicated boolean', () => {
-    expect(html).toContain('id="strategyUseEma34Filter"')
+  it('retires the service-owned EMA34 strategy switch from both editors', () => {
+    expect(html).not.toContain('id="strategyUseEma34Filter"')
     expect(html).not.toContain('id="strategyPolicyMode"')
     expect(html).not.toContain('id="strategyPolicyJson"')
-    expect(app).toContain('Boolean(Number(strategy?.use_ema34_filter || 0))')
-    expect(app).toContain('use_ema34_filter:$("strategyUseEma34Filter").checked')
+    expect(app).not.toContain('strategyUseEma34Filter')
+    expect(app).not.toContain('use_ema34_filter:')
     expect(app).not.toContain('_strategyPolicyDraft')
     expect(app).not.toContain('body.strategy_policy')
     expect(app).not.toContain('strategyPolicyWithEma34')
-    expect(adminApp).toContain('id="platformStrategyEma34"')
+    expect(adminApp).not.toContain('id="platformStrategyEma34"')
     expect(adminApp).not.toContain('platformStrategyPolicyMarkup(strategy)')
     expect(adminApp).not.toContain('id="platformStrategyPolicyMode"')
     expect(adminApp).not.toContain('id="platformStrategyPolicyJson"')
-    expect(adminApp).toContain('use_ema34_filter:ema34.checked')
+    expect(adminApp).not.toContain('use_ema34_filter:ema34.checked')
     expect(adminApp).not.toContain('_strategyPolicyDraft')
     expect(adminApp).not.toContain('payload.strategy_policy')
   })

@@ -23,6 +23,7 @@ import {
 import { createObserverQuoteFeedManager } from './observer-quote-feed.js'
 import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './routes/ai/terminal-clock.js'
 import { getInferenceSnapshotEvidence, getInferenceVisualizationSnapshot } from './routes/ai/inference-snapshots.js'
+import { executionValidationRejection, readExecutionValidation } from './routes/ai/signal-execution-validation.js'
 
 export { applyDefaultObserverClockBootstrap } from './routes/ai/terminal-clock.js'
 
@@ -2754,6 +2755,8 @@ function applyVisibleSignalRecord(row, delivery, source, { includeLegacyMarketDa
     result.is_executed = !!result.is_executed
   }
   result.source = delivery ? 'auto_shared' : (result.source || source)
+  const executionValidation = readExecutionValidation(result)
+  if (executionValidation.explicit) result.execution_validation = executionValidation.validation
   return result
 }
 
@@ -3214,6 +3217,8 @@ async function handleBrowserCommand(ws, userId, msg) {
 
         if (row) {
           ai.attachSignalTiming(row)
+          const executionValidation = readExecutionValidation(row)
+          if (executionValidation.explicit) row.execution_validation = executionValidation.validation
           delete row.decision_json
           delete row.signal_source
           if (row.execution_status !== undefined) delete row.execution_status
@@ -3396,6 +3401,19 @@ async function handleBrowserCommand(ws, userId, msg) {
           signalSource = 'manual'
         }
         if (!signal) return reply({ status: 'error', message: 'Signal not found' })
+        const executionValidation = readExecutionValidation(signal)
+        if (executionValidation.validation.eligible !== true) {
+          result = executionValidationRejection(executionValidation)
+          if (delivery) {
+            await queryRun(
+              'UPDATE auto_signal_deliveries SET execution_status = ?, execution_result = ? WHERE id = ? AND execution_status IN (\'not_attempted\', \'rejected\', \'skipped\')',
+              ['rejected', JSON.stringify(result), delivery.id])
+          } else {
+            await queryRun('UPDATE ai_signals SET execution_result = ? WHERE id = ?', [JSON.stringify(result), signal.id])
+          }
+          await ai.insertAudit(null, userId, 'ai_execute', signal.symbol, params, result, 'rejected')
+          break
+        }
         const deliveryAlreadyHandled = delivery && (
           Number(delivery.is_executed) === 1 ||
           delivery.pending_ticket || delivery.trade_ticket ||

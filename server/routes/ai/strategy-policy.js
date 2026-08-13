@@ -1,5 +1,5 @@
 import { hasLegacyUseChanTag, parseLegacyTimeframeTags } from './utils.js'
-import { compileStrategyPolicy, STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
+import { STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
 import { calculatePolicyIndicators } from './indicator-registry.js'
 import { buildPreInferenceWorkflowState } from './strategy-workflow-engine.js'
 import { renderStrategyPolicyPrompt } from './strategy-prompt-renderer.js'
@@ -15,42 +15,6 @@ const timeframeSet = new Set(VALID_TIMEFRAMES)
 const entryMethodSet = new Set(VALID_ENTRY_METHODS)
 export const CHAN_SUPPORTED_TIMEFRAMES = Object.freeze(['M5', 'M15', 'H1', 'H4'])
 const chanTimeframeSet = new Set(CHAN_SUPPORTED_TIMEFRAMES)
-
-const HARDCODED_EMA34_POLICY = Object.freeze({
-  schema_version:'strategy-policy-v1',
-  mode:'enforce',
-  features:[],
-  indicators:[{
-    id:'entry_ema34', kind:'ema', enabled:true,
-    source:{ timeframe:'M5', field:'close', bar_scope:'closed_only' },
-    params:{ period:34, minimum_bars:34, warmup_target_bars:170, evidence_window:5 },
-  }],
-  workflow:{ stages:[], selectors:[], default_decision:'allow' },
-  constraints:[
-    {
-      id:'entry_indicator_ready', scope:'new_entry', phases:['post_inference', 'pre_submit'],
-      require:{ left:{ ref:'indicators.entry_ema34.ready' }, op:'eq', right:true },
-      on_fail:'hold_new_entry', counts_as_trigger:false,
-    },
-    {
-      id:'buy_indicator_relation', scope:'new_entry', phases:['post_inference', 'pre_submit'],
-      when:{ left:{ ref:'signal.side' }, op:'eq', right:'buy' },
-      require:{ left:{ ref:'indicators.entry_ema34.bar.close' }, op:'gt', right:{ ref:'indicators.entry_ema34.value' } },
-      on_fail:'hold_new_entry', counts_as_trigger:false,
-    },
-    {
-      id:'sell_indicator_relation', scope:'new_entry', phases:['post_inference', 'pre_submit'],
-      when:{ left:{ ref:'signal.side' }, op:'eq', right:'sell' },
-      require:{ left:{ ref:'indicators.entry_ema34.bar.close' }, op:'lt', right:{ ref:'indicators.entry_ema34.value' } },
-      on_fail:'hold_new_entry', counts_as_trigger:false,
-    },
-  ],
-  prompt_rules:[{
-    id:'entry_indicator_filter',
-    text:'M5 已收盘 K 线 EMA34 是短线行情证据和新入场方向过滤器；可用于说明位置、斜率、距离、持续性与最近穿越，但不计作 M15 确认或 M5 触发，也不构成退出持仓或撤销挂单的理由。',
-  }],
-  ui:{ groups:[] },
-})
 
 function parseJson(value, fallback) {
   if (value == null || value === '') return fallback
@@ -81,14 +45,6 @@ export function normalizeUseChanAnalysis(value, { prompt = '' } = {}) {
 
 export function normalizeUseEma34Filter(value) {
   return value === true || value === 1 || value === '1'
-}
-
-function ensureEma34MarketData(marketDataPlan) {
-  if (marketDataPlan.timeframes.some(item => item.timeframe === 'M5')) return marketDataPlan
-  return {
-    ...marketDataPlan,
-    timeframes:[...marketDataPlan.timeframes, { timeframe:'M5', kline_count:100 }],
-  }
 }
 
 export function normalizeMarketDataPlan(value, { prompt = '', fallbackTimeframe = 'M30', fallbackCount = 100 } = {}) {
@@ -128,12 +84,9 @@ export function validateChanTimeframes(marketDataPlan, useChanAnalysis) {
 
 export function parseStrategyPolicy(strategy = {}) {
   const useEma34Filter = normalizeUseEma34Filter(strategy.use_ema34_filter)
-  let marketDataPlan = normalizeMarketDataPlan(strategy.market_data_plan_json || strategy.market_data_plan, {
+  const marketDataPlan = normalizeMarketDataPlan(strategy.market_data_plan_json || strategy.market_data_plan, {
     prompt: strategy.system_prompt || '',
   })
-  if (useEma34Filter) marketDataPlan = ensureEma34MarketData(marketDataPlan)
-  const compiledPolicy = useEma34Filter
-    ? compileStrategyPolicy(HARDCODED_EMA34_POLICY, { marketDataPlan }) : null
   const useChanAnalysis = normalizeUseChanAnalysis(
     strategy.use_chan_analysis ?? strategy.market_data_plan?.use_chan_analysis,
     { prompt: strategy.system_prompt || '' },
@@ -145,8 +98,11 @@ export function parseStrategyPolicy(strategy = {}) {
     useChanAnalysis,
     useEma34Filter,
     strategyPolicy:null,
-    compiledPolicy,
-    policyMode:useEma34Filter ? 'enforce' : 'off',
+    // use_ema34_filter is retained only as a legacy audit/read field. It must
+    // never create a runtime policy, add a market-data window, render prompt
+    // instructions, or enable enforcement for new inference tasks.
+    compiledPolicy:null,
+    policyMode:'off',
   }
 }
 
@@ -191,7 +147,12 @@ export function buildStrategyRuntimeSnapshot({ strategy = {}, policy = {}, strat
 }
 
 export function prepareStrategyPolicyRuntime(policy, strategyContext, { rawPolicy = null } = {}) {
-  const compiledPolicy = policy?.compiledPolicy || policy
+  // A parsed strategy with no compiled policy (including legacy
+  // use_ema34_filter records) must stay completely outside the policy runtime.
+  // Accept a compiled policy object directly for callers that already have
+  // one, but do not fall back to the parsed wrapper when its field is null.
+  const compiledPolicy = policy && Object.prototype.hasOwnProperty.call(policy, 'compiledPolicy')
+    ? policy.compiledPolicy : policy
   if (!compiledPolicy || compiledPolicy.mode === 'off') return null
   const frameSources = strategyContext?.policyIndicatorSources || {}
   const indicators = calculatePolicyIndicators(compiledPolicy, frameSources)

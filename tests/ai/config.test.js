@@ -141,6 +141,17 @@ describe('signalOrderPayload', () => {
     expect(result.signal_id).toBe(123)
   })
 
+  it('carries explicit execution validation to the execution boundary', () => {
+    const result = signalOrderPayload({
+      symbol:'XAUUSD', signal_type:'buy', id:123, stop_loss_price:1990, take_profit_1_price:2010,
+      execution_validation:{ status:'ineligible', eligible:false, reason_codes:['strategy_blocked'] },
+    }, {}, { latest_price:2000 }, true)
+    expect(result.execution_validation).toEqual({
+      status:'ineligible', eligible:false, reason_codes:['strategy_blocked'],
+    })
+    expect(buildBridgeOrderCall(result).bridgeParams).not.toHaveProperty('execution_validation')
+  })
+
   it('ignores a legacy absolute volume when the current signal has a risk tier', () => {
     const signal = {
       symbol:'XAUUSD', signal_type:'buy', position_size_tier:'light', recommended_volume:4.5,

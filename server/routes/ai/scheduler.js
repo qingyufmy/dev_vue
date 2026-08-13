@@ -22,8 +22,8 @@ import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import { prepareStrategyPolicyRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
-import { validateWorkflowTrace, workflowGateEvaluation } from './strategy-workflow-engine.js'
-import { applyConstraintAction, evaluateStrategyConstraints } from './strategy-constraint-engine.js'
+import { validateWorkflowTrace } from './strategy-workflow-engine.js'
+import { evaluateStrategyConstraints } from './strategy-constraint-engine.js'
 import { registerAutoSchedulerState } from './runtime-state-registry.js'
 import {
   beginBridgeDeliveryExecution,
@@ -36,6 +36,7 @@ import * as modelTaskTrackerModule from './model-task-tracker.js'
 import { modelTaskDeadlines } from './model-task-budget.js'
 import { buildSafeExecutionOutcome, buildSafeExecutionEvent } from '../../audit-localization.js'
 import { readAutoInferenceDeploymentDrain } from './auto-inference-deployment-drain.js'
+import { executionValidationRejection, readExecutionValidation } from './signal-execution-validation.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -2408,12 +2409,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         market,
       }, 'post_inference')
       strategyPolicyRuntime.constraint_results = { ...(strategyPolicyRuntime.constraint_results || {}), post_inference:postInference }
-      if (strategyPolicyRuntime.mode === 'enforce') {
-        signal.strategy_policy_decision = workflow.decision
-        signal = applyConstraintAction(signal, strategyPolicyRuntime.constraint_results.pre_inference).signal
-        signal = applyConstraintAction(signal, workflowGateEvaluation(workflow)).signal
-        signal = applyConstraintAction(signal, postInference).signal
-      }
+      if (strategyPolicyRuntime.mode === 'enforce') signal.strategy_policy_decision = workflow.decision
     }
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
     if (aiSource === 'ai_error_hold') {
@@ -2445,8 +2441,13 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
 
     // Freeze the subscriber set before atomically writing the shared signal
     // and all per-user deliveries.
+    const executionValidation = readExecutionValidation(signal)
     const st = autoSchedulerState[key]
-    const allSubscribers = st?.subscribers || new Set()
+    const allSubscribers = executionValidation.validation.eligible === true
+      ? (st?.subscribers || new Set()) : new Set()
+    if (executionValidation.validation.eligible !== true) {
+      l(`execution validation blocked shared delivery (${executionValidation.validation.status})`)
+    }
     const onlineSubscribers = new Set()
     for (const uid of allSubscribers) {
       if (isBridgeAlive(uid)) onlineSubscribers.add(uid)
@@ -2562,6 +2563,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         createdAt,
         signalType:signal.signal_type,
         pendingAction:signal.pending_action,
+        executionValidation:readExecutionValidation(signal),
         executionExpired:executionWindowExpired,
       })) {
         deliveryValues.push('(?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -2811,6 +2813,19 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     sendToBrowsers(userId, buildSafeExecutionEvent(safe, { type:'signal_execution_updated', signal_id:signalId }))
   }
   try {
+    const executionValidation = readExecutionValidation(signal)
+    if (executionValidation.validation.eligible !== true) {
+      const rejection = executionValidationRejection(executionValidation)
+      await setTerminalStatus('skipped', rejection.reason, rejection.details, {
+        ...rejection, status:'skipped', reason:rejection.reason,
+      })
+      await insertAudit(null, userId, 'ai_auto_execute_skipped', symbol,
+        { signal_id:signalId, delivery_signal_id:signalId, prompt_type_id:promptTypeId,
+          reason:rejection.reason, execution_validation:executionValidation.validation },
+        { ...rejection, status:'skipped' }, 'info')
+      sendToBrowsers(userId, { type:'signal_execution_updated', signal_id:signalId, status:'skipped' })
+      return
+    }
     if (isBridgeDeliveryMaintenancePaused(userId)) {
       await setTerminalStatus('skipped', 'bridge_update_maintenance')
       return
@@ -3628,6 +3643,10 @@ function signalDeliveryRecoveryDeadline(row, nowMs = Date.now()) {
 }
 
 function signalDeliveryRecoveryActionable(row, decision) {
+  const executionValidation = readExecutionValidation({ ...row, ...decision })
+  if (executionValidation.validation.eligible !== true) {
+    return { actionable:false, reason:'execution_validation_ineligible', executionValidation }
+  }
   const signalType = String(row?.signal_type || '').trim().toLowerCase()
   const pendingAction = String(row?.pending_action || decision?.pending_action || '').trim().toLowerCase()
   if (!signalType) return { actionable:false, reason:'delivery_recovery_untrusted' }
@@ -3722,6 +3741,7 @@ export async function reconcileUnattemptedSignalDeliveries({
     try {
       const decision = parseRecoveryJson(row.decision_json)
       const actionability = signalDeliveryRecoveryActionable(row, decision)
+      const executionValidation = actionability.executionValidation || readExecutionValidation({ ...row, ...decision })
       if (!actionability.actionable) {
         const closed = await closeUnattemptedDelivery(row, actionability.reason,
           { pending_action:row.pending_action || decision?.pending_action || null })
@@ -3807,6 +3827,7 @@ export async function reconcileUnattemptedSignalDeliveries({
         created_at_utc_msc:Number(row.created_at_utc_msc),
         ttl_seconds:Number(row.ttl_seconds),
         market_data:market,
+        ...(executionValidation.explicit ? { execution_validation:executionValidation.validation } : {}),
       }
       summary.attempted += 1
       await executeDeliveryFn(
@@ -4044,11 +4065,16 @@ function durableDeliveryRecovery(intent) {
 }
 
 function buildSignalDeliveryRows({ signalId, userIds, onlineUserIds, promptTypeId, symbol, createdAt,
-  signalType = null, pendingAction = null, executionExpired = false }) {
+  signalType = null, pendingAction = null, executionValidation = null, executionExpired = false }) {
   const online = onlineUserIds instanceof Set ? onlineUserIds : new Set(onlineUserIds || [])
   const normalizedSignalType = String(signalType || '').trim().toLowerCase()
   const normalizedPendingAction = String(pendingAction || '').trim().toLowerCase()
   const holdWithoutCancel = normalizedSignalType === 'hold' && normalizedPendingAction !== 'cancel'
+  const validationState = executionValidation?.validation
+    ? executionValidation
+    : readExecutionValidation(executionValidation || {})
+  const validationRejected = validationState.validation.eligible !== true
+  if (validationRejected) return []
   return [...new Set(userIds || [])].map(userId => {
     const isOnline = online.has(userId)
     if (executionExpired) {

@@ -161,7 +161,7 @@ function normalizeHypothesis(item, refs) {
   const supporting = [...new Set(array(item.supporting_trade_refs, 1).map(value => text(value, 128)).filter(Boolean))]
   if (!supporting.length || supporting.some(value => !refs.has(value))) throw new Error('manual_trade_review_output_reference_invalid')
   const targetPath = item.target_path == null ? null : text(item.target_path, 255)
-  if (targetPath && !/^(strategy_policy_json|market_data_plan_json|entry_methods_json|symbols_json|use_chan_analysis|use_ema34_filter)(\.|\[|$)/.test(targetPath)) {
+  if (targetPath && !/^(strategy_policy_json|market_data_plan_json|entry_methods_json|symbols_json|use_chan_analysis)(\.|\[|$)/.test(targetPath)) {
     throw new Error('manual_trade_review_output_rule_path_invalid')
   }
   return { hypothesis_id:text(item.hypothesis_id || item.candidate_id, 128) || `hypothesis_${sha256(JSON.stringify(item)).slice(0, 16)}`,
@@ -180,7 +180,7 @@ function sourceRefs(sourceRows = []) { return new Set(sourceRows.map(row => Stri
 function normalizeRuleComparison(item, strategySnapshot) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('manual_trade_review_output_invalid')
   const path = item.rule_path == null ? null : text(item.rule_path, 255)
-  const allowedPath = !path || /^(strategy_policy_json|market_data_plan_json|entry_methods_json|symbols_json|use_chan_analysis|use_ema34_filter)(\.|\[|$)/.test(path)
+  const allowedPath = !path || /^(strategy_policy_json|market_data_plan_json|entry_methods_json|symbols_json|use_chan_analysis)(\.|\[|$)/.test(path)
   if (!allowedPath) throw new Error('manual_trade_review_output_rule_path_invalid')
   return { rule_path:path, rule_summary:text(item.rule_summary), observed_evidence:text(item.observed_evidence),
     status:enumValue(item.status, new Set(['aligned', 'partial', 'conflict', 'unknown', 'not_applicable']), 'unknown', 'manual_trade_review_output_enum_invalid'),
@@ -239,7 +239,7 @@ async function getPlatformStrategySnapshot(actor, strategyId) {
     id:Number(strategy.id), title:text(strategy.title, 100), description:text(strategy.description), version:Number(strategy.version || 1), scope:'platform', owner_user_id:0,
     system_prompt:text(strategy.system_prompt, 50_000), symbols:parse(strategy.symbols_json, []), market_data_plan:parse(strategy.market_data_plan_json, {}),
     strategy_policy:parse(strategy.strategy_policy_json, {}), entry_methods:parse(strategy.entry_methods_json, []), use_chan_analysis:Boolean(Number(strategy.use_chan_analysis)),
-    use_ema34_filter:Boolean(Number(strategy.use_ema34_filter)), include_portfolio_context:Boolean(Number(strategy.include_portfolio_context)),
+    include_portfolio_context:Boolean(Number(strategy.include_portfolio_context)),
   }
   return { row:strategy, snapshot, hash:jsonHash(snapshot) }
 }

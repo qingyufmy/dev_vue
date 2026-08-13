@@ -87,29 +87,30 @@ describe('generic strategy policy compiler', () => {
       .toMatchObject({ kind, params:{ period } })
   })
 
-  it('uses the fixed EMA34 rule without expanding the model-visible M5 window', () => {
+  it('keeps the legacy EMA34 switch as read-only metadata without creating runtime policy', () => {
     const parsed = parseStrategyPolicy({
       market_data_plan_json:JSON.stringify({ primary_timeframe:'M15', timeframes:[
         { timeframe:'M15', kline_count:100 }, { timeframe:'M5', kline_count:50 },
       ] }),
       use_ema34_filter:1,
     })
-    expect(parsed).toMatchObject({ useEma34Filter:true, policyMode:'enforce', strategyPolicy:null })
+    expect(parsed).toMatchObject({ useEma34Filter:true, policyMode:'off', strategyPolicy:null, compiledPolicy:null })
     expect(parsed.marketDataPlan.timeframes.find(item => item.timeframe === 'M5')).toMatchObject({ kline_count:50 })
-    expect(parsed.compiledPolicy).toMatchObject({
-      mode:'enforce',
-      indicators:[{ id:'entry_ema34', kind:'ema', source:{ timeframe:'M5' }, params:{ period:34 } }],
-      workflow:{ stages:[], selectors:[], default_decision:'allow' },
-    })
   })
 
-  it('adds a normal M5 model window when EMA34 is enabled on a strategy without M5', () => {
+  it('does not add an M5 model window when the legacy EMA34 switch is enabled', () => {
     const parsed = parseStrategyPolicy({
       market_data_plan_json:JSON.stringify({ primary_timeframe:'M15', timeframes:[{ timeframe:'M15', kline_count:100 }] }),
       use_ema34_filter:1,
     })
-    expect(parsed.marketDataPlan.timeframes).toContainEqual({ timeframe:'M5', kline_count:100 })
-    expect(parsed.compiledPolicy.indicators[0].params.warmup_target_bars).toBe(170)
+    expect(parsed.marketDataPlan.timeframes).toEqual([{ timeframe:'M15', kline_count:100 }])
+    expect(parsed).toMatchObject({ useEma34Filter:true, compiledPolicy:null, policyMode:'off' })
+  })
+
+  it('does not retain the retired EMA34 runtime symbols', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/strategy-policy.js', import.meta.url), 'utf8')
+    expect(source).not.toContain('HARDCODED_EMA34_POLICY')
+    expect(source).not.toContain('ensureEma34MarketData')
   })
 
   it('keeps legacy snapshots while migrating active strategies to the dedicated EMA34 switch', () => {
@@ -246,14 +247,16 @@ describe('workflow and constraint execution', () => {
       .toMatchObject({ signal_type:'hold', recommended_volume:0 })
   })
 
-  it('does not require an empty workflow trace in the model contract', () => {
+  it('renders generic policy instructions only when an explicit compiled policy is supplied', () => {
     const configured = policyFixture()
     configured.workflow = { stages:[], selectors:[], default_decision:'allow' }
     const policy = compileStrategyPolicy(configured, { marketDataPlan:plan('M30', 'D1') })
     const prompt = renderStrategyPolicyPrompt(policy, { indicators:{} })
-    expect(prompt.text).toContain('EMA34 短线证据与新开仓过滤')
-    expect(prompt.text).not.toContain('运行政策')
-    expect(prompt.text).not.toContain('你必须在输出中提供 strategy_policy_trace.stages')
+    expect(prompt.text).toContain('策略显式声明的结构化数据')
+    expect(prompt.text).toContain(policy.policy_hash)
+    expect(prompt.text).not.toContain('EMA34')
+    expect(prompt.text).not.toContain('M5')
+    expect(prompt.text).not.toContain('必须 HOLD')
   })
 
   it('allows later stages to depend on an incrementally selected decision', () => {

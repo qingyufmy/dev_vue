@@ -1011,6 +1011,18 @@ button {
 .decision-diagnostics-head small,.decision-diagnostics p { margin:0; color:var(--text-muted); font-size:11px; line-height:1.5; }
 .decision-diagnostics-reasons { display:flex; flex-wrap:wrap; gap:7px; }
 .decision-diagnostics-reasons span { padding:5px 8px; border:1px solid color-mix(in srgb,var(--color-warning) 28%,var(--border-subtle)); border-radius:999px; color:var(--text-secondary); background:color-mix(in srgb,var(--color-warning-bg) 62%,transparent); font-size:11px; font-weight:700; }
+.analysis-system-status { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin:12px 0; }
+.analysis-system-status .decision-diagnostics { margin:0; }
+.execution-validation { display:grid; gap:9px; padding:12px 14px; border:1px solid var(--border-default); border-radius:12px; background:var(--bg-input-soft); }
+.execution-validation > div { display:flex; align-items:center; gap:9px; }
+.execution-validation > div > i { flex:0 0 auto; color:var(--status-connected); }
+.execution-validation > div > span { display:grid; gap:1px; }
+.execution-validation small { color:var(--text-muted); font-size:11px; }
+.execution-validation strong { color:var(--text-primary); font-size:13px; }
+.execution-validation p,.execution-validation ul { margin:0; color:var(--text-secondary); font-size:12px; line-height:1.55; }
+.execution-validation ul { padding-left:18px; }
+.execution-validation.ineligible { border-color:color-mix(in srgb,var(--color-warning) 32%,var(--border-default)); background:color-mix(in srgb,var(--color-warning-bg) 50%,var(--bg-input-soft)); }
+.execution-validation.ineligible > div > i { color:var(--color-warning); }
 .direction-bias { display:grid; gap:8px; margin-bottom:12px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:12px; background:color-mix(in srgb,var(--bg-input-soft) 72%,transparent); }
 .direction-bias-head,.direction-bias-values { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .direction-bias-head strong { color:var(--text-primary); font-size:13px; }
