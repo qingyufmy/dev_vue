@@ -16,7 +16,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
-  periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus } from '../../server/routes/ai/period-review.js'
+  periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
+  periodReviewConflictSnapshotsRequired } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
@@ -43,6 +44,12 @@ describe('period review lease heartbeat', () => {
 })
 
 describe('period review strategy-memory application status', () => {
+  it('requires frozen snapshots only when approved content has conflict evidence', () => {
+    expect(periodReviewConflictSnapshotsRequired({ daily_lessons:['保留经验'] })).toBe(false)
+    expect(periodReviewConflictSnapshotsRequired({ strategy_conflicts:[] })).toBe(false)
+    expect(periodReviewConflictSnapshotsRequired({ strategy_conflicts:[{ description:'策略冲突' }] })).toBe(true)
+  })
+
   it('distinguishes queued, applied, compression failure preservation and completion', () => {
     const base = { approved_version_id:39, memory_source_update_count:1 }
     expect(deriveStrategyMemoryApplicationStatus({ ...base, derivation_status:'queued' })).toBe('queued')

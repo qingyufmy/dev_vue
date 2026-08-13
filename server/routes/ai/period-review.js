@@ -3057,6 +3057,10 @@ function derivationMemoryEntries(approved, content) {
   return []
 }
 
+export function periodReviewConflictSnapshotsRequired(content) {
+  return Array.isArray(content?.strategy_conflicts) && content.strategy_conflicts.length > 0
+}
+
 export async function resumePeriodReviewDerivationJobs(limit = 100) {
   const rows = await queryAll(`SELECT jobs.id, jobs.user_id, jobs.target_type, cases.period_type
     FROM period_review_derivation_jobs jobs JOIN period_review_cases cases ON cases.id = jobs.period_case_id
@@ -3111,12 +3115,18 @@ export async function runPeriodReviewDerivationOnce() {
         source_refs:[...new Set(entries.flatMap(entry => entry.source_refs || []))],
       })
     }
+    const conflicts = Array.isArray(content.strategy_conflicts) ? content.strategy_conflicts : []
     const frozenMemory = approved.memory_library_snapshot_text
     const frozenStrategy = approved.memory_strategy_snapshot_text
-    if (frozenMemory == null || frozenStrategy == null) throw new Error('strategy_memory_conflict_frozen_snapshot_missing')
+    // Snapshots are needed only to verify an actual conflict excerpt. Older
+    // approved reviews can legitimately have no frozen conflict context; they
+    // must still be able to append their deterministic memory lessons.
+    if (conflicts.length > 0 && (frozenMemory == null || frozenStrategy == null)) {
+      throw new Error('strategy_memory_conflict_frozen_snapshot_missing')
+    }
     const proposedExperiences = derivationMemoryEntries(approved, content)
       .flatMap(item => [item.text, item.lesson, item.anti_pattern]).filter(Boolean)
-    for (const conflict of (Array.isArray(content.strategy_conflicts) ? content.strategy_conflicts : [])) {
+    for (const conflict of conflicts) {
       const canonicalConflictRefs = [...new Set([
         ...reviewSourceIds(approved, approved.period_type),
         `period_review_case:${Number(approved.id)}`,
