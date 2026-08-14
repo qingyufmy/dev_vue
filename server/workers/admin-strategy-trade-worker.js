@@ -10,7 +10,6 @@ import {
   ADMIN_STRATEGY_TRADE_SOURCE,
   assertAdminStrategyTargetSendFence,
   claimAdminStrategyTradeDispatch,
-  isAdminStrategyTradesEnabled,
   resolveEffectiveSymbolsForDispatch,
 } from '../services/admin-strategy-trades.js'
 import { acquireAccountSymbolInventoryLock, releaseAccountSymbolInventoryLock } from '../services/account-symbol-inventory-lock.js'
@@ -292,7 +291,6 @@ async function reconcileUncertainTarget(target) {
 }
 
 export async function reconcileAdminStrategyTradeTargetsOnce({ limit = 20 } = {}) {
-  if (!isAdminStrategyTradesEnabled()) return { disabled: true, processed: 0 }
   const targets = await queryAll(`SELECT * FROM admin_strategy_trade_targets
     WHERE status IN ('uncertain','reconciling') ORDER BY updated_at ASC, id ASC LIMIT ?`, [Math.max(1, Math.min(50, Number(limit) || 20))])
   const results = []
@@ -325,7 +323,6 @@ export async function processAdminStrategyTradeDispatch(dispatchId) {
 }
 
 export async function runAdminStrategyTradeWorkerOnce({ limit = 10 } = {}) {
-  if (!isAdminStrategyTradesEnabled()) return { disabled: true, processed: 0 }
   if (workerRunning) return { busy: true, processed: 0 }
   workerRunning = true
   try {

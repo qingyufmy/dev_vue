@@ -7,7 +7,6 @@ import {
   cancelAdminStrategyTradeDispatch,
   createAdminStrategyTradeDispatch,
   getAdminStrategyTradeDispatch,
-  isAdminStrategyTradesEnabled,
   retryAdminStrategyTradeDispatch,
 } from '../services/admin-strategy-trades.js'
 
@@ -15,7 +14,6 @@ const router = Router()
 
 function statusForError(error) {
   if (['dispatch_not_found', 'platform_strategy_not_found', 'source_account_not_found'].includes(error?.code)) return 404
-  if (['admin_strategy_trades_disabled'].includes(error?.code)) return 409
   if (['admin_required', 'access_denied'].includes(error?.code)) return 403
   if (['preview_hash_mismatch', 'confirmation_required', 'source_target_not_eligible', 'dispatch_not_retryable', 'dispatch_not_cancellable', 'uncertain_requires_reconciliation'].includes(error?.code)) return 409
   return 400
@@ -26,7 +24,7 @@ function sendError(res, error) {
 }
 
 router.get('/admin/strategy-trades/capabilities', authMiddleware, adminOnly, (_req, res) => {
-  res.json({ ok: true, enabled: isAdminStrategyTradesEnabled(), supported_entry_methods: [...ADMIN_STRATEGY_TRADE_ENTRY_METHODS] })
+  res.json({ ok: true, enabled: true, supported_entry_methods: [...ADMIN_STRATEGY_TRADE_ENTRY_METHODS] })
 })
 
 router.post('/admin/strategy-trades/preview', authMiddleware, adminOnly, async (req, res) => {

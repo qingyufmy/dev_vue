@@ -24,18 +24,6 @@ function parseJson(value, fallback = {}) {
   try { return value ? JSON.parse(value) : fallback } catch { return fallback }
 }
 
-function parseBoolean(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase())
-}
-
-export function isAdminStrategyTradesEnabled() {
-  return parseBoolean(process.env.ADMIN_STRATEGY_TRADES_ENABLED)
-}
-
-export function assertAdminStrategyTradesEnabled() {
-  if (!isAdminStrategyTradesEnabled()) throw fail('admin_strategy_trades_disabled')
-}
-
 function normalizeId(value, name) {
   const id = Number(value)
   if (!Number.isSafeInteger(id) || id <= 0) throw fail(`${name}_invalid`)
@@ -268,7 +256,6 @@ function subscriberEligibility(row, actorUserId, input, strategy) {
 }
 
 export async function buildAdminStrategyTradePreview(actorUserId, body = {}, headers = {}) {
-  assertAdminStrategyTradesEnabled()
   const actorId = normalizeId(actorUserId, 'actor_user_id')
   const input = normalizeAdminStrategyTradeInput(body, headers)
   const strategy = await loadPlatformStrategy(input.strategy_id)
@@ -372,7 +359,6 @@ async function insertDispatchTx(run, actorId, input, preview) {
 }
 
 export async function createAdminStrategyTradeDispatch(actorUserId, body = {}, headers = {}) {
-  assertAdminStrategyTradesEnabled()
   const actorId = normalizeId(actorUserId, 'actor_user_id')
   const preview = await buildAdminStrategyTradePreview(actorId, body, headers)
   if (body.preview_hash && body.preview_hash !== preview.preview_hash) throw fail('preview_hash_mismatch')
@@ -403,7 +389,6 @@ export async function getAdminStrategyTradeDispatch(dispatchId, actorUserId = nu
 }
 
 export async function cancelAdminStrategyTradeDispatch(actorUserId, dispatchId) {
-  assertAdminStrategyTradesEnabled()
   const actorId = normalizeId(actorUserId, 'actor_user_id'); const id = normalizeId(dispatchId, 'dispatch_id'); const now = beijingNow()
   await withTransaction(async run => {
     const [rows] = await run('SELECT * FROM admin_strategy_trade_dispatches WHERE id = ? AND actor_user_id = ? FOR UPDATE', [id, actorId])
@@ -417,7 +402,6 @@ export async function cancelAdminStrategyTradeDispatch(actorUserId, dispatchId) 
 }
 
 export async function retryAdminStrategyTradeDispatch(actorUserId, dispatchId) {
-  assertAdminStrategyTradesEnabled()
   const actorId = normalizeId(actorUserId, 'actor_user_id'); const id = normalizeId(dispatchId, 'dispatch_id'); const now = beijingNow()
   await withTransaction(async run => {
     const [rows] = await run('SELECT * FROM admin_strategy_trade_dispatches WHERE id = ? AND actor_user_id = ? FOR UPDATE', [id, actorId])

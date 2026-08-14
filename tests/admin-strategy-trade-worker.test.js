@@ -35,7 +35,6 @@ vi.mock('../server/services/admin-strategy-trades.js', () => ({
   ADMIN_STRATEGY_TRADE_MAGIC: 234000, ADMIN_STRATEGY_TRADE_SOURCE: 'admin_strategy_dispatch',
   assertAdminStrategyTargetSendFence: (...args) => mockFence(...args),
   claimAdminStrategyTradeDispatch: (...args) => mockClaimDispatch(...args),
-  isAdminStrategyTradesEnabled: () => true,
   resolveEffectiveSymbolsForDispatch: (selected, strategy) => selected == null ? JSON.parse(strategy || '[]') : JSON.parse(selected || '[]').filter(item => JSON.parse(strategy || '[]').includes(item)),
 }))
 

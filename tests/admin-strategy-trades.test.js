@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../server/db.js', () => ({
   beijingNow: () => '2026-08-14 12:00:00',
@@ -12,20 +12,36 @@ vi.mock('../server/bridge-ws.js', () => ({
 
 import {
   __adminStrategyTradeTest,
-  isAdminStrategyTradesEnabled,
   normalizeAdminStrategyTradeInput,
   resolveEffectiveSymbolsForDispatch,
 } from '../server/services/admin-strategy-trades.js'
 import { accountSymbolInventoryLockKey } from '../server/services/account-symbol-inventory-lock.js'
 import fs from 'node:fs'
 
-afterEach(() => { delete process.env.ADMIN_STRATEGY_TRADES_ENABLED })
-
 describe('admin strategy trade contract', () => {
-  it('is disabled by default and only enables through the explicit environment gate', () => {
-    expect(isAdminStrategyTradesEnabled()).toBe(false)
-    process.env.ADMIN_STRATEGY_TRADES_ENABLED = 'true'
-    expect(isAdminStrategyTradesEnabled()).toBe(true)
+  it('keeps admin capabilities enabled after admin auth without an environment gate', () => {
+    const route = fs.readFileSync(new URL('../server/routes/admin-strategy-trades.js', import.meta.url), 'utf8')
+    const service = fs.readFileSync(new URL('../server/services/admin-strategy-trades.js', import.meta.url), 'utf8')
+    expect(route).toContain("router.get('/admin/strategy-trades/capabilities', authMiddleware, adminOnly")
+    expect(route).toContain('enabled: true')
+    expect(route).not.toContain('isAdminStrategyTradesEnabled')
+    expect(service).not.toContain('ADMIN_STRATEGY_TRADES_ENABLED')
+    expect(service).not.toContain('assertAdminStrategyTradesEnabled')
+  })
+
+  it('keeps every admin strategy trade endpoint inaccessible to non-admin users', () => {
+    const route = fs.readFileSync(new URL('../server/routes/admin-strategy-trades.js', import.meta.url), 'utf8')
+    const endpoints = [
+      "router.get('/admin/strategy-trades/capabilities', authMiddleware, adminOnly",
+      "router.post('/admin/strategy-trades/preview', authMiddleware, adminOnly",
+      "router.post('/admin/strategy-trades', authMiddleware, adminOnly",
+      "router.get('/admin/strategy-trades/:id', authMiddleware, adminOnly",
+      "router.post('/admin/strategy-trades/:id/retry', authMiddleware, adminOnly",
+      "router.post('/admin/strategy-trades/:id/cancel', authMiddleware, adminOnly",
+    ]
+    for (const endpoint of endpoints) expect(route).toContain(endpoint)
+    expect(route).not.toContain("router.get('/strategy-trades")
+    expect(route).not.toContain("router.post('/strategy-trades")
   })
 
   it('normalizes compatibility aliases while freezing direct volume and market-only entry', () => {
