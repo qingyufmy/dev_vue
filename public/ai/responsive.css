@@ -1973,7 +1973,10 @@
 
 @media (max-width: 375px) {
   .strategy-editor-dialog { overflow-x: hidden; }
-  .strategy-editor-header { min-height:72px; padding-inline:14px; }
+  .strategy-editor-dialog > .strategy-editor-header { min-height:76px; padding:12px 14px; }
+  .strategy-editor-heading-copy { padding-right:4px; }
+  .strategy-editor-close { min-width:44px !important; width:44px; padding:0; }
+  .strategy-editor-close span { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .strategy-editor-primary,.strategy-editor-sidebar { padding:12px; }
   .strategy-editor-primary .strategy-form-section,.strategy-editor-sidebar .strategy-form-section { padding:12px; }
   .strategy-editor-workbench { max-width:100vw; }

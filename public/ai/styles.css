@@ -11030,9 +11030,14 @@ body.account-center-open { overflow: hidden; }
 
 /* Strategy editor workbench: the document stays primary while settings remain discoverable. */
 .strategy-editor-dialog { width:min(94vw,1360px); max-height:92dvh; display:flex; flex-direction:column; gap:0; padding:0; overflow:hidden; }
-.strategy-editor-header { flex:0 0 auto; min-height:76px; margin:0; padding:14px 20px 12px; border-bottom:1px solid var(--border-default); background:var(--bg-card); }
+.strategy-editor-dialog > .strategy-editor-header { position:relative; top:auto; z-index:4; flex:0 0 auto; min-height:84px; margin:0; padding:16px 20px 14px; border-bottom:1px solid var(--border-default); background:var(--bg-card); backdrop-filter:none; }
+.strategy-editor-heading-copy { min-width:0; padding-right:12px; }
+.strategy-editor-heading-copy h2 { margin:0; text-wrap:balance; }
+.strategy-editor-heading-copy p { margin-top:5px; max-width:72ch; text-wrap:pretty; }
 .strategy-editor-header .section-kicker { display:block; margin-bottom:3px; color:var(--gold-primary); font-size:11px; font-weight:800; letter-spacing:.08em; }
-.strategy-editor-header .btn { min-width:88px; min-height:44px; }
+.strategy-editor-header .btn { flex:0 0 auto; min-width:88px; min-height:44px; margin:0; }
+.strategy-editor-close { display:inline-flex; align-items:center; justify-content:center; gap:7px; }
+.strategy-editor-close i { flex:0 0 auto; }
 .strategy-editor-workbench { min-height:0; display:grid; grid-template-columns:minmax(0,1fr) minmax(300px,360px); overflow-y:auto; overscroll-behavior:contain; }
 .strategy-editor-primary { min-width:0; display:grid; align-content:start; gap:16px; padding:20px; }
 .strategy-editor-sidebar { min-width:0; display:grid; align-content:start; gap:12px; padding:20px; border-left:1px solid var(--border-default); background:color-mix(in srgb,var(--bg-input-softer) 35%,var(--bg-card)); }
