@@ -18,7 +18,7 @@ const mockFence = vi.fn(async () => ({}))
 const mockBridge = vi.fn(async () => ({ status: 'success', account: { server: 'DEMO', login: '1' }, positions: [] }))
 
 vi.mock('../server/db.js', () => ({
-  beijingNow: () => '2026-08-14 12:00:00', queryAll: (...args) => mockQueryAll(...args),
+  beijingNow: () => '2026-08-14 12:00:00', beijingAfter: () => '2026-08-14 12:02:00', queryAll: (...args) => mockQueryAll(...args),
   queryOne: (...args) => mockQueryOne(...args), queryRun: (...args) => mockQueryRun(...args),
   withTransaction: (...args) => mockWithTransaction(...args),
 }))

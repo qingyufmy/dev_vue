@@ -23,6 +23,7 @@ import userRoutes from './routes/user.js'
 import adminRoutes from './routes/admin.js'
 import adminConsoleRoutes from './routes/admin-console.js'
 import adminPositionProtectionRoutes, { startAdminPositionProtectionWorker } from './routes/admin-position-protection.js'
+import adminPositionCloseRoutes from './routes/admin-position-close.js'
 import tradeRoutes from './routes/trades.js'
 import paymentRoutes from './routes/payment.js'
 import videoRoutes from './routes/video.js'
@@ -65,6 +66,7 @@ import { createBridgePairStartLimiter } from './bridge-pair-rate-limit.js'
 import { pruneFinalizedCommands } from './bridge-v3/command-ledger.js'
 import { createAutoInferenceRecoveryLogDeduper } from './ai-recovery-log.js'
 import { startAdminStrategyTradeWorker, stopAdminStrategyTradeWorker } from './workers/admin-strategy-trade-worker.js'
+import { startAdminPositionCloseWorker, stopAdminPositionCloseWorker } from './workers/admin-position-close-worker.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -230,6 +232,7 @@ app.use('/api', userRoutes)
 app.use('/api', adminRoutes)
 app.use('/api', adminConsoleRoutes)
 app.use('/api', adminPositionProtectionRoutes)
+app.use('/api', adminPositionCloseRoutes)
 app.use('/api', tradeRoutes)
 app.use('/api', paymentRoutes)
 app.use('/api', videoRoutes)
@@ -245,6 +248,7 @@ app.use('/api', adminNotificationRoutes)
 app.use('/api', adminStrategyTradeRoutes)
 app.use('/aurum-api', noCache, aiRoutes)
 app.use('/aurum-api', noCache, adminStrategyTradeRoutes)
+app.use('/aurum-api', noCache, adminPositionCloseRoutes)
 
 
 
@@ -400,6 +404,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const orderIntentStop = stopOrderIntentReconciler()
     const notificationStop = stopNotificationCenterWorker()
     const adminStrategyTradeStop = stopAdminStrategyTradeWorker()
+    const adminPositionCloseStop = stopAdminPositionCloseWorker()
     const manualTradeReviewStop = stopManualTradeReviewWorker()
     const strategyMemoryCompressionStop = stopStrategyMemoryCompressionWorker()
     const strategyMemoryConsistencyStop = stopStrategyMemoryConsistencyWorker()
@@ -411,6 +416,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
       waitForShutdownTask(orderIntentStop, 'order-intent reconciler', timeout),
       waitForShutdownTask(notificationStop, 'notification center worker', timeout),
       Promise.resolve(adminStrategyTradeStop),
+      Promise.resolve(adminPositionCloseStop),
       waitForShutdownTask(manualTradeReviewStop, 'manual trade review worker', timeout),
       Promise.resolve(strategyMemoryCompressionStop),
       Promise.resolve(strategyMemoryConsistencyStop),
@@ -526,6 +532,7 @@ installGracefulShutdownHandlers()
   startStrategyMemoryConsistencyWorker()
   startManualTradeReviewWorker()
   startAdminStrategyTradeWorker()
+  startAdminPositionCloseWorker()
   startManualAnalysisJobs()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()

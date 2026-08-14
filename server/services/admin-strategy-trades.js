@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
+import { beijingAfter, beijingNow, parseBeijing, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
 import { stripBrokerSuffix } from '../routes/ai/utils.js'
 import { normalizePositionSizeTier, positionSizeFactor } from '../routes/ai/position-sizing.js'
 import { isSubscriptionScheduleActive } from '../routes/ai/subscription-schedule.js'
@@ -426,7 +426,7 @@ export async function retryAdminStrategyTradeDispatch(actorUserId, dispatchId) {
 
 export async function claimAdminStrategyTradeDispatch(dispatchId, leaseToken, leaseMs = 120_000) {
   const id = normalizeId(dispatchId, 'dispatch_id'); const token = String(leaseToken || crypto.randomUUID()); const now = beijingNow()
-  const until = new Date(Date.now() + leaseMs).toISOString().replace('T', ' ').substring(0, 19)
+  const until = beijingAfter(leaseMs)
   const result = await queryRun(`UPDATE admin_strategy_trade_dispatches SET status = 'delivering', confirmed_at = COALESCE(confirmed_at, ?), lease_token = ?, lease_expires_at = ?, updated_at = ?
     WHERE id = ? AND status IN ('confirmed','delivering') AND (lease_expires_at IS NULL OR lease_expires_at < ? OR lease_token = ?)`, [now, token, until, now, id, now, token])
   return result.changes ? { token, leaseExpiresAt: until } : null
@@ -445,7 +445,8 @@ export async function assertAdminStrategyTargetSendFence({ dispatchId, targetId,
   if (!['delivering'].includes(row.dispatch_status) || Number(row.valid_until_utc_msc) <= Date.now()) throw fail('admin_strategy_dispatch_send_fence_failed')
   if (!['validating', 'executing'].includes(row.target_status)) throw fail('admin_strategy_target_send_fence_failed')
   if (leaseToken && String(row.lease_token || '') !== String(leaseToken)) throw fail('admin_strategy_target_lease_lost')
-  if (row.lease_expires_at && new Date(row.lease_expires_at).getTime() <= Date.now()) throw fail('admin_strategy_target_lease_expired')
+  const leaseExpiresAt = parseBeijing(row.lease_expires_at)
+  if (row.lease_expires_at && (!leaseExpiresAt || leaseExpiresAt.getTime() <= Date.now())) throw fail('admin_strategy_target_lease_expired')
   if (sourceRequired && row.source_status !== 'succeeded') throw fail('admin_strategy_source_not_confirmed')
   return row
 }

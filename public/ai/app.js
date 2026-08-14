@@ -24,6 +24,13 @@ const state = {
   platformMarketSourceActive: false,
   currentConfigHasApiKey: false,
   pendingManualOrder: null,
+  adminStrategyDispatchCapabilities: { enabled:false, supported_entry_methods:[] },
+  adminStrategyDispatchCapabilitiesLoaded: false,
+  adminStrategyDispatchPreview: null,
+  adminStrategyDispatchPending: null,
+  adminStrategyDispatch: null,
+  adminStrategyDispatchPollTimer: null,
+  adminStrategyDispatchPollGeneration: 0,
   accountBalance: 0,
   notificationUnread: 0,
   notificationImportantUnacknowledgedCount: 0,
@@ -63,6 +70,13 @@ const state = {
   positionProtectionPreview: null,
   positionProtectionJob: null,
   positionProtectionPollTimer: null,
+  adminStrategyClosePreview: null,
+  adminStrategyClosePreviewTicket: null,
+  adminStrategyClosePreviewRequestVersion: 0,
+  adminStrategyCloseJob: null,
+  adminStrategyClosePollTimer: null,
+  adminStrategyClosePollGeneration: 0,
+  adminStrategyCloseSubmitting: false,
   signalTickets: {},
   closeSignalTickets: {},
   analysisHistoryOffset: 0,
@@ -619,6 +633,10 @@ function handleFormModalKeydown(event) {
     event.preventDefault();
     if (modal.dataset.closePolicy === "explicit") {
       strategyEditorAnnounceEscape();
+      return;
+    }
+    if (modal.id === "positionProtectionModal") {
+      closePositionProtectionModal();
       return;
     }
     closeFormModal(modal);
@@ -2493,6 +2511,9 @@ function invalidateSession() {
   stopKlineRefreshTimers();
   clearKlineData('读取失败');
   stopPositionProtectionPolling();
+  stopAdminStrategyClosePolling();
+  resetAdminStrategyCloseState();
+  stopAdminStrategyDispatchPolling();
   stopManualAnalysisPolling();
   stopReviewDetailPolling();
   stopManualTradeReviewPolling();
@@ -2534,6 +2555,14 @@ function invalidateSession() {
   state.modelProfiles = [];
   state.modelPurposeBindings = null;
   state.modelPurposeBindingsError = "";
+  state.adminStrategyDispatchCapabilities = { enabled:false, supported_entry_methods:[] };
+  state.adminStrategyDispatchCapabilitiesLoaded = false;
+  state.adminStrategyDispatchPreview = null;
+  state.adminStrategyDispatchPending = null;
+  state.adminStrategyDispatch = null;
+  state.adminStrategyClosePreview = null;
+  state.adminStrategyClosePreviewTicket = null;
+  state.adminStrategyCloseJob = null;
   state.reviewCases = [];
   state.reviewSummary = { pending:0, issues:0, unread:0, pending_confirmation:0, generating:0, failed:0, total:0, daily_total:0, monthly_total:0, daily_attention:0, monthly_attention:0 };
   state.reviewSummaryInitialized = false;
@@ -4530,7 +4559,415 @@ async function loadStrategyCatalog() {
     return `<article class="strategy-card ${item.scope === 'private' ? 'is-private' : 'is-platform'}" data-strategy-id="${Number(item.id)}"><header class="strategy-card-header"><div><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '我的策略' : '平台策略'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(visibilityLabel)}</span></div><p class="strategy-card-description">${escapeHtml(description)}</p></div><div class="strategy-card-actions">${canSubscribe ? subscriptionButton : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit"><i data-lucide="pencil" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-strategy-action="delete" aria-label="删除策略"><i data-lucide="trash-2" size="14"></i></button>' : ''}</div></header><div class="strategy-essentials"><span><small>支持品种</small><strong>${symbols.slice(0,4).map(escapeHtml).join('、') || '未设置'}${symbols.length > 4 ? ` 等 ${symbols.length} 个` : ''}</strong></span><span><small>主要行情</small><strong>${escapeHtml(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || 'M30')} · ${Number(plan.timeframes?.find(row => row.timeframe === plan.primary_timeframe)?.kline_count || plan.timeframes?.[0]?.kline_count || 100)} 根</strong></span><span><small>模型</small><strong>${escapeHtml(source)}</strong></span><span class="${linked.some(sub => Number(sub.execution_enabled)) ? 'running' : ''}"><small>自动运行</small><strong>${escapeHtml(execution)}</strong></span></div><details class="strategy-details"><summary><span>查看策略详情与订阅</span><i data-lucide="chevron-down" size="15"></i></summary><div class="strategy-details-body"><div class="strategy-specs"><span><small>完整行情计划</small><strong>${escapeHtml(planText)}</strong></span><span><small>附加数据</small><strong>${escapeHtml(`${chanText} · ${emaText}`)}</strong></span><span><small>允许入场</small><strong>${escapeHtml(entryText)}</strong></span><span><small>账户上下文</small><strong>${escapeHtml(portfolioText)}</strong></span><span><small>记忆方式</small><strong>${escapeHtml(memoryMode)}</strong></span></div>${subscriptionsBlock}</div></details></article>`;
   }).join("") : '<div class="empty-state"><strong>当前筛选下没有策略</strong><span>切换筛选条件，或新建一套自己的交易策略。</span></div>';
   populateManualStrategySelector();
+  renderAdminStrategyDispatchStrategyOptions();
+  renderAdminStrategyDispatchControls();
   initIcons();
+}
+
+const ADMIN_STRATEGY_DISPATCH_TIER_LABELS = Object.freeze({ probe:"试探仓", light:"轻仓", standard:"标准仓" });
+const ADMIN_STRATEGY_DISPATCH_STATUS_LABELS = Object.freeze({
+  queued:"等待发起", created:"已创建", preview:"预览", draft:"草稿", previewed:"预览完成", confirmed:"已确认", delivering:"分发中", source_pending:"源单等待中", source_sending:"源单发送中",
+  source_confirming:"确认源单结果", source_succeeded:"源单已确认", dispatching:"分发中", partial:"部分完成",
+  completed:"已完成", succeeded:"已完成", failed:"失败", rejected:"已拒绝", skipped:"已跳过", uncertain:"结果待确认",
+  cancelled:"已取消", cancelled_before_send:"已取消", expired:"已过期",
+});
+const ADMIN_STRATEGY_DISPATCH_TARGET_STATUS_LABELS = Object.freeze({
+  success:"成功", succeeded:"成功", completed:"成功", rejected:"拒绝", failed:"拒绝", failed_manual_review:"拒绝（待人工）", skipped:"跳过", uncertain:"结果待确认", pending:"处理中", queued:"等待处理",
+});
+
+function isAdminStrategyDispatchUser() {
+  return state.user?.role === "admin";
+}
+
+function adminStrategyDispatchModeEnabled() {
+  return Boolean(isAdminStrategyDispatchUser()
+    && state.adminStrategyDispatchCapabilities?.enabled
+    && $("adminStrategyDispatchEnabled")?.checked);
+}
+
+function adminStrategyDispatchStrategySymbols(strategy) {
+  const raw = strategy?.symbols_json ?? strategy?.symbols ?? [];
+  const values = Array.isArray(raw) ? raw : parseJsonField(raw, []);
+  return values.map(value => String(value || "").trim().toUpperCase()).filter(Boolean);
+}
+
+function activePlatformStrategyOptions() {
+  return (state.strategies || []).filter(item => item?.scope === "platform"
+    && item?.visibility_status === "active" && Number(item?.is_active ?? 1) !== 0);
+}
+
+function renderAdminStrategyDispatchStrategyOptions() {
+  const select = $("adminStrategyDispatchStrategy");
+  if (!select) return;
+  const current = String(select.value || state.adminStrategyDispatchPending?.payload?.strategy_id || "");
+  const strategies = activePlatformStrategyOptions();
+  select.innerHTML = `<option value="">${strategies.length ? "请选择平台策略" : "暂无可用的平台策略"}</option>`
+    + strategies.map(item => {
+      const symbols = adminStrategyDispatchStrategySymbols(item);
+      const symbolText = symbols.length ? ` · ${symbols.slice(0, 4).join("、")}${symbols.length > 4 ? " 等" : ""}` : "";
+      return `<option value="${Number(item.id)}">${escapeHtml(item.title || `平台策略 #${Number(item.id)}`)}${escapeHtml(symbolText)}</option>`;
+    }).join("");
+  if (strategies.some(item => String(item.id) === current)) select.value = current;
+  else if (strategies.length === 1) select.value = String(strategies[0].id);
+}
+
+function syncAdminStrategyDispatchOrderType() {
+  const active = adminStrategyDispatchModeEnabled();
+  const buttons = document.querySelectorAll(".order-type-btn");
+  buttons.forEach(button => {
+    const type = String(button.dataset.type || "");
+    if (active && type !== "market") {
+      if (!button.hasAttribute("data-admin-dispatch-was-disabled")) button.dataset.adminDispatchWasDisabled = button.disabled ? "1" : "0";
+      button.disabled = true;
+      button.setAttribute("aria-disabled", "true");
+      button.title = "平台策略分发仅支持市价 BUY/SELL";
+    } else if (!active && button.hasAttribute("data-admin-dispatch-was-disabled")) {
+      button.disabled = button.dataset.adminDispatchWasDisabled === "1";
+      button.removeAttribute("data-admin-dispatch-was-disabled");
+      button.removeAttribute("aria-disabled");
+      button.title = "";
+    }
+  });
+  if (active) {
+    state.selectedOrderType = "market";
+    const marketButton = document.querySelector('.order-type-btn[data-type="market"]');
+    buttons.forEach(button => button.classList.toggle("active", button === marketButton));
+    $("pendingPriceRow")?.style && ($("pendingPriceRow").style.display = "none");
+    if ($("stopLimitPriceWrap")) $("stopLimitPriceWrap").style.display = "none";
+  }
+  validatePendingPrice();
+}
+
+function renderAdminStrategyDispatchControls() {
+  const panel = $("adminStrategyDispatchPanel");
+  const checkbox = $("adminStrategyDispatchEnabled");
+  const fields = $("adminStrategyDispatchFields");
+  if (!panel || !checkbox || !fields) return;
+  const canUse = isAdminStrategyDispatchUser() && Boolean(state.adminStrategyDispatchCapabilities?.enabled);
+  panel.hidden = !canUse;
+  if (!canUse) checkbox.checked = false;
+  fields.hidden = !canUse || !checkbox.checked;
+  checkbox.disabled = !canUse;
+  renderAdminStrategyDispatchStrategyOptions();
+  const volumeLabel = $("tradeVolumeLabel");
+  if (volumeLabel) volumeLabel.textContent = "交易手数";
+  const volumeInput = $("tradeVolume");
+  const volumeHelp = $("tradeVolumeDispatchHelp");
+  const active = canUse && checkbox.checked;
+  if (volumeInput) {
+    if (active) {
+      if (!volumeInput.hasAttribute("data-admin-dispatch-was-disabled")) volumeInput.dataset.adminDispatchWasDisabled = volumeInput.disabled ? "1" : "0";
+      volumeInput.disabled = true;
+      volumeInput.title = "分发模式按仓位档位和各账户风控独立计算手数";
+    } else if (volumeInput.hasAttribute("data-admin-dispatch-was-disabled")) {
+      volumeInput.disabled = volumeInput.dataset.adminDispatchWasDisabled === "1";
+      volumeInput.removeAttribute("data-admin-dispatch-was-disabled");
+      volumeInput.title = "";
+    }
+  }
+  if (volumeHelp) volumeHelp.hidden = !active;
+  syncAdminStrategyDispatchOrderType();
+  renderAdminStrategyDispatchProgress();
+}
+
+async function loadAdminStrategyDispatchCapabilities({ force = false } = {}) {
+  if (!isAdminStrategyDispatchUser() || !state.token) {
+    state.adminStrategyDispatchCapabilities = { enabled:false, supported_entry_methods:[] };
+    state.adminStrategyDispatchCapabilitiesLoaded = true;
+    renderAdminStrategyDispatchControls();
+    return state.adminStrategyDispatchCapabilities;
+  }
+  if (!force && state.adminStrategyDispatchCapabilitiesLoaded) return state.adminStrategyDispatchCapabilities;
+  try {
+    const data = await api("/api/admin/strategy-trades/capabilities", { timeout:10000 });
+    const methods = Array.isArray(data?.supported_entry_methods) ? data.supported_entry_methods.map(value => String(value).toLowerCase()) : [];
+    state.adminStrategyDispatchCapabilities = {
+      enabled: Boolean(data?.enabled) && (!methods.length || methods.includes("market")),
+      supported_entry_methods: methods,
+    };
+  } catch (error) {
+    state.adminStrategyDispatchCapabilities = { enabled:false, supported_entry_methods:[] };
+    console.warn("[AdminStrategyDispatch] capabilities unavailable:", error?.message || error);
+  } finally {
+    state.adminStrategyDispatchCapabilitiesLoaded = true;
+    renderAdminStrategyDispatchControls();
+  }
+  return state.adminStrategyDispatchCapabilities;
+}
+
+async function ensureAdminStrategyDispatchReady() {
+  if (!isAdminStrategyDispatchUser() || !state.token) return false;
+  const capabilities = await loadAdminStrategyDispatchCapabilities();
+  if (!capabilities.enabled) return false;
+  if (!activePlatformStrategyOptions().length) await loadStrategyCatalog().catch(error => console.warn("[AdminStrategyDispatch] strategy catalog unavailable:", error?.message || error));
+  renderAdminStrategyDispatchControls();
+  return true;
+}
+
+function stopAdminStrategyDispatchPolling() {
+  if (state.adminStrategyDispatchPollTimer) clearTimeout(state.adminStrategyDispatchPollTimer);
+  state.adminStrategyDispatchPollTimer = null;
+  state.adminStrategyDispatchPollGeneration += 1;
+}
+
+function adminStrategyDispatchId(value) {
+  const id = value?.id ?? value?.dispatch_id ?? value?.strategy_trade_id ?? value?.trade_id
+    ?? value?.dispatch?.id ?? value?.strategy_trade?.id ?? value?.strategyTrade?.id;
+  return id == null || id === "" ? "" : String(id);
+}
+
+function adminStrategyDispatchRoot(data = {}) {
+  return data?.dispatch || data?.strategy_trade || data?.strategyTrade || data?.trade || data?.data?.dispatch || data?.data?.strategy_trade || data;
+}
+
+function adminStrategyDispatchPreviewRoot(data = {}) {
+  return data?.preview || data?.data?.preview || data?.strategy_trade_preview || data;
+}
+
+function adminStrategyDispatchTargets(data = {}) {
+  const root = adminStrategyDispatchRoot(data);
+  const candidates = data?.targets || data?.target_results || data?.target_statuses || root?.targets || root?.target_results || root?.target_statuses;
+  return Array.isArray(candidates) ? candidates : [];
+}
+
+function adminStrategyDispatchCounters(data = {}) {
+  const root = adminStrategyDispatchRoot(data);
+  const source = data?.counters || data?.summary || root?.counters || root?.summary || {};
+  const read = (keys) => {
+    for (const key of keys) {
+      const value = Number(source?.[key] ?? root?.[key] ?? data?.[key]);
+      if (Number.isFinite(value)) return value;
+    }
+    return 0;
+  };
+  const totalRaw = read(["total", "total_targets", "subscriber_total", "target_total", "target_count", "count"]);
+  const targets = data?.targets || root?.targets;
+  const sourceIncluded = Boolean(data?.source || root?.source || root?.source_target_id
+    || (Array.isArray(targets) && targets.some(target => String(target?.target_role || "").toLowerCase() === "source")));
+  return {
+    total:sourceIncluded && totalRaw > 0 ? Math.max(0, totalRaw - 1) : totalRaw,
+    executable:read(["executable", "executable_targets", "eligible", "eligible_targets", "eligible_target_count"]),
+    excluded:read(["excluded", "excluded_targets", "ineligible", "ineligible_targets", "excluded_target_count"]),
+    success:read(["success", "succeeded", "successful", "success_count"]),
+    rejected:read(["rejected", "rejected_count"]),
+    skipped:read(["skipped", "skipped_count"]),
+    uncertain:read(["uncertain", "uncertain_count", "unknown"]),
+  };
+}
+
+function adminStrategyDispatchStatus(value) {
+  return String(value || "queued").trim().toLowerCase();
+}
+
+function adminStrategyDispatchStatusLabel(value) {
+  const status = adminStrategyDispatchStatus(value);
+  return ADMIN_STRATEGY_DISPATCH_STATUS_LABELS[status] || userVisibleText(value, "处理中");
+}
+
+function adminStrategyDispatchTargetStatus(target = {}) {
+  return String(target?.status || target?.outcome || target?.result_status || target?.state || "pending").toLowerCase();
+}
+
+function adminStrategyDispatchTargetStatusLabel(value) {
+  const status = adminStrategyDispatchTargetStatus({ status:value });
+  return ADMIN_STRATEGY_DISPATCH_TARGET_STATUS_LABELS[status] || userVisibleText(value, "处理中");
+}
+
+function adminStrategyDispatchTargetReason(target = {}) {
+  return localizeReason(target?.reason_code || target?.reason || target?.message || target?.error || target?.exclusion_reason || "");
+}
+
+function renderAdminStrategyDispatchProgress() {
+  const panel = $("adminStrategyDispatchProgress");
+  const summary = $("adminStrategyDispatchProgressSummary");
+  const targetsHost = $("adminStrategyDispatchProgressTargets");
+  const retry = $("adminStrategyDispatchRetry");
+  if (!panel || !summary || !targetsHost || !retry) return;
+  const dispatch = state.adminStrategyDispatch;
+  if (!isAdminStrategyDispatchUser() || !dispatch) {
+    panel.hidden = true;
+    summary.innerHTML = "";
+    targetsHost.innerHTML = "";
+    retry.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const root = adminStrategyDispatchRoot(dispatch);
+  const status = adminStrategyDispatchStatus(root?.status || root?.phase || root?.dispatch_status);
+  const counters = adminStrategyDispatchCounters(dispatch);
+  const sourceAccount = root?.source_account || root?.source || dispatch?.source_account || {};
+  const sourceSnapshot = sourceAccount?.snapshot || sourceAccount?.account_snapshot || {};
+  const sourceText = sourceAccount?.login_account || sourceAccount?.login || sourceAccount?.account || sourceAccount?.name || sourceSnapshot?.account?.login_account || sourceSnapshot?.account?.nickname || root?.source_login || root?.source_account_login || "管理员源账户";
+  const targets = adminStrategyDispatchTargets(dispatch);
+  const sourceTarget = targets.find(target => String(target?.target_role || "").toLowerCase() === "source");
+  const sourceStage = sourceTarget?.status || root?.source_stage || root?.source_order_stage || root?.source_status || root?.phase || status;
+  const total = counters.total || counters.executable + counters.excluded || 0;
+  summary.innerHTML = `<div class="admin-strategy-dispatch-summary-grid"><span><small>源账户</small><strong>${escapeHtml(sourceText)}</strong></span><span><small>源订单阶段</small><strong>${escapeHtml(adminStrategyDispatchStatusLabel(sourceStage))}</strong></span><span><small>订阅总数</small><strong>${total}</strong></span><span><small>可执行</small><strong>${counters.executable}</strong></span><span><small>成功</small><strong>${counters.success}</strong></span><span><small>拒绝 / 跳过 / 待确认</small><strong>${counters.rejected} / ${counters.skipped} / ${counters.uncertain}</strong></span></div>`;
+  targetsHost.innerHTML = targets.length ? targets.map(target => {
+    const targetStatus = adminStrategyDispatchTargetStatus(target);
+    const label = target?.user_label || target?.user_name || target?.nickname || (target?.user_id ? `用户 #${target.user_id}` : "订阅目标");
+    const reason = adminStrategyDispatchTargetReason(target);
+    return `<div class="admin-strategy-dispatch-target-row ${escapeHtml(targetStatus)}"><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(target?.symbol || root?.symbol || "--")}${target?.volume != null ? ` · ${escapeHtml(volumeText(target.volume))}` : ""}</small></span><span class="status-chip ${targetStatus === "success" || targetStatus === "succeeded" || targetStatus === "completed" ? "success" : targetStatus === "rejected" || targetStatus === "failed" ? "danger" : targetStatus === "uncertain" ? "warning" : "info"}">${escapeHtml(adminStrategyDispatchTargetStatusLabel(targetStatus))}</span>${reason ? `<em title="${escapeHtml(reason)}">${escapeHtml(reason)}</em>` : ""}</div>`;
+  }).join("") : `<p class="admin-strategy-dispatch-empty">暂无逐目标结果，刷新以恢复进度。</p>`;
+  const failedTargets = targets.filter(target => ["failed", "failed_manual_review", "rejected"].includes(adminStrategyDispatchTargetStatus(target)));
+  retry.hidden = !failedTargets.length || ["completed", "succeeded", "cancelled", "cancelled_before_send", "expired"].includes(status);
+  retry.disabled = false;
+  initIcons();
+}
+
+function scheduleAdminStrategyDispatchRefresh() {
+  stopAdminStrategyDispatchPolling();
+  if (!state.adminStrategyDispatch) return;
+  const status = adminStrategyDispatchStatus(adminStrategyDispatchRoot(state.adminStrategyDispatch)?.status || adminStrategyDispatchRoot(state.adminStrategyDispatch)?.phase);
+  if (["completed", "succeeded", "failed", "cancelled", "cancelled_before_send", "expired"].includes(status)) return;
+  const generation = state.adminStrategyDispatchPollGeneration;
+  state.adminStrategyDispatchPollTimer = setTimeout(() => {
+    if (generation !== state.adminStrategyDispatchPollGeneration) return;
+    refreshAdminStrategyDispatch({ silent:true }).catch(() => {});
+  }, 4000);
+}
+
+async function refreshAdminStrategyDispatch({ silent = false } = {}) {
+  if (!isAdminStrategyDispatchUser()) return null;
+  const id = adminStrategyDispatchId(state.adminStrategyDispatch);
+  if (!id) return null;
+  try {
+    const data = await api(`/api/admin/strategy-trades/${encodeURIComponent(id)}`, { timeout:15000 });
+    state.adminStrategyDispatch = data;
+    renderAdminStrategyDispatchProgress();
+    scheduleAdminStrategyDispatchRefresh();
+    return state.adminStrategyDispatch;
+  } catch (error) {
+    const errorHost = $("adminStrategyDispatchProgressError");
+    if (errorHost) errorHost.textContent = error.message || "分发状态刷新失败";
+    if (!silent) toast(error.message || "分发状态刷新失败", "error");
+    return null;
+  }
+}
+
+async function retryAdminStrategyDispatch() {
+  if (!isAdminStrategyDispatchUser()) return;
+  const id = adminStrategyDispatchId(state.adminStrategyDispatch);
+  if (!id) return;
+  const button = $("adminStrategyDispatchRetry");
+  if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
+  try {
+    await api(`/api/admin/strategy-trades/${encodeURIComponent(id)}/retry`, { method:"POST", body:{}, timeout:20000 });
+    toast("失败目标已提交重试", "success");
+    await refreshAdminStrategyDispatch();
+  } catch (error) {
+    toast(error.message || "重试失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
+  }
+}
+
+function strategyDispatchClientRequestId() {
+  return globalThis.crypto?.randomUUID?.() || `admin-strategy-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function buildAdminStrategyDispatchPreview(direction) {
+  if (!isAdminStrategyDispatchUser() || !state.adminStrategyDispatchCapabilities?.enabled) throw new Error("当前账号不可使用平台策略分发");
+  if (!adminStrategyDispatchModeEnabled()) throw new Error("请先开启按平台策略分发");
+  if (!["buy", "sell"].includes(String(direction))) throw new Error("平台策略分发仅支持 BUY / SELL");
+  if (String(state.selectedOrderType || "market") !== "market") throw new Error("平台策略分发仅支持市价单");
+  const symbol = String($("tradeSymbolSelect")?.value || "").trim().toUpperCase();
+  const strategyId = Number($("adminStrategyDispatchStrategy")?.value || 0);
+  const strategy = activePlatformStrategyOptions().find(item => Number(item.id) === strategyId);
+  const sourceAccount = currentSubscriptionAccount();
+  const sourceAccountId = Number(sourceAccount?.id ?? sourceAccount?.trading_account_id ?? 0);
+  const stopLoss = manualTargetPrice("stopLossPoints", "止损价格");
+  const takeProfit = manualTargetPrice("takeProfitPoints", "止盈价格");
+  const validMinutes = Number($("adminStrategyDispatchValidMinutes")?.value);
+  const reason = String($("adminStrategyDispatchReason")?.value || "").trim();
+  if (!strategy) throw new Error("请选择有效的平台策略");
+  if (!symbol) throw new Error("请选择交易品种");
+  const supportedSymbols = adminStrategyDispatchStrategySymbols(strategy);
+  if (supportedSymbols.length && !supportedSymbols.some(value => standardMarketSymbol(value) === standardMarketSymbol(symbol))) throw new Error("当前品种不在所选平台策略支持范围内");
+  if (!Number.isSafeInteger(sourceAccountId) || sourceAccountId <= 0) throw new Error("当前没有可用的管理员交易账户");
+  if (stopLoss == null) throw new Error("策略分发必须填写止损价格");
+  if (takeProfit == null) throw new Error("策略分发至少填写一个止盈价格");
+  if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes > 1440) throw new Error("有效期必须是 1 至 1440 分钟");
+  if (!reason || reason.length < 2) throw new Error("请填写至少 2 个字的中文原因");
+  const quote = state.lastQuote;
+  if (!quote || String(quote.symbol || "").toUpperCase() !== symbol || !Number.isFinite(Number(quote.bid)) || !Number.isFinite(Number(quote.ask))) throw new Error("当前品种报价未就绪，请先刷新报价");
+  const clientRequestId = strategyDispatchClientRequestId();
+  const validUntil = Date.now() + validMinutes * 60_000;
+  const payload = {
+    strategy_id:strategyId, trading_account_id:sourceAccountId, symbol, direction:String(direction), entry_method:"market",
+    stop_loss:stopLoss, take_profit:takeProfit, take_profit_1:takeProfit,
+    position_size_tier:String($("adminStrategyDispatchTier")?.value || "probe"), valid_minutes:validMinutes,
+    valid_until:validUntil, valid_until_utc_msc:validUntil, reason, client_request_id:clientRequestId, idempotency_key:clientRequestId,
+  };
+  return { payload, meta:{ strategy, sourceAccount, symbol, direction:String(direction), stopLoss, takeProfit, validMinutes, validUntil, reason, tier:payload.position_size_tier } };
+}
+
+function renderAdminStrategyDispatchPreview(order, data) {
+  const host = $("adminStrategyDispatchPreviewBody");
+  if (!host) return;
+  const preview = adminStrategyDispatchPreviewRoot(data);
+  const counters = adminStrategyDispatchCounters(preview);
+  const source = preview?.source_account || preview?.source || {};
+  const sourceSnapshot = source?.snapshot || source?.account_snapshot || {};
+  const sourceText = source?.login_account || source?.login || source?.account || source?.name || sourceSnapshot?.account?.login_account || sourceSnapshot?.account?.nickname || "管理员源账户";
+  const excluded = preview?.excluded || preview?.excluded_targets || preview?.exclusions || [];
+  const excludedRows = Array.isArray(excluded) ? excluded : [];
+  const reasons = excludedRows.slice(0, 8).map(item => `<li>${escapeHtml(item?.user_label || item?.user_name || (item?.user_id ? `用户 #${item.user_id}` : "订阅目标"))}：${escapeHtml(adminStrategyDispatchTargetReason(item) || "未满足执行条件")}</li>`).join("");
+  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>仓位档位</span><strong>${escapeHtml(ADMIN_STRATEGY_DISPATCH_TIER_LABELS[order.meta.tier] || order.meta.tier)} · 按仓位档位和各账户风控独立计算手数</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(priceDisplay(order.meta.stopLoss))} / ${escapeHtml(priceDisplay(order.meta.takeProfit))}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div>${reasons ? `<div class="admin-strategy-dispatch-exclusion"><span>排除原因</span><ul>${reasons}</ul></div>` : ""}<div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason)}</strong></div>`;
+  $("adminStrategyDispatchModal")?.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  initIcons();
+}
+
+function closeAdminStrategyDispatchModal() {
+  state.adminStrategyDispatchPreview = null;
+  state.adminStrategyDispatchPending = null;
+  $("adminStrategyDispatchModal")?.classList.add("hidden");
+  if ($("orderConfirmModal")?.classList.contains("hidden") && $("manualInferenceModal")?.classList.contains("hidden")) document.body.classList.remove("modal-open");
+}
+
+async function openAdminStrategyDispatch(direction) {
+  if (!isAdminStrategyDispatchUser() || !state.adminStrategyDispatchCapabilities?.enabled) return;
+  try {
+    const order = buildAdminStrategyDispatchPreview(direction);
+    const previewResponse = await api("/api/admin/strategy-trades/preview", { method:"POST", body:order.payload, timeout:30000 });
+    const preview = adminStrategyDispatchPreviewRoot(previewResponse);
+    const previewHash = previewResponse?.preview_hash || preview?.preview_hash || preview?.hash || null;
+    if (previewHash) order.payload.preview_hash = previewHash;
+    state.adminStrategyDispatchPending = order;
+    state.adminStrategyDispatchPreview = previewResponse;
+    renderAdminStrategyDispatchPreview(order, previewResponse);
+  } catch (error) {
+    toast(error.message || "分发预览失败", "error");
+  }
+}
+
+async function createAdminStrategyDispatch() {
+  const order = state.adminStrategyDispatchPending;
+  if (!order || !isAdminStrategyDispatchUser()) return;
+  const button = $("adminStrategyDispatchModalConfirm");
+  if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
+  try {
+    const preview = adminStrategyDispatchPreviewRoot(state.adminStrategyDispatchPreview || {});
+    const body = { ...order.payload, preview_hash:order.payload.preview_hash || preview?.preview_hash, confirm:true };
+    const result = await api("/api/admin/strategy-trades", { method:"POST", body, timeout:30000 });
+    state.adminStrategyDispatch = result;
+    closeAdminStrategyDispatchModal();
+    renderAdminStrategyDispatchProgress();
+    toast("管理员策略指令已创建，正在跟踪源单与订阅目标", "success");
+    await refreshAdminStrategyDispatch({ silent:true });
+  } catch (error) {
+    toast(error.message || "创建分发失败", "error");
+  } finally {
+    if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
+  }
+}
+
+function strategyDispatchSignalSourceLabel(signal = {}) {
+  const raw = String(signal?.source || signal?.source_type || signal?.origin || signal?.execution_source || "").toLowerCase();
+  if (raw === "admin_strategy_dispatch" || raw === "admin_strategy_trade" || signal?.admin_strategy_dispatch_id || signal?.strategy_dispatch_id) return "管理员策略指令";
+  if (raw === "auto_shared") return "平台自动分析";
+  return "";
 }
 
 function strategyMarketPlan(strategy) {
@@ -6846,6 +7283,9 @@ function setWorkspaceSubtab(group, target) {
   if (group === "trading" && target === "management" && state.token) {
     loadPositionManagement({ preserveSelection:true }).catch(error => toast(error.message, "error"));
   }
+  if (group === "trading" && target === "manual" && state.token && isAdminStrategyDispatchUser()) {
+    ensureAdminStrategyDispatchReady().catch(error => console.warn("[AdminStrategyDispatch] manual panel unavailable:", error?.message || error));
+  }
   if (group === "review-memory" && target === "manual-trades" && state.token && canManagePlatformAiContent()) {
     loadManualTradeReviewWorkspace().catch(error => toast(localizeReason(error.code || error.message), "error"));
   }
@@ -7570,6 +8010,7 @@ async function bootstrap() {
     }
     const profileRes = await api("/api/profile");
     state.user = profileRes.user;
+    renderAdminStrategyDispatchControls();
     // Membership access is server-authoritative. Free and expired accounts
     // stay signed in and receive a useful access lobby instead of a blank app.
     const accessRes = await api("/api/ai/access-context");
@@ -7580,6 +8021,7 @@ async function bootstrap() {
       return;
     }
     $('proOverlay')?.classList.add('hidden');
+    void loadAdminStrategyDispatchCapabilities();
     await loadObserverChannels();
     showApp(true);
     void refreshNotificationSummary({ announce:false });
@@ -9179,6 +9621,493 @@ function renderObserverChannelControl() {
 }
 
 const POSITION_PROTECTION_TERMINAL_STATES = new Set(["completed", "partial_failed", "failed"]);
+const ADMIN_STRATEGY_CLOSE_TERMINAL_STATES = new Set(["completed", "partial", "partial_failed", "failed", "cancelled", "canceled"]);
+const ADMIN_STRATEGY_CLOSE_STATUS_LABELS = {
+  queued: "等待执行",
+  previewed: "已预览",
+  running: "正在平仓",
+  reconciling: "等待对账",
+  uncertain: "待确认",
+  completed: "全部完成",
+  partial: "部分完成",
+  partial_failed: "部分失败",
+  failed: "执行失败",
+  cancelled: "已取消",
+  canceled: "已取消",
+};
+
+function adminStrategyCloseRoot(data = {}) {
+  if (!data || typeof data !== "object") return {};
+  if (data.__adminStrategyCloseNormalized) return data;
+  const candidates = [
+    data.preview,
+    data.close_preview,
+    data.position_close_preview,
+    data.data?.preview,
+    data.data?.close_preview,
+    data.result?.preview,
+    data,
+  ];
+  const selected = candidates.find(item => item && typeof item === "object" && !Array.isArray(item)) || {};
+  if (selected === data) return selected;
+  const normalized = { ...data, ...selected };
+  Object.defineProperty(normalized, "__adminStrategyCloseNormalized", { value:true });
+  return normalized;
+}
+
+function adminStrategyCloseJobRoot(data = {}) {
+  if (!data || typeof data !== "object") return {};
+  if (data.__adminStrategyCloseNormalized) return data;
+  const candidates = [
+    data.job,
+    data.close_job,
+    data.position_close_job,
+    data.dispatch,
+    data.data?.job,
+    data.result?.job,
+    data,
+  ];
+  const selected = candidates.find(item => item && typeof item === "object" && !Array.isArray(item)) || {};
+  if (selected === data) return selected;
+  const normalized = { ...data, ...selected };
+  Object.defineProperty(normalized, "__adminStrategyCloseNormalized", { value:true });
+  return normalized;
+}
+
+function adminStrategyCloseValue(root, keys = []) {
+  for (const key of keys) {
+    if (root && root[key] !== undefined && root[key] !== null) return root[key];
+  }
+  return undefined;
+}
+
+function adminStrategyCloseBoolean(value) {
+  if (value === true || value === 1) return true;
+  if (typeof value !== "string") return false;
+  return ["true", "1", "yes", "confirmed", "unique", "eligible", "allowed"].includes(value.trim().toLowerCase());
+}
+
+function adminStrategyCloseDispatchMarker(value) {
+  if (typeof value === "string") return value.trim().toLowerCase() === "admin_strategy_dispatch";
+  if (!value || typeof value !== "object") return false;
+  return [
+    value.source,
+    value.source_type,
+    value.source_kind,
+    value.origin,
+    value.signal_source,
+    value.attribution_source,
+    value.dispatch_source,
+    value.type,
+    value.kind,
+    value.source_name,
+    value.strategy_source,
+  ].some(adminStrategyCloseDispatchMarker);
+}
+
+function adminStrategyCloseAttribution(preview = {}) {
+  const root = adminStrategyCloseRoot(preview);
+  const candidates = [
+    root,
+    root.source,
+    root.source_attribution,
+    root.attribution,
+    root.linked_source,
+    root.linked_dispatch,
+    root.dispatch,
+    root.strategy_dispatch,
+    root.admin_strategy_dispatch,
+    root.signal,
+  ];
+  if (!candidates.some(adminStrategyCloseDispatchMarker)) return false;
+  const uniqueKeys = [
+    "unique_attribution", "uniqueAttribution", "unique_source_attribution", "uniqueSourceAttribution", "unique_source", "uniqueSource", "is_unique", "isUnique",
+    "unique", "source_unique", "sourceUnique", "source_is_unique", "sourceIsUnique", "linked_admin_strategy_dispatch", "linkedAdminStrategyDispatch",
+    "can_close_linked_dispatch", "canCloseLinkedDispatch", "linked_close_available", "linkedCloseAvailable", "close_available", "closeAvailable", "can_close", "canClose",
+    "eligible", "is_eligible", "isEligible", "allowed",
+  ];
+  const uniqueOnlyKeys = ["unique_attribution", "uniqueAttribution", "unique_source_attribution", "uniqueSourceAttribution", "unique_source", "uniqueSource", "is_unique", "isUnique", "unique", "source_unique", "sourceUnique", "source_is_unique", "sourceIsUnique"];
+  if (candidates.some(item => item && typeof item === "object" && uniqueOnlyKeys.some(key => item[key] === false || item[key] === 0 || String(item[key]).toLowerCase() === "false"))) return false;
+  if (candidates.some(item => item && typeof item === "object" && uniqueKeys.some(key => adminStrategyCloseBoolean(item[key])))) return true;
+  const scope = candidates
+    .map(item => item && typeof item === "object" ? adminStrategyCloseValue(item, ["close_scope", "closeScope", "attribution_scope", "attributionScope", "source_scope", "sourceScope"]) : item)
+    .find(Boolean);
+  if (typeof scope === "string" && ["admin_strategy_dispatch", "unique_admin_strategy_dispatch"].includes(scope.trim().toLowerCase())) return true;
+  return false;
+}
+
+function adminStrategyCloseEligible(preview = {}) {
+  const root = adminStrategyCloseRoot(preview);
+  if (!adminStrategyCloseAttribution(root)) return false;
+  const explicitFalse = [
+    "can_close", "canClose", "close_available", "closeAvailable", "linked_close_available", "linkedCloseAvailable", "eligible", "is_eligible", "isEligible", "allowed",
+  ].some(key => root[key] === false || root[key] === 0 || String(root[key]).toLowerCase() === "false");
+  return !explicitFalse;
+}
+
+function adminStrategyClosePreviewHash(preview = {}) {
+  const root = adminStrategyCloseRoot(preview);
+  return adminStrategyCloseValue(root, ["preview_hash", "previewHash", "hash"]) || "";
+}
+
+function adminStrategyCloseTargets(data = {}) {
+  const root = adminStrategyCloseRoot(data);
+  const candidates = [root.targets, root.positions, root.target_positions, root.close_targets, root.results, root.target_progress, root.target_results, root.data?.targets];
+  return candidates.find(Array.isArray) || [];
+}
+
+function adminStrategyCloseJobTargets(job = {}) {
+  const root = adminStrategyCloseJobRoot(job);
+  const candidates = [root.targets, root.positions, root.target_positions, root.close_targets, root.results, root.target_progress, root.target_results, root.data?.targets];
+  return candidates.find(Array.isArray) || [];
+}
+
+function adminStrategyCloseTargetStatus(target = {}) {
+  const nestedResult = target.result && typeof target.result === "object" ? target.result : (target.outcome && typeof target.outcome === "object" ? target.outcome : null);
+  const value = String(adminStrategyCloseValue(target, ["status", "state", "target_status", "targetStatus"]) || adminStrategyCloseValue(nestedResult, ["status", "state", "outcome"]) || target.result || target.outcome || "queued").trim().toLowerCase();
+  if (["success", "succeeded", "completed", "closed", "done"].includes(value)) return "succeeded";
+  if (["failed", "error", "rejected"].includes(value)) return "failed";
+  if (["skipped", "excluded", "not_applicable"].includes(value)) return "skipped";
+  if (["uncertain", "unknown", "timeout", "timed_out"].includes(value)) return "uncertain";
+  if (["reconciling", "reconcile", "pending_reconciliation"].includes(value)) return "reconciling";
+  if (["running", "closing", "processing"].includes(value)) return "running";
+  return "queued";
+}
+
+function adminStrategyCloseTargetStatusLabel(value) {
+  return ({ succeeded:"成功", failed:"失败", skipped:"跳过", uncertain:"待确认", reconciling:"对账中", running:"执行中", queued:"等待" })[value] || "等待";
+}
+
+function adminStrategyCloseTargetReason(target = {}) {
+  const nestedResult = target.result && typeof target.result === "object" ? target.result : (target.outcome && typeof target.outcome === "object" ? target.outcome : null);
+  return adminStrategyCloseValue(target, ["reason", "error_message", "message", "error", "skip_reason", "exclusion_reason"])
+    || adminStrategyCloseValue(nestedResult, ["reason", "error_message", "message", "error"])
+    || "";
+}
+
+function adminStrategyCloseTargetIsSource(target = {}) {
+  const role = String(adminStrategyCloseValue(target, ["target_role", "role", "target_type"]) || "").toLowerCase();
+  return Boolean(target.is_source === true || target.is_source === 1 || ["source", "admin", "admin_source", "administrator", "admin_source_account", "source_account"].includes(role));
+}
+
+function adminStrategyCloseCounter(root, keys, fallback = 0) {
+  const value = adminStrategyCloseValue(root, keys);
+  return Number.isFinite(Number(value)) ? Number(value) : fallback;
+}
+
+function adminStrategyCloseCounters(data = {}) {
+  const root = adminStrategyCloseRoot(data);
+  const counters = root.counters || root.summary || root.counts || {};
+  const targets = adminStrategyCloseTargets(root);
+  const subscriberTargets = targets.filter(target => !adminStrategyCloseTargetIsSource(target));
+  const statuses = targets.map(adminStrategyCloseTargetStatus);
+  const count = (status) => statuses.filter(item => item === status).length;
+  const inferredSubscriberUsers = new Set(subscriberTargets.map(target => target.user_id).filter(value => value != null)).size;
+  const subscriberUsers = adminStrategyCloseCounter(root, ["subscriber_users", "subscriber_total", "affected_users", "user_count"], adminStrategyCloseCounter(counters, ["subscriber_users", "subscriber_total", "affected_users", "user_count"], inferredSubscriberUsers));
+  const affectedPositions = adminStrategyCloseCounter(root, ["subscriber_positions", "affected_positions", "position_count", "total_positions"], adminStrategyCloseCounter(counters, ["subscriber_positions", "affected_positions", "position_count", "total_positions"], subscriberTargets.length));
+  const excluded = Array.isArray(root.exclusions) ? root.exclusions.length : Array.isArray(root.excluded) ? root.excluded.length : adminStrategyCloseCounter(root, ["excluded", "excluded_count", "exclusion_count"], adminStrategyCloseCounter(counters, ["excluded", "excluded_count", "exclusion_count"], 0));
+  return {
+    subscriberUsers,
+    affectedPositions,
+    excluded,
+    succeeded: adminStrategyCloseCounter(root, ["succeeded", "succeeded_positions", "success", "success_count"], adminStrategyCloseCounter(counters, ["succeeded", "succeeded_positions", "success", "success_count"], count("succeeded"))),
+    failed: adminStrategyCloseCounter(root, ["failed", "failed_positions", "failure", "failure_count"], adminStrategyCloseCounter(counters, ["failed", "failed_positions", "failure", "failure_count"], count("failed"))),
+    skipped: adminStrategyCloseCounter(root, ["skipped", "skipped_positions", "skip", "skipped_count"], adminStrategyCloseCounter(counters, ["skipped", "skipped_positions", "skip", "skipped_count"], count("skipped"))),
+    uncertain: adminStrategyCloseCounter(root, ["uncertain", "uncertain_positions", "uncertain_count"], adminStrategyCloseCounter(counters, ["uncertain", "uncertain_positions", "uncertain_count"], count("uncertain") + count("reconciling"))),
+    reconciling: adminStrategyCloseCounter(root, ["reconciling", "reconciling_positions", "reconciling_count"], adminStrategyCloseCounter(counters, ["reconciling", "reconciling_positions", "reconciling_count"], count("reconciling"))),
+  };
+}
+
+function adminStrategyCloseStatus(job = {}) {
+  const root = adminStrategyCloseJobRoot(job);
+  return String(adminStrategyCloseValue(root, ["status", "phase", "job_status", "jobStatus", "close_status", "closeStatus"]) || "queued").trim().toLowerCase();
+}
+
+function adminStrategyCloseStatusLabel(value) {
+  return ADMIN_STRATEGY_CLOSE_STATUS_LABELS[String(value || "").toLowerCase()] || "处理中";
+}
+
+function adminStrategyCloseOrderedTargets(targets = []) {
+  return [...targets].sort((left, right) => Number(adminStrategyCloseTargetIsSource(left)) - Number(adminStrategyCloseTargetIsSource(right)));
+}
+
+function stopAdminStrategyClosePolling() {
+  if (state.adminStrategyClosePollTimer) clearTimeout(state.adminStrategyClosePollTimer);
+  state.adminStrategyClosePollTimer = null;
+  state.adminStrategyClosePollGeneration += 1;
+}
+
+function resetAdminStrategyCloseState() {
+  stopAdminStrategyClosePolling();
+  state.adminStrategyClosePreview = null;
+  state.adminStrategyClosePreviewTicket = null;
+  state.adminStrategyClosePreviewRequestVersion += 1;
+  state.adminStrategyCloseJob = null;
+  state.adminStrategyCloseSubmitting = false;
+  const section = $("adminStrategyCloseSection");
+  section?.classList.add("hidden");
+  $("adminStrategyCloseProgressStage")?.classList.add("hidden");
+  $("adminStrategyCloseError")?.classList.add("hidden");
+  $("adminStrategyCloseProgressError")?.replaceChildren();
+  const reason = $("adminStrategyCloseReason");
+  if (reason) {
+    reason.value = "";
+    reason.setAttribute("aria-invalid", "false");
+  }
+  const confirm = $("adminStrategyCloseConfirm");
+  if (confirm) confirm.checked = false;
+  const count = $("adminStrategyCloseReasonCount");
+  if (count) count.textContent = "0";
+  const reasonError = $("adminStrategyCloseReasonError");
+  if (reasonError) {
+    reasonError.textContent = "";
+    reasonError.classList.add("hidden");
+  }
+  const submit = $("adminStrategyCloseSubmit");
+  if (submit) {
+    submit.disabled = true;
+    submit.setAttribute("aria-busy", "false");
+  }
+  const previewImpact = $("adminStrategyClosePreviewImpact");
+  if (previewImpact) previewImpact.innerHTML = '<div class="workspace-skeleton"></div>';
+  const retry = $("adminStrategyCloseRetry");
+  if (retry) retry.classList.add("hidden");
+  const refresh = $("adminStrategyCloseRefresh");
+  if (refresh) refresh.lastChild && (refresh.lastChild.textContent = "重新获取平仓预览");
+}
+
+function setAdminStrategyCloseFieldError(message = "") {
+  const input = $("adminStrategyCloseReason");
+  const error = $("adminStrategyCloseReasonError");
+  input?.setAttribute("aria-invalid", message ? "true" : "false");
+  if (!error) return;
+  error.textContent = message;
+  error.classList.toggle("hidden", !message);
+}
+
+function renderAdminStrategyCloseFormState({ showErrors = false } = {}) {
+  const preview = state.adminStrategyClosePreview;
+  const reason = $("adminStrategyCloseReason")?.value.trim() || "";
+  const confirmed = Boolean($("adminStrategyCloseConfirm")?.checked);
+  const hash = adminStrategyClosePreviewHash(preview || {});
+  const reasonError = !reason ? "请填写完整平仓原因" : reason.length < 2 ? "请至少填写 2 个字" : reason.length > 500 ? "原因不能超过 500 个字" : "";
+  if ($("adminStrategyCloseReasonCount")) $("adminStrategyCloseReasonCount").textContent = String(reason.length);
+  if (showErrors || !reasonError) setAdminStrategyCloseFieldError(showErrors ? reasonError : "");
+  const valid = Boolean(preview && adminStrategyCloseEligible(preview) && hash && !reasonError && confirmed);
+  const submit = $("adminStrategyCloseSubmit");
+  if (submit) submit.disabled = !valid || state.adminStrategyCloseSubmitting;
+  return { valid, reason, confirmed, hash, reasonError };
+}
+
+function renderAdminStrategyClosePreview(preview, loading = false) {
+  const section = $("adminStrategyCloseSection");
+  const impact = $("adminStrategyClosePreviewImpact");
+  const submit = $("adminStrategyCloseSubmit");
+  if (loading || !preview || !adminStrategyCloseEligible(preview)) {
+    section?.classList.add("hidden");
+    if (submit) submit.disabled = true;
+    if (impact && loading) impact.innerHTML = '<div class="workspace-skeleton"></div>';
+    return false;
+  }
+  const root = adminStrategyCloseRoot(preview);
+  const counters = adminStrategyCloseCounters(root);
+  const exclusions = Array.isArray(root.exclusions) ? root.exclusions : (Array.isArray(root.excluded_targets) ? root.excluded_targets : (Array.isArray(root.excluded) ? root.excluded : []));
+  const sourceTicket = adminStrategyCloseValue(root, ["source_ticket", "source_position_ticket", "ticket"]) || $("positionProtectionTicket")?.value || "--";
+  const sourceAccount = root.source_account && typeof root.source_account === "object" ? root.source_account : {};
+  const sourceLogin = adminStrategyCloseValue(root, ["source_login", "source_account_login", "login_account"]) || sourceAccount.login || sourceAccount.account || "管理员源账户";
+  const previewHash = adminStrategyClosePreviewHash(root);
+  if (section) section.classList.remove("hidden");
+  if (impact) impact.innerHTML = `
+    <div><span>订阅用户（先关）</span><strong>${counters.subscriberUsers} 个用户 · ${counters.affectedPositions} 笔持仓</strong></div>
+    <div><span>管理员源仓（最后）</span><strong class="num">#${escapeHtml(sourceTicket)} · ${escapeHtml(sourceLogin)}</strong></div>
+    <div><span>安全排除</span><strong>${counters.excluded} 项</strong></div>
+    <div><span>预览状态</span><strong>${previewHash ? "哈希已锁定" : "等待后端确认"}</strong></div>
+    ${exclusions.length ? `<div class="admin-strategy-close-exclusions"><span>排除原因</span><ul>${exclusions.slice(0, 8).map(item => `<li>${escapeHtml(item?.user_label || item?.user_name || (item?.ticket ? `持仓 #${item.ticket}` : "目标持仓"))}：${escapeHtml(adminStrategyCloseTargetReason(item) || "未满足安全条件")}</li>`).join("")}</ul></div>` : ""}`;
+  renderAdminStrategyCloseFormState();
+  initIcons();
+  return true;
+}
+
+async function loadAdminStrategyClosePreview(ticket) {
+  const ticketValue = String(ticket || "").trim();
+  if (!ticketValue || state.user?.role !== "admin") return null;
+  resetAdminStrategyCloseState();
+  state.adminStrategyClosePreviewTicket = ticketValue;
+  const requestVersion = state.adminStrategyClosePreviewRequestVersion;
+  renderAdminStrategyClosePreview(null, true);
+  try {
+    const preview = await fetchAdminStrategyClosePreview(ticketValue);
+    if (requestVersion !== state.adminStrategyClosePreviewRequestVersion
+      || String($("positionProtectionTicket")?.value || "") !== ticketValue
+      || $("positionProtectionModal")?.classList.contains("hidden")) return null;
+    state.adminStrategyClosePreview = preview;
+    renderAdminStrategyClosePreview(preview);
+    return preview;
+  } catch (error) {
+    if (String($("positionProtectionTicket")?.value || "") === ticketValue) {
+      state.adminStrategyClosePreview = null;
+      renderAdminStrategyClosePreview(null);
+    }
+    return null;
+  }
+}
+
+async function fetchAdminStrategyClosePreview(ticket) {
+  const ticketValue = String(ticket || "").trim();
+  if (!ticketValue) throw new Error("缺少源仓票号");
+  const data = await api(`/api/admin/ai/positions/${encodeURIComponent(ticketValue)}/close-preview`, { timeout:20000 });
+  return adminStrategyCloseRoot(data);
+}
+
+function renderAdminStrategyCloseJob(job) {
+  if (!job) return;
+  const previous = state.adminStrategyCloseJob;
+  const next = adminStrategyCloseJobRoot(job);
+  const sameJob = adminStrategyCloseJobId(previous) && adminStrategyCloseJobId(previous) === adminStrategyCloseJobId(next);
+  const merged = {
+    ...(sameJob ? previous : {}),
+    ...next,
+  };
+  const targets = adminStrategyCloseJobTargets(merged);
+  if (targets.length) merged.targets = targets;
+  state.adminStrategyCloseJob = merged;
+  const status = adminStrategyCloseStatus(merged);
+  const terminal = ADMIN_STRATEGY_CLOSE_TERMINAL_STATES.has(status);
+  const counters = adminStrategyCloseCounters(merged);
+  const progress = adminStrategyCloseCounter(merged, ["progress_percent", "progressPercent", "progress", "percent"], 0);
+  const progressStage = $("adminStrategyCloseProgressStage");
+  progressStage?.classList.remove("hidden");
+  $("adminStrategyCloseSubmit")?.classList.add("hidden");
+  const refresh = $("adminStrategyCloseRefresh");
+  if (refresh?.lastChild) refresh.lastChild.textContent = terminal ? "重新获取平仓预览" : "刷新平仓进度";
+  const summary = $("adminStrategyCloseProgressSummary");
+  if (summary) summary.innerHTML = `<span><small>成功</small><strong>${counters.succeeded}</strong></span><span><small>失败</small><strong>${counters.failed}</strong></span><span><small>跳过</small><strong>${counters.skipped}</strong></span><span><small>待确认 / 对账中</small><strong>${counters.uncertain} / ${counters.reconciling}</strong></span>`;
+  const title = $("adminStrategyCloseProgressTitle");
+  if (title) title.textContent = adminStrategyCloseStatusLabel(status);
+  const text = $("adminStrategyCloseProgressText");
+  if (text) text.textContent = `${Math.max(0, Math.min(100, progress))}% · 订阅用户先关，管理员源仓最后${["uncertain", "reconciling"].includes(status) ? " · Bridge ACK 待对账" : ""}`;
+  const resultBody = $("adminStrategyCloseResultBody");
+  const ordered = adminStrategyCloseOrderedTargets(targets);
+  if (resultBody) resultBody.innerHTML = ordered.length ? ordered.map(target => {
+    const targetStatus = adminStrategyCloseTargetStatus(target);
+    const label = adminStrategyCloseTargetIsSource(target) ? "管理员源仓" : (target.user_label || target.user_name || (target.user_id ? `用户 ${target.user_id}` : "订阅用户"));
+    const ticket = adminStrategyCloseValue(target, ["ticket", "position_ticket", "source_ticket"]) || "--";
+    const reason = adminStrategyCloseTargetReason(target);
+    const tone = targetStatus === "succeeded" ? "success" : targetStatus === "failed" ? "danger" : ["uncertain", "reconciling"].includes(targetStatus) ? "warning" : targetStatus === "skipped" ? "warning" : "info";
+    return `<tr><td>${adminStrategyCloseTargetIsSource(target) ? '<span class="status-chip info">最后</span>' : '<span class="status-chip info">先关</span>'}${escapeHtml(label)}</td><td class="num">#${escapeHtml(ticket)}</td><td><span class="position-protection-target-status ${escapeHtml(targetStatus)} ${tone}">${adminStrategyCloseTargetStatusLabel(targetStatus)}</span></td><td>${escapeHtml(reason || (targetStatus === "uncertain" || targetStatus === "reconciling" ? "Bridge ACK 待对账" : "--"))}</td></tr>`;
+  }).join("") : '<tr class="empty-row"><td colspan="4">正在准备执行目标…</td></tr>';
+  const retryable = ordered.some(target => adminStrategyCloseTargetStatus(target) === "failed");
+  const retry = $("adminStrategyCloseRetry");
+  if (retry) retry.classList.toggle("hidden", !(terminal && retryable));
+  if (terminal) {
+    stopAdminStrategyClosePolling();
+    if (status === "completed") loadPositions().catch(() => {});
+  } else startAdminStrategyClosePolling(adminStrategyCloseJobId(merged));
+  initIcons();
+}
+
+function adminStrategyCloseJobId(job = {}) {
+  const root = adminStrategyCloseJobRoot(job);
+  return adminStrategyCloseValue(root, ["id", "job_id", "close_job_id", "position_close_job_id", "operation_id"]);
+}
+
+function startAdminStrategyClosePolling(jobId) {
+  stopAdminStrategyClosePolling();
+  if (!jobId || ADMIN_STRATEGY_CLOSE_TERMINAL_STATES.has(adminStrategyCloseStatus(state.adminStrategyCloseJob))) return;
+  const generation = state.adminStrategyClosePollGeneration;
+  state.adminStrategyClosePollTimer = setTimeout(async () => {
+    if (generation !== state.adminStrategyClosePollGeneration) return;
+    if ($("positionProtectionModal")?.classList.contains("hidden")) {
+      stopAdminStrategyClosePolling();
+      return;
+    }
+    try { await loadAdminStrategyCloseJob(jobId); } catch {}
+    if (generation === state.adminStrategyClosePollGeneration && !ADMIN_STRATEGY_CLOSE_TERMINAL_STATES.has(adminStrategyCloseStatus(state.adminStrategyCloseJob))) startAdminStrategyClosePolling(jobId);
+  }, 2000);
+}
+
+async function loadAdminStrategyCloseJob(jobId) {
+  const data = await api(`/api/admin/ai/position-close-jobs/${encodeURIComponent(jobId)}`);
+  const job = adminStrategyCloseJobRoot(data);
+  renderAdminStrategyCloseJob(job);
+  return job;
+}
+
+async function submitAdminStrategyCloseJob() {
+  const preview = state.adminStrategyClosePreview;
+  const formState = renderAdminStrategyCloseFormState({ showErrors:true });
+  if (!preview || !formState.valid || state.adminStrategyCloseSubmitting) return;
+  const confirmed = await showConfirm(
+    "确认完整平仓",
+    "这是管理员策略指令关联持仓的完整平仓，操作不可撤销；订阅用户会先关，管理员源仓最后，Bridge ACK 仍需对账。",
+    { confirmText:"确认完整平仓", cancelText:"返回检查", danger:true, requireText:"确认平仓", requireTextLabel:"输入以下文字以完成二次危险确认", requireTextHint:"仅输入“确认平仓”后才能继续" },
+  );
+  if (!confirmed) return;
+  const submit = $("adminStrategyCloseSubmit");
+  const errorHost = $("adminStrategyCloseError");
+  state.adminStrategyCloseSubmitting = true;
+  if (errorHost) errorHost.classList.add("hidden");
+  if (submit) {
+    submit.disabled = true;
+    submit.setAttribute("aria-busy", "true");
+  }
+  try {
+    const sourceTicket = String($("positionProtectionTicket")?.value || "").trim();
+    const data = await api("/api/admin/ai/position-close-jobs", {
+      method:"POST",
+      timeout:30000,
+      body:{
+        source_ticket:sourceTicket,
+        preview_hash:formState.hash,
+        reason:formState.reason,
+        idempotency_key:globalThis.crypto?.randomUUID?.() || `admin-strategy-close-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      },
+    });
+    renderAdminStrategyCloseJob(adminStrategyCloseJobRoot(data));
+  } catch (error) {
+    if (errorHost) {
+      errorHost.textContent = error.message || "完整平仓任务创建失败";
+      errorHost.classList.remove("hidden");
+    }
+  } finally {
+    state.adminStrategyCloseSubmitting = false;
+    submit?.setAttribute("aria-busy", "false");
+    renderAdminStrategyCloseFormState();
+  }
+}
+
+async function retryAdminStrategyCloseJob() {
+  const job = state.adminStrategyCloseJob;
+  const jobId = adminStrategyCloseJobId(job);
+  const retry = $("adminStrategyCloseRetry");
+  if (!jobId || !retry) return;
+  retry.disabled = true;
+  try {
+    const sourceTicket = String($("positionProtectionTicket")?.value || job.source_ticket || "").trim();
+    const freshPreview = await fetchAdminStrategyClosePreview(sourceTicket);
+    if (!adminStrategyCloseEligible(freshPreview)) throw new Error("关联策略指令归因已变化，请重新打开持仓预览");
+    state.adminStrategyClosePreview = freshPreview;
+    renderAdminStrategyClosePreview(freshPreview);
+    const previewHash = adminStrategyClosePreviewHash(freshPreview);
+    if (!previewHash) throw new Error("平仓预览哈希缺失，请重新获取预览");
+    const data = await api(`/api/admin/ai/position-close-jobs/${encodeURIComponent(jobId)}/retry-failed`, {
+      method:"POST",
+      body:{ preview_hash:previewHash },
+    });
+    renderAdminStrategyCloseJob(adminStrategyCloseJobRoot(data));
+  } catch (error) {
+    const errorHost = $("adminStrategyCloseProgressError");
+    if (errorHost) errorHost.textContent = error.message || "失败目标重试失败";
+  } finally {
+    retry.disabled = false;
+  }
+}
+
+function closePositionProtectionModal() {
+  stopPositionProtectionPolling();
+  resetAdminStrategyCloseState();
+  closeFormModal($("positionProtectionModal"));
+}
 
 function positionProtectionErrorLabel(code, fallback = "") {
   const labels = {
@@ -9305,6 +10234,7 @@ function renderPositionProtectionPreview(preview, loading = false) {
     if (summary) summary.innerHTML = '<div class="workspace-skeleton"></div>';
     if (impact) impact.innerHTML = '<div class="workspace-skeleton"></div>';
     if (submit) submit.disabled = true;
+    renderAdminStrategyClosePreview(null, true);
     return;
   }
   if (!preview) return;
@@ -9348,6 +10278,10 @@ async function loadPositionProtectionPreview(ticket, syncScope = "source_only") 
   const data = await api(`/api/admin/ai/positions/${encodeURIComponent(ticket)}/protection-preview?sync_scope=${encodeURIComponent(syncScope)}`, { timeout:20000 });
   state.positionProtectionPreview = data.preview;
   renderPositionProtectionPreview(data.preview);
+  // The linked full-close preview is deliberately independent from the
+  // ordinary protection-price flow. A missing/denied close preview must not
+  // block editing SL/TP for a normal source-only or AI signal position.
+  loadAdminStrategyClosePreview(ticket).catch(() => {});
   return data.preview;
 }
 
@@ -9362,6 +10296,7 @@ async function openPositionProtectionModal(ticket) {
   }
   state.positionProtectionPreview = null;
   state.positionProtectionJob = null;
+  resetAdminStrategyCloseState();
   stopPositionProtectionPolling();
   $("positionProtectionTicket").value = String(ticket);
   $("positionProtectionStopLoss").value = Number(position.sl) ? String(position.sl) : "";
@@ -9629,6 +10564,7 @@ function applyRoleUI() {
     const platformPersonalControl = el.classList.contains('personal-memory-only');
     el.style.display = isAdmin || (platformManager && platformPersonalControl) ? 'none' : '';
   });
+  renderAdminStrategyDispatchControls();
   setText("memoryTabLabel", "策略记忆库");
   setText("memoryActiveLabel", "当前记忆版本");
   setText("memoryActiveHelp", "完整传入分析与复盘");
@@ -10791,6 +11727,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   setText("signalFreshness", signalFreshness(signal));
   const confidence = confidenceInfo(signal.confidence);
   const dir = signalType(signal.signal_type);
+  const signalSourceLabel = strategyDispatchSignalSourceLabel(signal);
   const decision = signalDecision(signal);
   const advice = signalExecutionAdvice(signal);
   let executionPayload = signal.execution_result || {};
@@ -10854,6 +11791,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
         <span class="analysis-symbol">${escapeHtml(signal.symbol)}</span>
         <span class="signal-tf-badge" title="${escapeHtml(timeframeHelp(signal.timeframe))}">${escapeHtml(signal.timeframe)}</span>
         <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
+        ${signalSourceLabel ? `<span class="signal-source-badge admin-strategy-dispatch-source">${escapeHtml(signalSourceLabel)}</span>` : ""}
       </div>
         <span class="analysis-time num">#${escapeHtml(signal.id)} · ${escapeHtml(signalDisplayTime(signal))}</span>
     </div>
@@ -11932,10 +12870,11 @@ function buildHistoryItemHTML(signal) {
   const dir = signalType(signal.signal_type);
   const confidence = confidenceInfo(signal.confidence).label;
   const status = signalStatusLabel(signal);
+  const sourceLabel = strategyDispatchSignalSourceLabel(signal);
   return `
       <button class="analysis-history-item" data-analysis-id="${escapeHtml(signal.id)}">
         <span class="history-item-top">
-          <span class="history-item-symbol">${escapeHtml(signal.symbol)} · ${escapeHtml(signal.timeframe)}</span>
+          <span class="history-item-symbol">${escapeHtml(signal.symbol)} · ${escapeHtml(signal.timeframe)}${sourceLabel ? ` · <em class="history-source-label admin-strategy-dispatch-source">${escapeHtml(sourceLabel)}</em>` : ""}</span>
           <span class="history-item-dir ${dir}">${directionText(signal.signal_type)}</span>
         </span>
         <span class="history-item-meta">
@@ -12135,12 +13074,13 @@ function renderSignalRows() {
   body.innerHTML = rows.length ? rows.map((signal) => {
     const dir = signalType(signal.signal_type);
     const confidence = confidenceInfo(signal.confidence);
+    const sourceLabel = strategyDispatchSignalSourceLabel(signal);
     const rowStatus = signal.is_executed ? "executed" : signal.is_stale ? "expired" : "live";
     return `
       <tr data-analysis-id="${escapeHtml(signal.id)}">
         <td class="num">${escapeHtml(signal.id)}</td>
         <td>${compactTerminalTimeHtml(signal)}</td>
-        <td>${escapeHtml(signal.symbol)}</td>
+        <td>${escapeHtml(signal.symbol)}${sourceLabel ? `<small class="signal-source-label admin-strategy-dispatch-source">${escapeHtml(sourceLabel)}</small>` : ""}</td>
         <td><span class="signal-tf-badge ${dir === 'close' ? 'close-badge' : ''}">${dir === 'close' ? '持仓分析' : escapeHtml(signal.timeframe)}</span></td>
         <td><span class="tag ${dir}">${directionText(signal.signal_type)}</span></td>
         <td>
@@ -14195,8 +15135,24 @@ function bindEvents() {
   }));
   $("runAnalysisBtn").addEventListener("click", runAnalysis);
   $("executeSignalBtn").addEventListener("click", executeSignal);
-  $("buyBtn").addEventListener("click", () => openManual("buy"));
-  $("sellBtn").addEventListener("click", () => openManual("sell"));
+  $("buyBtn").addEventListener("click", () => adminStrategyDispatchModeEnabled() ? openAdminStrategyDispatch("buy") : openManual("buy"));
+  $("sellBtn").addEventListener("click", () => adminStrategyDispatchModeEnabled() ? openAdminStrategyDispatch("sell") : openManual("sell"));
+  $("adminStrategyDispatchEnabled")?.addEventListener("change", event => {
+    if (!isAdminStrategyDispatchUser() || !state.adminStrategyDispatchCapabilities?.enabled) {
+      event.target.checked = false;
+      return renderAdminStrategyDispatchControls();
+    }
+    if (event.target.checked) state.selectedOrderType = "market";
+    renderAdminStrategyDispatchControls();
+  });
+  $("adminStrategyDispatchRefresh")?.addEventListener("click", () => refreshAdminStrategyDispatch().catch(error => toast(error.message, "error")));
+  $("adminStrategyDispatchRetry")?.addEventListener("click", () => retryAdminStrategyDispatch().catch(error => toast(error.message, "error")));
+  $("adminStrategyDispatchModalClose")?.addEventListener("click", closeAdminStrategyDispatchModal);
+  $("adminStrategyDispatchModalCancel")?.addEventListener("click", closeAdminStrategyDispatchModal);
+  $("adminStrategyDispatchModalConfirm")?.addEventListener("click", createAdminStrategyDispatch);
+  $("adminStrategyDispatchModal")?.addEventListener("click", event => {
+    if (event.target === $("adminStrategyDispatchModal")) closeAdminStrategyDispatchModal();
+  });
   $("orderConfirmCancel")?.addEventListener("click", closeManualOrderModal);
   $("orderConfirmClose")?.addEventListener("click", closeManualOrderModal);
   $("orderConfirmSubmit")?.addEventListener("click", submitManualOrder);
@@ -14326,16 +15282,22 @@ function bindEvents() {
   $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(localizeReason(error.message), "error")));
   $("savePlatformPolicyBtn")?.addEventListener("click", () => savePlatformPolicy().catch(error => toast(error.message, "error")));
   $("saveUserFeatureFlagsBtn")?.addEventListener("click", () => saveUserFeatureFlags().catch(error => toast(error.message, "error")));
-  $("positionProtectionClose")?.addEventListener("click", () => {
-    stopPositionProtectionPolling();
-    closeFormModal($("positionProtectionModal"));
-  });
-  $("positionProtectionCancel")?.addEventListener("click", () => {
-    stopPositionProtectionPolling();
-    closeFormModal($("positionProtectionModal"));
-  });
+  $("positionProtectionClose")?.addEventListener("click", closePositionProtectionModal);
+  $("positionProtectionCancel")?.addEventListener("click", closePositionProtectionModal);
   $("positionProtectionSubmit")?.addEventListener("click", submitPositionProtectionJob);
   $("positionProtectionRetry")?.addEventListener("click", retryPositionProtectionJob);
+  $("adminStrategyCloseSubmit")?.addEventListener("click", submitAdminStrategyCloseJob);
+  $("adminStrategyCloseRetry")?.addEventListener("click", retryAdminStrategyCloseJob);
+  $("adminStrategyCloseRefresh")?.addEventListener("click", () => {
+    const ticket = $("positionProtectionTicket")?.value;
+    const jobId = adminStrategyCloseJobId(state.adminStrategyCloseJob || {});
+    if (jobId && !ADMIN_STRATEGY_CLOSE_TERMINAL_STATES.has(adminStrategyCloseStatus(state.adminStrategyCloseJob))) {
+      loadAdminStrategyCloseJob(jobId).catch(() => {});
+    } else if (ticket) loadAdminStrategyClosePreview(ticket).catch(() => {});
+  });
+  $("adminStrategyCloseReason")?.addEventListener("input", () => renderAdminStrategyCloseFormState());
+  $("adminStrategyCloseReason")?.addEventListener("blur", () => renderAdminStrategyCloseFormState({ showErrors:true }));
+  $("adminStrategyCloseConfirm")?.addEventListener("change", () => renderAdminStrategyCloseFormState());
   ["positionProtectionStopLoss", "positionProtectionTakeProfit", "positionProtectionReason"].forEach(id => {
     $(id)?.addEventListener("input", () => renderPositionProtectionChangeState());
     $(id)?.addEventListener("blur", () => renderPositionProtectionChangeState({ showErrors:true }));
@@ -14363,7 +15325,8 @@ function bindEvents() {
     modal.addEventListener("click", event => {
       if (event.target !== modal) return;
       if (modal.dataset.closePolicy === "explicit") return;
-      closeFormModal(modal);
+      if (modal.id === "positionProtectionModal") closePositionProtectionModal();
+      else closeFormModal(modal);
     });
   });
   document.querySelectorAll("[data-review-filter]").forEach(button => button.addEventListener("click", () => {

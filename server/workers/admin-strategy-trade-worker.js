@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
+import { beijingAfter, beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
 import { executeOrderCore } from '../routes/ai/config.js'
 import { mt5Bridge } from '../routes/ai/market-data.js'
 import { isSubscriptionScheduleActive } from '../routes/ai/subscription-schedule.js'
@@ -45,7 +45,7 @@ async function loadDispatch(dispatchId) {
 
 async function claimTarget(targetId, dispatchId, expectedStatuses = ['pending']) {
   const token = crypto.randomUUID(); const now = beijingNow()
-  const leaseUntil = new Date(Date.now() + 120_000).toISOString().replace('T', ' ').substring(0, 19)
+  const leaseUntil = beijingAfter(120_000)
   return withTransaction(async run => {
     const [rows] = await run('SELECT * FROM admin_strategy_trade_targets WHERE id = ? AND dispatch_id = ? FOR UPDATE', [targetId, dispatchId])
     const target = rows?.[0]

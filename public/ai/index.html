@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260814ema34toggle1" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260814ema34toggle1">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260814ema34toggle1">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -691,6 +691,44 @@
                     </label>
                     <div id="positionProtectionImpact" class="position-protection-impact"><div class="workspace-skeleton"></div></div>
                   </section>
+                  <section id="adminStrategyCloseSection" class="position-protection-section admin-strategy-close-section hidden" aria-labelledby="adminStrategyCloseTitle">
+                    <div class="admin-strategy-close-head">
+                      <div>
+                        <span class="admin-strategy-close-danger">危险操作</span>
+                        <h3 id="adminStrategyCloseTitle">平仓本次策略指令关联持仓</h3>
+                      </div>
+                      <span id="adminStrategyCloseAttributionBadge" class="admin-strategy-close-badge">仅管理员策略指令</span>
+                    </div>
+                    <p id="adminStrategyCloseDescription" class="admin-strategy-close-description">完整平仓不可撤销。订阅用户先关，管理员源仓最后；Bridge ACK 待对账。</p>
+                    <div id="adminStrategyClosePreviewImpact" class="admin-strategy-close-preview-impact" aria-live="polite"><div class="workspace-skeleton"></div></div>
+                    <p id="adminStrategyClosePreviewNote" class="admin-strategy-close-preview-note">仅当后端确认该 Magic 234000 源仓可唯一归因到“管理员策略指令”时显示。</p>
+                    <label class="admin-strategy-close-reason" for="adminStrategyCloseReason">
+                      <span>完整平仓原因 <b id="adminStrategyCloseReasonCount" class="num">0</b> / 500</span>
+                      <textarea id="adminStrategyCloseReason" maxlength="500" rows="3" placeholder="请说明为什么要撤销本次管理员策略指令关联持仓" aria-describedby="adminStrategyCloseReasonHelp adminStrategyCloseReasonError"></textarea>
+                      <small id="adminStrategyCloseReasonHelp">必填，2–500 字；该操作会写入管理员审计日志。</small>
+                      <small id="adminStrategyCloseReasonError" class="position-protection-field-error hidden" role="alert"></small>
+                    </label>
+                    <label class="admin-strategy-close-confirm" for="adminStrategyCloseConfirm">
+                      <input id="adminStrategyCloseConfirm" type="checkbox" aria-describedby="adminStrategyCloseConfirmHelp">
+                      <span><strong>我确认完整平仓不可撤销</strong><small id="adminStrategyCloseConfirmHelp">仅会按预览中的订阅目标执行，成功目标不会在重试时再次平仓。</small></span>
+                    </label>
+                    <div id="adminStrategyCloseError" class="position-protection-error hidden" role="alert"></div>
+                    <div class="admin-strategy-close-actions">
+                      <button id="adminStrategyCloseRefresh" class="btn btn-secondary btn-sm" type="button"><i data-lucide="refresh-cw" size="14"></i>重新获取平仓预览</button>
+                      <button id="adminStrategyCloseSubmit" class="btn btn-danger" type="button" disabled><i data-lucide="triangle-alert" size="16"></i>平仓本次策略指令关联持仓</button>
+                    </div>
+                    <div id="adminStrategyCloseProgressStage" class="admin-strategy-close-progress hidden" aria-live="polite">
+                      <div class="admin-strategy-close-progress-head"><div><span class="section-kicker">管理员策略指令 · 平仓进度</span><h4 id="adminStrategyCloseProgressTitle">等待执行</h4><p id="adminStrategyCloseProgressText">正在准备目标</p></div><span class="admin-strategy-close-order-note">订阅用户先关 · 管理员源仓最后</span></div>
+                      <div id="adminStrategyCloseProgressSummary" class="admin-strategy-close-progress-summary"></div>
+                      <div class="table-wrap admin-strategy-close-results">
+                        <table class="data-table">
+                          <thead><tr><th>目标</th><th>持仓</th><th>结果</th><th>说明</th></tr></thead>
+                          <tbody id="adminStrategyCloseResultBody"><tr class="empty-row"><td colspan="4">正在准备执行目标…</td></tr></tbody>
+                        </table>
+                      </div>
+                      <div class="admin-strategy-close-progress-actions"><button id="adminStrategyCloseRetry" class="btn btn-secondary btn-sm hidden" type="button"><i data-lucide="rotate-cw" size="14"></i>仅重试失败目标</button><span id="adminStrategyCloseProgressError" class="form-error" role="alert"></span></div>
+                    </div>
+                  </section>
                   <section class="position-protection-section" aria-labelledby="positionProtectionReasonTitle">
                     <div class="position-protection-section-head"><div><span class="position-protection-step">04</span><h3 id="positionProtectionReasonTitle">记录变更原因</h3></div><span><b id="positionProtectionReasonCount" class="num">0</b> / 500</span></div>
                     <label class="position-protection-reason" for="positionProtectionReason"><span class="sr-only">变更原因</span><textarea id="positionProtectionReason" maxlength="500" rows="3" placeholder="例如：价格结构失效，上移止损保护已有利润" aria-describedby="positionProtectionReasonHelp positionProtectionReasonError"></textarea><small id="positionProtectionReasonHelp">必填，至少 2 个字；保存后会写入管理员审计日志。</small><small id="positionProtectionReasonError" class="position-protection-field-error hidden" role="alert"></small></label>
@@ -791,6 +829,24 @@
           </div>
           <div class="trading-grid">
             <div class="card observer-action-panel workspace-subpanel trading-manual-panel" data-workspace-panel="trading" data-workspace-view="manual" hidden>
+              <section id="adminStrategyDispatchPanel" class="admin-strategy-dispatch-panel admin-only" hidden aria-labelledby="adminStrategyDispatchTitle">
+                <div class="admin-strategy-dispatch-head">
+                  <label class="admin-strategy-dispatch-toggle" for="adminStrategyDispatchEnabled">
+                    <input id="adminStrategyDispatchEnabled" type="checkbox" aria-controls="adminStrategyDispatchFields" />
+                    <span id="adminStrategyDispatchTitle">按平台策略分发</span>
+                  </label>
+                  <span class="status-chip warning">管理员策略指令</span>
+                </div>
+                <p class="admin-strategy-dispatch-note">仅管理员可直接发布策略指令，不是 AI 模型结论。关闭时按原有手动下单流程处理。</p>
+                <div id="adminStrategyDispatchFields" class="admin-strategy-dispatch-fields" hidden>
+                  <label><span>平台策略</span><select id="adminStrategyDispatchStrategy" aria-describedby="adminStrategyDispatchStrategyHelp"><option value="">正在加载平台策略</option></select><small id="adminStrategyDispatchStrategyHelp" class="field-help">只显示有效的平台策略，不会混入用户私有策略。</small></label>
+                  <div class="two-fields">
+                    <label><span>仓位档位</span><select id="adminStrategyDispatchTier"><option value="probe">试探仓</option><option value="light">轻仓</option><option value="standard">标准仓</option></select></label>
+                    <label><span>有效期（分钟）</span><input id="adminStrategyDispatchValidMinutes" class="num" type="number" min="1" max="1440" value="60" /><small class="field-help">分发指令有效期，到期后未处理目标不再重试</small></label>
+                  </div>
+                  <label><span>中文原因</span><textarea id="adminStrategyDispatchReason" rows="2" maxlength="500" required placeholder="请说明本次分发指令的中文原因"></textarea><small class="field-help">2–500 字，供审计与后续查看。</small></label>
+                </div>
+              </section>
               <div class="card-header">
                 <span class="card-title">手动交易</span>
                 <button class="card-action-btn" data-action="refresh-quote"><i data-lucide="refresh-cw" size="12"></i>报价</button>
@@ -801,7 +857,8 @@
                 <div><span>点差</span><strong id="tradeSpread" class="num">--</strong></div>
                 <div><span>买入成交参考</span><strong id="tradeAskPrice" class="num">--</strong></div>
               </div>
-              <label><span>交易手数</span><span class="unit-field"><input id="tradeVolume" class="num" type="number" value="0.01" min="0.001" step="0.001" /><span class="input-unit">手</span></span></label>
+              <label><span id="tradeVolumeLabel">交易手数</span><span class="unit-field"><input id="tradeVolume" class="num" type="number" value="0.01" min="0.001" step="0.001" /><span class="input-unit">手</span></span></label>
+              <small id="tradeVolumeDispatchHelp" class="field-help admin-strategy-dispatch-volume-help" hidden>分发模式按仓位档位和各账户风控独立计算手数。</small>
               <div class="order-type-row">
                 <span class="order-type-label">订单类型</span>
                 <div class="order-type-btns">
@@ -827,6 +884,12 @@
                 <button id="buyBtn" class="btn btn-buy"><span><i data-lucide="arrow-up-right" size="16"></i>买入</span><strong id="buyBtnPrice" class="order-btn-price num">--</strong></button>
                 <button id="sellBtn" class="btn btn-sell"><span><i data-lucide="arrow-down-right" size="16"></i>卖出</span><strong id="sellBtnPrice" class="order-btn-price num">--</strong></button>
               </div>
+              <section id="adminStrategyDispatchProgress" class="admin-strategy-dispatch-progress" hidden aria-labelledby="adminStrategyDispatchProgressTitle" aria-live="polite">
+                <div class="admin-strategy-dispatch-progress-head"><div><span class="section-kicker">管理员策略指令</span><strong id="adminStrategyDispatchProgressTitle">分发进度</strong></div><button id="adminStrategyDispatchRefresh" class="btn btn-ghost btn-sm" type="button"><i data-lucide="refresh-cw" size="14"></i>刷新</button></div>
+                <div id="adminStrategyDispatchProgressSummary" class="admin-strategy-dispatch-progress-summary"></div>
+                <div id="adminStrategyDispatchProgressTargets" class="admin-strategy-dispatch-targets"></div>
+                <div class="admin-strategy-dispatch-progress-actions"><button id="adminStrategyDispatchRetry" class="btn btn-secondary btn-sm" type="button" hidden>重试失败目标</button><span id="adminStrategyDispatchProgressError" class="form-error" role="alert"></span></div>
+              </section>
             </div>
             <div class="card workspace-subpanel active" data-workspace-panel="trading" data-workspace-view="orders">
               <div class="card-header">
@@ -1282,6 +1345,20 @@
       </div>
     </div>
 
+    <div id="adminStrategyDispatchModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="adminStrategyDispatchModalTitle">
+      <div class="order-confirm-dialog admin-strategy-dispatch-dialog">
+        <div class="order-confirm-head">
+          <div><strong id="adminStrategyDispatchModalTitle">管理员策略指令 · 预览</strong><small>这是管理员发布的策略指令，不是 AI 模型结论。</small></div>
+          <button id="adminStrategyDispatchModalClose" class="icon-btn" type="button" aria-label="关闭"><i data-lucide="x" size="16"></i></button>
+        </div>
+        <div id="adminStrategyDispatchPreviewBody" class="order-confirm-body admin-strategy-dispatch-preview-body"></div>
+        <div class="order-confirm-actions">
+          <button id="adminStrategyDispatchModalCancel" class="btn" type="button">取消</button>
+          <button id="adminStrategyDispatchModalConfirm" class="btn btn-primary" type="button">确认创建分发</button>
+        </div>
+      </div>
+    </div>
+
     <div id="manualInferenceModal" class="order-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="manualInferenceTitle">
       <div class="order-confirm-dialog manual-inference-dialog">
         <div class="order-confirm-head">
@@ -1359,7 +1436,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1"></script>
+    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

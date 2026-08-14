@@ -6274,6 +6274,91 @@ const migrations = [
         KEY idx_admin_strategy_target_intent (order_intent_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '188_admin_position_close_jobs',
+    async up() {
+      // Complete admin-dispatch closes have their own durable ledger.  The
+      // source signal remains the only attribution root; these tables never
+      // create a second signal/outcome or reuse auto_signal_deliveries.
+      await queryRun(`CREATE TABLE IF NOT EXISTS admin_position_close_jobs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        idempotency_key VARCHAR(191) NOT NULL,
+        actor_user_id INT NOT NULL,
+        source_signal_id BIGINT NOT NULL,
+        source_ticket VARCHAR(64) NOT NULL,
+        source_user_id INT NOT NULL,
+        source_trading_account_id INT NOT NULL,
+        source_symbol VARCHAR(64) NOT NULL,
+        source_direction VARCHAR(16) NOT NULL,
+        source_volume DECIMAL(20,8) NOT NULL DEFAULT 0,
+        source_magic BIGINT NOT NULL DEFAULT 234000,
+        reason VARCHAR(500) NOT NULL,
+        preview_hash CHAR(64) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        lease_token VARCHAR(64) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        target_count INT NOT NULL DEFAULT 0,
+        eligible_target_count INT NOT NULL DEFAULT 0,
+        succeeded_target_count INT NOT NULL DEFAULT 0,
+        failed_target_count INT NOT NULL DEFAULT 0,
+        skipped_target_count INT NOT NULL DEFAULT 0,
+        uncertain_target_count INT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        started_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_admin_position_close_idempotency (idempotency_key),
+        KEY idx_admin_position_close_status (status, updated_at),
+        KEY idx_admin_position_close_lease (status, lease_expires_at),
+        KEY idx_admin_position_close_source (source_signal_id, source_ticket),
+        KEY idx_admin_position_close_actor (actor_user_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`CREATE TABLE IF NOT EXISTS admin_position_close_targets (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        job_id BIGINT NOT NULL,
+        target_order INT NOT NULL DEFAULT 0,
+        target_role VARCHAR(16) NOT NULL,
+        is_source TINYINT NOT NULL DEFAULT 0,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        ownership_history_id BIGINT DEFAULT NULL,
+        outcome_id BIGINT DEFAULT NULL,
+        signal_id BIGINT NOT NULL,
+        broker_server_key VARCHAR(100) DEFAULT NULL,
+        login_account VARCHAR(50) DEFAULT NULL,
+        ticket VARCHAR(64) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        direction VARCHAR(16) NOT NULL,
+        volume DECIMAL(20,8) NOT NULL DEFAULT 0,
+        magic BIGINT NOT NULL DEFAULT 234000,
+        user_snapshot_json LONGTEXT NOT NULL,
+        account_snapshot_json LONGTEXT NOT NULL,
+        ownership_snapshot_json LONGTEXT NOT NULL,
+        outcome_snapshot_json LONGTEXT NOT NULL,
+        target_snapshot_json LONGTEXT NOT NULL,
+        bridge_generation BIGINT DEFAULT NULL,
+        operation_id VARCHAR(191) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        attempt_count INT NOT NULL DEFAULT 0,
+        lease_token VARCHAR(64) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        send_started_at DATETIME DEFAULT NULL,
+        send_finished_at DATETIME DEFAULT NULL,
+        reconcile_started_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        last_result_json LONGTEXT DEFAULT NULL,
+        error_code VARCHAR(128) DEFAULT NULL,
+        error_message VARCHAR(500) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_admin_position_close_operation (operation_id),
+        KEY idx_admin_position_close_target_job (job_id, target_order, id),
+        KEY idx_admin_position_close_target_status (status, updated_at),
+        KEY idx_admin_position_close_target_ticket (user_id, trading_account_id, ticket),
+        KEY idx_admin_position_close_target_signal (signal_id, user_id, status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

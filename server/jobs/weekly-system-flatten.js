@@ -1,13 +1,20 @@
 import crypto from 'crypto'
-import { queryRun } from '../db.js'
+import * as db from '../db.js'
 import { getRedis, isRedisAvailable } from '../redis.js'
 import { getAllBridges, getPlatformMarketClockState, sendBridgeCommand, sendToBrowsers } from '../bridge-ws.js'
+import { resolveAdminDispatchExemptions } from '../services/admin-system-position-targets.js'
 import { prepareAuditRecord } from '../audit-localization.js'
 import {
   isWeeklyFlattenWindow,
   weeklyFlattenCycleId,
   weeklyFlattenEnabled,
 } from './weekly-risk-window.js'
+
+function optionalDbFunction(name) {
+  try { return typeof db[name] === 'function' ? db[name] : null } catch { return null }
+}
+
+const queryRun = (...args) => optionalDbFunction('queryRun')(...args)
 
 const SYSTEM_MAGIC = 234000
 const LOCK_TTL_MS = 2 * 60 * 1000
@@ -195,6 +202,13 @@ async function inventory(userId) {
   return sendBridgeCommand(userId, 'system_trade_inventory', {}, 15000, { noFallback: true })
 }
 
+async function resolveWeeklyAdminExemptions(userId, before) {
+  // Legacy/unit environments may expose only queryRun and have no admin
+  // dispatch ledger. Production has queryAll and uses the fail-closed resolver.
+  if (!optionalDbFunction('queryAll')) return { status: 'ok', active: false, exemptions: [], exclusions: [] }
+  return resolveAdminDispatchExemptions(userId, before, { failClosedOnError: true })
+}
+
 async function notify(userId, status, details = {}) {
   sendToBrowsers(userId, { type: 'weekly_flatten_state', status, ...details })
 }
@@ -272,6 +286,9 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
 
     const pendingOrders = Array.isArray(before.pending_orders) ? before.pending_orders : []
     const positions = Array.isArray(before.positions) ? before.positions : []
+    let adminExemptions = null
+    let exemptTickets = new Set()
+    let weeklyPositions = positions
     logUser(cycle, userId, `交易清单获取完成：系统挂单 ${pendingOrders.length} 笔，系统持仓 ${positions.length} 笔`)
     const announced = await redis.set(`${doneKey}:started`, '1', 'NX', 'EX', COMPLETED_TTL_SECONDS)
     if (announced) {
@@ -306,9 +323,26 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
         { cycle, ticket: order.ticket, magic: SYSTEM_MAGIC }, result, ok ? 'success' : 'error')
     }
 
-    if (positions.length > 0 && before.account?.is_hedging !== true) {
+    // Resolve admin-dispatch attribution after the legacy pending-order
+    // cancellation pass.  A fail-closed position attribution must suppress
+    // weekly close commands without changing pending cancellation behavior.
+    adminExemptions = await resolveWeeklyAdminExemptions(userId, before)
+    if (adminExemptions.status === 'fail_closed') {
+      const result = { status:'failed_closed', reason:'admin_dispatch_attribution_unavailable',
+        attribution_reason:adminExemptions.reason || 'admin_dispatch_attribution_unavailable', cycle,
+        remaining_positions:positions.map(item => item.ticket), exempt_positions:[] }
+      await audit(userId, 'weekly_flatten_fail_closed', null,
+        { cycle, magic:SYSTEM_MAGIC, reason:result.attribution_reason, position_count:positions.length }, result, 'error')
+      await notify(userId, 'failed', { cycle, reason:'admin_dispatch_attribution_unavailable' })
+      return result
+    }
+    exemptTickets = new Set((adminExemptions.exemptions || []).map(item => String(item.ticket)))
+    weeklyPositions = positions.filter(position => !exemptTickets.has(String(position.ticket)))
+
+    if (weeklyPositions.length > 0 && before.account?.is_hedging !== true) {
       logUser(cycle, userId, `终止平仓：检测到净持仓账户，剩余系统持仓 ${positions.length} 笔`)
-      const result = { status: 'unsupported_netting', cycle, account: before.account, position_count: positions.length }
+      const result = { status: 'unsupported_netting', cycle, account: before.account, position_count: weeklyPositions.length,
+        exempt_positions:[...exemptTickets] }
       await reportOnce(redis, `${doneKey}:netting:reported`, COMPLETED_TTL_SECONDS, async () => {
         await audit(userId, 'weekly_flatten_unsupported_netting', null,
           { cycle, magic: SYSTEM_MAGIC, account: before.account }, result, 'error')
@@ -317,7 +351,7 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
       return result
     }
 
-    for (const position of positions) {
+    for (const position of weeklyPositions) {
       if (!isWeeklyFlattenWindow(clock(), offset)) {
         logUser(cycle, userId, '停止处理：MT5 周六00:00任务窗口已经结束')
         return { status: 'window_ended', cycle, failures }
@@ -352,13 +386,14 @@ export async function runWeeklySystemFlattenForUser(userId, now = new Date(), cl
     }
 
     const remainingPending = Array.isArray(after.pending_orders) ? after.pending_orders : []
-    const remainingPositions = Array.isArray(after.positions) ? after.positions : []
+    const allRemainingPositions = Array.isArray(after.positions) ? after.positions : []
+    const remainingPositions = allRemainingPositions.filter(position => !exemptTickets.has(String(position.ticket)))
     logUser(cycle, userId, `清理结果复核完成：剩余系统挂单 ${remainingPending.length} 笔，剩余系统持仓 ${remainingPositions.length} 笔`)
     if (remainingPending.length === 0 && remainingPositions.length === 0) {
       const result = { status: 'completed', cycle, duration_ms: Date.now() - startedAt }
       await redis.set(doneKey, JSON.stringify({ completed_at: new Date().toISOString() }), 'EX', COMPLETED_TTL_SECONDS)
       await audit(userId, 'weekly_flatten_completed', null,
-        { cycle, magic: SYSTEM_MAGIC }, result, 'success')
+        { cycle, magic: SYSTEM_MAGIC, exempt_positions:[...exemptTickets] }, result, 'success')
       await notify(userId, 'completed', { cycle })
       logUser(cycle, userId, `账户处理完成，耗时 ${result.duration_ms}ms`)
       return result

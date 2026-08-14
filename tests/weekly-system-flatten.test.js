@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockQueryRun = vi.fn()
+const mockQueryAll = vi.fn()
+const mockResolveAdminDispatchExemptions = vi.hoisted(() => vi.fn())
 const mockSendBridgeCommand = vi.fn()
 const mockSendToBrowsers = vi.fn()
 const mockGetAllBridges = vi.fn()
@@ -15,7 +17,10 @@ const mockRedis = {
   smembers: vi.fn(),
 }
 
-vi.mock('../server/db.js', () => ({ queryRun: mockQueryRun }))
+vi.mock('../server/db.js', () => ({ queryRun: mockQueryRun, queryAll: mockQueryAll }))
+vi.mock('../server/services/admin-system-position-targets.js', () => ({
+  resolveAdminDispatchExemptions: mockResolveAdminDispatchExemptions,
+}))
 vi.mock('../server/redis.js', () => ({ getRedis: () => mockRedis, isRedisAvailable: () => true }))
 vi.mock('../server/bridge-ws.js', () => ({
   getAllBridges: mockGetAllBridges,
@@ -34,6 +39,8 @@ beforeEach(() => {
   mockRedis.expire.mockResolvedValue(1)
   mockRedis.smembers.mockResolvedValue([])
   mockQueryRun.mockResolvedValue({ affectedRows: 1 })
+  mockQueryAll.mockResolvedValue([])
+  mockResolveAdminDispatchExemptions.mockResolvedValue({ status:'ok', active:false, exemptions:[], exclusions:[] })
   mockGetPlatformMarketClockState.mockReturnValue({
     connected:true, timezone_offset_minutes:180, clock_status:'verified',
   })
@@ -169,6 +176,94 @@ describe('weekly system flatten execution', () => {
     expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual([
       'system_trade_inventory', 'cancel_system_pending',
     ])
+  })
+
+  it('closes only ordinary positions when an admin target is mixed in', async () => {
+    mockResolveAdminDispatchExemptions.mockResolvedValue({
+      status:'ok', active:true, exemptions:[{ ticket:'101' }], exclusions:[],
+    })
+    mockSendBridgeCommand
+      .mockResolvedValueOnce({
+        status:'success', account:{ login:1, server:'demo', is_hedging:true },
+        pending_orders:[], positions:[
+          { ticket:101, symbol:'EURUSD', type:'buy', volume:0.1, magic:234000 },
+          { ticket:202, symbol:'XAUUSD', type:'sell', volume:0.2, magic:234000 },
+        ],
+      })
+      .mockResolvedValueOnce({ status:'success', ticket:202 })
+      .mockResolvedValueOnce({
+        status:'success', account:{ login:1, server:'demo', is_hedging:true },
+        pending_orders:[], positions:[{ ticket:101, symbol:'EURUSD', type:'buy', volume:0.1, magic:234000 }],
+      })
+    const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
+
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt, 180)
+
+    expect(result.status).toBe('completed')
+    expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual([
+      'system_trade_inventory', 'close_system_position', 'system_trade_inventory',
+    ])
+    expect(mockSendBridgeCommand.mock.calls[1][2].ticket).toBe(202)
+  })
+
+  it('completes when the only remaining position is an admin target exemption', async () => {
+    mockResolveAdminDispatchExemptions.mockResolvedValue({
+      status:'ok', active:true, exemptions:[{ ticket:'101' }], exclusions:[],
+    })
+    const inventoryResponse = {
+      status:'success', account:{ login:1, server:'demo', is_hedging:true },
+      pending_orders:[], positions:[{ ticket:101, symbol:'EURUSD', type:'buy', volume:0.1, magic:234000 }],
+    }
+    mockSendBridgeCommand.mockResolvedValueOnce(inventoryResponse).mockResolvedValueOnce(inventoryResponse)
+    const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
+
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt, 180)
+
+    expect(result.status).toBe('completed')
+    expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual([
+      'system_trade_inventory', 'system_trade_inventory',
+    ])
+  })
+
+  it('keeps a fallback-resolved admin target exempt without issuing a close command', async () => {
+    mockResolveAdminDispatchExemptions.mockResolvedValue({
+      status:'ok', active:true, source:'fallback_order_intent',
+      exemptions:[{ ticket:'101', attribution_source:'order_intent_fallback' }], exclusions:[],
+    })
+    const inventoryResponse = {
+      status:'success', account:{ login:1, server:'demo', is_hedging:true },
+      pending_orders:[], positions:[{ ticket:101, symbol:'EURUSD', type:'buy', volume:0.1, magic:234000 }],
+    }
+    mockSendBridgeCommand.mockResolvedValueOnce(inventoryResponse).mockResolvedValueOnce(inventoryResponse)
+    const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
+
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt, 180)
+
+    expect(result.status).toBe('completed')
+    expect(mockSendBridgeCommand).not.toHaveBeenCalledWith(7, 'close_system_position', expect.anything(), expect.anything(), expect.anything())
+  })
+
+  it('fail-closes ambiguous attribution after preserving pending cancellation and sends no close', async () => {
+    mockResolveAdminDispatchExemptions.mockResolvedValue({
+      status:'fail_closed', reason:'admin_dispatch_attribution_ambiguous', active:true,
+      exemptions:[], exclusions:[],
+    })
+    mockSendBridgeCommand
+      .mockResolvedValueOnce({
+        status:'success', account:{ login:1, server:'demo', is_hedging:true },
+        pending_orders:[{ ticket:11, symbol:'XAUUSD' }],
+        positions:[{ ticket:101, symbol:'EURUSD', type:'buy', volume:0.1, magic:234000 }],
+      })
+      .mockResolvedValueOnce({ status:'success', ticket:11 })
+    const { runWeeklySystemFlattenForUser } = await import('../server/jobs/weekly-system-flatten.js')
+
+    const result = await runWeeklySystemFlattenForUser(7, runAt, () => runAt, 180)
+
+    expect(result.status).toBe('failed_closed')
+    expect(mockSendBridgeCommand.mock.calls.map(call => call[1])).toEqual([
+      'system_trade_inventory', 'cancel_system_pending',
+    ])
+    expect(mockSendBridgeCommand).not.toHaveBeenCalledWith(7, 'close_system_position', expect.anything(), expect.anything(), expect.anything())
   })
 
   it('contains Redis completion-check failures without sending MT5 commands', async () => {

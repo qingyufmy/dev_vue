@@ -7,6 +7,13 @@ export function beijingNow() {
   return d.toISOString().replace('T', ' ').substring(0, 19)
 }
 
+/** Format a future Beijing DATETIME, preserving the same wall-clock basis as beijingNow(). */
+export function beijingAfter(milliseconds = 0) {
+  const offset = Number(milliseconds)
+  const d = new Date(Date.now() + 8 * 3600_000 + (Number.isFinite(offset) ? offset : 0))
+  return d.toISOString().replace('T', ' ').substring(0, 19)
+}
+
 /** Parse a beijingNow() string ('YYYY-MM-DD HH:mm:ss') into a Date, independent of server TZ */
 export function parseBeijing(str) {
   if (!str) return null

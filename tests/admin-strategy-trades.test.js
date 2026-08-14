@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../server/db.js', () => ({
   beijingNow: () => '2026-08-14 12:00:00',
+  beijingAfter: () => '2026-08-14 12:02:00',
+  parseBeijing: value => value ? new Date(String(value).replace(' ', 'T') + '+08:00') : null,
   queryAll: vi.fn(), queryOne: vi.fn(), queryRun: vi.fn(), withTransaction: vi.fn(),
 }))
 vi.mock('../server/bridge-ws.js', () => ({
