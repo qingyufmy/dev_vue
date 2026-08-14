@@ -293,7 +293,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
     expect(initial).toContain('loadSignals({ limit:1, summaryOnly:true, skipResultRender:true })')
     expect(initial).not.toContain('ensureAnalysisHistoryPageLoaded()')
-    expect(html).toContain('/ai/app.js?v=20260814strategyeditor2&build=signalbandwidth1-notifications1-analysisloading1')
+    expect(html).toContain('/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1')
   })
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {

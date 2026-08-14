@@ -73,6 +73,127 @@ function loadAdminModelRequestTransportTimeoutMs() {
   return new Function(`${adminApp.slice(start, end)}\nreturn adminModelRequestTransportTimeoutMs;`)()
 }
 
+function loadStrategyEma34ToggleHarness() {
+  const normalizedApp = app.replace(/\r\n?/g, '\n')
+  const editorStart = normalizedApp.indexOf('function strategyEditorSnapshot()')
+  const editorEnd = normalizedApp.indexOf('\n\nfunction strategyEditorAnnounceEscape', editorStart)
+  const syncStart = normalizedApp.indexOf('function syncStrategyDataCapabilityUI()')
+  const bindEnd = normalizedApp.indexOf('\n\nfunction indicatorDeclarationsForStrategyPayload', syncStart)
+  expect(editorStart).toBeGreaterThanOrEqual(0)
+  expect(editorEnd).toBeGreaterThan(editorStart)
+  expect(syncStart).toBeGreaterThanOrEqual(0)
+  expect(bindEnd).toBeGreaterThan(syncStart)
+
+  const makeControl = (id, { checked = false, value = '' } = {}) => ({
+    id,
+    checked,
+    value,
+    disabled: false,
+    indeterminate: false,
+    dataset: {},
+    setAttribute() {},
+    matches(selector) {
+      return selector.split(',').some(item => item.trim() === `#${id}`)
+    },
+  })
+  const editorListeners = new Map()
+  const editor = {
+    classList: { contains: () => false },
+    dataset: {},
+    addEventListener(type, listener) {
+      editorListeners.set(type, listener)
+    },
+    dispatch(type, event) {
+      editorListeners.get(type)?.(event)
+    },
+    _strategyDraft: {},
+  }
+  const elements = {
+    strategyEditor: editor,
+    strategyUseEma34Data: makeControl('strategyUseEma34Data'),
+    strategyEma34Timeframe: makeControl('strategyEma34Timeframe'),
+    strategyTitle: makeControl('strategyTitle', { value: '旧状态策略' }),
+    strategySymbols: makeControl('strategySymbols', { value: 'EURUSD' }),
+    strategyDescription: makeControl('strategyDescription', { value: 'description' }),
+    strategyPrompt: makeControl('strategyPrompt', { value: 'prompt' }),
+    strategyInterval: makeControl('strategyInterval', { value: '5' }),
+    strategyScope: makeControl('strategyScope', { value: 'private' }),
+    strategyVisibility: makeControl('strategyVisibility', { value: 'active' }),
+    strategyModelProfile: makeControl('strategyModelProfile'),
+    strategyIncludePortfolioContext: makeControl('strategyIncludePortfolioContext'),
+    strategyEditorStatus: { textContent: '' },
+    saveStrategyBtn: { disabled: true },
+  }
+  const ema = elements.strategyUseEma34Data
+  const entryMethod = { checked: true, dataset: { strategyEntryMethod: 'market' } }
+  const document = {
+    querySelectorAll(selector) {
+      return selector === '[data-strategy-entry-method]:checked' && entryMethod.checked ? [entryMethod] : []
+    },
+    querySelector(selector) {
+      return selector === '[data-strategy-entry-method]:checked' && entryMethod.checked ? entryMethod : null
+    },
+  }
+  const $ = id => elements[id] || null
+  const state = {
+    strategyDataCapabilities: { chan: { supported_timeframes: ['M5', 'M15', 'H1', 'H4'] } },
+    strategyDataCapabilitiesStatus: 'ready',
+  }
+  const strategyEditorMarketPlanFromControls = () => ({
+    primary_timeframe: 'M30',
+    timeframes: [{ timeframe: 'M30', kline_count: 100 }],
+  })
+  const strategyEma34State = () => ({
+    enabled: false,
+    legacyOnly: true,
+    advanced: false,
+    advancedDeclaration: null,
+    capabilityStatus: 'legacy_unconfigured',
+    capabilityTimeframe: '',
+    canonical: null,
+    policyMode: '',
+  })
+  const source = [
+    normalizedApp.slice(editorStart, editorEnd),
+    normalizedApp.slice(syncStart, bindEnd),
+  ].join('\n\n')
+  const loaded = new Function(
+    '$',
+    'document',
+    'state',
+    'normalizedStrategyDataCapabilities',
+    'STRATEGY_CHAN_TIMEFRAMES',
+    'escapeHtml',
+    'strategyEditorMarketPlanFromControls',
+    'syncStrategyEditorMarketPlanControls',
+    'strategyEma34State',
+    'strategyCapabilityStatusText',
+    'strategyDataSummaryMarkup',
+    'strategyDataTechnicalMarkup',
+    'renderStrategyWritingTemplates',
+    'canManagePlatformAiContent',
+    'initIcons',
+    `${source}\nreturn { syncStrategyDataCapabilityUI, bindStrategyDataEditorControls, strategyEditorSnapshot, strategyEditorUpdateState }`,
+  )(
+    $,
+    document,
+    state,
+    () => state.strategyDataCapabilities,
+    ['M5', 'M15', 'H1', 'H4'],
+    value => String(value),
+    strategyEditorMarketPlanFromControls,
+    () => {},
+    strategyEma34State,
+    (enabled, label, extra = '') => `${label} · ${enabled ? '已提供' : '未提供'}${extra ? ` · ${extra}` : ''}`,
+    () => '',
+    () => '',
+    () => {},
+    () => false,
+    () => {},
+  )
+  return { ...loaded, editor, ema, elements }
+}
+
 describe('strategy data capability editor contract', () => {
   it('keeps user and admin editors explicit, accessible, responsive, and cache-busted', () => {
     for (const source of [app, adminApp]) {
@@ -113,6 +234,25 @@ describe('strategy data capability editor contract', () => {
     expect(adminCss).toContain('min-height:44px')
     expect(html).toContain('strategydata5')
     expect(adminHtml).toContain('strategydata5')
+    expect(html).toContain('/ai/app.js?v=20260814ema34toggle1&')
+  })
+
+  it('keeps a user-enabled EMA34 switch enabled after syncing a legacy disabled strategy', () => {
+    const harness = loadStrategyEma34ToggleHarness()
+
+    harness.syncStrategyDataCapabilityUI()
+    expect(harness.ema.checked).toBe(false)
+    expect(harness.editor.dataset.strategyEmaInitialized).toBe('1')
+
+    harness.editor._strategyEditorBaseline = harness.strategyEditorSnapshot()
+    harness.bindStrategyDataEditorControls()
+    harness.ema.checked = true
+    harness.editor.dispatch('change', { target: harness.ema })
+
+    expect(harness.ema.checked).toBe(true)
+    expect(harness.editor.dataset.dirty).toBe('1')
+    expect(harness.elements.saveStrategyBtn.disabled).toBe(false)
+    expect(harness.elements.strategyEditorStatus.textContent).toBe('有未保存修改')
   })
 })
 
@@ -1776,7 +1916,7 @@ describe('route permissions and credential redaction', () => {
     expect(adminCss).toContain('.strategy-memory-preview-block.is-location-stale')
     expect(adminCss).toContain('.strategy-memory-preview-status.is-attention_required')
     expect(adminCss).toContain('.strategy-memory-conflict.is-location-stale')
-    expect(adminHtml).toContain('20260814strategyeditor2')
+    expect(adminHtml).toContain('20260814ema34toggle1')
     expect(adminHtml).toContain('memory-workbench3')
   })
 
@@ -1807,7 +1947,7 @@ describe('route permissions and credential redaction', () => {
     }
     expect(app).toContain('data-lucide="triangle-alert"')
     expect(adminApp).toContain("attention_required: ['triangle-alert'")
-    expect(html).toContain('20260814strategyeditor2')
+    expect(html).toContain('20260814ema34toggle1')
     expect(html).toContain('memory-workbench3')
   })
 })

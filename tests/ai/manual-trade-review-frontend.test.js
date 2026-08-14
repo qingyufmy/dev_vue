@@ -83,7 +83,7 @@ describe('manual trade review frontend contract', () => {
   })
 
   it('ships a cache key and mobile controls with a 44px touch target', () => {
-    expect(html).toContain('20260814strategyeditor2')
+    expect(html).toContain('20260814ema34toggle1')
     expect(html).toContain('manualmt4history1')
     expect(css).toContain('.manual-review-trade-row')
     expect(responsive).toContain('.manual-review-filter-bar .btn')

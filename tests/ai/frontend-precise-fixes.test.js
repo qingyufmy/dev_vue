@@ -200,7 +200,7 @@ describe('precise AI/admin frontend fixes', () => {
     const orders = sourceBlock(adminApp, 'async function loadCommercialOrders()', 'async function loadCommercialNotifications')
     expect(users).toContain("page_size:'10'")
     expect(orders).toContain("page_size:'20'")
-    expect(adminHtml).toContain('/admin/app.js?v=20260814strategyeditor2')
+    expect(adminHtml).toContain('/admin/app.js?v=20260814ema34toggle1')
   })
 
   it('prefers exact cached evidence over legacy fallback and clears the loading placeholder before chart creation', () => {
@@ -221,9 +221,9 @@ describe('precise AI/admin frontend fixes', () => {
   })
 
   it('ships cache-busted app scripts while keeping each asset family on one key', () => {
-    expect(aiHtml).toContain('/ai/app.js?v=20260814strategyeditor2&build=signalbandwidth1-notifications1-analysisloading1')
-    expect(aiHtml).toContain('/ai/styles.css?v=20260814strategyeditor2')
-    expect(aiHtml).toContain('/ai/responsive.css?v=20260814strategyeditor2')
-    expect(adminHtml).toContain('/admin/styles.css?v=20260814strategyeditor2')
+    expect(aiHtml).toContain('/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1')
+    expect(aiHtml).toContain('/ai/styles.css?v=20260814ema34toggle1')
+    expect(aiHtml).toContain('/ai/responsive.css?v=20260814ema34toggle1')
+    expect(adminHtml).toContain('/admin/styles.css?v=20260814ema34toggle1')
   })
 })

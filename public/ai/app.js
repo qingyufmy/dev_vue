@@ -4634,6 +4634,9 @@ function syncStrategyDataCapabilityUI() {
   const emaSelect = $("strategyEma34Timeframe");
   const emaState = strategyEma34State(strategy);
   editor._strategyEmaState = emaState;
+  // Read the persisted value only while the editor is being initialized.
+  // Subsequent syncs are driven by user events and must preserve that choice.
+  if (ema && !editor.dataset.strategyEmaInitialized) ema.checked = emaState.enabled;
   if (chan) {
     // Keep an invalid legacy selection reversible: users must still be able to
     // switch Chan off even when the old plan contains no supported timeframe.
@@ -4655,8 +4658,6 @@ function syncStrategyDataCapabilityUI() {
     ema.disabled = !selectedTimeframes.length && !emaState.advanced;
     ema.setAttribute("aria-expanded", String(Boolean($("strategyEma34Details")?.open)));
     ema.indeterminate = false;
-    if (!editor.dataset.strategyEmaInitialized) ema.checked = emaState.enabled;
-    if (emaState.legacyOnly && !emaState.enabled) ema.checked = false;
   }
   const chanStatus = $("strategyChanStatus");
   if (chanStatus) chanStatus.textContent = strategyCapabilityStatusText(Boolean(chan?.checked), "缠论结构数据", chanTimeframes.length ? `周期 ${chanTimeframes.join("、")}` : "没有已选支持周期");

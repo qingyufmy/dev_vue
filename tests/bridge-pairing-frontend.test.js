@@ -43,8 +43,8 @@ describe('Bridge authorization in the AI trading lab', () => {
 
   it('provides accessible status and responsive controls', () => {
     expect(html).toContain('role="status" aria-live="polite"')
-    expect(html).toContain('/ai/bridge-pair.css?v=20260814strategyeditor2')
-    expect(html).toContain('/ai/bridge-pair.js?v=20260814strategyeditor2')
+    expect(html).toContain('/ai/bridge-pair.css?v=20260814ema34toggle1')
+    expect(html).toContain('/ai/bridge-pair.js?v=20260814ema34toggle1')
     expect(styles).toContain('@media (max-width:560px)')
     expect(styles).toContain('@media (prefers-reduced-motion:reduce)')
   })
