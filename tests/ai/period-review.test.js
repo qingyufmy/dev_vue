@@ -17,7 +17,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
   periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
-  periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown } from '../../server/routes/ai/period-review.js'
+  periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown,
+  __testDeriveDailyReviewMemoryEntries, __testDeriveDailyReviewConflictExperiences } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
@@ -82,6 +83,41 @@ describe('period review strategy-memory application status', () => {
     expect(source).toContain("job.target_type !== 'strategy_memory_library'")
     expect(source).toContain("row.target_type === 'strategy_memory_library'")
     expect(source).not.toContain("['strategy_memory_library', 'personal_memory', 'platform_experience'].includes(job.target_type)")
+  })
+})
+
+describe('daily review memory derivation', () => {
+  const approved = {
+    id:42, approved_version_id:9,
+    evidence_json:JSON.stringify({ sources:[{ outcome_id:7 }] }),
+  }
+
+  it('uses trimmed daily lessons as the sole persisted collection while preserving matching metadata', () => {
+    const content = {
+      daily_lessons:['  lesson one  ', 'lesson two', 'lesson three'],
+      memory_updates:[
+        { text:'  lesson one  ', category:'entry_setup', anti_pattern:'keep metadata', source_refs:['model-forged'] },
+        { text:'hidden combined update', category:'risk_execution' },
+      ],
+    }
+    const entries = __testDeriveDailyReviewMemoryEntries(approved, content)
+    expect(entries).toHaveLength(3)
+    expect(entries.map(({ text, category }) => ({ text, category }))).toEqual([
+      { text:'lesson one', category:'entry_setup' },
+      { text:'lesson two', category:'general' },
+      { text:'lesson three', category:'general' },
+    ])
+    expect(entries[0].anti_pattern).toBe('keep metadata')
+    expect(entries.flatMap(entry => [entry.text, entry.lesson])).not.toContain('hidden combined update')
+    expect(entries[0].source_refs).toEqual(['outcome:7', 'period_review_case:42', 'period_review_version:9'])
+  })
+
+  it('keeps original update text available for conflict validation without persisting it', () => {
+    const experiences = __testDeriveDailyReviewConflictExperiences(approved, {
+      daily_lessons:['lesson one'],
+      memory_updates:[{ text:'hidden combined update', category:'general' }],
+    })
+    expect(experiences).toEqual(['hidden combined update', 'lesson one'])
   })
 })
 

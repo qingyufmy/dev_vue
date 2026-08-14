@@ -33,6 +33,7 @@ vi.mock('../../server/routes/ai/model-task-budget.js', () => ({
 import {
   STRATEGY_MEMORY_CONSISTENCY_DETECTOR_CONTRACT_VERSION,
   buildStrategyMemoryConsistencyMessages,
+  claimStrategyMemoryConsistencyJob,
   getLatestStrategyMemoryConsistencyJob,
   prepareStrategyMemoryConsistencyModelCall,
   queueStrategyMemoryConsistencyCheck,
@@ -173,6 +174,27 @@ describe('strategy memory consistency contract', () => {
     const second = await queueStrategyMemoryConsistencyCheck({ strategyId:5, strategyText, memoryContent:memoryText,
       triggerType:'manual_check' })
     expect(second.replayed).toBe(true)
+  })
+
+  it('auto-claims a later queued job instead of selecting an exhausted failed head', async () => {
+    const calls = []
+    const queued = { ...job, status:'queued', attempt_count:0, max_attempts:3,
+      next_attempt_at:null, lease_token:null, lease_expires_at:null }
+    mocks.withTransaction.mockImplementation(async callback => callback(async (sql, params) => {
+      calls.push({ sql, params })
+      if (sql.startsWith('SELECT * FROM strategy_memory_consistency_jobs')) return [[queued], []]
+      return [{ affectedRows:1 }, []]
+    }))
+
+    const claimed = await claimStrategyMemoryConsistencyJob({ workerId:'queue-test' })
+    const select = calls[0]
+    expect(select.sql).not.toContain("status IN ('queued','failed','leased')")
+    expect(select.sql).toContain("status = 'queued'")
+    expect(select.sql).toContain("status = 'failed'")
+    expect(select.sql).toContain('attempt_count < max_attempts')
+    expect(select.sql).toContain("status = 'leased'")
+    expect(select.sql).toContain('lease_expires_at <= ?')
+    expect(claimed).toMatchObject({ id:11, status:'leased', worker_id:'queue-test' })
   })
 
   it('uses confirmed physical limits and full prompt estimate', async () => {

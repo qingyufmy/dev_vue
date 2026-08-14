@@ -424,8 +424,11 @@ export async function claimStrategyMemoryConsistencyJob(input = {}) {
     const now = beijingNow()
     const where = requestedId != null
       ? 'id = ?'
-      : `status IN ('queued','failed','leased') AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`
-    const params = requestedId != null ? [Number(requestedId)] : [now]
+      : `((status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+        OR (status = 'failed' AND attempt_count < max_attempts
+          AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+        OR (status = 'leased' AND lease_expires_at <= ?))`
+    const params = requestedId != null ? [Number(requestedId)] : [now, now, now]
     const rows = await run(`SELECT * FROM strategy_memory_consistency_jobs WHERE ${where}
       ORDER BY id ASC LIMIT 1 FOR UPDATE`, params)
     const job = firstRow(rows)

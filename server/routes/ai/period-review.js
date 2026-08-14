@@ -2994,6 +2994,13 @@ function memoryMarkdownText(value) {
     .trim()
 }
 
+function reviewTextForMatching(value) {
+  // Lesson/update identity is deliberately only trim-based.  Do not make
+  // line-ending or control-character normalization silently turn two distinct
+  // approved texts into one memory entry.
+  return String(value ?? '').trim()
+}
+
 function reviewSourceIds(approved, type) {
   const evidence = parse(approved?.evidence_json, {}) || {}
   const refs = []
@@ -3027,15 +3034,24 @@ function derivationMemoryEntries(approved, content) {
   const canonicalRefs = reviewSourceIds(approved, periodType)
   if (periodType === 'daily') {
     const chanContext = frozenDailyChanContext(evidence)
-    const updates = Array.isArray(content.memory_updates) && content.memory_updates.length
-      ? content.memory_updates
-      : (Array.isArray(content.daily_lessons) ? content.daily_lessons.map(text => ({ text, category:'general' })) : [])
-    return updates.map(item => {
-      const category = item.category || item.memory_category || 'general'
+    // `daily_lessons` is the user-visible, approved collection.  Model
+    // memory_updates may carry useful metadata for a matching lesson, but it
+    // is not allowed to add hidden/combined lessons to the persisted library.
+    const lessons = (Array.isArray(content.daily_lessons) ? content.daily_lessons : [])
+      .map(text => reviewTextForMatching(text)).filter(Boolean)
+    const updatesByText = new Map()
+    for (const item of Array.isArray(content.memory_updates) ? content.memory_updates : []) {
+      const text = reviewTextForMatching(item?.text || item?.lesson)
+      if (text && !updatesByText.has(text)) updatesByText.set(text, item)
+    }
+    return lessons.map(lesson => {
+      const matched = updatesByText.get(lesson)
+      const category = [matched?.category, matched?.memory_category]
+        .find(value => MEMORY_CATEGORIES.has(value)) || 'general'
       if (category === 'chan_structure' && chanContext.mode !== 'enabled_complete') {
         throw new Error('strategy_memory_chan_evidence_invalid')
       }
-      return { ...item, category, source_refs:[...canonicalRefs, ...currentRefs] }
+      return { ...(matched || {}), text:lesson, category, source_refs:[...canonicalRefs, ...currentRefs] }
     })
   }
   if (periodType === 'monthly') {
@@ -3063,6 +3079,42 @@ function derivationMemoryEntries(approved, content) {
     }
   }
   return []
+}
+
+function derivationMemoryConflictExperiences(approved, content) {
+  const periodType = String(approved?.period_type || '')
+  if (periodType === 'daily') {
+    // Conflict evidence validates approved model excerpts, so retain the
+    // original memory_updates text as candidates even when an update is not a
+    // user-visible daily lesson.  This is intentionally separate from the
+    // entries that are actually written to the unified memory library.
+    const values = []
+    for (const item of Array.isArray(content.memory_updates) ? content.memory_updates : []) {
+      for (const key of ['text', 'lesson', 'anti_pattern']) {
+        const text = memoryMarkdownText(item?.[key])
+        if (text) values.push(text)
+      }
+    }
+    for (const lesson of Array.isArray(content.daily_lessons) ? content.daily_lessons : []) {
+      const text = memoryMarkdownText(lesson)
+      if (text) values.push(text)
+    }
+    return [...new Set(values)]
+  }
+  return derivationMemoryEntries(approved, content)
+    .flatMap(item => [item.text, item.lesson, item.anti_pattern])
+    .filter(Boolean)
+}
+
+// Kept deliberately test-only: production callers use the derivation worker
+// above, while focused tests can verify the server-owned daily lesson mapping
+// without running a database-backed worker cycle.
+export function __testDeriveDailyReviewMemoryEntries(approved, content) {
+  return derivationMemoryEntries({ ...(approved || {}), period_type:'daily' }, content || {})
+}
+
+export function __testDeriveDailyReviewConflictExperiences(approved, content) {
+  return derivationMemoryConflictExperiences({ ...(approved || {}), period_type:'daily' }, content || {})
 }
 
 export function periodReviewConflictSnapshotsRequired(content) {
@@ -3130,8 +3182,7 @@ export async function runPeriodReviewDerivationOnce() {
     if (conflicts.length > 0 && (frozenMemory == null || frozenStrategy == null)) {
       throw new Error('strategy_memory_conflict_frozen_snapshot_missing')
     }
-    const proposedExperiences = derivationMemoryEntries(approved, content)
-      .flatMap(item => [item.text, item.lesson, item.anti_pattern]).filter(Boolean)
+    const proposedExperiences = derivationMemoryConflictExperiences(approved, content)
     for (const conflict of conflicts) {
       const canonicalConflictRefs = [...new Set([
         ...reviewSourceIds(approved, approved.period_type),
