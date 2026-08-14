@@ -219,8 +219,66 @@ describe('platform market data', () => {
       start_utc_msc:start, end_utc_msc:end,
     }), expect.objectContaining({ timeoutMs:30000, noFallback:true }))
     expect(result.rates.map(item => item.close)).toEqual([2000, 2001, 2002])
-    expect(result.market_meta).toMatchObject({ source:'platform_admin_bridge_range', cache_layer:'exact_range', closed_candles_written:3 })
+    expect(result.market_meta).toMatchObject({ source:'platform_admin_bridge_range', cache_layer:'exact_range', closed_candles_written:3,
+      range_confirmation_basis:'actual_returned_closed_rates', range_response_endpoints_verified:false,
+      range_complete_reported:true })
     expect(redis.set).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['false', false],
+  ])('accepts an exact historical review range when Bridge range_complete is %s but returned closed rates are valid', async (_label, rangeComplete) => {
+    const start = rate(0, 2000).time_utc_msc
+    const end = rate(2, 2002).time_utc_msc + 60000
+    const response = { status:'success', symbol:'XAUUSD.a', rates:[rate(0, 2000), rate(1, 2001), rate(2, 2002)] }
+    if (rangeComplete !== undefined) response.range_complete = rangeComplete
+    mt5Bridge.mockResolvedValue(response)
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:20,
+      review_window:true, start_utc_msc:start, end_utc_msc:end })
+
+    expect(result.status).toBe('success')
+    expect(result.market_meta).toMatchObject({
+      range_confirmation_basis:'actual_returned_closed_rates',
+      range_response_endpoints_verified:false,
+      range_complete_reported:rangeComplete ?? null,
+    })
+  })
+
+  it('accepts a legacy Bridge false flag with null endpoint echoes using actual closed rates', async () => {
+    const start = rate(0, 2000).time_utc_msc
+    const end = rate(2, 2002).time_utc_msc + 60000
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', range_complete:false,
+      range_start_utc_msc:null, range_end_utc_msc:null,
+      rates:[rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:20,
+      review_window:true, start_utc_msc:start, end_utc_msc:end })
+
+    expect(result).toMatchObject({ status:'success' })
+    expect(result.market_meta).toMatchObject({
+      range_confirmation_basis:'actual_returned_closed_rates',
+      range_response_endpoints_verified:false, range_complete_reported:false,
+    })
+  })
+
+  it('applies the same exact-range audit to the user Bridge fallback', async () => {
+    bridge.activeId.mockResolvedValue(null)
+    const start = rate(0, 2000).time_utc_msc
+    const end = rate(2, 2002).time_utc_msc + 60000
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', range_complete:false,
+      range_start_utc_msc:start, range_end_utc_msc:end,
+      rates:[rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:20,
+      review_window:true, start_utc_msc:start, end_utc_msc:end })
+
+    expect(result.market_meta).toMatchObject({
+      source:'user_bridge_fallback', range_confirmation_basis:'actual_returned_closed_rates',
+      range_response_endpoints_verified:true, range_complete_reported:false,
+      range_start_utc_msc:start, range_end_utc_msc:end,
+    })
   })
 
   it('accepts an authoritative range whose requested start falls in a market closure', async () => {
@@ -260,6 +318,22 @@ describe('platform market data', () => {
       range_bridge_authoritative:true,
     })
     expect(result.market_meta.cache_internal_gap_details).toHaveLength(1)
+  })
+
+  it.each([
+    { range_start_utc_msc:rate(0, 2000).time_utc_msc + 60000, range_end_utc_msc:rate(2, 2002).time_utc_msc + 60000 },
+    { range_start_utc_msc:rate(0, 2000).time_utc_msc },
+    { range_start_utc_msc:null, range_end_utc_msc:rate(2, 2002).time_utc_msc + 60000 },
+  ])('rejects an exact Bridge range response with invalid or mismatched echoed endpoints', async responseRange => {
+    const start = rate(0, 2000).time_utc_msc
+    const end = rate(2, 2002).time_utc_msc + 60000
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', range_complete:false,
+      ...responseRange, rates:[rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:20,
+      review_window:true, start_utc_msc:start, end_utc_msc:end })
+
+    expect(result).toMatchObject({ status:'error', error:'rates_range_response_mismatch' })
   })
 
   it('does not replace a failed exact review range with unrelated live candles', async () => {
@@ -310,6 +384,18 @@ describe('platform market data', () => {
     const candleWrites = db.queryRun.mock.calls.filter(([sql]) => sql.includes('INSERT INTO market_candles'))
     expect(candleWrites).toHaveLength(1)
     expect(candleWrites[0][1]).toHaveLength(24)
+  })
+
+  it('rejects unrelated live candles when an exact range has no closed rates', async () => {
+    const liveOpen = Math.floor(Date.now() / 60000) * 60000
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', range_complete:false,
+      rates:[{ ...rate(0, 2000), time_utc_msc:liveOpen }] })
+    const result = await getPlatformRates(7, {
+      symbol:'XAUUSD', timeframe:'M1', count:20, review_window:true,
+      start_utc_msc:liveOpen - 5 * 60000, end_utc_msc:liveOpen - 2 * 60000,
+    })
+    expect(result).toMatchObject({ status:'error' })
+    expect(mt5Bridge).toHaveBeenCalledTimes(1)
   })
 
   it('persists only closed bars and returns the current bar as uncached live data', async () => {

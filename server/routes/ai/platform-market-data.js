@@ -151,6 +151,32 @@ function validRate(rate, offsetMinutes) {
   }
 }
 
+function exactRangeResponseAudit(response, startUtcMs, endUtcMs) {
+  const hasStart = Object.prototype.hasOwnProperty.call(response || {}, 'range_start_utc_msc')
+  const hasEnd = Object.prototype.hasOwnProperty.call(response || {}, 'range_end_utc_msc')
+  const rangeCompleteReported = typeof response?.range_complete === 'boolean'
+    ? response.range_complete : null
+  const responseStart = hasStart ? response?.range_start_utc_msc : undefined
+  const responseEnd = hasEnd ? response?.range_end_utc_msc : undefined
+  const startMissing = responseStart === null || responseStart === undefined
+  const endMissing = responseEnd === null || responseEnd === undefined
+  const hasEndpointEcho = !startMissing || !endMissing
+  if (hasEndpointEcho
+    && (startMissing || endMissing
+      || !Number.isSafeInteger(responseStart) || responseStart <= 0
+      || !Number.isSafeInteger(responseEnd) || responseEnd <= responseStart
+      || responseStart !== startUtcMs || responseEnd !== endUtcMs)) {
+    return { error:'rates_range_response_mismatch' }
+  }
+  return {
+    range_confirmation_basis:'actual_returned_closed_rates',
+    range_response_endpoints_verified:hasEndpointEcho,
+    range_complete_reported:rangeCompleteReported,
+    range_response_start_utc_msc:hasEndpointEcho ? responseStart : null,
+    range_response_end_utc_msc:hasEndpointEcho ? responseEnd : null,
+  }
+}
+
 function effectiveResponseClock(clock, response, rates) {
   const sample = Array.isArray(rates) ? rates.at(-1) : null
   const rawPlatform = String(response?.platform || response?.source || sample?.platform || sample?.source || clock.platform || '').trim().toLowerCase()
@@ -737,10 +763,12 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       const response = await mt5Bridge(platformUserId, 'rates', { symbol, timeframe, count,
         ...platformRoute,
         start_utc_msc:rangeStartUtcMs, end_utc_msc:rangeEndUtcMs }, { timeoutMs:30000, noFallback:true })
+      const rangeResponseAudit = response && typeof response === 'object'
+        ? exactRangeResponseAudit(response, rangeStartUtcMs, rangeEndUtcMs) : null
+      if (rangeResponseAudit?.error) {
+        return { status:'error', error:rangeResponseAudit.error, message:'桥接返回的请求范围与实际请求不一致' }
+      }
       if (response?.status === 'success' && Array.isArray(response.rates) && response.rates.length) {
-        if (response.range_complete !== true) {
-          return { status:'error', error:'rates_range_incomplete', message:'桥接未确认请求范围读取完成' }
-        }
         const effectiveClock = effectiveResponseClock(clock, response, response.rates)
         const closureCutoffUtcMs = Math.min(rangeEndUtcMs, Math.floor(Date.now() / timeframeIntervalMs(timeframe)) * timeframeIntervalMs(timeframe))
         const intervalMs = timeframeIntervalMs(timeframe)
@@ -816,6 +844,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_internal_gap_details:rangeSourceGaps.slice(0, 3),
           range_coverage_verified:true,
           range_bridge_authoritative:true,
+          ...rangeResponseAudit,
           endpoint_coverage_verified:rangeStartOpenTimeMatched,
           range_start_open_time_matched:rangeStartOpenTimeMatched,
           ...continuityMeta(rangeVerifiedIntegrity),
@@ -1052,10 +1081,12 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   let fallback = await mt5Bridge(requestUserId, 'rates', { symbol, timeframe, count:fallbackFetchCount,
     ...(fallbackReviewRange ? { start_utc_msc:fallbackRangeStart, end_utc_msc:fallbackRangeEnd } : {}) },
   { timeoutMs:fallbackReviewRange ? 30000 : 15000, noFallback:true })
-  if (fallback?.status !== 'success' || !Array.isArray(fallback.rates) || fallback.rates.length === 0) return fallback
-  if (fallbackReviewRange && fallback.range_complete !== true) {
-    return { status:'error', error:'rates_range_incomplete', message:'桥接未确认请求范围读取完成' }
+  const fallbackRangeResponseAudit = fallbackReviewRange && fallback && typeof fallback === 'object'
+    ? exactRangeResponseAudit(fallback, fallbackRangeStart, fallbackRangeEnd) : null
+  if (fallbackRangeResponseAudit?.error) {
+    return { status:'error', error:fallbackRangeResponseAudit.error, message:'桥接返回的请求范围与实际请求不一致' }
   }
+  if (fallback?.status !== 'success' || !Array.isArray(fallback.rates) || fallback.rates.length === 0) return fallback
 
   let effectiveFallbackClock = effectiveResponseClock(fallbackClock, fallback, fallback.rates)
   let fallbackOffset = effectiveFallbackClock.timezone_offset_minutes ?? null
@@ -1240,6 +1271,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     ...(fallbackReviewRange ? {
       range_coverage_verified:true,
       range_bridge_authoritative:true,
+      ...fallbackRangeResponseAudit,
       endpoint_coverage_verified:fallbackRangeStartOpenTimeMatched,
       range_start_open_time_matched:fallbackRangeStartOpenTimeMatched,
       range_start_utc_msc:fallbackRangeStart,
