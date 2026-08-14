@@ -1195,9 +1195,12 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
 ## 持仓与挂单管理输出合同
 position_management_context 是服务端提供的去身份化实时事实。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。如何判断保留、取消、持有或退出只以当前策略正文和输入事实为准。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、手数或盈亏。` : ''
     const declaredIndicators = market?.strategy_context?.indicators
+    const managedEma34Identity = declaredIndicators && Object.hasOwn(declaredIndicators, 'ema34')
+      ? ' strategy_context.indicators.ema34 是系统按策略声明计算的 EMA34 数据。'
+      : ''
     const declaredIndicatorRule = declaredIndicators && typeof declaredIndicators === 'object'
       && Object.keys(declaredIndicators).length > 0
-      ? '\n\n## 策略声明指标数据\nstrategy_context.indicators 仅包含当前策略显式声明、由服务端通用指标工具计算的中性事实。ready、reason、source、bar、value、analysis 与 evidence_hash 都是数据证据，不是服务端交易结论。如何解释这些指标、采用哪个周期以及是否交易，只以当前策略正文为准；不得自行增加策略未声明的指标、门槛或周期职责。'
+      ? `\n\n## 系统提供的数据\nstrategy_context.indicators 仅包含当前策略显式声明、由服务端通用指标工具计算的中性事实。${managedEma34Identity} ready、reason、source、bar、value、analysis 与 evidence_hash 都是数据证据，不是服务端交易结论。如何解释这些指标、采用哪个周期以及是否交易，只以当前策略正文为准；不得自行增加策略未声明的指标、门槛或周期职责。`
       : ''
     const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + strategyMemoryRule + declaredIndicatorRule + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
 

@@ -71,6 +71,9 @@ const state = {
   analysisHistoryPageLoaded: false,
   modelProfiles: [],
   strategyFilter: "all",
+  strategyDataCapabilities: null,
+  strategyDataCapabilitiesStatus: "idle",
+  strategyDataCapabilitiesRequestVersion: 0,
   reviewCases: [],
   reviewOverview: { pending: 0, issues: 0 },
   reviewSummary: { attention:0, unread:0, pending_confirmation:0, generating:0, failed:0, total:0, daily_total:0, monthly_total:0, daily_attention:0, monthly_attention:0 },
@@ -586,6 +589,21 @@ const REASON_MAP = {
   model_token_limits_unconfirmed: "该模型限制尚未确认，请编辑模型并保存验证后再使用、设为默认或绑定策略",
   model_token_limits_stale: "模型身份或限制已变化，请重新编辑并保存验证",
   strategy_memory_version_conflict: "记忆库已被其他操作更新，请刷新后重新编辑",
+  strategy_version_conflict: "策略已在其他位置更新，请刷新后对比再保存；当前草稿已保留",
+  strategy_data_capabilities_unavailable: "策略数据能力目录暂不可用，请稍后重试",
+  strategy_indicator_declaration_invalid: "EMA34 数据声明无效，请检查周期后重试",
+  strategy_indicator_advanced_conflict: "当前 EMA34 使用高级配置，简单开关不会覆盖",
+  strategy_indicator_advanced_configuration: "当前 EMA34 使用高级配置，简单开关不会覆盖",
+  strategy_data_runtime_confirmation_required: "请确认启用 EMA34 数据计算；这不会自动加入交易规则",
+  ema34_timeframe_required: "请先选择 EMA34 计算周期",
+  ema34_timeframe_not_in_market_plan: "EMA34 周期必须来自当前已启用的行情周期",
+  indicator_declarations_invalid: "指标数据声明无效，请检查 EMA34 周期后重试",
+  indicator_declaration_unsupported: "当前指标声明不受简单编辑器支持，高级配置已保留",
+  indicator_declaration_duplicate: "指标数据声明重复，请刷新后重试",
+  ema34_declaration_invalid: "EMA34 数据声明无效，请检查周期后重试",
+  strategy_policy_mutation_ambiguous: "高级策略配置无法安全合并，当前草稿已保留",
+  strategy_expected_version_invalid: "策略版本信息无效，请刷新策略后重试",
+  chan_timeframe_unsupported: "缠论只支持已选行情中的 M5、M15、H1 或 H4 周期",
   strategy_memory_capacity_exceeded: "记忆库已超过容量上限，请先压缩后再保存",
   strategy_memory_compression_output_invalid: "模型返回的压缩结果无效，请重试或人工整理记忆库",
   strategy_memory_compression_stale: "记忆库在压缩期间已更新，本次结果未应用，请重新压缩",
@@ -4249,7 +4267,9 @@ async function loadStrategyCatalog() {
     const entryMethods = parseJsonField(item.entry_methods_json, ["market","limit","stop","stop_limit"]);
     const planText = (plan.timeframes || []).map(row => `${row.timeframe}×${row.kline_count}`).join(" · ") || "M30×100";
     const entryText = entryMethods.map(method => ({market:"市价",limit:"限价",stop:"突破",stop_limit:"突破限价"}[method] || method)).join("、");
-    const chanText = Number(item.use_chan_analysis) ? "缠论已启用" : "常规行情指标";
+    const emaState = strategyEma34State(item);
+    const chanText = Number(item.use_chan_analysis) ? "缠论结构已提供" : "未提供缠论结构";
+    const emaText = emaState.advanced ? "EMA34 高级配置" : emaState.enabled ? `EMA34 · ${escapeHtml(emaState.canonical?.source?.timeframe || "已配置")}` : Number(item?.["use_ema34_filter"] || 0) ? "旧 EMA 状态未生效" : "未提供 EMA34";
     const portfolioText = item.scope === "private"
       ? (Number(item.include_portfolio_context) ? "已提供持仓与挂单" : "不提供持仓与挂单")
       : "平台行情专用";
@@ -4272,7 +4292,7 @@ async function loadStrategyCatalog() {
     const description = String(item.description || fallbackDescription)
       .replace(/^\s*>\s?/gm, "")
       .trim() || fallbackDescription;
-    return `<article class="strategy-card ${item.scope === 'private' ? 'is-private' : 'is-platform'}" data-strategy-id="${Number(item.id)}"><header class="strategy-card-header"><div><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '我的策略' : '平台策略'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(visibilityLabel)}</span></div><p class="strategy-card-description">${escapeHtml(description)}</p></div><div class="strategy-card-actions">${canSubscribe ? subscriptionButton : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit"><i data-lucide="pencil" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-strategy-action="delete" aria-label="删除策略"><i data-lucide="trash-2" size="14"></i></button>' : ''}</div></header><div class="strategy-essentials"><span><small>支持品种</small><strong>${symbols.slice(0,4).map(escapeHtml).join('、') || '未设置'}${symbols.length > 4 ? ` 等 ${symbols.length} 个` : ''}</strong></span><span><small>主要行情</small><strong>${escapeHtml(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || 'M30')} · ${Number(plan.timeframes?.find(row => row.timeframe === plan.primary_timeframe)?.kline_count || plan.timeframes?.[0]?.kline_count || 100)} 根</strong></span><span><small>模型</small><strong>${escapeHtml(source)}</strong></span><span class="${linked.some(sub => Number(sub.execution_enabled)) ? 'running' : ''}"><small>自动运行</small><strong>${escapeHtml(execution)}</strong></span></div><details class="strategy-details"><summary><span>查看策略详情与订阅</span><i data-lucide="chevron-down" size="15"></i></summary><div class="strategy-details-body"><div class="strategy-specs"><span><small>完整行情计划</small><strong>${escapeHtml(planText)}</strong></span><span><small>技术分析</small><strong>${escapeHtml(chanText)}</strong></span><span><small>允许入场</small><strong>${escapeHtml(entryText)}</strong></span><span><small>账户上下文</small><strong>${escapeHtml(portfolioText)}</strong></span><span><small>记忆方式</small><strong>${escapeHtml(memoryMode)}</strong></span></div>${subscriptionsBlock}</div></details></article>`;
+    return `<article class="strategy-card ${item.scope === 'private' ? 'is-private' : 'is-platform'}" data-strategy-id="${Number(item.id)}"><header class="strategy-card-header"><div><div class="workspace-row-title">${escapeHtml(item.title)} <span class="status-chip ${item.scope === 'private' ? 'info' : ''}">${item.scope === 'private' ? '我的策略' : '平台策略'}</span><span class="status-chip ${item.visibility_status === 'active' ? 'success' : 'warning'}">${escapeHtml(visibilityLabel)}</span></div><p class="strategy-card-description">${escapeHtml(description)}</p></div><div class="strategy-card-actions">${canSubscribe ? subscriptionButton : '<span class="status-chip">仅审计可见</span>'}${canEdit ? '<button class="btn btn-secondary btn-sm" data-strategy-action="edit"><i data-lucide="pencil" size="14"></i>编辑</button><button class="btn btn-danger-ghost btn-sm" data-strategy-action="delete" aria-label="删除策略"><i data-lucide="trash-2" size="14"></i></button>' : ''}</div></header><div class="strategy-essentials"><span><small>支持品种</small><strong>${symbols.slice(0,4).map(escapeHtml).join('、') || '未设置'}${symbols.length > 4 ? ` 等 ${symbols.length} 个` : ''}</strong></span><span><small>主要行情</small><strong>${escapeHtml(plan.primary_timeframe || plan.timeframes?.[0]?.timeframe || 'M30')} · ${Number(plan.timeframes?.find(row => row.timeframe === plan.primary_timeframe)?.kline_count || plan.timeframes?.[0]?.kline_count || 100)} 根</strong></span><span><small>模型</small><strong>${escapeHtml(source)}</strong></span><span class="${linked.some(sub => Number(sub.execution_enabled)) ? 'running' : ''}"><small>自动运行</small><strong>${escapeHtml(execution)}</strong></span></div><details class="strategy-details"><summary><span>查看策略详情与订阅</span><i data-lucide="chevron-down" size="15"></i></summary><div class="strategy-details-body"><div class="strategy-specs"><span><small>完整行情计划</small><strong>${escapeHtml(planText)}</strong></span><span><small>附加数据</small><strong>${escapeHtml(`${chanText} · ${emaText}`)}</strong></span><span><small>允许入场</small><strong>${escapeHtml(entryText)}</strong></span><span><small>账户上下文</small><strong>${escapeHtml(portfolioText)}</strong></span><span><small>记忆方式</small><strong>${escapeHtml(memoryMode)}</strong></span></div>${subscriptionsBlock}</div></details></article>`;
   }).join("") : '<div class="empty-state"><strong>当前筛选下没有策略</strong><span>切换筛选条件，或新建一套自己的交易策略。</span></div>';
   populateManualStrategySelector();
   initIcons();
@@ -4282,6 +4302,345 @@ function strategyMarketPlan(strategy) {
   const fallback = { primary_timeframe:"M30", timeframes:[{ timeframe:"M30", kline_count:100 }] };
   const plan = parseJsonField(strategy?.market_data_plan_json, fallback);
   return Array.isArray(plan?.timeframes) && plan.timeframes.length ? plan : fallback;
+}
+
+const STRATEGY_CHAN_TIMEFRAMES = Object.freeze(["M5", "M15", "H1", "H4"]);
+const STRATEGY_DATA_CAPABILITY_FALLBACK = Object.freeze({
+  version: "local-fallback",
+  timeframes: ["M1", "M5", "M15", "M30", "H1", "H4", "D1"],
+  base_market_data: { label: "基础行情与技术摘要" },
+  chan: { supported_timeframes: [...STRATEGY_CHAN_TIMEFRAMES], label: "缠论结构数据" },
+  indicators: { ema34: { kind: "ema", period: 34, field: "close", bar_scope: "closed_only", warmup_target_bars: 60, evidence_window: 5 } },
+  portfolio_context: { label: "持仓与挂单", private_only: true },
+  user_copy: {
+    chan: "为已选的支持周期计算并提供原始结构。不会自动决定方向，也不会强制观望或交易。",
+    ema34: "按所选周期的已收盘 K 线计算并提供。不会自动作为开仓过滤条件。",
+  },
+});
+
+function normalizedStrategyDataCapabilities(value = {}) {
+  const source = value?.capabilities && typeof value.capabilities === "object" ? value.capabilities : value;
+  const fallback = structuredClone(STRATEGY_DATA_CAPABILITY_FALLBACK);
+  const timeframes = Array.isArray(source?.timeframes)
+    ? source.timeframes.map(item => String(item?.timeframe || item || "").toUpperCase()).filter(Boolean)
+    : fallback.timeframes;
+  const chan = source?.chan && typeof source.chan === "object" ? source.chan : {};
+  const indicators = source?.indicators && typeof source.indicators === "object" ? source.indicators : {};
+  const ema34 = indicators.ema34 && typeof indicators.ema34 === "object" ? indicators.ema34 : {};
+  return {
+    ...fallback,
+    ...source,
+    version: String(source?.version || source?.catalog_version || fallback.version),
+    timeframes: timeframes.length ? timeframes : fallback.timeframes,
+    base_market_data: { ...fallback.base_market_data, ...(source?.base_market_data || source?.baseMarketData || {}) },
+    chan: { ...fallback.chan, ...chan, supported_timeframes: Array.isArray(chan.supported_timeframes) ? chan.supported_timeframes.map(value => String(value).toUpperCase()) : fallback.chan.supported_timeframes },
+    indicators: { ...fallback.indicators, ...indicators, ema34: { ...fallback.indicators.ema34, ...ema34 } },
+    portfolio_context: { ...fallback.portfolio_context, ...(source?.portfolio_context || {}) },
+    user_copy: { ...fallback.user_copy, ...(source?.user_copy || source?.copy || {}) },
+  };
+}
+
+async function loadStrategyDataCapabilities({ force = false, render = true } = {}) {
+  if (!force && state.strategyDataCapabilitiesStatus === "ready" && state.strategyDataCapabilities) return state.strategyDataCapabilities;
+  if (!force && state.strategyDataCapabilitiesStatus === "loading" && state.strategyDataCapabilitiesRequest) return state.strategyDataCapabilitiesRequest;
+  const requestVersion = Number(state.strategyDataCapabilitiesRequestVersion || 0) + 1;
+  state.strategyDataCapabilitiesRequestVersion = requestVersion;
+  state.strategyDataCapabilitiesStatus = "loading";
+  const request = api("/api/ai/strategy-data-capabilities").then(data => {
+    if (requestVersion !== Number(state.strategyDataCapabilitiesRequestVersion)) return state.strategyDataCapabilities;
+    state.strategyDataCapabilities = normalizedStrategyDataCapabilities(data);
+    state.strategyDataCapabilitiesStatus = "ready";
+    if (render) syncStrategyDataCapabilityUI();
+    return state.strategyDataCapabilities;
+  }).catch(error => {
+    if (requestVersion === Number(state.strategyDataCapabilitiesRequestVersion)) {
+      state.strategyDataCapabilitiesStatus = "error";
+      state.strategyDataCapabilitiesError = error;
+      syncStrategyDataCapabilityUI();
+    }
+    throw error;
+  }).finally(() => {
+    if (requestVersion === Number(state.strategyDataCapabilitiesRequestVersion)) state.strategyDataCapabilitiesRequest = null;
+  });
+  state.strategyDataCapabilitiesRequest = request;
+  return request;
+}
+
+function strategyPolicyObject(strategy = {}) {
+  const value = parseJsonField(strategy?.strategy_policy_json, strategy?.strategy_policy_json || null);
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function strategyIndicatorDeclarations(strategy = {}) {
+  const direct = parseJsonField(strategy?.indicator_declarations, strategy?.indicator_declarations || null);
+  if (Array.isArray(direct)) return structuredClone(direct);
+  const policy = strategyPolicyObject(strategy);
+  return Array.isArray(policy?.indicators) ? structuredClone(policy.indicators) : [];
+}
+
+function strategyIndicatorLooksLikeEma34(declaration = {}) {
+  const id = String(declaration?.id || "").toLowerCase();
+  const kind = String(declaration?.kind || declaration?.type || "").toLowerCase();
+  const period = Number(declaration?.params?.period ?? declaration?.period);
+  return id === "ema34" || id === "entry_ema34" || (kind === "ema" && period === 34);
+}
+
+function strategyIndicatorIsCanonicalEma34(declaration = {}) {
+  const id = String(declaration?.id || "").toLowerCase();
+  const kind = String(declaration?.kind || declaration?.type || "").toLowerCase();
+  const period = Number(declaration?.params?.period ?? declaration?.period);
+  const field = String(declaration?.source?.field || declaration?.field || "close").toLowerCase();
+  const barScope = String(declaration?.source?.bar_scope || declaration?.bar_scope || "closed_only").toLowerCase();
+  return id === "ema34" && kind === "ema" && period === 34 && field === "close" && barScope === "closed_only";
+}
+
+function strategyEma34State(strategy = {}) {
+  const policy = strategyPolicyObject(strategy);
+  const declarations = strategyIndicatorDeclarations(strategy);
+  const candidates = declarations.filter(strategyIndicatorLooksLikeEma34);
+  const canonical = candidates.find(strategyIndicatorIsCanonicalEma34) || null;
+  const advanced = candidates.some(item => !strategyIndicatorIsCanonicalEma34(item));
+  const legacyEnabled = Boolean(Number(strategy?.["use_ema34_filter"] || 0));
+  const capability = strategy?.data_capabilities?.ema34 && typeof strategy.data_capabilities.ema34 === "object" ? strategy.data_capabilities.ema34 : null;
+  const capabilityStatus = String(capability?.status || "").toLowerCase();
+  return {
+    policy,
+    declarations,
+    canonical: canonical || (capabilityStatus === "managed" && capability.enabled ? { id:"ema34", kind:"ema", enabled:true, source:{ timeframe:capability.timeframe } } : null),
+    advanced: capabilityStatus === "advanced" || advanced,
+    advancedDeclaration: candidates.find(item => !strategyIndicatorIsCanonicalEma34(item)) || null,
+    enabled: capabilityStatus === "managed" ? capability.enabled !== false : Boolean(canonical && canonical.enabled !== false),
+    legacyOnly: capabilityStatus === "legacy_unconfigured" || (legacyEnabled && !canonical && !advanced),
+    capabilityStatus,
+    capabilityTimeframe: String(capability?.timeframe || canonical?.source?.timeframe || "").toUpperCase(),
+    policyMode: String(policy?.mode || "").toLowerCase(),
+  };
+}
+
+function canonicalEma34Declaration(timeframe) {
+  return {
+    id: "ema34",
+    kind: "ema",
+    enabled: true,
+    source: { timeframe: String(timeframe || "").toUpperCase(), field: "close", bar_scope: "closed_only" },
+    params: { period: 34, minimum_bars: 34, warmup_target_bars: 60, evidence_window: 5 },
+  };
+}
+
+function strategyEditorMarketPlanFromControls() {
+  const timeframes = [...document.querySelectorAll("[data-strategy-timeframe]:checked")].map(input => ({
+    timeframe: String(input.dataset.strategyTimeframe || "").toUpperCase(),
+    kline_count: Number(document.querySelector(`[data-strategy-kline="${input.dataset.strategyTimeframe}"]`)?.value) || 100,
+  })).filter(item => item.timeframe);
+  const primary = document.querySelector('input[name="strategyPrimaryTimeframe"]:checked')?.value;
+  return { primary_timeframe: timeframes.some(item => item.timeframe === primary) ? primary : timeframes[0]?.timeframe || "", timeframes };
+}
+
+function strategyEditorSelectedTimeframes() {
+  return strategyEditorMarketPlanFromControls().timeframes.map(item => String(item.timeframe).toUpperCase());
+}
+
+function strategyEditorDataError(message = "") {
+  const node = $("strategyEditorError");
+  if (!node) return;
+  const text = String(message || "").trim();
+  node.hidden = !text;
+  node.textContent = text;
+}
+
+function strategyCapabilityStatusText(enabled, label, extra = "") {
+  return `${label} · ${enabled ? "已提供" : "未提供"}${extra ? ` · ${extra}` : ""}`;
+}
+
+function strategyDataSummaryMarkup({ plan, chanEnabled, chanTimeframes, emaEnabled, emaTimeframe, includePortfolio, entryMethods, loading = false } = {}) {
+  const methodLabels = { market: "市价", limit: "限价挂单", stop: "突破挂单", stop_limit: "突破限价" };
+  const rows = plan.timeframes.length
+    ? plan.timeframes.map(item => `<li><span>${escapeHtml(item.timeframe)}</span><strong>${Number(item.kline_count || 0)} 根 K 线及基础技术摘要</strong></li>`).join("")
+    : "<li><span>基础行情</span><strong>尚未选择行情周期</strong></li>";
+  const attachmentRows = [
+    chanEnabled ? `<li><span>缠论结构</span><strong>${escapeHtml(chanTimeframes.join("、") || "等待支持周期")}</strong></li>` : "",
+    emaEnabled ? `<li><span>EMA34</span><strong>${escapeHtml(emaTimeframe || "等待选择周期")} · 已收盘 K 线</strong></li>` : "",
+    `<li><span>持仓与挂单</span><strong>${includePortfolio ? "已提供" : "未提供"}</strong></li>`,
+  ].filter(Boolean).join("");
+  return `<div class="strategy-data-summary-heading"><strong>本策略将收到</strong><span class="status-chip">${loading ? "正在读取能力" : "实时更新"}</span></div><div class="strategy-data-summary-body"><section><h4>基础行情</h4><ul>${rows}</ul></section><section><h4>附加数据</h4><ul>${attachmentRows}</ul></section><section><h4>输出能力</h4><p>${escapeHtml(entryMethods.map(item => methodLabels[item] || item).join("、") || "尚未选择")}</p></section></div>`;
+}
+
+function strategyDataTechnicalMarkup({ plan, chanEnabled, chanTimeframes, emaEnabled, emaTimeframe } = {}) {
+  const fields = {
+    market_data_plan: plan,
+    chan: chanEnabled ? { field: "strategy_context.timeframes.*.summary.chan", timeframes: chanTimeframes } : null,
+    ema34: emaEnabled ? { field: "strategy_context.indicators.ema34", source: { timeframe: emaTimeframe, field: "close", bar_scope: "closed_only" } } : null,
+  };
+  return JSON.stringify(fields, null, 2);
+}
+
+function strategyWritingTemplates({ chanEnabled, chanTimeframes, emaEnabled, emaTimeframe } = {}) {
+  const templates = [];
+  if (chanEnabled) templates.push({ key: "chan", title: "缠论结构用途", text: `【缠论结构用途】\n- 使用周期：${chanTimeframes.join("、") || "请填写"}\n- 用途：{方向判断 / 入场确认 / 风险参考 / 其他，请填写}\n- 有效结构条件：{请填写}\n- 多周期冲突处理：{请填写}` });
+  if (emaEnabled) templates.push({ key: "ema34", title: "EMA34 用途", text: `【EMA34 用途】\n- 使用周期：${emaTimeframe || "请填写"}\n- 用途：{趋势过滤 / 入场确认 / 仅作参考 / 其他，请填写}\n- 多头条件：{请填写}\n- 空头条件：{请填写}\n- 不满足条件时：{请填写}` });
+  return templates;
+}
+
+function renderStrategyWritingTemplates(model) {
+  const host = $("strategyWritingTemplates");
+  if (!host) return;
+  const templates = strategyWritingTemplates(model);
+  host.innerHTML = templates.length ? templates.map(item => `<article class="strategy-writing-template"><div><strong>${escapeHtml(item.title)}</strong><pre>${escapeHtml(item.text)}</pre></div><div class="strategy-writing-template-actions"><button type="button" class="btn btn-secondary btn-sm" data-strategy-template-action="copy" data-strategy-template-key="${escapeHtml(item.key)}">复制写法模板</button><button type="button" class="btn btn-ghost btn-sm" data-strategy-template-action="insert" data-strategy-template-key="${escapeHtml(item.key)}">插入到光标位置</button></div></article>`).join("") : "<p class=\"strategy-writing-empty\">开启缠论或 EMA34 后，这里会显示可主动使用的写法模板。</p>";
+  host.dataset.templates = JSON.stringify(Object.fromEntries(templates.map(item => [item.key, item.text])));
+}
+
+async function copyStrategyTemplate(text) {
+  if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+  else {
+    const helper = document.createElement("textarea"); helper.value = text; helper.setAttribute("readonly", ""); helper.style.position = "fixed"; helper.style.opacity = "0"; document.body.appendChild(helper); helper.select(); document.execCommand("copy"); helper.remove();
+  }
+  toast("写法模板已复制，不会自动修改策略正文", "success");
+}
+
+function insertStrategyTemplate(text) {
+  const textarea = $("strategyPrompt");
+  if (!textarea) return;
+  const start = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
+  const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : start;
+  const prefix = start > 0 && !/[\n\r]$/.test(textarea.value.slice(0, start)) ? "\n\n" : "";
+  const insertion = `${prefix}${text}`;
+  if (typeof textarea.setRangeText === "function") textarea.setRangeText(insertion, start, end, "end");
+  else textarea.value = `${textarea.value.slice(0, start)}${insertion}${textarea.value.slice(end)}`;
+  textarea.focus();
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  toast("模板已插入光标位置，策略正文仍由你决定", "success");
+}
+
+function syncStrategyEditorMarketPlanControls() {
+  const selected = strategyEditorSelectedTimeframes();
+  document.querySelectorAll("[data-strategy-timeframe]").forEach(input => {
+    const timeframe = String(input.dataset.strategyTimeframe || "").toUpperCase();
+    const checked = input.checked;
+    const kline = document.querySelector(`[data-strategy-kline="${input.dataset.strategyTimeframe}"]`);
+    const radio = document.querySelector(`input[name="strategyPrimaryTimeframe"][value="${timeframe}"]`);
+    if (kline) kline.disabled = !checked;
+    if (radio) {
+      radio.disabled = !checked;
+      if (!checked) radio.checked = false;
+    }
+  });
+  if (!document.querySelector('input[name="strategyPrimaryTimeframe"]:checked')) {
+    document.querySelector(`input[name="strategyPrimaryTimeframe"][value="${selected[0]}"]`)?.click();
+  }
+  return selected;
+}
+
+function syncStrategyDataCapabilityUI() {
+  const editor = $("strategyEditor");
+  if (!editor || editor.classList.contains("hidden")) return;
+  const strategy = editor._strategyDraft || {};
+  const capabilities = state.strategyDataCapabilities || normalizedStrategyDataCapabilities({});
+  const plan = strategyEditorMarketPlanFromControls();
+  const selectedTimeframes = plan.timeframes.map(item => String(item.timeframe).toUpperCase());
+  const supported = (capabilities.chan?.supported_timeframes || STRATEGY_CHAN_TIMEFRAMES).map(value => String(value).toUpperCase());
+  const chanTimeframes = selectedTimeframes.filter(value => supported.includes(value));
+  const chan = $("strategyUseChanAnalysis");
+  const ema = $("strategyUseEma34Data");
+  const emaSelect = $("strategyEma34Timeframe");
+  const emaState = strategyEma34State(strategy);
+  editor._strategyEmaState = emaState;
+  if (chan) {
+    // Keep an invalid legacy selection reversible: users must still be able to
+    // switch Chan off even when the old plan contains no supported timeframe.
+    chan.disabled = !chanTimeframes.length && !chan.checked;
+    chan.setAttribute("aria-expanded", String(Boolean($("strategyChanDetails")?.open)));
+    if (!chanTimeframes.length && chan.checked) chan.dataset.invalid = "1";
+    else delete chan.dataset.invalid;
+  }
+  if (emaSelect) {
+    const previous = emaSelect.value || emaState.canonical?.source?.timeframe || selectedTimeframes[0] || "";
+    emaSelect.innerHTML = selectedTimeframes.map(timeframe => `<option value="${escapeHtml(timeframe)}">${escapeHtml(timeframe)} · 已收盘 K 线</option>`).join("");
+    emaSelect.value = selectedTimeframes.includes(previous) ? previous : selectedTimeframes[0] || "";
+    emaSelect.disabled = !ema?.checked || emaState.advanced || !selectedTimeframes.length;
+  }
+  if (ema) {
+    ema.disabled = emaState.advanced || !selectedTimeframes.length;
+    ema.setAttribute("aria-expanded", String(Boolean($("strategyEma34Details")?.open)));
+    if (emaState.advanced) {
+      ema.checked = false;
+      ema.indeterminate = true;
+    } else {
+      ema.indeterminate = false;
+      if (!editor.dataset.strategyEmaInitialized) ema.checked = emaState.enabled;
+      if (emaState.legacyOnly && !emaState.enabled) ema.checked = false;
+    }
+  }
+  const chanStatus = $("strategyChanStatus");
+  if (chanStatus) chanStatus.textContent = strategyCapabilityStatusText(Boolean(chan?.checked), "缠论结构数据", chanTimeframes.length ? `周期 ${chanTimeframes.join("、")}` : "没有已选支持周期");
+  const emaStatus = $("strategyEma34Status");
+  if (emaStatus) {
+    emaStatus.textContent = emaState.advanced
+      ? "高级配置 · 简单开关不会覆盖"
+      : emaState.legacyOnly
+        ? "旧配置未产生 EMA34 数据"
+        : strategyCapabilityStatusText(Boolean(ema?.checked), "EMA34 数据", emaSelect?.value ? `周期 ${emaSelect.value}` : "没有可选周期");
+  }
+  const chanTf = $("strategyChanTimeframes"); if (chanTf) chanTf.textContent = chanTimeframes.join("、") || "未选择支持周期";
+  const advanced = $("strategyAdvancedPolicyState");
+  if (advanced) {
+    advanced.innerHTML = emaState.advanced
+      ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="lock-keyhole" size="15"></i></span><span><strong>高级配置</strong><small>当前 EMA34 使用高级配置。简单开关不会覆盖它；请查看技术字段或由管理员确认转换。</small></span>`
+      : emaState.legacyOnly
+        ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="info" size="15"></i></span><span><strong>旧 EMA 状态</strong><small>旧配置未产生 EMA34 数据；重新开启并保存后才会按新声明提供。</small></span>`
+        : state.strategyDataCapabilitiesStatus === "error"
+          ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="triangle-alert" size="15"></i></span><span><strong>能力目录暂不可用</strong><small>未知高级配置不会被覆盖。可以取消编辑或稍后重试。</small></span><button type="button" class="btn btn-secondary btn-sm" data-strategy-capability-retry>重试</button>`
+          : "";
+    advanced.hidden = !advanced.innerHTML;
+  }
+  const methods = [...document.querySelectorAll("[data-strategy-entry-method]:checked")].map(input => input.dataset.strategyEntryMethod);
+  const includePortfolio = Boolean($("strategyIncludePortfolioContext")?.checked);
+  const summary = $("strategyDataSummary");
+  if (summary) summary.innerHTML = strategyDataSummaryMarkup({ plan, chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked) && !emaState.advanced, emaTimeframe:emaSelect?.value, includePortfolio, entryMethods:methods, loading:state.strategyDataCapabilitiesStatus === "loading" });
+  const technical = $("strategyDataTechnicalJson");
+  if (technical) technical.textContent = strategyDataTechnicalMarkup({ plan, chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked) && !emaState.advanced, emaTimeframe:emaSelect?.value });
+  renderStrategyWritingTemplates({ chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked) && !emaState.advanced, emaTimeframe:emaSelect?.value });
+  if (!editor.dataset.strategyEmaInitialized) editor.dataset.strategyEmaInitialized = "1";
+  initIcons();
+}
+
+function bindStrategyDataEditorControls() {
+  const editor = $("strategyEditor");
+  if (!editor || editor.dataset.strategyDataBound === "1") return;
+  editor.dataset.strategyDataBound = "1";
+  const refresh = () => { syncStrategyEditorMarketPlanControls(); syncStrategyDataCapabilityUI(); };
+  editor.addEventListener("change", event => {
+    if (event.target.matches("[data-strategy-timeframe], [data-strategy-kline], input[name='strategyPrimaryTimeframe'], [data-strategy-entry-method], #strategyUseChanAnalysis, #strategyUseEma34Data, #strategyEma34Timeframe, #strategyIncludePortfolioContext")) refresh();
+  });
+  editor.addEventListener("input", event => {
+    if (event.target.matches("[data-strategy-kline], #strategyTitle, #strategySymbols, #strategyDescription, #strategyPrompt")) syncStrategyDataCapabilityUI();
+  });
+  ["strategyChanDetails", "strategyEma34Details"].forEach(id => $(id)?.addEventListener("toggle", () => syncStrategyDataCapabilityUI()));
+  editor.addEventListener("click", async event => {
+    const retry = event.target.closest?.("[data-strategy-capability-retry]");
+    if (retry) { retry.disabled = true; try { await loadStrategyDataCapabilities({ force:true }); } catch { toast("能力目录读取失败，请稍后重试", "warning"); } finally { retry.disabled = false; } return; }
+    const action = event.target.closest?.("[data-strategy-template-action]");
+    if (!action) return;
+    const templates = parseJsonField($("strategyWritingTemplates")?.dataset.templates, {});
+    const text = templates?.[action.dataset.strategyTemplateKey] || "";
+    if (!text) return;
+    try { if (action.dataset.strategyTemplateAction === "copy") await copyStrategyTemplate(text); else insertStrategyTemplate(text); } catch (error) { toast(localizeReason(error?.message) || "模板操作失败，请重试", "warning"); }
+  });
+}
+
+function indicatorDeclarationsForStrategyPayload(strategy, enabled, timeframe) {
+  const current = strategyIndicatorDeclarations(strategy);
+  if (strategyEma34State(strategy).advanced) return current;
+  const managed = current.filter(strategyIndicatorLooksLikeEma34);
+  const advanced = managed.some(item => !strategyIndicatorIsCanonicalEma34(item));
+  if (advanced) return current;
+  const retained = current.filter(item => !strategyIndicatorLooksLikeEma34(item));
+  if (enabled) retained.push(canonicalEma34Declaration(timeframe));
+  return retained;
+}
+
+function strategyPolicyNeedsEmaConfirmation(strategy, emaEnabled) {
+  const stateInfo = strategyEma34State(strategy);
+  return Boolean(emaEnabled && !stateInfo.enabled && stateInfo.policyMode === "off");
 }
 
 function populateManualStrategySelector() {
@@ -4321,7 +4680,7 @@ function updateManualStrategySelection() {
   const methods = parseJsonField(strategy.entry_methods_json, ["market","limit","stop","stop_limit"]);
   const methodLabels = { market:"市价", limit:"限价挂单", stop:"突破挂单", stop_limit:"突破限价" };
   summary.className = "strategy-run-summary";
-  summary.innerHTML = `<div><span>行情计划</span><strong>${plan.timeframes.map(item => `${escapeHtml(item.timeframe)} × ${Number(item.kline_count)}`).join(" · ")}</strong></div><div><span>缠论指标</span><strong>${Number(strategy.use_chan_analysis) ? "已启用" : "未启用"}</strong></div><div><span>允许入场</span><strong>${methods.map(item => methodLabels[item] || item).map(escapeHtml).join("、")}</strong></div><div><span>模型</span><strong>${strategy.model_profile_id ? `绑定模型 #${Number(strategy.model_profile_id)}` : "按模型管理规则解析"}</strong></div>`;
+  summary.innerHTML = `<div><span>行情计划</span><strong>${plan.timeframes.map(item => `${escapeHtml(item.timeframe)} × ${Number(item.kline_count)}`).join(" · ")}</strong></div><div><span>缠论结构数据</span><strong>${Number(strategy.use_chan_analysis) ? "已提供" : "未提供"}</strong></div><div><span>允许入场</span><strong>${methods.map(item => methodLabels[item] || item).map(escapeHtml).join("、")}</strong></div><div><span>模型</span><strong>${strategy.model_profile_id ? `绑定模型 #${Number(strategy.model_profile_id)}` : "按模型管理规则解析"}</strong></div>`;
   populateModelCompareSelect();
 }
 
@@ -4340,7 +4699,8 @@ function renderStrategyModelOptions(scope, selectedId = "") {
 
 function openStrategyEditor(strategy = null) {
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
-  const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || "";
+  const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || ""; editor.dataset.strategyVersion = strategy?.version || ""; editor.dataset.strategyEmaInitialized = ""; editor._strategyDraft = strategy ? structuredClone(strategy) : {};
+  strategyEditorDataError("");
   const platformManager = canManagePlatformAiContent();
   $("strategyEditorTitle").textContent = strategy ? "编辑策略" : (platformManager ? "新建平台策略" : "新建自定义策略");
   $("strategyEditorBoundary").textContent = platformManager
@@ -4357,7 +4717,12 @@ function openStrategyEditor(strategy = null) {
   document.querySelectorAll('input[name="strategyPrimaryTimeframe"]').forEach(input => { input.checked = input.value === plan.primary_timeframe; input.disabled = !plan.timeframes.some(item => item.timeframe === input.value); });
   const entryMethods = new Set(parseJsonField(strategy?.entry_methods_json, ["market","limit","stop","stop_limit"]));
   document.querySelectorAll("[data-strategy-entry-method]").forEach(input => { input.checked = entryMethods.has(input.dataset.strategyEntryMethod); });
-  $("strategyUseChanAnalysis").checked = Boolean(Number(strategy?.use_chan_analysis || 0));
+  $("strategyUseChanAnalysis").checked = strategy?.data_capabilities?.chan?.enabled != null
+    ? Boolean(strategy.data_capabilities.chan.enabled)
+    : Boolean(Number(strategy?.use_chan_analysis || 0));
+  $("strategyUseEma34Data").checked = false;
+  $("strategyUseEma34Data").indeterminate = false;
+  $("strategyEma34Timeframe").innerHTML = "";
   $("strategyIncludePortfolioContext").checked = !platformManager && Boolean(Number(strategy?.include_portfolio_context || 0));
   $("strategyPortfolioContextField")?.classList.toggle("hidden", platformManager);
   if (platformManager) {
@@ -4367,30 +4732,72 @@ function openStrategyEditor(strategy = null) {
     $("strategyVisibilityField").style.display = "";
   }
   renderStrategyModelOptions(strategy?.scope || (platformManager ? "platform" : "private"), strategy?.model_profile_id || "");
+  bindStrategyDataEditorControls();
   openFormModal(editor);
+  syncStrategyEditorMarketPlanControls();
+  syncStrategyDataCapabilityUI();
+  loadStrategyDataCapabilities({ render:true }).catch(() => {});
 }
 
 async function saveStrategyEditor() {
-  const id = Number($("strategyEditor").dataset.strategyId || 0);
-  const timeframes = [...document.querySelectorAll("[data-strategy-timeframe]:checked")].map(input => ({ timeframe:input.dataset.strategyTimeframe, kline_count:Number(document.querySelector(`[data-strategy-kline="${input.dataset.strategyTimeframe}"]`)?.value) || 100 }));
-  if (!timeframes.length) throw new Error("请至少启用一个行情周期");
-  const primary = document.querySelector('input[name="strategyPrimaryTimeframe"]:checked')?.value;
-  const primaryTimeframe = timeframes.some(item => item.timeframe === primary) ? primary : timeframes[0].timeframe;
+  const editor = $("strategyEditor");
+  const button = $("saveStrategyBtn");
+  const id = Number(editor?.dataset.strategyId || 0);
+  const strategy = editor?._strategyDraft || {};
+  const fail = message => { const error = new Error(message); error._strategyEditorHandled = true; strategyEditorDataError(message); throw error; };
+  if (state.strategyDataCapabilitiesStatus !== "ready") return fail(state.strategyDataCapabilitiesStatus === "loading" ? "策略数据能力仍在读取，请稍后再保存" : "策略数据能力目录暂不可用，未知高级配置不会被覆盖；请重试或取消编辑");
+  const timeframes = strategyEditorMarketPlanFromControls().timeframes;
+  if (!timeframes.length) return fail("请至少启用一个行情周期");
+  const primaryTimeframe = strategyEditorMarketPlanFromControls().primary_timeframe || timeframes[0].timeframe;
   const entryMethods = [...document.querySelectorAll("[data-strategy-entry-method]:checked")].map(input => input.dataset.strategyEntryMethod);
-  if (!entryMethods.length) throw new Error("请至少允许一种入场方式");
+  if (!entryMethods.length) return fail("请至少允许一种入场方式");
+  const chanEnabled = Boolean($("strategyUseChanAnalysis")?.checked);
+  const chanSupported = (state.strategyDataCapabilities?.chan?.supported_timeframes || STRATEGY_CHAN_TIMEFRAMES).map(value => String(value).toUpperCase());
+  const selectedChanTimeframes = timeframes.map(item => item.timeframe).filter(timeframe => chanSupported.includes(String(timeframe).toUpperCase()));
+  if (chanEnabled && !selectedChanTimeframes.length) return fail("开启缠论结构数据前，请至少选择 M5、M15、H1 或 H4 周期");
+  const emaState = strategyEma34State(strategy);
+  const emaEnabled = Boolean($("strategyUseEma34Data")?.checked) && !emaState.advanced;
+  const emaTimeframe = String($("strategyEma34Timeframe")?.value || "").toUpperCase();
+  if (emaEnabled && !emaTimeframe) return fail("开启 EMA34 数据前，请选择一个当前行情周期");
+  if (emaEnabled && !timeframes.some(item => item.timeframe === emaTimeframe)) return fail("EMA34 周期必须来自当前已启用的行情周期");
+  let confirmEnableDataRuntime = false;
+  if (strategyPolicyNeedsEmaConfirmation(strategy, emaEnabled)) {
+    const message = "当前策略有一个明确关闭的高级策略配置。确认后将启用 EMA34 数据计算（不会自动加入交易规则），是否继续？";
+    const confirmed = await showConfirm("确认提供 EMA34 数据？", message, { confirmText:"确认启用", cancelText:"取消" });
+    if (!confirmed) return fail("你取消了 EMA34 数据启用，草稿仍保留");
+    confirmEnableDataRuntime = true;
+  }
   const scope = canManagePlatformAiContent() ? "platform" : "private";
   const visibilityStatus = canManagePlatformAiContent() ? $("strategyVisibility").value : "active";
   const body = { title:$("strategyTitle").value.trim(), symbols:$("strategySymbols").value.split(",").map(value => value.trim()).filter(Boolean),
     description:$("strategyDescription").value.trim(), system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
     market_data_plan:{ primary_timeframe:primaryTimeframe, timeframes }, entry_methods:entryMethods,
-    use_chan_analysis:$("strategyUseChanAnalysis").checked,
+    use_chan_analysis:chanEnabled,
     include_portfolio_context:scope === "private" && $("strategyIncludePortfolioContext").checked,
     is_active:visibilityStatus === "active",
     model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,
     scope,
     visibility_status:visibilityStatus };
-  await api(id ? `/api/ai/strategies/${id}` : "/api/ai/strategies", { method:id ? "PUT" : "POST", body });
-  closeFormModal($("strategyEditor"), false); toast("策略已保存", "success"); await loadStrategyCatalog();
+  if (!emaState.advanced) body.indicator_declarations = indicatorDeclarationsForStrategyPayload(strategy, emaEnabled, emaTimeframe);
+  if (id) body.expected_version = Number(editor.dataset.strategyVersion || strategy.version || 1);
+  if (confirmEnableDataRuntime) body.confirm_enable_data_runtime = true;
+  strategyEditorDataError("");
+  if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); button.querySelector(".strategy-save-label")?.replaceChildren(document.createTextNode("正在保存…")); }
+  try {
+    const saved = await api(id ? `/api/ai/strategies/${id}` : "/api/ai/strategies", { method:id ? "PUT" : "POST", body });
+    closeFormModal(editor, false); toast("策略已保存", "success"); await loadStrategyCatalog();
+    return saved;
+  } catch (error) {
+    const message = error?.code === "strategy_version_conflict"
+      ? "策略已在其他位置更新。当前草稿已保留，请刷新后对比再保存。"
+      : localizeReason(error?.code || error?.message) || "策略保存失败，当前草稿已保留，请修改后重试";
+    strategyEditorDataError(message);
+    error._strategyEditorHandled = true;
+    if (error?.code === "strategy_version_conflict") editor.dataset.strategyConflict = "1";
+    throw error;
+  } finally {
+    if (button) { button.disabled = false; button.setAttribute("aria-busy", "false"); button.querySelector(".strategy-save-label")?.replaceChildren(document.createTextNode("保存策略")); }
+  }
 }
 
 function mt5ScheduleTimezone(offsetMinutes = state.mt5TimezoneOffsetMinutes) {
@@ -13629,7 +14036,7 @@ function bindEvents() {
 
   $("addPrivateStrategyBtn")?.addEventListener("click", () => openStrategyEditor());
   $("cancelStrategyEditorBtn")?.addEventListener("click", () => closeFormModal($("strategyEditor")));
-  $("saveStrategyBtn")?.addEventListener("click", () => saveStrategyEditor().catch(error => toast(error.message, "error")));
+  $("saveStrategyBtn")?.addEventListener("click", () => saveStrategyEditor().catch(error => { if (!error?._strategyEditorHandled) toast(localizeReason(error?.code || error?.message) || "策略保存失败", "error"); }));
   $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => closeFormModal($("subscriptionEditor")));
   $("saveSubscriptionBtn")?.addEventListener("click", () => saveSubscriptionEditor().catch(error => toast(error.message, "error")));
   $("subscriptionStrategy")?.addEventListener("change", handleSubscriptionStrategyChange);

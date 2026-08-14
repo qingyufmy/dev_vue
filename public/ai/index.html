@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260812memory4" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260812memory4">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260812memory4">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260812memory4&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260812memory4&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260812memory4&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260812memory4&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -543,9 +543,9 @@
                 <fieldset class="strategy-form-section"><legend><span class="section-step">01</span>基本信息</legend><p>定义策略身份、可见范围和可分析品种。</p>
                   <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label><label id="strategyScopeField" class="admin-only platform-content-only is-readonly"><span>策略范围</span><input id="strategyScope" value="platform" readonly aria-readonly="true"><small id="strategyScopeHelp" class="field-help">平台内容维护者在这里维护平台策略，用户私有策略保持只读。</small></label><label id="strategyVisibilityField" class="admin-only platform-content-only"><span>可见状态</span><select id="strategyVisibility"><option value="active">上线（可用于分析）</option><option value="draft">草稿（不可用于分析）</option><option value="archived">归档（不可用于分析）</option></select><small class="field-help">可见状态同时控制策略是否进入手动和自动分析。</small></label></div>
                 </fieldset>
-                <fieldset class="strategy-form-section"><legend><span class="section-step">02</span>行情数据方案</legend><p>手动与自动分析共用这组周期和 K 线数量；主周期用于建议有效期和结果标识。</p>
+                <fieldset class="strategy-form-section strategy-data-section"><legend><span class="section-step">02</span><span id="strategyDataSectionTitle">提供给模型的数据</span></legend><p>手动与自动分析共用这组数据声明；系统提供事实，具体分析方法仍以策略正文为准。</p>
                   <div id="strategyMarketPlan" class="market-plan-grid">
-                    <div class="market-plan-head"><span>启用</span><span>周期</span><span>K 线数量</span><span>主周期</span></div>
+                    <div class="market-plan-head"><span>提供</span><span>周期</span><span>K 线数量</span><span>主周期</span></div>
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M1" aria-label="启用 M1"><strong>M1</strong><input type="number" data-strategy-kline="M1" min="10" max="500" step="10" value="100" aria-label="M1 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M1" aria-label="将 M1 设为主周期"></div>
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M5" aria-label="启用 M5"><strong>M5</strong><input type="number" data-strategy-kline="M5" min="10" max="500" step="10" value="100" aria-label="M5 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M5" aria-label="将 M5 设为主周期"></div>
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M15" aria-label="启用 M15"><strong>M15</strong><input type="number" data-strategy-kline="M15" min="10" max="500" step="10" value="100" aria-label="M15 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M15" aria-label="将 M15 设为主周期"></div>
@@ -554,12 +554,31 @@
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="H4" aria-label="启用 H4"><strong>H4</strong><input type="number" data-strategy-kline="H4" min="10" max="500" step="10" value="100" aria-label="H4 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="H4" aria-label="将 H4 设为主周期"></div>
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="D1" aria-label="启用 D1"><strong>D1</strong><input type="number" data-strategy-kline="D1" min="10" max="500" step="10" value="100" aria-label="D1 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="D1" aria-label="将 D1 设为主周期"></div>
                   </div>
-                  <div class="strategy-capability-grid">
-                    <label class="strategy-capability-toggle" for="strategyUseChanAnalysis">
-                      <input id="strategyUseChanAnalysis" type="checkbox">
-                      <span><strong>启用缠论指标</strong><small>计算笔、线段、中枢、背驰、走势状态与买卖点候选。推理耗时可能增加。</small></span>
-                    </label>
+                  <div class="strategy-capability-grid strategy-data-capabilities">
+                    <section class="strategy-capability-row" data-strategy-capability="chan">
+                      <label class="strategy-capability-toggle" for="strategyUseChanAnalysis">
+                        <input id="strategyUseChanAnalysis" type="checkbox" aria-describedby="strategyChanHelp strategyChanStatus" aria-controls="strategyChanDetails" aria-expanded="false">
+                        <span><strong>提供缠论结构数据</strong><small id="strategyChanHelp">为已选的支持周期计算并提供原始结构。不会自动决定方向，也不会强制观望或交易。</small><small id="strategyChanStatus" class="strategy-capability-status" role="status">当前未提供</small></span>
+                      </label>
+                      <details id="strategyChanDetails" class="strategy-capability-details">
+                        <summary><span>查看说明与写法</span><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary>
+                        <div class="strategy-capability-detail-body"><p>可计算周期：<strong id="strategyChanTimeframes">未选择支持周期</strong></p><p>结构数据由系统按实际周期提供，策略正文决定如何使用。</p></div>
+                      </details>
+                    </section>
+                    <section class="strategy-capability-row" data-strategy-capability="ema34">
+                      <label class="strategy-capability-toggle" for="strategyUseEma34Data">
+                        <input id="strategyUseEma34Data" type="checkbox" aria-describedby="strategyEma34Help strategyEma34Status" aria-controls="strategyEma34Details" aria-expanded="false">
+                        <span><strong>提供 EMA34 数据</strong><small id="strategyEma34Help">按所选周期的已收盘 K 线计算并提供。不会自动作为开仓过滤条件。</small><small id="strategyEma34Status" class="strategy-capability-status" role="status">当前未提供</small></span>
+                      </label>
+                      <details id="strategyEma34Details" class="strategy-capability-details">
+                        <summary><span>查看周期与说明</span><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary>
+                        <div class="strategy-capability-detail-body"><label class="strategy-inline-field" for="strategyEma34Timeframe"><span>计算周期</span><select id="strategyEma34Timeframe" aria-describedby="strategyEma34TimeframeHelp"></select><small id="strategyEma34TimeframeHelp">只能选择当前行情方案中已启用的周期。</small></label><p>参数固定为 EMA34、收盘价、已收盘 K 线；预热目标 60 根。</p></div>
+                      </details>
+                    </section>
                   </div>
+                  <div id="strategyAdvancedPolicyState" class="strategy-advanced-policy-state" role="status" aria-live="polite"></div>
+                  <div id="strategyDataSummary" class="strategy-data-summary" aria-live="polite" aria-atomic="true"><div class="strategy-data-summary-heading"><strong>本策略将收到</strong><span class="status-chip">正在读取</span></div><div class="strategy-data-summary-body"></div></div>
+                  <details id="strategyDataTechnicalDetails" class="strategy-technical-details"><summary><span>查看技术字段</span><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary><pre id="strategyDataTechnicalJson" aria-label="策略数据声明技术字段">{}</pre></details>
                 </fieldset>
                 <fieldset class="strategy-form-section"><legend><span class="section-step">03</span>允许的入场方式</legend><p>未启用的方式会从模型输出格式中删除，后端也会拒绝模型越界输出。</p>
                   <div class="entry-method-grid">
@@ -575,10 +594,12 @@
                     <input id="strategyIncludePortfolioContext" type="checkbox">
                     <span><strong>向模型提供当前持仓与挂单</strong><small>仅适用于你的私有策略。开启后，推理会读取当前交易账户的持仓和挂单，用于避免重复入场、方向冲突和挂单冲突；账户余额与模型凭据不会传入。桥接数据不完整时，本次推理会停止，不会用空数据继续判断。</small></span>
                   </label>
-                  <label class="prompt-box"><span>策略提示词</span><textarea id="strategyPrompt" rows="10" spellcheck="false" placeholder="描述市场分析框架、信号判断方法和输出侧重点"></textarea></label>
+                  <label class="prompt-box"><span>策略提示词</span><textarea id="strategyPrompt" rows="10" spellcheck="false" aria-describedby="strategyPromptHelp strategyEditorError" placeholder="描述市场分析框架、信号判断方法和输出侧重点"></textarea><small id="strategyPromptHelp" class="field-help">系统不会自动改写策略正文。你可以主动复制或插入下面的写法模板。</small></label>
+                  <section id="strategyWritingAssistant" class="strategy-writing-assistant" aria-labelledby="strategyWritingAssistantTitle"><header><strong id="strategyWritingAssistantTitle">如何在策略中使用</strong><small>仅在你点击时复制或插入，不会自动修改提示词。</small></header><div id="strategyWritingTemplates" class="strategy-writing-templates"></div></section>
                 </fieldset>
               </div>
-              <div class="form-actions form-modal-actions"><button id="saveStrategyBtn" class="btn btn-primary">保存策略</button></div>
+              <div id="strategyEditorError" class="strategy-editor-error" role="alert" aria-live="assertive" hidden></div>
+              <div class="form-actions form-modal-actions"><button id="saveStrategyBtn" class="btn btn-primary" type="button" aria-busy="false" aria-describedby="strategyEditorError"><span class="strategy-save-label">保存策略</span></button></div>
             </section>
             </div>
             <div id="subscriptionEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="subscriptionEditorTitle">
@@ -1329,7 +1350,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260812memory4&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1"></script>
+    <script src="/ai/app.js?v=20260812memory4&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

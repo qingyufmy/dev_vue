@@ -1697,10 +1697,27 @@ describe('maybeAiSignal', () => {
     expect(payload.strategy_context.indicators.entry_ema34).toMatchObject({
       ready:true, kind:'ema', value:1998.25, source:{ timeframe:'M5', bar_scope:'closed_only' },
     })
-    expect(evidence.systemPrompt).toContain('策略声明指标数据')
+    expect(evidence.systemPrompt).toContain('系统提供的数据')
     expect(evidence.systemPrompt).toContain('中性事实')
     expect(evidence.systemPrompt).not.toContain('价格在 EMA34 上方')
     expect(evidence.systemPrompt).not.toContain('strategy_policy_trace')
+  })
+
+  it('adds only a neutral EMA34 identity when the managed declaration is present', async () => {
+    mockFetch.mockResolvedValue({ ok:true, json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify({
+      signal_type:'hold', entry_method:'observe', confidence:0.5, position_size_tier:'observe',
+      position_size_reason:'等待', position_action:'observe', pending_action:'none', pending_action_reason:'',
+      management_direction:'none', analysis:'等待', reasoning:'等待',
+    }) } }] }) })
+    let evidence
+    await maybeAiSignal(null, { api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      _market_only:true, _onInferencePrepared:value => { evidence = value } }, {
+      symbol:'XAUUSD', standard_symbol:'XAUUSD', timeframe:'M5', latest_price:2000,
+      strategy_context:{ timeframes:{}, indicators:{ ema34:{ ready:true, kind:'ema', value:1999,
+        source:{ timeframe:'M5', bar_scope:'closed_only' }, evidence_hash:'b'.repeat(64) } } },
+    })
+    expect(evidence.systemPrompt).toContain('strategy_context.indicators.ema34 是系统按策略声明计算的 EMA34 数据')
+    expect(evidence.systemPrompt).not.toMatch(/上方只做多|下方禁止|过滤通过|必须观望/)
   })
 
   it('does not discourage automatic close in private portfolio boundaries', async () => {

@@ -36,6 +36,7 @@ import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription } from './strategy-ownership.js'
+import { buildStrategyDataCapabilitiesCatalog } from './strategy-policy.js'
 import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, normalizePlatformRiskConfig, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
 import { setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
 import { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
@@ -597,6 +598,10 @@ router.get('/ai/strategies', authMiddleware, async (req, res) => {
     res.json({ ok: true, strategies, subscriptions, accounts })
   }
   catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/strategy-data-capabilities', authMiddleware, (req, res) => {
+  res.json({ ok:true, capabilities:buildStrategyDataCapabilitiesCatalog() })
 })
 
 router.get('/ai/strategies/:id', authMiddleware, async (req, res) => {

@@ -1922,3 +1922,31 @@
   .manual-review-detail-actions .btn { width: 100%; min-height: 44px; }
   .manual-review-editor-actions .btn { width: 100%; min-height: 44px; }
 }
+
+/* Strategy data capability editor: keep the catalog readable without changing
+   the desktop information hierarchy. */
+@media (max-width: 1040px) {
+  .strategy-data-summary-body { grid-template-columns: 1fr; }
+  .strategy-data-summary-body section + section { border-top: 1px solid var(--border-subtle); border-left: 0; }
+}
+
+@media (max-width: 720px) {
+  .strategy-capability-detail-body { padding-left: 14px; }
+  .strategy-inline-field { grid-template-columns: 1fr; }
+  .strategy-inline-field > small { grid-column: 1; }
+  .strategy-writing-template { grid-template-columns: 1fr; }
+  .strategy-writing-template-actions { justify-content: stretch; }
+  .strategy-writing-template-actions .btn { flex: 1 1 140px; min-height: 44px; }
+}
+
+@media (max-width: 375px) {
+  .strategy-editor-dialog { overflow-x: hidden; }
+  .strategy-form-section :is(input, select, textarea) { font-size: 16px; }
+  .strategy-form-section :is(button, summary, .strategy-capability-toggle) { min-height: 44px; }
+  #saveStrategyBtn { min-height: 44px !important; }
+  .market-plan-head,.market-plan-row { grid-template-columns: 40px 46px minmax(84px, 1fr) 44px; gap: 5px; padding-inline: 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strategy-form-section * { scroll-behavior: auto !important; transition: none !important; }
+}

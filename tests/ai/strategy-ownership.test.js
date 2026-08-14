@@ -123,6 +123,20 @@ describe('strategy visibility and mutation permissions', () => {
     expect(params).toContain(2)
   })
 
+  it('returns one server-derived capability state for both strategy editors', async () => {
+    db.queryAll.mockResolvedValue([{ ...PRIVATE, use_chan_analysis:1, use_ema34_filter:1,
+      market_data_plan_json:JSON.stringify({ primary_timeframe:'M1', timeframes:[
+        { timeframe:'M1', kline_count:100 }, { timeframe:'H1', kline_count:100 },
+      ] }), strategy_policy_json:null }])
+    const [strategy] = await listStrategies(2, 'user')
+    expect(strategy.data_capabilities).toEqual({
+      version:'strategy-data-capabilities-v1',
+      chan:{ enabled:true, timeframes:['H1'] },
+      ema34:{ status:'legacy_unconfigured', enabled:false, timeframe:null },
+      portfolio_context:{ enabled:false, scope:'private' },
+    })
+  })
+
   it('rejects an expired or free user before listing', async () => {
     db.queryOne.mockImplementation(sql => sql.includes('FROM users') ? FREE : null)
     await expect(listStrategies(3, 'user')).rejects.toThrow('pro_access_required')
@@ -222,6 +236,49 @@ describe('strategy visibility and mutation permissions', () => {
     expect(updateParams[7]).toBe(1)
   })
 
+  it('maps the simple EMA34 declaration into a canonical data-only policy and audit mirror', async () => {
+    await createStrategy(2, 'user', {
+      scope:'private', title:'EMA34 data', symbols:['XAUUSD'],
+      market_data_plan:{ primary_timeframe:'H1', timeframes:[{ timeframe:'H1', kline_count:100 }] },
+      indicator_declarations:[{ id:'ema34', source:{ timeframe:'H1' } }],
+    })
+    const params = latestStrategyInsert()[1]
+    const policy = JSON.parse(params[18])
+    expect(params[7]).toBe(1)
+    expect(policy).toMatchObject({ mode:'shadow', indicators:[{
+      id:'ema34', kind:'ema', source:{ timeframe:'H1', field:'close', bar_scope:'closed_only' },
+      params:{ period:34, warmup_target_bars:60 },
+    }], constraints:[], prompt_rules:[] })
+  })
+
+  it('uses expected_version and SQL CAS while preserving a failed editor draft', async () => {
+    db.queryOne.mockImplementation(statement => statement.includes('FROM users')
+      ? PRO : { ...PRIVATE, version:4, strategy_policy_json:null,
+        market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:100 }] }) })
+    await expect(updateStrategy(2, 2, 'user', { expected_version:3, title:'stale' }))
+      .rejects.toThrow('strategy_version_conflict')
+    expect(db.queryRun).not.toHaveBeenCalled()
+
+    await updateStrategy(2, 2, 'user', { expected_version:4,
+      indicator_declarations:[{ id:'ema34', source:{ timeframe:'M5' } }] })
+    const update = db.queryRun.mock.calls[0]
+    expect(update[0]).toContain('WHERE id = ? AND version = ?')
+    expect(update[1].at(-1)).toBe(4)
+    expect(update[1][7]).toBe(1)
+    expect(JSON.parse(update[1][17]).indicators[0]).toMatchObject({ id:'ema34', source:{ timeframe:'M5' } })
+
+    db.queryRun.mockClear()
+    db.queryRun.mockResolvedValueOnce({ affectedRows:0 })
+    db.queryOne.mockImplementation(statement => {
+      if (statement.includes('FROM users')) return PRO
+      if (statement.includes('SELECT version FROM auto_prompt_types')) return { version:5 }
+      return { ...PRIVATE, version:4, strategy_policy_json:null,
+        market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:100 }] }) }
+    })
+    await expect(updateStrategy(2, 2, 'user', { expected_version:4, title:'raced' }))
+      .rejects.toThrow('strategy_version_conflict')
+  })
+
   it('round-trips a valid declared policy and bumps strategy version', async () => {
     await createStrategy(2, 'user', {
       scope:'private', title:'Declared EMA34', symbols:['XAUUSD'],
@@ -298,10 +355,14 @@ describe('strategy visibility and mutation permissions', () => {
       .rejects.toThrow('model_token_limits_unconfirmed')
   })
 
-  it('rejects Chan-incompatible timeframes at save time but permits them when Chan is off', async () => {
+  it('requires one Chan-supported timeframe but keeps ordinary unsupported periods in the same plan', async () => {
     await expect(createStrategy(2, 'user', { scope:'private', symbols:['XAUUSD'], use_chan_analysis:true,
       market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } }))
       .rejects.toThrow('chan_timeframe_unsupported')
+    await expect(createStrategy(2, 'user', { scope:'private', symbols:['XAUUSD'], use_chan_analysis:true,
+      market_data_plan:{ primary_timeframe:'M1', timeframes:[
+        { timeframe:'M1', kline_count:100 }, { timeframe:'H1', kline_count:100 },
+      ] } })).resolves.toBeTruthy()
     await expect(createStrategy(2, 'user', { scope:'private', symbols:['XAUUSD'], use_chan_analysis:false,
       market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } })).resolves.toBeTruthy()
   })

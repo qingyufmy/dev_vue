@@ -520,6 +520,7 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
       strategy_id:input.strategyRuntime.strategy_id || null,
       strategy_version:input.strategyRuntime.strategy_version || null,
       scope:input.strategyRuntime.scope || null,
+      data_capabilities_version:input.strategyRuntime.data_capabilities_version || null,
       market_data_plan:input.strategyRuntime.market_data_plan || null,
       entry_methods:input.strategyRuntime.entry_methods || null,
       use_chan_analysis:input.strategyRuntime.use_chan_analysis,

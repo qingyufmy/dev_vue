@@ -73,6 +73,42 @@ function loadAdminModelRequestTransportTimeoutMs() {
   return new Function(`${adminApp.slice(start, end)}\nreturn adminModelRequestTransportTimeoutMs;`)()
 }
 
+describe('strategy data capability editor contract', () => {
+  it('keeps user and admin editors explicit, accessible, responsive, and cache-busted', () => {
+    for (const source of [app, adminApp]) {
+      expect(source).toContain('/api/ai/strategy-data-capabilities')
+      expect(source).toContain('indicator_declarations')
+      expect(source).toContain('expected_version')
+      expect(source).toContain('strategy_version_conflict')
+      expect(source).toContain('不会自动加入交易规则')
+    }
+
+    expect(html).toContain('提供给模型的数据')
+    expect(html).toContain('提供缠论结构数据')
+    expect(html).toContain('提供 EMA34 数据')
+    expect(html).toContain('aria-describedby="strategyChanHelp strategyChanStatus"')
+    expect(html).toContain('aria-live="assertive"')
+    expect(app).toContain('if (!emaState.advanced) body.indicator_declarations')
+    expect(app).toContain('策略数据能力目录暂不可用')
+
+    expect(adminApp).toContain('admin-strategy-data-summary')
+    expect(adminApp).toContain('if(!emaState.advanced)payload.indicator_declarations')
+    expect(adminApp).toContain('data-delete-platform-strategy')
+    expect(adminApp).toContain('缠论至少需要一个支持周期')
+    expect(adminApp).toContain('策略数据能力目录暂不可用')
+
+    expect(responsiveCss).toContain('@media (max-width: 375px)')
+    expect(responsiveCss).toContain('@media (prefers-reduced-motion: reduce)')
+    expect(responsiveCss).toContain('min-height: 44px')
+    expect(responsiveCss).toContain('.strategy-editor-dialog { overflow-x: hidden; }')
+    expect(adminCss).toContain('@media (max-width:375px)')
+    expect(adminCss).toContain('@media (prefers-reduced-motion:reduce)')
+    expect(adminCss).toContain('min-height:44px')
+    expect(html).toContain('strategydata4')
+    expect(adminHtml).toContain('strategydata4')
+  })
+})
+
 describe('AI governance navigation and DOM contract', () => {
   it('uses truthful unified-memory application states without retired personal or platform candidates', () => {
     expect(app).toContain('memory_application_status')
@@ -831,8 +867,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(html).not.toContain('id="subscriptionSymbols"')
     expect(html).toContain('data-strategy-entry-method="stop_limit"')
     expect(html).toContain('id="strategyUseChanAnalysis"')
-    expect(html).toContain('启用缠论指标')
-    expect(app).toContain('use_chan_analysis:$("strategyUseChanAnalysis").checked')
+    expect(html).toContain('提供缠论结构数据')
+    expect(app).toContain('use_chan_analysis:chanEnabled')
     expect(app).toContain('strategy_id:strategyId')
     expect(app).not.toContain('/api/ai/inference-preferences')
     expect(html).not.toContain('id="systemPrompt"')

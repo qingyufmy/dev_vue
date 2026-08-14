@@ -3,6 +3,9 @@ import {
   normalizeEntryMethods,
   normalizeMarketDataPlan,
   normalizeUseChanAnalysis,
+  buildStrategyDataCapabilitiesCatalog,
+  describeSimpleIndicatorCapabilities,
+  mergeSimpleIndicatorDeclarations,
   parseStrategyPolicy,
   prepareStrategyDataRuntime,
   buildStrategyRuntimeSnapshot,
@@ -71,11 +74,84 @@ describe('strategy policy', () => {
     expect(parseStrategyPolicy({ system_prompt: '{{USE_CHAN}}', use_chan_analysis: 0 }).useChanAnalysis).toBe(false)
   })
 
-  it('rejects unsupported Chan periods while retaining them for ordinary market data when disabled', () => {
+  it('allows ordinary unsupported periods beside a supported Chan period and rejects a plan without any supported period', () => {
     expect(() => parseStrategyPolicy({ use_chan_analysis:1, market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } }))
       .toThrow('chan_timeframe_unsupported')
+    expect(parseStrategyPolicy({ use_chan_analysis:1, market_data_plan:{ primary_timeframe:'M1', timeframes:[
+      { timeframe:'M1', kline_count:100 }, { timeframe:'H1', kline_count:100 },
+    ] } })).toMatchObject({ useChanAnalysis:true, marketDataPlan:{ primary_timeframe:'M1' } })
     expect(parseStrategyPolicy({ use_chan_analysis:0, market_data_plan:{ timeframes:[{ timeframe:'M1', kline_count:100 }] } }).marketDataPlan.timeframes[0].timeframe)
       .toBe('M1')
+  })
+
+  it('publishes one neutral, versioned data-capability catalog', () => {
+    expect(buildStrategyDataCapabilitiesCatalog()).toMatchObject({
+      version:'strategy-data-capabilities-v1',
+      chan:{ label:'提供缠论结构数据', supported_timeframes:['M5', 'M15', 'H1', 'H4'] },
+      indicators:{ ema34:{ id:'ema34', kind:'ema', field:'close', bar_scope:'closed_only', params:{ period:34 } } },
+      user_copy:{ summary_title:'本策略将收到', save_label:'保存策略' },
+    })
+    expect(JSON.stringify(buildStrategyDataCapabilitiesCatalog())).not.toMatch(/只做多|禁止开仓|必须观望/)
+  })
+
+  it('creates and removes the managed EMA34 declaration without adding trading rules', () => {
+    const marketDataPlan = { primary_timeframe:'M15', timeframes:[{ timeframe:'M15', kline_count:100 }] }
+    const enabled = mergeSimpleIndicatorDeclarations({ marketDataPlan, declarations:[{
+      id:'ema34', source:{ timeframe:'M15' },
+    }] })
+    const policy = JSON.parse(enabled.strategyPolicyJson)
+    expect(enabled).toMatchObject({ useEma34Filter:true,
+      capabilityState:{ ema34:{ status:'managed', enabled:true, timeframe:'M15' } } })
+    expect(policy).toMatchObject({ schema_version:'strategy-policy-v1', mode:'shadow',
+      indicators:[{ id:'ema34', kind:'ema', source:{ timeframe:'M15', field:'close', bar_scope:'closed_only' },
+        params:{ period:34, minimum_bars:34, warmup_target_bars:60, evidence_window:5 } }],
+      workflow:{ stages:[], selectors:[] }, constraints:[], prompt_rules:[] })
+    expect(policy).not.toHaveProperty('policy_hash')
+
+    const disabled = mergeSimpleIndicatorDeclarations({ strategyPolicyValue:policy, marketDataPlan, declarations:[] })
+    expect(disabled).toMatchObject({ strategyPolicyJson:null, useEma34Filter:false,
+      capabilityState:{ ema34:{ status:'disabled', enabled:false } } })
+  })
+
+  it('protects explicit off and advanced EMA34 policies from a simple toggle', () => {
+    const marketDataPlan = { primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:100 }] }
+    const off = declaredEmaPolicy('off')
+    off.indicators = []
+    expect(() => mergeSimpleIndicatorDeclarations({ strategyPolicyValue:off, marketDataPlan,
+      declarations:[{ id:'ema34', source:{ timeframe:'M5' } }] }))
+      .toThrow('strategy_data_runtime_confirmation_required')
+    expect(mergeSimpleIndicatorDeclarations({ strategyPolicyValue:off, marketDataPlan,
+      declarations:[{ id:'ema34', source:{ timeframe:'M5' } }], confirmEnableDataRuntime:true }))
+      .toMatchObject({ useEma34Filter:true })
+
+    const advanced = declaredEmaPolicy()
+    expect(describeSimpleIndicatorCapabilities(advanced)).toMatchObject({
+      ema34:{ status:'advanced', enabled:true, timeframe:'M5' },
+    })
+    expect(() => mergeSimpleIndicatorDeclarations({ strategyPolicyValue:advanced, marketDataPlan,
+      declarations:[{ id:'ema34', source:{ timeframe:'M5' } }] }))
+      .toThrow('strategy_indicator_advanced_configuration')
+
+    const referenced = JSON.parse(mergeSimpleIndicatorDeclarations({ marketDataPlan,
+      declarations:[{ id:'ema34', source:{ timeframe:'M5' } }] }).strategyPolicyJson)
+    referenced.constraints = [{ require:{ left:{ ref:'indicators.ema34.ready' }, op:'eq', right:true } }]
+    expect(describeSimpleIndicatorCapabilities(referenced)).toMatchObject({
+      ema34:{ status:'advanced', enabled:true, timeframe:'M5' },
+    })
+    expect(() => mergeSimpleIndicatorDeclarations({ strategyPolicyValue:referenced, marketDataPlan,
+      declarations:[] })).toThrow('strategy_indicator_advanced_configuration')
+  })
+
+  it('rejects missing or out-of-plan EMA34 periods', () => {
+    const marketDataPlan = { primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:100 }] }
+    expect(() => mergeSimpleIndicatorDeclarations({ marketDataPlan, declarations:[{ id:'ema34' }] }))
+      .toThrow('ema34_timeframe_required')
+    expect(() => mergeSimpleIndicatorDeclarations({ marketDataPlan,
+      declarations:[{ id:'ema34', source:{ timeframe:'H1' } }] }))
+      .toThrow('ema34_timeframe_not_in_market_plan')
+    expect(() => mergeSimpleIndicatorDeclarations({ marketDataPlan,
+      declarations:[{ id:'ema34', kind:'sma', source:{ timeframe:'M5' } }] }))
+      .toThrow('ema34_declaration_invalid')
   })
 
   it('compiles an explicit declaration and computes only its generic indicator data', () => {
@@ -150,7 +226,8 @@ describe('strategy policy', () => {
       marketDataPlan:{ primary_timeframe:'M1', timeframes:[{ timeframe:'M1', kline_count:100 }] },
       entryMethods:['market'], useChanAnalysis:false, policyMode:'off', compiledPolicy:null,
     } })
-    expect(runtime).toMatchObject({ strategy_id:7, strategy_version:3, scope:'private', use_chan_analysis:false,
+    expect(runtime).toMatchObject({ strategy_id:7, strategy_version:3, scope:'private',
+      data_capabilities_version:'strategy-data-capabilities-v1', use_chan_analysis:false,
       entry_methods:['market'], window_policy_version:'chan_window_v6' })
     expect(runtime.runtime_config_hash).toMatch(/^[a-f0-9]{64}$/)
   })

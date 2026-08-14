@@ -190,4 +190,9 @@ describe('rollout hardening contract', () => {
     expect(serverIndex).toContain('startStrategyMemoryCompressionWorker()')
     expect(serverIndex).toContain('stopStrategyMemoryCompressionWorker()')
   })
+
+  it('serves one authenticated, neutral strategy data-capability catalog', () => {
+    expect(aiIndex).toContain("router.get('/ai/strategy-data-capabilities', authMiddleware")
+    expect(aiIndex).toContain('buildStrategyDataCapabilitiesCatalog()')
+  })
 })

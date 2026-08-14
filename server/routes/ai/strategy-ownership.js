@@ -5,7 +5,9 @@ import { parsePromptSymbols } from './config.js'
 import { getModelProfileById } from './model-profiles.js'
 import { modelProviderProtocol } from './model-providers.js'
 import { stripBrokerSuffix, stripStrategyControlTags } from './utils.js'
-import { normalizeEntryMethods, normalizeMarketDataPlan, normalizeUseChanAnalysis, normalizeUseEma34Filter, validateChanTimeframes } from './strategy-policy.js'
+import { CHAN_SUPPORTED_TIMEFRAMES, STRATEGY_DATA_CAPABILITIES_VERSION, describeSimpleIndicatorCapabilities,
+  mergeSimpleIndicatorDeclarations, normalizeEntryMethods, normalizeMarketDataPlan,
+  normalizeUseChanAnalysis, normalizeUseEma34Filter, validateChanTimeframes } from './strategy-policy.js'
 import { canonicalPolicyJson, compileStrategyPolicy, StrategyPolicyValidationError } from './strategy-policy-compiler.js'
 import { normalizeSubscriptionSchedule } from './subscription-schedule.js'
 
@@ -37,6 +39,28 @@ function requestedStrategyPolicy(payload = {}) {
   if (Object.hasOwn(payload, 'strategy_policy')) return payload.strategy_policy
   if (Object.hasOwn(payload, 'strategy_policy_json')) return payload.strategy_policy_json
   return undefined
+}
+
+function resolveStrategyPolicyMutation({ existingPolicy = null, payload = {}, marketDataPlan }) {
+  const requestedPolicy = requestedStrategyPolicy(payload)
+  if (payload.indicator_declarations !== undefined && requestedPolicy !== undefined) {
+    throw new Error('strategy_policy_mutation_ambiguous')
+  }
+  if (payload.indicator_declarations !== undefined) {
+    return mergeSimpleIndicatorDeclarations({
+      strategyPolicyValue:existingPolicy,
+      declarations:payload.indicator_declarations,
+      marketDataPlan,
+      confirmEnableDataRuntime:payload.confirm_enable_data_runtime === true,
+    })
+  }
+  return {
+    strategyPolicyJson:normalizeStrategyPolicyForStorage(
+      requestedPolicy !== undefined ? requestedPolicy : existingPolicy,
+      marketDataPlan,
+    ),
+    useEma34Filter:null,
+  }
 }
 
 function toId(value, field = 'id') {
@@ -197,6 +221,28 @@ function assertStrategyExecutable(strategy, userId) {
   }
 }
 
+function withStrategyDataCapabilityState(strategy) {
+  if (!strategy) return strategy
+  const marketDataPlan = normalizeMarketDataPlan(strategy.market_data_plan_json, { prompt:strategy.system_prompt || '' })
+  const enabledTimeframes = marketDataPlan.timeframes.map(item => item.timeframe)
+  let indicators
+  try {
+    indicators = describeSimpleIndicatorCapabilities(strategy.strategy_policy_json, normalizeUseEma34Filter(strategy.use_ema34_filter))
+  } catch {
+    indicators = { ema34:{ status:'advanced', enabled:true, timeframe:null } }
+  }
+  return {
+    ...strategy,
+    data_capabilities:{
+      version:STRATEGY_DATA_CAPABILITIES_VERSION,
+      chan:{ enabled:normalizeUseChanAnalysis(strategy.use_chan_analysis, { prompt:strategy.system_prompt || '' }),
+        timeframes:enabledTimeframes.filter(timeframe => CHAN_SUPPORTED_TIMEFRAMES.includes(timeframe)) },
+      ...indicators,
+      portfolio_context:{ enabled:Boolean(Number(strategy.include_portfolio_context)), scope:strategy.scope },
+    },
+  }
+}
+
 // ─── Strategy CRUD ───
 
 export async function listStrategies(userId, userRole, opts = {}) {
@@ -217,7 +263,7 @@ export async function listStrategies(userId, userRole, opts = {}) {
     }
     params.push(actorId)
   }
-  return queryAll(
+  const strategies = await queryAll(
     `SELECT apt.*, u.nickname AS owner_nickname
      FROM auto_prompt_types apt
      LEFT JOIN users u ON u.id = apt.owner_user_id
@@ -225,6 +271,7 @@ export async function listStrategies(userId, userRole, opts = {}) {
      ORDER BY apt.scope ASC, apt.sort_order ASC, apt.id ASC`,
     params
   )
+  return strategies.map(withStrategyDataCapabilityState)
 }
 
 export async function getStrategyById(strategyId, userId, userRole, opts = {}) {
@@ -241,7 +288,7 @@ export async function getStrategyById(strategyId, userId, userRole, opts = {}) {
   if (opts.forExecution) {
     try { assertStrategyExecutable(row, actorId) } catch { return null }
   }
-  return row
+  return withStrategyDataCapabilityState(row)
 }
 
 export async function createStrategy(userId, userRole, payload = {}) {
@@ -257,11 +304,13 @@ export async function createStrategy(userId, userRole, payload = {}) {
   if (!symbols.length) throw new Error('symbols_required')
   const rawPrompt = payload.system_prompt || ''
   const marketDataPlan = normalizeMarketDataPlan(payload.market_data_plan, { prompt: rawPrompt })
-  const strategyPolicyJson = normalizeStrategyPolicyForStorage(requestedStrategyPolicy(payload), marketDataPlan)
+  const policyMutation = resolveStrategyPolicyMutation({ payload, marketDataPlan })
+  const strategyPolicyJson = policyMutation.strategyPolicyJson
   const entryMethods = normalizeEntryMethods(payload.entry_methods)
   const useChanAnalysis = normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
   validateChanTimeframes(marketDataPlan, useChanAnalysis)
-  const useEma34Filter = normalizeUseEma34Filter(payload.use_ema34_filter)
+  const useEma34Filter = policyMutation.useEma34Filter == null
+    ? normalizeUseEma34Filter(payload.use_ema34_filter) : policyMutation.useEma34Filter
   const includePortfolioContext = normalizePortfolioContext(scope, payload.include_portfolio_context)
   const systemPrompt = stripStrategyControlTags(rawPrompt)
   const ownerUserId = scope === 'platform' ? 0 : actorId
@@ -317,6 +366,11 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
   if (payload.owner_user_id !== undefined && Number(payload.owner_user_id) !== Number(existing.owner_user_id)) {
     throw new Error('strategy_owner_immutable')
   }
+  if (payload.expected_version !== undefined) {
+    const expectedVersion = Number(payload.expected_version)
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion <= 0) throw new Error('strategy_expected_version_invalid')
+    if (expectedVersion !== Number(existing.version || 1)) throw new Error('strategy_version_conflict')
+  }
   const visibility = payload.visibility_status ?? existing.visibility_status
   if (!VALID_VISIBILITY.has(visibility)) throw new Error('invalid_visibility_status')
   let symbolsJson = existing.symbols_json
@@ -329,10 +383,12 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
     ? normalizeMarketDataPlan(payload.market_data_plan, { prompt: payload.system_prompt ?? existing.system_prompt })
     : normalizeMarketDataPlan(existing.market_data_plan_json, { prompt: existing.system_prompt })
   const requestedPolicy = requestedStrategyPolicy(payload)
-  const policyNeedsValidation = requestedPolicy !== undefined || payload.market_data_plan !== undefined
-  const strategyPolicyJson = policyNeedsValidation
-    ? normalizeStrategyPolicyForStorage(requestedPolicy !== undefined ? requestedPolicy : existing.strategy_policy_json, marketDataPlan)
-    : (existing.strategy_policy_json ?? null)
+  const policyNeedsValidation = requestedPolicy !== undefined || payload.indicator_declarations !== undefined
+    || payload.market_data_plan !== undefined
+  const policyMutation = policyNeedsValidation
+    ? resolveStrategyPolicyMutation({ existingPolicy:existing.strategy_policy_json, payload, marketDataPlan })
+    : { strategyPolicyJson:existing.strategy_policy_json ?? null, useEma34Filter:null }
+  const strategyPolicyJson = policyMutation.strategyPolicyJson
   const entryMethods = payload.entry_methods !== undefined
     ? normalizeEntryMethods(payload.entry_methods)
     : normalizeEntryMethods(existing.entry_methods_json)
@@ -342,26 +398,32 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
     ? normalizeUseChanAnalysis(payload.use_chan_analysis, { prompt: rawPrompt })
     : normalizeUseChanAnalysis(existing.use_chan_analysis, { prompt: existing.system_prompt })
   validateChanTimeframes(marketDataPlan, useChanAnalysis)
-  const useEma34Filter = payload.use_ema34_filter !== undefined
-    ? normalizeUseEma34Filter(payload.use_ema34_filter)
-    : normalizeUseEma34Filter(existing.use_ema34_filter)
+  const useEma34Filter = policyMutation.useEma34Filter == null
+    ? (payload.use_ema34_filter !== undefined
+      ? normalizeUseEma34Filter(payload.use_ema34_filter)
+      : normalizeUseEma34Filter(existing.use_ema34_filter))
+    : policyMutation.useEma34Filter
   const includePortfolioContext = payload.include_portfolio_context !== undefined
     ? normalizePortfolioContext(existing.scope, payload.include_portfolio_context)
     : normalizePortfolioContext(existing.scope, existing.include_portfolio_context)
   const requestedModelId = payload.model_profile_id !== undefined ? payload.model_profile_id : existing.model_profile_id
   const binding = await validateModelBinding(existing.scope, Number(existing.owner_user_id), requestedModelId)
-  const contentChanged = payload.title !== undefined || payload.system_prompt !== undefined || payload.symbols !== undefined
+  const contentChanged = payload.title !== undefined || payload.description !== undefined
+    || payload.system_prompt !== undefined || payload.symbols !== undefined
     || payload.market_data_plan !== undefined || payload.entry_methods !== undefined || payload.use_chan_analysis !== undefined
     || payload.use_ema34_filter !== undefined || payload.include_portfolio_context !== undefined
-    || requestedPolicy !== undefined
+    || requestedPolicy !== undefined || payload.indicator_declarations !== undefined
+    || payload.interval_minutes !== undefined || payload.sort_order !== undefined
+    || payload.model_profile_id !== undefined || payload.visibility_status !== undefined
+    || payload.version_label !== undefined
   const version = contentChanged ? Number(existing.version || 1) + 1 : Number(existing.version || 1)
   const now = beijingNow()
-  await queryRun(
+  const updateResult = await queryRun(
     `UPDATE auto_prompt_types SET title = ?, description = ?, system_prompt = ?, symbols_json = ?,
        market_data_plan_json = ?, entry_methods_json = ?, use_chan_analysis = ?, use_ema34_filter = ?, include_portfolio_context = ?,
        interval_minutes = ?, is_active = ?, sort_order = ?, model_profile_id = ?, inference_mode = ?,
        visibility_status = ?, version = ?, version_label = ?, strategy_policy_json = ?, updated_at = ?
-     WHERE id = ? AND deleted_at IS NULL`,
+     WHERE id = ? AND version = ? AND deleted_at IS NULL`,
     [
       payload.title ?? existing.title, payload.description ?? existing.description,
       systemPrompt, symbolsJson,
@@ -372,9 +434,14 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
       visibility === 'active' ? 1 : 0,
       payload.sort_order != null ? Number(payload.sort_order) || 0 : existing.sort_order,
       binding.modelProfileId, binding.inferenceMode, visibility, version,
-      payload.version_label ?? existing.version_label, strategyPolicyJson, now, id,
+      payload.version_label ?? existing.version_label, strategyPolicyJson, now, id, Number(existing.version || 1),
     ]
   )
+  const affectedRows = Number(updateResult?.affectedRows ?? updateResult?.changes ?? 1)
+  if (affectedRows !== 1) {
+    const latest = await queryOne('SELECT version FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL', [id])
+    if (!latest || Number(latest.version) !== Number(existing.version || 1)) throw new Error('strategy_version_conflict')
+  }
   return getStrategyById(id, actorId, userRole)
 }
 

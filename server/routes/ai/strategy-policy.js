@@ -1,5 +1,6 @@
 import { hasLegacyUseChanTag, parseLegacyTimeframeTags } from './utils.js'
-import { compileStrategyPolicy, StrategyPolicyValidationError, STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
+import { canonicalPolicyJson, compileStrategyPolicy, StrategyPolicyValidationError,
+  STRATEGY_POLICY_SCHEMA_VERSION, STRATEGY_POLICY_TIMEFRAMES } from './strategy-policy-compiler.js'
 import { calculatePolicyIndicators, INDICATOR_ALGORITHM_VERSION } from './indicator-registry.js'
 import { buildPreInferenceWorkflowState } from './strategy-workflow-engine.js'
 import { renderStrategyPolicyPrompt } from './strategy-prompt-renderer.js'
@@ -15,6 +16,13 @@ const timeframeSet = new Set(VALID_TIMEFRAMES)
 const entryMethodSet = new Set(VALID_ENTRY_METHODS)
 export const CHAN_SUPPORTED_TIMEFRAMES = Object.freeze(['M5', 'M15', 'H1', 'H4'])
 const chanTimeframeSet = new Set(CHAN_SUPPORTED_TIMEFRAMES)
+export const STRATEGY_DATA_CAPABILITIES_VERSION = 'strategy-data-capabilities-v1'
+export const SIMPLE_EMA34_INDICATOR_ID = 'ema34'
+
+const SIMPLE_EMA34_FIXED = Object.freeze({
+  kind:'ema', enabled:true, field:'close', bar_scope:'closed_only', period:34,
+  minimum_bars:34, warmup_target_bars:60, evidence_window:5,
+})
 
 function parseJson(value, fallback) {
   if (value == null || value === '') return fallback
@@ -73,13 +81,221 @@ export function validateChanTimeframes(marketDataPlan, useChanAnalysis) {
   if (!useChanAnalysis) return { valid:true, unsupported:[] }
   const timeframes = (marketDataPlan?.timeframes || []).map(item => String(item?.timeframe || '').trim().toUpperCase())
   const unsupported = [...new Set(timeframes.filter(timeframe => !chanTimeframeSet.has(timeframe)))]
-  if (unsupported.length) {
+  const supported = [...new Set(timeframes.filter(timeframe => chanTimeframeSet.has(timeframe)))]
+  if (!supported.length) {
     const error = new Error('chan_timeframe_unsupported')
     error.code = 'chan_timeframe_unsupported'
     error.timeframes = unsupported
     throw error
   }
-  return { valid:true, unsupported:[] }
+  return { valid:true, supported, unsupported }
+}
+
+export function buildStrategyDataCapabilitiesCatalog() {
+  return {
+    version:STRATEGY_DATA_CAPABILITIES_VERSION,
+    timeframes:[...VALID_TIMEFRAMES],
+    base_market_data:{
+      label:'基础行情与技术摘要',
+      description:'每个已启用周期提供 K 线、价格区间和基础技术摘要。',
+    },
+    chan:{
+      id:'chan_structure', label:'提供缠论结构数据',
+      description:'为已选的支持周期计算并提供原始结构。不会自动决定方向，也不会强制观望或交易。',
+      supported_timeframes:[...CHAN_SUPPORTED_TIMEFRAMES],
+      technical_path:'strategy_context.timeframes.<周期>.summary.chan',
+      writing_template:'【缠论结构用途】\n- 使用周期：{请填写}\n- 用途：{方向判断 / 入场确认 / 风险参考 / 其他，请填写}\n- 有效结构条件：{请填写}\n- 多周期冲突处理：{请填写}',
+    },
+    indicators:{
+      ema34:{
+        id:SIMPLE_EMA34_INDICATOR_ID, kind:'ema', label:'提供 EMA34 数据',
+        description:'按所选周期的已收盘 K 线计算并提供。不会自动作为开仓过滤条件。',
+        supported_timeframes:[...VALID_TIMEFRAMES], field:'close', bar_scope:'closed_only',
+        params:{ period:34, minimum_bars:34, warmup_target_bars:60, evidence_window:5 },
+        technical_path:'strategy_context.indicators.ema34',
+        writing_template:'【EMA34 用途】\n- 使用周期：{请填写}\n- 用途：{趋势过滤 / 入场确认 / 仅作参考 / 其他，请填写}\n- 多头条件：{请填写}\n- 空头条件：{请填写}\n- 不满足条件时：{请填写}',
+      },
+    },
+    portfolio_context:{
+      label:'提供持仓与挂单数据', scope:'private',
+      description:'仅私有策略可读取当前账户持仓和挂单事实。',
+    },
+    user_copy:{
+      summary_title:'本策略将收到', helper_title:'如何在策略中使用',
+      save_label:'保存策略', advanced_label:'高级配置',
+    },
+  }
+}
+
+function parsePolicyObject(value) {
+  if (value == null || value === '') return null
+  if (typeof value === 'object' && !Array.isArray(value)) return structuredClone(value)
+  try {
+    const parsed = JSON.parse(String(value))
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('policy_object_required')
+    return parsed
+  } catch (error) {
+    if (error instanceof StrategyPolicyValidationError) throw error
+    throw new StrategyPolicyValidationError('policy_json_invalid', '$')
+  }
+}
+
+function simpleEma34Declaration(timeframe) {
+  return {
+    id:SIMPLE_EMA34_INDICATOR_ID,
+    kind:SIMPLE_EMA34_FIXED.kind,
+    enabled:true,
+    source:{ timeframe, field:SIMPLE_EMA34_FIXED.field, bar_scope:SIMPLE_EMA34_FIXED.bar_scope },
+    params:{
+      period:SIMPLE_EMA34_FIXED.period,
+      minimum_bars:SIMPLE_EMA34_FIXED.minimum_bars,
+      warmup_target_bars:SIMPLE_EMA34_FIXED.warmup_target_bars,
+      evidence_window:SIMPLE_EMA34_FIXED.evidence_window,
+    },
+  }
+}
+
+function isSimpleEma34Indicator(indicator) {
+  return indicator?.id === SIMPLE_EMA34_INDICATOR_ID
+    && String(indicator.kind || '').toLowerCase() === SIMPLE_EMA34_FIXED.kind
+    && indicator.enabled !== false
+    && String(indicator.source?.field || '').toLowerCase() === SIMPLE_EMA34_FIXED.field
+    && String(indicator.source?.bar_scope || '').toLowerCase() === SIMPLE_EMA34_FIXED.bar_scope
+    && Number(indicator.params?.period) === SIMPLE_EMA34_FIXED.period
+    && Number(indicator.params?.minimum_bars) === SIMPLE_EMA34_FIXED.minimum_bars
+    && Number(indicator.params?.warmup_target_bars) === SIMPLE_EMA34_FIXED.warmup_target_bars
+    && Number(indicator.params?.evidence_window) === SIMPLE_EMA34_FIXED.evidence_window
+}
+
+function isEma34LikeIndicator(indicator) {
+  return String(indicator?.kind || '').toLowerCase() === 'ema' && Number(indicator?.params?.period) === 34
+}
+
+function policyReferencesIndicator(value, indicatorId, path = '$') {
+  if (path.startsWith('$.indicators')) return false
+  if (Array.isArray(value)) return value.some((item, index) => policyReferencesIndicator(item, indicatorId, `${path}[${index}]`))
+  if (!value || typeof value !== 'object') {
+    const reference = String(value || '')
+    return reference === `indicators.${indicatorId}` || reference.startsWith(`indicators.${indicatorId}.`)
+  }
+  return Object.entries(value).some(([key, item]) => policyReferencesIndicator(item, indicatorId, `${path}.${key}`))
+}
+
+function minimalDataPolicy() {
+  return {
+    schema_version:STRATEGY_POLICY_SCHEMA_VERSION,
+    mode:'shadow',
+    features:[],
+    indicators:[],
+    workflow:{ stages:[], selectors:[], default_decision:'allow' },
+    constraints:[],
+    prompt_rules:[],
+    ui:{ groups:[], simple_data_capabilities:{ version:STRATEGY_DATA_CAPABILITIES_VERSION, managed_indicator_ids:[SIMPLE_EMA34_INDICATOR_ID] } },
+  }
+}
+
+function canonicalCompiledPolicyJson(compiled) {
+  if (!compiled) return null
+  const { policy_hash:ignoredPolicyHash, ...storage } = compiled
+  return canonicalPolicyJson(storage)
+}
+
+function isEmptyManagedDataPolicy(policy) {
+  if (!policy) return true
+  const ui = policy.ui || {}
+  const uiKeys = Object.keys(ui).filter(key => key !== 'groups' && key !== 'simple_data_capabilities')
+  return (policy.features || []).length === 0
+    && (policy.indicators || []).length === 0
+    && (policy.workflow?.stages || []).length === 0
+    && (policy.workflow?.selectors || []).length === 0
+    && (policy.constraints || []).length === 0
+    && (policy.prompt_rules || []).length === 0
+    && (ui.groups || []).length === 0
+    && uiKeys.length === 0
+}
+
+export function describeSimpleIndicatorCapabilities(strategyPolicyValue, legacyEma34 = false) {
+  const policy = parsePolicyObject(strategyPolicyValue)
+  const indicators = Array.isArray(policy?.indicators) ? policy.indicators : []
+  const ema = indicators.find(item => item?.id === SIMPLE_EMA34_INDICATOR_ID)
+  if (!ema) {
+    const advanced = indicators.find(isEma34LikeIndicator)
+    if (advanced) return { ema34:{ status:'advanced', enabled:true,
+      timeframe:String(advanced.source?.timeframe || '').toUpperCase() || null } }
+    return { ema34:{ status:legacyEma34 ? 'legacy_unconfigured' : 'disabled', enabled:false, timeframe:null } }
+  }
+  if (!isSimpleEma34Indicator(ema) || policyReferencesIndicator(policy, SIMPLE_EMA34_INDICATOR_ID)) {
+    return { ema34:{ status:'advanced', enabled:true, timeframe:String(ema.source?.timeframe || '').toUpperCase() || null } }
+  }
+  return { ema34:{ status:'managed', enabled:true, timeframe:String(ema.source.timeframe).toUpperCase() } }
+}
+
+export function mergeSimpleIndicatorDeclarations({ strategyPolicyValue = null, declarations, marketDataPlan,
+  confirmEnableDataRuntime = false } = {}) {
+  if (declarations === undefined) {
+    const policy = parsePolicyObject(strategyPolicyValue)
+    const compiled = policy ? compileStrategyPolicy(policy, { marketDataPlan }) : null
+    return {
+      strategyPolicyJson:canonicalCompiledPolicyJson(compiled),
+      useEma34Filter:Boolean((compiled?.indicators || []).some(item => item?.id === SIMPLE_EMA34_INDICATOR_ID && isSimpleEma34Indicator(item))),
+      capabilityState:describeSimpleIndicatorCapabilities(compiled, false),
+    }
+  }
+  if (!Array.isArray(declarations)) throw new Error('indicator_declarations_invalid')
+  if (declarations.some(item => item?.id !== SIMPLE_EMA34_INDICATOR_ID)) throw new Error('indicator_declaration_unsupported')
+  if (declarations.length > 1) throw new Error('indicator_declaration_duplicate')
+
+  let policy = parsePolicyObject(strategyPolicyValue)
+  const advancedAlias = (policy?.indicators || []).find(item => item?.id !== SIMPLE_EMA34_INDICATOR_ID && isEma34LikeIndicator(item))
+  if (advancedAlias) throw new Error('strategy_indicator_advanced_configuration')
+  const existing = (policy?.indicators || []).find(item => item?.id === SIMPLE_EMA34_INDICATOR_ID)
+  if (existing && (!isSimpleEma34Indicator(existing) || policyReferencesIndicator(policy, SIMPLE_EMA34_INDICATOR_ID))) {
+    throw new Error('strategy_indicator_advanced_configuration')
+  }
+
+  const requested = declarations[0] || null
+  if (requested) {
+    const requestedShapeValid = requested && typeof requested === 'object' && !Array.isArray(requested)
+      && requested.enabled !== false
+      && (requested.kind === undefined || String(requested.kind).toLowerCase() === SIMPLE_EMA34_FIXED.kind)
+      && (requested.source?.field === undefined || String(requested.source.field).toLowerCase() === SIMPLE_EMA34_FIXED.field)
+      && (requested.source?.bar_scope === undefined || String(requested.source.bar_scope).toLowerCase() === SIMPLE_EMA34_FIXED.bar_scope)
+      && (requested.params?.period === undefined || Number(requested.params.period) === SIMPLE_EMA34_FIXED.period)
+      && (requested.params?.minimum_bars === undefined || Number(requested.params.minimum_bars) === SIMPLE_EMA34_FIXED.minimum_bars)
+      && (requested.params?.warmup_target_bars === undefined || Number(requested.params.warmup_target_bars) === SIMPLE_EMA34_FIXED.warmup_target_bars)
+      && (requested.params?.evidence_window === undefined || Number(requested.params.evidence_window) === SIMPLE_EMA34_FIXED.evidence_window)
+    if (!requestedShapeValid) throw new Error('ema34_declaration_invalid')
+    const timeframe = String(requested.source?.timeframe || '').trim().toUpperCase()
+    const planned = new Set((marketDataPlan?.timeframes || []).map(item => String(item?.timeframe || '').toUpperCase()))
+    if (!timeframe) throw new Error('ema34_timeframe_required')
+    if (!planned.has(timeframe)) throw new Error('ema34_timeframe_not_in_market_plan')
+    if (policy?.mode === 'off' && !confirmEnableDataRuntime) throw new Error('strategy_data_runtime_confirmation_required')
+    policy ||= minimalDataPolicy()
+    if (policy.mode === 'off') policy.mode = 'shadow'
+    policy.indicators = (policy.indicators || []).filter(item => item?.id !== SIMPLE_EMA34_INDICATOR_ID)
+    policy.indicators.push(simpleEma34Declaration(timeframe))
+    policy.ui ||= { groups:[] }
+    policy.ui.simple_data_capabilities = {
+      ...(policy.ui.simple_data_capabilities || {}),
+      version:STRATEGY_DATA_CAPABILITIES_VERSION,
+      managed_indicator_ids:[...new Set([...(policy.ui.simple_data_capabilities?.managed_indicator_ids || []), SIMPLE_EMA34_INDICATOR_ID])],
+    }
+  } else if (policy) {
+    policy.indicators = (policy.indicators || []).filter(item => item?.id !== SIMPLE_EMA34_INDICATOR_ID)
+    if (policy.ui?.simple_data_capabilities?.managed_indicator_ids) {
+      policy.ui.simple_data_capabilities.managed_indicator_ids = policy.ui.simple_data_capabilities.managed_indicator_ids
+        .filter(id => id !== SIMPLE_EMA34_INDICATOR_ID)
+    }
+    if (isEmptyManagedDataPolicy(policy)) policy = null
+  }
+
+  const compiled = policy ? compileStrategyPolicy(policy, { marketDataPlan }) : null
+  const canonical = canonicalCompiledPolicyJson(compiled)
+  return {
+    strategyPolicyJson:canonical,
+    useEma34Filter:Boolean(compiled?.indicators?.some(item => item.id === SIMPLE_EMA34_INDICATOR_ID)),
+    capabilityState:describeSimpleIndicatorCapabilities(compiled, false),
+  }
 }
 
 export function parseStrategyPolicy(strategy = {}) {
@@ -152,6 +368,7 @@ export function buildStrategyRuntimeSnapshot({ strategy = {}, policy = {}, strat
     : []
   const base = {
     strategy_runtime_version:1,
+    data_capabilities_version:STRATEGY_DATA_CAPABILITIES_VERSION,
     strategy_id:Number(strategy.id || strategy.strategy_id || 0) || null,
     strategy_version:Number(strategy.version || strategy.strategy_version || 1),
     scope:strategy.scope || strategy.strategy_scope || null,
