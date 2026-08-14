@@ -114,6 +114,23 @@ describe('admin strategy trade contract', () => {
     }, 1)).toBe('source_ownership_unavailable')
   })
 
+  it('deduplicates joined subscriber rows and counts the valid admin source as executable', () => {
+    const rows = [
+      { id: 8, user_id: 1, trading_account_id: 9, runtime_clock_status: 'synced' },
+      { id: 8, user_id: 1, trading_account_id: 9, runtime_clock_status: 'synced' },
+      { id: 9, user_id: 29, trading_account_id: 11, runtime_clock_status: 'synced' },
+    ]
+    expect(__adminStrategyTradeTest.uniqueSubscriberRows(rows)).toEqual([rows[0], rows[2]])
+    expect(__adminStrategyTradeTest.buildPreviewSummary({ valid: true }, [
+      { valid: false }, { valid: false },
+    ])).toEqual({
+      target_count: 3, eligible_target_count: 1, excluded_target_count: 2, source_valid: true,
+    })
+    expect(__adminStrategyTradeTest.buildPreviewSummary({ valid: false }, [{ valid: true }])).toEqual({
+      target_count: 2, eligible_target_count: 1, excluded_target_count: 1, source_valid: false,
+    })
+  })
+
   it('shares the scheduler inventory fence and keeps admin history out of auto_shared', () => {
     expect(accountSymbolInventoryLockKey(7, 'EURUSD.s')).toBe('delivery_inventory:7:EURUSD')
     const history = fs.readFileSync(new URL('../server/bridge-ws.js', import.meta.url), 'utf8')
@@ -144,6 +161,8 @@ describe('admin strategy trade contract', () => {
     expect(service).not.toContain('mds.bridge_generation')
     expect(service).toContain('bridge_generation: getBridgeGeneration(actorId) ?? sourceRow.bridge_generation')
     expect(service).toContain('bridge_generation: getBridgeGeneration(row.user_id) ?? row.bridge_generation')
+    expect(service).toContain('LEFT JOIN market_data_sources mds ON mds.id = (')
+    expect(service).toContain('SELECT MAX(mds2.id) FROM market_data_sources mds2')
   })
 
   it('keeps the optional protection migration idempotent and nullable', () => {

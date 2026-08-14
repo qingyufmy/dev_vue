@@ -46,6 +46,7 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(app).not.toContain('策略分发至少填写一个止盈价格')
     expect(app).toContain('function adminStrategyDispatchProtectionDisplay(value)')
     expect(app).toContain('value == null ? "未设置" : priceDisplay(value)')
+    expect(app).toContain('admin_account_excluded: "与管理员源账户相同，已作为源账户单独执行"')
     expect(html).toContain('止损止盈均可留空')
     expect(app).toContain('if (reason && reason.length < 2)')
     expect(app).toContain('order.meta.reason || "未填写"')

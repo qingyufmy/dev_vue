@@ -660,6 +660,7 @@ function handleFormModalKeydown(event) {
 
 const REASON_MAP = {
   skipped: "已跳过（未满足执行条件）",
+  admin_account_excluded: "与管理员源账户相同，已作为源账户单独执行",
   model_task_status_unknown: "模型服务商状态暂不可确认，正在安全恢复并避免重复请求",
   model_task_active: "上一轮模型任务仍在运行，等待完成",
   model_task_cooldown: "本轮模型任务已完成，等待完整配置周期",

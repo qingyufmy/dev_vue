@@ -212,11 +212,36 @@ async function loadSubscriberRows(strategyId) {
     LEFT JOIN risk_account_state ras ON ras.trading_account_id = ss.trading_account_id
     LEFT JOIN user_bridge_settings ubs ON ubs.user_id = ss.user_id
     LEFT JOIN auto_scheduler sched ON sched.user_id = ss.user_id
-    LEFT JOIN market_data_sources mds ON mds.bridge_user_id = ss.user_id
-      AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
-      AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
+    LEFT JOIN market_data_sources mds ON mds.id = (
+      SELECT MAX(mds2.id) FROM market_data_sources mds2
+      WHERE mds2.bridge_user_id = ss.user_id
+        AND UPPER(COALESCE(mds2.broker_server, '')) = UPPER(ta.broker_server)
+        AND CAST(COALESCE(mds2.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
+    )
     WHERE ss.strategy_id = ? AND ss.is_deleted = 0
     ORDER BY ss.id ASC`, [strategyId])
+}
+
+function uniqueSubscriberRows(rows = []) {
+  const seen = new Set()
+  return rows.filter(row => {
+    const key = `${Number(row.id || 0)}:${Number(row.user_id || 0)}:${Number(row.trading_account_id || 0)}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function buildPreviewSummary(source, targets = []) {
+  const sourceEligible = source?.valid ? 1 : 0
+  const eligibleSubscribers = targets.filter(item => item.valid).length
+  const excludedSubscribers = targets.length - eligibleSubscribers
+  return {
+    target_count: targets.length + 1,
+    eligible_target_count: eligibleSubscribers + sourceEligible,
+    excluded_target_count: excludedSubscribers + (sourceEligible ? 0 : 1),
+    source_valid: Boolean(source?.valid),
+  }
 }
 
 function sourceEligibility(row, actorUserId) {
@@ -263,7 +288,7 @@ export async function buildAdminStrategyTradePreview(actorUserId, body = {}, hea
     valid: !sourceReason, exclusion_reason: sourceReason,
     snapshot: snapshotForTarget({ ...sourceRow, user_id: actorId, bridge_generation: getBridgeGeneration(actorId) ?? sourceRow.bridge_generation }, input, strategy, 'source', sourceReason),
   }
-  const subscriberRows = await loadSubscriberRows(input.strategy_id)
+  const subscriberRows = uniqueSubscriberRows(await loadSubscriberRows(input.strategy_id))
   const targets = subscriberRows.map(row => {
     const enriched = { ...row, bridge_generation: getBridgeGeneration(row.user_id) ?? row.bridge_generation, source_broker_server: sourceRow.broker_server, source_login_account: sourceRow.login_account }
     const reason = subscriberEligibility(enriched, actorId, input, strategy)
@@ -282,12 +307,13 @@ export async function buildAdminStrategyTradePreview(actorUserId, body = {}, hea
     })),
   }
   const previewHash = stableHash(hashPayload)
+  const exclusions = [...(source.valid ? [] : [source]), ...targets.filter(item => !item.valid)]
   return {
     enabled: true, supported_entry_methods: [...ADMIN_STRATEGY_TRADE_ENTRY_METHODS], preview_hash: previewHash,
     request: { ...input, preview_hash: previewHash },
     strategy: { id: Number(strategy.id), title: strategy.title, scope: strategy.scope, owner_user_id: Number(strategy.owner_user_id || 0), version: Number(strategy.version || 1), symbols: parseSymbols(strategy.symbols_json) },
-    source, targets, exclusions: targets.filter(item => !item.valid),
-    summary: { target_count: targets.length + 1, eligible_target_count: targets.filter(item => item.valid).length, excluded_target_count: targets.filter(item => !item.valid).length, source_valid: !sourceReason },
+    source, targets, exclusions,
+    summary: buildPreviewSummary(source, targets),
   }
 }
 
@@ -449,5 +475,7 @@ export const __adminStrategyTradeTest = {
   symbolMatches,
   sourceEligibility,
   subscriberEligibility,
+  uniqueSubscriberRows,
+  buildPreviewSummary,
   resolveEffectiveSymbolsForDispatch,
 }
