@@ -22,7 +22,7 @@ vi.mock('../server/db.js', () => ({
   queryOne: (...args) => mockQueryOne(...args), queryRun: (...args) => mockQueryRun(...args),
   withTransaction: (...args) => mockWithTransaction(...args),
 }))
-vi.mock('../server/routes/ai/config.js', () => ({ executeOrderCore: (...args) => mockExecuteOrderCore(...args) }))
+vi.mock('../server/routes/ai/config.js', () => ({ executeAdminDirectedOrderCore: (...args) => mockExecuteOrderCore(...args) }))
 vi.mock('../server/routes/ai/market-data.js', () => ({ mt5Bridge: (...args) => mockBridge(...args) }))
 vi.mock('../server/bridge-ws.js', () => ({
   getBridgeGeneration: () => 5, isBridgeAlive: () => true, isTradeEnabled: () => true,
@@ -71,6 +71,24 @@ describe('admin strategy trade worker fences', () => {
     expect(request).not.toHaveProperty('position_size_factor')
   })
 
+  it('passes optional protection as null without synthesizing tier or candidate prices', () => {
+    const request = __adminStrategyTradeWorkerTest.targetRequest(
+      {
+        ...dispatch, requested_volume: '0.37', position_size_tier: null,
+        stop_loss: null, take_profit_1: null, take_profit_2: null, take_profit_3: null,
+      },
+      { trading_account_id: 9 },
+      { position_size_factor: 0.25 },
+    )
+    expect(request).toMatchObject({
+      volume: 0.37, sl: null, tp: null, stop_loss_price: null,
+      take_profit_1_price: null, take_profit_2_price: null, take_profit_3_price: null,
+      take_profit_candidates: [], magic: 234000, trading_account_id: 9,
+    })
+    expect(request).not.toHaveProperty('position_size_tier')
+    expect(request).not.toHaveProperty('position_size_factor')
+  })
+
   it('keeps tier fallback only for legacy rows without requested_volume', () => {
     const request = __adminStrategyTradeWorkerTest.targetRequest(
       { ...dispatch, requested_volume: null },
@@ -90,7 +108,7 @@ describe('admin strategy trade worker fences', () => {
     expect(mockExecuteOrderCore.mock.calls[0][3]).toBe('admin_strategy_source')
   })
 
-  it('keeps a subscriber runtime change before the Bridge fence from invoking executeOrderCore', async () => {
+  it('keeps a subscriber runtime change before the Bridge fence from invoking directed execution', async () => {
     const source = { id: 1, dispatch_id: 5, target_role: 'source', status: 'succeeded', user_id: 1, trading_account_id: 9, lease_token: null, target_snapshot_json: JSON.stringify({ bridge_generation: 5, broker: { server: 'DEMO', login: '1' }, position_size_factor: 0.25 }) }
     const subscriber = { id: 2, dispatch_id: 5, target_role: 'subscriber', status: 'pending', user_id: 2, trading_account_id: 10, subscription_id: 20, lease_token: null, target_snapshot_json: JSON.stringify({ bridge_generation: 5, broker: { server: 'DEMO', login: '2' }, subscription: { symbols: ['EURUSD'] }, position_size_factor: 0.25 }) }
     mockQueryOne.mockImplementation(async sql => {
@@ -135,7 +153,29 @@ describe('admin strategy trade worker fences', () => {
     expect(mockExecuteOrderCore).toHaveBeenCalledTimes(2)
     expect(mockExecuteOrderCore.mock.calls[0][3]).toBe('admin_strategy_source')
     expect(mockExecuteOrderCore.mock.calls[1][3]).toBe('admin_strategy_delivery')
-    expect(mockExecuteOrderCore.mock.calls[1][4].sourceType).toBe('admin_strategy_delivery')
+    expect(mockExecuteOrderCore.mock.calls[0][0]).toBe(1)
+    expect(mockExecuteOrderCore.mock.calls[0][2]).toMatchObject({
+      trading_account_id: 9, magic: 234000,
+    })
+    expect(mockExecuteOrderCore.mock.calls[0][4]).toMatchObject({
+      tradingAccountId: 9, sourceType: 'admin_strategy_source',
+      sourceId: '77:dispatch:5:target:1', magic: 234000,
+      beforeBridgeSend: expect.any(Function), beforeBridgeSendTx: expect.any(Function),
+    })
+    expect(mockExecuteOrderCore.mock.calls[1][2]).toMatchObject({
+      trading_account_id: 10, magic: 234000,
+    })
+    expect(mockExecuteOrderCore.mock.calls[1][4]).toMatchObject({
+      tradingAccountId: 10, sourceType: 'admin_strategy_delivery',
+      sourceId: '77:dispatch:5:target:2', magic: 234000,
+      beforeBridgeSend: expect.any(Function), beforeBridgeSendTx: expect.any(Function),
+    })
+    expect(mockFence).toHaveBeenCalledWith(expect.objectContaining({
+      dispatchId: 5, targetId: 1, targetRole: 'source', sourceRequired: false,
+    }))
+    expect(mockFence).toHaveBeenCalledWith(expect.objectContaining({
+      dispatchId: 5, targetId: 2, targetRole: 'subscriber', sourceRequired: true,
+    }))
   })
 
   it('absorbs an uncertain target after the intent reconciles and never re-executes it', async () => {

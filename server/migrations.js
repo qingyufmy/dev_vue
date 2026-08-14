@@ -6391,6 +6391,27 @@ const migrations = [
           MODIFY COLUMN position_size_tier VARCHAR(16) DEFAULT NULL`)
       }
     }
+  },
+  {
+    id: '190_admin_strategy_trade_optional_protection',
+    async up() {
+      const columns = await queryAll(`SELECT COLUMN_NAME, IS_NULLABLE, COLUMN_DEFAULT
+          FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'admin_strategy_trade_dispatches'
+            AND COLUMN_NAME IN ('stop_loss', 'take_profit_1')`)
+      const byName = new Map(columns.map(row => [String(row.COLUMN_NAME), row]))
+      for (const columnName of ['stop_loss', 'take_profit_1']) {
+        const column = byName.get(columnName)
+        if (!column) {
+          await queryRun(`ALTER TABLE admin_strategy_trade_dispatches
+            ADD COLUMN ${columnName} DECIMAL(20,8) DEFAULT NULL`)
+        } else if (String(column.IS_NULLABLE).toUpperCase() !== 'YES' || column.COLUMN_DEFAULT !== null) {
+          await queryRun(`ALTER TABLE admin_strategy_trade_dispatches
+            MODIFY COLUMN ${columnName} DECIMAL(20,8) DEFAULT NULL`)
+        }
+      }
+    }
   }
 ]
 

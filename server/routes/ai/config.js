@@ -25,6 +25,7 @@ export { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 export const DEFAULT_TAKE_PROFIT_MODE = 'ai_recommended'
 export const DEFAULT_TEMPERATURE = 0.3
 export const DEFAULT_MAX_TOKENS = 2000
+export const ADMIN_DIRECTED_ORDER_MAGIC = 234000
 
 // Parse strategy symbols from JSON string: parse, trim, uppercase, deduplicate
 export function parsePromptSymbols(symbolsJson) {
@@ -842,6 +843,49 @@ export function validateManualOrderRequest(request = {}) {
     throw new RiskReject('pending_price_invalid')
   }
   return true
+}
+
+// Administrator strategy dispatch is a fixed, explicitly directed order. It
+// keeps the durable intent/Bridge/outcome path but deliberately does not run
+// the AI risk-policy evaluator, ATR loading, or tier-based volume sizing.
+export async function executeAdminDirectedOrderCore(userId, config, request = {}, action = 'admin_strategy_source', options = {}) {
+  const sourceType = String(options.sourceType || action || '').trim()
+  if (!['admin_strategy_source', 'admin_strategy_delivery'].includes(sourceType)) {
+    throw new RiskReject('admin_strategy_source_type_invalid')
+  }
+  const directedMagic = Number(options.magic ?? request.magic)
+  if (directedMagic !== ADMIN_DIRECTED_ORDER_MAGIC) throw new RiskReject('admin_strategy_magic_invalid')
+  const result = await prepareAndExecuteOrderIntent({
+    userId,
+    tradingAccountId: options.tradingAccountId ?? request.trading_account_id ?? null,
+    signalId: request.signal_id ?? options.signalId ?? null,
+    clientRequestId: options.clientRequestId ?? request.client_request_id ?? request.request_id ?? null,
+    sourceType,
+    sourceId: options.sourceId ?? request.source_id ?? request.signal_id ?? null,
+    action,
+    request,
+    config,
+    options: { ...options, noFallback:true },
+    validateRequest: async (_config, _account, prepared) => {
+      validateManualOrderRequest(prepared)
+      return {
+        approved_order:{ ...prepared, magic:directedMagic },
+        original_order:{ ...prepared },
+        rule_results:[],
+        risk_amount:null,
+        policy_version_ids:[],
+      }
+    },
+    buildBridgeCall:buildBridgeOrderCall,
+    beforeBridgeSend: options.beforeBridgeSend,
+    beforeBridgeSendTx: options.beforeBridgeSendTx,
+    afterRiskPrepared: options.afterRiskPrepared,
+    resolveTradingAccount: ({ actorId, account, requestedAccountId }) =>
+      syncTradingAccountIdentity(actorId, account, requestedAccountId),
+    enrichRequest:enrichOrderRequest,
+  })
+  await insertAudit(null, userId, action, request.symbol, request, result, result.status)
+  return result
 }
 
 // Manual trading is user-directed. Keep confirmation, durable idempotency,

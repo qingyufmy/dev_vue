@@ -59,6 +59,25 @@ describe('admin strategy trade contract', () => {
     expect(() => normalizeAdminStrategyTradeInput({ ...input, entry_method: 'limit' })).toThrow('entry_method_not_supported')
   })
 
+  it('normalizes all optional stop-loss/take-profit combinations without zero sentinels', () => {
+    const base = {
+      strategy_id: 7, trading_account_id: 9, symbol: 'EURUSD', direction: 'buy',
+      volume: 0.1, valid_minutes: 5, reason: 'directed order',
+    }
+    const cases = [
+      [{ stop_loss: '', take_profit: '' }, { stop_loss: null, take_profit_1: null }],
+      [{ stop_loss: 1.08, take_profit: '' }, { stop_loss: 1.08, take_profit_1: null }],
+      [{ stop_loss: '', take_profit: 1.12 }, { stop_loss: null, take_profit_1: 1.12 }],
+      [{ stop_loss: 1.08, take_profit: 1.12 }, { stop_loss: 1.08, take_profit_1: 1.12 }],
+    ]
+    for (const [overrides, expected] of cases) {
+      const input = normalizeAdminStrategyTradeInput({ ...base, ...overrides })
+      expect(input).toMatchObject(expected)
+      expect(input.stop_loss).not.toBe(0)
+      expect(input.take_profit_1).not.toBe(0)
+    }
+  })
+
   it('rejects tier-only and non-positive/non-finite volume requests', () => {
     const base = {
       strategy_id: 7, trading_account_id: 9, symbol: 'EURUSD', direction: 'buy',
@@ -114,6 +133,19 @@ describe('admin strategy trade contract', () => {
     const dispatchInsert = service.slice(service.indexOf('INSERT INTO admin_strategy_trade_dispatches'), service.indexOf('const dispatchId'))
     expect(dispatchInsert).toContain('requested_volume, position_size_tier')
     expect(dispatchInsert).toContain("?, ?, ?, 'confirmed', ?, ?, ?, ?")
+    expect(dispatchInsert).toContain('input.entry_method, input.entry_price, input.stop_loss, input.take_profit_1')
+    expect(signalInsert).toContain('input.stop_loss, input.take_profit_1')
+  })
+
+  it('keeps the optional protection migration idempotent and nullable', () => {
+    const migrations = fs.readFileSync(new URL('../server/migrations.js', import.meta.url), 'utf8')
+    const start = migrations.indexOf("id: '190_admin_strategy_trade_optional_protection'")
+    expect(start).toBeGreaterThanOrEqual(0)
+    const migration = migrations.slice(start, migrations.indexOf('\n  }\n]', start))
+    expect(migration).toContain("COLUMN_NAME IN ('stop_loss', 'take_profit_1')")
+    expect(migration).toContain('IS_NULLABLE')
+    expect(migration).toContain('ADD COLUMN ${columnName} DECIMAL(20,8) DEFAULT NULL')
+    expect(migration).toContain('MODIFY COLUMN ${columnName} DECIMAL(20,8) DEFAULT NULL')
   })
 
   it('uses subscription intersection semantics: null inherits, an explicit empty list blocks all symbols', () => {

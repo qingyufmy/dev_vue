@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { beijingAfter, beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
-import { executeOrderCore } from '../routes/ai/config.js'
+import { executeAdminDirectedOrderCore } from '../routes/ai/config.js'
 import { mt5Bridge } from '../routes/ai/market-data.js'
 import { isSubscriptionScheduleActive } from '../routes/ai/subscription-schedule.js'
 import { getBridgeGeneration, isBridgeAlive, isTradeEnabled } from '../bridge-ws.js'
@@ -192,8 +192,9 @@ async function executeTarget(dispatch, target, sourceRequired = false) {
     if (!lock?.token) throw Object.assign(new Error('execution_inventory_lock_busy'), { code: 'execution_inventory_lock_busy', retryable: true })
     const request = targetRequest(dispatch, target, snapshot)
     const sourceId = `${dispatch.signal_id}:dispatch:${dispatch.id}:target:${target.id}`
-    const result = await executeOrderCore(target.user_id, { enable_auto_trade: true, take_profit_mode: snapshot.take_profit_mode || 'standard', max_position_size: 1 }, request, sourceRequired ? 'admin_strategy_delivery' : 'admin_strategy_source', {
-      tradingAccountId: target.trading_account_id, sourceType: sourceRequired ? 'admin_strategy_delivery' : 'admin_strategy_source', sourceId,
+    const sourceType = sourceRequired ? 'admin_strategy_delivery' : 'admin_strategy_source'
+    const result = await executeAdminDirectedOrderCore(target.user_id, { enable_auto_trade: true, take_profit_mode: snapshot.take_profit_mode || 'standard', max_position_size: 1 }, request, sourceType, {
+      tradingAccountId: target.trading_account_id, sourceType, sourceId, magic: ADMIN_STRATEGY_TRADE_MAGIC,
       riskProfileId: snapshot.risk?.profile_id || target.risk_profile_id,
       beforeBridgeSend: async () => {
         if (Date.now() >= Number(dispatch.valid_until_utc_msc)) throw Object.assign(new Error('dispatch_expired'), { preSend: true })

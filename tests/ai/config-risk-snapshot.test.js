@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  queryOne:vi.fn(), queryRun:vi.fn(), prepareIntent:vi.fn(), resolvePolicy:vi.fn(),
+  queryOne:vi.fn(), queryRun:vi.fn(), prepareIntent:vi.fn(), resolvePolicy:vi.fn(), evaluateCoreRisk:vi.fn(),
 }))
 
 vi.mock('../../server/db.js', () => ({
@@ -19,7 +19,7 @@ vi.mock('../../server/routes/ai/order-intents.js', () => ({
 
 vi.mock('../../server/routes/ai/risk-policy.js', () => ({
   DEFAULT_AI_VOLUME_STEP:0.01,
-  evaluateCoreRisk:vi.fn(),
+  evaluateCoreRisk:mocks.evaluateCoreRisk,
   persistRiskDecision:vi.fn(),
   resolveEffectiveRiskPolicy:(...args) => mocks.resolvePolicy(...args),
   resolvePlatformAiVolumeRange:vi.fn(),
@@ -45,7 +45,7 @@ vi.mock('../../server/routes/ai/audit-clock.js', () => ({
   })),
 }))
 
-import { executeOrderCore } from '../../server/routes/ai/config.js'
+import { ADMIN_DIRECTED_ORDER_MAGIC, executeAdminDirectedOrderCore, executeOrderCore } from '../../server/routes/ai/config.js'
 
 describe('executeOrderCore risk snapshot sizing', () => {
   beforeEach(() => {
@@ -93,5 +93,46 @@ describe('executeOrderCore risk snapshot sizing', () => {
     expect(result).toMatchObject({
       status:'success', prepared_volume:0, proposed_volume:0.5, policy_version_ids:[12],
     })
+  })
+
+  it('executes an admin-directed order without AI risk evaluation and preserves dispatch fences', async () => {
+    const beforeBridgeSend = vi.fn()
+    const beforeBridgeSendTx = vi.fn()
+    let intentOptions
+    mocks.prepareIntent.mockImplementationOnce(async options => {
+      intentOptions = options
+      const risk = await options.validateRequest({}, {}, { ...options.request })
+      expect(risk.approved_order).toMatchObject({
+        sl:null, tp:null, stop_loss_price:null, take_profit_1_price:null,
+        magic:ADMIN_DIRECTED_ORDER_MAGIC,
+      })
+      expect(risk.original_order).toMatchObject({ sl:null, tp:null })
+      return { status:'success', order_intent_id:321 }
+    })
+
+    const result = await executeAdminDirectedOrderCore(7, {}, {
+      symbol:'EURUSD', order_type:'buy', entry_method:'market', volume:0.37,
+      sl:null, tp:null, stop_loss_price:null, take_profit_1_price:null,
+      confirm:true, trading_account_id:9, signal_id:null,
+    }, 'admin_strategy_source', {
+      tradingAccountId:9, sourceType:'admin_strategy_source',
+      sourceId:'77:dispatch:5:target:1', magic:ADMIN_DIRECTED_ORDER_MAGIC,
+      beforeBridgeSend, beforeBridgeSendTx,
+    })
+
+    expect(result).toMatchObject({ status:'success', order_intent_id:321 })
+    expect(intentOptions).toMatchObject({
+      userId:7, tradingAccountId:9, signalId:null,
+      sourceType:'admin_strategy_source', sourceId:'77:dispatch:5:target:1',
+      action:'admin_strategy_source', request:expect.objectContaining({ sl:null, tp:null }),
+      beforeBridgeSend:expect.anything(), beforeBridgeSendTx:expect.anything(),
+    })
+    expect(intentOptions.options).toMatchObject({ noFallback:true, magic:ADMIN_DIRECTED_ORDER_MAGIC })
+    expect(intentOptions.beforeBridgeSend).toBe(beforeBridgeSend)
+    expect(intentOptions.beforeBridgeSendTx).toBe(beforeBridgeSendTx)
+    expect(intentOptions.loadRiskContext).toBeUndefined()
+    expect(intentOptions.statefulValidate).toBeUndefined()
+    expect(mocks.evaluateCoreRisk).not.toHaveBeenCalled()
+    expect(mocks.resolvePolicy).not.toHaveBeenCalled()
   })
 })

@@ -1131,7 +1131,8 @@ describe('AI governance navigation and DOM contract', () => {
     expect(stylesHref).toContain('manual-order-ticket1-admin-dispatch-switch1')
     expect(responsiveHref).toContain('manual-order-ticket1-admin-dispatch-switch1')
     expect(appHref).not.toContain('admin-dispatch-switch1')
-    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1')
+    expect(appHref).toContain('admin-dispatch-optional-protection1')
+    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1')
   })
 
   it('keeps admin dispatch volume explicit without changing ordinary AI tier display', () => {
