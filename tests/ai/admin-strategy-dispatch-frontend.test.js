@@ -16,8 +16,10 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(app).toContain('/api/admin/strategy-trades/capabilities')
     expect(app).toContain('state.adminStrategyDispatchCapabilities?.enabled')
     expect(app).toContain('panel.hidden = !canUse')
-    expect(app).toContain('volumeInput.disabled = true')
-    expect(html).toContain('按仓位档位和各账户风控独立计算手数')
+    expect(app).not.toContain('volumeInput.disabled = true')
+    expect(app).not.toContain('tradeVolumeDispatchHelp')
+    expect(html).not.toContain('id="tradeVolumeDispatchHelp"')
+    expect(html).not.toContain('id="adminStrategyDispatchTier"')
     expect(app).not.toContain('function openAdminStrategyDispatchPage')
   })
 
@@ -25,9 +27,17 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(app).toContain('item?.scope === "platform"')
     expect(app).toContain('item?.visibility_status === "active"')
     expect(app).toContain('entry_method:"market"')
-    for (const key of ['strategy_id', 'trading_account_id', 'symbol', 'direction', 'stop_loss', 'take_profit', 'position_size_tier', 'valid_minutes', 'valid_until_utc_msc', 'reason', 'client_request_id']) {
+    for (const key of ['strategy_id', 'trading_account_id', 'symbol', 'direction', 'stop_loss', 'take_profit', 'volume', 'valid_minutes', 'valid_until_utc_msc', 'reason', 'client_request_id']) {
       expect(app).toContain(`${key}:`)
     }
+    expect(app).toContain('const volume = Number($("tradeVolume")?.value)')
+    expect(app).toContain('交易手数')
+    expect(app).toContain('escapeHtml(String(order.meta.volume))} 手')
+    expect(app).not.toContain('volumeText(order.meta.volume)')
+    expect(String(0.001)).toBe('0.001')
+    expect(app).not.toContain('ADMIN_STRATEGY_DISPATCH_TIER_LABELS')
+    expect(app).not.toContain('adminStrategyDispatchTier')
+    expect(app).not.toContain('position_size_tier:String($("adminStrategyDispatchTier")')
     expect(app).not.toContain('source_volume')
     expect(app).toContain('stopLoss == null')
     expect(app).toContain('takeProfit == null')

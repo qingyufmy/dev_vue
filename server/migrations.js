@@ -6359,6 +6359,38 @@ const migrations = [
         KEY idx_admin_position_close_target_signal (signal_id, user_id, status)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     }
+  },
+  {
+    id: '189_admin_strategy_trade_requested_volume',
+    async up() {
+      // Migration 187 created tier-only dispatch rows. Keep that schema
+      // readable for in-flight legacy rows, while new rows freeze an explicit
+      // hand size in a nullable DECIMAL column.
+      const columns = await queryAll(`SELECT COLUMN_NAME, IS_NULLABLE, DATA_TYPE,
+          NUMERIC_PRECISION, NUMERIC_SCALE
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'admin_strategy_trade_dispatches'
+          AND COLUMN_NAME IN ('requested_volume', 'position_size_tier')`)
+      const byName = new Map(columns.map(row => [String(row.COLUMN_NAME), row]))
+      const requestedVolume = byName.get('requested_volume')
+      if (!requestedVolume) {
+        await queryRun(`ALTER TABLE admin_strategy_trade_dispatches
+          ADD COLUMN requested_volume DECIMAL(20,8) DEFAULT NULL AFTER take_profit_3`)
+      } else if (String(requestedVolume.DATA_TYPE).toLowerCase() !== 'decimal'
+        || Number(requestedVolume.NUMERIC_PRECISION) !== 20
+        || Number(requestedVolume.NUMERIC_SCALE) !== 8
+        || String(requestedVolume.IS_NULLABLE).toUpperCase() !== 'YES') {
+        await queryRun(`ALTER TABLE admin_strategy_trade_dispatches
+          MODIFY COLUMN requested_volume DECIMAL(20,8) DEFAULT NULL`)
+      }
+
+      const positionSizeTier = byName.get('position_size_tier')
+      if (positionSizeTier && String(positionSizeTier.IS_NULLABLE).toUpperCase() !== 'YES') {
+        await queryRun(`ALTER TABLE admin_strategy_trade_dispatches
+          MODIFY COLUMN position_size_tier VARCHAR(16) DEFAULT NULL`)
+      }
+    }
   }
 ]
 

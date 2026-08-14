@@ -39,7 +39,7 @@ vi.mock('../server/services/admin-strategy-trades.js', () => ({
   resolveEffectiveSymbolsForDispatch: (selected, strategy) => selected == null ? JSON.parse(strategy || '[]') : JSON.parse(selected || '[]').filter(item => JSON.parse(strategy || '[]').includes(item)),
 }))
 
-import { processAdminStrategyTradeDispatch, reconcileAdminStrategyTradeTargetsOnce } from '../server/workers/admin-strategy-trade-worker.js'
+import { __adminStrategyTradeWorkerTest, processAdminStrategyTradeDispatch, reconcileAdminStrategyTradeTargetsOnce } from '../server/workers/admin-strategy-trade-worker.js'
 
 const dispatch = {
   id: 5, signal_id: 77, actor_user_id: 1, symbol: 'EURUSD', direction: 'buy',
@@ -61,6 +61,28 @@ beforeEach(() => {
 })
 
 describe('admin strategy trade worker fences', () => {
+  it('sends a new dispatch fixed volume without legacy tier sizing fields', () => {
+    const request = __adminStrategyTradeWorkerTest.targetRequest(
+      { ...dispatch, requested_volume: '0.37', position_size_tier: 'probe' },
+      { trading_account_id: 9 },
+      { position_size_factor: 0.25 },
+    )
+    expect(request.volume).toBe(0.37)
+    expect(request).not.toHaveProperty('position_size_tier')
+    expect(request).not.toHaveProperty('position_size_factor')
+  })
+
+  it('keeps tier fallback only for legacy rows without requested_volume', () => {
+    const request = __adminStrategyTradeWorkerTest.targetRequest(
+      { ...dispatch, requested_volume: null },
+      { trading_account_id: 9 },
+      { position_size_factor: 0.25 },
+    )
+    expect(request.volume).toBe(0)
+    expect(request.position_size_tier).toBe('probe')
+    expect(request.position_size_factor).toBe(0.25)
+  })
+
   it('does not open subscriber targets when the source execution is uncertain', async () => {
     mockExecuteOrderCore.mockResolvedValue({ status: 'uncertain', order_intent_id: 11 })
     const result = await processAdminStrategyTradeDispatch(5)

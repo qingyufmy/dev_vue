@@ -1,7 +1,6 @@
 import crypto from 'node:crypto'
 import { beijingAfter, beijingNow, parseBeijing, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
 import { stripBrokerSuffix } from '../routes/ai/utils.js'
-import { normalizePositionSizeTier, positionSizeFactor } from '../routes/ai/position-sizing.js'
 import { isSubscriptionScheduleActive } from '../routes/ai/subscription-schedule.js'
 import { getBridgeGeneration, isBridgeAlive, isTradeEnabled } from '../bridge-ws.js'
 
@@ -53,6 +52,18 @@ function normalizePrice(value, name, required = true) {
   return price
 }
 
+function normalizeVolume(value) {
+  if (value === null || value === undefined || value === '') throw fail('volume_required')
+  const volume = Number(value)
+  if (!Number.isFinite(volume) || volume <= 0) throw fail('volume_invalid')
+  // The dispatch ledger stores DECIMAL(20,8). Freeze the same precision in
+  // the request/hash/snapshots so MySQL conversion cannot silently alter the
+  // value after the preview has been confirmed.
+  const normalized = Number(volume.toFixed(8))
+  if (!Number.isFinite(normalized) || normalized <= 0) throw fail('volume_invalid')
+  return normalized
+}
+
 export function normalizeAdminStrategyTradeInput(body = {}, headers = {}) {
   const strategyId = normalizeId(body.strategy_id, 'strategy_id')
   const accountId = normalizeId(body.trading_account_id, 'trading_account_id')
@@ -62,8 +73,7 @@ export function normalizeAdminStrategyTradeInput(body = {}, headers = {}) {
   if (!VALID_DIRECTIONS.has(direction)) throw fail('direction_invalid')
   const entryMethod = String(body.entry_method || 'market').trim().toLowerCase()
   if (!ADMIN_STRATEGY_TRADE_ENTRY_METHODS.includes(entryMethod)) throw fail('entry_method_not_supported')
-  const tier = normalizePositionSizeTier(body.position_size_tier, direction)
-  if (!tier) throw fail('position_size_tier_invalid')
+  const volume = normalizeVolume(body.volume)
   const validUntilRaw = body.valid_until_utc_msc ?? body.valid_until
   const validMinutes = Number(body.valid_minutes)
   const validUntil = validUntilRaw == null && Number.isFinite(validMinutes) && validMinutes > 0
@@ -83,7 +93,7 @@ export function normalizeAdminStrategyTradeInput(body = {}, headers = {}) {
     take_profit_1: normalizePrice(body.take_profit_1 ?? body.take_profit_1_price ?? body.take_profit, 'take_profit_1'),
     take_profit_2: normalizePrice(body.take_profit_2 ?? body.take_profit_2_price, 'take_profit_2', false),
     take_profit_3: normalizePrice(body.take_profit_3 ?? body.take_profit_3_price, 'take_profit_3', false),
-    position_size_tier: tier,
+    volume,
     valid_until_utc_msc: validUntil,
     reason,
     idempotency_key: String(body.idempotency_key || body.client_request_id || headers['idempotency-key'] || '').trim() || crypto.randomUUID(),
@@ -157,7 +167,9 @@ function snapshotForTarget(row, input, strategy, targetRole, exclusionReason = n
   }
   return {
     target_role: targetRole, dispatch_symbol: input.symbol, direction: input.direction,
-    position_size_tier: input.position_size_tier, position_size_factor: positionSizeFactor(input.position_size_tier),
+    // Freeze the administrator's explicit hand size in every target snapshot;
+    // subscribers must not recalculate it from a legacy position tier.
+    requested_volume: input.volume,
     standard_symbol: input.symbol, take_profit_mode: row.take_profit_mode || null,
     subscription, user: { id: Number(row.user_id || 0), role: row.user_role || null, plan: row.plan || null, plan_expires_at: row.plan_expires_at || null },
     account, broker: { server: row.broker_server || null, login: row.login_account || null },
@@ -288,7 +300,7 @@ export async function buildAdminStrategyTradePreview(actorUserId, body = {}, hea
   const previewHash = stableHash(hashPayload)
   return {
     enabled: true, supported_entry_methods: [...ADMIN_STRATEGY_TRADE_ENTRY_METHODS], preview_hash: previewHash,
-    request: { ...input, preview_hash: previewHash, position_size_factor: positionSizeFactor(input.position_size_tier) },
+    request: { ...input, preview_hash: previewHash },
     strategy: { id: Number(strategy.id), title: strategy.title, scope: strategy.scope, owner_user_id: Number(strategy.owner_user_id || 0), version: Number(strategy.version || 1), symbols: parseSymbols(strategy.symbols_json) },
     source, targets, exclusions: targets.filter(item => !item.valid),
     summary: { target_count: targets.length + 1, eligible_target_count: targets.filter(item => item.valid).length, excluded_target_count: targets.filter(item => !item.valid).length, source_valid: !sourceReason },
@@ -303,12 +315,12 @@ async function insertDispatchTx(run, actorId, input, preview) {
   const [dispatchResult] = await run(`INSERT INTO admin_strategy_trade_dispatches
     (idempotency_key, actor_user_id, strategy_id, frozen_strategy_version, strategy_snapshot_json,
      symbol, direction, entry_method, entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
-     position_size_tier, valid_until_utc_msc, reason, preview_hash, status, target_count,
+     requested_volume, position_size_tier, valid_until_utc_msc, reason, preview_hash, status, target_count,
      eligible_target_count, updated_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?)`, [
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'confirmed', ?, ?, ?, ?)`, [
     input.idempotency_key, actorId, input.strategy_id, Number(preview.strategy.version || 1), json(strategySnapshot),
     input.symbol, input.direction, input.entry_method, input.entry_price, input.stop_loss, input.take_profit_1,
-    input.take_profit_2, input.take_profit_3, input.position_size_tier, input.valid_until_utc_msc, input.reason,
+    input.take_profit_2, input.take_profit_3, input.volume, input.valid_until_utc_msc, input.reason,
     preview.preview_hash, preview.summary.target_count, preview.summary.eligible_target_count, now, now,
   ])
   const dispatchId = Number(dispatchResult.insertId)
@@ -316,13 +328,12 @@ async function insertDispatchTx(run, actorId, input, preview) {
     execution_validation: { status: 'eligible', eligible: true, reason_codes: [] } })
   const [signalResult] = await run(`INSERT INTO ai_signals
     (user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
-     recommended_volume, position_size_tier, position_size_factor, position_size_reason, analysis, reasoning,
+     recommended_volume, analysis, reasoning,
      stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json,
      token_count, ai_model, ttl_seconds, is_executed, created_at, created_at_utc_msc, entry_method, decision_json)
-    VALUES (?, 0, ?, 'admin_strategy_dispatch', ?, ?, 'M15', ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', 0, 'admin_strategy_dispatch', ?, 0, ?, ?, 'market', ?)`, [
+    VALUES (?, 0, ?, 'admin_strategy_dispatch', ?, ?, 'M15', ?, 1, ?, ?, ?, ?, ?, ?, ?, '{}', 0, 'admin_strategy_dispatch', 0, 0, ?, ?, 'market', ?)`, [
     actorId, input.strategy_id, ADMIN_STRATEGY_TRADE_SOURCE, input.symbol, input.direction,
-    input.position_size_tier, positionSizeFactor(input.position_size_tier), input.reason,
-    `Admin strategy dispatch ${dispatchId}`, input.reason, input.stop_loss, input.take_profit_1,
+    input.volume, `Admin strategy dispatch ${dispatchId}`, input.reason, input.stop_loss, input.take_profit_1,
     input.take_profit_2, input.take_profit_3, now, Date.now(), decision,
   ])
   const signalId = Number(signalResult.insertId)

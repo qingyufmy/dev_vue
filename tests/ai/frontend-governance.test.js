@@ -1125,7 +1125,21 @@ describe('AI governance navigation and DOM contract', () => {
     expect(stylesheetVersion).toBeTruthy()
     expect(appVersion).toMatch(/^[0-9a-z._-]+$/i)
     expect(appVersion).toBe(stylesheetVersion)
-    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1')
+    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1')
+  })
+
+  it('keeps admin dispatch volume explicit without changing ordinary AI tier display', () => {
+    expect(app).toContain('const volume = Number($("tradeVolume")?.value)')
+    expect(app).toContain('volume,')
+    expect(app).not.toContain('position_size_tier:String($("adminStrategyDispatchTier")')
+    expect(app).not.toContain('source_volume')
+    expect(app).not.toContain('volumeInput.disabled = true')
+    expect(html).not.toContain('id="adminStrategyDispatchTier"')
+    expect(html).not.toContain('id="tradeVolumeDispatchHelp"')
+    expect(html).toContain('AI 仓位档位')
+    expect(html).toContain('admin-dispatch-volume1')
+    const stylesheetQuery = html.match(/styles\.css\?v=[^\"]+/)?.[0] || ''
+    expect(stylesheetQuery).not.toContain('admin-dispatch-volume1')
   })
 
   it('separates model conclusions from data and execution validation in signal details', () => {

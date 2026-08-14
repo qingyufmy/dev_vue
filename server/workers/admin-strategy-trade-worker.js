@@ -75,11 +75,14 @@ async function markTarget(targetId, dispatchId, status, fields = {}) {
 }
 
 function targetRequest(dispatch, target, snapshot) {
-  return {
+  const isLegacyTierDispatch = dispatch.requested_volume === null
+    || dispatch.requested_volume === undefined || dispatch.requested_volume === ''
+  const request = {
     symbol: dispatch.symbol, order_type: dispatch.direction, direction: dispatch.direction,
-    entry_method: 'market', entry_price: dispatch.entry_price || null, volume: 0,
-    position_size_tier: dispatch.position_size_tier, position_size_factor: snapshot.position_size_factor,
-    position_size_reason: `admin_strategy_dispatch:${dispatch.id}`,
+    entry_method: 'market', entry_price: dispatch.entry_price || null,
+    // New dispatches carry an explicit, frozen hand size. executeOrderCore
+    // still applies broker/risk validation and may only reduce that request.
+    volume: isLegacyTierDispatch ? 0 : Number(dispatch.requested_volume),
     sl: dispatch.stop_loss, tp: dispatch.take_profit_1, stop_loss_price: dispatch.stop_loss,
     take_profit_1_price: dispatch.take_profit_1, take_profit_2_price: dispatch.take_profit_2,
     take_profit_3_price: dispatch.take_profit_3, take_profit_candidates: [dispatch.take_profit_1, dispatch.take_profit_2, dispatch.take_profit_3]
@@ -88,6 +91,14 @@ function targetRequest(dispatch, target, snapshot) {
     execution_validation: { status: 'eligible', eligible: true, reason_codes: [] }, magic: ADMIN_STRATEGY_TRADE_MAGIC,
     source: ADMIN_STRATEGY_TRADE_SOURCE, trading_account_id: Number(target.trading_account_id),
   }
+  // Compatibility path only for rows created before migration 189. New rows
+  // must never fall back to a position tier or its factor.
+  if (isLegacyTierDispatch) {
+    request.position_size_tier = dispatch.position_size_tier
+    request.position_size_factor = snapshot.position_size_factor
+    request.position_size_reason = `admin_strategy_dispatch:${dispatch.id}`
+  }
+  return request
 }
 
 async function checkTargetRuntime(dispatch, target, sourceRequired) {

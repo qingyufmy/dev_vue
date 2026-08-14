@@ -4564,7 +4564,6 @@ async function loadStrategyCatalog() {
   initIcons();
 }
 
-const ADMIN_STRATEGY_DISPATCH_TIER_LABELS = Object.freeze({ probe:"试探仓", light:"轻仓", standard:"标准仓" });
 const ADMIN_STRATEGY_DISPATCH_STATUS_LABELS = Object.freeze({
   queued:"等待发起", created:"已创建", preview:"预览", draft:"草稿", previewed:"预览完成", confirmed:"已确认", delivering:"分发中", source_pending:"源单等待中", source_sending:"源单发送中",
   source_confirming:"确认源单结果", source_succeeded:"源单已确认", dispatching:"分发中", partial:"部分完成",
@@ -4649,23 +4648,6 @@ function renderAdminStrategyDispatchControls() {
   fields.hidden = !canUse || !checkbox.checked;
   checkbox.disabled = !canUse;
   renderAdminStrategyDispatchStrategyOptions();
-  const volumeLabel = $("tradeVolumeLabel");
-  if (volumeLabel) volumeLabel.textContent = "交易手数";
-  const volumeInput = $("tradeVolume");
-  const volumeHelp = $("tradeVolumeDispatchHelp");
-  const active = canUse && checkbox.checked;
-  if (volumeInput) {
-    if (active) {
-      if (!volumeInput.hasAttribute("data-admin-dispatch-was-disabled")) volumeInput.dataset.adminDispatchWasDisabled = volumeInput.disabled ? "1" : "0";
-      volumeInput.disabled = true;
-      volumeInput.title = "分发模式按仓位档位和各账户风控独立计算手数";
-    } else if (volumeInput.hasAttribute("data-admin-dispatch-was-disabled")) {
-      volumeInput.disabled = volumeInput.dataset.adminDispatchWasDisabled === "1";
-      volumeInput.removeAttribute("data-admin-dispatch-was-disabled");
-      volumeInput.title = "";
-    }
-  }
-  if (volumeHelp) volumeHelp.hidden = !active;
   syncAdminStrategyDispatchOrderType();
   renderAdminStrategyDispatchProgress();
 }
@@ -4878,6 +4860,7 @@ function buildAdminStrategyDispatchPreview(direction) {
   const sourceAccountId = Number(sourceAccount?.id ?? sourceAccount?.trading_account_id ?? 0);
   const stopLoss = manualTargetPrice("stopLossPoints", "止损价格");
   const takeProfit = manualTargetPrice("takeProfitPoints", "止盈价格");
+  const volume = Number($("tradeVolume")?.value);
   const validMinutes = Number($("adminStrategyDispatchValidMinutes")?.value);
   const reason = String($("adminStrategyDispatchReason")?.value || "").trim();
   if (!strategy) throw new Error("请选择有效的平台策略");
@@ -4887,6 +4870,7 @@ function buildAdminStrategyDispatchPreview(direction) {
   if (!Number.isSafeInteger(sourceAccountId) || sourceAccountId <= 0) throw new Error("当前没有可用的管理员交易账户");
   if (stopLoss == null) throw new Error("策略分发必须填写止损价格");
   if (takeProfit == null) throw new Error("策略分发至少填写一个止盈价格");
+  if (!Number.isFinite(volume) || volume <= 0) throw new Error("交易手数必须是大于 0 的有效数字");
   if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes > 1440) throw new Error("有效期必须是 1 至 1440 分钟");
   if (!reason || reason.length < 2) throw new Error("请填写至少 2 个字的中文原因");
   const quote = state.lastQuote;
@@ -4895,11 +4879,11 @@ function buildAdminStrategyDispatchPreview(direction) {
   const validUntil = Date.now() + validMinutes * 60_000;
   const payload = {
     strategy_id:strategyId, trading_account_id:sourceAccountId, symbol, direction:String(direction), entry_method:"market",
-    stop_loss:stopLoss, take_profit:takeProfit, take_profit_1:takeProfit,
-    position_size_tier:String($("adminStrategyDispatchTier")?.value || "probe"), valid_minutes:validMinutes,
+    stop_loss:stopLoss, take_profit:takeProfit, take_profit_1:takeProfit, volume,
+    valid_minutes:validMinutes,
     valid_until:validUntil, valid_until_utc_msc:validUntil, reason, client_request_id:clientRequestId, idempotency_key:clientRequestId,
   };
-  return { payload, meta:{ strategy, sourceAccount, symbol, direction:String(direction), stopLoss, takeProfit, validMinutes, validUntil, reason, tier:payload.position_size_tier } };
+  return { payload, meta:{ strategy, sourceAccount, symbol, direction:String(direction), stopLoss, takeProfit, volume, validMinutes, validUntil, reason } };
 }
 
 function renderAdminStrategyDispatchPreview(order, data) {
@@ -4913,7 +4897,7 @@ function renderAdminStrategyDispatchPreview(order, data) {
   const excluded = preview?.excluded || preview?.excluded_targets || preview?.exclusions || [];
   const excludedRows = Array.isArray(excluded) ? excluded : [];
   const reasons = excludedRows.slice(0, 8).map(item => `<li>${escapeHtml(item?.user_label || item?.user_name || (item?.user_id ? `用户 #${item.user_id}` : "订阅目标"))}：${escapeHtml(adminStrategyDispatchTargetReason(item) || "未满足执行条件")}</li>`).join("");
-  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>仓位档位</span><strong>${escapeHtml(ADMIN_STRATEGY_DISPATCH_TIER_LABELS[order.meta.tier] || order.meta.tier)} · 按仓位档位和各账户风控独立计算手数</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(priceDisplay(order.meta.stopLoss))} / ${escapeHtml(priceDisplay(order.meta.takeProfit))}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div>${reasons ? `<div class="admin-strategy-dispatch-exclusion"><span>排除原因</span><ul>${reasons}</ul></div>` : ""}<div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason)}</strong></div>`;
+  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(priceDisplay(order.meta.stopLoss))} / ${escapeHtml(priceDisplay(order.meta.takeProfit))}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div>${reasons ? `<div class="admin-strategy-dispatch-exclusion"><span>排除原因</span><ul>${reasons}</ul></div>` : ""}<div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason)}</strong></div>`;
   $("adminStrategyDispatchModal")?.classList.remove("hidden");
   document.body.classList.add("modal-open");
   initIcons();
