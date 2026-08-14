@@ -760,9 +760,12 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
         }
         const normalizedTimes = new Set(normalizedRates.map(rate => Number(rate.time_utc_msc)))
-        if (!normalizedTimes.has(rangeStartUtcMs)) {
-          return { status:'error', error:'rates_range_incomplete', message:'桥接返回的 K 线未覆盖请求范围起点' }
-        }
+        // MT5 returns every bar that exists inside the requested interval.
+        // Deal timestamps and lookback boundaries can fall between candle
+        // opens or inside a market closure, so exact start equality is audit
+        // metadata rather than a completeness gate.  Period/holding coverage
+        // remains fail-closed in the review layer.
+        const rangeStartOpenTimeMatched = normalizedTimes.has(rangeStartUtcMs)
         const brokerSymbol = response.symbol || symbol
         const ensured = await ensureSourceBestEffort(platformUserId, effectiveClock, response.rates.at(-1))
         const sourceId = ensured.sourceId
@@ -813,7 +816,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
           cache_internal_gap_details:rangeSourceGaps.slice(0, 3),
           range_coverage_verified:true,
           range_bridge_authoritative:true,
-          endpoint_coverage_verified:true,
+          endpoint_coverage_verified:rangeStartOpenTimeMatched,
+          range_start_open_time_matched:rangeStartOpenTimeMatched,
           ...continuityMeta(rangeVerifiedIntegrity),
            continuity_calendar_version:MARKET_SESSION_CALENDAR_VERSION,
            expected_closures:rangeVerifiedIntegrity.expected_closures.slice(0, 8),
@@ -1075,9 +1079,8 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   if (!fallbackSplit.closedRates.length && !fallbackSplit.liveRates.length) {
     return { status:'error', error:'rates_timestamp_invalid', message:'桥接返回的 K 线时间无效' }
   }
-  if (fallbackReviewRange && !fallback.rates.some(rate => Number(validRate(rate, fallbackOffset)?.time_utc_msc) === fallbackRangeStart)) {
-    return { status:'error', error:'rates_range_incomplete', message:'桥接返回的 K 线未覆盖请求范围起点' }
-  }
+  const fallbackRangeStartOpenTimeMatched = !fallbackReviewRange || fallback.rates
+    .some(rate => Number(validRate(rate, fallbackOffset)?.time_utc_msc) === fallbackRangeStart)
   const initialFallbackIdentity = sourceIdentity(requestUserId, effectiveFallbackClock)
   let fallbackIdentityChanged = Boolean(existingFallbackSource.id && existingFallbackSource.sourceKey
     && existingFallbackSource.sourceKey !== initialFallbackIdentity.sourceKey)
@@ -1234,6 +1237,14 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
     continuity_reason:fallbackContinuityIntegrity.continuity_reason,
     continuity_reasons:fallbackContinuityIntegrity.continuity_reasons,
     unknown_session_gap_count:fallbackContinuityIntegrity.unknown_session_gap_count,
+    ...(fallbackReviewRange ? {
+      range_coverage_verified:true,
+      range_bridge_authoritative:true,
+      endpoint_coverage_verified:fallbackRangeStartOpenTimeMatched,
+      range_start_open_time_matched:fallbackRangeStartOpenTimeMatched,
+      range_start_utc_msc:fallbackRangeStart,
+      range_end_utc_msc:fallbackRangeEnd,
+    } : {}),
     chan_structure_anchor_utc_msc:Number(fallbackStructureAnchor?.anchor_time_utc_msc) || null,
     chan_last_confirmed_segment_utc_msc:Number(fallbackStructureAnchor?.last_confirmed_segment_time_utc_msc) || null,
     chan_structure_anchor_core_stable_id:fallbackStructureAnchor?.bootstrap_core_stable_id || null,

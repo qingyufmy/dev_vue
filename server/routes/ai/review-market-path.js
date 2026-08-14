@@ -127,6 +127,9 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       const initialExitMs = Number.isFinite(requestedCutoff) && requestedCutoff > 0
         ? requestedCutoff : (initialExitTimes.length ? Math.max(...initialExitTimes) : null)
       if (!initialEntryMs || !initialExitMs) throw new Error('holding_deal_times_missing')
+      const timeframeMs = TIMEFRAME_MS[timeframe]
+      const alignedEntryMs = Math.floor(initialEntryMs / timeframeMs) * timeframeMs
+      const alignedExitMs = Math.ceil(initialExitMs / timeframeMs) * timeframeMs
       let response
       let allRatesClosed = false
       const chanPolicy = chanEnabled && chanTimeframeSet.has(timeframe) ? getChanWindowPolicy(timeframe) : null
@@ -137,8 +140,8 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       } else {
         const contextBars = chanPolicy?.target || Math.max(80, Array.isArray(snapshotKlines[timeframe]) ? snapshotKlines[timeframe].length : 0)
         const loaded = await loadWindow(userId, symbol, timeframe,
-          initialEntryMs - contextBars * TIMEFRAME_MS[timeframe],
-          initialExitMs + TIMEFRAME_MS[timeframe], { alignToPeriodStart:false,
+          alignedEntryMs - contextBars * timeframeMs,
+          alignedExitMs + timeframeMs, { alignToPeriodStart:false,
             chanHistoryTarget:chanPolicy?.target || 0, chanMaximumHistoryCount:chanPolicy?.maximumHistoryCount || 0,
             includeChanHistory:Boolean(chanPolicy), strictSessionPolicy:true, standardSymbol:stripBrokerSuffix(symbol) })
         response = { status:'success', rates:loaded.rates, market_meta:loaded.marketMeta || {} }

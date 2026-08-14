@@ -81,6 +81,32 @@ describe('review holding market path', () => {
     expect(result.metrics.status).toBe('complete')
   })
 
+  it('aligns millisecond deal boundaries to the requested candle grid', async () => {
+    const series = rates(140)
+    const entryTime = series[90].time_utc_msc + 40_975
+    const exitTime = series[105].time_utc_msc + 13_111
+    const deals = [
+      { entry_type:0, volume:1, price:4000, raw_json:JSON.stringify({ time_utc_msc:entryTime }) },
+      { entry_type:1, volume:1, price:4002, raw_json:JSON.stringify({ time_utc_msc:exitTime }) },
+    ]
+    let requestedWindow = null
+
+    const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD',
+      signal:{ signal_type:'buy_limit', timeframe:'M5' }, snapshot:{ klines:{ M5:series.slice(-60) } }, deals,
+      chanRequirement:{ status:'disabled', source:'test_frozen_disabled', timeframes:[] },
+      loadWindow:async (_userId, _symbol, timeframe, startUtcMs, endUtcMs) => {
+        requestedWindow = { timeframe, startUtcMs, endUtcMs }
+        return { rates:series, marketMeta:{ source:'mysql_period_cache', timezone_offset_minutes:0 } }
+      },
+    })
+
+    expect(requestedWindow.timeframe).toBe('M5')
+    expect(requestedWindow.startUtcMs % 300_000).toBe(0)
+    expect(requestedWindow.endUtcMs % 300_000).toBe(0)
+    expect(requestedWindow.startUtcMs).toBe(Math.floor(entryTime / 300_000) * 300_000 - 80 * 300_000)
+    expect(result.metrics.status).toBe('complete')
+  })
+
   it('cuts counterfactual evidence at the entry boundary without holding metrics or future candles', async () => {
     const series = rates(120)
     const entryTime = series[90].time_utc_msc

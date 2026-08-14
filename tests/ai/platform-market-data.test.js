@@ -223,6 +223,26 @@ describe('platform market data', () => {
     expect(redis.set).not.toHaveBeenCalled()
   })
 
+  it('accepts an authoritative range whose requested start falls in a market closure', async () => {
+    const first = rate(0, 2000)
+    const start = first.time_utc_msc - 2 * 86400_000
+    const end = rate(2, 2002).time_utc_msc + 60_000
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', range_complete:true,
+      rates:[first, rate(1, 2001), rate(2, 2002)] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:20,
+      review_window:true, start_utc_msc:start, end_utc_msc:end })
+
+    expect(result.status).toBe('success')
+    expect(result.rates.map(item => item.close)).toEqual([2000, 2001, 2002])
+    expect(result.market_meta).toMatchObject({
+      range_bridge_authoritative:true,
+      range_coverage_verified:true,
+      endpoint_coverage_verified:false,
+      range_start_open_time_matched:false,
+    })
+  })
+
   it('marks an exact Bridge range gap as a verified source gap', async () => {
     const start = rate(0, 2000).time_utc_msc
     const end = rate(4, 2004).time_utc_msc
