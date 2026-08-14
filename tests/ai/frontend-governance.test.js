@@ -1122,9 +1122,15 @@ describe('AI governance navigation and DOM contract', () => {
   it('uses the same current cache key for the AI stylesheet and application script', () => {
     const stylesheetVersion = html.match(/styles\.css\?v=([0-9a-z]+)/)?.[1]
     const appVersion = html.match(/app\.js\?v=([0-9a-z]+)/)?.[1]
+    const stylesHref = html.match(/styles\.css\?[^"']+/)?.[0]
+    const responsiveHref = html.match(/responsive\.css\?[^"']+/)?.[0]
+    const appHref = html.match(/app\.js\?[^"']+/)?.[0]
     expect(stylesheetVersion).toBeTruthy()
     expect(appVersion).toMatch(/^[0-9a-z._-]+$/i)
     expect(appVersion).toBe(stylesheetVersion)
+    expect(stylesHref).toContain('manual-order-ticket1-admin-dispatch-switch1')
+    expect(responsiveHref).toContain('manual-order-ticket1-admin-dispatch-switch1')
+    expect(appHref).not.toContain('admin-dispatch-switch1')
     expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1')
   })
 

@@ -2034,10 +2034,7 @@
 
   .admin-strategy-dispatch-toggle {
     width: 100%;
-  }
-
-  .admin-strategy-dispatch-head > .status-chip {
-    align-self: flex-start;
+    justify-content: flex-start;
   }
 
   .admin-strategy-dispatch-fields {

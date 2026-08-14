@@ -10,8 +10,11 @@ describe('admin strategy dispatch frontend contract', () => {
   it('keeps the entry point inside manual order and gates it by admin capability', () => {
     expect(html).toContain('id="adminStrategyDispatchPanel"')
     expect(html).toContain('id="adminStrategyDispatchEnabled"')
+    expect(html).toContain('role="switch"')
+    expect(html).toContain('admin-strategy-dispatch-switch-thumb')
     expect(html).toContain('按平台策略分发')
-    expect(html).toContain('管理员策略指令')
+    expect(html).toContain('关闭即恢复普通下单')
+    expect(html).not.toContain('<span class="status-chip warning">管理员策略指令</span>')
     expect(app).toContain('state.user?.role === "admin"')
     expect(app).toContain('/api/admin/strategy-trades/capabilities')
     expect(app).toContain('state.adminStrategyDispatchCapabilities?.enabled')

@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260814ema34toggle1" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260814ema34toggle1">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260814ema34toggle1">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -832,15 +832,15 @@
               <section id="adminStrategyDispatchPanel" class="admin-strategy-dispatch-panel admin-only" hidden aria-labelledby="adminStrategyDispatchTitle">
                 <div class="admin-strategy-dispatch-head">
                   <div class="admin-strategy-dispatch-heading">
-                    <span class="section-kicker">管理员专属模式</span>
+                    <span class="section-kicker">管理员模式</span>
                     <strong id="adminStrategyDispatchTitle">按平台策略分发</strong>
-                    <small>仅市价 BUY / SELL；关闭后恢复普通手动下单。</small>
+                    <small>仅市价 BUY / SELL；关闭即恢复普通下单。</small>
                   </div>
                   <label class="admin-strategy-dispatch-toggle" for="adminStrategyDispatchEnabled">
-                    <input id="adminStrategyDispatchEnabled" type="checkbox" aria-controls="adminStrategyDispatchFields" aria-expanded="false" />
-                    <span><strong>启用分发</strong><small>开启后填写策略与有效期</small></span>
+                    <input id="adminStrategyDispatchEnabled" type="checkbox" role="switch" aria-controls="adminStrategyDispatchFields" aria-expanded="false" />
+                    <span class="admin-strategy-dispatch-switch" aria-hidden="true"><span class="admin-strategy-dispatch-switch-thumb"></span></span>
+                    <span class="admin-strategy-dispatch-toggle-copy"><strong>启用分发</strong><small>开启后填写策略与有效期</small></span>
                   </label>
-                  <span class="status-chip warning">管理员策略指令</span>
                 </div>
                 <div id="adminStrategyDispatchFields" class="admin-strategy-dispatch-fields" hidden>
                   <label for="adminStrategyDispatchStrategy"><span>平台策略</span><select id="adminStrategyDispatchStrategy" aria-describedby="adminStrategyDispatchStrategyHelp"><option value="">正在加载平台策略</option></select><small id="adminStrategyDispatchStrategyHelp" class="field-help">只显示有效的平台策略，不会混入用户私有策略。</small></label>

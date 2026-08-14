@@ -5553,10 +5553,6 @@ input:checked + .slider::before { transform: translateX(18px); }
   font-weight: 700;
 }
 
-.admin-strategy-dispatch-toggle input {
-  accent-color: var(--gold-primary);
-}
-
 .admin-strategy-dispatch-note,
 .admin-strategy-dispatch-progress-head small,
 .admin-strategy-dispatch-panel .field-help {
@@ -11520,7 +11516,7 @@ body.account-center-open { overflow: hidden; }
 }
 
 .trade-ticket-section :is(input, select, textarea),
-.admin-strategy-dispatch-panel :is(input, select, textarea) {
+.admin-strategy-dispatch-panel :is(input:not([type="checkbox"]), select, textarea) {
   min-height: 44px;
 }
 
@@ -11662,30 +11658,109 @@ body.account-center-open { overflow: hidden; }
 }
 
 .admin-strategy-dispatch-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 8px;
   min-height: 44px;
   padding: 5px 9px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--bg-card) 66%, transparent);
   cursor: pointer;
+  transition: border-color 180ms ease-out, background-color 180ms ease-out;
 }
 
 .admin-strategy-dispatch-toggle:has(input:focus-visible) {
-  outline: 2px solid var(--gold-primary);
+  outline: 2px solid color-mix(in srgb, var(--gold-primary) 82%, white);
   outline-offset: 2px;
 }
 
-.admin-strategy-dispatch-toggle > span {
+.admin-strategy-dispatch-toggle:has(input:checked) {
+  border-color: color-mix(in srgb, var(--gold-primary) 46%, var(--border-default));
+  background: color-mix(in srgb, var(--gold-wash) 68%, var(--bg-card));
+}
+
+.admin-strategy-dispatch-toggle:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: .58;
+}
+
+.admin-strategy-dispatch-toggle > input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.admin-strategy-dispatch-switch {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 38px;
+  width: 38px;
+  height: 22px;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  background: var(--bg-input);
+  transition: border-color 180ms ease-out, background-color 180ms ease-out;
+}
+
+.admin-strategy-dispatch-switch-thumb {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+  transition: background-color 180ms ease-out, transform 180ms ease-out;
+}
+
+.admin-strategy-dispatch-toggle > input:checked + .admin-strategy-dispatch-switch {
+  border-color: color-mix(in srgb, var(--gold-primary) 76%, var(--border-default));
+  background: color-mix(in srgb, var(--gold-primary) 64%, var(--bg-input));
+}
+
+.admin-strategy-dispatch-toggle > input:checked + .admin-strategy-dispatch-switch .admin-strategy-dispatch-switch-thumb {
+  background: var(--text-inverse);
+  transform: translateX(16px);
+}
+
+.admin-strategy-dispatch-toggle > input:disabled + .admin-strategy-dispatch-switch {
+  border-color: var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-input) 72%, var(--bg-base));
+}
+
+.admin-strategy-dispatch-toggle > input:disabled + .admin-strategy-dispatch-switch .admin-strategy-dispatch-switch-thumb {
+  background: var(--text-muted);
+}
+
+.admin-strategy-dispatch-toggle-copy {
   display: grid;
+  min-width: 0;
   gap: 2px;
 }
 
-.admin-strategy-dispatch-toggle > span strong {
+.admin-strategy-dispatch-toggle-copy strong,
+.admin-strategy-dispatch-toggle-copy small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-strategy-dispatch-toggle-copy strong {
   color: var(--text-primary);
   font-size: 12px;
 }
 
-.admin-strategy-dispatch-toggle > span small {
+.admin-strategy-dispatch-toggle-copy small {
   color: var(--text-muted);
   font-size: 10px;
   line-height: 1.3;
