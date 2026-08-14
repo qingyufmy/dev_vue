@@ -2709,6 +2709,32 @@ export function sendNotificationCreatedToUser(userId, data = {}) {
 // signal id alone is never sufficient: shared deliveries, observer strategy
 // scope, and legacy owner/platform rows all participate in the same check.
 async function loadVisibleSignalRecord(signalId, detailUserId, observerStrategyId) {
+  const adminTargetRow = await queryOne(
+    `SELECT t.id AS target_id, t.dispatch_id AS target_dispatch_id, t.target_role AS target_role,
+        t.subscription_id AS target_subscription_id, t.status AS target_status,
+        t.trade_ticket AS target_trade_ticket, t.execution_result_json AS target_execution_result_json,
+        t.order_intent_id AS target_order_intent_id, t.completed_at AS target_completed_at
+      FROM admin_strategy_trade_targets t JOIN ai_signals s ON s.id = t.signal_id
+      WHERE t.signal_id = ? AND t.user_id = ?
+        ${observerStrategyId ? 'AND s.prompt_type_id = ?' : ''}
+      ORDER BY (t.target_role = 'source') DESC, t.id DESC LIMIT 1`,
+    [signalId, detailUserId, ...(observerStrategyId ? [observerStrategyId] : [])],
+  )
+  if (adminTargetRow) {
+    const adminTarget = {
+      id: adminTargetRow.target_id, dispatch_id: adminTargetRow.target_dispatch_id,
+      target_role: adminTargetRow.target_role, subscription_id: adminTargetRow.target_subscription_id,
+      status: adminTargetRow.target_status, trade_ticket: adminTargetRow.target_trade_ticket,
+      execution_result_json: adminTargetRow.target_execution_result_json,
+      order_intent_id: adminTargetRow.target_order_intent_id, completed_at: adminTargetRow.target_completed_at,
+    }
+    return {
+      target: adminTarget,
+      delivery: null,
+      row: await queryOne('SELECT * FROM ai_signals WHERE id = ?', [signalId]),
+      source: 'admin_strategy_dispatch',
+    }
+  }
   const delivery = await queryOne(
     `SELECT * FROM auto_signal_deliveries WHERE signal_id = ? AND user_id = ?
       ${observerStrategyId ? 'AND prompt_type_id = ?' : ''}`,
@@ -2717,12 +2743,14 @@ async function loadVisibleSignalRecord(signalId, detailUserId, observerStrategyI
   if (delivery) {
     return {
       delivery,
+      target: null,
       row: await queryOne('SELECT * FROM ai_signals WHERE id = ?', [signalId]),
       source: 'auto_shared',
     }
   }
   return {
     delivery: null,
+    target: null,
     row: await queryOne(`SELECT * FROM ai_signals WHERE id = ? AND (user_id = ? OR user_id = 0)
       ${observerStrategyId ? 'AND prompt_type_id = ?' : ''}`,
     [signalId, detailUserId, ...(observerStrategyId ? [observerStrategyId] : [])]),
@@ -2730,7 +2758,7 @@ async function loadVisibleSignalRecord(signalId, detailUserId, observerStrategyI
   }
 }
 
-function applyVisibleSignalRecord(row, delivery, source, { includeLegacyMarketData = true } = {}) {
+function applyVisibleSignalRecord(row, delivery, source, { target = null, includeLegacyMarketData = true } = {}) {
   const result = { ...row }
   // A frozen snapshot is the authoritative market object for new signals. Do
   // not parse and serialize the legacy market_data_json alongside it; old rows
@@ -2739,7 +2767,20 @@ function applyVisibleSignalRecord(row, delivery, source, { includeLegacyMarketDa
     try { result.market_data = JSON.parse(result.market_data_json) } catch { result.market_data = {} }
   }
   delete result.market_data_json
-  if (delivery) {
+  if (target) {
+    result.is_executed = target.status === 'succeeded'
+    result.executed_at = target.completed_at || null
+    result.trade_ticket = target.trade_ticket || null
+    result.pending_ticket = null
+    result.pending_state = null
+    result.execution_result = target.execution_result_json || null
+    result.execution_status = target.status
+    result.admin_strategy_target_id = target.id
+    result.admin_strategy_dispatch_id = target.dispatch_id
+    result.admin_strategy_target_role = target.target_role
+    result.subscription_id = target.subscription_id
+    result.order_intent_id = target.order_intent_id
+  } else if (delivery) {
     result.is_executed = !!delivery.is_executed
     result.executed_at = delivery.executed_at
     result.trade_ticket = delivery.trade_ticket
@@ -2754,7 +2795,7 @@ function applyVisibleSignalRecord(row, delivery, source, { includeLegacyMarketDa
   } else {
     result.is_executed = !!result.is_executed
   }
-  result.source = delivery ? 'auto_shared' : (result.source || source)
+  result.source = target ? 'admin_strategy_dispatch' : (delivery ? 'auto_shared' : (result.source || source))
   const executionValidation = readExecutionValidation(result)
   if (executionValidation.explicit) result.execution_validation = executionValidation.validation
   return result
@@ -3206,6 +3247,15 @@ async function handleBrowserCommand(ws, userId, msg) {
            WHERE d.user_id = ? ${delivSessionFilter} ${observerStrategyId ? 'AND d.prompt_type_id = ?' : ''} ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
           [queryUserId, ...sessionParam, ...observerSignalParam]
         )
+        const adminTargetRow = await queryOne(
+          `SELECT s.id, s.signal_type, (t.status = 'succeeded') AS is_executed, t.completed_at AS executed_at,
+              s.created_at, s.created_at_utc_msc, s.ttl_seconds, s.timeframe, s.decision_json,
+              'admin_strategy_dispatch' AS signal_source, t.status AS execution_status
+           FROM admin_strategy_trade_targets t JOIN ai_signals s ON s.id = t.signal_id
+           WHERE t.user_id = ? ${observerStrategyId ? 'AND s.prompt_type_id = ?' : ''}
+           ORDER BY s.created_at DESC, s.id DESC LIMIT 1`,
+          [queryUserId, ...observerSignalParam]
+        )
 
         // Pick the newest of both
         let row = null
@@ -3214,6 +3264,8 @@ async function handleBrowserCommand(ws, userId, msg) {
         } else {
           row = oldRow || delivRow
         }
+        if (adminTargetRow && (!row || adminTargetRow.created_at > row.created_at
+          || (adminTargetRow.created_at === row.created_at && Number(adminTargetRow.id) > Number(row.id)))) row = adminTargetRow
 
         if (row) {
           ai.attachSignalTiming(row)
@@ -3239,6 +3291,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         }
         const snapshot = await getInferenceVisualizationSnapshot(signalId)
         const item = applyVisibleSignalRecord(visible.row, visible.delivery, visible.source, {
+          target: visible.target,
           includeLegacyMarketData: !snapshot,
         })
         item.pending_actions = await loadSignalPendingActions(
@@ -3328,27 +3381,33 @@ async function handleBrowserCommand(ws, userId, msg) {
         // Lightweight subquery for COUNT (no TEXT columns)
         const countColsOld = 's.id'
         const countColsDeliv = 's.id'
+        const countColsAdmin = 's.id'
         const countOldSub = `(SELECT ${countColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const countDelivSub = `(SELECT ${countColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id WHERE d.user_id = ?${observerDeliveryFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
+        const adminRepresentativeFilter = " AND t.id = COALESCE((SELECT MAX(t2.id) FROM admin_strategy_trade_targets t2 WHERE t2.signal_id = t.signal_id AND t2.user_id = t.user_id AND t2.target_role = 'source'), (SELECT MAX(t3.id) FROM admin_strategy_trade_targets t3 WHERE t3.signal_id = t.signal_id AND t3.user_id = t.user_id))"
+        const countAdminSub = `(SELECT ${countColsAdmin} FROM admin_strategy_trade_targets t JOIN ai_signals s ON s.id = t.signal_id WHERE t.user_id = ?${adminRepresentativeFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         // Full subquery for data (exclude market_data_json TEXT for performance)
-        const selectCols = 'id, user_id, trading_account_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, approved_order_json, created_at, created_at_utc_msc, terminal_timezone_offset_minutes, terminal_clock_status, terminal_clock_source, delivery_id, execution_status, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, pending_state, order_state, schema_version, decision_json'
-        const selectColsOld = 's.id, s.user_id, NULL AS trading_account_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, NULL as approved_order_json, s.created_at, s.created_at_utc_msc, s.terminal_timezone_offset_minutes, s.terminal_clock_status, s.terminal_clock_source, NULL as delivery_id, NULL as execution_status, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.pending_state, s.order_state, s.schema_version, s.decision_json'
+        const selectCols = 'id, user_id, trading_account_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence, recommended_volume, analysis, reasoning, stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, recommended_take_profit_tier, ai_model, ttl_seconds, is_executed, executed_at, trade_ticket, execution_result, approved_order_json, created_at, created_at_utc_msc, terminal_timezone_offset_minutes, terminal_clock_status, terminal_clock_source, delivery_id, execution_status, admin_target_id, admin_dispatch_id, admin_target_role, admin_subscription_id, entry_method, limit_price, stop_limit_price, pending_valid_until, pending_ticket, pending_state, order_state, schema_version, decision_json'
+        const selectColsOld = 's.id, s.user_id, NULL AS trading_account_id, s.config_id, s.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, s.is_executed, s.executed_at, s.trade_ticket, s.execution_result, NULL as approved_order_json, s.created_at, s.created_at_utc_msc, s.terminal_timezone_offset_minutes, s.terminal_clock_status, s.terminal_clock_source, NULL as delivery_id, NULL as execution_status, NULL as admin_target_id, NULL as admin_dispatch_id, NULL as admin_target_role, NULL as admin_subscription_id, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, s.pending_ticket, s.pending_state, s.order_state, s.schema_version, s.decision_json'
         const activeTradingAccountId = Number(observerContext?.channel?.trading_account_id)
         const activeTradingAccountSql = Number.isInteger(activeTradingAccountId) && activeTradingAccountId > 0
           ? String(activeTradingAccountId) : 'NULL'
-        const selectColsDeliv = `s.id, d.user_id, COALESCE(oi.trading_account_id, ${activeTradingAccountSql}) AS trading_account_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, d.approved_order_json, s.created_at, s.created_at_utc_msc, s.terminal_timezone_offset_minutes, s.terminal_clock_status, s.terminal_clock_source, d.id as delivery_id, d.execution_status, s.entry_method, s.limit_price, s.stop_limit_price, COALESCE(d.pending_valid_until, s.pending_valid_until) AS pending_valid_until, d.pending_ticket, d.pending_state, s.order_state, s.schema_version, s.decision_json`
+        const selectColsDeliv = `s.id, d.user_id, COALESCE(oi.trading_account_id, ${activeTradingAccountSql}) AS trading_account_id, s.config_id, d.prompt_type_id, s.session_id, s.source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, d.is_executed, d.executed_at, d.trade_ticket, d.execution_result, d.approved_order_json, s.created_at, s.created_at_utc_msc, s.terminal_timezone_offset_minutes, s.terminal_clock_status, s.terminal_clock_source, d.id as delivery_id, d.execution_status, NULL as admin_target_id, NULL as admin_dispatch_id, NULL as admin_target_role, NULL as admin_subscription_id, s.entry_method, s.limit_price, s.stop_limit_price, COALESCE(d.pending_valid_until, s.pending_valid_until) AS pending_valid_until, d.pending_ticket, d.pending_state, s.order_state, s.schema_version, s.decision_json`
+        const selectColsAdmin = `s.id, t.user_id, t.trading_account_id, s.config_id, s.prompt_type_id, s.session_id, 'admin_strategy_dispatch' AS source, s.symbol, s.timeframe, s.signal_type, s.confidence, s.recommended_volume, s.analysis, s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price, s.recommended_take_profit_tier, s.ai_model, s.ttl_seconds, (t.status = 'succeeded') AS is_executed, t.completed_at AS executed_at, t.trade_ticket, t.execution_result_json AS execution_result, oi.approved_order_json, s.created_at, s.created_at_utc_msc, s.terminal_timezone_offset_minutes, s.terminal_clock_status, s.terminal_clock_source, NULL AS delivery_id, t.status AS execution_status, t.id AS admin_target_id, t.dispatch_id AS admin_dispatch_id, t.target_role AS admin_target_role, t.subscription_id AS admin_subscription_id, s.entry_method, s.limit_price, s.stop_limit_price, s.pending_valid_until, NULL AS pending_ticket, NULL AS pending_state, s.order_state, s.schema_version, s.decision_json`
         const dataOldSub = `(SELECT ${selectColsOld} FROM ai_signals s WHERE s.user_id = ? AND (s.source = 'manual' OR s.source IS NULL)${oldSessionFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.join(' AND ') : ''})`
         const dataDelivSub = `(SELECT ${selectColsDeliv} FROM auto_signal_deliveries d JOIN ai_signals s ON s.id = d.signal_id LEFT JOIN order_intents oi ON oi.id = d.order_intent_id WHERE d.user_id = ?${observerDeliveryFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
+        const dataAdminSub = `(SELECT ${selectColsAdmin} FROM admin_strategy_trade_targets t JOIN ai_signals s ON s.id = t.signal_id LEFT JOIN order_intents oi ON oi.id = t.order_intent_id WHERE t.user_id = ?${adminRepresentativeFilter}${observerOldFilter}${sharedWhere.length > 0 ? ' AND ' + sharedConditions.map(c => 's.' + c).join(' AND ') : ''})`
         const oldParams = [queryUserId, ...oldSessionParam, ...observerStrategyParam, ...sharedParams]
 
         // Shared signals subquery (delivery overrides user-level execution state)
         const delivParams = [queryUserId, ...observerStrategyParam, ...sharedParams]
+        const adminParams = [queryUserId, ...observerStrategyParam, ...sharedParams]
 
         // COUNT uses lightweight subquery (no TEXT); data uses full subquery (no market_data_json)
-        const countSql = `SELECT COUNT(*) as total FROM (${countOldSub} UNION ALL ${countDelivSub}) t`
+        const countSql = `SELECT COUNT(*) as total FROM (${countOldSub} UNION ALL ${countDelivSub} UNION ALL ${countAdminSub}) t`
         const cursorWhere = Number.isInteger(beforeId) && beforeId > 0 ? ' WHERE t.id < ?' : ''
-        const dataSql = `SELECT ${selectCols} FROM (${dataOldSub} UNION ALL ${dataDelivSub}) t${cursorWhere} ORDER BY t.created_at_utc_msc DESC, t.id DESC LIMIT ? OFFSET ?`
-        const dataParams = [...oldParams, ...delivParams]
+        const dataSql = `SELECT ${selectCols} FROM (${dataOldSub} UNION ALL ${dataDelivSub} UNION ALL ${dataAdminSub}) t${cursorWhere} ORDER BY t.created_at_utc_msc DESC, t.id DESC LIMIT ? OFFSET ?`
+        const dataParams = [...oldParams, ...delivParams, ...adminParams]
         if (cursorWhere) dataParams.push(beforeId)
         dataParams.push(limit + 1, cursorWhere ? 0 : offset)
         const [countRow, allRows] = await Promise.all([
@@ -3366,6 +3425,7 @@ async function handleBrowserCommand(ws, userId, msg) {
           if (item.delivery_id) {
             item.source = 'auto_shared'
           }
+          if (item.admin_target_id) item.source = 'admin_strategy_dispatch'
           try { item.market_data = JSON.parse(item.market_data_json || '{}') } catch { item.market_data = {} }
           delete item.delivery_id
           item.is_executed = !!item.is_executed
@@ -3593,6 +3653,23 @@ async function handleBrowserCommand(ws, userId, msg) {
             if (ticket) ticketMap[String(ticket)] = row.signal_id
           } catch (e) { console.warn('[BridgeWS] Failed to parse delivery execution_result:', e.message) }
         }
+        const adminRows = await queryAll(
+          `SELECT signal_id, trade_ticket, execution_result_json
+           FROM admin_strategy_trade_targets
+           WHERE user_id = ? AND status = 'succeeded' AND trade_ticket IS NOT NULL
+             ${observerStrategyId ? 'AND signal_id IN (SELECT id FROM ai_signals WHERE prompt_type_id = ?)' : ''}
+           ORDER BY id DESC LIMIT 200`,
+          [sigUserId, ...observerTicketParam])
+        for (const row of adminRows) {
+          let ticket = row.trade_ticket
+          if (!ticket) {
+            try {
+              const exec = JSON.parse(row.execution_result_json || '{}')
+              ticket = exec.order || exec.ticket || exec.position
+            } catch {}
+          }
+          if (ticket) ticketMap[String(ticket)] = row.signal_id
+        }
         result = { status: 'success', tickets: ticketMap }
         break
       }
@@ -3682,6 +3759,15 @@ async function handleBrowserCommand(ws, userId, msg) {
                 [deliv.signal_id]
               )
             }
+          }
+          if (!signal) {
+            const adminTarget = await queryOne(
+              `SELECT t.signal_id FROM admin_strategy_trade_targets t
+               WHERE t.user_id = ? AND (t.trade_ticket = ? OR JSON_UNQUOTE(JSON_EXTRACT(t.execution_result_json, '$.ticket')) = ?)
+               ORDER BY t.id DESC LIMIT 1`,
+              [dataUserId || userId, ticketStr, ticketStr]
+            )
+            if (adminTarget?.signal_id) signal = await queryOne(`SELECT ${sigCols} FROM ai_signals WHERE id = ?`, [adminTarget.signal_id])
           }
           if (signal) {
             try { signal.market_data = JSON.parse(signal.market_data_json || '{}') } catch { signal.market_data = {} }

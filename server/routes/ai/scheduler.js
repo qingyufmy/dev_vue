@@ -35,6 +35,8 @@ import { modelTaskDeadlines } from './model-task-budget.js'
 import { buildSafeExecutionOutcome, buildSafeExecutionEvent } from '../../audit-localization.js'
 import { readAutoInferenceDeploymentDrain } from './auto-inference-deployment-drain.js'
 import { executionValidationRejection, readExecutionValidation } from './signal-execution-validation.js'
+import { accountSymbolInventoryLockKey, acquireAccountSymbolInventoryLock,
+  releaseAccountSymbolInventoryLock } from '../../services/account-symbol-inventory-lock.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -1185,13 +1187,12 @@ async function acquireLock(key) {
   } catch (e) { console.error('[acquireLock]', key, e.message); return null }
 }
 
-function deliveryInventoryLockKey(userId, symbol) {
-  return `delivery_inventory:${Number(userId)}:${stripBrokerSuffix(String(symbol || '')).toUpperCase()}`
-}
+const deliveryInventoryLockKey = accountSymbolInventoryLockKey
 
 async function acquireDeliveryInventoryLock(userId, symbol) {
-  const key = deliveryInventoryLockKey(userId, symbol)
-  return { key, token:await acquireLock(key) }
+  // Keep the scheduler's historical key and lease semantics while sharing
+  // the exact account+symbol fence with admin strategy deliveries.
+  return acquireAccountSymbolInventoryLock(userId, symbol)
 }
 
 async function schedulerLockWaitSeconds(key) {
@@ -3465,7 +3466,7 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     }), { scopes:['ai-operations', 'risk-audit'], refresh:true })
   } finally {
     if (inventoryLock?.token) {
-      await finalizeLock(inventoryLock.key, inventoryLock.token, 0).catch(() => {})
+      await releaseAccountSymbolInventoryLock(inventoryLock.key, inventoryLock.token).catch(() => {})
     }
     endDeliveryExecution()
   }

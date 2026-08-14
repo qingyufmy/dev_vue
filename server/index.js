@@ -35,6 +35,7 @@ import bridgeReleaseRoutes from './routes/bridge-release.js'
 import bridgeMaintenanceRoutes from './routes/bridge-maintenance.js'
 import bridgeRuntimeControlRoutes from './routes/bridge-runtime-control.js'
 import adminNotificationRoutes from './routes/admin-notifications.js'
+import adminStrategyTradeRoutes from './routes/admin-strategy-trades.js'
 import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON, getRedis } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker, startManualAnalysisJobs,
@@ -63,6 +64,7 @@ import { installFatalProcessHandlers, listenHttpServer } from './runtime-lifecyc
 import { createBridgePairStartLimiter } from './bridge-pair-rate-limit.js'
 import { pruneFinalizedCommands } from './bridge-v3/command-ledger.js'
 import { createAutoInferenceRecoveryLogDeduper } from './ai-recovery-log.js'
+import { startAdminStrategyTradeWorker, stopAdminStrategyTradeWorker } from './workers/admin-strategy-trade-worker.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -240,7 +242,9 @@ app.use('/api', bridgeReleaseRoutes)
 app.use('/api', bridgeMaintenanceRoutes)
 app.use('/api', bridgeRuntimeControlRoutes)
 app.use('/api', adminNotificationRoutes)
+app.use('/api', adminStrategyTradeRoutes)
 app.use('/aurum-api', noCache, aiRoutes)
+app.use('/aurum-api', noCache, adminStrategyTradeRoutes)
 
 
 
@@ -395,6 +399,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const pendingStop = stopPendingReconciler()
     const orderIntentStop = stopOrderIntentReconciler()
     const notificationStop = stopNotificationCenterWorker()
+    const adminStrategyTradeStop = stopAdminStrategyTradeWorker()
     const manualTradeReviewStop = stopManualTradeReviewWorker()
     const strategyMemoryCompressionStop = stopStrategyMemoryCompressionWorker()
     const strategyMemoryConsistencyStop = stopStrategyMemoryConsistencyWorker()
@@ -405,6 +410,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
       waitForShutdownTask(pendingStop, 'pending reconciler', timeout),
       waitForShutdownTask(orderIntentStop, 'order-intent reconciler', timeout),
       waitForShutdownTask(notificationStop, 'notification center worker', timeout),
+      Promise.resolve(adminStrategyTradeStop),
       waitForShutdownTask(manualTradeReviewStop, 'manual trade review worker', timeout),
       Promise.resolve(strategyMemoryCompressionStop),
       Promise.resolve(strategyMemoryConsistencyStop),
@@ -519,6 +525,7 @@ installGracefulShutdownHandlers()
   startStrategyMemoryCompressionWorker()
   startStrategyMemoryConsistencyWorker()
   startManualTradeReviewWorker()
+  startAdminStrategyTradeWorker()
   startManualAnalysisJobs()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))
   startWeeklySystemFlatten()

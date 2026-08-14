@@ -658,7 +658,11 @@ export async function executeOrderCore(userId, config, request, action, options 
     signalId,
     clientRequestId: options.clientRequestId ?? request.client_request_id ?? request.request_id ?? null,
     sourceType,
-    sourceId: options.deliveryId ?? signalId,
+    // `deliveryId` remains the legacy source identifier for automatic
+    // deliveries.  New callers may provide an explicit source id (for
+    // example an admin strategy dispatch target) without changing the
+    // existing delivery-id contract.
+    sourceId: options.sourceId ?? options.deliveryId ?? signalId,
     action,
     request,
     config,
