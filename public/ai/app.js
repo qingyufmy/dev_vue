@@ -10959,10 +10959,7 @@ function signalDecision(signal) {
   };
 }
 
-function renderExecutionValidation(validation) {
-  if (!validation || typeof validation !== "object") return "";
-  const eligible = validation.eligible === true && validation.status === "eligible";
-  const reasonLabels = {
+const EXECUTION_VALIDATION_REASON_LABELS = {
     model_hold:"模型本轮未提出新订单",
     position_action_hold_no_add:"模型建议不新增仓位",
     entry_method_not_allowed_by_strategy:"入场方式不在策略声明范围内",
@@ -10978,9 +10975,26 @@ function renderExecutionValidation(validation) {
     invalid_take_profit_direction:"止盈价格方向无效",
     take_profit_order_invalid:"多档止盈顺序无效",
     invalid_recommended_take_profit_tier:"推荐止盈档位不可用",
-  };
-  const reasons = [...new Set((Array.isArray(validation.reason_codes) ? validation.reason_codes : [])
-    .map(code => reasonLabels[String(code || "").toLowerCase()]).filter(Boolean))];
+};
+
+function executionValidationReasonTexts(validation) {
+  if (!validation || typeof validation !== "object") return [];
+  return [...new Set((Array.isArray(validation.reason_codes) ? validation.reason_codes : [])
+    .map(code => EXECUTION_VALIDATION_REASON_LABELS[String(code || "").toLowerCase()]).filter(Boolean))];
+}
+
+function executionAdviceDescription(advice, validation) {
+  const base = String(advice?.description || "").trim();
+  const reasons = validation?.eligible === true && validation?.status === "eligible"
+    ? [] : executionValidationReasonTexts(validation);
+  if (!reasons.length) return base;
+  return `${reasons.join("；")}，因此不会进入下单流程。`;
+}
+
+function renderExecutionValidation(validation) {
+  if (!validation || typeof validation !== "object") return "";
+  const eligible = validation.eligible === true && validation.status === "eligible";
+  const reasons = executionValidationReasonTexts(validation);
   return `<section class="execution-validation ${eligible ? "eligible" : "ineligible"}" aria-label="执行校验">
     <div><i data-lucide="${eligible ? "badge-check" : "shield-alert"}" size="17"></i><span><small>执行校验</small><strong>${eligible ? "参数校验通过" : "不会进入下单流程"}</strong></span></div>
     ${reasons.length ? `<ul>${reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : `<p>${eligible ? "仍需经过账户权限、独立风控与 Bridge 校验。" : "模型结论已保留，可查看原始分析与参数。"}</p>`}
@@ -11730,6 +11744,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
   const signalSourceLabel = strategyDispatchSignalSourceLabel(signal);
   const decision = signalDecision(signal);
   const advice = signalExecutionAdvice(signal);
+  const adviceDescription = executionAdviceDescription(advice, decision.executionValidation);
   let executionPayload = signal.execution_result || {};
   if (typeof executionPayload === "string") { try { executionPayload = JSON.parse(executionPayload); } catch { executionPayload = {}; } }
   const finalVolume = executionPayload?.risk?.approved_order?.volume ?? executionPayload?.approved_order?.volume ?? null;
@@ -11797,7 +11812,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     </div>
     <section class="execution-advice-hero ${escapeHtml(advice.state || "review")}">
       <div class="execution-advice-icon"><i data-lucide="${advice.executable ? "send" : dir === "hold" ? "pause" : "shield-check"}" size="20"></i></div>
-      <div><span>执行建议</span><strong>${escapeHtml(advice.title || executionStatus(signal))}</strong><p>${escapeHtml(advice.description || "")}</p></div>
+      <div><span>执行建议</span><strong>${escapeHtml(advice.title || executionStatus(signal))}</strong><p>${escapeHtml(adviceDescription)}</p></div>
       <span class="analysis-direction-badge ${dir}">${directionText(signal.signal_type)}</span>
     </section>
     ${renderSignalManagementActions(signal)}
@@ -11823,7 +11838,6 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
       <section><div class="analysis-section-title"><i data-lucide="check-circle-2" size="15"></i>关键依据</div>${renderDecisionList(decision.reasons, "详细依据请展开下方分析")}</section>
       <section><div class="analysis-section-title"><i data-lucide="triangle-alert" size="15"></i>市场风险</div>${renderDecisionList(decision.risks, "未识别到额外市场风险")}</section>
     </div>
-    ${renderExecutionValidation(decision.executionValidation)}
     ${renderExperienceUsage(signal, decision.experienceUsage)}
     ${(decision.trigger || decision.invalidation) ? `<div class="decision-conditions">${decision.trigger ? `<div><span>触发条件</span><strong>${escapeHtml(decision.trigger)}</strong></div>` : ""}${decision.invalidation ? `<div><span>失效条件</span><strong>${escapeHtml(decision.invalidation)}</strong></div>` : ""}</div>` : ""}
     ${inferenceChartShell(signal)}

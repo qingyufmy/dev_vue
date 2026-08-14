@@ -33,6 +33,14 @@ function loadUserVisibleText() {
   )
 }
 
+function loadExecutionAdviceDescription() {
+  const start = app.indexOf('const EXECUTION_VALIDATION_REASON_LABELS')
+  const end = app.indexOf('\nfunction renderExecutionValidation', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`${app.slice(start, end)}\nreturn executionAdviceDescription;`)()
+}
+
 function loadAutoRuntimeRemainingSeconds() {
   const start = app.indexOf('function autoRuntimeRemainingSeconds')
   const end = app.indexOf('function renderAutoAnalyzeBadge', start)
@@ -1117,6 +1125,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(stylesheetVersion).toBeTruthy()
     expect(appVersion).toMatch(/^[0-9a-z._-]+$/i)
     expect(appVersion).toBe(stylesheetVersion)
+    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1')
   })
 
   it('separates model conclusions from data and execution validation in signal details', () => {
@@ -1131,6 +1140,28 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).not.toContain('.decision-diagnostics')
     expect(css).toContain('.execution-validation.ineligible')
     expect(html).toContain('no-legacy-diagnostics1')
+  })
+
+  it('shows a concrete validation reason in the ordinary execution hero without duplicating the card', () => {
+    const describe = loadExecutionAdviceDescription()
+    expect(describe({ description:'详细信息已记录' }, {
+      eligible:false, status:'ineligible', reason_codes:['model_hold'],
+    })).toBe('模型本轮未提出新订单，因此不会进入下单流程。')
+    expect(describe({ description:'详细信息已记录' }, {
+      eligible:false, status:'ineligible', reason_codes:['model_hold'],
+    })).not.toContain('详细信息已记录')
+
+    const ordinaryStart = app.indexOf('function renderSignal(signal')
+    const ordinaryEnd = app.indexOf('\nfunction setManualInferenceModal', ordinaryStart)
+    const ordinary = app.slice(ordinaryStart, ordinaryEnd)
+    expect(ordinary).toContain('executionAdviceDescription(advice, decision.executionValidation)')
+    expect(ordinary).toContain('escapeHtml(adviceDescription)')
+    expect(ordinary).not.toContain('${renderExecutionValidation(decision.executionValidation)}')
+
+    const monitorStart = app.indexOf('function renderSignalMonitorDetails(signal)')
+    const monitorEnd = app.indexOf('\nfunction initSignalMonitor', monitorStart)
+    expect(app.slice(monitorStart, monitorEnd)).toContain('${renderExecutionValidation(decision.executionValidation)}')
+    expect(app).toContain('function renderExecutionValidation(validation)')
   })
 
   it('runs administrator model comparison from immutable signal snapshots', () => {
