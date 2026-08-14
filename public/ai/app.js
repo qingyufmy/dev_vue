@@ -527,11 +527,98 @@ function closeFormModal(editor, restoreFocus = true) {
   modalReturnFocus = null;
 }
 
+function strategyEditorSnapshot() {
+  const value = id => $(id)?.value ?? "";
+  const normalizeText = input => String(input ?? "").replace(/\r\n/g, "\n").trim();
+  const symbols = normalizeText(value("strategySymbols"))
+    .split(",").map(item => item.trim().toUpperCase()).filter(Boolean).join(",");
+  const plan = strategyEditorMarketPlanFromControls();
+  return JSON.stringify({
+    title: normalizeText(value("strategyTitle")),
+    symbols,
+    description: normalizeText(value("strategyDescription")),
+    prompt: normalizeText(value("strategyPrompt")),
+    interval: Number(value("strategyInterval")) || 0,
+    scope: normalizeText(value("strategyScope")),
+    visibility: normalizeText(value("strategyVisibility")),
+    model: value("strategyModelProfile") || "",
+    portfolio: Boolean($("strategyIncludePortfolioContext")?.checked),
+    chan: Boolean($("strategyUseChanAnalysis")?.checked),
+    ema: Boolean($("strategyUseEma34Data")?.checked),
+    emaTimeframe: value("strategyEma34Timeframe") || "",
+    plan: {
+      primary_timeframe: String(plan.primary_timeframe || "").toUpperCase(),
+      timeframes: plan.timeframes.map(item => ({ timeframe: String(item.timeframe).toUpperCase(), kline_count: Number(item.kline_count) || 0 })),
+    },
+    entryMethods: [...document.querySelectorAll("[data-strategy-entry-method]:checked")]
+      .map(input => String(input.dataset.strategyEntryMethod || "")).filter(Boolean).sort(),
+  });
+}
+
+function strategyEditorMinimumReady() {
+  const title = $("strategyTitle")?.value.trim();
+  const symbols = $("strategySymbols")?.value.split(",").map(value => value.trim()).filter(Boolean);
+  const hasTimeframe = strategyEditorMarketPlanFromControls().timeframes.length > 0;
+  const hasEntryMethod = document.querySelector("[data-strategy-entry-method]:checked");
+  return Boolean(title && symbols?.length && hasTimeframe && hasEntryMethod);
+}
+
+function strategyEditorSetStatus(message) {
+  const status = $("strategyEditorStatus");
+  if (status) status.textContent = message;
+}
+
+function strategyEditorUpdateState() {
+  const editor = $("strategyEditor");
+  if (!editor || editor.classList.contains("hidden")) return false;
+  const baseline = editor._strategyEditorBaseline;
+  const dirty = Boolean(baseline && strategyEditorSnapshot() !== baseline);
+  editor.dataset.dirty = dirty ? "1" : "0";
+  if (!editor.dataset.strategySaving) {
+    strategyEditorSetStatus(dirty ? "有未保存修改" : "未修改");
+  }
+  const button = $("saveStrategyBtn");
+  if (button && !editor.dataset.strategySaving) {
+    button.disabled = !dirty || !strategyEditorMinimumReady();
+  }
+  return dirty;
+}
+
+function strategyEditorAnnounceEscape() {
+  const editor = $("strategyEditor");
+  if (!editor || editor.classList.contains("hidden") || editor.dataset.escapeAnnounced) return;
+  editor.dataset.escapeAnnounced = "1";
+  strategyEditorSetStatus("请使用关闭按钮退出策略编辑器");
+  setTimeout(() => {
+    if (!editor.classList.contains("hidden")) {
+      delete editor.dataset.escapeAnnounced;
+      strategyEditorUpdateState();
+    }
+  }, 2400);
+}
+
+async function requestCloseStrategyEditor() {
+  const editor = $("strategyEditor");
+  if (!editor || editor.classList.contains("hidden")) return;
+  const active = document.activeElement;
+  if (!strategyEditorUpdateState()) {
+    closeFormModal(editor);
+    return;
+  }
+  const confirmed = await showConfirm("放弃未保存的修改？", "关闭后当前策略正文和设置不会保存。", { confirmText:"放弃并关闭", cancelText:"继续编辑", danger:true });
+  if (confirmed) closeFormModal(editor);
+  else if (active?.focus) active.focus();
+}
+
 function handleFormModalKeydown(event) {
   const modal = event.target.closest?.(".form-modal");
   if (!modal) return;
   if (event.key === "Escape") {
     event.preventDefault();
+    if (modal.dataset.closePolicy === "explicit") {
+      strategyEditorAnnounceEscape();
+      return;
+    }
     closeFormModal(modal);
     return;
   }
@@ -4612,9 +4699,11 @@ function bindStrategyDataEditorControls() {
   const refresh = () => { syncStrategyEditorMarketPlanControls(); syncStrategyDataCapabilityUI(); };
   editor.addEventListener("change", event => {
     if (event.target.matches("[data-strategy-timeframe], [data-strategy-kline], input[name='strategyPrimaryTimeframe'], [data-strategy-entry-method], #strategyUseChanAnalysis, #strategyUseEma34Data, #strategyEma34Timeframe, #strategyIncludePortfolioContext")) refresh();
+    strategyEditorUpdateState();
   });
   editor.addEventListener("input", event => {
     if (event.target.matches("[data-strategy-kline], #strategyTitle, #strategySymbols, #strategyDescription, #strategyPrompt")) syncStrategyDataCapabilityUI();
+    strategyEditorUpdateState();
   });
   ["strategyChanDetails", "strategyEma34Details"].forEach(id => $(id)?.addEventListener("toggle", () => syncStrategyDataCapabilityUI()));
   editor.addEventListener("click", async event => {
@@ -4702,7 +4791,7 @@ function renderStrategyModelOptions(scope, selectedId = "") {
 
 function openStrategyEditor(strategy = null) {
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
-  const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || ""; editor.dataset.strategyVersion = strategy?.version || ""; editor.dataset.strategyEmaInitialized = ""; editor._strategyDraft = strategy ? structuredClone(strategy) : {};
+  const editor = $("strategyEditor"); editor.dataset.strategyId = strategy?.id || ""; editor.dataset.strategyVersion = strategy?.version || ""; editor.dataset.strategyEmaInitialized = ""; editor.dataset.strategySaving = ""; editor.dataset.escapeAnnounced = ""; editor.dataset.closePolicy = "explicit"; editor._strategyDraft = strategy ? structuredClone(strategy) : {};
   strategyEditorDataError("");
   const platformManager = canManagePlatformAiContent();
   $("strategyEditorTitle").textContent = strategy ? "编辑策略" : (platformManager ? "新建平台策略" : "新建自定义策略");
@@ -4739,15 +4828,25 @@ function openStrategyEditor(strategy = null) {
   openFormModal(editor);
   syncStrategyEditorMarketPlanControls();
   syncStrategyDataCapabilityUI();
-  loadStrategyDataCapabilities({ render:true }).catch(() => {});
+  editor._strategyEditorBaseline = strategyEditorSnapshot();
+  strategyEditorUpdateState();
+  requestAnimationFrame(() => {
+    $(strategy ? "strategyPrompt" : "strategyTitle")?.focus({ preventScroll:true });
+    editor.querySelector(".strategy-editor-workbench")?.scrollTo(0, 0);
+  });
+  loadStrategyDataCapabilities({ render:true }).then(() => {
+    if (editor.dataset.dirty !== "1") editor._strategyEditorBaseline = strategyEditorSnapshot();
+    strategyEditorUpdateState();
+  }).catch(() => {});
 }
 
 async function saveStrategyEditor() {
   const editor = $("strategyEditor");
   const button = $("saveStrategyBtn");
+  if (!editor || editor.dataset.strategySaving === "1") return;
   const id = Number(editor?.dataset.strategyId || 0);
   const strategy = editor?._strategyDraft || {};
-  const fail = message => { const error = new Error(message); error._strategyEditorHandled = true; strategyEditorDataError(message); throw error; };
+  const fail = message => { const error = new Error(message); error._strategyEditorHandled = true; strategyEditorDataError(message); strategyEditorSetStatus("校验失败，请检查标记字段"); $("strategyTitle")?.focus(); throw error; };
   if (state.strategyDataCapabilitiesStatus !== "ready") return fail(state.strategyDataCapabilitiesStatus === "loading" ? "策略数据能力仍在读取，请稍后再保存" : "策略数据能力目录暂不可用，未知高级配置不会被覆盖；请重试或取消编辑");
   const timeframes = strategyEditorMarketPlanFromControls().timeframes;
   if (!timeframes.length) return fail("请至少启用一个行情周期");
@@ -4790,6 +4889,8 @@ async function saveStrategyEditor() {
   if (id) body.expected_version = Number(editor.dataset.strategyVersion || strategy.version || 1);
   if (confirmEnableDataRuntime) body.confirm_enable_data_runtime = true;
   strategyEditorDataError("");
+  editor.dataset.strategySaving = "1";
+  strategyEditorSetStatus("正在保存策略…");
   if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); button.querySelector(".strategy-save-label")?.replaceChildren(document.createTextNode("正在保存…")); }
   try {
     const saved = await api(id ? `/api/ai/strategies/${id}` : "/api/ai/strategies", { method:id ? "PUT" : "POST", body });
@@ -4800,11 +4901,15 @@ async function saveStrategyEditor() {
       ? "策略已在其他位置更新。当前草稿已保留，请刷新后对比再保存。"
       : localizeReason(error?.code || error?.message) || "策略保存失败，当前草稿已保留，请修改后重试";
     strategyEditorDataError(message);
+    strategyEditorSetStatus(error?.code === "strategy_version_conflict" ? "版本已变化，请处理冲突" : "保存失败，草稿仍保留");
+    $("strategyTitle")?.focus();
     error._strategyEditorHandled = true;
     if (error?.code === "strategy_version_conflict") editor.dataset.strategyConflict = "1";
     throw error;
   } finally {
-    if (button) { button.disabled = false; button.setAttribute("aria-busy", "false"); button.querySelector(".strategy-save-label")?.replaceChildren(document.createTextNode("保存策略")); }
+    delete editor.dataset.strategySaving;
+    if (button) { button.setAttribute("aria-busy", "false"); button.querySelector(".strategy-save-label")?.replaceChildren(document.createTextNode("保存策略")); }
+    strategyEditorUpdateState();
   }
 }
 
@@ -14043,7 +14148,7 @@ function bindEvents() {
   }
 
   $("addPrivateStrategyBtn")?.addEventListener("click", () => openStrategyEditor());
-  $("cancelStrategyEditorBtn")?.addEventListener("click", () => closeFormModal($("strategyEditor")));
+  $("cancelStrategyEditorBtn")?.addEventListener("click", () => requestCloseStrategyEditor());
   $("saveStrategyBtn")?.addEventListener("click", () => saveStrategyEditor().catch(error => { if (!error?._strategyEditorHandled) toast(localizeReason(error?.code || error?.message) || "策略保存失败", "error"); }));
   $("cancelSubscriptionEditorBtn")?.addEventListener("click", () => closeFormModal($("subscriptionEditor")));
   $("saveSubscriptionBtn")?.addEventListener("click", () => saveSubscriptionEditor().catch(error => toast(error.message, "error")));
@@ -14104,7 +14209,11 @@ function bindEvents() {
   });
   document.querySelectorAll(".form-modal").forEach(modal => {
     modal.addEventListener("keydown", handleFormModalKeydown);
-    modal.addEventListener("click", event => { if (event.target === modal) closeFormModal(modal); });
+    modal.addEventListener("click", event => {
+      if (event.target !== modal) return;
+      if (modal.dataset.closePolicy === "explicit") return;
+      closeFormModal(modal);
+    });
   });
   document.querySelectorAll("[data-review-filter]").forEach(button => button.addEventListener("click", () => {
     document.querySelectorAll("[data-review-filter]").forEach(item => {

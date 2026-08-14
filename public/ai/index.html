@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260812memory4" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260812memory4">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260812memory4">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260812memory4&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260812memory4&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260812memory4&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench2" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260812memory4&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench2" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -536,14 +536,22 @@
               <button class="filter-pill" type="button" data-strategy-filter="private">我的策略</button>
               <button class="filter-pill" type="button" data-strategy-filter="subscribed">已订阅</button>
             </div>
-            <div id="strategyEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="strategyEditorTitle">
+            <div id="strategyEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="strategyEditorTitle" aria-describedby="strategyEditorStatus" data-strategy-editor="true" data-close-policy="explicit">
             <section class="workspace-panel form-modal-dialog strategy-editor-dialog" tabindex="-1">
-              <div class="section-heading"><div><h2 id="strategyEditorTitle">新建自定义策略</h2><p id="strategyEditorBoundary">你创建的私有策略仅自己可见、可选和执行。</p></div><button id="cancelStrategyEditorBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
-              <div class="strategy-editor-sections">
-                <fieldset class="strategy-form-section"><legend><span class="section-step">01</span>基本信息</legend><p>定义策略身份、可见范围和可分析品种。</p>
+              <header class="section-heading strategy-editor-header"><div><span class="section-kicker">策略工作台</span><h2 id="strategyEditorTitle">新建自定义策略</h2><p id="strategyEditorBoundary">你创建的私有策略仅自己可见、可选和执行。</p></div><button id="cancelStrategyEditorBtn" class="btn btn-secondary btn-sm" type="button" aria-label="关闭策略编辑器">关闭</button></header>
+              <div class="strategy-editor-workbench">
+                <section class="strategy-editor-primary" aria-label="策略正文工作区" role="region">
+                <fieldset class="strategy-form-section strategy-identity-section"><legend>策略身份</legend><p>先明确策略名称、适用品种和一句话说明。</p>
                   <div class="settings-grid"><label><span>策略名称</span><input id="strategyTitle" maxlength="120" required></label><label><span>支持品种（逗号分隔）</span><input id="strategySymbols" placeholder="XAUUSD, EURUSD" required></label><label><span>策略说明</span><input id="strategyDescription" maxlength="500" placeholder="简要说明适用行情与交易逻辑"></label><label id="strategyScopeField" class="admin-only platform-content-only is-readonly"><span>策略范围</span><input id="strategyScope" value="platform" readonly aria-readonly="true"><small id="strategyScopeHelp" class="field-help">平台内容维护者在这里维护平台策略，用户私有策略保持只读。</small></label><label id="strategyVisibilityField" class="admin-only platform-content-only"><span>可见状态</span><select id="strategyVisibility"><option value="active">上线（可用于分析）</option><option value="draft">草稿（不可用于分析）</option><option value="archived">归档（不可用于分析）</option></select><small class="field-help">可见状态同时控制策略是否进入手动和自动分析。</small></label></div>
                 </fieldset>
-                <fieldset class="strategy-form-section strategy-data-section"><legend><span class="section-step">02</span><span id="strategyDataSectionTitle">提供给模型的数据</span></legend><p>手动与自动分析共用这组数据声明；系统提供事实，具体分析方法仍以策略正文为准。</p>
+                <fieldset class="strategy-form-section strategy-prompt-section"><legend>策略正文</legend><p>模型将以此处内容作为本策略的业务判断依据；数据声明只负责说明系统提供什么。</p>
+                  <label class="prompt-box"><span>策略正文</span><textarea id="strategyPrompt" rows="18" spellcheck="false" aria-describedby="strategyPromptHelp strategyEditorError" placeholder="描述市场分析框架、信号判断方法和输出侧重点"></textarea><small id="strategyPromptHelp" class="field-help">写清楚判断依据、信号条件、冲突处理和不确定时的行为。系统不会自动改写正文。</small></label>
+                  <section id="strategyWritingAssistant" class="strategy-writing-assistant" aria-labelledby="strategyWritingAssistantTitle"><details><summary><strong id="strategyWritingAssistantTitle">写法辅助</strong><small>查看当前数据的写法说明；仅在你点击时复制或插入。</small><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary><div id="strategyWritingTemplates" class="strategy-writing-templates"></div></details></section>
+                </fieldset>
+                </section>
+                <aside class="strategy-editor-sidebar" aria-label="策略设置侧栏">
+                <section id="strategyDataSummary" class="strategy-data-summary strategy-summary-compact" aria-live="polite" aria-atomic="true"><div class="strategy-data-summary-heading"><strong>当前提供</strong><span class="status-chip">正在读取</span></div><div class="strategy-data-summary-body"></div></section>
+                <fieldset class="strategy-form-section strategy-data-section"><legend><span id="strategyDataSectionTitle">行情与附加数据</span><span class="sr-only">提供给模型的数据</span></legend><p>声明系统提供的事实，不改变策略正文的业务逻辑。</p>
                   <div id="strategyMarketPlan" class="market-plan-grid">
                     <div class="market-plan-head"><span>提供</span><span>周期</span><span>K 线数量</span><span>主周期</span></div>
                     <div class="market-plan-row"><input type="checkbox" data-strategy-timeframe="M1" aria-label="启用 M1"><strong>M1</strong><input type="number" data-strategy-kline="M1" min="10" max="500" step="10" value="100" aria-label="M1 K 线数量"><input type="radio" name="strategyPrimaryTimeframe" value="M1" aria-label="将 M1 设为主周期"></div>
@@ -577,10 +585,9 @@
                     </section>
                   </div>
                   <div id="strategyAdvancedPolicyState" class="strategy-advanced-policy-state" role="status" aria-live="polite"></div>
-                  <div id="strategyDataSummary" class="strategy-data-summary" aria-live="polite" aria-atomic="true"><div class="strategy-data-summary-heading"><strong>本策略将收到</strong><span class="status-chip">正在读取</span></div><div class="strategy-data-summary-body"></div></div>
                   <details id="strategyDataTechnicalDetails" class="strategy-technical-details"><summary><span>查看技术字段</span><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary><pre id="strategyDataTechnicalJson" aria-label="策略数据声明技术字段">{}</pre></details>
                 </fieldset>
-                <fieldset class="strategy-form-section"><legend><span class="section-step">03</span>允许的入场方式</legend><p>未启用的方式会从模型输出格式中删除，后端也会拒绝模型越界输出。</p>
+                <fieldset class="strategy-form-section strategy-entry-section"><legend>执行能力</legend><p>未启用的方式会从模型输出格式中删除，后端也会拒绝模型越界输出。</p>
                   <div class="entry-method-grid">
                     <label><input type="checkbox" data-strategy-entry-method="market" checked><span><strong>市价入场</strong><small>立即按当前报价执行</small></span></label>
                     <label><input type="checkbox" data-strategy-entry-method="limit" checked><span><strong>限价挂单</strong><small>等待回撤到目标价格</small></span></label>
@@ -588,18 +595,16 @@
                     <label><input type="checkbox" data-strategy-entry-method="stop_limit" checked><span><strong>突破限价</strong><small>突破触发后再挂限价单</small></span></label>
                   </div>
                 </fieldset>
-                <fieldset class="strategy-form-section"><legend><span class="section-step">04</span>分析与模型</legend><p>分析提示词只描述判断方法，手数、点差、价格偏差等硬限制由 AI 风控师负责。</p>
+                <fieldset class="strategy-form-section strategy-runtime-section"><legend>运行设置</legend><p>模型和运行频率影响分析方式；风险边界仍由系统统一执行。</p>
                   <div class="settings-grid"><label><span>绑定模型</span><select id="strategyModelProfile"><option value="">按默认与共享规则选择</option></select><small id="strategyModelHelp" class="field-help">可绑定自己的模型；留空时按模型管理规则自动选择。</small></label><label><span>自动分析间隔（分钟）</span><input id="strategyInterval" type="number" min="1" value="5"></label></div>
                   <label id="strategyPortfolioContextField" class="strategy-capability-toggle user-only" for="strategyIncludePortfolioContext">
                     <input id="strategyIncludePortfolioContext" type="checkbox">
                     <span><strong>向模型提供当前持仓与挂单</strong><small>仅适用于你的私有策略。开启后，推理会读取当前交易账户的持仓和挂单，用于避免重复入场、方向冲突和挂单冲突；账户余额与模型凭据不会传入。桥接数据不完整时，本次推理会停止，不会用空数据继续判断。</small></span>
                   </label>
-                  <label class="prompt-box"><span>策略提示词</span><textarea id="strategyPrompt" rows="10" spellcheck="false" aria-describedby="strategyPromptHelp strategyEditorError" placeholder="描述市场分析框架、信号判断方法和输出侧重点"></textarea><small id="strategyPromptHelp" class="field-help">系统不会自动改写策略正文。你可以主动复制或插入下面的写法模板。</small></label>
-                  <section id="strategyWritingAssistant" class="strategy-writing-assistant" aria-labelledby="strategyWritingAssistantTitle"><header><strong id="strategyWritingAssistantTitle">如何在策略中使用</strong><small>仅在你点击时复制或插入，不会自动修改提示词。</small></header><div id="strategyWritingTemplates" class="strategy-writing-templates"></div></section>
                 </fieldset>
+                </aside>
               </div>
-              <div id="strategyEditorError" class="strategy-editor-error" role="alert" aria-live="assertive" hidden></div>
-              <div class="form-actions form-modal-actions"><button id="saveStrategyBtn" class="btn btn-primary" type="button" aria-busy="false" aria-describedby="strategyEditorError"><span class="strategy-save-label">保存策略</span></button></div>
+              <footer class="strategy-editor-footer"><div id="strategyEditorStatus" class="strategy-editor-status" role="status" aria-live="polite">未修改</div><div id="strategyEditorError" class="strategy-editor-error" role="alert" aria-live="assertive" hidden></div><div class="form-actions form-modal-actions"><button id="saveStrategyBtn" class="btn btn-primary" type="button" aria-busy="false" aria-describedby="strategyEditorError" disabled><span class="strategy-save-label">保存策略</span></button></div></footer>
             </section>
             </div>
             <div id="subscriptionEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="subscriptionEditorTitle">
@@ -1350,7 +1355,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260812memory4&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5"></script>
+    <script src="/ai/app.js?v=20260812memory4&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench2"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

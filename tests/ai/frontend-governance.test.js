@@ -116,6 +116,36 @@ describe('strategy data capability editor contract', () => {
   })
 })
 
+describe('strategy editor workbench contract', () => {
+  it('keeps strategy text primary and settings progressively disclosed in both consoles', () => {
+    expect(html).toContain('class="strategy-editor-workbench"')
+    expect(html).toContain('class="strategy-editor-primary"')
+    expect(html).toContain('class="strategy-editor-sidebar"')
+    expect(html).toContain('data-close-policy="explicit"')
+    expect(html).toContain('strategy-editor-workbench2')
+    expect(html.indexOf('id="strategyPrompt"')).toBeLessThan(html.indexOf('id="strategyDataSectionTitle"'))
+    expect(html).toContain('id="strategyEditorStatus"')
+    expect(app).toContain('请使用关闭按钮退出策略编辑器')
+    expect(app).toContain('function strategyEditorSnapshot()')
+    expect(app).toContain('requestCloseStrategyEditor')
+    expect(app).toContain('modal.dataset.closePolicy === "explicit"')
+    expect(app).toContain('focus({ preventScroll:true })')
+    expect(app).toContain('scrollTo(0, 0)')
+    expect(app).toContain('版本已变化，请处理冲突')
+
+    expect(adminApp).toContain('function strategyEditorWorkbenchMarkup(markup)')
+    expect(adminHtml).toContain('strategy-editor-workbench2')
+    expect(adminApp).toContain('data-close-policy="explicit"')
+    expect(adminApp).toContain('.replace(/<button class="secondary-button" data-close-entity-modal type="button">取消<\\/button>/')
+    expect(adminApp).toContain('<section class="strategy-editor-primary" role="region" aria-label="策略正文工作区">')
+    expect(adminApp).toContain('requestPlatformStrategyEditorClose')
+    expect(adminApp).toContain('platformStrategyEditorStatus')
+    expect(adminApp).toContain('closeEntityModal({force:true})')
+    expect(adminCss).toContain('.strategy-editor-modal .strategy-editor-workbench')
+    expect(adminCss).toContain('@media (max-width:819px)')
+  })
+})
+
 describe('AI governance navigation and DOM contract', () => {
   it('uses truthful unified-memory application states without retired personal or platform candidates', () => {
     expect(app).toContain('memory_application_status')

@@ -1950,3 +1950,39 @@
 @media (prefers-reduced-motion: reduce) {
   .strategy-form-section * { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* Strategy workbench breakpoints: keep the editor usable at 1080, 820 and 375px. */
+@media (max-width: 1079px) and (min-width: 820px) {
+  .strategy-editor-workbench { grid-template-columns:minmax(0,1fr) 320px; }
+  .strategy-editor-primary,.strategy-editor-sidebar { padding:16px; }
+  .strategy-editor-primary .strategy-identity-section .settings-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .strategy-prompt-section textarea { min-height:48dvh; }
+}
+
+@media (max-width: 819px) {
+  .strategy-editor-dialog { width:100%; max-height:100dvh; min-height:100dvh; border:0; border-radius:0; }
+  .strategy-editor-workbench { display:block; overflow-y:auto; }
+  .strategy-editor-primary { padding:16px; }
+  .strategy-editor-sidebar { padding:16px; border-top:1px solid var(--border-default); border-left:0; }
+  .strategy-editor-primary .strategy-identity-section .settings-grid { grid-template-columns:1fr; }
+  .strategy-prompt-section textarea { min-height:42dvh; }
+  .strategy-editor-footer { padding:10px 16px; }
+  .strategy-editor-footer .form-modal-actions .btn-primary { width:100%; }
+  .strategy-editor-footer { grid-template-columns:minmax(0,1fr) minmax(132px,auto); }
+}
+
+@media (max-width: 375px) {
+  .strategy-editor-dialog { overflow-x: hidden; }
+  .strategy-editor-header { min-height:72px; padding-inline:14px; }
+  .strategy-editor-primary,.strategy-editor-sidebar { padding:12px; }
+  .strategy-editor-primary .strategy-form-section,.strategy-editor-sidebar .strategy-form-section { padding:12px; }
+  .strategy-editor-workbench { max-width:100vw; }
+  .strategy-market-group .market-plan-head,.strategy-market-group .market-plan-row { grid-template-columns:31px 39px minmax(62px,1fr) 36px; gap:4px; padding-inline:5px; }
+  .strategy-editor-footer { grid-template-columns:1fr; gap:7px; padding:8px 12px; }
+  .strategy-editor-footer .form-modal-actions { grid-column:1; grid-row:auto; }
+  .strategy-editor-footer .form-modal-actions .btn-primary { width:100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strategy-editor-dialog *, .strategy-editor-dialog *::before, .strategy-editor-dialog *::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:0.01ms !important; }
+}
