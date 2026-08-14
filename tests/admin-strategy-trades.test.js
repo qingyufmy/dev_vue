@@ -121,6 +121,8 @@ describe('admin strategy trade contract', () => {
     expect(history).toContain('admin_strategy_trade_targets')
     expect(history).toContain('UNION ALL ${dataAdminSub}')
     expect(history).toContain('const adminParams = [queryUserId, ...observerStrategyParam, ...sharedParams]')
+    expect(history).toContain('queryOne(countSql, [...oldParams, ...delivParams, ...adminParams])')
+    expect(history).not.toContain('queryOne(countSql, [...oldParams, ...delivParams])')
     expect(history).toContain("if (item.admin_target_id) item.source = 'admin_strategy_dispatch'")
   })
 

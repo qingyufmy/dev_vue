@@ -3411,7 +3411,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         if (cursorWhere) dataParams.push(beforeId)
         dataParams.push(limit + 1, cursorWhere ? 0 : offset)
         const [countRow, allRows] = await Promise.all([
-          queryOne(countSql, [...oldParams, ...delivParams]),
+          queryOne(countSql, [...oldParams, ...delivParams, ...adminParams]),
           queryAll(dataSql, dataParams)
         ])
         const totalCount = countRow?.total || 0
