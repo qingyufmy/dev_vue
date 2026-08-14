@@ -300,6 +300,7 @@ export async function runStrategyMemoryCompressionOnce({ requestModel = requestJ
       userId:ownerUserId,
       strategyId:Number(job.strategy_id),
       usage:'memory_compression',
+      modelPurpose:'memory_compression',
     })
     if (!resolved?.model) throw errorWithCode(resolved?.error || 'compression_model_unavailable')
     const targetChars = Math.max(1, Number(job.target_chars) || 1)

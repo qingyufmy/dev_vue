@@ -577,7 +577,8 @@ export async function runStrategyMemoryConsistencyOnce({
     }
     const owner = await queryOne('SELECT owner_user_id FROM auto_prompt_types WHERE id = ? LIMIT 1', [job.strategy_id])
     const ownerUserId = Number(owner?.owner_user_id || job.owner_user_id || 0)
-    const resolved = await resolveAiTaskModel({ userId:ownerUserId, strategyId:Number(job.strategy_id), usage:'memory_consistency' })
+    const resolved = await resolveAiTaskModel({ userId:ownerUserId, strategyId:Number(job.strategy_id), usage:'memory_consistency',
+      modelPurpose:'memory_consistency' })
     if (!resolved?.model) throw errorWithCode(resolved?.error || 'consistency_model_unavailable')
     const messages = buildStrategyMemoryConsistencyMessages({ strategy:{ id:job.strategy_id, version:job.strategy_version },
       strategyText:frozen.strategyText, library:{ version_no:job.library_version_no, content_hash:job.library_content_hash },

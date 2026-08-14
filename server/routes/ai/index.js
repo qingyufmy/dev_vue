@@ -31,7 +31,8 @@ import { dismissStrategyMemoryConflict, getOrCreateStrategyMemoryLibrary,
   restoreStrategyMemoryLibraryRevision, saveStrategyMemoryLibrary } from './strategy-memory-library.js'
 import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelProfileDeletionImpact, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
-  resolveOwnedModelProfileForRuntime, resolveAiTaskModel, saveModelProfileWithValidation } from './model-profiles.js'
+  resolveOwnedModelProfileForRuntime, resolveAiTaskModel, saveModelProfileWithValidation,
+  getModelPurposeBindings, setModelPurposeBinding } from './model-profiles.js'
 import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
@@ -393,6 +394,33 @@ router.get('/ai/model-profiles', authMiddleware, async (req, res) => {
   } catch (error) { reviewError(res, error) }
 })
 
+router.get('/ai/model-purpose-bindings', authMiddleware, async (req, res) => {
+  try {
+    const requestedScope = String(req.query.scope || 'user').toLowerCase()
+    if (!['user', 'platform'].includes(requestedScope)) throw new Error('model_purpose_scope_invalid')
+    if (requestedScope === 'platform' && req.user.role !== 'admin') throw new Error('admin_only')
+    const ownerUserId = requestedScope === 'platform' ? 0 : Number(req.user.id)
+    res.json({ ok:true, ...(await getModelPurposeBindings(ownerUserId)) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/model-purpose-bindings/:purpose', authMiddleware, async (req, res) => {
+  try {
+    const requestedScope = String(req.body?.scope || 'user').toLowerCase()
+    if (!['user', 'platform'].includes(requestedScope)) throw new Error('model_purpose_scope_invalid')
+    if (requestedScope === 'platform' && req.user.role !== 'admin') throw new Error('admin_only')
+    const ownerUserId = requestedScope === 'platform' ? 0 : Number(req.user.id)
+    const purpose = await setModelPurposeBinding({ ownerUserId, purposeKey:req.params.purpose,
+      modelProfileId:req.body?.model_profile_id, updatedBy:req.user.id })
+    await auditAiMutation(req, 'ai_model_purpose_binding_changed', 'ai_model_purpose', req.params.purpose, {
+      scope:requestedScope, owner_user_id:ownerUserId, model_profile_id:purpose.model_profile_id,
+    })
+    const listing = await getModelPurposeBindings(ownerUserId)
+    const assignment = listing.purposes.find(item => item.purpose_key === String(req.params.purpose || '')) || purpose
+    res.json({ ok:true, ...assignment, purposes:listing.purposes, bindings:listing.bindings })
+  } catch (error) { reviewError(res, error) }
+})
+
 router.post('/ai/model-profiles', authMiddleware, async (req, res) => {
   try {
     const profile = await saveModelProfileWithValidation({ userId:req.user.id, payload:req.body || {},
@@ -572,13 +600,23 @@ router.get('/ai/model-source', authMiddleware, async (req, res) => {
   try {
     const usage = String(req.query.usage || 'manual')
     const strategyId = req.query.strategy_id ? Number(req.query.strategy_id) : null
-    const resolved = await resolveAiTaskModel({ userId: req.user.id, strategyId, usage })
+    const requestedPurpose = req.query.model_purpose ? String(req.query.model_purpose) : null
+    const purposeByUsage = {
+      manual:'manual_analysis', auto_private:'auto_inference', auto_platform:'auto_inference',
+      memory_compression:'memory_compression', memory_consistency:'memory_consistency',
+    }
+    const modelPurpose = requestedPurpose || purposeByUsage[usage] || undefined
+    const resolved = await resolveAiTaskModel({ userId: req.user.id, strategyId, usage, modelPurpose })
     res.json({ ok: true, source: {
       available: Boolean(resolved.model), credential_source: resolved.credential_source,
       reason: resolved.reason || null, error: resolved.error || null,
       model_profile_id: resolved.model_profile_id || null,
       provider: resolved.model?.provider || null, model_name: resolved.model?.model_name || null,
       usage: resolved.usage, strategy_id: resolved.strategy_id || null,
+      purpose: resolved.purpose || resolved.model_purpose || modelPurpose || null,
+      model_purpose: resolved.model_purpose || resolved.purpose || modelPurpose || null,
+      resolution_source: resolved.resolution_source || null,
+      resolution_reason: resolved.resolution_reason || null,
     } })
   } catch (error) { reviewError(res, error) }
 })
@@ -1508,6 +1546,7 @@ export { getInferencePreference, saveInferencePreference } from './inference-pre
 export { resolveAiTaskModel, logModelUsage, beginModelUsage, finishModelUsage, checkPlatformQuota,
   assertModelProfileSchemaReady,
   createModelProfile, getModelProfileById, getUserModelProfiles,
+  getModelPurposeBindings, setModelPurposeBinding,
   updateModelProfile, deleteModelProfile, setDefaultModelProfile,
   getUserModelDefault, setUserModelDefault,
   getPlatformUsagePolicy, updatePlatformUsagePolicy,

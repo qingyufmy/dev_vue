@@ -33,7 +33,8 @@ describe('manual trade review backend boundaries', () => {
     expect(routes).toContain("manual_trade_review_forbidden")
     const review = read('server/routes/ai/manual-trade-review.js')
     expect(review).toContain('WHERE cases.id = ? AND cases.user_id = ?')
-    expect(review).toContain('resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:\'review\' })')
+    expect(review).toContain("resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review',")
+    expect(review).toContain("modelPurpose:'manual_trade_review'")
     const worker = review.slice(review.indexOf('export async function runManualTradeReviewWorkerOnce'),
       review.indexOf('export async function recoverAbandonedManualTradeReviewJobs'))
     expect((worker.match(/await requestModel\(/g) || [])).toHaveLength(2)

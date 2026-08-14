@@ -11,6 +11,10 @@ import { getEffectivePlan } from '../../membership.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
 export const USAGES = ['manual', 'model_compare', 'auto_private', 'auto_platform', 'review', 'memory_compression', 'memory_consistency']
+export const MODEL_PURPOSES = Object.freeze([
+  'manual_analysis', 'auto_inference', 'daily_review', 'monthly_review',
+  'manual_trade_review', 'memory_compression', 'memory_consistency',
+])
 const MODEL_REQUEST_TIMEOUT_MIN_MS = 30000
 const MODEL_REQUEST_TIMEOUT_MAX_MS = 600000
 const MODEL_TOKEN_LIMIT_MAX = 2147483647
@@ -73,6 +77,7 @@ export async function assertModelProfileSchemaReady() {
   const requiredTables = [
     'ai_model_profiles',
     'user_model_defaults',
+    'ai_model_purpose_defaults',
     'platform_model_usage_policy',
     'ai_model_usage_logs',
   ]
@@ -362,6 +367,121 @@ export async function getUserModelProfiles(userId) {
   return await Promise.all(rows.map(row => sanitizeProfileWithCapabilities(row)))
 }
 
+function purposeOwnerScope(ownerUserId) {
+  return Number(ownerUserId) === 0 ? MODEL_PROFILE_SCOPE.PLATFORM : MODEL_PROFILE_SCOPE.USER
+}
+
+function purposeBindingView(row, ownerUserId) {
+  const hasBinding = Boolean(row?.id)
+  const profileId = row?.model_profile_id == null ? null : Number(row.model_profile_id)
+  const profileOwnerMatches = row?.profile_id != null
+    && Number(row.profile_owner_user_id) === Number(ownerUserId)
+    && String(row.profile_scope || '') === purposeOwnerScope(ownerUserId)
+  const profileActive = String(row.profile_status || '') === 'active' && row.profile_deleted_at == null
+  const profileUsable = profileOwnerMatches && profileActive && Boolean(row.profile_has_key)
+    && String(row.profile_token_limits_status || '') === 'confirmed'
+  return {
+    purpose_key:String(row?.purpose_key || ''),
+    owner_user_id:Number(ownerUserId),
+    model_profile_id:profileId,
+    inherited:!hasBinding,
+    source:hasBinding ? 'purpose_binding' : 'legacy_resolver',
+    reason:hasBinding ? (profileUsable ? 'purpose_binding' : 'purpose_binding_invalid') : 'legacy_fallback',
+    binding_id:hasBinding ? Number(row.id) : null,
+    binding_status:hasBinding ? (profileUsable ? 'active' : 'invalid') : 'inherited',
+    updated_by:row?.updated_by == null ? null : Number(row.updated_by),
+    created_at:row?.created_at || null,
+    updated_at:row?.updated_at || null,
+    profile:row?.profile_id == null ? null : {
+      id:Number(row.profile_id), provider:row.profile_provider || null,
+      model_name:row.profile_model_name || null, scope:row.profile_scope || null,
+      status:row.profile_status || null, has_api_key:Boolean(row.profile_has_key),
+      token_limits_status:row.profile_token_limits_status || null,
+      verification_status:row.profile_verification_status || null,
+    },
+  }
+}
+
+/** Return all stable purposes, including an explicit inherited row when unset. */
+export async function getModelPurposeBindings(ownerUserId) {
+  const normalizedOwnerId = Number(ownerUserId)
+  if (!Number.isInteger(normalizedOwnerId) || normalizedOwnerId < 0) throw new Error('model_purpose_owner_invalid')
+  const rows = await queryAll(
+    `SELECT bindings.id, bindings.owner_user_id, bindings.purpose_key, bindings.model_profile_id,
+            bindings.updated_by, bindings.created_at, bindings.updated_at,
+            profiles.id AS profile_id, profiles.owner_user_id AS profile_owner_user_id,
+            profiles.scope AS profile_scope, profiles.provider AS profile_provider,
+            profiles.model_name AS profile_model_name, profiles.status AS profile_status,
+            profiles.deleted_at AS profile_deleted_at,
+            (profiles.api_key_encrypted IS NOT NULL AND profiles.api_key_encrypted <> '') AS profile_has_key,
+            capabilities.token_limits_status AS profile_token_limits_status,
+            capabilities.verification_status AS profile_verification_status
+       FROM ai_model_purpose_defaults bindings
+       LEFT JOIN ai_model_profiles profiles ON profiles.id = bindings.model_profile_id
+       LEFT JOIN ai_model_provider_capabilities capabilities ON capabilities.model_profile_id = profiles.id
+      WHERE bindings.owner_user_id = ?
+      ORDER BY FIELD(bindings.purpose_key, 'manual_analysis', 'auto_inference', 'daily_review',
+        'monthly_review', 'manual_trade_review', 'memory_compression', 'memory_consistency')`,
+    [normalizedOwnerId]
+  )
+  const rowByPurpose = new Map((rows || []).map(row => [String(row.purpose_key), row]))
+  const purposes = MODEL_PURPOSES.map(purpose => purposeBindingView(
+    rowByPurpose.get(purpose) || { purpose_key:purpose }, normalizedOwnerId))
+  return {
+    owner_user_id:normalizedOwnerId,
+    scope:purposeOwnerScope(normalizedOwnerId),
+    purposes,
+    bindings:purposes.filter(item => !item.inherited),
+  }
+}
+
+export async function clearModelPurposeBinding({ ownerUserId, purposeKey } = {}) {
+  const purpose = normalizeModelPurpose(purposeKey)
+  const normalizedOwnerId = Number(ownerUserId)
+  if (!Number.isInteger(normalizedOwnerId) || normalizedOwnerId < 0) throw new Error('model_purpose_owner_invalid')
+  await queryRun(
+    'DELETE FROM ai_model_purpose_defaults WHERE owner_user_id = ? AND purpose_key = ?',
+    [normalizedOwnerId, purpose]
+  )
+  return { owner_user_id:normalizedOwnerId, purpose_key:purpose, model_profile_id:null,
+    inherited:true, source:'legacy_resolver', reason:'legacy_fallback' }
+}
+
+export async function setModelPurposeBinding({ ownerUserId, purposeKey, modelProfileId, updatedBy = null } = {}) {
+  const purpose = normalizeModelPurpose(purposeKey)
+  const normalizedOwnerId = Number(ownerUserId)
+  if (!Number.isInteger(normalizedOwnerId) || normalizedOwnerId < 0) throw new Error('model_purpose_owner_invalid')
+  if (modelProfileId === null || modelProfileId === undefined || modelProfileId === '') {
+    return clearModelPurposeBinding({ ownerUserId:normalizedOwnerId, purposeKey:purpose })
+  }
+  const profileId = Number(modelProfileId)
+  if (!Number.isInteger(profileId) || profileId <= 0) throw new Error('model_profile_not_found_or_inactive')
+  const scope = purposeOwnerScope(normalizedOwnerId)
+  const profile = await queryOne(
+    `SELECT * FROM ai_model_profiles
+      WHERE id = ? AND owner_user_id = ? AND scope = ?
+        AND status = 'active' AND deleted_at IS NULL`,
+    [profileId, normalizedOwnerId, scope]
+  )
+  if (!profile || !profile.api_key_encrypted) throw new Error('model_profile_not_found_or_inactive')
+  try { await assertConfirmedModelProfile(profile) }
+  catch (error) { throw new Error(error.message) }
+  const now = beijingNow()
+  await queryRun(
+    `INSERT INTO ai_model_purpose_defaults
+      (owner_user_id, purpose_key, model_profile_id, updated_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE model_profile_id = VALUES(model_profile_id),
+       updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)`,
+    [normalizedOwnerId, purpose, profileId, updatedBy == null ? null : Number(updatedBy), now, now]
+  )
+  return {
+    owner_user_id:normalizedOwnerId, scope, purpose_key:purpose, model_profile_id:profileId,
+    inherited:false, source:'purpose_binding', reason:'purpose_binding', updated_by:updatedBy == null ? null : Number(updatedBy),
+    updated_at:now,
+  }
+}
+
 export async function upsertDefaultModelProfileFromLegacyInput(userId, callerRole, payload = {}, scope = 'user') {
   if (!payload.api_key) return null
   if (scope === MODEL_PROFILE_SCOPE.PLATFORM && callerRole !== 'admin') throw new Error('platform_scope_requires_admin')
@@ -398,6 +518,13 @@ export async function getModelProfileDeletionImpact(id, userId) {
       ORDER BY apt.is_active DESC, apt.id DESC`,
     [id]
   )
+  const purposeBindings = await queryAll(
+    `SELECT id, owner_user_id, purpose_key, model_profile_id, updated_by, created_at, updated_at
+       FROM ai_model_purpose_defaults
+      WHERE owner_user_id = ? AND model_profile_id = ?
+      ORDER BY purpose_key`,
+    [Number(userId), id]
+  )
   const defaultRow = await queryOne(
     'SELECT user_id FROM user_model_defaults WHERE user_id = ? AND model_profile_id = ?',
     [userId, id]
@@ -415,7 +542,13 @@ export async function getModelProfileDeletionImpact(id, userId) {
       subscription_count: Number(row.subscription_count || 0),
       active_subscription_count: Number(row.active_subscription_count || 0),
     })),
-    can_delete: !isDefault && strategies.length === 0,
+    purpose_bindings:(purposeBindings || []).map(row => ({
+      id:Number(row.id), owner_user_id:Number(row.owner_user_id), purpose_key:String(row.purpose_key),
+      model_profile_id:Number(row.model_profile_id), updated_by:row.updated_by == null ? null : Number(row.updated_by),
+      created_at:row.created_at || null, updated_at:row.updated_at || null,
+    })),
+    purpose_binding_count:(purposeBindings || []).length,
+    can_delete: !isDefault && strategies.length === 0 && !(purposeBindings || []).length,
   }
 }
 
@@ -439,6 +572,12 @@ export async function deleteModelProfile(id, userId, confirmation = {}) {
       [id]
     )
     if (strategyRows?.length) throw new Error('model_profile_in_use')
+    const purposeResult = await run(
+      'SELECT id, purpose_key FROM ai_model_purpose_defaults WHERE owner_user_id = ? AND model_profile_id = ? FOR UPDATE',
+      [Number(existing.owner_user_id), id]
+    )
+    const purposeRows = Array.isArray(purposeResult?.[0]) ? purposeResult[0] : []
+    if (purposeRows.length) throw new Error('model_profile_purpose_in_use')
     if (String(confirmation.confirm_name || '') !== String(existing.model_name || '') ||
         Number(confirmation.confirm_id) !== Number(existing.id)) {
       throw new Error('model_profile_delete_confirmation_mismatch')
@@ -696,7 +835,106 @@ export async function checkPlatformQuota(userId, usage) {
 
 // ─── Unified Model Resolver ───
 
-export async function resolveAiTaskModel({ userId, strategyId, usage }) {
+function modelPurposeError(purpose) {
+  throw new Error(`invalid_model_purpose:${purpose}`)
+}
+
+function normalizeModelPurpose(value) {
+  const purpose = String(value || '').trim()
+  if (!MODEL_PURPOSES.includes(purpose)) modelPurposeError(purpose)
+  return purpose
+}
+
+function purposeResolution(result, purpose, source, reason = null) {
+  return {
+    ...result,
+    purpose,
+    model_purpose:purpose,
+    resolution_source:source,
+    resolution_reason:reason || result?.reason || null,
+  }
+}
+
+/**
+ * Validate the strategy before looking up an owner-level purpose binding.
+ * A strategy's scope is authoritative for choosing platform owner 0 versus
+ * the requesting user's owner id. This mirrors the legacy resolver's access
+ * and active checks so a purpose binding cannot bypass strategy permissions.
+ */
+async function inspectModelPurposeStrategy({ userId, strategyId, usage }) {
+  const numericUserId = Number(userId) || 0
+  if (!strategyId) {
+    if (usage === 'auto_private') return { error:'strategy_id_required' }
+    return { ownerUserId:usage === 'auto_platform' ? 0 : numericUserId, strategy:null }
+  }
+
+  const strategy = await queryOne(
+    `SELECT id, scope, owner_user_id, model_profile_id, visibility_status, is_active
+       FROM auto_prompt_types WHERE id = ? AND deleted_at IS NULL`,
+    [strategyId]
+  )
+  const scope = String(strategy?.scope || '')
+  const privateOwnerMismatch = scope === 'private' && Number(strategy.owner_user_id) !== numericUserId
+  if (!strategy || (usage === 'auto_private' && (scope !== 'private' || privateOwnerMismatch))) {
+    return { error:usage === 'auto_private' ? 'private_strategy_access_denied' : 'strategy_access_denied', strategy }
+  }
+  if (usage === 'auto_platform' && scope !== 'platform') {
+    return { error:'strategy_access_denied', strategy }
+  }
+  if (!['platform', 'private'].includes(scope) || privateOwnerMismatch) {
+    return { error:'strategy_access_denied', strategy }
+  }
+  if (strategy.visibility_status !== 'active' || !Number(strategy.is_active)) {
+    return {
+      error:scope === 'platform' ? 'platform_strategy_not_active' : 'private_strategy_not_active',
+      strategy,
+    }
+  }
+  return { ownerUserId:scope === 'platform' ? 0 : numericUserId, strategy }
+}
+
+async function resolvePurposeBinding({ userId, strategyId, usage, modelPurpose }) {
+  const purpose = normalizeModelPurpose(modelPurpose)
+  const context = await inspectModelPurposeStrategy({ userId, strategyId, usage })
+  if (context.error) {
+    return purposeResolution({ model:null, credential_source:'none', error:context.error,
+      usage, strategy_id:strategyId || null }, purpose, 'strategy_validation', context.error)
+  }
+
+  const ownerUserId = Number(context.ownerUserId) || 0
+  const binding = await queryOne(
+    `SELECT id, owner_user_id, purpose_key, model_profile_id, updated_by, created_at, updated_at
+       FROM ai_model_purpose_defaults
+      WHERE owner_user_id = ? AND purpose_key = ? LIMIT 1`,
+    [ownerUserId, purpose]
+  )
+  if (!binding) {
+    const legacy = await resolveLegacyAiTaskModel({ userId, strategyId, usage })
+    return purposeResolution(legacy, purpose, 'legacy', legacy.reason || 'legacy_resolver')
+  }
+
+  const profile = await queryOne(
+    `SELECT * FROM ai_model_profiles
+      WHERE id = ? AND owner_user_id = ? AND scope = ?
+        AND status = 'active' AND deleted_at IS NULL`,
+    [binding.model_profile_id, ownerUserId, ownerUserId === 0 ? 'platform' : 'user']
+  )
+  const failure = error => purposeResolution({ model:null, credential_source:'none',
+    error, usage, strategy_id:strategyId || null, model_profile_id:binding.model_profile_id },
+  purpose, 'purpose_binding', 'purpose_binding')
+  if (!profile || !profile.api_key_encrypted) return failure('bound_model_unavailable')
+  try { await assertConfirmedModelProfile(profile) }
+  catch (error) { return failure(error.message) }
+  const source = ownerUserId === 0 ? 'platform_primary' : 'user'
+  return purposeResolution({ ...buildResult(profile, source, usage, 'purpose_binding'),
+    strategy_id:strategyId || null }, purpose, 'purpose_binding', 'purpose_binding')
+}
+
+/**
+ * Legacy resolver retained in behavior for callers that do not provide
+ * modelPurpose. New purpose routing is an opt-in wrapper below.
+ */
+async function resolveLegacyAiTaskModel({ userId, strategyId, usage }) {
   if (!USAGES.includes(usage)) throw new Error(`invalid_usage:${usage}`)
 
   if ((usage === 'review' || usage === 'memory_compression' || usage === 'memory_consistency') && strategyId) {
@@ -887,6 +1125,20 @@ export async function resolveAiTaskModel({ userId, strategyId, usage }) {
   }
 
   return { model: null, credential_source: 'none', error: 'no_model_configured', usage, strategy_id: strategyId || null }
+}
+
+/**
+ * Resolve a model for one AI task. Omitting modelPurpose intentionally takes
+ * the complete legacy path above so old callers keep their exact priority and
+ * query behavior. A supplied purpose is an owner-level explicit binding;
+ * absence of that binding falls through to the same legacy resolver.
+ */
+export async function resolveAiTaskModel({ userId, strategyId, usage, modelPurpose } = {}) {
+  if (!USAGES.includes(usage)) throw new Error(`invalid_usage:${usage}`)
+  if (modelPurpose === undefined || modelPurpose === null || modelPurpose === '') {
+    return resolveLegacyAiTaskModel({ userId, strategyId, usage })
+  }
+  return resolvePurposeBinding({ userId, strategyId, usage, modelPurpose })
 }
 
 async function resolvePlatformModel(usage = 'auto_platform') {

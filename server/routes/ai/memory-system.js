@@ -1262,7 +1262,8 @@ export async function runMemoryCompressionOnce({ requestModel = requestJsonObjec
     const current = await activeScopeItems(job.user_id, job.scope_key)
     const currentIds = current.map(item => Number(item.id)).sort((a, b) => a - b)
     if (sha256(JSON.stringify(currentIds)) !== job.source_set_hash) throw new Error('compression_source_set_stale')
-    const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: null, usage: 'memory_compression' })
+    const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: null, usage: 'memory_compression',
+      modelPurpose:'memory_compression' })
     if (!resolved.model) throw new Error(resolved.error || 'compression_model_unavailable')
     const endpoint = modelEndpoint(resolved.model)
     const input = current.map(item => ({ id: Number(item.id), scope: parse(item.scope_json, {}), conditions: parse(item.conditions_json, {}), lesson: item.lesson_text, anti_pattern: item.anti_pattern_text }))

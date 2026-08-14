@@ -6163,6 +6163,29 @@ const migrations = [
         })
       }
     }
+  },
+  {
+    id: '186_ai_model_purpose_bindings',
+    async up() {
+      // Owner-level purpose defaults deliberately do not include strategy_id:
+      // strategy-specific bindings remain the legacy fallback and retain their
+      // existing priority when no purpose row is configured.
+      await queryRun(`CREATE TABLE IF NOT EXISTS ai_model_purpose_defaults (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        owner_user_id INT NOT NULL DEFAULT 0,
+        purpose_key ENUM('manual_analysis','auto_inference','daily_review','monthly_review',
+          'manual_trade_review','memory_compression','memory_consistency') NOT NULL,
+        model_profile_id INT NOT NULL,
+        updated_by INT DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_ai_model_purpose_owner (owner_user_id, purpose_key),
+        KEY idx_ai_model_purpose_profile (model_profile_id),
+        KEY idx_ai_model_purpose_owner (owner_user_id),
+        CONSTRAINT fk_ai_model_purpose_profile FOREIGN KEY (model_profile_id)
+          REFERENCES ai_model_profiles(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+    }
   }
 ]
 

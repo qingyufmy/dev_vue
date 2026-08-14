@@ -69,6 +69,8 @@ const state = {
   analysisHistoryHasMore: true,
   analysisHistoryLoading: false,
   analysisHistoryPageLoaded: false,
+  modelPurposeBindings: null,
+  modelPurposeBindingsError: "",
   modelProfiles: [],
   strategyFilter: "all",
   strategyDataCapabilities: null,
@@ -2530,6 +2532,8 @@ function invalidateSession() {
   state.latestSignalId = null;
   state.auditRows = [];
   state.modelProfiles = [];
+  state.modelPurposeBindings = null;
+  state.modelPurposeBindingsError = "";
   state.reviewCases = [];
   state.reviewSummary = { pending:0, issues:0, unread:0, pending_confirmation:0, generating:0, failed:0, total:0, daily_total:0, monthly_total:0, daily_attention:0, monthly_attention:0 };
   state.reviewSummaryInitialized = false;
@@ -4119,6 +4123,138 @@ function formatModelTokenCount(value) {
 
 function modelProviderLabel(provider) { return MODEL_PROVIDER_LABELS[provider] || provider; }
 
+const MODEL_PURPOSE_LABELS = Object.freeze({
+  manual_analysis: "手动分析",
+  auto_inference: "自动分析",
+  daily_review: "日复盘",
+  monthly_review: "月复盘",
+  manual_trade_review: "手动交易复盘",
+  memory_compression: "记忆整理",
+  memory_consistency: "一致性检查",
+});
+const MODEL_PURPOSE_KEYS = Object.keys(MODEL_PURPOSE_LABELS);
+
+function modelPurposeScope() { return state.user?.role === "admin" ? "platform" : "user"; }
+
+function normalizeModelPurposeBindings(data = {}) {
+  const source = Array.isArray(data?.purposes)
+    ? data.purposes
+    : Array.isArray(data?.bindings)
+      ? data.bindings
+      : data?.purposes && typeof data.purposes === "object"
+        ? Object.entries(data.purposes).map(([purpose, binding]) => ({ purpose, ...(binding || {}) }))
+        : data?.bindings && typeof data.bindings === "object"
+          ? Object.entries(data.bindings).map(([purpose, binding]) => ({ purpose, ...(binding || {}) }))
+          : [];
+  const byPurpose = new Map();
+  source.forEach(item => {
+    const purpose = String(item?.purpose || item?.purpose_key || item?.key || "").trim();
+    if (!MODEL_PURPOSE_LABELS[purpose]) return;
+    const nested = item?.model_profile || item?.modelProfile || item?.profile || item?.configured_model || null;
+    const id = item?.model_profile_id ?? item?.modelProfileId ?? item?.profile_id ?? nested?.id ?? null;
+    byPurpose.set(purpose, { ...item, purpose, model_profile_id: id == null ? null : Number(id) });
+  });
+  return MODEL_PURPOSE_KEYS.map(purpose => byPurpose.get(purpose) || { purpose, model_profile_id: null });
+}
+
+function modelPurposeNestedModel(binding = {}) {
+  return binding.model_profile || binding.modelProfile || binding.profile || binding.configured_model || binding.effective_model || binding.resolved_model || null;
+}
+
+function modelPurposeProfileId(binding = {}) {
+  const nested = modelPurposeNestedModel(binding);
+  const raw = binding.model_profile_id ?? binding.modelProfileId ?? binding.profile_id ?? nested?.id;
+  return raw == null || raw === "" ? null : Number(raw);
+}
+
+function modelPurposeText(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "object") return String(value.label || value.name || value.explanation || value.reason || value.source_label || value.source || value.kind || "").trim();
+  return String(value).trim();
+}
+
+function modelPurposeSource(binding = {}) {
+  const invalid = ["invalid", "blocked", "unavailable", "disabled"].includes(String(binding.binding_status || binding.status || "").toLowerCase());
+  const raw = modelPurposeText(invalid ? binding.reason : (binding.source_explanation ?? binding.sourceExplanation ?? binding.inherited_source ?? binding.inherited_from ?? binding.effective_source ?? binding.resolution?.source_explanation ?? binding.resolution?.source_label ?? binding.resolution?.source ?? binding.source_label ?? binding.source ?? binding.reason));
+  return ({ legacy_resolver: "未配置用途模型，继承现有模型解析规则", legacy_fallback: "未配置用途模型，继承现有模型解析规则", purpose_binding: "已按用途绑定", purpose_binding_invalid: "用途绑定已失效，请重新选择模型" })[raw] || raw;
+}
+
+function modelPurposeActualModel(binding = {}, profiles = []) {
+  const nested = modelPurposeNestedModel(binding);
+  const direct = binding.effective_model_name ?? binding.resolved_model_name ?? binding.actual_model_name ?? binding.configured_model_name ?? nested?.model_name ?? nested?.name;
+  if (direct) return String(direct);
+  const id = modelPurposeProfileId(binding);
+  return profiles.find(profile => Number(profile.id) === Number(id))?.model_name || "";
+}
+
+function modelPurposeProfileMeta(profile = {}) {
+  const verification = String(profile.verification_status || profile.provider_verification_status || "").toLowerCase();
+  const verificationLabel = verification === "verified" || verification === "confirmed" ? "已验证" : verification === "unverified" ? "待验证" : "";
+  const recent = profile.verified_at || profile.last_verified_at || profile.updated_at;
+  return `${modelTokenStatus(profile).label}${verificationLabel ? ` · ${verificationLabel}` : ""}${recent ? ` · 最近 ${escapeHtml(String(recent).slice(0, 16))}` : ""}`;
+}
+
+function renderModelPurposeBindings() {
+  const host = $("modelPurposeBindingsList");
+  if (!host) return;
+  const scope = modelPurposeScope();
+  const profiles = (state.modelProfiles || []).filter(profile => profile.scope === scope && profile.status === "active");
+  const error = String(state.modelPurposeBindingsError || "");
+  if (error) {
+    host.innerHTML = `<div class="model-purpose-load-error" role="alert">用途绑定加载失败：${escapeHtml(error)}<button class="btn btn-secondary btn-sm" type="button" data-retry-model-purposes>重新加载</button></div>`;
+    host.querySelector("[data-retry-model-purposes]")?.addEventListener("click", () => loadModelManagement().catch(loadError => toast(loadError.message, "error")));
+    return;
+  }
+  if (!state.modelPurposeBindings) {
+    host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
+    return;
+  }
+  const bindings = normalizeModelPurposeBindings(state.modelPurposeBindings);
+  host.innerHTML = bindings.map(binding => {
+    const purpose = binding.purpose;
+    const id = modelPurposeProfileId(binding);
+    const profile = profiles.find(item => Number(item.id) === Number(id));
+    const unavailable = id != null && !profile;
+    const blocked = unavailable || Boolean(binding.blocked || binding.invalid || ["blocked", "invalid", "unavailable", "disabled"].includes(String(binding.status || binding.binding_status || "").toLowerCase()));
+    const actual = modelPurposeActualModel(binding, profiles);
+    const source = modelPurposeSource(binding);
+    const options = `<option value="" ${id == null ? "selected" : ""}>继承现有规则</option>${unavailable ? `<option value="${Number(id)}" selected>当前绑定模型不可用</option>` : ""}${profiles.map(item => `<option value="${Number(item.id)}" ${Number(item.id) === Number(id) && !unavailable ? "selected" : ""}>${escapeHtml(item.model_name || `模型 #${Number(item.id)}`)} · ${escapeHtml(modelProviderLabel(item.provider))} · ${modelPurposeProfileMeta(item)}</option>`).join("")}`;
+    const resolution = blocked
+      ? `绑定模型不可用，保存前请选择其他${scope === "platform" ? "平台" : "个人"}模型或继承规则`
+      : `实际模型：${actual ? escapeHtml(actual) : "由现有规则解析"}${source ? ` · ${escapeHtml(source)}` : ""}`;
+    return `<div class="model-purpose-row ${blocked ? "is-blocked" : ""}" data-model-purpose="${purpose}"><div class="model-purpose-copy"><strong>${MODEL_PURPOSE_LABELS[purpose]}</strong><small>${escapeHtml(purpose)}</small></div><label class="model-purpose-select"><span class="sr-only">${MODEL_PURPOSE_LABELS[purpose]}模型</span><select class="select" data-purpose-select aria-describedby="model-purpose-resolution-${purpose}" ${isObserverMode() ? "disabled" : ""}>${options}</select></label><div id="model-purpose-resolution-${purpose}" class="model-purpose-resolution ${blocked ? "is-blocked" : ""}" role="status">${resolution}</div><button class="btn btn-secondary btn-sm" data-save-model-purpose type="button" ${isObserverMode() ? "disabled" : ""}>保存</button><div class="model-purpose-error" data-purpose-error role="alert" aria-live="polite"></div></div>`;
+  }).join("");
+}
+
+async function saveModelPurposeBinding(button) {
+  const row = button?.closest("[data-model-purpose]");
+  const purpose = row?.dataset.modelPurpose;
+  const select = row?.querySelector("[data-purpose-select]");
+  const errorHost = row?.querySelector("[data-purpose-error]");
+  if (!purpose || !select) return;
+  const raw = String(select.value || "").trim();
+  const modelProfileId = raw ? Number(raw) : null;
+  const scope = modelPurposeScope();
+  if (raw && (!Number.isInteger(modelProfileId) || !(state.modelProfiles || []).some(profile => profile.scope === scope && profile.status === "active" && Number(profile.id) === modelProfileId))) {
+    if (errorHost) errorHost.textContent = `请选择仍可用的${scope === "platform" ? "平台" : "个人"}模型，或改为继承现有规则`;
+    return;
+  }
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  if (errorHost) errorHost.textContent = "";
+  try {
+    await api(`/api/ai/model-purpose-bindings/${encodeURIComponent(purpose)}`, { method: "PUT", body: { scope, model_profile_id: modelProfileId } });
+    toast(`${MODEL_PURPOSE_LABELS[purpose]}已保存`, "success");
+    await loadModelManagement();
+  } catch (error) {
+    if (errorHost) errorHost.textContent = error.message || "保存失败，请重试";
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
+}
+
 function updateModelProviderHelp(provider) {
   const help = $("profileProviderHelp");
   if (!help) return;
@@ -4166,9 +4302,11 @@ async function loadModelManagement() {
   const notice = $("modelSourceNotice");
   if (notice) notice.innerHTML = '<span><strong>模型来源：</strong>正在向服务端确认当前可用配置…</span>';
   const usage = state.user?.role === "admin" ? "auto_platform" : "manual";
-  const [profilesResult, sourceResult] = await Promise.allSettled([
+  const purposeScope = modelPurposeScope();
+  const [profilesResult, sourceResult, purposeResult] = await Promise.allSettled([
     api(`/api/ai/model-profiles${profileScopeQuery()}`),
     api(`/api/ai/model-source?usage=${usage}`),
+    api(`/api/ai/model-purpose-bindings?scope=${encodeURIComponent(purposeScope)}`),
   ]);
   if (profilesResult.status === "fulfilled") {
     state.modelProfiles = profilesResult.value.profiles || [];
@@ -4195,6 +4333,14 @@ async function loadModelManagement() {
     if (notice) notice.innerHTML = `<span><strong>模型来源解析失败：</strong> ${escapeHtml(message)}</span><button class="btn btn-secondary btn-sm" type="button" data-action="retry-model-management">重试</button>`;
     if ($("strategyModelSource")) $("strategyModelSource").textContent = "模型来源解析失败";
   }
+  if (purposeResult.status === "fulfilled") {
+    state.modelPurposeBindings = purposeResult.value;
+    state.modelPurposeBindingsError = "";
+  } else {
+    state.modelPurposeBindings = null;
+    state.modelPurposeBindingsError = purposeResult.reason?.message || "用途绑定请求失败";
+  }
+  renderModelPurposeBindings();
   if (state.user?.role === "admin" && profilesResult.status === "fulfilled") {
     try { await loadPlatformPolicy(); }
     catch (error) { toast(`平台共享设置加载失败：${error.message}`, "warning"); }
@@ -14172,6 +14318,10 @@ function bindEvents() {
     renderSubscriptionScheduleWindows(rows);
   });
   $("addModelProfileBtn")?.addEventListener("click", () => openModelEditor());
+  $("modelPurposeBindingsList")?.addEventListener("click", event => {
+    const button = event.target.closest("[data-save-model-purpose]");
+    if (button) saveModelPurposeBinding(button).catch(error => toast(error.message || "保存失败，请重试", "error"));
+  });
   $("cancelModelProfileBtn")?.addEventListener("click", () => closeFormModal($("modelProfileEditor")));
   $("saveModelProfileBtn")?.addEventListener("click", () => saveModelProfile().catch(error => toast(localizeReason(error.message), "error")));
   $("savePlatformPolicyBtn")?.addEventListener("click", () => savePlatformPolicy().catch(error => toast(error.message, "error")));
@@ -14563,15 +14713,19 @@ function bindEvents() {
           const { impact } = await api(`/api/ai/model-profiles/${id}/delete-impact?scope=${scope}`);
           if (!impact.can_delete) {
             const strategyNames = (impact.strategies || []).map(item => item.title).filter(Boolean);
+            const purposeLabels = (impact.purpose_bindings || []).map(item => MODEL_PURPOSE_LABELS[item.purpose_key] || item.purpose_key).filter(Boolean);
             const reason = impact.is_default
               ? "该模型当前是默认模型，请先设置另一个默认模型。"
-              : `该模型仍被 ${strategyNames.length} 个策略绑定，请先在策略中更换模型。`;
+              : purposeLabels.length
+                ? `该模型仍被以下用途使用：${purposeLabels.join("、")}。请先更换用途模型或改为继承规则。`
+                : `该模型仍被 ${strategyNames.length} 个策略绑定，请先在策略中更换模型。`;
             await showConfirm("暂时无法删除模型", reason, {
               confirmText:"知道了", cancelText:"关闭",
               detailRows:[
                 ["模型", impact.model_name || `#${impact.id}`],
                 ["默认模型", impact.is_default ? "是" : "否", impact.is_default ? "danger" : ""],
                 ["绑定策略", strategyNames.length ? strategyNames.join("、") : "无", strategyNames.length ? "danger" : ""],
+                ["用途分配", purposeLabels.length ? purposeLabels.join("、") : "无", purposeLabels.length ? "danger" : ""],
               ],
             });
             return;

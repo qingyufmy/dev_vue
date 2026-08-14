@@ -176,7 +176,7 @@ export async function insertAudit(db, userId, action, symbol, request, result, s
 
 export async function getAnalyzeApiKey(userId, sessionId, strategyId = null) {
   if (!isEncryptionAvailable()) throw new Error('encryption_master_key_missing')
-  const resolved = await resolveAiTaskModel({ userId, strategyId, usage: 'manual' })
+  const resolved = await resolveAiTaskModel({ userId, strategyId, usage: 'manual', modelPurpose:'manual_analysis' })
   if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || 'no_model_configured')
   const [userConfig, aiVolumeRange] = await Promise.all([
     getInferencePreference(userId, sessionId),
@@ -194,6 +194,9 @@ export async function getAnalyzeApiKey(userId, sessionId, strategyId = null) {
     _model_shared: resolved.credential_source === 'platform_shared',
     _model_profile_id: resolved.model_profile_id,
     _credential_source: resolved.credential_source,
+    _model_purpose: resolved.model_purpose || resolved.purpose || 'manual_analysis',
+    _model_resolution_source: resolved.resolution_source || null,
+    _model_resolution_reason: resolved.resolution_reason || resolved.reason || null,
     _ai_volume_min: aiVolumeRange.min,
     _ai_volume_max: aiVolumeRange.max,
     _ai_volume_step: aiVolumeRange.step,
@@ -318,7 +321,8 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
   const ownerUserId = Number(pt.owner_user_id || 0)
   if (isPrivate && Number(requestedUserId) !== ownerUserId) throw new Error('private_strategy_access_denied')
   const usage = isPrivate ? 'auto_private' : 'auto_platform'
-  const resolved = await resolveAiTaskModel({ userId: isPrivate ? ownerUserId : 0, strategyId: promptTypeId, usage })
+  const resolved = await resolveAiTaskModel({ userId: isPrivate ? ownerUserId : 0, strategyId: promptTypeId, usage,
+    modelPurpose:'auto_inference' })
   if (!resolved.model?.api_key_encrypted) throw new Error(resolved.error || (isPrivate ? 'no_model_configured' : 'no_platform_model'))
   const [globalCfg, aiVolumeRange] = await Promise.all([
     getGlobalAutoConfig(),
@@ -338,6 +342,9 @@ export async function getUnifiedAutoInferenceConfig(promptTypeId, requestedUserI
     _source: 'unified',
     _model_profile_id: resolved.model_profile_id,
     _credential_source: resolved.credential_source,
+    _model_purpose: resolved.model_purpose || resolved.purpose || 'auto_inference',
+    _model_resolution_source: resolved.resolution_source || null,
+    _model_resolution_reason: resolved.resolution_reason || resolved.reason || null,
     _market_only: !isPrivate,
     _include_portfolio_context: isPrivate && Boolean(Number(pt.include_portfolio_context)),
     _strategy_scope: pt.scope || 'platform',

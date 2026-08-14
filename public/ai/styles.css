@@ -8709,6 +8709,21 @@ a.signal-link:hover {
   background: var(--calm-surface);
 }
 
+.model-purpose-bindings-panel { display: grid; gap: 12px; }
+.model-purpose-bindings-panel > .section-heading { margin-bottom: 0; }
+.model-purpose-list { display: grid; gap: 8px; }
+.model-purpose-row { display: grid; grid-template-columns: minmax(132px, .72fr) minmax(220px, 1.15fr) minmax(220px, 1.4fr) auto; align-items: center; gap: 10px; padding: 10px 11px; border: 1px solid var(--calm-border); border-radius: var(--radius-md); background: rgba(10, 17, 30, .42); }
+.model-purpose-copy strong, .model-purpose-copy small { display: block; }
+.model-purpose-copy strong { color: var(--text-primary); font-size: 12px; }
+.model-purpose-copy small { margin-top: 3px; color: var(--text-muted); font: 10px var(--font-mono); }
+.model-purpose-select .select { width: 100%; min-height: 36px; }
+.model-purpose-resolution { min-width: 0; color: var(--text-muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.model-purpose-row.is-blocked, .model-purpose-resolution.is-blocked { border-color: rgba(251, 113, 133, .34); }
+.model-purpose-resolution.is-blocked { color: #fda4af; }
+.model-purpose-error { min-height: 16px; color: #fda4af; font-size: 10px; grid-column: 2 / -1; }
+.model-purpose-row > .model-purpose-error:empty { display: none; }
+.model-purpose-load-error { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid rgba(251, 113, 133, .3); border-radius: var(--radius-md); color: #fda4af; font-size: 11px; }
+
 .model-primary-meta {
   margin-top: 5px;
 }
@@ -10369,6 +10384,10 @@ a.signal-link:hover {
   .review-queue { position: static; }
   .review-detail { position: static; }
   .review-outcome-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .model-purpose-row { grid-template-columns: 1fr 1fr; align-items: start; }
+  .model-purpose-resolution { grid-column: 1 / -1; }
+  .model-purpose-row > .btn { justify-self: end; }
+  .model-purpose-error { grid-column: 1 / -1; }
   .platform-section-header { align-items: flex-start; flex-direction: column; }
   .platform-section-stats { justify-content: flex-start; }
   .personal-memory-header { align-items: flex-start; flex-direction: column; }

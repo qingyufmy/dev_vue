@@ -135,7 +135,8 @@ describe('strategy memory compression worker', () => {
     } })
     const result = await runStrategyMemoryCompressionOnce({ requestModel:mocks.requestJsonObject })
     expect(result.status).toBe('succeeded')
-    expect(mocks.resolveAiTaskModel).toHaveBeenCalledWith({ userId:7, strategyId:5, usage:'memory_compression' })
+    expect(mocks.resolveAiTaskModel).toHaveBeenCalledWith({ userId:7, strategyId:5,
+      usage:'memory_compression', modelPurpose:'memory_compression' })
     expect(tracker.persistBudget).toHaveBeenCalled()
     expect(mocks.createStrategyMemoryInjectionLog).toHaveBeenCalledWith(expect.objectContaining({
       strategyId:5, injectionKind:'memory_compression', library,

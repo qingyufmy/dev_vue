@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260814ema34toggle1" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260814ema34toggle1">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260814ema34toggle1">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6" />
   </head>
   <body>
@@ -487,6 +487,10 @@
               <div class="insight-item"><span>连接可用</span><strong id="modelActiveStat" class="num">--</strong><small>可参与模型解析</small></div>
             </section>
             <div id="modelSourceNotice" class="source-notice compact-notice" role="status">正在确认当前模型来源…</div>
+            <section id="modelPurposeBindings" class="workspace-panel model-purpose-bindings-panel" aria-labelledby="modelPurposeBindingsTitle">
+              <div class="section-heading"><div><h2 id="modelPurposeBindingsTitle">按用途分配模型</h2><p>为手动分析、自动分析和复盘任务分别指定模型；未配置时继承现有模型解析规则。</p></div></div>
+              <div id="modelPurposeBindingsList" class="model-purpose-list" aria-live="polite"><div class="workspace-skeleton"></div></div>
+            </section>
             <div id="modelProfileEditor" class="form-modal hidden" role="dialog" aria-modal="true" aria-labelledby="modelEditorTitle">
             <section class="workspace-panel form-modal-dialog model-profile-dialog" tabindex="-1">
               <div class="section-heading"><div><h2 id="modelEditorTitle">添加模型</h2><p>API Key 只在保存时提交，页面不会回显明文。</p></div><button id="cancelModelProfileBtn" class="btn btn-secondary btn-sm" type="button">关闭</button></div>
@@ -1355,7 +1359,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6"></script>
+    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

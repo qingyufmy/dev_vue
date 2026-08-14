@@ -24,7 +24,9 @@ import {
   checkPlatformQuota,
   createModelProfile,
   deleteModelProfile,
+  clearModelPurposeBinding,
   finishModelUsage,
+  getModelPurposeBindings,
   getModelProfileDeletionImpact,
   migrateLegacyConfigs,
   normalizeModelTokenLimits,
@@ -32,6 +34,7 @@ import {
   recoverStaleModelUsageReservations,
   resolveAiTaskModel,
   saveModelProfileWithValidation,
+  setModelPurposeBinding,
   setDefaultModelProfile,
   updateModelProfile,
 } from '../../server/routes/ai/model-profiles.js'
@@ -299,6 +302,82 @@ describe('resolveAiTaskModel', () => {
     const result = await resolveAiTaskModel({ userId: 1, usage: 'model_compare' })
     expect(result).toMatchObject({ usage:'model_compare', error:'no_model_configured' })
   })
+
+  it('keeps the complete legacy resolver when a purpose has no binding', async () => {
+    mockQueryOne.mockResolvedValueOnce(null).mockResolvedValueOnce(profile())
+    const result = await resolveAiTaskModel({ userId:1, strategyId:null, usage:'manual', modelPurpose:'manual_analysis' })
+    expect(result).toMatchObject({ credential_source:'user', model_purpose:'manual_analysis', purpose:'manual_analysis',
+      resolution_source:'legacy', resolution_reason:'user_default' })
+  })
+
+  it('uses an active same-owner purpose binding before the legacy strategy/default chain', async () => {
+    mockQueryOne.mockResolvedValueOnce({ id:4, owner_user_id:1, purpose_key:'manual_analysis', model_profile_id:77 })
+      .mockResolvedValueOnce(profile({ id:77 }))
+    const result = await resolveAiTaskModel({ userId:1, strategyId:null, usage:'manual', modelPurpose:'manual_analysis' })
+    expect(result).toMatchObject({ credential_source:'user', model_profile_id:77,
+      purpose:'manual_analysis', model_purpose:'manual_analysis', resolution_source:'purpose_binding',
+      reason:'purpose_binding' })
+    expect(mockQueryOne).toHaveBeenCalledTimes(2)
+  })
+
+  it('selects the platform owner purpose binding for a platform strategy', async () => {
+    mockQueryOne.mockResolvedValueOnce({ id:12, scope:'platform', owner_user_id:0,
+      model_profile_id:null, visibility_status:'active', is_active:1 })
+      .mockResolvedValueOnce({ id:4, owner_user_id:0, purpose_key:'auto_inference', model_profile_id:88 })
+      .mockResolvedValueOnce(profile({ id:88, owner_user_id:0, scope:'platform' }))
+    const result = await resolveAiTaskModel({ userId:9, strategyId:12, usage:'auto_platform', modelPurpose:'auto_inference' })
+    expect(result).toMatchObject({ credential_source:'platform_primary', model_profile_id:88,
+      strategy_id:12, model_purpose:'auto_inference', resolution_source:'purpose_binding' })
+    expect(mockQueryOne.mock.calls[1][1]).toEqual([0, 'auto_inference'])
+  })
+
+  it('fails closed when an explicit purpose binding points to an unavailable model', async () => {
+    mockQueryOne.mockResolvedValueOnce({ id:4, owner_user_id:1, purpose_key:'manual_analysis', model_profile_id:77 })
+      .mockResolvedValueOnce(null)
+    const result = await resolveAiTaskModel({ userId:1, strategyId:null, usage:'manual', modelPurpose:'manual_analysis' })
+    expect(result).toMatchObject({ error:'bound_model_unavailable', model_profile_id:77,
+      purpose:'manual_analysis', resolution_source:'purpose_binding' })
+    expect(mockQueryOne).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('model purpose bindings', () => {
+  it('returns all purposes with explicit and inherited source metadata', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ id:3, owner_user_id:1, purpose_key:'manual_analysis', model_profile_id:10,
+      updated_by:2, created_at:'2026-08-14 10:00:00', updated_at:'2026-08-14 10:00:00', profile_id:10,
+      profile_owner_user_id:1, profile_scope:'user', profile_provider:'qwen', profile_model_name:'qwen-plus',
+      profile_status:'active', profile_deleted_at:null, profile_has_key:1, profile_token_limits_status:'confirmed',
+      profile_verification_status:'verified' }])
+    const result = await getModelPurposeBindings(1)
+    expect(result.purposes).toHaveLength(7)
+    expect(result.purposes.find(item => item.purpose_key === 'manual_analysis')).toMatchObject({
+      model_profile_id:10, inherited:false, source:'purpose_binding', binding_status:'active' })
+    expect(result.purposes.find(item => item.purpose_key === 'daily_review')).toMatchObject({
+      model_profile_id:null, inherited:true, source:'legacy_resolver', reason:'legacy_fallback' })
+  })
+
+  it('marks a purpose binding invalid until the profile token limits are confirmed', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ id:4, owner_user_id:1, purpose_key:'manual_analysis', model_profile_id:10,
+      updated_by:2, created_at:'2026-08-14 10:00:00', updated_at:'2026-08-14 10:00:00', profile_id:10,
+      profile_owner_user_id:1, profile_scope:'user', profile_provider:'qwen', profile_model_name:'qwen-plus',
+      profile_status:'active', profile_deleted_at:null, profile_has_key:1,
+      profile_token_limits_status:'default_unconfirmed', profile_verification_status:'verified' }])
+    const result = await getModelPurposeBindings(1)
+    expect(result.purposes.find(item => item.purpose_key === 'manual_analysis')).toMatchObject({
+      model_profile_id:10, inherited:false, source:'purpose_binding',
+      binding_status:'invalid', reason:'purpose_binding_invalid' })
+  })
+
+  it('enforces owner scope on writes and supports clear/inherit', async () => {
+    mockQueryOne.mockResolvedValueOnce(profile({ id:20, owner_user_id:1, scope:'user' }))
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    const saved = await setModelPurposeBinding({ ownerUserId:1, purposeKey:'daily_review', modelProfileId:20, updatedBy:1 })
+    expect(saved).toMatchObject({ owner_user_id:1, purpose_key:'daily_review', model_profile_id:20, inherited:false })
+    expect(mockQueryOne.mock.calls[0][1]).toEqual([20, 1, 'user'])
+    const cleared = await clearModelPurposeBinding({ ownerUserId:1, purposeKey:'daily_review' })
+    expect(cleared).toMatchObject({ purpose_key:'daily_review', model_profile_id:null, inherited:true })
+    expect(mockQueryRun.mock.calls.at(-1)[1]).toEqual([1, 'daily_review'])
+  })
 })
 
 describe('model profile authorization and defaults', () => {
@@ -430,6 +509,25 @@ describe('model profile authorization and defaults', () => {
     await expect(deleteModelProfile(10, 1, { confirm_name: 'qwen-plus', confirm_id: 10 }))
       .rejects.toThrow('model_profile_in_use')
     expect(mockTx).toHaveBeenCalledTimes(3)
+  })
+
+  it('reports and blocks purpose bindings before deleting a model', async () => {
+    mockQueryOne.mockResolvedValueOnce(profile({ is_default:0 })).mockResolvedValueOnce(null)
+    mockQueryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { id:9, owner_user_id:1, purpose_key:'daily_review', model_profile_id:10, updated_by:1 },
+    ])
+    const impact = await getModelProfileDeletionImpact(10, 1)
+    expect(impact).toMatchObject({ can_delete:false, purpose_binding_count:1 })
+    expect(impact.purpose_bindings[0]).toMatchObject({ purpose_key:'daily_review', model_profile_id:10 })
+
+    mockTx
+      .mockResolvedValueOnce([[profile({ is_default:0 })]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[{ id:9, purpose_key:'daily_review' }]])
+    await expect(deleteModelProfile(10, 1, { confirm_name:'qwen-plus', confirm_id:10 }))
+      .rejects.toThrow('model_profile_purpose_in_use')
+    expect(mockTx).toHaveBeenCalledTimes(4)
   })
 
   it('requires matching model name and id then soft-deletes an unused model', async () => {
@@ -615,7 +713,7 @@ describe('model schema readiness', () => {
   it('checks every required model-management table', async () => {
     mockQueryOne.mockResolvedValue(null)
     await assertModelProfileSchemaReady()
-    expect(mockQueryOne).toHaveBeenCalledTimes(4)
+    expect(mockQueryOne).toHaveBeenCalledTimes(5)
   })
 
   it('propagates a missing-table error', async () => {

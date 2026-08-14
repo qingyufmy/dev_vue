@@ -2133,7 +2133,8 @@ export const __testEnsurePeriodReviewStrategyMemoryInjectionLog = ensurePeriodRe
 async function generateDailyReview(job, requestModel) {
   const evidence = parse(job.evidence_json, null)
   if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('daily_review_evidence_invalid')
-  const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review' })
+  const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review',
+    modelPurpose:'daily_review' })
   if (!resolved.model) throw new Error(resolved.error || 'daily_review_model_unavailable')
   const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const strategyMemoryForPrompt = sanitizeStrategyMemoryPrompt(strategyMemorySnapshot.library)
@@ -2347,7 +2348,8 @@ async function claimMonthlyReviewJob() {
 }
 
 async function generateMonthlyReviewChunk(job, requestModel, checkpoint, chunk) {
-  const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
+  const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review',
+    modelPurpose:'monthly_review' })
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
   const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const strategyMemoryForPrompt = sanitizeStrategyMemoryPrompt(strategyMemorySnapshot.library)
@@ -2458,7 +2460,8 @@ function verifiedMonthlyMergeEvidence(evidence, checkpointResult) {
 }
 
 async function generateMonthlyReviewMerge(job, requestModel, evidence, checkpointResult) {
-  const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
+  const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review',
+    modelPurpose:'monthly_review' })
   if (!resolved.model) throw new Error(resolved.error || 'monthly_review_model_unavailable')
   const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const strategyMemoryForPrompt = sanitizeStrategyMemoryPrompt(strategyMemorySnapshot.library)

@@ -572,7 +572,8 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     const sources = await queryAll(`SELECT sources.* FROM manual_trade_review_sources sources
       JOIN manual_trade_review_cases cases ON cases.id = sources.case_id
       WHERE sources.case_id = ? AND cases.user_id = ? ORDER BY sources.id`, [job.case_id, job.user_id])
-    const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review' })
+    const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review',
+      modelPurpose:'manual_trade_review' })
     if (!resolved.model) throw new Error(resolved.error || 'manual_trade_review_model_unavailable')
     const memorySnapshot = (await getStrategyMemoryLibraryForRuntime({ strategyId:job.strategy_id,
       userId:job.user_id, role:'admin' })).library
