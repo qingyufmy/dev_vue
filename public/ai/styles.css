@@ -11396,3 +11396,344 @@ body.account-center-open { overflow: hidden; }
 .strategy-editor-dialog :is(input,select,textarea,button,summary):focus-visible { outline:3px solid color-mix(in srgb,var(--gold-primary) 72%,white); outline-offset:2px; }
 #model-strategy .strategy-editor-dialog .strategy-capability-details > summary:focus-visible,
 #model-strategy .strategy-editor-dialog .strategy-technical-details > summary:focus-visible { outline:0; outline-offset:0; background:var(--gold-wash); color:var(--gold-light); }
+
+/* Manual order ticket: a compact, keyboard-friendly execution sequence. */
+.trading-manual-panel {
+  width: min(100%, 900px);
+  gap: 12px;
+  padding: 16px;
+  border-color: color-mix(in srgb, var(--gold-primary) 24%, var(--border-default));
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--bg-base));
+}
+
+.trade-ticket-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 2px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.trade-ticket-heading,
+.admin-strategy-dispatch-heading {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.trade-ticket-heading h2 {
+  color: var(--text-primary);
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.trade-ticket-heading p,
+.admin-strategy-dispatch-heading small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.trade-ticket-refresh {
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: 12px;
+  gap: 6px;
+}
+
+.trade-ticket-section {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-input-soft) 78%, var(--bg-card));
+}
+
+.trade-ticket-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.trade-ticket-section-head > div:first-child {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.trade-ticket-section-head > div:first-child > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.trade-ticket-step {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--gold-primary) 42%, var(--border-default));
+  border-radius: var(--radius-sm);
+  color: var(--gold-light);
+  background: var(--gold-wash);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.trade-ticket-section-head h3 {
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.trade-ticket-status,
+.trade-ticket-hint {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 28px;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.trade-ticket-status {
+  border-color: color-mix(in srgb, var(--color-negative) 32%, var(--border-subtle));
+  color: var(--color-negative);
+}
+
+.trade-ticket-section label {
+  min-width: 0;
+}
+
+.trade-ticket-section :is(input, select, textarea),
+.admin-strategy-dispatch-panel :is(input, select, textarea) {
+  min-height: 44px;
+}
+
+.trade-ticket-market .trading-quote-row {
+  margin: 0;
+}
+
+.trade-ticket-market .trading-quote-row > div {
+  min-height: 64px;
+  align-content: center;
+  padding: 10px 11px;
+  border-color: color-mix(in srgb, var(--border-default) 80%, var(--gold-primary));
+  background: color-mix(in srgb, var(--bg-input) 72%, var(--bg-card));
+}
+
+.trade-ticket-market .trading-quote-row > div:first-child strong {
+  color: var(--color-positive);
+}
+
+.trade-ticket-market .trading-quote-row > div:last-child strong {
+  color: var(--color-negative);
+}
+
+.trade-ticket-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(260px, .92fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.trade-ticket-order,
+.trade-ticket-risk {
+  align-content: start;
+}
+
+.trade-ticket-section .order-type-row {
+  margin: 0;
+}
+
+.trade-ticket-section .order-type-btns {
+  width: 100%;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-input) 80%, var(--bg-base));
+}
+
+.trade-ticket-section .order-type-btn {
+  min-width: 0;
+  min-height: 44px;
+  flex: 1 1 0;
+  padding-inline: 8px;
+}
+
+.trade-ticket-section .pending-fields {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--gold-primary) 24%, var(--border-default));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--gold-wash) 44%, var(--bg-input-soft));
+}
+
+.trade-ticket-section .pending-fields[style*="display:none"] {
+  display: none !important;
+}
+
+.trade-ticket-section .pending-fields .two-fields {
+  margin: 0;
+}
+
+.trade-ticket-section .pending-fields .field-help,
+.trade-ticket-section .trade-risk-fields .field-help {
+  line-height: 1.4;
+}
+
+.trade-risk-fields {
+  margin: 0;
+}
+
+.trade-ticket-risk-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.trade-ticket-risk-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--gold-primary);
+}
+
+.trade-ticket-actions {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--gold-primary) 34%, var(--border-default));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--gold-wash) 36%, var(--bg-card));
+}
+
+.trade-ticket-actions .trade-button-row {
+  margin: 0;
+}
+
+.trade-ticket-actions .trade-button-row .btn {
+  min-height: 68px;
+}
+
+.trade-ticket-actions .order-btn-price {
+  font-size: 11px;
+}
+
+.admin-strategy-dispatch-panel[hidden],
+.admin-strategy-dispatch-fields[hidden],
+.admin-strategy-dispatch-progress[hidden],
+.admin-strategy-dispatch-progress-actions button[hidden] {
+  display: none !important;
+}
+
+.admin-strategy-dispatch-panel {
+  margin: 0;
+  padding: 12px 14px;
+  border-color: color-mix(in srgb, var(--gold-primary) 30%, var(--border-default));
+  background: color-mix(in srgb, var(--gold-wash) 48%, var(--bg-input));
+}
+
+.admin-strategy-dispatch-head {
+  align-items: center;
+}
+
+.admin-strategy-dispatch-heading > strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.admin-strategy-dispatch-toggle {
+  min-height: 44px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 66%, transparent);
+  cursor: pointer;
+}
+
+.admin-strategy-dispatch-toggle:has(input:focus-visible) {
+  outline: 2px solid var(--gold-primary);
+  outline-offset: 2px;
+}
+
+.admin-strategy-dispatch-toggle > span {
+  display: grid;
+  gap: 2px;
+}
+
+.admin-strategy-dispatch-toggle > span strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.admin-strategy-dispatch-toggle > span small {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.admin-strategy-dispatch-fields {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, .55fr);
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.admin-strategy-dispatch-fields .admin-strategy-dispatch-reason-field {
+  grid-column: 1 / -1;
+}
+
+.admin-strategy-dispatch-fields textarea {
+  min-height: 56px !important;
+  max-height: 140px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.admin-strategy-dispatch-progress {
+  margin-top: 0;
+  padding: 12px 14px;
+  border-color: color-mix(in srgb, var(--color-info) 28%, var(--border-default));
+}
+
+.admin-strategy-dispatch-progress-head .btn,
+.admin-strategy-dispatch-progress-actions .btn {
+  min-height: 44px;
+}
+
+.trade-ticket-refresh:focus-visible,
+.trade-ticket-section :is(button, input, select, textarea):focus-visible,
+.admin-strategy-dispatch-panel :is(input, select, textarea, button):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--gold-primary) 82%, white);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trade-ticket-head *,
+  .trade-ticket-section *,
+  .admin-strategy-dispatch-panel *,
+  .admin-strategy-dispatch-progress * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

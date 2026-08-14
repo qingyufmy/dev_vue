@@ -381,11 +381,18 @@ function syncManualOrderPlatformCapabilities() {
   state.selectedOrderType = "market";
   document.querySelectorAll(".order-type-btn").forEach((button) => {
     button.classList.toggle("active", button.dataset.type === "market");
+    button.setAttribute("aria-pressed", String(button.dataset.type === "market"));
   });
   const pendingRow = $("pendingPriceRow");
   const stopLimitWrap = $("stopLimitPriceWrap");
-  if (pendingRow) pendingRow.style.display = "none";
-  if (stopLimitWrap) stopLimitWrap.style.display = "none";
+  if (pendingRow) {
+    pendingRow.style.display = "none";
+    pendingRow.setAttribute("aria-hidden", "true");
+  }
+  if (stopLimitWrap) {
+    stopLimitWrap.style.display = "none";
+    stopLimitWrap.setAttribute("aria-hidden", "true");
+  }
 }
 
 function updateBridgePlatformUI(value) {
@@ -4612,6 +4619,7 @@ function renderAdminStrategyDispatchStrategyOptions() {
 
 function syncAdminStrategyDispatchOrderType() {
   const active = adminStrategyDispatchModeEnabled();
+  const selectedType = state.selectedOrderType || "market";
   const buttons = document.querySelectorAll(".order-type-btn");
   buttons.forEach(button => {
     const type = String(button.dataset.type || "");
@@ -4626,13 +4634,25 @@ function syncAdminStrategyDispatchOrderType() {
       button.removeAttribute("aria-disabled");
       button.title = "";
     }
+    button.setAttribute("aria-pressed", String(button.dataset.type === (active ? "market" : selectedType)));
   });
   if (active) {
     state.selectedOrderType = "market";
     const marketButton = document.querySelector('.order-type-btn[data-type="market"]');
-    buttons.forEach(button => button.classList.toggle("active", button === marketButton));
-    $("pendingPriceRow")?.style && ($("pendingPriceRow").style.display = "none");
-    if ($("stopLimitPriceWrap")) $("stopLimitPriceWrap").style.display = "none";
+    buttons.forEach(button => {
+      button.classList.toggle("active", button === marketButton);
+      button.setAttribute("aria-pressed", String(button === marketButton));
+    });
+    const pendingRow = $("pendingPriceRow");
+    if (pendingRow) {
+      pendingRow.style.display = "none";
+      pendingRow.setAttribute("aria-hidden", "true");
+    }
+    const stopLimitWrap = $("stopLimitPriceWrap");
+    if (stopLimitWrap) {
+      stopLimitWrap.style.display = "none";
+      stopLimitWrap.setAttribute("aria-hidden", "true");
+    }
   }
   validatePendingPrice();
 }
@@ -4647,6 +4667,7 @@ function renderAdminStrategyDispatchControls() {
   if (!canUse) checkbox.checked = false;
   fields.hidden = !canUse || !checkbox.checked;
   checkbox.disabled = !canUse;
+  checkbox.setAttribute("aria-expanded", String(canUse && checkbox.checked));
   renderAdminStrategyDispatchStrategyOptions();
   syncAdminStrategyDispatchOrderType();
   renderAdminStrategyDispatchProgress();
@@ -4766,7 +4787,7 @@ function renderAdminStrategyDispatchProgress() {
   const retry = $("adminStrategyDispatchRetry");
   if (!panel || !summary || !targetsHost || !retry) return;
   const dispatch = state.adminStrategyDispatch;
-  if (!isAdminStrategyDispatchUser() || !dispatch) {
+  if (!isAdminStrategyDispatchUser() || !state.adminStrategyDispatchCapabilities?.enabled || !dispatch) {
     panel.hidden = true;
     summary.innerHTML = "";
     targetsHost.innerHTML = "";
@@ -12507,15 +12528,21 @@ function initOrderTypeSelector() {
     btn.addEventListener("click", () => {
       btns.forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
+      btns.forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
       const type = btn.dataset.type;
       state.selectedOrderType = type;
       const pendingRow = $("pendingPriceRow");
       const stopLimitWrap = $("stopLimitPriceWrap");
       if (type === "market") {
         pendingRow.style.display = "none";
+        pendingRow.setAttribute("aria-hidden", "true");
+        stopLimitWrap.style.display = "none";
+        stopLimitWrap.setAttribute("aria-hidden", "true");
       } else {
         pendingRow.style.display = "";
+        pendingRow.setAttribute("aria-hidden", "false");
         stopLimitWrap.style.display = type === "stop_limit" ? "" : "none";
+        stopLimitWrap.setAttribute("aria-hidden", String(type !== "stop_limit"));
       }
       validatePendingPrice();
     });

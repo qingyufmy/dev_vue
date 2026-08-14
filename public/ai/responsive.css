@@ -1989,3 +1989,153 @@
 @media (prefers-reduced-motion: reduce) {
   .strategy-editor-dialog *, .strategy-editor-dialog *::before, .strategy-editor-dialog *::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:0.01ms !important; }
 }
+
+/* Manual order ticket responsive layout. Keep the trading workspace tabs intact. */
+@media (max-width: 767px) {
+  .trading-manual-panel {
+    width: 100%;
+    max-width: 100%;
+    padding: 12px;
+    overflow-x: hidden;
+  }
+
+  .trade-ticket-head {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    padding-inline: 0;
+  }
+
+  .trade-ticket-refresh {
+    width: 100%;
+  }
+
+  .trade-ticket-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .trade-ticket-section {
+    padding: 12px;
+  }
+
+  .trade-ticket-section-head {
+    align-items: flex-start;
+  }
+
+  .trade-ticket-section-head > .trade-ticket-hint,
+  .trade-ticket-section-head > .trade-ticket-status {
+    margin-top: 1px;
+  }
+
+  .admin-strategy-dispatch-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-strategy-dispatch-toggle {
+    width: 100%;
+  }
+
+  .admin-strategy-dispatch-head > .status-chip {
+    align-self: flex-start;
+  }
+
+  .admin-strategy-dispatch-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-strategy-dispatch-fields .admin-strategy-dispatch-reason-field {
+    grid-column: auto;
+  }
+
+  .trade-ticket-section .order-type-btns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trade-ticket-section .order-type-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .trade-ticket-section-head {
+    gap: 7px;
+  }
+
+  .trade-ticket-step {
+    width: 26px;
+    height: 26px;
+    flex-basis: 26px;
+  }
+
+  .trade-ticket-status,
+  .trade-ticket-hint {
+    padding-inline: 6px;
+    font-size: 9px;
+  }
+
+  .trade-ticket-market .trading-quote-row {
+    grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .trade-ticket-market .trading-quote-row > div {
+    padding-inline: 7px;
+  }
+
+  .trade-ticket-market .trading-quote-row strong {
+    font-size: clamp(13px, 4.6vw, 18px);
+  }
+
+  .trade-ticket-risk .trade-risk-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 375px) {
+  .trading-manual-panel {
+    padding: 10px;
+  }
+
+  .trade-ticket-section,
+  .trade-ticket-actions,
+  .admin-strategy-dispatch-panel,
+  .admin-strategy-dispatch-progress {
+    padding: 10px;
+  }
+
+  .trade-ticket-heading h2 {
+    font-size: 18px;
+  }
+
+  .trade-ticket-heading p,
+  .trade-ticket-risk-note,
+  .field-help {
+    font-size: 10px;
+  }
+
+  .trade-ticket-section .pending-fields {
+    padding: 8px;
+  }
+
+  .trade-ticket-actions .trade-button-row {
+    gap: 8px;
+  }
+
+  .trade-ticket-actions .trade-button-row .btn {
+    min-height: 62px;
+    padding-inline: 7px;
+  }
+}
+
+@media (max-width: 767px) and (orientation: landscape) {
+  .trade-ticket-head {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .trade-ticket-refresh {
+    width: auto;
+  }
+}
