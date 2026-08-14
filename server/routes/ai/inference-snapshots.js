@@ -5,11 +5,17 @@ import { stripBrokerSuffix, CHAN_ALGORITHM_VERSION } from './utils.js'
 import { getChanWindowPolicy, CHAN_WINDOW_POLICY_VERSION } from './chan-window-policy.js'
 
 export const MAX_INFERENCE_SNAPSHOT_BYTES = 512 * 1024
+export const CHAN_MODEL_PAYLOAD_VERSION = 'chan_model_payload_v1'
 const SECRET_KEY = /(api[_-]?key|authorization|credential|password|secret|token)/i
 const ACCOUNT_PRIVATE_KEY = new Set([
   'account', 'balance', 'equity', 'credit', 'margin', 'free_margin', 'margin_level',
   'positions', 'pending_orders', 'profit', 'total_profit', 'risk_level', 'personal_risk',
 ])
+
+function isExplicitlyEnabled(value) {
+  return value === true || value === 1 || value === '1'
+    || String(value ?? '').trim().toLowerCase() === 'true'
+}
 const COMPRESSED_JSON_PREFIX = 'gzip-base64:'
 const SNAPSHOT_COMPRESSION_MIN_BYTES = 4096
 export const INFERENCE_EVIDENCE_TIMEFRAMES = Object.freeze([
@@ -503,8 +509,13 @@ function fitKlinesToSnapshotBudget(stored, maxBytes, minimumBars = 50) {
 }
 
 export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHOT_BYTES) {
+  const chanModelPayloadVersion = input.strategyRuntime?.chan_model_payload_version
+    || (isExplicitlyEnabled(input.strategyRuntime?.use_chan_analysis) ? CHAN_MODEL_PAYLOAD_VERSION : null)
   const strategyRuntime = input.strategyRuntime ? {
     ...input.strategyRuntime,
+    ...(chanModelPayloadVersion
+      ? { chan_model_payload_version:chanModelPayloadVersion }
+      : {}),
     runtime_config_hash:input.strategyRuntime.runtime_config_hash || sha256(JSON.stringify({
       strategy_id:input.strategyRuntime.strategy_id || null,
       strategy_version:input.strategyRuntime.strategy_version || null,
@@ -514,6 +525,7 @@ export function prepareInferenceSnapshot(input, maxBytes = MAX_INFERENCE_SNAPSHO
       use_chan_analysis:input.strategyRuntime.use_chan_analysis,
       chan_timeframes:input.strategyRuntime.chan_timeframes || [],
       window_policy_version:input.strategyRuntime.window_policy_version || null,
+      chan_model_payload_version:chanModelPayloadVersion,
       schema_version:input.strategyRuntime.schema_version || null,
       mode:input.strategyRuntime.mode || null,
       policy_hash:input.strategyRuntime.policy_hash || null,

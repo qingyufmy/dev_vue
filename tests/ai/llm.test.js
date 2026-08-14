@@ -51,10 +51,10 @@ describe('model usage phase accounting contract', () => {
     expect(source).not.toContain('legacyPendingReason')
   })
 
-  it('keeps Chan diagnostics as data-dictionary fields and legacy stale fields non-current', () => {
-    expect(source).toContain('confirmed_structure_age_bars 是距最近确认线段终点的 K 线根数诊断值')
-    expect(source).toContain('confirmed_structure_stale 仅是旧版历史快照的兼容字段')
-    expect(source).toContain('缠论数据字典')
+  it('keeps legacy narrative localization without injecting Chan diagnostics into new prompts', () => {
+    expect(source).toContain('INFERENCE_NARRATIVE_REPLACEMENTS')
+    expect(source).not.toContain('CHAN_DIVERGENCE_RULE')
+    expect(source).toContain('CHAN_MODEL_RULE')
     expect(source).not.toContain('按当前具体策略的周期职责分析各周期原始结构')
   })
 })
@@ -94,7 +94,7 @@ describe('compact inference market payload', () => {
     expect(compacted.strategy_context.input_encoding.kline_fields).toEqual(INFERENCE_KLINE_FIELDS)
   })
 
-  it('replaces only exact repeated Chan objects with resolvable references', () => {
+  it('does not rewrite Chan structure objects into references', () => {
     const center = {
       status:'active', lower:3900, upper:4000,
       start_time:'2026-07-20 00:00:00', end_time:'2026-07-24 00:00:00',
@@ -108,9 +108,17 @@ describe('compact inference market payload', () => {
     const compacted = compactInferenceMarketPayload(payload)
     const chan = compacted.strategy_context.timeframes.H1.summary.chan
     expect(chan.current_center).toEqual(center)
-    expect(chan.latest_center).toEqual({ $ref:'#/strategy_context/timeframes/H1/summary/chan/current_center' })
+    expect(chan.latest_center).toEqual(center)
     expect(chan.active_center.status).toBe('broken_up')
-    expect(compacted.strategy_context.input_encoding.object_refs).toContain('JSON Pointer')
+    expect(compacted.strategy_context.input_encoding).toBeUndefined()
+  })
+
+  it('retains old Chan references as read-only input without creating new ones', () => {
+    const payload = { strategy_context:{ timeframes:{ H1:{ klines:[], summary:{ chan:{
+      current_center:{ $ref:'#/legacy/current_center' },
+    } } } } } }
+    expect(compactInferenceMarketPayload(payload).strategy_context.timeframes.H1.summary.chan)
+      .toEqual({ current_center:{ $ref:'#/legacy/current_center' } })
   })
 
   it('does not compact custom K-line objects with unknown fields', () => {
@@ -132,6 +140,11 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema.stop_loss_price).toContain('当前策略正文')
     expect(schema.stop_loss_price).not.toMatch(/周期角色|关键结构|波动证据/)
     expect(schema.position_action).toContain('表达当前策略')
+  })
+
+  it('describes confidence as conclusion certainty rather than a win-rate estimate', () => {
+    const schema = JSON.parse(buildStrategyOutputFormat(null, ['market']).outputFormat)
+    expect(schema.confidence).toBe('0.00-1.00 的数字，表示模型对依据当前策略和输入事实所得本轮结论的把握度；signal_type=hold 时表示对当前不满足策略交易条件这一结论的把握度；不是胜率，不得写成百分比')
   })
 
   it('does not encode generic analysis doctrine in the output contract', () => {
@@ -1508,6 +1521,60 @@ describe('maybeAiSignal', () => {
     })
   })
 
+  it('历史重放即使用户提示词为空也完全旁路新 Chan 投影和紧凑编码', async () => {
+    vi.clearAllMocks()
+    mockFetch.mockResolvedValue({
+      ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify({
+        signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+        analysis:'等待确认', reasoning:'冻结输入',
+      }) } }] }),
+    })
+    let evidence
+    const market = {
+      symbol:'XAUUSD', timeframe:'M5', latest_price:2000,
+      strategy_context:{ timeframes:{ M5:{ klines:[{ time:'legacy', open:1, high:2, low:0, close:1 }], summary:{ chan:{
+        current_segment:{ id:1 }, status:'partial', trend_state:'up', evidence_capabilities:{ entry_structure_usable:false },
+      } } } } },
+    }
+    await maybeAiSignal(null, {
+      api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      _comparison_replay_system_prompt:'stored system prompt',
+      _comparison_replay_user_prompt:'', _use_chan_analysis:true,
+      _onInferencePrepared:value => { evidence = value },
+    }, market)
+
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).messages).toEqual([
+      { role:'system', content:'stored system prompt' },
+      { role:'user', content:'' },
+    ])
+    expect(evidence.aiPayload.strategy_context.timeframes.M5.summary.chan).toMatchObject({
+      current_segment:{ id:1 }, status:'partial', trend_state:'up',
+    })
+    expect(evidence.aiPayload.strategy_context.timeframes.M5.klines[0]).toEqual({
+      time:'legacy', open:1, high:2, low:0, close:1,
+    })
+    expect(evidence.aiPayload.strategy_context).not.toHaveProperty('input_encoding')
+  })
+
+  it('拒绝新鲜 Chan 输入中的 JSON Pointer 且不调用 provider', async () => {
+    vi.clearAllMocks()
+    let evidence
+    const result = await maybeAiSignal(null, {
+      api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      _use_chan_analysis:true, _onInferencePrepared:value => { evidence = value },
+    }, {
+      symbol:'XAUUSD', timeframe:'M5', latest_price:2000,
+      strategy_context:{ timeframes:{ M5:{ summary:{ chan:{
+        current_segment:{ nested:{ $ref:'#/legacy/current_segment' } },
+      } } } } },
+    })
+    expect(result.reasoning).toContain('chan_model_payload_reference_forbidden')
+    expect(result._inference_source).toBe('ai_error_hold')
+    expect(evidence).toBeUndefined()
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
   it('共享推理只渲染市场白名单并回传可复现提示词证据', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -1731,9 +1798,10 @@ describe('maybeAiSignal', () => {
     await maybeAiSignal(null, config, market)
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(body.messages[0].content).not.toContain('{{USE_CHAN}}')
-    expect(body.messages[0].content).toContain('缠论数据字典')
-    expect(body.messages[0].content).toContain('forming_divergence')
-    expect(body.messages[0].content).toContain('entry_candidates')
+    expect(body.messages[0].content).toContain('strategy_context.timeframes 各周期 summary.chan 为系统计算的缠论结构，请仅按当前策略正文自行分析。')
+    expect(body.messages[0].content).not.toContain('缠论数据字典')
+    expect(body.messages[0].content).not.toContain('forming_divergence')
+    expect(body.messages[0].content).not.toContain('entry_candidates')
     expect(body.messages[0].content).not.toContain('周期职责')
     expect(body.messages[0].content).not.toContain('证据权重')
     expect(body.messages[0].content).not.toContain('观望条件')
@@ -1741,10 +1809,12 @@ describe('maybeAiSignal', () => {
     expect(body.messages[0].content).not.toContain('alignment_with_higher')
     expect(body.messages[0].content).not.toContain('agreement=mixed')
     expect(body.messages[0].content).not.toContain('alignment_with_higher=conflict')
-    expect(body.messages[0].content).toContain('bi_center_count')
-    expect(body.messages[0].content).toContain('segment_history_unresolved')
-    expect(body.messages[0].content).toContain('structure_topology_reliable')
-    expect(body.messages[0].content).toContain('time_location_reliable')
+    expect(body.messages[0].content).not.toContain('bi_center_count')
+    expect(body.messages[0].content).not.toContain('segment_history_unresolved')
+    expect(body.messages[0].content).not.toContain('structure_topology_reliable')
+    expect(body.messages[0].content).not.toContain('time_location_reliable')
+    expect(body.messages[0].content).not.toContain('JSON Pointer')
+    expect(body.messages[0].content).not.toContain('$ref')
   })
 
   it('结构化开关启用时payload保留chan', async () => {
@@ -1757,15 +1827,25 @@ describe('maybeAiSignal', () => {
       temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场', _use_chan_analysis: true
     }
     const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100, atr_anchor: 15, atr_anchor_tf: 'H1',
-      strategy_context: { visualization_klines: { M5: [{ time: 'internal-only' }] }, timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
+      strategy_context: { visualization_klines: { M5: [{ time: 'internal-only' }] }, timeframes: { M5: { klines:[{ time:'2026-01-01 00:00:00', time_utc_msc:1, time_server_msc:2, captured_at_utc_msc:3, open:1, high:2, low:0.5, close:1.5, tick_volume:10, spread:1 }], summary: { chan: {
+        current_segment: { id:1, confirmed:true }, status:'ok', trend_state:'up', evidence_capabilities:{ entry_structure_usable:true },
+      } } } } }
     }
+    const originalChan = structuredClone(market.strategy_context.timeframes.M5.summary.chan)
     await maybeAiSignal(null, config, market)
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeDefined()
+    expect(userPayload.strategy_context.timeframes.M5.summary.chan).toEqual({ current_segment:{ id:1, confirmed:true } })
+    expect(userPayload.strategy_context.timeframes.M5.summary.chan).not.toHaveProperty('status')
+    expect(userPayload.strategy_context.timeframes.M5.summary.chan).not.toHaveProperty('trend_state')
+    expect(userPayload.strategy_context.timeframes.M5.summary.chan).not.toHaveProperty('evidence_capabilities')
     expect(userPayload.strategy_context).not.toHaveProperty('visualization_klines')
     expect(userPayload).not.toHaveProperty('atr_anchor')
     expect(userPayload).not.toHaveProperty('atr_anchor_tf')
+    expect(body.messages[0].content).not.toContain('JSON Pointer')
+    expect(body.messages[0].content).not.toContain('$ref')
+    expect(market.strategy_context.timeframes.M5.summary.chan).toEqual(originalChan)
   })
 
   it('手动覆盖提示词决定模型指令并保留缠论数据', async () => {

@@ -11,6 +11,7 @@ import {
   persistInferenceSnapshotTx,
   sanitizeInferenceEvidence,
   resolveFrozenChanRequirement,
+  CHAN_MODEL_PAYLOAD_VERSION,
 } from '../../server/routes/ai/inference-snapshots.js'
 
 describe('shared market inference boundary', () => {
@@ -53,6 +54,24 @@ describe('shared market inference boundary', () => {
     expect(frozen.marketSnapshot.strategy_context.indicators).toEqual(indicators)
     expect(frozen.strategyRuntime).toMatchObject({ data_runtime_version:'strategy-data-runtime-v1',
       policy_hash:'b'.repeat(64), indicators })
+  })
+
+  it('records the fresh Chan model payload contract only in the internal runtime audit', () => {
+    const marketSnapshot = { strategy_context:{ timeframes:{ H1:{ summary:{ chan:{
+      current_segment:{ id:1 }, status:'partial', evidence_capabilities:{ entry_structure_usable:false },
+    } } } } } }
+    const result = prepareInferenceSnapshot({ marketSnapshot, strategyRuntime:{
+      strategy_id:7, strategy_version:3, use_chan_analysis:true, chan_timeframes:['H1'],
+    } })
+    expect(result.strategyRuntime.chan_model_payload_version).toBe(CHAN_MODEL_PAYLOAD_VERSION)
+    expect(result.marketSnapshot.strategy_context.timeframes.H1.summary.chan).toMatchObject({
+      current_segment:{ id:1 }, status:'partial', evidence_capabilities:{ entry_structure_usable:false },
+    })
+    expect(result.strategyRuntime.chan_model_payload_version).not.toBeUndefined()
+    const disabled = prepareInferenceSnapshot({ strategyRuntime:{ use_chan_analysis:false } })
+    expect(disabled.strategyRuntime).not.toHaveProperty('chan_model_payload_version')
+    const stringDisabled = prepareInferenceSnapshot({ strategyRuntime:{ use_chan_analysis:'false' } })
+    expect(stringDisabled.strategyRuntime).not.toHaveProperty('chan_model_payload_version')
   })
 
   it('does not expose server judgment scores or undeclared ATR anchors to the model snapshot', () => {

@@ -17,6 +17,7 @@ import { resolveModelProviderCapabilities } from './model-provider-capabilities.
 import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
 import { acquireModelTaskCapacity, retainModelTaskCapacityLease, releaseModelTaskCapacityLease } from './model-task-capacity.js'
 import { normalizeExperienceAttribution, normalizeExperienceRefs } from './experience-attribution.js'
+import { projectStrategyContextChanForModel } from './chan-model-payload.js'
 
 // Production must never emit prompts, market context, or model payloads even if
 // a stale environment flag survives a deployment.
@@ -39,28 +40,7 @@ export const INFERENCE_KLINE_FIELDS = Object.freeze([
   'spread',
 ])
 const COMPACT_MARKET_INPUT_RULE = `## 市场数据紧凑编码
-strategy_context.input_encoding 说明模型输入的无损编码。各周期 klines 中每个数组元素严格依次对应 kline_fields；字段包括原始时间、UTC 毫秒时间、交易服务器毫秒时间、采集 UTC 毫秒时间、开高低收、Tick 成交量和点差，null 表示该原始字段未提供，数组元素数量就是 K 线根数。对象 {"$ref":"#/..."} 是 JSON Pointer，表示与所指对象完全相同；分析时必须按原对象展开理解，不得视为数据缺失。`
-
-function jsonPointerToken(value) {
-  return String(value).replace(/~/g, '~0').replace(/\//g, '~1')
-}
-
-function dedupeChanObjects(value, path, seen, state) {
-  if (Array.isArray(value)) {
-    return value.map((item, index) => dedupeChanObjects(item, `${path}/${index}`, seen, state))
-  }
-  if (!value || typeof value !== 'object') return value
-  const signature = JSON.stringify(value)
-  if (signature.length >= 120 && seen.has(signature)) {
-    state.references++
-    return { $ref:seen.get(signature) }
-  }
-  if (signature.length >= 120) seen.set(signature, path)
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
-    key,
-    dedupeChanObjects(item, `${path}/${jsonPointerToken(key)}`, seen, state),
-  ]))
-}
+strategy_context.input_encoding 说明模型输入的无损编码。各周期 klines 中每个数组元素严格依次对应 kline_fields；字段包括原始时间、UTC 毫秒时间、交易服务器毫秒时间、采集 UTC 毫秒时间、开高低收、Tick 成交量和点差，null 表示该原始字段未提供，数组元素数量就是 K 线根数。`
 
 /**
  * Losslessly compact only the model-bound copy of market data. Stored market
@@ -70,7 +50,7 @@ export function compactInferenceMarketPayload(payload) {
   const compacted = structuredClone(payload || {})
   const timeframes = compacted?.strategy_context?.timeframes
   if (!timeframes || typeof timeframes !== 'object') return compacted
-  const state = { klineFrames:0, references:0 }
+  const state = { klineFrames:0 }
   const knownFields = new Set(INFERENCE_KLINE_FIELDS)
   for (const [timeframe, frame] of Object.entries(timeframes)) {
     const bars = frame?.klines
@@ -81,16 +61,11 @@ export function compactInferenceMarketPayload(payload) {
       frame.klines = bars.map(bar => INFERENCE_KLINE_FIELDS.map(field => bar[field] ?? null))
       state.klineFrames++
     }
-    if (frame?.summary?.chan && typeof frame.summary.chan === 'object') {
-      const path = `#/strategy_context/timeframes/${jsonPointerToken(timeframe)}/summary/chan`
-      frame.summary.chan = dedupeChanObjects(frame.summary.chan, path, new Map(), state)
-    }
   }
-  if (state.klineFrames || state.references) {
+  if (state.klineFrames) {
     compacted.strategy_context.input_encoding = {
       version:'compact-v1',
       ...(state.klineFrames ? { kline_fields:[...INFERENCE_KLINE_FIELDS] } : {}),
-      ...(state.references ? { object_refs:'JSON Pointer; exact duplicate object' } : {}),
     }
   }
   return compacted
@@ -132,22 +107,11 @@ const PENDING_LIFECYCLE_RULE = `
 ## 挂单生命周期硬性规则
 挂单有效期由服务端按 UTC 事实提供。禁止比较任何时间字符串来判断挂单是否过期；同样禁止比较 timestamp、MT5 墙钟字符串或叙述来判断过期。只能使用服务端明确给出的 is_expired，必要时仅把 valid_until_utc_msc/valid_until_utc 作为事实展示；is_expired=false 或 unknown 都不得按过期取消。禁止在 analysis 或 reasoning 中声称未过期挂单已过期、超时失效或已自动取消；禁止仅以时间、有效期或过期为理由输出 pending_action=cancel。是否存在挂单只能依据 pending_orders 当前数组；数组中不存在时只能表述“当前输入未包含该挂单”，不得推断其已过期或已取消。非过期取消必须说明价格、结构、方向或风险方面的依据。`
 
-const CHAN_DIVERGENCE_RULE = `
-## 缠论数据字典
-以下内容只解释输入字段和数据状态，不替代当前策略正文。
-chan.status、usable、confirmed、unresolved 表示缠论数据的总体可用性和确认状态；它们是数据状态，不是交易结论。
-chan.structure_topology_reliable 与 chan.absolute_time_location_reliable 分别表示结构拓扑和绝对时间定位的可靠性，二者含义独立。旧字段 time_location_reliable 与 absolute_time_location_reliable 同义。segment_count、center_count、bi_center_count 等字段是对应结构的计数或只读摘要；候选结构和确认结构应按字段自身状态区分。
-evidence_capabilities.history_complete、continuity_complete、topology_input_complete、absolute_time_location_reliable、segment_direction_usable、center_structure_usable、entry_structure_usable、divergence_usable 表示各层数据能力是否可供读取；能力字段彼此独立，不表示方向、胜率或执行资格。尤其是 entry_structure_usable=false 或 divergence_usable=false 时，不得据此否定 segment_direction_usable=true 的已确认线段方向。
-chan.divergence、chan.forming_divergence、chan.recent_divergences 和 chan.entry_candidates 分别表示确认结果、候选结果、历史结果和候选列表；type、state、confirmed、usable_for_entry、evidence_refs 等字段保留其原始枚举和引用关系。
-chan.trend_state、upward_breakout_pending、downward_breakout_pending、structure_anchor_bootstrap_pending、segment_history_unresolved、center_cross_window_unstable、center_entry_unconfirmed、divergence_evidence_unavailable 等字段只描述当前数据状态或诊断状态。
-confirmed_structure_age_bars 是距最近确认线段终点的 K 线根数诊断值；confirmed_structure_stale 仅是旧版历史快照的兼容字段，不代表当前引擎状态。
-时间字段、价格区间、area_ratio、peak_ratio、warnings 和数据源字段均按输入原样解释；不得把缺少某项数据改写为另一周期或另一指标的替代数据。所有缠论对象都是行情证据，策略正文决定如何使用它们。
-`
+const CHAN_MODEL_RULE = 'strategy_context.timeframes 各周期 summary.chan 为系统计算的缠论结构，请仅按当前策略正文自行分析。'
 
 const USER_VISIBLE_CHINESE_RULE = `
 ## 用户可见语言规则
-所有用户可见文本必须使用简体中文，包括一句话结论、触发条件、失效条件、关键依据、风险因素、行情分析、分析依据、经验影响和取消原因。禁止输出内部错误码、英文状态值或整句英文。品种代码、周期、价格以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。
-不得写 reliability=low、unreliable_segments、segment_history_unresolved、partial 等内部字段或枚举，也不得用“系统内部状态”代替解释。必须直接说明用户能理解的中文含义，例如：unreliable_segments 写成“线段结构尚不可靠”；segment_history_unresolved 写成“固定验证窗口尚未收敛，暂不确认线段”；reliability=low 写成“结构可靠性较低”。当某项结构数据不可用时，应说明对应数据缺失或可靠性限制及其影响，不得替换为未请求的周期或指标。`
+所有用户可见文本必须使用简体中文，包括一句话结论、触发条件、失效条件、关键依据、风险因素、行情分析、分析依据、经验影响和取消原因。禁止输出内部错误码、英文状态值或整句英文。品种代码、周期、价格以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。`
 
 const INFERENCE_NARRATIVE_REPLACEMENTS = [
   [/\bstructure_topology_reliable\s*=\s*true\b/gi, '线段与中枢结构拓扑已确认'],
@@ -229,7 +193,7 @@ function localizeAiSignalUserVisibleFields(signal) {
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价订单；buy_limit/sell_limit=限价订单；buy_stop/sell_stop=止损订单；buy_stop_limit/sell_stop_limit=止损限价订单；hold=observe",
   entry_method: "必须字段。仅允许 market | limit | stop | stop_limit | observe，并且必须与signal_type一致：buy/sell=market，*_limit=limit，*_stop=stop，*_stop_limit=stop_limit，hold=observe",
-  confidence: "0.00-1.00 的数字，表示模型依据当前策略和输入事实给出的置信度；不得写成百分比或其他类型",
+  confidence: "0.00-1.00 的数字，表示模型对依据当前策略和输入事实所得本轮结论的把握度；signal_type=hold 时表示对当前不满足策略交易条件这一结论的把握度；不是胜率，不得写成百分比",
   bullish_score: "可选数字，表示输入行情的多方倾向；不代表胜率或执行概率",
   bearish_score: "可选数字，表示输入行情的空方倾向；不代表胜率或执行概率",
   position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
@@ -1237,11 +1201,13 @@ position_management_context 是服务端提供的去身份化实时事实。每�
       : ''
     const fullPrompt = prompt + marketOnlyRule + privatePortfolioRule + positionManagementRule + strategyMemoryRule + declaredIndicatorRule + `\n\n${USER_VISIBLE_CHINESE_RULE}` + '\n\n## 输出格式\n你必须返回以下 JSON 结构：\n' + outputFormat + (positionManagementEnabled ? '' : pendingRule)
 
+    const isComparisonReplay = typeof config._comparison_replay_user_prompt === 'string'
+
     // Check if prompt wants Chan theory data
     const useChan = config._use_chan_analysis === undefined
       ? /\{\{USE_CHAN\}\}/.test(effectivePrompt)
       : Boolean(config._use_chan_analysis)
-    const promptWithChanRules = useChan ? `${fullPrompt}\n\n${CHAN_DIVERGENCE_RULE}` : fullPrompt
+    const promptWithChanRules = useChan ? `${fullPrompt}\n\n${CHAN_MODEL_RULE}` : fullPrompt
     const replaySystemPrompt = typeof config._comparison_replay_system_prompt === 'string'
       ? config._comparison_replay_system_prompt.trim()
       : ''
@@ -1261,14 +1227,19 @@ position_management_context 是服务端提供的去身份化实时事实。每�
       atr_anchor_tf: market.atr_anchor_tf,
     }
     if (market.strategy_context) {
-      const ctx = { ...market.strategy_context }
+      // Snapshot replays use the frozen prompt verbatim. Keep their payload
+      // preparation on the legacy read-only path and never apply the fresh
+      // model Chan projection to a historical input.
+      const ctx = isComparisonReplay || !useChan
+        ? structuredClone(market.strategy_context)
+        : projectStrategyContextChanForModel(market.strategy_context)
       // strategy_score and ATR anchors remain internal market/risk evidence;
       // they are not part of the generic model input contract. Remove them
       // from the cloned model-bound context without mutating the live market.
       delete aiPayload.strategy_score
       delete aiPayload.atr_anchor
       delete aiPayload.atr_anchor_tf
-      if (ctx.timeframes && typeof ctx.timeframes === 'object') {
+      if (!isComparisonReplay && ctx.timeframes && typeof ctx.timeframes === 'object') {
         ctx.timeframes = Object.fromEntries(Object.entries(ctx.timeframes).map(([timeframe, frame]) => [
           timeframe,
           frame && typeof frame === 'object'
@@ -1283,10 +1254,10 @@ position_management_context 是服务端提供的去身份化实时事实。每�
       // the model still receives the strategy-configured visible K-line window.
       delete ctx.visualization_klines
       // Strip Chan data when the strategy capability is disabled.
-      if (!useChan && ctx.timeframes) {
+      if (!isComparisonReplay && !useChan && ctx.timeframes) {
         let stripped = 0
         for (const tf of Object.keys(ctx.timeframes)) {
-          if (ctx.timeframes[tf]?.summary?.chan) {
+          if (ctx.timeframes[tf]?.summary && Object.prototype.hasOwnProperty.call(ctx.timeframes[tf].summary, 'chan')) {
             const s = { ...ctx.timeframes[tf].summary }
             delete s.chan
             ctx.timeframes[tf] = { ...ctx.timeframes[tf], summary: s }
@@ -1318,7 +1289,7 @@ position_management_context 是服务端提供的去身份化实时事实。每�
         content_text:strategyMemoryLibrary,
       }
     }
-    if (!config._comparison_replay_user_prompt) {
+    if (!isComparisonReplay) {
       aiPayload = compactInferenceMarketPayload(aiPayload)
       if (aiPayload?.strategy_context?.input_encoding) cleanPrompt = `${cleanPrompt}\n\n${COMPACT_MARKET_INPUT_RULE}`
     }
