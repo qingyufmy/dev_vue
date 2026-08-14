@@ -54,6 +54,19 @@ describe('admin strategy trade contract', () => {
     }
   })
 
+  it('normalizes an optional reason while retaining non-empty length limits', () => {
+    const base = {
+      strategy_id: 7, trading_account_id: 9, symbol: 'EURUSD', direction: 'buy',
+      take_profit: 1.12, stop_loss: 1.08, volume: 0.1, valid_minutes: 5,
+    }
+    for (const reason of [undefined, null, '', '   ']) {
+      expect(normalizeAdminStrategyTradeInput({ ...base, reason }).reason).toBe('')
+    }
+    expect(normalizeAdminStrategyTradeInput({ ...base, reason: '  ok  ' }).reason).toBe('ok')
+    expect(() => normalizeAdminStrategyTradeInput({ ...base, reason: 'x' })).toThrow('reason_invalid')
+    expect(() => normalizeAdminStrategyTradeInput({ ...base, reason: 'x'.repeat(501) })).toThrow('reason_invalid')
+  })
+
   it('fails closed for invalid target identity and keeps source exclusion deterministic', () => {
     expect(__adminStrategyTradeTest.symbolMatches('EURUSD.s', ['EURUSD'])).toBe(true)
     expect(__adminStrategyTradeTest.sourceEligibility({

@@ -1125,7 +1125,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(stylesheetVersion).toBeTruthy()
     expect(appVersion).toMatch(/^[0-9a-z._-]+$/i)
     expect(appVersion).toBe(stylesheetVersion)
-    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1')
+    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1')
   })
 
   it('keeps admin dispatch volume explicit without changing ordinary AI tier display', () => {
@@ -1134,8 +1134,13 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).not.toContain('position_size_tier:String($("adminStrategyDispatchTier")')
     expect(app).not.toContain('source_volume')
     expect(app).not.toContain('volumeInput.disabled = true')
+    expect(app).toContain('if (reason && reason.length < 2)')
+    expect(app).toContain('order.meta.reason || "未填写"')
     expect(html).not.toContain('id="adminStrategyDispatchTier"')
     expect(html).not.toContain('id="tradeVolumeDispatchHelp"')
+    expect(html).toContain('中文原因（选填）')
+    expect(html).toContain('选填；填写时 2–500 字')
+    expect(html).not.toContain('id="adminStrategyDispatchReason" rows="2" maxlength="500" required')
     expect(html).toContain('AI 仓位档位')
     expect(html).toContain('admin-dispatch-volume1')
     const stylesheetQuery = html.match(/styles\.css\?v=[^\"]+/)?.[0] || ''

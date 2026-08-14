@@ -4872,7 +4872,7 @@ function buildAdminStrategyDispatchPreview(direction) {
   if (takeProfit == null) throw new Error("策略分发至少填写一个止盈价格");
   if (!Number.isFinite(volume) || volume <= 0) throw new Error("交易手数必须是大于 0 的有效数字");
   if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes > 1440) throw new Error("有效期必须是 1 至 1440 分钟");
-  if (!reason || reason.length < 2) throw new Error("请填写至少 2 个字的中文原因");
+  if (reason && reason.length < 2) throw new Error("中文原因填写后至少需要 2 个字");
   const quote = state.lastQuote;
   if (!quote || String(quote.symbol || "").toUpperCase() !== symbol || !Number.isFinite(Number(quote.bid)) || !Number.isFinite(Number(quote.ask))) throw new Error("当前品种报价未就绪，请先刷新报价");
   const clientRequestId = strategyDispatchClientRequestId();
@@ -4897,7 +4897,7 @@ function renderAdminStrategyDispatchPreview(order, data) {
   const excluded = preview?.excluded || preview?.excluded_targets || preview?.exclusions || [];
   const excludedRows = Array.isArray(excluded) ? excluded : [];
   const reasons = excludedRows.slice(0, 8).map(item => `<li>${escapeHtml(item?.user_label || item?.user_name || (item?.user_id ? `用户 #${item.user_id}` : "订阅目标"))}：${escapeHtml(adminStrategyDispatchTargetReason(item) || "未满足执行条件")}</li>`).join("");
-  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(priceDisplay(order.meta.stopLoss))} / ${escapeHtml(priceDisplay(order.meta.takeProfit))}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div>${reasons ? `<div class="admin-strategy-dispatch-exclusion"><span>排除原因</span><ul>${reasons}</ul></div>` : ""}<div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason)}</strong></div>`;
+  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(priceDisplay(order.meta.stopLoss))} / ${escapeHtml(priceDisplay(order.meta.takeProfit))}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div>${reasons ? `<div class="admin-strategy-dispatch-exclusion"><span>排除原因</span><ul>${reasons}</ul></div>` : ""}<div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason || "未填写")}</strong></div>`;
   $("adminStrategyDispatchModal")?.classList.remove("hidden");
   document.body.classList.add("modal-open");
   initIcons();

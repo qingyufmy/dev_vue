@@ -41,8 +41,15 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(app).not.toContain('source_volume')
     expect(app).toContain('stopLoss == null')
     expect(app).toContain('takeProfit == null')
+    expect(app).toContain('if (reason && reason.length < 2)')
+    expect(app).toContain('order.meta.reason || "未填写"')
+    expect(app).toContain('reason, client_request_id')
     expect(html).toContain('id="adminStrategyDispatchReason"')
     expect(html).toContain('maxlength="500"')
+    expect(html).toContain('中文原因（选填）')
+    expect(html).toContain('可填写本次分发指令的中文原因')
+    expect(html).toContain('选填；填写时 2–500 字')
+    expect(html).not.toContain('id="adminStrategyDispatchReason" rows="2" maxlength="500" required')
   })
 
   it('previews before creation, shows target outcomes, refreshes, and retries failed targets', () => {

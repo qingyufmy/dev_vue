@@ -80,8 +80,8 @@ export function normalizeAdminStrategyTradeInput(body = {}, headers = {}) {
     ? Date.now() + validMinutes * 60_000 : Number(validUntilRaw)
   if (!Number.isSafeInteger(validUntil) || validUntil <= Date.now()) throw fail('valid_until_invalid')
   if (validUntil > Date.now() + 7 * 24 * 3600_000) throw fail('valid_until_too_far')
-  const reason = String(body.reason || '').trim()
-  if (reason.length < 2 || reason.length > 500) throw fail('reason_invalid')
+  const reason = String(body.reason ?? '').trim()
+  if (reason && (reason.length < 2 || reason.length > 500)) throw fail('reason_invalid')
   const input = {
     strategy_id: strategyId,
     trading_account_id: accountId,
