@@ -63,10 +63,11 @@ describe('admin strategy trade worker fences', () => {
   it('sends a new dispatch fixed volume without legacy tier sizing fields', () => {
     const request = __adminStrategyTradeWorkerTest.targetRequest(
       { ...dispatch, requested_volume: '0.37', position_size_tier: 'probe' },
-      { trading_account_id: 9 },
+      { id: 1, trading_account_id: 9 },
       { position_size_factor: 0.25 },
     )
     expect(request.volume).toBe(0.37)
+    expect(request.client_request_id).toBe('admin-strategy-dispatch:5:target:1')
     expect(request).not.toHaveProperty('position_size_tier')
     expect(request).not.toHaveProperty('position_size_factor')
   })
@@ -77,7 +78,7 @@ describe('admin strategy trade worker fences', () => {
         ...dispatch, requested_volume: '0.37', position_size_tier: null,
         stop_loss: null, take_profit_1: null, take_profit_2: null, take_profit_3: null,
       },
-      { trading_account_id: 9 },
+      { id: 1, trading_account_id: 9 },
       { position_size_factor: 0.25 },
     )
     expect(request).toMatchObject({
@@ -92,7 +93,7 @@ describe('admin strategy trade worker fences', () => {
   it('keeps tier fallback only for legacy rows without requested_volume', () => {
     const request = __adminStrategyTradeWorkerTest.targetRequest(
       { ...dispatch, requested_volume: null },
-      { trading_account_id: 9 },
+      { id: 1, trading_account_id: 9 },
       { position_size_factor: 0.25 },
     )
     expect(request.volume).toBe(0)
@@ -156,18 +157,22 @@ describe('admin strategy trade worker fences', () => {
     expect(mockExecuteOrderCore.mock.calls[0][0]).toBe(1)
     expect(mockExecuteOrderCore.mock.calls[0][2]).toMatchObject({
       trading_account_id: 9, magic: 234000,
+      client_request_id: 'admin-strategy-dispatch:5:target:1',
     })
     expect(mockExecuteOrderCore.mock.calls[0][4]).toMatchObject({
       tradingAccountId: 9, sourceType: 'admin_strategy_source',
       sourceId: '77:dispatch:5:target:1', magic: 234000,
+      clientRequestId: 'admin-strategy-dispatch:5:target:1',
       beforeBridgeSend: expect.any(Function), beforeBridgeSendTx: expect.any(Function),
     })
     expect(mockExecuteOrderCore.mock.calls[1][2]).toMatchObject({
       trading_account_id: 10, magic: 234000,
+      client_request_id: 'admin-strategy-dispatch:5:target:2',
     })
     expect(mockExecuteOrderCore.mock.calls[1][4]).toMatchObject({
       tradingAccountId: 10, sourceType: 'admin_strategy_delivery',
       sourceId: '77:dispatch:5:target:2', magic: 234000,
+      clientRequestId: 'admin-strategy-dispatch:5:target:2',
       beforeBridgeSend: expect.any(Function), beforeBridgeSendTx: expect.any(Function),
     })
     expect(mockFence).toHaveBeenCalledWith(expect.objectContaining({

@@ -76,6 +76,12 @@ async function markTarget(targetId, dispatchId, status, fields = {}) {
 function targetRequest(dispatch, target, snapshot) {
   const isLegacyTierDispatch = dispatch.requested_volume === null
     || dispatch.requested_volume === undefined || dispatch.requested_volume === ''
+  const dispatchId = Number(dispatch.id)
+  const targetId = Number(target.id)
+  if (!Number.isSafeInteger(dispatchId) || dispatchId <= 0
+    || !Number.isSafeInteger(targetId) || targetId <= 0) {
+    throw Object.assign(new Error('admin_strategy_target_identity_invalid'), { code: 'admin_strategy_target_identity_invalid' })
+  }
   const request = {
     symbol: dispatch.symbol, order_type: dispatch.direction, direction: dispatch.direction,
     entry_method: 'market', entry_price: dispatch.entry_price || null,
@@ -87,6 +93,7 @@ function targetRequest(dispatch, target, snapshot) {
     take_profit_3_price: dispatch.take_profit_3, take_profit_candidates: [dispatch.take_profit_1, dispatch.take_profit_2, dispatch.take_profit_3]
       .filter(value => Number(value) > 0).map((price, index) => ({ tier: index + 1, price: Number(price) })),
     confirm: true, signal_id: null,
+    client_request_id: `admin-strategy-dispatch:${dispatchId}:target:${targetId}`,
     execution_validation: { status: 'eligible', eligible: true, reason_codes: [] }, magic: ADMIN_STRATEGY_TRADE_MAGIC,
     source: ADMIN_STRATEGY_TRADE_SOURCE, trading_account_id: Number(target.trading_account_id),
   }
@@ -194,7 +201,8 @@ async function executeTarget(dispatch, target, sourceRequired = false) {
     const sourceId = `${dispatch.signal_id}:dispatch:${dispatch.id}:target:${target.id}`
     const sourceType = sourceRequired ? 'admin_strategy_delivery' : 'admin_strategy_source'
     const result = await executeAdminDirectedOrderCore(target.user_id, { enable_auto_trade: true, take_profit_mode: snapshot.take_profit_mode || 'standard', max_position_size: 1 }, request, sourceType, {
-      tradingAccountId: target.trading_account_id, sourceType, sourceId, magic: ADMIN_STRATEGY_TRADE_MAGIC,
+      tradingAccountId: target.trading_account_id, sourceType, sourceId,
+      clientRequestId: request.client_request_id, magic: ADMIN_STRATEGY_TRADE_MAGIC,
       riskProfileId: snapshot.risk?.profile_id || target.risk_profile_id,
       beforeBridgeSend: async () => {
         if (Date.now() >= Number(dispatch.valid_until_utc_msc)) throw Object.assign(new Error('dispatch_expired'), { preSend: true })
