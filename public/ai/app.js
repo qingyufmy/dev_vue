@@ -4966,7 +4966,6 @@ async function createAdminStrategyDispatch() {
 function strategyDispatchSignalSourceLabel(signal = {}) {
   const raw = String(signal?.source || signal?.source_type || signal?.origin || signal?.execution_source || "").toLowerCase();
   if (raw === "admin_strategy_dispatch" || raw === "admin_strategy_trade" || signal?.admin_strategy_dispatch_id || signal?.strategy_dispatch_id) return "管理员策略指令";
-  if (raw === "auto_shared") return "平台自动分析";
   return "";
 }
 

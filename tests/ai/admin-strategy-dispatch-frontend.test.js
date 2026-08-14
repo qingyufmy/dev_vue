@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
+const strategyDispatchSignalSourceLabel = new Function(`${app.slice(app.indexOf('function strategyDispatchSignalSourceLabel'), app.indexOf('function strategyMarketPlan'))}\nreturn strategyDispatchSignalSourceLabel;`)()
 
 describe('admin strategy dispatch frontend contract', () => {
   it('keeps the entry point inside manual order and gates it by admin capability', () => {
@@ -61,10 +62,14 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(css).toContain('.admin-strategy-dispatch-target-row')
   })
 
-  it('labels admin strategy dispatch sources distinctly from AI automatic analysis and bumps cache keys', () => {
+  it('keeps admin dispatch labels and omits the redundant auto-shared source label', () => {
     expect(app).toContain('admin_strategy_dispatch')
     expect(app).toContain('管理员策略指令')
-    expect(app).toContain('平台自动分析')
+    expect(strategyDispatchSignalSourceLabel({ source: 'admin_strategy_dispatch' })).toBe('管理员策略指令')
+    expect(strategyDispatchSignalSourceLabel({ source: 'admin_strategy_trade' })).toBe('管理员策略指令')
+    expect(strategyDispatchSignalSourceLabel({ admin_strategy_dispatch_id: 42 })).toBe('管理员策略指令')
+    expect(strategyDispatchSignalSourceLabel({ source: 'auto_shared' })).toBe('')
+    expect(strategyDispatchSignalSourceLabel({ source_type: 'auto_shared' })).toBe('')
     expect(html).toContain('admin-strategy-dispatch1')
   })
 })
