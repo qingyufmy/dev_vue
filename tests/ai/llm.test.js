@@ -1880,7 +1880,7 @@ describe('maybeAiSignal', () => {
       temperature: 0.7, max_tokens: 2000, system_prompt: '分析市场 {{USE_CHAN}}', _use_chan_analysis: false
     }
     const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100,
-      strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok' } } } } }
+      strategy_context: { timeframes: { M5: { summary: { chan: { status: 'ok', current_segment:{ nested:{ $ref:'#/legacy/current_segment' } } } } } } }
     }
     await maybeAiSignal(null, config, market)
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
