@@ -7,7 +7,8 @@ import { modelProviderProtocol } from './model-providers.js'
 import { stripBrokerSuffix, stripStrategyControlTags } from './utils.js'
 import { CHAN_SUPPORTED_TIMEFRAMES, STRATEGY_DATA_CAPABILITIES_VERSION, describeSimpleIndicatorCapabilities,
   mergeSimpleIndicatorDeclarations, normalizeEntryMethods, normalizeMarketDataPlan,
-  normalizeUseChanAnalysis, normalizeUseEma34Filter, validateChanTimeframes } from './strategy-policy.js'
+  normalizeUseChanAnalysis, normalizeUseEma34Filter, parseStrategyPolicy, setEma34DeclarationEnabled,
+  validateChanTimeframes } from './strategy-policy.js'
 import { canonicalPolicyJson, compileStrategyPolicy, StrategyPolicyValidationError } from './strategy-policy-compiler.js'
 import { normalizeSubscriptionSchedule } from './subscription-schedule.js'
 
@@ -54,12 +55,31 @@ function resolveStrategyPolicyMutation({ existingPolicy = null, payload = {}, ma
       confirmEnableDataRuntime:payload.confirm_enable_data_runtime === true,
     })
   }
-  return {
-    strategyPolicyJson:normalizeStrategyPolicyForStorage(
+  if (payload.use_ema34_filter !== undefined) {
+    let normalizedPolicy = normalizeStrategyPolicyForStorage(
       requestedPolicy !== undefined ? requestedPolicy : existingPolicy,
       marketDataPlan,
-    ),
-    useEma34Filter:null,
+    )
+    const requestedEnabled = normalizeUseEma34Filter(payload.use_ema34_filter)
+    if (requestedEnabled && normalizedPolicy) {
+      const policy = JSON.parse(normalizedPolicy)
+      if (String(policy.mode || '').toLowerCase() === 'off') {
+        if (payload.confirm_enable_data_runtime !== true) throw new Error('strategy_data_runtime_confirmation_required')
+        policy.mode = 'shadow'
+        normalizedPolicy = canonicalPolicyJson(policy)
+      }
+    }
+    return setEma34DeclarationEnabled(normalizedPolicy, requestedEnabled, { marketDataPlan })
+  }
+  const normalizedPolicy = normalizeStrategyPolicyForStorage(
+    requestedPolicy !== undefined ? requestedPolicy : existingPolicy,
+    marketDataPlan,
+  )
+  return {
+    strategyPolicyJson:normalizedPolicy,
+    useEma34Filter:normalizedPolicy
+      ? Boolean(describeSimpleIndicatorCapabilities(normalizedPolicy, false).ema34?.enabled)
+      : requestedPolicy !== undefined ? false : null,
   }
 }
 
@@ -225,11 +245,18 @@ function withStrategyDataCapabilityState(strategy) {
   if (!strategy) return strategy
   const marketDataPlan = normalizeMarketDataPlan(strategy.market_data_plan_json, { prompt:strategy.system_prompt || '' })
   const enabledTimeframes = marketDataPlan.timeframes.map(item => item.timeframe)
+  const ema34ProviderEnabled = normalizeUseEma34Filter(strategy.use_ema34_filter)
   let indicators
   try {
-    indicators = describeSimpleIndicatorCapabilities(strategy.strategy_policy_json, normalizeUseEma34Filter(strategy.use_ema34_filter))
+    indicators = describeSimpleIndicatorCapabilities(strategy.strategy_policy_json, ema34ProviderEnabled)
+    const runtimePolicy = parseStrategyPolicy(strategy)
+    // The structured declaration and the persisted provider switch are both
+    // authoritative. An off policy has no data runtime, so capability output
+    // must not advertise EMA34 even if an old declaration remained enabled.
+    indicators.ema34.enabled = ema34ProviderEnabled && runtimePolicy.policyMode !== 'off'
+      && indicators.ema34.enabled
   } catch {
-    indicators = { ema34:{ status:'advanced', enabled:true, timeframe:null } }
+    indicators = { ema34:{ status:'advanced', enabled:false, timeframe:null } }
   }
   return {
     ...strategy,
@@ -238,7 +265,11 @@ function withStrategyDataCapabilityState(strategy) {
       chan:{ enabled:normalizeUseChanAnalysis(strategy.use_chan_analysis, { prompt:strategy.system_prompt || '' }),
         timeframes:enabledTimeframes.filter(timeframe => CHAN_SUPPORTED_TIMEFRAMES.includes(timeframe)) },
       ...indicators,
-      portfolio_context:{ enabled:Boolean(Number(strategy.include_portfolio_context)), scope:strategy.scope },
+      portfolio_context:{
+        enabled:strategy.scope === 'platform' ? true : Boolean(Number(strategy.include_portfolio_context)),
+        scope:strategy.scope,
+        mode:strategy.scope === 'platform' ? 'strategy_reference' : 'account',
+      },
     },
   }
 }
@@ -384,7 +415,7 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
     : normalizeMarketDataPlan(existing.market_data_plan_json, { prompt: existing.system_prompt })
   const requestedPolicy = requestedStrategyPolicy(payload)
   const policyNeedsValidation = requestedPolicy !== undefined || payload.indicator_declarations !== undefined
-    || payload.market_data_plan !== undefined
+    || payload.market_data_plan !== undefined || payload.use_ema34_filter !== undefined
   const policyMutation = policyNeedsValidation
     ? resolveStrategyPolicyMutation({ existingPolicy:existing.strategy_policy_json, payload, marketDataPlan })
     : { strategyPolicyJson:existing.strategy_policy_json ?? null, useEma34Filter:null }

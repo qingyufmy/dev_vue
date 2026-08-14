@@ -4269,10 +4269,12 @@ async function loadStrategyCatalog() {
     const entryText = entryMethods.map(method => ({market:"市价",limit:"限价",stop:"突破",stop_limit:"突破限价"}[method] || method)).join("、");
     const emaState = strategyEma34State(item);
     const chanText = Number(item.use_chan_analysis) ? "缠论结构已提供" : "未提供缠论结构";
-    const emaText = emaState.advanced ? "EMA34 高级配置" : emaState.enabled ? `EMA34 · ${escapeHtml(emaState.canonical?.source?.timeframe || "已配置")}` : Number(item?.["use_ema34_filter"] || 0) ? "旧 EMA 状态未生效" : "未提供 EMA34";
+    const emaText = emaState.advanced
+      ? `EMA34 高级配置 · ${emaState.enabled ? "已提供" : "已关闭"}${emaState.capabilityTimeframe ? ` · ${emaState.capabilityTimeframe}` : ""}`
+      : emaState.enabled ? `EMA34 · ${escapeHtml(emaState.canonical?.source?.timeframe || "已配置")}` : Number(item?.["use_ema34_filter"] || 0) ? "旧 EMA 状态未生效" : "未提供 EMA34";
     const portfolioText = item.scope === "private"
       ? (Number(item.include_portfolio_context) ? "已提供持仓与挂单" : "不提供持仓与挂单")
-      : "平台行情专用";
+      : "策略参考持仓与挂单 · 运行时自动提供（可能为空或不可用）";
     const source = item.model_profile_id ? `绑定模型 #${item.model_profile_id}` : "继承默认模型";
     const memory = item.scope === "private" ? "个人记忆可用" : "使用绑定的平台记忆";
     const linked = subscriptions.filter(sub => Number(sub.strategy_id) === Number(item.id));
@@ -4400,19 +4402,20 @@ function strategyEma34State(strategy = {}) {
   const candidates = declarations.filter(strategyIndicatorLooksLikeEma34);
   const canonical = candidates.find(strategyIndicatorIsCanonicalEma34) || null;
   const advanced = candidates.some(item => !strategyIndicatorIsCanonicalEma34(item));
+  const advancedDeclaration = candidates.find(item => !strategyIndicatorIsCanonicalEma34(item)) || null;
   const legacyEnabled = Boolean(Number(strategy?.["use_ema34_filter"] || 0));
   const capability = strategy?.data_capabilities?.ema34 && typeof strategy.data_capabilities.ema34 === "object" ? strategy.data_capabilities.ema34 : null;
   const capabilityStatus = String(capability?.status || "").toLowerCase();
   return {
     policy,
     declarations,
-    canonical: canonical || (capabilityStatus === "managed" && capability.enabled ? { id:"ema34", kind:"ema", enabled:true, source:{ timeframe:capability.timeframe } } : null),
+    canonical: canonical || (capabilityStatus === "managed" ? { id:"ema34", kind:"ema", enabled:capability.enabled !== false, source:{ timeframe:capability.timeframe } } : null),
     advanced: capabilityStatus === "advanced" || advanced,
-    advancedDeclaration: candidates.find(item => !strategyIndicatorIsCanonicalEma34(item)) || null,
-    enabled: capabilityStatus === "managed" ? capability.enabled !== false : Boolean(canonical && canonical.enabled !== false),
+    advancedDeclaration,
+    enabled: capability ? capability.enabled !== false : Boolean((canonical || advancedDeclaration) && (canonical || advancedDeclaration).enabled !== false),
     legacyOnly: capabilityStatus === "legacy_unconfigured" || (legacyEnabled && !canonical && !advanced),
     capabilityStatus,
-    capabilityTimeframe: String(capability?.timeframe || canonical?.source?.timeframe || "").toUpperCase(),
+    capabilityTimeframe: String(capability?.timeframe || advancedDeclaration?.source?.timeframe || canonical?.source?.timeframe || "").toUpperCase(),
     policyMode: String(policy?.mode || "").toLowerCase(),
   };
 }
@@ -4452,7 +4455,7 @@ function strategyCapabilityStatusText(enabled, label, extra = "") {
   return `${label} · ${enabled ? "已提供" : "未提供"}${extra ? ` · ${extra}` : ""}`;
 }
 
-function strategyDataSummaryMarkup({ plan, chanEnabled, chanTimeframes, emaEnabled, emaTimeframe, includePortfolio, entryMethods, loading = false } = {}) {
+function strategyDataSummaryMarkup({ plan, chanEnabled, chanTimeframes, emaEnabled, emaTimeframe, includePortfolio, portfolioScope = "private", entryMethods, loading = false } = {}) {
   const methodLabels = { market: "市价", limit: "限价挂单", stop: "突破挂单", stop_limit: "突破限价" };
   const rows = plan.timeframes.length
     ? plan.timeframes.map(item => `<li><span>${escapeHtml(item.timeframe)}</span><strong>${Number(item.kline_count || 0)} 根 K 线及基础技术摘要</strong></li>`).join("")
@@ -4460,16 +4463,16 @@ function strategyDataSummaryMarkup({ plan, chanEnabled, chanTimeframes, emaEnabl
   const attachmentRows = [
     chanEnabled ? `<li><span>缠论结构</span><strong>${escapeHtml(chanTimeframes.join("、") || "等待支持周期")}</strong></li>` : "",
     emaEnabled ? `<li><span>EMA34</span><strong>${escapeHtml(emaTimeframe || "等待选择周期")} · 已收盘 K 线</strong></li>` : "",
-    `<li><span>持仓与挂单</span><strong>${includePortfolio ? "已提供" : "未提供"}</strong></li>`,
+    `<li><span>持仓与挂单</span><strong>${portfolioScope === "platform" ? "策略参考数据 · 运行时自动提供（可能为空或不可用）" : includePortfolio ? "已提供" : "未提供"}</strong></li>`,
   ].filter(Boolean).join("");
   return `<div class="strategy-data-summary-heading"><strong>本策略将收到</strong><span class="status-chip">${loading ? "正在读取能力" : "实时更新"}</span></div><div class="strategy-data-summary-body"><section><h4>基础行情</h4><ul>${rows}</ul></section><section><h4>附加数据</h4><ul>${attachmentRows}</ul></section><section><h4>输出能力</h4><p>${escapeHtml(entryMethods.map(item => methodLabels[item] || item).join("、") || "尚未选择")}</p></section></div>`;
 }
 
-function strategyDataTechnicalMarkup({ plan, chanEnabled, chanTimeframes, emaEnabled, emaTimeframe } = {}) {
+function strategyDataTechnicalMarkup({ plan, chanEnabled, chanTimeframes, emaEnabled, emaTimeframe, emaIndicatorId = "ema34" } = {}) {
   const fields = {
     market_data_plan: plan,
     chan: chanEnabled ? { field: "strategy_context.timeframes.*.summary.chan", timeframes: chanTimeframes } : null,
-    ema34: emaEnabled ? { field: "strategy_context.indicators.ema34", source: { timeframe: emaTimeframe, field: "close", bar_scope: "closed_only" } } : null,
+    ema34: emaEnabled ? { id: emaIndicatorId, field: `strategy_context.indicators.${emaIndicatorId}`, source: { timeframe: emaTimeframe, field: "close", bar_scope: "closed_only" } } : null,
   };
   return JSON.stringify(fields, null, 2);
 }
@@ -4553,29 +4556,27 @@ function syncStrategyDataCapabilityUI() {
     else delete chan.dataset.invalid;
   }
   if (emaSelect) {
-    const previous = emaSelect.value || emaState.canonical?.source?.timeframe || selectedTimeframes[0] || "";
-    emaSelect.innerHTML = selectedTimeframes.map(timeframe => `<option value="${escapeHtml(timeframe)}">${escapeHtml(timeframe)} · 已收盘 K 线</option>`).join("");
-    emaSelect.value = selectedTimeframes.includes(previous) ? previous : selectedTimeframes[0] || "";
+    const configuredTimeframe = emaState.capabilityTimeframe || emaState.canonical?.source?.timeframe || "";
+    const emaTimeframes = emaState.advanced && configuredTimeframe && !selectedTimeframes.includes(configuredTimeframe)
+      ? [configuredTimeframe, ...selectedTimeframes] : selectedTimeframes;
+    const previous = emaSelect.value || configuredTimeframe || selectedTimeframes[0] || "";
+    emaSelect.innerHTML = emaTimeframes.map(timeframe => `<option value="${escapeHtml(timeframe)}">${escapeHtml(timeframe)} · 已收盘 K 线</option>`).join("");
+    emaSelect.value = emaTimeframes.includes(previous) ? previous : emaTimeframes[0] || "";
     emaSelect.disabled = !ema?.checked || emaState.advanced || !selectedTimeframes.length;
   }
   if (ema) {
-    ema.disabled = emaState.advanced || !selectedTimeframes.length;
+    ema.disabled = !selectedTimeframes.length && !emaState.advanced;
     ema.setAttribute("aria-expanded", String(Boolean($("strategyEma34Details")?.open)));
-    if (emaState.advanced) {
-      ema.checked = false;
-      ema.indeterminate = true;
-    } else {
-      ema.indeterminate = false;
-      if (!editor.dataset.strategyEmaInitialized) ema.checked = emaState.enabled;
-      if (emaState.legacyOnly && !emaState.enabled) ema.checked = false;
-    }
+    ema.indeterminate = false;
+    if (!editor.dataset.strategyEmaInitialized) ema.checked = emaState.enabled;
+    if (emaState.legacyOnly && !emaState.enabled) ema.checked = false;
   }
   const chanStatus = $("strategyChanStatus");
   if (chanStatus) chanStatus.textContent = strategyCapabilityStatusText(Boolean(chan?.checked), "缠论结构数据", chanTimeframes.length ? `周期 ${chanTimeframes.join("、")}` : "没有已选支持周期");
   const emaStatus = $("strategyEma34Status");
   if (emaStatus) {
     emaStatus.textContent = emaState.advanced
-      ? "高级配置 · 简单开关不会覆盖"
+      ? `高级配置 · ${ema?.checked ? "已提供" : "已关闭"} · 开关只控制数据提供，不会覆盖高级参数`
       : emaState.legacyOnly
         ? "旧配置未产生 EMA34 数据"
         : strategyCapabilityStatusText(Boolean(ema?.checked), "EMA34 数据", emaSelect?.value ? `周期 ${emaSelect.value}` : "没有可选周期");
@@ -4584,7 +4585,7 @@ function syncStrategyDataCapabilityUI() {
   const advanced = $("strategyAdvancedPolicyState");
   if (advanced) {
     advanced.innerHTML = emaState.advanced
-      ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="lock-keyhole" size="15"></i></span><span><strong>高级配置</strong><small>当前 EMA34 使用高级配置。简单开关不会覆盖它；请查看技术字段或由管理员确认转换。</small></span>`
+      ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="sliders-horizontal" size="15"></i></span><span><strong>高级配置</strong><small>周期和参数保持只读；开关仅控制是否提供 EMA34 数据。关闭后不会修改策略正文，请自行调整正文中的相关逻辑。</small></span>`
       : emaState.legacyOnly
         ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="info" size="15"></i></span><span><strong>旧 EMA 状态</strong><small>旧配置未产生 EMA34 数据；重新开启并保存后才会按新声明提供。</small></span>`
         : state.strategyDataCapabilitiesStatus === "error"
@@ -4594,11 +4595,12 @@ function syncStrategyDataCapabilityUI() {
   }
   const methods = [...document.querySelectorAll("[data-strategy-entry-method]:checked")].map(input => input.dataset.strategyEntryMethod);
   const includePortfolio = Boolean($("strategyIncludePortfolioContext")?.checked);
+  const portfolioScope = String(strategy?.scope || (canManagePlatformAiContent() ? "platform" : "private"));
   const summary = $("strategyDataSummary");
-  if (summary) summary.innerHTML = strategyDataSummaryMarkup({ plan, chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked) && !emaState.advanced, emaTimeframe:emaSelect?.value, includePortfolio, entryMethods:methods, loading:state.strategyDataCapabilitiesStatus === "loading" });
+  if (summary) summary.innerHTML = strategyDataSummaryMarkup({ plan, chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked), emaTimeframe:emaSelect?.value, includePortfolio, portfolioScope, entryMethods:methods, loading:state.strategyDataCapabilitiesStatus === "loading" });
   const technical = $("strategyDataTechnicalJson");
-  if (technical) technical.textContent = strategyDataTechnicalMarkup({ plan, chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked) && !emaState.advanced, emaTimeframe:emaSelect?.value });
-  renderStrategyWritingTemplates({ chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked) && !emaState.advanced, emaTimeframe:emaSelect?.value });
+  if (technical) technical.textContent = strategyDataTechnicalMarkup({ plan, chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked), emaTimeframe:emaSelect?.value, emaIndicatorId:emaState.advancedDeclaration?.id || "ema34" });
+  renderStrategyWritingTemplates({ chanEnabled:Boolean(chan?.checked), chanTimeframes, emaEnabled:Boolean(ema?.checked), emaTimeframe:emaSelect?.value });
   if (!editor.dataset.strategyEmaInitialized) editor.dataset.strategyEmaInitialized = "1";
   initIcons();
 }
@@ -4640,7 +4642,8 @@ function indicatorDeclarationsForStrategyPayload(strategy, enabled, timeframe) {
 
 function strategyPolicyNeedsEmaConfirmation(strategy, emaEnabled) {
   const stateInfo = strategyEma34State(strategy);
-  return Boolean(emaEnabled && !stateInfo.enabled && stateInfo.policyMode === "off");
+  return Boolean(!emaEnabled && stateInfo.enabled
+    && (stateInfo.advanced || stateInfo.capabilityStatus === "managed"));
 }
 
 function populateManualStrategySelector() {
@@ -4756,13 +4759,17 @@ async function saveStrategyEditor() {
   const selectedChanTimeframes = timeframes.map(item => item.timeframe).filter(timeframe => chanSupported.includes(String(timeframe).toUpperCase()));
   if (chanEnabled && !selectedChanTimeframes.length) return fail("开启缠论结构数据前，请至少选择 M5、M15、H1 或 H4 周期");
   const emaState = strategyEma34State(strategy);
-  const emaEnabled = Boolean($("strategyUseEma34Data")?.checked) && !emaState.advanced;
+  const emaEnabled = Boolean($("strategyUseEma34Data")?.checked);
   const emaTimeframe = String($("strategyEma34Timeframe")?.value || "").toUpperCase();
   if (emaEnabled && !emaTimeframe) return fail("开启 EMA34 数据前，请选择一个当前行情周期");
   if (emaEnabled && !timeframes.some(item => item.timeframe === emaTimeframe)) return fail("EMA34 周期必须来自当前已启用的行情周期");
   let confirmEnableDataRuntime = false;
   if (strategyPolicyNeedsEmaConfirmation(strategy, emaEnabled)) {
-    const message = "当前策略有一个明确关闭的高级策略配置。确认后将启用 EMA34 数据计算（不会自动加入交易规则），是否继续？";
+    const message = "关闭后系统不再向模型提供 EMA34 数据，但不会修改策略正文。策略正文中如仍依赖 EMA34，请由你自行删除或调整相关逻辑。是否确认关闭？";
+    const confirmed = await showConfirm("确认停止提供 EMA34 数据？", message, { confirmText:"确认关闭", cancelText:"取消" });
+    if (!confirmed) return fail("你取消了 EMA34 数据关闭，草稿仍保留");
+  } else if (emaEnabled && !emaState.enabled && emaState.policyMode === "off") {
+    const message = "当前策略的数据运行模式为关闭。确认后将启用 EMA34 数据计算（不会自动加入交易规则），是否继续？";
     const confirmed = await showConfirm("确认提供 EMA34 数据？", message, { confirmText:"确认启用", cancelText:"取消" });
     if (!confirmed) return fail("你取消了 EMA34 数据启用，草稿仍保留");
     confirmEnableDataRuntime = true;
@@ -4773,6 +4780,7 @@ async function saveStrategyEditor() {
     description:$("strategyDescription").value.trim(), system_prompt:$("strategyPrompt").value.trim(), interval_minutes:Number($("strategyInterval").value) || 5,
     market_data_plan:{ primary_timeframe:primaryTimeframe, timeframes }, entry_methods:entryMethods,
     use_chan_analysis:chanEnabled,
+    use_ema34_filter:emaEnabled,
     include_portfolio_context:scope === "private" && $("strategyIncludePortfolioContext").checked,
     is_active:visibilityStatus === "active",
     model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,

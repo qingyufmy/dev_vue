@@ -133,7 +133,31 @@ describe('strategy visibility and mutation permissions', () => {
       version:'strategy-data-capabilities-v1',
       chan:{ enabled:true, timeframes:['H1'] },
       ema34:{ status:'legacy_unconfigured', enabled:false, timeframe:null },
-      portfolio_context:{ enabled:false, scope:'private' },
+      portfolio_context:{ enabled:false, scope:'private', mode:'account' },
+    })
+  })
+
+  it('reports the effective EMA34 provider state when a legacy mirror disables an enabled declaration', async () => {
+    db.queryAll.mockResolvedValue([{ ...PRIVATE, use_ema34_filter:0,
+      strategy_policy_json:JSON.stringify(DECLARED_EMA34_POLICY),
+      market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[
+        { timeframe:'M5', kline_count:60 },
+      ] }) }])
+    const [strategy] = await listStrategies(2, 'user')
+    expect(strategy.data_capabilities.ema34).toMatchObject({
+      status:'advanced', enabled:false, timeframe:'M5',
+    })
+  })
+
+  it('reports EMA34 disabled while the structured data runtime is off', async () => {
+    db.queryAll.mockResolvedValue([{ ...PRIVATE, use_ema34_filter:1,
+      strategy_policy_json:JSON.stringify({ ...DECLARED_EMA34_POLICY, mode:'off' }),
+      market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[
+        { timeframe:'M5', kline_count:60 },
+      ] }) }])
+    const [strategy] = await listStrategies(2, 'user')
+    expect(strategy.data_capabilities.ema34).toMatchObject({
+      status:'advanced', enabled:false, timeframe:'M5',
     })
   })
 
@@ -283,7 +307,7 @@ describe('strategy visibility and mutation permissions', () => {
     await createStrategy(2, 'user', {
       scope:'private', title:'Declared EMA34', symbols:['XAUUSD'],
       market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
-      strategy_policy_json:DECLARED_EMA34_POLICY,
+      strategy_policy_json:DECLARED_EMA34_POLICY, use_ema34_filter:true,
     })
     const [insertSql, insertParams] = latestStrategyInsert()
     expect(insertSql).toContain('strategy_policy_json')
@@ -299,7 +323,71 @@ describe('strategy visibility and mutation permissions', () => {
     expect(update[1][15]).toBe(2)
   })
 
+  it('derives the EMA34 mirror switch when an explicit policy omits the legacy field', async () => {
+    await createStrategy(2, 'user', {
+      scope:'private', title:'Derived EMA34', symbols:['XAUUSD'],
+      market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
+      strategy_policy_json:DECLARED_EMA34_POLICY,
+    })
+    expect(latestStrategyInsert()[1][7]).toBe(1)
+
+    db.queryOne.mockImplementation(statement => statement.includes('FROM users')
+      ? PRO : { ...PRIVATE, use_ema34_filter:0, strategy_policy_json:JSON.stringify(DECLARED_EMA34_POLICY), version:1,
+        market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] }) })
+    await updateStrategy(2, 2, 'user', { strategy_policy_json:DECLARED_EMA34_POLICY })
+    expect(db.queryRun.mock.calls.at(-1)[1][7]).toBe(1)
+  })
+
+  it('toggles an advanced EMA34 provider without rewriting its declaration or prompt', async () => {
+    const existing = { ...PRIVATE, strategy_policy_json:JSON.stringify(DECLARED_EMA34_POLICY),
+      use_ema34_filter:1, version:4,
+      market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] }),
+      system_prompt:'保持策略正文不变' }
+    db.queryOne.mockImplementation(statement => statement.includes('FROM users')
+      ? PRO : existing)
+    await updateStrategy(2, 2, 'user', { expected_version:4, use_ema34_filter:false })
+    const update = db.queryRun.mock.calls[0][1]
+    const policy = JSON.parse(update[17])
+    expect(update[2]).toBe('保持策略正文不变')
+    expect(update[7]).toBe(0)
+    expect(policy.indicators[0]).toMatchObject({ id:'entry_ema34', enabled:false,
+      source:{ timeframe:'M5' }, params:{ period:34 } })
+
+    db.queryRun.mockClear()
+    db.queryOne.mockImplementation(statement => statement.includes('FROM users')
+      ? PRO : { ...existing, strategy_policy_json:JSON.stringify(policy), use_ema34_filter:0, version:5 })
+    await updateStrategy(2, 2, 'user', { expected_version:5, use_ema34_filter:true })
+    const restored = JSON.parse(db.queryRun.mock.calls[0][1][17])
+    expect(db.queryRun.mock.calls[0][1][7]).toBe(1)
+    expect(restored.indicators[0]).toMatchObject({ id:'entry_ema34', enabled:true,
+      source:{ timeframe:'M5' }, params:{ period:34 } })
+  })
+
+  it('requires confirmation before enabling an off-mode policy and restores shadow mode after confirmation', async () => {
+    const offPolicy = { ...DECLARED_EMA34_POLICY, mode:'off' }
+    const existing = { ...PRIVATE, strategy_policy_json:JSON.stringify(offPolicy), use_ema34_filter:0, version:4,
+      market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] }) }
+    db.queryOne.mockImplementation(statement => statement.includes('FROM users') ? PRO : existing)
+    await expect(updateStrategy(2, 2, 'user', { expected_version:4, use_ema34_filter:true }))
+      .rejects.toThrow('strategy_data_runtime_confirmation_required')
+    expect(db.queryRun).not.toHaveBeenCalled()
+
+    await updateStrategy(2, 2, 'user', { expected_version:4, use_ema34_filter:true, confirm_enable_data_runtime:true })
+    const update = db.queryRun.mock.calls[0][1]
+    const policy = JSON.parse(update[17])
+    expect(update[7]).toBe(1)
+    expect(policy.mode).toBe('shadow')
+    expect(policy.indicators[0]).toMatchObject({ id:'entry_ema34', enabled:true })
+  })
+
   it('clears a declared policy explicitly and rejects invalid policy or timeframe references', async () => {
+    db.queryOne.mockImplementation(statement => statement.includes('FROM users')
+      ? PRO : { ...PRIVATE, use_ema34_filter:1, strategy_policy_json:JSON.stringify(DECLARED_EMA34_POLICY), version:1,
+        market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] }) })
+    await updateStrategy(2, 2, 'user', { strategy_policy_json:null })
+    expect(db.queryRun.mock.calls.at(-1)[1][7]).toBe(0)
+    expect(db.queryRun.mock.calls.at(-1)[1][17]).toBeNull()
+
     await expect(createStrategy(2, 'user', {
       scope:'private', symbols:['XAUUSD'], strategy_policy_json:{ ...DECLARED_EMA34_POLICY,
         indicators:[{ ...DECLARED_EMA34_POLICY.indicators[0], source:{ ...DECLARED_EMA34_POLICY.indicators[0].source, timeframe:'H1' } }] },

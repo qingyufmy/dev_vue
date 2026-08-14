@@ -158,7 +158,6 @@ function simpleEma34Declaration(timeframe) {
 function isSimpleEma34Indicator(indicator) {
   return indicator?.id === SIMPLE_EMA34_INDICATOR_ID
     && String(indicator.kind || '').toLowerCase() === SIMPLE_EMA34_FIXED.kind
-    && indicator.enabled !== false
     && String(indicator.source?.field || '').toLowerCase() === SIMPLE_EMA34_FIXED.field
     && String(indicator.source?.bar_scope || '').toLowerCase() === SIMPLE_EMA34_FIXED.bar_scope
     && Number(indicator.params?.period) === SIMPLE_EMA34_FIXED.period
@@ -220,14 +219,52 @@ export function describeSimpleIndicatorCapabilities(strategyPolicyValue, legacyE
   const ema = indicators.find(item => item?.id === SIMPLE_EMA34_INDICATOR_ID)
   if (!ema) {
     const advanced = indicators.find(isEma34LikeIndicator)
-    if (advanced) return { ema34:{ status:'advanced', enabled:true,
+    if (advanced) return { ema34:{ status:'advanced', enabled:advanced.enabled !== false,
       timeframe:String(advanced.source?.timeframe || '').toUpperCase() || null } }
     return { ema34:{ status:legacyEma34 ? 'legacy_unconfigured' : 'disabled', enabled:false, timeframe:null } }
   }
   if (!isSimpleEma34Indicator(ema) || policyReferencesIndicator(policy, SIMPLE_EMA34_INDICATOR_ID)) {
-    return { ema34:{ status:'advanced', enabled:true, timeframe:String(ema.source?.timeframe || '').toUpperCase() || null } }
+    return { ema34:{ status:'advanced', enabled:ema.enabled !== false, timeframe:String(ema.source?.timeframe || '').toUpperCase() || null } }
   }
-  return { ema34:{ status:'managed', enabled:true, timeframe:String(ema.source.timeframe).toUpperCase() } }
+  return { ema34:{ status:'managed', enabled:ema.enabled !== false, timeframe:String(ema.source.timeframe).toUpperCase() } }
+}
+
+/**
+ * Toggle the data provider state for every EMA34-like declaration while
+ * preserving the declaration id, source, parameters and all strategy rules.
+ * The strategy prompt is intentionally outside this helper; callers only
+ * persist the structured policy JSON and the legacy mirror switch.
+ */
+export function setEma34DeclarationEnabled(strategyPolicyValue, enabled, { marketDataPlan } = {}) {
+  const policy = parsePolicyObject(strategyPolicyValue)
+  if (!policy) return { strategyPolicyJson:null, useEma34Filter:Boolean(enabled), changed:false }
+  const indicators = Array.isArray(policy.indicators) ? policy.indicators : []
+  const hasEma34 = indicators.some(isEma34LikeIndicator)
+  if (!hasEma34) {
+    return {
+      strategyPolicyJson:normalizePolicyForStorage(policy, marketDataPlan),
+      useEma34Filter:false,
+      changed:false,
+    }
+  }
+  const nextEnabled = Boolean(enabled)
+  let changed = false
+  policy.indicators = indicators.map(indicator => {
+    if (!isEma34LikeIndicator(indicator)) return indicator
+    if ((indicator.enabled !== false) === nextEnabled) return indicator
+    changed = true
+    return { ...indicator, enabled:nextEnabled }
+  })
+  return {
+    strategyPolicyJson:normalizePolicyForStorage(policy, marketDataPlan),
+    useEma34Filter:nextEnabled,
+    changed,
+  }
+}
+
+function normalizePolicyForStorage(policy, marketDataPlan) {
+  compileStrategyPolicy(policy, { marketDataPlan })
+  return canonicalPolicyJson(policy)
 }
 
 export function mergeSimpleIndicatorDeclarations({ strategyPolicyValue = null, declarations, marketDataPlan,
@@ -237,7 +274,7 @@ export function mergeSimpleIndicatorDeclarations({ strategyPolicyValue = null, d
     const compiled = policy ? compileStrategyPolicy(policy, { marketDataPlan }) : null
     return {
       strategyPolicyJson:canonicalCompiledPolicyJson(compiled),
-      useEma34Filter:Boolean((compiled?.indicators || []).some(item => item?.id === SIMPLE_EMA34_INDICATOR_ID && isSimpleEma34Indicator(item))),
+      useEma34Filter:Boolean((compiled?.indicators || []).some(item => isEma34LikeIndicator(item) && item.enabled !== false)),
       capabilityState:describeSimpleIndicatorCapabilities(compiled, false),
     }
   }
@@ -281,19 +318,18 @@ export function mergeSimpleIndicatorDeclarations({ strategyPolicyValue = null, d
       managed_indicator_ids:[...new Set([...(policy.ui.simple_data_capabilities?.managed_indicator_ids || []), SIMPLE_EMA34_INDICATOR_ID])],
     }
   } else if (policy) {
-    policy.indicators = (policy.indicators || []).filter(item => item?.id !== SIMPLE_EMA34_INDICATOR_ID)
-    if (policy.ui?.simple_data_capabilities?.managed_indicator_ids) {
-      policy.ui.simple_data_capabilities.managed_indicator_ids = policy.ui.simple_data_capabilities.managed_indicator_ids
-        .filter(id => id !== SIMPLE_EMA34_INDICATOR_ID)
-    }
-    if (isEmptyManagedDataPolicy(policy)) policy = null
+    // Keep the managed declaration so a later toggle can restore the exact
+    // timeframe and parameters.  Disabling the provider is represented by
+    // enabled:false; the strategy prompt and policy rules are untouched.
+    policy.indicators = (policy.indicators || []).map(item => item?.id === SIMPLE_EMA34_INDICATOR_ID
+      ? { ...item, enabled:false } : item)
   }
 
   const compiled = policy ? compileStrategyPolicy(policy, { marketDataPlan }) : null
   const canonical = canonicalCompiledPolicyJson(compiled)
   return {
     strategyPolicyJson:canonical,
-    useEma34Filter:Boolean(compiled?.indicators?.some(item => item.id === SIMPLE_EMA34_INDICATOR_ID)),
+    useEma34Filter:Boolean(compiled?.indicators?.some(item => isEma34LikeIndicator(item) && item.enabled !== false)),
     capabilityState:describeSimpleIndicatorCapabilities(compiled, false),
   }
 }
@@ -333,8 +369,13 @@ export function parseStrategyPolicy(strategy = {}) {
       strategyPolicy = structuredClone(rawPolicyValue)
     }
   }
+  const runtimePolicy = hasExplicitPolicy ? structuredClone(strategyPolicy) : null
+  if (runtimePolicy && !useEma34Filter && Array.isArray(runtimePolicy.indicators)) {
+    runtimePolicy.indicators = runtimePolicy.indicators.map(indicator => isEma34LikeIndicator(indicator)
+      ? { ...indicator, enabled:false } : indicator)
+  }
   const compiledPolicy = hasExplicitPolicy
-    ? compileStrategyPolicy(rawPolicyValue, { marketDataPlan })
+    ? compileStrategyPolicy(runtimePolicy, { marketDataPlan })
     : null
   return {
     entryMethods: normalizeEntryMethods(strategy.entry_methods_json || strategy.entry_methods || DEFAULT_ENTRY_METHODS),
@@ -342,9 +383,9 @@ export function parseStrategyPolicy(strategy = {}) {
     useChanAnalysis,
     useEma34Filter,
     strategyPolicy,
-    // use_ema34_filter is retained only as a legacy audit/read field. It must
-    // never create a runtime policy, add a market-data window, render prompt
-    // instructions, or enable enforcement for new inference tasks.
+    // use_ema34_filter is the data-provider gate. It never creates a policy
+    // from nothing, changes the strategy prompt, or enables enforcement when
+    // no structured policy declaration exists.
     compiledPolicy,
     policyMode:compiledPolicy?.mode || 'off',
   }
@@ -426,9 +467,16 @@ function summarizeIndicatorInputSource(timeframe, source = {}) {
  * renders prompt instructions, or mutates the caller's strategy context.
  */
 export function prepareStrategyDataRuntime(policy, strategyContext, { rawPolicy = null } = {}) {
-  const compiledPolicy = policy && Object.prototype.hasOwnProperty.call(policy, 'compiledPolicy')
+  let compiledPolicy = policy && Object.prototype.hasOwnProperty.call(policy, 'compiledPolicy')
     ? policy.compiledPolicy : policy
   if (!compiledPolicy || compiledPolicy.mode === 'off') return null
+  if (policy && Object.prototype.hasOwnProperty.call(policy, 'useEma34Filter') && !policy.useEma34Filter) {
+    compiledPolicy = {
+      ...compiledPolicy,
+      indicators:(compiledPolicy.indicators || []).map(indicator => isEma34LikeIndicator(indicator)
+        ? { ...indicator, enabled:false } : indicator),
+    }
+  }
 
   const declaredSources = strategyContext?.policyIndicatorSources || {}
   // The private source map is the authoritative indicator input, while the
@@ -488,8 +536,9 @@ export function prepareStrategyDataRuntime(policy, strategyContext, { rawPolicy 
 }
 
 export function prepareStrategyPolicyRuntime(policy, strategyContext, { rawPolicy = null } = {}) {
-  // A parsed strategy with no compiled policy (including legacy
-  // use_ema34_filter records) must stay completely outside the policy runtime.
+  // A parsed strategy with no compiled policy (including a legacy
+  // use_ema34_filter record without declarations) must stay completely
+  // outside the policy runtime.
   // Accept a compiled policy object directly for callers that already have
   // one, but do not fall back to the parsed wrapper when its field is null.
   const compiledPolicy = policy && Object.prototype.hasOwnProperty.call(policy, 'compiledPolicy')

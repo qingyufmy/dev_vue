@@ -89,6 +89,9 @@ describe('strategy data capability editor contract', () => {
     expect(html).toContain('aria-describedby="strategyChanHelp strategyChanStatus"')
     expect(html).toContain('aria-live="assertive"')
     expect(app).toContain('if (!emaState.advanced) body.indicator_declarations')
+    expect(app).toContain('use_ema34_filter:emaEnabled')
+    expect(app).toContain('策略正文中如仍依赖 EMA34，请由你自行删除或调整相关逻辑')
+    expect(app).toContain('策略参考数据 · 运行时自动提供（可能为空或不可用）')
     expect(app).toContain('策略数据能力目录暂不可用')
 
     expect(adminApp).toContain('admin-strategy-data-summary')
@@ -96,6 +99,10 @@ describe('strategy data capability editor contract', () => {
     expect(adminApp).toContain('data-delete-platform-strategy')
     expect(adminApp).toContain('缠论至少需要一个支持周期')
     expect(adminApp).toContain('策略数据能力目录暂不可用')
+    expect(adminApp).toContain('use_ema34_filter:emaEnabled')
+    expect(adminApp).toContain('确认关闭 EMA34 数据？')
+    expect(adminApp).toContain('策略参考数据 · 运行时自动提供（可能为空或不可用）')
+    expect(adminApp).toContain('strategy_context.indicators.${id}')
 
     expect(responsiveCss).toContain('@media (max-width: 375px)')
     expect(responsiveCss).toContain('@media (prefers-reduced-motion: reduce)')
@@ -104,8 +111,8 @@ describe('strategy data capability editor contract', () => {
     expect(adminCss).toContain('@media (max-width:375px)')
     expect(adminCss).toContain('@media (prefers-reduced-motion:reduce)')
     expect(adminCss).toContain('min-height:44px')
-    expect(html).toContain('strategydata4')
-    expect(adminHtml).toContain('strategydata4')
+    expect(html).toContain('strategydata5')
+    expect(adminHtml).toContain('strategydata5')
   })
 })
 
@@ -791,6 +798,8 @@ describe('AI governance navigation and DOM contract', () => {
       html.match(/\/ai\/app\.js\?v=([^&"']+)/)?.[1],
     ]
     expect(new Set(versions).size).toBe(1)
+    const adminAppVersion = adminHtml.match(/\/admin\/app\.js\?v=[^&"']+&rev=([^"']+)/)?.[1]
+    expect(adminAppVersion).toContain('strategydata5')
   })
 
   it('lets private strategy owners explicitly opt into position and pending-order context', () => {
@@ -1643,12 +1652,12 @@ describe('route permissions and credential redaction', () => {
     expect(routes).not.toContain('detail:JSON.stringify(req.body)')
   })
 
-  it('retires the service-owned EMA34 strategy switch from both editors', () => {
+  it('keeps the EMA34 provider switch explicit without exposing a second policy editor', () => {
     expect(html).not.toContain('id="strategyUseEma34Filter"')
     expect(html).not.toContain('id="strategyPolicyMode"')
     expect(html).not.toContain('id="strategyPolicyJson"')
     expect(app).not.toContain('strategyUseEma34Filter')
-    expect(app).not.toContain('use_ema34_filter:')
+    expect(app).toContain('use_ema34_filter:emaEnabled')
     expect(app).not.toContain('_strategyPolicyDraft')
     expect(app).not.toContain('body.strategy_policy')
     expect(app).not.toContain('strategyPolicyWithEma34')

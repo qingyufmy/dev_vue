@@ -6,6 +6,7 @@ import {
   buildStrategyDataCapabilitiesCatalog,
   describeSimpleIndicatorCapabilities,
   mergeSimpleIndicatorDeclarations,
+  setEma34DeclarationEnabled,
   parseStrategyPolicy,
   prepareStrategyDataRuntime,
   buildStrategyRuntimeSnapshot,
@@ -109,8 +110,10 @@ describe('strategy policy', () => {
     expect(policy).not.toHaveProperty('policy_hash')
 
     const disabled = mergeSimpleIndicatorDeclarations({ strategyPolicyValue:policy, marketDataPlan, declarations:[] })
-    expect(disabled).toMatchObject({ strategyPolicyJson:null, useEma34Filter:false,
-      capabilityState:{ ema34:{ status:'disabled', enabled:false } } })
+    expect(disabled).toMatchObject({ useEma34Filter:false,
+      capabilityState:{ ema34:{ status:'managed', enabled:false, timeframe:'M15' } } })
+    expect(JSON.parse(disabled.strategyPolicyJson).indicators[0]).toMatchObject({ id:'ema34', enabled:false,
+      source:{ timeframe:'M15' }, params:{ period:34 } })
   })
 
   it('protects explicit off and advanced EMA34 policies from a simple toggle', () => {
@@ -131,6 +134,16 @@ describe('strategy policy', () => {
     expect(() => mergeSimpleIndicatorDeclarations({ strategyPolicyValue:advanced, marketDataPlan,
       declarations:[{ id:'ema34', source:{ timeframe:'M5' } }] }))
       .toThrow('strategy_indicator_advanced_configuration')
+
+    expect(setEma34DeclarationEnabled(advanced, false, { marketDataPlan })).toMatchObject({
+      useEma34Filter:false,
+    })
+    const advancedOff = JSON.parse(setEma34DeclarationEnabled(advanced, false, { marketDataPlan }).strategyPolicyJson)
+    expect(advancedOff.indicators[0]).toMatchObject({ id:'entry_ema34', enabled:false,
+      source:{ timeframe:'M5' }, params:{ period:34 } })
+    const advancedOn = JSON.parse(setEma34DeclarationEnabled(advancedOff, true, { marketDataPlan }).strategyPolicyJson)
+    expect(advancedOn.indicators[0]).toMatchObject({ id:'entry_ema34', enabled:true,
+      source:{ timeframe:'M5' }, params:{ period:34 } })
 
     const referenced = JSON.parse(mergeSimpleIndicatorDeclarations({ marketDataPlan,
       declarations:[{ id:'ema34', source:{ timeframe:'M5' } }] }).strategyPolicyJson)
@@ -158,7 +171,7 @@ describe('strategy policy', () => {
     const strategyPolicy = declaredEmaPolicy()
     const strategy = {
       market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
-      strategy_policy_json:JSON.stringify(strategyPolicy), use_ema34_filter:0,
+      strategy_policy_json:JSON.stringify(strategyPolicy), use_ema34_filter:1,
     }
     const parsed = parseStrategyPolicy(strategy)
     expect(parsed.policyMode).toBe('enforce')
@@ -184,6 +197,18 @@ describe('strategy policy', () => {
     expect(prepareStrategyDataRuntime(parsed, { policyIndicatorSources:{} })).toBeNull()
   })
 
+  it('skips every EMA34-like declaration when the total switch is off while preserving the policy declaration', () => {
+    const strategyPolicy = declaredEmaPolicy()
+    const parsed = parseStrategyPolicy({
+      market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
+      strategy_policy_json:JSON.stringify(strategyPolicy), use_ema34_filter:0,
+    })
+    expect(parsed.compiledPolicy.indicators[0]).toMatchObject({ id:'entry_ema34', enabled:false })
+    expect(prepareStrategyDataRuntime(parsed, { policyIndicatorSources:{ M5:{ bars:[], lastBarClosed:true } } })).toMatchObject({
+      indicators:{}, indicator_source_timeframes:[], input_sources:{},
+    })
+  })
+
   it('fails closed for an explicitly invalid policy instead of treating it as off', () => {
     expect(() => parseStrategyPolicy({
       market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
@@ -205,7 +230,7 @@ describe('strategy policy', () => {
   it('freezes the data runtime in the strategy snapshot without adding policy decisions', () => {
     const parsed = parseStrategyPolicy({
       market_data_plan:{ primary_timeframe:'M5', timeframes:[{ timeframe:'M5', kline_count:60 }] },
-      strategy_policy_json:JSON.stringify(declaredEmaPolicy()),
+      strategy_policy_json:JSON.stringify(declaredEmaPolicy()), use_ema34_filter:1,
     })
     const bars = Array.from({ length:34 }, (_, index) => ({
       time_utc_msc:1_000 + index * 300_000, open:index + 1, high:index + 1, low:index + 1, close:index + 1,
