@@ -122,7 +122,7 @@ describe('strategy editor workbench contract', () => {
     expect(html).toContain('class="strategy-editor-primary"')
     expect(html).toContain('class="strategy-editor-sidebar"')
     expect(html).toContain('data-close-policy="explicit"')
-    expect(html).toContain('strategy-editor-workbench3')
+    expect(html).toContain('strategy-editor-workbench6')
     expect(html).toContain('class="strategy-editor-heading-copy"')
     expect(html).toContain('class="btn btn-secondary btn-sm strategy-editor-close"')
     expect(html.indexOf('id="strategyPrompt"')).toBeLessThan(html.indexOf('id="strategyDataSectionTitle"'))
@@ -136,7 +136,7 @@ describe('strategy editor workbench contract', () => {
     expect(app).toContain('版本已变化，请处理冲突')
 
     expect(adminApp).toContain('function strategyEditorWorkbenchMarkup(markup)')
-    expect(adminHtml).toContain('strategy-editor-workbench2')
+    expect(adminHtml).toContain('strategy-editor-workbench6')
     expect(adminApp).toContain('data-close-policy="explicit"')
     expect(adminApp).toContain('.replace(/<button class="secondary-button" data-close-entity-modal type="button">取消<\\/button>/')
     expect(adminApp).toContain('<section class="strategy-editor-primary" role="region" aria-label="策略正文工作区">')
@@ -145,6 +145,8 @@ describe('strategy editor workbench contract', () => {
     expect(adminApp).toContain('closeEntityModal({force:true})')
     expect(adminCss).toContain('.strategy-editor-modal .strategy-editor-workbench')
     expect(adminCss).toContain('@media (max-width:819px)')
+    expect(css).toContain('#model-strategy .strategy-editor-dialog .strategy-capability-details > summary:focus-visible')
+    expect(css).toContain('outline:0; outline-offset:0; background:var(--gold-wash); color:var(--gold-light)')
   })
 })
 
@@ -1774,7 +1776,7 @@ describe('route permissions and credential redaction', () => {
     expect(adminCss).toContain('.strategy-memory-preview-block.is-location-stale')
     expect(adminCss).toContain('.strategy-memory-preview-status.is-attention_required')
     expect(adminCss).toContain('.strategy-memory-conflict.is-location-stale')
-    expect(adminHtml).toContain('20260812memory4')
+    expect(adminHtml).toContain('20260814strategyeditor2')
     expect(adminHtml).toContain('memory-workbench3')
   })
 
@@ -1805,7 +1807,7 @@ describe('route permissions and credential redaction', () => {
     }
     expect(app).toContain('data-lucide="triangle-alert"')
     expect(adminApp).toContain("attention_required: ['triangle-alert'")
-    expect(html).toContain('20260812memory4')
+    expect(html).toContain('20260814strategyeditor2')
     expect(html).toContain('memory-workbench3')
   })
 })

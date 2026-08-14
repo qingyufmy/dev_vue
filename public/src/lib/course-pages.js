@@ -1,4 +1,4 @@
-import { coursePrograms, getCourseConsultUrl } from '../data/course-programs.js?v=20260812memory4'
+import { coursePrograms, getCourseConsultUrl } from '../data/course-programs.js?v=20260814strategyeditor2'
 
 function renderArtifact(program) {
   if (program.slug === 'trading-craft') {

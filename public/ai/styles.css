@@ -11095,3 +11095,5 @@ body.account-center-open { overflow: hidden; }
 .strategy-editor-footer .form-modal-actions .btn-primary { min-width:132px; min-height:44px; }
 .strategy-editor-footer .form-modal-actions .btn-primary:disabled { opacity:.48; cursor:not-allowed; }
 .strategy-editor-dialog :is(input,select,textarea,button,summary):focus-visible { outline:3px solid color-mix(in srgb,var(--gold-primary) 72%,white); outline-offset:2px; }
+#model-strategy .strategy-editor-dialog .strategy-capability-details > summary:focus-visible,
+#model-strategy .strategy-editor-dialog .strategy-technical-details > summary:focus-visible { outline:0; outline-offset:0; background:var(--gold-wash); color:var(--gold-light); }
