@@ -139,6 +139,13 @@ describe('admin strategy trade contract', () => {
     expect(signalInsert).toContain('input.stop_loss, input.take_profit_1')
   })
 
+  it('reads Bridge generation from runtime instead of a nonexistent market-data column', () => {
+    const service = fs.readFileSync(new URL('../server/services/admin-strategy-trades.js', import.meta.url), 'utf8')
+    expect(service).not.toContain('mds.bridge_generation')
+    expect(service).toContain('bridge_generation: getBridgeGeneration(actorId) ?? sourceRow.bridge_generation')
+    expect(service).toContain('bridge_generation: getBridgeGeneration(row.user_id) ?? row.bridge_generation')
+  })
+
   it('keeps the optional protection migration idempotent and nullable', () => {
     const migrations = fs.readFileSync(new URL('../server/migrations.js', import.meta.url), 'utf8')
     const start = migrations.indexOf("id: '190_admin_strategy_trade_optional_protection'")

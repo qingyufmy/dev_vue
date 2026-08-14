@@ -181,14 +181,11 @@ async function loadSourceRow(actorUserId, accountId) {
       own.trading_account_id AS ownership_trading_account_id,
       own.broker_server_key AS ownership_broker_server_key, own.login_account AS ownership_login_account,
       ubs.trade_send_enabled, sched.enable_auto_trade AS scheduler_enable_auto_trade,
-      sched.enabled AS scheduler_enabled, COALESCE(mds.bridge_generation, 0) AS bridge_generation
+      sched.enabled AS scheduler_enabled, NULL AS bridge_generation
     FROM trading_accounts ta JOIN users u ON u.id = ta.user_id
     LEFT JOIN mt5_account_ownership_history own ON own.trading_account_id = ta.id AND own.ended_at IS NULL
     LEFT JOIN user_bridge_settings ubs ON ubs.user_id = ta.user_id
     LEFT JOIN auto_scheduler sched ON sched.user_id = ta.user_id
-    LEFT JOIN market_data_sources mds ON mds.bridge_user_id = ta.user_id
-      AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
-      AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
     WHERE ta.id = ? AND ta.user_id = ? AND ta.is_deleted = 0 LIMIT 1`, [accountId, actorUserId])
   if (!row) throw fail('source_account_not_found')
   return row
@@ -206,7 +203,7 @@ async function loadSubscriberRows(strategyId) {
       ras.halt_status, ras.user_kill_switch, ubs.trade_send_enabled,
       sched.enable_auto_trade AS scheduler_enable_auto_trade, sched.enabled AS scheduler_enabled,
       mds.timezone_offset_minutes AS runtime_timezone_offset_minutes,
-      mds.clock_status AS runtime_clock_status, COALESCE(mds.bridge_generation, 0) AS bridge_generation
+      mds.clock_status AS runtime_clock_status, NULL AS bridge_generation
     FROM strategy_subscriptions ss JOIN auto_prompt_types apt ON apt.id = ss.strategy_id AND apt.deleted_at IS NULL
     JOIN users u ON u.id = ss.user_id
     LEFT JOIN trading_accounts ta ON ta.id = ss.trading_account_id
