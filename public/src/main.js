@@ -3995,6 +3995,35 @@ async function _doCreateCryptoPayment(plan, period) {
   }
 }
 
+async function copyTextWithFallback(value) {
+  const text = String(value ?? '')
+  if (!text) throw new Error('copy_empty')
+
+  if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {}
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '-9999px'
+  textarea.style.left = '-9999px'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  let copied = false
+  try {
+    copied = typeof document.execCommand === 'function' && document.execCommand('copy')
+  } catch {}
+  textarea.remove()
+  if (!copied) throw new Error('copy_failed')
+}
+
 function _showCryptoPaymentPage(order) {
   if (document.getElementById('cryptoPaymentModal')) return
 
@@ -4064,16 +4093,24 @@ function _showCryptoPaymentPage(order) {
     }
   })
 
-  overlay.querySelector('#cryptoCopyBtn').addEventListener('click', () => {
-    navigator.clipboard.writeText(address).then(() => {
-      const btn = overlay.querySelector('#cryptoCopyBtn')
+  overlay.querySelector('#cryptoCopyBtn').addEventListener('click', async (event) => {
+    const btn = event.currentTarget
+    const defaultLabel = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> 复制'
+    btn.disabled = true
+    try {
+      await copyTextWithFallback(address)
       btn.textContent = '✓ 已复制'
-      setTimeout(() => { btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> 复制' }, 2000)
-    }).catch(() => {
-      const el = document.getElementById('cryptoPayAddress')
-      if (el) { const r = document.createRange(); r.selectNode(el); window.getSelection().removeAllRanges(); window.getSelection().addRange(r) }
-      showToast('地址已选中，请按 Ctrl+C 复制', 'info')
-    })
+      showToast('收款地址已复制', 'success')
+    } catch {
+      btn.textContent = '复制失败'
+      showToast('复制失败，请手动复制地址', 'error')
+    } finally {
+      setTimeout(() => {
+        if (!btn.isConnected) return
+        btn.disabled = false
+        btn.innerHTML = defaultLabel
+      }, 2000)
+    }
   })
 
   overlay.querySelector('#cryptoCancelOrderBtn')?.addEventListener('click', async () => {

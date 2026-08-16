@@ -7,6 +7,7 @@ import { adapters } from '../crypto/chains/index.js'
 import { generatePaymentQR } from '../crypto/qr.js'
 import { getFixedAddressForChain, generateUniqueAmount, resetFixedAddressCache } from '../crypto/fixed-address.js'
 import { calculatePlanExpiry } from '../utils.js'
+import { isMembershipExpired } from '../membership.js'
 import { broadcastAdminEvent } from '../bridge-ws.js'
 import { enqueuePaymentSideEffect, schedulePaymentSideEffects } from '../jobs/payment-side-effects.js'
 
@@ -84,6 +85,12 @@ const CHAIN_MAP = {
   'TRON': 'TRON', 'ETH': 'ETH', 'BSC': 'BSC', 'SOL': 'SOL',
 }
 
+const ACTIVE_PRO_PLUS_ERROR = '当前 Pro 会员有效期内无法购买 Plus，请续费或购买 Pro'
+
+function isActiveProUser(user) {
+  return String(user?.plan || '').toLowerCase() === 'pro' && !isMembershipExpired(user)
+}
+
 async function getPaymentMode() {
   const row = await queryOne(
     "SELECT value FROM system_config WHERE category = 'crypto_wallet' AND `key` = 'payment_mode'"
@@ -134,6 +141,10 @@ router.get('/payment', authMiddleware, async (req, res) => {
     const amount = typeof priceObj === 'object' ? priceObj.current : priceObj
 
     const user = await queryOne('SELECT plan, plan_expires_at, referral_credit FROM users WHERE id = ?', [req.user.id])
+
+    if (plan === 'plus' && isActiveProUser(user)) {
+      return res.json({ ok: false, error: ACTIVE_PRO_PLUS_ERROR })
+    }
 
     const referralCredit = appliedReferralCredit(user?.referral_credit, amount, use_referral_credit === '1')
 
@@ -197,6 +208,10 @@ router.post('/payment', authMiddleware, async (req, res) => {
       ))
       const user = userRows[0]
       if (!user) throw new Error('USER_NOT_FOUND')
+
+      // Keep this check after the row lock and before both pending-order reuse
+      // and order creation so concurrent requests cannot bypass the rule.
+      if (plan === 'plus' && isActiveProUser(user)) return { kind: 'blocked' }
 
       const existingRows = rowsFrom(await run(
         `SELECT order_id, order_no, crypto_address, crypto_amount, crypto_expires_at,
@@ -264,6 +279,10 @@ router.post('/payment', authMiddleware, async (req, res) => {
       await deductCredit()
       return { kind: 'pending', finalAmount, referralCredit, usdtAmount }
     })
+
+    if (creation.kind === 'blocked') {
+      return res.json({ ok: false, error: ACTIVE_PRO_PLUS_ERROR })
+    }
 
     if (creation.kind === 'existing') {
       const existingOrder = creation.order

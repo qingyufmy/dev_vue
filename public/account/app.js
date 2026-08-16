@@ -9,6 +9,7 @@ const state = {
   notificationLatestImportant:null, notificationFocusId:notificationQueryId,
   period:'month', tab:'overview', paymentTimer:null, securityCooldown:null,
   securityFlow:null, securityReturnFocus:null, notificationSummaryFlight:null,
+  paymentCountdownTimer:null,
 }
 const TAB_META = {
   overview:['账户概览','查看会员状态和常用账户信息。'],
@@ -78,6 +79,33 @@ function toast(message,type='') {
   node.textContent = message
   $('toastHost').appendChild(node)
   setTimeout(() => node.remove(),3600)
+}
+
+async function copyTextWithFallback(value) {
+  const text = String(value ?? '')
+  if (!text) throw new Error('copy_empty')
+
+  if (typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {}
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly','')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '-9999px'
+  textarea.style.left = '-9999px'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  let copied = false
+  try { copied = typeof document.execCommand === 'function' && document.execCommand('copy') } catch {}
+  textarea.remove()
+  if (!copied) throw new Error('copy_failed')
 }
 
 function notifyParent(type,payload={}) {
@@ -513,9 +541,10 @@ function bindSecurityDialogActions() {
 function planPrice(plan,period) { const row = state.plans?.[plan]?.[period]; return typeof row === 'object' ? Number(row.current || 0) : Number(row || 0) }
 function subscriptionTemplate() {
   const current = effectivePlan()
+  const activePro = String(state.user?.plan || '').toLowerCase() === 'pro' && !Boolean(state.user?.membershipExpired) && current === 'pro'
   const suffix = state.period === 'year' ? '/年' : '/月'
   const price = plan => money(planPrice(plan,state.period))
-  return `<div class="section-stack"><article class="panel"><div class="section-heading"><div><h2>选择会员</h2><p>续费从当前到期时间顺延；付费成功后两个前端同时生效。</p></div><div class="plan-switch"><button data-period="month" class="${state.period === 'month' ? 'active' : ''}">月付</button><button data-period="year" class="${state.period === 'year' ? 'active' : ''}">年付</button></div></div><div class="plan-grid"><article class="plan-card"><header><div><h3>Plus 专业版</h3><p>课程进阶与 AI 观摩</p></div>${current === 'plus' ? '<span class="status-badge paid">当前权益</span>' : ''}</header><div class="plan-price">${price('plus')} <small>${suffix}</small></div><ul class="plan-features"><li>主站进阶课程与学习工具</li><li>AI 实验室观摩模式</li><li>会员到期通知</li></ul><button class="button secondary" data-buy-plan="plus">${current === 'plus' ? '续费 Plus' : '购买 Plus'}</button></article><article class="plan-card recommended"><header><div><h3>Pro 交易版</h3><p>完整 AI 交易工作台</p></div>${current === 'pro' ? '<span class="status-badge paid">当前权益</span>' : '<span class="plan-badge">推荐</span>'}</header><div class="plan-price">${price('pro')} <small>${suffix}</small></div><ul class="plan-features"><li>包含 Plus 全部权益</li><li>连接 MT5 桥接软件</li><li>自动分析、策略与风控</li></ul><button class="button primary" data-buy-plan="pro">${current === 'pro' ? '续费 Pro' : '购买 Pro'}</button></article></div></article><article class="panel info-list"><div class="info-row"><span>当前购买方案</span><strong>${escapeHtml(planLabel(state.user.plan))}${state.user.membershipExpired ? '（已过期）' : ''}</strong></div><div class="info-row"><span>当前有效权限</span><strong>${escapeHtml(planLabel(current))}</strong></div><div class="info-row"><span>到期时间</span><strong>${escapeHtml(formatDate(state.user.planExpiresAt))}</strong></div></article></div>`
+  return `<div class="section-stack"><article class="panel"><div class="section-heading"><div><h2>选择会员</h2><p>续费从当前到期时间顺延；付费成功后两个前端同时生效。</p></div><div class="plan-switch"><button data-period="month" class="${state.period === 'month' ? 'active' : ''}">月付</button><button data-period="year" class="${state.period === 'year' ? 'active' : ''}">年付</button></div></div><div class="plan-grid"><article class="plan-card"><header><div><h3>Plus 专业版</h3><p>课程进阶与 AI 观摩</p></div>${current === 'plus' ? '<span class="status-badge paid">当前权益</span>' : ''}</header><div class="plan-price">${price('plus')} <small>${suffix}</small></div><ul class="plan-features"><li>主站进阶课程与学习工具</li><li>AI 实验室观摩模式</li><li>会员到期通知</li></ul>${activePro ? '<p class="plan-disabled-note">当前已是 Pro，无法购买 Plus</p>' : ''}<button class="button secondary" data-buy-plan="plus" ${activePro ? 'disabled aria-disabled="true"' : ''}>${current === 'plus' ? '续费 Plus' : activePro ? 'Pro 用户不可购买 Plus' : '购买 Plus'}</button></article><article class="plan-card recommended"><header><div><h3>Pro 交易版</h3><p>完整 AI 交易工作台</p></div>${current === 'pro' ? '<span class="status-badge paid">当前权益</span>' : '<span class="plan-badge">推荐</span>'}</header><div class="plan-price">${price('pro')} <small>${suffix}</small></div><ul class="plan-features"><li>包含 Plus 全部权益</li><li>连接 MT5 桥接软件</li><li>自动分析、策略与风控</li></ul><button class="button primary" data-buy-plan="pro">${current === 'pro' ? '续费 Pro' : '购买 Pro'}</button></article></div></article><article class="panel info-list"><div class="info-row"><span>当前购买方案</span><strong>${escapeHtml(planLabel(state.user.plan))}${state.user.membershipExpired ? '（已过期）' : ''}</strong></div><div class="info-row"><span>当前有效权限</span><strong>${escapeHtml(planLabel(current))}</strong></div><div class="info-row"><span>到期时间</span><strong>${escapeHtml(formatDate(state.user.planExpiresAt))}</strong></div></article></div>`
 }
 
 function ordersTemplate() {
@@ -747,12 +776,71 @@ async function createPayment(plan,button) {
   } catch(error){ toast(error.message,'error') } finally { button.disabled=false }
 }
 
+function paymentExpiryTimestamp(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return Date.now() + 30 * 60 * 1000
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? `${raw}T23:59:59+08:00`
+    : /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/.test(raw)
+      ? `${raw.replace(' ', 'T')}+08:00`
+      : raw.replace(' ', 'T')
+  const timestamp = new Date(normalized).getTime()
+  return Number.isFinite(timestamp) ? timestamp : Date.now() + 30 * 60 * 1000
+}
+
+function stopPaymentCountdown() {
+  clearInterval(state.paymentCountdownTimer)
+  state.paymentCountdownTimer = null
+}
+
+function startPaymentCountdown(expiresAt) {
+  stopPaymentCountdown()
+  const endAt = paymentExpiryTimestamp(expiresAt)
+  const render = () => {
+    const countdown = $('paymentCountdown')
+    if (!countdown) return stopPaymentCountdown()
+    const remaining = Math.max(0, Math.floor((endAt - Date.now()) / 1000))
+    const minutes = Math.floor(remaining / 60)
+    const seconds = remaining % 60
+    countdown.textContent = `${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}`
+    if (remaining === 0) {
+      const status = $('paymentStatus')
+      if (status) status.textContent = '订单已过期'
+      stopPaymentCountdown()
+    }
+  }
+  render()
+  state.paymentCountdownTimer = setInterval(render,1000)
+}
+
 function openPayment(order) {
   clearInterval(state.paymentTimer)
-  $('paymentDialogContent').innerHTML=`<section class="payment-sheet"><header><div><h2>${escapeHtml(order.label || 'USDT 支付')}</h2><p>请使用 TRC-20 网络转入精确金额，系统会自动确认。</p></div><button class="icon-button" data-close-payment aria-label="关闭">×</button></header><div class="payment-qr">${order.qr_code ? `<img src="${escapeHtml(order.qr_code)}" alt="付款二维码">` : '<strong>二维码生成失败，请复制地址付款</strong>'}</div><div class="payment-detail"><div><span>应付金额</span><strong>${escapeHtml(order.crypto_amount)} USDT</strong></div><div><span>确认要求</span><strong>${Number(order.required_confirmations || 1)} 次链上确认</strong></div><div class="payment-address"><span>TRC-20 收款地址</span><strong>${escapeHtml(order.crypto_address)}</strong></div><div><span>订单号</span><strong>${escapeHtml(order.orderNo)}</strong></div><div><span>支付状态</span><strong id="paymentStatus">等待付款</strong></div></div><div class="payment-actions"><button class="button secondary" data-copy-address="${escapeHtml(order.crypto_address)}">复制地址</button><button class="button quiet" data-close-payment>稍后支付</button></div></section>`
+  stopPaymentCountdown()
+  const amount = escapeHtml(order.crypto_amount ?? '0')
+  const address = escapeHtml(order.crypto_address || '')
+  const confirmations = Number(order.required_confirmations || 1)
+  $('paymentDialogContent').innerHTML=`<section class="payment-sheet"><header><div><h2>${escapeHtml(order.label || 'USDT 支付')}</h2><p>请使用 TRC-20 网络转入精确金额，系统会自动确认。</p></div><button class="icon-button" data-close-payment aria-label="关闭">×</button></header><div class="payment-amount-row"><strong>${amount}</strong><span>USDT</span><span class="payment-chain-badge">TRC-20</span></div><div class="payment-qr-section"><div class="payment-qr">${order.qr_code ? `<img src="${escapeHtml(order.qr_code)}" alt="付款二维码">` : '<strong>二维码生成失败，请复制地址付款</strong>'}</div><p class="payment-qr-hint">使用 TRC-20 钱包扫描二维码</p></div><div class="payment-address-section"><span class="payment-field-label">收款地址</span><div class="payment-address-box"><strong id="paymentAddressText">${address}</strong><button class="button secondary payment-copy-button" id="paymentCopyButton" type="button">复制</button></div></div><div class="payment-warning"><span aria-hidden="true">⚠️</span><span>请务必转账 <strong>${amount} USDT</strong> 至上述地址（TRC-20 网络），金额不匹配可能导致到账延迟</span></div><div class="payment-countdown"><span aria-hidden="true">⏱</span><span>请在 <strong id="paymentCountdown">30:00</strong> 内完成支付</span></div><div class="payment-status-row"><span class="payment-status-dot"></span><span id="paymentStatus">等待支付...</span><span class="payment-confirmations">确认数: <strong id="paymentConfirmations">0</strong> / ${confirmations}</span></div><div class="payment-order-meta"><span>订单号<strong>${escapeHtml(order.orderNo || '--')}</strong></span><span>确认要求<strong>${confirmations} 次链上确认</strong></span></div><div class="payment-actions"><button class="button quiet" data-close-payment>稍后支付</button></div></section>`
   $('paymentDialog').showModal()
   document.querySelectorAll('[data-close-payment]').forEach(button=>button.addEventListener('click',()=>$('paymentDialog').close()))
-  document.querySelector('[data-copy-address]')?.addEventListener('click',async event=>{ await navigator.clipboard.writeText(event.currentTarget.dataset.copyAddress); toast('收款地址已复制') })
+  $('paymentCopyButton')?.addEventListener('click',async event=>{
+    const button = event.currentTarget
+    button.disabled = true
+    try {
+      await copyTextWithFallback(order.crypto_address)
+      button.textContent = '✓ 已复制'
+      toast('收款地址已复制')
+    } catch {
+      button.textContent = '复制失败'
+      toast('复制失败，请手动复制地址','error')
+    } finally {
+      setTimeout(() => {
+        if (!button.isConnected) return
+        button.disabled = false
+        button.textContent = '复制'
+      },2000)
+    }
+  })
+  startPaymentCountdown(order.expires_at)
   state.paymentTimer=setInterval(()=>void pollPayment(order.orderId),5000)
 }
 
@@ -760,8 +848,10 @@ async function pollPayment(orderId) {
   try {
     const result=await api(`/api/payment/status/${encodeURIComponent(orderId)}`)
     const host=$('paymentStatus'); if(host) host.textContent=result.statusLabel || result.status
-    if(result.status==='paid') { clearInterval(state.paymentTimer); toast('支付已确认，会员权益已经更新'); setTimeout(()=>$('paymentDialog').close(),900); state.orders=null; await refreshProfile() }
-    if(['expired','cancelled','failed'].includes(result.status)) clearInterval(state.paymentTimer)
+    const confirmations=$('paymentConfirmations'); if(confirmations) confirmations.textContent=Number(result.confirmations || 0)
+    const dot=document.querySelector('.payment-status-dot'); if(dot) dot.className=`payment-status-dot ${result.status === 'paid' ? 'success' : ['expired','cancelled','failed'].includes(result.status) ? 'error' : 'pending'}`
+    if(result.status==='paid') { clearInterval(state.paymentTimer); stopPaymentCountdown(); toast('支付已确认，会员权益已经更新'); setTimeout(()=>$('paymentDialog').close(),900); state.orders=null; await refreshProfile() }
+    if(['expired','cancelled','failed'].includes(result.status)) { clearInterval(state.paymentTimer); stopPaymentCountdown() }
   } catch {}
 }
 
@@ -793,7 +883,7 @@ async function bootstrap() {
 $('accountNav').addEventListener('click',event=>{ const button=event.target.closest('[data-tab]'); if(button) switchTab(button.dataset.tab) })
 $('accountLogoutBtn').addEventListener('click',event=>openSecurityDialog('logout',event.currentTarget))
 $('accountCloseBtn').addEventListener('click',()=>embedded ? notifyParent('account-center-close') : history.length > 1 ? history.back() : location.assign('/'))
-$('paymentDialog').addEventListener('close',()=>clearInterval(state.paymentTimer))
+$('paymentDialog').addEventListener('close',()=>{ clearInterval(state.paymentTimer); stopPaymentCountdown() })
 $('securityCaptchaForm').addEventListener('submit',event=>{ event.preventDefault(); void submitSecurityCaptcha(event.currentTarget) })
 document.querySelectorAll('[data-close-security-captcha]').forEach(button=>button.addEventListener('click',()=>$('securityCaptchaDialog').close()))
 $('securityDialog').addEventListener('close',()=>{ clearSecurityCooldown(); const focus=state.securityReturnFocus; state.securityFlow=null; state.securityReturnFocus=null; if(focus?.isConnected) focus.focus() })

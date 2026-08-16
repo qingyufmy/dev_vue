@@ -6,10 +6,12 @@ const CHAIN_IDS = {
   BSC: 56,
 }
 
-function buildPaymentURI(chain, address, amount) {
+export function buildPaymentURI(chain, address, amount) {
   switch (chain) {
     case 'TRON':
-      return `tron:${address}?contract=${USDT_CONTRACTS.TRON}&amount=${amount}`
+      // Binance's scanner expects a plain TRON address for this QR. The
+      // contract/amount URI is not consistently recognized by the app.
+      return address
     case 'ETH':
       return `ethereum:${address}@${CHAIN_IDS.ETH}?amount=${amount}&contractAddress=${USDT_CONTRACTS.ETH}`
     case 'BSC':

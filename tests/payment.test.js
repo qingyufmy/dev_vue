@@ -128,6 +128,12 @@ describe('payment.js — GET /payment preview', () => {
     expect(json.plan).toBe('pro')
   })
 
+  it('有效 Pro 会员不能预览购买 Plus', async () => {
+    mockQueryOne.mockResolvedValue({ plan: 'pro', plan_expires_at: '2099-12-31 23:59:59', referral_credit: 0 })
+    const { json } = await callRoute('get', '/payment', { preview: '1', plan: 'plus', period: 'month' })
+    expect(json).toEqual({ ok: false, error: '当前 Pro 会员有效期内无法购买 Plus，请续费或购买 Pro' })
+  })
+
   it.each(['plus', 'pro'])('过期会员可以重新购买 %s', async (targetPlan) => {
     mockQueryOne.mockResolvedValue({ plan: 'pro', plan_expires_at: '2020-01-01 23:59:59', referral_credit: 0 })
     const { json } = await callRoute('get', '/payment', { preview: '1', plan: targetPlan, period: 'month' })
@@ -238,6 +244,27 @@ describe('payment.js — POST /payment', () => {
       expect.stringContaining('INSERT INTO crypto_watch_list'),
       expect.arrayContaining(['TRON', 'TTestAddress12345678901234567890', 19])
     )
+  })
+
+  it('在锁定用户后拒绝有效 Pro 创建 Plus 订单，且不复用或创建订单', async () => {
+    mockQueryRun.mockImplementation((sql) => {
+      if (sql.includes('FROM users WHERE id = ? FOR UPDATE')) {
+        return Promise.resolve([[{ plan:'pro', plan_expires_at:'2099-12-31 23:59:59', referral_credit:0 }]])
+      }
+      if (sql.trim().startsWith('SELECT')) return Promise.resolve([[]])
+      return Promise.resolve([{ insertId:1, affectedRows:1 }])
+    })
+
+    const { json } = await callRoute('post', '/payment', {
+      plan: 'plus', period: 'month', crypto_chain: 'TRON'
+    })
+
+    expect(json).toEqual({ ok:false, error:'当前 Pro 会员有效期内无法购买 Plus，请续费或购买 Pro' })
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('FROM users WHERE id = ? FOR UPDATE'), [1]
+    )
+    expect(mockQueryRun).not.toHaveBeenCalledWith(expect.stringContaining('FROM orders o'), expect.anything())
+    expect(mockQueryRun).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO orders'), expect.anything())
   })
 
   it('复用订单时返回订单中保存的实付金额，不按当前余额重算', async () => {

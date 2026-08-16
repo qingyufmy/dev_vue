@@ -1,8 +1,20 @@
 import { describe, it, expect } from 'vitest'
-import { generatePaymentQR } from '../../server/crypto/qr.js'
+import { buildPaymentURI, generatePaymentQR } from '../../server/crypto/qr.js'
 import { USDT_CONTRACTS } from '../../server/crypto/constants.js'
 
 describe('generatePaymentQR', () => {
+  it('TRON QR payload is the plain receiving address for Binance scanning', () => {
+    const address = 'TTestAddr123456789012345678901'
+    expect(buildPaymentURI('TRON', address, 50.001)).toBe(address)
+    expect(buildPaymentURI('TRON', address, 50.001)).not.toContain('tron:')
+  })
+
+  it('keeps token payment URI formats for non-TRON chains', () => {
+    expect(buildPaymentURI('ETH', '0xTestAddr', 100)).toContain('ethereum:0xTestAddr@1?amount=100')
+    expect(buildPaymentURI('BSC', '0xTestAddr', 25.5)).toContain('ethereum:0xTestAddr@56?amount=25.5')
+    expect(buildPaymentURI('SOL', 'So1TestAddr', 75)).toContain('solana:So1TestAddr?amount=75')
+  })
+
   it('TRON 链生成 data URL', async () => {
     const result = await generatePaymentQR('TRON', 'TTestAddr123', 50.001)
     expect(result).toMatch(/^data:image\/png;base64,/)
