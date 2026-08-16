@@ -19,7 +19,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
   periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown,
   __testDeriveDailyReviewMemoryEntries, __testDeriveDailyReviewConflictExperiences } from '../../server/routes/ai/period-review.js'
-import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog } from '../../server/routes/ai/period-review.js'
+import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
+  __testGetReviewStrategyMemorySnapshot } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -186,6 +187,30 @@ describe('period review memory task boundary', () => {
       })).rejects.toThrow('injection_write_failed')
     expect(findExisting).toHaveBeenCalledTimes(1)
     expect(createLog).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores estimated tokens from a persisted frozen library before injection logging', async () => {
+    const content = '保留中文记忆与 risk boundary'
+    const contentHash = crypto.createHash('sha256').update(content, 'utf8').digest('hex')
+    const job = { ...baseJob, memory_library_version_no:7, memory_library_content_hash:contentHash,
+      memory_library_snapshot_text:content, memory_strategy_snapshot_text:'frozen strategy' }
+    const snapshot = await __testGetReviewStrategyMemorySnapshot(job)
+    const expectedTokens = Math.ceil(Buffer.byteLength(content, 'utf8') / 4)
+    expect(snapshot.library).toMatchObject({ version_no:7, content_hash:contentHash, content_text:content,
+      char_count:Array.from(content).length, estimated_token_count:expectedTokens })
+
+    const findExisting = vi.fn().mockResolvedValue(null)
+    const createLog = vi.fn().mockResolvedValue({ id:88, estimated_token_count:expectedTokens })
+    await __testEnsurePeriodReviewStrategyMemoryInjectionLog(job, snapshot, 'daily_review', 'task-frozen', {
+      findExisting, createLog,
+    })
+    expect(createLog).toHaveBeenCalledWith(expect.objectContaining({
+      library:expect.objectContaining({ content_hash:contentHash, estimated_token_count:expectedTokens }),
+    }))
+    await expect(__testEnsurePeriodReviewStrategyMemoryInjectionLog(job, {
+      ...snapshot, library:{ ...snapshot.library, content_text:`${content} changed` },
+    }, 'daily_review', 'task-drift', { findExisting:vi.fn(), createLog:vi.fn() }))
+      .rejects.toThrow('period_review_memory_snapshot_invalid')
   })
 
 })

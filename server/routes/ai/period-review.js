@@ -10,6 +10,7 @@ import { isAiFeatureEnabled } from './rollout-governance.js'
 import {
   getStrategyMemoryLibraryForRuntime,
   sanitizeStrategyMemoryPrompt,
+  strategyMemoryEstimatedTokenCount,
   createStrategyMemoryInjectionLog,
   enqueueApprovedStrategyMemoryUpdate,
   recordStrategyMemoryConflictEvidence,
@@ -2062,6 +2063,7 @@ async function getReviewStrategyMemorySnapshot(job) {
         content_hash:String(job.memory_library_content_hash),
         content_text:String(job.memory_library_snapshot_text),
         char_count:Array.from(String(job.memory_library_snapshot_text)).length,
+        estimated_token_count:strategyMemoryEstimatedTokenCount(job.memory_library_snapshot_text),
       },
     }
     return job._strategyMemorySnapshot
@@ -2070,12 +2072,19 @@ async function getReviewStrategyMemorySnapshot(job) {
     strategyId:job.strategy_id,
     actor:{ userId:job.user_id, role:job.user_role || 'user' },
   })
+  const frozenSnapshot = {
+    ...snapshot,
+    library:{
+      ...snapshot.library,
+      estimated_token_count:strategyMemoryEstimatedTokenCount(snapshot.library?.content_text),
+    },
+  }
   const result = await queryRun(`UPDATE period_review_jobs
       SET memory_library_version_no = ?, memory_library_content_hash = ?,
           memory_library_snapshot_text = ?, memory_strategy_snapshot_text = ?, updated_at = ?
     WHERE id = ? AND memory_library_version_no IS NULL`,
-  [snapshot.library.version_no, snapshot.library.content_hash, snapshot.library.content_text,
-    snapshot.strategy_text || '', beijingNow(), job.id])
+  [frozenSnapshot.library.version_no, frozenSnapshot.library.content_hash, frozenSnapshot.library.content_text,
+    frozenSnapshot.strategy_text || '', beijingNow(), job.id])
   if (!Number(result.changes || result.affectedRows || 0)) {
     const frozen = await queryOne(`SELECT memory_library_version_no, memory_library_content_hash,
         memory_library_snapshot_text, memory_strategy_snapshot_text
@@ -2087,12 +2096,12 @@ async function getReviewStrategyMemorySnapshot(job) {
     job.memory_strategy_snapshot_text = frozen.memory_strategy_snapshot_text
     return getReviewStrategyMemorySnapshot(job)
   }
-  job.memory_library_version_no = snapshot.library.version_no
-  job.memory_library_content_hash = snapshot.library.content_hash
-  job.memory_library_snapshot_text = snapshot.library.content_text
-  job.memory_strategy_snapshot_text = snapshot.strategy_text || ''
-  job._strategyMemorySnapshot = snapshot
-  return snapshot
+  job.memory_library_version_no = frozenSnapshot.library.version_no
+  job.memory_library_content_hash = frozenSnapshot.library.content_hash
+  job.memory_library_snapshot_text = frozenSnapshot.library.content_text
+  job.memory_strategy_snapshot_text = frozenSnapshot.strategy_text || ''
+  job._strategyMemorySnapshot = frozenSnapshot
+  return frozenSnapshot
 }
 
 async function ensurePeriodReviewStrategyMemoryInjectionLog(job, snapshot, usageKind = 'review', modelTaskId = null, deps = {}) {
@@ -2129,6 +2138,7 @@ async function ensurePeriodReviewStrategyMemoryInjectionLog(job, snapshot, usage
 }
 
 export const __testEnsurePeriodReviewStrategyMemoryInjectionLog = ensurePeriodReviewStrategyMemoryInjectionLog
+export const __testGetReviewStrategyMemorySnapshot = getReviewStrategyMemorySnapshot
 
 async function generateDailyReview(job, requestModel) {
   const evidence = parse(job.evidence_json, null)
