@@ -27,8 +27,8 @@
     <link rel="icon" href="/favicon.ico?v=20260814ema34toggle1" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260814ema34toggle1">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260814ema34toggle1">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-workbench1" />
-    <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-workbench1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2" />
+    <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2" />
   </head>
   <body>
     <a class="skip-link" href="#aiMainContent">跳到主要内容</a>
@@ -478,24 +478,16 @@
           <div id="model-management" class="model-strategy-panel" role="tabpanel" aria-labelledby="modelStrategyModelsTab" data-model-strategy-panel="models" hidden>
           <div class="workspace-page model-management-workbench" data-model-management="true">
             <header class="workspace-header model-strategy-toolbar compact-section-header model-management-command">
-              <div class="model-management-command-copy"><span class="section-kicker">模型管理</span><h2>模型中枢</h2><p>统一管理连接、用途路由与模型能力；每项任务的最终来源仍由服务端解析。</p></div>
-              <div class="toolbar-actions model-management-command-actions"><span id="modelCatalogSummary" class="catalog-summary" role="status" aria-live="polite">正在加载模型…</span><button id="addModelProfileBtn" class="btn btn-primary" type="button"><i data-lucide="plus" size="16" aria-hidden="true"></i>添加模型</button></div>
+              <div class="model-management-command-copy"><span class="section-kicker">AI策略师 / 模型</span><h2>模型管理</h2><p>统一维护连接与能力，模型用途会在页面底部单独路由。</p></div>
+              <div class="model-management-status-strip" role="status" aria-live="polite"><div class="model-management-status-primary"><span>当前生效模型</span><strong id="modelEffectiveSource">正在选择…</strong></div><div class="model-management-status-stat"><span>已配置</span><strong id="modelCountStat" class="num">--</strong></div><div class="model-management-status-stat"><span>可用</span><strong id="modelActiveStat" class="num">--</strong></div></div>
             </header>
-            <section class="insight-strip model-insight-strip model-management-insights" aria-label="模型概览">
-              <div class="insight-item primary"><span>当前生效模型</span><strong id="modelEffectiveSource">正在选择…</strong><small>由服务端按任务与权限确定</small></div>
-              <div class="insight-item"><span>已配置</span><strong id="modelCountStat" class="num">--</strong><small>模型总数</small></div>
-              <div class="insight-item"><span>连接可用</span><strong id="modelActiveStat" class="num">--</strong><small>可参与模型解析</small></div>
-            </section>
-            <div id="modelSourceNotice" class="source-notice compact-notice" role="status">正在确认当前模型来源…</div>
-            <section id="modelPurposeBindings" class="workspace-panel model-purpose-bindings-panel" aria-labelledby="modelPurposeBindingsTitle" data-model-management-section="purpose">
-              <div class="section-heading"><div><span class="section-kicker">任务路由</span><h2 id="modelPurposeBindingsTitle">按用途分配模型</h2><p>将模型分配给具体任务；留空时继承现有解析规则，实际生效模型会在每张卡片中说明。</p></div></div>
-              <div id="modelPurposeBindingsList" class="model-purpose-list" aria-live="polite"><div class="workspace-skeleton"></div></div>
-            </section>
+            <div id="modelSourceNotice" class="source-notice compact-notice" role="status" aria-live="polite">正在确认当前模型来源…</div>
             <section id="modelProfileCatalog" class="workspace-panel model-catalog-panel" aria-labelledby="modelCatalogTitle" data-model-management-section="directory">
-              <header class="section-heading model-catalog-heading"><div><span class="section-kicker">模型目录</span><h2 id="modelCatalogTitle">已配置模型</h2><p>按模型名或供应商快速定位连接；技术参数保持在展开区域，便于日常巡检。</p></div><span id="modelCatalogResultCount" class="catalog-result-count" role="status" aria-live="polite">等待加载</span></header>
+              <header class="section-heading model-catalog-heading"><div><span class="section-kicker">模型目录</span><h2 id="modelCatalogTitle">已配置模型</h2><p>按模型名或供应商定位连接，展开技术信息查看请求能力。</p></div></header>
               <div class="model-catalog-toolbar" role="search" aria-label="搜索和筛选模型目录">
                 <label class="model-catalog-search"><span class="sr-only">搜索模型或供应商</span><i data-lucide="search" size="16" aria-hidden="true"></i><input id="modelCatalogSearch" type="search" placeholder="搜索模型名或供应商" autocomplete="off" spellcheck="false" aria-controls="modelProfilesList"></label>
                 <label class="model-catalog-status"><span>状态</span><select id="modelCatalogStatus" aria-label="按模型状态筛选" aria-controls="modelProfilesList"><option value="all">全部模型</option><option value="available">连接可用</option><option value="default">默认模型</option></select></label>
+                <span id="modelCatalogSummary" class="catalog-summary" role="status" aria-live="polite">正在加载模型…</span><span id="modelCatalogResultCount" class="catalog-result-count" role="status" aria-live="polite">等待加载</span><button id="addModelProfileBtn" class="btn btn-primary" type="button"><i data-lucide="plus" size="16" aria-hidden="true"></i>添加模型</button>
               </div>
               <div id="modelCatalogEmptyState" class="model-catalog-empty hidden" role="status" aria-live="polite"><i data-lucide="search-x" size="22" aria-hidden="true"></i><div><strong id="modelCatalogEmptyTitle">没有符合条件的模型</strong><p id="modelCatalogEmptyCopy">尝试更换关键词或状态筛选。</p></div><button id="modelCatalogClearBtn" class="btn btn-secondary btn-sm" type="button" data-model-catalog-clear hidden>清除筛选</button></div>
               <div id="modelProfilesList" class="workspace-list model-profile-grid"><div class="workspace-skeleton"></div><div class="workspace-skeleton"></div></div>
@@ -532,6 +524,10 @@
                 <label><input id="shareForCompression" type="checkbox"><span>记忆压缩</span></label>
               </div>
               <div class="settings-grid compact"><label><span>每用户每日请求</span><input id="policyDailyRequests" type="number" min="1"></label><label><span>每用户每日 Token</span><input id="policyDailyTokens" type="number" min="1000" step="1000"></label></div>
+            </section>
+            <section id="modelPurposeBindings" class="workspace-panel model-purpose-bindings-panel" aria-labelledby="modelPurposeBindingsTitle" data-model-management-section="purpose">
+              <div class="section-heading"><div><span class="section-kicker">任务路由</span><h2 id="modelPurposeBindingsTitle">按用途分配模型</h2><p>将模型分配给具体任务；留空时继承现有解析规则，实际生效模型会在每张路由中说明。</p></div></div>
+              <div id="modelPurposeBindingsList" class="model-purpose-list" aria-live="polite"><div class="workspace-skeleton"></div></div>
             </section>
           </div>
           </div>
@@ -1473,7 +1469,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-workbench1"></script>
+    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

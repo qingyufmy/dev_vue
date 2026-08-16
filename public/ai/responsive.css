@@ -2140,16 +2140,12 @@
 /* Model management workbench: preserve the scan order and touch targets on
    tablet and 375px screens without introducing a nested horizontal scroller. */
 @media (max-width: 1023px) {
-  .model-management-workbench .model-management-insights {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .model-management-workbench .model-insight-strip .insight-item:first-child {
-    grid-column: 1 / -1;
-  }
-
   .model-management-workbench .model-profile-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-management-workbench .model-profile-card {
+    grid-template-columns: minmax(190px, 1.05fr) minmax(180px, .95fr) auto;
   }
 }
 
@@ -2160,17 +2156,43 @@
     flex-direction: column;
   }
 
-  .model-management-workbench .model-management-command-actions {
-    justify-content: space-between;
+  .model-management-workbench .model-management-status-strip {
+    width: 100%;
+    margin-left: 0;
   }
 
-  .model-management-workbench .model-purpose-list,
-  .model-management-workbench .model-profile-grid {
+  .model-management-workbench .model-catalog-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(130px, 180px) auto auto auto;
+  }
+
+  .model-management-workbench .model-purpose-list {
     grid-template-columns: 1fr;
   }
 
+  .model-management-workbench .model-profile-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .model-management-workbench .model-profile-card-header {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .model-management-workbench .model-profile-signals {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .model-management-workbench .model-profile-details {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
   .model-management-workbench .model-profile-card-actions {
-    align-items: stretch;
+    grid-column: 2;
+    grid-row: 1;
+    align-items: center;
   }
 
   .model-management-workbench .model-profile-card-actions .btn:not(:last-child) {
@@ -2178,21 +2200,49 @@
   }
 }
 
+@media (max-width: 680px) {
+  .model-management-workbench .model-purpose-row {
+    grid-template-columns: minmax(110px, .85fr) minmax(150px, 1fr) minmax(140px, 1fr) auto;
+  }
+}
+
 @media (max-width: 560px) {
-  .model-management-workbench .model-management-command-actions,
+  .model-management-workbench .model-management-command {
+    gap: 10px;
+  }
+
+  .model-management-workbench .model-management-status-strip {
+    min-width: 0;
+  }
+
   .model-management-workbench .model-catalog-toolbar {
     align-items: stretch;
     grid-template-columns: 1fr;
     flex-direction: column;
   }
 
-  .model-management-workbench .model-management-command-actions .catalog-summary {
+  .model-management-workbench .model-catalog-toolbar > .catalog-summary,
+  .model-management-workbench .model-catalog-toolbar > .catalog-result-count {
     width: 100%;
     min-height: 32px;
   }
 
-  .model-management-workbench .model-management-command-actions .btn {
+  .model-management-workbench .model-catalog-toolbar > .catalog-result-count {
+    border-left: 0;
+    border-top: 1px solid var(--calm-border);
+  }
+
+  .model-management-workbench .model-catalog-toolbar > .btn {
     width: 100%;
+  }
+
+  .model-management-workbench .model-purpose-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .model-management-workbench .model-purpose-error {
+    grid-column: 1;
   }
 
   .model-management-workbench .model-catalog-status {
@@ -2205,9 +2255,14 @@
     width: 100%;
   }
 
+  .model-management-workbench .model-profile-card {
+    display: block;
+  }
+
   .model-management-workbench .model-profile-card-header {
     align-items: stretch;
     flex-direction: column;
+    margin-bottom: 8px;
   }
 
   .model-management-workbench .model-profile-statuses {
@@ -2217,6 +2272,7 @@
   }
 
   .model-management-workbench .model-profile-signals {
+    margin-bottom: 8px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2227,6 +2283,7 @@
   .model-management-workbench .model-profile-card-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 8px;
   }
 
   .model-management-workbench .model-profile-card-actions .btn:last-child {
@@ -2240,7 +2297,7 @@
   }
 
   .model-management-workbench .model-catalog-empty .btn {
-    width: 100%;
+    width: calc(100% - 34px);
     margin-left: 34px;
   }
 }
@@ -2254,11 +2311,6 @@
   .model-management-workbench .model-purpose-row,
   .model-management-workbench .model-profile-card {
     padding: 12px;
-  }
-
-  .model-management-workbench .model-purpose-key {
-    max-width: 42%;
-    font-size: 8px;
   }
 
   .model-management-workbench .model-profile-name-row h3 {

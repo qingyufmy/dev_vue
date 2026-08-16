@@ -11822,52 +11822,110 @@ body.account-center-open { overflow: hidden; }
 }
 
 .model-management-command {
-  align-items: flex-end;
-  padding: 4px 2px 0;
+  align-items: center;
+  gap: 18px;
+  padding: 0 2px;
 }
 
 .model-management-command-copy,
-.model-management-command-actions,
+.model-management-status-strip,
 .model-management-workbench .model-catalog-heading > div {
   min-width: 0;
 }
 
 .model-management-command-copy h2 {
-  margin-top: 4px;
+  margin-top: 2px;
   color: var(--text-primary);
-  font-size: clamp(22px, 2.2vw, 30px);
+  font-size: clamp(19px, 2vw, 24px);
   line-height: 1.2;
-  letter-spacing: -.025em;
+  letter-spacing: -.01em;
 }
 
 .model-management-command-copy p {
-  max-width: 66ch;
-  margin-top: 7px;
+  max-width: 60ch;
+  margin-top: 4px;
   color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
-.model-management-command-actions {
-  flex-wrap: wrap;
-  align-items: center;
+.model-management-status-strip {
+  display: flex;
+  min-width: min(100%, 450px);
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 0;
+  margin-left: auto;
+  border: 1px solid var(--calm-border);
+  border-radius: var(--radius-sm);
+  background: rgba(9, 14, 25, .28);
 }
 
-.model-management-command-actions .btn,
-.model-management-workbench .model-catalog-toolbar :is(input, select),
-.model-management-workbench .model-purpose-row > .btn,
-.model-management-workbench .model-profile-card-actions .btn,
-.model-management-workbench #savePlatformPolicyBtn {
+.model-management-status-primary,
+.model-management-status-stat {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 3px;
+  padding: 8px 12px;
+}
+
+.model-management-status-primary {
+  flex: 1 1 auto;
+  border-right: 1px solid var(--calm-border);
+}
+
+.model-management-status-primary span,
+.model-management-status-stat span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.model-management-status-primary strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-management-status-stat {
+  flex: 0 0 auto;
+  min-width: 66px;
+  text-align: right;
+}
+
+.model-management-status-stat + .model-management-status-stat {
+  border-left: 1px solid var(--calm-border);
+}
+
+.model-management-status-stat strong {
+  color: var(--gold-primary);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.model-management-workbench .model-catalog-toolbar :is(input, select) {
+  min-height: 44px;
+}
+
+/* The strategy workspace has a legacy #model-strategy .btn-sm rule. Keep the
+   touch-target guarantee local to this workbench while giving it higher
+   specificity than that legacy compact-button rule. */
+#model-strategy .model-management-workbench .model-catalog-toolbar > .btn,
+#model-strategy .model-management-workbench .model-purpose-row > .btn,
+#model-strategy .model-management-workbench .model-profile-card-actions .btn,
+#model-strategy .model-management-workbench #savePlatformPolicyBtn {
   min-height: 44px;
 }
 
 .model-management-workbench :is(button, input, select, summary):focus-visible {
   outline: 2px solid color-mix(in srgb, var(--gold-primary) 86%, white);
   outline-offset: 2px;
-}
-
-.model-management-workbench .model-management-insights {
-  grid-template-columns: minmax(0, 1.35fr) repeat(2, minmax(0, .82fr));
 }
 
 .model-management-workbench .model-purpose-bindings-panel,
@@ -11887,27 +11945,26 @@ body.account-center-open { overflow: hidden; }
 }
 
 .model-management-workbench .model-purpose-list {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
 }
 
 .model-management-workbench .model-purpose-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(132px, .82fr) minmax(180px, 1.08fr) minmax(170px, 1.22fr) auto;
   min-width: 0;
-  align-items: stretch;
-  flex-direction: column;
-  gap: 12px;
-  padding: 15px;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
   border-color: var(--calm-border);
-  background: linear-gradient(145deg, rgba(18, 27, 43, .82), rgba(10, 17, 30, .74));
-  transition: transform 180ms ease, border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+  background: var(--bg-card);
+  transition: border-color 160ms ease, background-color 160ms ease;
 }
 
 .model-management-workbench .model-purpose-row:hover {
-  transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--gold-primary) 38%, var(--calm-border));
   background: var(--bg-card-hover);
-  box-shadow: 0 10px 24px rgba(2, 6, 23, .16);
 }
 
 .model-management-workbench .model-purpose-card-head {
@@ -11936,7 +11993,8 @@ body.account-center-open { overflow: hidden; }
 }
 
 .model-management-workbench .model-purpose-copy strong {
-  font-size: 15px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
   line-height: 1.3;
 }
 
@@ -11944,22 +12002,12 @@ body.account-center-open { overflow: hidden; }
   margin-top: 1px;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .model-management-workbench .model-purpose-key {
-  max-width: 45%;
-  overflow: hidden;
-  padding: 4px 7px;
-  border: 1px solid rgba(148, 163, 184, .16);
-  border-radius: var(--radius-pill);
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 .model-management-workbench .model-purpose-select {
@@ -11975,15 +12023,17 @@ body.account-center-open { overflow: hidden; }
 
 .model-management-workbench .model-purpose-resolution {
   display: grid;
-  min-height: 48px;
+  min-width: 0;
+  min-height: 40px;
   align-content: center;
   gap: 3px;
-  padding: 9px 11px;
+  padding: 6px 9px;
   border: 1px solid rgba(148, 163, 184, .14);
-  border-radius: var(--radius-sm);
-  background: rgba(9, 14, 25, .44);
+  border-radius: 6px;
+  background: var(--bg-input-soft);
+  overflow-wrap: anywhere;
   font-size: 11px;
-  line-height: 1.45;
+  line-height: 1.3;
 }
 
 .model-management-workbench .model-purpose-resolution.is-blocked {
@@ -11992,26 +12042,25 @@ body.account-center-open { overflow: hidden; }
 }
 
 .model-management-workbench .model-purpose-row > .btn {
-  align-self: flex-start;
-  padding-inline: 14px;
+  align-self: center;
+  padding-inline: 12px;
 }
 
 .model-management-workbench .model-purpose-error {
   min-height: 0;
-  margin-top: -3px;
-  grid-column: auto;
+  grid-column: 2 / -1;
+  margin: -2px 0 0;
 }
 
 .model-management-workbench .model-catalog-heading {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .model-management-workbench .catalog-result-count {
   flex: 0 0 auto;
-  min-height: 30px;
-  padding: 6px 9px;
-  border: 1px solid rgba(148, 163, 184, .16);
-  border-radius: var(--radius-pill);
+  min-height: 28px;
+  padding: 5px 9px;
+  border-left: 1px solid var(--calm-border);
   color: var(--text-secondary);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -12020,9 +12069,10 @@ body.account-center-open { overflow: hidden; }
 
 .model-management-workbench .model-catalog-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
-  gap: 10px;
-  margin-bottom: 14px;
+  grid-template-columns: minmax(200px, 1fr) minmax(130px, 180px) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .model-management-workbench .model-catalog-search,
@@ -12064,6 +12114,20 @@ body.account-center-open { overflow: hidden; }
 
 .model-management-workbench .model-catalog-status > select {
   width: 100%;
+}
+
+.model-management-workbench .model-catalog-toolbar > .catalog-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-management-workbench .model-catalog-toolbar > #addModelProfileBtn {
+  min-width: 112px;
+  white-space: nowrap;
 }
 
 .model-management-workbench .model-catalog-empty {
@@ -12112,28 +12176,27 @@ body.account-center-open { overflow: hidden; }
 
 .model-management-workbench .model-profile-grid {
   display: grid !important;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-  gap: 12px;
+  gap: 8px;
 }
 
 .model-management-workbench .model-profile-card {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.15fr) minmax(200px, 1fr) auto;
   min-width: 0;
-  align-items: stretch;
-  flex-direction: column;
-  gap: 14px;
-  padding: 16px;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
   border-color: var(--calm-border);
-  background: linear-gradient(145deg, rgba(18, 27, 43, .93), rgba(10, 17, 30, .88));
-  transition: transform 180ms ease, border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+  background: var(--bg-card);
+  transition: border-color 160ms ease, background-color 160ms ease;
 }
 
 .model-management-workbench .model-profile-card:hover {
-  transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--gold-primary) 34%, var(--calm-border));
   background: var(--bg-card-hover);
-  box-shadow: 0 12px 26px rgba(2, 6, 23, .18);
 }
 
 .model-management-workbench .model-profile-card-header,
@@ -12144,10 +12207,19 @@ body.account-center-open { overflow: hidden; }
 }
 
 .model-management-workbench .model-profile-card-header {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
+}
+
+#model-strategy .model-management-workbench .model-profile-card-header {
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 6px;
 }
 
 .model-management-workbench .model-profile-identity {
@@ -12156,15 +12228,20 @@ body.account-center-open { overflow: hidden; }
   gap: 10px;
 }
 
+#model-strategy .model-management-workbench .model-profile-identity,
+#model-strategy .model-management-workbench .model-profile-statuses {
+  width: 100%;
+}
+
 .model-management-workbench .model-profile-mark {
   display: inline-flex;
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   align-items: center;
   justify-content: center;
   border: 1px solid color-mix(in srgb, var(--gold-primary) 30%, var(--border-default));
-  border-radius: 10px;
+  border-radius: 7px;
   background: var(--gold-wash);
   color: var(--gold-primary);
 }
@@ -12183,7 +12260,7 @@ body.account-center-open { overflow: hidden; }
 .model-management-workbench .model-profile-name-row h3 {
   overflow-wrap: anywhere;
   color: var(--text-primary);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.35;
 }
 
@@ -12195,31 +12272,36 @@ body.account-center-open { overflow: hidden; }
 
 .model-management-workbench .model-profile-statuses {
   flex: 0 0 auto;
-  align-items: flex-end;
-  flex-direction: column;
-  gap: 5px;
+  align-items: center;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .model-management-workbench .model-profile-signals {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
 }
 
 .model-management-workbench .model-profile-signal {
+  display: grid;
   min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid rgba(148, 163, 184, .14);
-  border-radius: var(--radius-sm);
-  background: rgba(9, 14, 25, .42);
+  grid-template-columns: auto minmax(0, auto);
+  align-items: baseline;
+  gap: 4px;
+  padding: 0;
 }
 
 .model-management-workbench .model-profile-signal > strong {
-  display: block;
   overflow-wrap: anywhere;
-  margin-top: 4px;
+  margin-top: 0;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.35;
 }
 
@@ -12227,8 +12309,11 @@ body.account-center-open { overflow: hidden; }
 .model-management-workbench .model-profile-signal > strong.is-warning { color: #fcd34d; }
 
 .model-management-workbench .model-profile-details {
-  margin-top: auto;
-  padding-top: 2px;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+  margin: 0;
+  padding-top: 4px;
   border-top: 1px solid rgba(148, 163, 184, .12);
 }
 
@@ -12246,8 +12331,13 @@ body.account-center-open { overflow: hidden; }
 }
 
 .model-management-workbench .model-profile-card-actions {
+  grid-column: 3;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 6px;
 }
 
 .model-management-workbench .model-profile-card-actions .btn {
