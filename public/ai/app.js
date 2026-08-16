@@ -2787,6 +2787,30 @@ function historySyncMetadata(data) {
     ? data.history_sync : {};
 }
 
+function historyRevisionFromData(data) {
+  const rawRevision = historySyncMetadata(data).history_revision;
+  if (rawRevision == null || (typeof rawRevision === "string" && rawRevision.trim() === "")
+      || (typeof rawRevision !== "number" && typeof rawRevision !== "string")) return null;
+  const revision = Number(rawRevision);
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+}
+
+async function loadHistoryTicketMapsForData(data) {
+  const historyRevision = historyRevisionFromData(data);
+  // Pin the current revision before starting either map request. Each request
+  // also receives the explicit revision so a concurrent Bridge push cannot
+  // change the cache key through `_lastHistoryRevision` while it is loading.
+  if (historyRevision !== null) _lastHistoryRevision = historyRevision;
+  const loadMap = loader => Promise.resolve()
+    .then(() => loader({ historyRevision }))
+    .catch(() => {});
+  await Promise.all([
+    loadMap(loadSignalTickets),
+    loadMap(loadCloseSignalTickets),
+  ]);
+  return historyRevision;
+}
+
 function historyPrepareRangeFromResponse(data = {}) {
   const candidates = [data?.history_range, data?.scope_range, data?.range].filter(item => item && typeof item === "object");
   const firstObject = (...values) => values.find(value => value && typeof value === "object") || {};
@@ -13814,11 +13838,12 @@ function loadHistory(forceRefresh, options = {}) {
       snapshot:_historyCursorState.snapshotId });
     if (!forceRefresh && _historyCache && _historyCache.filters === filterKey) {
       if (!historyRangeContextMatches(requestContextKey, requestGeneration)) return null;
-      applyHistoryScopeResponse(_historyCache.data);
-      _applyHistoryData(_historyCache.data, { tableOnly:options.tableOnly === true });
-      loadSignalTickets().catch(()=>{});
-      loadCloseSignalTickets().catch(()=>{});
-      return _historyCache.data;
+      const cachedData = _historyCache.data;
+      applyHistoryScopeResponse(cachedData);
+      await loadHistoryTicketMapsForData(cachedData);
+      if (!historyRangeContextMatches(requestContextKey, requestGeneration)) return null;
+      _applyHistoryData(cachedData, { tableOnly:options.tableOnly === true });
+      return cachedData;
     }
 
     historyCircuitAllows(key, { manualRefresh });
@@ -13835,24 +13860,20 @@ function loadHistory(forceRefresh, options = {}) {
           ...frozenRangeParams,
         }
       : {};
-    const [data] = await Promise.all([
-      wsApi("history", {
-        page:filters.page,
-        page_size:filters.pageSize,
-        force_refresh:Boolean(forceRefresh),
-        ...filterParams,
-        ...(Object.keys(rangeParams).length
-          ? {
-              ...(filters.page > 1 && _historyCursorState.snapshotId
-                ? { history_snapshot_id:_historyCursorState.snapshotId }
-                : {}),
-              ...rangeParams,
-            } : {}),
-        ...(cursor ? { cursor } : {}),
-      }),
-      loadSignalTickets(),
-      loadCloseSignalTickets(),
-    ]);
+    const data = await wsApi("history", {
+      page:filters.page,
+      page_size:filters.pageSize,
+      force_refresh:Boolean(forceRefresh),
+      ...filterParams,
+      ...(Object.keys(rangeParams).length
+        ? {
+            ...(filters.page > 1 && _historyCursorState.snapshotId
+              ? { history_snapshot_id:_historyCursorState.snapshotId }
+              : {}),
+            ...rangeParams,
+          } : {}),
+      ...(cursor ? { cursor } : {}),
+    });
     if (!historyRangeContextMatches(requestContextKey, requestGeneration)) return null;
     if (data?.status !== 'success') {
       const error = new Error(data?.message || data?.error || '历史数据读取失败');
@@ -13902,6 +13923,8 @@ function loadHistory(forceRefresh, options = {}) {
     const resolvedFilterKey = JSON.stringify({ ...filterParams, page:filters.page,
       pageSize:filters.pageSize, snapshot:_historyCursorState.snapshotId });
     _historyCache = { filters:resolvedFilterKey, data };
+    await loadHistoryTicketMapsForData(data);
+    if (!historyRangeContextMatches(requestContextKey, requestGeneration)) return null;
     _applyHistoryData(data, { tableOnly:options.tableOnly === true });
     clearHistoryCircuit(key);
     return data;
@@ -14090,8 +14113,9 @@ function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, 
       finishHistoryRangeRetry(_historyRangeRetryState);
     }
     const sync = historySyncMetadata(tableData);
-    const revision = Number(sync.history_revision);
-    if (Number.isSafeInteger(revision) && revision >= 0) _lastHistoryRevision = revision;
+    // loadHistory pins the response revision before loading ticket maps and
+    // keeps it stable through the table render; do not overwrite it here
+    // after asynchronous map work has completed.
     if (sync.freshness_state === "fresh") _historyDirty = false;
     else if (sync.freshness_state) _historyDirty = true;
     if (!disableFreshnessRetry) scheduleHistoryFreshnessRetry(tableData);

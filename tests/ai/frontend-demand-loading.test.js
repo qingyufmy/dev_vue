@@ -104,6 +104,7 @@ async function runHistoryCursorScenario() {
     function notifyHistoryFailure() {}
     function loadSignalTickets() { return Promise.resolve() }
     function loadCloseSignalTickets() { return Promise.resolve() }
+    function loadHistoryTicketMapsForData() { return Promise.resolve() }
     function _applyHistoryData() {}
     function cancelHistoryRangeRetry() {}
     function resetHistoryCursorState(key = null) {
@@ -129,6 +130,101 @@ async function runHistoryCursorScenario() {
         first, second, dirty,
         firstRange:{ start:_historyCursorState.rangeStart, end:_historyCursorState.rangeEnd },
       }
+    })()
+  `)
+  return harness()
+}
+
+async function runHistoryTicketBindingScenario() {
+  const metadataStart = app.indexOf('function historySyncMetadata')
+  const metadataEnd = app.indexOf('function historyPrepareRangeFromResponse', metadataStart)
+  const tableStart = app.indexOf('function loadHistory(forceRefresh')
+  const tableEnd = app.indexOf('function _applyHistoryData', tableStart)
+  expect(metadataStart).toBeGreaterThanOrEqual(0)
+  expect(metadataEnd).toBeGreaterThan(metadataStart)
+  expect(tableStart).toBeGreaterThanOrEqual(0)
+  expect(tableEnd).toBeGreaterThan(tableStart)
+  const harness = new Function(`
+    const events = []
+    const mapRequests = []
+    const renders = []
+    let historyReads = 0
+    let _historyCache = null
+    let _lastHistoryRevision = 99
+    let _historyQueryState = null
+    let _historyCursorState = {
+      key:null, snapshotId:null, rangeStart:null, rangeEnd:null,
+      pageCursors:new Map([[1, null]]),
+    }
+    const _historyTableFlights = new Map()
+    const state = {
+      historyFilters:{ page:1, pageSize:20 },
+      bridgePlatform:'mt5',
+      bridgeAccountIdentity:{ brokerServerKey:'DEMO', loginAccount:'42' },
+      _accountContextGeneration:0,
+      signalTickets:{},
+      closeSignalTickets:{},
+    }
+    const document = { getElementById:() => ({ value:'' }) }
+    function historySyncMetadata(data) {
+      return data?.history_sync && typeof data.history_sync === 'object' ? data.history_sync : {}
+    }
+    function getHistoryRangeParams() { return { history_scope:'all' } }
+    function historyRefreshContextKey() { return 'history-context' }
+    function historyRangeContextMatches() { return true }
+    function applyHistoryScopeResponse() {}
+    function historyFlightKey(kind, options) { return \`\${kind}:\${Boolean(options.forceRefresh)}\` }
+    function historyCircuitAllows() {}
+    function clearHistoryCircuit() {}
+    function historyRangeFromError() { return null }
+    function isHistoryCursorRangeIncomplete() { return false }
+    function rememberHistoryFailure() {}
+    function notifyHistoryFailure() {}
+    function clearInvalidHistoryRangePreference() {}
+    function historyCursorRangeIsFixed() { return false }
+    function historyQueryRangeParams() { return {} }
+    function resetHistoryCursorState(key = null) {
+      _historyCursorState = { key, snapshotId:null, rangeStart:null, rangeEnd:null, pageCursors:new Map([[1, null]]) }
+    }
+    function loadSignalTickets(options) {
+      mapRequests.push({ kind:'signal', revision:options.historyRevision, globalRevision:_lastHistoryRevision })
+      events.push(\`map-request:signal:\${options.historyRevision}\`)
+      return new Promise(resolve => setTimeout(() => {
+        state.signalTickets = { revision:options.historyRevision }
+        events.push(\`map-ready:signal:\${options.historyRevision}\`)
+        resolve(state.signalTickets)
+      }, 0))
+    }
+    function loadCloseSignalTickets(options) {
+      mapRequests.push({ kind:'close', revision:options.historyRevision, globalRevision:_lastHistoryRevision })
+      events.push(\`map-request:close:\${options.historyRevision}\`)
+      return new Promise(resolve => setTimeout(() => {
+        state.closeSignalTickets = { revision:options.historyRevision }
+        events.push(\`map-ready:close:\${options.historyRevision}\`)
+        resolve(state.closeSignalTickets)
+      }, 0))
+    }
+    function wsApi(action) {
+      if (action !== 'history') throw new Error(\`unexpected action: \${action}\`)
+      historyReads += 1
+      return Promise.resolve({
+        status:'success', orders:[{ ticket:'T-1' }],
+        history_sync:{ history_revision:41, freshness_state:'fresh' },
+      })
+    }
+    function _applyHistoryData() {
+      const renderNo = renders.length + 1
+      renders.push({ renderNo, globalRevision:_lastHistoryRevision,
+        signalRevision:state.signalTickets.revision,
+        closeRevision:state.closeSignalTickets.revision })
+      events.push(\`render:\${renderNo}\`)
+    }
+    ${app.slice(metadataStart, metadataEnd)}
+    ${app.slice(tableStart, tableEnd)}
+    return (async () => {
+      await loadHistory(true)
+      await loadHistory(false)
+      return { events, mapRequests, renders, historyReads, lastHistoryRevision:_lastHistoryRevision }
     })()
   `)
   return harness()
@@ -341,6 +437,33 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(leaveHistory).toContain('cancelHistoryRangeRetry()')
     expect(leaveHistory).toContain('clearHistoryFreshnessRetry()')
     expect(app).toContain('function resetHistoryCursorState(key = null, { preserveRange = false } = {}) {\n  cancelHistoryRangeRetry()')
+  })
+
+  it('binds history tickets before rendering both fresh and cache-hit pages', async () => {
+    const result = await runHistoryTicketBindingScenario()
+
+    expect(result.historyReads).toBe(1)
+    expect(result.lastHistoryRevision).toBe(41)
+    expect(result.mapRequests).toEqual([
+      { kind:'signal', revision:41, globalRevision:41 },
+      { kind:'close', revision:41, globalRevision:41 },
+      { kind:'signal', revision:41, globalRevision:41 },
+      { kind:'close', revision:41, globalRevision:41 },
+    ])
+    expect(result.renders).toEqual([
+      { renderNo:1, globalRevision:41, signalRevision:41, closeRevision:41 },
+      { renderNo:2, globalRevision:41, signalRevision:41, closeRevision:41 },
+    ])
+    const firstRender = result.events.indexOf('render:1')
+    const secondRender = result.events.indexOf('render:2')
+    expect(result.events.slice(0, firstRender)).toEqual([
+      'map-request:signal:41', 'map-request:close:41',
+      'map-ready:signal:41', 'map-ready:close:41',
+    ])
+    expect(result.events.slice(firstRender + 1, secondRender)).toEqual([
+      'map-request:signal:41', 'map-request:close:41',
+      'map-ready:signal:41', 'map-ready:close:41',
+    ])
   })
 
   it('accepts only a safe fixed range from an incomplete-history response', () => {
