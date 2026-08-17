@@ -6488,6 +6488,62 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '193_manual_trade_review_counterfactual_points',
+    async up() {
+      // Candidate points are a separate ledger from migration 192's fixed
+      // two-stage rows.  A generation is fenced by the business job at write
+      // time; no foreign keys are used so the existing review history remains
+      // readable during staged rollouts and restores.
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_counterfactual_points (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        case_id BIGINT UNSIGNED NOT NULL,
+        job_id BIGINT UNSIGNED NOT NULL,
+        generation_no INT UNSIGNED NOT NULL,
+        candidate_key VARCHAR(64) NOT NULL,
+        decision_time_utc_msc BIGINT UNSIGNED NOT NULL,
+        offset_bars SMALLINT NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        model_task_id VARCHAR(128) DEFAULT NULL,
+        market_snapshot_hash CHAR(64) DEFAULT NULL,
+        input_hash CHAR(64) DEFAULT NULL,
+        normalized_output_json MEDIUMTEXT DEFAULT NULL,
+        normalized_output_hash CHAR(64) DEFAULT NULL,
+        last_error_code VARCHAR(128) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_manual_trade_review_counterfactual_generation (job_id, generation_no, candidate_key),
+        UNIQUE KEY uk_manual_trade_review_counterfactual_model_task (model_task_id),
+        KEY idx_manual_trade_review_counterfactual_status (status, updated_at),
+        KEY idx_manual_trade_review_counterfactual_case_generation (case_id, generation_no),
+        KEY idx_manual_trade_review_counterfactual_job_generation (job_id, generation_no),
+        KEY idx_manual_trade_review_counterfactual_decision_time (decision_time_utc_msc)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // CREATE TABLE can succeed before schema_migrations is recorded (for
+      // example after a process interruption).  Repair each named index
+      // independently without touching existing rows or prior migrations.
+      const indexes = await queryAll(`SELECT INDEX_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'manual_trade_review_counterfactual_points'`)
+      const existing = new Set(indexes.map(row => String(row.INDEX_NAME)))
+      const missing = [
+        ['uk_manual_trade_review_counterfactual_generation', 'ADD UNIQUE KEY uk_manual_trade_review_counterfactual_generation (job_id, generation_no, candidate_key)'],
+        ['uk_manual_trade_review_counterfactual_model_task', 'ADD UNIQUE KEY uk_manual_trade_review_counterfactual_model_task (model_task_id)'],
+        ['idx_manual_trade_review_counterfactual_status', 'ADD KEY idx_manual_trade_review_counterfactual_status (status, updated_at)'],
+        ['idx_manual_trade_review_counterfactual_case_generation', 'ADD KEY idx_manual_trade_review_counterfactual_case_generation (case_id, generation_no)'],
+        ['idx_manual_trade_review_counterfactual_job_generation', 'ADD KEY idx_manual_trade_review_counterfactual_job_generation (job_id, generation_no)'],
+        ['idx_manual_trade_review_counterfactual_decision_time', 'ADD KEY idx_manual_trade_review_counterfactual_decision_time (decision_time_utc_msc)'],
+      ]
+      for (const [name, definition] of missing) {
+        if (!existing.has(name)) {
+          await queryRun(`ALTER TABLE manual_trade_review_counterfactual_points ${definition}`)
+        }
+      }
+    }
   }
 ]
 
