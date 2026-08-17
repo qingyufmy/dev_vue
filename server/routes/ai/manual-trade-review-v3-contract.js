@@ -540,7 +540,11 @@ export function normalizeManualTradeReviewV3Content(input, options = {}) {
     output_contract_version:MANUAL_TRADE_REVIEW_V3_VERSION,
     review_summary:normalizedText(input.review_summary, 'review_summary'),
     why_profitable:normalizeWhyProfitable(input.why_profitable),
-    technical_analysis_chain:arrayValue(input.technical_analysis_chain, 'technical_analysis_chain', MAX_CHAIN_COUNT, { required:false })
+    // A v3 review must explain at least one evidence-backed technical chain.
+    // When no method can be reconstructed, the model must still emit one
+    // `unexplained` item with its evidence limitations instead of omitting the
+    // core business answer.
+    technical_analysis_chain:arrayValue(input.technical_analysis_chain, 'technical_analysis_chain', MAX_CHAIN_COUNT)
       .map(item => normalizeTechnicalChainItem(item, options)),
     counterfactual_summary:normalizeCounterfactualSummary(input.counterfactual_summary, options),
     rule_comparisons:arrayValue(input.rule_comparisons, 'rule_comparisons', 50, { required:false })

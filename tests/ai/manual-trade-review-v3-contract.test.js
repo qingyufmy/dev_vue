@@ -154,6 +154,9 @@ describe('manual trade review v3 contract', () => {
     expect(() => normalizeManualTradeReviewV3Content(v3Content({
       technical_analysis_chain:[{ ...v3Content().technical_analysis_chain[0], origin:'strategy_derived', strategy_rule_paths:['strategy_policy.missing'] }],
     }), { strategySnapshot, allowedEvidenceRefs:refs, serverDerivedSummary:derivedSummary })).toThrow('strategy_rule_path_unknown')
+    expect(() => normalizeManualTradeReviewV3Content(v3Content({ technical_analysis_chain:[] }), {
+      strategySnapshot, allowedEvidenceRefs:refs, serverDerivedSummary:derivedSummary,
+    })).toThrow('technical_analysis_chain_required')
   })
 
   it('does not allow model output to supply the direction summary', () => {
