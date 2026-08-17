@@ -6681,6 +6681,24 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '195_manual_trade_review_aggregate_runtime_fence',
+    async up() {
+      // Runtime identity is a non-sensitive generation fence.  Credentials
+      // and raw provider URLs never belong in this table; the application
+      // stores only the sanitized runtime JSON and its hash.
+      const columnRows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'manual_trade_review_aggregate_cases'`)
+      const existingColumns = new Set(columnRows.map(row => String(row.COLUMN_NAME)))
+      const columns = [
+        ['model_runtime_json', 'ADD COLUMN model_runtime_json MEDIUMTEXT DEFAULT NULL'],
+        ['model_runtime_hash', 'ADD COLUMN model_runtime_hash CHAR(64) DEFAULT NULL'],
+      ]
+      for (const [name, definition] of columns) {
+        if (!existingColumns.has(name)) await queryRun(`ALTER TABLE manual_trade_review_aggregate_cases ${definition}`)
+      }
+    }
   }
 ]
 

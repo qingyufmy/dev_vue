@@ -1340,7 +1340,8 @@ router.get('/ai/manual-trade-review-aggregates', authMiddleware, async (req, res
   if (!requireManualTradeReviewManager(req, res)) return
   try {
     const aggregates = await listManualTradeReviewAggregates({ actor:req.user, userId:req.user.id,
-      tradingAccountId:req.query?.trading_account_id, limit:req.query?.limit, offset:req.query?.offset })
+      tradingAccountId:req.query?.trading_account_id, strategyId:req.query?.strategy_id,
+      limit:req.query?.limit, offset:req.query?.offset })
     res.json({ ok:true, aggregates })
   } catch (error) { reviewError(res, error) }
 })

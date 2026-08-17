@@ -188,6 +188,88 @@ function modelEndpoint(model) {
   return { protocol, url:`${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}` }
 }
 
+function safeCapabilitySnapshot(capabilities = {}) {
+  const readNumber = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Math.trunc(Number(value)) : null
+  return {
+    context_window_tokens:readNumber(capabilities.context_window_tokens),
+    max_input_tokens:readNumber(capabilities.max_input_tokens ?? capabilities.provider_max_input_tokens),
+    max_output_tokens:readNumber(capabilities.max_output_tokens),
+    context_limit_semantics:['shared_context', 'separate'].includes(String(capabilities.context_limit_semantics || ''))
+      ? String(capabilities.context_limit_semantics) : null,
+    token_limits_source:capabilities.token_limits_source == null ? null : String(capabilities.token_limits_source).slice(0, 64),
+    token_limits_status:capabilities.token_limits_status == null ? null : String(capabilities.token_limits_status).slice(0, 32),
+    token_limits_updated_at_utc_ms:readNumber(capabilities.token_limits_updated_at_utc_ms
+      ?? capabilities.token_limits_updated_at_utc_msc),
+  }
+}
+
+/**
+ * Return the non-sensitive model envelope used to fence one aggregate
+ * generation.  Credentials and the raw endpoint are intentionally excluded;
+ * only an endpoint fingerprint is persisted.
+ */
+export function manualTradeReviewAggregateModelRuntime({ resolved, endpoint, capabilities = {}, budget = {} } = {}) {
+  const model = resolved?.model || {}
+  const modelProfileId = Number(resolved?.model_profile_id ?? model.id)
+  if (!Number.isSafeInteger(modelProfileId) || modelProfileId <= 0) throw aggregateError('model_runtime_invalid')
+  const provider = String(model.provider || model.api_provider || '').trim()
+  const modelName = String(model.model_name || model.model || '').trim()
+  const protocol = String(endpoint?.protocol || modelProviderProtocol(provider)).trim()
+  if (!provider || !modelName || !protocol || !endpoint?.url) throw aggregateError('model_runtime_invalid')
+  const capabilitySnapshot = safeCapabilitySnapshot(capabilities)
+  const runtime = {
+    runtime_version:1,
+    model_profile_id:modelProfileId,
+    provider,
+    model:modelName,
+    protocol,
+    credential_source:String(resolved?.credential_source || 'none'),
+    endpoint_fingerprint:sha256(String(endpoint.url)),
+    profile_updated_at:model.profile_updated_at || null,
+    temperature:Number.isFinite(Number(model.temperature)) ? Number(model.temperature) : null,
+    thinking_enabled:model.thinking_enabled == null ? null : Boolean(model.thinking_enabled),
+    reasoning_effort:model.reasoning_effort == null ? null : String(model.reasoning_effort),
+    capability_snapshot_hash:sha256(JSON.stringify(capabilitySnapshot)),
+    capability_snapshot:capabilitySnapshot,
+    selected_output_budget:Number(budget.selectedMaxOutputTokens) > 0 ? Math.trunc(Number(budget.selectedMaxOutputTokens)) : null,
+    estimated_input_tokens:Number(budget.estimatedInputTokens) >= 0 ? Math.trunc(Number(budget.estimatedInputTokens)) : null,
+  }
+  const json = JSON.stringify(runtime)
+  return { json, hash:sha256(json), runtime }
+}
+
+function parseAggregateRuntime(row) {
+  const hash = row?.model_runtime_hash == null ? null : normalizedHash(row.model_runtime_hash, 'model_runtime_hash')
+  const json = row?.model_runtime_json == null || row.model_runtime_json === '' ? null : String(row.model_runtime_json)
+  if ((hash && !json) || (!hash && json) || (json && sha256(json) !== hash)) {
+    throw aggregateError('model_runtime_changed')
+  }
+  return { hash, json, runtime:parseJson(json, null) }
+}
+
+async function persistAggregateModelRuntime({ job, runtime, modelProfileId, credentialSource, db, now = beijingNow() } = {}) {
+  const id = positiveId(job?.id, 'aggregate_case_id')
+  const generation = positiveId(job?.generation_no, 'generation_no')
+  const token = nonEmptyLeaseToken(job?.lease_token)
+  const database = dbApi(db)
+  const existing = parseAggregateRuntime(job)
+  if (existing.hash && existing.hash !== runtime.hash) throw aggregateError('model_runtime_changed')
+  const persistedProfileId = Number(modelProfileId ?? runtime.runtime?.model_profile_id)
+  const result = await database.queryRun(`UPDATE manual_trade_review_aggregate_cases SET
+      model_profile_id = ?, credential_source = ?, model_runtime_json = ?, model_runtime_hash = ?,
+      updated_at = ?
+    WHERE id = ? AND generation_no = ? AND status = 'generating' AND lease_token = ?
+      AND ((model_runtime_hash IS NULL AND model_runtime_json IS NULL)
+        OR (model_runtime_hash = ? AND model_runtime_json = ?))`, [
+    Number.isSafeInteger(persistedProfileId) && persistedProfileId > 0 ? persistedProfileId : null,
+    credentialSource == null ? null : String(credentialSource).slice(0, 32),
+    runtime.json, runtime.hash, now, id, generation, token, existing.hash || runtime.hash, existing.json || runtime.json,
+  ])
+  if (affectedRows(result) !== 1) throw aggregateError('model_runtime_changed')
+  return { ...runtime, model_profile_id:Number.isSafeInteger(persistedProfileId) && persistedProfileId > 0 ? persistedProfileId : null,
+    credential_source:credentialSource == null ? null : String(credentialSource).slice(0, 32) }
+}
+
 function publicCase(row) {
   if (!row) return null
   return {
@@ -203,6 +285,7 @@ function publicCase(row) {
     input_hash:row.input_hash || null,
     prompt_hash:row.prompt_hash || null,
     output_contract_hash:row.output_contract_hash || null,
+    model_runtime_hash:row.model_runtime_hash || null,
     status:row.status,
     task_deadline_at:row.task_deadline_at || null,
     generation_no:Number(row.generation_no || 1),
@@ -385,8 +468,9 @@ function freezeAggregateSnapshots(rows) {
 async function loadAndFreezeAggregateEnvelope(run, aggregateRow) {
   const rows = await txRows(run, `SELECT sources.*, cases.user_id AS source_user_id,
       cases.trading_account_id AS source_trading_account_id, cases.strategy_id AS source_strategy_id,
-      cases.strategy_version AS source_strategy_version, cases.status AS source_case_status,
-      cases.approved_version_id, cases.strategy_snapshot_json, cases.strategy_snapshot_hash,
+      cases.strategy_version AS current_strategy_version,
+      cases.strategy_snapshot_json AS current_strategy_snapshot_json,
+      cases.strategy_snapshot_hash AS current_strategy_snapshot_hash,
       versions.content_json, versions.content_hash AS version_content_hash
     FROM manual_trade_review_aggregate_sources sources
     JOIN manual_trade_review_cases cases ON cases.id = sources.source_case_id
@@ -400,7 +484,10 @@ async function loadAndFreezeAggregateEnvelope(run, aggregateRow) {
     if (Number(row.source_user_id) !== Number(aggregateRow.user_id)) throw aggregateError('source_owner_mismatch')
     if (Number(row.source_trading_account_id) !== Number(aggregateRow.trading_account_id)) throw aggregateError('source_account_mismatch')
     if (Number(row.source_strategy_id) !== Number(aggregateRow.strategy_id)) throw aggregateError('source_strategy_mismatch')
-    if (!CASE_STATUS_COMPLETED.has(String(row.source_case_status))) throw aggregateError('source_not_completed')
+    // The source case status and approved pointer are deliberately not read
+    // as gates here.  Creation already validated and persisted the exact
+    // source version plus its confirmation status.  A later edit, deferral,
+    // or confirmation change must not invalidate this pinned aggregate.
     const storedHash = normalizedHash(row.source_content_hash, 'stored_content_hash')
     const versionHash = normalizedHash(row.version_content_hash, 'version_content_hash')
     if (storedHash !== versionHash || sha256(row.content_json) !== storedHash) throw aggregateError('source_changed')
@@ -408,8 +495,9 @@ async function loadAndFreezeAggregateEnvelope(run, aggregateRow) {
       ...frozenSourceRecord(row),
       content_json:row.content_json,
       confirmed:String(row.confirmation_status) === 'confirmed',
-      strategy_snapshot_json:row.strategy_snapshot_json,
-      strategy_snapshot_hash:row.strategy_snapshot_hash,
+      current_strategy_version:row.current_strategy_version,
+      strategy_snapshot_json:row.current_strategy_snapshot_json,
+      strategy_snapshot_hash:row.current_strategy_snapshot_hash,
     }
   }).sort(sourceSort)
   const selection = normalized.map(row => ({ case_id:row.case_id, version_id:row.version_id, content_hash:row.content_hash }))
@@ -417,18 +505,39 @@ async function loadAndFreezeAggregateEnvelope(run, aggregateRow) {
   if (String(aggregateRow.selection_hash || '').toLowerCase() !== selectionHash) throw aggregateError('source_set_changed')
   const frozenJson = JSON.stringify(normalized.map(frozenSourceRecord))
   const frozenHash = manualTradeReviewAggregateFrozenSourceSetHash(normalized)
-  const snapshots = freezeAggregateSnapshots(normalized)
+  let snapshots
+  if (aggregateRow.strategy_snapshot_json || aggregateRow.strategy_snapshot_hash) {
+    const storedSnapshotJson = String(aggregateRow.strategy_snapshot_json || '')
+    const storedSnapshotHash = normalizedHash(aggregateRow.strategy_snapshot_hash, 'strategy_snapshot_hash')
+    if (!storedSnapshotJson || sha256(storedSnapshotJson) !== storedSnapshotHash) {
+      throw aggregateError('strategy_snapshot_changed')
+    }
+    const storedSnapshots = parseJson(storedSnapshotJson, null)
+    if (!Array.isArray(storedSnapshots) || storedSnapshots.length === 0) {
+      throw aggregateError('strategy_snapshot_invalid')
+    }
+    snapshots = freezeAggregateSnapshots(storedSnapshots.map(item => ({
+      strategy_version:item?.strategy_version,
+      strategy_snapshot_hash:item?.strategy_snapshot_hash,
+      strategy_snapshot_json:JSON.stringify(item?.strategy_snapshot),
+    })))
+    if (snapshots.hash !== storedSnapshotHash) throw aggregateError('strategy_snapshot_changed')
+  } else {
+    // Compatibility for aggregate rows queued before creation-time freezing.
+    // Only this one-time legacy path may consult the current case snapshot.
+    for (const row of normalized) {
+      if (row.current_strategy_version != null
+        && Number(row.current_strategy_version) !== Number(row.strategy_version)) {
+        throw aggregateError('strategy_snapshot_changed')
+      }
+    }
+    snapshots = freezeAggregateSnapshots(normalized)
+  }
   if (aggregateRow.frozen_source_set_hash && String(aggregateRow.frozen_source_set_hash).toLowerCase() !== frozenHash) {
     throw aggregateError('frozen_source_set_changed')
   }
   if (aggregateRow.frozen_source_set_json && sha256(String(aggregateRow.frozen_source_set_json)) !== frozenHash) {
     throw aggregateError('frozen_source_set_changed')
-  }
-  if (aggregateRow.strategy_snapshot_hash && String(aggregateRow.strategy_snapshot_hash).toLowerCase() !== snapshots.hash) {
-    throw aggregateError('strategy_snapshot_changed')
-  }
-  if (aggregateRow.strategy_snapshot_json && sha256(String(aggregateRow.strategy_snapshot_json)) !== snapshots.hash) {
-    throw aggregateError('strategy_snapshot_changed')
   }
   return {
     rows:normalized,
@@ -641,11 +750,19 @@ export async function createManualTradeReviewAggregate({ actor, userId, tradingA
       const pinned = await loadPinnedSources(run, selections, {
         userId:ownerId, tradingAccountId:accountId, strategyId:strategy,
       })
+      // Freeze the complete source and strategy envelope while the source
+      // rows are still locked.  Claim/recovery must consume this envelope;
+      // it must not reinterpret a source case's later lifecycle status.
+      const frozenSourceSetJson = JSON.stringify(pinned.rows.map(frozenSourceRecord))
+      const frozenSourceSetHash = manualTradeReviewAggregateFrozenSourceSetHash(pinned.rows)
+      const frozenSnapshots = freezeAggregateSnapshots(pinned.rows)
       const result = await txRun(run, `INSERT INTO manual_trade_review_aggregate_cases
         (client_request_id, user_id, trading_account_id, strategy_id, strategy_versions_json, selection_hash,
+         frozen_source_set_json, frozen_source_set_hash, strategy_snapshot_json, strategy_snapshot_hash,
          status, generation_no, attempt_count, max_attempts, progress_stage, stage_updated_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'queued', 1, 0, ?, 'queued', ?, ?, ?)`, [
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 1, 0, ?, 'queued', ?, ?, ?)`, [
         clientId, ownerId, accountId, strategy, JSON.stringify(pinned.strategyVersions), selectionHash,
+        frozenSourceSetJson, frozenSourceSetHash, frozenSnapshots.json, frozenSnapshots.hash,
         attempts, now, now, now,
       ])
       const aggregateCaseId = Number(result.insertId)
@@ -662,7 +779,9 @@ export async function createManualTradeReviewAggregate({ actor, userId, tradingA
       return {
         idempotent:false, created:true,
         aggregate_case:{ id:aggregateCaseId, user_id:ownerId, trading_account_id:accountId, strategy_id:strategy,
-          strategy_versions:pinned.strategyVersions, selection_hash:selectionHash, status:'queued', generation_no:1,
+          strategy_versions:pinned.strategyVersions, selection_hash:selectionHash,
+          frozen_source_set_hash:frozenSourceSetHash, strategy_snapshot_hash:frozenSnapshots.hash,
+          status:'queued', generation_no:1,
           attempt_count:0, max_attempts:attempts, progress_stage:'queued', current_version_id:null },
         sources:pinned.rows.map(row => ({ ...row, content_json:undefined })),
       }
@@ -706,26 +825,32 @@ export async function listEligibleManualTradeReviewSources({ actor, userId, trad
   }))
 }
 
-export async function listManualTradeReviewAggregates({ actor, userId, tradingAccountId, limit = 50, offset = 0, db } = {}) {
+export async function listManualTradeReviewAggregates({ actor, userId, tradingAccountId, strategyId,
+  limit = 50, offset = 0, db } = {}) {
   const ownerId = assertOwner(actor, userId)
   const accountId = tradingAccountId == null ? null : positiveId(tradingAccountId, 'trading_account_id')
+  const strategy = strategyId == null ? null : positiveId(strategyId, 'strategy_id')
   const size = Math.min(200, Math.max(1, Number(limit) || 50))
   const skip = Math.max(0, Number(offset) || 0)
   const database = dbApi(db)
-  const where = accountId == null ? 'user_id = ?' : 'user_id = ? AND trading_account_id = ?'
-  const params = accountId == null ? [ownerId, size, skip] : [ownerId, accountId, size, skip]
+  const clauses = ['user_id = ?']
+  const params = [ownerId]
+  if (accountId != null) { clauses.push('trading_account_id = ?'); params.push(accountId) }
+  if (strategy != null) { clauses.push('strategy_id = ?'); params.push(strategy) }
+  const where = clauses.join(' AND ')
+  params.push(size, skip)
   const rows = await database.queryAll(`SELECT * FROM manual_trade_review_aggregate_cases
     WHERE ${where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`, params)
   return rows.map(publicCase)
 }
 
-async function findOwnedAggregate(runOrQuery, aggregateId, { userId, tradingAccountId } = {}) {
+async function findOwnedAggregate(runOrQuery, aggregateId, { userId, tradingAccountId, forUpdate = false } = {}) {
   const id = positiveId(aggregateId, 'aggregate_case_id')
   const ownerId = positiveId(userId, 'user_id')
   const accountId = tradingAccountId == null ? null : positiveId(tradingAccountId, 'trading_account_id')
   const accountClause = accountId == null ? '' : ' AND trading_account_id = ?'
   const params = accountId == null ? [id, ownerId] : [id, ownerId, accountId]
-  const sql = `SELECT * FROM manual_trade_review_aggregate_cases WHERE id = ? AND user_id = ?${accountClause}`
+  const sql = `SELECT * FROM manual_trade_review_aggregate_cases WHERE id = ? AND user_id = ?${accountClause}${forUpdate ? ' FOR UPDATE' : ''}`
   const row = typeof runOrQuery === 'function' ? await txOne(runOrQuery, sql, params) : await runOrQuery.queryOne(sql, params)
   if (!row) throw aggregateError('not_found')
   return row
@@ -769,6 +894,7 @@ export async function retryManualTradeReviewAggregate({ actor, userId, aggregate
     const updated = await txRun(run, `UPDATE manual_trade_review_aggregate_cases
       SET status = 'queued', generation_no = ?, attempt_count = 0, lease_token = NULL,
         lease_expires_at = NULL, task_deadline_at = NULL, model_task_id = NULL,
+        model_profile_id = NULL, credential_source = NULL, model_runtime_json = NULL, model_runtime_hash = NULL,
         input_hash = NULL, prompt_hash = NULL, output_contract_hash = NULL,
         progress_stage = 'queued', stage_updated_at = ?,
         next_attempt_at = NULL, completed_at = NULL, last_failure_generation_no = ?, last_failure_at = ?, updated_at = ?
@@ -802,7 +928,9 @@ export async function claimManualTradeReviewAggregate({ now = beijingNow(), leas
     return {
       ...publicCase({ ...row, ...frozen, task_deadline_at:taskDeadline }),
       id:Number(row.id), status:'generating', attempt_count:Number(row.attempt_count || 0) + 1,
-      lease_token:token, task_deadline_at:taskDeadline, ...frozen,
+      lease_token:token, task_deadline_at:taskDeadline,
+      model_runtime_json:row.model_runtime_json || null, model_runtime_hash:row.model_runtime_hash || null,
+      ...frozen,
     }
   })
 }
@@ -821,11 +949,16 @@ export async function linkManualTradeReviewAggregateModelTask({ aggregateId, gen
   const database = dbApi(db)
   return database.withTransaction(async run => {
     const row = await txOne(run, `SELECT id, status, generation_no, lease_token,
-        model_task_id, frozen_source_set_hash
+        model_task_id, frozen_source_set_hash, model_runtime_hash, model_runtime_json,
+        strategy_snapshot_hash
       FROM manual_trade_review_aggregate_cases WHERE id = ? FOR UPDATE`, [id])
     if (!row || String(row.status) !== 'generating' || Number(row.generation_no) !== generation
       || String(row.lease_token || '') !== token || String(row.frozen_source_set_hash || '').toLowerCase() !== sourceHash) {
       throw aggregateError('lease_lost')
+    }
+    parseAggregateRuntime(row)
+    if (!row.model_runtime_hash || !row.model_runtime_json || !row.strategy_snapshot_hash) {
+      throw aggregateError('model_runtime_missing')
     }
     if (row.model_task_id && String(row.model_task_id) !== taskId) throw aggregateError('model_task_conflict')
     const result = await txRun(run, `UPDATE manual_trade_review_aggregate_cases SET
@@ -853,6 +986,23 @@ export async function recoverAbandonedManualTradeReviewAggregates({ now = beijin
       const task = row.model_task_id
         ? await txOne(run, 'SELECT status, lease_expires_at_utc_msc FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [row.model_task_id])
         : null
+      // A generation that lost its lease before persisting the runtime must
+      // not silently resolve the then-current profile on recovery.  Stop it
+      // and require a new manual generation so the model choice is explicit.
+      const runtimeHash = String(row.model_runtime_hash || '').trim().toLowerCase()
+      const runtimeJson = row.model_runtime_json == null ? '' : String(row.model_runtime_json)
+      const runtimeInvalid = (!runtimeHash && runtimeJson)
+        || (runtimeHash && (!runtimeJson || !HASH_PATTERN.test(runtimeHash) || sha256(runtimeJson) !== runtimeHash))
+      if ((!runtimeHash && !runtimeJson) || runtimeInvalid) {
+        const updated = await txRun(run, `UPDATE manual_trade_review_aggregate_cases SET status = 'failed',
+            lease_token = NULL, lease_expires_at = NULL, progress_stage = 'failed',
+            last_error_code = 'model_runtime_missing_requires_retry', last_failure_generation_no = ?,
+            last_failure_at = ?, updated_at = ? WHERE id = ? AND generation_no = ? AND status = 'generating'`, [
+          Number(row.generation_no || 1), now, now, row.id, Number(row.generation_no || 1),
+        ])
+        if (affectedRows(updated) === 1) failed += 1
+        return
+      }
       const taskState = taskStatusRequiresWait(task)
       if (taskState === 'active' || taskState === 'status_unknown' || taskState === 'terminal_succeeded') {
         const updated = await txRun(run, `UPDATE manual_trade_review_aggregate_cases SET status = 'status_unknown',
@@ -917,7 +1067,8 @@ export async function markManualTradeReviewAggregateFailure({ aggregateId, gener
 }
 
 export async function saveManualTradeReviewAggregateOutput({ actor, userId, aggregateId, generationNo,
-  leaseToken, modelTaskId, sourceSetHash, output, strategySnapshot, modelProfileId = null,
+  leaseToken, modelTaskId, sourceSetHash, strategySnapshotHash, modelRuntimeHash,
+  inputHash, promptHash, outputContractHash, output, strategySnapshot, modelProfileId = null,
   authorType = 'model', db, now = beijingNow() } = {}) {
   const ownerId = assertOwner(actor, userId)
   const id = positiveId(aggregateId, 'aggregate_case_id')
@@ -925,25 +1076,63 @@ export async function saveManualTradeReviewAggregateOutput({ actor, userId, aggr
   const token = nonEmptyLeaseToken(leaseToken)
   const taskId = nonEmptyTaskId(modelTaskId)
   const expectedSourceHash = normalizedHash(sourceSetHash, 'source_set_hash')
+  const expectedStrategyHash = normalizedHash(strategySnapshotHash, 'strategy_snapshot_hash')
+  const expectedRuntimeHash = normalizedHash(modelRuntimeHash, 'model_runtime_hash')
+  const expectedInputHash = normalizedHash(inputHash, 'input_hash')
+  const expectedPromptHash = normalizedHash(promptHash, 'prompt_hash')
+  const expectedContractHash = normalizedHash(outputContractHash, 'output_contract_hash')
   const database = dbApi(db)
   return database.withTransaction(async run => {
-    const row = await findOwnedAggregate(run, id, { userId:ownerId })
+    const row = await findOwnedAggregate(run, id, { userId:ownerId, forUpdate:true })
     if (String(row.status) !== 'generating' || Number(row.generation_no) !== generation
       || String(row.lease_token || '') !== token || String(row.model_task_id || '') !== taskId
-      || String(row.frozen_source_set_hash || '').toLowerCase() !== expectedSourceHash) throw aggregateError('lease_lost')
+      || String(row.frozen_source_set_hash || '').toLowerCase() !== expectedSourceHash
+      || String(row.strategy_snapshot_hash || '').toLowerCase() !== expectedStrategyHash
+      || String(row.model_runtime_hash || '').toLowerCase() !== expectedRuntimeHash
+      || String(row.input_hash || '').toLowerCase() !== expectedInputHash
+      || String(row.prompt_hash || '').toLowerCase() !== expectedPromptHash
+      || String(row.output_contract_hash || '').toLowerCase() !== expectedContractHash) throw aggregateError('lease_lost')
+    const runtimeEnvelope = parseAggregateRuntime(row)
+    const modelTask = await txOne(run, `SELECT task_id, status, snapshot_hash, input_hash, prompt_hash,
+        output_contract_hash, frozen_model_profile_id, frozen_provider, frozen_model,
+        frozen_protocol, frozen_credential_source, result_hash
+      FROM ai_model_tasks WHERE task_id = ? FOR UPDATE`, [taskId])
+    if (!modelTask) throw aggregateError('model_task_missing')
+    if (!['result_ready', 'applying'].includes(String(modelTask.status))) throw aggregateError('model_task_not_ready')
+    if (String(modelTask.snapshot_hash || '').toLowerCase() !== expectedSourceHash
+      || String(modelTask.input_hash || '').toLowerCase() !== expectedInputHash
+      || String(modelTask.prompt_hash || '').toLowerCase() !== expectedPromptHash
+      || String(modelTask.output_contract_hash || '').toLowerCase() !== expectedContractHash) {
+      throw aggregateError('model_task_fence_changed')
+    }
+    if (modelProfileId != null && Number(modelTask.frozen_model_profile_id) !== Number(modelProfileId)) {
+      throw aggregateError('model_task_fence_changed')
+    }
+    const runtimeModel = runtimeEnvelope.runtime
+    if (!runtimeModel || Number(runtimeModel.model_profile_id) !== Number(modelTask.frozen_model_profile_id)
+      || String(runtimeModel.provider || '') !== String(modelTask.frozen_provider || '')
+      || String(runtimeModel.model || '') !== String(modelTask.frozen_model || '')
+      || String(runtimeModel.protocol || '') !== String(modelTask.frozen_protocol || '')
+      || String(runtimeModel.credential_source || '') !== String(modelTask.frozen_credential_source || '')) {
+      throw aggregateError('model_task_fence_changed')
+    }
     const frozen = await loadAndFreezeAggregateEnvelope(run, row)
     if (frozen.frozen_source_set_hash !== expectedSourceHash) throw aggregateError('source_set_changed')
+    if (frozen.strategy_snapshot_hash !== expectedStrategyHash) throw aggregateError('strategy_snapshot_changed')
     const pinned = frozen.rows.map(source => ({
       case_id:source.case_id, version_id:source.version_id, content_hash:source.content_hash,
       confirmed:source.confirmed, content_json:source.content_json,
       ref:source.ref,
     }))
     const normalized = normalizeManualTradeReviewAggregateModelOutput(output, {
-      sources:pinned, strategySnapshot:strategySnapshot || frozen.strategy_snapshot_for_contract,
+      sources:pinned, strategySnapshot:frozen.strategy_snapshot_for_contract,
       strategyVersions:parseJson(row.strategy_versions_json, []),
     })
     const contentJson = JSON.stringify(normalized)
     const contentHash = sha256(contentJson)
+    if (String(modelTask.result_hash || '').toLowerCase() !== contentHash) {
+      throw aggregateError('model_task_fence_changed')
+    }
     const latest = await txOne(run, `SELECT MAX(version_no) AS version_no
       FROM manual_trade_review_aggregate_versions WHERE aggregate_case_id = ?`, [id])
     const versionNo = Number(latest?.version_no || 0) + 1
@@ -960,8 +1149,10 @@ export async function saveManualTradeReviewAggregateOutput({ actor, userId, aggr
       progress_stage = 'completed', stage_updated_at = ?, lease_token = NULL, lease_expires_at = NULL,
       model_task_id = NULL, last_error_code = NULL, completed_at = ?, updated_at = ?
       WHERE id = ? AND generation_no = ? AND status = 'generating' AND model_task_id = ?
-        AND lease_token = ? AND frozen_source_set_hash = ?`,
-    [versionId, now, now, now, id, generation, taskId, token, expectedSourceHash])
+        AND lease_token = ? AND frozen_source_set_hash = ? AND strategy_snapshot_hash = ?
+        AND model_runtime_hash = ? AND input_hash = ? AND prompt_hash = ? AND output_contract_hash = ?`,
+    [versionId, now, now, now, id, generation, taskId, token, expectedSourceHash, expectedStrategyHash,
+      expectedRuntimeHash, expectedInputHash, expectedPromptHash, expectedContractHash])
     if (affectedRows(applied) !== 1) throw aggregateError('lease_lost')
     return { aggregate_case_id:id, version_id:versionId, version_no:versionNo, content_hash:contentHash, content:normalized }
   })
@@ -1031,6 +1222,9 @@ const AGGREGATE_TERMINAL_ERROR_CODES = new Set([
   'manual_trade_review_aggregate_strategy_snapshot_changed',
   'manual_trade_review_aggregate_strategy_snapshot_missing',
   'manual_trade_review_aggregate_frozen_model_input_changed',
+  'manual_trade_review_aggregate_model_runtime_changed',
+  'manual_trade_review_aggregate_model_runtime_missing',
+  'manual_trade_review_aggregate_model_runtime_invalid',
   'manual_trade_review_aggregate_generation_deadline_exceeded',
 ])
 
@@ -1109,6 +1303,15 @@ export async function runManualTradeReviewAggregateOnce({ requestModel = request
     if (!resolved?.model) throw aggregateError(resolved?.error || 'model_unavailable')
     const endpoint = modelEndpoint(resolved.model)
     const { budget, capabilities } = await prepareAggregateBudget(resolved, messages)
+    const runtime = manualTradeReviewAggregateModelRuntime({ resolved, endpoint, capabilities, budget })
+    const storedRuntime = parseAggregateRuntime(job)
+    if (storedRuntime.hash && storedRuntime.hash !== runtime.hash) throw aggregateError('model_runtime_changed')
+    const persistedRuntime = await persistAggregateModelRuntime({ job, runtime,
+      modelProfileId:resolved.model_profile_id, credentialSource:resolved.credential_source, db })
+    job.model_runtime_json = persistedRuntime.json
+    job.model_runtime_hash = persistedRuntime.hash
+    job.model_profile_id = resolved.model_profile_id
+    job.credential_source = resolved.credential_source
     const generationNo = Number(job.generation_no || 1)
     const idempotencyKey = manualTradeReviewAggregateModelIdempotencyKey({ aggregateId:job.id, generationNo })
     const modelName = resolved.model.model_name || resolved.model.model
@@ -1162,8 +1365,9 @@ export async function runManualTradeReviewAggregateOnce({ requestModel = request
     await tracker.applying()
     const saved = await saveManualTradeReviewAggregateOutput({ actor:{ id:job.user_id }, userId:job.user_id,
       aggregateId:job.id, generationNo, leaseToken:job.lease_token, modelTaskId:tracker.taskId,
-      sourceSetHash:job.frozen_source_set_hash, output:normalized,
-      strategySnapshot,
+      sourceSetHash:job.frozen_source_set_hash, strategySnapshotHash:job.strategy_snapshot_hash,
+      modelRuntimeHash:job.model_runtime_hash, inputHash, promptHash, outputContractHash,
+      output:normalized, strategySnapshot,
       modelProfileId:resolved.model_profile_id, db })
     await tracker.succeeded({ resultRef:`manual_trade_review_aggregate:${job.id}:${generationNo}`, resultHash:saved.content_hash })
     return { status:'succeeded', aggregate_case_id:Number(job.id), version_id:saved.version_id,

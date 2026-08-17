@@ -8,7 +8,9 @@ import {
   manualTradeReviewAggregateFrozenSourceSetHash,
   manualTradeReviewAggregateModelIdempotencyKey,
   linkManualTradeReviewAggregateModelTask,
+  listManualTradeReviewAggregates,
   markManualTradeReviewAggregateFailure,
+  manualTradeReviewAggregateModelRuntime,
   manualTradeReviewAggregateSelectionHash,
   normalizeManualTradeReviewAggregateModelOutput,
   normalizeManualTradeReviewAggregateSources,
@@ -38,11 +40,18 @@ function aggregateClaimRows({ id = 901, first, second, status = 'queued', modelT
     ...row, id:index + 1, aggregate_case_id:id,
   }))
   const selectionHash = manualTradeReviewAggregateSelectionHash([first, second])
+  const snapshotJson = JSON.stringify([{ strategy_version:4,
+    strategy_snapshot_hash:rows[0].strategy_snapshot_hash,
+    strategy_snapshot:{ strategy_policy:{ entry:'trend' } } }])
+  const runtimeJson = JSON.stringify({ runtime_version:1, model_profile_id:9, provider:'test', model:'test-model',
+    protocol:'chat', credential_source:'test', endpoint_fingerprint:'e'.repeat(64) })
   return {
     row:{ id, user_id:7, trading_account_id:11, strategy_id:3, strategy_versions_json:'[4]', selection_hash:selectionHash,
       status, generation_no:1, attempt_count:0, max_attempts:3, task_deadline_at:'2099-01-01 00:00:00',
       model_task_id:modelTaskId, frozen_source_set_hash:null, frozen_source_set_json:null,
-      strategy_snapshot_hash:null, strategy_snapshot_json:null, lease_token:null },
+      strategy_snapshot_hash:sha256(snapshotJson), strategy_snapshot_json:snapshotJson, lease_token:null,
+      model_runtime_hash:sha256(runtimeJson), model_runtime_json:runtimeJson,
+      input_hash:null, prompt_hash:null, output_contract_hash:null },
     rows, selectionHash,
   }
 }
@@ -94,6 +103,9 @@ describe('manual trade review aggregate service', () => {
       clientRequestId:'aggregate-request-1', sources:[first, second], db })
     expect(result).toMatchObject({ created:true, aggregate_case:{ id:901, status:'queued', generation_no:1 } })
     expect(db.calls.filter(call => call.sql.includes('INSERT INTO manual_trade_review_aggregate_sources'))).toHaveLength(2)
+    const insertCase = db.calls.find(call => call.sql.includes('INSERT INTO manual_trade_review_aggregate_cases'))
+    expect(insertCase.sql).toContain('frozen_source_set_json')
+    expect(insertCase.sql).toContain('strategy_snapshot_json')
     expect(db.calls.some(call => call.sql.includes('FOR UPDATE'))).toBe(true)
 
     const mismatched = transactionDb({ sourceRows:[pinnedRow(first), pinnedRow(second, { accountId:12 })] })
@@ -201,6 +213,45 @@ describe('manual trade review aggregate service', () => {
     expect(block).toContain('information_schema.STATISTICS')
   })
 
+  it('appends migration 195 with only nullable non-sensitive runtime fence columns', () => {
+    const migration = readFileSync(new URL('../../server/migrations.js', import.meta.url), 'utf8')
+    const start194 = migration.indexOf("id: '194_manual_trade_review_aggregate'")
+    const start195 = migration.indexOf("id: '195_manual_trade_review_aggregate_runtime_fence'")
+    expect(start195).toBeGreaterThan(start194)
+    const block = migration.slice(start195, migration.indexOf('\n  }\n]', start195))
+    expect(block).toContain('model_runtime_json MEDIUMTEXT DEFAULT NULL')
+    expect(block).toContain('model_runtime_hash CHAR(64) DEFAULT NULL')
+    expect(block).toContain('information_schema.COLUMNS')
+    expect(block).toContain('if (!existingColumns.has(name))')
+    expect(block).not.toMatch(/DROP\s+(?:COLUMN|TABLE)/i)
+    expect(block).not.toMatch(/api[_-]?key|authorization|password|secret/i)
+  })
+
+  it('hashes a sanitized model runtime without storing endpoint or credential material', () => {
+    const result = manualTradeReviewAggregateModelRuntime({
+      resolved:{ model_profile_id:9, credential_source:'platform_primary', model:{ id:9, provider:'openai',
+        model_name:'gpt-test', api_base_url:'https://secret.example/v1?api_key=do-not-store', temperature:.2,
+        thinking_enabled:true, profile_updated_at:'2026-08-17 19:00:00' } },
+      endpoint:{ protocol:'chat', url:'https://secret.example/v1/chat/completions?api_key=do-not-store' },
+      capabilities:{ context_window_tokens:128000, max_input_tokens:120000, max_output_tokens:4096,
+        context_limit_semantics:'shared_context', token_limits_source:'provider', token_limits_status:'confirmed' },
+      budget:{ selectedMaxOutputTokens:4096, estimatedInputTokens:512 },
+    })
+    expect(result.hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(result.json).not.toContain('secret.example')
+    expect(result.json).not.toContain('api_key')
+    expect(result.runtime).toMatchObject({ model_profile_id:9, provider:'openai', model:'gpt-test', protocol:'chat',
+      credential_source:'platform_primary', endpoint_fingerprint:expect.stringMatching(/^[a-f0-9]{64}$/) })
+  })
+
+  it('filters aggregate history by owner-safe optional strategy id', async () => {
+    const calls = []
+    const db = { queryAll:async (sql, params) => { calls.push({ sql, params }); return [] } }
+    await listManualTradeReviewAggregates({ actor:{ id:7 }, userId:7, tradingAccountId:11, strategyId:3, db })
+    expect(calls[0].sql).toContain('trading_account_id = ? AND strategy_id = ?')
+    expect(calls[0].params).toEqual([7, 11, 3, 50, 0])
+  })
+
   it('normalizes aggregate model output against pinned sources and downgrades unsupported recommendations', () => {
     const first = source(101, 201)
     const second = source(102, 202)
@@ -222,6 +273,13 @@ describe('manual trade review aggregate service', () => {
     const first = source(101, 201)
     const second = source(102, 202)
     const fixture = aggregateClaimRows({ first, second, modelTaskId:'task-existing' })
+    fixture.rows.forEach(row => {
+      row.source_case_status = 'deferred'
+      row.approved_version_id = null
+      row.current_strategy_version = 99
+      row.current_strategy_snapshot_json = JSON.stringify({ strategy_policy:{ entry:'changed-after-create' } })
+      row.current_strategy_snapshot_hash = sha256(row.current_strategy_snapshot_json)
+    })
     const calls = []
     const db = {
       calls,
@@ -256,6 +314,8 @@ describe('manual trade review aggregate service', () => {
         if (sql.includes('SELECT id, status, generation_no')) return [[{
           id:901, status:'generating', generation_no:2, lease_token:'lease-2', model_task_id:null,
           frozen_source_set_hash:sourceSetHash,
+          model_runtime_json:JSON.stringify({ runtime_version:1 }),
+          model_runtime_hash:sha256(JSON.stringify({ runtime_version:1 })), strategy_snapshot_hash:'b'.repeat(64),
         }], []]
         if (sql.includes('UPDATE manual_trade_review_aggregate_cases')) return [{ affectedRows:1 }, []]
         return [[], []]
@@ -297,12 +357,25 @@ describe('manual trade review aggregate service', () => {
     const fixture = aggregateClaimRows({ first, second, status:'generating', modelTaskId:'task-1' })
     const sourceSetHash = manualTradeReviewAggregateFrozenSourceSetHash(fixture.rows)
     fixture.row.frozen_source_set_hash = sourceSetHash
+    const inputHash = 'b'.repeat(64)
+    const promptHash = 'c'.repeat(64)
+    const outputContractHash = 'd'.repeat(64)
+    fixture.row.input_hash = inputHash
+    fixture.row.prompt_hash = promptHash
+    fixture.row.output_contract_hash = outputContractHash
+    fixture.row.lease_token = 'lease-1'
     const db = {
       withTransaction:async callback => callback(async sql => {
         if (sql.includes('FROM manual_trade_review_aggregate_cases')) return [[{
-          ...fixture.row, lease_token:'lease-1', frozen_source_set_hash:sourceSetHash,
+          ...fixture.row, frozen_source_set_hash:sourceSetHash,
         }], []]
         if (sql.includes('FROM manual_trade_review_aggregate_sources')) return [fixture.rows, []]
+        if (sql.includes('FROM ai_model_tasks')) return [[{
+          task_id:'task-1', status:'applying', snapshot_hash:sourceSetHash, input_hash:inputHash,
+          prompt_hash:promptHash, output_contract_hash:outputContractHash, frozen_model_profile_id:9,
+          frozen_provider:'test', frozen_model:'test-model', frozen_protocol:'chat', frozen_credential_source:'test',
+          result_hash:db.modelTaskResultHash,
+        }], []]
         if (sql.includes('SELECT MAX(version_no)')) return [[{ version_no:0 }], []]
         if (sql.includes('INSERT INTO manual_trade_review_aggregate_versions')) return [{ insertId:10 }, []]
         if (sql.includes("SET status = 'draft'")) return [{ affectedRows:0 }, []]
@@ -311,8 +384,18 @@ describe('manual trade review aggregate service', () => {
     }
     const output = { output_contract_version:'manual-trade-review-aggregate-v1', recurring_patterns:[], strategy_gaps:[],
       protection_findings:[], version_comparisons:[], strategy_optimization_hypotheses:[], limitations:[] }
+    const normalizedOutput = normalizeManualTradeReviewAggregateModelOutput(output, {
+      sources:fixture.rows.map(row => ({ case_id:row.source_case_id, version_id:row.source_version_id,
+        content_hash:row.source_content_hash, confirmed:row.confirmation_status === 'confirmed',
+        content_json:row.content_json })), strategySnapshot:{ strategy_policy:{ entry:'trend' } }, strategyVersions:[4],
+    })
+    const resultHash = sha256(JSON.stringify(normalizedOutput))
+    db.modelTaskResultHash = resultHash
     await expect(saveManualTradeReviewAggregateOutput({ actor:{ id:7 }, userId:7, aggregateId:901, generationNo:1,
-      leaseToken:'lease-1', modelTaskId:'task-1', sourceSetHash, output, strategySnapshot:{ strategy_policy:{ entry:'trend' } }, db }))
+      leaseToken:'lease-1', modelTaskId:'task-1', sourceSetHash,
+      strategySnapshotHash:fixture.row.strategy_snapshot_hash, modelRuntimeHash:fixture.row.model_runtime_hash,
+      inputHash, promptHash, outputContractHash, output, strategySnapshot:{ strategy_policy:{ entry:'trend' } },
+      modelProfileId:9, db }))
       .rejects.toThrow('lease_lost')
   })
 })
