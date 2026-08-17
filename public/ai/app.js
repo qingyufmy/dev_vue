@@ -4883,6 +4883,13 @@ function adminStrategyDispatchTargetReason(target = {}) {
   return localizeReason(target?.reason_code || target?.reason || target?.message || target?.error || target?.exclusion_reason || "");
 }
 
+function adminStrategyDispatchTargetLabel(target = {}) {
+  const parts = [target?.user_account, target?.user_nickname]
+    .map(value => String(value || "").trim())
+    .filter(Boolean);
+  return [...new Set(parts)].join(" · ") || "订阅目标";
+}
+
 function renderAdminStrategyDispatchProgress() {
   const panel = $("adminStrategyDispatchProgress");
   const summary = $("adminStrategyDispatchProgressSummary");
@@ -4911,7 +4918,7 @@ function renderAdminStrategyDispatchProgress() {
   summary.innerHTML = `<div class="admin-strategy-dispatch-summary-grid"><span><small>源账户</small><strong>${escapeHtml(sourceText)}</strong></span><span><small>源订单阶段</small><strong>${escapeHtml(adminStrategyDispatchStatusLabel(sourceStage))}</strong></span><span><small>订阅总数</small><strong>${total}</strong></span><span><small>可执行</small><strong>${counters.executable}</strong></span><span><small>成功</small><strong>${counters.success}</strong></span><span><small>拒绝 / 跳过 / 待确认</small><strong>${counters.rejected} / ${counters.skipped} / ${counters.uncertain}</strong></span></div>`;
   targetsHost.innerHTML = targets.length ? targets.map(target => {
     const targetStatus = adminStrategyDispatchTargetStatus(target);
-    const label = target?.user_label || target?.user_name || target?.nickname || (target?.user_id ? `用户 #${target.user_id}` : "订阅目标");
+    const label = adminStrategyDispatchTargetLabel(target);
     const reason = adminStrategyDispatchTargetReason(target);
     return `<div class="admin-strategy-dispatch-target-row ${escapeHtml(targetStatus)}"><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(target?.symbol || root?.symbol || "--")}${target?.volume != null ? ` · ${escapeHtml(volumeText(target.volume))}` : ""}</small></span><span class="status-chip ${targetStatus === "success" || targetStatus === "succeeded" || targetStatus === "completed" ? "success" : targetStatus === "rejected" || targetStatus === "failed" ? "danger" : targetStatus === "uncertain" ? "warning" : "info"}">${escapeHtml(adminStrategyDispatchTargetStatusLabel(targetStatus))}</span>${reason ? `<em title="${escapeHtml(reason)}">${escapeHtml(reason)}</em>` : ""}</div>`;
   }).join("") : `<p class="admin-strategy-dispatch-empty">暂无逐目标结果，刷新以恢复进度。</p>`;
@@ -5022,7 +5029,7 @@ function renderAdminStrategyDispatchPreview(order, data) {
   const sourceText = source?.login_account || source?.login || source?.account || source?.name || sourceSnapshot?.account?.login_account || sourceSnapshot?.account?.nickname || "管理员源账户";
   const excluded = preview?.excluded || preview?.excluded_targets || preview?.exclusions || [];
   const excludedRows = Array.isArray(excluded) ? excluded : [];
-  const reasons = excludedRows.slice(0, 8).map(item => `<li>${escapeHtml(item?.user_label || item?.user_name || (item?.user_id ? `用户 #${item.user_id}` : "订阅目标"))}：${escapeHtml(adminStrategyDispatchTargetReason(item) || "未满足执行条件")}</li>`).join("");
+  const reasons = excludedRows.slice(0, 8).map(item => `<li>${escapeHtml(adminStrategyDispatchTargetLabel(item))}：${escapeHtml(adminStrategyDispatchTargetReason(item) || "未满足执行条件")}</li>`).join("");
   const stopLossText = adminStrategyDispatchProtectionDisplay(order.meta.stopLoss);
   const takeProfitText = adminStrategyDispatchProtectionDisplay(order.meta.takeProfit);
   host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(stopLossText)} / ${escapeHtml(takeProfitText)}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div>${reasons ? `<div class="admin-strategy-dispatch-exclusion"><span>排除原因</span><ul>${reasons}</ul></div>` : ""}<div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason || "未填写")}</strong></div>`;

@@ -5,6 +5,7 @@ const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'ut
 const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 const strategyDispatchSignalSourceLabel = new Function(`${app.slice(app.indexOf('function strategyDispatchSignalSourceLabel'), app.indexOf('function strategyMarketPlan'))}\nreturn strategyDispatchSignalSourceLabel;`)()
+const adminStrategyDispatchTargetLabel = new Function(`${app.slice(app.indexOf('function adminStrategyDispatchTargetLabel'), app.indexOf('function renderAdminStrategyDispatchProgress'))}\nreturn adminStrategyDispatchTargetLabel;`)()
 
 describe('admin strategy dispatch frontend contract', () => {
   it('keeps the entry point inside manual order and gates it by admin capability', () => {
@@ -95,5 +96,16 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(strategyDispatchSignalSourceLabel({ source: 'auto_shared' })).toBe('')
     expect(strategyDispatchSignalSourceLabel({ source_type: 'auto_shared' })).toBe('')
     expect(html).toContain('admin-strategy-dispatch1')
+    expect(html).toContain('admin-dispatch-user-label1')
+  })
+
+  it('shows deterministic user account and nickname labels for dispatch targets', () => {
+    expect(adminStrategyDispatchTargetLabel({ user_account: '18192234189', user_nickname: '测试用户' })).toBe('18192234189 · 测试用户')
+    expect(adminStrategyDispatchTargetLabel({ user_account: 'same', user_nickname: 'same' })).toBe('same')
+    expect(adminStrategyDispatchTargetLabel({ user_account: '18192234189' })).toBe('18192234189')
+    expect(adminStrategyDispatchTargetLabel({ user_nickname: '测试用户' })).toBe('测试用户')
+    expect(adminStrategyDispatchTargetLabel({ user_id: 28 })).toBe('订阅目标')
+    expect(app).toContain('const label = adminStrategyDispatchTargetLabel(target)')
+    expect(app).not.toContain('target?.user_id ? `用户 #${target.user_id}`')
   })
 })
