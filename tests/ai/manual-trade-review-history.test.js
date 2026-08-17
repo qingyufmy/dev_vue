@@ -138,6 +138,43 @@ describe('manual trade review history cursor contract', () => {
     expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual(['history_prepare_status_v1'])
   })
 
+  it('falls back to an exact-range MT5 cursor page when prepare status is unsupported', async () => {
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') {
+        return { status:'error', error:'history_prepare_status_unsupported' }
+      }
+      if (action === 'history_page') return validEvidencePage()
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ unavailable:false, evidence_status:'complete' })
+    expect(result.trades).toHaveLength(1)
+    expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual([
+      'history_prepare_status_v1', 'history_page', 'positions',
+    ])
+  })
+
+  it('keeps MT5 fail-closed after prepare fallback when the cursor page lacks exact-range proof', async () => {
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') {
+        return { status:'error', error:'history_prepare_status_unsupported' }
+      }
+      if (action === 'history_page') {
+        return { ...validEvidencePage(), history_sync:{ complete:true, coverage_complete:true,
+          clock_status:'verified', timezone_offset_minutes:180 } }
+      }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const result = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(result).toMatchObject({ unavailable:true, evidence_reason:'history_incomplete' })
+    expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual([
+      'history_prepare_status_v1', 'history_page',
+    ])
+  })
+
   it('scans an empty source page and returns the first eligible trade from the same snapshot', async () => {
     let sourcePage = 0
     bridge.mt5Bridge.mockImplementation(async (_userId, action, request) => {

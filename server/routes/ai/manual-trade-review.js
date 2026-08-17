@@ -885,7 +885,7 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     lease.assertOwned(); tracker.assertOwned()
     const now = beijingNow()
     await withTransaction(async run => {
-      const [rows] = await run('SELECT status, lease_token, current_version_id FROM manual_trade_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [job.case_id, job.user_id])
+      const [rows] = await run('SELECT status, current_version_id FROM manual_trade_review_cases WHERE id = ? AND user_id = ? FOR UPDATE', [job.case_id, job.user_id])
       const current = rows?.[0]
       if (!current || String(current.status) === 'approved') throw new Error('manual_trade_review_lease_lost')
       const [lease] = await run('SELECT id FROM manual_trade_review_jobs WHERE id = ? AND lease_token = ? AND status = \'leased\' FOR UPDATE', [job.id, job.lease_token])

@@ -581,7 +581,12 @@ async function prepareManualTradeRange(account, range) {
         // terminal_visible_history_complete=true before admission.
         return { supported:false, ready:null, reason:null, ...manualTradeHistoryScope(account) }
       }
-      return { supported:true, ready:false, reason:'history_cursor_range_incomplete' }
+      // Older MT5 Bridge builds can support bounded exact-range cursor pages
+      // without the newer lightweight prepare-status action. Continue to the
+      // page read and let historySyncComplete() require its explicit
+      // requested_range_complete=true proof; missing or false proof still
+      // fails closed before any trade can be admitted.
+      return { supported:false, ready:null, reason:null, ...manualTradeHistoryScope(account) }
     }
     if (!result || result.status === 'error' || result.error) {
       return { supported:true, ready:false,
