@@ -16,12 +16,30 @@ import { buildManualReviewEvidenceCatalog, requiredManualReviewArray, requiredMa
   validateManualReviewEvidenceRefs } from './manual-trade-review-contract.js'
 import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime } from './strategy-memory-library.js'
 import { createManualTradeReviewPrompts } from './manual-trade-review-prompts.js'
+import {
+  ensureManualTradeReviewCounterfactualPoints,
+  readManualTradeReviewCounterfactualPoints,
+  linkManualTradeReviewCounterfactualPointModelTask,
+  saveManualTradeReviewCounterfactualPointOutput,
+  markManualTradeReviewCounterfactualPointUnknown,
+  markManualTradeReviewCounterfactualPointFailed,
+} from './manual-trade-review-counterfactual-points.js'
+import {
+  MANUAL_TRADE_REVIEW_COUNTERFACTUAL_POINT_V3_VERSION,
+  MANUAL_TRADE_REVIEW_V3_VERSION,
+  deriveManualTradeReviewDirectionSummary,
+  evaluateManualTradeReviewProtectionPlan,
+  normalizeManualTradeReviewCounterfactualPoint,
+  normalizeManualTradeReviewV3Content,
+} from './manual-trade-review-v3-contract.js'
 import { buildFrozenRuntime, buildManualTradeReviewStageInputHash, ensureManualTradeReviewStageRuns,
   linkManualTradeReviewStageModelTask, normalizeManualTradeReviewStageOutput,
   readManualTradeReviewStageRuns, saveManualTradeReviewStageOutput, validateManualTradeReviewStageRuns } from './manual-trade-review-stage-runs.js'
 
 const REVIEW_OUTPUT_VERSION = 'manual-trade-review-v2'
 const COUNTERFACTUAL_OUTPUT_VERSION = 'manual-trade-counterfactual-v1'
+const REVIEW_V3_OUTPUT_VERSION = MANUAL_TRADE_REVIEW_V3_VERSION
+const COUNTERFACTUAL_POINT_V3_OUTPUT_VERSION = MANUAL_TRADE_REVIEW_COUNTERFACTUAL_POINT_V3_VERSION
 const MAX_TEXT = 6_000
 const MAX_THESIS = 2_000
 const MAX_CANDIDATES = 20
@@ -55,9 +73,13 @@ function text(value, max = MAX_TEXT) {
   return String(value == null ? '' : value).normalize('NFKC').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max)
 }
 
-const { counterfactualPrompt, outcomeReviewPrompt } = createManualTradeReviewPrompts({
+const {
+  counterfactualPrompt, outcomeReviewPrompt, counterfactualPointPrompt, outcomeReviewV3Prompt,
+} = createManualTradeReviewPrompts({
   parse, text, buildManualReviewEvidenceCatalog, manualTradeReviewOutputContract,
   counterfactualOutputVersion:COUNTERFACTUAL_OUTPUT_VERSION, maxThesis:MAX_THESIS,
+  counterfactualPointOutputVersion:COUNTERFACTUAL_POINT_V3_OUTPUT_VERSION,
+  manualTradeReviewV3OutputVersion:REVIEW_V3_OUTPUT_VERSION,
 })
 
 function id(value, code = 'invalid_id') {
@@ -422,6 +444,8 @@ export async function createManualTradeReview(actor, input = {}, options = {}) {
   ]).filter(([identity, hash]) => identity && hash))
   const caseEvidenceStatus = evidence.evidence_status === 'complete' && evidence.market_data?.status === 'complete' ? 'complete' : 'partial'
   const caseEvidenceReason = caseEvidenceStatus === 'complete' ? null : manualTradeReviewEvidenceReason(evidence)
+  const hasCounterfactualPointShape = Object.values(evidence.market_data?.trades || {}).some(path =>
+    path && typeof path === 'object' && Object.prototype.hasOwnProperty.call(path, 'counterfactual_points'))
   const now = beijingNow()
   let result
   try {
@@ -445,7 +469,7 @@ export async function createManualTradeReview(actor, input = {}, options = {}) {
         trade.identity?.position_id || trade.position_id || null, trade.identity?.entry_order_ticket || trade.entry_order_ticket || null, trade.entry_time_utc_msc, trade.close_time_utc_msc,
         trade.symbol, trade.direction, JSON.stringify(trade), JSON.stringify(trade.manual_classification || trade.normalized?.manual_classification || { source:'manual', evidence_status:'complete' }), now])
       }
-      const jobKey = `manual:${insert.insertId}:${evidenceHash}:${strategy.hash}:${thesis ? sha256(thesis) : 'none'}:${REVIEW_OUTPUT_VERSION}`
+      const jobKey = `manual:${insert.insertId}:${evidenceHash}:${strategy.hash}:${thesis ? sha256(thesis) : 'none'}:${hasCounterfactualPointShape ? REVIEW_V3_OUTPUT_VERSION : REVIEW_OUTPUT_VERSION}`
       await run(`INSERT INTO manual_trade_review_jobs
       (case_id, idempotency_key, generation_no, status, progress_stage, attempt_count, max_attempts,
        task_deadline_at, created_at, updated_at)
@@ -527,21 +551,47 @@ export async function editManualTradeReview({ caseId, actor, content, expectedVe
     if (['queued', 'generating'].includes(String(row.status))) throw new Error('manual_trade_review_action_not_allowed_in_generation')
     if (!['draft', 'edited', 'needs_revision'].includes(String(row.status))) throw new Error('manual_trade_review_edit_not_allowed')
     if (expectedVersionId != null && Number(expectedVersionId) !== Number(row.current_version_id || 0)) throw new Error('manual_trade_review_version_conflict')
+    let currentContent = null
+    let currentIsV3 = false
     if (row.current_version_id) {
       const [currentVersions] = await run(`SELECT content_json FROM manual_trade_review_versions
         WHERE id = ? AND case_id = ? FOR UPDATE`, [row.current_version_id, idValue])
-      const frozenCounterfactual = parse(currentVersions?.[0]?.content_json, {})?.counterfactual_analysis
-      const editedCounterfactual = content?.counterfactual_analysis
-      if (frozenCounterfactual && jsonHash(frozenCounterfactual) !== jsonHash(editedCounterfactual)) {
-        throw new Error('manual_trade_review_counterfactual_immutable')
+      currentContent = parse(currentVersions?.[0]?.content_json, {})
+      currentIsV3 = currentContent?.output_contract_version === REVIEW_V3_OUTPUT_VERSION
+      if (currentIsV3) {
+        const frozenPoints = currentContent?.counterfactual_points
+        const frozenSummary = currentContent?.counterfactual_summary
+        if (jsonHash(frozenPoints) !== jsonHash(content?.counterfactual_points)
+          || jsonHash(frozenSummary) !== jsonHash(content?.counterfactual_summary)) {
+          throw new Error('manual_trade_review_counterfactual_immutable')
+        }
+      } else {
+        const frozenCounterfactual = currentContent?.counterfactual_analysis
+        const editedCounterfactual = content?.counterfactual_analysis
+        if (frozenCounterfactual && jsonHash(frozenCounterfactual) !== jsonHash(editedCounterfactual)) {
+          throw new Error('manual_trade_review_counterfactual_immutable')
+        }
       }
     }
     const [sources] = await run(`SELECT sources.source_identity_hash FROM manual_trade_review_sources sources
       JOIN manual_trade_review_cases cases ON cases.id = sources.case_id
       WHERE sources.case_id = ? AND cases.user_id = ?`, [idValue, actorId])
-    const normalized = validateManualTradeReviewContent(content, sources, parse(row.strategy_snapshot_json, {}), {
-      evidenceStatus:row.evidence_status, evidence:parse(row.evidence_json, {}),
-    })
+    const strategySnapshot = parse(row.strategy_snapshot_json, {})
+    const evidence = parse(row.evidence_json, {})
+    const evidenceCatalog = buildManualReviewEvidenceCatalog(sources, evidence)
+    const normalized = currentIsV3
+      ? { ...normalizeManualTradeReviewV3Content(content, {
+        strategySnapshot,
+        allowedEvidenceRefs:evidenceCatalog.outcome_refs,
+        sourceRefs:evidenceCatalog.trade_refs,
+        sourceRefSet:new Set(evidenceCatalog.trade_refs),
+        serverDerivedSummary:currentContent.counterfactual_summary,
+        serverProtectionAssessment:{ protection_quality:currentContent.counterfactual_summary?.protection_quality },
+      }), counterfactual_points:currentContent.counterfactual_points,
+        counterfactual_summary:currentContent.counterfactual_summary }
+      : validateManualTradeReviewContent(content, sources, strategySnapshot, {
+        evidenceStatus:row.evidence_status, evidence,
+      })
     const [maxRows] = await run(`SELECT COALESCE(MAX(versions.version_no), 0) AS version_no FROM manual_trade_review_versions versions
       JOIN manual_trade_review_cases cases ON cases.id = versions.case_id
       WHERE versions.case_id = ? AND cases.user_id = ?`, [idValue, actorId])
@@ -781,6 +831,24 @@ function manualTradeReviewOutputContractHash() {
   return jsonHash(manualTradeReviewOutputContract(1))
 }
 
+function manualTradeReviewV3OutputContractHash() {
+  return jsonHash({
+    output_contract_version:REVIEW_V3_OUTPUT_VERSION,
+    technical_analysis_chain:'structured evidence-backed array',
+    counterfactual_summary:'server-derived',
+    protection_plan:'server-evaluated',
+  })
+}
+
+function manualTradeReviewV3PointContractHash() {
+  return jsonHash({
+    output_contract_version:COUNTERFACTUAL_POINT_V3_OUTPUT_VERSION,
+    candidate_key:'anchor_minus_2|anchor_minus_1|anchor|anchor_plus_1|anchor_plus_2', decision:'buy|sell|hold|insufficient_evidence',
+    entry_allowed:'boolean', entry_method:'market|limit|stop|stop_limit|observe|unknown',
+    strategy_signals:'structured evidence-backed array', protection_plan:'mechanically assessed', confidence:'0..1',
+  })
+}
+
 function manualTradeReviewCounterfactualContractHash() {
   return jsonHash({ output_contract_version:COUNTERFACTUAL_OUTPUT_VERSION,
     decision:'buy|sell|hold|insufficient_evidence', reasoning:'string', strategy_signals:['string'],
@@ -808,7 +876,7 @@ function frozenMemoryPayload(runtime) {
     char_count:charCount, estimated_token_count:estimatedTokenCount }
 }
 
-function assertFrozenRuntimeForJob(runtime, job, reviewCase, resolved, endpoint, modelFingerprint) {
+function assertFrozenRuntimeForJob(runtime, job, reviewCase, resolved, endpoint, modelFingerprint, outputContractHash = null) {
   if (!runtime || Number(runtime.case_id) !== Number(job.case_id)
     || Number(runtime.job_id) !== Number(job.id)
     || Number(runtime.generation_no) !== Number(job.generation_no || 1)) {
@@ -822,6 +890,11 @@ function assertFrozenRuntimeForJob(runtime, job, reviewCase, resolved, endpoint,
     || Number(runtime.parent_version_id || 0) !== Number(reviewCase.current_version_id || 0)) {
     throw Object.assign(new Error('manual_trade_review_frozen_runtime_changed'), {
       code:'manual_trade_review_frozen_runtime_changed', manualTradeReviewTerminalTask:true,
+    })
+  }
+  if (outputContractHash && String(runtime.output_contract_hash || '').toLowerCase() !== String(outputContractHash).toLowerCase()) {
+    throw Object.assign(new Error('manual_trade_review_frozen_output_contract_changed'), {
+      code:'manual_trade_review_frozen_output_contract_changed', manualTradeReviewTerminalTask:true,
     })
   }
   const model = runtime.model || {}
@@ -868,14 +941,15 @@ async function mirrorManualTradeReviewStageTask(job, taskId) {
   }
 }
 
-async function loadManualTradeReviewGenerationRuntime(job, reviewCase, resolved, endpoint, memorySnapshot = null) {
+async function loadManualTradeReviewGenerationRuntime(job, reviewCase, resolved, endpoint, memorySnapshot = null,
+  outputContractHash = manualTradeReviewOutputContractHash()) {
   const persisted = await readManualTradeReviewStageRuns({ caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1) })
   if (persisted.length) {
     const shared = validateManualTradeReviewStageRuns(persisted, {
       caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1),
     })
     const modelFingerprint = manualTradeReviewModelConfigFingerprint(resolved, endpoint)
-    const memory = assertFrozenRuntimeForJob(shared.runtime, job, reviewCase, resolved, endpoint, modelFingerprint)
+    const memory = assertFrozenRuntimeForJob(shared.runtime, job, reviewCase, resolved, endpoint, modelFingerprint, outputContractHash)
     return { stageRows:shared.stageRuns, runtime:shared.runtime, runtimeHash:shared.frozenRuntimeHash, memory }
   }
   const memory = memorySnapshot || (await getStrategyMemoryLibraryForRuntime({ strategyId:job.strategy_id,
@@ -885,7 +959,7 @@ async function loadManualTradeReviewGenerationRuntime(job, reviewCase, resolved,
     caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1),
     taskDeadlineAt:job.task_deadline_at, parentVersionId:reviewCase.current_version_id,
     strategySnapshotHash:reviewCase.strategy_snapshot_hash, evidenceHash:reviewCase.evidence_hash,
-    outputContractHash:manualTradeReviewOutputContractHash(), selectionContractVersion:'manual-trade-selection-v1',
+    outputContractHash, selectionContractVersion:'manual-trade-selection-v1',
     memory:{ libraryId:memory?.strategy_id, versionNo:memory?.version_no, revisionId:memory?.revision_id,
       contentHash:memory?.content_hash, content:memory?.content_text },
     model:{ profileId:resolved.model_profile_id, provider:resolved.model.provider || resolved.model.api_provider,
@@ -902,6 +976,12 @@ async function loadManualTradeReviewGenerationRuntime(job, reviewCase, resolved,
 
 async function reconcileManualTradeReviewStageTask(stageRow, outputHash) {
   if (!stageRow?.model_task_id) return
+  // A v3 counterfactual stage is a compatibility checkpoint for the frozen
+  // point bundle.  Its task id is borrowed from a completed point task only
+  // because the legacy stage table requires one; never reconcile that task
+  // with the aggregate bundle hash or its point result lineage is corrupted.
+  if (stageRow.stage === 'counterfactual'
+    && stageRow.normalizedOutput?.output_contract_version === COUNTERFACTUAL_POINT_V3_OUTPUT_VERSION) return
   const task = await queryOne('SELECT task_id, status FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [stageRow.model_task_id])
   if (task && String(task.status) !== 'succeeded') {
     await markModelTaskSucceededFromResult(stageRow.model_task_id, {
@@ -913,7 +993,7 @@ async function reconcileManualTradeReviewStageTask(stageRow, outputHash) {
 
 async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, memorySnapshot,
   stageRows, endpoint, resolved, budget, messages, parentOutputHash = null, requestModel, validateOutput,
-  finalApply = false, lease } = {}) {
+  finalApply = false, lease, outputContractHash:requestedOutputContractHash = null } = {}) {
   const row = stageRows.find(item => item.stage === stage)
   if (!row) throw manualTradeReviewStageTaskError(stage, 'row_missing')
   if (row.status === 'succeeded' && row.normalizedOutput) {
@@ -926,8 +1006,8 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
   if (row.status === 'failed' || row.status === 'stale' || row.status === 'conflict') {
     throw manualTradeReviewStageTaskError(stage, 'terminal_requires_retry')
   }
-  const outputContractHash = stage === 'counterfactual'
-    ? manualTradeReviewCounterfactualContractHash() : manualTradeReviewOutputContractHash()
+  const outputContractHash = requestedOutputContractHash || (stage === 'counterfactual'
+    ? manualTradeReviewCounterfactualContractHash() : manualTradeReviewOutputContractHash())
   const frozenRuntimeHash = runtimeHash || runtime.runtimeHash || runtime.frozenRuntimeHash
   const inputHash = buildManualTradeReviewStageInputHash({ stage, frozenRuntimeHash,
     messages, outputContractHash, parentOutputHash })
@@ -1013,7 +1093,364 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
   }
 }
 
-async function applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputHash, sources = [] } = {}) {
+function manualTradeReviewV3PointOffset(candidateKey) {
+  const value = String(candidateKey || '').trim()
+  if (value === 'anchor') return 0
+  const match = /^anchor_(minus|plus)_(\d+)$/.exec(value)
+  if (!match) return null
+  const offset = Number(match[2]) * (match[1] === 'minus' ? -1 : 1)
+  return Number.isSafeInteger(offset) && Math.abs(offset) <= 2 ? offset : null
+}
+
+function manualTradeReviewV3PointHash(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return /^[a-f0-9]{64}$/.test(normalized) ? normalized : null
+}
+
+function manualTradeReviewV3PointEvidence(reviewCase, sources, evidence) {
+  const source = sources?.[0]
+  const identity = String(source?.source_identity_hash || '')
+  const path = evidence?.market_data?.trades?.[identity]
+  const supplied = path?.counterfactual_points
+  if (!path || !Object.prototype.hasOwnProperty.call(path, 'counterfactual_points')) return null
+  if (!Array.isArray(supplied) || supplied.length > 5) {
+    throw new Error('manual_trade_review_counterfactual_points_invalid')
+  }
+  if (supplied.length === 0) throw new Error('manual_trade_review_counterfactual_points_invalid')
+  const catalog = buildManualReviewEvidenceCatalog(sources, evidence)
+  const keys = new Set(); const offsets = new Set(); const times = new Set()
+  return supplied.map((candidate, index) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error(`manual_trade_review_counterfactual_point_${index}_invalid`)
+    }
+    if ((candidate.status != null && String(candidate.status) !== 'complete')
+      || (candidate.market_data?.status != null && String(candidate.market_data.status) !== 'complete')) {
+      throw new Error(`manual_trade_review_counterfactual_point_${index}_incomplete`)
+    }
+    const candidateKey = String(candidate.candidate_key || candidate.candidateKey || '').trim()
+    const offsetBars = Number(candidate.offset_bars ?? candidate.offsetBars)
+    const decisionTime = Number(candidate.decision_time_utc_msc ?? candidate.decisionTimeUtcMsc)
+    const expectedOffset = manualTradeReviewV3PointOffset(candidateKey)
+    if (expectedOffset == null || !Number.isSafeInteger(offsetBars) || offsetBars !== expectedOffset
+      || !Number.isSafeInteger(decisionTime) || decisionTime <= 0
+      || keys.has(candidateKey) || offsets.has(offsetBars) || times.has(decisionTime)) {
+      throw new Error(`manual_trade_review_counterfactual_point_${index}_identity_invalid`)
+    }
+    const marketData = candidate.market_data ?? candidate.closed_market_data ?? candidate.closedMarketData
+      ?? candidate.market_snapshot ?? candidate.marketSnapshot
+    if (!marketData || typeof marketData !== 'object' || Array.isArray(marketData)) {
+      throw new Error(`manual_trade_review_counterfactual_point_${index}_market_data_invalid`)
+    }
+    if (marketData.status != null && String(marketData.status) !== 'complete') {
+      throw new Error(`manual_trade_review_counterfactual_point_${index}_incomplete`)
+    }
+    const allowed = candidate.allowed_evidence_refs ?? candidate.allowedEvidenceRefs
+    let allowedEvidenceRefs
+    const pointCatalogRefs = catalog.counterfactual_refs_by_trade?.[identity]?.[candidateKey] || []
+    try {
+      allowedEvidenceRefs = validateManualReviewEvidenceRefs(allowed, pointCatalogRefs, { required:true })
+    } catch {
+      throw new Error(`manual_trade_review_counterfactual_point_${index}_evidence_refs_invalid`)
+    }
+    const marketSnapshotHash = manualTradeReviewV3PointHash(candidate.market_snapshot_hash ?? candidate.marketSnapshotHash)
+    if (!marketSnapshotHash) throw new Error(`manual_trade_review_counterfactual_point_${index}_snapshot_hash_invalid`)
+    const inputHash = manualTradeReviewV3PointHash(candidate.input_hash ?? candidate.inputHash)
+      || jsonHash({ candidate_key:candidateKey, decision_time_utc_msc:decisionTime, offset_bars:offsetBars,
+        market_snapshot_hash:marketSnapshotHash, allowed_evidence_refs:allowedEvidenceRefs, market_data:marketData })
+    const historicalContractSpec = candidate.historical_contract_spec ?? candidate.historicalContractSpec
+      ?? candidate.contract_spec ?? candidate.contractSpec
+    keys.add(candidateKey); offsets.add(offsetBars); times.add(decisionTime)
+    return { candidate_key:candidateKey, decision_time_utc_msc:decisionTime, offset_bars:offsetBars,
+      primary_timeframe:typeof candidate.primary_timeframe === 'string' ? candidate.primary_timeframe.trim().toUpperCase() : null,
+      status:'complete', market_data:marketData, closed_market_data:marketData,
+      ...(historicalContractSpec && typeof historicalContractSpec === 'object' && !Array.isArray(historicalContractSpec)
+        ? { historical_contract_spec:historicalContractSpec } : {}),
+      market_snapshot_hash:marketSnapshotHash, input_hash:inputHash, allowed_evidence_refs:allowedEvidenceRefs }
+  }).sort((left, right) => left.offset_bars - right.offset_bars)
+}
+
+function manualTradeReviewV3OutputDirection(value) {
+  const normalized = String(value == null ? '' : value).trim().toLowerCase()
+  if (['buy', 'long', '0'].includes(normalized)) return 'buy'
+  if (['sell', 'short', '1'].includes(normalized)) return 'sell'
+  return null
+}
+
+function manualTradeReviewV3FindAtr(value, depth = 0) {
+  if (depth > 5 || value == null) return null
+  if (typeof value !== 'object') return null
+  if (Array.isArray(value)) {
+    for (const nested of value) {
+      const found = manualTradeReviewV3FindAtr(nested, depth + 1)
+      if (found != null) return found
+    }
+    return null
+  }
+  for (const key of ['atr', 'atr_value', 'average_true_range']) {
+    const number = Number(value[key])
+    if (Number.isFinite(number) && number > 0) return number
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    const normalizedKey = String(key).toLowerCase()
+    if (!nested || typeof nested !== 'object'
+      || !(normalizedKey.includes('atr') || normalizedKey.includes('indicator') || normalizedKey.includes('technical')
+        || normalizedKey.includes('volatility') || normalizedKey.includes('metric') || normalizedKey === 'timeframes')) continue
+    const found = manualTradeReviewV3FindAtr(nested, depth + 1)
+    if (found != null) return found
+  }
+  return null
+}
+
+function manualTradeReviewV3ProtectionAssessment(candidate, point) {
+  const marketData = point?.market_data || point?.closed_market_data || {}
+  return evaluateManualTradeReviewProtectionPlan(candidate.protection_plan, {
+    direction:candidate.decision,
+    entryPrice:candidate.entry_price_reference,
+    atr:manualTradeReviewV3FindAtr(marketData),
+    contractSpec:point?.historical_contract_spec || point?.contract_spec || point?.contractSpec
+      || marketData?.historical_contract_spec || marketData?.contract_spec || marketData?.contractSpec,
+    strategyConsistency:'unknown',
+  })
+}
+
+function manualTradeReviewV3ServerSummary(points, candidates, actualDirection) {
+  const normalizedCandidates = candidates.map(candidate => candidate.normalizedOutput || candidate.normalized_output || candidate)
+  const protections = new Map(points.map((point, index) => {
+    const output = normalizedCandidates[index]
+    return [output.candidate_key, manualTradeReviewV3ProtectionAssessment(output, point)]
+  }))
+  const direction = deriveManualTradeReviewDirectionSummary(normalizedCandidates, actualDirection, {
+    protectionByCandidate:protections,
+  })
+  const resultCandidates = direction.candidates.map(item => ({ ...item,
+    protection_assessment:protections.get(item.candidate_key) || null,
+  }))
+  const first = resultCandidates.find(item => item.direction_match === 'same_direction_entry'
+    || item.direction_match === 'same_direction_observe')
+  const protection = first?.protection_assessment || resultCandidates[0]?.protection_assessment || null
+  return { ...direction, candidates:resultCandidates,
+    protection_assessment:protection || { protection_quality:'unknown', execution_feasibility:'unknown' },
+  }
+}
+
+function manualTradeReviewV3PointBundle(points, normalizedCandidates, serverSummary) {
+  return {
+    output_contract_version:COUNTERFACTUAL_POINT_V3_OUTPUT_VERSION,
+    points:points.map((point, index) => ({
+      candidate_key:point.candidate_key, decision_time_utc_msc:point.decision_time_utc_msc,
+      offset_bars:point.offset_bars, market_snapshot_hash:point.market_snapshot_hash,
+      input_hash:point.input_hash, normalized_output:normalizedCandidates[index],
+    })),
+    server_derived_summary:serverSummary,
+  }
+}
+
+function manualTradeReviewV3ValidatePersistedBundle(bundle, points, strategySnapshot) {
+  if (!bundle || typeof bundle !== 'object' || bundle.output_contract_version !== COUNTERFACTUAL_POINT_V3_OUTPUT_VERSION
+    || !bundle.server_derived_summary || typeof bundle.server_derived_summary !== 'object'
+    || !Array.isArray(bundle.points)
+    || bundle.points.length !== points.length) throw new Error('manual_trade_review_counterfactual_bundle_invalid')
+  const byKey = new Map(bundle.points.map(point => [String(point?.candidate_key || ''), point]))
+  return points.map(point => {
+    const persisted = byKey.get(point.candidate_key)
+    if (!persisted || String(persisted.market_snapshot_hash || '') !== point.market_snapshot_hash
+      || String(persisted.input_hash || '') !== point.input_hash) {
+      throw new Error('manual_trade_review_counterfactual_bundle_conflict')
+    }
+    const normalized = normalizeManualTradeReviewCounterfactualPoint(persisted.normalized_output, {
+      strategySnapshot, allowedEvidenceRefs:point.allowed_evidence_refs,
+    })
+    if (normalized.candidate_key !== point.candidate_key) {
+      throw new Error('manual_trade_review_counterfactual_bundle_candidate_conflict')
+    }
+    return normalized
+  })
+}
+
+async function reconcileManualTradeReviewV3PointTask(pointRow, job, point) {
+  if (!pointRow?.modelTaskId || !pointRow.normalizedOutputHash) return
+  const task = await queryOne('SELECT task_id, status FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [pointRow.modelTaskId])
+  if (task && String(task.status) !== 'succeeded') {
+    await markModelTaskSucceededFromResult(pointRow.modelTaskId, {
+      resultRef:`manual_trade_review_counterfactual:${job.id}:${Number(job.generation_no || 1)}:${point.candidate_key}`,
+      resultHash:pointRow.normalizedOutputHash,
+    })
+  }
+}
+
+async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, sources, job, runtime, runtimeHash,
+  memorySnapshot, endpoint, resolved, requestModel, lease, strategySnapshot } = {}) {
+  const generationNo = Number(job.generation_no || 1)
+  if (pointRow?.status === 'succeeded' && pointRow.normalizedOutput) {
+    await reconcileManualTradeReviewV3PointTask(pointRow, job, point)
+    return { output:normalizeManualTradeReviewCounterfactualPoint(pointRow.normalizedOutput, {
+      strategySnapshot, allowedEvidenceRefs:point.allowed_evidence_refs,
+    }), outputHash:pointRow.normalizedOutputHash, skipped:true }
+  }
+  if (pointRow?.status === 'status_unknown') {
+    throw manualTradeReviewStageTaskError(`counterfactual_point_${point.candidate_key}`, 'status_unknown', { terminal:false, hold:true })
+  }
+  if (['failed', 'stale', 'conflict'].includes(String(pointRow?.status || ''))) {
+    throw manualTradeReviewStageTaskError(`counterfactual_point_${point.candidate_key}`, 'terminal_requires_retry')
+  }
+  if (pointRow?.modelTaskId) {
+    const priorTask = await queryOne('SELECT * FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [pointRow.modelTaskId])
+    if (!priorTask) throw manualTradeReviewStageTaskError(`counterfactual_point_${point.candidate_key}`, 'task_missing')
+    const waitError = manualTradeReviewModelTaskWaitError(priorTask)
+    if (waitError) throw waitError
+    if (String(priorTask.status) === 'status_unknown') {
+      throw manualTradeReviewStageTaskError(`counterfactual_point_${point.candidate_key}`, 'task_status_unknown', { terminal:false, hold:true })
+    }
+    if (MODEL_TASK_ACTIVE_STATES.has(String(priorTask.status))) {
+      throw manualTradeReviewStageTaskError(`counterfactual_point_${point.candidate_key}`, 'task_active', { terminal:false, hold:true })
+    }
+    if (MODEL_TASK_TERMINAL_STATES.has(String(priorTask.status))) {
+      throw manualTradeReviewStageTaskError(`counterfactual_point_${point.candidate_key}`, 'task_terminal')
+    }
+  }
+  const messages = counterfactualPointPrompt(reviewCase, sources, point, memorySnapshot)
+  const budget = await prepareManualTradeReviewBudget(resolved, messages)
+  const pointOutputContractHash = manualTradeReviewV3PointContractHash()
+  const inputHash = buildManualTradeReviewStageInputHash({ stage:'counterfactual', frozenRuntimeHash:runtimeHash,
+    messages, outputContractHash:pointOutputContractHash, parentOutputHash:null })
+  const validateOutput = value => normalizeManualTradeReviewCounterfactualPoint(value, {
+    strategySnapshot, allowedEvidenceRefs:point.allowed_evidence_refs,
+  })
+  let tracker = null
+  try {
+    const idempotencyKey = `manual_trade_review:${Number(job.id)}:${generationNo}:counterfactual:${point.candidate_key}`
+    tracker = await createModelTaskTracker({
+      taskKind:'manual_analysis', queueClass:'background', ownerUserId:job.user_id,
+      strategyId:job.strategy_id, domainType:'manual_trade_review_counterfactual_point', domainId:job.id,
+      idempotencyKey, inputHash, snapshotHash:runtimeHash,
+      promptHash:sha256(JSON.stringify(messages)), outputContractHash:pointOutputContractHash,
+      provider:resolved.model.provider || resolved.model.api_provider, model:resolved.model.model_name || resolved.model.model,
+      modelProfileId:resolved.model_profile_id, protocol:endpoint.protocol, credentialSource:resolved.credential_source,
+      frozenContext:{ manual_review_runtime_hash:runtimeHash, stage:'counterfactual_point', candidate_key:point.candidate_key,
+        decision_time_utc_msc:point.decision_time_utc_msc, offset_bars:point.offset_bars,
+        market_snapshot_hash:point.market_snapshot_hash, input_hash:point.input_hash,
+        allowed_evidence_refs:point.allowed_evidence_refs, parent_output_hash:null, generation_no:generationNo },
+      maxAttempts:Number(job.max_attempts) || 3, taskDeadlineAtUtcMs:parseBeijingDateTime(job.task_deadline_at),
+    }, { workerId:`manual-trade-review:${process.pid}:counterfactual:${point.candidate_key}`, linkTask:async taskId =>
+      linkManualTradeReviewCounterfactualPointModelTask({ caseId:job.case_id, jobId:job.id, generationNo,
+        candidateKey:point.candidate_key, modelTaskId:taskId, inputHash, leaseToken:job.lease_token }) })
+    await createStrategyMemoryInjectionLog({ strategyId:job.strategy_id,
+      actor:{ userId:job.user_id, role:'admin' }, library:memorySnapshot,
+      injectionKind:`manual_trade_review_counterfactual_point_${point.candidate_key}`, modelTaskId:tracker.taskId })
+    await tracker.persistBudget(budget)
+    const requestSignal = () => {
+      const signals = [lease.signal, tracker.signal].filter(Boolean)
+      return signals.length > 1 ? AbortSignal.any(signals) : signals[0] || null
+    }
+    const callbacks = {
+      onProviderRequest:event => tracker.onProviderRequest(event), onProviderUsage:event => tracker.onProviderUsage(event),
+      onProviderActivity:event => tracker.onProviderActivity(event), onProviderQuiet:event => tracker.onProviderQuiet(event),
+    }
+    lease.assertOwned(); tracker.assertOwned()
+    const deadlines = modelTaskDeadlines('manual_analysis', { nowUtcMs:Date.now(), businessDeadlineUtcMs:parseBeijingDateTime(job.task_deadline_at) })
+    const raw = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted,
+      provider:resolved.model.provider || resolved.model.api_provider, model:resolved.model.model_name || resolved.model.model,
+      temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens:budget.selectedMaxOutputTokens,
+      thinkingEnabled:resolved.model.thinking_enabled, reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
+      messages, modelTaskBudget:budget, usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id,
+        credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
+      timeout:Math.max(1, Math.min(deadlines.attemptSafetyDeadlineUtcMs, deadlines.taskDeadlineUtcMs) - Date.now()),
+      deadlineAtMs:deadlines.attemptSafetyDeadlineUtcMs, followupValidUntilMs:deadlines.taskDeadlineUtcMs,
+      signal:requestSignal(), ...callbacks, allowFollowupRequests:false, validateObject:validateOutput })
+    lease.assertOwned(); tracker.assertOwned()
+    const output = validateOutput(raw)
+    const saved = await saveManualTradeReviewCounterfactualPointOutput({ caseId:job.case_id, jobId:job.id,
+      generationNo, candidateKey:point.candidate_key, modelTaskId:tracker.taskId, leaseToken:job.lease_token,
+      normalizedOutput:output })
+    await tracker.resultReady({ resultHash:saved.normalizedOutputHash })
+    await tracker.succeeded({ resultRef:`manual_trade_review_counterfactual:${job.id}:${generationNo}:${point.candidate_key}`,
+      resultHash:saved.normalizedOutputHash })
+    return { output, outputHash:saved.normalizedOutputHash, skipped:false, modelTaskId:tracker.taskId }
+  } catch (error) {
+    const hold = Boolean(error?.manualTradeReviewHold || error?.manualTradeReviewDeferUntilUtcMs)
+    try {
+      if (hold) await markManualTradeReviewCounterfactualPointUnknown({ caseId:job.case_id, jobId:job.id, generationNo,
+        candidateKey:point.candidate_key, modelTaskId:tracker?.taskId || pointRow?.modelTaskId || null,
+        leaseToken:job.lease_token, errorCode:error?.code || 'manual_trade_review_counterfactual_status_unknown' })
+      else if (error?.manualTradeReviewTerminalTask) await markManualTradeReviewCounterfactualPointFailed({
+        caseId:job.case_id, jobId:job.id, generationNo, candidateKey:point.candidate_key,
+        modelTaskId:tracker?.taskId || pointRow?.modelTaskId || null, leaseToken:job.lease_token,
+        errorCode:error?.code || 'manual_trade_review_counterfactual_failed' })
+      // Keep a running point mutable for provider/validation failures.  The
+      // durable model task tracker owns retry scheduling; marking it failed
+      // here would make the next worker reject a retryable task permanently.
+    } catch (statusError) {
+      console.error('[ManualTradeReview] counterfactual point status update failed:', statusError.message)
+    }
+    try { await tracker?.failed(error, Number(job.attempt_count || 0) >= Number(job.max_attempts || 3)) } catch (trackerError) {
+      console.error('[ManualTradeReview] counterfactual point task failure update failed:', trackerError.message)
+    }
+    throw error
+  } finally {
+    try { await tracker?.stop() } catch (error) { console.error('[ManualTradeReview] counterfactual point task stop failed:', error.message) }
+  }
+}
+
+async function runManualTradeReviewV3Counterfactual({ points, reviewCase, sources, frozenEvidence, job, runtime,
+  runtimeHash, memorySnapshot, endpoint, resolved, requestModel, lease, stageRows } = {}) {
+  const strategySnapshot = parse(reviewCase.strategy_snapshot_json, {})
+  const stage = stageRows.find(item => item.stage === 'counterfactual')
+  if (!stage) throw manualTradeReviewStageTaskError('counterfactual', 'row_missing')
+  const ledgerRows = await ensureManualTradeReviewCounterfactualPoints({ caseId:job.case_id, jobId:job.id,
+    generationNo:Number(job.generation_no || 1), leaseToken:job.lease_token,
+    candidates:points.map(point => ({ candidateKey:point.candidate_key, decisionTimeUtcMsc:point.decision_time_utc_msc,
+      offsetBars:point.offset_bars, marketSnapshotHash:point.market_snapshot_hash, inputHash:point.input_hash })) })
+  if (stage.status === 'status_unknown') throw manualTradeReviewStageTaskError('counterfactual', 'status_unknown', { terminal:false, hold:true })
+  if (['failed', 'stale', 'conflict'].includes(String(stage.status || ''))) throw manualTradeReviewStageTaskError('counterfactual', 'terminal_requires_retry')
+  let normalizedCandidates
+  let outputHash = stage.normalizedOutputHash
+  if (stage.status === 'succeeded' && stage.normalizedOutput) {
+    const ledgerByKey = new Map(ledgerRows.map(row => [row.candidate_key, row]))
+    for (const point of points) {
+      const row = ledgerByKey.get(point.candidate_key)
+      if (!row || row.status !== 'succeeded' || !row.normalizedOutput) {
+        throw new Error('manual_trade_review_counterfactual_point_ledger_incomplete')
+      }
+      await reconcileManualTradeReviewV3PointTask(row, job, point)
+    }
+    normalizedCandidates = manualTradeReviewV3ValidatePersistedBundle(stage.normalizedOutput, points, strategySnapshot)
+    for (const [index, point] of points.entries()) {
+      const row = ledgerByKey.get(point.candidate_key)
+      if (jsonHash(row.normalizedOutput) !== jsonHash(normalizedCandidates[index])) {
+        throw new Error('manual_trade_review_counterfactual_point_output_conflict')
+      }
+    }
+  } else {
+    normalizedCandidates = []
+    for (const point of points) {
+      const row = ledgerRows.find(item => item.candidate_key === point.candidate_key)
+      if (!row) throw new Error('manual_trade_review_counterfactual_point_missing')
+      const result = await runManualTradeReviewV3Point({ point, pointRow:row, reviewCase, sources, job, runtime,
+        runtimeHash, memorySnapshot, endpoint, resolved, requestModel, lease, strategySnapshot })
+      normalizedCandidates.push(result.output)
+    }
+    const actualDirection = manualTradeReviewV3OutputDirection(parse(sources[0]?.normalized_trade_json, {})?.direction || sources[0]?.direction)
+    const serverSummary = manualTradeReviewV3ServerSummary(points, normalizedCandidates, actualDirection)
+    const bundle = manualTradeReviewV3PointBundle(points, normalizedCandidates, serverSummary)
+    const bundleInputHash = buildManualTradeReviewStageInputHash({ stage:'counterfactual', frozenRuntimeHash:runtimeHash,
+      messages:{ candidate_keys:points.map(point => point.candidate_key), input_hashes:points.map(point => point.input_hash) },
+      outputContractHash:manualTradeReviewV3OutputContractHash(), parentOutputHash:null })
+    const bundleTaskId = ledgerRows.find(row => row.model_task_id || row.modelTaskId)?.modelTaskId
+    if (!bundleTaskId) throw new Error('manual_trade_review_counterfactual_point_task_missing')
+    await linkManualTradeReviewStageModelTask({ caseId:job.case_id, jobId:job.id,
+      generationNo:Number(job.generation_no || 1), stage:'counterfactual', modelTaskId:stage.model_task_id || bundleTaskId,
+      inputHash:bundleInputHash, leaseToken:job.lease_token })
+    const saved = await saveManualTradeReviewStageOutput({ caseId:job.case_id, jobId:job.id,
+      generationNo:Number(job.generation_no || 1), stage:'counterfactual', leaseToken:job.lease_token,
+      normalizedOutput:bundle })
+    outputHash = saved.normalizedOutputHash
+  }
+  const actualDirection = manualTradeReviewV3OutputDirection(parse(sources[0]?.normalized_trade_json, {})?.direction || sources[0]?.direction)
+  const serverSummary = manualTradeReviewV3ServerSummary(points, normalizedCandidates, actualDirection)
+  return { normalizedCandidates, serverSummary, outputHash }
+}
+
+async function applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputHash, sources = [], v3 = false } = {}) {
   return withTransaction(async run => {
     const [jobRows] = await run(`SELECT * FROM manual_trade_review_jobs
       WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased' FOR UPDATE`,
@@ -1039,9 +1476,24 @@ async function applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputH
     if (!outcome || outcome.status !== 'succeeded' || outcome.normalizedOutputHash !== outputHash) {
       throw new Error('manual_trade_review_outcome_stage_fence_lost')
     }
-    const content = validateManualTradeReviewContent(outcome.normalizedOutput, sources,
-      parse(currentCase.strategy_snapshot_json, {}), { evidenceStatus:currentCase.evidence_status, evidence:parse(currentCase.evidence_json, {}) })
-    const normalized = normalizeManualTradeReviewStageOutput(content)
+    const strategySnapshot = parse(currentCase.strategy_snapshot_json, {})
+    const evidenceCatalog = buildManualReviewEvidenceCatalog(sources, parse(currentCase.evidence_json, {}))
+    const content = v3
+      ? normalizeManualTradeReviewV3Content(outcome.normalizedOutput, {
+        strategySnapshot,
+        allowedEvidenceRefs:evidenceCatalog.outcome_refs,
+        sourceRefs:evidenceCatalog.trade_refs,
+        sourceRefSet:new Set(evidenceCatalog.trade_refs),
+        serverDerivedSummary:outcome.normalizedOutput.counterfactual_summary,
+        serverProtectionAssessment:outcome.normalizedOutput.counterfactual_summary,
+      })
+      : validateManualTradeReviewContent(outcome.normalizedOutput, sources, strategySnapshot, {
+        evidenceStatus:currentCase.evidence_status, evidence:parse(currentCase.evidence_json, {}) })
+    const persistedContent = v3
+      ? { ...content, counterfactual_points:outcome.normalizedOutput.counterfactual_points || [],
+        counterfactual_summary:outcome.normalizedOutput.counterfactual_summary }
+      : content
+    const normalized = normalizeManualTradeReviewStageOutput(persistedContent)
     if (normalized.normalizedOutputHash !== outputHash) throw new Error('manual_trade_review_outcome_hash_mismatch')
     const now = beijingNow()
     const [existing] = await run(`SELECT id, version_no FROM manual_trade_review_versions
@@ -1090,40 +1542,91 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     if (sources.length !== 1) throw new Error('manual_trade_review_selection_invalid')
     const frozenEvidence = parse(reviewCase.evidence_json, {})
     const evidenceCatalog = buildManualReviewEvidenceCatalog(sources, frozenEvidence)
+    const v3Points = manualTradeReviewV3PointEvidence(reviewCase, sources, frozenEvidence)
+    const isV3 = Array.isArray(v3Points) && v3Points.length > 0
     const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review',
       modelPurpose:'manual_trade_review' })
     if (!resolved.model) throw new Error(resolved.error || 'manual_trade_review_model_unavailable')
     const endpoint = modelEndpoint(resolved.model)
-    const runtimeContext = await loadManualTradeReviewGenerationRuntime(job, reviewCase, resolved, endpoint)
+    const runtimeContext = await loadManualTradeReviewGenerationRuntime(job, reviewCase, resolved, endpoint, null,
+      isV3 ? manualTradeReviewV3OutputContractHash() : manualTradeReviewOutputContractHash())
     const memorySnapshot = runtimeContext.memory
     const runtime = runtimeContext.runtime
     let stageRows = runtimeContext.stageRows
-    const counterfactualMessages = counterfactualPrompt(reviewCase, sources, memorySnapshot)
-    const counterfactualBudget = await prepareManualTradeReviewBudget(resolved, counterfactualMessages)
-    await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'counterfactual_analysis', stage_updated_at = ?, updated_at = ?
-      WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased'`,
-    [beijingNow(), beijingNow(), job.id, Number(job.generation_no || 1), job.lease_token])
-    const counterfactualResult = await runManualTradeReviewStage({ stage:'counterfactual', job,
-      runtime, runtimeHash:runtimeContext.runtimeHash, memorySnapshot, stageRows, endpoint, resolved, budget:counterfactualBudget,
-      messages:counterfactualMessages, requestModel, lease,
-      validateOutput:value => validateCounterfactualAnalysis(value, { allowedEvidenceRefs:evidenceCatalog.pre_entry_refs }) })
-    const counterfactual = counterfactualResult.output
-    stageRows = await readManualTradeReviewStageRuns({ caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1) })
-    await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'outcome_review', stage_updated_at = ?, updated_at = ?
-      WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased'`,
-    [beijingNow(), beijingNow(), job.id, Number(job.generation_no || 1), job.lease_token])
-    const outcomeMessages = outcomeReviewPrompt(reviewCase, sources, counterfactual, memorySnapshot)
+    let counterfactualResult
+    let outcomeMessages
+    let outcomeValidator
+    if (isV3) {
+      await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'counterfactual_points', stage_updated_at = ?, updated_at = ?
+        WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased'`,
+      [beijingNow(), beijingNow(), job.id, Number(job.generation_no || 1), job.lease_token])
+      const v3Counterfactual = await runManualTradeReviewV3Counterfactual({ points:v3Points, reviewCase, sources,
+        frozenEvidence, job, runtime, runtimeHash:runtimeContext.runtimeHash, memorySnapshot, endpoint, resolved,
+        requestModel, lease, stageRows })
+      const serverCandidateByKey = new Map((v3Counterfactual.serverSummary.candidates || [])
+        .map(item => [item.candidate_key, item]))
+      const frozenPointBundle = v3Points.map((point, index) => {
+        const normalized = v3Counterfactual.normalizedCandidates[index]
+        const derived = serverCandidateByKey.get(point.candidate_key) || {}
+        return { ...normalized, candidate_key:point.candidate_key, decision_time_utc_msc:point.decision_time_utc_msc,
+          offset_bars:point.offset_bars, primary_timeframe:point.primary_timeframe || null, status:point.status || 'complete',
+          market_snapshot_hash:point.market_snapshot_hash, input_hash:point.input_hash,
+          allowed_evidence_refs:point.allowed_evidence_refs,
+          ...(point.historical_contract_spec ? { historical_contract_spec:point.historical_contract_spec } : {}),
+          normalized_output:normalized, direction_match:derived.direction_match || 'insufficient_evidence',
+          strategy_eligibility:derived.strategy_eligibility || 'unknown',
+          execution_feasibility:derived.execution_feasibility || 'unknown',
+          protection_assessment:derived.protection_assessment || null }
+      })
+      const serverDerivedSummary = v3Counterfactual.serverSummary
+      counterfactualResult = { output:v3Counterfactual.normalizedCandidates, outputHash:v3Counterfactual.outputHash,
+        serverDerivedSummary, frozenPointBundle }
+      stageRows = await readManualTradeReviewStageRuns({ caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1) })
+      await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'outcome_review', stage_updated_at = ?, updated_at = ?
+        WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased'`,
+      [beijingNow(), beijingNow(), job.id, Number(job.generation_no || 1), job.lease_token])
+      outcomeMessages = outcomeReviewV3Prompt(reviewCase, sources, frozenPointBundle, serverDerivedSummary, memorySnapshot)
+      outcomeValidator = value => {
+        const normalized = normalizeManualTradeReviewV3Content(value, {
+          strategySnapshot:parse(reviewCase.strategy_snapshot_json, {}),
+          allowedEvidenceRefs:evidenceCatalog.outcome_refs,
+          sourceRefs:evidenceCatalog.trade_refs,
+          sourceRefSet:new Set(evidenceCatalog.trade_refs),
+          serverDerivedSummary,
+          serverProtectionAssessment:serverDerivedSummary.protection_assessment,
+        })
+        return { ...normalized, counterfactual_points:frozenPointBundle,
+          counterfactual_summary:normalized.counterfactual_summary }
+      }
+    } else {
+      const counterfactualMessages = counterfactualPrompt(reviewCase, sources, memorySnapshot)
+      const counterfactualBudget = await prepareManualTradeReviewBudget(resolved, counterfactualMessages)
+      await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'counterfactual_analysis', stage_updated_at = ?, updated_at = ?
+        WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased'`,
+      [beijingNow(), beijingNow(), job.id, Number(job.generation_no || 1), job.lease_token])
+      counterfactualResult = await runManualTradeReviewStage({ stage:'counterfactual', job,
+        runtime, runtimeHash:runtimeContext.runtimeHash, memorySnapshot, stageRows, endpoint, resolved, budget:counterfactualBudget,
+        messages:counterfactualMessages, requestModel, lease,
+        validateOutput:value => validateCounterfactualAnalysis(value, { allowedEvidenceRefs:evidenceCatalog.pre_entry_refs }) })
+      const counterfactual = counterfactualResult.output
+      stageRows = await readManualTradeReviewStageRuns({ caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1) })
+      await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'outcome_review', stage_updated_at = ?, updated_at = ?
+        WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased'`,
+      [beijingNow(), beijingNow(), job.id, Number(job.generation_no || 1), job.lease_token])
+      outcomeMessages = outcomeReviewPrompt(reviewCase, sources, counterfactual, memorySnapshot)
+      outcomeValidator = value => validateManualTradeReviewContent({ ...value, counterfactual_analysis:counterfactual }, sources,
+        parse(reviewCase.strategy_snapshot_json, {}), { evidenceStatus:reviewCase.evidence_status, evidence:frozenEvidence })
+    }
     const outcomeBudget = await prepareManualTradeReviewBudget(resolved, outcomeMessages)
     const outcomeResult = await runManualTradeReviewStage({ stage:'outcome_review', job,
       runtime, runtimeHash:runtimeContext.runtimeHash, memorySnapshot, stageRows, endpoint, resolved, budget:outcomeBudget,
       messages:outcomeMessages, parentOutputHash:counterfactualResult.outputHash, requestModel, lease,
-      finalApply:true,
-      validateOutput:value => validateManualTradeReviewContent({ ...value, counterfactual_analysis:counterfactual }, sources,
-        parse(reviewCase.strategy_snapshot_json, {}), { evidenceStatus:reviewCase.evidence_status, evidence:frozenEvidence }) })
+      finalApply:true, outputContractHash:isV3 ? manualTradeReviewV3OutputContractHash() : null,
+      validateOutput:outcomeValidator })
     outcomeTracker = outcomeResult.tracker
     lease.assertOwned(); outcomeTracker?.assertOwned()
     const applied = await applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputHash:outcomeResult.outputHash,
-      sources })
+      sources, v3:isV3 })
     await outcomeTracker?.succeeded({ resultRef:`manual_trade_review_case:${job.case_id}`, resultHash:applied.contentHash })
     return { status:'succeeded', case_id:Number(job.case_id), version_id:applied.versionId }
   } catch (error) {
@@ -1153,6 +1656,15 @@ export async function recoverAbandonedManualTradeReviewJobs({ now = beijingNow()
   let requeued = 0; let failed = 0; let manualRetryRequired = 0
   for (const job of rows) {
     const stageRows = await readManualTradeReviewStageRuns({ caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1) })
+    let pointRows = []
+    try {
+      pointRows = await readManualTradeReviewCounterfactualPoints({ caseId:job.case_id, jobId:job.id,
+        generationNo:Number(job.generation_no || 1) })
+    } catch {
+      // The point ledger is an additive v3 capability.  A deployment that has
+      // not applied its migration must retain the complete v2 recovery path.
+      pointRows = []
+    }
     const deadlineAt = parseBeijingDateTime(job.task_deadline_at)
     const deadlineExpired = Number.isFinite(deadlineAt) && deadlineAt > 0 && deadlineAt <= Date.now()
     const taskRows = []
@@ -1161,9 +1673,15 @@ export async function recoverAbandonedManualTradeReviewJobs({ now = beijingNow()
       const task = await queryOne('SELECT status, lease_expires_at_utc_msc, scheduled_at_utc_msc FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [stage.model_task_id])
       if (task) taskRows.push({ stage, task })
     }
+    for (const point of pointRows) {
+      if (!point.model_task_id) continue
+      const task = await queryOne('SELECT status, lease_expires_at_utc_msc, scheduled_at_utc_msc FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [point.model_task_id])
+      if (task) taskRows.push({ stage:point, task })
+    }
     const hasUnknownOrActiveTask = taskRows.some(({ stage, task }) =>
       stage.status === 'status_unknown' || String(task.status) === 'status_unknown' || MODEL_TASK_ACTIVE_STATES.has(String(task.status)))
     const hasTerminalStage = stageRows.some(stage => ['failed', 'stale', 'conflict'].includes(String(stage.status)))
+      || pointRows.some(point => ['failed', 'stale', 'conflict'].includes(String(point.status)))
     const unsafeLegacyGeneration = stageRows.length === 0
       && ['generating', 'counterfactual_analysis', 'outcome_review'].includes(String(job.progress_stage || ''))
     const incompleteStageLedger = stageRows.length > 0 && stageRows.length !== 2
@@ -1234,5 +1752,8 @@ export const __manualTradeReviewTest = {
   manualTradeReviewModelTaskTerminalError, manualTradeReviewCanRecoverCompletedTask, claimManualTradeReviewJob,
   manualTradeReviewEvidenceReason, frozenMemoryPayload, loadManualTradeReviewGenerationRuntime,
   manualTradeReviewStageTaskError, deferManualTradeReviewForModelTaskLease,
-  runManualTradeReviewStage, applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs,
+  runManualTradeReviewStage, runManualTradeReviewV3Point, runManualTradeReviewV3Counterfactual,
+  manualTradeReviewV3PointEvidence, manualTradeReviewV3ServerSummary, manualTradeReviewV3PointBundle,
+  manualTradeReviewV3ValidatePersistedBundle, manualTradeReviewV3OutputContractHash, manualTradeReviewV3PointContractHash,
+  applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs,
 }
