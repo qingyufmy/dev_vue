@@ -1,13 +1,15 @@
 import crypto from 'node:crypto'
 import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
-import { stripBrokerSuffix } from './utils.js'
+import { stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 
 export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.6'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
 export const AUTO_EXIT_CONFIRMATIONS_REQUIRED = 2
+const POSITION_MANAGEMENT_ROTATION_BATCH_MAX_SECTIONS = Math.floor(POSITION_MANAGEMENT_MAX_GROUPS / 2)
+const POSITION_MANAGEMENT_ROTATION_SAFETY_MARGIN_CHARS = 1024
 
 const MARKET_ALIGNMENT_VALUES = new Set(['aligned', 'misaligned', 'uncertain'])
 const MANAGEMENT_REASON_CODE = /^[a-z][a-z0-9_]{0,63}$/
@@ -111,6 +113,28 @@ function lastClosedBarTime(market, timeframe) {
   if (seconds && seconds > 0) return Math.trunc(seconds > 10_000_000_000 ? seconds : seconds * 1000)
   const parsed = Date.parse(String(market?.timestamp || ''))
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function terminalBarTimeMs(value) {
+  const direct = number(value?.time_utc_msc ?? value?.utc_time_msc ?? value?.time_msc)
+  if (direct && direct > 0) return Math.trunc(direct)
+  const seconds = number(value?.time_utc ?? value?.time)
+  if (seconds && seconds > 0) return Math.trunc(seconds > 10_000_000_000 ? seconds : seconds * 1000)
+  const parsed = Date.parse(String(value?.time_utc ?? value?.time ?? ''))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function closedBarWindow(market, timeframe) {
+  const currentTime = lastClosedBarTime(market, timeframe)
+  const frame = market?.strategy_context?.timeframes?.[timeframe]
+  const rows = Array.isArray(frame?.klines) ? frame.klines : []
+  const previousTimes = [...new Set(rows.map(terminalBarTimeMs)
+    .filter(value => Number.isFinite(value) && value > 0 && (!currentTime || value < currentTime)))]
+    .sort((left, right) => left - right)
+  return {
+    current_closed_bar_time_utc_ms:currentTime,
+    previous_closed_bar_time_utc_ms:previousTimes.at(-1) || null,
+  }
 }
 
 export function buildPositionManagementAsOf(market, decisionTimeframe) {
@@ -392,13 +416,11 @@ export async function loadActivePositionManagementContext({
     }
     group.targets.push(row)
   }
-  const pendingGroups = []
-  const positionGroups = []
-  const targets = new Map()
   const currentBarRef = asOf.closed_bar_time_utc_ms
     ? `bar:${asOf.decision_timeframe}:${asOf.closed_bar_time_utc_ms}` : null
   const currentSnapshotRef = asOf.market_snapshot_hash
     ? `snapshot:${String(asOf.market_snapshot_hash).replace(/^sha256:/, '')}` : null
+  const descriptors = []
   for (const group of groups.values()) {
     const hasPosition = group.targets.some(row => row.position_id)
     const hasPending = group.targets.some(row => row.pending_ticket && !row.position_id)
@@ -425,29 +447,123 @@ export async function loadActivePositionManagementContext({
       safe.reference_facts_status = group.reference_facts_status_by_kind[kind]
       return safe
     }
-    if (hasPosition) positionGroups.push(buildModelGroup('position'))
-    if (hasPending) pendingGroups.push(buildModelGroup('pending'))
-    targets.set(group.management_group_id, group.targets)
+    const sections = {
+      position:hasPosition ? buildModelGroup('position') : null,
+      pending:hasPending ? buildModelGroup('pending') : null,
+    }
+    descriptors.push({
+      management_group_id:group.management_group_id,
+      stable_key:String(group.management_group_id),
+      section_weight:Number(Boolean(sections.position)) + Number(Boolean(sections.pending)),
+      sections,
+      targets:group.targets,
+    })
   }
-  const context = {
-    contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
-    as_of:asOf,
-    pending_groups:pendingGroups,
-    position_groups:positionGroups,
+
+  const buildContext = selected => {
+    const pending = selected.map(item => item.sections.pending).filter(Boolean)
+    const positions = selected.map(item => item.sections.position).filter(Boolean)
+    const context = {
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+      as_of:asOf,
+      pending_groups:pending,
+      position_groups:positions,
+    }
+    return { context, pending, positions, chars:JSON.stringify(context).length }
   }
+
+  const allBuild = buildContext(descriptors)
+  const totalGroupCount = descriptors.length
+  const totalSectionCount = descriptors.reduce((sum, item) => sum + item.section_weight, 0)
+  const allFits = totalSectionCount <= POSITION_MANAGEMENT_MAX_GROUPS
+    && allBuild.chars <= POSITION_MANAGEMENT_MAX_CONTEXT_CHARS
+  let selectedDescriptors = descriptors
+  let selectionMode = 'all'
+  let rotationSlot = null
+  let batchCount = allFits ? 1 : 0
+  let oversizedGroupCount = 0
+  let deferredGroupCount = 0
+
+  if (!allFits) {
+    selectionMode = 'rotating'
+    const emptyContextChars = buildContext([]).chars
+    const batchCharBudget = Math.floor((POSITION_MANAGEMENT_MAX_CONTEXT_CHARS
+      - emptyContextChars - POSITION_MANAGEMENT_ROTATION_SAFETY_MARGIN_CHARS) / 2)
+    const batches = []
+    const oversized = []
+    let currentBatch = []
+    const sortedDescriptors = [...descriptors].sort((left, right) => left.stable_key < right.stable_key ? -1 : 1)
+    const pushCurrentBatch = () => {
+      if (currentBatch.length) batches.push(currentBatch)
+      currentBatch = []
+    }
+    for (const descriptor of sortedDescriptors) {
+      if (descriptor.section_weight > POSITION_MANAGEMENT_ROTATION_BATCH_MAX_SECTIONS) {
+        oversized.push(descriptor)
+        continue
+      }
+      const alone = buildContext([descriptor]).chars
+      if (alone > batchCharBudget) {
+        oversized.push(descriptor)
+        continue
+      }
+      const candidate = [...currentBatch, descriptor]
+      const candidateBuild = buildContext(candidate)
+      if (candidate.reduce((sum, item) => sum + item.section_weight, 0)
+        <= POSITION_MANAGEMENT_ROTATION_BATCH_MAX_SECTIONS
+        && candidateBuild.chars <= batchCharBudget) {
+        currentBatch = candidate
+      } else {
+        pushCurrentBatch()
+        currentBatch = [descriptor]
+      }
+    }
+    pushCurrentBatch()
+    batchCount = batches.length
+    oversizedGroupCount = oversized.length
+    if (batchCount > 1) {
+      const interval = timeframeIntervalMs(asOf.decision_timeframe)
+      const closedBarTime = Number(asOf.closed_bar_time_utc_ms)
+      if (!Number.isFinite(closedBarTime) || closedBarTime <= 0 || !interval) {
+        throw new Error('position_management_rotation_bar_unavailable')
+      }
+      rotationSlot = ((Math.floor(closedBarTime / interval) % batchCount) + batchCount) % batchCount
+      const previousSlot = (rotationSlot - 1 + batchCount) % batchCount
+      selectedDescriptors = [...batches[rotationSlot], ...batches[previousSlot]]
+    } else if (batchCount === 1) {
+      selectedDescriptors = batches[0]
+      rotationSlot = 0
+    } else {
+      selectedDescriptors = []
+    }
+    const selectedKeys = new Set(selectedDescriptors.map(item => item.stable_key))
+    deferredGroupCount = Math.max(0, totalGroupCount - selectedKeys.size - oversizedGroupCount)
+  }
+  const selectedBuild = buildContext(selectedDescriptors)
+  if (selectedBuild.chars > POSITION_MANAGEMENT_MAX_CONTEXT_CHARS
+    || selectedBuild.pending.length + selectedBuild.positions.length > POSITION_MANAGEMENT_MAX_GROUPS) {
+    throw new Error('position_management_selected_context_over_budget')
+  }
+  const context = selectedBuild.context
+  const pendingGroups = selectedBuild.pending
+  const positionGroups = selectedBuild.positions
+  const selectedKeys = new Set(selectedDescriptors.map(item => item.stable_key))
+  const targets = new Map(selectedDescriptors
+    .filter(item => selectedKeys.has(item.stable_key))
+    .map(item => [item.management_group_id, item.targets]))
+  const contextChars = selectedBuild.chars
   const groupCount = pendingGroups.length + positionGroups.length
-  if (groupCount > POSITION_MANAGEMENT_MAX_GROUPS) {
-    throw new Error(`position_management_group_limit_exceeded:${groupCount}`)
-  }
-  const contextChars = JSON.stringify(context).length
-  if (contextChars > POSITION_MANAGEMENT_MAX_CONTEXT_CHARS) {
-    throw new Error(`position_management_context_budget_exceeded:${contextChars}`)
-  }
+  const previousClosedBarTime = closedBarWindow(market, decisionTimeframe).previous_closed_bar_time_utc_ms
   Object.defineProperty(context, '_targets', { value:targets, enumerable:false })
   Object.defineProperty(context, '_market', { value:market, enumerable:false })
   Object.defineProperty(context, '_diagnostics', {
     value:{ group_count:groupCount, pending_count:pendingGroups.length,
-      position_count:positionGroups.length, context_chars:contextChars },
+      position_count:positionGroups.length, context_chars:contextChars,
+      total_group_count:totalGroupCount, total_section_count:totalSectionCount,
+      selected_group_count:selectedKeys.size, selected_section_count:groupCount,
+      deferred_group_count:deferredGroupCount, oversized_group_count:oversizedGroupCount,
+      selection_mode:selectionMode, rotation_slot:rotationSlot, batch_count:batchCount,
+      previous_closed_bar_time_utc_ms:previousClosedBarTime },
     enumerable:false,
   })
   return context
@@ -807,6 +923,19 @@ export function resolveAutomaticExitConfirmation(current, previous = null) {
     return { validation_status:'valid', confirmation_count:1, reset_reason:null }
   }
 
+  // Confirmation must come from the immediately previous actual closed bar
+  // in the current strategy window.  Do not infer adjacency from a fixed
+  // timeframe duration: weekends, holidays and broker data gaps are valid
+  // reasons for UTC timestamps to be farther apart.
+  const previousEvaluationBar = Number(previous?.closed_bar_time_utc_ms)
+  const currentPreviousBar = Number(current?.previous_closed_bar_time_utc_ms)
+  if (!Number.isFinite(previousEvaluationBar) || previousEvaluationBar <= 0
+    || !Number.isFinite(currentPreviousBar) || currentPreviousBar <= 0
+    || previousEvaluationBar !== currentPreviousBar) {
+    return { validation_status:'valid', confirmation_count:1,
+      reset_reason:'automatic_confirmation_bar_gap' }
+  }
+
   const currentInference = managementInferenceIdentity(current)
   const previousInference = managementInferenceIdentity(previous)
   const currentTask = managementTaskIdentity(current)
@@ -874,6 +1003,7 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
       inference_id:String(signalId), decision_signal_id:Number(signalId),
       market_snapshot_hash:context.as_of.market_snapshot_hash,
       closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms,
+      previous_closed_bar_time_utc_ms:context?._diagnostics?.previous_closed_bar_time_utc_ms,
       contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
     }, {
       ...previous,
@@ -895,6 +1025,7 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
     inference_id:String(signalId),
     market_snapshot_hash:context.as_of.market_snapshot_hash,
     closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms,
+    previous_closed_bar_time_utc_ms:context?._diagnostics?.previous_closed_bar_time_utc_ms || null,
     contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
     created_at:now,
   }
@@ -941,32 +1072,44 @@ async function resetAutomaticExitCandidate(target, record, evaluation) {
     ...(Array.isArray(previousEvidence.decision_signal_ids) ? previousEvidence.decision_signal_ids : []),
     record.decision_signal_id,
   ].map(Number).filter(id => id > 0))]
+  const isBarGapReset = record.reset_reason === 'automatic_confirmation_bar_gap'
   const evidence = {
     status:'reset',
-    source:record.validation_status === 'invalid' ? 'invalid_inference_output' : 'automatic_inference_hold',
+    source:isBarGapReset
+      ? 'automatic_confirmation_bar_gap'
+      : (record.validation_status === 'invalid' ? 'invalid_inference_output' : 'automatic_inference_hold'),
     confirmation_count:0,
     required_confirmations:AUTO_EXIT_CONFIRMATIONS_REQUIRED,
     reset_evaluation_id:record.id,
     reset_decision_signal_id:record.decision_signal_id,
     evaluation_ids:evaluationIds,
     decision_signal_ids:decisionSignalIds,
+    ...(isBarGapReset ? {
+      previous_closed_bar_time_utc_ms:record.previous?.closed_bar_time_utc_ms || null,
+      current_previous_closed_bar_time_utc_ms:record.previous_closed_bar_time_utc_ms || null,
+    } : {}),
   }
   const result = await queryRun(`UPDATE ai_position_management_tasks
     SET status = 'HELD', evidence_validation_json = ?, confirmation_count = 0,
       state_version = state_version + 1, completed_at = ?, updated_at = ?
     WHERE id = ? AND status = 'CANDIDATE'`, [JSON.stringify(evidence), now, now, task.id])
   if (Number(result?.changes ?? result?.affectedRows ?? 0) !== 1) return null
-  const summary = record.validation_status === 'invalid'
-    ? '本轮自动推理结果无效，连续平仓确认已中断'
-    : '本轮自动推理建议继续持有，连续平仓确认已清零'
+  const summary = isBarGapReset
+    ? '当前行情窗口存在闭合K线缺口，旧平仓候选已安全结束'
+    : (record.validation_status === 'invalid'
+      ? '本轮自动推理结果无效，连续平仓确认已中断'
+      : '本轮自动推理建议继续持有，连续平仓确认已清零')
+  const eventType = isBarGapReset
+    ? 'automatic_confirmation_bar_gap'
+    : 'automatic_confirmation_reset'
   await queryRun(`INSERT INTO ai_position_management_events
     (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
-    VALUES (?, 'CANDIDATE', 'HELD', 'automatic_confirmation_reset', ?, ?, 'model', ?)`, [
-    task.id, summary, JSON.stringify({ evaluation, evidence }), now,
+    VALUES (?, 'CANDIDATE', 'HELD', ?, ?, ?, 'model', ?)`, [
+    task.id, eventType, summary, JSON.stringify({ evaluation, evidence }), now,
   ])
   const updated = { ...task, status:'HELD', state_version:Number(task.state_version || 1) + 1,
     confirmation_count:0, evidence_validation_json:JSON.stringify(evidence), updated_at:now }
-  broadcastPositionManagementTask(updated, 'automatic_confirmation_reset')
+  broadcastPositionManagementTask(updated, eventType)
   return updated
 }
 
@@ -1164,6 +1307,10 @@ export async function persistPositionManagementEvaluations({
       })
       if (!record) continue
       if (inferenceSource !== 'automatic_scheduler') continue
+      if (record.reset_reason === 'automatic_confirmation_bar_gap') {
+        const resetTask = await resetAutomaticExitCandidate(target, record, normalizedEvaluation)
+        if (resetTask) created.push(resetTask)
+      }
       const task = record.validation_status !== 'valid' || record.action !== 'exit'
         ? await resetAutomaticExitCandidate(target, record, normalizedEvaluation)
         : await advanceAutomaticExitCandidate({ signalId, context, target,

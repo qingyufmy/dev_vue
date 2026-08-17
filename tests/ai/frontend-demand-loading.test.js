@@ -243,7 +243,12 @@ function runRealtimeSignalTicketScenario() {
     const _historyTicketMapGenerations = { signal:0, close:0 }
     const _historyTicketMapCache = new Map()
     const _historyTicketMapFlights = new Map()
+    const SIGNAL_TICKET_REFRESH_RETRY_DELAYS_MS = [1000, 2000, 5000]
+    const SIGNAL_TICKET_REFRESH_MAX_RETRIES = SIGNAL_TICKET_REFRESH_RETRY_DELAYS_MS.length
     let _signalTicketRefreshTimer = null
+    let _signalTicketRefreshRetryTimer = null
+    let _signalTicketRefreshRetryAttempt = 0
+    let _signalTicketRefreshStart = null
     let _signalTicketRefreshPromise = null
     let _signalTicketRefreshDirty = false
     let activeRequests = 0
@@ -288,7 +293,7 @@ function runRealtimeSignalTicketScenario() {
       const second = scheduleSignalTicketRefresh({ immediate:true })
       await new Promise(resolve => setTimeout(resolve, 0))
       const coalescedRequests = requests.length
-      requests[0].resolve({ tickets:{ 'T-1':77 } })
+      requests[0].resolve({ tickets:{ 'T-0':76, 'T-1':77 } })
       await Promise.all([first, second])
       const linkedAfterExecution = ticketCell('T-1', state.signalTickets)
 
@@ -297,18 +302,19 @@ function runRealtimeSignalTicketScenario() {
       await new Promise(resolve => setTimeout(resolve, 0))
       const firstInFlightRequest = requests.at(-1)
       const trailingTrigger = scheduleSignalTicketRefresh({ immediate:true })
-      firstInFlightRequest.resolve({ tickets:{ 'T-1':77 } })
+      firstInFlightRequest.resolve({ tickets:{ 'T-0':76, 'T-1':77 } })
       await new Promise(resolve => setTimeout(resolve, 0))
       const trailingRequest = requests.at(-1)
       const thirdTrigger = scheduleSignalTicketRefresh({ immediate:true })
-      trailingRequest.resolve({ tickets:{ 'T-2':78 } })
+      trailingRequest.resolve({ tickets:{ 'T-0':76, 'T-2':78 } })
       await new Promise(resolve => setTimeout(resolve, 0))
       const thirdRequest = requests.at(-1)
-      thirdRequest.resolve({ tickets:{ 'T-3':79 } })
+      thirdRequest.resolve({ tickets:{ 'T-0':76, 'T-3':79 } })
       await Promise.all([inFlight, trailingTrigger, thirdTrigger])
       const trailingRefreshRequestCount = requests.length
       const trailingTicketMap = { ...state.signalTickets }
 
+      state.positions = [{ ...newPosition, ticket:'T-2' }]
       state.signalTickets = { 'T-1':77 }
       const stale = scheduleSignalTicketRefresh({ immediate:true })
       await new Promise(resolve => setTimeout(resolve, 0))
@@ -360,6 +366,129 @@ function runRealtimeSignalTicketScenario() {
         priceOnly,
         priceOnlyRequests,
         oldPositionResponseWasIgnored:renders.length === renderCountBeforePositionLoad,
+      }
+    })()
+  `)
+  return harness()
+}
+
+function runBoundedSignalTicketRetryScenario() {
+  const helperStart = app.indexOf('function ticketMapContextSnapshot')
+  const helperEnd = app.indexOf('/* ---- Sidebar 观摩提示 ---- */', helperStart)
+  expect(helperStart).toBeGreaterThanOrEqual(0)
+  expect(helperEnd).toBeGreaterThan(helperStart)
+  const harness = new Function(`
+    const requests = []
+    const timers = []
+    let nextTimerId = 1
+    let activeRequests = 0
+    let maxConcurrentRequests = 0
+    let _lastHistoryRevision = 7
+    let _ticketMapContextGeneration = 0
+    const _historyTicketMapGenerations = { signal:0, close:0 }
+    const _historyTicketMapCache = new Map()
+    const _historyTicketMapFlights = new Map()
+    const SIGNAL_TICKET_REFRESH_RETRY_DELAYS_MS = [1000, 2000, 5000]
+    const SIGNAL_TICKET_REFRESH_MAX_RETRIES = SIGNAL_TICKET_REFRESH_RETRY_DELAYS_MS.length
+    let _signalTicketRefreshTimer = null
+    let _signalTicketRefreshRetryTimer = null
+    let _signalTicketRefreshRetryAttempt = 0
+    let _signalTicketRefreshStart = null
+    let _signalTicketRefreshPromise = null
+    let _signalTicketRefreshResolve = null
+    let _signalTicketRefreshDirty = false
+    const state = {
+      _accountContextGeneration:0,
+      signalTickets:{},
+      closeSignalTickets:{},
+      positions:[{ ticket:'T-1', symbol:'XAUUSD', type:'buy', volume:1, price_open:1, time:'t', sl:0, tp:0, magic:234000, digits:2 }],
+    }
+    function setTimeout(callback, delay) {
+      const timer = { id:nextTimerId++, callback, delay, cancelled:false }
+      timers.push(timer)
+      return timer.id
+    }
+    function clearTimeout(id) {
+      const timer = timers.find(item => item.id === id)
+      if (timer) timer.cancelled = true
+    }
+    async function flushMicrotasks() {
+      for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    }
+    async function fireNextTimer() {
+      const timer = timers.find(item => !item.cancelled)
+      if (!timer) throw new Error('expected timer')
+      timer.cancelled = true
+      timer.callback()
+      await flushMicrotasks()
+      return timer
+    }
+    function wsApi(action) {
+      if (action !== 'signal_tickets') throw new Error('unexpected action')
+      const request = { action, resolve:null, reject:null }
+      requests.push(request)
+      return new Promise((resolve, reject) => {
+        activeRequests += 1
+        maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests)
+        request.resolve = value => { activeRequests -= 1; resolve(value) }
+        request.reject = error => { activeRequests -= 1; reject(error) }
+      })
+    }
+    function renderPositionTables() {}
+    function escapeHtml(value) { return String(value) }
+    function positionStructureMatches(current = [], next = []) {
+      const signature = position => JSON.stringify([
+        String(position.ticket ?? ''), String(position.symbol ?? ''), String(position.type ?? '').toLowerCase(),
+        Number(position.volume), Number(position.price_open), String(position.time ?? ''),
+        Number(position.sl), Number(position.tp), Number(position.magic), Number(position.digits ?? 2),
+      ])
+      return current.length === next.length && current.every((position, index) => signature(position) === signature(next[index]))
+    }
+    ${app.slice(helperStart, helperEnd)}
+    return (async () => {
+      const refresh = scheduleSignalTicketRefresh({ immediate:true })
+      const initialTimer = await fireNextTimer()
+      requests[0].resolve({ tickets:{} })
+      await flushMicrotasks()
+      const retryOne = await fireNextTimer()
+      requests[1].resolve({ tickets:{} })
+      await flushMicrotasks()
+      const retryTwo = await fireNextTimer()
+      requests[2].resolve({ tickets:{} })
+      await flushMicrotasks()
+      const retryThree = await fireNextTimer()
+      requests[3].resolve({ tickets:{ 'T-1':101 } })
+      await refresh
+
+      state.positions = [{ ...state.positions[0], ticket:'T-2' }]
+      const exhausted = scheduleSignalTicketRefresh({ immediate:true, resetRetry:true })
+      await fireNextTimer()
+      requests[4].reject(new Error('temporary-0'))
+      await flushMicrotasks()
+      for (let requestIndex = 5; requestIndex <= 7; requestIndex += 1) {
+        await fireNextTimer()
+        requests[requestIndex].reject(new Error('temporary-' + (requestIndex - 4)))
+        await flushMicrotasks()
+      }
+      await exhausted
+      const timersAfterExhaustion = timers.filter(item => !item.cancelled).length
+      const preservedAfterExhaustion = { ...state.signalTickets }
+
+      state.positions = []
+      const emptyRefresh = scheduleSignalTicketRefresh({ immediate:true })
+      await fireNextTimer()
+      requests[8].resolve({ tickets:{} })
+      await emptyRefresh
+      return {
+        requestCount:requests.length,
+        retryDelays:[retryOne.delay, retryTwo.delay, retryThree.delay],
+        initialDelay:initialTimer.delay,
+        finalMap:{ ...state.signalTickets },
+        maxConcurrentRequests,
+        activeRequests,
+        timersAfterExhaustion,
+        preservedAfterExhaustion,
+        timersAfterEmpty:timers.filter(item => !item.cancelled).length,
       }
     })()
   `)
@@ -530,7 +659,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {
     const execution = block("} else if (msg.type === 'signal_execution_updated')", "} else if (msg.type === 'weekly_flatten_state')")
-    expect(execution).toContain('scheduleSignalTicketRefresh()')
+    expect(execution).toContain('scheduleSignalTicketRefresh({ immediate:true, resetRetry:true })')
     expect(execution).toContain('{ limit:1, summaryOnly:true, skipResultRender:true }')
     expect(execution).toContain('{ skipResultRender:true, loadDashboard:false }')
     expect(execution).toContain('openAnalysisFromHistory(msg.signal_id')
@@ -611,15 +740,45 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(result.coalescedRequests).toBe(1)
     expect(result.linkedAfterExecution).toContain('openAnalysisFromHistory(77')
     expect(result.trailingRefreshRequestCount).toBe(4)
-    expect(result.trailingTicketMap).toEqual({ 'T-3':79 })
+    expect(result.trailingTicketMap).toEqual({ 'T-0':76, 'T-3':79 })
     expect(result.maxConcurrentRequests).toBe(1)
-    expect(result.renders[0]).toEqual({ tickets:['T-1'], positions:['T-0'] })
+    expect(result.renders[0]).toEqual({ tickets:['T-0','T-1'], positions:['T-0'] })
     expect(result.oldResponseWasIgnored).toBe(true)
     expect(result.preservedAfterFailure).toBe(true)
     expect(result.retryRequestCount).toBe(7)
     expect(result.priceOnly).toBe(false)
     expect(result.priceOnlyRequests).toBe(0)
     expect(result.oldPositionResponseWasIgnored).toBe(true)
+  })
+
+  it('uses bounded 1/2/5 second ticket-map compensation retries only while needed', async () => {
+    const result = await runBoundedSignalTicketRetryScenario()
+
+    expect(result.initialDelay).toBe(0)
+    expect(result.retryDelays).toEqual([1000, 2000, 5000])
+    expect(result.requestCount).toBe(9)
+    expect(result.finalMap).toEqual({})
+    expect(result.maxConcurrentRequests).toBe(1)
+    expect(result.activeRequests).toBe(0)
+    expect(result.timersAfterExhaustion).toBe(0)
+    expect(result.preservedAfterExhaustion).toEqual({ 'T-1':101 })
+    expect(result.timersAfterEmpty).toBe(0)
+  })
+
+  it('clears ticket refresh debounce, retry and waiter state on account context changes', () => {
+    const caches = block('function clearAccountContextCaches()', 'function invalidateSession()')
+    expect(caches).toContain('clearTimeout(_signalTicketRefreshRetryTimer)')
+    expect(caches).toContain('_signalTicketRefreshRetryAttempt = 0')
+    expect(caches).toContain('_signalTicketRefreshStart = null')
+    expect(caches).toContain('_signalTicketRefreshResolve')
+    expect(caches).toContain('abandonedTicketRefreshResolve()')
+  })
+
+  it('restarts ticket attribution immediately for structural position and manual position refreshes', () => {
+    const bridgePositions = block('if (msg.positions) {', '_maybeRefreshSignal()')
+    const loadPositions = block('async function loadPositions(', '/* ---- Sidebar 观摩提示 ---- */')
+    expect(bridgePositions).toContain('scheduleSignalTicketRefresh({ immediate:true, resetRetry:true })')
+    expect(loadPositions).toContain('scheduleSignalTicketRefresh({ immediate:true, resetRetry:true })')
   })
 
   it('accepts only a safe fixed range from an incomplete-history response', () => {

@@ -250,6 +250,11 @@ const _historyTicketMapFlights = new Map();
 let _ticketMapContextGeneration = 0;
 const _historyTicketMapGenerations = { signal: 0, close: 0 };
 let _signalTicketRefreshTimer = null;
+const SIGNAL_TICKET_REFRESH_RETRY_DELAYS_MS = [1000, 2000, 5000];
+const SIGNAL_TICKET_REFRESH_MAX_RETRIES = SIGNAL_TICKET_REFRESH_RETRY_DELAYS_MS.length;
+let _signalTicketRefreshRetryTimer = null;
+let _signalTicketRefreshRetryAttempt = 0;
+let _signalTicketRefreshStart = null;
 let _signalTicketRefreshPromise = null;
 let _signalTicketRefreshResolve = null;
 let _signalTicketRefreshDirty = false;
@@ -2589,6 +2594,10 @@ function clearAccountContextCaches() {
     clearTimeout(_signalTicketRefreshTimer);
     _signalTicketRefreshTimer = null;
   }
+  if (_signalTicketRefreshRetryTimer) {
+    clearTimeout(_signalTicketRefreshRetryTimer);
+    _signalTicketRefreshRetryTimer = null;
+  }
   // Do not try to cancel the underlying WebSocket request.  Its completion
   // is guarded by the context generation below, so a late response cannot
   // write the next account's map.  Clearing the reference allows the new
@@ -2596,6 +2605,8 @@ function clearAccountContextCaches() {
   _signalTicketRefreshPromise = null;
   _signalTicketRefreshResolve = null;
   _signalTicketRefreshDirty = false;
+  _signalTicketRefreshRetryAttempt = 0;
+  _signalTicketRefreshStart = null;
   if (abandonedTicketRefreshResolve) abandonedTicketRefreshResolve();
   cancelHistoryPrepareRetry();
   cancelHistoryLegacySummaryRetry();
@@ -3655,7 +3666,7 @@ function connectBridgeStatusWs(onReady) {
         // same signal so pending/executed state disables duplicate submission.
         // The archived history revision may stay unchanged when a ticket is
         // attributed, so invalidate the independent ticket map epoch as well.
-        scheduleSignalTicketRefresh();
+        scheduleSignalTicketRefresh({ immediate:true, resetRetry:true });
         const isAnalyst = activeTabId() === "ai-analyze";
         const refreshOptions = isAnalyst
           ? { skipResultRender:true, loadDashboard:false }
@@ -3920,7 +3931,7 @@ function handleBridgeData(msg) {
     state.positions = msg.positions;
     if (!patched) renderPositionTables(msg.positions);
     if (shouldRefreshSignalTicketMapForPositions(previousPositions, msg.positions)) {
-      scheduleSignalTicketRefresh();
+      scheduleSignalTicketRefresh({ immediate:true, resetRetry:true });
     }
   }
   _maybeRefreshSignal();
@@ -10535,9 +10546,14 @@ function signalTicketMapHasTicket(ticket) {
   return value !== undefined && value !== null && String(value) !== "";
 }
 
+function positionsHaveUnmappedSignalTickets(positions = state.positions || []) {
+  return Array.isArray(positions) && positions.length > 0
+    && positions.some(position => !signalTicketMapHasTicket(position?.ticket));
+}
+
 function shouldRefreshSignalTicketMapForPositions(previousPositions = [], nextPositions = []) {
   if (positionStructureMatches(previousPositions, nextPositions)) return false;
-  return nextPositions.some(position => !signalTicketMapHasTicket(position?.ticket));
+  return positionsHaveUnmappedSignalTickets(nextPositions);
 }
 
 function invalidateTicketMapCache(kind) {
@@ -10547,27 +10563,66 @@ function invalidateTicketMapCache(kind) {
   }
 }
 
-function scheduleSignalTicketRefresh({ immediate = false } = {}) {
+function scheduleSignalTicketRefresh({ immediate = false, resetRetry = false } = {}) {
   if (_signalTicketRefreshPromise) {
-    // A timer that has not fired yet already represents the latest merged
-    // event. Once a request is in flight, mark the serial drain dirty so every
-    // later execution event is covered before the outer promise resolves.
-    if (!_signalTicketRefreshTimer) _signalTicketRefreshDirty = true;
+    if (resetRetry) {
+      _signalTicketRefreshRetryAttempt = 0;
+      const pendingTimer = _signalTicketRefreshRetryTimer || _signalTicketRefreshTimer;
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        if (_signalTicketRefreshRetryTimer === pendingTimer) _signalTicketRefreshRetryTimer = null;
+        if (_signalTicketRefreshTimer === pendingTimer) _signalTicketRefreshTimer = null;
+        const start = _signalTicketRefreshStart;
+        _signalTicketRefreshStart = null;
+        if (start) start(false);
+        else _signalTicketRefreshDirty = true;
+      } else {
+        // The request is already in flight. The serial drain below will issue
+        // one fresh pass as soon as it completes.
+        _signalTicketRefreshDirty = true;
+      }
+    } else if (!_signalTicketRefreshTimer) {
+      // A retry timer is also a pending cycle; retain the dirty marker so the
+      // next pass observes the newest position snapshot.
+      _signalTicketRefreshDirty = true;
+    }
     return _signalTicketRefreshPromise;
   }
   const delayMs = immediate ? 0 : 16;
   let resolveRefresh;
   const promise = new Promise(resolve => { resolveRefresh = resolve; });
   _signalTicketRefreshResolve = resolveRefresh;
+  _signalTicketRefreshRetryAttempt = 0;
+
+  const finishRefresh = () => {
+    if (_signalTicketRefreshPromise !== promise) {
+      resolveRefresh();
+      return;
+    }
+    if (_signalTicketRefreshTimer) {
+      clearTimeout(_signalTicketRefreshTimer);
+      _signalTicketRefreshTimer = null;
+    }
+    if (_signalTicketRefreshRetryTimer) {
+      clearTimeout(_signalTicketRefreshRetryTimer);
+      _signalTicketRefreshRetryTimer = null;
+    }
+    _signalTicketRefreshDirty = false;
+    _signalTicketRefreshRetryAttempt = 0;
+    _signalTicketRefreshStart = null;
+    _signalTicketRefreshPromise = null;
+    if (_signalTicketRefreshResolve === resolveRefresh) _signalTicketRefreshResolve = null;
+    resolveRefresh();
+  };
+
   const run = async () => {
+    if (_signalTicketRefreshPromise !== promise) return;
     while (true) {
       const context = ticketMapContextSnapshot("signal");
       invalidateTicketMapCache("signal");
       context.ticketMapGeneration = ++_historyTicketMapGenerations.signal;
-      // A trigger received while the request below is pending sets this flag;
-      // consume it here so each pass drains exactly the events that preceded
-      // its request.  Any new trigger during the request sets it again and
-      // causes one more serial pass below.
+      // Consume events that preceded this request. Events received while the
+      // request is pending set the flag again and are drained serially below.
       _signalTicketRefreshDirty = false;
       await loadSignalTickets({
         historyRevision: _lastHistoryRevision,
@@ -10577,26 +10632,56 @@ function scheduleSignalTicketRefresh({ immediate = false } = {}) {
         ticketMapGeneration: context.ticketMapGeneration,
       });
       if (ticketMapContextMatches(context)) renderPositionTables(state.positions || []);
-      if (_signalTicketRefreshPromise === promise && _signalTicketRefreshDirty) continue;
-      if (_signalTicketRefreshPromise === promise) {
-        _signalTicketRefreshDirty = false;
-        _signalTicketRefreshPromise = null;
-        _signalTicketRefreshResolve = null;
+      if (_signalTicketRefreshPromise !== promise) return;
+      if (_signalTicketRefreshDirty) continue;
+
+      if (ticketMapContextMatches(context)
+        && positionsHaveUnmappedSignalTickets(state.positions)
+        && _signalTicketRefreshRetryAttempt < SIGNAL_TICKET_REFRESH_MAX_RETRIES) {
+        const delay = SIGNAL_TICKET_REFRESH_RETRY_DELAYS_MS[_signalTicketRefreshRetryAttempt];
+        _signalTicketRefreshRetryAttempt += 1;
+        _signalTicketRefreshStart = isRetry => {
+          _signalTicketRefreshStart = null;
+          if (_signalTicketRefreshPromise !== promise) return;
+          if (isRetry && !positionsHaveUnmappedSignalTickets(state.positions)) {
+            finishRefresh();
+            return;
+          }
+          run().catch(() => finishRefresh());
+        };
+        _signalTicketRefreshRetryTimer = setTimeout(() => {
+          _signalTicketRefreshRetryTimer = null;
+          const start = _signalTicketRefreshStart;
+          _signalTicketRefreshStart = null;
+          if (!positionsHaveUnmappedSignalTickets(state.positions)) {
+            finishRefresh();
+            return;
+          }
+          if (start) start(true);
+          else run().catch(() => finishRefresh());
+        }, delay);
+        return;
       }
-      resolveRefresh();
+      finishRefresh();
       return;
     }
   };
+
+  _signalTicketRefreshStart = isRetry => {
+    _signalTicketRefreshStart = null;
+    if (_signalTicketRefreshPromise !== promise) return;
+    if (isRetry && !positionsHaveUnmappedSignalTickets(state.positions)) {
+      finishRefresh();
+      return;
+    }
+    run().catch(() => finishRefresh());
+  };
   _signalTicketRefreshTimer = setTimeout(() => {
     _signalTicketRefreshTimer = null;
-    run().catch(() => {
-      if (_signalTicketRefreshPromise === promise) {
-        _signalTicketRefreshDirty = false;
-        _signalTicketRefreshPromise = null;
-        _signalTicketRefreshResolve = null;
-      }
-      resolveRefresh();
-    });
+    const start = _signalTicketRefreshStart;
+    _signalTicketRefreshStart = null;
+    if (start) start(false);
+    else run().catch(() => finishRefresh());
   }, delayMs);
   _signalTicketRefreshPromise = promise;
   return promise;
@@ -10622,7 +10707,7 @@ async function loadPositions({ refreshSignalTickets = true, liveOnly = false } =
   const positions = data.positions || [];
   renderPositionTables(positions, { liveOnly });
   if (shouldRefreshSignalTicketMapForPositions(previousPositions, positions)) {
-    scheduleSignalTicketRefresh();
+    scheduleSignalTicketRefresh({ immediate:true, resetRetry:true });
   }
 }
 

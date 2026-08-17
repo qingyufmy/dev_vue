@@ -431,10 +431,36 @@ describe('consecutive automatic-inference exit confirmation', () => {
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, null))
       .toMatchObject({ validation_status:'valid', confirmation_count:1 })
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:102,
-      market_snapshot_hash:'sha256:snapshot-b', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
+      market_snapshot_hash:'sha256:snapshot-b', previous_closed_bar_time_utc_ms:1784736900000,
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
       action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+      closed_bar_time_utc_ms:1784736900000,
     })).toMatchObject({ validation_status:'valid', confirmation_count:2 })
+  })
+
+  it('does not combine exit confirmations across a closed-bar gap', () => {
+    expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:102,
+      market_snapshot_hash:'sha256:snapshot-b', previous_closed_bar_time_utc_ms:1784736900000,
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
+      action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:101,
+      market_snapshot_hash:'sha256:snapshot-a', closed_bar_time_utc_ms:1784736000000,
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+    })).toMatchObject({ validation_status:'valid', confirmation_count:1,
+      reset_reason:'automatic_confirmation_bar_gap' })
+  })
+
+  it('accepts the actual previous market bar across a weekend without fixed-duration arithmetic', () => {
+    const fridayClose = Date.parse('2026-08-14T20:00:00.000Z')
+    expect(resolveAutomaticExitConfirmation({
+      action:'exit', market_alignment:'misaligned', decision_signal_id:202,
+      market_snapshot_hash:'sha256:monday', previous_closed_bar_time_utc_ms:fridayClose,
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+    }, {
+      action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:201,
+      market_snapshot_hash:'sha256:friday', closed_bar_time_utc_ms:fridayClose,
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+    })).toMatchObject({ validation_status:'valid', confirmation_count:2, reset_reason:null })
   })
 
   it('does not increment when the task or snapshot is reused', () => {
@@ -504,7 +530,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
   it('keeps automatic exit confirmation and task lookup isolated by outcome', async () => {
     const previousObserverExit = {
       id:401, decision_signal_id:900, action:'exit', validation_status:'valid',
-      market_snapshot_hash:'snapshot-a', closed_bar_time_utc_ms:1784736900000,
+      market_snapshot_hash:'snapshot-a', closed_bar_time_utc_ms:1784736000000,
       model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }),
     }
     const observerCandidate = {
@@ -538,6 +564,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
     })
     const localContext = { ...context,
       as_of:{ ...context.as_of, market_snapshot_hash:'sha256:snapshot-b' },
+      _diagnostics:{ previous_closed_bar_time_utc_ms:1784736000000 },
       _targets:new Map([['position_group_01', [target(1001, 7), target(1002, 28)] ]]) }
     const result = await persistPositionManagementEvaluations({ signalId:110, context:localContext,
       inferenceSource:'automatic_scheduler', management:{
@@ -559,7 +586,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
   it('promotes the same task after a second consecutive valid exit', async () => {
     queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
       .mockResolvedValueOnce({ id:11, decision_signal_id:101, action:'exit', validation_status:'valid',
-        market_snapshot_hash:'snapshot-a', closed_bar_time_utc_ms:1784736900000,
+        market_snapshot_hash:'snapshot-a', closed_bar_time_utc_ms:1784736000000,
         model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION, market_alignment:'misaligned' }) })
       .mockResolvedValueOnce({ id:21, state_version:1, status:'CANDIDATE', user_id:7,
         execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01',
@@ -577,6 +604,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
     }
     const localContext = { ...context,
       as_of:{ ...context.as_of, market_snapshot_hash:'sha256:snapshot-b' },
+      _diagnostics:{ previous_closed_bar_time_utc_ms:1784736000000 },
       _targets:new Map([['position_group_01', [target]]]) }
     const result = await persistPositionManagementEvaluations({ signalId:102, context:localContext,
       inferenceSource:'automatic_scheduler', management:{
@@ -584,6 +612,45 @@ describe('consecutive automatic-inference exit confirmation', () => {
     } })
     expect(result).toEqual([expect.objectContaining({ status:'EVIDENCE_CONFIRMED', confirmation_count:2 })])
     expect(queryRun.mock.calls.some(call => String(call[0]).includes("status = 'EVIDENCE_CONFIRMED'"))).toBe(true)
+  })
+
+  it('retires and rebuilds a candidate after a closed-bar gap', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+      .mockResolvedValueOnce({ id:11, decision_signal_id:101, action:'exit', validation_status:'valid',
+        market_snapshot_hash:'snapshot-a', closed_bar_time_utc_ms:1784736000000,
+        model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }) })
+      .mockResolvedValueOnce({ id:21, state_version:1, status:'CANDIDATE', user_id:7,
+        execution_mode:'auto_exit', task_type:'position_exit', management_group_id:'position_group_01', thesis_id:'thesis_01',
+        model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }) })
+      .mockResolvedValueOnce(null)
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:31, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+      .mockResolvedValueOnce({ insertId:41, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:9, position_id:'P-9', original_symbol:'XAUUSD.s',
+      standard_symbol:'XAUUSD', management_group_id:'position_group_01', thesis_id:'thesis_01',
+      ownership_history_id:5, broker_server_key:'Broker-Demo', login_account:'10001',
+      strategy_id:2, strategy_version:4, origin_signal_id:100,
+    }
+    const localContext = { ...context,
+      as_of:{ ...context.as_of, market_snapshot_hash:'sha256:snapshot-b' },
+      _diagnostics:{ previous_closed_bar_time_utc_ms:1784736900000 },
+      _targets:new Map([['position_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:102, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+        position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
+      } })
+    expect(result).toEqual([
+      expect.objectContaining({ id:21, status:'HELD', confirmation_count:0 }),
+      expect.objectContaining({ id:41, status:'CANDIDATE', confirmation_count:1 }),
+    ])
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes("VALUES (?, 'CANDIDATE', 'HELD', ?")
+      && call[1]?.[1] === 'automatic_confirmation_bar_gap')).toBe(true)
+    expect(queryRun.mock.calls.some(call => JSON.stringify(call[1] || []).includes('automatic_confirmation_bar_gap'))).toBe(true)
   })
 
   it('does not create another close task after the confirmed task has entered execution', async () => {
@@ -835,6 +902,119 @@ describe('durable state and protection boundaries', () => {
     expect(value._targets.get('group_pending')[0].position_id).toBeNull()
     expect(value._targets.get('group_pending')[0].strategy_version).toBe(1)
     expect(value._targets.get('group_stale')).toHaveLength(1)
+  })
+
+  it('rotates an over-capacity set without dropping the whole management context', async () => {
+    const rows = Array.from({ length:21 }, (_, index) => ({
+      outcome_id:2000 + index, pending_ticket:`O-${2000 + index}`, position_id:null,
+      effective_pending_state:'pending', management_group_id:`capacity-group-${String(index).padStart(2, '0')}`,
+      thesis_id:`capacity-thesis-${index}`, strategy_id:3, strategy_version:1,
+      standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:2000 + index,
+      decision_timeframe:'M15', entry_method:'limit', core_entry_reason:'容量测试挂单',
+      original_stop_loss:4000, invalidation_conditions_json:'[]', evidence_refs_json:'[]',
+    }))
+    queryAll.mockResolvedValue(rows)
+    const market = {
+      strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', positions:[], pending_orders:[] },
+      strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 },
+        market_data_quality:{ last_bar_closed:true } },
+        klines:[{ time_utc_msc:1784876400000 }, { time_utc_msc:1784877300000 }] } } },
+    }
+    const first = await loadActivePositionManagementContext({
+      strategyId:3, symbol:'XAUUSD', decisionTimeframe:'M15', market,
+    })
+    const second = await loadActivePositionManagementContext({
+      strategyId:3, symbol:'XAUUSD', decisionTimeframe:'M15', market,
+    })
+    expect(first._diagnostics).toMatchObject({
+      selection_mode:'rotating', batch_count:3, total_group_count:21,
+    })
+    expect(first._diagnostics.selected_section_count).toBeLessThanOrEqual(20)
+    expect(first._diagnostics.deferred_group_count).toBeGreaterThan(0)
+    expect(first._diagnostics.context_chars).toBeLessThanOrEqual(32_000)
+    expect(first._targets.size).toBeGreaterThan(0)
+    expect([...second._targets.keys()]).toEqual([...first._targets.keys()])
+    expect(JSON.stringify(first)).not.toContain('_diagnostics')
+
+    const rotatedContexts = [first]
+    for (const offset of [900_000, 1_800_000]) {
+      const current = 1784877300000 + offset
+      market.strategy_context.timeframes.M15.summary.last_closed_bar.time_utc_msc = current
+      market.strategy_context.timeframes.M15.klines = [
+        { time_utc_msc:current - 900_000 }, { time_utc_msc:current },
+      ]
+      rotatedContexts.push(await loadActivePositionManagementContext({
+        strategyId:3, symbol:'XAUUSD', decisionTimeframe:'M15', market,
+      }))
+    }
+    const selectionCounts = new Map(rows.map(row => [row.management_group_id, 0]))
+    for (const selected of rotatedContexts) {
+      for (const groupId of selected._targets.keys()) {
+        selectionCounts.set(groupId, selectionCounts.get(groupId) + 1)
+      }
+    }
+    expect([...selectionCounts.values()].every(count => count >= 2)).toBe(true)
+  })
+
+  it('keeps mixed pending and position sections atomic during capacity rotation', async () => {
+    const rows = Array.from({ length:11 }, (_, index) => {
+      const groupId = `atomic-capacity-group-${String(index).padStart(2, '0')}`
+      return [
+        { outcome_id:2100 + index * 2, pending_ticket:null, position_id:`P-${2100 + index * 2}`,
+          effective_pending_state:null, management_group_id:groupId, thesis_id:`atomic-thesis-${index}`,
+          strategy_id:3, strategy_version:1, standard_symbol:'XAUUSD', direction:'buy',
+          origin_signal_id:2100 + index * 2, decision_timeframe:'M15', entry_method:'market',
+          core_entry_reason:'混合容量测试', original_stop_loss:4000,
+          invalidation_conditions_json:'[]', evidence_refs_json:'[]' },
+        { outcome_id:2101 + index * 2, pending_ticket:`O-${2101 + index * 2}`, position_id:null,
+          effective_pending_state:'pending', management_group_id:groupId, thesis_id:`atomic-thesis-${index}`,
+          strategy_id:3, strategy_version:1, standard_symbol:'XAUUSD', direction:'buy',
+          origin_signal_id:2100 + index * 2, decision_timeframe:'M15', entry_method:'market',
+          core_entry_reason:'混合容量测试', original_stop_loss:4000,
+          invalidation_conditions_json:'[]', evidence_refs_json:'[]' },
+      ]
+    }).flat()
+    queryAll.mockResolvedValueOnce(rows)
+    const value = await loadActivePositionManagementContext({
+      strategyId:3, symbol:'XAUUSD', decisionTimeframe:'M15',
+      market:{ strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', positions:[], pending_orders:[] },
+        strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 } },
+          klines:[{ time_utc_msc:1784876400000 }, { time_utc_msc:1784877300000 }] } } } },
+    })
+    const pendingIds = new Set(value.pending_groups.map(group => group.management_group_id))
+    const positionIds = new Set(value.position_groups.map(group => group.management_group_id))
+    expect([...pendingIds]).toEqual([...positionIds])
+    expect(value._diagnostics.selected_section_count).toBeLessThanOrEqual(20)
+    expect(value._diagnostics.context_chars).toBeLessThanOrEqual(32_000)
+  })
+
+  it('isolates a single over-budget group without deferring normal groups', async () => {
+    const oversizedTakeProfits = JSON.stringify(Array.from({ length:20_000 }, () => 1))
+    queryAll.mockResolvedValueOnce([
+      { outcome_id:2201, pending_ticket:'O-2201', position_id:null, effective_pending_state:'pending',
+        management_group_id:'oversized-group', thesis_id:'oversized-thesis', strategy_id:3, strategy_version:1,
+        standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:2201, decision_timeframe:'M15',
+        entry_method:'limit', core_entry_reason:'异常大组', original_stop_loss:4000,
+        original_take_profits_json:oversizedTakeProfits, invalidation_conditions_json:'[]', evidence_refs_json:'[]' },
+      ...Array.from({ length:2 }, (_, index) => ({
+        outcome_id:2210 + index, pending_ticket:`O-${2210 + index}`, position_id:null,
+        effective_pending_state:'pending', management_group_id:`normal-group-${index}`,
+        thesis_id:`normal-thesis-${index}`, strategy_id:3, strategy_version:1,
+        standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:2210 + index,
+        decision_timeframe:'M15', entry_method:'limit', core_entry_reason:'正常组', original_stop_loss:4000,
+        invalidation_conditions_json:'[]', evidence_refs_json:'[]',
+      })),
+    ])
+    const value = await loadActivePositionManagementContext({
+      strategyId:3, symbol:'XAUUSD', decisionTimeframe:'M15',
+      market:{ strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', positions:[], pending_orders:[] },
+        strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 } },
+          klines:[{ time_utc_msc:1784876400000 }, { time_utc_msc:1784877300000 }] } } } },
+    })
+    expect(value._diagnostics.oversized_group_count).toBe(1)
+    expect(value._targets.has('oversized-group')).toBe(false)
+    expect(value._targets.has('normal-group-0')).toBe(true)
+    expect(value._targets.has('normal-group-1')).toBe(true)
   })
 
   it('keeps both observer and subscriber outcomes in private execution targets for one group', async () => {
