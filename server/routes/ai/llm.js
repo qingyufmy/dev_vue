@@ -1246,7 +1246,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const positionManagementRule = positionManagementEnabled ? `
 
 ## 持仓与挂单管理输出合同
-position_management_context 是服务端提供的去身份化实时事实。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。decision_context_status=available 表示冻结入场论点、决策周期和闭合K线证据完整；否则只能按安全默认保留。reference_facts_status=missing 或 unavailable 只表示观摩源当前没有可用的匿名终端事实，不代表管理组消失；当 decision_context_status=available 时，仍可依据冻结论点、当前闭合行情和允许的 bar/snapshot evidence_refs 判断取消或退出。不得伪造不存在的终端事实，也不得引用 subscriber terminal ref。如何判断保留、取消、持有或退出只以当前策略正文和输入事实为准。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、手数或盈亏。` : ''
+position_management_context 是服务端提供的去身份化实时事实，平台策略的管理组只来自本轮观摩源当前 reference portfolio 中仍存在且已精确归属的持仓或挂单。观摩源当前没有持仓和挂单时，管理组为空；历史 thesis、旧 outcome 或订阅用户仍存续的订单不能生成管理组。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。decision_context_status=available 且 reference_facts_status=available 才能提出 cancel/exit；证据缺失或不可用时只能安全保留，不得凭冻结论点恢复已消失的管理组。不得伪造不存在的终端事实，也不得引用 subscriber terminal ref。模型只输出当前输入管理组的判断；只有合法 cancel/exit 结论才由服务端按冻结 origin_signal_id 经 delivery、order intent、outcome 唯一 lineage 解析订阅执行目标，hold/keep/observe 不遍历订阅库存。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、手数或盈亏。` : ''
     const declaredIndicators = market?.strategy_context?.indicators
     const managedEma34Identity = declaredIndicators && Object.hasOwn(declaredIndicators, 'ema34')
       ? ' strategy_context.indicators.ema34 是系统按策略声明计算的 EMA34 数据。'

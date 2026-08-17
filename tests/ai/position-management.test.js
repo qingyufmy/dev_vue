@@ -23,6 +23,7 @@ import {
   getPositionManagementSettings,
   isActivePositionManagementOutcome,
   loadActivePositionManagementContext,
+  resolvePositionManagementExecutionTargets,
   loadSignalManagementActions,
   positionProtectionStatus,
   persistPositionManagementEvaluations,
@@ -48,7 +49,7 @@ const context = {
   contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
   as_of:asOf,
   pending_groups:[{
-    management_group_id:'pending_group_01',
+    management_group_id:'pending_group_01', thesis_id:'pending_thesis_01',
     decision_context_status:'available', reference_facts_status:'available',
     allowed_evidence_refs:['bar:M15:1784736900000', 'snapshot:snapshot'],
   }],
@@ -342,7 +343,7 @@ describe('position management strategy-authoritative contract', () => {
     )
   })
 
-  it('allows a platform orphan candidate from frozen thesis and closed-market evidence', () => {
+  it('fails closed for a platform group whose observer fact is unavailable', () => {
     const orphanContext = {
       ...context,
       pending_groups:[{
@@ -360,9 +361,11 @@ describe('position management strategy-authoritative contract', () => {
       position_evaluations:[],
     }), orphanContext, plan => ({ ...plan, confidence:0.8 }))
     expect(result._position_management.pending_evaluations[0]).toMatchObject({
-      action:'cancel', cancel_reason_code:'thesis_invalidated',
+      action:'keep', validation_source:'server_fail_closed',
     })
-    expect(result._position_management.validation.errors).toEqual([])
+    expect(result._position_management.validation.errors).toContainEqual(
+      expect.objectContaining({ code:'pending_reference_facts_unavailable' }),
+    )
   })
 
   it('fails closed for a private strategy when its own terminal fact is unavailable', () => {
@@ -401,6 +404,33 @@ describe('position management strategy-authoritative contract', () => {
     )
   })
 
+  it('rejects a model evaluation that replaces the frozen origin signal', () => {
+    const result = validatePositionManagementResponse(response({
+      pending_evaluations:[{ ...response().pending_evaluations[0], origin_signal_id:999 }],
+      position_evaluations:[],
+    }), context, plan => ({ ...plan, confidence:0.8 }))
+    expect(result._position_management.pending_evaluations[0]).toMatchObject({
+      action:'keep', validation_source:'server_fail_closed',
+    })
+    expect(result._position_management.validation.errors).toContainEqual(
+      expect.objectContaining({ code:'pending_origin_signal_invalid' }),
+    )
+  })
+
+  it('rejects a pending evaluation that replaces the frozen thesis', () => {
+    const result = validatePositionManagementResponse(response({
+      pending_evaluations:[{ ...response().pending_evaluations[0], thesis_id:'other-thesis' }],
+      position_evaluations:[],
+    }), context, plan => ({ ...plan, confidence:0.8 }))
+    expect(result._position_management.pending_evaluations[0]).toMatchObject({
+      action:'keep', thesis_id:context.pending_groups[0].thesis_id,
+      validation_source:'server_fail_closed',
+    })
+    expect(result._position_management.validation.errors).toContainEqual(
+      expect.objectContaining({ code:'pending_thesis_invalid' }),
+    )
+  })
+
   it('expires the whole response when snapshot identity changes', () => {
     expect(() => validatePositionManagementResponse(response({
       as_of:{ ...asOf, market_snapshot_hash:'sha256:other' },
@@ -427,6 +457,7 @@ describe('position management strategy-authoritative contract', () => {
 describe('consecutive automatic-inference exit confirmation', () => {
   it('requires two distinct current-contract inferences and snapshots', () => {
     expect(AUTO_EXIT_CONFIRMATIONS_REQUIRED).toBe(2)
+    expect(POSITION_MANAGEMENT_CONTRACT_VERSION).toBe('position-management-v1.7')
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, null))
       .toMatchObject({ validation_status:'valid', confirmation_count:1 })
@@ -477,7 +508,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:102,
       market_snapshot_hash:'sha256:snapshot-b', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
       action:'exit', market_alignment:'misaligned', validation_status:'valid', decision_signal_id:101,
-      market_snapshot_hash:'sha256:snapshot-a', contract_version:'position-management-v1.2',
+      market_snapshot_hash:'sha256:snapshot-a', contract_version:'position-management-v1.6',
     })).toMatchObject({ validation_status:'valid', confirmation_count:1, reset_reason:'contract_not_compatible' })
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:103,
       market_snapshot_hash:'sha256:snapshot-c', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, {
@@ -865,7 +896,7 @@ describe('durable state and protection boundaries', () => {
     expect(targetMatchesPositionManagementTask(legacyPendingAlias, 'position_exit')).toBe(false)
   })
 
-  it('keeps active subscriber targets when the terminal reference portfolio no longer contains them', async () => {
+  it('does not let stale subscriber outcomes create platform management groups', async () => {
     queryAll.mockResolvedValueOnce([
       {
         outcome_id:11, pending_ticket:'O-11', position_id:'O-11', effective_pending_state:'pending',
@@ -893,15 +924,39 @@ describe('durable state and protection boundaries', () => {
     })
 
     expect(value.pending_groups).toEqual([expect.objectContaining({ management_group_id:'group_pending' })])
-    expect(value.position_groups).toEqual([expect.objectContaining({
-      management_group_id:'group_stale',
-      reference_facts_status:'missing',
-    })])
-    expect(value.position_groups[0].position_facts).toEqual([])
+    expect(value.position_groups).toEqual([])
     expect(value.pending_groups[0]).not.toHaveProperty('frozen_conditions')
     expect(value._targets.get('group_pending')[0].position_id).toBeNull()
     expect(value._targets.get('group_pending')[0].strategy_version).toBe(1)
-    expect(value._targets.get('group_stale')).toHaveLength(1)
+    expect(value._targets.has('group_stale')).toBe(false)
+  })
+
+  it('keeps an available observer 0/0 portfolio empty even when a subscriber outcome is stale-open', async () => {
+    queryAll.mockResolvedValueOnce([{
+      outcome_id:724919486, user_id:28, trading_account_id:3,
+      pending_ticket:null, position_id:'724919486', effective_pending_state:null,
+      management_group_id:'subscriber-stale-group', thesis_id:'subscriber-stale-thesis',
+      strategy_id:3, strategy_version:1, strategy_scope:'platform',
+      standard_symbol:'XAUUSD', direction:'buy', origin_signal_id:13170,
+      decision_timeframe:'M15', entry_method:'market', core_entry_reason:'历史订阅论点',
+      invalidation_conditions_json:'[]', evidence_refs_json:'[]',
+    }])
+
+    const value = await loadActivePositionManagementContext({
+      strategyId:3, symbol:'XAUUSD', decisionTimeframe:'M15',
+      market:{
+        strategy_reference_portfolio:{
+          role:'platform_strategy_reference_portfolio', strategy_id:3, symbol:'XAUUSD',
+          positions:[], pending_orders:[], position_count:0, pending_count:0,
+        },
+        strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 } } } } },
+      },
+    })
+
+    expect(value.pending_groups).toEqual([])
+    expect(value.position_groups).toEqual([])
+    expect(value._targets.size).toBe(0)
+    expect(JSON.stringify(value)).not.toContain('subscriber-stale-group')
   })
 
   it('rotates an over-capacity set without dropping the whole management context', async () => {
@@ -915,7 +970,9 @@ describe('durable state and protection boundaries', () => {
     }))
     queryAll.mockResolvedValue(rows)
     const market = {
-      strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', positions:[], pending_orders:[] },
+      strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', positions:[],
+        pending_orders:rows.map(row => ({ reference_id:`outcome:${row.outcome_id}`, direction:'buy',
+          order_type:'buy_limit', trigger_price:4100 })) },
       strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 },
         market_data_quality:{ last_bar_closed:true } },
         klines:[{ time_utc_msc:1784876400000 }, { time_utc_msc:1784877300000 }] } } },
@@ -977,7 +1034,11 @@ describe('durable state and protection boundaries', () => {
     queryAll.mockResolvedValueOnce(rows)
     const value = await loadActivePositionManagementContext({
       strategyId:3, symbol:'XAUUSD', decisionTimeframe:'M15',
-      market:{ strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', positions:[], pending_orders:[] },
+      market:{ strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio',
+          positions:rows.filter(row => row.position_id).map(row => ({ reference_id:`outcome:${row.outcome_id}`,
+            direction:'buy', order_type:'position', entry_price:4100, current_price:4101 })),
+          pending_orders:rows.filter(row => row.pending_ticket).map(row => ({ reference_id:`outcome:${row.outcome_id}`,
+            direction:'buy', order_type:'buy_limit', trigger_price:4100 })) },
         strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 } },
           klines:[{ time_utc_msc:1784876400000 }, { time_utc_msc:1784877300000 }] } } } },
     })
@@ -1007,7 +1068,12 @@ describe('durable state and protection boundaries', () => {
     ])
     const value = await loadActivePositionManagementContext({
       strategyId:3, symbol:'XAUUSD', decisionTimeframe:'M15',
-      market:{ strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', positions:[], pending_orders:[] },
+      market:{ strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', positions:[],
+          pending_orders:[
+            { reference_id:'outcome:2201', direction:'buy', order_type:'buy_limit', trigger_price:4100 },
+            { reference_id:'outcome:2210', direction:'buy', order_type:'buy_limit', trigger_price:4100 },
+            { reference_id:'outcome:2211', direction:'buy', order_type:'buy_limit', trigger_price:4100 },
+          ] },
         strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 } },
           klines:[{ time_utc_msc:1784876400000 }, { time_utc_msc:1784877300000 }] } } } },
     })
@@ -1017,7 +1083,7 @@ describe('durable state and protection boundaries', () => {
     expect(value._targets.has('normal-group-1')).toBe(true)
   })
 
-  it('keeps both observer and subscriber outcomes in private execution targets for one group', async () => {
+  it('keeps only the observer outcome in the platform model target projection', async () => {
     queryAll.mockResolvedValueOnce([
       { outcome_id:801, pending_ticket:'O-801', position_id:null, effective_pending_state:'pending',
         user_id:1, trading_account_id:1, login_account:'observer',
@@ -1042,7 +1108,7 @@ describe('durable state and protection boundaries', () => {
     })
 
     expect(value.pending_groups).toHaveLength(1)
-    expect(value._targets.get('shared-group-801').map(target => target.outcome_id)).toEqual([801, 802])
+    expect(value._targets.get('shared-group-801').map(target => target.outcome_id)).toEqual([801])
     const serialized = JSON.stringify(value)
     expect(serialized).not.toContain('observer')
     expect(serialized).not.toContain('subscriber')
@@ -1221,7 +1287,7 @@ describe('durable state and protection boundaries', () => {
     })
   })
 
-  it('retains a group as unavailable when the platform snapshot cannot map its live fact', async () => {
+  it('does not create a platform group when the reference portfolio has no live fact', async () => {
     queryAll.mockResolvedValueOnce([{
       outcome_id:701, position_id:'POS-701', pending_ticket:null, effective_pending_state:null,
       management_group_id:'unmapped-701', thesis_id:'thesis-701', strategy_id:4, strategy_version:1,
@@ -1234,10 +1300,62 @@ describe('durable state and protection boundaries', () => {
       market:{ strategy_reference_portfolio:{ role:'platform_strategy_reference_portfolio', status:'unavailable', positions:[], pending_orders:[] },
         strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1786070400000 } } } } } },
     })
-    expect(value.position_groups).toEqual([expect.objectContaining({
-      management_group_id:'unmapped-701', decision_context_status:'available',
-      reference_facts_status:'unavailable', position_facts:[],
-    })])
+    expect(value.position_groups).toEqual([])
+  })
+
+  it('resolves only unique subscriber delivery lineage after a valid cancel', async () => {
+    const group = {
+      ...context.pending_groups[0], strategy_id:3, strategy_version:1, strategy_scope:'platform',
+      standard_symbol:'XAUUSD',
+      thesis_id:'thesis-source', original_signal_id:801, management_group_id:'group-source',
+    }
+    const row = (overrides = {}) => ({
+      delivery_id:10, delivery_signal_id:801, delivery_user_id:28, delivery_strategy_id:3,
+      delivery_symbol:'XAUUSD.s',
+      delivery_order_intent_id:901, intent_id:901, intent_user_id:28, intent_trading_account_id:3,
+      intent_status:'succeeded', delivery_pending_ticket:'O-802',
+      outcome_id:802, outcome_delivery_id:10, outcome_order_intent_id:901, user_id:28,
+      trading_account_id:3, ownership_history_id:44, broker_server_key:'BROKER-DEMO', login_account:'7788',
+      original_symbol:'XAUUSD.s', symbol:'XAUUSD.s', pending_ticket:'O-802', position_id:null,
+      entry_direction:'buy', system_magic:234000, attribution_status:'pending', outcome_status:'open',
+      effective_pending_state:'pending', origin_management_group_id:'group-source',
+      origin_thesis_id:'thesis-source', origin_strategy_id:3, origin_signal_id:801,
+      strategy_version:1, strategy_scope:'platform', management_group_id:'group-source', thesis_id:'thesis-source',
+      ...overrides,
+    })
+    const duplicate = row({ delivery_id:11, outcome_id:803, outcome_delivery_id:11, delivery_order_intent_id:902,
+      intent_id:902, outcome_order_intent_id:902, delivery_user_id:29, intent_user_id:29, user_id:29,
+      trading_account_id:4, intent_trading_account_id:4, pending_ticket:'O-803' })
+    queryAll.mockResolvedValueOnce([row(), duplicate, { ...duplicate, outcome_id:804 }])
+    const targets = await resolvePositionManagementExecutionTargets({
+      context:{ pending_groups:[group], position_groups:[],
+        _targets:new Map([['group-source', [{ outcome_id:801, user_id:1 }]]]),
+        _executionLineage:{ strategy_scope:'platform', source_user_ids:[1] } },
+      groupId:'group-source', section:'pending', action:'cancel',
+    })
+    expect(targets).toEqual([expect.objectContaining({ outcome_id:802, user_id:28, pending_ticket:'O-802' })])
+    expect(queryAll.mock.calls.at(-1)?.[0]).toContain(
+      'ON outcomes.delivery_id = d.id AND outcomes.order_intent_id = d.order_intent_id',
+    )
+    expect(queryAll.mock.calls.at(-1)?.[0]).not.toContain('outcomes.delivery_id IS NULL')
+  })
+
+  it('keeps private mixed-lifecycle targets separated by management task type', async () => {
+    const group = { management_group_id:'private-mixed', original_signal_id:901 }
+    const pending = { outcome_id:1, pending_ticket:'P-1', position_id:null, effective_pending_state:'pending' }
+    const position = { outcome_id:2, pending_ticket:null, position_id:'POS-2', effective_pending_state:null }
+    const privateContext = {
+      pending_groups:[group], position_groups:[group],
+      _executionLineage:{ strategy_scope:'private' },
+      _targets:new Map([['private-mixed', [pending, position]]]),
+    }
+
+    await expect(resolvePositionManagementExecutionTargets({
+      context:privateContext, groupId:'private-mixed', section:'pending', action:'cancel',
+    })).resolves.toEqual([pending])
+    await expect(resolvePositionManagementExecutionTargets({
+      context:privateContext, groupId:'private-mixed', section:'position', action:'exit',
+    })).resolves.toEqual([position])
   })
 
   it('does not accept the retired auto-reverse mode through the settings API', async () => {

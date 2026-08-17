@@ -238,6 +238,59 @@ describe('strategy-owned pending order selection', () => {
     )).toEqual([orders[1]])
   })
 
+  it('binds synchronous cancellation to the frozen origin signal per group', () => {
+    const deliveries = [
+      { signal_id:700, pending_ticket:'70', management_group_id:'group-a' },
+      { signal_id:701, pending_ticket:'71', management_group_id:'group-a' },
+    ]
+    const signal = { signal_type:'buy', position_management:{ pending_evaluations:[
+      { management_group_id:'group-a', action:'cancel' },
+    ] } }
+    const context = { pending_groups:[{ management_group_id:'group-a', original_signal_id:701 }] }
+    const originByGroup = __schedulerTest.synchronousPendingCancelOriginSignalIds(signal, context)
+    expect(originByGroup).toEqual(new Map([['group-a', 701]]))
+    const orders = [
+      { symbol:'XAUUSD.s', ticket:70, pending_type:'BUY_LIMIT', magic:234000 },
+      { symbol:'XAUUSD.s', ticket:71, pending_type:'BUY_LIMIT', magic:234000 },
+    ]
+    expect(__schedulerTest.selectOwnedStrategyPendingOrders(
+      orders, deliveries, 'XAUUSD', undefined, new Set(['group-a']), originByGroup,
+    )).toEqual([orders[1]])
+  })
+
+  it('keeps the frozen origin filter when recovery has no live model context', () => {
+    const signal = { signal_type:'buy', position_management:{ pending_evaluations:[
+      { management_group_id:'group-a', action:'cancel', origin_signal_id:701 },
+    ] } }
+    expect(__schedulerTest.synchronousPendingCancelOriginSignalIds(signal, null))
+      .toEqual(new Map([['group-a', 701]]))
+  })
+
+  it('requires a unique delivery to intent and open outcome before synchronous cancellation', () => {
+    const originByGroup = new Map([['group-a', 701]])
+    const base = {
+      delivery_id:11, signal_id:701, delivery_user_id:28, order_intent_id:901,
+      pending_ticket:'71', pending_state:'pending', origin_management_group_id:'group-a',
+      origin_thesis_id:'thesis-a', order_intent_status:'succeeded', intent_user_id:28,
+      intent_trading_account_id:3001, outcome_id:1001, outcome_delivery_id:11,
+      outcome_order_intent_id:901, outcome_user_id:28, outcome_trading_account_id:3001,
+      outcome_pending_ticket:'71', outcome_status:'open', outcome_management_group_id:'group-a',
+      outcome_thesis_id:'thesis-a',
+    }
+    expect(__schedulerTest.selectFrozenSynchronousPendingDeliveries([
+      base,
+      { ...base, signal_id:700, delivery_id:12, order_intent_id:902, outcome_id:1002,
+        outcome_delivery_id:12, outcome_order_intent_id:902, pending_ticket:'70', outcome_pending_ticket:'70' },
+    ], originByGroup)).toEqual([base])
+    expect(__schedulerTest.selectFrozenSynchronousPendingDeliveries([
+      base,
+      { ...base, outcome_id:1002, outcome_delivery_id:11 },
+    ], originByGroup)).toEqual([])
+    expect(__schedulerTest.selectFrozenSynchronousPendingDeliveries([
+      { ...base, outcome_status:'cancelled' },
+    ], originByGroup)).toEqual([])
+  })
+
   it('matches cancel targets only in the requested direction', () => {
     const orders = [
       { symbol:'XAUUSD.s', ticket:10, pending_type:'buy_limit', magic:234000 },

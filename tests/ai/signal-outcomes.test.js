@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 const db = vi.hoisted(() => ({
   queryAll: vi.fn(), queryOne: vi.fn(), queryRun: vi.fn(), withTransaction: vi.fn(),
   beijingNow: vi.fn(() => '2026-07-15 12:00:00'),
+  parseBeijing: vi.fn(value => new Date(String(value).replace(' ', 'T') + '+08:00')),
 }))
 vi.mock('../../server/db.js', () => db)
 
@@ -15,6 +16,8 @@ import {
   reconcileTerminalPendingOutcomes,
   reconcileSignalOutcomes,
   outcomeReconciliationRangeEndUtcMsc,
+  outcomeCreatedUtcMsc,
+  outcomeHistoryRangeStartUtcMsc,
   resolveOutcomeClosureTransition,
   loadOutcomeHistory,
   utcDateToday,
@@ -39,6 +42,38 @@ describe('signal outcome attribution', () => {
     expect(outcomeReconciliationRangeEndUtcMsc(now)).not.toBe(now)
     expect(outcomeReconciliationRangeEndUtcMsc(Number.NaN)).toBeNull()
     expect(outcomeReconciliationRangeEndUtcMsc(1)).toBeNull()
+  })
+
+  it('converts Beijing DATETIME creation evidence to exact UTC with bounded overlap', () => {
+    const created = outcome({
+      created_at:'2026-08-13 06:32:15',
+      order_intent_created_at:'2026-08-13 06:32:14',
+      ownership_started_at_utc_msc:Date.parse('2026-08-12T00:00:00.000Z'),
+    })
+    expect(outcomeCreatedUtcMsc(created)).toBe(Date.parse('2026-08-12T22:32:14.000Z'))
+    expect(outcomeHistoryRangeStartUtcMsc([created])).toBe(
+      Date.parse('2026-08-12T22:17:14.000Z'),
+    )
+    expect(outcomeHistoryRangeStartUtcMsc([created], 60 * 60 * 1000)).toBe(
+      Date.parse('2026-08-12T22:32:14.000Z') - 15 * 60 * 1000,
+    )
+  })
+
+  it('does not move a Beijing 06:32 entry to the next UTC day boundary', async () => {
+    const incident = outcome({
+      status:'open', order_intent_id:8, created_at:'2026-08-13 06:32:15',
+      order_intent_created_at:'2026-08-13 06:32:14',
+      position_id:'724919486', entry_order_ticket:'724919400',
+      ownership_started_at_utc_msc:Date.parse('2026-08-12T00:00:00.000Z'),
+    })
+    db.queryAll.mockResolvedValue([incident])
+    const bridge = vi.fn(async (_userId, action) => action === 'positions'
+      ? { status:'success', positions:[] }
+      : { status:'error', error:'history_evidence_unavailable' })
+    await reconcileSignalOutcomes({ bridge })
+    const historyCall = bridge.mock.calls.find(([, action]) => action === 'history_evidence')
+    expect(historyCall?.[2]?.range_start_utc_msc).toBe(Date.parse('2026-08-12T22:17:14.000Z'))
+    expect(historyCall?.[2]?.range_start_utc_msc).not.toBe(Date.parse('2026-08-13T00:00:00.000Z'))
   })
 
   it('does not register direct user orders as AI-managed outcomes', async () => {

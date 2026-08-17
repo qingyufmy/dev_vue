@@ -1511,6 +1511,9 @@ describe('maybeAiSignal', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     const systemPrompt = body.messages[0].content
     expect(systemPrompt).toContain('持仓与挂单管理输出合同')
+    expect(systemPrompt).toContain('观摩源当前 reference portfolio')
+    expect(systemPrompt).toContain('只有合法 cancel/exit 结论才由服务端按冻结 origin_signal_id')
+    expect(systemPrompt).not.toContain('不代表管理组消失')
     expect(systemPrompt).toContain('market_alignment')
     expect(systemPrompt).not.toContain('只有明确 market_alignment=misaligned')
     expect(systemPrompt).not.toContain('禁止因到期、有效期、盈利保护')

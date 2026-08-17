@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../../db.js'
+import { queryAll, queryOne, queryRun, withTransaction, beijingNow, parseBeijing } from '../../db.js'
 import { broadcastAdminEvent, sendToBrowsers } from '../../bridge-ws.js'
 import { mt5Bridge } from './market-data.js'
 import { positionProtectionStatus } from './position-management.js'
@@ -9,6 +9,7 @@ const OPEN_STATUSES = ['open', 'closing']
 const PROTECTION_INCIDENTS = ['missing_stop_loss', 'invalid_stop_loss_direction']
 const HISTORY_EVIDENCE_REF_LIMIT = 100
 const HOUR_MSC = 60 * 60 * 1000
+const OUTCOME_HISTORY_OVERLAP_MSC = 15 * 60 * 1000
 let monitorTimer = null
 
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0
@@ -51,21 +52,51 @@ export function outcomeReconciliationRangeEndUtcMsc(now = Date.now()) {
   return Number.isSafeInteger(rangeEndUtcMsc) && rangeEndUtcMsc > 0 ? rangeEndUtcMsc : null
 }
 
-function utcDateStartUtcMsc(value) {
-  const text = String(value || '').trim()
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null
-  const parsed = Date.parse(`${text}T00:00:00.000Z`)
-  if (!Number.isSafeInteger(parsed) || parsed <= 0 || utcDateToday(parsed) !== text) return null
-  return parsed
-}
-
 function ownershipStartUtcMsc(outcome) {
   const numeric = Number(outcome?.ownership_started_at_utc_msc ?? outcome?.ownership_start_utc_msc)
   if (Number.isSafeInteger(numeric) && numeric > 0) return numeric
   const text = outcome?.ownership_started_at ?? outcome?.ownership_start
   if (typeof text !== 'string') return null
-  const parsed = Date.parse(`${text.trim().replace(' ', 'T')}Z`)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+  const parsed = parseBeijing(text)
+  const timestamp = parsed?.getTime()
+  return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null
+}
+
+function trustedUtcMsc(value) {
+  const numeric = Number(value)
+  return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : null
+}
+
+function beijingDatetimeUtcMsc(value) {
+  if (value == null || String(value).trim() === '') return null
+  const parsed = parseBeijing(value)
+  const timestamp = parsed?.getTime()
+  return Number.isSafeInteger(timestamp) && timestamp > 0 ? timestamp : null
+}
+
+export function outcomeCreatedUtcMsc(outcome) {
+  const precise = [
+    trustedUtcMsc(outcome?.signal_created_at_utc_msc),
+    trustedUtcMsc(outcome?.created_at_utc_msc),
+  ].filter(value => value != null)
+  const beijing = [
+    beijingDatetimeUtcMsc(outcome?.order_intent_created_at),
+    beijingDatetimeUtcMsc(outcome?.created_at),
+    beijingDatetimeUtcMsc(outcome?.signal_created_at),
+  ].filter(value => value != null)
+  return [...precise, ...beijing].sort((left, right) => left - right)[0] || null
+}
+
+export function outcomeHistoryRangeStartUtcMsc(outcomes = [], overlapMsc = OUTCOME_HISTORY_OVERLAP_MSC) {
+  const rows = Array.isArray(outcomes) ? outcomes : []
+  const starts = rows.map(outcome => {
+    const created = outcomeCreatedUtcMsc(outcome)
+    const ownership = ownershipStartUtcMsc(outcome)
+    if (!created || !ownership) return null
+    const overlap = Math.max(0, Math.min(Number(overlapMsc) || 0, OUTCOME_HISTORY_OVERLAP_MSC))
+    return Math.max(ownership, created - overlap)
+  }).filter(value => Number.isSafeInteger(value) && value > 0)
+  return starts.length ? Math.min(...starts) : null
 }
 
 export function dealTimeForDatabase(deal) {
@@ -411,9 +442,13 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
   const reconciliationRangeEndUtcMsc = outcomeReconciliationRangeEndUtcMsc()
   if (!reconciliationRangeEndUtcMsc) return 0
   const outcomes = await queryAll(`SELECT so.*, oi.bridge_command_ref, oi.approved_order_json,
+      oi.created_at AS order_intent_created_at,
+      signals.created_at AS signal_created_at,
+      signals.created_at_utc_msc AS signal_created_at_utc_msc,
       ownership.broker_server_key, ownership.login_account,
       CAST(UNIX_TIMESTAMP(ownership.started_at) * 1000 AS UNSIGNED) AS ownership_started_at_utc_msc
     FROM signal_outcomes so JOIN order_intents oi ON oi.id = so.order_intent_id
+    LEFT JOIN ai_signals signals ON signals.id = so.signal_id
     JOIN mt5_account_ownership_history ownership
       ON ownership.id = so.ownership_history_id
       AND ownership.trading_account_id = so.trading_account_id
@@ -435,12 +470,11 @@ export async function reconcileSignalOutcomes({ bridge = mt5Bridge } = {}) {
       || userOutcomes.some(item => String(item.broker_server_key || '').trim().toUpperCase() !== brokerServer.toUpperCase()
         || String(item.login_account || '').trim() !== login)) continue
     let history, positions
-    const earliestCreated = userOutcomes.map(item => String(item.created_at || '').slice(0, 10)).filter(Boolean).sort()[0]
-    const earliestDateStartUtcMsc = utcDateStartUtcMsc(earliestCreated)
     const ownershipStarts = userOutcomes.map(ownershipStartUtcMsc)
     const knownOwnershipStarts = ownershipStarts.filter(value => Number.isSafeInteger(value) && value > 0)
-    if (!earliestDateStartUtcMsc || knownOwnershipStarts.length !== ownershipStarts.length) continue
-    const ownershipClampedRangeStartUtcMsc = Math.max(earliestDateStartUtcMsc, Math.max(...knownOwnershipStarts))
+    const preciseRangeStartUtcMsc = outcomeHistoryRangeStartUtcMsc(userOutcomes)
+    if (!preciseRangeStartUtcMsc || knownOwnershipStarts.length !== ownershipStarts.length) continue
+    const ownershipClampedRangeStartUtcMsc = Math.max(preciseRangeStartUtcMsc, Math.max(...knownOwnershipStarts))
     try {
       ;[history, positions] = await Promise.all([
         loadOutcomeHistory(bridge, userId, ownershipClampedRangeStartUtcMsc,

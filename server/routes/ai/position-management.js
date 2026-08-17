@@ -3,7 +3,7 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.6'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.7'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
@@ -334,21 +334,33 @@ export async function loadActivePositionManagementContext({
   const referencePortfolio = market?.strategy_reference_portfolio
   const isPlatformStrategy = strategyScope === 'platform'
   const hasReferencePortfolio = referencePortfolio?.role === 'platform_strategy_reference_portfolio'
-  const referencePortfolioAvailable = hasReferencePortfolio
+  const referencePortfolioIdentityValid = !isPlatformStrategy || (
+    (referencePortfolio?.strategy_id == null || Number(referencePortfolio.strategy_id) === Number(strategyId))
+    && (referencePortfolio?.symbol == null
+      || stripBrokerSuffix(String(referencePortfolio.symbol)).toUpperCase() === standardSymbol)
+  )
+  const referencePortfolioAvailable = hasReferencePortfolio && referencePortfolioIdentityValid
     && referencePortfolio?.status !== 'unavailable'
     && Array.isArray(referencePortfolio?.positions)
     && Array.isArray(referencePortfolio?.pending_orders)
   const referenceFactsByOutcome = new Map()
+  const referenceOutcomeIds = new Set()
   if (referencePortfolioAvailable) {
     for (const item of referencePortfolio.positions) {
       const outcomeId = Number(/^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1] || 0)
-      if (outcomeId > 0) referenceFactsByOutcome.set(outcomeId,
-        { ...(referenceFactsByOutcome.get(outcomeId) || {}), position:item })
+      if (outcomeId > 0) {
+        referenceOutcomeIds.add(outcomeId)
+        referenceFactsByOutcome.set(outcomeId,
+          { ...(referenceFactsByOutcome.get(outcomeId) || {}), position:item })
+      }
     }
     for (const item of referencePortfolio.pending_orders) {
       const outcomeId = Number(/^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1] || 0)
-      if (outcomeId > 0) referenceFactsByOutcome.set(outcomeId,
-        { ...(referenceFactsByOutcome.get(outcomeId) || {}), pending:item })
+      if (outcomeId > 0) {
+        referenceOutcomeIds.add(outcomeId)
+        referenceFactsByOutcome.set(outcomeId,
+          { ...(referenceFactsByOutcome.get(outcomeId) || {}), pending:item })
+      }
     }
   }
   const privatePortfolioAvailable = Array.isArray(market?.positions)
@@ -363,6 +375,15 @@ export async function loadActivePositionManagementContext({
     ? (referencePortfolioAvailable ? 'missing' : 'unavailable')
     : (privatePortfolioAvailable ? 'missing' : 'unavailable')
   const executionTargetsSeen = new Set()
+
+  // A platform model is authoritative only for the live observer portfolio.
+  // Subscriber outcomes are deliberately loaded only as a later execution
+  // lineage lookup after a valid cancel/exit decision.  Keeping this identity
+  // non-enumerable preserves the anonymous model contract while allowing that
+  // lookup to bind to the exact frozen source signal.
+  const platformReferenceRows = isPlatformStrategy
+    ? rows.filter(row => referenceOutcomeIds.has(Number(row?.outcome_id)))
+    : rows
 
   const resolveTerminalFact = (row, kind) => {
     if (isPlatformStrategy) {
@@ -380,10 +401,21 @@ export async function loadActivePositionManagementContext({
     return source ? terminalFact(source, row, kind, 'private_market') : null
   }
   const groups = new Map()
-  for (const rawRow of rows) {
+  for (const rawRow of platformReferenceRows) {
     const row = normalizePositionManagementOutcome(rawRow)
     if (!isActivePositionManagementOutcome(row)) continue
     if (!row.management_group_id) continue
+    if (isPlatformStrategy) {
+      const referenceFacts = referenceFactsByOutcome.get(Number(row.outcome_id)) || {}
+      const reference = referenceFacts.position || referenceFacts.pending
+      if (!reference) continue
+      if (reference.origin_signal_id != null
+        && Number(reference.origin_signal_id) !== Number(row.origin_signal_id)) continue
+      if (reference.thesis_id != null
+        && String(reference.thesis_id || '') !== String(row.thesis_id || '')) continue
+      if (reference.management_group_id != null
+        && String(reference.management_group_id || '') !== String(row.management_group_id || '')) continue
+    }
     const targetKey = `${String(row.management_group_id)}:${Number(row.outcome_id)}`
     if (executionTargetsSeen.has(targetKey)) continue
     executionTargetsSeen.add(targetKey)
@@ -555,6 +587,14 @@ export async function loadActivePositionManagementContext({
   const groupCount = pendingGroups.length + positionGroups.length
   const previousClosedBarTime = closedBarWindow(market, decisionTimeframe).previous_closed_bar_time_utc_ms
   Object.defineProperty(context, '_targets', { value:targets, enumerable:false })
+  Object.defineProperty(context, '_executionLineage', {
+    value:isPlatformStrategy ? {
+      strategy_scope:'platform',
+      source_outcome_ids:[...referenceOutcomeIds],
+      source_user_ids:[...new Set(platformReferenceRows.map(row => Number(row?.user_id)).filter(id => id > 0))],
+    } : { strategy_scope:'private' },
+    enumerable:false,
+  })
   Object.defineProperty(context, '_market', { value:market, enumerable:false })
   Object.defineProperty(context, '_diagnostics', {
     value:{ group_count:groupCount, pending_count:pendingGroups.length,
@@ -585,6 +625,8 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
     market_plan:marketPlan,
     pending_evaluations:(context.pending_groups || []).map(group => ({
       management_group_id:group.management_group_id,
+      thesis_id:group.thesis_id,
+      origin_signal_id:group.original_signal_id,
       action:'仅允许 keep | cancel',
       market_alignment:'仅允许 aligned | misaligned | uncertain，作为当前策略判断的描述字段，不决定 action',
       cancel_reason_code:'action=cancel 时填写当前策略定义的 lowercase_snake_case 原因码；keep 时为 null',
@@ -594,6 +636,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
     position_evaluations:(context.position_groups || []).map(group => ({
       management_group_id:group.management_group_id,
       thesis_id:group.thesis_id,
+      origin_signal_id:group.original_signal_id,
       action:'仅允许 hold | exit',
       market_alignment:'仅允许 aligned | misaligned | uncertain，作为当前策略判断的描述字段，不决定 action',
       exit_reason_code:'action=exit 时填写当前策略定义的 lowercase_snake_case 原因码；hold 时为 null',
@@ -670,21 +713,22 @@ function groupDecisionContextAvailable(group) {
 function groupReferenceFactsAvailableForEvaluation(group) {
   const status = String(group?.reference_facts_status || '').toLowerCase()
   const scope = String(group?.strategy_scope || 'platform').toLowerCase()
-  // A platform model can make a market-level decision when the observer
-  // snapshot is missing; execution still preflights each subscriber account.
-  // A private strategy, however, must fail closed when its own terminal fact
-  // is unavailable because there is no separate anonymous observer source.
+  // Platform groups are created only from the observer's current reference
+  // portfolio.  Missing or unavailable facts therefore cannot resurrect a
+  // stale thesis, nor authorize cancel/exit from historical subscriber state.
+  // Private strategies retain their own terminal-inventory fail-closed rule.
   if (scope === 'private') return status === 'available'
-  return ['available', 'missing', 'unavailable'].includes(status)
+  return status === 'available'
 }
 
 function groupManagementFactsAvailable(group) {
   return groupDecisionContextAvailable(group) && groupReferenceFactsAvailableForEvaluation(group)
 }
 
-function safePendingEvaluation(groupId, reason = '该管理组未通过模型输出校验，服务端按安全默认继续保留挂单') {
+function safePendingEvaluation(groupId, thesisId = null,
+  reason = '该管理组未通过模型输出校验，服务端按安全默认继续保留挂单') {
   return {
-    management_group_id:groupId, action:'keep', market_alignment:'uncertain',
+    management_group_id:groupId, thesis_id:thesisId, action:'keep', market_alignment:'uncertain',
     cancel_reason_code:null, reason, evidence_refs:[], validation_source:'server_fail_closed',
   }
 }
@@ -738,6 +782,13 @@ export function validatePositionManagementResponse(value, context, validateMarke
     try {
       const group = pendingById.get(String(item?.management_group_id || ''))
       if (!group || seenPending.has(group.management_group_id)) throw new Error('pending_management_group_invalid')
+      if (item?.thesis_id != null && String(item.thesis_id || '') !== String(group.thesis_id || '')) {
+        throw new Error('pending_thesis_invalid')
+      }
+      if (item?.origin_signal_id != null
+        && Number(item.origin_signal_id) !== Number(group.original_signal_id)) {
+        throw new Error('pending_origin_signal_invalid')
+      }
       const action = String(item.action || '').toLowerCase()
       if (!['keep', 'cancel'].includes(action)) throw new Error('pending_action_invalid')
       const marketAlignment = normalizeMarketAlignment(item?.market_alignment)
@@ -761,7 +812,8 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (!reason) throw new Error('pending_reason_required')
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
       seenPending.add(group.management_group_id)
-      pendingEvaluations.push({ management_group_id:group.management_group_id, action,
+      pendingEvaluations.push({ management_group_id:group.management_group_id,
+        thesis_id:group.thesis_id, origin_signal_id:Number(group.original_signal_id) || null, action,
         market_alignment:marketAlignment,
         cancel_reason_code:cancelReasonCode, reason, evidence_refs:evidenceRefs })
     } catch (error) { errors.push({ section:'pending', group_id:item?.management_group_id || null, code:error.message }) }
@@ -772,6 +824,10 @@ export function validatePositionManagementResponse(value, context, validateMarke
       const group = positionById.get(String(item?.management_group_id || ''))
       if (!group || seenPosition.has(group.management_group_id)) throw new Error('position_management_group_invalid')
       if (String(item.thesis_id || '') !== String(group.thesis_id)) throw new Error('position_thesis_invalid')
+      if (item?.origin_signal_id != null
+        && Number(item.origin_signal_id) !== Number(group.original_signal_id)) {
+        throw new Error('position_origin_signal_invalid')
+      }
       const action = String(item.action || '').toLowerCase()
       if (!['hold', 'exit'].includes(action)) throw new Error('position_action_invalid')
       const marketAlignment = normalizeMarketAlignment(item?.market_alignment)
@@ -793,7 +849,8 @@ export function validatePositionManagementResponse(value, context, validateMarke
       const evidenceRefs = validateEvidenceRefs(item.evidence_refs, group.allowed_evidence_refs)
       seenPosition.add(group.management_group_id)
       positionEvaluations.push({
-        management_group_id:group.management_group_id, thesis_id:group.thesis_id, action,
+        management_group_id:group.management_group_id, thesis_id:group.thesis_id,
+        origin_signal_id:Number(group.original_signal_id) || null, action,
         market_alignment:marketAlignment,
         exit_reason_code:exitReasonCode === 'null' ? null : exitReasonCode,
         reversal_candidate:Boolean(item.reversal_candidate),
@@ -802,10 +859,10 @@ export function validatePositionManagementResponse(value, context, validateMarke
     } catch (error) { errors.push({ section:'position', group_id:item?.management_group_id || null, code:error.message }) }
   }
 
-  for (const [groupId] of pendingById) if (!seenPending.has(groupId)) {
+  for (const [groupId, group] of pendingById) if (!seenPending.has(groupId)) {
     errors.push({ section:'pending', group_id:groupId, code:'evaluation_missing' })
     pendingEvaluations.push({
-      ...safePendingEvaluation(groupId),
+      ...safePendingEvaluation(groupId, group.thesis_id),
     })
   }
   for (const [groupId, group] of positionById) if (!seenPosition.has(groupId)) {
@@ -856,6 +913,124 @@ async function resolveModes(targets) {
     WHERE user_id IN (${unique.map(() => '?').join(',')})`, unique) : []
   const byUser = new Map(rows.map(row => [Number(row.user_id), normalizeMode(row.execution_mode)]))
   return { control:control || { maximum_mode:'display', ai_pending_cancel_enabled:0 }, byUser }
+}
+
+function executionGroup(context, groupId, section) {
+  const groups = section === 'position' ? context?.position_groups : context?.pending_groups
+  return (groups || []).find(group => String(group?.management_group_id || '') === String(groupId || '')) || null
+}
+
+function lineageTargetFromRow(row) {
+  return {
+    outcome_id:Number(row.outcome_id), delivery_id:Number(row.delivery_id), order_intent_id:Number(row.order_intent_id),
+    user_id:Number(row.user_id), trading_account_id:Number(row.trading_account_id), ownership_history_id:row.ownership_history_id,
+    broker_server_key:row.broker_server_key, login_account:row.login_account,
+    original_symbol:row.original_symbol || row.symbol, symbol:row.symbol,
+    standard_symbol:stripBrokerSuffix(String(row.original_symbol || row.symbol || '')).toUpperCase(),
+    pending_ticket:row.pending_ticket, position_id:row.position_id,
+    entry_direction:row.entry_direction, system_magic:row.system_magic,
+    attribution_status:row.attribution_status, actual_stop_loss:row.actual_stop_loss,
+    actual_take_profit:row.actual_take_profit, effective_pending_state:row.effective_pending_state,
+    strategy_id:Number(row.strategy_id), strategy_version:Number(row.strategy_version || 1),
+    strategy_scope:row.strategy_scope, management_group_id:row.management_group_id,
+    thesis_id:row.thesis_id, origin_signal_id:Number(row.origin_signal_id),
+  }
+}
+
+/**
+ * Resolve subscriber execution targets only after a validated cancel/exit.
+ * The observer outcome is a model fact, not an execution target.  Every
+ * returned row must have one delivery, its frozen origin signal, one order
+ * intent and one matching outcome; ambiguous or incomplete lineage is
+ * dropped rather than guessed.
+ */
+export async function resolvePositionManagementExecutionTargets({ context, groupId, section, action } = {}) {
+  const group = executionGroup(context, groupId, section)
+  if (!group || !['cancel', 'exit'].includes(String(action || '').toLowerCase())) return []
+  const lineage = context?._executionLineage
+  if (!lineage || String(lineage.strategy_scope || '').toLowerCase() !== 'platform') {
+    const taskType = section === 'position' ? 'position_exit' : 'pending_cancel'
+    return (context?._targets?.get(groupId) || [])
+      .filter(target => targetMatchesPositionManagementTask(target, taskType))
+  }
+  const originSignalId = Number(group.original_signal_id)
+  const strategyId = Number(group.strategy_id)
+  if (!Number.isSafeInteger(originSignalId) || originSignalId <= 0
+    || !Number.isSafeInteger(strategyId) || strategyId <= 0) return []
+  const sourceUserIds = new Set((lineage.source_user_ids || []).map(Number).filter(id => id > 0))
+  const rows = await queryAll(`SELECT d.id AS delivery_id, d.signal_id AS delivery_signal_id,
+      d.user_id AS delivery_user_id, d.prompt_type_id AS delivery_strategy_id,
+      d.symbol AS delivery_symbol, d.order_intent_id AS delivery_order_intent_id,
+      d.pending_ticket AS delivery_pending_ticket, d.trade_ticket AS delivery_trade_ticket,
+      d.pending_state AS delivery_pending_state,
+      oi.id AS intent_id, oi.user_id AS intent_user_id, oi.trading_account_id AS intent_trading_account_id,
+      oi.status AS intent_status, oi.action AS intent_action,
+      outcomes.id AS outcome_id, outcomes.delivery_id AS outcome_delivery_id,
+      outcomes.order_intent_id AS outcome_order_intent_id, outcomes.user_id,
+      outcomes.trading_account_id, outcomes.ownership_history_id, outcomes.broker_server_key,
+      outcomes.login_account, outcomes.original_symbol, outcomes.symbol, outcomes.pending_ticket,
+      outcomes.position_id, outcomes.entry_direction, outcomes.system_magic,
+      outcomes.attribution_status, outcomes.actual_stop_loss, outcomes.actual_take_profit,
+      outcomes.status AS outcome_status,
+      COALESCE(d.pending_state, origin_signals.pending_state) AS effective_pending_state,
+      origin_signals.management_group_id AS origin_management_group_id,
+      origin_signals.thesis_id AS origin_thesis_id,
+      origin_signals.prompt_type_id AS origin_strategy_id,
+      origin_signals.id AS origin_signal_id,
+      theses.strategy_version, theses.strategy_scope, theses.management_group_id, theses.thesis_id
+    FROM auto_signal_deliveries d
+    JOIN ai_signals origin_signals ON origin_signals.id = d.signal_id
+    LEFT JOIN order_intents oi ON oi.id = d.order_intent_id
+    LEFT JOIN signal_outcomes outcomes
+      ON outcomes.delivery_id = d.id AND outcomes.order_intent_id = d.order_intent_id
+    LEFT JOIN ai_trade_theses theses ON theses.thesis_id = origin_signals.thesis_id
+    WHERE d.signal_id = ? AND d.prompt_type_id = ?
+    ORDER BY d.id ASC, outcomes.id ASC`, [originSignalId, strategyId])
+  const byDelivery = new Map()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const deliveryId = Number(row.delivery_id)
+    if (!Number.isSafeInteger(deliveryId) || deliveryId <= 0) continue
+    if (!byDelivery.has(deliveryId)) byDelivery.set(deliveryId, [])
+    byDelivery.get(deliveryId).push(row)
+  }
+  const targets = []
+  for (const deliveryRows of byDelivery.values()) {
+    // A delivery must resolve to exactly one outcome.  Do not select a
+    // historical ticket when the lineage is duplicated or partially linked.
+    if (deliveryRows.length !== 1) continue
+    const row = deliveryRows[0]
+    const deliveryUserId = Number(row.delivery_user_id)
+    if (!deliveryUserId || sourceUserIds.has(deliveryUserId)) continue
+    if (Number(row.delivery_signal_id) !== originSignalId
+      || Number(row.delivery_strategy_id) !== strategyId
+      || Number(row.origin_signal_id) !== originSignalId
+      || Number(row.origin_strategy_id) !== strategyId
+      || Number(row.strategy_version || 0) !== Number(group.strategy_version || 0)
+      || String(row.origin_management_group_id || '') !== String(group.management_group_id || '')
+      || String(row.origin_thesis_id || '') !== String(group.thesis_id || '')
+      || stripBrokerSuffix(String(row.delivery_symbol || '')).toUpperCase()
+        !== stripBrokerSuffix(String(group.standard_symbol || '')).toUpperCase()
+      || Number(row.delivery_order_intent_id) <= 0
+      || Number(row.intent_id) !== Number(row.delivery_order_intent_id)
+      || (row.intent_status != null
+        && !['succeeded', 'success'].includes(String(row.intent_status).toLowerCase()))
+      || Number(row.outcome_id) <= 0
+      || Number(row.outcome_order_intent_id) !== Number(row.intent_id)
+      || Number(row.outcome_delivery_id || 0) !== Number(row.delivery_id)
+      || Number(row.intent_user_id) !== deliveryUserId
+      || Number(row.user_id) !== deliveryUserId
+      || Number(row.intent_trading_account_id) !== Number(row.trading_account_id)
+      || String(row.management_group_id || '') !== String(group.management_group_id || '')
+      || String(row.thesis_id || '') !== String(group.thesis_id || '')) continue
+    if (section === 'pending' && row.delivery_pending_ticket
+      && String(row.delivery_pending_ticket) !== String(row.pending_ticket || '')) continue
+    if (!['open', 'closing'].includes(String(row.outcome_status || '').toLowerCase())) continue
+    const target = lineageTargetFromRow(row)
+    if (targetMatchesPositionManagementTask(target, section === 'position' ? 'position_exit' : 'pending_cancel')) {
+      targets.push(target)
+    }
+  }
+  return targets
 }
 
 function managementContractVersion(value) {
@@ -1242,13 +1417,19 @@ function normalizePersistedManagementEvaluation(evaluation, group, section) {
     : !reasonCode || reasonCode === 'null' || reasonCode === 'none'
   const invalid = !groupManagementFactsAvailable(group) || !alignment || !actionAllowed
     || !reason || !reasonCodeValid
-  if (!invalid) return { ...evaluation, market_alignment:alignment }
-  if (section === 'position') return safePositionEvaluation(
-    evaluation?.management_group_id, group?.thesis_id,
-    '当前决策证据或终端事实不可用，或模型理由不符合行情一致性合同，服务端按安全默认继续持有',
-  )
-  return safePendingEvaluation(evaluation?.management_group_id,
-    '当前决策证据或终端事实不可用，或模型理由不符合行情一致性合同，服务端按安全默认继续保留挂单')
+  if (!invalid) return { ...evaluation, thesis_id:group?.thesis_id || null,
+    origin_signal_id:Number(group?.original_signal_id) || null, market_alignment:alignment }
+  if (section === 'position') return {
+    ...safePositionEvaluation(
+      evaluation?.management_group_id, group?.thesis_id,
+      '当前决策证据或终端事实不可用，或模型理由不符合行情一致性合同，服务端按安全默认继续持有',
+    ), origin_signal_id:Number(group?.original_signal_id) || null,
+  }
+  return {
+    ...safePendingEvaluation(evaluation?.management_group_id, group?.thesis_id,
+      '当前决策证据或终端事实不可用，或模型理由不符合行情一致性合同，服务端按安全默认继续保留挂单'),
+    origin_signal_id:Number(group?.original_signal_id) || null,
+  }
 }
 
 export async function persistPositionManagementEvaluations({
@@ -1283,12 +1464,27 @@ export async function persistPositionManagementEvaluations({
     .filter(item => item.action === 'cancel'
       && !synchronousGroups.has(String(item?.management_group_id || '')))
     .map(item => ({ ...item, taskType:'pending_cancel' }))
-  const allTargets = [
-    ...positionEvaluations.flatMap(item => (context._targets.get(item.management_group_id) || [])
-      .filter(target => targetMatchesPositionManagementTask(target, 'position_exit'))),
-    ...pendingCandidates.flatMap(item => (context._targets.get(item.management_group_id) || [])
-      .filter(target => targetMatchesPositionManagementTask(target, 'pending_cancel'))),
-  ]
+  const resolvedTargets = new Map()
+  const resolveFor = async (item, section, action) => {
+    const groupId = String(item?.management_group_id || '')
+    if (!groupId) return []
+    if (resolvedTargets.has(`${section}:${groupId}`)) return resolvedTargets.get(`${section}:${groupId}`)
+    const targets = await resolvePositionManagementExecutionTargets({
+      context, groupId, section, action,
+    })
+    resolvedTargets.set(`${section}:${groupId}`, targets)
+    return targets
+  }
+  const allTargets = []
+  for (const item of positionEvaluations) {
+    const normalized = normalizePersistedManagementEvaluation(item,
+      executionGroup(context, item?.management_group_id, 'position'), 'position')
+    if (normalized.action !== 'exit') continue
+    allTargets.push(...await resolveFor(item, 'position', 'exit'))
+  }
+  for (const item of pendingCandidates) {
+    allTargets.push(...await resolveFor(item, 'pending', 'cancel'))
+  }
   const modes = await resolveModes(allTargets)
   const created = []
 
@@ -1296,8 +1492,9 @@ export async function persistPositionManagementEvaluations({
     const normalizedEvaluation = normalizePersistedManagementEvaluation(evaluation,
       (context.position_groups || []).find(group => String(group.management_group_id) === String(evaluation?.management_group_id)),
       'position')
-    const targets = (context._targets.get(evaluation.management_group_id) || [])
-      .filter(target => targetMatchesPositionManagementTask(target, 'position_exit'))
+    const targets = normalizedEvaluation.action === 'exit'
+      ? (resolvedTargets.get(`position:${String(evaluation.management_group_id || '')}`) || [])
+      : []
     for (const target of targets) {
       const mode = resolvePositionManagementTaskMode('position_exit',
         modes.byUser.get(Number(target.user_id)) || 'auto_exit', modes.control)
@@ -1320,8 +1517,7 @@ export async function persistPositionManagementEvaluations({
   }
 
   for (const evaluation of pendingCandidates) {
-    const targets = (context._targets.get(evaluation.management_group_id) || [])
-      .filter(target => targetMatchesPositionManagementTask(target, evaluation.taskType))
+    const targets = resolvedTargets.get(`pending:${String(evaluation.management_group_id || '')}`) || []
     for (const target of targets) {
       const mode = resolvePositionManagementTaskMode(
         evaluation.taskType,

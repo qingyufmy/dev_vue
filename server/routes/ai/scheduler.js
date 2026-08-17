@@ -467,15 +467,23 @@ function calculateRecoverySeconds(deadlineMs, nowMs = Date.now()) {
   return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000))
 }
 
-function selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, direction, managementGroupIds = null) {
+function selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, direction,
+  managementGroupIds = null, originSignalIdsByGroup = null) {
   const expectedSymbol = stripBrokerSuffix(symbol)
   const expectedDirection = String(direction || '').toLowerCase()
   const filterDirection = direction !== undefined && direction !== null
   if (filterDirection && !['buy', 'sell'].includes(expectedDirection)) return []
   const selectedGroups = managementGroupIds instanceof Set
     ? managementGroupIds : managementGroupIds ? new Set(managementGroupIds) : null
+  const originByGroup = originSignalIdsByGroup instanceof Map ? originSignalIdsByGroup : null
   const strategyTickets = new Set((Array.isArray(strategyDeliveries) ? strategyDeliveries : [])
-    .filter(item => !selectedGroups || selectedGroups.has(String(item?.management_group_id || '').trim()))
+    .filter(item => {
+      const groupId = String(item?.management_group_id || '').trim()
+      if (selectedGroups && !selectedGroups.has(groupId)) return false
+      if (!originByGroup) return true
+      const expectedOrigin = Number(originByGroup.get(groupId) || 0)
+      return expectedOrigin > 0 && Number(item?.signal_id || 0) === expectedOrigin
+    })
     .map(item => String(item?.pending_ticket || '').trim())
     .filter(Boolean))
   return (Array.isArray(pendingOrders) ? pendingOrders : []).filter(item => {
@@ -502,6 +510,72 @@ function synchronousPendingCancelGroupIds(signal) {
     .filter(item => String(item?.action || '').toLowerCase() === 'cancel')
     .map(item => String(item?.management_group_id || '').trim())
     .filter(Boolean))
+}
+
+function synchronousPendingCancelOriginSignalIds(signal, context) {
+  const groups = synchronousPendingCancelGroupIds(signal)
+  if (!(groups instanceof Set) || !groups.size) return new Map()
+  const byGroup = new Map((context?.pending_groups || []).map(group => [
+    String(group?.management_group_id || ''), Number(group?.original_signal_id || 0),
+  ]))
+  const frozenEvaluations = (positionManagementDecision(signal)?.pending_evaluations || [])
+    .filter(item => item && typeof item === 'object')
+  const signalByGroup = new Map(frozenEvaluations.map(item => [
+    String(item?.management_group_id || ''), Number(item?.origin_signal_id || 0),
+  ]))
+  const result = new Map()
+  for (const groupId of groups) {
+    // Recovery can re-enter executeDelivery without the non-persisted model
+    // context. The normalized model response carries the same frozen origin;
+    // use it only as a fallback, never a user/ticket-derived guess.
+    const originSignalId = Number(byGroup.get(groupId) || signalByGroup.get(groupId) || 0)
+    if (originSignalId > 0) result.set(groupId, originSignalId)
+  }
+  return result
+}
+
+function selectFrozenSynchronousPendingDeliveries(strategyDeliveries, originSignalIdsByGroup) {
+  if (!(originSignalIdsByGroup instanceof Map) || !originSignalIdsByGroup.size) return []
+  const byDelivery = new Map()
+  for (const item of Array.isArray(strategyDeliveries) ? strategyDeliveries : []) {
+    const deliveryId = Number(item?.delivery_id || 0)
+    if (!Number.isSafeInteger(deliveryId) || deliveryId <= 0) continue
+    if (!byDelivery.has(deliveryId)) byDelivery.set(deliveryId, [])
+    byDelivery.get(deliveryId).push(item)
+  }
+  const selected = []
+  for (const rows of byDelivery.values()) {
+    // A delivery with more than one joined outcome is ambiguous.  Do not
+    // choose the first historical row or ticket by query order.
+    if (rows.length !== 1) continue
+    const item = rows[0]
+    const deliveryId = Number(item?.delivery_id || 0)
+    const orderIntentId = Number(item?.order_intent_id || 0)
+    const outcomeId = Number(item?.outcome_id || 0)
+    const groupId = String(item?.origin_management_group_id || item?.management_group_id || '').trim()
+    const expectedOrigin = Number(originSignalIdsByGroup.get(groupId) || 0)
+    if (!Number.isSafeInteger(deliveryId) || deliveryId <= 0
+      || !Number.isSafeInteger(orderIntentId) || orderIntentId <= 0
+      || !Number.isSafeInteger(outcomeId) || outcomeId <= 0
+      || expectedOrigin <= 0
+      || Number(item?.signal_id || 0) !== expectedOrigin
+      || Number(item?.delivery_signal_id || item?.signal_id || 0) !== expectedOrigin
+      || String(item?.origin_management_group_id || '') !== groupId
+      || String(item?.outcome_management_group_id || '') !== groupId
+      || String(item?.outcome_thesis_id || '') !== String(item?.origin_thesis_id || '')
+      || !['succeeded', 'success'].includes(String(item?.order_intent_status || '').toLowerCase())
+      || Number(item?.intent_user_id) !== Number(item?.delivery_user_id)
+      || Number(item?.outcome_user_id) !== Number(item?.delivery_user_id)
+      || Number(item?.outcome_trading_account_id) !== Number(item?.intent_trading_account_id)
+      || Number(item?.outcome_order_intent_id) !== orderIntentId
+      || Number(item?.outcome_delivery_id) !== deliveryId
+      || String(item?.pending_state || '').toLowerCase() !== 'pending'
+      || !String(item?.pending_ticket || '').trim()
+      || String(item?.outcome_pending_ticket || '').trim() !== String(item.pending_ticket).trim()
+      || !['open', 'closing'].includes(String(item?.outcome_status || '').toLowerCase())) continue
+    selected.push(item)
+  }
+  return selected
 }
 
 /**
@@ -2713,7 +2787,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         const batch = eligibleSubs.slice(i, i + CONCURRENCY)
         await Promise.allSettled(batch.map(uid =>
           executeDelivery(uid, signalId, signal, config, market, promptTypeId, symbol, createdAt,
-            lockGuard, modelTaskTracker, resultValidUntilUtcMsc)
+            lockGuard, modelTaskTracker, resultValidUntilUtcMsc, null, positionManagementContext)
         ))
       }
     }
@@ -2776,7 +2850,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
 
 // === Delivery execution for a single subscriber ===
 async function executeDelivery(userId, signalId, signal, unifiedConfig, market, promptTypeId, symbol, createdAt,
-  lockGuard, modelTaskTracker = null, resultValidUntilUtcMsc = null, recoveryContext = null) {
+  lockGuard, modelTaskTracker = null, resultValidUntilUtcMsc = null, recoveryContext = null,
+  positionManagementContext = null) {
   const endDeliveryExecution = beginBridgeDeliveryExecution(userId)
   const l = (msg) => console.log(`[Delivery U${userId}] signal=${signalId} ${symbol}: ${msg}`)
   let inventoryLock = null
@@ -2929,10 +3004,24 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const [positionsResponse, pendingResponse, strategyDeliveries] = await Promise.all([
       mt5Bridge(userId, 'positions', { symbol }, { noFallback:true }),
       mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true }),
-      queryAll(`SELECT d.pending_ticket, d.trade_ticket,
-          COALESCE(outcomes.management_group_id, origin_signals.management_group_id) AS management_group_id
+      queryAll(`SELECT d.id AS delivery_id, d.signal_id, d.user_id AS delivery_user_id,
+          d.order_intent_id, d.pending_ticket, d.trade_ticket, d.pending_state,
+          COALESCE(outcomes.management_group_id, origin_signals.management_group_id) AS management_group_id,
+          origin_signals.management_group_id AS origin_management_group_id,
+          origin_signals.thesis_id AS origin_thesis_id,
+          oi.status AS order_intent_status, oi.user_id AS intent_user_id,
+          oi.trading_account_id AS intent_trading_account_id,
+          outcomes.id AS outcome_id, outcomes.delivery_id AS outcome_delivery_id,
+          outcomes.order_intent_id AS outcome_order_intent_id,
+          outcomes.user_id AS outcome_user_id,
+          outcomes.trading_account_id AS outcome_trading_account_id,
+          outcomes.pending_ticket AS outcome_pending_ticket,
+          outcomes.status AS outcome_status,
+          outcomes.management_group_id AS outcome_management_group_id,
+          outcomes.thesis_id AS outcome_thesis_id
         FROM auto_signal_deliveries d
         LEFT JOIN signal_outcomes outcomes ON outcomes.delivery_id = d.id
+        LEFT JOIN order_intents oi ON oi.id = d.order_intent_id
         LEFT JOIN ai_signals origin_signals ON origin_signals.id = d.signal_id
         WHERE d.user_id = ? AND d.prompt_type_id = ? AND (d.pending_ticket IS NOT NULL OR d.trade_ticket IS NOT NULL)
         ORDER BY d.id DESC LIMIT 200`, [userId, promptTypeId]),
@@ -2949,16 +3038,25 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
     const pendingAction = String(signal.pending_action || 'none').toLowerCase()
     const pendingActionReason = String(signal.pending_action_reason || '').trim()
     const managementDirection = String(signal.management_direction || (isTradeSignal ? (signalIsBuy ? 'buy' : 'sell') : 'none')).toLowerCase()
-    const syncPendingCancelGroupIds = synchronousPendingCancelGroupIds(signal)
+    const referenceUserIds = new Set((positionManagementContext?._executionLineage?.source_user_ids || [])
+      .map(Number).filter(id => id > 0))
+    const syncPendingCancelGroupIds = referenceUserIds.has(Number(userId))
+      ? new Set() : synchronousPendingCancelGroupIds(signal)
+    const syncPendingCancelOriginSignalIds = synchronousPendingCancelOriginSignalIds(signal, positionManagementContext)
+    const frozenSyncDeliveries = syncPendingCancelGroupIds.size > 0 && isTradeSignal
+      ? selectFrozenSynchronousPendingDeliveries(strategyDeliveries, syncPendingCancelOriginSignalIds)
+      : strategyDeliveries
     // `keep` intentionally has no management direction in the model contract:
     // it evaluates every current-strategy pending order for this symbol. Only
     // cancel uses the model-provided direction to select targets.
     const pendingTargets = syncPendingCancelGroupIds.size > 0 && isTradeSignal
-      ? selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, undefined, syncPendingCancelGroupIds)
+      ? selectOwnedStrategyPendingOrders(pendingOrders, frozenSyncDeliveries, symbol, undefined,
+        syncPendingCancelGroupIds, syncPendingCancelOriginSignalIds)
       : pendingAction === 'keep'
         ? selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol)
         : selectOwnedStrategyPendingOrders(pendingOrders, strategyDeliveries, symbol, managementDirection)
-    const strategyPendingTickets = new Set(strategyDeliveries.map(item => String(item.pending_ticket || '')).filter(Boolean))
+    const strategyPendingTickets = new Set(pendingTargets
+      .map(item => String(item?.ticket ?? item?.mt5_ticket ?? '').trim()).filter(Boolean))
     const pendingDecision = syncPendingCancelGroupIds.size > 0 && isTradeSignal
       ? { action:'manage', reason:null, count:pendingTargets.length, targets:pendingTargets }
       : resolvePendingActionGate({ pendingAction, pendingOrders:pendingTargets })
@@ -4135,6 +4233,8 @@ export const __schedulerTest = {
   calculateRecoverySeconds,
   selectOwnedStrategyPendingOrders,
   synchronousPendingCancelGroupIds,
+  synchronousPendingCancelOriginSignalIds,
+  selectFrozenSynchronousPendingDeliveries,
   resolvePendingActionGate,
   resolvePendingCancellationPlan,
   resolvePendingCancellationOutcome,
