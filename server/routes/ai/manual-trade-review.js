@@ -25,6 +25,8 @@ const ALLOWED_EVIDENCE = new Set(['complete', 'partial', 'insufficient'])
 const ALLOWED_COUNTERFACTUAL_DECISION = new Set(['buy', 'sell', 'hold', 'insufficient_evidence'])
 const ALLOWED_COUNTERFACTUAL_MATCH = new Set(['same_direction', 'hold', 'opposite_direction', 'insufficient_evidence'])
 const ALLOWED_HYPOTHESIS_STATE = new Set(['hypothesis', 'insufficient_evidence'])
+const MANUAL_TRADE_HASH_PATTERN = /^[0-9a-f]{64}$/i
+const MANUAL_TRADE_REFERENCE_PATTERN = /^(?!0+$)\d{1,32}$/
 
 let manualReviewTimer = null
 let manualReviewWake = false
@@ -118,17 +120,58 @@ function enumValue(value, allowed, fallback, code) {
   return value
 }
 
+function manualTradeHash(value) {
+  if (typeof value !== 'string') throw new Error('manual_trade_review_selection_invalid')
+  const normalized = value.trim()
+  if (!MANUAL_TRADE_HASH_PATTERN.test(normalized)) throw new Error('manual_trade_review_selection_invalid')
+  return normalized.toLowerCase()
+}
+
+function manualTradeReference(value) {
+  if (value == null) return null
+  if (typeof value !== 'string') throw new Error('manual_trade_review_selection_reference_invalid')
+  const normalized = value.trim()
+  if (!MANUAL_TRADE_REFERENCE_PATTERN.test(normalized)) {
+    throw new Error('manual_trade_review_selection_reference_invalid')
+  }
+  return normalized
+}
+
 export function validateManualTradeSelection(selected = []) {
   if (!Array.isArray(selected) || !selected.length || selected.length > MANUAL_TRADE_SELECTION_MAX) {
     throw new Error('manual_trade_review_selection_invalid')
   }
-  const identities = selected.map(item => String(item?.source_identity_hash || item?.trade_id || '').trim())
-  const hashes = selected.map(item => String(item?.trade_source_hash || '').trim())
+  const normalized = selected.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('manual_trade_review_selection_invalid')
+    }
+    // `trade_id` remains a compatibility alias only when the canonical
+    // source identity hash is absent. The server always emits both canonical
+    // hash fields so downstream evidence reads cannot depend on the alias.
+    const sourceIdentityValue = item.source_identity_hash == null || String(item.source_identity_hash).trim() === ''
+      ? item.trade_id : item.source_identity_hash
+    const sourceIdentityHash = manualTradeHash(sourceIdentityValue)
+    const tradeSourceHash = manualTradeHash(item.trade_source_hash)
+    const positionId = manualTradeReference(item.position_id)
+    const entryOrderTicket = manualTradeReference(item.entry_order_ticket)
+    if (!positionId && !entryOrderTicket) {
+      throw new Error('manual_trade_review_selection_reference_invalid')
+    }
+    return {
+      trade_id:sourceIdentityHash,
+      source_identity_hash:sourceIdentityHash,
+      trade_source_hash:tradeSourceHash,
+      position_id:positionId,
+      entry_order_ticket:entryOrderTicket,
+    }
+  })
+  const identities = normalized.map(item => item.source_identity_hash)
+  const hashes = normalized.map(item => item.trade_source_hash)
   if (identities.some(value => !value) || new Set(identities).size !== identities.length
     || hashes.some(value => !value) || new Set(hashes).size !== hashes.length) {
     throw new Error('manual_trade_review_selection_duplicate')
   }
-  return selected
+  return normalized
 }
 
 export function manualTradeReviewOutputContract(sampleCount = 1) {

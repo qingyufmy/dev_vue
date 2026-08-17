@@ -1936,6 +1936,7 @@ const API_ERROR_MESSAGES = {
   manual_trade_review_mt4_visible_history_incomplete: "MT4 只复盘终端当前可见历史，请在 MT4“账户历史”中选择“全部历史”后刷新；系统不会宣称券商全量历史",
   manual_trade_review_mt4_visible_history_unknown: "当前 MT4 桥接未提供可见历史完整性证明，请升级桥接并在 MT4“账户历史”中选择“全部历史”后刷新",
   manual_trade_review_history_range_invalid: "最近 7 天的交易快照已失效，请重新刷新交易记录",
+  manual_trade_review_selection_reference_invalid: "所选交易缺少可验证的订单或持仓引用，请刷新交易记录后重新选择",
   manual_trade_review_counterfactual_invalid: "开仓前盲测结果格式无效，请重试生成",
   manual_trade_review_counterfactual_immutable: "开仓前盲测结论已冻结，不能在事后人工改写",
   history_incomplete: "交易历史完整性尚未确认，暂不能安全筛选手动交易",
@@ -6812,7 +6813,8 @@ async function createManualTradeReviewTask() {
     const data = await api("/api/ai/manual-trade-reviews", { method:"POST", timeout:30_000, body:{
       client_request_id:manualTradeReviewBuildClientRequestId(), strategy_id:strategyId,
       user_thesis_text:String($("manualTradeReviewThesis")?.value || "").trim(),
-      trades:selected.map(item => ({ trade_id:item.trade_id, source_identity_hash:item.source_identity_hash, trade_source_hash:item.trade_source_hash })),
+      trades:selected.map(item => ({ trade_id:item.trade_id, source_identity_hash:item.source_identity_hash, trade_source_hash:item.trade_source_hash,
+        position_id:item.position_id || null, entry_order_ticket:item.entry_order_ticket || null })),
     } });
     const id = Number(data.case?.id || 0);
     state.manualTradeReviewSelectedId = id || null;

@@ -13,7 +13,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
 vi.mock('../../server/routes/ai/terminal-clock.js', () => ({ trustedTerminalClock:() => true }))
 vi.mock('../../server/routes/ai/review-market-path.js', () => ({ buildReviewMarketPath:vi.fn() }))
 
-import { listEligibleManualTrades } from '../../server/routes/ai/manual-trade-evidence.js'
+import { buildEligibleManualTrades, listEligibleManualTrades, readManualTradeEvidence } from '../../server/routes/ai/manual-trade-evidence.js'
 
 const accountRow = { id:5, user_id:7, broker_server:'Broker-Demo', login_account:'1001', observe_status:'active',
   current_user_id:7, current_trading_account_id:5, account_currency:'USD' }
@@ -285,5 +285,61 @@ describe('manual trade review history cursor contract', () => {
     expect(result.trades[0].symbol).toBe('GBPUSD')
     expect(result).toMatchObject({ scanned_source_pages:2, skipped_empty_source_pages:1, has_more:false })
     expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'positions')).toHaveLength(1)
+  })
+
+  it('re-reads a selected position through history evidence without accepting empty references', async () => {
+    const history = validEvidencePage()
+    history.deals = history.deals.map((row, index) => ({ ...row, order_ticket:`${2001 + index}`, position_id:'1001' }))
+    history.history_orders = history.history_orders.map((row, index) => ({ ...row, order_ticket:`${2001 + index}`, position_id:'1001' }))
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
+      if (action === 'history_evidence') return history
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+    const eligible = buildEligibleManualTrades(history, { account:accountRow, positions:[], systemReferences:new Map() }).trades[0]
+    const result = await readManualTradeEvidence({ id:7 }, accountRow, [{
+      trade_id:eligible.trade_id, source_identity_hash:eligible.source_identity_hash,
+      trade_source_hash:eligible.trade_source_hash, position_id:eligible.position_id,
+      entry_order_ticket:eligible.entry_order_ticket,
+    }], {
+      strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } },
+      buildPath:async () => ({ status:'complete' }), nowUtcMsc:10_000,
+    })
+    const evidenceCall = bridge.mt5Bridge.mock.calls.find(([, action]) => action === 'history_evidence')
+    expect(result).toMatchObject({ evidence_status:'complete', trades:[{ source_identity_hash:eligible.source_identity_hash }] })
+    expect(evidenceCall?.[2]).toMatchObject({ evidence_position_ids:[eligible.position_id], evidence_order_tickets:[] })
+  })
+
+  it('re-reads an order-only selection through entry order evidence', async () => {
+    const history = validEvidencePage()
+    history.deals = history.deals.map(row => ({ ...row, order_ticket:'2001', position_id:null }))
+    history.history_orders = history.history_orders.map(row => ({ ...row, order_ticket:'2001', position_id:null }))
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
+      if (action === 'history_evidence') return history
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+    const eligible = buildEligibleManualTrades(history, { account:accountRow, positions:[], systemReferences:new Map() }).trades[0]
+    await readManualTradeEvidence({ id:7 }, accountRow, [{
+      trade_id:eligible.trade_id, source_identity_hash:eligible.source_identity_hash,
+      trade_source_hash:eligible.trade_source_hash, position_id:null,
+      entry_order_ticket:eligible.entry_order_ticket,
+    }], {
+      strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } },
+      buildPath:async () => ({ status:'complete' }), nowUtcMsc:10_000,
+    })
+    const evidenceCall = bridge.mt5Bridge.mock.calls.find(([, action]) => action === 'history_evidence')
+    expect(evidenceCall?.[2]).toMatchObject({ evidence_position_ids:[], evidence_order_tickets:[eligible.entry_order_ticket] })
+  })
+
+  it('rejects empty evidence references before any Bridge call', async () => {
+    const hash = 'a'.repeat(64)
+    bridge.mt5Bridge.mockClear()
+    await expect(readManualTradeEvidence({ id:7 }, accountRow, [{
+      trade_id:hash, source_identity_hash:hash, trade_source_hash:'b'.repeat(64),
+    }])).rejects.toThrow('manual_trade_review_selection_reference_invalid')
+    expect(bridge.mt5Bridge).not.toHaveBeenCalled()
   })
 })

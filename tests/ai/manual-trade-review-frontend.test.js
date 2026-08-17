@@ -82,8 +82,20 @@ describe('manual trade review frontend contract', () => {
     expect(strategyEditor).not.toContain('openStrategyEditor(null)')
   })
 
+  it('sends only stable history references when creating a review', () => {
+    const create = block('async function createManualTradeReviewTask', 'function manualTradeReviewCaseStatus')
+    expect(create).toContain('source_identity_hash:item.source_identity_hash')
+    expect(create).toContain('trade_source_hash:item.trade_source_hash')
+    expect(create).toContain('position_id:item.position_id || null')
+    expect(create).toContain('entry_order_ticket:item.entry_order_ticket || null')
+    expect(create).not.toContain('net_profit:item.')
+    expect(create).not.toContain('entry_price:item.')
+    expect(create).not.toContain('normalized:item.')
+  })
+
   it('ships a cache key and mobile controls with a 44px touch target', () => {
     expect(html).toContain('20260814ema34toggle1')
+    expect(html).toContain('manual-review-create-ref1')
     expect(html).toContain('manualmt4history1')
     expect(css).toContain('.manual-review-trade-row')
     expect(responsive).toContain('.manual-review-filter-bar .btn')

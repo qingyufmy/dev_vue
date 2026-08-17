@@ -24,6 +24,8 @@ import { __manualTradeReviewTest, manualTradeReviewOutputContract, validateCount
 const source = { source_identity_hash:'trade-a', normalized_trade_json:JSON.stringify({
   symbol:'EURUSD', direction:'buy', entry_time_utc_msc:1_000, close_time_utc_msc:2_000, net_profit:10,
 }) }
+const identityHash = 'A'.repeat(64)
+const sourceHash = 'B'.repeat(64)
 const counterfactual = { decision:'buy', reasoning:'strategy allowed long', strategy_signals:['trend'], blocking_rules:[], confidence:.7 }
 
 function validContent(overrides = {}) {
@@ -62,6 +64,33 @@ describe('manual profitable trade counterfactual review contract', () => {
     ])).toThrow('manual_trade_review_selection_invalid')
     expect(() => validateManualTradeReviewContent(validContent(), [source, { source_identity_hash:'trade-b' }], {}, { evidenceStatus:'complete' }))
       .toThrow('manual_trade_review_selection_invalid')
+  })
+
+  it('rebuilds a canonical position selection and uses trade_id only as an identity fallback', () => {
+    expect(validateManualTradeSelection([{
+      trade_id:identityHash, trade_source_hash:sourceHash, position_id:'000123', entry_order_ticket:null,
+      symbol:'EURUSD', net_profit:99,
+    }])).toEqual([{
+      trade_id:identityHash.toLowerCase(), source_identity_hash:identityHash.toLowerCase(),
+      trade_source_hash:sourceHash.toLowerCase(), position_id:'000123', entry_order_ticket:null,
+    }])
+  })
+
+  it('accepts an order-only selection and rejects malformed or empty references', () => {
+    expect(validateManualTradeSelection([{
+      source_identity_hash:identityHash, trade_source_hash:sourceHash, entry_order_ticket:'987654',
+    }])[0]).toMatchObject({ position_id:null, entry_order_ticket:'987654' })
+    for (const value of ['0', '000', '-1', '1.2', '1e3', '1'.repeat(33), 'ticket', '', 123, 1e3]) {
+      expect(() => validateManualTradeSelection([{
+        source_identity_hash:identityHash, trade_source_hash:sourceHash, position_id:value,
+      }])).toThrow('manual_trade_review_selection_reference_invalid')
+    }
+    expect(() => validateManualTradeSelection([{
+      source_identity_hash:identityHash, trade_source_hash:sourceHash,
+    }])).toThrow('manual_trade_review_selection_reference_invalid')
+    expect(() => validateManualTradeSelection([{
+      source_identity_hash:'not-a-sha256', trade_source_hash:sourceHash, position_id:'1',
+    }])).toThrow('manual_trade_review_selection_invalid')
   })
 
   it('rejects unknown references, rule paths, and enum drift', () => {

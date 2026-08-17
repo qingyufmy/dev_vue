@@ -23,6 +23,7 @@ export const MANUAL_TRADE_SOURCE_SCAN_MAX_PAGES = 5
 const EXPERT_REASON_CODES = new Set(['expert', 'ea', 'robot', 'algorithm', 'automated', '3'])
 const EXIT_ENTRIES = new Set(['out', 'out_by', 'inout', 'close', 'closed', '1', '2', '3'])
 const ENTRY_ENTRIES = new Set(['in', 'open', 'opened', '0'])
+const MANUAL_TRADE_REFERENCE_PATTERN = /^(?!0+$)\d{1,32}$/
 
 function json(value, fallback = null) {
   if (value == null || value === '') return fallback
@@ -41,6 +42,16 @@ function safeInteger(value) {
 }
 
 function text(value) { return String(value == null ? '' : value).trim() }
+
+function manualTradeReference(value) {
+  if (value == null) return null
+  if (typeof value !== 'string') throw new Error('manual_trade_review_selection_reference_invalid')
+  const normalized = text(value)
+  if (!MANUAL_TRADE_REFERENCE_PATTERN.test(normalized)) {
+    throw new Error('manual_trade_review_selection_reference_invalid')
+  }
+  return normalized
+}
 
 function stable(value) {
   if (value == null || typeof value !== 'object') return value
@@ -969,8 +980,15 @@ export async function readManualTradeEvidence(actor, account, selected = [], opt
     || selectedHashes.some(value => !value) || new Set(selectedHashes).size !== selectedHashes.length) {
     throw new Error('manual_trade_review_selection_duplicate')
   }
-  const positions = selected.map(item => item.position_id).filter(Boolean)
-  const orders = selected.filter(item => !item.position_id).map(item => item.entry_order_ticket).filter(Boolean)
+  const references = selected.map(item => ({
+    position_id:manualTradeReference(item?.position_id),
+    entry_order_ticket:manualTradeReference(item?.entry_order_ticket),
+  }))
+  const positions = references.map(item => item.position_id).filter(Boolean)
+  const orders = references.filter(item => !item.position_id).map(item => item.entry_order_ticket).filter(Boolean)
+  if (!positions.length && !orders.length) {
+    throw new Error('manual_trade_review_selection_reference_invalid')
+  }
   const recentRange = resolveRecentProfitableRange({}, options.nowUtcMsc)
   if (!options.history && selected.some(item => Number(item.close_time_utc_msc) < recentRange.range_start_utc_msc
     || Number(item.close_time_utc_msc) > recentRange.range_end_utc_msc)) {
