@@ -3,7 +3,7 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.5'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.6'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
@@ -190,6 +190,7 @@ function publicGroup(row) {
     thesis_id:row.thesis_id,
     strategy_id:Number(row.strategy_id),
     strategy_version:Number(row.strategy_version || 1),
+    strategy_scope:text(row.strategy_scope, 32).toLowerCase() === 'private' ? 'private' : 'platform',
     standard_symbol:row.standard_symbol,
     direction:row.direction,
     original_signal_id:Number(row.origin_signal_id || row.signal_id),
@@ -313,10 +314,6 @@ export async function loadActivePositionManagementContext({
     && referencePortfolio?.status !== 'unavailable'
     && Array.isArray(referencePortfolio?.positions)
     && Array.isArray(referencePortfolio?.pending_orders)
-  const referenceOutcomeIds = referencePortfolioAvailable
-    ? new Set([...referencePortfolio.positions, ...referencePortfolio.pending_orders]
-      .map(item => /^outcome:(\d+)$/.exec(String(item?.reference_id || ''))?.[1])
-      .filter(Boolean).map(Number)) : null
   const referenceFactsByOutcome = new Map()
   if (referencePortfolioAvailable) {
     for (const item of referencePortfolio.positions) {
@@ -337,6 +334,12 @@ export async function loadActivePositionManagementContext({
   const privatePendingRows = mapTerminalRows(market?.pending_orders,
     ['ticket', 'mt5_ticket', 'order_id', 'pending_ticket'])
 
+  const asOf = buildPositionManagementAsOf(market, decisionTimeframe)
+  const initialReferenceFactsStatus = isPlatformStrategy
+    ? (referencePortfolioAvailable ? 'missing' : 'unavailable')
+    : (privatePortfolioAvailable ? 'missing' : 'unavailable')
+  const executionTargetsSeen = new Set()
+
   const resolveTerminalFact = (row, kind) => {
     if (isPlatformStrategy) {
       if (!referencePortfolioAvailable) return null
@@ -354,12 +357,12 @@ export async function loadActivePositionManagementContext({
   }
   const groups = new Map()
   for (const rawRow of rows) {
-    // The reference portfolio is sourced from the terminal's current
-    // positions and pending orders. When it is available, stale database
-    // outcomes must not be fed back into a new management inference.
-    if (referenceOutcomeIds && !referenceOutcomeIds.has(Number(rawRow.outcome_id))) continue
     const row = normalizePositionManagementOutcome(rawRow)
     if (!isActivePositionManagementOutcome(row)) continue
+    if (!row.management_group_id) continue
+    const targetKey = `${String(row.management_group_id)}:${Number(row.outcome_id)}`
+    if (executionTargetsSeen.has(targetKey)) continue
+    executionTargetsSeen.add(targetKey)
     // Active system positions/pending orders remain in the current-state
     // review after a strategy version changes.  Keep the thesis version on
     // the target for audit, but do not drop a live outcome from management.
@@ -367,28 +370,31 @@ export async function loadActivePositionManagementContext({
       const group = { ...publicGroup(row), targets:[] }
       group.pending_order_facts = []
       group.position_facts = []
-      group.current_facts_status = group.core_entry_reason && group.entry_method
-        && group.decision_timeframe && group.direction ? 'available' : 'unavailable'
+      group.allowed_evidence_refs_by_kind = { pending:[], position:[] }
+      group.decision_context_status = group.core_entry_reason && group.entry_method
+        && group.decision_timeframe && group.direction && asOf.closed_bar_time_utc_ms
+        && asOf.market_snapshot_hash ? 'available' : 'unavailable'
+      group.reference_facts_status_by_kind = { pending:initialReferenceFactsStatus, position:initialReferenceFactsStatus }
       groups.set(row.management_group_id, group)
     }
     const group = groups.get(row.management_group_id)
     const kind = row.position_id ? 'position' : 'pending'
     const fact = resolveTerminalFact(row, kind)
-    if (kind === 'position') group.position_facts.push(fact)
-    else group.pending_order_facts.push(fact)
+    if (fact) {
+      if (kind === 'position') group.position_facts.push(fact)
+      else group.pending_order_facts.push(fact)
+    }
     if (fact && terminalFactComplete(fact, kind)) {
-      group.allowed_evidence_refs.push(`terminal:${row.outcome_id}:${kind}`)
-    } else {
-      // Keep the group visible so an unavailable snapshot resets an earlier
-      // candidate rather than silently disappearing and later pairing with it.
-      group.current_facts_status = 'unavailable'
+      group.allowed_evidence_refs_by_kind[kind].push(`terminal:${row.outcome_id}:${kind}`)
+      group.reference_facts_status_by_kind[kind] = 'available'
+    } else if (fact && group.reference_facts_status_by_kind[kind] !== 'available') {
+      group.reference_facts_status_by_kind[kind] = 'unavailable'
     }
     group.targets.push(row)
   }
   const pendingGroups = []
   const positionGroups = []
   const targets = new Map()
-  const asOf = buildPositionManagementAsOf(market, decisionTimeframe)
   const currentBarRef = asOf.closed_bar_time_utc_ms
     ? `bar:${asOf.decision_timeframe}:${asOf.closed_bar_time_utc_ms}` : null
   const currentSnapshotRef = asOf.market_snapshot_hash
@@ -396,18 +402,31 @@ export async function loadActivePositionManagementContext({
   for (const group of groups.values()) {
     const hasPosition = group.targets.some(row => row.position_id)
     const hasPending = group.targets.some(row => row.pending_ticket && !row.position_id)
-    const safe = { ...group }
-    delete safe.targets
-    // Facts are always present for the corresponding management section. A
-    // null entry is intentional: it makes the fail-closed state explicit to
-    // the model and server validator without exposing terminal identifiers.
-    safe.allowed_evidence_refs = [...new Set([
-      ...(safe.allowed_evidence_refs || []),
-      ...(currentBarRef ? [currentBarRef] : []),
-      ...(currentSnapshotRef ? [currentSnapshotRef] : []),
-    ])]
-    if (hasPosition) positionGroups.push(safe)
-    if (hasPending) pendingGroups.push(safe)
+    // Build independent model sections.  A management group can contain a
+    // filled subscriber position and another subscriber's pending order at
+    // the same time; facts and terminal evidence must never cross sections.
+    const buildModelGroup = kind => {
+      const safe = { ...group,
+        position_facts:kind === 'position' ? [...group.position_facts] : [],
+        pending_order_facts:kind === 'pending' ? [...group.pending_order_facts] : [],
+      }
+      delete safe.targets
+      delete safe.reference_facts_status_by_kind
+      delete safe.allowed_evidence_refs_by_kind
+      // Missing reference facts are represented by reference_facts_status. Do
+      // not add null terminal facts: the model must not infer a broker state
+      // from an absent observer snapshot.
+      const kindEvidenceRefs = group.allowed_evidence_refs_by_kind[kind]
+      safe.allowed_evidence_refs = [...new Set([
+        ...(kindEvidenceRefs || []),
+        ...(currentBarRef ? [currentBarRef] : []),
+        ...(currentSnapshotRef ? [currentSnapshotRef] : []),
+      ])]
+      safe.reference_facts_status = group.reference_facts_status_by_kind[kind]
+      return safe
+    }
+    if (hasPosition) positionGroups.push(buildModelGroup('position'))
+    if (hasPending) pendingGroups.push(buildModelGroup('pending'))
     targets.set(group.management_group_id, group.targets)
   }
   const context = {
@@ -528,8 +547,23 @@ function normalizeMarketAlignment(value) {
   return MARKET_ALIGNMENT_VALUES.has(alignment) ? alignment : null
 }
 
-function groupCurrentFactsAvailable(group) {
-  return String(group?.current_facts_status || 'available').toLowerCase() === 'available'
+function groupDecisionContextAvailable(group) {
+  return String(group?.decision_context_status || '').toLowerCase() === 'available'
+}
+
+function groupReferenceFactsAvailableForEvaluation(group) {
+  const status = String(group?.reference_facts_status || '').toLowerCase()
+  const scope = String(group?.strategy_scope || 'platform').toLowerCase()
+  // A platform model can make a market-level decision when the observer
+  // snapshot is missing; execution still preflights each subscriber account.
+  // A private strategy, however, must fail closed when its own terminal fact
+  // is unavailable because there is no separate anonymous observer source.
+  if (scope === 'private') return status === 'available'
+  return ['available', 'missing', 'unavailable'].includes(status)
+}
+
+function groupManagementFactsAvailable(group) {
+  return groupDecisionContextAvailable(group) && groupReferenceFactsAvailableForEvaluation(group)
 }
 
 function safePendingEvaluation(groupId, reason = '该管理组未通过模型输出校验，服务端按安全默认继续保留挂单') {
@@ -592,7 +626,8 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (!['keep', 'cancel'].includes(action)) throw new Error('pending_action_invalid')
       const marketAlignment = normalizeMarketAlignment(item?.market_alignment)
       if (!marketAlignment) throw new Error('pending_market_alignment_required')
-      if (!groupCurrentFactsAvailable(group)) throw new Error('pending_current_facts_unavailable')
+      if (!groupDecisionContextAvailable(group)) throw new Error('pending_decision_context_unavailable')
+      if (!groupReferenceFactsAvailableForEvaluation(group)) throw new Error('pending_reference_facts_unavailable')
       const rawCancelReasonCode = item?.cancel_reason_code
       const hasCancelReasonCode = rawCancelReasonCode !== undefined && rawCancelReasonCode !== null
         && String(rawCancelReasonCode).trim() !== ''
@@ -625,7 +660,8 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (!['hold', 'exit'].includes(action)) throw new Error('position_action_invalid')
       const marketAlignment = normalizeMarketAlignment(item?.market_alignment)
       if (!marketAlignment) throw new Error('position_market_alignment_required')
-      if (!groupCurrentFactsAvailable(group)) throw new Error('position_current_facts_unavailable')
+      if (!groupDecisionContextAvailable(group)) throw new Error('position_decision_context_unavailable')
+      if (!groupReferenceFactsAvailableForEvaluation(group)) throw new Error('position_reference_facts_unavailable')
       const rawExitReasonCode = item?.exit_reason_code
       const hasExitReasonCode = rawExitReasonCode !== undefined && rawExitReasonCode !== null
         && String(rawExitReasonCode).trim() !== ''
@@ -1061,15 +1097,15 @@ function normalizePersistedManagementEvaluation(evaluation, group, section) {
   const reasonCodeValid = executionAction
     ? MANAGEMENT_REASON_CODE.test(reasonCode)
     : !reasonCode || reasonCode === 'null' || reasonCode === 'none'
-  const invalid = !groupCurrentFactsAvailable(group) || !alignment || !actionAllowed
+  const invalid = !groupManagementFactsAvailable(group) || !alignment || !actionAllowed
     || !reason || !reasonCodeValid
   if (!invalid) return { ...evaluation, market_alignment:alignment }
   if (section === 'position') return safePositionEvaluation(
     evaluation?.management_group_id, group?.thesis_id,
-    '当前终端事实不可用或模型理由不符合行情一致性合同，服务端按安全默认继续持有',
+    '当前决策证据或终端事实不可用，或模型理由不符合行情一致性合同，服务端按安全默认继续持有',
   )
   return safePendingEvaluation(evaluation?.management_group_id,
-    '当前终端事实不可用或模型理由不符合行情一致性合同，服务端按安全默认继续保留挂单')
+    '当前决策证据或终端事实不可用，或模型理由不符合行情一致性合同，服务端按安全默认继续保留挂单')
 }
 
 export async function persistPositionManagementEvaluations({

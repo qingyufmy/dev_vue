@@ -9,7 +9,7 @@ const providerCapabilitiesMock = vi.hoisted(() => ({
   })),
 }))
 vi.mock('../../server/routes/ai/model-provider-capabilities.js', () => providerCapabilitiesMock)
-import { requestJsonObject, resolveConfirmedRequestMaxTokens, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, resolveConfirmedRequestMaxTokens, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS, projectPositionManagementContextForModel } from '../../server/routes/ai/llm.js'
 import { compactRates, DEFAULT_PROMPT } from '../../server/routes/ai/utils.js'
 import { POSITION_MANAGEMENT_CONTRACT_VERSION } from '../../server/routes/ai/position-management.js'
 
@@ -26,6 +26,32 @@ describe('model output budgets', () => {
     const repair = [...initial, { role:'user', content:'b'.repeat(160) }]
     expect(resolveConfirmedRequestMaxTokens(initial, 80, budget)).toBe(80)
     expect(resolveConfirmedRequestMaxTokens(repair, 80, budget)).toBeLessThan(80)
+  })
+})
+
+describe('position management model privacy projection', () => {
+  it('removes execution-only account and broker fields before model serialization', () => {
+    const projected = projectPositionManagementContextForModel({
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+      as_of:{ decision_timeframe:'M15', closed_bar_time_utc_ms:1, market_snapshot_hash:'sha256:x',
+        user_id:28, balance:1000 },
+      pending_groups:[{
+        management_group_id:'group-1', decision_context_status:'available', reference_facts_status:'missing',
+        user_id:28, trading_account_id:3, login_account:'secret', pending_ticket:'O-1',
+        pending_order_facts:[{ source:'platform_reference_portfolio', trigger_price:2000, ticket:'O-1', volume:1, profit:3 }],
+      }],
+      position_groups:[],
+    })
+    const serialized = JSON.stringify(projected)
+    expect(serialized).not.toContain('user_id')
+    expect(serialized).not.toContain('trading_account_id')
+    expect(serialized).not.toContain('login_account')
+    expect(serialized).not.toContain('pending_ticket')
+    expect(serialized).not.toContain('ticket')
+    expect(serialized).not.toContain('volume')
+    expect(serialized).not.toContain('profit')
+    expect(serialized).not.toContain('balance')
+    expect(serialized).toContain('reference_facts_status')
   })
 })
 
@@ -1296,11 +1322,11 @@ describe('maybeAiSignal', () => {
       as_of:asOf,
       pending_groups:[{
         management_group_id:'pending_group_01',
-        current_facts_status:'available',
+        decision_context_status:'available', reference_facts_status:'available',
         allowed_evidence_refs:['bar:M15:1784736900000'],
       }],
       position_groups:[{
-        management_group_id:'position_group_01', thesis_id:'thesis_01', current_facts_status:'available',
+        management_group_id:'position_group_01', thesis_id:'thesis_01', decision_context_status:'available', reference_facts_status:'available',
         allowed_evidence_refs:['bar:M15:1784736900000'],
       }],
     }
@@ -1363,11 +1389,11 @@ describe('maybeAiSignal', () => {
       as_of:asOf,
       pending_groups:[{
         management_group_id:'pending_group_01',
-        current_facts_status:'available',
+        decision_context_status:'available', reference_facts_status:'available',
         allowed_evidence_refs:['bar:M15:1784736900000'],
       }],
       position_groups:[{
-        management_group_id:'position_group_01', thesis_id:'thesis_01', current_facts_status:'available',
+        management_group_id:'position_group_01', thesis_id:'thesis_01', decision_context_status:'available', reference_facts_status:'available',
         allowed_evidence_refs:['bar:M15:1784736900000'],
       }],
     }
@@ -1440,14 +1466,14 @@ describe('maybeAiSignal', () => {
     const positionManagementContext = {
       contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION, as_of:asOf,
       pending_groups:[{
-        management_group_id:'pending_group_01', current_facts_status:'available',
+        management_group_id:'pending_group_01', decision_context_status:'available', reference_facts_status:'available',
         core_entry_reason:'阻力位反转做空', entry_method:'limit', decision_timeframe:'M15', direction:'sell',
         pending_order_facts:[{ source:'private_market', direction:'sell', trigger_price:2050,
           actual_stop_loss:2070, actual_take_profit:1980, order_type:'sell_limit', created_at:'2026-08-07T08:00:00Z' }],
         allowed_evidence_refs:['bar:M15:1784736900000'],
       }],
       position_groups:[{
-        management_group_id:'position_group_01', thesis_id:'thesis_01', current_facts_status:'available',
+        management_group_id:'position_group_01', thesis_id:'thesis_01', decision_context_status:'available', reference_facts_status:'available',
         core_entry_reason:'回踩支撑后做多', entry_method:'market', decision_timeframe:'M15', direction:'buy',
         position_facts:[{ source:'private_market', direction:'buy', entry_price:2000, current_price:2010,
           actual_stop_loss:1985, actual_take_profit:2050, order_type:'position', opened_at:'2026-08-07T08:00:00Z' }],

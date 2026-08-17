@@ -243,6 +243,16 @@ const HISTORY_PREPARE_UNSUPPORTED_CODE = "history_prepare_status_unsupported";
 const HISTORY_PREPARE_RETRY_DELAYS_MS = [200, 400, 800, 1000];
 const _historyTicketMapCache = new Map();
 const _historyTicketMapFlights = new Map();
+// Ticket attribution has a lifecycle independent from the history revision:
+// a newly executed signal can add a ticket without changing the archived
+// history snapshot.  Keep a small, account-scoped epoch so a forced refresh
+// cannot be hidden behind the old history cache key.
+let _ticketMapContextGeneration = 0;
+const _historyTicketMapGenerations = { signal: 0, close: 0 };
+let _signalTicketRefreshTimer = null;
+let _signalTicketRefreshPromise = null;
+let _signalTicketRefreshResolve = null;
+let _signalTicketRefreshDirty = false;
 const HISTORY_FRESHNESS_RETRY_DELAYS_MS = [1000, 2000, 5000, 10000];
 const HISTORY_FRESHNESS_RETRY_MAX_ATTEMPTS = 60;
 // MT4 legacy history can return the visible rows before its SQLite summary is
@@ -2573,6 +2583,20 @@ function stopRealtimeSync() {
 }
 
 function clearAccountContextCaches() {
+  _ticketMapContextGeneration += 1;
+  const abandonedTicketRefreshResolve = _signalTicketRefreshResolve;
+  if (_signalTicketRefreshTimer) {
+    clearTimeout(_signalTicketRefreshTimer);
+    _signalTicketRefreshTimer = null;
+  }
+  // Do not try to cancel the underlying WebSocket request.  Its completion
+  // is guarded by the context generation below, so a late response cannot
+  // write the next account's map.  Clearing the reference allows the new
+  // account to start its own refresh immediately.
+  _signalTicketRefreshPromise = null;
+  _signalTicketRefreshResolve = null;
+  _signalTicketRefreshDirty = false;
+  if (abandonedTicketRefreshResolve) abandonedTicketRefreshResolve();
   cancelHistoryPrepareRetry();
   cancelHistoryLegacySummaryRetry();
   _historyQueryGeneration += 1;
@@ -2589,6 +2613,8 @@ function clearAccountContextCaches() {
   _historyErrorNotices.clear();
   _historyTicketMapCache.clear();
   _historyTicketMapFlights.clear();
+  _historyTicketMapGenerations.signal += 1;
+  _historyTicketMapGenerations.close += 1;
   state.historyRangePreferenceKey = null;
   state.historyRangePreferences = null;
   state.historyRangeMeta = null;
@@ -2601,6 +2627,8 @@ function clearAccountContextCaches() {
   state.mt5TimezoneOffsetMinutes = null;
   state.positions = [];
   state.pendingOrders = [];
+  state.signalTickets = {};
+  state.closeSignalTickets = {};
   state.tradingAccounts = [];
   state.strategySubscriptions = [];
   state.manualTradeReviewAggregateAccountId = null;
@@ -3625,6 +3653,9 @@ function connectBridgeStatusWs(onReady) {
       } else if (msg.type === 'signal_execution_updated') {
         // Execution can complete after the signal itself was pushed. Reload the
         // same signal so pending/executed state disables duplicate submission.
+        // The archived history revision may stay unchanged when a ticket is
+        // attributed, so invalidate the independent ticket map epoch as well.
+        scheduleSignalTicketRefresh();
         const isAnalyst = activeTabId() === "ai-analyze";
         const refreshOptions = isAnalyst
           ? { skipResultRender:true, loadDashboard:false }
@@ -3864,6 +3895,7 @@ function handleBridgeData(msg) {
     updatePnlStyle("tradeAccountProfit", msg.account.profit);
   }
   if (msg.positions) {
+    const previousPositions = state.positions || [];
     const newTickets = new Set(msg.positions.map(p => String(p.ticket)));
     // Remove rows for positions that no longer exist (closed)
     const existingRows = document.querySelectorAll('#positionsBody tr[data-ticket]');
@@ -3887,6 +3919,9 @@ function handleBridgeData(msg) {
     const patched = patchPositionLiveCells(msg.positions);
     state.positions = msg.positions;
     if (!patched) renderPositionTables(msg.positions);
+    if (shouldRefreshSignalTicketMapForPositions(previousPositions, msg.positions)) {
+      scheduleSignalTicketRefresh();
+    }
   }
   _maybeRefreshSignal();
 }
@@ -10417,31 +10452,71 @@ function renderPositionTables(positions = [], { liveOnly = false } = {}) {
   return 'full';
 }
 
-function historyTicketMapKey(kind, historyRevision = _lastHistoryRevision) {
-  return `${kind}|${Number(state._accountContextGeneration || 0)}|${historyRevision == null ? "live" : Number(historyRevision)}`;
+function ticketMapContextSnapshot(kind, historyRevision = _lastHistoryRevision, overrides = {}) {
+  const revision = overrides.historyRevision === undefined ? historyRevision : overrides.historyRevision;
+  return {
+    kind,
+    accountContextGeneration: Number(overrides.accountContextGeneration ?? state._accountContextGeneration ?? 0),
+    ticketMapContextGeneration: Number(overrides.ticketMapContextGeneration ?? _ticketMapContextGeneration),
+    ticketMapGeneration: Number(overrides.ticketMapGeneration ?? _historyTicketMapGenerations[kind] ?? 0),
+    historyRevision: revision == null ? null : Number(revision),
+  };
 }
 
-async function loadHistoryTicketMap(kind, { historyRevision = _lastHistoryRevision, forceRefresh = false } = {}) {
-  const key = historyTicketMapKey(kind, historyRevision);
+function ticketMapContextMatches(context = {}) {
+  return Number(context.accountContextGeneration) === Number(state._accountContextGeneration || 0)
+    && Number(context.ticketMapContextGeneration) === Number(_ticketMapContextGeneration)
+    && Number(context.ticketMapGeneration) === Number(_historyTicketMapGenerations[context.kind] || 0);
+}
+
+function currentTicketMap(kind) {
+  return kind === "signal" ? (state.signalTickets || {}) : (state.closeSignalTickets || {});
+}
+
+function historyTicketMapKey(kind, historyRevision = _lastHistoryRevision, context = {}) {
+  const snapshot = ticketMapContextSnapshot(kind, historyRevision, context);
+  return `${kind}|${snapshot.accountContextGeneration}|${snapshot.ticketMapContextGeneration}|${snapshot.ticketMapGeneration}|${snapshot.historyRevision == null ? "live" : snapshot.historyRevision}`;
+}
+
+async function loadHistoryTicketMap(kind, {
+  historyRevision = _lastHistoryRevision,
+  forceRefresh = false,
+  accountContextGeneration,
+  ticketMapContextGeneration,
+  ticketMapGeneration,
+} = {}) {
+  const context = ticketMapContextSnapshot(kind, historyRevision, {
+    accountContextGeneration,
+    ticketMapContextGeneration,
+    ticketMapGeneration,
+  });
+  const key = historyTicketMapKey(kind, context.historyRevision, context);
+  // A forced refresh must still reuse a same-generation flight.  Otherwise a
+  // burst of execution events can create one request per event.
+  if (_historyTicketMapFlights.has(key)) return _historyTicketMapFlights.get(key);
   if (!forceRefresh && _historyTicketMapCache.has(key)) {
     const tickets = _historyTicketMapCache.get(key);
-    if (kind === "signal") state.signalTickets = tickets;
-    else state.closeSignalTickets = tickets;
-    return tickets;
+    if (ticketMapContextMatches(context)) {
+      if (kind === "signal") state.signalTickets = tickets;
+      else state.closeSignalTickets = tickets;
+      return tickets;
+    }
+    return currentTicketMap(kind);
   }
-  if (!forceRefresh && _historyTicketMapFlights.has(key)) return _historyTicketMapFlights.get(key);
   const action = kind === "signal" ? "signal_tickets" : "close_signal_tickets";
   const run = wsApi(action).then(data => {
-    const tickets = data.tickets || {};
+    const tickets = data?.tickets && typeof data.tickets === "object" ? data.tickets : {};
+    // The account or attribution epoch may have changed while the request was
+    // in flight.  Never let the old response overwrite the current account.
+    if (!ticketMapContextMatches(context)) return currentTicketMap(kind);
     _historyTicketMapCache.set(key, tickets);
     if (kind === "signal") state.signalTickets = tickets;
     else state.closeSignalTickets = tickets;
     return tickets;
   }).catch(() => {
-    const empty = {};
-    if (kind === "signal") state.signalTickets = empty;
-    else state.closeSignalTickets = empty;
-    return empty;
+    // Keep the last known mapping on transient failures.  A later execution
+    // event or explicit refresh can retry without a visible unlinking flash.
+    return currentTicketMap(kind);
   }).finally(() => { if (_historyTicketMapFlights.get(key) === run) _historyTicketMapFlights.delete(key); });
   _historyTicketMapFlights.set(key, run);
   return run;
@@ -10455,6 +10530,78 @@ async function loadCloseSignalTickets(options = {}) {
   return loadHistoryTicketMap("close", options);
 }
 
+function signalTicketMapHasTicket(ticket) {
+  const value = currentTicketMap("signal")[String(ticket ?? "")];
+  return value !== undefined && value !== null && String(value) !== "";
+}
+
+function shouldRefreshSignalTicketMapForPositions(previousPositions = [], nextPositions = []) {
+  if (positionStructureMatches(previousPositions, nextPositions)) return false;
+  return nextPositions.some(position => !signalTicketMapHasTicket(position?.ticket));
+}
+
+function invalidateTicketMapCache(kind) {
+  const prefix = `${kind}|`;
+  for (const key of _historyTicketMapCache.keys()) {
+    if (String(key).startsWith(prefix)) _historyTicketMapCache.delete(key);
+  }
+}
+
+function scheduleSignalTicketRefresh({ immediate = false } = {}) {
+  if (_signalTicketRefreshPromise) {
+    // A timer that has not fired yet already represents the latest merged
+    // event. Once a request is in flight, mark the serial drain dirty so every
+    // later execution event is covered before the outer promise resolves.
+    if (!_signalTicketRefreshTimer) _signalTicketRefreshDirty = true;
+    return _signalTicketRefreshPromise;
+  }
+  const delayMs = immediate ? 0 : 16;
+  let resolveRefresh;
+  const promise = new Promise(resolve => { resolveRefresh = resolve; });
+  _signalTicketRefreshResolve = resolveRefresh;
+  const run = async () => {
+    while (true) {
+      const context = ticketMapContextSnapshot("signal");
+      invalidateTicketMapCache("signal");
+      context.ticketMapGeneration = ++_historyTicketMapGenerations.signal;
+      // A trigger received while the request below is pending sets this flag;
+      // consume it here so each pass drains exactly the events that preceded
+      // its request.  Any new trigger during the request sets it again and
+      // causes one more serial pass below.
+      _signalTicketRefreshDirty = false;
+      await loadSignalTickets({
+        historyRevision: _lastHistoryRevision,
+        forceRefresh: true,
+        accountContextGeneration: context.accountContextGeneration,
+        ticketMapContextGeneration: context.ticketMapContextGeneration,
+        ticketMapGeneration: context.ticketMapGeneration,
+      });
+      if (ticketMapContextMatches(context)) renderPositionTables(state.positions || []);
+      if (_signalTicketRefreshPromise === promise && _signalTicketRefreshDirty) continue;
+      if (_signalTicketRefreshPromise === promise) {
+        _signalTicketRefreshDirty = false;
+        _signalTicketRefreshPromise = null;
+        _signalTicketRefreshResolve = null;
+      }
+      resolveRefresh();
+      return;
+    }
+  };
+  _signalTicketRefreshTimer = setTimeout(() => {
+    _signalTicketRefreshTimer = null;
+    run().catch(() => {
+      if (_signalTicketRefreshPromise === promise) {
+        _signalTicketRefreshDirty = false;
+        _signalTicketRefreshPromise = null;
+        _signalTicketRefreshResolve = null;
+      }
+      resolveRefresh();
+    });
+  }, delayMs);
+  _signalTicketRefreshPromise = promise;
+  return promise;
+}
+
 function ticketCell(ticket, signalTickets) {
   const signalId = signalTickets[String(ticket)];
   if (signalId) {
@@ -10464,11 +10611,19 @@ function ticketCell(ticket, signalTickets) {
 }
 
 async function loadPositions({ refreshSignalTickets = true, liveOnly = false } = {}) {
+  const accountContextGeneration = Number(state._accountContextGeneration || 0);
+  const ticketMapContextGeneration = Number(_ticketMapContextGeneration);
+  const previousPositions = state.positions || [];
   const requests = [wsApi("positions", {})];
   if (refreshSignalTickets) requests.push(loadSignalTickets());
   const [data] = await Promise.all(requests);
+  if (accountContextGeneration !== Number(state._accountContextGeneration || 0)
+    || ticketMapContextGeneration !== Number(_ticketMapContextGeneration)) return;
   const positions = data.positions || [];
   renderPositionTables(positions, { liveOnly });
+  if (shouldRefreshSignalTicketMapForPositions(previousPositions, positions)) {
+    scheduleSignalTicketRefresh();
+  }
 }
 
 /* ---- Sidebar 观摩提示 ---- */

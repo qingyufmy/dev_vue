@@ -230,6 +230,142 @@ async function runHistoryTicketBindingScenario() {
   return harness()
 }
 
+function runRealtimeSignalTicketScenario() {
+  const helperStart = app.indexOf('function ticketMapContextSnapshot')
+  const helperEnd = app.indexOf('/* ---- Sidebar 观摩提示 ---- */', helperStart)
+  expect(helperStart).toBeGreaterThanOrEqual(0)
+  expect(helperEnd).toBeGreaterThan(helperStart)
+  const harness = new Function(`
+    const requests = []
+    const renders = []
+    let _lastHistoryRevision = 7
+    let _ticketMapContextGeneration = 0
+    const _historyTicketMapGenerations = { signal:0, close:0 }
+    const _historyTicketMapCache = new Map()
+    const _historyTicketMapFlights = new Map()
+    let _signalTicketRefreshTimer = null
+    let _signalTicketRefreshPromise = null
+    let _signalTicketRefreshDirty = false
+    let activeRequests = 0
+    let maxConcurrentRequests = 0
+    const state = {
+      _accountContextGeneration:0,
+      signalTickets:{},
+      closeSignalTickets:{},
+      positions:[],
+    }
+    function wsApi(action) {
+      if (!['signal_tickets', 'positions'].includes(action)) throw new Error('unexpected action')
+      const request = { action, resolve:null, reject:null }
+      requests.push(request)
+      return new Promise((resolve, reject) => {
+        activeRequests += 1
+        maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests)
+        request.resolve = value => { activeRequests -= 1; resolve(value) }
+        request.reject = error => { activeRequests -= 1; reject(error) }
+      })
+    }
+    function renderPositionTables(positions) {
+      renders.push({ tickets:Object.keys(state.signalTickets), positions:positions.map(item => item.ticket) })
+    }
+    function escapeHtml(value) { return String(value) }
+    function positionStructureMatches(current = [], next = []) {
+      const signature = position => JSON.stringify([
+        String(position.ticket ?? ''), String(position.symbol ?? ''), String(position.type ?? '').toLowerCase(),
+        Number(position.volume), Number(position.price_open), String(position.time ?? ''),
+        Number(position.sl), Number(position.tp), Number(position.magic), Number(position.digits ?? 2),
+      ])
+      return current.length === next.length && current.every((position, index) => signature(position) === signature(next[index]))
+    }
+    ${app.slice(helperStart, helperEnd)}
+    return (async () => {
+      const newPosition = { ticket:'T-1', symbol:'XAUUSD', type:'buy', volume:1, price_open:1, time:'t', sl:0, tp:0, magic:234000, digits:2 }
+      const oldPosition = { ...newPosition, ticket:'T-0' }
+      state.positions = [oldPosition]
+      const needsNewTicket = shouldRefreshSignalTicketMapForPositions(state.positions, [newPosition])
+      const initialTicketCell = ticketCell('T-1', state.signalTickets)
+      const first = scheduleSignalTicketRefresh({ immediate:true })
+      const second = scheduleSignalTicketRefresh({ immediate:true })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const coalescedRequests = requests.length
+      requests[0].resolve({ tickets:{ 'T-1':77 } })
+      await Promise.all([first, second])
+      const linkedAfterExecution = ticketCell('T-1', state.signalTickets)
+
+      state.signalTickets = {}
+      const inFlight = scheduleSignalTicketRefresh({ immediate:true })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const firstInFlightRequest = requests.at(-1)
+      const trailingTrigger = scheduleSignalTicketRefresh({ immediate:true })
+      firstInFlightRequest.resolve({ tickets:{ 'T-1':77 } })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const trailingRequest = requests.at(-1)
+      const thirdTrigger = scheduleSignalTicketRefresh({ immediate:true })
+      trailingRequest.resolve({ tickets:{ 'T-2':78 } })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const thirdRequest = requests.at(-1)
+      thirdRequest.resolve({ tickets:{ 'T-3':79 } })
+      await Promise.all([inFlight, trailingTrigger, thirdTrigger])
+      const trailingRefreshRequestCount = requests.length
+      const trailingTicketMap = { ...state.signalTickets }
+
+      state.signalTickets = { 'T-1':77 }
+      const stale = scheduleSignalTicketRefresh({ immediate:true })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const oldRequest = requests.at(-1)
+      state._accountContextGeneration = 1
+      _ticketMapContextGeneration += 1
+      state.signalTickets = { 'T-2':88 }
+      oldRequest.resolve({ tickets:{ 'T-1':99 } })
+      await stale
+      const oldResponseWasIgnored = JSON.stringify(state.signalTickets) === JSON.stringify({ 'T-2':88 })
+
+      const retry = scheduleSignalTicketRefresh({ immediate:true })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      requests.at(-1).reject(new Error('temporary'))
+      await retry
+      const preservedAfterFailure = JSON.stringify(state.signalTickets) === JSON.stringify({ 'T-2':88 })
+      const retryAgain = scheduleSignalTicketRefresh({ immediate:true })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const retryRequestCount = requests.length
+      requests.at(-1).resolve({ tickets:{ 'T-2':101 } })
+      await retryAgain
+      const priceOnly = shouldRefreshSignalTicketMapForPositions(
+        [newPosition],
+        [{ ...newPosition, price_current:2, profit:3 }],
+      )
+      const requestsBeforePriceOnly = requests.length
+      if (priceOnly) await scheduleSignalTicketRefresh({ immediate:true })
+      const priceOnlyRequests = requests.length - requestsBeforePriceOnly
+      const renderCountBeforePositionLoad = renders.length
+      const positionLoad = loadPositions({ refreshSignalTickets:false })
+      const positionRequest = requests.at(-1)
+      state._accountContextGeneration = 2
+      _ticketMapContextGeneration += 1
+      state.positions = [newPosition]
+      positionRequest.resolve({ positions:[oldPosition] })
+      await positionLoad
+      return {
+        needsNewTicket,
+        initialTicketCell,
+        coalescedRequests,
+        linkedAfterExecution,
+        trailingRefreshRequestCount,
+        trailingTicketMap,
+        maxConcurrentRequests,
+        renders,
+        oldResponseWasIgnored,
+        preservedAfterFailure,
+        retryRequestCount,
+        priceOnly,
+        priceOnlyRequests,
+        oldPositionResponseWasIgnored:renders.length === renderCountBeforePositionLoad,
+      }
+    })()
+  `)
+  return harness()
+}
+
 describe('AI laboratory demand-driven frontend loading contract', () => {
   it('loads the dashboard in status, symbols, then dashboard-data order', () => {
     const initial = block('async function loadInitialDashboard()', 'let _refreshAllPromise')
@@ -394,6 +530,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
 
   it('uses summary-only updates outside the analyst page and preserves selected details there', () => {
     const execution = block("} else if (msg.type === 'signal_execution_updated')", "} else if (msg.type === 'weekly_flatten_state')")
+    expect(execution).toContain('scheduleSignalTicketRefresh()')
     expect(execution).toContain('{ limit:1, summaryOnly:true, skipResultRender:true }')
     expect(execution).toContain('{ skipResultRender:true, loadDashboard:false }')
     expect(execution).toContain('openAnalysisFromHistory(msg.signal_id')
@@ -464,6 +601,25 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
       'map-request:signal:41', 'map-request:close:41',
       'map-ready:signal:41', 'map-ready:close:41',
     ])
+  })
+
+  it('refreshes realtime position ticket links without F5 and guards generation races', async () => {
+    const result = await runRealtimeSignalTicketScenario()
+
+    expect(result.needsNewTicket).toBe(true)
+    expect(result.initialTicketCell).not.toContain('<a ')
+    expect(result.coalescedRequests).toBe(1)
+    expect(result.linkedAfterExecution).toContain('openAnalysisFromHistory(77')
+    expect(result.trailingRefreshRequestCount).toBe(4)
+    expect(result.trailingTicketMap).toEqual({ 'T-3':79 })
+    expect(result.maxConcurrentRequests).toBe(1)
+    expect(result.renders[0]).toEqual({ tickets:['T-1'], positions:['T-0'] })
+    expect(result.oldResponseWasIgnored).toBe(true)
+    expect(result.preservedAfterFailure).toBe(true)
+    expect(result.retryRequestCount).toBe(7)
+    expect(result.priceOnly).toBe(false)
+    expect(result.priceOnlyRequests).toBe(0)
+    expect(result.oldPositionResponseWasIgnored).toBe(true)
   })
 
   it('accepts only a safe fixed range from an incomplete-history response', () => {

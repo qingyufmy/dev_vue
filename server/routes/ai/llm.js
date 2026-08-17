@@ -99,6 +99,59 @@ function stripPositionManagementNonMarketInputs(payload) {
   return payload
 }
 
+// Position-management targets contain account, ownership and broker ticket
+// fields for the execution worker.  Keep model serialization on an explicit
+// anonymous projection so a future context field cannot accidentally widen
+// the shared strategy prompt.
+const POSITION_MANAGEMENT_MODEL_GROUP_FIELDS = [
+  'management_group_id', 'thesis_id', 'strategy_id', 'strategy_version', 'strategy_scope',
+  'standard_symbol', 'direction', 'original_signal_id', 'core_entry_reason', 'entry_method',
+  'decision_timeframe', 'original_stop_loss', 'original_take_profits', 'allowed_evidence_refs',
+  'decision_context_status', 'reference_facts_status',
+]
+const POSITION_MANAGEMENT_MODEL_FACT_FIELDS = [
+  'source', 'kind', 'direction', 'order_type', 'entry_price', 'trigger_price', 'current_price',
+  'actual_stop_loss', 'actual_take_profit', 'original_stop_loss', 'original_take_profits',
+  'opened_at', 'created_at',
+]
+
+function projectPositionManagementFact(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return Object.fromEntries(POSITION_MANAGEMENT_MODEL_FACT_FIELDS
+    .filter(key => Object.prototype.hasOwnProperty.call(value, key))
+    .map(key => [key, value[key]]))
+}
+
+function projectPositionManagementGroup(group) {
+  if (!group || typeof group !== 'object' || Array.isArray(group)) return group
+  const projected = Object.fromEntries(POSITION_MANAGEMENT_MODEL_GROUP_FIELDS
+    .filter(key => Object.prototype.hasOwnProperty.call(group, key))
+    .map(key => [key, group[key]]))
+  for (const key of ['position_facts', 'pending_order_facts']) {
+    if (Array.isArray(group[key])) {
+      projected[key] = group[key].map(projectPositionManagementFact)
+        .filter(item => item && Object.keys(item).length > 0)
+    }
+  }
+  return projected
+}
+
+export function projectPositionManagementContextForModel(context) {
+  if (!context || typeof context !== 'object' || Array.isArray(context)) return context
+  return {
+    contract_version:context.contract_version,
+    as_of:context.as_of && typeof context.as_of === 'object' ? {
+      decision_timeframe:context.as_of.decision_timeframe,
+      closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms,
+      market_snapshot_hash:context.as_of.market_snapshot_hash,
+    } : context.as_of,
+    pending_groups:Array.isArray(context.pending_groups)
+      ? context.pending_groups.map(projectPositionManagementGroup) : [],
+    position_groups:Array.isArray(context.position_groups)
+      ? context.position_groups.map(projectPositionManagementGroup) : [],
+  }
+}
+
 export function formatPendingValidUntilUtc(validMinutes, nowMs = Date.now()) {
   const minutes = Math.min(Math.max(parseInt(validMinutes) || 240, 1), 1440)
   return new Date(nowMs + minutes * 60000).toISOString().replace('T', ' ').substring(0, 19)
@@ -1193,7 +1246,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const positionManagementRule = positionManagementEnabled ? `
 
 ## 持仓与挂单管理输出合同
-position_management_context 是服务端提供的去身份化实时事实。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。如何判断保留、取消、持有或退出只以当前策略正文和输入事实为准。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、手数或盈亏。` : ''
+position_management_context 是服务端提供的去身份化实时事实。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。decision_context_status=available 表示冻结入场论点、决策周期和闭合K线证据完整；否则只能按安全默认保留。reference_facts_status=missing 或 unavailable 只表示观摩源当前没有可用的匿名终端事实，不代表管理组消失；当 decision_context_status=available 时，仍可依据冻结论点、当前闭合行情和允许的 bar/snapshot evidence_refs 判断取消或退出。不得伪造不存在的终端事实，也不得引用 subscriber terminal ref。如何判断保留、取消、持有或退出只以当前策略正文和输入事实为准。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、手数或盈亏。` : ''
     const declaredIndicators = market?.strategy_context?.indicators
     const managedEma34Identity = declaredIndicators && Object.hasOwn(declaredIndicators, 'ema34')
       ? ' strategy_context.indicators.ema34 是系统按策略声明计算的 EMA34 数据。'
@@ -1278,12 +1331,7 @@ position_management_context 是服务端提供的去身份化实时事实。每�
     delete aiPayload.atr_anchor_tf
     if (positionManagementEnabled) {
       aiPayload = stripPositionManagementNonMarketInputs(aiPayload)
-      aiPayload.position_management_context = {
-        contract_version:positionManagementContext.contract_version,
-        as_of:positionManagementContext.as_of,
-        pending_groups:positionManagementContext.pending_groups,
-        position_groups:positionManagementContext.position_groups,
-      }
+      aiPayload.position_management_context = projectPositionManagementContextForModel(positionManagementContext)
     }
     if (typeof config._comparison_replay_user_prompt !== 'string') {
       aiPayload.strategy_memory_library = {
