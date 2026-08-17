@@ -187,6 +187,15 @@ const state = {
   manualTradeReviewAggregateLoading: false,
   manualTradeReviewAggregateError: "",
   manualTradeReviewAggregatePollTimer: null,
+  manualTradeReviewAggregatePollGeneration: 0,
+  manualTradeReviewAggregatePollRetryAttempt: 0,
+  manualTradeReviewAggregatePollWaitingForVisible: false,
+  manualTradeReviewAggregatePollInFlight: false,
+  manualTradeReviewAggregateSubmitting: false,
+  manualTradeReviewAggregateClientRequestId: null,
+  manualTradeReviewAggregateAccountId: null,
+  manualTradeReviewAggregateStrategyId: null,
+  manualTradeReviewAggregateContextVersion: 0,
   manualTradeReviewClientRequestId: null,
   manualTradeReviewHistoryOffset: 0,
   manualTradeReviewHistoryPageSize: 20,
@@ -707,6 +716,37 @@ const REASON_MAP = {
   manual_trade_review_mt4_visible_history_incomplete: "MT4 只复盘终端当前可见历史，请在 MT4“账户历史”中选择“全部历史”后刷新；系统不会宣称券商全量历史",
   manual_trade_review_mt4_visible_history_unknown: "当前 MT4 桥接未提供可见历史完整性证明，请升级桥接并在 MT4“账户历史”中选择“全部历史”后刷新",
   manual_trade_review_source_changed: "订单来源或冻结交易历史已发生变化，请刷新后重新选择",
+  manual_trade_review_aggregate_not_found: "综合复盘任务不存在或已失效，请刷新综合复盘历史",
+  manual_trade_review_aggregate_forbidden: "当前账号无权查看这条综合复盘任务",
+  manual_trade_review_aggregate_generation_failed: "综合复盘生成失败，请检查模型配置后重试",
+  manual_trade_review_aggregate_retry_not_allowed: "当前综合复盘状态不支持重试",
+  manual_trade_review_aggregate_source_count_invalid: "综合复盘至少选择 2 条、最多选择 20 条固定版本",
+  manual_trade_review_aggregate_source_invalid: "综合复盘来源格式无效，请重新选择固定复盘版本",
+  manual_trade_review_aggregate_source_duplicate: "综合复盘包含重复来源，请重新选择固定复盘版本",
+  manual_trade_review_aggregate_source_version_duplicate: "同一复盘不能重复选择多个版本，请重新选择",
+  manual_trade_review_aggregate_source_not_completed: "所选复盘尚未生成可用固定版本，请刷新后重新选择",
+  manual_trade_review_aggregate_source_changed: "所选复盘版本已发生变化，请刷新综合复盘来源",
+  manual_trade_review_aggregate_source_set_changed: "综合复盘来源集合已变化，请刷新后重新选择",
+  manual_trade_review_aggregate_frozen_source_set_changed: "综合复盘固定来源已变化，已停止继续生成",
+  manual_trade_review_aggregate_source_account_mismatch: "所选复盘不属于当前交易账户，请重新选择账号",
+  manual_trade_review_aggregate_source_strategy_mismatch: "所选复盘不属于当前策略，请重新选择策略",
+  manual_trade_review_aggregate_source_owner_mismatch: "所选复盘不属于当前账号",
+  manual_trade_review_aggregate_client_request_id_invalid: "综合复盘请求编号无效，请重新提交",
+  manual_trade_review_aggregate_context_required: "请选择交易账户和平台策略后，再开始综合分析",
+  manual_trade_review_aggregate_idempotency_conflict: "该综合复盘请求编号对应了不同来源，请检查选择后重试",
+  manual_trade_review_aggregate_model_provider_unavailable: "当前没有可用的综合复盘模型，请先配置平台模型",
+  manual_trade_review_aggregate_model_task_conflict: "综合复盘模型任务已被其他生成流程占用，请刷新后重试",
+  manual_trade_review_aggregate_model_task_terminal_requires_retry: "上一轮综合复盘模型任务已终止，请人工重试新一代任务",
+  manual_trade_review_aggregate_status_unknown: "综合复盘状态暂时无法确认，请人工重试新一代任务",
+  manual_trade_review_aggregate_model_input_limit_exceeded: "所选复盘内容超出模型输入限制，请减少来源后重试",
+  manual_trade_review_aggregate_output_budget_insufficient: "当前模型输出额度不足，请调整模型配置后重试",
+  manual_trade_review_aggregate_model_task_missing: "综合复盘模型任务不存在，请人工重试新一代任务",
+  manual_trade_review_aggregate_deadline_exceeded: "综合复盘已超过生成期限，请人工重试新一代任务",
+  manual_trade_review_aggregate_model_runtime_invalid: "综合复盘模型运行配置无效，请检查模型配置后重试",
+  manual_trade_review_aggregate_model_runtime_changed: "综合复盘模型配置在生成期间发生变化，请人工重试新一代任务",
+  manual_trade_review_aggregate_lease_lost: "综合复盘生成租约已失效，请刷新后人工重试",
+  manual_trade_review_aggregate_frozen_model_input_changed: "综合复盘冻结输入已变化，已停止继续生成",
+  manual_trade_review_aggregate_frozen_model_changed: "本轮综合复盘冻结的模型配置已变化，请人工重试新一代任务",
   manual_trade_review_output_evidence_quality_invalid: "模型返回的证据质量与冻结证据不一致，请重试生成",
   manual_trade_review_evidence_quality_invalid: "模型返回的证据质量无效，请重试生成",
   manual_trade_review_job_not_found: "复盘生成任务不存在或已失效，请刷新复盘历史",
@@ -2563,6 +2603,11 @@ function clearAccountContextCaches() {
   state.pendingOrders = [];
   state.tradingAccounts = [];
   state.strategySubscriptions = [];
+  state.manualTradeReviewAggregateAccountId = null;
+  state.manualTradeReviewAggregateStrategyId = null;
+  state.manualTradeReviewAggregateMode = false;
+  state.manualTradeReviewAggregateSubmitting = false;
+  resetManualTradeReviewAggregateContextState();
   state.signals = [];
   state.selectedSignal = null;
   state.latestSignalId = null;
@@ -3987,12 +4032,14 @@ document.addEventListener("visibilitychange", () => {
     stopUiTimer();
     stopLiveQuoteRefreshTimer();
     stopKlineRefreshTimers();
+    pauseManualTradeReviewAggregatePolling();
   } else {
     void refreshNotificationSummary();
     startUiTimer();
     startLiveQuoteRefreshTimer();
     scheduleBridgeDataRefresh();
     resumeManualTradeReviewPolling();
+    resumeManualTradeReviewAggregatePolling();
     if (activeTabId() === "dashboard") {
       loadKlineData().catch(() => {});
       startKlineRefreshTimer();
@@ -6598,7 +6645,7 @@ const MANUAL_TRADE_REVIEW_TERMINAL_JOBS = new Set(["succeeded", "failed", "cance
 
 function manualTradeReviewStatusLabel(value) {
   return ({
-    queued:"已进入队列", preparing:"准备证据", generating:"AI 分析中", counterfactual_analysis:"开仓前盲测",
+    queued:"已进入队列", preparing:"准备证据", generating:"AI 分析中", model_aggregation:"正在综合分析", counterfactual_analysis:"开仓前盲测",
     outcome_review:"事后盈利复盘", validating:"校验结果",
     repairing:"修复输出", retry_wait:"等待重试", completed:"生成完成", succeeded:"生成完成",
     draft:"待确认", edited:"已修改", needs_revision:"需要修改", approved:"已确认",
@@ -6631,7 +6678,7 @@ function manualTradeReviewStatusTone(value) {
   const status = String(value || "").toLowerCase();
   if (["approved", "succeeded", "completed"].includes(status)) return "success";
   if (["failed", "needs_revision", "incomplete", "cancelled"].includes(status)) return "danger";
-  if (["draft", "edited", "queued", "preparing", "generating", "running", "leased", "counterfactual_analysis", "outcome_review", "validating", "retry_wait"].includes(status)) return "warning";
+  if (["draft", "edited", "queued", "preparing", "generating", "model_aggregation", "running", "leased", "counterfactual_analysis", "outcome_review", "validating", "retry_wait"].includes(status)) return "warning";
   return "info";
 }
 
@@ -6671,6 +6718,10 @@ function manualTradeReviewHandleForbidden(error) {
   state.manualTradeReviewAggregateMode = false;
   state.manualTradeReviewAggregateSelection = [];
   state.manualTradeReviewAggregateDetail = null;
+  state.manualTradeReviewAggregateAccountId = null;
+  state.manualTradeReviewAggregateStrategyId = null;
+  state.manualTradeReviewAggregateSubmitting = false;
+  manualTradeReviewAggregateResetClientRequestId();
   stopManualTradeReviewAggregatePolling();
   stopManualTradeReviewPolling();
   applyRoleUI();
@@ -6953,9 +7004,93 @@ function manualTradeReviewAggregateSourceRef(item) {
   return `case:${Number(item?.case_id || 0)}:version:${Number(item?.version_id || 0)}:hash:${String(item?.content_hash || "")}`;
 }
 
+function manualTradeReviewAggregateBuildClientRequestId() {
+  try { if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID(); } catch {}
+  return `manual-review-aggregate-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function manualTradeReviewAggregateEnsureClientRequestId() {
+  if (!state.manualTradeReviewAggregateClientRequestId) state.manualTradeReviewAggregateClientRequestId = manualTradeReviewAggregateBuildClientRequestId();
+  return state.manualTradeReviewAggregateClientRequestId;
+}
+
+function manualTradeReviewAggregateResetClientRequestId() {
+  state.manualTradeReviewAggregateClientRequestId = null;
+}
+
+function manualTradeReviewAggregateCurrentContext() {
+  const account = currentSubscriptionAccount();
+  const accountId = Number(state.manualTradeReviewAggregateAccountId
+    || account?.id
+    || state.manualTradeReviewDetail?.trading_account_id
+    || 0) || 0;
+  const strategyId = Number(state.manualTradeReviewAggregateStrategyId
+    || state.manualTradeReviewStrategyId
+    || $("manualTradeReviewStrategy")?.value
+    || state.manualTradeReviewDetail?.strategy_id
+    || 0) || 0;
+  return { accountId, strategyId };
+}
+
+function manualTradeReviewAggregateStrategyOptions() {
+  const source = state.manualTradeReviewStrategies?.length
+    ? state.manualTradeReviewStrategies
+    : (state.strategies || []).filter(item => item.scope === "platform");
+  return source.filter(item => item.visibility_status !== "archived" && Number(item.is_active ?? 1) !== 0);
+}
+
+function manualTradeReviewAggregateContextError({ accountId, strategyId } = manualTradeReviewAggregateCurrentContext()) {
+  if (!accountId && !strategyId) return "请选择交易账户和平台策略后，再开始综合分析";
+  if (!accountId) return "请选择用于综合分析的交易账户";
+  if (!strategyId) return "请选择用于综合分析的平台策略";
+  return "";
+}
+
+function resetManualTradeReviewAggregateContextState() {
+  stopManualTradeReviewAggregatePolling();
+  manualTradeReviewAggregateResetClientRequestId();
+  state.manualTradeReviewAggregateSelection = [];
+  state.manualTradeReviewAggregateEligible = [];
+  state.manualTradeReviewAggregates = [];
+  state.manualTradeReviewAggregateDetail = null;
+  state.manualTradeReviewAggregateError = "";
+  state.manualTradeReviewAggregateContextVersion += 1;
+}
+
+function setManualTradeReviewAggregateContext({ accountId, strategyId, reload = true } = {}) {
+  const nextAccountId = accountId === undefined
+    ? state.manualTradeReviewAggregateAccountId
+    : Number(accountId || 0) || null;
+  const nextStrategyId = strategyId === undefined
+    ? state.manualTradeReviewAggregateStrategyId
+    : Number(strategyId || 0) || null;
+  const changed = Number(state.manualTradeReviewAggregateAccountId || 0) !== Number(nextAccountId || 0)
+    || Number(state.manualTradeReviewAggregateStrategyId || 0) !== Number(nextStrategyId || 0);
+  state.manualTradeReviewAggregateAccountId = nextAccountId;
+  state.manualTradeReviewAggregateStrategyId = nextStrategyId;
+  if (!changed) return Promise.resolve();
+  resetManualTradeReviewAggregateContextState();
+  renderManualTradeReviewAggregateHistory();
+  renderManualTradeReviewAggregateDetail();
+  if (reload && state.manualTradeReviewAggregateMode) return loadManualTradeReviewAggregateSources();
+  return Promise.resolve();
+}
+
 function stopManualTradeReviewAggregatePolling() {
   if (state.manualTradeReviewAggregatePollTimer) clearTimeout(state.manualTradeReviewAggregatePollTimer);
   state.manualTradeReviewAggregatePollTimer = null;
+  state.manualTradeReviewAggregatePollGeneration += 1;
+  state.manualTradeReviewAggregatePollRetryAttempt = 0;
+  state.manualTradeReviewAggregatePollWaitingForVisible = false;
+  state.manualTradeReviewAggregatePollInFlight = false;
+}
+
+function pauseManualTradeReviewAggregatePolling() {
+  if (state.manualTradeReviewAggregatePollTimer) clearTimeout(state.manualTradeReviewAggregatePollTimer);
+  state.manualTradeReviewAggregatePollTimer = null;
+  if (state.manualTradeReviewAggregateDetail && manualTradeReviewAggregateShouldPoll(state.manualTradeReviewAggregateDetail)) {
+    state.manualTradeReviewAggregatePollWaitingForVisible = true;
+  }
 }
 
 function manualTradeReviewAggregateShouldPoll(detail) {
@@ -6963,16 +7098,70 @@ function manualTradeReviewAggregateShouldPoll(detail) {
   return ["queued", "generating"].includes(status);
 }
 
-function scheduleManualTradeReviewAggregatePolling() {
-  stopManualTradeReviewAggregatePolling();
+const MANUAL_TRADE_REVIEW_AGGREGATE_POLL_MAX_RETRY_DELAY_MS = 30_000;
+
+function manualTradeReviewAggregatePollDelayMs({ immediate = false } = {}) {
+  if (immediate) return 0;
+  const attempt = Number(state.manualTradeReviewAggregatePollRetryAttempt || 0);
+  if (!attempt) return MANUAL_TRADE_REVIEW_POLL_INTERVAL_MS;
+  return Math.min(MANUAL_TRADE_REVIEW_POLL_INTERVAL_MS * (2 ** Math.min(attempt, 4)), MANUAL_TRADE_REVIEW_AGGREGATE_POLL_MAX_RETRY_DELAY_MS);
+}
+
+function manualTradeReviewAggregatePollErrorIsTerminal(error) {
+  const code = String(error?.code || error?.message || "");
+  return Number(error?.status) === 401 || Number(error?.status) === 403
+    || /aggregate_(not_found|forbidden|source_changed|source_set_changed|frozen_source_set_changed|source_(?:account|strategy)_mismatch|retry_not_allowed)/.test(code);
+}
+
+function manualTradeReviewAggregateHandlePollError(error, generation) {
+  if (generation !== state.manualTradeReviewAggregatePollGeneration) return;
+  if (Number(error?.status) === 401 || Number(error?.status) === 403) {
+    state.manualTradeReviewAggregateError = localizeReason(error.code || error.message);
+    stopManualTradeReviewAggregatePolling();
+    renderManualTradeReviewAggregateDetail();
+    return;
+  }
+  if (manualTradeReviewAggregatePollErrorIsTerminal(error)) {
+    state.manualTradeReviewAggregateError = localizeReason(error.code || error.message || "manual_trade_review_aggregate_generation_failed");
+    stopManualTradeReviewAggregatePolling();
+    renderManualTradeReviewAggregateDetail();
+    return;
+  }
+  state.manualTradeReviewAggregatePollRetryAttempt = Math.min(Number(state.manualTradeReviewAggregatePollRetryAttempt || 0) + 1, 8);
+  state.manualTradeReviewAggregateError = "综合复盘状态暂时无法读取，系统会自动重试";
+  renderManualTradeReviewAggregateDetail();
+  scheduleManualTradeReviewAggregatePolling(state.manualTradeReviewAggregateDetail);
+}
+
+function scheduleManualTradeReviewAggregatePolling(detail, { immediate = false } = {}) {
+  if (state.manualTradeReviewAggregatePollTimer) clearTimeout(state.manualTradeReviewAggregatePollTimer);
+  state.manualTradeReviewAggregatePollTimer = null;
   const id = Number(state.manualTradeReviewAggregateDetail?.aggregate_case?.id || 0);
   if (!id || !manualTradeReviewAggregateShouldPoll(state.manualTradeReviewAggregateDetail)) return;
+  if (document.visibilityState === "hidden") {
+    state.manualTradeReviewAggregatePollWaitingForVisible = true;
+    state.manualTradeReviewAggregatePollTimer = null;
+    return;
+  }
+  state.manualTradeReviewAggregatePollWaitingForVisible = false;
+  const generation = state.manualTradeReviewAggregatePollGeneration;
+  const contextVersion = state.manualTradeReviewAggregateContextVersion;
+  const delay = manualTradeReviewAggregatePollDelayMs({ immediate });
   state.manualTradeReviewAggregatePollTimer = setTimeout(() => {
-    openManualTradeReviewAggregate(id, { silent:true }).catch(error => {
-      state.manualTradeReviewAggregateError = localizeReason(error.code || error.message);
-      renderManualTradeReviewAggregateDetail();
-    });
-  }, MANUAL_TRADE_REVIEW_POLL_INTERVAL_MS);
+    state.manualTradeReviewAggregatePollTimer = null;
+    if (generation !== state.manualTradeReviewAggregatePollGeneration || contextVersion !== state.manualTradeReviewAggregateContextVersion) return;
+    if (document.visibilityState === "hidden") {
+      state.manualTradeReviewAggregatePollWaitingForVisible = true;
+      return;
+    }
+    openManualTradeReviewAggregate(id, { silent:true }).catch(error => manualTradeReviewAggregateHandlePollError(error, generation));
+  }, delay);
+}
+
+function resumeManualTradeReviewAggregatePolling() {
+  if (document.visibilityState === "hidden") return;
+  if (!state.manualTradeReviewAggregateDetail || !manualTradeReviewAggregateShouldPoll(state.manualTradeReviewAggregateDetail)) return;
+  scheduleManualTradeReviewAggregatePolling(state.manualTradeReviewAggregateDetail, { immediate:true });
 }
 
 function renderManualTradeReviewAggregateHistory() {
@@ -6996,6 +7185,15 @@ function renderManualTradeReviewAggregateHistory() {
   initIcons();
 }
 
+function manualTradeReviewAggregateProgressHtml(detail) {
+  const aggregateCase = detail?.aggregate_case || {};
+  const current = String(aggregateCase.progress_stage || aggregateCase.status || "queued").toLowerCase();
+  const stages = [["queued", "准备固定来源"], ["model_aggregation", "正在综合分析"], ["validating", "校验并保存"], ["completed", "完成"]];
+  const currentIndex = ["completed", "draft", "succeeded"].includes(String(aggregateCase.status || "").toLowerCase())
+    ? 3 : current === "status_unknown" || current === "failed" ? -1 : Math.max(0, stages.findIndex(item => item[0] === current));
+  return `<div class="manual-review-progress" role="status" aria-live="polite"><div class="manual-review-progress-heading"><strong>综合生成进度</strong><span>${escapeHtml(manualTradeReviewStatusLabel(current))}</span></div><div class="manual-review-progress-track">${stages.map(([key, label], index) => `<div class="${index < currentIndex ? "done" : index === currentIndex ? "active" : ""}"><span>${index < currentIndex ? "✓" : index + 1}</span><small>${label}</small></div>`).join("")}</div></div>`;
+}
+
 function renderManualTradeReviewAggregateDetail() {
   const host = $("manualTradeReviewDetail");
   if (!host) return;
@@ -7007,57 +7205,144 @@ function renderManualTradeReviewAggregateDetail() {
   const content = version?.content || {};
   const hypotheses = Array.isArray(content.strategy_optimization_hypotheses) ? content.strategy_optimization_hypotheses : [];
   const patterns = Array.isArray(content.recurring_patterns) ? content.recurring_patterns : [];
-  host.innerHTML = `<header class="manual-review-detail-header"><div><span class="review-section-kicker">多版本综合分析</span><h4>同一账号、同一策略 · 固定 2–20 个复盘版本</h4><p>建议只进入人工评审，不自动修改策略、记忆、回测或交易。</p></div><button class="btn btn-ghost btn-sm" type="button" data-manual-review-action="exit-aggregate-mode">退出综合分析</button></header>${state.manualTradeReviewAggregateError ? `<div class="manual-review-evidence-banner danger"><span>${escapeHtml(state.manualTradeReviewAggregateError)}</span></div>` : ""}${detail ? `<section class="manual-review-conclusion"><div class="manual-review-conclusion-heading"><span class="review-section-kicker">综合任务 #${Number(aggregateCase.id || 0)}</span><span class="status-chip ${manualTradeReviewStatusTone(aggregateCase.status)}">${escapeHtml(manualTradeReviewStatusLabel(aggregateCase.status))}</span></div><p>已固定 ${Number(content.source_summary?.total || detail.sources?.length || 0)} 条来源；其中 ${Number(content.source_summary?.confirmed || 0)} 条已确认。</p></section>${manualTradeReviewAggregateShouldPoll(detail) ? manualTradeReviewProgressHtml({ progress_stage:aggregateCase.progress_stage, job_status:aggregateCase.status }) : ""}${manualTradeReviewListHtml("重复出现的模式", patterns.map(item => item.pattern), "repeat-2")}${manualTradeReviewListHtml("策略缺口", content.strategy_gaps, "scan-search")}${manualTradeReviewListHtml("保护方案发现", content.protection_findings, "shield-alert")}${hypotheses.length ? `<section class="manual-review-result-section"><header><span><i data-lucide="flask-conical" size="15"></i><strong>综合优化假设</strong></span><small>${hypotheses.length} 条</small></header><div class="manual-review-optimization-list">${hypotheses.map(item => `<article><div><strong>${escapeHtml(item.proposed_change || "观察假设")}</strong><span class="status-chip ${item.recommendation_state === "ready_for_human_review" ? "warning" : "info"}">${escapeHtml(manualTradeReviewValueLabel(item.recommendation_state))}</span></div><p>目标规则：${escapeHtml(item.target_path || "未指定")}</p><p>支持 ${Number(item.support_count || item.supporting_review_refs?.length || 0)} 条；反例 ${Number(item.counterexample_review_refs?.length || 0)} 条</p><p class="manual-review-risk">风险：${escapeHtml(item.risk_if_applied || "暂无说明")}</p><small>验证要求：${escapeHtml(item.validation_needed || "需要独立回放与人工评审")}</small></article>`).join("")}</div></section>` : ""}${["failed", "deferred", "status_unknown"].includes(String(aggregateCase.status)) ? `<button class="btn btn-secondary" type="button" data-manual-review-action="retry-aggregate" data-manual-aggregate-id="${Number(aggregateCase.id)}">人工重试新代际</button>` : ""}` : `<section class="manual-review-result-section"><header><span><i data-lucide="list-checks" size="15"></i><strong>选择来源</strong></span><small>${selected.length} / 20</small></header><p>只可选择当前复盘所属账号和策略下的固定版本。至少 2 条；建议需 3 条已确认支持和独立反例才可进入人工评审。</p><button class="btn btn-primary" type="button" data-manual-review-action="create-aggregate" ${selected.length < 2 || selected.length > 20 ? "disabled" : ""}>创建综合分析任务</button></section>${state.manualTradeReviewAggregates.length ? `<section class="manual-review-result-section"><header><span><strong>最近综合任务</strong></span></header>${state.manualTradeReviewAggregates.slice(0, 10).map(item => `<button class="btn btn-ghost btn-sm" type="button" data-manual-review-action="open-aggregate" data-manual-aggregate-id="${Number(item.id)}">#${Number(item.id)} · ${escapeHtml(manualTradeReviewStatusLabel(item.status))}</button>`).join("")}</section>` : ""}`}`;
+  const context = manualTradeReviewAggregateCurrentContext();
+  const accounts = Array.isArray(state.tradingAccounts) ? state.tradingAccounts : [];
+  const strategies = manualTradeReviewAggregateStrategyOptions();
+  const accountOptions = accounts.length
+    ? `<option value="">请选择交易账户</option>${accounts.map(item => {
+      const label = item.account_name || item.login_account || item.login || item.broker_server || `账户 #${Number(item.id || 0)}`;
+      return `<option value="${Number(item.id)}" ${Number(item.id) === Number(context.accountId) ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("")}`
+    : '<option value="">暂无可用交易账户</option>';
+  const strategyOptions = strategies.length
+    ? `<option value="">请选择平台策略</option>${strategies.map(item => `<option value="${Number(item.id)}" ${Number(item.id) === Number(context.strategyId) ? "selected" : ""}>${escapeHtml(item.title || `平台策略 #${Number(item.id)}`)} · v${Number(item.version || 1)}</option>`).join("")}`
+    : '<option value="">暂无可用平台策略</option>';
+  const contextError = manualTradeReviewAggregateContextError(context);
+  const contextPanel = `<section class="manual-review-context-panel" aria-label="综合分析上下文"><header><span><i data-lucide="filter" size="15"></i><strong>选择综合分析上下文</strong></span><small>来源、历史和结果严格按账号与策略隔离</small></header><div class="manual-review-context-fields"><label class="manual-review-field"><span>交易账户</span><select data-manual-aggregate-context="account" aria-label="综合分析交易账户">${accountOptions}</select></label><label class="manual-review-field"><span>平台策略</span><select data-manual-aggregate-context="strategy" aria-label="综合分析平台策略">${strategyOptions}</select></label></div>${contextError ? `<p class="field-help" role="status">${escapeHtml(contextError)}</p>` : ""}</section>`;
+  const errorBanner = state.manualTradeReviewAggregateError ? `<div class="manual-review-evidence-banner danger" role="alert"><span>${escapeHtml(state.manualTradeReviewAggregateError)}</span></div>` : "";
+  const progress = detail && manualTradeReviewAggregateShouldPoll(detail) ? manualTradeReviewAggregateProgressHtml(detail) : "";
+  const readyToCreate = selected.length >= 2 && selected.length <= 20 && !contextError && !state.manualTradeReviewAggregateSubmitting;
+  const createButton = `<button class="btn btn-primary" type="button" data-manual-review-action="create-aggregate" ${readyToCreate ? "" : "disabled"} aria-busy="${String(Boolean(state.manualTradeReviewAggregateSubmitting))}">${state.manualTradeReviewAggregateSubmitting ? "正在创建综合分析…" : "创建综合分析任务"}</button>`;
+  host.innerHTML = `<header class="manual-review-detail-header"><div><span class="review-section-kicker">多版本综合分析</span><h4>同一账号、同一策略 · 固定 2–20 个复盘版本</h4><p>建议只进入人工评审，不自动修改策略、记忆、回测或交易。</p></div><button class="btn btn-ghost btn-sm" type="button" data-manual-review-action="exit-aggregate-mode">退出综合分析</button></header>${contextPanel}${errorBanner}${detail ? `<section class="manual-review-conclusion"><div class="manual-review-conclusion-heading"><span class="review-section-kicker">综合任务 #${Number(aggregateCase.id || 0)}</span><span class="status-chip ${manualTradeReviewStatusTone(aggregateCase.status)}">${escapeHtml(manualTradeReviewStatusLabel(aggregateCase.status))}</span></div><p>已固定 ${Number(content.source_summary?.total || detail.sources?.length || 0)} 条来源；其中 ${Number(content.source_summary?.confirmed || 0)} 条已确认。</p></section>${progress}${manualTradeReviewListHtml("重复出现的模式", patterns.map(item => item.pattern), "repeat-2")}${manualTradeReviewListHtml("策略缺口", content.strategy_gaps, "scan-search")}${manualTradeReviewListHtml("保护方案发现", content.protection_findings, "shield-alert")}${hypotheses.length ? `<section class="manual-review-result-section"><header><span><i data-lucide="flask-conical" size="15"></i><strong>综合优化假设</strong></span><small>${hypotheses.length} 条</small></header><div class="manual-review-optimization-list">${hypotheses.map(item => `<article><div><strong>${escapeHtml(item.proposed_change || "观察假设")}</strong><span class="status-chip ${item.recommendation_state === "ready_for_human_review" ? "warning" : "info"}">${escapeHtml(manualTradeReviewValueLabel(item.recommendation_state))}</span></div><p>目标规则：${escapeHtml(item.target_path || "未指定")}</p><p>支持 ${Number(item.support_count || item.supporting_review_refs?.length || 0)} 条；反例 ${Number(item.counterexample_review_refs?.length || 0)} 条</p><p class="manual-review-risk">风险：${escapeHtml(item.risk_if_applied || "暂无说明")}</p><small>验证要求：${escapeHtml(item.validation_needed || "需要独立回放与人工评审")}</small></article>`).join("")}</div></section>` : ""}${["failed", "deferred", "status_unknown"].includes(String(aggregateCase.status)) ? `<button class="btn btn-secondary" type="button" data-manual-review-action="retry-aggregate" data-manual-aggregate-id="${Number(aggregateCase.id)}">人工重试新代际</button>` : ""}` : `<section class="manual-review-result-section"><header><span><i data-lucide="list-checks" size="15"></i><strong>选择来源</strong></span><small>${selected.length} / 20</small></header><p>只可选择当前账号与策略下的固定版本。至少 2 条；建议需 3 条已确认支持和独立反例才可进入人工评审。</p>${createButton}</section>${state.manualTradeReviewAggregates.length ? `<section class="manual-review-result-section"><header><span><strong>最近综合任务</strong></span></header>${state.manualTradeReviewAggregates.slice(0, 10).map(item => `<button class="btn btn-ghost btn-sm" type="button" data-manual-review-action="open-aggregate" data-manual-aggregate-id="${Number(item.id)}">#${Number(item.id)} · ${escapeHtml(manualTradeReviewStatusLabel(item.status))}</button>`).join("")}</section>` : ""}`}`;
   initIcons();
 }
 
 async function enterManualTradeReviewAggregateMode() {
-  const anchor = state.manualTradeReviewDetail;
-  if (!anchor?.trading_account_id || !anchor?.strategy_id) throw new Error("请先打开一条要综合的单笔复盘，用于确定账号和策略");
   stopManualTradeReviewPolling();
+  if (!state.tradingAccounts?.length || !state.manualTradeReviewStrategies?.length) {
+    await Promise.allSettled([loadStrategyCatalog(), loadManualTradeReviewStrategies()]);
+  }
+  const context = manualTradeReviewAggregateCurrentContext();
   state.manualTradeReviewAggregateMode = true;
-  state.manualTradeReviewAggregateLoading = true;
-  state.manualTradeReviewAggregateError = "";
-  state.manualTradeReviewAggregateSelection = [];
-  state.manualTradeReviewAggregateDetail = null;
+  state.manualTradeReviewAggregateAccountId = context.accountId || null;
+  state.manualTradeReviewAggregateStrategyId = context.strategyId || null;
+  resetManualTradeReviewAggregateContextState();
   renderManualTradeReviewAggregateHistory();
   renderManualTradeReviewAggregateDetail();
-  try {
-    const params = new URLSearchParams({ trading_account_id:String(anchor.trading_account_id), strategy_id:String(anchor.strategy_id), limit:"200" });
-    const [eligible, aggregates] = await Promise.all([
-      api(`/api/ai/manual-trade-review-aggregates/eligible-reviews?${params.toString()}`),
-      api(`/api/ai/manual-trade-review-aggregates?trading_account_id=${encodeURIComponent(anchor.trading_account_id)}&limit=50`),
-    ]);
-    state.manualTradeReviewAggregateEligible = eligible.reviews || [];
-    state.manualTradeReviewAggregates = aggregates.aggregates || [];
-  } finally {
+  await loadManualTradeReviewAggregateSources();
+}
+
+async function loadManualTradeReviewAggregateSources() {
+  const context = manualTradeReviewAggregateCurrentContext();
+  const requestVersion = state.manualTradeReviewAggregateContextVersion;
+  state.manualTradeReviewAggregateLoading = true;
+  state.manualTradeReviewAggregateError = manualTradeReviewAggregateContextError(context);
+  renderManualTradeReviewAggregateHistory();
+  renderManualTradeReviewAggregateDetail();
+  if (state.manualTradeReviewAggregateError) {
     state.manualTradeReviewAggregateLoading = false;
     renderManualTradeReviewAggregateHistory();
     renderManualTradeReviewAggregateDetail();
+    return [];
+  }
+  try {
+    const params = new URLSearchParams({ trading_account_id:String(context.accountId), strategy_id:String(context.strategyId), limit:"200" });
+    const aggregateParams = new URLSearchParams({ trading_account_id:String(context.accountId), strategy_id:String(context.strategyId), limit:"50" });
+    const [eligible, aggregates] = await Promise.all([
+      api(`/api/ai/manual-trade-review-aggregates/eligible-reviews?${params.toString()}`),
+      api(`/api/ai/manual-trade-review-aggregates?${aggregateParams.toString()}`),
+    ]);
+    if (requestVersion !== state.manualTradeReviewAggregateContextVersion) return [];
+    state.manualTradeReviewAggregateEligible = eligible.reviews || [];
+    state.manualTradeReviewAggregates = aggregates.aggregates || [];
+    state.manualTradeReviewAggregateError = "";
+    return state.manualTradeReviewAggregateEligible;
+  } catch (error) {
+    if (requestVersion === state.manualTradeReviewAggregateContextVersion) state.manualTradeReviewAggregateError = localizeReason(error.code || error.message);
+    throw error;
+  } finally {
+    if (requestVersion === state.manualTradeReviewAggregateContextVersion) {
+      state.manualTradeReviewAggregateLoading = false;
+      renderManualTradeReviewAggregateHistory();
+      renderManualTradeReviewAggregateDetail();
+    }
   }
 }
 
 async function openManualTradeReviewAggregate(id, { silent = false } = {}) {
+  // Opening a different item is a new foreground navigation.  Invalidate any
+  // timer or in-flight poll from the previously selected aggregate so an old
+  // response cannot overwrite the newly opened detail.
+  if (!silent) stopManualTradeReviewAggregatePolling();
+  const requestVersion = state.manualTradeReviewAggregateContextVersion;
+  const navigationGeneration = state.manualTradeReviewAggregatePollGeneration;
+  if (silent && state.manualTradeReviewAggregatePollInFlight) return state.manualTradeReviewAggregateDetail;
+  if (silent) state.manualTradeReviewAggregatePollInFlight = true;
   if (!silent) state.manualTradeReviewAggregateLoading = true;
-  const data = await api(`/api/ai/manual-trade-review-aggregates/${Number(id)}`);
-  state.manualTradeReviewAggregateDetail = data.aggregate || null;
-  state.manualTradeReviewAggregateLoading = false;
-  renderManualTradeReviewAggregateDetail();
-  scheduleManualTradeReviewAggregatePolling();
-  return state.manualTradeReviewAggregateDetail;
+  try {
+    const data = await api(`/api/ai/manual-trade-review-aggregates/${Number(id)}`);
+    if (requestVersion !== state.manualTradeReviewAggregateContextVersion
+      || navigationGeneration !== state.manualTradeReviewAggregatePollGeneration) return null;
+    const aggregate = data.aggregate || null;
+    const incomingAccountId = Number(aggregate?.aggregate_case?.trading_account_id || 0) || null;
+    const incomingStrategyId = Number(aggregate?.aggregate_case?.strategy_id || 0) || null;
+    if (incomingAccountId && state.manualTradeReviewAggregateAccountId && incomingAccountId !== Number(state.manualTradeReviewAggregateAccountId)) throw new Error("manual_trade_review_aggregate_source_account_mismatch");
+    if (incomingStrategyId && state.manualTradeReviewAggregateStrategyId && incomingStrategyId !== Number(state.manualTradeReviewAggregateStrategyId)) throw new Error("manual_trade_review_aggregate_source_strategy_mismatch");
+    if (incomingAccountId && !state.manualTradeReviewAggregateAccountId) state.manualTradeReviewAggregateAccountId = incomingAccountId;
+    if (incomingStrategyId && !state.manualTradeReviewAggregateStrategyId) state.manualTradeReviewAggregateStrategyId = incomingStrategyId;
+    state.manualTradeReviewAggregateDetail = aggregate;
+    state.manualTradeReviewAggregatePollRetryAttempt = 0;
+    state.manualTradeReviewAggregateError = "";
+    scheduleManualTradeReviewAggregatePolling(state.manualTradeReviewAggregateDetail);
+    return state.manualTradeReviewAggregateDetail;
+  } catch (error) {
+    if (!silent) state.manualTradeReviewAggregateError = localizeReason(error.code || error.message);
+    throw error;
+  } finally {
+    if (silent) state.manualTradeReviewAggregatePollInFlight = false;
+    state.manualTradeReviewAggregateLoading = false;
+    renderManualTradeReviewAggregateDetail();
+  }
 }
 
 async function createManualTradeReviewAggregateTask() {
-  const anchor = state.manualTradeReviewDetail;
+  if (state.manualTradeReviewAggregateSubmitting) return;
+  const context = manualTradeReviewAggregateCurrentContext();
+  const contextError = manualTradeReviewAggregateContextError(context);
+  if (contextError) throw new Error("manual_trade_review_aggregate_context_required");
   const selectedRefs = new Set(state.manualTradeReviewAggregateSelection || []);
   const sources = state.manualTradeReviewAggregateEligible.filter(item => selectedRefs.has(manualTradeReviewAggregateSourceRef(item)))
     .map(item => ({ case_id:item.case_id, version_id:item.version_id, content_hash:item.content_hash }));
   if (sources.length < 2 || sources.length > 20) throw new Error("请选择 2–20 条固定复盘版本");
-  const result = await api("/api/ai/manual-trade-review-aggregates", { method:"POST", body:{
-    client_request_id:manualTradeReviewBuildClientRequestId(), trading_account_id:anchor.trading_account_id,
-    strategy_id:anchor.strategy_id, sources,
-  } });
-  await openManualTradeReviewAggregate(result.aggregate_case?.id);
+  const clientRequestId = manualTradeReviewAggregateEnsureClientRequestId();
+  state.manualTradeReviewAggregateSubmitting = true;
+  state.manualTradeReviewAggregateError = "";
+  renderManualTradeReviewAggregateDetail();
+  try {
+    const result = await api("/api/ai/manual-trade-review-aggregates", { method:"POST", timeout:30_000, body:{
+      client_request_id:clientRequestId, trading_account_id:context.accountId,
+      strategy_id:context.strategyId, sources,
+    } });
+    manualTradeReviewAggregateResetClientRequestId();
+    state.manualTradeReviewAggregateDetail = null;
+    await openManualTradeReviewAggregate(result.aggregate_case?.id);
+  } catch (error) {
+    state.manualTradeReviewAggregateError = localizeReason(error.code || error.message);
+    throw error;
+  } finally {
+    state.manualTradeReviewAggregateSubmitting = false;
+    renderManualTradeReviewAggregateDetail();
+  }
 }
 
 function renderManualTradeReviewHistory() {
@@ -7898,6 +8183,7 @@ function setWorkspaceSubtab(group, target) {
       target = "reviews";
     }
     if (state.reviewMemoryView === "memories" && target !== "memories") stopStrategyMemoryConsistencyPolling();
+    if (target !== "manual-trades") stopManualTradeReviewAggregatePolling();
     state.reviewMemoryView = target;
   }
   document.querySelectorAll(`[data-workspace-tab="${group}"]`).forEach(button => {
@@ -16073,6 +16359,14 @@ function bindEvents() {
         selected.add(ref);
       } else selected.delete(ref);
       state.manualTradeReviewAggregateSelection = [...selected];
+      // A changed source set must never replay a request token that was
+      // created for a different frozen selection.  Keep the token only while
+      // the user is retrying the same selection after an uncertain response.
+      manualTradeReviewAggregateResetClientRequestId();
+      if (state.manualTradeReviewAggregateDetail) {
+        stopManualTradeReviewAggregatePolling();
+        state.manualTradeReviewAggregateDetail = null;
+      }
       renderManualTradeReviewAggregateHistory();
       renderManualTradeReviewAggregateDetail();
       return;
@@ -16099,7 +16393,20 @@ function bindEvents() {
       const nextStrategyId = Number(event.target.value || 0) || null;
       if (Number(state.manualTradeReviewStrategyId || 0) !== nextStrategyId) manualTradeReviewResetClientRequestId();
       state.manualTradeReviewStrategyId = nextStrategyId;
+      if (state.manualTradeReviewAggregateMode) {
+        setManualTradeReviewAggregateContext({ strategyId:nextStrategyId, reload:true }).catch(error => toast(localizeReason(error.code || error.message), "error"));
+      }
       renderManualTradeReviewSelectionSummary();
+      return;
+    }
+    const aggregateContext = event.target.closest("[data-manual-aggregate-context]");
+    if (aggregateContext && state.manualTradeReviewAggregateMode) {
+      const field = String(aggregateContext.dataset.manualAggregateContext || "");
+      const current = manualTradeReviewAggregateCurrentContext();
+      const next = field === "account"
+        ? { accountId:Number(aggregateContext.value || 0) || null, strategyId:current.strategyId }
+        : { accountId:current.accountId, strategyId:Number(aggregateContext.value || 0) || null };
+      setManualTradeReviewAggregateContext({ ...next, reload:true }).catch(error => toast(localizeReason(error.code || error.message), "error"));
     }
   });
   // Timeframe checkbox change → update confirm text
@@ -16426,6 +16733,10 @@ function bindEvents() {
           stopManualTradeReviewPolling();
           stopManualTradeReviewAggregatePolling();
           state.manualTradeReviewAggregateMode = false;
+          state.manualTradeReviewAggregateSubmitting = false;
+          state.manualTradeReviewAggregateAccountId = null;
+          state.manualTradeReviewAggregateStrategyId = null;
+          resetManualTradeReviewAggregateContextState();
           manualTradeReviewResetClientRequestId();
           state.manualTradeReviewSelectedId = null;
           state.selectedManualTradeReviewId = null;
@@ -16443,6 +16754,9 @@ function bindEvents() {
         else if (action === "exit-aggregate-mode") {
           stopManualTradeReviewAggregatePolling();
           state.manualTradeReviewAggregateMode = false;
+          state.manualTradeReviewAggregateSubmitting = false;
+          manualTradeReviewAggregateResetClientRequestId();
+          state.manualTradeReviewAggregateSelection = [];
           state.manualTradeReviewAggregateDetail = null;
           renderManualTradeReviewHistory();
           renderManualTradeReviewDetail();
@@ -16450,7 +16764,8 @@ function bindEvents() {
         else if (action === "open-aggregate") openManualTradeReviewAggregate(Number(manualReviewAction.dataset.manualAggregateId)).catch(error => toast(localizeReason(error.code || error.message), "error"));
         else if (action === "retry-aggregate") {
           const aggregateId = Number(manualReviewAction.dataset.manualAggregateId || 0);
-          await api(`/api/ai/manual-trade-review-aggregates/${aggregateId}/retry`, { method:"POST", body:{ trading_account_id:state.manualTradeReviewDetail?.trading_account_id } });
+          const aggregateContext = manualTradeReviewAggregateCurrentContext();
+          await api(`/api/ai/manual-trade-review-aggregates/${aggregateId}/retry`, { method:"POST", body:{ trading_account_id:aggregateContext.accountId } });
           await openManualTradeReviewAggregate(aggregateId);
         }
         else if (action === "previous-history" || action === "next-history") {

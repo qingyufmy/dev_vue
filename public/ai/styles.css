@@ -605,6 +605,11 @@ button {
 .manual-review-field { display: grid; gap: 7px; }
 .manual-review-field select { min-height: 40px; padding: 8px 10px; font-size: 13px; }
 .manual-review-field textarea { min-height: 132px; padding: 10px 11px; resize: vertical; font: inherit; font-size: 13px; line-height: 1.55; }
+.manual-review-context-panel { display: grid; gap: 10px; padding: 12px 13px; border: 1px solid rgba(96,165,250,.2); border-radius: 10px; background: rgba(37,99,235,.05); }
+.manual-review-context-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 9px; color: var(--text-secondary); font-size: 12px; }
+.manual-review-context-panel > header > span { display: inline-flex; align-items: center; gap: 6px; }
+.manual-review-context-panel > header > small { color: var(--text-muted); font-size: 10px; }
+.manual-review-context-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
 .manual-review-thesis-field { max-width: 850px; }
 .manual-review-result-actions { display: flex; gap: 7px; }
 .manual-review-result-layout { display: grid; grid-template-columns: minmax(230px,285px) minmax(0,1fr); gap: 14px; min-width: 0; }

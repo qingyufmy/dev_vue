@@ -1910,6 +1910,7 @@
   .manual-review-pager { justify-content: space-between; width: 100%; }
   .manual-review-pager .pager-btn { min-width: 96px; min-height: 44px; }
   .manual-review-selection-summary { grid-template-columns: 1fr; }
+  .manual-review-context-fields { grid-template-columns: 1fr; }
   .manual-review-result-actions { width: 100%; }
   .manual-review-result-actions .btn { flex: 1; min-height: 44px; }
   .manual-review-result-layout { grid-template-columns: 1fr; }
