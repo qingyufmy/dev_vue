@@ -42,6 +42,12 @@ describe('manual trade review backend boundaries', () => {
       '/ai/manual-trade-reviews/:id/retry',
     ]
     for (const path of paths) expect(routes).toContain(`'${path}'`)
+    const aggregatePaths = [
+      '/ai/manual-trade-review-aggregates/eligible-reviews', '/ai/manual-trade-review-aggregates',
+      '/ai/manual-trade-review-aggregates/:id', '/ai/manual-trade-review-aggregates/:id/job-status',
+      '/ai/manual-trade-review-aggregates/:id/retry',
+    ]
+    for (const path of aggregatePaths) expect(routes).toContain(`'${path}'`)
     expect(routes).toContain('canManagePlatformAiContent(req.user)')
     expect(routes).toContain("manual_trade_review_forbidden")
     const review = read('server/routes/ai/manual-trade-review.js')
@@ -50,7 +56,9 @@ describe('manual trade review backend boundaries', () => {
     expect(review).toContain("modelPurpose:'manual_trade_review'")
     const worker = review.slice(review.indexOf('export async function runManualTradeReviewWorkerOnce'),
       review.indexOf('export async function recoverAbandonedManualTradeReviewJobs'))
-    expect((review.match(/await requestModel\(/g) || [])).toHaveLength(1)
+    // v2 keeps one counterfactual + one outcome request; v3 adds the same
+    // outcome stage after one request per frozen candidate point.
+    expect((review.match(/await requestModel\(/g) || [])).toHaveLength(2)
     expect((worker.match(/await runManualTradeReviewStage\(/g) || [])).toHaveLength(2)
     expect(worker).toContain("progress_stage = 'counterfactual_analysis'")
     expect(worker).toContain("progress_stage = 'outcome_review'")
@@ -65,6 +73,8 @@ describe('manual trade review backend boundaries', () => {
     expect(worker).not.toContain('${job.attempt_count}')
     expect(worker).toContain('task_deadline_at')
     expect(review).toContain('manual_trade_review_counterfactual_immutable')
+    expect(worker).toContain('manualTradeReviewV3PointEvidence')
+    expect(review).toContain('counterfactual:${point.candidate_key}')
   })
 
   it('keeps lease waiting outside the manual attempt budget and advances retry generations explicitly', () => {
@@ -82,8 +92,11 @@ describe('manual trade review backend boundaries', () => {
     expect(index).toContain('startManualTradeReviewWorker')
     expect(index).toContain('stopManualTradeReviewWorker')
     expect(index).toContain("startManualTradeReviewWorker()")
+    expect(index).toContain('startManualTradeReviewAggregateWorker()')
+    expect(index).toContain('stopManualTradeReviewAggregateWorker()')
     const aiIndex = read('server/routes/ai/index.js')
     expect(aiIndex).toContain('startManualTradeReviewWorker, stopManualTradeReviewWorker')
+    expect(aiIndex).toContain('startManualTradeReviewAggregateWorker, stopManualTradeReviewAggregateWorker')
   })
 
   it('wakes the worker immediately only after a new review case is durably created', () => {

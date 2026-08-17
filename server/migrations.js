@@ -6544,6 +6544,143 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '194_manual_trade_review_aggregate',
+    async up() {
+      // Aggregate reviews pin immutable single-review versions.  They have a
+      // separate lifecycle so selecting several completed reviews never
+      // changes the single-trade case or its generation history.
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_aggregate_cases (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        client_request_id VARCHAR(191) NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        strategy_id BIGINT UNSIGNED NOT NULL,
+        strategy_versions_json TEXT NOT NULL,
+        selection_hash CHAR(64) NOT NULL,
+        -- These fields are populated only after a durable worker claim.  The
+        -- selection hash is the client request; the frozen hashes below are
+        -- the server-verified source/snapshot envelope used for fencing.
+        frozen_source_set_json MEDIUMTEXT DEFAULT NULL,
+        frozen_source_set_hash CHAR(64) DEFAULT NULL,
+        strategy_snapshot_json MEDIUMTEXT DEFAULT NULL,
+        strategy_snapshot_hash CHAR(64) DEFAULT NULL,
+        input_hash CHAR(64) DEFAULT NULL,
+        prompt_hash CHAR(64) DEFAULT NULL,
+        output_contract_hash CHAR(64) DEFAULT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'queued',
+        generation_no INT UNSIGNED NOT NULL DEFAULT 1,
+        attempt_count INT NOT NULL DEFAULT 0,
+        max_attempts INT NOT NULL DEFAULT 3,
+        lease_token CHAR(36) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        task_deadline_at DATETIME DEFAULT NULL,
+        model_profile_id BIGINT UNSIGNED DEFAULT NULL,
+        credential_source VARCHAR(32) DEFAULT NULL,
+        model_task_id VARCHAR(128) DEFAULT NULL,
+        progress_stage VARCHAR(32) NOT NULL DEFAULT 'queued',
+        stage_updated_at DATETIME DEFAULT NULL,
+        current_version_id BIGINT UNSIGNED DEFAULT NULL,
+        approved_version_id BIGINT UNSIGNED DEFAULT NULL,
+        last_error_code VARCHAR(128) DEFAULT NULL,
+        last_failure_generation_no INT UNSIGNED DEFAULT NULL,
+        last_failure_at DATETIME DEFAULT NULL,
+        next_attempt_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_manual_trade_review_aggregate_client_request (user_id, client_request_id),
+        KEY idx_manual_trade_review_aggregate_owner_state (user_id, status, updated_at),
+        KEY idx_manual_trade_review_aggregate_account (trading_account_id, created_at),
+        KEY idx_manual_trade_review_aggregate_selection (selection_hash),
+        KEY idx_manual_trade_review_aggregate_claim (status, lease_expires_at, next_attempt_at, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_aggregate_sources (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        aggregate_case_id BIGINT UNSIGNED NOT NULL,
+        source_case_id BIGINT UNSIGNED NOT NULL,
+        source_version_id BIGINT UNSIGNED NOT NULL,
+        source_content_hash CHAR(64) NOT NULL,
+        source_user_id INT NOT NULL,
+        source_trading_account_id INT NOT NULL,
+        source_strategy_id BIGINT UNSIGNED NOT NULL,
+        source_strategy_version INT NOT NULL,
+        confirmation_status VARCHAR(16) NOT NULL DEFAULT 'unconfirmed',
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_manual_trade_review_aggregate_source (aggregate_case_id, source_case_id, source_version_id),
+        KEY idx_manual_trade_review_aggregate_source_case (aggregate_case_id, id),
+        KEY idx_manual_trade_review_aggregate_source_version (source_case_id, source_version_id),
+        KEY idx_manual_trade_review_aggregate_source_hash (source_content_hash)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_aggregate_versions (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        aggregate_case_id BIGINT UNSIGNED NOT NULL,
+        generation_no INT UNSIGNED NOT NULL,
+        version_no INT NOT NULL,
+        parent_version_id BIGINT UNSIGNED DEFAULT NULL,
+        author_type VARCHAR(16) NOT NULL,
+        author_user_id INT DEFAULT NULL,
+        model_profile_id BIGINT UNSIGNED DEFAULT NULL,
+        source_set_hash CHAR(64) NOT NULL,
+        content_json MEDIUMTEXT NOT NULL,
+        content_hash CHAR(64) NOT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_manual_trade_review_aggregate_version (aggregate_case_id, version_no),
+        KEY idx_manual_trade_review_aggregate_version_case (aggregate_case_id, created_at),
+        KEY idx_manual_trade_review_aggregate_version_generation (aggregate_case_id, generation_no)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // A deployment may have created the table from an earlier interrupted
+      // copy of this migration.  Repair additive columns without changing
+      // existing rows or earlier migrations.
+      const aggregateColumns = [
+        ['frozen_source_set_json', 'ADD COLUMN frozen_source_set_json MEDIUMTEXT DEFAULT NULL'],
+        ['frozen_source_set_hash', 'ADD COLUMN frozen_source_set_hash CHAR(64) DEFAULT NULL'],
+        ['strategy_snapshot_json', 'ADD COLUMN strategy_snapshot_json MEDIUMTEXT DEFAULT NULL'],
+        ['strategy_snapshot_hash', 'ADD COLUMN strategy_snapshot_hash CHAR(64) DEFAULT NULL'],
+        ['input_hash', 'ADD COLUMN input_hash CHAR(64) DEFAULT NULL'],
+        ['prompt_hash', 'ADD COLUMN prompt_hash CHAR(64) DEFAULT NULL'],
+        ['output_contract_hash', 'ADD COLUMN output_contract_hash CHAR(64) DEFAULT NULL'],
+      ]
+      const columnRows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'manual_trade_review_aggregate_cases'`)
+      const existingColumns = new Set(columnRows.map(row => String(row.COLUMN_NAME)))
+      for (const [name, definition] of aggregateColumns) {
+        if (!existingColumns.has(name)) await queryRun(`ALTER TABLE manual_trade_review_aggregate_cases ${definition}`)
+      }
+
+      const repairIndexes = [
+        ['manual_trade_review_aggregate_cases', [
+          ['uk_manual_trade_review_aggregate_client_request', 'ADD UNIQUE KEY uk_manual_trade_review_aggregate_client_request (user_id, client_request_id)'],
+          ['idx_manual_trade_review_aggregate_owner_state', 'ADD KEY idx_manual_trade_review_aggregate_owner_state (user_id, status, updated_at)'],
+          ['idx_manual_trade_review_aggregate_account', 'ADD KEY idx_manual_trade_review_aggregate_account (trading_account_id, created_at)'],
+          ['idx_manual_trade_review_aggregate_selection', 'ADD KEY idx_manual_trade_review_aggregate_selection (selection_hash)'],
+          ['idx_manual_trade_review_aggregate_claim', 'ADD KEY idx_manual_trade_review_aggregate_claim (status, lease_expires_at, next_attempt_at, updated_at)'],
+        ]],
+        ['manual_trade_review_aggregate_sources', [
+          ['uk_manual_trade_review_aggregate_source', 'ADD UNIQUE KEY uk_manual_trade_review_aggregate_source (aggregate_case_id, source_case_id, source_version_id)'],
+          ['idx_manual_trade_review_aggregate_source_case', 'ADD KEY idx_manual_trade_review_aggregate_source_case (aggregate_case_id, id)'],
+          ['idx_manual_trade_review_aggregate_source_version', 'ADD KEY idx_manual_trade_review_aggregate_source_version (source_case_id, source_version_id)'],
+          ['idx_manual_trade_review_aggregate_source_hash', 'ADD KEY idx_manual_trade_review_aggregate_source_hash (source_content_hash)'],
+        ]],
+        ['manual_trade_review_aggregate_versions', [
+          ['uk_manual_trade_review_aggregate_version', 'ADD UNIQUE KEY uk_manual_trade_review_aggregate_version (aggregate_case_id, version_no)'],
+          ['idx_manual_trade_review_aggregate_version_case', 'ADD KEY idx_manual_trade_review_aggregate_version_case (aggregate_case_id, created_at)'],
+          ['idx_manual_trade_review_aggregate_version_generation', 'ADD KEY idx_manual_trade_review_aggregate_version_generation (aggregate_case_id, generation_no)'],
+        ]],
+      ]
+      for (const [tableName, indexes] of repairIndexes) {
+        const rows = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, [tableName])
+        const existing = new Set(rows.map(row => String(row.INDEX_NAME)))
+        for (const [name, definition] of indexes) {
+          if (!existing.has(name)) await queryRun(`ALTER TABLE ${tableName} ${definition}`)
+        }
+      }
+    }
   }
 ]
 

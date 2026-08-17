@@ -41,6 +41,7 @@ import { fetchSentiment } from './services/sentiment.js'
 import { cacheSetJSON, getRedis } from './redis.js'
 import { initAutoSchedulers, startPeriodReviewWorker, startManualAnalysisJobs,
   startHistoryCompareRecoveryWorker, startManualTradeReviewWorker, stopManualTradeReviewWorker,
+  startManualTradeReviewAggregateWorker, stopManualTradeReviewAggregateWorker,
   startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker,
   startStrategyMemoryConsistencyWorker, stopStrategyMemoryConsistencyWorker } from './routes/ai/index.js'
 import { recoverAbandonedAutoInferenceTasks } from './routes/ai/model-task-runtime.js'
@@ -406,6 +407,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const adminStrategyTradeStop = stopAdminStrategyTradeWorker()
     const adminPositionCloseStop = stopAdminPositionCloseWorker()
     const manualTradeReviewStop = stopManualTradeReviewWorker()
+    const manualTradeReviewAggregateStop = stopManualTradeReviewAggregateWorker()
     const strategyMemoryCompressionStop = stopStrategyMemoryCompressionWorker()
     const strategyMemoryConsistencyStop = stopStrategyMemoryConsistencyWorker()
     clearShutdownTimers()
@@ -418,6 +420,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
       Promise.resolve(adminStrategyTradeStop),
       Promise.resolve(adminPositionCloseStop),
       waitForShutdownTask(manualTradeReviewStop, 'manual trade review worker', timeout),
+      waitForShutdownTask(manualTradeReviewAggregateStop, 'manual trade review aggregate worker', timeout),
       Promise.resolve(strategyMemoryCompressionStop),
       Promise.resolve(strategyMemoryConsistencyStop),
     ])
@@ -531,6 +534,7 @@ installGracefulShutdownHandlers()
   startStrategyMemoryCompressionWorker()
   startStrategyMemoryConsistencyWorker()
   startManualTradeReviewWorker()
+  startManualTradeReviewAggregateWorker()
   startAdminStrategyTradeWorker()
   startAdminPositionCloseWorker()
   startManualAnalysisJobs()

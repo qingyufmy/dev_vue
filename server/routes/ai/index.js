@@ -69,6 +69,10 @@ import { listEligibleManualTradeReviews, listManualTradeReviewStrategies, create
   listManualTradeReviews, getManualTradeReview, getManualTradeReviewJobStatus, editManualTradeReview,
   confirmManualTradeReview, retryManualTradeReview,
   startManualTradeReviewWorker, stopManualTradeReviewWorker } from './manual-trade-review.js'
+import { createManualTradeReviewAggregate, listEligibleManualTradeReviewSources,
+  listManualTradeReviewAggregates, getManualTradeReviewAggregate, getManualTradeReviewAggregateJobStatus,
+  retryManualTradeReviewAggregate, requestManualTradeReviewAggregateCycle,
+  startManualTradeReviewAggregateWorker, stopManualTradeReviewAggregateWorker } from './manual-trade-review-aggregate.js'
 
 const router = Router()
 
@@ -1306,6 +1310,71 @@ router.post('/ai/manual-trade-reviews/:id/retry', authMiddleware, async (req, re
   catch (error) { reviewError(res, error) }
 })
 
+// Aggregate review is a separate workflow over immutable completed review
+// versions. It never changes the single raw-trade selection limit.
+router.get('/ai/manual-trade-review-aggregates/eligible-reviews', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const reviews = await listEligibleManualTradeReviewSources({ actor:req.user, userId:req.user.id,
+      tradingAccountId:req.query?.trading_account_id, strategyId:req.query?.strategy_id,
+      limit:req.query?.limit, offset:req.query?.offset })
+    res.json({ ok:true, reviews })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/manual-trade-review-aggregates', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const result = await createManualTradeReviewAggregate({ actor:req.user, userId:req.user.id,
+      tradingAccountId:req.body?.trading_account_id, strategyId:req.body?.strategy_id,
+      clientRequestId:req.body?.client_request_id, sources:req.body?.sources })
+    if (result.created) requestManualTradeReviewAggregateCycle()
+    await auditAiMutation(req, result.created ? 'manual_trade_review_aggregate_created' : 'manual_trade_review_aggregate_replayed',
+      'manual_trade_review_aggregate_case', result.aggregate_case?.id || null,
+      { strategy_id:Number(req.body?.strategy_id) || null, source_count:Array.isArray(req.body?.sources) ? req.body.sources.length : 0 })
+    res.status(result.created ? 202 : 200).json({ ok:true, ...result })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/manual-trade-review-aggregates', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const aggregates = await listManualTradeReviewAggregates({ actor:req.user, userId:req.user.id,
+      tradingAccountId:req.query?.trading_account_id, limit:req.query?.limit, offset:req.query?.offset })
+    res.json({ ok:true, aggregates })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/manual-trade-review-aggregates/:id/job-status', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const job = await getManualTradeReviewAggregateJobStatus({ actor:req.user, userId:req.user.id,
+      aggregateId:Number(req.params.id), tradingAccountId:req.query?.trading_account_id })
+    res.json({ ok:true, job })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/manual-trade-review-aggregates/:id', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const aggregate = await getManualTradeReviewAggregate({ actor:req.user, userId:req.user.id,
+      aggregateId:Number(req.params.id), tradingAccountId:req.query?.trading_account_id })
+    res.json({ ok:true, aggregate })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/manual-trade-review-aggregates/:id/retry', authMiddleware, async (req, res) => {
+  if (!requireManualTradeReviewManager(req, res)) return
+  try {
+    const result = await retryManualTradeReviewAggregate({ actor:req.user, userId:req.user.id,
+      aggregateId:Number(req.params.id), tradingAccountId:req.body?.trading_account_id })
+    requestManualTradeReviewAggregateCycle()
+    await auditAiMutation(req, 'manual_trade_review_aggregate_retried', 'manual_trade_review_aggregate_case',
+      Number(req.params.id), { generation_no:result.generation_no })
+    res.status(202).json({ ok:true, ...result })
+  } catch (error) { reviewError(res, error) }
+})
+
 router.get('/ai/reviews/:id', authMiddleware, async (req, res) => {
   try { res.json({ ok: true, review: await getReviewCase(Number(req.params.id), req.user.id) }) }
   catch (error) { reviewError(res, error) }
@@ -1521,6 +1590,7 @@ router.delete('/ai/admin/platform-experience/:id', authMiddleware, async (req, r
 
 export { initAutoSchedulers, startManualAnalysisJobs, startHistoryCompareRecoveryWorker,
   startManualTradeReviewWorker, stopManualTradeReviewWorker,
+  startManualTradeReviewAggregateWorker, stopManualTradeReviewAggregateWorker,
   startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker,
   runStrategyMemoryCompressionOnce, recoverAbandonedStrategyMemoryCompressionModelTasks,
   startStrategyMemoryConsistencyWorker, stopStrategyMemoryConsistencyWorker,
