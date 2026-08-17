@@ -64,7 +64,8 @@ describe('executeOrderCore risk snapshot sizing', () => {
           status:'success', complete:true, positions:[], pending:[],
           instruments:{ XAUUSD:{
             name:'XAUUSD', currency_profit:'USD', volume_min:0.01, volume_max:100,
-            volume_step:0.01, tick_size:0.01, tick_value:1,
+            volume_step:0.01, tick_size:0.01, tick_value:1, contract_size:100,
+            digits:2, point:0.01, trade_mode:4,
           } },
         }
       })
@@ -74,6 +75,7 @@ describe('executeOrderCore risk snapshot sizing', () => {
         account:{ equity:10_000, currency:'USD' }, quote:{ bid:4100, ask:4100.2 }, bridgeOptions:{},
       })
       const snapshotCall = bridge.mock.calls.find(call => call[1] === 'risk_snapshot')
+      expect(context.instrument_validation).toMatchObject({ valid:true, status:'legacy', reasons:[] })
       return {
         status:'success',
         proposed_volume:snapshotCall[2].proposed_order.volume,

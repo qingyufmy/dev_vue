@@ -77,9 +77,9 @@ describe('MT4 EA reconnect contract', () => {
 })
 
 describe('MT4 EA extended data contract', () => {
-  it('advertises the official 3.0.2 version and handles every server data action', () => {
+  it('advertises the compatible 3.0.2 risk-fix adapter and handles every server data action', () => {
     expect(source).toContain('#define BRIDGE_PROTOCOL_VERSION 3')
-    expect(source).toContain('#define ADAPTER_VERSION "3.0.2"')
+    expect(source).toContain('#define ADAPTER_VERSION "3.0.2-riskfix1"')
     expect(source).toContain('#property version   "3.02"')
     expect(source).toContain('AppendInt32(hello, BRIDGE_PROTOCOL_VERSION)')
     expect(source).toContain('AppendUtf8(hello, ADAPTER_VERSION)')
@@ -127,6 +127,43 @@ describe('MT4 EA broker-symbol contract', () => {
     ]) {
       expect(functionBlock(name, next)).toContain('ResolveBrokerSymbol(')
     }
+  })
+})
+
+describe('MT4 EA instrument risk metadata contract', () => {
+  it('normalizes every symbol-data outlet through one tick-size reader', () => {
+    const reader = functionBlock('void ReadInstrumentRiskSpec', 'string InstrumentRiskSpecJsonFields')
+    expect(reader).toContain('MarketInfo(symbol, MODE_TICKSIZE)')
+    expect(reader).toContain('SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE)')
+    expect(reader).toContain('spec.tick_size_raw_marketinfo * spec.point')
+    expect(reader).toContain('symbol_info_trade_tick_size')
+    expect(reader).toContain('market_info_tick_size_points')
+    expect(reader).toContain('marketinfo_semantic_mismatch')
+
+    for (const [name, next] of [
+      ['void SendSymbolSnapshot', 'void SendSymbolSnapshotResult'],
+      ['string RiskInstrumentJson', 'void AddRiskInstrument'],
+      ['string BuildSymbolsPayload', 'string BuildHistoryPayload'],
+    ]) {
+      const block = functionBlock(name, next)
+      expect(block).toContain('ReadInstrumentRiskSpec(symbol, instrument_spec)')
+      expect(block).toContain('InstrumentRiskSpecJsonFields(instrument_spec)')
+      expect(block).not.toContain('MarketInfo(symbol, MODE_TICKSIZE)')
+    }
+  })
+
+  it('publishes raw candidates, the selected source, and validation evidence', () => {
+    const fields = functionBlock('string InstrumentRiskSpecJsonFields', 'void SendSymbolSnapshot')
+    for (const key of [
+      'platform',
+      'ea_version',
+      'tick_size_raw_marketinfo',
+      'tick_size_marketinfo_price_candidate',
+      'tick_size_symbolinfo_candidate',
+      'tick_size_source',
+      'instrument_validation_status',
+      'instrument_validation_reasons',
+    ]) expect(fields).toContain(key)
   })
 })
 

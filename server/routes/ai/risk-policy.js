@@ -303,8 +303,73 @@ export async function submitRiskPolicyChanges({ policySetId, actorId, changes, r
   })
 }
 
-const floorStep = (value, step) => Number((Math.floor((value + 1e-12) / step) * step).toFixed(8))
-const aligned = (value, step, origin = 0) => Math.abs((value - origin) / step - Math.round((value - origin) / step)) < 1e-7
+// Volume values are decimal quantities supplied by the broker.  Do not use
+// Math.round(value / step) here: a binary floating point value such as
+// 0.065 / 0.01 can fall on the wrong side of the half-step boundary.  The
+// broker lattice is `volume_min + n * volume_step`, so all arithmetic below
+// is performed on decimal integer units instead.
+const decimalParts = value => {
+  const text = String(value).trim()
+  const match = text.match(/^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/)
+  if (!match) return null
+  const sign = match[1] === '-' ? -1n : 1n
+  const whole = match[2] || ''
+  const fraction = match[3] ?? match[4] ?? ''
+  const exponent = Number(match[5] || 0)
+  if (!Number.isSafeInteger(exponent)) return null
+  let scale = fraction.length - exponent
+  let coefficient = BigInt(`${whole}${fraction}` || '0')
+  if (scale < 0) {
+    coefficient *= 10n ** BigInt(-scale)
+    scale = 0
+  }
+  return { coefficient:sign * coefficient, scale }
+}
+
+const decimalGrid = (value, origin, step) => {
+  const values = [decimalParts(value), decimalParts(origin), decimalParts(step)]
+  if (values.some(item => !item)) return null
+  const scale = Math.max(...values.map(item => item.scale))
+  const units = values.map(item => item.coefficient * 10n ** BigInt(scale - item.scale))
+  if (units[2] <= 0n) return null
+  return { valueUnits:units[0], originUnits:units[1], stepUnits:units[2], scale }
+}
+
+const unitsToNumber = (units, scale) => Number(units) / 10 ** scale
+
+export const roundStepHalfUp = (value, step, origin = 0) => {
+  const grid = decimalGrid(value, origin, step)
+  if (!grid) return Number.NaN
+  const difference = grid.valueUnits - grid.originUnits
+  if (difference <= 0n) return unitsToNumber(grid.originUnits, grid.scale)
+  let index = difference / grid.stepUnits
+  if (difference % grid.stepUnits * 2n >= grid.stepUnits) index += 1n
+  return unitsToNumber(grid.originUnits + index * grid.stepUnits, grid.scale)
+}
+
+const floorVolumeOnLattice = (value, volumeMin, volumeStep) => {
+  const grid = decimalGrid(value, volumeMin, volumeStep)
+  if (!grid) return Number.NaN
+  const difference = grid.valueUnits - grid.originUnits
+  if (difference < 0n) return 0
+  const index = difference / grid.stepUnits
+  return unitsToNumber(grid.originUnits + index * grid.stepUnits, grid.scale)
+}
+
+const stepDownVolume = (value, volumeMin, volumeStep) => {
+  const grid = decimalGrid(value, volumeMin, volumeStep)
+  if (!grid) return Number.NaN
+  const difference = grid.valueUnits - grid.originUnits
+  const index = difference > 0n ? difference / grid.stepUnits : 0n
+  return unitsToNumber(grid.originUnits + (index - 1n) * grid.stepUnits, grid.scale)
+}
+
+const aligned = (value, step, origin = 0) => {
+  const grid = decimalGrid(value, origin, step)
+  if (!grid) return false
+  const difference = grid.valueUnits - grid.originUnits
+  return difference >= 0n && difference % grid.stepUnits === 0n
+}
 const pass = (rules, code, details = {}) => rules.push({ code, outcome: 'pass', details })
 const rejection = (rules, code, details = {}) => ({ decision_status: 'reject', reject_code: code, rule_results: [...rules, { code, outcome: 'reject', details }] })
 const quoteEpoch = value => {
@@ -368,6 +433,26 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   if (!policy.allowed_symbols.includes('*') && !policy.allowed_symbols.includes(symbol) && !policy.allowed_symbols.includes(standard)) {
     const rejected = rolloutReject('R1.1_SYMBOL_NOT_ALLOWED', { symbol }); if (rejected) return rejected
   }
+  const instrumentValidationStatus = String(instrument?.instrument_validation_status || '').trim().toLowerCase() || null
+  if (['ambiguous', 'invalid', 'inconsistent'].includes(instrumentValidationStatus)) {
+    const rawCandidates = {
+      tick_size_raw_marketinfo: instrument?.tick_size_raw_marketinfo ?? null,
+      tick_size_marketinfo_price_candidate: instrument?.tick_size_marketinfo_price_candidate ?? null,
+      tick_size_symbolinfo_candidate: instrument?.tick_size_symbolinfo_candidate ?? null,
+    }
+    return fail('R1_INSTRUMENT_DATA_INCONSISTENT', {
+      instrument_validation_status:instrumentValidationStatus,
+      tick_size:finite(instrument?.tick_size),
+      tick_value:finite(instrument?.tick_value),
+      point:finite(instrument?.point),
+      contract_size:finite(instrument?.contract_size),
+      tick_size_source:String(instrument?.tick_size_source || '').trim() || null,
+      instrument_validation_reasons:Array.isArray(instrument?.instrument_validation_reasons)
+        ? instrument.instrument_validation_reasons : [],
+      raw_candidates:rawCandidates,
+      ...rawCandidates,
+    })
+  }
   const needed = ['tick_value', 'tick_size', 'contract_size', 'volume_min', 'volume_max', 'volume_step', 'digits', 'point', 'trade_mode']
   const missing = needed.filter(key => !Number.isFinite(Number(instrument?.[key])))
   if (missing.length) return fail('R1_INSTRUMENT_DATA_INCOMPLETE', { missing })
@@ -385,7 +470,7 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   const normalizedTier = hasTierSizing ? normalizePositionSizeTier(approved.position_size_tier, approved.signal_type) : null
   if (hasTierSizing && !normalizedTier) return fail('R5_SCHEMA_AI_POSITION_SIZE_TIER', { position_size_tier:approved.position_size_tier })
   let volume = hasTierSizing
-    ? floorStep(Math.min(Number(policy.max_position_size), brokerMaxVolume), brokerVolumeStep)
+    ? floorVolumeOnLattice(Math.min(Number(policy.max_position_size), brokerMaxVolume), brokerMinVolume, brokerVolumeStep)
     : finite(approved.volume)
   if (!(volume > 0)) return fail('R1.9_VOLUME_INVALID')
   if (volume < brokerMinVolume || volume > brokerMaxVolume || !aligned(volume, brokerVolumeStep, brokerMinVolume)) {
@@ -396,7 +481,7 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   // The gate must not move an AI stop loss because that changes the trading
   // thesis. Broker minimum stop distance remains an execution-layer check.
   const finalDistance = Math.abs(entry - Number(approved.sl))
-  volume = floorStep(Math.min(volume, policy.max_position_size, Number(instrument.volume_max)), Number(instrument.volume_step))
+  volume = floorVolumeOnLattice(Math.min(volume, policy.max_position_size, Number(instrument.volume_max)), brokerMinVolume, brokerVolumeStep)
   const brokerVolume = finite(brokerCalculation?.volume)
   const brokerLoss = finite(brokerCalculation?.loss_to_sl)
   const brokerPriceTolerance = Math.max(Number(instrument.tick_size), Number(instrument.point)) + 1e-9
@@ -428,13 +513,35 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
   const fullRiskCap = equity * policy.max_risk_per_trade_pct / 100
   const riskCap = fullRiskCap * resolvedPositionSizeFactor
   const riskBasedVolume = riskCap / riskPerLot
-  const volumeBeforeStep = Math.min(volume, riskBasedVolume)
-  volume = floorStep(volumeBeforeStep, Number(instrument.volume_step))
+  const cappedVolumeBeforeRounding = Math.min(volume, riskBasedVolume)
+  const roundedVolumeCandidate = roundStepHalfUp(cappedVolumeBeforeRounding, brokerVolumeStep, brokerMinVolume)
+  const roundedRiskAmount = riskPerLot * roundedVolumeCandidate
+  const requestedVolumeLimit = hasTierSizing ? null : Number(original.volume)
+  const roundedVolumeExceedsRequest = requestedVolumeLimit != null
+    && roundedVolumeCandidate > requestedVolumeLimit + 1e-9
+  const roundingGuardApplied = roundedRiskAmount > riskCap + 1e-9 || roundedVolumeExceedsRequest
+  volume = roundingGuardApplied
+    ? stepDownVolume(roundedVolumeCandidate, brokerMinVolume, brokerVolumeStep)
+    : roundedVolumeCandidate
+  const approvedRiskAmount = riskPerLot * volume
+  const roundingDetails = {
+    theoretical_volume:Number(riskBasedVolume.toFixed(8)),
+    capped_volume_before_rounding:Number(cappedVolumeBeforeRounding.toFixed(8)),
+    // Keep the old audit key for readers written before the rounding change.
+    capped_volume_before_step:Number(cappedVolumeBeforeRounding.toFixed(8)),
+    rounded_volume_candidate:Number(roundedVolumeCandidate.toFixed(8)),
+    approved_volume:Number(volume.toFixed(8)),
+    rounding_mode:'half_up',
+    rounding_step:brokerVolumeStep,
+    rounding_guard_applied:roundingGuardApplied,
+    rounded_risk_amount:Number(roundedRiskAmount.toFixed(8)),
+    instrument_validation_status:instrumentValidationStatus,
+    tick_size_source:String(instrument?.tick_size_source || '').trim() || null,
+  }
   const minimumLot = Number(instrument.volume_min)
   if (volume + 1e-9 < minimumLot) return fail('R1.9_BELOW_MINIMUM_AFTER_RISK', {
     volume,
-    theoretical_volume:Number(riskBasedVolume.toFixed(8)),
-    capped_volume_before_step:Number(volumeBeforeStep.toFixed(8)),
+    ...roundingDetails,
     minimum:minimumLot,
     step:Number(instrument.volume_step),
     equity,
@@ -448,11 +555,12 @@ export function evaluateCoreRisk({ request, account, quote, instrument, brokerCa
     position_size_tier:approved.position_size_tier || null,
     calculation_source:calculationSource,
   })
-  if (!hasTierSizing && volume > Number(original.volume) + 1e-9) return fail('R1.9_VOLUME_INCREASE_FORBIDDEN')
+  if (!hasTierSizing && volume > Number(original.volume) + 1e-9) return fail('R1.9_VOLUME_INCREASE_FORBIDDEN', roundingDetails)
   if (volume !== Number(approved.volume)) adjusted = true
   approved.volume = volume
   pass(rules, 'R1.10_REAL_RISK', {
-    risk_amount: Number((riskPerLot * volume).toFixed(8)), risk_cap: riskCap,
+    ...roundingDetails,
+    risk_amount: Number(approvedRiskAmount.toFixed(8)), risk_cap: riskCap,
     full_risk_cap: fullRiskCap, position_size_factor:resolvedPositionSizeFactor,
     position_size_tier:approved.position_size_tier || null,
     position_limit_lots:Number(policy.max_position_size),

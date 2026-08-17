@@ -7,7 +7,7 @@ const db = vi.hoisted(() => ({
 vi.mock('../../server/db.js', () => db)
 
 import {
-  DEFAULT_RISK_POLICY, RISK_RULES, evaluateCoreRisk, isRelaxation,
+  DEFAULT_RISK_POLICY, RISK_RULES, evaluateCoreRisk, isRelaxation, roundStepHalfUp,
   normalizePlatformRiskConfig, resolveEffectiveRiskPolicy, resolvePlatformAiVolumeRange, submitRiskPolicyChanges, persistRiskDecision, weekendProtectionState,
 } from '../../server/routes/ai/risk-policy.js'
 
@@ -49,8 +49,67 @@ describe('L1/L4/L5 core risk gate', () => {
     } })
     expect(result.rule_results).toContainEqual(expect.objectContaining({
       code: 'R1.10_REAL_RISK',
-      details: expect.objectContaining({ calculation_source: 'mt5_order_calc_profit', risk_amount: 45 }),
+      details: expect.objectContaining({
+        calculation_source: 'mt5_order_calc_profit', risk_amount: 45,
+        theoretical_volume:0.06666667, capped_volume_before_rounding:0.03,
+        rounded_volume_candidate:0.03, approved_volume:0.03,
+        rounding_mode:'half_up', rounding_step:0.01,
+        rounding_guard_applied:false, rounded_risk_amount:45,
+      }),
     }))
+  })
+
+  it('rounds volume with decimal-safe half-up semantics on the broker lattice', () => {
+    expect(roundStepHalfUp(0.064, 0.01)).toBe(0.06)
+    expect(roundStepHalfUp(0.065, 0.01)).toBe(0.07)
+    expect(roundStepHalfUp(0.066, 0.01)).toBe(0.07)
+    expect(roundStepHalfUp(0.125, 0.05)).toBe(0.15)
+    expect(roundStepHalfUp(0.0249, 0.001)).toBe(0.025)
+    expect(roundStepHalfUp(0.04, 0.02, 0.01)).toBe(0.05)
+  })
+
+  it('uses the risk cap after half-up rounding and records the rounding audit fields', () => {
+    const result = run({
+      request:{ volume:0.1, sl:1990.2 },
+      account:{ equity:64 },
+      policy:{ max_position_size:0.2 },
+      instrument:{ tick_size:1, tick_value:1, point:0.01 },
+    })
+    expect(result.decision_status).toBe('adjust')
+    expect(result.approved_order.volume).toBe(0.06)
+    expect(result.rule_results).toContainEqual(expect.objectContaining({
+      code:'R1.10_REAL_RISK',
+      details:expect.objectContaining({
+        theoretical_volume:0.064,
+        capped_volume_before_rounding:0.064,
+        rounded_volume_candidate:0.06,
+        approved_volume:0.06,
+        rounding_mode:'half_up',
+        rounding_step:0.01,
+        rounding_guard_applied:false,
+        rounded_risk_amount:0.6,
+        risk_amount:0.6,
+      }),
+    }))
+  })
+
+  it('rounds up at a half step, then falls back one step when the rounded risk exceeds the cap', () => {
+    const result = run({
+      request:{ volume:0.1, sl:1990.2 },
+      account:{ equity:65 },
+      policy:{ max_position_size:0.2 },
+      instrument:{ tick_size:1, tick_value:1, point:0.01 },
+    })
+    const details = result.rule_results.find(item => item.code === 'R1.10_REAL_RISK').details
+    expect(result.approved_order.volume).toBe(0.06)
+    expect(details).toMatchObject({
+      theoretical_volume:0.065,
+      capped_volume_before_rounding:0.065,
+      rounded_volume_candidate:0.07,
+      approved_volume:0.06,
+      rounding_guard_applied:true,
+      rounded_risk_amount:0.7,
+    })
   })
 
   it('turns a fixed AI tier into a deterministic fraction of the user risk budget', () => {
@@ -126,11 +185,42 @@ describe('L1/L4/L5 core risk gate', () => {
       code:'R1.9_BELOW_MINIMUM_AFTER_RISK',
       details:{
         volume:0, theoretical_volume:0.00049505, capped_volume_before_step:0.00049505,
+        capped_volume_before_rounding:0.00049505, rounded_volume_candidate:0.01,
+        approved_volume:0, rounding_mode:'half_up', rounding_step:0.01,
+        rounding_guard_applied:true, rounded_risk_amount:20.2,
         minimum:0.01, step:0.01, equity:100, full_risk_cap:1, risk_cap:1,
         risk_per_lot:2020, minimum_lot_risk:20.2, minimum_lot_risk_pct:20.2,
         position_size_factor:1, calculation_source:'symbol_tick_metadata',
       },
     })
+  })
+
+  it('rejects an explicitly ambiguous instrument before sizing and preserves raw candidates', () => {
+    const result = run({ instrument: {
+      instrument_validation_status:'ambiguous', tick_size_source:'marketinfo_price_candidate',
+      tick_size_raw_marketinfo:1, tick_size_marketinfo_price_candidate:0.01,
+      tick_size_symbolinfo_candidate:0.1,
+    } })
+    expect(result).toMatchObject({ decision_status:'reject', reject_code:'R1_INSTRUMENT_DATA_INCONSISTENT' })
+    expect(result.rule_results.at(-1)).toMatchObject({
+      code:'R1_INSTRUMENT_DATA_INCONSISTENT',
+      details:expect.objectContaining({
+        instrument_validation_status:'ambiguous', tick_size_source:'marketinfo_price_candidate',
+        tick_size:0.01, tick_value:1, point:0.01, contract_size:100,
+        raw_candidates:{ tick_size_raw_marketinfo:1, tick_size_marketinfo_price_candidate:0.01, tick_size_symbolinfo_candidate:0.1 },
+      }),
+    })
+  })
+
+  it('passes legacy instruments and forwards validation evidence to R1.10', () => {
+    const result = run({ instrument: { instrument_validation_status:'valid', tick_size_source:'symbol_info_trade_tick_size' } })
+    expect(result.decision_status).toBe('pass')
+    expect(result.rule_results).toContainEqual(expect.objectContaining({
+      code:'R1.10_REAL_RISK',
+      details:expect.objectContaining({
+        instrument_validation_status:'valid', tick_size_source:'symbol_info_trade_tick_size',
+      }),
+    }))
   })
 
   it.each([

@@ -283,6 +283,7 @@ const VALUE_LABELS = {
   'R1.5_RR_TOO_LOW': '盈亏比低于最低要求',
   'R1.5_TP_TIER_UPGRADED': '已改用满足盈亏比要求的更远止盈档位',
   'R1.9_BELOW_MINIMUM_AFTER_RISK': '风险调整后手数低于最小可交易手数',
+  'R1_INSTRUMENT_DATA_INCONSISTENT': '交易平台返回的品种风险参数不一致',
   'R4.4_QUOTE_STALE': 'MT5 报价已过期或时间异常',
   'R1.7_PENDING_DEVIATION': '挂单价格偏离当前报价过大',
   'R1.7_PENDING_PRICE_ABNORMAL': '挂单触发价明显异常',
@@ -514,9 +515,14 @@ export function formatRiskReason(code, details = {}) {
   if (rawCode === 'R1.9_AI_VOLUME_OUT_OF_RANGE') return `${base}：执行上限 ${displayNumber(details.volume)} 手，允许范围 ${displayNumber(details.minimum)}～${displayNumber(details.maximum)} 手，步进 ${displayNumber(details.step)} 手`
   if (rawCode === 'R1.9_BELOW_MINIMUM_AFTER_RISK') {
     if (Number.isFinite(Number(details.theoretical_volume)) && Number.isFinite(Number(details.risk_cap)) && Number.isFinite(Number(details.minimum_lot_risk))) {
-      return `${base}：理论手数 ${displayNumber(details.theoretical_volume, 4)}，按 ${displayNumber(details.step)} 手步进向下取整后为 ${displayNumber(details.volume)} 手；本次风险预算 ${displayNumber(details.risk_cap, 2)}，最小 ${displayNumber(details.minimum)} 手预计止损亏损 ${displayNumber(details.minimum_lot_risk, 2)}（均为账户货币），因此未执行`
+      const rounded = details.rounded_volume_candidate ?? details.volume
+      const guard = details.rounding_guard_applied ? '，向上舍入超过风险预算后已安全回退' : ''
+      return `${base}：理论手数 ${displayNumber(details.theoretical_volume, 4)}，按 ${displayNumber(details.rounding_step ?? details.step)} 手步进四舍五入候选为 ${displayNumber(rounded)} 手${guard}；最终 ${displayNumber(details.approved_volume ?? details.volume)} 手，本次风险预算 ${displayNumber(details.risk_cap, 2)}，最小 ${displayNumber(details.minimum)} 手预计止损亏损 ${displayNumber(details.minimum_lot_risk, 2)}（均为账户货币），因此未执行`
     }
     return `${base}：风险计算后为 ${displayNumber(details.volume)} 手，最低可交易 ${displayNumber(details.minimum)} 手`
+  }
+  if (rawCode === 'R1_INSTRUMENT_DATA_INCONSISTENT') {
+    return `${base}：tick size ${displayNumber(details.tick_size, 8)}，tick value ${displayNumber(details.tick_value, 8)}，来源 ${details.tick_size_source || '未确认'}；已为安全起见阻止下单`
   }
   if (rawCode === 'R1.7_PENDING_DIRECTION') return `${base}：触发价 ${displayNumber(details.trigger_price)}，当前价 ${displayNumber(details.current_price)}`
   if (rawCode === 'R1.7_STOP_LIMIT_RELATION') return `${base}：触发价 ${displayNumber(details.trigger_price)}，触发后限价 ${displayNumber(details.stop_limit_price)}`
@@ -545,14 +551,18 @@ export function formatRiskReason(code, details = {}) {
 // realtime boundary.  Risk policy/account snapshots stay server-side.
 const SAFE_EXECUTION_DETAIL_KEYS = new Set([
   'risk_decision_id', 'current', 'limit', 'minimum', 'maximum', 'step', 'volume',
-  'theoretical_volume', 'risk_cap', 'minimum_lot_risk', 'risk_calculation_volume', 'trigger_price',
+  'theoretical_volume', 'capped_volume_before_rounding', 'rounded_volume_candidate',
+  'approved_volume', 'rounding_mode', 'rounding_step', 'rounding_guard_applied',
+  'rounded_risk_amount', 'risk_cap', 'minimum_lot_risk', 'risk_calculation_volume', 'trigger_price',
   'stop_limit_price', 'current_price', 'entry_price', 'quote_age_seconds',
   'maximum_seconds', 'spread_points', 'remaining_seconds', 'count', 'remaining',
   'allowed_min', 'allowed_max', 'maximum_pct', 'drawdown_pct', 'limit_pct',
   'daily_loss_pct', 'daily_loss_limit_pct', 'loss_pct', 'rr', 'minimum_rr', 'deviation',
   'stop_loss', 'take_profit',
   'minimum_seconds', 'until', 'remaining_same_direction', 'lookback_seconds',
-  'ticket', 'tickets', 'retcode', 'stage', 'field', 'reason',
+  'ticket', 'tickets', 'retcode', 'stage', 'field', 'reason', 'tick_size', 'tick_value',
+  'point', 'contract_size', 'tick_size_source', 'instrument_validation_status',
+  'validation_reasons', 'instrument_validation_reasons',
   'pending_action_reason', 'pending_action', 'management_group_ids', 'model_task_status',
 ])
 

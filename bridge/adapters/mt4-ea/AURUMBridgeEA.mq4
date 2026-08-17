@@ -3,7 +3,7 @@
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.0.2"
+#define ADAPTER_VERSION "3.0.2-riskfix1"
 #define MAX_HISTORY_WINDOW_MSC 1576800000000
 #define QUERY_COMMENT_MAX_ROWS 500
 #define QUERY_COMMENT_LOOKBACK_MSC 2592000000
@@ -66,6 +66,20 @@ int    g_history_index_total = -1;
 int    g_history_index_login = 0;
 string g_history_index_server = "";
 long   g_history_index_offset_msc = 0;
+
+struct InstrumentRiskSpec
+  {
+   double point;
+   double tick_size;
+   double tick_value;
+   double contract_size;
+   double tick_size_raw_marketinfo;
+   double tick_size_marketinfo_price_candidate;
+   double tick_size_symbolinfo_candidate;
+   string tick_size_source;
+   string validation_status;
+   string validation_reasons_json;
+  };
 
 long StableServerIdentityHash(const string value)
   {
@@ -591,6 +605,90 @@ void SendRatesResult(const string request_id, const int status,
    if(!WriteFrame(response)) DisconnectPipe();
   }
 
+bool PositiveFinite(const double value)
+  {
+   return(MathIsValidNumber(value) && value > 0);
+  }
+
+bool TickSizeAlignsWithPoint(const double tick_size, const double point)
+  {
+   if(!PositiveFinite(tick_size) || !PositiveFinite(point)) return(false);
+   double steps = tick_size / point;
+   if(!MathIsValidNumber(steps) || steps < 1.0 - 0.0000001) return(false);
+   return(MathAbs(steps - MathRound(steps)) <= 0.0000001);
+  }
+
+bool TickSizesNearlyEqual(const double left, const double right)
+  {
+   if(!PositiveFinite(left) || !PositiveFinite(right)) return(false);
+   double scale = MathMax(MathAbs(left), MathAbs(right));
+   return(MathAbs(left - right) <= MathMax(0.000000000001, scale * 0.0000001));
+  }
+
+void ReadInstrumentRiskSpec(const string symbol, InstrumentRiskSpec &spec)
+  {
+   spec.point = MarketInfo(symbol, MODE_POINT);
+   spec.tick_value = MarketInfo(symbol, MODE_TICKVALUE);
+   spec.contract_size = MarketInfo(symbol, MODE_LOTSIZE);
+   spec.tick_size_raw_marketinfo = MarketInfo(symbol, MODE_TICKSIZE);
+   spec.tick_size_marketinfo_price_candidate =
+      spec.tick_size_raw_marketinfo * spec.point;
+   spec.tick_size_symbolinfo_candidate =
+      SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   spec.tick_size = 0;
+   spec.tick_size_source = "unavailable";
+   spec.validation_status = "invalid";
+   spec.validation_reasons_json = "[\"tick_size_unavailable\"]";
+
+   bool symbolinfo_valid = TickSizeAlignsWithPoint(
+      spec.tick_size_symbolinfo_candidate, spec.point);
+   bool marketinfo_valid = TickSizeAlignsWithPoint(
+      spec.tick_size_marketinfo_price_candidate, spec.point);
+   if(symbolinfo_valid)
+     {
+      spec.tick_size = spec.tick_size_symbolinfo_candidate;
+      spec.tick_size_source = "symbol_info_trade_tick_size";
+      spec.validation_status = "valid";
+      if(marketinfo_valid && TickSizesNearlyEqual(
+         spec.tick_size_symbolinfo_candidate,
+         spec.tick_size_marketinfo_price_candidate))
+         spec.validation_reasons_json = "[]";
+      else
+         spec.validation_reasons_json =
+            "[\"marketinfo_semantic_mismatch\"]";
+      return;
+     }
+   if(marketinfo_valid)
+     {
+      spec.tick_size = spec.tick_size_marketinfo_price_candidate;
+      spec.tick_size_source = "market_info_tick_size_points";
+      spec.validation_status = "fallback";
+      spec.validation_reasons_json =
+         "[\"symbolinfo_tick_size_unavailable\"]";
+     }
+  }
+
+string InstrumentRiskSpecJsonFields(InstrumentRiskSpec &spec)
+  {
+   return("\"platform\":\"mt4\""
+      + ",\"ea_version\":\"" + ADAPTER_VERSION + "\""
+      + ",\"point\":" + JsonNumber(spec.point)
+      + ",\"tick_size\":" + JsonNumber(spec.tick_size)
+      + ",\"tick_value\":" + JsonNumber(spec.tick_value)
+      + ",\"contract_size\":" + JsonNumber(spec.contract_size)
+      + ",\"tick_size_raw_marketinfo\":"
+      + JsonNumber(spec.tick_size_raw_marketinfo)
+      + ",\"tick_size_marketinfo_price_candidate\":"
+      + JsonNumber(spec.tick_size_marketinfo_price_candidate)
+      + ",\"tick_size_symbolinfo_candidate\":"
+      + JsonNumber(spec.tick_size_symbolinfo_candidate)
+      + ",\"tick_size_source\":\"" + JsonEscape(spec.tick_size_source) + "\""
+      + ",\"instrument_validation_status\":\""
+      + JsonEscape(spec.validation_status) + "\""
+      + ",\"instrument_validation_reasons\":"
+      + spec.validation_reasons_json);
+  }
+
 void SendSymbolSnapshot(uchar &request[], int &offset)
   {
    string request_id = ReadUtf8(request, offset);
@@ -614,7 +712,9 @@ void SendSymbolSnapshot(uchar &request[], int &offset)
       return;
      }
    RefreshRates();
-   double point = MarketInfo(symbol, MODE_POINT);
+   InstrumentRiskSpec instrument_spec;
+   ReadInstrumentRiskSpec(symbol, instrument_spec);
+   double point = instrument_spec.point;
    double bid = MarketInfo(symbol, MODE_BID);
    double ask = MarketInfo(symbol, MODE_ASK);
    double margin_per_lot = MarketInfo(symbol, MODE_MARGINREQUIRED);
@@ -634,12 +734,9 @@ void SendSymbolSnapshot(uchar &request[], int &offset)
       + ",\"trade_stops_level\":" + IntegerToString((int)MarketInfo(symbol, MODE_STOPLEVEL))
       + ",\"trade_freeze_level\":" + IntegerToString((int)MarketInfo(symbol, MODE_FREEZELEVEL))
       + ",\"filling_mode\":0,\"order_mode\":0"
-      + ",\"point\":" + JsonNumber(point)
+      + "," + InstrumentRiskSpecJsonFields(instrument_spec)
       + ",\"spread\":" + IntegerToString((int)MarketInfo(symbol, MODE_SPREAD))
       + ",\"spread_float\":false"
-      + ",\"tick_size\":" + JsonNumber(MarketInfo(symbol, MODE_TICKSIZE) * point)
-      + ",\"tick_value\":" + JsonNumber(MarketInfo(symbol, MODE_TICKVALUE))
-      + ",\"contract_size\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSIZE))
       + ",\"margin_initial\":" + JsonNumber(MarketInfo(symbol, MODE_MARGININIT))
       + ",\"margin_maintenance\":" + JsonNumber(MarketInfo(symbol, MODE_MARGINMAINTENANCE))
       + ",\"margin_hedged\":" + JsonNumber(MarketInfo(symbol, MODE_MARGINHEDGED))
@@ -696,15 +793,13 @@ string JsonLong(const long value)
 
 string RiskInstrumentJson(const string symbol)
   {
-   double point = MarketInfo(symbol, MODE_POINT);
+   InstrumentRiskSpec instrument_spec;
+   ReadInstrumentRiskSpec(symbol, instrument_spec);
    return("{\"name\":\"" + JsonEscape(symbol) + "\""
       + ",\"digits\":" + IntegerToString((int)MarketInfo(symbol, MODE_DIGITS))
       + ",\"trade_mode\":" + (MarketInfo(symbol, MODE_TRADEALLOWED) > 0 ? "4" : "0")
       + ",\"trade_calc_mode\":" + IntegerToString((int)MarketInfo(symbol, MODE_PROFITCALCMODE))
-      + ",\"point\":" + JsonNumber(point)
-      + ",\"tick_size\":" + JsonNumber(MarketInfo(symbol, MODE_TICKSIZE) * point)
-      + ",\"tick_value\":" + JsonNumber(MarketInfo(symbol, MODE_TICKVALUE))
-      + ",\"contract_size\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSIZE))
+      + "," + InstrumentRiskSpecJsonFields(instrument_spec)
       + ",\"margin_initial\":" + JsonNumber(MarketInfo(symbol, MODE_MARGININIT))
       + ",\"volume_min\":" + JsonNumber(MarketInfo(symbol, MODE_MINLOT))
       + ",\"volume_max\":" + JsonNumber(MarketInfo(symbol, MODE_MAXLOT))
@@ -1410,15 +1505,14 @@ string BuildSymbolsPayload()
       string symbol = SymbolName(index, false);
       if(symbol == "") continue;
       string description = SymbolInfoString(symbol, SYMBOL_DESCRIPTION);
+      InstrumentRiskSpec instrument_spec;
+      ReadInstrumentRiskSpec(symbol, instrument_spec);
       if(count > 0) rows += ",";
       rows += "{\"name\":\"" + JsonEscape(symbol) + "\","
          + "\"description\":\"" + JsonEscape(description) + "\","
          + "\"digits\":" + IntegerToString((int)MarketInfo(symbol, MODE_DIGITS)) + ","
          + "\"trade_mode\":" + IntegerToString((int)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE)) + ","
-         + "\"point\":" + JsonNumber(MarketInfo(symbol, MODE_POINT)) + ","
-         + "\"tick_size\":" + JsonNumber(MarketInfo(symbol, MODE_TICKSIZE)) + ","
-         + "\"tick_value\":" + JsonNumber(MarketInfo(symbol, MODE_TICKVALUE)) + ","
-         + "\"contract_size\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSIZE)) + ","
+         + InstrumentRiskSpecJsonFields(instrument_spec) + ","
          + "\"volume_min\":" + JsonNumber(MarketInfo(symbol, MODE_MINLOT)) + ","
          + "\"volume_max\":" + JsonNumber(MarketInfo(symbol, MODE_MAXLOT)) + ","
          + "\"volume_step\":" + JsonNumber(MarketInfo(symbol, MODE_LOTSTEP)) + "}";

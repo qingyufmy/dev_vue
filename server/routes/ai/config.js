@@ -20,6 +20,7 @@ import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './term
 import { getDefaultObserverSourceClock } from './observer-channels.js'
 import { auditTradingAccountId, buildAuditClockSnapshot } from './audit-clock.js'
 import { executionValidationRejection, readExecutionValidation } from './signal-execution-validation.js'
+import { validateRiskInstrument } from './instrument-risk-metadata.js'
 
 export { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
 export const DEFAULT_TAKE_PROFIT_MODE = 'ai_recommended'
@@ -788,6 +789,11 @@ export async function executeOrderCore(userId, config, request, action, options 
       if (!instrument) throw Object.assign(new Error('symbol_metadata_not_found'), {
         reason:'symbol_metadata_not_found', stage:'instrument', field:'instrument',
       })
+      const instrumentValidation = validateRiskInstrument(instrument, {
+        account,
+        snapshot:riskSnapshot,
+        stage:'risk_snapshot',
+      })
       const fxRates = {}
       const accountCurrency = String(account?.currency || '').toUpperCase()
       const quoteCurrencies = new Set([...(riskSnapshot.positions || []), ...(riskSnapshot.pending || []), prepared]
@@ -804,7 +810,8 @@ export async function executeOrderCore(userId, config, request, action, options 
         }
       }
       return {
-        account, quote, instrument, instruments, fxRates,
+        account, quote, instrument:instrumentValidation.instrument || instrument, instruments, fxRates,
+        instrument_validation:instrumentValidation,
         resolved_risk_policy: resolved.policy,
         risk_policy_version_ids: resolved.policyVersionIds,
         risk_calculation_volume: riskCalculationVolume,

@@ -6003,7 +6003,7 @@ const RISK_DECISION_LABELS = {
   "R5_SCHEMA_SYMBOL":"缺少交易品种", "R5_SCHEMA_ORDER_TYPE":"订单方向无效", "R5_SCHEMA_ENTRY_METHOD":"入场方式无效",
   "R5_SCHEMA_AI_REQUIRED":"AI 订单必要字段不完整", "R5_SCHEMA_PENDING_PRICE":"挂单价格无效",
   "R5_SCHEMA_STOP_LIMIT_PRICE":"Stop Limit 触发后限价无效", "R5_SCHEMA_AI_POSITION_SIZE_TIER":"AI 返回的仓位档位无效",
-  "R1_INSTRUMENT_DATA_INCOMPLETE":"品种交易参数不完整", "R1_SYMBOL_TRADE_DISABLED":"品种当前禁止交易",
+  "R1_INSTRUMENT_DATA_INCOMPLETE":"品种交易参数不完整", "R1_INSTRUMENT_DATA_INCONSISTENT":"交易平台返回的品种风险参数不一致", "R1_SYMBOL_TRADE_DISABLED":"品种当前禁止交易",
   "R1.1_SYMBOL_NOT_ALLOWED":"品种不在允许范围", "R1.2_STOP_LOSS_REQUIRED":"缺少止损",
   "R1.4_STOP_LOSS_TOO_FAR":"止损距离超过上限",
   "R1.5_TAKE_PROFIT_REQUIRED":"缺少止盈", "R1.5_RR_TOO_LOW":"盈亏比低于最低要求",
@@ -6068,10 +6068,13 @@ function riskRuleDescription(code, details = {}) {
   if (code === "R1.5_TP_TIER_UPGRADED") return `${label}：TP${details.from_tier ?? "?"} → TP${details.to_tier ?? "?"}，调整后盈亏比 ${displayRiskNumber(details.rr)}`;
   if (code === "R1.9_BELOW_MINIMUM_AFTER_RISK") {
     if ([details.theoretical_volume, details.risk_cap, details.minimum_lot_risk].every(value => Number.isFinite(Number(value)))) {
-      return `${label}：理论手数 ${displayRiskNumber(details.theoretical_volume, 4)}，按 ${displayRiskNumber(details.step, 3)} 手步进向下取整后为 ${displayRiskNumber(details.volume, 3)} 手；本次风险预算 ${displayRiskNumber(details.risk_cap, 2)}，最小 ${displayRiskNumber(details.minimum, 3)} 手预计止损亏损 ${displayRiskNumber(details.minimum_lot_risk, 2)}（均为账户货币），因此未执行`;
+      const rounded = details.rounded_volume_candidate ?? details.volume;
+      const guard = details.rounding_guard_applied ? "，向上舍入超过风险预算后已安全回退" : "";
+      return `${label}：理论手数 ${displayRiskNumber(details.theoretical_volume, 4)}，按 ${displayRiskNumber(details.rounding_step ?? details.step, 3)} 手步进四舍五入候选为 ${displayRiskNumber(rounded, 3)} 手${guard}；最终 ${displayRiskNumber(details.approved_volume ?? details.volume, 3)} 手，本次风险预算 ${displayRiskNumber(details.risk_cap, 2)}，最小 ${displayRiskNumber(details.minimum, 3)} 手预计止损亏损 ${displayRiskNumber(details.minimum_lot_risk, 2)}（均为账户货币），因此未执行`;
     }
     return `${label}：计算结果 ${displayRiskNumber(details.volume)} 手，最低 ${displayRiskNumber(details.minimum)} 手`;
   }
+  if (code === "R1_INSTRUMENT_DATA_INCONSISTENT") return `${label}：tick size ${displayRiskNumber(details.tick_size, 8)}，tick value ${displayRiskNumber(details.tick_value, 8)}，来源 ${details.tick_size_source || "未确认"}；已为安全起见阻止下单`;
   if (code === "R4.4_QUOTE_STALE") return `${label}：报价年龄 ${displayRiskNumber(details.quote_age_seconds, 3)} 秒，允许上限 ${displayRiskNumber(details.maximum_seconds)} 秒`;
   if (code === "R1.7_PENDING_DEVIATION") return `${label}：偏离 ${displayRiskNumber(details.deviation)}，允许上限 ${displayRiskNumber(details.maximum)}`;
   if (code === "R4.6_EXECUTION_PRICE_DEVIATION") return `${label}：当前 ${displayRiskNumber(details.current_price)}，允许 ${displayRiskNumber(details.allowed_min)} ～ ${displayRiskNumber(details.allowed_max)}（±${displayRiskNumber(details.maximum_pct, 3)}%）`;

@@ -173,7 +173,12 @@ describe('audit localization', () => {
   it('explains the full minimum-lot risk calculation in account currency', () => {
     expect(formatRiskReason('R1.9_BELOW_MINIMUM_AFTER_RISK', {
       theoretical_volume:0.00822, volume:0, minimum:0.01, step:0.01,
+      rounded_volume_candidate:0.01, approved_volume:0,
+      rounding_step:0.01, rounding_guard_applied:true,
       risk_cap:24.67, minimum_lot_risk:30,
-    })).toBe('风险调整后手数低于最小可交易手数：理论手数 0.0082，按 0.01 手步进向下取整后为 0 手；本次风险预算 24.67，最小 0.01 手预计止损亏损 30（均为账户货币），因此未执行')
+    })).toBe('风险调整后手数低于最小可交易手数：理论手数 0.0082，按 0.01 手步进四舍五入候选为 0.01 手，向上舍入超过风险预算后已安全回退；最终 0 手，本次风险预算 24.67，最小 0.01 手预计止损亏损 30（均为账户货币），因此未执行')
+    expect(formatRiskReason('R1_INSTRUMENT_DATA_INCONSISTENT', {
+      tick_size:0.0001, tick_value:1, tick_size_source:'unavailable',
+    })).toBe('交易平台返回的品种风险参数不一致：tick size 0.0001，tick value 1，来源 unavailable；已为安全起见阻止下单')
   })
 })
