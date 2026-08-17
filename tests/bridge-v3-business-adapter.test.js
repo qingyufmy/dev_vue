@@ -706,6 +706,33 @@ describe('Bridge v3 business compatibility adapter', () => {
     })
   })
 
+  it('omits null optional protection fields from a market place-order command', async () => {
+    const { adapter, gateway } = setup()
+
+    await adapter.execute(42, 'open', {
+      symbol:'XAUUSD', order_type:'buy', volume:0.1,
+      stop_loss:null, take_profit:null, deviation:null, magic:null, comment:null,
+    })
+
+    expect(gateway.sendCommand.mock.calls[0][1].params).toEqual({
+      symbol:'XAUUSD', side:'buy', order_kind:'market', volume:0.1,
+    })
+  })
+
+  it.each([
+    ['zero stop loss', { stop_loss:0 }],
+    ['negative take profit', { take_profit:-1 }],
+    ['string stop loss', { stop_loss:'2290' }],
+  ])('keeps %s so strict Worker validation can reject it', async (_label, invalid) => {
+    const { adapter, gateway } = setup()
+
+    await adapter.execute(42, 'open', {
+      symbol:'XAUUSD', order_type:'buy', volume:0.1, ...invalid,
+    })
+
+    expect(gateway.sendCommand.mock.calls[0][1].params).toMatchObject(invalid)
+  })
+
   it('never aliases a pending order ticket as a position id', async () => {
     const { adapter } = setup({ commandResult:{
       status:'succeeded', command_id:'command_pending_01',
@@ -746,6 +773,20 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(gateway.sendCommand.mock.calls[0][1].params).toMatchObject({
       side:'buy', order_kind:'stop_limit', stop_limit_price:2308,
       expiration:1_900_000_000, type_time:2,
+    })
+  })
+
+  it('omits null optional fields from a pending place-order command', async () => {
+    const { adapter, gateway } = setup()
+
+    await adapter.execute(42, 'pending', {
+      symbol:'XAUUSD', order_type:'sell_limit', volume:0.1, price:2310,
+      stop_loss:null, take_profit:null, stoplimit_price:null,
+      deviation:null, magic:null, expiration:null, comment:null,
+    })
+
+    expect(gateway.sendCommand.mock.calls[0][1].params).toEqual({
+      symbol:'XAUUSD', side:'sell', order_kind:'limit', volume:0.1, price:2310,
     })
   })
 
@@ -973,6 +1014,24 @@ describe('Bridge v3 business compatibility adapter', () => {
         expected_take_profit:2320, expected_state:expectedState,
       },
     }), { timeoutMs:5000 })
+  })
+
+  it('preserves null protection values when clearing a system position field', async () => {
+    const { adapter, gateway } = setup({ positionRows:[{
+      ticket:10, symbol:'XAUUSD', type:0, volume:0.1, magic:234000, sl:2290, tp:2320,
+    }] })
+    const expectedState = {
+      ticket:'10', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.1,
+      stop_loss:2290, take_profit:2320,
+    }
+
+    await expect(adapter.execute(42, 'modify_system_position_protection', {
+      ticket:'10', stop_loss:null, take_profit:2325, expected_state:expectedState,
+    })).resolves.toMatchObject({ status:'success' })
+
+    expect(gateway.sendCommand.mock.calls[0][1].params).toMatchObject({
+      stop_loss:null, take_profit:2325,
+    })
   })
 
   it('projects complete management state onto the strict Worker whitelist', async () => {

@@ -59,6 +59,16 @@ function cleanObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined))
 }
 
+// The strict Worker contract treats an optional field that is present with
+// null as invalid.  Place-order fields are optional when the caller has no
+// protection/expiry/etc. to send, so omit both null and undefined at this
+// wire boundary.  Keep `cleanObject` unchanged because management commands
+// use null deliberately (for example, clearing a position's protection).
+function cleanPlaceOrderObject(value) {
+  return Object.fromEntries(Object.entries(value)
+    .filter(([, item]) => item !== undefined && item !== null))
+}
+
 // The server keeps the complete expected state for preconditions and audit
 // records, while Bridge Worker commands accept only the protocol contract
 // fields below. Keep this projection at the wire boundary so server-only
@@ -190,7 +200,7 @@ function normalizeOrder(item, platform) {
 
 function tradeParams(action, params) {
   if (action === 'open') {
-    return cleanObject({
+    return cleanPlaceOrderObject({
       symbol:params.symbol,
       side:params.side ?? params.type ?? params.order_type,
       order_kind:'market',
@@ -205,7 +215,7 @@ function tradeParams(action, params) {
   if (action === 'pending') {
     const legacyType = String(params.type ?? params.order_type ?? '').trim().toLowerCase()
     const [side, ...kindParts] = legacyType.split('_')
-    return cleanObject({
+    return cleanPlaceOrderObject({
       symbol:params.symbol,
       side,
       order_kind:kindParts.join('_'),

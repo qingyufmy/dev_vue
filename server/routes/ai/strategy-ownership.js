@@ -689,17 +689,18 @@ async function syncLegacySchedulerTx(run, userId, preferred = null) {
   const now = beijingNow()
   if (active) {
     await run(`INSERT INTO auto_scheduler
-      (user_id, enabled, prompt_type_id, selected_symbols_json, created_at, updated_at)
-      VALUES (?, 1, ?, ?, ?, ?)
+      (user_id, enabled, prompt_type_id, enable_auto_trade, selected_symbols_json, created_at, updated_at)
+      VALUES (?, 1, ?, 1, ?, ?, ?)
       ON DUPLICATE KEY UPDATE enabled = 1, prompt_type_id = VALUES(prompt_type_id),
-        selected_symbols_json = VALUES(selected_symbols_json), updated_at = VALUES(updated_at)`,
+        enable_auto_trade = 1, selected_symbols_json = VALUES(selected_symbols_json),
+        updated_at = VALUES(updated_at)`,
     [userId, active.strategy_id, active.symbols_json ?? null, now, now])
     await run(`INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at)
       VALUES (?, 1, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 1, updated_at = VALUES(updated_at)`,
     [userId, now])
     return
   }
-  await run('UPDATE auto_scheduler SET enabled = 0, updated_at = ? WHERE user_id = ?', [now, userId])
+  await run('UPDATE auto_scheduler SET enabled = 0, enable_auto_trade = 0, updated_at = ? WHERE user_id = ?', [now, userId])
   await run(`INSERT INTO user_bridge_settings (user_id, auto_reasoning_enabled, updated_at)
     VALUES (?, 0, ?) ON DUPLICATE KEY UPDATE auto_reasoning_enabled = 0, updated_at = VALUES(updated_at)`,
   [userId, now])
