@@ -290,6 +290,48 @@ function timeframePlan(sourceEvidence, enabledTimeframes = []) {
     .sort((left, right) => REVIEW_TIMEFRAME_MS[left] - REVIEW_TIMEFRAME_MS[right])
 }
 
+export function periodMarketSourceAuthorization({ userId, strategyId, strategyScope, tradingAccountId } = {}) {
+  const scope = String(strategyScope || '').trim().toLowerCase()
+  const ownerId = Number(userId)
+  const accountId = Number(tradingAccountId)
+  const normalizedStrategyId = Number(strategyId)
+  if (scope === 'private' && Number.isSafeInteger(ownerId) && ownerId > 0) {
+    if (Number.isSafeInteger(accountId) && accountId > 0) {
+      return {
+        sql:`mds.bridge_user_id = ? AND EXISTS (
+          SELECT 1 FROM trading_accounts review_account
+          WHERE review_account.id = ? AND review_account.user_id = ?
+            AND UPPER(COALESCE(review_account.broker_server, '')) = UPPER(COALESCE(mds.broker_server, ''))
+            AND CAST(COALESCE(review_account.login_account, 0) AS CHAR) = CAST(COALESCE(mds.account_login, 0) AS CHAR)
+        )`,
+        params:[ownerId, accountId, ownerId],
+        mode:'private_account',
+      }
+    }
+    return { sql:'mds.bridge_user_id = ?', params:[ownerId], mode:'private_user' }
+  }
+  if (scope === 'platform' && Number.isSafeInteger(normalizedStrategyId) && normalizedStrategyId > 0) {
+    return {
+      sql:`EXISTS (
+        SELECT 1 FROM ai_observer_sources review_source
+        LEFT JOIN trading_accounts review_account ON review_account.id = review_source.trading_account_id
+        WHERE review_source.strategy_id = ? AND review_source.status = 'active'
+          AND review_source.bridge_user_id = mds.bridge_user_id
+          AND (review_source.trading_account_id IS NULL OR (
+            UPPER(COALESCE(review_account.broker_server, '')) = UPPER(COALESCE(mds.broker_server, ''))
+            AND CAST(COALESCE(review_account.login_account, 0) AS CHAR) = CAST(COALESCE(mds.account_login, 0) AS CHAR)
+          ))
+      )`,
+      params:[normalizedStrategyId],
+      mode:'platform_observer_source',
+    }
+  }
+  // Compatibility for older direct callers without a frozen strategy scope.
+  // Runtime period reviews always pass an explicit scope and therefore never
+  // use this legacy administrator-only branch.
+  return { sql:"u.role = 'admin'", params:[], mode:'legacy_admin' }
+}
+
 export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtcMs, endUtcMs, options = {}) {
   const chanHistoryTarget = Number(options.chanHistoryTarget || options.chanMaximumHistoryCount)
   const requestedChanLookback = options.includeChanHistory === true && Number.isFinite(chanHistoryTarget) && chanHistoryTarget > 0
@@ -321,14 +363,20 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
   const requestedSourceKey = String(options.sourceKey || options.source_key || '').trim()
   const sourceSelector = requestedSourceId ? 'AND mds.id = ?' : requestedSourceKey ? 'AND mds.source_key = ?' : ''
   const sourceSelectorParams = requestedSourceId ? [requestedSourceId] : requestedSourceKey ? [requestedSourceKey] : []
+  const sourceAuthorization = periodMarketSourceAuthorization({
+    userId,
+    strategyId:options.strategyId ?? options.strategy_id,
+    strategyScope:options.strategyScope ?? options.strategy_scope,
+    tradingAccountId:options.tradingAccountId ?? options.trading_account_id,
+  })
   const existingSource = await queryOne(`SELECT mds.id, mds.broker_server, mds.account_login, mds.source_key,
       mds.timezone_offset_minutes, mds.clock_status
     FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
-    WHERE u.role = 'admin' AND EXISTS (SELECT 1 FROM market_candles candles
+    WHERE ${sourceAuthorization.sql} AND EXISTS (SELECT 1 FROM market_candles candles
       WHERE candles.source_id = mds.id AND candles.standard_symbol = ? AND candles.timeframe = ? LIMIT 1)
       ${sourceSelector}
     ORDER BY (mds.clock_status = 'calibrated') DESC, mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`,
-  [stripBrokerSuffix(symbol), timeframe, ...sourceSelectorParams])
+  [...sourceAuthorization.params, stripBrokerSuffix(symbol), timeframe, ...sourceSelectorParams])
   let sourceId = Number(existingSource?.id)
   // A source is identified by its exact platform/source_key/account identity.
   // Never merge candles from another terminal merely because broker_server is equal.
@@ -402,7 +450,8 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
   return { sourceId, interval, rates, periodRates, marketMeta:continuityMeta, coverage }
 }
 
-export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbols = [], startUtcMs, endUtcMs, sources = [] } = {}) {
+export async function buildDailyPeriodMarketEvidence({ userId, strategyId, strategyScope = null,
+  tradingAccountId = null, symbols = [], startUtcMs, endUtcMs, sources = [] } = {}) {
   const requirements = []
   for (const source of sources || []) {
     const evidence = source?.evidence || source
@@ -460,6 +509,9 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, symbo
           env:{},
           sourceId:frozenIdentity?.source_id || null,
           sourceKey:frozenIdentity?.source_key || null,
+          strategyId,
+          strategyScope,
+          tradingAccountId,
         })
         const sentinel = { ...loaded.rates.at(-1), time_utc_msc:loaded.rates.at(-1).time_utc_msc + loaded.interval }
         const market = calculateMarketData(symbol, timeframe, [...loaded.rates, sentinel], {}, [], {

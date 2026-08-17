@@ -722,6 +722,223 @@ export function periodReviewCreationWindowState(periodType, periodEndUtcMs, asOf
 const DAILY_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence'])
 const CHAN_SOURCES = new Set(['data', 'calculation', 'confirmation_lag', 'ai_interpretation', 'strategy_rule', 'none', 'unknown'])
 const MEMORY_CATEGORIES = new Set(['general', 'market_regime', 'entry_setup', 'chan_structure', 'risk_execution'])
+const DAILY_REVIEW_V3_CONTRACT = 'daily-period-review-v3'
+const V3_MARKET_ALIGNMENT = new Set(['aligned', 'partly_aligned', 'conflict', 'insufficient_evidence'])
+const V3_STRATEGY_ALIGNMENT = new Set(['aligned', 'partly_aligned', 'conflict', 'insufficient_evidence'])
+const V3_OUTCOME_RESULTS = new Set(['profit', 'loss', 'breakeven'])
+const V3_AVOIDABILITY = new Set(['avoidable', 'partly_avoidable', 'normal_strategy_loss', 'insufficient_evidence'])
+const V3_MAX_ISSUE_CODES = 20
+const V3_MAX_EVIDENCE_REFS = 50
+const V3_MAX_PRIMARY_CAUSES = 8
+const V3_MAX_EXPERIENCE_RULES = 100
+const DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES = 30
+
+export const DAILY_PERIOD_REVIEW_V3_CONTRACT = DAILY_REVIEW_V3_CONTRACT
+
+function boundedReviewText(value, field, { maxLength = 8000, required = true } = {}) {
+  const text = memoryMarkdownText(value)
+  if (required && !text) throw new Error(`${field}_missing`)
+  if (text.length > maxLength) throw new Error(`${field}_too_long`)
+  return text
+}
+
+function normalizeConfidence(value, field = 'daily_review_confidence') {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number < 0 || number > 1) throw new Error(`invalid_${field}`)
+  return number
+}
+
+function normalizeV3TextArray(value, field, maxItems = 100) {
+  if (!Array.isArray(value) || value.length > maxItems) throw new Error(`invalid_daily_v3_${field}`)
+  return value.map((item, index) => boundedReviewText(item, `daily_v3_${field}_${index}`, { maxLength:3000 }))
+}
+
+function normalizeV3EvidenceRefs(value, outcomeId, allowedRefs = null) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > V3_MAX_EVIDENCE_REFS) {
+    throw new Error('invalid_daily_v3_evidence_refs')
+  }
+  const refs = [...new Set(value.map(ref => String(ref ?? '').trim()))]
+  if (refs.some(ref => !ref) || refs.some(ref => !/^[-a-zA-Z0-9_:.]+$/.test(ref))) {
+    throw new Error('invalid_daily_v3_evidence_refs')
+  }
+  const fallback = new Set([`outcome:${outcomeId}`])
+  const allowed = allowedRefs instanceof Set && allowedRefs.size ? allowedRefs : fallback
+  if (refs.some(ref => !allowed.has(ref))) throw new Error('daily_v3_evidence_ref_not_allowed')
+  return refs
+}
+
+function normalizeExperienceRules(input, {
+  allowedSourceRefs = null, chanMemoryAllowed = true, knownOutcomeIds = new Set(),
+} = {}) {
+  if (!Array.isArray(input)) throw new Error('invalid_daily_experience_rules')
+  if (input.length > V3_MAX_EXPERIENCE_RULES) throw new Error('daily_experience_rules_too_many')
+  return input.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('invalid_daily_experience_rule')
+    const category = String(item.category || item.memory_category || 'general').trim().toLowerCase()
+    if (!MEMORY_CATEGORIES.has(category)) throw new Error('daily_experience_rule_category_invalid')
+    if (category === 'chan_structure' && !chanMemoryAllowed) throw new Error('strategy_memory_chan_evidence_invalid')
+    const condition = boundedReviewText(item.condition, 'daily_experience_rule_condition', { maxLength: 3000 })
+    const action = boundedReviewText(item.action, 'daily_experience_rule_action', { maxLength: 3000 })
+    const riskControl = boundedReviewText(item.risk_control, 'daily_experience_rule_risk_control', { maxLength: 3000 })
+    const invalidation = boundedReviewText(item.invalidation, 'daily_experience_rule_invalidation', { maxLength: 3000 })
+    const prohibitedAction = boundedReviewText(item.prohibited_action, 'daily_experience_rule_prohibited_action', { maxLength: 3000 })
+    const refs = item.source_refs ?? item.evidence_refs
+    if (!Array.isArray(refs) || refs.length < 1) throw new Error('daily_experience_rule_source_refs_missing')
+    const sourceRefs = [...new Set(refs.map(ref => String(ref ?? '').trim()))]
+    if (sourceRefs.some(ref => !/^outcome:\d+$/.test(ref))) throw new Error('daily_experience_rule_source_refs_invalid')
+    if (allowedSourceRefs && sourceRefs.some(ref => !allowedSourceRefs.has(ref))) throw new Error('daily_experience_rule_source_refs_invalid')
+    const referencedOutcomeIds = sourceRefs.map(ref => Number(ref.slice('outcome:'.length)))
+    if (referencedOutcomeIds.some(id => !knownOutcomeIds.has(id))) throw new Error('daily_experience_rule_source_refs_invalid')
+    return {
+      category, condition, action, risk_control:riskControl, invalidation, prohibited_action:prohibitedAction,
+      source_refs:sourceRefs, confidence:normalizeConfidence(item.confidence, 'daily_experience_rule_confidence'),
+    }
+  })
+}
+
+function dailyOutcomeEvidenceRefs(source, outcomeId) {
+  const refs = new Set([`outcome:${outcomeId}`])
+  const evidenceRefs = source?.evidence_refs && typeof source.evidence_refs === 'object' ? source.evidence_refs : {}
+  for (const [key, value] of Object.entries(evidenceRefs)) {
+    const id = value && typeof value === 'object' ? (value.id ?? value.hash ?? value.outcome_id) : value
+    if (id !== null && id !== undefined && String(id).trim()) refs.add(`${key}:${String(id).trim()}`)
+  }
+  return refs
+}
+
+function dailyOutcomeFacts(outcomeFacts) {
+  if (outcomeFacts instanceof Map) return outcomeFacts
+  const map = new Map()
+  if (Array.isArray(outcomeFacts)) {
+    for (const item of outcomeFacts) {
+      const id = Number(item?.outcome_id ?? item?.id)
+      if (Number.isSafeInteger(id) && id > 0) map.set(id, item)
+    }
+  } else if (outcomeFacts && typeof outcomeFacts === 'object') {
+    for (const [key, item] of Object.entries(outcomeFacts)) {
+      const id = Number(item?.outcome_id ?? item?.id ?? key)
+      if (Number.isSafeInteger(id) && id > 0) map.set(id, item)
+    }
+  }
+  return map
+}
+
+function expectedV3OutcomeResult(netProfit) {
+  const value = Number(netProfit)
+  if (!Number.isFinite(value)) return null
+  return value > 0 ? 'profit' : value < 0 ? 'loss' : 'breakeven'
+}
+
+function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext = {}) {
+  const normalizedChanContext = normalizeReviewChanContext(chanContext)
+  // v3 callers must provide an explicit frozen Chan capability.  Undefined
+  // context is retained only for the legacy v2 validator compatibility path.
+  const chanAllowed = normalizedChanContext.mode === 'enabled_complete'
+  const known = new Set(outcomeIds.map(Number))
+  const facts = dailyOutcomeFacts(conflictContext.outcomeFacts)
+  const evidenceRefsByOutcome = conflictContext.evidenceRefsByOutcome instanceof Map
+    ? conflictContext.evidenceRefsByOutcome : new Map()
+  const periodSummary = firstReviewText(input, ['period_summary', 'daily_summary', 'review_summary', 'summary'])
+  if (!periodSummary) throw new Error('daily_review_summary_missing')
+  if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_daily_review_decision')
+  for (const key of ['trade_assessments', 'repeated_issues', 'strengths', 'risk_observations', 'next_day_actions']) {
+    if (!Array.isArray(input[key])) throw new Error(`invalid_daily_review_${key}`)
+  }
+  if (!Array.isArray(input.experience_rules)) throw new Error('invalid_daily_experience_rules')
+  if (chanAllowed && !Array.isArray(input.chan_diagnoses)) throw new Error('invalid_daily_review_chan_diagnoses')
+  if (!chanAllowed && (hasNonEmptyValue(input.chan_diagnoses) || hasNonEmptyValue(input.period_chan_assessment))) {
+    throw new Error('strategy_memory_chan_evidence_invalid')
+  }
+  const assessments = input.trade_assessments.map(item => {
+    const outcomeId = Number(item?.outcome_id)
+    if (!known.has(outcomeId) || !DAILY_DECISIONS.has(item?.decision_quality)) throw new Error('invalid_daily_v3_trade_assessment')
+    const originalSignalLogic = boundedReviewText(item.original_signal_logic, 'daily_v3_original_signal_logic')
+    const technicalBasisAssessment = boundedReviewText(item.technical_basis_assessment, 'daily_v3_technical_basis_assessment')
+    const riskExecutionAssessment = boundedReviewText(item.risk_execution_assessment, 'daily_v3_risk_execution_assessment')
+    if (!V3_MARKET_ALIGNMENT.has(item.market_alignment)) throw new Error('invalid_daily_v3_market_alignment')
+    if (!V3_STRATEGY_ALIGNMENT.has(item.strategy_alignment)) throw new Error('invalid_daily_v3_strategy_alignment')
+    const attribution = item?.outcome_attribution
+    if (!attribution || typeof attribution !== 'object' || Array.isArray(attribution)) throw new Error('invalid_daily_v3_outcome_attribution')
+    if (!V3_OUTCOME_RESULTS.has(attribution.result)) throw new Error('invalid_daily_v3_outcome_result')
+    if (!Array.isArray(attribution.primary_causes) || attribution.primary_causes.length < 1
+      || attribution.primary_causes.length > V3_MAX_PRIMARY_CAUSES) throw new Error('invalid_daily_v3_primary_causes')
+    const primaryCauses = attribution.primary_causes.map((cause, index) => boundedReviewText(cause,
+      `daily_v3_primary_cause_${index}`, { maxLength:2000 }))
+    const explanation = boundedReviewText(attribution.explanation, 'daily_v3_outcome_explanation')
+    if (!V3_AVOIDABILITY.has(attribution.avoidability)) throw new Error('invalid_daily_v3_avoidability')
+    const factsForOutcome = facts.get(outcomeId)
+    const expectedResult = expectedV3OutcomeResult(factsForOutcome?.net_profit ?? factsForOutcome?.outcome?.net_profit)
+    if (expectedResult && expectedResult !== attribution.result) throw new Error('daily_v3_outcome_result_mismatch')
+    if (attribution.avoidability === 'normal_strategy_loss'
+      && (item.decision_quality === 'poor' || item.strategy_alignment === 'conflict' || item.market_alignment === 'conflict')) {
+      throw new Error('daily_v3_normal_loss_inconsistent')
+    }
+    const nextRule = item.next_time_rule
+    if (!nextRule || typeof nextRule !== 'object' || Array.isArray(nextRule)) throw new Error('invalid_daily_v3_next_time_rule')
+    const normalizedRule = {
+      condition:boundedReviewText(nextRule.condition, 'daily_v3_next_rule_condition'),
+      action:boundedReviewText(nextRule.action, 'daily_v3_next_rule_action'),
+      risk_control:boundedReviewText(nextRule.risk_control, 'daily_v3_next_rule_risk_control'),
+      invalidation:boundedReviewText(nextRule.invalidation, 'daily_v3_next_rule_invalidation'),
+      prohibited_action:boundedReviewText(nextRule.prohibited_action, 'daily_v3_next_rule_prohibited_action'),
+    }
+    const refs = normalizeV3EvidenceRefs(item.evidence_refs, outcomeId, evidenceRefsByOutcome.get(outcomeId))
+    return {
+      outcome_id:outcomeId, decision_quality:item.decision_quality,
+      original_signal_logic:originalSignalLogic, technical_basis_assessment:technicalBasisAssessment,
+      market_alignment:item.market_alignment, strategy_alignment:item.strategy_alignment,
+      risk_execution_assessment:riskExecutionAssessment,
+      outcome_attribution:{ result:attribution.result, primary_causes:primaryCauses, explanation,
+        avoidability:attribution.avoidability },
+      next_time_rule:normalizedRule,
+      issue_codes:[...new Set((Array.isArray(item.issue_codes) ? item.issue_codes : []).map(code => boundedReviewText(code,
+        'daily_v3_issue_code', { maxLength:120 })).slice(0, V3_MAX_ISSUE_CODES))],
+      evidence_refs:refs, confidence:normalizeConfidence(item.confidence, 'daily_v3_trade_confidence'),
+    }
+  })
+  if (assessments.length !== known.size || new Set(assessments.map(item => item.outcome_id)).size !== known.size) {
+    throw new Error('daily_review_trade_coverage_incomplete')
+  }
+  const normalizedRules = normalizeExperienceRules(input.experience_rules, {
+    allowedSourceRefs:new Set([...known].map(id => `outcome:${id}`)), chanMemoryAllowed:chanAllowed, knownOutcomeIds:known,
+  })
+  const periodChan = chanAllowed && input.period_chan_assessment && typeof input.period_chan_assessment === 'object'
+    ? input.period_chan_assessment : { status:'insufficient_evidence', issue_source:'unknown', explanation:'', affected_outcome_ids:[], confidence:0 }
+  const affectedOutcomeIds = [...new Set((Array.isArray(periodChan.affected_outcome_ids) ? periodChan.affected_outcome_ids : []).map(Number))]
+  if (chanAllowed && (!CHAN_SOURCES.has(periodChan.issue_source) || affectedOutcomeIds.some(id => !known.has(id)))) {
+    throw new Error('invalid_daily_period_chan_assessment')
+  }
+  const strategyConflicts = normalizeStrategyConflicts({ ...input }, {
+    allowedSourceRefs:new Set([...known].map(id => `outcome:${id}`)), requireSourceRefs:true,
+    strategyText:conflictContext.strategyText, memoryText:conflictContext.memoryText,
+    proposedExperiences:normalizedRules.map(rule => [rule.condition, rule.action, rule.prohibited_action].join('；')),
+    requireExactProposedExcerpt:true,
+  })
+  const result = {
+    output_contract_version:DAILY_REVIEW_V3_CONTRACT, period_summary:periodSummary, decision_quality:input.decision_quality,
+    trade_assessments:assessments, repeated_issues:normalizeV3TextArray(input.repeated_issues, 'repeated_issues'),
+    strengths:normalizeV3TextArray(input.strengths, 'strengths'),
+    risk_observations:normalizeV3TextArray(input.risk_observations, 'risk_observations'),
+    next_day_actions:normalizeV3TextArray(input.next_day_actions, 'next_day_actions'),
+    experience_rules:normalizedRules, strategy_conflicts:strategyConflicts, confidence:normalizeConfidence(input.confidence),
+  }
+  if (chanAllowed) {
+    if (input.chan_diagnoses.length !== known.size || new Set(input.chan_diagnoses.map(item => Number(item?.outcome_id))).size !== known.size) {
+      throw new Error('daily_review_chan_coverage_incomplete')
+    }
+    result.chan_diagnoses = input.chan_diagnoses.map(item => {
+      const outcomeId = Number(item?.outcome_id)
+      if (!known.has(outcomeId) || !CHAN_SOURCES.has(item?.issue_source)) throw new Error('invalid_daily_chan_diagnosis')
+      return { outcome_id:outcomeId, status:String(item.status || 'insufficient_evidence'), issue_source:item.issue_source,
+        impact_on_decision:String(item.impact_on_decision || 'unknown'), explanation:String(item.explanation || '').trim(),
+        confidence:normalizeConfidence(item.confidence || 0, 'daily_chan_confidence') }
+    })
+    result.period_chan_assessment = { status:String(periodChan.status || 'insufficient_evidence'), issue_source:periodChan.issue_source,
+      explanation:String(periodChan.explanation || '').trim(), affected_outcome_ids:affectedOutcomeIds,
+      confidence:normalizeConfidence(periodChan.confidence || 0, 'daily_period_chan_confidence') }
+  }
+  return result
+}
 
 function normalizeReviewChanContext(context) {
   // Direct validator callers from older code did not pass evidence context.
@@ -823,7 +1040,7 @@ function normalizeStrategyMemoryUpdates(input, {
 
 function normalizeStrategyConflicts(input, {
   allowedSourceRefs = null, requireSourceRefs = false, strategyText = null,
-  memoryText = null, proposedExperiences = [],
+  memoryText = null, proposedExperiences = [], requireExactProposedExcerpt = false,
 } = {}) {
   const conflicts = input?.strategy_conflicts == null ? [] : input.strategy_conflicts
   if (!Array.isArray(conflicts)) throw new Error('invalid_strategy_conflicts')
@@ -858,7 +1075,9 @@ function normalizeStrategyConflicts(input, {
       throw new Error('strategy_memory_conflict_memory_excerpt_invalid')
     }
     if (conflictTarget === 'proposed_experience'
-      && !proposedExperiences.some(value => String(value || '').includes(memoryExcerpt))) {
+      && !proposedExperiences.some(value => requireExactProposedExcerpt
+        ? String(value || '').trim() === memoryExcerpt
+        : String(value || '').includes(memoryExcerpt))) {
       throw new Error('strategy_memory_conflict_proposed_excerpt_invalid')
     }
     const category = String(item.category || 'general').trim().toLowerCase()
@@ -923,6 +1142,9 @@ function firstReviewText(input, keys) {
 export function validateDailyReviewContent(input, outcomeIds = [], chanContext, conflictContext = {}) {
   input = unwrapReviewContent(input, ['daily_review', 'review'])
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_daily_review_content')
+  if (String(input.output_contract_version || input.contract_version || '') === DAILY_REVIEW_V3_CONTRACT) {
+    return normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext)
+  }
   // Models sometimes add harmless explanatory keys. Normalize to the strict
   // server-owned shape below instead of failing an otherwise valid review.
   const periodSummary = firstReviewText(input, ['period_summary', 'daily_summary', 'review_summary', 'summary'])
@@ -1048,7 +1270,7 @@ export function validateMonthlyReviewMergeContent(input, dailyCaseIds = [], appr
     strategy_conflicts:verifiedStrategyConflicts }, dailyCaseIds, approvedDailyCaseIds, chanContext, conflictContext)
 }
 
-async function eligibleOutcomeRows(limit) {
+async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } = {}) {
   const batchLimit = Math.min(2000, Math.max(2, Number(limit || 500)))
   const backlogLimit = Math.max(1, Math.ceil(batchLimit * 0.7))
   // Keep a full recent lane after removing historical unassociated rows from
@@ -1071,7 +1293,10 @@ async function eligibleOutcomeRows(limit) {
   const eligible = `so.status = 'closed' AND so.review_eligible_at IS NOT NULL
     AND ((snap.strategy_scope = 'private' AND NOT ${platformManagerSql})
       OR (snap.strategy_scope = 'platform' AND ${platformManagerSql}))`
-  const [backlog, recent] = await Promise.all([
+  const unassociated = `NOT EXISTS (SELECT 1 FROM period_review_sources prs
+      JOIN period_review_cases cases ON cases.id = prs.period_case_id
+      WHERE prs.outcome_id = so.id AND cases.period_type = 'daily' AND cases.status <> 'superseded')`
+  const [backlog, recent, recovery] = await Promise.all([
     // Only associated, incomplete evidence belongs to the maintenance lane.
     // Unassociated historical outcomes are intentionally excluded here: the
     // recent lane below gives new source rows a bounded, deterministic path to
@@ -1082,10 +1307,17 @@ async function eligibleOutcomeRows(limit) {
           AND cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
           AND COALESCE(cases.evidence_reason, '') NOT IN ('inference_snapshot_incomplete','historical_prompt_missing'))
       ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]),
-    queryAll(`${select} WHERE ${eligible} ORDER BY so.review_eligible_at DESC, so.id DESC LIMIT ?`, [recentLimit]),
+    // Live lane stays newest-first so an opt-in historical recovery cannot
+    // starve the current creation window.
+    queryAll(`${select} WHERE ${eligible} AND ${unassociated}
+      ORDER BY so.review_eligible_at DESC, so.id DESC LIMIT ?`, [recentLimit]),
+    // Historical fairness is a separate, explicitly enabled lane. It walks
+    // oldest-first while the live lane above continues to create today's case.
+    includeHistoricalRecovery ? queryAll(`${select} WHERE ${eligible} AND ${unassociated}
+      ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [recentLimit]) : Promise.resolve([]),
   ])
   const merged = new Map()
-  for (const row of [...backlog, ...recent]) merged.set(Number(row.id), row)
+  for (const row of [...backlog, ...recent, ...recovery]) merged.set(Number(row.id), row)
   const observerClock = await getDefaultObserverSourceClock().catch(() => null)
   return [...merged.values()].map(row => {
     const clock = applyDefaultObserverClockBootstrap({
@@ -1095,7 +1327,7 @@ async function eligibleOutcomeRows(limit) {
     }, observerClock)
     return { ...row, timezone_offset_minutes:clock.timezone_offset_minutes ?? null,
       clock_status:clock.clock_status || 'unknown' }
-  })
+    })
 }
 
 async function prepareTradeEvidence(outcome) {
@@ -1122,17 +1354,39 @@ export function compactPeriodTradeEvidence(evidence) {
       account_login:identity.account_login == null ? null : String(identity.account_login),
     }])).values()]
   const postTrade = evidence.post_trade || {}
+  const snapshotRef = snapshot ? { id:snapshot.id, strategy_id:snapshot.strategy_id, strategy_version:snapshot.strategy_version,
+    strategy_scope:snapshot.strategy_scope, prompt_hash:snapshot.prompt_hash, model_profile_id:snapshot.model_profile_id,
+    provider:snapshot.provider, model_name:snapshot.model_name, credential_source:snapshot.credential_source,
+    content_hash:snapshot.content_hash,
+    source_identity:frozenSourceIdentities.length === 1 ? frozenSourceIdentities[0] : null,
+    source_identities:frozenSourceIdentities,
+  } : null
+  // Keep the exact historical inputs needed to judge the original decision.
+  // The previous compactor retained only a reference and therefore forced a
+  // later review to infer the signal rationale from the current strategy.
+  // These fields are still immutable snapshot data; current optimization
+  // context is injected separately by generateDailyReview.
+  const preTradeFrozen = {
+    signal:inference.signal || null,
+    snapshot:{
+      ...snapshotRef,
+      system_prompt:snapshot.system_prompt || null,
+      user_prompt:snapshot.user_prompt || null,
+      strategy_runtime:snapshot.strategy_runtime || null,
+      market_snapshot:snapshot.market_snapshot || null,
+      klines:snapshot.klines || null,
+    },
+    risk_decision:inference.risk_decision || null,
+    original_order:inference.original_order || null,
+    approved_order:inference.approved_order || null,
+    cutoff_utc_msc:Number(inference.signal?.created_at_utc_msc || inference.signal?.created_at_msc || 0) || null,
+  }
   return {
     schema_version:evidence.schema_version,
     inference_time:{
       signal:inference.signal || null,
-      snapshot_ref:snapshot ? { id:snapshot.id, strategy_id:snapshot.strategy_id, strategy_version:snapshot.strategy_version,
-        strategy_scope:snapshot.strategy_scope, prompt_hash:snapshot.prompt_hash, model_profile_id:snapshot.model_profile_id,
-        provider:snapshot.provider, model_name:snapshot.model_name, credential_source:snapshot.credential_source,
-        content_hash:snapshot.content_hash,
-        source_identity:frozenSourceIdentities.length === 1 ? frozenSourceIdentities[0] : null,
-        source_identities:frozenSourceIdentities,
-      } : null,
+      snapshot_ref:snapshotRef,
+      pre_trade_frozen:preTradeFrozen,
       risk_decision:inference.risk_decision || null, original_order:inference.original_order || null,
       approved_order:inference.approved_order || null,
     },
@@ -1143,7 +1397,10 @@ export function compactPeriodTradeEvidence(evidence) {
   }
 }
 
-async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
+async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
+  allowMissedWindowRecovery = false,
+  recoveryGraceMinutes = DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES,
+} = {}) {
   const existingCase = await queryOne(`SELECT * FROM period_review_cases WHERE period_type = 'daily' AND period_key = ?
     AND user_id = ? AND trading_account_id = ? AND strategy_id = ?
     ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, updated_at DESC, id DESC LIMIT 1`,
@@ -1151,9 +1408,13 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
   const creationWindow = periodReviewCreationWindowState('daily', group.endUtcMs, asOfUtcMs)
   // Look up the case first so an existing review can always be maintained;
   // only a genuinely new case is subject to the first-creation window.
-  if (!existingCase && creationWindow.state !== 'within') {
+  const recoveryGraceUtcMs = Math.max(0, Number(recoveryGraceMinutes) || 0) * 60000
+  const recoveryAllowed = !existingCase && allowMissedWindowRecovery && creationWindow.state === 'after'
+    && Number(asOfUtcMs) >= creationWindow.windowEndUtcMs + recoveryGraceUtcMs
+  if (!existingCase && creationWindow.state !== 'within' && !recoveryAllowed) {
     return { id:null, periodKey:group.periodKey, complete:false, sourceCount:0,
-      evidenceHash:null, skippedCreationWindow:true, creationWindowState:creationWindow.state }
+      evidenceHash:null, skippedCreationWindow:true, creationWindowState:creationWindow.state,
+      missedWindowRecoveryEligible:creationWindow.state === 'after' }
   }
   const existingMaintainedResult = value => ({ complete:existingCase?.evidence_status === 'complete', ...value,
     existingMaintained:true, creationWindowState:creationWindow.state })
@@ -1203,7 +1464,7 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
   const sourceIds = sources.map(item => item.outcome_id).sort((a, b) => a - b)
   const sourceHash = sha256(JSON.stringify(sources.map(item => [item.outcome_id, item.evidence_hash])))
   const evidence = {
-    schema_version: 2,
+    schema_version: 3,
     period: { type:'daily', key:group.periodKey, aggregation_basis:'fully_closed_at',
       timezone_offset_minutes:group.offsetMinutes, clock_status:clock.status,
       start_utc_msc:group.startUtcMs, end_utc_msc:group.endUtcMs },
@@ -1214,6 +1475,7 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
     sources,
   }
   evidence.period_market = await buildDailyPeriodMarketEvidence({ userId:group.userId, strategyId:group.strategyId,
+    strategyScope:group.strategyScope, tradingAccountId:group.tradingAccountId,
     symbols:group.outcomes.map(item => item.symbol), startUtcMs:group.startUtcMs, endUtcMs:group.endUtcMs, sources })
   const periodMarketComplete = evidence.period_market.status === 'complete'
   const complete = tradeEvidenceComplete && periodMarketComplete
@@ -1284,11 +1546,16 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now()) {
     (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
     VALUES (?, 'daily_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `daily:${periodCase.id}:${evidenceHash}`, now, now])
   return { id: Number(periodCase.id), periodKey: group.periodKey, complete, sourceCount: sourceIds.length, evidenceHash,
-    ...(existingCase ? { existingMaintained:true } : { created:true }), creationWindowState:creationWindow.state }
+    ...(existingCase ? { existingMaintained:true } : { created:true,
+      missedWindowRecovery:recoveryAllowed }), creationWindowState:creationWindow.state }
 }
 
-export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Date.now() } = {}) {
-  const rows = await eligibleOutcomeRows(limit)
+export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Date.now(),
+  missedWindowRecovery = false,
+  recoveryLimit = 0,
+  recoveryGraceMinutes = DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES,
+} = {}) {
+  const rows = await eligibleOutcomeRows(limit, { includeHistoricalRecovery:Boolean(missedWindowRecovery) })
   const userIds = [...new Set(rows.map(row => Number(row.user_id)).filter(id => id > 0))]
   const enabledEntries = await Promise.all(userIds.map(async userId => [userId, await isAiFeatureEnabled('review_generation_enabled', userId)]))
   const enabledUsers = new Set(enabledEntries.filter(([, enabled]) => enabled).map(([userId]) => userId))
@@ -1299,15 +1566,25 @@ export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Dat
       || row.timezone_offset_minutes === '' || !Number.isInteger(Number(row.timezone_offset_minutes))).length,
     groups: groups.length, ready: 0, incomplete: 0,
     beforeCreationWindow: 0, outsideCreationWindow: 0, created: 0, existingMaintained: 0,
-    clock:{ status:'per_account' } }
+    recoveryEnabled:Boolean(missedWindowRecovery), recoveryRequested:Math.max(0, Number(recoveryLimit) || 0),
+    recoveryCreated:0, recoverySkipped:0, clock:{ status:'per_account' } }
+  const boundedRecoveryLimit = Math.max(0, Math.min(groups.length, Math.trunc(Number(recoveryLimit) || 0)))
+  let recoveryUsed = 0
   for (const group of groups) {
-    const prepared = await upsertDailyGroup(group, { status:group.clockStatus || 'account_terminal' }, asOfUtcMs)
+    const creationState = periodReviewCreationWindowState('daily', group.endUtcMs, asOfUtcMs).state
+    const allowRecoveryForGroup = Boolean(missedWindowRecovery) && creationState === 'after' && recoveryUsed < boundedRecoveryLimit
+    const prepared = await upsertDailyGroup(group, { status:group.clockStatus || 'account_terminal' }, asOfUtcMs, {
+      allowMissedWindowRecovery:allowRecoveryForGroup, recoveryGraceMinutes,
+    })
     if (prepared.skippedCreationWindow && prepared.creationWindowState === 'before') result.beforeCreationWindow += 1
     if (prepared.skippedCreationWindow && prepared.creationWindowState === 'after') result.outsideCreationWindow += 1
     if (prepared.created) result.created += 1
+    if (prepared.missedWindowRecovery) { result.recoveryCreated += 1; recoveryUsed += 1 }
+    if (prepared.missedWindowRecoveryEligible && !prepared.missedWindowRecovery) result.recoverySkipped += 1
     if (prepared.existingMaintained) result.existingMaintained += 1
     if (!prepared.skippedCreationWindow) result[prepared.complete ? 'ready' : 'incomplete'] += 1
   }
+  result.recoveryUsed = recoveryUsed
   return result
 }
 
@@ -2140,6 +2417,44 @@ async function ensurePeriodReviewStrategyMemoryInjectionLog(job, snapshot, usage
 export const __testEnsurePeriodReviewStrategyMemoryInjectionLog = ensurePeriodReviewStrategyMemoryInjectionLog
 export const __testGetReviewStrategyMemorySnapshot = getReviewStrategyMemorySnapshot
 
+function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strategyMemoryForPrompt) {
+  const sources = Array.isArray(evidence?.sources) ? evidence.sources : []
+  const preTradeFrozen = []
+  const holdingPath = []
+  const evidenceRefsByOutcome = new Map()
+  const outcomeFacts = new Map()
+  for (const source of sources) {
+    const outcomeId = Number(source?.outcome_id)
+    if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) continue
+    const tradeEvidence = source?.evidence || source
+    const inference = tradeEvidence?.inference_time || {}
+    const postTrade = tradeEvidence?.post_trade || {}
+    const refs = dailyOutcomeEvidenceRefs(tradeEvidence, outcomeId)
+    evidenceRefsByOutcome.set(outcomeId, refs)
+    preTradeFrozen.push({ outcome_id:outcomeId,
+      signal:inference.signal || null, snapshot_ref:inference.snapshot_ref || null,
+      risk_decision:inference.risk_decision || null, original_order:inference.original_order || null,
+      approved_order:inference.approved_order || null,
+      ...(inference.pre_trade_frozen ? { ...inference.pre_trade_frozen } : {}),
+    })
+    holdingPath.push({ outcome_id:outcomeId, ...postTrade })
+    if (postTrade.outcome && typeof postTrade.outcome === 'object') outcomeFacts.set(outcomeId, postTrade.outcome)
+  }
+  return {
+    system_statistics:evidence?.statistics || {},
+    pre_trade_frozen:preTradeFrozen,
+    holding_path:holdingPath,
+    period_market:evidence?.period_market || null,
+    current_optimization_context:{
+      strategy:strategyMemorySnapshot?.strategy_text || '',
+      strategy_memory_library:strategyMemoryForPrompt,
+      strategy_memory_version_no:Number(strategyMemorySnapshot?.library?.version_no || 0),
+      strategy_memory_content_hash:strategyMemorySnapshot?.library?.content_hash || null,
+    },
+    outcomeFacts, evidenceRefsByOutcome,
+  }
+}
+
 async function generateDailyReview(job, requestModel) {
   const evidence = parse(job.evidence_json, null)
   if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('daily_review_evidence_invalid')
@@ -2148,6 +2463,7 @@ async function generateDailyReview(job, requestModel) {
   if (!resolved.model) throw new Error(resolved.error || 'daily_review_model_unavailable')
   const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const strategyMemoryForPrompt = sanitizeStrategyMemoryPrompt(strategyMemorySnapshot.library)
+  const modelEvidence = buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strategyMemoryForPrompt)
   const endpoint = modelEndpoint(resolved.model)
   const outcomeIds = evidence.sources.map(item => Number(item.outcome_id))
   const chanContext = frozenDailyChanContext(evidence)
@@ -2155,13 +2471,20 @@ async function generateDailyReview(job, requestModel) {
   const memoryCategoryEnum = chanAllowed
     ? 'general|market_regime|entry_setup|chan_structure|risk_execution'
     : 'general|market_regime|entry_setup|risk_execution'
-  const shape = { period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
-    trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence', summary: 'string', issue_codes: ['string'] })),
-    repeated_issues: ['string'], strengths: ['string'], daily_lessons: ['string'], risk_observations: ['string'],
-    memory_updates:[{ text:'string', category:memoryCategoryEnum, source_refs:['string'] }],
+  const shape = { output_contract_version:DAILY_REVIEW_V3_CONTRACT, period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
+    trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence',
+      original_signal_logic:'string', technical_basis_assessment:'string', market_alignment:'aligned|partly_aligned|conflict|insufficient_evidence',
+      strategy_alignment:'aligned|partly_aligned|conflict|insufficient_evidence', risk_execution_assessment:'string',
+      outcome_attribution:{ result:'profit|loss|breakeven', primary_causes:['string'], explanation:'string',
+        avoidability:'avoidable|partly_avoidable|normal_strategy_loss|insufficient_evidence' },
+      next_time_rule:{ condition:'string', action:'string', risk_control:'string', invalidation:'string', prohibited_action:'string' },
+      issue_codes:['string'], evidence_refs:['outcome:<id> or another server-provided reference'], confidence:0.5 })),
+    repeated_issues: ['string'], strengths: ['string'], risk_observations: ['string'], next_day_actions:['string'],
+    experience_rules:[{ category:memoryCategoryEnum, condition:'string', action:'string', risk_control:'string', invalidation:'string',
+      prohibited_action:'string', source_refs:['outcome:<id>'], confidence:0.5 }],
     strategy_conflicts:[{ conflict_target:'existing_memory|proposed_experience', category:memoryCategoryEnum,
-      summary:'string', strategy_excerpt:'必须逐字来自 current_strategy',
-      memory_excerpt:'必须逐字来自 strategy_memory_library 或同响应 memory_updates',
+      summary:'string', strategy_excerpt:'必须逐字来自 current_optimization_context.strategy',
+      memory_excerpt:'existing_memory 时逐字来自 current_optimization_context.strategy_memory_library.content_text；proposed_experience 时严格使用 同一规则 condition；action；prohibited_action',
       suggested_change:'string', source_refs:['string'] }],
     confidence: 0.5 }
   if (chanAllowed) {
@@ -2174,15 +2497,15 @@ async function generateDailyReview(job, requestModel) {
     ? `trade_assessments 和 chan_diagnoses 必须各包含 ${outcomeIds.length} 项，并且 outcome_id 只能且必须完整覆盖：${outcomeIds.join(', ')}。`
     : `trade_assessments 必须包含 ${outcomeIds.length} 项，并且 outcome_id 只能且必须完整覆盖：${outcomeIds.join(', ')}；Chan 未获准时 required_output 不包含 chan_diagnoses。`
   const memoryCategoryContract = chanAllowed
-    ? 'memory_updates 的 category 可使用 required_output 中列出的全部类别。'
-    : 'memory_updates 的 category 不得使用 chan_structure；Chan 未获准时不得生成 Chan 记忆。'
+    ? 'experience_rules 的 category 可使用 required_output 中列出的全部类别。'
+    : 'experience_rules 的 category 不得使用 chan_structure；Chan 未获准时不得生成 Chan 记忆。'
   const contract = [
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
-    '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。',
+    '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。当前输出版本为 daily-period-review-v3，不能退回旧版 daily_lessons/memory_updates 合同。',
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     tradeCoverageContract,
-    `不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。memory_updates 和 strategy_conflicts 没有可靠结论时必须返回空数组；每个对象的文本和引用字段必须符合 required_output。source_refs 只能引用服务器提供的 outcome:<id>，不得编造其他来源。strategy_excerpt 必须逐字来自 current_strategy；existing_memory 的 memory_excerpt 必须逐字来自 strategy_memory_library.content_text；proposed_experience 的 memory_excerpt 必须逐字来自同响应 memory_updates.text。${memoryCategoryContract}`,
+    `不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。experience_rules 和 strategy_conflicts 没有可靠结论时必须返回空数组；每个对象的文本和引用字段必须符合 required_output。source_refs/evidence_refs 只能引用服务器提供的 outcome:<id> 或证据引用，不得编造其他来源。strategy_excerpt 必须逐字来自 current_optimization_context.strategy；existing_memory 的 memory_excerpt 必须逐字来自 current_optimization_context.strategy_memory_library.content_text；proposed_experience 的 memory_excerpt 必须严格拼接同一条 experience_rule 的“condition；action；prohibited_action”，使用全角分号且不得增删文字。每条 experience_rule 必须是条件—动作—风控—失效—禁止行为的明确规则，不能写泛泛建议。${memoryCategoryContract}`,
     chanAllowed ? '只有冻结证据明确启用缠论且 Chan 证据完整时才可输出缠论诊断；缠论记忆类别必须有可靠结构证据。'
       : '冻结证据未同时满足缠论启用和完整条件；禁止输出任何缠论字段、缠论诊断或 chan_structure 记忆。',
   ].join('\n')
@@ -2190,9 +2513,17 @@ async function generateDailyReview(job, requestModel) {
     ? '冻结证据明确启用了缠论且 period_market 的 Chan 证据完整；请根据能力字段判断可用结构。'
     : '冻结证据未同时满足缠论启用和完整条件；不要输出、推断或评价任何缠论结构，也不要生成 chan_structure 记忆。'
   const messages = [
-    { role: 'system', content: `你是严格的交易日复盘分析器。所有基础统计以系统提供的数据为准，不得自行重算。period_market 是按策略周期提取的完整交易日行情；${chanPrompt} 必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
-    { role: 'user', content: JSON.stringify({ required_output: shape, current_strategy:strategyMemorySnapshot.strategy_text,
-      strategy_memory_library:strategyMemoryForPrompt, evidence:stripHistoricalConditionFields(evidence) }) },
+    { role: 'system', content: `你是严格的交易日复盘分析器。system_statistics 是后端计算的只读事实，必须直接采用且不得自行重算。模型输入已明确分区：pre_trade_frozen 只能评价原始信号当时的判断，holding_path 只能解释持仓路径和成交结果，period_market 只能补充交易日环境和事后解释，current_optimization_context 只用于提出当前策略优化建议，不能改写历史判断。${chanPrompt} 必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
+    { role: 'user', content: JSON.stringify({ required_output: shape, outcome_ids:outcomeIds,
+      review_context:stripHistoricalConditionFields({
+        system_statistics:modelEvidence.system_statistics,
+        pre_trade_frozen:modelEvidence.pre_trade_frozen,
+        holding_path:modelEvidence.holding_path,
+        period_market:modelEvidence.period_market,
+        current_optimization_context:modelEvidence.current_optimization_context,
+      }),
+      evidence_refs_by_outcome:Object.fromEntries([...modelEvidence.evidenceRefsByOutcome.entries()].map(([id, refs]) => [String(id), [...refs]])),
+    }) },
   ]
   const modelCall = await preparePeriodReviewModelCall('daily_review', resolved, messages,
     Math.max(3000, Math.ceil(JSON.stringify(shape).length / 2.5)), {
@@ -2224,11 +2555,15 @@ async function generateDailyReview(job, requestModel) {
      validateObject: value => validateDailyReviewContent(value, outcomeIds, chanContext, {
        strategyText:strategyMemorySnapshot.strategy_text,
        memoryText:strategyMemorySnapshot.library.content_text,
+       outcomeFacts:modelEvidence.outcomeFacts,
+       evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
      }),
   })
   const content = validateDailyReviewContent(output, outcomeIds, chanContext, {
     strategyText:strategyMemorySnapshot.strategy_text,
     memoryText:strategyMemorySnapshot.library.content_text,
+    outcomeFacts:modelEvidence.outcomeFacts,
+    evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
   })
   await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
   return { content, resolved }
@@ -2714,11 +3049,17 @@ export async function runMonthlyReviewWorkerOnce({ requestModel = requestJsonObj
   }
 }
 
-function periodReviewContentForCase(reviewCase, content) {
+function periodReviewContentForCase(reviewCase, content, conflictContext = {}) {
   const evidence = parse(reviewCase.evidence_json, {})
   if (reviewCase.period_type === 'daily') {
     const outcomeIds = (evidence.sources || []).map(item => Number(item.outcome_id))
-    return validateDailyReviewContent(content, outcomeIds, frozenDailyChanContext(evidence))
+    const modelEvidence = buildDailyReviewV3ModelEvidence(evidence, null, '')
+    return validateDailyReviewContent(content, outcomeIds, frozenDailyChanContext(evidence), {
+      outcomeFacts:modelEvidence.outcomeFacts,
+      evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
+      strategyText:conflictContext.strategyText,
+      memoryText:conflictContext.memoryText,
+    })
   }
   if (reviewCase.period_type === 'monthly') {
     const dailyCaseIds = (evidence.sources || []).map(item => Number(item.period_case_id))
@@ -2828,7 +3169,33 @@ export async function getPeriodReviewCase(periodCaseId, actor) {
       FROM period_review_job_events WHERE period_case_id = ? ORDER BY id DESC LIMIT 30`, [periodCaseId]),
   ])
   const normalizedReviewCase = normalizePeriodReviewState(reviewCase)
-  return { ...normalizedReviewCase, evidence: parse(normalizedReviewCase.evidence_json, null), evidence_json: undefined, sources,
+  const detailEvidence = parse(normalizedReviewCase.evidence_json, null)
+  if (detailEvidence && Array.isArray(detailEvidence.sources)) {
+    detailEvidence.sources = detailEvidence.sources.map(source => {
+      const trade = source?.evidence || {}, inference = trade.inference_time || {}, post = trade.post_trade || {}
+      const frozen = inference.pre_trade_frozen || {}
+      const snapshot = frozen.snapshot || {}
+      return { ...source, evidence:{ schema_version:trade.schema_version,
+        inference_time:{ signal:inference.signal || frozen.signal || null, snapshot_ref:inference.snapshot_ref || null,
+          pre_trade_frozen:{ signal:frozen.signal || null, cutoff_utc_msc:frozen.cutoff_utc_msc || null,
+            snapshot:{ id:snapshot.id || null, strategy_id:snapshot.strategy_id || null,
+              strategy_version:snapshot.strategy_version || null, content_hash:snapshot.content_hash || null } },
+          risk_decision:inference.risk_decision || frozen.risk_decision || null,
+          original_order:inference.original_order || frozen.original_order || null,
+          approved_order:inference.approved_order || frozen.approved_order || null },
+        post_trade:{ outcome:post.outcome || null, execution:post.execution || null,
+          deals:(Array.isArray(post.deals) ? post.deals : []).map(deal => ({ deal_ticket:deal.deal_ticket,
+            entry_type:deal.entry_type, volume:deal.volume, price:deal.price, profit:deal.profit,
+            commission:deal.commission, swap:deal.swap, fee:deal.fee, deal_time:deal.deal_time })),
+          path_metrics:post.path_metrics || null }, evidence_refs:trade.evidence_refs || {} } }
+    })
+  }
+  if (detailEvidence?.period_market?.symbols && typeof detailEvidence.period_market.symbols === 'object') {
+    detailEvidence.period_market.symbols = Object.fromEntries(Object.entries(detailEvidence.period_market.symbols)
+      .map(([symbol, frames]) => [symbol, Object.fromEntries(Object.entries(frames || {}).map(([timeframe, frame]) =>
+        [timeframe, { ...frame, full_period_candles:undefined }]))]))
+  }
+  return { ...normalizedReviewCase, evidence: detailEvidence, evidence_json: undefined, sources,
     job_events: events.map(row => ({ ...row, metadata: parse(row.metadata_json, null), metadata_json: undefined })),
     versions: versions.map(row => ({ ...row, content: parse(row.content_json, {}), content_json: undefined })) }
 }
@@ -2926,7 +3293,18 @@ export async function editPeriodReviewCase({ periodCaseId, actor, content, expec
     const reviewCase = rows[0]
     if (!reviewCase) throw new Error('period_review_not_found')
     if (!reviewCase.current_version_id || Number(reviewCase.current_version_id) !== Number(expectedVersionId)) throw new Error('period_review_version_conflict')
-    const normalized = periodReviewContentForCase(reviewCase, content)
+    let conflictContext = {}
+    if (reviewCase.period_type === 'daily' && Array.isArray(content?.strategy_conflicts)
+      && content.strategy_conflicts.length > 0) {
+      const [snapshotRows] = await run(`SELECT memory_strategy_snapshot_text, memory_library_snapshot_text
+        FROM period_review_jobs WHERE period_case_id = ?
+          AND memory_strategy_snapshot_text IS NOT NULL AND memory_library_snapshot_text IS NOT NULL
+        ORDER BY id DESC LIMIT 1`, [periodCaseId])
+      if (!snapshotRows[0]) throw new Error('strategy_memory_conflict_frozen_snapshot_missing')
+      conflictContext = { strategyText:snapshotRows[0].memory_strategy_snapshot_text,
+        memoryText:snapshotRows[0].memory_library_snapshot_text }
+    }
+    const normalized = periodReviewContentForCase(reviewCase, content, conflictContext)
     const [versions] = await run('SELECT COALESCE(MAX(version_no), 0) AS max_version FROM period_review_versions WHERE period_case_id = ? FOR UPDATE', [periodCaseId])
     const now = beijingNow()
     const body = JSON.stringify(normalized)
@@ -3026,6 +3404,18 @@ function reviewSourceIds(approved, type) {
 export function deterministicReviewMemoryMarkdown(entries) {
   const lines = []
   for (const entry of entries || []) {
+    const condition = memoryMarkdownText(entry.condition)
+    const action = memoryMarkdownText(entry.action)
+    const invalidation = memoryMarkdownText(entry.invalidation)
+    const prohibitedAction = memoryMarkdownText(entry.prohibited_action)
+    const structuredRisk = memoryMarkdownText(entry.risk_control)
+    if (condition && action && invalidation && prohibitedAction && structuredRisk) {
+      lines.push(`- 当【${condition}】时，执行【${action}】。`)
+      lines.push(`  - 风控：${structuredRisk}`)
+      lines.push(`  - 失效：${invalidation}`)
+      lines.push(`  - 禁止：${prohibitedAction}`)
+      continue
+    }
     const text = memoryMarkdownText(entry.text || entry.lesson)
     if (!text) continue
     lines.push(`- ${text}`)
@@ -3043,6 +3433,22 @@ function derivationMemoryEntries(approved, content) {
   const currentRefs = [`period_review_case:${Number(approved.id)}`, `period_review_version:${Number(approved.approved_version_id)}`]
   const canonicalRefs = reviewSourceIds(approved, periodType)
   if (periodType === 'daily') {
+    if (String(content?.output_contract_version || '') === DAILY_REVIEW_V3_CONTRACT) {
+      const chanContext = frozenDailyChanContext(evidence)
+      const knownOutcomeRefs = new Set(canonicalRefs)
+      const rules = Array.isArray(content.experience_rules) ? content.experience_rules : []
+      return rules.map(rule => {
+        const category = [rule?.category, rule?.memory_category].find(value => MEMORY_CATEGORIES.has(value)) || 'general'
+        if (category === 'chan_structure' && chanContext.mode !== 'enabled_complete') {
+          throw new Error('strategy_memory_chan_evidence_invalid')
+        }
+        const sourceRefs = [...new Set((Array.isArray(rule?.source_refs) ? rule.source_refs : []).map(ref => String(ref).trim()))]
+        if (!sourceRefs.length || sourceRefs.some(ref => !knownOutcomeRefs.has(ref))) {
+          throw new Error('daily_experience_rule_source_refs_invalid')
+        }
+        return { ...rule, category, source_refs:[...sourceRefs, ...currentRefs] }
+      })
+    }
     const chanContext = frozenDailyChanContext(evidence)
     // `daily_lessons` is the user-visible, approved collection.  Model
     // memory_updates may carry useful metadata for a matching lesson, but it
@@ -3094,6 +3500,14 @@ function derivationMemoryEntries(approved, content) {
 function derivationMemoryConflictExperiences(approved, content) {
   const periodType = String(approved?.period_type || '')
   if (periodType === 'daily') {
+    if (String(content?.output_contract_version || '') === DAILY_REVIEW_V3_CONTRACT) {
+      // Keep proposed-conflict matching identical to generation-time
+      // validation. A conflict excerpt must match one complete structured
+      // rule, not an independently reformatted fragment.
+      return derivationMemoryEntries(approved, content)
+        .map(item => [item.condition, item.action, item.prohibited_action].map(memoryMarkdownText).filter(Boolean).join('；'))
+        .filter(Boolean)
+    }
     // Conflict evidence validates approved model excerpts, so retain the
     // original memory_updates text as candidates even when an update is not a
     // user-visible daily lesson.  This is intentionally separate from the

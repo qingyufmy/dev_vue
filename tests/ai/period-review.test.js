@@ -18,7 +18,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
   periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
   periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown,
-  __testDeriveDailyReviewMemoryEntries, __testDeriveDailyReviewConflictExperiences } from '../../server/routes/ai/period-review.js'
+  __testDeriveDailyReviewMemoryEntries, __testDeriveDailyReviewConflictExperiences,
+  DAILY_PERIOD_REVIEW_V3_CONTRACT } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
   __testGetReviewStrategyMemorySnapshot } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
@@ -119,6 +120,25 @@ describe('daily review memory derivation', () => {
       memory_updates:[{ text:'hidden combined update', category:'general' }],
     })
     expect(experiences).toEqual(['hidden combined update', 'lesson one'])
+  })
+
+  it('derives v3 memory only from structured experience rules', () => {
+    const entries = __testDeriveDailyReviewMemoryEntries({ ...approved, period_type:'daily' }, {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT,
+      daily_lessons:['不得写入的旧字段'],
+      experience_rules:[{ category:'risk_execution', condition:'波动扩大且确认失败', action:'暂停入场',
+        risk_control:'只保留试探仓', invalidation:'重新形成确认', prohibited_action:'禁止追单',
+        source_refs:['outcome:7'], confidence:0.9 }],
+    })
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ condition:'波动扩大且确认失败', action:'暂停入场', source_refs:['outcome:7','period_review_case:42','period_review_version:9'] })
+    expect(deterministicReviewMemoryMarkdown(entries)).toBe('- 当【波动扩大且确认失败】时，执行【暂停入场】。\n  - 风控：只保留试探仓\n  - 失效：重新形成确认\n  - 禁止：禁止追单')
+    expect(__testDeriveDailyReviewConflictExperiences({ ...approved, period_type:'daily' }, {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT,
+      experience_rules:[{ category:'risk_execution', condition:'波动扩大且确认失败', action:'暂停入场',
+        risk_control:'只保留试探仓', invalidation:'重新形成确认', prohibited_action:'禁止追单',
+        source_refs:['outcome:7'], confidence:0.9 }],
+    })).toEqual(['波动扩大且确认失败；暂停入场；禁止追单'])
   })
 })
 
@@ -539,6 +559,24 @@ describe('daily review preparation candidates', () => {
     expect(result).toMatchObject({ groups:1, ready:1, outsideCreationWindow:0, created:0, existingMaintained:1 })
     expect(periodReviewDb.queryRun).not.toHaveBeenCalled()
   })
+
+  it('separates the live new-source lane from opt-in fair historical recovery', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    expect(source).toContain('const unassociated = `NOT EXISTS (SELECT 1 FROM period_review_sources prs')
+    expect(source).toContain('ORDER BY so.review_eligible_at DESC, so.id DESC LIMIT ?')
+    expect(source.match(/ORDER BY so\.review_eligible_at ASC, so\.id ASC/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(source).toContain('includeHistoricalRecovery ? queryAll')
+    expect(source).toContain('includeHistoricalRecovery:Boolean(missedWindowRecovery)')
+  })
+
+  it('keeps missed-window recovery opt-in and bounded while reusing case/job idempotency', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    expect(source).toContain('missedWindowRecovery = false')
+    expect(source).toContain('recoveryLimit = 0')
+    expect(source).toContain('allowMissedWindowRecovery:allowRecoveryForGroup')
+    expect(source).toContain('INSERT IGNORE INTO period_review_jobs')
+    expect(source).toContain('`daily:${periodCase.id}:${evidenceHash}`')
+  })
 })
 
 describe('daily review model boundary', () => {
@@ -599,6 +637,75 @@ describe('daily review model boundary', () => {
     }] }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }, {
       strategyText:'策略原文', memoryText:'记忆原文',
     })).toThrow('strategy_memory_conflict_category_invalid')
+  })
+
+  it('validates the v3 per-trade attribution contract and deterministic outcome facts', () => {
+    const value = validateDailyReviewContent({
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT,
+      period_summary:'逐笔复盘完成', decision_quality:'mixed',
+      trade_assessments:[{
+        outcome_id:1, decision_quality:'mixed', original_signal_logic:'突破后回踩确认',
+        technical_basis_assessment:'冻结的均线和结构支持方向，但确认仍不充分', market_alignment:'partly_aligned',
+        strategy_alignment:'aligned', risk_execution_assessment:'止损位置合理，退出执行略晚',
+        outcome_attribution:{ result:'loss', primary_causes:['回踩确认不足'], explanation:'入场后结构未延续，触发止损', avoidability:'partly_avoidable' },
+        next_time_rule:{ condition:'突破后回踩未形成确认', action:'等待收盘确认后再入场', risk_control:'使用标准止损并限制试探仓', invalidation:'回踩跌破结构失效位', prohibited_action:'禁止在确认前追入' },
+        issue_codes:['confirmation_lag'], evidence_refs:['outcome:1','trade_outcome:1'], confidence:0.8,
+      }],
+      repeated_issues:[], strengths:['按计划止损'], risk_observations:['确认不足时风险扩大'], next_day_actions:['等待确认再执行'],
+      experience_rules:[{ category:'entry_setup', condition:'突破后回踩未确认', action:'等待收盘确认再入场', risk_control:'只用试探仓并设置止损',
+        invalidation:'跌破结构失效位', prohibited_action:'禁止追入', source_refs:['outcome:1'], confidence:0.8 }],
+      strategy_conflicts:[], confidence:0.8,
+    }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }, {
+      outcomeFacts:[{ id:1, net_profit:-12 }],
+      evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1','trade_outcome:1'])]]),
+    })
+    expect(value.output_contract_version).toBe(DAILY_PERIOD_REVIEW_V3_CONTRACT)
+    expect(value.trade_assessments[0].outcome_attribution.result).toBe('loss')
+    expect(value.experience_rules[0].source_refs).toEqual(['outcome:1'])
+    expect(() => validateDailyReviewContent({
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT,
+      period_summary:'逐笔复盘', decision_quality:'good', trade_assessments:[{
+        outcome_id:1, decision_quality:'good', original_signal_logic:'逻辑', technical_basis_assessment:'依据',
+        market_alignment:'aligned', strategy_alignment:'aligned', risk_execution_assessment:'风控',
+        outcome_attribution:{ result:'profit', primary_causes:['原因'], explanation:'解释', avoidability:'avoidable' },
+        next_time_rule:{ condition:'条件', action:'动作', risk_control:'风控', invalidation:'失效', prohibited_action:'禁止' },
+        evidence_refs:['outcome:1'], confidence:0.5,
+      }], repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], experience_rules:[],
+      strategy_conflicts:[], confidence:0.5,
+    }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }, {
+      outcomeFacts:[{ id:1, net_profit:-1 }],
+    })).toThrow('daily_v3_outcome_result_mismatch')
+  })
+
+  it('rejects forged v3 evidence and non-executable experience rules', () => {
+    const base = {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT,
+      period_summary:'逐笔复盘', decision_quality:'mixed', trade_assessments:[{
+        outcome_id:1, decision_quality:'mixed', original_signal_logic:'逻辑', technical_basis_assessment:'依据',
+        market_alignment:'aligned', strategy_alignment:'aligned', risk_execution_assessment:'风控',
+        outcome_attribution:{ result:'breakeven', primary_causes:['原因'], explanation:'解释', avoidability:'insufficient_evidence' },
+        next_time_rule:{ condition:'条件', action:'动作', risk_control:'风控', invalidation:'失效', prohibited_action:'禁止' },
+        evidence_refs:['outcome:999'], confidence:0.5,
+      }], repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], strategy_conflicts:[], confidence:0.5,
+      experience_rules:[{ category:'general', condition:'条件', action:'动作', risk_control:'风控', invalidation:'失效', prohibited_action:'禁止', source_refs:['outcome:1'], confidence:0.5 }],
+    }
+    expect(() => validateDailyReviewContent(base, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }))
+      .toThrow('daily_v3_evidence_ref_not_allowed')
+    expect(() => validateDailyReviewContent({ ...base, trade_assessments:[{
+      ...base.trade_assessments[0], evidence_refs:['outcome:1'],
+    }], experience_rules:[{ ...base.experience_rules[0], action:'' }] }, [1], {
+      chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+    })).toThrow('daily_experience_rule_action_missing')
+  })
+
+  it('reloads frozen strategy and memory snapshots before accepting edited daily conflicts', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    expect(source).toContain('SELECT memory_strategy_snapshot_text, memory_library_snapshot_text')
+    expect(source).toContain("throw new Error('strategy_memory_conflict_frozen_snapshot_missing')")
+    expect(source).toContain('strategyText:conflictContext.strategyText')
+    expect(source).toContain('memoryText:conflictContext.memoryText')
+    expect(source).toContain('snapshot:{ id:snapshot.id || null')
+    expect(source).not.toContain('pre_trade_frozen:{ ...frozen }')
   })
 })
 

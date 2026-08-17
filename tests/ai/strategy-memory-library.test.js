@@ -659,4 +659,76 @@ describe('unified strategy memory access and CAS', () => {
       conflict_key:'conflict-1', description:'结构矛盾', source_refs:['outcome:101'],
     })).rejects.toThrow('strategy_memory_approved_review_not_canonical')
   })
+
+  it('deduplicates conflict evidence by review case even when a regenerated version differs', async () => {
+    mockQueryOne.mockResolvedValueOnce(privateStrategy())
+    const run = vi.fn(async sql => {
+      const text = String(sql)
+      if (text.includes('FROM period_review_cases cases')) return [[{ id:1201, strategy_id:5,
+        period_type:'daily', status:'approved', current_version_id:39, approved_version_id:39,
+        canonical_version_id:39, canonical_version_case_id:1201,
+        evidence_json:JSON.stringify({ sources:[{ outcome_id:101 }] }) }], []]
+      if (text.includes('SELECT * FROM strategy_memory_libraries')) return [[library()], []]
+      if (text.includes('FROM strategy_memory_conflicts')) return [[{
+        id:77, strategy_id:5, evidence_count:1, alert_threshold:3, status:'observing',
+      }], []]
+      if (text.includes('FROM strategy_memory_conflict_bindings')) return [[{ id:66 }], []]
+      if (text.includes('INSERT INTO strategy_memory_conflict_bindings')) return [{ affectedRows:1 }, []]
+      if (text.includes('FROM strategy_memory_conflict_occurrences')) return [[{
+        id:88, conflict_id:77, period_review_case_id:1201, period_review_version_id:38,
+      }], []]
+      throw new Error(`unexpected_sql:${sql}`)
+    })
+    mockWithTransaction.mockImplementationOnce(fn => fn(run))
+    const result = await recordStrategyMemoryConflictEvidence({
+      strategyId:5, actor:{ serverOwned:true, userId:7 }, serverOwned:true,
+      strategyScope:'private', strategyOwnerUserId:7,
+      validatedReviewCase:{ id:1201, strategy_id:5, approved_version_id:39, status:'approved' },
+      approved:true, period_review_version_id:39, period_review_case_id:1201,
+      conflict_target:'existing_memory', category:'general', description:'结构矛盾',
+      strategy_excerpt:'策略正文', memory_excerpt:'旧记忆', source_refs:['outcome:101'],
+    })
+    expect(result).toMatchObject({ recorded:false, duplicate:true })
+    const occurrenceSelect = run.mock.calls.find(([sql]) => String(sql).includes('FROM strategy_memory_conflict_occurrences'))
+    expect(String(occurrenceSelect?.[0])).toContain('period_review_case_id = ?')
+    expect(occurrenceSelect?.[1]).toEqual([77, 1201])
+    expect(run.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO strategy_memory_conflict_occurrences'))).toBe(false)
+  })
+
+  it('recounts distinct review cases before applying the conflict alert threshold', async () => {
+    mockQueryOne.mockResolvedValueOnce(privateStrategy())
+    const run = vi.fn(async sql => {
+      const text = String(sql)
+      if (text.includes('FROM period_review_cases cases')) return [[{ id:1201, strategy_id:5,
+        period_type:'daily', status:'approved', current_version_id:39, approved_version_id:39,
+        canonical_version_id:39, canonical_version_case_id:1201,
+        evidence_json:JSON.stringify({ sources:[{ outcome_id:101 }] }) }], []]
+      if (text.includes('SELECT * FROM strategy_memory_libraries')) return [[library()], []]
+      if (text.includes('FROM strategy_memory_conflicts')) return [[{
+        id:77, strategy_id:5, evidence_count:7, alert_threshold:3, status:'observing',
+      }], []]
+      if (text.includes('FROM strategy_memory_conflict_bindings')) return [[{ id:66 }], []]
+      if (text.includes('INSERT INTO strategy_memory_conflict_bindings')) return [{ affectedRows:1 }, []]
+      if (text.includes('SELECT * FROM strategy_memory_conflict_occurrences')) return [[], []]
+      if (text.includes('INSERT INTO strategy_memory_conflict_occurrences')) return [{ insertId:88, affectedRows:1 }, []]
+      if (text.includes('COUNT(DISTINCT period_review_case_id)')) return [[{ evidence_count:3 }], []]
+      if (text.includes('UPDATE strategy_memory_conflicts')) return [{ affectedRows:1 }, []]
+      throw new Error(`unexpected_sql:${sql}`)
+    })
+    mockWithTransaction.mockImplementationOnce(fn => fn(run))
+    const result = await recordStrategyMemoryConflictEvidence({
+      strategyId:5, actor:{ serverOwned:true, userId:7 }, serverOwned:true,
+      strategyScope:'private', strategyOwnerUserId:7,
+      validatedReviewCase:{ id:1201, strategy_id:5, approved_version_id:39, status:'approved' },
+      approved:true, period_review_version_id:39, period_review_case_id:1201,
+      conflict_target:'existing_memory', category:'general', description:'结构矛盾',
+      strategy_excerpt:'策略正文', memory_excerpt:'旧记忆', source_refs:['outcome:101'],
+    })
+    expect(result).toMatchObject({
+      recorded:true, duplicate:false,
+      conflict:{ evidence_count:3, status:'attention_required' },
+    })
+    const update = run.mock.calls.find(([sql]) => String(sql).includes('UPDATE strategy_memory_conflicts'))
+    expect(update?.[1]?.slice(0, 2)).toEqual([3, 'attention_required'])
+  })
 })

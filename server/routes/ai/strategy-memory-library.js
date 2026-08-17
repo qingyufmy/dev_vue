@@ -1381,8 +1381,8 @@ export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, ac
     }
     const occurrence = await txOne(run,
       `SELECT * FROM strategy_memory_conflict_occurrences
-        WHERE conflict_id = ? AND period_review_version_id = ? FOR UPDATE`,
-      [conflict.id, periodReviewVersionId])
+        WHERE conflict_id = ? AND period_review_case_id = ? FOR UPDATE`,
+      [conflict.id, periodReviewCaseId])
     if (occurrence) {
       result = { recorded:false, duplicate:true, conflict }
       return
@@ -1400,7 +1400,14 @@ export async function recordStrategyMemoryConflictEvidence(strategyIdOrInput, ac
         bindingId, Number(strategy.version || 1), currentLibrary.version_no, currentLibrary.content_hash,
         verified.source_block_id, verified.source_block_hash, verified.memory_excerpt, verified.conflict_kind]
     )
-    const count = Number(conflict.evidence_count || 0) + 1
+    // A regenerated version of the same period-review case is still the same
+    // independent observation. Recount durable cases after insertion so old
+    // multi-version occurrences cannot keep an inflated conflict threshold.
+    const countRow = await txOne(run,
+      `SELECT COUNT(DISTINCT period_review_case_id) AS evidence_count
+         FROM strategy_memory_conflict_occurrences
+        WHERE conflict_id = ?`, [conflict.id])
+    const count = Number(countRow?.evidence_count || 0)
     const currentStatus = String(conflict.status || 'observing')
     const nextStatus = currentStatus === 'dismissed'
       ? currentStatus
