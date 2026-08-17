@@ -25,6 +25,18 @@ function payload(overrides = {}) {
   }
 }
 
+function reviewCandles(interval = 900_000) {
+  return [
+    { time_utc_msc:1, close_time_utc_msc:100 },
+    { time_utc_msc:101, close_time_utc_msc:500 },
+    { time_utc_msc:501, close_time_utc_msc:1000 },
+    ...Array.from({ length:22 }, (_, index) => ({
+      time_utc_msc:1001 + index * interval,
+      close_time_utc_msc:2000 + index * interval,
+    })),
+  ]
+}
+
 describe('manual trade evidence admission', () => {
   it('admits a profitable fully closed trade whose entry order is not bound to a platform signal', () => {
     const result = buildEligibleManualTrades(payload(), { account, positions:[], systemReferences:new Map() })
@@ -128,7 +140,7 @@ describe('manual trade evidence admission', () => {
     expect(buildEligibleManualTrades(expertMagicZero, { account }).trades[0].manual_classification.expert_reason).toBe(true)
   })
 
-  it('builds bounded frozen market paths from the strategy plan and canonical deal timestamps', async () => {
+  it('keeps the v3 candidate shape and fails closed when candidate candles are unavailable', async () => {
     const trade = buildEligibleManualTrades(payload(), { account }).trades[0]
     const calls = []
     const market = await buildManualTradeMarketEvidence({ actor:{ id:7 }, account, trades:[trade],
@@ -137,13 +149,17 @@ describe('manual trade evidence admission', () => {
       ] } },
       buildPath:async input => { calls.push(input); return { status:'complete', timeframes:{ M15:{ status:'complete' } } } },
     })
-    expect(market.status).toBe('complete')
+    expect(market.status).toBe('partial')
     expect(Object.keys(market.trades)).toHaveLength(1)
     expect(calls).toHaveLength(2)
     expect(calls[0].snapshot.klines).toEqual({ M15:[], H1:[], H4:[], D1:[] })
     expect(calls[0].deals[0]).toMatchObject({ entry_type:0, volume:1, price:1.1 })
     expect(JSON.parse(calls[0].deals[0].raw_json)).toMatchObject({ time_utc_msc:1000 })
     expect(calls[0].chanRequirement).toMatchObject({ status:'disabled', timeframes:[] })
+    expect(market.trades[trade.source_identity_hash]).toMatchObject({
+      counterfactual_points:[], candidate_points:{}, counterfactual_points_status:'unavailable',
+      counterfactual_points_reason:'counterfactual_candle_sequence_unavailable',
+    })
   })
 
   it('passes the frozen Chan requirement into both review stages and fails closed when it is incomplete', async () => {
@@ -155,12 +171,12 @@ describe('manual trade evidence admission', () => {
       buildPath:async input => {
         calls.push(input)
         return { status:'complete', timeframes:{
-          M15:{ status:'complete', chan:{ status:'complete' } },
-          H1:{ status:'complete', chan:{ status:calls.length === 1 ? 'complete' : 'partial' } },
+          M15:{ status:'complete', candles:reviewCandles(), chan:{ status:'complete' } },
+          H1:{ status:'complete', candles:reviewCandles(3_600_000), chan:{ status:calls.length === 1 ? 'complete' : 'partial' } },
         } }
       },
     })
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(6)
     expect(calls.every(call => call.chanRequirement.status === 'enabled')).toBe(true)
     expect(calls[0].chanRequirement.timeframes).toEqual(['M15', 'H1'])
     expect(market).toMatchObject({ status:'partial', reason:expect.stringContaining('chan_evidence_incomplete') })
@@ -177,7 +193,10 @@ describe('manual trade evidence admission', () => {
     const market = await buildManualTradeMarketEvidence({ actor:{ id:7 }, account, trades:[trade],
       strategySnapshot:{ version:8, use_chan_analysis:true, market_data_plan:{ primary_timeframe:'M15',
         timeframes:[{ timeframe:'M15' }, { timeframe:'H1' }] } },
-      buildPath:async () => ({ status:'complete', timeframes:{ M15:{ status:'complete', chan }, H1:{ status:'complete', chan } } }),
+      buildPath:async () => ({ status:'complete', timeframes:{
+        M15:{ status:'complete', candles:reviewCandles(), chan },
+        H1:{ status:'complete', candles:reviewCandles(3_600_000), chan },
+      } }),
     })
     expect(market).toMatchObject({ status:'complete', reason:null })
     expect(market.trades[trade.source_identity_hash].chan_evidence.pre_entry.M15).toMatchObject({

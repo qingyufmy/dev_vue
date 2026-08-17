@@ -27,6 +27,8 @@ import {
 import {
   MANUAL_TRADE_REVIEW_COUNTERFACTUAL_POINT_V3_VERSION,
   MANUAL_TRADE_REVIEW_V3_VERSION,
+  deriveManualTradeReviewDeclaredTimeframes,
+  deriveManualTradeReviewEvidenceTimeframes,
   deriveManualTradeReviewDirectionSummary,
   evaluateManualTradeReviewProtectionPlan,
   normalizeManualTradeReviewCounterfactualPoint,
@@ -430,9 +432,15 @@ export async function createManualTradeReview(actor, input = {}, options = {}) {
     userId:actorId, tradingAccountId:account.id, platform:account.platform, nowUtcMsc:options.nowUtcMsc,
   })
   const strategy = options.strategy || await getPlatformStrategySnapshot(actor, input.strategy_id)
-  const evidence = options.evidence || await readManualTradeEvidence(actor, account, selected, {
+  const rawEvidence = options.evidence || await readManualTradeEvidence(actor, account, selected, {
     ...options, strategySnapshot:strategy.snapshot, selection_context_token:selectionContextToken,
   })
+  // New cases always freeze the v3 contract marker inside evidence_json.  It
+  // participates in evidence_hash/job idempotency and prevents an incomplete
+  // candidate batch from being mistaken for a legacy v2 record on recovery.
+  const evidence = rawEvidence && typeof rawEvidence === 'object'
+    ? { ...rawEvidence, review_contract_version:MANUAL_TRADE_REVIEW_V3_VERSION }
+    : rawEvidence
   if (!evidence || !Array.isArray(evidence.trades) || evidence.evidence_status === 'unavailable') {
     throw new Error('manual_trade_review_evidence_unavailable')
   }
@@ -444,7 +452,8 @@ export async function createManualTradeReview(actor, input = {}, options = {}) {
   ]).filter(([identity, hash]) => identity && hash))
   const caseEvidenceStatus = evidence.evidence_status === 'complete' && evidence.market_data?.status === 'complete' ? 'complete' : 'partial'
   const caseEvidenceReason = caseEvidenceStatus === 'complete' ? null : manualTradeReviewEvidenceReason(evidence)
-  const hasCounterfactualPointShape = Object.values(evidence.market_data?.trades || {}).some(path =>
+  const hasExplicitV3Contract = evidence?.review_contract_version === MANUAL_TRADE_REVIEW_V3_VERSION
+  const hasCounterfactualPointShape = hasExplicitV3Contract || Object.values(evidence.market_data?.trades || {}).some(path =>
     path && typeof path === 'object' && Object.prototype.hasOwnProperty.call(path, 'counterfactual_points'))
   const now = beijingNow()
   let result
@@ -582,6 +591,8 @@ export async function editManualTradeReview({ caseId, actor, content, expectedVe
     const normalized = currentIsV3
       ? { ...normalizeManualTradeReviewV3Content(content, {
         strategySnapshot,
+        strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(strategySnapshot),
+        evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(evidenceCatalog.outcome_refs),
         allowedEvidenceRefs:evidenceCatalog.outcome_refs,
         sourceRefs:evidenceCatalog.trade_refs,
         sourceRefSet:new Set(evidenceCatalog.trade_refs),
@@ -1111,8 +1122,16 @@ function manualTradeReviewV3PointEvidence(reviewCase, sources, evidence) {
   const source = sources?.[0]
   const identity = String(source?.source_identity_hash || '')
   const path = evidence?.market_data?.trades?.[identity]
-  const supplied = path?.counterfactual_points
-  if (!path || !Object.prototype.hasOwnProperty.call(path, 'counterfactual_points')) return null
+  const hasCounterfactualPoints = Boolean(path && (
+    Object.prototype.hasOwnProperty.call(path, 'counterfactual_points')
+    || Object.prototype.hasOwnProperty.call(path, 'candidate_points')
+  ))
+  if (!path || !hasCounterfactualPoints) return null
+  const suppliedValue = Object.prototype.hasOwnProperty.call(path, 'counterfactual_points')
+    ? path.counterfactual_points : path.candidate_points
+  const supplied = Array.isArray(suppliedValue) ? suppliedValue
+    : suppliedValue && typeof suppliedValue === 'object' && !Array.isArray(suppliedValue)
+      ? Object.values(suppliedValue) : suppliedValue
   if (!Array.isArray(supplied) || supplied.length > 5) {
     throw new Error('manual_trade_review_counterfactual_points_invalid')
   }
@@ -1144,6 +1163,15 @@ function manualTradeReviewV3PointEvidence(reviewCase, sources, evidence) {
     if (marketData.status != null && String(marketData.status) !== 'complete') {
       throw new Error(`manual_trade_review_counterfactual_point_${index}_incomplete`)
     }
+    const strategySnapshot = parse(reviewCase?.strategy_snapshot_json ?? reviewCase?.strategy_snapshot, {})
+    const declaredTimeframes = new Set(deriveManualTradeReviewDeclaredTimeframes(strategySnapshot))
+    const availableTimeframes = new Set(deriveManualTradeReviewEvidenceTimeframes(marketData))
+    const inferredTimeframe = availableTimeframes.size === 1 ? [...availableTimeframes][0] : ''
+    const primaryTimeframe = String(candidate.primary_timeframe || candidate.primaryTimeframe || marketData.primary_timeframe || inferredTimeframe).trim().toUpperCase()
+    if (!primaryTimeframe || (declaredTimeframes.size && !declaredTimeframes.has(primaryTimeframe))
+      || !availableTimeframes.has(primaryTimeframe)) {
+      throw new Error(`manual_trade_review_counterfactual_point_${index}_timeframe_invalid`)
+    }
     const allowed = candidate.allowed_evidence_refs ?? candidate.allowedEvidenceRefs
     let allowedEvidenceRefs
     const pointCatalogRefs = catalog.counterfactual_refs_by_trade?.[identity]?.[candidateKey] || []
@@ -1161,7 +1189,7 @@ function manualTradeReviewV3PointEvidence(reviewCase, sources, evidence) {
       ?? candidate.contract_spec ?? candidate.contractSpec
     keys.add(candidateKey); offsets.add(offsetBars); times.add(decisionTime)
     return { candidate_key:candidateKey, decision_time_utc_msc:decisionTime, offset_bars:offsetBars,
-      primary_timeframe:typeof candidate.primary_timeframe === 'string' ? candidate.primary_timeframe.trim().toUpperCase() : null,
+      primary_timeframe:primaryTimeframe,
       status:'complete', market_data:marketData, closed_market_data:marketData,
       ...(historicalContractSpec && typeof historicalContractSpec === 'object' && !Array.isArray(historicalContractSpec)
         ? { historical_contract_spec:historicalContractSpec } : {}),
@@ -1176,48 +1204,114 @@ function manualTradeReviewV3OutputDirection(value) {
   return null
 }
 
-function manualTradeReviewV3FindAtr(value, depth = 0) {
-  if (depth > 5 || value == null) return null
-  if (typeof value !== 'object') return null
-  if (Array.isArray(value)) {
-    for (const nested of value) {
-      const found = manualTradeReviewV3FindAtr(nested, depth + 1)
-      if (found != null) return found
-    }
-    return null
-  }
-  for (const key of ['atr', 'atr_value', 'average_true_range']) {
+function atrDeclarationValues(value) {
+  if (Array.isArray(value)) return value.map(item => item && typeof item === 'object' ? item : null).filter(Boolean)
+  if (!value || typeof value !== 'object') return []
+  return Object.entries(value).map(([id, item]) => item && typeof item === 'object' && !Array.isArray(item)
+    ? { id, ...item } : null).filter(Boolean)
+}
+
+function atrDeclarationPeriod(declaration = {}) {
+  const direct = Number(declaration.params?.period ?? declaration.period ?? declaration.length)
+  if (Number.isSafeInteger(direct) && direct > 0) return direct
+  const match = /(?:^|[_-])atr(?:[_-]?(\d+))(?:$|[_-])/i.exec(String(declaration.id || declaration.name || ''))
+  const inferred = Number(match?.[1])
+  return Number.isSafeInteger(inferred) && inferred > 0 ? inferred : null
+}
+
+function atrDeclarationTimeframe(declaration = {}) {
+  return String(declaration.source?.timeframe || declaration.timeframe || declaration.source_timeframe || '')
+    .trim().toUpperCase()
+}
+
+function manualTradeReviewV3AtrDeclarations(strategySnapshot = {}) {
+  const policy = strategySnapshot?.strategy_policy || strategySnapshot?.strategyPolicy || {}
+  const candidates = [
+    ...atrDeclarationValues(policy.indicators),
+    ...atrDeclarationValues(strategySnapshot?.indicator_declarations || strategySnapshot?.indicatorDeclarations),
+    ...atrDeclarationValues(strategySnapshot?.market_data_plan?.indicators),
+  ]
+  return candidates.filter(declaration => /(?:^|[_-])atr(?:$|[_-])|average_true_range/i.test(
+    `${declaration.id || ''} ${declaration.kind || ''} ${declaration.type || ''} ${declaration.name || ''}`,
+  )).map(declaration => ({
+    id:String(declaration.id || declaration.name || '').trim().toLowerCase(),
+    timeframe:atrDeclarationTimeframe(declaration), period:atrDeclarationPeriod(declaration),
+  })).filter(item => item.id && item.timeframe && item.period)
+}
+
+function indicatorAtrValue(value, period) {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const declaredPeriod = Number(value.period ?? value.params?.period)
+  if (Number.isFinite(declaredPeriod) && declaredPeriod > 0 && declaredPeriod !== period) return null
+  for (const key of ['value', 'atr', 'atr_value', 'average_true_range']) {
     const number = Number(value[key])
     if (Number.isFinite(number) && number > 0) return number
-  }
-  for (const [key, nested] of Object.entries(value)) {
-    const normalizedKey = String(key).toLowerCase()
-    if (!nested || typeof nested !== 'object'
-      || !(normalizedKey.includes('atr') || normalizedKey.includes('indicator') || normalizedKey.includes('technical')
-        || normalizedKey.includes('volatility') || normalizedKey.includes('metric') || normalizedKey === 'timeframes')) continue
-    const found = manualTradeReviewV3FindAtr(nested, depth + 1)
-    if (found != null) return found
   }
   return null
 }
 
-function manualTradeReviewV3ProtectionAssessment(candidate, point) {
+function atrIndicatorKeyMatches(key, declaration) {
+  const normalizedKey = String(key || '').trim().toLowerCase()
+  if (normalizedKey === declaration.id) return true
+  if (!normalizedKey.includes('atr') && !normalizedKey.includes('average_true_range')) return false
+  const periodMatch = /(?:^|[_-])atr(?:[_-]?(\d+))(?:$|[_-])/i.exec(normalizedKey)
+  return Number(periodMatch?.[1]) === declaration.period
+}
+
+function manualTradeReviewV3FindAtrEvidence(point, strategySnapshot = {}) {
   const marketData = point?.market_data || point?.closed_market_data || {}
-  return evaluateManualTradeReviewProtectionPlan(candidate.protection_plan, {
+  const primaryTimeframe = String(point?.primary_timeframe || marketData?.primary_timeframe || '').trim().toUpperCase()
+  if (!primaryTimeframe) return { atr_timeframe:null, atr_period:null, atr_value:null, atr_evidence_ref:null }
+  const declarations = manualTradeReviewV3AtrDeclarations(strategySnapshot)
+    .filter(item => item.timeframe === primaryTimeframe)
+  // No declaration, or more than one possible declaration, means the server
+  // cannot safely choose an ATR identity/period.
+  if (declarations.length !== 1) return { atr_timeframe:primaryTimeframe, atr_period:null, atr_value:null, atr_evidence_ref:null }
+  const declaration = declarations[0]
+  const frame = marketData?.timeframes?.[primaryTimeframe]
+  const indicators = frame?.indicators
+  if (!indicators || typeof indicators !== 'object' || Array.isArray(indicators)) {
+    return { atr_timeframe:primaryTimeframe, atr_period:declaration.period, atr_value:null, atr_evidence_ref:null }
+  }
+  const matches = Object.entries(indicators)
+    .filter(([key]) => atrIndicatorKeyMatches(key, declaration))
+    .map(([key, value]) => ({ key, value:indicatorAtrValue(value, declaration.period) }))
+    .filter(item => item.value != null)
+  if (matches.length !== 1) {
+    return { atr_timeframe:primaryTimeframe, atr_period:declaration.period, atr_value:null, atr_evidence_ref:null }
+  }
+  const refs = Array.isArray(point?.allowed_evidence_refs)
+    ? point.allowed_evidence_refs.filter(ref => String(ref).startsWith('market:')
+      && String(ref).split(':').at(-1)?.toUpperCase() === primaryTimeframe)
+    : []
+  return { atr_timeframe:primaryTimeframe, atr_period:declaration.period, atr_value:matches[0].value,
+    atr_evidence_ref:refs.length === 1 ? refs[0] : null }
+}
+
+function manualTradeReviewV3FindAtr(point, strategySnapshot = {}) {
+  return manualTradeReviewV3FindAtrEvidence(point, strategySnapshot).atr_value
+}
+
+function manualTradeReviewV3ProtectionAssessment(candidate, point, strategySnapshot = {}) {
+  const marketData = point?.market_data || point?.closed_market_data || {}
+  const atrEvidence = manualTradeReviewV3FindAtrEvidence(point, strategySnapshot)
+  const assessment = evaluateManualTradeReviewProtectionPlan(candidate.protection_plan, {
     direction:candidate.decision,
     entryPrice:candidate.entry_price_reference,
-    atr:manualTradeReviewV3FindAtr(marketData),
+    atr:atrEvidence.atr_value,
     contractSpec:point?.historical_contract_spec || point?.contract_spec || point?.contractSpec
       || marketData?.historical_contract_spec || marketData?.contract_spec || marketData?.contractSpec,
     strategyConsistency:'unknown',
   })
+  return { ...assessment, ...atrEvidence }
 }
 
-function manualTradeReviewV3ServerSummary(points, candidates, actualDirection) {
+function manualTradeReviewV3ServerSummary(points, candidates, actualDirection, strategySnapshot = {}) {
   const normalizedCandidates = candidates.map(candidate => candidate.normalizedOutput || candidate.normalized_output || candidate)
   const protections = new Map(points.map((point, index) => {
     const output = normalizedCandidates[index]
-    return [output.candidate_key, manualTradeReviewV3ProtectionAssessment(output, point)]
+    return [output.candidate_key, manualTradeReviewV3ProtectionAssessment(output, point, strategySnapshot)]
   }))
   const direction = deriveManualTradeReviewDirectionSummary(normalizedCandidates, actualDirection, {
     protectionByCandidate:protections,
@@ -1258,7 +1352,9 @@ function manualTradeReviewV3ValidatePersistedBundle(bundle, points, strategySnap
       throw new Error('manual_trade_review_counterfactual_bundle_conflict')
     }
     const normalized = normalizeManualTradeReviewCounterfactualPoint(persisted.normalized_output, {
-      strategySnapshot, allowedEvidenceRefs:point.allowed_evidence_refs,
+      strategySnapshot, strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(strategySnapshot),
+      evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(point.market_data),
+      allowedEvidenceRefs:point.allowed_evidence_refs,
     })
     if (normalized.candidate_key !== point.candidate_key) {
       throw new Error('manual_trade_review_counterfactual_bundle_candidate_conflict')
@@ -1284,7 +1380,9 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
   if (pointRow?.status === 'succeeded' && pointRow.normalizedOutput) {
     await reconcileManualTradeReviewV3PointTask(pointRow, job, point)
     return { output:normalizeManualTradeReviewCounterfactualPoint(pointRow.normalizedOutput, {
-      strategySnapshot, allowedEvidenceRefs:point.allowed_evidence_refs,
+      strategySnapshot, strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(strategySnapshot),
+      evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(point.market_data),
+      allowedEvidenceRefs:point.allowed_evidence_refs,
     }), outputHash:pointRow.normalizedOutputHash, skipped:true }
   }
   if (pointRow?.status === 'status_unknown') {
@@ -1314,7 +1412,9 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
   const inputHash = buildManualTradeReviewStageInputHash({ stage:'counterfactual', frozenRuntimeHash:runtimeHash,
     messages, outputContractHash:pointOutputContractHash, parentOutputHash:null })
   const validateOutput = value => normalizeManualTradeReviewCounterfactualPoint(value, {
-    strategySnapshot, allowedEvidenceRefs:point.allowed_evidence_refs,
+    strategySnapshot, strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(strategySnapshot),
+    evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(point.market_data),
+    allowedEvidenceRefs:point.allowed_evidence_refs,
   })
   let tracker = null
   try {
@@ -1430,7 +1530,7 @@ async function runManualTradeReviewV3Counterfactual({ points, reviewCase, source
       normalizedCandidates.push(result.output)
     }
     const actualDirection = manualTradeReviewV3OutputDirection(parse(sources[0]?.normalized_trade_json, {})?.direction || sources[0]?.direction)
-    const serverSummary = manualTradeReviewV3ServerSummary(points, normalizedCandidates, actualDirection)
+    const serverSummary = manualTradeReviewV3ServerSummary(points, normalizedCandidates, actualDirection, strategySnapshot)
     const bundle = manualTradeReviewV3PointBundle(points, normalizedCandidates, serverSummary)
     const bundleInputHash = buildManualTradeReviewStageInputHash({ stage:'counterfactual', frozenRuntimeHash:runtimeHash,
       messages:{ candidate_keys:points.map(point => point.candidate_key), input_hashes:points.map(point => point.input_hash) },
@@ -1446,7 +1546,7 @@ async function runManualTradeReviewV3Counterfactual({ points, reviewCase, source
     outputHash = saved.normalizedOutputHash
   }
   const actualDirection = manualTradeReviewV3OutputDirection(parse(sources[0]?.normalized_trade_json, {})?.direction || sources[0]?.direction)
-  const serverSummary = manualTradeReviewV3ServerSummary(points, normalizedCandidates, actualDirection)
+  const serverSummary = manualTradeReviewV3ServerSummary(points, normalizedCandidates, actualDirection, strategySnapshot)
   return { normalizedCandidates, serverSummary, outputHash }
 }
 
@@ -1481,6 +1581,8 @@ async function applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputH
     const content = v3
       ? normalizeManualTradeReviewV3Content(outcome.normalizedOutput, {
         strategySnapshot,
+        strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(strategySnapshot),
+        evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(evidenceCatalog.outcome_refs),
         allowedEvidenceRefs:evidenceCatalog.outcome_refs,
         sourceRefs:evidenceCatalog.trade_refs,
         sourceRefSet:new Set(evidenceCatalog.trade_refs),
@@ -1542,8 +1644,31 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     if (sources.length !== 1) throw new Error('manual_trade_review_selection_invalid')
     const frozenEvidence = parse(reviewCase.evidence_json, {})
     const evidenceCatalog = buildManualReviewEvidenceCatalog(sources, frozenEvidence)
-    const v3Points = manualTradeReviewV3PointEvidence(reviewCase, sources, frozenEvidence)
-    const isV3 = Array.isArray(v3Points) && v3Points.length > 0
+    const hasExplicitV3Contract = frozenEvidence?.review_contract_version === MANUAL_TRADE_REVIEW_V3_VERSION
+    const sourcePath = frozenEvidence?.market_data?.trades?.[String(sources[0]?.source_identity_hash || '')]
+    const hasCounterfactualPointField = Boolean(sourcePath && (
+      Object.prototype.hasOwnProperty.call(sourcePath, 'counterfactual_points')
+      || Object.prototype.hasOwnProperty.call(sourcePath, 'candidate_points')
+    ))
+    let v3Points = null
+    try {
+      v3Points = manualTradeReviewV3PointEvidence(reviewCase, sources, frozenEvidence)
+    } catch (error) {
+      // A v3 record (including an old unmarked record with the v3 evidence
+      // shape) must never fall back to the v2 prompt.  Normalize all frozen
+      // candidate evidence failures to one stable domain error for the job
+      // and UI, while retaining the granular cause in logs/cause chains.
+      if (hasExplicitV3Contract || hasCounterfactualPointField) {
+        const unavailable = new Error('manual_trade_review_counterfactual_points_unavailable', { cause:error })
+        unavailable.code = 'manual_trade_review_counterfactual_points_unavailable'
+        throw unavailable
+      }
+      throw error
+    }
+    const isV3 = hasExplicitV3Contract || (Array.isArray(v3Points) && v3Points.length > 0)
+    if (isV3 && (!Array.isArray(v3Points) || v3Points.length === 0)) {
+      throw new Error('manual_trade_review_counterfactual_points_unavailable')
+    }
     const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review',
       modelPurpose:'manual_trade_review' })
     if (!resolved.model) throw new Error(resolved.error || 'manual_trade_review_model_unavailable')
@@ -1589,6 +1714,8 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
       outcomeValidator = value => {
         const normalized = normalizeManualTradeReviewV3Content(value, {
           strategySnapshot:parse(reviewCase.strategy_snapshot_json, {}),
+          strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(parse(reviewCase.strategy_snapshot_json, {})),
+          evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(evidenceCatalog.outcome_refs),
           allowedEvidenceRefs:evidenceCatalog.outcome_refs,
           sourceRefs:evidenceCatalog.trade_refs,
           sourceRefSet:new Set(evidenceCatalog.trade_refs),
@@ -1754,6 +1881,7 @@ export const __manualTradeReviewTest = {
   manualTradeReviewStageTaskError, deferManualTradeReviewForModelTaskLease,
   runManualTradeReviewStage, runManualTradeReviewV3Point, runManualTradeReviewV3Counterfactual,
   manualTradeReviewV3PointEvidence, manualTradeReviewV3ServerSummary, manualTradeReviewV3PointBundle,
+  manualTradeReviewV3FindAtr, manualTradeReviewV3FindAtrEvidence,
   manualTradeReviewV3ValidatePersistedBundle, manualTradeReviewV3OutputContractHash, manualTradeReviewV3PointContractHash,
   applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs,
 }

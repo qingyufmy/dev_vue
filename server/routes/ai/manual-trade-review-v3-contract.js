@@ -29,6 +29,7 @@ const RULE_STATUSES = new Set(['aligned', 'partial', 'conflict', 'unknown', 'not
 const OPTIMIZATION_STATES = new Set(['hypothesis', 'insufficient_evidence'])
 const AGGREGATE_RECOMMENDATION_STATES = new Set(['observe', 'ready_for_human_review', 'insufficient_evidence'])
 const EXECUTION_FEASIBILITY = new Set(['pass', 'fail', 'unknown'])
+const REVIEW_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 
 const MAX_SIGNAL_COUNT = 20
 const MAX_BLOCKING_RULE_COUNT = 20
@@ -123,6 +124,67 @@ function strategySnapshotFromOptions(options = {}) {
   return options.strategySnapshot ?? options.strategy_snapshot ?? options.frozenStrategy ?? options.frozen_strategy
 }
 
+function normalizeTimeframe(value) {
+  const normalized = String(value == null ? '' : value).trim().toUpperCase()
+  return REVIEW_TIMEFRAMES.has(normalized) ? normalized : null
+}
+
+function declaredTimeframes(strategySnapshot = {}) {
+  const plan = strategySnapshot?.market_data_plan || strategySnapshot?.marketDataPlan || {}
+  const raw = Array.isArray(plan.timeframes) ? plan.timeframes : []
+  const values = raw.map(item => typeof item === 'string' ? item : item?.timeframe ?? item?.tf)
+  const primary = plan.primary_timeframe ?? plan.primaryTimeframe
+  return new Set([...values, primary].map(normalizeTimeframe).filter(Boolean))
+}
+
+function optionTimeframes(options = {}, field, fallback = []) {
+  const supplied = options[field] ?? options[field.replace(/[A-Z]/g, match => `_${match.toLowerCase()}`)]
+  const values = supplied instanceof Set ? [...supplied] : Array.isArray(supplied) ? supplied : fallback
+  return new Set(values.map(normalizeTimeframe).filter(Boolean))
+}
+
+function evidenceReferenceTimeframe(value) {
+  const parts = String(value == null ? '' : value).split(':')
+  return normalizeTimeframe(parts.at(-1))
+}
+
+function ensureTimeframeEvidence(timeframes, refs, field) {
+  if (!timeframes.size) return
+  const referenceTimeframes = refs.map(evidenceReferenceTimeframe).filter(Boolean)
+  if (!referenceTimeframes.length || referenceTimeframes.some(value => !timeframes.has(value))) {
+    error(`${field}_evidence_timeframe_invalid`)
+  }
+  for (const timeframe of timeframes) {
+    if (!referenceTimeframes.includes(timeframe)) error(`${field}_evidence_timeframe_missing`)
+  }
+}
+
+function validateOutputTimeframe(value, field, options = {}, refs = [], {
+  requireStrategyDeclared = true, checkEvidenceRefs = true,
+} = {}) {
+  const timeframe = normalizeTimeframe(value)
+  if (!timeframe) error(`${field}_invalid`)
+  const declared = optionTimeframes(options, 'strategyDeclaredTimeframes', [...declaredTimeframes(strategySnapshotFromOptions(options))])
+  if (requireStrategyDeclared && declared.size && !declared.has(timeframe)) error(`${field}_undeclared`)
+  const available = optionTimeframes(options, 'evidenceAvailableTimeframes')
+  if (available.size && !available.has(timeframe)) error(`${field}_evidence_unavailable`)
+  if (checkEvidenceRefs) ensureTimeframeEvidence(new Set([timeframe]), refs, field)
+  return timeframe
+}
+
+export function deriveManualTradeReviewDeclaredTimeframes(strategySnapshot = {}) {
+  return [...declaredTimeframes(strategySnapshot)].sort()
+}
+
+export function deriveManualTradeReviewEvidenceTimeframes(value = {}) {
+  const frames = new Set()
+  const timeframes = value?.timeframes && typeof value.timeframes === 'object' ? Object.keys(value.timeframes) : []
+  timeframes.forEach(item => { const normalized = normalizeTimeframe(item); if (normalized) frames.add(normalized) })
+  const refs = Array.isArray(value) ? value : value?.allowedEvidenceRefs ?? value?.allowed_evidence_refs ?? []
+  refs.forEach(item => { const normalized = evidenceReferenceTimeframe(item); if (normalized) frames.add(normalized) })
+  return [...frames].sort()
+}
+
 function candidateKey(value) {
   if (typeof value !== 'string' || !CANDIDATE_KEYS.has(value)) error('candidate_key_invalid')
   return value
@@ -148,7 +210,7 @@ function normalizeStrategySignal(signal, options = {}) {
   const refs = evidenceRefs(signal.evidence_refs, allowedRefs(options), 'strategy_signal_evidence_refs')
   return {
     strategy_rule_path:strategyPath(signal.strategy_rule_path, strategySnapshotFromOptions(options)),
-    timeframe:normalizedText(signal.timeframe, 'strategy_signal_timeframe', 64).toUpperCase(),
+    timeframe:validateOutputTimeframe(signal.timeframe, 'strategy_signal_timeframe', options, refs),
     observation:normalizedText(signal.observation, 'strategy_signal_observation'),
     inference:normalizedText(signal.inference, 'strategy_signal_inference'),
     evidence_refs:refs,
@@ -463,11 +525,18 @@ function normalizeTechnicalChainItem(item, options = {}) {
     .map(path => strategyPath(path, strategySnapshotFromOptions(options)))
   if (origin === 'strategy_derived' && paths.length === 0) error('strategy_rule_paths_required')
   if (origin !== 'strategy_derived' && paths.length > 0) error('strategy_rule_paths_origin_invalid')
+  const refs = evidenceRefs(item.evidence_refs, allowedRefs(options), 'technical_evidence_refs')
+  const timeframes = arrayValue(item.timeframes, 'technical_timeframes', 20, { required:false })
+    .map(value => validateOutputTimeframe(value, 'technical_timeframe', options, refs,
+      { requireStrategyDeclared:origin === 'strategy_derived', checkEvidenceRefs:false }))
+  // A technical claim covering multiple periods must cite at least one exact
+  // evidence reference for each of those periods.  References from another
+  // period cannot be used to support a higher/lower timeframe statement.
+  ensureTimeframeEvidence(new Set(timeframes), refs, 'technical')
   return {
     origin,
     method_label:normalizedText(item.method_label, 'technical_method_label', 200),
-    timeframes:arrayValue(item.timeframes, 'technical_timeframes', 20, { required:false })
-      .map(value => normalizedText(value, 'technical_timeframe', 64).toUpperCase()),
+    timeframes,
     observations:arrayValue(item.observations, 'technical_observations', 30, { required:false })
       .map(value => normalizedText(value, 'technical_observation')),
     reasoning:normalizedText(item.reasoning, 'technical_reasoning'),
@@ -476,7 +545,7 @@ function normalizeTechnicalChainItem(item, options = {}) {
       'technical_outcome_independence',
     ),
     strategy_rule_paths:paths,
-    evidence_refs:evidenceRefs(item.evidence_refs, allowedRefs(options), 'technical_evidence_refs'),
+    evidence_refs:refs,
     limitations:normalizedText(item.limitations, 'technical_limitations'),
   }
 }

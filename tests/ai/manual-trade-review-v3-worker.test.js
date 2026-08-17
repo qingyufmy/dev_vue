@@ -92,6 +92,27 @@ describe('manual trade review v3 worker wiring', () => {
     expect(summary.candidates[0].execution_feasibility).toBe('pass')
   })
 
+  it('uses only the strategy-declared ATR from the candidate primary timeframe', () => {
+    const point = evidencePoint({ primary_timeframe:'M15', market_data:{ status:'complete', timeframes:{
+      M15:{ status:'complete', candles:[], indicators:{ atr_14:10 } },
+      H1:{ status:'complete', candles:[], indicators:{ atr_14:100 } },
+    } } })
+    const strategy = { market_data_plan:{ primary_timeframe:'M15', timeframes:[{ timeframe:'M15' }, { timeframe:'H1' }] },
+      strategy_policy:{ indicators:[{ id:'atr_14', kind:'atr', source:{ timeframe:'M15' }, params:{ period:14 } }] } }
+    expect(__manualTradeReviewTest.manualTradeReviewV3FindAtrEvidence(point, strategy)).toMatchObject({
+      atr_timeframe:'M15', atr_period:14, atr_value:10, atr_evidence_ref:pointRef,
+    })
+    expect(__manualTradeReviewTest.manualTradeReviewV3FindAtrEvidence(point, {
+      ...strategy, strategy_policy:{ indicators:[{ id:'atr_14', kind:'atr', source:{ timeframe:'H1' }, params:{ period:14 } }] },
+    })).toMatchObject({ atr_value:null })
+    expect(__manualTradeReviewTest.manualTradeReviewV3FindAtrEvidence(point, {
+      ...strategy, strategy_policy:{ indicators:[
+        { id:'atr_14', kind:'atr', source:{ timeframe:'M15' }, params:{ period:14 } },
+        { id:'atr_20', kind:'atr', source:{ timeframe:'M15' }, params:{ period:20 } },
+      ] },
+    })).toMatchObject({ atr_value:null })
+  })
+
   it('accepts v3 optimization references only from the frozen source set', () => {
     const normalized = normalizeManualTradeReviewV3Content({
       output_contract_version:MANUAL_TRADE_REVIEW_V3_VERSION, review_summary:'复盘摘要',

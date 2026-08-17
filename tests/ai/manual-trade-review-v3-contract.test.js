@@ -17,6 +17,10 @@ const strategySnapshot = {
   entry_methods:['market', 'limit'], symbols:['XAUUSD'], use_chan_analysis:true,
 }
 const refs = ['bar:a:pre:M15', 'bar:a:outcome:M15', 'bar:b:outcome:M15', 'bar:c:outcome:M15']
+const strictStrategySnapshot = {
+  ...strategySnapshot,
+  market_data_plan:{ primary_timeframe:'M15', timeframes:[{ timeframe:'M15' }, { timeframe:'H1' }] },
+}
 
 function point(overrides = {}) {
   return {
@@ -157,6 +161,23 @@ describe('manual trade review v3 contract', () => {
     expect(() => normalizeManualTradeReviewV3Content(v3Content({ technical_analysis_chain:[] }), {
       strategySnapshot, allowedEvidenceRefs:refs, serverDerivedSummary:derivedSummary,
     })).toThrow('technical_analysis_chain_required')
+  })
+
+  it('rejects undeclared or mismatched evidence timeframes', () => {
+    expect(() => normalizeManualTradeReviewCounterfactualPoint(point({
+      strategy_signals:[{ ...point().strategy_signals[0], timeframe:'H1', evidence_refs:[refs[0]] }],
+    }), { strategySnapshot:strictStrategySnapshot, allowedEvidenceRefs:refs,
+      evidenceAvailableTimeframes:['M15'] })).toThrow('strategy_signal_timeframe_evidence_unavailable')
+    expect(() => normalizeManualTradeReviewV3Content(v3Content({
+      technical_analysis_chain:[{ ...v3Content().technical_analysis_chain[0], timeframes:['H1'], evidence_refs:[refs[1]] }],
+    }), { strategySnapshot:strictStrategySnapshot, allowedEvidenceRefs:refs,
+      evidenceAvailableTimeframes:['M15', 'H1'] })).toThrow('technical_evidence_timeframe_invalid')
+    const multiTimeframeRef = 'bar:h:outcome:H1'
+    const multi = normalizeManualTradeReviewV3Content(v3Content({
+      technical_analysis_chain:[{ ...v3Content().technical_analysis_chain[0], timeframes:['M15', 'H1'], evidence_refs:[refs[1], multiTimeframeRef] }],
+    }), { strategySnapshot:strictStrategySnapshot, allowedEvidenceRefs:[...refs, multiTimeframeRef],
+      evidenceAvailableTimeframes:['M15', 'H1'], serverDerivedSummary:deriveManualTradeReviewDirectionSummary([point()], 'buy') })
+    expect(multi.technical_analysis_chain[0].timeframes).toEqual(['M15', 'H1'])
   })
 
   it('does not allow model output to supply the direction summary', () => {

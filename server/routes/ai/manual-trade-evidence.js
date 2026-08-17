@@ -9,6 +9,7 @@ import { assessChanEvidenceDimensions } from './chan-evidence-assessment.js'
 import { createManualTradeSelectionContext, verifyManualTradeSelectionContext } from './manual-trade-selection-context.js'
 import { buildManualReviewCounterfactualEvidenceRefs } from './manual-trade-review-contract.js'
 import { buildManualTradeReviewCounterfactualPoints, MAX_MANUAL_TRADE_REVIEW_COUNTERFACTUAL_OFFSET_BARS } from './manual-trade-review-counterfactual-points.js'
+import { MANUAL_TRADE_REVIEW_V3_VERSION } from './manual-trade-review-v3-contract.js'
 
 export const MANUAL_TRADE_PAGE_DEFAULT = 20
 export const MANUAL_TRADE_PAGE_MAX = 100
@@ -961,11 +962,13 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
            signal_type:trade.direction, stop_loss_price:trade.stop_loss, take_profit_1_price:trade.take_profit },
       })
       const primaryTimeframe = primaryReviewTimeframe(strategySnapshot, timeframes)
-      const primaryFrame = preEntry?.timeframes?.[primaryTimeframe]
-      const hasCandidateEvidenceShape = primaryFrame && Object.prototype.hasOwnProperty.call(primaryFrame, 'candles')
-      const counterfactual = hasCandidateEvidenceShape
-        ? await buildCounterfactualPoints({ common, trade, preEntry, entryTimeUtcMsc, primaryTimeframe, buildPath })
-        : null
+      // Every newly-created review is a v3 contract.  Even when the primary
+      // frame does not contain a candle sequence, retain the complete v3
+      // evidence shape and let the worker fail closed with a stable reason.
+      // Omitting this field would make the worker mistake an incomplete new
+      // review for an old v2 record and spend model budget on the wrong
+      // prompt.
+      const counterfactual = await buildCounterfactualPoints({ common, trade, preEntry, entryTimeUtcMsc, primaryTimeframe, buildPath })
       const candidatePoints = counterfactual?.points || []
       const candidatePointsByKey = Object.fromEntries(candidatePoints
         .filter(point => point?.candidate_key)
@@ -973,12 +976,11 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
       const baseComplete = preEntry?.status === 'complete' && outcomePath?.status === 'complete'
       const path = { status:baseComplete && (!counterfactual || counterfactual.status === 'complete') ? 'complete' : 'partial',
         pre_entry:preEntry, outcome_path:outcomePath,
-        ...(counterfactual ? {
-          counterfactual_points:candidatePoints,
-          candidate_points:candidatePointsByKey,
-          counterfactual_points_status:counterfactual.status,
-          counterfactual_points_reason:counterfactual.reason,
-        } : {}) }
+        counterfactual_points:candidatePoints,
+        candidate_points:candidatePointsByKey,
+        counterfactual_points_status:counterfactual.status,
+        counterfactual_points_reason:counterfactual.reason,
+      }
       if (chanRequirement.status === 'enabled') {
         const chanFrames = [...new Set(chanRequirement.timeframes || [])]
         const chanEvidence = { pre_entry:{}, outcome:{} }
@@ -1299,6 +1301,10 @@ export async function readManualTradeEvidence(actor, account, selected = [], opt
     broker_server:account.broker_server, login_account:account.login_account },
     history_sync:result.history_sync || null, trades:frozenTrades,
     trade_source_hashes:matched.map(item => ({ source_identity_hash:item.source_identity_hash, trade_source_hash:item.trade_source_hash })),
+    // This marker is part of the immutable evidence hash and tells recovery
+    // code that this record must remain on the v3 contract, including when
+    // candidate evidence is unavailable.
+    review_contract_version:MANUAL_TRADE_REVIEW_V3_VERSION,
     market_data:marketData, generated_at_utc_msc:Date.now(), timezone_offset_minutes:built.timezone_offset_minutes,
     clock_status:built.clock_status, evidence_status:evidenceStatus,
     evidence_reason:evidenceStatus === 'complete' ? null : 'market_evidence_incomplete', ...historyScope }
