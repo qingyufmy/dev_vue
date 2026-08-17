@@ -36,6 +36,14 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null
 }
 
+function optionalProtectionPrice(...values) {
+  for (const value of values) {
+    const number = numberOrNull(value)
+    if (number != null && number > 0) return number
+  }
+  return null
+}
+
 function safeInteger(value) {
   const number = Number(value)
   return Number.isSafeInteger(number) && number > 0 ? number : null
@@ -154,8 +162,8 @@ function normalizeOrder(row) {
     volume_initial:numberOrNull(row?.volume_initial),
     volume_current:numberOrNull(row?.volume_current),
     price_open:numberOrNull(row?.price_open),
-    stop_loss:numberOrNull(row?.stop_loss ?? row?.sl),
-    take_profit:numberOrNull(row?.take_profit ?? row?.tp),
+    stop_loss:optionalProtectionPrice(row?.stop_loss, row?.sl),
+    take_profit:optionalProtectionPrice(row?.take_profit, row?.tp),
     time_utc_msc:numberOrNull(row?.time_utc_msc),
     time_server_msc:numberOrNull(row?.time_server_msc),
   }
@@ -383,8 +391,10 @@ export function buildEligibleManualTrades(payload = {}, {
       close_time_utc_msc:times.length ? Math.max(...times) : null,
       entry_price:entries.length ? entries.reduce((sum, item) => sum + (item.price || 0) * (item.volume || 0), 0) / Math.max(entryVolume, 1e-12) : numberOrNull(trade.entry_price),
       close_price:exits.length ? exits.reduce((sum, item) => sum + (item.price || 0) * (item.volume || 0), 0) / Math.max(exitVolume, 1e-12) : numberOrNull(trade.exit_price),
-      stop_loss:protections.map(item => item.stop_loss).find(value => value != null && value > 0) ?? numberOrNull(trade.stop_loss),
-      take_profit:protections.map(item => item.take_profit).find(value => value != null && value > 0) ?? numberOrNull(trade.take_profit),
+      stop_loss:protections.map(item => item.stop_loss).find(value => value != null && value > 0)
+        ?? optionalProtectionPrice(trade.stop_loss, trade.sl),
+      take_profit:protections.map(item => item.take_profit).find(value => value != null && value > 0)
+        ?? optionalProtectionPrice(trade.take_profit, trade.tp),
       net_profit:netProfit,
       fees:{ commission:deals.reduce((sum, item) => sum + (item.commission || 0), 0), swap:deals.reduce((sum, item) => sum + (item.swap || 0), 0), fee:deals.reduce((sum, item) => sum + (item.fee || 0), 0) },
       deals:deals.map(item => ({ ...item })),

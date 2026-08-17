@@ -38,6 +38,27 @@ function validEvidencePage({ nextCursor = null, hasMore = false, symbol = 'EURUS
   ], history_snapshot_id:'snapshot-1', next_cursor:nextCursor, has_more:hasMore, history_sync:{ ...completeSync } }
 }
 
+function protectionDeals() {
+  return [
+    { deal_ticket:'d-protection-1', order_ticket:'2001', position_id:'1001', symbol:'EURUSD',
+      type:'buy', entry_type:0, magic:0, reason:'client', volume:1, price:1.1, time_utc_msc:1_000 },
+    { deal_ticket:'d-protection-2', order_ticket:'2002', position_id:'1001', symbol:'EURUSD',
+      type:'sell', entry_type:1, magic:0, reason:'client', volume:1, price:1.2, profit:10, time_utc_msc:2_000 },
+  ]
+}
+
+function compactProtectionPage({ stopLoss = 0, takeProfit = 0 } = {}) {
+  return {
+    status:'success', orders:[
+      { order_ticket:'2001', position_id:'1001', symbol:'EURUSD', magic:0, reason:'client', volume_initial:1,
+        price_open:1.1, stop_loss:stopLoss, take_profit:takeProfit },
+      { order_ticket:'2002', position_id:'1001', symbol:'EURUSD', magic:0, reason:'client', volume_initial:1,
+        price_open:1.2, stop_loss:stopLoss, take_profit:takeProfit },
+    ], history_snapshot_id:'protection-snapshot', next_cursor:null, has_more:false,
+    history_sync:{ ...completeSync },
+  }
+}
+
 describe('manual trade review history cursor contract', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -285,6 +306,54 @@ describe('manual trade review history cursor contract', () => {
     expect(result.trades[0].symbol).toBe('GBPUSD')
     expect(result).toMatchObject({ scanned_source_pages:2, skipped_empty_source_pages:1, has_more:false })
     expect(bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'positions')).toHaveLength(1)
+  })
+
+  it('keeps the source hash stable when compact protection zeros become missing evidence values', async () => {
+    const compact = compactProtectionPage()
+    const evidenceWithoutOrders = {
+      status:'success', deals:protectionDeals(), history_snapshot_id:'protection-snapshot',
+      history_sync:{ ...completeSync },
+    }
+    const evidenceWithMissingProtections = {
+      ...evidenceWithoutOrders,
+      history_orders:[
+        { order_ticket:'2001', position_id:'1001', symbol:'EURUSD', magic:0, reason:'client', volume_initial:1, price_open:1.1 },
+        { order_ticket:'2002', position_id:'1001', symbol:'EURUSD', magic:0, reason:'client', volume_initial:1,
+          price_open:1.2, stop_loss:null, take_profit:'' },
+      ],
+    }
+    let evidenceCalls = 0
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
+      if (action === 'history_page') return compact
+      if (action === 'history_evidence') return evidenceCalls++ === 0 ? evidenceWithoutOrders : evidenceWithMissingProtections
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+
+    const listed = await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc:10_000 })
+    expect(listed).toMatchObject({ unavailable:false, trades:[{ position_id:'1001', entry_order_ticket:'2001' }] })
+    const selected = listed.trades[0]
+    const readAccount = { ...accountRow, terminal_instance_id:'terminal-1', platform:'mt5',
+      route:{ terminal_instance_id:'terminal-1', account_ref:{ broker_server:'Broker-Demo', login:'1001' } } }
+    const reread = await readManualTradeEvidence({ id:7 }, readAccount, [{
+      trade_id:selected.trade_id, source_identity_hash:selected.source_identity_hash,
+      trade_source_hash:selected.trade_source_hash, position_id:selected.position_id,
+      entry_order_ticket:selected.entry_order_ticket,
+    }], {
+      strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } },
+      buildPath:async () => ({ status:'complete' }), nowUtcMsc:10_000,
+    })
+    expect(reread.trades[0].trade_source_hash).toBe(selected.trade_source_hash)
+    expect(reread.trades[0]).toMatchObject({ stop_loss:null, take_profit:null })
+  })
+
+  it('preserves positive stop-loss and take-profit values during normalization', () => {
+    const page = compactProtectionPage({ stopLoss:1.05, takeProfit:1.2 })
+    const result = buildEligibleManualTrades({
+      ...page, deals:protectionDeals(), history_orders:page.orders,
+    }, { account:accountRow, positions:[], systemReferences:new Map() })
+    expect(result.trades[0]).toMatchObject({ stop_loss:1.05, take_profit:1.2 })
   })
 
   it('re-reads a selected position through history evidence without accepting empty references', async () => {
