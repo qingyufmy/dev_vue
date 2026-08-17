@@ -156,4 +156,16 @@ describe('manual trade review frontend contract', () => {
     expect(detail).toContain('行情完整</strong>：当前窗口未形成足够的缠论结构')
     expect(app).toContain('await assertManualTradeReviewActionable(caseId, versionId)')
   })
+
+  it('renders v3 candidate, profit attribution, technical-chain and protection layers without hiding unknown feasibility', () => {
+    const detail = block('function renderManualTradeReviewV3Detail', 'function manualTradeReviewListHtml')
+    expect(detail).toContain('历史时间邻域盲测')
+    expect(detail).toContain('为什么盈利')
+    expect(detail).toContain('技术分析链')
+    expect(detail).toContain('strategy_eligibility')
+    expect(detail).toContain('execution_feasibility')
+    expect(detail).toContain('缺少历史合约事实时，执行可行性保持待确认')
+    expect(app).toContain('content.output_contract_version === "manual-trade-review-v3"')
+    expect(app).toContain('["manual-trade-review-v2", "manual-trade-review-v3"]')
+  })
 })
