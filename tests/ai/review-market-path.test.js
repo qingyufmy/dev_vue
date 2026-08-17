@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildReviewMarketPath, calculateHoldingPathMetrics } from '../../server/routes/ai/review-market-path.js'
+import { buildReviewMarketPath, calculateHoldingPathMetrics, expectedLatestClosedOpen } from '../../server/routes/ai/review-market-path.js'
 
 function rates(count = 120, start = Date.UTC(2026, 6, 1), step = 300000) {
   return Array.from({ length: count }, (_, index) => {
@@ -23,13 +23,15 @@ describe('review holding market path', () => {
       take_profit_1_price: 95, take_profit_2_price: 90, stop_loss_price: 107,
     } })
     expect(result.status).toBe('complete')
-    expect(result.max_favorable_excursion).toBe(8)
+    expect(result.max_favorable_excursion).toBe(6)
     expect(result.max_adverse_excursion).toBe(8)
     expect(result.take_profit_touched).toEqual([true, false, false])
     expect(result.stop_loss_touched).toBe(true)
+    expect(result.metric_precision).toBe('bar_bounded')
+    expect(result.boundary_candle_partial).toBe(false)
   })
 
-  it('includes the candle that already opened when a short holding period starts', () => {
+  it('does not treat prices outside a short intrabar holding interval as exact evidence', () => {
     const result = calculateHoldingPathMetrics({
       rates:[{ time_utc_msc:0, high:105, low:95 }, { time_utc_msc:3600000, high:110, low:90 }],
       deals:[
@@ -38,8 +40,37 @@ describe('review holding market path', () => {
       ],
       direction:'buy', timeframeIntervalMs:3600000,
     })
-    expect(result.status).toBe('complete')
-    expect(result.bars_held).toBe(1)
+    expect(result.status).toBe('partial')
+    expect(result.reason).toBe('holding_path_bar_boundary_insufficient')
+    expect(result.metric_precision).toBe('insufficient')
+    expect(result.boundary_candle_count).toBe(1)
+  })
+
+  it('aligns the latest closed candle to the timeframe boundary', () => {
+    expect(expectedLatestClosedOpen(Date.UTC(2026, 7, 17, 10, 0, 0), 300000))
+      .toBe(Date.UTC(2026, 7, 17, 9, 55, 0))
+    expect(expectedLatestClosedOpen(Date.UTC(2026, 7, 17, 10, 1, 42), 300000))
+      .toBe(Date.UTC(2026, 7, 17, 9, 55, 0))
+    expect(expectedLatestClosedOpen(0, 300000)).toBeNull()
+  })
+
+  it('does not report a normal aligned pre-entry candle as truncated', async () => {
+    const series = rates(120)
+    const cutoff = series[90].time_utc_msc + 42_000
+    const deals = [
+      { entry_type:0, volume:1, price:4000, raw_json:JSON.stringify({ time_utc_msc:cutoff }) },
+      { entry_type:1, volume:1, price:4002, raw_json:JSON.stringify({ time_utc_msc:series[105].time_utc_msc }) },
+    ]
+    const available = series.slice(0, 91)
+    const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD',
+      signal:{ timeframe:'M5', signal_type:'hold' }, snapshot:{ klines:{ M5:[] } }, deals,
+      asOfUtcMsc:cutoff, includeHoldingMetrics:false, timezoneOffsetMinutes:0,
+      chanRequirement:{ status:'disabled', source:'test', timeframes:[] },
+      fetchRates:async () => ({ status:'success', rates:[...available, { ...available.at(-1),
+        time_utc_msc:available.at(-1).time_utc_msc + 300000 }], market_meta:{ timezone_offset_minutes:0 } }),
+    })
+    expect(result.timeframes.M5.truncated_before_exit).toBe(false)
+    expect(result.timeframes.M5.expected_last_closed_open_utc_msc).toBe(series[89].time_utc_msc)
   })
 
   it('keeps only holding path plus context and calculates Chan evidence', async () => {

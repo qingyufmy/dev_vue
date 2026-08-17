@@ -18,23 +18,37 @@ vi.mock('../../server/routes/ai/manual-trade-evidence.js', () => ({
   normalizedTradeHash:value => `hash:${String(value)}`,
 }))
 
-import { __manualTradeReviewTest, manualTradeReviewOutputContract, validateCounterfactualAnalysis,
-  validateManualTradeReviewContent, validateManualTradeSelection, recoverAbandonedManualTradeReviewJobs } from '../../server/routes/ai/manual-trade-review.js'
+import { __manualTradeReviewTest, confirmManualTradeReview, createManualTradeReview, manualTradeReviewOutputContract, validateCounterfactualAnalysis,
+  validateManualTradeReviewContent, validateManualTradeSelection, recoverAbandonedManualTradeReviewJobs,
+  retryManualTradeReview } from '../../server/routes/ai/manual-trade-review.js'
 
 const source = { source_identity_hash:'trade-a', normalized_trade_json:JSON.stringify({
   symbol:'EURUSD', direction:'buy', entry_time_utc_msc:1_000, close_time_utc_msc:2_000, net_profit:10,
 }) }
 const identityHash = 'A'.repeat(64)
 const sourceHash = 'B'.repeat(64)
-const counterfactual = { decision:'buy', reasoning:'strategy allowed long', strategy_signals:['trend'], blocking_rules:[], confidence:.7 }
+const counterfactual = { decision:'buy', reasoning:'strategy allowed long', strategy_signals:['trend'], blocking_rules:[],
+  evidence_refs:['trade:trade-a'], confidence:.7 }
+const frozenStrategy = { version:4, strategy_policy:{ entry:{ mode:'trend' } }, market_data_plan:{ primary_timeframe:'M15' },
+  entry_methods:[], symbols:['EURUSD'], use_chan_analysis:false }
+const frozenEvidence = { market_data:{ trades:{ 'trade-a':{
+  pre_entry:{ timeframes:{ M15:{ status:'complete' } } },
+  outcome_path:{ timeframes:{ M15:{ status:'complete' } } },
+} } } }
 
 function validContent(overrides = {}) {
   return {
     counterfactual_analysis:counterfactual, evidence_quality:'complete', review_summary:'review',
     strategy_alignment:'partial', decision_quality:'mixed', counterfactual_match:'same_direction',
-    why_profitable:'trend continuation', profit_attribution:{ market_fit:'fit' },
+    why_profitable:'trend continuation', profit_attribution:{ market_fit:'fit', entry_quality:'timely',
+      exit_quality:'captured move', luck_or_uncontrolled_factors:'normal market noise' },
+    outcome_independence_note:'outcome was evaluated only after the frozen decision',
+    rule_comparisons:[{ rule_path:'strategy_policy.entry', rule_summary:'follow trend', observed_evidence:'trend continued',
+      status:'aligned', evidence_refs:['trade:trade-a'] }], strengths:['followed trend'], issues:[], confidence:.8,
     strategy_optimization_hypotheses:[{ hypothesis_id:'h1', supporting_trade_refs:['trade-a'],
-      state:'hypothesis', target_path:'strategy_policy_json.entry', proposed_change:'observe pullback' }],
+      state:'hypothesis', target_path:'strategy_policy.entry', current_rule_summary:'follow trend',
+      observed_gap:'pullback definition is broad', proposed_change:'observe pullback', counter_evidence:[], applicable_when:{ symbol:'EURUSD' },
+      risk_if_applied:'may filter valid entries', confidence:.6, validation_needed:'validate on more closed trades' }],
     ...overrides,
   }
 }
@@ -50,10 +64,11 @@ describe('manual profitable trade counterfactual review contract', () => {
   })
 
   it('normalizes one frozen source and never emits experience candidates', () => {
-    const content = validateManualTradeReviewContent(validContent({ review_summary:'  user text\u0000 ' }), [source], { version:4 }, { evidenceStatus:'complete' })
+    const content = validateManualTradeReviewContent(validContent({ review_summary:'  user text\u0000 ' }), [source], frozenStrategy,
+      { evidenceStatus:'complete', evidence:frozenEvidence })
     expect(content.review_summary).toBe('user text')
     expect(content.counterfactual_analysis.decision).toBe('buy')
-    expect(content.strategy_optimization_hypotheses[0]).toMatchObject({ state:'hypothesis', target_path:'strategy_policy_json.entry' })
+    expect(content.strategy_optimization_hypotheses[0]).toMatchObject({ state:'hypothesis', target_path:'strategy_policy.entry' })
     expect(content).not.toHaveProperty('experience_candidates')
   })
 
@@ -62,7 +77,8 @@ describe('manual profitable trade counterfactual review contract', () => {
     expect(() => validateManualTradeSelection([
       { source_identity_hash:'a', trade_source_hash:'h1' }, { source_identity_hash:'b', trade_source_hash:'h2' },
     ])).toThrow('manual_trade_review_selection_invalid')
-    expect(() => validateManualTradeReviewContent(validContent(), [source, { source_identity_hash:'trade-b' }], {}, { evidenceStatus:'complete' }))
+    expect(() => validateManualTradeReviewContent(validContent(), [source, { source_identity_hash:'trade-b' }], frozenStrategy,
+      { evidenceStatus:'complete', evidence:frozenEvidence }))
       .toThrow('manual_trade_review_selection_invalid')
   })
 
@@ -96,16 +112,47 @@ describe('manual profitable trade counterfactual review contract', () => {
   it('rejects unknown references, rule paths, and enum drift', () => {
     expect(() => validateManualTradeReviewContent(validContent({ strategy_optimization_hypotheses:[{
       supporting_trade_refs:['other'], state:'hypothesis', proposed_change:'x',
-    }] }), [source], {}, { evidenceStatus:'complete' })).toThrow('manual_trade_review_output_reference_invalid')
+    }] }), [source], frozenStrategy, { evidenceStatus:'complete', evidence:frozenEvidence })).toThrow('manual_trade_review_output_reference_invalid')
     expect(() => validateManualTradeReviewContent(validContent({ rule_comparisons:[{ rule_path:'system_prompt', status:'conflict' }] }),
-      [source], {}, { evidenceStatus:'complete' })).toThrow('manual_trade_review_output_rule_path_invalid')
+      [source], frozenStrategy, { evidenceStatus:'complete', evidence:frozenEvidence })).toThrow('manual_trade_review_output_rule_path_invalid')
     expect(() => validateManualTradeReviewContent(validContent({ counterfactual_match:'invented' }),
-      [source], {}, { evidenceStatus:'complete' })).toThrow('manual_trade_review_output_enum_invalid')
+      [source], frozenStrategy, { evidenceStatus:'complete', evidence:frozenEvidence })).toThrow('manual_trade_review_output_enum_invalid')
   })
 
   it('downgrades optimization hypotheses when frozen evidence is incomplete', () => {
-    const content = validateManualTradeReviewContent(validContent({ evidence_quality:'partial' }), [source], {}, { evidenceStatus:'partial' })
+    const content = validateManualTradeReviewContent(validContent({ evidence_quality:'insufficient' }), [source], frozenStrategy,
+      { evidenceStatus:'partial', evidence:frozenEvidence })
     expect(content.strategy_optimization_hypotheses[0]).toMatchObject({ state:'insufficient_evidence' })
+  })
+
+  it('rejects empty required fields and invented evidence references', () => {
+    expect(() => validateManualTradeReviewContent(validContent({ review_summary:'  ' }), [source], frozenStrategy,
+      { evidenceStatus:'complete', evidence:frozenEvidence })).toThrow('manual_trade_review_output_review_summary_required')
+    expect(() => validateManualTradeReviewContent(validContent({ rule_comparisons:[{
+      rule_path:'strategy_policy.entry', rule_summary:'follow trend', observed_evidence:'trend continued',
+      status:'aligned', evidence_refs:['market:trade-a:outcome:H4'],
+    }] }), [source], frozenStrategy, { evidenceStatus:'complete', evidence:frozenEvidence }))
+      .toThrow('manual_trade_review_output_reference_invalid')
+  })
+
+  it('locks approval to the current version and keeps repeated approval idempotent', async () => {
+    db.withTransaction.mockImplementationOnce(async callback => callback(async sql => {
+      if (sql.includes('SELECT * FROM manual_trade_review_cases')) return [[{
+        id:19, user_id:7, status:'approved', current_version_id:41, approved_version_id:41,
+      }], []]
+      throw new Error('unexpected_sql')
+    }))
+    await expect(confirmManualTradeReview({ caseId:19, actor:{ id:7 }, versionId:41, action:'approve' }))
+      .resolves.toEqual({ case_id:19, status:'approved', version_id:41 })
+
+    db.withTransaction.mockImplementationOnce(async callback => callback(async sql => {
+      if (sql.includes('SELECT * FROM manual_trade_review_cases')) return [[{
+        id:19, user_id:7, status:'draft', current_version_id:42, approved_version_id:null,
+      }], []]
+      throw new Error('unexpected_sql')
+    }))
+    await expect(confirmManualTradeReview({ caseId:19, actor:{ id:7 }, versionId:41, action:'approve' }))
+      .rejects.toThrow('manual_trade_review_version_conflict')
   })
 
   it('keeps future outcome and user thesis out of the counterfactual prompt', () => {
@@ -146,5 +193,129 @@ describe('manual profitable trade counterfactual review contract', () => {
     db.queryRun.mockResolvedValue({ changes:1 })
     const result = await recoverAbandonedManualTradeReviewJobs({ now:'2026-08-10 12:00:00', limit:10 })
     expect(result).toMatchObject({ scanned:1, requeued:0, failed:1, manual_retry_required:1 })
+  })
+
+  it('keys the generic model task by job generation, never by outer attempt', () => {
+    expect(__manualTradeReviewTest.manualTradeReviewModelIdempotencyKey({ id:19, case_id:23, generation_no:4, attempt_count:99 }))
+      .toBe('manual_trade_review:19:4')
+    expect(__manualTradeReviewTest.manualTradeReviewModelIdempotencyKey({ id:19, case_id:23, generation_no:4, attempt_count:1 }))
+      .toBe('manual_trade_review:19:4')
+  })
+
+  it('defers a valid queued-task lease without consuming the manual job attempt', () => {
+    const wait = __manualTradeReviewTest.manualTradeReviewModelTaskWaitError({
+      status:'retry_wait', scheduled_at_utc_msc:0, lease_expires_at_utc_msc:2_000_000,
+    }, 1_000_000)
+    expect(wait).toMatchObject({ code:'manual_trade_review_model_task_lease_wait' })
+    expect(wait.manualTradeReviewDeferUntilUtcMs).toBe(2_000_000)
+    expect(__manualTradeReviewTest.manualTradeReviewModelTaskWaitError({
+      status:'provider_running', scheduled_at_utc_msc:0, lease_expires_at_utc_msc:2_000_000,
+    }, 1_000_000)).toMatchObject({ code:'manual_trade_review_model_task_lease_wait' })
+    expect(__manualTradeReviewTest.manualTradeReviewModelTaskWaitError({
+      status:'retry_wait', scheduled_at_utc_msc:0, lease_expires_at_utc_msc:999_999,
+    }, 1_000_000)).toBeNull()
+  })
+
+  it('does not reuse a terminal generic task inside the same generation', () => {
+    const error = __manualTradeReviewTest.manualTradeReviewModelTaskTerminalError({ status:'failed_terminal' })
+    expect(error).toMatchObject({ code:'manual_trade_review_model_task_terminal_requires_retry', manualTradeReviewTerminalTask:true })
+    expect(__manualTradeReviewTest.manualTradeReviewModelTaskTerminalError({ status:'retry_wait' })).toBeNull()
+  })
+
+  it('recovers a succeeded generic task only when its business version was already committed', () => {
+    expect(__manualTradeReviewTest.manualTradeReviewCanRecoverCompletedTask({ status:'succeeded' }, {
+      status:'draft', current_version_id:41,
+    })).toBe(true)
+    expect(__manualTradeReviewTest.manualTradeReviewCanRecoverCompletedTask({ status:'succeeded' }, {
+      status:'generating', current_version_id:null,
+    })).toBe(false)
+    expect(__manualTradeReviewTest.manualTradeReviewCanRecoverCompletedTask({ status:'failed_terminal' }, {
+      status:'draft', current_version_id:41,
+    })).toBe(false)
+  })
+
+  it('persists a missing historical deadline only on the first manual job claim', async () => {
+    const sqlCalls = []
+    db.withTransaction.mockImplementationOnce(async callback => callback(async (sql, params) => {
+      sqlCalls.push({ sql, params })
+      if (sql.includes('SELECT jobs.*, cases.user_id')) return [[{
+        id:31, case_id:19, status:'queued', attempt_count:0, task_deadline_at:null,
+      }], []]
+      return [{ affectedRows:1 }, []]
+    }))
+    const first = await __manualTradeReviewTest.claimManualTradeReviewJob()
+    expect(first.task_deadline_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+    const claimUpdate = sqlCalls.find(call => call.sql.includes("SET status = 'leased'"))
+    expect(claimUpdate?.sql).toContain('task_deadline_at = COALESCE(task_deadline_at, ?)')
+    expect(claimUpdate?.params[0]).toBe(first.task_deadline_at)
+
+    db.withTransaction.mockImplementationOnce(async callback => callback(async (sql, params) => {
+      sqlCalls.push({ sql, params })
+      if (sql.includes('SELECT jobs.*, cases.user_id')) return [[{
+        id:31, case_id:19, status:'queued', attempt_count:1, task_deadline_at:'2026-08-10 12:30:00',
+      }], []]
+      return [{ affectedRows:1 }, []]
+    }))
+    const second = await __manualTradeReviewTest.claimManualTradeReviewJob()
+    expect(second.task_deadline_at).toBe('2026-08-10 12:30:00')
+  })
+
+  it('creates generation one with a persisted business deadline in the job INSERT', async () => {
+    vi.stubGlobal('setImmediate', vi.fn())
+    const sqlCalls = []
+    db.queryOne.mockReset()
+    db.queryOne.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id:19, user_id:7, trading_account_id:3, strategy_id:5, strategy_version:2, strategy_scope:'platform',
+      evidence_status:'complete', status:'queued', generation_no:1, task_deadline_at:'2026-08-10 12:30:00',
+    })
+    db.withTransaction.mockImplementationOnce(async callback => callback(async (sql, params) => {
+      sqlCalls.push({ sql, params })
+      if (sql.includes('SELECT * FROM manual_trade_review_cases')) return [[], []]
+      if (sql.includes('INSERT INTO manual_trade_review_cases')) return [{ insertId:19 }, []]
+      return [{ affectedRows:1, insertId:1 }, []]
+    }))
+    const identity = 'a'.repeat(64)
+    const sourceHashValue = 'b'.repeat(64)
+    const result = await createManualTradeReview({ id:7 }, {
+      client_request_id:'req-generation-1', trading_account_id:3, strategy_id:5,
+      trades:[{ source_identity_hash:identity, trade_source_hash:sourceHashValue, position_id:'123' }],
+    }, {
+      account:{ id:3, terminal_instance_id:'terminal-1', broker_server:'Broker-Demo', login_account:'1001' },
+      strategy:{ snapshot:{ id:5, version:2 }, hash:'strategy-hash' },
+      evidence:{ evidence_status:'complete', market_data:{ status:'complete' },
+        trades:[{ identity:{ identity_hash:identity, position_id:'123' }, symbol:'EURUSD', entry_time_utc_msc:1, close_time_utc_msc:2 }],
+        trade_source_hashes:[{ source_identity_hash:identity, trade_source_hash:sourceHashValue }] },
+    })
+    vi.unstubAllGlobals()
+    expect(result.created).toBe(true)
+    const jobInsert = sqlCalls.find(call => call.sql.includes('INSERT INTO manual_trade_review_jobs'))
+    expect(jobInsert?.sql).toContain('generation_no')
+    expect(jobInsert?.sql).toContain('task_deadline_at')
+    expect(jobInsert?.sql).toContain("VALUES (?, ?, 1, 'queued'")
+    expect(jobInsert?.params[2]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+  })
+
+  it('retries in one transaction with generation increment and a fresh deadline', async () => {
+    vi.stubGlobal('setImmediate', vi.fn())
+    const sqlCalls = []
+    db.withTransaction.mockImplementationOnce(async callback => callback(async (sql, params) => {
+      sqlCalls.push({ sql, params })
+      if (sql.includes('SELECT cases.id AS case_id')) return [[{
+        case_id:19, case_status:'failed', job_id:31, generation_no:1, job_status:'failed',
+      }], []]
+      return [{ affectedRows:1 }, []]
+    }))
+    const result = await retryManualTradeReview(19, { id:7 })
+    vi.unstubAllGlobals()
+    expect(result).toMatchObject({ queued:true, case_id:19, generation_no:2 })
+    const jobUpdate = sqlCalls.find(call => call.sql.includes('UPDATE manual_trade_review_jobs'))
+    expect(jobUpdate?.sql).toContain('generation_no = ?')
+    expect(jobUpdate?.sql).toContain('model_task_id = NULL')
+    expect(jobUpdate?.sql).toContain('task_deadline_at = ?')
+    expect(jobUpdate?.sql).toContain('attempt_count = 0')
+    expect(jobUpdate?.params[0]).toBe(2)
+    expect(jobUpdate?.params[1]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+    expect(sqlCalls.findIndex(call => call.sql.includes('UPDATE manual_trade_review_jobs')))
+      .toBeLessThan(sqlCalls.findIndex(call => call.sql.includes('UPDATE manual_trade_review_cases')))
   })
 })

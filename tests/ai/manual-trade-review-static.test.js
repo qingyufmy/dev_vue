@@ -20,6 +20,19 @@ describe('manual trade review backend boundaries', () => {
     expect(migration.lastIndexOf("id: '178_manual_trade_strategy_review'")).toBeGreaterThan(migration.lastIndexOf("id: '177_"))
   })
 
+  it('adds generation recovery columns in migration 191 without rewriting migration 178 data', () => {
+    const migration = read('server/migrations.js')
+    const migration191 = migration.slice(migration.lastIndexOf("id: '191_manual_trade_review_generation_recovery'"))
+    expect(migration191).toContain("id: '191_manual_trade_review_generation_recovery'")
+    expect(migration191).toContain('ADD COLUMN generation_no INT UNSIGNED NOT NULL DEFAULT 1 AFTER case_id')
+    expect(migration191).toContain('ADD COLUMN task_deadline_at DATETIME DEFAULT NULL AFTER max_attempts')
+    expect(migration191).toContain("COLUMN_NAME IN ('generation_no', 'task_deadline_at')")
+    expect(migration191).not.toMatch(/UPDATE\s+manual_trade_review_jobs/i)
+    const migration178 = migration.slice(migration.indexOf("id: '178_manual_trade_strategy_review'"), migration.indexOf("id: '179_history_range_preferences'"))
+    expect(migration178).not.toContain('generation_no')
+    expect(migration178).not.toContain('task_deadline_at')
+  })
+
   it('guards every manual review route with platform content management and owner-scoped service calls', () => {
     const routes = read('server/routes/ai/index.js')
     const paths = [
@@ -46,7 +59,20 @@ describe('manual trade review backend boundaries', () => {
     expect(worker).toContain('outcomeDeadline.attemptSafetyDeadlineUtcMs')
     expect(worker).toContain('createModelTaskTracker')
     expect(worker).toContain('startManualTradeReviewLeaseHeartbeat')
+    expect(worker).toContain('manualTradeReviewModelIdempotencyKey(job)')
+    expect(worker).not.toContain('${job.attempt_count}')
+    expect(worker).toContain('task_deadline_at')
     expect(review).toContain('manual_trade_review_counterfactual_immutable')
+  })
+
+  it('keeps lease waiting outside the manual attempt budget and advances retry generations explicitly', () => {
+    const review = read('server/routes/ai/manual-trade-review.js')
+    expect(review).toContain('manual_trade_review_model_task_lease_wait')
+    expect(review).toContain('attempt_count = GREATEST(0, attempt_count - 1)')
+    expect(review).toContain('task_deadline_at = COALESCE(task_deadline_at, ?)')
+    expect(review).toContain('generation_no = ?')
+    expect(review).toContain('model_task_id = NULL')
+    expect(review).toContain('task_deadline_at = ?')
   })
 
   it('starts and stops the new worker without restoring the legacy trade-review worker', () => {

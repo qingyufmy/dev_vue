@@ -82,6 +82,46 @@ describe('manual trade review frontend contract', () => {
     expect(strategyEditor).not.toContain('openStrategyEditor(null)')
   })
 
+  it('keeps the history reachable from every draft stage', () => {
+    expect(html).toContain('data-manual-review-action="view-history"')
+    const handler = block('if (manualReviewAction)', 'if (reviewCase)')
+    expect(handler).toContain('action === "view-history"')
+    expect(handler).toContain('setManualTradeReviewStage("result")')
+    expect(handler).toContain('manualTradeReviewResetClientRequestId()')
+    expect(html).toContain('data-manual-review-action="new-review"')
+  })
+
+  it('keeps create idempotency stable through unknown request outcomes', () => {
+    const create = block('function manualTradeReviewBuildClientRequestId', 'function manualTradeReviewCaseStatus')
+    expect(create).toContain('state.manualTradeReviewClientRequestId')
+    expect(create).toContain('manualTradeReviewEnsureClientRequestId')
+    expect(create).toContain('manualTradeReviewResetClientRequestId')
+    expect(create).toContain('const clientRequestId = manualTradeReviewEnsureClientRequestId()')
+    expect(create).toContain('client_request_id:clientRequestId')
+    expect(create).toContain('manualTradeReviewResetClientRequestId();')
+  })
+
+  it('pauses polling while hidden, resumes when visible, and backs off transient errors', () => {
+    const polling = block('function stopManualTradeReviewPolling', 'function manualTradeReviewProgressHtml')
+    expect(polling).toContain('document.visibilityState === "hidden"')
+    expect(polling).toContain('resumeManualTradeReviewPolling')
+    expect(polling).toContain('MANUAL_TRADE_REVIEW_POLL_MAX_RETRY_DELAY_MS')
+    expect(polling).toContain('manualTradeReviewPollRetryAttempt')
+    expect(polling).toContain('manualTradeReviewPollErrorIsTerminal')
+    expect(polling).toContain('manualTradeReviewHandlePollError')
+    expect(polling).not.toContain('pollManualTradeReviewJob(Number(state.manualTradeReviewSelectedId), generation).catch(() => {})')
+  })
+
+  it('guards detail requests against stale responses and localizes internal codes', () => {
+    const detail = block('async function openManualTradeReviewDetail', 'async function refreshManualTradeReviewTab')
+    expect(detail).toContain('manualTradeReviewDetailRequestVersion')
+    expect(detail).toContain('requestVersion !== state.manualTradeReviewDetailRequestVersion')
+    expect(app).toContain('manual_trade_review_source_changed:')
+    expect(app).toContain('market_evidence_unavailable:')
+    expect(app).toContain('manualTradeReviewReasonText(detail.evidence_reason)')
+    expect(app).toContain('localizeReason(detail.last_error_code')
+  })
+
   it('sends only stable history references when creating a review', () => {
     const create = block('async function createManualTradeReviewTask', 'function manualTradeReviewCaseStatus')
     expect(create).toContain('source_identity_hash:item.source_identity_hash')
@@ -97,6 +137,7 @@ describe('manual trade review frontend contract', () => {
     expect(html).toContain('20260814ema34toggle1')
     expect(html).toContain('manual-review-create-ref1')
     expect(html).toContain('manualmt4history1')
+    expect(html).toContain('manual-review-frontend2')
     expect(css).toContain('.manual-review-trade-row')
     expect(responsive).toContain('.manual-review-filter-bar .btn')
     expect(responsive).toContain('min-height: 44px')

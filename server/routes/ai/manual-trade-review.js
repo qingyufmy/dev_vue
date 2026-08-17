@@ -9,6 +9,9 @@ import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-provider
 import { resolveAiTaskModel } from './model-profiles.js'
 import { sha256 } from './inference-snapshots.js'
 import { getCurrentManualReviewAccount, listEligibleManualTrades, readManualTradeEvidence, normalizedTradeHash, MANUAL_TRADE_SELECTION_MAX } from './manual-trade-evidence.js'
+import { buildManualReviewEvidenceCatalog, requiredManualReviewArray, requiredManualReviewConfidence,
+  requiredManualReviewEnum, requiredManualReviewObject, requiredManualReviewText, validateFrozenStrategyPath,
+  validateManualReviewEvidenceRefs } from './manual-trade-review-contract.js'
 import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime } from './strategy-memory-library.js'
 
 const REVIEW_OUTPUT_VERSION = 'manual-trade-review-v2'
@@ -27,6 +30,10 @@ const ALLOWED_COUNTERFACTUAL_MATCH = new Set(['same_direction', 'hold', 'opposit
 const ALLOWED_HYPOTHESIS_STATE = new Set(['hypothesis', 'insufficient_evidence'])
 const MANUAL_TRADE_HASH_PATTERN = /^[0-9a-f]{64}$/i
 const MANUAL_TRADE_REFERENCE_PATTERN = /^(?!0+$)\d{1,32}$/
+const MANUAL_TRADE_REVIEW_TASK_DEADLINE_MS = 30 * 60_000
+const MODEL_TASK_TERMINAL_STATES = new Set(['cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected'])
+const MODEL_TASK_ACTIVE_STATES = new Set(['leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet',
+  'status_unknown', 'reconciling', 'response_received', 'validating', 'repairing', 'result_ready', 'applying'])
 
 let manualReviewTimer = null
 let manualReviewWake = false
@@ -42,20 +49,6 @@ function text(value, max = MAX_TEXT) {
   return String(value == null ? '' : value).normalize('NFKC').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max)
 }
 
-function array(value, max = MAX_CANDIDATES) { return (Array.isArray(value) ? value : []).slice(0, max) }
-
-function boundedObject(value, maxBytes = 4_000) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  try {
-    const copy = JSON.parse(JSON.stringify(value))
-    if (Buffer.byteLength(JSON.stringify(copy), 'utf8') > maxBytes) throw new Error('too_large')
-    return copy
-  } catch (error) {
-    if (error?.message === 'too_large') throw new Error('manual_trade_review_output_object_too_large')
-    throw new Error('manual_trade_review_output_object_invalid')
-  }
-}
-
 function id(value, code = 'invalid_id') {
   const number = Number(value)
   if (!Number.isSafeInteger(number) || number <= 0) throw new Error(code)
@@ -67,6 +60,27 @@ function jsonHash(value) { return sha256(JSON.stringify(value)) }
 function dateAfter(seconds = 120) {
   const date = new Date(Date.now() + Math.max(1, Number(seconds) || 120) * 1000)
   return new Date(date.getTime() + 8 * 3600_000).toISOString().replace('T', ' ').slice(0, 19)
+}
+
+function dateAtUtcMs(utcMs) {
+  const timestamp = Number(utcMs)
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return null
+  const date = new Date(timestamp + 8 * 3600_000)
+  return Number.isFinite(date.getTime()) ? date.toISOString().replace('T', ' ').slice(0, 19) : null
+}
+
+function parseBeijingDateTime(value) {
+  if (!value) return null
+  const date = new Date(`${String(value).replace(' ', 'T')}+08:00`)
+  return Number.isFinite(date.getTime()) ? date.getTime() : null
+}
+
+function newManualTradeReviewDeadline() {
+  return dateAfter(MANUAL_TRADE_REVIEW_TASK_DEADLINE_MS / 1000)
+}
+
+function manualTradeReviewModelIdempotencyKey(job) {
+  return `manual_trade_review:${Number(job.id)}:${Number(job.generation_no || 1)}`
 }
 
 function modelEndpoint(model) {
@@ -113,12 +127,6 @@ function managerOrThrow(actor) {
 }
 
 function sanitizeThesis(value) { return text(value, MAX_THESIS) || null }
-
-function enumValue(value, allowed, fallback, code) {
-  if (value == null || value === '') return fallback
-  if (!allowed.has(value)) throw new Error(code)
-  return value
-}
 
 function manualTradeHash(value) {
   if (typeof value !== 'string') throw new Error('manual_trade_review_selection_invalid')
@@ -178,92 +186,131 @@ export function manualTradeReviewOutputContract(sampleCount = 1) {
   return {
     output_contract_version:REVIEW_OUTPUT_VERSION,
     counterfactual_analysis:{ output_contract_version:COUNTERFACTUAL_OUTPUT_VERSION,
-      decision:'buy|sell|hold|insufficient_evidence' },
-    evidence_quality:'complete|partial|insufficient',
-    strategy_alignment:'aligned|partial|conflict|unknown',
+      decision:'buy|sell|hold|insufficient_evidence', reasoning:'non-empty string', strategy_signals:['string'],
+      blocking_rules:['string'], evidence_refs:['allowed pre-entry evidence ref'], confidence:'number 0..1' },
+    evidence_quality:'complete|insufficient; must match frozen evidence status',
+    strategy_alignment:'aligned|partial|misaligned|conflict|unknown',
     decision_quality:'good|mixed|poor|insufficient_evidence',
     counterfactual_match:'same_direction|hold|opposite_direction|insufficient_evidence',
+    review_summary:'non-empty string', why_profitable:'non-empty string',
+    profit_attribution:{ market_fit:'non-empty string', entry_quality:'non-empty string',
+      exit_quality:'non-empty string', luck_or_uncontrolled_factors:'non-empty string' },
+    outcome_independence_note:'non-empty string',
+    rule_comparisons:[{ rule_path:'existing frozen strategy path or null only when status is unknown/not_applicable',
+      rule_summary:'non-empty string', observed_evidence:'non-empty string',
+      status:'aligned|partial|conflict|unknown|not_applicable', evidence_refs:['allowed outcome evidence ref'] }],
+    strengths:['string'], issues:['string'],
+    strategy_optimization_hypotheses:[{ target_path:'existing frozen strategy path', supporting_trade_refs:['source identity hash'],
+      current_rule_summary:'non-empty string', observed_gap:'non-empty string', proposed_change:'non-empty string',
+      counter_evidence:['string'], applicable_when:{}, risk_if_applied:'non-empty string',
+      validation_needed:'non-empty string', confidence:'number 0..1',
+      state:'hypothesis|insufficient_evidence' }],
+    confidence:'number 0..1',
+    allowed_strategy_roots:['strategy_policy', 'market_data_plan', 'entry_methods', 'symbols', 'use_chan_analysis'],
     strategy_optimization_state:'hypothesis|insufficient_evidence',
   }
 }
 
-export function validateCounterfactualAnalysis(input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('manual_trade_review_counterfactual_invalid')
+export function validateCounterfactualAnalysis(input, { allowedEvidenceRefs = null } = {}) {
+  requiredManualReviewObject(input, 'counterfactual_analysis')
   return {
     output_contract_version:COUNTERFACTUAL_OUTPUT_VERSION,
-    decision:enumValue(input.decision, ALLOWED_COUNTERFACTUAL_DECISION, 'insufficient_evidence', 'manual_trade_review_output_enum_invalid'),
-    reasoning:text(input.reasoning), strategy_signals:array(input.strategy_signals, 20).map(value => text(value)).filter(Boolean),
-    blocking_rules:array(input.blocking_rules, 20).map(value => text(value)).filter(Boolean),
-    evidence_refs:array(input.evidence_refs, 30).map(value => text(value, 128)).filter(Boolean),
-    confidence:Math.max(0, Math.min(1, Number(input.confidence) || 0)),
+    decision:requiredManualReviewEnum(input.decision, ALLOWED_COUNTERFACTUAL_DECISION),
+    reasoning:requiredManualReviewText(input.reasoning, 'counterfactual_reasoning'),
+    strategy_signals:requiredManualReviewArray(input.strategy_signals, 'strategy_signals', 20)
+      .map(value => requiredManualReviewText(value, 'strategy_signal')),
+    blocking_rules:requiredManualReviewArray(input.blocking_rules, 'blocking_rules', 20)
+      .map(value => requiredManualReviewText(value, 'blocking_rule')),
+    evidence_refs:allowedEvidenceRefs == null
+      ? validateManualReviewEvidenceRefs(requiredManualReviewArray(input.evidence_refs, 'evidence_refs', 30), input.evidence_refs, { required:true })
+      : validateManualReviewEvidenceRefs(requiredManualReviewArray(input.evidence_refs, 'evidence_refs', 30), allowedEvidenceRefs, { required:true }),
+    confidence:requiredManualReviewConfidence(input.confidence),
   }
 }
 
-function normalizeHypothesis(item, refs) {
+function normalizeHypothesis(item, refs, strategySnapshot) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('manual_trade_review_output_invalid')
-  const supporting = [...new Set(array(item.supporting_trade_refs, 1).map(value => text(value, 128)).filter(Boolean))]
+  const supporting = [...new Set(requiredManualReviewArray(item.supporting_trade_refs, 'supporting_trade_refs', 1)
+    .map(value => requiredManualReviewText(value, 'supporting_trade_ref', 128)))]
   if (!supporting.length || supporting.some(value => !refs.has(value))) throw new Error('manual_trade_review_output_reference_invalid')
-  const targetPath = item.target_path == null ? null : text(item.target_path, 255)
-  if (targetPath && !/^(strategy_policy_json|market_data_plan_json|entry_methods_json|symbols_json|use_chan_analysis)(\.|\[|$)/.test(targetPath)) {
-    throw new Error('manual_trade_review_output_rule_path_invalid')
-  }
+  const state = requiredManualReviewEnum(item.state, ALLOWED_HYPOTHESIS_STATE)
+  const targetPath = validateFrozenStrategyPath(item.target_path, strategySnapshot, { allowEmpty:state === 'insufficient_evidence' })
   return { hypothesis_id:text(item.hypothesis_id || item.candidate_id, 128) || `hypothesis_${sha256(JSON.stringify(item)).slice(0, 16)}`,
-    target_path:targetPath, current_rule_summary:text(item.current_rule_summary), observed_gap:text(item.observed_gap || item.observed_manual_logic),
-    proposed_change:text(item.proposed_change), supporting_trade_refs:supporting,
-    counter_evidence:array(item.counter_evidence, 20).map(value => text(value)).filter(Boolean),
-    applicable_when:boundedObject(item.applicable_when), risk_if_applied:text(item.risk_if_applied),
-    confidence:Math.max(0, Math.min(1, Number(item.confidence) || 0)),
-    state:enumValue(item.state, ALLOWED_HYPOTHESIS_STATE, 'hypothesis', 'manual_trade_review_output_enum_invalid'),
-    validation_needed:text(item.validation_needed),
+    target_path:targetPath,
+    current_rule_summary:requiredManualReviewText(item.current_rule_summary, 'current_rule_summary'),
+    observed_gap:requiredManualReviewText(item.observed_gap || item.observed_manual_logic, 'observed_gap'),
+    proposed_change:requiredManualReviewText(item.proposed_change, 'proposed_change'), supporting_trade_refs:supporting,
+    counter_evidence:requiredManualReviewArray(item.counter_evidence, 'counter_evidence', 20)
+      .map(value => requiredManualReviewText(value, 'counter_evidence_item')),
+    applicable_when:requiredManualReviewObject(item.applicable_when, 'applicable_when'),
+    risk_if_applied:requiredManualReviewText(item.risk_if_applied, 'risk_if_applied'),
+    confidence:requiredManualReviewConfidence(item.confidence), state,
+    validation_needed:requiredManualReviewText(item.validation_needed, 'validation_needed'),
   }
 }
 
 function sourceRefs(sourceRows = []) { return new Set(sourceRows.map(row => String(row.source_identity_hash || '')).filter(Boolean)) }
 
-function normalizeRuleComparison(item, strategySnapshot) {
+function manualTradeReviewEvidenceReason(evidence) {
+  const reason = String(evidence?.market_data?.reason || evidence?.reason || '')
+  if (reason.includes('chan_evidence_incomplete')) return 'chan_evidence_incomplete'
+  if (reason.includes('holding_path_bar_boundary_insufficient')) return 'holding_path_bar_boundary_insufficient'
+  if (reason.includes('truncated') || reason.includes('coverage')) return 'market_path_candle_coverage_incomplete'
+  return 'market_evidence_unavailable'
+}
+
+function normalizeRuleComparison(item, strategySnapshot, allowedEvidenceRefs) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('manual_trade_review_output_invalid')
-  const path = item.rule_path == null ? null : text(item.rule_path, 255)
-  const allowedPath = !path || /^(strategy_policy_json|market_data_plan_json|entry_methods_json|symbols_json|use_chan_analysis)(\.|\[|$)/.test(path)
-  if (!allowedPath) throw new Error('manual_trade_review_output_rule_path_invalid')
-  return { rule_path:path, rule_summary:text(item.rule_summary), observed_evidence:text(item.observed_evidence),
-    status:enumValue(item.status, new Set(['aligned', 'partial', 'conflict', 'unknown', 'not_applicable']), 'unknown', 'manual_trade_review_output_enum_invalid'),
-    evidence_refs:array(item.evidence_refs, 30).map(value => text(value, 128)).filter(Boolean),
+  const status = requiredManualReviewEnum(item.status, new Set(['aligned', 'partial', 'conflict', 'unknown', 'not_applicable']))
+  const path = validateFrozenStrategyPath(item.rule_path, strategySnapshot, { allowEmpty:['unknown', 'not_applicable'].includes(status) })
+  return { rule_path:path, rule_summary:requiredManualReviewText(item.rule_summary, 'rule_summary'),
+    observed_evidence:requiredManualReviewText(item.observed_evidence, 'observed_evidence'), status,
+    evidence_refs:validateManualReviewEvidenceRefs(requiredManualReviewArray(item.evidence_refs, 'evidence_refs', 30),
+      allowedEvidenceRefs, { required:true }),
     frozen_strategy_version:Number(strategySnapshot.version || 1) }
 }
 
-export function validateManualTradeReviewContent(input, sourceRows = [], strategySnapshot = {}, { evidenceStatus = 'complete' } = {}) {
+export function validateManualTradeReviewContent(input, sourceRows = [], strategySnapshot = {}, { evidenceStatus = 'complete', evidence = {} } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('manual_trade_review_output_invalid')
   const refs = sourceRefs(sourceRows)
+  const catalog = buildManualReviewEvidenceCatalog(sourceRows, evidence)
   const sampleCount = sourceRows.length
   if (sampleCount !== 1) throw new Error('manual_trade_review_selection_invalid')
-  const evidenceQuality = enumValue(input.evidence_quality, ALLOWED_EVIDENCE,
-    evidenceStatus === 'complete' ? 'complete' : 'insufficient', 'manual_trade_review_output_enum_invalid')
-  if (evidenceStatus !== 'complete' && evidenceQuality === 'complete') {
+  const evidenceQuality = requiredManualReviewEnum(input.evidence_quality, ALLOWED_EVIDENCE)
+  const expectedEvidenceQuality = evidenceStatus === 'complete' ? 'complete' : 'insufficient'
+  if (evidenceQuality !== expectedEvidenceQuality) {
     throw new Error('manual_trade_review_output_evidence_quality_invalid')
   }
   const evidenceComplete = evidenceStatus === 'complete' && evidenceQuality === 'complete'
-  const strategyAlignment = enumValue(input.strategy_alignment, ALLOWED_ALIGNMENT, 'unknown', 'manual_trade_review_output_enum_invalid')
-  const decisionQuality = enumValue(input.decision_quality, ALLOWED_DECISION, 'insufficient_evidence', 'manual_trade_review_output_enum_invalid')
-  const counterfactual = validateCounterfactualAnalysis(input.counterfactual_analysis)
+  const strategyAlignment = requiredManualReviewEnum(input.strategy_alignment, ALLOWED_ALIGNMENT)
+  const decisionQuality = requiredManualReviewEnum(input.decision_quality, ALLOWED_DECISION)
+  const counterfactual = validateCounterfactualAnalysis(input.counterfactual_analysis, { allowedEvidenceRefs:catalog.pre_entry_refs })
+  const attribution = requiredManualReviewObject(input.profit_attribution, 'profit_attribution')
   const content = {
     output_contract_version:REVIEW_OUTPUT_VERSION,
     evidence_quality:evidenceQuality,
-    review_summary:text(input.review_summary),
+    review_summary:requiredManualReviewText(input.review_summary, 'review_summary'),
     strategy_alignment:strategyAlignment,
     decision_quality:decisionQuality,
-    counterfactual_match:enumValue(input.counterfactual_match, ALLOWED_COUNTERFACTUAL_MATCH,
-      'insufficient_evidence', 'manual_trade_review_output_enum_invalid'),
+    counterfactual_match:requiredManualReviewEnum(input.counterfactual_match, ALLOWED_COUNTERFACTUAL_MATCH),
     counterfactual_analysis:counterfactual,
-    why_profitable:text(input.why_profitable),
-    profit_attribution:{ market_fit:text(input.profit_attribution?.market_fit), entry_quality:text(input.profit_attribution?.entry_quality),
-      exit_quality:text(input.profit_attribution?.exit_quality), luck_or_uncontrolled_factors:text(input.profit_attribution?.luck_or_uncontrolled_factors) },
-    outcome_independence_note:text(input.outcome_independence_note),
-    rule_comparisons:array(input.rule_comparisons, 50).map(item => normalizeRuleComparison(item, strategySnapshot)),
-    strengths:array(input.strengths, 20).map(value => text(value)).filter(Boolean),
-    issues:array(input.issues, 20).map(value => text(value)).filter(Boolean),
-    strategy_optimization_hypotheses:array(input.strategy_optimization_hypotheses || input.strategy_optimization_candidates, MAX_CANDIDATES)
-      .map(item => normalizeHypothesis(item, refs)),
-    confidence:Math.max(0, Math.min(1, Number(input.confidence) || 0)),
+    why_profitable:requiredManualReviewText(input.why_profitable, 'why_profitable'),
+    profit_attribution:{ market_fit:requiredManualReviewText(attribution.market_fit, 'profit_market_fit'),
+      entry_quality:requiredManualReviewText(attribution.entry_quality, 'profit_entry_quality'),
+      exit_quality:requiredManualReviewText(attribution.exit_quality, 'profit_exit_quality'),
+      luck_or_uncontrolled_factors:requiredManualReviewText(attribution.luck_or_uncontrolled_factors, 'profit_luck_factors') },
+    outcome_independence_note:requiredManualReviewText(input.outcome_independence_note, 'outcome_independence_note'),
+    rule_comparisons:requiredManualReviewArray(input.rule_comparisons, 'rule_comparisons', 50)
+      .map(item => normalizeRuleComparison(item, strategySnapshot, catalog.outcome_refs)),
+    strengths:requiredManualReviewArray(input.strengths, 'strengths', 20)
+      .map(value => requiredManualReviewText(value, 'strength')),
+    issues:requiredManualReviewArray(input.issues, 'issues', 20)
+      .map(value => requiredManualReviewText(value, 'issue')),
+    strategy_optimization_hypotheses:requiredManualReviewArray(
+      input.strategy_optimization_hypotheses ?? input.strategy_optimization_candidates,
+      'strategy_optimization_hypotheses', MAX_CANDIDATES)
+      .map(item => normalizeHypothesis(item, refs, strategySnapshot)),
+    confidence:requiredManualReviewConfidence(input.confidence),
   }
   if (!evidenceComplete) {
     content.strategy_optimization_hypotheses = content.strategy_optimization_hypotheses
@@ -290,7 +337,7 @@ async function getPlatformStrategySnapshot(actor, strategyId) {
 async function getCaseForActor(caseId, actorId, { forUpdate = false } = {}) {
   const suffix = forUpdate ? ' FOR UPDATE' : ''
   return queryOne(`SELECT cases.*, jobs.id AS job_id, jobs.status AS job_status, jobs.progress_stage,
-      jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at,
+      jobs.generation_no, jobs.task_deadline_at, jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at,
       jobs.lease_expires_at, jobs.completed_at, jobs.model_task_id
     FROM manual_trade_review_cases cases
     LEFT JOIN manual_trade_review_jobs jobs ON jobs.case_id = cases.id
@@ -302,7 +349,8 @@ function publicCase(row) {
   return { id:Number(row.id), user_id:Number(row.user_id), trading_account_id:Number(row.trading_account_id), strategy_id:Number(row.strategy_id), strategy_version:Number(row.strategy_version), strategy_scope:row.strategy_scope,
     strategy_snapshot_hash:row.strategy_snapshot_hash, selection_hash:row.selection_hash, evidence_status:row.evidence_status, evidence_reason:row.evidence_reason, status:row.status,
     current_version_id:row.current_version_id == null ? null : Number(row.current_version_id), approved_version_id:row.approved_version_id == null ? null : Number(row.approved_version_id),
-    created_at:row.created_at, updated_at:row.updated_at, job_status:row.job_status || null, progress_stage:row.progress_stage || null, attempt_count:Number(row.attempt_count || 0),
+    created_at:row.created_at, updated_at:row.updated_at, job_status:row.job_status || null, progress_stage:row.progress_stage || null,
+    generation_no:Number(row.generation_no || 1), task_deadline_at:row.task_deadline_at || null, attempt_count:Number(row.attempt_count || 0),
     last_error_code:row.last_error_code || null }
 }
 
@@ -340,20 +388,22 @@ export async function createManualTradeReview(actor, input = {}, options = {}) {
     String(item.source_identity_hash || ''), String(item.trade_source_hash || ''),
   ]).filter(([identity, hash]) => identity && hash))
   const caseEvidenceStatus = evidence.evidence_status === 'complete' && evidence.market_data?.status === 'complete' ? 'complete' : 'partial'
-  const caseEvidenceReason = caseEvidenceStatus === 'complete' ? null : 'market_evidence_unavailable'
+  const caseEvidenceReason = caseEvidenceStatus === 'complete' ? null : manualTradeReviewEvidenceReason(evidence)
   const now = beijingNow()
-  const result = await withTransaction(async run => {
-    const [duplicates] = await run('SELECT * FROM manual_trade_review_cases WHERE user_id = ? AND client_request_id = ? FOR UPDATE', [actorId, clientRequestId])
-    if (duplicates?.[0]) return { created:false, id:Number(duplicates[0].id) }
-    const [insert] = await run(`INSERT INTO manual_trade_review_cases
+  let result
+  try {
+    result = await withTransaction(async run => {
+      const [duplicates] = await run('SELECT * FROM manual_trade_review_cases WHERE user_id = ? AND client_request_id = ? FOR UPDATE', [actorId, clientRequestId])
+      if (duplicates?.[0]) return { created:false, id:Number(duplicates[0].id) }
+      const [insert] = await run(`INSERT INTO manual_trade_review_cases
       (client_request_id, user_id, trading_account_id, strategy_id, strategy_version, strategy_scope,
        strategy_snapshot_json, strategy_snapshot_hash, user_thesis_text, user_thesis_hash, selection_hash,
        evidence_json, evidence_hash, evidence_status, evidence_reason, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, 'platform', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
     [clientRequestId, actorId, account.id, strategy.snapshot.id, strategy.snapshot.version, JSON.stringify(strategy.snapshot), strategy.hash, thesis,
       thesis ? sha256(thesis) : null, selectionHash, JSON.stringify(evidence), evidenceHash, caseEvidenceStatus, caseEvidenceReason, now, now])
-    for (const trade of evidence.trades) {
-      await run(`INSERT INTO manual_trade_review_sources
+      for (const trade of evidence.trades) {
+        await run(`INSERT INTO manual_trade_review_sources
         (case_id, source_identity_hash, trade_source_hash, trading_account_id, terminal_instance_id, broker_server, login_account,
          position_id, entry_order_ticket, entry_time_utc_msc, close_time_utc_msc, symbol, direction, normalized_trade_json,
          manual_classification_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -361,20 +411,28 @@ export async function createManualTradeReview(actor, input = {}, options = {}) {
         tradeHashByIdentity.get(String(trade.identity?.identity_hash || trade.source_identity_hash || trade.identity_hash || '')) || normalizedTradeHash(trade), account.id, account.terminal_instance_id, account.broker_server, account.login_account,
         trade.identity?.position_id || trade.position_id || null, trade.identity?.entry_order_ticket || trade.entry_order_ticket || null, trade.entry_time_utc_msc, trade.close_time_utc_msc,
         trade.symbol, trade.direction, JSON.stringify(trade), JSON.stringify(trade.manual_classification || trade.normalized?.manual_classification || { source:'manual', evidence_status:'complete' }), now])
-    }
-    const jobKey = `manual:${insert.insertId}:${evidenceHash}:${strategy.hash}:${thesis ? sha256(thesis) : 'none'}:${REVIEW_OUTPUT_VERSION}`
-    await run(`INSERT INTO manual_trade_review_jobs
-      (case_id, idempotency_key, status, progress_stage, attempt_count, max_attempts, created_at, updated_at)
-      VALUES (?, ?, 'queued', 'queued', 0, 3, ?, ?)`, [insert.insertId, jobKey, now, now])
-    return { created:true, id:Number(insert.insertId) }
-  })
+      }
+      const jobKey = `manual:${insert.insertId}:${evidenceHash}:${strategy.hash}:${thesis ? sha256(thesis) : 'none'}:${REVIEW_OUTPUT_VERSION}`
+      await run(`INSERT INTO manual_trade_review_jobs
+      (case_id, idempotency_key, generation_no, status, progress_stage, attempt_count, max_attempts,
+       task_deadline_at, created_at, updated_at)
+      VALUES (?, ?, 1, 'queued', 'queued', 0, 3, ?, ?, ?)`, [insert.insertId, jobKey, newManualTradeReviewDeadline(), now, now])
+      return { created:true, id:Number(insert.insertId) }
+    })
+  } catch (error) {
+    if (String(error?.code || '') !== 'ER_DUP_ENTRY') throw error
+    const replay = await getCaseForActorByRequest(actorId, clientRequestId)
+    if (!replay) throw error
+    return { created:false, case:publicCase(replay) }
+  }
   if (result.created) requestManualTradeReviewCycle()
   const saved = await getCaseForActor(result.id, actorId)
   return { created:result.created, case:publicCase(saved) }
 }
 
 async function getCaseForActorByRequest(actorId, clientRequestId) {
-  return queryOne(`SELECT cases.*, jobs.status AS job_status, jobs.progress_stage, jobs.attempt_count, jobs.max_attempts,
+  return queryOne(`SELECT cases.*, jobs.status AS job_status, jobs.progress_stage, jobs.generation_no, jobs.task_deadline_at,
+      jobs.attempt_count, jobs.max_attempts,
       jobs.last_error_code, jobs.next_attempt_at FROM manual_trade_review_cases cases
       LEFT JOIN manual_trade_review_jobs jobs ON jobs.case_id = cases.id
       WHERE cases.user_id = ? AND cases.client_request_id = ? LIMIT 1`, [actorId, clientRequestId])
@@ -384,7 +442,7 @@ export async function listManualTradeReviews(actor, params = {}) {
   const actorId = managerOrThrow(actor)
   const limit = Math.min(100, Math.max(1, Number(params.limit) || 20))
   const offset = Math.max(0, Number(params.offset) || 0)
-  const rows = await queryAll(`SELECT cases.*, jobs.status AS job_status, jobs.progress_stage, jobs.attempt_count,
+  const rows = await queryAll(`SELECT cases.*, jobs.status AS job_status, jobs.progress_stage, jobs.generation_no, jobs.task_deadline_at, jobs.attempt_count,
       jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at
     FROM manual_trade_review_cases cases LEFT JOIN manual_trade_review_jobs jobs ON jobs.case_id = cases.id
     WHERE cases.user_id = ? ORDER BY cases.updated_at DESC, cases.id DESC LIMIT ? OFFSET ?`, [actorId, limit, offset])
@@ -417,7 +475,8 @@ export async function getManualTradeReviewJobStatus(caseId, actor) {
   const actorId = managerOrThrow(actor)
   const row = await getCaseForActor(id(caseId, 'manual_trade_review_not_found'), actorId)
   if (!row) throw new Error('manual_trade_review_not_found')
-  return { id:Number(row.job_id || 0) || null, case_id:Number(row.id), status:row.job_status || null, progress_stage:row.progress_stage || null,
+  return { id:Number(row.job_id || 0) || null, case_id:Number(row.id), generation_no:Number(row.generation_no || 1),
+    task_deadline_at:row.task_deadline_at || null, status:row.job_status || null, progress_stage:row.progress_stage || null,
     attempt_count:Number(row.attempt_count || 0), max_attempts:Number(row.max_attempts || 3), last_error_code:row.last_error_code || null,
     next_attempt_at:row.next_attempt_at || null, completed_at:row.completed_at || null }
 }
@@ -443,7 +502,9 @@ export async function editManualTradeReview({ caseId, actor, content, expectedVe
     const [sources] = await run(`SELECT sources.source_identity_hash FROM manual_trade_review_sources sources
       JOIN manual_trade_review_cases cases ON cases.id = sources.case_id
       WHERE sources.case_id = ? AND cases.user_id = ?`, [idValue, actorId])
-    const normalized = validateManualTradeReviewContent(content, sources, parse(row.strategy_snapshot_json, {}), { evidenceStatus:row.evidence_status })
+    const normalized = validateManualTradeReviewContent(content, sources, parse(row.strategy_snapshot_json, {}), {
+      evidenceStatus:row.evidence_status, evidence:parse(row.evidence_json, {}),
+    })
     const [maxRows] = await run(`SELECT COALESCE(MAX(versions.version_no), 0) AS version_no FROM manual_trade_review_versions versions
       JOIN manual_trade_review_cases cases ON cases.id = versions.case_id
       WHERE versions.case_id = ? AND cases.user_id = ?`, [idValue, actorId])
@@ -469,6 +530,13 @@ export async function confirmManualTradeReview({ caseId, actor, versionId = null
     if (!row) throw new Error('manual_trade_review_not_found')
     const selectedVersion = Number(versionId || row.current_version_id || 0)
     if (!selectedVersion) throw new Error('manual_trade_review_version_required')
+    if (String(row.status) === 'approved') {
+      if (action === 'approve' && selectedVersion === Number(row.approved_version_id || 0)) {
+        return { case_id:idValue, status:'approved', version_id:selectedVersion }
+      }
+      throw new Error('manual_trade_review_approved_locked')
+    }
+    if (selectedVersion !== Number(row.current_version_id || 0)) throw new Error('manual_trade_review_version_conflict')
     const [versions] = await run(`SELECT versions.id, versions.content_json FROM manual_trade_review_versions versions
       JOIN manual_trade_review_cases cases ON cases.id = versions.case_id
       WHERE versions.id = ? AND versions.case_id = ? AND cases.user_id = ?`, [selectedVersion, idValue, actorId])
@@ -484,21 +552,40 @@ export async function confirmManualTradeReview({ caseId, actor, versionId = null
 export async function retryManualTradeReview(caseId, actor) {
   const actorId = managerOrThrow(actor)
   const idValue = id(caseId, 'manual_trade_review_not_found')
-  const now = beijingNow()
-  const result = await queryRun(`UPDATE manual_trade_review_jobs jobs
-    JOIN manual_trade_review_cases cases ON cases.id = jobs.case_id
-    SET jobs.status = 'queued', jobs.progress_stage = 'queued', jobs.attempt_count = 0, jobs.lease_token = NULL,
-      jobs.lease_expires_at = NULL, jobs.last_error_code = NULL, jobs.next_attempt_at = NULL, jobs.updated_at = ?,
-      cases.status = 'queued', cases.updated_at = ?
-    WHERE jobs.case_id = ? AND cases.user_id = ? AND jobs.status IN ('failed','deferred')`, [now, now, idValue, actorId])
-  if (!Number(result.changes || 0)) throw new Error('manual_trade_review_retry_not_allowed')
+  const result = await withTransaction(async run => {
+    const [rows] = await run(`SELECT cases.id AS case_id, cases.status AS case_status, jobs.id AS job_id,
+        jobs.generation_no, jobs.status AS job_status
+      FROM manual_trade_review_cases cases
+      JOIN manual_trade_review_jobs jobs ON jobs.case_id = cases.id
+      WHERE cases.id = ? AND cases.user_id = ? AND jobs.status IN ('failed','deferred')
+      FOR UPDATE`, [idValue, actorId])
+    const row = rows?.[0]
+    if (!row) throw new Error('manual_trade_review_retry_not_allowed')
+    const now = beijingNow()
+    const generationNo = Math.max(1, Number(row.generation_no || 1)) + 1
+    const deadline = newManualTradeReviewDeadline()
+    const [updated] = await run(`UPDATE manual_trade_review_jobs
+      SET status = 'queued', progress_stage = 'queued', generation_no = ?, model_task_id = NULL,
+        task_deadline_at = ?, attempt_count = 0, lease_token = NULL, lease_expires_at = NULL,
+        last_error_code = NULL, next_attempt_at = NULL, completed_at = NULL, stage_updated_at = NULL,
+        updated_at = ?
+      WHERE id = ? AND case_id = ? AND status IN ('failed','deferred')`,
+    [generationNo, deadline, now, row.job_id, idValue])
+    if (Number(updated?.affectedRows ?? updated?.changes ?? 0) !== 1) throw new Error('manual_trade_review_retry_not_allowed')
+    const [caseUpdate] = await run(`UPDATE manual_trade_review_cases
+      SET status = 'queued', updated_at = ?
+      WHERE id = ? AND user_id = ?`, [now, idValue, actorId])
+    if (Number(caseUpdate?.affectedRows ?? caseUpdate?.changes ?? 0) !== 1) throw new Error('manual_trade_review_retry_not_allowed')
+    return { generation_no:generationNo, task_deadline_at:deadline }
+  })
   requestManualTradeReviewCycle()
-  return { queued:true, case_id:idValue }
+  return { queued:true, case_id:idValue, generation_no:result.generation_no, task_deadline_at:result.task_deadline_at }
 }
 
 async function claimManualTradeReviewJob() {
   const now = beijingNow()
   const token = crypto.randomUUID()
+  const firstClaimDeadline = newManualTradeReviewDeadline()
   return withTransaction(async run => {
     const [rows] = await run(`SELECT jobs.*, cases.user_id, cases.strategy_id, cases.status AS case_status
       FROM manual_trade_review_jobs jobs JOIN manual_trade_review_cases cases ON cases.id = jobs.case_id
@@ -508,10 +595,13 @@ async function claimManualTradeReviewJob() {
     const row = rows?.[0]
     if (!row) return null
     const [updated] = await run(`UPDATE manual_trade_review_jobs SET status = 'leased', progress_stage = 'preparing',
-      attempt_count = attempt_count + 1, lease_token = ?, lease_expires_at = ?, stage_updated_at = ?, updated_at = ?
-      WHERE id = ? AND (status = 'queued' OR (status = 'leased' AND lease_expires_at < ?))`, [token, dateAfter(600), now, now, row.id, now])
+      attempt_count = attempt_count + 1, task_deadline_at = COALESCE(task_deadline_at, ?),
+      lease_token = ?, lease_expires_at = ?, stage_updated_at = ?, updated_at = ?
+      WHERE id = ? AND (status = 'queued' OR (status = 'leased' AND lease_expires_at < ?))`,
+    [firstClaimDeadline, token, dateAfter(600), now, now, row.id, now])
     if (!updated.affectedRows) return null
-    return { ...row, lease_token:token, attempt_count:Number(row.attempt_count || 0) + 1 }
+    return { ...row, task_deadline_at:row.task_deadline_at || firstClaimDeadline,
+      lease_token:token, attempt_count:Number(row.attempt_count || 0) + 1 }
   })
 }
 
@@ -556,34 +646,92 @@ function strategyMemoryPayload(memory) {
 function counterfactualPrompt(reviewCase, sources, memory = null) {
   const snapshot = parse(reviewCase.strategy_snapshot_json, {})
   const evidence = parse(reviewCase.evidence_json, {})
+  const evidenceCatalog = buildManualReviewEvidenceCatalog(sources, evidence)
   const source = sources[0]
   const trade = parse(source?.normalized_trade_json, {})
   const path = evidence.market_data?.trades?.[source?.source_identity_hash]?.pre_entry || { status:'unavailable' }
   const contract = { output_contract_version:COUNTERFACTUAL_OUTPUT_VERSION,
     decision:'buy|sell|hold|insufficient_evidence', reasoning:'string', strategy_signals:['string'],
     blocking_rules:['string'], evidence_refs:['string'], confidence:'0..1' }
-  const system = `你是交易策略的开仓前分析模型。假设现在停留在目标开仓时刻之前，只能使用冻结策略、冻结策略记忆库和开仓前已闭合行情。策略记忆库只是经验参考，不能覆盖当前策略、事实证据或风险边界。禁止推断或索取真实交易方向、开仓价、止损止盈、平仓结果、利润、持仓路径和用户说明。判断当时按该策略是否会下单以及方向。严格输出 JSON，不输出 Markdown。证据不足必须选择 insufficient_evidence。输出合同：${JSON.stringify(contract)}`
-  const user = `<frozen_strategy>${JSON.stringify(snapshot)}</frozen_strategy>\n<strategy_memory_library>${JSON.stringify(strategyMemoryPayload(memory))}</strategy_memory_library>\n<decision_context>${JSON.stringify({ source_identity_hash:source?.source_identity_hash, symbol:trade.symbol, decision_time_utc_msc:trade.entry_time_utc_msc })}</decision_context>\n<pre_entry_market_data>${JSON.stringify(path)}</pre_entry_market_data>`
+  const system = `你是交易策略的开仓前分析模型。假设现在停留在目标开仓时刻之前，只能使用冻结策略、冻结策略记忆库和开仓前已闭合行情。策略记忆库只是经验参考，不能覆盖当前策略、事实证据或风险边界。禁止推断或索取真实交易方向、开仓价、止损止盈、平仓结果、利润、持仓路径和用户说明。判断当时按该策略是否会下单以及方向。严格输出 JSON，不输出 Markdown。证据不足必须选择 insufficient_evidence。evidence_refs 必须至少引用一个 allowed_evidence_refs 中的精确值，不得自造引用。输出合同：${JSON.stringify(contract)}`
+  const user = `<frozen_strategy>${JSON.stringify(snapshot)}</frozen_strategy>\n<strategy_memory_library>${JSON.stringify(strategyMemoryPayload(memory))}</strategy_memory_library>\n<allowed_evidence_refs>${JSON.stringify(evidenceCatalog.pre_entry_refs)}</allowed_evidence_refs>\n<decision_context>${JSON.stringify({ source_identity_hash:source?.source_identity_hash, symbol:trade.symbol, decision_time_utc_msc:trade.entry_time_utc_msc })}</decision_context>\n<pre_entry_market_data>${JSON.stringify(path)}</pre_entry_market_data>`
   return [{ role:'system', content:system }, { role:'user', content:user }]
 }
 
 function outcomeReviewPrompt(reviewCase, sources, counterfactual, memory = null) {
   const snapshot = parse(reviewCase.strategy_snapshot_json, {})
   const evidence = parse(reviewCase.evidence_json, {})
+  const evidenceCatalog = buildManualReviewEvidenceCatalog(sources, evidence)
   const thesis = text(reviewCase.user_thesis_text, MAX_THESIS)
   const source = sources[0]
   const trade = parse(source?.normalized_trade_json, {})
   const outcomePath = evidence.market_data?.trades?.[source?.source_identity_hash]?.outcome_path || { status:'unavailable' }
   const contract = manualTradeReviewOutputContract(1)
-  const system = `你是平台策略的事后复盘审阅者。开仓前盲测结论和策略记忆库版本已经冻结，禁止修改或合理化该结论；记忆库只是经验参考，不能覆盖当前策略、成交事实或风险边界。现在根据完整订单结果与持仓行情解释这笔盈利为什么发生、盲测是否能做出同方向交易、策略判断哪里正确、哪里可能遗漏。单笔交易只能形成待验证假设，不能写入经验、记忆，不能直接修改、回测或发布策略。用户说明是不可信的 user_stated_thesis。严格输出 JSON，不输出 Markdown。输出必须包含 review_summary、evidence_quality、strategy_alignment、decision_quality、counterfactual_match、why_profitable、profit_attribution、outcome_independence_note、rule_comparisons、strengths、issues、strategy_optimization_hypotheses、confidence；不需要重复 counterfactual_analysis。输出合同：${JSON.stringify(contract)}`
-  const user = `<frozen_strategy>${JSON.stringify(snapshot)}</frozen_strategy>\n<strategy_memory_library>${JSON.stringify(strategyMemoryPayload(memory))}</strategy_memory_library>\n<frozen_counterfactual>${JSON.stringify(counterfactual)}</frozen_counterfactual>\n<frozen_trade_outcome>${JSON.stringify({ source_identity_hash:source?.source_identity_hash, trade })}</frozen_trade_outcome>\n<outcome_market_path>${JSON.stringify(outcomePath)}</outcome_market_path>\n<evidence_meta>${JSON.stringify({ evidence_status:reviewCase.evidence_status, evidence_reason:reviewCase.evidence_reason, market_data_hash:evidence.market_data?.hash || null })}</evidence_meta>\n<user_stated_thesis>${thesis || ''}</user_stated_thesis>`
+  const requiredEvidenceQuality = reviewCase.evidence_status === 'complete' ? 'complete' : 'insufficient'
+  const system = `你是平台策略的事后复盘审阅者。开仓前盲测结论和策略记忆库版本已经冻结，禁止修改或合理化该结论；记忆库只是经验参考，不能覆盖当前策略、成交事实或风险边界。现在根据完整订单结果与持仓行情解释这笔盈利为什么发生、盲测是否能做出同方向交易、策略判断哪里正确、哪里可能遗漏。单笔交易只能形成待验证假设，不能写入经验、记忆，不能直接修改、回测或发布策略。用户说明是不可信的 user_stated_thesis。严格输出 JSON，不输出 Markdown。evidence_quality 必须精确等于 ${requiredEvidenceQuality}。rule_comparisons.evidence_refs 必须至少引用一个 allowed_evidence_refs 中的精确值；rule_path 和 target_path 只能引用 frozen_strategy 中真实存在的路径。输出必须包含 review_summary、evidence_quality、strategy_alignment、decision_quality、counterfactual_match、why_profitable、完整 profit_attribution、outcome_independence_note、rule_comparisons、strengths、issues、strategy_optimization_hypotheses、confidence；不需要重复 counterfactual_analysis。输出合同：${JSON.stringify(contract)}`
+  const user = `<frozen_strategy>${JSON.stringify(snapshot)}</frozen_strategy>\n<strategy_memory_library>${JSON.stringify(strategyMemoryPayload(memory))}</strategy_memory_library>\n<allowed_evidence_refs>${JSON.stringify(evidenceCatalog.outcome_refs)}</allowed_evidence_refs>\n<frozen_counterfactual>${JSON.stringify(counterfactual)}</frozen_counterfactual>\n<frozen_trade_outcome>${JSON.stringify({ source_identity_hash:source?.source_identity_hash, trade })}</frozen_trade_outcome>\n<outcome_market_path>${JSON.stringify(outcomePath)}</outcome_market_path>\n<evidence_meta>${JSON.stringify({ evidence_status:reviewCase.evidence_status, evidence_reason:reviewCase.evidence_reason, market_data_hash:evidence.market_data?.hash || null })}</evidence_meta>\n<user_stated_thesis>${thesis || ''}</user_stated_thesis>`
   return [{ role:'system', content:system }, { role:'user', content:user }]
+}
+
+function manualTradeReviewModelTaskWaitError(task, nowUtcMs = Date.now()) {
+  if (!task) return null
+  const status = String(task.status || '')
+  const leaseExpiresAt = Number(task.lease_expires_at_utc_msc || 0)
+  const scheduledAt = Number(task.scheduled_at_utc_msc || 0)
+  const hasValidLease = leaseExpiresAt > nowUtcMs
+  const scheduledInFuture = scheduledAt > nowUtcMs
+  const canBeHeldByAnotherWorker = ['queued', 'retry_wait'].includes(status) || MODEL_TASK_ACTIVE_STATES.has(status)
+  if (!(canBeHeldByAnotherWorker && (hasValidLease || scheduledInFuture))) return null
+  const waitUntilUtcMs = Math.max(nowUtcMs + 5_000, hasValidLease ? leaseExpiresAt : 0, scheduledInFuture ? scheduledAt : 0)
+  const error = new Error('manual_trade_review_model_task_lease_wait')
+  error.code = 'manual_trade_review_model_task_lease_wait'
+  error.manualTradeReviewDeferUntilUtcMs = waitUntilUtcMs
+  return error
+}
+
+function manualTradeReviewModelTaskTerminalError(task) {
+  if (!MODEL_TASK_TERMINAL_STATES.has(String(task?.status || ''))) return null
+  const error = new Error('manual_trade_review_model_task_terminal_requires_retry')
+  error.code = 'manual_trade_review_model_task_terminal_requires_retry'
+  error.manualTradeReviewTerminalTask = true
+  return error
+}
+
+function manualTradeReviewCanRecoverCompletedTask(task, reviewCase) {
+  return String(task?.status || '') === 'succeeded'
+    && Number(reviewCase?.current_version_id || 0) > 0
+    && ['draft', 'edited', 'needs_revision', 'approved'].includes(String(reviewCase?.status || ''))
+}
+
+async function deferManualTradeReviewForModelTaskLease(job, error) {
+  const now = Date.now()
+  const deadlineAtUtcMs = parseBeijingDateTime(job.task_deadline_at)
+  const requestedWaitUntil = Number(error?.manualTradeReviewDeferUntilUtcMs) || now + 30_000
+  const deadlineExpired = Number.isFinite(deadlineAtUtcMs) && deadlineAtUtcMs > 0 && deadlineAtUtcMs <= requestedWaitUntil
+  const status = deadlineExpired ? 'failed' : 'queued'
+  const progressStage = deadlineExpired ? 'failed' : 'retry_wait'
+  const errorCode = deadlineExpired ? 'manual_trade_review_generation_deadline_exceeded' : 'manual_trade_review_model_task_lease_wait'
+  const nextAttemptAt = deadlineExpired ? null : dateAtUtcMs(requestedWaitUntil)
+  const completedAt = deadlineExpired ? beijingNow() : null
+  const update = await queryRun(`UPDATE manual_trade_review_jobs SET status = ?, progress_stage = ?,
+    attempt_count = GREATEST(0, attempt_count - 1), last_error_code = ?, lease_token = NULL,
+    lease_expires_at = NULL, next_attempt_at = ?, completed_at = ?, updated_at = ?
+    WHERE id = ? AND lease_token = ?`, [status, progressStage, errorCode, nextAttemptAt, completedAt,
+    beijingNow(), job.id, job.lease_token])
+  if (Number(update?.affectedRows ?? update?.changes ?? 0) < 1) return false
+  await queryRun(`UPDATE manual_trade_review_cases SET status = ?, updated_at = ?
+    WHERE id = ? AND status <> 'approved'`, [status, beijingNow(), job.case_id])
+  return { status, error_code:errorCode, next_attempt_at:nextAttemptAt }
 }
 
 async function markJobFailure(job, error) {
   const code = text(error?.code || error?.message || 'manual_trade_review_generation_failed', 128)
   const now = beijingNow()
-  const exhausted = Number(job.attempt_count || 0) >= Number(job.max_attempts || 3)
+  const deadlineAtUtcMs = parseBeijingDateTime(job.task_deadline_at)
+  const deadlineExpired = Number.isFinite(deadlineAtUtcMs) && deadlineAtUtcMs > 0 && deadlineAtUtcMs <= Date.now()
+  const exhausted = Boolean(error?.manualTradeReviewTerminalTask)
+    || deadlineExpired
+    || Number(job.attempt_count || 0) >= Number(job.max_attempts || 3)
   const targetStatus = exhausted ? 'failed' : 'queued'
   const update = await queryRun(`UPDATE manual_trade_review_jobs SET status = ?, progress_stage = ?, last_error_code = ?,
     lease_token = NULL, lease_expires_at = NULL, next_attempt_at = ?, completed_at = ?, updated_at = ?
@@ -605,16 +753,25 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
   const lease = startManualTradeReviewLeaseHeartbeat(job)
   // Freeze one 30-minute business deadline for both model stages. Each stage
   // receives its own 15-minute attempt window, capped by this immutable task
-  // deadline; the second request never starts a fresh 30-minute task.
-  job._taskDeadlineAtMs = modelTaskDeadlines('manual_analysis', { nowUtcMs:Date.now() }).taskDeadlineUtcMs
+  // deadline; the second request never starts a fresh 30-minute task. The
+  // claim transaction fills a historical NULL once, so every worker attempt
+  // receives the same persisted wall-clock deadline.
+  job._taskDeadlineAtMs = parseBeijingDateTime(job.task_deadline_at)
   let tracker = null
   try {
     lease.assertOwned()
+    if (!job._taskDeadlineAtMs) throw new Error('manual_trade_review_deadline_missing')
+    if (job._taskDeadlineAtMs <= Date.now()) throw Object.assign(new Error('manual_trade_review_generation_deadline_exceeded'), {
+      code:'manual_trade_review_generation_deadline_exceeded',
+    })
     const reviewCase = await queryOne('SELECT * FROM manual_trade_review_cases WHERE id = ? AND user_id = ?', [job.case_id, job.user_id])
     if (!reviewCase) throw new Error('manual_trade_review_not_found')
     const sources = await queryAll(`SELECT sources.* FROM manual_trade_review_sources sources
       JOIN manual_trade_review_cases cases ON cases.id = sources.case_id
       WHERE sources.case_id = ? AND cases.user_id = ? ORDER BY sources.id`, [job.case_id, job.user_id])
+    if (sources.length !== 1) throw new Error('manual_trade_review_selection_invalid')
+    const frozenEvidence = parse(reviewCase.evidence_json, {})
+    const evidenceCatalog = buildManualReviewEvidenceCatalog(sources, frozenEvidence)
     const resolved = await resolveAiTaskModel({ userId:job.user_id, strategyId:job.strategy_id, usage:'review',
       modelPurpose:'manual_trade_review' })
     if (!resolved.model) throw new Error(resolved.error || 'manual_trade_review_model_unavailable')
@@ -624,12 +781,23 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     const counterfactualMessages = counterfactualPrompt(reviewCase, sources, memorySnapshot)
     const counterfactualBudget = await prepareManualTradeReviewBudget(resolved, counterfactualMessages)
     const priorModelTaskId = job.model_task_id || null
-    let idempotencyKey = `manual_trade_review:${job.id}:${job.case_id}:${job.attempt_count}`
+    const idempotencyKey = manualTradeReviewModelIdempotencyKey(job)
     if (priorModelTaskId) {
-      const priorTask = await queryOne('SELECT status, idempotency_key FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [priorModelTaskId])
-      if (priorTask && ['queued', 'retry_wait'].includes(String(priorTask.status || '')) && priorTask.idempotency_key) {
-        idempotencyKey = priorTask.idempotency_key
+      const priorTask = await queryOne(`SELECT status, scheduled_at_utc_msc, lease_expires_at_utc_msc
+        FROM ai_model_tasks WHERE task_id = ? LIMIT 1`, [priorModelTaskId])
+      const waitError = manualTradeReviewModelTaskWaitError(priorTask)
+      if (waitError) throw waitError
+      if (manualTradeReviewCanRecoverCompletedTask(priorTask, reviewCase)) {
+        const now = beijingNow()
+        const recovered = await queryRun(`UPDATE manual_trade_review_jobs SET status = 'succeeded', progress_stage = 'completed',
+          lease_token = NULL, lease_expires_at = NULL, last_error_code = NULL, next_attempt_at = NULL,
+          completed_at = COALESCE(completed_at, ?), updated_at = ?
+          WHERE id = ? AND lease_token = ?`, [now, now, job.id, job.lease_token])
+        if (Number(recovered?.affectedRows ?? recovered?.changes ?? 0) !== 1) throw new Error('manual_trade_review_lease_lost')
+        return { status:'succeeded', case_id:Number(job.case_id), recovered:true }
       }
+      const terminalError = manualTradeReviewModelTaskTerminalError(priorTask)
+      if (terminalError) throw terminalError
     }
     tracker = await createModelTaskTracker({
       taskKind:'manual_analysis', queueClass:'background', ownerUserId:job.user_id,
@@ -689,8 +857,8 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
       timeout:counterfactualDeadline.requestTimeoutMs, deadlineAtMs:counterfactualDeadline.attemptSafetyDeadlineUtcMs,
       followupValidUntilMs:counterfactualDeadline.taskDeadlineUtcMs, signal:requestSignal(),
       ...providerCallbacks, allowFollowupRequests:false,
-      validateObject:validateCounterfactualAnalysis })
-    const counterfactual = validateCounterfactualAnalysis(counterfactualRaw)
+      validateObject:value => validateCounterfactualAnalysis(value, { allowedEvidenceRefs:evidenceCatalog.pre_entry_refs }) })
+    const counterfactual = validateCounterfactualAnalysis(counterfactualRaw, { allowedEvidenceRefs:evidenceCatalog.pre_entry_refs })
     lease.assertOwned(); tracker.assertOwned()
     await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'outcome_review', stage_updated_at = ?, updated_at = ?
       WHERE id = ? AND lease_token = ?`, [beijingNow(), beijingNow(), job.id, job.lease_token])
@@ -707,9 +875,9 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
       followupValidUntilMs:outcomeDeadline.taskDeadlineUtcMs, signal:requestSignal(),
       ...providerCallbacks, allowFollowupRequests:false,
       validateObject:value => validateManualTradeReviewContent({ ...value, counterfactual_analysis:counterfactual }, sources,
-        parse(reviewCase.strategy_snapshot_json, {}), { evidenceStatus:reviewCase.evidence_status }) })
+        parse(reviewCase.strategy_snapshot_json, {}), { evidenceStatus:reviewCase.evidence_status, evidence:frozenEvidence }) })
     const content = validateManualTradeReviewContent({ ...outcomeRaw, counterfactual_analysis:counterfactual }, sources,
-      parse(reviewCase.strategy_snapshot_json, {}), { evidenceStatus:reviewCase.evidence_status })
+      parse(reviewCase.strategy_snapshot_json, {}), { evidenceStatus:reviewCase.evidence_status, evidence:frozenEvidence })
     const contentHash = jsonHash(content)
     await tracker.resultReady({ resultHash:contentHash })
     lease.assertOwned(); tracker.assertOwned()
@@ -739,7 +907,13 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     return { status:'succeeded', case_id:Number(job.case_id) }
   } catch (error) {
     let failure = error
-    try { await tracker?.failed(error, Number(job.attempt_count || 0) >= Number(job.max_attempts || 3)) }
+    if (Number(error?.manualTradeReviewDeferUntilUtcMs) > 0 && !tracker) {
+      try {
+        const deferred = await deferManualTradeReviewForModelTaskLease(job, error)
+        if (deferred) return { status:deferred.status, case_id:Number(job.case_id), error:deferred.error_code }
+      } catch (deferError) { failure = deferError }
+    }
+    try { await tracker?.failed(failure, Number(job.attempt_count || 0) >= Number(job.max_attempts || 3)) }
     catch (trackerError) { failure = trackerError }
     await markJobFailure(job, failure)
     return { status:'failed', case_id:Number(job.case_id), error:String(failure?.code || failure?.message || 'manual_trade_review_generation_failed') }
@@ -750,7 +924,7 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
 }
 
 export async function recoverAbandonedManualTradeReviewJobs({ now = beijingNow(), limit = 100 } = {}) {
-  const rows = await queryAll(`SELECT id, case_id, attempt_count, max_attempts, progress_stage FROM manual_trade_review_jobs
+  const rows = await queryAll(`SELECT id, case_id, generation_no, task_deadline_at, attempt_count, max_attempts, progress_stage FROM manual_trade_review_jobs
     WHERE status = 'leased' AND lease_expires_at < ? ORDER BY id LIMIT ?`, [now, Math.min(500, Math.max(1, Number(limit) || 100))])
   let requeued = 0; let failed = 0; let manualRetryRequired = 0
   for (const job of rows) {
@@ -805,4 +979,8 @@ export function stopManualTradeReviewWorker() {
   return true
 }
 
-export const __manualTradeReviewTest = { parse, getPlatformStrategySnapshot, counterfactualPrompt, outcomeReviewPrompt }
+export const __manualTradeReviewTest = {
+  parse, getPlatformStrategySnapshot, counterfactualPrompt, outcomeReviewPrompt,
+  manualTradeReviewModelIdempotencyKey, manualTradeReviewModelTaskWaitError,
+  manualTradeReviewModelTaskTerminalError, manualTradeReviewCanRecoverCompletedTask, claimManualTradeReviewJob,
+}

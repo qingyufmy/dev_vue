@@ -4,6 +4,7 @@ import { mt5Bridge } from './market-data.js'
 import { getBridgeRuntimeDiagnostics, getHistoryTerminalClock } from '../../bridge-ws.js'
 import { trustedTerminalClock } from './terminal-clock.js'
 import { buildReviewMarketPath } from './review-market-path.js'
+import { resolveFrozenChanRequirement } from './inference-snapshots.js'
 
 export const MANUAL_TRADE_PAGE_DEFAULT = 20
 export const MANUAL_TRADE_PAGE_MAX = 100
@@ -759,8 +760,20 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
     return { schema_version:1, status:'unavailable', reason:'selection_limit_exceeded', timeframes:[], trades:{}, hash:null }
   }
   const timeframes = strategyMarketTimeframes(strategySnapshot)
-  const marketData = { schema_version:1, status:'complete', reason:null, timeframes, trades:{} }
+  const useChanAnalysis = strategySnapshot?.use_chan_analysis === true
+    || strategySnapshot?.use_chan_analysis === 1 || strategySnapshot?.use_chan_analysis === '1'
+  const chanRequirement = resolveFrozenChanRequirement({ strategy_runtime:{
+    use_chan_analysis:useChanAnalysis,
+    strategy_version:strategySnapshot?.version,
+    market_data_plan:strategySnapshot?.market_data_plan,
+    chan_timeframes:timeframes,
+  } })
+  const marketData = { schema_version:1, status:'complete', reason:null, timeframes,
+    chan_requirement:chanRequirement, trades:{} }
   if (!timeframes.length) return { ...marketData, status:'partial', reason:'market_data_plan_missing' }
+  if (chanRequirement.status === 'enabled' && (chanRequirement.unsupported_timeframes || []).length) {
+    return { ...marketData, status:'partial', reason:'chan_timeframe_unsupported', hash:sha256(marketData) }
+  }
   const failures = []
   const snapshot = {
     ...strategySnapshot,
@@ -777,6 +790,7 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
       const common = {
         userId:Number(actor?.id), tradingAccountId:Number(account?.id), symbol:trade.symbol,
         snapshot, deals:reviewPathDeals(trade), timezoneOffsetMinutes:Number(account?.timezone_offset_minutes),
+        chanRequirement,
       }
       const preEntry = await buildPath({ ...common,
         signal:{ timeframe:String(strategySnapshot?.market_data_plan?.primary_timeframe || timeframes[0]), signal_type:'hold' },
@@ -788,8 +802,20 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
       })
       const path = { status:preEntry?.status === 'complete' && outcomePath?.status === 'complete' ? 'complete' : 'partial',
         pre_entry:preEntry, outcome_path:outcomePath }
+      if (chanRequirement.status === 'enabled') {
+        const chanFrames = [...new Set(chanRequirement.timeframes || [])]
+        const chanComplete = chanFrames.length > 0 && chanFrames.every(timeframe => {
+          const before = preEntry?.timeframes?.[timeframe]?.chan
+          const after = outcomePath?.timeframes?.[timeframe]?.chan
+          return [before, after].every(value => ['complete', 'ok'].includes(String(value?.status || '').toLowerCase()))
+        })
+        if (!chanComplete) {
+          path.status = 'partial'
+          path.reason = 'chan_evidence_incomplete'
+        }
+      }
       marketData.trades[identity] = path
-      if (path.status !== 'complete') failures.push(`${identity}:${preEntry?.reason || outcomePath?.reason || 'market_path_incomplete'}`)
+      if (path.status !== 'complete') failures.push(`${identity}:${path.reason || preEntry?.reason || outcomePath?.reason || 'market_path_incomplete'}`)
     } catch (error) {
       const reason = String(error?.message || error || 'market_path_unavailable').slice(0, 96)
       marketData.trades[identity] = { status:'unavailable', reason }

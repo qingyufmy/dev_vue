@@ -6412,6 +6412,29 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '191_manual_trade_review_generation_recovery',
+    async up() {
+      // Keep each manual-review generation's business deadline separate from
+      // the generic model-task deadline. Existing rows start with a NULL
+      // deadline and are filled once by the first claim transaction; newly
+      // created jobs persist it at creation.
+      const columns = await queryAll(`SELECT COLUMN_NAME
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'manual_trade_review_jobs'
+          AND COLUMN_NAME IN ('generation_no', 'task_deadline_at')`)
+      const existing = new Set(columns.map(row => String(row.COLUMN_NAME)))
+      if (!existing.has('generation_no')) {
+        await queryRun(`ALTER TABLE manual_trade_review_jobs
+          ADD COLUMN generation_no INT UNSIGNED NOT NULL DEFAULT 1 AFTER case_id`)
+      }
+      if (!existing.has('task_deadline_at')) {
+        await queryRun(`ALTER TABLE manual_trade_review_jobs
+          ADD COLUMN task_deadline_at DATETIME DEFAULT NULL AFTER max_attempts`)
+      }
+    }
   }
 ]
 
