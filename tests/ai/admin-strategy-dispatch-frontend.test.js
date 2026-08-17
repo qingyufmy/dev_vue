@@ -6,6 +6,7 @@ const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url)
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 const strategyDispatchSignalSourceLabel = new Function(`${app.slice(app.indexOf('function strategyDispatchSignalSourceLabel'), app.indexOf('function strategyMarketPlan'))}\nreturn strategyDispatchSignalSourceLabel;`)()
 const adminStrategyDispatchTargetLabel = new Function(`${app.slice(app.indexOf('function adminStrategyDispatchTargetLabel'), app.indexOf('function renderAdminStrategyDispatchProgress'))}\nreturn adminStrategyDispatchTargetLabel;`)()
+const adminStrategyDispatchPreviewTargetHelpers = new Function(`${app.slice(app.indexOf('function adminStrategyDispatchPreviewTargetRows'), app.indexOf('function adminStrategyDispatchPreviewTargetRow(target'))}\nreturn { eligible:adminStrategyDispatchPreviewEligibleTargets, excluded:adminStrategyDispatchPreviewExcludedTargets };`)()
 
 describe('admin strategy dispatch frontend contract', () => {
   it('keeps the entry point inside manual order and gates it by admin capability', () => {
@@ -107,5 +108,34 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(adminStrategyDispatchTargetLabel({ user_id: 28 })).toBe('订阅目标')
     expect(app).toContain('const label = adminStrategyDispatchTargetLabel(target)')
     expect(app).not.toContain('target?.user_id ? `用户 #${target.user_id}`')
+  })
+
+  it('keeps account details collapsed by default and expands an accessible target list on demand', () => {
+    expect(app).toContain('<details class="admin-strategy-dispatch-target-details">')
+    expect(app).toContain('<summary><span>查看账号明细</span>')
+    expect(app).not.toContain('<details class="admin-strategy-dispatch-target-details" open>')
+    expect(app).toContain('adminStrategyDispatchPreviewEligibleTargets(preview)')
+    expect(app).toContain('adminStrategyDispatchPreviewExcludedTargets(preview)')
+    expect(app).toContain('adminStrategyDispatchTargetLabel(target)')
+    expect(app).toContain('adminStrategyDispatchTargetReason(target) || "未满足执行条件"')
+    expect(app).toContain('<strong>可执行账号</strong>')
+    expect(app).toContain('<strong>排除账号</strong>')
+    expect(css).toContain('.admin-strategy-dispatch-target-details summary:focus-visible')
+    expect(css).toContain('@media (prefers-reduced-motion: reduce)')
+    expect(html).toContain('admin-dispatch-details1')
+  })
+
+  it('keeps source and subscription identities distinct while deduplicating compatibility aliases', () => {
+    const source = { target_role:'source', trading_account_id:2, valid:true }
+    const subscriber = { target_role:'subscriber', subscription_id:5, trading_account_id:3, valid:true }
+    expect(adminStrategyDispatchPreviewTargetHelpers.eligible({
+      source, source_account:source, targets:[subscriber], eligible_targets:[subscriber],
+    })).toEqual([source, subscriber])
+
+    const sourceExclusion = { target_role:'source', trading_account_id:2, exclusion_reason:'source_bridge_offline' }
+    const duplicateSubscription = { target_role:'subscriber', subscription_id:4, trading_account_id:2, exclusion_reason:'admin_account_excluded' }
+    expect(adminStrategyDispatchPreviewTargetHelpers.excluded({ exclusions:[sourceExclusion, duplicateSubscription] })).toEqual([
+      sourceExclusion, duplicateSubscription,
+    ])
   })
 })

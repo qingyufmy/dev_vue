@@ -774,7 +774,21 @@ const REASON_MAP = {
   max_open_positions_reached: "持仓数量达到上限，已拒绝",
   signal_price_slippage_exceeded: "信号参考价与当前报价偏离过大，已拒绝",
   auto_trade_disabled: "当前订阅没有开启自动执行",
+  execution_disabled: "当前订阅没有开启自动执行",
+  scheduler_disabled: "自动交易调度未开启",
+  symbol_not_subscribed: "当前订阅未包含该交易品种",
+  membership_not_eligible: "当前会员套餐不支持自动执行",
+  membership_expired: "会员已到期",
+  account_not_active: "交易账户当前未激活",
+  ownership_unavailable: "交易账户归属尚未确认",
+  source_account_not_active: "管理员源账户当前未激活",
+  source_ownership_unavailable: "管理员源账户归属尚未确认",
+  source_trade_send_disabled: "管理员源账户已关闭交易发送",
+  source_bridge_offline: "管理员源账户的交易终端桥接当前未连接",
+  source_bridge_trade_disabled: "管理员源账户的交易终端自动交易权限未开启",
   bridge_offline: "用户的交易终端桥接当前未连接",
+  bridge_trade_disabled: "交易终端自动交易权限未开启",
+  risk_halted: "账户风控已暂停交易",
   user_quote_unavailable: "无法获取用户交易平台的有效报价",
   stop_loss_missing: "AI 信号缺少有效止损价格",
   invalid_stop_loss_direction: "止损价格方向与订单方向不一致",
@@ -4890,6 +4904,69 @@ function adminStrategyDispatchTargetLabel(target = {}) {
   return [...new Set(parts)].join(" · ") || "订阅目标";
 }
 
+function adminStrategyDispatchPreviewTargetRows(preview = {}) {
+  const candidates = preview?.targets || preview?.target_results || preview?.target_statuses;
+  return Array.isArray(candidates) ? candidates : [];
+}
+
+function adminStrategyDispatchPreviewTargetValid(target = {}) {
+  const value = target?.valid ?? target?.eligible ?? target?.is_eligible ?? target?.executable ?? target?.is_valid;
+  if (value === true || value === 1) return true;
+  return ["true", "1", "yes", "eligible", "executable", "allowed"].includes(String(value || "").trim().toLowerCase());
+}
+
+function adminStrategyDispatchPreviewTargetIdentity(target = {}) {
+  const targetRole = String(target?.target_role || target?.role || "").trim().toLowerCase();
+  const subscriptionId = target?.subscription_id ?? target?.subscription?.id;
+  if (Number.isFinite(Number(subscriptionId)) && Number(subscriptionId) > 0) return `subscription:${Number(subscriptionId)}`;
+  const account = target?.account || target?.snapshot?.account || target?.account_snapshot || {};
+  const accountId = target?.trading_account_id ?? target?.account_id ?? account?.id;
+  if (Number.isFinite(Number(accountId)) && Number(accountId) > 0) return `${targetRole || "account"}:${Number(accountId)}`;
+  const broker = target?.broker_server || target?.broker?.server || account?.broker_server;
+  const login = target?.login_account || target?.broker?.login || account?.login_account;
+  if (broker || login) return `broker:${String(broker || "").trim().toUpperCase()}|login:${String(login || "").trim()}`;
+  const userId = target?.user_id ?? target?.user?.id;
+  if (userId != null && String(userId).trim()) return `user:${String(userId).trim()}`;
+  return "";
+}
+
+function adminStrategyDispatchPreviewUniqueTargets(targets = []) {
+  const seen = new Set();
+  return targets.filter((target, index) => {
+    if (!target || typeof target !== "object") return false;
+    const identity = adminStrategyDispatchPreviewTargetIdentity(target) || `row:${index}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+function adminStrategyDispatchPreviewEligibleTargets(preview = {}) {
+  const sourceCandidates = [preview?.source, preview?.source_account]
+    .filter(target => target && typeof target === "object")
+    .filter(adminStrategyDispatchPreviewTargetValid);
+  const targetRows = adminStrategyDispatchPreviewTargetRows(preview)
+    .filter(adminStrategyDispatchPreviewTargetValid);
+  const explicitRows = ["eligible_targets", "executable_targets", "valid_targets"]
+    .flatMap(key => Array.isArray(preview?.[key]) ? preview[key] : []);
+  return adminStrategyDispatchPreviewUniqueTargets([...sourceCandidates, ...targetRows, ...explicitRows]);
+}
+
+function adminStrategyDispatchPreviewExcludedTargets(preview = {}) {
+  const rows = ["exclusions", "excluded", "excluded_targets", "ineligible_targets"]
+    .flatMap(key => Array.isArray(preview?.[key]) ? preview[key] : []);
+  return adminStrategyDispatchPreviewUniqueTargets(rows);
+}
+
+function adminStrategyDispatchPreviewTargetRow(target, { excluded = false } = {}) {
+  const targetRole = String(target?.target_role || target?.role || "").toLowerCase();
+  const fallbackLabel = targetRole === "source" ? "管理员源账户" : "订阅目标";
+  const label = adminStrategyDispatchTargetLabel(target) === "订阅目标" && targetRole === "source"
+    ? fallbackLabel : adminStrategyDispatchTargetLabel(target);
+  const reason = excluded ? adminStrategyDispatchTargetReason(target) || "未满足执行条件" : "";
+  return `<li class="admin-strategy-dispatch-detail-row ${excluded ? "is-excluded" : "is-executable"}"><span><strong>${escapeHtml(label)}</strong>${reason ? `<small>${escapeHtml(reason)}</small>` : ""}</span><em>${excluded ? "排除" : "可执行"}</em></li>`;
+}
+
 function renderAdminStrategyDispatchProgress() {
   const panel = $("adminStrategyDispatchProgress");
   const summary = $("adminStrategyDispatchProgressSummary");
@@ -5027,12 +5104,19 @@ function renderAdminStrategyDispatchPreview(order, data) {
   const source = preview?.source_account || preview?.source || {};
   const sourceSnapshot = source?.snapshot || source?.account_snapshot || {};
   const sourceText = source?.login_account || source?.login || source?.account || source?.name || sourceSnapshot?.account?.login_account || sourceSnapshot?.account?.nickname || "管理员源账户";
-  const excluded = preview?.excluded || preview?.excluded_targets || preview?.exclusions || [];
-  const excludedRows = Array.isArray(excluded) ? excluded : [];
-  const reasons = excludedRows.slice(0, 8).map(item => `<li>${escapeHtml(adminStrategyDispatchTargetLabel(item))}：${escapeHtml(adminStrategyDispatchTargetReason(item) || "未满足执行条件")}</li>`).join("");
+  const executableRows = adminStrategyDispatchPreviewEligibleTargets(preview);
+  const excludedRows = adminStrategyDispatchPreviewExcludedTargets(preview);
+  const executableCount = counters.executable || executableRows.length;
+  const excludedCount = counters.excluded || excludedRows.length;
+  const executableItems = executableRows.length
+    ? executableRows.map(target => adminStrategyDispatchPreviewTargetRow(target)).join("")
+    : `<li class="admin-strategy-dispatch-detail-empty">${executableCount ? "接口未返回可执行账号明细，请刷新后重试。" : "暂无可执行账号"}</li>`;
+  const excludedItems = excludedRows.length
+    ? excludedRows.map(target => adminStrategyDispatchPreviewTargetRow(target, { excluded:true })).join("")
+    : `<li class="admin-strategy-dispatch-detail-empty">${excludedCount ? "接口未返回排除账号明细，请刷新后重试。" : "暂无排除账号"}</li>`;
   const stopLossText = adminStrategyDispatchProtectionDisplay(order.meta.stopLoss);
   const takeProfitText = adminStrategyDispatchProtectionDisplay(order.meta.takeProfit);
-  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(stopLossText)} / ${escapeHtml(takeProfitText)}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div>${reasons ? `<div class="admin-strategy-dispatch-exclusion"><span>排除原因</span><ul>${reasons}</ul></div>` : ""}<div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason || "未填写")}</strong></div>`;
+  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(stopLossText)} / ${escapeHtml(takeProfitText)}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div><details class="admin-strategy-dispatch-target-details"><summary><span>查看账号明细</span><small>可执行与排除账号</small><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary><div class="admin-strategy-dispatch-details-body"><section class="admin-strategy-dispatch-detail-section admin-strategy-dispatch-executable"><div class="admin-strategy-dispatch-detail-heading"><strong>可执行账号</strong><span>${executableCount}</span></div><ul>${executableItems}</ul></section><section class="admin-strategy-dispatch-detail-section admin-strategy-dispatch-exclusion"><div class="admin-strategy-dispatch-detail-heading"><strong>排除账号</strong><span>${excludedCount}</span></div><ul>${excludedItems}</ul></section></div></details><div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason || "未填写")}</strong></div>`;
   $("adminStrategyDispatchModal")?.classList.remove("hidden");
   document.body.classList.add("modal-open");
   initIcons();

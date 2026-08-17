@@ -229,7 +229,7 @@ async function loadSubscriberRows(strategyId) {
         AND UPPER(COALESCE(mds2.broker_server, '')) = UPPER(ta.broker_server)
         AND CAST(COALESCE(mds2.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
     )
-    WHERE ss.strategy_id = ? AND ss.is_deleted = 0
+    WHERE ss.strategy_id = ? AND ss.is_deleted = 0 AND ss.execution_enabled = 1
     ORDER BY ss.id ASC`, [strategyId])
 }
 
