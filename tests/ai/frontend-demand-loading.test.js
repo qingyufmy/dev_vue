@@ -82,6 +82,10 @@ async function runHistoryCursorScenario() {
     }
     const document = { getElementById:() => ({ value:'' }) }
     function getHistoryRangeParams() { return { history_scope:'all' } }
+    function historyTableFiltersSnapshot() {
+      return { page:state.historyFilters.page, pageSize:state.historyFilters.pageSize,
+        entry_from:'', entry_to:'', filter_close_from:'', filter_close_to:'', direction:'', profit_filter:'' }
+    }
     function historyRefreshContextKey({ forceRefresh = false } = {}) {
       return JSON.stringify({ forceRefresh, page:state.historyFilters.page, range:getHistoryRangeParams() })
     }
@@ -170,6 +174,10 @@ async function runHistoryTicketBindingScenario() {
       return data?.history_sync && typeof data.history_sync === 'object' ? data.history_sync : {}
     }
     function getHistoryRangeParams() { return { history_scope:'all' } }
+    function historyTableFiltersSnapshot() {
+      return { page:state.historyFilters.page, pageSize:state.historyFilters.pageSize,
+        entry_from:'', entry_to:'', filter_close_from:'', filter_close_to:'', direction:'', profit_filter:'' }
+    }
     function historyRefreshContextKey() { return 'history-context' }
     function historyRangeContextMatches() { return true }
     function applyHistoryScopeResponse() {}
@@ -818,7 +826,8 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     const views = block('function loadHistoryViews(', 'function historyProtectionCell')
     const table = block('function loadHistory(forceRefresh', 'function _applyHistoryData')
     expect(freshness).toContain('const rangePending = sync.requested_range_complete === false')
-    expect(freshness).toContain('loadHistoryViews({ forceRefresh:false, historyRetryAttempt:true })')
+    expect(freshness).toContain('historyRetryAttempt:true')
+    expect(freshness).toContain('...(requestQuery ? { query:requestQuery } : {})')
     expect(freshness).not.toContain('loadHistoryViews({ forceRefresh:true')
     expect(views).toContain('const automaticRetry = historyRetryAttempt === true && manualRefresh !== true')
     expect(views).toContain('const effectiveForceRefresh = Boolean(!tableOnly && !automaticRetry && (forceRefresh || _historyDirty))')

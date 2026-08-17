@@ -2914,6 +2914,7 @@ function scheduleHistoryLegacySummaryRetry(query) {
         disableRangeRetry:true,
         disableFreshnessRetry:true,
         skipPrepare:true,
+        query:retry.query,
       });
       retry.inFlight = false;
       if (_historyLegacySummaryRetry !== retry || retry.cancelled) return;
@@ -3060,7 +3061,9 @@ function historyQueryIsCurrent(query) {
   return Boolean(query)
     && Number(state.historyQueryGeneration || 0) === Number(query.generation)
     && Number(_historyQueryGeneration) === Number(query.generation)
+    && Number(state._accountContextGeneration || 0) === Number(query.accountContextGeneration || 0)
     && historyStableAccountKey() === query.accountKey
+    && (!query.platform || normalizeBridgePlatform(state.bridgePlatform) === query.platform)
     && activeTabId() === "history";
 }
 
@@ -3151,6 +3154,21 @@ function seedHistoryFrozenRange(query) {
   return historyCursorRangeIsFixed(_historyCursorState);
 }
 
+function historyTableFiltersSnapshot() {
+  const filters = state.historyFilters || {};
+  const value = id => $(id)?.value || "";
+  return {
+    page:Number(filters.page || 1),
+    pageSize:Number(filters.pageSize || 20),
+    entry_from:value("filterEntryFrom"),
+    entry_to:value("filterEntryTo"),
+    filter_close_from:value("filterCloseFrom"),
+    filter_close_to:value("filterCloseTo"),
+    direction:value("filterDirection"),
+    profit_filter:value("filterProfit"),
+  };
+}
+
 function beginHistoryQuery(trigger = "enter") {
   cancelHistoryPrepareRetry();
   cancelHistoryRangeRetry();
@@ -3161,11 +3179,18 @@ function beginHistoryQuery(trigger = "enter") {
   let scopeParams;
   try { scopeParams = getHistoryRangeParams(); }
   catch (error) { throw error; }
+  // Every explicit scope/filter/refresh operation starts a first-page query;
+  // pagination continues through its own opaque snapshot without opening a
+  // second explicit generation.
+  if (state.historyFilters) state.historyFilters.page = 1;
   const query = {
     generation,
     trigger:String(trigger || "enter"),
     accountKey:historyStableAccountKey(),
-    scopeParams,
+    accountContextGeneration:Number(state._accountContextGeneration || 0),
+    platform:normalizeBridgePlatform(state.bridgePlatform),
+    scopeParams:Object.freeze({ ...scopeParams }),
+    tableFilters:Object.freeze({ ...historyTableFiltersSnapshot() }),
     frozenRange:null,
     status:"preparing_time",
     sync:{},
@@ -3267,7 +3292,9 @@ async function runHistoryLegacyFallback(query, options = {}) {
     disableRangeRetry:true,
     disableFreshnessRetry:true,
     skipPrepare:true,
+    query,
   });
+  if (!historyQueryIsCurrent(query) || !data || data.historyStale === true) return null;
   if (historyQueryIsCurrent(query)) {
     const historyPending = data?.historyPending === true;
     const summaryPending = data?.summaryPending === true;
@@ -3320,6 +3347,7 @@ async function runHistoryQuery(query, options = {}) {
           disableRangeRetry:true,
           disableFreshnessRetry:true,
           skipPrepare:true,
+          query,
         });
       } catch (error) {
         if (isHistoryCursorRangeIncomplete(error) && historyQueryIsCurrent(query)) {
@@ -3332,7 +3360,7 @@ async function runHistoryQuery(query, options = {}) {
         }
         throw error;
       }
-      if (!historyQueryIsCurrent(query)) return null;
+      if (!historyQueryIsCurrent(query) || !data || data.historyStale === true) return null;
       query.status = data?.historyPending ? "unavailable" : "ready";
       renderHistorySyncStatus(data?.historyPending ? "历史记录仍在准备中，请点击刷新重试" : "历史记录已更新", { tone:data?.historyPending ? "warning" : "success", busy:false });
       return data;
@@ -3399,7 +3427,7 @@ function markHistoryDirty({ refreshActive = false } = {}) {
   };
 }
 
-function scheduleHistoryFreshnessRetry(data) {
+function scheduleHistoryFreshnessRetry(data, query = _historyQueryState) {
   const sync = historySyncMetadata(data);
   const freshnessPending = ['refreshing', 'stale'].includes(String(sync.freshness_state || ''));
   const summaryPending = ['pending', 'rebuilding'].includes(String(sync.summary_status || ''));
@@ -3409,7 +3437,8 @@ function scheduleHistoryFreshnessRetry(data) {
     return;
   }
   if (activeTabId() !== "history") return;
-  const contextKey = historyRetryContextKey();
+  const requestQuery = query?.generation != null ? query : null;
+  const contextKey = historyRetryContextKey({ query:requestQuery });
   let retry = _historyFreshnessRetry;
   if (!retry || retry.contextKey !== contextKey) {
     clearHistoryFreshnessRetry();
@@ -3424,10 +3453,14 @@ function scheduleHistoryFreshnessRetry(data) {
   retry.timer = setTimeout(async () => {
     retry.timer = null;
     if (_historyFreshnessRetry !== retry || activeTabId() !== "history"
-      || retry.contextKey !== historyRetryContextKey()) return;
+      || retry.contextKey !== historyRetryContextKey({ query:requestQuery })) return;
     retry.attempt += 1;
     try {
-      await loadHistoryViews({ forceRefresh:false, historyRetryAttempt:true });
+      await loadHistoryViews({
+        forceRefresh:false,
+        historyRetryAttempt:true,
+        ...(requestQuery ? { query:requestQuery } : {}),
+      });
     } catch {}
   }, delay);
 }
@@ -14564,9 +14597,12 @@ function renderHistoryRangeMeta(meta = state.historyRangeMeta, scope = $("histor
   setText("historyRangeHint", message);
 }
 
-function historyRangeContextMatches(requestContextKey, generation, { includeTableFilters = true } = {}) {
-  return Number(state._accountContextGeneration || 0) === Number(generation || 0)
-    && requestContextKey === historyRefreshContextKey({ forceRefresh:false, includeTableFilters });
+function historyRangeContextMatches(requestContextKey, generation, { includeTableFilters = true, query = null } = {}) {
+  const current = query
+    ? historyQueryIsCurrent(query)
+    : Number(state._accountContextGeneration || 0) === Number(generation || 0);
+  return current
+    && requestContextKey === historyRefreshContextKey({ forceRefresh:false, includeTableFilters, query });
 }
 
 function getHistoryRangeParams() {
@@ -14673,8 +14709,8 @@ function historyRangeFromError(error) {
   return null;
 }
 
-function historyRetryContextKey() {
-  return historyRefreshContextKey({ forceRefresh:false });
+function historyRetryContextKey({ query = null } = {}) {
+  return historyRefreshContextKey({ forceRefresh:false, query });
 }
 
 function isHistoryCursorRangeIncomplete(error) {
@@ -14808,31 +14844,38 @@ function updateHistoryRangeUI({ pending = false } = {}) {
   if (mt4RangeWarning) setText("historyRangeHint", `${$("historyRangeHint")?.textContent || ""}${mt4RangeWarning}`);
 }
 
-function historyRefreshContextKey({ forceRefresh = false, includeTableFilters = true } = {}) {
+function historyRefreshContextKey({ forceRefresh = false, includeTableFilters = true, query = null } = {}) {
   let range;
-  try {
-    range = getHistoryRangeParams();
-  } catch {
-    range = { history_scope: $("historyRangeMode")?.value || HISTORY_DEFAULT_SCOPE };
+  if (query?.scopeParams && typeof query.scopeParams === "object") {
+    range = { ...query.scopeParams };
+  } else {
+    try {
+      range = getHistoryRangeParams();
+    } catch {
+      range = { history_scope: $("historyRangeMode")?.value || HISTORY_DEFAULT_SCOPE };
+    }
   }
   const filters = state.historyFilters || {};
+  const frozenFilters = query?.tableFilters && typeof query.tableFilters === "object"
+    ? query.tableFilters : null;
+  const filterValue = (key, id) => (frozenFilters?.[key] ?? $(id)?.value ?? "");
   return JSON.stringify({
-    generation:Number(state._accountContextGeneration || 0),
-    history_query_generation:Number(state.historyQueryGeneration || 0),
-    account:state.bridgeAccountIdentity || null,
-    platform:state.bridgePlatform || "mt5",
+    generation:Number(query?.accountContextGeneration ?? state._accountContextGeneration ?? 0),
+    history_query_generation:Number(query?.generation ?? state.historyQueryGeneration ?? 0),
+    account:query?.accountKey || state.bridgeAccountIdentity || null,
+    platform:query?.platform || state.bridgePlatform || "mt5",
     range,
     filters:includeTableFilters ? {
       // Forced refreshes always share the first-page flight, even when a
       // stale pagination state still points at a later page.
-      page:forceRefresh ? 1 : Number(filters.page || 1),
-      pageSize:Number(filters.pageSize || 20),
-      entry_from:$("filterEntryFrom")?.value || "",
-      entry_to:$("filterEntryTo")?.value || "",
-      close_from:$("filterCloseFrom")?.value || "",
-      close_to:$("filterCloseTo")?.value || "",
-      direction:$("filterDirection")?.value || "",
-      profit_filter:$("filterProfit")?.value || "",
+      page:forceRefresh ? 1 : Number(frozenFilters?.page ?? filters.page ?? 1),
+      pageSize:Number(frozenFilters?.pageSize ?? filters.pageSize ?? 20),
+      entry_from:filterValue("entry_from", "filterEntryFrom"),
+      entry_to:filterValue("entry_to", "filterEntryTo"),
+      close_from:filterValue("filter_close_from", "filterCloseFrom"),
+      close_to:filterValue("filter_close_to", "filterCloseTo"),
+      direction:filterValue("direction", "filterDirection"),
+      profit_filter:filterValue("profit_filter", "filterProfit"),
     } : null,
   });
 }
@@ -14914,67 +14957,69 @@ function clearInvalidHistoryRangePreference(error) {
 }
 
 function loadHistory(forceRefresh, options = {}) {
-  const key = historyFlightKey("table", { forceRefresh:Boolean(forceRefresh) });
+  const query = options.query || null;
+  const key = historyFlightKey("table", { forceRefresh:Boolean(forceRefresh), query });
   const existing = _historyTableFlights.get(key);
   if (existing) return existing;
   const manualRefresh = options.manualRefresh === true;
   let requestCursorKey = null;
   const run = (async () => {
   try {
-    const filters = state.historyFilters;
-    const entryFrom = document.getElementById('filterEntryFrom')?.value || '';
-    const entryTo = document.getElementById('filterEntryTo')?.value || '';
-    const closeFrom = document.getElementById('filterCloseFrom')?.value || '';
-    const closeTo = document.getElementById('filterCloseTo')?.value || '';
-    const direction = document.getElementById('filterDirection')?.value || '';
-    const profit = document.getElementById('filterProfit')?.value || '';
-    const filterParams = getHistoryRangeParams();
-    if (entryFrom) filterParams.entry_from = entryFrom;
-    if (entryTo) filterParams.entry_to = entryTo;
-    if (closeFrom) filterParams.filter_close_from = closeFrom;
-    if (closeTo) filterParams.filter_close_to = closeTo;
-    if (direction) filterParams.direction = direction;
-    if (profit) filterParams.profit_filter = profit;
+    const filters = state.historyFilters || {};
+    const tableFilters = query?.tableFilters || historyTableFiltersSnapshot();
+    const filterParams = {
+      ...(query?.scopeParams || getHistoryRangeParams()),
+      ...(tableFilters.entry_from ? { entry_from:tableFilters.entry_from } : {}),
+      ...(tableFilters.entry_to ? { entry_to:tableFilters.entry_to } : {}),
+      ...(tableFilters.filter_close_from ? { filter_close_from:tableFilters.filter_close_from } : {}),
+      ...(tableFilters.filter_close_to ? { filter_close_to:tableFilters.filter_close_to } : {}),
+      ...(tableFilters.direction ? { direction:tableFilters.direction } : {}),
+      ...(tableFilters.profit_filter ? { profit_filter:tableFilters.profit_filter } : {}),
+    };
+    let page = Number(tableFilters.page || filters.page || 1);
+    const pageSize = Number(tableFilters.pageSize || filters.pageSize || 20);
 
     const cursorKey = JSON.stringify({
       ...filterParams,
-      pageSize:filters.pageSize,
-      platform:state.bridgePlatform,
-      account:state.bridgeAccountIdentity,
+      pageSize,
+      platform:query?.platform || state.bridgePlatform,
+      account:query?.accountKey || state.bridgeAccountIdentity,
     });
     requestCursorKey = cursorKey;
     if (forceRefresh || _historyCursorState.key !== cursorKey) {
+      page = 1;
       filters.page = 1;
       const preserveFrozenRange = !forceRefresh
         && _historyCursorState.preserveRangeOnKeyChange === true;
       resetHistoryCursorState(cursorKey, { preserveRange:preserveFrozenRange });
     }
-    if (filters.page > 1 && !_historyCursorState.pageCursors.has(filters.page)) {
+    if (page > 1 && !_historyCursorState.pageCursors.has(page)) {
+      page = 1;
       filters.page = 1;
       resetHistoryCursorState(cursorKey, {
         preserveRange:historyCursorRangeIsFixed(_historyCursorState),
       });
     }
-    const requestContextKey = historyRefreshContextKey({ forceRefresh:false });
-    const requestGeneration = Number(state._accountContextGeneration || 0);
+    const requestContextKey = historyRefreshContextKey({ forceRefresh:false, query });
+    const requestGeneration = Number(query?.accountContextGeneration ?? state._accountContextGeneration ?? 0);
 
     // Cache check
-    const filterKey = JSON.stringify({ ...filterParams, page: filters.page, pageSize: filters.pageSize,
+    const filterKey = JSON.stringify({ ...filterParams, page, pageSize,
       snapshot:_historyCursorState.snapshotId });
     if (!forceRefresh && _historyCache && _historyCache.filters === filterKey) {
-      if (!historyRangeContextMatches(requestContextKey, requestGeneration)) return null;
+      if (!historyRangeContextMatches(requestContextKey, requestGeneration, { query })) return null;
       const cachedData = _historyCache.data;
       applyHistoryScopeResponse(cachedData);
       await loadHistoryTicketMapsForData(cachedData);
-      if (!historyRangeContextMatches(requestContextKey, requestGeneration)) return null;
+      if (!historyRangeContextMatches(requestContextKey, requestGeneration, { query })) return null;
       _applyHistoryData(cachedData, { tableOnly:options.tableOnly === true });
       return cachedData;
     }
 
     historyCircuitAllows(key, { manualRefresh });
-    const cursor = _historyCursorState.pageCursors.get(filters.page) || null;
+    const cursor = _historyCursorState.pageCursors.get(page) || null;
     const frozenRangeParams = typeof historyQueryRangeParams === "function"
-      ? historyQueryRangeParams(_historyQueryState) : {};
+      ? historyQueryRangeParams(query || _historyQueryState) : {};
     const rangeParams = Number.isSafeInteger(_historyCursorState.rangeStart)
       && Number.isSafeInteger(_historyCursorState.rangeEnd)
       && _historyCursorState.rangeStart > 0
@@ -14986,20 +15031,20 @@ function loadHistory(forceRefresh, options = {}) {
         }
       : {};
     const data = await wsApi("history", {
-      page:filters.page,
-      page_size:filters.pageSize,
+      page,
+      page_size:pageSize,
       force_refresh:Boolean(forceRefresh),
       ...filterParams,
       ...(Object.keys(rangeParams).length
         ? {
-            ...(filters.page > 1 && _historyCursorState.snapshotId
+            ...(page > 1 && _historyCursorState.snapshotId
               ? { history_snapshot_id:_historyCursorState.snapshotId }
               : {}),
             ...rangeParams,
           } : {}),
       ...(cursor ? { cursor } : {}),
     });
-    if (!historyRangeContextMatches(requestContextKey, requestGeneration)) return null;
+    if (!historyRangeContextMatches(requestContextKey, requestGeneration, { query })) return null;
     if (data?.status !== 'success') {
       const error = new Error(data?.message || data?.error || '历史数据读取失败');
       error.code = data?.code || data?.error_code || data?.error || null;
@@ -15015,11 +15060,11 @@ function loadHistory(forceRefresh, options = {}) {
     // snapshot and its captured/allowed/system/effective boundaries. Re-pin
     // the range when page one is read again so a newer snapshot is never paired
     // with metadata from an earlier snapshot on Next.
-    if (_historyQueryState?.legacyFallback === true
-      && filters.page === 1
-      && historyQueryIsCurrent(_historyQueryState)) {
+    if ((query || _historyQueryState)?.legacyFallback === true
+      && page === 1
+      && historyQueryIsCurrent(query || _historyQueryState)) {
       const legacyFrozenRange = historyPrepareRangeFromResponse(data);
-      if (legacyFrozenRange) _historyQueryState.frozenRange = legacyFrozenRange;
+      if (legacyFrozenRange) (query || _historyQueryState).frozenRange = legacyFrozenRange;
     }
     const snapshotId = data.history_snapshot_id ? String(data.history_snapshot_id) : null;
     if (snapshotId && !responseRange) {
@@ -15040,16 +15085,16 @@ function loadHistory(forceRefresh, options = {}) {
       }
       _historyCursorState.snapshotId = snapshotId;
       if (data.has_more === true && data.next_cursor) {
-        _historyCursorState.pageCursors.set(filters.page + 1, String(data.next_cursor));
+        _historyCursorState.pageCursors.set(page + 1, String(data.next_cursor));
       } else {
-        _historyCursorState.pageCursors.delete(filters.page + 1);
+        _historyCursorState.pageCursors.delete(page + 1);
       }
     }
-    const resolvedFilterKey = JSON.stringify({ ...filterParams, page:filters.page,
-      pageSize:filters.pageSize, snapshot:_historyCursorState.snapshotId });
+    const resolvedFilterKey = JSON.stringify({ ...filterParams, page,
+      pageSize, snapshot:_historyCursorState.snapshotId });
     _historyCache = { filters:resolvedFilterKey, data };
     await loadHistoryTicketMapsForData(data);
-    if (!historyRangeContextMatches(requestContextKey, requestGeneration)) return null;
+    if (!historyRangeContextMatches(requestContextKey, requestGeneration, { query })) return null;
     _applyHistoryData(data, { tableOnly:options.tableOnly === true });
     clearHistoryCircuit(key);
     return data;
@@ -15126,17 +15171,18 @@ function _applyHistoryData(data) {
 
 // Chart and summary use the same explicit history scope as the table.
 function loadHistoryChart(forceRefresh, options = {}) {
-  const key = historyFlightKey("chart", { forceRefresh:Boolean(forceRefresh), includeTableFilters:false });
+  const query = options.query || null;
+  const key = historyFlightKey("chart", { forceRefresh:Boolean(forceRefresh), includeTableFilters:false, query });
   const existing = _historyChartFlights.get(key);
   if (existing) return existing;
   const manualRefresh = options.manualRefresh === true;
   const run = (async () => {
   try {
-    const requestContextKey = historyRefreshContextKey({ forceRefresh:false, includeTableFilters:false });
-    const requestGeneration = Number(state._accountContextGeneration || 0);
-    const params = getHistoryRangeParams();
+    const requestContextKey = historyRefreshContextKey({ forceRefresh:false, includeTableFilters:false, query });
+    const requestGeneration = Number(query?.accountContextGeneration ?? state._accountContextGeneration ?? 0);
+    const params = { ...(query?.scopeParams || getHistoryRangeParams()) };
     const frozenRangeParams = typeof historyQueryRangeParams === "function"
-      ? historyQueryRangeParams(_historyQueryState) : {};
+      ? historyQueryRangeParams(query || _historyQueryState) : {};
     const rangeParams = Number.isSafeInteger(_historyCursorState.rangeStart)
       && Number.isSafeInteger(_historyCursorState.rangeEnd)
       && _historyCursorState.rangeStart > 0
@@ -15149,16 +15195,16 @@ function loadHistoryChart(forceRefresh, options = {}) {
       : {};
     const requestParams = { ...params, ...rangeParams };
 
-    const filterKey = JSON.stringify({ scope:requestParams, account:historyStableAccountKey() });
+    const filterKey = JSON.stringify({ scope:requestParams, account:query?.accountKey || historyStableAccountKey() });
     if (!forceRefresh && _historyChartCache && _historyChartCache.filters === filterKey) {
-      if (!historyRangeContextMatches(requestContextKey, requestGeneration, { includeTableFilters:false })) return null;
+      if (!historyRangeContextMatches(requestContextKey, requestGeneration, { includeTableFilters:false, query })) return null;
       _renderHistoryChart(_historyChartCache.data);
       return;
     }
 
     historyCircuitAllows(key, { manualRefresh });
     const data = await wsApi("history_chart_data", { ...requestParams, force_refresh:Boolean(forceRefresh) });
-    if (!historyRangeContextMatches(requestContextKey, requestGeneration, { includeTableFilters:false })) return null;
+    if (!historyRangeContextMatches(requestContextKey, requestGeneration, { includeTableFilters:false, query })) return null;
     if (data?.status !== 'success') {
       const error = new Error(data?.message || data?.error || '历史图表读取失败');
       error.code = data?.code || data?.error_code || data?.error || null;
@@ -15169,6 +15215,7 @@ function loadHistoryChart(forceRefresh, options = {}) {
     applyHistoryScopeResponse(data);
     _historyChartCache = { filters: filterKey, data };
     await ensureChartJs();
+    if (!historyRangeContextMatches(requestContextKey, requestGeneration, { includeTableFilters:false, query })) return null;
     _renderHistoryChart(data);
     clearHistoryCircuit(key);
   } catch (e) {
@@ -15186,12 +15233,12 @@ function loadHistoryChart(forceRefresh, options = {}) {
   return run;
 }
 
-function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, manualRefresh = false, historyRetryAttempt = false, tableOnly = false, disableRangeRetry = false, disableFreshnessRetry = false } = {}) {
+function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, manualRefresh = false, historyRetryAttempt = false, tableOnly = false, disableRangeRetry = false, disableFreshnessRetry = false, query = null } = {}) {
   if (manualRefresh) {
     cancelHistoryRangeRetry();
     cancelHistoryLegacySummaryRetry();
   }
-  const currentRetryContext = historyRetryContextKey();
+  const currentRetryContext = historyRetryContextKey({ query });
   if (_historyRangeRetryState
     && (activeTabId() !== "history" || _historyRangeRetryState.contextKey !== currentRetryContext)) {
     cancelHistoryRangeRetry();
@@ -15201,7 +15248,7 @@ function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, 
   // would drop the pinned range and make the server capture a new endpoint.
   const automaticRetry = historyRetryAttempt === true && manualRefresh !== true;
   const effectiveForceRefresh = Boolean(!tableOnly && !automaticRetry && (forceRefresh || _historyDirty));
-  const key = `${historyFlightKey("views", { forceRefresh:effectiveForceRefresh })}:${tableOnly ? "table-only" : "full"}`;
+  const key = `${historyFlightKey("views", { forceRefresh:effectiveForceRefresh, query })}:${tableOnly ? "table-only" : "full"}`;
   const existing = _historyViewsFlights.get(key);
   if (existing) return existing;
   const effectiveManualRefresh = manualRefresh;
@@ -15216,14 +15263,14 @@ function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, 
       _historyChartCache = null;
     }
     if (includeAccount) await loadAccount();
-    const requestContextKey = historyRetryContextKey();
+    const requestContextKey = historyRetryContextKey({ query });
     let tableData = null;
     try {
-      tableData = await loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh, tableOnly });
+      tableData = await loadHistory(effectiveForceRefresh, { manualRefresh:effectiveManualRefresh, tableOnly, query });
     } catch (error) {
       if (isHistoryCursorRangeIncomplete(error)) {
         if (disableRangeRetry) throw error;
-        if (activeTabId() !== "history" || requestContextKey !== historyRetryContextKey()) {
+        if (activeTabId() !== "history" || requestContextKey !== historyRetryContextKey({ query })) {
           return { historyPending:false, historyStale:true };
         }
         renderHistoryPreparationStatus();
@@ -15233,6 +15280,7 @@ function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, 
       throw error;
     }
     if (!tableData) return { historyPending:false, historyStale:true };
+    if (query && !historyQueryIsCurrent(query)) return { historyPending:false, historyStale:true };
     if (tableOnly) return { historyPending:false, tableOnly:true };
     if (_historyRangeRetryState?.contextKey === requestContextKey) {
       finishHistoryRangeRetry(_historyRangeRetryState);
@@ -15243,7 +15291,7 @@ function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, 
     // after asynchronous map work has completed.
     if (sync.freshness_state === "fresh") _historyDirty = false;
     else if (sync.freshness_state) _historyDirty = true;
-    if (!disableFreshnessRetry) scheduleHistoryFreshnessRetry(tableData);
+    if (!disableFreshnessRetry) scheduleHistoryFreshnessRetry(tableData, query);
     if (!historySummaryReadyForRequestedRange(sync)) {
       return { historyPending:false, historyStale:_historyDirty, summaryPending:true };
     }
@@ -15251,27 +15299,29 @@ function loadHistoryViewsLegacy({ forceRefresh = false, includeAccount = false, 
       ? tableData.chart_data : null;
     if (embeddedChart) {
       await ensureChartJs();
+      if (query && !historyQueryIsCurrent(query)) return { historyPending:false, historyStale:true };
       _renderHistoryChart(embeddedChart);
       _historyChartCache = {
-        filters:`embedded:${historyRefreshContextKey({ forceRefresh:false, includeTableFilters:false })}`,
+        filters:`embedded:${historyRefreshContextKey({ forceRefresh:false, includeTableFilters:false, query })}`,
         data:embeddedChart,
       };
       return { historyPending:false, embeddedChart:true };
     }
     // Cursor continuations intentionally omit the already rendered chart to
     // keep every later page minimal.
-    if (Number(state.historyFilters?.page || 1) > 1 && _historyChartCache) {
+    if (Number(query?.tableFilters?.page || state.historyFilters?.page || 1) > 1 && _historyChartCache) {
       return { historyPending:false, embeddedChart:true };
     }
     // The table owns the single forced terminal sync. The chart then reads the
     // refreshed Bridge archive only as a compatibility fallback.
     try {
-      await loadHistoryChart(false, { manualRefresh:effectiveManualRefresh });
+      const chartResult = await loadHistoryChart(false, { manualRefresh:effectiveManualRefresh, query });
+      if (query && chartResult === null) return { historyPending:false, historyStale:true };
     } catch (error) {
       if (!isHistoryCursorRangeIncomplete(error)) throw error;
       if (disableRangeRetry) throw error;
       const pendingRange = historyRangeFromError(error);
-      if (pendingRange && requestContextKey === historyRetryContextKey() && _historyCursorState.key) {
+      if (pendingRange && requestContextKey === historyRetryContextKey({ query }) && _historyCursorState.key) {
         _historyCursorState.rangeStart = pendingRange.rangeStart;
         _historyCursorState.rangeEnd = pendingRange.rangeEnd;
       }

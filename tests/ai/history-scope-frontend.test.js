@@ -145,6 +145,125 @@ function loadHistoryLegacyFallbackHarness(result, options = {}) {
   `)()
 }
 
+function loadHistoryContextHarness({ currentAccountContextGeneration = 1 } = {}) {
+  const currentStart = app.indexOf('function historyQueryIsCurrent')
+  const currentEnd = app.indexOf('function historyPrepareMessage', currentStart)
+  const contextStart = app.indexOf('function historyRangeContextMatches')
+  const contextEnd = app.indexOf('function historyPreparationMessage', contextStart)
+  const keyStart = app.indexOf('function historyRefreshContextKey')
+  const keyEnd = app.indexOf('function historyErrorCode', keyStart)
+  expect(currentStart).toBeGreaterThanOrEqual(0)
+  expect(contextEnd).toBeGreaterThan(contextStart)
+  expect(keyEnd).toBeGreaterThan(keyStart)
+  return new Function(`
+    const state = {
+      historyQueryGeneration:7,
+      _accountContextGeneration:${Number(currentAccountContextGeneration)},
+      bridgePlatform:'mt4',
+      bridgeAccountIdentity:{ platform:'mt4', brokerServerKey:'Broker', loginAccount:'123' },
+      historyRangeMeta:{ allowedStartDate:'2000-01-01', systemStartDate:'2026-07-01', actualEndDate:'2026-08-17' },
+      historyFilters:{ page:1, pageSize:20 },
+    }
+    const nodes = {
+      historyRangeMode:{ value:'platform' },
+      historyRangeFrom:{ value:'2026-07-31' },
+      historyRangeTo:{ value:'' },
+      filterEntryFrom:{ value:'' },
+      filterEntryTo:{ value:'' },
+      filterCloseFrom:{ value:'' },
+      filterCloseTo:{ value:'' },
+      filterDirection:{ value:'' },
+      filterProfit:{ value:'' },
+    }
+    let _historyQueryGeneration = 7
+    function $(id) { return nodes[id] }
+    function activeTabId() { return 'history' }
+    function normalizeBridgePlatform(value) { return String(value || '').toLowerCase() === 'mt4' ? 'mt4' : 'mt5' }
+    function historyStableAccountKey() { return 'mt4|broker|123' }
+    function historyPreferenceStart() { return '' }
+    function validHistoryBusinessDate(value) { return /^\\d{4}-\\d{2}-\\d{2}$/.test(String(value || '')) }
+    ${app.slice(currentStart, currentEnd)}
+    ${app.slice(contextStart, contextEnd)}
+    ${app.slice(keyStart, keyEnd)}
+    const query = {
+      generation:7,
+      accountContextGeneration:1,
+      accountKey:'mt4|broker|123',
+      platform:'mt4',
+      scopeParams:{ history_scope:'platform' },
+      tableFilters:{ page:1, pageSize:20, entry_from:'', entry_to:'', filter_close_from:'', filter_close_to:'', direction:'', profit_filter:'' },
+    }
+    const requestKey = historyRefreshContextKey({ query })
+    state.historyRangeMeta = null
+    nodes.historyRangeFrom.value = '2026-07-31'
+    state.historyRangeMeta = { allowedStartDate:'2000-01-01', systemStartDate:'2026-07-31', actualEndDate:'2026-08-17' }
+    nodes.historyRangeFrom.value = '2026-07-31'
+    return {
+      matchesAfterResponseMeta:historyRangeContextMatches(requestKey, query.accountContextGeneration, { query }),
+      requestKey,
+      responseKey:historyRefreshContextKey({ query }),
+      current:historyQueryIsCurrent(query),
+    }
+  `)()
+}
+
+function loadHistoryRequestSnapshotHarness() {
+  const start = app.indexOf('function loadHistory(forceRefresh')
+  const end = app.indexOf('function _applyHistoryData', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`
+    const state = {
+      historyFilters:{ page:1, pageSize:20 },
+      _accountContextGeneration:1,
+      bridgePlatform:'mt4',
+      bridgeAccountIdentity:null,
+      historyQueryGeneration:1,
+    }
+    const query = {
+      generation:1,
+      accountContextGeneration:1,
+      accountKey:'mt4|broker|123',
+      platform:'mt4',
+      scopeParams:{ history_scope:'platform' },
+      tableFilters:{ page:1, pageSize:20, entry_from:'2026-08-01', entry_to:'', filter_close_from:'2026-08-02', filter_close_to:'2026-08-03', direction:'buy', profit_filter:'loss' },
+      legacyFallback:true,
+      frozenRange:null,
+    }
+    const calls = []
+    let _historyCache = null
+    let _historyQueryState = query
+    const _historyTableFlights = new Map()
+    let _historyCursorState = { key:null, snapshotId:null, rangeStart:null, rangeEnd:null, pageCursors:new Map([[1,null]]), preserveRangeOnKeyChange:false }
+    function historyFlightKey() { return 'table-flight' }
+    function historyRefreshContextKey() { return 'history-context' }
+    function historyTableFiltersSnapshot() { throw new Error('mutable table controls must not be read') }
+    function getHistoryRangeParams() { throw new Error('mutable history range must not be read') }
+    function historyQueryRangeParams() { return {} }
+    function historyRangeContextMatches() { return true }
+    function historyCursorRangeIsFixed() { return false }
+    function resetHistoryCursorState(key) { _historyCursorState = { key, snapshotId:null, rangeStart:null, rangeEnd:null, pageCursors:new Map([[1,null]]), preserveRangeOnKeyChange:false } }
+    function historyPrepareRangeFromResponse() { return null }
+    function historyQueryIsCurrent() { return true }
+    function historyRangeFromError() { return null }
+    function isHistoryCursorRangeIncomplete() { return false }
+    function historyCircuitAllows() {}
+    function clearInvalidHistoryRangePreference() {}
+    function rememberHistoryFailure() {}
+    function notifyHistoryFailure() {}
+    function clearHistoryCircuit() {}
+    async function loadHistoryTicketMapsForData() {}
+    function applyHistoryScopeResponse() {}
+    function _applyHistoryData() {}
+    async function wsApi(action, params) {
+      calls.push({ action, params })
+      return { status:'success', orders:[], pagination:{ current_page:1, page_size:20, total_count:0 }, history_sync:{ requested_range_complete:true, terminal_visible_history_complete:true, summary_status:'ready' } }
+    }
+    ${app.slice(start, end)}
+    return loadHistory(false, { query }).then(() => calls[0])
+  `)()
+}
+
 function loadCursorResetHarness() {
   const fixedStart = app.indexOf('function historyCursorRangeIsFixed')
   const resetStart = app.indexOf('function resetHistoryCursorState', fixedStart)
@@ -363,11 +482,11 @@ describe('history scope frontend contract', () => {
     expect(load).toContain('history_snapshot_id:_historyCursorState.snapshotId')
     expect(load).toContain('range_start_utc_msc:_historyCursorState.rangeStart')
     expect(load).toContain('range_end_utc_msc:_historyCursorState.rangeEnd')
-    expect(load).toContain('_historyQueryState?.legacyFallback === true')
-    expect(load).toContain('filters.page === 1')
+    expect(load).toContain('(query || _historyQueryState)?.legacyFallback === true')
+    expect(load).toContain('page === 1')
     expect(load).not.toContain('&& !_historyQueryState.frozenRange')
     expect(load).toContain('const legacyFrozenRange = historyPrepareRangeFromResponse(data)')
-    expect(load).toContain('_historyQueryState.frozenRange = legacyFrozenRange')
+    expect(load).toContain('(query || _historyQueryState).frozenRange = legacyFrozenRange')
     expect(app).toContain('captured_end_utc_msc:Number(range.captured_end_utc_msc)')
   })
 
@@ -450,6 +569,47 @@ describe('history scope frontend contract', () => {
     expect(app).toContain('loadHistoryViewsLegacy({\n          forceRefresh:false')
     expect(app).toContain('history_prepare_status_unsupported')
     expect(app).toContain('runHistoryLegacyFallback')
+  })
+
+  it('keeps an MT4 fallback response current after the server rehydrates range metadata', () => {
+    const result = loadHistoryContextHarness()
+    expect(result.matchesAfterResponseMeta).toBe(true)
+    expect(result.responseKey).toBe(result.requestKey)
+    expect(result.current).toBe(true)
+  })
+
+  it('invalidates a frozen history query when only the account context generation changes', () => {
+    const result = loadHistoryContextHarness({ currentAccountContextGeneration:2 })
+    expect(result.matchesAfterResponseMeta).toBe(false)
+    expect(result.current).toBe(false)
+  })
+
+  it('sends MT4 history through the explicit query snapshot instead of mutable range and filter controls', async () => {
+    const result = await loadHistoryRequestSnapshotHarness()
+    expect(result).toMatchObject({
+      action:'history',
+      params:{
+        history_scope:'platform',
+        entry_from:'2026-08-01',
+        filter_close_from:'2026-08-02',
+        filter_close_to:'2026-08-03',
+        direction:'buy',
+        profit_filter:'loss',
+      },
+    })
+    expect(result.params).not.toHaveProperty('scope_start_override')
+  })
+
+  it('does not report fallback success for an empty or stale result', async () => {
+    const empty = await loadHistoryLegacyFallbackHarness(null)
+    expect(empty.data).toBeNull()
+    expect(empty.status).toBe('loading_snapshot')
+    expect(empty.message).not.toContain('历史记录已更新')
+
+    const stale = await loadHistoryLegacyFallbackHarness({ historyPending:false, historyStale:true })
+    expect(stale.data).toBeNull()
+    expect(stale.status).toBe('loading_snapshot')
+    expect(stale.message).not.toContain('历史记录已更新')
   })
 
   it('fails closed until prepare status proves both exact range and summary readiness', () => {
@@ -594,7 +754,7 @@ describe('history scope frontend contract', () => {
 
   it('advances generations only for explicit history operations and invalidates stale responses', () => {
     expect(app).toContain('historyQueryGeneration: 0')
-    expect(app).toContain('history_query_generation:Number(state.historyQueryGeneration || 0)')
+    expect(app).toContain('history_query_generation:Number(query?.generation ?? state.historyQueryGeneration ?? 0)')
     expect(app).toContain('loadHistoryViews({ newQuery:true, trigger:"enter"')
     expect(app).toContain('loadHistoryViews({ newQuery:true, trigger:"apply"')
     expect(app).toContain('loadHistoryViews({ newQuery:true, trigger:"filter"')
@@ -604,7 +764,7 @@ describe('history scope frontend contract', () => {
   })
 
   it('does not reuse a snapshot on page one and keeps ticket maps out of status checks', () => {
-    expect(app).toContain('filters.page > 1 && _historyCursorState.snapshotId')
+    expect(app).toContain('page > 1 && _historyCursorState.snapshotId')
     const pagerStart = app.indexOf('if (pagerButton && !pagerButton.disabled)')
     const pagerEnd = app.indexOf('if (actionButton)', pagerStart)
     const pager = app.slice(pagerStart, pagerEnd)
