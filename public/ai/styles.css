@@ -5525,6 +5525,12 @@ input:checked + .slider::before { transform: translateX(18px); }
   backdrop-filter: blur(5px);
 }
 
+/* Destructive confirmations may open from an existing form modal. Keep the
+   second confirmation visibly and interactively above its parent dialog. */
+#genericConfirmModal {
+  z-index: 1100;
+}
+
 .admin-strategy-dispatch-panel {
   display: grid;
   gap: 10px;
