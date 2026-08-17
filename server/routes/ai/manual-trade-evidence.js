@@ -5,6 +5,8 @@ import { getBridgeRuntimeDiagnostics, getHistoryTerminalClock } from '../../brid
 import { trustedTerminalClock } from './terminal-clock.js'
 import { buildReviewMarketPath } from './review-market-path.js'
 import { resolveFrozenChanRequirement } from './inference-snapshots.js'
+import { assessChanEvidenceDimensions } from './chan-evidence-assessment.js'
+import { createManualTradeSelectionContext, verifyManualTradeSelectionContext } from './manual-trade-selection-context.js'
 
 export const MANUAL_TRADE_PAGE_DEFAULT = 20
 export const MANUAL_TRADE_PAGE_MAX = 100
@@ -525,7 +527,7 @@ function resolveRecentProfitableRange(params = {}, nowUtcMsc = Date.now()) {
     }
     return { range_start_utc_msc:suppliedStart, range_end_utc_msc:suppliedEnd }
   }
-  return { range_start_utc_msc:now - MANUAL_TRADE_LOOKBACK_MSC, range_end_utc_msc:now }
+  return { range_start_utc_msc:Math.max(0, now - MANUAL_TRADE_LOOKBACK_MSC), range_end_utc_msc:now }
 }
 
 async function bridgeHistory(account, params = {}, { evidence = false, range:providedRange = null } = {}) {
@@ -538,6 +540,11 @@ async function bridgeHistory(account, params = {}, { evidence = false, range:pro
   }
   if (action === 'history_page') Object.assign(request, { history_snapshot_id:params.history_snapshot_id, cursor:params.cursor })
   if (evidence) {
+    // Evidence reads are a second verification against the exact snapshot
+    // selected by the user.  A Bridge may still reject unsupported snapshot
+    // fields, but omitting the identity would silently permit a fresh source
+    // read to be compared with an old selector result.
+    if (params.history_snapshot_id) request.history_snapshot_id = params.history_snapshot_id
     request.evidence_position_ids = params.evidence_position_ids
     request.evidence_order_tickets = params.evidence_order_tickets
   }
@@ -652,6 +659,20 @@ function manualTradeUnavailable({ pageSize, historySnapshotId = null, reason = '
     ...(history_scope_note ? { history_scope_note } : {}),
     history_source_limited:Boolean(history_source_limited),
   }
+}
+
+function issueManualTradeSelectionContext({ actor, account, range, historySnapshotId, nowUtcMsc } = {}) {
+  if (!range || !historySnapshotId) return null
+  return createManualTradeSelectionContext({ userId:actor?.id, tradingAccountId:account?.id,
+    platform:account?.platform, rangeStartUtcMsc:range.range_start_utc_msc,
+    rangeEndUtcMsc:range.range_end_utc_msc, historySnapshotId,
+    nowUtcMsc:Number.isSafeInteger(Number(nowUtcMsc)) ? Number(nowUtcMsc) : Date.now() })
+}
+
+function attachManualTradeSelectionContext(result, contextToken) {
+  if (!contextToken || !result || result.unavailable) return result
+  return { ...result, selection_context_token:contextToken,
+    pagination:result.pagination ? { ...result.pagination, selection_context_token:contextToken } : result.pagination }
 }
 
 function historySyncFromPayload(payload = {}) {
@@ -774,9 +795,34 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
     chan_timeframes:timeframes,
   } })
   const marketData = { schema_version:1, status:'complete', reason:null, timeframes,
-    chan_requirement:chanRequirement, trades:{} }
-  if (!timeframes.length) return { ...marketData, status:'partial', reason:'market_data_plan_missing' }
+    chan_requirement:chanRequirement, evidence_issues:[], trades:{} }
+  const addIssue = issue => {
+    const normalized = { scope:String(issue.scope || 'market'), timeframe:issue.timeframe ? String(issue.timeframe) : null,
+      category:String(issue.category || 'market_data'), data_status:String(issue.data_status || 'unknown'),
+      structure_status:String(issue.structure_status || 'not_applicable'), code:String(issue.code || 'market_data_unavailable') }
+    const key = `${normalized.scope}:${normalized.timeframe || ''}:${normalized.code}`
+    if (!marketData.evidence_issues.some(item => `${item.scope}:${item.timeframe || ''}:${item.code}` === key)) {
+      marketData.evidence_issues.push(normalized)
+    }
+  }
+  const marketIssueCode = reason => {
+    const value = String(reason || '').toLowerCase()
+    if (value.includes('clock') || value.includes('time_location')) return 'terminal_clock_untrusted'
+    if (value.includes('boundary')) return 'market_candle_boundary_insufficient'
+    if (value.includes('gap') || value.includes('continuity') || value.includes('coverage') || value.includes('truncated')) return 'market_candle_gap'
+    if (value.includes('unsupported')) return 'chan_timeframe_unsupported'
+    if (value.includes('market_data_plan')) return 'market_data_plan_invalid'
+    return 'market_data_unavailable'
+  }
+  if (!timeframes.length) {
+    addIssue({ code:'market_data_plan_invalid' })
+    return { ...marketData, status:'partial', reason:'market_data_plan_missing' }
+  }
   if (chanRequirement.status === 'enabled' && (chanRequirement.unsupported_timeframes || []).length) {
+    for (const timeframe of chanRequirement.unsupported_timeframes) {
+      addIssue({ scope:'market', timeframe, category:'chan_data', data_status:'unsupported',
+        structure_status:'unavailable', code:'chan_timeframe_unsupported' })
+    }
     return { ...marketData, status:'partial', reason:'chan_timeframe_unsupported', hash:sha256(marketData) }
   }
   const failures = []
@@ -809,18 +855,48 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
         pre_entry:preEntry, outcome_path:outcomePath }
       if (chanRequirement.status === 'enabled') {
         const chanFrames = [...new Set(chanRequirement.timeframes || [])]
-        const chanComplete = chanFrames.length > 0 && chanFrames.every(timeframe => {
+        const chanEvidence = { pre_entry:{}, outcome:{} }
+        const chanDataFailures = []
+        const chanStructureStatuses = []
+        for (const timeframe of chanFrames) {
           const before = preEntry?.timeframes?.[timeframe]?.chan
           const after = outcomePath?.timeframes?.[timeframe]?.chan
-          return [before, after].every(value => ['complete', 'ok'].includes(String(value?.status || '').toLowerCase()))
-        })
-        if (!chanComplete) {
+          const beforeAssessment = assessChanEvidenceDimensions(chanRequirement, [{ chan:before }])
+          const afterAssessment = assessChanEvidenceDimensions(chanRequirement, [{ chan:after }])
+          chanEvidence.pre_entry[timeframe] = { ...beforeAssessment }
+          chanEvidence.outcome[timeframe] = { ...afterAssessment }
+          chanStructureStatuses.push(beforeAssessment.structure_status, afterAssessment.structure_status)
+          for (const [stage, assessment] of [['pre_entry', beforeAssessment], ['outcome', afterAssessment]]) {
+            if (assessment.data_status !== 'complete') {
+              chanDataFailures.push(`${stage}:${timeframe}:${assessment.reason || 'chan_evidence_incomplete'}`)
+              addIssue({ scope:stage, timeframe, category:'chan_data', data_status:assessment.data_status,
+                structure_status:assessment.structure_status,
+                code:assessment.data_status === 'unsupported' ? 'chan_timeframe_unsupported' : marketIssueCode(assessment.reason) === 'market_data_unavailable'
+                  ? 'chan_data_incomplete' : marketIssueCode(assessment.reason) })
+            } else if (assessment.structure_status === 'insufficient_structure' || assessment.structure_status === 'partial') {
+              addIssue({ scope:stage, timeframe, category:'chan_structure', data_status:'complete',
+                structure_status:assessment.structure_status, code:'chan_structure_insufficient' })
+            }
+          }
+        }
+        path.chan_evidence = chanEvidence
+        path.chan_structure_status = chanStructureStatuses.includes('partial')
+          ? 'partial' : chanStructureStatuses.includes('insufficient_structure')
+            ? 'insufficient_structure' : chanStructureStatuses.length ? 'formed' : 'unavailable'
+        // Structural absence is a valid observation when all requested data
+        // is complete.  Only data failures change the path's evidence status.
+        if (chanFrames.length === 0 || chanDataFailures.length) {
           path.status = 'partial'
-          path.reason = 'chan_evidence_incomplete'
+          path.reason = chanDataFailures[0]?.split(':').at(-1) || 'chan_evidence_incomplete'
         }
       }
       marketData.trades[identity] = path
-      if (path.status !== 'complete') failures.push(`${identity}:${path.reason || preEntry?.reason || outcomePath?.reason || 'market_path_incomplete'}`)
+      if (path.status !== 'complete') {
+        const reason = path.reason || preEntry?.reason || outcomePath?.reason || 'market_path_incomplete'
+        failures.push(`${identity}:${reason}`)
+        addIssue({ scope:preEntry?.status === 'complete' ? 'outcome' : 'pre_entry',
+          timeframe:strategySnapshot?.market_data_plan?.primary_timeframe || timeframes[0], code:marketIssueCode(reason) })
+      }
     } catch (error) {
       const reason = String(error?.message || error || 'market_path_unavailable').slice(0, 96)
       marketData.trades[identity] = { status:'unavailable', reason }
@@ -953,7 +1029,14 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
       // Keep the original cursor field names explicit for older callers:
       // history_snapshot_id:result.history_snapshot_id, next_cursor:result.next_cursor, has_more:hasMore.
       const visibleNext = hasMore && nextCursor ? nextCursor : null
-      return { trades:filtered.slice(0, safeSize).map(item => ({ ...item, normalized:undefined })),
+      if (!historySnapshotId) {
+        return manualTradeUnavailable({ pageSize:safeSize, historySnapshotId,
+          reason:'history_snapshot_unavailable', error:'manual_trade_review_evidence_unavailable',
+          scannedSourcePages, skippedEmptySourcePages, ...historyScope })
+      }
+      const selectionContextToken = issueManualTradeSelectionContext({ actor, account, range,
+        historySnapshotId, nowUtcMsc:options.nowUtcMsc })
+      return attachManualTradeSelectionContext({ trades:filtered.slice(0, safeSize).map(item => ({ ...item, normalized:undefined })),
         pagination:{ page_size:safeSize, total:result.pagination?.total_count ?? filtered.length,
           history_snapshot_id:historySnapshotId, next_cursor:visibleNext, has_more:Boolean(visibleNext),
           range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
@@ -962,7 +1045,7 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
         range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
         scanned_source_pages:scannedSourcePages, skipped_empty_source_pages:skippedEmptySourcePages,
         unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded,
-        ...historyScope }
+        ...historyScope }, selectionContextToken)
     }
 
     skippedEmptySourcePages += 1
@@ -970,7 +1053,9 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
     // resumed. Do not turn a truncated source into an apparently complete
     // empty list, and do not attempt a scan without a stable snapshot.
     if (!hasMore) {
-      return { trades:[], pagination:{ page_size:safeSize, total:result.pagination?.total_count ?? 0,
+      const selectionContextToken = issueManualTradeSelectionContext({ actor, account, range,
+        historySnapshotId, nowUtcMsc:options.nowUtcMsc })
+      return attachManualTradeSelectionContext({ trades:[], pagination:{ page_size:safeSize, total:result.pagination?.total_count ?? 0,
           history_snapshot_id:historySnapshotId, next_cursor:null, has_more:false,
           range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
           scanned_source_pages:scannedSourcePages, skipped_empty_source_pages:skippedEmptySourcePages },
@@ -978,13 +1063,15 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
         range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
         scanned_source_pages:scannedSourcePages, skipped_empty_source_pages:skippedEmptySourcePages,
         unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded,
-        ...historyScope }
+        ...historyScope }, selectionContextToken)
     }
     // Stop after a bounded number of raw pages. Returning the final cursor
     // lets the user explicitly continue searching without showing a dead
     // "next page" beside an empty result.
     if (scannedSourcePages >= MANUAL_TRADE_SOURCE_SCAN_MAX_PAGES) {
-      return { trades:[], pagination:{ page_size:safeSize, total:0,
+      const selectionContextToken = issueManualTradeSelectionContext({ actor, account, range,
+        historySnapshotId, nowUtcMsc:options.nowUtcMsc })
+      return attachManualTradeSelectionContext({ trades:[], pagination:{ page_size:safeSize, total:0,
           history_snapshot_id:historySnapshotId, next_cursor:nextCursor, has_more:true,
           range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
           scanned_source_pages:scannedSourcePages, skipped_empty_source_pages:skippedEmptySourcePages },
@@ -992,7 +1079,7 @@ export async function listEligibleManualTrades(actor, params = {}, options = {})
         range_start_utc_msc:range?.range_start_utc_msc || null, range_end_utc_msc:range?.range_end_utc_msc || null,
         scanned_source_pages:scannedSourcePages, skipped_empty_source_pages:skippedEmptySourcePages,
         unavailable:false, evidence_status:built.evidence_status, evidence_reason:null, excluded:built.excluded,
-        ...historyScope }
+        ...historyScope }, selectionContextToken)
     }
     const cursor = String(nextCursor)
     if (seenCursors.has(cursor)) {
@@ -1030,11 +1117,14 @@ export async function readManualTradeEvidence(actor, account, selected = [], opt
   if (!positions.length && !orders.length) {
     throw new Error('manual_trade_review_selection_reference_invalid')
   }
-  const recentRange = resolveRecentProfitableRange({}, options.nowUtcMsc)
-  if (!options.history && selected.some(item => Number(item.close_time_utc_msc) < recentRange.range_start_utc_msc
-    || Number(item.close_time_utc_msc) > recentRange.range_end_utc_msc)) {
-    throw new Error('manual_trade_review_source_changed')
-  }
+  const selectionContext = options.history
+    ? null
+    : verifyManualTradeSelectionContext(options.selection_context_token || options.selectionContextToken, {
+      userId:actor?.id, tradingAccountId:account?.id, platform:account?.platform,
+      nowUtcMsc:options.nowUtcMsc })
+  const recentRange = selectionContext
+    ? { range_start_utc_msc:selectionContext.range_start_utc_msc, range_end_utc_msc:selectionContext.range_end_utc_msc }
+    : resolveRecentProfitableRange({}, options.nowUtcMsc)
   if (!options.history) {
     const prepared = await prepareManualTradeRange(account, recentRange)
     if (prepared.supported && !prepared.ready) {
@@ -1042,10 +1132,14 @@ export async function readManualTradeEvidence(actor, account, selected = [], opt
     }
   }
   const result = options.history || await bridgeHistory(account, {
+    history_snapshot_id:selectionContext.history_snapshot_id,
     evidence_position_ids:positions, evidence_order_tickets:orders,
   }, { evidence:true, range:recentRange })
   if (!result || result.status === 'error' || result.error) {
     throw new Error(text(result?.error) || 'manual_trade_review_evidence_unavailable')
+  }
+  if (selectionContext && String(result.history_snapshot_id || '') !== String(selectionContext.history_snapshot_id)) {
+    throw new Error('manual_trade_review_history_snapshot_changed')
   }
   const refs = collectManualTradeEvidenceRefs(result)
   let systemReferences
@@ -1061,6 +1155,11 @@ export async function readManualTradeEvidence(actor, account, selected = [], opt
   for (const trade of matched) {
     const expected = wanted.get(trade.source_identity_hash)
     if (expected !== trade.trade_source_hash) throw new Error('manual_trade_review_source_changed')
+    if (!options.history && (!Number.isFinite(Number(trade.close_time_utc_msc))
+      || Number(trade.close_time_utc_msc) < recentRange.range_start_utc_msc
+      || Number(trade.close_time_utc_msc) > recentRange.range_end_utc_msc)) {
+      throw new Error('manual_trade_review_trade_outside_selection_range')
+    }
   }
   const frozenTrades = matched.map(item => ({
     ...item.normalized, source_identity_hash:item.source_identity_hash, trade_source_hash:item.trade_source_hash,

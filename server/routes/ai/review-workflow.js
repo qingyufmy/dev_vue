@@ -2,6 +2,7 @@ import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../..
 import { parseSnapshotJson, sha256, resolveFrozenChanRequirement } from './inference-snapshots.js'
 import { buildReviewMarketPath } from './review-market-path.js'
 import { canManagePlatformAiContent, platformAiContentManagerSql } from './platform-content-access.js'
+import { assessChanEvidenceDimensions } from './chan-evidence-assessment.js'
 
 const REVIEW_DECISIONS = new Set(['good', 'mixed', 'poor', 'insufficient_evidence'])
 const ISSUE_SEVERITIES = new Set(['low', 'medium', 'high', 'critical'])
@@ -82,39 +83,11 @@ export function assessReviewEvidence(row, deals = []) {
 }
 
 export function assessChanEvidenceStatus(requirementOrStatus, timeframeValues = []) {
-  const requirement = requirementOrStatus && typeof requirementOrStatus === 'object'
-    ? requirementOrStatus : { status:requirementOrStatus }
-  const requirementStatus = requirement.status
-  if (requirementStatus === 'disabled') return { status:'not_applicable', reason:null }
-  if (requirementStatus === 'unknown') return { status:'unknown', reason:'chan_requirement_unknown' }
-  if (Array.isArray(requirement.unsupported_timeframes) && requirement.unsupported_timeframes.length) {
-    return { status:'unsupported', reason:'chan_timeframe_unsupported' }
-  }
-  const chans = timeframeValues.map(value => value?.chan).filter(Boolean)
-  if (!chans.length) return { status:'unavailable', reason:'chan_evidence_unavailable' }
-  const unsupported = chans.some(chan => {
-    const codes = chan?.evidence_capabilities?.reason_codes
-    return ['unsupported', 'unsupported_policy', 'unsupported_timeframe_policy'].includes(String(chan?.status || '').toLowerCase())
-      || (Array.isArray(codes) && codes.some(code => String(code).toLowerCase().includes('unsupported')))
-  })
-  if (unsupported) return { status:'unsupported', reason:'chan_timeframe_unsupported' }
-  const incomplete = chans.some(chan => {
-    const capabilities = chan?.evidence_capabilities
-    if (capabilities && capabilities.data_complete === false) return true
-    if (chan.history_sufficient === false || chan.closed_history_sufficient === false) return true
-    if (chan.window_stable === false || chan.cache_internal_gap_unresolved === true) return true
-    if (chan.time_location_reliable === false || chan.structure_time_key_reliable === false) return true
-    if (chan.clock_trust_level && ['unknown', 'untrusted'].includes(String(chan.clock_trust_level).toLowerCase())) return true
-    const continuity = chan.continuity && typeof chan.continuity === 'object' ? chan.continuity : null
-    if (continuity && (continuity.known === false || continuity.reliable === false
-      || continuity.status === 'unknown_session' || continuity.status === 'suspicious_gap'
-      || continuity.cache_internal_gap_unresolved === true)) return true
-    if (['unknown_session', 'suspicious_gap', 'policy_missing'].includes(String(chan.continuity_status || '').toLowerCase())) return true
-    return false
-  })
-  if (incomplete) return { status:'partial', reason:'chan_evidence_incomplete' }
-  const complete = chans.every(chan => ['complete', 'ok'].includes(String(chan?.status || '').toLowerCase()))
-  return complete ? { status:'complete', reason:null } : { status:'partial', reason:'chan_evidence_partial' }
+  const assessment = assessChanEvidenceDimensions(requirementOrStatus, timeframeValues)
+  // Keep the period-review API shape stable while making the shared evaluator
+  // available to manual review and future callers through its orthogonal
+  // data_status/structure_status dimensions.
+  return { status:assessment.status, reason:assessment.reason }
 }
 
 async function loadEvidence(outcomeId) {

@@ -40,6 +40,55 @@ function json(value) {
   return value == null ? null : JSON.stringify(value)
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function parsedJson(value) {
+  if (value == null || value === '') return null
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return value }
+}
+
+function modelTaskIdempotencyConflict(field) {
+  const error = new Error(`model_task_idempotency_conflict:${field}`)
+  error.code = 'model_task_idempotency_conflict'
+  return error
+}
+
+export function assertModelTaskIdempotencyEnvelope(task, input = {}) {
+  if (!task) return true
+  const fields = [
+    ['input_hash', input.inputHash, task.input_hash],
+    ['snapshot_hash', input.snapshotHash, task.snapshot_hash],
+    ['prompt_hash', input.promptHash, task.prompt_hash],
+    ['output_contract_hash', input.outputContractHash, task.output_contract_hash],
+    ['frozen_provider', input.provider, task.frozen_provider],
+    ['frozen_model', input.model, task.frozen_model],
+    ['frozen_protocol', input.protocol, task.frozen_protocol],
+    ['frozen_credential_source', input.credentialSource, task.frozen_credential_source],
+  ]
+  for (const [field, requested, existing] of fields) {
+    if (requested != null && requested !== '' && existing != null && existing !== ''
+      && String(requested) !== String(existing)) throw modelTaskIdempotencyConflict(field)
+  }
+  const requestedProfileId = Number(input.modelProfileId)
+  const existingProfileId = Number(task.frozen_model_profile_id)
+  if (Number.isFinite(requestedProfileId) && requestedProfileId > 0
+    && Number.isFinite(existingProfileId) && existingProfileId > 0
+    && requestedProfileId !== existingProfileId) throw modelTaskIdempotencyConflict('frozen_model_profile_id')
+  if (input.frozenContext != null && task.frozen_context_json != null && task.frozen_context_json !== '') {
+    if (stableJson(input.frozenContext) !== stableJson(parsedJson(task.frozen_context_json))) {
+      throw modelTaskIdempotencyConflict('frozen_context_json')
+    }
+  }
+  return true
+}
+
 export async function appendModelTaskEvent(taskId, eventType, payload = null, attemptId = null, run = queryRun) {
   await run(`INSERT INTO ai_model_task_events
     (task_id, attempt_id, event_type, payload_json, created_at_utc_msc)
@@ -68,6 +117,7 @@ export async function createModelTask(input, run = queryRun) {
   const task = created ? await queryOne('SELECT * FROM ai_model_tasks WHERE task_id = ?', [taskId])
     : await queryOne(`SELECT * FROM ai_model_tasks WHERE task_kind = ? AND idempotency_key = ? LIMIT 1`,
       [input.taskKind, input.idempotencyKey])
+  if (!created) assertModelTaskIdempotencyEnvelope(task, input)
   if (created) await appendModelTaskEvent(taskId, 'task_created', { status:'queued' }, null, run)
   return { task, created }
 }

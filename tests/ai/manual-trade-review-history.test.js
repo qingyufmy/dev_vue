@@ -5,6 +5,7 @@ const bridge = vi.hoisted(() => ({ mt5Bridge:vi.fn() }))
 const bridgeRuntime = vi.hoisted(() => ({ platform:'mt5' }))
 vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/market-data.js', () => bridge)
+vi.mock('../../server/config.js', () => ({ JWT_SECRET:'manual-review-test-secret' }))
 vi.mock('../../server/bridge-ws.js', () => ({
   getBridgeRuntimeDiagnostics:() => ({ terminals:[{ terminal_instance_id:'terminal-1', broker_server:'Broker-Demo', login:'1001', platform:bridgeRuntime.platform }] }),
   getHistoryTerminalClock:() => ({ timezone_offset_minutes:180, clock_status:'verified' }),
@@ -14,9 +15,10 @@ vi.mock('../../server/routes/ai/terminal-clock.js', () => ({ trustedTerminalCloc
 vi.mock('../../server/routes/ai/review-market-path.js', () => ({ buildReviewMarketPath:vi.fn() }))
 
 import { buildEligibleManualTrades, listEligibleManualTrades, readManualTradeEvidence } from '../../server/routes/ai/manual-trade-evidence.js'
+import { createManualTradeSelectionContext } from '../../server/routes/ai/manual-trade-selection-context.js'
 
 const accountRow = { id:5, user_id:7, broker_server:'Broker-Demo', login_account:'1001', observe_status:'active',
-  current_user_id:7, current_trading_account_id:5, account_currency:'USD' }
+  current_user_id:7, current_trading_account_id:5, account_currency:'USD', platform:'mt5' }
 
 const completeSync = { complete:true, requested_range_complete:true, coverage_complete:true,
   clock_status:'verified', timezone_offset_minutes:180 }
@@ -57,6 +59,12 @@ function compactProtectionPage({ stopLoss = 0, takeProfit = 0 } = {}) {
     ], history_snapshot_id:'protection-snapshot', next_cursor:null, has_more:false,
     history_sync:{ ...completeSync },
   }
+}
+
+function selectionContextToken(snapshot = 'snapshot-1') {
+  return createManualTradeSelectionContext({ userId:7, tradingAccountId:5, platform:'mt5',
+    rangeStartUtcMsc:0, rangeEndUtcMsc:10_000, historySnapshotId:snapshot,
+    nowUtcMsc:10_000, ttlMsc:900_000 })
 }
 
 describe('manual trade review history cursor contract', () => {
@@ -379,10 +387,15 @@ describe('manual trade review history cursor contract', () => {
       entry_order_ticket:selected.entry_order_ticket,
     }], {
       strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } },
-      buildPath:async () => ({ status:'complete' }), nowUtcMsc:10_000,
+      // The context was issued at 10_000; advancing the caller clock must not
+      // silently recompute a new seven-day range.
+      buildPath:async () => ({ status:'complete' }), nowUtcMsc:20_000,
+      selection_context_token:listed.selection_context_token,
     })
     expect(reread.trades[0].trade_source_hash).toBe(selected.trade_source_hash)
     expect(reread.trades[0]).toMatchObject({ stop_loss:null, take_profit:null })
+    const evidenceCall = bridge.mt5Bridge.mock.calls.filter(([, action]) => action === 'history_evidence').at(-1)
+    expect(evidenceCall?.[2]).toMatchObject({ history_snapshot_id:'protection-snapshot', range_start_utc_msc:0, range_end_utc_msc:10_000 })
   })
 
   it('preserves positive stop-loss and take-profit values during normalization', () => {
@@ -411,6 +424,7 @@ describe('manual trade review history cursor contract', () => {
     }], {
       strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } },
       buildPath:async () => ({ status:'complete' }), nowUtcMsc:10_000,
+      selection_context_token:selectionContextToken(history.history_snapshot_id),
     })
     const evidenceCall = bridge.mt5Bridge.mock.calls.find(([, action]) => action === 'history_evidence')
     expect(result).toMatchObject({ evidence_status:'complete', trades:[{ source_identity_hash:eligible.source_identity_hash }] })
@@ -435,9 +449,29 @@ describe('manual trade review history cursor contract', () => {
     }], {
       strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } },
       buildPath:async () => ({ status:'complete' }), nowUtcMsc:10_000,
+      selection_context_token:selectionContextToken(history.history_snapshot_id),
     })
     const evidenceCall = bridge.mt5Bridge.mock.calls.find(([, action]) => action === 'history_evidence')
     expect(evidenceCall?.[2]).toMatchObject({ evidence_position_ids:[], evidence_order_tickets:[eligible.entry_order_ticket] })
+  })
+
+  it('fails closed when the Bridge evidence snapshot changes after selection', async () => {
+    const history = validEvidencePage()
+    history.history_snapshot_id = 'snapshot-after-refresh'
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
+      if (action === 'history_evidence') return history
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+    const eligible = buildEligibleManualTrades(history, { account:accountRow, positions:[], systemReferences:new Map() }).trades[0]
+    await expect(readManualTradeEvidence({ id:7 }, accountRow, [{
+      trade_id:eligible.trade_id, source_identity_hash:eligible.source_identity_hash,
+      trade_source_hash:eligible.trade_source_hash, position_id:'1001', entry_order_ticket:'2001',
+    }], {
+      strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } }, nowUtcMsc:10_000,
+      selection_context_token:selectionContextToken('snapshot-selected'),
+    })).rejects.toThrow('manual_trade_review_history_snapshot_changed')
   })
 
   it('rejects empty evidence references before any Bridge call', async () => {

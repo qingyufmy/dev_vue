@@ -124,6 +124,7 @@ describe('manual trade review frontend contract', () => {
 
   it('sends only stable history references when creating a review', () => {
     const create = block('async function createManualTradeReviewTask', 'function manualTradeReviewCaseStatus')
+    expect(create).toContain('selection_context_token:state.manualTradeReviewSelectionContextToken')
     expect(create).toContain('source_identity_hash:item.source_identity_hash')
     expect(create).toContain('trade_source_hash:item.trade_source_hash')
     expect(create).toContain('position_id:item.position_id || null')
@@ -138,8 +139,21 @@ describe('manual trade review frontend contract', () => {
     expect(html).toContain('manual-review-create-ref1')
     expect(html).toContain('manualmt4history1')
     expect(html).toContain('manual-review-frontend2')
+    expect(html).toContain('manual-review-durable-stage1')
     expect(css).toContain('.manual-review-trade-row')
     expect(responsive).toContain('.manual-review-filter-bar .btn')
     expect(responsive).toContain('min-height: 44px')
+  })
+
+  it('keeps old versions read-only while a new generation is active and labels retry waits accurately', () => {
+    const progress = block('function manualTradeReviewProgressHtml', 'function manualTradeReviewEvidenceIssuesHtml')
+    const detail = block('function renderManualTradeReviewV2Detail', 'function manualTradeReviewListHtml')
+    expect(progress).toContain('["retry_wait", "status_unknown"]')
+    expect(progress).toContain('waitingForRetry ? -1')
+    expect(detail).toContain('${editable ?')
+    expect(detail).toContain('当前生成中 · 旧版本只读')
+    expect(detail).toContain('manualTradeReviewEvidenceIssuesHtml(detail.evidence_issues)')
+    expect(detail).toContain('行情完整</strong>：当前窗口未形成足够的缠论结构')
+    expect(app).toContain('await assertManualTradeReviewActionable(caseId, versionId)')
   })
 })

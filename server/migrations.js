@@ -6435,6 +6435,59 @@ const migrations = [
           ADD COLUMN task_deadline_at DATETIME DEFAULT NULL AFTER max_attempts`)
       }
     }
+  },
+  {
+    id: '192_manual_trade_review_durable_stage_runs',
+    async up() {
+      // Stage rows are an additive, append-friendly ledger for each manual
+      // review generation.  Do not fold these checkpoints back into the
+      // single job row: retries must retain the prior generation's task and
+      // output hashes for audit and safe recovery.
+      await queryRun(`CREATE TABLE IF NOT EXISTS manual_trade_review_stage_runs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        case_id BIGINT UNSIGNED NOT NULL,
+        job_id BIGINT UNSIGNED NOT NULL,
+        generation_no INT UNSIGNED NOT NULL,
+        stage VARCHAR(24) NOT NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        model_task_id VARCHAR(128) DEFAULT NULL,
+        frozen_runtime_json MEDIUMTEXT NOT NULL,
+        frozen_runtime_hash CHAR(64) NOT NULL,
+        input_hash CHAR(64) DEFAULT NULL,
+        normalized_output_json MEDIUMTEXT DEFAULT NULL,
+        normalized_output_hash CHAR(64) DEFAULT NULL,
+        last_error_code VARCHAR(128) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        UNIQUE KEY uk_manual_trade_review_stage_generation (job_id, generation_no, stage),
+        UNIQUE KEY uk_manual_trade_review_stage_model_task (model_task_id),
+        KEY idx_manual_trade_review_stage_status (status, updated_at),
+        KEY idx_manual_trade_review_stage_case_generation (case_id, generation_no),
+        KEY idx_manual_trade_review_stage_job_generation (job_id, generation_no)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // A deployment can be resumed after CREATE TABLE succeeded but before
+      // schema_migrations was recorded.  Ensure the named indexes are present
+      // without touching existing rows or changing migrations 178/191.
+      const indexes = await queryAll(`SELECT INDEX_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'manual_trade_review_stage_runs'`)
+      const existing = new Set(indexes.map(row => String(row.INDEX_NAME)))
+      const missing = [
+        ['uk_manual_trade_review_stage_generation', 'ADD UNIQUE KEY uk_manual_trade_review_stage_generation (job_id, generation_no, stage)'],
+        ['uk_manual_trade_review_stage_model_task', 'ADD UNIQUE KEY uk_manual_trade_review_stage_model_task (model_task_id)'],
+        ['idx_manual_trade_review_stage_status', 'ADD KEY idx_manual_trade_review_stage_status (status, updated_at)'],
+        ['idx_manual_trade_review_stage_case_generation', 'ADD KEY idx_manual_trade_review_stage_case_generation (case_id, generation_no)'],
+        ['idx_manual_trade_review_stage_job_generation', 'ADD KEY idx_manual_trade_review_stage_job_generation (job_id, generation_no)'],
+      ]
+      for (const [name, definition] of missing) {
+        if (!existing.has(name)) {
+          await queryRun(`ALTER TABLE manual_trade_review_stage_runs ${definition}`)
+        }
+      }
+    }
   }
 ]
 

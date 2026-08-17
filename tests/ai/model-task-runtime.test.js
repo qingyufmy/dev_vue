@@ -10,7 +10,7 @@ vi.mock('../../server/db.js', () => ({
   withTransaction:vi.fn(),
 }))
 
-import { assertModelTaskTransition, canTransitionModelTask, createModelTask,
+import { assertModelTaskIdempotencyEnvelope, assertModelTaskTransition, canTransitionModelTask, createModelTask,
   finishModelTaskAttempt, markModelTaskCompletedStaleById, markModelTaskSucceededFromResult,
   persistModelTaskBudget,
   recoverAbandonedAutoInferenceTasks, recoverAbandonedBusinessModelTasks, renewModelTaskLease,
@@ -34,6 +34,36 @@ describe('model task runtime state and fencing', () => {
     expect(result).toEqual({ task:{ task_id:'existing', status:'provider_running' }, created:false })
     expect(mockQueryOne).toHaveBeenCalledWith(expect.stringContaining('task_kind = ? AND idempotency_key = ?'),
       ['auto_inference', 'strategy:7:XAUUSD:cycle:9'])
+  })
+
+  it('rejects an idempotent task when its frozen execution envelope changes', async () => {
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:0 })
+    mockQueryOne.mockResolvedValueOnce({
+      task_id:'existing', status:'queued', input_hash:'old-input',
+      frozen_provider:'openai', frozen_model:'model-a', frozen_model_profile_id:7,
+      frozen_protocol:'chat_completions', frozen_context_json:JSON.stringify({ generation_no:2, stage:'counterfactual' }),
+    })
+    await expect(createModelTask({
+      taskKind:'manual_analysis', idempotencyKey:'manual:19:2:counterfactual', inputHash:'new-input',
+      provider:'openai', model:'model-a', modelProfileId:7, protocol:'chat_completions',
+      frozenContext:{ stage:'counterfactual', generation_no:2 },
+    })).rejects.toMatchObject({ code:'model_task_idempotency_conflict' })
+  })
+
+  it('accepts equivalent frozen context regardless of object key order', () => {
+    expect(assertModelTaskIdempotencyEnvelope({
+      input_hash:'same', frozen_context_json:'{"stage":"outcome_review","generation_no":3}',
+    }, {
+      inputHash:'same', frozenContext:{ generation_no:3, stage:'outcome_review' },
+    })).toBe(true)
+  })
+
+  it('keeps historical null envelope fields compatible', () => {
+    expect(assertModelTaskIdempotencyEnvelope({
+      task_id:'legacy', input_hash:null, frozen_provider:null, frozen_context_json:null,
+    }, {
+      inputHash:'new-hash', provider:'openai', frozenContext:{ generation_no:1 },
+    })).toBe(true)
   })
 
   it('renews a lease only with the exact token and fencing generation', async () => {

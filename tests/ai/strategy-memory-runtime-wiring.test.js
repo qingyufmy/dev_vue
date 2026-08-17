@@ -27,10 +27,12 @@ describe('unified strategy memory runtime wiring', () => {
 
   it('uses one frozen library in both manual-trade review model stages', () => {
     const review = read('server/routes/ai/manual-trade-review.js')
-    expect(review).toContain('const memorySnapshot = (await getStrategyMemoryLibraryForRuntime')
+    expect(review).toContain('const memory = memorySnapshot || (await getStrategyMemoryLibraryForRuntime')
+    expect(review).toContain('const memorySnapshot = runtimeContext.memory')
+    expect(review).toContain('content:memory?.content_text')
     expect(review).toContain('counterfactualPrompt(reviewCase, sources, memorySnapshot)')
     expect(review).toContain('outcomeReviewPrompt(reviewCase, sources, counterfactual, memorySnapshot)')
-    expect(review).toContain("injectionKind:'manual_trade_review'")
+    expect(review).toContain('injectionKind:`manual_trade_review_${stage}`')
   })
 
   it('keeps historical comparison replay on its original frozen user prompt', () => {

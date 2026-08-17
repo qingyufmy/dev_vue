@@ -4,6 +4,7 @@ const db = vi.hoisted(() => ({
   beijingNow:vi.fn(() => '2026-08-10 12:00:00'), queryAll:vi.fn(), queryOne:vi.fn(), queryRun:vi.fn(), withTransaction:vi.fn(),
 }))
 vi.mock('../../server/db.js', () => db)
+vi.mock('../../server/config.js', () => ({ JWT_SECRET:'manual-review-test-secret' }))
 vi.mock('../../server/routes/ai/platform-content-access.js', () => ({ canManagePlatformAiContent:() => true }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject:vi.fn() }))
 vi.mock('../../server/routes/ai/model-providers.js', () => ({ MODEL_PROVIDER_DEFAULTS:{}, modelProviderProtocol:() => 'chat' }))
@@ -21,6 +22,7 @@ vi.mock('../../server/routes/ai/manual-trade-evidence.js', () => ({
 import { __manualTradeReviewTest, confirmManualTradeReview, createManualTradeReview, manualTradeReviewOutputContract, validateCounterfactualAnalysis,
   validateManualTradeReviewContent, validateManualTradeSelection, recoverAbandonedManualTradeReviewJobs,
   retryManualTradeReview } from '../../server/routes/ai/manual-trade-review.js'
+import { createManualTradeSelectionContext } from '../../server/routes/ai/manual-trade-selection-context.js'
 
 const source = { source_identity_hash:'trade-a', normalized_trade_json:JSON.stringify({
   symbol:'EURUSD', direction:'buy', entry_time_utc_msc:1_000, close_time_utc_msc:2_000, net_profit:10,
@@ -188,11 +190,12 @@ describe('manual profitable trade counterfactual review contract', () => {
     expect(messages[1].content).toContain('等待结构确认')
   })
 
-  it('fails closed after an expired two-stage provider lease', async () => {
+  it('requires an explicit retry for a legacy in-flight generation without a durable stage ledger', async () => {
     db.queryAll.mockResolvedValueOnce([{ id:19, case_id:23, attempt_count:1, max_attempts:3, progress_stage:'counterfactual_analysis' }])
     db.queryRun.mockResolvedValue({ changes:1 })
     const result = await recoverAbandonedManualTradeReviewJobs({ now:'2026-08-10 12:00:00', limit:10 })
     expect(result).toMatchObject({ scanned:1, requeued:0, failed:1, manual_retry_required:1 })
+    expect(db.queryRun.mock.calls[0][1]).toContain('manual_trade_review_generation_expired_manual_retry_required')
   })
 
   it('keys the generic model task by job generation, never by outer attempt', () => {
@@ -220,6 +223,23 @@ describe('manual profitable trade counterfactual review contract', () => {
     const error = __manualTradeReviewTest.manualTradeReviewModelTaskTerminalError({ status:'failed_terminal' })
     expect(error).toMatchObject({ code:'manual_trade_review_model_task_terminal_requires_retry', manualTradeReviewTerminalTask:true })
     expect(__manualTradeReviewTest.manualTradeReviewModelTaskTerminalError({ status:'retry_wait' })).toBeNull()
+  })
+
+  it('holds a status-unknown stage without consuming the business retry budget', async () => {
+    const hold = __manualTradeReviewTest.manualTradeReviewStageTaskError('counterfactual', 'task_status_unknown',
+      { terminal:false, hold:true })
+    hold.manualTradeReviewDeferUntilUtcMs = Date.now() + 30_000
+    expect(hold).toMatchObject({ manualTradeReviewHold:true })
+    expect(hold.manualTradeReviewTerminalTask).toBeUndefined()
+    db.queryRun.mockReset()
+    db.queryRun.mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    const result = await __manualTradeReviewTest.deferManualTradeReviewForModelTaskLease({
+      id:19, case_id:23, generation_no:4, lease_token:'lease-4', task_deadline_at:'2099-08-10 12:30:00',
+    }, hold)
+    expect(result).toMatchObject({ status:'queued', error_code:'manual_trade_review_counterfactual_task_status_unknown' })
+    const [sql, params] = db.queryRun.mock.calls[0]
+    expect(sql).toContain('attempt_count = GREATEST(0, attempt_count - 1)')
+    expect(params.slice(0, 3)).toEqual(['queued', 'status_unknown', 'manual_trade_review_counterfactual_task_status_unknown'])
   })
 
   it('recovers a succeeded generic task only when its business version was already committed', () => {
@@ -278,9 +298,11 @@ describe('manual profitable trade counterfactual review contract', () => {
     const sourceHashValue = 'b'.repeat(64)
     const result = await createManualTradeReview({ id:7 }, {
       client_request_id:'req-generation-1', trading_account_id:3, strategy_id:5,
+      selection_context_token:createManualTradeSelectionContext({ userId:7, tradingAccountId:3, platform:'mt5',
+        rangeStartUtcMsc:0, rangeEndUtcMsc:10_000_000_000_000, historySnapshotId:'snapshot-1' }),
       trades:[{ source_identity_hash:identity, trade_source_hash:sourceHashValue, position_id:'123' }],
     }, {
-      account:{ id:3, terminal_instance_id:'terminal-1', broker_server:'Broker-Demo', login_account:'1001' },
+      account:{ id:3, user_id:7, platform:'mt5', terminal_instance_id:'terminal-1', broker_server:'Broker-Demo', login_account:'1001' },
       strategy:{ snapshot:{ id:5, version:2 }, hash:'strategy-hash' },
       evidence:{ evidence_status:'complete', market_data:{ status:'complete' },
         trades:[{ identity:{ identity_hash:identity, position_id:'123' }, symbol:'EURUSD', entry_time_utc_msc:1, close_time_utc_msc:2 }],
@@ -293,6 +315,20 @@ describe('manual profitable trade counterfactual review contract', () => {
     expect(jobInsert?.sql).toContain('task_deadline_at')
     expect(jobInsert?.sql).toContain("VALUES (?, ?, 1, 'queued'")
     expect(jobInsert?.params[2]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+  })
+
+  it('replays an existing client request without requiring an expired selection context', async () => {
+    db.queryOne.mockReset()
+    db.queryOne.mockResolvedValueOnce({ id:19, user_id:7, trading_account_id:3, strategy_id:5,
+      strategy_version:2, strategy_scope:'platform', evidence_status:'complete', status:'queued',
+      current_version_id:null, approved_version_id:null, created_at:'2026-08-10 12:00:00', updated_at:'2026-08-10 12:00:00',
+      generation_no:1, job_status:'queued', progress_stage:'queued', attempt_count:0, last_error_code:null })
+    const result = await createManualTradeReview({ id:7 }, {
+      client_request_id:'req-already-created',
+      trades:[{ source_identity_hash:identityHash, trade_source_hash:sourceHash, position_id:'123' }],
+      selection_context_token:'expired-or-missing-is-irrelevant-for-replay',
+    })
+    expect(result).toMatchObject({ created:false, case:{ id:19, status:'queued' } })
   })
 
   it('retries in one transaction with generation increment and a fresh deadline', async () => {

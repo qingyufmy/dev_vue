@@ -10,6 +10,7 @@ vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel:
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
 import { assessChanEvidenceStatus, assessReviewEvidence, assessReviewStrategyEligibility, validateReviewContent } from '../../server/routes/ai/review-workflow.js'
+import { assessChanEvidenceDimensions } from '../../server/routes/ai/chan-evidence-assessment.js'
 
 const completeRow = (overrides = {}) => ({
   status: 'closed', review_eligible_at: '2026-07-15 12:00:00', attribution_status: 'attributed',
@@ -31,6 +32,27 @@ describe('trade review evidence completeness', () => {
     })
     expect(assessChanEvidenceStatus({ status:'enabled' }, [{ chan:{ status:'complete', evidence_capabilities:{ data_complete:false } } }]))
       .toEqual({ status:'partial', reason:'chan_evidence_incomplete' })
+  })
+
+  it('keeps a complete window with insufficient bis as structural insufficiency', () => {
+    const chan = { status:'insufficient_bis', window_stable:false, time_location_reliable:true,
+      structure_time_key_reliable:true, clock_trust_level:'verified',
+      evidence_capabilities:{ data_complete:true, history_complete:true, continuity_complete:true } }
+    expect(assessChanEvidenceDimensions({ status:'enabled' }, [{ chan }])).toMatchObject({
+      data_status:'complete', structure_status:'insufficient_structure',
+      status:'partial', reason:'chan_structure_insufficient',
+    })
+    expect(assessChanEvidenceStatus({ status:'enabled' }, [{ chan }]))
+      .toEqual({ status:'partial', reason:'chan_structure_insufficient' })
+  })
+
+  it('fails closed when the clock or absolute time location is untrusted', () => {
+    const chan = { status:'insufficient_bis', window_stable:false, time_location_reliable:false,
+      absolute_time_location_reliable:false, structure_time_key_reliable:true, clock_trust_level:'untrusted',
+      evidence_capabilities:{ data_complete:true, history_complete:true, continuity_complete:true } }
+    expect(assessChanEvidenceDimensions({ status:'enabled' }, [{ chan }])).toMatchObject({
+      data_status:'incomplete', reason:'chan_evidence_incomplete',
+    })
   })
 
   it('accepts only exact, closed evidence with the original historical prompt', () => {

@@ -164,6 +164,29 @@ describe('manual trade evidence admission', () => {
     expect(calls.every(call => call.chanRequirement.status === 'enabled')).toBe(true)
     expect(calls[0].chanRequirement.timeframes).toEqual(['M15', 'H1'])
     expect(market).toMatchObject({ status:'partial', reason:expect.stringContaining('chan_evidence_incomplete') })
+    expect(market.evidence_issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category:'chan_data', code:'chan_data_incomplete' }),
+    ]))
+  })
+
+  it('keeps complete Chan data usable when the fixed window has insufficient bis', async () => {
+    const trade = buildEligibleManualTrades(payload(), { account }).trades[0]
+    const chan = { status:'insufficient_bis', window_stable:false, time_location_reliable:true,
+      absolute_time_location_reliable:true, structure_time_key_reliable:true, clock_trust_level:'verified',
+      evidence_capabilities:{ data_complete:true, history_complete:true, continuity_complete:true } }
+    const market = await buildManualTradeMarketEvidence({ actor:{ id:7 }, account, trades:[trade],
+      strategySnapshot:{ version:8, use_chan_analysis:true, market_data_plan:{ primary_timeframe:'M15',
+        timeframes:[{ timeframe:'M15' }, { timeframe:'H1' }] } },
+      buildPath:async () => ({ status:'complete', timeframes:{ M15:{ status:'complete', chan }, H1:{ status:'complete', chan } } }),
+    })
+    expect(market).toMatchObject({ status:'complete', reason:null })
+    expect(market.trades[trade.source_identity_hash].chan_evidence.pre_entry.M15).toMatchObject({
+      data_status:'complete', structure_status:'insufficient_structure',
+    })
+    expect(market.evidence_issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scope:'pre_entry', timeframe:'M15', data_status:'complete',
+        structure_status:'insufficient_structure', code:'chan_structure_insufficient' }),
+    ]))
   })
 
   it('fails closed instead of accepting more than one trade', async () => {
