@@ -2,7 +2,7 @@ import * as modelTaskRuntime from './model-task-runtime.js'
 import { classifyModelProviderError } from './model-provider-adapters.js'
 
 const { beginModelTaskAttempt, claimModelTaskById, createModelTask, finishModelTaskAttempt,
-  persistModelTaskBudget, renewModelTaskLease, transitionModelTask } = modelTaskRuntime
+  persistModelTaskBudget, renewModelTaskLease, succeedModelTaskInTransaction, transitionModelTask } = modelTaskRuntime
 
 const CLAIMABLE_STATUSES = new Set(['queued', 'retry_wait'])
 const TERMINAL_STATUSES = new Set(['cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected'])
@@ -78,6 +78,7 @@ export async function createModelTaskTracker(input, {
   task = await transitionModelTask(task, 'preparing')
   let attempt = null
   let providerAttemptSequence = 0
+  let pendingTransactionalSuccess = null
   // Keep the last provider attempt outcome in memory while the durable
   // attempt row remains the source of truth.  A failed fetch can leave no
   // response to inspect, so the request id/status captured by the usage
@@ -321,9 +322,24 @@ export async function createModelTaskTracker(input, {
     resultReady:transitionToResultReady,
     applying:() => statusTransition('applying'),
     succeeded:patch => statusTransition('succeeded', patch),
+    succeedInTransaction:(run, patch = {}) => enqueue(async () => {
+      // Stop future renewals before the transaction obtains the task row
+      // lock.  Do not mutate the in-memory terminal state until the caller's
+      // surrounding transaction has actually committed.
+      if (renewTimer) clearInterval(renewTimer)
+      pendingTransactionalSuccess = await succeedModelTaskInTransaction(run, task, patch)
+      return { ...pendingTransactionalSuccess }
+    }),
+    commitTransactionSucceeded:() => enqueue(async () => {
+      if (!pendingTransactionalSuccess) throw trackerError('model_task_transaction_success_missing', task.status)
+      task = pendingTransactionalSuccess
+      pendingTransactionalSuccess = null
+      return task
+    }),
     completedStale:reason => transitionToTerminal('completed_stale', reason),
     completedRejected:reason => transitionToTerminal('completed_rejected', reason),
     failed:(error, exhausted = false) => enqueue(async () => {
+      pendingTransactionalSuccess = null
       // Once a validated result reached result_ready/applying, retry_wait would
       // require replaying an output that is no longer durably stored in the
       // generic envelope. Fail that attempt terminally instead of performing

@@ -13,8 +13,8 @@ vi.mock('../../server/db.js', () => ({
 import { assertModelTaskIdempotencyEnvelope, assertModelTaskTransition, canTransitionModelTask, createModelTask,
   finishModelTaskAttempt, markModelTaskCompletedStaleById, markModelTaskSucceededFromResult,
   persistModelTaskBudget,
-  recoverAbandonedAutoInferenceTasks, recoverAbandonedBusinessModelTasks, renewModelTaskLease,
-  touchModelTaskActivity, transitionModelTask } from '../../server/routes/ai/model-task-runtime.js'
+  reconcileModelTaskResultInTransaction, recoverAbandonedAutoInferenceTasks, recoverAbandonedBusinessModelTasks, renewModelTaskLease,
+  succeedModelTaskInTransaction, touchModelTaskActivity, transitionModelTask } from '../../server/routes/ai/model-task-runtime.js'
 
 describe('model task runtime state and fencing', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -143,6 +143,60 @@ describe('model task runtime state and fencing', () => {
     await expect(transitionModelTask({ task_id:'task-1', status:'result_ready', lease_token:'old', fencing_token:3 },
       'applying')).rejects.toThrow('model_task_fence_lost')
     expect(mockQueryRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('commits succeeded through the caller transaction with the exact applying fence', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce([{ affectedRows:1 }])
+      .mockResolvedValueOnce([{ affectedRows:1 }])
+    const task = { task_id:'task-tx', status:'applying', lease_token:'lease-tx', fencing_token:9,
+      result_hash:'result-hash' }
+    await expect(succeedModelTaskInTransaction(run, task, {
+      resultRef:'manual_trade_review_case:44', resultHash:'result-hash',
+    })).resolves.toMatchObject({ status:'succeeded', result_ref:'manual_trade_review_case:44', lease_token:null })
+    expect(run.mock.calls[0][0]).toContain("status = 'applying'")
+    expect(run.mock.calls[0][0]).toContain('lease_token = ? AND fencing_token = ?')
+    expect(run.mock.calls[0][1].slice(-4)).toEqual(['task-tx', 'lease-tx', 9, 'result-hash'])
+    expect(run.mock.calls[1][1][2]).toBe('status_changed')
+  })
+
+  it('rejects the caller transaction when the applying task fence is lost', async () => {
+    const run = vi.fn().mockResolvedValueOnce([{ affectedRows:0 }])
+    await expect(succeedModelTaskInTransaction(run, {
+      task_id:'task-stale', status:'applying', lease_token:'old', fencing_token:2, result_hash:'hash',
+    }, { resultRef:'manual_trade_review_case:45', resultHash:'hash' })).rejects.toThrow('model_task_fence_lost')
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects the caller transaction when the terminal event cannot be written', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce([{ affectedRows:1 }])
+      .mockResolvedValueOnce([{ affectedRows:0 }])
+    await expect(succeedModelTaskInTransaction(run, {
+      task_id:'task-event', status:'applying', lease_token:'lease-event', fencing_token:3, result_hash:'hash',
+    }, { resultRef:'manual_trade_review_case:48', resultHash:'hash' })).rejects.toThrow('model_task_event_write_failed')
+    expect(run).toHaveBeenCalledTimes(2)
+  })
+
+  it('reconciles an expired applying task inside the domain transaction', async () => {
+    const run = vi.fn()
+      .mockResolvedValueOnce([[{ task_id:'task-recover', status:'applying', result_hash:'hash',
+        lease_token:'expired', lease_expires_at_utc_msc:90 }]])
+      .mockResolvedValueOnce([{ affectedRows:1 }])
+      .mockResolvedValueOnce([{ affectedRows:1 }])
+    await expect(reconcileModelTaskResultInTransaction(run, 'task-recover', {
+      resultRef:'manual_trade_review_case:46', resultHash:'hash',
+    }, { nowUtcMs:100 })).resolves.toMatchObject({ status:'succeeded', lease_token:null })
+    expect(run.mock.calls[1][0]).toContain('lease_expires_at_utc_msc <= ?')
+  })
+
+  it('does not reconcile a durable result while the original worker lease is active', async () => {
+    const run = vi.fn().mockResolvedValueOnce([[{ task_id:'task-live', status:'applying', result_hash:'hash',
+      lease_token:'live', lease_expires_at_utc_msc:200 }]])
+    await expect(reconcileModelTaskResultInTransaction(run, 'task-live', {
+      resultRef:'manual_trade_review_case:47', resultHash:'hash',
+    }, { nowUtcMs:100 })).rejects.toThrow('model_task_lease_active')
+    expect(run).toHaveBeenCalledTimes(1)
   })
 
   it('reconciles a durable result without re-running the worker', async () => {

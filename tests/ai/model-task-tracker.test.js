@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const runtime = vi.hoisted(() => ({
   createModelTask:vi.fn(), claimModelTaskById:vi.fn(), transitionModelTask:vi.fn(),
   renewModelTaskLease:vi.fn(), beginModelTaskAttempt:vi.fn(), finishModelTaskAttempt:vi.fn(),
-  persistModelTaskBudget:vi.fn(), touchModelTaskActivity:vi.fn(),
+  persistModelTaskBudget:vi.fn(), succeedModelTaskInTransaction:vi.fn(), touchModelTaskActivity:vi.fn(),
 }))
 
 vi.mock('../../server/routes/ai/model-task-runtime.js', () => runtime)
@@ -22,6 +22,9 @@ function setupRuntime() {
   runtime.beginModelTaskAttempt.mockResolvedValue({ id:11, task_id:'task-1', attempt_no:1, fencing_token:1 })
   runtime.finishModelTaskAttempt.mockResolvedValue(undefined)
   runtime.persistModelTaskBudget.mockImplementation(async (task, budget) => ({ ...task, ...budget }))
+  runtime.succeedModelTaskInTransaction.mockImplementation(async (_run, task, patch) => ({
+    ...task, ...patch, status:'succeeded', result_ref:patch.resultRef, result_hash:patch.resultHash,
+  }))
   runtime.touchModelTaskActivity.mockResolvedValue(undefined)
 }
 
@@ -45,6 +48,22 @@ describe('authoritative model task tracker', () => {
     expect(runtime.persistModelTaskBudget).toHaveBeenCalledWith(expect.objectContaining({
       task_id:'task-1', lease_token:'lease-1', fencing_token:1,
     }), expect.objectContaining({ selectedMaxOutputTokens:200 }))
+    await tracker.stop()
+  })
+
+  it('updates local tracker state only after the caller confirms its transaction committed', async () => {
+    const tracker = await createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'daily:tx-success' }, { renewIntervalMs:60_000 })
+    await tracker.onProviderRequest({ phase:'request' })
+    await tracker.onProviderUsage({ phase:'request', status:'success', httpStatus:200, responseReceived:true })
+    await tracker.resultReady({ resultHash:'hash-1' })
+    await tracker.applying()
+    const run = vi.fn()
+    await tracker.succeedInTransaction(run, { resultRef:'review:1', resultHash:'hash-1' })
+    expect(runtime.succeedModelTaskInTransaction).toHaveBeenCalledWith(run,
+      expect.objectContaining({ status:'applying' }), { resultRef:'review:1', resultHash:'hash-1' })
+    expect(tracker.status).toBe('applying')
+    await tracker.commitTransactionSucceeded()
+    expect(tracker.status).toBe('succeeded')
     await tracker.stop()
   })
 

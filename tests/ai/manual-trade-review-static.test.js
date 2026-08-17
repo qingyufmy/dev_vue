@@ -5,6 +5,18 @@ const root = new URL('../../', import.meta.url)
 const read = file => readFileSync(new URL(file, root), 'utf8')
 
 describe('manual trade review backend boundaries', () => {
+  it('applies the final business version and model-task success atomically', () => {
+    const source = read('server/routes/ai/manual-trade-review.js')
+    const applyStart = source.indexOf('async function applyManualTradeReviewOutcome')
+    const workerStart = source.indexOf('export async function runManualTradeReviewWorkerOnce', applyStart)
+    const applyBlock = source.slice(applyStart, workerStart)
+    const workerBlock = source.slice(workerStart, source.indexOf('export async function recoverAbandonedManualTradeReviewJobs', workerStart))
+    expect(applyBlock).toContain('outcomeTracker.succeedInTransaction(run')
+    expect(applyBlock).toContain('reconcileModelTaskResultInTransaction(run')
+    expect(applyBlock.indexOf("SET status = 'succeeded'")).toBeLessThan(applyBlock.indexOf('outcomeTracker.succeedInTransaction(run'))
+    expect(workerBlock).not.toContain('outcomeTracker?.succeeded(')
+  })
+
   it('appends migration 178 with independent case/source/version/job tables', () => {
     const migration = read('server/migrations.js')
     expect(migration).toContain("id: '178_manual_trade_strategy_review'")

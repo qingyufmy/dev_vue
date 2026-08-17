@@ -227,6 +227,18 @@ describe('manual trade review aggregate service', () => {
     expect(block).not.toMatch(/api[_-]?key|authorization|password|secret/i)
   })
 
+  it('commits aggregate business output and model-task success through the same transaction callback', () => {
+    const sourceText = readFileSync(new URL('../../server/routes/ai/manual-trade-review-aggregate.js', import.meta.url), 'utf8')
+    const saveStart = sourceText.indexOf('export async function saveManualTradeReviewAggregateOutput')
+    const heartbeatStart = sourceText.indexOf('function startManualTradeReviewAggregateLeaseHeartbeat', saveStart)
+    const saveBlock = sourceText.slice(saveStart, heartbeatStart)
+    const workerStart = sourceText.indexOf('export async function runManualTradeReviewAggregateOnce')
+    const workerBlock = sourceText.slice(workerStart, sourceText.indexOf('export function requestManualTradeReviewAggregateCycle', workerStart))
+    expect(saveBlock).toContain('modelTaskTracker.succeedInTransaction(run')
+    expect(saveBlock.indexOf("SET status = 'draft'")).toBeLessThan(saveBlock.indexOf('modelTaskTracker.succeedInTransaction(run'))
+    expect(workerBlock).not.toContain('tracker.succeeded(')
+  })
+
   it('hashes a sanitized model runtime without storing endpoint or credential material', () => {
     const result = manualTradeReviewAggregateModelRuntime({
       resolved:{ model_profile_id:9, credential_source:'platform_primary', model:{ id:9, provider:'openai',

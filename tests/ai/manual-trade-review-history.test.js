@@ -67,6 +67,18 @@ function selectionContextToken(snapshot = 'snapshot-1') {
     nowUtcMsc:10_000, ttlMsc:900_000 })
 }
 
+function reviewCandles() {
+  return [
+    { time_utc_msc:1, close_time_utc_msc:100 },
+    { time_utc_msc:101, close_time_utc_msc:500 },
+    { time_utc_msc:501, close_time_utc_msc:1_000 },
+    ...Array.from({ length:22 }, (_, index) => ({
+      time_utc_msc:1_001 + index * 900_000,
+      close_time_utc_msc:2_000 + index * 900_000,
+    })),
+  ]
+}
+
 describe('manual trade review history cursor contract', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -423,7 +435,8 @@ describe('manual trade review history cursor contract', () => {
       entry_order_ticket:eligible.entry_order_ticket,
     }], {
       strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } },
-      buildPath:async () => ({ status:'complete' }), nowUtcMsc:10_000,
+      buildPath:async () => ({ status:'complete', timeframes:{ M15:{ status:'complete', candles:reviewCandles() } } }),
+      nowUtcMsc:10_000,
       selection_context_token:selectionContextToken(history.history_snapshot_id),
     })
     const evidenceCall = bridge.mt5Bridge.mock.calls.find(([, action]) => action === 'history_evidence')

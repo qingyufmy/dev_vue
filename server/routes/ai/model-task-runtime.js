@@ -90,7 +90,7 @@ export function assertModelTaskIdempotencyEnvelope(task, input = {}) {
 }
 
 export async function appendModelTaskEvent(taskId, eventType, payload = null, attemptId = null, run = queryRun) {
-  await run(`INSERT INTO ai_model_task_events
+  return await run(`INSERT INTO ai_model_task_events
     (task_id, attempt_id, event_type, payload_json, created_at_utc_msc)
     VALUES (?, ?, ?, ?, ?)`, [taskId, attemptId || null, eventType, json(payload), Date.now()])
 }
@@ -244,6 +244,82 @@ export async function transitionModelTask(task, toStatus, patch = {}) {
   if (Number(result?.affectedRows ?? result?.changes ?? 0) !== 1) throw new Error('model_task_fence_lost')
   await appendModelTaskEvent(task.task_id, 'status_changed', { from:task.status, to:toStatus, ...patch })
   return { ...task, ...patch, status:toStatus, completed_at_utc_msc:terminal ? now : task.completed_at_utc_msc }
+}
+
+/**
+ * Commit an applying task to succeeded inside the caller's existing MySQL
+ * transaction so the domain result and model-task terminal state are atomic.
+ */
+export async function succeedModelTaskInTransaction(run, task, patch = {}) {
+  if (typeof run !== 'function') throw new Error('model_task_transaction_runner_missing')
+  if (String(task?.status || '') !== 'applying') throw new Error('model_task_transaction_status_invalid')
+  const resultHash = String(patch.resultHash || task?.result_hash || '').trim()
+  const resultRef = String(patch.resultRef || task?.result_ref || '').trim()
+  if (!resultHash) throw new Error('model_task_result_hash_required')
+  if (!resultRef) throw new Error('model_task_result_ref_required')
+  const now = Date.now()
+  const response = await run(`UPDATE ai_model_tasks SET status = 'succeeded',
+    result_ref = ?, result_hash = ?, error_code = NULL, error_message = NULL,
+    completed_at_utc_msc = ?, lease_token = NULL, lease_owner = NULL,
+    lease_expires_at_utc_msc = NULL, last_activity_at_utc_msc = ?, updated_at_utc_msc = ?
+    WHERE task_id = ? AND lease_token = ? AND fencing_token = ? AND status = 'applying'
+      AND result_hash = ?`, [resultRef, resultHash, now, now, now,
+    task.task_id, task.lease_token, Number(task.fencing_token), resultHash])
+  const result = Array.isArray(response) ? response[0] : response
+  if (Number(result?.affectedRows ?? result?.changes ?? 0) !== 1) throw new Error('model_task_fence_lost')
+  const eventResponse = await appendModelTaskEvent(task.task_id, 'status_changed', {
+    from:'applying', to:'succeeded', resultRef, resultHash,
+  }, null, run)
+  const eventResult = Array.isArray(eventResponse) ? eventResponse[0] : eventResponse
+  if (Number(eventResult?.affectedRows ?? eventResult?.changes ?? 0) !== 1) throw new Error('model_task_event_write_failed')
+  return { ...task, status:'succeeded', result_ref:resultRef, result_hash:resultHash,
+    completed_at_utc_msc:now, lease_token:null, lease_owner:null, lease_expires_at_utc_msc:null }
+}
+
+/**
+ * Reconcile a durable domain result in the caller's transaction after the
+ * original model-task lease has expired.  A still-live worker is never fenced
+ * out, and an already-succeeded task is accepted only with the same hash.
+ */
+export async function reconcileModelTaskResultInTransaction(run, taskId, patch = {}, options = {}) {
+  if (typeof run !== 'function') throw new Error('model_task_transaction_runner_missing')
+  const resultHash = String(patch.resultHash || '').trim()
+  const resultRef = String(patch.resultRef || '').trim()
+  if (!resultHash) throw new Error('model_task_result_hash_required')
+  if (!resultRef) throw new Error('model_task_result_ref_required')
+  const now = Number(options.nowUtcMs) || Date.now()
+  const selected = await run(`SELECT task_id, status, result_hash, lease_token, lease_expires_at_utc_msc
+    FROM ai_model_tasks WHERE task_id = ? FOR UPDATE`, [String(taskId)])
+  const rows = Array.isArray(selected?.[0]) ? selected[0] : (Array.isArray(selected) ? selected : [])
+  const task = rows[0]
+  if (!task) throw new Error('model_task_not_found')
+  if (task.result_hash && String(task.result_hash) !== resultHash) throw new Error('model_task_result_hash_conflict')
+  if (String(task.status) === 'succeeded') {
+    const updated = await run(`UPDATE ai_model_tasks SET result_ref = ?, result_hash = ?,
+      error_code = NULL, error_message = NULL, updated_at_utc_msc = ?
+      WHERE task_id = ? AND status = 'succeeded' AND result_hash = ?`,
+    [resultRef, resultHash, now, String(taskId), resultHash])
+    const result = Array.isArray(updated) ? updated[0] : updated
+    if (Number(result?.affectedRows ?? result?.changes ?? 0) !== 1) throw new Error('model_task_fence_lost')
+    return { ...task, result_ref:resultRef, result_hash:resultHash }
+  }
+  if (!['result_ready', 'applying'].includes(String(task.status))) throw new Error('model_task_reconcile_status_invalid')
+  if (task.lease_token && Number(task.lease_expires_at_utc_msc) > now) throw new Error('model_task_lease_active')
+  const updated = await run(`UPDATE ai_model_tasks SET status = 'succeeded', result_ref = ?, result_hash = ?,
+    error_code = NULL, error_message = NULL, completed_at_utc_msc = ?, lease_token = NULL,
+    lease_owner = NULL, lease_expires_at_utc_msc = NULL, last_activity_at_utc_msc = ?, updated_at_utc_msc = ?
+    WHERE task_id = ? AND status = ? AND (lease_token IS NULL OR lease_expires_at_utc_msc <= ?)
+      AND (result_hash IS NULL OR result_hash = ?)`,
+  [resultRef, resultHash, now, now, now, String(taskId), String(task.status), now, resultHash])
+  const result = Array.isArray(updated) ? updated[0] : updated
+  if (Number(result?.affectedRows ?? result?.changes ?? 0) !== 1) throw new Error('model_task_fence_lost')
+  const eventResponse = await appendModelTaskEvent(String(taskId), 'task_reconciled_from_result', {
+    result_ref:resultRef, atomic:true,
+  }, null, run)
+  const eventResult = Array.isArray(eventResponse) ? eventResponse[0] : eventResponse
+  if (Number(eventResult?.affectedRows ?? eventResult?.changes ?? 0) !== 1) throw new Error('model_task_event_write_failed')
+  return { ...task, status:'succeeded', result_ref:resultRef, result_hash:resultHash,
+    completed_at_utc_msc:now, lease_token:null, lease_owner:null, lease_expires_at_utc_msc:null }
 }
 
 export async function beginModelTaskAttempt(task, input = {}) {

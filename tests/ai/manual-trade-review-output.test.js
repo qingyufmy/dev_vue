@@ -225,6 +225,15 @@ describe('manual profitable trade counterfactual review contract', () => {
     expect(__manualTradeReviewTest.manualTradeReviewModelTaskTerminalError({ status:'retry_wait' })).toBeNull()
   })
 
+  it('computes one frozen generation deadline from the v3 candidate count', () => {
+    const evidence = count => ({ review_contract_version:'manual-trade-review-v3', market_data:{ trades:{
+      trade:{ counterfactual_points:Array.from({ length:count }, (_, index) => ({ candidate_key:`point-${index}` })) },
+    } } })
+    expect(__manualTradeReviewTest.manualTradeReviewDeadlineMs({})).toBe(30 * 60_000)
+    expect(__manualTradeReviewTest.manualTradeReviewDeadlineMs(evidence(3))).toBe(75 * 60_000)
+    expect(__manualTradeReviewTest.manualTradeReviewDeadlineMs(evidence(5))).toBe(105 * 60_000)
+  })
+
   it('holds a status-unknown stage without consuming the business retry budget', async () => {
     const hold = __manualTradeReviewTest.manualTradeReviewStageTaskError('counterfactual', 'task_status_unknown',
       { terminal:false, hold:true })

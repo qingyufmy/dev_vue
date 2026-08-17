@@ -3,7 +3,7 @@ import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../..
 import { canManagePlatformAiContent } from './platform-content-access.js'
 import { requestJsonObject } from './llm.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
-import { markModelTaskSucceededFromResult } from './model-task-runtime.js'
+import { markModelTaskSucceededFromResult, reconcileModelTaskResultInTransaction } from './model-task-runtime.js'
 import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget } from './model-task-budget.js'
 import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
@@ -57,6 +57,8 @@ const ALLOWED_HYPOTHESIS_STATE = new Set(['hypothesis', 'insufficient_evidence']
 const MANUAL_TRADE_HASH_PATTERN = /^[0-9a-f]{64}$/i
 const MANUAL_TRADE_REFERENCE_PATTERN = /^(?!0+$)\d{1,32}$/
 const MANUAL_TRADE_REVIEW_TASK_DEADLINE_MS = 30 * 60_000
+const MANUAL_TRADE_REVIEW_V3_POINT_DEADLINE_MS = 15 * 60_000
+const MANUAL_TRADE_REVIEW_MAX_DEADLINE_MS = 120 * 60_000
 const MODEL_TASK_TERMINAL_STATES = new Set(['cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected'])
 const MODEL_TASK_ACTIVE_STATES = new Set(['leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet',
   'status_unknown', 'reconciling', 'response_received', 'validating', 'repairing', 'result_ready', 'applying'])
@@ -110,8 +112,42 @@ function parseBeijingDateTime(value) {
   return Number.isFinite(date.getTime()) ? date.getTime() : null
 }
 
-function newManualTradeReviewDeadline() {
-  return dateAfter(MANUAL_TRADE_REVIEW_TASK_DEADLINE_MS / 1000)
+function manualTradeReviewFrozenCandidateCount(evidence = {}) {
+  const paths = Object.values(evidence?.market_data?.trades || {})
+  let count = 0
+  for (const path of paths) {
+    const supplied = path?.counterfactual_points ?? path?.candidate_points
+    const values = Array.isArray(supplied) ? supplied
+      : supplied && typeof supplied === 'object' ? Object.values(supplied) : []
+    count += values.length
+  }
+  return Math.min(5, Math.max(0, count))
+}
+
+function manualTradeReviewDeadlineMs(evidence = {}) {
+  const explicitV3 = evidence?.review_contract_version === MANUAL_TRADE_REVIEW_V3_VERSION
+  const hasV3Shape = Object.values(evidence?.market_data?.trades || {}).some(path => path && (
+    Object.prototype.hasOwnProperty.call(path, 'counterfactual_points')
+    || Object.prototype.hasOwnProperty.call(path, 'candidate_points')))
+  if (!explicitV3 && !hasV3Shape) return MANUAL_TRADE_REVIEW_TASK_DEADLINE_MS
+  return Math.min(MANUAL_TRADE_REVIEW_MAX_DEADLINE_MS,
+    MANUAL_TRADE_REVIEW_TASK_DEADLINE_MS
+      + manualTradeReviewFrozenCandidateCount(evidence) * MANUAL_TRADE_REVIEW_V3_POINT_DEADLINE_MS)
+}
+
+function newManualTradeReviewDeadline(evidence = {}) {
+  return dateAfter(manualTradeReviewDeadlineMs(evidence) / 1000)
+}
+
+function assertManualTradeReviewRequestTime(job) {
+  const deadlineAtMs = parseBeijingDateTime(job?.task_deadline_at)
+  if (!deadlineAtMs) throw new Error('manual_trade_review_deadline_missing')
+  if (deadlineAtMs <= Date.now()) {
+    const error = new Error('manual_trade_review_generation_deadline_exceeded')
+    error.code = error.message
+    throw error
+  }
+  return deadlineAtMs
 }
 
 function manualTradeReviewModelIdempotencyKey(job) {
@@ -482,7 +518,7 @@ export async function createManualTradeReview(actor, input = {}, options = {}) {
       await run(`INSERT INTO manual_trade_review_jobs
       (case_id, idempotency_key, generation_no, status, progress_stage, attempt_count, max_attempts,
        task_deadline_at, created_at, updated_at)
-      VALUES (?, ?, 1, 'queued', 'queued', 0, 3, ?, ?, ?)`, [insert.insertId, jobKey, newManualTradeReviewDeadline(), now, now])
+      VALUES (?, ?, 1, 'queued', 'queued', 0, 3, ?, ?, ?)`, [insert.insertId, jobKey, newManualTradeReviewDeadline(evidence), now, now])
       return { created:true, id:Number(insert.insertId) }
     })
   } catch (error) {
@@ -654,7 +690,8 @@ export async function retryManualTradeReview(caseId, actor) {
   const actorId = managerOrThrow(actor)
   const idValue = id(caseId, 'manual_trade_review_not_found')
   const result = await withTransaction(async run => {
-    const [rows] = await run(`SELECT cases.id AS case_id, cases.status AS case_status, jobs.id AS job_id,
+    const [rows] = await run(`SELECT cases.id AS case_id, cases.status AS case_status, cases.evidence_json,
+        jobs.id AS job_id,
         jobs.generation_no, jobs.status AS job_status
       FROM manual_trade_review_cases cases
       JOIN manual_trade_review_jobs jobs ON jobs.case_id = cases.id
@@ -664,7 +701,7 @@ export async function retryManualTradeReview(caseId, actor) {
     if (!row) throw new Error('manual_trade_review_retry_not_allowed')
     const now = beijingNow()
     const generationNo = Math.max(1, Number(row.generation_no || 1)) + 1
-    const deadline = newManualTradeReviewDeadline()
+    const deadline = newManualTradeReviewDeadline(parse(row.evidence_json, {}))
     const [updated] = await run(`UPDATE manual_trade_review_jobs
       SET status = 'queued', progress_stage = 'queued', generation_no = ?, model_task_id = NULL,
         task_deadline_at = ?, attempt_count = 0, lease_token = NULL, lease_expires_at = NULL,
@@ -686,9 +723,9 @@ export async function retryManualTradeReview(caseId, actor) {
 async function claimManualTradeReviewJob() {
   const now = beijingNow()
   const token = crypto.randomUUID()
-  const firstClaimDeadline = newManualTradeReviewDeadline()
   return withTransaction(async run => {
-    const [rows] = await run(`SELECT jobs.*, cases.user_id, cases.strategy_id, cases.status AS case_status
+    const [rows] = await run(`SELECT jobs.*, cases.user_id, cases.strategy_id, cases.evidence_json,
+        cases.status AS case_status
       FROM manual_trade_review_jobs jobs JOIN manual_trade_review_cases cases ON cases.id = jobs.case_id
       WHERE (jobs.status = 'queued' OR (jobs.status = 'leased' AND jobs.lease_expires_at < ?))
         AND cases.status IN ('queued','generating')
@@ -696,6 +733,7 @@ async function claimManualTradeReviewJob() {
       ORDER BY jobs.created_at, jobs.id LIMIT 1 FOR UPDATE`, [now, now])
     const row = rows?.[0]
     if (!row) return null
+    const firstClaimDeadline = newManualTradeReviewDeadline(parse(row.evidence_json, {}))
     const [updated] = await run(`UPDATE manual_trade_review_jobs SET status = 'leased', progress_stage = 'preparing',
       attempt_count = attempt_count + 1, task_deadline_at = COALESCE(task_deadline_at, ?),
       lease_token = ?, lease_expires_at = ?, stage_updated_at = ?, updated_at = ?
@@ -993,7 +1031,16 @@ async function reconcileManualTradeReviewStageTask(stageRow, outputHash) {
   // with the aggregate bundle hash or its point result lineage is corrupted.
   if (stageRow.stage === 'counterfactual'
     && stageRow.normalizedOutput?.output_contract_version === COUNTERFACTUAL_POINT_V3_OUTPUT_VERSION) return
-  const task = await queryOne('SELECT task_id, status FROM ai_model_tasks WHERE task_id = ? LIMIT 1', [stageRow.model_task_id])
+  const task = await queryOne(`SELECT task_id, status, lease_expires_at_utc_msc, scheduled_at_utc_msc
+    FROM ai_model_tasks WHERE task_id = ? LIMIT 1`, [stageRow.model_task_id])
+  if (stageRow.stage === 'outcome_review') {
+    const waitError = manualTradeReviewModelTaskWaitError(task)
+    if (waitError) throw waitError
+    // Final task success is committed only together with the business
+    // version.  The atomic apply path below reconciles an expired applying
+    // task or accepts an already-succeeded task with the exact same hash.
+    return
+  }
   if (task && String(task.status) !== 'succeeded') {
     await markModelTaskSucceededFromResult(stageRow.model_task_id, {
       resultRef:`manual_trade_review_stage:${stageRow.job_id}:${stageRow.generation_no}:${stageRow.stage}`,
@@ -1067,8 +1114,9 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
       onProviderQuiet:event => tracker.onProviderQuiet(event),
     }
     lease.assertOwned(); tracker.assertOwned()
+    const businessDeadlineUtcMs = assertManualTradeReviewRequestTime(job)
     const deadlines = modelTaskDeadlines('manual_analysis', {
-      nowUtcMs:Date.now(), businessDeadlineUtcMs:parseBeijingDateTime(job.task_deadline_at),
+      nowUtcMs:Date.now(), businessDeadlineUtcMs,
     })
     const raw = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted,
       provider:resolved.model.provider || resolved.model.api_provider, model:resolved.model.model_name || resolved.model.model,
@@ -1447,7 +1495,8 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
       onProviderActivity:event => tracker.onProviderActivity(event), onProviderQuiet:event => tracker.onProviderQuiet(event),
     }
     lease.assertOwned(); tracker.assertOwned()
-    const deadlines = modelTaskDeadlines('manual_analysis', { nowUtcMs:Date.now(), businessDeadlineUtcMs:parseBeijingDateTime(job.task_deadline_at) })
+    const businessDeadlineUtcMs = assertManualTradeReviewRequestTime(job)
+    const deadlines = modelTaskDeadlines('manual_analysis', { nowUtcMs:Date.now(), businessDeadlineUtcMs })
     const raw = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted,
       provider:resolved.model.provider || resolved.model.api_provider, model:resolved.model.model_name || resolved.model.model,
       temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3), maxTokens:budget.selectedMaxOutputTokens,
@@ -1550,8 +1599,9 @@ async function runManualTradeReviewV3Counterfactual({ points, reviewCase, source
   return { normalizedCandidates, serverSummary, outputHash }
 }
 
-async function applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputHash, sources = [], v3 = false } = {}) {
-  return withTransaction(async run => {
+async function applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputHash, sources = [], v3 = false,
+  outcomeTracker = null } = {}) {
+  const applied = await withTransaction(async run => {
     const [jobRows] = await run(`SELECT * FROM manual_trade_review_jobs
       WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased' FOR UPDATE`,
     [job.id, Number(job.generation_no || 1), job.lease_token])
@@ -1614,14 +1664,32 @@ async function applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputH
     const [caseUpdate] = await run(`UPDATE manual_trade_review_cases SET current_version_id = ?, status = 'draft', updated_at = ?
       WHERE id = ? AND user_id = ? AND status IN ('queued','generating') AND
         COALESCE(current_version_id, 0) = ?`, [versionId, now, job.case_id, job.user_id, Number(runtime.parent_version_id || 0)])
-    if (!caseUpdate?.affectedRows) throw new Error('manual_trade_review_parent_version_conflict')
+    if (Number(caseUpdate?.affectedRows ?? caseUpdate?.changes ?? 0) !== 1) {
+      throw new Error('manual_trade_review_parent_version_conflict')
+    }
     const [jobUpdate] = await run(`UPDATE manual_trade_review_jobs SET status = 'succeeded', progress_stage = 'completed',
       lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
       WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased'`,
     [now, now, job.id, Number(job.generation_no || 1), job.lease_token])
-    if (!jobUpdate?.affectedRows) throw new Error('manual_trade_review_lease_lost')
+    if (Number(jobUpdate?.affectedRows ?? jobUpdate?.changes ?? 0) !== 1) {
+      throw new Error('manual_trade_review_lease_lost')
+    }
+    const resultRef = `manual_trade_review_case:${job.case_id}`
+    if (outcomeTracker) {
+      if (String(outcomeTracker.taskId || '') !== String(outcome.model_task_id || '')) {
+        throw new Error('manual_trade_review_outcome_stage_task_conflict')
+      }
+      await outcomeTracker.succeedInTransaction(run, { resultRef, resultHash:outputHash })
+    } else {
+      if (!outcome.model_task_id) throw new Error('manual_trade_review_outcome_stage_task_missing')
+      await reconcileModelTaskResultInTransaction(run, outcome.model_task_id, {
+        resultRef, resultHash:outputHash,
+      })
+    }
     return { versionId, contentHash:outputHash }
   })
+  if (outcomeTracker) await outcomeTracker.commitTransactionSucceeded()
+  return applied
 }
 
 export async function runManualTradeReviewWorkerOnce({ requestModel = requestJsonObject } = {}) {
@@ -1753,8 +1821,7 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     outcomeTracker = outcomeResult.tracker
     lease.assertOwned(); outcomeTracker?.assertOwned()
     const applied = await applyManualTradeReviewOutcome({ job, reviewCase, runtime, outputHash:outcomeResult.outputHash,
-      sources, v3:isV3 })
-    await outcomeTracker?.succeeded({ resultRef:`manual_trade_review_case:${job.case_id}`, resultHash:applied.contentHash })
+      sources, v3:isV3, outcomeTracker })
     return { status:'succeeded', case_id:Number(job.case_id), version_id:applied.versionId }
   } catch (error) {
     let failure = error
@@ -1874,6 +1941,8 @@ export function stopManualTradeReviewWorker() {
 }
 
 export const __manualTradeReviewTest = {
+  manualTradeReviewFrozenCandidateCount, manualTradeReviewDeadlineMs, newManualTradeReviewDeadline,
+  assertManualTradeReviewRequestTime,
   parse, getPlatformStrategySnapshot, counterfactualPrompt, outcomeReviewPrompt,
   manualTradeReviewModelIdempotencyKey, manualTradeReviewModelTaskWaitError,
   manualTradeReviewModelTaskTerminalError, manualTradeReviewCanRecoverCompletedTask, claimManualTradeReviewJob,

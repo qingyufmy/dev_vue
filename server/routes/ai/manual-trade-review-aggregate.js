@@ -1069,7 +1069,7 @@ export async function markManualTradeReviewAggregateFailure({ aggregateId, gener
 export async function saveManualTradeReviewAggregateOutput({ actor, userId, aggregateId, generationNo,
   leaseToken, modelTaskId, sourceSetHash, strategySnapshotHash, modelRuntimeHash,
   inputHash, promptHash, outputContractHash, output, strategySnapshot, modelProfileId = null,
-  authorType = 'model', db, now = beijingNow() } = {}) {
+  authorType = 'model', modelTaskTracker = null, db, now = beijingNow() } = {}) {
   const ownerId = assertOwner(actor, userId)
   const id = positiveId(aggregateId, 'aggregate_case_id')
   const generation = positiveId(generationNo, 'generation_no')
@@ -1082,7 +1082,7 @@ export async function saveManualTradeReviewAggregateOutput({ actor, userId, aggr
   const expectedPromptHash = normalizedHash(promptHash, 'prompt_hash')
   const expectedContractHash = normalizedHash(outputContractHash, 'output_contract_hash')
   const database = dbApi(db)
-  return database.withTransaction(async run => {
+  const saved = await database.withTransaction(async run => {
     const row = await findOwnedAggregate(run, id, { userId:ownerId, forUpdate:true })
     if (String(row.status) !== 'generating' || Number(row.generation_no) !== generation
       || String(row.lease_token || '') !== token || String(row.model_task_id || '') !== taskId
@@ -1154,8 +1154,18 @@ export async function saveManualTradeReviewAggregateOutput({ actor, userId, aggr
     [versionId, now, now, now, id, generation, taskId, token, expectedSourceHash, expectedStrategyHash,
       expectedRuntimeHash, expectedInputHash, expectedPromptHash, expectedContractHash])
     if (affectedRows(applied) !== 1) throw aggregateError('lease_lost')
+    if (!modelTaskTracker || String(modelTaskTracker.taskId || '') !== taskId
+      || typeof modelTaskTracker.succeedInTransaction !== 'function') {
+      throw aggregateError('model_task_tracker_missing')
+    }
+    await modelTaskTracker.succeedInTransaction(run, {
+      resultRef:`manual_trade_review_aggregate:${id}:${generation}`,
+      resultHash:contentHash,
+    })
     return { aggregate_case_id:id, version_id:versionId, version_no:versionNo, content_hash:contentHash, content:normalized }
   })
+  await modelTaskTracker.commitTransactionSucceeded()
+  return saved
 }
 
 function startManualTradeReviewAggregateLeaseHeartbeat(job, db) {
@@ -1368,8 +1378,7 @@ export async function runManualTradeReviewAggregateOnce({ requestModel = request
       sourceSetHash:job.frozen_source_set_hash, strategySnapshotHash:job.strategy_snapshot_hash,
       modelRuntimeHash:job.model_runtime_hash, inputHash, promptHash, outputContractHash,
       output:normalized, strategySnapshot,
-      modelProfileId:resolved.model_profile_id, db })
-    await tracker.succeeded({ resultRef:`manual_trade_review_aggregate:${job.id}:${generationNo}`, resultHash:saved.content_hash })
+      modelProfileId:resolved.model_profile_id, modelTaskTracker:tracker, db })
     return { status:'succeeded', aggregate_case_id:Number(job.id), version_id:saved.version_id,
       model_task_id:tracker.taskId }
   } catch (error) {
