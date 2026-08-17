@@ -829,7 +829,7 @@ mod tests {
 
         let reconnect_name = reconnect_pipe_name(&terminal_id).expect("reconnect pipe");
         let mut current_hello = hello(&data_path);
-        current_hello.adapter_version = "3.0.2".to_owned();
+        current_hello.adapter_version = "3.0.3".to_owned();
         let reconnect_client = tokio::spawn(serve_one_snapshot(
             format!(r"\\.\pipe\{reconnect_name}"),
             current_hello,
@@ -842,7 +842,7 @@ mod tests {
             .expect("reconnected snapshot");
         assert_eq!(second.streams.account.expect("account")["balance"], 10_100);
         reconnect_client.await.expect("reconnect client");
-        assert_eq!(source.adapter_version().as_deref(), Some("3.0.2"));
+        assert_eq!(source.adapter_version().as_deref(), Some("3.0.3"));
         assert!(!source.adapter_requires_restart());
 
         source.close().await;

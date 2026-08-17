@@ -27,7 +27,7 @@ pub use trade_api::{
 };
 
 pub const CURRENT_PROTOCOL_VERSION: i32 = 3;
-pub const CURRENT_ADAPTER_VERSION: &str = "3.0.2";
+pub const CURRENT_ADAPTER_VERSION: &str = "3.0.3";
 pub const MAX_HISTORY_WINDOW_MSC: i64 = 50 * 365 * 24 * 60 * 60 * 1_000;
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_STRING_BYTES: usize = 2 * 1024 * 1024;
@@ -508,7 +508,7 @@ mod tests {
     fn hello() -> Hello {
         Hello {
             protocol_version: 3,
-            adapter_version: "3.0.2-test".to_owned(),
+            adapter_version: "3.0.3-test".to_owned(),
             terminal_data_path: r"C:\MT4\Data".to_owned(),
             broker_server: "Broker-Demo".to_owned(),
             login: "12345678".to_owned(),
@@ -526,7 +526,7 @@ mod tests {
     fn hello_matches_the_existing_dotnet_and_ea_binary_contract() {
         let mut expected = 1_i32.to_le_bytes().to_vec();
         expected.extend_from_slice(&3_i32.to_le_bytes());
-        append_string(&mut expected, "3.0.2-test");
+        append_string(&mut expected, "3.0.3-test");
         append_string(&mut expected, r"C:\MT4\Data");
         append_string(&mut expected, "Broker-Demo");
         append_string(&mut expected, "12345678");
@@ -631,7 +631,7 @@ mod tests {
         assert!(candidate.supports_deals());
         assert!(candidate.supports_extended_data());
 
-        candidate.adapter_version = "3.0.2".to_owned();
+        candidate.adapter_version = "3.0.3".to_owned();
         assert!(candidate.adapter_is_current());
         assert!(!candidate.adapter_requires_restart());
         assert!(candidate.supports_deals());
