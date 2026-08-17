@@ -168,4 +168,16 @@ describe('manual trade review frontend contract', () => {
     expect(app).toContain('content.output_contract_version === "manual-trade-review-v3"')
     expect(app).toContain('["manual-trade-review-v2", "manual-trade-review-v3"]')
   })
+
+  it('keeps aggregate selection separate from raw-trade selection and exposes pinned-version results', () => {
+    expect(html).toContain('data-manual-review-action="aggregate-mode"')
+    expect(app).toContain('manualTradeReviewAggregateMode')
+    expect(app).toContain('data-manual-aggregate-select')
+    expect(app).toContain('sources.length < 2 || sources.length > 20')
+    expect(app).toContain('/api/ai/manual-trade-review-aggregates/eligible-reviews')
+    expect(app).toContain('supporting_review_refs')
+    expect(app).toContain('counterexample_review_refs')
+    expect(app).toContain('不自动修改策略、记忆、回测或交易')
+    expect(html).toContain('manual-review-v3aggregate1')
+  })
 })
