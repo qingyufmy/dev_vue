@@ -86,6 +86,8 @@ const state = {
   modelPurposeBindings: null,
   modelPurposeBindingsError: "",
   modelProfiles: [],
+  modelCatalogSearch: "",
+  modelCatalogStatus: "all",
   strategyFilter: "all",
   strategyDataCapabilities: null,
   strategyDataCapabilitiesStatus: "idle",
@@ -772,7 +774,21 @@ const REASON_MAP = {
   max_open_positions_reached: "持仓数量达到上限，已拒绝",
   signal_price_slippage_exceeded: "信号参考价与当前报价偏离过大，已拒绝",
   auto_trade_disabled: "当前订阅没有开启自动执行",
+  execution_disabled: "当前订阅没有开启自动执行",
+  scheduler_disabled: "自动交易调度未开启",
+  symbol_not_subscribed: "当前订阅未包含该交易品种",
+  membership_not_eligible: "当前会员套餐不支持自动执行",
+  membership_expired: "会员已到期",
+  account_not_active: "交易账户当前未激活",
+  ownership_unavailable: "交易账户归属尚未确认",
+  source_account_not_active: "管理员源账户当前未激活",
+  source_ownership_unavailable: "管理员源账户归属尚未确认",
+  source_trade_send_disabled: "管理员源账户已关闭交易发送",
+  source_bridge_offline: "管理员源账户的交易终端桥接当前未连接",
+  source_bridge_trade_disabled: "管理员源账户的交易终端自动交易权限未开启",
   bridge_offline: "用户的交易终端桥接当前未连接",
+  bridge_trade_disabled: "交易终端自动交易权限未开启",
+  risk_halted: "账户风控已暂停交易",
   user_quote_unavailable: "无法获取用户交易平台的有效报价",
   stop_loss_missing: "AI 信号缺少有效止损价格",
   invalid_stop_loss_direction: "止损价格方向与订单方向不一致",
@@ -4193,6 +4209,15 @@ const MODEL_PURPOSE_LABELS = Object.freeze({
   memory_compression: "记忆整理",
   memory_consistency: "一致性检查",
 });
+const MODEL_PURPOSE_DESCRIPTIONS = Object.freeze({
+  manual_analysis: "实时手动请求",
+  auto_inference: "按订阅自动运行",
+  daily_review: "每日复盘生成",
+  monthly_review: "周期总结与回顾",
+  manual_trade_review: "人工选择交易复盘",
+  memory_compression: "整理统一策略记忆",
+  memory_consistency: "校验记忆与策略一致性",
+});
 const MODEL_PURPOSE_KEYS = Object.keys(MODEL_PURPOSE_LABELS);
 
 function modelPurposeScope() { return state.user?.role === "admin" ? "platform" : "user"; }
@@ -4284,7 +4309,7 @@ function renderModelPurposeBindings() {
     const resolution = blocked
       ? `绑定模型不可用，保存前请选择其他${scope === "platform" ? "平台" : "个人"}模型或继承规则`
       : `实际模型：${actual ? escapeHtml(actual) : "由现有规则解析"}${source ? ` · ${escapeHtml(source)}` : ""}`;
-    return `<div class="model-purpose-row ${blocked ? "is-blocked" : ""}" data-model-purpose="${purpose}"><div class="model-purpose-copy"><strong>${MODEL_PURPOSE_LABELS[purpose]}</strong><small>${escapeHtml(purpose)}</small></div><label class="model-purpose-select"><span class="sr-only">${MODEL_PURPOSE_LABELS[purpose]}模型</span><select class="select" data-purpose-select aria-describedby="model-purpose-resolution-${purpose}" ${isObserverMode() ? "disabled" : ""}>${options}</select></label><div id="model-purpose-resolution-${purpose}" class="model-purpose-resolution ${blocked ? "is-blocked" : ""}" role="status">${resolution}</div><button class="btn btn-secondary btn-sm" data-save-model-purpose type="button" ${isObserverMode() ? "disabled" : ""}>保存</button><div class="model-purpose-error" data-purpose-error role="alert" aria-live="polite"></div></div>`;
+    return `<article class="model-purpose-row model-purpose-card ${blocked ? "is-blocked" : ""}" data-model-purpose="${purpose}"><div class="model-purpose-card-head"><div class="model-purpose-copy"><span class="model-purpose-kicker">任务用途</span><strong>${MODEL_PURPOSE_LABELS[purpose]}</strong><small>${escapeHtml(MODEL_PURPOSE_DESCRIPTIONS[purpose] || "按用途解析")}</small></div><span class="model-purpose-key sr-only" aria-hidden="true">${escapeHtml(purpose)}</span></div><label class="model-purpose-select"><span>${MODEL_PURPOSE_LABELS[purpose]}模型</span><select class="select" data-purpose-select aria-describedby="model-purpose-resolution-${purpose}" ${isObserverMode() ? "disabled" : ""}>${options}</select></label><div id="model-purpose-resolution-${purpose}" class="model-purpose-resolution ${blocked ? "is-blocked" : ""}" role="status"><span class="model-purpose-resolution-label">实际解析</span>${resolution}</div><button class="btn btn-secondary btn-sm" data-save-model-purpose type="button" ${isObserverMode() ? "disabled" : ""}>保存用途</button><div class="model-purpose-error" data-purpose-error role="alert" aria-live="polite"></div></article>`;
   }).join("");
 }
 
@@ -4301,8 +4326,10 @@ async function saveModelPurposeBinding(button) {
     if (errorHost) errorHost.textContent = `请选择仍可用的${scope === "platform" ? "平台" : "个人"}模型，或改为继承现有规则`;
     return;
   }
+  const originalLabel = button.textContent;
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
+  button.textContent = "保存中…";
   if (errorHost) errorHost.textContent = "";
   try {
     await api(`/api/ai/model-purpose-bindings/${encodeURIComponent(purpose)}`, { method: "PUT", body: { scope, model_profile_id: modelProfileId } });
@@ -4313,6 +4340,7 @@ async function saveModelPurposeBinding(button) {
   } finally {
     button.disabled = false;
     button.removeAttribute("aria-busy");
+    button.textContent = originalLabel;
   }
 }
 
@@ -4330,27 +4358,84 @@ function updateModelProviderHelp(provider) {
     : "复杂任务更稳，但推理耗时更长";
 }
 
+function modelCatalogFilterState() {
+  return {
+    query: String(state.modelCatalogSearch || "").trim().toLocaleLowerCase("zh-CN"),
+    status: String(state.modelCatalogStatus || "all"),
+  };
+}
+
+function modelCatalogProfiles() {
+  const { query, status } = modelCatalogFilterState();
+  return (state.modelProfiles || []).filter(profile => {
+    const modelName = String(profile.model_name || "").toLocaleLowerCase("zh-CN");
+    const provider = `${modelProviderLabel(profile.provider) || ""} ${profile.provider || ""}`.toLocaleLowerCase("zh-CN");
+    const matchesQuery = !query || modelName.includes(query) || provider.includes(query);
+    const matchesStatus = status === "available"
+      ? profile.status === "active"
+      : status === "default"
+        ? Boolean(profile.is_default)
+        : true;
+    return matchesQuery && matchesStatus;
+  });
+}
+
 function renderModelProfiles() {
   const host = $("modelProfilesList");
   if (!host) return;
+  const profiles = state.modelProfiles || [];
+  const visibleProfiles = modelCatalogProfiles();
+  const { query, status } = modelCatalogFilterState();
   const summary = $("modelCatalogSummary");
-  const activeProfiles = state.modelProfiles.filter(profile => profile.status === "active");
-  if (summary) summary.textContent = `${state.modelProfiles.length} 个模型 · ${activeProfiles.length} 个可用`;
-  setText("modelCountStat", state.modelProfiles.length);
+  const resultCount = $("modelCatalogResultCount");
+  const emptyState = $("modelCatalogEmptyState");
+  const emptyTitle = $("modelCatalogEmptyTitle");
+  const emptyCopy = $("modelCatalogEmptyCopy");
+  const clearButton = $("modelCatalogClearBtn");
+  const activeProfiles = profiles.filter(profile => profile.status === "active");
+  const hasFilters = Boolean(query) || status !== "all";
+  if (summary) summary.textContent = hasFilters
+    ? `显示 ${visibleProfiles.length} / ${profiles.length} 个模型`
+    : `${profiles.length} 个模型 · ${activeProfiles.length} 个可用`;
+  if (resultCount) resultCount.textContent = hasFilters
+    ? `${visibleProfiles.length} 个结果（共 ${profiles.length} 个）`
+    : `${profiles.length} 个结果`;
+  setText("modelCountStat", profiles.length);
   setText("modelActiveStat", activeProfiles.length);
-  if (!state.modelProfiles.length) {
-    host.innerHTML = state.user?.role === "admin"
-      ? '<div class="workspace-panel empty-state"><strong>还没有平台模型</strong><span>添加平台模型后，可按手动分析、自动分析、复盘和记忆压缩分别开放共享。</span></div>'
-      : '<div class="workspace-panel empty-state"><strong>还没有可用模型</strong><span>添加一个自己的模型；若管理员已开放共享，也可由系统按用途自动选用平台模型。</span></div>';
+
+  if (!visibleProfiles.length) {
+    host.innerHTML = "";
+    host.classList.add("hidden");
+    emptyState?.classList.remove("hidden");
+    if (emptyTitle) emptyTitle.textContent = profiles.length ? "没有符合筛选条件的模型" : state.user?.role === "admin" ? "还没有平台模型" : "还没有可用模型";
+    if (emptyCopy) emptyCopy.textContent = profiles.length
+      ? "尝试更换模型名、供应商或状态筛选。"
+      : state.user?.role === "admin"
+        ? "添加平台模型后，可按用途开放共享。"
+        : "添加一个自己的模型，或等待管理员开放共享模型。";
+    if (clearButton) clearButton.hidden = !hasFilters;
+    initIcons();
     return;
   }
-  host.innerHTML = state.modelProfiles.map(profile => {
+
+  emptyState?.classList.add("hidden");
+  host.classList.remove("hidden");
+  host.innerHTML = visibleProfiles.map(profile => {
     const limits = modelTokenLimits(profile);
     const tokenStatus = modelTokenStatus(profile);
+    const modelName = escapeHtml(profile.model_name || `模型 #${Number(profile.id)}`);
+    const providerLabel = escapeHtml(modelProviderLabel(profile.provider) || profile.provider || "未知供应商");
+    const isActive = profile.status === "active";
+    const credentialLabel = profile.has_api_key ? "凭据已保存" : "需要配置凭据";
     return `
     <article class="workspace-row model-profile-card" data-model-id="${Number(profile.id)}">
-      <div class="workspace-row-main"><div class="workspace-row-title">${escapeHtml(profile.model_name)} ${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}<span class="status-chip ${profile.status === 'active' ? 'info' : 'warning'}">${profile.status === 'active' ? '连接可用' : '已停用'}</span>${profile.provider === 'kimi_code' ? `<span class="status-chip warning">${state.user?.role === 'admin' ? '订阅模型 · 可按用途共享' : '个人订阅'}</span>` : ''}</div><div class="workspace-row-meta model-primary-meta"><span>${escapeHtml(modelProviderLabel(profile.provider))}</span><span>${profile.has_api_key ? '凭据已安全保存' : '需要配置凭据'}</span></div><details class="row-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || '使用服务商默认地址')}</span><span>上下文窗口 ${formatModelTokenCount(limits.context_window_tokens)} tokens</span><span>最大输入 ${formatModelTokenCount(limits.max_input_tokens)} tokens</span><span>最大输出 ${formatModelTokenCount(limits.max_output_tokens)} tokens</span><span>能力状态 <em class="status-chip ${tokenStatus.tone}">${tokenStatus.label}</em></span><span>思考模式 ${Number(profile.thinking_enabled) ? '开启' : '关闭'}</span><span>Temperature ${escapeHtml(profile.temperature ?? '--')}</span>${profile.request_timeout_ms ? `<span>模型请求超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ''}</div></details></div>
-      <div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" data-model-action="default" ${profile.is_default ? 'disabled' : ''}>设为默认</button><button class="btn btn-secondary btn-sm" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" data-model-action="delete" aria-label="删除 ${escapeHtml(profile.model_name)}"><i data-lucide="trash-2" size="14"></i></button></div>
+      <header class="model-profile-card-header">
+        <div class="model-profile-identity"><span class="model-profile-mark" aria-hidden="true"><i data-lucide="cpu" size="18"></i></span><div class="model-profile-identity-copy"><div class="model-profile-name-row"><h3>${modelName}</h3>${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}</div><p>${providerLabel}</p></div></div>
+        <div class="model-profile-statuses"><span class="status-chip ${isActive ? "info" : "warning"}">${isActive ? "连接可用" : "已停用"}</span>${profile.provider === "kimi_code" ? `<span class="status-chip warning">${state.user?.role === "admin" ? "订阅模型 · 可按用途共享" : "个人订阅"}</span>` : ""}</div>
+      </header>
+      <div class="model-profile-signals"><div class="model-profile-signal"><span>凭据状态</span><strong class="${profile.has_api_key ? "is-positive" : "is-warning"}">${credentialLabel}</strong></div><div class="model-profile-signal"><span>能力状态</span><strong>${tokenStatus.label}</strong></div><div class="model-profile-signal"><span>思考模式</span><strong>${Number(profile.thinking_enabled) ? "开启" : "关闭"}</strong></div></div>
+      <details class="row-details model-profile-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || "使用服务商默认地址")}</span><span>上下文窗口 ${formatModelTokenCount(limits.context_window_tokens)} tokens</span><span>最大输入 ${formatModelTokenCount(limits.max_input_tokens)} tokens</span><span>最大输出 ${formatModelTokenCount(limits.max_output_tokens)} tokens</span><span>能力状态 <em class="status-chip ${tokenStatus.tone}">${tokenStatus.label}</em></span><span>Temperature ${escapeHtml(profile.temperature ?? "--")}</span>${profile.request_timeout_ms ? `<span>模型请求超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ""}</div></details>
+      <footer class="workspace-row-actions model-profile-card-actions"><button class="btn btn-secondary btn-sm" type="button" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" type="button" data-model-action="default" ${profile.is_default ? "disabled" : ""}>设为默认</button><button class="btn btn-secondary btn-sm" type="button" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" type="button" data-model-action="delete" aria-label="删除 ${modelName}"><i data-lucide="trash-2" size="14" aria-hidden="true"></i></button></footer>
     </article>`;
   }).join("");
   initIcons();
@@ -4358,7 +4443,12 @@ function renderModelProfiles() {
 
 async function loadModelManagement() {
   const host = $("modelProfilesList");
-  if (host) host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
+  if (host) {
+    host.classList.remove("hidden");
+    host.innerHTML = '<div class="workspace-skeleton"></div><div class="workspace-skeleton"></div>';
+  }
+  $("modelCatalogEmptyState")?.classList.add("hidden");
+  setText("modelCatalogResultCount", "正在加载模型");
   setText("modelEffectiveSource", "正在选择…");
   const notice = $("modelSourceNotice");
   if (notice) notice.innerHTML = '<span><strong>模型来源：</strong>正在向服务端确认当前可用配置…</span>';
@@ -4374,8 +4464,10 @@ async function loadModelManagement() {
     renderModelProfiles();
   } else {
     state.modelProfiles = [];
+    $("modelCatalogEmptyState")?.classList.add("hidden");
     setText("modelCountStat", "--");
     setText("modelActiveStat", "--");
+    setText("modelCatalogResultCount", "模型目录加载失败");
     if ($("modelCatalogSummary")) $("modelCatalogSummary").textContent = "模型列表加载失败";
     if (host) host.innerHTML = `<div class="workspace-panel model-load-error" role="alert"><span class="model-load-error-icon"><i data-lucide="circle-alert" size="18"></i></span><div><strong>模型列表加载失败</strong><small>${escapeHtml(profilesResult.reason?.message || "请检查网络连接后重试")}</small></div><button class="btn btn-secondary btn-sm" type="button" data-action="retry-model-management">重新加载</button></div>`;
   }
@@ -4805,6 +4897,76 @@ function adminStrategyDispatchTargetReason(target = {}) {
   return localizeReason(target?.reason_code || target?.reason || target?.message || target?.error || target?.exclusion_reason || "");
 }
 
+function adminStrategyDispatchTargetLabel(target = {}) {
+  const parts = [target?.user_account, target?.user_nickname]
+    .map(value => String(value || "").trim())
+    .filter(Boolean);
+  return [...new Set(parts)].join(" · ") || "订阅目标";
+}
+
+function adminStrategyDispatchPreviewTargetRows(preview = {}) {
+  const candidates = preview?.targets || preview?.target_results || preview?.target_statuses;
+  return Array.isArray(candidates) ? candidates : [];
+}
+
+function adminStrategyDispatchPreviewTargetValid(target = {}) {
+  const value = target?.valid ?? target?.eligible ?? target?.is_eligible ?? target?.executable ?? target?.is_valid;
+  if (value === true || value === 1) return true;
+  return ["true", "1", "yes", "eligible", "executable", "allowed"].includes(String(value || "").trim().toLowerCase());
+}
+
+function adminStrategyDispatchPreviewTargetIdentity(target = {}) {
+  const targetRole = String(target?.target_role || target?.role || "").trim().toLowerCase();
+  const subscriptionId = target?.subscription_id ?? target?.subscription?.id;
+  if (Number.isFinite(Number(subscriptionId)) && Number(subscriptionId) > 0) return `subscription:${Number(subscriptionId)}`;
+  const account = target?.account || target?.snapshot?.account || target?.account_snapshot || {};
+  const accountId = target?.trading_account_id ?? target?.account_id ?? account?.id;
+  if (Number.isFinite(Number(accountId)) && Number(accountId) > 0) return `${targetRole || "account"}:${Number(accountId)}`;
+  const broker = target?.broker_server || target?.broker?.server || account?.broker_server;
+  const login = target?.login_account || target?.broker?.login || account?.login_account;
+  if (broker || login) return `broker:${String(broker || "").trim().toUpperCase()}|login:${String(login || "").trim()}`;
+  const userId = target?.user_id ?? target?.user?.id;
+  if (userId != null && String(userId).trim()) return `user:${String(userId).trim()}`;
+  return "";
+}
+
+function adminStrategyDispatchPreviewUniqueTargets(targets = []) {
+  const seen = new Set();
+  return targets.filter((target, index) => {
+    if (!target || typeof target !== "object") return false;
+    const identity = adminStrategyDispatchPreviewTargetIdentity(target) || `row:${index}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
+function adminStrategyDispatchPreviewEligibleTargets(preview = {}) {
+  const sourceCandidates = [preview?.source, preview?.source_account]
+    .filter(target => target && typeof target === "object")
+    .filter(adminStrategyDispatchPreviewTargetValid);
+  const targetRows = adminStrategyDispatchPreviewTargetRows(preview)
+    .filter(adminStrategyDispatchPreviewTargetValid);
+  const explicitRows = ["eligible_targets", "executable_targets", "valid_targets"]
+    .flatMap(key => Array.isArray(preview?.[key]) ? preview[key] : []);
+  return adminStrategyDispatchPreviewUniqueTargets([...sourceCandidates, ...targetRows, ...explicitRows]);
+}
+
+function adminStrategyDispatchPreviewExcludedTargets(preview = {}) {
+  const rows = ["exclusions", "excluded", "excluded_targets", "ineligible_targets"]
+    .flatMap(key => Array.isArray(preview?.[key]) ? preview[key] : []);
+  return adminStrategyDispatchPreviewUniqueTargets(rows);
+}
+
+function adminStrategyDispatchPreviewTargetRow(target, { excluded = false } = {}) {
+  const targetRole = String(target?.target_role || target?.role || "").toLowerCase();
+  const fallbackLabel = targetRole === "source" ? "管理员源账户" : "订阅目标";
+  const label = adminStrategyDispatchTargetLabel(target) === "订阅目标" && targetRole === "source"
+    ? fallbackLabel : adminStrategyDispatchTargetLabel(target);
+  const reason = excluded ? adminStrategyDispatchTargetReason(target) || "未满足执行条件" : "";
+  return `<li class="admin-strategy-dispatch-detail-row ${excluded ? "is-excluded" : "is-executable"}"><span><strong>${escapeHtml(label)}</strong>${reason ? `<small>${escapeHtml(reason)}</small>` : ""}</span><em>${excluded ? "排除" : "可执行"}</em></li>`;
+}
+
 function renderAdminStrategyDispatchProgress() {
   const panel = $("adminStrategyDispatchProgress");
   const summary = $("adminStrategyDispatchProgressSummary");
@@ -4833,7 +4995,7 @@ function renderAdminStrategyDispatchProgress() {
   summary.innerHTML = `<div class="admin-strategy-dispatch-summary-grid"><span><small>源账户</small><strong>${escapeHtml(sourceText)}</strong></span><span><small>源订单阶段</small><strong>${escapeHtml(adminStrategyDispatchStatusLabel(sourceStage))}</strong></span><span><small>订阅总数</small><strong>${total}</strong></span><span><small>可执行</small><strong>${counters.executable}</strong></span><span><small>成功</small><strong>${counters.success}</strong></span><span><small>拒绝 / 跳过 / 待确认</small><strong>${counters.rejected} / ${counters.skipped} / ${counters.uncertain}</strong></span></div>`;
   targetsHost.innerHTML = targets.length ? targets.map(target => {
     const targetStatus = adminStrategyDispatchTargetStatus(target);
-    const label = target?.user_label || target?.user_name || target?.nickname || (target?.user_id ? `用户 #${target.user_id}` : "订阅目标");
+    const label = adminStrategyDispatchTargetLabel(target);
     const reason = adminStrategyDispatchTargetReason(target);
     return `<div class="admin-strategy-dispatch-target-row ${escapeHtml(targetStatus)}"><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(target?.symbol || root?.symbol || "--")}${target?.volume != null ? ` · ${escapeHtml(volumeText(target.volume))}` : ""}</small></span><span class="status-chip ${targetStatus === "success" || targetStatus === "succeeded" || targetStatus === "completed" ? "success" : targetStatus === "rejected" || targetStatus === "failed" ? "danger" : targetStatus === "uncertain" ? "warning" : "info"}">${escapeHtml(adminStrategyDispatchTargetStatusLabel(targetStatus))}</span>${reason ? `<em title="${escapeHtml(reason)}">${escapeHtml(reason)}</em>` : ""}</div>`;
   }).join("") : `<p class="admin-strategy-dispatch-empty">暂无逐目标结果，刷新以恢复进度。</p>`;
@@ -4942,12 +5104,19 @@ function renderAdminStrategyDispatchPreview(order, data) {
   const source = preview?.source_account || preview?.source || {};
   const sourceSnapshot = source?.snapshot || source?.account_snapshot || {};
   const sourceText = source?.login_account || source?.login || source?.account || source?.name || sourceSnapshot?.account?.login_account || sourceSnapshot?.account?.nickname || "管理员源账户";
-  const excluded = preview?.excluded || preview?.excluded_targets || preview?.exclusions || [];
-  const excludedRows = Array.isArray(excluded) ? excluded : [];
-  const reasons = excludedRows.slice(0, 8).map(item => `<li>${escapeHtml(item?.user_label || item?.user_name || (item?.user_id ? `用户 #${item.user_id}` : "订阅目标"))}：${escapeHtml(adminStrategyDispatchTargetReason(item) || "未满足执行条件")}</li>`).join("");
+  const executableRows = adminStrategyDispatchPreviewEligibleTargets(preview);
+  const excludedRows = adminStrategyDispatchPreviewExcludedTargets(preview);
+  const executableCount = counters.executable || executableRows.length;
+  const excludedCount = counters.excluded || excludedRows.length;
+  const executableItems = executableRows.length
+    ? executableRows.map(target => adminStrategyDispatchPreviewTargetRow(target)).join("")
+    : `<li class="admin-strategy-dispatch-detail-empty">${executableCount ? "接口未返回可执行账号明细，请刷新后重试。" : "暂无可执行账号"}</li>`;
+  const excludedItems = excludedRows.length
+    ? excludedRows.map(target => adminStrategyDispatchPreviewTargetRow(target, { excluded:true })).join("")
+    : `<li class="admin-strategy-dispatch-detail-empty">${excludedCount ? "接口未返回排除账号明细，请刷新后重试。" : "暂无排除账号"}</li>`;
   const stopLossText = adminStrategyDispatchProtectionDisplay(order.meta.stopLoss);
   const takeProfitText = adminStrategyDispatchProtectionDisplay(order.meta.takeProfit);
-  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(stopLossText)} / ${escapeHtml(takeProfitText)}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div>${reasons ? `<div class="admin-strategy-dispatch-exclusion"><span>排除原因</span><ul>${reasons}</ul></div>` : ""}<div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason || "未填写")}</strong></div>`;
+  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(stopLossText)} / ${escapeHtml(takeProfitText)}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div><details class="admin-strategy-dispatch-target-details"><summary><span>查看账号明细</span><small>可执行与排除账号</small><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary><div class="admin-strategy-dispatch-details-body"><section class="admin-strategy-dispatch-detail-section admin-strategy-dispatch-executable"><div class="admin-strategy-dispatch-detail-heading"><strong>可执行账号</strong><span>${executableCount}</span></div><ul>${executableItems}</ul></section><section class="admin-strategy-dispatch-detail-section admin-strategy-dispatch-exclusion"><div class="admin-strategy-dispatch-detail-heading"><strong>排除账号</strong><span>${excludedCount}</span></div><ul>${excludedItems}</ul></section></div></details><div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason || "未填写")}</strong></div>`;
   $("adminStrategyDispatchModal")?.classList.remove("hidden");
   document.body.classList.add("modal-open");
   initIcons();
@@ -15327,6 +15496,25 @@ function bindEvents() {
     renderSubscriptionScheduleWindows(rows);
   });
   $("addModelProfileBtn")?.addEventListener("click", () => openModelEditor());
+  $("modelCatalogSearch")?.addEventListener("input", event => {
+    state.modelCatalogSearch = event.target.value || "";
+    renderModelProfiles();
+  });
+  $("modelCatalogStatus")?.addEventListener("change", event => {
+    state.modelCatalogStatus = event.target.value || "all";
+    renderModelProfiles();
+  });
+  $("modelCatalogEmptyState")?.addEventListener("click", event => {
+    if (!event.target.closest("[data-model-catalog-clear]")) return;
+    state.modelCatalogSearch = "";
+    state.modelCatalogStatus = "all";
+    const search = $("modelCatalogSearch");
+    const status = $("modelCatalogStatus");
+    if (search) search.value = "";
+    if (status) status.value = "all";
+    renderModelProfiles();
+    search?.focus();
+  });
   $("modelPurposeBindingsList")?.addEventListener("click", event => {
     const button = event.target.closest("[data-save-model-purpose]");
     if (button) saveModelPurposeBinding(button).catch(error => toast(error.message || "保存失败，请重试", "error"));
@@ -15722,7 +15910,7 @@ function bindEvents() {
       const row = modelAction.closest("[data-model-id]"); const id = Number(row?.dataset.modelId); const profile = state.modelProfiles.find(item => Number(item.id) === id); const scope = state.user?.role === "admin" ? "platform" : "user";
       try {
         if (modelAction.dataset.modelAction === "edit") openModelEditor(profile);
-        else if (modelAction.dataset.modelAction === "test") { modelAction.disabled = true; const data = await api(`/api/ai/model-profiles/${id}/test`, { method:"POST", body:{ scope }, timeout:modelRequestTransportTimeoutMs(profile?.request_timeout_ms) }); toast(`连接成功 · ${data.latency_ms} ms`, "success"); }
+        else if (modelAction.dataset.modelAction === "test") { modelAction.disabled = true; modelAction.setAttribute("aria-busy", "true"); modelAction.textContent = "测试中…"; const data = await api(`/api/ai/model-profiles/${id}/test`, { method:"POST", body:{ scope }, timeout:modelRequestTransportTimeoutMs(profile?.request_timeout_ms) }); toast(`连接成功 · ${data.latency_ms} ms`, "success"); }
         else if (modelAction.dataset.modelAction === "default") { await api(`/api/ai/model-profiles/${id}/default`, { method:"POST", body:{ scope } }); toast("默认模型已更新", "success"); await loadModelManagement(); }
         else if (modelAction.dataset.modelAction === "delete") {
           modelAction.disabled = true;
@@ -15760,7 +15948,7 @@ function bindEvents() {
           toast("模型已删除", "success");
           await loadModelManagement();
         }
-      } catch (error) { toast(localizeReason(error.message),"error"); } finally { modelAction.disabled = false; }
+      } catch (error) { toast(localizeReason(error.message),"error"); } finally { if (modelAction.dataset.modelAction === "test") { modelAction.textContent = "测试连接"; modelAction.removeAttribute("aria-busy"); } modelAction.disabled = false; }
       return;
     }
     if (manualReviewAction) {

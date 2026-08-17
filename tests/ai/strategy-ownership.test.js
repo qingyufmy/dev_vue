@@ -575,6 +575,24 @@ describe('subscription transaction and V1 execution constraint', () => {
     expect(sql.some(value => value.includes('INSERT INTO user_bridge_settings'))).toBe(true)
   })
 
+  it('mirrors the legacy auto-trade switch when subscriptions become active or inactive', async () => {
+    await createSubscription(2, 'user', { trading_account_id: 10, strategy_id: 2, execution_enabled: true })
+    const createSchedulerWrite = txRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
+    expect(createSchedulerWrite?.[0]).toContain('enable_auto_trade')
+    expect(createSchedulerWrite?.[0]).toContain('VALUES (?, 1, ?, 1, ?, ?, ?)')
+    expect(createSchedulerWrite?.[0]).toContain('enable_auto_trade = 1')
+
+    txRun.mockClear()
+    await updateSubscription(20, 2, 'user', { execution_enabled: true })
+    const updateSchedulerWrite = txRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO auto_scheduler'))
+    expect(updateSchedulerWrite?.[0]).toContain('enable_auto_trade = 1')
+
+    txRun.mockClear()
+    await updateSubscription(20, 2, 'user', { execution_enabled: false })
+    const disableSchedulerWrite = txRun.mock.calls.find(([sql]) => sql.includes('UPDATE auto_scheduler SET enabled = 0'))
+    expect(disableSchedulerWrite?.[0]).toContain('enable_auto_trade = 0')
+  })
+
   it('does not enable execution for a transferred MT5 account', async () => {
     txRun.mockImplementation(sql => {
       if (sql.includes('FROM trading_accounts')) return [[{ ...ACCOUNT, observe_status:'transferred' }], []]

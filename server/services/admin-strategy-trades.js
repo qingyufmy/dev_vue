@@ -118,6 +118,13 @@ function symbolMatches(symbol, ...symbolLists) {
   return symbolLists.flatMap(parseSymbols).some(item => stripBrokerSuffix(item) === wanted)
 }
 
+function userTargetDisplayFields(row = {}) {
+  return {
+    user_account: String(row.user_account || '').trim() || null,
+    user_nickname: String(row.user_nickname || '').trim() || null,
+  }
+}
+
 function snapshotForTarget(row, input, strategy, targetRole, exclusionReason = null) {
   const schedule = {
     enabled: Number(row.schedule_enabled || 0) === 1,
@@ -177,6 +184,8 @@ async function loadPlatformStrategy(strategyId) {
 
 async function loadSourceRow(actorUserId, accountId) {
   const row = await queryOne(`SELECT ta.*, u.role AS user_role, u.plan, u.plan_expires_at,
+      COALESCE(NULLIF(TRIM(u.phone), ''), NULLIF(TRIM(u.email), ''), NULLIF(TRIM(u.uid), '')) AS user_account,
+      NULLIF(TRIM(u.nickname), '') AS user_nickname,
       own.id AS ownership_history_id, own.user_id AS ownership_user_id,
       own.trading_account_id AS ownership_trading_account_id,
       own.broker_server_key AS ownership_broker_server_key, own.login_account AS ownership_login_account,
@@ -194,6 +203,8 @@ async function loadSourceRow(actorUserId, accountId) {
 async function loadSubscriberRows(strategyId) {
   return queryAll(`SELECT ss.*, apt.symbols_json AS strategy_symbols_json,
       u.role AS user_role, u.plan, u.plan_expires_at,
+      COALESCE(NULLIF(TRIM(u.phone), ''), NULLIF(TRIM(u.email), ''), NULLIF(TRIM(u.uid), '')) AS user_account,
+      NULLIF(TRIM(u.nickname), '') AS user_nickname,
       ta.broker_server, ta.login_account, ta.nickname AS account_nickname,
       ta.margin_mode, ta.observe_status, ta.is_deleted AS account_is_deleted,
       own.id AS ownership_history_id, own.user_id AS ownership_user_id,
@@ -218,7 +229,7 @@ async function loadSubscriberRows(strategyId) {
         AND UPPER(COALESCE(mds2.broker_server, '')) = UPPER(ta.broker_server)
         AND CAST(COALESCE(mds2.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
     )
-    WHERE ss.strategy_id = ? AND ss.is_deleted = 0
+    WHERE ss.strategy_id = ? AND ss.is_deleted = 0 AND ss.execution_enabled = 1
     ORDER BY ss.id ASC`, [strategyId])
 }
 
@@ -285,6 +296,7 @@ export async function buildAdminStrategyTradePreview(actorUserId, body = {}, hea
   const sourceReason = sourceEligibility(sourceRow, actorId)
   const source = {
     target_role: 'source', user_id: actorId, trading_account_id: input.trading_account_id,
+    ...userTargetDisplayFields(sourceRow),
     valid: !sourceReason, exclusion_reason: sourceReason,
     snapshot: snapshotForTarget({ ...sourceRow, user_id: actorId, bridge_generation: getBridgeGeneration(actorId) ?? sourceRow.bridge_generation }, input, strategy, 'source', sourceReason),
   }
@@ -295,6 +307,7 @@ export async function buildAdminStrategyTradePreview(actorUserId, body = {}, hea
     return {
       target_role: 'subscriber', subscription_id: Number(row.id), user_id: Number(row.user_id),
       trading_account_id: Number(row.trading_account_id), valid: !reason, exclusion_reason: reason,
+      ...userTargetDisplayFields(row),
       snapshot: snapshotForTarget(enriched, input, strategy, 'subscriber', reason),
     }
   })
@@ -407,7 +420,11 @@ export async function getAdminStrategyTradeDispatch(dispatchId, actorUserId = nu
     FROM admin_strategy_trade_dispatches d LEFT JOIN auto_prompt_types apt ON apt.id = d.strategy_id
       LEFT JOIN ai_signals s ON s.id = d.signal_id WHERE d.id = ?`, [id])
   if (!dispatch || (actorUserId != null && Number(dispatch.actor_user_id) !== normalizeId(actorUserId, 'actor_user_id'))) return null
-  const targets = await queryAll('SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? ORDER BY target_role = \'source\' DESC, id ASC', [id])
+  const targets = await queryAll(`SELECT t.*,
+      COALESCE(NULLIF(TRIM(u.phone), ''), NULLIF(TRIM(u.email), ''), NULLIF(TRIM(u.uid), '')) AS user_account,
+      NULLIF(TRIM(u.nickname), '') AS user_nickname
+    FROM admin_strategy_trade_targets t LEFT JOIN users u ON u.id = t.user_id
+    WHERE t.dispatch_id = ? ORDER BY t.target_role = 'source' DESC, t.id ASC`, [id])
   return { ...dispatch, strategy_snapshot: parseJson(dispatch.strategy_snapshot_json), targets: targets.map(decodeTarget), summary: { target_count: targets.length, succeeded: targets.filter(t => t.status === 'succeeded').length, rejected: targets.filter(t => t.status === 'rejected').length, skipped: targets.filter(t => t.status === 'skipped').length, failed: targets.filter(t => ['failed', 'failed_manual_review'].includes(t.status)).length, uncertain: targets.filter(t => t.status === 'uncertain').length } }
 }
 
@@ -473,6 +490,7 @@ export const __adminStrategyTradeTest = {
   normalizeAdminStrategyTradeInput,
   stableHash,
   symbolMatches,
+  userTargetDisplayFields,
   sourceEligibility,
   subscriberEligibility,
   uniqueSubscriberRows,

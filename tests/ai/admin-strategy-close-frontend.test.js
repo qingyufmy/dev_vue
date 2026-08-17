@@ -52,4 +52,12 @@ describe('admin strategy linked close frontend contract', () => {
     expect(css).toContain('.position-protection-target-status.uncertain')
     expect(html).toContain('admin-strategy-close1')
   })
+
+  it('renders the second dangerous confirmation above the position editor modal', () => {
+    const formModalZ = Number(css.match(/\.form-modal\s*\{[^}]*z-index:\s*(\d+)/s)?.[1])
+    const confirmModalZ = Number(css.match(/#genericConfirmModal\s*\{[^}]*z-index:\s*(\d+)/s)?.[1])
+    expect(formModalZ).toBeGreaterThan(0)
+    expect(confirmModalZ).toBeGreaterThan(formModalZ)
+    expect(html).toContain('admin-strategy-close-confirm1')
+  })
 })

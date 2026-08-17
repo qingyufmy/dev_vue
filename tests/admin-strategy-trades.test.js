@@ -165,6 +165,29 @@ describe('admin strategy trade contract', () => {
     expect(service).toContain('SELECT MAX(mds2.id) FROM market_data_sources mds2')
   })
 
+  it('exposes safe user account and nickname fields for preview and dispatch GET targets', () => {
+    const service = fs.readFileSync(new URL('../server/services/admin-strategy-trades.js', import.meta.url), 'utf8')
+    expect(__adminStrategyTradeTest.userTargetDisplayFields({ user_account: '18192234189', user_nickname: '测试用户' })).toEqual({
+      user_account: '18192234189', user_nickname: '测试用户',
+    })
+    expect(__adminStrategyTradeTest.userTargetDisplayFields({ user_account: '  ', user_nickname: '' })).toEqual({
+      user_account: null, user_nickname: null,
+    })
+    expect(service).toContain("COALESCE(NULLIF(TRIM(u.phone), ''), NULLIF(TRIM(u.email), ''), NULLIF(TRIM(u.uid), '')) AS user_account")
+    expect(service).toContain("NULLIF(TRIM(u.nickname), '') AS user_nickname")
+    expect(service).toContain('FROM admin_strategy_trade_targets t LEFT JOIN users u ON u.id = t.user_id')
+    expect(service).not.toContain('u.password AS')
+  })
+
+  it('limits dispatch candidates to currently enabled strategy subscriptions', () => {
+    const service = fs.readFileSync(new URL('../server/services/admin-strategy-trades.js', import.meta.url), 'utf8')
+    const subscriberQuery = service.slice(
+      service.indexOf('async function loadSubscriberRows'),
+      service.indexOf('function uniqueSubscriberRows'),
+    )
+    expect(subscriberQuery).toContain('WHERE ss.strategy_id = ? AND ss.is_deleted = 0 AND ss.execution_enabled = 1')
+  })
+
   it('keeps the optional protection migration idempotent and nullable', () => {
     const migrations = fs.readFileSync(new URL('../server/migrations.js', import.meta.url), 'utf8')
     const start = migrations.indexOf("id: '190_admin_strategy_trade_optional_protection'")
