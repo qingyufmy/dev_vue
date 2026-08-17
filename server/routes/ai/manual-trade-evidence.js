@@ -7,6 +7,8 @@ import { buildReviewMarketPath } from './review-market-path.js'
 import { resolveFrozenChanRequirement } from './inference-snapshots.js'
 import { assessChanEvidenceDimensions } from './chan-evidence-assessment.js'
 import { createManualTradeSelectionContext, verifyManualTradeSelectionContext } from './manual-trade-selection-context.js'
+import { buildManualReviewCounterfactualEvidenceRefs } from './manual-trade-review-contract.js'
+import { buildManualTradeReviewCounterfactualPoints, MAX_MANUAL_TRADE_REVIEW_COUNTERFACTUAL_OFFSET_BARS } from './manual-trade-review-counterfactual-points.js'
 
 export const MANUAL_TRADE_PAGE_DEFAULT = 20
 export const MANUAL_TRADE_PAGE_MAX = 100
@@ -17,6 +19,10 @@ const MANUAL_TRADE_PREPARE_POLL_INTERVAL_MS = 250
 const MT4_VISIBLE_HISTORY_INCOMPLETE = 'manual_trade_review_mt4_visible_history_incomplete'
 const MT4_VISIBLE_HISTORY_UNKNOWN = 'manual_trade_review_mt4_visible_history_unknown'
 const MT4_HISTORY_SCOPE_NOTE = 'MT4 手动复盘只覆盖终端当前可见历史；请在 MT4“账户历史”中选择“全部历史”后刷新。系统不会宣称券商全量历史。'
+const MANUAL_TRADE_REVIEW_TIMEFRAME_MS = Object.freeze({
+  M1:60_000, M5:300_000, M15:900_000, M30:1_800_000,
+  H1:3_600_000, H4:14_400_000, D1:86_400_000,
+})
 // A selector request may inspect a small number of raw Bridge pages when a
 // page contains only automated, incomplete, or otherwise filtered records.
 // Keep this bounded: the endpoint is still an on-demand cursor read, not an
@@ -776,6 +782,109 @@ function reviewPathDeals(trade = {}) {
   })
 }
 
+function primaryReviewTimeframe(strategySnapshot = {}, timeframes = []) {
+  const requested = String(strategySnapshot?.market_data_plan?.primary_timeframe || '').trim().toUpperCase()
+  return requested && timeframes.includes(requested) ? requested : String(timeframes[0] || '').trim().toUpperCase()
+}
+
+function closedCandlesFromPath(path, timeframe) {
+  const frame = path?.timeframes?.[timeframe]
+  const candles = frame?.candles
+  return Array.isArray(candles) ? candles : []
+}
+
+function counterfactualPointUnavailable(point = {}, reason = 'counterfactual_point_market_data_unavailable') {
+  return {
+    candidate_key:point.candidate_key || null,
+    decision_time_utc_msc:point.decision_time_utc_msc ?? null,
+    offset_bars:point.offset_bars ?? null,
+    primary_timeframe:point.primary_timeframe || null,
+    status:'unavailable', reason,
+    market_snapshot_hash:null, input_hash:null,
+    market_data:{ status:'unavailable', reason },
+    closed_market_data:{ status:'unavailable', reason },
+    allowed_evidence_refs:[],
+  }
+}
+
+function buildCounterfactualPointInput({ common, point, primaryTimeframe, buildPath }) {
+  return buildPath({ ...common,
+    // A candidate is a blind point. Keep the actual entry and exit deals,
+    // direction, price and protection out of this request entirely.
+    deals:[],
+    signal:{ timeframe:primaryTimeframe, signal_type:'hold' },
+    asOfUtcMsc:Number(point.decision_time_utc_msc), includeHoldingMetrics:false,
+  })
+}
+
+/**
+ * Build a frozen, independently-cutoff candidate set around the real entry.
+ * The initial window is used only to locate real closed candle boundaries; no
+ * window payload is sent to a model or retained as evidence.  Each retained
+ * point then gets a separate path request at its own decision cutoff.
+ */
+async function buildCounterfactualPoints({ common, trade, preEntry, entryTimeUtcMsc, primaryTimeframe, buildPath }) {
+  const interval = MANUAL_TRADE_REVIEW_TIMEFRAME_MS[primaryTimeframe]
+  const preEntryCandles = closedCandlesFromPath(preEntry, primaryTimeframe)
+  if (!Number.isFinite(entryTimeUtcMsc) || !interval || !preEntryCandles.length) {
+    return { status:'unavailable', reason:'counterfactual_candle_sequence_unavailable', points:[] }
+  }
+
+  // The upper bound is derived from the strategy period and the bounded point
+  // policy, never from the real close time or profit result.
+  const windowCutoff = entryTimeUtcMsc + interval * (MAX_MANUAL_TRADE_REVIEW_COUNTERFACTUAL_OFFSET_BARS + 2)
+  let windowPath
+  try {
+    windowPath = await buildPath({ ...common,
+      deals:[],
+      signal:{ timeframe:primaryTimeframe, signal_type:'hold' },
+      asOfUtcMsc:windowCutoff, includeHoldingMetrics:false,
+    })
+  } catch {
+    return { status:'unavailable', reason:'counterfactual_candle_sequence_unavailable', points:[] }
+  }
+  const sequence = closedCandlesFromPath(windowPath, primaryTimeframe)
+  if (!sequence.length) return { status:'unavailable', reason:'counterfactual_candle_sequence_unavailable', points:[] }
+
+  let points
+  try {
+    points = buildManualTradeReviewCounterfactualPoints({
+      closedCandles:sequence, entryTimeUtcMsc, timeframe:primaryTimeframe,
+    })
+  } catch (error) {
+    const reason = String(error?.code || error?.message || '').includes('candidate_unavailable')
+      ? 'counterfactual_candidate_unavailable' : 'counterfactual_candle_sequence_invalid'
+    return { status:'unavailable', reason, points:[] }
+  }
+
+  const frozen = []
+  for (const point of points) {
+    const descriptor = { ...point, primary_timeframe:primaryTimeframe }
+    try {
+      const pointPath = await buildCounterfactualPointInput({ common, point, primaryTimeframe, buildPath })
+      const pointStatus = pointPath?.status === 'complete' ? 'complete' : 'partial'
+      const evidence = {
+        ...descriptor, status:pointStatus,
+        market_snapshot_hash:pointPath?.hash || sha256(JSON.stringify(pointPath || {})),
+        input_hash:sha256(JSON.stringify({ candidate:descriptor, cutoff:Number(point.decision_time_utc_msc) })),
+        market_data:pointPath,
+        closed_market_data:pointPath,
+      }
+      evidence.allowed_evidence_refs = buildManualReviewCounterfactualEvidenceRefs(
+        trade.source_identity_hash, point.candidate_key, evidence)
+      if (pointStatus !== 'complete') {
+        evidence.status = 'unavailable'
+        evidence.reason = 'counterfactual_point_market_data_incomplete'
+      }
+      frozen.push(evidence)
+    } catch {
+      frozen.push(counterfactualPointUnavailable(descriptor))
+    }
+  }
+  const failed = frozen.find(point => point.status !== 'complete')
+  return { status:failed ? 'unavailable' : 'complete', reason:failed?.reason || null, points:frozen }
+}
+
 /**
  * Build frozen market evidence for each selected source. The path builder is
  * intentionally bounded to the frozen strategy's first four timeframes and
@@ -849,10 +958,27 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
       })
       const outcomePath = await buildPath({ ...common,
         signal:{ timeframe:String(strategySnapshot?.market_data_plan?.primary_timeframe || timeframes[0]),
-          signal_type:trade.direction, stop_loss_price:trade.stop_loss, take_profit_1_price:trade.take_profit },
+           signal_type:trade.direction, stop_loss_price:trade.stop_loss, take_profit_1_price:trade.take_profit },
       })
-      const path = { status:preEntry?.status === 'complete' && outcomePath?.status === 'complete' ? 'complete' : 'partial',
-        pre_entry:preEntry, outcome_path:outcomePath }
+      const primaryTimeframe = primaryReviewTimeframe(strategySnapshot, timeframes)
+      const primaryFrame = preEntry?.timeframes?.[primaryTimeframe]
+      const hasCandidateEvidenceShape = primaryFrame && Object.prototype.hasOwnProperty.call(primaryFrame, 'candles')
+      const counterfactual = hasCandidateEvidenceShape
+        ? await buildCounterfactualPoints({ common, trade, preEntry, entryTimeUtcMsc, primaryTimeframe, buildPath })
+        : null
+      const candidatePoints = counterfactual?.points || []
+      const candidatePointsByKey = Object.fromEntries(candidatePoints
+        .filter(point => point?.candidate_key)
+        .map(point => [point.candidate_key, point]))
+      const baseComplete = preEntry?.status === 'complete' && outcomePath?.status === 'complete'
+      const path = { status:baseComplete && (!counterfactual || counterfactual.status === 'complete') ? 'complete' : 'partial',
+        pre_entry:preEntry, outcome_path:outcomePath,
+        ...(counterfactual ? {
+          counterfactual_points:candidatePoints,
+          candidate_points:candidatePointsByKey,
+          counterfactual_points_status:counterfactual.status,
+          counterfactual_points_reason:counterfactual.reason,
+        } : {}) }
       if (chanRequirement.status === 'enabled') {
         const chanFrames = [...new Set(chanRequirement.timeframes || [])]
         const chanEvidence = { pre_entry:{}, outcome:{} }
@@ -892,7 +1018,8 @@ export async function buildManualTradeMarketEvidence({ actor, account, trades = 
       }
       marketData.trades[identity] = path
       if (path.status !== 'complete') {
-        const reason = path.reason || preEntry?.reason || outcomePath?.reason || 'market_path_incomplete'
+        const reason = path.counterfactual_points_reason || path.reason || preEntry?.reason || outcomePath?.reason || 'market_path_incomplete'
+        path.reason = reason
         failures.push(`${identity}:${reason}`)
         addIssue({ scope:preEntry?.status === 'complete' ? 'outcome' : 'pre_entry',
           timeframe:strategySnapshot?.market_data_plan?.primary_timeframe || timeframes[0], code:marketIssueCode(reason) })

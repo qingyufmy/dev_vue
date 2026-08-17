@@ -38,10 +38,40 @@ function addMarketReferences(target, identity, phase, path = {}) {
   }
 }
 
+function candidatePointValues(path = {}) {
+  const points = path?.counterfactual_points ?? path?.counterfactualPoints
+    ?? path?.candidate_points ?? path?.candidatePoints
+  if (Array.isArray(points)) return points
+  if (points && typeof points === 'object') return Object.values(points)
+  return []
+}
+
+/**
+ * Build the exact, phase-specific references that a single counterfactual
+ * point is allowed to cite.  The candidate key is part of every market ref so
+ * one point cannot cite another point's cutoff evidence by accident.
+ */
+export function buildManualReviewCounterfactualEvidenceRefs(identity, candidateKey, point = {}) {
+  const normalizedIdentity = String(identity || '').trim()
+  const normalizedKey = String(candidateKey || point?.candidate_key || point?.candidateKey || '').trim()
+  const refs = new Set()
+  const market = point?.closed_market_data ?? point?.closedMarketData
+    ?? point?.market_data ?? point?.marketData ?? point?.path ?? {}
+  for (const [timeframe, frame] of Object.entries(market?.timeframes || {})) {
+    const normalizedTimeframe = String(timeframe || '').trim().toUpperCase()
+    if (!normalizedTimeframe || !normalizedKey) continue
+    refs.add(`market:${normalizedIdentity}:counterfactual:${normalizedKey}:${normalizedTimeframe}`)
+    if (frame?.chan) refs.add(`chan:${normalizedIdentity}:counterfactual:${normalizedKey}:${normalizedTimeframe}`)
+  }
+  return [...refs].sort()
+}
+
 export function buildManualReviewEvidenceCatalog(sourceRows = [], evidence = {}) {
   const preEntry = new Set()
   const outcome = new Set()
   const tradeRefs = new Set()
+  const counterfactual = new Set()
+  const counterfactualByTrade = {}
   const trades = evidence?.market_data?.trades || {}
   for (const row of sourceRows) {
     const identity = String(row?.source_identity_hash || '').trim()
@@ -53,11 +83,25 @@ export function buildManualReviewEvidenceCatalog(sourceRows = [], evidence = {})
     addMarketReferences(preEntry, identity, 'pre_entry', path.pre_entry)
     addMarketReferences(outcome, identity, 'pre_entry', path.pre_entry)
     addMarketReferences(outcome, identity, 'outcome', path.outcome_path)
+    const points = candidatePointValues(path)
+    for (const point of points) {
+      const candidateKey = String(point?.candidate_key || point?.candidateKey || '').trim()
+      if (!candidateKey) continue
+      const refs = buildManualReviewCounterfactualEvidenceRefs(identity, candidateKey, point)
+      counterfactualByTrade[identity] = counterfactualByTrade[identity] || {}
+      counterfactualByTrade[identity][candidateKey] = refs
+      // Candidate +1 may be after the real entry.  Keep those exact refs out
+      // of the legacy blind pre_entry catalog; point prompts receive their
+      // own allow-list, while the outcome stage can cite the frozen set.
+      refs.forEach(ref => { counterfactual.add(ref); outcome.add(ref) })
+    }
   }
   return {
     trade_refs:[...tradeRefs].sort(),
     pre_entry_refs:[...preEntry].sort(),
     outcome_refs:[...outcome].sort(),
+    counterfactual_refs:[...counterfactual].sort(),
+    counterfactual_refs_by_trade:counterfactualByTrade,
   }
 }
 

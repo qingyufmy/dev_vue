@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildManualReviewEvidenceCatalog, requiredManualReviewArray, requiredManualReviewConfidence,
+import { buildManualReviewCounterfactualEvidenceRefs, buildManualReviewEvidenceCatalog, requiredManualReviewArray, requiredManualReviewConfidence,
   requiredManualReviewText, validateFrozenStrategyPath, validateManualReviewEvidenceRefs,
 } from '../../server/routes/ai/manual-trade-review-contract.js'
 
@@ -35,6 +35,25 @@ describe('manual trade review strict output contract helpers', () => {
       .toEqual([`trade:${identity}`])
     expect(() => validateManualReviewEvidenceRefs([`market:${identity}:outcome:M15`], catalog.pre_entry_refs))
       .toThrow('manual_trade_review_output_reference_invalid')
+  })
+
+  it('adds exact candidate-point references without allowing cross-point market evidence', () => {
+    const candidate = { candidate_key:'anchor_plus_1', closed_market_data:{
+      timeframes:{ M15:{ candles:[{ time_utc_msc:1000 }], chan:{ status:'complete' } } },
+    } }
+    const refs = buildManualReviewCounterfactualEvidenceRefs(identity, candidate.candidate_key, candidate)
+    expect(refs).toEqual([
+      `chan:${identity}:counterfactual:anchor_plus_1:M15`,
+      `market:${identity}:counterfactual:anchor_plus_1:M15`,
+    ])
+    const catalog = buildManualReviewEvidenceCatalog([{ source_identity_hash:identity }], { market_data:{ trades:{
+      [identity]:{ counterfactual_points:[candidate] },
+    } } })
+    expect(catalog.counterfactual_refs).toEqual(refs)
+    expect(catalog.counterfactual_refs_by_trade[identity].anchor_plus_1).toEqual(refs)
+    expect(catalog.counterfactual_refs).not.toContain(`market:${identity}:counterfactual:anchor:M15`)
+    expect(catalog.pre_entry_refs).not.toContain(`market:${identity}:counterfactual:anchor_plus_1:M15`)
+    expect(catalog.outcome_refs).toContain(`market:${identity}:counterfactual:anchor_plus_1:M15`)
   })
 
   it('requires explicitly present non-empty text, arrays and bounded confidence', () => {
