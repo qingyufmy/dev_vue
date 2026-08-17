@@ -195,4 +195,3 @@ describe('manual trade review counterfactual points', () => {
     expect(block).not.toContain('FOREIGN KEY')
   })
 })
-
