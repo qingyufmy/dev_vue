@@ -10,6 +10,13 @@ const parse = (value, fallback = {}) => { try { return value == null ? fallback 
 const TIMEFRAME_MS = { M1: 60000, M5: 300000, M15: 900000, M30: 1800000, H1: 3600000, H4: 14400000, D1: 86400000 }
 const MAX_REVIEW_PATH_CANDLES = 5000
 
+export function expectedLatestClosedOpen(cutoffUtcMsc, timeframeIntervalMs) {
+  const cutoff = Number(cutoffUtcMsc)
+  const interval = Number(timeframeIntervalMs)
+  if (!Number.isFinite(cutoff) || cutoff <= 0 || !Number.isFinite(interval) || interval <= 0) return null
+  return Math.floor(cutoff / interval) * interval - interval
+}
+
 function dealUtcMs(deal, offsetMinutes = 0) {
   const raw = parse(deal?.raw_json, {})
   const direct = Number(raw.time_utc_msc)
@@ -41,23 +48,32 @@ export function calculateHoldingPathMetrics({ rates = [], deals = [], direction 
   const entryPrice = weightedPrice(entries)
   const exitPrice = weightedPrice(exits)
   const intervalMs = Math.max(0, Number(timeframeIntervalMs) || 0)
-  const path = rates.filter(rate => {
+  const strictPath = rates.filter(rate => {
     const openTime = Number(rate.time_utc_msc)
-    return openTime <= exitMs && openTime + intervalMs > entryMs
+    return intervalMs > 0 && openTime >= entryMs && openTime + intervalMs <= exitMs
   })
-  if (!Number.isFinite(entryMs) || !Number.isFinite(exitMs) || !Number.isFinite(entryPrice) || !path.length) {
-    return { status: 'partial', reason: 'holding_path_not_covered', entry_time_utc_msc: Number.isFinite(entryMs) ? entryMs : null, exit_time_utc_msc: Number.isFinite(exitMs) ? exitMs : null }
+  const boundaryCandles = rates.filter(rate => {
+    const openTime = Number(rate.time_utc_msc)
+    return intervalMs > 0 && openTime < exitMs && openTime + intervalMs > entryMs
+      && !(openTime >= entryMs && openTime + intervalMs <= exitMs)
+  })
+  if (!Number.isFinite(entryMs) || !Number.isFinite(exitMs) || !Number.isFinite(entryPrice) || !strictPath.length) {
+    return { status: 'partial', reason: 'holding_path_bar_boundary_insufficient', metric_precision:'insufficient',
+      boundary_candle_partial:boundaryCandles.length > 0, boundary_candle_count:boundaryCandles.length,
+      entry_time_utc_msc: Number.isFinite(entryMs) ? entryMs : null, exit_time_utc_msc: Number.isFinite(exitMs) ? exitMs : null }
   }
-  const high = Math.max(...path.map(rate => Number(rate.high)))
-  const low = Math.min(...path.map(rate => Number(rate.low)))
+  const knownPrices = [entryPrice, exitPrice].filter(Number.isFinite)
+  const high = Math.max(...knownPrices, ...strictPath.map(rate => Number(rate.high)))
+  const low = Math.min(...knownPrices, ...strictPath.map(rate => Number(rate.low)))
   const isBuy = String(direction).toLowerCase().startsWith('buy')
   const favorable = isBuy ? high - entryPrice : entryPrice - low
   const adverse = isBuy ? entryPrice - low : high - entryPrice
   const touched = price => Number.isFinite(Number(price)) && (isBuy ? high >= Number(price) : low <= Number(price))
   const stopTouched = Number.isFinite(Number(signal.stop_loss_price)) && (isBuy ? low <= Number(signal.stop_loss_price) : high >= Number(signal.stop_loss_price))
   return {
-    status: 'complete', entry_time_utc_msc: entryMs, exit_time_utc_msc: exitMs,
-    entry_price: entryPrice, exit_price: exitPrice, bars_held: path.length, path_high: high, path_low: low,
+    status: 'complete', metric_precision:'bar_bounded', boundary_candle_partial:boundaryCandles.length > 0,
+    boundary_candle_count:boundaryCandles.length, entry_time_utc_msc: entryMs, exit_time_utc_msc: exitMs,
+    entry_price: entryPrice, exit_price: exitPrice, bars_held: strictPath.length, path_high: high, path_low: low,
     max_favorable_excursion: Math.max(0, favorable), max_adverse_excursion: Math.max(0, adverse),
     max_favorable_excursion_pct: entryPrice ? Math.max(0, favorable) / entryPrice * 100 : null,
     max_adverse_excursion_pct: entryPrice ? Math.max(0, adverse) / entryPrice * 100 : null,
@@ -185,7 +201,9 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
         if (firstPath >= 0 && lastPath >= firstPath) closed = allClosed.slice(Math.max(0, firstPath - 80), Math.min(allClosed.length, lastPath + 21))
       }
       const truncatedBeforeEntry = databasePathTruncated || Boolean(entryMs && allClosed[0]?.time_utc_msc > entryMs)
-      const truncatedBeforeExit = Boolean(exitMs && allClosed.at(-1)?.time_utc_msc < exitMs - TIMEFRAME_MS[timeframe])
+      const expectedLastClosedOpen = expectedLatestClosedOpen(exitMs, TIMEFRAME_MS[timeframe])
+      const truncatedBeforeExit = Boolean(expectedLastClosedOpen != null
+        && (!allClosed.length || Number(allClosed.at(-1)?.time_utc_msc) < expectedLastClosedOpen))
       const sentinel = closed.length ? { ...closed.at(-1), time_utc_msc: Number(closed.at(-1).time_utc_msc) + TIMEFRAME_MS[timeframe] } : null
       const chanRates = chanPolicy ? (chanHistory.length ? chanHistory : allClosed) : []
       const market = calculateMarketData(symbol, timeframe, sentinel ? [...closed, sentinel] : closed, {}, [], {
@@ -196,13 +214,21 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
           chanWindowPolicyVersion:chanPolicy.windowPolicyVersion } : {}),
         chanDataQuality: response.market_meta || {},
       })
+      const coverageReasons = [
+        ...(closed.length < 20 ? ['candles_insufficient'] : []),
+        ...(truncatedBeforeEntry ? ['truncated_before_entry'] : []),
+        ...(truncatedBeforeExit ? ['truncated_before_exit'] : []),
+      ]
       evidence[timeframe] = {
         status: closed.length >= 20 && !truncatedBeforeEntry && !truncatedBeforeExit ? 'complete' : 'partial', candle_count: closed.length,
         source_candle_count: allClosed.length, truncated_before_entry: truncatedBeforeEntry, truncated_before_exit: truncatedBeforeExit,
+        expected_last_closed_open_utc_msc:expectedLastClosedOpen,
+        coverage_reason:coverageReasons.join(',') || null,
         first_time_utc_msc: closed[0]?.time_utc_msc || null, last_time_utc_msc: closed.at(-1)?.time_utc_msc || null,
         candles: closed, indicators: { atr_14: market.atr_14, rsi_14: market.rsi_14, macd: market.macd },
         ...(chanPolicy ? { chan: slimChan(market.chan) } : {}),
       }
+      if (coverageReasons.length) errors.push(`${timeframe}:${coverageReasons.join('+')}`)
       if (timeframe === timeframes[0]) { primaryRates = closed; primaryOffset = offset; primaryTruncated = truncatedBeforeEntry || truncatedBeforeExit }
     } catch (error) {
       errors.push(`${timeframe}:${String(error?.message || error).slice(0, 80)}`)
