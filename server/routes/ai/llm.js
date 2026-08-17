@@ -198,7 +198,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   bearish_score: "可选数字，表示输入行情的空方倾向；不代表胜率或执行概率",
   position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
   position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
-  position_action: "必须字段。仅允许 open | hold_no_add | allow_add | observe，表达当前策略对新开仓或加仓的结论；退出已有持仓通过 position_evaluations 表达",
+  position_action: "必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达",
   pending_action: "必须字段。仅允许 none | keep | cancel。none 表示本轮不管理现有挂单；keep 表示保留模型选中的挂单；cancel 表示取消模型选中的挂单。新信号与挂单管理是相互独立的结论",
   pending_action_reason: "中文说明挂单处理的策略依据。pending_action 为 cancel 时必须填写；其他动作可返回空字符串",
   management_direction: "必须字段。仅允许 buy | sell | none。需要取消挂单时填写被管理挂单方向；其他情况填 none",
@@ -232,7 +232,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   delete schema.cancel_pending
   schema.position_size_tier = '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数。'
   schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
-  schema.position_action = '必须字段。仅允许 open | hold_no_add | allow_add | observe，表达当前策略对新开仓或加仓的结论；退出已有持仓通过 position_evaluations 表达。'
+  schema.position_action = '必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达。'
   schema.pending_action = '必须字段。仅允许 none | keep | cancel。none 表示本轮不管理现有挂单；keep 表示保留模型选中的挂单；cancel 表示取消模型选中的挂单。新信号与挂单管理是相互独立的结论。'
   schema.pending_action_reason = '中文字符串。pending_action 为 cancel 时必须填写当前策略依据；其他动作返回空字符串。'
   schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 时填写被管理挂单方向；其他情况填 none。'
@@ -1579,6 +1579,55 @@ function currentModelDecision(parsed = {}) {
   return result
 }
 
+function normalizeHoldNoAddTrade(parsed, { signalType, entryMethod, limitPrice, stopLimitPrice, market, strictConflict = false }) {
+  const originalSignalType = String(signalType || parsed.signal_type || '').toLowerCase()
+  const originalEntryMethod = String(entryMethod || parsed.entry_method || '').toLowerCase()
+  const candidateEntryPrice = originalEntryMethod === 'market' ? market?.latest_price : limitPrice ?? parsed.limit_price
+  const positiveNumber = value => {
+    const number = Number(value)
+    return Number.isFinite(number) && number > 0 ? number : null
+  }
+  parsed.candidate_entry = {
+    signal_type:originalSignalType,
+    direction:originalSignalType.startsWith('buy') ? 'buy' : 'sell',
+    entry_method:originalEntryMethod,
+    entry_price:positiveNumber(candidateEntryPrice),
+    stop_limit_price:positiveNumber(stopLimitPrice ?? parsed.stop_limit_price),
+    stop_loss_price:positiveNumber(parsed.stop_loss_price),
+    take_profit_1_price:positiveNumber(parsed.take_profit_1_price),
+    take_profit_2_price:positiveNumber(parsed.take_profit_2_price),
+    take_profit_3_price:positiveNumber(parsed.take_profit_3_price),
+  }
+  parsed.signal_type = 'hold'
+  parsed.entry_method = 'observe'
+  parsed.recommended_volume = 0
+  parsed.position_size_tier = 'observe'
+  parsed.position_size_factor = 0
+  parsed.position_size_reason = strictConflict
+    ? '模型同时给出交易与不新增仓位结论，字段冲突，本次不执行。'
+    : '当前已有同向持仓，本次不新增仓位。'
+  parsed.management_direction = parsed.pending_action === 'cancel' ? parsed.management_direction : 'none'
+  parsed.limit_price = null
+  parsed.stop_limit_price = null
+  parsed.stop_loss_price = null
+  parsed.take_profit_1_price = null
+  parsed.take_profit_2_price = null
+  parsed.take_profit_3_price = null
+  parsed.recommended_take_profit_tier = null
+  parsed.pending_valid_minutes = 0
+  parsed.pending_valid_until = null
+  parsed.decision_summary = strictConflict
+    ? '模型同时给出交易与不新增仓位结论，字段冲突，本次不执行。'
+    : '当前已有同向持仓，策略建议继续持有，暂不加仓。'
+  parsed.normalization_info = {
+    type:strictConflict ? 'trade_hold_no_add_conflict' : 'existing_position_hold_no_add',
+    reason:strictConflict ? 'trade_hold_no_add_conflict' : 'existing_position_hold_no_add',
+    original_signal_type:originalSignalType,
+    original_entry_method:originalEntryMethod,
+  }
+  return parsed
+}
+
 function currentExecutionValidation(parsed, config, market) {
   const signalType = String(parsed.signal_type || '').toLowerCase()
   const entryMethod = String(parsed.entry_method || '').toLowerCase()
@@ -1649,13 +1698,28 @@ function currentExecutionValidation(parsed, config, market) {
 }
 
 function normalizeCurrentAiSignal(parsed, config, market) {
-  const signalType = String(parsed.signal_type || '').toLowerCase()
-  const entryMethod = String(parsed.entry_method || '').toLowerCase()
-  const isTrade = signalType.startsWith('buy') || signalType.startsWith('sell')
-  const positionTier = normalizePositionSizeTier(parsed.position_size_tier, signalType)
+  let signalType = String(parsed.signal_type || '').toLowerCase()
+  let entryMethod = String(parsed.entry_method || '').toLowerCase()
+  let isTrade = signalType.startsWith('buy') || signalType.startsWith('sell')
+  let positionTier = normalizePositionSizeTier(parsed.position_size_tier, signalType)
   const confidence = Number(parsed.confidence)
-  const pendingValidMinutes = Math.min(Math.max(parseInt(parsed.pending_valid_minutes) || 240, 1), 1440)
+  let pendingValidMinutes = Math.min(Math.max(parseInt(parsed.pending_valid_minutes) || 240, 1), 1440)
   const modelDecision = currentModelDecision(parsed)
+  if (isTrade && String(parsed.position_action || '').toLowerCase() === 'hold_no_add') {
+    normalizeHoldNoAddTrade(parsed, {
+      signalType,
+      entryMethod,
+      limitPrice:parsed.limit_price,
+      stopLimitPrice:parsed.stop_limit_price,
+      market,
+      strictConflict:true,
+    })
+    signalType = 'hold'
+    entryMethod = 'observe'
+    isTrade = false
+    positionTier = normalizePositionSizeTier(parsed.position_size_tier, signalType)
+    pendingValidMinutes = 0
+  }
   const executionValidation = currentExecutionValidation(parsed, config, market)
 
   return {
@@ -1678,7 +1742,7 @@ function normalizeCurrentAiSignal(parsed, config, market) {
     take_profit_3_price:parsed.take_profit_3_price == null ? null : Number(parsed.take_profit_3_price),
     recommended_take_profit_tier:parsed.recommended_take_profit_tier == null
       ? null : Number(parsed.recommended_take_profit_tier),
-    normalization_info:null,
+    normalization_info:parsed.normalization_info || null,
     model_decision:modelDecision,
     execution_validation:executionValidation,
   }
@@ -1908,43 +1972,13 @@ export function normalizeAiSignal(parsed, config, market) {
   // Normalize that combination to HOLD while retaining the proposed levels as
   // explicitly non-executable market evidence.
   if (signalType !== 'hold' && parsed.position_action === 'hold_no_add') {
-    const originalSignalType = signalType
-    const candidateEntryPrice = entryMethod === 'market' ? Number(market.latest_price) : limitPrice
-    parsed.candidate_entry = {
-      signal_type:originalSignalType,
-      direction:originalSignalType.startsWith('buy') ? 'buy' : 'sell',
-      entry_method:entryMethod,
-      entry_price:Number.isFinite(Number(candidateEntryPrice)) && Number(candidateEntryPrice) > 0 ? Number(candidateEntryPrice) : null,
-      stop_limit_price:Number.isFinite(Number(stopLimitPrice)) && Number(stopLimitPrice) > 0 ? Number(stopLimitPrice) : null,
-      stop_loss_price:Number.isFinite(Number(parsed.stop_loss_price)) && Number(parsed.stop_loss_price) > 0 ? Number(parsed.stop_loss_price) : null,
-      take_profit_1_price:Number.isFinite(Number(parsed.take_profit_1_price)) && Number(parsed.take_profit_1_price) > 0 ? Number(parsed.take_profit_1_price) : null,
-      take_profit_2_price:Number.isFinite(Number(parsed.take_profit_2_price)) && Number(parsed.take_profit_2_price) > 0 ? Number(parsed.take_profit_2_price) : null,
-      take_profit_3_price:Number.isFinite(Number(parsed.take_profit_3_price)) && Number(parsed.take_profit_3_price) > 0 ? Number(parsed.take_profit_3_price) : null,
-    }
-    parsed.signal_type = 'hold'
-    parsed.entry_method = 'observe'
-    parsed.recommended_volume = 0
-    parsed.position_size_tier = 'observe'
-    parsed.position_size_factor = 0
-    parsed.position_size_reason = '当前已有同向持仓，本次不新增仓位。'
-    parsed.management_direction = ['cancel'].includes(parsed.pending_action) ? parsed.management_direction : 'none'
-    parsed.limit_price = null
-    parsed.stop_limit_price = null
-    parsed.stop_loss_price = null
-    parsed.take_profit_1_price = null
-    parsed.take_profit_2_price = null
-    parsed.take_profit_3_price = null
-    parsed.recommended_take_profit_tier = null
-    parsed.pending_valid_minutes = 0
-    parsed.pending_valid_until = null
-    parsed.decision_summary = '当前已有同向持仓，策略建议继续持有，暂不加仓。'
-    parsed.normalization_info = {
-      type:'existing_position_hold_no_add',
-      reason:'existing_position_hold_no_add',
-      original_signal_type:originalSignalType,
-      original_entry_method:entryMethod,
-    }
-    return parsed
+    return normalizeHoldNoAddTrade(parsed, {
+      signalType,
+      entryMethod,
+      limitPrice,
+      stopLimitPrice,
+      market,
+    })
   }
 
   const context = market?.strategy_context || {}

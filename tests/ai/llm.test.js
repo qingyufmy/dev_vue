@@ -140,6 +140,10 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema.stop_loss_price).toContain('当前策略正文')
     expect(schema.stop_loss_price).not.toMatch(/周期角色|关键结构|波动证据/)
     expect(schema.position_action).toContain('表达当前策略')
+    expect(schema.position_action).toContain('无同向持仓且需要交易时，交易信号只能使用 position_action=open')
+    expect(schema.position_action).toContain('已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add')
+    expect(schema.position_action).toContain('signal_type=hold、entry_method=observe、position_action=hold_no_add')
+    expect(schema.position_action).toContain('无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe')
   })
 
   it('describes confidence as conclusion certainty rather than a win-rate estimate', () => {
@@ -2013,7 +2017,7 @@ describe('normalizeAiSignal - L5 strict schema', () => {
     })
   })
 
-  it('preserves a trade-shaped no-add model conclusion but marks it ineligible', () => {
+  it('normalizes a trade-shaped no-add model conclusion to hold while preserving evidence', () => {
     const result = normalizeAiSignal({
       _inference_source:'ai', signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
       position_size_tier:'probe', position_size_reason:'等待回踩', position_action:'hold_no_add',
@@ -2023,12 +2027,39 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       analysis:'偏多但不加仓', reasoning:'已有同向持仓',
     }, { ...config, _allowed_entry_methods:['limit'] }, market)
     expect(result).toMatchObject({
-      signal_type:'buy_limit', entry_method:'limit', recommended_volume:0,
-      position_size_tier:'probe', position_action:'hold_no_add', limit_price:1995,
-      stop_loss_price:1985, take_profit_1_price:2010,
+      signal_type:'hold', entry_method:'observe', recommended_volume:0,
+      position_size_tier:'observe', position_action:'hold_no_add', limit_price:null,
+      stop_loss_price:null, take_profit_1_price:null,
+      candidate_entry:{ signal_type:'buy_limit', direction:'buy', entry_method:'limit', entry_price:1995,
+        stop_loss_price:1985, take_profit_1_price:2010 },
       model_decision:{ signal_type:'buy_limit', entry_method:'limit', position_action:'hold_no_add' },
-      execution_validation:{ status:'ineligible', eligible:false,
-        reason_codes:['position_action_hold_no_add'] },
+      execution_validation:{ status:'ineligible', eligible:false, reason_codes:['model_hold'] },
+    })
+    expect(result.position_size_reason).toBe('模型同时给出交易与不新增仓位结论，字段冲突，本次不执行。')
+    expect(result.decision_summary).toBe('模型同时给出交易与不新增仓位结论，字段冲突，本次不执行。')
+    expect(result.pending_valid_minutes).toBe(0)
+    expect(result.pending_valid_until).toBeNull()
+    expect(result.normalization_info).toMatchObject({
+      type:'trade_hold_no_add_conflict', reason:'trade_hold_no_add_conflict',
+      original_signal_type:'buy_limit', original_entry_method:'limit',
+    })
+  })
+
+  it('preserves an independent pending cancellation when a trade-shaped no-add conclusion becomes hold', () => {
+    const result = normalizeAiSignal({
+      _inference_source:'ai', signal_type:'buy_limit', entry_method:'limit', confidence:0.8,
+      position_size_tier:'probe', position_size_reason:'等待回踩', position_action:'hold_no_add',
+      pending_action:'cancel', pending_action_reason:'原买入挂单的结构前提已经失效',
+      management_direction:'buy', limit_price:1995,
+      stop_loss_price:1985, take_profit_1_price:2010, recommended_take_profit_tier:1,
+      invalidation_condition:'跌破失效位后当前建议失效',
+    }, { ...config, _allowed_entry_methods:['limit'] }, market)
+    expect(result).toMatchObject({
+      signal_type:'hold', entry_method:'observe', position_action:'hold_no_add',
+      pending_action:'cancel', pending_action_reason:'原买入挂单的结构前提已经失效',
+      management_direction:'buy',
+      execution_validation:{ status:'eligible', eligible:true, reason_codes:[] },
+      model_decision:{ signal_type:'buy_limit', entry_method:'limit', position_action:'hold_no_add' },
     })
   })
 
