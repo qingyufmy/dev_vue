@@ -24,7 +24,7 @@ function loadPeriodReviewContractHelpers() {
     const PERIOD_REVIEW_ACTIVE_JOB_STATUSES = new Set(['queued', 'leased', 'status_unknown'])
     const state = { periodReviewRegenerateRequestKeys: new Map() }
     ${source}
-    return { periodReviewV3ContentIsSafe, periodReviewContractState, periodReviewCanRegenerate, periodReviewRegenerationRequestKey }
+    return { periodReviewV3ContentIsSafe, periodReviewV3LegacyContentIsSafe, periodReviewContractState, periodReviewCanRegenerate, periodReviewRegenerationRequestKey }
   `)()
 }
 
@@ -98,6 +98,23 @@ describe('daily period review v3 frontend contract', () => {
     expect(periodReviewV3ContentIsSafe({ ...content, strengths: [{ text: { value: '不应字符串化' } }] })).toBe(false)
   })
 
+  it('keeps old v3 text findings readable but read-only and offers regeneration', () => {
+    const { periodReviewV3ContentIsSafe, periodReviewV3LegacyContentIsSafe, periodReviewContractState } = loadPeriodReviewContractHelpers()
+    const content = {
+      output_contract_version: 'daily-period-review-v3',
+      trade_assessments: [{ outcome_id: 1, outcome_attribution: {}, next_time_rule: {} }],
+      repeated_issues: ['趋势判断过早', '止损距离过近'],
+      strengths: ['按计划执行'],
+      experience_rules: [{ category: 'risk_execution', condition: '波动放大', action: '缩小仓位', risk_control: '先确认止损', invalidation: '结构反转', prohibited_action: '禁止追单' }],
+    }
+    expect(periodReviewV3ContentIsSafe(content)).toBe(false)
+    expect(periodReviewV3LegacyContentIsSafe(content)).toBe(true)
+    expect(periodReviewContractState({}, { period_type: 'daily' }, { id: 290 }, content)).toMatchObject({ supported:true, kind:'daily-v3-legacy', legacyCompatible:true })
+    expect(app).toContain('periodReviewLegacyNoticeHtml')
+    expect(app).toContain('periodReviewLegacyReadOnly')
+    expect(app).toContain('action !== "regenerate"')
+  })
+
   it('fails closed for unknown contracts and protects write actions', () => {
     expect(app).toContain('function periodReviewContractState(')
     expect(app).toContain('function periodReviewContractMismatchHtml(')
@@ -150,11 +167,18 @@ describe('daily period review v3 frontend contract', () => {
     expect(app).toContain('实际写入文本预览')
     expect(app).toContain('JSON.stringify(content) !== state.periodReviewEditorBaseline')
     expect(app).toContain('approvalVersionId = Number(saved.versionId)')
+    expect(app).toContain('card.querySelector("summary strong")')
   })
 
   it('provides responsive and keyboard-native expandable cards', () => {
-    expect(app).toContain('<details class="period-review-trade-card"')
+    expect(app).toContain('<details class="period-review-trade-card">')
+    expect(app).toContain('period-review-section-nav')
+    expect(app).toContain('id="period-review-evidence"')
+    expect(app).toContain('period-review-finding-card')
+    expect(app).toContain('period-review-rule-card')
     expect(styles).toContain('.period-review-trade-card > summary')
     expect(styles).toContain('.period-review-v3-grid { grid-template-columns: 1fr; }')
+    expect(styles).toContain('min-height: 44px')
+    expect(styles).toContain('@media (prefers-reduced-motion: reduce)')
   })
 })
