@@ -37,10 +37,12 @@ describe('admin position protection UI contract', () => {
       'positionProtectionReasonError', 'positionProtectionCancel',
       'positionProtectionSubmitHint', 'positionProtectionSubmitLabel',
       'positionProtectionScopeDetailsToggle', 'positionProtectionScopeDetails',
+      'positionProtectionCloseCurrent', 'positionProtectionCloseCurrentHelp',
     ]) expect(html).toContain(`id="${id}"`)
     expect(html).toContain('aria-describedby="positionProtectionStopLossHelp positionProtectionStopLossError"')
     expect(html).toContain('aria-describedby="positionProtectionTakeProfitHelp positionProtectionTakeProfitError"')
-    expect(html).toContain('只修改止损或止盈，不会改变持仓方向、手数与开仓价格。')
+    expect(html).toContain('调整当前系统持仓的保护价，或单独平仓当前持仓；关联账户操作会另行确认。')
+    expect(html).toContain('class="position-protection-reason-head"')
     expect(app).toContain('renderPositionProtectionChangeState({ showErrors:true })')
     expect(app).toContain('positionProtectionPriceLabel(currentStopLoss)')
     expect(app).toContain('positionProtectionSubmitLabel").textContent = "正在保存…"')
@@ -50,8 +52,13 @@ describe('admin position protection UI contract', () => {
     expect(css).toContain('.position-protection-sync-option:has(input:checked)')
     expect(css).toContain('.position-protection-scope-details')
     expect(app).toContain('renderPositionProtectionScopeDetails')
-    expect(app).toContain('data-scope-details="exclusions"')
     expect(app).toContain('positionProtectionPreviewRequestVersion')
+    expect(app).toContain('closeCurrentPositionFromProtectionModal')
+    expect(app).toContain('closeProtectionModalOnSuccess:true')
+    expect(app).toContain('closeCurrent.title = "只平仓当前账户这一笔持仓，不影响其他账户"')
+    expect(app).toContain('expected_state: managementExpectedState(position, ticket, "position")')
+    expect(css).toContain('.position-protection-impact > div')
+    expect(css).toContain('.position-protection-impact > button { appearance:none;')
     expect(css).not.toContain('grid-template-columns:1px 42px minmax(0,1fr)')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })

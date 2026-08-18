@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260814ema34toggle1" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260814ema34toggle1">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260814ema34toggle1">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2-admin-dispatch-details1-admin-strategy-close-confirm1-manual-review-evidence1-manual-review-v3aggregate1-manual-review-frontend3-daily-review-v3-period-review-compact1-period-review-nav1-strategy-direction-interlock1-period-review-short-holding1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2-admin-dispatch-details1-admin-strategy-close-confirm1-manual-review-evidence1-manual-review-v3aggregate1-manual-review-frontend3-daily-review-v3-period-review-compact1-period-review-nav1-strategy-direction-interlock1-period-review-short-holding1-position-protection-modal2" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2" />
   </head>
   <body>
@@ -670,32 +670,37 @@
                   <div>
                     <span class="section-kicker">系统持仓 · 管理员操作</span>
                     <h2 id="positionProtectionTitle">编辑持仓保护价</h2>
-                    <p id="positionProtectionDescription">只修改止损或止盈，不会改变持仓方向、手数与开仓价格。</p>
+                    <p id="positionProtectionDescription">调整当前系统持仓的保护价，或单独平仓当前持仓；关联账户操作会另行确认。</p>
                   </div>
-                  <button id="positionProtectionClose" class="icon-btn" type="button" aria-label="关闭编辑持仓保护价弹窗"><i data-lucide="x" size="18"></i></button>
+                  <div class="position-protection-heading-actions">
+                    <button id="positionProtectionCloseCurrent" class="btn btn-danger btn-sm" type="button" disabled aria-describedby="positionProtectionCloseCurrentHelp"><i data-lucide="x-circle" size="15"></i><span>平仓当前持仓</span></button>
+                    <button id="positionProtectionClose" class="icon-btn" type="button" aria-label="关闭编辑持仓保护价弹窗"><i data-lucide="x" size="18"></i></button>
+                  </div>
                 </header>
                 <input id="positionProtectionTicket" type="hidden">
                 <div id="positionProtectionError" class="position-protection-error hidden" role="alert"></div>
 
                 <div id="positionProtectionFormStage">
                   <section class="position-protection-section position-protection-overview" aria-labelledby="positionProtectionSourceTitle">
-                    <div class="position-protection-section-head"><div><span class="position-protection-step">01</span><h3 id="positionProtectionSourceTitle">确认当前持仓</h3></div><span class="position-protection-live"><i data-lucide="radio" size="13"></i><span data-bridge-platform-template="{platform} 实时数据">交易平台实时数据</span></span></div>
+                    <div class="position-protection-section-head"><div><h3 id="positionProtectionSourceTitle">当前持仓</h3><span id="positionProtectionCloseCurrentHelp" class="position-protection-section-note">仅关闭当前账户这一笔，不影响其他账户</span></div><span class="position-protection-live"><i data-lucide="radio" size="13"></i><span data-bridge-platform-template="{platform} 实时数据">交易平台实时数据</span></span></div>
                     <div id="positionProtectionSourceSummary" class="position-protection-summary"><div class="workspace-skeleton"></div></div>
-                    <div id="adminStrategyCloseCapability" class="admin-strategy-close-capability" aria-live="polite">
-                      <div><i data-lucide="octagon-alert" size="17"></i><span><strong>需要结束本次策略持仓？</strong><small id="adminStrategyCloseCapabilityStatus">正在核对完整平仓范围…</small></span></div>
-                      <div class="admin-strategy-close-capability-actions"><button id="adminStrategyCloseCapabilityRetry" class="btn btn-secondary btn-sm hidden" type="button"><i data-lucide="refresh-cw" size="14"></i>重新核对</button><button id="adminStrategyCloseCapabilityButton" class="btn btn-danger btn-sm" type="button" aria-controls="adminStrategyCloseSection" aria-expanded="false" disabled><i data-lucide="x-circle" size="14"></i>完整平仓…</button></div>
+                    <div id="adminStrategyCloseCapability" class="admin-strategy-close-capability hidden" aria-live="polite">
+                      <div><i data-lucide="octagon-alert" size="17"></i><span><strong id="adminStrategyCloseCapabilityTitle">策略关联平仓</strong><small id="adminStrategyCloseCapabilityStatus">正在核对完整平仓范围…</small></span></div>
+                      <div class="admin-strategy-close-capability-actions"><button id="adminStrategyCloseCapabilityRetry" class="btn btn-secondary btn-sm hidden" type="button"><i data-lucide="refresh-cw" size="14"></i>重新核对</button><button id="adminStrategyCloseCapabilityButton" class="btn btn-danger btn-sm hidden" type="button" aria-controls="adminStrategyCloseSection" aria-expanded="false" disabled><i data-lucide="x-circle" size="14"></i>关联平仓…</button></div>
                     </div>
                   </section>
                   <section class="position-protection-section" aria-labelledby="positionProtectionPriceTitle">
-                    <div class="position-protection-section-head"><div><span class="position-protection-step">02</span><h3 id="positionProtectionPriceTitle">设置新的保护价</h3></div><span>至少修改一项</span></div>
+                    <div class="position-protection-section-head"><div><h3 id="positionProtectionPriceTitle">设置新的保护价</h3></div><span>至少修改一项</span></div>
                     <div class="position-protection-price-grid">
                       <label class="position-protection-field" for="positionProtectionStopLoss"><span>止损价格 <b>SL</b></span><div class="position-protection-input"><i data-lucide="shield" size="17"></i><input id="positionProtectionStopLoss" class="num" type="number" min="0" step="any" inputmode="decimal" autocomplete="off" aria-describedby="positionProtectionStopLossHelp positionProtectionStopLossError"><em id="positionProtectionStopLossState">原值</em></div><small id="positionProtectionStopLossHelp">保持原值时无需改动；系统会按券商最小跳动单位校准。</small><small id="positionProtectionStopLossError" class="position-protection-field-error hidden" role="alert"></small></label>
                       <label class="position-protection-field" for="positionProtectionTakeProfit"><span>止盈价格 <b>TP</b></span><div class="position-protection-input"><i data-lucide="target" size="17"></i><input id="positionProtectionTakeProfit" class="num" type="number" min="0" step="any" inputmode="decimal" autocomplete="off" aria-describedby="positionProtectionTakeProfitHelp positionProtectionTakeProfitError"><em id="positionProtectionTakeProfitState">原值</em></div><small id="positionProtectionTakeProfitHelp">执行前会校验方向、现价及券商要求的最小距离。</small><small id="positionProtectionTakeProfitError" class="position-protection-field-error hidden" role="alert"></small></label>
                     </div>
                     <div id="positionProtectionChangeSummary" class="position-protection-change-summary" aria-live="polite"><i data-lucide="info" size="16"></i><span>修改任一价格后，这里会显示本次变更摘要。</span></div>
+                    <div class="position-protection-reason-head"><h3 id="positionProtectionReasonTitle">记录变更原因</h3><span><b id="positionProtectionReasonCount" class="num">0</b> / 500</span></div>
+                    <label class="position-protection-reason" for="positionProtectionReason"><span class="sr-only">变更原因</span><textarea id="positionProtectionReason" maxlength="500" rows="2" placeholder="例如：价格结构失效，上移止损保护已有利润" aria-describedby="positionProtectionReasonHelp positionProtectionReasonError"></textarea><small id="positionProtectionReasonHelp">必填，至少 2 个字；保存后会写入管理员审计日志。</small><small id="positionProtectionReasonError" class="position-protection-field-error hidden" role="alert"></small></label>
                   </section>
                   <section class="position-protection-section position-protection-scope-section" aria-labelledby="positionProtectionScopeTitle">
-                    <div class="position-protection-section-head"><div><span class="position-protection-step">03</span><h3 id="positionProtectionScopeTitle">选择应用范围</h3></div><div class="position-protection-scope-actions"><span id="positionProtectionScopeBadge" class="position-protection-scope-badge">仅当前持仓</span><button id="positionProtectionScopeDetailsToggle" class="btn btn-secondary btn-sm" type="button" aria-controls="positionProtectionScopeDetails" aria-expanded="false"><i data-lucide="list-tree" size="14"></i><span>查看范围明细</span></button></div></div>
+                    <div class="position-protection-section-head"><div><h3 id="positionProtectionScopeTitle">选择应用范围</h3></div><div class="position-protection-scope-actions"><span id="positionProtectionScopeBadge" class="position-protection-scope-badge">仅当前持仓</span><button id="positionProtectionScopeDetailsToggle" class="btn btn-secondary btn-sm" type="button" aria-controls="positionProtectionScopeDetails" aria-expanded="false"><i data-lucide="list-tree" size="14"></i><span>查看范围明细</span></button></div></div>
                     <label class="position-protection-sync-option">
                       <input id="positionProtectionSyncScope" type="checkbox">
                       <span class="position-protection-switch" aria-hidden="true"><i></i></span>
@@ -741,10 +746,6 @@
                       </div>
                       <div class="admin-strategy-close-progress-actions"><button id="adminStrategyCloseRetry" class="btn btn-secondary btn-sm hidden" type="button"><i data-lucide="rotate-cw" size="14"></i>仅重试失败目标</button><span id="adminStrategyCloseProgressError" class="form-error" role="alert"></span></div>
                     </div>
-                  </section>
-                  <section class="position-protection-section" aria-labelledby="positionProtectionReasonTitle">
-                    <div class="position-protection-section-head"><div><span class="position-protection-step">04</span><h3 id="positionProtectionReasonTitle">记录变更原因</h3></div><span><b id="positionProtectionReasonCount" class="num">0</b> / 500</span></div>
-                    <label class="position-protection-reason" for="positionProtectionReason"><span class="sr-only">变更原因</span><textarea id="positionProtectionReason" maxlength="500" rows="3" placeholder="例如：价格结构失效，上移止损保护已有利润" aria-describedby="positionProtectionReasonHelp positionProtectionReasonError"></textarea><small id="positionProtectionReasonHelp">必填，至少 2 个字；保存后会写入管理员审计日志。</small><small id="positionProtectionReasonError" class="position-protection-field-error hidden" role="alert"></small></label>
                   </section>
                 </div>
 
@@ -1474,7 +1475,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2-admin-dispatch-user-label1-admin-dispatch-details1-manual-review-create-ref1-riskmetadataround1-manual-review-frontend2-manual-review-durable-stage1-manual-review-v3aggregate1-manual-review-frontend3-position-ticket-refresh1-position-ticket-retry1-daily-review-v3-daily-review-v3fix1-period-review-contract-refresh1-period-review-short-holding1-pending-fill-ticket-binding1&rev=period-review-compact1-period-review-nav1-strategy-direction-interlock1"></script>
+    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2-admin-dispatch-user-label1-admin-dispatch-details1-manual-review-create-ref1-riskmetadataround1-manual-review-frontend2-manual-review-durable-stage1-manual-review-v3aggregate1-manual-review-frontend3-position-ticket-refresh1-position-ticket-retry1-daily-review-v3-daily-review-v3fix1-period-review-contract-refresh1-period-review-short-holding1-pending-fill-ticket-binding1-position-protection-modal2&rev=period-review-compact1-period-review-nav1-strategy-direction-interlock1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

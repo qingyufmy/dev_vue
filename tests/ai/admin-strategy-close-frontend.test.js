@@ -25,7 +25,10 @@ describe('admin strategy linked close frontend contract', () => {
     expect(app).toContain('if (!adminStrategyCloseAttribution(root)) return false')
     expect(app).toContain('loadAdminStrategyClosePreview(ticket)')
     expect(app).toContain('renderAdminStrategyCloseCapability("unavailable", error)')
-    expect(app).toContain('暂不可完整平仓')
+    expect(app).toContain('admin_dispatch_attribution_unavailable')
+    expect(app).toContain('当前持仓来自普通 AI 信号，不属于管理员策略指令')
+    expect(app).toContain('adminStrategyCloseAttributionUnavailable')
+    expect(app).not.toContain('暂不可完整平仓')
   })
 
   it('uses the close-preview, job, polling and failed-only retry API contracts', () => {
