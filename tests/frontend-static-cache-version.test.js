@@ -30,6 +30,7 @@ describe('frontend static cache version', () => {
     const appReference = source.match(/\/ai\/app\.js\?[^"']+/)?.[0] || ''
     expect(appReference).toContain(`v=${CACHE_VERSION}`)
     expect(appReference).toMatch(/build=[^"']*period-review-short-holding1/)
+    expect(appReference).toContain('pending-fill-ticket-binding1')
     expect(appReference).toContain('rev=period-review-compact1-period-review-nav1')
     expect(appReference).not.toContain('styles.css')
   })

@@ -3754,6 +3754,13 @@ function connectBridgeStatusWs(onReady) {
         // New signal pushed — refresh status and signal list
         handleNewSignal(msg);
         loadStatus().catch(() => {});
+      } else if (msg.type === 'pending_filled') {
+        // A pending order can become a position after the bounded structural
+        // retries have finished.  Let the server's final attribution event
+        // start one authoritative ticket-map refresh; never trust event data
+        // as a local mapping because it may be delayed or cross an account
+        // context boundary.
+        handlePendingFilledTicketEvent(msg);
       } else if (msg.type === 'signal_execution_updated') {
         // Execution can complete after the signal itself was pushed. Reload the
         // same signal so pending/executed state disables duplicate submission.
@@ -11104,6 +11111,20 @@ function scheduleSignalTicketRefresh({ immediate = false, resetRetry = false } =
   }, delayMs);
   _signalTicketRefreshPromise = promise;
   return promise;
+}
+
+function isSafePendingFilledEvent(msg = {}) {
+  const signalId = String(msg?.signal_id ?? '').trim();
+  const ticket = String(msg?.ticket ?? msg?.trade_ticket ?? '').trim();
+  return /^[1-9]\d{0,19}$/.test(signalId)
+    && ticket.length > 0 && ticket.length <= 128
+    && !/[\u0000-\u001f\u007f]/.test(ticket);
+}
+
+function handlePendingFilledTicketEvent(msg = {}) {
+  if (!isSafePendingFilledEvent(msg)) return false;
+  scheduleSignalTicketRefresh({ immediate:true, resetRetry:true });
+  return true;
 }
 
 function ticketCell(ticket, signalTickets) {

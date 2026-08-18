@@ -299,6 +299,7 @@ function runRealtimeSignalTicketScenario() {
       const initialTicketCell = ticketCell('T-1', state.signalTickets)
       const first = scheduleSignalTicketRefresh({ immediate:true })
       const second = scheduleSignalTicketRefresh({ immediate:true })
+      const pendingFilledEventAccepted = handlePendingFilledTicketEvent({ signal_id:'77', ticket:'T-1' })
       await new Promise(resolve => setTimeout(resolve, 0))
       const coalescedRequests = requests.length
       requests[0].resolve({ tickets:{ 'T-0':76, 'T-1':77 } })
@@ -362,6 +363,7 @@ function runRealtimeSignalTicketScenario() {
       return {
         needsNewTicket,
         initialTicketCell,
+        pendingFilledEventAccepted,
         coalescedRequests,
         linkedAfterExecution,
         trailingRefreshRequestCount,
@@ -482,10 +484,20 @@ function runBoundedSignalTicketRetryScenario() {
       const timersAfterExhaustion = timers.filter(item => !item.cancelled).length
       const preservedAfterExhaustion = { ...state.signalTickets }
 
+      // The server can finish attribution after the bounded 1/2/5 second
+      // compensation window.  A pending_filled event must start one new
+      // authoritative refresh and must not write the event payload locally.
+      const invalidPendingFilledEvent = handlePendingFilledTicketEvent({ signal_id:'', ticket:'T-2' })
+      const pendingFilledEventAccepted = handlePendingFilledTicketEvent({ signal_id:'202', ticket:'T-2' })
+      await fireNextTimer()
+      requests[8].resolve({ tickets:{ 'T-2':202 } })
+      await flushMicrotasks()
+      const pendingFilledTicketMap = { ...state.signalTickets }
+
       state.positions = []
       const emptyRefresh = scheduleSignalTicketRefresh({ immediate:true })
       await fireNextTimer()
-      requests[8].resolve({ tickets:{} })
+      requests[9].resolve({ tickets:{} })
       await emptyRefresh
       return {
         requestCount:requests.length,
@@ -496,6 +508,9 @@ function runBoundedSignalTicketRetryScenario() {
         activeRequests,
         timersAfterExhaustion,
         preservedAfterExhaustion,
+        invalidPendingFilledEvent,
+        pendingFilledEventAccepted,
+        pendingFilledTicketMap,
         timersAfterEmpty:timers.filter(item => !item.cancelled).length,
       }
     })()
@@ -676,6 +691,16 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
     expect(refresh).toContain('{ skipResultRender:true, loadDashboard:false }')
   })
 
+  it('consumes delayed pending_filled events through the authoritative serial ticket refresh', () => {
+    const pending = block("} else if (msg.type === 'pending_filled')", "} else if (msg.type === 'signal_execution_updated')")
+    const helper = block('function isSafePendingFilledEvent', 'function ticketCell')
+    expect(pending).toContain('handlePendingFilledTicketEvent(msg)')
+    expect(pending).not.toContain('state.signalTickets')
+    expect(helper).toContain('scheduleSignalTicketRefresh({ immediate:true, resetRetry:true })')
+    expect(helper).toContain('ticket.length <= 128')
+    expect(helper).toContain('return false')
+  })
+
   it('refreshes only the active page and avoids quoting before symbol discovery', () => {
     const binding = block('$("refreshAllBtn").addEventListener', '$("gatewayMode")')
     expect(binding).toContain('const tabId = activeTabId()')
@@ -745,6 +770,7 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
 
     expect(result.needsNewTicket).toBe(true)
     expect(result.initialTicketCell).not.toContain('<a ')
+    expect(result.pendingFilledEventAccepted).toBe(true)
     expect(result.coalescedRequests).toBe(1)
     expect(result.linkedAfterExecution).toContain('openAnalysisFromHistory(77')
     expect(result.trailingRefreshRequestCount).toBe(4)
@@ -764,12 +790,15 @@ describe('AI laboratory demand-driven frontend loading contract', () => {
 
     expect(result.initialDelay).toBe(0)
     expect(result.retryDelays).toEqual([1000, 2000, 5000])
-    expect(result.requestCount).toBe(9)
+    expect(result.requestCount).toBe(10)
     expect(result.finalMap).toEqual({})
     expect(result.maxConcurrentRequests).toBe(1)
     expect(result.activeRequests).toBe(0)
     expect(result.timersAfterExhaustion).toBe(0)
     expect(result.preservedAfterExhaustion).toEqual({ 'T-1':101 })
+    expect(result.invalidPendingFilledEvent).toBe(false)
+    expect(result.pendingFilledEventAccepted).toBe(true)
+    expect(result.pendingFilledTicketMap).toEqual({ 'T-2':202 })
     expect(result.timersAfterEmpty).toBe(0)
   })
 

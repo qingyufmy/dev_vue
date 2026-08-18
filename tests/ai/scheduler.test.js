@@ -521,7 +521,7 @@ describe('reconcilePendingOrders', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     db.queryAll.mockResolvedValue([])
-    db.queryRun.mockResolvedValue({})
+    db.queryRun.mockResolvedValue({ changes:1 })
     bridgeWs.isBridgeAlive.mockReturnValue(true)
     bridgeWs.sendToBrowsers.mockResolvedValue({})
     marketData.mt5Bridge.mockResolvedValue({})
@@ -573,6 +573,39 @@ describe('reconcilePendingOrders', () => {
 
     const filledCall = db.queryRun.mock.calls.find(c => c[0].includes("'filled'"))
     expect(filledCall).toBeTruthy()
+    expect(bridgeWs.sendToBrowsers.mock.calls.map(([, event]) => event)).toEqual([
+      { type:'pending_filled', ticket:'5002', signal_id:200 },
+      {
+        type:'signal_execution_updated', signal_id:200, status:'success',
+        reconciled:true, pending_state:'filled', trade_ticket:'5002',
+      },
+    ])
+    expect(Math.max(...db.queryRun.mock.invocationCallOrder))
+      .toBeLessThan(Math.min(...bridgeWs.sendToBrowsers.mock.invocationCallOrder))
+  })
+
+  it('does not broadcast successful fill events when outcome attribution persistence fails', async () => {
+    db.queryAll
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: 22, user_id: 10, signal_id: 2200, order_intent_id: 9220, pending_ticket: '5022', pending_valid_until: '2026-12-31 23:59:59', src: 'delivery' },
+      ])
+      .mockResolvedValueOnce([])
+    db.queryRun.mockImplementation(async sql => {
+      if (String(sql).includes('signal_outcomes')) throw new Error('db_unavailable')
+      return { changes:1 }
+    })
+    marketData.mt5Bridge.mockImplementation((_uid, action) => {
+      if (action === 'pending_list') return Promise.resolve({ orders: [] })
+      if (action === 'positions') return Promise.resolve({ positions: [{ ticket: 5022 }] })
+      return Promise.resolve({})
+    })
+
+    await reconcilePendingOrders()
+
+    expect(db.queryRun.mock.calls.some(c => c[0].includes('signal_outcomes'))).toBe(true)
+    expect(db.queryRun.mock.calls.some(c => c[0].includes("pending_state = 'filled'"))).toBe(false)
+    expect(bridgeWs.sendToBrowsers).not.toHaveBeenCalled()
   })
 
   it('marks a missing pending ticket filled from a targeted order lookup', async () => {

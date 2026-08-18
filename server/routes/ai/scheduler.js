@@ -4191,26 +4191,49 @@ export async function reconcilePendingOrders() {
         if (matchedPosition || lookupFilled) {
           const resolvedTradeTicket = String(matchedPosition?.ticket ?? matchedPosition?.position_id
             ?? lookup?.position_id ?? lookup?.ticket ?? ticket)
-          if (row.src === 'delivery') {
-            await queryRun(
-              "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
-              [resolvedTradeTicket, row.id])
-            await recordPendingOutcomeFill({
-              orderIntentId: row.order_intent_id,
-              deliveryId: row.id,
-              positionId: matchedPosition?.position_id ?? matchedPosition?.ticket ?? lookup?.position_id,
-              orderTicket: ticket,
-              dealTicket: lookup?.deal ?? lookup?.deal_ticket,
-            })
-            // Fix 6: do NOT sync user ticket to shared root ai_signals
-          } else {
-    await queryRun(
-              "UPDATE ai_signals SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
-              [resolvedTradeTicket, row.signal_id])
+          // Do not announce a successful fill until every durable attribution
+          // write has completed.  Keep the outcome write ahead of the delivery
+          // state transition so a transient attribution failure leaves the
+          // pending delivery eligible for the next reconciliation pass.
+          try {
+            if (row.src === 'delivery') {
+              await recordPendingOutcomeFill({
+                orderIntentId: row.order_intent_id,
+                deliveryId: row.id,
+                positionId: matchedPosition?.position_id ?? matchedPosition?.ticket ?? lookup?.position_id,
+                orderTicket: ticket,
+                dealTicket: lookup?.deal ?? lookup?.deal_ticket,
+              })
+              const deliveryUpdate = await queryRun(
+                "UPDATE auto_signal_deliveries SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
+                [resolvedTradeTicket, row.id])
+              if (Number(deliveryUpdate?.changes || 0) < 1) {
+                throw new Error(`pending_delivery_fill_not_persisted:${row.id}`)
+              }
+              // Fix 6: do NOT sync user ticket to shared root ai_signals
+            } else {
+              const signalUpdate = await queryRun(
+                "UPDATE ai_signals SET pending_state = 'filled', is_executed = 1, trade_ticket = ?, executed_at = NOW() WHERE id = ?",
+                [resolvedTradeTicket, row.signal_id])
+              if (Number(signalUpdate?.changes || 0) < 1) {
+                throw new Error(`pending_signal_fill_not_persisted:${row.signal_id}`)
+              }
+            }
+          } catch (error) {
+            console.error(`[PendingReconciler] User ${userId}: fill attribution write failed signal=${row.signal_id}:`, error.message)
+            continue
           }
           await insertAudit(null, userId, 'pending_filled', null,
             { signal_id: row.signal_id, ticket, src: row.src }, { status: 'filled', ticket: resolvedTradeTicket }, 'success')
           sendToBrowsers(userId, { type: 'pending_filled', ticket: resolvedTradeTicket, signal_id: row.signal_id })
+          sendToBrowsers(userId, {
+            type: 'signal_execution_updated',
+            signal_id: row.signal_id,
+            status: 'success',
+            reconciled: true,
+            pending_state: 'filled',
+            trade_ticket: resolvedTradeTicket,
+          })
           continue
         }
 
