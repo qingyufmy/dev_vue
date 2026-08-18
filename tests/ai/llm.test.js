@@ -37,10 +37,18 @@ describe('position management model privacy projection', () => {
         user_id:28, balance:1000 },
       pending_groups:[{
         management_group_id:'group-1', decision_context_status:'available', reference_facts_status:'missing',
+        core_entry_reason:'历史入场叙事', original_stop_loss:1900, original_take_profits:[2100],
         user_id:28, trading_account_id:3, login_account:'secret', pending_ticket:'O-1',
-        pending_order_facts:[{ source:'platform_reference_portfolio', trigger_price:2000, ticket:'O-1', volume:1, profit:3 }],
+        pending_order_facts:[{ source:'platform_reference_portfolio', trigger_price:2000, ticket:'O-1', volume:1,
+          original_stop_loss:1900, original_take_profits:[2100], profit:3 }],
       }],
       position_groups:[],
+      exposure_summary:{
+        buy:{ position_count:2, position_volume:0.3, weighted_average_entry:2001,
+          pending_count:1, pending_volume:0.1 },
+        sell:{ position_count:0, position_volume:0, weighted_average_entry:null,
+          pending_count:0, pending_volume:0 },
+      },
     })
     const serialized = JSON.stringify(projected)
     expect(serialized).not.toContain('user_id')
@@ -48,9 +56,14 @@ describe('position management model privacy projection', () => {
     expect(serialized).not.toContain('login_account')
     expect(serialized).not.toContain('pending_ticket')
     expect(serialized).not.toContain('ticket')
-    expect(serialized).not.toContain('volume')
+    expect(serialized).toContain('"volume":1')
     expect(serialized).not.toContain('profit')
     expect(serialized).not.toContain('balance')
+    expect(serialized).not.toContain('core_entry_reason')
+    expect(serialized).not.toContain('original_stop_loss')
+    expect(serialized).not.toContain('original_take_profits')
+    expect(projected.exposure_summary.buy).toEqual({ position_count:2, position_volume:0.3,
+      weighted_average_entry:2001, pending_count:1, pending_volume:0.1 })
     expect(serialized).toContain('reference_facts_status')
   })
 })

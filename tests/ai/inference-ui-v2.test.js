@@ -117,15 +117,19 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('userVisibleText(action.message')
     expect(app).toContain('function renderSignalManagementActions(signal)')
     expect(app).toContain('signal?.management_actions')
+    expect(app).toContain('本轮退出判断成立，连续确认 +1')
+    expect(app).toContain('未找到当前订单')
+    expect(app).toContain('订单号正在对账')
+    expect(app).toContain('signal-management-target-list')
+    expect(app).not.toContain('票号待同步')
     expect(app).toContain('持仓与挂单管理')
     expect(app).toContain('本次建议取消，已进入处理')
-    expect(app).toContain('本次第 ${count || 1} 次确认')
-    expect(app).toContain('本次完成连续确认')
-    expect(app).toContain('本次继续持有并清零')
+    expect(app).toContain('连续确认 +1，已达到')
+    expect(app).toContain('本轮继续持有，退出确认已清零')
     expect(app).toContain('effectTone(action)')
-    expect(app).toContain('class="management-state ${escapeHtml(taskTone)}"')
+    expect(app).toContain('signal-management-target-ticket')
     expect(app).toContain('pendingOutcomeFor(action)')
-    expect(app).toContain('处理当前状态')
+    expect(app).toContain('查看其余 ${hidden.length} 个目标')
     expect(app).toContain('managedCancelTickets')
   })
 
@@ -137,9 +141,13 @@ describe('inference workspace V2 contract', () => {
   })
 
   it('keeps concrete execution outcomes visible even after the signal expires', () => {
-    expect(app.indexOf('if (executionStatus && executionStatus !== "success")')).toBeLessThan(app.indexOf('if (signalIsStale(signal)) return { state:"expired"'))
+    expect(app.indexOf('if (executionStatus && executionStatus !== "success")')).toBeLessThan(
+      app.indexOf('if (signalIsStale(signal)) return { state:"expired"'),
+    )
     expect(app).toContain('opposite_position_exists:"当前账户已有反向持仓，本次不新增仓位"')
-    expect(app).toContain('title: brokerRejected ? `${bridgePlatformLabel()} 拒绝订单` : rejected ? "风控未放行" : skipped ? "本次未执行"')
+    expect(app).toContain(
+      'title: brokerRejected ? `${bridgePlatformLabel()} 拒绝订单` : rejected ? "风控未放行" : skipped ? "本次未执行"',
+    )
   })
 
   it('shows completed pending cancellation details in the inference result', () => {

@@ -3310,6 +3310,7 @@ async function handleBrowserCommand(ws, userId, msg) {
         })))
         item.management_actions = await ai.loadSignalManagementActions(detailUserId, signalId, {
           management:item.position_management,
+          admin:user?.role === 'admin',
         })
         if (snapshot) delete item.market_data
         result = { status: 'success', signal: item }

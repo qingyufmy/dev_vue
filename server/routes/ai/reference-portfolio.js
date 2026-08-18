@@ -15,6 +15,11 @@ function ticketKey(value) {
   return value == null ? '' : String(value).trim()
 }
 
+function validVolume(value) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 1_000_000 ? parsed : null
+}
+
 function parseUtcMsc(value) {
   if (value instanceof Date) {
     const time = value.getTime()
@@ -114,8 +119,7 @@ export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId,
       current_price:Number(item.price_current || 0),
       actual_stop_loss:Number(item.sl || 0) || null,
       actual_take_profit:Number(item.tp || 0) || null,
-      original_stop_loss:Number(ownership.original_stop_loss || 0) || null,
-      original_take_profits:jsonArray(ownership.original_take_profits_json),
+      volume:validVolume(item.volume ?? item.lots ?? item.volume_lots),
       opened_at:item.time || item.time_open || ownership.created_at || null,
       created_at:item.time || item.time_open || ownership.created_at || null,
     }))
@@ -135,17 +139,41 @@ export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId,
       trigger_price:Number(item.price || 0),
       actual_stop_loss:Number(item.sl || 0) || null,
       actual_take_profit:Number(item.tp || 0) || null,
-      original_stop_loss:Number(ownership.original_stop_loss || 0) || null,
-      original_take_profits:jsonArray(ownership.original_take_profits_json),
+      volume:validVolume(item.volume ?? item.lots ?? item.volume_lots),
       created_at:item.time_setup || item.time_create || item.created_at || ownership.created_at || null,
       ...pendingTimeFacts(ownership, capturedAtUtcMsc),
     }))
+  const exposureSummary = { buy:exposureBucket(), sell:exposureBucket() }
+  for (const item of positions) {
+    const bucket = exposureSummary[item.direction]
+    if (!bucket) continue
+    bucket.position_count += 1
+    if (item.volume != null) {
+      bucket.position_volume += item.volume
+      if (item.entry_price > 0) bucket._weighted_entry_notional += item.entry_price * item.volume
+    }
+  }
+  for (const item of pending) {
+    const bucket = exposureSummary[item.direction]
+    if (!bucket) continue
+    bucket.pending_count += 1
+    if (item.volume != null) bucket.pending_volume += item.volume
+  }
+  for (const bucket of Object.values(exposureSummary)) {
+    bucket.position_volume = roundVolume(bucket.position_volume)
+    bucket.pending_volume = roundVolume(bucket.pending_volume)
+    bucket.weighted_average_entry = bucket.position_volume > 0
+      && bucket._weighted_entry_notional > 0
+      ? roundPrice(bucket._weighted_entry_notional / bucket.position_volume) : null
+    delete bucket._weighted_entry_notional
+  }
   return {
     role:'platform_strategy_reference_portfolio',
     strategy_id:Number(strategyId),
     symbol:stripBrokerSuffix(String(symbol || '')).toUpperCase(),
     positions,
     pending_orders:pending,
+    exposure_summary:exposureSummary,
     position_count:positions.length,
     pending_count:pending.length,
     captured_at:new Date(capturedAtUtcMsc).toISOString(),
@@ -182,9 +210,21 @@ export async function loadPlatformDirectionInterlockTasks({ strategyId, sourceUs
     }))
 }
 
-function jsonArray(value) {
-  try {
-    const parsed = JSON.parse(value || '[]')
-    return Array.isArray(parsed) ? parsed : []
-  } catch { return [] }
+function exposureBucket() {
+  return {
+    position_count:0,
+    position_volume:0,
+    weighted_average_entry:null,
+    pending_count:0,
+    pending_volume:0,
+    _weighted_entry_notional:0,
+  }
+}
+
+function roundVolume(value) {
+  return Number.isFinite(Number(value)) ? Number(Number(value).toFixed(8)) : 0
+}
+
+function roundPrice(value) {
+  return Number.isFinite(Number(value)) ? Number(Number(value).toFixed(8)) : null
 }

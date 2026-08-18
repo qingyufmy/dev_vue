@@ -11290,7 +11290,7 @@ function adminStrategyCloseBoolean(value) {
 }
 
 function adminStrategyCloseDispatchMarker(value) {
-  if (typeof value === "string") return value.trim().toLowerCase() === "admin_strategy_dispatch";
+  if (typeof value === "string") return ["admin_strategy_dispatch", "auto_shared"].includes(value.trim().toLowerCase());
   if (!value || typeof value !== "object") return false;
   return [
     value.source,
@@ -11334,7 +11334,7 @@ function adminStrategyCloseAttribution(preview = {}) {
   const scope = candidates
     .map(item => item && typeof item === "object" ? adminStrategyCloseValue(item, ["close_scope", "closeScope", "attribution_scope", "attributionScope", "source_scope", "sourceScope"]) : item)
     .find(Boolean);
-  if (typeof scope === "string" && ["admin_strategy_dispatch", "unique_admin_strategy_dispatch"].includes(scope.trim().toLowerCase())) return true;
+  if (typeof scope === "string" && ["admin_strategy_dispatch", "unique_admin_strategy_dispatch", "auto_shared", "platform_strategy_signal"].includes(scope.trim().toLowerCase())) return true;
   return false;
 }
 
@@ -11496,8 +11496,10 @@ function resetAdminStrategyCloseState() {
 function adminStrategyCloseUnavailableMessage(error) {
   const code = String(error?.code || error?.message || "").trim();
   const labels = {
-    admin_dispatch_attribution_unavailable:"当前持仓来自普通 AI 信号，不属于管理员策略指令；如需退出，请使用“平仓当前持仓”。",
+    admin_dispatch_attribution_unavailable:"当前持仓未能唯一关联到平台策略信号；如需立即退出，可使用“平仓当前持仓”。",
     admin_dispatch_attribution_ambiguous:"当前持仓关联到多个来源记录，不能安全确定平仓范围。",
+    platform_signal_attribution_ambiguous:"当前持仓关联到多个平台策略来源，不能安全确定关联平仓范围。",
+    system_position_attribution_ambiguous:"当前持仓来源归因冲突，不能安全确定关联平仓范围。",
     system_position_not_found:"当前持仓已不存在或已经平仓，请刷新持仓后重试。",
     position_magic_mismatch:"持仓归属校验失败，不能使用策略关联平仓。",
     position_not_system_owned:"该持仓不是系统下单，不能使用策略关联平仓。",
@@ -11526,21 +11528,21 @@ function renderAdminStrategyCloseCapability(stateName, error = null) {
   if (!capability || !status || !button || !retry) return;
   const available = stateName === "available";
   const loading = stateName === "loading";
-  const ordinaryAiPosition = !available && !loading && adminStrategyCloseAttributionUnavailable(error);
-  const hasError = !available && !loading && !ordinaryAiPosition;
+  const attributionUnavailable = !available && !loading && adminStrategyCloseAttributionUnavailable(error);
+  const hasError = !available && !loading && !attributionUnavailable;
   capability.classList.toggle("hidden", loading);
-  capability.classList.toggle("is-neutral", ordinaryAiPosition);
+  capability.classList.toggle("is-neutral", attributionUnavailable);
   capability.classList.toggle("is-error", hasError);
   button.disabled = !available;
   button.classList.toggle("hidden", !available);
   button.setAttribute("aria-expanded", String(available && state.adminStrategyCloseExpanded));
   button.lastChild && (button.lastChild.textContent = "关联平仓…");
-  retry.classList.toggle("hidden", loading || available || ordinaryAiPosition);
+  retry.classList.toggle("hidden", loading || available || attributionUnavailable);
   if (capabilityTitle) capabilityTitle.textContent = available
     ? "需要结束本次策略持仓？"
-    : ordinaryAiPosition ? "当前持仓不支持策略关联平仓" : loading ? "正在核对关联平仓" : "关联平仓范围待核对";
+    : attributionUnavailable ? "当前持仓暂不可关联平仓" : loading ? "正在核对关联平仓" : "关联平仓范围待核对";
   status.textContent = available
-    ? "已确认可唯一关联到本次管理员策略指令；点击后查看范围并进行危险确认。"
+    ? "已确认可唯一关联到平台策略信号；点击后查看范围并进行危险确认。"
     : loading ? "正在核对来源信号、真实持仓和订阅目标…" : adminStrategyCloseUnavailableMessage(error);
   if (!available) {
     state.adminStrategyCloseExpanded = false;
@@ -11598,7 +11600,7 @@ function renderAdminStrategyClosePreview(preview, loading = false) {
   if (section) section.classList.toggle("hidden", !state.adminStrategyCloseExpanded);
   if (impact) impact.innerHTML = `
     <div><span>订阅用户（先关）</span><strong>${counters.subscriberUsers} 个用户 · ${counters.affectedPositions} 笔持仓</strong></div>
-    <div><span>管理员源仓（最后）</span><strong class="num">#${escapeHtml(sourceTicket)} · ${escapeHtml(sourceLogin)}</strong></div>
+    <div><span>观摩源仓（最后）</span><strong class="num">#${escapeHtml(sourceTicket)} · ${escapeHtml(sourceLogin)}</strong></div>
     <div><span>安全排除</span><strong>${counters.excluded} 项</strong></div>
     <div><span>预览状态</span><strong>${previewHash ? "哈希已锁定" : "等待后端确认"}</strong></div>
     ${exclusions.length ? `<div class="admin-strategy-close-exclusions"><span>排除原因</span><ul>${exclusions.slice(0, 8).map(item => `<li>${escapeHtml(item?.user_label || item?.user_name || (item?.ticket ? `持仓 #${item.ticket}` : "目标持仓"))}：${escapeHtml(adminStrategyCloseTargetReason(item) || "未满足安全条件")}</li>`).join("")}</ul></div>` : ""}`;
@@ -11677,12 +11679,12 @@ function renderAdminStrategyCloseJob(job) {
   const title = $("adminStrategyCloseProgressTitle");
   if (title) title.textContent = adminStrategyCloseStatusLabel(status);
   const text = $("adminStrategyCloseProgressText");
-  if (text) text.textContent = `${Math.max(0, Math.min(100, progress))}% · 订阅用户先关，管理员源仓最后${["uncertain", "reconciling"].includes(status) ? " · Bridge ACK 待对账" : ""}`;
+  if (text) text.textContent = `${Math.max(0, Math.min(100, progress))}% · 订阅用户先关，观摩源仓最后${["uncertain", "reconciling"].includes(status) ? " · Bridge ACK 待对账" : ""}`;
   const resultBody = $("adminStrategyCloseResultBody");
   const ordered = adminStrategyCloseOrderedTargets(targets);
   if (resultBody) resultBody.innerHTML = ordered.length ? ordered.map(target => {
     const targetStatus = adminStrategyCloseTargetStatus(target);
-    const label = adminStrategyCloseTargetIsSource(target) ? "管理员源仓" : (target.user_label || target.user_name || (target.user_id ? `用户 ${target.user_id}` : "订阅用户"));
+    const label = adminStrategyCloseTargetIsSource(target) ? "观摩源仓" : (target.user_label || target.user_name || (target.user_id ? `用户 ${target.user_id}` : "订阅用户"));
     const ticket = adminStrategyCloseValue(target, ["ticket", "position_ticket", "source_ticket"]) || "--";
     const reason = adminStrategyCloseTargetReason(target);
     const tone = targetStatus === "succeeded" ? "success" : targetStatus === "failed" ? "danger" : ["uncertain", "reconciling"].includes(targetStatus) ? "warning" : targetStatus === "skipped" ? "warning" : "info";
@@ -11731,7 +11733,7 @@ async function submitAdminStrategyCloseJob() {
   if (!preview || !formState.valid || state.adminStrategyCloseSubmitting) return;
   const confirmed = await showConfirm(
     "确认完整平仓",
-    "这是管理员策略指令关联持仓的完整平仓，操作不可撤销；订阅用户会先关，管理员源仓最后，Bridge ACK 仍需对账。",
+    "这是平台策略关联持仓的完整平仓，操作不可撤销；订阅用户会先关，观摩源仓最后，Bridge ACK 仍需对账。",
     { confirmText:"确认完整平仓", cancelText:"返回检查", danger:true, requireText:"确认平仓", requireTextLabel:"输入以下文字以完成二次危险确认", requireTextHint:"仅输入“确认平仓”后才能继续" },
   );
   if (!confirmed) return;
@@ -13027,9 +13029,9 @@ function renderSignalManagementActions(signal) {
     const count = Math.max(0, Math.min(required, Number(action?.confirmation_count || 0)));
     if (action?.action_type === "pending_cancel") return effect === "first_confirmation"
       ? "本次建议取消，已进入处理" : "本次建议取消";
-    if (effect === "first_confirmation") return `本次第 ${count || 1} 次确认（${count || 1}/${required}）`;
-    if (effect === "confirmation_completed") return `本次完成连续确认（${required}/${required}）`;
-    if (effect === "confirmation_reset") return `本次继续持有并清零（0/${required}）`;
+    if (effect === "first_confirmation") return `本轮退出判断成立，连续确认 +1（${count || 1}/${required}）`;
+    if (effect === "confirmation_completed") return `连续确认 +1，已达到 ${required}/${required}，进入退出处理`;
+    if (effect === "confirmation_reset") return `本轮继续持有，退出确认已清零（0/${required}）`;
     if (effect === "invalid_reset") return `本次结果无效并清零（0/${required}）`;
     if (action?.action_type === "pending_cancel") return `本次模型单轮判断成立但未进入自动任务（1/${required}）`;
     return `仅展示本轮建议，未进入连续确认（0/${required}）`;
@@ -13057,20 +13059,53 @@ function renderSignalManagementActions(signal) {
     if (!statusCode) return "仅显示模型建议";
     return positionManagementStatus(statusCode).label || "状态待确认";
   };
+  const mappingLabel = action => {
+    const status = String(action?.mapping_status || (action?.target_ticket || action?.ticket ? "mapped" : "missing"));
+    const ticket = String(action?.target_ticket || action?.ticket || "").trim();
+    if (status === "mapped" && ticket) return { label:`#${ticket}`, tone:"mapped", icon:"badge-check" };
+    if (status === "reconciling") return { label:"订单号正在对账", tone:"reconciling", icon:"refresh-cw" };
+    if (status === "excluded") return { label:"已安全排除", tone:"excluded", icon:"shield-x" };
+    return { label:"未找到当前订单", tone:"missing", icon:"circle-alert" };
+  };
+  const roleLabel = action => action?.target_role === "source" ? "观摩源" : action?.target_role === "subscriber" ? "订阅目标" : "执行目标";
+  const grouped = new Map();
+  actions.forEach(action => {
+    const key = [action?.action_type, action?.management_group_id, action?.action, action?.reason].join("::");
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(action);
+  });
+  const renderTarget = action => {
+    const pendingOutcome = pendingOutcomeFor(action);
+    const taskStatus = typeof action?.task_status === "string" ? action.task_status : action?.task?.status;
+    const taskTone = taskStatus ? positionManagementStatus(taskStatus).tone
+      : pendingOutcome?.status === "failed" ? "failed" : pendingOutcome ? "confirmed" : "";
+    const mapping = mappingLabel(action);
+    const identity = [action?.user_label, action?.account_label].map(value => String(value || "").trim()).filter(Boolean).join(" · ");
+    const mappingReason = userVisibleText(action?.mapping_reason, "");
+    return `<div class="signal-management-target ${escapeHtml(mapping.tone)}">
+      <div class="signal-management-target-main"><span class="target-role ${escapeHtml(action?.target_role || "target")}">${escapeHtml(roleLabel(action))}</span><strong>${escapeHtml(identity || roleLabel(action))}</strong></div>
+      <div class="signal-management-target-ticket"><i data-lucide="${mapping.icon}" size="14"></i><b>${escapeHtml(mapping.label)}</b></div>
+      <span class="management-state ${escapeHtml(taskTone)}">${escapeHtml(taskLabel(action, pendingOutcome))}</span>
+      ${mappingReason ? `<p>${escapeHtml(mappingReason)}</p>` : ""}
+    </div>`;
+  };
   return `<section class="signal-management-actions">
-    <div class="analysis-section-title"><i data-lucide="briefcase-business" size="15"></i><strong>持仓与挂单管理</strong><span>本次推理归因</span></div>
-    <div class="signal-management-action-list">${actions.map(action => {
+    <div class="analysis-section-title"><i data-lucide="briefcase-business" size="15"></i><strong>持仓与挂单管理</strong><span>${grouped.size} 组判断 · ${actions.length} 个目标</span></div>
+    <div class="signal-management-action-list">${[...grouped.values()].map(group => {
+      const ordered = [...group].sort((left, right) => {
+        const rank = item => item?.target_role === "source" ? 0 : item?.mapping_status !== "mapped" ? 1 : 2;
+        return rank(left) - rank(right);
+      });
+      const action = ordered.find(item => item?.target_role === "source") || ordered[0];
       const type = action?.action_type === "pending_cancel" ? "pending-cancel" : "position-exit";
-      const ticket = String(action?.target_ticket || action?.ticket || "").trim();
       const reason = userVisibleText(action?.reason, type === "pending-cancel" ? "原挂单条件已经失效" : "本轮继续依据当前持仓判断");
-      const taskStatus = typeof action?.task_status === "string" ? action.task_status : action?.task?.status;
-      const pendingOutcome = pendingOutcomeFor(action);
-      const taskTone = taskStatus ? positionManagementStatus(taskStatus).tone
-        : pendingOutcome?.status === "failed" ? "failed" : pendingOutcome ? "confirmed" : "";
+      const visible = ordered.slice(0, 4);
+      const hidden = ordered.slice(4);
       return `<article class="signal-management-action ${type} ${escapeHtml(String(action?.inference_effect || "display_only"))}">
         <div class="signal-management-action-head"><strong>${actionTitle(action)}</strong><span class="management-state ${escapeHtml(effectTone(action))}">${escapeHtml(effectLabel(action))}</span></div>
-        <div class="signal-management-action-meta"><span>目标票号</span><b>${ticket ? `#${escapeHtml(ticket)}` : "票号待同步"}</b><span>处理当前状态</span><b class="management-state ${escapeHtml(taskTone)}">${escapeHtml(taskLabel(action, pendingOutcome))}</b></div>
         <p>${escapeHtml(reason)}</p>
+        <div class="signal-management-target-list">${visible.map(renderTarget).join("")}</div>
+        ${hidden.length ? `<details class="signal-management-target-more"><summary>查看其余 ${hidden.length} 个目标</summary><div class="signal-management-target-list">${hidden.map(renderTarget).join("")}</div></details>` : ""}
       </article>`;
     }).join("")}</div>
   </section>`;
@@ -16582,7 +16617,7 @@ function renderPositionManagementTasks(tasks = [], pagination = {}) {
       const evidenceMeta = positionManagementConfirmationMeta(task, evidence);
       const selected = Number(state.selectedPositionManagementId) === Number(task.id);
       const ticket = task.target_position_id || task.target_pending_ticket;
-      const targetMeta = [ticket ? `#${ticket}` : "票号待同步", positionManagementDirection(task.target_direction), Number(task.target_volume) > 0 ? `${Number(task.target_volume)}手` : ""].filter(Boolean).join(" · ");
+      const targetMeta = [ticket ? `#${ticket}` : "未找到当前订单", positionManagementDirection(task.target_direction), Number(task.target_volume) > 0 ? `${Number(task.target_volume)}手` : ""].filter(Boolean).join(" · ");
       return `<tr class="${selected ? "selected" : ""}" data-position-management-row="${Number(task.id)}">
         <td><span class="management-group-cell"><strong>${escapeHtml(task.standard_symbol || task.original_symbol || "--")}</strong><small title="${escapeHtml(targetMeta)}">${escapeHtml(targetMeta)}</small></span></td>
         <td><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(positionManagementTaskLabel(task.task_type))}</span></td>

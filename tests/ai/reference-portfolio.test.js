@@ -30,15 +30,21 @@ describe('platform reference portfolio', () => {
     const result = await loadPlatformReferencePortfolio({ strategyId:3, sourceUserId:7, symbol:'XAUUSD' })
     expect(result).toMatchObject({ strategy_id:3, symbol:'XAUUSD', position_count:1, pending_count:1 })
     expect(result.positions[0]).toMatchObject({ origin_signal_id:11, side:'buy', entry_price:2000,
-      actual_stop_loss:1990, original_stop_loss:1990, thesis_id:'thesis-11' })
+      actual_stop_loss:1990, volume:0.5, thesis_id:'thesis-11' })
     expect(result.pending_orders[0]).toMatchObject({ origin_signal_id:12, side:'sell', trigger_price:2020,
-      actual_stop_loss:2030, original_stop_loss:2030, thesis_id:'thesis-12' })
+      actual_stop_loss:2030, volume:0.7, thesis_id:'thesis-12' })
+    expect(result.exposure_summary).toEqual({
+      buy:{ position_count:1, position_volume:0.5, weighted_average_entry:2000,
+        pending_count:0, pending_volume:0 },
+      sell:{ position_count:0, position_volume:0, weighted_average_entry:null,
+        pending_count:1, pending_volume:0.7 },
+    })
     expect(String(mocks.queryAll.mock.calls[0][0])).toContain("outcomes.status IN ('open','closing')")
     expect(String(mocks.queryAll.mock.calls[0][0])).not.toContain('LIMIT 200')
     expect(mocks.mt5Bridge).toHaveBeenNthCalledWith(1, 7, 'positions', {}, { timeoutMs:5000, noFallback:true })
     expect(mocks.mt5Bridge).toHaveBeenNthCalledWith(2, 7, 'pending_list', {}, { timeoutMs:5000, noFallback:true })
     const keys = JSON.stringify(result).match(/"([^"]+)":/g)?.map(key => key.slice(1, -2)) || []
-    expect(keys).not.toEqual(expect.arrayContaining(['volume', 'profit', 'ticket', 'account', 'balance', 'equity']))
+    expect(keys).not.toEqual(expect.arrayContaining(['profit', 'ticket', 'account', 'balance', 'equity']))
   })
 
   it.each([

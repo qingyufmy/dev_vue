@@ -105,15 +105,41 @@ function stripPositionManagementNonMarketInputs(payload) {
 // the shared strategy prompt.
 const POSITION_MANAGEMENT_MODEL_GROUP_FIELDS = [
   'management_group_id', 'thesis_id', 'strategy_id', 'strategy_version', 'strategy_scope',
-  'standard_symbol', 'direction', 'original_signal_id', 'core_entry_reason', 'entry_method',
-  'decision_timeframe', 'original_stop_loss', 'original_take_profits', 'allowed_evidence_refs',
+  'standard_symbol', 'direction', 'original_signal_id', 'allowed_evidence_refs',
   'decision_context_status', 'reference_facts_status',
 ]
 const POSITION_MANAGEMENT_MODEL_FACT_FIELDS = [
   'source', 'kind', 'direction', 'order_type', 'entry_price', 'trigger_price', 'current_price',
-  'actual_stop_loss', 'actual_take_profit', 'original_stop_loss', 'original_take_profits',
+  'actual_stop_loss', 'actual_take_profit', 'volume',
   'opened_at', 'created_at',
 ]
+
+function projectPositionManagementExposureSummary(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const result = {}
+  for (const direction of ['buy', 'sell']) {
+    const bucket = value[direction]
+    if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) continue
+    const nonNegativeInt = input => {
+      const parsed = Number(input)
+      return Number.isInteger(parsed) && parsed >= 0 && parsed <= 1_000_000 ? parsed : 0
+    }
+    const nonNegativeNumber = input => {
+      const parsed = Number(input)
+      return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1_000_000_000
+        ? Number(parsed.toFixed(8)) : 0
+    }
+    const average = Number(bucket.weighted_average_entry)
+    result[direction] = {
+      position_count:nonNegativeInt(bucket.position_count),
+      position_volume:nonNegativeNumber(bucket.position_volume),
+      weighted_average_entry:Number.isFinite(average) && average > 0 ? Number(average.toFixed(8)) : null,
+      pending_count:nonNegativeInt(bucket.pending_count),
+      pending_volume:nonNegativeNumber(bucket.pending_volume),
+    }
+  }
+  return Object.keys(result).length ? result : null
+}
 
 function projectPositionManagementFact(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -145,6 +171,7 @@ export function projectPositionManagementContextForModel(context) {
       closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms,
       market_snapshot_hash:context.as_of.market_snapshot_hash,
     } : context.as_of,
+    exposure_summary:projectPositionManagementExposureSummary(context.exposure_summary),
     pending_groups:Array.isArray(context.pending_groups)
       ? context.pending_groups.map(projectPositionManagementGroup) : [],
     position_groups:Array.isArray(context.position_groups)
@@ -1230,7 +1257,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     if (DEBUG_LLM) console.log(`[LLM] Output schema loaded: ${schemaSource} (${outputFormat.length} chars)`)
 
     const marketOnlyRule = config._market_only
-      ? '\n\n## 共享市场事实边界\nplatform_strategy_reference_portfolio 只表示本平台当前策略已产生的持仓与挂单，不代表任何订阅用户的真实账户。不得推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。请按照当前策略正文独立判断是否新建、加仓、保留或取消；不得返回绝对手数，实际手数由独立风控和合约规格计算。'
+      ? '\n\n## 共享市场事实边界\nplatform_strategy_reference_portfolio 只表示本平台当前策略已产生的观摩源持仓与挂单，不代表任何订阅用户的真实账户。观摩源订单的手数与 exposure_summary 是匿名暴露事实，只能用于判断继续加仓、hold_no_add、保留或退出；不得推测订阅用户的账户、余额、权益、持仓、挂单或个人风控信息。不得返回绝对手数，实际手数由独立风控和合约规格计算。'
       : ''
     const privatePortfolioRule = !config._market_only && config._include_portfolio_context
       ? '\n\n## 私有策略账户事实\npositions 与 pending_orders 是当前策略获准读取的实时账户事实。请依据当前策略正文独立判断新建信号、加仓、保留或取消；不得把余额或现有手数复制成新订单手数，实际手数由独立风控和合约规格计算。'
@@ -1246,7 +1273,7 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
     const positionManagementRule = positionManagementEnabled ? `
 
 ## 持仓与挂单管理输出合同
-position_management_context 是服务端提供的去身份化实时事实，平台策略的管理组只来自本轮观摩源当前 reference portfolio 中仍存在且已精确归属的持仓或挂单。观摩源当前没有持仓和挂单时，管理组为空；历史 thesis、旧 outcome 或订阅用户仍存续的订单不能生成管理组。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。decision_context_status=available 且 reference_facts_status=available 才能提出 cancel/exit；证据缺失或不可用时只能安全保留，不得凭冻结论点恢复已消失的管理组。不得伪造不存在的终端事实，也不得引用 subscriber terminal ref。模型只输出当前输入管理组的判断；只有合法 cancel/exit 结论才由服务端按冻结 origin_signal_id 经 delivery、order intent、outcome 唯一 lineage 解析订阅执行目标，hold/keep/observe 不遍历订阅库存。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、手数或盈亏。` : ''
+position_management_context 是服务端提供的去身份化实时事实，平台策略的管理组只来自本轮观摩源当前 reference portfolio 中仍存在且已精确归属的持仓或挂单。观摩源当前没有持仓和挂单时，管理组为空；历史 thesis、旧 outcome 或订阅用户仍存续的订单不能生成管理组。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。当前事实只用于判断订单是否符合行情：持仓依据当前 entry_price/current_price/actual_stop_loss/actual_take_profit/volume，挂单依据 trigger_price/actual_stop_loss/actual_take_profit/volume；不得使用原始入场论点、原始保护价或失效条件替代当前事实。volume 与 exposure_summary 仅用于判断 allow_add 或 hold_no_add，禁止返回绝对手数。decision_context_status=available 且 reference_facts_status=available 才能提出 cancel/exit；证据缺失或不可用时只能安全保留，不得凭冻结论点恢复已消失的管理组。不得伪造不存在的终端事实，也不得引用 subscriber terminal ref。模型只输出当前输入管理组的判断；只有合法 cancel/exit 结论才由服务端按冻结 origin_signal_id 经 delivery、order intent、outcome 唯一 lineage 解析订阅执行目标，hold/keep/observe 不遍历订阅库存。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、金额盈亏或订阅用户手数。` : ''
     const declaredIndicators = market?.strategy_context?.indicators
     const managedEma34Identity = declaredIndicators && Object.hasOwn(declaredIndicators, 'ema34')
       ? ' strategy_context.indicators.ema34 是系统按策略声明计算的 EMA34 数据。'

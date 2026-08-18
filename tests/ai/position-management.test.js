@@ -593,7 +593,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
 
   it('requires two distinct current-contract inferences and snapshots', () => {
     expect(AUTO_EXIT_CONFIRMATIONS_REQUIRED).toBe(2)
-    expect(POSITION_MANAGEMENT_CONTRACT_VERSION).toBe('position-management-v1.8')
+    expect(POSITION_MANAGEMENT_CONTRACT_VERSION).toBe('position-management-v1.9')
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, null))
       .toMatchObject({ validation_status:'valid', confirmation_count:1 })
@@ -692,6 +692,65 @@ describe('consecutive automatic-inference exit confirmation', () => {
     expect(result).toEqual([expect.objectContaining({ status:'CANDIDATE', confirmation_count:1, required_confirmations:2 })])
     expect(queryRun.mock.calls.some(call => String(call[0]).includes('ai_position_management_evaluations'))).toBe(true)
     expect(queryRun.mock.calls.some(call => String(call[0]).includes("'EVIDENCE_CONFIRMED'"))).toBe(false)
+  })
+
+  it('anchors a platform exit confirmation to the observer source even when that user is display-only', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+    queryAll.mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ user_id:7, execution_mode:'display' }])
+    queryRun.mockResolvedValueOnce({ insertId:111, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+      .mockResolvedValueOnce({ insertId:121, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const source = {
+      user_id:7, trading_account_id:3, outcome_id:109, position_id:'SOURCE-109',
+      original_symbol:'XAUUSD.s', standard_symbol:'XAUUSD', direction:'buy', system_magic:234000,
+      management_group_id:'position_group_01', thesis_id:'thesis_01', ownership_history_id:5,
+      broker_server_key:'Broker-Demo', login_account:'10001', strategy_id:2,
+      strategy_version:4, strategy_scope:'platform', origin_signal_id:100,
+    }
+    const localContext = { ...context,
+      position_groups:[{ ...context.position_groups[0], original_signal_id:100,
+        strategy_id:2, strategy_version:4, strategy_scope:'platform', standard_symbol:'XAUUSD' }],
+      _executionLineage:{ strategy_scope:'platform', source_user_ids:[7], source_outcome_ids:[109] },
+      _targets:new Map([['position_group_01', [source]]]),
+    }
+    const result = await persistPositionManagementEvaluations({ signalId:201, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+        position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
+      } })
+    expect(result).toEqual([expect.objectContaining({ outcome_id:109, status:'CANDIDATE',
+      confirmation_count:1, required_confirmations:2 })])
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes('ai_position_management_evaluations'))).toBe(true)
+  })
+
+  it('records a platform display-only recommendation without faking a confirmation increment', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'display', ai_pending_cancel_enabled:1 })
+    queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:211, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const source = {
+      user_id:7, trading_account_id:3, outcome_id:209, position_id:'SOURCE-209',
+      original_symbol:'XAUUSD.s', standard_symbol:'XAUUSD', direction:'buy', system_magic:234000,
+      management_group_id:'position_group_01', thesis_id:'thesis_01', ownership_history_id:5,
+      broker_server_key:'Broker-Demo', login_account:'10001', strategy_id:2,
+      strategy_version:4, strategy_scope:'platform', origin_signal_id:100,
+    }
+    const localContext = { ...context,
+      position_groups:[{ ...context.position_groups[0], original_signal_id:100,
+        strategy_id:2, strategy_version:4, strategy_scope:'platform', standard_symbol:'XAUUSD' }],
+      _executionLineage:{ strategy_scope:'platform', source_user_ids:[7], source_outcome_ids:[209] },
+      _targets:new Map([['position_group_01', [source]]]),
+    }
+    expect(await persistPositionManagementEvaluations({ signalId:202, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+        position_evaluations:[response().position_evaluations[0]], pending_evaluations:[],
+      } })).toEqual([])
+    expect(queryRun.mock.calls.find(call => String(call[0]).startsWith('UPDATE ai_position_management_evaluations'))?.[1])
+      .toEqual([0, 211])
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes('INSERT IGNORE INTO ai_position_management_tasks'))).toBe(false)
   })
 
   it('keeps automatic exit confirmation and task lookup isolated by outcome', async () => {
@@ -1240,8 +1299,8 @@ describe('durable state and protection boundaries', () => {
         strategy_context:{ timeframes:{ M15:{ summary:{ last_closed_bar:{ time_utc_msc:1784877300000 } },
           klines:[{ time_utc_msc:1784876400000 }, { time_utc_msc:1784877300000 }] } } } },
     })
-    expect(value._diagnostics.oversized_group_count).toBe(1)
-    expect(value._targets.has('oversized-group')).toBe(false)
+    expect(value._diagnostics.oversized_group_count).toBe(0)
+    expect(value._targets.has('oversized-group')).toBe(true)
     expect(value._targets.has('normal-group-0')).toBe(true)
     expect(value._targets.has('normal-group-1')).toBe(true)
   })
@@ -1397,22 +1456,20 @@ describe('durable state and protection boundaries', () => {
       },
     })
     expect(value.position_groups[0]).toMatchObject({
-      decision_context_status:'available', reference_facts_status:'available', direction:'buy', entry_method:'market',
-      core_entry_reason:'回踩支撑后顺势做多', original_stop_loss:1980,
-      original_take_profits:[2040,2080],
+      decision_context_status:'available', reference_facts_status:'available', direction:'buy',
       position_facts:[expect.objectContaining({ source:'platform_reference_portfolio', direction:'buy',
         order_type:'position', entry_price:2000, current_price:2010,
-        actual_stop_loss:1985, actual_take_profit:2050 })],
+        actual_stop_loss:1985, actual_take_profit:2050, volume:null })],
     })
     expect(value.pending_groups[0]).toMatchObject({
-      decision_context_status:'available', reference_facts_status:'available', direction:'sell', entry_method:'limit',
+      decision_context_status:'available', reference_facts_status:'available', direction:'sell',
       pending_order_facts:[expect.objectContaining({ source:'platform_reference_portfolio', direction:'sell',
-        order_type:'sell_limit', trigger_price:2050, actual_stop_loss:2070 })],
+        order_type:'sell_limit', trigger_price:2050, actual_stop_loss:2070, volume:null })],
     })
     const contextKeys = JSON.stringify({ position:value.position_groups, pending:value.pending_groups })
       .match(/"([^"]+)":/g)?.map(key => key.slice(1, -2)) || []
     expect(contextKeys).not.toEqual(expect.arrayContaining([
-      'protection_status', 'ticket', 'volume', 'profit', 'balance', 'equity',
+      'protection_status', 'ticket', 'profit', 'balance', 'equity',
     ]))
   })
 
@@ -1704,5 +1761,38 @@ describe('durable state and protection boundaries', () => {
     expect(queryAll.mock.calls[0][1]).toEqual([7, 105])
     expect(queryAll.mock.calls[1][0]).toContain('tasks.user_id = ?')
     expect(queryAll.mock.calls[1][1][0]).toBe(7)
+  })
+
+  it('maps tickets from the exact outcomes already validated for this decision inference', async () => {
+    const management = { position_evaluations:[{
+      management_group_id:'platform-position-group', thesis_id:'platform-thesis',
+      action:'exit', reason:'观摩源方向失效',
+    }] }
+    queryAll
+      .mockResolvedValueOnce([{
+        id:21, user_id:28, decision_signal_id:123, outcome_id:900,
+        management_group_id:'platform-position-group', thesis_id:'platform-thesis',
+        action:'exit', validation_status:'valid', consecutive_exit_count:1,
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        outcome_id:900, user_id:28, trading_account_id:9, position_id:'POS-900',
+        pending_ticket:null, delivery_id:77,
+        login_account:'SUB-900', outcome_status:'open', attribution_status:'matched',
+        system_magic:234000,
+        user_nickname:'订阅用户', user_email:'subscriber@example.com',
+      }])
+
+    const actions = await loadSignalManagementActions(7, 123, { management, admin:true })
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toMatchObject({
+      target_role:'subscriber', target_ticket:'POS-900', target_outcome_id:900,
+      mapping_status:'mapped', account_label:'SUB-900',
+    })
+
+    const mappingSql = queryAll.mock.calls[2][0]
+    expect(mappingSql).toContain('WHERE outcomes.id IN (?)')
+    expect(queryAll.mock.calls[2][1]).toEqual([900])
+    expect(mappingSql).not.toContain('outcomes.signal_id = ?')
   })
 })

@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260814ema34toggle1" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260814ema34toggle1">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260814ema34toggle1">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2-admin-dispatch-details1-admin-strategy-close-confirm1-manual-review-evidence1-manual-review-v3aggregate1-manual-review-frontend3-daily-review-v3-period-review-compact1-period-review-nav1-strategy-direction-interlock1-period-review-short-holding1-position-protection-modal2" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2-admin-dispatch-details1-admin-strategy-close-confirm1-manual-review-evidence1-manual-review-v3aggregate1-manual-review-frontend3-daily-review-v3-period-review-compact1-period-review-nav1-strategy-direction-interlock1-period-review-short-holding1-position-protection-modal2-observer-position-management1" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2" />
   </head>
   <body>
@@ -715,14 +715,14 @@
                         <span class="admin-strategy-close-danger">危险操作</span>
                         <h3 id="adminStrategyCloseTitle">平仓本次策略指令关联持仓</h3>
                       </div>
-                      <span id="adminStrategyCloseAttributionBadge" class="admin-strategy-close-badge">仅管理员策略指令</span>
+                      <span id="adminStrategyCloseAttributionBadge" class="admin-strategy-close-badge">平台策略关联持仓</span>
                     </div>
-                    <p id="adminStrategyCloseDescription" class="admin-strategy-close-description">完整平仓不可撤销。订阅用户先关，管理员源仓最后；Bridge ACK 待对账。</p>
+                    <p id="adminStrategyCloseDescription" class="admin-strategy-close-description">完整平仓不可撤销。订阅用户先关，观摩源仓最后；Bridge ACK 待对账。</p>
                     <div id="adminStrategyClosePreviewImpact" class="admin-strategy-close-preview-impact" aria-live="polite"><div class="workspace-skeleton"></div></div>
-                    <p id="adminStrategyClosePreviewNote" class="admin-strategy-close-preview-note">仅当后端确认该 Magic 234000 源仓可唯一归因到“管理员策略指令”时显示。</p>
+                    <p id="adminStrategyClosePreviewNote" class="admin-strategy-close-preview-note">仅当后端确认该 Magic 234000 源仓可唯一归因到平台策略信号时显示。</p>
                     <label class="admin-strategy-close-reason" for="adminStrategyCloseReason">
                       <span>完整平仓原因 <b id="adminStrategyCloseReasonCount" class="num">0</b> / 500</span>
-                      <textarea id="adminStrategyCloseReason" maxlength="500" rows="3" placeholder="请说明为什么要撤销本次管理员策略指令关联持仓" aria-describedby="adminStrategyCloseReasonHelp adminStrategyCloseReasonError"></textarea>
+                      <textarea id="adminStrategyCloseReason" maxlength="500" rows="3" placeholder="请说明为什么要结束本次平台策略关联持仓" aria-describedby="adminStrategyCloseReasonHelp adminStrategyCloseReasonError"></textarea>
                       <small id="adminStrategyCloseReasonHelp">必填，2–500 字；该操作会写入管理员审计日志。</small>
                       <small id="adminStrategyCloseReasonError" class="position-protection-field-error hidden" role="alert"></small>
                     </label>
@@ -736,7 +736,7 @@
                       <button id="adminStrategyCloseSubmit" class="btn btn-danger" type="button" disabled><i data-lucide="triangle-alert" size="16"></i>平仓本次策略指令关联持仓</button>
                     </div>
                     <div id="adminStrategyCloseProgressStage" class="admin-strategy-close-progress hidden" aria-live="polite">
-                      <div class="admin-strategy-close-progress-head"><div><span class="section-kicker">管理员策略指令 · 平仓进度</span><h4 id="adminStrategyCloseProgressTitle">等待执行</h4><p id="adminStrategyCloseProgressText">正在准备目标</p></div><span class="admin-strategy-close-order-note">订阅用户先关 · 管理员源仓最后</span></div>
+                      <div class="admin-strategy-close-progress-head"><div><span class="section-kicker">平台策略关联持仓 · 平仓进度</span><h4 id="adminStrategyCloseProgressTitle">等待执行</h4><p id="adminStrategyCloseProgressText">正在准备目标</p></div><span class="admin-strategy-close-order-note">订阅用户先关 · 观摩源仓最后</span></div>
                       <div id="adminStrategyCloseProgressSummary" class="admin-strategy-close-progress-summary"></div>
                       <div class="table-wrap admin-strategy-close-results">
                         <table class="data-table">
@@ -1475,7 +1475,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2-admin-dispatch-user-label1-admin-dispatch-details1-manual-review-create-ref1-riskmetadataround1-manual-review-frontend2-manual-review-durable-stage1-manual-review-v3aggregate1-manual-review-frontend3-position-ticket-refresh1-position-ticket-retry1-daily-review-v3-daily-review-v3fix1-period-review-contract-refresh1-period-review-short-holding1-pending-fill-ticket-binding1-position-protection-modal2&rev=period-review-compact1-period-review-nav1-strategy-direction-interlock1"></script>
+    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2-admin-dispatch-user-label1-admin-dispatch-details1-manual-review-create-ref1-riskmetadataround1-manual-review-frontend2-manual-review-durable-stage1-manual-review-v3aggregate1-manual-review-frontend3-position-ticket-refresh1-position-ticket-retry1-daily-review-v3-daily-review-v3fix1-period-review-contract-refresh1-period-review-short-holding1-pending-fill-ticket-binding1-position-protection-modal2-observer-position-management1&rev=period-review-compact1-period-review-nav1-strategy-direction-interlock1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

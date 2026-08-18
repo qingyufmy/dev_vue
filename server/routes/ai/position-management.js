@@ -3,7 +3,7 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.8'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.9'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
@@ -209,7 +209,6 @@ export async function createTradeThesisTx(run, {
 }
 
 function publicGroup(row) {
-  const originalTakeProfits = json(row.original_take_profits_json, [])
   return {
     management_group_id:row.management_group_id,
     thesis_id:row.thesis_id,
@@ -219,14 +218,6 @@ function publicGroup(row) {
     standard_symbol:row.standard_symbol,
     direction:row.direction,
     original_signal_id:Number(row.origin_signal_id || row.signal_id),
-    core_entry_reason:text(row.core_entry_reason, 1000),
-    entry_method:text(row.entry_method, 64).toLowerCase() || null,
-    decision_timeframe:row.decision_timeframe,
-    original_stop_loss:positiveNumber(row.original_stop_loss),
-    original_take_profits:Array.isArray(originalTakeProfits) ? originalTakeProfits : [],
-    // Frozen thesis details are supplied as context only.  They describe the
-    // original entry logic; the model must compare that logic with current
-    // market facts and may not treat protective prices as exit gates.
     allowed_evidence_refs:[],
   }
 }
@@ -248,11 +239,10 @@ function terminalFact(value, row, kind, source) {
   const pending = kind === 'pending'
   const direction = terminalDirection(value, row?.direction)
   const orderType = text(value?.order_type || value?.pending_type || value?.type
-    || (pending ? row?.entry_method : 'position'), 64).toLowerCase() || null
+    || (pending ? null : 'position'), 64).toLowerCase() || null
   const entryPrice = number(value?.entry_price ?? value?.open_price ?? value?.price_open)
   const triggerPrice = number(value?.trigger_price ?? value?.price)
   const currentPrice = number(value?.current_price ?? value?.price_current)
-  const originalTakeProfits = json(row?.original_take_profits_json, [])
   const result = {
     source,
     kind,
@@ -263,9 +253,7 @@ function terminalFact(value, row, kind, source) {
     current_price:pending ? null : (currentPrice && currentPrice > 0 ? currentPrice : null),
     actual_stop_loss:positiveNumber(value?.actual_stop_loss ?? value?.sl),
     actual_take_profit:positiveNumber(value?.actual_take_profit ?? value?.tp),
-    original_stop_loss:positiveNumber(value?.original_stop_loss ?? row?.original_stop_loss),
-    original_take_profits:Array.isArray(value?.original_take_profits)
-      ? value.original_take_profits : (Array.isArray(originalTakeProfits) ? originalTakeProfits : []),
+    volume:positiveNumber(value?.volume ?? value?.lots),
     opened_at:pending ? null : terminalTime(value, 'opened_at', 'open_time', 'time_open', 'time'),
     created_at:terminalTime(value, 'created_at', 'created_at_utc', 'time_setup', 'time_create', 'time')
       || row?.created_at || null,
@@ -277,6 +265,33 @@ function terminalFactComplete(fact, kind) {
   if (!fact || fact.kind !== kind || !fact.direction || !fact.order_type) return false
   if (kind === 'position') return Number(fact.entry_price) > 0 && Number(fact.current_price) > 0
   return Number(fact.trigger_price) > 0
+}
+
+function safeExposureSummary(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const result = {}
+  for (const direction of ['buy', 'sell']) {
+    const bucket = value[direction]
+    if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) continue
+    const nonNegativeInt = input => {
+      const parsed = Number(input)
+      return Number.isInteger(parsed) && parsed >= 0 && parsed <= 1_000_000 ? parsed : 0
+    }
+    const nonNegativeNumber = input => {
+      const parsed = Number(input)
+      return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1_000_000_000
+        ? Number(parsed.toFixed(8)) : 0
+    }
+    const average = Number(bucket.weighted_average_entry)
+    result[direction] = {
+      position_count:nonNegativeInt(bucket.position_count),
+      position_volume:nonNegativeNumber(bucket.position_volume),
+      weighted_average_entry:Number.isFinite(average) && average > 0 ? Number(average.toFixed(8)) : null,
+      pending_count:nonNegativeInt(bucket.pending_count),
+      pending_volume:nonNegativeNumber(bucket.pending_volume),
+    }
+  }
+  return Object.keys(result).length ? result : null
 }
 
 function lookupKeys(value, keys) {
@@ -428,8 +443,11 @@ export async function loadActivePositionManagementContext({
       group.pending_order_facts = []
       group.position_facts = []
       group.allowed_evidence_refs_by_kind = { pending:[], position:[] }
-      group.decision_context_status = group.core_entry_reason && group.entry_method
-        && group.decision_timeframe && group.direction && asOf.closed_bar_time_utc_ms
+      // Position management is a current-state comparison.  It must not
+      // require the historical entry narrative or original protection values
+      // that are retained in the thesis tables for audit only.
+      group.decision_context_status = group.standard_symbol && group.direction
+        && asOf.decision_timeframe && asOf.closed_bar_time_utc_ms
         && asOf.market_snapshot_hash ? 'available' : 'unavailable'
       group.reference_facts_status_by_kind = { pending:initialReferenceFactsStatus, position:initialReferenceFactsStatus }
       groups.set(row.management_group_id, group)
@@ -501,6 +519,7 @@ export async function loadActivePositionManagementContext({
       as_of:asOf,
       pending_groups:pending,
       position_groups:positions,
+      exposure_summary:isPlatformStrategy ? safeExposureSummary(referencePortfolio?.exposure_summary) : null,
     }
     return { context, pending, positions, chars:JSON.stringify(context).length }
   }
@@ -975,7 +994,7 @@ function executionGroup(context, groupId, section) {
   return (groups || []).find(group => String(group?.management_group_id || '') === String(groupId || '')) || null
 }
 
-function lineageTargetFromRow(row) {
+function lineageTargetFromRow(row, targetRole = 'subscriber') {
   return {
     outcome_id:Number(row.outcome_id), delivery_id:Number(row.delivery_id), order_intent_id:Number(row.order_intent_id),
     user_id:Number(row.user_id), trading_account_id:Number(row.trading_account_id), ownership_history_id:row.ownership_history_id,
@@ -989,15 +1008,17 @@ function lineageTargetFromRow(row) {
     strategy_id:Number(row.strategy_id), strategy_version:Number(row.strategy_version || 1),
     strategy_scope:row.strategy_scope, management_group_id:row.management_group_id,
     thesis_id:row.thesis_id, origin_signal_id:Number(row.origin_signal_id),
+    target_role:targetRole,
   }
 }
 
 /**
- * Resolve subscriber execution targets only after a validated cancel/exit.
- * The observer outcome is a model fact, not an execution target.  Every
- * returned row must have one delivery, its frozen origin signal, one order
- * intent and one matching outcome; ambiguous or incomplete lineage is
- * dropped rather than guessed.
+ * Resolve the private execution targets for one validated management action.
+ * Platform groups always include the current observer outcome(s) that created
+ * the model facts, followed by subscriber outcomes resolved through the
+ * frozen delivery -> intent -> outcome lineage.  The observer is deliberately
+ * appended last so downstream execution can process subscribers first while
+ * retaining the source as the final reference target.
  */
 export async function resolvePositionManagementExecutionTargets({ context, groupId, section, action } = {}) {
   const group = executionGroup(context, groupId, section)
@@ -1015,6 +1036,56 @@ export async function resolvePositionManagementExecutionTargets({ context, group
   if (!Number.isSafeInteger(originSignalId) || originSignalId <= 0
     || !Number.isSafeInteger(strategyId) || strategyId <= 0) return []
   const sourceUserIds = new Set((lineage.source_user_ids || []).map(Number).filter(id => id > 0))
+  const sourceOutcomeIds = new Set((lineage.source_outcome_ids || []).map(Number).filter(id => id > 0))
+  if (!sourceOutcomeIds.size) {
+    for (const target of context?._targets?.get(groupId) || []) {
+      if (sourceUserIds.size && !sourceUserIds.has(Number(target?.user_id))) continue
+      const outcomeId = Number(target?.outcome_id)
+      if (outcomeId > 0) sourceOutcomeIds.add(outcomeId)
+    }
+  }
+  const sourceTargets = (context?._targets?.get(groupId) || [])
+    .filter(target => targetMatchesPositionManagementTask(target, section === 'position' ? 'position_exit' : 'pending_cancel'))
+    .filter(target => sourceOutcomeIds.has(Number(target?.outcome_id))
+      && (!sourceUserIds.size || sourceUserIds.has(Number(target?.user_id)))
+      && Number(target?.system_magic) === SYSTEM_MAGIC)
+    .map(target => ({ ...target, target_role:'source' }))
+  const nonExecutionAction = (section === 'position' && normalizedAction === 'hold')
+    || (section === 'pending' && normalizedAction === 'keep')
+  if (nonExecutionAction) {
+    const taskType = section === 'position' ? 'position_exit' : 'pending_cancel'
+    const existingRows = await queryAll(`SELECT tasks.id AS task_id, tasks.outcome_id,
+        tasks.user_id, tasks.trading_account_id, tasks.ownership_history_id,
+        tasks.broker_server_key, tasks.login_account, tasks.original_symbol,
+        tasks.standard_symbol, tasks.strategy_id, tasks.strategy_version,
+        tasks.management_group_id, tasks.thesis_id, tasks.origin_signal_id,
+        outcomes.position_id, outcomes.pending_ticket, outcomes.entry_direction,
+        outcomes.system_magic, outcomes.attribution_status, outcomes.actual_stop_loss,
+        outcomes.actual_take_profit, outcomes.status AS outcome_status
+      FROM ai_position_management_tasks tasks
+      JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
+      WHERE tasks.task_type = ? AND tasks.management_group_id = ?
+        AND tasks.origin_signal_id = ? AND tasks.status IN ('CANDIDATE','EVIDENCE_CONFIRMED')
+        AND outcomes.status IN ('open','closing')`, [taskType, groupId, originSignalId])
+    const existingTargets = (existingRows || []).map(row => ({
+      ...lineageTargetFromRow({ ...row,
+        delivery_id:null, order_intent_id:null, symbol:row.original_symbol,
+        effective_pending_state:section === 'pending' ? 'pending' : null,
+        strategy_scope:'platform',
+      }, 'subscriber'),
+      target_role:'subscriber',
+      task_id:Number(row.task_id) || null,
+    })).filter(target => Number(target.system_magic) === SYSTEM_MAGIC
+      && targetMatchesPositionManagementTask(target, taskType))
+    const seen = new Set()
+    return [...existingTargets, ...sourceTargets].filter(target => {
+      const targetKey = [target.user_id, target.trading_account_id, target.outcome_id,
+        target.pending_ticket || target.position_id || ''].join(':')
+      if (seen.has(targetKey)) return false
+      seen.add(targetKey)
+      return true
+    })
+  }
   const rows = await queryAll(`SELECT d.id AS delivery_id, d.signal_id AS delivery_signal_id,
       d.user_id AS delivery_user_id, d.prompt_type_id AS delivery_strategy_id,
       d.symbol AS delivery_symbol, d.order_intent_id AS delivery_order_intent_id,
@@ -1051,6 +1122,7 @@ export async function resolvePositionManagementExecutionTargets({ context, group
     byDelivery.get(deliveryId).push(row)
   }
   const targets = []
+  const seenTargetKeys = new Set()
   for (const deliveryRows of byDelivery.values()) {
     // A delivery must resolve to exactly one outcome.  Do not select a
     // historical ticket when the lineage is duplicated or partially linked.
@@ -1077,17 +1149,30 @@ export async function resolvePositionManagementExecutionTargets({ context, group
       || Number(row.intent_user_id) !== deliveryUserId
       || Number(row.user_id) !== deliveryUserId
       || Number(row.intent_trading_account_id) !== Number(row.trading_account_id)
+      || Number(row.system_magic) !== SYSTEM_MAGIC
       || String(row.management_group_id || '') !== String(group.management_group_id || '')
       || String(row.thesis_id || '') !== String(group.thesis_id || '')) continue
     if (section === 'pending' && row.delivery_pending_ticket
       && String(row.delivery_pending_ticket) !== String(row.pending_ticket || '')) continue
     if (!['open', 'closing'].includes(String(row.outcome_status || '').toLowerCase())) continue
     const target = lineageTargetFromRow(row)
-    if (targetMatchesPositionManagementTask(target, section === 'position' ? 'position_exit' : 'pending_cancel')) {
+    const targetKey = [target.user_id, target.trading_account_id, target.outcome_id,
+      target.pending_ticket || target.position_id || ''].join(':')
+    if (!seenTargetKeys.has(targetKey)
+      && targetMatchesPositionManagementTask(target, section === 'position' ? 'position_exit' : 'pending_cancel')) {
+      seenTargetKeys.add(targetKey)
       targets.push(target)
     }
   }
-  return targets
+  const sourceSeen = new Set()
+  const deduplicatedSourceTargets = sourceTargets.filter(target => {
+    const targetKey = [target.user_id, target.trading_account_id, target.outcome_id,
+      target.pending_ticket || target.position_id || ''].join(':')
+    if (sourceSeen.has(targetKey)) return false
+    sourceSeen.add(targetKey)
+    return true
+  })
+  return [...targets, ...deduplicatedSourceTargets]
 }
 
 function managementContractVersion(value) {
@@ -1196,7 +1281,10 @@ export function resolveAutomaticExitConfirmation(current, previous = null) {
   }
 }
 
-async function recordAutomaticPositionEvaluation({ signalId, context, target, evaluation, inferenceSource } = {}) {
+async function recordAutomaticPositionEvaluation({
+  signalId, context, target, evaluation, inferenceSource,
+  confirmationTarget = null, confirmationRecord = null,
+} = {}) {
   const now = beijingNow()
   const originalSymbol = String(target.original_symbol || target.symbol || target.standard_symbol || '')
   const standardSymbol = target.standard_symbol || stripBrokerSuffix(originalSymbol).toUpperCase()
@@ -1205,6 +1293,7 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
     ...evaluation,
     contract_version:managementContractVersion(evaluation) || POSITION_MANAGEMENT_CONTRACT_VERSION,
   }
+  const confirmationAnchor = confirmationTarget || target
   const result = await queryRun(`INSERT IGNORE INTO ai_position_management_evaluations
     (decision_signal_id, user_id, trading_account_id, outcome_id, position_id,
      management_group_id, thesis_id, original_symbol, standard_symbol, action,
@@ -1220,18 +1309,53 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
     context.as_of.decision_timeframe, context.as_of.closed_bar_time_utc_ms,
     String(context.as_of.market_snapshot_hash).replace(/^sha256:/, ''), inferenceSource, now,
   ])
-  if (!Number(result?.insertId)) return null
+  if (!Number(result?.insertId)) {
+    const existing = await queryOne(`SELECT id, decision_signal_id, action, validation_status,
+        consecutive_exit_count, market_snapshot_hash, closed_bar_time_utc_ms,
+        model_evaluation_json, created_at
+      FROM ai_position_management_evaluations
+      WHERE decision_signal_id = ? AND outcome_id = ? LIMIT 1`, [signalId, target.outcome_id])
+    if (!existing?.id) return null
+    const replayPrevious = inferenceSource === 'automatic_scheduler'
+      && Number(existing.consecutive_exit_count || 0) >= AUTO_EXIT_CONFIRMATIONS_REQUIRED
+      ? await queryOne(`SELECT id, decision_signal_id, action, validation_status,
+          consecutive_exit_count, market_snapshot_hash, closed_bar_time_utc_ms,
+          model_evaluation_json, created_at
+        FROM ai_position_management_evaluations
+        WHERE outcome_id = ? AND management_group_id = ?
+          AND inference_source = 'automatic_scheduler' AND id < ?
+        ORDER BY id DESC LIMIT 1`, [confirmationAnchor.outcome_id,
+        confirmationAnchor.management_group_id, Number(existing.id)]) : null
+    return {
+      id:Number(existing.id),
+      decision_signal_id:Number(existing.decision_signal_id || signalId),
+      action:String(existing.action || evaluation.action || '').toLowerCase(),
+      validation_status:String(existing.validation_status || validationStatus).toLowerCase(),
+      confirmation_count:Math.max(0, Number(existing.consecutive_exit_count || 0)),
+      reset_reason:null,
+      inference_source:inferenceSource,
+      previous:replayPrevious,
+      inference_id:String(signalId),
+      market_snapshot_hash:existing.market_snapshot_hash || context.as_of.market_snapshot_hash,
+      closed_bar_time_utc_ms:Number(existing.closed_bar_time_utc_ms || context.as_of.closed_bar_time_utc_ms),
+      previous_closed_bar_time_utc_ms:context?._diagnostics?.previous_closed_bar_time_utc_ms || null,
+      contract_version:managementContractVersion(json(existing.model_evaluation_json, {}))
+        || POSITION_MANAGEMENT_CONTRACT_VERSION,
+      created_at:existing.created_at || now,
+      replayed:true,
+    }
+  }
   const evaluationId = Number(result.insertId)
-  const previous = inferenceSource === 'automatic_scheduler'
+  const previous = inferenceSource === 'automatic_scheduler' && !confirmationRecord
     ? await queryOne(`SELECT id, decision_signal_id, action, validation_status,
         consecutive_exit_count, market_snapshot_hash, closed_bar_time_utc_ms,
         model_evaluation_json, created_at
       FROM ai_position_management_evaluations
       WHERE outcome_id = ? AND management_group_id = ? AND inference_source = 'automatic_scheduler' AND id < ?
-      ORDER BY id DESC LIMIT 1`, [target.outcome_id, target.management_group_id, evaluationId])
+      ORDER BY id DESC LIMIT 1`, [confirmationAnchor.outcome_id, confirmationAnchor.management_group_id, evaluationId])
     : null
   const confirmation = inferenceSource === 'automatic_scheduler'
-    ? resolveAutomaticExitConfirmation({ ...evaluation,
+    ? (confirmationRecord || resolveAutomaticExitConfirmation({ ...evaluation,
       inference_id:String(signalId), decision_signal_id:Number(signalId),
       market_snapshot_hash:context.as_of.market_snapshot_hash,
       closed_bar_time_utc_ms:context.as_of.closed_bar_time_utc_ms,
@@ -1241,7 +1365,7 @@ async function recordAutomaticPositionEvaluation({ signalId, context, target, ev
       ...previous,
       ...json(previous?.model_evaluation_json, {}),
       contract_version:managementContractVersion(json(previous?.model_evaluation_json, {})),
-    })
+    }))
     : { validation_status:validationStatus, confirmation_count:0, reset_reason:null }
   await queryRun(`UPDATE ai_position_management_evaluations
     SET consecutive_exit_count = ? WHERE id = ?`, [confirmation.confirmation_count, evaluationId])
@@ -1657,8 +1781,8 @@ export async function persistPositionManagementEvaluations({
       'position')
     const targets = ['hold', 'exit'].includes(normalizedEvaluation.action)
       ? (resolvedTargets.get(`position:${String(evaluation.management_group_id || '')}`) || []) : []
-    for (const target of targets) {
-      if (normalizedEvaluation.action === 'hold') {
+    if (normalizedEvaluation.action === 'hold') {
+      for (const target of targets) {
         const record = await recordAutomaticPositionEvaluation({
           signalId, context, target, evaluation:normalizedEvaluation, inferenceSource,
         })
@@ -1666,24 +1790,85 @@ export async function persistPositionManagementEvaluations({
           signalId, context, target, section:'position', action:'hold',
           evaluation:{ ...normalizedEvaluation, evaluation_id:record?.id || null },
         }))
-        continue
       }
-      const mode = resolvePositionManagementTaskMode('position_exit',
-        modes.byUser.get(Number(target.user_id)) || 'auto_exit', modes.control)
-      if (mode === 'display') continue
-      const record = await recordAutomaticPositionEvaluation({
-        signalId, context, target, evaluation:normalizedEvaluation, inferenceSource,
+      continue
+    }
+
+    const platformGroupConfirmation = String(context?._executionLineage?.strategy_scope || '').toLowerCase() === 'platform'
+    if (!platformGroupConfirmation) {
+      for (const target of targets) {
+        const mode = resolvePositionManagementTaskMode('position_exit',
+          modes.byUser.get(Number(target.user_id)) || 'auto_exit', modes.control)
+        if (mode === 'display') continue
+        const record = await recordAutomaticPositionEvaluation({
+          signalId, context, target, evaluation:normalizedEvaluation, inferenceSource,
+        })
+        if (!record || inferenceSource !== 'automatic_scheduler') continue
+        if (record.reset_reason === 'automatic_confirmation_bar_gap') {
+          const resetTask = await resetAutomaticExitCandidate(target, record, normalizedEvaluation)
+          if (resetTask) created.push(resetTask)
+        }
+        const task = record.validation_status !== 'valid' || record.action !== 'exit'
+          ? await resetAutomaticExitCandidate(target, record, normalizedEvaluation)
+          : await advanceAutomaticExitCandidate({ signalId, context, target,
+            evaluation:normalizedEvaluation, mode, record })
+        if (task) created.push(task)
+      }
+      continue
+    }
+
+    // Platform confirmations are anchored to the observer source outcome.
+    // Subscriber targets can appear/disappear between cycles, so their own
+    // evaluation rows inherit the source record instead of maintaining a
+    // second counter that could drift from the group-level decision.
+    const sourceTarget = targets.find(target => target?.target_role === 'source') || null
+    // Group confirmation is a platform-level decision about the observer
+    // portfolio. Subscriber execution preferences must never suppress or
+    // advance this counter.
+    const automaticSourceMode = normalizeMode(modes.control.maximum_mode || 'display')
+    const groupConfirmationEnabled = inferenceSource === 'automatic_scheduler'
+      && sourceTarget && automaticSourceMode !== 'display'
+    let sourceRecord = null
+    if (sourceTarget) {
+      const displayOnlyConfirmation = inferenceSource === 'automatic_scheduler' && !groupConfirmationEnabled
+        ? { validation_status:normalizedEvaluation.validation_source === 'server_fail_closed' ? 'invalid' : 'valid',
+          confirmation_count:0, reset_reason:null }
+        : null
+      sourceRecord = await recordAutomaticPositionEvaluation({
+        signalId, context, target:sourceTarget, confirmationTarget:sourceTarget,
+        confirmationRecord:displayOnlyConfirmation,
+        evaluation:normalizedEvaluation, inferenceSource,
+      })
+      if (!sourceRecord) continue
+    }
+    const subscribers = sourceTarget ? targets.filter(target => target !== sourceTarget) : targets
+    const deferredSource = sourceTarget ? [sourceTarget] : []
+    for (const target of [...subscribers, ...deferredSource]) {
+      const isSource = target === sourceTarget
+      const record = isSource && sourceRecord ? sourceRecord : await recordAutomaticPositionEvaluation({
+        signalId, context, target, confirmationTarget:sourceTarget || target,
+        confirmationRecord:sourceRecord,
+        evaluation:normalizedEvaluation, inferenceSource,
       })
       if (!record) continue
       if (inferenceSource !== 'automatic_scheduler') continue
-      if (record.reset_reason === 'automatic_confirmation_bar_gap') {
-        const resetTask = await resetAutomaticExitCandidate(target, record, normalizedEvaluation)
+      const mode = isSource
+        ? automaticSourceMode
+        : resolvePositionManagementTaskMode('position_exit',
+          modes.byUser.get(Number(target.user_id)) || 'auto_exit', modes.control)
+      if (!groupConfirmationEnabled || mode === 'display') continue
+      // Use the source record as the task evidence for every target.  This
+      // makes the group-level 1/2 -> 2/2 transition visible and auditable even
+      // when a subscriber was mapped only on the second inference.
+      const confirmationRecord = sourceRecord || record
+      if (confirmationRecord.reset_reason === 'automatic_confirmation_bar_gap') {
+        const resetTask = await resetAutomaticExitCandidate(target, confirmationRecord, normalizedEvaluation)
         if (resetTask) created.push(resetTask)
       }
-      const task = record.validation_status !== 'valid' || record.action !== 'exit'
-        ? await resetAutomaticExitCandidate(target, record, normalizedEvaluation)
+      const task = confirmationRecord.validation_status !== 'valid' || confirmationRecord.action !== 'exit'
+        ? await resetAutomaticExitCandidate(target, confirmationRecord, normalizedEvaluation)
         : await advanceAutomaticExitCandidate({ signalId, context, target,
-          evaluation:normalizedEvaluation, mode, record })
+          evaluation:normalizedEvaluation, mode, record:confirmationRecord })
       if (task) created.push(task)
     }
   }
@@ -2077,13 +2262,31 @@ function taskForManagementAction(spec, evaluation, tasks, signalId) {
   return signalMatch || null
 }
 
-function managementTargetTicket(spec, task, evaluation = null) {
+function managementTargetTicket(spec, task, evaluation = null, target = null) {
   const taskTicket = spec.task_type === 'pending_cancel'
     ? task?.target_pending_ticket
     : task?.target_position_id
   const evaluationTicket = spec.task_type === 'position_exit' ? evaluation?.position_id : null
-  const value = taskTicket || evaluationTicket
+  const targetTicket = spec.task_type === 'pending_cancel'
+    ? (target?.pending_ticket || target?.target_pending_ticket)
+    : (target?.position_id || target?.target_position_id)
+  const value = targetTicket || taskTicket || evaluationTicket
   return managementText(value, 96) || null
+}
+
+function managementTargetMappingStatus(target, ticket = null) {
+  const status = String(target?.mapping_status || '').trim().toLowerCase()
+  if (['mapped', 'reconciling', 'missing', 'excluded'].includes(status)) return status
+  return ticket ? 'mapped' : 'missing'
+}
+
+function managementTargetLabel(target) {
+  return managementText(target?.user_label || target?.nickname || target?.user_nickname, 120) || null
+}
+
+function managementTargetAccount(target) {
+  return managementText(target?.account_label || target?.login_account
+    || target?.trading_account_id, 96) || null
 }
 
 function managementReason(spec, evaluation, task) {
@@ -2099,7 +2302,7 @@ function managementReason(spec, evaluation, task) {
  * after its task advances to a terminal state.
  */
 export function buildSignalManagementActions({
-  signalId = null, management = null, evaluations = [], tasks = [],
+  signalId = null, management = null, evaluations = [], tasks = [], targetMappings = [],
 } = {}) {
   const source = management?.position_management && typeof management.position_management === 'object'
     ? management.position_management : management
@@ -2124,14 +2327,28 @@ export function buildSignalManagementActions({
       && signalNumber
       && [task.decision_signal_id, task.origin_signal_id]
         .map(managementNumber).includes(signalNumber))
-    const targets = matchingEvaluations.length
+    const scopedMappings = (Array.isArray(targetMappings) ? targetMappings : [])
+      .filter(target => String(target?.management_group_id || '') === String(spec.management_group_id || ''))
+    const targets = scopedMappings.length
+      ? scopedMappings.map(target => {
+        const evaluation = matchingEvaluations.find(row => target?.outcome_id != null
+          && Number(row?.outcome_id) === Number(target.outcome_id)) || matchingEvaluations[0] || null
+        const task = (tasks || []).find(row => target?.outcome_id != null
+          && Number(row?.outcome_id) === Number(target.outcome_id)
+          && String(row?.task_type || '') === spec.task_type
+          && (!spec.management_group_id || String(row.management_group_id || '') === spec.management_group_id))
+          || taskForManagementAction(spec, evaluation, tasks, signalNumber)
+        return { evaluation, task, target }
+      })
+      : matchingEvaluations.length
       ? matchingEvaluations.map(evaluation => ({
         evaluation,
         task:taskForManagementAction(spec, evaluation, tasks, signalNumber),
+        target:null,
       }))
-      : directTasks.length ? directTasks.map(task => ({ evaluation:null, task })) : [{ evaluation:null, task:null }]
+      : directTasks.length ? directTasks.map(task => ({ evaluation:null, task, target:null })) : [{ evaluation:null, task:null, target:null }]
 
-    for (const { evaluation, task } of targets) {
+    for (const { evaluation, task, target } of targets) {
       const validationStatus = String(evaluation?.validation_status || '').toLowerCase() === 'invalid' ? 'invalid' : 'valid'
       const count = Math.max(0, Number(evaluation?.consecutive_exit_count || 0))
       let inferenceEffect = 'display_only'
@@ -2162,7 +2379,8 @@ export function buildSignalManagementActions({
       }
 
       const taskSummary = managementTaskSummary(task)
-      const targetTicket = managementTargetTicket(spec, task, evaluation)
+      const targetTicket = managementTargetTicket(spec, task, evaluation, target)
+      const mappingStatus = managementTargetMappingStatus(target, targetTicket)
       result.push({
         action_type:spec.action_type,
         task_type:spec.task_type,
@@ -2179,6 +2397,12 @@ export function buildSignalManagementActions({
           ? (String(spec.exit_reason_code || '').toLowerCase() || null) : null,
         ticket:targetTicket,
         target_ticket:targetTicket,
+        target_role:managementText(target?.target_role, 24) || null,
+        target_outcome_id:managementNumber(target?.outcome_id),
+        user_label:managementTargetLabel(target),
+        account_label:managementTargetAccount(target),
+        mapping_status:mappingStatus,
+        mapping_reason:managementText(target?.mapping_reason || target?.excluded_reason, 240) || null,
         reason:managementReason(spec, evaluation, task),
         validation_status:validationStatus,
         inference_effect:inferenceEffect,
@@ -2199,7 +2423,7 @@ export function buildSignalManagementActions({
  * payload so signal detail remains usable during rolling upgrades.
  */
 export async function loadSignalManagementActions(userId, signalId, {
-  management = null,
+  management = null, admin = false,
 } = {}) {
   const scopedUserId = Number(userId)
   const scopedSignalId = Number(signalId)
@@ -2221,14 +2445,18 @@ export async function loadSignalManagementActions(userId, signalId, {
 
   let evaluations = []
   try {
-    evaluations = await queryAll(`SELECT * FROM ai_position_management_evaluations
-      WHERE user_id = ? AND decision_signal_id = ?
-      ORDER BY id ASC LIMIT 100`, [scopedUserId, scopedSignalId])
+    evaluations = await queryAll(admin
+      ? `SELECT * FROM ai_position_management_evaluations
+        WHERE decision_signal_id = ? ORDER BY id ASC LIMIT 100`
+      : `SELECT * FROM ai_position_management_evaluations
+        WHERE user_id = ? AND decision_signal_id = ?
+        ORDER BY id ASC LIMIT 100`, admin ? [scopedSignalId] : [scopedUserId, scopedSignalId])
   } catch (error) {
     console.warn(`[PositionManagement] Failed to load evaluations for signal ${scopedSignalId}:`, error.message)
     evaluations = []
   }
-  evaluations = (evaluations || []).filter(row => row?.user_id == null || Number(row.user_id) === scopedUserId)
+  evaluations = admin ? (evaluations || [])
+    : (evaluations || []).filter(row => row?.user_id == null || Number(row.user_id) === scopedUserId)
 
   const groups = [...new Map((evaluations || []).map(row => [
     `${Number(row?.outcome_id) || 0}:${String(row?.management_group_id || '')}`,
@@ -2250,17 +2478,72 @@ export async function loadSignalManagementActions(userId, signalId, {
         outcomes.pending_ticket AS target_pending_ticket
       FROM ai_position_management_tasks tasks
       LEFT JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
-      WHERE tasks.user_id = ? AND tasks.task_type IN ('position_exit','pending_cancel')
+      WHERE ${admin ? '' : 'tasks.user_id = ? AND '}
+        tasks.task_type IN ('position_exit','pending_cancel')
         AND (${taskConditions.join(' OR ')})
-      ORDER BY tasks.updated_at DESC, tasks.id DESC LIMIT 100`, [scopedUserId, ...taskParams])
+      ORDER BY tasks.updated_at DESC, tasks.id DESC LIMIT 100`, admin ? taskParams : [scopedUserId, ...taskParams])
   } catch (error) {
     console.warn(`[PositionManagement] Failed to load tasks for signal ${scopedSignalId}:`, error.message)
     tasks = []
   }
-  tasks = (tasks || []).filter(row => row?.user_id == null || Number(row.user_id) === scopedUserId)
+  tasks = admin ? (tasks || [])
+    : (tasks || []).filter(row => row?.user_id == null || Number(row.user_id) === scopedUserId)
+
+  const targetGroupByOutcome = new Map()
+  for (const row of [...(evaluations || []), ...(tasks || [])]) {
+    const outcomeId = Number(row?.outcome_id)
+    const groupId = String(row?.management_group_id || '').trim()
+    if (outcomeId > 0 && groupId) targetGroupByOutcome.set(outcomeId, groupId)
+  }
+  const targetOutcomeIds = [...targetGroupByOutcome.keys()]
+  let targetMappings = []
+  try {
+    // Evaluation/task rows were created from the already validated private
+    // source + delivery lineage. Use their exact outcome ids here; the signal
+    // currently being viewed is the decision inference, not the older origin
+    // signal that opened the positions.
+    targetMappings = targetOutcomeIds.length ? await queryAll(`SELECT outcomes.id AS outcome_id, outcomes.user_id,
+        outcomes.trading_account_id, outcomes.position_id, outcomes.pending_ticket,
+        outcomes.delivery_id, outcomes.status AS outcome_status, outcomes.attribution_status,
+        outcomes.system_magic, users.nickname AS user_nickname, users.email AS user_email,
+        accounts.nickname AS account_name, accounts.login_account
+      FROM signal_outcomes outcomes
+      LEFT JOIN users ON users.id = outcomes.user_id
+      LEFT JOIN trading_accounts accounts ON accounts.id = outcomes.trading_account_id
+      WHERE outcomes.id IN (${targetOutcomeIds.map(() => '?').join(',')})
+        AND outcomes.status IN ('open','closing')${admin ? '' : ' AND outcomes.user_id = ?'}
+      ORDER BY outcomes.id ASC LIMIT 200`, admin
+      ? targetOutcomeIds : [...targetOutcomeIds, scopedUserId]) : []
+  } catch (error) {
+    console.warn(`[PositionManagement] Failed to load target mappings for signal ${scopedSignalId}:`, error.message)
+    targetMappings = []
+  }
+  targetMappings = (targetMappings || []).map(row => {
+    const position = String(row.position_id || '').trim()
+    const pending = String(row.pending_ticket || '').trim()
+    const ticket = position || pending || null
+    const systemOwned = Number(row.system_magic) === SYSTEM_MAGIC
+    const targetRole = row.delivery_id == null ? 'source' : 'subscriber'
+    const attributionStatus = String(row.attribution_status || '').trim().toLowerCase()
+    const reconciling = !ticket && ['pending', 'reconciling'].includes(attributionStatus)
+    const accountLabel = [managementText(row.account_name, 120), managementText(row.login_account, 64)]
+      .filter(Boolean).join(' · ')
+    return {
+      ...row,
+      management_group_id:targetGroupByOutcome.get(Number(row.outcome_id)) || null,
+      target_role:targetRole,
+      ticket,
+      mapping_status:!systemOwned ? 'excluded' : (ticket ? 'mapped' : (reconciling ? 'reconciling' : 'missing')),
+      mapping_reason:!systemOwned ? '非平台系统订单'
+        : (!ticket ? (reconciling ? '订单归因正在对账' : '未找到该信号对应的当前订单') : null),
+      user_label:admin ? (targetRole === 'source' ? '观摩源'
+        : (managementText(row.user_nickname, 120) || managementText(row.user_email, 160) || '订阅用户')) : null,
+      account_label:admin ? (accountLabel || null) : null,
+    }
+  })
 
   return buildSignalManagementActions({
-    signalId:scopedSignalId, management:source, evaluations, tasks,
+    signalId:scopedSignalId, management:source, evaluations, tasks, targetMappings,
   })
 }
 

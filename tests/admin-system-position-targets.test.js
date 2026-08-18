@@ -160,4 +160,77 @@ describe('admin system position attribution', () => {
     const changedDisplay = await resolveAdminSystemPositionTargets(7, '100')
     expect(changedDisplay.preview_hash).toBe(result.preview_hash)
   })
+
+  it('allows an active platform observer source and resolves frozen subscriber deliveries', async () => {
+    const sourceAccount = {
+      trading_account_id:10, user_id:7, broker_server:'DEMO', login_account:'1',
+      ownership_history_id:9, ownership_broker_server_key:'DEMO', ownership_login_account:'1',
+      account_name:'平台观摩源',
+    }
+    const sourceRow = {
+      root_signal_id:50, signal_source:'auto_shared', signal_strategy_id:3,
+      strategy_scope:'platform', observer_source_id:4, observer_source_user_id:7,
+      observer_strategy_id:3, outcome_id:11, outcome_signal_id:50, outcome_status:'open',
+      outcome_position_id:'100', outcome_system_magic:234000, outcome_trading_account_id:10,
+      outcome_symbol:'EURUSD', outcome_direction:'buy', outcome_volume:0.1,
+      user_id:7, trading_account_id:10, ownership_history_id:9,
+      broker_server_key:'DEMO', login_account:'1', user_nickname:'观摩源', account_name:'平台观摩源',
+    }
+    const subscriberRow = {
+      id:61, delivery_id:61, root_signal_id:50, signal_id:50, signal_source:'auto_shared',
+      target_role:'subscriber', status:'success', trade_ticket:'200',
+      user_id:8, trading_account_id:20, ownership_history_id:10,
+      broker_server_key:'DEMO', login_account:'2', standard_symbol:'EURUSD',
+      direction:'buy', volume:0.2, user_nickname:'订阅用户', account_name:'订阅账户',
+      outcome_id:12, outcome_signal_id:50, outcome_status:'open', outcome_position_id:'200',
+      outcome_system_magic:234000, outcome_trading_account_id:20,
+      outcome_symbol:'EURUSD', outcome_direction:'buy', outcome_volume:0.2,
+    }
+    mocks.queryOne
+      .mockResolvedValueOnce(sourceAccount)
+      .mockResolvedValueOnce({
+        trading_account_id:20, user_id:8, broker_server:'DEMO', login_account:'2',
+        ownership_history_id:10, ownership_broker_server_key:'DEMO', ownership_login_account:'2',
+        ownership_user_id:8, ownership_trading_account_id:20,
+      })
+    mocks.queryAll
+      .mockResolvedValueOnce([sourceRow])
+      .mockResolvedValueOnce([subscriberRow])
+    mocks.inventory
+      .mockResolvedValueOnce({
+        status:'success', account:{ server:'DEMO', login:'1' },
+        positions:[{ ticket:'100', symbol:'EURUSD', type:'buy', volume:0.1, magic:234000 }],
+      })
+      .mockResolvedValueOnce({
+        status:'success', account:{ server:'DEMO', login:'2' },
+        positions:[{ ticket:'200', symbol:'EURUSD', type:'buy', volume:0.2, magic:234000 }],
+      })
+
+    const result = await resolveAdminSystemPositionTargets(7, '100')
+
+    expect(result.attribution).toMatchObject({ source:'auto_shared', signal_id:50, unique_attribution:true })
+    expect(result.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ target_role:'source', user_id:7, ticket:'100' }),
+      expect.objectContaining({ target_role:'subscriber', user_id:8, ticket:'200' }),
+    ]))
+    expect(mocks.queryAll.mock.calls[1][0]).toContain('FROM auto_signal_deliveries d')
+    expect(mocks.queryAll.mock.calls[1][0]).toContain('COUNT(*) FROM signal_outcomes active_outcomes')
+  })
+
+  it('rejects auto-shared positions that are not bound to the active observer source', async () => {
+    mocks.queryOne.mockResolvedValueOnce({
+      trading_account_id:10, user_id:7, broker_server:'DEMO', login_account:'1',
+      ownership_history_id:9, ownership_broker_server_key:'DEMO', ownership_login_account:'1',
+    })
+    mocks.queryAll
+      .mockResolvedValueOnce([{
+        root_signal_id:50, signal_source:'auto_shared', signal_strategy_id:3,
+        strategy_scope:'platform', observer_source_id:null, observer_source_user_id:null,
+        observer_strategy_id:null, outcome_id:11,
+      }])
+      .mockResolvedValueOnce([])
+
+    await expect(resolveAdminSystemPositionTargets(7, '100'))
+      .rejects.toMatchObject({ code:'admin_dispatch_attribution_unavailable' })
+  })
 })

@@ -1036,11 +1036,27 @@ button {
 .signal-management-action-head { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
 .signal-management-action-head strong { color:var(--text-primary); font-size:13px; line-height:1.4; }
 .signal-management-action-head .management-state { margin-left:auto; }
-.signal-management-action-meta { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:6px 10px; color:var(--text-secondary); font-size:12px; }
-.signal-management-action-meta span { color:var(--text-muted); }
-.signal-management-action-meta b { min-width:0; color:var(--text-primary); font-size:13px; overflow-wrap:anywhere; }
-.signal-management-action-meta .management-state { justify-self:start; }
 .signal-management-action p { margin:0; color:var(--text-secondary); font-size:13px; line-height:1.5; text-wrap:pretty; }
+.signal-management-target-list { display:grid; gap:6px; }
+.signal-management-target { display:grid; grid-template-columns:minmax(130px,1fr) minmax(120px,.8fr) auto; align-items:center; gap:6px 12px; min-width:0; padding:8px 10px; border:1px solid var(--border-subtle); border-radius:8px; background:color-mix(in srgb,var(--bg-input-soft) 70%,transparent); }
+.signal-management-target.missing,.signal-management-target.excluded { border-color:color-mix(in srgb,var(--color-warning) 35%,var(--border-default)); }
+.signal-management-target.reconciling { border-color:color-mix(in srgb,var(--brand-gold) 35%,var(--border-default)); }
+.signal-management-target-main { display:flex; align-items:center; gap:7px; min-width:0; }
+.signal-management-target-main strong { min-width:0; overflow:hidden; color:var(--text-primary); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.signal-management-target-ticket { display:flex; align-items:center; gap:6px; min-width:0; color:var(--text-secondary); }
+.signal-management-target-ticket b { min-width:0; overflow-wrap:anywhere; color:var(--text-primary); font-size:12px; }
+.signal-management-target > .management-state { justify-self:end; }
+.signal-management-target > p { grid-column:1 / -1; color:var(--text-muted); font-size:12px; }
+.target-role { flex:none; padding:2px 6px; border:1px solid var(--border-default); border-radius:999px; color:var(--text-tertiary); font-size:10px; line-height:1.4; }
+.target-role.source { border-color:color-mix(in srgb,var(--brand-gold) 40%,var(--border-default)); color:var(--brand-gold); }
+.signal-management-target-more { border-top:1px solid var(--border-subtle); padding-top:7px; }
+.signal-management-target-more summary { cursor:pointer; color:var(--text-secondary); font-size:12px; }
+.signal-management-target-more[open] summary { margin-bottom:6px; }
+@media (max-width:640px) {
+  .signal-management-target { grid-template-columns:minmax(0,1fr) auto; }
+  .signal-management-target-ticket { grid-column:1 / -1; }
+  .signal-management-target > .management-state { grid-column:2; grid-row:1; }
+}
 .decision-summary { display:grid; grid-template-columns:94px minmax(0,1fr); gap:12px; align-items:start; margin-bottom:12px; padding:14px 16px; border-radius:12px; background:color-mix(in srgb,var(--bg-input-soft) 82%,transparent); }
 .decision-summary span { color:var(--text-secondary); font-size:12px; padding-top:3px; }
 .decision-summary strong { color:var(--text-primary); font-size:15px; line-height:1.55; }

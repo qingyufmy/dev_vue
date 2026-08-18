@@ -5,6 +5,7 @@ import * as marketData from '../routes/ai/market-data.js'
 import { stripBrokerSuffix } from '../routes/ai/utils.js'
 
 export const ADMIN_SYSTEM_POSITION_SOURCE = 'admin_strategy_dispatch'
+export const PLATFORM_SHARED_POSITION_SOURCE = 'auto_shared'
 export const ADMIN_SYSTEM_POSITION_MAGIC = 234000
 
 const OPEN_OUTCOME_STATUSES = ['open', 'closing']
@@ -234,7 +235,6 @@ async function readInventory(userId, { bridge = null, expectedGeneration = null 
 }
 
 async function loadSourceCandidates(userId, tradingAccountId, sourceTicket) {
-  const params = [Number(userId), Number(tradingAccountId), ticket(sourceTicket), ticket(sourceTicket), ...OPEN_OUTCOME_STATUSES, ADMIN_SYSTEM_POSITION_SOURCE]
   const outcomeRows = await dbAll(`SELECT outcomes.*, outcomes.id AS outcome_id,
       outcomes.signal_id AS outcome_signal_id,
       outcomes.position_id AS outcome_position_id,
@@ -245,7 +245,11 @@ async function loadSourceCandidates(userId, tradingAccountId, sourceTicket) {
       outcomes.symbol AS outcome_symbol,
       outcomes.entry_direction AS outcome_direction,
       outcomes.expected_volume AS outcome_volume,
-      s.id AS root_signal_id, s.source AS signal_source,
+      s.id AS root_signal_id, s.source AS signal_source, s.prompt_type_id AS signal_strategy_id,
+      strategy.scope AS strategy_scope,
+      observer_source.id AS observer_source_id,
+      observer_source.bridge_user_id AS observer_source_user_id,
+      observer_source.strategy_id AS observer_strategy_id,
       t.id AS admin_target_id, t.target_role, t.status AS target_status,
       t.trade_ticket, t.target_snapshot_json, t.account_snapshot_json,
       t.ownership_snapshot_json, t.bridge_generation, t.broker_server_key,
@@ -254,7 +258,12 @@ async function loadSourceCandidates(userId, tradingAccountId, sourceTicket) {
       identity_account.nickname AS account_name,
       d.actor_user_id, d.status AS dispatch_status
     FROM signal_outcomes outcomes
-    JOIN ai_signals s ON s.id = outcomes.signal_id AND s.source = ?
+    JOIN ai_signals s ON s.id = outcomes.signal_id AND s.source IN (?, ?)
+    LEFT JOIN auto_prompt_types strategy ON strategy.id = s.prompt_type_id AND strategy.deleted_at IS NULL
+    LEFT JOIN ai_observer_sources observer_source
+      ON observer_source.bridge_user_id = outcomes.user_id
+      AND observer_source.strategy_id = s.prompt_type_id
+      AND observer_source.status = 'active'
     LEFT JOIN users identity_user ON identity_user.id = outcomes.user_id
     LEFT JOIN trading_accounts identity_account
       ON identity_account.id = outcomes.trading_account_id
@@ -268,8 +277,18 @@ async function loadSourceCandidates(userId, tradingAccountId, sourceTicket) {
     WHERE outcomes.user_id = ? AND outcomes.trading_account_id = ?
       AND (outcomes.position_id = ? OR outcomes.entry_order_ticket = ?)
       AND outcomes.status IN (?, ?) AND COALESCE(outcomes.system_magic, ?) = ?
-    ORDER BY outcomes.id`, [ADMIN_SYSTEM_POSITION_SOURCE, Number(userId), Number(tradingAccountId), ticket(sourceTicket), ticket(sourceTicket), ...OPEN_OUTCOME_STATUSES, ADMIN_SYSTEM_POSITION_MAGIC, ADMIN_SYSTEM_POSITION_MAGIC])
-  const candidates = outcomeRows.filter(row => text(row.signal_source) === ADMIN_SYSTEM_POSITION_SOURCE)
+    ORDER BY outcomes.id`, [ADMIN_SYSTEM_POSITION_SOURCE, PLATFORM_SHARED_POSITION_SOURCE,
+    Number(userId), Number(tradingAccountId), ticket(sourceTicket), ticket(sourceTicket),
+    ...OPEN_OUTCOME_STATUSES, ADMIN_SYSTEM_POSITION_MAGIC, ADMIN_SYSTEM_POSITION_MAGIC])
+  const candidates = outcomeRows.filter(row => {
+    const source = text(row.signal_source)
+    if (source === ADMIN_SYSTEM_POSITION_SOURCE) return true
+    return source === PLATFORM_SHARED_POSITION_SOURCE
+      && text(row.strategy_scope).toLowerCase() === 'platform'
+      && Number(row.observer_source_id) > 0
+      && Number(row.observer_source_user_id) === Number(userId)
+      && Number(row.observer_strategy_id) === Number(row.signal_strategy_id)
+  })
   if (candidates.length) return candidates
 
   // A successful Bridge order can precede signal_outcomes attribution by a
@@ -317,6 +336,53 @@ async function loadDispatchTargets(signalId) {
     WHERE t.signal_id = ? AND t.status IN (?, ?, ?, ?)
       AND d.status IN (?, ?, ?, ?)
     ORDER BY CASE WHEN t.target_role = 'subscriber' THEN 0 ELSE 1 END, t.id`, [ADMIN_SYSTEM_POSITION_SOURCE, ...OPEN_OUTCOME_STATUSES, Number(signalId), ...CLOSEABLE_TARGET_STATUSES, ...ACTIVE_DISPATCH_STATUSES])
+}
+
+async function loadPlatformDeliveryTargets(signalId, sourceUserId) {
+  return dbAll(`SELECT d.id, d.id AS delivery_id, d.signal_id,
+      'subscriber' AS target_role, d.execution_status AS status,
+      s.id AS root_signal_id, s.source AS signal_source,
+      so.id AS outcome_id, so.signal_id AS outcome_signal_id,
+      so.status AS outcome_status, so.position_id AS outcome_position_id,
+      so.entry_order_ticket AS outcome_entry_order_ticket,
+      so.system_magic AS outcome_system_magic,
+      so.trading_account_id AS outcome_trading_account_id,
+      so.symbol AS outcome_symbol, so.entry_direction AS outcome_direction,
+      so.expected_volume AS outcome_volume,
+      so.user_id, so.trading_account_id, so.ownership_history_id,
+      so.broker_server_key, so.login_account,
+      so.position_id AS trade_ticket, so.symbol AS standard_symbol,
+      so.entry_direction AS direction, so.expected_volume AS volume,
+      ta.broker_server AS account_broker_server, ta.login_account AS account_login_account,
+      ta.nickname AS account_name,
+      identity_user.email AS user_email, identity_user.nickname AS user_nickname,
+      own.id AS current_ownership_history_id, own.user_id AS ownership_user_id,
+      own.trading_account_id AS ownership_trading_account_id,
+      own.broker_server_key AS current_broker_server_key,
+      own.login_account AS current_login_account
+    FROM auto_signal_deliveries d
+    JOIN ai_signals s ON s.id = d.signal_id AND s.source = ?
+    JOIN order_intents oi ON oi.id = d.order_intent_id
+      AND oi.user_id = d.user_id AND oi.status IN ('succeeded', 'success')
+    JOIN signal_outcomes so ON so.delivery_id = d.id
+      AND so.order_intent_id = d.order_intent_id
+      AND so.user_id = d.user_id AND so.status IN (?, ?)
+    LEFT JOIN trading_accounts ta ON ta.id = so.trading_account_id
+      AND ta.user_id = so.user_id AND ta.is_deleted = 0
+    LEFT JOIN users identity_user ON identity_user.id = so.user_id
+    LEFT JOIN mt5_account_ownership_history own
+      ON own.trading_account_id = so.trading_account_id AND own.user_id = so.user_id
+      AND own.ended_at IS NULL
+    WHERE d.signal_id = ? AND d.user_id <> ?
+      AND d.execution_status = 'success'
+      AND COALESCE(so.system_magic, ?) = ?
+      AND 1 = (SELECT COUNT(*) FROM signal_outcomes active_outcomes
+        WHERE active_outcomes.delivery_id = d.id
+          AND active_outcomes.order_intent_id = d.order_intent_id
+          AND active_outcomes.status IN (?, ?))
+    ORDER BY d.id, so.id`, [PLATFORM_SHARED_POSITION_SOURCE, ...OPEN_OUTCOME_STATUSES,
+    Number(signalId), Number(sourceUserId), ADMIN_SYSTEM_POSITION_MAGIC, ADMIN_SYSTEM_POSITION_MAGIC,
+    ...OPEN_OUTCOME_STATUSES])
 }
 
 function uniqueSignalIds(rows) {
@@ -424,12 +490,24 @@ export async function resolveAdminSystemPositionTargets(actorUserId, sourceTicke
   }
   const signalId = signalIds[0]
   const sourceRows = sourceCandidates.filter(row => Number(row.root_signal_id || row.signal_id) === signalId)
+  const signalSources = new Set(sourceRows.map(row => text(row.signal_source)).filter(Boolean))
+  if (signalSources.size !== 1) throw fail('system_position_attribution_ambiguous', { signal_id: signalId })
+  const signalSource = [...signalSources][0]
   const outcomeIds = new Set(sourceRows.map(row => Number(row.outcome_id || row.id)).filter(Number.isSafeInteger))
   const sourceTargetIds = new Set(sourceRows.map(row => Number(row.admin_target_id || (text(row.target_role) === 'source' ? row.id : 0))).filter(Number.isSafeInteger))
-  if (outcomeIds.size > 1 || sourceTargetIds.size > 1
-    || (outcomeIds.size === 0 && sourceTargetIds.size !== 1)
-    || (outcomeIds.size === 1 && sourceTargetIds.size !== 1)) {
-    throw fail('admin_dispatch_attribution_ambiguous', { signal_id: signalId })
+  if (signalSource === ADMIN_SYSTEM_POSITION_SOURCE) {
+    if (outcomeIds.size > 1 || sourceTargetIds.size > 1
+      || (outcomeIds.size === 0 && sourceTargetIds.size !== 1)
+      || (outcomeIds.size === 1 && sourceTargetIds.size !== 1)) {
+      throw fail('admin_dispatch_attribution_ambiguous', { signal_id: signalId })
+    }
+  } else if (signalSource === PLATFORM_SHARED_POSITION_SOURCE) {
+    if (outcomeIds.size !== 1 || sourceRows.some(row => Number(row.observer_source_user_id) !== actorId
+      || Number(row.observer_strategy_id) !== Number(row.signal_strategy_id))) {
+      throw fail('platform_signal_attribution_ambiguous', { signal_id: signalId })
+    }
+  } else {
+    throw fail('system_position_source_unsupported', { signal_id: signalId, source:signalSource })
   }
   const sourceRow = sourceRows.find(row => text(row.target_role) === 'source') || sourceRows[0]
   const source = decodeTarget({ ...sourceRow, target_role: 'source', trade_ticket: wantedTicket,
@@ -456,7 +534,9 @@ export async function resolveAdminSystemPositionTargets(actorUserId, sourceTicke
   const exclusions = []
   let targets = [source]
   if (includeSubscribers) {
-    const rows = await loadDispatchTargets(signalId)
+    const rows = signalSource === PLATFORM_SHARED_POSITION_SOURCE
+      ? await loadPlatformDeliveryTargets(signalId, actorId)
+      : await loadDispatchTargets(signalId)
     const decoded = rows.filter(row => text(row.target_role) === 'subscriber').map(row => decodeTarget(row, { sourceSignalId: signalId }))
     const deduped = dedupeTargets(decoded)
     for (const duplicateTarget of deduped.duplicateTargets) {
@@ -519,7 +599,7 @@ export async function resolveAdminSystemPositionTargets(actorUserId, sourceTicke
     eligible: true,
     can_close: true,
     unique_attribution: true,
-    attribution: { source: ADMIN_SYSTEM_POSITION_SOURCE, unique_attribution: true, signal_id: signalId, dispatch_id: source.dispatch_id },
+    attribution: { source: signalSource, unique_attribution: true, signal_id: signalId, dispatch_id: source.dispatch_id },
     source,
     source_signal_id: signalId,
     source_ticket: wantedTicket,
