@@ -19,7 +19,7 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
   periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown,
   __testDeriveDailyReviewMemoryEntries, __testDeriveDailyReviewConflictExperiences,
-  DAILY_PERIOD_REVIEW_V3_CONTRACT } from '../../server/routes/ai/period-review.js'
+  DAILY_PERIOD_REVIEW_V3_CONTRACT, buildDailyReviewChunkPlan, dailyReviewRecoveryRuntimeOptions } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
   __testGetReviewStrategyMemorySnapshot } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
@@ -247,6 +247,7 @@ describe('period review model-task recovery and retry', () => {
       if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'daily' }]]
       if (sql.includes('SELECT * FROM period_review_jobs')) return [[{ id:9, period_case_id:42, job_type:'daily_review',
         idempotency_key:'daily:42:evidence', status:'status_unknown', model_task_id:'task-unknown' }]]
+      if (sql.includes("domain_type = 'period_review_job'")) return [[]]
       if (sql.includes('SELECT task_id, status')) return [[{ task_id:'task-unknown', status:'status_unknown' }]]
       return [{ affectedRows:1 }]
     })
@@ -262,6 +263,7 @@ describe('period review model-task recovery and retry', () => {
       if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'daily' }]]
       if (sql.includes('SELECT * FROM period_review_jobs')) return [[{ id:9, period_case_id:42, job_type:'daily_review',
         idempotency_key:'daily:42:evidence', status:'failed', model_task_id:'task-terminal' }]]
+      if (sql.includes("domain_type = 'period_review_job'")) return [[]]
       if (sql.includes('SELECT task_id, status')) return [[{ task_id:'task-terminal', status:'failed_terminal' }]]
       return [{ affectedRows:1, insertId:10 }]
     })
@@ -273,6 +275,20 @@ describe('period review model-task recovery and retry', () => {
     expect(update).toBeTruthy()
     expect(update[0]).toContain('model_task_id = NULL')
     expect(update[1][1]).toMatch(/^retry:daily_review:42:/)
+  })
+
+  it('blocks manual retry while any independently linked daily chunk task is unresolved', async () => {
+    const run = vi.fn(async sql => {
+      if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'daily' }]]
+      if (sql.includes('SELECT * FROM period_review_jobs')) return [[{ id:9, period_case_id:42, job_type:'daily_review',
+        idempotency_key:'daily:42:evidence', status:'failed', model_task_id:'task-terminal' }]]
+      if (sql.includes("domain_type = 'period_review_job'")) return [[{ task_id:'task-chunk-2', status:'status_unknown' }]]
+      return [{ affectedRows:1 }]
+    })
+    periodReviewDb.withTransaction.mockImplementation(callback => callback(run))
+
+    await expect(retryPeriodReviewCase(42, { id:7, role:'user' }))
+      .rejects.toThrow('period_review_daily_checkpoint_task_unresolved')
   })
 
   it('rotates a succeeded daily job when its evidence changes', async () => {
@@ -359,6 +375,24 @@ describe('period review model-task recovery and retry', () => {
     expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => sql.includes("status='status_unknown'"))).toBe(true)
     expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => sql.includes("status='queued'"))).toBe(false)
     expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => sql.includes("period_review_jobs SET status = 'status_unknown'"))).toBe(true)
+  })
+
+  it('recovers a validated daily chunk checkpoint without replaying its provider request', async () => {
+    const content = { output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, trade_assessments:[] }
+    const contentHash = crypto.createHash('sha256').update(JSON.stringify(content)).digest('hex')
+    periodReviewDb.queryAll.mockResolvedValueOnce([{ task_id:'task-chunk', task_kind:'daily_review_chunk',
+      domain_type:'period_review_job', domain_id:'9', status:'result_ready', lease_expires_at_utc_msc:90_000,
+      task_deadline_at_utc_msc:300_000, fencing_token:4, provider_attempt_started:1 }])
+    periodReviewDb.queryOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id:9, status:'leased', period_case_id:42, current_version_id:null, result_hash:null })
+      .mockResolvedValueOnce({ payload_json:JSON.stringify({ role:'chunk', chunk_index:0,
+        plan_hash:'plan', content_hash:contentHash, content }) })
+
+    const result = await recoverAbandonedPeriodReviewModelTasks({ nowUtcMs:100_000 })
+    expect(result).toMatchObject({ scanned:1, succeeded:1, statusUnknown:0, stale:0 })
+    expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => /status\s*=\s*'succeeded'/.test(sql))).toBe(true)
+    expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => sql.includes("period_review_jobs SET status = 'failed'"))).toBe(false)
   })
 })
 
@@ -533,7 +567,7 @@ describe('daily review preparation candidates', () => {
     expect(maintenanceSql).toContain('EXISTS (SELECT 1 FROM period_review_sources')
     expect(maintenanceSql).not.toContain('NOT EXISTS (SELECT 1 FROM period_review_sources')
     expect(periodReviewDb.queryAll.mock.calls[0][1]).toEqual([7])
-    expect(periodReviewDb.queryAll.mock.calls[1][1]).toEqual([10])
+    expect(periodReviewDb.queryAll.mock.calls[1][1]).toEqual([3])
     expect(result).toMatchObject({ groups:1, outsideCreationWindow:1, created:0, existingMaintained:0 })
     expect(periodReviewDb.queryRun).not.toHaveBeenCalled()
   })
@@ -565,8 +599,8 @@ describe('daily review preparation candidates', () => {
     expect(source).toContain('const unassociated = `NOT EXISTS (SELECT 1 FROM period_review_sources prs')
     expect(source).toContain('ORDER BY so.review_eligible_at DESC, so.id DESC LIMIT ?')
     expect(source.match(/ORDER BY so\.review_eligible_at ASC, so\.id ASC/g)?.length).toBeGreaterThanOrEqual(2)
-    expect(source).toContain('includeHistoricalRecovery ? queryAll')
-    expect(source).toContain('includeHistoricalRecovery:Boolean(missedWindowRecovery)')
+    expect(source).toContain('includeHistoricalRecovery && recoveryLimit > 0 ? queryAll')
+    expect(source).toContain('includeHistoricalRecovery:recoveryEnabled')
   })
 
   it('keeps missed-window recovery opt-in and bounded while reusing case/job idempotency', () => {
@@ -576,6 +610,25 @@ describe('daily review preparation candidates', () => {
     expect(source).toContain('allowMissedWindowRecovery:allowRecoveryForGroup')
     expect(source).toContain('INSERT IGNORE INTO period_review_jobs')
     expect(source).toContain('`daily:${periodCase.id}:${evidenceHash}`')
+  })
+
+  it('exposes a disabled-by-default and hard-bounded recovery runtime switch', () => {
+    expect(dailyReviewRecoveryRuntimeOptions({})).toMatchObject({ missedWindowRecovery:false, recoveryLimit:0 })
+    expect(dailyReviewRecoveryRuntimeOptions({
+      AI_DAILY_REVIEW_MISSED_WINDOW_RECOVERY:'true',
+      AI_DAILY_REVIEW_MISSED_WINDOW_RECOVERY_LIMIT:'999',
+      AI_DAILY_REVIEW_MISSED_WINDOW_RECOVERY_GRACE_MINUTES:'999999',
+    })).toMatchObject({ missedWindowRecovery:true, recoveryLimit:100, recoveryGraceMinutes:10080 })
+  })
+
+  it('builds deterministic daily chunks with complete unique outcome coverage', () => {
+    const plan = buildDailyReviewChunkPlan({ sources:[
+      { outcome_id:3, evidence_hash:'c' }, { outcome_id:1, evidence_hash:'a' }, { outcome_id:2, evidence_hash:'b' },
+    ] }, { maxOutcomes:2, maxBytes:100000 })
+    expect(plan.chunk_count).toBe(2)
+    expect(plan.expected_outcome_ids).toEqual([1, 2, 3])
+    expect(plan.chunks.map(chunk => chunk.outcome_ids)).toEqual([[1, 2], [3]])
+    expect(new Set(plan.chunks.flatMap(chunk => chunk.outcome_ids)).size).toBe(3)
   })
 })
 
@@ -646,12 +699,12 @@ describe('daily review model boundary', () => {
       trade_assessments:[{
         outcome_id:1, decision_quality:'mixed', original_signal_logic:'突破后回踩确认',
         technical_basis_assessment:'冻结的均线和结构支持方向，但确认仍不充分', market_alignment:'partly_aligned',
-        strategy_alignment:'aligned', risk_execution_assessment:'止损位置合理，退出执行略晚',
+        strategy_alignment:'aligned', risk_execution_assessment:'止损位置合理，退出执行略晚', risk_execution_status:'compliant',
         outcome_attribution:{ result:'loss', primary_causes:['回踩确认不足'], explanation:'入场后结构未延续，触发止损', avoidability:'partly_avoidable' },
         next_time_rule:{ condition:'突破后回踩未形成确认', action:'等待收盘确认后再入场', risk_control:'使用标准止损并限制试探仓', invalidation:'回踩跌破结构失效位', prohibited_action:'禁止在确认前追入' },
         issue_codes:['confirmation_lag'], evidence_refs:['outcome:1','trade_outcome:1'], confidence:0.8,
       }],
-      repeated_issues:[], strengths:['按计划止损'], risk_observations:['确认不足时风险扩大'], next_day_actions:['等待确认再执行'],
+      repeated_issues:[], strengths:[{ text:'按计划止损', source_refs:['outcome:1'], occurrence_count:1 }], risk_observations:['确认不足时风险扩大'], next_day_actions:['等待确认再执行'],
       experience_rules:[{ category:'entry_setup', condition:'突破后回踩未确认', action:'等待收盘确认再入场', risk_control:'只用试探仓并设置止损',
         invalidation:'跌破结构失效位', prohibited_action:'禁止追入', source_refs:['outcome:1'], confidence:0.8 }],
       strategy_conflicts:[], confidence:0.8,
@@ -666,7 +719,7 @@ describe('daily review model boundary', () => {
       output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT,
       period_summary:'逐笔复盘', decision_quality:'good', trade_assessments:[{
         outcome_id:1, decision_quality:'good', original_signal_logic:'逻辑', technical_basis_assessment:'依据',
-        market_alignment:'aligned', strategy_alignment:'aligned', risk_execution_assessment:'风控',
+        market_alignment:'aligned', strategy_alignment:'aligned', risk_execution_assessment:'风控', risk_execution_status:'compliant',
         outcome_attribution:{ result:'profit', primary_causes:['原因'], explanation:'解释', avoidability:'avoidable' },
         next_time_rule:{ condition:'条件', action:'动作', risk_control:'风控', invalidation:'失效', prohibited_action:'禁止' },
         evidence_refs:['outcome:1'], confidence:0.5,
@@ -677,15 +730,56 @@ describe('daily review model boundary', () => {
     })).toThrow('daily_v3_outcome_result_mismatch')
   })
 
+  it('accepts normal strategy loss only for a good aligned compliant loss', () => {
+    const assessment = {
+      outcome_id:1, decision_quality:'good', original_signal_logic:'按趋势回踩入场',
+      technical_basis_assessment:'冻结指标与结构支持该入场', market_alignment:'aligned', strategy_alignment:'aligned',
+      risk_execution_assessment:'止损止盈与仓位均按策略执行', risk_execution_status:'compliant',
+      outcome_attribution:{ result:'loss', primary_causes:['正常价格波动触发止损'], explanation:'策略有效条件内的小概率亏损', avoidability:'normal_strategy_loss' },
+      next_time_rule:{ condition:'同类趋势回踩再次出现', action:'继续按确认规则执行', risk_control:'维持标准风险', invalidation:'趋势结构失效', prohibited_action:'禁止扩大仓位追回亏损' },
+      issue_codes:[], evidence_refs:['outcome:1'], confidence:0.8,
+    }
+    const content = { output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'正常策略亏损复盘',
+      decision_quality:'good', trade_assessments:[assessment], repeated_issues:[], strengths:[], risk_observations:[],
+      next_day_actions:[], experience_rules:[], strategy_conflicts:[], confidence:0.8 }
+    const context = { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }
+    const facts = { outcomeFacts:[{ id:1, net_profit:-8 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]) }
+    expect(validateDailyReviewContent(content, [1], context, facts).trade_assessments[0].outcome_attribution.avoidability)
+      .toBe('normal_strategy_loss')
+    expect(() => validateDailyReviewContent({ ...content, trade_assessments:[{
+      ...assessment, risk_execution_status:'partly_compliant',
+    }] }, [1], context, facts)).toThrow('daily_v3_normal_loss_inconsistent')
+    expect(() => validateDailyReviewContent({ ...content, trade_assessments:[{
+      ...assessment, decision_quality:'mixed',
+    }] }, [1], context, facts)).toThrow('daily_v3_normal_loss_inconsistent')
+  })
+
+  it('rejects an insufficient decision that otherwise claims every subordinate conclusion is definitive', () => {
+    const content = {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'证据不足复盘', decision_quality:'insufficient_evidence',
+      trade_assessments:[{ outcome_id:1, decision_quality:'insufficient_evidence', original_signal_logic:'原始逻辑可见',
+        technical_basis_assessment:'部分技术数据缺失', market_alignment:'aligned', strategy_alignment:'aligned',
+        risk_execution_assessment:'执行记录完整', risk_execution_status:'compliant', missing_evidence:['缺少关键周期行情'],
+        outcome_attribution:{ result:'loss', primary_causes:['行情证据缺失'], explanation:'无法形成完整技术归因', avoidability:'avoidable' },
+        next_time_rule:{ condition:'证据恢复后', action:'重新复核', risk_control:'不增加风险', invalidation:'证据仍缺失', prohibited_action:'禁止形成确定性结论' },
+        issue_codes:['evidence_gap'], evidence_refs:['outcome:1'], confidence:0.4 }],
+      repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], experience_rules:[], strategy_conflicts:[], confidence:0.4,
+    }
+    expect(() => validateDailyReviewContent(content, [1], {
+      chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+    }, { outcomeFacts:[{ id:1, net_profit:-2 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]) }))
+      .toThrow('daily_v3_insufficient_decision_contradicts_deterministic')
+  })
+
   it('rejects forged v3 evidence and non-executable experience rules', () => {
     const base = {
       output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT,
       period_summary:'逐笔复盘', decision_quality:'mixed', trade_assessments:[{
         outcome_id:1, decision_quality:'mixed', original_signal_logic:'逻辑', technical_basis_assessment:'依据',
-        market_alignment:'aligned', strategy_alignment:'aligned', risk_execution_assessment:'风控',
+        market_alignment:'aligned', strategy_alignment:'aligned', risk_execution_assessment:'风控', risk_execution_status:'compliant',
         outcome_attribution:{ result:'breakeven', primary_causes:['原因'], explanation:'解释', avoidability:'insufficient_evidence' },
         next_time_rule:{ condition:'条件', action:'动作', risk_control:'风控', invalidation:'失效', prohibited_action:'禁止' },
-        evidence_refs:['outcome:999'], confidence:0.5,
+        evidence_refs:['outcome:999'], missing_evidence:['缺少可避免性证据'], confidence:0.5,
       }], repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], strategy_conflicts:[], confidence:0.5,
       experience_rules:[{ category:'general', condition:'条件', action:'动作', risk_control:'风控', invalidation:'失效', prohibited_action:'禁止', source_refs:['outcome:1'], confidence:0.5 }],
     }

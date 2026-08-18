@@ -8053,6 +8053,7 @@ function syncPeriodReviewEditorFromFields() {
 const periodReviewAlignmentLabels = { aligned:"符合", partly_aligned:"部分符合", conflict:"冲突", insufficient_evidence:"证据不足" };
 const periodReviewAvoidabilityLabels = { avoidable:"可以避免", partly_avoidable:"部分可避免", normal_strategy_loss:"正常策略亏损", insufficient_evidence:"证据不足" };
 const periodReviewResultLabels = { profit:"盈利", loss:"亏损", breakeven:"持平" };
+const periodReviewRiskExecutionLabels = { compliant:"执行合规", partly_compliant:"部分合规", violation:"执行违规", insufficient_evidence:"证据不足" };
 const periodReviewExperienceCategoryLabels = { general:"通用", market_regime:"行情环境", entry_setup:"入场条件", chan_structure:"缠论结构", risk_execution:"风控执行" };
 
 function periodReviewNestedField(path, label, value, { rows = 3, editable = false, type = "text", options = null } = {}) {
@@ -8080,15 +8081,23 @@ function renderDailyV3TradeAssessments(assessments, editable, sources = []) {
   if (!assessments.length) return '<div class="review-empty-state empty-state"><strong>没有逐笔判断</strong><span>当前版本未包含可校对的交易结论</span></div>';
   const facts = dailyV3TradeFacts(sources);
   return `<section class="period-review-v3-section"><div class="period-review-section-heading"><div><span class="review-section-kicker">逐笔校对</span><h3>当时判断与事后结果</h3></div><span>${assessments.length} 笔</span></div><div class="period-review-trade-list">${assessments.map((item, index) => {
-    const attribution = item.outcome_attribution || {}, nextRule = item.next_time_rule || {}, fact = facts.get(Number(item.outcome_id)) || {};
-    const profitLabel = Number.isFinite(fact.netProfit) ? ` · 盈亏 ${fmt(fact.netProfit, 2)}` : "";
-    return `<details class="period-review-trade-card" ${index === 0 ? "open" : ""}><summary><span><strong>${escapeHtml(fact.symbol || "--")} · ${escapeHtml(fact.direction || "--")} · 交易 #${Number(item.outcome_id || 0)}</strong><small>信号 #${escapeHtml(fact.signalId || "--")} · ${escapeHtml(fact.entryTime || "--")} → ${escapeHtml(fact.closeTime || "--")}${escapeHtml(profitLabel)} · ${escapeHtml(periodDecisionLabels[item.decision_quality] || item.decision_quality || "未评价")} · ${escapeHtml(periodReviewResultLabels[attribution.result] || attribution.result || "结果未知")}</small></span><span class="period-review-trade-confidence">置信度 ${Math.round(Number(item.confidence || 0) * 100)}%</span><i data-lucide="chevron-down" size="16"></i></summary><div class="period-review-trade-body">
-      <div class="period-review-v3-block"><h4>事前判断</h4><div class="period-review-v3-grid">${periodReviewNestedField(`trade_assessments.${index}.original_signal_logic`, "原始信号逻辑", item.original_signal_logic, { editable })}${periodReviewNestedField(`trade_assessments.${index}.technical_basis_assessment`, "技术依据评价", item.technical_basis_assessment, { editable })}${periodReviewNestedField(`trade_assessments.${index}.market_alignment`, "是否符合当时行情", item.market_alignment, { editable, options:periodReviewAlignmentLabels })}${periodReviewNestedField(`trade_assessments.${index}.strategy_alignment`, "是否符合策略", item.strategy_alignment, { editable, options:periodReviewAlignmentLabels })}</div></div>
-      <div class="period-review-v3-block"><h4>事后归因</h4><div class="period-review-v3-grid">${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.primary_causes`, "主要原因", attribution.primary_causes, { editable, type:"lines" })}${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.explanation`, "盈亏形成过程", attribution.explanation, { editable })}${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.avoidability`, "可避免性", attribution.avoidability, { editable, options:periodReviewAvoidabilityLabels })}${periodReviewNestedField(`trade_assessments.${index}.risk_execution_assessment`, "入场、止损止盈与执行", item.risk_execution_assessment, { editable })}</div></div>
+	    const attribution = item.outcome_attribution || {}, nextRule = item.next_time_rule || {}, fact = facts.get(Number(item.outcome_id)) || {};
+	    const profitLabel = Number.isFinite(fact.netProfit) ? ` · 盈亏 ${fmt(fact.netProfit, 2)}` : "";
+	    return `<details class="period-review-trade-card" ${index === 0 ? "open" : ""}><summary><span><strong>${escapeHtml(fact.symbol || "--")} · ${escapeHtml(fact.direction || "--")} · 交易 #${Number(item.outcome_id || 0)}</strong><small>信号 #${escapeHtml(fact.signalId || "--")} · ${escapeHtml(fact.entryTime || "--")} → ${escapeHtml(fact.closeTime || "--")}${escapeHtml(profitLabel)} · ${escapeHtml(periodDecisionLabels[item.decision_quality] || item.decision_quality || "未评价")} · ${escapeHtml(periodReviewResultLabels[attribution.result] || attribution.result || "结果未知")}</small></span><span class="period-review-trade-confidence">置信度 ${Math.round(Number(item.confidence || 0) * 100)}%</span><i data-lucide="chevron-down" size="16"></i></summary><div class="period-review-trade-body">
+	      <div class="period-review-v3-block"><h4>事前判断</h4><div class="period-review-v3-grid">${periodReviewNestedField(`trade_assessments.${index}.decision_quality`, "逐笔决策质量", item.decision_quality, { editable, options:periodDecisionLabels })}${periodReviewNestedField(`trade_assessments.${index}.original_signal_logic`, "原始信号逻辑", item.original_signal_logic, { editable })}${periodReviewNestedField(`trade_assessments.${index}.technical_basis_assessment`, "技术依据评价", item.technical_basis_assessment, { editable })}${periodReviewNestedField(`trade_assessments.${index}.market_alignment`, "是否符合当时行情", item.market_alignment, { editable, options:periodReviewAlignmentLabels })}${periodReviewNestedField(`trade_assessments.${index}.strategy_alignment`, "是否符合策略", item.strategy_alignment, { editable, options:periodReviewAlignmentLabels })}${periodReviewNestedField(`trade_assessments.${index}.missing_evidence`, "缺失证据", item.missing_evidence || [], { editable, type:"lines" })}</div></div>
+	      <div class="period-review-v3-block"><h4>事后归因</h4><div class="period-review-v3-grid">${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.primary_causes`, "主要原因", attribution.primary_causes, { editable, type:"lines" })}${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.explanation`, "盈亏形成过程", attribution.explanation, { editable })}${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.avoidability`, "可避免性", attribution.avoidability, { editable, options:periodReviewAvoidabilityLabels })}${periodReviewNestedField(`trade_assessments.${index}.risk_execution_status`, "风控执行状态", item.risk_execution_status || "insufficient_evidence", { editable, options:periodReviewRiskExecutionLabels })}${periodReviewNestedField(`trade_assessments.${index}.risk_execution_assessment`, "入场、止损止盈与执行", item.risk_execution_assessment, { editable })}${periodReviewNestedField(`trade_assessments.${index}.issue_codes`, "问题代码", item.issue_codes || [], { editable, type:"lines" })}</div></div>
       <div class="period-review-v3-block"><h4>下次明确行为</h4><div class="period-review-v3-grid">${[["condition","触发条件"],["action","执行动作"],["risk_control","风险控制"],["invalidation","失效条件"],["prohibited_action","禁止行为"]].map(([key,label]) => periodReviewNestedField(`trade_assessments.${index}.next_time_rule.${key}`, label, nextRule[key], { editable })).join("")}</div></div>
       <div class="period-review-v3-meta"><span>证据引用：${escapeHtml((item.evidence_refs || []).join("、") || "无")}</span>${periodReviewNestedField(`trade_assessments.${index}.confidence`, "置信度", item.confidence, { editable, type:"number" })}</div>
     </div></details>`;
-  }).join("")}</div></section>`;
+	  }).join("")}</div></section>`;
+}
+
+function renderDailyV3Findings(key, title, findings, editable) {
+  const items = Array.isArray(findings) ? findings : [];
+  return `<section class="period-review-v3-section"><div class="period-review-section-heading"><div><span class="review-section-kicker">跨交易归纳</span><h3>${escapeHtml(title)}</h3></div><span>${items.length} 条</span></div><div class="period-review-experience-list">${items.map((raw, index) => {
+    const item = typeof raw === "string" ? { text:raw, source_refs:[], occurrence_count:1 } : (raw || {});
+    return `<article class="period-review-experience-card"><header><strong>${escapeHtml(title)} ${index + 1}</strong><span>${Number(item.occurrence_count || 0)} 次</span></header>${periodReviewNestedField(`${key}.${index}.text`, "结论", item.text, { editable })}<p>来源交易：${escapeHtml((item.source_refs || []).join("、") || "无有效来源")}</p></article>`;
+  }).join("") || '<p class="period-review-empty-copy">本周期没有形成可验证的跨交易结论</p>'}</div></section>`;
 }
 
 function periodReviewExperienceMarkdown(rules) {
@@ -8205,12 +8214,12 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
           ? "复盘经验已经写入当前策略记忆库；后台整理不会回滚已保存内容"
           : ["completed", "succeeded"].includes(derivationStatus) ? "已写入对应策略的当前记忆版本"
             : "后台任务会自动完成，无需重复确认";
-  const editableGroups = isMonthly
+	  const editableGroups = isMonthly
     ? [
       ["recurring_patterns", "重复出现的模式"], ["strengths", "稳定有效的做法"],
       ["risk_observations", "风险观察"], ["chan_issue_summary", "缠论结构问题"], ["next_month_actions", "下月行动"]]
-    : isDailyV3
-      ? [["repeated_issues", "重复出现的问题"], ["strengths", "做得好的地方"], ["risk_observations", "风险观察"], ["next_day_actions", "下一交易日动作"]]
+	    : isDailyV3
+	      ? [["risk_observations", "风险观察"], ["next_day_actions", "下一交易日动作"]]
       : [["repeated_issues", "重复出现的问题"], ["strengths", "做得好的地方"], ["daily_lessons", "当日经验"], ["risk_observations", "风险观察"]];
   const assessments = isMonthly ? (content.daily_assessments || []) : (content.trade_assessments || []);
   const diagnostics = isMonthly ? [] : [
@@ -8239,8 +8248,10 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       <div class="period-review-edit-grid">${editableGroups.map(([key,label]) => `<label class="review-field"><span>${label}</span><textarea data-period-review-field="${key}" data-field-type="lines" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(periodReviewLines(content[key]))}</textarea><small>每行一条，保持简短且可执行</small></label>`).join('')}</div>
       <textarea id="reviewContentEditor" hidden>${escapeHtml(JSON.stringify(content))}</textarea>
     </section>` : `<div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="${review.status === 'failed' ? 'circle-alert' : 'loader-circle'}" size="20"></i></span><strong>${review.status === 'failed' ? '复盘生成失败' : '复盘正在准备'}</strong><span>${escapeHtml(review.status === 'failed' ? periodReviewFailureText(review.last_error_code) : periodReviewEvidenceReasonText(review.evidence_reason))}</span></div>`}
-    ${current && isDailyV3 ? renderDailyV3TradeAssessments(assessments, editable, evidence.sources || []) : ''}
-    ${current && isDailyV3 ? renderDailyV3ExperienceRules(content.experience_rules || [], editable) : ''}
+	    ${current && isDailyV3 ? renderDailyV3TradeAssessments(assessments, editable, evidence.sources || []) : ''}
+	    ${current && isDailyV3 ? renderDailyV3Findings("repeated_issues", "重复出现的问题", content.repeated_issues, editable) : ''}
+	    ${current && isDailyV3 ? renderDailyV3Findings("strengths", "稳定有效的做法", content.strengths, editable) : ''}
+	    ${current && isDailyV3 ? renderDailyV3ExperienceRules(content.experience_rules || [], editable) : ''}
     ${current ? `<section class="period-review-evidence-grid">
       ${isDailyV3 ? '' : periodReviewListBlock(isMonthly ? '跨日模式' : '逐笔判断', assessments.map(item => `${isMonthly ? item.period_case_id : item.outcome_id} · ${periodDecisionLabels[item.decision_quality] || item.decision_quality}：${item.summary || ''}`), isMonthly ? 'calendar-range' : 'receipt-text')}
       ${isMonthly ? periodReviewListBlock('记忆库更新候选', (content.memory_candidates || []).map(item => item.lesson), 'brain-circuit') : periodReviewListBlock('缠论结构诊断', diagnostics.map(item => `${chanIssueLabels[item.issue_source] || item.issue_source}：${item.explanation || '无补充说明'}`), 'git-branch')}

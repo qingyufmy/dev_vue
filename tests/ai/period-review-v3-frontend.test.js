@@ -17,13 +17,21 @@ describe('daily period review v3 frontend contract', () => {
     for (const field of [
       'original_signal_logic', 'technical_basis_assessment', 'market_alignment', 'strategy_alignment',
       'outcome_attribution.primary_causes', 'outcome_attribution.explanation', 'outcome_attribution.avoidability',
-      'risk_execution_assessment', 'next_time_rule',
+      'decision_quality', 'risk_execution_status', 'risk_execution_assessment', 'missing_evidence', 'issue_codes', 'next_time_rule',
     ]) expect(app).toContain(field)
     for (const field of ['condition','action','risk_control','invalidation','prohibited_action']) {
       expect(app).toContain(`["${field}",`)
     }
     expect(app).toContain('证据引用：')
     expect(app).toContain('period-review-trade-confidence')
+  })
+
+  it('keeps cross-trade findings attributable instead of flattening them into text lines', () => {
+    expect(app).toContain('renderDailyV3Findings("repeated_issues"')
+    expect(app).toContain('renderDailyV3Findings("strengths"')
+    expect(app).toContain('item.source_refs')
+    expect(app).toContain('item.occurrence_count')
+    expect(app).not.toContain('? [["repeated_issues", "重复出现的问题"], ["strengths", "做得好的地方"]')
   })
 
   it('supports deleting an invalid experience without making source references editable', () => {

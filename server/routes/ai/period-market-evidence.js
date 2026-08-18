@@ -398,8 +398,15 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
       start_utc_msc:startUtcMs - historyLookback * interval, end_utc_msc:endUtcMs })
     sourceId = Number(hydrated?.market_meta?.source_id)
     if (hydrated?.status === 'error' || !sourceId) throw new Error(hydrated?.error || hydrated?.message || 'period_market_source_unavailable')
-    const hydratedSource = await queryOne(`SELECT id, broker_server, account_login, source_key, timezone_offset_minutes, clock_status
-      FROM market_data_sources WHERE id = ?`, [sourceId])
+    // Bridge hydration is only a transport result.  It must pass the same
+    // frozen strategy/account authorization as the cached-source path before
+    // any of its candles can become review evidence.
+    const hydratedSource = await queryOne(`SELECT mds.id, mds.broker_server, mds.account_login, mds.source_key,
+        mds.timezone_offset_minutes, mds.clock_status
+      FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
+      WHERE ${sourceAuthorization.sql} AND mds.id = ? ${sourceSelector}`,
+    [...sourceAuthorization.params, sourceId, ...sourceSelectorParams])
+    if (!hydratedSource) throw new Error('period_market_source_unauthorized')
     rows = await readStored([sourceId])
     const hydratedIdentity = sourceIdentityFromRow(hydratedSource || { id:sourceId })
     marketMeta = { ...(hydrated.market_meta || {}), source_id:sourceId,

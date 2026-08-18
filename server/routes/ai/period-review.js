@@ -20,7 +20,7 @@ import { canManagePlatformAiContent, platformAiContentManagerSql } from './platf
 import { applyDefaultObserverClockBootstrap } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
-import { MODEL_TASK_TERMINAL_STATES, recoverAbandonedBusinessModelTasks } from './model-task-runtime.js'
+import { MODEL_TASK_TERMINAL_STATES, appendModelTaskEvent, recoverAbandonedBusinessModelTasks } from './model-task-runtime.js'
 import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
 import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import {
@@ -727,13 +727,31 @@ const V3_MARKET_ALIGNMENT = new Set(['aligned', 'partly_aligned', 'conflict', 'i
 const V3_STRATEGY_ALIGNMENT = new Set(['aligned', 'partly_aligned', 'conflict', 'insufficient_evidence'])
 const V3_OUTCOME_RESULTS = new Set(['profit', 'loss', 'breakeven'])
 const V3_AVOIDABILITY = new Set(['avoidable', 'partly_avoidable', 'normal_strategy_loss', 'insufficient_evidence'])
+const V3_RISK_EXECUTION_STATUS = new Set(['compliant', 'partly_compliant', 'violation', 'insufficient_evidence'])
 const V3_MAX_ISSUE_CODES = 20
 const V3_MAX_EVIDENCE_REFS = 50
 const V3_MAX_PRIMARY_CAUSES = 8
 const V3_MAX_EXPERIENCE_RULES = 100
 const DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES = 30
+const DAILY_REVIEW_CHUNK_MAX_OUTCOMES = 20
+const DAILY_REVIEW_CHUNK_MAX_BYTES = 120000
+const DAILY_RECOVERY_LIMIT_MAX = 100
+const DAILY_RECOVERY_GRACE_MAX_MINUTES = 7 * 24 * 60
 
 export const DAILY_PERIOD_REVIEW_V3_CONTRACT = DAILY_REVIEW_V3_CONTRACT
+
+export function dailyReviewRecoveryRuntimeOptions(env = process.env) {
+  const enabled = /^(1|true|yes|on)$/i.test(String(env?.AI_DAILY_REVIEW_MISSED_WINDOW_RECOVERY || '').trim())
+  const parsedLimit = Number(env?.AI_DAILY_REVIEW_MISSED_WINDOW_RECOVERY_LIMIT)
+  const parsedGrace = Number(env?.AI_DAILY_REVIEW_MISSED_WINDOW_RECOVERY_GRACE_MINUTES)
+  const recoveryLimit = Number.isFinite(parsedLimit)
+    ? Math.min(DAILY_RECOVERY_LIMIT_MAX, Math.max(0, Math.trunc(parsedLimit))) : 0
+  const recoveryGraceMinutes = Number.isFinite(parsedGrace)
+    ? Math.min(DAILY_RECOVERY_GRACE_MAX_MINUTES, Math.max(0, Math.trunc(parsedGrace)))
+    : DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES
+  return { missedWindowRecovery:enabled && recoveryLimit > 0, recoveryLimit, recoveryGraceMinutes,
+    maxRecoveryLimit:DAILY_RECOVERY_LIMIT_MAX }
+}
 
 function boundedReviewText(value, field, { maxLength = 8000, required = true } = {}) {
   const text = memoryMarkdownText(value)
@@ -751,6 +769,26 @@ function normalizeConfidence(value, field = 'daily_review_confidence') {
 function normalizeV3TextArray(value, field, maxItems = 100) {
   if (!Array.isArray(value) || value.length > maxItems) throw new Error(`invalid_daily_v3_${field}`)
   return value.map((item, index) => boundedReviewText(item, `daily_v3_${field}_${index}`, { maxLength:3000 }))
+}
+
+function normalizeV3ObservationArray(value, field, knownOutcomeIds, { requireTwoSources = false } = {}) {
+  if (!Array.isArray(value) || value.length > 100) throw new Error(`invalid_daily_v3_${field}`)
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(`invalid_daily_v3_${field}`)
+    const text = boundedReviewText(item.text, `daily_v3_${field}_${index}_text`, { maxLength:3000 })
+    if (!Array.isArray(item.source_refs) || item.source_refs.length < 1) throw new Error(`daily_v3_${field}_source_refs_missing`)
+    const refs = [...new Set(item.source_refs.map(ref => String(ref ?? '').trim()))]
+    if (refs.some(ref => !/^outcome:\d+$/.test(ref))
+      || refs.some(ref => !knownOutcomeIds.has(Number(ref.slice('outcome:'.length))))) {
+      throw new Error(`daily_v3_${field}_source_refs_invalid`)
+    }
+    const occurrenceCount = Number(item.occurrence_count)
+    if (!Number.isSafeInteger(occurrenceCount) || occurrenceCount !== refs.length || occurrenceCount < 1) {
+      throw new Error(`daily_v3_${field}_occurrence_count_invalid`)
+    }
+    if (requireTwoSources && refs.length < 2) throw new Error('daily_v3_repeated_issue_requires_two_outcomes')
+    return { text, source_refs:refs, occurrence_count:occurrenceCount }
+  })
 }
 
 function normalizeV3EvidenceRefs(value, outcomeId, allowedRefs = null) {
@@ -854,7 +892,13 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
     if (!known.has(outcomeId) || !DAILY_DECISIONS.has(item?.decision_quality)) throw new Error('invalid_daily_v3_trade_assessment')
     const originalSignalLogic = boundedReviewText(item.original_signal_logic, 'daily_v3_original_signal_logic')
     const technicalBasisAssessment = boundedReviewText(item.technical_basis_assessment, 'daily_v3_technical_basis_assessment')
-    const riskExecutionAssessment = boundedReviewText(item.risk_execution_assessment, 'daily_v3_risk_execution_assessment')
+    const riskExecutionAssessment = boundedReviewText(typeof item.risk_execution_assessment === 'object'
+      ? (item.risk_execution_assessment.summary || item.risk_execution_assessment.text) : item.risk_execution_assessment,
+    'daily_v3_risk_execution_assessment')
+    const riskExecutionStatus = String(item.risk_execution_status
+      || (item.risk_execution_assessment && typeof item.risk_execution_assessment === 'object'
+        ? item.risk_execution_assessment.status : '')).trim()
+    if (!V3_RISK_EXECUTION_STATUS.has(riskExecutionStatus)) throw new Error('invalid_daily_v3_risk_execution_status')
     if (!V3_MARKET_ALIGNMENT.has(item.market_alignment)) throw new Error('invalid_daily_v3_market_alignment')
     if (!V3_STRATEGY_ALIGNMENT.has(item.strategy_alignment)) throw new Error('invalid_daily_v3_strategy_alignment')
     const attribution = item?.outcome_attribution
@@ -870,9 +914,29 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
     const expectedResult = expectedV3OutcomeResult(factsForOutcome?.net_profit ?? factsForOutcome?.outcome?.net_profit)
     if (expectedResult && expectedResult !== attribution.result) throw new Error('daily_v3_outcome_result_mismatch')
     if (attribution.avoidability === 'normal_strategy_loss'
-      && (item.decision_quality === 'poor' || item.strategy_alignment === 'conflict' || item.market_alignment === 'conflict')) {
+      && (expectedResult !== 'loss' || item.decision_quality !== 'good' || item.market_alignment !== 'aligned'
+        || item.strategy_alignment !== 'aligned' || riskExecutionStatus !== 'compliant')) {
       throw new Error('daily_v3_normal_loss_inconsistent')
     }
+    if (Object.prototype.hasOwnProperty.call(item, 'missing_evidence')
+      && !Array.isArray(item.missing_evidence)) throw new Error('invalid_daily_v3_missing_evidence')
+    const missingEvidence = Array.isArray(item.missing_evidence)
+      ? item.missing_evidence.map((value, index) => boundedReviewText(value, `daily_v3_missing_evidence_${index}`, { maxLength:2000 }))
+      : []
+    const hasInsufficientState = item.decision_quality === 'insufficient_evidence'
+      || item.market_alignment === 'insufficient_evidence'
+      || item.strategy_alignment === 'insufficient_evidence'
+      || riskExecutionStatus === 'insufficient_evidence'
+      || attribution.avoidability === 'insufficient_evidence'
+    if (hasInsufficientState && !missingEvidence.length) throw new Error('daily_v3_missing_evidence_required')
+    if (item.decision_quality === 'insufficient_evidence'
+      && item.market_alignment !== 'insufficient_evidence'
+      && item.strategy_alignment !== 'insufficient_evidence'
+      && riskExecutionStatus !== 'insufficient_evidence'
+      && attribution.avoidability !== 'insufficient_evidence') {
+      throw new Error('daily_v3_insufficient_decision_contradicts_deterministic')
+    }
+    if (!hasInsufficientState && missingEvidence.length) throw new Error('daily_v3_missing_evidence_contradicts_deterministic')
     const nextRule = item.next_time_rule
     if (!nextRule || typeof nextRule !== 'object' || Array.isArray(nextRule)) throw new Error('invalid_daily_v3_next_time_rule')
     const normalizedRule = {
@@ -887,7 +951,8 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
       outcome_id:outcomeId, decision_quality:item.decision_quality,
       original_signal_logic:originalSignalLogic, technical_basis_assessment:technicalBasisAssessment,
       market_alignment:item.market_alignment, strategy_alignment:item.strategy_alignment,
-      risk_execution_assessment:riskExecutionAssessment,
+      risk_execution_assessment:riskExecutionAssessment, risk_execution_status:riskExecutionStatus,
+      missing_evidence:missingEvidence,
       outcome_attribution:{ result:attribution.result, primary_causes:primaryCauses, explanation,
         avoidability:attribution.avoidability },
       next_time_rule:normalizedRule,
@@ -902,6 +967,8 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
   const normalizedRules = normalizeExperienceRules(input.experience_rules, {
     allowedSourceRefs:new Set([...known].map(id => `outcome:${id}`)), chanMemoryAllowed:chanAllowed, knownOutcomeIds:known,
   })
+  const normalizedRepeatedIssues = normalizeV3ObservationArray(input.repeated_issues, 'repeated_issues', known, { requireTwoSources:true })
+  const normalizedStrengths = normalizeV3ObservationArray(input.strengths, 'strengths', known)
   const periodChan = chanAllowed && input.period_chan_assessment && typeof input.period_chan_assessment === 'object'
     ? input.period_chan_assessment : { status:'insufficient_evidence', issue_source:'unknown', explanation:'', affected_outcome_ids:[], confidence:0 }
   const affectedOutcomeIds = [...new Set((Array.isArray(periodChan.affected_outcome_ids) ? periodChan.affected_outcome_ids : []).map(Number))]
@@ -916,8 +983,8 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
   })
   const result = {
     output_contract_version:DAILY_REVIEW_V3_CONTRACT, period_summary:periodSummary, decision_quality:input.decision_quality,
-    trade_assessments:assessments, repeated_issues:normalizeV3TextArray(input.repeated_issues, 'repeated_issues'),
-    strengths:normalizeV3TextArray(input.strengths, 'strengths'),
+    trade_assessments:assessments, repeated_issues:normalizedRepeatedIssues,
+    strengths:normalizedStrengths,
     risk_observations:normalizeV3TextArray(input.risk_observations, 'risk_observations'),
     next_day_actions:normalizeV3TextArray(input.next_day_actions, 'next_day_actions'),
     experience_rules:normalizedRules, strategy_conflicts:strategyConflicts, confidence:normalizeConfidence(input.confidence),
@@ -1272,12 +1339,23 @@ export function validateMonthlyReviewMergeContent(input, dailyCaseIds = [], appr
 
 async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } = {}) {
   const batchLimit = Math.min(2000, Math.max(2, Number(limit || 500)))
-  const backlogLimit = Math.max(1, Math.ceil(batchLimit * 0.7))
+  // Reserve a stable live lane on every cycle. Historical recovery is an
+  // optional third lane and receives only its own budget, so enabling it can
+  // reduce maintenance throughput but can never displace newly eligible
+  // outcomes from the live lane or make the aggregate exceed `limit`.
+  const liveLimit = Math.max(1, Math.floor(batchLimit * 0.3))
+  // Keep a small batch useful as well: reserving a recovery slot for a
+  // two-to-four row batch would make the lane budgets exceed the requested
+  // limit once the maintenance lane is retained. Recovery is therefore
+  // intentionally deferred until there is a bounded slot left for it.
+  const recoveryLimit = includeHistoricalRecovery && batchLimit >= 5
+    ? Math.max(1, Math.floor(batchLimit * 0.2)) : 0
+  const backlogLimit = Math.max(0, batchLimit - liveLimit - recoveryLimit)
   // Keep a full recent lane after removing historical unassociated rows from
   // the maintenance lane. This lets a busy period converge even when more
   // than 30% of a batch belongs to newly eligible outcomes; both queries stay
   // explicitly bounded and the merged result remains de-duplicated below.
-  const recentLimit = batchLimit
+  const recentLimit = liveLimit
   const select = `SELECT so.*, snap.strategy_id, snap.strategy_version, snap.strategy_scope,
       u.role AS user_role, u.plan_source AS user_plan_source,
       ta.broker_server, mds.timezone_offset_minutes, mds.clock_status,
@@ -1301,25 +1379,25 @@ async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } 
     // Unassociated historical outcomes are intentionally excluded here: the
     // recent lane below gives new source rows a bounded, deterministic path to
     // first creation without allowing an old backlog to occupy every batch.
-    queryAll(`${select} WHERE ${eligible} AND EXISTS (SELECT 1 FROM period_review_sources prs
+    backlogLimit > 0 ? queryAll(`${select} WHERE ${eligible} AND EXISTS (SELECT 1 FROM period_review_sources prs
         JOIN period_review_cases cases ON cases.id = prs.period_case_id
         WHERE prs.outcome_id = so.id AND cases.period_type = 'daily' AND cases.evidence_status <> 'complete'
           AND cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
           AND COALESCE(cases.evidence_reason, '') NOT IN ('inference_snapshot_incomplete','historical_prompt_missing'))
-      ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]),
+      ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]) : Promise.resolve([]),
     // Live lane stays newest-first so an opt-in historical recovery cannot
     // starve the current creation window.
     queryAll(`${select} WHERE ${eligible} AND ${unassociated}
       ORDER BY so.review_eligible_at DESC, so.id DESC LIMIT ?`, [recentLimit]),
     // Historical fairness is a separate, explicitly enabled lane. It walks
     // oldest-first while the live lane above continues to create today's case.
-    includeHistoricalRecovery ? queryAll(`${select} WHERE ${eligible} AND ${unassociated}
-      ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [recentLimit]) : Promise.resolve([]),
+    includeHistoricalRecovery && recoveryLimit > 0 ? queryAll(`${select} WHERE ${eligible} AND ${unassociated}
+      ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [recoveryLimit]) : Promise.resolve([]),
   ])
   const merged = new Map()
   for (const row of [...backlog, ...recent, ...recovery]) merged.set(Number(row.id), row)
   const observerClock = await getDefaultObserverSourceClock().catch(() => null)
-  return [...merged.values()].map(row => {
+  return [...merged.values()].slice(0, batchLimit).map(row => {
     const clock = applyDefaultObserverClockBootstrap({
       broker_server:row.broker_server,
       timezone_offset_minutes:row.timezone_offset_minutes,
@@ -1555,7 +1633,11 @@ export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Dat
   recoveryLimit = 0,
   recoveryGraceMinutes = DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES,
 } = {}) {
-  const rows = await eligibleOutcomeRows(limit, { includeHistoricalRecovery:Boolean(missedWindowRecovery) })
+  const boundedRecoveryLimit = Math.max(0, Math.min(DAILY_RECOVERY_LIMIT_MAX, Math.trunc(Number(recoveryLimit) || 0)))
+  const boundedRecoveryGraceMinutes = Math.max(0, Math.min(DAILY_RECOVERY_GRACE_MAX_MINUTES,
+    Math.trunc(Number(recoveryGraceMinutes) || DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES)))
+  const recoveryEnabled = Boolean(missedWindowRecovery) && boundedRecoveryLimit > 0
+  const rows = await eligibleOutcomeRows(limit, { includeHistoricalRecovery:recoveryEnabled })
   const userIds = [...new Set(rows.map(row => Number(row.user_id)).filter(id => id > 0))]
   const enabledEntries = await Promise.all(userIds.map(async userId => [userId, await isAiFeatureEnabled('review_generation_enabled', userId)]))
   const enabledUsers = new Set(enabledEntries.filter(([, enabled]) => enabled).map(([userId]) => userId))
@@ -1566,15 +1648,15 @@ export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Dat
       || row.timezone_offset_minutes === '' || !Number.isInteger(Number(row.timezone_offset_minutes))).length,
     groups: groups.length, ready: 0, incomplete: 0,
     beforeCreationWindow: 0, outsideCreationWindow: 0, created: 0, existingMaintained: 0,
-    recoveryEnabled:Boolean(missedWindowRecovery), recoveryRequested:Math.max(0, Number(recoveryLimit) || 0),
+    recoveryEnabled, recoveryRequested:boundedRecoveryLimit,
     recoveryCreated:0, recoverySkipped:0, clock:{ status:'per_account' } }
-  const boundedRecoveryLimit = Math.max(0, Math.min(groups.length, Math.trunc(Number(recoveryLimit) || 0)))
+  const boundedGroupRecoveryLimit = Math.min(groups.length, boundedRecoveryLimit)
   let recoveryUsed = 0
   for (const group of groups) {
     const creationState = periodReviewCreationWindowState('daily', group.endUtcMs, asOfUtcMs).state
-    const allowRecoveryForGroup = Boolean(missedWindowRecovery) && creationState === 'after' && recoveryUsed < boundedRecoveryLimit
+    const allowRecoveryForGroup = recoveryEnabled && creationState === 'after' && recoveryUsed < boundedGroupRecoveryLimit
     const prepared = await upsertDailyGroup(group, { status:group.clockStatus || 'account_terminal' }, asOfUtcMs, {
-      allowMissedWindowRecovery:allowRecoveryForGroup, recoveryGraceMinutes,
+      allowMissedWindowRecovery:allowRecoveryForGroup, recoveryGraceMinutes:boundedRecoveryGraceMinutes,
     })
     if (prepared.skippedCreationWindow && prepared.creationWindowState === 'before') result.beforeCreationWindow += 1
     if (prepared.skippedCreationWindow && prepared.creationWindowState === 'after') result.outsideCreationWindow += 1
@@ -2001,13 +2083,47 @@ function parseCheckpointContent(row) {
 }
 
 async function inspectPeriodReviewModelTask(task) {
-  const job = await queryOne(`SELECT jobs.id, jobs.status, jobs.period_case_id,
+  const dailyCheckpointTask = ['daily_review_chunk', 'daily_review_merge'].includes(String(task?.task_kind || ''))
+  let job = await queryOne(`SELECT jobs.id, jobs.status, jobs.period_case_id,
       cases.current_version_id, versions.content_hash AS result_hash
     FROM period_review_jobs jobs
     LEFT JOIN period_review_cases cases ON cases.id = jobs.period_case_id
     LEFT JOIN period_review_versions versions ON versions.id = cases.current_version_id
     WHERE jobs.model_task_id = ? LIMIT 1`, [task.task_id])
+  // Daily v3 chunks and the final merge each have their own model task. Only
+  // the first task is linked into the single legacy job.model_task_id column;
+  // the generic task envelope's domain identity associates the remaining
+  // tasks with the same durable review job without a schema change.
+  if (!job && dailyCheckpointTask
+    && task?.domain_type === 'period_review_job' && task?.domain_id != null) {
+    job = await queryOne(`SELECT jobs.id, jobs.status, jobs.period_case_id,
+        cases.current_version_id, versions.content_hash AS result_hash
+      FROM period_review_jobs jobs
+      LEFT JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+      LEFT JOIN period_review_versions versions ON versions.id = cases.current_version_id
+      WHERE jobs.id = ? LIMIT 1`, [Number(task.domain_id)])
+  }
   if (job) {
+    if (dailyCheckpointTask) {
+      const event = await queryOne(`SELECT payload_json FROM ai_model_task_events
+        WHERE task_id = ? AND event_type = 'daily_review_checkpoint' ORDER BY id DESC LIMIT 1`, [task.task_id])
+      const payload = parse(event?.payload_json, null)
+      if (payload) {
+        const content = payload.content
+        const contentHash = content && typeof content === 'object' && !Array.isArray(content)
+          ? sha256(JSON.stringify(content)) : null
+        if (!contentHash || String(payload.content_hash || '') !== contentHash) {
+          throw new Error('daily_review_checkpoint_content_hash_conflict')
+        }
+        const role = String(payload.role || '')
+        const resultRef = role === 'chunk'
+          ? `period_review_chunk:${job.period_case_id}:${Number(payload.chunk_index)}`
+          : role === 'merge' ? `period_review_merge:${job.period_case_id}` : null
+        if (!resultRef) throw new Error('daily_review_checkpoint_role_invalid')
+        return { kind:'period_review_daily_checkpoint', job, succeeded:true,
+          resultRef, resultHash:contentHash }
+      }
+    }
     const succeeded = job.status === 'succeeded' && Number(job.current_version_id) > 0 && Boolean(job.result_hash)
     return { kind:'period_review', job, succeeded, resultRef:succeeded ? `period_review_case:${job.period_case_id}` : null,
       resultHash:succeeded ? job.result_hash : null }
@@ -2032,6 +2148,9 @@ async function transitionPeriodReviewModelBusiness({ action, task, business, rea
   const jobId = Number(business?.job?.id || 0)
   if (!jobId) return
   const now = beijingNow()
+  const dailyTaskUsesDomainIdentity = ['daily_review_chunk', 'daily_review_merge'].includes(String(task?.task_kind || ''))
+  const dailyJobWhere = dailyTaskUsesDomainIdentity ? 'id = ?' : 'id = ? AND model_task_id = ?'
+  const dailyJobParams = dailyTaskUsesDomainIdentity ? [jobId] : [jobId, task.task_id]
   if (business.kind === 'monthly_review_chunk') {
     const checkpointId = Number(business.checkpoint?.id || 0)
     if (!checkpointId) return
@@ -2075,29 +2194,29 @@ async function transitionPeriodReviewModelBusiness({ action, task, business, rea
   if (action === 'requeued') {
     await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
       last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
-      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed','skipped')`,
-    [now, now, jobId, task.task_id])
+      WHERE ${dailyJobWhere} AND status NOT IN ('succeeded','failed','skipped')`,
+    [now, now, ...dailyJobParams])
     return
   }
   if (action === 'status_unknown') {
     await queryRun(`UPDATE period_review_jobs SET status = 'status_unknown', progress_stage = 'status_unknown', stage_updated_at = ?,
       last_error_code = 'provider_status_unknown', lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL, updated_at = ?
-      WHERE id = ? AND model_task_id = ? AND status NOT IN ('succeeded','failed','skipped')`,
-    [now, now, jobId, task.task_id])
+      WHERE ${dailyJobWhere} AND status NOT IN ('succeeded','failed','skipped')`,
+    [now, now, ...dailyJobParams])
     return
   }
   if (action === 'stale') {
     await queryRun(`UPDATE period_review_jobs SET status = 'failed', progress_stage = 'failed', stage_updated_at = ?,
       last_error_code = ?, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
-      completed_at = ?, updated_at = ? WHERE id = ? AND model_task_id = ?
+      completed_at = ?, updated_at = ? WHERE ${dailyJobWhere}
       AND status NOT IN ('succeeded','failed','skipped')`,
-    [now, String(reason || 'model_task_recovery_stale').slice(0, 128), now, now, jobId, task.task_id])
+    [now, String(reason || 'model_task_recovery_stale').slice(0, 128), now, now, ...dailyJobParams])
   }
 }
 
 export async function recoverAbandonedPeriodReviewModelTasks({ nowUtcMs = Date.now(), limit = 100 } = {}) {
   return recoverAbandonedBusinessModelTasks({
-    taskKinds:['daily_review', 'monthly_review_chunk', 'monthly_review_merge'], nowUtcMs, limit,
+    taskKinds:['daily_review', 'daily_review_chunk', 'daily_review_merge', 'monthly_review_chunk', 'monthly_review_merge'], nowUtcMs, limit,
     inspectBusiness:inspectPeriodReviewModelTask,
     onBusinessTransition:transitionPeriodReviewModelBusiness,
   })
@@ -2113,17 +2232,22 @@ export function buildPeriodReviewModelTaskFrozenContext(job, extras = {}) {
   }
 }
 
-async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, taskKind) {
+async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, taskKind, taskExtras = {}, {
+  taskDeadlineAtUtcMs = null,
+} = {}) {
+  const modelTaskKind = String(taskExtras.model_task_kind || taskKind)
+  const taskKeySuffix = String(taskExtras.task_key_suffix || '').trim()
+  const idempotencyKey = `period_review:${job.id}:${job.idempotency_key}${taskKeySuffix ? `:${taskKeySuffix}` : ''}`
   const tracker = await createModelTaskTracker({
-    taskKind,
+    taskKind:modelTaskKind,
     queueClass:'background',
     ownerUserId:job.user_id,
     strategyId:job.strategy_id,
     domainType:'period_review_job',
     domainId:job.id,
-    idempotencyKey:`period_review:${job.id}:${job.idempotency_key}`,
+    idempotencyKey,
     snapshotHash:job.evidence_hash || sha256(JSON.stringify(evidence)),
-    inputHash:sha256(JSON.stringify(evidence)),
+    inputHash:sha256(JSON.stringify({ evidence, task_extras:taskExtras })),
     provider:resolved.model.provider,
     model:resolved.model.model_name,
     modelProfileId:resolved.model_profile_id,
@@ -2131,9 +2255,10 @@ async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, tas
     credentialSource:resolved.credential_source,
     frozenContext:buildPeriodReviewModelTaskFrozenContext(job, {
       period_case_id:Number(job.period_case_id), evidence_hash:job.evidence_hash,
+      ...taskExtras,
     }),
     maxAttempts:Number(job.max_attempts) || 3,
-    taskDeadlineAtUtcMs:job._deadlineAtMs,
+    taskDeadlineAtUtcMs:taskDeadlineAtUtcMs || job._deadlineAtMs,
   }, {
     workerId:`period-review:${process.pid}`,
     linkTask:async taskId => {
@@ -2142,7 +2267,11 @@ async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, tas
       const affected = Number(result?.affectedRows ?? result?.changes)
       if (Number.isFinite(affected) && affected < 1) {
         const linked = await queryOne('SELECT model_task_id FROM period_review_jobs WHERE id = ? LIMIT 1', [job.id])
-        if (String(linked?.model_task_id || '') !== String(taskId)) throw new Error('model_task_link_failed')
+        const linkedTaskId = String(linked?.model_task_id || '')
+        const independentDailyTask = ['daily_review_chunk', 'daily_review_merge'].includes(modelTaskKind)
+        if (!linkedTaskId || (!independentDailyTask && linkedTaskId !== String(taskId))) {
+          throw new Error('model_task_link_failed')
+        }
       }
       return true
     },
@@ -2455,6 +2584,196 @@ function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strat
   }
 }
 
+export function buildDailyReviewChunkPlan(evidence, {
+  maxOutcomes = DAILY_REVIEW_CHUNK_MAX_OUTCOMES,
+  maxBytes = DAILY_REVIEW_CHUNK_MAX_BYTES,
+} = {}) {
+  const sources = (Array.isArray(evidence?.sources) ? evidence.sources : [])
+    .slice().sort((left, right) => Number(left?.outcome_id) - Number(right?.outcome_id))
+  const outcomeIds = sources.map(source => Number(source?.outcome_id))
+  if (!outcomeIds.length || outcomeIds.some(id => !Number.isSafeInteger(id) || id <= 0)
+    || new Set(outcomeIds).size !== outcomeIds.length) throw new Error('daily_review_chunk_source_set_invalid')
+  const outcomeLimit = Math.max(1, Math.trunc(Number(maxOutcomes) || DAILY_REVIEW_CHUNK_MAX_OUTCOMES))
+  const byteLimit = Math.max(1024, Math.trunc(Number(maxBytes) || DAILY_REVIEW_CHUNK_MAX_BYTES))
+  const chunks = []
+  let current = []
+  let currentBytes = 0
+  const flush = () => {
+    if (!current.length) return
+    const ids = current.map(source => Number(source.outcome_id))
+    const sourceHash = sha256(JSON.stringify(current.map(source => [Number(source.outcome_id), source.evidence_hash || null])))
+    chunks.push({ chunk_index:chunks.length, outcome_ids:ids, sources:current,
+      source_hash:sourceHash, expected_outcome_ids:ids })
+    current = []
+    currentBytes = 0
+  }
+  for (const source of sources) {
+    const sourceBytes = Buffer.byteLength(JSON.stringify(source), 'utf8')
+    if (current.length && (current.length >= outcomeLimit || currentBytes + sourceBytes > byteLimit)) flush()
+    current.push(source)
+    currentBytes += sourceBytes
+  }
+  flush()
+  const expectedOutcomeIds = chunks.flatMap(chunk => chunk.outcome_ids)
+  const sourceHash = sha256(JSON.stringify(expectedOutcomeIds))
+  const planHash = sha256(JSON.stringify({ source_hash:sourceHash,
+    chunks:chunks.map(chunk => ({ chunk_index:chunk.chunk_index, source_hash:chunk.source_hash, outcome_ids:chunk.outcome_ids })) }))
+  return { source_hash:sourceHash, plan_hash:planHash, expected_outcome_ids:expectedOutcomeIds,
+    chunk_count:chunks.length, chunks:chunks.map(chunk => ({ ...chunk, chunk_count:chunks.length,
+      plan_hash:planHash })) }
+}
+
+function dailyReviewModelEvidenceForChunk(modelEvidence, chunk) {
+  const ids = new Set((chunk?.outcome_ids || []).map(Number))
+  return {
+    system_statistics:modelEvidence.system_statistics || {},
+    pre_trade_frozen:(modelEvidence.pre_trade_frozen || []).filter(item => ids.has(Number(item.outcome_id))),
+    holding_path:(modelEvidence.holding_path || []).filter(item => ids.has(Number(item.outcome_id))),
+    period_market:modelEvidence.period_market || null,
+    current_optimization_context:modelEvidence.current_optimization_context || {},
+    outcomeFacts:new Map([...modelEvidence.outcomeFacts.entries()].filter(([id]) => ids.has(Number(id)))),
+    evidenceRefsByOutcome:new Map([...modelEvidence.evidenceRefsByOutcome.entries()].filter(([id]) => ids.has(Number(id)))),
+  }
+}
+
+function dailyReviewDecisionQualityForChunks(contents) {
+  // Any unresolvable source gap must remain visible at the day level instead
+  // of being hidden behind a mixed aggregate from other trades.
+  const rank = { good:0, mixed:1, poor:2, insufficient_evidence:3 }
+  return contents.reduce((selected, content) => rank[content.decision_quality] > rank[selected]
+    ? content.decision_quality : selected, 'good')
+}
+
+function mergeDailyReviewV3ChunkContents(contents, outcomeIds) {
+  const assessments = contents.flatMap(content => content.trade_assessments || [])
+  const byOutcome = new Map()
+  for (const item of assessments) {
+    const id = Number(item?.outcome_id)
+    if (byOutcome.has(id)) throw new Error('daily_review_chunk_trade_duplicate')
+    byOutcome.set(id, item)
+  }
+  const expected = new Set(outcomeIds.map(Number))
+  if (byOutcome.size !== expected.size || [...expected].some(id => !byOutcome.has(id))) {
+    throw new Error('daily_review_chunk_trade_coverage_incomplete')
+  }
+  const dedupe = values => {
+    const seen = new Set()
+    return values.filter(item => {
+      const key = JSON.stringify(item)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+  const merged = {
+    output_contract_version:DAILY_REVIEW_V3_CONTRACT,
+    period_summary:contents.map((content, index) => `第${index + 1}分块：${content.period_summary}`).join('\n'),
+    decision_quality:dailyReviewDecisionQualityForChunks(contents),
+    trade_assessments:outcomeIds.map(id => byOutcome.get(Number(id))),
+    repeated_issues:dedupe(contents.flatMap(content => content.repeated_issues || [])),
+    strengths:dedupe(contents.flatMap(content => content.strengths || [])),
+    risk_observations:dedupe(contents.flatMap(content => content.risk_observations || [])),
+    next_day_actions:dedupe(contents.flatMap(content => content.next_day_actions || [])),
+    experience_rules:dedupe(contents.flatMap(content => content.experience_rules || [])),
+    strategy_conflicts:dedupe(contents.flatMap(content => content.strategy_conflicts || [])),
+    confidence:Math.min(...contents.map(content => Number(content.confidence))),
+  }
+  const firstWithChan = contents.find(content => Array.isArray(content.chan_diagnoses))
+  if (firstWithChan) {
+    merged.chan_diagnoses = contents.flatMap(content => content.chan_diagnoses || [])
+    const periodAssessments = contents.map(content => content.period_chan_assessment).filter(Boolean)
+    const statusRank = { normal:0, insufficient_evidence:1, suspected_issue:2, confirmed_issue:3 }
+    const representative = periodAssessments.reduce((selected, item) =>
+      (statusRank[item.status] ?? -1) > (statusRank[selected.status] ?? -1) ? item : selected,
+    firstWithChan.period_chan_assessment)
+    merged.period_chan_assessment = {
+      ...representative,
+      explanation:[...new Set(periodAssessments.map(item => String(item.explanation || '').trim()).filter(Boolean))].join('；'),
+      affected_outcome_ids:[...new Set(periodAssessments.flatMap(item => item.affected_outcome_ids || []).map(Number))],
+      confidence:Math.min(...periodAssessments.map(item => Number(item.confidence))),
+    }
+  }
+  return merged
+}
+
+function dailyReviewTaskIdentity(job, role, planHash, chunkIndex = null) {
+  const normalizedRole = String(role || '').trim()
+  if (!['chunk', 'merge'].includes(normalizedRole)) throw new Error('daily_review_task_role_invalid')
+  const suffix = normalizedRole === 'chunk'
+    ? `daily_review_chunk:${Number(chunkIndex)}:${String(planHash || '')}`
+    : `daily_review_merge:${String(planHash || '')}`
+  return {
+    taskKind:normalizedRole === 'chunk' ? 'daily_review_chunk' : 'daily_review_merge',
+    idempotencyKey:`period_review:${job.id}:${job.idempotency_key}:${suffix}`,
+    taskKeySuffix:suffix,
+  }
+}
+
+async function loadDailyReviewCheckpoint(taskIdentity, expectedPlanHash, expectedChunkIndex = null) {
+  const task = await queryOne('SELECT task_id, status, result_hash FROM ai_model_tasks WHERE task_kind = ? AND idempotency_key = ? LIMIT 1',
+    [taskIdentity.taskKind, taskIdentity.idempotencyKey])
+  if (!task || String(task.status) !== 'succeeded') return null
+  const event = await queryOne(`SELECT payload_json FROM ai_model_task_events
+    WHERE task_id = ? AND event_type = 'daily_review_checkpoint' ORDER BY id DESC LIMIT 1`, [task.task_id])
+  const payload = parse(event?.payload_json, null)
+  if (!payload || String(payload.plan_hash || '') !== String(expectedPlanHash || '')
+    || (expectedChunkIndex != null && Number(payload.chunk_index) !== Number(expectedChunkIndex))) {
+    throw new Error('daily_review_checkpoint_identity_conflict')
+  }
+  const content = payload.content
+  if (!content || typeof content !== 'object' || Array.isArray(content)) throw new Error('daily_review_checkpoint_content_missing')
+  if (payload.content_hash && String(payload.content_hash) !== sha256(JSON.stringify(content))) {
+    throw new Error('daily_review_checkpoint_content_hash_conflict')
+  }
+  if (task.result_hash && String(task.result_hash) !== String(payload.content_hash || '')) {
+    throw new Error('daily_review_checkpoint_result_hash_conflict')
+  }
+  return { task, content }
+}
+
+async function persistDailyReviewCheckpoint(tracker, {
+  role, planHash, chunkIndex = null, sourceHash = null, content,
+}) {
+  tracker.assertOwned()
+  const contentHash = sha256(JSON.stringify(content))
+  await appendModelTaskEvent(tracker.taskId, 'daily_review_checkpoint', {
+    role, plan_hash:planHash, chunk_index:chunkIndex, source_hash:sourceHash,
+    content_hash:contentHash, content,
+  })
+  return contentHash
+}
+
+function normalizeDailyReviewMergeContent(input, outcomeIds, chanContext, conflictContext = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_daily_review_merge_content')
+  if (input.output_contract_version !== DAILY_REVIEW_V3_CONTRACT) throw new Error('invalid_daily_v3_contract_version')
+  const known = new Set(outcomeIds.map(Number))
+  for (const key of ['repeated_issues', 'strengths', 'risk_observations', 'next_day_actions', 'experience_rules', 'strategy_conflicts']) {
+    if (!Array.isArray(input[key])) throw new Error(`invalid_daily_review_merge_${key}`)
+  }
+  const periodSummary = boundedReviewText(input.period_summary, 'daily_review_merge_summary')
+  const normalizedChanContext = normalizeReviewChanContext(chanContext)
+  const chanAllowed = normalizedChanContext.mode === 'enabled_complete'
+  const normalizedRules = normalizeExperienceRules(input.experience_rules, {
+    allowedSourceRefs:new Set([...known].map(id => `outcome:${id}`)), chanMemoryAllowed:chanAllowed, knownOutcomeIds:known,
+  })
+  const strategyConflicts = normalizeStrategyConflicts(input, {
+    allowedSourceRefs:new Set([...known].map(id => `outcome:${id}`)), requireSourceRefs:true,
+    strategyText:conflictContext.strategyText, memoryText:conflictContext.memoryText,
+    proposedExperiences:normalizedRules.map(rule => [rule.condition, rule.action, rule.prohibited_action].join('；')),
+    requireExactProposedExcerpt:true,
+  })
+  return {
+    output_contract_version:DAILY_REVIEW_V3_CONTRACT,
+    period_summary:periodSummary,
+    repeated_issues:normalizeV3ObservationArray(input.repeated_issues, 'repeated_issues', known, { requireTwoSources:true }),
+    strengths:normalizeV3ObservationArray(input.strengths, 'strengths', known),
+    risk_observations:normalizeV3TextArray(input.risk_observations, 'merge_risk_observations'),
+    next_day_actions:normalizeV3TextArray(input.next_day_actions, 'merge_next_day_actions'),
+    experience_rules:normalizedRules, strategy_conflicts:strategyConflicts,
+    confidence:normalizeConfidence(input.confidence, 'daily_review_merge_confidence'),
+  }
+}
+
 async function generateDailyReview(job, requestModel) {
   const evidence = parse(job.evidence_json, null)
   if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('daily_review_evidence_invalid')
@@ -2464,6 +2783,7 @@ async function generateDailyReview(job, requestModel) {
   const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const strategyMemoryForPrompt = sanitizeStrategyMemoryPrompt(strategyMemorySnapshot.library)
   const modelEvidence = buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strategyMemoryForPrompt)
+  const chunkPlan = buildDailyReviewChunkPlan(evidence)
   const endpoint = modelEndpoint(resolved.model)
   const outcomeIds = evidence.sources.map(item => Number(item.outcome_id))
   const chanContext = frozenDailyChanContext(evidence)
@@ -2471,15 +2791,19 @@ async function generateDailyReview(job, requestModel) {
   const memoryCategoryEnum = chanAllowed
     ? 'general|market_regime|entry_setup|chan_structure|risk_execution'
     : 'general|market_regime|entry_setup|risk_execution'
+  const firstChunkOutcomeIds = chunkPlan.chunks[0]?.outcome_ids || outcomeIds
   const shape = { output_contract_version:DAILY_REVIEW_V3_CONTRACT, period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
-    trade_assessments: outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence',
+    trade_assessments: firstChunkOutcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence',
       original_signal_logic:'string', technical_basis_assessment:'string', market_alignment:'aligned|partly_aligned|conflict|insufficient_evidence',
       strategy_alignment:'aligned|partly_aligned|conflict|insufficient_evidence', risk_execution_assessment:'string',
+      risk_execution_status:'compliant|partly_compliant|violation|insufficient_evidence', missing_evidence:['string'],
       outcome_attribution:{ result:'profit|loss|breakeven', primary_causes:['string'], explanation:'string',
         avoidability:'avoidable|partly_avoidable|normal_strategy_loss|insufficient_evidence' },
       next_time_rule:{ condition:'string', action:'string', risk_control:'string', invalidation:'string', prohibited_action:'string' },
       issue_codes:['string'], evidence_refs:['outcome:<id> or another server-provided reference'], confidence:0.5 })),
-    repeated_issues: ['string'], strengths: ['string'], risk_observations: ['string'], next_day_actions:['string'],
+    repeated_issues:[{ text:'string', source_refs:['outcome:<id>'], occurrence_count:2 }],
+    strengths:[{ text:'string', source_refs:['outcome:<id>'], occurrence_count:1 }],
+    risk_observations: ['string'], next_day_actions:['string'],
     experience_rules:[{ category:memoryCategoryEnum, condition:'string', action:'string', risk_control:'string', invalidation:'string',
       prohibited_action:'string', source_refs:['outcome:<id>'], confidence:0.5 }],
     strategy_conflicts:[{ conflict_target:'existing_memory|proposed_experience', category:memoryCategoryEnum,
@@ -2488,14 +2812,14 @@ async function generateDailyReview(job, requestModel) {
       suggested_change:'string', source_refs:['string'] }],
     confidence: 0.5 }
   if (chanAllowed) {
-    shape.chan_diagnoses = outcomeIds.map(outcomeId => ({ outcome_id: outcomeId, status: 'normal|suspected_issue|confirmed_issue|insufficient_evidence', issue_source: 'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown', impact_on_decision: 'none|minor|material|unknown', explanation: 'string', confidence: 0.5 }))
+    shape.chan_diagnoses = firstChunkOutcomeIds.map(outcomeId => ({ outcome_id: outcomeId, status: 'normal|suspected_issue|confirmed_issue|insufficient_evidence', issue_source: 'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown', impact_on_decision: 'none|minor|material|unknown', explanation: 'string', confidence: 0.5 }))
     shape.period_chan_assessment = { status:'normal|suspected_issue|confirmed_issue|insufficient_evidence',
-      issue_source:'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown',
-      explanation:'string', affected_outcome_ids:outcomeIds, confidence:0.5 }
+    issue_source:'data|calculation|confirmation_lag|ai_interpretation|strategy_rule|none|unknown',
+      explanation:'string', affected_outcome_ids:firstChunkOutcomeIds, confidence:0.5 }
   }
   const tradeCoverageContract = chanAllowed
-    ? `trade_assessments 和 chan_diagnoses 必须各包含 ${outcomeIds.length} 项，并且 outcome_id 只能且必须完整覆盖：${outcomeIds.join(', ')}。`
-    : `trade_assessments 必须包含 ${outcomeIds.length} 项，并且 outcome_id 只能且必须完整覆盖：${outcomeIds.join(', ')}；Chan 未获准时 required_output 不包含 chan_diagnoses。`
+    ? 'trade_assessments 和 chan_diagnoses 必须各包含 required_output 中列出的分块交易，并且 outcome_id 只能且必须完整覆盖 expected_outcome_ids。'
+    : 'trade_assessments 必须包含 required_output 中列出的分块交易，并且 outcome_id 只能且必须完整覆盖 expected_outcome_ids；Chan 未获准时 required_output 不包含 chan_diagnoses。'
   const memoryCategoryContract = chanAllowed
     ? 'experience_rules 的 category 可使用 required_output 中列出的全部类别。'
     : 'experience_rules 的 category 不得使用 chan_structure；Chan 未获准时不得生成 Chan 记忆。'
@@ -2503,6 +2827,7 @@ async function generateDailyReview(job, requestModel) {
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
     '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。当前输出版本为 daily-period-review-v3，不能退回旧版 daily_lessons/memory_updates 合同。',
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
+    'risk_execution_status 必须明确标记合规、部分合规、违规或证据不足；normal_strategy_loss 仅允许实际亏损、decision_quality=good、market_alignment=aligned、strategy_alignment=aligned 且 risk_execution_status=compliant。出现任何 insufficient_evidence 必须填写 missing_evidence，确定性 aligned 结论不得同时填写 missing_evidence。repeated_issues 和 strengths 必须使用 text/source_refs/occurrence_count 结构，repeated_issues 至少引用两个不同 outcome。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     tradeCoverageContract,
     `不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。experience_rules 和 strategy_conflicts 没有可靠结论时必须返回空数组；每个对象的文本和引用字段必须符合 required_output。source_refs/evidence_refs 只能引用服务器提供的 outcome:<id> 或证据引用，不得编造其他来源。strategy_excerpt 必须逐字来自 current_optimization_context.strategy；existing_memory 的 memory_excerpt 必须逐字来自 current_optimization_context.strategy_memory_library.content_text；proposed_experience 的 memory_excerpt 必须严格拼接同一条 experience_rule 的“condition；action；prohibited_action”，使用全角分号且不得增删文字。每条 experience_rule 必须是条件—动作—风控—失效—禁止行为的明确规则，不能写泛泛建议。${memoryCategoryContract}`,
@@ -2512,60 +2837,218 @@ async function generateDailyReview(job, requestModel) {
   const chanPrompt = chanAllowed
     ? '冻结证据明确启用了缠论且 period_market 的 Chan 证据完整；请根据能力字段判断可用结构。'
     : '冻结证据未同时满足缠论启用和完整条件；不要输出、推断或评价任何缠论结构，也不要生成 chan_structure 记忆。'
-  const messages = [
-    { role: 'system', content: `你是严格的交易日复盘分析器。system_statistics 是后端计算的只读事实，必须直接采用且不得自行重算。模型输入已明确分区：pre_trade_frozen 只能评价原始信号当时的判断，holding_path 只能解释持仓路径和成交结果，period_market 只能补充交易日环境和事后解释，current_optimization_context 只用于提出当前策略优化建议，不能改写历史判断。${chanPrompt} 必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` },
-    { role: 'user', content: JSON.stringify({ required_output: shape, outcome_ids:outcomeIds,
+  const systemMessage = { role: 'system', content: `你是严格的交易日复盘分析器。system_statistics 是后端计算的只读事实，必须直接采用且不得自行重算。模型输入已明确分区：pre_trade_frozen 只能评价原始信号当时的判断，holding_path 只能解释持仓路径和成交结果，period_market 只能补充交易日环境和事后解释，current_optimization_context 只用于提出当前策略优化建议，不能改写历史判断。${chanPrompt} 必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` }
+  const chunkContents = []
+  for (const chunk of chunkPlan.chunks) {
+    const chunkIds = chunk.outcome_ids.map(Number)
+    const chunkEvidence = dailyReviewModelEvidenceForChunk(modelEvidence, chunk)
+    const chunkShape = {
+      ...shape,
+      trade_assessments:chunkIds.map(outcomeId => ({ ...shape.trade_assessments[0], outcome_id:outcomeId })),
+    }
+    if (chanAllowed) {
+      chunkShape.chan_diagnoses = chunkIds.map(outcomeId => ({ ...shape.chan_diagnoses[0], outcome_id:outcomeId }))
+      chunkShape.period_chan_assessment = { ...shape.period_chan_assessment, affected_outcome_ids:chunkIds }
+    }
+    const taskIdentity = dailyReviewTaskIdentity(job, 'chunk', chunkPlan.plan_hash, chunk.chunk_index)
+    const checkpoint = await loadDailyReviewCheckpoint(taskIdentity, chunkPlan.plan_hash, chunk.chunk_index)
+    if (checkpoint) {
+      const restored = validateDailyReviewContent(checkpoint.content, chunkIds, chanContext, {
+        strategyText:strategyMemorySnapshot.strategy_text,
+        memoryText:strategyMemorySnapshot.library.content_text,
+        outcomeFacts:chunkEvidence.outcomeFacts,
+        evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
+      })
+      chunkContents.push(restored)
+      job._modelTracker = null
+      continue
+    }
+    const chunkMessages = [systemMessage, { role:'user', content:JSON.stringify({
+      required_output:chunkShape, outcome_ids:chunkIds,
+      chunk:{ chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count,
+        expected_outcome_ids:chunk.expected_outcome_ids, source_hash:chunk.source_hash, plan_hash:chunkPlan.plan_hash },
       review_context:stripHistoricalConditionFields({
-        system_statistics:modelEvidence.system_statistics,
-        pre_trade_frozen:modelEvidence.pre_trade_frozen,
-        holding_path:modelEvidence.holding_path,
-        period_market:modelEvidence.period_market,
-        current_optimization_context:modelEvidence.current_optimization_context,
+        system_statistics:chunkEvidence.system_statistics,
+        pre_trade_frozen:chunkEvidence.pre_trade_frozen,
+        holding_path:chunkEvidence.holding_path,
+        period_market:chunkEvidence.period_market,
+        current_optimization_context:chunkEvidence.current_optimization_context,
       }),
-      evidence_refs_by_outcome:Object.fromEntries([...modelEvidence.evidenceRefsByOutcome.entries()].map(([id, refs]) => [String(id), [...refs]])),
-    }) },
-  ]
-  const modelCall = await preparePeriodReviewModelCall('daily_review', resolved, messages,
-    Math.max(3000, Math.ceil(JSON.stringify(shape).length / 2.5)), {
-      nowUtcMs:Date.now(), businessDeadlineUtcMs:job._deadlineAtMs,
+      evidence_refs_by_outcome:Object.fromEntries([...chunkEvidence.evidenceRefsByOutcome.entries()]
+        .map(([id, refs]) => [String(id), [...refs]])),
+    }) }]
+    // Every provider request gets an independent budget/deadline and durable
+    // model-task envelope. The event-table checkpoint is written only after
+    // the chunk has passed the full v3 validator; a retry can therefore reuse
+    // a completed chunk without replaying a billable request.
+    const modelCall = await preparePeriodReviewModelCall('daily_review', resolved, chunkMessages,
+      Math.max(3000, Math.ceil(JSON.stringify(chunkShape).length / 2.5)), { nowUtcMs:Date.now() })
+    const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review_chunk', {
+      model_task_kind:taskIdentity.taskKind,
+      task_key_suffix:taskIdentity.taskKeySuffix,
+      daily_review_task_role:'chunk', daily_review_chunk_index:chunk.chunk_index,
+      daily_review_chunk_plan_hash:chunkPlan.plan_hash,
+      daily_review_chunk_count:chunkPlan.chunk_count,
+      daily_review_expected_outcome_ids:chunkPlan.expected_outcome_ids,
+    }, { taskDeadlineAtUtcMs:modelCall.taskDeadlineUtcMs })
+    job._modelTracker = tracker
+    await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'daily_review', tracker.taskId)
+    await tracker.persistBudget(modelCall.budget)
+    const requestSignal = job._abortSignal && tracker.signal
+      ? AbortSignal.any([job._abortSignal, tracker.signal])
+      : tracker.signal || job._abortSignal || null
+    const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
+      model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
+      maxTokens:modelCall.budget.selectedMaxOutputTokens, thinkingEnabled: resolved.model.thinking_enabled,
+      reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
+      timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
+      followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs,
+      signal:requestSignal,
+      messages:chunkMessages, modelTaskBudget:modelCall.budget,
+      usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id,
+        daily_review_chunk_index:chunk.chunk_index, daily_review_chunk_count:chunkPlan.chunk_count },
+      onProviderRequest:periodReviewProviderRequestCallback(job, tracker),
+      onProviderUsage:event => tracker.onProviderUsage(event),
+      onProviderActivity:event => tracker.onProviderActivity(event),
+      onProviderQuiet:event => tracker.onProviderQuiet(event),
+      onProgress: stage => setPeriodReviewJobStage(job, `daily_chunk_${chunk.chunk_index}_${stage}`),
+      validateObject: value => validateDailyReviewContent(value, chunkIds, chanContext, {
+        strategyText:strategyMemorySnapshot.strategy_text,
+        memoryText:strategyMemorySnapshot.library.content_text,
+        outcomeFacts:chunkEvidence.outcomeFacts,
+        evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
+      }),
     })
-  job._deadlineAtMs = modelCall.taskDeadlineUtcMs
-  job._attemptDeadlineAtMs = modelCall.attemptSafetyDeadlineUtcMs
-  job._modelBudget = modelCall.budget
-  const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review')
-  await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'daily_review', tracker.taskId)
-  await tracker.persistBudget(modelCall.budget)
-  const requestSignal = job._abortSignal && tracker.signal
-    ? AbortSignal.any([job._abortSignal, tracker.signal])
-    : tracker.signal || job._abortSignal || null
-  const output = await requestModel({ url: endpoint.url, apiKey: resolved.model.api_key_encrypted, provider: resolved.model.provider,
-    model: resolved.model.model_name, temperature: Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
-    maxTokens:modelCall.budget.selectedMaxOutputTokens, thinkingEnabled: resolved.model.thinking_enabled,
-    reasoningEffort: resolved.model.reasoning_effort, protocol: endpoint.protocol,
-    timeout:modelCall.requestTimeoutMs, deadlineAtMs:modelCall.attemptSafetyDeadlineUtcMs,
-    followupValidUntilMs:modelCall.attemptSafetyDeadlineUtcMs,
-    signal:requestSignal,
-    messages, modelTaskBudget:modelCall.budget,
-    usageContext: { userId: job.user_id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'review', strategyId: job.strategy_id },
-    onProviderRequest:periodReviewProviderRequestCallback(job, tracker),
-    onProviderUsage:event => tracker.onProviderUsage(event),
-    onProviderActivity:event => tracker.onProviderActivity(event),
-    onProviderQuiet:event => tracker.onProviderQuiet(event),
-    onProgress: stage => setPeriodReviewJobStage(job, stage),
-     validateObject: value => validateDailyReviewContent(value, outcomeIds, chanContext, {
-       strategyText:strategyMemorySnapshot.strategy_text,
-       memoryText:strategyMemorySnapshot.library.content_text,
-       outcomeFacts:modelEvidence.outcomeFacts,
-       evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
-     }),
-  })
-  const content = validateDailyReviewContent(output, outcomeIds, chanContext, {
+    const normalized = validateDailyReviewContent(output, chunkIds, chanContext, {
+      strategyText:strategyMemorySnapshot.strategy_text,
+      memoryText:strategyMemorySnapshot.library.content_text,
+      outcomeFacts:chunkEvidence.outcomeFacts,
+      evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
+    })
+    const resultHash = await persistDailyReviewCheckpoint(tracker, { role:'chunk', planHash:chunkPlan.plan_hash,
+      chunkIndex:chunk.chunk_index, sourceHash:chunk.source_hash, content:normalized })
+    await tracker.resultReady({ resultHash, resultRef:`period_review_chunk:${job.period_case_id}:${chunk.chunk_index}` })
+    await tracker.applying()
+    await tracker.succeeded({ resultRef:`period_review_chunk:${job.period_case_id}:${chunk.chunk_index}`, resultHash })
+    await tracker.stop()
+    chunkContents.push(normalized)
+    job._modelTracker = null
+  }
+  // A single bounded chunk remains one model call. Only a genuinely split day
+  // pays for the separate cross-chunk synthesis task.
+  const deterministicMerge = mergeDailyReviewV3ChunkContents(chunkContents, outcomeIds)
+  if (chunkPlan.chunk_count === 1) {
+    return { content:validateDailyReviewContent(chunkContents[0], outcomeIds, chanContext, {
+      strategyText:strategyMemorySnapshot.strategy_text,
+      memoryText:strategyMemorySnapshot.library.content_text,
+      outcomeFacts:modelEvidence.outcomeFacts,
+      evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
+    }), resolved }
+  }
+  const compactChunkResults = chunkContents.map((content, index) => ({
+    chunk_index:index, outcome_ids:content.trade_assessments.map(item => Number(item.outcome_id)),
+    period_summary:content.period_summary,
+    trade_assessments:content.trade_assessments.map(item => ({ outcome_id:item.outcome_id,
+      decision_quality:item.decision_quality, market_alignment:item.market_alignment,
+      strategy_alignment:item.strategy_alignment, risk_execution_status:item.risk_execution_status,
+      outcome_attribution:item.outcome_attribution, next_time_rule:item.next_time_rule,
+      issue_codes:item.issue_codes, evidence_refs:item.evidence_refs, confidence:item.confidence })),
+    repeated_issues:content.repeated_issues, strengths:content.strengths,
+    risk_observations:content.risk_observations, next_day_actions:content.next_day_actions,
+    experience_rules:content.experience_rules, strategy_conflicts:content.strategy_conflicts,
+    confidence:content.confidence,
+  }))
+  const mergeShape = { output_contract_version:DAILY_REVIEW_V3_CONTRACT, period_summary:'string',
+    repeated_issues:[{ text:'string', source_refs:['outcome:<id>'], occurrence_count:2 }],
+    strengths:[{ text:'string', source_refs:['outcome:<id>'], occurrence_count:1 }],
+    risk_observations:['string'], next_day_actions:['string'],
+    experience_rules:[{ category:memoryCategoryEnum, condition:'string', action:'string', risk_control:'string',
+      invalidation:'string', prohibited_action:'string', source_refs:['outcome:<id>'], confidence:0.5 }],
+    strategy_conflicts:[{ conflict_target:'existing_memory|proposed_experience', category:memoryCategoryEnum,
+      summary:'string', strategy_excerpt:'必须逐字来自 current_optimization_context.strategy',
+      memory_excerpt:'existing_memory 时逐字来自 current_optimization_context.strategy_memory_library.content_text；proposed_experience 时严格使用 同一规则 condition；action；prohibited_action',
+      suggested_change:'string', source_refs:['outcome:<id>'] }], confidence:0.5 }
+  const mergeContract = [
+    '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
+    '这是日复盘最终合并任务，只允许输出 required_output 中的周期级字段；不要输出或改写任何 trade_assessments，逐笔结论由服务器保留。',
+    '必须综合全部 validated_chunk_results，跨分块识别 repeated_issues、strengths、risk_observations、next_day_actions、experience_rules 和 strategy_conflicts；source_refs 必须只引用实际存在的 outcome:<id>，repeated_issues 至少引用两个不同 outcome。',
+    'experience_rules 必须是条件—动作—风控—失效—禁止行为的明确规则；不得把盈利等同于决策正确，也不得把亏损等同于决策错误。',
+    `所有 strategy_excerpt、memory_excerpt 和${chanAllowed ? '' : '非缠论'}经验引用约束与逐笔任务相同；${memoryCategoryContract}`,
+  ].join('\n')
+  const mergeTaskIdentity = dailyReviewTaskIdentity(job, 'merge', chunkPlan.plan_hash)
+  const mergeCheckpoint = await loadDailyReviewCheckpoint(mergeTaskIdentity, chunkPlan.plan_hash)
+  let mergedOutput
+  if (mergeCheckpoint) {
+    mergedOutput = normalizeDailyReviewMergeContent(mergeCheckpoint.content, outcomeIds, chanContext, {
+      strategyText:strategyMemorySnapshot.strategy_text, memoryText:strategyMemorySnapshot.library.content_text,
+    })
+    job._modelTracker = null
+  } else {
+    const mergeMessages = [
+      { role:'system', content:`你是严格的交易日复盘合并分析器。你只能基于服务器已经校验的分块结论做跨分块归纳，不能修改任何逐笔结论、事实或引用。${mergeContract}` },
+      { role:'user', content:JSON.stringify({ required_output:mergeShape, output_contract_version:DAILY_REVIEW_V3_CONTRACT,
+        expected_outcome_ids:outcomeIds, plan_hash:chunkPlan.plan_hash,
+        current_optimization_context:modelEvidence.current_optimization_context,
+        validated_chunk_results:compactChunkResults }) },
+    ]
+    const mergeCall = await preparePeriodReviewModelCall('daily_review', resolved, mergeMessages,
+      Math.max(3000, Math.ceil(JSON.stringify(mergeShape).length / 2.5)), { nowUtcMs:Date.now() })
+    const mergeTracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review_merge', {
+      model_task_kind:mergeTaskIdentity.taskKind, task_key_suffix:mergeTaskIdentity.taskKeySuffix,
+      daily_review_task_role:'merge', daily_review_chunk_plan_hash:chunkPlan.plan_hash,
+      daily_review_chunk_count:chunkPlan.chunk_count,
+      daily_review_expected_outcome_ids:chunkPlan.expected_outcome_ids,
+    }, { taskDeadlineAtUtcMs:mergeCall.taskDeadlineUtcMs })
+    job._modelTracker = mergeTracker
+    await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'daily_review', mergeTracker.taskId)
+    await mergeTracker.persistBudget(mergeCall.budget)
+    const mergeSignal = job._abortSignal && mergeTracker.signal
+      ? AbortSignal.any([job._abortSignal, mergeTracker.signal])
+      : mergeTracker.signal || job._abortSignal || null
+    const mergeOutputRaw = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted,
+      provider:resolved.model.provider, model:resolved.model.model_name,
+      temperature:Math.min(Number(resolved.model.temperature ?? 0.2), 0.3),
+      maxTokens:mergeCall.budget.selectedMaxOutputTokens, thinkingEnabled:resolved.model.thinking_enabled,
+      reasoningEffort:resolved.model.reasoning_effort, protocol:endpoint.protocol,
+      timeout:mergeCall.requestTimeoutMs, deadlineAtMs:mergeCall.attemptSafetyDeadlineUtcMs,
+      followupValidUntilMs:mergeCall.attemptSafetyDeadlineUtcMs, signal:mergeSignal,
+      messages:mergeMessages, modelTaskBudget:mergeCall.budget,
+      usageContext:{ userId:job.user_id, profileId:resolved.model_profile_id, credentialSource:resolved.credential_source,
+        usage:'review', strategyId:job.strategy_id, daily_review_merge:true, daily_review_chunk_count:chunkPlan.chunk_count },
+      onProviderRequest:periodReviewProviderRequestCallback(job, mergeTracker),
+      onProviderUsage:event => mergeTracker.onProviderUsage(event),
+      onProviderActivity:event => mergeTracker.onProviderActivity(event),
+      onProviderQuiet:event => mergeTracker.onProviderQuiet(event),
+      onProgress:stage => setPeriodReviewJobStage(job, `daily_merge_${stage}`),
+      validateObject:value => normalizeDailyReviewMergeContent(value, outcomeIds, chanContext, {
+        strategyText:strategyMemorySnapshot.strategy_text, memoryText:strategyMemorySnapshot.library.content_text,
+      }),
+    })
+    mergedOutput = normalizeDailyReviewMergeContent(mergeOutputRaw, outcomeIds, chanContext, {
+      strategyText:strategyMemorySnapshot.strategy_text, memoryText:strategyMemorySnapshot.library.content_text,
+    })
+    const resultHash = await persistDailyReviewCheckpoint(mergeTracker, { role:'merge', planHash:chunkPlan.plan_hash,
+      content:mergedOutput })
+    await mergeTracker.resultReady({ resultHash, resultRef:`period_review_merge:${job.period_case_id}` })
+  }
+  const mergedContent = {
+    ...deterministicMerge, period_summary:mergedOutput.period_summary,
+    repeated_issues:mergedOutput.repeated_issues, strengths:mergedOutput.strengths,
+    risk_observations:mergedOutput.risk_observations, next_day_actions:mergedOutput.next_day_actions,
+    experience_rules:mergedOutput.experience_rules,
+    // Chunk conflicts have already passed excerpt/source validation. The merge
+    // model may add a cross-chunk conflict but may not erase validated evidence.
+    strategy_conflicts:[...new Map([
+      ...(deterministicMerge.strategy_conflicts || []), ...(mergedOutput.strategy_conflicts || []),
+    ].map(item => [JSON.stringify(item), item])).values()],
+    confidence:Math.min(Number(deterministicMerge.confidence), Number(mergedOutput.confidence)),
+  }
+  const content = validateDailyReviewContent(mergedContent, outcomeIds, chanContext, {
     strategyText:strategyMemorySnapshot.strategy_text,
     memoryText:strategyMemorySnapshot.library.content_text,
     outcomeFacts:modelEvidence.outcomeFacts,
     evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
   })
-  await tracker.resultReady({ resultHash:sha256(JSON.stringify(content)) })
   return { content, resolved }
 }
 
@@ -3688,6 +4171,14 @@ export async function retryPeriodReviewCase(periodCaseId, actor) {
     const now = beijingNow()
     let jobId = Number(jobs[0]?.id || 0)
     if (jobs[0]) {
+      if (jobType === 'daily_review') {
+        const [dailyTasks] = await run(`SELECT task_id, status FROM ai_model_tasks
+          WHERE domain_type = 'period_review_job' AND domain_id = ?
+            AND task_kind IN ('daily_review_chunk','daily_review_merge') FOR UPDATE`, [String(jobs[0].id)])
+        if ((dailyTasks || []).some(task => !MODEL_TASK_TERMINAL_STATES.has(String(task.status || '')))) {
+          throw new Error('period_review_daily_checkpoint_task_unresolved')
+        }
+      }
       if (jobType === 'monthly_review') {
         const [checkpoints] = await run(`SELECT * FROM period_review_monthly_checkpoints
           WHERE period_review_job_id = ? ORDER BY evidence_hash, chunk_index FOR UPDATE`, [jobs[0].id])
@@ -3777,7 +4268,7 @@ export async function runPeriodReviewCycle() {
   const recoveredModelTasks = await recoverAbandonedPeriodReviewModelTasks()
   const recoveredExpiredJobs = await recoverExpiredPeriodReviewJobs()
   const resumedDerivationJobs = await resumePeriodReviewDerivationJobs()
-  const dailyPreparation = await prepareEligibleDailyReviews()
+  const dailyPreparation = await prepareEligibleDailyReviews(dailyReviewRecoveryRuntimeOptions())
   const dailyWorker = await runDailyReviewWorkerOnce()
   const monthlyPreparation = await prepareEligibleMonthlyReviews()
   const monthlyWorker = await runMonthlyReviewWorkerOnce()

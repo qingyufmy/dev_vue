@@ -6699,6 +6699,21 @@ const migrations = [
         if (!existingColumns.has(name)) await queryRun(`ALTER TABLE manual_trade_review_aggregate_cases ${definition}`)
       }
     }
+  },
+  {
+    id: '196_model_task_event_long_payload',
+    async up() {
+      // Daily review chunk checkpoints store already-validated model output in
+      // the durable task event ledger. TEXT can truncate a legitimate multi-
+      // trade checkpoint, so widen only this append-only payload column.
+      const rows = await queryAll(`SELECT DATA_TYPE FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_model_task_events'
+          AND COLUMN_NAME = 'payload_json'`)
+      if (!rows.length) throw new Error('ai_model_task_events_payload_missing')
+      if (String(rows[0].DATA_TYPE || '').toLowerCase() !== 'longtext') {
+        await queryRun('ALTER TABLE ai_model_task_events MODIFY COLUMN payload_json LONGTEXT DEFAULT NULL')
+      }
+    }
   }
 ]
 
