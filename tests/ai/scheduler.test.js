@@ -166,6 +166,27 @@ describe('execution validation delivery gate', () => {
   })
 })
 
+describe('subscriber execution weekly gate', () => {
+  it('uses the risk-snapshot clock and never falls back to the legacy bridge clock', () => {
+    const evaluationNow = Date.parse('2026-08-21T15:30:00.000Z')
+    const context = {
+      user_id:28, trading_account_id:3, terminal_instance_id:null,
+      broker_server:'ULTIMAMARKETS-DEMO', login:'18192234189',
+      timezone_offset_minutes:480, clock_status:'verified',
+      clock_source:'risk_snapshot_terminal', captured_at_utc_msc:evaluationNow,
+      calibration_age_ms:1000,
+    }
+
+    // The test bridge mock intentionally does not provide
+    // getPlatformMarketClockState. Calling the old bridgeWeeklyWindow lookup
+    // would therefore fail; the context-only gate must still block Friday.
+    expect(__schedulerTest.autoDeliveryWeeklyWindow(context, new Date(evaluationNow)))
+      .toMatchObject({ blocked:true, reason:'weekly_flatten_window' })
+    expect(__schedulerTest.autoDeliveryWeeklyWindow(null, new Date(evaluationNow)))
+      .toMatchObject({ blocked:true, reason:'execution_clock_context_missing' })
+  })
+})
+
 describe('automatic-analysis control state', () => {
   beforeEach(() => {
     vi.clearAllMocks()

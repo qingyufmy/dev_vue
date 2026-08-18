@@ -24,4 +24,12 @@ describe('frontend static cache version', () => {
       expect(new Set(versions), file).toEqual(new Set([CACHE_VERSION]))
     }
   })
+
+  it('keeps the AI period-review functional build separate from the shared cache key', async () => {
+    const source = await readFile('public/ai/index.html', 'utf8')
+    const appReference = source.match(/\/ai\/app\.js\?[^"']+/)?.[0] || ''
+    expect(appReference).toContain(`v=${CACHE_VERSION}`)
+    expect(appReference).toMatch(/build=[^"']*period-review-contract-refresh1/)
+    expect(appReference).not.toContain('styles.css')
+  })
 })

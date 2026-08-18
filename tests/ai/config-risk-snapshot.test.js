@@ -35,6 +35,13 @@ vi.mock('../../server/routes/ai/rollout-governance.js', () => ({
 
 vi.mock('../../server/routes/ai/terminal-clock.js', () => ({
   applyDefaultObserverClockBootstrap:vi.fn(), trustedTerminalClock:vi.fn(),
+  buildExecutionClockContext:vi.fn(({ userId, tradingAccountId, brokerServer, login, clock = {}, capturedAtUtcMsc }) => ({
+    user_id:Number(userId), trading_account_id:Number(tradingAccountId), terminal_instance_id:null,
+    broker_server:String(brokerServer || ''), login:String(login || ''),
+    timezone_offset_minutes:clock.timezone_offset_minutes ?? null,
+    clock_status:String(clock.clock_status || ''), clock_source:'risk_snapshot_terminal',
+    captured_at_utc_msc:Number(capturedAtUtcMsc) || null, calibration_age_ms:null,
+  })),
 }))
 vi.mock('../../server/routes/ai/observer-channels.js', () => ({ getDefaultObserverSourceClock:vi.fn() }))
 vi.mock('../../server/routes/ai/audit-clock.js', () => ({

@@ -29,7 +29,7 @@ import {
   isPlatformMarketMaintenancePaused,
   isPrivateInferenceMaintenancePaused,
 } from '../../bridge-v3/update-maintenance-registry.js'
-import { trustedTerminalClock } from './terminal-clock.js'
+import { trustedTerminalClock, validateExecutionClockContext } from './terminal-clock.js'
 import * as modelTaskTrackerModule from './model-task-tracker.js'
 import { modelTaskDeadlines } from './model-task-budget.js'
 import { buildSafeExecutionOutcome, buildSafeExecutionEvent } from '../../audit-localization.js'
@@ -37,6 +37,7 @@ import { readAutoInferenceDeploymentDrain } from './auto-inference-deployment-dr
 import { executionValidationRejection, readExecutionValidation } from './signal-execution-validation.js'
 import { accountSymbolInventoryLockKey, acquireAccountSymbolInventoryLock,
   releaseAccountSymbolInventoryLock } from '../../services/account-symbol-inventory-lock.js'
+import { DuplicateLivePendingError, findDuplicateLivePending } from './live-pending-dedup.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -416,6 +417,24 @@ async function assertSignalDeliveryRecoveryTx({ run, recoveryContext, userId, si
 function bridgeWeeklyWindow(userId, tradingAccountId = null, now = new Date()) {
   const clock = getPlatformMarketClockState(userId, tradingAccountId)
   return isWeeklyFlattenWindow(now, clock.timezone_offset_minutes)
+}
+
+// Automatic subscriber orders must use the clock captured by their own risk
+// snapshot. This helper is deliberately independent from bridgeWeeklyWindow,
+// whose legacy lookup may resolve an observer/shared clock.
+export function autoDeliveryWeeklyWindow(executionClockContext, now = new Date()) {
+  if (!executionClockContext) return { blocked:true, reason:'execution_clock_context_missing' }
+  const evaluationNow = now instanceof Date ? now.getTime() : Number(now)
+  const clockCheck = validateExecutionClockContext(executionClockContext, {
+    userId:executionClockContext.user_id,
+    tradingAccountId:executionClockContext.trading_account_id,
+    brokerServer:executionClockContext.broker_server,
+    login:executionClockContext.login,
+    requireTerminal:false,
+  }, evaluationNow)
+  if (!clockCheck.valid) return { blocked:true, reason:clockCheck.reason }
+  const blocked = isWeeklyFlattenWindow(now, clockCheck.context.timezone_offset_minutes)
+  return { blocked, reason:blocked ? 'weekly_flatten_window' : null, context:clockCheck.context }
 }
 
 function isMarketWaitReason(reason) {
@@ -2972,13 +2991,6 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
         { status: 'skipped' }, 'info')
       return
     }
-    const subscriberWeeklyWindow = () => bridgeWeeklyWindow(
-      userId, subscriptionRuntime.trading_account_id)
-    if (subscriberWeeklyWindow()) {
-      await setTerminalStatus('skipped', 'weekly_flatten_window')
-      return
-    }
-
     // Strategy inference locks are independent, but all strategies for this
     // user share one terminal inventory. Serialize the final snapshot and
     // order send per account+symbol to prevent concurrent strategies from
@@ -3001,11 +3013,25 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
 
-    const [positionsResponse, pendingResponse, strategyDeliveries] = await Promise.all([
+    const [positionsResponse, pendingResponse] = await Promise.all([
       mt5Bridge(userId, 'positions', { symbol }, { noFallback:true }),
       mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true }),
-      queryAll(`SELECT d.id AS delivery_id, d.signal_id, d.user_id AS delivery_user_id,
-          d.order_intent_id, d.pending_ticket, d.trade_ticket, d.pending_state,
+    ])
+    let positions = Array.isArray(positionsResponse?.positions) ? positionsResponse.positions : null
+    let pendingOrders = pendingResponse?.orders ?? pendingResponse?.pending_list
+    if (!positions || !Array.isArray(pendingOrders)) {
+      await finishBeforeRisk('rejected', 'portfolio_state_unavailable')
+      return
+    }
+    // Resolve ownership against the terminal's complete live pending set, not
+    // an arbitrary slice of recent delivery history. This keeps old-but-live
+    // pending orders inside both management and duplicate-order safeguards.
+    const livePendingTickets = [...new Set(pendingOrders
+      .map(item => String(item?.ticket ?? item?.mt5_ticket ?? item?.order_ticket ?? '').trim())
+      .filter(Boolean))]
+    const strategyDeliveries = livePendingTickets.length ? await queryAll(`SELECT d.id AS delivery_id, d.signal_id, d.user_id AS delivery_user_id,
+          d.prompt_type_id, d.order_intent_id, d.pending_ticket, d.trade_ticket, d.pending_state,
+          d.execution_status,
           COALESCE(outcomes.management_group_id, origin_signals.management_group_id) AS management_group_id,
           origin_signals.management_group_id AS origin_management_group_id,
           origin_signals.thesis_id AS origin_thesis_id,
@@ -3016,22 +3042,24 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
           outcomes.user_id AS outcome_user_id,
           outcomes.trading_account_id AS outcome_trading_account_id,
           outcomes.pending_ticket AS outcome_pending_ticket,
+          outcomes.entry_order_ticket AS outcome_trade_ticket,
+          outcomes.strategy_id AS outcome_strategy_id,
           outcomes.status AS outcome_status,
           outcomes.management_group_id AS outcome_management_group_id,
           outcomes.thesis_id AS outcome_thesis_id
         FROM auto_signal_deliveries d
-        LEFT JOIN signal_outcomes outcomes ON outcomes.delivery_id = d.id
+        LEFT JOIN signal_outcomes outcomes
+          ON outcomes.delivery_id = d.id
+          OR (d.order_intent_id IS NOT NULL AND outcomes.order_intent_id = d.order_intent_id)
         LEFT JOIN order_intents oi ON oi.id = d.order_intent_id
         LEFT JOIN ai_signals origin_signals ON origin_signals.id = d.signal_id
-        WHERE d.user_id = ? AND d.prompt_type_id = ? AND (d.pending_ticket IS NOT NULL OR d.trade_ticket IS NOT NULL)
-        ORDER BY d.id DESC LIMIT 200`, [userId, promptTypeId]),
-    ])
-    let positions = Array.isArray(positionsResponse?.positions) ? positionsResponse.positions : null
-    let pendingOrders = pendingResponse?.orders ?? pendingResponse?.pending_list
-    if (!positions || !Array.isArray(pendingOrders)) {
-      await finishBeforeRisk('rejected', 'portfolio_state_unavailable')
-      return
-    }
+        WHERE d.user_id = ? AND d.prompt_type_id = ?
+          AND (d.pending_ticket IN (${livePendingTickets.map(() => '?').join(',')})
+            OR d.trade_ticket IN (${livePendingTickets.map(() => '?').join(',')})
+            OR outcomes.pending_ticket IN (${livePendingTickets.map(() => '?').join(',')})
+            OR outcomes.entry_order_ticket IN (${livePendingTickets.map(() => '?').join(',')}))
+        ORDER BY d.id DESC`, [userId, promptTypeId,
+          ...livePendingTickets, ...livePendingTickets, ...livePendingTickets, ...livePendingTickets]) : []
     const signalType = String(signal.signal_type || '').toLowerCase()
     const isTradeSignal = signalType.startsWith('buy') || signalType.startsWith('sell')
     const signalIsBuy = signalType.startsWith('buy')
@@ -3309,7 +3337,8 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       ? { ...signal, position_size_tier:'probe', position_size_factor:0.25 }
       : signal
     const order = signalOrderPayload(executionSignal, riskConfig, market, true)
-    if (isAiPendingOrderRequest(order, 'auto_delivery')) {
+    const isPendingOrder = isAiPendingOrderRequest(order, 'auto_delivery')
+    if (isPendingOrder) {
       try {
         await assertAiPendingOrderEnabled()
       } catch {
@@ -3387,12 +3416,9 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       return
     }
 
-    // Final lock check before sending MT5 order (Fix 2)
-    if (subscriberWeeklyWindow()) {
-      l('skipped: weekly flatten window began before order send')
-      await setTerminalStatus('skipped', 'weekly_flatten_window').catch(() => {})
-      return
-    }
+    // The final weekly lock is evaluated only after loadRiskContext has
+    // captured the subscriber's account-bound terminal clock. The older
+    // bridgeWeeklyWindow lookup here could use an observer/shared clock.
     if (lockGuard && !(await lockGuard.assertOwned('order_send'))) {
       l('skipped: lock lost before order send')
       await setTerminalStatus('skipped', 'lock_lost_before_send').catch(() => {})
@@ -3408,12 +3434,31 @@ async function executeDelivery(userId, signalId, signal, unifiedConfig, market, 
       await setTerminalStatus('skipped', 'model_task_business_gate_failed').catch(() => {})
       return
     }
-    const beforeBridgeSend = async () => {
-      if (subscriberWeeklyWindow()) throw new Error('weekly_flatten_window')
+    const beforeBridgeSend = async ({ executionClockContext = null, instrument = null } = {}) => {
+      const weeklyGate = autoDeliveryWeeklyWindow(executionClockContext, new Date())
+      if (weeklyGate.blocked) throw new Error(weeklyGate.reason)
       if (lockGuard && !(await lockGuard.assertOwned('bridge_send'))) throw new Error('lock_lost_before_send')
       if (modelTaskTracker && !(await assertAutoInferenceBusinessGate({
         tracker:modelTaskTracker, lockGuard:null, resultValidUntilUtcMsc, phase:'bridge_send',
       }))) throw new Error('model_task_business_gate_failed')
+      if (isPendingOrder) {
+        const latestPendingResponse = await mt5Bridge(userId, 'pending_list', { symbol }, { noFallback:true })
+        const latestPendingOrders = latestPendingResponse?.orders ?? latestPendingResponse?.pending_list
+        if (!latestPendingResponse || latestPendingResponse.status === 'error' || !Array.isArray(latestPendingOrders)) {
+          throw new Error('pending_list_unavailable_before_order')
+        }
+        const duplicate = findDuplicateLivePending({
+          pendingOrders:latestPendingOrders,
+          request:order,
+          strategyDeliveries,
+          userId,
+          tradingAccountId:executionClockContext?.trading_account_id,
+          strategyId:promptTypeId,
+          instrument,
+          dedupPriceAtr:riskConfig?.dedup_price_atr,
+        })
+        if (duplicate) throw new DuplicateLivePendingError(duplicate)
+      }
     }
     const beforeBridgeSendTx = modelTaskTracker
       ? ({ run }) => assertAutoInferenceOrderSendTx({
@@ -4255,6 +4300,8 @@ export const __schedulerTest = {
   schedulerLockWaitSeconds,
   deliveryInventoryLockKey,
   acquireDeliveryInventoryLock,
+  autoDeliveryWeeklyWindow,
+  findDuplicateLivePending,
   nextCompletionIntervalDeadlineMs,
   completionIntervalCooldownSeconds,
   failedCycleCooldownSeconds,

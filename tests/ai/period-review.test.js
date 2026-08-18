@@ -16,10 +16,14 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
-  periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus,
+  periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus, regeneratePeriodReviewCase,
+  __testFinishDailyReviewSuccess, __testFinishDailyReviewFailure,
   periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown,
   __testDeriveDailyReviewMemoryEntries, __testDeriveDailyReviewConflictExperiences,
-  DAILY_PERIOD_REVIEW_V3_CONTRACT, buildDailyReviewChunkPlan, dailyReviewRecoveryRuntimeOptions } from '../../server/routes/ai/period-review.js'
+  DAILY_PERIOD_REVIEW_V3_CONTRACT, PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION,
+  PERIOD_REVIEW_FRONTEND_BUILD, PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS,
+  periodReviewFrontendMetadata, periodReviewFrontendContractMismatch,
+  buildDailyReviewChunkPlan, dailyReviewRecoveryRuntimeOptions } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
   __testGetReviewStrategyMemorySnapshot } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
@@ -393,6 +397,114 @@ describe('period review model-task recovery and retry', () => {
     expect(result).toMatchObject({ scanned:1, succeeded:1, statusUnknown:0, stale:0 })
     expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => /status\s*=\s*'succeeded'/.test(sql))).toBe(true)
     expect(periodReviewDb.queryRun.mock.calls.some(([sql]) => sql.includes("period_review_jobs SET status = 'failed'"))).toBe(false)
+  })
+})
+
+describe('period review explicit regeneration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    periodReviewDb.queryRun.mockResolvedValue({ affectedRows:1 })
+  })
+
+  const baseCase = (overrides = {}) => ({ id:42, user_id:7, period_type:'daily', status:'draft',
+    evidence_status:'complete', evidence_hash:'evidence-v1', evidence_json:'{"sources":[{"outcome_id":7}]}',
+    current_version_id:5, approved_version_id:null, ...overrides })
+
+  function mockRegenerationTransaction({ reviewCase = baseCase(), jobs = [], checkpoints = [], tasks = [], insertId = 22 } = {}) {
+    const run = vi.fn(async (sql, params = []) => {
+      if (sql.includes('SELECT cases.*')) {
+        if (params.length > 1 && Number(params[1]) !== Number(reviewCase.user_id)) return [[]]
+        return [[reviewCase]]
+      }
+      if (sql.includes('SELECT * FROM period_review_versions')) return [[{ id:reviewCase.current_version_id, version_no:2 }]]
+      if (sql.includes('SELECT * FROM period_review_jobs')) return [jobs]
+      if (sql.includes('SELECT checkpoints.*')) return [checkpoints]
+      if (sql.includes('SELECT task_id, status FROM ai_model_tasks') || sql.includes('SELECT task_id, status')) return [tasks]
+      if (sql.includes('INSERT INTO period_review_jobs')) return [{ insertId }, []]
+      if (sql.includes('UPDATE period_review_cases SET status = \'generating\'')) return [{ affectedRows:1 }, []]
+      if (sql.includes('INSERT INTO period_review_job_events')) return [{ affectedRows:1 }, []]
+      return [{ affectedRows:1 }, []]
+    })
+    periodReviewDb.withTransaction.mockImplementation(callback => callback(run))
+    return run
+  }
+
+  it('enforces owner scope and allowed state/evidence/version gates', async () => {
+    mockRegenerationTransaction({ reviewCase:baseCase({ user_id:7 }) })
+    await expect(regeneratePeriodReviewCase(42, { id:9, role:'user' })).rejects.toThrow('period_review_not_found')
+
+    mockRegenerationTransaction({ reviewCase:baseCase({ status:'approved', approved_version_id:5 }) })
+    await expect(regeneratePeriodReviewCase(42, { id:7, role:'user' })).rejects.toThrow('period_review_regeneration_case_state_invalid')
+
+    mockRegenerationTransaction({ reviewCase:baseCase({ evidence_status:'incomplete' }) })
+    await expect(regeneratePeriodReviewCase(42, { id:7, role:'user' })).rejects.toThrow('period_review_regeneration_evidence_incomplete')
+
+    mockRegenerationTransaction({ reviewCase:baseCase({ current_version_id:null }) })
+    await expect(regeneratePeriodReviewCase(42, { id:7, role:'user' })).rejects.toThrow('period_review_regeneration_version_missing')
+  })
+
+  it('creates a separate regeneration job, preserves the current version and is idempotent', async () => {
+    const jobs = [{ id:9, job_slot:0, job_type:'daily_review', status:'succeeded', model_task_id:null,
+      idempotency_key:'daily:42:evidence-v1', memory_library_version_no:4, memory_library_content_hash:'memory-hash',
+      memory_library_snapshot_text:'冻结记忆', memory_strategy_snapshot_text:'冻结策略' }]
+    const run = mockRegenerationTransaction({ jobs })
+    const first = await regeneratePeriodReviewCase(42, { id:7, role:'user' }, { requestIdempotencyKey:'regen-1' })
+    expect(first).toMatchObject({ queued:true, jobId:22, current_version_id:5, parent_version_id:5, job_status:'queued' })
+    expect(first.idempotency_key).toMatch(/^regenerate:daily_review:42:req:/)
+    const insert = run.mock.calls.find(([sql]) => sql.includes('INSERT INTO period_review_jobs'))
+    expect(insert[1]).toEqual(expect.arrayContaining([42, 'daily_review', 1, first.idempotency_key, 4, 'memory-hash', '冻结记忆', '冻结策略']))
+    expect(run.mock.calls.some(([sql]) => sql.includes("SET status = 'generating'"))).toBe(true)
+    expect(run.mock.calls.some(([sql]) => sql.includes('current_version_id = NULL'))).toBe(false)
+
+    const regenerated = { id:22, job_slot:1, job_type:'daily_review', status:'queued', model_task_id:null,
+      idempotency_key:first.idempotency_key }
+    jobs.push(regenerated)
+    const second = await regeneratePeriodReviewCase(42, { id:7, role:'user' }, { requestIdempotencyKey:'regen-1' })
+    expect(second).toMatchObject({ queued:true, jobId:22, current_version_id:5, parent_version_id:5, idempotency_key:first.idempotency_key })
+    expect(run.mock.calls.filter(([sql]) => sql.includes('INSERT INTO period_review_jobs'))).toHaveLength(1)
+  })
+
+  it('blocks a concurrent regeneration with a different business key', async () => {
+    mockRegenerationTransaction({ reviewCase:baseCase({ status:'generating' }), jobs:[
+      { id:22, job_slot:1, status:'queued', idempotency_key:'regenerate:daily_review:42:run:old:v5', model_task_id:null },
+    ] })
+    await expect(regeneratePeriodReviewCase(42, { id:7, role:'user' }, { requestIdempotencyKey:'other' }))
+      .rejects.toThrow('period_review_regeneration_in_progress')
+  })
+
+  it('fails closed for unresolved daily tasks and monthly checkpoints', async () => {
+    mockRegenerationTransaction({ jobs:[{ id:9, job_slot:0, status:'succeeded', model_task_id:'task-1', idempotency_key:'daily:42:evidence' }],
+      tasks:[{ task_id:'task-1', status:'submitted' }] })
+    await expect(regeneratePeriodReviewCase(42, { id:7, role:'user' })).rejects.toThrow('period_review_regeneration_model_task_unresolved')
+
+    mockRegenerationTransaction({ reviewCase:baseCase({ period_type:'monthly' }), jobs:[{ id:9, job_slot:0, status:'succeeded', model_task_id:null,
+      idempotency_key:'monthly:42:evidence' }], checkpoints:[{ id:3, status:'queued', model_task_id:null }] })
+    await expect(regeneratePeriodReviewCase(42, { id:7, role:'user' })).rejects.toThrow('period_review_regeneration_chunk_checkpoint_unresolved')
+  })
+
+  it('uses the old version as the parent and keeps it on regeneration failure', async () => {
+    const job = { id:22, job_slot:1, period_case_id:42, status:'leased', lease_token:'lease', attempt_count:3, max_attempts:3,
+      idempotency_key:'regenerate:daily_review:42:run:x:v5' }
+    const run = vi.fn(async sql => {
+      if (sql.includes('SELECT * FROM period_review_jobs')) return [[job]]
+      if (sql.includes('SELECT * FROM period_review_cases')) return [[baseCase({ status:'generating' })]]
+      if (sql.includes('SELECT id, version_no FROM period_review_versions')) return [[{ id:5, version_no:2 }]]
+      if (sql.includes('INSERT INTO period_review_versions')) return [{ insertId:6 }, []]
+      if (sql.includes('UPDATE period_review_cases SET status = \'draft\'')) return [{ affectedRows:1 }, []]
+      return [{ affectedRows:1 }, []]
+    })
+    periodReviewDb.withTransaction.mockImplementation(callback => callback(run))
+    await __testFinishDailyReviewSuccess(job, { content:{ summary:'new' }, resolved:{ model_profile_id:3, credential_source:'platform' } })
+    const versionInsert = run.mock.calls.find(([sql]) => sql.includes('INSERT INTO period_review_versions'))
+    expect(versionInsert[1]).toEqual(expect.arrayContaining([42, 3, 5]))
+    expect(versionInsert[1]).toContain('AI daily review regeneration regenerate:daily_review:42:run:x:v5')
+
+    periodReviewDb.queryRun.mockClear()
+    await __testFinishDailyReviewFailure(job, new Error('provider_failed'))
+    const failureUpdate = periodReviewDb.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE period_review_cases SET status'))
+    expect(failureUpdate[0]).toContain("status = ?")
+    expect(failureUpdate[1][0]).toBe('needs_revision')
+    expect(failureUpdate[0]).not.toContain('current_version_id IS NULL')
   })
 })
 
@@ -1067,6 +1179,7 @@ describe('period review runtime integration', () => {
     expect(routes).toContain("router.post('/ai/period-reviews/:id/edit'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/confirm'")
     expect(routes).toContain("router.post('/ai/period-reviews/:id/retry'")
+    expect(routes).toContain("router.post('/ai/period-reviews/:id/regenerate'")
     expect(routes).toContain("router.get('/ai/period-reviews/summary'")
     expect(periodReview).toContain('daily_total:0, monthly_total:0')
     expect(routes).toContain("router.get('/ai/period-reviews/:id/job-status'")
@@ -1140,6 +1253,74 @@ describe('period review runtime integration', () => {
     const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
     expect(source).not.toContain("UPDATE platform_strategy_experience_items SET status = 'revoked'")
     expect(source).not.toContain("UPDATE experience_memory_items SET status = 'stale'")
+  })
+})
+
+describe('period review frontend contract handshake', () => {
+  const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
+
+  it('publishes UI metadata separately from supported model output contracts', () => {
+    expect(PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION).toBe('period-review-ui-v1')
+    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-contract-refresh1')
+    expect(PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS).toEqual(expect.arrayContaining([
+      'daily-period-review-v3', 'daily-period-review-v1', 'daily-period-review-v2',
+      'period-review-v1', 'period-review-v2',
+    ]))
+    expect(PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS).not.toContain(PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION)
+    expect(periodReviewFrontendMetadata()).toEqual({
+      frontend_contract_version:'period-review-ui-v1',
+      period_review_contracts:[...PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS],
+      ai_frontend_build:'period-review-contract-refresh1',
+    })
+  })
+
+  it('fails closed for missing or stale UI build/contract headers', () => {
+    expect(periodReviewFrontendContractMismatch({})).toBe(true)
+    expect(periodReviewFrontendContractMismatch({
+      'X-Aurum-AI-Frontend-Build':'period-review-contract-refresh1',
+      'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
+    })).toBe(false)
+    expect(periodReviewFrontendContractMismatch({
+      'X-Aurum-AI-Frontend-Build':'period-review-contract-refresh1',
+    })).toBe(true)
+    expect(periodReviewFrontendContractMismatch({
+      'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
+    })).toBe(true)
+    expect(periodReviewFrontendContractMismatch({
+      headers:{ 'x-aurum-ai-frontend-build':'period-review-contract-refresh0' },
+    })).toBe(true)
+    expect(periodReviewFrontendContractMismatch({
+      'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v0',
+    })).toBe(true)
+    expect(periodReviewFrontendContractMismatch({
+      'X-Aurum-AI-Frontend-Build':'period-review-contract-refresh1',
+      'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
+      'X-Aurum-Period-Review-Contracts':'daily-period-review-v2',
+    })).toBe(false)
+    expect(periodReviewFrontendContractMismatch({
+      'X-Aurum-AI-Frontend-Build':'',
+      'X-Aurum-Period-Review-Frontend-Contract':' ',
+    })).toBe(true)
+  })
+
+  it('attaches metadata and no-store headers to all period-review reads, while guarding every write', () => {
+    for (const route of [
+      "router.get('/ai/period-reviews', authMiddleware, periodReviewReadHeaders",
+      "router.get('/ai/period-reviews/summary', authMiddleware, periodReviewReadHeaders",
+      "router.get('/ai/period-reviews/:id', authMiddleware, periodReviewReadHeaders",
+      "router.get('/ai/period-reviews/:id/job-status', authMiddleware, periodReviewReadHeaders",
+    ]) expect(routes).toContain(route)
+    for (const route of [
+      "router.post('/ai/period-reviews/:id/edit', authMiddleware, periodReviewFrontendContractGuard",
+      "router.post('/ai/period-reviews/:id/confirm', authMiddleware, periodReviewFrontendContractGuard",
+      "router.post('/ai/period-reviews/:id/retry', authMiddleware, periodReviewFrontendContractGuard",
+      "router.post('/ai/period-reviews/:id/regenerate', authMiddleware, periodReviewFrontendContractGuard",
+      "router.post('/ai/period-reviews/:id/derivation/retry', authMiddleware, periodReviewFrontendContractGuard",
+    ]) expect(routes).toContain(route)
+    expect(routes).toContain("router.post('/ai/period-reviews/:id/read', authMiddleware, async")
+    expect(routes).toContain("Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate'")
+    expect(routes).toContain('periodReviewFrontendMetadata()')
+    expect(routes).toContain("period_review_frontend_contract_mismatch")
   })
 })
 

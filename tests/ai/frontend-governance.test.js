@@ -314,7 +314,8 @@ describe('AI governance navigation and DOM contract', () => {
   it('treats a persisted period-review version as authoritative over a stale leased job', () => {
     const effectiveStatus = loadPeriodReviewEffectiveStatus()
     expect(effectiveStatus({ current_version_id:191, status:'draft', job_status:'leased', progress_stage:'model_request' })).toBe('draft')
-    expect(app).toContain('const stage = Number(review.current_version_id || 0) > 0 ? "succeeded"')
+    expect(app).toContain('const activeJob = periodReviewJobInProgress(review)')
+    expect(app).toContain('const stage = activeJob')
   })
 
   it('falls back to the absolute scheduler deadline when seconds are missing', () => {
@@ -366,6 +367,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(userVisibleText('center_entry_unconfirmed')).toBe('中枢已确认，但进入段缺少跨窗口共识，仅背驰暂不可判')
     expect(userVisibleText('structure_anchor_bootstrap_pending')).toBe('结构锚点正在用连续三根已收盘K线确认，暂不使用依赖进入段的背驰与买卖点')
     expect(userVisibleText('center_cross_window_unstable')).toBe('不同历史窗口对中枢形成核心尚未达成共识')
+    expect(userVisibleText({ text:'结构化字段不应被强转文本' })).toBe('暂无中文说明')
   })
 
   it('renders the same broker time for heartbeat and quote clock payloads', () => {
@@ -1133,7 +1135,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(responsiveHref).toContain('manual-order-ticket1-admin-dispatch-switch1')
     expect(appHref).not.toContain('admin-dispatch-switch1')
     expect(appHref).toContain('admin-dispatch-optional-protection1')
-    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2-admin-dispatch-user-label1-admin-dispatch-details1-manual-review-create-ref1-riskmetadataround1-manual-review-frontend2-manual-review-durable-stage1-manual-review-v3aggregate1-manual-review-frontend3-position-ticket-refresh1-position-ticket-retry1-daily-review-v3-daily-review-v3fix1')
+    expect(html).toContain('build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2-admin-dispatch-user-label1-admin-dispatch-details1-manual-review-create-ref1-riskmetadataround1-manual-review-frontend2-manual-review-durable-stage1-manual-review-v3aggregate1-manual-review-frontend3-position-ticket-refresh1-position-ticket-retry1-daily-review-v3-daily-review-v3fix1-period-review-contract-refresh1')
   })
 
   it('keeps admin dispatch volume explicit without changing ordinary AI tier display', () => {

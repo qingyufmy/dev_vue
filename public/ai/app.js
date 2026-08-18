@@ -100,6 +100,10 @@ const state = {
   reviewDetailPollTimer: null,
   reviewDetailJobKey: null,
   reviewDetailRequestVersion: 0,
+  periodReviewContractIssue: null,
+  periodReviewMutationInFlight: false,
+  periodReviewDetail: null,
+  periodReviewRegenerateRequestKeys: new Map(),
   reviewFilter: "",
   reviewPeriodFilter: "",
   reviewListOffset: 0,
@@ -207,6 +211,31 @@ const state = {
   inferenceChartSignalKey: null,
   inferenceChartLayers: { segments: true, centers: true, divergence: true, entries: true, levels: true },
 };
+
+// Period-review content is a versioned UI contract.  Keep the functional
+// build separate from the shared cache key in index.html: the server can
+// compare these values without forcing a cache-key change for the other AI
+// entry points.
+const AI_FRONTEND_BUILD = "period-review-contract-refresh1";
+const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = "period-review-ui-v1";
+const PERIOD_REVIEW_DAILY_V3_CONTRACT = "daily-period-review-v3";
+const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
+  "daily-period-review-v1",
+  "daily-period-review-v2",
+  "period-review-v1",
+  "period-review-v2",
+]);
+const PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS = Object.freeze([
+  PERIOD_REVIEW_DAILY_V3_CONTRACT,
+  ...PERIOD_REVIEW_LEGACY_CONTRACTS,
+]);
+// Kept as a descriptive alias for callers/tests that use the old name.  It
+// intentionally contains output contracts only; the UI handshake version is
+// sent separately and must never be advertised as an output contract.
+const PERIOD_REVIEW_SUPPORTED_CONTRACTS = PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS;
+const PERIOD_REVIEW_CONTRACT_ERROR_TEXT = "页面版本已更新，请刷新后继续";
+const PERIOD_REVIEW_REGENERATABLE_STATUSES = new Set(["draft", "edited", "needs_revision", "deferred"]);
+const PERIOD_REVIEW_ACTIVE_JOB_STATUSES = new Set(["queued", "leased", "status_unknown"]);
 
 const MANUAL_ANALYSIS_TASK_STORAGE_KEY = "aurum.ai.manual-analysis.task";
 const MANUAL_ANALYSIS_POLL_INTERVAL_MS = 3000;
@@ -773,6 +802,14 @@ const REASON_MAP = {
   holding_path_bar_boundary_insufficient: "持仓区间缺少完整闭合 K 线，本次仅保留证据不足结论",
   manual_trade_review_generation_deadline_exceeded: "本轮复盘已超过 30 分钟生成期限，请手动重试以创建新一代任务",
   manual_trade_review_model_task_terminal_requires_retry: "本轮模型任务已经终止，请手动重试以创建新一代任务",
+  period_review_frontend_contract_mismatch: "页面版本已更新，请刷新后继续操作复盘",
+  period_review_regeneration_not_available: "当前复盘状态不支持重新生成，请刷新后重试",
+  period_review_regeneration_in_progress: "这份复盘正在重新生成，请勿重复提交",
+  period_review_regeneration_case_state_invalid: "当前复盘状态不支持重新生成",
+  period_review_regeneration_approved: "已确认的复盘不能直接重新生成",
+  period_review_regeneration_evidence_incomplete: "复盘证据尚不完整，暂不能重新生成",
+  period_review_regeneration_version_missing: "当前复盘版本不存在，请刷新后重试",
+  period_review_regeneration_version_conflict: "复盘版本已变化，请刷新后重新操作",
   manual_trade_review_approved_locked: "复盘已确认，不能再改写或切换确认版本",
   model_task_not_claimable: "复盘任务正在被其他生成流程处理，请稍后刷新",
   model_task_duplicate_terminal: "上一轮复盘任务已有最终结果，请刷新复盘历史",
@@ -884,12 +921,19 @@ const REASON_MAP = {
   pending_list_confirm_failed: "替换旧挂单后的挂单复核失败",
   pending_supersede_incomplete: "同方向旧挂单尚未完全替换",
   pending_limit_reached: "当前品种的挂单数量已达到限制",
+  duplicate_live_pending: "当前策略在相同价格区域已有系统挂单，本次未重复下单",
+  pending_list_unavailable_before_order: "发送前无法刷新交易平台挂单列表，本次未下单",
   ai_pending_order_disabled: "平台已关闭 AI 挂单",
   ai_pending_cancel_disabled: "平台已关闭 AI 取消挂单",
   subscription_inactive: "策略订阅当前未启用",
   outside_schedule: "当前不在自动推理运行时段内",
   trade_send_disabled: "交易发送已关闭",
   weekly_flatten_window: "周末风险控制处理中",
+  execution_clock_context_missing: "缺少本交易账户的可信平台时钟证据，订单未发送",
+  execution_clock_identity_mismatch: "交易账户或终端已变化，订单未发送",
+  execution_clock_untrusted_source: "交易平台时钟来源不可信，订单未发送",
+  execution_clock_stale: "交易平台时钟证据已过期，订单未发送",
+  terminal_clock_unverified: "交易平台时钟尚未校准，订单未发送",
   system_execution_exception: "系统执行异常，详细信息已记录",
   lock_lost_before_supersede_cancel: "任务执行权已失效，未继续替换旧挂单",
   lock_lost_before_pending_confirm: "任务执行权已失效，未继续复核挂单",
@@ -1699,6 +1743,10 @@ function localizeReason(reason) {
 }
 
 function userVisibleText(value, fallback = "暂无中文说明") {
+  // Structured review fields must never be stringified into "[object Object]"
+  // or an internal-code fallback.  Callers that own a structured contract
+  // must validate it before entering this legacy text-localization helper.
+  if (value && typeof value === "object") return fallback;
   let text = String(value || "").trim();
   if (!text) return fallback;
   const cleanLocalizedText = input => String(input || "")
@@ -2379,6 +2427,14 @@ async function api(path, options = {}) {
   }
   const headers = { ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  if (path.startsWith("/api/ai/period-reviews")) {
+    headers["X-Aurum-AI-Frontend-Build"] = AI_FRONTEND_BUILD;
+    headers["X-Aurum-Period-Review-Frontend-Contract"] = PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION;
+    headers["X-Aurum-Period-Review-Contracts"] = PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS.join(",");
+    // A review detail is a version handshake.  Do not let an intermediary
+    // replay a stale contract response into a long-lived editor.
+    headers["Cache-Control"] = "no-cache";
+  }
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
   const body = (options.body && typeof options.body === 'object') ? JSON.stringify(options.body) : options.body;
   const controller = new AbortController();
@@ -6563,6 +6619,150 @@ function periodReviewEffectiveStatus(item) {
   return item.status;
 }
 
+function periodReviewContractValues(value) {
+  if (Array.isArray(value)) return value.flatMap(item => periodReviewContractValues(item));
+  if (typeof value === "string") return value.split(/[\s,;]+/).map(item => item.trim()).filter(Boolean);
+  if (!value || typeof value !== "object") return [];
+  return periodReviewContractValues(value.supported || value.contracts || value.output_contracts || value.period_review_contracts || value.version);
+}
+
+function periodReviewContractMetadata(data = {}, review = {}) {
+  const sources = [data, data.capabilities, data.runtime_capabilities, data.ai_runtime_capabilities,
+    data.period_review_capabilities, review].filter(value => value && typeof value === "object");
+  const first = key => sources.map(source => source[key]).find(value => value !== undefined && value !== null && value !== "");
+  const frontendContractVersion = first("frontend_contract_version");
+  const aiFrontendBuild = first("ai_frontend_build");
+  const periodReviewContracts = [...new Set([
+    ...periodReviewContractValues(first("period_review_contracts")),
+    ...periodReviewContractValues(first("periodReviewContracts")),
+  ])];
+  return { frontendContractVersion:frontendContractVersion == null ? "" : String(frontendContractVersion).trim(),
+    aiFrontendBuild:aiFrontendBuild == null ? "" : String(aiFrontendBuild).trim(), periodReviewContracts };
+}
+
+function periodReviewTextFieldIsSafe(value, { required = false } = {}) {
+  if (value == null) return !required;
+  return typeof value === "string" && (!required || value.trim().length > 0);
+}
+
+function periodReviewStructuredFindingIsSafe(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && periodReviewTextFieldIsSafe(value.text, { required:true })
+    && (value.source_refs == null || Array.isArray(value.source_refs))
+    && (value.occurrence_count == null || Number.isFinite(Number(value.occurrence_count))));
+}
+
+function periodReviewExperienceRuleIsSafe(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return ["category", "condition", "action", "risk_control", "invalidation", "prohibited_action"]
+    .every(key => periodReviewTextFieldIsSafe(value[key], { required:true }))
+    && (value.source_refs == null || Array.isArray(value.source_refs))
+    && (value.confidence == null || Number.isFinite(Number(value.confidence)));
+}
+
+function periodReviewTradeAssessmentIsSafe(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const scalarFields = ["decision_quality", "original_signal_logic", "technical_basis_assessment", "market_alignment",
+    "strategy_alignment", "risk_execution_status", "risk_execution_assessment"];
+  if (scalarFields.some(key => value[key] != null && typeof value[key] !== "string")) return false;
+  if (value.outcome_id != null && !Number.isFinite(Number(value.outcome_id))) return false;
+  if (value.confidence != null && !Number.isFinite(Number(value.confidence))) return false;
+  if (value.missing_evidence != null && (!Array.isArray(value.missing_evidence) || value.missing_evidence.some(item => typeof item !== "string"))) return false;
+  if (value.issue_codes != null && (!Array.isArray(value.issue_codes) || value.issue_codes.some(item => typeof item !== "string"))) return false;
+  if (value.evidence_refs != null && (!Array.isArray(value.evidence_refs) || value.evidence_refs.some(item => typeof item !== "string"))) return false;
+  for (const key of ["outcome_attribution", "next_time_rule"]) {
+    if (value[key] != null && (!value[key] || typeof value[key] !== "object" || Array.isArray(value[key]))) return false;
+  }
+  const attribution = value.outcome_attribution || {};
+  if (attribution.primary_causes != null && (!Array.isArray(attribution.primary_causes) || attribution.primary_causes.some(item => typeof item !== "string"))) return false;
+  if (attribution.explanation != null && typeof attribution.explanation !== "string") return false;
+  const nextRule = value.next_time_rule || {};
+  if (["condition", "action", "risk_control", "invalidation", "prohibited_action"].some(key => nextRule[key] != null && typeof nextRule[key] !== "string")) return false;
+  return true;
+}
+
+function periodReviewV3ContentIsSafe(content = {}) {
+  if (!Array.isArray(content.trade_assessments)
+    || !Array.isArray(content.repeated_issues)
+    || !Array.isArray(content.strengths)
+    || !Array.isArray(content.experience_rules)) return false;
+  return content.repeated_issues.every(periodReviewStructuredFindingIsSafe)
+    && content.strengths.every(periodReviewStructuredFindingIsSafe)
+    && content.experience_rules.every(periodReviewExperienceRuleIsSafe)
+    && content.trade_assessments.every(periodReviewTradeAssessmentIsSafe);
+}
+
+function periodReviewLegacyContentIsSafe(content = {}) {
+  const arrays = [content.repeated_issues, content.strengths, content.daily_lessons, content.risk_observations];
+  return arrays.every(value => value == null || (Array.isArray(value) && value.every(item => typeof item === "string")));
+}
+
+function periodReviewContractState(data = {}, review = {}, current = null, content = {}) {
+  const metadata = periodReviewContractMetadata(data, review);
+  if (metadata.frontendContractVersion && metadata.frontendContractVersion !== PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION) {
+    return { supported:false, reason:"frontend_contract_version" };
+  }
+  if (metadata.aiFrontendBuild && metadata.aiFrontendBuild !== AI_FRONTEND_BUILD) {
+    return { supported:false, reason:"ai_frontend_build" };
+  }
+  const outputVersion = String(content.output_contract_version || "").trim();
+  if (metadata.periodReviewContracts.length && outputVersion
+    && !metadata.periodReviewContracts.includes(outputVersion)) {
+    return { supported:false, reason:"period_review_contracts" };
+  }
+  if (!current) return { supported:true, kind:"pending", outputVersion, metadata };
+  if (review.period_type === "daily" && outputVersion === PERIOD_REVIEW_DAILY_V3_CONTRACT) {
+    return periodReviewV3ContentIsSafe(content)
+      ? { supported:true, kind:"daily-v3", outputVersion, metadata }
+      : { supported:false, reason:"daily_v3_shape" };
+  }
+  if (review.period_type === "daily" && (!outputVersion || PERIOD_REVIEW_LEGACY_CONTRACTS.has(outputVersion))) {
+    return periodReviewLegacyContentIsSafe(content)
+      ? { supported:true, kind:"daily-legacy", outputVersion, metadata }
+      : { supported:false, reason:"legacy_shape" };
+  }
+  if (review.period_type === "monthly" && (!outputVersion || PERIOD_REVIEW_LEGACY_CONTRACTS.has(outputVersion))) {
+    return { supported:true, kind:"monthly", outputVersion, metadata };
+  }
+  return { supported:false, reason:"unknown_output_contract", outputVersion };
+}
+
+function periodReviewContractMismatchHtml(reason = "unknown") {
+  return `<div class="review-empty-state empty-state is-error period-review-contract-mismatch" role="alert" data-contract-reason="${escapeHtml(reason)}"><span class="review-empty-icon"><i data-lucide="refresh-cw" size="20"></i></span><strong>${PERIOD_REVIEW_CONTRACT_ERROR_TEXT}</strong><span>当前复盘内容与页面支持的合同不一致。为保护复盘内容，保存、标记问题、确认和经验沉淀已停用。</span><button class="btn btn-secondary btn-sm" type="button" data-review-action="reload-page">刷新页面</button></div>`;
+}
+
+function periodReviewEditorIsDirty() {
+  const baseline = state.periodReviewEditorBaseline, editor = $("reviewContentEditor");
+  if (!baseline || !editor) return false;
+  try { return JSON.stringify(parseJsonField(editor.value, {})) !== baseline; } catch { return true; }
+}
+
+function periodReviewJobInProgress(review = {}) {
+  return PERIOD_REVIEW_ACTIVE_JOB_STATUSES.has(String(review.job_status || "").toLowerCase())
+    || String(review.status || "").toLowerCase() === "generating";
+}
+
+function periodReviewCanRegenerate(review = {}, current = null) {
+  return Boolean(current && Number(review.current_version_id || 0) === Number(current.id || 0)
+    && PERIOD_REVIEW_REGENERATABLE_STATUSES.has(String(review.status || "").toLowerCase())
+    && !periodReviewJobInProgress(review));
+}
+
+function periodReviewRegenerationRequestKey(caseId, versionId) {
+  const map = state.periodReviewRegenerateRequestKeys;
+  const key = `${Number(caseId)}:${Number(versionId)}`;
+  if (!map.has(key)) {
+    const random = globalThis.crypto?.randomUUID?.()
+      || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    map.set(key, `period-review-regenerate:${Number(caseId)}:${Number(versionId)}:${random}`);
+  }
+  return map.get(key);
+}
+
+function clearPeriodReviewRegenerationRequestKey(caseId, versionId) {
+  state.periodReviewRegenerateRequestKeys.delete(`${Number(caseId)}:${Number(versionId)}`);
+}
+
 function renderReviewSummary(summary = state.reviewSummary) {
   const badge = $("reviewNavBadge"), failureDot = $("reviewNavFailureDot");
   const attention = Number(summary.attention || 0), failed = Number(summary.failed || 0);
@@ -7921,7 +8121,11 @@ async function openReviewDetail(id) {
 const periodDecisionLabels = { good:"良好", mixed:"有得有失", poor:"需要改进", insufficient_evidence:"证据不足" };
 const chanIssueLabels = { data:"行情数据", calculation:"结构计算", confirmation_lag:"结构确认延迟", ai_interpretation:"AI 解读", strategy_rule:"策略规则", none:"未发现问题", unknown:"暂无法判断" };
 
-function periodReviewArray(value) { return Array.isArray(value) ? value.map(item => userVisibleText(item, "系统未提供中文说明")).filter(Boolean) : []; }
+function periodReviewArray(value) {
+  return Array.isArray(value)
+    ? value.filter(item => typeof item === "string").map(item => userVisibleText(item, "系统未提供中文说明")).filter(Boolean)
+    : [];
+}
 function periodReviewLines(value) { return periodReviewArray(value).join("\n"); }
 function periodReviewFailureText(value) {
   const text = String(value || "");
@@ -7966,9 +8170,14 @@ function periodReviewEventLabel(event) {
 
 function periodReviewProgressHtml(review) {
   if (!review?.job_id && !review?.job_status) return "";
-  // A persisted version is the authoritative completion fact. A stale leased
-  // job must not make an already generated review look active again.
-  const stage = Number(review.current_version_id || 0) > 0 ? "succeeded" : periodReviewEffectiveStatus(review);
+  // A regeneration keeps the old version visible while its job is active.
+  // Only a completed non-regeneration job may use the persisted version as
+  // the progress completion signal.
+  const activeJob = periodReviewJobInProgress(review)
+    && (Number(review.job_slot || 0) > 0 || !Number(review.current_version_id || 0));
+  const stage = activeJob
+    ? (review.progress_stage || review.job_status || "generating")
+    : Number(review.current_version_id || 0) > 0 ? "succeeded" : periodReviewEffectiveStatus(review);
   const stages = ["preparing", "model_request", "validating", "succeeded"];
   const stageIndex = stage === "queued" || stage === "retry_wait" ? 0 : stage === "repairing" ? 2 : Math.max(0, stages.indexOf(stage));
   const terminal = ["succeeded", "failed"].includes(stage) || ["draft", "edited", "approved"].includes(review.status);
@@ -7990,7 +8199,8 @@ function periodReviewProgressHtml(review) {
 
 function schedulePeriodReviewDetailPoll(review) {
   stopReviewDetailPolling();
-  const generatingReview = review && ["queued", "leased"].includes(review.job_status) && !Number(review.current_version_id || 0);
+  const generatingReview = Boolean(review && periodReviewJobInProgress(review)
+    && (Number(review.job_slot || 0) > 0 || !Number(review.current_version_id || 0)));
   const memoryStatus = review?.memory_application_status || review?.derivation_status || "";
   const derivingMemory = review && ["queued", "applying", "compression_queued", "compression_running"].includes(memoryStatus);
   if (!generatingReview && !derivingMemory) return;
@@ -7998,13 +8208,13 @@ function schedulePeriodReviewDetailPoll(review) {
     && review.timezone_offset_minutes !== "" && Number.isInteger(Number(review.timezone_offset_minutes))
     ? Number(review.timezone_offset_minutes) : null;
   const requestVersion = state.reviewDetailRequestVersion;
-  state.reviewDetailJobKey = `${review.job_status}:${review.progress_stage}:${review.attempt_count}:${review.next_attempt_at || ''}`;
+  state.reviewDetailJobKey = `${review.job_slot || 0}:${review.job_status}:${review.progress_stage}:${review.attempt_count}:${review.next_attempt_at || ''}:${review.current_version_id || ''}`;
   state.reviewDetailPollTimer = setTimeout(async () => {
     if (requestVersion !== state.reviewDetailRequestVersion
       || Number(state.selectedReviewId) !== caseId || activeTabId() !== "review-memory") return;
     try {
       const data = await api(`/api/ai/period-reviews/${caseId}/job-status`), job = { ...(data.job || {}), timezone_offset_minutes:timezoneOffset };
-      const nextKey = `${job.job_status}:${job.progress_stage}:${job.attempt_count}:${job.next_attempt_at || ''}:${job.current_version_id || ''}`;
+      const nextKey = `${job.job_slot || 0}:${job.job_status}:${job.progress_stage}:${job.attempt_count}:${job.next_attempt_at || ''}:${job.current_version_id || ''}`;
       if ((generatingReview && (job.current_version_id || ["failed", "succeeded"].includes(job.job_status)))
         || (derivingMemory && !["queued", "applying", "compression_queued", "compression_running"].includes(job.memory_application_status || job.derivation_status))) {
         await loadReviewMemory();
@@ -8095,7 +8305,11 @@ function renderDailyV3TradeAssessments(assessments, editable, sources = []) {
 function renderDailyV3Findings(key, title, findings, editable) {
   const items = Array.isArray(findings) ? findings : [];
   return `<section class="period-review-v3-section"><div class="period-review-section-heading"><div><span class="review-section-kicker">跨交易归纳</span><h3>${escapeHtml(title)}</h3></div><span>${items.length} 条</span></div><div class="period-review-experience-list">${items.map((raw, index) => {
-    const item = typeof raw === "string" ? { text:raw, source_refs:[], occurrence_count:1 } : (raw || {});
+    // v3 findings are structured objects.  Legacy text arrays are rendered by
+    // the legacy editor only; silently coercing one here would recreate the
+    // duplicate generic fallback seen in long-lived old tabs.
+    const item = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null;
+    if (!periodReviewStructuredFindingIsSafe(item)) return "";
     return `<article class="period-review-experience-card"><header><strong>${escapeHtml(title)} ${index + 1}</strong><span>${Number(item.occurrence_count || 0)} 次</span></header>${periodReviewNestedField(`${key}.${index}.text`, "结论", item.text, { editable })}<p>来源交易：${escapeHtml((item.source_refs || []).join("、") || "无有效来源")}</p></article>`;
   }).join("") || '<p class="period-review-empty-copy">本周期没有形成可验证的跨交易结论</p>'}</div></section>`;
 }
@@ -8110,7 +8324,8 @@ function renderPeriodReviewExperiencePreview(rules) {
 }
 
 function renderDailyV3ExperienceRules(rules, editable) {
-  return `<section class="period-review-v3-section"><div class="period-review-section-heading"><div><span class="review-section-kicker">确认前预览</span><h3>将沉淀到策略记忆库的经验</h3></div><span>${rules.length} 条</span></div><div class="period-review-experience-list">${rules.map((rule, index) => `<article class="period-review-experience-card" data-experience-rule-index="${index}"><header><strong>规则 ${index + 1} · ${escapeHtml(periodReviewExperienceCategoryLabels[rule.category] || rule.category)}</strong>${editable ? `<button class="text-action" type="button" data-review-action="remove-experience" data-experience-index="${index}">删除错误经验</button>` : ""}</header><div class="period-review-v3-grid">${periodReviewNestedField(`experience_rules.${index}.category`, "类别", rule.category, { editable, options:periodReviewExperienceCategoryLabels })}${[["condition","条件"],["action","动作"],["risk_control","风控"],["invalidation","失效"],["prohibited_action","禁止行为"]].map(([key,label]) => periodReviewNestedField(`experience_rules.${index}.${key}`, label, rule[key], { editable })).join("")}</div><p>来源交易：${escapeHtml((rule.source_refs || []).join("、") || "无有效来源")} · 置信度 ${Math.round(Number(rule.confidence || 0) * 100)}%</p></article>`).join("") || '<p class="period-review-empty-copy">本次没有可沉淀的经验规则</p>'}</div><div class="period-review-memory-preview"><strong>实际写入文本预览</strong><pre id="periodReviewExperiencePreview">${escapeHtml(periodReviewExperienceMarkdown(rules) || "没有将要写入的经验规则")}</pre></div></section>`;
+  const safeRules = (Array.isArray(rules) ? rules : []).filter(periodReviewExperienceRuleIsSafe);
+  return `<section class="period-review-v3-section"><div class="period-review-section-heading"><div><span class="review-section-kicker">当日经验（确认后沉淀）</span><h3>当日经验（确认后沉淀）</h3></div><span>${safeRules.length} 条</span></div><div class="period-review-experience-list">${safeRules.map((rule, index) => `<article class="period-review-experience-card" data-experience-rule-index="${index}"><header><strong>规则 ${index + 1} · ${escapeHtml(periodReviewExperienceCategoryLabels[rule.category] || rule.category)}</strong>${editable ? `<button class="text-action" type="button" data-review-action="remove-experience" data-experience-index="${index}">删除错误经验</button>` : ""}</header><div class="period-review-v3-grid">${periodReviewNestedField(`experience_rules.${index}.category`, "类别", rule.category, { editable, options:periodReviewExperienceCategoryLabels })}${[["condition","条件"],["action","动作"],["risk_control","风控"],["invalidation","失效"],["prohibited_action","禁止行为"]].map(([key,label]) => periodReviewNestedField(`experience_rules.${index}.${key}`, label, rule[key], { editable })).join("")}</div><p>来源交易：${escapeHtml((rule.source_refs || []).join("、") || "无有效来源")} · 置信度 ${Math.round(Number(rule.confidence || 0) * 100)}%</p></article>`).join("") || '<p class="period-review-empty-copy">本次没有可沉淀的经验规则</p>'}</div><div class="period-review-memory-preview"><strong>实际写入文本预览</strong><pre id="periodReviewExperiencePreview">${escapeHtml(periodReviewExperienceMarkdown(safeRules) || "没有将要写入的经验规则")}</pre></div></section>`;
 }
 
 function removePeriodReviewExperienceRule(index) {
@@ -8119,8 +8334,9 @@ function removePeriodReviewExperienceRule(index) {
   if (!Array.isArray(content.experience_rules) || index < 0 || index >= content.experience_rules.length) return;
   content.experience_rules.splice(index, 1);
   editor.value = JSON.stringify(content, null, 2);
-  const section = document.querySelector(".period-review-experience-list")?.closest(".period-review-v3-section");
-  section?.querySelector(`[data-experience-rule-index="${index}"]`)?.remove();
+  const targetCard = document.querySelector(`[data-experience-rule-index="${index}"]`);
+  const section = targetCard?.closest(".period-review-v3-section");
+  targetCard?.remove();
   section?.querySelectorAll("[data-experience-rule-index]").forEach((card, nextIndex) => {
     card.dataset.experienceRuleIndex = String(nextIndex);
     const title = card.querySelector("header strong");
@@ -8178,9 +8394,26 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   if (requestVersion !== state.reviewDetailRequestVersion
     || Number(state.selectedReviewId) !== requestedId) return null;
   const review = data.review || {};
-  const current = (review.versions || []).find(item => Number(item.id) === Number(review.current_version_id)) || review.versions?.at(-1);
+  const currentVersionId = Number(review.current_version_id || 0);
+  const current = currentVersionId > 0
+    ? (review.versions || []).find(item => Number(item.id) === currentVersionId) || null
+    : null;
   const content = current?.content || {};
-  const isDailyV3 = review.period_type === "daily" && content.output_contract_version === "daily-period-review-v3";
+  const contractState = periodReviewContractState(data, review, current, content);
+  if (!contractState.supported) {
+    state.periodReviewContractIssue = contractState;
+    state.periodReviewDetail = null;
+    state.periodReviewEditorBaseline = null;
+    if (detail) detail.innerHTML = periodReviewContractMismatchHtml(contractState.reason);
+    initIcons();
+    return review;
+  }
+  state.periodReviewContractIssue = null;
+  state.periodReviewDetail = review;
+  if (Number(review.job_slot || 0) > 0 && String(review.job_status || "").toLowerCase() === "failed") {
+    clearPeriodReviewRegenerationRequestKey(review.id, currentVersionId);
+  }
+  const isDailyV3 = contractState.kind === "daily-v3";
   state.periodReviewEditorBaseline = current ? JSON.stringify(content) : null;
   const evidence = review.evidence || {};
   const stats = evidence.statistics || {};
@@ -8190,7 +8423,8 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   const profit = Number(stats.net_profit || 0);
   const confidence = Number(content.confidence);
   const confidencePercent = Number.isFinite(confidence) ? Math.round(confidence * 100) : 0;
-  const editable = Boolean(current) && review.status !== "approved";
+  const editable = Boolean(current) && review.status !== "approved" && !periodReviewJobInProgress(review);
+  const canRegenerate = periodReviewCanRegenerate(review, current);
   const sourceLabel = review.evidence_status === "complete" ? "证据完整" : "证据待补全";
   const sourceDetail = quality.complete === false ? "部分行情或结构证据不可用" : `已汇总 ${Number(review.source_count || 0)} 个来源`;
   const periodScope = isMonthly
@@ -8230,7 +8464,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     || Number(state.selectedReviewId) !== requestedId) return null;
   detail.innerHTML = `<button class="review-mobile-back" type="button" data-review-action="back-list"><i data-lucide="arrow-left" size="16"></i>返回复盘列表</button><header class="period-review-detail-header">
       <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · ${escapeHtml(strategyProvenance)}</p><p class="period-review-period-scope"><i data-lucide="clock-3" size="13"></i>${escapeHtml(periodScope)}</p></div>
-      <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
+      <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${canRegenerate ? `<button class="btn btn-secondary btn-sm" data-review-action="regenerate" data-version-id="${Number(current.id)}"><i data-lucide="sparkles" size="14"></i>重新生成</button>` : ''}${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
     </header>
     ${periodReviewProgressHtml(review)}
     <section class="period-review-metrics" aria-label="周期统计">
@@ -17200,19 +17434,57 @@ function bindEvents() {
     if (reviewCase) { openPeriodReviewDetail(Number(reviewCase.dataset.reviewId)).catch(error => toast(error.message,"error")); return; }
     if (reviewAction) {
       const caseId = state.selectedReviewId, versionId = Number(reviewAction.dataset.versionId || 0), action = reviewAction.dataset.reviewAction;
+      const periodReviewWriteActions = new Set(["regenerate", "save", "approve", "needs_revision", "defer", "retry-derivation", "remove-experience"]);
+      if (state.periodReviewContractIssue && periodReviewWriteActions.has(action)) {
+        toast(PERIOD_REVIEW_CONTRACT_ERROR_TEXT, "warning");
+        return;
+      }
       if (action === "back-list") {
         stopReviewDetailPolling();
         state.reviewDetailRequestVersion += 1;
         state.selectedReviewId = null;
+        state.periodReviewDetail = null;
         renderReviewCases();
         const reviewLayout = document.querySelector(".period-review-layout");
         reviewLayout?.classList.remove("has-mobile-detail");
         document.querySelector(".review-queue")?.scrollIntoView({ behavior:"smooth", block:"start" });
         return;
       }
+      if (action === "reload-page") {
+        if (periodReviewEditorIsDirty() || state.periodReviewMutationInFlight) {
+          toast("当前复盘有未保存修改或正在提交，请先完成后再刷新", "warning");
+          return;
+        }
+        window.location.reload();
+        return;
+      }
+      if (action === "regenerate" && state.periodReviewMutationInFlight) return;
+      const isPeriodReviewMutation = new Set(["regenerate", "retry", "retry-derivation", "save", "approve", "needs_revision", "defer"]).has(action);
       try {
+        if (isPeriodReviewMutation) {
+          state.periodReviewMutationInFlight = true;
+          reviewAction.disabled = true;
+        }
         if (action === "reload-detail") {
           await openPeriodReviewDetail(caseId);
+        }
+        else if (action === "regenerate") {
+          const review = state.periodReviewDetail;
+          if (!periodReviewCanRegenerate(review, { id:versionId })) {
+            throw new Error("period_review_regeneration_not_available");
+          }
+          const confirmed = await showConfirm(
+            "确认重新生成这份复盘？",
+            "系统将再次调用模型分析。当前复盘版本会保留，生成期间不能保存或确认旧版本。",
+            { confirmText:"确认重新生成", cancelText:"取消" },
+          );
+          if (!confirmed) return;
+          const idempotencyKey = periodReviewRegenerationRequestKey(caseId, versionId);
+          await api(`/api/ai/period-reviews/${caseId}/regenerate`, {
+            method:"POST",
+            headers:{"Idempotency-Key":idempotencyKey},
+          });
+          toast("已进入重新生成队列，旧版本仍保留", "success");
         }
         else if (action === "retry") {
           reviewAction.disabled = true;
@@ -17247,8 +17519,11 @@ function bindEvents() {
           if (confirmed.post_action_error) toast(`复盘已确认，但经验处理未完成：${localizeReason(confirmed.post_action_error)}`, "warning");
         }
         await loadReviewMemory(); await openPeriodReviewDetail(caseId);
-      } catch (error) { toast(error.message,"error"); }
-      finally { reviewAction.disabled = false; }
+      } catch (error) { toast(localizeReason(error.code || error.message),"error"); }
+      finally {
+        reviewAction.disabled = false;
+        if (isPeriodReviewMutation) state.periodReviewMutationInFlight = false;
+      }
       return;
     }
     if (killSwitch) {
@@ -17483,9 +17758,11 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 window.addEventListener("beforeunload", event => {
-  if (!state.strategyMemoryEditorDirty) return;
+  if (!state.strategyMemoryEditorDirty && !periodReviewEditorIsDirty()) return;
   event.preventDefault();
-  event.returnValue = "策略记忆原文有未保存的修改。";
+  event.returnValue = state.strategyMemoryEditorDirty
+    ? "策略记忆原文有未保存的修改。"
+    : "周期复盘有未保存的修改。";
 });
 
 // --- Changelog Modal ---

@@ -473,7 +473,7 @@ describe('recovery and reconciliation', () => {
       request_json:JSON.stringify({ symbol:'XAUUSD', order_type:'buy_limit', volume:0.01 }),
       approved_order_json:JSON.stringify({ symbol:'XAUUSD', order_type:'buy_limit', volume:0.01 }),
       bridge_payload_json:JSON.stringify({ action:'pending', params:{} }),
-      created_at:'2026-07-19 10:00:00',
+      created_at:new Date(Date.now() - 10 * 60_000).toISOString(),
     }
     reservation = { order_intent_id: 1, status: 'active' }
     delivery = { id:9, signal_id:77, execution_status:'uncertain' }
@@ -507,7 +507,7 @@ describe('recovery and reconciliation', () => {
       request_json:JSON.stringify({ symbol:'XAUUSD', order_type:'buy_limit', volume:0.02 }),
       approved_order_json:JSON.stringify({ symbol:'XAUUSD', order_type:'buy_limit', volume:0.02 }),
       bridge_payload_json:JSON.stringify({ action:'pending', params:{} }),
-      created_at:'2026-07-19 10:00:00',
+      created_at:new Date(Date.now() - 60_000).toISOString(),
     }
     reservation = { order_intent_id:1, status:'active' }
     delivery = { id:9, signal_id:77, execution_status:'uncertain', is_executed:0 }
@@ -528,7 +528,7 @@ describe('recovery and reconciliation', () => {
     intent = {
       id:1, user_id:1, trading_account_id:1, status:'uncertain', bridge_command_ref:'AI-1',
       symbol:'XAUUSD', source_type:'auto_delivery', source_id:'77:1', action:'ai_auto_execute',
-      created_at:'2026-07-19 10:00:00',
+      created_at:new Date(Date.now() - 10 * 60_000).toISOString(),
     }
     reservation = { order_intent_id:1, status:'active' }
     delivery = { id:9, signal_id:77, execution_status:'uncertain' }

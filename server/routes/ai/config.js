@@ -16,7 +16,7 @@ import { getInferencePreference } from './inference-preferences.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
 import { subscriptionAllowsExecution, subscriptionAllowsInference } from './subscription-schedule.js'
 import { DEFAULT_MAX_POSITION_SIZE } from './defaults.js'
-import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
+import { applyDefaultObserverClockBootstrap, buildExecutionClockContext, trustedTerminalClock } from './terminal-clock.js'
 import { getDefaultObserverSourceClock } from './observer-channels.js'
 import { auditTradingAccountId, buildAuditClockSnapshot } from './audit-clock.js'
 import { executionValidationRejection, readExecutionValidation } from './signal-execution-validation.js'
@@ -76,6 +76,8 @@ export function buildBridgeOrderCall(request) {
       execution_validation: _executionValidation,
       mt5_timezone_offset_minutes: _mt5TimezoneOffsetMinutes,
       mt5_clock_status: _mt5ClockStatus,
+      execution_clock_context: _executionClockContext,
+      executionClockContext: _executionClockContextCamel,
       ...bridgeParams
     } = request
     return { bridgeAction: 'open', bridgeParams }
@@ -617,6 +619,10 @@ export async function executeOrderCore(userId, config, request, action, options 
   options = { ...options, noFallback: true }
   const signalId = request.signal_id ?? options.signalId ?? null
   const sourceType = options.sourceType || (options.deliveryId ? 'auto_delivery' : signalId ? 'signal' : 'manual')
+  // AI-originated orders must carry the terminal clock captured by the same
+  // risk snapshot all the way to sendBridgeCommand. Direct manual orders keep
+  // their existing account-clock path; they do not have a risk snapshot.
+  options.requireExecutionClockContext = sourceType !== 'manual'
   if (sourceType !== 'manual' || signalId != null) {
     let validationStates = []
     try {
@@ -700,12 +706,21 @@ export async function executeOrderCore(userId, config, request, action, options 
     beforeBridgeSend: async ({ bridgeAction, request:approved }) => {
       if (sourceType !== 'manual' && bridgeAction === 'pending') await assertAiPendingOrderEnabled()
       if (typeof options.beforeBridgeSend === 'function') {
-        await options.beforeBridgeSend({ bridgeAction, request:approved })
+        await options.beforeBridgeSend({
+          bridgeAction,
+          request:approved,
+          executionClockContext:options.executionClockContext || null,
+          instrument:options.executionInstrument || null,
+        })
       }
     },
     beforeBridgeSendTx: options.beforeBridgeSendTx,
     afterRiskPrepared: options.afterRiskPrepared,
-    resolveTradingAccount: ({ actorId, account, requestedAccountId }) => syncTradingAccountIdentity(actorId, account, requestedAccountId),
+    resolveTradingAccount: async ({ actorId, account, requestedAccountId }) => {
+      const resolved = await syncTradingAccountIdentity(actorId, account, requestedAccountId)
+      if (resolved?.accountId) options.tradingAccountId = resolved.accountId
+      return resolved
+    },
     statefulValidate: ({ run, tradingAccountId, intentId, request: approved, risk, riskContext }) => evaluateStatefulRiskTx(run, {
       userId,
       accountId: tradingAccountId,
@@ -794,6 +809,29 @@ export async function executeOrderCore(userId, config, request, action, options 
         snapshot:riskSnapshot,
         stage:'risk_snapshot',
       })
+      const snapshotAccount = riskSnapshot.account && typeof riskSnapshot.account === 'object'
+        ? riskSnapshot.account : {}
+      const executionClockContext = buildExecutionClockContext({
+        userId:actorId,
+        tradingAccountId,
+        terminalInstanceId:riskSnapshot.terminal_instance_id || options.terminal_instance_id || null,
+        brokerServer:snapshotAccount.server || snapshotAccount.broker_server
+          || account?.server || account?.broker_server,
+        login:snapshotAccount.login || snapshotAccount.account_login
+          || account?.login || account?.login_account,
+        clock:riskSnapshot,
+        capturedAtUtcMsc:riskSnapshot.captured_at_utc_msc || riskSnapshot.observed_at_utc_msc,
+        source:riskSnapshot.clock_source || 'risk_snapshot_terminal',
+      })
+      // Pending expiration must use the same terminal clock as the risk
+      // snapshot. The quote clock is only a pre-snapshot hint and must not
+      // silently win at the final Bridge boundary.
+      if (executionClockContext.timezone_offset_minutes !== null) {
+        prepared.mt5_timezone_offset_minutes = executionClockContext.timezone_offset_minutes
+        prepared.mt5_clock_status = executionClockContext.clock_status
+      }
+      options.executionClockContext = executionClockContext
+      options.executionInstrument = instrumentValidation.instrument || instrument
       const fxRates = {}
       const accountCurrency = String(account?.currency || '').toUpperCase()
       const quoteCurrencies = new Set([...(riskSnapshot.positions || []), ...(riskSnapshot.pending || []), prepared]
@@ -823,6 +861,7 @@ export async function executeOrderCore(userId, config, request, action, options 
         timezone_offset_minutes:riskSnapshot.timezone_offset_minutes == null
           || riskSnapshot.timezone_offset_minutes === '' ? null : Number(riskSnapshot.timezone_offset_minutes),
         clock_status:riskSnapshot.clock_status || '',
+        execution_clock_context:executionClockContext,
         businessDate: riskSnapshot.business_date,
         increment: riskSnapshot.increment || {},
         broker_calculation: riskSnapshot.broker_calculation || null,

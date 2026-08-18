@@ -49,7 +49,8 @@ import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, listPeriodReviewCases, getPeriodReviewCase,
   editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
   markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
-  retryPeriodReviewDerivation } from './period-review.js'
+  retryPeriodReviewDerivation, regeneratePeriodReviewCase, periodReviewFrontendMetadata,
+  periodReviewFrontendContractMismatch } from './period-review.js'
 import { listModelSnapshotSamples } from './model-snapshot-samples.js'
 import { translateAdminProfileError, updateAdminUserProfile } from './admin-user-profile.js'
 import { getPositionManagementSettings, getPositionManagementTask, listPositionManagementTasks,
@@ -180,8 +181,30 @@ function reviewError(res, error) {
     console.error(`[AI API ${incidentId}]`, error)
     return res.status(500).json({ ok:false, error:'ai_internal_error', incident_id:incidentId })
   }
-  const status = code.includes('not_found') ? 404 : code.includes('conflict') ? 409 : (code.includes('access_denied') || code.includes('forbidden') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required') || code === 'manual_trade_review_forbidden') ? 403 : 400
+  const status = code.includes('not_found') ? 404 : code.includes('conflict') || code === 'period_review_frontend_contract_mismatch' ? 409 : (code.includes('access_denied') || code.includes('forbidden') || code.includes('admin_required') || code.includes('admin_only') || code.includes('requires_admin') || code.includes('pro_access_required') || code === 'manual_trade_review_forbidden') ? 403 : 400
   return res.status(status).json({ ok: false, error: code })
+}
+
+function setPeriodReviewReadHeaders(res) {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+  res.set('Pragma', 'no-cache')
+  res.set('Expires', '0')
+}
+
+function periodReviewReadHeaders(_req, res, next) {
+  setPeriodReviewReadHeaders(res)
+  return next()
+}
+
+function sendPeriodReviewReadResponse(res, payload) {
+  return res.json({ ok:true, ...(payload || {}), ...periodReviewFrontendMetadata() })
+}
+
+function periodReviewFrontendContractGuard(req, res, next) {
+  if (periodReviewFrontendContractMismatch(req)) {
+    return res.status(409).json({ ok:false, error:'period_review_frontend_contract_mismatch' })
+  }
+  return next()
 }
 
 export function modelConnectionValidationError(error) {
@@ -1162,8 +1185,8 @@ router.get('/ai/reviews', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
-router.get('/ai/period-reviews', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, ...(await listPeriodReviewCases(req.user, { ...req.query, includePageInfo:true })) }) }
+router.get('/ai/period-reviews', authMiddleware, periodReviewReadHeaders, async (req, res) => {
+  try { sendPeriodReviewReadResponse(res, await listPeriodReviewCases(req.user, { ...req.query, includePageInfo:true })) }
   catch (error) { reviewError(res, error) }
 })
 
@@ -1190,22 +1213,22 @@ router.delete('/ai/manual-analysis/jobs/:jobId', authMiddleware, async (req, res
   catch (error) { reviewError(res, error) }
 })
 
-router.get('/ai/period-reviews/summary', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, summary: await getPeriodReviewSummary(req.user) }) }
+router.get('/ai/period-reviews/summary', authMiddleware, periodReviewReadHeaders, async (req, res) => {
+  try { sendPeriodReviewReadResponse(res, { summary:await getPeriodReviewSummary(req.user) }) }
   catch (error) { reviewError(res, error) }
 })
 
-router.get('/ai/period-reviews/:id', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, review: await getPeriodReviewCase(Number(req.params.id), req.user) }) }
+router.get('/ai/period-reviews/:id', authMiddleware, periodReviewReadHeaders, async (req, res) => {
+  try { sendPeriodReviewReadResponse(res, { review:await getPeriodReviewCase(Number(req.params.id), req.user) }) }
   catch (error) { reviewError(res, error) }
 })
 
-router.get('/ai/period-reviews/:id/job-status', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, job: await getPeriodReviewJobStatus(Number(req.params.id), req.user) }) }
+router.get('/ai/period-reviews/:id/job-status', authMiddleware, periodReviewReadHeaders, async (req, res) => {
+  try { sendPeriodReviewReadResponse(res, { job:await getPeriodReviewJobStatus(Number(req.params.id), req.user) }) }
   catch (error) { reviewError(res, error) }
 })
 
-router.post('/ai/period-reviews/:id/edit', authMiddleware, async (req, res) => {
+router.post('/ai/period-reviews/:id/edit', authMiddleware, periodReviewFrontendContractGuard, async (req, res) => {
   try { res.json({ ok: true, ...(await editPeriodReviewCase({ periodCaseId: Number(req.params.id), actor: req.user,
     content: req.body?.content, expectedVersionId: req.body?.expected_version_id, changeNote: req.body?.change_note })) }) }
   catch (error) { reviewError(res, error) }
@@ -1216,7 +1239,7 @@ router.post('/ai/period-reviews/:id/read', authMiddleware, async (req, res) => {
   catch (error) { reviewError(res, error) }
 })
 
-router.post('/ai/period-reviews/:id/confirm', authMiddleware, async (req, res) => {
+router.post('/ai/period-reviews/:id/confirm', authMiddleware, periodReviewFrontendContractGuard, async (req, res) => {
   try {
     const periodCaseId = Number(req.params.id)
     const result = await confirmPeriodReviewCase({ periodCaseId, actor: req.user,
@@ -1226,12 +1249,19 @@ router.post('/ai/period-reviews/:id/confirm', authMiddleware, async (req, res) =
   } catch (error) { reviewError(res, error) }
 })
 
-router.post('/ai/period-reviews/:id/retry', authMiddleware, async (req, res) => {
+router.post('/ai/period-reviews/:id/retry', authMiddleware, periodReviewFrontendContractGuard, async (req, res) => {
   try { res.json({ ok: true, ...(await retryPeriodReviewCase(Number(req.params.id), req.user)) }) }
   catch (error) { reviewError(res, error) }
 })
 
-router.post('/ai/period-reviews/:id/derivation/retry', authMiddleware, async (req, res) => {
+router.post('/ai/period-reviews/:id/regenerate', authMiddleware, periodReviewFrontendContractGuard, async (req, res) => {
+  try {
+    const requestIdempotencyKey = req.get('Idempotency-Key') || req.body?.idempotency_key || req.body?.request_id || null
+    res.json({ ok: true, ...(await regeneratePeriodReviewCase(Number(req.params.id), req.user, { requestIdempotencyKey })) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/period-reviews/:id/derivation/retry', authMiddleware, periodReviewFrontendContractGuard, async (req, res) => {
   try { res.json({ ok:true, ...(await retryPeriodReviewDerivation(Number(req.params.id), req.user)) }) }
   catch (error) { reviewError(res, error) }
 })
@@ -1660,7 +1690,7 @@ export { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   startPeriodReviewWorker, stopPeriodReviewWorker, listPeriodReviewCases, getPeriodReviewCase,
   editPeriodReviewCase, confirmPeriodReviewCase, retryPeriodReviewCase, getPeriodReviewSummary,
   markPeriodReviewRead, getPeriodReviewJobStatus, requestPeriodReviewCycle,
-  retryPeriodReviewDerivation } from './period-review.js'
+  retryPeriodReviewDerivation, regeneratePeriodReviewCase } from './period-review.js'
 
 export { assertAiGovernanceSchemaReady, getEffectiveFeatureFlags, updateAiFeatureFlags,
   updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'

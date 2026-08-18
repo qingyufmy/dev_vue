@@ -80,6 +80,7 @@ import { WebSocketServer } from 'ws'
 import {
   initBridgeWS,
   sendBridgeCommand,
+  bindExecutionClockRouteParams,
   isBridgeAlive,
   isTradeEnabled,
   getOwnBridgeMarketState,
@@ -2356,6 +2357,28 @@ describe('sendBridgeCommand', () => {
     expect(result.code).toBe('terminal_clock_unverified')
     expect(result.message).toBe('交易平台时间尚未校准')
     vi.useRealTimers()
+  })
+
+  it('fails closed when an AI order does not carry the risk-snapshot clock context', async () => {
+    const result = await sendBridgeCommand(91, 'pending', { symbol:'XAUUSD' }, 5000, {
+      noFallback:true, requireExecutionClockContext:true, tradingAccountId:12,
+    })
+
+    expect(result).toMatchObject({
+      status:'rejected', code:'execution_clock_context_missing',
+    })
+    expect(mockBridgeV3Business.execute).not.toHaveBeenCalled()
+  })
+
+  it('binds an AI order payload to the same terminal identity that validated its clock context', () => {
+    expect(bindExecutionClockRouteParams({ symbol:'XAUUSD', order_type:'buy_limit' }, {
+      terminal_instance_id:'subscriber-terminal',
+      broker_server:'ULTIMAMARKETS-DEMO',
+      login:'18192234189',
+    })).toEqual({
+      symbol:'XAUUSD', order_type:'buy_limit', terminal_instance_id:'subscriber-terminal',
+      broker_server:'ULTIMAMARKETS-DEMO', login:'18192234189',
+    })
   })
 
   it('uses the same-broker default observer clock for the first-install weekly risk window', async () => {

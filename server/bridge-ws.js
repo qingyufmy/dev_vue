@@ -21,7 +21,8 @@ import {
   isBridgeHistoryReadsEnabled,
 } from './bridge-v3/business-adapter.js'
 import { createObserverQuoteFeedManager } from './observer-quote-feed.js'
-import { applyDefaultObserverClockBootstrap, trustedTerminalClock } from './routes/ai/terminal-clock.js'
+import { applyDefaultObserverClockBootstrap, trustedTerminalClock,
+  validateExecutionClockContext } from './routes/ai/terminal-clock.js'
 import { getInferenceSnapshotEvidence, getInferenceVisualizationSnapshot } from './routes/ai/inference-snapshots.js'
 import { executionValidationRejection, readExecutionValidation } from './routes/ai/signal-execution-validation.js'
 
@@ -4397,13 +4398,52 @@ async function handleBrowserCommand(ws, userId, msg) {
 }
 
 // Send command to bridge and wait for result
+export function bindExecutionClockRouteParams(params = {}, clock = {}) {
+  return {
+    ...params,
+    terminal_instance_id:clock.terminal_instance_id,
+    broker_server:clock.broker_server,
+    login:clock.login,
+  }
+}
+
 export async function sendBridgeCommand(userId, action, params, timeoutMs = 5000, options = {}) {
   const numericUserId = Number(userId)
   if (action === 'open' || action === 'pending') {
-    const clock = await getEffectivePlatformMarketClockState(
-      numericUserId,
-      options.tradingAccountId ?? params?.trading_account_id ?? null,
-      params?.terminal_instance_id ?? null)
+    const tradingAccountId = options.tradingAccountId ?? params?.trading_account_id ?? null
+    let clock
+    if (options.requireExecutionClockContext) {
+      const route = getBridgeDataRoute(numericUserId, tradingAccountId, {
+        strictAccount:Number(tradingAccountId) > 0,
+      })
+      const supplied = options.executionClockContext
+      if (!supplied) {
+        return { status:'rejected', code:'execution_clock_context_missing',
+          message:'交易平台时间证据不可用，订单未发送到 MT5' }
+      }
+      const verified = validateExecutionClockContext(supplied, {
+        userId:numericUserId,
+        tradingAccountId,
+        terminalInstanceId:params?.terminal_instance_id || route?.terminal_instance_id || null,
+        brokerServer:route?.account_ref?.broker_server || null,
+        login:route?.account_ref?.login || null,
+      })
+      if (!verified.valid) {
+        return { status:'rejected', code:verified.reason,
+          message:'交易平台时间证据不可用，订单未发送到 MT5' }
+      }
+      // Keep the route-derived terminal identity attached to the context sent
+      // to the Bridge. It cannot be replaced by an observer or shared clock.
+      clock = verified.context
+      params = bindExecutionClockRouteParams(params, clock)
+      options = { ...options, executionClockContext:clock,
+        terminal_instance_id:clock.terminal_instance_id }
+    } else {
+      clock = await getEffectivePlatformMarketClockState(
+        numericUserId,
+        tradingAccountId,
+        params?.terminal_instance_id ?? null)
+    }
     const riskLock = weeklyRiskLockResult(
       new Date(), clock.timezone_offset_minutes, clock.clock_status)
     if (riskLock) return riskLock
