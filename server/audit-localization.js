@@ -271,6 +271,8 @@ const VALUE_LABELS = {
   terminal_clock_unverified: '交易平台时钟尚未校准，订单未发送',
   private_portfolio_context_unavailable: '无法获取私有策略所需的持仓与挂单数据',
   portfolio_state_unavailable: '无法读取当前账户的持仓与挂单，本次未执行',
+  strategy_reversal_waiting_for_exit: '观摩源旧方向尚未完成退出，本轮不执行反向开仓',
+  strategy_reference_portfolio_refresh_unavailable: '无法确认观摩源最新持仓与挂单，本轮停止新开仓',
   opposite_position_exists: '当前账户已有反向持仓，本次不新增仓位',
   existing_position_no_add: '当前账户已有同向持仓，策略未建议加仓',
   reference_position_not_matched: '账户实际持仓与平台参考组合不一致，本次不跟随加仓',

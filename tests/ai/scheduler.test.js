@@ -166,6 +166,71 @@ describe('execution validation delivery gate', () => {
   })
 })
 
+describe('platform strategy direction interlock integration', () => {
+  const referenceSource = { source_id:5, bridge_user_id:1, trading_account_id:3 }
+  const signal = () => ({
+    signal_type:'sell', entry_method:'market', position_action:'open',
+    position_size_tier:'probe', position_size_factor:0.25,
+    stop_loss_price:4428, take_profit_1_price:4388,
+    execution_validation:{ status:'eligible', eligible:true, reason_codes:[] },
+    _position_management:{ position_evaluations:[
+      { management_group_id:'group-46', action:'hold', reversal_candidate:true },
+      { management_group_id:'group-47', action:'hold', reversal_candidate:true },
+    ] },
+  })
+
+  it('blocks signal 24414 shape before persistence while retaining management evaluations', async () => {
+    const frozen = { positions:[{ direction:'buy' }, { direction:'buy' }], pending_orders:[] }
+    const result = await __schedulerTest.enforcePlatformStrategyDirectionInterlock({
+      signal:signal(), market:{ latest_price:4395, strategy_reference_portfolio:frozen },
+      strategyId:1, inferenceUserId:1, symbol:'XAUUSD', referenceSource,
+      getCurrentSource:vi.fn(async () => ({ ...referenceSource })),
+      loadReferencePortfolio:vi.fn(async () => frozen),
+      loadBlockingTasks:vi.fn(async () => []),
+    })
+    expect(result.resolution).toMatchObject({ allowed:false,
+      reason_code:'strategy_reversal_waiting_for_exit', frozen_opposite_count:2 })
+    expect(result.signal).toMatchObject({ signal_type:'hold', entry_method:'observe',
+      execution_validation:{ eligible:false, reason_codes:['strategy_reversal_waiting_for_exit'] } })
+    expect(result.signal._position_management.position_evaluations).toHaveLength(2)
+  })
+
+  it('fails closed when the observer source changes during inference', async () => {
+    const result = await __schedulerTest.enforcePlatformStrategyDirectionInterlock({
+      signal:signal(), market:{ strategy_reference_portfolio:{ positions:[], pending_orders:[] } },
+      strategyId:1, inferenceUserId:1, symbol:'XAUUSD', referenceSource,
+      getCurrentSource:vi.fn(async () => ({ ...referenceSource, trading_account_id:99 })),
+      loadReferencePortfolio:vi.fn(), loadBlockingTasks:vi.fn(),
+    })
+    expect(result.signal.execution_validation).toMatchObject({ eligible:false,
+      reason_codes:['strategy_reference_portfolio_refresh_unavailable'] })
+    expect(result.resolution.refresh_error).toBe('reference_source_changed_during_inference')
+  })
+
+  it('fails closed when inference is running through a different bridge than the configured source', async () => {
+    const result = await __schedulerTest.enforcePlatformStrategyDirectionInterlock({
+      signal:signal(), market:{ strategy_reference_portfolio:null },
+      strategyId:1, inferenceUserId:99, symbol:'XAUUSD', referenceSource,
+    })
+    expect(result.signal.execution_validation).toMatchObject({ eligible:false,
+      reason_codes:['strategy_reference_portfolio_refresh_unavailable'] })
+    expect(result.resolution.refresh_error).toBe('reference_source_bridge_mismatch')
+  })
+
+  it('allows the later cycle only after frozen and fresh portfolios are flat', async () => {
+    const flat = { positions:[], pending_orders:[] }
+    const original = signal()
+    const result = await __schedulerTest.enforcePlatformStrategyDirectionInterlock({
+      signal:original, market:{ strategy_reference_portfolio:flat },
+      strategyId:1, inferenceUserId:1, symbol:'XAUUSD', referenceSource,
+      getCurrentSource:vi.fn(async () => ({ ...referenceSource })),
+      loadReferencePortfolio:vi.fn(async () => flat), loadBlockingTasks:vi.fn(async () => []),
+    })
+    expect(result.resolution).toMatchObject({ allowed:true })
+    expect(result.signal).toBe(original)
+  })
+})
+
 describe('subscriber execution weekly gate', () => {
   it('uses the risk-snapshot clock and never falls back to the legacy bridge clock', () => {
     const evaluationNow = Date.parse('2026-08-21T15:30:00.000Z')

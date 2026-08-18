@@ -3,6 +3,9 @@ import { mt5Bridge } from './market-data.js'
 import { stripBrokerSuffix } from './utils.js'
 
 const SYSTEM_TRADE_MAGIC = 234000
+const DIRECTION_INTERLOCK_SAFE_TASK_STATES = new Set([
+  'HELD', 'EXPIRED', 'REJECTED', 'COMPLETED', 'EXIT_ONLY_COMPLETED',
+])
 
 function sameSymbol(value, expected) {
   return stripBrokerSuffix(String(value || '')).toUpperCase() === stripBrokerSuffix(String(expected || '')).toUpperCase()
@@ -148,6 +151,35 @@ export async function loadPlatformReferencePortfolio({ strategyId, sourceUserId,
     captured_at:new Date(capturedAtUtcMsc).toISOString(),
     captured_at_utc_msc:capturedAtUtcMsc,
   }
+}
+
+/**
+ * Return only durable platform-source task facts that can make a direction
+ * change unsafe. Subscriber inventory is deliberately not queried here.
+ */
+export async function loadPlatformDirectionInterlockTasks({ strategyId, sourceUserId, symbol } = {}) {
+  const rows = await queryAll(`SELECT tasks.id, tasks.task_type, tasks.status,
+      tasks.candidate_action, tasks.outcome_id, tasks.decision_signal_id,
+      tasks.origin_signal_id, tasks.original_symbol, tasks.standard_symbol,
+      outcomes.entry_direction
+    FROM ai_position_management_tasks tasks
+    JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
+    WHERE tasks.strategy_id = ? AND tasks.user_id = ?
+      AND outcomes.status IN ('open','closing')
+    ORDER BY tasks.id`, [Number(strategyId), Number(sourceUserId)])
+  return rows.filter(row => sameSymbol(row.standard_symbol || row.original_symbol, symbol)
+      && !DIRECTION_INTERLOCK_SAFE_TASK_STATES.has(String(row.status || '').trim().toUpperCase()))
+    .map(row => ({
+      task_id:Number(row.id),
+      task_type:String(row.task_type || ''),
+      status:String(row.status || '').trim().toUpperCase(),
+      candidate_action:String(row.candidate_action || ''),
+      outcome_id:Number(row.outcome_id),
+      decision_signal_id:Number(row.decision_signal_id) || null,
+      origin_signal_id:Number(row.origin_signal_id) || null,
+      direction:String(row.entry_direction || '').toLowerCase().startsWith('buy') ? 'buy'
+        : String(row.entry_direction || '').toLowerCase().startsWith('sell') ? 'sell' : null,
+    }))
 }
 
 function jsonArray(value) {

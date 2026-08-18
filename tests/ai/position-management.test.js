@@ -30,10 +30,11 @@ import {
   resolveAutomaticExitConfirmation,
   resolvePositionManagementTaskMode,
   savePositionManagementSettings,
+  supersedePositionManagementCandidates,
   targetMatchesPositionManagementTask,
   validatePositionManagementResponse,
 } from '../../server/routes/ai/position-management.js'
-import { queryAll, queryOne, queryRun } from '../../server/db.js'
+import { queryAll, queryOne, queryRun, withTransaction } from '../../server/db.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -273,7 +274,7 @@ describe('position management strategy-authoritative contract', () => {
 
   it.each([
     ['aligned', 'hold'], ['uncertain', 'hold'], ['misaligned', 'exit'],
-  ])('enforces position market_alignment=%s as action=%s', (marketAlignment, action) => {
+  ])('enforces valid position market_alignment=%s as action=%s', (marketAlignment, action) => {
     const value = response({
       pending_evaluations:[{ ...response().pending_evaluations[0], action:'keep', market_alignment:'aligned', cancel_reason_code:null }],
       position_evaluations:[{
@@ -288,8 +289,8 @@ describe('position management strategy-authoritative contract', () => {
   })
 
   it.each([
-    ['aligned', 'cancel'], ['uncertain', 'cancel'], ['misaligned', 'keep'],
-  ])('preserves strategy-selected pending action independently from market_alignment=%s action=%s', (marketAlignment, action) => {
+    ['aligned', 'cancel'], ['uncertain', 'keep'], ['misaligned', 'cancel'],
+  ])('enforces valid pending market_alignment=%s as action=%s', (marketAlignment, action) => {
     const value = response({ pending_evaluations:[{
       ...response().pending_evaluations[0], action, market_alignment:marketAlignment,
       cancel_reason_code:action === 'cancel' ? 'market_misaligned' : null,
@@ -298,6 +299,62 @@ describe('position management strategy-authoritative contract', () => {
       plan => ({ ...plan, confidence:0.8 }))
     expect(result._position_management.pending_evaluations[0]).toMatchObject({ action, market_alignment:marketAlignment })
     expect(result._position_management.validation.errors).toEqual([])
+  })
+
+  it.each([
+    ['pending', 'misaligned', 'keep', 'pending_misaligned_action_invalid'],
+    ['pending', 'uncertain', 'cancel', 'pending_uncertain_action_invalid'],
+    ['position', 'misaligned', 'hold', 'position_misaligned_action_invalid'],
+    ['position', 'uncertain', 'exit', 'position_uncertain_action_invalid'],
+  ])('fails closed for %s alignment/action conflict: %s + %s',
+    (section, marketAlignment, action, code) => {
+      const value = response({
+        market_plan:{ signal_type:'sell', entry_method:'market' },
+        pending_evaluations:section === 'pending' ? [{
+          ...response().pending_evaluations[0], action, market_alignment:marketAlignment,
+          cancel_reason_code:action === 'cancel' ? 'market_misaligned' : null,
+        }] : [],
+        position_evaluations:section === 'position' ? [{
+          ...response().position_evaluations[0], action, market_alignment:marketAlignment,
+          exit_reason_code:action === 'exit' ? 'market_misaligned' : null,
+        }] : [],
+      })
+      const result = validatePositionManagementResponse(value, context, plan => ({ ...plan, confidence:0.8 }))
+      expect(result.signal_type).toBe('hold')
+      expect(result.entry_method).toBe('observe')
+      expect(result._position_management.validation.fail_closed).toBe(true)
+      expect(result._position_management.validation.errors).toContainEqual(expect.objectContaining({ code }))
+      const evaluation = section === 'pending'
+        ? result._position_management.pending_evaluations[0]
+        : result._position_management.position_evaluations[0]
+      expect(evaluation.validation_source).toBe('server_fail_closed')
+    })
+
+  it('fails closed for signal 24414 shape even when both opposite positions are held', () => {
+    const localContext = {
+      ...context,
+      position_groups:[
+        { ...context.position_groups[0], management_group_id:'group-46', thesis_id:'thesis-46', direction:'buy' },
+        { ...context.position_groups[0], management_group_id:'group-47', thesis_id:'thesis-47', direction:'buy' },
+      ],
+    }
+    const value = response({
+      market_plan:{ ...response().market_plan, signal_type:'sell', entry_method:'market' },
+      pending_evaluations:[],
+      position_evaluations:localContext.position_groups.map(group => ({
+        management_group_id:group.management_group_id, thesis_id:group.thesis_id,
+        action:'hold', market_alignment:'aligned', exit_reason_code:null,
+        reversal_candidate:true, reason:'结构尚未满足退出确认', evidence_refs:[],
+      })),
+    })
+    const result = validatePositionManagementResponse(value, localContext,
+      plan => ({ ...plan, confidence:0.7 }))
+    expect(result).toMatchObject({ signal_type:'hold', entry_method:'observe', position_action:'observe' })
+    expect(result._position_management.position_evaluations).toHaveLength(2)
+    expect(result._position_management.validation).toMatchObject({ fail_closed:true })
+    expect(result._position_management.validation.errors).toContainEqual(expect.objectContaining({
+      section:'market', code:'strategy_reversal_waiting_for_exit',
+    }))
   })
 
   it.each(['expired', 'thesis_invalidated', 'risk_reduction', 'model_judgment'])
@@ -455,9 +512,88 @@ describe('position management strategy-authoritative contract', () => {
 })
 
 describe('consecutive automatic-inference exit confirmation', () => {
+  it('atomically supersedes only unissued candidates for a valid hold/keep decision', async () => {
+    const candidates = [
+      { id:21, status:'CANDIDATE', state_version:1, fencing_token:2, evidence_validation_json:'{}' },
+      { id:22, status:'EVIDENCE_CONFIRMED', state_version:3, fencing_token:4, evidence_validation_json:'{}' },
+    ]
+    const runner = vi.fn(async (sql, params = []) => {
+      if (String(sql).includes('SELECT * FROM ai_position_management_tasks')) return [candidates, []]
+      if (String(sql).includes('UPDATE ai_position_management_tasks')) return [{ affectedRows:1 }, []]
+      if (String(sql).includes('INSERT INTO ai_position_management_events')) return [{ affectedRows:1 }, []]
+      throw new Error(`unexpected transaction SQL: ${sql}`)
+    })
+    withTransaction.mockImplementationOnce(async callback => callback(runner))
+    const result = await supersedePositionManagementCandidates({
+      signalId:301,
+      context:{ as_of:{ closed_bar_time_utc_ms:1784736900000, market_snapshot_hash:'sha256:new-snapshot' } },
+      target:{ user_id:7, trading_account_id:3, outcome_id:9, strategy_id:2, strategy_version:4,
+        management_group_id:'position_group_01', thesis_id:'thesis_01' },
+      section:'position', action:'hold',
+      evaluation:{ market_alignment:'aligned', reason:'当前行情仍支持原持仓方向' },
+    })
+    expect(result).toEqual([
+      expect.objectContaining({ id:21, status:'HELD', state_version:2, fencing_token:3 }),
+      expect.objectContaining({ id:22, status:'HELD', state_version:4, fencing_token:5 }),
+    ])
+    expect(runner.mock.calls[0][0]).toContain('FOR UPDATE')
+    expect(runner.mock.calls[0][0]).toContain('status IN (?,?)')
+    expect(runner.mock.calls[0][1].slice(-2)).toEqual(['CANDIDATE', 'EVIDENCE_CONFIRMED'])
+    expect(runner.mock.calls.filter(call => String(call[0]).includes('UPDATE ai_position_management_tasks')))
+      .toHaveLength(2)
+    expect(runner.mock.calls.filter(call => String(call[0]).includes('INSERT INTO ai_position_management_events')))
+      .toHaveLength(2)
+    expect(result.every(task => JSON.parse(task.evidence_validation_json).status === 'reset')).toBe(true)
+  })
+
+  it('persists an invalid hold evaluation and interrupts a prior exit candidate', async () => {
+    queryOne.mockImplementation(async sql => {
+      if (String(sql).includes('global_position_management_control')) {
+        return { maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 }
+      }
+      if (String(sql).includes('ai_position_management_evaluations')) {
+        return { id:40, decision_signal_id:200, action:'exit', validation_status:'valid',
+          market_snapshot_hash:'snapshot-old', closed_bar_time_utc_ms:1784736000000,
+          model_evaluation_json:JSON.stringify({ contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }) }
+      }
+      return null
+    })
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:41, changes:1 }).mockResolvedValueOnce({ changes:1 })
+    const task = { id:51, status:'CANDIDATE', state_version:1, fencing_token:1,
+      evidence_validation_json:'{}', task_type:'position_exit' }
+    const runner = vi.fn(async sql => {
+      if (String(sql).includes('SELECT * FROM ai_position_management_tasks')) return [[task], []]
+      if (String(sql).includes('UPDATE ai_position_management_tasks')) return [{ affectedRows:1 }, []]
+      if (String(sql).includes('INSERT INTO ai_position_management_events')) return [{ affectedRows:1 }, []]
+      throw new Error(`unexpected transaction SQL: ${sql}`)
+    })
+    withTransaction.mockImplementationOnce(async callback => callback(runner))
+    const target = { user_id:7, trading_account_id:3, outcome_id:9, position_id:'P-9',
+      original_symbol:'XAUUSD', standard_symbol:'XAUUSD', management_group_id:'position_group_01',
+      thesis_id:'thesis_01', ownership_history_id:5, strategy_id:2, strategy_version:4,
+      origin_signal_id:100 }
+    const localContext = { ...context,
+      as_of:{ ...context.as_of, market_snapshot_hash:'sha256:snapshot-invalid' },
+      _targets:new Map([['position_group_01', [target]]]) }
+    const invalidHold = {
+      ...response().position_evaluations[0], action:'hold', market_alignment:'uncertain',
+      exit_reason_code:null, validation_source:'server_fail_closed',
+    }
+    const result = await persistPositionManagementEvaluations({
+      signalId:201, context:localContext, inferenceSource:'automatic_scheduler',
+      management:{ position_evaluations:[invalidHold], pending_evaluations:[] },
+    })
+    expect(result).toEqual([expect.objectContaining({ id:51, status:'HELD', confirmation_count:0 })])
+    const evidence = JSON.parse(result[0].evidence_validation_json)
+    expect(evidence).toMatchObject({ status:'reset', source:'invalid_inference_output',
+      reset_evaluation_id:41, reset_decision_signal_id:201 })
+    expect(queryRun.mock.calls.some(call => String(call[0]).includes('ai_position_management_evaluations'))).toBe(true)
+  })
+
   it('requires two distinct current-contract inferences and snapshots', () => {
     expect(AUTO_EXIT_CONFIRMATIONS_REQUIRED).toBe(2)
-    expect(POSITION_MANAGEMENT_CONTRACT_VERSION).toBe('position-management-v1.7')
+    expect(POSITION_MANAGEMENT_CONTRACT_VERSION).toBe('position-management-v1.8')
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, null))
       .toMatchObject({ validation_status:'valid', confirmation_count:1 })
@@ -730,6 +866,33 @@ describe('consecutive automatic-inference exit confirmation', () => {
 })
 
 describe('single-inference pending cancellation', () => {
+  it('supersedes a pending-cancel candidate when the latest valid decision keeps the order', async () => {
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+    queryAll.mockResolvedValueOnce([])
+    const task = { id:71, status:'EVIDENCE_CONFIRMED', state_version:2, fencing_token:3,
+      evidence_validation_json:'{}', task_type:'pending_cancel' }
+    const runner = vi.fn(async sql => {
+      if (String(sql).includes('SELECT * FROM ai_position_management_tasks')) return [[task], []]
+      if (String(sql).includes('UPDATE ai_position_management_tasks')) return [{ affectedRows:1 }, []]
+      if (String(sql).includes('INSERT INTO ai_position_management_events')) return [{ affectedRows:1 }, []]
+      throw new Error(`unexpected transaction SQL: ${sql}`)
+    })
+    withTransaction.mockImplementationOnce(async callback => callback(runner))
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:79, pending_ticket:'O-79', position_id:null,
+      original_symbol:'XAUUSD', standard_symbol:'XAUUSD', management_group_id:'pending_group_01',
+      thesis_id:'thesis_pending_01', ownership_history_id:5, strategy_id:2, strategy_version:4,
+    }
+    const localContext = { ...context, _targets:new Map([['pending_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:111, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{ position_evaluations:[], pending_evaluations:[{
+        ...response().pending_evaluations[0], action:'keep', market_alignment:'uncertain', cancel_reason_code:null,
+      }] } })
+    expect(result).toEqual([expect.objectContaining({ id:71, status:'HELD', confirmation_count:0 })])
+    expect(runner.mock.calls.some(call => String(call[0]).includes('FOR UPDATE'))).toBe(true)
+    expect(queryRun).not.toHaveBeenCalled()
+  })
+
   it('confirms a valid cancel decision immediately without querying a previous round', async () => {
     queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
     queryAll.mockResolvedValueOnce([])

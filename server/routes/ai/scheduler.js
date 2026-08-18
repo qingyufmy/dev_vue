@@ -18,7 +18,7 @@ import { isSubscriptionScheduleActive } from './subscription-schedule.js'
 import { attachSignalPresentation, normalizeDecisionFields, SIGNAL_SCHEMA_VERSION } from './signal-presentation.js'
 import { buildDecisionDiagnostics } from './decision-diagnostics.js'
 import { getObserverSourceForStrategy } from './observer-channels.js'
-import { loadPlatformReferencePortfolio } from './reference-portfolio.js'
+import { loadPlatformDirectionInterlockTasks, loadPlatformReferencePortfolio } from './reference-portfolio.js'
 import { createTradeThesisTx, hasActivePositionManagementGroups,
   loadActivePositionManagementContext, persistPositionManagementEvaluations } from './position-management.js'
 import { prepareStrategyDataRuntime, buildStrategyRuntimeSnapshot } from './strategy-policy.js'
@@ -38,6 +38,7 @@ import { executionValidationRejection, readExecutionValidation } from './signal-
 import { accountSymbolInventoryLockKey, acquireAccountSymbolInventoryLock,
   releaseAccountSymbolInventoryLock } from '../../services/account-symbol-inventory-lock.js'
 import { DuplicateLivePendingError, findDuplicateLivePending } from './live-pending-dedup.js'
+import { applyStrategyDirectionInterlock, resolveStrategyDirectionInterlock } from './strategy-direction-interlock.js'
 
 // === Unified Scheduler State ===
 // Key: "promptTypeId:symbol"
@@ -243,6 +244,61 @@ function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAt
   }
 }
 
+export async function enforcePlatformStrategyDirectionInterlock({ signal, market, strategyId,
+  inferenceUserId, symbol, referenceSource, getCurrentSource = getObserverSourceForStrategy,
+  loadReferencePortfolio = loadPlatformReferencePortfolio,
+  loadBlockingTasks = loadPlatformDirectionInterlockTasks } = {}) {
+  const modelTradeDirection = String(signal?.signal_type || '').trim().toLowerCase()
+  if (!/^(buy|sell)(?:_|$)/.test(modelTradeDirection) || !referenceSource) {
+    return { signal, resolution:null }
+  }
+  if (Number(referenceSource.bridge_user_id) !== Number(inferenceUserId)) {
+    const resolution = {
+      ...resolveStrategyDirectionInterlock({ signal,
+        frozenPortfolio:market?.strategy_reference_portfolio, freshPortfolio:null,
+        blockingTasks:[], refreshAvailable:false }),
+      refresh_error:'reference_source_bridge_mismatch',
+    }
+    return { signal:applyStrategyDirectionInterlock(signal, resolution, market), resolution }
+  }
+  let resolution
+  try {
+    const currentSource = await getCurrentSource(strategyId)
+    const sourceStable = currentSource
+      && Number(currentSource.source_id) === Number(referenceSource.source_id)
+      && Number(currentSource.bridge_user_id) === Number(referenceSource.bridge_user_id)
+      && Number(currentSource.trading_account_id || 0) === Number(referenceSource.trading_account_id || 0)
+    if (!sourceStable) throw new Error('reference_source_changed_during_inference')
+    const [freshPortfolio, blockingTasks] = await Promise.all([
+      loadReferencePortfolio({ strategyId, sourceUserId:inferenceUserId, symbol }),
+      loadBlockingTasks({ strategyId, sourceUserId:inferenceUserId, symbol }),
+    ])
+    resolution = resolveStrategyDirectionInterlock({
+      signal,
+      frozenPortfolio:market?.strategy_reference_portfolio,
+      freshPortfolio,
+      blockingTasks,
+      refreshAvailable:true,
+    })
+  } catch (error) {
+    resolution = {
+      ...resolveStrategyDirectionInterlock({
+        signal,
+        frozenPortfolio:market?.strategy_reference_portfolio,
+        freshPortfolio:null,
+        blockingTasks:[],
+        refreshAvailable:false,
+      }),
+      refresh_error:String(error?.message || 'reference_refresh_failed').slice(0, 160),
+    }
+  }
+  return {
+    signal:resolution.allowed === false
+      ? applyStrategyDirectionInterlock(signal, resolution, market) : signal,
+    resolution,
+  }
+}
+
 function getAutoModelTaskTrackerFactory() {
   const factory = modelTaskTrackerModule.createModelTaskTracker
   if (typeof factory !== 'function') {
@@ -256,6 +312,7 @@ function getAutoModelTaskTrackerFactory() {
 async function assertModelTaskOwned(tracker, phase) {
   if (!tracker || tracker.active === false) return false
   if (typeof tracker.assertOwned !== 'function') return false
+  let platformReferenceSource = null
   try {
     const owned = await tracker.assertOwned(phase)
     return owned !== false
@@ -2333,8 +2390,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     market.used_timeframes = market.strategy_context.used_timeframes || Object.keys(market.strategy_context?.timeframes || {})
     market.missing_timeframes = market.strategy_context.missing_timeframes || market.requested_timeframes.filter(tf => !market.used_timeframes.includes(tf))
     if (!isPrivate) {
-      const referenceSource = await getObserverSourceForStrategy(promptTypeId)
-      if (referenceSource && Number(referenceSource.bridge_user_id) === Number(inferenceUserId)) {
+      platformReferenceSource = await getObserverSourceForStrategy(promptTypeId)
+      if (platformReferenceSource && Number(platformReferenceSource.bridge_user_id) === Number(inferenceUserId)) {
         try {
           market.strategy_reference_portfolio = await loadPlatformReferencePortfolio({
             strategyId:promptTypeId, sourceUserId:inferenceUserId, symbol,
@@ -2498,6 +2555,20 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         { trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe: primaryTf },
         { status: 'error', reason: 'ai_failed', message: signal.reasoning || '' }, 'error')
       return { status: 'blocked', reason: 'ai_failed' }
+    }
+
+    if (!isPrivate) {
+      const interlockResult = await enforcePlatformStrategyDirectionInterlock({
+        signal, market, strategyId:promptTypeId, inferenceUserId, symbol,
+        referenceSource:platformReferenceSource,
+      })
+      signal = interlockResult.signal
+      if (interlockResult.resolution?.refresh_error) {
+        l(`strategy direction interlock refresh failed (${interlockResult.resolution.refresh_error})`)
+      }
+      if (interlockResult.resolution?.allowed === false) {
+        l(`strategy direction interlock blocked new entry (${interlockResult.resolution.reason_code})`)
+      }
     }
 
     signal.decision_diagnostics = buildDecisionDiagnostics({ signal, market, modelSignalType })
@@ -4310,6 +4381,7 @@ export const __schedulerTest = {
   autoModelTaskDomainId,
   checkAutoModelTaskGate,
   buildAutoModelTaskInput,
+  enforcePlatformStrategyDirectionInterlock,
   assertAutoInferenceApplyGate,
   assertAutoInferenceBusinessGate,
   assertAutoInferenceOrderSendTx,

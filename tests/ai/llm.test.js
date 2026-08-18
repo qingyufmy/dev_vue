@@ -170,6 +170,7 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema.position_action).toContain('已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add')
     expect(schema.position_action).toContain('signal_type=hold、entry_method=observe、position_action=hold_no_add')
     expect(schema.position_action).toContain('无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe')
+    expect(schema.position_action).toContain('禁止同时输出反向交易与 position_action=open')
   })
 
   it('describes confidence as conclusion certainty rather than a win-rate estimate', () => {

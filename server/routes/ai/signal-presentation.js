@@ -86,6 +86,29 @@ function candidateEntry(signal) {
   }
 }
 
+function directionInterlock(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const reasonCode = cleanText(value.reason_code, 128).toLowerCase()
+  if (!['strategy_reversal_waiting_for_exit', 'strategy_reference_portfolio_refresh_unavailable'].includes(reasonCode)) {
+    return null
+  }
+  const count = input => {
+    if (input == null) return null
+    const number = Number(input)
+    return Number.isInteger(number) && number >= 0 ? number : null
+  }
+  return {
+    allowed:false,
+    applicable:true,
+    reason_code:reasonCode,
+    candidate_direction:['buy', 'sell'].includes(String(value.candidate_direction || '').toLowerCase())
+      ? String(value.candidate_direction).toLowerCase() : null,
+    frozen_opposite_count:count(value.frozen_opposite_count),
+    fresh_opposite_count:count(value.fresh_opposite_count),
+    blocking_task_count:count(value.blocking_task_count),
+  }
+}
+
 function experienceUsage(signal) {
   const usage = signal?.experience_usage && typeof signal.experience_usage === 'object' ? signal.experience_usage : {}
   const ids = value => [...new Set((Array.isArray(value) ? value : []).map(Number)
@@ -170,12 +193,27 @@ function positionManagementDecision(signal = {}) {
     reason:cleanText(item?.reason, 1000),
     evidence_refs:cleanList(item?.evidence_refs, 20, 160),
   })).filter(item => item.management_group_id && item.action)
+  const rawDiagnostics = value.diagnostics && typeof value.diagnostics === 'object'
+    && !Array.isArray(value.diagnostics) ? value.diagnostics : null
+  const diagnosticCount = input => {
+    const number = Number(input)
+    return Number.isInteger(number) && number >= 0 ? number : 0
+  }
   return {
     contract_version:cleanText(value.contract_version, 40),
     as_of:value.as_of && typeof value.as_of === 'object' ? {
       decision_timeframe:cleanText(value.as_of.decision_timeframe, 16),
       closed_bar_time_utc_ms:Number(value.as_of.closed_bar_time_utc_ms) || null,
       market_snapshot_hash:cleanText(value.as_of.market_snapshot_hash, 80),
+    } : null,
+    diagnostics:rawDiagnostics ? {
+      total_group_count:diagnosticCount(rawDiagnostics.total_group_count),
+      selected_group_count:diagnosticCount(rawDiagnostics.selected_group_count),
+      deferred_group_count:diagnosticCount(rawDiagnostics.deferred_group_count),
+      oversized_group_count:diagnosticCount(rawDiagnostics.oversized_group_count),
+      selection_mode:rawDiagnostics.selection_mode === 'rotating' ? 'rotating' : 'all',
+      rotation_slot:diagnosticCount(rawDiagnostics.rotation_slot),
+      batch_count:diagnosticCount(rawDiagnostics.batch_count),
     } : null,
     pending_evaluations:evaluations('pending_evaluations'),
     position_evaluations:evaluations('position_evaluations'),
@@ -250,6 +288,7 @@ export function normalizeDecisionFields(signal = {}) {
     execution_valid_until_utc_msc:Number.isFinite(executionValidUntilUtcMsc) && executionValidUntilUtcMsc > 0
       ? Math.trunc(executionValidUntilUtcMsc) : null,
     candidate_entry:candidateEntry(signal),
+    direction_interlock:directionInterlock(signal.direction_interlock),
     stop_loss_diagnostics:stopLossDiagnostics(signal),
     position_management:positionManagementDecision(signal),
     experience_usage:experienceUsage(signal),
@@ -279,6 +318,22 @@ export function buildExecutionAdvice(signal = {}, executionResult = null) {
   const executionValidation = readExecutionValidation({ ...signal, decision_json:signal.decision_json }).validation
 
   if (executionValidation.eligible !== true) {
+    if (executionValidation.reason_codes.includes('strategy_reversal_waiting_for_exit')) {
+      return {
+        state:'observe',
+        title:'等待旧方向退出',
+        description:'观摩源旧方向持仓或挂单尚未完成退出和对账，本轮不会执行反向开仓。',
+        executable:false,
+      }
+    }
+    if (executionValidation.reason_codes.includes('strategy_reference_portfolio_refresh_unavailable')) {
+      return {
+        state:'unavailable',
+        title:'观摩源状态未确认',
+        description:'模型返回后无法确认观摩源最新持仓与挂单，本轮已安全停止新开仓。',
+        executable:false,
+      }
+    }
     const invalid = executionValidation.status === 'invalid_output'
     return {
       state:'unavailable',

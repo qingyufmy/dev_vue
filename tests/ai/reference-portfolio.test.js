@@ -4,7 +4,8 @@ const mocks = vi.hoisted(() => ({ queryAll:vi.fn(), mt5Bridge:vi.fn() }))
 vi.mock('../../server/db.js', () => ({ queryAll:mocks.queryAll }))
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge:mocks.mt5Bridge }))
 
-import { loadPlatformReferencePortfolio } from '../../server/routes/ai/reference-portfolio.js'
+import { loadPlatformDirectionInterlockTasks,
+  loadPlatformReferencePortfolio } from '../../server/routes/ai/reference-portfolio.js'
 
 describe('platform reference portfolio', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -131,5 +132,27 @@ describe('platform reference portfolio', () => {
       is_expired:null, remaining_seconds:null,
     })
     expect(result.pending_orders[0]).not.toHaveProperty('valid_until')
+  })
+
+  it('returns only unresolved platform-source tasks for the requested symbol', async () => {
+    mocks.queryAll.mockResolvedValue([
+      { id:1, task_type:'position_exit', status:'CANDIDATE', candidate_action:'exit', outcome_id:46,
+        decision_signal_id:24414, origin_signal_id:24367, standard_symbol:'XAUUSD', entry_direction:'buy' },
+      { id:2, task_type:'position_exit', status:'EXIT_ONLY_COMPLETED', candidate_action:'exit', outcome_id:47,
+        decision_signal_id:24420, origin_signal_id:24398, standard_symbol:'XAUUSD.s', entry_direction:'buy' },
+      { id:3, task_type:'pending_cancel', status:'MANUAL_REVIEW', candidate_action:'cancel', outcome_id:48,
+        decision_signal_id:24421, origin_signal_id:24400, original_symbol:'EURUSD', entry_direction:'sell' },
+      { id:4, task_type:'position_exit', status:'FAILED', candidate_action:'exit', outcome_id:49,
+        decision_signal_id:24422, origin_signal_id:24401, original_symbol:'XAUUSD.c', entry_direction:'sell' },
+    ])
+
+    const result = await loadPlatformDirectionInterlockTasks({ strategyId:1, sourceUserId:7, symbol:'XAUUSD' })
+
+    expect(result).toEqual([
+      expect.objectContaining({ task_id:1, status:'CANDIDATE', direction:'buy', outcome_id:46 }),
+      expect.objectContaining({ task_id:4, status:'FAILED', direction:'sell', outcome_id:49 }),
+    ])
+    expect(String(mocks.queryAll.mock.calls[0][0])).toContain("outcomes.status IN ('open','closing')")
+    expect(mocks.queryAll.mock.calls[0][1]).toEqual([1, 7])
   })
 })

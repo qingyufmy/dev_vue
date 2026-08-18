@@ -3,7 +3,7 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.7'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.8'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
@@ -17,6 +17,7 @@ const MANAGEMENT_REASON_CODE = /^[a-z][a-z0-9_]{0,63}$/
 const SYSTEM_MAGIC = 234000
 const MODE_RANK = new Map(POSITION_MANAGEMENT_MODES.map((mode, index) => [mode, index]))
 const TERMINAL_STATES = new Set(['HELD', 'EXPIRED', 'REJECTED', 'FAILED', 'COMPLETED', 'EXIT_ONLY_COMPLETED'])
+const SUPERSEDABLE_TASK_STATES = ['CANDIDATE', 'EVIDENCE_CONFIRMED']
 const TRANSITIONS = new Map(Object.entries({
   CANDIDATE:['EVIDENCE_CONFIRMED', 'HELD', 'EXPIRED', 'REJECTED'],
   // The worker commits the lock and executable intent atomically.  Keep the
@@ -617,6 +618,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
   let marketPlan
   try { marketPlan = JSON.parse(baseMarketFormat || '{}') } catch { marketPlan = {} }
   for (const key of ['analysis', 'reasoning', 'position_action', 'pending_action', 'pending_action_reason', 'management_direction', 'cancel_pending']) delete marketPlan[key]
+  marketPlan.signal_type = `${String(marketPlan.signal_type || '仅允许 buy | sell | hold')}。当前管理组仍有反方向持仓或挂单时只能输出 hold；即使判断反转，也必须先通过 position_evaluations/pending_evaluations 处理旧方向并等待后续空仓快照，禁止在本轮输出反向新单`
   return JSON.stringify({
     contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
     as_of:context.as_of,
@@ -628,7 +630,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
       thesis_id:group.thesis_id,
       origin_signal_id:group.original_signal_id,
       action:'仅允许 keep | cancel',
-      market_alignment:'仅允许 aligned | misaligned | uncertain，作为当前策略判断的描述字段，不决定 action',
+      market_alignment:'仅允许 aligned | misaligned | uncertain；misaligned 必须 cancel，uncertain 必须 keep，aligned 可 keep 或 cancel（cancel 必须填写合法原因码）',
       cancel_reason_code:'action=cancel 时填写当前策略定义的 lowercase_snake_case 原因码；keep 时为 null',
       reason:'简体中文说明当前策略为何保留或取消该挂单',
       evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
@@ -638,7 +640,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
       thesis_id:group.thesis_id,
       origin_signal_id:group.original_signal_id,
       action:'仅允许 hold | exit',
-      market_alignment:'仅允许 aligned | misaligned | uncertain，作为当前策略判断的描述字段，不决定 action',
+      market_alignment:'仅允许 aligned | misaligned | uncertain；misaligned 必须 exit，uncertain 必须 hold，aligned 可 hold 或 exit（exit 必须填写合法原因码）',
       exit_reason_code:'action=exit 时填写当前策略定义的 lowercase_snake_case 原因码；hold 时为 null',
       reversal_candidate:'布尔值，仅为解释性判断，不是执行命令',
       reason:'简体中文说明当前策略为何继续持有或退出该持仓',
@@ -704,6 +706,24 @@ function hasManagementExecutionIntent(item, section) {
 function normalizeMarketAlignment(value) {
   const alignment = String(value ?? '').trim().toLowerCase()
   return MARKET_ALIGNMENT_VALUES.has(alignment) ? alignment : null
+}
+
+function validateMarketAlignmentAction(section, marketAlignment, action) {
+  if (section === 'pending') {
+    if (marketAlignment === 'misaligned' && action !== 'cancel') {
+      throw new Error('pending_misaligned_action_invalid')
+    }
+    if (marketAlignment === 'uncertain' && action !== 'keep') {
+      throw new Error('pending_uncertain_action_invalid')
+    }
+    return
+  }
+  if (marketAlignment === 'misaligned' && action !== 'exit') {
+    throw new Error('position_misaligned_action_invalid')
+  }
+  if (marketAlignment === 'uncertain' && action !== 'hold') {
+    throw new Error('position_uncertain_action_invalid')
+  }
 }
 
 function groupDecisionContextAvailable(group) {
@@ -793,6 +813,7 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (!['keep', 'cancel'].includes(action)) throw new Error('pending_action_invalid')
       const marketAlignment = normalizeMarketAlignment(item?.market_alignment)
       if (!marketAlignment) throw new Error('pending_market_alignment_required')
+      validateMarketAlignmentAction('pending', marketAlignment, action)
       if (!groupDecisionContextAvailable(group)) throw new Error('pending_decision_context_unavailable')
       if (!groupReferenceFactsAvailableForEvaluation(group)) throw new Error('pending_reference_facts_unavailable')
       const rawCancelReasonCode = item?.cancel_reason_code
@@ -832,6 +853,7 @@ export function validatePositionManagementResponse(value, context, validateMarke
       if (!['hold', 'exit'].includes(action)) throw new Error('position_action_invalid')
       const marketAlignment = normalizeMarketAlignment(item?.market_alignment)
       if (!marketAlignment) throw new Error('position_market_alignment_required')
+      validateMarketAlignmentAction('position', marketAlignment, action)
       if (!groupDecisionContextAvailable(group)) throw new Error('position_decision_context_unavailable')
       if (!groupReferenceFactsAvailableForEvaluation(group)) throw new Error('position_reference_facts_unavailable')
       const rawExitReasonCode = item?.exit_reason_code
@@ -872,10 +894,33 @@ export function validatePositionManagementResponse(value, context, validateMarke
     })
   }
 
+  const marketDirection = String(marketPlan?.signal_type || '').toLowerCase().startsWith('buy') ? 'buy'
+    : String(marketPlan?.signal_type || '').toLowerCase().startsWith('sell') ? 'sell' : null
+  if (marketDirection) {
+    const oppositeDirection = marketDirection === 'buy' ? 'sell' : 'buy'
+    const conflictingGroups = [...(context.position_groups || []), ...(context.pending_groups || [])]
+      .filter(group => String(group?.direction || '').toLowerCase() === oppositeDirection)
+    if (conflictingGroups.length) {
+      errors.push({
+        section:'market',
+        group_id:conflictingGroups[0].management_group_id || null,
+        code:'strategy_reversal_waiting_for_exit',
+      })
+    }
+  }
+
   const nonExecutionMarketPlan = String(marketPlan?.signal_type || '').toLowerCase() === 'hold'
     && String(marketPlan?.entry_method || '').toLowerCase() === 'observe'
   const requiresRepair = Boolean(marketError
     || (errors.length && (!nonExecutionMarketPlan || hasExecutionIntent)))
+  let marketPlanFailClosed = false
+  if (errors.length && allowFailClosed && !marketError && !nonExecutionMarketPlan) {
+    // A repaired response that still contains a management-contract defect
+    // must not retain a valid new-order plan.  Keep the original text and
+    // management errors for audit, but remove the executable market action.
+    marketPlan = safeHold(value, 'position_management_management_validation_failed')
+    marketPlanFailClosed = true
+  }
   if (!allowFailClosed && (marketError || errors.length)
     && !(allowNonExecutionFailClosed && !requiresRepair)) {
     const details = [
@@ -892,9 +937,19 @@ export function validatePositionManagementResponse(value, context, validateMarke
     _position_management:{
       contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
       as_of:{ ...context.as_of },
+      diagnostics:context?._diagnostics ? {
+        total_group_count:Number(context._diagnostics.total_group_count || 0),
+        selected_group_count:Number(context._diagnostics.selected_group_count || 0),
+        deferred_group_count:Number(context._diagnostics.deferred_group_count || 0),
+        oversized_group_count:Number(context._diagnostics.oversized_group_count || 0),
+        selection_mode:String(context._diagnostics.selection_mode || 'all'),
+        rotation_slot:Number(context._diagnostics.rotation_slot || 0),
+        batch_count:Number(context._diagnostics.batch_count || 0),
+      } : null,
       pending_evaluations:pendingEvaluations,
       position_evaluations:positionEvaluations,
-      validation:{ market_plan:marketError ? 'invalid' : 'valid', errors },
+      validation:{ market_plan:marketError ? 'invalid' : (marketPlanFailClosed ? 'fail_closed' : 'valid'),
+        fail_closed:Boolean(marketError || marketPlanFailClosed), errors },
     },
   }
 }
@@ -946,7 +1001,9 @@ function lineageTargetFromRow(row) {
  */
 export async function resolvePositionManagementExecutionTargets({ context, groupId, section, action } = {}) {
   const group = executionGroup(context, groupId, section)
-  if (!group || !['cancel', 'exit'].includes(String(action || '').toLowerCase())) return []
+  const normalizedAction = String(action || '').toLowerCase()
+  const allowedActions = section === 'position' ? ['hold', 'exit'] : ['keep', 'cancel']
+  if (!group || !allowedActions.includes(normalizedAction)) return []
   const lineage = context?._executionLineage
   if (!lineage || String(lineage.strategy_scope || '').toLowerCase() !== 'platform') {
     const taskType = section === 'position' ? 'position_exit' : 'pending_cancel'
@@ -1402,6 +1459,100 @@ async function advanceAutomaticExitCandidate({ signalId, context, target, evalua
   return updated
 }
 
+/**
+ * End an unissued management candidate when the latest valid inference says
+ * to keep the pending order or hold the position.  This operation is scoped
+ * to one exact subscriber outcome and uses row locks so a worker cannot
+ * prepare the old candidate concurrently.  Once a task has entered
+ * PRECONDITIONS_LOCKED (or a later command/reconciliation state), it is left
+ * untouched and must continue its real execution audit.
+ */
+export async function supersedePositionManagementCandidates({
+  signalId, context, target, section, action, evaluation = null,
+} = {}) {
+  const normalizedSection = String(section || '').toLowerCase()
+  const normalizedAction = String(action || '').toLowerCase()
+  const expectedAction = normalizedSection === 'position' ? 'hold' : 'keep'
+  if (normalizedAction !== expectedAction || !target?.outcome_id
+    || !target?.management_group_id || !target?.thesis_id) return []
+
+  const taskType = normalizedSection === 'position' ? 'position_exit' : 'pending_cancel'
+  const statePlaceholders = SUPERSEDABLE_TASK_STATES.map(() => '?').join(',')
+  const now = beijingNow()
+  const decisionSignalId = Number(signalId) > 0 ? Number(signalId) : null
+  const snapshotHash = String(context?.as_of?.market_snapshot_hash || '').replace(/^sha256:/, '') || null
+  const closedBarTime = Number(context?.as_of?.closed_bar_time_utc_ms) > 0
+    ? Number(context.as_of.closed_bar_time_utc_ms) : null
+  const invalidInference = evaluation?.validation_source === 'server_fail_closed'
+  const positionReset = normalizedSection === 'position'
+  const updatedTasks = await withTransaction(async run => {
+    const [rows] = await run(`SELECT * FROM ai_position_management_tasks
+      WHERE task_type = ? AND user_id = ? AND trading_account_id = ? AND outcome_id = ?
+        AND strategy_id = ? AND strategy_version = ? AND management_group_id = ? AND thesis_id = ?
+        AND status IN (${statePlaceholders})
+      FOR UPDATE`, [
+      taskType, Number(target.user_id), Number(target.trading_account_id), Number(target.outcome_id),
+      Number(target.strategy_id), Number(target.strategy_version || 1), target.management_group_id,
+      target.thesis_id, ...SUPERSEDABLE_TASK_STATES,
+    ])
+    const superseded = []
+    for (const task of Array.isArray(rows) ? rows : []) {
+      const previousEvidence = json(task.evidence_validation_json, {})
+      const evidence = {
+        ...previousEvidence,
+        status:positionReset ? 'reset' : 'superseded',
+        source:invalidInference ? 'invalid_inference_output'
+          : (positionReset ? 'automatic_inference_hold' : 'new_management_keep'),
+        superseded_by_decision_signal_id:decisionSignalId,
+        superseded_by_closed_bar_time_utc_ms:closedBarTime,
+        superseded_by_market_snapshot_hash:snapshotHash,
+        superseded_action:normalizedAction,
+        superseded_section:normalizedSection,
+        superseded_at:now,
+        ...(positionReset ? {
+          reset_evaluation_id:Number(evaluation?.evaluation_id) || null,
+          reset_decision_signal_id:decisionSignalId,
+        } : {}),
+        superseded_evaluation: evaluation ? {
+          market_alignment:normalizeMarketAlignment(evaluation.market_alignment),
+          reason:text(evaluation.reason, 1000),
+        } : null,
+      }
+      const [updated] = await run(`UPDATE ai_position_management_tasks
+        SET status = 'HELD', evidence_validation_json = ?, confirmation_count = 0,
+          state_version = state_version + 1, fencing_token = COALESCE(fencing_token, 0) + 1,
+          lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
+        WHERE id = ? AND status IN (${statePlaceholders})`, [
+        JSON.stringify(evidence), now, now, task.id, ...SUPERSEDABLE_TASK_STATES,
+      ])
+      if (Number(updated?.affectedRows ?? updated?.changes ?? 0) !== 1) continue
+      await run(`INSERT INTO ai_position_management_events
+        (task_id, from_status, to_status, event_type, summary, details_json, actor_type, created_at)
+        VALUES (?, ?, 'HELD', 'management_candidate_superseded', ?, ?, 'model', ?)`, [
+        task.id, task.status,
+        invalidInference
+          ? '本轮持仓判断证据无效，已打断连续确认并结束尚未发出命令的旧候选'
+          : '最新继续持有/保留判断已替代尚未发出命令的旧候选',
+        JSON.stringify({
+          decision_signal_id:decisionSignalId, closed_bar_time_utc_ms:closedBarTime,
+          market_snapshot_hash:snapshotHash, superseded_task_id:Number(task.id),
+          section:normalizedSection, action:normalizedAction,
+          management_group_id:target.management_group_id, thesis_id:target.thesis_id,
+          previous_state_version:Number(task.state_version || 1),
+        }), now,
+      ])
+      superseded.push({ ...task, status:'HELD', confirmation_count:0,
+        state_version:Number(task.state_version || 1) + 1,
+        fencing_token:Number(task.fencing_token || 0) + 1,
+        lease_token:null, lease_expires_at:null,
+        completed_at:now, updated_at:now, evidence_validation_json:JSON.stringify(evidence) })
+    }
+    return superseded
+  })
+  for (const task of updatedTasks) broadcastPositionManagementTask(task, 'management_candidate_superseded')
+  return updatedTasks
+}
+
 function normalizePersistedManagementEvaluation(evaluation, group, section) {
   const action = String(evaluation?.action || '').trim().toLowerCase()
   const alignment = normalizeMarketAlignment(evaluation?.market_alignment)
@@ -1415,7 +1566,11 @@ function normalizePersistedManagementEvaluation(evaluation, group, section) {
   const reasonCodeValid = executionAction
     ? MANAGEMENT_REASON_CODE.test(reasonCode)
     : !reasonCode || reasonCode === 'null' || reasonCode === 'none'
-  const invalid = !groupManagementFactsAvailable(group) || !alignment || !actionAllowed
+  let alignmentActionValid = Boolean(alignment && actionAllowed)
+  if (alignmentActionValid) {
+    try { validateMarketAlignmentAction(section, alignment, action) } catch { alignmentActionValid = false }
+  }
+  const invalid = !groupManagementFactsAvailable(group) || !alignmentActionValid
     || !reason || !reasonCodeValid
   if (!invalid) return { ...evaluation, thesis_id:group?.thesis_id || null,
     origin_signal_id:Number(group?.original_signal_id) || null, market_alignment:alignment }
@@ -1464,6 +1619,11 @@ export async function persistPositionManagementEvaluations({
     .filter(item => item.action === 'cancel'
       && !synchronousGroups.has(String(item?.management_group_id || '')))
     .map(item => ({ ...item, taskType:'pending_cancel' }))
+  const pendingKeeps = pendingEvaluations
+    .map(item => normalizePersistedManagementEvaluation(item,
+      (context.pending_groups || []).find(group => String(group.management_group_id) === String(item?.management_group_id)),
+      'pending'))
+    .filter(item => item.action === 'keep' && item.validation_source !== 'server_fail_closed')
   const resolvedTargets = new Map()
   const resolveFor = async (item, section, action) => {
     const groupId = String(item?.management_group_id || '')
@@ -1479,11 +1639,14 @@ export async function persistPositionManagementEvaluations({
   for (const item of positionEvaluations) {
     const normalized = normalizePersistedManagementEvaluation(item,
       executionGroup(context, item?.management_group_id, 'position'), 'position')
-    if (normalized.action !== 'exit') continue
-    allTargets.push(...await resolveFor(item, 'position', 'exit'))
+    if (!['hold', 'exit'].includes(normalized.action)) continue
+    allTargets.push(...await resolveFor(item, 'position', normalized.action))
   }
   for (const item of pendingCandidates) {
     allTargets.push(...await resolveFor(item, 'pending', 'cancel'))
+  }
+  for (const item of pendingKeeps) {
+    allTargets.push(...await resolveFor(item, 'pending', 'keep'))
   }
   const modes = await resolveModes(allTargets)
   const created = []
@@ -1492,10 +1655,19 @@ export async function persistPositionManagementEvaluations({
     const normalizedEvaluation = normalizePersistedManagementEvaluation(evaluation,
       (context.position_groups || []).find(group => String(group.management_group_id) === String(evaluation?.management_group_id)),
       'position')
-    const targets = normalizedEvaluation.action === 'exit'
-      ? (resolvedTargets.get(`position:${String(evaluation.management_group_id || '')}`) || [])
-      : []
+    const targets = ['hold', 'exit'].includes(normalizedEvaluation.action)
+      ? (resolvedTargets.get(`position:${String(evaluation.management_group_id || '')}`) || []) : []
     for (const target of targets) {
+      if (normalizedEvaluation.action === 'hold') {
+        const record = await recordAutomaticPositionEvaluation({
+          signalId, context, target, evaluation:normalizedEvaluation, inferenceSource,
+        })
+        created.push(...await supersedePositionManagementCandidates({
+          signalId, context, target, section:'position', action:'hold',
+          evaluation:{ ...normalizedEvaluation, evaluation_id:record?.id || null },
+        }))
+        continue
+      }
       const mode = resolvePositionManagementTaskMode('position_exit',
         modes.byUser.get(Number(target.user_id)) || 'auto_exit', modes.control)
       if (mode === 'display') continue
@@ -1513,6 +1685,15 @@ export async function persistPositionManagementEvaluations({
         : await advanceAutomaticExitCandidate({ signalId, context, target,
           evaluation:normalizedEvaluation, mode, record })
       if (task) created.push(task)
+    }
+  }
+
+  for (const evaluation of pendingKeeps) {
+    const targets = resolvedTargets.get(`pending:${String(evaluation.management_group_id || '')}`) || []
+    for (const target of targets) {
+      created.push(...await supersedePositionManagementCandidates({
+        signalId, context, target, section:'pending', action:'keep', evaluation,
+      }))
     }
   }
 

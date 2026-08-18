@@ -92,6 +92,15 @@ describe('AI position management workspace', () => {
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
+  it('shows compact management coverage when large portfolios are rotated', () => {
+    expect(app).toContain('function renderPositionManagementCoverage(positionManagement)')
+    expect(app).toContain('持仓与挂单判断覆盖')
+    expect(app).toContain('延后 ${deferred} 组')
+    expect(app).toContain('因输入过大未纳入')
+    expect(css).toContain('.position-management-coverage')
+    expect(html).toContain('strategy-direction-interlock1')
+  })
+
   it('patches only live price and profit cells while the position structure is stable', () => {
     expect(app).toContain('data-position-live="price"')
     expect(app).toContain('data-position-live="profit"')

@@ -56,6 +56,10 @@ describe('signal presentation', () => {
   })
   it('does not present an unavailable confidence sentinel as a measured zero percent', () => {
     expect(app).toContain('if (rounded === 0) return { value: 0, label: "不可用" }')
+    expect(app).toContain('strategy_reversal_waiting_for_exit:"观摩源旧方向尚未完成退出，本轮不执行反向开仓"')
+    expect(app).toContain('strategy_reference_portfolio_refresh_unavailable:"无法确认观摩源最新持仓与挂单，本轮停止新开仓"')
+    expect(app).toContain('const directionInterlock = signal?.direction_interlock || stored.direction_interlock || null;')
+    expect(app).toContain('directionInterlock\n      ? (signal?.decision_summary || stored.decision_summary)')
   })
   it('does not render server diagnostics in signal details', () => {
     expect(app).not.toContain('function renderDecisionDiagnostics(diagnostics)')
@@ -363,5 +367,49 @@ describe('signal presentation', () => {
     })).toMatchObject({ state:'expired', title:'行情快照已过期', executable:false })
     expect(app).toContain('if (signal.is_stale === true) return true;')
     expect(app).toContain('execution_valid_until_utc_msc')
+  })
+
+  it('presents a strategy reversal interlock as an intentional wait state', () => {
+    const signal = {
+      signal_type:'hold', entry_method:'observe', position_action:'observe',
+      direction_interlock:{ allowed:false, applicable:true,
+        reason_code:'strategy_reversal_waiting_for_exit', candidate_direction:'sell',
+        frozen_opposite_count:2, fresh_opposite_count:2, blocking_task_count:0 },
+      execution_validation:{ status:'ineligible', eligible:false,
+        reason_codes:['strategy_reversal_waiting_for_exit'] },
+    }
+    const decision = normalizeDecisionFields(signal)
+    expect(decision.direction_interlock).toEqual(signal.direction_interlock)
+    expect(buildExecutionAdvice(signal)).toEqual({
+      state:'observe', title:'等待旧方向退出',
+      description:'观摩源旧方向持仓或挂单尚未完成退出和对账，本轮不会执行反向开仓。',
+      executable:false,
+    })
+  })
+
+  it('persists bounded position-management rotation diagnostics', () => {
+    const decision = normalizeDecisionFields({
+      signal_type:'hold', entry_method:'observe',
+      _position_management:{ contract_version:'position-management-v1.8',
+        diagnostics:{ total_group_count:25, selected_group_count:20, deferred_group_count:4,
+          oversized_group_count:1, selection_mode:'rotating', rotation_slot:2, batch_count:3 },
+        pending_evaluations:[], position_evaluations:[] },
+    })
+    expect(decision.position_management.diagnostics).toEqual({
+      total_group_count:25, selected_group_count:20, deferred_group_count:4,
+      oversized_group_count:1, selection_mode:'rotating', rotation_slot:2, batch_count:3,
+    })
+  })
+
+  it('presents an unavailable post-model reference refresh as fail closed', () => {
+    expect(buildExecutionAdvice({
+      signal_type:'hold', entry_method:'observe',
+      execution_validation:{ status:'ineligible', eligible:false,
+        reason_codes:['strategy_reference_portfolio_refresh_unavailable'] },
+    })).toEqual({
+      state:'unavailable', title:'观摩源状态未确认',
+      description:'模型返回后无法确认观摩源最新持仓与挂单，本轮已安全停止新开仓。',
+      executable:false,
+    })
   })
 })

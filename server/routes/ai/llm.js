@@ -251,7 +251,7 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   bearish_score: "可选数字，表示输入行情的空方倾向；不代表胜率或执行概率",
   position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
   position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
-  position_action: "必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达",
+  position_action: "必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达。当前管理组仍有反方向持仓或挂单时，即使判断可能反转，也只能在 position_evaluations 中标记 reversal_candidate，禁止同时输出反向交易与 position_action=open；必须先完成旧方向退出并等待后续空仓快照重新推理",
   pending_action: "必须字段。仅允许 none | keep | cancel。none 表示本轮不管理现有挂单；keep 表示保留模型选中的挂单；cancel 表示取消模型选中的挂单。新信号与挂单管理是相互独立的结论",
   pending_action_reason: "中文说明挂单处理的策略依据。pending_action 为 cancel 时必须填写；其他动作可返回空字符串",
   management_direction: "必须字段。仅允许 buy | sell | none。需要取消挂单时填写被管理挂单方向；其他情况填 none",
@@ -285,7 +285,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   delete schema.cancel_pending
   schema.position_size_tier = '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数。'
   schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
-  schema.position_action = '必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达。'
+  schema.position_action = '必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达。当前管理组仍有反方向持仓或挂单时，即使判断可能反转，也只能在 position_evaluations 中标记 reversal_candidate，禁止同时输出反向交易与 position_action=open；必须先完成旧方向退出并等待后续空仓快照重新推理。'
   schema.pending_action = '必须字段。仅允许 none | keep | cancel。none 表示本轮不管理现有挂单；keep 表示保留模型选中的挂单；cancel 表示取消模型选中的挂单。新信号与挂单管理是相互独立的结论。'
   schema.pending_action_reason = '中文字符串。pending_action 为 cancel 时必须填写当前策略依据；其他动作返回空字符串。'
   schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 时填写被管理挂单方向；其他情况填 none。'

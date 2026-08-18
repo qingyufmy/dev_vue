@@ -6281,6 +6281,8 @@ const RISK_DECISION_LABELS = {
   "R6_ACCOUNT_TRADE_PERMISSION_REQUIRED":"交易账户没有完整交易权限", "R6_GLOBAL_KILL_SWITCH":"全局紧急停止已开启",
   "R6_USER_KILL_SWITCH":"账户紧急停止已开启", "R6.4_OBSERVATION_BELOW_MINIMUM":"观察期手数低于最小可交易手数",
   portfolio_state_unavailable:"无法读取当前账户的持仓与挂单，本次未执行",
+  strategy_reversal_waiting_for_exit:"观摩源旧方向尚未完成退出，本轮不执行反向开仓",
+  strategy_reference_portfolio_refresh_unavailable:"无法确认观摩源最新持仓与挂单，本轮停止新开仓",
   opposite_position_exists:"当前账户已有反向持仓，本次不新增仓位",
   existing_position_no_add:"当前账户已有同向持仓，策略未建议加仓",
   reference_position_not_matched:"账户实际持仓与平台参考组合不一致，本次不跟随加仓",
@@ -12506,11 +12508,15 @@ function signalDecision(signal) {
   const bullish = Number(modelDecision.bullish_score ?? signal?.bullish_score ?? stored.bullish_score);
   const bearish = Number(modelDecision.bearish_score ?? signal?.bearish_score ?? stored.bearish_score);
   const experienceUsage = signal?.experience_usage || stored.experience_usage || {};
+  const directionInterlock = signal?.direction_interlock || stored.direction_interlock || null;
   const hasDirectionBias = Number.isFinite(bullish) && Number.isFinite(bearish) && bullish >= 0 && bearish >= 0 && bullish + bearish > 0;
   const total = hasDirectionBias ? bullish + bearish : 0;
   return {
     modelDecision,
-    summary: userVisibleText(modelDecision.decision_summary || signal?.decision_summary || stored.decision_summary, dir === "hold" ? "模型建议观望。" : `${dir === "buy" ? "偏多" : "偏空"}机会成立，等待执行校验与风控复核。`),
+    summary: userVisibleText(directionInterlock
+      ? (signal?.decision_summary || stored.decision_summary)
+      : (modelDecision.decision_summary || signal?.decision_summary || stored.decision_summary),
+    dir === "hold" ? "模型建议观望。" : `${dir === "buy" ? "偏多" : "偏空"}机会成立，等待执行校验与风控复核。`),
     trigger: userVisibleText(modelDecision.trigger_condition || signal?.trigger_condition || stored.trigger_condition, ""),
     invalidation: userVisibleText(modelDecision.invalidation_condition || signal?.invalidation_condition || stored.invalidation_condition, ""),
     reasons: Array.isArray(sourceReasons) ? sourceReasons.slice(0, 4).map(item => userVisibleText(item, "系统未提供中文依据")) : [],
@@ -12518,6 +12524,8 @@ function signalDecision(signal) {
     bullishScore: hasDirectionBias ? Math.round(bullish / total * 1000) / 10 : null,
     bearishScore: hasDirectionBias ? Math.round(bearish / total * 1000) / 10 : null,
     candidateEntry: signal?.candidate_entry || stored.candidate_entry || null,
+    positionManagement:signal?.position_management || stored.position_management || null,
+    directionInterlock,
     experienceUsage,
     executionValidation:signal?.execution_validation || stored.execution_validation || null,
   };
@@ -12525,6 +12533,8 @@ function signalDecision(signal) {
 
 const EXECUTION_VALIDATION_REASON_LABELS = {
     model_hold:"模型本轮未提出新订单",
+    strategy_reversal_waiting_for_exit:"观摩源旧方向尚未完成退出，本轮不执行反向开仓",
+    strategy_reference_portfolio_refresh_unavailable:"无法确认观摩源最新持仓与挂单，本轮停止新开仓",
     position_action_hold_no_add:"模型建议不新增仓位",
     entry_method_not_allowed_by_strategy:"入场方式不在策略声明范围内",
     pending_price_required:"挂单缺少有效价格",
@@ -12716,6 +12726,24 @@ function renderCandidateEntryReference(candidate) {
     <div class="candidate-entry-reference-head"><span><i data-lucide="scan-search" size="15"></i>候选入场参考</span><strong>${escapeHtml(typeLabels[signalTypeValue] || "方向参考")}</strong></div>
     <div>${rows.map(([label, value]) => `<span><small>${label}</small><b>${escapeHtml(priceDisplay(value))}</b></span>`).join("")}</div>
     <p>仅作为后续行情观察依据，当前策略明确建议不加仓，不会进入下单流程。</p>
+  </section>`;
+}
+
+function renderPositionManagementCoverage(positionManagement) {
+  const diagnostics = positionManagement?.diagnostics;
+  if (!diagnostics || typeof diagnostics !== "object") return "";
+  const total = Math.max(0, Number(diagnostics.total_group_count || 0));
+  if (!total) return "";
+  const selected = Math.min(total, Math.max(0, Number(diagnostics.selected_group_count || 0)));
+  const deferred = Math.max(0, Number(diagnostics.deferred_group_count || 0));
+  const oversized = Math.max(0, Number(diagnostics.oversized_group_count || 0));
+  const rotating = diagnostics.selection_mode === "rotating" && Number(diagnostics.batch_count || 0) > 0;
+  const batch = rotating
+    ? `轮转批次 ${Math.min(Number(diagnostics.batch_count), Number(diagnostics.rotation_slot || 0) + 1)}/${Number(diagnostics.batch_count)}`
+    : "本轮全部覆盖";
+  return `<section class="position-management-coverage ${oversized ? "warning" : ""}">
+    <div><i data-lucide="scan-search" size="15"></i><strong>持仓与挂单判断覆盖</strong><span>${escapeHtml(batch)}</span></div>
+    <p>本轮评估 ${selected}/${total} 组${deferred ? `，延后 ${deferred} 组` : ""}${oversized ? `，${oversized} 组因输入过大未纳入` : ""}。</p>
   </section>`;
 }
 
@@ -13381,6 +13409,7 @@ function renderSignal(signal, elapsedMs = null, options = {}) {
     </section>
     ${renderSignalManagementActions(signal)}
     ${renderSignalPendingActions(signal)}
+    ${renderPositionManagementCoverage(decision.positionManagement)}
     <div class="decision-summary"><span>一句话结论</span><strong>${escapeHtml(decision.summary)}</strong></div>
     ${renderDirectionBias(decision)}
     ${renderCandidateEntryReference(decision.candidateEntry)}

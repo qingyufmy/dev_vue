@@ -159,6 +159,10 @@ describe('audit localization', () => {
   })
 
   it('formats portfolio alignment outcomes with concrete counts', () => {
+    expect(formatRiskReason('strategy_reversal_waiting_for_exit'))
+      .toBe('观摩源旧方向尚未完成退出，本轮不执行反向开仓')
+    expect(formatRiskReason('strategy_reference_portfolio_refresh_unavailable'))
+      .toBe('无法确认观摩源最新持仓与挂单，本轮停止新开仓')
     expect(formatRiskReason('opposite_position_exists', { count:3 }))
       .toBe('当前账户已有反向持仓，本次不新增仓位：检测到 3 个反向持仓')
     expect(prepareAuditRecord('ai_auto_execute_skipped', { stage:'portfolio_alignment' }, {
