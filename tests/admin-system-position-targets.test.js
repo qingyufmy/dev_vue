@@ -71,4 +71,93 @@ describe('admin system position attribution', () => {
     await expect(resolveAdminSystemPositionTargets(7, '100'))
       .rejects.toMatchObject({ code:'admin_dispatch_attribution_ambiguous' })
   })
+
+  it('returns safe identity and inclusion fields for targets and exclusions', async () => {
+    const sourceAccount = {
+      trading_account_id:10, user_id:7, broker_server:'DEMO', login_account:'1',
+      ownership_history_id:9, ownership_broker_server_key:'DEMO', ownership_login_account:'1',
+      account_name:'源账户',
+    }
+    const sourceRow = {
+      root_signal_id:5, signal_source:'admin_strategy_dispatch', outcome_id:11,
+      outcome_signal_id:5, outcome_status:'open', outcome_position_id:'100', outcome_system_magic:234000,
+      outcome_trading_account_id:10, outcome_symbol:'EURUSD', outcome_direction:'buy', outcome_volume:0.1,
+      admin_target_id:21, target_role:'source', trade_ticket:'100', standard_symbol:'EURUSD',
+      broker_server_key:'DEMO', login_account:'1', dispatch_id:31, dispatch_status:'succeeded',
+      user_email:'source@example.com', user_nickname:'源用户', account_name:'源账户',
+    }
+    const subscriberRow = {
+      id:22, root_signal_id:5, signal_id:5, signal_source:'admin_strategy_dispatch',
+      target_role:'subscriber', target_status:'succeeded', status:'succeeded', trade_ticket:'200',
+      target_role:'subscriber', user_id:8, trading_account_id:20, dispatch_id:31,
+      broker_server_key:'DEMO', login_account:'2', standard_symbol:'EURUSD', direction:'buy', volume:0.2,
+      bridge_generation:7, user_email:'subscriber@example.com', user_nickname:'订阅用户', account_name:'订阅账户',
+      outcome_id:12, outcome_signal_id:5, outcome_status:'open', outcome_position_id:'200',
+      outcome_system_magic:234000, outcome_trading_account_id:20, outcome_symbol:'EURUSD',
+      outcome_direction:'buy', outcome_volume:0.2,
+    }
+    mocks.queryOne
+      .mockResolvedValueOnce(sourceAccount)
+      .mockResolvedValueOnce({
+        trading_account_id:20, user_id:8, broker_server:'DEMO', login_account:'2',
+        ownership_history_id:10, ownership_broker_server_key:'DEMO', ownership_login_account:'2',
+        ownership_user_id:8, ownership_trading_account_id:20,
+      })
+    mocks.queryAll
+      .mockResolvedValueOnce([sourceRow])
+      .mockResolvedValueOnce([subscriberRow])
+    mocks.inventory
+      .mockResolvedValueOnce({
+        status:'success', account:{ server:'DEMO', login:'1' },
+        positions:[{ ticket:'100', symbol:'EURUSD', type:'buy', volume:0.1, magic:234000 }],
+      })
+      .mockResolvedValueOnce({
+        status:'success', account:{ server:'DEMO', login:'2' },
+        positions:[{ ticket:'200', symbol:'EURUSD', type:'buy', volume:0.2, magic:234000 }],
+      })
+
+    const result = await resolveAdminSystemPositionTargets(7, '100')
+    expect(result.targets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        target_role:'source', nickname:'源用户', account_name:'源账户', email:'source@example.com',
+        user_label:'源用户', login_account:'1', bridge_connected:true,
+        inclusion_status:'source_only', reason_code:null,
+      }),
+      expect.objectContaining({
+        target_role:'subscriber', nickname:'订阅用户', account_name:'订阅账户', email:'subscriber@example.com',
+        user_label:'订阅用户', login_account:'2', bridge_connected:true,
+        inclusion_status:'included', reason_code:null,
+      }),
+    ]))
+    expect(result.exclusions).toEqual([])
+    expect(result.summary).toEqual({
+      target_count:2, eligible_target_count:2, excluded_target_count:0,
+      subscriber_users:1, subscriber_positions:1,
+    })
+
+    mocks.queryOne.mockReset()
+    mocks.queryOne
+      .mockResolvedValueOnce(sourceAccount)
+      .mockResolvedValueOnce({
+        trading_account_id:20, user_id:8, broker_server:'DEMO', login_account:'2',
+        ownership_history_id:10, ownership_broker_server_key:'DEMO', ownership_login_account:'2',
+        ownership_user_id:8, ownership_trading_account_id:20,
+      })
+    mocks.queryAll.mockReset()
+    mocks.queryAll
+      .mockResolvedValueOnce([{ ...sourceRow, user_email:'source-changed@example.com', user_nickname:'源用户改名', account_name:'源账户改名' }])
+      .mockResolvedValueOnce([{ ...subscriberRow, user_email:'subscriber-changed@example.com', user_nickname:'订阅用户改名', account_name:'订阅账户改名' }])
+    mocks.inventory.mockReset()
+    mocks.inventory
+      .mockResolvedValueOnce({
+        status:'success', account:{ server:'DEMO', login:'1' },
+        positions:[{ ticket:'100', symbol:'EURUSD', type:'buy', volume:0.1, magic:234000 }],
+      })
+      .mockResolvedValueOnce({
+        status:'success', account:{ server:'DEMO', login:'2' },
+        positions:[{ ticket:'200', symbol:'EURUSD', type:'buy', volume:0.2, magic:234000 }],
+      })
+    const changedDisplay = await resolveAdminSystemPositionTargets(7, '100')
+    expect(changedDisplay.preview_hash).toBe(result.preview_hash)
+  })
 })

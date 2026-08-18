@@ -44,6 +44,7 @@ const sourceOutcome = {
   entry_direction:'buy',
   expected_volume:0.1,
   nickname:'管理员',
+  email:'admin@example.com',
 }
 
 beforeEach(() => {
@@ -64,6 +65,7 @@ beforeEach(() => {
     ownership_history_id:101,
     broker_server_key:'BROKER-DEMO',
     login_account:'10001',
+    account_name:'源账户',
   })
 })
 
@@ -83,7 +85,12 @@ describe('admin position protection', () => {
     expect(preview.affected_users).toBe(1)
     expect(preview.affected_positions).toBe(1)
     expect(preview.source.magic).toBe(SYSTEM_POSITION_MAGIC)
-    expect(preview.targets[0]).toMatchObject({ is_source:true, ticket:'70001', user_id:1 })
+    expect(preview.targets[0]).toMatchObject({
+      is_source:true, ticket:'70001', user_id:1,
+      account_name:'源账户', user_label:'源账户',
+      login_account:'10001', bridge_connected:true,
+      inclusion_status:'source_only', reason_code:null,
+    })
   })
 
   it('resolves all uniquely attributed positions from the same signal', async () => {
@@ -103,6 +110,8 @@ describe('admin position protection', () => {
       current_login_account:'20002',
       position_source_count:1,
       nickname:'跟随用户',
+      email:'follower@example.com',
+      account_name:'跟随账户',
     }
     queryAll
       .mockResolvedValueOnce([sourceOutcome])
@@ -116,7 +125,59 @@ describe('admin position protection', () => {
     expect(preview.affected_users).toBe(2)
     expect(preview.affected_positions).toBe(2)
     expect(preview.targets.map(item => item.ticket)).toEqual(['70001', '80002'])
+    expect(preview.targets[1]).toMatchObject({
+      nickname:'跟随用户', account_name:'跟随账户', email:'follower@example.com',
+      user_label:'跟随用户', login_account:'20002', bridge_connected:true,
+      inclusion_status:'included', reason_code:null,
+    })
     expect(preview.exclusions).toEqual([])
+  })
+
+  it('exposes identity and reason for a multiple-position-source exclusion', async () => {
+    const duplicate = {
+      ...sourceOutcome,
+      id:52,
+      user_id:2,
+      trading_account_id:22,
+      position_id:'80002',
+      current_ownership_history_id:202,
+      current_broker_server_key:'BROKER-LIVE',
+      current_login_account:'20002',
+      nickname:'重复来源用户',
+      email:'duplicate@example.com',
+      account_name:'重复来源账户',
+      position_source_count:2,
+    }
+    queryAll
+      .mockResolvedValueOnce([sourceOutcome])
+      .mockResolvedValueOnce([duplicate])
+    const preview = await getPositionProtectionPreview(1, '70001', { syncScope:'signal' })
+    expect(preview.exclusions).toEqual([expect.objectContaining({
+      user_id:2, trading_account_id:22, ticket:'80002',
+      nickname:'重复来源用户', account_name:'重复来源账户', email:'duplicate@example.com',
+      user_label:'重复来源用户', login_account:'20002', bridge_connected:true,
+      inclusion_status:'excluded', reason_code:'multiple_position_sources',
+      reason:'multiple_position_sources',
+    })])
+  })
+
+  it('does not include display identity fields in the preview hash', async () => {
+    const sourceA = { ...sourceOutcome, nickname:'管理员 A', email:'a@example.com' }
+    const followerA = {
+      ...sourceOutcome, id:42, user_id:2, trading_account_id:22, position_id:'80002',
+      current_ownership_history_id:202, current_broker_server_key:'BROKER-LIVE', current_login_account:'20002',
+      position_source_count:1, nickname:'跟随 A', email:'follower-a@example.com', account_name:'账户 A',
+    }
+    const sourceB = { ...sourceA, nickname:'管理员 B', email:'b@example.com', account_name:'账户 B' }
+    const followerB = { ...followerA, nickname:'跟随 B', email:'follower-b@example.com', account_name:'账户 C' }
+    queryAll
+      .mockResolvedValueOnce([sourceA])
+      .mockResolvedValueOnce([sourceA, followerA])
+      .mockResolvedValueOnce([sourceB])
+      .mockResolvedValueOnce([sourceB, followerB])
+    const first = await getPositionProtectionPreview(1, '70001', { syncScope:'signal' })
+    const second = await getPositionProtectionPreview(1, '70001', { syncScope:'signal' })
+    expect(second.preview_hash).toBe(first.preview_hash)
   })
 
   it('fails closed when the source position maps to multiple outcomes', async () => {

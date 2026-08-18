@@ -26,6 +26,19 @@ const numeric = value => Number.isFinite(Number(value)) ? Number(value) : null
 const positionRef = outcome => textValue(outcome?.position_id || outcome?.entry_order_ticket)
 const targetKey = target => `${Number(target.user_id)}:${Number(target.trading_account_id)}:${textValue(target.ticket)}`
 
+function identityFields(row = {}, fallbackUserId = null) {
+  const nickname = textValue(row.nickname || row.user_nickname) || null
+  const accountName = textValue(row.account_name || row.account_nickname || row.trading_account_name) || null
+  const email = textValue(row.email || row.user_email) || null
+  const userId = Number(row.user_id || fallbackUserId || 0)
+  return {
+    nickname,
+    account_name:accountName,
+    email,
+    user_label:textValue(row.user_label) || nickname || accountName || email || (userId > 0 ? `用户 ${userId}` : '未知用户'),
+  }
+}
+
 function protectionError(code, message = '') {
   const error = new Error(code)
   error.code = code
@@ -62,7 +75,7 @@ function findInventoryPosition(inventory, ticket) {
 }
 
 async function findCurrentAccount(userId, account) {
-  return queryOne(`SELECT ta.id AS trading_account_id, ta.user_id, ta.margin_mode,
+  return queryOne(`SELECT ta.id AS trading_account_id, ta.user_id, ta.nickname AS account_name, ta.margin_mode,
       ownership.id AS ownership_history_id, ownership.broker_server_key, ownership.login_account
     FROM trading_accounts ta
     JOIN mt5_account_ownership_history ownership
@@ -105,6 +118,12 @@ async function loadSourceContext(actorUserId, ticket, { bridge = mt5Bridge } = {
 
 function buildSourceTarget(context, actorUserId) {
   const { position, account, sourceOutcome } = context
+  const identity = identityFields({
+    user_id:actorUserId,
+    nickname:sourceOutcome?.nickname,
+    email:sourceOutcome?.email,
+    account_name:account?.account_name,
+  }, actorUserId)
   return {
     is_source:true,
     user_id:Number(actorUserId),
@@ -122,7 +141,9 @@ function buildSourceTarget(context, actorUserId) {
     current_stop_loss:numeric(position.sl) || 0,
     current_take_profit:numeric(position.tp) || 0,
     bridge_connected:isBridgeAlive(Number(actorUserId)),
-    user_label:textValue(sourceOutcome?.nickname || sourceOutcome?.email) || `用户 ${actorUserId}`,
+    ...identity,
+    inclusion_status:'source_only',
+    reason_code:null,
   }
 }
 
@@ -130,6 +151,7 @@ async function loadSignalTargets(sourceContext, actorUserId) {
   const signalId = Number(sourceContext.sourceOutcome?.signal_id)
   if (!signalId) return { targets:[], exclusions:[] }
   const rows = await queryAll(`SELECT outcomes.*, users.email, users.nickname,
+      accounts.nickname AS account_name,
       ownership.id AS current_ownership_history_id,
       ownership.broker_server_key AS current_broker_server_key,
       ownership.login_account AS current_login_account,
@@ -163,9 +185,26 @@ async function loadSignalTargets(sourceContext, actorUserId) {
     if (!ticket || seen.has(key)) continue
     seen.add(key)
     if (Number(outcome.position_source_count || 0) !== 1) {
-      exclusions.push({ user_id:Number(outcome.user_id), ticket, reason:'multiple_position_sources' })
+      const identity = identityFields(outcome, outcome.user_id)
+      exclusions.push({
+        ...identity,
+        user_id:Number(outcome.user_id),
+        trading_account_id:Number(outcome.trading_account_id),
+        broker_server_key:textValue(outcome.current_broker_server_key),
+        login_account:textValue(outcome.current_login_account),
+        ticket,
+        symbol:textValue(outcome.original_symbol || outcome.symbol),
+        direction:textValue(outcome.entry_direction).toLowerCase(),
+        volume:Number(outcome.expected_volume || outcome.entry_volume || 0),
+        bridge_connected:isBridgeAlive(Number(outcome.user_id)),
+        eligible:false,
+        inclusion_status:'excluded',
+        reason_code:'multiple_position_sources',
+        reason:'multiple_position_sources',
+      })
       continue
     }
+    const identity = identityFields(outcome, outcome.user_id)
     targets.push({
       is_source:Number(outcome.user_id) === Number(actorUserId)
         && Number(outcome.trading_account_id) === Number(sourceContext.account.trading_account_id)
@@ -185,7 +224,9 @@ async function loadSignalTargets(sourceContext, actorUserId) {
       current_stop_loss:null,
       current_take_profit:null,
       bridge_connected:isBridgeAlive(Number(outcome.user_id)),
-      user_label:textValue(outcome.nickname || outcome.email) || `用户 ${outcome.user_id}`,
+      ...identity,
+      inclusion_status:'included',
+      reason_code:null,
     })
   }
   return { targets, exclusions }

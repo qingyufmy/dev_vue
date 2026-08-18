@@ -681,6 +681,10 @@
                   <section class="position-protection-section position-protection-overview" aria-labelledby="positionProtectionSourceTitle">
                     <div class="position-protection-section-head"><div><span class="position-protection-step">01</span><h3 id="positionProtectionSourceTitle">确认当前持仓</h3></div><span class="position-protection-live"><i data-lucide="radio" size="13"></i><span data-bridge-platform-template="{platform} 实时数据">交易平台实时数据</span></span></div>
                     <div id="positionProtectionSourceSummary" class="position-protection-summary"><div class="workspace-skeleton"></div></div>
+                    <div id="adminStrategyCloseCapability" class="admin-strategy-close-capability" aria-live="polite">
+                      <div><i data-lucide="octagon-alert" size="17"></i><span><strong>需要结束本次策略持仓？</strong><small id="adminStrategyCloseCapabilityStatus">正在核对完整平仓范围…</small></span></div>
+                      <div class="admin-strategy-close-capability-actions"><button id="adminStrategyCloseCapabilityRetry" class="btn btn-secondary btn-sm hidden" type="button"><i data-lucide="refresh-cw" size="14"></i>重新核对</button><button id="adminStrategyCloseCapabilityButton" class="btn btn-danger btn-sm" type="button" aria-controls="adminStrategyCloseSection" aria-expanded="false" disabled><i data-lucide="x-circle" size="14"></i>完整平仓…</button></div>
+                    </div>
                   </section>
                   <section class="position-protection-section" aria-labelledby="positionProtectionPriceTitle">
                     <div class="position-protection-section-head"><div><span class="position-protection-step">02</span><h3 id="positionProtectionPriceTitle">设置新的保护价</h3></div><span>至少修改一项</span></div>
@@ -691,13 +695,14 @@
                     <div id="positionProtectionChangeSummary" class="position-protection-change-summary" aria-live="polite"><i data-lucide="info" size="16"></i><span>修改任一价格后，这里会显示本次变更摘要。</span></div>
                   </section>
                   <section class="position-protection-section position-protection-scope-section" aria-labelledby="positionProtectionScopeTitle">
-                    <div class="position-protection-section-head"><div><span class="position-protection-step">03</span><h3 id="positionProtectionScopeTitle">选择应用范围</h3></div><span id="positionProtectionScopeBadge" class="position-protection-scope-badge">仅当前持仓</span></div>
+                    <div class="position-protection-section-head"><div><span class="position-protection-step">03</span><h3 id="positionProtectionScopeTitle">选择应用范围</h3></div><div class="position-protection-scope-actions"><span id="positionProtectionScopeBadge" class="position-protection-scope-badge">仅当前持仓</span><button id="positionProtectionScopeDetailsToggle" class="btn btn-secondary btn-sm" type="button" aria-controls="positionProtectionScopeDetails" aria-expanded="false"><i data-lucide="list-tree" size="14"></i><span>查看范围明细</span></button></div></div>
                     <label class="position-protection-sync-option">
                       <input id="positionProtectionSyncScope" type="checkbox">
                       <span class="position-protection-switch" aria-hidden="true"><i></i></span>
                       <span><strong>同步同一信号下的系统持仓</strong><small id="positionProtectionScopeHelp">默认只修改当前持仓；开启后会重新核对可安全同步的账户。</small></span>
                     </label>
                     <div id="positionProtectionImpact" class="position-protection-impact"><div class="workspace-skeleton"></div></div>
+                    <div id="positionProtectionScopeDetails" class="position-protection-scope-details hidden" aria-live="polite"></div>
                   </section>
                   <section id="adminStrategyCloseSection" class="position-protection-section admin-strategy-close-section hidden" aria-labelledby="adminStrategyCloseTitle">
                     <div class="admin-strategy-close-head">

@@ -97,6 +97,52 @@ function outcomeSnapshot(row) {
   }
 }
 
+function identityFields(row = {}, { userSnapshot = {}, accountSnapshot = {}, fallbackUserId = null } = {}) {
+  const nickname = text(row.nickname || row.user_nickname || userSnapshot.nickname)
+  const accountName = text(row.account_name || row.account_nickname || accountSnapshot.nickname)
+  const email = text(row.email || row.user_email || userSnapshot.email)
+  const userId = Number(row.user_id || fallbackUserId || 0)
+  return {
+    nickname:nickname || null,
+    account_name:accountName || null,
+    email:email || null,
+    user_label:text(row.user_label) || nickname || accountName || email || (userId > 0 ? `用户 ${userId}` : '未知用户'),
+  }
+}
+
+function bridgeConnected(row = {}, snapshot = {}) {
+  const isAlive = optionalModuleFunction(bridgeWs, 'isBridgeAlive')
+  if (isAlive && Number(row.user_id || 0) > 0) return Boolean(isAlive(Number(row.user_id)))
+  if (row.bridge_connected != null) return Boolean(row.bridge_connected)
+  return snapshot.bridge_connected == null ? null : Boolean(snapshot.bridge_connected)
+}
+
+function displayFields(target, { inclusionStatus = null, reasonCode = null } = {}) {
+  const code = reasonCode || target?.reason_code || target?.reason || target?.exclusion_reason || null
+  return {
+    ...identityFields(target, {
+      userSnapshot:target?.user_snapshot,
+      accountSnapshot:target?.account_snapshot,
+      fallbackUserId:target?.user_id,
+    }),
+    bridge_connected:target?.bridge_connected == null ? null : Boolean(target.bridge_connected),
+    inclusion_status:inclusionStatus || (target?.is_source ? 'source_only' : 'included'),
+    reason_code:code,
+    ...(code ? { reason:code } : {}),
+  }
+}
+
+function exclusionTarget(target, reason, extra = {}) {
+  return {
+    ...target,
+    ...displayFields(target, { inclusionStatus:'excluded', reasonCode:reason }),
+    eligible:false,
+    reason,
+    reason_code:reason,
+    ...extra,
+  }
+}
+
 function decodeTarget(row, { sourceSignalId = null } = {}) {
   const snapshot = targetSnapshot(row)
   const accountSnapshot = parseJson(row.account_snapshot_json, snapshot.account || {})
@@ -109,6 +155,8 @@ function decodeTarget(row, { sourceSignalId = null } = {}) {
   const resolvedVolume = Number(row.volume ?? snapshot.volume ?? outcome.volume ?? 0)
   const targetRole = text(row.target_role).toLowerCase() || 'subscriber'
   const signalId = Number(row.signal_id || sourceSignalId || outcome.signal_id || 0)
+  const identity = identityFields(row, { userSnapshot, accountSnapshot, fallbackUserId:row.user_id })
+  const reasonCode = row.exclusion_reason || null
   return {
     id: Number(row.id || row.admin_target_id || 0),
     target_role: targetRole,
@@ -136,7 +184,12 @@ function decodeTarget(row, { sourceSignalId = null } = {}) {
     ownership_snapshot: ownershipSnapshot,
     outcome_snapshot: outcome,
     subscription_id: row.subscription_id ? Number(row.subscription_id) : null,
-    exclusion_reason: row.exclusion_reason || null,
+    exclusion_reason: reasonCode,
+    ...identity,
+    bridge_connected:bridgeConnected(row, snapshot),
+    inclusion_status:targetRole === 'source' ? 'source_only' : reasonCode ? 'excluded' : 'included',
+    reason_code:reasonCode,
+    ...(reasonCode ? { reason:reasonCode } : {}),
   }
 }
 
@@ -197,9 +250,16 @@ async function loadSourceCandidates(userId, tradingAccountId, sourceTicket) {
       t.trade_ticket, t.target_snapshot_json, t.account_snapshot_json,
       t.ownership_snapshot_json, t.bridge_generation, t.broker_server_key,
       t.login_account, t.standard_symbol, t.dispatch_id,
+      identity_user.email AS user_email, identity_user.nickname AS user_nickname,
+      identity_account.nickname AS account_name,
       d.actor_user_id, d.status AS dispatch_status
     FROM signal_outcomes outcomes
     JOIN ai_signals s ON s.id = outcomes.signal_id AND s.source = ?
+    LEFT JOIN users identity_user ON identity_user.id = outcomes.user_id
+    LEFT JOIN trading_accounts identity_account
+      ON identity_account.id = outcomes.trading_account_id
+      AND identity_account.user_id = outcomes.user_id
+      AND identity_account.is_deleted = 0
     LEFT JOIN admin_strategy_trade_targets t
       ON t.signal_id = outcomes.signal_id AND t.target_role = 'source'
       AND t.user_id = outcomes.user_id AND t.trading_account_id = outcomes.trading_account_id
@@ -235,6 +295,8 @@ async function loadDispatchTargets(signalId) {
       so.symbol AS outcome_symbol, so.entry_direction AS outcome_direction,
       so.expected_volume AS outcome_volume,
       ta.broker_server AS account_broker_server, ta.login_account AS account_login_account,
+      ta.nickname AS account_name,
+      identity_user.email AS user_email, identity_user.nickname AS user_nickname,
       own.id AS current_ownership_history_id, own.user_id AS ownership_user_id,
       own.trading_account_id AS ownership_trading_account_id,
       own.broker_server_key AS current_broker_server_key,
@@ -248,6 +310,7 @@ async function loadDispatchTargets(signalId) {
       AND (so.position_id = t.trade_ticket OR so.entry_order_ticket = t.trade_ticket)
     LEFT JOIN trading_accounts ta ON ta.id = t.trading_account_id
       AND ta.user_id = t.user_id AND ta.is_deleted = 0
+    LEFT JOIN users identity_user ON identity_user.id = t.user_id
     LEFT JOIN mt5_account_ownership_history own
       ON own.trading_account_id = t.trading_account_id AND own.user_id = t.user_id
       AND own.ended_at IS NULL
@@ -319,12 +382,16 @@ export async function validateAdminSystemPositionTarget(target, {
 function dedupeTargets(targets) {
   const seen = new Map()
   const duplicateKeys = new Set()
+  const duplicateTargets = []
   for (const target of targets) {
     const key = `${target.user_id}:${target.trading_account_id}:${target.ticket}`
-    if (seen.has(key)) duplicateKeys.add(key)
+    if (seen.has(key)) {
+      duplicateKeys.add(key)
+      duplicateTargets.push(target)
+    }
     else seen.set(key, target)
   }
-  return { targets: [...seen.values()], duplicateKeys }
+  return { targets: [...seen.values()], duplicateKeys, duplicateTargets }
 }
 
 function previewHash(payload) {
@@ -380,6 +447,9 @@ export async function resolveAdminSystemPositionTargets(actorUserId, sourceTicke
   source.direction = direction(source.direction || sourcePosition.type)
   source.volume = Number(sourcePosition.volume || source.volume || 0)
   source.magic = ADMIN_SYSTEM_POSITION_MAGIC
+  source.bridge_connected = bridgeConnected(source, source.target_snapshot)
+  source.inclusion_status = 'source_only'
+  source.reason_code = null
   const sourceValidation = await validateAdminSystemPositionTarget(source, { bridge, inventoryResult: actorInventory, requireBridge })
   if (!sourceValidation.ok) throw fail(`source_${sourceValidation.reason}`, { target: source })
 
@@ -389,15 +459,26 @@ export async function resolveAdminSystemPositionTargets(actorUserId, sourceTicke
     const rows = await loadDispatchTargets(signalId)
     const decoded = rows.filter(row => text(row.target_role) === 'subscriber').map(row => decodeTarget(row, { sourceSignalId: signalId }))
     const deduped = dedupeTargets(decoded)
-    for (const duplicateKey of deduped.duplicateKeys) exclusions.push({ reason: 'duplicate_target', key: duplicateKey })
+    for (const duplicateTarget of deduped.duplicateTargets) {
+      const key = `${duplicateTarget.user_id}:${duplicateTarget.trading_account_id}:${duplicateTarget.ticket}`
+      exclusions.push(exclusionTarget(duplicateTarget, 'duplicate_target', { key }))
+    }
+    // Keep a key-only record for a legacy row that cannot be decoded into a
+    // target identity.  Normal duplicate rows are emitted above with the
+    // account/user display fields required by the preview contract.
+    for (const duplicateKey of deduped.duplicateKeys) {
+      if (!deduped.duplicateTargets.some(target => `${target.user_id}:${target.trading_account_id}:${target.ticket}` === duplicateKey)) {
+        exclusions.push({ reason:'duplicate_target', reason_code:'duplicate_target', inclusion_status:'excluded', key:duplicateKey })
+      }
+    }
     for (const target of deduped.targets) {
       if (!target.ticket) {
-        exclusions.push({ ...target, eligible: false, reason: 'ticket_unavailable' })
+        exclusions.push(exclusionTarget(target, 'ticket_unavailable'))
         continue
       }
       const ownership = await validateOwnership(target).catch(error => ({ ok: false, reason: error.code || 'ownership_query_failed', error }))
       if (!ownership.ok) {
-        exclusions.push({ ...target, eligible: false, reason: ownership.reason })
+        exclusions.push(exclusionTarget(target, ownership.reason))
         continue
       }
       target.ownership_history_id = Number(ownership.account.ownership_history_id)
@@ -405,16 +486,26 @@ export async function resolveAdminSystemPositionTargets(actorUserId, sourceTicke
       target.login_account = text(ownership.account.ownership_login_account || ownership.account.login_account)
       const validation = await validateAdminSystemPositionTarget(target, { bridge, requireBridge })
       if (!validation.ok) {
-        exclusions.push({ ...target, eligible: false, reason: validation.reason })
+        exclusions.push(exclusionTarget(target, validation.reason))
         continue
       }
       target.eligible = true
       target.position = validation.position
       target.bridge_generation = validation.generation
+      target.inclusion_status = 'included'
+      target.reason_code = null
       targets.push(target)
     }
   }
-  targets = targets.map((target, index) => ({ ...target, eligible: target.eligible !== false, target_order: target.is_source ? targets.length : index }))
+  targets = targets.map((target, index) => ({
+    ...target,
+    ...displayFields(target, {
+      inclusionStatus:target.is_source ? 'source_only' : 'included',
+      reasonCode:null,
+    }),
+    eligible:target.eligible !== false,
+    target_order:target.is_source ? targets.length : index,
+  }))
     .sort((a, b) => Number(a.is_source) - Number(b.is_source) || Number(a.user_id) - Number(b.user_id) || Number(a.id) - Number(b.id))
   const payload = {
     actor_user_id: actorId, source_signal_id: signalId, source_ticket: wantedTicket,
@@ -453,6 +544,8 @@ async function loadActiveTargetsForUser(userId) {
       so.symbol AS outcome_symbol, so.entry_direction AS outcome_direction,
       so.expected_volume AS outcome_volume,
       ta.broker_server AS account_broker_server, ta.login_account AS account_login_account,
+      ta.nickname AS account_name,
+      identity_user.email AS user_email, identity_user.nickname AS user_nickname,
       own.id AS current_ownership_history_id, own.user_id AS ownership_user_id,
       own.trading_account_id AS ownership_trading_account_id,
       own.broker_server_key AS current_broker_server_key,
@@ -468,6 +561,7 @@ async function loadActiveTargetsForUser(userId) {
       ORDER BY latest.id DESC LIMIT 1)
     LEFT JOIN order_intents oi ON oi.id = t.order_intent_id
     LEFT JOIN trading_accounts ta ON ta.id = t.trading_account_id AND ta.user_id = t.user_id AND ta.is_deleted = 0
+    LEFT JOIN users identity_user ON identity_user.id = t.user_id
     LEFT JOIN mt5_account_ownership_history own ON own.trading_account_id = t.trading_account_id
       AND own.user_id = t.user_id AND own.ended_at IS NULL
     WHERE t.user_id = ? AND t.status IN (?, ?, ?, ?, ?, ?, ?)

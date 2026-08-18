@@ -68,11 +68,16 @@ const state = {
   positions: [],
   pendingOrders: [],
   positionProtectionPreview: null,
+  positionProtectionPreviewRequestVersion: 0,
+  positionProtectionScopeDetailsExpanded: false,
   positionProtectionJob: null,
   positionProtectionPollTimer: null,
   adminStrategyClosePreview: null,
   adminStrategyClosePreviewTicket: null,
   adminStrategyClosePreviewRequestVersion: 0,
+  adminStrategyClosePreviewState: "idle",
+  adminStrategyClosePreviewError: null,
+  adminStrategyCloseExpanded: false,
   adminStrategyCloseJob: null,
   adminStrategyClosePollTimer: null,
   adminStrategyClosePollGeneration: 0,
@@ -11441,8 +11446,19 @@ function resetAdminStrategyCloseState() {
   state.adminStrategyClosePreviewRequestVersion += 1;
   state.adminStrategyCloseJob = null;
   state.adminStrategyCloseSubmitting = false;
+  state.adminStrategyClosePreviewState = "idle";
+  state.adminStrategyClosePreviewError = null;
+  state.adminStrategyCloseExpanded = false;
   const section = $("adminStrategyCloseSection");
   section?.classList.add("hidden");
+  const capabilityButton = $("adminStrategyCloseCapabilityButton");
+  if (capabilityButton) {
+    capabilityButton.disabled = true;
+    capabilityButton.setAttribute("aria-expanded", "false");
+  }
+  const capabilityStatus = $("adminStrategyCloseCapabilityStatus");
+  if (capabilityStatus) capabilityStatus.textContent = "正在核对完整平仓范围…";
+  $("adminStrategyCloseCapabilityRetry")?.classList.add("hidden");
   $("adminStrategyCloseProgressStage")?.classList.add("hidden");
   $("adminStrategyCloseError")?.classList.add("hidden");
   $("adminStrategyCloseProgressError")?.replaceChildren();
@@ -11473,6 +11489,47 @@ function resetAdminStrategyCloseState() {
   if (refresh) refresh.lastChild && (refresh.lastChild.textContent = "重新获取平仓预览");
 }
 
+function adminStrategyCloseUnavailableMessage(error) {
+  const code = String(error?.code || error?.message || "").trim();
+  const labels = {
+    admin_dispatch_attribution_unavailable:"当前持仓缺少可核验的管理员策略信号来源，不能批量平仓。",
+    admin_dispatch_attribution_ambiguous:"当前持仓关联到多个来源记录，不能安全确定平仓范围。",
+    system_position_not_found:"当前持仓已不存在或已经平仓，请刷新持仓后重试。",
+    position_magic_mismatch:"持仓归属校验失败，不能使用策略关联平仓。",
+    position_not_system_owned:"该持仓不是系统下单，不能使用策略关联平仓。",
+    source_bridge_offline:"发起账户 Bridge 离线，连接交易终端后可重新核对。",
+    source_position_not_found:"发起持仓已不存在，请刷新持仓后重试。",
+    source_account_identity_unavailable:"当前交易账户身份无法核验，请重新连接交易终端。",
+  };
+  return labels[code] || (error?.name === "ApiError"
+    ? error.message
+    : "暂时无法核对完整平仓范围，请稍后重新核对。"
+  );
+}
+
+function renderAdminStrategyCloseCapability(stateName, error = null) {
+  state.adminStrategyClosePreviewState = stateName;
+  state.adminStrategyClosePreviewError = error;
+  const status = $("adminStrategyCloseCapabilityStatus");
+  const button = $("adminStrategyCloseCapabilityButton");
+  const retry = $("adminStrategyCloseCapabilityRetry");
+  if (!status || !button || !retry) return;
+  const available = stateName === "available";
+  const loading = stateName === "loading";
+  button.disabled = !available;
+  button.setAttribute("aria-expanded", String(available && state.adminStrategyCloseExpanded));
+  button.lastChild && (button.lastChild.textContent = available ? "完整平仓…" : loading ? "正在核对…" : "暂不可完整平仓");
+  retry.classList.toggle("hidden", loading || available);
+  status.textContent = available
+    ? "已确认可唯一关联到本次管理员策略指令；点击后查看范围并进行危险确认。"
+    : loading ? "正在核对来源信号、真实持仓和订阅目标…" : adminStrategyCloseUnavailableMessage(error);
+  if (!available) {
+    state.adminStrategyCloseExpanded = false;
+    $("adminStrategyCloseSection")?.classList.add("hidden");
+  }
+  initIcons();
+}
+
 function setAdminStrategyCloseFieldError(message = "") {
   const input = $("adminStrategyCloseReason");
   const error = $("adminStrategyCloseReasonError");
@@ -11501,9 +11558,9 @@ function renderAdminStrategyClosePreview(preview, loading = false) {
   const impact = $("adminStrategyClosePreviewImpact");
   const submit = $("adminStrategyCloseSubmit");
   if (loading || !preview || !adminStrategyCloseEligible(preview)) {
-    section?.classList.add("hidden");
     if (submit) submit.disabled = true;
     if (impact && loading) impact.innerHTML = '<div class="workspace-skeleton"></div>';
+    renderAdminStrategyCloseCapability(loading ? "loading" : "unavailable");
     return false;
   }
   const root = adminStrategyCloseRoot(preview);
@@ -11511,9 +11568,12 @@ function renderAdminStrategyClosePreview(preview, loading = false) {
   const exclusions = Array.isArray(root.exclusions) ? root.exclusions : (Array.isArray(root.excluded_targets) ? root.excluded_targets : (Array.isArray(root.excluded) ? root.excluded : []));
   const sourceTicket = adminStrategyCloseValue(root, ["source_ticket", "source_position_ticket", "ticket"]) || $("positionProtectionTicket")?.value || "--";
   const sourceAccount = root.source_account && typeof root.source_account === "object" ? root.source_account : {};
-  const sourceLogin = adminStrategyCloseValue(root, ["source_login", "source_account_login", "login_account"]) || sourceAccount.login || sourceAccount.account || "管理员源账户";
+  const sourceLogin = adminStrategyCloseValue(root, ["source_login", "source_account_login", "login_account"])
+    || adminStrategyCloseValue(root.source || {}, ["login_account", "login", "account"])
+    || sourceAccount.login || sourceAccount.account || "管理员源账户";
   const previewHash = adminStrategyClosePreviewHash(root);
-  if (section) section.classList.remove("hidden");
+  renderAdminStrategyCloseCapability("available");
+  if (section) section.classList.toggle("hidden", !state.adminStrategyCloseExpanded);
   if (impact) impact.innerHTML = `
     <div><span>订阅用户（先关）</span><strong>${counters.subscriberUsers} 个用户 · ${counters.affectedPositions} 笔持仓</strong></div>
     <div><span>管理员源仓（最后）</span><strong class="num">#${escapeHtml(sourceTicket)} · ${escapeHtml(sourceLogin)}</strong></div>
@@ -11543,9 +11603,22 @@ async function loadAdminStrategyClosePreview(ticket) {
   } catch (error) {
     if (String($("positionProtectionTicket")?.value || "") === ticketValue) {
       state.adminStrategyClosePreview = null;
-      renderAdminStrategyClosePreview(null);
+      renderAdminStrategyCloseCapability("unavailable", error);
     }
     return null;
+  }
+}
+
+function toggleAdminStrategyCloseSection() {
+  if (state.adminStrategyClosePreviewState !== "available" || !state.adminStrategyClosePreview) return;
+  state.adminStrategyCloseExpanded = !state.adminStrategyCloseExpanded;
+  const section = $("adminStrategyCloseSection");
+  section?.classList.toggle("hidden", !state.adminStrategyCloseExpanded);
+  const button = $("adminStrategyCloseCapabilityButton");
+  button?.setAttribute("aria-expanded", String(state.adminStrategyCloseExpanded));
+  if (state.adminStrategyCloseExpanded) {
+    renderAdminStrategyClosePreview(state.adminStrategyClosePreview);
+    section?.scrollIntoView({ behavior:matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block:"nearest" });
   }
 }
 
@@ -11702,6 +11775,8 @@ async function retryAdminStrategyCloseJob() {
 
 function closePositionProtectionModal() {
   stopPositionProtectionPolling();
+  state.positionProtectionPreviewRequestVersion += 1;
+  state.positionProtectionScopeDetailsExpanded = false;
   resetAdminStrategyCloseState();
   closeFormModal($("positionProtectionModal"));
 }
@@ -11822,6 +11897,86 @@ function startPositionProtectionPolling(jobId) {
   }, 2000);
 }
 
+function positionProtectionScopeReasonLabel(item = {}) {
+  const code = String(item.reason_code || item.reason || item.exclusion_reason || "").trim();
+  const labels = {
+    multiple_position_sources:"存在多个持仓来源，无法唯一归因",
+    duplicate_target:"重复目标，已安全去重",
+    ticket_unavailable:"缺少真实持仓票号",
+    bridge_offline:"Bridge 离线",
+    position_not_found:"真实持仓已不存在",
+    position_magic_mismatch:"持仓 Magic 不匹配",
+    ownership_changed:"交易账户归属已变化",
+    ownership_query_failed:"暂时无法核验账户归属",
+  };
+  return item.reason_label || labels[code] || REASON_MAP[code] || (code ? "未满足安全同步条件" : "符合本次应用范围");
+}
+
+function positionProtectionTargetUserLabel(item = {}) {
+  const nickname = String(item.nickname || "").trim();
+  const accountName = String(item.account_name || item.email || "").trim();
+  if (nickname && accountName && nickname !== accountName) return `${nickname} · ${accountName}`;
+  return nickname || accountName || item.user_label || (item.user_id ? `用户 ${item.user_id}` : "未知用户");
+}
+
+function renderPositionProtectionScopeDetails(preview = state.positionProtectionPreview) {
+  const host = $("positionProtectionScopeDetails");
+  const toggle = $("positionProtectionScopeDetailsToggle");
+  if (!host || !toggle) return;
+  const expanded = Boolean(state.positionProtectionScopeDetailsExpanded);
+  host.classList.toggle("hidden", !expanded);
+  toggle.setAttribute("aria-expanded", String(expanded));
+  const toggleLabel = toggle.querySelector("span");
+  if (toggleLabel) toggleLabel.textContent = expanded ? "收起范围明细" : "查看范围明细";
+  if (!expanded) return;
+  if (!preview) {
+    host.innerHTML = '<div class="workspace-skeleton"></div>';
+    return;
+  }
+  const included = (Array.isArray(preview.targets) ? preview.targets : []).map(item => ({ ...item, scope_status:"included" }));
+  const excluded = (Array.isArray(preview.exclusions) ? preview.exclusions : []).map(item => ({ ...item, scope_status:"excluded" }));
+  const rows = [...included, ...excluded];
+  host.innerHTML = `
+    <div class="position-protection-scope-details-head">
+      <div><strong>本次范围明细</strong><small>执行前仍会重新核对账户归属、Bridge 和真实持仓；预览不代表已经执行。</small></div>
+      <span>${included.length} 笔纳入 · ${excluded.length} 项排除</span>
+    </div>
+    <div class="table-wrap position-protection-scope-table">
+      <table class="data-table">
+        <thead><tr><th>用户</th><th>交易账户</th><th>持仓</th><th>Bridge</th><th>本次处理</th><th>说明</th></tr></thead>
+        <tbody>${rows.length ? rows.map(item => {
+          const excludedItem = item.scope_status === "excluded" || item.inclusion_status === "excluded";
+          const online = item.bridge_connected === true;
+          const bridgeKnown = typeof item.bridge_connected === "boolean";
+          const source = Boolean(item.is_source);
+          const symbol = item.symbol ? `${escapeHtml(item.symbol)} · ` : "";
+          const direction = item.direction === "buy" ? "买入" : item.direction === "sell" ? "卖出" : "";
+          const position = item.ticket ? `${symbol}${direction ? `${direction} · ` : ""}#${escapeHtml(item.ticket)}` : "未取得票号";
+          return `<tr class="${excludedItem ? "is-excluded" : "is-included"}">
+            <td data-label="用户"><strong>${escapeHtml(positionProtectionTargetUserLabel(item))}</strong>${source ? '<small>发起账户</small>' : ""}</td>
+            <td data-label="交易账户" class="num">${escapeHtml(item.login_account || "--")}</td>
+            <td data-label="持仓" class="num">${position}</td>
+            <td data-label="Bridge"><span class="position-protection-connection ${online ? "is-online" : "is-offline"}"><i></i>${bridgeKnown ? (online ? "在线" : "离线") : "状态未知"}</span></td>
+            <td data-label="本次处理"><span class="position-protection-scope-status ${excludedItem ? "is-excluded" : "is-included"}">${excludedItem ? "安全排除" : source ? "发起持仓" : "纳入同步"}</span></td>
+            <td data-label="说明">${escapeHtml(excludedItem ? positionProtectionScopeReasonLabel(item) : source ? "当前正在编辑的系统持仓" : "同一信号关联的系统持仓")}</td>
+          </tr>`;
+        }).join("") : '<tr class="empty-row"><td colspan="6">当前没有可展示的应用目标</td></tr>'}</tbody>
+      </table>
+    </div>`;
+  initIcons();
+}
+
+function togglePositionProtectionScopeDetails({ focusExclusions = false } = {}) {
+  state.positionProtectionScopeDetailsExpanded = !state.positionProtectionScopeDetailsExpanded;
+  if (focusExclusions) state.positionProtectionScopeDetailsExpanded = true;
+  renderPositionProtectionScopeDetails();
+  if (state.positionProtectionScopeDetailsExpanded) {
+    const host = $("positionProtectionScopeDetails");
+    host?.scrollIntoView({ behavior:matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block:"nearest" });
+    if (focusExclusions) host?.querySelector("tr.is-excluded")?.scrollIntoView({ block:"nearest" });
+  }
+}
+
 function renderPositionProtectionPreview(preview, loading = false) {
   const summary = $("positionProtectionSourceSummary");
   const impact = $("positionProtectionImpact");
@@ -11832,6 +11987,7 @@ function renderPositionProtectionPreview(preview, loading = false) {
     if (impact) impact.innerHTML = '<div class="workspace-skeleton"></div>';
     if (submit) submit.disabled = true;
     renderAdminStrategyClosePreview(null, true);
+    renderPositionProtectionScopeDetails(null);
     return;
   }
   if (!preview) return;
@@ -11850,11 +12006,14 @@ function renderPositionProtectionPreview(preview, loading = false) {
       <div><span>当前止盈</span><strong class="num">${positionProtectionPriceLabel(source.current_take_profit)}</strong></div>
       <div><span>来源信号</span><strong>${source.signal_id ? `#${escapeHtml(source.signal_id)}` : "无法唯一归因"}</strong></div>
     </div>`;
+  const exclusionCount = Number(preview.exclusions?.length || 0);
   if (impact) impact.innerHTML = `
-    <div><span>目标账户</span><strong class="num">${Number(preview.affected_users || 0)}</strong></div>
-    <div><span>目标持仓</span><strong class="num">${Number(preview.affected_positions || 0)}</strong></div>
+    <button type="button" data-scope-details="all"><span>目标账户</span><strong class="num">${Number(preview.affected_users || 0)}</strong><small>查看明细</small></button>
+    <button type="button" data-scope-details="all"><span>目标持仓</span><strong class="num">${Number(preview.affected_positions || 0)}</strong><small>查看明细</small></button>
     <div><span>桥接在线</span><strong class="num">${Number(preview.online_users || 0)}</strong></div>
-    <div><span>安全排除</span><strong class="num">${Number(preview.exclusions?.length || 0)}</strong></div>`;
+    ${exclusionCount > 0
+      ? `<button type="button" data-scope-details="exclusions"><span>安全排除</span><strong class="num">${exclusionCount}</strong><small>查看原因</small></button>`
+      : '<div><span>安全排除</span><strong class="num">0</strong></div>'}`;
   if (scope) {
     scope.disabled = !preview.sync_available;
     scope.checked = preview.sync_scope === "signal" && preview.sync_available;
@@ -11867,12 +12026,17 @@ function renderPositionProtectionPreview(preview, loading = false) {
   if (scopeBadge) scopeBadge.textContent = scope?.checked
     ? `同步 ${Number(preview.affected_positions || 0)} 笔持仓` : "仅当前持仓";
   if (submit) submit.disabled = false;
+  renderPositionProtectionScopeDetails(preview);
   renderPositionProtectionChangeState();
 }
 
 async function loadPositionProtectionPreview(ticket, syncScope = "source_only") {
+  const requestVersion = ++state.positionProtectionPreviewRequestVersion;
   renderPositionProtectionPreview(null, true);
   const data = await api(`/api/admin/ai/positions/${encodeURIComponent(ticket)}/protection-preview?sync_scope=${encodeURIComponent(syncScope)}`, { timeout:20000 });
+  if (requestVersion !== state.positionProtectionPreviewRequestVersion
+    || String($("positionProtectionTicket")?.value || "") !== String(ticket)
+    || ($("positionProtectionSyncScope")?.checked ? "signal" : "source_only") !== syncScope) return null;
   state.positionProtectionPreview = data.preview;
   renderPositionProtectionPreview(data.preview);
   // The linked full-close preview is deliberately independent from the
@@ -11892,6 +12056,8 @@ async function openPositionProtectionModal(ticket) {
     return;
   }
   state.positionProtectionPreview = null;
+  state.positionProtectionPreviewRequestVersion += 1;
+  state.positionProtectionScopeDetailsExpanded = false;
   state.positionProtectionJob = null;
   resetAdminStrategyCloseState();
   stopPositionProtectionPolling();
@@ -17009,6 +17175,17 @@ function bindEvents() {
   $("positionProtectionRetry")?.addEventListener("click", retryPositionProtectionJob);
   $("adminStrategyCloseSubmit")?.addEventListener("click", submitAdminStrategyCloseJob);
   $("adminStrategyCloseRetry")?.addEventListener("click", retryAdminStrategyCloseJob);
+  $("adminStrategyCloseCapabilityButton")?.addEventListener("click", toggleAdminStrategyCloseSection);
+  $("adminStrategyCloseCapabilityRetry")?.addEventListener("click", () => {
+    const ticket = $("positionProtectionTicket")?.value;
+    if (ticket) loadAdminStrategyClosePreview(ticket).catch(() => {});
+  });
+  $("positionProtectionScopeDetailsToggle")?.addEventListener("click", () => togglePositionProtectionScopeDetails());
+  $("positionProtectionImpact")?.addEventListener("click", event => {
+    const trigger = event.target.closest?.("[data-scope-details]");
+    if (!trigger) return;
+    togglePositionProtectionScopeDetails({ focusExclusions:trigger.dataset.scopeDetails === "exclusions" });
+  });
   $("adminStrategyCloseRefresh")?.addEventListener("click", () => {
     const ticket = $("positionProtectionTicket")?.value;
     const jobId = adminStrategyCloseJobId(state.adminStrategyCloseJob || {});
@@ -17026,10 +17203,14 @@ function bindEvents() {
   $("positionProtectionSyncScope")?.addEventListener("change", async event => {
     const ticket = $("positionProtectionTicket")?.value;
     if (!ticket) return;
+    const previousPreview = state.positionProtectionPreview;
     event.target.disabled = true;
     try { await loadPositionProtectionPreview(ticket, event.target.checked ? "signal" : "source_only"); }
     catch (error) {
       event.target.checked = !event.target.checked;
+      state.positionProtectionPreview = previousPreview;
+      if (previousPreview) renderPositionProtectionPreview(previousPreview);
+      loadAdminStrategyClosePreview(ticket).catch(() => {});
       toast(error.message, "error");
     } finally {
       event.target.disabled = !state.positionProtectionPreview?.sync_available;

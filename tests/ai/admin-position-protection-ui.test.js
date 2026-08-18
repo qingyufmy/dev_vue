@@ -36,6 +36,7 @@ describe('admin position protection UI contract', () => {
       'positionProtectionScopeBadge', 'positionProtectionReasonCount',
       'positionProtectionReasonError', 'positionProtectionCancel',
       'positionProtectionSubmitHint', 'positionProtectionSubmitLabel',
+      'positionProtectionScopeDetailsToggle', 'positionProtectionScopeDetails',
     ]) expect(html).toContain(`id="${id}"`)
     expect(html).toContain('aria-describedby="positionProtectionStopLossHelp positionProtectionStopLossError"')
     expect(html).toContain('aria-describedby="positionProtectionTakeProfitHelp positionProtectionTakeProfitError"')
@@ -47,6 +48,10 @@ describe('admin position protection UI contract', () => {
     expect(css).toContain('.position-protection-sync-option { position:relative; display:flex;')
     expect(css).toContain('.position-protection-switch { position:relative; flex:0 0 42px;')
     expect(css).toContain('.position-protection-sync-option:has(input:checked)')
+    expect(css).toContain('.position-protection-scope-details')
+    expect(app).toContain('renderPositionProtectionScopeDetails')
+    expect(app).toContain('data-scope-details="exclusions"')
+    expect(app).toContain('positionProtectionPreviewRequestVersion')
     expect(css).not.toContain('grid-template-columns:1px 42px minmax(0,1fr)')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
   })

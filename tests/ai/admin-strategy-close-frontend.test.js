@@ -14,6 +14,8 @@ describe('admin strategy linked close frontend contract', () => {
     expect(html).toContain('订阅用户先关，管理员源仓最后')
     expect(html).toContain('Bridge ACK 待对账')
     expect(html).toContain('maxlength="500"')
+    expect(html).toContain('id="adminStrategyCloseCapabilityButton"')
+    expect(html).toContain('id="adminStrategyCloseCapabilityStatus"')
   })
 
   it('fails closed unless the preview confirms a unique admin strategy attribution', () => {
@@ -22,6 +24,8 @@ describe('admin strategy linked close frontend contract', () => {
     expect(app).toContain('unique_attribution')
     expect(app).toContain('if (!adminStrategyCloseAttribution(root)) return false')
     expect(app).toContain('loadAdminStrategyClosePreview(ticket)')
+    expect(app).toContain('renderAdminStrategyCloseCapability("unavailable", error)')
+    expect(app).toContain('暂不可完整平仓')
   })
 
   it('uses the close-preview, job, polling and failed-only retry API contracts', () => {
