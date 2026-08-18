@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 // Mock 依赖 — 路径必须与 scheduler.js 的导入路径一致
 vi.mock('../../server/db.js', () => ({
@@ -228,6 +229,28 @@ describe('platform strategy direction interlock integration', () => {
     })
     expect(result.resolution).toMatchObject({ allowed:true })
     expect(result.signal).toBe(original)
+  })
+})
+
+describe('unified-cycle observer source scope', () => {
+  it('keeps the shared observer source in the real unified cycle scope', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
+    const cycleStart = source.indexOf('async function runUnifiedAutoCycle')
+    const cycleEnd = source.indexOf('\nasync function executeDelivery', cycleStart)
+    const taskFenceStart = source.indexOf('async function assertModelTaskOwned')
+    const taskFenceEnd = source.indexOf('\nasync function assertAutoInferenceApplyGate', taskFenceStart)
+
+    expect(cycleStart).toBeGreaterThanOrEqual(0)
+    expect(cycleEnd).toBeGreaterThan(cycleStart)
+    expect(taskFenceStart).toBeGreaterThanOrEqual(0)
+    expect(taskFenceEnd).toBeGreaterThan(taskFenceStart)
+
+    const cycleBody = source.slice(cycleStart, cycleEnd)
+    const taskFenceBody = source.slice(taskFenceStart, taskFenceEnd)
+    expect(cycleBody.match(/let platformReferenceSource = null/g)).toHaveLength(1)
+    expect(cycleBody).toContain('platformReferenceSource = await getObserverSourceForStrategy')
+    expect(cycleBody).toContain('referenceSource:platformReferenceSource')
+    expect(taskFenceBody).not.toContain('platformReferenceSource')
   })
 })
 

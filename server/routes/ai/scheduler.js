@@ -312,7 +312,6 @@ function getAutoModelTaskTrackerFactory() {
 async function assertModelTaskOwned(tracker, phase) {
   if (!tracker || tracker.active === false) return false
   if (typeof tracker.assertOwned !== 'function') return false
-  let platformReferenceSource = null
   try {
     const owned = await tracker.assertOwned(phase)
     return owned !== false
@@ -2285,6 +2284,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
   let previousOnProviderQuiet = null
   let previousOnInferencePrepared = null
   let previousAbortSignal = null
+  // The observer source is resolved while building the platform market
+  // snapshot and reused after model inference for the direction interlock.
+  // Keep it in the unified-cycle scope; task-fence assertions must not own
+  // or shadow this value.
+  let platformReferenceSource = null
   const finishModelTaskAfterSignalGate = async (type, reason) => {
     if (modelTaskSettled || !modelTaskTracker) return
     try {
