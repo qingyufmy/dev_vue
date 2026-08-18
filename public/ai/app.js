@@ -8505,7 +8505,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     <div class="period-review-source ${review.evidence_status === 'complete' ? 'complete' : 'warning'}"><i data-lucide="${review.evidence_status === 'complete' ? 'shield-check' : 'triangle-alert'}" size="16"></i><div><strong>${sourceLabel}</strong><span>${escapeHtml(sourceDetail)}；${escapeHtml(nextPeriodHint)}</span></div></div>
     ${review.status === 'approved' && derivationStatus ? `<div class="period-review-source ${derivationClass}"><i data-lucide="${["applied","completed","succeeded"].includes(derivationStatus) ? 'brain-circuit' : ["failed","compression_failed_memory_preserved"].includes(derivationStatus) ? 'circle-alert' : 'loader-circle'}" size="16"></i><div><strong>${escapeHtml(derivationLabels[derivationStatus] || derivationStatus)}</strong><span>${escapeHtml(derivationDetail)}</span></div>${["failed","compression_failed_memory_preserved"].includes(derivationStatus) ? '<button class="btn btn-secondary btn-sm" data-review-action="retry-derivation">重试经验处理</button>' : ''}</div>` : ''}
     ${isLegacyV3 ? periodReviewLegacyNoticeHtml() : ''}
-    ${current ? `<nav class="period-review-section-nav" aria-label="复盘结果分区导航"><a href="#period-review-overview">概览</a>${isDailyV3 ? '<a href="#period-review-trades">逐笔复盘</a><a href="#period-review-findings">归纳结论</a><a href="#period-review-experience">当日经验</a>' : ''}<a href="#period-review-evidence">证据</a></nav>` : ''}
+    ${current ? `<nav class="period-review-section-nav" aria-label="复盘结果分区导航"><button type="button" data-review-section-target="period-review-overview" aria-current="location">概览</button>${isDailyV3 ? '<button type="button" data-review-section-target="period-review-trades">逐笔复盘</button><button type="button" data-review-section-target="period-review-findings">归纳结论</button><button type="button" data-review-section-target="period-review-experience">当日经验</button>' : ''}<button type="button" data-review-section-target="period-review-evidence">证据</button></nav>` : ''}
     ${current ? `<section id="period-review-overview" class="period-review-editor">
       <div class="period-review-section-heading"><div><span class="review-section-kicker">核心结论</span><h3>${isMonthly ? '本月策略表现' : '当日策略表现'}</h3></div><span>第 ${Number(current.version_no || 1)} 次修订</span></div>
       <label class="review-field"><span>复盘摘要</span><textarea data-period-review-field="period_summary" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(userVisibleText(content.period_summary, "暂无复盘摘要"))}</textarea></label>
@@ -16663,6 +16663,46 @@ async function loadAudit() {
   }
 }
 
+function navigatePeriodReviewSection(targetId, trigger) {
+  const allowedTargets = new Set([
+    "period-review-overview",
+    "period-review-trades",
+    "period-review-findings",
+    "period-review-experience",
+    "period-review-evidence",
+  ]);
+  if (!allowedTargets.has(targetId)) return;
+  const detail = $("reviewDetail");
+  const target = document.getElementById(targetId);
+  const main = document.querySelector(".main");
+  const nav = trigger?.closest(".period-review-section-nav");
+  if (!detail?.contains(target) || !main || !nav) return;
+
+  nav.querySelectorAll("[data-review-section-target]").forEach(button => {
+    const active = button === trigger;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "location");
+    else button.removeAttribute("aria-current");
+  });
+
+  const mainRect = main.getBoundingClientRect();
+  const navRect = nav.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const visibleTop = Math.max(mainRect.top + 8, navRect.bottom + 8);
+  const visibleBottom = mainRect.bottom - 16;
+  const availableHeight = Math.max(0, visibleBottom - visibleTop);
+  let delta = 0;
+  if (targetRect.height > availableHeight || targetRect.top < visibleTop) {
+    delta = targetRect.top - visibleTop;
+  } else if (targetRect.bottom > visibleBottom) {
+    delta = targetRect.bottom - visibleBottom;
+  }
+  if (Math.abs(delta) < 1) return;
+  const nextTop = Math.max(0, Math.min(main.scrollTop + delta, main.scrollHeight - main.clientHeight));
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  main.scrollTo({ top:nextTop, behavior:reducedMotion ? "auto" : "smooth" });
+}
+
 function bindEvents() {
   if (!state.strategyMemoryVisibilityBound) {
     document.addEventListener("visibilitychange", handleStrategyMemoryVisibilityChange);
@@ -17133,6 +17173,7 @@ function bindEvents() {
     const modelAction = event.target.closest("[data-model-action]");
     const reviewCase = event.target.closest("[data-review-id]");
     const reviewAction = event.target.closest("[data-review-action]");
+    const reviewSectionNav = event.target.closest("[data-review-section-target]");
     const strategyMemoryAction = event.target.closest("[data-strategy-memory-action]");
     const strategyMemoryRestore = event.target.closest("[data-strategy-memory-restore]");
     const strategyMemoryConflict = event.target.closest("[data-strategy-memory-conflict]");
@@ -17145,6 +17186,11 @@ function bindEvents() {
     const subscriptionAction = event.target.closest("[data-subscription-action]");
     const openWorkspaceTab = event.target.closest("[data-open-workspace-tab]");
     const positionManagementDetail = event.target.closest("[data-position-management-id]");
+
+    if (reviewSectionNav) {
+      navigatePeriodReviewSection(reviewSectionNav.dataset.reviewSectionTarget, reviewSectionNav);
+      return;
+    }
 
     if (strategyMemoryMode) {
       const nextMode = strategyMemoryMode.dataset.strategyMemoryMode === "source" ? "source" : "preview";

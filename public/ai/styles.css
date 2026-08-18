@@ -12646,28 +12646,33 @@ body.account-center-open { overflow: hidden; }
 }
 
 .period-review-section-nav::-webkit-scrollbar { display: none; }
-.period-review-section-nav a {
+.period-review-section-nav button {
   display: inline-flex;
   min-height: 44px;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
   padding: 0 11px;
+  border: 0;
   border-radius: 7px;
+  background: transparent;
   color: var(--text-secondary);
+  font-family: inherit;
   font-size: 11px;
   font-weight: 700;
-  text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
 }
 
-.period-review-section-nav a:hover,
-.period-review-section-nav a:focus-visible {
+.period-review-section-nav button:hover,
+.period-review-section-nav button:focus-visible,
+.period-review-section-nav button.active,
+.period-review-section-nav button[aria-current="location"] {
   color: var(--text-primary);
   background: rgba(212, 175, 55, .12);
 }
 
-.period-review-section-nav a:focus-visible,
+.period-review-section-nav button:focus-visible,
 .period-review-detail :is(summary, button, a, input, select, textarea):focus-visible {
   outline: 2px solid #f1d56d;
   outline-offset: 2px;
@@ -12845,7 +12850,7 @@ body.account-center-open { overflow: hidden; }
   .period-review-metrics { grid-template-columns: 1fr 1fr; margin-inline: 12px; }
   .period-review-metrics > div { min-height: 67px; padding: 9px 10px; }
   .period-review-metrics strong { font-size: 16px; }
-  .period-review-section-nav a { padding-inline: 9px; }
+  .period-review-section-nav button { padding-inline: 9px; }
   .period-review-v3-grid,
   .period-review-edit-grid,
   .period-review-evidence-grid { grid-template-columns: 1fr; }

@@ -181,4 +181,15 @@ describe('daily period review v3 frontend contract', () => {
     expect(styles).toContain('min-height: 44px')
     expect(styles).toContain('@media (prefers-reduced-motion: reduce)')
   })
+
+  it('navigates review sections without native hash jumps or excess bottom whitespace', () => {
+    expect(app).toContain('data-review-section-target="period-review-overview"')
+    expect(app).toContain('aria-current="location"')
+    expect(app).not.toContain('href="#period-review-overview"')
+    expect(app).toContain('function navigatePeriodReviewSection(targetId, trigger)')
+    expect(app).toContain('targetRect.bottom - visibleBottom')
+    expect(app).toContain('main.scrollHeight - main.clientHeight')
+    expect(app).toContain('(prefers-reduced-motion: reduce)')
+    expect(styles).toContain('.period-review-section-nav button[aria-current="location"]')
+  })
 })
