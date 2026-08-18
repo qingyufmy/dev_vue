@@ -751,7 +751,7 @@ export const DAILY_PERIOD_REVIEW_V3_CONTRACT = DAILY_REVIEW_V3_CONTRACT
 // is allowed to write a review, while period_review_contracts describes the
 // output shapes that this server can still read.
 export const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
-export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-contract-refresh1'
+export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-short-holding1'
 export const PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS = Object.freeze([
   DAILY_PERIOD_REVIEW_V3_CONTRACT,
   'daily-period-review-v1',
@@ -940,6 +940,8 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
   const facts = dailyOutcomeFacts(conflictContext.outcomeFacts)
   const evidenceRefsByOutcome = conflictContext.evidenceRefsByOutcome instanceof Map
     ? conflictContext.evidenceRefsByOutcome : new Map()
+  const evidenceLimitationsByOutcome = conflictContext.evidenceLimitationsByOutcome instanceof Map
+    ? conflictContext.evidenceLimitationsByOutcome : new Map()
   const periodSummary = firstReviewText(input, ['period_summary', 'daily_summary', 'review_summary', 'summary'])
   if (!periodSummary) throw new Error('daily_review_summary_missing')
   if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_daily_review_decision')
@@ -1017,6 +1019,11 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
       market_alignment:item.market_alignment, strategy_alignment:item.strategy_alignment,
       risk_execution_assessment:riskExecutionAssessment, risk_execution_status:riskExecutionStatus,
       missing_evidence:missingEvidence,
+      evidence_limitations:(evidenceLimitationsByOutcome.get(outcomeId) || []).map(item => ({
+        scope:String(item?.scope || ''), description:String(item?.description || ''),
+        unavailable_capabilities:[...new Set((Array.isArray(item?.unavailable_capabilities)
+          ? item.unavailable_capabilities : []).map(String).filter(Boolean))],
+      })).filter(item => item.scope && item.description),
       outcome_attribution:{ result:attribution.result, primary_causes:primaryCauses, explanation,
         avoidability:attribution.avoidability },
       next_time_rule:normalizedRule,
@@ -1446,7 +1453,11 @@ async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } 
     backlogLimit > 0 ? queryAll(`${select} WHERE ${eligible} AND EXISTS (SELECT 1 FROM period_review_sources prs
         JOIN period_review_cases cases ON cases.id = prs.period_case_id
         WHERE prs.outcome_id = so.id AND cases.period_type = 'daily' AND cases.evidence_status <> 'complete'
-          AND cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+          AND (cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+            OR EXISTS (SELECT 1 FROM period_review_sources upgrade_source
+              JOIN trade_review_cases upgrade_trade ON upgrade_trade.id = upgrade_source.trade_review_case_id
+              WHERE upgrade_source.period_case_id = cases.id
+                AND upgrade_trade.path_evidence_reason = 'holding_path_bar_boundary_insufficient'))
           AND COALESCE(cases.evidence_reason, '') NOT IN ('inference_snapshot_incomplete','historical_prompt_missing'))
       ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]) : Promise.resolve([]),
     // Live lane stays newest-first so an opt-in historical recovery cannot
@@ -2642,12 +2653,25 @@ async function ensurePeriodReviewStrategyMemoryInjectionLog(job, snapshot, usage
 export const __testEnsurePeriodReviewStrategyMemoryInjectionLog = ensurePeriodReviewStrategyMemoryInjectionLog
 export const __testGetReviewStrategyMemorySnapshot = getReviewStrategyMemorySnapshot
 
+function dailyOutcomeEvidenceLimitations(postTrade = {}) {
+  const metrics = postTrade?.path_metrics && typeof postTrade.path_metrics === 'object'
+    ? postTrade.path_metrics : {}
+  if (String(metrics.status || '') !== 'not_observable'
+    && String(metrics.metric_precision || '') !== 'not_observable') return []
+  return [{
+    scope:'holding_path',
+    description:'持仓时间较短，没有完整闭合 K 线完全落在开仓和平仓之间，无法精确判断持仓内最大有利波动、最大不利波动及止盈止损触达。',
+    unavailable_capabilities:['mfe_mae', 'target_touch', 'intrabar_sequence'],
+  }]
+}
+
 function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strategyMemoryForPrompt) {
   const sources = Array.isArray(evidence?.sources) ? evidence.sources : []
   const preTradeFrozen = []
   const holdingPath = []
   const evidenceRefsByOutcome = new Map()
   const outcomeFacts = new Map()
+  const evidenceLimitationsByOutcome = new Map()
   for (const source of sources) {
     const outcomeId = Number(source?.outcome_id)
     if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) continue
@@ -2663,6 +2687,7 @@ function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strat
       ...(inference.pre_trade_frozen ? { ...inference.pre_trade_frozen } : {}),
     })
     holdingPath.push({ outcome_id:outcomeId, ...postTrade })
+    evidenceLimitationsByOutcome.set(outcomeId, dailyOutcomeEvidenceLimitations(postTrade))
     if (postTrade.outcome && typeof postTrade.outcome === 'object') outcomeFacts.set(outcomeId, postTrade.outcome)
   }
   return {
@@ -2676,7 +2701,7 @@ function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strat
       strategy_memory_version_no:Number(strategyMemorySnapshot?.library?.version_no || 0),
       strategy_memory_content_hash:strategyMemorySnapshot?.library?.content_hash || null,
     },
-    outcomeFacts, evidenceRefsByOutcome,
+    outcomeFacts, evidenceRefsByOutcome, evidenceLimitationsByOutcome,
   }
 }
 
@@ -2729,6 +2754,8 @@ function dailyReviewModelEvidenceForChunk(modelEvidence, chunk) {
     current_optimization_context:modelEvidence.current_optimization_context || {},
     outcomeFacts:new Map([...modelEvidence.outcomeFacts.entries()].filter(([id]) => ids.has(Number(id)))),
     evidenceRefsByOutcome:new Map([...modelEvidence.evidenceRefsByOutcome.entries()].filter(([id]) => ids.has(Number(id)))),
+    evidenceLimitationsByOutcome:new Map([...modelEvidence.evidenceLimitationsByOutcome.entries()]
+      .filter(([id]) => ids.has(Number(id)))),
   }
 }
 
@@ -2924,6 +2951,7 @@ async function generateDailyReview(job, requestModel) {
     '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。当前输出版本为 daily-period-review-v3，不能退回旧版 daily_lessons/memory_updates 合同。',
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
     'risk_execution_status 必须明确标记合规、部分合规、违规或证据不足；normal_strategy_loss 仅允许实际亏损、decision_quality=good、market_alignment=aligned、strategy_alignment=aligned 且 risk_execution_status=compliant。出现任何 insufficient_evidence 必须填写 missing_evidence，确定性 aligned 结论不得同时填写 missing_evidence。repeated_issues 和 strengths 必须使用 text/source_refs/occurrence_count 结构，repeated_issues 至少引用两个不同 outcome。',
+    'holding_path.path_metrics.status=not_observable 表示交易事实和行情覆盖完整，但持仓太短，闭合K线无法精确观察持仓内路径；这不等于整条交易证据不足。此时禁止把边界K线高低价当作持仓期MFE/MAE，禁止判断止盈、止损是否曾触达，也不得据此生成经验规则；仍须使用成交事实、事前快照和交易日行情完成信号逻辑、盈亏原因与改进建议分析。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     tradeCoverageContract,
     `不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。experience_rules 和 strategy_conflicts 没有可靠结论时必须返回空数组；每个对象的文本和引用字段必须符合 required_output。source_refs/evidence_refs 只能引用服务器提供的 outcome:<id> 或证据引用，不得编造其他来源。strategy_excerpt 必须逐字来自 current_optimization_context.strategy；existing_memory 的 memory_excerpt 必须逐字来自 current_optimization_context.strategy_memory_library.content_text；proposed_experience 的 memory_excerpt 必须严格拼接同一条 experience_rule 的“condition；action；prohibited_action”，使用全角分号且不得增删文字。每条 experience_rule 必须是条件—动作—风控—失效—禁止行为的明确规则，不能写泛泛建议。${memoryCategoryContract}`,
@@ -2954,6 +2982,7 @@ async function generateDailyReview(job, requestModel) {
         memoryText:strategyMemorySnapshot.library.content_text,
         outcomeFacts:chunkEvidence.outcomeFacts,
         evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
+        evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
       })
       chunkContents.push(restored)
       job._modelTracker = null
@@ -3013,6 +3042,7 @@ async function generateDailyReview(job, requestModel) {
         memoryText:strategyMemorySnapshot.library.content_text,
         outcomeFacts:chunkEvidence.outcomeFacts,
         evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
+        evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
       }),
     })
     const normalized = validateDailyReviewContent(output, chunkIds, chanContext, {
@@ -3020,6 +3050,7 @@ async function generateDailyReview(job, requestModel) {
       memoryText:strategyMemorySnapshot.library.content_text,
       outcomeFacts:chunkEvidence.outcomeFacts,
       evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
+      evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
     })
     const resultHash = await persistDailyReviewCheckpoint(tracker, { role:'chunk', planHash:chunkPlan.plan_hash,
       chunkIndex:chunk.chunk_index, sourceHash:chunk.source_hash, content:normalized })
@@ -3039,6 +3070,7 @@ async function generateDailyReview(job, requestModel) {
       memoryText:strategyMemorySnapshot.library.content_text,
       outcomeFacts:modelEvidence.outcomeFacts,
       evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
+      evidenceLimitationsByOutcome:modelEvidence.evidenceLimitationsByOutcome,
     }), resolved }
   }
   const compactChunkResults = chunkContents.map((content, index) => ({
@@ -3144,6 +3176,7 @@ async function generateDailyReview(job, requestModel) {
     memoryText:strategyMemorySnapshot.library.content_text,
     outcomeFacts:modelEvidence.outcomeFacts,
     evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
+    evidenceLimitationsByOutcome:modelEvidence.evidenceLimitationsByOutcome,
   })
   return { content, resolved }
 }
@@ -3709,6 +3742,7 @@ function periodReviewContentForCase(reviewCase, content, conflictContext = {}) {
     return validateDailyReviewContent(content, outcomeIds, frozenDailyChanContext(evidence), {
       outcomeFacts:modelEvidence.outcomeFacts,
       evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
+      evidenceLimitationsByOutcome:modelEvidence.evidenceLimitationsByOutcome,
       strategyText:conflictContext.strategyText,
       memoryText:conflictContext.memoryText,
     })

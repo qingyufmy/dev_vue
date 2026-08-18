@@ -217,7 +217,7 @@ const state = {
 // build separate from the shared cache key in index.html: the server can
 // compare these values without forcing a cache-key change for the other AI
 // entry points.
-const AI_FRONTEND_BUILD = "period-review-contract-refresh1";
+const AI_FRONTEND_BUILD = "period-review-short-holding1";
 const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = "period-review-ui-v1";
 const PERIOD_REVIEW_DAILY_V3_CONTRACT = "daily-period-review-v3";
 const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -801,6 +801,7 @@ const REASON_MAP = {
   chan_evidence_incomplete: "缠论证据未完整返回，本次仅保留证据不足结论",
   market_path_candle_coverage_incomplete: "行情 K 线覆盖不完整，本次仅保留证据不足结论",
   holding_path_bar_boundary_insufficient: "持仓区间缺少完整闭合 K 线，本次仅保留证据不足结论",
+  holding_path_intrabar_unobservable: "持仓时间较短，行情覆盖完整，但无法从闭合 K 线精确判断持仓内路径",
   manual_trade_review_generation_deadline_exceeded: "本轮复盘已超过 30 分钟生成期限，请手动重试以创建新一代任务",
   manual_trade_review_model_task_terminal_requires_retry: "本轮模型任务已经终止，请手动重试以创建新一代任务",
   period_review_frontend_contract_mismatch: "页面版本已更新，请刷新后继续操作复盘",
@@ -2099,6 +2100,7 @@ const API_ERROR_MESSAGES = {
   chan_evidence_incomplete: "缠论证据未完整返回，本次仅保留证据不足结论",
   market_path_candle_coverage_incomplete: "行情 K 线覆盖不完整，本次仅保留证据不足结论",
   holding_path_bar_boundary_insufficient: "持仓区间缺少完整闭合 K 线，本次仅保留证据不足结论",
+  holding_path_intrabar_unobservable: "持仓时间较短，行情覆盖完整，但无法从闭合 K 线精确判断持仓内路径",
   manual_trade_review_generation_deadline_exceeded: "本轮复盘已超过 30 分钟生成期限，请手动重试以创建新一代任务",
   manual_trade_review_model_task_terminal_requires_retry: "本轮模型任务已经终止，请手动重试以创建新一代任务",
   manual_trade_review_approved_locked: "复盘已确认，不能再改写或切换确认版本",
@@ -8122,14 +8124,16 @@ async function openReviewDetail(id) {
   const confidencePercent = Number.isFinite(confidence) ? Math.round(Math.max(0, Math.min(1, confidence)) * 100) : 50;
   const pathEvidence = evidence.post_trade?.path_evidence || {};
   const pathMetrics = evidence.post_trade?.path_metrics || {};
+  const pathMetricsNotObservable = pathMetrics.status === "not_observable" || pathMetrics.metric_precision === "not_observable";
   const pathCoverage = Object.entries(pathEvidence.coverage || {});
   const excursion = (value) => Number.isFinite(Number(value)) ? `${fmt(Number(value), 2)}%` : "--";
   detail.innerHTML = `<header class="review-detail-header"><div class="review-detail-title"><span class="review-detail-icon"><i data-lucide="clipboard-check" size="19"></i></span><div><span class="review-section-kicker">复盘详情</span><h2>复盘 #${Number(review.id)}</h2><p>版本 ${escapeHtml(current?.version_no || '--')} · 信号 #${escapeHtml(review.signal_id || '--')}</p></div></div><div class="review-detail-status"><span class="status-chip ${review.status === 'approved' ? 'success' : ['failed','incomplete','needs_revision'].includes(review.status) ? 'danger' : 'warning'}">${escapeHtml(reviewStatusLabel(review.status))}</span>${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div></header>
     ${review.evidence_status !== 'complete' ? `<div class="source-notice"><span><strong>证据准备中：</strong>${escapeHtml(periodReviewEvidenceReasonText(review.evidence_reason))}</span></div>` : ''}
     <section class="review-outcome-strip" aria-label="交易结果"><div class="review-outcome-main ${profitClass}"><span>净利润</span><strong>${fmt(outcome.net_profit, 2)}</strong><small>账户货币</small></div><div class="review-outcome-metric"><span>成交手数</span><strong>${fmt(outcome.closed_volume, 2)}</strong><small>已平仓</small></div><div class="review-outcome-metric"><span>结论置信度</span><strong>${confidencePercent}%</strong><small>AI 复盘判断</small></div><p><i data-lucide="info" size="14"></i>盈亏是结果，不直接代表当时的决策质量。</p></section>
     <section class="review-path-summary ${pathEvidence.status === 'complete' ? 'is-complete' : 'is-partial'}">
-      <header><div><span class="review-section-kicker">持仓路径证据</span><h3>从开仓到平仓的行情表现</h3></div><span class="status-chip ${pathEvidence.status === 'complete' ? 'success' : 'warning'}">${pathEvidence.status === 'complete' ? '证据完整' : '部分可用'}</span></header>
-      <div class="review-path-metrics"><div><span>最大有利波动</span><strong>${excursion(pathMetrics.max_favorable_excursion_pct)}</strong></div><div><span>最大不利波动</span><strong>${excursion(pathMetrics.max_adverse_excursion_pct)}</strong></div><div><span>持仓 K 线</span><strong>${Number(pathMetrics.bars_held || 0)} 根</strong></div><div><span>缠论周期</span><strong>${pathCoverage.length || 0} 个</strong></div></div>
+      <header><div><span class="review-section-kicker">持仓路径证据</span><h3>从开仓到平仓的行情表现</h3></div><span class="status-chip ${pathEvidence.status === 'complete' ? 'success' : 'warning'}">${pathMetricsNotObservable ? '行情覆盖完整' : pathEvidence.status === 'complete' ? '证据完整' : '部分可用'}</span></header>
+      ${pathMetricsNotObservable ? '<div class="period-review-evidence-limitations" role="note"><strong>短持仓精度限制</strong><p>没有完整闭合 K 线完全落在开仓和平仓之间，无法精确判断持仓内最大有利/不利波动及止盈止损触达。</p></div>' : ''}
+      <div class="review-path-metrics"><div><span>最大有利波动</span><strong>${excursion(pathMetrics.max_favorable_excursion_pct)}</strong></div><div><span>最大不利波动</span><strong>${excursion(pathMetrics.max_adverse_excursion_pct)}</strong></div><div><span>持仓 K 线</span><strong>${pathMetricsNotObservable ? '无完整内部 M5 K 线' : `${Number(pathMetrics.bars_held || 0)} 根`}</strong></div><div><span>缠论周期</span><strong>${pathCoverage.length || 0} 个</strong></div></div>
       <footer>${pathCoverage.map(([timeframe, item]) => `<span><strong>${escapeHtml(timeframe)}</strong> ${Number(item.candle_count || 0)} 根 · ${item.status === 'complete' ? '结构已计算' : '数据不足'}</span>`).join('') || '<span>暂无可用的持仓行情路径</span>'}</footer>
     </section>
     <div class="review-structured-form">
@@ -8313,13 +8317,20 @@ function dailyV3TradeFacts(sources) {
   }));
 }
 
+function periodReviewEvidenceLimitationsHtml(limitations) {
+  const items = (Array.isArray(limitations) ? limitations : []).filter(item => item && typeof item === "object" && String(item.description || "").trim());
+  if (!items.length) return "";
+  return `<div class="period-review-evidence-limitations" role="note"><strong>证据精度说明</strong>${items.map(item => `<p>${escapeHtml(item.description)}</p>`).join("")}</div>`;
+}
+
 function renderDailyV3TradeAssessments(assessments, editable, sources = []) {
   if (!assessments.length) return '<div class="review-empty-state empty-state"><strong>没有逐笔判断</strong><span>当前版本未包含可校对的交易结论</span></div>';
   const facts = dailyV3TradeFacts(sources);
   return `<section id="period-review-trades" class="period-review-v3-section"><div class="period-review-section-heading"><div><span class="review-section-kicker">逐笔校对</span><h3>当时判断与事后结果</h3><p class="period-review-section-summary">按需展开单笔，核对信号逻辑、行情匹配、盈亏归因和下次行为。</p></div><span>${assessments.length} 笔</span></div><div class="period-review-trade-list">${assessments.map((item, index) => {
 	    const attribution = item.outcome_attribution || {}, nextRule = item.next_time_rule || {}, fact = facts.get(Number(item.outcome_id)) || {};
 	    const profitLabel = Number.isFinite(fact.netProfit) ? ` · 盈亏 ${fmt(fact.netProfit, 2)}` : "";
-    return `<details class="period-review-trade-card"><summary><span><strong>${escapeHtml(fact.symbol || "--")} · ${escapeHtml(fact.direction || "--")} · 交易 #${Number(item.outcome_id || 0)}</strong><small>信号 #${escapeHtml(fact.signalId || "--")} · ${escapeHtml(fact.entryTime || "--")} → ${escapeHtml(fact.closeTime || "--")}${escapeHtml(profitLabel)} · ${escapeHtml(periodDecisionLabels[item.decision_quality] || item.decision_quality || "未评价")} · ${escapeHtml(periodReviewResultLabels[attribution.result] || attribution.result || "结果未知")}</small></span><span class="period-review-trade-confidence">置信度 ${Math.round(Number(item.confidence || 0) * 100)}%</span><i data-lucide="chevron-down" size="16"></i></summary><div class="period-review-trade-body">
+	    return `<details class="period-review-trade-card"><summary><span><strong>${escapeHtml(fact.symbol || "--")} · ${escapeHtml(fact.direction || "--")} · 交易 #${Number(item.outcome_id || 0)}</strong><small>信号 #${escapeHtml(fact.signalId || "--")} · ${escapeHtml(fact.entryTime || "--")} → ${escapeHtml(fact.closeTime || "--")}${escapeHtml(profitLabel)} · ${escapeHtml(periodDecisionLabels[item.decision_quality] || item.decision_quality || "未评价")} · ${escapeHtml(periodReviewResultLabels[attribution.result] || attribution.result || "结果未知")}</small></span><span class="period-review-trade-confidence">置信度 ${Math.round(Number(item.confidence || 0) * 100)}%</span><i data-lucide="chevron-down" size="16"></i></summary><div class="period-review-trade-body">
+	      ${periodReviewEvidenceLimitationsHtml(item.evidence_limitations)}
 	      <div class="period-review-v3-block"><h4>事前判断</h4><div class="period-review-v3-grid">${periodReviewNestedField(`trade_assessments.${index}.decision_quality`, "逐笔决策质量", item.decision_quality, { editable, options:periodDecisionLabels })}${periodReviewNestedField(`trade_assessments.${index}.original_signal_logic`, "原始信号逻辑", item.original_signal_logic, { editable })}${periodReviewNestedField(`trade_assessments.${index}.technical_basis_assessment`, "技术依据评价", item.technical_basis_assessment, { editable })}${periodReviewNestedField(`trade_assessments.${index}.market_alignment`, "是否符合当时行情", item.market_alignment, { editable, options:periodReviewAlignmentLabels })}${periodReviewNestedField(`trade_assessments.${index}.strategy_alignment`, "是否符合策略", item.strategy_alignment, { editable, options:periodReviewAlignmentLabels })}${periodReviewNestedField(`trade_assessments.${index}.missing_evidence`, "缺失证据", item.missing_evidence || [], { editable, type:"lines" })}</div></div>
 	      <div class="period-review-v3-block"><h4>事后归因</h4><div class="period-review-v3-grid">${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.primary_causes`, "主要原因", attribution.primary_causes, { editable, type:"lines" })}${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.explanation`, "盈亏形成过程", attribution.explanation, { editable })}${periodReviewNestedField(`trade_assessments.${index}.outcome_attribution.avoidability`, "可避免性", attribution.avoidability, { editable, options:periodReviewAvoidabilityLabels })}${periodReviewNestedField(`trade_assessments.${index}.risk_execution_status`, "风控执行状态", item.risk_execution_status || "insufficient_evidence", { editable, options:periodReviewRiskExecutionLabels })}${periodReviewNestedField(`trade_assessments.${index}.risk_execution_assessment`, "入场、止损止盈与执行", item.risk_execution_assessment, { editable })}${periodReviewNestedField(`trade_assessments.${index}.issue_codes`, "问题代码", item.issue_codes || [], { editable, type:"lines" })}</div></div>
       <div class="period-review-v3-block"><h4>下次明确行为</h4><div class="period-review-v3-grid">${[["condition","触发条件"],["action","执行动作"],["risk_control","风险控制"],["invalidation","失效条件"],["prohibited_action","禁止行为"]].map(([key,label]) => periodReviewNestedField(`trade_assessments.${index}.next_time_rule.${key}`, label, nextRule[key], { editable })).join("")}</div></div>

@@ -90,6 +90,14 @@ export function assessChanEvidenceStatus(requirementOrStatus, timeframeValues = 
   return { status:assessment.status, reason:assessment.reason }
 }
 
+export function assessMarketPathReviewability(marketPath = {}) {
+  const reviewable = marketPath.status === 'complete'
+    && marketPath.trade_facts_status === 'complete'
+    && marketPath.market_coverage_status === 'complete'
+    && ['complete', 'not_observable'].includes(marketPath.path_metrics_status)
+  return { complete: reviewable, reasons: reviewable ? [] : ['holding_market_path_incomplete'] }
+}
+
 async function loadEvidence(outcomeId) {
   const row = await queryOne(`SELECT so.*, s.signal_type, s.confidence, s.recommended_volume, s.analysis,
       s.reasoning, s.stop_loss_price, s.take_profit_1_price, s.take_profit_2_price, s.take_profit_3_price,
@@ -138,9 +146,10 @@ async function loadEvidence(outcomeId) {
   catch (error) { marketPath.reason = safeError(error) }
   const chanEvidence = assessChanEvidenceStatus(chanRequirement, Object.values(marketPath.timeframes || {}))
   const chanEvidenceStatus = chanEvidence.status
+  const marketPathAssessment = assessMarketPathReviewability(marketPath)
   const assessment = {
-    complete:coreAssessment.complete && marketPath.status === 'complete',
-    reasons:[...coreAssessment.reasons, ...(marketPath.status === 'complete' ? [] : ['holding_market_path_incomplete'])],
+    complete:coreAssessment.complete && marketPathAssessment.complete,
+    reasons:[...coreAssessment.reasons, ...marketPathAssessment.reasons],
   }
   const refs = {
     original_signal: { type: 'ai_signal', id: row.signal_id },
@@ -171,6 +180,12 @@ async function loadEvidence(outcomeId) {
          ...(Object.prototype.hasOwnProperty.call(value, 'chan') ? { chan:value.chan } : {}),
        }])),
        path_evidence: { status: marketPath.status, reason: marketPath.reason, primary_timeframe: marketPath.primary_timeframe,
+         trade_facts_status:marketPath.trade_facts_status || null,
+         market_coverage_status:marketPath.market_coverage_status || null,
+         path_metrics_status:marketPath.path_metrics_status || null,
+         capabilities:marketPath.capabilities || marketPath.metrics?.capabilities || null,
+         evidence_limitations:marketPath.path_metrics_status === 'not_observable'
+           ? [marketPath.metrics?.reason || marketPath.reason || 'holding_path_intrabar_unobservable'] : [],
          chan_requirement_status:chanRequirement.status, chan_evidence_status:chanEvidenceStatus,
           chan_evidence_reason:chanEvidence.reason,
          chan_requirement:chanRequirement,

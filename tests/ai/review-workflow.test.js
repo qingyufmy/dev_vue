@@ -9,7 +9,7 @@ vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel: vi.fn() }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject: vi.fn() }))
 
-import { assessChanEvidenceStatus, assessReviewEvidence, assessReviewStrategyEligibility, validateReviewContent } from '../../server/routes/ai/review-workflow.js'
+import { assessChanEvidenceStatus, assessMarketPathReviewability, assessReviewEvidence, assessReviewStrategyEligibility, validateReviewContent } from '../../server/routes/ai/review-workflow.js'
 import { assessChanEvidenceDimensions } from '../../server/routes/ai/chan-evidence-assessment.js'
 
 const completeRow = (overrides = {}) => ({
@@ -26,6 +26,18 @@ const content = (overrides = {}) => ({
 })
 
 describe('trade review evidence completeness', () => {
+  it('does not turn unobservable short-path metrics into incomplete trade evidence', () => {
+    expect(assessMarketPathReviewability({ status:'complete', trade_facts_status:'complete',
+      market_coverage_status:'complete', path_metrics_status:'not_observable' })).toEqual({ complete:true, reasons:[] })
+    expect(assessMarketPathReviewability({ status:'partial', trade_facts_status:'complete',
+      market_coverage_status:'partial', path_metrics_status:'not_observable' })).toEqual({
+      complete:false, reasons:['holding_market_path_incomplete'],
+    })
+    expect(assessMarketPathReviewability({ status:'complete', path_metrics_status:'not_observable' })).toEqual({
+      complete:false, reasons:['holding_market_path_incomplete'],
+    })
+  })
+
   it('separates unsupported or incomplete Chan evidence from ordinary review evidence', () => {
     expect(assessChanEvidenceStatus({ status:'enabled', unsupported_timeframes:['M30'] }, [])).toEqual({
       status:'unsupported', reason:'chan_timeframe_unsupported',
@@ -156,6 +168,9 @@ describe('review durability and privacy guards', () => {
     expect(service).toContain('post_trade_klines')
     expect(service).toContain('post_trade_structure')
     expect(service).toContain('path_metrics')
+    expect(service).toContain('path_metrics_status')
+    expect(service).toContain('evidence_limitations')
+    expect(service).toContain('capabilities:marketPath.capabilities')
     expect(service).toContain('snapshot_strategy_version')
     expect(migration).toContain('path_evidence_status')
   })

@@ -678,6 +678,7 @@ describe('daily review preparation candidates', () => {
     const maintenanceSql = periodReviewDb.queryAll.mock.calls[0][0]
     expect(maintenanceSql).toContain('EXISTS (SELECT 1 FROM period_review_sources')
     expect(maintenanceSql).not.toContain('NOT EXISTS (SELECT 1 FROM period_review_sources')
+    expect(maintenanceSql).toContain("upgrade_trade.path_evidence_reason = 'holding_path_bar_boundary_insufficient'")
     expect(periodReviewDb.queryAll.mock.calls[0][1]).toEqual([7])
     expect(periodReviewDb.queryAll.mock.calls[1][1]).toEqual([3])
     expect(result).toMatchObject({ groups:1, outsideCreationWindow:1, created:0, existingMaintained:0 })
@@ -840,6 +841,32 @@ describe('daily review model boundary', () => {
     }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }, {
       outcomeFacts:[{ id:1, net_profit:-1 }],
     })).toThrow('daily_v3_outcome_result_mismatch')
+  })
+
+  it('adds server-owned short-holding limitations without downgrading the whole trade', () => {
+    const assessment = {
+      outcome_id:1, decision_quality:'mixed', original_signal_logic:'按趋势回踩入场',
+      technical_basis_assessment:'事前证据足以评价方向与入场条件', market_alignment:'partly_aligned',
+      strategy_alignment:'aligned', risk_execution_assessment:'成交与已实现盈亏完整', risk_execution_status:'compliant',
+      outcome_attribution:{ result:'loss', primary_causes:['入场后价格反向'], explanation:'根据成交与交易日行情判断为亏损', avoidability:'partly_avoidable' },
+      next_time_rule:{ condition:'回踩确认不足', action:'等待确认', risk_control:'限制仓位', invalidation:'结构失效', prohibited_action:'禁止追单' },
+      issue_codes:[], evidence_refs:['outcome:1'], confidence:0.7,
+    }
+    const content = { output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'短持仓复盘',
+      decision_quality:'mixed', trade_assessments:[assessment], repeated_issues:[], strengths:[], risk_observations:[],
+      next_day_actions:[], experience_rules:[], strategy_conflicts:[], confidence:0.7 }
+    const limitation = { scope:'holding_path', description:'持仓时间较短，无法精确判断持仓内路径。',
+      unavailable_capabilities:['mfe_mae','target_touch','intrabar_sequence'] }
+    const normalized = validateDailyReviewContent(content, [1], {
+      chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+    }, {
+      outcomeFacts:[{ id:1, net_profit:-1 }],
+      evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]),
+      evidenceLimitationsByOutcome:new Map([[1, [limitation]]]),
+    })
+    expect(normalized.trade_assessments[0]).toMatchObject({
+      decision_quality:'mixed', missing_evidence:[], evidence_limitations:[limitation],
+    })
   })
 
   it('accepts normal strategy loss only for a good aligned compliant loss', () => {
@@ -1261,7 +1288,7 @@ describe('period review frontend contract handshake', () => {
 
   it('publishes UI metadata separately from supported model output contracts', () => {
     expect(PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION).toBe('period-review-ui-v1')
-    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-contract-refresh1')
+    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-short-holding1')
     expect(PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS).toEqual(expect.arrayContaining([
       'daily-period-review-v3', 'daily-period-review-v1', 'daily-period-review-v2',
       'period-review-v1', 'period-review-v2',
@@ -1270,18 +1297,18 @@ describe('period review frontend contract handshake', () => {
     expect(periodReviewFrontendMetadata()).toEqual({
       frontend_contract_version:'period-review-ui-v1',
       period_review_contracts:[...PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS],
-      ai_frontend_build:'period-review-contract-refresh1',
+      ai_frontend_build:'period-review-short-holding1',
     })
   })
 
   it('fails closed for missing or stale UI build/contract headers', () => {
     expect(periodReviewFrontendContractMismatch({})).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-contract-refresh1',
+      'X-Aurum-AI-Frontend-Build':'period-review-short-holding1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
     })).toBe(false)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-contract-refresh1',
+      'X-Aurum-AI-Frontend-Build':'period-review-short-holding1',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
@@ -1293,7 +1320,7 @@ describe('period review frontend contract handshake', () => {
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v0',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-contract-refresh1',
+      'X-Aurum-AI-Frontend-Build':'period-review-short-holding1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
       'X-Aurum-Period-Review-Contracts':'daily-period-review-v2',
     })).toBe(false)

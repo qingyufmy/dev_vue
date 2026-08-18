@@ -9,7 +9,7 @@ function loadPeriodReviewContractHelpers() {
   const end = app.indexOf('function renderReviewSummary', start)
   const source = app.slice(start, end)
   return new Function(`
-    const AI_FRONTEND_BUILD = 'period-review-contract-refresh1'
+    const AI_FRONTEND_BUILD = 'period-review-short-holding1'
     const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
     const PERIOD_REVIEW_DAILY_V3_CONTRACT = 'daily-period-review-v3'
     const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -50,6 +50,16 @@ describe('daily period review v3 frontend contract', () => {
     }
     expect(app).toContain('证据引用：')
     expect(app).toContain('period-review-trade-confidence')
+    expect(app).toContain('periodReviewEvidenceLimitationsHtml(item.evidence_limitations)')
+    expect(app).toContain('证据精度说明')
+  })
+
+  it('distinguishes short-holding metric limits from missing market coverage', () => {
+    expect(app).toContain('pathMetrics.status === "not_observable"')
+    expect(app).toContain('行情覆盖完整')
+    expect(app).toContain('无完整内部 M5 K 线')
+    expect(app).toContain('holding_path_intrabar_unobservable')
+    expect(styles).toContain('.period-review-evidence-limitations')
   })
 
   it('keeps cross-trade findings attributable instead of flattening them into text lines', () => {
