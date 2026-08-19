@@ -9,9 +9,9 @@ const periodReviewDb = vi.hoisted(() => ({
 vi.mock('../../server/db.js', () => periodReviewDb)
 
 import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCases, monthlyReviewStatistics, outcomeCloseUtcMs,
-  compactPeriodTradeEvidence, dailyEvidenceSemanticHash, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
+  compactPeriodTradeEvidence, compactPreTradeReviewEvidence, dailyEvidenceSemanticHash, isTerminalTradeEvidenceReason, periodReviewEligibility, reviewPeriodBounds, reviewPeriodKey,
   monthlyReviewSourceHash, periodReviewAccessScope, samePeriodOutcomeSet, shouldRefreshDailyReviewCase, shouldUpgradePeriodMarketEvidence,
-  startPeriodReviewLeaseHeartbeat, validateDailyReviewContent, validateMonthlyReviewContent,
+  startPeriodReviewLeaseHeartbeat, validateDailyReviewContent, validateDailyReviewV3Content, validateMonthlyReviewContent,
   validateMonthlyReviewMergeContent,
   validateMonthlyReviewChunkContent, recoverAbandonedPeriodReviewModelTasks, retryPeriodReviewCase,
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
@@ -24,7 +24,7 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   PERIOD_REVIEW_FRONTEND_BUILD, PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS,
   periodReviewFrontendMetadata, periodReviewFrontendContractMismatch,
   buildDailyReviewChunkPlan, compactDailyReviewPeriodMarket,
-  dailyReviewRecoveryRuntimeOptions } from '../../server/routes/ai/period-review.js'
+  dailyReviewRecoveryRuntimeOptions, periodReviewModelInputBudget, selectWholePolicyUpgradeCaseIds } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
   __testGetReviewStrategyMemorySnapshot } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
@@ -706,19 +706,19 @@ describe('daily review preparation candidates', () => {
       strategy_version:2, strategy_scope:'private', status:'closed', review_eligible_at:'2026-07-17 10:00:00',
       timezone_offset_minutes:180, clock_status:'account_terminal', net_profit:10,
       last_deal_raw_json:JSON.stringify({ time_utc_msc:closeUtcMs }) }
-    periodReviewDb.queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([row])
+    periodReviewDb.queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([row])
     periodReviewDb.queryOne.mockImplementation(async sql => {
       if (sql.includes('period_review_cases')) return null
       return { review_generation_enabled:1 }
     })
 
     const result = await prepareEligibleDailyReviews({ limit:10, asOfUtcMs:Date.parse('2026-07-20T00:00:00Z') })
-    const maintenanceSql = periodReviewDb.queryAll.mock.calls[0][0]
+    const maintenanceSql = periodReviewDb.queryAll.mock.calls[1][0]
     expect(maintenanceSql).toContain('EXISTS (SELECT 1 FROM period_review_sources')
     expect(maintenanceSql).not.toContain('NOT EXISTS (SELECT 1 FROM period_review_sources')
     expect(maintenanceSql).toContain("upgrade_trade.path_evidence_reason = 'holding_path_bar_boundary_insufficient'")
-    expect(periodReviewDb.queryAll.mock.calls[0][1]).toEqual([7])
-    expect(periodReviewDb.queryAll.mock.calls[1][1]).toEqual([3])
+    expect(periodReviewDb.queryAll.mock.calls[1][1]).toEqual([7])
+    expect(periodReviewDb.queryAll.mock.calls[2][1]).toEqual([3])
     expect(result).toMatchObject({ groups:1, outsideCreationWindow:1, created:0, existingMaintained:0 })
     expect(periodReviewDb.queryRun).not.toHaveBeenCalled()
   })
@@ -729,7 +729,7 @@ describe('daily review preparation candidates', () => {
       strategy_version:2, strategy_scope:'private', status:'closed', review_eligible_at:'2026-07-17 10:00:00',
       timezone_offset_minutes:180, clock_status:'account_terminal', net_profit:10,
       last_deal_raw_json:JSON.stringify({ time_utc_msc:closeUtcMs }) }
-    periodReviewDb.queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([row]).mockResolvedValueOnce([
+    periodReviewDb.queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([row]).mockResolvedValueOnce([
       { outcome_id:91, source_hash:null, current_evidence_hash:null, current_evidence_updated_at:null },
     ])
     periodReviewDb.queryOne.mockImplementation(async sql => {
@@ -750,8 +750,27 @@ describe('daily review preparation candidates', () => {
     expect(source).toContain('const unassociated = `NOT EXISTS (SELECT 1 FROM period_review_sources prs')
     expect(source).toContain('ORDER BY so.review_eligible_at DESC, so.id DESC LIMIT ?')
     expect(source.match(/ORDER BY so\.review_eligible_at ASC, so\.id ASC/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(source).toContain('const policyCandidateRows = policyUpgradeLimit > 0 ? await queryAll')
+    expect(source).toContain('HAVING COUNT(policy_source.outcome_id) <= ?')
+    expect(source).toContain('selectWholePolicyUpgradeCaseIds(policyCandidateRows, backlogLimit, policyUpgradeLimit)')
+    expect(source).toContain('selectedPolicyCaseIds.join(',')')
     expect(source).toContain('includeHistoricalRecovery && recoveryLimit > 0 ? queryAll')
     expect(source).toContain('includeHistoricalRecovery:recoveryEnabled')
+  })
+
+  it('defers an oversized policy case instead of returning a partial source set', () => {
+    expect(selectWholePolicyUpgradeCaseIds([
+      { period_case_id:91, outcome_count:6 },
+    ], 5, 5)).toEqual([])
+    expect(selectWholePolicyUpgradeCaseIds([
+      { period_case_id:91, outcome_count:3 }, { period_case_id:92, outcome_count:3 },
+      { period_case_id:93, outcome_count:2 },
+    ], 5, 5)).toEqual([91, 93])
+    expect(selectWholePolicyUpgradeCaseIds([
+      { period_case_id:91, outcome_count:1 }, { period_case_id:92, outcome_count:1 },
+      { period_case_id:93, outcome_count:1 }, { period_case_id:94, outcome_count:1 },
+      { period_case_id:95, outcome_count:1 }, { period_case_id:96, outcome_count:1 },
+    ], 10, 5)).toHaveLength(5)
   })
 
   it('keeps missed-window recovery opt-in and bounded while reusing case/job idempotency', () => {
@@ -1368,7 +1387,7 @@ describe('period review frontend contract handshake', () => {
 
   it('publishes UI metadata separately from supported model output contracts', () => {
     expect(PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION).toBe('period-review-ui-v1')
-    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-shared-market1')
+    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-second-remediation1')
     expect(PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS).toEqual(expect.arrayContaining([
       'daily-period-review-v3', 'daily-period-review-v1', 'daily-period-review-v2',
       'period-review-v1', 'period-review-v2',
@@ -1377,18 +1396,18 @@ describe('period review frontend contract handshake', () => {
     expect(periodReviewFrontendMetadata()).toEqual({
       frontend_contract_version:'period-review-ui-v1',
       period_review_contracts:[...PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS],
-      ai_frontend_build:'period-review-shared-market1',
+      ai_frontend_build:'period-review-second-remediation1',
     })
   })
 
   it('fails closed for missing or stale UI build/contract headers', () => {
     expect(periodReviewFrontendContractMismatch({})).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-shared-market1',
+      'X-Aurum-AI-Frontend-Build':'period-review-second-remediation1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
     })).toBe(false)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-shared-market1',
+      'X-Aurum-AI-Frontend-Build':'period-review-second-remediation1',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
@@ -1400,7 +1419,7 @@ describe('period review frontend contract handshake', () => {
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v0',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-shared-market1',
+      'X-Aurum-AI-Frontend-Build':'period-review-second-remediation1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
       'X-Aurum-Period-Review-Contracts':'daily-period-review-v2',
     })).toBe(false)
@@ -1588,10 +1607,64 @@ describe('period market evidence', () => {
       } } } } }, klines:{ M5:[1,2] }, prompt_hash:'hash', content_hash:'content' },
     risk_decision:{ status:'pass' } }, post_trade:{ outcome:{ id:3 }, post_trade_klines:{ M5:[1,2] }, post_trade_structure:{ M5:{ chan:{ status:'ok' } } } }, evidence_refs:{ inference_snapshot:{ id:7 } } })
     expect(compact.inference_time.snapshot_ref).toMatchObject({ id:7, prompt_hash:'hash', content_hash:'content' })
-    expect(compact.inference_time.snapshot_ref.source_identity).toMatchObject({ source_id:17, source_key:'mt5|broker-demo|9001' })
+    expect(compact.inference_time.snapshot_ref).not.toHaveProperty('source_identity')
+    expect(JSON.stringify(compact)).not.toContain('mt5|broker-demo|9001')
     expect(compact.inference_time).not.toHaveProperty('snapshot')
     expect(compact.post_trade).not.toHaveProperty('post_trade_klines')
     expect(compact.evidence_refs.inference_snapshot.id).toBe(7)
+  })
+
+  it('keeps bounded local candles from a separately loaded snapshot.klines map', () => {
+    const compact = compactPreTradeReviewEvidence({
+      signal:{ id:11, reasoning:'信号理由', direction:'buy' },
+      snapshot:{ id:12, snapshot_key:'must-not-be-model-visible', klines:{ M5:[
+        { time_utc_msc:1, open:1, high:2, low:0, close:1.5, volume:3 },
+        { time_utc_msc:2, open:1.5, high:2.5, low:1, close:2, volume:4 },
+      ] }, market_snapshot:{ strategy_context:{ timeframes:{ M5:{ summary:{ close:2 } } } } } },
+    })
+    expect(compact.market_snapshot.timeframes.M5.local_klines).toHaveLength(2)
+    expect(compact.market_snapshot.timeframes.M5.local_klines[1]).toMatchObject({ time_utc_msc:2, close:2 })
+    expect(JSON.stringify(compact)).not.toContain('snapshot_key')
+    expect(JSON.stringify(compact)).not.toContain('source_key')
+  })
+
+  it('keeps the model input boundary measurable in bytes and estimated tokens', () => {
+    const budget = periodReviewModelInputBudget([{ role:'system', content:'x'.repeat(520 * 1024) }])
+    expect(budget.requestBytes).toBeGreaterThan(500 * 1024)
+    expect(budget.withinBytes).toBe(false)
+    expect(budget.estimatedInputTokens).toBeGreaterThan(120000)
+    expect(budget.withinTokens).toBe(false)
+  })
+
+  it('compacts a large raw snapshot for all twelve trades without replaying prompts or candles', () => {
+    const raw = Array.from({ length:12 }, (_, index) => ({ outcome_id:index + 1, evidence_hash:`h${index + 1}`,
+      evidence:{ schema_version:2, inference_time:{ signal:{ id:index + 1, reasoning:'保留信号理由' }, snapshot:{
+        system_prompt:'system'.repeat(200000), user_prompt:'user'.repeat(200000),
+        klines:{ M5:Array.from({ length:200 }, (_, candle) => ({ time_utc_msc:candle, open:1, high:2, low:0, close:1.5 })) },
+        market_snapshot:{ strategy_context:{ timeframes:{ M5:{ summary:{ close:1.5 } } } } },
+      } }, post_trade:{ outcome:{ net_profit:index - 6 } } } }))
+    const plan = buildDailyReviewChunkPlan({ sources:raw }, { maxOutcomes:20, maxBytes:280000 })
+    expect(plan.chunk_count).toBe(1)
+    expect(JSON.stringify(plan)).not.toContain('system'.repeat(100))
+    expect(JSON.stringify(plan)).not.toContain('user'.repeat(100))
+    for (const source of plan.chunks[0].sources) {
+      expect(Buffer.byteLength(JSON.stringify(source), 'utf8')).toBeLessThanOrEqual(280000)
+    }
+  })
+
+  it('normalizes only a missing v3 version and rejects an exact legacy payload', () => {
+    const assessment = { outcome_id:1, decision_quality:'good', original_signal_logic:'原始逻辑',
+      technical_basis_assessment:'技术依据', market_alignment:'aligned', strategy_alignment:'aligned',
+      risk_execution_assessment:'执行合规', risk_execution_status:'compliant',
+      outcome_attribution:{ result:'profit', primary_causes:['行情配合'], explanation:'按计划盈利', avoidability:'partly_avoidable' },
+      next_time_rule:{ condition:'条件成立', action:'执行', risk_control:'控制风险', invalidation:'条件失效', prohibited_action:'禁止追单' },
+      issue_codes:[], evidence_refs:['outcome:1'], confidence:0.8 }
+    const content = { period_summary:'日复盘', decision_quality:'good', trade_assessments:[assessment],
+      repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], experience_rules:[], confidence:0.8 }
+    expect(validateDailyReviewV3Content(content, [1]).output_contract_version).toBe('daily-period-review-v3')
+    expect(() => validateDailyReviewV3Content({ ...content, daily_lessons:[] }, [1])).toThrow('invalid_daily_v3_contract_version')
+    expect(() => validateDailyReviewV3Content({ ...content, output_contract_version:'daily-period-review-v2' }, [1]))
+      .toThrow('invalid_daily_v3_contract_version')
   })
 })
 

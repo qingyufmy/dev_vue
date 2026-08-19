@@ -71,9 +71,39 @@ function requestTimeoutForAttempt(_model, attemptSafetyDeadlineUtcMs, nowUtcMs =
   return remaining
 }
 
+export function periodReviewModelInputBudget(messages) {
+  const serialized = JSON.stringify(messages || [])
+  const requestBytes = Buffer.byteLength(serialized, 'utf8')
+  const estimatedInputTokens = estimateModelInputTokens(messages)
+  return { requestBytes, estimatedInputTokens,
+    withinBytes:requestBytes <= DAILY_REVIEW_MODEL_MAX_BYTES,
+    withinTokens:estimatedInputTokens <= DAILY_REVIEW_MODEL_MAX_INPUT_TOKENS,
+    maxBytes:DAILY_REVIEW_MODEL_MAX_BYTES,
+    maxInputTokens:DAILY_REVIEW_MODEL_MAX_INPUT_TOKENS }
+}
+
+function assertPeriodReviewModelInputBudget(messages, taskKind) {
+  // Monthly review has its own chunking and a different physical provider
+  // contract.  The daily model-facing projection is the path that previously
+  // sent an unbounded historical snapshot, so keep this gate scoped to it.
+  if (String(taskKind || '') !== 'daily_review') return periodReviewModelInputBudget(messages)
+  const budget = periodReviewModelInputBudget(messages)
+  if (!budget.withinBytes || !budget.withinTokens) {
+    const error = new Error('period_review_input_budget_exceeded')
+    error.code = error.message
+    error.requestBytes = budget.requestBytes
+    error.estimatedInputTokens = budget.estimatedInputTokens
+    error.maxBytes = budget.maxBytes
+    error.maxInputTokens = budget.maxInputTokens
+    throw error
+  }
+  return budget
+}
+
 async function preparePeriodReviewModelCall(taskKind, resolved, messages, schemaNeedTokens, {
   nowUtcMs = Date.now(), businessDeadlineUtcMs = null,
 } = {}) {
+  const inputBudget = assertPeriodReviewModelInputBudget(messages, taskKind)
   let capabilities = {}
   try {
     capabilities = await getModelProviderCapabilities(resolved?.model_profile_id) || {}
@@ -139,7 +169,8 @@ async function preparePeriodReviewModelCall(taskKind, resolved, messages, schema
     attemptSafetyDeadlineUtcMs:Math.min(rawDeadlines.attemptSafetyDeadlineUtcMs, rawDeadlines.taskDeadlineUtcMs),
   }
   return {
-    budget,
+    budget:{ ...budget, requestBytes:inputBudget.requestBytes,
+      estimatedInputTokens:inputBudget.estimatedInputTokens },
     ...deadlines,
     requestTimeoutMs:requestTimeoutForAttempt(resolved?.model, deadlines.attemptSafetyDeadlineUtcMs, nowUtcMs),
   }
@@ -479,7 +510,7 @@ export function monthlyReviewSourceHash(rows = []) {
  * both writes.
  */
 export async function refreshPeriodReviewJobForEvidence(run, {
-  periodType, periodCaseId, evidenceHash, now = beijingNow(),
+  periodType, periodCaseId, evidenceHash, now = beijingNow(), preserveQuotaFailure = false, targetStatus = null,
 } = {}) {
   if (typeof run !== 'function') throw new Error('period_review_job_transaction_required')
   const normalizedType = String(periodType || '').toLowerCase()
@@ -491,12 +522,21 @@ export async function refreshPeriodReviewJobForEvidence(run, {
     throw new Error('period_review_job_evidence_identity_invalid')
   }
   const idempotencyKey = `${normalizedType}:${caseId}:${hash}`
-  const result = await run(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL,
-      status = 'queued', progress_stage = 'queued', stage_updated_at = ?, attempt_count = 0,
-      last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
-      completed_at = NULL, updated_at = ?
-      WHERE period_case_id = ? AND job_type = ? AND job_slot = 0`,
-  [idempotencyKey, now, now, caseId, jobType])
+  const nextStatus = targetStatus || (preserveQuotaFailure ? 'failed' : 'queued')
+  const preserveError = preserveQuotaFailure && nextStatus === 'failed'
+  const result = !preserveError && !targetStatus
+    ? await run(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL,
+        status = 'queued', progress_stage = 'queued', stage_updated_at = ?, attempt_count = 0,
+        last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+        completed_at = NULL, updated_at = ?
+        WHERE period_case_id = ? AND job_type = ? AND job_slot = 0`,
+      [idempotencyKey, now, now, caseId, jobType])
+    : await run(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL,
+        status = ?, progress_stage = ?, stage_updated_at = ?, attempt_count = 0,
+        last_error_code = IF(? = 1, last_error_code, NULL), lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+        completed_at = NULL, updated_at = ?
+        WHERE period_case_id = ? AND job_type = ? AND job_slot = 0`,
+      [idempotencyKey, nextStatus, nextStatus, now, preserveError ? 1 : 0, now, caseId, jobType])
   const resultHeader = Array.isArray(result) ? result[0] : result
   const affectedRows = Number(resultHeader?.affectedRows ?? resultHeader?.changes ?? 0)
   if (affectedRows !== 1) throw new Error('period_review_job_refresh_conflict')
@@ -768,7 +808,19 @@ const V3_MAX_PRIMARY_CAUSES = 8
 const V3_MAX_EXPERIENCE_RULES = 100
 const DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES = 30
 const DAILY_REVIEW_CHUNK_MAX_OUTCOMES = 20
-const DAILY_REVIEW_CHUNK_MAX_BYTES = 120000
+// The provider receives the model projection, not the frozen evidence blob.
+// Leave headroom for the contract/system message while keeping both physical
+// request bytes and the calibrated input-token estimate below the acceptance
+// gates.  A separate hard guard below still protects callers that build a
+// larger request accidentally.
+const DAILY_REVIEW_CHUNK_MAX_BYTES = 180000
+const DAILY_REVIEW_MODEL_MAX_BYTES = 500 * 1024
+const DAILY_REVIEW_MODEL_MAX_INPUT_TOKENS = 120000
+const DAILY_REVIEW_POLICY_UPGRADE_LIMIT = 5
+const DAILY_REVIEW_PRE_TRADE_TEXT_MAX_BYTES = 12000
+const DAILY_REVIEW_STRATEGY_TEXT_MAX_BYTES = 72000
+const DAILY_REVIEW_MEMORY_TEXT_MAX_BYTES = 72000
+const DAILY_REVIEW_LOCAL_KLINE_LIMIT = 32
 const DAILY_REVIEW_MODEL_TASK_MAX_ATTEMPTS = 12
 const DAILY_REVIEW_MARKET_DIGEST_VERSION = 'daily-market-digest-v1'
 const DAILY_REVIEW_QUOTA_RECOVERY_VERSION = 'quota-recovery-v1'
@@ -782,7 +834,7 @@ export const DAILY_PERIOD_REVIEW_V3_CONTRACT = DAILY_REVIEW_V3_CONTRACT
 // is allowed to write a review, while period_review_contracts describes the
 // output shapes that this server can still read.
 export const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
-export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-shared-market1'
+export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-second-remediation1'
 export const PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS = Object.freeze([
   DAILY_PERIOD_REVIEW_V3_CONTRACT,
   'daily-period-review-v1',
@@ -1379,6 +1431,29 @@ export function validateDailyReviewContent(input, outcomeIds = [], chanContext, 
   return result
 }
 
+/**
+ * Validator used by newly created daily-period-review-v3 model tasks.  The
+ * legacy public validator remains backwards compatible for old editors, but a
+ * new task must never silently fall back to the daily_lessons contract.  A
+ * response that is structurally v3 but only omits the version marker is the
+ * one safe normalization performed here.
+ */
+export function validateDailyReviewV3Content(input, outcomeIds = [], chanContext, conflictContext = {}) {
+  const value = unwrapReviewContent(input, ['daily_review', 'review'])
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_daily_v3_contract_version')
+  const declared = String(value.output_contract_version || value.contract_version || '').trim()
+  if (declared && declared !== DAILY_REVIEW_V3_CONTRACT) throw new Error('invalid_daily_v3_contract_version')
+  const looksV3 = Object.prototype.hasOwnProperty.call(value, 'trade_assessments')
+    || Object.prototype.hasOwnProperty.call(value, 'experience_rules')
+    || Object.prototype.hasOwnProperty.call(value, 'next_day_actions')
+    || Object.prototype.hasOwnProperty.call(value, 'original_signal_logic')
+  const looksLegacy = Object.prototype.hasOwnProperty.call(value, 'daily_lessons')
+    || Object.prototype.hasOwnProperty.call(value, 'memory_updates')
+  if (!declared && (!looksV3 || looksLegacy)) throw new Error('invalid_daily_v3_contract_version')
+  return normalizeDailyV3Content({ ...value, output_contract_version:DAILY_REVIEW_V3_CONTRACT }, outcomeIds,
+    chanContext, conflictContext)
+}
+
 export function validateMonthlyReviewContent(input, dailyCaseIds = [], approvedDailyCaseIds = dailyCaseIds, chanContext,
   conflictContext = {}) {
   input = unwrapReviewContent(input, ['monthly_review', 'review'])
@@ -1458,7 +1533,11 @@ async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } 
   // intentionally deferred until there is a bounded slot left for it.
   const recoveryLimit = includeHistoricalRecovery && batchLimit >= 5
     ? Math.max(1, Math.floor(batchLimit * 0.2)) : 0
+  // Policy upgrades are a priority sub-lane inside the bounded maintenance
+  // budget, not extra capacity.  This preserves the live lane and prevents
+  // an upgrade batch from making the scheduler exceed `batchLimit`.
   const backlogLimit = Math.max(0, batchLimit - liveLimit - recoveryLimit)
+  const policyUpgradeLimit = Math.min(DAILY_REVIEW_POLICY_UPGRADE_LIMIT, backlogLimit)
   // Keep a full recent lane after removing historical unassociated rows from
   // the maintenance lane. This lets a busy period converge even when more
   // than 30% of a batch belongs to newly eligible outcomes; both queries stay
@@ -1482,21 +1561,66 @@ async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } 
   const unassociated = `NOT EXISTS (SELECT 1 FROM period_review_sources prs
       JOIN period_review_cases cases ON cases.id = prs.period_case_id
       WHERE prs.outcome_id = so.id AND cases.period_type = 'daily' AND cases.status <> 'superseded')`
+  // Select candidate IDs separately from outcome rows.  This keeps the
+  // policy lane compatible with MySQL versions without window functions and,
+  // more importantly, lets us greedily reserve only whole cases that fit the
+  // maintenance budget.  A case larger than the remaining budget is deferred
+  // rather than returned partially.
+  const policyCandidateRows = policyUpgradeLimit > 0 ? await queryAll(`SELECT policy_case.id AS period_case_id,
+      policy_case.updated_at AS period_case_updated_at,
+      COUNT(policy_source.outcome_id) AS outcome_count
+    FROM period_review_cases policy_case
+    JOIN period_review_sources policy_source ON policy_source.period_case_id = policy_case.id
+    JOIN signal_outcomes policy_outcome ON policy_outcome.id = policy_source.outcome_id
+    JOIN users policy_user ON policy_user.id = policy_outcome.user_id
+    JOIN trading_accounts policy_account ON policy_account.id = policy_outcome.trading_account_id
+      AND policy_account.user_id = policy_outcome.user_id
+    JOIN inference_snapshots policy_snapshot ON policy_snapshot.id = (
+      SELECT MAX(policy_snapshot_latest.id) FROM inference_snapshots policy_snapshot_latest
+      WHERE policy_snapshot_latest.signal_id = policy_outcome.signal_id)
+    WHERE policy_case.period_type = 'daily' AND policy_case.status <> 'superseded'
+      AND policy_case.current_version_id IS NULL
+      AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(IF(JSON_VALID(policy_case.evidence_json), policy_case.evidence_json, '{}'),
+        '$.period_market.source_policy_version')), '') <> '${PERIOD_MARKET_SOURCE_POLICY_VERSION}'
+      AND policy_outcome.status = 'closed' AND policy_outcome.review_eligible_at IS NOT NULL
+      AND ((policy_snapshot.strategy_scope = 'private' AND NOT ${platformAiContentManagerSql('policy_user')})
+        OR (policy_snapshot.strategy_scope = 'platform' AND ${platformAiContentManagerSql('policy_user')}))
+      AND NOT EXISTS (SELECT 1 FROM period_review_jobs candidate_active_job
+        WHERE candidate_active_job.period_case_id = policy_case.id
+          AND candidate_active_job.job_type = 'daily_review' AND candidate_active_job.job_slot = 0
+          AND candidate_active_job.status IN ('leased','status_unknown'))
+    GROUP BY policy_case.id, policy_case.updated_at
+    HAVING COUNT(policy_source.outcome_id) <= ?
+    ORDER BY policy_case.updated_at ASC, policy_case.id ASC LIMIT ?`, [backlogLimit, policyUpgradeLimit]) : []
+  const selectedPolicyCaseIds = selectWholePolicyUpgradeCaseIds(policyCandidateRows, backlogLimit, policyUpgradeLimit)
+  // Historical recovery continues to use ORDER BY so.review_eligible_at ASC, so.id ASC;
+  // policy candidates above are selected with the same oldest-first ordering.
+  const policyUpgradeCondition = selectedPolicyCaseIds.length ? `EXISTS (SELECT 1 FROM period_review_sources policy_source
+      JOIN period_review_cases policy_case ON policy_case.id = policy_source.period_case_id
+      WHERE policy_source.outcome_id = so.id AND policy_case.period_type = 'daily'
+        AND policy_case.status <> 'superseded' AND policy_case.current_version_id IS NULL
+        AND policy_case.id IN (${selectedPolicyCaseIds.join(',')})
+        AND NOT EXISTS (SELECT 1 FROM period_review_jobs active_policy_job
+          WHERE active_policy_job.period_case_id = policy_case.id AND active_policy_job.job_type = 'daily_review'
+            AND active_policy_job.job_slot = 0 AND active_policy_job.status IN ('leased','status_unknown')))` : 'FALSE'
   const [backlog, recent, recovery] = await Promise.all([
     // Only associated, incomplete evidence belongs to the maintenance lane.
     // Unassociated historical outcomes are intentionally excluded here: the
     // recent lane below gives new source rows a bounded, deterministic path to
     // first creation without allowing an old backlog to occupy every batch.
-    backlogLimit > 0 ? queryAll(`${select} WHERE ${eligible} AND EXISTS (SELECT 1 FROM period_review_sources prs
+    backlogLimit > 0 ? queryAll(`${select} WHERE ${eligible} AND (${policyUpgradeCondition} OR EXISTS (SELECT 1 FROM period_review_sources prs
         JOIN period_review_cases cases ON cases.id = prs.period_case_id
         WHERE prs.outcome_id = so.id AND cases.period_type = 'daily' AND cases.evidence_status <> 'complete'
+          AND NOT EXISTS (SELECT 1 FROM period_review_jobs active_backlog_job
+            WHERE active_backlog_job.period_case_id = cases.id AND active_backlog_job.job_type = 'daily_review'
+              AND active_backlog_job.job_slot = 0 AND active_backlog_job.status IN ('leased','status_unknown'))
           AND (cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
             OR EXISTS (SELECT 1 FROM period_review_sources upgrade_source
               JOIN trade_review_cases upgrade_trade ON upgrade_trade.id = upgrade_source.trade_review_case_id
               WHERE upgrade_source.period_case_id = cases.id
                 AND upgrade_trade.path_evidence_reason = 'holding_path_bar_boundary_insufficient'))
-          AND COALESCE(cases.evidence_reason, '') NOT IN ('inference_snapshot_incomplete','historical_prompt_missing'))
-      ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]) : Promise.resolve([]),
+          AND COALESCE(cases.evidence_reason, '') NOT IN ('inference_snapshot_incomplete','historical_prompt_missing')))
+      ORDER BY CASE WHEN ${policyUpgradeCondition} THEN 0 ELSE 1 END, so.review_eligible_at ASC, so.id ASC LIMIT ?`, [backlogLimit]) : Promise.resolve([]),
     // Live lane stays newest-first so an opt-in historical recovery cannot
     // starve the current creation window.
     queryAll(`${select} WHERE ${eligible} AND ${unassociated}
@@ -1507,7 +1631,7 @@ async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } 
       ORDER BY so.review_eligible_at ASC, so.id ASC LIMIT ?`, [recoveryLimit]) : Promise.resolve([]),
   ])
   const merged = new Map()
-  for (const row of [...backlog, ...recent, ...recovery]) merged.set(Number(row.id), row)
+  for (const row of [...(backlog || []), ...(recent || []), ...(recovery || [])]) merged.set(Number(row.id), row)
   const observerClock = await getDefaultObserverSourceClock().catch(() => null)
   return [...merged.values()].slice(0, batchLimit).map(row => {
     const clock = applyDefaultObserverClockBootstrap({
@@ -1520,6 +1644,29 @@ async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } 
     })
 }
 
+/**
+ * Select only complete policy-upgrade cases for one maintenance batch.  The
+ * database candidate query is already oldest-first and capped by case count;
+ * this final deterministic pass reserves outcome capacity so an oversized
+ * case is deferred instead of being returned partially.
+ */
+export function selectWholePolicyUpgradeCaseIds(rows = [], backlogLimit = 0, maxCases = DAILY_REVIEW_POLICY_UPGRADE_LIMIT) {
+  const budget = Math.max(0, Math.trunc(Number(backlogLimit) || 0))
+  const caseLimit = Math.max(0, Math.trunc(Number(maxCases) || 0))
+  const selected = []
+  let used = 0
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (selected.length >= caseLimit) break
+    const caseId = Number(row?.period_case_id)
+    const outcomeCount = Number(row?.outcome_count)
+    if (!Number.isSafeInteger(caseId) || caseId <= 0 || !Number.isSafeInteger(outcomeCount) || outcomeCount <= 0) continue
+    if (used + outcomeCount > budget) continue
+    selected.push(caseId)
+    used += outcomeCount
+  }
+  return selected
+}
+
 async function prepareTradeEvidence(outcome) {
   const reviewCase = await ensureReviewCaseForOutcome(outcome.id, { queueGeneration:false })
   if (reviewCase?.skipped) return { status: 'ineligible', reason: reviewCase.reason, reviewCase: null, evidence: null }
@@ -1527,64 +1674,250 @@ async function prepareTradeEvidence(outcome) {
   return { status: loaded?.evidence_status || 'incomplete', reason: loaded?.evidence_reason || null, reviewCase: loaded, evidence: parse(loaded?.evidence_json, null) }
 }
 
+function clipReviewText(value, maxBytes = DAILY_REVIEW_PRE_TRADE_TEXT_MAX_BYTES) {
+  const text = String(value ?? '')
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text
+  const marker = '\n…[中间内容已按复盘输入预算压缩]…\n'
+  const available = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf8'))
+  const take = (input, budget, fromEnd = false) => {
+    const chars = Array.from(input)
+    const selected = []
+    let used = 0
+    const source = fromEnd ? chars.reverse() : chars
+    for (const char of source) {
+      const size = Buffer.byteLength(char, 'utf8')
+      if (used + size > budget) break
+      selected.push(char); used += size
+    }
+    return fromEnd ? selected.reverse().join('') : selected.join('')
+  }
+  const headBudget = Math.floor(available * 0.6)
+  return `${take(text, headBudget)}${marker}${take(text, available - headBudget, true)}`
+}
+
+function compactReviewValue(value, { maxBytes = DAILY_REVIEW_PRE_TRADE_TEXT_MAX_BYTES,
+  maxArrayItems = 32, maxDepth = 4 } = {}, depth = 0) {
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') return value
+  if (typeof value === 'string') return clipReviewText(value, maxBytes)
+  if (depth >= maxDepth) return typeof value === 'object' ? '[已省略嵌套字段]' : String(value)
+  if (Array.isArray(value)) return value.slice(-maxArrayItems).map(item => compactReviewValue(item,
+    { maxBytes:Math.max(256, Math.floor(maxBytes / 2)), maxArrayItems:Math.min(16, maxArrayItems), maxDepth }, depth + 1))
+  if (typeof value !== 'object') return String(value)
+  const result = {}
+  for (const [key, item] of Object.entries(value)) {
+    // These fields are either full prompt payloads or repeat the candle body
+    // that is projected separately. They must never leak into a model chunk.
+    if (['system_prompt', 'user_prompt', 'klines', 'market_snapshot', 'market_data_snapshot',
+      'full_period_candles', 'post_trade_klines', 'source_identity', 'source_key', 'source_id',
+      'account_login', 'account_id', 'trading_account_id', 'broker_server', 'broker_server_name'].includes(String(key))) continue
+    result[key] = compactReviewValue(item, {
+      maxBytes:Math.max(256, Math.floor(maxBytes / 2)), maxArrayItems, maxDepth,
+    }, depth + 1)
+  }
+  return result
+}
+
+function compactReviewOrder(order) {
+  if (!order || typeof order !== 'object' || Array.isArray(order)) return order || null
+  const allowed = ['symbol', 'order_type', 'entry_method', 'direction', 'volume', 'price', 'limit_price',
+    'stop_limit_price', 'sl', 'tp', 'stop_loss_price', 'take_profit_1_price', 'take_profit_2_price',
+    'take_profit_3_price', 'pending_valid_until', 'position_size_tier', 'position_size_factor',
+    'risk_amount', 'status', 'reason', 'magic']
+  return Object.fromEntries(allowed.filter(key => Object.prototype.hasOwnProperty.call(order, key))
+    .map(key => [key, typeof order[key] === 'string' ? clipReviewText(order[key], 2000) : order[key]]))
+}
+
+function compactReviewSignal(signal) {
+  if (!signal || typeof signal !== 'object' || Array.isArray(signal)) return signal || null
+  const allowed = ['id', 'signal_id', 'symbol', 'timeframe', 'signal_type', 'direction', 'confidence',
+    'analysis', 'reasoning', 'entry_method', 'limit_price', 'stop_limit_price', 'stop_loss_price',
+    'take_profit_1_price', 'take_profit_2_price', 'take_profit_3_price', 'recommended_take_profit_tier',
+    'recommended_volume', 'position_size_tier', 'position_size_reason', 'created_at', 'created_at_msc', 'created_at_utc_msc',
+    'strategy_id', 'strategy_version', 'strategy_scope']
+  return Object.fromEntries(allowed.filter(key => Object.prototype.hasOwnProperty.call(signal, key))
+    .map(key => [key, typeof signal[key] === 'string' ? clipReviewText(signal[key]) : signal[key]]))
+}
+
+function compactLocalReviewKlines(klines, limit = DAILY_REVIEW_LOCAL_KLINE_LIMIT) {
+  if (!Array.isArray(klines)) return []
+  const allowed = ['time', 'time_msc', 'time_utc_msc', 'time_utc_ms', 'time_server_msc', 'open', 'high', 'low', 'close',
+    'volume', 'tick_volume', 'real_volume', 'spread']
+  const boundedLimit = Math.max(1, Math.trunc(Number(limit) || DAILY_REVIEW_LOCAL_KLINE_LIMIT))
+  return klines.slice(-boundedLimit)
+    .map(item => item && typeof item === 'object'
+      ? Object.fromEntries(allowed.filter(key => Object.prototype.hasOwnProperty.call(item, key)).map(key => [key, item[key]]))
+      : item)
+}
+
+function compactReviewMarketSnapshot(snapshot = {}, supplementalKlines = {}) {
+  if (!snapshot || typeof snapshot !== 'object') return null
+  const context = snapshot.strategy_context && typeof snapshot.strategy_context === 'object'
+    ? snapshot.strategy_context : {}
+  const sourceFrames = context.timeframes && typeof context.timeframes === 'object' ? context.timeframes : {}
+  // Some inference loaders put candles inside market_snapshot while others
+  // attach them to the frozen snapshot (or pass them separately).  Merge all
+  // three bounded sources so a loader returning an empty supplemental object
+  // cannot accidentally hide the candles that were already frozen.
+  const embeddedKlines = snapshot.klines && typeof snapshot.klines === 'object' && !Array.isArray(snapshot.klines)
+    ? snapshot.klines : {}
+  const extraKlines = supplementalKlines && typeof supplementalKlines === 'object' && !Array.isArray(supplementalKlines)
+    ? supplementalKlines : {}
+  const rawKlines = { ...embeddedKlines, ...extraKlines }
+  const timeframes = Object.fromEntries(Object.entries(sourceFrames).map(([timeframe, frame]) => {
+    const value = frame && typeof frame === 'object' ? frame : {}
+    const summary = value.summary || value.indicators || value.technical_indicators || null
+    const localKlines = value.klines || rawKlines[timeframe] || rawKlines[String(timeframe).toUpperCase()]
+    return [timeframe, { summary:compactReviewValue(summary, { maxBytes:12000, maxArrayItems:24, maxDepth:4 }),
+      structure:compactReviewValue(value.structure || value.chan || null, { maxBytes:8000, maxArrayItems:16, maxDepth:4 }),
+      latest_price:value.latest_price ?? value.current_price ?? null,
+      closed_bar_time_utc_msc:value.closed_bar_time_utc_msc ?? null,
+      local_klines:compactLocalReviewKlines(localKlines) }]
+  }))
+  return { symbol:snapshot.symbol || null, timeframe:snapshot.timeframe || null,
+    latest_price:snapshot.latest_price ?? snapshot.current_price ?? null,
+    as_of:snapshot.as_of || snapshot.closed_bar_time_utc_msc || null,
+    timeframes }
+}
+
+function compactReviewStrategyRuntime(runtime) {
+  if (!runtime || typeof runtime !== 'object') return runtime || null
+  const allowed = ['mode', 'strategy_id', 'strategy_version', 'version', 'policy_version', 'policy_hash',
+    'strategy_policy_json', 'policy', 'rules', 'entry_rules', 'risk_rules', 'exit_rules', 'timeframes',
+    'indicators', 'use_chan_analysis', 'chan_timeframes']
+  const value = Object.fromEntries(allowed.filter(key => Object.prototype.hasOwnProperty.call(runtime, key))
+    .map(key => [key, compactReviewValue(runtime[key], { maxBytes:18000, maxArrayItems:32, maxDepth:5 })]))
+  return value
+}
+
+function compactReviewStrategyMemory(library) {
+  if (!library || typeof library !== 'object') return library || null
+  return { version_no:Number(library.version_no || 0), content_hash:library.content_hash || null,
+    char_count:Number(library.char_count || 0), estimated_token_count:Number(library.estimated_token_count || 0),
+    content_text:clipReviewText(library.content_text || '', DAILY_REVIEW_MEMORY_TEXT_MAX_BYTES) }
+}
+
+function compactReviewDeals(deals) {
+  if (!Array.isArray(deals)) return []
+  const allowed = ['deal_id', 'ticket', 'order_ticket', 'position_ticket', 'type', 'entry', 'price', 'volume',
+    'profit', 'commission', 'swap', 'time', 'time_msc', 'time_utc_msc', 'reason']
+  return deals.slice(-100).map(deal => deal && typeof deal === 'object'
+    ? Object.fromEntries(allowed.filter(key => Object.prototype.hasOwnProperty.call(deal, key)).map(key => [key, deal[key]]))
+    : deal)
+}
+
+function compactReviewPostTrade(postTrade = {}) {
+  if (!postTrade || typeof postTrade !== 'object') return {}
+  return { outcome:compactReviewValue(postTrade.outcome, { maxBytes:16000, maxArrayItems:32, maxDepth:4 }),
+    execution:compactReviewValue(postTrade.execution, { maxBytes:12000, maxArrayItems:32, maxDepth:4 }),
+    deals:compactReviewDeals(postTrade.deals),
+    path_metrics:compactReviewValue(postTrade.path_metrics, { maxBytes:10000, maxArrayItems:24, maxDepth:4 }),
+    post_trade_structure:compactReviewValue(postTrade.post_trade_structure, { maxBytes:16000, maxArrayItems:24, maxDepth:4 }),
+    path_evidence:compactReviewValue(postTrade.path_evidence, { maxBytes:12000, maxArrayItems:24, maxDepth:4 }) }
+}
+
+function compactReviewEvidenceRefs(refs) {
+  if (!refs || typeof refs !== 'object' || Array.isArray(refs)) return {}
+  return Object.fromEntries(Object.entries(refs).slice(0, 24).map(([key, value]) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [key, typeof value === 'string' ? clipReviewText(value, 512) : value]
+    return [key, Object.fromEntries(['id', 'hash', 'outcome_id', 'case_id', 'version_id']
+      .filter(field => Object.prototype.hasOwnProperty.call(value, field))
+      .map(field => [field, value[field]]))]
+  }))
+}
+
+function isCompactPeriodTradeEvidence(evidence) {
+  return Boolean(evidence && typeof evidence === 'object'
+    && evidence.inference_time && typeof evidence.inference_time === 'object'
+    && evidence.inference_time.pre_trade_frozen
+    && !evidence.inference_time.snapshot)
+}
+
+/**
+ * Build the bounded pre-trade projection sent to the daily review model.
+ * Full prompts, runtime snapshots and all raw candles remain in the frozen
+ * inference snapshot; this projection keeps only the signal rationale,
+ * strategy rules/version, indicator summaries, local candles and order/risk
+ * facts needed to assess the original decision.
+ */
+export function compactPreTradeReviewEvidence(inference = {}) {
+  const snapshot = inference?.snapshot || {}
+  const snapshotRef = { id:snapshot.id || null, strategy_id:snapshot.strategy_id || null,
+    strategy_version:snapshot.strategy_version || null, strategy_scope:snapshot.strategy_scope || null,
+    prompt_hash:snapshot.prompt_hash || null, model_profile_id:snapshot.model_profile_id || null,
+    provider:snapshot.provider || null, model_name:snapshot.model_name || null,
+    content_hash:snapshot.content_hash || null }
+  const signal = compactReviewSignal(inference.signal)
+  const snapshotKlines = {
+    ...(snapshot.klines && typeof snapshot.klines === 'object' && !Array.isArray(snapshot.klines) ? snapshot.klines : {}),
+    ...(inference.klines && typeof inference.klines === 'object' && !Array.isArray(inference.klines) ? inference.klines : {}),
+  }
+  return { signal, snapshot_ref:snapshotRef,
+    strategy_runtime:compactReviewStrategyRuntime(snapshot.strategy_runtime),
+    market_snapshot:compactReviewMarketSnapshot(snapshot.market_snapshot || {}, snapshotKlines),
+    risk_decision:compactReviewValue(inference.risk_decision, { maxBytes:12000, maxArrayItems:32, maxDepth:4 }),
+    original_order:compactReviewOrder(inference.original_order),
+    approved_order:compactReviewOrder(inference.approved_order),
+    cutoff_utc_msc:Number(inference.signal?.created_at_utc_msc || inference.signal?.created_at_msc || 0) || null }
+}
+
 export function compactPeriodTradeEvidence(evidence) {
   if (!evidence || typeof evidence !== 'object') return null
+  if (isCompactPeriodTradeEvidence(evidence)) return evidence
   const inference = evidence.inference_time || {}
-  const snapshot = inference.snapshot || {}
-  const frozenSourceIdentities = [...new Map(Object.values(snapshot?.market_snapshot?.strategy_context?.timeframes || {})
-    .map(frame => frame?.summary?.market_data_quality?.continuity?.source_identity
-      || frame?.summary?.market_data_quality?.source_identity
-      || frame?.summary?.market_data_quality)
-    .filter(identity => identity && (identity.source_id || identity.source_key))
-    .map(identity => [identity.source_key || `id:${identity.source_id}`, {
-      source_id:Number(identity.source_id) || null,
-      source_key:identity.source_key || null,
-      platform:identity.platform || null,
-      broker_server:identity.broker_server || null,
-      account_login:identity.account_login == null ? null : String(identity.account_login),
-    }])).values()]
+  const snapshotRef = compactPreTradeReviewEvidence(inference).snapshot_ref
   const postTrade = evidence.post_trade || {}
-  const snapshotRef = snapshot ? { id:snapshot.id, strategy_id:snapshot.strategy_id, strategy_version:snapshot.strategy_version,
-    strategy_scope:snapshot.strategy_scope, prompt_hash:snapshot.prompt_hash, model_profile_id:snapshot.model_profile_id,
-    provider:snapshot.provider, model_name:snapshot.model_name, credential_source:snapshot.credential_source,
-    content_hash:snapshot.content_hash,
-    source_identity:frozenSourceIdentities.length === 1 ? frozenSourceIdentities[0] : null,
-    source_identities:frozenSourceIdentities,
-  } : null
-  // Keep the exact historical inputs needed to judge the original decision.
-  // The previous compactor retained only a reference and therefore forced a
-  // later review to infer the signal rationale from the current strategy.
-  // These fields are still immutable snapshot data; current optimization
-  // context is injected separately by generateDailyReview.
-  const preTradeFrozen = {
-    signal:inference.signal || null,
-    snapshot:{
-      ...snapshotRef,
-      system_prompt:snapshot.system_prompt || null,
-      user_prompt:snapshot.user_prompt || null,
-      strategy_runtime:snapshot.strategy_runtime || null,
-      market_snapshot:snapshot.market_snapshot || null,
-      klines:snapshot.klines || null,
-    },
-    risk_decision:inference.risk_decision || null,
-    original_order:inference.original_order || null,
-    approved_order:inference.approved_order || null,
-    cutoff_utc_msc:Number(inference.signal?.created_at_utc_msc || inference.signal?.created_at_msc || 0) || null,
-  }
-  return {
+  const preTradeFrozen = compactPreTradeReviewEvidence(inference)
+  let compact = {
     schema_version:evidence.schema_version,
     inference_time:{
-      signal:inference.signal || null,
+      signal:preTradeFrozen.signal,
       snapshot_ref:snapshotRef,
       pre_trade_frozen:preTradeFrozen,
-      risk_decision:inference.risk_decision || null, original_order:inference.original_order || null,
-      approved_order:inference.approved_order || null,
+      risk_decision:preTradeFrozen.risk_decision, original_order:preTradeFrozen.original_order,
+      approved_order:preTradeFrozen.approved_order,
     },
-    post_trade:{ outcome:postTrade.outcome || null, execution:postTrade.execution || null, deals:postTrade.deals || [],
-      path_metrics:postTrade.path_metrics || null, post_trade_structure:postTrade.post_trade_structure || {},
-      path_evidence:postTrade.path_evidence || null },
-    evidence_refs:evidence.evidence_refs || {},
+    post_trade:compactReviewPostTrade(postTrade),
+    evidence_refs:compactReviewEvidenceRefs(evidence.evidence_refs),
   }
+  const compactBytes = () => Buffer.byteLength(JSON.stringify(compact), 'utf8')
+  if (compactBytes() <= DAILY_REVIEW_CHUNK_MAX_BYTES) return compact
+
+  // A malformed/legacy trade can still contain many individually valid but
+  // collectively oversized fields.  Compress the lower-priority narrative
+  // again before chunk planning; the original frozen evidence remains in the
+  // database for audit and can be retried after an explicit failure.
+  const reducedPreTrade = {
+    signal:compactReviewValue(preTradeFrozen.signal, { maxBytes:4000, maxArrayItems:8, maxDepth:3 }),
+    snapshot_ref:snapshotRef,
+    strategy_runtime:compactReviewValue(preTradeFrozen.strategy_runtime, { maxBytes:5000, maxArrayItems:8, maxDepth:3 }),
+    market_snapshot:compactReviewValue(preTradeFrozen.market_snapshot, { maxBytes:5000, maxArrayItems:8, maxDepth:3 }),
+    risk_decision:compactReviewValue(preTradeFrozen.risk_decision, { maxBytes:4000, maxArrayItems:8, maxDepth:3 }),
+    original_order:compactReviewOrder(preTradeFrozen.original_order),
+    approved_order:compactReviewOrder(preTradeFrozen.approved_order),
+    cutoff_utc_msc:preTradeFrozen.cutoff_utc_msc || null,
+  }
+  compact = {
+    schema_version:evidence.schema_version,
+    inference_time:{ signal:reducedPreTrade.signal, snapshot_ref:snapshotRef,
+      pre_trade_frozen:reducedPreTrade, risk_decision:reducedPreTrade.risk_decision,
+      original_order:reducedPreTrade.original_order, approved_order:reducedPreTrade.approved_order },
+    post_trade:{ outcome:compactReviewValue(postTrade.outcome, { maxBytes:6000, maxArrayItems:12, maxDepth:3 }),
+      execution:compactReviewValue(postTrade.execution, { maxBytes:4000, maxArrayItems:12, maxDepth:3 }),
+      deals:compactReviewDeals(postTrade.deals).slice(-24),
+      path_metrics:compactReviewValue(postTrade.path_metrics, { maxBytes:5000, maxArrayItems:12, maxDepth:3 }),
+      post_trade_structure:compactReviewValue(postTrade.post_trade_structure, { maxBytes:5000, maxArrayItems:12, maxDepth:3 }),
+      path_evidence:compactReviewValue(postTrade.path_evidence, { maxBytes:4000, maxArrayItems:12, maxDepth:3 }) },
+    evidence_refs:compactReviewEvidenceRefs(evidence.evidence_refs),
+  }
+  if (compactBytes() > DAILY_REVIEW_CHUNK_MAX_BYTES) {
+    const error = new Error('period_review_input_budget_exceeded')
+    error.code = error.message
+    error.reason = 'period_review_trade_evidence_too_large'
+    error.requestBytes = compactBytes()
+    error.maxBytes = DAILY_REVIEW_CHUNK_MAX_BYTES
+    throw error
+  }
+  return compact
 }
 
 async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
@@ -1609,6 +1942,8 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
   const existingMaintainedResult = value => ({ complete:existingCase?.evidence_status === 'complete', ...value,
     existingMaintained:true, creationWindowState:creationWindow.state })
   let existingSources = []
+  let existingJob = null
+  let needsPeriodMarketUpgrade = false
   if (existingCase) {
     group.strategyVersion = Number(existingCase.strategy_version || group.strategyVersion || 1)
     existingSources = await queryAll(`SELECT source.outcome_id, source.source_hash,
@@ -1616,8 +1951,16 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
       FROM period_review_sources source
       LEFT JOIN trade_review_cases review_case ON review_case.id = source.trade_review_case_id
       WHERE source.period_case_id = ? ORDER BY source.outcome_id`, [existingCase.id])
-    const existingJob = await queryOne(`SELECT id, status, idempotency_key, attempt_count, max_attempts, last_error_code FROM period_review_jobs
+    existingJob = await queryOne(`SELECT id, status, idempotency_key, attempt_count, max_attempts, last_error_code FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
+    // Never rewrite evidence or rotate the identity of a live provider task.
+    // The candidate query also excludes these statuses, but this second guard
+    // is required for a race between candidate selection and maintenance.
+    if (existingJob && ['leased', 'status_unknown'].includes(String(existingJob.status || ''))) {
+      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey,
+        complete:existingCase.evidence_status === 'complete', sourceCount:Number(existingCase.source_count || 0),
+        evidenceHash:existingCase.evidence_hash, reused:true, refreshReason:'generation_in_progress' })
+    }
     const activeRegeneration = existingCase.current_version_id
       ? await queryOne(`SELECT id, status FROM period_review_jobs
         WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot > 0
@@ -1627,18 +1970,20 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
       complete:existingCase.evidence_status === 'complete', sourceCount:Number(existingCase.source_count || 0),
       evidenceHash:existingCase.evidence_hash, reused:true, refreshReason:'regeneration_in_progress' })
     await reconcilePersistedPeriodReviewState(existingCase, existingJob)
-    if (await recoverDailyQuotaFailure(existingCase, existingJob)) {
-      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey,
-        complete:true, sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash,
-        requeued:true, refreshReason:'provider_quota_recovery' })
-    }
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
-    const needsPeriodMarketUpgrade = shouldUpgradePeriodMarketEvidence(existingCase, existingEvidence)
+    needsPeriodMarketUpgrade = shouldUpgradePeriodMarketEvidence(existingCase, existingEvidence, asOfUtcMs)
     const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources, asOfUtcMs)
-    if (!refresh.refresh && !needsPeriodMarketUpgrade) return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
-      complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0),
-      evidenceHash: existingCase.evidence_hash, reused:true, refreshReason:refresh.reason })
-    if (existingJob?.status === 'skipped' && !existingCase.current_version_id) {
+    if (!refresh.refresh && !needsPeriodMarketUpgrade) {
+      if (await recoverDailyQuotaFailure(existingCase, existingJob)) {
+        return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey,
+          complete:true, sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash,
+          requeued:true, refreshReason:'provider_quota_recovery' })
+      }
+      return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
+        complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0),
+        evidenceHash: existingCase.evidence_hash, reused:true, refreshReason:refresh.reason })
+    }
+    if (existingJob?.status === 'skipped' && !existingCase.current_version_id && !needsPeriodMarketUpgrade) {
       const now = beijingNow()
       if (existingCase.evidence_hash) {
         await refreshPeriodReviewJobForEvidence(queryRun, { periodType:'daily', periodCaseId:existingCase.id,
@@ -1651,19 +1996,29 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
       return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
         sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, requeued:true })
     }
-    if (existingJob && !existingCase.current_version_id && !needsPeriodMarketUpgrade) return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
+    if (existingJob && !existingCase.current_version_id && !needsPeriodMarketUpgrade && !refresh.refresh) return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash })
     if (!existingJob && existingCase.evidence_status === 'incomplete' && isTerminalTradeEvidenceReason(existingCase.evidence_reason) && !refresh.refresh) {
       return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
         complete: false, sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash, terminal: true, reused: true })
     }
   }
+  const policyUpgradeInProgress = Boolean(existingCase && needsPeriodMarketUpgrade && !existingCase.current_version_id)
+  if (policyUpgradeInProgress) {
+    await setPeriodReviewJobStage(existingJob, 'evidence_upgrade_started', 'info', 'evidence_upgrade_started', {
+      source_policy_version:PERIOD_MARKET_SOURCE_POLICY_VERSION,
+    })
+  }
   const prepared = []
   for (const outcome of group.outcomes) prepared.push({ outcome, ...(await prepareTradeEvidence(outcome)) })
   const tradeEvidenceComplete = prepared.every(item => item.status === 'complete' && item.evidence)
   const reasons = [...new Set(prepared.flatMap(item => String(item.reason || '').split(',')).filter(Boolean))]
-  const sources = prepared.map(item => ({ outcome_id: Number(item.outcome.id), trade_review_case_id: Number(item.reviewCase?.id || 0) || null,
-    evidence_hash: item.reviewCase?.evidence_hash || null, evidence: compactPeriodTradeEvidence(item.evidence) }))
+  const rawSources = prepared.map(item => ({ outcome_id: Number(item.outcome.id), trade_review_case_id: Number(item.reviewCase?.id || 0) || null,
+    evidence_hash: item.reviewCase?.evidence_hash || null, evidence: item.evidence }))
+  // Keep the full frozen trade snapshot available to the deterministic period
+  // market collector (Chan requirement and source candidates are audit facts),
+  // but persist only the compact projection in the period-case model input.
+  const sources = rawSources.map(source => ({ ...source, evidence:compactPeriodTradeEvidence(source.evidence) }))
   const sourceIds = sources.map(item => item.outcome_id).sort((a, b) => a - b)
   const sourceHash = sha256(JSON.stringify(sources.map(item => [item.outcome_id, item.evidence_hash])))
   const evidence = {
@@ -1677,9 +2032,16 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
     statistics: dailyReviewStatistics(group.outcomes),
     sources,
   }
-  evidence.period_market = await buildDailyPeriodMarketEvidence({ userId:group.userId, strategyId:group.strategyId,
-    strategyScope:group.strategyScope, tradingAccountId:group.tradingAccountId,
-    symbols:group.outcomes.map(item => item.symbol), startUtcMs:group.startUtcMs, endUtcMs:group.endUtcMs, sources })
+  try {
+    evidence.period_market = await buildDailyPeriodMarketEvidence({ userId:group.userId, strategyId:group.strategyId,
+      strategyScope:group.strategyScope, tradingAccountId:group.tradingAccountId,
+      symbols:group.outcomes.map(item => item.symbol), startUtcMs:group.startUtcMs, endUtcMs:group.endUtcMs, sources:rawSources })
+  } catch (error) {
+    if (policyUpgradeInProgress) await setPeriodReviewJobStage(existingJob, 'evidence_upgrade_failed', 'error', 'evidence_upgrade_failed', {
+      error:safeError(error), source_policy_version:PERIOD_MARKET_SOURCE_POLICY_VERSION,
+    })
+    throw error
+  }
   const periodMarketComplete = evidence.period_market.status === 'complete'
   const complete = tradeEvidenceComplete && periodMarketComplete
   if (!periodMarketComplete) reasons.push('period_market_incomplete')
@@ -1748,9 +2110,31 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
   if (complete && !periodCase.current_version_id) await queryRun(`INSERT IGNORE INTO period_review_jobs
     (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
     VALUES (?, 'daily_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `daily:${periodCase.id}:${evidenceHash}`, now, now])
+  let requeued = false
+  let refreshedJob = null
+  // For an existing draft, persist the new evidence first, then rotate the
+  // business identity.  The old task/checkpoint key can no longer be found by
+  // dailyReviewTaskIdentity, so a later quota recovery cannot reuse it.
+  if (existingCase && existingJob && !existingCase.current_version_id
+    && String(existingCase.evidence_hash || '') !== String(evidenceHash || '')) {
+    await refreshPeriodReviewJobForEvidence(queryRun, { periodType:'daily', periodCaseId:periodCase.id,
+      evidenceHash, now, preserveQuotaFailure:isRecoverableDailyQuotaFailure(existingJob),
+      targetStatus:complete ? null : 'skipped' })
+    const freshJob = await queryOne(`SELECT id, status, idempotency_key, attempt_count, max_attempts, last_error_code
+      FROM period_review_jobs WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [periodCase.id])
+    refreshedJob = freshJob
+    // A quota failure is recoverable only after the new evidence is durable
+    // and complete.  Incomplete policy-upgrade evidence remains skipped until
+    // the next evidence collector makes the case complete.
+    if (complete && await recoverDailyQuotaFailure(periodCase, freshJob)) requeued = true
+  }
+  if (policyUpgradeInProgress) await setPeriodReviewJobStage(refreshedJob || existingJob, 'evidence_upgrade_succeeded', 'success', 'evidence_upgrade_succeeded', {
+    source_policy_version:PERIOD_MARKET_SOURCE_POLICY_VERSION, evidence_hash:evidenceHash, complete,
+  })
   return { id: Number(periodCase.id), periodKey: group.periodKey, complete, sourceCount: sourceIds.length, evidenceHash,
     ...(existingCase ? { existingMaintained:true } : { created:true,
-      missedWindowRecovery:recoveryAllowed }), creationWindowState:creationWindow.state }
+      missedWindowRecovery:recoveryAllowed }), ...(requeued ? { requeued:true, refreshReason:'provider_quota_recovery' } : {}),
+    creationWindowState:creationWindow.state }
 }
 
 export async function prepareEligibleDailyReviews({ limit = 500, asOfUtcMs = Date.now(),
@@ -2729,19 +3113,20 @@ export function compactDailyReviewPeriodMarket(periodMarket) {
           status:value.status || 'unavailable', reason:value.reason || null,
           candle_count:Number(value.candle_count || 0), expected_candle_count:Number(value.expected_candle_count || 0),
           first_time_utc_msc:value.first_time_utc_msc ?? null, last_time_utc_msc:value.last_time_utc_msc ?? null,
-          summary:value.summary || null,
+          summary:compactReviewValue(value.summary, { maxBytes:12000, maxArrayItems:24, maxDepth:4 }),
           coverage:{ endpoint_complete:coverage.endpoint_complete ?? null,
             internal_gap_count:Number(coverage.internal_gap_count || 0), max_gap_ms:Number(coverage.max_gap_ms || 0),
             continuity_status:coverage.continuity_status || null, continuity_reason:coverage.continuity_reason || null,
             continuity_policy_id:coverage.continuity_policy_id || null,
             continuity_policy_version:coverage.continuity_policy_version ?? null,
             continuity_policy_hash:coverage.continuity_policy_hash || null },
-          source_provenance:value.source_provenance || value.source_selection || {
-            policy_version:value.source_policy_version || periodMarket.source_policy_version || null,
-            selection_mode:value.source_selection_mode || null,
-            selection_reason:value.source_selection_reason || null,
-            source_changed:Boolean(value.source_selection_changed),
-          },
+          source_provenance:(() => {
+            const provenance = value.source_provenance || value.source_selection || {}
+            return { policy_version:provenance.policy_version || value.source_policy_version || periodMarket.source_policy_version || null,
+              selection_mode:provenance.selection_mode || value.source_selection_mode || null,
+              selection_reason:provenance.selection_reason || value.source_selection_reason || null,
+              source_changed:Boolean(provenance.source_changed ?? value.source_selection_changed) }
+          })(),
         }]
       }))]))
     : {}
@@ -2751,10 +3136,10 @@ export function compactDailyReviewPeriodMarket(periodMarket) {
     source_policy_version:periodMarket.source_policy_version || null,
     status:periodMarket.status || 'unavailable', reason:periodMarket.reason || null,
     window_policy_version:periodMarket.window_policy_version || null,
-    chan_requirement:periodMarket.chan_requirement || null,
+    chan_requirement:compactReviewValue(periodMarket.chan_requirement, { maxBytes:4000, maxArrayItems:16, maxDepth:3 }),
     chan_evidence_status:periodMarket.chan_evidence_status || null,
-    timeframes:periodMarket.timeframes || [],
-    timeframes_by_outcome:periodMarket.timeframes_by_outcome || {},
+    timeframes:compactReviewValue(periodMarket.timeframes, { maxBytes:6000, maxArrayItems:32, maxDepth:3 }),
+    timeframes_by_outcome:compactReviewValue(periodMarket.timeframes_by_outcome, { maxBytes:8000, maxArrayItems:32, maxDepth:3 }),
     symbols,
   }
 }
@@ -2769,7 +3154,11 @@ function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strat
   for (const source of sources) {
     const outcomeId = Number(source?.outcome_id)
     if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) continue
-    const tradeEvidence = source?.evidence || source
+    // Older cases may still contain a raw frozen inference snapshot.  Apply
+    // the same model boundary to those rows as to newly upgraded evidence;
+    // a persisted case is an audit artifact, not permission to replay prompts
+    // or an unbounded candle array to the provider.
+    const tradeEvidence = compactPeriodTradeEvidence(source?.evidence || source) || {}
     const inference = tradeEvidence?.inference_time || {}
     const postTrade = tradeEvidence?.post_trade || {}
     const refs = dailyOutcomeEvidenceRefs(tradeEvidence, outcomeId)
@@ -2790,8 +3179,8 @@ function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strat
     holding_path:holdingPath,
     period_market:compactDailyReviewPeriodMarket(evidence?.period_market),
     current_optimization_context:{
-      strategy:strategyMemorySnapshot?.strategy_text || '',
-      strategy_memory_library:strategyMemoryForPrompt,
+      strategy:clipReviewText(strategyMemorySnapshot?.strategy_text || '', DAILY_REVIEW_STRATEGY_TEXT_MAX_BYTES),
+      strategy_memory_library:compactReviewStrategyMemory(strategyMemoryForPrompt),
       strategy_memory_version_no:Number(strategyMemorySnapshot?.library?.version_no || 0),
       strategy_memory_content_hash:strategyMemorySnapshot?.library?.content_hash || null,
     },
@@ -2805,6 +3194,9 @@ export function buildDailyReviewChunkPlan(evidence, {
 } = {}) {
   const sources = (Array.isArray(evidence?.sources) ? evidence.sources : [])
     .slice().sort((left, right) => Number(left?.outcome_id) - Number(right?.outcome_id))
+    .map(source => ({ outcome_id:Number(source?.outcome_id), evidence_hash:source?.evidence_hash || null,
+      trade_review_case_id:source?.trade_review_case_id || null,
+      evidence:compactPeriodTradeEvidence(source?.evidence || source) }))
   const outcomeIds = sources.map(source => Number(source?.outcome_id))
   if (!outcomeIds.length || outcomeIds.some(id => !Number.isSafeInteger(id) || id <= 0)
     || new Set(outcomeIds).size !== outcomeIds.length) throw new Error('daily_review_chunk_source_set_invalid')
@@ -2960,6 +3352,17 @@ async function persistDailyReviewCheckpoint(tracker, {
   return contentHash
 }
 
+async function persistPeriodReviewInputBudget(tracker, budget, metadata = {}) {
+  if (!tracker?.taskId || !budget) return
+  await appendModelTaskEvent(tracker.taskId, 'period_review_input_budget', {
+    request_bytes:Number(budget.requestBytes || 0),
+    estimated_input_tokens:Number(budget.estimatedInputTokens || 0),
+    max_request_bytes:DAILY_REVIEW_MODEL_MAX_BYTES,
+    max_input_tokens:DAILY_REVIEW_MODEL_MAX_INPUT_TOKENS,
+    ...metadata,
+  })
+}
+
 function normalizeDailyReviewMergeContent(input, outcomeIds, chanContext, conflictContext = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid_daily_review_merge_content')
   if (input.output_contract_version !== DAILY_REVIEW_V3_CONTRACT) throw new Error('invalid_daily_v3_contract_version')
@@ -2989,6 +3392,21 @@ function normalizeDailyReviewMergeContent(input, outcomeIds, chanContext, confli
     experience_rules:normalizedRules, strategy_conflicts:strategyConflicts,
     confidence:normalizeConfidence(input.confidence, 'daily_review_merge_confidence'),
   }
+}
+
+function normalizeDailyReviewV3MergeContent(input, outcomeIds, chanContext, conflictContext = {}) {
+  const value = unwrapReviewContent(input, ['daily_review', 'review'])
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_daily_v3_contract_version')
+  const declared = String(value.output_contract_version || value.contract_version || '').trim()
+  if (declared && declared !== DAILY_REVIEW_V3_CONTRACT) throw new Error('invalid_daily_v3_contract_version')
+  if (!declared && (Object.prototype.hasOwnProperty.call(value, 'daily_lessons')
+    || Object.prototype.hasOwnProperty.call(value, 'memory_updates')
+    || (!Object.prototype.hasOwnProperty.call(value, 'experience_rules')
+      && !Object.prototype.hasOwnProperty.call(value, 'repeated_issues')))) {
+    throw new Error('invalid_daily_v3_contract_version')
+  }
+  return normalizeDailyReviewMergeContent({ ...value, output_contract_version:DAILY_REVIEW_V3_CONTRACT }, outcomeIds,
+    chanContext, conflictContext)
 }
 
 async function generateDailyReview(job, requestModel) {
@@ -3071,7 +3489,7 @@ async function generateDailyReview(job, requestModel) {
     const taskIdentity = dailyReviewTaskIdentity(job, 'chunk', chunkPlan.plan_hash, chunk.chunk_index)
     const checkpoint = await loadDailyReviewCheckpoint(taskIdentity, chunkPlan.plan_hash, chunk.chunk_index)
     if (checkpoint) {
-      const restored = validateDailyReviewContent(checkpoint.content, chunkIds, chanContext, {
+      const restored = validateDailyReviewV3Content(checkpoint.content, chunkIds, chanContext, {
         strategyText:strategyMemorySnapshot.strategy_text,
         memoryText:strategyMemorySnapshot.library.content_text,
         outcomeFacts:chunkEvidence.outcomeFacts,
@@ -3115,6 +3533,11 @@ async function generateDailyReview(job, requestModel) {
     job._modelTracker = tracker
     await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'daily_review', tracker.taskId)
     await tracker.persistBudget(modelCall.budget)
+    await persistPeriodReviewInputBudget(tracker, modelCall.budget, {
+      task_role:'chunk', chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count,
+      outcome_count:chunkIds.length, market_digest_version:DAILY_REVIEW_MARKET_DIGEST_VERSION,
+      pre_trade_projection_version:'daily-pre-trade-v2',
+    })
     const requestSignal = job._abortSignal && tracker.signal
       ? AbortSignal.any([job._abortSignal, tracker.signal])
       : tracker.signal || job._abortSignal || null
@@ -3133,7 +3556,11 @@ async function generateDailyReview(job, requestModel) {
       onProviderActivity:event => tracker.onProviderActivity(event),
       onProviderQuiet:event => tracker.onProviderQuiet(event),
       onProgress: stage => setPeriodReviewJobStage(job, `daily_chunk_${chunk.chunk_index}_${stage}`),
-      validateObject: value => validateDailyReviewContent(value, chunkIds, chanContext, {
+      allowFollowupRequests:true,
+      repairContext:{ outputFormat:JSON.stringify(chunkShape),
+        requiredCoverage:{ contract_version:DAILY_REVIEW_V3_CONTRACT, outcome_ids:chunkIds,
+          chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count } },
+      validateObject: value => validateDailyReviewV3Content(value, chunkIds, chanContext, {
         strategyText:strategyMemorySnapshot.strategy_text,
         memoryText:strategyMemorySnapshot.library.content_text,
         outcomeFacts:chunkEvidence.outcomeFacts,
@@ -3141,7 +3568,7 @@ async function generateDailyReview(job, requestModel) {
         evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
       }),
     })
-    const normalized = validateDailyReviewContent(output, chunkIds, chanContext, {
+    const normalized = validateDailyReviewV3Content(output, chunkIds, chanContext, {
       strategyText:strategyMemorySnapshot.strategy_text,
       memoryText:strategyMemorySnapshot.library.content_text,
       outcomeFacts:chunkEvidence.outcomeFacts,
@@ -3161,7 +3588,7 @@ async function generateDailyReview(job, requestModel) {
   // pays for the separate cross-chunk synthesis task.
   const deterministicMerge = mergeDailyReviewV3ChunkContents(chunkContents, outcomeIds)
   if (chunkPlan.chunk_count === 1) {
-    return { content:validateDailyReviewContent(chunkContents[0], outcomeIds, chanContext, {
+    return { content:validateDailyReviewV3Content(chunkContents[0], outcomeIds, chanContext, {
       strategyText:strategyMemorySnapshot.strategy_text,
       memoryText:strategyMemorySnapshot.library.content_text,
       outcomeFacts:modelEvidence.outcomeFacts,
@@ -3203,7 +3630,7 @@ async function generateDailyReview(job, requestModel) {
   const mergeCheckpoint = await loadDailyReviewCheckpoint(mergeTaskIdentity, chunkPlan.plan_hash)
   let mergedOutput
   if (mergeCheckpoint) {
-    mergedOutput = normalizeDailyReviewMergeContent(mergeCheckpoint.content, outcomeIds, chanContext, {
+    mergedOutput = normalizeDailyReviewV3MergeContent(mergeCheckpoint.content, outcomeIds, chanContext, {
       strategyText:strategyMemorySnapshot.strategy_text, memoryText:strategyMemorySnapshot.library.content_text,
     })
     job._modelTracker = null
@@ -3226,6 +3653,11 @@ async function generateDailyReview(job, requestModel) {
     job._modelTracker = mergeTracker
     await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'daily_review', mergeTracker.taskId)
     await mergeTracker.persistBudget(mergeCall.budget)
+    await persistPeriodReviewInputBudget(mergeTracker, mergeCall.budget, {
+      task_role:'merge', chunk_count:chunkPlan.chunk_count, outcome_count:outcomeIds.length,
+      market_digest_version:DAILY_REVIEW_MARKET_DIGEST_VERSION,
+      pre_trade_projection_version:'daily-pre-trade-v2',
+    })
     const mergeSignal = job._abortSignal && mergeTracker.signal
       ? AbortSignal.any([job._abortSignal, mergeTracker.signal])
       : mergeTracker.signal || job._abortSignal || null
@@ -3244,11 +3676,15 @@ async function generateDailyReview(job, requestModel) {
       onProviderActivity:event => mergeTracker.onProviderActivity(event),
       onProviderQuiet:event => mergeTracker.onProviderQuiet(event),
       onProgress:stage => setPeriodReviewJobStage(job, `daily_merge_${stage}`),
-      validateObject:value => normalizeDailyReviewMergeContent(value, outcomeIds, chanContext, {
+      allowFollowupRequests:true,
+      repairContext:{ outputFormat:JSON.stringify(mergeShape),
+        requiredCoverage:{ contract_version:DAILY_REVIEW_V3_CONTRACT, outcome_ids:outcomeIds,
+          chunk_count:chunkPlan.chunk_count } },
+      validateObject:value => normalizeDailyReviewV3MergeContent(value, outcomeIds, chanContext, {
         strategyText:strategyMemorySnapshot.strategy_text, memoryText:strategyMemorySnapshot.library.content_text,
       }),
     })
-    mergedOutput = normalizeDailyReviewMergeContent(mergeOutputRaw, outcomeIds, chanContext, {
+    mergedOutput = normalizeDailyReviewV3MergeContent(mergeOutputRaw, outcomeIds, chanContext, {
       strategyText:strategyMemorySnapshot.strategy_text, memoryText:strategyMemorySnapshot.library.content_text,
     })
     const resultHash = await persistDailyReviewCheckpoint(mergeTracker, { role:'merge', planHash:chunkPlan.plan_hash,
@@ -3267,7 +3703,7 @@ async function generateDailyReview(job, requestModel) {
     ].map(item => [JSON.stringify(item), item])).values()],
     confidence:Math.min(Number(deterministicMerge.confidence), Number(mergedOutput.confidence)),
   }
-  const content = validateDailyReviewContent(mergedContent, outcomeIds, chanContext, {
+  const content = validateDailyReviewV3Content(mergedContent, outcomeIds, chanContext, {
     strategyText:strategyMemorySnapshot.strategy_text,
     memoryText:strategyMemorySnapshot.library.content_text,
     outcomeFacts:modelEvidence.outcomeFacts,

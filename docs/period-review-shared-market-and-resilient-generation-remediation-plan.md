@@ -1,6 +1,6 @@
 # 周期复盘共享行情与可靠生成优化修复方案
 
-> 文档状态：已实施、待发布验证
+> 文档状态：已实施，但虚拟机真实验证未通过；后续修复见 `period-review-post-deployment-second-remediation-plan.md`
 > 基线分支：`dev_codex`
 > 基线提交：`6e711fa4076ade7ee37a9dfced2f5baf3f8e4`
 > 编制日期：2026-08-19
@@ -367,4 +367,4 @@ npm run lint
 4. HTTP 429 使用模型容量熔断时间安排续跑、返还本轮业务尝试，并复用已经成功的分块检查点。
 5. 历史 `model_quota_exhausted` 终态仅在证据完整、没有版本时执行一次幂等恢复；不修改原始交易和复盘版本。
 
-发布后仍需在虚拟机和公网分别核验真实 case 的证据重建、模型配额恢复及最终唯一版本。本地测试不能替代该运行时证据。
+虚拟机部署后的真实验证已完成，结果未通过：旧证据没有及时进入政策升级通道；case 291 虽完成配额恢复和分片断点续跑，但最终因 v3 输出误落旧版 `daily_lessons` 验证路径而失败；单分片仍约 1.27 MB、约 47 万输入 token；case 292 仍保留旧来源身份冲突。详细第二轮修复设计与验收门槛见 `docs/period-review-post-deployment-second-remediation-plan.md`。

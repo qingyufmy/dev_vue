@@ -50,7 +50,7 @@ function loadAutoRuntimeRemainingSeconds() {
 
 function loadPeriodReviewEffectiveStatus() {
   const normalizedApp = app.replace(/\r\n?/g, '\n')
-  const start = normalizedApp.indexOf('function periodReviewEffectiveStatus')
+  const start = normalizedApp.indexOf('const PERIOD_REVIEW_TERMINAL_JOB_STATUSES')
   const end = normalizedApp.indexOf('\n\nfunction renderReviewSummary', start)
   expect(start).toBeGreaterThanOrEqual(0)
   expect(end).toBeGreaterThan(start)

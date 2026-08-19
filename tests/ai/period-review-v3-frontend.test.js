@@ -5,11 +5,11 @@ const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'ut
 const styles = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 
 function loadPeriodReviewContractHelpers() {
-  const start = app.indexOf('function periodReviewContractValues')
+  const start = app.indexOf('const PERIOD_REVIEW_TERMINAL_JOB_STATUSES')
   const end = app.indexOf('function renderReviewSummary', start)
   const source = app.slice(start, end)
   return new Function(`
-    const AI_FRONTEND_BUILD = 'period-review-shared-market1'
+    const AI_FRONTEND_BUILD = 'period-review-second-remediation1'
     const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
     const PERIOD_REVIEW_DAILY_V3_CONTRACT = 'daily-period-review-v3'
     const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -24,7 +24,29 @@ function loadPeriodReviewContractHelpers() {
     const PERIOD_REVIEW_ACTIVE_JOB_STATUSES = new Set(['queued', 'leased', 'status_unknown'])
     const state = { periodReviewRegenerateRequestKeys: new Map() }
     ${source}
-    return { periodReviewV3ContentIsSafe, periodReviewV3LegacyContentIsSafe, periodReviewContractState, periodReviewCanRegenerate, periodReviewRegenerationRequestKey }
+    return { periodReviewV3ContentIsSafe, periodReviewV3LegacyContentIsSafe, periodReviewContractState, periodReviewCanRegenerate, periodReviewRegenerationRequestKey, periodReviewEffectiveStatus, periodReviewJobInProgress, periodReviewStageInfo, periodReviewChunkProgress }
+  `)()
+}
+
+function loadPeriodReviewFailureText() {
+  const start = app.indexOf('function periodReviewFailureText')
+  const end = app.indexOf('function formatReviewEventTime', start)
+  const source = app.slice(start, end)
+  return new Function(`
+    const localizeReason = value => value
+    ${source}
+    return periodReviewFailureText
+  `)()
+}
+
+function loadPeriodReviewEventLabel(role = 'user') {
+  const start = app.indexOf('const PERIOD_REVIEW_TERMINAL_JOB_STATUSES')
+  const end = app.indexOf('function periodReviewProgressHtml', start)
+  const source = app.slice(start, end)
+  return new Function(`
+    const state = { user: { role: '${role}' } }
+    ${source}
+    return periodReviewEventLabel
   `)()
 }
 
@@ -208,5 +230,42 @@ describe('daily period review v3 frontend contract', () => {
     expect(app).toContain('main.scrollHeight - main.clientHeight')
     expect(app).toContain('(prefers-reduced-motion: reduce)')
     expect(styles).toContain('.period-review-section-nav button[aria-current="location"]')
+  })
+
+  it('derives terminal UI state from the job and stops polling stale generating cases', () => {
+    const { periodReviewEffectiveStatus, periodReviewJobInProgress } = loadPeriodReviewContractHelpers()
+    expect(periodReviewEffectiveStatus({ status: 'generating', job_status: 'failed', current_version_id: null })).toBe('failed')
+    expect(periodReviewJobInProgress({ status: 'generating', job_status: 'failed', current_version_id: null })).toBe(false)
+    expect(periodReviewEffectiveStatus({ status: 'generating', job_status: 'succeeded', current_version_id: null })).not.toBe('succeeded')
+    expect(app).toContain('return terminalJobStatus === "succeeded" ? "ready" : terminalJobStatus')
+    expect(app).toContain(': Number(review.current_version_id || 0) > 0 ? "succeeded" : periodReviewEffectiveStatus(review)')
+  })
+
+  it('localizes remediation failures for users and keeps diagnostic codes for admins only', () => {
+    const failureText = loadPeriodReviewFailureText()
+    expect(failureText('period_review_input_budget_exceeded')).toContain('输入容量')
+    expect(failureText('invalid_daily_v3_contract_version')).toContain('格式版本')
+    expect(failureText('evidence_upgrade_failed')).toContain('行情证据')
+    expect(failureText('period_review_input_budget_exceeded')).not.toContain('period_review_input_budget_exceeded')
+
+    const userLabel = loadPeriodReviewEventLabel('user')({ stage: 'preparing', message_code: 'evidence_upgrade_failed' })
+    const adminLabel = loadPeriodReviewEventLabel('admin')({ stage: 'preparing', message_code: 'evidence_upgrade_failed' })
+    expect(userLabel).toContain('行情证据')
+    expect(userLabel).not.toContain('evidence_upgrade_failed')
+    expect(adminLabel).toContain('错误码 evidence_upgrade_failed')
+  })
+
+  it('shows v3 chunk validation and checkpoint recovery without exposing internal payloads', () => {
+    const { periodReviewStageInfo, periodReviewChunkProgress } = loadPeriodReviewContractHelpers()
+    const stageInfo = periodReviewStageInfo({ progress_stage: 'daily_chunk_1_validating' })
+    expect(stageInfo).toMatchObject({ kind: 'daily_chunk', chunkIndex: 1, phase: 'validating' })
+    expect(periodReviewChunkProgress({ job_events: [
+      { metadata: { chunk_count: 3 }, message_code: 'daily_review_checkpoint_restored' },
+    ] }, stageInfo)).toMatchObject({ chunkIndex: 1, chunkCount: 3, checkpointRestored: true })
+    const label = loadPeriodReviewEventLabel('user')({
+      stage: 'daily_chunk_1_validating', message_code: 'daily_review_checkpoint_restored',
+    })
+    expect(label).toContain('已恢复2号分片')
+    expect(label).not.toContain('daily_review_checkpoint_restored')
   })
 })

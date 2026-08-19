@@ -222,7 +222,7 @@ const state = {
 // build separate from the shared cache key in index.html: the server can
 // compare these values without forcing a cache-key change for the other AI
 // entry points.
-const AI_FRONTEND_BUILD = "period-review-shared-market1";
+const AI_FRONTEND_BUILD = "period-review-second-remediation1";
 const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = "period-review-ui-v1";
 const PERIOD_REVIEW_DAILY_V3_CONTRACT = "daily-period-review-v3";
 const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -817,6 +817,20 @@ const REASON_MAP = {
   period_review_regeneration_evidence_incomplete: "复盘证据尚不完整，暂不能重新生成",
   period_review_regeneration_version_missing: "当前复盘版本不存在，请刷新后重试",
   period_review_regeneration_version_conflict: "复盘版本已变化，请刷新后重新操作",
+  period_review_input_budget_exceeded: "本次复盘资料超出模型输入容量，系统已停止本轮生成并保留已完成分片，请稍后重试",
+  invalid_daily_v3_contract_version: "日复盘模型返回的格式版本不兼容，本轮未保存结果，请重新生成",
+  daily_review_checkpoint_identity_conflict: "已完成分片与本轮证据版本不一致，系统已隔离旧分片并重新生成",
+  daily_review_checkpoint_content_missing: "已完成分片缺少可恢复内容，系统将重新生成该分片",
+  daily_review_checkpoint_content_hash_conflict: "已完成分片校验不一致，系统已隔离旧分片并重新生成",
+  daily_review_checkpoint_result_hash_conflict: "已完成分片结果校验不一致，系统已隔离旧分片并重新生成",
+  evidence_upgrade_required: "行情证据规则已升级，系统正在自动重建复盘证据",
+  evidence_upgrade_started: "行情证据正在按当前规则自动重建",
+  evidence_upgrade_succeeded: "行情证据已按当前规则重建，系统将继续生成复盘",
+  evidence_upgrade_failed: "行情证据重建未完成，系统会在后台自动重试",
+  period_review_evidence_upgrade_required: "行情证据规则已升级，系统正在自动重建复盘证据",
+  period_review_evidence_upgrade_started: "行情证据正在按当前规则自动重建",
+  period_review_evidence_upgrade_succeeded: "行情证据已按当前规则重建，系统将继续生成复盘",
+  period_review_evidence_upgrade_failed: "行情证据重建未完成，系统会在后台自动重试",
   manual_trade_review_approved_locked: "复盘已确认，不能再改写或切换确认版本",
   model_task_not_claimable: "复盘任务正在被其他生成流程处理，请稍后刷新",
   model_task_duplicate_terminal: "上一轮复盘任务已有最终结果，请刷新复盘历史",
@@ -1743,6 +1757,15 @@ function localizeReason(reason) {
   if (text === "invalid_global_risk_core_limits") return "单笔手数上限和单笔风险上限必须大于 0";
   if (text.startsWith("Invalid live quote for ")) {
     return `${text.replace("Invalid live quote for ", "")} 报价无效，已阻止下单`;
+  }
+  if (/^(?:period_review_)?evidence_upgrade_(?:required|queued|started|running)/i.test(text)) {
+    return "行情证据规则已升级，系统正在自动重建复盘证据";
+  }
+  if (/^(?:period_review_)?evidence_upgrade_(?:succeeded|complete|completed)/i.test(text)) {
+    return "行情证据已按当前规则重建，系统将继续生成复盘";
+  }
+  if (/^(?:period_review_)?evidence_upgrade_(?:failed|error)/i.test(text)) {
+    return "行情证据重建未完成，系统会在后台自动重试";
   }
   if (/^(?:R\d|PX\.)[A-Z0-9._-]+$/i.test(text)) return "风控条件未满足";
   if (/[A-Za-z]/.test(text) && !/[\u4e00-\u9fff]/.test(text)) return "系统执行条件未满足，详细信息已记录";
@@ -6604,7 +6627,7 @@ function renderExecutionDecisions(rows, pagination = {}) {
   renderPager("executionDecisionPager", state.executionFilters.page, state.executionFilters.pageSize, state.executionFilters.total, "executions");
 }
 
-function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", queued:"已进入队列", preparing:"准备证据", model_request:"AI 分析中", validating:"校验结果", repairing:"修复输出", retry_wait:"等待重试", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", succeeded:"生成完成", deferred:"稍后处理" })[value] || userVisibleText(value, "未知状态"); }
+function reviewStatusLabel(value) { return ({ evidence_pending:"待生成", incomplete:"证据缺失", ready:"待生成", queued:"已进入队列", preparing:"准备证据", model_request:"AI 分析中", validating:"校验结果", repairing:"修复输出", retry_wait:"等待重试", generating:"生成中", draft:"待确认", edited:"已修改", needs_revision:"内容有问题", approved:"已确认", failed:"生成失败", succeeded:"生成完成", skipped:"已跳过", deferred:"稍后处理" })[value] || userVisibleText(value, "未知状态"); }
 
 function reviewFieldStatusLabel(value) {
   return ({
@@ -6621,19 +6644,85 @@ function periodReviewEvidenceReasonText(value) {
     holding_market_path_incomplete:"开仓至平仓的行情路径尚未补齐",
     period_market_incomplete:"当日完整行情与结构证据尚未补齐",
     evidence_rebuild_required:"证据规则已升级，系统正在自动重建",
+    evidence_upgrade_required:"行情证据规则已升级，系统正在自动重建",
+    evidence_upgrade_started:"行情证据正在按当前规则重建",
+    evidence_upgrade_running:"行情证据正在按当前规则重建",
+    evidence_upgrade_succeeded:"行情证据已按当前规则重建，系统将继续生成",
+    evidence_upgrade_failed:"行情证据重建未完成，系统会自动重试",
+    period_review_evidence_upgrade_required:"行情证据规则已升级，系统正在自动重建",
+    period_review_evidence_upgrade_started:"行情证据正在按当前规则重建",
+    period_review_evidence_upgrade_succeeded:"行情证据已按当前规则重建，系统将继续生成",
+    period_review_evidence_upgrade_failed:"行情证据重建未完成，系统会自动重试",
     execution_deals_missing:"成交明细尚未同步完整",
   };
   const parts = String(value || "").split(",").map(item => item.trim()).filter(Boolean);
   if (!parts.length) return "关键证据尚未完整，系统会自动重试";
   return [...new Set(parts.map(item => labels[item]
-    || (/bridge not connected/i.test(item) ? "管理员桥接未连接，暂时无法补齐历史行情" : item)))].join("；");
+    || (/^(?:period_review_)?evidence_upgrade_(?:required|queued|started|running)/i.test(item) ? "行情证据规则已升级，系统正在自动重建"
+      : /^(?:period_review_)?evidence_upgrade_(?:succeeded|complete|completed)/i.test(item) ? "行情证据已按当前规则重建，系统将继续生成"
+        : /^(?:period_review_)?evidence_upgrade_(?:failed|error)/i.test(item) ? "行情证据重建未完成，系统会自动重试"
+          : /bridge not connected/i.test(item) ? "管理员桥接未连接，暂时无法补齐历史行情" : item)))].join("；");
 }
+const PERIOD_REVIEW_TERMINAL_JOB_STATUSES = new Set(["failed", "succeeded", "skipped"]);
+
+function periodReviewTerminalJobStatus(item = {}) {
+  const jobStatus = String(item.job_status || "").toLowerCase();
+  if (PERIOD_REVIEW_TERMINAL_JOB_STATUSES.has(jobStatus)) return jobStatus;
+  const progressStage = String(item.progress_stage || "").toLowerCase();
+  return PERIOD_REVIEW_TERMINAL_JOB_STATUSES.has(progressStage) ? progressStage : "";
+}
+
 function periodReviewEffectiveStatus(item) {
+  const terminalJobStatus = periodReviewTerminalJobStatus(item);
+  // A terminal job without a persisted version must never fall back to the
+  // case's stale "generating" status. That fallback made failed reviews look
+  // permanently active until a full page refresh or a later scheduler pass.
+  if (!Number(item.current_version_id || 0) && terminalJobStatus) {
+    // A succeeded job without a persisted version is an inconsistent state,
+    // not a completed review. Keep it recoverable without showing a false
+    // “已生成” result to the user.
+    return terminalJobStatus === "succeeded" ? "ready" : terminalJobStatus;
+  }
   if (Number(item.current_version_id || 0) > 0) return item.status || "draft";
   if (item.job_status === "leased") return item.progress_stage || "generating";
   if (item.job_status === "queued" && item.next_attempt_at) return "retry_wait";
   if (item.job_status === "queued") return "queued";
   return item.status;
+}
+
+function periodReviewStageInfo(review = {}) {
+  const stage = String(review.progress_stage || review.job_status || periodReviewEffectiveStatus(review) || "").toLowerCase();
+  const dailyChunk = stage.match(/^daily_chunk_(\d+)(?:_(.*))?$/);
+  if (dailyChunk) return { stage, kind:"daily_chunk", chunkIndex:Number(dailyChunk[1]), phase:dailyChunk[2] || "model_request" };
+  const monthlyChunk = stage.match(/^monthly_chunk_(\d+)(?:_(.*))?$/);
+  if (monthlyChunk) return { stage, kind:"monthly_chunk", chunkIndex:Number(monthlyChunk[1]), phase:monthlyChunk[2] || "model_request" };
+  const dailyMerge = stage.match(/^daily_merge_(.*)$/);
+  if (dailyMerge) return { stage, kind:"daily_merge", phase:dailyMerge[1] || "model_request" };
+  const monthlyMerge = stage.match(/^monthly_merge_(.*)$/);
+  if (monthlyMerge) return { stage, kind:"monthly_merge", phase:monthlyMerge[1] || "model_request" };
+  return { stage, kind:"period", phase:stage };
+}
+
+function periodReviewChunkProgress(review = {}, stageInfo = periodReviewStageInfo(review)) {
+  const values = [review, ...(Array.isArray(review.job_events) ? review.job_events : [])];
+  let chunkIndex = Number.isInteger(stageInfo.chunkIndex) ? stageInfo.chunkIndex : null;
+  let chunkCount = null;
+  let checkpointRestored = false;
+  for (const value of values) {
+    const metadata = value?.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata)
+      ? value.metadata : {};
+    const stage = String(value?.stage || "").toLowerCase();
+    const stageMatch = stage.match(/^(?:daily|monthly)_chunk_(\d+)/);
+    const candidateIndex = metadata.chunk_index ?? metadata.chunkIndex ?? metadata.daily_review_chunk_index
+      ?? (stageMatch ? stageMatch[1] : null);
+    if (chunkIndex == null && candidateIndex != null && Number.isInteger(Number(candidateIndex))) chunkIndex = Number(candidateIndex);
+    const candidateCount = metadata.chunk_count ?? metadata.chunkCount ?? metadata.daily_review_chunk_count
+      ?? metadata.monthly_review_chunk_count;
+    if (chunkCount == null && candidateCount != null && Number.isInteger(Number(candidateCount)) && Number(candidateCount) > 0) chunkCount = Number(candidateCount);
+    const code = String(value?.message_code || "").toLowerCase();
+    if (/checkpoint/.test(`${stage} ${code}`) && /(restore|recover|resume|reuse|success|succeed|completed)/.test(`${stage} ${code}`)) checkpointRestored = true;
+  }
+  return { chunkIndex, chunkCount, checkpointRestored };
 }
 
 function periodReviewContractValues(value) {
@@ -6778,6 +6867,7 @@ function periodReviewEditorIsDirty() {
 }
 
 function periodReviewJobInProgress(review = {}) {
+  if (periodReviewTerminalJobStatus(review)) return false;
   return PERIOD_REVIEW_ACTIVE_JOB_STATUSES.has(String(review.job_status || "").toLowerCase())
     || String(review.status || "").toLowerCase() === "generating";
 }
@@ -8083,15 +8173,15 @@ function renderReviewCases() {
   host.innerHTML = items.length ? `${items.map(item => {
     const selected = Number(item.id) === Number(state.selectedReviewId);
     const effectiveStatus = periodReviewEffectiveStatus(item);
-    const icon = item.status === "approved" ? "check" : item.status === "needs_revision" ? "triangle-alert" : item.status === "failed" ? "x" : effectiveStatus === "model_request" ? "sparkles" : "clock-3";
+    const icon = effectiveStatus === "approved" ? "check" : effectiveStatus === "needs_revision" ? "triangle-alert" : effectiveStatus === "failed" ? "x" : effectiveStatus === "succeeded" ? "check" : effectiveStatus === "model_request" ? "sparkles" : "clock-3";
     const stats = item.statistics || {};
     const isMonthly = item.period_type === "monthly";
     const profit = Number(stats.net_profit || 0);
     return `<button class="review-case-button ${selected ? 'selected' : ''} ${Number(item.is_unread) ? 'is-unread' : ''}" data-review-id="${Number(item.id)}" aria-pressed="${selected}" aria-label="打开${isMonthly ? '月' : '日'}复盘 ${escapeHtml(item.period_key)}，${escapeHtml(reviewStatusLabel(effectiveStatus))}">
       <span class="review-unread-dot ${Number(item.is_unread) ? '' : 'hidden'}" aria-label="未读复盘"></span>
-      <span class="review-case-leading ${statusClass(item.status)}"><i data-lucide="${icon}" size="16"></i></span>
+      <span class="review-case-leading ${statusClass(effectiveStatus)}"><i data-lucide="${icon}" size="16"></i></span>
       <span class="review-case-main">
-        <span class="review-case-head"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="status-chip ${statusClass(item.status)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
+        <span class="review-case-head"><strong>${isMonthly ? '月复盘' : '日复盘'} · ${escapeHtml(item.period_key)}</strong><span class="status-chip ${statusClass(effectiveStatus)}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span></span>
         <span class="review-case-strategy">${escapeHtml(item.strategy_title || `策略 #${item.strategy_id}`)}</span>
         <span class="review-case-metrics"><span><small>${isMonthly ? '交易日' : '交易数量'}</small><strong>${isMonthly ? Number(stats.trading_days || 0) : Number(stats.trade_count || item.source_count || 0)}${isMonthly ? ' 天' : ' 笔'}</strong></span><span><small>净收益</small><strong class="${profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''}">${fmt(profit, 2)}</strong></span></span>
       </span>
@@ -8171,6 +8261,27 @@ function periodReviewArray(value) {
 function periodReviewLines(value) { return periodReviewArray(value).join("\n"); }
 function periodReviewFailureText(value) {
   const text = String(value || "");
+  if (/period_review_input_budget_exceeded|daily_review_input_budget_exceeded|model_input_budget_exceeded/i.test(text)) {
+    return "本次复盘资料超出模型输入容量，系统已停止本轮生成并保留已完成分片，请稍后重试";
+  }
+  if (/invalid_daily_v3_contract_version/i.test(text)) {
+    return "日复盘模型返回的格式版本不兼容，本轮未保存结果，请重新生成";
+  }
+  if (/evidence_upgrade_(?:required|queued|started|running)/i.test(text)) {
+    return "行情证据规则已升级，系统正在自动重建复盘证据";
+  }
+  if (/evidence_upgrade_(?:succeeded|complete|completed)/i.test(text)) {
+    return "行情证据已按当前规则重建，系统将继续生成复盘";
+  }
+  if (/evidence_upgrade_(?:failed|error)/i.test(text)) {
+    return "行情证据重建未完成，系统会在后台自动重试";
+  }
+  if (/daily_review_checkpoint_(?:identity_conflict|content_missing|content_hash_conflict|result_hash_conflict)/i.test(text)) {
+    return "已完成分片校验不一致，系统已隔离旧分片并重新生成";
+  }
+  if (/invalid_daily_v3_|daily_v3_/i.test(text)) {
+    return "日复盘输出未通过新版格式校验，系统会在当前分片进行一次定向修复；若最终失败，请重新生成";
+  }
   if (/model_quota_exhausted|model_quota_probe_in_progress/i.test(text)) return "模型服务容量暂时不足，系统会在额度恢复后自动续跑未完成的分块";
   if (/HTTP 429|rate.?limit/i.test(text)) return "模型服务当前请求过多，请稍后重试";
   if (/response content is empty|repair response content is empty/i.test(text)) return "模型已响应，但没有返回可用的复盘内容";
@@ -8205,10 +8316,51 @@ function terminalTimezoneLabel(offsetMinutes) {
   return `UTC${offset >= 0 ? "+" : ""}${fmt(offset / 60, 1)}`;
 }
 
-function periodReviewEventLabel(event) {
+function periodReviewPhaseLabel(phase, { kind = "period", chunkIndex = null } = {}) {
+  const suffix = Number.isInteger(chunkIndex) ? `第 ${chunkIndex + 1} 个分片` : "本轮复盘";
+  const labels = {
+    queued: kind === "daily_chunk" || kind === "monthly_chunk" ? `${suffix}已进入队列` : "已进入生成队列",
+    preparing: kind === "daily_chunk" || kind === "monthly_chunk" ? `正在准备${suffix}` : "正在准备复盘证据",
+    model_request: kind === "daily_chunk" || kind === "monthly_chunk" ? `正在分析${suffix}` : "AI 开始分析",
+    response_received: kind === "daily_chunk" || kind === "monthly_chunk" ? `${suffix}已收到模型结果` : "已收到模型结果",
+    validating: kind === "daily_chunk" || kind === "monthly_chunk" ? `正在校验${suffix}` : "正在校验模型结果",
+    repairing: kind === "daily_chunk" || kind === "monthly_chunk" ? `正在修复${suffix}的输出` : "正在修复输出格式",
+    result_ready: kind === "daily_chunk" || kind === "monthly_chunk" ? `${suffix}已校验完成` : "复盘结果已校验",
+    applying: kind === "daily_chunk" || kind === "monthly_chunk" ? `正在保存${suffix}` : "正在保存复盘结果",
+    succeeded: kind === "daily_chunk" || kind === "monthly_chunk" ? `${suffix}已完成` : "复盘生成完成",
+    retry_wait: kind === "daily_chunk" || kind === "monthly_chunk" ? `${suffix}等待自动重试` : "本次生成未完成，等待自动重试",
+    failed: kind === "daily_chunk" || kind === "monthly_chunk" ? `${suffix}生成失败` : "复盘生成失败",
+    status_unknown: "模型服务状态暂时无法确认，正在安全恢复",
+  };
+  return labels[phase] || (kind === "daily_merge" ? "正在合并已完成分片" : kind === "monthly_merge" ? "正在合并月复盘分片" : "复盘正在处理");
+}
+
+function periodReviewEventLabelBase(event = {}) {
+  const stage = String(event.stage || "").toLowerCase();
+  const messageCode = String(event.message_code || "").toLowerCase();
+  const stageInfo = periodReviewStageInfo({ progress_stage:stage });
+  if (stageInfo.kind === "daily_chunk" || stageInfo.kind === "monthly_chunk" || stageInfo.kind === "daily_merge" || stageInfo.kind === "monthly_merge") {
+    if (/checkpoint/.test(`${stage} ${messageCode}`) && /(restore|recover|resume|reuse|success|succeed|completed)/.test(`${stage} ${messageCode}`)) {
+      return stageInfo.kind.endsWith("chunk") ? `已恢复${Number(stageInfo.chunkIndex) + 1}号分片，继续未完成部分` : "已恢复复盘检查点，继续未完成部分";
+    }
+    return periodReviewPhaseLabel(stageInfo.phase, stageInfo);
+  }
+  if (/evidence_upgrade_(?:required|queued|started|running)/i.test(stage) || /evidence_upgrade_(?:required|queued|started|running)/i.test(messageCode)) return "行情证据规则已升级，正在自动重建";
+  if (/evidence_upgrade_(?:succeeded|complete|completed)/i.test(stage) || /evidence_upgrade_(?:succeeded|complete|completed)/i.test(messageCode)) return "行情证据已重建，继续生成复盘";
+  if (/evidence_upgrade_(?:failed|error)/i.test(stage) || /evidence_upgrade_(?:failed|error)/i.test(messageCode)) return "行情证据重建未完成，等待自动重试";
   const labels = { queued:"已进入生成队列", preparing:"正在准备复盘证据", model_request:"AI 开始分析", validating:"正在校验模型结果",
-    repairing:"正在修复输出格式", retry_wait:"本次生成未完成，等待自动重试", succeeded:"复盘生成完成", failed:"复盘生成失败" };
-  return labels[event.stage] || reviewStatusLabel(event.stage);
+    repairing:"正在修复输出格式", retry_wait:"本次生成未完成，等待自动重试", succeeded:"复盘生成完成", failed:"复盘生成失败",
+    skipped:"本次复盘已跳过", status_unknown:"模型服务状态暂时无法确认，正在安全恢复" };
+  if (labels[stage]) return labels[stage];
+  if (/checkpoint/.test(`${stage} ${messageCode}`) && /(restore|recover|resume|reuse|success|succeed|completed)/.test(`${stage} ${messageCode}`)) return "已恢复已完成分片，继续未完成部分";
+  return "复盘正在处理";
+}
+
+function periodReviewEventLabel(event = {}) {
+  const label = periodReviewEventLabelBase(event);
+  return state.user?.role === "admin" && event.message_code
+    ? `${label} · 错误码 ${String(event.message_code)}`
+    : label;
 }
 
 function periodReviewProgressHtml(review) {
@@ -8221,15 +8373,29 @@ function periodReviewProgressHtml(review) {
   const stage = activeJob
     ? (review.progress_stage || review.job_status || "generating")
     : Number(review.current_version_id || 0) > 0 ? "succeeded" : periodReviewEffectiveStatus(review);
+  const stageInfo = periodReviewStageInfo({ progress_stage:stage, job_status:review.job_status, status:review.status });
+  const chunkProgress = periodReviewChunkProgress(review, stageInfo);
+  const phase = stageInfo.phase;
   const stages = ["preparing", "model_request", "validating", "succeeded"];
-  const stageIndex = stage === "queued" || stage === "retry_wait" ? 0 : stage === "repairing" ? 2 : Math.max(0, stages.indexOf(stage));
-  const terminal = ["succeeded", "failed"].includes(stage) || ["draft", "edited", "approved"].includes(review.status);
+  const stageIndex = stageInfo.kind === "daily_chunk" || stageInfo.kind === "monthly_chunk" || stageInfo.kind === "daily_merge" || stageInfo.kind === "monthly_merge"
+    ? phase === "queued" || phase === "retry_wait" ? 0 : ["model_request", "response_received"].includes(phase) ? 1 : ["validating", "repairing"].includes(phase) ? 2 : ["result_ready", "applying", "succeeded"].includes(phase) ? 3 : 0
+    : stage === "queued" || stage === "retry_wait" ? 0 : stage === "repairing" ? 2 : Math.max(0, stages.indexOf(stage));
+  const terminal = ["succeeded", "failed", "skipped"].includes(stage) || ["draft", "edited", "approved"].includes(review.status);
   const nextMs = review.next_attempt_at ? Date.parse(String(review.next_attempt_at).replace(" ", "T")) : NaN;
   const retrySeconds = Number.isFinite(nextMs) ? Math.max(0, Math.ceil((nextMs - Date.now()) / 1000)) : null;
-  const capacityWait = stage === "retry_wait" && /model_quota_exhausted|model_quota_probe_in_progress/i.test(String(review.last_error_code || ""));
-  const title = capacityWait ? "模型容量等待中" : stage === "retry_wait" ? "等待自动重试" : stage === "failed" ? "复盘生成失败" : stage === "succeeded" ? "复盘已生成" : "正在生成复盘";
-  const detail = stage === "retry_wait" && retrySeconds != null
-    ? `${capacityWait ? "预计" : ""}${retrySeconds} 秒后自动继续` : capacityWait ? "额度恢复后自动续跑未完成分块" : reviewStatusLabel(stage);
+  const capacityWait = (stage === "retry_wait" || phase === "retry_wait") && /model_quota_exhausted|model_quota_probe_in_progress/i.test(String(review.last_error_code || ""));
+  const evidenceUpgrade = /^(?:period_review_)?evidence_upgrade_(?:required|queued|started|running|succeeded|complete|completed|failed|error)$/i.test(String(review.last_error_code || ""))
+    || /^(?:period_review_)?evidence_upgrade_(?:required|queued|started|running|succeeded|complete|completed|failed|error)$/i.test(String(stage));
+  const chunkTitle = (stageInfo.kind === "daily_chunk" || stageInfo.kind === "monthly_chunk") && Number.isInteger(chunkProgress.chunkIndex)
+    ? `${stageInfo.kind === "monthly_chunk" ? "月复盘" : "日复盘"}第 ${chunkProgress.chunkIndex + 1}${Number.isInteger(chunkProgress.chunkCount) ? `/${chunkProgress.chunkCount}` : ""} 个分片`
+    : stageInfo.kind === "daily_merge" ? "正在合并日复盘分片" : stageInfo.kind === "monthly_merge" ? "正在合并月复盘分片" : "";
+  const title = evidenceUpgrade ? "正在升级复盘证据" : capacityWait ? "模型容量等待中" : stage === "retry_wait" ? "等待自动重试" : stage === "failed" ? "复盘生成失败" : stage === "skipped" ? "复盘未生成" : stage === "succeeded" ? "复盘已生成" : chunkTitle || "正在生成复盘";
+  const phaseDetail = stageInfo.kind === "daily_chunk" || stageInfo.kind === "monthly_chunk" || stageInfo.kind === "daily_merge" || stageInfo.kind === "monthly_merge"
+    ? periodReviewPhaseLabel(phase, stageInfo) : reviewStatusLabel(stage);
+  let detail = stage === "retry_wait" && retrySeconds != null
+    ? `${capacityWait ? "预计" : ""}${retrySeconds} 秒后自动继续` : capacityWait ? "额度恢复后自动续跑未完成分块" : stage === "failed" ? periodReviewFailureText(review.last_error_code) : evidenceUpgrade ? periodReviewFailureText(review.last_error_code || stage) : phaseDetail;
+  if (chunkProgress.checkpointRestored) detail += " · 已恢复检查点";
+  if (state.user?.role === "admin" && review.last_error_code) detail += ` · 管理员错误码：${String(review.last_error_code)}`;
   const events = (review.job_events || []).slice(0, 8);
   return `<section id="periodReviewProgress" class="period-review-progress is-${escapeHtml(stage)}" aria-live="polite">
     <header><div><span class="review-section-kicker">生成状态</span><h3>${escapeHtml(title)}</h3></div><span class="period-review-attempt">业务生成 ${Number(review.attempt_count || 0)}/${Number(review.max_attempts || 3)}</span></header>
@@ -8476,7 +8642,8 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
   const stats = evidence.statistics || {};
   const quality = evidence.source_quality || {};
   const isMonthly = review.period_type === "monthly";
-  const statusClass = review.status === "approved" ? "success" : ["failed", "incomplete", "needs_revision"].includes(review.status) ? "danger" : "warning";
+  const effectiveStatus = periodReviewEffectiveStatus(review);
+  const statusClass = effectiveStatus === "approved" ? "success" : ["failed", "incomplete", "needs_revision"].includes(effectiveStatus) ? "danger" : "warning";
   const profit = Number(stats.net_profit || 0);
   const confidence = Number(content.confidence);
   const confidencePercent = Number.isFinite(confidence) ? Math.round(confidence * 100) : 0;
@@ -8521,7 +8688,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
     || Number(state.selectedReviewId) !== requestedId) return null;
   detail.innerHTML = `<button class="review-mobile-back" type="button" data-review-action="back-list"><i data-lucide="arrow-left" size="16"></i>返回复盘列表</button><header class="period-review-detail-header">
       <div><span class="period-review-type ${isMonthly ? 'monthly' : 'daily'}"><i data-lucide="${isMonthly ? 'calendar-range' : 'calendar-days'}" size="14"></i>${isMonthly ? '月复盘' : '日复盘'}</span><h2>${escapeHtml(review.period_key || '--')}</h2><p>${escapeHtml(review.strategy_title || `策略 #${review.strategy_id}`)} · ${escapeHtml(strategyProvenance)}</p><p class="period-review-period-scope"><i data-lucide="clock-3" size="13"></i>${escapeHtml(periodScope)}</p></div>
-      <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(review.status))}</span>${canRegenerate ? `<button class="btn btn-secondary btn-sm" data-review-action="regenerate" data-version-id="${Number(current.id)}"><i data-lucide="sparkles" size="14"></i>重新生成</button>` : ''}${review.status === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
+      <div class="period-review-header-state"><span class="status-chip ${statusClass}">${escapeHtml(reviewStatusLabel(effectiveStatus))}</span>${canRegenerate ? `<button class="btn btn-secondary btn-sm" data-review-action="regenerate" data-version-id="${Number(current.id)}"><i data-lucide="sparkles" size="14"></i>重新生成</button>` : ''}${effectiveStatus === 'failed' ? '<button class="btn btn-secondary btn-sm" data-review-action="retry"><i data-lucide="rotate-cw" size="14"></i>重试生成</button>' : ''}</div>
     </header>
     ${periodReviewProgressHtml(review)}
     <section class="period-review-metrics" aria-label="周期统计">
@@ -8540,7 +8707,7 @@ async function openPeriodReviewDetail(id, { silent = false } = {}) {
       <div class="period-review-decision-row"><label class="review-field"><span>决策质量</span><select data-period-review-field="decision_quality" ${editable ? '' : 'disabled'}>${Object.entries(periodDecisionLabels).map(([value,label]) => `<option value="${value}" ${content.decision_quality === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="review-field"><span>结论置信度</span><div class="confidence-input"><input data-period-review-field="confidence" type="number" min="0" max="1" step="0.05" value="${escapeHtml(content.confidence ?? 0.5)}" ${editable ? '' : 'disabled'}><small>0 到 1</small></div></label></div>
       <div class="period-review-edit-grid">${editableGroups.map(([key,label]) => `<label class="review-field"><span>${label}</span><textarea data-period-review-field="${key}" data-field-type="lines" rows="4" ${editable ? '' : 'disabled'}>${escapeHtml(periodReviewLines(content[key]))}</textarea><small>每行一条，保持简短且可执行</small></label>`).join('')}</div>
       <textarea id="reviewContentEditor" hidden>${escapeHtml(JSON.stringify(content))}</textarea>
-    </section>` : `<div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="${review.status === 'failed' ? 'circle-alert' : 'loader-circle'}" size="20"></i></span><strong>${review.status === 'failed' ? '复盘生成失败' : '复盘正在准备'}</strong><span>${escapeHtml(review.status === 'failed' ? periodReviewFailureText(review.last_error_code) : periodReviewEvidenceReasonText(review.evidence_reason))}</span></div>`}
+    </section>` : `<div class="review-empty-state empty-state"><span class="review-empty-icon"><i data-lucide="${effectiveStatus === 'failed' ? 'circle-alert' : 'loader-circle'}" size="20"></i></span><strong>${effectiveStatus === 'failed' ? '复盘生成失败' : '复盘正在准备'}</strong><span>${escapeHtml(effectiveStatus === 'failed' ? periodReviewFailureText(review.last_error_code) : periodReviewEvidenceReasonText(review.evidence_reason))}</span></div>`}
     ${current && isDailyV3 ? renderDailyV3TradeAssessments(assessments, editable, evidence.sources || []) : ''}
     ${current && isDailyV3 ? `<section id="period-review-findings" class="period-review-findings-group"><h3 class="sr-only">归纳结论</h3>${renderDailyV3Findings("repeated_issues", "重复出现的问题", content.repeated_issues, editable)}${renderDailyV3Findings("strengths", "稳定有效的做法", content.strengths, editable)}</section>` : ''}
     ${current && isDailyV3 ? renderDailyV3ExperienceRules(content.experience_rules || [], editable) : ''}
