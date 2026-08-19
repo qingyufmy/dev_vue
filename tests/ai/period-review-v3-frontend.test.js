@@ -9,7 +9,7 @@ function loadPeriodReviewContractHelpers() {
   const end = app.indexOf('function renderReviewSummary', start)
   const source = app.slice(start, end)
   return new Function(`
-    const AI_FRONTEND_BUILD = 'period-review-second-remediation1'
+    const AI_FRONTEND_BUILD = 'period-review-evidence-retry1'
     const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
     const PERIOD_REVIEW_DAILY_V3_CONTRACT = 'daily-period-review-v3'
     const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -241,11 +241,25 @@ describe('daily period review v3 frontend contract', () => {
     expect(app).toContain(': Number(review.current_version_id || 0) > 0 ? "succeeded" : periodReviewEffectiveStatus(review)')
   })
 
+  it('presents recoverable market evidence as a scheduled wait instead of a terminal failure', () => {
+    const { periodReviewEffectiveStatus, periodReviewJobInProgress } = loadPeriodReviewContractHelpers()
+    const review = { status:'ready', job_status:'queued', progress_stage:'evidence_retry_wait',
+      next_attempt_at:'2026-08-19 11:25:00', current_version_id:null }
+    expect(periodReviewEffectiveStatus(review)).toBe('evidence_retry_wait')
+    expect(periodReviewJobInProgress(review)).toBe(true)
+    expect(app).toContain('等待行情恢复')
+    expect(app).toContain('periodReviewRetryTimeText(review.next_attempt_at)')
+    expect(app).toContain('evidence_retry_count')
+    expect(app).toContain('retryAtMs - Date.now() > 60000 ? 30000 : 5000')
+    expect(styles).toContain('.period-review-progress.is-evidence_retry_wait')
+  })
+
   it('localizes remediation failures for users and keeps diagnostic codes for admins only', () => {
     const failureText = loadPeriodReviewFailureText()
     expect(failureText('period_review_input_budget_exceeded')).toContain('输入容量')
     expect(failureText('invalid_daily_v3_contract_version')).toContain('格式版本')
     expect(failureText('evidence_upgrade_failed')).toContain('行情证据')
+    expect(failureText('period_market_bridge_unavailable')).toContain('自动继续')
     expect(failureText('period_review_input_budget_exceeded')).not.toContain('period_review_input_budget_exceeded')
 
     const userLabel = loadPeriodReviewEventLabel('user')({ stage: 'preparing', message_code: 'evidence_upgrade_failed' })

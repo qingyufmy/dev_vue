@@ -727,6 +727,9 @@ button {
 .period-review-live-line.danger { color: #fda4af; }
 .period-review-live-line.danger .period-review-live-dot { background: #fb7185; }
 .period-review-inline-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 9px; padding: 9px 10px; border-radius: 8px; color: #fda4af; background: rgba(244,63,94,.07); font-size: 11px; line-height: 1.5; }
+.period-review-progress.is-evidence_retry_wait { border-color: rgba(56,189,248,.26); background: linear-gradient(120deg,rgba(14,165,233,.07),rgba(15,24,39,.76)); }
+.period-review-progress.is-evidence_retry_wait .period-review-live-dot { background: #38bdf8; }
+.period-review-inline-error.is-waiting { color: #bae6fd; background: rgba(14,165,233,.08); }
 .period-review-log { margin-top: 10px; border-top: 1px solid rgba(148,163,184,.11); }
 .period-review-log summary { display: flex; align-items: center; gap: 6px; padding-top: 10px; color: var(--text-secondary); font-size: 11px; cursor: pointer; }
 .period-review-log summary span { min-width: 18px; padding: 1px 5px; border-radius: 999px; color: var(--text-muted); background: rgba(148,163,184,.09); text-align: center; }

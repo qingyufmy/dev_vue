@@ -2330,6 +2330,8 @@ const migrations = [
         model_profile_id INT DEFAULT NULL,
         credential_source VARCHAR(32) DEFAULT NULL,
         last_error_code VARCHAR(128) DEFAULT NULL,
+        evidence_retry_count INT NOT NULL DEFAULT 0,
+        evidence_last_checked_at DATETIME DEFAULT NULL,
         created_at DATETIME NOT NULL,
         updated_at DATETIME NOT NULL,
         completed_at DATETIME DEFAULT NULL,
@@ -6713,6 +6715,59 @@ const migrations = [
       if (String(rows[0].DATA_TYPE || '').toLowerCase() !== 'longtext') {
         await queryRun('ALTER TABLE ai_model_task_events MODIFY COLUMN payload_json LONGTEXT DEFAULT NULL')
       }
+    }
+  },
+  {
+    id: '197_period_review_evidence_retry_state',
+    async up() {
+      const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_jobs'
+          AND COLUMN_NAME IN ('evidence_retry_count', 'evidence_last_checked_at')`)
+      const existing = new Set(rows.map(row => String(row.COLUMN_NAME)))
+      if (!existing.has('evidence_retry_count')) {
+        await queryRun('ALTER TABLE period_review_jobs ADD COLUMN evidence_retry_count INT NOT NULL DEFAULT 0 AFTER last_error_code')
+      }
+      if (!existing.has('evidence_last_checked_at')) {
+        await queryRun('ALTER TABLE period_review_jobs ADD COLUMN evidence_last_checked_at DATETIME DEFAULT NULL AFTER evidence_retry_count')
+      }
+      const retryIndexes = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'period_review_jobs'
+          AND INDEX_NAME = 'idx_period_review_job_retry_due'`)
+      if (!retryIndexes.length) {
+        await queryRun('CREATE INDEX idx_period_review_job_retry_due ON period_review_jobs (job_type, status, next_attempt_at, period_case_id)')
+      }
+      // This is intentionally a narrow, idempotent compatibility repair. Only
+      // versionless daily cases that were skipped while market evidence was
+      // incomplete are restored. Disabled generation, status-unknown and any
+      // leased/provider-owned state remain untouched for manual handling.
+      await queryRun(`UPDATE period_review_jobs jobs
+        JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+        SET jobs.status = 'queued', jobs.progress_stage = 'evidence_retry_wait',
+          jobs.last_error_code = 'period_market_incomplete', jobs.next_attempt_at = NOW(),
+          jobs.completed_at = NULL, jobs.lease_token = NULL, jobs.lease_expires_at = NULL,
+          jobs.model_task_id = NULL, jobs.updated_at = NOW()
+        WHERE jobs.job_type = 'daily_review' AND jobs.job_slot = 0 AND jobs.status = 'skipped'
+          AND jobs.lease_token IS NULL
+          AND (jobs.last_error_code IS NULL OR jobs.last_error_code IN
+            ('period_market_incomplete', 'period_market_source_unavailable', 'period_market_candles_unavailable',
+             'period_market_endpoint_incomplete', 'period_market_internal_gap', 'platform_market_source_unavailable',
+             'bridge_not_connected', 'bridge_history_terminal_clock_unavailable', 'rates_gap_refill_failed',
+             'market_session_policy_unavailable'))
+          AND cases.current_version_id IS NULL AND cases.evidence_status <> 'complete'
+          AND cases.evidence_reason LIKE '%period_market%'
+          AND cases.evidence_reason NOT LIKE '%inference_snapshot_incomplete%'
+          AND cases.evidence_reason NOT LIKE '%historical_prompt_missing%'
+          AND cases.evidence_reason NOT LIKE '%unauthorized%'
+          AND cases.evidence_reason NOT LIKE '%identity%'
+          AND cases.evidence_reason NOT LIKE '%invalid%'
+          AND cases.evidence_reason NOT LIKE '%conflict%'
+          AND cases.evidence_reason NOT LIKE '%contract%'
+          AND cases.evidence_reason NOT LIKE '%scope_missing%'
+          AND cases.evidence_reason NOT LIKE '%unsupported%'
+          AND cases.evidence_reason NOT LIKE '%unknown%'
+          AND cases.evidence_reason NOT LIKE '%permission%'
+          AND cases.evidence_reason NOT LIKE '%authorization%'
+          AND cases.evidence_reason NOT LIKE '%changed%'`)
     }
   }
 ]

@@ -29,7 +29,8 @@ describe('frontend static cache version', () => {
     const source = await readFile('public/ai/index.html', 'utf8')
     const appReference = source.match(/\/ai\/app\.js\?[^"']+/)?.[0] || ''
     expect(appReference).toContain(`v=${CACHE_VERSION}`)
-    expect(appReference).toMatch(/build=[^"']*period-review-second-remediation1/)
+    expect(appReference).toMatch(/build=[^"']*period-review-evidence-retry1/)
+    expect(source).toMatch(/styles\.css[^"']*period-review-evidence-retry1/)
     expect(appReference).toContain('pending-fill-ticket-binding1')
     expect(appReference).toContain('rev=period-review-compact1-period-review-nav1')
     expect(appReference).not.toContain('styles.css')

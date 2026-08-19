@@ -801,6 +801,30 @@ describe('daily review preparation candidates', () => {
     expect(new Set(plan.chunks.flatMap(chunk => chunk.outcome_ids)).size).toBe(3)
   })
 
+  it('packs daily chunks by the measured final request budget and binds the shared context hash', () => {
+    const evidence = { sources:Array.from({ length:5 }, (_, index) => ({ outcome_id:index + 1, evidence_hash:`h${index + 1}` })) }
+    const options = { maxOutcomes:20, maxBytes:100000, maxRequestBytes:2500, maxInputTokens:100000,
+      measureChunk:sources => ({ requestBytes:sources.length * 1000, estimatedInputTokens:sources.length * 100 }) }
+    const first = buildDailyReviewChunkPlan(evidence, { ...options, contextHash:'context-a' })
+    const second = buildDailyReviewChunkPlan(evidence, { ...options, contextHash:'context-b' })
+    expect(first.chunks.map(chunk => chunk.outcome_ids)).toEqual([[1, 2], [3, 4], [5]])
+    expect(first.chunks.map(chunk => chunk.planned_request_bytes)).toEqual([2000, 2000, 1000])
+    expect(first.plan_hash).not.toBe(second.plan_hash)
+    expect(first.context_hash).toBe('context-a')
+  })
+
+  it('sends current strategy and memory only to the period-level merge task', () => {
+    const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    const chunkBuilder = source.slice(source.indexOf('function dailyReviewChunkMessages'), source.indexOf('async function generateDailyReview'))
+    const mergeBuilder = source.slice(source.indexOf('const mergeMessages = ['), source.indexOf('const mergeCall ='))
+    expect(chunkBuilder).not.toContain('current_optimization_context')
+    expect(mergeBuilder).toContain('current_optimization_context:modelEvidence.current_optimization_context')
+    expect(source).toContain('experience_rules:[]')
+    expect(source).toContain('strategy_conflicts:[]')
+    expect(source).toContain("throw new Error('daily_review_chunk_optimization_scope_invalid')")
+    expect(source.match(/validateDailyReviewChunkContent\(/g)?.length).toBeGreaterThanOrEqual(4)
+  })
+
   it('projects a compact model-facing market digest without raw daily candles or account identity', () => {
     const digest = compactDailyReviewPeriodMarket({ schema_version:3, status:'complete', source_policy_version:'shared-canonical-v1',
       symbols:{ XAUUSD:{ H1:{ status:'complete', candle_count:24, expected_candle_count:24,
@@ -1387,7 +1411,7 @@ describe('period review frontend contract handshake', () => {
 
   it('publishes UI metadata separately from supported model output contracts', () => {
     expect(PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION).toBe('period-review-ui-v1')
-    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-second-remediation1')
+    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-evidence-retry1')
     expect(PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS).toEqual(expect.arrayContaining([
       'daily-period-review-v3', 'daily-period-review-v1', 'daily-period-review-v2',
       'period-review-v1', 'period-review-v2',
@@ -1396,18 +1420,18 @@ describe('period review frontend contract handshake', () => {
     expect(periodReviewFrontendMetadata()).toEqual({
       frontend_contract_version:'period-review-ui-v1',
       period_review_contracts:[...PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS],
-      ai_frontend_build:'period-review-second-remediation1',
+      ai_frontend_build:'period-review-evidence-retry1',
     })
   })
 
   it('fails closed for missing or stale UI build/contract headers', () => {
     expect(periodReviewFrontendContractMismatch({})).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-second-remediation1',
+      'X-Aurum-AI-Frontend-Build':'period-review-evidence-retry1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
     })).toBe(false)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-second-remediation1',
+      'X-Aurum-AI-Frontend-Build':'period-review-evidence-retry1',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
@@ -1419,7 +1443,7 @@ describe('period review frontend contract handshake', () => {
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v0',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-second-remediation1',
+      'X-Aurum-AI-Frontend-Build':'period-review-evidence-retry1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
       'X-Aurum-Period-Review-Contracts':'daily-period-review-v2',
     })).toBe(false)

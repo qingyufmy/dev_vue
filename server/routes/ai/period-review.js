@@ -48,6 +48,27 @@ const MONTHLY_CREATION_WINDOW_END_MINUTES = 360
 const DAILY_COMPLETE_RECHECK_MS = 15 * 60 * 1000
 const DAILY_INCOMPLETE_RECHECK_MS = 60 * 60 * 1000
 const DAILY_SETTLE_MS = 24 * 60 * 60 * 1000
+// Evidence collection can be temporarily unavailable while the Bridge or its
+// market source reconnects.  These retries are deliberately separate from the
+// model-generation attempt counter: no provider task is created while the
+// case is waiting for market evidence.
+export const DAILY_EVIDENCE_RETRY_DELAYS_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000]
+const DAILY_EVIDENCE_RETRY_MAX_DELAY_MS = DAILY_EVIDENCE_RETRY_DELAYS_MS.at(-1)
+const DAILY_EVIDENCE_RETRY_STAGE = 'evidence_retry_wait'
+const DAILY_EVIDENCE_RETRY_ERROR = 'period_market_incomplete'
+const DAILY_EVIDENCE_RETRY_DISABLED_ERROR = 'review_generation_disabled'
+const DAILY_EVIDENCE_RETRY_TERMINAL_STATES = new Set(['leased', 'status_unknown', 'succeeded', 'failed'])
+const DAILY_EVIDENCE_RETRY_MARKET_REASONS = new Set([
+  'period_market_incomplete', 'period_market_source_unavailable', 'period_market_candles_unavailable',
+  'period_market_endpoint_incomplete', 'period_market_internal_gap', 'platform_market_source_unavailable',
+  'bridge_not_connected', 'bridge_history_terminal_clock_unavailable', 'rates_gap_refill_failed',
+  'market_session_policy_unavailable',
+])
+// The maintenance query below cannot call the JS classifier. Keep its legacy
+// recovery lane to exact, reviewed reason/error codes instead of a broad LIKE
+// match that could resurrect an identity, contract, or terminal evidence case.
+const DAILY_EVIDENCE_RETRY_SQL_ALLOWLIST = [...DAILY_EVIDENCE_RETRY_MARKET_REASONS]
+  .map(value => `'${value}'`).join(', ')
 // Evidence is produced by several asynchronous collectors.  Do not rebuild a
 // user-visible review while one of those collectors is still changing the
 // snapshot; a single quiet window is enough to debounce the settled-period
@@ -438,7 +459,7 @@ export function periodReviewProviderRequestCallback(job, tracker) {
   }
 }
 
-export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], asOfUtcMs = Date.now()) {
+export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], asOfUtcMs = Date.now(), existingJob = null) {
   if (!reviewCase) return { refresh:true, reason:'new_case' }
   if (!samePeriodOutcomeSet(group?.outcomes || [], sources)) return { refresh:true, reason:'outcome_set_changed' }
   // User approval freezes the evidence snapshot that produced the published
@@ -461,6 +482,13 @@ export function shouldRefreshDailyReviewCase(reviewCase, group, sources = [], as
   }
   if (reviewCase.evidence_status !== 'complete') {
     if (isTerminalTradeEvidenceReason(reviewCase.evidence_reason)) return { refresh:false, reason:'terminal_evidence_incomplete' }
+    if (isRecoverableDailyEvidenceJob(existingJob, reviewCase)) {
+      const nextAttemptAtUtcMs = beijingDateTimeMs(existingJob.next_attempt_at)
+      if (!nextAttemptAtUtcMs || Number(asOfUtcMs) >= nextAttemptAtUtcMs) {
+        return { refresh:true, reason:'evidence_retry_due' }
+      }
+      return { refresh:false, reason:'evidence_retry_wait', next_attempt_at:existingJob.next_attempt_at }
+    }
     return { refresh:elapsed >= DAILY_INCOMPLETE_RECHECK_MS, reason:elapsed >= DAILY_INCOMPLETE_RECHECK_MS ? 'incomplete_recheck_due' : 'incomplete_recheck_wait' }
   }
   if (!reviewCase.current_version_id) return { refresh:true, reason:'draft_missing' }
@@ -527,13 +555,15 @@ export async function refreshPeriodReviewJobForEvidence(run, {
   const result = !preserveError && !targetStatus
     ? await run(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL,
         status = 'queued', progress_stage = 'queued', stage_updated_at = ?, attempt_count = 0,
-        last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+        last_error_code = NULL, evidence_retry_count = 0, evidence_last_checked_at = NULL,
+        lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
         completed_at = NULL, updated_at = ?
         WHERE period_case_id = ? AND job_type = ? AND job_slot = 0`,
       [idempotencyKey, now, now, caseId, jobType])
     : await run(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL,
         status = ?, progress_stage = ?, stage_updated_at = ?, attempt_count = 0,
-        last_error_code = IF(? = 1, last_error_code, NULL), lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+        last_error_code = IF(? = 1, last_error_code, NULL), evidence_retry_count = 0, evidence_last_checked_at = NULL,
+        lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
         completed_at = NULL, updated_at = ?
         WHERE period_case_id = ? AND job_type = ? AND job_slot = 0`,
       [idempotencyKey, nextStatus, nextStatus, now, preserveError ? 1 : 0, now, caseId, jobType])
@@ -542,6 +572,48 @@ export async function refreshPeriodReviewJobForEvidence(run, {
   if (affectedRows !== 1) throw new Error('period_review_job_refresh_conflict')
   return { idempotencyKey, jobType, periodCaseId:caseId,
     affectedRows }
+}
+
+async function queueDailyEvidenceRetry(run, {
+  periodCaseId, evidenceHash, existingJob = null, now = beijingNow(),
+} = {}) {
+  if (typeof run !== 'function') throw new Error('period_review_job_transaction_required')
+  const caseId = Number(periodCaseId)
+  const hash = String(evidenceHash || '').trim()
+  if (!Number.isSafeInteger(caseId) || caseId <= 0 || !hash) throw new Error('period_review_evidence_retry_identity_invalid')
+  const retryCount = Math.max(0, Number(existingJob?.evidence_retry_count || 0)) + 1
+  const retryAt = dailyEvidenceRetryAt(retryCount - 1, beijingDateTimeMs(now) || Date.now())
+  const idempotencyKey = `daily:${caseId}:${hash}`
+  if (existingJob?.id) {
+    const result = await run(`UPDATE period_review_jobs SET idempotency_key = ?, status = 'queued',
+        progress_stage = ?, stage_updated_at = ?, attempt_count = 0, last_error_code = ?,
+        evidence_retry_count = ?, evidence_last_checked_at = ?, model_task_id = NULL,
+        lease_token = NULL, lease_expires_at = NULL, next_attempt_at = ?, completed_at = NULL, updated_at = ?
+      WHERE id = ? AND status IN ('queued', 'skipped') AND lease_token IS NULL`,
+    [idempotencyKey, DAILY_EVIDENCE_RETRY_STAGE, now, DAILY_EVIDENCE_RETRY_ERROR, retryCount, now,
+      retryAt, now, existingJob.id])
+    const header = Array.isArray(result) ? result[0] : result
+    const affectedRows = Number(header?.affectedRows ?? header?.changes ?? 0)
+    if (affectedRows !== 1) throw new Error('period_review_evidence_retry_conflict')
+    return { id:Number(existingJob.id), idempotencyKey, retryCount, retryAt, affectedRows }
+  }
+  const result = await run(`INSERT IGNORE INTO period_review_jobs
+      (period_case_id, job_type, job_slot, idempotency_key, status, progress_stage, stage_updated_at,
+       attempt_count, max_attempts, last_error_code, evidence_retry_count, evidence_last_checked_at,
+       next_attempt_at, created_at, updated_at, completed_at)
+    VALUES (?, 'daily_review', 0, ?, 'queued', ?, ?, 0, 3, ?, ?, ?, ?, ?, ?, NULL)`,
+  [caseId, idempotencyKey, DAILY_EVIDENCE_RETRY_STAGE, now, DAILY_EVIDENCE_RETRY_ERROR, retryCount, now,
+    retryAt, now, now])
+  const header = Array.isArray(result) ? result[0] : result
+  const affectedRows = Number(header?.affectedRows ?? header?.changes ?? 0)
+  if (affectedRows !== 1) {
+    const current = await queryOne(`SELECT id, status, evidence_retry_count, next_attempt_at
+      FROM period_review_jobs WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [caseId])
+    if (!current) throw new Error('period_review_evidence_retry_conflict')
+    return { id:Number(current.id), idempotencyKey, retryCount:Number(current.evidence_retry_count || 0),
+      retryAt:current.next_attempt_at || retryAt, affectedRows:0 }
+  }
+  return { id:Number(header.insertId || 0), idempotencyKey, retryCount, retryAt, affectedRows }
 }
 
 export function monthlyReviewJobRefreshStages(existingCase, sourceChanged, existingJob = null) {
@@ -554,6 +626,41 @@ export function monthlyReviewJobRefreshStages(existingCase, sourceChanged, exist
 function afterSeconds(seconds) {
   const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
   return date.toISOString().replace('T', ' ').slice(0, 19)
+}
+
+function dailyEvidenceReasonTokens(value) {
+  return [...new Set(String(value || '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean))]
+}
+
+export function isRecoverableDailyEvidenceReason(value) {
+  const tokens = dailyEvidenceReasonTokens(value)
+  if (!tokens.length || tokens.some(token => TERMINAL_TRADE_EVIDENCE_REASONS.has(token))) return false
+  // Unknown market/source/identity/contract errors must fail closed. Only the
+  // explicit transient allowlist below can be scheduled for automatic retry.
+  const isTransient = token => DAILY_EVIDENCE_RETRY_MARKET_REASONS.has(token)
+    || token === 'bridge not connected' || token === 'bridge history terminal clock unavailable'
+    || token.endsWith(':bridge not connected') || token.endsWith(':bridge history terminal clock unavailable')
+  return tokens.every(isTransient)
+}
+
+export function dailyEvidenceRetryDelayMs(evidenceRetryCount = 0) {
+  const count = Math.max(0, Math.trunc(Number(evidenceRetryCount) || 0))
+  return DAILY_EVIDENCE_RETRY_DELAYS_MS[Math.min(count, DAILY_EVIDENCE_RETRY_DELAYS_MS.length - 1)]
+    || DAILY_EVIDENCE_RETRY_MAX_DELAY_MS
+}
+
+export function dailyEvidenceRetryAt(evidenceRetryCount = 0, nowUtcMs = Date.now()) {
+  return beijingAtUtcMs(Number(nowUtcMs) + dailyEvidenceRetryDelayMs(evidenceRetryCount))
+}
+
+export function isRecoverableDailyEvidenceJob(job, reviewCase = null) {
+  if (!job || Number(reviewCase?.current_version_id || 0) > 0
+    || String(reviewCase?.evidence_status || '') === 'complete') return false
+  const status = String(job.status || '').toLowerCase()
+  if (DAILY_EVIDENCE_RETRY_TERMINAL_STATES.has(status)
+    || status === 'disabled' || String(job.last_error_code || '').toLowerCase() === DAILY_EVIDENCE_RETRY_DISABLED_ERROR) return false
+  return ['queued', 'skipped', 'retry_wait', DAILY_EVIDENCE_RETRY_STAGE].includes(status)
+    && isRecoverableDailyEvidenceReason([reviewCase?.evidence_reason, job.last_error_code].filter(Boolean).join(','))
 }
 
 function isRecoverableDailyQuotaFailure(job) {
@@ -816,6 +923,9 @@ const DAILY_REVIEW_CHUNK_MAX_OUTCOMES = 20
 const DAILY_REVIEW_CHUNK_MAX_BYTES = 180000
 const DAILY_REVIEW_MODEL_MAX_BYTES = 500 * 1024
 const DAILY_REVIEW_MODEL_MAX_INPUT_TOKENS = 120000
+const DAILY_REVIEW_CHUNK_PLAN_MAX_BYTES = 470 * 1024
+const DAILY_REVIEW_CHUNK_PLAN_MAX_INPUT_TOKENS = 110000
+const DAILY_REVIEW_CHUNK_PLAN_VERSION = 'daily-request-budget-v2'
 const DAILY_REVIEW_POLICY_UPGRADE_LIMIT = 5
 const DAILY_REVIEW_PRE_TRADE_TEXT_MAX_BYTES = 12000
 const DAILY_REVIEW_STRATEGY_TEXT_MAX_BYTES = 72000
@@ -834,7 +944,7 @@ export const DAILY_PERIOD_REVIEW_V3_CONTRACT = DAILY_REVIEW_V3_CONTRACT
 // is allowed to write a review, while period_review_contracts describes the
 // output shapes that this server can still read.
 export const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
-export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-second-remediation1'
+export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-evidence-retry1'
 export const PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS = Object.freeze([
   DAILY_PERIOD_REVIEW_V3_CONTRACT,
   'daily-period-review-v1',
@@ -1614,7 +1724,22 @@ async function eligibleOutcomeRows(limit, { includeHistoricalRecovery = false } 
           AND NOT EXISTS (SELECT 1 FROM period_review_jobs active_backlog_job
             WHERE active_backlog_job.period_case_id = cases.id AND active_backlog_job.job_type = 'daily_review'
               AND active_backlog_job.job_slot = 0 AND active_backlog_job.status IN ('leased','status_unknown'))
-          AND (cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+          AND (EXISTS (SELECT 1 FROM period_review_jobs evidence_retry_job
+                WHERE evidence_retry_job.period_case_id = cases.id
+                  AND evidence_retry_job.job_type = 'daily_review' AND evidence_retry_job.job_slot = 0
+                  AND evidence_retry_job.status = 'queued'
+                  AND (evidence_retry_job.next_attempt_at IS NULL OR evidence_retry_job.next_attempt_at <= NOW())
+                  AND evidence_retry_job.last_error_code = '${DAILY_EVIDENCE_RETRY_ERROR}'
+              )
+            OR (EXISTS (SELECT 1 FROM period_review_jobs legacy_evidence_job
+                WHERE legacy_evidence_job.period_case_id = cases.id
+                  AND legacy_evidence_job.job_type = 'daily_review' AND legacy_evidence_job.job_slot = 0
+                  AND legacy_evidence_job.status = 'skipped'
+                  AND legacy_evidence_job.lease_token IS NULL
+                  AND (legacy_evidence_job.last_error_code IS NULL
+                    OR legacy_evidence_job.last_error_code IN (${DAILY_EVIDENCE_RETRY_SQL_ALLOWLIST}))
+              ) AND cases.evidence_reason IN (${DAILY_EVIDENCE_RETRY_SQL_ALLOWLIST}))
+            OR cases.updated_at <= DATE_SUB(NOW(), INTERVAL 1 HOUR)
             OR EXISTS (SELECT 1 FROM period_review_sources upgrade_source
               JOIN trade_review_cases upgrade_trade ON upgrade_trade.id = upgrade_source.trade_review_case_id
               WHERE upgrade_source.period_case_id = cases.id
@@ -1951,7 +2076,8 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
       FROM period_review_sources source
       LEFT JOIN trade_review_cases review_case ON review_case.id = source.trade_review_case_id
       WHERE source.period_case_id = ? ORDER BY source.outcome_id`, [existingCase.id])
-    existingJob = await queryOne(`SELECT id, status, idempotency_key, attempt_count, max_attempts, last_error_code FROM period_review_jobs
+    existingJob = await queryOne(`SELECT id, status, idempotency_key, attempt_count, max_attempts, last_error_code,
+        next_attempt_at, evidence_retry_count, evidence_last_checked_at, completed_at FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     // Never rewrite evidence or rotate the identity of a live provider task.
     // The candidate query also excludes these statuses, but this second guard
@@ -1972,7 +2098,27 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
     await reconcilePersistedPeriodReviewState(existingCase, existingJob)
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
     needsPeriodMarketUpgrade = shouldUpgradePeriodMarketEvidence(existingCase, existingEvidence, asOfUtcMs)
-    const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources, asOfUtcMs)
+    let refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources, asOfUtcMs, existingJob)
+    const legacyRecoverableSkipped = existingJob?.status === 'skipped'
+      && !existingCase.current_version_id && existingCase.evidence_status !== 'complete'
+      && isRecoverableDailyEvidenceReason([existingCase.evidence_reason, existingJob.last_error_code].filter(Boolean).join(','))
+      && String(existingJob.last_error_code || '').toLowerCase() !== DAILY_EVIDENCE_RETRY_DISABLED_ERROR
+    if (legacyRecoverableSkipped) {
+      // Older releases represented a temporary market gap as a completed
+      // skipped job. Restore only that narrow, versionless state; do not touch
+      // disabled/status-unknown/provider-owned jobs.
+      const now = beijingNow()
+      await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = ?, stage_updated_at = ?,
+          last_error_code = ?, model_task_id = NULL, lease_token = NULL, lease_expires_at = NULL,
+          next_attempt_at = NULL, completed_at = NULL, updated_at = ?
+        WHERE id = ? AND status = 'skipped' AND lease_token IS NULL`,
+      [DAILY_EVIDENCE_RETRY_STAGE, now, DAILY_EVIDENCE_RETRY_ERROR, now, existingJob.id])
+      existingJob.status = 'queued'
+      existingJob.progress_stage = DAILY_EVIDENCE_RETRY_STAGE
+      existingJob.last_error_code = DAILY_EVIDENCE_RETRY_ERROR
+      existingJob.next_attempt_at = null
+      refresh = { refresh:true, reason:'legacy_evidence_skipped_recovery' }
+    }
     if (!refresh.refresh && !needsPeriodMarketUpgrade) {
       if (await recoverDailyQuotaFailure(existingCase, existingJob)) {
         return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey,
@@ -1983,18 +2129,11 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
         complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0),
         evidenceHash: existingCase.evidence_hash, reused:true, refreshReason:refresh.reason })
     }
-    if (existingJob?.status === 'skipped' && !existingCase.current_version_id && !needsPeriodMarketUpgrade) {
-      const now = beijingNow()
-      if (existingCase.evidence_hash) {
-        await refreshPeriodReviewJobForEvidence(queryRun, { periodType:'daily', periodCaseId:existingCase.id,
-          evidenceHash:existingCase.evidence_hash, now })
-      } else {
-        await queryRun(`UPDATE period_review_jobs SET status = 'queued', progress_stage = 'queued', stage_updated_at = ?,
-          attempt_count = 0, last_error_code = NULL, model_task_id = NULL, next_attempt_at = NULL,
-          completed_at = NULL, updated_at = ? WHERE id = ?`, [now, now, existingJob.id])
-      }
-      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey, complete:existingCase.evidence_status === 'complete',
-        sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash, requeued:true })
+    if (existingJob?.status === 'skipped'
+      && String(existingJob.last_error_code || '').toLowerCase() === DAILY_EVIDENCE_RETRY_DISABLED_ERROR) {
+      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey,
+        complete:existingCase.evidence_status === 'complete', sourceCount:Number(existingCase.source_count || 0),
+        evidenceHash:existingCase.evidence_hash, reused:true, refreshReason:'review_generation_disabled' })
     }
     if (existingJob && !existingCase.current_version_id && !needsPeriodMarketUpgrade && !refresh.refresh) return existingMaintainedResult({ id: Number(existingCase.id), periodKey: group.periodKey,
       complete: existingCase.evidence_status === 'complete', sourceCount: Number(existingCase.source_count || 0), evidenceHash: existingCase.evidence_hash })
@@ -2107,26 +2246,36 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
   for (const source of sources) await queryRun(`INSERT INTO period_review_sources
     (period_case_id, outcome_id, trade_review_case_id, source_hash, created_at) VALUES (?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE trade_review_case_id = VALUES(trade_review_case_id), source_hash = VALUES(source_hash)`, [periodCase.id, source.outcome_id, source.trade_review_case_id, source.evidence_hash, now])
-  if (complete && !periodCase.current_version_id) await queryRun(`INSERT IGNORE INTO period_review_jobs
-    (period_case_id, job_type, idempotency_key, status, attempt_count, max_attempts, created_at, updated_at)
-    VALUES (?, 'daily_review', ?, 'queued', 0, 3, ?, ?)`, [periodCase.id, `daily:${periodCase.id}:${evidenceHash}`, now, now])
   let requeued = false
   let refreshedJob = null
-  // For an existing draft, persist the new evidence first, then rotate the
-  // business identity.  The old task/checkpoint key can no longer be found by
-  // dailyReviewTaskIdentity, so a later quota recovery cannot reuse it.
-  if (existingCase && existingJob && !existingCase.current_version_id
-    && String(existingCase.evidence_hash || '') !== String(evidenceHash || '')) {
-    await refreshPeriodReviewJobForEvidence(queryRun, { periodType:'daily', periodCaseId:periodCase.id,
-      evidenceHash, now, preserveQuotaFailure:isRecoverableDailyQuotaFailure(existingJob),
-      targetStatus:complete ? null : 'skipped' })
-    const freshJob = await queryOne(`SELECT id, status, idempotency_key, attempt_count, max_attempts, last_error_code
-      FROM period_review_jobs WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [periodCase.id])
-    refreshedJob = freshJob
-    // A quota failure is recoverable only after the new evidence is durable
-    // and complete.  Incomplete policy-upgrade evidence remains skipped until
-    // the next evidence collector makes the case complete.
-    if (complete && await recoverDailyQuotaFailure(periodCase, freshJob)) requeued = true
+  if (!periodCase.current_version_id) {
+    if (complete) {
+      await queryRun(`INSERT IGNORE INTO period_review_jobs
+        (period_case_id, job_type, job_slot, idempotency_key, status, progress_stage, attempt_count, max_attempts,
+         evidence_retry_count, created_at, updated_at)
+        VALUES (?, 'daily_review', 0, ?, 'queued', 'queued', 0, 3, 0, ?, ?)`,
+      [periodCase.id, `daily:${periodCase.id}:${evidenceHash}`, now, now])
+      // For an existing draft, persist the new evidence first, then rotate the
+      // business identity. The old task/checkpoint key can no longer be found
+      // by dailyReviewTaskIdentity, so a later quota recovery cannot reuse it.
+      if (existingCase && existingJob && String(existingCase.evidence_hash || '') !== String(evidenceHash || '')) {
+        await refreshPeriodReviewJobForEvidence(queryRun, { periodType:'daily', periodCaseId:periodCase.id,
+          evidenceHash, now, preserveQuotaFailure:isRecoverableDailyQuotaFailure(existingJob) })
+        refreshedJob = await queryOne(`SELECT id, status, idempotency_key, attempt_count, max_attempts,
+            last_error_code, next_attempt_at, evidence_retry_count, evidence_last_checked_at
+          FROM period_review_jobs WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [periodCase.id])
+        if (await recoverDailyQuotaFailure(periodCase, refreshedJob)) requeued = true
+      }
+    } else if (isRecoverableDailyEvidenceReason(reasons.join(','))) {
+      // A recoverable market gap owns a durable queued job even before the
+      // first model request. The daily worker's evidence_status=complete guard
+      // keeps this job out of the provider path until the next preparation.
+      const retry = await queueDailyEvidenceRetry(queryRun, { periodCaseId:periodCase.id,
+        evidenceHash, existingJob, now })
+      refreshedJob = { ...(existingJob || {}), id:retry.id, status:'queued', idempotency_key:retry.idempotencyKey,
+        last_error_code:DAILY_EVIDENCE_RETRY_ERROR, next_attempt_at:retry.retryAt,
+        evidence_retry_count:retry.retryCount }
+    }
   }
   if (policyUpgradeInProgress) await setPeriodReviewJobStage(refreshedJob || existingJob, 'evidence_upgrade_succeeded', 'success', 'evidence_upgrade_succeeded', {
     source_policy_version:PERIOD_MARKET_SOURCE_POLICY_VERSION, evidence_hash:evidenceHash, complete,
@@ -3191,6 +3340,10 @@ function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strat
 export function buildDailyReviewChunkPlan(evidence, {
   maxOutcomes = DAILY_REVIEW_CHUNK_MAX_OUTCOMES,
   maxBytes = DAILY_REVIEW_CHUNK_MAX_BYTES,
+  maxRequestBytes = DAILY_REVIEW_CHUNK_PLAN_MAX_BYTES,
+  maxInputTokens = DAILY_REVIEW_CHUNK_PLAN_MAX_INPUT_TOKENS,
+  measureChunk = null,
+  contextHash = null,
 } = {}) {
   const sources = (Array.isArray(evidence?.sources) ? evidence.sources : [])
     .slice().sort((left, right) => Number(left?.outcome_id) - Number(right?.outcome_id))
@@ -3202,30 +3355,56 @@ export function buildDailyReviewChunkPlan(evidence, {
     || new Set(outcomeIds).size !== outcomeIds.length) throw new Error('daily_review_chunk_source_set_invalid')
   const outcomeLimit = Math.max(1, Math.trunc(Number(maxOutcomes) || DAILY_REVIEW_CHUNK_MAX_OUTCOMES))
   const byteLimit = Math.max(1024, Math.trunc(Number(maxBytes) || DAILY_REVIEW_CHUNK_MAX_BYTES))
+  const requestByteLimit = Math.max(1024, Math.trunc(Number(maxRequestBytes) || DAILY_REVIEW_CHUNK_PLAN_MAX_BYTES))
+  const tokenLimit = Math.max(1000, Math.trunc(Number(maxInputTokens) || DAILY_REVIEW_CHUNK_PLAN_MAX_INPUT_TOKENS))
   const chunks = []
   let current = []
   let currentBytes = 0
+  let currentBudget = null
   const flush = () => {
     if (!current.length) return
     const ids = current.map(source => Number(source.outcome_id))
     const sourceHash = sha256(JSON.stringify(current.map(source => [Number(source.outcome_id), source.evidence_hash || null])))
     chunks.push({ chunk_index:chunks.length, outcome_ids:ids, sources:current,
-      source_hash:sourceHash, expected_outcome_ids:ids })
+      source_hash:sourceHash, expected_outcome_ids:ids,
+      planned_request_bytes:Number(currentBudget?.requestBytes || 0) || null,
+      planned_input_tokens:Number(currentBudget?.estimatedInputTokens || 0) || null })
     current = []
     currentBytes = 0
+    currentBudget = null
   }
   for (const source of sources) {
     const sourceBytes = Buffer.byteLength(JSON.stringify(source), 'utf8')
-    if (current.length && (current.length >= outcomeLimit || currentBytes + sourceBytes > byteLimit)) flush()
+    let candidate = [...current, source]
+    let candidateBudget = typeof measureChunk === 'function' ? measureChunk(candidate) : null
+    const candidateOverBudget = Boolean(candidateBudget && (Number(candidateBudget.requestBytes) > requestByteLimit
+      || Number(candidateBudget.estimatedInputTokens) > tokenLimit))
+    if (current.length && (current.length >= outcomeLimit || currentBytes + sourceBytes > byteLimit || candidateOverBudget)) {
+      flush()
+      candidate = [source]
+      candidateBudget = typeof measureChunk === 'function' ? measureChunk(candidate) : null
+    }
+    if (!current.length && candidateBudget && (Number(candidateBudget.requestBytes) > DAILY_REVIEW_MODEL_MAX_BYTES
+      || Number(candidateBudget.estimatedInputTokens) > DAILY_REVIEW_MODEL_MAX_INPUT_TOKENS)) {
+      const error = new Error('period_review_input_budget_exceeded')
+      error.code = error.message
+      error.reason = 'period_review_single_trade_request_too_large'
+      error.requestBytes = Number(candidateBudget.requestBytes || 0)
+      error.estimatedInputTokens = Number(candidateBudget.estimatedInputTokens || 0)
+      throw error
+    }
     current.push(source)
     currentBytes += sourceBytes
+    currentBudget = candidateBudget
   }
   flush()
   const expectedOutcomeIds = chunks.flatMap(chunk => chunk.outcome_ids)
   const sourceHash = sha256(JSON.stringify(expectedOutcomeIds))
-  const planHash = sha256(JSON.stringify({ source_hash:sourceHash,
+  const planHash = sha256(JSON.stringify({ planning_version:DAILY_REVIEW_CHUNK_PLAN_VERSION,
+    context_hash:contextHash || null, source_hash:sourceHash,
     chunks:chunks.map(chunk => ({ chunk_index:chunk.chunk_index, source_hash:chunk.source_hash, outcome_ids:chunk.outcome_ids })) }))
   return { source_hash:sourceHash, plan_hash:planHash, expected_outcome_ids:expectedOutcomeIds,
+    planning_version:DAILY_REVIEW_CHUNK_PLAN_VERSION, context_hash:contextHash || null,
     chunk_count:chunks.length, chunks:chunks.map(chunk => ({ ...chunk, chunk_count:chunks.length,
       plan_hash:planHash })) }
 }
@@ -3237,7 +3416,6 @@ function dailyReviewModelEvidenceForChunk(modelEvidence, chunk) {
     pre_trade_frozen:(modelEvidence.pre_trade_frozen || []).filter(item => ids.has(Number(item.outcome_id))),
     holding_path:(modelEvidence.holding_path || []).filter(item => ids.has(Number(item.outcome_id))),
     period_market:modelEvidence.period_market || null,
-    current_optimization_context:modelEvidence.current_optimization_context || {},
     outcomeFacts:new Map([...modelEvidence.outcomeFacts.entries()].filter(([id]) => ids.has(Number(id)))),
     evidenceRefsByOutcome:new Map([...modelEvidence.evidenceRefsByOutcome.entries()].filter(([id]) => ids.has(Number(id)))),
     evidenceLimitationsByOutcome:new Map([...modelEvidence.evidenceLimitationsByOutcome.entries()]
@@ -3409,6 +3587,58 @@ function normalizeDailyReviewV3MergeContent(input, outcomeIds, chanContext, conf
     chanContext, conflictContext)
 }
 
+function dailyReviewChunkShape(baseShape, outcomeIds, chanAllowed) {
+  const ids = outcomeIds.map(Number)
+  const shape = {
+    ...baseShape,
+    trade_assessments:ids.map(outcomeId => ({ ...baseShape.trade_assessments[0], outcome_id:outcomeId })),
+    // Current strategy optimization is a period-level responsibility. Keeping
+    // these arrays empty prevents each independent trade request from needing
+    // the same full strategy and memory library.
+    experience_rules:[],
+    strategy_conflicts:[],
+  }
+  if (chanAllowed) {
+    shape.chan_diagnoses = ids.map(outcomeId => ({ ...baseShape.chan_diagnoses[0], outcome_id:outcomeId }))
+    shape.period_chan_assessment = { ...baseShape.period_chan_assessment, affected_outcome_ids:ids }
+  }
+  return shape
+}
+
+function dailyReviewChunkMessages({ systemMessage, baseShape, chanAllowed, modelEvidence, chunk }) {
+  const chunkIds = chunk.outcome_ids.map(Number)
+  const chunkEvidence = dailyReviewModelEvidenceForChunk(modelEvidence, chunk)
+  const chunkShape = dailyReviewChunkShape(baseShape, chunkIds, chanAllowed)
+  return {
+    chunkIds,
+    chunkEvidence,
+    chunkShape,
+    messages:[systemMessage, { role:'user', content:JSON.stringify({
+      required_output:chunkShape, outcome_ids:chunkIds,
+      chunk:{ chunk_index:chunk.chunk_index, chunk_count:chunk.chunk_count,
+        expected_outcome_ids:chunk.expected_outcome_ids, source_hash:chunk.source_hash, plan_hash:chunk.plan_hash },
+      review_context:stripHistoricalConditionFields({
+        system_statistics:chunkEvidence.system_statistics,
+        pre_trade_frozen:chunkEvidence.pre_trade_frozen,
+        holding_path:chunkEvidence.holding_path,
+        period_market:chunkEvidence.period_market,
+      }),
+      evidence_refs_by_outcome:Object.fromEntries([...chunkEvidence.evidenceRefsByOutcome.entries()]
+        .map(([id, refs]) => [String(id), [...refs]])),
+      evidence_limitations_by_outcome:Object.fromEntries([...chunkEvidence.evidenceLimitationsByOutcome.entries()]
+        .map(([id, limitations]) => [String(id), limitations])),
+    }) }],
+  }
+}
+
+function validateDailyReviewChunkContent(input, outcomeIds, chanContext, options = {}) {
+  const content = validateDailyReviewV3Content(input, outcomeIds, chanContext, options)
+  if ((content.experience_rules || []).length || (content.strategy_conflicts || []).length) {
+    throw new Error('daily_review_chunk_optimization_scope_invalid')
+  }
+  return content
+}
+
 async function generateDailyReview(job, requestModel) {
   const evidence = parse(job.evidence_json, null)
   if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('daily_review_evidence_invalid')
@@ -3418,7 +3648,6 @@ async function generateDailyReview(job, requestModel) {
   const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
   const strategyMemoryForPrompt = sanitizeStrategyMemoryPrompt(strategyMemorySnapshot.library)
   const modelEvidence = buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strategyMemoryForPrompt)
-  const chunkPlan = buildDailyReviewChunkPlan(evidence)
   const endpoint = modelEndpoint(resolved.model)
   const outcomeIds = evidence.sources.map(item => Number(item.outcome_id))
   const chanContext = frozenDailyChanContext(evidence)
@@ -3426,16 +3655,15 @@ async function generateDailyReview(job, requestModel) {
   const memoryCategoryEnum = chanAllowed
     ? 'general|market_regime|entry_setup|chan_structure|risk_execution'
     : 'general|market_regime|entry_setup|risk_execution'
-  const firstChunkOutcomeIds = chunkPlan.chunks[0]?.outcome_ids || outcomeIds
   const shape = { output_contract_version:DAILY_REVIEW_V3_CONTRACT, period_summary: 'string', decision_quality: 'good|mixed|poor|insufficient_evidence',
-    trade_assessments: firstChunkOutcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence',
+    trade_assessments: [{ outcome_id:outcomeIds[0], decision_quality: 'good|mixed|poor|insufficient_evidence',
       original_signal_logic:'string', technical_basis_assessment:'string', market_alignment:'aligned|partly_aligned|conflict|insufficient_evidence',
       strategy_alignment:'aligned|partly_aligned|conflict|insufficient_evidence', risk_execution_assessment:'string',
       risk_execution_status:'compliant|partly_compliant|violation|insufficient_evidence', missing_evidence:[],
       outcome_attribution:{ result:'profit|loss|breakeven', primary_causes:['string'], explanation:'string',
         avoidability:'avoidable|partly_avoidable|normal_strategy_loss|insufficient_evidence' },
       next_time_rule:{ condition:'string', action:'string', risk_control:'string', invalidation:'string', prohibited_action:'string' },
-      issue_codes:['string'], evidence_refs:['outcome:<id> or another server-provided reference'], confidence:0.5 })),
+      issue_codes:['string'], evidence_refs:['outcome:<id> or another server-provided reference'], confidence:0.5 }],
     repeated_issues:[{ text:'string', source_refs:['outcome:<id>'], occurrence_count:2 }],
     strengths:[{ text:'string', source_refs:['outcome:<id>'], occurrence_count:1 }],
     risk_observations: ['string'], next_day_actions:['string'],
@@ -3466,30 +3694,42 @@ async function generateDailyReview(job, requestModel) {
     'holding_path.path_metrics.status=not_observable 表示交易事实和行情覆盖完整，但持仓太短，闭合K线无法精确观察持仓内路径；这不等于整条交易证据不足。此时禁止把边界K线高低价当作持仓期MFE/MAE，禁止判断止盈、止损是否曾触达，也不得据此生成经验规则；仍须使用成交事实、事前快照和交易日行情完成信号逻辑、盈亏原因与改进建议分析。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     tradeCoverageContract,
-    `不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。experience_rules 和 strategy_conflicts 没有可靠结论时必须返回空数组；每个对象的文本和引用字段必须符合 required_output。source_refs/evidence_refs 只能引用服务器提供的 outcome:<id> 或证据引用，不得编造其他来源。strategy_excerpt 必须逐字来自 current_optimization_context.strategy；existing_memory 的 memory_excerpt 必须逐字来自 current_optimization_context.strategy_memory_library.content_text；proposed_experience 的 memory_excerpt 必须严格拼接同一条 experience_rule 的“condition；action；prohibited_action”，使用全角分号且不得增删文字。每条 experience_rule 必须是条件—动作—风控—失效—禁止行为的明确规则，不能写泛泛建议。${memoryCategoryContract}`,
+    `不得遗漏、合并或虚构交易；不得修改系统提供的基础统计。当前请求只负责逐笔判断，不提供当前策略优化上下文；experience_rules 和 strategy_conflicts 必须严格返回空数组，由最终合并任务统一生成。每个对象的文本和引用字段必须符合 required_output。source_refs/evidence_refs 只能引用服务器提供的 outcome:<id> 或证据引用，不得编造其他来源。${memoryCategoryContract}`,
     chanAllowed ? '只有冻结证据明确启用缠论且 Chan 证据完整时才可输出缠论诊断；缠论记忆类别必须有可靠结构证据。'
       : '冻结证据未同时满足缠论启用和完整条件；禁止输出任何缠论字段、缠论诊断或 chan_structure 记忆。',
   ].join('\n')
   const chanPrompt = chanAllowed
     ? '冻结证据明确启用了缠论且 period_market 的 Chan 证据完整；请根据能力字段判断可用结构。'
     : '冻结证据未同时满足缠论启用和完整条件；不要输出、推断或评价任何缠论结构，也不要生成 chan_structure 记忆。'
-  const systemMessage = { role: 'system', content: `你是严格的交易日复盘分析器。system_statistics 是后端计算的只读事实，必须直接采用且不得自行重算。模型输入已明确分区：pre_trade_frozen 只能评价原始信号当时的判断，holding_path 只能解释持仓路径和成交结果，period_market 只能补充交易日环境和事后解释，current_optimization_context 只用于提出当前策略优化建议，不能改写历史判断。${chanPrompt} 必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` }
+  const systemMessage = { role: 'system', content: `你是严格的交易日复盘分析器。system_statistics 是后端计算的只读事实，必须直接采用且不得自行重算。模型输入已明确分区：pre_trade_frozen 只能评价原始信号当时的判断，holding_path 只能解释持仓路径和成交结果，period_market 只能补充交易日环境和事后解释。当前策略优化上下文只在最终合并任务使用，不能改写历史判断。${chanPrompt} 必须判断问题来自行情数据、结构计算、确认延迟、AI 解读还是策略规则。period_market.status 不完整时必须降低置信度。必须区分推理时结构、同时间点回放结构和事后最终结构；未来数据只能用于事后解释，不能反过来判定当时决策错误。不得把盈利等同于决策正确，也不得把亏损等同于决策错误。\n\n以下输出契约不可违反：\n${contract}` }
+  const planContextHash = sha256(JSON.stringify({
+    planning_version:DAILY_REVIEW_CHUNK_PLAN_VERSION,
+    system_message:systemMessage.content,
+    system_statistics:modelEvidence.system_statistics,
+    period_market:modelEvidence.period_market,
+    optimization_context:modelEvidence.current_optimization_context,
+  }))
+  const chunkPlan = buildDailyReviewChunkPlan(evidence, {
+    maxBytes:DAILY_REVIEW_CHUNK_PLAN_MAX_BYTES,
+    contextHash:planContextHash,
+    measureChunk:sources => {
+      const ids = sources.map(source => Number(source.outcome_id))
+      const placeholderHash = '0'.repeat(64)
+      const candidate = { chunk_index:0, chunk_count:999, outcome_ids:ids, expected_outcome_ids:ids,
+        source_hash:placeholderHash, plan_hash:placeholderHash }
+      return periodReviewModelInputBudget(dailyReviewChunkMessages({ systemMessage, baseShape:shape,
+        chanAllowed, modelEvidence, chunk:candidate }).messages)
+    },
+  })
   const chunkContents = []
   for (const chunk of chunkPlan.chunks) {
-    const chunkIds = chunk.outcome_ids.map(Number)
-    const chunkEvidence = dailyReviewModelEvidenceForChunk(modelEvidence, chunk)
-    const chunkShape = {
-      ...shape,
-      trade_assessments:chunkIds.map(outcomeId => ({ ...shape.trade_assessments[0], outcome_id:outcomeId })),
-    }
-    if (chanAllowed) {
-      chunkShape.chan_diagnoses = chunkIds.map(outcomeId => ({ ...shape.chan_diagnoses[0], outcome_id:outcomeId }))
-      chunkShape.period_chan_assessment = { ...shape.period_chan_assessment, affected_outcome_ids:chunkIds }
-    }
+    const { chunkIds, chunkEvidence, chunkShape, messages:chunkMessages } = dailyReviewChunkMessages({
+      systemMessage, baseShape:shape, chanAllowed, modelEvidence, chunk,
+    })
     const taskIdentity = dailyReviewTaskIdentity(job, 'chunk', chunkPlan.plan_hash, chunk.chunk_index)
     const checkpoint = await loadDailyReviewCheckpoint(taskIdentity, chunkPlan.plan_hash, chunk.chunk_index)
     if (checkpoint) {
-      const restored = validateDailyReviewV3Content(checkpoint.content, chunkIds, chanContext, {
+      const restored = validateDailyReviewChunkContent(checkpoint.content, chunkIds, chanContext, {
         strategyText:strategyMemorySnapshot.strategy_text,
         memoryText:strategyMemorySnapshot.library.content_text,
         outcomeFacts:chunkEvidence.outcomeFacts,
@@ -3500,22 +3740,6 @@ async function generateDailyReview(job, requestModel) {
       job._modelTracker = null
       continue
     }
-    const chunkMessages = [systemMessage, { role:'user', content:JSON.stringify({
-      required_output:chunkShape, outcome_ids:chunkIds,
-      chunk:{ chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count,
-        expected_outcome_ids:chunk.expected_outcome_ids, source_hash:chunk.source_hash, plan_hash:chunkPlan.plan_hash },
-      review_context:stripHistoricalConditionFields({
-        system_statistics:chunkEvidence.system_statistics,
-        pre_trade_frozen:chunkEvidence.pre_trade_frozen,
-        holding_path:chunkEvidence.holding_path,
-        period_market:chunkEvidence.period_market,
-        current_optimization_context:chunkEvidence.current_optimization_context,
-      }),
-      evidence_refs_by_outcome:Object.fromEntries([...chunkEvidence.evidenceRefsByOutcome.entries()]
-        .map(([id, refs]) => [String(id), [...refs]])),
-      evidence_limitations_by_outcome:Object.fromEntries([...chunkEvidence.evidenceLimitationsByOutcome.entries()]
-        .map(([id, limitations]) => [String(id), limitations])),
-    }) }]
     // Every provider request gets an independent budget/deadline and durable
     // model-task envelope. The event-table checkpoint is written only after
     // the chunk has passed the full v3 validator; a retry can therefore reuse
@@ -3536,7 +3760,9 @@ async function generateDailyReview(job, requestModel) {
     await persistPeriodReviewInputBudget(tracker, modelCall.budget, {
       task_role:'chunk', chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count,
       outcome_count:chunkIds.length, market_digest_version:DAILY_REVIEW_MARKET_DIGEST_VERSION,
-      pre_trade_projection_version:'daily-pre-trade-v2',
+      pre_trade_projection_version:'daily-pre-trade-v2', chunk_planning_version:chunkPlan.planning_version,
+      shared_context_hash:chunkPlan.context_hash, planned_request_bytes:chunk.planned_request_bytes,
+      planned_input_tokens:chunk.planned_input_tokens,
     })
     const requestSignal = job._abortSignal && tracker.signal
       ? AbortSignal.any([job._abortSignal, tracker.signal])
@@ -3560,7 +3786,7 @@ async function generateDailyReview(job, requestModel) {
       repairContext:{ outputFormat:JSON.stringify(chunkShape),
         requiredCoverage:{ contract_version:DAILY_REVIEW_V3_CONTRACT, outcome_ids:chunkIds,
           chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count } },
-      validateObject: value => validateDailyReviewV3Content(value, chunkIds, chanContext, {
+      validateObject: value => validateDailyReviewChunkContent(value, chunkIds, chanContext, {
         strategyText:strategyMemorySnapshot.strategy_text,
         memoryText:strategyMemorySnapshot.library.content_text,
         outcomeFacts:chunkEvidence.outcomeFacts,
@@ -3568,7 +3794,7 @@ async function generateDailyReview(job, requestModel) {
         evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
       }),
     })
-    const normalized = validateDailyReviewV3Content(output, chunkIds, chanContext, {
+    const normalized = validateDailyReviewChunkContent(output, chunkIds, chanContext, {
       strategyText:strategyMemorySnapshot.strategy_text,
       memoryText:strategyMemorySnapshot.library.content_text,
       outcomeFacts:chunkEvidence.outcomeFacts,
@@ -3584,18 +3810,10 @@ async function generateDailyReview(job, requestModel) {
     chunkContents.push(normalized)
     job._modelTracker = null
   }
-  // A single bounded chunk remains one model call. Only a genuinely split day
-  // pays for the separate cross-chunk synthesis task.
+  // Trade chunks never receive the current optimization context. The merge is
+  // therefore required even for one chunk so strategy advice and conflicts are
+  // produced exactly once from the frozen strategy and memory library.
   const deterministicMerge = mergeDailyReviewV3ChunkContents(chunkContents, outcomeIds)
-  if (chunkPlan.chunk_count === 1) {
-    return { content:validateDailyReviewV3Content(chunkContents[0], outcomeIds, chanContext, {
-      strategyText:strategyMemorySnapshot.strategy_text,
-      memoryText:strategyMemorySnapshot.library.content_text,
-      outcomeFacts:modelEvidence.outcomeFacts,
-      evidenceRefsByOutcome:modelEvidence.evidenceRefsByOutcome,
-      evidenceLimitationsByOutcome:modelEvidence.evidenceLimitationsByOutcome,
-    }), resolved }
-  }
   const compactChunkResults = chunkContents.map((content, index) => ({
     chunk_index:index, outcome_ids:content.trade_assessments.map(item => Number(item.outcome_id)),
     period_summary:content.period_summary,
@@ -3624,7 +3842,7 @@ async function generateDailyReview(job, requestModel) {
     '这是日复盘最终合并任务，只允许输出 required_output 中的周期级字段；不要输出或改写任何 trade_assessments，逐笔结论由服务器保留。',
     '必须综合全部 validated_chunk_results，跨分块识别 repeated_issues、strengths、risk_observations、next_day_actions、experience_rules 和 strategy_conflicts；source_refs 必须只引用实际存在的 outcome:<id>，repeated_issues 至少引用两个不同 outcome。',
     'experience_rules 必须是条件—动作—风控—失效—禁止行为的明确规则；不得把盈利等同于决策正确，也不得把亏损等同于决策错误。',
-    `所有 strategy_excerpt、memory_excerpt 和${chanAllowed ? '' : '非缠论'}经验引用约束与逐笔任务相同；${memoryCategoryContract}`,
+    `current_optimization_context 只在本合并任务提供。strategy_excerpt 必须逐字来自 current_optimization_context.strategy；existing_memory 的 memory_excerpt 必须逐字来自 current_optimization_context.strategy_memory_library.content_text；proposed_experience 的 memory_excerpt 必须严格拼接同一条 experience_rule 的“condition；action；prohibited_action”。${chanAllowed ? '' : '禁止生成缠论经验或冲突。'}${memoryCategoryContract}`,
   ].join('\n')
   const mergeTaskIdentity = dailyReviewTaskIdentity(job, 'merge', chunkPlan.plan_hash)
   const mergeCheckpoint = await loadDailyReviewCheckpoint(mergeTaskIdentity, chunkPlan.plan_hash)
@@ -3656,7 +3874,8 @@ async function generateDailyReview(job, requestModel) {
     await persistPeriodReviewInputBudget(mergeTracker, mergeCall.budget, {
       task_role:'merge', chunk_count:chunkPlan.chunk_count, outcome_count:outcomeIds.length,
       market_digest_version:DAILY_REVIEW_MARKET_DIGEST_VERSION,
-      pre_trade_projection_version:'daily-pre-trade-v2',
+      pre_trade_projection_version:'daily-pre-trade-v2', chunk_planning_version:chunkPlan.planning_version,
+      shared_context_hash:chunkPlan.context_hash,
     })
     const mergeSignal = job._abortSignal && mergeTracker.signal
       ? AbortSignal.any([job._abortSignal, mergeTracker.signal])
@@ -3696,8 +3915,8 @@ async function generateDailyReview(job, requestModel) {
     repeated_issues:mergedOutput.repeated_issues, strengths:mergedOutput.strengths,
     risk_observations:mergedOutput.risk_observations, next_day_actions:mergedOutput.next_day_actions,
     experience_rules:mergedOutput.experience_rules,
-    // Chunk conflicts have already passed excerpt/source validation. The merge
-    // model may add a cross-chunk conflict but may not erase validated evidence.
+    // Current-strategy conflicts are produced once by the merge task. Keep the
+    // deterministic union for checkpoint/backward compatibility.
     strategy_conflicts:[...new Map([
       ...(deterministicMerge.strategy_conflicts || []), ...(mergedOutput.strategy_conflicts || []),
     ].map(item => [JSON.stringify(item), item])).values()],
@@ -3752,7 +3971,8 @@ async function finishDailyReviewSuccess(job, generated) {
       }
     }
     await run(`UPDATE period_review_jobs SET status = 'succeeded', progress_stage = 'succeeded', stage_updated_at = ?,
-      model_profile_id = ?, credential_source = ?, last_error_code = NULL, next_attempt_at = NULL, completed_at = ?,
+      model_profile_id = ?, credential_source = ?, last_error_code = NULL, evidence_retry_count = 0,
+      evidence_last_checked_at = NULL, next_attempt_at = NULL, completed_at = ?,
       lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?`,
     [now, generated.resolved.model_profile_id, generated.resolved.credential_source, now, now, job.id])
   })
@@ -4358,7 +4578,7 @@ export async function listPeriodReviewCases(actor, { periodType = null, status =
       cases.current_version_id, cases.approved_version_id, cases.evidence_json, cases.created_at, cases.updated_at,
       COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
        jobs.job_slot, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at, jobs.attempt_count, jobs.max_attempts,
-      jobs.last_error_code, jobs.next_attempt_at,
+       jobs.last_error_code, jobs.next_attempt_at, jobs.evidence_retry_count, jobs.evidence_last_checked_at,
       derivation.status AS derivation_status, derivation.last_error_code AS derivation_error_code,
       ${strategyMemoryStateSelectSql()},
       CASE WHEN cases.current_version_id IS NOT NULL AND (seen.last_seen_version_id IS NULL OR seen.last_seen_version_id <> cases.current_version_id) THEN 1 ELSE 0 END AS is_unread
@@ -4407,7 +4627,8 @@ export async function getPeriodReviewCase(periodCaseId, actor) {
   const reviewCase = await queryOne(`SELECT cases.*,
       COALESCE(strategies.title, CONCAT('策略 #', cases.strategy_id)) AS strategy_title,
        jobs.id AS job_id, jobs.job_slot, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
-      jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at,
+       jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at,
+       jobs.evidence_retry_count, jobs.evidence_last_checked_at, jobs.completed_at,
       derivation.id AS derivation_job_id, derivation.status AS derivation_status,
       derivation.attempt_count AS derivation_attempt_count, derivation.max_attempts AS derivation_max_attempts,
       derivation.last_error_code AS derivation_error_code, derivation.completed_at AS derivation_completed_at,
@@ -4539,7 +4760,8 @@ export async function getPeriodReviewJobStatus(periodCaseId, actor) {
   const status = await queryOne(`SELECT cases.id, cases.period_type, cases.status, cases.current_version_id,
       cases.approved_version_id,
        jobs.id AS job_id, jobs.job_slot, jobs.status AS job_status, jobs.progress_stage, jobs.stage_updated_at,
-      jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at, jobs.completed_at,
+       jobs.attempt_count, jobs.max_attempts, jobs.last_error_code, jobs.next_attempt_at,
+       jobs.evidence_retry_count, jobs.evidence_last_checked_at, jobs.completed_at,
       derivation.status AS derivation_status, derivation.attempt_count AS derivation_attempt_count,
       derivation.max_attempts AS derivation_max_attempts, derivation.last_error_code AS derivation_error_code,
       derivation.completed_at AS derivation_completed_at, ${strategyMemoryStateSelectSql()}

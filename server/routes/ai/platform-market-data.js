@@ -6,6 +6,7 @@ import { CHAN_ALGORITHM_VERSION, stripBrokerSuffix, timeframeIntervalMs } from '
 import { getDefaultObserverSource, observerSourceSupportsSymbol } from './observer-channels.js'
 import { classifyMarketClosure, MARKET_SESSION_CALENDAR_VERSION, MARKET_SESSION_ENGINE_VERSION } from './market-session-calendar.js'
 import { getMarketSessionPolicyMode, resolveMarketSessionPolicy } from './market-session-policy.js'
+import { wakePeriodReviewEvidenceWaiters } from './period-review-evidence-wake.js'
 
 const CACHE_LIMIT = 2000
 const CACHE_TTL_SECONDS = 24 * 60 * 60
@@ -701,6 +702,10 @@ async function writeClosedWindowBestEffort(sourceId, brokerSymbol, timeframe, cl
       failures.push('redis')
       console.error('[MarketData] candle cache write failed:', error.message)
     }
+  }
+  if (persistedCount > 0) {
+    await wakePeriodReviewEvidenceWaiters({ sourceId, standardSymbol:stripBrokerSuffix(brokerSymbol), timeframe })
+      .catch(error => console.error('[MarketData] period-review evidence wake failed:', error?.message || error))
   }
   return { persistedCount, failures }
 }
