@@ -377,6 +377,47 @@ describe('period review model-task recovery and retry', () => {
     expect(run.mock.calls.some(([sql]) => sql.includes('UPDATE period_review_jobs SET status = \'queued\''))).toBe(false)
   })
 
+  it('cancels only retry_wait checkpoint tasks before rotating a manual daily retry', async () => {
+    const task = { task_id:'task-retry-wait', status:'retry_wait' }
+    const events = []
+    const run = vi.fn(async (sql, params) => {
+      if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'daily' }]]
+      if (sql.includes('SELECT * FROM period_review_jobs')) return [[{ id:9, period_case_id:42, job_type:'daily_review',
+        idempotency_key:'daily:42:evidence', status:'failed', model_task_id:task.task_id }]]
+      if (sql.includes("domain_type = 'period_review_job'")) return [[task]]
+      if (sql.includes("UPDATE ai_model_tasks SET status = 'cancelled'")) {
+        task.status = 'cancelled'
+        return { affectedRows:1 }
+      }
+      if (sql.includes('INSERT INTO ai_model_task_events')) {
+        events.push({ taskId:params[0], eventType:params[2], payload:JSON.parse(params[3]) })
+        return { affectedRows:1 }
+      }
+      if (sql.includes('SELECT task_id, status FROM ai_model_tasks WHERE task_id = ?')) return [[task]]
+      return { affectedRows:1, insertId:10 }
+    })
+    periodReviewDb.withTransaction.mockImplementation(callback => callback(run))
+
+    const result = await retryPeriodReviewCase(42, { id:7, role:'user' })
+
+    expect(result).toMatchObject({ queued:true, jobId:9 })
+    expect(task.status).toBe('cancelled')
+    const cancellation = run.mock.calls.find(([sql]) => sql.includes("UPDATE ai_model_tasks SET status = 'cancelled'"))
+    expect(cancellation).toBeTruthy()
+    expect(cancellation[0]).toContain('completed_at_utc_msc = ?')
+    expect(cancellation[0]).toContain('lease_token = NULL')
+    expect(cancellation[0]).toContain('lease_owner = NULL')
+    expect(cancellation[0]).toContain('lease_expires_at_utc_msc = NULL')
+    expect(cancellation[1][0]).toBe('period_review_manual_retry_checkpoint_cancelled')
+    expect(cancellation[1][1]).toBe('period_review_manual_retry_checkpoint_cancelled')
+    expect(cancellation[1][4]).toBe(task.task_id)
+    expect(events).toEqual([{ taskId:task.task_id, eventType:'task_cancelled',
+      payload:{ reason:'period_review_manual_retry_checkpoint_cancelled' } }])
+    const jobUpdate = run.mock.calls.find(([sql]) => sql.includes('idempotency_key = ?'))
+    expect(jobUpdate[0]).toContain('model_task_id = NULL')
+    expect(jobUpdate[1][1]).toMatch(/^retry:daily_review:42:/)
+  })
+
   it('uses a new business key and clears a terminal model task before retrying', async () => {
     const run = vi.fn(async sql => {
       if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'daily' }]]
@@ -401,13 +442,18 @@ describe('period review model-task recovery and retry', () => {
       if (sql.includes('SELECT cases.*')) return [[{ id:42, user_id:7, evidence_status:'complete', current_version_id:null, period_type:'daily' }]]
       if (sql.includes('SELECT * FROM period_review_jobs')) return [[{ id:9, period_case_id:42, job_type:'daily_review',
         idempotency_key:'daily:42:evidence', status:'failed', model_task_id:'task-terminal' }]]
-      if (sql.includes("domain_type = 'period_review_job'")) return [[{ task_id:'task-chunk-2', status:'status_unknown' }]]
+      if (sql.includes("domain_type = 'period_review_job'")) return [[
+        { task_id:'task-retry-wait', status:'retry_wait' },
+        { task_id:'task-chunk-2', status:'status_unknown' },
+      ]]
       return [{ affectedRows:1 }]
     })
     periodReviewDb.withTransaction.mockImplementation(callback => callback(run))
 
     await expect(retryPeriodReviewCase(42, { id:7, role:'user' }))
       .rejects.toThrow('period_review_daily_checkpoint_task_unresolved')
+    expect(run.mock.calls.some(([sql]) => sql.includes("UPDATE ai_model_tasks SET status = 'cancelled'"))).toBe(false)
+    expect(run.mock.calls.some(([sql]) => sql.includes('task_cancelled'))).toBe(false)
   })
 
   it('rotates a succeeded daily job when its evidence changes', async () => {

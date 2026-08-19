@@ -5550,8 +5550,33 @@ export async function retryPeriodReviewCase(periodCaseId, actor) {
         const [dailyTasks] = await run(`SELECT task_id, status FROM ai_model_tasks
           WHERE domain_type = 'period_review_job' AND domain_id = ?
             AND task_kind IN ('daily_review_chunk','daily_review_merge') FOR UPDATE`, [String(jobs[0].id)])
-        if ((dailyTasks || []).some(task => !MODEL_TASK_TERMINAL_STATES.has(String(task.status || '')))) {
+        const unresolvedDailyTasks = (dailyTasks || []).filter(task => {
+          const status = String(task.status || '')
+          return status !== 'retry_wait' && !MODEL_TASK_TERMINAL_STATES.has(status)
+        })
+        if (unresolvedDailyTasks.length) {
           throw new Error('period_review_daily_checkpoint_task_unresolved')
+        }
+        // A failed daily job may leave a checkpoint task in retry_wait.  Once
+        // the complete task group has passed the preflight above, explicitly
+        // fence only those retry_wait tasks before rotating the business key.
+        // Unknown or active provider states never reach this loop, so a mixed
+        // group cannot be partially cancelled.
+        const cancelReason = 'period_review_manual_retry_checkpoint_cancelled'
+        const taskNowUtcMs = Date.now()
+        for (const task of dailyTasks || []) {
+          if (String(task.status || '') !== 'retry_wait') continue
+          const cancelResponse = await run(`UPDATE ai_model_tasks SET status = 'cancelled',
+              error_code = ?, error_message = ?, completed_at_utc_msc = ?,
+              lease_token = NULL, lease_owner = NULL, lease_expires_at_utc_msc = NULL,
+              updated_at_utc_msc = ?
+              WHERE task_id = ? AND status = 'retry_wait'`,
+          [cancelReason, cancelReason, taskNowUtcMs, taskNowUtcMs, task.task_id])
+          const cancelResult = Array.isArray(cancelResponse) ? cancelResponse[0] : cancelResponse
+          if (Number(cancelResult?.affectedRows ?? cancelResult?.changes ?? 0) !== 1) {
+            throw new Error('period_review_daily_checkpoint_task_cancel_conflict')
+          }
+          await appendModelTaskEvent(task.task_id, 'task_cancelled', { reason:cancelReason }, null, run)
         }
       }
       if (jobType === 'monthly_review') {
