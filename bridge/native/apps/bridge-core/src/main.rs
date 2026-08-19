@@ -71,6 +71,7 @@ const UPDATE_RUNTIME_STATUS_MAX_AGE_MSC: i64 = 15_000;
 const OBSERVER_CREDENTIAL_RECOVERY_SCAN_INTERVAL: Duration = Duration::from_secs(5);
 const OBSERVER_CREDENTIAL_RECOVERY_COOLDOWN: Duration = Duration::from_secs(30);
 const MT5_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const MT5_IDENTITY_MISMATCH_THRESHOLD: u32 = 3;
 const UPDATE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 static UPDATE_DRAIN_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -183,6 +184,9 @@ struct RuntimeStatusMonitorContext {
     root_data_directory: PathBuf,
     ui_state: UiStateStore,
     preferences_store: BridgePreferencesStore,
+    preference_change_sender: watch::Sender<u64>,
+    mt5_redetect_requested: Arc<AtomicBool>,
+    mt5_auto_redetect_suppressed: Arc<AtomicBool>,
     terminal_candidates: Vec<UiTerminalCandidate>,
     logger: BridgeLogger,
 }
@@ -203,8 +207,10 @@ struct ProfileLifecycleRuntime {
     stop: SessionCancellation,
     ui_state: UiStateStore,
     preferences_store: BridgePreferencesStore,
+    preference_change_sender: watch::Sender<u64>,
     preference_change_receiver: watch::Receiver<u64>,
     mt5_redetect_requested: Arc<AtomicBool>,
+    mt5_auto_redetect_suppressed: Arc<AtomicBool>,
     update_drain: RuntimeUpdateDrainSlot,
 }
 
@@ -1160,6 +1166,7 @@ async fn run_connected_profile(
     }
     let (preference_change_sender, preference_change_receiver) = watch::channel(0_u64);
     let mt5_redetect_requested = Arc::new(AtomicBool::new(false));
+    let mt5_auto_redetect_suppressed = Arc::new(AtomicBool::new(false));
     let mt4_registration_tasks = if profile_id == DEFAULT_PROFILE_ID {
         let (event_sender, event_receiver) = mpsc::channel(32);
         let registration_task = tokio::spawn(mt4_registration_coordinator::run(
@@ -1212,7 +1219,7 @@ async fn run_connected_profile(
             ui_state: ui_state.clone(),
             credential_store: credential_store.clone(),
             preferences_store: preferences_store.clone(),
-            preference_change_sender,
+            preference_change_sender: preference_change_sender.clone(),
             mt5_redetect_requested: Arc::clone(&mt5_redetect_requested),
             application_directory: application_directory.clone(),
             root_data_directory: root_data_directory.clone(),
@@ -1254,8 +1261,10 @@ async fn run_connected_profile(
             stop: stop.clone(),
             ui_state: ui_state.clone(),
             preferences_store: preferences_store.clone(),
+            preference_change_sender,
             preference_change_receiver,
             mt5_redetect_requested,
+            mt5_auto_redetect_suppressed,
             update_drain,
         },
     )
@@ -3374,8 +3383,10 @@ async fn run_profile_lifecycle(
         stop,
         ui_state,
         preferences_store,
+        preference_change_sender,
         mut preference_change_receiver,
         mt5_redetect_requested,
+        mt5_auto_redetect_suppressed,
         update_drain,
     } = runtime;
     loop {
@@ -3735,6 +3746,9 @@ async fn run_profile_lifecycle(
                 root_data_directory: root_data_directory.to_path_buf(),
                 ui_state: ui_state.clone(),
                 preferences_store: preferences_store.clone(),
+                preference_change_sender: preference_change_sender.clone(),
+                mt5_redetect_requested: Arc::clone(&mt5_redetect_requested),
+                mt5_auto_redetect_suppressed: Arc::clone(&mt5_auto_redetect_suppressed),
                 terminal_candidates: known_terminal_candidates.clone(),
                 logger: logger.clone(),
             },
@@ -3834,6 +3848,20 @@ fn request_mt5_redetection(requested: &AtomicBool) {
     requested.store(true, Ordering::Release);
 }
 
+fn request_mt5_auto_redetection(requested: &AtomicBool, suppressed: &AtomicBool) -> bool {
+    // Keep one automatic refresh attempt per mismatch episode. A failed probe
+    // leaves this latch set, so the degraded old binding remains fail-closed;
+    // a successful manual retry or later verified probe clears it.
+    if suppressed
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+    request_mt5_redetection(requested);
+    true
+}
+
 fn consume_mt5_redetection(requested: &AtomicBool) -> bool {
     requested.swap(false, Ordering::AcqRel)
 }
@@ -3842,7 +3870,18 @@ fn force_mt5_redetection_for_platform(platform: Option<&str>, requested: bool) -
     requested && platform == Some("mt5")
 }
 
-fn mt5_binding_reusable(binding: &TerminalBinding, installation: &Mt5Installation) -> bool {
+fn is_mt5_identity_mismatch(error_code: Option<&str>) -> bool {
+    matches!(
+        error_code,
+        Some("mt5_login_mismatch" | "mt5_broker_server_mismatch")
+    )
+}
+
+fn mt5_binding_matches_probe(
+    binding: &TerminalBinding,
+    installation: &Mt5Installation,
+    probe: &Mt5ProbeResult,
+) -> bool {
     binding.platform == "mt5"
         && installation.is_running
         && binding.terminal_instance_id == installation.terminal_instance_id
@@ -3850,6 +3889,11 @@ fn mt5_binding_reusable(binding: &TerminalBinding, installation: &Mt5Installatio
             &binding.terminal_path,
             &installation.executable_path,
         )
+        && mt5_terminal_discovery::paths_equal(
+            &probe.executable_path,
+            &installation.executable_path,
+        )
+        && binding.account_ref == probe.account_ref
 }
 
 async fn provision_mt5_bindings_if_missing(
@@ -3903,24 +3947,6 @@ async fn provision_mt5_bindings_if_missing(
             continue;
         }
 
-        // A forced scan is intentionally path-aware: a running binding with
-        // the same terminal identity is already connected and must not be
-        // re-initialized (which would bump its epoch and may foreground MT5).
-        if force_redetect
-            && mt5_bindings
-                .iter()
-                .any(|binding| mt5_binding_reusable(binding, &installation))
-        {
-            logger.info(
-                "native_mt5_terminal_probe_reused_binding",
-                Some(&format!(
-                    "profile={profile_id};terminal_id={}",
-                    installation.terminal_instance_id
-                )),
-            );
-            accepted.push(installation.terminal_instance_id);
-            continue;
-        }
         if !installation.is_running {
             logger.warning(
                 "native_mt5_terminal_probe_skipped",
@@ -3999,12 +4025,36 @@ async fn provision_mt5_bindings_if_missing(
                 continue;
             }
         };
+        let binding_matches_probe = mt5_bindings
+            .iter()
+            .any(|binding| mt5_binding_matches_probe(binding, &installation, &probe));
         if let Err(code) = persist_mt5_probe(&store, &installation, &probe, now_utc_msc()) {
             last_error = code;
             if let Some(candidate) = mt5_probe_failure_candidate(&installation, code) {
                 failed_candidates.push(candidate);
             }
             continue;
+        }
+        if binding_matches_probe {
+            logger.info(
+                "native_mt5_terminal_probe_reused_binding",
+                Some(&format!(
+                    "profile={profile_id};terminal_id={};identity_verified=true",
+                    installation.terminal_instance_id
+                )),
+            );
+        } else {
+            logger.info(
+                "native_mt5_terminal_rebound",
+                Some(&format!(
+                    "profile={profile_id};terminal_id={};identity_changed={}",
+                    installation.terminal_instance_id,
+                    mt5_bindings.iter().any(|binding| {
+                        binding.terminal_instance_id == installation.terminal_instance_id
+                            && binding.platform == "mt5"
+                    })
+                )),
+            );
         }
         logger.info(
             "native_mt5_terminal_provisioned",
@@ -4104,9 +4154,27 @@ fn persist_mt5_probe(
 ) -> Result<(), &'static str> {
     if observer_terminal::mt5_terminal_instance_id(&probe.executable_path)?
         != installation.terminal_instance_id
-        || probe.executable_path != installation.executable_path
+        || !mt5_terminal_discovery::paths_equal(
+            &probe.executable_path,
+            &installation.executable_path,
+        )
     {
         return Err("mt5_probe_identity_mismatch");
+    }
+    let existing = store
+        .terminal_bindings()
+        .map_err(|error| error.code())?
+        .into_iter()
+        .find(|binding| binding.terminal_instance_id == installation.terminal_instance_id);
+    if existing.is_some_and(|binding| {
+        binding.platform == "mt5"
+            && mt5_terminal_discovery::paths_equal(
+                &binding.terminal_path,
+                &installation.executable_path,
+            )
+            && binding.account_ref == probe.account_ref
+    }) {
+        return Ok(());
     }
     store
         .activate_terminal_binding(
@@ -4471,6 +4539,9 @@ async fn monitor_runtime_status(
         root_data_directory,
         ui_state,
         preferences_store,
+        preference_change_sender,
+        mt5_redetect_requested,
+        mt5_auto_redetect_suppressed,
         terminal_candidates,
         logger,
     } = context;
@@ -4506,6 +4577,49 @@ async fn monitor_runtime_status(
         if changed {
             log_runtime_status(&logger, &snapshot);
             last_fingerprint = Some(fingerprint);
+        }
+        let identity_mismatch = snapshot
+            .terminals
+            .iter()
+            .filter(|terminal| terminal.platform == "mt5")
+            .find(|terminal| {
+                is_mt5_identity_mismatch(terminal.error_code.as_deref())
+                    && terminal
+                        .collector_consecutive_failures
+                        .max(terminal.worker_consecutive_failures)
+                        >= MT5_IDENTITY_MISMATCH_THRESHOLD
+            });
+        if let Some(terminal) = identity_mismatch {
+            let mismatch_failures = terminal
+                .collector_consecutive_failures
+                .max(terminal.worker_consecutive_failures);
+            if request_mt5_auto_redetection(&mt5_redetect_requested, &mt5_auto_redetect_suppressed)
+            {
+                logger.warning(
+                    "native_mt5_identity_refresh_requested",
+                    Some(&format!(
+                        "profile={profile_id};terminal_id={};reason=identity_mismatch;consecutive_failures={mismatch_failures}",
+                        terminal.terminal_instance_id
+                    )),
+                );
+                signal_preference_change(&preference_change_sender);
+            }
+        } else if snapshot
+            .terminals
+            .iter()
+            .filter(|terminal| terminal.platform == "mt5")
+            .all(|terminal| terminal.local_operational_ready)
+            && snapshot
+                .terminals
+                .iter()
+                .any(|terminal| terminal.platform == "mt5")
+        {
+            // Do not clear the latch during lifecycle warm-up. If the probe
+            // failed and the old binding starts again, a transient
+            // worker_registry_not_ready snapshot must not arm another loop.
+            // A fully ready MT5 snapshot proves the refreshed identity is
+            // usable and begins a new mismatch episode.
+            mt5_auto_redetect_suppressed.store(false, Ordering::Release);
         }
         tokio::select! {
             _ = stop.cancelled() => return,
@@ -5577,7 +5691,7 @@ mod tests {
     }
 
     #[test]
-    fn mt5_binding_reuse_requires_id_path_and_running_state() {
+    fn mt5_binding_reuse_requires_verified_identity_after_probe() {
         let terminal = std::env::temp_dir()
             .join("bridge-mt5-reuse")
             .join("terminal64.exe");
@@ -5593,27 +5707,51 @@ mod tests {
             updated_at_utc_msc: 1_800_000_000_000,
         };
         let installation = Mt5Installation {
-            executable_path: terminal,
+            executable_path: terminal.clone(),
             terminal_instance_id: "mt5_reuse_terminal".to_owned(),
             is_running: true,
         };
-        assert!(mt5_binding_reusable(&binding, &installation));
+        let probe = Mt5ProbeResult {
+            executable_path: terminal.clone(),
+            account_ref: binding.account_ref.clone(),
+        };
+        assert!(mt5_binding_matches_probe(&binding, &installation, &probe));
+
+        let mut changed_login = probe.clone();
+        changed_login.account_ref.login = "654321".to_owned();
+        assert!(!mt5_binding_matches_probe(
+            &binding,
+            &installation,
+            &changed_login
+        ));
+
+        let mut changed_server = probe.clone();
+        changed_server.account_ref.broker_server = "Broker-Live".to_owned();
+        assert!(!mt5_binding_matches_probe(
+            &binding,
+            &installation,
+            &changed_server
+        ));
 
         let mut not_running = installation.clone();
         not_running.is_running = false;
-        assert!(!mt5_binding_reusable(&binding, &not_running));
+        assert!(!mt5_binding_matches_probe(&binding, &not_running, &probe));
 
         let mut wrong_id = installation.clone();
         wrong_id.terminal_instance_id = "mt5_other_terminal".to_owned();
-        assert!(!mt5_binding_reusable(&binding, &wrong_id));
+        assert!(!mt5_binding_matches_probe(&binding, &wrong_id, &probe));
 
         let mut wrong_path = installation.clone();
         wrong_path.executable_path = std::env::temp_dir().join("other-terminal64.exe");
-        assert!(!mt5_binding_reusable(&binding, &wrong_path));
+        assert!(!mt5_binding_matches_probe(&binding, &wrong_path, &probe));
 
         let mut wrong_platform = binding.clone();
         wrong_platform.platform = "mt4".to_owned();
-        assert!(!mt5_binding_reusable(&wrong_platform, &installation));
+        assert!(!mt5_binding_matches_probe(
+            &wrong_platform,
+            &installation,
+            &probe
+        ));
     }
 
     #[test]
@@ -5647,6 +5785,28 @@ mod tests {
         request_mt5_redetection(&requested);
         assert!(consume_mt5_redetection(&requested));
         assert!(!consume_mt5_redetection(&requested));
+    }
+
+    #[test]
+    fn mt5_auto_redetect_request_is_debounced_until_verified_refresh() {
+        let requested = AtomicBool::new(false);
+        let suppressed = AtomicBool::new(false);
+        assert!(request_mt5_auto_redetection(&requested, &suppressed));
+        assert!(!request_mt5_auto_redetection(&requested, &suppressed));
+        assert!(suppressed.load(Ordering::Acquire));
+        assert!(consume_mt5_redetection(&requested));
+        assert!(!consume_mt5_redetection(&requested));
+
+        suppressed.store(false, Ordering::Release);
+        assert!(request_mt5_auto_redetection(&requested, &suppressed));
+    }
+
+    #[test]
+    fn mt5_identity_mismatch_auto_recovery_only_accepts_identity_errors() {
+        assert!(is_mt5_identity_mismatch(Some("mt5_login_mismatch")));
+        assert!(is_mt5_identity_mismatch(Some("mt5_broker_server_mismatch")));
+        assert!(!is_mt5_identity_mismatch(Some("mt5_account_unavailable")));
+        assert!(!is_mt5_identity_mismatch(None));
     }
 
     #[test]
@@ -5688,6 +5848,25 @@ mod tests {
         assert_eq!(bindings[0].terminal_instance_id, terminal_instance_id);
         assert_eq!(bindings[0].account_ref, probe.account_ref);
         assert_eq!(bindings[0].terminal_path, terminal);
+        let initial_epoch = bindings[0].connection_epoch;
+
+        persist_mt5_probe(&store, &installation, &probe, now_utc_msc() + 1_000)
+            .expect("same identity keeps binding epoch");
+        let unchanged = store.terminal_bindings().expect("unchanged probe bindings");
+        assert_eq!(unchanged[0].connection_epoch, initial_epoch);
+
+        let changed_probe = Mt5ProbeResult {
+            executable_path: installation.executable_path.clone(),
+            account_ref: AccountRef {
+                broker_server: "Broker-Live".to_owned(),
+                login: "654321".to_owned(),
+            },
+        };
+        persist_mt5_probe(&store, &installation, &changed_probe, now_utc_msc() + 2_000)
+            .expect("changed identity replaces binding");
+        let replaced = store.terminal_bindings().expect("replaced probe bindings");
+        assert_eq!(replaced[0].connection_epoch, initial_epoch + 1);
+        assert_eq!(replaced[0].account_ref, changed_probe.account_ref);
 
         let mismatched = Mt5ProbeResult {
             executable_path: root.join("other").join("terminal64.exe"),
@@ -5697,6 +5876,11 @@ mod tests {
             persist_mt5_probe(&store, &installation, &mismatched, now_utc_msc()),
             Err("mt5_probe_identity_mismatch")
         );
+        let after_failure = store
+            .terminal_bindings()
+            .expect("historical binding after failed probe");
+        assert_eq!(after_failure[0].account_ref, changed_probe.account_ref);
+        assert_eq!(after_failure[0].connection_epoch, initial_epoch + 1);
         drop(store);
         std::fs::remove_dir_all(root).expect("remove probe binding fixture");
     }
