@@ -616,12 +616,15 @@ fn is_explicit_mt4_only_candidate(path: &Path) -> bool {
     else {
         return false;
     };
-    (installation_directory.join("MQL4").is_dir() && !installation_directory.join("MQL5").is_dir())
-        || file_product_major_version(path).is_some_and(is_mt4_product_major)
+    is_explicit_mt4_evidence(
+        installation_directory.join("MQL4").is_dir(),
+        installation_directory.join("MQL5").is_dir(),
+        file_product_major_version(path),
+    )
 }
 
-fn is_mt4_product_major(product_major: u16) -> bool {
-    product_major == 4
+fn is_explicit_mt4_evidence(has_mql4: bool, has_mql5: bool, product_major: Option<u16>) -> bool {
+    !has_mql5 && (has_mql4 || product_major == Some(4))
 }
 
 fn file_product_major_version(path: &Path) -> Option<u16> {
@@ -801,10 +804,13 @@ mod tests {
     }
 
     #[test]
-    fn mt4_product_major_is_classified_without_rejecting_mt5_or_unknown_versions() {
-        assert!(is_mt4_product_major(4));
-        assert!(!is_mt4_product_major(5));
-        assert!(!is_mt4_product_major(0));
+    fn mt4_evidence_requires_no_positive_mql5_layout() {
+        assert!(is_explicit_mt4_evidence(false, false, Some(4)));
+        assert!(is_explicit_mt4_evidence(true, false, None));
+        assert!(!is_explicit_mt4_evidence(false, false, Some(5)));
+        assert!(!is_explicit_mt4_evidence(false, false, None));
+        assert!(!is_explicit_mt4_evidence(true, true, Some(4)));
+        assert!(!is_explicit_mt4_evidence(false, true, Some(4)));
     }
 
     #[test]
