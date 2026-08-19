@@ -44,7 +44,15 @@ describe('admin strategy trade contract', () => {
     expect(route).not.toContain("router.post('/strategy-trades")
   })
 
-  it('normalizes compatibility aliases while freezing direct volume and market-only entry', () => {
+  it('enriches live pending rows with dispatch lineage without hiding inventory on metadata failure', () => {
+    const bridge = fs.readFileSync(new URL('../server/bridge-ws.js', import.meta.url), 'utf8')
+    expect(bridge).toContain('admin_strategy_dispatch_id')
+    expect(bridge).toContain("d.entry_method <> 'market'")
+    expect(bridge).toContain('admin_strategy_distributed:true')
+    expect(bridge).toContain('Metadata enrichment must never hide')
+  })
+
+  it('normalizes compatibility aliases while freezing direct volume and pending entry parameters', () => {
     const input = normalizeAdminStrategyTradeInput({
       strategy_id: 7, trading_account_id: 9, symbol: 'EURUSD.s', direction: 'BUY',
       take_profit: 1.12, stop_loss: 1.08, volume: '0.123456789', valid_minutes: 5,
@@ -56,7 +64,8 @@ describe('admin strategy trade contract', () => {
     expect(input.idempotency_key).toBe('client-1')
     expect(input.valid_until_utc_msc).toBeGreaterThan(Date.now())
     expect(input).not.toHaveProperty('position_size_tier')
-    expect(() => normalizeAdminStrategyTradeInput({ ...input, entry_method: 'limit' })).toThrow('entry_method_not_supported')
+    const pending = normalizeAdminStrategyTradeInput({ ...input, entry_method: 'limit', limit_price: 1.1, pending_valid_minutes: 60 })
+    expect(pending).toMatchObject({ entry_method:'limit', entry_price:1.1, limit_price:1.1, pending_valid_minutes:60 })
   })
 
   it('normalizes all optional stop-loss/take-profit combinations without zero sentinels', () => {
@@ -147,12 +156,12 @@ describe('admin strategy trade contract', () => {
     const service = fs.readFileSync(new URL('../server/services/admin-strategy-trades.js', import.meta.url), 'utf8')
     const signalInsert = service.slice(service.indexOf('INSERT INTO ai_signals'), service.indexOf('const signalId'))
     expect(signalInsert).toContain('recommended_volume, analysis, reasoning')
-    expect(signalInsert).toContain("'admin_strategy_dispatch', 0, 0, ?, ?, 'market', ?")
+    expect(signalInsert).toContain("?, ?, ?, 0, 'admin_strategy_dispatch', 0, 0, ?, ?, ?, ?, ?")
     expect(signalInsert).not.toContain("'admin_strategy_dispatch', ?, 0, ?, ?, 'market', ?")
     const dispatchInsert = service.slice(service.indexOf('INSERT INTO admin_strategy_trade_dispatches'), service.indexOf('const dispatchId'))
     expect(dispatchInsert).toContain('requested_volume, position_size_tier')
     expect(dispatchInsert).toContain("?, ?, ?, 'confirmed', ?, ?, ?, ?")
-    expect(dispatchInsert).toContain('input.entry_method, input.entry_price, input.stop_loss, input.take_profit_1')
+    expect(dispatchInsert).toContain('input.symbol, input.direction, input.entry_method, input.entry_price, input.limit_price, input.stop_limit_price')
     expect(signalInsert).toContain('input.stop_loss, input.take_profit_1')
   })
 

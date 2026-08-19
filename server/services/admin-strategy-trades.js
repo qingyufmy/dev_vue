@@ -5,7 +5,11 @@ import { isSubscriptionScheduleActive } from '../routes/ai/subscription-schedule
 import { getBridgeGeneration, isBridgeAlive, isTradeEnabled } from '../bridge-ws.js'
 
 export const ADMIN_STRATEGY_TRADE_SOURCE = 'admin_strategy_dispatch'
-export const ADMIN_STRATEGY_TRADE_ENTRY_METHODS = Object.freeze(['market'])
+// The administrator dispatch contract mirrors the common Bridge order
+// contract.  Platform capability (MT4 vs MT5) is still checked at the final
+// Bridge boundary; the preview has no terminal platform context, so it must
+// not silently hide valid MT5 order types.
+export const ADMIN_STRATEGY_TRADE_ENTRY_METHODS = Object.freeze(['market', 'limit', 'stop', 'stop_limit'])
 export const ADMIN_STRATEGY_TRADE_MAGIC = 234000
 const VALID_DIRECTIONS = new Set(['buy', 'sell'])
 const PREVIEWABLE_STATUSES = new Set(['draft', 'previewed', 'confirmed'])
@@ -62,6 +66,19 @@ export function normalizeAdminStrategyTradeInput(body = {}, headers = {}) {
   const entryMethod = String(body.entry_method || 'market').trim().toLowerCase()
   if (!ADMIN_STRATEGY_TRADE_ENTRY_METHODS.includes(entryMethod)) throw fail('entry_method_not_supported')
   const volume = normalizeVolume(body.volume)
+  const pending = entryMethod !== 'market'
+  const limitPrice = normalizePrice(
+    body.limit_price ?? (pending ? body.entry_price : null),
+    'limit_price', pending,
+  )
+  const stopLimitPrice = normalizePrice(body.stop_limit_price, 'stop_limit_price', entryMethod === 'stop_limit')
+  const pendingValidRaw = body.pending_valid_minutes ?? body.pending_validity_minutes
+  const pendingValidMinutes = pending
+    ? (pendingValidRaw == null || pendingValidRaw === '' ? 240 : Number(pendingValidRaw))
+    : null
+  if (pending && (!Number.isInteger(pendingValidMinutes) || pendingValidMinutes < 1 || pendingValidMinutes > 1440)) {
+    throw fail('pending_valid_minutes_invalid')
+  }
   const validUntilRaw = body.valid_until_utc_msc ?? body.valid_until
   const validMinutes = Number(body.valid_minutes)
   const validUntil = validUntilRaw == null && Number.isFinite(validMinutes) && validMinutes > 0
@@ -76,7 +93,13 @@ export function normalizeAdminStrategyTradeInput(body = {}, headers = {}) {
     symbol,
     direction,
     entry_method: entryMethod,
-    entry_price: normalizePrice(body.entry_price, 'entry_price', false),
+    // Keep entry_price as the common display/reference field.  For pending
+    // orders it is the trigger/limit price and is persisted again as
+    // limit_price for the Bridge contract.
+    entry_price: pending ? limitPrice : normalizePrice(body.entry_price, 'entry_price', false),
+    limit_price: limitPrice,
+    stop_limit_price: stopLimitPrice,
+    pending_valid_minutes: pendingValidMinutes,
     stop_loss: normalizePrice(body.stop_loss ?? body.stop_loss_price, 'stop_loss', false),
     take_profit_1: normalizePrice(body.take_profit_1 ?? body.take_profit_1_price ?? body.take_profit, 'take_profit_1', false),
     take_profit_2: normalizePrice(body.take_profit_2 ?? body.take_profit_2_price, 'take_profit_2', false),
@@ -162,6 +185,9 @@ function snapshotForTarget(row, input, strategy, targetRole, exclusionReason = n
   }
   return {
     target_role: targetRole, dispatch_symbol: input.symbol, direction: input.direction,
+    entry_method: input.entry_method, entry_price: input.entry_price,
+    limit_price: input.limit_price, stop_limit_price: input.stop_limit_price,
+    pending_valid_minutes: input.pending_valid_minutes,
     // Freeze the administrator's explicit hand size in every target snapshot;
     // subscribers must not recalculate it from a legacy position tier.
     requested_volume: input.volume,
@@ -337,12 +363,14 @@ async function insertDispatchTx(run, actorId, input, preview) {
   const strategySnapshot = { ...preview.strategy, request: preview.request }
   const [dispatchResult] = await run(`INSERT INTO admin_strategy_trade_dispatches
     (idempotency_key, actor_user_id, strategy_id, frozen_strategy_version, strategy_snapshot_json,
-     symbol, direction, entry_method, entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
+     symbol, direction, entry_method, entry_price, limit_price, stop_limit_price, pending_valid_minutes,
+     stop_loss, take_profit_1, take_profit_2, take_profit_3,
      requested_volume, position_size_tier, valid_until_utc_msc, reason, preview_hash, status, target_count,
      eligible_target_count, updated_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'confirmed', ?, ?, ?, ?)`, [
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'confirmed', ?, ?, ?, ?)`, [
     input.idempotency_key, actorId, input.strategy_id, Number(preview.strategy.version || 1), json(strategySnapshot),
-    input.symbol, input.direction, input.entry_method, input.entry_price, input.stop_loss, input.take_profit_1,
+    input.symbol, input.direction, input.entry_method, input.entry_price, input.limit_price, input.stop_limit_price,
+    input.pending_valid_minutes, input.stop_loss, input.take_profit_1,
     input.take_profit_2, input.take_profit_3, input.volume, input.valid_until_utc_msc, input.reason,
     preview.preview_hash, preview.summary.target_count, preview.summary.eligible_target_count, now, now,
   ])
@@ -353,11 +381,15 @@ async function insertDispatchTx(run, actorId, input, preview) {
     (user_id, config_id, prompt_type_id, session_id, source, symbol, timeframe, signal_type, confidence,
      recommended_volume, analysis, reasoning,
      stop_loss_price, take_profit_1_price, take_profit_2_price, take_profit_3_price, market_data_json,
-     token_count, ai_model, ttl_seconds, is_executed, created_at, created_at_utc_msc, entry_method, decision_json)
-    VALUES (?, 0, ?, 'admin_strategy_dispatch', ?, ?, 'M15', ?, 1, ?, ?, ?, ?, ?, ?, ?, '{}', 0, 'admin_strategy_dispatch', 0, 0, ?, ?, 'market', ?)`, [
+     limit_price, stop_limit_price, pending_valid_until, token_count, ai_model, ttl_seconds, is_executed,
+     created_at, created_at_utc_msc, entry_method, decision_json)
+    VALUES (?, 0, ?, 'admin_strategy_dispatch', ?, ?, 'M15', ?, 1, ?, ?, ?, ?, ?, ?, ?, '{}',
+      ?, ?, ?, 0, 'admin_strategy_dispatch', 0, 0, ?, ?, ?, ?, ?)`, [
     actorId, input.strategy_id, ADMIN_STRATEGY_TRADE_SOURCE, input.symbol, input.direction,
     input.volume, `Admin strategy dispatch ${dispatchId}`, input.reason, input.stop_loss, input.take_profit_1,
-    input.take_profit_2, input.take_profit_3, now, Date.now(), decision,
+    input.take_profit_2, input.take_profit_3, input.limit_price, input.stop_limit_price,
+    input.pending_valid_minutes == null ? null : new Date(Date.now() + input.pending_valid_minutes * 60_000).toISOString().slice(0, 19).replace('T', ' '),
+    now, Date.now(), input.entry_method, decision,
   ])
   const signalId = Number(signalResult.insertId)
   await run('UPDATE admin_strategy_trade_dispatches SET signal_id = ?, source_target_id = NULL, updated_at = ? WHERE id = ?', [signalId, now, dispatchId])

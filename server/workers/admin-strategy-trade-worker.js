@@ -23,7 +23,7 @@ function parseJson(value, fallback = {}) {
 }
 
 function ticketFrom(value = {}) {
-  return String(value.trade_ticket ?? value.position_id ?? value.position ?? value.ticket ?? value.entry_order_ticket ?? value.order_ticket ?? value.order ?? '').trim() || null
+  return String(value.trade_ticket ?? value.pending_ticket ?? value.position_id ?? value.position ?? value.ticket ?? value.entry_order_ticket ?? value.order_ticket ?? value.order ?? '').trim() || null
 }
 
 function directionMatches(value, direction) {
@@ -32,6 +32,40 @@ function directionMatches(value, direction) {
   const numeric = Number(value)
   return Number.isFinite(numeric) && ((String(direction).toLowerCase() === 'buy' && numeric === 0)
     || (String(direction).toLowerCase() === 'sell' && numeric === 1))
+}
+
+function pendingTypeFor(direction, entryMethod) {
+  const side = String(direction || '').toLowerCase()
+  if (entryMethod === 'limit') return side === 'buy' ? 'buy_limit' : 'sell_limit'
+  if (entryMethod === 'stop') return side === 'buy' ? 'buy_stop' : 'sell_stop'
+  if (entryMethod === 'stop_limit') return side === 'buy' ? 'buy_stop_limit' : 'sell_stop_limit'
+  return null
+}
+
+function pendingTypeFrom(item = {}) {
+  const text = String(item.pending_type ?? item.order_type ?? '').trim().toLowerCase()
+  if (text) return text
+  return ({ 2:'buy_limit', 3:'sell_limit', 4:'buy_stop', 5:'sell_stop', 6:'buy_stop_limit', 7:'sell_stop_limit' })[Number(item.type)] || ''
+}
+
+function pendingSideFrom(item = {}) {
+  const side = String(item.side ?? item.direction ?? '').trim().toLowerCase()
+  if (side === 'buy' || side === 'sell') return side
+  const kind = pendingTypeFrom(item)
+  return kind.startsWith('buy') ? 'buy' : kind.startsWith('sell') ? 'sell' : ''
+}
+
+function pendingInventory(inventory) {
+  return Array.isArray(inventory?.pending_orders) ? inventory.pending_orders
+    : Array.isArray(inventory?.pending) ? inventory.pending : []
+}
+
+function isPendingDispatch(dispatch) {
+  return ['limit', 'stop', 'stop_limit'].includes(String(dispatch?.entry_method || '').toLowerCase())
+}
+
+function inventoryTicket(item) {
+  return String(item?.ticket ?? item?.order_id ?? item?.pending_ticket ?? '').trim()
 }
 
 function setError(error, fallback = 'admin_strategy_trade_failed') {
@@ -62,7 +96,7 @@ async function markTarget(targetId, dispatchId, status, fields = {}) {
   if (!allowed.has(status)) throw new Error(`invalid_target_status:${status}`)
   const updates = ['status = ?', 'updated_at = ?']; const params = [status, now]
   for (const [column, value] of Object.entries(fields)) {
-    if (!['order_intent_id', 'trade_ticket', 'execution_result_json', 'error_code', 'completed_at', 'lease_token', 'lease_expires_at'].includes(column)) continue
+    if (!['order_intent_id', 'trade_ticket', 'terminal_order_kind', 'terminal_order_state', 'execution_result_json', 'error_code', 'completed_at', 'lease_token', 'lease_expires_at'].includes(column)) continue
     updates.push(`${column} = ?`); params.push(value)
   }
   if (['succeeded', 'rejected', 'skipped', 'failed', 'failed_manual_review'].includes(status)) {
@@ -82,9 +116,14 @@ function targetRequest(dispatch, target, snapshot) {
     || !Number.isSafeInteger(targetId) || targetId <= 0) {
     throw Object.assign(new Error('admin_strategy_target_identity_invalid'), { code: 'admin_strategy_target_identity_invalid' })
   }
+  const entryMethod = String(dispatch.entry_method || 'market').toLowerCase()
+  const pending = entryMethod !== 'market'
   const request = {
     symbol: dispatch.symbol, order_type: dispatch.direction, direction: dispatch.direction,
-    entry_method: 'market', entry_price: dispatch.entry_price || null,
+    entry_method: entryMethod, entry_price: dispatch.entry_price || null,
+    limit_price: pending ? (dispatch.limit_price || dispatch.entry_price || null) : null,
+    stop_limit_price: entryMethod === 'stop_limit' ? (dispatch.stop_limit_price || null) : null,
+    pending_valid_minutes: pending ? Number(dispatch.pending_valid_minutes || 240) : null,
     // New dispatches carry an explicit, frozen hand size. executeOrderCore
     // still applies broker/risk validation and may only reduce that request.
     volume: isLegacyTierDispatch ? 0 : Number(dispatch.requested_volume),
@@ -159,12 +198,13 @@ async function checkTargetRuntime(dispatch, target, sourceRequired) {
 
 async function verifySourceOutcome(dispatch, target, result, request) {
   if (result?.status !== 'success' || !result.order_intent_id) return { verified: false, uncertain: result?.status === 'uncertain' }
-  const outcomeRows = await queryAll(`SELECT so.*, oi.trading_account_id, oi.symbol, oi.request_json, oi.status AS intent_status
+  const outcomeRows = await queryAll(`SELECT so.*, oi.trading_account_id, oi.symbol, oi.request_json, oi.status AS intent_status,
+      oi.pending_ticket AS intent_pending_ticket
     FROM signal_outcomes so JOIN order_intents oi ON oi.id = so.order_intent_id
     WHERE so.order_intent_id = ?`, [result.order_intent_id])
   if (outcomeRows.length !== 1) return { verified: false, uncertain: true, reason: 'signal_outcome_not_unique' }
   const outcome = outcomeRows[0]
-  const resultTicket = ticketFrom(result) || ticketFrom(outcome)
+  const resultTicket = ticketFrom(result) || ticketFrom({ pending_ticket:outcome.pending_ticket || outcome.intent_pending_ticket }) || ticketFrom(outcome)
   if (!resultTicket || outcome.intent_status !== 'succeeded' || String(outcome.signal_id) !== String(dispatch.signal_id)
     || Number(outcome.trading_account_id) !== Number(target.trading_account_id)
     || stripBrokerSuffix(String(outcome.symbol || '')) !== stripBrokerSuffix(dispatch.symbol)
@@ -178,13 +218,30 @@ async function verifySourceOutcome(dispatch, target, result, request) {
     || String(inventory.account.login || '') !== String(frozen.broker?.login || '')) {
     return { verified: false, uncertain: true, reason: 'source_inventory_account_mismatch', ticket: resultTicket }
   }
-  const list = Array.isArray(inventory.positions) ? inventory.positions : []
-  const match = list.find(position => String(position.ticket ?? position.position_id ?? position.order ?? '') === String(resultTicket)
+  const pending = isPendingDispatch(dispatch)
+  const list = pending ? pendingInventory(inventory) : (Array.isArray(inventory.positions) ? inventory.positions : [])
+  const expectedPendingType = pendingTypeFor(dispatch.direction, String(dispatch.entry_method || '').toLowerCase())
+  const match = list.find(position => inventoryTicket(position) === String(resultTicket)
     && stripBrokerSuffix(String(position.symbol || '')) === stripBrokerSuffix(dispatch.symbol)
-    && directionMatches(position.type ?? position.direction, dispatch.direction)
+    && (pending ? pendingSideFrom(position) === String(dispatch.direction).toLowerCase()
+      && (!expectedPendingType || pendingTypeFrom(position) === expectedPendingType)
+      : directionMatches(position.type ?? position.direction, dispatch.direction))
     && Number(position.magic) === ADMIN_STRATEGY_TRADE_MAGIC)
   if (!match) return { verified: false, uncertain: true, reason: 'source_inventory_not_confirmed', ticket: resultTicket }
-  return { verified: true, ticket: resultTicket, outcome }
+  return { verified: true, ticket: resultTicket, outcome, terminal_order_kind: pending ? 'pending' : 'position', terminal_order_state: pending ? 'pending' : 'open' }
+}
+
+async function syncSourceSignal(dispatch, ticket, pending, resultJson) {
+  if (!dispatch?.signal_id || !ticket) return
+  if (pending) {
+    // The shared signal represents the source order only.  Subscriber tickets
+    // stay on their own dispatch targets/outcomes and must never overwrite it.
+    await queryRun(`UPDATE ai_signals SET pending_ticket = ?, pending_state = 'pending',
+      execution_result = ? WHERE id = ?`, [String(ticket), resultJson, Number(dispatch.signal_id)])
+  } else {
+    await queryRun(`UPDATE ai_signals SET is_executed = 1, executed_at = COALESCE(executed_at, NOW()),
+      trade_ticket = ?, execution_result = ? WHERE id = ?`, [String(ticket), resultJson, Number(dispatch.signal_id)])
+  }
 }
 
 async function executeTarget(dispatch, target, sourceRequired = false) {
@@ -212,24 +269,31 @@ async function executeTarget(dispatch, target, sourceRequired = false) {
     })
     const resultJson = JSON.stringify(result || {})
     if (result?.status === 'succeeded' || (result?.status === 'success' && result?.order_intent_id)) {
-      const intent = await queryOne('SELECT id, status, trade_ticket, result_json FROM order_intents WHERE id = ?', [result.order_intent_id])
+      const intent = await queryOne('SELECT id, status, trade_ticket, pending_ticket, result_json FROM order_intents WHERE id = ?', [result.order_intent_id])
       if (intent?.status === 'uncertain') {
         await markTarget(target.id, dispatch.id, 'uncertain', { order_intent_id: intent.id, execution_result_json: resultJson, error_code: 'order_intent_uncertain' })
         return { status: 'uncertain' }
       }
-      const ticket = intent?.trade_ticket || ticketFrom(result)
+      const pending = isPendingDispatch(dispatch)
+      const ticket = (pending ? intent?.pending_ticket : intent?.trade_ticket) || ticketFrom(result)
       if (!ticket) {
-        await markTarget(target.id, dispatch.id, 'uncertain', { order_intent_id: result.order_intent_id, execution_result_json: resultJson, error_code: 'trade_ticket_missing' })
+        await markTarget(target.id, dispatch.id, 'uncertain', { order_intent_id: result.order_intent_id, terminal_order_kind: pending ? 'pending' : 'position', execution_result_json: resultJson, error_code: 'trade_ticket_missing' })
         return { status: 'uncertain' }
       }
+      let terminalOrderKind = pending ? 'pending' : 'position'
+      let terminalOrderState = pending ? 'pending' : 'open'
       if (!sourceRequired) {
         const verified = await verifySourceOutcome(dispatch, target, result, request)
         if (!verified.verified) {
-          await markTarget(target.id, dispatch.id, 'uncertain', { order_intent_id: result.order_intent_id, trade_ticket: ticket, execution_result_json: resultJson, error_code: verified.reason || 'source_not_confirmed' })
+          await markTarget(target.id, dispatch.id, 'uncertain', { order_intent_id: result.order_intent_id, trade_ticket: ticket, terminal_order_kind: pending ? 'pending' : 'position', execution_result_json: resultJson, error_code: verified.reason || 'source_not_confirmed' })
           return { status: 'uncertain' }
         }
+        terminalOrderKind = verified.terminal_order_kind || terminalOrderKind
+        terminalOrderState = verified.terminal_order_state || terminalOrderState
       }
-      await markTarget(target.id, dispatch.id, 'succeeded', { order_intent_id: result.order_intent_id, trade_ticket: ticket, execution_result_json: resultJson })
+      if (!sourceRequired) await syncSourceSignal(dispatch, ticket, pending, resultJson)
+      await markTarget(target.id, dispatch.id, 'succeeded', { order_intent_id: result.order_intent_id, trade_ticket: ticket,
+        terminal_order_kind: terminalOrderKind, terminal_order_state: terminalOrderState, execution_result_json: resultJson })
       return { status: 'succeeded', ticket }
     }
     if (result?.status === 'uncertain') {
@@ -273,7 +337,7 @@ async function reconcileUncertainTarget(target) {
   const dispatch = await loadDispatch(target.dispatch_id)
   if (!dispatch) return { status: 'missing_dispatch' }
   const intent = target.order_intent_id
-    ? await queryOne('SELECT id, status, trade_ticket, result_json, trading_account_id, symbol FROM order_intents WHERE id = ?', [target.order_intent_id]) : null
+    ? await queryOne('SELECT id, status, trade_ticket, pending_ticket, result_json, trading_account_id, symbol FROM order_intents WHERE id = ?', [target.order_intent_id]) : null
   if (!intent || intent.status === 'uncertain' || intent.status === 'bridge_sending' || intent.status === 'preparing' || intent.status === 'prepared') return { status: 'still_uncertain' }
   if (intent.status !== 'succeeded') {
     await markTarget(target.id, target.dispatch_id, 'failed_manual_review', { error_code: `reconcile_${intent.status || 'failed'}`, execution_result_json: intent.result_json || JSON.stringify({ status: intent.status }) })
@@ -285,17 +349,28 @@ async function reconcileUncertainTarget(target) {
     || Number(outcomes[0].system_magic) !== ADMIN_STRATEGY_TRADE_MAGIC) return { status: 'still_uncertain' }
   const snapshot = parseJson(target.target_snapshot_json)
   const inventory = await mt5Bridge(target.user_id, 'system_trade_inventory', {}, { noFallback: true, timeoutMs: 10_000 }).catch(() => null)
-  const ticket = intent.trade_ticket || ticketFrom(outcomes[0])
+  const pending = isPendingDispatch(dispatch)
+  const ticket = (pending ? intent.pending_ticket : intent.trade_ticket) || ticketFrom(outcomes[0])
   if (inventory?.status !== 'success' || !inventory.account
     || String(inventory.account.server || '').toUpperCase() !== String(snapshot.broker?.server || '').toUpperCase()
     || String(inventory.account.login || '') !== String(snapshot.broker?.login || '')) return { status: 'still_uncertain' }
-  const position = inventory?.status === 'success' && Array.isArray(inventory.positions)
+  const pendingOrder = pending ? pendingInventory(inventory).find(item => inventoryTicket(item) === String(ticket)
+    && stripBrokerSuffix(String(item.symbol || '')) === stripBrokerSuffix(dispatch.symbol)
+    && pendingSideFrom(item) === String(dispatch.direction).toLowerCase()
+    && (!pendingTypeFor(dispatch.direction, String(dispatch.entry_method || '').toLowerCase())
+      || pendingTypeFrom(item) === pendingTypeFor(dispatch.direction, String(dispatch.entry_method || '').toLowerCase()))
+    && Number(item.magic) === ADMIN_STRATEGY_TRADE_MAGIC) : null
+  const position = Array.isArray(inventory.positions)
     ? inventory.positions.find(item => String(item.ticket ?? item.position_id ?? item.order ?? '') === String(ticket)
       && stripBrokerSuffix(String(item.symbol || '')) === stripBrokerSuffix(dispatch.symbol)
       && directionMatches(item.type ?? item.direction, dispatch.direction)
       && Number(item.magic) === ADMIN_STRATEGY_TRADE_MAGIC) : null
-  if (!position) return { status: 'still_uncertain' }
-  await markTarget(target.id, target.dispatch_id, 'succeeded', { order_intent_id: intent.id, trade_ticket: ticket, execution_result_json: intent.result_json || JSON.stringify(position) })
+  if (pending && !pendingOrder && !position) return { status: 'still_uncertain' }
+  if (!pending && !position) return { status: 'still_uncertain' }
+  const kind = pending && pendingOrder ? 'pending' : 'position'
+  const state = pending && pendingOrder ? 'pending' : 'open'
+  await markTarget(target.id, target.dispatch_id, 'succeeded', { order_intent_id: intent.id, trade_ticket: ticket,
+    terminal_order_kind:kind, terminal_order_state:state, execution_result_json: intent.result_json || JSON.stringify(pendingOrder || position) })
   return { status: 'succeeded' }
 }
 

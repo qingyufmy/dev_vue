@@ -31,6 +31,10 @@ const state = {
   adminStrategyDispatch: null,
   adminStrategyDispatchPollTimer: null,
   adminStrategyDispatchPollGeneration: 0,
+  adminStrategyPendingCancelPreview: null,
+  adminStrategyPendingCancelJob: null,
+  adminStrategyPendingCancelPollTimer: null,
+  adminStrategyPendingCancelPollGeneration: 0,
   accountBalance: 0,
   notificationUnread: 0,
   notificationImportantUnacknowledgedCount: 0,
@@ -2818,6 +2822,9 @@ function invalidateSession() {
   state.adminStrategyDispatchPreview = null;
   state.adminStrategyDispatchPending = null;
   state.adminStrategyDispatch = null;
+  stopAdminStrategyPendingCancelPolling();
+  state.adminStrategyPendingCancelPreview = null;
+  state.adminStrategyPendingCancelJob = null;
   state.adminStrategyClosePreview = null;
   state.adminStrategyClosePreviewTicket = null;
   state.adminStrategyCloseJob = null;
@@ -5025,40 +5032,46 @@ function renderAdminStrategyDispatchStrategyOptions() {
 
 function syncAdminStrategyDispatchOrderType() {
   const active = adminStrategyDispatchModeEnabled();
-  const selectedType = state.selectedOrderType || "market";
+  const supported = new Set((state.adminStrategyDispatchCapabilities?.supported_entry_methods || ["market"])
+    .map(value => String(value || "").toLowerCase()));
+  let selectedType = state.selectedOrderType || "market";
   const buttons = document.querySelectorAll(".order-type-btn");
   buttons.forEach(button => {
     const type = String(button.dataset.type || "");
-    if (active && type !== "market") {
+    if (active && !supported.has(type)) {
       if (!button.hasAttribute("data-admin-dispatch-was-disabled")) button.dataset.adminDispatchWasDisabled = button.disabled ? "1" : "0";
       button.disabled = true;
       button.setAttribute("aria-disabled", "true");
-      button.title = "平台策略分发仅支持市价 BUY/SELL";
-    } else if (!active && button.hasAttribute("data-admin-dispatch-was-disabled")) {
+      button.title = "当前平台策略分发不支持该订单类型";
+    } else if (button.hasAttribute("data-admin-dispatch-was-disabled")) {
       button.disabled = button.dataset.adminDispatchWasDisabled === "1";
       button.removeAttribute("data-admin-dispatch-was-disabled");
       button.removeAttribute("aria-disabled");
       button.title = "";
     }
-    button.setAttribute("aria-pressed", String(button.dataset.type === (active ? "market" : selectedType)));
   });
+  if (active && !supported.has(selectedType)) {
+    selectedType = supported.has("market") ? "market" : ([...supported][0] || "market");
+    state.selectedOrderType = selectedType;
+  }
   if (active) {
-    state.selectedOrderType = "market";
-    const marketButton = document.querySelector('.order-type-btn[data-type="market"]');
+    const selectedButton = document.querySelector(`.order-type-btn[data-type="${selectedType}"]`);
     buttons.forEach(button => {
-      button.classList.toggle("active", button === marketButton);
-      button.setAttribute("aria-pressed", String(button === marketButton));
+      button.classList.toggle("active", button === selectedButton);
+      button.setAttribute("aria-pressed", String(button === selectedButton));
     });
     const pendingRow = $("pendingPriceRow");
     if (pendingRow) {
-      pendingRow.style.display = "none";
-      pendingRow.setAttribute("aria-hidden", "true");
+      pendingRow.style.display = selectedType === "market" ? "none" : "";
+      pendingRow.setAttribute("aria-hidden", String(selectedType === "market"));
     }
     const stopLimitWrap = $("stopLimitPriceWrap");
     if (stopLimitWrap) {
-      stopLimitWrap.style.display = "none";
-      stopLimitWrap.setAttribute("aria-hidden", "true");
+      stopLimitWrap.style.display = selectedType === "stop_limit" ? "" : "none";
+      stopLimitWrap.setAttribute("aria-hidden", String(selectedType !== "stop_limit"));
     }
+  } else {
+    buttons.forEach(button => button.setAttribute("aria-pressed", String(button.dataset.type === selectedType)));
   }
   validatePendingPrice();
 }
@@ -5090,9 +5103,10 @@ async function loadAdminStrategyDispatchCapabilities({ force = false } = {}) {
   try {
     const data = await api("/api/admin/strategy-trades/capabilities", { timeout:10000 });
     const methods = Array.isArray(data?.supported_entry_methods) ? data.supported_entry_methods.map(value => String(value).toLowerCase()) : [];
+    const supportedMethods = methods.length ? methods : ["market"];
     state.adminStrategyDispatchCapabilities = {
-      enabled: Boolean(data?.enabled) && (!methods.length || methods.includes("market")),
-      supported_entry_methods: methods,
+      enabled: Boolean(data?.enabled) && supportedMethods.includes("market"),
+      supported_entry_methods: supportedMethods,
     };
   } catch (error) {
     state.adminStrategyDispatchCapabilities = { enabled:false, supported_entry_methods:[] };
@@ -5345,11 +5359,169 @@ function strategyDispatchClientRequestId() {
   return globalThis.crypto?.randomUUID?.() || `admin-strategy-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function adminStrategyPendingCancelRoot(data = {}) {
+  return data?.job || data?.preview || data?.result || data || {};
+}
+
+function adminStrategyPendingCancelTargets(data = {}) {
+  const root = adminStrategyPendingCancelRoot(data);
+  return Array.isArray(root.targets) ? root.targets : [];
+}
+
+function adminStrategyPendingCancelStatusLabel(value) {
+  const status = String(value || "pending").toLowerCase();
+  return ({ queued:"等待执行", pending:"等待执行", running:"正在撤单", executing:"正在撤单",
+    reconciling:"正在核对", uncertain:"等待核对", succeeded:"已撤单", completed:"已完成",
+    partial:"部分完成", skipped:"已安全跳过", failed:"撤单失败" })[status] || status;
+}
+
+function adminStrategyPendingCancelReasonLabel(value) {
+  return ({ filled:"已成交为持仓，本次不会平仓", already_absent:"终端已不存在，无需重复撤单",
+    outcome_not_pending:"原订单已不是挂单状态", ticket_unavailable:"未找到可核验的真实票号",
+    pending_identity_mismatch:"实时挂单身份与原分发不一致", pending_magic_mismatch:"系统 Magic 不匹配",
+    account_identity_mismatch:"当前终端账户身份不匹配", bridge_offline:"桥接离线",
+    trade_send_disabled:"交易发送已关闭", inventory_unavailable:"无法核对实时挂单" })[String(value || "")] || String(value || "");
+}
+
+function stopAdminStrategyPendingCancelPolling() {
+  if (state.adminStrategyPendingCancelPollTimer) clearTimeout(state.adminStrategyPendingCancelPollTimer);
+  state.adminStrategyPendingCancelPollTimer = null;
+  state.adminStrategyPendingCancelPollGeneration += 1;
+}
+
+function renderAdminStrategyPendingCancel() {
+  const body = $("adminStrategyPendingCancelBody");
+  const confirm = $("adminStrategyPendingCancelConfirm");
+  const retry = $("adminStrategyPendingCancelRetry");
+  if (!body || !confirm || !retry) return;
+  const source = state.adminStrategyPendingCancelJob || state.adminStrategyPendingCancelPreview;
+  const root = adminStrategyPendingCancelRoot(source || {});
+  const targets = adminStrategyPendingCancelTargets(source || {});
+  const isJob = Boolean(root?.id || root?.job_id);
+  const eligible = Number(root?.eligible_target_count ?? root?.summary?.eligible_target_count
+    ?? targets.filter(target => target.eligible).length);
+  const succeeded = Number(root?.succeeded ?? root?.succeeded_target_count ?? root?.summary?.succeeded ?? 0);
+  const failed = Number(root?.failed ?? root?.failed_target_count ?? root?.summary?.failed ?? 0);
+  const skipped = Number(root?.skipped ?? root?.skipped_target_count ?? root?.summary?.skipped
+    ?? targets.filter(target => !target.eligible).length);
+  const uncertain = Number(root?.uncertain ?? root?.uncertain_target_count ?? root?.summary?.uncertain ?? 0);
+  const status = String(root?.status || (isJob ? "queued" : "preview"));
+  const rows = targets.map(target => {
+    const targetStatus = String(target.status || (target.eligible ? "pending" : "skipped"));
+    const account = adminStrategyDispatchTargetLabel(target);
+    const reason = adminStrategyPendingCancelReasonLabel(target.error_code || target.exclusion_reason || target.reason);
+    return `<div class="admin-strategy-dispatch-target-row ${escapeHtml(targetStatus)}"><span><strong>${escapeHtml(account)}</strong><small>${escapeHtml(target.target_role === "source" ? "观摩源（最后撤单）" : "订阅账户")}${target.ticket ? ` · #${escapeHtml(String(target.ticket))}` : ""}</small></span><span class="status-chip ${["succeeded","completed"].includes(targetStatus) ? "success" : targetStatus === "failed" ? "danger" : ["uncertain","reconciling"].includes(targetStatus) ? "warning" : "info"}">${escapeHtml(adminStrategyPendingCancelStatusLabel(targetStatus))}</span>${reason ? `<em title="${escapeHtml(reason)}">${escapeHtml(reason)}</em>` : ""}</div>`;
+  }).join("");
+  body.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>${isJob ? escapeHtml(adminStrategyPendingCancelStatusLabel(status)) : "只取消本次分发产生的挂单"}</strong><span>订阅账户先撤，观摩源最后；已成交订单不会转为平仓。</span></div><div class="admin-strategy-dispatch-summary-grid"><span><small>目标总数</small><strong>${targets.length}</strong></span><span><small>可执行</small><strong>${eligible}</strong></span><span><small>已撤 / 跳过</small><strong>${succeeded} / ${skipped}</strong></span><span><small>失败 / 待核对</small><strong>${failed} / ${uncertain}</strong></span></div>${isJob ? "" : `<label class="admin-strategy-dispatch-reason-field" for="adminStrategyPendingCancelReason"><span>撤单原因</span><textarea id="adminStrategyPendingCancelReason" rows="2" maxlength="500">管理员取消已分发挂单</textarea><small class="field-help">将写入系统审计；不会发送给模型。</small></label>`}<div class="admin-strategy-dispatch-targets">${rows || '<p class="admin-strategy-dispatch-empty">没有可关联的分发挂单。</p>'}</div>`;
+  const terminal = ["succeeded", "partial", "failed", "completed"].includes(status);
+  confirm.hidden = isJob;
+  confirm.disabled = isJob || eligible <= 0;
+  retry.hidden = !isJob || !terminal || failed <= 0 || uncertain > 0;
+  retry.disabled = false;
+  initIcons();
+}
+
+function closeAdminStrategyPendingCancelModal() {
+  stopAdminStrategyPendingCancelPolling();
+  state.adminStrategyPendingCancelPreview = null;
+  state.adminStrategyPendingCancelJob = null;
+  $("adminStrategyPendingCancelModal")?.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+}
+
+async function openAdminStrategyPendingCancel(dispatchId) {
+  const id = Number(dispatchId);
+  if (!isAdminStrategyDispatchUser() || !Number.isSafeInteger(id) || id <= 0) return;
+  try {
+    const data = await api(`/api/admin/strategy-trades/${encodeURIComponent(id)}/pending-cancel-preview`, { timeout:30000 });
+    state.adminStrategyPendingCancelPreview = data;
+    state.adminStrategyPendingCancelJob = null;
+    renderAdminStrategyPendingCancel();
+    $("adminStrategyPendingCancelModal")?.classList.remove("hidden");
+    document.body.classList.add("modal-open");
+  } catch (error) {
+    toast(error.message || "关联撤单预览失败", "error");
+  }
+}
+
+function scheduleAdminStrategyPendingCancelRefresh() {
+  stopAdminStrategyPendingCancelPolling();
+  const root = adminStrategyPendingCancelRoot(state.adminStrategyPendingCancelJob || {});
+  if (!root?.id && !root?.job_id) return;
+  if (["succeeded", "partial", "failed", "completed"].includes(String(root.status || ""))) return;
+  const generation = state.adminStrategyPendingCancelPollGeneration;
+  state.adminStrategyPendingCancelPollTimer = setTimeout(() => {
+    if (generation !== state.adminStrategyPendingCancelPollGeneration) return;
+    refreshAdminStrategyPendingCancelJob().catch(() => {});
+  }, 3000);
+}
+
+async function refreshAdminStrategyPendingCancelJob() {
+  const root = adminStrategyPendingCancelRoot(state.adminStrategyPendingCancelJob || {});
+  const jobId = Number(root.id || root.job_id);
+  if (!jobId) return;
+  const data = await api(`/api/admin/strategy-trades/pending-cancel-jobs/${encodeURIComponent(jobId)}`, { timeout:15000 });
+  state.adminStrategyPendingCancelJob = data;
+  renderAdminStrategyPendingCancel();
+  scheduleAdminStrategyPendingCancelRefresh();
+  await loadPendingOrders().catch(() => {});
+}
+
+async function createAdminStrategyPendingCancel() {
+  const preview = adminStrategyPendingCancelRoot(state.adminStrategyPendingCancelPreview || {});
+  const dispatchId = Number(preview.dispatch_id);
+  const button = $("adminStrategyPendingCancelConfirm");
+  if (!dispatchId || !preview.preview_hash || !button) return;
+  const reason = String($("adminStrategyPendingCancelReason")?.value || "").trim();
+  if (reason.length < 2) return toast("请填写至少 2 个字的撤单原因", "warning");
+  button.disabled = true;
+  try {
+    const data = await api(`/api/admin/strategy-trades/${encodeURIComponent(dispatchId)}/pending-cancel-jobs`, {
+      method:"POST", timeout:30000, body:{ confirm:true, preview_hash:preview.preview_hash, reason,
+        idempotency_key:strategyDispatchClientRequestId() },
+    });
+    state.adminStrategyPendingCancelPreview = null;
+    state.adminStrategyPendingCancelJob = data;
+    renderAdminStrategyPendingCancel();
+    scheduleAdminStrategyPendingCancelRefresh();
+    toast("关联撤单任务已创建", "success");
+  } catch (error) {
+    toast(error.message || "创建关联撤单任务失败", "error");
+    button.disabled = false;
+  }
+}
+
+async function retryAdminStrategyPendingCancel() {
+  const job = adminStrategyPendingCancelRoot(state.adminStrategyPendingCancelJob || {});
+  const jobId = Number(job.id || job.job_id);
+  const dispatchId = Number(job.dispatch_id);
+  const button = $("adminStrategyPendingCancelRetry");
+  if (!jobId || !dispatchId || !button) return;
+  button.disabled = true;
+  try {
+    const previewData = await api(`/api/admin/strategy-trades/${encodeURIComponent(dispatchId)}/pending-cancel-preview`, { timeout:30000 });
+    const preview = adminStrategyPendingCancelRoot(previewData);
+    const data = await api(`/api/admin/strategy-trades/pending-cancel-jobs/${encodeURIComponent(jobId)}/retry-failed`, {
+      method:"POST", timeout:30000, body:{ preview_hash:preview.preview_hash },
+    });
+    state.adminStrategyPendingCancelJob = data;
+    renderAdminStrategyPendingCancel();
+    scheduleAdminStrategyPendingCancelRefresh();
+  } catch (error) {
+    toast(error.message || "重试关联撤单失败", "error");
+    button.disabled = false;
+  }
+}
+
 function buildAdminStrategyDispatchPreview(direction) {
   if (!isAdminStrategyDispatchUser() || !state.adminStrategyDispatchCapabilities?.enabled) throw new Error("当前账号不可使用平台策略分发");
   if (!adminStrategyDispatchModeEnabled()) throw new Error("请先开启按平台策略分发");
   if (!["buy", "sell"].includes(String(direction))) throw new Error("平台策略分发仅支持 BUY / SELL");
-  if (String(state.selectedOrderType || "market") !== "market") throw new Error("平台策略分发仅支持市价单");
+  const entryMethod = String(state.selectedOrderType || "market").toLowerCase();
+  const supportedMethods = new Set((state.adminStrategyDispatchCapabilities?.supported_entry_methods || ["market"])
+    .map(value => String(value || "").toLowerCase()));
+  if (!supportedMethods.has(entryMethod)) throw new Error("当前平台策略分发不支持该订单类型");
+  if (state.bridgePlatform === "mt4" && entryMethod === "stop_limit") throw new Error("MT4 不支持止损限价单");
   const symbol = String($("tradeSymbolSelect")?.value || "").trim().toUpperCase();
   const strategyId = Number($("adminStrategyDispatchStrategy")?.value || 0);
   const strategy = activePlatformStrategyOptions().find(item => Number(item.id) === strategyId);
@@ -5359,6 +5531,9 @@ function buildAdminStrategyDispatchPreview(direction) {
   const takeProfit = manualTargetPrice("takeProfitPoints", "止盈价格");
   const volume = Number($("tradeVolume")?.value);
   const validMinutes = Number($("adminStrategyDispatchValidMinutes")?.value);
+  const pendingPrice = entryMethod === "market" ? null : Number($("pendingPrice")?.value);
+  const stopLimitPrice = entryMethod === "stop_limit" ? Number($("stopLimitPrice")?.value) : null;
+  const pendingValidMinutes = entryMethod === "market" ? null : Number($("pendingValidMinutes")?.value);
   const reason = String($("adminStrategyDispatchReason")?.value || "").trim();
   if (!strategy) throw new Error("请选择有效的平台策略");
   if (!symbol) throw new Error("请选择交易品种");
@@ -5366,19 +5541,25 @@ function buildAdminStrategyDispatchPreview(direction) {
   if (supportedSymbols.length && !supportedSymbols.some(value => standardMarketSymbol(value) === standardMarketSymbol(symbol))) throw new Error("当前品种不在所选平台策略支持范围内");
   if (!Number.isSafeInteger(sourceAccountId) || sourceAccountId <= 0) throw new Error("当前没有可用的管理员交易账户");
   if (!Number.isFinite(volume) || volume <= 0) throw new Error("交易手数必须是大于 0 的有效数字");
-  if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes > 1440) throw new Error("有效期必须是 1 至 1440 分钟");
+  if (!Number.isInteger(validMinutes) || validMinutes < 1 || validMinutes > 1440) throw new Error("分发截止必须是 1 至 1440 分钟");
+  if (entryMethod !== "market" && (!Number.isFinite(pendingPrice) || pendingPrice <= 0)) throw new Error("请填写有效的挂单价");
+  if (entryMethod === "stop_limit" && (!Number.isFinite(stopLimitPrice) || stopLimitPrice <= 0)) throw new Error("请填写有效的止损限价");
+  if (entryMethod !== "market" && (!Number.isInteger(pendingValidMinutes) || pendingValidMinutes < 1 || pendingValidMinutes > 1440)) throw new Error("挂单有效期必须是 1 至 1440 分钟");
   if (reason && reason.length < 2) throw new Error("中文原因填写后至少需要 2 个字");
   const quote = state.lastQuote;
   if (!quote || String(quote.symbol || "").toUpperCase() !== symbol || !Number.isFinite(Number(quote.bid)) || !Number.isFinite(Number(quote.ask))) throw new Error("当前品种报价未就绪，请先刷新报价");
   const clientRequestId = strategyDispatchClientRequestId();
   const validUntil = Date.now() + validMinutes * 60_000;
   const payload = {
-    strategy_id:strategyId, trading_account_id:sourceAccountId, symbol, direction:String(direction), entry_method:"market",
+    strategy_id:strategyId, trading_account_id:sourceAccountId, symbol, direction:String(direction), entry_method:entryMethod,
+    entry_price:entryMethod === "market" ? null : pendingPrice, limit_price:pendingPrice, stop_limit_price:stopLimitPrice,
+    pending_valid_minutes:pendingValidMinutes,
     stop_loss:stopLoss, take_profit:takeProfit, take_profit_1:takeProfit, volume,
     valid_minutes:validMinutes,
     valid_until:validUntil, valid_until_utc_msc:validUntil, reason, client_request_id:clientRequestId, idempotency_key:clientRequestId,
   };
-  return { payload, meta:{ strategy, sourceAccount, symbol, direction:String(direction), stopLoss, takeProfit, volume, validMinutes, validUntil, reason } };
+  return { payload, meta:{ strategy, sourceAccount, symbol, direction:String(direction), entryMethod, pendingPrice, stopLimitPrice,
+    pendingValidMinutes, stopLoss, takeProfit, volume, validMinutes, validUntil, reason } };
 }
 
 function adminStrategyDispatchProtectionDisplay(value) {
@@ -5405,7 +5586,11 @@ function renderAdminStrategyDispatchPreview(order, data) {
     : `<li class="admin-strategy-dispatch-detail-empty">${excludedCount ? "接口未返回排除账号明细，请刷新后重试。" : "暂无排除账号"}</li>`;
   const stopLossText = adminStrategyDispatchProtectionDisplay(order.meta.stopLoss);
   const takeProfitText = adminStrategyDispatchProtectionDisplay(order.meta.takeProfit);
-  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(stopLossText)} / ${escapeHtml(takeProfitText)}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div><details class="admin-strategy-dispatch-target-details"><summary><span>查看账号明细</span><small>可执行与排除账号</small><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary><div class="admin-strategy-dispatch-details-body"><section class="admin-strategy-dispatch-detail-section admin-strategy-dispatch-executable"><div class="admin-strategy-dispatch-detail-heading"><strong>可执行账号</strong><span>${executableCount}</span></div><ul>${executableItems}</ul></section><section class="admin-strategy-dispatch-detail-section admin-strategy-dispatch-exclusion"><div class="admin-strategy-dispatch-detail-heading"><strong>排除账号</strong><span>${excludedCount}</span></div><ul>${excludedItems}</ul></section></div></details><div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason || "未填写")}</strong></div>`;
+  const entryLabels = { market:"市价", limit:"限价挂单", stop:"止损挂单", stop_limit:"止损限价" };
+  const priceText = order.meta.entryMethod === "market" ? "按实时价格" : priceDisplay(order.meta.pendingPrice);
+  const stopLimitText = order.meta.entryMethod === "stop_limit" ? ` / ${priceDisplay(order.meta.stopLimitPrice)}` : "";
+  const pendingExpiry = order.meta.entryMethod === "market" ? "不适用" : `${order.meta.pendingValidMinutes} 分钟`;
+  host.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>管理员策略指令</strong><span>二次确认后才会创建分发，不会改写普通手动下单。</span></div><div><span>源账户</span><strong>${escapeHtml(sourceText)}</strong></div><div><span>方向 / 品种</span><strong>${escapeHtml(order.meta.direction.toUpperCase())} · ${escapeHtml(order.meta.symbol)}</strong></div><div><span>订单类型</span><strong>${escapeHtml(entryLabels[order.meta.entryMethod] || order.meta.entryMethod)} · ${escapeHtml(priceText + stopLimitText)}</strong></div><div><span>挂单有效期</span><strong>${escapeHtml(pendingExpiry)}</strong></div><div><span>平台策略</span><strong>${escapeHtml(order.meta.strategy.title || `#${order.meta.strategy.id}`)}</strong></div><div><span>交易手数</span><strong>${escapeHtml(String(order.meta.volume))} 手</strong></div><div><span>止损 / 止盈</span><strong>${escapeHtml(stopLossText)} / ${escapeHtml(takeProfitText)}</strong></div><div><span>订阅总数</span><strong>${counters.total}</strong></div><div><span>可执行 / 排除</span><strong>${counters.executable} / ${counters.excluded}</strong></div><details class="admin-strategy-dispatch-target-details"><summary><span>查看账号明细</span><small>可执行与排除账号</small><i data-lucide="chevron-down" size="15" aria-hidden="true"></i></summary><div class="admin-strategy-dispatch-details-body"><section class="admin-strategy-dispatch-detail-section admin-strategy-dispatch-executable"><div class="admin-strategy-dispatch-detail-heading"><strong>可执行账号</strong><span>${executableCount}</span></div><ul>${executableItems}</ul></section><section class="admin-strategy-dispatch-detail-section admin-strategy-dispatch-exclusion"><div class="admin-strategy-dispatch-detail-heading"><strong>排除账号</strong><span>${excludedCount}</span></div><ul>${excludedItems}</ul></section></div></details><div class="admin-strategy-dispatch-reason"><span>中文原因</span><strong>${escapeHtml(order.meta.reason || "未填写")}</strong></div>`;
   $("adminStrategyDispatchModal")?.classList.remove("hidden");
   document.body.classList.add("modal-open");
   initIcons();
@@ -14754,7 +14939,9 @@ function renderPendingOrders(orders) {
       <td data-label="挂单时间" class="num">${createdAt || "--"}</td>
       <td data-label="有效期">${validUntil || "永久有效"}</td>
       <td data-label="状态"><span class="row-status ${isPending ? "warning" : "neutral"}">${stateLabels[state] || state}</span></td>
-      <td data-label="操作">${isPending ? `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}')">撤单</button>` : ""}</td>
+      <td data-label="操作">${isPending ? (isAdminStrategyDispatchUser() && Number(o.admin_strategy_dispatch_id) > 0
+        ? `<button class="btn btn-sm btn-outline" onclick="openAdminStrategyPendingCancel(${Number(o.admin_strategy_dispatch_id)})">关联撤单</button>`
+        : `<button class="btn btn-sm btn-outline" onclick="cancelPendingOrder('${escapeHtml(String(o.mt5_ticket || o.ticket || o.id))}')">撤单</button>`) : ""}</td>
     </tr>`;
   }).join("");
 }
@@ -17311,7 +17498,6 @@ function bindEvents() {
       event.target.checked = false;
       return renderAdminStrategyDispatchControls();
     }
-    if (event.target.checked) state.selectedOrderType = "market";
     renderAdminStrategyDispatchControls();
   });
   $("adminStrategyDispatchRefresh")?.addEventListener("click", () => refreshAdminStrategyDispatch().catch(error => toast(error.message, "error")));
@@ -17321,6 +17507,13 @@ function bindEvents() {
   $("adminStrategyDispatchModalConfirm")?.addEventListener("click", createAdminStrategyDispatch);
   $("adminStrategyDispatchModal")?.addEventListener("click", event => {
     if (event.target === $("adminStrategyDispatchModal")) closeAdminStrategyDispatchModal();
+  });
+  $("adminStrategyPendingCancelClose")?.addEventListener("click", closeAdminStrategyPendingCancelModal);
+  $("adminStrategyPendingCancelCancel")?.addEventListener("click", closeAdminStrategyPendingCancelModal);
+  $("adminStrategyPendingCancelConfirm")?.addEventListener("click", createAdminStrategyPendingCancel);
+  $("adminStrategyPendingCancelRetry")?.addEventListener("click", retryAdminStrategyPendingCancel);
+  $("adminStrategyPendingCancelModal")?.addEventListener("click", event => {
+    if (event.target === $("adminStrategyPendingCancelModal")) closeAdminStrategyPendingCancelModal();
   });
   $("orderConfirmCancel")?.addEventListener("click", closeManualOrderModal);
   $("orderConfirmClose")?.addEventListener("click", closeManualOrderModal);

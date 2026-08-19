@@ -6769,6 +6769,148 @@ const migrations = [
           AND cases.evidence_reason NOT LIKE '%authorization%'
           AND cases.evidence_reason NOT LIKE '%changed%'`)
     }
+  },
+  {
+    id: '198_admin_pending_dispatch_and_cancel_jobs',
+    async up() {
+      // The original admin dispatch schema was market-only.  These nullable
+      // additive fields preserve every historical market row while freezing
+      // the pending-order parameters for new dispatches.
+      const dispatchColumns = [
+        ['limit_price', 'ADD COLUMN limit_price DECIMAL(20,8) DEFAULT NULL AFTER entry_price'],
+        ['stop_limit_price', 'ADD COLUMN stop_limit_price DECIMAL(20,8) DEFAULT NULL AFTER limit_price'],
+        ['pending_valid_minutes', 'ADD COLUMN pending_valid_minutes INT DEFAULT NULL AFTER stop_limit_price'],
+      ]
+      const dispatchRows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_strategy_trade_dispatches'`)
+      const dispatchExisting = new Set(dispatchRows.map(row => String(row.COLUMN_NAME)))
+      for (const [name, definition] of dispatchColumns) {
+        if (!dispatchExisting.has(name)) await queryRun(`ALTER TABLE admin_strategy_trade_dispatches ${definition}`)
+      }
+
+      const targetColumns = [
+        ['terminal_order_kind', "ADD COLUMN terminal_order_kind VARCHAR(16) NOT NULL DEFAULT 'position' AFTER trade_ticket"],
+        ['terminal_order_state', 'ADD COLUMN terminal_order_state VARCHAR(24) DEFAULT NULL AFTER terminal_order_kind'],
+      ]
+      const targetRows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_strategy_trade_targets'`)
+      const targetExisting = new Set(targetRows.map(row => String(row.COLUMN_NAME)))
+      for (const [name, definition] of targetColumns) {
+        if (!targetExisting.has(name)) await queryRun(`ALTER TABLE admin_strategy_trade_targets ${definition}`)
+      }
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS admin_strategy_pending_cancel_jobs (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        idempotency_key VARCHAR(191) NOT NULL,
+        actor_user_id INT NOT NULL,
+        dispatch_id BIGINT NOT NULL,
+        source_signal_id BIGINT NOT NULL,
+        reason VARCHAR(500) NOT NULL,
+        preview_hash CHAR(64) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        lease_token VARCHAR(64) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        target_count INT NOT NULL DEFAULT 0,
+        eligible_target_count INT NOT NULL DEFAULT 0,
+        succeeded_target_count INT NOT NULL DEFAULT 0,
+        failed_target_count INT NOT NULL DEFAULT 0,
+        skipped_target_count INT NOT NULL DEFAULT 0,
+        uncertain_target_count INT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL,
+        started_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_admin_pending_cancel_idempotency (idempotency_key),
+        KEY idx_admin_pending_cancel_status (status, updated_at),
+        KEY idx_admin_pending_cancel_lease (status, lease_expires_at),
+        KEY idx_admin_pending_cancel_dispatch (dispatch_id, created_at),
+        KEY idx_admin_pending_cancel_actor (actor_user_id, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS admin_strategy_pending_cancel_targets (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        job_id BIGINT NOT NULL,
+        dispatch_target_id BIGINT NOT NULL,
+        target_order INT NOT NULL DEFAULT 0,
+        target_role VARCHAR(16) NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        ownership_history_id BIGINT DEFAULT NULL,
+        outcome_id BIGINT DEFAULT NULL,
+        signal_id BIGINT NOT NULL,
+        broker_server_key VARCHAR(100) DEFAULT NULL,
+        login_account VARCHAR(50) DEFAULT NULL,
+        ticket VARCHAR(64) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        direction VARCHAR(16) NOT NULL,
+        volume DECIMAL(20,8) NOT NULL DEFAULT 0,
+        magic BIGINT NOT NULL DEFAULT 234000,
+        eligible TINYINT NOT NULL DEFAULT 0,
+        expected_state_json LONGTEXT NOT NULL,
+        target_snapshot_json LONGTEXT NOT NULL,
+        bridge_generation BIGINT DEFAULT NULL,
+        operation_id VARCHAR(191) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        attempt_count INT NOT NULL DEFAULT 0,
+        lease_token VARCHAR(64) DEFAULT NULL,
+        lease_expires_at DATETIME DEFAULT NULL,
+        send_started_at DATETIME DEFAULT NULL,
+        send_finished_at DATETIME DEFAULT NULL,
+        reconcile_started_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        last_result_json LONGTEXT DEFAULT NULL,
+        exclusion_reason VARCHAR(128) DEFAULT NULL,
+        error_code VARCHAR(128) DEFAULT NULL,
+        error_message VARCHAR(500) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_admin_pending_cancel_target (job_id, dispatch_target_id),
+        UNIQUE KEY uk_admin_pending_cancel_operation (operation_id),
+        KEY idx_admin_pending_cancel_target_job (job_id, status, target_order, id),
+        KEY idx_admin_pending_cancel_target_status (status, updated_at),
+        KEY idx_admin_pending_cancel_target_account (user_id, trading_account_id, ticket),
+        KEY idx_admin_pending_cancel_target_dispatch (dispatch_target_id, status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      // A partially applied deployment may have created the tables before the
+      // schema migration row was recorded.  Repair only the named columns and
+      // indexes; never rewrite existing cancel records.
+      const jobColumns = [
+        ['started_at', 'ADD COLUMN started_at DATETIME DEFAULT NULL AFTER created_at'],
+        ['completed_at', 'ADD COLUMN completed_at DATETIME DEFAULT NULL AFTER started_at'],
+      ]
+      const jobRows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_strategy_pending_cancel_jobs'`)
+      const jobExisting = new Set(jobRows.map(row => String(row.COLUMN_NAME)))
+      for (const [name, definition] of jobColumns) {
+        if (!jobExisting.has(name)) await queryRun(`ALTER TABLE admin_strategy_pending_cancel_jobs ${definition}`)
+      }
+      const indexSpecs = [
+        ['admin_strategy_pending_cancel_jobs', [
+          ['uk_admin_pending_cancel_idempotency', 'ADD UNIQUE KEY uk_admin_pending_cancel_idempotency (idempotency_key)'],
+          ['idx_admin_pending_cancel_status', 'ADD KEY idx_admin_pending_cancel_status (status, updated_at)'],
+          ['idx_admin_pending_cancel_lease', 'ADD KEY idx_admin_pending_cancel_lease (status, lease_expires_at)'],
+          ['idx_admin_pending_cancel_dispatch', 'ADD KEY idx_admin_pending_cancel_dispatch (dispatch_id, created_at)'],
+          ['idx_admin_pending_cancel_actor', 'ADD KEY idx_admin_pending_cancel_actor (actor_user_id, created_at)'],
+        ]],
+        ['admin_strategy_pending_cancel_targets', [
+          ['uk_admin_pending_cancel_target', 'ADD UNIQUE KEY uk_admin_pending_cancel_target (job_id, dispatch_target_id)'],
+          ['uk_admin_pending_cancel_operation', 'ADD UNIQUE KEY uk_admin_pending_cancel_operation (operation_id)'],
+          ['idx_admin_pending_cancel_target_job', 'ADD KEY idx_admin_pending_cancel_target_job (job_id, status, target_order, id)'],
+          ['idx_admin_pending_cancel_target_status', 'ADD KEY idx_admin_pending_cancel_target_status (status, updated_at)'],
+          ['idx_admin_pending_cancel_target_account', 'ADD KEY idx_admin_pending_cancel_target_account (user_id, trading_account_id, ticket)'],
+          ['idx_admin_pending_cancel_target_dispatch', 'ADD KEY idx_admin_pending_cancel_target_dispatch (dispatch_target_id, status)'],
+        ]],
+      ]
+      for (const [tableName, specs] of indexSpecs) {
+        const rows = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, [tableName])
+        const existing = new Set(rows.map(row => String(row.INDEX_NAME)))
+        for (const [name, definition] of specs) {
+          if (!existing.has(name)) await queryRun(`ALTER TABLE ${tableName} ${definition}`)
+        }
+      }
+    }
   }
 ]
 

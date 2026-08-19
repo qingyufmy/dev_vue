@@ -31,7 +31,10 @@ describe('admin strategy dispatch frontend contract', () => {
   it('uses only active platform strategies and validates the admin source order fields', () => {
     expect(app).toContain('item?.scope === "platform"')
     expect(app).toContain('item?.visibility_status === "active"')
-    expect(app).toContain('entry_method:"market"')
+    expect(app).toContain('entry_method:entryMethod')
+    expect(app).toContain('limit_price:pendingPrice')
+    expect(app).toContain('stop_limit_price:stopLimitPrice')
+    expect(app).toContain('pending_valid_minutes:pendingValidMinutes')
     for (const key of ['strategy_id', 'trading_account_id', 'symbol', 'direction', 'stop_loss', 'take_profit', 'volume', 'valid_minutes', 'valid_until_utc_msc', 'reason', 'client_request_id']) {
       expect(app).toContain(`${key}:`)
     }
@@ -82,8 +85,9 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(app).toContain('adminStrategyDispatchModeEnabled() ? openAdminStrategyDispatch("buy") : openManual("buy")')
     expect(app).toContain('adminStrategyDispatchModeEnabled() ? openAdminStrategyDispatch("sell") : openManual("sell")')
     expect(app).toContain('if (!isAdminStrategyDispatchUser() || !state.adminStrategyDispatchCapabilities?.enabled)')
-    expect(app).toContain('state.selectedOrderType = "market"')
-    expect(app).toContain('type !== "market"')
+    expect(app).not.toContain('if (event.target.checked) state.selectedOrderType = "market"')
+    expect(app).toContain('!supported.has(type)')
+    expect(html).toContain('分发截止（分钟）')
     expect(css).toContain('.admin-strategy-dispatch-panel')
     expect(css).toContain('.admin-strategy-dispatch-target-row')
   })
@@ -137,5 +141,15 @@ describe('admin strategy dispatch frontend contract', () => {
     expect(adminStrategyDispatchPreviewTargetHelpers.excluded({ exclusions:[sourceExclusion, duplicateSubscription] })).toEqual([
       sourceExclusion, duplicateSubscription,
     ])
+  })
+
+  it('uses the linked dispatch cancel workflow for distributed pending orders', () => {
+    expect(app).toContain('function openAdminStrategyPendingCancel(dispatchId)')
+    expect(app).toContain('/pending-cancel-preview`')
+    expect(app).toContain('/pending-cancel-jobs`')
+    expect(app).toContain('/retry-failed`')
+    expect(app).toContain('openAdminStrategyPendingCancel(${Number(o.admin_strategy_dispatch_id)})')
+    expect(html).toContain('id="adminStrategyPendingCancelModal"')
+    expect(app).toContain('已成交订单不会转为平仓')
   })
 })

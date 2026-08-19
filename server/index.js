@@ -68,6 +68,7 @@ import { pruneFinalizedCommands } from './bridge-v3/command-ledger.js'
 import { createAutoInferenceRecoveryLogDeduper } from './ai-recovery-log.js'
 import { startAdminStrategyTradeWorker, stopAdminStrategyTradeWorker } from './workers/admin-strategy-trade-worker.js'
 import { startAdminPositionCloseWorker, stopAdminPositionCloseWorker } from './workers/admin-position-close-worker.js'
+import { startAdminStrategyPendingCancelWorker, stopAdminStrategyPendingCancelWorker } from './workers/admin-strategy-pending-cancel-worker.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -405,6 +406,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const orderIntentStop = stopOrderIntentReconciler()
     const notificationStop = stopNotificationCenterWorker()
     const adminStrategyTradeStop = stopAdminStrategyTradeWorker()
+    const adminStrategyPendingCancelStop = stopAdminStrategyPendingCancelWorker()
     const adminPositionCloseStop = stopAdminPositionCloseWorker()
     const manualTradeReviewStop = stopManualTradeReviewWorker()
     const manualTradeReviewAggregateStop = stopManualTradeReviewAggregateWorker()
@@ -418,6 +420,7 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
       waitForShutdownTask(orderIntentStop, 'order-intent reconciler', timeout),
       waitForShutdownTask(notificationStop, 'notification center worker', timeout),
       Promise.resolve(adminStrategyTradeStop),
+      Promise.resolve(adminStrategyPendingCancelStop),
       Promise.resolve(adminPositionCloseStop),
       waitForShutdownTask(manualTradeReviewStop, 'manual trade review worker', timeout),
       waitForShutdownTask(manualTradeReviewAggregateStop, 'manual trade review aggregate worker', timeout),
@@ -536,6 +539,7 @@ installGracefulShutdownHandlers()
   startManualTradeReviewWorker()
   startManualTradeReviewAggregateWorker()
   startAdminStrategyTradeWorker()
+  startAdminStrategyPendingCancelWorker()
   startAdminPositionCloseWorker()
   startManualAnalysisJobs()
   startHoldSignalCleanup().catch(err => console.error('[HoldSignalCleanup] Startup failed:', err.message))

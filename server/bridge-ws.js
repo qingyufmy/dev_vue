@@ -3724,6 +3724,29 @@ async function handleBrowserCommand(ws, userId, msg) {
         try {
           const symbol = params.symbol ? params.symbol : null
           const listResult = await ai.mt5Bridge(dataUserId, 'pending_list', routedParams({ symbol }), { noFallback:true })
+          if (listResult?.status === 'success' && Array.isArray(listResult.orders) && listResult.orders.length) {
+            try {
+              const linkedTargets = await queryAll(`SELECT t.id AS admin_strategy_target_id,
+                  t.dispatch_id AS admin_strategy_dispatch_id, t.signal_id, t.trade_ticket, t.target_role,
+                  d.entry_method
+                FROM admin_strategy_trade_targets t
+                JOIN admin_strategy_trade_dispatches d ON d.id = t.dispatch_id
+                WHERE t.user_id = ? AND t.status = 'succeeded' AND t.trade_ticket IS NOT NULL
+                  AND d.entry_method <> 'market'
+                ORDER BY t.id DESC LIMIT 500`, [dataUserId])
+              const linkedByTicket = new Map(linkedTargets.map(item => [String(item.trade_ticket), item]))
+              listResult.orders = listResult.orders.map(order => {
+                const ticket = String(order?.mt5_ticket ?? order?.ticket ?? order?.id ?? '')
+                const linked = linkedByTicket.get(ticket)
+                return linked ? { ...order, ...linked, admin_strategy_distributed:true } : order
+              })
+            } catch (error) {
+              // Metadata enrichment must never hide the broker's live pending
+              // inventory. The server-side cancel preview repeats the full
+              // lineage and identity checks before any command is accepted.
+              console.warn('[BridgeWS] pending dispatch metadata unavailable:', error.message)
+            }
+          }
           if (access.read_only && listResult && typeof listResult === 'object') listResult.observer_source = true
           result = listResult
         } catch (e) {
