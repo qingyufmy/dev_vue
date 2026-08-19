@@ -301,6 +301,12 @@ fn resolve_candidates(
         let Some(executable) = find_terminal_executable(&candidate.path) else {
             continue;
         };
+        // MT4 also ships a `terminal.exe`.  Only reject an installation when
+        // its layout proves that it is MT4-only; portable/legacy MT5 layouts
+        // without MQL5 must remain discoverable.
+        if is_explicit_mt4_only_candidate(&executable) {
+            continue;
+        }
         let Ok(terminal_instance_id) = mt5_terminal_instance_id(&executable) else {
             continue;
         };
@@ -597,7 +603,15 @@ pub(crate) fn is_terminal64_executable(path: &Path) -> bool {
 }
 
 fn is_running_mt5_candidate(path: &Path) -> bool {
-    is_terminal_executable(path)
+    is_terminal_executable(path) && !is_explicit_mt4_only_candidate(path)
+}
+
+fn is_explicit_mt4_only_candidate(path: &Path) -> bool {
+    let Some(installation_directory) = path.is_dir().then_some(path).or_else(|| path.parent())
+    else {
+        return false;
+    };
+    installation_directory.join("MQL4").is_dir() && !installation_directory.join("MQL5").is_dir()
 }
 
 fn utf16_z(value: &[u16]) -> String {
@@ -679,6 +693,52 @@ mod tests {
         assert!(!root.join("MQL5").is_dir());
         assert!(is_running_mt5_candidate(&terminal));
         fs::remove_dir_all(root).expect("remove terminal fixture");
+    }
+
+    #[test]
+    fn explicit_mt4_only_candidates_are_filtered_but_mt5_and_unknown_are_kept() {
+        let root = fixture_directory("platform-layout");
+        let mt4 = root.join("MetaTrader 4");
+        let mt5 = root.join("MetaTrader 5");
+        let unknown = root.join("Portable");
+        fs::create_dir_all(mt4.join("MQL4")).expect("mt4 data directory");
+        fs::create_dir_all(mt5.join("MQL5")).expect("mt5 data directory");
+        fs::create_dir_all(&unknown).expect("unknown installation directory");
+        let mt4_terminal = mt4.join("terminal.exe");
+        let mt5_terminal = mt5.join("terminal.exe");
+        let unknown_terminal = unknown.join("terminal.exe");
+        fs::write(&mt4_terminal, b"terminal").expect("mt4 terminal");
+        fs::write(&mt5_terminal, b"terminal").expect("mt5 terminal");
+        fs::write(&unknown_terminal, b"terminal").expect("unknown terminal");
+
+        assert!(is_explicit_mt4_only_candidate(&mt4_terminal));
+        assert!(!is_explicit_mt4_only_candidate(&mt5_terminal));
+        assert!(!is_explicit_mt4_only_candidate(&unknown_terminal));
+        assert!(!is_running_mt5_candidate(&mt4_terminal));
+        assert!(is_running_mt5_candidate(&mt5_terminal));
+        assert!(is_running_mt5_candidate(&unknown_terminal));
+
+        let values = resolve_candidates([
+            Mt5InstallationCandidate {
+                path: mt4.clone(),
+                is_running: true,
+            },
+            Mt5InstallationCandidate {
+                path: mt5,
+                is_running: false,
+            },
+            Mt5InstallationCandidate {
+                path: unknown,
+                is_running: false,
+            },
+        ]);
+        assert_eq!(values.len(), 2);
+        assert!(values.iter().all(|value| {
+            !paths_equal(&value.executable_path, &mt4_terminal)
+                && (paths_equal(&value.executable_path, &mt5_terminal)
+                    || paths_equal(&value.executable_path, &unknown_terminal))
+        }));
+        fs::remove_dir_all(root).expect("remove platform fixture");
     }
 
     #[test]
