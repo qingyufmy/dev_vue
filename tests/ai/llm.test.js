@@ -750,6 +750,85 @@ describe('requestJsonObject', () => {
     expect(repairPayload.original_output).toBe('{"summary":"缺少必填字段"}')
   })
 
+  it('carries caller and presentation-safe validator context into one compact repair', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: '{"decision_quality":"insufficient_evidence"}' } }] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ choices: [{ message: { content: '{"decision_quality":"mixed"}' } }] }),
+      })
+    const validateObject = vi.fn((value, validation) => {
+      if (validation.phase === 'initial') {
+        const error = new Error('daily_v3_insufficient_state_without_server_limitation')
+        error.code = error.message
+        error.validationContext = { outcome_id:1, fields:['decision_quality'] }
+        throw error
+      }
+      return value
+    })
+    const frozenReviewContext = {
+      system_statistics:{ trade_count:1 },
+      pre_trade_frozen:[{ outcome_id:1, signal:{ signal_type:'buy' } }],
+      holding_path:[{ outcome_id:1, outcome:{ net_profit:-1 } }],
+      period_market:{ status:'complete' },
+    }
+    const validateRepairOutput = vi.fn(({ initialObject, repairedObject, validationError }) => {
+      expect(initialObject).toEqual({ decision_quality:'insufficient_evidence' })
+      expect(repairedObject).toEqual({ decision_quality:'mixed' })
+      expect(validationError.message).toBe('daily_v3_insufficient_state_without_server_limitation')
+    })
+    const result = await requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'initial review request' }], validateObject,
+      repairContext:{ outputFormat:'{"decision_quality":"good|mixed|poor|insufficient_evidence"}',
+        requiredCoverage:{ outcome_ids:[1] },
+        validationContext:({ validationError, validationContext }) => {
+          expect(validationError.message).toBe('daily_v3_insufficient_state_without_server_limitation')
+          expect(validationContext).toEqual({ outcome_id:1, fields:['decision_quality'] })
+          return { review_context:frozenReviewContext,
+          evidence_limitations_by_outcome:{ '1':[] },
+          insufficient_evidence_policy_by_outcome:{ '1':{ allowed:false, server_limitations:[] } } }
+        },
+        validateRepairOutput,
+        repairInstructions:'只能依据同一冻结证据重新判断被报告字段。' },
+    })
+    expect(result).toEqual({ decision_quality:'mixed' })
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    const repairPayload = JSON.parse(repairBody.messages[1].content)
+    expect(repairPayload.validation_error).toBe('daily_v3_insufficient_state_without_server_limitation')
+    expect(repairPayload.validation_context.review_context).toEqual(frozenReviewContext)
+    expect(repairPayload.validation_context.evidence_limitations_by_outcome).toEqual({ '1':[] })
+    expect(repairPayload.validation_context.insufficient_evidence_policy_by_outcome['1'].allowed).toBe(false)
+    expect(repairPayload.validation_context.outcome_id).toBe(1)
+    expect(repairPayload.validation_context.fields).toEqual(['decision_quality'])
+    expect(repairBody.messages[0].content).toContain('只能依据同一冻结证据')
+    expect(validateRepairOutput).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the original validation error message ahead of its optional code', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"bad"}' } }] }) })
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"fixed"}' } }] }) })
+    const validateObject = vi.fn((value, validation) => {
+      if (validation.phase === 'initial') {
+        const error = new Error('legacy_validation_message')
+        error.code = 'new_stable_code'
+        throw error
+      }
+      return value
+    })
+    await requestJsonObject({ url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], validateObject,
+      repairContext:{ outputFormat:'{"value":"string"}', requiredCoverage:null } })
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    expect(JSON.parse(repairBody.messages[1].content).validation_error).toBe('legacy_validation_message')
+  })
+
   it('HTTP 错误抛出异常', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500 })
 

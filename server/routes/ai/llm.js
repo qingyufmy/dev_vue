@@ -1050,6 +1050,32 @@ export function resolveConfirmedRequestMaxTokens(messages, requestedMaxTokens, m
   return Math.trunc(effective)
 }
 
+function cloneRepairValidationContext(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  try {
+    return JSON.parse(JSON.stringify(value))
+  } catch {
+    return null
+  }
+}
+
+async function resolveRepairValidationContext(repairContext, validationError) {
+  const configuredContext = repairContext?.validationContext
+    || repairContext?.validation_context
+  const generatedContext = typeof configuredContext === 'function'
+    ? await configuredContext({
+      validationError,
+      validationContext:cloneRepairValidationContext(validationError?.validationContext
+        || validationError?.validation_context),
+    })
+    : configuredContext
+  const callerContext = cloneRepairValidationContext(generatedContext)
+  const errorContext = cloneRepairValidationContext(validationError?.validationContext
+    || validationError?.validation_context)
+  if (!callerContext && !errorContext) return null
+  return { ...(callerContext || {}), ...(errorContext || {}) }
+}
+
 export async function requestJsonObject({
   url, apiKey, provider, model, temperature, maxTokens, messages, thinkingEnabled,
   reasoningEffort, protocol = 'chat_completions', timeout = 120000, usageContext = null,
@@ -1138,8 +1164,12 @@ export async function requestJsonObject({
     throw error
   }
   await emitModelProgress(onProgress, 'validating')
+  let initialParsedObject = null
+  let initialParsedAvailable = false
   try {
     const parsed = parseJsonObject(content)
+    initialParsedObject = cloneRepairValidationContext(parsed)
+    initialParsedAvailable = Boolean(initialParsedObject)
     return typeof validateObject === 'function' ? validateObject(parsed, { phase:'initial' }) : parsed
   } catch (exc) {
     if (!allowFollowupRequests) throw exc
@@ -1152,13 +1182,18 @@ export async function requestJsonObject({
     }
     signal?.throwIfAborted()
     await emitModelProgress(onProgress, 'repairing')
+    const repairValidationContext = await resolveRepairValidationContext(repairContext, exc)
     const repairMessages = repairContext ? [
-      { role:'system', content:'你是 JSON 输出格式修复器。只能修复字段名、数据类型、枚举值和缺失的必填项，不得重新分析行情，不得改变原输出中已经合法的交易方向、价格、止损止盈、挂单或持仓管理意图。必须严格遵守 output_contract 和 required_coverage，只返回一个完整、合法的 JSON 对象，不要 Markdown、解释或外层包装字段。' },
+      { role:'system', content:[
+        '你是 JSON 输出格式修复器。只能修复字段名、数据类型、枚举值和缺失的必填项，不得重新分析行情，不得改变原输出中已经合法的交易方向、价格、止损止盈、挂单或持仓管理意图。必须严格遵守 output_contract 和 required_coverage，只返回一个完整、合法的 JSON 对象，不要 Markdown、解释或外层包装字段。',
+        repairContext.repairInstructions ? String(repairContext.repairInstructions) : '',
+      ].filter(Boolean).join('\n') },
       { role:'user', content:JSON.stringify({
-        validation_error:String(exc.message || 'output_validation_failed'),
+        validation_error:String(exc.message || exc.code || 'output_validation_failed'),
         output_contract:repairContext.outputFormat || '{}',
         required_coverage:repairContext.requiredCoverage || null,
         original_output:content,
+        ...(repairValidationContext ? { validation_context:repairValidationContext } : {}),
       }) },
     ] : [
       ...messages,
@@ -1181,6 +1216,14 @@ export async function requestJsonObject({
     if (!repaired) throw new Error('LLM repair response content is empty')
     await emitModelProgress(onProgress, 'validating')
     const repairedObject = parseJsonObject(repaired)
+    if (initialParsedAvailable && typeof repairContext?.validateRepairOutput === 'function') {
+      await repairContext.validateRepairOutput({
+        initialObject:initialParsedObject,
+        repairedObject,
+        validationError:exc,
+        validationContext:repairValidationContext,
+      })
+    }
     return typeof validateObject === 'function' ? validateObject(repairedObject, { phase:'repair' }) : repairedObject
   }
 }

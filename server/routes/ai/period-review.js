@@ -997,6 +997,11 @@ const V3_STRATEGY_ALIGNMENT = new Set(['aligned', 'partly_aligned', 'conflict', 
 const V3_OUTCOME_RESULTS = new Set(['profit', 'loss', 'breakeven'])
 const V3_AVOIDABILITY = new Set(['avoidable', 'partly_avoidable', 'normal_strategy_loss', 'insufficient_evidence'])
 const V3_RISK_EXECUTION_STATUS = new Set(['compliant', 'partly_compliant', 'violation', 'insufficient_evidence'])
+const DAILY_REVIEW_REPAIR_ENUM_FIELDS = new Set([
+  'decision_quality', 'market_alignment', 'strategy_alignment', 'risk_execution_status',
+  'outcome_attribution.avoidability',
+])
+const DAILY_REVIEW_REPAIR_ROOT_ENUM_FIELDS = new Set(['$root.decision_quality'])
 const V3_MAX_ISSUE_CODES = 20
 const V3_MAX_EVIDENCE_REFS = 50
 const V3_MAX_PRIMARY_CAUSES = 8
@@ -1103,6 +1108,22 @@ function boundedReviewText(value, field, { maxLength = 8000, required = true } =
   if (required && !text) throw new Error(`${field}_missing`)
   if (text.length > maxLength) throw new Error(`${field}_too_long`)
   return text
+}
+
+function dailyReviewValidationError(code, { outcomeId, fields = [] } = {}) {
+  const numericOutcomeId = outcomeId === null || outcomeId === undefined ? NaN : Number(outcomeId)
+  const validationContext = {
+    outcome_id:Number.isSafeInteger(numericOutcomeId) && numericOutcomeId > 0 ? numericOutcomeId : null,
+    fields:[...new Set((Array.isArray(fields) ? fields : []).map(String).filter(Boolean))],
+  }
+  const error = new Error(code)
+  error.code = code
+  // Keep the context presentation-safe: only a stable outcome identifier and
+  // JSON field paths are sent to the one-shot repair request.  Do not attach
+  // the source evidence, prompt, credentials, or model output here.
+  error.validationContext = validationContext
+  error.validation_context = validationContext
+  return error
 }
 
 function normalizeConfidence(value, field = 'daily_review_confidence') {
@@ -1223,6 +1244,10 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
     ? conflictContext.evidenceRefsByOutcome : new Map()
   const evidenceLimitationsByOutcome = conflictContext.evidenceLimitationsByOutcome instanceof Map
     ? conflictContext.evidenceLimitationsByOutcome : new Map()
+  const hasServerEvidenceLimitation = [...known].some(outcomeId =>
+    normalizeDailyReviewServerLimitations(evidenceLimitationsByOutcome.get(outcomeId)).length > 0)
+  const topLevelInsufficientEvidenceDisallowed = input.decision_quality === 'insufficient_evidence'
+    && !hasServerEvidenceLimitation
   const periodSummary = firstReviewText(input, ['period_summary', 'daily_summary', 'review_summary', 'summary'])
   if (!periodSummary) throw new Error('daily_review_summary_missing')
   if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_daily_review_decision')
@@ -1277,6 +1302,13 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
       || item.strategy_alignment === 'insufficient_evidence'
       || riskExecutionStatus === 'insufficient_evidence'
       || attribution.avoidability === 'insufficient_evidence'
+    const insufficientEvidenceFields = [
+      item.decision_quality === 'insufficient_evidence' ? 'decision_quality' : null,
+      item.market_alignment === 'insufficient_evidence' ? 'market_alignment' : null,
+      item.strategy_alignment === 'insufficient_evidence' ? 'strategy_alignment' : null,
+      riskExecutionStatus === 'insufficient_evidence' ? 'risk_execution_status' : null,
+      attribution.avoidability === 'insufficient_evidence' ? 'outcome_attribution.avoidability' : null,
+    ].filter(Boolean)
     // Evidence availability is a server-owned fact. Ignore invented model
     // gaps when deterministic evidence is complete, and derive the visible
     // list from frozen limitations when an insufficient state is permitted.
@@ -1284,13 +1316,21 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
       ? serverEvidenceLimitations.map(value => boundedReviewText(value.description,
         'daily_v3_server_missing_evidence', { maxLength:2000 }))
       : []
-    if (hasInsufficientState && !missingEvidence.length) throw new Error('daily_v3_insufficient_state_without_server_limitation')
+    if (hasInsufficientState && !missingEvidence.length) {
+      throw dailyReviewValidationError('daily_v3_insufficient_state_without_server_limitation', {
+        outcomeId,
+        fields:[...insufficientEvidenceFields,
+          ...(topLevelInsufficientEvidenceDisallowed ? ['$root.decision_quality'] : [])],
+      })
+    }
     if (item.decision_quality === 'insufficient_evidence'
       && item.market_alignment !== 'insufficient_evidence'
       && item.strategy_alignment !== 'insufficient_evidence'
       && riskExecutionStatus !== 'insufficient_evidence'
       && attribution.avoidability !== 'insufficient_evidence') {
-      throw new Error('daily_v3_insufficient_decision_contradicts_deterministic')
+      throw dailyReviewValidationError('daily_v3_insufficient_decision_contradicts_deterministic', {
+        outcomeId, fields:['decision_quality'],
+      })
     }
     // Validation no longer spends a provider repair call solely because a
     // complete trade contained an extra model-authored missing_evidence.
@@ -1321,6 +1361,11 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
   })
   if (assessments.length !== known.size || new Set(assessments.map(item => item.outcome_id)).size !== known.size) {
     throw new Error('daily_review_trade_coverage_incomplete')
+  }
+  if (topLevelInsufficientEvidenceDisallowed) {
+    throw dailyReviewValidationError('daily_v3_insufficient_state_without_server_limitation', {
+      outcomeId:null, fields:['$root.decision_quality'],
+    })
   }
   const normalizedRules = normalizeExperienceRules(input.experience_rules, {
     allowedSourceRefs:new Set([...known].map(id => `outcome:${id}`)), chanMemoryAllowed:chanAllowed, knownOutcomeIds:known,
@@ -3709,31 +3754,217 @@ function dailyReviewChunkShape(baseShape, outcomeIds, chanAllowed) {
   return shape
 }
 
+function normalizeDailyReviewServerLimitations(limitations) {
+  return (Array.isArray(limitations) ? limitations : []).map(item => ({
+    scope:String(item?.scope || ''), description:String(item?.description || ''),
+    unavailable_capabilities:[...new Set((Array.isArray(item?.unavailable_capabilities)
+      ? item.unavailable_capabilities : []).map(String).filter(Boolean))],
+  })).filter(item => item.scope && item.description)
+}
+
+function dailyReviewInsufficientEvidencePolicy(evidenceLimitationsByOutcome, outcomeIds) {
+  const limitationsMap = evidenceLimitationsByOutcome instanceof Map
+    ? evidenceLimitationsByOutcome : new Map()
+  return Object.fromEntries((Array.isArray(outcomeIds) ? outcomeIds : []).map(value => {
+    const outcomeId = Number(value)
+    const serverLimitations = normalizeDailyReviewServerLimitations(limitationsMap.get(outcomeId))
+    return [String(outcomeId), { allowed:serverLimitations.length > 0, server_limitations:serverLimitations }]
+  }))
+}
+
+function dailyReviewChunkPeriodMarket(periodMarket, chanAllowed) {
+  if (chanAllowed || !periodMarket || typeof periodMarket !== 'object' || Array.isArray(periodMarket)) {
+    return periodMarket
+  }
+  // These two top-level fields exist only to explain Chan capability.  When
+  // Chan is not authorized for this chunk, omit them from the model-facing
+  // projection so a partial diagnostic state cannot be mistaken for a trade
+  // evidence gap.  The underlying facts, market digest, and risk evidence are
+  // retained unchanged.
+  const { chan_requirement:unusedRequirement, chan_evidence_status:unusedStatus, ...market } = periodMarket
+  return market
+}
+
+function dailyReviewChunkModelContext(chunkEvidence, chanAllowed) {
+  return stripHistoricalConditionFields({
+    system_statistics:chunkEvidence.system_statistics,
+    pre_trade_frozen:chunkEvidence.pre_trade_frozen,
+    holding_path:chunkEvidence.holding_path,
+    period_market:dailyReviewChunkPeriodMarket(chunkEvidence.period_market, chanAllowed),
+  })
+}
+
+function dailyReviewChunkRepairValidationContext({ chunkEvidence, chanAllowed, validationError }) {
+  const { outcomeId, fields } = dailyReviewRepairValidationContext(validationError)
+  const rootDecisionQualityReported = fields.includes('$root.decision_quality')
+  const limitationMap = chunkEvidence.evidenceLimitationsByOutcome instanceof Map
+    ? chunkEvidence.evidenceLimitationsByOutcome : new Map()
+  const outcomeIds = new Set()
+  const addOutcomeId = value => {
+    const id = Number(value)
+    if (Number.isSafeInteger(id) && id > 0) outcomeIds.add(id)
+  }
+  for (const id of (Array.isArray(chunkEvidence.outcomeIds) ? chunkEvidence.outcomeIds : [])) addOutcomeId(id)
+  for (const map of [chunkEvidence.outcomeFacts, chunkEvidence.evidenceRefsByOutcome, limitationMap]) {
+    if (map instanceof Map) for (const id of map.keys()) addOutcomeId(id)
+  }
+  for (const items of [chunkEvidence.pre_trade_frozen, chunkEvidence.holding_path]) {
+    if (Array.isArray(items)) for (const item of items) addOutcomeId(item?.outcome_id)
+  }
+  addOutcomeId(outcomeId)
+  const policyOutcomeIds = rootDecisionQualityReported
+    ? [...outcomeIds].sort((left, right) => left - right)
+    : outcomeId == null ? [] : [outcomeId]
+  const sharedSystemStatistics = compactReviewValue(chunkEvidence.system_statistics, {
+    maxBytes:12000, maxArrayItems:32, maxDepth:4,
+  })
+  const sharedPeriodMarket = dailyReviewChunkPeriodMarket(chunkEvidence.period_market, chanAllowed)
+  const context = {
+    review_context:{ system_statistics:sharedSystemStatistics, period_market:sharedPeriodMarket },
+  }
+  if (policyOutcomeIds.length) {
+    context.evidence_limitations_by_outcome = Object.fromEntries(policyOutcomeIds.map(id => [
+      String(id), normalizeDailyReviewServerLimitations(limitationMap.get(id)),
+    ]))
+    context.insufficient_evidence_policy_by_outcome = dailyReviewInsufficientEvidencePolicy(
+      limitationMap, policyOutcomeIds)
+  }
+  if (outcomeId == null) {
+    return context
+  }
+  const outcomeFilter = item => Number(item?.outcome_id) === outcomeId
+  context.review_context = stripHistoricalConditionFields({
+    system_statistics:sharedSystemStatistics,
+    pre_trade_frozen:Array.isArray(chunkEvidence.pre_trade_frozen)
+      ? chunkEvidence.pre_trade_frozen.filter(outcomeFilter) : [],
+    holding_path:Array.isArray(chunkEvidence.holding_path)
+      ? chunkEvidence.holding_path.filter(outcomeFilter) : [],
+    period_market:sharedPeriodMarket,
+  })
+  if (!policyOutcomeIds.length) {
+    context.evidence_limitations_by_outcome = { [String(outcomeId)]:[] }
+    context.insufficient_evidence_policy_by_outcome = dailyReviewInsufficientEvidencePolicy(limitationMap, [outcomeId])
+  }
+  return context
+}
+
 function dailyReviewChunkMessages({ systemMessage, baseShape, chanAllowed, modelEvidence, chunk }) {
   const chunkIds = chunk.outcome_ids.map(Number)
   const chunkEvidence = dailyReviewModelEvidenceForChunk(modelEvidence, chunk)
   const chunkShape = dailyReviewChunkShape(baseShape, chunkIds, chanAllowed)
+  const reviewContext = dailyReviewChunkModelContext(chunkEvidence, chanAllowed)
+  const evidenceLimitationsByOutcome = Object.fromEntries([...chunkEvidence.evidenceLimitationsByOutcome.entries()]
+    .map(([id, limitations]) => [String(id), normalizeDailyReviewServerLimitations(limitations)]))
+  const insufficientEvidencePolicyByOutcome = dailyReviewInsufficientEvidencePolicy(
+    chunkEvidence.evidenceLimitationsByOutcome, chunkIds)
   return {
     chunkIds,
     chunkEvidence,
     chunkShape,
+    reviewContext,
+    evidenceLimitationsByOutcome,
+    insufficientEvidencePolicyByOutcome,
     messages:[systemMessage, { role:'user', content:JSON.stringify({
       required_output:chunkShape, outcome_ids:chunkIds,
       chunk:{ chunk_index:chunk.chunk_index, chunk_count:chunk.chunk_count,
         expected_outcome_ids:chunk.expected_outcome_ids, source_hash:chunk.source_hash, plan_hash:chunk.plan_hash },
-      review_context:stripHistoricalConditionFields({
-        system_statistics:chunkEvidence.system_statistics,
-        pre_trade_frozen:chunkEvidence.pre_trade_frozen,
-        holding_path:chunkEvidence.holding_path,
-        period_market:chunkEvidence.period_market,
-      }),
+      review_context:reviewContext,
       evidence_refs_by_outcome:Object.fromEntries([...chunkEvidence.evidenceRefsByOutcome.entries()]
         .map(([id, refs]) => [String(id), [...refs]])),
-      evidence_limitations_by_outcome:Object.fromEntries([...chunkEvidence.evidenceLimitationsByOutcome.entries()]
-        .map(([id, limitations]) => [String(id), limitations])),
+      evidence_limitations_by_outcome:evidenceLimitationsByOutcome,
+      insufficient_evidence_policy_by_outcome:insufficientEvidencePolicyByOutcome,
     }) }],
   }
 }
+
+function dailyReviewRepairDiffPaths(left, right, path = '$', differences = []) {
+  if (differences.length >= 100) return differences
+  if (Object.is(left, right)) return differences
+  const leftArray = Array.isArray(left)
+  const rightArray = Array.isArray(right)
+  if (leftArray || rightArray) {
+    if (!leftArray || !rightArray || left.length !== right.length) {
+      differences.push(path)
+      return differences
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      dailyReviewRepairDiffPaths(left[index], right[index], `${path}[${index}]`, differences)
+      if (differences.length >= 100) break
+    }
+    return differences
+  }
+  const leftObject = left && typeof left === 'object'
+  const rightObject = right && typeof right === 'object'
+  if (leftObject || rightObject) {
+    if (!leftObject || !rightObject) {
+      differences.push(path)
+      return differences
+    }
+    const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort()
+    for (const key of keys) {
+      const childPath = path === '$' ? key : `${path}.${key}`
+      if (!Object.prototype.hasOwnProperty.call(left, key)
+        || !Object.prototype.hasOwnProperty.call(right, key)) {
+        differences.push(childPath)
+      } else {
+        dailyReviewRepairDiffPaths(left[key], right[key], childPath, differences)
+      }
+      if (differences.length >= 100) break
+    }
+    return differences
+  }
+  differences.push(path)
+  return differences
+}
+
+function dailyReviewRepairValidationContext(validationError) {
+  const value = validationError?.validationContext || validationError?.validation_context
+  const outcomeId = Number(value?.outcome_id)
+  const fields = [...new Set((Array.isArray(value?.fields) ? value.fields : []).map(String).filter(Boolean))]
+  return {
+    outcomeId:Number.isSafeInteger(outcomeId) && outcomeId > 0 ? outcomeId : null,
+    fields,
+  }
+}
+
+function validateDailyReviewRepairOutput({ initialObject, repairedObject, validationError }) {
+  const { outcomeId, fields } = dailyReviewRepairValidationContext(validationError)
+  // Structural/parse failures have no semantic outcome context. Preserve the
+  // generic repair behavior for those errors; v3 semantic failures always
+  // carry a stable outcome ID (unless the root field is reported) and enum
+  // field paths from the validator.
+  if (!fields.length) return
+  const rootFields = fields.filter(field => DAILY_REVIEW_REPAIR_ROOT_ENUM_FIELDS.has(field))
+  const outcomeFields = fields.filter(field => !DAILY_REVIEW_REPAIR_ROOT_ENUM_FIELDS.has(field))
+  if (fields.some(field => !DAILY_REVIEW_REPAIR_ENUM_FIELDS.has(field)
+    && !DAILY_REVIEW_REPAIR_ROOT_ENUM_FIELDS.has(field))) {
+    throw dailyReviewValidationError('daily_v3_repair_validation_context_invalid', { outcomeId, fields })
+  }
+  if (outcomeFields.length && outcomeId == null) {
+    throw dailyReviewValidationError('daily_v3_repair_validation_context_invalid', { outcomeId, fields })
+  }
+  const assessments = Array.isArray(initialObject?.trade_assessments) ? initialObject.trade_assessments : []
+  const matchingIndexes = assessments.reduce((indexes, item, index) => {
+    if (outcomeId != null && Number(item?.outcome_id) === outcomeId) indexes.push(index)
+    return indexes
+  }, [])
+  if (outcomeFields.length && matchingIndexes.length !== 1) {
+    throw dailyReviewValidationError('daily_v3_repair_validation_context_invalid', { outcomeId, fields })
+  }
+  const allowedPaths = new Set(rootFields.map(field => field === '$root.decision_quality' ? 'decision_quality' : field))
+  for (const field of outcomeFields) allowedPaths.add(`trade_assessments[${matchingIndexes[0]}].${field}`)
+  const differences = dailyReviewRepairDiffPaths(initialObject, repairedObject)
+  const unauthorized = differences.filter(path => !allowedPaths.has(path))
+  if (unauthorized.length) {
+    throw dailyReviewValidationError('daily_v3_repair_output_changed_unreported_field', {
+      outcomeId, fields:unauthorized.slice(0, 20),
+    })
+  }
+}
+
+export const __testDailyReviewChunkMessages = dailyReviewChunkMessages
+export const __testDailyReviewChunkRepairValidationContext = dailyReviewChunkRepairValidationContext
+export const __testValidateDailyReviewRepairOutput = validateDailyReviewRepairOutput
 
 function validateDailyReviewChunkContent(input, outcomeIds, chanContext, options = {}) {
   const content = validateDailyReviewV3Content(input, outcomeIds, chanContext, options)
@@ -3743,13 +3974,21 @@ function validateDailyReviewChunkContent(input, outcomeIds, chanContext, options
   return content
 }
 
-async function generateDailyReview(job, requestModel) {
+async function generateDailyReview(job, requestModel, dependencies = {}) {
+  const resolveModel = dependencies.resolveModel || resolveAiTaskModel
+  const getStrategyMemorySnapshot = dependencies.getStrategyMemorySnapshot || getReviewStrategyMemorySnapshot
+  const prepareModelCall = dependencies.prepareModelCall || preparePeriodReviewModelCall
+  const loadCheckpoint = dependencies.loadCheckpoint || loadDailyReviewCheckpoint
+  const startModelTask = dependencies.startModelTask || startPeriodReviewModelTask
+  const ensureMemoryInjectionLog = dependencies.ensureMemoryInjectionLog || ensurePeriodReviewStrategyMemoryInjectionLog
+  const persistInputBudget = dependencies.persistInputBudget || persistPeriodReviewInputBudget
+  const persistCheckpoint = dependencies.persistCheckpoint || persistDailyReviewCheckpoint
   const evidence = parse(job.evidence_json, null)
   if (!evidence || !Array.isArray(evidence.sources) || !evidence.sources.length) throw new Error('daily_review_evidence_invalid')
-  const resolved = await resolveAiTaskModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review',
+  const resolved = await resolveModel({ userId: job.user_id, strategyId: job.strategy_id, usage: 'review',
     modelPurpose:'daily_review' })
   if (!resolved.model) throw new Error(resolved.error || 'daily_review_model_unavailable')
-  const strategyMemorySnapshot = await getReviewStrategyMemorySnapshot(job)
+  const strategyMemorySnapshot = await getStrategyMemorySnapshot(job)
   const strategyMemoryForPrompt = sanitizeStrategyMemoryPrompt(strategyMemorySnapshot.library)
   const modelEvidence = buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strategyMemoryForPrompt)
   const endpoint = modelEndpoint(resolved.model)
@@ -3794,7 +4033,7 @@ async function generateDailyReview(job, requestModel) {
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
     '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。当前输出版本为 daily-period-review-v3，不能退回旧版 daily_lessons/memory_updates 合同。',
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
-    'risk_execution_status 必须明确标记合规、部分合规、违规或证据不足；normal_strategy_loss 仅允许实际亏损、decision_quality=good、market_alignment=aligned、strategy_alignment=aligned 且 risk_execution_status=compliant。missing_evidence 是后端所有字段，模型必须始终返回空数组；只有 review_context 明确提供 evidence_limitations 时才允许使用 insufficient_evidence，后端会写入实际限制。repeated_issues 和 strengths 必须使用 text/source_refs/occurrence_count 结构，repeated_issues 至少引用两个不同 outcome。',
+    'risk_execution_status 必须明确标记合规、部分合规、违规或证据不足；normal_strategy_loss 仅允许实际亏损、decision_quality=good、market_alignment=aligned、strategy_alignment=aligned 且 risk_execution_status=compliant。missing_evidence 是后端所有字段，模型必须始终返回空数组；只有顶层 insufficient_evidence_policy_by_outcome 中对应 outcome_id 的 allowed=true 且 server_limitations 非空时，才允许在该 outcome 的具体枚举字段使用 insufficient_evidence。该 policy 与 evidence_limitations_by_outcome 都是服务器冻结事实；不得伪造、扩展或改写限制，也不得把 review_context 中与 Chan 诊断无关的状态当作交易证据缺口。repeated_issues 和 strengths 必须使用 text/source_refs/occurrence_count 结构，repeated_issues 至少引用两个不同 outcome。',
     'holding_path.path_metrics.status=not_observable 表示交易事实和行情覆盖完整，但持仓太短，闭合K线无法精确观察持仓内路径；这不等于整条交易证据不足。此时禁止把边界K线高低价当作持仓期MFE/MAE，禁止判断止盈、止损是否曾触达，也不得据此生成经验规则；仍须使用成交事实、事前快照和交易日行情完成信号逻辑、盈亏原因与改进建议分析。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     tradeCoverageContract,
@@ -3831,7 +4070,7 @@ async function generateDailyReview(job, requestModel) {
       systemMessage, baseShape:shape, chanAllowed, modelEvidence, chunk,
     })
     const taskIdentity = dailyReviewTaskIdentity(job, 'chunk', chunkPlan.plan_hash, chunk.chunk_index)
-    const checkpoint = await loadDailyReviewCheckpoint(taskIdentity, chunkPlan.plan_hash, chunk.chunk_index)
+    const checkpoint = await loadCheckpoint(taskIdentity, chunkPlan.plan_hash, chunk.chunk_index)
     if (checkpoint) {
       const restored = validateDailyReviewChunkContent(checkpoint.content, chunkIds, chanContext, {
         strategyText:strategyMemorySnapshot.strategy_text,
@@ -3848,9 +4087,9 @@ async function generateDailyReview(job, requestModel) {
     // model-task envelope. The event-table checkpoint is written only after
     // the chunk has passed the full v3 validator; a retry can therefore reuse
     // a completed chunk without replaying a billable request.
-    const modelCall = await preparePeriodReviewModelCall('daily_review', resolved, chunkMessages,
+    const modelCall = await prepareModelCall('daily_review', resolved, chunkMessages,
       Math.max(3000, Math.ceil(JSON.stringify(chunkShape).length / 2.5)), { nowUtcMs:Date.now() })
-    const tracker = await startPeriodReviewModelTask(job, resolved, endpoint, evidence, 'daily_review_chunk', {
+    const tracker = await startModelTask(job, resolved, endpoint, evidence, 'daily_review_chunk', {
       model_task_kind:taskIdentity.taskKind,
       task_key_suffix:taskIdentity.taskKeySuffix,
       daily_review_task_role:'chunk', daily_review_chunk_index:chunk.chunk_index,
@@ -3859,9 +4098,9 @@ async function generateDailyReview(job, requestModel) {
       daily_review_expected_outcome_ids:chunkPlan.expected_outcome_ids,
     }, { taskDeadlineAtUtcMs:modelCall.taskDeadlineUtcMs })
     job._modelTracker = tracker
-    await ensurePeriodReviewStrategyMemoryInjectionLog(job, strategyMemorySnapshot, 'daily_review', tracker.taskId)
+    await ensureMemoryInjectionLog(job, strategyMemorySnapshot, 'daily_review', tracker.taskId)
     await tracker.persistBudget(modelCall.budget)
-    await persistPeriodReviewInputBudget(tracker, modelCall.budget, {
+    await persistInputBudget(tracker, modelCall.budget, {
       task_role:'chunk', chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count,
       outcome_count:chunkIds.length, market_digest_version:DAILY_REVIEW_MARKET_DIGEST_VERSION,
       pre_trade_projection_version:'daily-pre-trade-v2', chunk_planning_version:chunkPlan.planning_version,
@@ -3889,7 +4128,14 @@ async function generateDailyReview(job, requestModel) {
       allowFollowupRequests:true,
       repairContext:{ outputFormat:JSON.stringify(chunkShape),
         requiredCoverage:{ contract_version:DAILY_REVIEW_V3_CONTRACT, outcome_ids:chunkIds,
-          chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count } },
+          chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count },
+        validationContext:({ validationError }) => dailyReviewChunkRepairValidationContext({
+          chunkEvidence, chanAllowed, validationError,
+        }),
+        repairInstructions:'本次仅允许依据 validation_context.review_context 中同一份冻结证据，重新判断 validation_context 中报告的 outcome_id 与 fields 对应的语义枚举。不得修改成交事实、价格、outcome coverage、任何未被报告的字段或分析范围；不得把 mixed、partly 或其他无证据状态硬编码为替代值；仍须通过服务器校验。',
+        validateRepairOutput:({ initialObject, repairedObject, validationError }) => validateDailyReviewRepairOutput({
+          initialObject, repairedObject, validationError,
+        }) },
       validateObject: value => validateDailyReviewChunkContent(value, chunkIds, chanContext, {
         strategyText:strategyMemorySnapshot.strategy_text,
         memoryText:strategyMemorySnapshot.library.content_text,
@@ -3905,7 +4151,7 @@ async function generateDailyReview(job, requestModel) {
       evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
       evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
     })
-    const resultHash = await persistDailyReviewCheckpoint(tracker, { role:'chunk', planHash:chunkPlan.plan_hash,
+    const resultHash = await persistCheckpoint(tracker, { role:'chunk', planHash:chunkPlan.plan_hash,
       chunkIndex:chunk.chunk_index, sourceHash:chunk.source_hash, content:normalized })
     await tracker.resultReady({ resultHash, resultRef:`period_review_chunk:${job.period_case_id}:${chunk.chunk_index}` })
     await tracker.applying()
@@ -4035,6 +4281,8 @@ async function generateDailyReview(job, requestModel) {
   })
   return { content, resolved }
 }
+
+export const __testGenerateDailyReview = generateDailyReview
 
 async function finishDailyReviewSuccess(job, generated) {
   await withTransaction(async run => {

@@ -26,6 +26,9 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   PERIOD_REVIEW_FRONTEND_BUILD, PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS,
   periodReviewFrontendMetadata, periodReviewFrontendContractMismatch,
   buildDailyReviewChunkPlan, compactDailyReviewPeriodMarket,
+  __testDailyReviewChunkMessages, __testDailyReviewChunkRepairValidationContext,
+  __testValidateDailyReviewRepairOutput,
+  __testGenerateDailyReview,
   dailyReviewRecoveryRuntimeOptions, periodReviewModelInputBudget, selectWholePolicyUpgradeCaseIds,
   periodReviewPreProviderRetryDelayMs, periodReviewPreProviderRetryAt } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
@@ -1131,6 +1134,12 @@ describe('daily review model boundary', () => {
       evidenceLimitationsByOutcome:new Map([[1, [limitation]]]) })
     expect(normalized.trade_assessments[0].missing_evidence).toEqual([limitation.description])
 
+    const topLevelInsufficient = validateDailyReviewContent({ ...content, decision_quality:'insufficient_evidence' }, [1], {
+      chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+    }, { outcomeFacts:[{ id:1, net_profit:-1 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]),
+      evidenceLimitationsByOutcome:new Map([[1, [limitation]]]) })
+    expect(topLevelInsufficient.decision_quality).toBe('insufficient_evidence')
+
     const complete = validateDailyReviewContent({ ...content, trade_assessments:[{
       ...assessment, risk_execution_status:'compliant', missing_evidence:['模型多填字段'],
     }] }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }, {
@@ -1178,6 +1187,206 @@ describe('daily review model boundary', () => {
       chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
     }, { outcomeFacts:[{ id:1, net_profit:-2 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]) }))
       .toThrow('daily_v3_insufficient_state_without_server_limitation')
+  })
+
+  it('keeps disallowed insufficient evidence errors stable and presentation-safe', () => {
+    const content = {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'证据不足复盘', decision_quality:'insufficient_evidence',
+      trade_assessments:[{ outcome_id:1, decision_quality:'insufficient_evidence', original_signal_logic:'原始逻辑可见',
+        technical_basis_assessment:'技术依据', market_alignment:'aligned', strategy_alignment:'aligned',
+        risk_execution_assessment:'执行记录完整', risk_execution_status:'compliant',
+        outcome_attribution:{ result:'loss', primary_causes:['证据缺口'], explanation:'不能形成完整归因', avoidability:'avoidable' },
+        next_time_rule:{ condition:'证据恢复', action:'重新复核', risk_control:'不增加风险', invalidation:'证据仍缺失', prohibited_action:'禁止确定性结论' },
+        evidence_refs:['outcome:1'], confidence:0.4 }],
+      repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], experience_rules:[], strategy_conflicts:[], confidence:0.4,
+    }
+    let error
+    try {
+      validateDailyReviewContent(content, [1], {
+        chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+      }, { outcomeFacts:[{ id:1, net_profit:-2 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]) })
+    } catch (caught) {
+      error = caught
+    }
+    expect(error?.code).toBe('daily_v3_insufficient_state_without_server_limitation')
+    expect(error?.validationContext).toEqual({ outcome_id:1, fields:['decision_quality', '$root.decision_quality'] })
+    expect(error?.validation_context).toEqual({ outcome_id:1, fields:['decision_quality', '$root.decision_quality'] })
+    expect(String(error)).not.toContain('原始逻辑可见')
+    expect(JSON.stringify(error)).not.toContain('api_key')
+  })
+
+  it('rejects top-level insufficient evidence when the chunk has no server limitation', () => {
+    const content = {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'顶层证据不足复盘', decision_quality:'insufficient_evidence',
+      trade_assessments:[{ outcome_id:1, decision_quality:'mixed', original_signal_logic:'原始逻辑可见',
+        technical_basis_assessment:'技术依据完整', market_alignment:'aligned', strategy_alignment:'aligned',
+        risk_execution_assessment:'执行记录完整', risk_execution_status:'compliant',
+        outcome_attribution:{ result:'loss', primary_causes:['价格反向'], explanation:'按成交事实归因', avoidability:'partly_avoidable' },
+        next_time_rule:{ condition:'回踩确认', action:'等待确认', risk_control:'限制风险', invalidation:'结构失效', prohibited_action:'禁止追单' },
+        evidence_refs:['outcome:1'], confidence:0.5 }],
+      repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], experience_rules:[], strategy_conflicts:[], confidence:0.5,
+    }
+    let error
+    try {
+      validateDailyReviewContent(content, [1], {
+        chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+      }, { outcomeFacts:[{ id:1, net_profit:-2 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]) })
+    } catch (caught) {
+      error = caught
+    }
+    expect(error?.code).toBe('daily_v3_insufficient_state_without_server_limitation')
+    expect(error?.validationContext).toEqual({ outcome_id:null, fields:['$root.decision_quality'] })
+  })
+
+  it('sends an explicit per-outcome insufficient-evidence policy and omits unrelated Chan state', () => {
+    const built = __testDailyReviewChunkMessages({
+      systemMessage:{ role:'system', content:'insufficient_evidence_policy_by_outcome' },
+      baseShape:{ trade_assessments:[{ outcome_id:0, decision_quality:'good' }] }, chanAllowed:false,
+      modelEvidence:{ system_statistics:{ trade_count:1 },
+        pre_trade_frozen:[{ outcome_id:1, signal:{ signal_type:'buy' } }],
+        holding_path:[{ outcome_id:1, outcome:{ net_profit:-1 }, risk_decision:{ status:'approved' } }],
+        period_market:{ status:'complete', chan_requirement:{ status:'enabled' }, chan_evidence_status:'partial',
+          symbols:{ XAUUSD:{ H1:{ status:'complete', summary:{ close:2000 } } } } },
+        outcomeFacts:new Map([[1, { net_profit:-1 }]]),
+        evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]),
+        evidenceLimitationsByOutcome:new Map([[1, []]]),
+      },
+      chunk:{ chunk_index:0, chunk_count:1, outcome_ids:[1], expected_outcome_ids:[1], source_hash:'source', plan_hash:'plan' },
+    })
+    const payload = JSON.parse(built.messages[1].content)
+    expect(payload.insufficient_evidence_policy_by_outcome['1']).toEqual({ allowed:false, server_limitations:[] })
+    expect(payload.evidence_limitations_by_outcome['1']).toEqual([])
+    expect(payload.review_context.period_market).not.toHaveProperty('chan_requirement')
+    expect(payload.review_context.period_market).not.toHaveProperty('chan_evidence_status')
+    expect(payload.review_context.holding_path[0].risk_decision).toEqual({ status:'approved' })
+    const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    expect(source).toContain('顶层 insufficient_evidence_policy_by_outcome')
+    expect(source).toContain('evidence_limitations_by_outcome')
+    expect(source).not.toContain('review_context 明确提供 evidence_limitations')
+  })
+
+  it('only allows a repair to change the reported outcome enum field', () => {
+    const initialObject = {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'原始总结', decision_quality:'mixed',
+      trade_assessments:[{ outcome_id:1, decision_quality:'insufficient_evidence', market_alignment:'aligned',
+        strategy_alignment:'aligned', risk_execution_status:'compliant',
+        outcome_attribution:{ avoidability:'partly_avoidable' } }],
+      repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], experience_rules:[], confidence:0.5,
+    }
+    const validationError = { validationContext:{ outcome_id:1, fields:['decision_quality'] } }
+    expect(() => __testValidateDailyReviewRepairOutput({ initialObject,
+      repairedObject:{ ...initialObject, period_summary:'被擅自改写' }, validationError }))
+      .toThrow('daily_v3_repair_output_changed_unreported_field')
+    expect(() => __testValidateDailyReviewRepairOutput({ initialObject,
+      repairedObject:{ ...initialObject, trade_assessments:[{ ...initialObject.trade_assessments[0], decision_quality:'mixed' }] },
+      validationError })).not.toThrow()
+
+    const rootValidationError = { validationContext:{ outcome_id:null, fields:['$root.decision_quality'] } }
+    expect(() => __testValidateDailyReviewRepairOutput({ initialObject,
+      repairedObject:{ ...initialObject, decision_quality:'good' }, validationError:rootValidationError })).not.toThrow()
+    expect(() => __testValidateDailyReviewRepairOutput({ initialObject,
+      repairedObject:{ ...initialObject, period_summary:'根路径之外的修改' }, validationError:rootValidationError }))
+      .toThrow('daily_v3_repair_output_changed_unreported_field')
+  })
+
+  it('builds repair context only for the reported outcome while retaining shared facts', () => {
+    const error = { validationContext:{ outcome_id:1, fields:['decision_quality'] } }
+    const context = __testDailyReviewChunkRepairValidationContext({ chanAllowed:false,
+      chunkEvidence:{ system_statistics:{ trade_count:2 },
+        pre_trade_frozen:[{ outcome_id:1, signal:{ id:'one' } }, { outcome_id:2, signal:{ id:'two' } }],
+        holding_path:[{ outcome_id:1, outcome:{ net_profit:-1 } }, { outcome_id:2, outcome:{ net_profit:2 } }],
+        period_market:{ status:'complete', chan_requirement:{ status:'enabled' }, chan_evidence_status:'partial', symbols:{} },
+        evidenceLimitationsByOutcome:new Map([[1, []], [2, [{ scope:'holding_path', description:'仅二号限制', unavailable_capabilities:['mfe_mae'] }]]]),
+      }, validationError:error })
+    expect(context.review_context.system_statistics).toEqual({ trade_count:2 })
+    expect(context.review_context.period_market).not.toHaveProperty('chan_evidence_status')
+    expect(context.review_context.pre_trade_frozen.map(item => item.outcome_id)).toEqual([1])
+    expect(context.review_context.holding_path.map(item => item.outcome_id)).toEqual([1])
+    expect(context.evidence_limitations_by_outcome).toEqual({ '1':[] })
+    expect(context.insufficient_evidence_policy_by_outcome).toEqual({
+      '1':{ allowed:false, server_limitations:[] },
+    })
+    expect(JSON.stringify(context)).not.toContain('二号限制')
+    expect(JSON.stringify(context)).not.toContain('"id":"two"')
+
+    const rootContext = __testDailyReviewChunkRepairValidationContext({ chanAllowed:false,
+      chunkEvidence:{ system_statistics:{ trade_count:2 },
+        pre_trade_frozen:[{ outcome_id:1, signal:{ id:'one' } }, { outcome_id:2, signal:{ id:'two' } }],
+        holding_path:[{ outcome_id:1, outcome:{ net_profit:-1 } }, { outcome_id:2, outcome:{ net_profit:2 } }],
+        period_market:{ status:'complete', symbols:{} },
+        evidenceLimitationsByOutcome:new Map([[1, []], [2, [{ scope:'holding_path', description:'仅二号限制', unavailable_capabilities:['mfe_mae'] }]]]),
+      }, validationError:{ validationContext:{ outcome_id:null, fields:['$root.decision_quality'] } } })
+    expect(rootContext.review_context).not.toHaveProperty('pre_trade_frozen')
+    expect(rootContext.review_context).not.toHaveProperty('holding_path')
+    expect(rootContext.evidence_limitations_by_outcome).toEqual({
+      '1':[], '2':[{ scope:'holding_path', description:'仅二号限制', unavailable_capabilities:['mfe_mae'] }],
+    })
+    expect(rootContext.insufficient_evidence_policy_by_outcome).toEqual({
+      '1':{ allowed:false, server_limitations:[] },
+      '2':{ allowed:true, server_limitations:[{ scope:'holding_path', description:'仅二号限制', unavailable_capabilities:['mfe_mae'] }] },
+    })
+    expect(JSON.stringify(rootContext)).not.toContain('"id":"one"')
+    expect(JSON.stringify(rootContext)).not.toContain('"id":"two"')
+  })
+
+  it('wires the repair diff guard into the generated chunk request, not the merge request', async () => {
+    const memoryText = '冻结策略记忆'
+    const memoryHash = crypto.createHash('sha256').update(memoryText, 'utf8').digest('hex')
+    const job = {
+      id:22, period_case_id:22, idempotency_key:'daily:22:evidence', user_id:7, strategy_id:3,
+      evidence_hash:'case-22-evidence',
+      evidence_json:JSON.stringify({ statistics:{ trade_count:1 },
+        period_market:{ status:'complete', chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' },
+        sources:[{ outcome_id:1, evidence_hash:'outcome-1', evidence:{
+          inference_time:{ signal:{ signal_type:'buy' }, snapshot_ref:'snapshot-1', risk_decision:{ status:'approved' },
+            original_order:{ symbol:'XAUUSD' }, approved_order:{ symbol:'XAUUSD' } },
+          post_trade:{ outcome:{ net_profit:-1 }, execution:{ status:'filled' }, deals:[], path_metrics:{ status:'complete' } },
+        } }],
+      }),
+      _strategyMemorySnapshot:{ strategy_text:'冻结策略', library:{ strategy_id:3, version_no:1,
+        content_hash:memoryHash, content_text:memoryText } },
+    }
+    const tracker = { taskId:'task-22-chunk-0', signal:null, persistBudget:vi.fn(), assertOwned:vi.fn() }
+    const requestModel = vi.fn(async args => {
+      requestModel.args = args
+      throw new Error('capture_chunk_request')
+    })
+    await expect(__testGenerateDailyReview(job, requestModel, {
+      resolveModel:vi.fn(async () => ({ model:{ provider:'deepseek', model_name:'deepseek-chat',
+        api_base_url:'https://api.example.test', api_key_encrypted:'test-key', temperature:0.2,
+        thinking_enabled:false, reasoning_effort:'low' }, model_profile_id:null, credential_source:'test' })),
+      getStrategyMemorySnapshot:vi.fn(async currentJob => currentJob._strategyMemorySnapshot),
+      loadCheckpoint:vi.fn(async () => null),
+      prepareModelCall:vi.fn(async () => ({ budget:{ selectedMaxOutputTokens:1000 }, requestTimeoutMs:1000,
+        attemptSafetyDeadlineUtcMs:Date.now() + 60_000, taskDeadlineUtcMs:Date.now() + 60_000 })),
+      startModelTask:vi.fn(async () => tracker),
+      ensureMemoryInjectionLog:vi.fn(async () => null),
+      persistInputBudget:vi.fn(async () => null),
+    })).rejects.toThrow('capture_chunk_request')
+    const args = requestModel.args
+    expect(args).toBeTruthy()
+    expect(args.validateRepairOutput).toBeUndefined()
+    expect(args.repairContext.validateRepairOutput).toEqual(expect.any(Function))
+    const initialObject = {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'原始总结', decision_quality:'mixed',
+      trade_assessments:[{ outcome_id:1, decision_quality:'insufficient_evidence', market_alignment:'aligned',
+        strategy_alignment:'aligned', risk_execution_status:'compliant',
+        outcome_attribution:{ avoidability:'partly_avoidable' } }],
+      repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], experience_rules:[], confidence:0.5,
+    }
+    const validationError = new Error('daily_v3_insufficient_state_without_server_limitation')
+    validationError.validationContext = { outcome_id:1, fields:['decision_quality'] }
+    expect(() => args.repairContext.validateRepairOutput({ initialObject,
+      repairedObject:{ ...initialObject, period_summary:'非法修改' }, validationError }))
+      .toThrow('daily_v3_repair_output_changed_unreported_field')
+    expect(() => args.repairContext.validateRepairOutput({ initialObject,
+      repairedObject:{ ...initialObject, trade_assessments:[{ ...initialObject.trade_assessments[0], decision_quality:'mixed' }] },
+      validationError })).not.toThrow()
+
+    const source = readFileSync(new URL('../../server/routes/ai/period-review.js', import.meta.url), 'utf8')
+    const mergeStart = source.indexOf('const mergeOutputRaw = await requestModel')
+    const mergeEnd = source.indexOf('mergedOutput = normalizeDailyReviewV3MergeContent', mergeStart)
+    expect(source.slice(mergeStart, mergeEnd)).not.toContain('validateRepairOutput')
   })
 
   it('rejects forged v3 evidence and non-executable experience rules', () => {

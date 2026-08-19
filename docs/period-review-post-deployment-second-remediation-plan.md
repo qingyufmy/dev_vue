@@ -510,3 +510,47 @@ API 列表、详情和状态接口返回：`next_attempt_at`、`evidence_retry_c
 - `git diff --check`：通过。
 
 验证期间修正了一项既有测试边界：迁移 195 的安全检查现在只读取迁移 195 自身，不再把后续迁移文本错误并入检查范围。当前工作区已有的 Lark 推送脚本改动未被修改，也不属于本批次。
+
+## 20. Case 22 日复盘语义校验与定向修复（2026-08-19）
+
+### 20.1 已验证的公网证据
+
+- 公网 case `22` 对应 `2026-08-18` 日复盘，包含 9 笔已闭合交易；截图与只读运行记录显示交易证据和周期行情均已完成，job `6` 的业务生成阶段已达到 `3/3` 次尝试，尚未生成版本。
+- chunk 1 的初次模型输出和一次定向 repair 都失败于稳定错误码 `daily_v3_insufficient_state_without_server_limitation`。
+- 原 repair 请求只带通用 `output_contract`、`required_coverage` 和 `original_output`，没有逐笔冻结证据限制、允许状态或可重新判断语义的 compact review context。
+- 初次请求实际发送的是同级 `evidence_limitations_by_outcome`，而提示文本引用了不存在或层级不一致的 `review_context.evidence_limitations`；这会让模型无法可靠判断 `insufficient_evidence` 是否被服务器允许。
+
+以上是对已观察请求和任务记录的事实归纳，不代表本地分支已部署到公网，也不代表本次已重试 case、重启服务或写入数据库。
+
+### 20.2 本次实现项
+
+- 初次 daily chunk payload 增加服务器冻结的 `insufficient_evidence_policy_by_outcome`。每个 outcome 明确给出 `allowed` 和 `server_limitations`，并与同级 `evidence_limitations_by_outcome` 共用同一份服务器限制；提示文本改为引用这两个实际存在且路径一致的字段，不允许模型伪造限制。
+- v3 validator 对不允许的 `insufficient_evidence` 保持原错误码，同时附加 presentation-safe 的 `outcome_id` 和违规 JSON 字段路径；错误对象不携带原始 prompt、模型输出或凭据。
+- `llm.js` 的通用 repairContext 支持调用方提供的静态或基于 validation error 动态生成的 `validationContext`，并合并 validator 携带的安全上下文。daily repair 只携带报错 outcome 的逐笔冻结证据、共享 compact `system_statistics`/`period_market`、该 outcome 的 policy 与 `evidence_limitations_by_outcome`，完整 `original_output` 仍用于覆盖修复。
+- daily repair 的说明允许仅依据同一冻结证据重新判断报告的语义枚举；服务端 diff hook 强制只允许修改指定 outcome 的指定枚举路径，禁止改成交事实、价格、数组顺序、覆盖范围、未报告字段或扩大分析范围；修复结果仍必须再次通过 validator。
+- v3 顶层 `decision_quality` 也纳入同一服务器限制校验：当 chunk 内所有 outcome 的 policy 都是 `allowed=false` 时，顶层 `insufficient_evidence` 使用同一稳定错误码；若与逐笔违规同时出现，安全字段列表会稳定加入 `$root.decision_quality`，一次 repair 可同时修正。只要存在任一真实服务器限制，顶层 `insufficient_evidence` 仍保留原有合法语义。
+- 根路径违规的 compact repair context 只携带共享统计/行情以及全 chunk 的 policy/limitations，不携带任何逐笔冻结证据；diff hook 将 `$root.decision_quality` 精确映射到顶层字段，并继续拒绝未报告的根字段或其他对象变化。
+- 当 Chan 未获准时，chunk 模型上下文删除仅用于 Chan 诊断的顶层 `chan_requirement` 与 `chan_evidence_status`，保留成交事实、行情摘要和风控证据，减少无关 `partial` 状态对逐笔证据判断的诱导。
+
+### 20.3 两轮实现后自审与调整
+
+第一轮复审聚焦需求覆盖、边界和最小改动：确认 policy 必须由服务器的逐笔限制派生，不能将 `mixed`、`partly` 或“证据不足”硬编码成替代结论；确认通用 repair 默认合同不能变化。因此调整为只新增可选 `validationContext`/repair guidance，旧 generic compact repair 继续只发送原有四个核心字段；period repair 才注入冻结上下文。
+
+第二轮复审聚焦兼容性、安全和异常恢复：确认错误上下文只允许 outcome ID 与字段路径，repair payload 不从异常对象复制 prompt、凭据或原始证据；确认一次 repair 后的第二次校验仍会失败关闭，不能绕过 validator；确认 Chan 状态裁剪只作用于模型投影，不影响服务器证据、成交事实、持久化 checkpoint 或最终合并。补充了初次 payload、稳定错误元数据、repair context 传递及同错修复成功的回归测试。
+
+追加复审聚焦聚合语义：发现顶层 `decision_quality` 仍可能在逐笔字段修正后残留无限制的 `insufficient_evidence`，遂把根路径纳入同一 validation context，并让根路径 repair 只获得全 chunk 的限制判定所需摘要；同时保留有任一真实 limitation 时的既有顶层合法语义。新增顶层单独拒绝、逐笔与顶层合并报告、根字段 diff 白名单及真实 limitation 放行测试。
+
+### 20.4 本地验证与剩余风险
+
+本地分支验证命令：
+
+- `node --check server/routes/ai/period-review.js`；
+- `node --check server/routes/ai/llm.js`；
+- `node node_modules/vitest/vitest.mjs run tests/ai/period-review.test.js tests/ai/llm.test.js`；
+- `git diff --check`。
+
+剩余风险：
+
+- 本次只修复本地 `dev_codex` 分支代码和回归测试；公网运行 commit、部署结果及 case 22 的重新生成仍需独立发布和只读验收，不能由本地测试推断。
+- 真实模型仍可能返回其他结构或语义错误；repair context 只提供同一冻结证据，不扩大分析授权，连续校验失败仍会保留失败终态。
+- 超大 chunk 的 compact repair 仍受模型上下文和现有请求预算约束，需要在发布后用 case 22 的真实 task/event 记录确认请求大小与修复成功率。
