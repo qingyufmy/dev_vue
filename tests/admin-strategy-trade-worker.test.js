@@ -4,15 +4,18 @@ const mockQueryAll = vi.fn()
 const mockQueryOne = vi.fn()
 const mockQueryRun = vi.fn(async () => ({ changes: 1 }))
 const mockExecuteOrderCore = vi.fn()
-const mockWithTransaction = vi.fn(async callback => callback(async (sql, params = []) => {
+let transactionSourceStatus = null
+const mockTxRun = vi.fn(async (sql, params = []) => {
   if (sql.includes('SELECT * FROM admin_strategy_trade_targets WHERE id')) {
     const isSubscriber = Number(params[0]) === 2
     return [[isSubscriber
       ? { id: 2, dispatch_id: 5, status: 'pending', target_role: 'subscriber', user_id: 2, trading_account_id: 10, subscription_id: 20, lease_token: null, attempt_count: 0, target_snapshot_json: JSON.stringify({ bridge_generation: 5, broker: { server: 'DEMO', login: '2' }, subscription: { symbols: ['EURUSD'] }, position_size_factor: 0.25 }) }
       : { id: 1, dispatch_id: 5, status: 'pending', target_role: 'source', user_id: 1, trading_account_id: 9, lease_token: null, attempt_count: 0, target_snapshot_json: JSON.stringify({ bridge_generation: 5, broker: { server: 'DEMO', login: '1' }, position_size_factor: 0.25 }) }], []]
   }
+  if (sql.includes('SELECT status FROM admin_strategy_trade_targets')) return [[{ status: transactionSourceStatus }], []]
   return [{ affectedRows: 1 }, []]
-}))
+})
+const mockWithTransaction = vi.fn(async callback => callback(mockTxRun))
 const mockClaimDispatch = vi.fn(async () => ({ token: 'dispatch-lease' }))
 const mockFence = vi.fn(async () => ({}))
 const mockBridge = vi.fn(async () => ({ status: 'success', account: { server: 'DEMO', login: '1' }, positions: [] }))
@@ -48,6 +51,7 @@ const dispatch = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  transactionSourceStatus = null
   mockQueryOne.mockImplementation(async sql => {
     if (sql.includes('admin_strategy_trade_dispatches')) return { ...dispatch }
     if (sql.includes("target_role = 'source'")) return { id: 1, dispatch_id: 5, target_role: 'source', status: 'pending', user_id: 1, trading_account_id: 9, lease_token: null, attempt_count: 0, target_snapshot_json: JSON.stringify({ bridge_generation: 5, broker: { server: 'DEMO', login: '1' }, position_size_factor: 0.25 }) }
@@ -107,6 +111,30 @@ describe('admin strategy trade worker fences', () => {
     expect(result.source).toBe('uncertain')
     expect(mockExecuteOrderCore).toHaveBeenCalledTimes(1)
     expect(mockExecuteOrderCore.mock.calls[0][3]).toBe('admin_strategy_source')
+    expect(mockTxRun.mock.calls.some(([sql]) => String(sql).includes("error_code = 'source_execution_failed'"))).toBe(false)
+  })
+
+  it('atomically skips only unsent subscribers when source execution is definitely failed', async () => {
+    transactionSourceStatus = 'failed'
+    const source = { id: 1, dispatch_id: 5, target_role: 'source', status: 'pending', user_id: 1, trading_account_id: 9, lease_token: null, attempt_count: 0, target_snapshot_json: JSON.stringify({ bridge_generation: 5, broker: { server: 'DEMO', login: '1' } }) }
+    const subscriber = { id: 2, dispatch_id: 5, target_role: 'subscriber', status: 'pending', user_id: 2, trading_account_id: 10, subscription_id: 20, order_intent_id: null, trade_ticket: null, target_snapshot_json: JSON.stringify({ bridge_generation: 5, broker: { server: 'DEMO', login: '2' } }) }
+    mockQueryOne.mockImplementation(async sql => {
+      if (sql.includes('admin_strategy_trade_dispatches')) return { ...dispatch, status:'confirmed' }
+      if (sql.includes("target_role = 'source'")) return source
+      return null
+    })
+    mockQueryAll.mockImplementation(async sql => {
+      if (sql.includes("target_role = 'subscriber'")) return [subscriber]
+      return [{ target_role:'source', status:'failed' }, { target_role:'subscriber', status:'pending' }]
+    })
+    mockExecuteOrderCore.mockResolvedValue({ status:'failed', reason:'worker_command_params_invalid', order_intent_id:11 })
+
+    const result = await processAdminStrategyTradeDispatch(5)
+
+    expect(result.source).toBe('failed')
+    expect(mockExecuteOrderCore).toHaveBeenCalledTimes(1)
+    expect(mockTxRun).toHaveBeenCalledWith(expect.stringContaining("error_code = 'source_execution_failed'"), expect.arrayContaining([5]))
+    expect(mockTxRun).toHaveBeenCalledWith(expect.stringContaining('order_intent_id IS NULL AND trade_ticket IS NULL'), expect.any(Array))
   })
 
   it('keeps a subscriber runtime change before the Bridge fence from invoking directed execution', async () => {

@@ -483,10 +483,26 @@ export async function retryAdminStrategyTradeDispatch(actorUserId, dispatchId) {
     const [uncertain] = await run("SELECT id FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND status IN ('uncertain','reconciling') LIMIT 1", [id])
     if (uncertain?.length) throw fail('uncertain_requires_reconciliation')
     const [retryable] = await run(`SELECT id FROM admin_strategy_trade_targets WHERE dispatch_id = ?
-      AND (status IN ('failed','rejected','failed_manual_review') OR (target_role = 'source' AND status = 'skipped')) FOR UPDATE`, [id])
+      AND (
+        (target_role = 'source' AND status IN ('failed','failed_manual_review','skipped')
+          AND COALESCE(error_code, '') NOT IN ('dispatch_cancelled','dispatch_expired')
+          AND (order_intent_id IS NULL OR error_code = 'worker_command_params_invalid'))
+        OR (target_role = 'subscriber' AND status = 'skipped'
+          AND error_code = 'source_execution_failed'
+          AND order_intent_id IS NULL AND trade_ticket IS NULL)
+      ) FOR UPDATE`, [id])
     if (!retryable?.length) throw fail('no_failed_targets')
     await run("UPDATE admin_strategy_trade_dispatches SET status = 'confirmed', completed_at = NULL, updated_at = ? WHERE id = ?", [now, id])
-    await run("UPDATE admin_strategy_trade_targets SET status = 'pending', error_code = NULL, completed_at = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE dispatch_id = ? AND (status IN ('failed','rejected','failed_manual_review') OR (target_role = 'source' AND status = 'skipped'))", [now, id])
+    await run(`UPDATE admin_strategy_trade_targets SET status = 'pending', error_code = NULL,
+        completed_at = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = ?
+      WHERE dispatch_id = ? AND (
+        (target_role = 'source' AND status IN ('failed','failed_manual_review','skipped')
+          AND COALESCE(error_code, '') NOT IN ('dispatch_cancelled','dispatch_expired')
+          AND (order_intent_id IS NULL OR error_code = 'worker_command_params_invalid'))
+        OR (target_role = 'subscriber' AND status = 'skipped'
+          AND error_code = 'source_execution_failed'
+          AND order_intent_id IS NULL AND trade_ticket IS NULL)
+      )`, [now, id])
   })
   return getAdminStrategyTradeDispatch(id, actorId)
 }

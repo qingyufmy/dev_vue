@@ -107,6 +107,25 @@ async function markTarget(targetId, dispatchId, status, fields = {}) {
   await queryRun(`UPDATE admin_strategy_trade_targets SET ${updates.join(', ')} WHERE dispatch_id = ? AND id = ?`, params)
 }
 
+async function finalizeUnsentSubscribersAfterSourceFailure(dispatchId) {
+  return withTransaction(async run => {
+    const [sources] = await run(`SELECT status FROM admin_strategy_trade_targets
+      WHERE dispatch_id = ? AND target_role = 'source' LIMIT 1 FOR UPDATE`, [dispatchId])
+    const source = sources?.[0]
+    if (!source || !['rejected', 'skipped', 'failed', 'failed_manual_review'].includes(source.status)) return 0
+    const now = beijingNow()
+    const [result] = await run(`UPDATE admin_strategy_trade_targets SET status = 'skipped',
+        error_code = 'source_execution_failed',
+        execution_result_json = ?, completed_at = ?, updated_at = ?,
+        lease_token = NULL, lease_expires_at = NULL
+      WHERE dispatch_id = ? AND target_role = 'subscriber' AND status = 'pending'
+        AND order_intent_id IS NULL AND trade_ticket IS NULL`, [
+      JSON.stringify({ status:'skipped', reason:'source_execution_failed' }), now, now, dispatchId,
+    ])
+    return Number(result?.affectedRows || 0)
+  })
+}
+
 function targetRequest(dispatch, target, snapshot) {
   const isLegacyTierDispatch = dispatch.requested_volume === null
     || dispatch.requested_volume === undefined || dispatch.requested_volume === ''
@@ -261,6 +280,7 @@ async function executeTarget(dispatch, target, sourceRequired = false) {
       tradingAccountId: target.trading_account_id, sourceType, sourceId,
       clientRequestId: request.client_request_id, magic: ADMIN_STRATEGY_TRADE_MAGIC,
       riskProfileId: snapshot.risk?.profile_id || target.risk_profile_id,
+      allowRetryFailed: true,
       beforeBridgeSend: async () => {
         if (Date.now() >= Number(dispatch.valid_until_utc_msc)) throw Object.assign(new Error('dispatch_expired'), { preSend: true })
         if (!isBridgeAlive(target.user_id) || !isTradeEnabled(target.user_id)) throw Object.assign(new Error('bridge_runtime_fence_failed'), { preSend: true })
@@ -299,6 +319,14 @@ async function executeTarget(dispatch, target, sourceRequired = false) {
     if (result?.status === 'uncertain') {
       await markTarget(target.id, dispatch.id, 'uncertain', { order_intent_id: result.order_intent_id || null, execution_result_json: resultJson, error_code: 'bridge_result_uncertain' })
       return { status: 'uncertain' }
+    }
+    if (result?.status === 'failed') {
+      await markTarget(target.id, dispatch.id, 'failed_manual_review', {
+        order_intent_id: result.order_intent_id || null,
+        execution_result_json: resultJson,
+        error_code: setError(result),
+      })
+      return { status: 'failed', error: setError(result) }
     }
     await markTarget(target.id, dispatch.id, 'rejected', { order_intent_id: result?.order_intent_id || null, execution_result_json: resultJson, error_code: setError(result, 'broker_rejected') })
     return { status: 'rejected' }
@@ -395,10 +423,16 @@ export async function processAdminStrategyTradeDispatch(dispatchId) {
   const source = await queryOne("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'source' LIMIT 1", [dispatch.id])
   if (source?.status === 'pending') {
     const sourceResult = await executeTarget(dispatch, source, false)
-    if (sourceResult.status !== 'succeeded') return { status: await finalizeDispatch(dispatch.id), source: sourceResult.status }
+    if (sourceResult.status !== 'succeeded') {
+      await finalizeUnsentSubscribersAfterSourceFailure(dispatch.id)
+      return { status: await finalizeDispatch(dispatch.id), source: sourceResult.status }
+    }
   }
   const sourceAfter = await queryOne("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'source' LIMIT 1", [dispatch.id])
-  if (sourceAfter?.status !== 'succeeded') return { status: await finalizeDispatch(dispatch.id), source: sourceAfter?.status }
+  if (sourceAfter?.status !== 'succeeded') {
+    await finalizeUnsentSubscribersAfterSourceFailure(dispatch.id)
+    return { status: await finalizeDispatch(dispatch.id), source: sourceAfter?.status }
+  }
   const targets = await queryAll("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'subscriber' AND status = 'pending' ORDER BY id ASC", [dispatch.id])
   for (const target of targets) {
     await executeTarget(dispatch, target, true)

@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 
+const mockQueryOne = vi.fn()
+const mockWithTransaction = vi.fn()
+
 vi.mock('../server/db.js', () => ({
   beijingNow: () => '2026-08-14 12:00:00',
   beijingAfter: () => '2026-08-14 12:02:00',
   parseBeijing: value => value ? new Date(String(value).replace(' ', 'T') + '+08:00') : null,
-  queryAll: vi.fn(), queryOne: vi.fn(), queryRun: vi.fn(), withTransaction: vi.fn(),
+  queryAll: vi.fn(), queryOne: (...args) => mockQueryOne(...args), queryRun: vi.fn(), withTransaction: (...args) => mockWithTransaction(...args),
 }))
 vi.mock('../server/bridge-ws.js', () => ({
   getBridgeGeneration: vi.fn(() => 3), isBridgeAlive: vi.fn(() => true), isTradeEnabled: vi.fn(() => true),
@@ -13,6 +16,7 @@ vi.mock('../server/bridge-ws.js', () => ({
 import {
   __adminStrategyTradeTest,
   normalizeAdminStrategyTradeInput,
+  retryAdminStrategyTradeDispatch,
   resolveEffectiveSymbolsForDispatch,
 } from '../server/services/admin-strategy-trades.js'
 import { accountSymbolInventoryLockKey } from '../server/services/account-symbol-inventory-lock.js'
@@ -225,5 +229,29 @@ describe('admin strategy trade contract', () => {
     expect(resolveEffectiveSymbolsForDispatch(null, '["EURUSD","GBPUSD"]')).toEqual(['EURUSD', 'GBPUSD'])
     expect(resolveEffectiveSymbolsForDispatch('["EURUSD"]', '["EURUSD","GBPUSD"]')).toEqual(['EURUSD'])
     expect(resolveEffectiveSymbolsForDispatch('[]', '["EURUSD"]')).toEqual([])
+  })
+
+  it('retries only the source failure fence and safe source-failure subscriber skips', async () => {
+    const run = vi.fn(async (sql) => {
+      if (sql.includes('SELECT * FROM admin_strategy_trade_dispatches WHERE id = ? AND actor_user_id = ? FOR UPDATE')) {
+        return [[{ id:5, actor_user_id:1, status:'failed' }], []]
+      }
+      if (sql.includes("status IN ('uncertain','reconciling')")) return [[], []]
+      if (sql.includes('SELECT id FROM admin_strategy_trade_targets')) return [[{ id:1 }], []]
+      return [{ affectedRows:1 }, []]
+    })
+    mockWithTransaction.mockImplementation(async callback => callback(run))
+    mockQueryOne.mockResolvedValue(null)
+
+    await retryAdminStrategyTradeDispatch(1, 5)
+
+    const targetSelect = run.mock.calls.find(([sql]) => sql.includes("error_code = 'source_execution_failed'"))?.[0]
+    const targetUpdate = run.mock.calls.find(([sql]) => sql.includes('UPDATE admin_strategy_trade_targets'))?.[0]
+    expect(targetSelect).toContain("target_role = 'source'")
+    expect(targetSelect).toContain("error_code = 'source_execution_failed'")
+    expect(targetSelect).toContain('order_intent_id IS NULL AND trade_ticket IS NULL')
+    expect(targetUpdate).toContain("target_role = 'subscriber'")
+    expect(targetUpdate).toContain("error_code = 'source_execution_failed'")
+    expect(targetUpdate).not.toContain("status IN ('failed','rejected','failed_manual_review')")
   })
 })

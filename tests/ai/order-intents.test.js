@@ -58,6 +58,7 @@ function makeRunner() {
     if (sql.includes('FROM order_intents WHERE idempotency_key')) return resultRows(intent ? [intent] : [])
     if (sql.includes('FROM order_intents WHERE id =')) return resultRows(intent ? [intent] : [])
     if (sql.includes('FROM auto_signal_deliveries WHERE order_intent_id')) return resultRows(delivery ? [delivery] : [])
+    if (sql.includes('SELECT id FROM signal_outcomes WHERE order_intent_id')) return resultRows([])
     if (sql.startsWith('INSERT INTO order_intents')) {
       intent = {
         id: nextIntentId++, idempotency_key: params[0], user_id: params[1], trading_account_id: params[2],
@@ -444,6 +445,56 @@ describe('prepareAndExecuteOrderIntent', () => {
     })
     expect(intent.status).toBe('rejected')
     expect(reservation.status).toBe('released')
+  })
+
+  it('classifies Worker parameter rejection as a terminal failure and preserves the Bridge command id', async () => {
+    mockBridge.mockImplementation(async (_userId, action) => {
+      if (action === 'account') return { status:'success', equity:1000 }
+      if (action === 'quote') return { status:'success', bid:1, ask:2 }
+      return { status:'error', error:'worker_command_params_invalid', message:'worker_command_params_invalid', command_id:'command-pre-mt-1' }
+    })
+
+    const result = await prepareAndExecuteOrderIntent(baseArgs())
+
+    expect(result).toMatchObject({
+      status:'failed', classification:'preparation_failure', reason:'worker_command_params_invalid',
+      order_intent_id:1, bridge_command_id:'command-pre-mt-1',
+    })
+    expect(intent.status).toBe('failed')
+    expect(reservation.status).toBe('released')
+    expect(txRun.mock.calls.some(call => String(call[0]).includes('INSERT INTO signal_outcomes'))).toBe(false)
+  })
+
+  it('retries only a known pre-MT failure with the same intent key and a new Bridge operation identity', async () => {
+    let sendCount = 0
+    const request = { symbol:'XAUUSD', order_type:'buy', volume:0.01, confirm:true, signal_id:77, client_request_id:'admin-dispatch:target-1' }
+    mockBridge.mockImplementation(async (_userId, action, payload) => {
+      if (action === 'account') return { status:'success', equity:1000 }
+      if (action === 'quote') return { status:'success', bid:1, ask:2 }
+      sendCount += 1
+      return sendCount === 1
+        ? { status:'error', error:'worker_command_params_invalid', command_id:'command-pre-mt-1' }
+        : { status:'success', ticket:123, command_id:'command-retry-2' }
+    })
+
+    const first = await prepareAndExecuteOrderIntent(baseArgs({
+      sourceType:'admin_strategy_source', action:'admin_strategy_source',
+      request,
+    }))
+    const second = await prepareAndExecuteOrderIntent(baseArgs({
+      sourceType:'admin_strategy_source', action:'admin_strategy_source',
+      request,
+      options:{ allowRetryFailed:true },
+    }))
+
+    expect(first).toMatchObject({ status:'failed', order_intent_id:1 })
+    expect(second).toMatchObject({ status:'success', order_intent_id:1 })
+    const sends = mockBridge.mock.calls.filter(call => call[1] === 'admin_strategy_source' || call[1] === 'open')
+    expect(sends).toHaveLength(2)
+    expect(sends[0][2].client_request_id).toBe(sends[1][2].client_request_id)
+    expect(sends[0][2].comment).toBe(sends[1][2].comment)
+    expect(sends[0][2]).not.toHaveProperty('operation_id')
+    expect(sends[1][2].operation_id).toMatch(/^admin-retry:1:/)
   })
 })
 

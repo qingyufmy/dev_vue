@@ -56,6 +56,19 @@ function brokerReason(result) {
   return brokerResultValue(result, 'message') || brokerResultValue(result, 'error') || ''
 }
 
+function bridgeCommandId(result) {
+  const value = result?.bridge_command_id ?? result?.command_id
+    ?? result?.raw_result?.command_id ?? result?.result?.command_id
+  const normalized = String(value || '').trim()
+  return normalized || null
+}
+
+function isKnownPreMtFailure(result) {
+  const code = String(result?.error_code || result?.error || result?.reason_code
+    || brokerResultValue(result, 'error_code') || brokerResultValue(result, 'error') || '').trim()
+  return code === 'worker_command_params_invalid'
+}
+
 export function executionTicket(result, action = 'open') {
   if (isPendingAction(action)) {
     return result?.order ?? result?.pending_ticket ?? result?.ticket ?? result?.order_id ?? null
@@ -142,12 +155,29 @@ function replayResult(row) {
   return { ...saved, order_intent_id: row.id, idempotent_replay: true }
 }
 
-async function claimIntent({ userId, tradingAccountId, idempotencyKey, sourceType, sourceId, clientRequestId, action, request }) {
+async function claimIntent({ userId, tradingAccountId, idempotencyKey, sourceType, sourceId, clientRequestId, action, request, allowRetryFailed = false }) {
   const leaseToken = randomUUID()
   return withTransaction(async run => {
     await lockAccountScope(run, userId, tradingAccountId)
     const existing = await txOne(run, 'SELECT * FROM order_intents WHERE idempotency_key = ? FOR UPDATE', [idempotencyKey])
     if (existing) {
+      const existingResult = safeParse(existing.result_json, {})
+      const retryablePreMtFailure = String(existing.error_code || existingResult.reason_code || existingResult.reason || '').trim()
+        === 'worker_command_params_invalid'
+      if (existing.status === 'failed' && allowRetryFailed
+        && ['admin_strategy_source', 'admin_strategy_delivery'].includes(String(sourceType || ''))
+        && retryablePreMtFailure) {
+        const outcome = await txOne(run, 'SELECT id FROM signal_outcomes WHERE order_intent_id = ? LIMIT 1', [existing.id])
+        if (!outcome) {
+          await run(
+            `UPDATE order_intents SET status = 'preparing', lease_token = ?,
+               lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND), request_json = ?,
+               result_json = NULL, error_code = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`,
+            [leaseToken, LEASE_SECONDS, JSON.stringify(request), beijingNow(), existing.id]
+          )
+          return { intentId: Number(existing.id), leaseToken, retried:true }
+        }
+      }
       if (TERMINAL_STATUSES.has(existing.status) || existing.status === 'uncertain' || existing.status === 'bridge_sending') {
         return { replay: replayResult(existing) }
       }
@@ -163,7 +193,7 @@ async function claimIntent({ userId, tradingAccountId, idempotencyKey, sourceTyp
            result_json = NULL, error_code = NULL, updated_at = ? WHERE id = ?`,
         [leaseToken, LEASE_SECONDS, JSON.stringify(request), beijingNow(), existing.id]
       )
-      return { intentId: Number(existing.id), leaseToken }
+      return { intentId: Number(existing.id), leaseToken, retried:false }
     }
     const [insert] = await run(
       `INSERT INTO order_intents
@@ -175,7 +205,7 @@ async function claimIntent({ userId, tradingAccountId, idempotencyKey, sourceTyp
         action, request.symbol || null, JSON.stringify(request), leaseToken, LEASE_SECONDS, beijingNow(), beijingNow(),
       ]
     )
-    return { intentId: Number(insert.insertId), leaseToken }
+    return { intentId: Number(insert.insertId), leaseToken, retried:false }
   })
 }
 
@@ -268,7 +298,7 @@ async function reserveRisk(intentId, leaseToken, userId, tradingAccountId, reque
 }
 
 async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId, bridgeAction, bridgeParams,
-  beforeBridgeSendTx = null) {
+  beforeBridgeSendTx = null, retryAttempt = false) {
   return withTransaction(async run => {
     await lockAccountScope(run, userId, tradingAccountId)
     const intent = await txOne(run, 'SELECT * FROM order_intents WHERE id = ? FOR UPDATE', [intentId])
@@ -279,7 +309,11 @@ async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId,
     const bridgeRef = `AI-${Number(intentId).toString(36).toUpperCase()}`.slice(0, 24)
     // The MT5 comment is the durable execution identity. Never allow a caller
     // supplied comment to replace it; the original request remains in request_json.
-    const payload = { ...bridgeParams, comment: bridgeRef }
+    const payload = {
+      ...bridgeParams,
+      comment: bridgeRef,
+      ...(retryAttempt ? { operation_id:`admin-retry:${Number(intentId)}:${String(leaseToken)}` } : {}),
+    }
     await run(
       `UPDATE order_intents SET status = 'bridge_sending', bridge_command_ref = ?, bridge_payload_json = ?,
          lease_expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND), updated_at = ? WHERE id = ?`,
@@ -292,10 +326,12 @@ async function markBridgeSending(intentId, leaseToken, userId, tradingAccountId,
 async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeResult) {
   const ticket = executionTicket(bridgeResult, bridgeAction)
   const succeeded = bridgeResult?.status === 'success' && ticket != null
-  const explicitReject = isDeterministicBrokerReject(bridgeResult)
-  const status = succeeded ? 'succeeded' : explicitReject ? 'rejected' : 'uncertain'
+  const preMtFailure = !succeeded && isKnownPreMtFailure(bridgeResult)
+  const explicitReject = !preMtFailure && isDeterministicBrokerReject(bridgeResult)
+  const status = succeeded ? 'succeeded' : explicitReject ? 'rejected' : preMtFailure ? 'failed' : 'uncertain'
   const retcode = brokerRetcode(bridgeResult)
   const brokerMessage = brokerReason(bridgeResult)
+  const commandId = bridgeCommandId(bridgeResult)
   const safeBroker = explicitReject
     ? buildSafeExecutionOutcome({
       status:'rejected', classification:'broker_rejection',
@@ -304,16 +340,25 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
       stage:'bridge_send', field:'execution',
     })
     : null
+  const safePreMt = preMtFailure
+    ? buildSafeExecutionOutcome({
+      status:'failed', classification:'preparation_failure', reason:'worker_command_params_invalid',
+      details:{}, stage:'bridge_send', field:'execution',
+    })
+    : null
   const safeUncertain = !succeeded && !explicitReject
+    && !preMtFailure
     ? buildSafeExecutionOutcome({
       status:'uncertain', classification:'execution_uncertain', reason:'bridge_result_uncertain',
       details:{}, stage:'bridge_send', field:'execution',
     }) : null
   const result = succeeded
-    ? bridgeResult
+    ? { ...bridgeResult, ...(commandId ? { bridge_command_id:commandId } : {}) }
     : explicitReject
-      ? { ...safeBroker, status:'rejected' }
-      : { ...safeUncertain, status:'uncertain' }
+      ? { ...safeBroker, status:'rejected', ...(commandId ? { bridge_command_id:commandId } : {}) }
+      : preMtFailure
+        ? { ...safePreMt, status:'failed', ...(commandId ? { bridge_command_id:commandId } : {}) }
+        : { ...safeUncertain, status:'uncertain', ...(commandId ? { bridge_command_id:commandId } : {}) }
   await withTransaction(async run => {
     // Outcome creation needs the owning user, source and approved request too.
     // Selecting only lifecycle fields made a successful MT5 order fail during
@@ -327,14 +372,14 @@ async function finalizeBridgeResult(intentId, leaseToken, bridgeAction, bridgeRe
         status, succeeded && !isPendingAction(bridgeAction) ? String(ticket) : null,
         succeeded && isPendingAction(bridgeAction) ? String(ticket) : null,
         JSON.stringify(result), succeeded ? null : (brokerMessage || status),
-        beijingNow(), succeeded || explicitReject ? beijingNow() : null, intentId,
+        beijingNow(), succeeded || explicitReject || preMtFailure ? beijingNow() : null, intentId,
       ]
     )
     if (succeeded) {
       await run("UPDATE risk_reservations SET status = 'committed', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
       if (intent.trading_account_id) await recordSuccessfulOpenTx(run, intent.trading_account_id)
       await createSignalOutcomeTx(run, intent, bridgeResult, bridgeAction)
-    } else if (explicitReject) {
+    } else if (explicitReject || preMtFailure) {
       await run("UPDATE risk_reservations SET status = 'released', updated_at = ? WHERE order_intent_id = ? AND status = 'active'", [beijingNow(), intentId])
     }
   })
@@ -431,6 +476,7 @@ export async function prepareAndExecuteOrderIntent({
     claim = await claimIntent({
       userId: actorId, tradingAccountId: accountId, idempotencyKey, sourceType,
       sourceId: sourceId || signalId, clientRequestId: effectiveClientId, action, request,
+      allowRetryFailed: options.allowRetryFailed === true,
     })
   } catch (error) {
     return buildSafeExecutionOutcome({
@@ -439,7 +485,7 @@ export async function prepareAndExecuteOrderIntent({
     })
   }
   if (claim.replay) return claim.replay
-  const { intentId, leaseToken } = claim
+  const { intentId, leaseToken, retried } = claim
   const preparedRequest = { ...request }
   let quote = null
   let bridgeStarted = false
@@ -496,7 +542,7 @@ export async function prepareAndExecuteOrderIntent({
     preparationStage = 'bridge_send'
     preparationField = 'execution'
     const sending = await markBridgeSending(intentId, leaseToken, actorId, accountId, bridgeAction, bridgeParams,
-      beforeBridgeSendTx)
+      beforeBridgeSendTx, retried === true)
     bridgeStarted = true
     let bridgeResult
     try {

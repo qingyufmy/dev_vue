@@ -69,6 +69,75 @@ function cleanPlaceOrderObject(value) {
     .filter(([, item]) => item !== undefined && item !== null))
 }
 
+// Database DECIMAL values arrive as plain decimal text. Do not accept
+// scientific notation or partial decimals at this boundary: the wire contract
+// should be narrower than JavaScript's Number() parser.
+const DECIMAL_NUMBER_PATTERN = /^\d+(?:\.\d+)?$/
+const INTEGER_NUMBER_PATTERN = /^[+-]?\d+$/
+
+function placeOrderNumericError() {
+  throw adapterError('bridge_trade_numeric_param_invalid')
+}
+
+function normalizePlaceOrderNumber(value, { positive = true } = {}) {
+  if (value === undefined || value === null) return undefined
+  let number
+  if (typeof value === 'number') {
+    number = value
+  } else if (typeof value === 'string' && DECIMAL_NUMBER_PATTERN.test(value.trim())) {
+    number = Number(value.trim())
+  } else {
+    placeOrderNumericError()
+  }
+  if (!Number.isFinite(number) || (positive ? !(number > 0) : number < 0)) {
+    placeOrderNumericError()
+  }
+  return number
+}
+
+function normalizePlaceOrderInteger(value, { positive = false, nonnegative = false } = {}) {
+  if (value === undefined || value === null) return undefined
+  let number
+  if (typeof value === 'number') {
+    number = value
+  } else if (typeof value === 'string' && INTEGER_NUMBER_PATTERN.test(value.trim())) {
+    number = Number(value.trim())
+  } else {
+    placeOrderNumericError()
+  }
+  if (!Number.isSafeInteger(number) || (positive && !(number > 0)) || (nonnegative && number < 0)) {
+    placeOrderNumericError()
+  }
+  return number
+}
+
+function normalizePlaceOrderParams(params, action, orderKind) {
+  const normalized = { ...params }
+  const positiveFields = ['volume', 'price', 'stop_loss', 'take_profit', 'stop_limit_price']
+  for (const field of positiveFields) {
+    if (Object.prototype.hasOwnProperty.call(normalized, field)) {
+      normalized[field] = normalizePlaceOrderNumber(normalized[field])
+    }
+  }
+  for (const field of ['deviation', 'type_time', 'type_filling']) {
+    if (Object.prototype.hasOwnProperty.call(normalized, field)) {
+      normalized[field] = normalizePlaceOrderInteger(normalized[field], { nonnegative: true })
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(normalized, 'magic')) {
+    normalized.magic = normalizePlaceOrderInteger(normalized.magic)
+  }
+  if (Object.prototype.hasOwnProperty.call(normalized, 'expiration')) {
+    normalized.expiration = normalizePlaceOrderInteger(normalized.expiration, { positive: true })
+  }
+  if (normalizePlaceOrderNumber(normalized.volume) === undefined) placeOrderNumericError()
+  if (action === 'pending' && ['limit', 'stop', 'stop_limit'].includes(orderKind)
+    && normalizePlaceOrderNumber(normalized.price) === undefined) placeOrderNumericError()
+  if (action === 'pending' && orderKind === 'stop_limit'
+    && normalizePlaceOrderNumber(normalized.stop_limit_price) === undefined) placeOrderNumericError()
+  return normalized
+}
+
 // The server keeps the complete expected state for preconditions and audit
 // records, while Bridge Worker commands accept only the protocol contract
 // fields below. Keep this projection at the wire boundary so server-only
@@ -200,7 +269,7 @@ function normalizeOrder(item, platform) {
 
 function tradeParams(action, params) {
   if (action === 'open') {
-    return cleanPlaceOrderObject({
+    return normalizePlaceOrderParams(cleanPlaceOrderObject({
       symbol:params.symbol,
       side:params.side ?? params.type ?? params.order_type,
       order_kind:'market',
@@ -209,16 +278,20 @@ function tradeParams(action, params) {
       take_profit:params.take_profit ?? params.tp,
       deviation:params.deviation,
       magic:params.magic,
+      expiration:params.expiration,
+      type_time:params.type_time,
+      type_filling:params.type_filling,
       comment:durableOrderComment(params.comment),
-    })
+    }), action, 'market')
   }
   if (action === 'pending') {
     const legacyType = String(params.type ?? params.order_type ?? '').trim().toLowerCase()
     const [side, ...kindParts] = legacyType.split('_')
-    return cleanPlaceOrderObject({
+    const orderKind = kindParts.join('_')
+    return normalizePlaceOrderParams(cleanPlaceOrderObject({
       symbol:params.symbol,
       side,
-      order_kind:kindParts.join('_'),
+      order_kind:orderKind,
       volume:params.volume,
       price:params.price,
       stop_loss:params.stop_loss ?? params.sl,
@@ -227,9 +300,10 @@ function tradeParams(action, params) {
       deviation:params.deviation,
       magic:params.magic,
       expiration:params.expiration,
-      type_time:params.expiration ? 2 : undefined,
+      type_time:params.type_time ?? (params.expiration != null ? 2 : undefined),
+      type_filling:params.type_filling,
       comment:durableOrderComment(params.comment),
-    })
+    }), action, orderKind)
   }
   if (action === 'close' || action === 'close_system_position') {
     const expected = params.expected_state || {}

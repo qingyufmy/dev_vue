@@ -722,15 +722,50 @@ describe('Bridge v3 business compatibility adapter', () => {
   it.each([
     ['zero stop loss', { stop_loss:0 }],
     ['negative take profit', { take_profit:-1 }],
-    ['string stop loss', { stop_loss:'2290' }],
-  ])('keeps %s so strict Worker validation can reject it', async (_label, invalid) => {
+    ['empty stop loss', { stop_loss:'' }],
+    ['mixed stop loss', { stop_loss:'2290abc' }],
+    ['scientific stop loss', { stop_loss:'2.29e3' }],
+    ['boolean stop loss', { stop_loss:true }],
+  ])('rejects %s before creating a Bridge command', async (_label, invalid) => {
     const { adapter, gateway } = setup()
 
-    await adapter.execute(42, 'open', {
+    await expect(adapter.execute(42, 'open', {
       symbol:'XAUUSD', order_type:'buy', volume:0.1, ...invalid,
-    })
+    })).resolves.toMatchObject({ status:'error', error:'bridge_trade_numeric_param_invalid' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
 
-    expect(gateway.sendCommand.mock.calls[0][1].params).toMatchObject(invalid)
+  it('converts strict decimal strings for all place-order numeric fields', async () => {
+    const { adapter, gateway } = setup()
+
+    await expect(adapter.execute(42, 'pending', {
+      symbol:'XAUUSD', order_type:'buy_stop_limit', volume:'0.01000000', price:'2310.00000000',
+      stop_loss:'2290.50000000', take_profit:'2320.25000000', stoplimit_price:'2308.75000000',
+      deviation:'12', magic:'234000', expiration:'1900000000', type_filling:'1',
+    })).resolves.toMatchObject({ status:'success' })
+    expect(gateway.sendCommand.mock.calls[0][1].params).toMatchObject({
+      volume:0.01, price:2310, stop_loss:2290.5, take_profit:2320.25,
+      stop_limit_price:2308.75, deviation:12, magic:234000,
+      expiration:1900000000, type_time:2, type_filling:1,
+    })
+    for (const value of Object.values(gateway.sendCommand.mock.calls[0][1].params)) {
+      if (typeof value === 'number') expect(Number.isFinite(value)).toBe(true)
+    }
+  })
+
+  it.each([
+    ['fractional deviation', { deviation:'1.5' }],
+    ['negative type time', { type_time:-1 }],
+    ['boolean filling mode', { type_filling:true }],
+    ['zero expiration', { expiration:0 }],
+    ['mixed magic', { magic:'234000x' }],
+  ])('rejects invalid integer field: %s before Bridge dispatch', async (_label, invalid) => {
+    const { adapter, gateway } = setup()
+
+    await expect(adapter.execute(42, 'open', {
+      symbol:'XAUUSD', order_type:'buy', volume:0.1, ...invalid,
+    })).resolves.toMatchObject({ status:'error', error:'bridge_trade_numeric_param_invalid' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
   })
 
   it('never aliases a pending order ticket as a position id', async () => {
@@ -823,6 +858,20 @@ describe('Bridge v3 business compatibility adapter', () => {
     expect(first).toMatch(/^command_[a-f0-9]{64}$/)
     expect(gateway.sendCommand.mock.calls[0][1].params.comment).toBe('AI-2S')
     expect(gateway.sendCommand.mock.calls[1][1].params.comment).toBe('AI-2S')
+  })
+
+  it('uses a retry operation identity for a new Bridge command without changing the MT comment', async () => {
+    const { adapter, gateway } = setup()
+    const params = { symbol:'XAUUSD', order_type:'buy', volume:0.1, comment:'AI-RETRY-1' }
+
+    await adapter.execute(42, 'open', params)
+    await adapter.execute(42, 'open', { ...params, operation_id:'admin-retry:1:lease-2' })
+
+    const first = gateway.sendCommand.mock.calls[0][1]
+    const second = gateway.sendCommand.mock.calls[1][1]
+    expect(first.command_id).not.toBe(second.command_id)
+    expect(first.params.comment).toBe(second.params.comment)
+    expect(second.params).not.toHaveProperty('operation_id')
   })
 
   it('preserves the durable order-intent comment for pending-order reconciliation', async () => {
