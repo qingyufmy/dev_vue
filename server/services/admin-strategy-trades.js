@@ -515,6 +515,25 @@ export async function claimAdminStrategyTradeDispatch(dispatchId, leaseToken, le
   return result.changes ? { token, leaseExpiresAt: until } : null
 }
 
+/**
+ * Release only the dispatch lease owned by this worker invocation.
+ *
+ * The token predicate is intentional: a slow/failed worker must never clear
+ * a lease that a later worker has already acquired after the original lease
+ * expired.  Completed dispatches are also eligible here because finalization
+ * can update status before the worker reaches its finally block.
+ */
+export async function releaseAdminStrategyTradeDispatchLease(dispatchId, leaseToken) {
+  const id = normalizeId(dispatchId, 'dispatch_id')
+  const token = String(leaseToken || '').trim()
+  if (!token) return false
+  const now = beijingNow()
+  const result = await queryRun(`UPDATE admin_strategy_trade_dispatches
+    SET lease_token = NULL, lease_expires_at = NULL, updated_at = ?
+    WHERE id = ? AND lease_token = ?`, [now, id, token])
+  return Number(result?.changes || 0) > 0
+}
+
 export async function assertAdminStrategyTargetSendFence({ dispatchId, targetId, targetRole, sourceRequired = false, leaseToken = null } = {}) {
   const id = normalizeId(dispatchId, 'dispatch_id'); const tid = normalizeId(targetId, 'target_id')
   const rows = await queryAll(`SELECT d.status AS dispatch_status, d.valid_until_utc_msc, d.signal_id,

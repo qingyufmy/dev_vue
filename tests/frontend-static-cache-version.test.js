@@ -32,6 +32,8 @@ describe('frontend static cache version', () => {
     expect(appReference).toMatch(/build=[^"']*period-review-evidence-retry1/)
     expect(source).toMatch(/styles\.css[^"']*period-review-evidence-retry1/)
     expect(appReference).toContain('pending-fill-ticket-binding1')
+    expect(appReference).toContain('admin-pending-cancel-modal1')
+    expect(source).toMatch(/styles\.css[^"']*admin-pending-cancel-modal1/)
     expect(appReference).toContain('rev=period-review-compact1-period-review-nav1')
     expect(appReference).not.toContain('styles.css')
   })

@@ -5410,14 +5410,31 @@ function renderAdminStrategyPendingCancel() {
     const targetStatus = String(target.status || (target.eligible ? "pending" : "skipped"));
     const account = adminStrategyDispatchTargetLabel(target);
     const reason = adminStrategyPendingCancelReasonLabel(target.error_code || target.exclusion_reason || target.reason);
-    return `<div class="admin-strategy-dispatch-target-row ${escapeHtml(targetStatus)}"><span><strong>${escapeHtml(account)}</strong><small>${escapeHtml(target.target_role === "source" ? "观摩源（最后撤单）" : "订阅账户")}${target.ticket ? ` · #${escapeHtml(String(target.ticket))}` : ""}</small></span><span class="status-chip ${["succeeded","completed"].includes(targetStatus) ? "success" : targetStatus === "failed" ? "danger" : ["uncertain","reconciling"].includes(targetStatus) ? "warning" : "info"}">${escapeHtml(adminStrategyPendingCancelStatusLabel(targetStatus))}</span>${reason ? `<em title="${escapeHtml(reason)}">${escapeHtml(reason)}</em>` : ""}</div>`;
+    const statusTone = ["succeeded", "completed"].includes(targetStatus) ? "success"
+      : targetStatus === "failed" ? "danger"
+        : ["uncertain", "reconciling", "running", "executing"].includes(targetStatus) ? "warning" : "info";
+    const roleLabel = target.target_role === "source" ? "观摩源 · 最后撤单" : "订阅账户";
+    const symbol = target.symbol || target.standard_symbol || "--";
+    const ticket = target.ticket ? `票号 #${escapeHtml(String(target.ticket))}` : "票号待核对";
+    return `<li class="admin-strategy-dispatch-target-row ${escapeHtml(targetStatus)}"><div class="admin-strategy-pending-cancel-target-main"><div class="admin-strategy-pending-cancel-target-heading"><strong>${escapeHtml(account)}</strong><span class="status-chip ${statusTone}">${escapeHtml(adminStrategyPendingCancelStatusLabel(targetStatus))}</span></div><div class="admin-strategy-pending-cancel-target-meta"><span>${escapeHtml(roleLabel)}</span><span>${escapeHtml(symbol)}</span><span>${ticket}</span></div>${reason ? `<p class="admin-strategy-pending-cancel-target-reason" title="${escapeHtml(reason)}">${escapeHtml(reason)}</p>` : ""}</div></li>`;
   }).join("");
-  body.innerHTML = `<div class="admin-strategy-dispatch-preview-banner"><strong>${isJob ? escapeHtml(adminStrategyPendingCancelStatusLabel(status)) : "只取消本次分发产生的挂单"}</strong><span>订阅账户先撤，观摩源最后；已成交订单不会转为平仓。</span></div><div class="admin-strategy-dispatch-summary-grid"><span><small>目标总数</small><strong>${targets.length}</strong></span><span><small>可执行</small><strong>${eligible}</strong></span><span><small>已撤 / 跳过</small><strong>${succeeded} / ${skipped}</strong></span><span><small>失败 / 待核对</small><strong>${failed} / ${uncertain}</strong></span></div>${isJob ? "" : `<label class="admin-strategy-dispatch-reason-field" for="adminStrategyPendingCancelReason"><span>撤单原因</span><textarea id="adminStrategyPendingCancelReason" rows="2" maxlength="500">管理员取消已分发挂单</textarea><small class="field-help">将写入系统审计；不会发送给模型。</small></label>`}<div class="admin-strategy-dispatch-targets">${rows || '<p class="admin-strategy-dispatch-empty">没有可关联的分发挂单。</p>'}</div>`;
+  const statusTone = ["succeeded", "completed"].includes(status) ? "success"
+    : ["failed"].includes(status) ? "danger"
+      : ["uncertain", "reconciling", "running", "executing", "partial"].includes(status) ? "warning" : "info";
+  const statusText = isJob ? adminStrategyPendingCancelStatusLabel(status) : "待确认";
+  body.innerHTML = `<div class="admin-strategy-dispatch-preview-banner admin-strategy-pending-cancel-banner" role="note"><span class="admin-strategy-pending-cancel-banner-icon" aria-hidden="true"><i data-lucide="shield-check" size="18"></i></span><div class="admin-strategy-pending-cancel-banner-copy"><div class="admin-strategy-pending-cancel-banner-heading"><strong>只撤本次分发产生的挂单</strong><span class="status-chip ${statusTone}">${escapeHtml(statusText)}</span></div><p>订阅账户先撤，观摩源最后；已成交订单不会转为平仓。</p></div></div><div class="admin-strategy-dispatch-summary-grid admin-strategy-pending-cancel-summary"><span><small>目标总数</small><strong>${targets.length}</strong></span><span><small>可执行</small><strong>${eligible}</strong></span><span><small>已撤 / 跳过</small><strong>${succeeded} / ${skipped}</strong></span><span><small>失败 / 待核对</small><strong>${failed} / ${uncertain}</strong></span></div>${isJob ? "" : `<label class="admin-strategy-dispatch-reason-field admin-strategy-pending-cancel-reason" for="adminStrategyPendingCancelReason"><span><strong>撤单原因</strong><small>写入系统审计，不发送给模型</small></span><textarea id="adminStrategyPendingCancelReason" rows="2" maxlength="500">管理员取消已分发挂单</textarea><small class="field-help">请说明取消原因，便于后续追溯。</small></label>`}<section class="admin-strategy-pending-cancel-target-section" aria-labelledby="adminStrategyPendingCancelTargetTitle"><div class="admin-strategy-pending-cancel-target-section-heading"><strong id="adminStrategyPendingCancelTargetTitle">关联账户</strong><span>只核对本次分发产生的挂单</span></div><ul class="admin-strategy-dispatch-targets admin-strategy-pending-cancel-target-list">${rows || '<li class="admin-strategy-dispatch-empty">没有可关联的分发挂单。</li>'}</ul></section>`;
   const terminal = ["succeeded", "partial", "failed", "completed"].includes(status);
   confirm.hidden = isJob;
   confirm.disabled = isJob || eligible <= 0;
   retry.hidden = !isJob || !terminal || failed <= 0 || uncertain > 0;
   retry.disabled = false;
+  confirm.removeAttribute("aria-busy");
+  retry.removeAttribute("aria-busy");
+  const dialog = $("adminStrategyPendingCancelModal")?.querySelector(".admin-strategy-pending-cancel-dialog");
+  if (dialog) {
+    dialog.dataset.mode = isJob ? "job" : "preview";
+    dialog.dataset.retryAvailable = retry.hidden ? "false" : "true";
+  }
   initIcons();
 }
 
@@ -5439,6 +5456,7 @@ async function openAdminStrategyPendingCancel(dispatchId) {
     renderAdminStrategyPendingCancel();
     $("adminStrategyPendingCancelModal")?.classList.remove("hidden");
     document.body.classList.add("modal-open");
+    requestAnimationFrame(() => $("adminStrategyPendingCancelClose")?.focus({ preventScroll:true }));
   } catch (error) {
     toast(error.message || "关联撤单预览失败", "error");
   }
@@ -5475,6 +5493,7 @@ async function createAdminStrategyPendingCancel() {
   const reason = String($("adminStrategyPendingCancelReason")?.value || "").trim();
   if (reason.length < 2) return toast("请填写至少 2 个字的撤单原因", "warning");
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   try {
     const data = await api(`/api/admin/strategy-trades/${encodeURIComponent(dispatchId)}/pending-cancel-jobs`, {
       method:"POST", timeout:30000, body:{ confirm:true, preview_hash:preview.preview_hash, reason,
@@ -5488,6 +5507,8 @@ async function createAdminStrategyPendingCancel() {
   } catch (error) {
     toast(error.message || "创建关联撤单任务失败", "error");
     button.disabled = false;
+  } finally {
+    button.removeAttribute("aria-busy");
   }
 }
 
@@ -5498,6 +5519,7 @@ async function retryAdminStrategyPendingCancel() {
   const button = $("adminStrategyPendingCancelRetry");
   if (!jobId || !dispatchId || !button) return;
   button.disabled = true;
+  button.setAttribute("aria-busy", "true");
   try {
     const previewData = await api(`/api/admin/strategy-trades/${encodeURIComponent(dispatchId)}/pending-cancel-preview`, { timeout:30000 });
     const preview = adminStrategyPendingCancelRoot(previewData);
@@ -5510,6 +5532,8 @@ async function retryAdminStrategyPendingCancel() {
   } catch (error) {
     toast(error.message || "重试关联撤单失败", "error");
     button.disabled = false;
+  } finally {
+    button.removeAttribute("aria-busy");
   }
 }
 
@@ -17514,6 +17538,28 @@ function bindEvents() {
   $("adminStrategyPendingCancelRetry")?.addEventListener("click", retryAdminStrategyPendingCancel);
   $("adminStrategyPendingCancelModal")?.addEventListener("click", event => {
     if (event.target === $("adminStrategyPendingCancelModal")) closeAdminStrategyPendingCancelModal();
+  });
+  $("adminStrategyPendingCancelModal")?.addEventListener("keydown", event => {
+    const modal = $("adminStrategyPendingCancelModal");
+    if (!modal || modal.classList.contains("hidden")) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAdminStrategyPendingCancelModal();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...modal.querySelectorAll("button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex='-1'])")]
+      .filter(element => !element.hidden && element.getAttribute("aria-hidden") !== "true");
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
   $("orderConfirmCancel")?.addEventListener("click", closeManualOrderModal);
   $("orderConfirmClose")?.addEventListener("click", closeManualOrderModal);

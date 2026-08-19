@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 
 const mockQueryOne = vi.fn()
+const mockQueryRun = vi.fn()
 const mockWithTransaction = vi.fn()
 
 vi.mock('../server/db.js', () => ({
   beijingNow: () => '2026-08-14 12:00:00',
   beijingAfter: () => '2026-08-14 12:02:00',
   parseBeijing: value => value ? new Date(String(value).replace(' ', 'T') + '+08:00') : null,
-  queryAll: vi.fn(), queryOne: (...args) => mockQueryOne(...args), queryRun: vi.fn(), withTransaction: (...args) => mockWithTransaction(...args),
+  queryAll: vi.fn(), queryOne: (...args) => mockQueryOne(...args), queryRun: (...args) => mockQueryRun(...args), withTransaction: (...args) => mockWithTransaction(...args),
 }))
 vi.mock('../server/bridge-ws.js', () => ({
   getBridgeGeneration: vi.fn(() => 3), isBridgeAlive: vi.fn(() => true), isTradeEnabled: vi.fn(() => true),
@@ -18,6 +19,7 @@ import {
   normalizeAdminStrategyTradeInput,
   retryAdminStrategyTradeDispatch,
   resolveEffectiveSymbolsForDispatch,
+  releaseAdminStrategyTradeDispatchLease,
 } from '../server/services/admin-strategy-trades.js'
 import { accountSymbolInventoryLockKey } from '../server/services/account-symbol-inventory-lock.js'
 import fs from 'node:fs'
@@ -34,6 +36,22 @@ function insertTupleCounts(source, tableName) {
 }
 
 describe('admin strategy trade contract', () => {
+  it('releases a dispatch lease only when the worker token still owns it', async () => {
+    mockQueryRun.mockResolvedValueOnce({ changes: 1 })
+    expect(await releaseAdminStrategyTradeDispatchLease(5, 'worker-token')).toBe(true)
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE id = ? AND lease_token = ?'),
+      ['2026-08-14 12:00:00', 5, 'worker-token'],
+    )
+
+    mockQueryRun.mockResolvedValueOnce({ changes: 0 })
+    expect(await releaseAdminStrategyTradeDispatchLease(5, 'stale-token')).toBe(false)
+    expect(mockQueryRun).toHaveBeenLastCalledWith(
+      expect.stringContaining('WHERE id = ? AND lease_token = ?'),
+      ['2026-08-14 12:00:00', 5, 'stale-token'],
+    )
+  })
+
   it('keeps admin capabilities enabled after admin auth without an environment gate', () => {
     const route = fs.readFileSync(new URL('../server/routes/admin-strategy-trades.js', import.meta.url), 'utf8')
     const service = fs.readFileSync(new URL('../server/services/admin-strategy-trades.js', import.meta.url), 'utf8')

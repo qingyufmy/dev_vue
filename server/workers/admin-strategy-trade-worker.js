@@ -10,6 +10,7 @@ import {
   ADMIN_STRATEGY_TRADE_SOURCE,
   assertAdminStrategyTargetSendFence,
   claimAdminStrategyTradeDispatch,
+  releaseAdminStrategyTradeDispatchLease,
   resolveEffectiveSymbolsForDispatch,
 } from '../services/admin-strategy-trades.js'
 import { acquireAccountSymbolInventoryLock, releaseAccountSymbolInventoryLock } from '../services/account-symbol-inventory-lock.js'
@@ -398,6 +399,7 @@ async function reconcileUncertainTarget(target) {
   const kind = pending && pendingOrder ? 'pending' : 'position'
   const state = pending && pendingOrder ? 'pending' : 'open'
   await markTarget(target.id, target.dispatch_id, 'succeeded', { order_intent_id: intent.id, trade_ticket: ticket,
+    error_code: null,
     terminal_order_kind:kind, terminal_order_state:state, execution_result_json: intent.result_json || JSON.stringify(pendingOrder || position) })
   return { status: 'succeeded' }
 }
@@ -420,24 +422,30 @@ export async function processAdminStrategyTradeDispatch(dispatchId) {
   }
   const lease = await claimAdminStrategyTradeDispatch(dispatch.id)
   if (!lease) return { status: 'claimed_by_other' }
-  const source = await queryOne("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'source' LIMIT 1", [dispatch.id])
-  if (source?.status === 'pending') {
-    const sourceResult = await executeTarget(dispatch, source, false)
-    if (sourceResult.status !== 'succeeded') {
-      await finalizeUnsentSubscribersAfterSourceFailure(dispatch.id)
-      return { status: await finalizeDispatch(dispatch.id), source: sourceResult.status }
+  try {
+    const source = await queryOne("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'source' LIMIT 1", [dispatch.id])
+    if (source?.status === 'pending') {
+      const sourceResult = await executeTarget(dispatch, source, false)
+      if (sourceResult.status !== 'succeeded') {
+        await finalizeUnsentSubscribersAfterSourceFailure(dispatch.id)
+        return { status: await finalizeDispatch(dispatch.id), source: sourceResult.status }
+      }
     }
+    const sourceAfter = await queryOne("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'source' LIMIT 1", [dispatch.id])
+    if (sourceAfter?.status !== 'succeeded') {
+      await finalizeUnsentSubscribersAfterSourceFailure(dispatch.id)
+      return { status: await finalizeDispatch(dispatch.id), source: sourceAfter?.status }
+    }
+    const targets = await queryAll("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'subscriber' AND status = 'pending' ORDER BY id ASC", [dispatch.id])
+    for (const target of targets) {
+      await executeTarget(dispatch, target, true)
+    }
+    return { status: await finalizeDispatch(dispatch.id) }
+  } finally {
+    await releaseAdminStrategyTradeDispatchLease(dispatch.id, lease.token).catch(error => {
+      console.error('[AdminStrategyTradeWorker] dispatch lease release:', error.message)
+    })
   }
-  const sourceAfter = await queryOne("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'source' LIMIT 1", [dispatch.id])
-  if (sourceAfter?.status !== 'succeeded') {
-    await finalizeUnsentSubscribersAfterSourceFailure(dispatch.id)
-    return { status: await finalizeDispatch(dispatch.id), source: sourceAfter?.status }
-  }
-  const targets = await queryAll("SELECT * FROM admin_strategy_trade_targets WHERE dispatch_id = ? AND target_role = 'subscriber' AND status = 'pending' ORDER BY id ASC", [dispatch.id])
-  for (const target of targets) {
-    await executeTarget(dispatch, target, true)
-  }
-  return { status: await finalizeDispatch(dispatch.id) }
 }
 
 export async function runAdminStrategyTradeWorkerOnce({ limit = 10 } = {}) {

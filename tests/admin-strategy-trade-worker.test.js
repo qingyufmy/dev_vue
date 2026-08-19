@@ -17,6 +17,7 @@ const mockTxRun = vi.fn(async (sql, params = []) => {
 })
 const mockWithTransaction = vi.fn(async callback => callback(mockTxRun))
 const mockClaimDispatch = vi.fn(async () => ({ token: 'dispatch-lease' }))
+const mockReleaseDispatch = vi.fn(async () => true)
 const mockFence = vi.fn(async () => ({}))
 const mockBridge = vi.fn(async () => ({ status: 'success', account: { server: 'DEMO', login: '1' }, positions: [] }))
 
@@ -38,10 +39,11 @@ vi.mock('../server/services/admin-strategy-trades.js', () => ({
   ADMIN_STRATEGY_TRADE_MAGIC: 234000, ADMIN_STRATEGY_TRADE_SOURCE: 'admin_strategy_dispatch',
   assertAdminStrategyTargetSendFence: (...args) => mockFence(...args),
   claimAdminStrategyTradeDispatch: (...args) => mockClaimDispatch(...args),
+  releaseAdminStrategyTradeDispatchLease: (...args) => mockReleaseDispatch(...args),
   resolveEffectiveSymbolsForDispatch: (selected, strategy) => selected == null ? JSON.parse(strategy || '[]') : JSON.parse(selected || '[]').filter(item => JSON.parse(strategy || '[]').includes(item)),
 }))
 
-import { __adminStrategyTradeWorkerTest, processAdminStrategyTradeDispatch, reconcileAdminStrategyTradeTargetsOnce } from '../server/workers/admin-strategy-trade-worker.js'
+import { __adminStrategyTradeWorkerTest, processAdminStrategyTradeDispatch, reconcileAdminStrategyTradeTargetsOnce, runAdminStrategyTradeWorkerOnce } from '../server/workers/admin-strategy-trade-worker.js'
 
 const dispatch = {
   id: 5, signal_id: 77, actor_user_id: 1, symbol: 'EURUSD', direction: 'buy',
@@ -112,6 +114,7 @@ describe('admin strategy trade worker fences', () => {
     expect(mockExecuteOrderCore).toHaveBeenCalledTimes(1)
     expect(mockExecuteOrderCore.mock.calls[0][3]).toBe('admin_strategy_source')
     expect(mockTxRun.mock.calls.some(([sql]) => String(sql).includes("error_code = 'source_execution_failed'"))).toBe(false)
+    expect(mockReleaseDispatch).toHaveBeenCalledWith(5, 'dispatch-lease')
   })
 
   it('atomically skips only unsent subscribers when source execution is definitely failed', async () => {
@@ -211,6 +214,51 @@ describe('admin strategy trade worker fences', () => {
     }))
   })
 
+  it('releases an uncertain source lease so reconciliation and subscriber delivery happen in the next tick', async () => {
+    let phase = 'source-uncertain'
+    let subscriberStatus = 'pending'
+    const source = { id: 1, dispatch_id: 5, target_role: 'source', status: 'pending', user_id: 1, trading_account_id: 9, order_intent_id: 11, lease_token: null, attempt_count: 0, target_snapshot_json: JSON.stringify({ broker: { server: 'DEMO', login: '1' } }) }
+    const uncertainSource = { ...source, status: 'uncertain' }
+    const subscriber = { id: 2, dispatch_id: 5, target_role: 'subscriber', status: 'pending', user_id: 2, trading_account_id: 10, subscription_id: 20, lease_token: null, target_snapshot_json: JSON.stringify({ bridge_generation: 5, broker: { server: 'DEMO', login: '2' }, subscription: { symbols: ['EURUSD'] }, position_size_factor: 0.25 }) }
+    const outcomes = [{ signal_id: 77, trading_account_id: 9, symbol: 'EURUSD', system_magic: 234000, position_id: '900' }]
+
+    mockQueryOne.mockImplementation(async (sql, params = []) => {
+      if (sql.includes('admin_strategy_trade_dispatches')) return { ...dispatch, status: phase === 'source-uncertain' ? 'confirmed' : 'delivering' }
+      if (sql.includes("target_role = 'source'")) return phase === 'source-uncertain' ? source : { ...source, status: 'succeeded' }
+      if (sql.includes('FROM order_intents')) {
+        return Number(params[0]) === 11
+          ? { id: 11, status: 'succeeded', trade_ticket: '900', result_json: '{}' }
+          : { id: 12, status: 'succeeded', trade_ticket: '901', result_json: '{}' }
+      }
+      if (sql.includes('FROM strategy_subscriptions')) return { id: 20, user_id: 2, trading_account_id: 10, symbols_json: '["EURUSD"]', strategy_symbols_json: '["EURUSD"]', execution_enabled: 1, is_deleted: 0, observe_status: 'active', ownership_user_id: 2, ownership_trading_account_id: 10, broker_server: 'DEMO', login_account: '2', scheduler_enabled: 1, scheduler_enable_auto_trade: 1, trade_send_enabled: 1, user_role: 'user', plan: 'plus', plan_expires_at: null, halt_status: null, user_kill_switch: 0, schedule_enabled: 0 }
+      return null
+    })
+    mockQueryAll.mockImplementation(async sql => {
+      if (sql.includes("status IN ('uncertain','reconciling')")) return phase === 'source-uncertain' ? [] : [uncertainSource]
+      if (sql.includes('signal_outcomes')) return outcomes
+      if (sql.includes('SELECT id FROM admin_strategy_trade_dispatches')) return phase === 'source-uncertain' ? [] : [{ id: 5 }]
+      if (sql.includes("target_role = 'subscriber' AND status = 'pending'")) return phase === 'source-uncertain' ? [] : [{ ...subscriber, status: subscriberStatus }]
+      return [{ target_role: 'source', status: phase === 'source-uncertain' ? 'uncertain' : 'succeeded' }, { target_role: 'subscriber', status: subscriberStatus }]
+    })
+    mockExecuteOrderCore.mockImplementation(async (_userId, _config, _request, action) => {
+      if (action === 'admin_strategy_source') return { status: 'uncertain', order_intent_id: 11 }
+      subscriberStatus = 'succeeded'
+      return { status: 'success', order_intent_id: 12, ticket: '901' }
+    })
+    mockBridge.mockResolvedValue({ status: 'success', account: { server: 'DEMO', login: '1' }, positions: [{ ticket: '900', symbol: 'EURUSD', type: 'buy', magic: 234000 }] })
+
+    const first = await processAdminStrategyTradeDispatch(5)
+    expect(first.source).toBe('uncertain')
+    expect(mockReleaseDispatch).toHaveBeenCalledWith(5, 'dispatch-lease')
+
+    phase = 'reconciled'
+    const second = await runAdminStrategyTradeWorkerOnce()
+    expect(second.results[0].status).toBe('succeeded')
+    expect(mockExecuteOrderCore).toHaveBeenCalledTimes(2)
+    expect(mockExecuteOrderCore.mock.calls[1][3]).toBe('admin_strategy_delivery')
+    expect(mockReleaseDispatch).toHaveBeenCalledTimes(2)
+  })
+
   it('absorbs an uncertain target after the intent reconciles and never re-executes it', async () => {
     const target = { id: 3, dispatch_id: 5, target_role: 'subscriber', user_id: 2, trading_account_id: 10, order_intent_id: 12, status: 'uncertain', target_snapshot_json: JSON.stringify({ broker: { server: 'DEMO', login: '1' } }) }
     mockQueryAll.mockImplementation(async sql => {
@@ -229,5 +277,9 @@ describe('admin strategy trade worker fences', () => {
     expect(result.results[0].status).toBe('succeeded')
     expect(mockExecuteOrderCore).not.toHaveBeenCalled()
     expect(mockQueryRun).toHaveBeenCalledWith(expect.stringContaining("SET status = ?"), expect.arrayContaining(['succeeded']))
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('error_code = ?'),
+      expect.arrayContaining(['succeeded', null]),
+    )
   })
 })
