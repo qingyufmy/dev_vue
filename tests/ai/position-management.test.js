@@ -1586,11 +1586,59 @@ describe('durable state and protection boundaries', () => {
         _executionLineage:{ strategy_scope:'platform', source_user_ids:[1] } },
       groupId:'group-source', section:'pending', action:'cancel',
     })
-    expect(targets).toEqual([expect.objectContaining({ outcome_id:802, user_id:28, pending_ticket:'O-802' })])
+    expect(targets).toEqual([expect.objectContaining({ outcome_id:802, user_id:28,
+      pending_ticket:'O-802', strategy_id:3 })])
+    expect(queryAll.mock.calls.at(-1)?.[0]).toContain('outcomes.strategy_id AS strategy_id')
     expect(queryAll.mock.calls.at(-1)?.[0]).toContain(
       'ON outcomes.delivery_id = d.id AND outcomes.order_intent_id = d.order_intent_id',
     )
     expect(queryAll.mock.calls.at(-1)?.[0]).not.toContain('outcomes.delivery_id IS NULL')
+  })
+
+  it('skips an invalid platform source target without blocking a valid subscriber cancellation', async () => {
+    const group = {
+      ...context.pending_groups[0], strategy_id:3, strategy_version:1, strategy_scope:'platform',
+      standard_symbol:'XAUUSD', thesis_id:'thesis-source', original_signal_id:801,
+      management_group_id:'group-source',
+    }
+    const invalidSource = {
+      user_id:1, trading_account_id:1, outcome_id:801, pending_ticket:'O-801', position_id:null,
+      original_symbol:'XAUUSD', standard_symbol:'XAUUSD', system_magic:234000,
+      effective_pending_state:'pending', management_group_id:'group-source', thesis_id:'thesis-source',
+      strategy_id:NaN, strategy_version:1, origin_signal_id:801,
+    }
+    const subscriber = {
+      delivery_id:10, delivery_signal_id:801, delivery_user_id:28, delivery_strategy_id:3,
+      delivery_symbol:'XAUUSD.s', delivery_order_intent_id:901,
+      delivery_pending_ticket:'O-802', delivery_pending_state:'pending',
+      intent_id:901, intent_user_id:28, intent_trading_account_id:3, intent_status:'succeeded',
+      outcome_id:802, outcome_delivery_id:10, outcome_order_intent_id:901, user_id:28,
+      trading_account_id:3, ownership_history_id:44, broker_server_key:'BROKER-DEMO', login_account:'7788',
+      original_symbol:'XAUUSD.s', symbol:'XAUUSD.s', pending_ticket:'O-802', position_id:null,
+      entry_direction:'buy', system_magic:234000, attribution_status:'pending', outcome_status:'open',
+      effective_pending_state:'pending', origin_management_group_id:'group-source',
+      origin_thesis_id:'thesis-source', origin_strategy_id:3, origin_signal_id:801,
+      strategy_version:1, strategy_scope:'platform', management_group_id:'group-source', thesis_id:'thesis-source',
+    }
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+    queryAll.mockResolvedValueOnce([subscriber]).mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:303, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+
+    const result = await persistPositionManagementEvaluations({ signalId:812,
+      context:{ ...context, pending_groups:[group], _targets:new Map([['group-source', [invalidSource]]]),
+        _executionLineage:{ strategy_scope:'platform', source_user_ids:[1], source_outcome_ids:[801] } },
+      inferenceSource:'automatic_scheduler', management:{ position_evaluations:[], pending_evaluations:[{
+        ...response().pending_evaluations[0], management_group_id:'group-source',
+      }] } })
+
+    expect(result).toEqual([expect.objectContaining({ outcome_id:802 })])
+    const taskInserts = queryRun.mock.calls.filter(call =>
+      String(call[0]).includes('INSERT IGNORE INTO ai_position_management_tasks'))
+    expect(taskInserts).toHaveLength(1)
+    expect(taskInserts[0][1][3]).toBe(28)
+    expect(taskInserts[0][1][11]).toBe(3)
+    expect(taskInserts[0][1].some(value => typeof value === 'number' && Number.isNaN(value))).toBe(false)
   })
 
   it('keeps private mixed-lifecycle targets separated by management task type', async () => {

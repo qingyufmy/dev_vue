@@ -48,6 +48,13 @@ const object = value => value && !Array.isArray(value) && typeof value === 'obje
 const text = (value, max = 500) => typeof value === 'string' ? value.trim().slice(0, max) : ''
 const number = value => Number.isFinite(Number(value)) ? Number(value) : null
 const positiveNumber = value => { const parsed = number(value); return parsed && parsed > 0 ? parsed : null }
+function positiveSafeInteger(value) {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return null
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
 export function normalizeBridgeGeneration(value) {
   if (value == null || (typeof value === 'string' && value.trim() === '')) return null
   if (typeof value !== 'number' && typeof value !== 'string') return null
@@ -1000,10 +1007,25 @@ function executionGroup(context, groupId, section) {
   return (groups || []).find(group => String(group?.management_group_id || '') === String(groupId || '')) || null
 }
 
+function isValidPositionManagementTaskTarget(target) {
+  if (!target || !['user_id', 'trading_account_id', 'outcome_id', 'strategy_id']
+    .every(field => positiveSafeInteger(target[field]) != null)) return false
+  if (target.strategy_version != null && positiveSafeInteger(target.strategy_version) == null) return false
+  return [target.original_symbol || target.symbol || target.standard_symbol,
+    target.standard_symbol, target.management_group_id, target.thesis_id]
+    .every(value => String(value || '').trim() !== '')
+}
+
 function lineageTargetFromRow(row, targetRole = 'subscriber') {
+  const strategyId = positiveSafeInteger(row.strategy_id)
+    ?? positiveSafeInteger(row.origin_strategy_id)
+    ?? positiveSafeInteger(row.delivery_strategy_id)
+  const strategyVersion = row.strategy_version == null ? 1 : positiveSafeInteger(row.strategy_version)
   return {
-    outcome_id:Number(row.outcome_id), delivery_id:Number(row.delivery_id), order_intent_id:Number(row.order_intent_id),
-    user_id:Number(row.user_id), trading_account_id:Number(row.trading_account_id), ownership_history_id:row.ownership_history_id,
+    outcome_id:positiveSafeInteger(row.outcome_id), delivery_id:positiveSafeInteger(row.delivery_id),
+    order_intent_id:positiveSafeInteger(row.order_intent_id),
+    user_id:positiveSafeInteger(row.user_id), trading_account_id:positiveSafeInteger(row.trading_account_id),
+    ownership_history_id:row.ownership_history_id,
     broker_server_key:row.broker_server_key, login_account:row.login_account,
     original_symbol:row.original_symbol || row.symbol, symbol:row.symbol,
     standard_symbol:stripBrokerSuffix(String(row.original_symbol || row.symbol || '')).toUpperCase(),
@@ -1011,9 +1033,9 @@ function lineageTargetFromRow(row, targetRole = 'subscriber') {
     entry_direction:row.entry_direction, system_magic:row.system_magic,
     attribution_status:row.attribution_status, actual_stop_loss:row.actual_stop_loss,
     actual_take_profit:row.actual_take_profit, effective_pending_state:row.effective_pending_state,
-    strategy_id:Number(row.strategy_id), strategy_version:Number(row.strategy_version || 1),
+    strategy_id:strategyId, strategy_version:strategyVersion,
     strategy_scope:row.strategy_scope, management_group_id:row.management_group_id,
-    thesis_id:row.thesis_id, origin_signal_id:Number(row.origin_signal_id),
+    thesis_id:row.thesis_id, origin_signal_id:positiveSafeInteger(row.origin_signal_id),
     target_role:targetRole,
   }
 }
@@ -1055,6 +1077,7 @@ export async function resolvePositionManagementExecutionTargets({ context, group
     .filter(target => sourceOutcomeIds.has(Number(target?.outcome_id))
       && (!sourceUserIds.size || sourceUserIds.has(Number(target?.user_id)))
       && Number(target?.system_magic) === SYSTEM_MAGIC)
+    .filter(target => isValidPositionManagementTaskTarget(target))
     .map(target => ({ ...target, target_role:'source' }))
   const nonExecutionAction = (section === 'position' && normalizedAction === 'hold')
     || (section === 'pending' && normalizedAction === 'keep')
@@ -1081,7 +1104,8 @@ export async function resolvePositionManagementExecutionTargets({ context, group
       }, 'subscriber'),
       target_role:'subscriber',
       task_id:Number(row.task_id) || null,
-    })).filter(target => Number(target.system_magic) === SYSTEM_MAGIC
+    })).filter(target => isValidPositionManagementTaskTarget(target)
+      && Number(target.system_magic) === SYSTEM_MAGIC
       && targetMatchesPositionManagementTask(target, taskType))
     const seen = new Set()
     return [...existingTargets, ...sourceTargets].filter(target => {
@@ -1111,7 +1135,8 @@ export async function resolvePositionManagementExecutionTargets({ context, group
       origin_signals.thesis_id AS origin_thesis_id,
       origin_signals.prompt_type_id AS origin_strategy_id,
       origin_signals.id AS origin_signal_id,
-      theses.strategy_version, theses.strategy_scope, theses.management_group_id, theses.thesis_id
+      outcomes.strategy_id AS strategy_id, theses.strategy_version, theses.strategy_scope,
+      theses.management_group_id, theses.thesis_id
     FROM auto_signal_deliveries d
     JOIN ai_signals origin_signals ON origin_signals.id = d.signal_id
     LEFT JOIN order_intents oi ON oi.id = d.order_intent_id
@@ -1165,6 +1190,7 @@ export async function resolvePositionManagementExecutionTargets({ context, group
     const targetKey = [target.user_id, target.trading_account_id, target.outcome_id,
       target.pending_ticket || target.position_id || ''].join(':')
     if (!seenTargetKeys.has(targetKey)
+      && isValidPositionManagementTaskTarget(target)
       && targetMatchesPositionManagementTask(target, section === 'position' ? 'position_exit' : 'pending_cancel')) {
       seenTargetKeys.add(targetKey)
       targets.push(target)
@@ -1760,9 +1786,9 @@ export async function persistPositionManagementEvaluations({
     const groupId = String(item?.management_group_id || '')
     if (!groupId) return []
     if (resolvedTargets.has(`${section}:${groupId}`)) return resolvedTargets.get(`${section}:${groupId}`)
-    const targets = await resolvePositionManagementExecutionTargets({
+    const targets = (await resolvePositionManagementExecutionTargets({
       context, groupId, section, action,
-    })
+    })).filter(target => isValidPositionManagementTaskTarget(target))
     resolvedTargets.set(`${section}:${groupId}`, targets)
     return targets
   }
@@ -1790,6 +1816,7 @@ export async function persistPositionManagementEvaluations({
       ? (resolvedTargets.get(`position:${String(evaluation.management_group_id || '')}`) || []) : []
     if (normalizedEvaluation.action === 'hold') {
       for (const target of targets) {
+        if (inferenceSource === 'automatic_scheduler' && !isValidPositionManagementTaskTarget(target)) continue
         const record = await recordAutomaticPositionEvaluation({
           signalId, context, target, evaluation:normalizedEvaluation, inferenceSource,
         })
@@ -1807,6 +1834,7 @@ export async function persistPositionManagementEvaluations({
         const mode = resolvePositionManagementTaskMode('position_exit',
           modes.byUser.get(Number(target.user_id)) || 'auto_exit', modes.control)
         if (mode === 'display') continue
+        if (inferenceSource === 'automatic_scheduler' && !isValidPositionManagementTaskTarget(target)) continue
         const record = await recordAutomaticPositionEvaluation({
           signalId, context, target, evaluation:normalizedEvaluation, inferenceSource,
         })
@@ -1892,6 +1920,7 @@ export async function persistPositionManagementEvaluations({
   for (const evaluation of pendingCandidates) {
     const targets = resolvedTargets.get(`pending:${String(evaluation.management_group_id || '')}`) || []
     for (const target of targets) {
+      if (!isValidPositionManagementTaskTarget(target)) continue
       const mode = resolvePositionManagementTaskMode(
         evaluation.taskType,
         modes.byUser.get(Number(target.user_id)) || 'auto_exit',
