@@ -18,6 +18,17 @@ import {
 import { accountSymbolInventoryLockKey } from '../server/services/account-symbol-inventory-lock.js'
 import fs from 'node:fs'
 
+function insertTupleCounts(source, tableName) {
+  const start = source.indexOf(`INSERT INTO ${tableName}`)
+  const fragment = source.slice(start)
+  const match = fragment.match(/\(([\s\S]*?)\)\s*VALUES\s*\(([\s\S]*?)\)`/)
+  if (!match) return null
+  return {
+    columns:match[1].split(',').map(value => value.trim()).filter(Boolean).length,
+    values:match[2].split(',').map(value => value.trim()).filter(Boolean).length,
+  }
+}
+
 describe('admin strategy trade contract', () => {
   it('keeps admin capabilities enabled after admin auth without an environment gate', () => {
     const route = fs.readFileSync(new URL('../server/routes/admin-strategy-trades.js', import.meta.url), 'utf8')
@@ -156,13 +167,15 @@ describe('admin strategy trade contract', () => {
     const service = fs.readFileSync(new URL('../server/services/admin-strategy-trades.js', import.meta.url), 'utf8')
     const signalInsert = service.slice(service.indexOf('INSERT INTO ai_signals'), service.indexOf('const signalId'))
     expect(signalInsert).toContain('recommended_volume, analysis, reasoning')
-    expect(signalInsert).toContain("?, ?, ?, 0, 'admin_strategy_dispatch', 0, 0, ?, ?, ?, ?, ?")
+    expect(signalInsert).toContain("?, ?, ?, 0, 'admin_strategy_dispatch', 0, 0, ?, ?, ?, ?")
     expect(signalInsert).not.toContain("'admin_strategy_dispatch', ?, 0, ?, ?, 'market', ?")
     const dispatchInsert = service.slice(service.indexOf('INSERT INTO admin_strategy_trade_dispatches'), service.indexOf('const dispatchId'))
     expect(dispatchInsert).toContain('requested_volume, position_size_tier')
-    expect(dispatchInsert).toContain("?, ?, ?, 'confirmed', ?, ?, ?, ?")
+    expect(dispatchInsert).toContain("?, NULL, ?, ?, ?, 'confirmed', ?, ?, ?, ?")
     expect(dispatchInsert).toContain('input.symbol, input.direction, input.entry_method, input.entry_price, input.limit_price, input.stop_limit_price')
     expect(signalInsert).toContain('input.stop_loss, input.take_profit_1')
+    expect(insertTupleCounts(service, 'admin_strategy_trade_dispatches')).toEqual({ columns:26, values:26 })
+    expect(insertTupleCounts(service, 'ai_signals')).toEqual({ columns:28, values:28 })
   })
 
   it('reads Bridge generation from runtime instead of a nonexistent market-data column', () => {

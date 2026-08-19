@@ -367,7 +367,7 @@ async function insertDispatchTx(run, actorId, input, preview) {
      stop_loss, take_profit_1, take_profit_2, take_profit_3,
      requested_volume, position_size_tier, valid_until_utc_msc, reason, preview_hash, status, target_count,
      eligible_target_count, updated_at, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'confirmed', ?, ?, ?, ?)`, [
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'confirmed', ?, ?, ?, ?)`, [
     input.idempotency_key, actorId, input.strategy_id, Number(preview.strategy.version || 1), json(strategySnapshot),
     input.symbol, input.direction, input.entry_method, input.entry_price, input.limit_price, input.stop_limit_price,
     input.pending_valid_minutes, input.stop_loss, input.take_profit_1,
@@ -384,7 +384,7 @@ async function insertDispatchTx(run, actorId, input, preview) {
      limit_price, stop_limit_price, pending_valid_until, token_count, ai_model, ttl_seconds, is_executed,
      created_at, created_at_utc_msc, entry_method, decision_json)
     VALUES (?, 0, ?, 'admin_strategy_dispatch', ?, ?, 'M15', ?, 1, ?, ?, ?, ?, ?, ?, ?, '{}',
-      ?, ?, ?, 0, 'admin_strategy_dispatch', 0, 0, ?, ?, ?, ?, ?)`, [
+      ?, ?, ?, 0, 'admin_strategy_dispatch', 0, 0, ?, ?, ?, ?)`, [
     actorId, input.strategy_id, ADMIN_STRATEGY_TRADE_SOURCE, input.symbol, input.direction,
     input.volume, `Admin strategy dispatch ${dispatchId}`, input.reason, input.stop_loss, input.take_profit_1,
     input.take_profit_2, input.take_profit_3, input.limit_price, input.stop_limit_price,
