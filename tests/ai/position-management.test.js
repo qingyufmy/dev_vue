@@ -23,6 +23,7 @@ import {
   getPositionManagementSettings,
   isActivePositionManagementOutcome,
   loadActivePositionManagementContext,
+  normalizeBridgeGeneration,
   resolvePositionManagementExecutionTargets,
   loadSignalManagementActions,
   positionProtectionStatus,
@@ -35,6 +36,7 @@ import {
   validatePositionManagementResponse,
 } from '../../server/routes/ai/position-management.js'
 import { queryAll, queryOne, queryRun, withTransaction } from '../../server/db.js'
+import { getBridgeGeneration } from '../../server/bridge-ws.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -85,6 +87,14 @@ function response(overrides = {}) {
 }
 
 describe('position management strategy-authoritative contract', () => {
+  it('normalizes invalid Bridge generations to null before SQL binding', () => {
+    for (const value of [NaN, Infinity, -Infinity, null, undefined, 0, -1, '']) {
+      expect(normalizeBridgeGeneration(value)).toBeNull()
+    }
+    expect(normalizeBridgeGeneration(7)).toBe(7)
+    expect(normalizeBridgeGeneration('11')).toBe(11)
+  })
+
   it('uses the explicit last closed bar instead of the forming candle', () => {
     const result = buildPositionManagementAsOf({
       timestamp:'2026-07-24 12:30:00',
@@ -1010,6 +1020,29 @@ describe('single-inference pending cancellation', () => {
     expect(result).toEqual([expect.objectContaining({ task_type:'pending_cancel', candidate_action:'cancel' })])
     expect(queryRun.mock.calls[0][0]).toContain('ai_position_management_tasks')
     expect(queryRun.mock.calls[0][1]).toContain('pending_cancel')
+  })
+
+  it('binds an invalid Bridge generation as NULL for a pending-cancel task', async () => {
+    getBridgeGeneration.mockReturnValueOnce(NaN)
+    queryOne.mockResolvedValueOnce({ maximum_mode:'auto_exit', ai_pending_cancel_enabled:1 })
+    queryAll.mockResolvedValueOnce([])
+    queryRun.mockResolvedValueOnce({ insertId:42, changes:1 })
+      .mockResolvedValueOnce({ changes:1 })
+    const target = {
+      user_id:7, trading_account_id:3, outcome_id:49, pending_ticket:'O-49', position_id:null,
+      original_symbol:'XAUUSD.s', standard_symbol:'XAUUSD', management_group_id:'pending_group_01',
+      thesis_id:'thesis_pending_01', ownership_history_id:5, broker_server_key:'Broker-Demo',
+      login_account:'10001', strategy_id:2, strategy_version:4, origin_signal_id:100,
+    }
+    const localContext = { ...context, _targets:new Map([['pending_group_01', [target]]]) }
+    const result = await persistPositionManagementEvaluations({ signalId:110, context:localContext,
+      inferenceSource:'automatic_scheduler', management:{
+        position_evaluations:[], pending_evaluations:[response().pending_evaluations[0]],
+      } })
+    expect(result).toEqual([expect.objectContaining({ task_type:'pending_cancel', candidate_action:'cancel' })])
+    const taskInsert = queryRun.mock.calls.find(call =>
+      String(call[0]).includes('INSERT IGNORE INTO ai_position_management_tasks'))
+    expect(taskInsert?.[1]?.[8]).toBeNull()
   })
 
   it('creates one pending-cancel task per active account target in a shared group', async () => {

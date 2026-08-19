@@ -48,6 +48,12 @@ const object = value => value && !Array.isArray(value) && typeof value === 'obje
 const text = (value, max = 500) => typeof value === 'string' ? value.trim().slice(0, max) : ''
 const number = value => Number.isFinite(Number(value)) ? Number(value) : null
 const positiveNumber = value => { const parsed = number(value); return parsed && parsed > 0 ? parsed : null }
+export function normalizeBridgeGeneration(value) {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return null
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  const generation = Number(value)
+  return Number.isSafeInteger(generation) && generation > 0 ? generation : null
+}
 const json = (value, fallback = {}) => { try { return value ? JSON.parse(value) : fallback } catch { return fallback } }
 const canonicalJson = value => Array.isArray(value) ? value.map(canonicalJson)
   : value && typeof value === 'object'
@@ -1491,7 +1497,8 @@ async function createAutomaticExitTask({ signalId, context, target, evaluation, 
     VALUES (?, 'position_exit', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, 'exit', ?, ?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY), ?, ?)`, [
     taskKey, mode, target.user_id, target.trading_account_id, target.ownership_history_id || null,
-    target.broker_server_key || null, target.login_account || null, getBridgeGeneration(Number(target.user_id)),
+    target.broker_server_key || null, target.login_account || null,
+    normalizeBridgeGeneration(getBridgeGeneration(Number(target.user_id))),
     originalSymbol, target.standard_symbol || stripBrokerSuffix(originalSymbol).toUpperCase(), target.strategy_id,
     target.strategy_version || 1, target.management_group_id, target.thesis_id,
     target.origin_signal_id || null, signalId, target.outcome_id, context.as_of.decision_timeframe,
@@ -1914,7 +1921,7 @@ export async function persistPositionManagementEvaluations({
           1, 1, 'EVIDENCE_CONFIRMED', 1, DATE_ADD(NOW(), INTERVAL 1 DAY), ?, ?)`, [
         taskKey, evaluation.taskType, mode, target.user_id, target.trading_account_id,
         target.ownership_history_id || null, target.broker_server_key || null, target.login_account || null,
-        getBridgeGeneration(Number(target.user_id)), originalSymbol,
+        normalizeBridgeGeneration(getBridgeGeneration(Number(target.user_id))), originalSymbol,
         target.standard_symbol || stripBrokerSuffix(originalSymbol).toUpperCase(), target.strategy_id,
         target.strategy_version || 1, target.management_group_id, target.thesis_id,
         target.origin_signal_id || null, signalId, target.outcome_id, context.as_of.decision_timeframe,

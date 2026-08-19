@@ -65,6 +65,20 @@ function setup({ routes = [route()], account, rows = [], positionRows, orderRows
 }
 
 describe('Bridge v3 business compatibility adapter', () => {
+  it('returns a generation only when every connected route has the same positive integer', () => {
+    expect(setup({ routes:[route({ connection_generation:11 })] }).adapter.getGeneration(42)).toBe(11)
+    expect(setup({ routes:[route({ connection_generation:NaN })] }).adapter.getGeneration(42)).toBeNull()
+    expect(setup({ routes:[route({ connection_generation:undefined })] }).adapter.getGeneration(42)).toBeNull()
+    expect(setup({ routes:[
+      route({ connection_generation:11 }), route({ connection_generation:NaN }),
+    ] }).adapter.getGeneration(42)).toBeNull()
+    expect(setup({ routes:[
+      route({ connection_generation:11 }), route({ connection_generation:12 }),
+    ] }).adapter.getGeneration(42)).toBeNull()
+    expect(setup({ routes:[route({ connection_generation:0 })] }).adapter.getGeneration(42)).toBeNull()
+    expect(setup({ routes:[route({ connection_generation:Infinity })] }).adapter.getGeneration(42)).toBeNull()
+  })
+
   it('serves a fresh account snapshot in the legacy response shape', async () => {
     const { adapter } = setup()
 

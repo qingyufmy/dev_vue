@@ -111,6 +111,13 @@ function normalizePlaceOrderInteger(value, { positive = false, nonnegative = fal
   return number
 }
 
+function normalizeBridgeGeneration(value) {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return null
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  const generation = Number(value)
+  return Number.isSafeInteger(generation) && generation > 0 ? generation : null
+}
+
 function normalizePlaceOrderParams(params, action, orderKind) {
   const normalized = { ...params }
   const positiveFields = ['volume', 'price', 'stop_loss', 'take_profit', 'stop_limit_price']
@@ -1136,8 +1143,13 @@ export function createBridgeV3BusinessAdapter({
     releaseMaintenanceLease:(actorUserId, leaseId) =>
       gateway.releaseMaintenanceLease(actorUserId, leaseId),
     getGeneration:userId => {
-      const generations = new Set(connectedTerminals(userId).map(route => Number(route.connection_generation)))
-      return generations.size === 1 ? generations.values().next().value : null
+      const routes = connectedTerminals(userId)
+      if (!Array.isArray(routes) || routes.length === 0) return null
+      const generations = routes.map(route => normalizeBridgeGeneration(route?.connection_generation))
+      if (generations.some(generation => generation == null)) return null
+      return generations.every(generation => generation === generations[0])
+        ? generations[0]
+        : null
     },
     execute,
     selectRoute,
