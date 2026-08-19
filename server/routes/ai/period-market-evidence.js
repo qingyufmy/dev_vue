@@ -8,6 +8,11 @@ import { classifyContinuityGap, MARKET_SESSION_CALENDAR_VERSION } from './market
 import { resolveMarketSessionPolicy } from './market-session-policy.js'
 
 export const REVIEW_TIMEFRAME_MS = { M1:60000, M5:300000, M15:900000, M30:1800000, H1:3600000, H4:14400000, D1:86400000 }
+// K-lines are shared market evidence.  The source identity is retained for
+// provenance, but platform reviews must select one quality-checked source per
+// symbol/timeframe/window instead of requiring the observer account identity.
+export const PERIOD_MARKET_SOURCE_POLICY_VERSION = 'shared-canonical-v1'
+const TRUSTED_MARKET_CLOCK_STATUSES = ['verified', 'calibrated', 'observer_bootstrap', 'mt4_current_offset']
 const MAX_REVIEW_WINDOW_CANDLES = 5000
 // Ordinary indicator/context warmup. Chan history is always supplied through
 // its frozen v6 window policy and never falls back to this value.
@@ -312,18 +317,15 @@ export function periodMarketSourceAuthorization({ userId, strategyId, strategySc
   }
   if (scope === 'platform' && Number.isSafeInteger(normalizedStrategyId) && normalizedStrategyId > 0) {
     return {
-      sql:`EXISTS (
-        SELECT 1 FROM ai_observer_sources review_source
-        LEFT JOIN trading_accounts review_account ON review_account.id = review_source.trading_account_id
-        WHERE review_source.strategy_id = ? AND review_source.status = 'active'
-          AND review_source.bridge_user_id = mds.bridge_user_id
-          AND (review_source.trading_account_id IS NULL OR (
-            UPPER(COALESCE(review_account.broker_server, '')) = UPPER(COALESCE(mds.broker_server, ''))
-            AND CAST(COALESCE(review_account.login_account, 0) AS CHAR) = CAST(COALESCE(mds.account_login, 0) AS CHAR)
-          ))
-      )`,
-      params:[normalizedStrategyId],
-      mode:'platform_observer_source',
+      // Market candles are exchange/broker market evidence, not account-owned
+      // trade evidence.  Keep the observer strategy in the caller's frozen
+      // scope, while selecting a canonical source only by timestamp quality.
+      // Trade/order/position ownership is enforced by their own queries and is
+      // intentionally not relaxed here.
+      sql:`mds.clock_status IN (${TRUSTED_MARKET_CLOCK_STATUSES.map(() => '?').join(', ')})`,
+      params:[...TRUSTED_MARKET_CLOCK_STATUSES],
+      mode:'platform_shared_market',
+      policy_version:PERIOD_MARKET_SOURCE_POLICY_VERSION,
     }
   }
   // Compatibility for older direct callers without a frozen strategy scope.
@@ -361,32 +363,62 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
   const requestedSourceId = Number(options.sourceId || options.source_id) > 0
     ? Number(options.sourceId || options.source_id) : null
   const requestedSourceKey = String(options.sourceKey || options.source_key || '').trim()
-  const sourceSelector = requestedSourceId ? 'AND mds.id = ?' : requestedSourceKey ? 'AND mds.source_key = ?' : ''
-  const sourceSelectorParams = requestedSourceId ? [requestedSourceId] : requestedSourceKey ? [requestedSourceKey] : []
+  const candidateIdentities = Array.isArray(options.sourceCandidates)
+    ? options.sourceCandidates.filter(item => item && typeof item === 'object') : []
+  const candidateIds = [...new Set(candidateIdentities.map(item => Number(item.source_id || item.id)).filter(id => id > 0))]
+  const candidateKeys = [...new Set(candidateIdentities.map(item => String(item.source_key || '').trim()).filter(Boolean))]
+  const sourceSelector = requestedSourceId ? 'AND mds.id = ?' : requestedSourceKey ? 'AND mds.source_key = ?'
+    : candidateIds.length || candidateKeys.length
+      ? `AND (${[
+        candidateIds.length ? `mds.id IN (${candidateIds.map(() => '?').join(',')})` : null,
+        candidateKeys.length ? `mds.source_key IN (${candidateKeys.map(() => '?').join(',')})` : null,
+      ].filter(Boolean).join(' OR ')})` : ''
+  const sourceSelectorParams = requestedSourceId ? [requestedSourceId] : requestedSourceKey ? [requestedSourceKey]
+    : [...candidateIds, ...candidateKeys]
   const sourceAuthorization = periodMarketSourceAuthorization({
     userId,
     strategyId:options.strategyId ?? options.strategy_id,
     strategyScope:options.strategyScope ?? options.strategy_scope,
     tradingAccountId:options.tradingAccountId ?? options.trading_account_id,
   })
+  const hasFrozenSourceSelector = Boolean(requestedSourceId || requestedSourceKey || candidateIds.length || candidateKeys.length)
+  // Without a frozen source candidate, the shared-market fallback must come
+  // from the platform bridge/admin source.  Otherwise a complete private
+  // user's cache could accidentally become platform review evidence.
+  const canonicalPlatformRoleFilter = sourceAuthorization.mode === 'platform_shared_market'
+    && !hasFrozenSourceSelector ? " AND u.role = 'admin'" : ''
   const existingSource = await queryOne(`SELECT mds.id, mds.broker_server, mds.account_login, mds.source_key,
       mds.timezone_offset_minutes, mds.clock_status
     FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
-    WHERE ${sourceAuthorization.sql} AND EXISTS (SELECT 1 FROM market_candles candles
+    WHERE ${sourceAuthorization.sql}${canonicalPlatformRoleFilter} AND EXISTS (SELECT 1 FROM market_candles candles
       WHERE candles.source_id = mds.id AND candles.standard_symbol = ? AND candles.timeframe = ? LIMIT 1)
       ${sourceSelector}
     ORDER BY (mds.clock_status = 'calibrated') DESC, mds.last_calibrated_at DESC, mds.id DESC LIMIT 1`,
   [...sourceAuthorization.params, stripBrokerSuffix(symbol), timeframe, ...sourceSelectorParams])
   let sourceId = Number(existingSource?.id)
-  // A source is identified by its exact platform/source_key/account identity.
-  // Never merge candles from another terminal merely because broker_server is equal.
+  // A source is still selected as one exact source for this symbol/timeframe
+  // window.  Platform reviews may replace it with the canonical market source
+  // when the frozen cache is incomplete, but never merge candles across sources.
   let rows = sourceId ? await readStored([sourceId]) : []
   let periodRows = rows.filter(row => Number(row.time_utc_msc) >= startUtcMs && Number(row.time_utc_msc) < endUtcMs)
   const existingIdentity = sourceIdentityFromRow(existingSource || {})
+  const requestedIdentity = sourceIdentityFromRow({ source_id:requestedSourceId, source_key:requestedSourceKey })
+  const sourceSelectionMeta = {
+    source_policy_version:sourceAuthorization.policy_version || PERIOD_MARKET_SOURCE_POLICY_VERSION,
+    source_selection_mode:sourceAuthorization.mode,
+    source_selection_changed:false,
+    source_selection_reason:existingSource
+      ? (requestedSourceId || requestedSourceKey || candidateIds.length || candidateKeys.length
+        ? 'frozen_or_cached_source' : 'canonical_cached_source') : null,
+    requested_source_identity:requestedIdentity.source_id || requestedIdentity.source_key ? requestedIdentity : null,
+    candidate_source_identities:candidateIdentities.length ? candidateIdentities.map(sourceIdentityFromRow) : [],
+  }
   let marketMeta = existingSource ? { source:'mysql_period_cache', source_id:sourceId,
     source_key:existingIdentity.source_key, platform:existingIdentity.platform,
     broker_server:existingIdentity.broker_server, account_login:existingIdentity.account_login,
     source_identity:existingIdentity,
+    ...sourceSelectionMeta,
+    selected_source_identity:existingIdentity.source_id ? existingIdentity : null,
     timezone_offset_minutes:existingSource.timezone_offset_minutes, clock_status:existingSource.clock_status } : {}
   let coverage = assessReviewCandleCoverage(periodRows, startUtcMs, endUtcMs, timeframe, {
     ...marketMeta, strictSessionPolicy:options.strictSessionPolicy === true,
@@ -398,23 +430,37 @@ export async function loadPeriodMarketWindow(userId, symbol, timeframe, startUtc
       start_utc_msc:startUtcMs - historyLookback * interval, end_utc_msc:endUtcMs })
     sourceId = Number(hydrated?.market_meta?.source_id)
     if (hydrated?.status === 'error' || !sourceId) throw new Error(hydrated?.error || hydrated?.message || 'period_market_source_unavailable')
-    // Bridge hydration is only a transport result.  It must pass the same
-    // frozen strategy/account authorization as the cached-source path before
-    // any of its candles can become review evidence.
+    // Bridge hydration is only a transport result.  Private review data still
+    // passes exact account authorization.  Platform review K-lines are shared
+    // market evidence, so a canonical platform source may replace an absent
+    // or incomplete frozen cache source; the replacement is recorded below.
+    const hydratedSourceSelector = sourceAuthorization.mode === 'platform_shared_market' ? '' : ` ${sourceSelector}`
+    const hydratedSourceSelectorParams = sourceAuthorization.mode === 'platform_shared_market' ? [] : sourceSelectorParams
+    const hydratedSourceRoleFilter = sourceAuthorization.mode === 'platform_shared_market' ? " AND u.role = 'admin'" : ''
     const hydratedSource = await queryOne(`SELECT mds.id, mds.broker_server, mds.account_login, mds.source_key,
         mds.timezone_offset_minutes, mds.clock_status
       FROM market_data_sources mds JOIN users u ON u.id = mds.bridge_user_id
-      WHERE ${sourceAuthorization.sql} AND mds.id = ? ${sourceSelector}`,
-    [...sourceAuthorization.params, sourceId, ...sourceSelectorParams])
+      WHERE ${sourceAuthorization.sql}${hydratedSourceRoleFilter} AND mds.id = ?${hydratedSourceSelector}`,
+    [...sourceAuthorization.params, sourceId, ...hydratedSourceSelectorParams])
     if (!hydratedSource) throw new Error('period_market_source_unauthorized')
     rows = await readStored([sourceId])
     const hydratedIdentity = sourceIdentityFromRow(hydratedSource || { id:sourceId })
+    const changed = Boolean((requestedSourceId && requestedSourceId !== hydratedIdentity.source_id)
+      || (requestedSourceKey && requestedSourceKey !== hydratedIdentity.source_key)
+      || ((candidateIds.length || candidateKeys.length)
+        && !candidateIds.includes(hydratedIdentity.source_id)
+        && !candidateKeys.includes(hydratedIdentity.source_key)))
     marketMeta = { ...(hydrated.market_meta || {}), source_id:sourceId,
       source_key:hydratedIdentity.source_key || hydrated.market_meta?.source_key || null,
       platform:hydratedIdentity.platform || hydrated.market_meta?.platform || null,
       broker_server:hydratedIdentity.broker_server || hydrated.market_meta?.broker_server || null,
       account_login:hydratedIdentity.account_login || hydrated.market_meta?.account_login || null,
-      source_identity:hydratedIdentity.source_id ? hydratedIdentity : hydrated.market_meta?.source_identity || null }
+      source_identity:hydratedIdentity.source_id ? hydratedIdentity : hydrated.market_meta?.source_identity || null,
+      ...sourceSelectionMeta,
+      source_selection_changed:changed,
+      source_selection_reason:changed ? 'canonical_platform_fallback' : 'frozen_source_hydrated',
+      selected_source_identity:hydratedIdentity.source_id ? hydratedIdentity : null,
+    }
   }
   // Daily/monthly reviews use a fixed period boundary and may require strict
   // grid alignment. Model comparison accepts arbitrary minute ranges, so its
@@ -496,7 +542,8 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, strat
     timeframes:enabledTimeframes, window_policy_version:windowPolicyVersion,
   }
   if (!uniqueSymbols.length || !timeframes.length) return { status:'unavailable', reason:'period_market_scope_missing', symbols:{}, hash:null, schema_version:3, chan_requirement:chanRequirement }
-  const result = { schema_version:3, coverage_policy_version:2, status:'complete', reason:null, generated_at:new Date().toISOString(), uses_full_period_candles:true,
+  const result = { schema_version:3, coverage_policy_version:2, source_policy_version:PERIOD_MARKET_SOURCE_POLICY_VERSION,
+    status:'complete', reason:null, generated_at:new Date().toISOString(), uses_full_period_candles:true,
     chan_requirement:chanRequirement, chan_enabled:chanStatus === 'enabled' || chanStatus === 'mixed', symbols:{} }
   const chanTimeframeSet = new Set(enabledTimeframes)
   const shouldComputeChan = chanStatus === 'enabled' || chanStatus === 'mixed'
@@ -505,8 +552,6 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, strat
     result.symbols[symbol] = {}
     for (const timeframe of timeframes) {
       try {
-        if (sourceIdentities.length > 1) throw new Error('period_market_source_identity_ambiguous')
-        const frozenIdentity = sourceIdentities[0] || null
         const chanPolicy = shouldComputeChan && chanTimeframeSet.has(timeframe) ? getChanWindowPolicy(timeframe) : null
         const loaded = await loadPeriodMarketWindow(userId, symbol, timeframe, startUtcMs, endUtcMs, {
           chanHistoryTarget:chanPolicy?.target || 0,
@@ -514,8 +559,7 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, strat
           strictSessionPolicy:true,
           ignoreMarketSessionPolicy:true,
           env:{},
-          sourceId:frozenIdentity?.source_id || null,
-          sourceKey:frozenIdentity?.source_key || null,
+          sourceCandidates:sourceIdentities,
           strategyId,
           strategyScope,
           tradingAccountId,
@@ -539,6 +583,12 @@ export async function buildDailyPeriodMarketEvidence({ userId, strategyId, strat
         result.symbols[symbol][timeframe] = {
           status:complete ? 'complete' : 'partial', candle_count:loaded.periodRates.length, expected_candle_count:expected,
           first_time_utc_msc:first, last_time_utc_msc:last, full_period_candles:loaded.periodRates.map(compactRate),
+          source_policy_version:loaded.marketMeta?.source_policy_version || PERIOD_MARKET_SOURCE_POLICY_VERSION,
+          source_selection_mode:loaded.marketMeta?.source_selection_mode || null,
+          source_selection_changed:Boolean(loaded.marketMeta?.source_selection_changed),
+          source_selection_reason:loaded.marketMeta?.source_selection_reason || null,
+          requested_source_identity:loaded.marketMeta?.requested_source_identity || null,
+          selected_source_identity:loaded.marketMeta?.selected_source_identity || null,
           source_identity:loaded.marketMeta?.source_identity || {
             source_id:loaded.marketMeta?.source_id || loaded.sourceId || null,
             source_key:loaded.marketMeta?.source_key || null,
@@ -610,6 +660,10 @@ export function monthlyPeriodMarketDigest(dailyCases = []) {
       symbols[symbol] = Object.fromEntries(Object.entries(frames || {}).map(([timeframe, value]) => [timeframe, {
         status:value.status, candle_count:value.candle_count, expected_candle_count:value.expected_candle_count,
         first_time_utc_msc:value.first_time_utc_msc, last_time_utc_msc:value.last_time_utc_msc,
+        source_policy_version:value.source_policy_version || market.source_policy_version || null,
+        source_selection_mode:value.source_selection_mode || null,
+        source_selection_changed:Boolean(value.source_selection_changed),
+        source_selection_reason:value.source_selection_reason || null,
         source_identity:value.source_identity || null, coverage:value.coverage || null, summary:value.summary || null,
       }]))
     }

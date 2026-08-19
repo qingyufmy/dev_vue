@@ -9,7 +9,7 @@ function loadPeriodReviewContractHelpers() {
   const end = app.indexOf('function renderReviewSummary', start)
   const source = app.slice(start, end)
   return new Function(`
-    const AI_FRONTEND_BUILD = 'period-review-short-holding1'
+    const AI_FRONTEND_BUILD = 'period-review-shared-market1'
     const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
     const PERIOD_REVIEW_DAILY_V3_CONTRACT = 'daily-period-review-v3'
     const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -60,6 +60,13 @@ describe('daily period review v3 frontend contract', () => {
     expect(app).toContain('无完整内部 M5 K 线')
     expect(app).toContain('holding_path_intrabar_unobservable')
     expect(styles).toContain('.period-review-evidence-limitations')
+  })
+
+  it('presents provider capacity as an automatic wait instead of a terminal generation failure', () => {
+    expect(app).toContain('模型容量等待中')
+    expect(app).toContain('额度恢复后自动续跑未完成分块')
+    expect(app).toContain('model_quota_exhausted|model_quota_probe_in_progress')
+    expect(app).toContain('业务生成 ${Number(review.attempt_count || 0)}/${Number(review.max_attempts || 3)}')
   })
 
   it('keeps cross-trade findings attributable instead of flattening them into text lines', () => {

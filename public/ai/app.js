@@ -222,7 +222,7 @@ const state = {
 // build separate from the shared cache key in index.html: the server can
 // compare these values without forcing a cache-key change for the other AI
 // entry points.
-const AI_FRONTEND_BUILD = "period-review-short-holding1";
+const AI_FRONTEND_BUILD = "period-review-shared-market1";
 const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = "period-review-ui-v1";
 const PERIOD_REVIEW_DAILY_V3_CONTRACT = "daily-period-review-v3";
 const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -8171,6 +8171,7 @@ function periodReviewArray(value) {
 function periodReviewLines(value) { return periodReviewArray(value).join("\n"); }
 function periodReviewFailureText(value) {
   const text = String(value || "");
+  if (/model_quota_exhausted|model_quota_probe_in_progress/i.test(text)) return "模型服务容量暂时不足，系统会在额度恢复后自动续跑未完成的分块";
   if (/HTTP 429|rate.?limit/i.test(text)) return "模型服务当前请求过多，请稍后重试";
   if (/response content is empty|repair response content is empty/i.test(text)) return "模型已响应，但没有返回可用的复盘内容";
   if (/daily_review_summary_missing/i.test(text)) return "模型没有返回必填的日复盘总结；系统已加强格式校验，请重新生成";
@@ -8225,11 +8226,13 @@ function periodReviewProgressHtml(review) {
   const terminal = ["succeeded", "failed"].includes(stage) || ["draft", "edited", "approved"].includes(review.status);
   const nextMs = review.next_attempt_at ? Date.parse(String(review.next_attempt_at).replace(" ", "T")) : NaN;
   const retrySeconds = Number.isFinite(nextMs) ? Math.max(0, Math.ceil((nextMs - Date.now()) / 1000)) : null;
-  const title = stage === "retry_wait" ? "等待自动重试" : stage === "failed" ? "复盘生成失败" : stage === "succeeded" ? "复盘已生成" : "正在生成复盘";
-  const detail = stage === "retry_wait" && retrySeconds != null ? `${retrySeconds} 秒后可再次执行` : reviewStatusLabel(stage);
+  const capacityWait = stage === "retry_wait" && /model_quota_exhausted|model_quota_probe_in_progress/i.test(String(review.last_error_code || ""));
+  const title = capacityWait ? "模型容量等待中" : stage === "retry_wait" ? "等待自动重试" : stage === "failed" ? "复盘生成失败" : stage === "succeeded" ? "复盘已生成" : "正在生成复盘";
+  const detail = stage === "retry_wait" && retrySeconds != null
+    ? `${capacityWait ? "预计" : ""}${retrySeconds} 秒后自动继续` : capacityWait ? "额度恢复后自动续跑未完成分块" : reviewStatusLabel(stage);
   const events = (review.job_events || []).slice(0, 8);
   return `<section id="periodReviewProgress" class="period-review-progress is-${escapeHtml(stage)}" aria-live="polite">
-    <header><div><span class="review-section-kicker">生成状态</span><h3>${escapeHtml(title)}</h3></div><span class="period-review-attempt">第 ${Number(review.attempt_count || 0)}/${Number(review.max_attempts || 3)} 次尝试</span></header>
+    <header><div><span class="review-section-kicker">生成状态</span><h3>${escapeHtml(title)}</h3></div><span class="period-review-attempt">业务生成 ${Number(review.attempt_count || 0)}/${Number(review.max_attempts || 3)}</span></header>
     <div class="period-review-stage-track" role="progressbar" aria-label="复盘生成阶段" aria-valuemin="1" aria-valuemax="4" aria-valuenow="${Math.min(4, stageIndex + 1)}">
       ${["准备证据", "AI 分析", "校验结果", "等待确认"].map((label,index) => `<div class="${index < stageIndex || (terminal && stage !== 'failed') ? 'done' : index === stageIndex && !terminal ? 'active' : ''}"><span>${index < stageIndex || (terminal && stage !== 'failed') ? '<i data-lucide="check" size="12"></i>' : index + 1}</span><small>${label}</small></div>`).join("")}
     </div>

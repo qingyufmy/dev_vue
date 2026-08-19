@@ -17,13 +17,14 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   refreshPeriodReviewJobForEvidence, monthlyReviewJobRefreshStages, prepareEligibleMonthlyReviews,
   prepareEligibleDailyReviews, isPeriodReviewEvidenceStable, normalizePeriodReviewState, periodReviewProviderRequestCallback,
   periodReviewCreationWindowState, deriveStrategyMemoryApplicationStatus, regeneratePeriodReviewCase,
-  __testFinishDailyReviewSuccess, __testFinishDailyReviewFailure,
+  __testFinishDailyReviewSuccess, __testFinishDailyReviewFailure, __testRecoverDailyQuotaFailure,
   periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown,
   __testDeriveDailyReviewMemoryEntries, __testDeriveDailyReviewConflictExperiences,
   DAILY_PERIOD_REVIEW_V3_CONTRACT, PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION,
   PERIOD_REVIEW_FRONTEND_BUILD, PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS,
   periodReviewFrontendMetadata, periodReviewFrontendContractMismatch,
-  buildDailyReviewChunkPlan, dailyReviewRecoveryRuntimeOptions } from '../../server/routes/ai/period-review.js'
+  buildDailyReviewChunkPlan, compactDailyReviewPeriodMarket,
+  dailyReviewRecoveryRuntimeOptions } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
   __testGetReviewStrategyMemorySnapshot } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
@@ -506,6 +507,43 @@ describe('period review explicit regeneration', () => {
     expect(failureUpdate[1][0]).toBe('needs_revision')
     expect(failureUpdate[0]).not.toContain('current_version_id IS NULL')
   })
+
+  it('keeps provider quota waits retryable without consuming a business attempt', async () => {
+    periodReviewDb.queryRun.mockReset().mockResolvedValue({ affectedRows:1 })
+    const job = { id:31, job_slot:0, period_case_id:51, lease_token:'quota-lease',
+      attempt_count:3, max_attempts:3, _businessAttemptStarted:true }
+    const error = Object.assign(new Error('model_quota_exhausted'), {
+      code:'model_quota_exhausted', providerStatus:429, modelQuotaCircuit:true,
+    })
+    await __testFinishDailyReviewFailure(job, error, { status:'retry_wait', error_code:'model_quota_exhausted' })
+    const refund = periodReviewDb.queryRun.mock.calls.find(([sql]) => sql.includes('GREATEST(attempt_count - 1, 0)'))
+    expect(refund).toBeTruthy()
+    expect(job.attempt_count).toBe(2)
+    const jobUpdate = periodReviewDb.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE period_review_jobs SET status = ?'))
+    expect(jobUpdate[1][0]).toBe('queued')
+    expect(jobUpdate[1][1]).toBe('model_quota_exhausted')
+    expect(jobUpdate[1][2]).toMatch(/^2026-|^2027-/)
+    const caseUpdate = periodReviewDb.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE period_review_cases SET status = ?'))
+    expect(caseUpdate[1][0]).toBe('ready')
+  })
+
+  it('requeues one legacy terminal quota job with a new durable task identity', async () => {
+    periodReviewDb.queryRun.mockReset().mockResolvedValue({ affectedRows:1 })
+    const recovered = await __testRecoverDailyQuotaFailure({ id:51, current_version_id:null,
+      evidence_status:'complete', evidence_hash:'evidence-a' }, {
+      id:31, status:'failed', last_error_code:'model_quota_exhausted',
+      idempotency_key:'daily:51:evidence-a',
+    })
+    expect(recovered).toBe(true)
+    const jobUpdate = periodReviewDb.queryRun.mock.calls[0]
+    expect(jobUpdate[1][0]).toBe('daily:51:evidence-a:quota-recovery-v1')
+    expect(jobUpdate[0]).toContain("WHERE id = ? AND status = 'failed' AND last_error_code = ?")
+    expect(periodReviewDb.queryRun.mock.calls[1][0]).toContain("current_version_id IS NULL AND evidence_status = 'complete'")
+
+    expect(await __testRecoverDailyQuotaFailure({ id:51, current_version_id:9,
+      evidence_status:'complete' }, { id:31, status:'failed', last_error_code:'model_quota_exhausted' })).toBe(false)
+    expect(periodReviewDb.queryRun).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('period review calendar', () => {
@@ -743,6 +781,19 @@ describe('daily review preparation candidates', () => {
     expect(plan.chunks.map(chunk => chunk.outcome_ids)).toEqual([[1, 2], [3]])
     expect(new Set(plan.chunks.flatMap(chunk => chunk.outcome_ids)).size).toBe(3)
   })
+
+  it('projects a compact model-facing market digest without raw daily candles or account identity', () => {
+    const digest = compactDailyReviewPeriodMarket({ schema_version:3, status:'complete', source_policy_version:'shared-canonical-v1',
+      symbols:{ XAUUSD:{ H1:{ status:'complete', candle_count:24, expected_candle_count:24,
+        first_time_utc_msc:1, last_time_utc_msc:2, full_period_candles:[{ t:1, o:1, h:2, l:0, c:1 }],
+        source_identity:{ account_login:'860058' }, source_policy_version:'shared-canonical-v1', source_selection_changed:true,
+        coverage:{ endpoint_complete:true, internal_gap_count:0 }, summary:{ open:1, high:2, low:0, close:1.5 } } } } })
+    expect(digest).toMatchObject({ digest_version:'daily-market-digest-v1', status:'complete',
+      symbols:{ XAUUSD:{ H1:{ candle_count:24, summary:{ close:1.5 },
+        source_provenance:{ policy_version:'shared-canonical-v1', source_changed:true } } } } })
+    expect(digest.symbols.XAUUSD.H1).not.toHaveProperty('full_period_candles')
+    expect(JSON.stringify(digest)).not.toContain('860058')
+  })
 })
 
 describe('daily review model boundary', () => {
@@ -869,6 +920,35 @@ describe('daily review model boundary', () => {
     })
   })
 
+  it('normalizes model-authored missing evidence from deterministic server limitations', () => {
+    const assessment = {
+      outcome_id:1, decision_quality:'mixed', original_signal_logic:'按趋势回踩入场',
+      technical_basis_assessment:'持仓路径不可精确观察', market_alignment:'partly_aligned', strategy_alignment:'aligned',
+      risk_execution_assessment:'成交事实完整', risk_execution_status:'insufficient_evidence',
+      missing_evidence:['模型编造的缺口'],
+      outcome_attribution:{ result:'loss', primary_causes:['价格反向'], explanation:'按成交事实确认亏损', avoidability:'partly_avoidable' },
+      next_time_rule:{ condition:'回踩确认不足', action:'等待确认', risk_control:'限制仓位', invalidation:'结构失效', prohibited_action:'禁止追单' },
+      issue_codes:[], evidence_refs:['outcome:1'], confidence:0.6,
+    }
+    const limitation = { scope:'holding_path', description:'持仓太短，无法精确判断持仓内路径。',
+      unavailable_capabilities:['mfe_mae'] }
+    const content = { output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'复盘', decision_quality:'mixed',
+      trade_assessments:[assessment], repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[],
+      experience_rules:[], strategy_conflicts:[], confidence:0.6 }
+    const normalized = validateDailyReviewContent(content, [1], {
+      chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+    }, { outcomeFacts:[{ id:1, net_profit:-1 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]),
+      evidenceLimitationsByOutcome:new Map([[1, [limitation]]]) })
+    expect(normalized.trade_assessments[0].missing_evidence).toEqual([limitation.description])
+
+    const complete = validateDailyReviewContent({ ...content, trade_assessments:[{
+      ...assessment, risk_execution_status:'compliant', missing_evidence:['模型多填字段'],
+    }] }, [1], { chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable' }, {
+      outcomeFacts:[{ id:1, net_profit:-1 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]),
+    })
+    expect(complete.trade_assessments[0].missing_evidence).toEqual([])
+  })
+
   it('accepts normal strategy loss only for a good aligned compliant loss', () => {
     const assessment = {
       outcome_id:1, decision_quality:'good', original_signal_logic:'按趋势回踩入场',
@@ -907,7 +987,7 @@ describe('daily review model boundary', () => {
     expect(() => validateDailyReviewContent(content, [1], {
       chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
     }, { outcomeFacts:[{ id:1, net_profit:-2 }], evidenceRefsByOutcome:new Map([[1, new Set(['outcome:1'])]]) }))
-      .toThrow('daily_v3_insufficient_decision_contradicts_deterministic')
+      .toThrow('daily_v3_insufficient_state_without_server_limitation')
   })
 
   it('rejects forged v3 evidence and non-executable experience rules', () => {
@@ -916,9 +996,9 @@ describe('daily review model boundary', () => {
       period_summary:'逐笔复盘', decision_quality:'mixed', trade_assessments:[{
         outcome_id:1, decision_quality:'mixed', original_signal_logic:'逻辑', technical_basis_assessment:'依据',
         market_alignment:'aligned', strategy_alignment:'aligned', risk_execution_assessment:'风控', risk_execution_status:'compliant',
-        outcome_attribution:{ result:'breakeven', primary_causes:['原因'], explanation:'解释', avoidability:'insufficient_evidence' },
+        outcome_attribution:{ result:'breakeven', primary_causes:['原因'], explanation:'解释', avoidability:'partly_avoidable' },
         next_time_rule:{ condition:'条件', action:'动作', risk_control:'风控', invalidation:'失效', prohibited_action:'禁止' },
-        evidence_refs:['outcome:999'], missing_evidence:['缺少可避免性证据'], confidence:0.5,
+        evidence_refs:['outcome:999'], missing_evidence:[], confidence:0.5,
       }], repeated_issues:[], strengths:[], risk_observations:[], next_day_actions:[], strategy_conflicts:[], confidence:0.5,
       experience_rules:[{ category:'general', condition:'条件', action:'动作', risk_control:'风控', invalidation:'失效', prohibited_action:'禁止', source_refs:['outcome:1'], confidence:0.5 }],
     }
@@ -1288,7 +1368,7 @@ describe('period review frontend contract handshake', () => {
 
   it('publishes UI metadata separately from supported model output contracts', () => {
     expect(PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION).toBe('period-review-ui-v1')
-    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-short-holding1')
+    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-shared-market1')
     expect(PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS).toEqual(expect.arrayContaining([
       'daily-period-review-v3', 'daily-period-review-v1', 'daily-period-review-v2',
       'period-review-v1', 'period-review-v2',
@@ -1297,18 +1377,18 @@ describe('period review frontend contract handshake', () => {
     expect(periodReviewFrontendMetadata()).toEqual({
       frontend_contract_version:'period-review-ui-v1',
       period_review_contracts:[...PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS],
-      ai_frontend_build:'period-review-short-holding1',
+      ai_frontend_build:'period-review-shared-market1',
     })
   })
 
   it('fails closed for missing or stale UI build/contract headers', () => {
     expect(periodReviewFrontendContractMismatch({})).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-short-holding1',
+      'X-Aurum-AI-Frontend-Build':'period-review-shared-market1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
     })).toBe(false)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-short-holding1',
+      'X-Aurum-AI-Frontend-Build':'period-review-shared-market1',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
@@ -1320,7 +1400,7 @@ describe('period review frontend contract handshake', () => {
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v0',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-short-holding1',
+      'X-Aurum-AI-Frontend-Build':'period-review-shared-market1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
       'X-Aurum-Period-Review-Contracts':'daily-period-review-v2',
     })).toBe(false)

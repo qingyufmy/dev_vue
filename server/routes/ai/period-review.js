@@ -5,7 +5,8 @@ import { ensureReviewCaseForOutcome } from './review-workflow.js'
 import { resolveAiTaskModel } from './model-profiles.js'
 import { requestJsonObject } from './llm.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
-import { buildDailyPeriodMarketEvidence, monthlyPeriodMarketDigest } from './period-market-evidence.js'
+import { buildDailyPeriodMarketEvidence, monthlyPeriodMarketDigest,
+  PERIOD_MARKET_SOURCE_POLICY_VERSION } from './period-market-evidence.js'
 import { isAiFeatureEnabled } from './rollout-governance.js'
 import {
   getStrategyMemoryLibraryForRuntime,
@@ -454,6 +455,7 @@ export function shouldUpgradePeriodMarketEvidence(reviewCase, evidence, asOfUtcM
   return Number(evidence?.schema_version || 0) < 2
     || Number(evidence?.period_market?.schema_version || 0) < 2
     || Number(evidence?.period_market?.coverage_policy_version || 0) < 2
+    || String(evidence?.period_market?.source_policy_version || '') !== PERIOD_MARKET_SOURCE_POLICY_VERSION
     || !evidence?.period_market?.generated_at
     || (evidence?.period_market?.status !== 'complete'
       && (!Number.isFinite(marketGeneratedAt) || Number(asOfUtcMs) - marketGeneratedAt >= 3600000))
@@ -512,6 +514,32 @@ export function monthlyReviewJobRefreshStages(existingCase, sourceChanged, exist
 function afterSeconds(seconds) {
   const date = new Date(Date.now() + (8 * 3600 + seconds) * 1000)
   return date.toISOString().replace('T', ' ').slice(0, 19)
+}
+
+function isRecoverableDailyQuotaFailure(job) {
+  const code = String(job?.last_error_code || '').toLowerCase()
+  return String(job?.status || '') === 'failed'
+    && !String(job?.idempotency_key || '').endsWith(`:${DAILY_REVIEW_QUOTA_RECOVERY_VERSION}`)
+    && (code.includes('model_quota_exhausted') || code.includes('http 429') || code.includes('rate limit'))
+}
+
+async function recoverDailyQuotaFailure(reviewCase, job) {
+  if (!reviewCase || !job || reviewCase.current_version_id || reviewCase.evidence_status !== 'complete'
+    || !isRecoverableDailyQuotaFailure(job)) return false
+  const baseKey = String(job.idempotency_key || `daily:${reviewCase.id}:${reviewCase.evidence_hash}`)
+    .replace(/:quota-recovery-v1$/, '')
+  const now = beijingNow()
+  const result = await queryRun(`UPDATE period_review_jobs SET idempotency_key = ?, model_task_id = NULL,
+      status = 'queued', progress_stage = 'queued', stage_updated_at = ?, attempt_count = 0,
+      last_error_code = NULL, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = NULL,
+      completed_at = NULL, updated_at = ?
+    WHERE id = ? AND status = 'failed' AND last_error_code = ?`,
+  [`${baseKey}:${DAILY_REVIEW_QUOTA_RECOVERY_VERSION}`, now, now, job.id, job.last_error_code])
+  const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
+  if (affected !== 1) return false
+  await queryRun(`UPDATE period_review_cases SET status = 'ready', updated_at = ?
+    WHERE id = ? AND current_version_id IS NULL AND evidence_status = 'complete'`, [now, reviewCase.id])
+  return true
 }
 
 async function setPeriodReviewJobStage(job, stage, eventStatus = 'info', messageCode = null, metadata = null) {
@@ -741,6 +769,9 @@ const V3_MAX_EXPERIENCE_RULES = 100
 const DAILY_MISSED_WINDOW_RECOVERY_GRACE_MINUTES = 30
 const DAILY_REVIEW_CHUNK_MAX_OUTCOMES = 20
 const DAILY_REVIEW_CHUNK_MAX_BYTES = 120000
+const DAILY_REVIEW_MODEL_TASK_MAX_ATTEMPTS = 12
+const DAILY_REVIEW_MARKET_DIGEST_VERSION = 'daily-market-digest-v1'
+const DAILY_REVIEW_QUOTA_RECOVERY_VERSION = 'quota-recovery-v1'
 const DAILY_RECOVERY_LIMIT_MAX = 100
 const DAILY_RECOVERY_GRACE_MAX_MINUTES = 7 * 24 * 60
 
@@ -751,7 +782,7 @@ export const DAILY_PERIOD_REVIEW_V3_CONTRACT = DAILY_REVIEW_V3_CONTRACT
 // is allowed to write a review, while period_review_contracts describes the
 // output shapes that this server can still read.
 export const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
-export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-short-holding1'
+export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-shared-market1'
 export const PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS = Object.freeze([
   DAILY_PERIOD_REVIEW_V3_CONTRACT,
   'daily-period-review-v1',
@@ -986,15 +1017,24 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
     }
     if (Object.prototype.hasOwnProperty.call(item, 'missing_evidence')
       && !Array.isArray(item.missing_evidence)) throw new Error('invalid_daily_v3_missing_evidence')
-    const missingEvidence = Array.isArray(item.missing_evidence)
-      ? item.missing_evidence.map((value, index) => boundedReviewText(value, `daily_v3_missing_evidence_${index}`, { maxLength:2000 }))
-      : []
+    const serverEvidenceLimitations = (evidenceLimitationsByOutcome.get(outcomeId) || []).map(item => ({
+      scope:String(item?.scope || ''), description:String(item?.description || ''),
+      unavailable_capabilities:[...new Set((Array.isArray(item?.unavailable_capabilities)
+        ? item.unavailable_capabilities : []).map(String).filter(Boolean))],
+    })).filter(item => item.scope && item.description)
     const hasInsufficientState = item.decision_quality === 'insufficient_evidence'
       || item.market_alignment === 'insufficient_evidence'
       || item.strategy_alignment === 'insufficient_evidence'
       || riskExecutionStatus === 'insufficient_evidence'
       || attribution.avoidability === 'insufficient_evidence'
-    if (hasInsufficientState && !missingEvidence.length) throw new Error('daily_v3_missing_evidence_required')
+    // Evidence availability is a server-owned fact. Ignore invented model
+    // gaps when deterministic evidence is complete, and derive the visible
+    // list from frozen limitations when an insufficient state is permitted.
+    const missingEvidence = hasInsufficientState
+      ? serverEvidenceLimitations.map(value => boundedReviewText(value.description,
+        'daily_v3_server_missing_evidence', { maxLength:2000 }))
+      : []
+    if (hasInsufficientState && !missingEvidence.length) throw new Error('daily_v3_insufficient_state_without_server_limitation')
     if (item.decision_quality === 'insufficient_evidence'
       && item.market_alignment !== 'insufficient_evidence'
       && item.strategy_alignment !== 'insufficient_evidence'
@@ -1002,7 +1042,8 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
       && attribution.avoidability !== 'insufficient_evidence') {
       throw new Error('daily_v3_insufficient_decision_contradicts_deterministic')
     }
-    if (!hasInsufficientState && missingEvidence.length) throw new Error('daily_v3_missing_evidence_contradicts_deterministic')
+    // Validation no longer spends a provider repair call solely because a
+    // complete trade contained an extra model-authored missing_evidence.
     const nextRule = item.next_time_rule
     if (!nextRule || typeof nextRule !== 'object' || Array.isArray(nextRule)) throw new Error('invalid_daily_v3_next_time_rule')
     const normalizedRule = {
@@ -1019,11 +1060,7 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
       market_alignment:item.market_alignment, strategy_alignment:item.strategy_alignment,
       risk_execution_assessment:riskExecutionAssessment, risk_execution_status:riskExecutionStatus,
       missing_evidence:missingEvidence,
-      evidence_limitations:(evidenceLimitationsByOutcome.get(outcomeId) || []).map(item => ({
-        scope:String(item?.scope || ''), description:String(item?.description || ''),
-        unavailable_capabilities:[...new Set((Array.isArray(item?.unavailable_capabilities)
-          ? item.unavailable_capabilities : []).map(String).filter(Boolean))],
-      })).filter(item => item.scope && item.description),
+      evidence_limitations:serverEvidenceLimitations,
       outcome_attribution:{ result:attribution.result, primary_causes:primaryCauses, explanation,
         avoidability:attribution.avoidability },
       next_time_rule:normalizedRule,
@@ -1579,7 +1616,7 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
       FROM period_review_sources source
       LEFT JOIN trade_review_cases review_case ON review_case.id = source.trade_review_case_id
       WHERE source.period_case_id = ? ORDER BY source.outcome_id`, [existingCase.id])
-    const existingJob = await queryOne(`SELECT id, status FROM period_review_jobs
+    const existingJob = await queryOne(`SELECT id, status, idempotency_key, attempt_count, max_attempts, last_error_code FROM period_review_jobs
       WHERE period_case_id = ? AND job_type = 'daily_review' AND job_slot = 0 LIMIT 1`, [existingCase.id])
     const activeRegeneration = existingCase.current_version_id
       ? await queryOne(`SELECT id, status FROM period_review_jobs
@@ -1590,6 +1627,11 @@ async function upsertDailyGroup(group, clock, asOfUtcMs = Date.now(), {
       complete:existingCase.evidence_status === 'complete', sourceCount:Number(existingCase.source_count || 0),
       evidenceHash:existingCase.evidence_hash, reused:true, refreshReason:'regeneration_in_progress' })
     await reconcilePersistedPeriodReviewState(existingCase, existingJob)
+    if (await recoverDailyQuotaFailure(existingCase, existingJob)) {
+      return existingMaintainedResult({ id:Number(existingCase.id), periodKey:group.periodKey,
+        complete:true, sourceCount:Number(existingCase.source_count || 0), evidenceHash:existingCase.evidence_hash,
+        requeued:true, refreshReason:'provider_quota_recovery' })
+    }
     const existingEvidence = parse(existingCase.evidence_json, {}) || {}
     const needsPeriodMarketUpgrade = shouldUpgradePeriodMarketEvidence(existingCase, existingEvidence)
     const refresh = shouldRefreshDailyReviewCase(existingCase, group, existingSources, asOfUtcMs)
@@ -2358,7 +2400,12 @@ async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, tas
       period_case_id:Number(job.period_case_id), evidence_hash:job.evidence_hash,
       ...taskExtras,
     }),
-    maxAttempts:Number(job.max_attempts) || 3,
+    // Provider-capacity retries are tracked independently from the three
+    // business generation attempts. A quota circuit normally prevents these
+    // extra task attempts from reaching the provider at all.
+    maxAttempts:['daily_review_chunk', 'daily_review_merge'].includes(modelTaskKind)
+      ? Math.max(DAILY_REVIEW_MODEL_TASK_MAX_ATTEMPTS, Number(job.max_attempts) || 3)
+      : Number(job.max_attempts) || 3,
     taskDeadlineAtUtcMs:taskDeadlineAtUtcMs || job._deadlineAtMs,
   }, {
     workerId:`period-review:${process.pid}`,
@@ -2665,6 +2712,53 @@ function dailyOutcomeEvidenceLimitations(postTrade = {}) {
   }]
 }
 
+/**
+ * Preserve the deterministic market conclusions and provenance needed by the
+ * model without replaying a full trading day's candle arrays in every chunk.
+ * Raw candles remain frozen in period_review_cases.evidence_json for audit and
+ * deterministic rebuilds; this is only the model-facing projection.
+ */
+export function compactDailyReviewPeriodMarket(periodMarket) {
+  if (!periodMarket || typeof periodMarket !== 'object' || Array.isArray(periodMarket)) return periodMarket || null
+  const symbols = periodMarket.symbols && typeof periodMarket.symbols === 'object'
+    ? Object.fromEntries(Object.entries(periodMarket.symbols).map(([symbol, frames]) => [symbol,
+      Object.fromEntries(Object.entries(frames || {}).map(([timeframe, frame]) => {
+        const value = frame && typeof frame === 'object' ? frame : {}
+        const coverage = value.coverage && typeof value.coverage === 'object' ? value.coverage : {}
+        return [timeframe, {
+          status:value.status || 'unavailable', reason:value.reason || null,
+          candle_count:Number(value.candle_count || 0), expected_candle_count:Number(value.expected_candle_count || 0),
+          first_time_utc_msc:value.first_time_utc_msc ?? null, last_time_utc_msc:value.last_time_utc_msc ?? null,
+          summary:value.summary || null,
+          coverage:{ endpoint_complete:coverage.endpoint_complete ?? null,
+            internal_gap_count:Number(coverage.internal_gap_count || 0), max_gap_ms:Number(coverage.max_gap_ms || 0),
+            continuity_status:coverage.continuity_status || null, continuity_reason:coverage.continuity_reason || null,
+            continuity_policy_id:coverage.continuity_policy_id || null,
+            continuity_policy_version:coverage.continuity_policy_version ?? null,
+            continuity_policy_hash:coverage.continuity_policy_hash || null },
+          source_provenance:value.source_provenance || value.source_selection || {
+            policy_version:value.source_policy_version || periodMarket.source_policy_version || null,
+            selection_mode:value.source_selection_mode || null,
+            selection_reason:value.source_selection_reason || null,
+            source_changed:Boolean(value.source_selection_changed),
+          },
+        }]
+      }))]))
+    : {}
+  return {
+    schema_version:periodMarket.schema_version || null,
+    digest_version:DAILY_REVIEW_MARKET_DIGEST_VERSION,
+    source_policy_version:periodMarket.source_policy_version || null,
+    status:periodMarket.status || 'unavailable', reason:periodMarket.reason || null,
+    window_policy_version:periodMarket.window_policy_version || null,
+    chan_requirement:periodMarket.chan_requirement || null,
+    chan_evidence_status:periodMarket.chan_evidence_status || null,
+    timeframes:periodMarket.timeframes || [],
+    timeframes_by_outcome:periodMarket.timeframes_by_outcome || {},
+    symbols,
+  }
+}
+
 function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strategyMemoryForPrompt) {
   const sources = Array.isArray(evidence?.sources) ? evidence.sources : []
   const preTradeFrozen = []
@@ -2694,7 +2788,7 @@ function buildDailyReviewV3ModelEvidence(evidence, strategyMemorySnapshot, strat
     system_statistics:evidence?.statistics || {},
     pre_trade_frozen:preTradeFrozen,
     holding_path:holdingPath,
-    period_market:evidence?.period_market || null,
+    period_market:compactDailyReviewPeriodMarket(evidence?.period_market),
     current_optimization_context:{
       strategy:strategyMemorySnapshot?.strategy_text || '',
       strategy_memory_library:strategyMemoryForPrompt,
@@ -2919,7 +3013,7 @@ async function generateDailyReview(job, requestModel) {
     trade_assessments: firstChunkOutcomeIds.map(outcomeId => ({ outcome_id: outcomeId, decision_quality: 'good|mixed|poor|insufficient_evidence',
       original_signal_logic:'string', technical_basis_assessment:'string', market_alignment:'aligned|partly_aligned|conflict|insufficient_evidence',
       strategy_alignment:'aligned|partly_aligned|conflict|insufficient_evidence', risk_execution_assessment:'string',
-      risk_execution_status:'compliant|partly_compliant|violation|insufficient_evidence', missing_evidence:['string'],
+      risk_execution_status:'compliant|partly_compliant|violation|insufficient_evidence', missing_evidence:[],
       outcome_attribution:{ result:'profit|loss|breakeven', primary_causes:['string'], explanation:'string',
         avoidability:'avoidable|partly_avoidable|normal_strategy_loss|insufficient_evidence' },
       next_time_rule:{ condition:'string', action:'string', risk_control:'string', invalidation:'string', prohibited_action:'string' },
@@ -2950,7 +3044,7 @@ async function generateDailyReview(job, requestModel) {
     '输出必须是一个 JSON 对象，禁止 Markdown、解释文字和外层包装字段。',
     '必须原样使用 required_output 中的全部字段名；所有字段必填，即使没有内容也必须返回空数组。当前输出版本为 daily-period-review-v3，不能退回旧版 daily_lessons/memory_updates 合同。',
     'period_summary 必须是非空中文总结；decision_quality 只能使用给定枚举；confidence 必须是 0 到 1 的数字。',
-    'risk_execution_status 必须明确标记合规、部分合规、违规或证据不足；normal_strategy_loss 仅允许实际亏损、decision_quality=good、market_alignment=aligned、strategy_alignment=aligned 且 risk_execution_status=compliant。出现任何 insufficient_evidence 必须填写 missing_evidence，确定性 aligned 结论不得同时填写 missing_evidence。repeated_issues 和 strengths 必须使用 text/source_refs/occurrence_count 结构，repeated_issues 至少引用两个不同 outcome。',
+    'risk_execution_status 必须明确标记合规、部分合规、违规或证据不足；normal_strategy_loss 仅允许实际亏损、decision_quality=good、market_alignment=aligned、strategy_alignment=aligned 且 risk_execution_status=compliant。missing_evidence 是后端所有字段，模型必须始终返回空数组；只有 review_context 明确提供 evidence_limitations 时才允许使用 insufficient_evidence，后端会写入实际限制。repeated_issues 和 strengths 必须使用 text/source_refs/occurrence_count 结构，repeated_issues 至少引用两个不同 outcome。',
     'holding_path.path_metrics.status=not_observable 表示交易事实和行情覆盖完整，但持仓太短，闭合K线无法精确观察持仓内路径；这不等于整条交易证据不足。此时禁止把边界K线高低价当作持仓期MFE/MAE，禁止判断止盈、止损是否曾触达，也不得据此生成经验规则；仍须使用成交事实、事前快照和交易日行情完成信号逻辑、盈亏原因与改进建议分析。',
     '除 JSON 字段名和规定枚举值外，所有用户可见字符串与数组内容必须使用简体中文；禁止输出内部错误码、英文状态或整句英文。品种代码、周期以及 AI、MT5、MACD、RSI、ATR、KDJ、EMA、SMA 等通用技术缩写可以保留。',
     tradeCoverageContract,
@@ -3001,6 +3095,8 @@ async function generateDailyReview(job, requestModel) {
       }),
       evidence_refs_by_outcome:Object.fromEntries([...chunkEvidence.evidenceRefsByOutcome.entries()]
         .map(([id, refs]) => [String(id), [...refs]])),
+      evidence_limitations_by_outcome:Object.fromEntries([...chunkEvidence.evidenceLimitationsByOutcome.entries()]
+        .map(([id, limitations]) => [String(id), limitations])),
     }) }]
     // Every provider request gets an independent budget/deadline and durable
     // model-task envelope. The event-table checkpoint is written only after
@@ -3233,6 +3329,37 @@ function providerResultUnknown(tracker, task = null) {
   return providerState?.submitted === true && providerState?.responseReceived !== true
 }
 
+function isPeriodReviewProviderCapacityWait(error, modelTask = null) {
+  const values = [error?.code, error?.message, modelTask?.error_code, modelTask?.errorCode]
+    .map(value => String(value || '').toLowerCase())
+  return Number(error?.providerStatus) === 429 || error?.modelQuotaCircuit === true
+    || values.some(value => value.includes('model_quota_exhausted')
+      || value.includes('model_quota_probe_in_progress') || value.includes('http 429') || value.includes('rate limit'))
+}
+
+function periodReviewCapacityRetryAt(error) {
+  const raw = error?.details?.retry_after || error?.retryAfter || error?.retry_after
+  const parsed = raw ? Date.parse(String(raw).replace(' ', 'T')) : NaN
+  if (Number.isFinite(parsed) && parsed > Date.now()) {
+    const date = new Date(parsed + 8 * 3600000)
+    return date.toISOString().replace('T', ' ').slice(0, 19)
+  }
+  const minutes = Math.max(5, Number.parseInt(process.env.AI_MODEL_QUOTA_CIRCUIT_MINUTES || '60') || 60)
+  return afterSeconds(minutes * 60)
+}
+
+async function restoreQuotaConsumedBusinessAttempt(job) {
+  if (!job?._businessAttemptStarted || Number(job.attempt_count || 0) <= 0) return false
+  const result = await queryRun(`UPDATE period_review_jobs SET attempt_count = GREATEST(attempt_count - 1, 0), updated_at = ?
+    WHERE id = ? AND status = 'leased' AND lease_token = ? AND attempt_count > 0`,
+  [beijingNow(), job.id, job.lease_token])
+  const affected = Number(result?.affectedRows ?? result?.changes ?? 0)
+  if (affected !== 1) return false
+  job.attempt_count = Math.max(0, Number(job.attempt_count || 0) - 1)
+  job._businessAttemptStarted = false
+  return true
+}
+
 async function markPeriodReviewRegenerationNeedsRevision(job) {
   if (!isPeriodReviewRegenerationJob(job)) return
   await queryRun(`UPDATE period_review_cases SET status = 'needs_revision', updated_at = ?
@@ -3241,10 +3368,13 @@ async function markPeriodReviewRegenerationNeedsRevision(job) {
 
 async function finishDailyReviewFailure(job, error, modelTask = null) {
   const unknown = providerResultUnknown(job._modelTracker, modelTask)
-  const exhausted = job.attempt_count >= Number(job.max_attempts)
-  const retryAt = unknown || exhausted ? null : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
+  const capacityWait = !unknown && isPeriodReviewProviderCapacityWait(error, modelTask)
+  if (capacityWait) await restoreQuotaConsumedBusinessAttempt(job)
+  const exhausted = !capacityWait && job.attempt_count >= Number(job.max_attempts)
+  const retryAt = unknown || exhausted ? null : capacityWait ? periodReviewCapacityRetryAt(error)
+    : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
   const jobStatus = unknown ? 'status_unknown' : exhausted ? 'failed' : 'queued'
-  const errorCode = unknown ? 'provider_status_unknown' : safeError(error)
+  const errorCode = unknown ? 'provider_status_unknown' : capacityWait ? 'model_quota_exhausted' : safeError(error)
   const jobUpdate = await queryRun(`UPDATE period_review_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
     lease_expires_at = NULL, next_attempt_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
   [jobStatus, errorCode, retryAt, beijingNow(), job.id, job.lease_token])
@@ -3302,17 +3432,23 @@ export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObjec
   } catch (error) {
     let failure = error
     let modelTask = null
+    const capacityWait = isPeriodReviewProviderCapacityWait(error)
     try {
-      modelTask = await job._modelTracker?.failed(error, job.attempt_count >= Number(job.max_attempts))
+      modelTask = await job._modelTracker?.failed(error, !capacityWait && job.attempt_count >= Number(job.max_attempts))
     } catch (trackerError) {
       failure = trackerError
       console.error(`[PeriodReview case=${job.period_case_id}] model task failure:`, safeError(trackerError))
     }
     await finishDailyReviewFailure(job, failure, modelTask)
     const unknown = providerResultUnknown(job._modelTracker, modelTask)
-    await setPeriodReviewJobStage(job, unknown ? 'status_unknown' : job.attempt_count >= Number(job.max_attempts) ? 'failed' : 'retry_wait', 'error', safeError(error),
-      unknown || job.attempt_count >= Number(job.max_attempts) ? null : { retry_delay_seconds: Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
-    return { claimed: true, status: unknown ? 'status_unknown' : 'failed', periodCaseId: Number(job.period_case_id), error: safeError(failure) }
+    const exhausted = !capacityWait && job.attempt_count >= Number(job.max_attempts)
+    await setPeriodReviewJobStage(job, unknown ? 'status_unknown' : exhausted ? 'failed' : 'retry_wait', 'error',
+      capacityWait ? 'model_quota_exhausted' : safeError(error),
+      unknown || exhausted ? null : capacityWait
+        ? { retry_reason:'provider_capacity', retry_at:periodReviewCapacityRetryAt(error) }
+        : { retry_delay_seconds:Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
+    return { claimed:true, status:unknown ? 'status_unknown' : exhausted ? 'failed' : 'retry_wait',
+      periodCaseId:Number(job.period_case_id), error:safeError(failure) }
   } finally {
     try { await job._modelTracker?.stop() } catch (trackerError) {
       console.error(`[PeriodReview case=${job.period_case_id}] model task stop:`, safeError(trackerError))
@@ -4702,5 +4838,6 @@ export function stopPeriodReviewWorker() {
 // are not used by the HTTP route or worker runtime.
 export const __testFinishDailyReviewSuccess = finishDailyReviewSuccess
 export const __testFinishDailyReviewFailure = finishDailyReviewFailure
+export const __testRecoverDailyQuotaFailure = recoverDailyQuotaFailure
 export const __testFinishMonthlyReviewSuccess = finishMonthlyReviewSuccess
 export const __testFinishMonthlyReviewFailure = finishMonthlyReviewFailure
