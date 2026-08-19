@@ -1029,36 +1029,55 @@ button {
 .signal-pending-action > i { margin-top:1px; }
 .signal-pending-action strong { display:block; color:var(--text-primary); font-size:13px; line-height:1.4; }
 .signal-pending-action p { margin:3px 0 0; color:var(--text-secondary); font-size:12px; line-height:1.5; }
-.signal-management-actions { margin:0 0 12px; padding:14px 16px; border:1px solid color-mix(in srgb,var(--brand-gold) 30%,var(--border-default)); border-radius:14px; background:color-mix(in srgb,var(--brand-gold) 5%,var(--bg-input-soft)); }
-.signal-management-actions .analysis-section-title { margin:0 0 10px; }
-.signal-management-actions .analysis-section-title span { margin-left:auto; color:var(--text-tertiary); font-size:12px; font-weight:500; }
+.signal-management-actions { margin:0 0 12px; border:1px solid color-mix(in srgb,var(--brand-gold) 30%,var(--border-default)); border-radius:14px; background:color-mix(in srgb,var(--brand-gold) 5%,var(--bg-input-soft)); overflow:hidden; }
+.signal-management-summary { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:8px; min-height:44px; padding:12px 16px; cursor:pointer; list-style:none; }
+.signal-management-summary::-webkit-details-marker { display:none; }
+.signal-management-summary:focus-visible { outline:2px solid var(--brand-gold); outline-offset:-2px; }
+.signal-management-summary-icon { display:grid; place-items:center; width:24px; height:24px; color:var(--brand-gold); }
+.signal-management-summary-copy { display:grid; gap:4px; min-width:0; }
+.signal-management-summary-copy strong { color:var(--text-primary); font-size:13px; line-height:1.4; }
+.signal-management-summary-copy > span { color:var(--text-tertiary); font-size:12px; font-weight:500; }
+.signal-management-summary-status { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:4px 8px; color:var(--text-secondary); font-size:11px; font-weight:700; text-align:right; }
+.signal-management-summary-status-item { white-space:nowrap; }
+.signal-management-summary-status-item.completed { color:var(--status-connected); }
+.signal-management-summary-status-item.processing,.signal-management-summary-status-item.suggestion { color:var(--color-warning); }
+.signal-management-summary-status-item.failed { color:var(--status-danger); }
+.signal-management-summary-chevron { display:grid; place-items:center; width:24px; height:24px; color:var(--text-secondary); transition:transform 180ms ease-out; }
+.signal-management-actions[open] .signal-management-summary-chevron { transform:rotate(180deg); }
+.signal-management-actions[open] > .signal-management-action-list { border-top:1px solid var(--border-subtle); }
 .signal-management-action-list { display:grid; gap:8px; }
-.signal-management-action { display:grid; gap:8px; padding:11px 12px; border:1px solid var(--border-default); border-radius:10px; background:var(--bg-surface); }
+.signal-management-actions > .signal-management-action-list { padding:12px 16px 16px; }
+.signal-management-action { display:grid; gap:8px; padding:12px; border:1px solid var(--border-default); border-radius:10px; background:var(--bg-surface); }
 .signal-management-action.confirmation_completed { border-color:color-mix(in srgb,var(--status-connected) 38%,var(--border-default)); background:var(--status-connected-bg); }
 .signal-management-action.confirmation_reset,.signal-management-action.invalid_reset { border-color:color-mix(in srgb,var(--color-warning) 35%,var(--border-default)); background:var(--color-warning-bg); }
-.signal-management-action-head { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.signal-management-action-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .signal-management-action-head strong { color:var(--text-primary); font-size:13px; line-height:1.4; }
 .signal-management-action-head .management-state { margin-left:auto; }
 .signal-management-action p { margin:0; color:var(--text-secondary); font-size:13px; line-height:1.5; text-wrap:pretty; }
-.signal-management-target-list { display:grid; gap:6px; }
-.signal-management-target { display:grid; grid-template-columns:minmax(130px,1fr) minmax(120px,.8fr) auto; align-items:center; gap:6px 12px; min-width:0; padding:8px 10px; border:1px solid var(--border-subtle); border-radius:8px; background:color-mix(in srgb,var(--bg-input-soft) 70%,transparent); }
+.signal-management-target-list { display:grid; gap:8px; }
+.signal-management-target { display:grid; grid-template-columns:minmax(130px,1fr) minmax(120px,.8fr) auto; align-items:center; gap:8px 12px; min-width:0; padding:8px 12px; border:1px solid var(--border-subtle); border-radius:8px; background:color-mix(in srgb,var(--bg-input-soft) 70%,transparent); }
 .signal-management-target.missing,.signal-management-target.excluded { border-color:color-mix(in srgb,var(--color-warning) 35%,var(--border-default)); }
 .signal-management-target.reconciling { border-color:color-mix(in srgb,var(--brand-gold) 35%,var(--border-default)); }
-.signal-management-target-main { display:flex; align-items:center; gap:7px; min-width:0; }
+.signal-management-target-main { display:flex; align-items:center; gap:8px; min-width:0; }
 .signal-management-target-main strong { min-width:0; overflow:hidden; color:var(--text-primary); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
-.signal-management-target-ticket { display:flex; align-items:center; gap:6px; min-width:0; color:var(--text-secondary); }
+.signal-management-target-ticket { display:flex; align-items:center; gap:8px; min-width:0; color:var(--text-secondary); }
 .signal-management-target-ticket b { min-width:0; overflow-wrap:anywhere; color:var(--text-primary); font-size:12px; }
 .signal-management-target > .management-state { justify-self:end; }
 .signal-management-target > p { grid-column:1 / -1; color:var(--text-muted); font-size:12px; }
 .target-role { flex:none; padding:2px 6px; border:1px solid var(--border-default); border-radius:999px; color:var(--text-tertiary); font-size:10px; line-height:1.4; }
 .target-role.source { border-color:color-mix(in srgb,var(--brand-gold) 40%,var(--border-default)); color:var(--brand-gold); }
-.signal-management-target-more { border-top:1px solid var(--border-subtle); padding-top:7px; }
+.signal-management-target-more { border-top:1px solid var(--border-subtle); padding-top:8px; }
 .signal-management-target-more summary { cursor:pointer; color:var(--text-secondary); font-size:12px; }
-.signal-management-target-more[open] summary { margin-bottom:6px; }
+.signal-management-target-more[open] summary { margin-bottom:8px; }
 @media (max-width:640px) {
+  .signal-management-summary { grid-template-columns:auto minmax(0,1fr) auto; }
+  .signal-management-summary-status { grid-column:2 / -1; justify-content:flex-start; text-align:left; }
   .signal-management-target { grid-template-columns:minmax(0,1fr) auto; }
   .signal-management-target-ticket { grid-column:1 / -1; }
   .signal-management-target > .management-state { grid-column:2; grid-row:1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .signal-management-summary-chevron { transition:none; }
 }
 .decision-summary { display:grid; grid-template-columns:94px minmax(0,1fr); gap:12px; align-items:start; margin-bottom:12px; padding:14px 16px; border-radius:12px; background:color-mix(in srgb,var(--bg-input-soft) 82%,transparent); }
 .decision-summary span { color:var(--text-secondary); font-size:12px; padding-top:3px; }

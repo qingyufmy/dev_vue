@@ -13435,10 +13435,40 @@ function renderSignalPendingActions(signal) {
   </section>`;
 }
 
+const SIGNAL_MANAGEMENT_COLLAPSE_LIMIT = 64;
+const _signalManagementCollapseState = new Map();
+let _signalManagementCollapseToggleBound = false;
+
+function rememberSignalManagementCollapse(signalId, open) {
+  const key = String(signalId ?? "").trim();
+  if (!key) return;
+  _signalManagementCollapseState.delete(key);
+  _signalManagementCollapseState.set(key, Boolean(open));
+  while (_signalManagementCollapseState.size > SIGNAL_MANAGEMENT_COLLAPSE_LIMIT) {
+    const oldestKey = _signalManagementCollapseState.keys().next().value;
+    if (oldestKey === undefined) break;
+    _signalManagementCollapseState.delete(oldestKey);
+  }
+}
+
+function bindSignalManagementCollapseState() {
+  if (_signalManagementCollapseToggleBound || typeof document === "undefined") return;
+  document.addEventListener("toggle", event => {
+    const details = event.target;
+    if (!details?.matches?.("details.signal-management-actions")) return;
+    rememberSignalManagementCollapse(details.dataset.signalManagementCollapse, details.open);
+  }, true);
+  _signalManagementCollapseToggleBound = true;
+}
+
 function renderSignalManagementActions(signal) {
   const actions = Array.isArray(signal?.management_actions)
     ? signal.management_actions : (Array.isArray(signal?.position_management_actions) ? signal.position_management_actions : []);
   if (!actions.length) return "";
+  bindSignalManagementCollapseState();
+  const signalId = String(signal?.id ?? "").trim();
+  const hasSavedCollapseState = signalId && _signalManagementCollapseState.has(signalId);
+  const openAttribute = hasSavedCollapseState && _signalManagementCollapseState.get(signalId) ? " open" : "";
   const pendingOutcomes = Array.isArray(signal?.pending_actions) ? signal.pending_actions : [];
   const effectLabel = action => {
     const effect = String(action?.inference_effect || "display_only");
@@ -13467,6 +13497,34 @@ function renderSignalManagementActions(signal) {
     const ticket = String(action?.target_ticket || action?.ticket || "").trim();
     return pendingOutcomes.find(item => ticket && String(item?.ticket || "").trim() === ticket)
       || (pendingOutcomes.length === 1 ? pendingOutcomes[0] : null);
+  };
+  const managementStatusSummary = items => {
+    const counts = { completed:0, processing:0, failed:0, suggestion:0 };
+    items.forEach(action => {
+      const statusCode = String(action?.task_status || action?.task?.status || "").trim().toUpperCase();
+      const statusTone = positionManagementStatus(statusCode).tone;
+      const outcomeStatus = String(pendingOutcomeFor(action)?.status || "").trim().toLowerCase();
+      const effect = String(action?.inference_effect || "display_only");
+      if (["cancelled", "superseded"].includes(outcomeStatus)
+        || statusTone === "completed" || effect === "confirmation_completed") {
+        counts.completed += 1;
+      } else if (outcomeStatus === "failed" || statusTone === "failed" || effect === "invalid_reset") {
+        counts.failed += 1;
+      } else if (statusTone === "candidate" || effect === "first_confirmation") {
+        counts.processing += 1;
+      } else {
+        counts.suggestion += 1;
+      }
+    });
+    const labels = [
+      ["completed", "已完成"],
+      ["processing", "处理中"],
+      ["failed", "异常"],
+      ["suggestion", "仅建议"],
+    ];
+    return labels
+      .filter(([key]) => counts[key] > 0)
+      .map(([key, label]) => ({ tone:key, label:`${label} ${counts[key]}` }));
   };
   const taskLabel = (action, pendingOutcome = null) => {
     const statusCode = typeof action?.task_status === "string" ? action.task_status : action?.task?.status;
@@ -13506,8 +13564,14 @@ function renderSignalManagementActions(signal) {
       ${mappingReason ? `<p>${escapeHtml(mappingReason)}</p>` : ""}
     </div>`;
   };
-  return `<section class="signal-management-actions">
-    <div class="analysis-section-title"><i data-lucide="briefcase-business" size="15"></i><strong>持仓与挂单管理</strong><span>${grouped.size} 组判断 · ${actions.length} 个目标</span></div>
+  const summaryStatuses = managementStatusSummary(actions);
+  return `<details class="signal-management-actions" data-signal-management-collapse="${escapeHtml(signalId)}"${openAttribute}>
+    <summary class="signal-management-summary">
+      <span class="signal-management-summary-icon" aria-hidden="true"><i data-lucide="briefcase-business" size="15"></i></span>
+      <span class="signal-management-summary-copy"><strong>持仓与挂单管理</strong><span>${grouped.size} 组判断 · ${actions.length} 个目标</span></span>
+      <span class="signal-management-summary-status" aria-label="管理状态">${summaryStatuses.map(item => `<span class="signal-management-summary-status-item ${item.tone}">${escapeHtml(item.label)}</span>`).join("")}</span>
+      <span class="signal-management-summary-chevron" aria-hidden="true"><i data-lucide="chevron-down" size="16"></i></span>
+    </summary>
     <div class="signal-management-action-list">${[...grouped.values()].map(group => {
       const ordered = [...group].sort((left, right) => {
         const rank = item => item?.target_role === "source" ? 0 : item?.mapping_status !== "mapped" ? 1 : 2;
@@ -13525,7 +13589,7 @@ function renderSignalManagementActions(signal) {
         ${hidden.length ? `<details class="signal-management-target-more"><summary>查看其余 ${hidden.length} 个目标</summary><div class="signal-management-target-list">${hidden.map(renderTarget).join("")}</div></details>` : ""}
       </article>`;
     }).join("")}</div>
-  </section>`;
+  </details>`;
 }
 
 function renderDecisionList(items, emptyText) {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
+const styles = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
 
 describe('inference workspace V2 contract', () => {
   it('opens manual inference from a dedicated modal', () => {
@@ -131,6 +132,26 @@ describe('inference workspace V2 contract', () => {
     expect(app).toContain('pendingOutcomeFor(action)')
     expect(app).toContain('查看其余 ${hidden.length} 个目标')
     expect(app).toContain('managedCancelTickets')
+  })
+
+  it('uses a keyboard-accessible native collapse for signal management', () => {
+    expect(app).toContain('<details class="signal-management-actions"')
+    expect(app).toContain('<summary class="signal-management-summary">')
+    expect(app).toContain('data-signal-management-collapse')
+    expect(app).toContain('已完成')
+    expect(app).toContain('处理中')
+    expect(app).toContain('异常')
+    expect(app).toContain('仅建议')
+    expect(app).toContain('const _signalManagementCollapseState = new Map()')
+    expect(app).toContain('SIGNAL_MANAGEMENT_COLLAPSE_LIMIT = 64')
+    expect(app).toContain('document.addEventListener("toggle"')
+    expect(app).toContain('rememberSignalManagementCollapse(details.dataset.signalManagementCollapse, details.open)')
+    expect(app).not.toContain('<details class="signal-management-actions" open')
+    expect(styles).toContain('.signal-management-summary {')
+    expect(styles).toContain('min-height:44px')
+    expect(styles).toContain('.signal-management-summary:focus-visible')
+    expect(styles).toContain('.signal-management-actions[open] .signal-management-summary-chevron')
+    expect(styles).toContain('@media (prefers-reduced-motion: reduce)')
   })
 
   it('refreshes only affected signal management cards after task updates', () => {
