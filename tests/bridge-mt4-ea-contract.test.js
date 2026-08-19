@@ -12,7 +12,7 @@ function functionBlock(name, nextName) {
 describe('MT4 EA time contract', () => {
   it('normalizes broker quote time to UTC before publishing it', () => {
     const block = functionBlock('void SendQuoteResult', 'int ResolveTimeframe')
-    expect(source).toContain('#property version   "3.03"')
+    expect(source).toContain('#property version   "3.04"')
     expect(block).toContain('ServerTimeToUtcMsc(source_time, CurrentServerOffsetMsc())')
     expect(block).toContain('AppendInt32(response, CurrentServerOffsetMinutes())')
     expect(block).toContain('AppendUtf8(response, CurrentServerClockStatus())')
@@ -77,10 +77,10 @@ describe('MT4 EA reconnect contract', () => {
 })
 
 describe('MT4 EA extended data contract', () => {
-  it('advertises the compatible 3.0.3 adapter and handles every server data action', () => {
+  it('advertises the compatible 3.0.4 adapter and handles every server data action', () => {
     expect(source).toContain('#define BRIDGE_PROTOCOL_VERSION 3')
-    expect(source).toContain('#define ADAPTER_VERSION "3.0.3"')
-    expect(source).toContain('#property version   "3.03"')
+    expect(source).toContain('#define ADAPTER_VERSION "3.0.4"')
+    expect(source).toContain('#property version   "3.04"')
     expect(source).toContain('AppendInt32(hello, BRIDGE_PROTOCOL_VERSION)')
     expect(source).toContain('AppendUtf8(hello, ADAPTER_VERSION)')
     const block = functionBlock('void SendExtendedData', 'void SendExtendedDataResult')

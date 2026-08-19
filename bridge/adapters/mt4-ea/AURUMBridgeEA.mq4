@@ -1,9 +1,9 @@
 #property strict
-#property version   "3.03"
+#property version   "3.04"
 #property description "AURUM Bridge local MT4 adapter. No DLL or WebRequest required."
 
 #define BRIDGE_PROTOCOL_VERSION 3
-#define ADAPTER_VERSION "3.0.3"
+#define ADAPTER_VERSION "3.0.4"
 #define MAX_HISTORY_WINDOW_MSC 1576800000000
 #define QUERY_COMMENT_MAX_ROWS 500
 #define QUERY_COMMENT_LOOKBACK_MSC 2592000000

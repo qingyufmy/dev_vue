@@ -308,5 +308,3 @@ git diff --check
 - 保持 installer、bootstrap、源码部署和 current 激活为独立边界。
 
 剩余风险：本方案不更新完整安装器，所以在下一个 full-installer 批次之前，新安装用户仍可能先安装当前 installer 版本，再通过签名模块更新到 3.0.4。这不影响 3.0.3 存量客户端的自动更新，但应在发布报告中明确标记。
-
-
