@@ -174,6 +174,18 @@ async function applyDeals(run, message, userId) {
   }
 }
 
+async function clearTerminalReadModel(run, terminalInstanceId) {
+  for (const table of [
+    'bridge_v3_stream_revisions',
+    'bridge_v3_account_latest',
+    'bridge_v3_positions_latest',
+    'bridge_v3_orders_latest',
+    'bridge_v3_deals',
+  ]) {
+    await run(`DELETE FROM ${table} WHERE terminal_instance_id = ?`, [terminalInstanceId])
+  }
+}
+
 export async function registerBridgeTerminalSession({
   userId,
   sessionId,
@@ -220,28 +232,45 @@ export async function registerBridgeTerminalSession({
       [normalized.terminalInstanceId]
     )
     const existing = normalizeTerminalRow(rows?.[0])
-    const rebound = Boolean(existing && existing.user_id !== normalized.userId)
+    const sameUser = Boolean(existing && existing.user_id === normalized.userId)
+    const routeMatch = Boolean(existing
+      && String(existing.platform) === normalized.platform
+      && String(existing.broker_server).toLowerCase() === normalized.brokerServer.toLowerCase()
+      && String(existing.login_account) === normalized.login)
+    const routeChanged = Boolean(existing && !routeMatch)
+    const accountRebound = Boolean(existing && sameUser && routeChanged)
+    const ownerRebound = Boolean(existing && !sameUser)
+    const previousRoute = existing ? {
+      userId:existing.user_id,
+      platform:String(existing.platform || '').trim().toLowerCase(),
+      brokerServer:String(existing.broker_server || '').trim(),
+      login:String(existing.login_account || '').trim(),
+      connectionEpoch:Number(existing.connection_epoch),
+    } : null
     if (existing) {
-      const routeMatch = String(existing.platform) === normalized.platform
-        && String(existing.broker_server).toLowerCase() === normalized.brokerServer.toLowerCase()
-        && String(existing.login_account) === normalized.login
-      if (!routeMatch) throw readModelError('bridge_terminal_binding_mismatch')
-      if (rebound && existing.connected) {
-        throw readModelError('bridge_terminal_binding_mismatch')
-      }
-      if (!rebound && normalized.connectionEpoch < existing.connection_epoch) {
+      if (accountRebound) {
+        if (String(existing.platform) !== normalized.platform) {
+          throw readModelError('bridge_terminal_binding_mismatch')
+        }
+        if (normalized.connectionEpoch <= existing.connection_epoch) {
+          throw readModelError('bridge_connection_epoch_stale')
+        }
+      } else if (ownerRebound) {
+        // A different user may only reclaim a disconnected terminal while
+        // preserving its platform/account route. Their isolated profile may
+        // have an unrelated (and lower) epoch counter.
+        if (!routeMatch || existing.connected) {
+          throw readModelError('bridge_terminal_binding_mismatch')
+        }
+      } else if (normalized.connectionEpoch < existing.connection_epoch) {
         throw readModelError('bridge_connection_epoch_stale')
       }
     }
-    if (rebound) {
-      // Observer profiles keep an isolated SQLite store, so their local epoch
-      // counters are intentionally not comparable with the main profile. The
-      // disconnected route and account identity fence the transfer; discard
-      // server stream cursors so the new owner can establish a fresh snapshot
-      // even when its local epoch is numerically lower.
-      await run('DELETE FROM bridge_v3_stream_revisions WHERE terminal_instance_id = ?', [
-        normalized.terminalInstanceId,
-      ])
+    if (accountRebound || ownerRebound) {
+      // The terminal ID is installation-scoped rather than account-scoped, so
+      // every account-dependent V3 projection must be rebuilt for the new
+      // route before it can be read or used for trading.
+      await clearTerminalReadModel(run, normalized.terminalInstanceId)
     }
 
     await run(`INSERT INTO bridge_v3_terminal_sessions
@@ -250,7 +279,9 @@ export async function registerBridgeTerminalSession({
        update_state, update_started_at_utc_msc, update_reported_at_utc_msc, update_error_code,
        connected, last_seen_at_utc_msc)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-      ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), connection_epoch = VALUES(connection_epoch),
+      ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), platform = VALUES(platform),
+        broker_server = VALUES(broker_server), login_account = VALUES(login_account),
+        connection_epoch = VALUES(connection_epoch),
         session_id = VALUES(session_id),
         client_version = VALUES(client_version), bridge_version = VALUES(bridge_version),
         installation_id = VALUES(installation_id),
@@ -280,9 +311,13 @@ export async function registerBridgeTerminalSession({
       ])
     }
     return { ...normalized, connected:true, lastSeenAtUtcMsc:nowUtcMsc,
-      resumed:Boolean(existing && existing.user_id === normalized.userId
+      resumed:Boolean(existing && sameUser && routeMatch
         && normalized.connectionEpoch === existing.connection_epoch),
-      rebound }
+      rebound:ownerRebound,
+      accountRebound,
+      ownerRebound,
+      previousRoute,
+    }
   })
 }
 

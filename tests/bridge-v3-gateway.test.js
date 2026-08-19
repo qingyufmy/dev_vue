@@ -213,6 +213,7 @@ function setup(overrides = {}) {
     markUncertain:vi.fn().mockResolvedValue({ command:{ status:'uncertain' } }),
     recordResult:vi.fn().mockImplementation(message => Promise.resolve({ command:{ result:message } })),
     countOutstanding:vi.fn().mockResolvedValue(0),
+    onTerminalRouteInvalidated:vi.fn().mockResolvedValue(undefined),
     onDataDelta:vi.fn().mockResolvedValue(undefined),
     now:() => NOW,
     ...overrides,
@@ -762,6 +763,43 @@ describe('Bridge v3 websocket gateway', () => {
     newWs.emit('message', Buffer.from(JSON.stringify(reconnectDelta)))
     await flush()
     expect(dependencies.applyDelta).toHaveBeenCalledOnce()
+  })
+
+  it('invalidates a same-user account route before accepting its replacement connection', async () => {
+    const registerTerminal = vi.fn().mockResolvedValue({
+      connected:true,
+      accountRebound:true,
+      previousRoute:{
+        userId:42, platform:'mt5', brokerServer:'Broker-Demo', login:'12345678', connectionEpoch:7,
+      },
+    })
+    const onTerminalRouteInvalidated = vi.fn().mockResolvedValue(undefined)
+    const { gateway } = setup({ registerTerminal, onTerminalRouteInvalidated })
+    const ws = await connect(gateway)
+    const reboundHello = hello()
+    reboundHello.terminals[0] = {
+      ...reboundHello.terminals[0],
+      account_ref:{ broker_server:'Broker-Demo', login:'999' },
+      connection_epoch:8,
+    }
+
+    ws.emit('message', Buffer.from(JSON.stringify(reboundHello)))
+    await flush()
+
+    expect(onTerminalRouteInvalidated).toHaveBeenCalledWith({
+      userId:42,
+      terminal:expect.objectContaining({
+        terminal_instance_id:'terminal_01JGATEWAY1',
+        account_ref:{ broker_server:'Broker-Demo', login:'999' },
+        connection_epoch:8,
+      }),
+      previousRoute:expect.objectContaining({ login:'12345678', connectionEpoch:7 }),
+    })
+    expect(gateway.listConnectedTerminals(42)[0]).toMatchObject({
+      account_ref:{ broker_server:'Broker-Demo', login:'999' },
+      initial_sync_ready:false,
+    })
+    expect(JSON.parse(ws.send.mock.calls.at(-1)[0])).toMatchObject({ type:'hello_ack' })
   })
 
   it('rejects missing tickets without registering a terminal', async () => {

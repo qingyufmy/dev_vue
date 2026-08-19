@@ -114,6 +114,7 @@ export function createBridgeV3Gateway({
   markUncertain = markCommandDeliveryUncertain,
   recordResult = recordCommandResult,
   countOutstanding = countOutstandingCommands,
+  onTerminalRouteInvalidated = async () => {},
   onTerminalReady = async () => {},
   onTerminalDisconnected = async () => {},
   onDataDelta = async () => {},
@@ -394,6 +395,7 @@ export function createBridgeV3Gateway({
     if (connection.ready) throw Object.assign(new Error('bridge_hello_duplicate'), { code:'bridge_hello_duplicate' })
 
     const accepted = []
+    const registrations = []
     connection.sessionId = message.session_id
     try {
       for (const terminal of message.terminals) {
@@ -403,7 +405,7 @@ export function createBridgeV3Gateway({
               !== connection.observerAccountRef.broker_server.trim().toLowerCase())) {
           throw gatewayError('observer_source_account_mismatch')
         }
-        await registerTerminal({
+        const registration = await registerTerminal({
           userId:connection.userId,
           sessionId:message.session_id,
           terminalInstanceId:terminal.terminal_instance_id,
@@ -420,6 +422,15 @@ export function createBridgeV3Gateway({
         connection.terminals.set(terminal.terminal_instance_id, terminal)
         connection.initialSnapshotStreams.set(terminal.terminal_instance_id, new Set())
         accepted.push(terminal.terminal_instance_id)
+        registrations.push({ terminal, registration })
+      }
+      for (const { terminal, registration } of registrations) {
+        if (registration?.accountRebound !== true) continue
+        await onTerminalRouteInvalidated({
+          userId:connection.userId,
+          terminal:{ ...terminal },
+          previousRoute:registration.previousRoute || null,
+        })
       }
     } catch (error) {
       await disconnectTerminals(message.session_id, connection.userId, { nowUtcMsc:now() }).catch(() => {})

@@ -262,7 +262,12 @@ async function preparePlatformHistoryOnTerminalReady(userId, route, accountId) {
   try {
     return await task
   } finally {
-    historyPlatformPrepareJobs.delete(key)
+    // A route invalidation may remove this flight and let the replacement
+    // account start another task under the same terminal key. The superseded
+    // task must not delete that newer flight when it eventually settles.
+    if (historyPlatformPrepareJobs.get(key) === task) {
+      historyPlatformPrepareJobs.delete(key)
+    }
   }
 }
 
@@ -360,7 +365,7 @@ async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectio
   }
 }
 
-async function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
+function invalidateBridgeV3TerminalRoute({ userId, terminal }) {
   const bindings = bridgeV3TradingAccounts.get(Number(userId))
   bindings?.delete(terminal.terminal_instance_id)
   if (bindings?.size === 0) bridgeV3TradingAccounts.delete(Number(userId))
@@ -368,10 +373,26 @@ async function forgetBridgeV3TerminalIdentity({ userId, terminal }) {
   marketStates?.delete(terminal.terminal_instance_id)
   if (marketStates?.size === 0) bridgeV3MarketStates.delete(Number(userId))
   if (bridgeV3PreferredTerminals.get(Number(userId)) === terminal.terminal_instance_id) {
-    const replacement = (bridgeV3Business?.connectedTerminals(Number(userId)) || [])
+    bridgeV3PreferredTerminals.delete(Number(userId))
+  }
+  const historySuffix = `:${String(terminal.terminal_instance_id || '')}`
+  for (const key of historyPlatformPrepareJobs.keys()) {
+    if (key.endsWith(historySuffix)) historyPlatformPrepareJobs.delete(key)
+  }
+}
+
+async function forgetBridgeV3TerminalIdentity({ userId, terminal, connectionGeneration }) {
+  const replacement = (bridgeV3Business?.connectedTerminals(Number(userId)) || [])
+    .find(route => route.terminal_instance_id === terminal.terminal_instance_id)
+  if (replacement
+    && Number(replacement.connection_generation) !== Number(connectionGeneration)) {
+    return
+  }
+  invalidateBridgeV3TerminalRoute({ userId, terminal })
+  if (bridgeV3PreferredTerminals.get(Number(userId)) == null) {
+    const preferred = (bridgeV3Business?.connectedTerminals(Number(userId)) || [])
       .find(route => route.terminal_instance_id !== terminal.terminal_instance_id)
-    if (replacement) bridgeV3PreferredTerminals.set(Number(userId), replacement.terminal_instance_id)
-    else bridgeV3PreferredTerminals.delete(Number(userId))
+    if (preferred) bridgeV3PreferredTerminals.set(Number(userId), preferred.terminal_instance_id)
   }
   broadcastAdminEvent('bridge', 'disconnected', {
     user_id:Number(userId),
@@ -819,6 +840,7 @@ export function initBridgeWS(server) {
   refreshDefaultObserverClock().catch(() => {})
   wss = new WebSocketServer({ noServer: true, maxPayload: BRIDGE_WS_LIMITS.maxPayloadBytes })
   const v3Gateway = createBridgeV3Gateway({
+    onTerminalRouteInvalidated:invalidateBridgeV3TerminalRoute,
     onTerminalReady:synchronizeBridgeV3TerminalIdentity,
     onTerminalDisconnected:forgetBridgeV3TerminalIdentity,
     onDataDelta:notifyBridgeV3DataChanged,

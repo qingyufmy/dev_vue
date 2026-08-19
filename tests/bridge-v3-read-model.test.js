@@ -84,7 +84,7 @@ describe('Bridge v3 incremental read model', () => {
     expect(run.mock.calls.some(([sql]) => sql.includes('INSERT IGNORE INTO bridge_update_events'))).toBe(true)
   })
 
-  it('rejects stale epochs and account rebinding hidden inside a reconnect', async () => {
+  it('rejects stale epochs and accepts a fenced same-user account rebind', async () => {
     const stale = transactionFor({ terminal:terminalRow({ connection_epoch:8 }) })
     await expect(registerBridgeTerminalSession({
       userId:42, sessionId:'session_01JREADMODEL02', terminalInstanceId:'terminal_01JREADMODEL1',
@@ -92,10 +92,50 @@ describe('Bridge v3 incremental read model', () => {
     }, { transactionFn:stale.transactionFn })).rejects.toMatchObject({ code:'bridge_connection_epoch_stale' })
 
     const rebound = transactionFor()
-    await expect(registerBridgeTerminalSession({
+    const result = await registerBridgeTerminalSession({
       userId:42, sessionId:'session_01JREADMODEL02', terminalInstanceId:'terminal_01JREADMODEL1',
       platform:'mt5', brokerServer:'Broker-Demo', login:'999', connectionEpoch:8,
-    }, { transactionFn:rebound.transactionFn })).rejects.toMatchObject({ code:'bridge_terminal_binding_mismatch' })
+    }, { transactionFn:rebound.transactionFn })
+    expect(result).toMatchObject({
+      accountRebound:true, ownerRebound:false, rebound:false, resumed:false,
+      previousRoute:expect.objectContaining({ login:'12345678', connectionEpoch:7 }),
+    })
+    const sql = rebound.run.mock.calls.map(([value]) => value)
+    for (const table of [
+      'bridge_v3_stream_revisions', 'bridge_v3_account_latest', 'bridge_v3_positions_latest',
+      'bridge_v3_orders_latest', 'bridge_v3_deals',
+    ]) {
+      expect(sql.some(value => value.includes(`DELETE FROM ${table}`))).toBe(true)
+    }
+    expect(sql.find(value => value.includes('INSERT INTO bridge_v3_terminal_sessions')))
+      .toContain('broker_server = VALUES(broker_server)')
+  })
+
+  it('rejects account changes without a strictly newer epoch and rejects platform changes', async () => {
+    const sameEpoch = transactionFor()
+    await expect(registerBridgeTerminalSession({
+      userId:42, sessionId:'session_01JREADMODEL02', terminalInstanceId:'terminal_01JREADMODEL1',
+      platform:'mt5', brokerServer:'Broker-Demo', login:'999', connectionEpoch:7,
+    }, { transactionFn:sameEpoch.transactionFn })).rejects.toMatchObject({ code:'bridge_connection_epoch_stale' })
+
+    const changedPlatform = transactionFor()
+    await expect(registerBridgeTerminalSession({
+      userId:42, sessionId:'session_01JREADMODEL02', terminalInstanceId:'terminal_01JREADMODEL1',
+      platform:'mt4', brokerServer:'Broker-Demo', login:'12345678', connectionEpoch:8,
+    }, { transactionFn:changedPlatform.transactionFn }))
+      .rejects.toMatchObject({ code:'bridge_terminal_binding_mismatch' })
+  })
+
+  it('accepts a same-user broker-server change only with a newer epoch', async () => {
+    const rebound = transactionFor()
+    await expect(registerBridgeTerminalSession({
+      userId:42, sessionId:'session_01JREADMODEL02', terminalInstanceId:'terminal_01JREADMODEL1',
+      platform:'mt5', brokerServer:'Broker-Live', login:'12345678', connectionEpoch:8,
+    }, { transactionFn:rebound.transactionFn })).resolves.toMatchObject({
+      accountRebound:true,
+      brokerServer:'Broker-Live',
+      previousRoute:expect.objectContaining({ brokerServer:'Broker-Demo' }),
+    })
   })
 
   it('resumes the same terminal epoch under a new websocket session', async () => {
@@ -140,11 +180,16 @@ describe('Bridge v3 incremental read model', () => {
       connected:true,
       resumed:false,
       rebound:true,
+      ownerRebound:true,
+      accountRebound:false,
       userId:42,
     })
-    expect(rebound.run.mock.calls.some(([sql]) => sql.includes(
-      'DELETE FROM bridge_v3_stream_revisions WHERE terminal_instance_id = ?'
-    ))).toBe(true)
+    for (const table of [
+      'bridge_v3_stream_revisions', 'bridge_v3_account_latest', 'bridge_v3_positions_latest',
+      'bridge_v3_orders_latest', 'bridge_v3_deals',
+    ]) {
+      expect(rebound.run.mock.calls.some(([sql]) => sql.includes(`DELETE FROM ${table}`))).toBe(true)
+    }
     expect(rebound.run.mock.calls.some(([sql]) => sql.includes('user_id = VALUES(user_id)'))).toBe(true)
   })
 
@@ -154,6 +199,13 @@ describe('Bridge v3 incremental read model', () => {
       userId:42, sessionId:'session_01JREADMODEL04', terminalInstanceId:'terminal_01JREADMODEL1',
       platform:'mt5', brokerServer:'Broker-Demo', login:'12345678', connectionEpoch:9,
     }, { transactionFn:active.transactionFn })).rejects.toMatchObject({ code:'bridge_terminal_binding_mismatch' })
+
+    const crossUserRouteChange = transactionFor({ terminal:terminalRow({ user_id:29, connected:0 }) })
+    await expect(registerBridgeTerminalSession({
+      userId:42, sessionId:'session_01JREADMODEL04', terminalInstanceId:'terminal_01JREADMODEL1',
+      platform:'mt5', brokerServer:'Broker-Demo', login:'999', connectionEpoch:9,
+    }, { transactionFn:crossUserRouteChange.transactionFn }))
+      .rejects.toMatchObject({ code:'bridge_terminal_binding_mismatch' })
 
     const stale = transactionFor({ terminal:terminalRow({ user_id:42, connection_epoch:8, connected:0 }) })
     await expect(registerBridgeTerminalSession({
