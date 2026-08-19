@@ -1,6 +1,11 @@
 import crypto from 'node:crypto'
 import { queryAll, queryOne, queryRun, withTransaction } from '../../db.js'
 
+// ai_model_tasks.idempotency_key is VARCHAR(191) characters. Period-review callers have
+// a canonical shortening layer, but generic callers must fail fast rather
+// than silently changing a key they may not be able to reconstruct.
+export const MODEL_TASK_IDEMPOTENCY_KEY_MAX_CHARS = 191
+
 export const MODEL_TASK_TERMINAL_STATES = new Set([
   'cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected',
 ])
@@ -109,6 +114,14 @@ function modelTaskCreateFailure(reason, cause = null) {
   return error
 }
 
+export function assertModelTaskIdempotencyKeyLength(idempotencyKey) {
+  if (idempotencyKey == null) return true
+  if (Array.from(String(idempotencyKey)).length <= MODEL_TASK_IDEMPOTENCY_KEY_MAX_CHARS) return true
+  const error = new Error('model_task_idempotency_key_too_long')
+  error.code = 'model_task_idempotency_key_too_long'
+  throw error
+}
+
 function rowsFromRunnerResult(result) {
   if (Array.isArray(result?.[0])) return result[0]
   return Array.isArray(result) ? result : []
@@ -159,6 +172,7 @@ async function createModelTaskWithRunner(input, run) {
 }
 
 export async function createModelTask(input, run = null) {
+  assertModelTaskIdempotencyKeyLength(input?.idempotencyKey)
   if (typeof run === 'function') return createModelTaskWithRunner(input, run)
   return withTransaction(transactionRun => createModelTaskWithRunner(input, transactionRun))
 }

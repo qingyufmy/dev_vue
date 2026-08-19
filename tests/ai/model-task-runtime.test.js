@@ -13,6 +13,7 @@ vi.mock('../../server/db.js', () => ({
 
 import { assertModelTaskIdempotencyEnvelope, assertModelTaskTransition, canTransitionModelTask, createModelTask,
   finishModelTaskAttempt, markModelTaskCompletedStaleById, markModelTaskSucceededFromResult,
+  MODEL_TASK_IDEMPOTENCY_KEY_MAX_CHARS,
   persistModelTaskBudget,
   reconcileModelTaskResultInTransaction, recoverAbandonedAutoInferenceTasks, recoverAbandonedBusinessModelTasks, renewModelTaskLease,
   succeedModelTaskInTransaction, touchModelTaskActivity, transitionModelTask } from '../../server/routes/ai/model-task-runtime.js'
@@ -68,6 +69,29 @@ describe('model task runtime state and fencing', () => {
     expect(run.mock.calls.map(([sql]) => sql)).toEqual(expect.arrayContaining([
       expect.stringContaining('INSERT INTO ai_model_tasks'), expect.stringContaining('INSERT INTO ai_model_task_events'),
     ]))
+  })
+
+  it('fails fast for an oversized generic idempotency key without exposing the key', async () => {
+    const run = vi.fn()
+    const oversized = 'k'.repeat(MODEL_TASK_IDEMPOTENCY_KEY_MAX_CHARS + 1)
+    await expect(createModelTask({ taskKind:'daily_review', idempotencyKey:oversized }, run))
+      .rejects.toMatchObject({ code:'model_task_idempotency_key_too_long' })
+    await expect(createModelTask({ taskKind:'daily_review', idempotencyKey:oversized }, run))
+      .rejects.not.toThrow(oversized)
+    expect(run).not.toHaveBeenCalled()
+    expect(mockWithTransaction).not.toHaveBeenCalled()
+  })
+
+  it('accepts exactly 191 characters, including non-ASCII characters', async () => {
+    const task = { task_id:'task-191', task_kind:'daily_review', status:'queued' }
+    const key = '中'.repeat(MODEL_TASK_IDEMPOTENCY_KEY_MAX_CHARS)
+    const run = vi.fn()
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+      .mockResolvedValueOnce([[task], []])
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+    await expect(createModelTask({ taskId:'task-191', taskKind:'daily_review', idempotencyKey:key }, run))
+      .resolves.toEqual({ task, created:true })
+    expect(run.mock.calls[0][1]).toContain(key)
   })
 
   it('reconciles a concurrent duplicate insert on the same transaction runner', async () => {

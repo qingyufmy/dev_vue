@@ -20,6 +20,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   __testFinishDailyReviewSuccess, __testFinishDailyReviewFailure, __testRecoverDailyQuotaFailure,
   periodReviewConflictSnapshotsRequired, deterministicReviewMemoryMarkdown,
   __testDeriveDailyReviewMemoryEntries, __testDeriveDailyReviewConflictExperiences,
+  buildPeriodReviewModelTaskRawKey, periodReviewModelTaskIdempotencyKey, __testDailyReviewTaskIdentity,
+  __testLoadDailyReviewCheckpoint,
   DAILY_PERIOD_REVIEW_V3_CONTRACT, PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION,
   PERIOD_REVIEW_FRONTEND_BUILD, PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS,
   periodReviewFrontendMetadata, periodReviewFrontendContractMismatch,
@@ -28,6 +30,7 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   periodReviewPreProviderRetryDelayMs, periodReviewPreProviderRetryAt } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
   __testGetReviewStrategyMemorySnapshot } from '../../server/routes/ai/period-review.js'
+import { createModelTask } from '../../server/routes/ai/model-task-runtime.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
 
 describe('period review lease heartbeat', () => {
@@ -49,6 +52,113 @@ describe('period review lease heartbeat', () => {
     expect(heartbeat.signal.aborted).toBe(false)
     expect(() => heartbeat.assertOwned()).not.toThrow()
     await heartbeat.stop()
+  })
+})
+
+describe('period-review model-task idempotency identities', () => {
+  const job = { id:22, idempotency_key:'daily:22:evidence' }
+
+  it('keeps existing short identities unchanged and honors the 191-character boundary', () => {
+    const suffix = 'daily_review_chunk:0:plan-hash'
+    const shortRaw = buildPeriodReviewModelTaskRawKey({ jobId:job.id, jobIdempotencyKey:job.idempotency_key,
+      taskKeySuffix:suffix })
+    expect(periodReviewModelTaskIdempotencyKey({ jobId:job.id, jobIdempotencyKey:job.idempotency_key,
+      modelTaskKind:'daily_review_chunk', taskKeySuffix:suffix })).toBe(shortRaw)
+
+    const emptyPrefix = buildPeriodReviewModelTaskRawKey({ jobId:job.id, jobIdempotencyKey:'', modelTaskKind:'daily_review_merge' })
+    const boundaryJobKey = 'b'.repeat(191 - emptyPrefix.length)
+    const boundaryRaw = buildPeriodReviewModelTaskRawKey({ jobId:job.id, jobIdempotencyKey:boundaryJobKey })
+    expect(Array.from(boundaryRaw)).toHaveLength(191)
+    expect(periodReviewModelTaskIdempotencyKey({ jobId:job.id, jobIdempotencyKey:boundaryJobKey,
+      modelTaskKind:'daily_review_merge' })).toBe(boundaryRaw)
+
+    const oversizedJobKey = `${boundaryJobKey}b`
+    const oversizedRaw = buildPeriodReviewModelTaskRawKey({ jobId:job.id, jobIdempotencyKey:oversizedJobKey })
+    expect(Array.from(oversizedRaw)).toHaveLength(192)
+    expect(periodReviewModelTaskIdempotencyKey({ jobId:job.id, jobIdempotencyKey:oversizedJobKey,
+      modelTaskKind:'daily_review_merge' })).not.toBe(oversizedRaw)
+  })
+
+  it('shortens long case 22 keys deterministically to an ASCII identity containing the raw hash', () => {
+    const rawKey = 'e'.repeat(260)
+    const raw = buildPeriodReviewModelTaskRawKey({ jobId:22, jobIdempotencyKey:rawKey })
+    const identity = periodReviewModelTaskIdempotencyKey({ jobId:22, jobIdempotencyKey:rawKey,
+      modelTaskKind:'daily_review_merge' })
+    const hash = crypto.createHash('sha256').update(raw, 'utf8').digest('hex')
+    expect(identity).toContain('period_review:22:daily_review_merge:sha256:')
+    expect(identity).toContain(hash)
+    expect(identity).toMatch(/^[\x00-\x7F]+$/)
+    expect(Array.from(identity).length).toBeLessThanOrEqual(191)
+    expect(identity).toBe(periodReviewModelTaskIdempotencyKey({ jobId:22, jobIdempotencyKey:rawKey,
+      modelTaskKind:'daily_review_merge' }))
+  })
+
+  it('normalizes monthly chunk retry keys without changing short historical keys', () => {
+    const shortHistoricalKey = 'monthly_review_chunk:22:evidence:0:source:expected:1'
+    expect(periodReviewModelTaskIdempotencyKey({ rawKey:shortHistoricalKey, jobId:22,
+      modelTaskKind:'monthly_review_chunk' })).toBe(shortHistoricalKey)
+    const longHistoricalKey = [
+      'monthly_review_chunk', 22, 'e'.repeat(64), 0, 's'.repeat(64), 'i'.repeat(64), 1,
+    ].join(':')
+    const normalized = periodReviewModelTaskIdempotencyKey({ rawKey:longHistoricalKey, jobId:22,
+      modelTaskKind:'monthly_review_chunk' })
+    expect(Array.from(longHistoricalKey).length).toBeGreaterThan(191)
+    expect(normalized).toContain('period_review:22:monthly_review_chunk:sha256:')
+    expect(Array.from(normalized).length).toBeLessThanOrEqual(191)
+    expect(normalized).toBe(periodReviewModelTaskIdempotencyKey({ rawKey:longHistoricalKey, jobId:22,
+      modelTaskKind:'monthly_review_chunk' }))
+  })
+
+  it('allows the generated long case 22 identity through model-task creation', async () => {
+    const idempotencyKey = periodReviewModelTaskIdempotencyKey({ jobId:22, jobIdempotencyKey:'q'.repeat(260),
+      modelTaskKind:'daily_review_merge' })
+    const task = { task_id:'case-22-merge-task', task_kind:'daily_review_merge', status:'queued' }
+    const run = vi.fn()
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+      .mockResolvedValueOnce([[task], []])
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+    await expect(createModelTask({ taskId:task.task_id, taskKind:task.task_kind, idempotencyKey }, run))
+      .resolves.toEqual({ task, created:true })
+    expect(run.mock.calls[0][1]).toContain(idempotencyKey)
+    expect(Array.from(idempotencyKey).length).toBeLessThanOrEqual(191)
+  })
+
+  it('separates long identities by raw key, job id, and model task kind', () => {
+    const common = { jobIdempotencyKey:'x'.repeat(260) }
+    const identities = [
+      periodReviewModelTaskIdempotencyKey({ ...common, jobId:22, modelTaskKind:'daily_review_merge' }),
+      periodReviewModelTaskIdempotencyKey({ ...common, jobId:23, modelTaskKind:'daily_review_merge' }),
+      periodReviewModelTaskIdempotencyKey({ ...common, jobId:22, modelTaskKind:'monthly_review_merge' }),
+      periodReviewModelTaskIdempotencyKey({ ...common, jobId:22, modelTaskKind:'daily_review_merge', taskKeySuffix:'retry' }),
+    ]
+    expect(new Set(identities).size).toBe(identities.length)
+  })
+
+  it('uses the same generator for daily chunk/merge checkpoints and no-suffix daily/monthly merges', async () => {
+    const longJob = { id:22, idempotency_key:'z'.repeat(260) }
+    for (const [role, planHash, chunkIndex] of [['chunk', 'plan-a', 0], ['merge', 'plan-a', null]]) {
+      const identity = __testDailyReviewTaskIdentity(longJob, role, planHash, chunkIndex)
+      expect(identity.idempotencyKey).toBe(periodReviewModelTaskIdempotencyKey({
+        jobId:longJob.id, jobIdempotencyKey:longJob.idempotency_key,
+        modelTaskKind:identity.taskKind, taskKeySuffix:identity.taskKeySuffix,
+      }))
+      periodReviewDb.queryOne.mockReset().mockResolvedValueOnce(null)
+      await expect(__testLoadDailyReviewCheckpoint({ ...identity, idempotencyKey:'stale-key' }, planHash, chunkIndex))
+        .resolves.toBeNull()
+      expect(periodReviewDb.queryOne.mock.calls[0][1]).toEqual([identity.taskKind, identity.idempotencyKey])
+    }
+    const dailyMerge = periodReviewModelTaskIdempotencyKey({ jobId:longJob.id,
+      jobIdempotencyKey:longJob.idempotency_key, modelTaskKind:'daily_review' })
+    const monthlyMerge = periodReviewModelTaskIdempotencyKey({ jobId:longJob.id,
+      jobIdempotencyKey:longJob.idempotency_key, modelTaskKind:'monthly_review_merge' })
+    expect(dailyMerge).toContain(':daily_review:sha256:')
+    expect(monthlyMerge).toContain(':monthly_review_merge:sha256:')
+    expect(dailyMerge).not.toBe(monthlyMerge)
+  })
+
+  it('preserves the existing short checkpoint identity', () => {
+    const identity = __testDailyReviewTaskIdentity(job, 'merge', 'plan-short')
+    expect(identity.idempotencyKey).toBe('period_review:22:daily:22:evidence:daily_review_merge:plan-short')
   })
 })
 

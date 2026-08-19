@@ -66,6 +66,47 @@ const PERIOD_REVIEW_PRE_PROVIDER_RETRY_STAGE = 'pre_provider_retry_wait'
 const PERIOD_REVIEW_PRE_PROVIDER_RETRY_CODES = new Set([
   'model_task_create_failed', 'model_task_link_failed', 'model_task_transaction_runner_missing',
 ])
+
+// ai_model_tasks.idempotency_key is VARCHAR(191) characters. Keep the historical
+// period-review key character-for-character when it fits; only oversized task keys are
+// replaced with a deterministic ASCII identity that still exposes the task
+// namespace, job id, task kind, and the SHA-256 of the historical key.
+export const PERIOD_REVIEW_MODEL_TASK_KEY_MAX_CHARS = 191
+const PERIOD_REVIEW_MODEL_TASK_KEY_NAMESPACE = 'period_review'
+
+function periodReviewAsciiKeyPart(value, fallback) {
+  const normalized = String(value ?? '').replace(/[^A-Za-z0-9_.-]/g, '_')
+  return (normalized || fallback).slice(0, 48)
+}
+
+export function buildPeriodReviewModelTaskRawKey({
+  jobId, jobIdempotencyKey, taskKeySuffix = '',
+} = {}) {
+  const suffix = String(taskKeySuffix || '').trim()
+  return `${PERIOD_REVIEW_MODEL_TASK_KEY_NAMESPACE}:${String(jobId)}:${String(jobIdempotencyKey)}${suffix ? `:${suffix}` : ''}`
+}
+
+export function periodReviewModelTaskIdempotencyKey({
+  rawKey = null, jobId, jobIdempotencyKey, modelTaskKind, taskKeySuffix = '',
+} = {}) {
+  const historicalKey = rawKey == null
+    ? buildPeriodReviewModelTaskRawKey({ jobId, jobIdempotencyKey, taskKeySuffix })
+    : String(rawKey)
+  if (Array.from(historicalKey).length <= PERIOD_REVIEW_MODEL_TASK_KEY_MAX_CHARS) return historicalKey
+  const safeJobId = periodReviewAsciiKeyPart(jobId, 'unknown_job')
+  const safeTaskKind = periodReviewAsciiKeyPart(modelTaskKind, 'unknown_task')
+  const compactKey = `${PERIOD_REVIEW_MODEL_TASK_KEY_NAMESPACE}:${safeJobId}:${safeTaskKind}:sha256:${sha256(historicalKey)}`
+  // The fixed 48-character component bounds above keep this below 191 characters;
+  // retain an assertion so a future format change cannot reintroduce the
+  // database error silently.
+  if (Array.from(compactKey).length > PERIOD_REVIEW_MODEL_TASK_KEY_MAX_CHARS) {
+    const error = new Error('period_review_model_task_key_generation_failed')
+    error.code = 'period_review_model_task_key_generation_failed'
+    throw error
+  }
+  return compactKey
+}
+
 const DAILY_EVIDENCE_RETRY_DISABLED_ERROR = 'review_generation_disabled'
 const DAILY_EVIDENCE_RETRY_TERMINAL_STATES = new Set(['leased', 'status_unknown', 'succeeded', 'failed'])
 const DAILY_EVIDENCE_RETRY_MARKET_REASONS = new Set([
@@ -2960,7 +3001,9 @@ async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, tas
 } = {}) {
   const modelTaskKind = String(taskExtras.model_task_kind || taskKind)
   const taskKeySuffix = String(taskExtras.task_key_suffix || '').trim()
-  const idempotencyKey = `period_review:${job.id}:${job.idempotency_key}${taskKeySuffix ? `:${taskKeySuffix}` : ''}`
+  const idempotencyKey = periodReviewModelTaskIdempotencyKey({
+    jobId:job.id, jobIdempotencyKey:job.idempotency_key, modelTaskKind, taskKeySuffix,
+  })
   const tracker = await createModelTaskTracker({
     taskKind:modelTaskKind,
     queueClass:'background',
@@ -3120,11 +3163,14 @@ async function startMonthlyReviewChunkModelTask(job, resolved, endpoint, checkpo
     sources:chunk.sources || [],
   }
   const attemptNo = Math.max(1, Number(checkpoint.attempt_count || 1))
-  const retryIdempotencyKey = [
+  const retryRawKey = [
     'monthly_review_chunk', Number(job.id), String(chunkEvidence.evidence_hash || job.evidence_hash || ''),
     Number(chunkEvidence.chunk_index), String(chunkEvidence.source_hash || ''),
     String(chunk.expected_ids_hash || chunk.expectedIdHash || ''), attemptNo,
   ].join(':')
+  const retryIdempotencyKey = periodReviewModelTaskIdempotencyKey({
+    rawKey:retryRawKey, jobId:job.id, modelTaskKind:'monthly_review_chunk',
+  })
   // A worker can die after creating the authoritative task but before the
   // provider request starts. Reuse that queued task by its durable key; only
   // an explicit retry/failed checkpoint gets a fresh attempt key.
@@ -3536,16 +3582,27 @@ function dailyReviewTaskIdentity(job, role, planHash, chunkIndex = null) {
   const suffix = normalizedRole === 'chunk'
     ? `daily_review_chunk:${Number(chunkIndex)}:${String(planHash || '')}`
     : `daily_review_merge:${String(planHash || '')}`
+  const taskKind = normalizedRole === 'chunk' ? 'daily_review_chunk' : 'daily_review_merge'
   return {
-    taskKind:normalizedRole === 'chunk' ? 'daily_review_chunk' : 'daily_review_merge',
-    idempotencyKey:`period_review:${job.id}:${job.idempotency_key}:${suffix}`,
+    taskKind,
+    jobId:job.id,
+    jobIdempotencyKey:job.idempotency_key,
+    idempotencyKey:periodReviewModelTaskIdempotencyKey({
+      jobId:job.id, jobIdempotencyKey:job.idempotency_key, modelTaskKind:taskKind, taskKeySuffix:suffix,
+    }),
     taskKeySuffix:suffix,
   }
 }
 
 async function loadDailyReviewCheckpoint(taskIdentity, expectedPlanHash, expectedChunkIndex = null) {
+  const idempotencyKey = taskIdentity?.jobId != null && Object.prototype.hasOwnProperty.call(taskIdentity, 'jobIdempotencyKey')
+    ? periodReviewModelTaskIdempotencyKey({
+      jobId:taskIdentity.jobId, jobIdempotencyKey:taskIdentity.jobIdempotencyKey,
+      modelTaskKind:taskIdentity.taskKind, taskKeySuffix:taskIdentity.taskKeySuffix,
+    })
+    : taskIdentity?.idempotencyKey
   const task = await queryOne('SELECT task_id, status, result_hash FROM ai_model_tasks WHERE task_kind = ? AND idempotency_key = ? LIMIT 1',
-    [taskIdentity.taskKind, taskIdentity.idempotencyKey])
+    [taskIdentity.taskKind, idempotencyKey])
   if (!task || String(task.status) !== 'succeeded') return null
   const event = await queryOne(`SELECT payload_json FROM ai_model_task_events
     WHERE task_id = ? AND event_type = 'daily_review_checkpoint' ORDER BY id DESC LIMIT 1`, [task.task_id])
@@ -5556,3 +5613,5 @@ export const __testFinishDailyReviewFailure = finishDailyReviewFailure
 export const __testRecoverDailyQuotaFailure = recoverDailyQuotaFailure
 export const __testFinishMonthlyReviewSuccess = finishMonthlyReviewSuccess
 export const __testFinishMonthlyReviewFailure = finishMonthlyReviewFailure
+export const __testDailyReviewTaskIdentity = dailyReviewTaskIdentity
+export const __testLoadDailyReviewCheckpoint = loadDailyReviewCheckpoint
