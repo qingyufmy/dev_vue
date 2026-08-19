@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 const db = vi.hoisted(() => ({
   beijingNow:vi.fn(() => '2026-08-19 12:00:00'),
   queryRun:vi.fn(),
+  withTransaction:vi.fn(),
 }))
 
 vi.mock('../../server/db.js', () => db)
@@ -50,24 +51,31 @@ describe('period review evidence wake', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     resetPeriodReviewEvidenceWakeState()
-    db.queryRun.mockResolvedValue({ affectedRows:2 })
   })
 
   it('only advances queued evidence jobs and debounces repeated candle events', async () => {
     const requestCycle = vi.fn()
+    const run = vi.fn()
+      .mockResolvedValueOnce([[{ id:11 }, { id:12 }], []])
+      .mockResolvedValueOnce([{ affectedRows:2 }, []])
+    db.withTransaction.mockImplementationOnce(callback => callback(run))
     const first = await wakePeriodReviewEvidenceWaiters({ sourceId:7, standardSymbol:'XAUUSD', timeframe:'M5',
       requestCycle, nowUtcMs:100_000 })
     const second = await wakePeriodReviewEvidenceWaiters({ sourceId:8, standardSymbol:'XAUUSD', timeframe:'H1',
       requestCycle, nowUtcMs:110_000 })
     expect(first).toMatchObject({ woken:2, standardSymbol:'XAUUSD', timeframe:'M5' })
     expect(second).toMatchObject({ woken:0, skipped:'debounced' })
-    expect(db.queryRun).toHaveBeenCalledTimes(1)
-    expect(db.queryRun.mock.calls[0][0]).toContain("jobs.status = 'queued'")
-    expect(db.queryRun.mock.calls[0][0]).toContain("jobs.last_error_code = 'period_market_incomplete'")
-    expect(db.queryRun.mock.calls[0][0]).toContain('cases.evidence_status <>')
-    expect(db.queryRun.mock.calls[0][0]).toContain('JSON_EXTRACT')
-    expect(db.queryRun.mock.calls[0][1]).toContain('XAUUSD')
-    expect(db.queryRun.mock.calls[0][1]).toContain('M5')
+    expect(db.withTransaction).toHaveBeenCalledTimes(1)
+    expect(run.mock.calls[0][0]).toContain("jobs.status = 'queued'")
+    expect(run.mock.calls[0][0]).toContain("jobs.last_error_code = 'period_market_incomplete'")
+    expect(run.mock.calls[0][0]).toContain('cases.evidence_status <>')
+    expect(run.mock.calls[0][0]).toContain('JSON_EXTRACT')
+    expect(run.mock.calls[0][0]).toContain('ORDER BY jobs.next_attempt_at ASC, jobs.id ASC LIMIT ? FOR UPDATE')
+    expect(run.mock.calls[1][0]).toContain('UPDATE period_review_jobs jobs')
+    expect(run.mock.calls[1][0]).not.toContain('ORDER BY')
+    expect(run.mock.calls[1][0]).not.toContain('LIMIT')
+    expect(run.mock.calls[0][1]).toContain('XAUUSD')
+    expect(run.mock.calls[0][1]).toContain('M5')
     expect(requestCycle).toHaveBeenCalledTimes(1)
   })
 

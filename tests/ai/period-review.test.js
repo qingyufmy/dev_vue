@@ -24,7 +24,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   PERIOD_REVIEW_FRONTEND_BUILD, PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS,
   periodReviewFrontendMetadata, periodReviewFrontendContractMismatch,
   buildDailyReviewChunkPlan, compactDailyReviewPeriodMarket,
-  dailyReviewRecoveryRuntimeOptions, periodReviewModelInputBudget, selectWholePolicyUpgradeCaseIds } from '../../server/routes/ai/period-review.js'
+  dailyReviewRecoveryRuntimeOptions, periodReviewModelInputBudget, selectWholePolicyUpgradeCaseIds,
+  periodReviewPreProviderRetryDelayMs, periodReviewPreProviderRetryAt } from '../../server/routes/ai/period-review.js'
 import { buildPeriodReviewModelTaskFrozenContext, __testEnsurePeriodReviewStrategyMemoryInjectionLog,
   __testGetReviewStrategyMemorySnapshot } from '../../server/routes/ai/period-review.js'
 import { assessReviewCandleCoverage, isReviewGridAligned, loadPeriodMarketWindow, monthlyPeriodMarketDigest, requiredReviewCandleCount } from '../../server/routes/ai/period-market-evidence.js'
@@ -525,6 +526,42 @@ describe('period review explicit regeneration', () => {
     expect(jobUpdate[1][2]).toMatch(/^2026-|^2027-/)
     const caseUpdate = periodReviewDb.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE period_review_cases SET status = ?'))
     expect(caseUpdate[1][0]).toBe('ready')
+  })
+
+  it('persists independent pre-provider infrastructure backoff without consuming business attempts', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T04:00:00.000Z'))
+    try {
+      const job = { id:32, job_slot:0, period_case_id:52, lease_token:'create-lease',
+        attempt_count:0, max_attempts:3 }
+      const error = Object.assign(new Error('model_task_create_failed'), { code:'model_task_create_failed' })
+      periodReviewDb.queryRun.mockReset().mockResolvedValue({ affectedRows:1 })
+      periodReviewDb.queryOne.mockReset().mockResolvedValueOnce({ retry_count:0 })
+      const first = await __testFinishDailyReviewFailure(job, error)
+      expect(first).toMatchObject({ preProviderRetry:{ errorCode:'model_task_create_failed', retryCount:1,
+        retryAt:periodReviewPreProviderRetryAt(0) } })
+      expect(periodReviewDb.queryOne.mock.calls[0][0]).toContain('stage = ?')
+      expect(periodReviewDb.queryOne.mock.calls[0][1]).toEqual([32, 'pre_provider_retry_wait', 'model_task_create_failed'])
+      expect(job.attempt_count).toBe(0)
+      const firstUpdate = periodReviewDb.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE period_review_jobs SET status = ?'))
+      expect(firstUpdate[1][0]).toBe('queued')
+      expect(firstUpdate[1][1]).toBe('model_task_create_failed')
+      expect(firstUpdate[1][2]).toBe(periodReviewPreProviderRetryAt(0))
+
+      periodReviewDb.queryRun.mockReset().mockResolvedValue({ affectedRows:1 })
+      periodReviewDb.queryOne.mockReset().mockResolvedValueOnce({ retry_count:1 })
+      const second = await __testFinishDailyReviewFailure(job, error)
+      expect(second.preProviderRetry.retryCount).toBe(2)
+      expect(second.retryAt).toBe(periodReviewPreProviderRetryAt(1))
+      expect(periodReviewDb.queryRun.mock.calls.find(([sql]) => sql.includes('UPDATE period_review_jobs SET status = ?'))[1][2])
+        .toBe(periodReviewPreProviderRetryAt(1))
+      expect(periodReviewDb.queryOne).toHaveBeenCalledTimes(1)
+      expect(periodReviewPreProviderRetryDelayMs(0)).toBe(5 * 60 * 1000)
+      expect(periodReviewPreProviderRetryDelayMs(1)).toBe(15 * 60 * 1000)
+      expect(periodReviewPreProviderRetryDelayMs(20)).toBe(60 * 60 * 1000)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('requeues one legacy terminal quota job with a new durable task identity', async () => {

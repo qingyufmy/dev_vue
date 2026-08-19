@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const db = vi.hoisted(() => ({ queryAll: vi.fn(), queryOne: vi.fn(), queryRun: vi.fn() }))
+const db = vi.hoisted(() => ({ queryAll: vi.fn(), queryOne: vi.fn(), queryRun: vi.fn(), withTransaction: vi.fn() }))
 const bridge = vi.hoisted(() => ({ activeId: vi.fn(), clock: vi.fn(), dataRoute: vi.fn() }))
 const mt5Bridge = vi.hoisted(() => vi.fn())
 const redis = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn() }))
@@ -32,6 +32,7 @@ describe('platform market data', () => {
     db.queryOne.mockResolvedValue({ id: 9 })
     db.queryAll.mockResolvedValue([])
     db.queryRun.mockResolvedValue({ changes: 1, insertId: 1 })
+    db.withTransaction.mockImplementation(async callback => callback(vi.fn().mockResolvedValue([[], []])))
     redis.get.mockResolvedValue(null)
     redis.set.mockResolvedValue(undefined)
   })

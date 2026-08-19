@@ -3,11 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mockQueryRun = vi.fn()
 const mockQueryOne = vi.fn()
 const mockQueryAll = vi.fn()
+const mockWithTransaction = vi.fn()
 vi.mock('../../server/db.js', () => ({
   queryRun:(...args) => mockQueryRun(...args),
   queryOne:(...args) => mockQueryOne(...args),
   queryAll:(...args) => mockQueryAll(...args),
-  withTransaction:vi.fn(),
+  withTransaction:(...args) => mockWithTransaction(...args),
 }))
 
 import { assertModelTaskIdempotencyEnvelope, assertModelTaskTransition, canTransitionModelTask, createModelTask,
@@ -28,26 +29,64 @@ describe('model task runtime state and fencing', () => {
   })
 
   it('deduplicates a business task by task kind and idempotency key', async () => {
-    mockQueryRun.mockResolvedValueOnce({ affectedRows:0 })
-    mockQueryOne.mockResolvedValueOnce({ task_id:'existing', status:'provider_running' })
-    const result = await createModelTask({ taskKind:'auto_inference', idempotencyKey:'strategy:7:XAUUSD:cycle:9' })
+    const duplicate = Object.assign(new Error('duplicate'), { code:'ER_DUP_ENTRY', errno:1062 })
+    const run = vi.fn()
+      .mockRejectedValueOnce(duplicate)
+      .mockResolvedValueOnce([[{ task_id:'existing', status:'provider_running' }], []])
+    const result = await createModelTask({ taskKind:'auto_inference', idempotencyKey:'strategy:7:XAUUSD:cycle:9' }, run)
     expect(result).toEqual({ task:{ task_id:'existing', status:'provider_running' }, created:false })
-    expect(mockQueryOne).toHaveBeenCalledWith(expect.stringContaining('task_kind = ? AND idempotency_key = ?'),
-      ['auto_inference', 'strategy:7:XAUUSD:cycle:9'])
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(run.mock.calls[1][0]).toContain('task_kind = ? AND idempotency_key <=> ?')
   })
 
   it('rejects an idempotent task when its frozen execution envelope changes', async () => {
-    mockQueryRun.mockResolvedValueOnce({ affectedRows:0 })
-    mockQueryOne.mockResolvedValueOnce({
+    const duplicate = Object.assign(new Error('duplicate'), { code:'ER_DUP_ENTRY', errno:1062 })
+    const run = vi.fn()
+      .mockRejectedValueOnce(duplicate)
+      .mockResolvedValueOnce([[{
       task_id:'existing', status:'queued', input_hash:'old-input',
       frozen_provider:'openai', frozen_model:'model-a', frozen_model_profile_id:7,
       frozen_protocol:'chat_completions', frozen_context_json:JSON.stringify({ generation_no:2, stage:'counterfactual' }),
-    })
+    }], []])
     await expect(createModelTask({
       taskKind:'manual_analysis', idempotencyKey:'manual:19:2:counterfactual', inputHash:'new-input',
       provider:'openai', model:'model-a', modelProfileId:7, protocol:'chat_completions',
       frozenContext:{ stage:'counterfactual', generation_no:2 },
-    })).rejects.toMatchObject({ code:'model_task_idempotency_conflict' })
+    }, run)).rejects.toMatchObject({ code:'model_task_idempotency_conflict' })
+  })
+
+  it('creates and records the task event on one transaction runner by default', async () => {
+    const task = { task_id:'task-created', task_kind:'daily_review', status:'queued' }
+    const run = vi.fn()
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+      .mockResolvedValueOnce([[task], []])
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+    mockWithTransaction.mockImplementationOnce(callback => callback(run))
+    const result = await createModelTask({ taskId:'task-created', taskKind:'daily_review', idempotencyKey:'daily:1' })
+    expect(result).toEqual({ task, created:true })
+    expect(mockWithTransaction).toHaveBeenCalledTimes(1)
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual(expect.arrayContaining([
+      expect.stringContaining('INSERT INTO ai_model_tasks'), expect.stringContaining('INSERT INTO ai_model_task_events'),
+    ]))
+  })
+
+  it('reconciles a concurrent duplicate insert on the same transaction runner', async () => {
+    const duplicate = Object.assign(new Error('duplicate'), { code:'ER_DUP_ENTRY', errno:1062 })
+    const task = { task_id:'task-existing', task_kind:'daily_review', status:'queued' }
+    const run = vi.fn()
+      .mockRejectedValueOnce(duplicate)
+      .mockResolvedValueOnce([[task], []])
+    await expect(createModelTask({ taskKind:'daily_review', idempotencyKey:'daily:race' }, run))
+      .resolves.toEqual({ task, created:false })
+    expect(run.mock.calls.filter(([sql]) => sql.includes('FOR UPDATE'))).toHaveLength(1)
+  })
+
+  it('does not swallow non-duplicate database errors during task creation', async () => {
+    const failure = Object.assign(new Error('foreign key failed'), { code:'ER_NO_REFERENCED_ROW' })
+    const run = vi.fn().mockRejectedValueOnce(failure)
+    await expect(createModelTask({ taskKind:'daily_review', idempotencyKey:'daily:db-failure' }, run))
+      .rejects.toBe(failure)
+    expect(run).toHaveBeenCalledTimes(1)
   })
 
   it('accepts equivalent frozen context regardless of object key order', () => {

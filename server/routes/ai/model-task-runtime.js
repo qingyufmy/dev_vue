@@ -95,31 +95,72 @@ export async function appendModelTaskEvent(taskId, eventType, payload = null, at
     VALUES (?, ?, ?, ?, ?)`, [taskId, attemptId || null, eventType, json(payload), Date.now()])
 }
 
-export async function createModelTask(input, run = queryRun) {
+function duplicateKeyError(error) {
+  return String(error?.code || '').toUpperCase() === 'ER_DUP_ENTRY'
+    || Number(error?.errno) === 1062
+}
+
+function modelTaskCreateFailure(reason, cause = null) {
+  const safeReason = String(reason || 'unknown')
+  const error = new Error(`model_task_create_failed:${safeReason}`)
+  error.code = 'model_task_create_failed'
+  error.reason = safeReason
+  if (cause) error.cause = cause
+  return error
+}
+
+function rowsFromRunnerResult(result) {
+  if (Array.isArray(result?.[0])) return result[0]
+  return Array.isArray(result) ? result : []
+}
+
+async function firstRunnerRow(run, sql, params = []) {
+  const result = await run(sql, params)
+  return rowsFromRunnerResult(result)[0] || null
+}
+
+async function createModelTaskWithRunner(input, run) {
+  if (typeof run !== 'function') throw new Error('model_task_transaction_runner_missing')
   const taskId = input.taskId || crypto.randomUUID()
   const now = Number(input.nowUtcMs) || Date.now()
-  const result = await run(`INSERT IGNORE INTO ai_model_tasks
-    (task_id, task_kind, queue_class, owner_user_id, strategy_id, domain_type, domain_id,
-     idempotency_key, snapshot_hash, input_hash, prompt_hash, output_contract_hash,
-     frozen_provider, frozen_model, frozen_model_profile_id, frozen_protocol, frozen_credential_source,
-     frozen_context_json, status, priority, max_attempts, scheduled_at_utc_msc,
-     task_deadline_at_utc_msc, result_valid_until_utc_msc, created_at_utc_msc, updated_at_utc_msc)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
-  [taskId, input.taskKind, input.queueClass || 'background', Number(input.ownerUserId) || 0,
-    Number(input.strategyId) || null, input.domainType || null, input.domainId == null ? null : String(input.domainId),
-    input.idempotencyKey || null, input.snapshotHash || null, input.inputHash || null, input.promptHash || null,
-    input.outputContractHash || null, input.provider || null, input.model || null,
-    Number(input.modelProfileId) || null, input.protocol || null, input.credentialSource || null,
-    json(input.frozenContext), Number(input.priority) || 0, Math.max(1, Number(input.maxAttempts) || 1),
-    Number(input.scheduledAtUtcMs) || now, Number(input.taskDeadlineAtUtcMs) || null,
-    Number(input.resultValidUntilUtcMs) || null, now, now])
-  const created = Number(result?.affectedRows ?? result?.changes ?? 0) === 1
-  const task = created ? await queryOne('SELECT * FROM ai_model_tasks WHERE task_id = ?', [taskId])
-    : await queryOne(`SELECT * FROM ai_model_tasks WHERE task_kind = ? AND idempotency_key = ? LIMIT 1`,
-      [input.taskKind, input.idempotencyKey])
-  if (!created) assertModelTaskIdempotencyEnvelope(task, input)
-  if (created) await appendModelTaskEvent(taskId, 'task_created', { status:'queued' }, null, run)
-  return { task, created }
+  // Go straight to the unique insert. A pre-insert gap lock can deadlock two
+  // concurrent creators under InnoDB; the unique-key loser is reconciled on
+  // the same transaction connection below.
+  try {
+    await run(`INSERT INTO ai_model_tasks
+      (task_id, task_kind, queue_class, owner_user_id, strategy_id, domain_type, domain_id,
+       idempotency_key, snapshot_hash, input_hash, prompt_hash, output_contract_hash,
+       frozen_provider, frozen_model, frozen_model_profile_id, frozen_protocol, frozen_credential_source,
+       frozen_context_json, status, priority, max_attempts, scheduled_at_utc_msc,
+       task_deadline_at_utc_msc, result_valid_until_utc_msc, created_at_utc_msc, updated_at_utc_msc)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+    [taskId, input.taskKind, input.queueClass || 'background', Number(input.ownerUserId) || 0,
+      Number(input.strategyId) || null, input.domainType || null, input.domainId == null ? null : String(input.domainId),
+      input.idempotencyKey || null, input.snapshotHash || null, input.inputHash || null, input.promptHash || null,
+      input.outputContractHash || null, input.provider || null, input.model || null,
+      Number(input.modelProfileId) || null, input.protocol || null, input.credentialSource || null,
+      json(input.frozenContext), Number(input.priority) || 0, Math.max(1, Number(input.maxAttempts) || 1),
+      Number(input.scheduledAtUtcMs) || now, Number(input.taskDeadlineAtUtcMs) || null,
+      Number(input.resultValidUntilUtcMs) || null, now, now])
+  } catch (error) {
+    // Only a unique-key race is recoverable. Other database errors must retain
+    // their original error and transaction rollback semantics.
+    if (!duplicateKeyError(error)) throw error
+    const duplicate = await firstRunnerRow(run, `SELECT * FROM ai_model_tasks
+      WHERE task_kind = ? AND idempotency_key <=> ? LIMIT 1 FOR UPDATE`, [input.taskKind, input.idempotencyKey || null])
+    if (!duplicate) throw modelTaskCreateFailure('duplicate_identity_not_found', error)
+    assertModelTaskIdempotencyEnvelope(duplicate, input)
+    return { task:duplicate, created:false }
+  }
+  const task = await firstRunnerRow(run, 'SELECT * FROM ai_model_tasks WHERE task_id = ? LIMIT 1 FOR UPDATE', [taskId])
+  if (!task) throw modelTaskCreateFailure('inserted_row_not_found')
+  await appendModelTaskEvent(task.task_id, 'task_created', { status:'queued' }, null, run)
+  return { task, created:true }
+}
+
+export async function createModelTask(input, run = null) {
+  if (typeof run === 'function') return createModelTaskWithRunner(input, run)
+  return withTransaction(transactionRun => createModelTaskWithRunner(input, transactionRun))
 }
 
 export async function claimNextModelTask({ taskKinds = null, leaseMs = 120_000, workerId = null } = {}) {

@@ -56,6 +56,16 @@ export const DAILY_EVIDENCE_RETRY_DELAYS_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60
 const DAILY_EVIDENCE_RETRY_MAX_DELAY_MS = DAILY_EVIDENCE_RETRY_DELAYS_MS.at(-1)
 const DAILY_EVIDENCE_RETRY_STAGE = 'evidence_retry_wait'
 const DAILY_EVIDENCE_RETRY_ERROR = 'period_market_incomplete'
+// Failures before the provider request must not consume the business attempt
+// counter, but they also must not wake the same broken setup every minute.
+// Their ordinal is derived from period_review_job_events, so no new column or
+// migration is needed and evidence_retry_count keeps its original meaning.
+export const PERIOD_REVIEW_PRE_PROVIDER_RETRY_DELAYS_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000]
+const PERIOD_REVIEW_PRE_PROVIDER_RETRY_MAX_DELAY_MS = PERIOD_REVIEW_PRE_PROVIDER_RETRY_DELAYS_MS.at(-1)
+const PERIOD_REVIEW_PRE_PROVIDER_RETRY_STAGE = 'pre_provider_retry_wait'
+const PERIOD_REVIEW_PRE_PROVIDER_RETRY_CODES = new Set([
+  'model_task_create_failed', 'model_task_link_failed', 'model_task_transaction_runner_missing',
+])
 const DAILY_EVIDENCE_RETRY_DISABLED_ERROR = 'review_generation_disabled'
 const DAILY_EVIDENCE_RETRY_TERMINAL_STATES = new Set(['leased', 'status_unknown', 'succeeded', 'failed'])
 const DAILY_EVIDENCE_RETRY_MARKET_REASONS = new Set([
@@ -651,6 +661,43 @@ export function dailyEvidenceRetryDelayMs(evidenceRetryCount = 0) {
 
 export function dailyEvidenceRetryAt(evidenceRetryCount = 0, nowUtcMs = Date.now()) {
   return beijingAtUtcMs(Number(nowUtcMs) + dailyEvidenceRetryDelayMs(evidenceRetryCount))
+}
+
+export function periodReviewPreProviderRetryDelayMs(retryCount = 0) {
+  const count = Math.max(0, Math.trunc(Number(retryCount) || 0))
+  return PERIOD_REVIEW_PRE_PROVIDER_RETRY_DELAYS_MS[Math.min(count, PERIOD_REVIEW_PRE_PROVIDER_RETRY_DELAYS_MS.length - 1)]
+    || PERIOD_REVIEW_PRE_PROVIDER_RETRY_MAX_DELAY_MS
+}
+
+export function periodReviewPreProviderRetryAt(retryCount = 0, nowUtcMs = Date.now()) {
+  return beijingAtUtcMs(Number(nowUtcMs) + periodReviewPreProviderRetryDelayMs(retryCount))
+}
+
+function periodReviewPreProviderErrorCode(error) {
+  const code = String(error?.code || '').trim()
+  if (PERIOD_REVIEW_PRE_PROVIDER_RETRY_CODES.has(code)) return code
+  const messageCode = String(error?.message || '').split(':', 1)[0].trim()
+  return PERIOD_REVIEW_PRE_PROVIDER_RETRY_CODES.has(messageCode) ? messageCode : null
+}
+
+async function nextPeriodReviewPreProviderRetry(job, error) {
+  const errorCode = periodReviewPreProviderErrorCode(error)
+  if (!errorCode || periodReviewProviderRequestStarted(job?._modelTracker)) return null
+  let previousCount = 0
+  try {
+    const row = await queryOne(`SELECT COUNT(*) AS retry_count
+      FROM period_review_job_events
+      WHERE job_id = ? AND stage = ? AND event_status = 'error' AND message_code = ?`,
+    [job.id, PERIOD_REVIEW_PRE_PROVIDER_RETRY_STAGE, errorCode])
+    previousCount = Math.max(0, Number(row?.retry_count || 0))
+  } catch (lookupError) {
+    // The event table is observability state. If it is temporarily unavailable,
+    // retain a safe first backoff rather than turning the business job terminal.
+    console.warn(`[PeriodReview case=${job?.period_case_id}] pre-provider retry history unavailable:`, safeError(lookupError))
+  }
+  const retryCount = previousCount + 1
+  const retryAt = periodReviewPreProviderRetryAt(retryCount - 1)
+  return { errorCode, retryCount, retryAt, delayMs:periodReviewPreProviderRetryDelayMs(retryCount - 1) }
 }
 
 export function isRecoverableDailyEvidenceJob(job, reviewCase = null) {
@@ -4025,12 +4072,15 @@ async function markPeriodReviewRegenerationNeedsRevision(job) {
 async function finishDailyReviewFailure(job, error, modelTask = null) {
   const unknown = providerResultUnknown(job._modelTracker, modelTask)
   const capacityWait = !unknown && isPeriodReviewProviderCapacityWait(error, modelTask)
+  const preProviderRetry = capacityWait ? null : await nextPeriodReviewPreProviderRetry(job, error)
   if (capacityWait) await restoreQuotaConsumedBusinessAttempt(job)
   const exhausted = !capacityWait && job.attempt_count >= Number(job.max_attempts)
-  const retryAt = unknown || exhausted ? null : capacityWait ? periodReviewCapacityRetryAt(error)
+  const retryAt = unknown || exhausted ? null : preProviderRetry ? preProviderRetry.retryAt
+    : capacityWait ? periodReviewCapacityRetryAt(error)
     : afterSeconds(Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))))
   const jobStatus = unknown ? 'status_unknown' : exhausted ? 'failed' : 'queued'
-  const errorCode = unknown ? 'provider_status_unknown' : capacityWait ? 'model_quota_exhausted' : safeError(error)
+  const errorCode = unknown ? 'provider_status_unknown' : capacityWait ? 'model_quota_exhausted'
+    : preProviderRetry?.errorCode || safeError(error)
   const jobUpdate = await queryRun(`UPDATE period_review_jobs SET status = ?, last_error_code = ?, lease_token = NULL,
     lease_expires_at = NULL, next_attempt_at = ?, updated_at = ? WHERE id = ? AND lease_token = ?`,
   [jobStatus, errorCode, retryAt, beijingNow(), job.id, job.lease_token])
@@ -4043,6 +4093,7 @@ async function finishDailyReviewFailure(job, error, modelTask = null) {
   await queryRun(`UPDATE period_review_cases SET status = ?, updated_at = ? WHERE id = ? ${isPeriodReviewRegenerationJob(job)
     ? "AND current_version_id IS NOT NULL AND status IN ('generating', 'needs_revision')" : 'AND current_version_id IS NULL'}`,
     [caseStatus, beijingNow(), job.period_case_id])
+  return { jobStatus, retryAt, errorCode, preProviderRetry }
 }
 
 async function skipDisabledPeriodReviewJob(job) {
@@ -4095,14 +4146,20 @@ export async function runDailyReviewWorkerOnce({ requestModel = requestJsonObjec
       failure = trackerError
       console.error(`[PeriodReview case=${job.period_case_id}] model task failure:`, safeError(trackerError))
     }
-    await finishDailyReviewFailure(job, failure, modelTask)
+    const failureState = await finishDailyReviewFailure(job, failure, modelTask)
     const unknown = providerResultUnknown(job._modelTracker, modelTask)
     const exhausted = !capacityWait && job.attempt_count >= Number(job.max_attempts)
-    await setPeriodReviewJobStage(job, unknown ? 'status_unknown' : exhausted ? 'failed' : 'retry_wait', 'error',
-      capacityWait ? 'model_quota_exhausted' : safeError(error),
-      unknown || exhausted ? null : capacityWait
+    const preProviderRetry = failureState?.preProviderRetry
+    const stage = unknown ? 'status_unknown' : exhausted ? 'failed' : preProviderRetry
+      ? PERIOD_REVIEW_PRE_PROVIDER_RETRY_STAGE : 'retry_wait'
+    const metadata = unknown || exhausted ? null : preProviderRetry
+      ? { retry_count:preProviderRetry.retryCount, retry_at:preProviderRetry.retryAt,
+        retry_delay_seconds:Math.round(preProviderRetry.delayMs / 1000), retry_reason:'pre_provider_infrastructure' }
+      : capacityWait
         ? { retry_reason:'provider_capacity', retry_at:periodReviewCapacityRetryAt(error) }
-        : { retry_delay_seconds:Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) })
+        : { retry_delay_seconds:Math.min(900, 60 * (2 ** Math.max(0, Number(job.attempt_count) - 1))) }
+    await setPeriodReviewJobStage(job, stage, 'error',
+      capacityWait ? 'model_quota_exhausted' : failureState?.errorCode || safeError(error), metadata)
     return { claimed:true, status:unknown ? 'status_unknown' : exhausted ? 'failed' : 'retry_wait',
       periodCaseId:Number(job.period_case_id), error:safeError(failure) }
   } finally {

@@ -615,11 +615,14 @@ describe('durable automatic model-task gate', () => {
     expect(input.resultValidUntilUtcMs).toBeGreaterThan(0)
     expect(input).not.toHaveProperty('resultValidUntilUtcMsc')
 
-    db.queryRun.mockResolvedValue({ affectedRows:1 })
-    db.queryOne.mockResolvedValue({ task_id:'task-1', result_valid_until_utc_msc:120_000 })
+    const taskRun = vi.fn()
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+      .mockResolvedValueOnce([[{ task_id:'task-1', result_valid_until_utc_msc:120_000 }], []])
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+    db.withTransaction.mockImplementationOnce(callback => callback(taskRun))
     await createModelTask(input)
 
-    const [insertSql, insertParams] = db.queryRun.mock.calls[0]
+    const [insertSql, insertParams] = taskRun.mock.calls[0]
     expect(insertSql).toContain('result_valid_until_utc_msc')
     expect(insertParams[22]).toBe(input.resultValidUntilUtcMs)
   })

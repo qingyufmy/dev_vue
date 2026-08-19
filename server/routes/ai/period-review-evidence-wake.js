@@ -1,4 +1,4 @@
-import { queryRun } from '../../db.js'
+import { withTransaction } from '../../db.js'
 
 // A candle persistence event can arrive much sooner than the regular review
 // scheduler tick. Wake only the already-queued evidence lane; the normal cycle
@@ -31,25 +31,45 @@ export async function wakePeriodReviewEvidenceWaiters({ sourceId = null, standar
   wakeState.set(key, Number(nowUtcMs))
   const now = new Date(Number(nowUtcMs) + 8 * 3600000).toISOString().replace('T', ' ').slice(0, 19)
   const boundedLimit = Math.max(1, Math.min(WAKE_LIMIT, Math.trunc(Number(limit) || WAKE_LIMIT)))
-  const result = await queryRun(`UPDATE period_review_jobs jobs
-      JOIN period_review_cases cases ON cases.id = jobs.period_case_id
-    SET jobs.next_attempt_at = ?, jobs.progress_stage = 'evidence_retry_wait',
-      jobs.stage_updated_at = ?, jobs.updated_at = ?
-    WHERE jobs.job_type = 'daily_review' AND jobs.job_slot = 0 AND jobs.status = 'queued'
-      AND jobs.last_error_code = 'period_market_incomplete' AND jobs.lease_token IS NULL
-      AND cases.current_version_id IS NULL AND cases.evidence_status <> 'complete'
-      AND JSON_EXTRACT(IF(JSON_VALID(cases.evidence_json), cases.evidence_json, '{}'),
-        CONCAT('$.period_market.symbols.', ?, '.', ?)) IS NOT NULL
-      AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at > ?)
-    ORDER BY jobs.next_attempt_at ASC, jobs.id ASC LIMIT ?`, [now, now, now, standardSymbol.trim().toUpperCase(),
-    timeframe.trim().toUpperCase(), now, boundedLimit])
-  const header = Array.isArray(result) ? result[0] : result
-  const woken = Number(header?.affectedRows ?? header?.changes ?? 0)
+  const symbol = standardSymbol.trim().toUpperCase()
+  const frame = timeframe.trim().toUpperCase()
+  const result = await withTransaction(async run => {
+    const [rows] = await run(`SELECT jobs.id
+        FROM period_review_jobs jobs
+        JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+      WHERE jobs.job_type = 'daily_review' AND jobs.job_slot = 0 AND jobs.status = 'queued'
+        AND jobs.last_error_code = 'period_market_incomplete' AND jobs.lease_token IS NULL
+        AND cases.current_version_id IS NULL AND cases.evidence_status <> 'complete'
+        AND JSON_EXTRACT(IF(JSON_VALID(cases.evidence_json), cases.evidence_json, '{}'),
+          CONCAT('$.period_market.symbols.', ?, '.', ?)) IS NOT NULL
+        AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at > ?)
+      ORDER BY jobs.next_attempt_at ASC, jobs.id ASC LIMIT ? FOR UPDATE`, [symbol, frame, now, boundedLimit])
+    const ids = (Array.isArray(rows) ? rows : []).map(row => Number(row?.id)).filter(Number.isSafeInteger)
+    if (!ids.length) return { affectedRows:0, selectedIds:[] }
+    const placeholders = ids.map(() => '?').join(',')
+    // The selection is bounded and ordered above. Recheck the entire lane in
+    // the update so a concurrent scheduler/case refresh cannot wake a row
+    // that stopped being an evidence-retry waiter after it was selected.
+    const [updated] = await run(`UPDATE period_review_jobs jobs
+        JOIN period_review_cases cases ON cases.id = jobs.period_case_id
+      SET jobs.next_attempt_at = ?, jobs.progress_stage = 'evidence_retry_wait',
+        jobs.stage_updated_at = ?, jobs.updated_at = ?
+      WHERE jobs.id IN (${placeholders})
+        AND jobs.job_type = 'daily_review' AND jobs.job_slot = 0 AND jobs.status = 'queued'
+        AND jobs.last_error_code = 'period_market_incomplete' AND jobs.lease_token IS NULL
+        AND cases.current_version_id IS NULL AND cases.evidence_status <> 'complete'
+        AND JSON_EXTRACT(IF(JSON_VALID(cases.evidence_json), cases.evidence_json, '{}'),
+          CONCAT('$.period_market.symbols.', ?, '.', ?)) IS NOT NULL
+        AND (jobs.next_attempt_at IS NULL OR jobs.next_attempt_at > ?)`,
+    [now, now, now, ...ids, symbol, frame, now])
+    return { affectedRows:Number(updated?.affectedRows ?? updated?.changes ?? 0), selectedIds:ids }
+  })
+  const woken = Number(result?.affectedRows || 0)
   if (woken > 0) {
     if (typeof requestCycle === 'function') requestCycle()
     else import('./period-review.js').then(module => module.requestPeriodReviewCycle()).catch(error => {
       console.error('[PeriodReview] evidence wake failed:', error?.message || error)
     })
   }
-  return { woken, sourceId:Number(sourceId), standardSymbol:String(standardSymbol).trim().toUpperCase(), timeframe:String(timeframe).trim().toUpperCase() }
+  return { woken, sourceId:Number(sourceId), standardSymbol:symbol, timeframe:frame }
 }
