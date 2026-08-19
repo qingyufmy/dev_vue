@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -13,6 +13,10 @@ use bridge_contract::AccountRef;
 use serde::Deserialize;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FFI_SIGNATURE, VS_FIXEDFILEINFO,
+    VerQueryValueW,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -34,6 +38,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const MAX_PROBE_OUTPUT_BYTES: u64 = 16 * 1024;
 const MAX_PROCESS_PATH_CHARS: usize = 32_768;
 const MAX_REGISTRY_PATH_BYTES: u32 = 64 * 1024;
+const MAX_VERSION_INFO_BYTES: u32 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Mt5Installation {
@@ -611,7 +616,61 @@ fn is_explicit_mt4_only_candidate(path: &Path) -> bool {
     else {
         return false;
     };
-    installation_directory.join("MQL4").is_dir() && !installation_directory.join("MQL5").is_dir()
+    (installation_directory.join("MQL4").is_dir() && !installation_directory.join("MQL5").is_dir())
+        || file_product_major_version(path).is_some_and(is_mt4_product_major)
+}
+
+fn is_mt4_product_major(product_major: u16) -> bool {
+    product_major == 4
+}
+
+fn file_product_major_version(path: &Path) -> Option<u16> {
+    if !path.is_file() {
+        return None;
+    }
+    let wide_path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut ignored_handle = 0_u32;
+    let size = unsafe { GetFileVersionInfoSizeW(wide_path.as_ptr(), &mut ignored_handle) };
+    if size == 0 || size > MAX_VERSION_INFO_BYTES {
+        return None;
+    }
+    let mut version_data = vec![0_u8; usize::try_from(size).ok()?];
+    if unsafe {
+        GetFileVersionInfoW(
+            wide_path.as_ptr(),
+            0,
+            size,
+            version_data.as_mut_ptr().cast(),
+        )
+    } == 0
+    {
+        return None;
+    }
+    let root_query = wide_z(r"\");
+    let mut fixed_info = std::ptr::null_mut();
+    let mut fixed_info_size = 0_u32;
+    if unsafe {
+        VerQueryValueW(
+            version_data.as_ptr().cast(),
+            root_query.as_ptr(),
+            &mut fixed_info,
+            &mut fixed_info_size,
+        )
+    } == 0
+        || fixed_info.is_null()
+        || usize::try_from(fixed_info_size).ok()? < std::mem::size_of::<VS_FIXEDFILEINFO>()
+    {
+        return None;
+    }
+    let fixed_info = unsafe { fixed_info.cast::<VS_FIXEDFILEINFO>().read_unaligned() };
+    if fixed_info.dwSignature != VS_FFI_SIGNATURE as u32 {
+        return None;
+    }
+    Some((fixed_info.dwProductVersionMS >> 16) as u16)
 }
 
 fn utf16_z(value: &[u16]) -> String {
@@ -739,6 +798,13 @@ mod tests {
                     || paths_equal(&value.executable_path, &unknown_terminal))
         }));
         fs::remove_dir_all(root).expect("remove platform fixture");
+    }
+
+    #[test]
+    fn mt4_product_major_is_classified_without_rejecting_mt5_or_unknown_versions() {
+        assert!(is_mt4_product_major(4));
+        assert!(!is_mt4_product_major(5));
+        assert!(!is_mt4_product_major(0));
     }
 
     #[test]
