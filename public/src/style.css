@@ -8426,7 +8426,8 @@ body.main-account-center-open { overflow: hidden; }
 .program-enrollment-qr {
   grid-column: 3;
   grid-row: 1 / span 2;
-  justify-self: center;
+  justify-self: start;
+  margin-block-start: 24px;
 }
 
 .program-enrollment-qr figure {
@@ -8526,6 +8527,20 @@ body.main-account-center-open { overflow: hidden; }
   }
 }
 
+@media (min-width: 981px) {
+  .program-enrollment-qr {
+    margin-block-start: 32px;
+    margin-inline-start: -8px;
+  }
+}
+
+@media (min-width: 1101px) {
+  .program-enrollment-qr {
+    margin-block-start: 40px;
+    margin-inline-start: -48px;
+  }
+}
+
 @media (max-width: 820px) {
   .program-enrollment {
     grid-template-columns: 1fr;
@@ -8539,6 +8554,7 @@ body.main-account-center-open { overflow: hidden; }
   .program-enrollment-qr {
     grid-row: auto;
     justify-self: start;
+    margin: 0;
   }
 }
 
