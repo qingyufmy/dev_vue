@@ -34,6 +34,7 @@ describe('frontend static cache version', () => {
     expect(appReference).toContain('pending-fill-ticket-binding1')
     expect(appReference).toContain('admin-pending-cancel-modal1')
     expect(appReference).toContain('signal-management-collapse1')
+    expect(appReference).toContain('history-pagination-account-key1')
     expect(source).toMatch(/styles\.css[^"']*admin-pending-cancel-modal1/)
     expect(source).toMatch(/styles\.css[^"']*signal-management-collapse1/)
     expect(appReference).toContain('rev=period-review-compact1-period-review-nav1')

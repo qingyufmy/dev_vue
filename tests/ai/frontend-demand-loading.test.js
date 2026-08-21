@@ -80,6 +80,7 @@ async function runHistoryCursorScenario() {
       bridgePlatform:'mt5',
       bridgeAccountIdentity:{ brokerServerKey:'DEMO', loginAccount:'42' },
     }
+    function historyStableAccountKey() { return 'mt5|demo|42' }
     const document = { getElementById:() => ({ value:'' }) }
     function getHistoryRangeParams() { return { history_scope:'all' } }
     function historyTableFiltersSnapshot() {
@@ -169,6 +170,7 @@ async function runHistoryTicketBindingScenario() {
       signalTickets:{},
       closeSignalTickets:{},
     }
+    function historyStableAccountKey() { return 'mt5|demo|42' }
     const document = { getElementById:() => ({ value:'' }) }
     function historySyncMetadata(data) {
       return data?.history_sync && typeof data.history_sync === 'object' ? data.history_sync : {}

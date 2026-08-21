@@ -956,7 +956,7 @@ describe('AI governance navigation and DOM contract', () => {
     expect(app).toContain('range_start_utc_msc:_historyCursorState.rangeStart')
     expect(app).toContain('range_end_utc_msc:_historyCursorState.rangeEnd')
     expect(app).toContain('...(cursor ? { cursor } : {})')
-    expect(app).toContain('account:query?.accountKey || state.bridgeAccountIdentity')
+    expect(app).toContain('account:query?.accountKey || historyStableAccountKey()')
     expect(app).toContain('_historyCursorState.pageCursors.set(page + 1')
     expect(bridgeWs).toContain("cursorMode ? 'history_page' : 'history'")
     expect(bridgeWs).toContain('hasHistoryCursorCapability(exactRoute)')

@@ -264,6 +264,114 @@ function loadHistoryRequestSnapshotHarness() {
   `)()
 }
 
+function loadHistoryPaginationContinuationHarness() {
+  const start = app.indexOf('function loadHistory(forceRefresh')
+  const end = app.indexOf('function _applyHistoryData', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(end).toBeGreaterThan(start)
+  return new Function(`
+    const state = {
+      historyFilters:{ page:1, pageSize:20 },
+      _accountContextGeneration:1,
+      bridgePlatform:'mt5',
+      bridgeAccountIdentity:{ platform:'mt5', brokerServerKey:'DEMO', loginAccount:'42' },
+      historyQueryGeneration:1,
+    }
+    const query = {
+      generation:1,
+      accountContextGeneration:1,
+      accountKey:'mt5|demo|42',
+      platform:'mt5',
+      scopeParams:{ history_scope:'platform' },
+      tableFilters:{ page:1, pageSize:20, entry_from:'', entry_to:'', filter_close_from:'', filter_close_to:'', direction:'', profit_filter:'' },
+      frozenRange:{
+        range_start_utc_msc:1000,
+        range_end_utc_msc:5000,
+        allowed_start_utc_msc:900,
+        system_start_utc_msc:1000,
+        effective_start_utc_msc:1000,
+        captured_end_utc_msc:5000,
+      },
+      legacyFallback:false,
+    }
+    const calls = []
+    const pages = [
+      { status:'success', orders:[{ id:'page-1' }], history_snapshot_id:'snapshot-1', next_cursor:'cursor-2', has_more:true,
+        history_range:{ range_start_utc_msc:1000, range_end_utc_msc:5000 },
+        history_sync:{ requested_range_complete:true, terminal_visible_history_complete:true, summary_status:'ready' } },
+      { status:'success', orders:[{ id:'page-2' }], history_snapshot_id:'snapshot-1', next_cursor:null, has_more:false,
+        history_range:{ range_start_utc_msc:1000, range_end_utc_msc:5000 },
+        history_sync:{ requested_range_complete:true, terminal_visible_history_complete:true, summary_status:'ready' } },
+    ]
+    let _historyCache = null
+    let _historyCursorState = {
+      key:null, snapshotId:null, rangeStart:1000, rangeEnd:5000,
+      pageCursors:new Map([[1, null]]), preserveRangeOnKeyChange:true,
+    }
+    const _historyTableFlights = new Map()
+    let _historyQueryState = query
+    function historyStableAccountKey() { return 'mt5|demo|42' }
+    function historyFlightKey() { return 'table-flight' }
+    function historyRefreshContextKey() { return 'history-context' }
+    function historyTableFiltersSnapshot() {
+      return { page:state.historyFilters.page, pageSize:20, entry_from:'', entry_to:'', filter_close_from:'', filter_close_to:'', direction:'', profit_filter:'' }
+    }
+    function getHistoryRangeParams() { return { history_scope:'platform' } }
+    function historyQueryRangeParams(currentQuery) { return currentQuery?.frozenRange || {} }
+    function historyRangeContextMatches() { return true }
+    function historyCursorRangeIsFixed(cursor = _historyCursorState) {
+      return Number.isSafeInteger(cursor?.rangeStart) && Number.isSafeInteger(cursor?.rangeEnd)
+        && cursor.rangeStart > 0 && cursor.rangeStart < cursor.rangeEnd
+    }
+    function resetHistoryCursorState(key = null, { preserveRange = false } = {}) {
+      const previous = _historyCursorState
+      const keepRange = preserveRange && historyCursorRangeIsFixed(previous)
+      _historyCursorState = {
+        key,
+        snapshotId:null,
+        rangeStart:keepRange ? previous.rangeStart : null,
+        rangeEnd:keepRange ? previous.rangeEnd : null,
+        pageCursors:new Map([[1, null]]),
+        preserveRangeOnKeyChange:Boolean(keepRange && key == null),
+      }
+    }
+    async function wsApi(action, params) {
+      calls.push({ action, params })
+      return pages[calls.length - 1]
+    }
+    function historyRangeFromError(error) {
+      const range = error?.history_range
+      return range ? { rangeStart:Number(range.range_start_utc_msc), rangeEnd:Number(range.range_end_utc_msc) } : null
+    }
+    function historyQueryIsCurrent() { return true }
+    function isHistoryCursorRangeIncomplete() { return false }
+    function historyErrorCode() { return '' }
+    function clearInvalidHistoryRangePreference() {}
+    function historyCircuitAllows() {}
+    function rememberHistoryFailure() {}
+    function notifyHistoryFailure() {}
+    function clearHistoryCircuit() {}
+    async function loadHistoryTicketMapsForData() {}
+    function applyHistoryScopeResponse() {}
+    function _applyHistoryData() {}
+    ${app.slice(start, end)}
+    return (async () => {
+      await loadHistory(false, { query })
+      state.historyFilters.page = 2
+      await loadHistory(false, { tableOnly:true })
+      return {
+        calls,
+        page:state.historyFilters.page,
+        cursorKey:JSON.parse(_historyCursorState.key),
+        snapshotId:_historyCursorState.snapshotId,
+        rangeStart:_historyCursorState.rangeStart,
+        rangeEnd:_historyCursorState.rangeEnd,
+        pageCursors:[..._historyCursorState.pageCursors.entries()],
+      }
+    })()
+  `)()
+}
+
 function loadCursorResetHarness() {
   const fixedStart = app.indexOf('function historyCursorRangeIsFixed')
   const resetStart = app.indexOf('function resetHistoryCursorState', fixedStart)
@@ -598,6 +706,34 @@ describe('history scope frontend contract', () => {
       },
     })
     expect(result.params).not.toHaveProperty('scope_start_override')
+  })
+
+  it('keeps the stable account cursor, snapshot and frozen range when moving to page two', async () => {
+    const result = await loadHistoryPaginationContinuationHarness()
+
+    expect(result.calls).toHaveLength(2)
+    expect(result.calls[0].params).toMatchObject({ page:1, page_size:20, history_scope:'platform' })
+    expect(result.calls[0].params).not.toHaveProperty('history_snapshot_id')
+    expect(result.calls[0].params).not.toHaveProperty('cursor')
+    expect(result.calls[1].params).toMatchObject({
+      page:2,
+      page_size:20,
+      history_scope:'platform',
+      history_snapshot_id:'snapshot-1',
+      cursor:'cursor-2',
+      range_start_utc_msc:1000,
+      range_end_utc_msc:5000,
+      allowed_start_utc_msc:900,
+      system_start_utc_msc:1000,
+      effective_start_utc_msc:1000,
+      captured_end_utc_msc:5000,
+    })
+    expect(result.page).toBe(2)
+    expect(result.cursorKey.account).toBe('mt5|demo|42')
+    expect(result.snapshotId).toBe('snapshot-1')
+    expect(result.rangeStart).toBe(1000)
+    expect(result.rangeEnd).toBe(5000)
+    expect(result.pageCursors).toEqual([[1, null], [2, 'cursor-2']])
   })
 
   it('does not report fallback success for an empty or stale result', async () => {

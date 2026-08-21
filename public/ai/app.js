@@ -16038,7 +16038,7 @@ function historyRefreshContextKey({ forceRefresh = false, includeTableFilters = 
   return JSON.stringify({
     generation:Number(query?.accountContextGeneration ?? state._accountContextGeneration ?? 0),
     history_query_generation:Number(query?.generation ?? state.historyQueryGeneration ?? 0),
-    account:query?.accountKey || state.bridgeAccountIdentity || null,
+    account:query?.accountKey || historyStableAccountKey() || null,
     platform:query?.platform || state.bridgePlatform || "mt5",
     range,
     filters:includeTableFilters ? {
@@ -16159,7 +16159,7 @@ function loadHistory(forceRefresh, options = {}) {
       ...filterParams,
       pageSize,
       platform:query?.platform || state.bridgePlatform,
-      account:query?.accountKey || state.bridgeAccountIdentity,
+      account:query?.accountKey || historyStableAccountKey(),
     });
     requestCursorKey = cursorKey;
     if (forceRefresh || _historyCursorState.key !== cursorKey) {
