@@ -18,6 +18,7 @@ vi.mock('../../server/system-email.js', () => ({
 import {
   assertModelQuotaAvailable,
   buildModelQuotaCircuitContext,
+  keepModelQuotaIncidentOpen,
   recordModelQuotaExhausted,
   recordModelQuotaRecovered,
 } from '../../server/routes/ai/model-quota-circuit.js'
@@ -36,7 +37,7 @@ beforeEach(() => {
   mockQueryRun.mockResolvedValue({ changes:1 })
 })
 
-describe('model quota circuit identity', () => {
+describe('model quota incident identity', () => {
   it('is stable per model profile and does not activate without a durable profile', () => {
     const again = buildModelQuotaCircuitContext({
       usageContext:{ profileId:7 }, provider:'deepseek', model:'deepseek-v4-pro',
@@ -47,29 +48,32 @@ describe('model quota circuit identity', () => {
   })
 })
 
-describe('model quota circuit state', () => {
-  it('blocks provider requests while the quota circuit is open', async () => {
-    mockQueryOne.mockResolvedValue({ status:'open', is_blocked:1, probe_busy:0, open_until:'2026-07-24 14:00:00' })
-    await expect(assertModelQuotaAvailable(context)).rejects.toMatchObject({
-      message:'model_quota_exhausted', code:'model_quota_exhausted', modelQuotaCircuit:true,
+describe('model quota incident state', () => {
+  it('allows normal provider requests while a quota incident is open', async () => {
+    mockQueryOne.mockResolvedValue({ status:'open', error_count:3 })
+    await expect(assertModelQuotaAvailable(context)).resolves.toEqual({
+      recoveryCandidate:true, incidentErrorCount:3,
     })
     expect(mockQueryRun).not.toHaveBeenCalled()
   })
 
-  it('atomically claims one recovery probe after the circuit delay', async () => {
-    mockQueryOne.mockResolvedValue({ status:'open', is_blocked:0, probe_busy:0 })
-    mockQueryRun.mockResolvedValue({ changes:1 })
-    await expect(assertModelQuotaAvailable(context)).resolves.toEqual({ probe:true })
-    expect(mockQueryRun.mock.calls[0][0]).toContain('probe_lease_until')
+  it('does not mark normal traffic as recovery traffic without an open incident', async () => {
+    mockQueryOne.mockResolvedValue({ status:'recovered' })
+    await expect(assertModelQuotaAvailable(context)).resolves.toEqual({
+      recoveryCandidate:false, incidentErrorCount:null,
+    })
+    expect(mockQueryRun).not.toHaveBeenCalled()
   })
 
-  it('opens the circuit and sends one deduplicated administrator email', async () => {
+  it('records the incident without a timed circuit and sends one deduplicated administrator email', async () => {
     mockQueryRun
       .mockResolvedValueOnce({ changes:1 })
       .mockResolvedValueOnce({ changes:1 })
     await recordModelQuotaExhausted(context, 'LLM HTTP 429')
+    expect(mockQueryRun.mock.calls[0][0]).not.toContain('DATE_ADD')
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
-    expect(mockSendEmail.mock.calls[0][0].subject).toContain('额度已耗尽')
+    expect(mockSendEmail.mock.calls[0][0].subject).toContain('返回 429')
+    expect(mockSendEmail.mock.calls[0][0].html).toContain('不会设置定时熔断')
     expect(mockSendEmail.mock.calls[0][0].html).not.toContain('api-key')
   })
 
@@ -81,10 +85,26 @@ describe('model quota circuit state', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
-  it('closes the circuit and sends a recovery email once', async () => {
+  it('marks the matching incident recovered and sends a recovery email once', async () => {
     mockQueryRun.mockResolvedValue({ changes:1 })
-    await recordModelQuotaRecovered(context)
+    await recordModelQuotaRecovered(context, { incidentErrorCount:3 })
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
     expect(mockSendEmail.mock.calls[0][0].subject).toContain('恢复')
+    expect(mockSendEmail.mock.calls[0][0].html).not.toContain('恢复探测')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('error_count = ?')
+    expect(mockQueryRun.mock.calls[0][1]).toEqual([context.circuitKey, 3])
+  })
+
+  it('does not let a stale success recover a newer 429 incident', async () => {
+    mockQueryRun.mockResolvedValue({ changes:0 })
+    await recordModelQuotaRecovered(context, { incidentErrorCount:3 })
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('keeps an unresolved incident open without adding a retry delay', async () => {
+    mockQueryRun.mockResolvedValue({ changes:1 })
+    await keepModelQuotaIncidentOpen(context)
+    expect(mockQueryRun.mock.calls[0][0]).toContain('open_until = NULL')
+    expect(mockQueryRun.mock.calls[0][0]).not.toContain('DATE_ADD')
   })
 })

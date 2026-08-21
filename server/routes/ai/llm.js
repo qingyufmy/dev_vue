@@ -11,7 +11,7 @@ import { DEFAULT_ENTRY_METHODS, normalizeEntryMethods, signalTypesForEntryMethod
 import { normalizePositionSizeTier, positionSizeFactor, resolvePositionSizeTier } from './position-sizing.js'
 import { buildPositionManagementOutputFormat, hasActivePositionManagementGroups,
   validatePositionManagementResponse } from './position-management.js'
-import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, deferModelQuotaProbe,
+import { assertModelQuotaAvailable, buildModelQuotaCircuitContext, keepModelQuotaIncidentOpen,
   recordModelQuotaExhausted, recordModelQuotaRecovered } from './model-quota-circuit.js'
 import { resolveModelProviderCapabilities } from './model-provider-capabilities.js'
 import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget, summarizeModelOutputHistory } from './model-task-budget.js'
@@ -804,10 +804,10 @@ async function trackedModelRequest({
   const requestBytes = Buffer.byteLength(requestBody, 'utf8')
   let responseBytes = 0
   let streamTerminal = false
-  const quotaCircuitContext = buildModelQuotaCircuitContext({
+  const quotaIncidentContext = buildModelQuotaCircuitContext({
     usageContext, provider, model:body?.model, url,
   })
-  let quotaCircuitState = { probe:false }
+  let quotaIncidentState = { recoveryCandidate:false, incidentErrorCount:null }
   const quietDelayMs = Math.max(1_000, Number(providerQuietAfterMs) || 60_000)
   const resetProviderQuietTimer = () => {
     if (quietTimer) { clearTimeout(quietTimer); quietTimer = null }
@@ -822,7 +822,7 @@ async function trackedModelRequest({
     if (quietTimer) { clearTimeout(quietTimer); quietTimer = null }
   }
   try {
-    quotaCircuitState = await assertModelQuotaAvailable(quotaCircuitContext)
+    quotaIncidentState = await assertModelQuotaAvailable(quotaIncidentContext)
     // Admission is deliberately before the durable submitted callback and the
     // fetch. Waiting here cannot be mistaken for a provider submission and
     // therefore cannot turn a capacity wait into status_unknown.
@@ -950,7 +950,9 @@ async function trackedModelRequest({
       httpStatus, responseReceived:providerResponseReceived })
     assertModelResponseComplete(data, protocol)
     clearProviderQuietTimer()
-    if (quotaCircuitState.probe) await recordModelQuotaRecovered(quotaCircuitContext)
+    if (quotaIncidentState.recoveryCandidate) {
+      await recordModelQuotaRecovered(quotaIncidentContext, quotaIncidentState)
+    }
     return { response, data }
   } catch (error) {
     clearProviderQuietTimer()
@@ -999,12 +1001,12 @@ async function trackedModelRequest({
     }
     try {
       if (Number(error?.providerStatus) === 429) {
-        await recordModelQuotaExhausted(quotaCircuitContext, error.providerCode || error.code || error.message)
-      } else if (quotaCircuitState.probe) {
-        await deferModelQuotaProbe(quotaCircuitContext)
+        await recordModelQuotaExhausted(quotaIncidentContext, error.providerCode || error.code || error.message)
+      } else if (quotaIncidentState.recoveryCandidate) {
+        await keepModelQuotaIncidentOpen(quotaIncidentContext)
       }
-    } catch (circuitError) {
-      console.error('[LLM] Failed to update model quota circuit:', circuitError.message)
+    } catch (incidentError) {
+      console.error('[LLM] Failed to update model quota incident:', incidentError.message)
     }
     throw error
   }

@@ -3069,8 +3069,7 @@ async function startPeriodReviewModelTask(job, resolved, endpoint, evidence, tas
       ...taskExtras,
     }),
     // Provider-capacity retries are tracked independently from the three
-    // business generation attempts. A quota circuit normally prevents these
-    // extra task attempts from reaching the provider at all.
+    // business generation attempts and remain eligible for normal model traffic.
     maxAttempts:['daily_review_chunk', 'daily_review_merge'].includes(modelTaskKind)
       ? Math.max(DAILY_REVIEW_MODEL_TASK_MAX_ATTEMPTS, Number(job.max_attempts) || 3)
       : Number(job.max_attempts) || 3,
@@ -4352,8 +4351,7 @@ function periodReviewCapacityRetryAt(error) {
     const date = new Date(parsed + 8 * 3600000)
     return date.toISOString().replace('T', ' ').slice(0, 19)
   }
-  const minutes = Math.max(5, Number.parseInt(process.env.AI_MODEL_QUOTA_CIRCUIT_MINUTES || '60') || 60)
-  return afterSeconds(minutes * 60)
+  return afterSeconds(60)
 }
 
 async function restoreQuotaConsumedBusinessAttempt(job) {
