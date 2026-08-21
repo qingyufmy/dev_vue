@@ -1,4 +1,4 @@
-import { coursePrograms, getCourseConsultUrl } from '../data/course-programs.js?v=20260814ema34toggle1'
+import { coursePrograms, getCourseConsultUrl } from '../data/course-programs.js?v=20260814ema34toggle1&rev=course-payment-qr1'
 
 function renderArtifact(program) {
   if (program.slug === 'trading-craft') {
@@ -163,6 +163,12 @@ export function renderCourseProgramPage(program) {
         <div class="program-enrollment-actions">
           <button class="btn btn-primary" type="button" data-course-trial="true">免费试听第一课</button>
           <a class="btn btn-outline" href="${consultUrl}" target="_blank" rel="noopener noreferrer">咨询课程顾问</a>
+        </div>
+        <div class="program-enrollment-qr">
+          <figure>
+            <img src="${program.qrCode.src}" alt="${program.qrCode.alt}" width="176" height="176" loading="lazy" decoding="async">
+            <figcaption>扫码支付课程费用</figcaption>
+          </figure>
         </div>
       </section>
 

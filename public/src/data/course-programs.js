@@ -11,6 +11,10 @@ export const coursePrograms = [
     statement: '我们交付的是方法、训练与纪律，不预测行情，不承诺收益。交易结果由市场与你自己决定。',
     price: '¥29,800',
     priceNote: '一次报名 · 含三个月训练全程',
+    qrCode: {
+      src: '/assets/course-trading-craft-qr.png',
+      alt: '交易是一门手艺课程收款二维码',
+    },
     customerServiceId: '交易是一门手艺',
     facts: ['一根均线 + MACD', '66 天刻意练习', '专题训练 + 课后答疑', '零基础可入'],
     includes: [
@@ -59,6 +63,10 @@ export const coursePrograms = [
     statement: '课程中的个人工具用于核对、风控与复盘，决策权始终属于使用者；不得对外荐股、卖信号或替他人决策。',
     price: '¥39,800',
     priceNote: '一次报名 · 含主线全程与 4 周陪跑',
+    qrCode: {
+      src: '/assets/course-ai-forging-qr.png',
+      alt: 'AI铸剑课程收款二维码',
+    },
     customerServiceId: 'AI铸剑',
     facts: ['双入口学习路径', '零代码可以毕业', 'MT4 / MT5 为进阶选修', '4 周复盘陪跑'],
     includes: [

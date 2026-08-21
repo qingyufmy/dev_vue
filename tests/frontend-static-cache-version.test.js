@@ -39,4 +39,16 @@ describe('frontend static cache version', () => {
     expect(appReference).toContain('rev=period-review-compact1-period-review-nav1')
     expect(appReference).not.toContain('styles.css')
   })
+
+  it('cache-busts the public course QR page assets', async () => {
+    const html = await readFile('public/index.html', 'utf8')
+    const main = await readFile('public/src/main.js', 'utf8')
+    const coursePages = await readFile('public/src/lib/course-pages.js', 'utf8')
+
+    expect(html).toContain('/src/style.css?v=20260814ema34toggle1&rev=course-qr1')
+    expect(html).toContain('/src/main.js?v=20260814ema34toggle1&build=payment-copy-feedback1-course-payment-qr1')
+    expect(main).toContain('./data/course-programs.js?v=20260814ema34toggle1&rev=course-payment-qr1')
+    expect(main).toContain('./lib/course-pages.js?v=20260814ema34toggle1&rev=course-payment-qr1')
+    expect(coursePages).toContain('../data/course-programs.js?v=20260814ema34toggle1&rev=course-payment-qr1')
+  })
 })

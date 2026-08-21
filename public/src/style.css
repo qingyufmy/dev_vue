@@ -8385,8 +8385,8 @@ body.main-account-center-open { overflow: hidden; }
 
 .program-enrollment {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 38px 60px;
+  grid-template-columns: 220px minmax(0, 1fr) 208px;
+  gap: 38px 42px;
   align-items: start;
 }
 
@@ -8421,6 +8421,39 @@ body.main-account-center-open { overflow: hidden; }
 
 .program-enrollment-actions {
   grid-column: 2;
+}
+
+.program-enrollment-qr {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  justify-self: center;
+}
+
+.program-enrollment-qr figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+}
+
+.program-enrollment-qr img {
+  display: block;
+  width: 176px;
+  height: 176px;
+  max-width: 100%;
+  padding: 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.program-enrollment-qr figcaption {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .program-faq-list {
@@ -8490,6 +8523,22 @@ body.main-account-center-open { overflow: hidden; }
 
   .program-output-strip div:nth-child(2) {
     border-right: 0;
+  }
+}
+
+@media (max-width: 820px) {
+  .program-enrollment {
+    grid-template-columns: 1fr;
+  }
+
+  .program-enrollment-actions,
+  .program-enrollment-qr {
+    grid-column: 1;
+  }
+
+  .program-enrollment-qr {
+    grid-row: auto;
+    justify-self: start;
   }
 }
 
@@ -8583,8 +8632,7 @@ body.main-account-center-open { overflow: hidden; }
 
   .program-output-strip,
   .program-practice-list,
-  .program-fit-columns,
-  .program-enrollment {
+  .program-fit-columns {
     grid-template-columns: 1fr;
   }
 
@@ -8602,10 +8650,6 @@ body.main-account-center-open { overflow: hidden; }
   .program-modules article {
     grid-template-columns: 1fr;
     gap: 10px;
-  }
-
-  .program-enrollment-actions {
-    grid-column: 1;
   }
 
   .program-next-course {

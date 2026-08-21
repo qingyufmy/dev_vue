@@ -36,4 +36,16 @@ describe('course program pages', () => {
     expect(html).toContain('kefu.daoctech.com')
     expect(html).not.toContain('<iframe')
   })
+
+  it.each(coursePrograms)('renders only the $slug payment QR code with accessible metadata', (program) => {
+    const html = renderCourseProgramPage(program)
+    const otherProgram = coursePrograms.find(item => item.slug !== program.slug)
+
+    expect(html).toContain(`<img src="${program.qrCode.src}" alt="${program.qrCode.alt}" width="176" height="176" loading="lazy" decoding="async">`)
+    expect(html.match(new RegExp(program.qrCode.src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1)
+    expect(html).not.toContain(otherProgram.qrCode.src)
+    expect(program.qrCode.alt).toContain('课程收款二维码')
+    expect(html).toContain('扫码支付课程费用')
+    expect(html).not.toContain('扫码咨询报名')
+  })
 })

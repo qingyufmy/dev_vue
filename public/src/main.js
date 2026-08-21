@@ -4,8 +4,8 @@ import { api } from './lib/api.js'
 import { createCourseContent } from './lib/course-content.js?v=20260814ema34toggle1'
 import { getArticleContentValidationError, getCourseMediaValidationError } from './lib/admin-course.js?v=20260814ema34toggle1'
 import { classifyArticleUrl, getVideoEpisodeIds } from './lib/course-media.js?v=20260814ema34toggle1'
-import { getCourseProgramByView } from './data/course-programs.js?v=20260814ema34toggle1'
-import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260814ema34toggle1'
+import { getCourseProgramByView } from './data/course-programs.js?v=20260814ema34toggle1&rev=course-payment-qr1'
+import { renderCourseOverviewPage, renderCourseProgramPage } from './lib/course-pages.js?v=20260814ema34toggle1&rev=course-payment-qr1'
 import { getCoursePage } from './lib/course-catalog.js?v=20260814ema34toggle1'
 // Quill loaded via <script> tag in index.html (local /vendor/quill.js)
 // Quill snow theme CSS loaded via <link> in index.html
