@@ -133,6 +133,98 @@ describe('manual trade review v3 worker wiring', () => {
     expect(normalized.strategy_optimization_hypotheses[0].supporting_review_refs).toEqual(['trade-a'])
   })
 
+  it('repairs only invalid point strategy paths from the frozen allow-list', () => {
+    const initial = {
+      ...candidate(),
+      strategy_signals:[{
+        ...candidate().strategy_signals[0],
+        strategy_rule_path:'frozen_strategy.strategy_policy.entry.trend.enabled',
+      }],
+    }
+    const validateOutput = value => normalizeManualTradeReviewCounterfactualPoint(value, {
+      strategySnapshot, allowedEvidenceRefs:[pointRef],
+    })
+    const repair = __manualTradeReviewTest.manualTradeReviewPointPathRepairContext(strategySnapshot, validateOutput)
+    const validationError = new Error('manual_trade_review_v3_strategy_rule_path_invalid')
+    const validationContext = repair.validationContext({ validationError, initialObject:initial })
+    expect(validationContext.targets).toEqual([{
+      path:'strategy_signals[0].strategy_rule_path', signal_index:0,
+      current_value:'frozen_strategy.strategy_policy.entry.trend.enabled',
+    }])
+    expect(validationContext.allowed_strategy_rule_paths).toContain('strategy_policy.entry.trend.enabled')
+    const repairInput = repair.repairInput({ initialObject:initial, validationContext })
+    expect(repairInput.repair_targets[0].strategy_signal.observation).toBe('冻结证据显示条件成立')
+    const repaired = repair.applyRepairPatch({
+      initialObject:initial, validationContext,
+      repairPatch:{ changes:[{
+        path:'strategy_signals[0].strategy_rule_path', value:'strategy_policy.entry.trend.enabled',
+      }] },
+    })
+    expect(repaired.strategy_signals[0].strategy_rule_path).toBe('strategy_policy.entry.trend.enabled')
+    expect(repaired.decision).toBe(initial.decision)
+    expect(repaired.protection_plan).toEqual(initial.protection_plan)
+  })
+
+  it('rejects path repair patches outside the reported targets or frozen allow-list', () => {
+    const initial = {
+      ...candidate(),
+      strategy_signals:[{ ...candidate().strategy_signals[0], strategy_rule_path:'$.strategy_policy.entry' }],
+    }
+    const validateOutput = value => normalizeManualTradeReviewCounterfactualPoint(value, {
+      strategySnapshot, allowedEvidenceRefs:[pointRef],
+    })
+    const repair = __manualTradeReviewTest.manualTradeReviewPointPathRepairContext(strategySnapshot, validateOutput)
+    const validationError = new Error('manual_trade_review_v3_strategy_rule_path_invalid')
+    const validationContext = repair.validationContext({ validationError, initialObject:initial })
+    expect(() => repair.applyRepairPatch({
+      initialObject:initial, validationContext,
+      repairPatch:{ changes:[{ path:'decision', value:'strategy_policy.entry.trend.enabled' }] },
+    })).toThrow('strategy_path_repair_invalid')
+    expect(() => repair.applyRepairPatch({
+      initialObject:initial, validationContext,
+      repairPatch:{ changes:[{
+        path:'strategy_signals[0].strategy_rule_path', value:'strategy_policy.not_real',
+      }] },
+    })).toThrow('strategy_path_repair_invalid')
+    const unrelatedError = new Error('manual_trade_review_v3_confidence_invalid')
+    expect(() => repair.validationContext({ validationError:unrelatedError, initialObject:initial }))
+      .toThrow('manual_trade_review_v3_confidence_invalid')
+  })
+
+  it('repairs only reported v3 outcome path fields and preserves review content', () => {
+    const initial = {
+      review_summary:'保持原复盘结论',
+      technical_analysis_chain:[{
+        method_label:'趋势规则', strategy_rule_paths:['frozen_strategy.strategy_policy.entry.trend.enabled'],
+      }],
+      rule_comparisons:[{ status:'unknown', rule_path:null, rule_summary:'保持原比较' }],
+      strategy_optimization_hypotheses:[{
+        target_path:'$.strategy_policy.entry.trend.enabled', proposed_change:'保持原建议',
+      }],
+    }
+    const validateOutput = vi.fn(value => value)
+    const repair = __manualTradeReviewTest.manualTradeReviewOutcomePathRepairContext(strategySnapshot, validateOutput)
+    const validationError = new Error('manual_trade_review_v3_strategy_rule_path_invalid')
+    const validationContext = repair.validationContext({ validationError, initialObject:initial })
+    expect(validationContext.targets.map(target => target.path)).toEqual([
+      'technical_analysis_chain[0].strategy_rule_paths[0]',
+      'strategy_optimization_hypotheses[0].target_path',
+    ])
+    const repaired = repair.applyRepairPatch({
+      initialObject:initial, validationContext,
+      repairPatch:{ changes:validationContext.targets.map(target => ({
+        path:target.path, value:'strategy_policy.entry.trend.enabled',
+      })) },
+    })
+    expect(repaired.technical_analysis_chain[0].strategy_rule_paths[0])
+      .toBe('strategy_policy.entry.trend.enabled')
+    expect(repaired.strategy_optimization_hypotheses[0].target_path)
+      .toBe('strategy_policy.entry.trend.enabled')
+    expect(repaired.review_summary).toBe('保持原复盘结论')
+    expect(repaired.rule_comparisons[0]).toEqual(initial.rule_comparisons[0])
+    expect(validateOutput).toHaveBeenCalledOnce()
+  })
+
   it('freezes point task idempotency and passes source refs to v3 output validation', async () => {
     const review = await import('node:fs').then(fs => fs.readFileSync(
       new URL('../../server/routes/ai/manual-trade-review.js', import.meta.url), 'utf8'))
@@ -148,6 +240,10 @@ describe('manual trade review v3 worker wiring', () => {
     expect(review).toContain('resultHash:pointRow.normalizedOutputHash')
     expect(review).toMatch(/candidateKey:point\.candidate_key, modelTaskId:taskId, inputHash:point\.input_hash, leaseToken:job\.lease_token/)
     expect(review).toContain('promptHash:sha256(JSON.stringify(messages)), outputContractHash:pointOutputContractHash')
+    expect(review).toContain('allowFollowupRequests:true')
+    expect(review).toContain('repairContext:manualTradeReviewPointPathRepairContext(strategySnapshot, validateOutput)')
+    expect(review).toContain('repairContext:outcomeRepairContext')
+    expect(review).toContain('allowFollowupRequests:Boolean(repairContext)')
     expect(review).toContain('idempotencyKey, inputHash, snapshotHash:runtimeHash')
     const memoryUsageKinds = [
       'manual_review_cf_point', 'manual_review_counterfactual', 'manual_review_outcome',

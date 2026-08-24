@@ -7,6 +7,44 @@ function pathSegments(path) {
   return path.replace(/\[(\d+)\]/g, '.$1').split('.')
 }
 
+function legalStrategyPath(path) {
+  const segments = pathSegments(path)
+  return Boolean(segments && STRATEGY_ROOTS.has(segments[0])
+    && !segments.some(segment => FORBIDDEN_PATH_SEGMENTS.has(String(segment).toLowerCase())))
+}
+
+/**
+ * Enumerate every addressable value under the frozen strategy roots.  The
+ * returned paths use the same grammar as validateFrozenStrategyPath, include
+ * array indexes, and are independent of object insertion order.
+ */
+export function buildFrozenStrategyPaths(snapshot = {}) {
+  const paths = new Set()
+  const source = snapshot && typeof snapshot === 'object' ? snapshot : {}
+  const walk = (value, path, ancestors = new Set()) => {
+    if (!legalStrategyPath(path)) return
+    paths.add(path)
+    if (value == null || typeof value !== 'object' || ancestors.has(value)) return
+    const nextAncestors = new Set(ancestors)
+    nextAncestors.add(value)
+    if (Array.isArray(value)) {
+      for (const key of Object.keys(value).filter(item => /^(0|[1-9]\d*)$/.test(item)).sort((left, right) => Number(left) - Number(right))) {
+        walk(value[key], `${path}[${key}]`, nextAncestors)
+      }
+      return
+    }
+    for (const key of Object.keys(value).sort()) {
+      const normalizedKey = String(key).normalize('NFKC')
+      if (normalizedKey !== key || !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(normalizedKey)) continue
+      walk(value[key], `${path}.${normalizedKey}`, nextAncestors)
+    }
+  }
+  for (const root of STRATEGY_ROOTS) {
+    if (Object.prototype.hasOwnProperty.call(source, root)) walk(source[root], root)
+  }
+  return [...paths].sort()
+}
+
 export function validateFrozenStrategyPath(value, snapshot = {}, { allowEmpty = false } = {}) {
   if (value == null || String(value).trim() === '') {
     if (allowEmpty) return null
@@ -14,8 +52,7 @@ export function validateFrozenStrategyPath(value, snapshot = {}, { allowEmpty = 
   }
   const path = String(value).normalize('NFKC').trim()
   const segments = pathSegments(path)
-  if (!segments || !STRATEGY_ROOTS.has(segments[0])
-    || segments.some(segment => FORBIDDEN_PATH_SEGMENTS.has(String(segment).toLowerCase()))) {
+  if (!segments || !legalStrategyPath(path)) {
     throw new Error('manual_trade_review_output_rule_path_invalid')
   }
   let current = snapshot

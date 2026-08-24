@@ -11,7 +11,7 @@ import { resolveAiTaskModel } from './model-profiles.js'
 import { sha256 } from './inference-snapshots.js'
 import { getCurrentManualReviewAccount, listEligibleManualTrades, readManualTradeEvidence, normalizedTradeHash, MANUAL_TRADE_SELECTION_MAX } from './manual-trade-evidence.js'
 import { verifyManualTradeSelectionContext } from './manual-trade-selection-context.js'
-import { buildManualReviewEvidenceCatalog, requiredManualReviewArray, requiredManualReviewConfidence,
+import { buildFrozenStrategyPaths, buildManualReviewEvidenceCatalog, requiredManualReviewArray, requiredManualReviewConfidence,
   requiredManualReviewEnum, requiredManualReviewObject, requiredManualReviewText, validateFrozenStrategyPath,
   validateManualReviewEvidenceRefs } from './manual-trade-review-contract.js'
 import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime } from './strategy-memory-library.js'
@@ -86,6 +86,187 @@ function parse(value, fallback = null) {
 
 function text(value, max = MAX_TEXT) {
   return String(value == null ? '' : value).normalize('NFKC').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max)
+}
+
+const MANUAL_REVIEW_PATH_REPAIR_CODES = new Set([
+  'manual_trade_review_v3_strategy_rule_path_required',
+  'manual_trade_review_v3_strategy_rule_path_invalid',
+  'manual_trade_review_v3_strategy_rule_path_unknown',
+])
+
+function manualTradeReviewPointPathRepairTargets(initialObject, strategySnapshot) {
+  const allowedPaths = buildFrozenStrategyPaths(strategySnapshot)
+  const targets = []
+  const signals = Array.isArray(initialObject?.strategy_signals) ? initialObject.strategy_signals : []
+  signals.forEach((signal, index) => {
+    try {
+      validateFrozenStrategyPath(signal?.strategy_rule_path, strategySnapshot)
+    } catch {
+      targets.push({
+        path:`strategy_signals[${index}].strategy_rule_path`,
+        signal_index:index,
+        current_value:typeof signal?.strategy_rule_path === 'string' ? signal.strategy_rule_path : null,
+      })
+    }
+  })
+  return { targets, allowedPaths }
+}
+
+function manualTradeReviewPointPathRepairContext(strategySnapshot, validateOutput) {
+  return {
+    mode:'patch',
+    patchOutputFormat:{ changes:[{
+      path:'exact repair_targets.path', value:'one exact allowed_strategy_rule_paths value',
+    }] },
+    requiredCoverage:'Return exactly one change for every repair target and no other changes.',
+    repairMaxTokens:2_048,
+    repairReasoningEffort:'low',
+    patchRepairInstructions:'只修复 strategy_rule_path。每个 value 必须逐字复制 allowed_strategy_rule_paths 中的一项；不得添加 frozen_strategy.、$、斜杠或解释文字，不得修改方向、价格、保护计划、证据引用或任何其他字段。',
+    validationContext:({ validationError, initialObject }) => {
+      const code = String(validationError?.code || validationError?.message || '')
+      if (!MANUAL_REVIEW_PATH_REPAIR_CODES.has(code)) throw validationError
+      const { targets, allowedPaths } = manualTradeReviewPointPathRepairTargets(initialObject, strategySnapshot)
+      if (!targets.length || !allowedPaths.length) throw validationError
+      return { targets, allowed_strategy_rule_paths:allowedPaths }
+    },
+    repairInput:({ initialObject, validationContext }) => ({
+      repair_targets:(validationContext?.targets || []).map(target => ({
+        ...target,
+        strategy_signal:initialObject?.strategy_signals?.[target.signal_index] || null,
+      })),
+      allowed_strategy_rule_paths:validationContext?.allowed_strategy_rule_paths || [],
+    }),
+    applyRepairPatch:({ initialObject, repairPatch, validationContext }) => {
+      const changes = Array.isArray(repairPatch?.changes) ? repairPatch.changes : []
+      const targets = Array.isArray(validationContext?.targets) ? validationContext.targets : []
+      const allowedPaths = new Set(validationContext?.allowed_strategy_rule_paths || [])
+      if (changes.length !== targets.length) throw new Error('manual_trade_review_v3_strategy_path_repair_coverage_invalid')
+      const targetByPath = new Map(targets.map(target => [target.path, target]))
+      const seen = new Set()
+      const repaired = JSON.parse(JSON.stringify(initialObject))
+      for (const change of changes) {
+        const path = String(change?.path || '')
+        const value = String(change?.value || '').normalize('NFKC').trim()
+        const target = targetByPath.get(path)
+        if (!target || seen.has(path) || !allowedPaths.has(value)) {
+          throw new Error('manual_trade_review_v3_strategy_path_repair_invalid')
+        }
+        if (!repaired?.strategy_signals?.[target.signal_index]) {
+          throw new Error('manual_trade_review_v3_strategy_path_repair_target_missing')
+        }
+        repaired.strategy_signals[target.signal_index].strategy_rule_path = value
+        seen.add(path)
+      }
+      return validateOutput(repaired)
+    },
+  }
+}
+
+function manualTradeReviewOutcomePathRepairTargets(initialObject, strategySnapshot) {
+  const allowedPaths = buildFrozenStrategyPaths(strategySnapshot)
+  const targets = []
+  const addTarget = (value, path, location, { allowEmpty = false } = {}) => {
+    try {
+      validateFrozenStrategyPath(value, strategySnapshot, { allowEmpty })
+    } catch {
+      targets.push({ path, current_value:typeof value === 'string' ? value : null, ...location })
+    }
+  }
+  const chain = Array.isArray(initialObject?.technical_analysis_chain) ? initialObject.technical_analysis_chain : []
+  chain.forEach((item, itemIndex) => {
+    const paths = Array.isArray(item?.strategy_rule_paths) ? item.strategy_rule_paths : []
+    paths.forEach((value, pathIndex) => addTarget(value,
+      `technical_analysis_chain[${itemIndex}].strategy_rule_paths[${pathIndex}]`,
+      { section:'technical_analysis_chain', item_index:itemIndex, path_index:pathIndex }))
+  })
+  const comparisons = Array.isArray(initialObject?.rule_comparisons) ? initialObject.rule_comparisons : []
+  comparisons.forEach((item, itemIndex) => addTarget(item?.rule_path,
+    `rule_comparisons[${itemIndex}].rule_path`,
+    { section:'rule_comparisons', item_index:itemIndex },
+    { allowEmpty:['unknown', 'not_applicable'].includes(item?.status) }))
+  const hypotheses = Array.isArray(initialObject?.strategy_optimization_hypotheses)
+    ? initialObject.strategy_optimization_hypotheses : []
+  hypotheses.forEach((item, itemIndex) => addTarget(item?.target_path,
+    `strategy_optimization_hypotheses[${itemIndex}].target_path`,
+    { section:'strategy_optimization_hypotheses', item_index:itemIndex },
+    { allowEmpty:item?.state === 'insufficient_evidence' }))
+  return { targets, allowedPaths }
+}
+
+function manualTradeReviewOutcomePathTargetValue(initialObject, target) {
+  if (target?.section === 'technical_analysis_chain') {
+    return initialObject?.technical_analysis_chain?.[target.item_index] || null
+  }
+  if (target?.section === 'rule_comparisons') return initialObject?.rule_comparisons?.[target.item_index] || null
+  if (target?.section === 'strategy_optimization_hypotheses') {
+    return initialObject?.strategy_optimization_hypotheses?.[target.item_index] || null
+  }
+  return null
+}
+
+function applyManualTradeReviewOutcomePath(repaired, target, value) {
+  const technicalPaths = repaired?.technical_analysis_chain?.[target.item_index]?.strategy_rule_paths
+  if (target.section === 'technical_analysis_chain' && Array.isArray(technicalPaths)
+    && target.path_index >= 0 && target.path_index < technicalPaths.length) {
+    technicalPaths[target.path_index] = value
+    return true
+  }
+  if (target.section === 'rule_comparisons' && repaired?.rule_comparisons?.[target.item_index]) {
+    repaired.rule_comparisons[target.item_index].rule_path = value
+    return true
+  }
+  if (target.section === 'strategy_optimization_hypotheses'
+    && repaired?.strategy_optimization_hypotheses?.[target.item_index]) {
+    repaired.strategy_optimization_hypotheses[target.item_index].target_path = value
+    return true
+  }
+  return false
+}
+
+function manualTradeReviewOutcomePathRepairContext(strategySnapshot, validateOutput) {
+  return {
+    mode:'patch',
+    patchOutputFormat:{ changes:[{
+      path:'exact repair_targets.path', value:'one exact allowed_strategy_rule_paths value',
+    }] },
+    requiredCoverage:'Return exactly one change for every repair target and no other changes.',
+    repairMaxTokens:4_096,
+    repairReasoningEffort:'low',
+    patchRepairInstructions:'只修复被报告的策略路径字段。每个 value 必须逐字复制 allowed_strategy_rule_paths 中的一项；不得添加 frozen_strategy.、$、斜杠或解释文字，不得修改复盘结论、归因、证据引用、优化建议或任何其他字段。',
+    validationContext:({ validationError, initialObject }) => {
+      const code = String(validationError?.code || validationError?.message || '')
+      if (!MANUAL_REVIEW_PATH_REPAIR_CODES.has(code)) throw validationError
+      const { targets, allowedPaths } = manualTradeReviewOutcomePathRepairTargets(initialObject, strategySnapshot)
+      if (!targets.length || !allowedPaths.length) throw validationError
+      return { targets, allowed_strategy_rule_paths:allowedPaths }
+    },
+    repairInput:({ initialObject, validationContext }) => ({
+      repair_targets:(validationContext?.targets || []).map(target => ({
+        ...target, source_item:manualTradeReviewOutcomePathTargetValue(initialObject, target),
+      })),
+      allowed_strategy_rule_paths:validationContext?.allowed_strategy_rule_paths || [],
+    }),
+    applyRepairPatch:({ initialObject, repairPatch, validationContext }) => {
+      const changes = Array.isArray(repairPatch?.changes) ? repairPatch.changes : []
+      const targets = Array.isArray(validationContext?.targets) ? validationContext.targets : []
+      const allowedPaths = new Set(validationContext?.allowed_strategy_rule_paths || [])
+      if (changes.length !== targets.length) throw new Error('manual_trade_review_v3_strategy_path_repair_coverage_invalid')
+      const targetByPath = new Map(targets.map(target => [target.path, target]))
+      const seen = new Set()
+      const repaired = JSON.parse(JSON.stringify(initialObject))
+      for (const change of changes) {
+        const path = String(change?.path || '')
+        const value = String(change?.value || '').normalize('NFKC').trim()
+        const target = targetByPath.get(path)
+        if (!target || seen.has(path) || !allowedPaths.has(value)
+          || !applyManualTradeReviewOutcomePath(repaired, target, value)) {
+          throw new Error('manual_trade_review_v3_strategy_path_repair_invalid')
+        }
+        seen.add(path)
+      }
+      return validateOutput(repaired)
+    },
+  }
 }
 
 const {
@@ -1075,7 +1256,7 @@ async function reconcileManualTradeReviewStageTask(stageRow, outputHash) {
 
 async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, memorySnapshot,
   stageRows, endpoint, resolved, budget, messages, parentOutputHash = null, requestModel, validateOutput,
-  finalApply = false, lease, outputContractHash:requestedOutputContractHash = null } = {}) {
+  repairContext = null, finalApply = false, lease, outputContractHash:requestedOutputContractHash = null } = {}) {
   const row = stageRows.find(item => item.stage === stage)
   if (!row) throw manualTradeReviewStageTaskError(stage, 'row_missing')
   if (row.status === 'succeeded' && row.normalizedOutput) {
@@ -1151,7 +1332,8 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
         usage:'review', strategyId:job.strategy_id },
       timeout:Math.max(1, Math.min(deadlines.attemptSafetyDeadlineUtcMs, deadlines.taskDeadlineUtcMs) - Date.now()),
       deadlineAtMs:deadlines.attemptSafetyDeadlineUtcMs, followupValidUntilMs:deadlines.taskDeadlineUtcMs,
-      signal:requestSignal(), ...callbacks, allowFollowupRequests:false,
+      signal:requestSignal(), ...callbacks, allowFollowupRequests:Boolean(repairContext),
+      ...(repairContext ? { repairContext } : {}),
       validateObject:validateOutput,
     })
     lease.assertOwned(); tracker.assertOwned()
@@ -1529,7 +1711,9 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
         credentialSource:resolved.credential_source, usage:'review', strategyId:job.strategy_id },
       timeout:Math.max(1, Math.min(deadlines.attemptSafetyDeadlineUtcMs, deadlines.taskDeadlineUtcMs) - Date.now()),
       deadlineAtMs:deadlines.attemptSafetyDeadlineUtcMs, followupValidUntilMs:deadlines.taskDeadlineUtcMs,
-      signal:requestSignal(), ...callbacks, allowFollowupRequests:false, validateObject:validateOutput })
+      signal:requestSignal(), ...callbacks, allowFollowupRequests:true,
+      repairContext:manualTradeReviewPointPathRepairContext(strategySnapshot, validateOutput),
+      validateObject:validateOutput })
     lease.assertOwned(); tracker.assertOwned()
     const output = validateOutput(raw)
     const saved = await saveManualTradeReviewCounterfactualPointOutput({ caseId:job.case_id, jobId:job.id,
@@ -1773,6 +1957,7 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
     let counterfactualResult
     let outcomeMessages
     let outcomeValidator
+    let outcomeRepairContext = null
     if (isV3) {
       await queryRun(`UPDATE manual_trade_review_jobs SET progress_stage = 'counterfactual_points', stage_updated_at = ?, updated_at = ?
         WHERE id = ? AND generation_no = ? AND lease_token = ? AND status = 'leased'`,
@@ -1817,6 +2002,8 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
         return { ...normalized, counterfactual_points:frozenPointBundle,
           counterfactual_summary:normalized.counterfactual_summary }
       }
+      outcomeRepairContext = manualTradeReviewOutcomePathRepairContext(
+        parse(reviewCase.strategy_snapshot_json, {}), outcomeValidator)
     } else {
       const counterfactualMessages = counterfactualPrompt(reviewCase, sources, memorySnapshot)
       const counterfactualBudget = await prepareManualTradeReviewBudget(resolved, counterfactualMessages)
@@ -1841,6 +2028,7 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
       runtime, runtimeHash:runtimeContext.runtimeHash, memorySnapshot, stageRows, endpoint, resolved, budget:outcomeBudget,
       messages:outcomeMessages, parentOutputHash:counterfactualResult.outputHash, requestModel, lease,
       finalApply:true, outputContractHash:isV3 ? manualTradeReviewV3OutputContractHash() : null,
+      repairContext:outcomeRepairContext,
       validateOutput:outcomeValidator })
     outcomeTracker = outcomeResult.tracker
     lease.assertOwned(); outcomeTracker?.assertOwned()
@@ -1976,6 +2164,8 @@ export const __manualTradeReviewTest = {
   manualTradeReviewV3PointEvidence, manualTradeReviewV3ServerSummary, manualTradeReviewV3PointBundle,
   manualTradeReviewV3FindAtr, manualTradeReviewV3FindAtrEvidence,
   manualTradeReviewV3ValidatePersistedBundle, manualTradeReviewV3OutputContractHash, manualTradeReviewV3PointContractHash,
+  manualTradeReviewPointPathRepairTargets, manualTradeReviewPointPathRepairContext,
+  manualTradeReviewOutcomePathRepairTargets, manualTradeReviewOutcomePathRepairContext,
   applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs, markJobFailure,
   manualTradeReviewDeterministicEvidenceFailure,
 }
