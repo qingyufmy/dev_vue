@@ -1494,7 +1494,7 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
       maxAttempts:Number(job.max_attempts) || 3, taskDeadlineAtUtcMs:parseBeijingDateTime(job.task_deadline_at),
     }, { workerId:`manual-trade-review:${process.pid}:counterfactual:${point.candidate_key}`, linkTask:async taskId =>
       linkManualTradeReviewCounterfactualPointModelTask({ caseId:job.case_id, jobId:job.id, generationNo,
-        candidateKey:point.candidate_key, modelTaskId:taskId, inputHash, leaseToken:job.lease_token }) })
+        candidateKey:point.candidate_key, modelTaskId:taskId, inputHash:point.input_hash, leaseToken:job.lease_token }) })
     await createStrategyMemoryInjectionLog({ strategyId:job.strategy_id,
       actor:{ userId:job.user_id, role:'admin' }, library:memorySnapshot,
       injectionKind:`manual_trade_review_counterfactual_point_${point.candidate_key}`, modelTaskId:tracker.taskId })

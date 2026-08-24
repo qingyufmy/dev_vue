@@ -14,7 +14,7 @@ import { MANUAL_TRADE_REVIEW_V3_VERSION } from './manual-trade-review-v3-contrac
 export const MANUAL_TRADE_PAGE_DEFAULT = 20
 export const MANUAL_TRADE_PAGE_MAX = 100
 export const MANUAL_TRADE_SELECTION_MAX = 1
-export const MANUAL_TRADE_LOOKBACK_MSC = 7 * 24 * 60 * 60 * 1000
+export const MANUAL_TRADE_LOOKBACK_MSC = 30 * 24 * 60 * 60 * 1000
 const MANUAL_TRADE_PREPARE_POLL_ATTEMPTS = 8
 const MANUAL_TRADE_PREPARE_POLL_INTERVAL_MS = 250
 const MT4_VISIBLE_HISTORY_INCOMPLETE = 'manual_trade_review_mt4_visible_history_incomplete'

@@ -146,5 +146,8 @@ describe('manual trade review v3 worker wiring', () => {
     expect(review).toContain('outputContractHash:isV3 ? manualTradeReviewV3OutputContractHash() : null')
     expect(review).toContain('resultRef:`manual_trade_review_counterfactual:${job.id}')
     expect(review).toContain('resultHash:pointRow.normalizedOutputHash')
+    expect(review).toMatch(/candidateKey:point\.candidate_key, modelTaskId:taskId, inputHash:point\.input_hash, leaseToken:job\.lease_token/)
+    expect(review).toContain('promptHash:sha256(JSON.stringify(messages)), outputContractHash:pointOutputContractHash')
+    expect(review).toContain('idempotencyKey, inputHash, snapshotHash:runtimeHash')
   })
 })

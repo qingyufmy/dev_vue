@@ -2107,7 +2107,7 @@ const API_ERROR_MESSAGES = {
   manual_trade_review_evidence_unavailable: "手动交易证据暂不可用，请连接终端并稍后重试",
   manual_trade_review_mt4_visible_history_incomplete: "MT4 只复盘终端当前可见历史，请在 MT4“账户历史”中选择“全部历史”后刷新；系统不会宣称券商全量历史",
   manual_trade_review_mt4_visible_history_unknown: "当前 MT4 桥接未提供可见历史完整性证明，请升级桥接并在 MT4“账户历史”中选择“全部历史”后刷新",
-  manual_trade_review_history_range_invalid: "最近 7 天的交易快照已失效，请重新刷新交易记录",
+  manual_trade_review_history_range_invalid: "最近 30 天的交易快照已失效，请重新刷新交易记录",
   manual_trade_review_selection_context_required: "交易选择已失效，请刷新交易记录后重新选择",
   manual_trade_review_selection_context_invalid: "交易选择凭证无效，请刷新交易记录后重新选择",
   manual_trade_review_selection_context_expired: "交易选择已超过 15 分钟，请刷新交易记录后重新选择",
@@ -2117,7 +2117,7 @@ const API_ERROR_MESSAGES = {
   manual_trade_review_counterfactual_immutable: "开仓前盲测结论已冻结，不能在事后人工改写",
   manual_trade_review_source_changed: "订单来源或冻结交易历史已发生变化，请刷新后重新选择",
   manual_trade_review_history_snapshot_changed: "交易历史快照发生变化，请刷新交易记录后重新选择",
-  manual_trade_review_trade_outside_selection_range: "所选交易已不在冻结的最近 7 天范围内，请刷新后重新选择",
+  manual_trade_review_trade_outside_selection_range: "所选交易已不在冻结的最近 30 天范围内，请刷新后重新选择",
   manual_trade_review_action_not_allowed_in_generation: "当前复盘正在生成，旧版本暂时只读；请等待本轮完成或失败后再处理",
   manual_trade_review_frozen_model_changed: "本轮冻结的模型配置已变化，已停止继续生成；请人工重试以创建新一代任务",
   model_task_idempotency_conflict: "模型任务的冻结输入与既有任务不一致，已停止执行以避免重复或串用结果",
@@ -2153,7 +2153,7 @@ const API_ERROR_MESSAGES = {
   history_page_unavailable: "交易历史下一页暂不可用，已停止继续查找",
   system_association_lookup_unavailable: "系统关联证据暂不可用，已停止继续查找",
   positions_unavailable: "当前持仓证据暂不可用，已停止继续查找",
-  manual_trade_review_selection_invalid: "请选择 1 笔最近 7 天的盈利未绑定信号订单",
+  manual_trade_review_selection_invalid: "请选择 1 笔最近 30 天的盈利未绑定信号订单",
   manual_trade_review_selection_duplicate: "交易来源已变化或重复，请刷新后重新选择",
   manual_trade_review_client_request_id_required: "任务请求编号缺失，请重试",
   manual_trade_review_model_unavailable: "当前没有可用的复盘模型，请先配置平台模型",
@@ -7504,7 +7504,7 @@ function renderManualTradeReviewTrades() {
     const scanned = Number(state.manualTradeReviewScannedSourcePages || 0);
     host.innerHTML = historyScopeNotice + (canContinue
       ? `<div class="manual-review-empty"><i data-lucide="search-check" size="20"></i><div><strong>已检查当前范围，仍有更早记录</strong><span>本次已检查 ${scanned || 1} 个历史页，当前范围没有符合筛选的交易；继续查找会沿同一快照检查更早记录。</span></div></div>`
-      : '<div class="manual-review-empty"><i data-lucide="check-check" size="20"></i><div><strong>最近 7 天没有可复盘交易</strong><span>这里只显示盈利、完整平仓且开仓订单未绑定平台信号的记录。</span></div></div>');
+      : '<div class="manual-review-empty"><i data-lucide="check-check" size="20"></i><div><strong>最近 30 天没有可复盘交易</strong><span>这里只显示盈利、完整平仓且开仓订单未绑定平台信号的记录。</span></div></div>');
   } else {
     host.innerHTML = historyScopeNotice + state.manualTradeReviewTrades.map(trade => {
       const identity = manualTradeReviewIdentity(trade);

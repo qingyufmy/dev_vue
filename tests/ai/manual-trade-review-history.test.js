@@ -14,7 +14,8 @@ vi.mock('../../server/bridge-ws.js', () => ({
 vi.mock('../../server/routes/ai/terminal-clock.js', () => ({ trustedTerminalClock:() => true }))
 vi.mock('../../server/routes/ai/review-market-path.js', () => ({ buildReviewMarketPath:vi.fn() }))
 
-import { buildEligibleManualTrades, listEligibleManualTrades, readManualTradeEvidence } from '../../server/routes/ai/manual-trade-evidence.js'
+import { buildEligibleManualTrades, listEligibleManualTrades, readManualTradeEvidence,
+  MANUAL_TRADE_LOOKBACK_MSC } from '../../server/routes/ai/manual-trade-evidence.js'
 import { createManualTradeSelectionContext } from '../../server/routes/ai/manual-trade-selection-context.js'
 
 const accountRow = { id:5, user_id:7, broker_server:'Broker-Demo', login_account:'1001', observe_status:'active',
@@ -80,6 +81,10 @@ function reviewCandles() {
 }
 
 describe('manual trade review history cursor contract', () => {
+  it('uses a bounded rolling 30-day eligible-trade window', () => {
+    expect(MANUAL_TRADE_LOOKBACK_MSC).toBe(30 * 24 * 60 * 60 * 1000)
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     bridgeRuntime.platform = 'mt5'
@@ -118,7 +123,17 @@ describe('manual trade review history cursor contract', () => {
     expect(bridge.mt5Bridge.mock.calls[2][2]).toMatchObject({ evidence_position_ids:['p1'], evidence_order_tickets:['o1'] })
   })
 
-  it('refreshes the current seven-day SQLite snapshot without invoking legacy full history', async () => {
+  it('sends the exact rolling 30-day range to Bridge', async () => {
+    const nowUtcMsc = MANUAL_TRADE_LOOKBACK_MSC + 10_000
+    await listEligibleManualTrades({ id:7 }, { page_size:20 }, { nowUtcMsc })
+    expect(bridge.mt5Bridge.mock.calls[0][1]).toBe('history_prepare_status_v1')
+    expect(bridge.mt5Bridge.mock.calls[0][2]).toMatchObject({
+      range_start_utc_msc:10_000,
+      range_end_utc_msc:nowUtcMsc,
+    })
+  })
+
+  it('refreshes the current 30-day SQLite snapshot without invoking legacy full history', async () => {
     const result = await listEligibleManualTrades({ id:7 }, { page_size:20, force_refresh:'1' }, { nowUtcMsc:10_000 })
     expect(result.unavailable).toBe(false)
     expect(bridge.mt5Bridge.mock.calls.map(([, action]) => action)).toEqual([
