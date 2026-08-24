@@ -548,12 +548,12 @@ export async function requeueAbandonedModelTaskById(taskId, reason = 'model_task
   const now = Date.now()
   const where = recoveryWhere({ ...guard, taskId })
   const result = await queryRun(`UPDATE ai_model_tasks SET status='queued',
-    error_code=NULL, error_message=NULL, lease_token=NULL, lease_owner=NULL,
+    error_code=?, error_message=?, lease_token=NULL, lease_owner=NULL,
     lease_expires_at_utc_msc=NULL, fencing_token=fencing_token + 1,
     last_activity_at_utc_msc=?, updated_at_utc_msc=?
     WHERE ${where.sql} AND status IN ('leased','preparing')
       AND NOT EXISTS (SELECT 1 FROM ai_model_task_attempts attempts WHERE attempts.task_id = ai_model_tasks.task_id)`,
-  [now, now, ...where.params])
+  [String(reason).slice(0, 128), String(reason).slice(0, 512), now, now, ...where.params])
   if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
     await appendModelTaskEvent(String(taskId), 'task_requeued_after_recovery', { reason })
     return true
@@ -576,6 +576,7 @@ const BUSINESS_RECOVERY_ACTIVE_STATES = Object.freeze([
  */
 export async function recoverAbandonedBusinessModelTasks({
   taskKinds = null,
+  domainTypes = null,
   nowUtcMs = Date.now(),
   limit = 500,
   inspectBusiness = null,
@@ -584,13 +585,17 @@ export async function recoverAbandonedBusinessModelTasks({
   const kinds = Array.isArray(taskKinds)
     ? [...new Set(taskKinds.map(value => String(value || '').trim()).filter(Boolean))]
     : []
+  const domains = Array.isArray(domainTypes)
+    ? [...new Set(domainTypes.map(value => String(value || '').trim()).filter(Boolean))]
+    : []
   const kindClause = kinds.length ? ` AND tasks.task_kind IN (${kinds.map(() => '?').join(',')})` : ''
+  const domainClause = domains.length ? ` AND tasks.domain_type IN (${domains.map(() => '?').join(',')})` : ''
   const boundedLimit = Math.max(1, Math.min(1000, Number(limit) || 500))
   const tasks = await queryAll(`SELECT tasks.*,
       EXISTS (SELECT 1 FROM ai_model_task_attempts attempts WHERE attempts.task_id = tasks.task_id) AS provider_attempt_started
     FROM ai_model_tasks tasks
-    WHERE tasks.status IN (${BUSINESS_RECOVERY_ACTIVE_STATES.map(() => '?').join(',')})${kindClause}
-    ORDER BY tasks.updated_at_utc_msc LIMIT ?`, [...BUSINESS_RECOVERY_ACTIVE_STATES, ...kinds, boundedLimit])
+    WHERE tasks.status IN (${BUSINESS_RECOVERY_ACTIVE_STATES.map(() => '?').join(',')})${kindClause}${domainClause}
+    ORDER BY tasks.updated_at_utc_msc LIMIT ?`, [...BUSINESS_RECOVERY_ACTIVE_STATES, ...kinds, ...domains, boundedLimit])
   const result = {
     scanned:tasks.length, succeeded:0, requeued:0, statusUnknown:0, stale:0, active:0, errors:0,
   }

@@ -80,6 +80,105 @@ describe('official provider SSE requests', () => {
     expect(usage).toHaveBeenCalledWith(expect.objectContaining({ status:'error', responseReceived:false, responseBytes:expect.any(Number) }))
   })
 
+  it('accepts a completed chat choice when a compatible gateway omits trailing DONE', async () => {
+    mockFetch.mockResolvedValue(response(streamBody([
+      'data: {"id":"ds-eof","choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\n',
+      'data: {"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}\n\n',
+    ])))
+    const activities = vi.fn()
+    const result = await requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', provider:'deepseek', apiKey:'key', model:'deepseek-chat',
+      maxTokens:100, messages:[{ role:'user', content:'test' }], onProviderActivity:activities,
+    })
+    expect(result).toEqual({ ok:true })
+    expect(activities.mock.calls.at(-1)[0]).toMatchObject({
+      state:'provider_terminal', providerEventType:'chat.finish_reason', responseReceived:true,
+    })
+  })
+
+  it('keeps a completed chat choice when the transport closes after finish_reason', async () => {
+    const encoder = new TextEncoder()
+    const transportBody = {
+      [Symbol.asyncIterator]:() => {
+        let index = 0
+        const parts = [
+          'data: {"id":"ds-terminated","choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\n',
+          'data: {"choices":[{"finish_reason":"stop"}]}\n\n',
+        ]
+        return {
+          next:async () => index < parts.length
+            ? { done:false, value:encoder.encode(parts[index++]) }
+            : Promise.reject(new TypeError('terminated')),
+          return:vi.fn(async () => ({ done:true })),
+        }
+      },
+    }
+    const usage = vi.fn()
+    await expect(requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', provider:'deepseek', apiKey:'key', model:'deepseek-chat',
+      maxTokens:100, messages:[{ role:'user', content:'test' }], onProviderUsage:usage,
+    })).resolves.toEqual({ ok:true })
+    expect(usage).toHaveBeenCalledWith(expect.objectContaining({ status:'success', responseReceived:true }))
+  })
+
+  it('keeps a complete JSON result when the transport closes before finish metadata', async () => {
+    const encoder = new TextEncoder()
+    const transportBody = {
+      [Symbol.asyncIterator]:() => {
+        let sent = false
+        return {
+          next:async () => sent
+            ? Promise.reject(new TypeError('terminated'))
+            : (sent = true, { done:false, value:encoder.encode(
+              'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}\n\n',
+            ) }),
+          return:vi.fn(async () => ({ done:true })),
+        }
+      },
+    }
+    const terminal = vi.fn()
+    const parsed = await parseProviderSseResponse(response(transportBody), { onEvent:terminal })
+    expect(parsed.data.choices[0].message.content).toBe('{"ok":true}')
+    expect(parsed.terminalEvent).toMatchObject({ eventType:'chat.complete_json', done:true })
+    expect(terminal.mock.calls.at(-1)[0]).toMatchObject({ eventType:'chat.complete_json' })
+  })
+
+  it('still rejects streamed length truncation even when the JSON is complete', async () => {
+    mockFetch.mockResolvedValue(response(streamBody([
+      'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"length"}]}\n\n',
+    ])))
+    await expect(requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', provider:'deepseek', apiKey:'key', model:'deepseek-chat',
+      maxTokens:100, messages:[{ role:'user', content:'test' }],
+    })).rejects.toMatchObject({ code:'output_truncated', finishReason:'length' })
+  })
+
+  it('fails closed when the transport closes before finish_reason', async () => {
+    const encoder = new TextEncoder()
+    const transportBody = {
+      [Symbol.asyncIterator]:() => {
+        let sent = false
+        return {
+          next:async () => sent
+            ? Promise.reject(new TypeError('terminated'))
+            : (sent = true, { done:false, value:encoder.encode(
+              'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}\n\n',
+            ) }),
+          return:vi.fn(async () => ({ done:true })),
+        }
+      },
+    }
+    await expect(parseProviderSseResponse(response(transportBody)))
+      .rejects.toThrow('terminated')
+  })
+
+  it('does not hide parser failures that happen after finish_reason', async () => {
+    await expect(parseProviderSseResponse(response(streamBody([
+      'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\n',
+      'garbage\n\n',
+    ])))).rejects.toMatchObject({ code:'provider_sse_malformed' })
+  })
+
   it('rejects malformed and oversized SSE events', async () => {
     await expect(parseProviderSseResponse(response(streamBody(['garbage\n\n']))))
       .rejects.toMatchObject({ code:'provider_sse_malformed' })

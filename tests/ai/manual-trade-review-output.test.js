@@ -198,6 +198,145 @@ describe('manual profitable trade counterfactual review contract', () => {
     expect(db.queryRun.mock.calls[0][1]).toContain('manual_trade_review_generation_expired_manual_retry_required')
   })
 
+  it('recovers an expired provider-quiet point as status_unknown without consuming a business attempt', async () => {
+    db.queryAll.mockReset()
+    db.queryOne.mockReset()
+    db.queryRun.mockReset().mockResolvedValue({ affectedRows:1 })
+    db.queryAll
+      .mockResolvedValueOnce([{
+        task_id:'task-point-unknown', task_kind:'manual_analysis',
+        domain_type:'manual_trade_review_counterfactual_point', domain_id:41,
+        status:'provider_quiet', lease_expires_at_utc_msc:90, task_deadline_at_utc_msc:300,
+        fencing_token:2, provider_attempt_started:1,
+        frozen_context_json:JSON.stringify({ generation_no:7 }),
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ candidate_key:'anchor_minus_1', status:'running', model_task_id:'task-point-unknown' }])
+    db.queryOne.mockResolvedValueOnce({ id:41, case_id:99, generation_no:7, status:'queued', case_status:'queued', current_version_id:null })
+
+    const result = await __manualTradeReviewTest.recoverAbandonedManualTradeReviewModelTasks({ nowUtcMs:100, limit:10 })
+
+    expect(result).toMatchObject({ scanned:1, statusUnknown:1, stale:0 })
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("UPDATE ai_model_tasks SET status='status_unknown'"))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('manual_trade_review_counterfactual_points SET status = \'status_unknown\''))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("UPDATE manual_trade_review_jobs SET status = 'queued'"))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes('attempt_count = GREATEST'))).toBe(false)
+  })
+
+  it('closes an expired unknown point and its review job/case as failed', async () => {
+    db.queryAll.mockReset()
+    db.queryOne.mockReset()
+    db.queryRun.mockReset().mockResolvedValue({ affectedRows:1 })
+    db.queryAll
+      .mockResolvedValueOnce([{
+        task_id:'task-point-stale', task_kind:'manual_analysis',
+        domain_type:'manual_trade_review_counterfactual_point', domain_id:41,
+        status:'status_unknown', lease_expires_at_utc_msc:null, task_deadline_at_utc_msc:99,
+        fencing_token:3, provider_attempt_started:1,
+        frozen_context_json:JSON.stringify({ generation_no:7 }),
+      }])
+      .mockResolvedValueOnce([{ stage:'counterfactual', status:'status_unknown', model_task_id:'task-point-stale' }])
+      .mockResolvedValueOnce([{ candidate_key:'anchor_minus_1', status:'status_unknown', model_task_id:'task-point-stale' }])
+    db.queryOne.mockResolvedValueOnce({ id:41, case_id:99, generation_no:7, status:'queued', case_status:'queued', current_version_id:null })
+
+    const result = await __manualTradeReviewTest.recoverAbandonedManualTradeReviewModelTasks({ nowUtcMs:100, limit:10 })
+
+    expect(result).toMatchObject({ scanned:1, statusUnknown:0, stale:1 })
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("UPDATE ai_model_tasks SET status='completed_stale'"))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("manual_trade_review_counterfactual_points SET status = 'failed'"))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("manual_trade_review_stage_runs SET status = 'failed'"))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("UPDATE manual_trade_review_jobs SET status = 'failed'"))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes("UPDATE manual_trade_review_cases SET status = 'failed'"))).toBe(true)
+  })
+
+  it('does not treat a saved outcome payload as final success before a business version exists', async () => {
+    db.queryAll.mockReset()
+    db.queryOne.mockReset()
+    db.queryOne.mockResolvedValueOnce({ id:41, case_id:99, generation_no:7, status:'queued', case_status:'generating', current_version_id:12 })
+    db.queryAll
+      .mockResolvedValueOnce([{
+        stage:'outcome_review', status:'succeeded', model_task_id:'task-outcome',
+        normalized_output_json:'{}', normalized_output_hash:'a'.repeat(64),
+      }])
+      .mockResolvedValueOnce([])
+    db.queryOne.mockResolvedValueOnce(null)
+
+    const result = await __manualTradeReviewTest.inspectManualTradeReviewModelTask({
+      task_id:'task-outcome', domain_type:'manual_trade_review_job', domain_id:41,
+      frozen_context_json:JSON.stringify({ generation_no:7 }),
+    })
+
+    expect(result).toMatchObject({ succeeded:false, stage:{ status:'succeeded' } })
+  })
+
+  it('reconciles a durable point output as task success without replaying the provider', async () => {
+    db.queryAll.mockReset()
+    db.queryOne.mockReset()
+    db.queryOne.mockResolvedValueOnce({ id:41, case_id:99, generation_no:7, status:'queued', case_status:'queued', current_version_id:null })
+    db.queryAll
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        candidate_key:'anchor_minus_1', status:'succeeded', model_task_id:'task-point-success',
+        normalized_output_json:'{}', normalized_output_hash:'b'.repeat(64),
+      }])
+
+    const result = await __manualTradeReviewTest.inspectManualTradeReviewModelTask({
+      task_id:'task-point-success', domain_type:'manual_trade_review_counterfactual_point', domain_id:41,
+      frozen_context_json:JSON.stringify({ generation_no:7 }),
+    })
+
+    expect(result).toMatchObject({ succeeded:true, resultHash:'b'.repeat(64), point:{ status:'succeeded' } })
+  })
+
+  it('reconciles a durable non-final stage output while keeping outcome apply separate', async () => {
+    db.queryAll.mockReset()
+    db.queryOne.mockReset()
+    db.queryOne.mockResolvedValueOnce({ id:41, case_id:99, generation_no:7, status:'queued', case_status:'queued', current_version_id:null })
+    db.queryAll
+      .mockResolvedValueOnce([{
+        stage:'counterfactual', status:'succeeded', model_task_id:'task-stage-success',
+        normalized_output_json:'{}', normalized_output_hash:'c'.repeat(64),
+      }])
+      .mockResolvedValueOnce([])
+
+    const result = await __manualTradeReviewTest.inspectManualTradeReviewModelTask({
+      task_id:'task-stage-success', domain_type:'manual_trade_review_job', domain_id:41,
+      frozen_context_json:JSON.stringify({ generation_no:7 }),
+    })
+
+    expect(result).toMatchObject({ succeeded:true, resultHash:'c'.repeat(64), stage:{ stage:'counterfactual' } })
+  })
+
+  it('reconciles a terminal model task after a prior business-ledger callback failure', async () => {
+    db.queryAll.mockReset()
+    db.queryOne.mockReset()
+    db.queryRun.mockReset().mockResolvedValue({ affectedRows:1 })
+    db.queryAll
+      .mockResolvedValueOnce([{
+        task_id:'task-terminal-reconcile', task_kind:'manual_analysis',
+        domain_type:'manual_trade_review_counterfactual_point', domain_id:41,
+        status:'completed_stale', error_code:'model_task_status_unknown_deadline_expired',
+        frozen_context_json:JSON.stringify({ generation_no:7 }),
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        candidate_key:'anchor_minus_1', status:'status_unknown', model_task_id:'task-terminal-reconcile',
+      }])
+    db.queryOne.mockResolvedValueOnce({
+      id:41, case_id:99, generation_no:7, status:'queued', case_status:'queued', current_version_id:null,
+    })
+
+    await expect(__manualTradeReviewTest.reconcileManualTradeReviewTerminalModelTasks({ limit:10 }))
+      .resolves.toBe(1)
+
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes(
+      "manual_trade_review_counterfactual_points SET status = 'failed'",
+    ))).toBe(true)
+    expect(db.queryRun.mock.calls.some(([sql]) => sql.includes(
+      "UPDATE manual_trade_review_jobs SET status = 'failed'",
+    ))).toBe(true)
+  })
+
   it('keys the generic model task by job generation, never by outer attempt', () => {
     expect(__manualTradeReviewTest.manualTradeReviewModelIdempotencyKey({ id:19, case_id:23, generation_no:4, attempt_count:99 }))
       .toBe('manual_trade_review:19:4')

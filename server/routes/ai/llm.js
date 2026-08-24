@@ -727,6 +727,41 @@ export async function parseProviderSseResponse(response, {
     }
   }
 
+  const chatFinishReason = () => protocol === 'responses'
+    ? ''
+    : String(chat?.choices?.[0]?.finish_reason || '').trim()
+  const chatHasCompleteJson = () => {
+    if (protocol === 'responses') return false
+    const content = String(chat?.choices?.[0]?.message?.content || '').trim()
+    if (!content) return false
+    try {
+      const value = parseJsonObject(content)
+      return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+    } catch { return false }
+  }
+  const acceptChatTerminalEvidence = async () => {
+    const finishReason = chatFinishReason()
+    const completeJson = chatHasCompleteJson()
+    if ((!finishReason && !completeJson) || terminal) return false
+    terminal = true
+    terminalEvent = {
+      eventType:finishReason ? 'chat.finish_reason' : 'chat.complete_json',
+      data:{ choices:[{ finish_reason:finishReason || null }] },
+      rawData:'', done:true, responseBytes,
+    }
+    if (typeof onEvent === 'function') await onEvent(terminalEvent)
+    return true
+  }
+  const transportEndedAfterChatTerminalEvidence = error => {
+    if (!chatFinishReason() && !chatHasCompleteJson()) return false
+    const errorCode = String(error?.code || error?.cause?.code || '').trim().toUpperCase()
+    const message = String(error?.message || '').trim().toLowerCase()
+    return ['UND_ERR_SOCKET', 'ECONNRESET', 'ERR_STREAM_PREMATURE_CLOSE'].includes(errorCode)
+      || message === 'terminated'
+      || message.includes('premature close')
+      || message.includes('other side closed')
+  }
+
   try {
     while (!terminal) {
       const next = reader ? await reader.read() : await iterator.next()
@@ -748,6 +783,12 @@ export async function parseProviderSseResponse(response, {
         lineBuffer = ''
       }
     }
+    // Chat Completions defines finish_reason on the final choice chunk. Some
+    // compatible gateways close the body without the optional trailing
+    // `[DONE]` sentinel. Preserve any later usage-only chunk when present. If
+    // even finish_reason was lost with the tail packet, a complete JSON object
+    // is still safe to pass into requestJsonObject's existing strict validator.
+    if (!terminal) await acceptChatTerminalEvidence()
     if (!terminal) throw providerStreamError('provider_sse_terminal_missing')
 
     if (protocol === 'responses') {
@@ -767,6 +808,15 @@ export async function parseProviderSseResponse(response, {
     }
     return { data:chat, responseBytes, terminalEvent, eventCount }
   } catch (error) {
+    // Undici reports a peer close as `terminated`. If a chat finish_reason or
+    // a complete JSON object was already received, the missing tail cannot
+    // change the structured result. Do not turn it into provider_quiet.
+    // Parser, validation, callback, and incomplete-content errors still fail
+    // closed.
+    if (transportEndedAfterChatTerminalEvidence(error)) {
+      await acceptChatTerminalEvidence()
+      return { data:chat, responseBytes, terminalEvent, eventCount }
+    }
     if (error && typeof error === 'object') {
       error.responseBytes = responseBytes
       error.eventCount = eventCount
@@ -894,7 +944,9 @@ async function trackedModelRequest({
         limits:deriveProviderSseLimits(body?.max_output_tokens ?? body?.max_tokens),
         onEvent:async event => {
           responseBytes = Math.max(responseBytes, Number(event?.responseBytes) || 0)
-          const eventType = event.done ? '[DONE]' : String(event.eventType || event.data?.type || 'provider.event')
+          const syntheticChatTerminal = ['chat.finish_reason', 'chat.complete_json'].includes(event.eventType)
+          const eventType = event.done && !syntheticChatTerminal
+            ? '[DONE]' : String(event.eventType || event.data?.type || 'provider.event')
           const terminalEvent = event.done || (protocol === 'responses'
             && ['response.completed', 'response.incomplete', 'response.failed', 'error', 'response.error'].includes(eventType))
           const eventRequestId = event.data?.id || event.data?.response?.id

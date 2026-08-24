@@ -3,7 +3,7 @@ import { beijingNow, queryAll, queryOne, queryRun, withTransaction } from '../..
 import { canManagePlatformAiContent } from './platform-content-access.js'
 import { requestJsonObject } from './llm.js'
 import { createModelTaskTracker } from './model-task-tracker.js'
-import { markModelTaskSucceededFromResult, reconcileModelTaskResultInTransaction } from './model-task-runtime.js'
+import { markModelTaskSucceededFromResult, reconcileModelTaskResultInTransaction, recoverAbandonedBusinessModelTasks } from './model-task-runtime.js'
 import { estimateModelInputTokens, modelTaskDeadlines, selectModelTaskBudget } from './model-task-budget.js'
 import { getModelProviderCapabilities } from './model-provider-capabilities.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
@@ -998,6 +998,245 @@ async function deferManualTradeReviewForModelTaskLease(job, error) {
   await queryRun(`UPDATE manual_trade_review_cases SET status = ?, updated_at = ?
      WHERE id = ? AND status IN ('queued','generating')`, [status, beijingNow(), job.case_id])
   return { status, error_code:errorCode, next_attempt_at:nextAttemptAt }
+}
+
+const MANUAL_TRADE_REVIEW_RECOVERY_DOMAIN_TYPES = Object.freeze([
+  'manual_trade_review_job', 'manual_trade_review_counterfactual_point',
+])
+const MANUAL_TRADE_REVIEW_RECOVERY_STAGE_STATUSES = Object.freeze(['pending', 'running', 'status_unknown'])
+const MANUAL_TRADE_REVIEW_RECOVERY_POINT_STATUSES = Object.freeze(['pending', 'running', 'status_unknown'])
+
+function manualTradeReviewRecoveryGeneration(task) {
+  const context = parse(task?.frozen_context_json, {})
+  const generationNo = Number(context?.generation_no || context?.generationNo || 0)
+  return Number.isSafeInteger(generationNo) && generationNo > 0 ? generationNo : null
+}
+
+function manualTradeReviewRecoveryOutputDurable(row) {
+  return String(row?.status || '') === 'succeeded'
+    && row?.normalized_output_json != null && row?.normalized_output_json !== ''
+    && /^[0-9a-f]{64}$/iu.test(String(row?.normalized_output_hash || ''))
+}
+
+function manualTradeReviewRecoveryLedgerUnresolved(row, statuses) {
+  if (!row) return false
+  const status = String(row.status || '')
+  return statuses.includes(status) || (status === 'succeeded' && !manualTradeReviewRecoveryOutputDurable(row))
+}
+
+/**
+ * Inspect only the generation and ledger row linked to a manual-review model
+ * task.  A saved outcome-stage payload is deliberately not a business
+ * success: only the case version created by applyManualTradeReviewOutcome is
+ * proof that the final result was applied.
+ */
+export async function inspectManualTradeReviewModelTask(task) {
+  const domainType = String(task?.domain_type || '')
+  if (!MANUAL_TRADE_REVIEW_RECOVERY_DOMAIN_TYPES.includes(domainType)) return null
+  const jobId = Number(task?.domain_id || 0)
+  const generationNo = manualTradeReviewRecoveryGeneration(task)
+  if (!Number.isSafeInteger(jobId) || jobId <= 0 || !generationNo) return null
+
+  const job = await queryOne(`SELECT jobs.*, cases.status AS case_status,
+      cases.current_version_id, cases.updated_at AS case_updated_at
+    FROM manual_trade_review_jobs jobs
+    JOIN manual_trade_review_cases cases ON cases.id = jobs.case_id
+    WHERE jobs.id = ? AND jobs.generation_no = ? LIMIT 1`, [jobId, generationNo])
+  if (!job) return { succeeded:false, job:null, stage:null, point:null, generationNo }
+
+  const stageRows = await queryAll(`SELECT * FROM manual_trade_review_stage_runs
+    WHERE job_id = ? AND generation_no = ? AND model_task_id = ? LIMIT 1`,
+  [jobId, generationNo, String(task.task_id)])
+  let pointRows = []
+  try {
+    pointRows = await queryAll(`SELECT * FROM manual_trade_review_counterfactual_points
+      WHERE job_id = ? AND generation_no = ? AND model_task_id = ? LIMIT 1`,
+    [jobId, generationNo, String(task.task_id)])
+  } catch {
+    // The point ledger is additive to the v2 two-stage ledger.  During a
+    // staged deployment, a legacy stage task must remain recoverable even
+    // before migration 193 has reached this process.
+    pointRows = []
+  }
+  const stage = stageRows?.[0] || null
+  const point = pointRows?.[0] || null
+
+  if (point && manualTradeReviewRecoveryOutputDurable(point)) {
+    return { succeeded:true, resultRef:`manual_trade_review_counterfactual:${jobId}:${generationNo}:${point.candidate_key}`,
+      resultHash:point.normalized_output_hash, job, case:job, stage, point, generationNo }
+  }
+
+  if (stage && manualTradeReviewRecoveryOutputDurable(stage)) {
+    if (String(stage.stage) !== 'outcome_review') {
+      return { succeeded:true, resultRef:`manual_trade_review_stage:${jobId}:${generationNo}:${stage.stage}`,
+        resultHash:stage.normalized_output_hash, job, case:job, stage, point, generationNo }
+    }
+    const version = await queryOne(`SELECT id, content_hash FROM manual_trade_review_versions
+      WHERE id = ? AND case_id = ? AND content_hash = ? LIMIT 1`,
+    [Number(job.current_version_id || 0), Number(job.case_id), stage.normalized_output_hash])
+    if (version?.id && String(job.status) === 'succeeded'
+      && ['draft', 'edited', 'needs_revision', 'approved'].includes(String(job.case_status || ''))) {
+      return { succeeded:true, resultRef:`manual_trade_review_case:${job.case_id}`,
+        resultHash:stage.normalized_output_hash, job, case:job, stage, point, version, generationNo }
+    }
+  }
+
+  return { succeeded:false, job, case:job, stage, point, generationNo }
+}
+
+async function manualTradeReviewRecoveryUpdateLinkedLedger({ task, business, action, reason }) {
+  const job = business?.job || business?.case
+  const jobId = Number(job?.id || task?.domain_id || 0)
+  const generationNo = Number(business?.generationNo || manualTradeReviewRecoveryGeneration(task) || 0)
+  if (!Number.isSafeInteger(jobId) || jobId <= 0 || !Number.isSafeInteger(generationNo) || generationNo <= 0) return
+  const now = beijingNow()
+  const errorCode = text(reason || 'manual_trade_review_model_task_recovery', 128)
+
+  if (action === 'status_unknown') {
+    const point = business?.point
+    if (manualTradeReviewRecoveryLedgerUnresolved(point, MANUAL_TRADE_REVIEW_RECOVERY_POINT_STATUSES)) {
+      await queryRun(`UPDATE manual_trade_review_counterfactual_points SET status = 'status_unknown',
+          last_error_code = ?, completed_at = NULL, updated_at = ?
+        WHERE job_id = ? AND generation_no = ? AND candidate_key = ? AND model_task_id = ?
+          AND status IN ('pending', 'running', 'status_unknown', 'succeeded')`,
+      [errorCode, now, jobId, generationNo, String(point.candidate_key), String(task.task_id)])
+    }
+    const stage = business?.stage
+    const stageCanBecomeUnknown = stage && (
+      manualTradeReviewRecoveryLedgerUnresolved(stage, MANUAL_TRADE_REVIEW_RECOVERY_STAGE_STATUSES)
+      || (String(stage.stage) === 'outcome_review' && String(stage.status) === 'succeeded'
+        && !business?.version?.id)
+    )
+    if (stageCanBecomeUnknown) {
+      await queryRun(`UPDATE manual_trade_review_stage_runs SET status = 'status_unknown',
+          last_error_code = ?, completed_at = NULL, updated_at = ?
+        WHERE job_id = ? AND generation_no = ? AND stage = ? AND model_task_id = ?
+          AND (status IN ('pending', 'running', 'status_unknown')
+            OR status = 'succeeded')`,
+      [errorCode, now, jobId, generationNo, String(stage.stage), String(task.task_id)])
+    }
+    await queryRun(`UPDATE manual_trade_review_jobs SET status = 'queued', progress_stage = 'status_unknown',
+        lease_token = NULL, lease_expires_at = NULL, last_error_code = ?,
+        next_attempt_at = ?, completed_at = NULL, updated_at = ?
+      WHERE id = ? AND generation_no = ? AND status IN ('queued', 'leased', 'generating')`,
+    [errorCode, dateAtUtcMs(Date.now() + 30_000), now, jobId, generationNo])
+    await queryRun(`UPDATE manual_trade_review_cases SET status = 'queued',
+        evidence_reason = COALESCE(evidence_reason, ?), updated_at = ?
+      WHERE id = ? AND status IN ('queued', 'generating')
+        AND EXISTS (SELECT 1 FROM manual_trade_review_jobs jobs
+          WHERE jobs.id = ? AND jobs.case_id = ?
+            AND jobs.generation_no = ? AND jobs.status = 'queued')`,
+    [errorCode, now, Number(job.case_id), jobId, Number(job.case_id), generationNo])
+    return
+  }
+
+  if (action === 'requeued') {
+    const point = business?.point
+    if (point && ['pending', 'running'].includes(String(point.status))) {
+      await queryRun(`UPDATE manual_trade_review_counterfactual_points SET status = 'pending',
+          last_error_code = NULL, completed_at = NULL, updated_at = ?
+        WHERE job_id = ? AND generation_no = ? AND candidate_key = ? AND model_task_id = ?
+          AND status IN ('pending', 'running')`,
+      [now, jobId, generationNo, String(point.candidate_key), String(task.task_id)])
+    }
+    const stage = business?.stage
+    if (stage && ['pending', 'running'].includes(String(stage.status))) {
+      await queryRun(`UPDATE manual_trade_review_stage_runs SET status = 'pending',
+          last_error_code = NULL, completed_at = NULL, updated_at = ?
+        WHERE job_id = ? AND generation_no = ? AND stage = ? AND model_task_id = ?
+          AND status IN ('pending', 'running')`,
+      [now, jobId, generationNo, String(stage.stage), String(task.task_id)])
+    }
+    await queryRun(`UPDATE manual_trade_review_jobs SET status = 'queued', progress_stage = 'retry_wait',
+        lease_token = NULL, lease_expires_at = NULL, attempt_count = GREATEST(0, attempt_count - 1),
+        last_error_code = ?, next_attempt_at = ?, completed_at = NULL, updated_at = ?
+      WHERE id = ? AND generation_no = ? AND status IN ('queued', 'leased', 'generating')`,
+    [errorCode, dateAtUtcMs(Date.now()), now, jobId, generationNo])
+    await queryRun(`UPDATE manual_trade_review_cases SET status = 'queued',
+        evidence_reason = COALESCE(evidence_reason, ?), updated_at = ?
+      WHERE id = ? AND status IN ('queued', 'generating')
+        AND EXISTS (SELECT 1 FROM manual_trade_review_jobs jobs
+          WHERE jobs.id = ? AND jobs.case_id = ?
+            AND jobs.generation_no = ? AND jobs.status = 'queued')`,
+    [errorCode, now, Number(job.case_id), jobId, Number(job.case_id), generationNo])
+    return
+  }
+
+  if (action === 'stale') {
+    const point = business?.point
+    if (manualTradeReviewRecoveryLedgerUnresolved(point, MANUAL_TRADE_REVIEW_RECOVERY_POINT_STATUSES)) {
+      await queryRun(`UPDATE manual_trade_review_counterfactual_points SET status = 'failed',
+          last_error_code = ?, completed_at = ?, updated_at = ?
+        WHERE job_id = ? AND generation_no = ? AND candidate_key = ? AND model_task_id = ?
+          AND status IN ('pending', 'running', 'status_unknown', 'succeeded')`,
+      [errorCode, now, now, jobId, generationNo, String(point.candidate_key), String(task.task_id)])
+    }
+    const stage = business?.stage
+    const stageNeedsFailure = manualTradeReviewRecoveryLedgerUnresolved(stage, MANUAL_TRADE_REVIEW_RECOVERY_STAGE_STATUSES)
+      || (String(stage?.stage || '') === 'outcome_review' && String(stage?.status || '') === 'succeeded'
+        && !business?.version?.id)
+    if (stageNeedsFailure) {
+      await queryRun(`UPDATE manual_trade_review_stage_runs SET status = 'failed',
+          last_error_code = ?, completed_at = ?, updated_at = ?
+        WHERE job_id = ? AND generation_no = ? AND stage = ? AND model_task_id = ?
+          AND status IN ('pending', 'running', 'status_unknown', 'succeeded')`,
+      [errorCode, now, now, jobId, generationNo, String(stage.stage), String(task.task_id)])
+    }
+    await queryRun(`UPDATE manual_trade_review_jobs SET status = 'failed', progress_stage = 'failed',
+        lease_token = NULL, lease_expires_at = NULL, last_error_code = ?,
+        next_attempt_at = NULL, completed_at = ?, updated_at = ?
+      WHERE id = ? AND generation_no = ? AND status IN ('queued', 'leased', 'generating')`,
+    [errorCode, now, now, jobId, generationNo])
+    await queryRun(`UPDATE manual_trade_review_cases SET status = 'failed',
+        evidence_reason = COALESCE(evidence_reason, ?), updated_at = ?
+      WHERE id = ? AND status IN ('queued', 'generating')
+        AND EXISTS (SELECT 1 FROM manual_trade_review_jobs jobs
+          WHERE jobs.id = ? AND jobs.case_id = ?
+            AND jobs.generation_no = ? AND jobs.status = 'failed')`,
+    [errorCode, now, Number(job.case_id), jobId, Number(job.case_id), generationNo])
+  }
+}
+
+async function reconcileManualTradeReviewTerminalModelTasks({ limit = 500 } = {}) {
+  const rows = await queryAll(`SELECT tasks.* FROM ai_model_tasks tasks
+    WHERE tasks.task_kind = ? AND tasks.domain_type IN (?, ?)
+      AND (tasks.status = 'completed_stale'
+        OR (tasks.status = 'queued' AND tasks.error_code = ?))
+    ORDER BY tasks.updated_at_utc_msc DESC LIMIT ?`, [
+    'manual_analysis', ...MANUAL_TRADE_REVIEW_RECOVERY_DOMAIN_TYPES,
+    'model_task_worker_abandoned_before_provider', Math.max(1, Math.min(1000, Number(limit) || 500)),
+  ])
+  let reconciled = 0
+  for (const task of rows || []) {
+    const business = await inspectManualTradeReviewModelTask(task)
+    if (!business || business.succeeded === true) continue
+    const action = String(task.status) === 'completed_stale' ? 'stale' : 'requeued'
+    await manualTradeReviewRecoveryUpdateLinkedLedger({ task, business, action,
+      reason:task.error_code || `manual_trade_review_${action}_reconciliation` })
+    reconciled += 1
+  }
+  return reconciled
+}
+
+export async function recoverAbandonedManualTradeReviewModelTasks({ nowUtcMs = Date.now(), limit = 500 } = {}) {
+  let result = null
+  let failure = null
+  try {
+    result = await recoverAbandonedBusinessModelTasks({
+      taskKinds:['manual_analysis'], domainTypes:[...MANUAL_TRADE_REVIEW_RECOVERY_DOMAIN_TYPES],
+      nowUtcMs, limit, inspectBusiness:inspectManualTradeReviewModelTask,
+      onBusinessTransition:transition => manualTradeReviewRecoveryUpdateLinkedLedger(transition),
+    })
+  } catch (error) {
+    failure = error
+  }
+  // A model-task transition and the business ledger are separate durable
+  // records.  If the callback failed after a task reached a terminal/requeued
+  // state, re-scan those exact manual-review task domains so a transient DB
+  // error cannot leave a running point or job forever.
+  const terminalReconciled = await reconcileManualTradeReviewTerminalModelTasks({ limit })
+  if (failure) throw failure
+  return { ...result, terminalReconciled }
 }
 
 function manualTradeReviewFailureIsTerminal(job, error) {
@@ -2166,7 +2405,11 @@ export function requestManualTradeReviewCycle() {
     manualReviewWake = false
     if (manualReviewRunning) return
     manualReviewRunning = true
-    try { await recoverAbandonedManualTradeReviewJobs(); await runManualTradeReviewWorkerOnce() }
+    try {
+      await recoverAbandonedManualTradeReviewModelTasks()
+      await recoverAbandonedManualTradeReviewJobs()
+      await runManualTradeReviewWorkerOnce()
+    }
     catch (error) { console.error('[ManualTradeReview] worker cycle failed:', error.message) }
     finally { manualReviewRunning = false }
   })
@@ -2203,5 +2446,7 @@ export const __manualTradeReviewTest = {
   manualTradeReviewCounterfactualValuesEqual,
   manualTradeReviewOutcomePathRepairTargets, manualTradeReviewOutcomePathRepairContext,
   applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs, markJobFailure,
-  manualTradeReviewDeterministicEvidenceFailure,
+  manualTradeReviewDeterministicEvidenceFailure, inspectManualTradeReviewModelTask,
+  manualTradeReviewRecoveryUpdateLinkedLedger, reconcileManualTradeReviewTerminalModelTasks,
+  recoverAbandonedManualTradeReviewModelTasks,
 }

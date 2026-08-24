@@ -327,6 +327,24 @@ describe('model task runtime state and fencing', () => {
     expect(mockQueryRun).not.toHaveBeenCalled()
   })
 
+  it('supports an optional domain filter without scanning ordinary manual analysis tasks', async () => {
+    mockQueryAll.mockResolvedValueOnce([])
+
+    await expect(recoverAbandonedBusinessModelTasks({
+      taskKinds:['manual_analysis'],
+      domainTypes:['manual_trade_review_job', 'manual_trade_review_counterfactual_point'],
+      nowUtcMs:100_000,
+      inspectBusiness:vi.fn(),
+    })).resolves.toMatchObject({ scanned:0 })
+
+    const [sql, params] = mockQueryAll.mock.calls[0]
+    expect(sql).toContain('tasks.task_kind IN')
+    expect(sql).toContain('tasks.domain_type IN')
+    expect(params).toContain('manual_analysis')
+    expect(params).toContain('manual_trade_review_job')
+    expect(params).toContain('manual_trade_review_counterfactual_point')
+  })
+
   it('requeues an expired leased task only when no provider attempt exists', async () => {
     mockQueryAll.mockResolvedValueOnce([{ task_id:'preparing', status:'preparing',
       lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:300_000, provider_attempt_started:0 }])
