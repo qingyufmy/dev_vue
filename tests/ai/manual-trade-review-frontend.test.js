@@ -101,6 +101,19 @@ describe('manual trade review frontend contract', () => {
     expect(create).toContain('manualTradeReviewResetClientRequestId();')
   })
 
+  it('refreshes stale selections without automatically replaying creation', () => {
+    const recovery = block('const MANUAL_TRADE_REVIEW_REFRESH_SELECTION_ERRORS', 'function manualTradeReviewReadFilters')
+    const create = block('async function createManualTradeReviewTask', 'function manualTradeReviewCaseStatus')
+    expect(recovery).toContain('manual_trade_review_history_snapshot_changed')
+    expect(recovery).toContain('manual_trade_review_source_changed')
+    expect(recovery).toContain('state.manualTradeReviewSelectionContextToken = null')
+    expect(recovery).toContain('state.manualTradeReviewSelectedTrades = []')
+    expect(recovery).toContain('loadManualTradeReviewTrades({ reset:true, forceRefresh:true })')
+    expect(recovery).not.toContain('api("/api/ai/manual-trade-reviews"')
+    expect(create).toContain('await manualTradeReviewRecoverStaleSelection(error)')
+    expect(create).not.toContain('manualTradeReviewResetClientRequestId();\n    if (await manualTradeReviewRecoverStaleSelection')
+  })
+
   it('pauses polling while hidden, resumes when visible, and backs off transient errors', () => {
     const polling = block('function stopManualTradeReviewPolling', 'function manualTradeReviewProgressHtml')
     expect(polling).toContain('document.visibilityState === "hidden"')
@@ -140,6 +153,7 @@ describe('manual trade review frontend contract', () => {
     expect(html).toContain('manualmt4history1')
     expect(html).toContain('manual-review-frontend2')
     expect(html).toContain('manual-review-durable-stage1')
+    expect(html).toContain('manual-review-snapshot-fix1')
     expect(css).toContain('.manual-review-trade-row')
     expect(responsive).toContain('.manual-review-filter-bar .btn')
     expect(responsive).toContain('min-height: 44px')

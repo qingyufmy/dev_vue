@@ -7403,6 +7403,31 @@ function manualTradeReviewResetCursor() {
   state.manualTradeReviewHasMore = false;
 }
 
+const MANUAL_TRADE_REVIEW_REFRESH_SELECTION_ERRORS = new Set([
+  "manual_trade_review_selection_context_expired",
+  "manual_trade_review_selection_context_invalid",
+  "manual_trade_review_selection_context_mismatch",
+  "manual_trade_review_history_snapshot_changed",
+  "manual_trade_review_source_changed",
+]);
+
+async function manualTradeReviewRecoverStaleSelection(error) {
+  const code = String(error?.code || error?.message || "");
+  if (!MANUAL_TRADE_REVIEW_REFRESH_SELECTION_ERRORS.has(code)) return false;
+  state.manualTradeReviewSelectionContextToken = null;
+  state.manualTradeReviewSelectedTrades = [];
+  state.manualTradeReviewSelection = [];
+  manualTradeReviewResetCursor();
+  setManualTradeReviewStage("selection", { loadData:false });
+  toast("交易候选已变化，正在刷新；请重新选择后创建复盘", "warning");
+  try {
+    await loadManualTradeReviewTrades({ reset:true, forceRefresh:true });
+  } catch {
+    // loadManualTradeReviewTrades already records and renders the refresh error.
+  }
+  return true;
+}
+
 function manualTradeReviewReadFilters() {
   state.manualTradeReviewFilters.symbol = String($("manualTradeReviewSymbol")?.value || "").trim();
   state.manualTradeReviewFilters.direction = String($("manualTradeReviewDirection")?.value || "").trim();
@@ -7638,6 +7663,9 @@ async function createManualTradeReviewTask() {
     await loadManualTradeReviewHistory({ reset:true });
     if (id) await openManualTradeReviewDetail(id);
     toast(data.created === false ? "已恢复已有手动交易复盘任务" : "复盘任务已创建，正在生成", "success");
+  } catch (error) {
+    if (await manualTradeReviewRecoverStaleSelection(error)) return;
+    throw error;
   } finally {
     state.manualTradeReviewSubmitting = false;
     renderManualTradeReviewSelectionSummary();
@@ -9325,7 +9353,13 @@ function strategyMemoryReasonLabel(value) {
     legacy_import:"旧记忆一次性迁移" })[String(value || "")] || "系统更新";
 }
 
-const STRATEGY_MEMORY_CONSISTENCY_TERMINAL = new Set(["succeeded", "succeeded_noop", "failed", "stale", "status_unknown"]);
+const STRATEGY_MEMORY_CONSISTENCY_TERMINAL = new Set(["succeeded", "succeeded_noop", "stale", "status_unknown"]);
+function strategyMemoryConsistencyTerminal(job) {
+  const status = String(job?.status || "");
+  if (STRATEGY_MEMORY_CONSISTENCY_TERMINAL.has(status)) return true;
+  if (status !== "failed") return false;
+  return Number(job?.attempt_count || 0) >= Number(job?.max_attempts || 3);
+}
 function stopStrategyMemoryConsistencyPolling() {
   clearTimeout(state.strategyMemoryConsistencyPollTimer);
   state.strategyMemoryConsistencyPollTimer = null;
@@ -9335,12 +9369,17 @@ function resumeStrategyMemoryConsistencyPolling() {
   const job = state.strategyMemoryConsistencyJob;
   const strategyId = Number(state.selectedStrategyMemoryId || 0);
   if (!document.hidden && strategyId > 0 && job
-    && !STRATEGY_MEMORY_CONSISTENCY_TERMINAL.has(String(job.status || ""))) {
+    && !strategyMemoryConsistencyTerminal(job)) {
     startStrategyMemoryConsistencyPolling(strategyId, job);
   }
 }
 function strategyMemoryConsistencyLabel(job) {
   if (String(job?.last_error_code || "") === "model_input_limit_exceeded") return "当前模型容量不足，未完成一致性检查";
+  if (String(job?.status || "") === "failed" && !strategyMemoryConsistencyTerminal(job)) {
+    const attempt = Number(job?.attempt_count || 0);
+    const maximum = Number(job?.max_attempts || 3);
+    return `本次检查失败，等待第 ${Math.min(maximum, attempt + 1)} / ${maximum} 次重试`;
+  }
   return ({ queued:"等待一致性检查", leased:"正在核对策略一致性", succeeded:"一致性检查完成",
     succeeded_noop:"未发现策略冲突", failed:"一致性检查失败，记忆已保留",
     stale:"策略或记忆已变化，结果未应用", status_unknown:"检查状态未知，可重新检查" })[String(job?.status || "")] || "尚未检查一致性";
@@ -9375,7 +9414,7 @@ function startStrategyMemoryConsistencyPolling(strategyId, job) {
       const data = await api(`/api/ai/strategy-memories/${strategyId}/consistency-checks/${jobId}`);
       if (generation !== state.strategyMemoryConsistencyGeneration || Number(state.selectedStrategyMemoryId) !== Number(strategyId)) return;
       state.strategyMemoryConsistencyJob = data.job;
-      if (STRATEGY_MEMORY_CONSISTENCY_TERMINAL.has(String(data.job?.status || ""))) {
+      if (strategyMemoryConsistencyTerminal(data.job)) {
         state.strategyMemoryDetail = await api(`/api/ai/strategy-memories/${strategyId}`);
         await loadStrategyMemoryPreview(strategyId);
         renderStrategyMemoryLibrary(); return;
@@ -9447,29 +9486,34 @@ function renderStrategyMemoryLibrary() {
   const alerts = conflicts.filter(item => item.status === "attention_required" && currentLocation(item));
   const observing = conflicts.filter(item => item.status === "observing" && currentLocation(item));
   const activeConflictIds = new Set([...alerts, ...observing].map(item => Number(item.id)));
-  const inactiveConflicts = conflicts.filter(item => !activeConflictIds.has(Number(item.id)));
-  const stale = inactiveConflicts.filter(item => String(item.verification_status || "") === "location_stale");
+  const historicalConflicts = conflicts.filter(item => !activeConflictIds.has(Number(item.id)));
   const usage = Math.min(100, Math.round(Number(library.char_count || 0) / Math.max(1, Number(library.capacity_chars || 120000)) * 100));
   const options = strategies.map(item => `<option value="${Number(item.strategy_id)}" ${Number(item.strategy_id) === Number(selected.strategy_id) ? "selected" : ""}>${escapeHtml(item.title || `策略 #${item.strategy_id}`)} · ${item.strategy_scope === "platform" ? "平台" : "私有"}</option>`).join("");
-  const conflictRows = [...alerts, ...observing, ...inactiveConflicts].map(item => {
+  const renderConflictRow = (item, { historical = false } = {}) => {
     const inactive = ["resolved", "dismissed"].includes(String(item.status || ""));
-    const staleRow = String(item.verification_status || "") === "location_stale";
+    const staleRow = String(item.verification_status || "") === "location_stale"
+      || String(item.location_status || "") !== "matched";
     const stateName = staleRow ? "location_stale" : item.status;
     const badge = strategyMemoryConflictStatusMarkup(stateName, stateName === "observing" ? Number(item.evidence_count || 0) : 0);
     const rowClass = stateName === "location_stale" ? "location-stale" : stateName;
-    const actionButtons = inactive || staleRow
-      ? `<button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="reopen">重新打开</button>`
+    const actionButtons = historical
+      ? (!staleRow && inactive ? `<button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="reopen">重新打开</button>` : "")
       : `<button class="btn btn-secondary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="dismiss">忽略</button><button class="btn btn-primary btn-sm" type="button" data-strategy-memory-conflict="${Number(item.id)}" data-strategy-memory-conflict-action="resolve">已处理</button>`;
     return `<article class="strategy-memory-conflict is-${escapeHtml(rowClass)}">
     <div><div class="strategy-memory-conflict-state">${badge}</div><strong>${escapeHtml(item.conflict_summary || "发现记忆与策略可能冲突")}</strong>${item.strategy_excerpt ? `<p>策略原文：${escapeHtml(item.strategy_excerpt)}</p>` : ""}${item.memory_excerpt ? `<p>记忆原文：${escapeHtml(item.memory_excerpt)}</p>` : ""}${item.suggested_change ? `<p>建议核对：${escapeHtml(item.suggested_change)}</p>` : ""}</div>
     <div class="strategy-memory-row-actions">${actionButtons}</div>
-  </article>`; }).join("");
+  </article>`;
+  };
+  const currentConflictRows = [...alerts, ...observing].map(item => renderConflictRow(item)).join("");
+  const historicalConflictRows = historicalConflicts.map(item => renderConflictRow(item, { historical:true })).join("");
   const revisionRows = revisions.slice(0, 20).map(item => { const sourceReview = String(item.source_type || "") === "period_review_version" && Number(item.source_id || 0) > 0 ? ` · 来源复盘版本 #${Number(item.source_id)}` : ""; return `<li><div><strong>版本 ${Number(item.version_no)}</strong><span>${escapeHtml(strategyMemoryReasonLabel(item.change_reason))}${escapeHtml(sourceReview)} · ${escapeHtml(formatTime(item.created_at))}</span></div>${Number(item.version_no) !== Number(library.version_no) ? `<button class="text-button" type="button" data-strategy-memory-restore="${Number(item.id)}">恢复此版本</button>` : '<span class="status-chip success">当前</span>'}</li>`; }).join("");
   const sourceMode = state.strategyMemoryViewMode === "source";
   const consistencyLabel = strategyMemoryConsistencyLabel(state.strategyMemoryConsistencyJob);
+  const consistencyActive = Boolean(state.strategyMemoryConsistencyJob
+    && !strategyMemoryConsistencyTerminal(state.strategyMemoryConsistencyJob));
   const healthLabel = alerts.length ? `需要人工检查 ${alerts.length} 项` : observing.length ? `观察中 ${observing.length} 项` : "状态正常";
   const healthTone = alerts.length ? "danger" : observing.length ? "warning" : "success";
-  const conflictCountRows = `<div class="strategy-memory-side-metrics"><div><span>需人工检查</span><strong>${alerts.length}</strong><small>达到提醒阈值</small></div><div><span>观察中</span><strong>${observing.length}</strong><small>等待更多证据</small></div><div><span>待复核</span><strong>${stale.length}</strong><small>原文位置变化</small></div></div>`;
+  const conflictCountRows = `<div class="strategy-memory-side-metrics"><div><span>需人工检查</span><strong>${alerts.length}</strong><small>达到提醒阈值</small></div><div><span>观察中</span><strong>${observing.length}</strong><small>等待更多证据</small></div><div><span>历史记录</span><strong>${historicalConflicts.length}</strong><small>已失效或已处置</small></div></div>`;
   host.innerHTML = `<section class="strategy-memory-library strategy-memory-workspace">
     <header class="strategy-memory-toolbar"><label><span>选择策略</span><select id="strategyMemorySelector">${options}</select></label><div class="strategy-memory-summary"><span><strong>v${Number(library.version_no || 0)}</strong> 当前版本</span><span class="strategy-memory-health ${healthTone}"><strong>${escapeHtml(healthLabel)}</strong></span></div></header>
     ${alerts.length ? `<div class="strategy-memory-alert" role="alert"><span class="strategy-memory-status-icon" aria-hidden="true"><i data-lucide="triangle-alert" size="15"></i></span><div><strong>${alerts.length} 项策略冲突已达到提醒阈值</strong><span>系统只做提醒，不会自动修改策略。请核对下方证据后人工决定。</span></div></div>` : ""}
@@ -9478,8 +9522,9 @@ function renderStrategyMemoryLibrary() {
       ${!sourceMode && state.strategyMemoryEditorDirty ? '<div class="strategy-memory-draft-notice" role="status">当前显示的是已保存版本预览；原文中还有未保存修改。</div>' : ''}
       <div id="strategyMemoryDocumentStage" class="strategy-memory-document-stage">${sourceMode ? `<label class="strategy-memory-editor"><span>编辑完整记忆库原文 <span class="sr-only">完整记忆库原文（Markdown）</span></span><textarea id="strategyMemoryContent" rows="22" spellcheck="false" aria-describedby="strategyMemoryHelp">${escapeHtml(state.strategyMemoryEditorDirty ? (state.strategyMemoryEditorDraft ?? library.content_text ?? "") : (library.content_text || ""))}</textarea><small id="strategyMemoryHelp">这是该策略唯一的完整 Markdown 记忆库。保存会形成可恢复的新版本；不保存不会写入服务端。</small></label>` : strategyMemoryPreviewMarkup(state.strategyMemoryPreview)}</div>
       ${sourceMode ? `<div class="strategy-memory-actions strategy-memory-editor-actions"><button class="btn btn-secondary" type="button" data-strategy-memory-action="cancel">取消编辑</button><button class="btn btn-primary" type="button" data-strategy-memory-action="save" ${!state.strategyMemoryEditorDirty || compressionPresentation.active ? 'disabled' : ''}>保存新版本</button></div>` : ""}
-      ${conflictRows ? `<section class="strategy-memory-conflicts"><header><div><h3>策略冲突提醒</h3><p>同一冲突必须在至少 ${Number(library.conflict_alert_threshold || 3)} 次不同且已确认的复盘中出现，才会要求人工检查策略。</p></div><span>${alerts.length} 项需处理 · ${observing.length} 项观察中 · ${stale.length} 项待复核</span></header>${conflictRows}</section>` : ""}
-    </section><aside class="strategy-memory-sidebar" aria-label="记忆库维护状态"><section class="strategy-memory-side-card strategy-memory-capacity-card"><header><div><span class="strategy-memory-side-kicker">维护状态</span><h3>容量</h3></div><strong>${usage}%</strong></header><div class="strategy-memory-capacity" aria-label="记忆库容量已使用 ${usage}%"><span style="width:${usage}%"></span></div><p><strong>${Number(library.char_count || 0).toLocaleString("zh-CN")}</strong> / ${Number(library.capacity_chars || 120000).toLocaleString("zh-CN")} 字</p></section><section class="strategy-memory-side-card strategy-memory-task-card"><header><div><span class="strategy-memory-side-kicker">维护任务</span><h3>整理压缩</h3></div><span id="strategyMemoryCompressionStatus" class="status-chip" role="status" aria-live="polite">${escapeHtml(compressionPresentation.text)}</span></header><p>达到容量或月复盘确认时整理，原记忆始终可恢复。</p><button class="btn btn-secondary" type="button" data-strategy-memory-action="compress" ${compressionPresentation.active ? 'disabled' : ''}><i data-lucide="combine" size="15"></i>${compressionPresentation.active ? '正在整理' : '整理并压缩'}</button></section><section class="strategy-memory-side-card strategy-memory-task-card"><header><div><span class="strategy-memory-side-kicker">维护检查</span><h3>一致性</h3></div><span class="strategy-memory-consistency-status" role="status" aria-live="polite">${escapeHtml(consistencyLabel)}</span></header><p>核对策略原文与记忆块的来源和位置，不会自动修改策略。</p><button class="btn btn-secondary" type="button" data-strategy-memory-action="consistency">重新检查</button></section><section class="strategy-memory-side-card strategy-memory-conflict-card"><header><div><span class="strategy-memory-side-kicker">人工处理</span><h3>冲突计数</h3></div>${strategyMemoryConflictStatusMarkup(alerts.length ? "attention_required" : observing.length ? "observing" : "healthy")}</header>${conflictCountRows}</section><details class="strategy-memory-revisions strategy-memory-side-card"><summary><span><i data-lucide="history" size="15"></i><strong>版本历史</strong><small>可恢复版本</small></span><i data-lucide="chevron-down" size="15"></i></summary><ol>${revisionRows || '<li class="strategy-memory-empty-row">尚无历史版本</li>'}</ol></details></aside></div>
+      ${currentConflictRows ? `<section class="strategy-memory-conflicts"><header><div><h3>策略冲突提醒</h3><p>这里只显示当前策略与当前记忆版本仍然命中的冲突。</p></div><span>${alerts.length} 项需处理 · ${observing.length} 项观察中</span></header>${currentConflictRows}</section>` : ""}
+      ${historicalConflictRows ? `<details class="strategy-memory-conflict-history strategy-memory-revisions"><summary><span><i data-lucide="history" size="15"></i><strong>历史冲突记录</strong><small>${historicalConflicts.length} 项 · 不影响当前策略</small></span><i data-lucide="chevron-down" size="15"></i></summary><div>${historicalConflictRows}</div></details>` : ""}
+    </section><aside class="strategy-memory-sidebar" aria-label="记忆库维护状态"><section class="strategy-memory-side-card strategy-memory-capacity-card"><header><div><span class="strategy-memory-side-kicker">维护状态</span><h3>容量</h3></div><strong>${usage}%</strong></header><div class="strategy-memory-capacity" aria-label="记忆库容量已使用 ${usage}%"><span style="width:${usage}%"></span></div><p><strong>${Number(library.char_count || 0).toLocaleString("zh-CN")}</strong> / ${Number(library.capacity_chars || 120000).toLocaleString("zh-CN")} 字</p></section><section class="strategy-memory-side-card strategy-memory-task-card"><header><div><span class="strategy-memory-side-kicker">维护任务</span><h3>整理压缩</h3></div><span id="strategyMemoryCompressionStatus" class="status-chip" role="status" aria-live="polite">${escapeHtml(compressionPresentation.text)}</span></header><p>达到容量或月复盘确认时整理，原记忆始终可恢复。</p><button class="btn btn-secondary" type="button" data-strategy-memory-action="compress" ${compressionPresentation.active ? 'disabled' : ''}><i data-lucide="combine" size="15"></i>${compressionPresentation.active ? '正在整理' : '整理并压缩'}</button></section><section class="strategy-memory-side-card strategy-memory-task-card"><header><div><span class="strategy-memory-side-kicker">维护检查</span><h3>一致性</h3></div><span class="strategy-memory-consistency-status" role="status" aria-live="polite">${escapeHtml(consistencyLabel)}</span></header><p>核对策略原文与记忆块的来源和位置，不会自动修改策略。</p><button class="btn btn-secondary" type="button" data-strategy-memory-action="consistency" ${consistencyActive ? 'disabled' : ''}>${consistencyActive ? '检查进行中' : '重新检查'}</button></section><section class="strategy-memory-side-card strategy-memory-conflict-card"><header><div><span class="strategy-memory-side-kicker">人工处理</span><h3>冲突计数</h3></div>${strategyMemoryConflictStatusMarkup(alerts.length ? "attention_required" : observing.length ? "observing" : "healthy")}</header>${conflictCountRows}</section><details class="strategy-memory-revisions strategy-memory-side-card"><summary><span><i data-lucide="history" size="15"></i><strong>版本历史</strong><small>可恢复版本</small></span><i data-lucide="chevron-down" size="15"></i></summary><ol>${revisionRows || '<li class="strategy-memory-empty-row">尚无历史版本</li>'}</ol></details></aside></div>
   </section>`;
   initIcons();
   $("strategyMemoryContent")?.addEventListener("input", event => {
@@ -18093,12 +18138,19 @@ function bindEvents() {
         renderStrategyMemoryCompressionStatus(state.strategyMemoryCompressionJob);
         return;
       }
+      if (strategyMemoryAction.dataset.strategyMemoryAction === "consistency"
+        && state.strategyMemoryConsistencyJob
+        && !strategyMemoryConsistencyTerminal(state.strategyMemoryConsistencyJob)) {
+        return;
+      }
       strategyMemoryAction.disabled = true;
       try {
         if (strategyMemoryAction.dataset.strategyMemoryAction === "consistency") {
+          const currentConsistency = state.strategyMemoryConsistencyJob;
           const queued = await api(`/api/ai/strategy-memories/${strategyId}/consistency-checks`, { method:"POST", body:{
             expected_version_no:Number(library.version_no), trigger_type:"manual_check",
-            force_new:["stale", "status_unknown", "failed"].includes(String(state.strategyMemoryConsistencyJob?.status || "")),
+            force_new:["stale", "status_unknown"].includes(String(currentConsistency?.status || ""))
+              || (String(currentConsistency?.status || "") === "failed" && strategyMemoryConsistencyTerminal(currentConsistency)),
           } });
           startStrategyMemoryConsistencyPolling(strategyId, queued.job);
           toast("一致性检查已进入队列", "success");

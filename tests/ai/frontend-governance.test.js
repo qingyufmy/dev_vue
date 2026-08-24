@@ -1969,6 +1969,33 @@ describe('route permissions and credential redaction', () => {
     expect(adminApp).toContain('state.platformMemoryCompressionJob=latestCompression.job||null')
   })
 
+  it('keeps retryable consistency failures polling until attempts are exhausted', () => {
+    expect(app).toContain('function strategyMemoryConsistencyTerminal(job)')
+    expect(app).toContain('Number(job?.attempt_count || 0) >= Number(job?.max_attempts || 3)')
+    expect(app).toContain('本次检查失败，等待第')
+    expect(app).toContain('!strategyMemoryConsistencyTerminal(job)')
+    expect(adminApp).toContain('function adminStrategyMemoryConsistencyTerminal(job)')
+    expect(adminApp).toContain("if(status!=='failed')return false")
+    expect(adminApp).toContain('本次检查失败，等待第')
+    expect(adminApp).toContain('!adminStrategyMemoryConsistencyTerminal(job)')
+    expect(html).toContain('memory-consistency-retry1')
+    expect(adminHtml).toContain('memory-consistency-retry1')
+  })
+
+  it('separates stale conflict audit history from current conflict reminders', () => {
+    for (const source of [app, adminApp]) {
+      expect(source).toContain('historicalConflicts')
+      expect(source).toContain('historicalConflictRows')
+      expect(source).toContain('历史冲突记录')
+      expect(source).toContain('不影响当前策略')
+    }
+    expect(app).toContain('currentConflictRows')
+    expect(app).toContain('!staleRow && inactive')
+    expect(adminApp).toContain("!staleRow&&inactive")
+    expect(html).toContain('conflict-history1')
+    expect(adminHtml).toContain('conflict-history1')
+  })
+
   it('keeps the administrator memory console preview-first and consistency-aware', () => {
     expect(adminApp).toContain("const ADMIN_STRATEGY_MEMORY_MARKDOWN_LABEL = '完整记忆库原文（Markdown）'")
     expect(adminApp).toContain('data-platform-memory-mode="preview"')

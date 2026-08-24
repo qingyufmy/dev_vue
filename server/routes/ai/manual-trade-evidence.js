@@ -1267,7 +1267,14 @@ export async function readManualTradeEvidence(actor, account, selected = [], opt
   if (!result || result.status === 'error' || result.error) {
     throw new Error(text(result?.error) || 'manual_trade_review_evidence_unavailable')
   }
-  if (selectionContext && String(result.history_snapshot_id || '') !== String(selectionContext.history_snapshot_id)) {
+  // `history_evidence_v1` is a point-read contract. Native Bridge responses
+  // are allowed to omit the pagination snapshot because the selection
+  // context, exact references and source hashes provide the create-time
+  // binding. Only an explicitly returned, non-empty snapshot can prove that
+  // the source moved to a different snapshot and should fail closed here.
+  const returnedHistorySnapshotId = String(result.history_snapshot_id ?? '').trim()
+  if (selectionContext && returnedHistorySnapshotId
+    && returnedHistorySnapshotId !== String(selectionContext.history_snapshot_id).trim()) {
     throw new Error('manual_trade_review_history_snapshot_changed')
   }
   const refs = collectManualTradeEvidenceRefs(result)

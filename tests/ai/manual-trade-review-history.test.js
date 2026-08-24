@@ -487,6 +487,69 @@ describe('manual trade review history cursor contract', () => {
     })).rejects.toThrow('manual_trade_review_history_snapshot_changed')
   })
 
+  it('accepts the native history evidence response when it omits a snapshot id', async () => {
+    const history = validEvidencePage()
+    delete history.history_snapshot_id
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
+      if (action === 'history_evidence') return history
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+    const eligible = buildEligibleManualTrades(history, { account:accountRow, positions:[], systemReferences:new Map() }).trades[0]
+    const result = await readManualTradeEvidence({ id:7 }, accountRow, [{
+      trade_id:eligible.trade_id, source_identity_hash:eligible.source_identity_hash,
+      trade_source_hash:eligible.trade_source_hash, position_id:'1001', entry_order_ticket:'2001',
+    }], {
+      strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } },
+      buildPath:async () => ({ status:'complete', timeframes:{ M15:{ status:'complete', candles:reviewCandles() } } }), nowUtcMsc:10_000,
+      selection_context_token:selectionContextToken('snapshot-selected'),
+    })
+    expect(result).toMatchObject({ evidence_status:'complete', trades:[{ source_identity_hash:eligible.source_identity_hash }] })
+  })
+
+  it('rejects a native response without a snapshot id when a selected source hash changes', async () => {
+    const selectedHistory = validEvidencePage()
+    const changedHistory = validEvidencePage()
+    delete changedHistory.history_snapshot_id
+    changedHistory.deals = changedHistory.deals.map((deal, index) => index === 1 ? { ...deal, profit:11 } : deal)
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
+      if (action === 'history_evidence') return changedHistory
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+    const eligible = buildEligibleManualTrades(selectedHistory, { account:accountRow, positions:[], systemReferences:new Map() }).trades[0]
+    await expect(readManualTradeEvidence({ id:7 }, accountRow, [{
+      trade_id:eligible.trade_id, source_identity_hash:eligible.source_identity_hash,
+      trade_source_hash:eligible.trade_source_hash, position_id:'1001', entry_order_ticket:'2001',
+    }], {
+      strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } }, nowUtcMsc:10_000,
+      selection_context_token:selectionContextToken('snapshot-selected'),
+    })).rejects.toThrow('manual_trade_review_source_changed')
+  })
+
+  it('rejects a native response without a snapshot id when a selected trade is missing', async () => {
+    const selectedHistory = validEvidencePage()
+    const missingHistory = validEvidencePage()
+    delete missingHistory.history_snapshot_id
+    missingHistory.deals = missingHistory.deals.slice(0, 1)
+    bridge.mt5Bridge.mockImplementation(async (_userId, action) => {
+      if (action === 'history_prepare_status_v1') return { status:'success', history_sync:{ requested_range_complete:true } }
+      if (action === 'history_evidence') return missingHistory
+      if (action === 'positions') return { status:'success', positions:[] }
+      return { status:'error', error:'unexpected_action' }
+    })
+    const eligible = buildEligibleManualTrades(selectedHistory, { account:accountRow, positions:[], systemReferences:new Map() }).trades[0]
+    await expect(readManualTradeEvidence({ id:7 }, accountRow, [{
+      trade_id:eligible.trade_id, source_identity_hash:eligible.source_identity_hash,
+      trade_source_hash:eligible.trade_source_hash, position_id:'1001', entry_order_ticket:'2001',
+    }], {
+      strategySnapshot:{ market_data_plan:{ timeframes:[{ timeframe:'M15' }] } }, nowUtcMsc:10_000,
+      selection_context_token:selectionContextToken('snapshot-selected'),
+    })).rejects.toThrow('manual_trade_review_source_changed')
+  })
+
   it('rejects empty evidence references before any Bridge call', async () => {
     const hash = 'a'.repeat(64)
     bridge.mt5Bridge.mockClear()

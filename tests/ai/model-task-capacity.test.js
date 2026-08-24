@@ -137,6 +137,8 @@ describe('model-task capacity reservations', () => {
     expect(modelTaskCapacityQueue('review')).toBe('background')
     expect(modelTaskCapacityQueue('model_compare')).toBe('background')
     expect(modelTaskCapacityQueue('memory_compression')).toBe('background')
+    expect(modelTaskCapacityQueue('memory_consistency')).toBe('background')
+    expect(() => modelTaskCapacityQueue('memory_consistncy')).toThrow('model_capacity_usage_unknown:memory_consistncy')
   })
 
   it('reserves one critical slot: a fourth background waits while critical work is admitted', async () => {

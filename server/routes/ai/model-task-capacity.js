@@ -68,7 +68,8 @@ export function modelTaskCapacityQueue(usage) {
   const normalized = String(usage || '').trim().toLowerCase().replace(/-/g, '_')
   if (normalized === 'auto_platform' || normalized === 'auto_private') return MODEL_TASK_CAPACITY_QUEUE.EXECUTION_CRITICAL
   if (normalized === 'manual' || normalized === 'model_test' || normalized === 'modeltest') return MODEL_TASK_CAPACITY_QUEUE.INTERACTIVE
-  if (normalized === 'review' || normalized === 'model_compare' || normalized === 'memory_compression') return MODEL_TASK_CAPACITY_QUEUE.BACKGROUND
+  if (normalized === 'review' || normalized === 'model_compare'
+    || normalized === 'memory_compression' || normalized === 'memory_consistency') return MODEL_TASK_CAPACITY_QUEUE.BACKGROUND
   throw new Error(`model_capacity_usage_unknown:${normalized || 'empty'}`)
 }
 

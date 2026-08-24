@@ -35,6 +35,7 @@ import {
   buildStrategyMemoryConsistencyMessages,
   claimStrategyMemoryConsistencyJob,
   getLatestStrategyMemoryConsistencyJob,
+  linkStrategyMemoryConsistencyModelTask,
   prepareStrategyMemoryConsistencyModelCall,
   queueStrategyMemoryConsistencyCheck,
   recoverAbandonedStrategyMemoryConsistencyModelTasks,
@@ -203,6 +204,45 @@ describe('strategy memory consistency contract', () => {
     expect(mocks.selectModelTaskBudget).toHaveBeenCalledWith(expect.objectContaining({
       taskKind:'strategy_memory_consistency', profile:null, maxInputTokens:9000, providerOutputCap:2000,
     }))
+  })
+
+  it('switches the current model task only for the claimed attempt and lease', async () => {
+    const current = { id:11, status:'leased', attempt_count:1, lease_token:'lease-1', model_task_id:null }
+    mocks.queryRun.mockImplementation(async (sql, params) => {
+      if (!sql.startsWith('UPDATE strategy_memory_consistency_jobs SET model_task_id')) return { affectedRows:1 }
+      const [taskId, , id, attemptCount, leaseToken] = params
+      if (current.id !== Number(id) || current.attempt_count !== Number(attemptCount)
+        || current.lease_token !== leaseToken || current.status !== 'leased') return { affectedRows:0 }
+      if (current.model_task_id === taskId) return { affectedRows:0 }
+      current.model_task_id = taskId
+      return { affectedRows:1 }
+    })
+    mocks.queryOne.mockImplementation(async () => ({ ...current }))
+
+    await expect(linkStrategyMemoryConsistencyModelTask({ ...job, attempt_count:1, lease_token:'lease-1' }, 'task-1'))
+      .resolves.toBe(true)
+    await expect(linkStrategyMemoryConsistencyModelTask({ ...job, attempt_count:1, lease_token:'lease-1' }, 'task-1'))
+      .resolves.toBe(true)
+
+    current.attempt_count = 2
+    current.lease_token = 'lease-2'
+    await expect(linkStrategyMemoryConsistencyModelTask({ ...job, attempt_count:1, lease_token:'lease-1' }, 'task-old'))
+      .rejects.toThrow('model_task_link_failed')
+    expect(current.model_task_id).toBe('task-1')
+
+    await expect(linkStrategyMemoryConsistencyModelTask({ ...job, attempt_count:2, lease_token:'lease-2' }, 'task-2'))
+      .resolves.toBe(true)
+    expect(current.model_task_id).toBe('task-2')
+  })
+
+  it('does not claim an exhausted job for a fourth attempt', async () => {
+    const exhausted = { ...job, status:'failed', attempt_count:3, max_attempts:3,
+      next_attempt_at:null, lease_token:null, lease_expires_at:null }
+    mocks.withTransaction.mockImplementation(async callback => callback(async (sql) => {
+      if (sql.startsWith('SELECT * FROM strategy_memory_consistency_jobs')) return [[exhausted], []]
+      throw new Error('unexpected write after exhausted claim')
+    }))
+    await expect(claimStrategyMemoryConsistencyJob({ workerId:'queue-test' })).resolves.toBeNull()
   })
 })
 

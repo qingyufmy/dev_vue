@@ -480,14 +480,30 @@ function startConsistencyLeaseHeartbeat(job) {
   }
 }
 
-async function linkModelTask(job, taskId) {
+export async function linkStrategyMemoryConsistencyModelTask(job, taskId) {
+  const attemptCount = Number(job?.attempt_count || 0)
+  const leaseToken = String(job?.lease_token || '').trim()
+  if (!Number.isInteger(attemptCount) || attemptCount <= 0 || !job?.id || !leaseToken) {
+    throw errorWithCode('strategy_memory_consistency_lease_lost')
+  }
+  // A job has one current model task per leased attempt.  A later attempt is
+  // allowed to replace the previous task, but only while the exact attempt
+  // and lease that claimed the job are still current.  This fences a worker
+  // whose lease expired while it was creating or linking a task.
   const result = await queryRun(`UPDATE strategy_memory_consistency_jobs SET model_task_id = ?, updated_at = ?
-    WHERE id = ? AND lease_token = ? AND status = 'leased' AND (model_task_id IS NULL OR model_task_id = ?)`,
-  [taskId, beijingNow(), job.id, job.lease_token, taskId])
+    WHERE id = ? AND attempt_count = ? AND lease_token = ? AND status = 'leased'`,
+  [taskId, beijingNow(), job.id, attemptCount, leaseToken])
   if (affectedRows(result) > 0) return true
-  const linked = await queryOne('SELECT model_task_id FROM strategy_memory_consistency_jobs WHERE id = ? LIMIT 1', [job.id])
-  if (String(linked?.model_task_id || '') !== String(taskId)) throw errorWithCode('model_task_link_failed')
-  return true
+  // MySQL can report zero changed rows when the same attempt is re-entered
+  // with the same deterministic idempotency task.  Treat that as success only
+  // when every fence value still matches; an old lease must never be accepted.
+  const linked = await queryOne(`SELECT model_task_id, attempt_count, lease_token, status
+    FROM strategy_memory_consistency_jobs WHERE id = ? LIMIT 1`, [job.id])
+  if (String(linked?.model_task_id || '') === String(taskId)
+    && Number(linked?.attempt_count || 0) === attemptCount
+    && String(linked?.lease_token || '') === leaseToken
+    && String(linked?.status || '') === 'leased') return true
+  throw errorWithCode('model_task_link_failed')
 }
 
 function providerResultUnknown(tracker, task = null) {
@@ -604,7 +620,7 @@ export async function runStrategyMemoryConsistencyOnce({
         detector_contract_version:String(job.detector_contract_version || STRATEGY_MEMORY_CONSISTENCY_DETECTOR_CONTRACT_VERSION) },
       maxAttempts:Number(job.max_attempts || 3), taskDeadlineAtUtcMs:modelCall.taskDeadlineUtcMs,
     }, { workerId:`strategy-memory-consistency:${process.pid}`, leaseMs:STRATEGY_MEMORY_CONSISTENCY_LEASE_MS,
-      linkTask:taskId => linkModelTask(job, taskId) })
+      linkTask:taskId => linkStrategyMemoryConsistencyModelTask(job, taskId) })
     await tracker.persistBudget(modelCall.budget)
     const signal = AbortSignal.any([lease.signal, tracker.signal])
     const output = await requestModel({ url:endpoint.url, apiKey:resolved.model.api_key_encrypted,
