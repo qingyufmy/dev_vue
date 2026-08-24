@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { deriveProviderSseLimits, parseProviderSseResponse, requestJsonObject } from '../../server/routes/ai/llm.js'
+import { deriveProviderSseLimits, MODEL_PROVIDER_SSE_LIMITS, parseProviderSseResponse,
+  requestJsonObject, resolveProviderSseOutputTokens } from '../../server/routes/ai/llm.js'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -191,9 +192,85 @@ describe('official provider SSE requests', () => {
     const limits = deriveProviderSseLimits(393216)
     expect(limits.maxEvents).toBeGreaterThan(20_000)
     expect(limits.maxBytes).toBeGreaterThan(16 * 1024 * 1024)
-    expect(limits.maxEvents).toBeLessThanOrEqual(4_000_000)
-    expect(limits.maxBytes).toBeLessThanOrEqual(128 * 1024 * 1024)
+    expect(deriveProviderSseLimits(Number.MAX_SAFE_INTEGER)).toMatchObject({
+      maxEvents:4_000_000, maxBytes:128 * 1024 * 1024,
+    })
     expect(limits.maxLineBytes).toBe(256 * 1024)
+  })
+
+  it('keeps the default SSE envelope without a request or persisted task budget', () => {
+    expect(resolveProviderSseOutputTokens()).toBe(0)
+    expect(deriveProviderSseLimits(resolveProviderSseOutputTokens())).toEqual(MODEL_PROVIDER_SSE_LIMITS)
+  })
+
+  it('uses the persisted output budget when a repair body omits its token field', async () => {
+    const budget = { selectedMaxOutputTokens:393216 }
+    expect(resolveProviderSseOutputTokens({}, budget)).toBe(393216)
+    expect(resolveProviderSseOutputTokens({}, { selected_output_budget:'393216' })).toBe(393216)
+    const limits = deriveProviderSseLimits(resolveProviderSseOutputTokens({}, budget))
+    const parts = ['data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}' + '\n\n']
+    for (let index = 0; index < 20_050; index++) {
+      parts.push('data: {"choices":[{"delta":{"content":" "}}]}\n\n')
+    }
+    parts.push('data: {"choices":[{"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n')
+    await expect(parseProviderSseResponse(response(streamBody(parts)), { limits }))
+      .resolves.toMatchObject({ eventCount:20_053 })
+  })
+
+  it('uses the task budget for an openai-compatible thinking repair without changing its wire body', async () => {
+    const budget = {
+      selectedMaxOutputTokens:393216, tokenLimitsStatus:'confirmed',
+      maxInputTokens:10000, providerOutputCap:393216, contextLimitSemantics:'separate',
+    }
+    const invalidParts = ['data: {"choices":[{"delta":{"content":"{\\"ok\\":false}"}}]}\n\n']
+    for (let index = 0; index < 20_050; index++) {
+      invalidParts.push('data: {"choices":[{"delta":{"content":" "}}]}\n\n')
+    }
+    invalidParts.push('data: {"choices":[{"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n')
+    mockFetch
+      .mockResolvedValueOnce(response(streamBody(invalidParts)))
+      .mockResolvedValueOnce(response(streamBody([
+        'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ])))
+    await expect(requestJsonObject({
+      url:'https://gateway.example.test/v1/chat/completions', provider:'openai_compatible', apiKey:'key', model:'custom',
+      maxTokens:393216, thinkingEnabled:true, capabilities:{ supports_stream:true }, modelTaskBudget:budget,
+      messages:[{ role:'user', content:'test' }],
+      validateObject:value => {
+        if (value?.ok !== true) throw new Error('invalid_output')
+        return value
+      },
+    })).resolves.toEqual({ ok:true })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    for (const call of mockFetch.mock.calls) {
+      const body = JSON.parse(call[1].body)
+      expect(body).not.toHaveProperty('max_tokens')
+      expect(body).not.toHaveProperty('max_output_tokens')
+    }
+  })
+
+  it('carries the physical SSE budget through empty-response followup and repair requests', async () => {
+    const budget = {
+      selectedMaxOutputTokens:393216, tokenLimitsStatus:'confirmed',
+      maxInputTokens:1000, providerOutputCap:393216, contextLimitSemantics:'separate',
+    }
+    mockFetch
+      .mockResolvedValueOnce(response(streamBody([
+        'data: {"choices":[{"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n',
+      ])))
+      .mockResolvedValueOnce(response(streamBody([
+        'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},"finish_reason":"stop"}]}\n\n',
+        'data: [DONE]\n\n',
+      ])))
+    await expect(requestJsonObject({
+      url:'https://api.deepseek.com/chat/completions', provider:'deepseek', apiKey:'key', model:'deepseek-chat',
+      maxTokens:393216, modelTaskBudget:budget, messages:[{ role:'user', content:'test' }],
+    })).resolves.toEqual({ ok:true })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    for (const call of mockFetch.mock.calls) {
+      expect(JSON.parse(call[1].body)).toMatchObject({ max_tokens:393216 })
+    }
   })
 
   it('does not truncate a physically valid stream after the old 20k event default', async () => {

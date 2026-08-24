@@ -1614,6 +1614,20 @@ function manualTradeReviewV3PointFailureStatus({ saved = false, hold = false, bu
   return businessAttemptsExhausted ? 'failed' : null
 }
 
+function normalizeManualTradeReviewV3PointForCandidate(value, point, options = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return normalizeManualTradeReviewCounterfactualPoint(value, options)
+  }
+  // candidate_key is the server-owned identity of the one frozen point sent to
+  // the model, not an analytical conclusion. Bind the returned content to that
+  // immutable identity so a missing or malformed echo cannot discard an
+  // otherwise valid blind analysis or trigger another provider request.
+  return normalizeManualTradeReviewCounterfactualPoint({
+    ...value,
+    candidate_key:point.candidate_key,
+  }, options)
+}
+
 function manualTradeReviewV3PointOffset(candidateKey) {
   const value = String(candidateKey || '').trim()
   if (value === 'anchor') return 0
@@ -1921,7 +1935,7 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
   const pointOutputContractHash = manualTradeReviewV3PointContractHash()
   const inputHash = buildManualTradeReviewStageInputHash({ stage:'counterfactual', frozenRuntimeHash:runtimeHash,
     messages, outputContractHash:pointOutputContractHash, parentOutputHash:null })
-  const validateOutput = value => normalizeManualTradeReviewCounterfactualPoint(value, {
+  const validateOutput = value => normalizeManualTradeReviewV3PointForCandidate(value, point, {
     strategySnapshot, strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(strategySnapshot),
     evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(point.market_data),
     allowedEvidenceRefs:point.allowed_evidence_refs,
@@ -2448,6 +2462,7 @@ export const __manualTradeReviewTest = {
   manualTradeReviewV3FindAtr, manualTradeReviewV3FindAtrEvidence,
   manualTradeReviewV3ValidatePersistedBundle, manualTradeReviewV3OutputContractHash, manualTradeReviewV3PointContractHash,
   manualTradeReviewV3PointFailureStatus,
+  normalizeManualTradeReviewV3PointForCandidate,
   manualTradeReviewPointPathRepairTargets, manualTradeReviewPointPathRepairContext,
   manualTradeReviewCounterfactualValuesEqual,
   manualTradeReviewOutcomePathRepairTargets, manualTradeReviewOutcomePathRepairContext,

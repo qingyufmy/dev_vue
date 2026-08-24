@@ -570,6 +570,24 @@ export function deriveProviderSseLimits(physicalMaxOutputTokens, baseLimits = MO
   }
 }
 
+/**
+ * Resolve the physical output allowance represented by one provider request.
+ *
+ * The wire field is intentionally preferred because it is the request that
+ * the provider actually received.  A repair/followup builder may omit that
+ * field, however, so retain the persisted task budget as a safe parser
+ * fallback.  Older task snapshots use the SQL-style `selected_output_budget`
+ * name, while live callers use `selectedMaxOutputTokens`.
+ */
+export function resolveProviderSseOutputTokens(body = null, modelTaskBudget = null) {
+  for (const field of ['max_output_tokens', 'max_tokens', 'max_completion_tokens']) {
+    const requestTokens = positiveInteger(body?.[field], 0)
+    if (requestTokens > 0) return requestTokens
+  }
+  return positiveInteger(modelTaskBudget?.selectedMaxOutputTokens, 0)
+    || positiveInteger(modelTaskBudget?.selected_output_budget, 0)
+}
+
 function providerStreamError(code, detail = '') {
   const error = new Error(detail ? `${code}:${detail}` : code)
   error.code = code
@@ -839,6 +857,7 @@ async function trackedModelRequest({
   url, apiKey, body, timeout, usageContext, estimatedTokens, phase, provider, signal,
   onProviderRequest, onProviderUsage, onProviderActivity, onProviderQuiet,
   providerQuietAfterMs = 60_000, protocol, supportsStream = false, deadlineAtMs = null,
+  modelTaskBudget = null,
 }) {
   let usageLogId = null
   let capacityLease = null
@@ -941,7 +960,7 @@ async function trackedModelRequest({
     if (streamingResponse) {
       const parsed = await parseProviderSseResponse(response, {
         protocol,
-        limits:deriveProviderSseLimits(body?.max_output_tokens ?? body?.max_tokens),
+        limits:deriveProviderSseLimits(resolveProviderSseOutputTokens(body, modelTaskBudget)),
         onEvent:async event => {
           responseBytes = Math.max(responseBytes, Number(event?.responseBytes) || 0)
           const syntheticChatTerminal = ['chat.finish_reason', 'chat.complete_json'].includes(event.eventType)
@@ -1190,7 +1209,7 @@ export async function requestJsonObject({
     url, apiKey, body, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
     estimatedTokens, phase: 'request', provider, signal, onProviderRequest, onProviderUsage,
     onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
-    deadlineAtMs:taskDeadlineAtMs,
+    deadlineAtMs:taskDeadlineAtMs, modelTaskBudget,
   })
   const nativeJsonMode = usesNativeJsonMode(provider, protocol)
   let content = extractLlmContent(data, protocol, nativeJsonMode)
@@ -1218,7 +1237,7 @@ export async function requestJsonObject({
       url, apiKey, body:emptyRetryBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
       estimatedTokens:emptyRetryEstimate, phase:'repair', provider, signal, onProviderRequest, onProviderUsage,
       onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
-      deadlineAtMs:taskDeadlineAtMs,
+      deadlineAtMs:taskDeadlineAtMs, modelTaskBudget,
     })
     content = extractLlmContent(emptyRetryData, protocol, true)
   }
@@ -1314,7 +1333,7 @@ export async function requestJsonObject({
       url, apiKey, body: repairBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
       estimatedTokens: repairEstimate, phase: 'repair', provider, signal, onProviderRequest, onProviderUsage,
       onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
-      deadlineAtMs:taskDeadlineAtMs,
+      deadlineAtMs:taskDeadlineAtMs, modelTaskBudget,
     })
     const repaired = extractLlmContent(repairedData, protocol, nativeJsonMode)
     if (!repaired) throw new Error('LLM repair response content is empty')

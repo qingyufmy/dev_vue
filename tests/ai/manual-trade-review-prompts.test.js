@@ -85,6 +85,8 @@ describe('manual trade review v3 prompts', () => {
     expect(user).not.toContain('anchor_plus_1')
     expect(system).toContain('strategy_signals')
     expect(system).toContain('protection_plan')
+    expect(system).toContain('输出 candidate_key 必须逐字等于 anchor_minus_1')
+    expect(system).toContain('"candidate_key":"anchor_minus_1"')
     expect(system).toContain('真实手动订单的方向')
     expect(system).toContain('每条 strategy_signal 的全部 evidence_refs 必须与该条 timeframe 完全同周期')
     expect(system).toContain('一个观察涉及多个周期时必须拆成多条 strategy_signal')

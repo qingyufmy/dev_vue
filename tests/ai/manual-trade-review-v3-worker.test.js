@@ -142,6 +142,16 @@ describe('manual trade review v3 worker wiring', () => {
     expect(normalized.strategy_optimization_hypotheses[0].supporting_review_refs).toEqual(['trade-a'])
   })
 
+  it('binds the model output to the one frozen server-owned candidate identity', () => {
+    const point = evidencePoint({ candidate_key:'anchor_minus_1', offset_bars:-1 })
+    const malformedEcho = { ...candidate(), candidate_key:'not-a-candidate' }
+    const normalized = __manualTradeReviewTest.normalizeManualTradeReviewV3PointForCandidate(
+      malformedEcho, point, { strategySnapshot, allowedEvidenceRefs:[pointRef] })
+    expect(normalized.candidate_key).toBe('anchor_minus_1')
+    expect(normalized.decision).toBe(malformedEcho.decision)
+    expect(normalized.protection_plan).toEqual(malformedEcho.protection_plan)
+  })
+
   it('repairs only invalid point strategy paths from the frozen allow-list', () => {
     const initial = {
       ...candidate(),
