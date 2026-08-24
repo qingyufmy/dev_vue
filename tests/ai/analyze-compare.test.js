@@ -552,8 +552,10 @@ describe('POST /ai/analyze-compare route', () => {
     expect(routes).toContain("error: 'pro_access_required'")
   })
 
-  it('uses the model-specific timeout for connection tests', () => {
-    expect(routes).toContain('timeout: resolved.model.request_timeout_ms || 120000')
+  it('uses bounded connection and stream probes for model verification', () => {
+    expect(routes).toContain('const MODEL_CONNECTION_PROBE_TIMEOUT_MS = 30_000')
+    expect(routes).toContain('timeout:connectionTimeoutMs')
+    expect(routes).toContain('probeModelStreamCapability(model, { timeoutMs:connectionTimeoutMs })')
   })
 })
 

@@ -903,6 +903,8 @@ const REASON_MAP = {
   model_connection_request_rejected: "模型服务拒绝了当前请求，请核对模型名称、调用协议和三个 Token 限制",
   model_connection_token_limits_rejected: "当前模型不接受所填限制，请修改上下文窗口、最大输入或最大输出",
   model_connection_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
+  model_stream_verification_unverified: "连接尚可用，但流式响应暂未确认；本次未保存，请稍后重新验证",
+  model_profile_verification_result_invalid: "模型验证结果无效，请刷新后重新保存",
   unsupported_model_provider: "不支持这个模型服务商",
   model_endpoint_invalid_url: "模型接口地址格式不正确",
   model_endpoint_credentials_forbidden: "模型接口地址不能包含用户名或密码",
@@ -2077,6 +2079,8 @@ const API_ERROR_MESSAGES = {
   model_connection_request_rejected: "模型服务拒绝了当前请求，请核对模型名称、调用协议和三个 Token 限制",
   model_connection_token_limits_rejected: "当前模型不接受所填限制，请修改上下文窗口、最大输入或最大输出",
   model_connection_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
+  model_stream_verification_unverified: "连接尚可用，但流式响应暂未确认；本次未保存，请稍后重新验证",
+  model_profile_verification_result_invalid: "模型验证结果无效，请刷新后重新保存",
   output_truncated: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
   ai_response_missing_json_object: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
   credential_decryption_failed: "模型凭据无法解密，请联系管理员检查密钥版本",
@@ -2441,6 +2445,11 @@ function modelRequestTransportTimeoutMs(requestTimeoutMs) {
     : DEFAULT_MODEL_REQUEST_TIMEOUT_MS;
   return modelDeadline + MODEL_REQUEST_TRANSPORT_MARGIN_MS;
 }
+
+// Model save/revalidation performs two server-bounded probes (connection and
+// streaming), each capped at 30 seconds. Keep this independent from the much
+// longer runtime model deadline configured for real analysis requests.
+const MODEL_VALIDATION_TRANSPORT_TIMEOUT_MS = 65_000;
 
 // Keep the legacy WebSocket command wait aligned with the formal single
 // provider-attempt safety deadlines in server/routes/ai/model-task-budget.js.
@@ -4490,6 +4499,14 @@ function modelTokenStatus(profile = {}) {
   return { label: "待人工确认", tone: "warning" };
 }
 
+function modelStreamingStatus(profile = {}) {
+  const nested = profile.transport_capabilities?.streaming || profile.transportCapabilities?.streaming || {};
+  const raw = String(nested.status || profile.streaming_status || "unverified").toLowerCase();
+  if (raw === "supported") return { status: "supported", label: "已验证支持", tone: "success" };
+  if (raw === "unsupported") return { status: "unsupported", label: "已验证不支持", tone: "warning" };
+  return { status: "unverified", label: "尚未验证", tone: "warning" };
+}
+
 function formatModelTokenCount(value) {
   return Number(value || 0).toLocaleString("zh-CN");
 }
@@ -4573,8 +4590,9 @@ function modelPurposeActualModel(binding = {}, profiles = []) {
 function modelPurposeProfileMeta(profile = {}) {
   const verification = String(profile.verification_status || profile.provider_verification_status || "").toLowerCase();
   const verificationLabel = verification === "verified" || verification === "confirmed" ? "已验证" : verification === "unverified" ? "待验证" : "";
+  const streaming = modelStreamingStatus(profile);
   const recent = profile.verified_at || profile.last_verified_at || profile.updated_at;
-  return `${modelTokenStatus(profile).label}${verificationLabel ? ` · ${verificationLabel}` : ""}${recent ? ` · 最近 ${escapeHtml(String(recent).slice(0, 16))}` : ""}`;
+  return `${modelTokenStatus(profile).label}${verificationLabel ? ` · ${verificationLabel}` : ""} · 流式${streaming.label}${recent ? ` · 最近 ${escapeHtml(String(recent).slice(0, 16))}` : ""}`;
 }
 
 function renderModelPurposeBindings() {
@@ -4601,10 +4619,15 @@ function renderModelPurposeBindings() {
     const blocked = unavailable || Boolean(binding.blocked || binding.invalid || ["blocked", "invalid", "unavailable", "disabled"].includes(String(binding.status || binding.binding_status || "").toLowerCase()));
     const actual = modelPurposeActualModel(binding, profiles);
     const source = modelPurposeSource(binding);
+    const streaming = profile ? modelStreamingStatus(profile) : null;
+    const longReviewRisk = ["daily_review", "monthly_review"].includes(purpose) && streaming && streaming.status !== "supported";
+    const streamWarning = longReviewRisk
+      ? `<small class="model-purpose-stream-warning" role="note">长响应风险：${streaming.status === "unsupported" ? "已验证不支持流式响应" : "流式响应尚未验证"}，复盘可能触发网关超时。</small>`
+      : "";
     const options = `<option value="" ${id == null ? "selected" : ""}>继承现有规则</option>${unavailable ? `<option value="${Number(id)}" selected>当前绑定模型不可用</option>` : ""}${profiles.map(item => `<option value="${Number(item.id)}" ${Number(item.id) === Number(id) && !unavailable ? "selected" : ""}>${escapeHtml(item.model_name || `模型 #${Number(item.id)}`)} · ${escapeHtml(modelProviderLabel(item.provider))} · ${modelPurposeProfileMeta(item)}</option>`).join("")}`;
     const resolution = blocked
       ? `绑定模型不可用，保存前请选择其他${scope === "platform" ? "平台" : "个人"}模型或继承规则`
-      : `实际模型：${actual ? escapeHtml(actual) : "由现有规则解析"}${source ? ` · ${escapeHtml(source)}` : ""}`;
+      : `实际模型：${actual ? escapeHtml(actual) : "由现有规则解析"}${source ? ` · ${escapeHtml(source)}` : ""}${streamWarning}`;
     return `<article class="model-purpose-row model-purpose-card ${blocked ? "is-blocked" : ""}" data-model-purpose="${purpose}"><div class="model-purpose-card-head"><div class="model-purpose-copy"><span class="model-purpose-kicker">任务用途</span><strong>${MODEL_PURPOSE_LABELS[purpose]}</strong><small>${escapeHtml(MODEL_PURPOSE_DESCRIPTIONS[purpose] || "按用途解析")}</small></div><span class="model-purpose-key sr-only" aria-hidden="true">${escapeHtml(purpose)}</span></div><label class="model-purpose-select"><span>${MODEL_PURPOSE_LABELS[purpose]}模型</span><select class="select" data-purpose-select aria-describedby="model-purpose-resolution-${purpose}" ${isObserverMode() ? "disabled" : ""}>${options}</select></label><div id="model-purpose-resolution-${purpose}" class="model-purpose-resolution ${blocked ? "is-blocked" : ""}" role="status"><span class="model-purpose-resolution-label">实际解析</span>${resolution}</div><button class="btn btn-secondary btn-sm" data-save-model-purpose type="button" ${isObserverMode() ? "disabled" : ""}>保存用途</button><div class="model-purpose-error" data-purpose-error role="alert" aria-live="polite"></div></article>`;
   }).join("");
 }
@@ -4723,15 +4746,16 @@ function renderModelProfiles() {
     const providerLabel = escapeHtml(modelProviderLabel(profile.provider) || profile.provider || "未知供应商");
     const isActive = profile.status === "active";
     const credentialLabel = profile.has_api_key ? "凭据已保存" : "需要配置凭据";
+    const streaming = modelStreamingStatus(profile);
     return `
     <article class="workspace-row model-profile-card" data-model-id="${Number(profile.id)}">
       <header class="model-profile-card-header">
         <div class="model-profile-identity"><span class="model-profile-mark" aria-hidden="true"><i data-lucide="cpu" size="18"></i></span><div class="model-profile-identity-copy"><div class="model-profile-name-row"><h3>${modelName}</h3>${profile.is_default ? '<span class="status-chip success">默认模型</span>' : ''}</div><p>${providerLabel}</p></div></div>
         <div class="model-profile-statuses"><span class="status-chip ${isActive ? "info" : "warning"}">${isActive ? "连接可用" : "已停用"}</span>${profile.provider === "kimi_code" ? `<span class="status-chip warning">${state.user?.role === "admin" ? "订阅模型 · 可按用途共享" : "个人订阅"}</span>` : ""}</div>
       </header>
-      <div class="model-profile-signals"><div class="model-profile-signal"><span>凭据状态</span><strong class="${profile.has_api_key ? "is-positive" : "is-warning"}">${credentialLabel}</strong></div><div class="model-profile-signal"><span>能力状态</span><strong>${tokenStatus.label}</strong></div><div class="model-profile-signal"><span>思考模式</span><strong>${Number(profile.thinking_enabled) ? "开启" : "关闭"}</strong></div></div>
-      <details class="row-details model-profile-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || "使用服务商默认地址")}</span><span>上下文窗口 ${formatModelTokenCount(limits.context_window_tokens)} tokens</span><span>最大输入 ${formatModelTokenCount(limits.max_input_tokens)} tokens</span><span>最大输出 ${formatModelTokenCount(limits.max_output_tokens)} tokens</span><span>能力状态 <em class="status-chip ${tokenStatus.tone}">${tokenStatus.label}</em></span><span>Temperature ${escapeHtml(profile.temperature ?? "--")}</span>${profile.request_timeout_ms ? `<span>模型请求超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ""}</div></details>
-      <footer class="workspace-row-actions model-profile-card-actions"><button class="btn btn-secondary btn-sm" type="button" data-model-action="test">测试连接</button><button class="btn btn-secondary btn-sm" type="button" data-model-action="default" ${profile.is_default ? "disabled" : ""}>设为默认</button><button class="btn btn-secondary btn-sm" type="button" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" type="button" data-model-action="delete" aria-label="删除 ${modelName}"><i data-lucide="trash-2" size="14" aria-hidden="true"></i></button></footer>
+      <div class="model-profile-signals"><div class="model-profile-signal"><span>凭据状态</span><strong class="${profile.has_api_key ? "is-positive" : "is-warning"}">${credentialLabel}</strong></div><div class="model-profile-signal"><span>能力状态</span><strong>${tokenStatus.label}</strong></div><div class="model-profile-signal"><span>流式响应</span><strong class="${streaming.status === "supported" ? "is-positive" : "is-warning"}">${streaming.label}</strong></div><div class="model-profile-signal"><span>思考模式</span><strong>${Number(profile.thinking_enabled) ? "开启" : "关闭"}</strong></div></div>
+      <details class="row-details model-profile-details"><summary>查看技术信息</summary><div class="workspace-row-meta"><span>API：${escapeHtml(profile.api_base_url || "使用服务商默认地址")}</span><span>上下文窗口 ${formatModelTokenCount(limits.context_window_tokens)} tokens</span><span>最大输入 ${formatModelTokenCount(limits.max_input_tokens)} tokens</span><span>最大输出 ${formatModelTokenCount(limits.max_output_tokens)} tokens</span><span>能力状态 <em class="status-chip ${tokenStatus.tone}">${tokenStatus.label}</em></span><span>流式响应 <em class="status-chip ${streaming.tone}">${streaming.label}</em></span><span>Temperature ${escapeHtml(profile.temperature ?? "--")}</span>${profile.request_timeout_ms ? `<span>模型请求超时 ${Math.round(profile.request_timeout_ms / 1000)}s</span>` : ""}</div></details>
+      <footer class="workspace-row-actions model-profile-card-actions"><button class="btn btn-secondary btn-sm" type="button" data-model-action="test">重新验证</button><button class="btn btn-secondary btn-sm" type="button" data-model-action="default" ${profile.is_default ? "disabled" : ""}>设为默认</button><button class="btn btn-secondary btn-sm" type="button" data-model-action="edit">编辑</button><button class="btn btn-danger-ghost btn-sm" type="button" data-model-action="delete" aria-label="删除 ${modelName}"><i data-lucide="trash-2" size="14" aria-hidden="true"></i></button></footer>
     </article>`;
   }).join("");
   initIcons();
@@ -4855,23 +4879,24 @@ async function saveModelProfile() {
   if (button) {
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
-    button.textContent = "正在验证…";
+    button.textContent = "正在验证连接与流式能力…";
   }
   try {
-    await api(id ? `/api/ai/model-profiles/${id}` : "/api/ai/model-profiles", {
+    const result = await api(id ? `/api/ai/model-profiles/${id}` : "/api/ai/model-profiles", {
       method: id ? "PUT" : "POST",
       body,
-      timeout: modelRequestTransportTimeoutMs(requestTimeoutMs),
+      timeout: MODEL_VALIDATION_TRANSPORT_TIMEOUT_MS,
     });
     $("profileApiKey").value = "";
     closeFormModal(editor, false);
-    toast("模型已验证并保存", "success");
+    const streamStatus = modelStreamingStatus(result.profile || {}).status;
+    toast(streamStatus === "supported" ? "模型已保存 · 流式响应已验证" : "模型已保存 · 已验证为非流式，长响应可能超时", streamStatus === "supported" ? "success" : "warning");
     await loadModelManagement();
   } finally {
     if (button) {
       button.disabled = false;
       button.removeAttribute("aria-busy");
-      button.textContent = "保存并验证";
+      button.textContent = "保存并验证连接与流式能力";
     }
   }
 }
@@ -18222,7 +18247,7 @@ function bindEvents() {
       const row = modelAction.closest("[data-model-id]"); const id = Number(row?.dataset.modelId); const profile = state.modelProfiles.find(item => Number(item.id) === id); const scope = state.user?.role === "admin" ? "platform" : "user";
       try {
         if (modelAction.dataset.modelAction === "edit") openModelEditor(profile);
-        else if (modelAction.dataset.modelAction === "test") { modelAction.disabled = true; modelAction.setAttribute("aria-busy", "true"); modelAction.textContent = "测试中…"; const data = await api(`/api/ai/model-profiles/${id}/test`, { method:"POST", body:{ scope }, timeout:modelRequestTransportTimeoutMs(profile?.request_timeout_ms) }); toast(`连接成功 · ${data.latency_ms} ms`, "success"); }
+        else if (modelAction.dataset.modelAction === "test") { modelAction.disabled = true; modelAction.setAttribute("aria-busy", "true"); modelAction.textContent = "正在验证连接与流式能力…"; const data = await api(`/api/ai/model-profiles/${id}/test`, { method:"POST", body:{ scope }, timeout:MODEL_VALIDATION_TRANSPORT_TIMEOUT_MS }); const streamStatus = modelStreamingStatus(data.profile || {}).status; toast(streamStatus === "supported" ? `连接成功 · 流式响应已验证 · ${data.latency_ms} ms` : `连接成功 · 已验证为非流式 · ${data.latency_ms} ms`, streamStatus === "supported" ? "success" : "warning"); await loadModelManagement(); }
         else if (modelAction.dataset.modelAction === "default") { await api(`/api/ai/model-profiles/${id}/default`, { method:"POST", body:{ scope } }); toast("默认模型已更新", "success"); await loadModelManagement(); }
         else if (modelAction.dataset.modelAction === "delete") {
           modelAction.disabled = true;
@@ -18260,7 +18285,7 @@ function bindEvents() {
           toast("模型已删除", "success");
           await loadModelManagement();
         }
-      } catch (error) { toast(localizeReason(error.message),"error"); } finally { if (modelAction.dataset.modelAction === "test") { modelAction.textContent = "测试连接"; modelAction.removeAttribute("aria-busy"); } modelAction.disabled = false; }
+      } catch (error) { toast(localizeReason(error.message),"error"); } finally { if (modelAction.dataset.modelAction === "test") { modelAction.textContent = "重新验证"; modelAction.removeAttribute("aria-busy"); } modelAction.disabled = false; }
       return;
     }
     if (manualReviewAction) {

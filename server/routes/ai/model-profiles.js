@@ -6,7 +6,7 @@ import { encryptCredential, decryptCredential, isEncryptionAvailable, isEncrypte
 import { recordCredentialMigration } from './rollout-governance.js'
 import { isPlatformShareableProvider, modelProviderProtocol, normalizeModelProviderProfile } from './model-providers.js'
 import { MODEL_PROVIDER_CAPABILITY_KEYS, MODEL_TOKEN_LIMIT_DEFAULTS,
-  getModelProviderCapabilities, normalizeProviderCapabilities } from './model-provider-capabilities.js'
+  getModelProviderCapabilities, normalizeProviderCapabilities, modelStreamingCapabilityStatus } from './model-provider-capabilities.js'
 import { getEffectivePlan } from '../../membership.js'
 
 export const MODEL_PROFILE_SCOPE = { USER: 'user', PLATFORM: 'platform' }
@@ -176,9 +176,14 @@ async function assertConfirmedModelProfile(profile) {
 }
 
 function tokenCapabilityFields(capability, tokenLimits, actorUserId, identity,
-  providerVerification = 'unverified', identityChanged = false) {
+  providerVerification = 'unverified', identityChanged = false, verifiedCapabilities = null) {
+  const verification = verifiedCapabilities && typeof verifiedCapabilities === 'object'
+    ? verifiedCapabilities : null
   return {
     ...(identityChanged ? {} : (capability || {})),
+    ...(verification ? Object.fromEntries(MODEL_PROVIDER_CAPABILITY_KEYS
+      .filter(key => Object.hasOwn(verification, key))
+      .map(key => [key, verification[key] === true])) : {}),
     ...identity,
     context_window_tokens:tokenLimits.context_window_tokens,
     max_input_tokens:tokenLimits.max_input_tokens,
@@ -188,8 +193,8 @@ function tokenCapabilityFields(capability, tokenLimits, actorUserId, identity,
     token_limits_status:'confirmed',
     token_limits_updated_by:Number(actorUserId) || null,
     token_limits_updated_at_utc_msc:Date.now(),
-    verification_status:identityChanged ? 'unverified' : (capability?.verification_status || providerVerification),
-    verified_at_utc_msc:identityChanged ? null : (capability?.verified_at_utc_msc || null),
+    verification_status:verification?.verification_status || (identityChanged ? 'unverified' : (capability?.verification_status || providerVerification)),
+    verified_at_utc_msc:verification?.verified_at_utc_msc || (identityChanged ? null : (capability?.verified_at_utc_msc || null)),
   }
 }
 
@@ -303,11 +308,24 @@ export async function prepareModelProfileForSave({ id = null, userId, payload = 
 export async function saveModelProfileWithValidation({ id = null, userId, payload = {}, callerRole, verify } = {}) {
   const prepared = await prepareModelProfileForSave({ id, userId, payload, callerRole })
   if (typeof verify !== 'function') throw new Error('model_profile_verification_required')
-  await verify(prepared.runtimeModel, prepared)
+  const verification = await verify(prepared.runtimeModel, prepared)
+  if (!verification || verification.ok !== true || !verification.capabilities
+      || !['supported', 'unsupported'].includes(String(verification.capabilities.streaming_status || ''))) {
+    throw new Error('model_profile_verification_result_invalid')
+  }
+  if (['provider', 'model_name', 'api_base_url', 'protocol'].some(key =>
+    String(verification.capabilities[key] || '') !== String(prepared.identity[key] || ''))) {
+    throw new Error('model_profile_verification_result_invalid')
+  }
 
   const now = beijingNow()
   const capability = tokenCapabilityFields(prepared.oldCapability, prepared.tokenLimits, userId,
-    prepared.identity, prepared.oldCapability?.verification_status || 'unverified', prepared.identityChanged)
+    prepared.identity, 'unverified', prepared.identityChanged, {
+      ...verification.capabilities,
+      supports_stream:verification.capabilities.streaming_status === 'supported',
+      verification_status:'verified',
+      verified_at_utc_msc:verification.capabilities.verified_at_utc_msc || Date.now(),
+    })
   let profileId = prepared.id
   await withTransaction(async run => {
     if (prepared.id == null) {
@@ -338,6 +356,52 @@ export async function saveModelProfileWithValidation({ id = null, userId, payloa
     await upsertModelProfileCapability(run, profileId, capability, userId)
   })
   return await getModelProfileById(profileId)
+}
+
+/**
+ * Persist a connection-test verification without changing the profile row.
+ * The profile is locked and its optimistic timestamp/identity are checked
+ * after the provider call, so a concurrent edit cannot receive stale proof.
+ */
+export async function persistModelProfileVerification({ profileId, userId, actorUserId = userId,
+  expectedUpdatedAt = null, verification } = {}) {
+  if (!verification || verification.ok !== true || !verification.capabilities
+      || !['supported', 'unsupported'].includes(String(verification.capabilities.streaming_status || ''))) {
+    throw new Error('model_profile_verification_result_invalid')
+  }
+  await withTransaction(async run => {
+    const profileResult = await run(`SELECT * FROM ai_model_profiles
+      WHERE id = ? AND owner_user_id = ? AND status = 'active' AND deleted_at IS NULL FOR UPDATE`,
+    [Number(profileId), Number(userId)])
+    const profileRows = Array.isArray(profileResult?.[0]) ? profileResult[0] : []
+    const existing = profileRows[0]
+    if (!existing) throw new Error('model_profile_not_found_or_inactive')
+    if (expectedUpdatedAt != null && String(existing.updated_at) !== String(expectedUpdatedAt)) {
+      throw new Error('model_profile_conflict')
+    }
+    const capabilityResult = await run(
+      'SELECT * FROM ai_model_provider_capabilities WHERE model_profile_id = ? LIMIT 1 FOR UPDATE',
+      [Number(profileId)])
+    const capabilityRows = Array.isArray(capabilityResult?.[0]) ? capabilityResult[0] : []
+    const oldCapability = normalizeProviderCapabilities(capabilityRows[0] || {})
+    const identity = {
+      provider:String(existing.provider || ''), model_name:String(existing.model_name || ''),
+      api_base_url:String(existing.api_base_url || ''), protocol:modelProviderProtocol(existing.provider),
+    }
+    const reported = verification.capabilities
+    if (['provider', 'model_name', 'api_base_url', 'protocol'].some(key =>
+      String(reported[key] || '') !== String(identity[key] || ''))) {
+      throw new Error('model_profile_conflict')
+    }
+    const tokenLimits = normalizeModelTokenLimits({}, capabilityRows.length ? oldCapability : existing)
+    const capability = tokenCapabilityFields(oldCapability, tokenLimits, actorUserId, identity, 'unverified', false, {
+      ...reported,
+      supports_stream:reported.streaming_status === 'supported',
+      verification_status:'verified', verified_at_utc_msc:reported.verified_at_utc_msc || Date.now(),
+    })
+    await upsertModelProfileCapability(run, Number(profileId), capability, actorUserId)
+  })
+  return await getModelProfileById(Number(profileId))
 }
 
 // ─── Model Profiles CRUD ───
@@ -1228,6 +1292,16 @@ async function sanitizeProfileWithCapabilities(row) {
     verification_status:capabilities.verification_status,
     provider_verification_status:capabilities.verification_status,
     provider_capability_source:capabilities.capability_source || null,
+    supports_stream:capabilities.verification_status === 'verified' && capabilities.supports_stream === true,
+    transport_capabilities:{
+      streaming:{
+        status:modelStreamingCapabilityStatus(capabilities),
+        verified_at_utc_msc:capabilities.verified_at_utc_msc || null,
+        source:capabilities.capability_source
+          || (capabilities.verification_status === 'verified'
+            ? (capabilities.verified_at_utc_msc ? 'save_probe' : 'db_verified') : null),
+      },
+    },
   }
   // Keep the capability identity available to server-side binding checks while
   // avoiding a new public credential/configuration field in the JSON response.

@@ -31,6 +31,7 @@ import {
   migrateLegacyConfigs,
   normalizeModelTokenLimits,
   prepareModelProfileForSave,
+  persistModelProfileVerification,
   recoverStaleModelUsageReservations,
   resolveAiTaskModel,
   saveModelProfileWithValidation,
@@ -412,6 +413,59 @@ describe('model profile authorization and defaults', () => {
     expect(mockWithTransaction).not.toHaveBeenCalled()
     expect(mockQueryRun).not.toHaveBeenCalled()
     expect(mockTx).not.toHaveBeenCalled()
+  })
+
+  it('atomically saves verified stream capability with a newly validated profile', async () => {
+    const verification = {
+      ok:true,
+      capabilities:{ provider:'deepseek', model_name:'deepseek-chat',
+        api_base_url:'https://api.deepseek.com', protocol:'chat_completions',
+        streaming_status:'supported', verification_status:'verified', verified_at_utc_msc:1721035200000 },
+    }
+    const savedProfile = profile({ id:42, provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com' })
+    const savedCapability = {
+      provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com', protocol:'chat_completions',
+      supports_stream:1, verification_status:'verified', verified_at_utc_msc:1721035200000,
+      context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216,
+      token_limits_source:'manual_confirmed', token_limits_status:'confirmed',
+    }
+    mockTx
+      .mockResolvedValueOnce([{ insertId:42 }, []])
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+    mockQueryOne.mockResolvedValueOnce(savedProfile).mockResolvedValueOnce(savedCapability)
+    const verify = vi.fn().mockResolvedValue(verification)
+    const result = await saveModelProfileWithValidation({ userId:1, callerRole:'pro', verify,
+      payload:{ provider:'deepseek', model_name:'deepseek-chat', api_key:'pending-key',
+        context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216 } })
+    expect(verify).toHaveBeenCalledOnce()
+    expect(result.transport_capabilities.streaming).toMatchObject({ status:'supported', source:'save_probe' })
+    expect(mockWithTransaction).toHaveBeenCalledOnce()
+    expect(mockTx.mock.calls[1][0]).toContain('ai_model_provider_capabilities')
+    expect(mockTx.mock.calls[1][1]).toEqual(expect.arrayContaining([1, 'deepseek', 'deepseek-chat', 'https://api.deepseek.com', 'chat_completions', 'verified']))
+  })
+
+  it('keeps a stored capability unchanged when connection-test proof becomes stale', async () => {
+    const existing = profile({ id:22, updated_at:'2026-07-15 12:00:00' })
+    mockTx.mockResolvedValueOnce([[existing], []])
+    const verification = { ok:true, capabilities:{ provider:'qwen', model_name:'qwen-plus',
+      api_base_url:'https://different.example.test/v1', protocol:'chat_completions',
+      streaming_status:'supported', verification_status:'verified' } }
+    await expect(persistModelProfileVerification({ profileId:22, userId:1,
+      expectedUpdatedAt:'2026-07-15 11:59:59', verification })).rejects.toThrow('model_profile_conflict')
+    expect(mockTx).toHaveBeenCalledOnce()
+  })
+
+  it('rejects connection-test proof for a different model identity', async () => {
+    const existing = profile({ id:23, updated_at:'2026-07-15 12:00:00' })
+    const capability = { provider:'qwen', model_name:'qwen-plus', api_base_url:existing.api_base_url,
+      protocol:'chat_completions', context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216,
+      token_limits_source:'manual_confirmed', token_limits_status:'confirmed', verification_status:'verified', supports_stream:0 }
+    mockTx.mockResolvedValueOnce([[existing], []]).mockResolvedValueOnce([[capability], []])
+    const verification = { ok:true, capabilities:{ provider:'qwen', model_name:'other-model',
+      api_base_url:existing.api_base_url, protocol:'chat_completions', streaming_status:'supported', verification_status:'verified' } }
+    await expect(persistModelProfileVerification({ profileId:23, userId:1,
+      expectedUpdatedAt:existing.updated_at, verification })).rejects.toThrow('model_profile_conflict')
+    expect(mockTx).toHaveBeenCalledTimes(2)
   })
 
   it('rejects platform scope from a non-admin caller', async () => {

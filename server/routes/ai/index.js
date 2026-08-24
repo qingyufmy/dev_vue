@@ -8,6 +8,7 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow, logAudit } f
 import { authMiddleware } from '../../middleware/auth.js'
 import { mt5Bridge, calculateMarketData } from './market-data.js'
 import { maybeAiSignal, requestJsonObject } from './llm.js'
+import { probeModelStreamCapability } from './model-transport-probe.js'
 import { MODEL_PROVIDER_DEFAULTS, modelProviderProtocol } from './model-providers.js'
 import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistoryCompareJob,
   cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
@@ -32,8 +33,7 @@ import { dismissStrategyMemoryConflict, getOrCreateStrategyMemoryLibrary,
 import { createModelProfile, getUserModelProfiles, updateModelProfile, getModelProfileDeletionImpact, deleteModelProfile,
   setDefaultModelProfile, getPlatformUsagePolicy, updatePlatformUsagePolicy,
   resolveOwnedModelProfileForRuntime, resolveAiTaskModel, saveModelProfileWithValidation,
-  getModelPurposeBindings, setModelPurposeBinding } from './model-profiles.js'
-import { getModelProviderCapabilities } from './model-provider-capabilities.js'
+  getModelPurposeBindings, setModelPurposeBinding, persistModelProfileVerification } from './model-profiles.js'
 import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStrategyDeletionPreview, deleteStrategy,
   listTradingAccounts, createTradingAccount, updateTradingAccount, deleteTradingAccount,
   listSubscriptions, createSubscription, updateSubscription, deleteSubscription } from './strategy-ownership.js'
@@ -221,28 +221,62 @@ export function modelConnectionValidationError(error) {
   return 'model_connection_unavailable'
 }
 
-/** Execute exactly one provider request for a pending model profile. */
+const MODEL_CONNECTION_PROBE_TIMEOUT_MS = 30_000
+
+/** Execute one bounded connection request followed by one bounded stream probe. */
 export async function verifyPendingModelProfile(model = {}) {
   const provider = model.provider || model.api_provider
   const protocol = modelProviderProtocol(provider)
   const base = String(model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
   if (!base) throw new Error('unsupported_model_provider')
   const testConfig = resolveModelConnectionTestConfig({ ...model, max_output_tokens:model.max_output_tokens })
+  const connectionTimeoutMs = Math.min(
+    Math.max(1, Number(model.request_timeout_ms) || MODEL_CONNECTION_PROBE_TIMEOUT_MS),
+    MODEL_CONNECTION_PROBE_TIMEOUT_MS,
+  )
+  const connectionStarted = Date.now()
   try {
     const result = await requestJsonObject({
       url:`${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
       apiKey:model.api_key_encrypted, provider, model:model.model_name, temperature:0,
-      maxTokens:testConfig.maxTokens, protocol, timeout:model.request_timeout_ms || 120000,
+      maxTokens:testConfig.maxTokens, protocol, timeout:connectionTimeoutMs,
       thinkingEnabled:testConfig.thinkingEnabled, reasoningEffort:testConfig.reasoningEffort,
       messages:[{ role:'system', content:'Return exactly {"ok":true} as JSON.' }, { role:'user', content:'{"ok":true}' }],
+      // The first request is intentionally non-streaming. The following
+      // server-controlled probe is the only source of transport capability.
+      capabilities:{ supports_stream:false, supports_request_id:false, verification_status:'unverified' },
       allowFollowupRequests:false, usageContext:null,
     })
     if (!result || typeof result !== 'object' || Array.isArray(result) || result.ok !== true) {
       throw new Error('model_connection_probe_invalid_response')
     }
-    return { ok:true }
+    const connectionLatencyMs = Date.now() - connectionStarted
+    const streaming = await probeModelStreamCapability(model, { timeoutMs:connectionTimeoutMs })
+    if (streaming.status === 'unverified') {
+      const error = new Error('model_stream_verification_unverified')
+      error.code = 'model_stream_verification_unverified'
+      // Keep only a stable internal reason; never attach provider response
+      // bodies, prompts, or credentials to the API error.
+      error.streamReason = String(streaming.reason || 'stream_probe_failed').slice(0, 80)
+      throw error
+    }
+    return {
+      ok:true,
+      verification:{
+        connection:{ status:'passed', latency_ms:connectionLatencyMs },
+        streaming,
+      },
+      capabilities:{
+        provider:String(provider), model_name:String(model.model_name || ''),
+        api_base_url:String(base), protocol:String(protocol),
+        streaming_status:streaming.status, verification_status:'verified',
+        verified_at_utc_msc:Date.now(), capability_source:'save_probe',
+      },
+    }
   } catch (error) {
-    const stableCode = modelConnectionValidationError(error)
+    const stableCode = error?.code === 'model_stream_verification_unverified'
+      ? 'model_stream_verification_unverified'
+      : modelConnectionValidationError(error)
     const stable = new Error(stableCode)
     stable.code = stableCode
     stable.providerStatus = error?.providerStatus
@@ -506,22 +540,22 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
     const ownerId = req.user.role === 'admin' && req.body?.scope === 'platform' ? 0 : req.user.id
     const resolved = await resolveOwnedModelProfileForRuntime(Number(req.params.id), ownerId)
     if (!resolved.model) throw new Error(resolved.error || 'model_unavailable')
-    const capabilities = await getModelProviderCapabilities(resolved.model_profile_id)
-    const testConfig = resolveModelConnectionTestConfig({ ...resolved.model, ...capabilities })
-    const { provider, protocol } = testConfig
-    const base = String(resolved.model.api_base_url || MODEL_PROVIDER_DEFAULTS[provider] || '').replace(/\/+$/, '')
-    if (!base) throw new Error('unsupported_model_provider')
-    const started = Date.now()
-    const result = await requestJsonObject({ url: `${base}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`,
-      apiKey: resolved.model.api_key_encrypted, provider, model: resolved.model.model_name, temperature: 0,
-      maxTokens: testConfig.maxTokens, protocol,
-      timeout: resolved.model.request_timeout_ms || 120000,
-      thinkingEnabled: testConfig.thinkingEnabled,
-      reasoningEffort: testConfig.reasoningEffort,
-      messages: [{ role: 'system', content: 'Return JSON only.' }, { role: 'user', content: '{"ok":true}' }],
-      allowFollowupRequests: testConfig.allowFollowupRequests,
-      usageContext: { userId: req.user.id, profileId: resolved.model_profile_id, credentialSource: resolved.credential_source, usage: 'manual', strategyId: null } })
-    res.json({ ok: true, latency_ms: Date.now() - started, provider, model_name: resolved.model.model_name, response_valid: result?.ok === true })
+    const verification = await verifyPendingModelProfile(resolved.model)
+    const profile = await persistModelProfileVerification({
+      profileId:resolved.model_profile_id, userId:ownerId, actorUserId:req.user.id,
+      expectedUpdatedAt:resolved.model.profile_updated_at, verification,
+    })
+    const stream = verification.verification?.streaming || {}
+    await auditAiMutation(req, 'ai_model_profile_transport_verified', 'ai_model_profile', resolved.model_profile_id, {
+      provider:resolved.model.provider, model_name:resolved.model.model_name,
+      streaming_status:stream.status, first_delta_ms:stream.first_delta_ms,
+      total_latency_ms:stream.total_latency_ms,
+    })
+    res.json({ ok:true,
+      latency_ms:Number(stream.total_latency_ms || verification.verification?.connection?.latency_ms || 0),
+      provider:resolved.model.provider, model_name:resolved.model.model_name,
+      response_valid:true, verification, profile,
+    })
   } catch (error) { reviewError(res, error) }
 })
 

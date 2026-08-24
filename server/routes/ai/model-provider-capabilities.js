@@ -92,6 +92,11 @@ export function normalizeProviderCapabilities(row = {}) {
   }
 }
 
+export function modelStreamingCapabilityStatus(capabilities = {}) {
+  if (String(capabilities?.verification_status || 'unverified') !== 'verified') return 'unverified'
+  return capabilities?.supports_stream === true ? 'supported' : 'unsupported'
+}
+
 export async function getModelProviderCapabilities(modelProfileId) {
   if (!Number(modelProfileId)) return normalizeProviderCapabilities()
   const row = await queryOne(`SELECT * FROM ai_model_provider_capabilities

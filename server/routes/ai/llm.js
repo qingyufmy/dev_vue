@@ -342,7 +342,7 @@ function usesNativeJsonMode(provider, protocol) {
     || (provider === 'volcengine_agent_plan' && protocol === 'responses')
 }
 
-function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort,
+export function buildLlmRequestBody({ protocol, provider, model, temperature, maxTokens, messages, thinkingEnabled, reasoningEffort,
   supportsStream = false }) {
   if (protocol === 'responses') {
     const instructions = messages
