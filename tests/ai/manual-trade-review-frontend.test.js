@@ -114,6 +114,28 @@ describe('manual trade review frontend contract', () => {
     expect(create).not.toContain('manualTradeReviewResetClientRequestId();\n    if (await manualTradeReviewRecoverStaleSelection')
   })
 
+  it('recreates deterministic frozen-evidence failures from fresh history instead of retrying the old case', () => {
+    const recovery = block('const MANUAL_TRADE_REVIEW_RECREATE_ERRORS', 'function manualTradeReviewStatusTone')
+    const handler = block('if (manualReviewAction)', 'if (reviewCase)')
+    expect(app).toContain('manual_trade_review_counterfactual_points_unavailable: "冻结的反事实候选行情不完整，本轮未调用模型')
+    expect(recovery).toContain('manual_trade_review_counterfactual_points_unavailable')
+    expect(recovery).toContain('data-manual-review-action="${action}"')
+    expect(recovery).toContain('刷新交易历史并重新创建')
+    expect(recovery).toContain('manualTradeReviewResetClientRequestId()')
+    expect(recovery).toContain('state.manualTradeReviewSelectionContextToken = null')
+    expect(recovery).toContain('state.manualTradeReviewSelectedTrades = []')
+    expect(recovery).toContain('state.manualTradeReviewStrategyId = strategyId || null')
+    expect(recovery).toContain('Object.prototype.hasOwnProperty.call(detail || {}, "user_thesis_text")')
+    expect(recovery).toContain('$("manualTradeReviewThesis").value = thesis')
+    expect(recovery).toContain('loadManualTradeReviewTrades({ reset:true, forceRefresh:true })')
+    expect(recovery).not.toContain('manualTradeReviewThesis").value = ""')
+    expect(recovery).not.toContain('/retry')
+    expect(handler).toContain('action === "recreate-review"')
+    expect(handler).toContain('await manualTradeReviewRecreateFromFreshEvidence()')
+    expect(handler).toContain('/api/ai/manual-trade-reviews/${caseId}/retry')
+    expect(app.match(/manualTradeReviewFailureBanner\(detail\)/g)?.length).toBeGreaterThanOrEqual(3)
+  })
+
   it('pauses polling while hidden, resumes when visible, and backs off transient errors', () => {
     const polling = block('function stopManualTradeReviewPolling', 'function manualTradeReviewProgressHtml')
     expect(polling).toContain('document.visibilityState === "hidden"')
@@ -132,7 +154,8 @@ describe('manual trade review frontend contract', () => {
     expect(app).toContain('manual_trade_review_source_changed:')
     expect(app).toContain('market_evidence_unavailable:')
     expect(app).toContain('manualTradeReviewReasonText(detail.evidence_reason)')
-    expect(app).toContain('localizeReason(detail.last_error_code')
+    expect(app).toContain('localizeReason(code)')
+    expect(app).toContain('manualTradeReviewFailureBanner(detail)')
   })
 
   it('sends only stable history references when creating a review', () => {
@@ -154,6 +177,7 @@ describe('manual trade review frontend contract', () => {
     expect(html).toContain('manual-review-frontend2')
     expect(html).toContain('manual-review-durable-stage1')
     expect(html).toContain('manual-review-snapshot-fix1')
+    expect(html).toContain('manual-review-counterfactual-market1')
     expect(css).toContain('.manual-review-trade-row')
     expect(responsive).toContain('.manual-review-filter-bar .btn')
     expect(responsive).toContain('min-height: 44px')

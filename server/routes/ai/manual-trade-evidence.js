@@ -814,7 +814,7 @@ function buildCounterfactualPointInput({ common, point, primaryTimeframe, buildP
     // direction, price and protection out of this request entirely.
     deals:[],
     signal:{ timeframe:primaryTimeframe, signal_type:'hold' },
-    asOfUtcMsc:Number(point.decision_time_utc_msc), includeHoldingMetrics:false,
+    asOfUtcMsc:Number(point.decision_time_utc_msc), includeHoldingMetrics:false, pathMode:'cutoff_snapshot',
   })
 }
 
@@ -839,7 +839,7 @@ async function buildCounterfactualPoints({ common, trade, preEntry, entryTimeUtc
     windowPath = await buildPath({ ...common,
       deals:[],
       signal:{ timeframe:primaryTimeframe, signal_type:'hold' },
-      asOfUtcMsc:windowCutoff, includeHoldingMetrics:false,
+      asOfUtcMsc:windowCutoff, includeHoldingMetrics:false, pathMode:'cutoff_snapshot',
     })
   } catch {
     return { status:'unavailable', reason:'counterfactual_candle_sequence_unavailable', points:[] }

@@ -570,7 +570,12 @@ export async function getManualTradeReview(caseId, actor) {
   const evidence = parse(row.evidence_json, {})
   const evidenceIssues = Array.isArray(evidence.evidence_issues) ? evidence.evidence_issues
     : Array.isArray(evidence.market_data?.evidence_issues) ? evidence.market_data.evidence_issues : []
-  return { ...publicCase(row), strategy_snapshot:snapshot, evidence_issues:evidenceIssues,
+  // The detail endpoint is already scoped by getCaseForActor to the current
+  // actor.  Return the user's own thesis here so the deterministic evidence
+  // recovery action can preserve it when creating a new case; keep it out of
+  // publicCase/list responses because those are list/card payloads.
+  return { ...publicCase(row), user_thesis_text:row.user_thesis_text || null,
+    strategy_snapshot:snapshot, evidence_issues:evidenceIssues,
     evidence:{ ...evidence, trades:undefined }, sources:sources.map(source => ({ ...source,
     normalized_trade:parse(source.normalized_trade_json, null), manual_classification:parse(source.manual_classification_json, null), normalized_trade_json:undefined, manual_classification_json:undefined })),
     versions:versions.map(version => ({ ...version, content:parse(version.content_json, {}), content_json:undefined })) }
@@ -841,7 +846,9 @@ async function markJobFailure(job, error) {
   const deadlineAtUtcMs = parseBeijingDateTime(job.task_deadline_at)
   const deadlineExpired = Number.isFinite(deadlineAtUtcMs) && deadlineAtUtcMs > 0 && deadlineAtUtcMs <= Date.now()
   const heldForTaskReconciliation = Boolean(error?.manualTradeReviewHold)
-  const exhausted = !heldForTaskReconciliation && (Boolean(error?.manualTradeReviewTerminalTask)
+  const deterministicEvidenceFailure = manualTradeReviewDeterministicEvidenceFailure(code)
+  const exhausted = !heldForTaskReconciliation && (deterministicEvidenceFailure
+    || Boolean(error?.manualTradeReviewTerminalTask)
     || deadlineExpired
     || Number(job.attempt_count || 0) >= Number(job.max_attempts || 3))
   const targetStatus = exhausted ? 'failed' : 'queued'
@@ -858,6 +865,12 @@ async function markJobFailure(job, error) {
       AND EXISTS (SELECT 1 FROM manual_trade_review_jobs jobs
         WHERE jobs.id = ? AND jobs.status = ? AND jobs.last_error_code = ?)`, [targetStatus, code, now, job.case_id, job.id, targetStatus, code])
   return true
+}
+
+function manualTradeReviewDeterministicEvidenceFailure(errorOrCode) {
+  const code = typeof errorOrCode === 'string'
+    ? errorOrCode : text(errorOrCode?.code || errorOrCode?.message || '', 128)
+  return code === 'manual_trade_review_counterfactual_points_unavailable'
 }
 
 function manualTradeReviewModelConfigFingerprint(resolved, endpoint) {
@@ -1952,5 +1965,6 @@ export const __manualTradeReviewTest = {
   manualTradeReviewV3PointEvidence, manualTradeReviewV3ServerSummary, manualTradeReviewV3PointBundle,
   manualTradeReviewV3FindAtr, manualTradeReviewV3FindAtrEvidence,
   manualTradeReviewV3ValidatePersistedBundle, manualTradeReviewV3OutputContractHash, manualTradeReviewV3PointContractHash,
-  applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs,
+  applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs, markJobFailure,
+  manualTradeReviewDeterministicEvidenceFailure,
 }

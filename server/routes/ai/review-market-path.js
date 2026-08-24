@@ -5,18 +5,33 @@ import { stripBrokerSuffix } from './utils.js'
 import { loadPeriodMarketWindow } from './period-market-evidence.js'
 import { resolveDefaultObserverClockBootstrap, trustedTerminalClock } from './terminal-clock.js'
 import { getChanWindowPolicy } from './chan-window-policy.js'
+import { assessChanEvidenceDimensions } from './chan-evidence-assessment.js'
 
 const parse = (value, fallback = {}) => { try { return value == null ? fallback : JSON.parse(value) } catch { return fallback } }
 const TIMEFRAME_MS = { M1: 60000, M5: 300000, M15: 900000, M30: 1800000, H1: 3600000, H4: 14400000, D1: 86400000 }
 const MAX_REVIEW_PATH_CANDLES = 5000
 const COMPLETE_PATH_CAPABILITIES = Object.freeze({ mfe_mae: true, target_touch: true, intrabar_sequence: true })
 const UNOBSERVABLE_PATH_CAPABILITIES = Object.freeze({ mfe_mae: false, target_touch: false, intrabar_sequence: false })
+const REVIEW_PATH_MODES = new Set(['trade_path', 'cutoff_snapshot'])
 
-export function expectedLatestClosedOpen(cutoffUtcMsc, timeframeIntervalMs) {
+function validTimezoneOffset(value) {
+  if (value === null || value === undefined || value === '') return null
+  const offset = Number(value)
+  return Number.isInteger(offset) && offset >= -720 && offset <= 840 ? offset : null
+}
+
+function validUtcMsc(value) {
+  const utcMsc = Number(value)
+  return Number.isSafeInteger(utcMsc) && utcMsc > 0 ? utcMsc : null
+}
+
+export function expectedLatestClosedOpen(cutoffUtcMsc, timeframeIntervalMs, timezoneOffsetMinutes = 0) {
   const cutoff = Number(cutoffUtcMsc)
   const interval = Number(timeframeIntervalMs)
-  if (!Number.isFinite(cutoff) || cutoff <= 0 || !Number.isFinite(interval) || interval <= 0) return null
-  return Math.floor(cutoff / interval) * interval - interval
+  const offset = validTimezoneOffset(timezoneOffsetMinutes)
+  if (!Number.isFinite(cutoff) || cutoff <= 0 || !Number.isFinite(interval) || interval <= 0 || offset === null) return null
+  const offsetMs = offset * 60000
+  return Math.floor((cutoff + offsetMs) / interval) * interval - interval - offsetMs
 }
 
 function dealUtcMs(deal, offsetMinutes = 0) {
@@ -184,6 +199,19 @@ function countHoldingCandleGaps(rates = [], entryMs, exitMs, intervalMs) {
   return gaps
 }
 
+function countSnapshotCandleGaps(rates = [], intervalMs) {
+  const interval = Number(intervalMs)
+  if (!interval || !Array.isArray(rates) || rates.length < 2) return 0
+  const ordered = [...rates].sort((left, right) => Number(left.time_utc_msc) - Number(right.time_utc_msc))
+  let gaps = 0
+  for (let index = 1; index < ordered.length; index += 1) {
+    const from = Number(ordered[index - 1]?.time_utc_msc)
+    const to = Number(ordered[index]?.time_utc_msc)
+    if (Number.isFinite(from) && Number.isFinite(to) && to - from > interval && !crossesWeekend(from, to)) gaps += 1
+  }
+  return gaps
+}
+
 function responseCoverageGapCount(marketMeta = {}) {
   const coverage = marketMeta.coverage && typeof marketMeta.coverage === 'object' ? marketMeta.coverage : {}
   const values = [marketMeta.internal_gap_count, marketMeta.internalGapCount, coverage.internal_gap_count,
@@ -209,12 +237,28 @@ function hasResponseContinuityAssessment(marketMeta = {}) {
 
 export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, signal = {}, snapshot = {}, deals = [], fetchRates = null,
   loadWindow = loadPeriodMarketWindow, timezoneOffsetMinutes = null, asOfUtcMsc = null, includeHoldingMetrics = true,
-  chanRequirement = undefined } = {}) {
+  chanRequirement = undefined, pathMode = 'trade_path' } = {}) {
+  const normalizedPathMode = String(pathMode || 'trade_path').trim().toLowerCase() || 'trade_path'
+  const cutoffSnapshot = normalizedPathMode === 'cutoff_snapshot'
+  const requestedCutoff = cutoffSnapshot ? validUtcMsc(asOfUtcMsc)
+    : (() => { const value = Number(asOfUtcMsc); return Number.isFinite(value) && value > 0 ? value : null })()
   const snapshotKlines = snapshot?.klines && typeof snapshot.klines === 'object' ? snapshot.klines : {}
   const timeframes = [...new Set([signal.timeframe, ...Object.keys(snapshotKlines)]
     .map(value => String(value || '').toUpperCase()).filter(value => TIMEFRAME_MS[value]))]
     .sort((left, right) => TIMEFRAME_MS[left] - TIMEFRAME_MS[right]).slice(0, 4)
-  if (!symbol || !timeframes.length) return { status: 'partial', reason: 'review_timeframes_missing', timeframes: {}, metrics: null }
+  if (!REVIEW_PATH_MODES.has(normalizedPathMode)) {
+    return { status:'partial', reason:'review_path_mode_invalid', path_mode:normalizedPathMode,
+      trade_facts_status:'not_applicable', market_coverage_status:'unavailable', path_metrics_status:'not_evaluated',
+      timeframes:{}, metrics:null }
+  }
+  if (!symbol || !timeframes.length) return { status: 'partial', reason: 'review_timeframes_missing',
+    ...(cutoffSnapshot ? { path_mode:normalizedPathMode, trade_facts_status:'not_applicable',
+      market_coverage_status:'unavailable', path_metrics_status:'not_evaluated' } : {}), timeframes: {}, metrics: null }
+  if (cutoffSnapshot && (requestedCutoff === null || !Array.isArray(deals) || deals.length > 0 || includeHoldingMetrics !== false)) {
+    return { status:'partial', reason:'cutoff_snapshot_contract_invalid', path_mode:normalizedPathMode,
+      trade_facts_status:'not_applicable', market_coverage_status:'unavailable', path_metrics_status:'not_evaluated',
+      timeframes:{}, metrics:null }
+  }
   const evidence = {}
   let primaryRates = []
   let primaryOffset = 0
@@ -228,25 +272,25 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
     : { status:'unknown', source:'unresolved', timeframes:[] }
   const chanEnabled = effectiveChanRequirement.status === 'enabled'
   const chanTimeframeSet = new Set((effectiveChanRequirement.timeframes || []).map(item => String(item).toUpperCase()))
-  const hasRequestedOffset = timezoneOffsetMinutes !== null && timezoneOffsetMinutes !== undefined
-    && timezoneOffsetMinutes !== '' && Number.isInteger(Number(timezoneOffsetMinutes))
+  const requestedOffset = validTimezoneOffset(timezoneOffsetMinutes)
+  const hasRequestedOffset = requestedOffset !== null
   const defaultOffset = hasRequestedOffset
-    ? Number(timezoneOffsetMinutes)
+    ? requestedOffset
     : dealsHaveCanonicalUtc(deals) ? 0 : await reviewMarketOffset(userId, tradingAccountId).catch(() => null)
-  if (!Number.isInteger(defaultOffset)) {
-    return { status:'partial', reason:'terminal_clock_unverified', timeframes:{}, metrics:null }
+  if (validTimezoneOffset(defaultOffset) === null) {
+    return { status:'partial', reason:'terminal_clock_unverified',
+      ...(cutoffSnapshot ? { path_mode:normalizedPathMode, trade_facts_status:'not_applicable',
+        market_coverage_status:'unavailable', path_metrics_status:'not_evaluated' } : {}), timeframes:{}, metrics:null }
   }
   for (const timeframe of timeframes) {
     try {
-      const initialEntryTimes = deals.filter(deal => [0, 2].includes(Number(deal.entry_type)))
+      const initialEntryTimes = cutoffSnapshot ? [] : deals.filter(deal => [0, 2].includes(Number(deal.entry_type)))
         .map(deal => dealUtcMs(deal, defaultOffset)).filter(Number.isFinite)
-      const initialExitTimes = deals.filter(deal => [1, 2, 3].includes(Number(deal.entry_type)))
+      const initialExitTimes = cutoffSnapshot ? [] : deals.filter(deal => [1, 2, 3].includes(Number(deal.entry_type)))
         .map(deal => dealUtcMs(deal, defaultOffset)).filter(Number.isFinite)
       const initialEntryMs = initialEntryTimes.length ? Math.min(...initialEntryTimes) : null
-      const requestedCutoff = Number(asOfUtcMsc)
-      const initialExitMs = Number.isFinite(requestedCutoff) && requestedCutoff > 0
-        ? requestedCutoff : (initialExitTimes.length ? Math.max(...initialExitTimes) : null)
-      if (!initialEntryMs || !initialExitMs) throw new Error('holding_deal_times_missing')
+      const initialExitMs = cutoffSnapshot ? requestedCutoff : (requestedCutoff || (initialExitTimes.length ? Math.max(...initialExitTimes) : null))
+      if ((!cutoffSnapshot && !initialEntryMs) || !initialExitMs) throw new Error('holding_deal_times_missing')
       const timeframeMs = TIMEFRAME_MS[timeframe]
       const alignedEntryMs = Math.floor(initialEntryMs / timeframeMs) * timeframeMs
       const alignedExitMs = Math.ceil(initialExitMs / timeframeMs) * timeframeMs
@@ -259,27 +303,30 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
             chanValidationWindowCounts:chanPolicy.validationWindowCounts, chanWindowPolicyVersion:chanPolicy.windowPolicyVersion } : {}) })
       } else {
         const contextBars = chanPolicy?.target || Math.max(80, Array.isArray(snapshotKlines[timeframe]) ? snapshotKlines[timeframe].length : 0)
+        const windowStartUtcMs = cutoffSnapshot ? initialExitMs - contextBars * timeframeMs
+          : alignedEntryMs - contextBars * timeframeMs
+        const windowEndUtcMs = cutoffSnapshot ? initialExitMs : alignedExitMs + timeframeMs
         const loaded = await loadWindow(userId, symbol, timeframe,
-          alignedEntryMs - contextBars * timeframeMs,
-          alignedExitMs + timeframeMs, { alignToPeriodStart:false,
+          windowStartUtcMs, windowEndUtcMs, { alignToPeriodStart:false, pathMode:normalizedPathMode,
             chanHistoryTarget:chanPolicy?.target || 0, chanMaximumHistoryCount:chanPolicy?.maximumHistoryCount || 0,
             includeChanHistory:Boolean(chanPolicy), strictSessionPolicy:true, standardSymbol:stripBrokerSuffix(symbol) })
         response = { status:'success', rates:loaded.rates, market_meta:loaded.marketMeta || {} }
         allRatesClosed = true
       }
       if (response?.status === 'error' || !Array.isArray(response?.rates) || response.rates.length < 2) throw new Error(response?.error || 'rates_unavailable')
-      const responseOffset = response.market_meta?.timezone_offset_minutes
-      const offset = responseOffset == null || responseOffset === ''
-        ? defaultOffset : Number(responseOffset)
-      let allClosed = (allRatesClosed ? response.rates : response.rates.slice(0, -1))
+      const rawResponseOffset = response.market_meta?.timezone_offset_minutes
+      const hasResponseOffset = rawResponseOffset !== null && rawResponseOffset !== undefined && rawResponseOffset !== ''
+      const responseOffset = validTimezoneOffset(rawResponseOffset)
+      if (hasResponseOffset && responseOffset === null) throw new Error('terminal_timezone_offset_invalid')
+      const offset = responseOffset === null ? defaultOffset : responseOffset
+      let allClosed = (allRatesClosed || cutoffSnapshot ? response.rates : response.rates.slice(0, -1))
         .filter(rate => Number.isFinite(Number(rate.time_utc_msc))).map(compactRate)
         .sort((left, right) => left.time_utc_msc - right.time_utc_msc)
       let chanHistory = allClosed.slice()
-      const entryTimes = deals.filter(deal => [0, 2].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)
-      const exitTimes = deals.filter(deal => [1, 2, 3].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)
+      const entryTimes = cutoffSnapshot ? [] : deals.filter(deal => [0, 2].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)
+      const exitTimes = cutoffSnapshot ? [] : deals.filter(deal => [1, 2, 3].includes(Number(deal.entry_type))).map(deal => dealUtcMs(deal, offset)).filter(Number.isFinite)
       const entryMs = entryTimes.length ? Math.min(...entryTimes) : null
-      const exitMs = Number.isFinite(requestedCutoff) && requestedCutoff > 0
-        ? requestedCutoff : (exitTimes.length ? Math.max(...exitTimes) : null)
+      const exitMs = cutoffSnapshot ? requestedCutoff : (requestedCutoff || (exitTimes.length ? Math.max(...exitTimes) : null))
       const sourceId = Number(response.market_meta?.source_id)
       let databasePathTruncated = false
       if (sourceId > 0 && entryMs && exitMs) {
@@ -306,16 +353,18 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
         if (firstPath >= 0 && lastPath >= firstPath) closed = allClosed.slice(Math.max(0, firstPath - 80), Math.min(allClosed.length, lastPath + 21))
       }
       const truncatedBeforeEntry = databasePathTruncated || Boolean(entryMs && allClosed[0]?.time_utc_msc > entryMs)
-      const expectedLastClosedOpen = expectedLatestClosedOpen(exitMs, TIMEFRAME_MS[timeframe])
+      const expectedLastClosedOpen = expectedLatestClosedOpen(exitMs, TIMEFRAME_MS[timeframe], offset)
       const truncatedBeforeExit = Boolean(expectedLastClosedOpen != null
         && (!allClosed.length || Number(allClosed.at(-1)?.time_utc_msc) < expectedLastClosedOpen))
       const continuityAssessed = hasResponseContinuityAssessment(response.market_meta || {})
       const marketGapCount = Math.max(responseCoverageGapCount(response.market_meta || {}),
-        includeHoldingMetrics && !continuityAssessed
-          ? countHoldingCandleGaps(allClosed, entryMs, exitMs, TIMEFRAME_MS[timeframe]) : 0)
+        !continuityAssessed
+          ? (cutoffSnapshot ? countSnapshotCandleGaps(allClosed, TIMEFRAME_MS[timeframe])
+            : includeHoldingMetrics ? countHoldingCandleGaps(allClosed, entryMs, exitMs, TIMEFRAME_MS[timeframe]) : 0) : 0)
       const sentinel = closed.length ? { ...closed.at(-1), time_utc_msc: Number(closed.at(-1).time_utc_msc) + TIMEFRAME_MS[timeframe] } : null
       const chanRates = chanPolicy ? (chanHistory.length ? chanHistory : allClosed) : []
-      const market = calculateMarketData(symbol, timeframe, sentinel ? [...closed, sentinel] : closed, {}, [], {
+      const marketRates = cutoffSnapshot ? closed : (sentinel ? [...closed, sentinel] : closed)
+      const market = calculateMarketData(symbol, timeframe, marketRates, {}, [], {
         computeChan: Boolean(chanPolicy?.supported),
         ...(chanPolicy ? { chanRates, requestedChanHistoryCount:chanPolicy.target,
           chanMaximumHistoryCount:chanPolicy.maximumHistoryCount,
@@ -329,14 +378,21 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
         ...(truncatedBeforeExit ? ['truncated_before_exit'] : []),
         ...(marketGapCount > 0 ? ['market_internal_gap'] : []),
       ]
+      const chanAssessment = cutoffSnapshot && chanPolicy
+        ? assessChanEvidenceDimensions(effectiveChanRequirement, [{ chan:market.chan }]) : null
+      if (chanAssessment && chanAssessment.data_status !== 'complete') {
+        coverageReasons.push(chanAssessment.reason || 'chan_evidence_incomplete')
+      }
       evidence[timeframe] = {
-        status: closed.length >= 20 && !truncatedBeforeEntry && !truncatedBeforeExit && marketGapCount === 0 ? 'complete' : 'partial', candle_count: closed.length,
+        status:coverageReasons.length === 0 ? 'complete' : 'partial', candle_count: closed.length,
         source_candle_count: allClosed.length, truncated_before_entry: truncatedBeforeEntry, truncated_before_exit: truncatedBeforeExit,
         internal_gap_count: marketGapCount,
         expected_last_closed_open_utc_msc:expectedLastClosedOpen,
         coverage_reason:coverageReasons.join(',') || null,
         first_time_utc_msc: closed[0]?.time_utc_msc || null, last_time_utc_msc: closed.at(-1)?.time_utc_msc || null,
         candles: closed, indicators: { atr_14: market.atr_14, rsi_14: market.rsi_14, macd: market.macd },
+        ...(chanAssessment ? { chan_data_status:chanAssessment.data_status,
+          chan_structure_status:chanAssessment.structure_status } : {}),
         ...(chanPolicy ? { chan: slimChan(market.chan) } : {}),
       }
       if (coverageReasons.length) errors.push(`${timeframe}:${coverageReasons.join('+')}`)
@@ -350,7 +406,7 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
       evidence[timeframe] = { status: 'unavailable', candle_count: 0 }
     }
   }
-  const metrics = includeHoldingMetrics ? calculateHoldingPathMetrics({ rates: primaryRates, deals, direction: signal.signal_type,
+  const metrics = !cutoffSnapshot && includeHoldingMetrics ? calculateHoldingPathMetrics({ rates: primaryRates, deals, direction: signal.signal_type,
     offsetMinutes: primaryOffset, timeframeIntervalMs:TIMEFRAME_MS[timeframes[0]], signal }) : null
   if (primaryTruncated && metrics && ['complete', 'not_observable'].includes(metrics.status)) {
     metrics.status = 'partial'; metrics.path_metrics_status = 'incomplete'
@@ -363,13 +419,15 @@ export async function buildReviewMarketPath({ userId, tradingAccountId, symbol, 
     metrics.capabilities = { ...UNOBSERVABLE_PATH_CAPABILITIES }
   }
   const facts = holdingFacts(deals, primaryOffset)
-  const tradeFactsStatus = includeHoldingMetrics ? (metrics?.trade_facts_status || (facts.complete ? 'complete' : 'incomplete'))
+  const tradeFactsStatus = cutoffSnapshot ? 'not_applicable' : includeHoldingMetrics
+    ? (metrics?.trade_facts_status || (facts.complete ? 'complete' : 'incomplete'))
     : (facts.complete ? 'complete' : 'incomplete')
   const marketCoverageStatus = Object.values(evidence).some(item => item.status === 'unavailable')
     ? 'unavailable' : Object.values(evidence).every(item => item.status === 'complete') ? 'complete' : 'partial'
-  const pathMetricsStatus = includeHoldingMetrics ? (metrics?.path_metrics_status || 'incomplete') : 'not_evaluated'
-  const complete = tradeFactsStatus === 'complete' && marketCoverageStatus === 'complete'
-  const result = { status: complete ? 'complete' : 'partial', trade_facts_status: tradeFactsStatus,
+  const pathMetricsStatus = cutoffSnapshot ? 'not_evaluated' : includeHoldingMetrics
+    ? (metrics?.path_metrics_status || 'incomplete') : 'not_evaluated'
+  const complete = marketCoverageStatus === 'complete' && (cutoffSnapshot || tradeFactsStatus === 'complete')
+  const result = { status: complete ? 'complete' : 'partial', path_mode:normalizedPathMode, trade_facts_status: tradeFactsStatus,
     market_coverage_status: marketCoverageStatus, path_metrics_status: pathMetricsStatus,
     capabilities: metrics?.capabilities || null,
     reason: [...errors, metrics?.reason].filter(Boolean).join(',') || null,

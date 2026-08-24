@@ -806,6 +806,7 @@ const REASON_MAP = {
   manual_trade_review_evidence_quality_invalid: "模型返回的证据质量无效，请重试生成",
   manual_trade_review_job_not_found: "复盘生成任务不存在或已失效，请刷新复盘历史",
   manual_trade_review_retry_exhausted: "复盘生成重试次数已用尽，请重新创建复盘任务",
+  manual_trade_review_counterfactual_points_unavailable: "冻结的反事实候选行情不完整，本轮未调用模型；请刷新交易历史后重新创建复盘",
   market_evidence_unavailable: "行情证据暂不可用，请刷新交易记录后重试",
   chan_evidence_incomplete: "缠论证据未完整返回，本次仅保留证据不足结论",
   market_path_candle_coverage_incomplete: "行情 K 线覆盖不完整，本次仅保留证据不足结论",
@@ -7324,6 +7325,43 @@ function manualTradeReviewReasonText(reason, fallback = "行情或历史证据�
   return text ? localizeReason(text) : fallback;
 }
 
+const MANUAL_TRADE_REVIEW_RECREATE_ERRORS = new Set([
+  "manual_trade_review_counterfactual_points_unavailable",
+]);
+
+function manualTradeReviewRequiresFreshEvidence(detail = {}) {
+  return MANUAL_TRADE_REVIEW_RECREATE_ERRORS.has(String(detail?.last_error_code || "").trim());
+}
+
+function manualTradeReviewFailureBanner(detail = {}) {
+  const code = String(detail?.last_error_code || "manual_trade_review_generation_failed").trim();
+  const recreate = manualTradeReviewRequiresFreshEvidence(detail);
+  const action = recreate ? "recreate-review" : "retry-review";
+  const label = recreate ? "刷新交易历史并重新创建" : "重试生成";
+  return `<div class="manual-review-evidence-banner danger" role="alert"><i data-lucide="circle-alert" size="16"></i><span><strong>生成失败</strong>：${escapeHtml(localizeReason(code))}</span><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="${action}" data-manual-review-id="${Number(detail.id)}">${label}</button></div>`;
+}
+
+async function manualTradeReviewRecreateFromFreshEvidence(detail = state.manualTradeReviewDetail || {}) {
+  const strategyId = Number(detail?.strategy_id || state.manualTradeReviewStrategyId || 0);
+  const thesis = Object.prototype.hasOwnProperty.call(detail || {}, "user_thesis_text")
+    ? String(detail.user_thesis_text || "") : null;
+  stopManualTradeReviewPolling();
+  manualTradeReviewResetClientRequestId();
+  state.manualTradeReviewSelectedId = null;
+  state.selectedManualTradeReviewId = null;
+  state.manualTradeReviewDetail = null;
+  state.manualTradeReviewDetailError = "";
+  state.manualTradeReviewSelectedTrades = [];
+  state.manualTradeReviewSelection = [];
+  state.manualTradeReviewSelectionContextToken = null;
+  state.manualTradeReviewStrategyId = strategyId || null;
+  if ($("manualTradeReviewStrategy")) $("manualTradeReviewStrategy").value = strategyId ? String(strategyId) : "";
+  if (thesis !== null && $("manualTradeReviewThesis")) $("manualTradeReviewThesis").value = thesis;
+  setManualTradeReviewStage("selection", { loadData:false });
+  toast("正在刷新交易历史；请重新选择交易后创建新复盘", "warning");
+  await loadManualTradeReviewTrades({ reset:true, forceRefresh:true });
+}
+
 function manualTradeReviewStatusTone(value) {
   const status = String(value || "").toLowerCase();
   if (["approved", "succeeded", "completed"].includes(status)) return "success";
@@ -8202,7 +8240,7 @@ function renderManualTradeReviewV2Detail({ detail, currentVersion, content, case
     ? detail.evidence_issues.filter(item => item?.code === "chan_structure_insufficient") : [];
   const evidenceInfoBanner = detail.evidence_status === "complete" && structuralIssues.length
     ? `<div class="manual-review-evidence-banner" role="status"><i data-lucide="info" size="16"></i><span><strong>行情完整</strong>：当前窗口未形成足够的缠论结构${manualTradeReviewEvidenceIssuesHtml(structuralIssues)}</span></div>` : "";
-  const failedBanner = caseStatus === "failed" ? `<div class="manual-review-evidence-banner danger" role="alert"><i data-lucide="circle-alert" size="16"></i><span><strong>生成失败</strong>：${escapeHtml(localizeReason(detail.last_error_code || "manual_trade_review_generation_failed"))}</span><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="retry-review" data-manual-review-id="${Number(detail.id)}">重试生成</button></div>` : "";
+  const failedBanner = caseStatus === "failed" ? manualTradeReviewFailureBanner(detail) : "";
   host.innerHTML = `<header class="manual-review-detail-header"><div><span class="review-section-kicker">复盘 #${Number(detail.id)}</span><h4>${escapeHtml(detail.strategy_snapshot?.title || `平台策略 #${Number(detail.strategy_id || 0)}`)} · v${Number(detail.strategy_version || 1)}</h4><p>${escapeHtml(source.symbol || "订单")} · ${escapeHtml(source.identity?.entry_order_ticket || source.identity?.position_id || "--")} · 未绑定平台信号</p></div><span class="status-chip ${tone}">${escapeHtml(manualTradeReviewStatusLabel(caseStatus))}</span></header>${manualTradeReviewShouldPoll(detail) ? manualTradeReviewProgressHtml(detail) : ""}${evidenceBanner}${evidenceInfoBanner}${failedBanner}<section class="manual-review-conclusion"><div class="manual-review-conclusion-heading"><span class="review-section-kicker">结论</span><span>版本 ${Number(currentVersion.version_no || 1)} · 两阶段冻结</span></div><p>${escapeHtml(content.review_summary || "暂无复盘摘要")}</p><div class="manual-review-conclusion-metrics"><span><small>盲测决策</small><strong>${escapeHtml(manualTradeReviewValueLabel(counterfactual.decision, "证据不足"))}</strong></span><span><small>与实际方向</small><strong>${escapeHtml(manualTradeReviewValueLabel(content.counterfactual_match, "证据不足"))}</strong></span><span><small>策略符合度</small><strong>${escapeHtml(manualTradeReviewValueLabel(content.strategy_alignment))}</strong></span><span><small>决策质量</small><strong>${escapeHtml(manualTradeReviewValueLabel(content.decision_quality, "证据不足"))}</strong></span></div></section><section class="manual-review-result-section"><header><span><i data-lucide="scan-search" size="15"></i><strong>阶段 A · 开仓前盲测</strong></span><small>不含实际盈亏与方向</small></header><p>${escapeHtml(counterfactual.reasoning || "证据不足，无法形成开仓前判断")}</p>${manualTradeReviewListHtml("当时策略信号", counterfactual.strategy_signals, "activity")}${manualTradeReviewListHtml("阻断条件", counterfactual.blocking_rules, "shield-alert")}</section><section class="manual-review-result-section"><header><span><i data-lucide="receipt-text" size="15"></i><strong>阶段 B · 盈利归因</strong></span><small>查看完整结果后</small></header><p><b>为什么盈利：</b>${escapeHtml(content.why_profitable || "暂无说明")}</p><p><b>市场适配：</b>${escapeHtml(content.profit_attribution?.market_fit || "暂无说明")}</p><p><b>入场质量：</b>${escapeHtml(content.profit_attribution?.entry_quality || "暂无说明")}</p><p><b>退出质量：</b>${escapeHtml(content.profit_attribution?.exit_quality || "暂无说明")}</p><p><b>偶然因素：</b>${escapeHtml(content.profit_attribution?.luck_or_uncontrolled_factors || "暂无说明")}</p></section>${manualTradeReviewListHtml("策略规则对照", rules, "git-compare")}${manualTradeReviewListHtml("策略有效点", content.strengths, "badge-check")}${manualTradeReviewListHtml("问题与风险", content.issues, "triangle-alert")}${hypotheses.length ? `<section class="manual-review-result-section"><header><span><i data-lucide="flask-conical" size="15"></i><strong>待验证优化假设</strong></span><small>不自动改策略、不写入记忆</small></header><div class="manual-review-optimization-list">${hypotheses.map(item => `<article><div><strong>${escapeHtml(item.proposed_change || "观察假设")}</strong><span class="status-chip info">${escapeHtml(manualTradeReviewValueLabel(item.state, "待验证假设"))}</span></div><p>目标规则：${escapeHtml(item.target_path || "仅观察")}</p><p>缺口：${escapeHtml(item.observed_gap || "暂无说明")}</p><p class="manual-review-risk">风险：${escapeHtml(item.risk_if_applied || "暂无说明")}</p><small>验证要求：${escapeHtml(item.validation_needed || "需要更多独立样本和人工验证")}</small></article>`).join("")}</div></section>` : ""}${editable ? `<section class="manual-review-editor"><header><span><i data-lucide="pencil" size="15"></i><strong>人工编辑</strong></span><small>保存为新版本，不改变冻结证据</small></header><textarea data-manual-content-editor rows="14" spellcheck="false">${escapeHtml(JSON.stringify(content, null, 2))}</textarea><div class="manual-review-editor-actions"><button class="btn btn-secondary" type="button" data-manual-review-action="save-edit" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">保存人工修订</button></div></section>` : ""}<footer class="manual-review-detail-actions"><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="open-strategy-editor" data-manual-review-id="${Number(detail.id)}">打开策略编辑器</button>${editable ? `<button class="btn btn-ghost btn-sm" type="button" data-manual-review-action="defer-review" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">稍后处理</button><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="mark-problem" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">标记需要修改</button><button class="btn btn-primary btn-sm" type="button" data-manual-review-action="approve-review" data-manual-review-id="${Number(detail.id)}" data-manual-version-id="${Number(currentVersion.id)}">确认复盘</button>` : approved ? '<span class="status-chip success">复盘已确认 · 未写入经验或策略</span>' : '<span class="status-chip warning">当前生成中 · 旧版本只读</span>'}</footer>`;
 }
 
@@ -8219,8 +8257,7 @@ function renderManualTradeReviewV3Detail({ detail, currentVersion, content, case
   const why = content.why_profitable || {};
   const evidenceBanner = detail.evidence_status !== "complete"
     ? `<div class="manual-review-evidence-banner warning" role="status"><i data-lucide="triangle-alert" size="16"></i><span><strong>证据部分可用</strong>：${escapeHtml(manualTradeReviewReasonText(detail.evidence_reason))}${manualTradeReviewEvidenceIssuesHtml(detail.evidence_issues)}</span></div>` : "";
-  const failedBanner = caseStatus === "failed"
-    ? `<div class="manual-review-evidence-banner danger" role="alert"><i data-lucide="circle-alert" size="16"></i><span><strong>生成失败</strong>：${escapeHtml(localizeReason(detail.last_error_code || "manual_trade_review_generation_failed"))}</span><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="retry-review" data-manual-review-id="${Number(detail.id)}">重试生成</button></div>` : "";
+  const failedBanner = caseStatus === "failed" ? manualTradeReviewFailureBanner(detail) : "";
   const pointCards = points.map(point => {
     const protection = point.protection_assessment || point.server_protection_assessment || {};
     const plan = point.protection_plan || {};
@@ -8319,7 +8356,7 @@ function renderManualTradeReviewDetail() {
     initIcons();
     return;
   }
-  host.innerHTML = `<header class="manual-review-detail-header"><div><span class="review-section-kicker">复盘 #${Number(detail.id)}</span><h4>${escapeHtml(detail.strategy_snapshot?.title || `平台策略 #${Number(detail.strategy_id || 0)}`)} · v${Number(detail.strategy_version || detail.strategy_snapshot?.version || 1)}</h4><p>${sources.length || 0} 笔冻结交易 · 创建于 ${escapeHtml(manualTradeReviewFormatTime(detail.created_at))}</p></div><span class="status-chip ${tone}"><i data-lucide="${tone === "success" ? "check-circle-2" : tone === "danger" ? "circle-alert" : "clock-3"}" size="13"></i>${escapeHtml(manualTradeReviewStatusLabel(caseStatus))}</span></header>${manualTradeReviewShouldPoll(detail) ? manualTradeReviewProgressHtml(detail) : ""}${detail.evidence_status !== "complete" ? `<div class="manual-review-evidence-banner warning" role="status"><i data-lucide="triangle-alert" size="16"></i><span><strong>证据不足</strong>：${escapeHtml(manualTradeReviewReasonText(detail.evidence_reason))}${manualTradeReviewEvidenceIssuesHtml(detail.evidence_issues)}</span></div>` : ""}${caseStatus === "failed" ? `<div class="manual-review-evidence-banner danger" role="alert"><i data-lucide="circle-alert" size="16"></i><span><strong>生成失败</strong>：${escapeHtml(localizeReason(detail.last_error_code || "manual_trade_review_generation_failed"))}</span><button class="btn btn-secondary btn-sm" type="button" data-manual-review-action="retry-review" data-manual-review-id="${Number(detail.id)}">重试生成</button></div>` : ""}${
+  host.innerHTML = `<header class="manual-review-detail-header"><div><span class="review-section-kicker">复盘 #${Number(detail.id)}</span><h4>${escapeHtml(detail.strategy_snapshot?.title || `平台策略 #${Number(detail.strategy_id || 0)}`)} · v${Number(detail.strategy_version || detail.strategy_snapshot?.version || 1)}</h4><p>${sources.length || 0} 笔冻结交易 · 创建于 ${escapeHtml(manualTradeReviewFormatTime(detail.created_at))}</p></div><span class="status-chip ${tone}"><i data-lucide="${tone === "success" ? "check-circle-2" : tone === "danger" ? "circle-alert" : "clock-3"}" size="13"></i>${escapeHtml(manualTradeReviewStatusLabel(caseStatus))}</span></header>${manualTradeReviewShouldPoll(detail) ? manualTradeReviewProgressHtml(detail) : ""}${detail.evidence_status !== "complete" ? `<div class="manual-review-evidence-banner warning" role="status"><i data-lucide="triangle-alert" size="16"></i><span><strong>证据不足</strong>：${escapeHtml(manualTradeReviewReasonText(detail.evidence_reason))}${manualTradeReviewEvidenceIssuesHtml(detail.evidence_issues)}</span></div>` : ""}${caseStatus === "failed" ? manualTradeReviewFailureBanner(detail) : ""}${
     currentVersion
       ? `<section class="manual-review-conclusion"><div class="manual-review-conclusion-heading"><span class="review-section-kicker">结论优先</span><span>版本 ${Number(currentVersion.version_no || 1)} · ${currentVersion.author_type === "model" ? "模型生成" : "人工修订"}</span></div><p>${escapeHtml(content.review_summary || "暂无复盘摘要")}</p><div class="manual-review-conclusion-metrics"><span><small>证据质量</small><strong>${escapeHtml(content.evidence_quality || (evidenceComplete ? "complete" : "insufficient"))}</strong></span><span><small>行情合理性</small><strong>${escapeHtml(content.market_alignment || "unknown")}</strong></span><span><small>策略符合度</small><strong>${escapeHtml(content.strategy_alignment || "unknown")}</strong></span><span><small>决策质量</small><strong>${escapeHtml(content.decision_quality || "insufficient_evidence")}</strong></span></div></section>${manualTradeReviewListHtml("优势", content.strengths, "badge-check")}${manualTradeReviewListHtml("问题与风险", content.issues, "triangle-alert")}<section class="manual-review-result-section"><header><span><i data-lucide="receipt-text" size="15"></i><strong>逐笔评估</strong></span><small>${assessments.length} 笔</small></header>${assessments.length ? `<div class="manual-review-assessment-list">${assessments.map((item) => `<article><div class="manual-review-assessment-head"><strong>${escapeHtml(item.source_identity_hash || "交易来源")}</strong><span class="status-chip ${item.strategy_alignment === "aligned" ? "success" : item.strategy_alignment === "conflict" ? "danger" : "warning"}">${escapeHtml(item.strategy_alignment || "unknown")}</span></div><p><b>行情</b> ${escapeHtml(item.market_reason || "暂无说明")}</p><p><b>策略</b> ${escapeHtml(item.strategy_reason || "暂无说明")}</p><p><b>决策</b> ${escapeHtml(item.decision_reason || "暂无说明")}</p><small>盈亏独立性：${escapeHtml(item.outcome_independence_note || "未说明")}</small></article>`).join("")}</div>` : '<p class="manual-review-muted">暂无逐笔评估</p>'}</section>${manualTradeReviewListHtml("策略规则对照", rules, "git-compare")}${optimizations.length ? `<section class="manual-review-result-section"><header><span><i data-lucide="wand-sparkles" size="15"></i><strong>优化建议与风险</strong></span><small>${optimizations.length} 条 · 不会自动改策略</small></header><div class="manual-review-optimization-list">${optimizations.map((item) => `<article><div><strong>${escapeHtml(item.proposed_change || "观察项")}</strong><span class="status-chip ${item.recommendation_state === "ready_for_human_review" ? "warning" : "info"}">${escapeHtml(item.recommendation_state || "observe")}</span></div><p>目标规则：${escapeHtml(item.target_path || "仅观察，不指定规则")}</p><p>适用时机：${escapeHtml(JSON.stringify(item.applicable_when || {}))}</p><p class="manual-review-risk">风险：${escapeHtml(item.risk_if_applied || "暂无说明")}</p></article>`).join("")}</div></section>` : ""}${
           candidates.length
@@ -18410,6 +18447,7 @@ function bindEvents() {
           loadManualTradeReviewHistory().catch(error => toast(localizeReason(error.code || error.message), "error"));
         } else if (action === "open-history") openManualTradeReviewDetail(caseId).catch(error => toast(localizeReason(error.code || error.message), "error"));
         else if (action === "reload-detail") openManualTradeReviewDetail(caseId).catch(error => toast(localizeReason(error.code || error.message), "error"));
+        else if (action === "recreate-review") await manualTradeReviewRecreateFromFreshEvidence();
         else if (action === "retry-review") {
           manualReviewAction.disabled = true;
           api(`/api/ai/manual-trade-reviews/${caseId}/retry`, { method:"POST" }).then(() => openManualTradeReviewDetail(caseId)).then(() => loadManualTradeReviewHistory()).then(() => toast("已重新进入生成队列", "success")).catch(error => toast(localizeReason(error.code || error.message), "error")).finally(() => { manualReviewAction.disabled = false; });

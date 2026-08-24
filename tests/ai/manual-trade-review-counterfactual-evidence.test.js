@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildManualTradeMarketEvidence } from '../../server/routes/ai/manual-trade-evidence.js'
+import { buildReviewMarketPath } from '../../server/routes/ai/review-market-path.js'
 
 const account = { id:12, timezone_offset_minutes:180 }
 const strategySnapshot = { market_data_plan:{ primary_timeframe:'M15', timeframes:[{ timeframe:'M15' }] } }
@@ -50,6 +51,8 @@ describe('manual trade review counterfactual market evidence', () => {
     const candidateCalls = calls.slice(3)
     expect(calls).toHaveLength(6) // pre-entry, outcome, window, then three independent points
     expect(candidateCalls.map(call => call.asOfUtcMsc)).toEqual([4000, 6000, 8000])
+    expect(candidateCalls.every(call => call.pathMode === 'cutoff_snapshot')).toBe(true)
+    expect(calls.slice(0, 2).every(call => !call.pathMode || call.pathMode === 'trade_path')).toBe(true)
     expect(candidateCalls.every(call => call.includeHoldingMetrics === false)).toBe(true)
     expect(candidateCalls.every(call => call.signal.signal_type === 'hold')).toBe(true)
     expect(candidateCalls.every(call => call.signal.stop_loss_price == null && call.signal.take_profit_1_price == null)).toBe(true)
@@ -70,5 +73,38 @@ describe('manual trade review counterfactual market evidence', () => {
       status:'partial', counterfactual_points_status:'unavailable',
       counterfactual_points_reason:'counterfactual_candidate_unavailable',
     })
+  })
+
+  it('composes the real path builder with empty-deal cutoff snapshots', async () => {
+    const step = 900_000
+    const start = Date.UTC(2026, 7, 20, 0, 0, 0)
+    const entry = start + step * 80 + 120_000
+    const realRates = Array.from({ length:140 }, (_, index) => {
+      const open = 1.1 + index / 100_000
+      return { time_utc_msc:start + index * step, open, high:open + 0.001, low:open - 0.001, close:open + 0.0002, tick_volume:100 }
+    })
+    const realTrade = trade({ entry_time_utc_msc:entry, normalized:{ entry_time_utc_msc:entry, deals:[
+      { entry_type:0, volume:1, price:1.1, time_utc_msc:entry },
+      { entry_type:1, volume:1, price:1.11, time_utc_msc:start + step * 100 + 120_000 },
+    ] } })
+    const calls = []
+    const result = await buildManualTradeMarketEvidence({ actor:{ id:7 }, account,
+      trades:[realTrade], strategySnapshot, buildPath:async input => {
+        calls.push(input)
+        return buildReviewMarketPath({ ...input,
+          loadWindow:async () => ({ rates:realRates, marketMeta:{ timezone_offset_minutes:180, clock_status:'verified',
+            continuity_status:'reliable', internal_gap_count:0 } }),
+        })
+      } })
+    expect(result.status).toBe('complete')
+    expect(result.trades['trade-a'].counterfactual_points_status).toBe('complete')
+    const snapshotCalls = calls.filter(call => call.pathMode === 'cutoff_snapshot')
+    expect(snapshotCalls.length).toBe(4)
+    expect(snapshotCalls.every(call => call.deals.length === 0 && call.includeHoldingMetrics === false
+      && call.signal.signal_type === 'hold')).toBe(true)
+    expect(result.trades['trade-a'].counterfactual_points.every(point => {
+      const serialized = JSON.stringify(point.market_data)
+      return !serialized.includes('net_profit') && !serialized.includes('stop_loss') && !serialized.includes('take_profit')
+    })).toBe(true)
   })
 })

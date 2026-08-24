@@ -19,7 +19,7 @@ vi.mock('../../server/routes/ai/manual-trade-evidence.js', () => ({
   normalizedTradeHash:value => `hash:${String(value)}`,
 }))
 
-import { __manualTradeReviewTest, confirmManualTradeReview, createManualTradeReview, manualTradeReviewOutputContract, validateCounterfactualAnalysis,
+import { __manualTradeReviewTest, confirmManualTradeReview, createManualTradeReview, getManualTradeReview, manualTradeReviewOutputContract, validateCounterfactualAnalysis,
   validateManualTradeReviewContent, validateManualTradeSelection, recoverAbandonedManualTradeReviewJobs,
   retryManualTradeReview } from '../../server/routes/ai/manual-trade-review.js'
 import { createManualTradeSelectionContext } from '../../server/routes/ai/manual-trade-selection-context.js'
@@ -251,6 +251,35 @@ describe('manual profitable trade counterfactual review contract', () => {
     expect(params.slice(0, 3)).toEqual(['queued', 'status_unknown', 'manual_trade_review_counterfactual_task_status_unknown'])
   })
 
+  it('treats missing frozen counterfactual points as terminal on the first attempt', async () => {
+    expect(__manualTradeReviewTest.manualTradeReviewDeterministicEvidenceFailure(
+      'manual_trade_review_counterfactual_points_unavailable')).toBe(true)
+    expect(__manualTradeReviewTest.manualTradeReviewDeterministicEvidenceFailure('provider_timeout')).toBe(false)
+    db.queryRun.mockReset().mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    const error = Object.assign(new Error('manual_trade_review_counterfactual_points_unavailable'), {
+      code:'manual_trade_review_counterfactual_points_unavailable',
+    })
+    const updated = await __manualTradeReviewTest.markJobFailure({ id:19, case_id:23, generation_no:1,
+      lease_token:'lease-1', task_deadline_at:'2099-08-10 12:30:00', attempt_count:1, max_attempts:3 }, error)
+    expect(updated).toBe(true)
+    const [sql, params] = db.queryRun.mock.calls[0]
+    expect(sql).toContain("SET status = ?, progress_stage = ?, last_error_code = ?")
+    expect(params.slice(0, 4)).toEqual(['failed', 'failed', 'manual_trade_review_counterfactual_points_unavailable', null])
+  })
+
+  it('keeps transient provider failures on the existing retry-wait path', async () => {
+    db.queryRun.mockReset().mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    const error = Object.assign(new Error('provider_timeout'), { code:'provider_timeout' })
+    const updated = await __manualTradeReviewTest.markJobFailure({ id:19, case_id:23, generation_no:1,
+      lease_token:'lease-1', task_deadline_at:'2099-08-10 12:30:00', attempt_count:1, max_attempts:3 }, error)
+    expect(updated).toBe(true)
+    const [, jobParams] = db.queryRun.mock.calls[0]
+    const [, caseParams] = db.queryRun.mock.calls[1]
+    expect(jobParams.slice(0, 3)).toEqual(['queued', 'retry_wait', 'provider_timeout'])
+    expect(jobParams[3]).toBeTruthy()
+    expect(caseParams[0]).toBe('queued')
+  })
+
   it('recovers a succeeded generic task only when its business version was already committed', () => {
     expect(__manualTradeReviewTest.manualTradeReviewCanRecoverCompletedTask({ status:'succeeded' }, {
       status:'draft', current_version_id:41,
@@ -362,5 +391,17 @@ describe('manual profitable trade counterfactual review contract', () => {
     expect(jobUpdate?.params[1]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
     expect(sqlCalls.findIndex(call => call.sql.includes('UPDATE manual_trade_review_jobs')))
       .toBeLessThan(sqlCalls.findIndex(call => call.sql.includes('UPDATE manual_trade_review_cases')))
+  })
+
+  it('returns the actor-owned thesis only in the case detail response', async () => {
+    db.queryOne.mockReset()
+    db.queryAll.mockReset()
+    db.queryOne.mockResolvedValueOnce({ id:19, user_id:7, trading_account_id:3, strategy_id:5, strategy_version:2,
+      strategy_scope:'platform', strategy_snapshot_json:'{}', evidence_json:'{}', user_thesis_text:'保留这个论点',
+      evidence_status:'partial', status:'failed', generation_no:1, attempt_count:1, max_attempts:3,
+      last_error_code:'manual_trade_review_counterfactual_points_unavailable' })
+    db.queryAll.mockResolvedValueOnce([]).mockResolvedValueOnce([])
+    const detail = await getManualTradeReview(19, { id:7 })
+    expect(detail.user_thesis_text).toBe('保留这个论点')
   })
 })

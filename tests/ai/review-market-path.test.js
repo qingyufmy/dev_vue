@@ -123,6 +123,78 @@ describe('review holding market path', () => {
     expect(expectedLatestClosedOpen(0, 300000)).toBeNull()
   })
 
+  it('aligns H4 and D1 latest closed candles to a trusted terminal offset', () => {
+    const cutoff = Date.UTC(2026, 7, 21, 4, 47, 0)
+    expect(expectedLatestClosedOpen(cutoff, 14_400_000, 180))
+      .toBe(Date.UTC(2026, 7, 20, 21, 0, 0))
+    expect(expectedLatestClosedOpen(cutoff, 86_400_000, 180))
+      .toBe(Date.UTC(2026, 7, 19, 21, 0, 0))
+  })
+
+  it('builds a cutoff snapshot without trade facts and excludes candles after the cutoff', async () => {
+    const series = rates(120)
+    const cutoff = series[90].time_utc_msc + 300_000
+    const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD',
+      signal:{ timeframe:'M5', signal_type:'hold' }, snapshot:{ klines:{ M5:[] } }, deals:[],
+      pathMode:'cutoff_snapshot', asOfUtcMsc:cutoff, includeHoldingMetrics:false, timezoneOffsetMinutes:0,
+      chanRequirement:{ status:'disabled', source:'test_frozen_disabled', timeframes:[] },
+      loadWindow:async () => ({ rates:series, marketMeta:{ timezone_offset_minutes:0, clock_status:'verified',
+        continuity_status:'reliable', internal_gap_count:0 } }),
+    })
+    expect(result).toMatchObject({ status:'complete', path_mode:'cutoff_snapshot', trade_facts_status:'not_applicable',
+      path_metrics_status:'not_evaluated', metrics:null })
+    expect(result.timeframes.M5.candles.every(candle => candle.time_utc_msc + 300_000 <= cutoff)).toBe(true)
+    expect(result.timeframes.M5.candles.some(candle => candle.time_utc_msc + 300_000 > cutoff)).toBe(false)
+  })
+
+  it('rejects invalid cutoff snapshot combinations without falling back to trade_path', async () => {
+    const cases = [
+      { asOfUtcMsc:null, deals:[], includeHoldingMetrics:false },
+      { asOfUtcMsc:Date.UTC(2026, 7, 17, 10), deals:[{ entry_type:0 }], includeHoldingMetrics:false },
+      { asOfUtcMsc:Date.UTC(2026, 7, 17, 10), deals:[], includeHoldingMetrics:true },
+    ]
+    for (const input of cases) {
+      const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD',
+        signal:{ timeframe:'M5', signal_type:'hold' }, snapshot:{ klines:{ M5:[] } }, pathMode:'cutoff_snapshot',
+        chanRequirement:{ status:'disabled', timeframes:[] }, ...input,
+        loadWindow:async () => ({ rates:rates(), marketMeta:{ timezone_offset_minutes:0, clock_status:'verified' } }),
+      })
+      expect(result).toMatchObject({ status:'partial', reason:'cutoff_snapshot_contract_invalid',
+        trade_facts_status:'not_applicable', path_metrics_status:'not_evaluated' })
+    }
+  })
+
+  it('prefers the response terminal offset over the frozen fallback for H4 coverage', async () => {
+    const step = 14_400_000
+    const series = rates(100, Date.UTC(2026, 7, 10, 21, 0, 0), step)
+    const cutoff = Date.UTC(2026, 7, 22, 4, 30, 0)
+    const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD',
+      signal:{ timeframe:'H4', signal_type:'hold' }, snapshot:{ klines:{ H4:[] } }, deals:[],
+      pathMode:'cutoff_snapshot', asOfUtcMsc:cutoff, includeHoldingMetrics:false, timezoneOffsetMinutes:0,
+      chanRequirement:{ status:'disabled', source:'test_frozen_disabled', timeframes:[] },
+      loadWindow:async () => ({ rates:series, marketMeta:{ timezone_offset_minutes:180, clock_status:'verified',
+        continuity_status:'reliable', internal_gap_count:0 } }),
+    })
+    expect(result.status).toBe('complete')
+    expect(result.timeframes.H4.expected_last_closed_open_utc_msc)
+      .toBe(expectedLatestClosedOpen(cutoff, step, 180))
+    expect(result.timeframes.H4.truncated_before_exit).toBe(false)
+  })
+
+  it('fails closed when the market response explicitly supplies an invalid terminal offset', async () => {
+    const series = rates(100)
+    const cutoff = series[90].time_utc_msc + 300_000
+    const result = await buildReviewMarketPath({ userId:7, symbol:'XAUUSD',
+      signal:{ timeframe:'M5', signal_type:'hold' }, snapshot:{ klines:{ M5:[] } }, deals:[],
+      pathMode:'cutoff_snapshot', asOfUtcMsc:cutoff, includeHoldingMetrics:false, timezoneOffsetMinutes:180,
+      chanRequirement:{ status:'disabled', source:'test_frozen_disabled', timeframes:[] },
+      loadWindow:async () => ({ rates:series, marketMeta:{ timezone_offset_minutes:9999, clock_status:'verified' } }),
+    })
+    expect(result).toMatchObject({ status:'partial', market_coverage_status:'unavailable' })
+    expect(result.reason).toContain('terminal_timezone_offset_invalid')
+    expect(result.timeframes.M5).toMatchObject({ status:'unavailable', candle_count:0 })
+  })
+
   it('does not report a normal aligned pre-entry candle as truncated', async () => {
     const series = rates(120)
     const cutoff = series[90].time_utc_msc + 42_000
