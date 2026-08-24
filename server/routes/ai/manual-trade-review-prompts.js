@@ -59,7 +59,7 @@ function candidatePointPayload(reviewCase, sources, point, { parse, buildManualR
   }
 }
 
-function defaultManualTradeReviewV3Contract(outputVersion) {
+export function defaultManualTradeReviewV3Contract(outputVersion = DEFAULT_REVIEW_V3_OUTPUT_VERSION) {
   return {
     output_contract_version:outputVersion,
     review_summary:'non-empty string',

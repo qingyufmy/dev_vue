@@ -245,6 +245,29 @@ describe('parseJsonObject', () => {
   it('无 JSON 抛出错误', () => {
     expect(() => parseJsonObject('no json here')).toThrow('ai_response_missing_json_object')
   })
+
+  it('返回第一个完整对象，不被后续对象或尾随花括号干扰', () => {
+    expect(parseJsonObject('结果：{"answer":{"value":1}}\n备用示例：{"answer":{"value":2}}}'))
+      .toEqual({ answer:{ value:1 } })
+  })
+
+  it('忽略字符串中的花括号并正确匹配嵌套对象', () => {
+    expect(parseJsonObject('```json\n{"message":"文本中的 {花括号}","nested":{"ok":true}}\n```'))
+      .toEqual({ message:'文本中的 {花括号}', nested:{ ok:true } })
+  })
+
+  it('候选对象均非法时抛固定脱敏错误且不泄露模型原文', () => {
+    const sensitive = 'secret-provider-response-should-not-appear'
+    let error
+    try {
+      parseJsonObject(`说明 {"broken":${sensitive}} 以及 {not-json}`)
+    } catch (caught) {
+      error = caught
+    }
+    expect(error?.code).toBe('ai_response_invalid_json_object')
+    expect(error?.message).toMatch(/^ai_response_invalid_json_object:chars=\d+,candidates=\d+$/)
+    expect(error?.message).not.toContain(sensitive)
+  })
 })
 
 describe('常量', () => {

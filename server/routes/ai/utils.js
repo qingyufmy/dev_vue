@@ -227,8 +227,56 @@ export function aiFailureHold(market, reason) {
 }
 
 export function parseJsonObject(content) {
-  const start = content.indexOf('{')
-  const end = content.lastIndexOf('}')
-  if (start === -1 || end === -1 || end <= start) throw new Error('ai_response_missing_json_object')
-  return JSON.parse(content.substring(start, end + 1))
+  const source = typeof content === 'string' ? content : String(content == null ? '' : content)
+  let candidateCount = 0
+
+  // Provider responses may contain Markdown, a short explanation, multiple
+  // JSON examples, or a JSON value with nested objects.  Do not use the last
+  // closing brace as the boundary: a trailing example/brace can otherwise
+  // turn an otherwise valid response into a parse error.  Instead, scan each
+  // opening brace and find its matching closing brace while respecting JSON
+  // string escapes, then accept the first complete plain object that parses.
+  for (let start = 0; start < source.length; start += 1) {
+    if (source[start] !== '{') continue
+    candidateCount += 1
+    let depth = 0
+    let inString = false
+    let escaped = false
+    let end = -1
+    for (let index = start; index < source.length; index += 1) {
+      const character = source[index]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (character === '\\') escaped = true
+        else if (character === '"') inString = false
+        continue
+      }
+      if (character === '"') {
+        inString = true
+        continue
+      }
+      if (character === '{') depth += 1
+      else if (character === '}') {
+        depth -= 1
+        if (depth === 0) {
+          end = index
+          break
+        }
+        if (depth < 0) break
+      }
+    }
+    if (end < 0 || inString || depth !== 0) continue
+    try {
+      const parsed = JSON.parse(source.slice(start, end + 1))
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+    } catch {
+      // Continue scanning later braces.  A malformed candidate can contain a
+      // valid nested object or precede a valid JSON object in the same reply.
+    }
+  }
+
+  if (candidateCount === 0) throw new Error('ai_response_missing_json_object')
+  const error = new Error(`ai_response_invalid_json_object:chars=${source.length},candidates=${candidateCount}`)
+  error.code = 'ai_response_invalid_json_object'
+  throw error
 }

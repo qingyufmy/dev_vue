@@ -891,6 +891,36 @@ describe('requestJsonObject', () => {
     expect(validateObject.mock.calls.map(([, validation]) => validation.phase)).toEqual(['initial', 'repair'])
   })
 
+  it('lets an explicit empty caller target list force full repair', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"bad"}' } }] }) })
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"fixed"}' } }] }) })
+    const validateObject = vi.fn((value, validation) => {
+      if (validation.phase === 'initial') {
+        const error = new Error('outcome_refs_invalid')
+        error.validationContext = { targets:[{ scope:'root', field:'value' }] }
+        throw error
+      }
+      return value
+    })
+    const applyRepairPatch = vi.fn(() => { throw new Error('patch must not run') })
+    const result = await requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'完整初始请求' }], validateObject,
+      repairContext:{ mode:'patch', outputFormat:'{"value":"string"}', patchOutputFormat:'{"changes":[]}',
+        validationContext:() => ({ targets:[] }), repairInput:() => ({ repair_targets:[{ field:'value' }] }),
+        applyRepairPatch, repairInstructions:'FULL_ONLY_MARKER', patchRepairInstructions:'PATCH_ONLY_MARKER' },
+    })
+    expect(result).toEqual({ value:'fixed' })
+    expect(applyRepairPatch).not.toHaveBeenCalled()
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    expect(JSON.parse(repairBody.messages[1].content).original_output).toBe('{"value":"bad"}')
+    expect(repairBody.messages[0].content).toContain('FULL_ONLY_MARKER')
+    expect(repairBody.messages[0].content).not.toContain('PATCH_ONLY_MARKER')
+  })
+
   it('keeps the original validation error when follow-up repair is disabled', async () => {
     mockFetch.mockResolvedValueOnce({ ok:true,
       json:() => Promise.resolve({ choices:[{ message:{ content:'not-json' } }] }) })

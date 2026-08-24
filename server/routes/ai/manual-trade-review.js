@@ -15,7 +15,7 @@ import { buildFrozenStrategyPaths, buildManualReviewEvidenceCatalog, requiredMan
   requiredManualReviewEnum, requiredManualReviewObject, requiredManualReviewText, validateFrozenStrategyPath,
   validateManualReviewEvidenceRefs } from './manual-trade-review-contract.js'
 import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime } from './strategy-memory-library.js'
-import { createManualTradeReviewPrompts } from './manual-trade-review-prompts.js'
+import { createManualTradeReviewPrompts, defaultManualTradeReviewV3Contract } from './manual-trade-review-prompts.js'
 import { createManualTradeReviewPointRepairContext,
   manualTradeReviewPointRepairTargets } from './manual-trade-review-repair.js'
 import {
@@ -39,7 +39,8 @@ import {
 } from './manual-trade-review-v3-contract.js'
 import { buildFrozenRuntime, buildManualTradeReviewStageInputHash, ensureManualTradeReviewStageRuns,
   linkManualTradeReviewStageModelTask, normalizeManualTradeReviewStageOutput,
-  readManualTradeReviewStageRuns, saveManualTradeReviewStageOutput, validateManualTradeReviewStageRuns } from './manual-trade-review-stage-runs.js'
+  readManualTradeReviewStageRuns, saveManualTradeReviewStageOutput, validateManualTradeReviewStageRuns,
+  markManualTradeReviewStageFailed } from './manual-trade-review-stage-runs.js'
 
 const REVIEW_OUTPUT_VERSION = 'manual-trade-review-v2'
 const COUNTERFACTUAL_OUTPUT_VERSION = 'manual-trade-counterfactual-v1'
@@ -169,28 +170,45 @@ function applyManualTradeReviewOutcomePath(repaired, target, value) {
   return false
 }
 
-function manualTradeReviewOutcomePathRepairContext(strategySnapshot, validateOutput) {
+function manualTradeReviewOutcomePathRepairContext(strategySnapshot, validateOutput, {
+  allowedEvidenceRefs = [], allowedSourceRefs = [],
+} = {}) {
+  const allowedStrategyRulePaths = buildFrozenStrategyPaths(strategySnapshot)
+  const allowedEvidence = [...new Set((Array.isArray(allowedEvidenceRefs) ? allowedEvidenceRefs : [])
+    .map(value => String(value || '').normalize('NFKC').trim()).filter(Boolean))]
+  const allowedSources = [...new Set((Array.isArray(allowedSourceRefs) ? allowedSourceRefs : [])
+    .map(value => String(value || '').normalize('NFKC').trim()).filter(Boolean))]
+  const outputFormat = JSON.stringify(defaultManualTradeReviewV3Contract(REVIEW_V3_OUTPUT_VERSION))
+  const allowLists = () => ({
+    allowed_evidence_refs:allowedEvidence,
+    allowed_source_refs:allowedSources,
+    allowed_strategy_rule_paths:allowedStrategyRulePaths,
+  })
   return {
     mode:'patch',
+    outputFormat,
     patchOutputFormat:{ changes:[{
       path:'exact repair_targets.path', value:'one exact allowed_strategy_rule_paths value',
     }] },
-    requiredCoverage:'Return exactly one change for every repair target and no other changes.',
+    requiredCoverage:'Patch mode must return exactly one change for every repair target and no other changes. Full-object mode must return one complete object covering every field required by output_contract.',
     repairMaxTokens:4_096,
     repairReasoningEffort:'low',
+    repairInstructions:`只修复当前输出的格式或校验问题，必须严格按 output_contract 返回完整 v3 JSON 对象。只能从 allowed_evidence_refs、allowed_source_refs、allowed_strategy_rule_paths 白名单逐字复制引用和路径；不得编造、改写或添加白名单之外的值。不得改变原复盘结论、成交事实、价格、服务器派生结论、事实归因或优化建议；只能修复使同一份输出满足合同所必需的字段名、类型、枚举值、缺失字段和引用格式。`,
     patchRepairInstructions:'只修复被报告的策略路径字段。每个 value 必须逐字复制 allowed_strategy_rule_paths 中的一项；不得添加 frozen_strategy.、$、斜杠或解释文字，不得修改复盘结论、归因、证据引用、优化建议或任何其他字段。',
     validationContext:({ validationError, initialObject }) => {
       const code = String(validationError?.code || validationError?.message || '')
-      if (!MANUAL_REVIEW_PATH_REPAIR_CODES.has(code)) throw validationError
+      if (!MANUAL_REVIEW_PATH_REPAIR_CODES.has(code)) return { targets:[], ...allowLists() }
       const { targets, allowedPaths } = manualTradeReviewOutcomePathRepairTargets(initialObject, strategySnapshot)
       if (!targets.length || !allowedPaths.length) throw validationError
-      return { targets, allowed_strategy_rule_paths:allowedPaths }
+      return { targets, ...allowLists(), allowed_strategy_rule_paths:allowedPaths }
     },
     repairInput:({ initialObject, validationContext }) => ({
       repair_targets:(validationContext?.targets || []).map(target => ({
         ...target, source_item:manualTradeReviewOutcomePathTargetValue(initialObject, target),
       })),
       allowed_strategy_rule_paths:validationContext?.allowed_strategy_rule_paths || [],
+      allowed_evidence_refs:validationContext?.allowed_evidence_refs || [],
+      allowed_source_refs:validationContext?.allowed_source_refs || [],
     }),
     applyRepairPatch:({ initialObject, repairPatch, validationContext }) => {
       const changes = Array.isArray(repairPatch?.changes) ? repairPatch.changes : []
@@ -982,17 +1000,23 @@ async function deferManualTradeReviewForModelTaskLease(job, error) {
   return { status, error_code:errorCode, next_attempt_at:nextAttemptAt }
 }
 
-async function markJobFailure(job, error) {
+function manualTradeReviewFailureIsTerminal(job, error) {
   const code = text(error?.code || error?.message || 'manual_trade_review_generation_failed', 128)
-  const now = beijingNow()
   const deadlineAtUtcMs = parseBeijingDateTime(job.task_deadline_at)
   const deadlineExpired = Number.isFinite(deadlineAtUtcMs) && deadlineAtUtcMs > 0 && deadlineAtUtcMs <= Date.now()
   const heldForTaskReconciliation = Boolean(error?.manualTradeReviewHold)
+  const deferredForTaskReconciliation = Number(error?.manualTradeReviewDeferUntilUtcMs) > 0
   const deterministicEvidenceFailure = manualTradeReviewDeterministicEvidenceFailure(code)
-  const exhausted = !heldForTaskReconciliation && (deterministicEvidenceFailure
+  return !heldForTaskReconciliation && !deferredForTaskReconciliation && (deterministicEvidenceFailure
     || Boolean(error?.manualTradeReviewTerminalTask)
     || deadlineExpired
     || Number(job.attempt_count || 0) >= Number(job.max_attempts || 3))
+}
+
+async function markJobFailure(job, error) {
+  const code = text(error?.code || error?.message || 'manual_trade_review_generation_failed', 128)
+  const now = beijingNow()
+  const exhausted = manualTradeReviewFailureIsTerminal(job, error)
   const targetStatus = exhausted ? 'failed' : 'queued'
   const update = await queryRun(`UPDATE manual_trade_review_jobs SET status = ?, progress_stage = ?, last_error_code = ?,
     lease_token = NULL, lease_expires_at = NULL, next_attempt_at = ?, completed_at = ?, updated_at = ?
@@ -1303,10 +1327,30 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
       resultHash:normalized.normalizedOutputHash })
     return { output:normalized.output, outputHash:normalized.normalizedOutputHash, skipped:false, tracker:null }
   } catch (error) {
+    const terminalBusinessFailure = manualTradeReviewFailureIsTerminal(job, error)
+    const heldOrDeferred = Boolean(error?.manualTradeReviewHold
+      || Number(error?.manualTradeReviewDeferUntilUtcMs) > 0)
     try {
-      await tracker?.failed(error, Number(job.attempt_count || 0) >= Number(job.max_attempts || 3))
+      await tracker?.failed(error, terminalBusinessFailure)
     } catch (trackerError) {
       console.error('[ManualTradeReview] stage task failure update failed:', trackerError.message)
+    }
+    // A stage row must not remain `running` after the final business attempt.
+    // Keep this mutation independently fenced by the current job lease and
+    // generation so a tracker failure cannot hide the durable business state.
+    if (terminalBusinessFailure && !heldOrDeferred) {
+      const candidateCode = String(error?.code || '').trim()
+      const errorCode = /^[a-z0-9_.:-]{1,128}$/iu.test(candidateCode)
+        ? candidateCode : 'manual_trade_review_stage_failed'
+      try {
+        await markManualTradeReviewStageFailed({
+          caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1), stage,
+          leaseToken:job.lease_token, expectedJobStatuses:['leased', 'generating'],
+          expectedStageStatuses:['pending', 'running', 'status_unknown'], errorCode,
+        })
+      } catch (stageError) {
+        console.error('[ManualTradeReview] stage status failure update failed:', stageError.message)
+      }
     }
     throw error
   } finally {
@@ -1990,7 +2034,10 @@ export async function runManualTradeReviewWorkerOnce({ requestModel = requestJso
           counterfactual_summary:normalized.counterfactual_summary }
       }
       outcomeRepairContext = manualTradeReviewOutcomePathRepairContext(
-        parse(reviewCase.strategy_snapshot_json, {}), outcomeValidator)
+        parse(reviewCase.strategy_snapshot_json, {}), outcomeValidator, {
+          allowedEvidenceRefs:evidenceCatalog.outcome_refs,
+          allowedSourceRefs:evidenceCatalog.trade_refs,
+        })
     } else {
       const counterfactualMessages = counterfactualPrompt(reviewCase, sources, memorySnapshot)
       const counterfactualBudget = await prepareManualTradeReviewBudget(resolved, counterfactualMessages)

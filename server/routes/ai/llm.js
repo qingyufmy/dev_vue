@@ -1076,7 +1076,13 @@ async function resolveRepairValidationContext(repairContext, validationError, in
   const errorContext = cloneRepairValidationContext(validationError?.validationContext
     || validationError?.validation_context)
   if (!callerContext && !errorContext) return null
-  return { ...(callerContext || {}), ...(errorContext || {}) }
+  const merged = { ...(callerContext || {}), ...(errorContext || {}) }
+  // A caller may deliberately return an empty target list to force a
+  // full-object repair (for example when a v3 reference or JSON-shape error
+  // cannot be safely patched).  Do not let stale validator metadata re-enable
+  // patch mode in that case; caller-provided targets are authoritative.
+  if (Array.isArray(callerContext?.targets)) merged.targets = callerContext.targets
+  return merged
 }
 
 function hasRepairableTargets(validationContext) {

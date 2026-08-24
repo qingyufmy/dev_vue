@@ -339,6 +339,121 @@ describe('manual trade review v3 worker wiring', () => {
     expect(validateOutput).toHaveBeenCalledOnce()
   })
 
+  it('uses a full-object v3 repair fallback for non-path outcome validation errors', () => {
+    const repair = __manualTradeReviewTest.manualTradeReviewOutcomePathRepairContext(strategySnapshot, value => value, {
+      allowedEvidenceRefs:[pointRef], allowedSourceRefs:['trade-a'],
+    })
+    const validationContext = repair.validationContext({
+      validationError:Object.assign(new Error('manual_trade_review_v3_supporting_review_refs_invalid'), {
+        code:'manual_trade_review_v3_supporting_review_refs_invalid',
+      }),
+      initialObject:{ review_summary:'原始结论' },
+    })
+    expect(validationContext.targets).toEqual([])
+    expect(validationContext.allowed_evidence_refs).toEqual([pointRef])
+    expect(validationContext.allowed_source_refs).toEqual(['trade-a'])
+    expect(validationContext.allowed_strategy_rule_paths)
+      .toContain('strategy_policy.entry.trend.enabled')
+    expect(repair.outputFormat).toContain('manual-trade-review-v3')
+    expect(repair.repairInstructions).toContain('allowed_evidence_refs')
+    expect(repair.repairInstructions).toContain('不得改变原复盘结论')
+  })
+
+  it('marks the current stage failed only after the final business attempt', async () => {
+    const requestError = Object.assign(new Error('manual_trade_review_v3_technical_evidence_refs_invalid'), {
+      code:'manual_trade_review_v3_technical_evidence_refs_invalid',
+    })
+    const requestModel = vi.fn(async () => { throw requestError })
+    const lease = { signal:null, assertOwned:vi.fn() }
+    const job = { id:19, case_id:7, generation_no:2, user_id:11, strategy_id:13, lease_token:'lease-1',
+      attempt_count:3, max_attempts:3, task_deadline_at:'2099-01-01 00:00:00' }
+    vi.clearAllMocks()
+    const stageWrites = []
+    db.withTransaction.mockImplementation(async callback => callback(async (sql, params) => {
+      stageWrites.push({ sql, params })
+      return [{ affectedRows:1 }, []]
+    }))
+    await expect(__manualTradeReviewTest.runManualTradeReviewStage({
+      stage:'outcome_review', job, runtime:{ runtimeHash:'a'.repeat(64) }, runtimeHash:'a'.repeat(64),
+      memorySnapshot:{}, stageRows:[{ stage:'outcome_review', status:'running', model_task_id:null }],
+      endpoint:{ url:'https://model.test', protocol:'chat' },
+      resolved:{ model:{ provider:'openai', model:'model-a' }, model_profile_id:5, credential_source:'platform' },
+      budget:{ selectedMaxOutputTokens:128 }, messages:{ user:'request' }, requestModel, lease,
+      outputContractHash:'b'.repeat(64), validateOutput:value => value,
+    })).rejects.toBe(requestError)
+    expect(db.withTransaction).toHaveBeenCalledOnce()
+    expect(stageWrites[0].sql).toContain("SET stages.status = ?")
+    expect(stageWrites[0].sql).toContain('jobs.lease_token = ?')
+    expect(stageWrites[0].params).toEqual(expect.arrayContaining([
+      'failed', 'manual_trade_review_v3_technical_evidence_refs_invalid', 19, 2, 'outcome_review', 'lease-1',
+    ]))
+    expect(db.tracker.failed).toHaveBeenCalledWith(requestError, true)
+
+    vi.clearAllMocks()
+    await expect(__manualTradeReviewTest.runManualTradeReviewStage({
+      stage:'outcome_review', job:{ ...job, attempt_count:2 }, runtime:{ runtimeHash:'a'.repeat(64) }, runtimeHash:'a'.repeat(64),
+      memorySnapshot:{}, stageRows:[{ stage:'outcome_review', status:'running', model_task_id:null }],
+      endpoint:{ url:'https://model.test', protocol:'chat' },
+      resolved:{ model:{ provider:'openai', model:'model-a' }, model_profile_id:5, credential_source:'platform' },
+      budget:{ selectedMaxOutputTokens:128 }, messages:{ user:'request' }, requestModel, lease,
+      outputContractHash:'b'.repeat(64), validateOutput:value => value,
+    })).rejects.toBe(requestError)
+    expect(db.withTransaction).not.toHaveBeenCalled()
+    expect(db.tracker.failed).toHaveBeenCalledWith(requestError, false)
+
+    vi.clearAllMocks()
+    const terminalTaskError = Object.assign(new Error('manual_trade_review_model_task_terminal_requires_retry'), {
+      code:'manual_trade_review_model_task_terminal_requires_retry', manualTradeReviewTerminalTask:true,
+    })
+    const terminalRequestModel = vi.fn(async () => { throw terminalTaskError })
+    await expect(__manualTradeReviewTest.runManualTradeReviewStage({
+      stage:'outcome_review', job:{ ...job, attempt_count:2 }, runtime:{ runtimeHash:'a'.repeat(64) }, runtimeHash:'a'.repeat(64),
+      memorySnapshot:{}, stageRows:[{ stage:'outcome_review', status:'running', model_task_id:null }],
+      endpoint:{ url:'https://model.test', protocol:'chat' },
+      resolved:{ model:{ provider:'openai', model:'model-a' }, model_profile_id:5, credential_source:'platform' },
+      budget:{ selectedMaxOutputTokens:128 }, messages:{ user:'request' }, requestModel:terminalRequestModel, lease,
+      outputContractHash:'b'.repeat(64), validateOutput:value => value,
+    })).rejects.toBe(terminalTaskError)
+    expect(db.withTransaction).toHaveBeenCalledOnce()
+    expect(db.tracker.failed).toHaveBeenCalledWith(terminalTaskError, true)
+
+    vi.clearAllMocks()
+    db.createModelTaskTracker.mockRejectedValueOnce(new Error('tracker unavailable'))
+    await expect(__manualTradeReviewTest.runManualTradeReviewStage({
+      stage:'outcome_review', job, runtime:{ runtimeHash:'a'.repeat(64) }, runtimeHash:'a'.repeat(64),
+      memorySnapshot:{}, stageRows:[{ stage:'outcome_review', status:'running', model_task_id:null }],
+      endpoint:{ url:'https://model.test', protocol:'chat' },
+      resolved:{ model:{ provider:'openai', model:'model-a' }, model_profile_id:5, credential_source:'platform' },
+      budget:{ selectedMaxOutputTokens:128 }, messages:{ user:'request' }, requestModel, lease,
+      outputContractHash:'b'.repeat(64), validateOutput:value => value,
+    })).rejects.toThrow('tracker unavailable')
+    expect(db.withTransaction).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the original business error when final stage synchronization fails', async () => {
+    const requestError = Object.assign(new Error('manual_trade_review_v3_json_invalid'), {
+      code:'manual_trade_review_v3_json_invalid',
+    })
+    const requestModel = vi.fn(async () => { throw requestError })
+    const lease = { signal:null, assertOwned:vi.fn() }
+    const job = { id:19, case_id:7, generation_no:2, user_id:11, strategy_id:13, lease_token:'lease-1',
+      attempt_count:3, max_attempts:3, task_deadline_at:'2099-01-01 00:00:00' }
+    vi.clearAllMocks()
+    db.withTransaction.mockImplementation(async callback => callback(async () => [{ affectedRows:1 }, []]))
+    db.withTransaction.mockImplementationOnce(() => { throw new Error('stage sync unavailable') })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(__manualTradeReviewTest.runManualTradeReviewStage({
+      stage:'outcome_review', job, runtime:{ runtimeHash:'a'.repeat(64) }, runtimeHash:'a'.repeat(64),
+      memorySnapshot:{}, stageRows:[{ stage:'outcome_review', status:'running', model_task_id:null }],
+      endpoint:{ url:'https://model.test', protocol:'chat' },
+      resolved:{ model:{ provider:'openai', model:'model-a' }, model_profile_id:5, credential_source:'platform' },
+      budget:{ selectedMaxOutputTokens:128 }, messages:{ user:'request' }, requestModel, lease,
+      outputContractHash:'b'.repeat(64), validateOutput:value => value,
+    })).rejects.toBe(requestError)
+    expect(consoleError).toHaveBeenCalledWith('[ManualTradeReview] stage status failure update failed:', 'stage sync unavailable')
+    consoleError.mockRestore()
+  })
+
   it('freezes point task idempotency and passes source refs to v3 output validation', async () => {
     const review = await import('node:fs').then(fs => fs.readFileSync(
       new URL('../../server/routes/ai/manual-trade-review.js', import.meta.url), 'utf8'))
