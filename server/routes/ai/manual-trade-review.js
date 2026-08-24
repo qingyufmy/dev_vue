@@ -21,6 +21,7 @@ import { createManualTradeReviewPointRepairContext,
 import {
   ensureManualTradeReviewCounterfactualPoints,
   readManualTradeReviewCounterfactualPoints,
+  hashManualTradeReviewCounterfactualValue,
   linkManualTradeReviewCounterfactualPointModelTask,
   saveManualTradeReviewCounterfactualPointOutput,
   markManualTradeReviewCounterfactualPointUnknown,
@@ -230,6 +231,10 @@ function id(value, code = 'invalid_id') {
 }
 
 function jsonHash(value) { return sha256(JSON.stringify(value)) }
+
+function manualTradeReviewCounterfactualValuesEqual(left, right) {
+  return hashManualTradeReviewCounterfactualValue(left) === hashManualTradeReviewCounterfactualValue(right)
+}
 
 function dateAfter(seconds = 120) {
   const date = new Date(Date.now() + Math.max(1, Number(seconds) || 120) * 1000)
@@ -1297,6 +1302,13 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
     await tracker.succeeded({ resultRef:`manual_trade_review_stage:${job.id}:${job.generation_no}:${stage}`,
       resultHash:normalized.normalizedOutputHash })
     return { output:normalized.output, outputHash:normalized.normalizedOutputHash, skipped:false, tracker:null }
+  } catch (error) {
+    try {
+      await tracker?.failed(error, Number(job.attempt_count || 0) >= Number(job.max_attempts || 3))
+    } catch (trackerError) {
+      console.error('[ManualTradeReview] stage task failure update failed:', trackerError.message)
+    }
+    throw error
   } finally {
     if (tracker && !handoff) {
       try { await tracker.stop() } catch (error) { console.error('[ManualTradeReview] stage task stop failed:', error.message) }
@@ -1742,7 +1754,7 @@ async function runManualTradeReviewV3Counterfactual({ points, reviewCase, source
     normalizedCandidates = manualTradeReviewV3ValidatePersistedBundle(stage.normalizedOutput, points, strategySnapshot)
     for (const [index, point] of points.entries()) {
       const row = ledgerByKey.get(point.candidate_key)
-      if (jsonHash(row.normalizedOutput) !== jsonHash(normalizedCandidates[index])) {
+      if (!manualTradeReviewCounterfactualValuesEqual(row.normalizedOutput, normalizedCandidates[index])) {
         throw new Error('manual_trade_review_counterfactual_point_output_conflict')
       }
     }
@@ -1761,7 +1773,13 @@ async function runManualTradeReviewV3Counterfactual({ points, reviewCase, source
     const bundleInputHash = buildManualTradeReviewStageInputHash({ stage:'counterfactual', frozenRuntimeHash:runtimeHash,
       messages:{ candidate_keys:points.map(point => point.candidate_key), input_hashes:points.map(point => point.input_hash) },
       outputContractHash:manualTradeReviewV3OutputContractHash(), parentOutputHash:null })
-    const bundleTaskId = ledgerRows.find(row => row.model_task_id || row.modelTaskId)?.modelTaskId
+    // ensureManualTradeReviewCounterfactualPoints returns the pre-call ledger
+    // snapshot.  Each point run links and saves its task after that snapshot is
+    // read, so the bundle task id must come from a fresh generation-scoped read.
+    const refreshedLedgerRows = await readManualTradeReviewCounterfactualPoints({
+      caseId:job.case_id, jobId:job.id, generationNo:Number(job.generation_no || 1),
+    })
+    const bundleTaskId = refreshedLedgerRows.find(row => row.model_task_id || row.modelTaskId)?.modelTaskId
     if (!bundleTaskId) throw new Error('manual_trade_review_counterfactual_point_task_missing')
     await linkManualTradeReviewStageModelTask({ caseId:job.case_id, jobId:job.id,
       generationNo:Number(job.generation_no || 1), stage:'counterfactual', modelTaskId:stage.model_task_id || bundleTaskId,
@@ -2135,6 +2153,7 @@ export const __manualTradeReviewTest = {
   manualTradeReviewV3ValidatePersistedBundle, manualTradeReviewV3OutputContractHash, manualTradeReviewV3PointContractHash,
   manualTradeReviewV3PointFailureStatus,
   manualTradeReviewPointPathRepairTargets, manualTradeReviewPointPathRepairContext,
+  manualTradeReviewCounterfactualValuesEqual,
   manualTradeReviewOutcomePathRepairTargets, manualTradeReviewOutcomePathRepairContext,
   applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs, markJobFailure,
   manualTradeReviewDeterministicEvidenceFailure,

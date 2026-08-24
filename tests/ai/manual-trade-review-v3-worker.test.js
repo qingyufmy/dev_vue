@@ -2,11 +2,20 @@ import { describe, expect, it, vi } from 'vitest'
 
 const db = vi.hoisted(() => ({
   beijingNow:vi.fn(() => '2026-08-10 12:00:00'), queryAll:vi.fn(), queryOne:vi.fn(), queryRun:vi.fn(), withTransaction:vi.fn(),
+  tracker:{
+    taskId:'manual-review-stage-task', signal:null,
+    assertOwned:vi.fn(), persistBudget:vi.fn(async () => {}), resultReady:vi.fn(async () => {}),
+    applying:vi.fn(async () => {}), succeeded:vi.fn(async () => {}), failed:vi.fn(async () => {}),
+    stop:vi.fn(async () => {}), onProviderRequest:vi.fn(), onProviderUsage:vi.fn(),
+    onProviderActivity:vi.fn(), onProviderQuiet:vi.fn(),
+  },
+  createModelTaskTracker:vi.fn(async () => db.tracker),
 }))
 vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/config.js', () => ({ JWT_SECRET:'manual-review-v3-worker-test-secret' }))
 vi.mock('../../server/routes/ai/platform-content-access.js', () => ({ canManagePlatformAiContent:() => true }))
 vi.mock('../../server/routes/ai/llm.js', () => ({ requestJsonObject:vi.fn() }))
+vi.mock('../../server/routes/ai/model-task-tracker.js', () => ({ createModelTaskTracker:db.createModelTaskTracker }))
 vi.mock('../../server/routes/ai/model-providers.js', () => ({ MODEL_PROVIDER_DEFAULTS:{}, modelProviderProtocol:() => 'chat' }))
 vi.mock('../../server/routes/ai/model-profiles.js', () => ({ resolveAiTaskModel:vi.fn() }))
 vi.mock('../../server/routes/ai/inference-snapshots.js', () => ({ sha256:value => `hash:${String(value)}` }))
@@ -217,6 +226,74 @@ describe('manual trade review v3 worker wiring', () => {
     expect(pointReady).toBeGreaterThanOrEqual(0)
     expect(pointReady).toBeLessThan(pointApplying)
     expect(pointApplying).toBeLessThan(pointSucceeded)
+  })
+
+  it('compares persisted point output canonically and keeps real conflicts', () => {
+    const first = { candidate_key:'anchor', decision:'buy', protection_plan:{ stop_loss_price:1_990, take_profit_prices:[2_020] } }
+    const reordered = { protection_plan:{ take_profit_prices:[2_020], stop_loss_price:1_990 }, decision:'buy', candidate_key:'anchor' }
+    expect(__manualTradeReviewTest.manualTradeReviewCounterfactualValuesEqual(first, reordered)).toBe(true)
+    expect(__manualTradeReviewTest.manualTradeReviewCounterfactualValuesEqual(first, { ...reordered, decision:'sell' })).toBe(false)
+  })
+
+  it('refreshes the generation ledger after point completion before selecting the bundle task', async () => {
+    const review = await import('node:fs').then(fs => fs.readFileSync(
+      new URL('../../server/routes/ai/manual-trade-review.js', import.meta.url), 'utf8'))
+    const pointCompleted = review.indexOf('normalizedCandidates.push(result.output)')
+    const refreshedLedger = review.indexOf('const refreshedLedgerRows = await readManualTradeReviewCounterfactualPoints', pointCompleted)
+    const bundleTask = review.indexOf('const bundleTaskId = refreshedLedgerRows.find', refreshedLedger)
+    expect(pointCompleted).toBeGreaterThanOrEqual(0)
+    expect(refreshedLedger).toBeGreaterThan(pointCompleted)
+    expect(bundleTask).toBeGreaterThan(refreshedLedger)
+    expect(review.slice(refreshedLedger, bundleTask)).not.toContain('ledgerRows.find(row => row.model_task_id || row.modelTaskId)')
+  })
+
+  it('marks a failed stage task and propagates the original request error', async () => {
+    vi.clearAllMocks()
+    const requestError = new Error('terminated')
+    const requestModel = vi.fn(async () => { throw requestError })
+    const lease = { signal:null, assertOwned:vi.fn() }
+    const job = { id:19, case_id:7, generation_no:2, user_id:11, strategy_id:13, lease_token:'lease-1',
+      attempt_count:2, max_attempts:3, task_deadline_at:'2099-01-01 00:00:00' }
+    await expect(__manualTradeReviewTest.runManualTradeReviewStage({
+      stage:'counterfactual', job, runtime:{ runtimeHash:'a'.repeat(64) }, runtimeHash:'a'.repeat(64),
+      memorySnapshot:{}, stageRows:[{ stage:'counterfactual', status:'pending', model_task_id:null }],
+      endpoint:{ url:'https://model.test', protocol:'chat' },
+      resolved:{ model:{ provider:'openai', model:'model-a' }, model_profile_id:5, credential_source:'platform' },
+      budget:{ selectedMaxOutputTokens:128 }, messages:{ user:'request' }, requestModel, lease,
+      outputContractHash:'b'.repeat(64),
+      validateOutput:value => value,
+    })).rejects.toBe(requestError)
+    expect(db.tracker.failed).toHaveBeenCalledWith(requestError, false)
+    expect(db.tracker.stop).toHaveBeenCalled()
+
+    db.tracker.failed.mockClear(); db.tracker.stop.mockClear()
+    await expect(__manualTradeReviewTest.runManualTradeReviewStage({
+      stage:'counterfactual', job:{ ...job, attempt_count:3 }, runtime:{ runtimeHash:'a'.repeat(64) }, runtimeHash:'a'.repeat(64),
+      memorySnapshot:{}, stageRows:[{ stage:'counterfactual', status:'pending', model_task_id:null }],
+      endpoint:{ url:'https://model.test', protocol:'chat' },
+      resolved:{ model:{ provider:'openai', model:'model-a' }, model_profile_id:5, credential_source:'platform' },
+      budget:{ selectedMaxOutputTokens:128 }, messages:{ user:'request' }, requestModel, lease,
+      outputContractHash:'b'.repeat(64),
+      validateOutput:value => value,
+    })).rejects.toBe(requestError)
+    expect(db.tracker.failed).toHaveBeenCalledWith(requestError, true)
+    expect(db.tracker.stop).toHaveBeenCalled()
+
+    db.tracker.failed.mockRejectedValueOnce(new Error('tracker update failed'))
+    db.tracker.stop.mockClear()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(__manualTradeReviewTest.runManualTradeReviewStage({
+      stage:'counterfactual', job, runtime:{ runtimeHash:'a'.repeat(64) }, runtimeHash:'a'.repeat(64),
+      memorySnapshot:{}, stageRows:[{ stage:'counterfactual', status:'pending', model_task_id:null }],
+      endpoint:{ url:'https://model.test', protocol:'chat' },
+      resolved:{ model:{ provider:'openai', model:'model-a' }, model_profile_id:5, credential_source:'platform' },
+      budget:{ selectedMaxOutputTokens:128 }, messages:{ user:'request' }, requestModel, lease,
+      outputContractHash:'b'.repeat(64),
+      validateOutput:value => value,
+    })).rejects.toBe(requestError)
+    expect(consoleError).toHaveBeenCalledWith('[ManualTradeReview] stage task failure update failed:', 'tracker update failed')
+    expect(db.tracker.stop).toHaveBeenCalled()
+    consoleError.mockRestore()
   })
 
   it('only synchronizes a failed point after business retries are exhausted', () => {
