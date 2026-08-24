@@ -241,7 +241,7 @@ export async function verifyPendingModelProfile(model = {}) {
       apiKey:model.api_key_encrypted, provider, model:model.model_name, temperature:0,
       maxTokens:testConfig.maxTokens, protocol, timeout:connectionTimeoutMs,
       thinkingEnabled:testConfig.thinkingEnabled, reasoningEffort:testConfig.reasoningEffort,
-      messages:[{ role:'system', content:'Return exactly {"ok":true} as JSON.' }, { role:'user', content:'{"ok":true}' }],
+      messages:[{ role:'system', content:'Return exactly {"ok":true} as a json object.' }, { role:'user', content:'{"ok":true}' }],
       // The first request is intentionally non-streaming. The following
       // server-controlled probe is the only source of transport capability.
       capabilities:{ supports_stream:false, supports_request_id:false, verification_status:'unverified' },
@@ -252,14 +252,7 @@ export async function verifyPendingModelProfile(model = {}) {
     }
     const connectionLatencyMs = Date.now() - connectionStarted
     const streaming = await probeModelStreamCapability(model, { timeoutMs:connectionTimeoutMs })
-    if (streaming.status === 'unverified') {
-      const error = new Error('model_stream_verification_unverified')
-      error.code = 'model_stream_verification_unverified'
-      // Keep only a stable internal reason; never attach provider response
-      // bodies, prompts, or credentials to the API error.
-      error.streamReason = String(streaming.reason || 'stream_probe_failed').slice(0, 80)
-      throw error
-    }
+    const streamingVerified = streaming.status === 'supported' || streaming.status === 'unsupported'
     return {
       ok:true,
       verification:{
@@ -269,14 +262,14 @@ export async function verifyPendingModelProfile(model = {}) {
       capabilities:{
         provider:String(provider), model_name:String(model.model_name || ''),
         api_base_url:String(base), protocol:String(protocol),
-        streaming_status:streaming.status, verification_status:'verified',
-        verified_at_utc_msc:Date.now(), capability_source:'save_probe',
+        streaming_status:streaming.status,
+        verification_status:streamingVerified ? 'verified' : 'unverified',
+        verified_at_utc_msc:streamingVerified ? Date.now() : null,
+        capability_source:'save_probe',
       },
     }
   } catch (error) {
-    const stableCode = error?.code === 'model_stream_verification_unverified'
-      ? 'model_stream_verification_unverified'
-      : modelConnectionValidationError(error)
+    const stableCode = modelConnectionValidationError(error)
     const stable = new Error(stableCode)
     stable.code = stableCode
     stable.providerStatus = error?.providerStatus
@@ -489,7 +482,7 @@ router.post('/ai/model-profiles', authMiddleware, async (req, res) => {
     await auditAiMutation(req, 'ai_model_profile_created', 'ai_model_profile', profile.id, {
       scope:profile.scope, provider:profile.provider, model_name:profile.model_name,
     })
-    res.json({ ok:true, profile })
+    res.json({ ok:true, profile, verification:profile?.verification || null })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -503,7 +496,7 @@ router.put('/ai/model-profiles/:id', authMiddleware, async (req, res) => {
       scope:profile.scope, provider:profile.provider, model_name:profile.model_name,
       credential_rotated:Boolean(req.body?.api_key),
     })
-    res.json({ ok:true, profile })
+    res.json({ ok:true, profile, verification:profile?.verification || null })
   }
   catch (error) { reviewError(res, error) }
 })
@@ -554,7 +547,7 @@ router.post('/ai/model-profiles/:id/test', authMiddleware, async (req, res) => {
     res.json({ ok:true,
       latency_ms:Number(stream.total_latency_ms || verification.verification?.connection?.latency_ms || 0),
       provider:resolved.model.provider, model_name:resolved.model.model_name,
-      response_valid:true, verification, profile,
+      response_valid:true, verification:verification.verification || null, profile,
     })
   } catch (error) { reviewError(res, error) }
 })

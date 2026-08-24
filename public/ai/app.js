@@ -903,7 +903,7 @@ const REASON_MAP = {
   model_connection_request_rejected: "模型服务拒绝了当前请求，请核对模型名称、调用协议和三个 Token 限制",
   model_connection_token_limits_rejected: "当前模型不接受所填限制，请修改上下文窗口、最大输入或最大输出",
   model_connection_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
-  model_stream_verification_unverified: "连接尚可用，但流式响应暂未确认；本次未保存，请稍后重新验证",
+  model_stream_verification_unverified: "连接验证已通过，但流式响应尚未确认；模型将暂用非流式请求",
   model_profile_verification_result_invalid: "模型验证结果无效，请刷新后重新保存",
   unsupported_model_provider: "不支持这个模型服务商",
   model_endpoint_invalid_url: "模型接口地址格式不正确",
@@ -2079,7 +2079,7 @@ const API_ERROR_MESSAGES = {
   model_connection_request_rejected: "模型服务拒绝了当前请求，请核对模型名称、调用协议和三个 Token 限制",
   model_connection_token_limits_rejected: "当前模型不接受所填限制，请修改上下文窗口、最大输入或最大输出",
   model_connection_output_incomplete: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
-  model_stream_verification_unverified: "连接尚可用，但流式响应暂未确认；本次未保存，请稍后重新验证",
+  model_stream_verification_unverified: "连接验证已通过，但流式响应尚未确认；模型将暂用非流式请求",
   model_profile_verification_result_invalid: "模型验证结果无效，请刷新后重新保存",
   output_truncated: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
   ai_response_missing_json_object: "模型连接成功但验证输出不完整，请检查思考和最大输出配置",
@@ -4889,8 +4889,13 @@ async function saveModelProfile() {
     });
     $("profileApiKey").value = "";
     closeFormModal(editor, false);
-    const streamStatus = modelStreamingStatus(result.profile || {}).status;
-    toast(streamStatus === "supported" ? "模型已保存 · 流式响应已验证" : "模型已保存 · 已验证为非流式，长响应可能超时", streamStatus === "supported" ? "success" : "warning");
+    const streamStatus = String(result.verification?.streaming?.status || modelStreamingStatus(result.profile || {}).status || "unverified").toLowerCase();
+    const savedMessage = streamStatus === "supported"
+      ? "模型已保存 · 流式响应已验证"
+      : streamStatus === "unsupported"
+        ? "模型已保存 · 已验证不支持流式，长响应可能超时"
+        : "模型已保存，流式响应尚未验证，将暂用非流式";
+    toast(savedMessage, streamStatus === "supported" ? "success" : "warning");
     await loadModelManagement();
   } finally {
     if (button) {
@@ -18247,7 +18252,7 @@ function bindEvents() {
       const row = modelAction.closest("[data-model-id]"); const id = Number(row?.dataset.modelId); const profile = state.modelProfiles.find(item => Number(item.id) === id); const scope = state.user?.role === "admin" ? "platform" : "user";
       try {
         if (modelAction.dataset.modelAction === "edit") openModelEditor(profile);
-        else if (modelAction.dataset.modelAction === "test") { modelAction.disabled = true; modelAction.setAttribute("aria-busy", "true"); modelAction.textContent = "正在验证连接与流式能力…"; const data = await api(`/api/ai/model-profiles/${id}/test`, { method:"POST", body:{ scope }, timeout:MODEL_VALIDATION_TRANSPORT_TIMEOUT_MS }); const streamStatus = modelStreamingStatus(data.profile || {}).status; toast(streamStatus === "supported" ? `连接成功 · 流式响应已验证 · ${data.latency_ms} ms` : `连接成功 · 已验证为非流式 · ${data.latency_ms} ms`, streamStatus === "supported" ? "success" : "warning"); await loadModelManagement(); }
+        else if (modelAction.dataset.modelAction === "test") { modelAction.disabled = true; modelAction.setAttribute("aria-busy", "true"); modelAction.textContent = "正在验证连接与流式能力…"; const data = await api(`/api/ai/model-profiles/${id}/test`, { method:"POST", body:{ scope }, timeout:MODEL_VALIDATION_TRANSPORT_TIMEOUT_MS }); const streamStatus = String(data.verification?.streaming?.status || modelStreamingStatus(data.profile || {}).status || "unverified").toLowerCase(); const testMessage = streamStatus === "supported" ? `连接成功 · 流式响应已验证 · ${data.latency_ms} ms` : streamStatus === "unsupported" ? `连接成功 · 已验证不支持流式 · ${data.latency_ms} ms` : `连接成功 · 流式响应尚未验证，将暂用非流式 · ${data.latency_ms} ms`; toast(testMessage, streamStatus === "supported" ? "success" : "warning"); await loadModelManagement(); }
         else if (modelAction.dataset.modelAction === "default") { await api(`/api/ai/model-profiles/${id}/default`, { method:"POST", body:{ scope } }); toast("默认模型已更新", "success"); await loadModelManagement(); }
         else if (modelAction.dataset.modelAction === "delete") {
           modelAction.disabled = true;

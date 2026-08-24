@@ -35,8 +35,14 @@ function isMeaningfulStreamEvent(event, protocol) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return false
   if (protocol === 'responses') {
     const type = String(event.eventType || data.type || '').trim()
-    if (type !== 'response.output_text.delta') return false
-    const delta = data.delta ?? data.text ?? data.output_text_delta
+    // Responses can spend the small probe budget entirely in reasoning
+    // deltas (for example response.reasoning_summary_text.delta) and then
+    // terminate as response.incomplete. Any provider-defined response delta
+    // with a bounded non-empty text value proves that the endpoint emitted a
+    // real incremental SSE event; requiring output_text alone would reject
+    // those valid streams.
+    if (!type.startsWith('response.') || !type.endsWith('.delta')) return false
+    const delta = data.delta ?? data.text ?? data.output_text_delta ?? data.reasoning_summary_text
     return typeof delta === 'string' && delta.trim().length > 0
   }
   const choice = Array.isArray(data.choices) ? data.choices[0] : null
@@ -130,7 +136,7 @@ export async function probeModelStreamCapability(model = {}, { timeoutMs = null 
   try { await assertSafeModelEndpoint(url) } catch { return probeError('unsafe_endpoint') }
   const maxOutputTokens = MODEL_STREAM_PROBE_LIMITS.maxOutputTokens
   const messages = protocol === 'responses'
-    ? [{ role:'user', content:'Return the single word OK.' }]
+    ? [{ role:'user', content:'Return the smallest valid json object {"ok":true}; output json only.' }]
     : [{ role:'system', content:'Return the single word OK.' }, { role:'user', content:'OK' }]
   const body = buildLlmRequestBody({
     protocol, provider, model:model.model_name, temperature:0, maxTokens:maxOutputTokens,

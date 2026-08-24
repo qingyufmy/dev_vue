@@ -444,6 +444,57 @@ describe('model profile authorization and defaults', () => {
     expect(mockTx.mock.calls[1][1]).toEqual(expect.arrayContaining([1, 'deepseek', 'deepseek-chat', 'https://api.deepseek.com', 'chat_completions', 'verified']))
   })
 
+  it('saves a newly validated profile when the stream probe is unverified', async () => {
+    const verification = {
+      ok:true,
+      verification:{ connection:{ status:'passed' }, streaming:{ status:'unverified', reason:'probe_timeout' } },
+      capabilities:{ provider:'deepseek', model_name:'deepseek-chat',
+        api_base_url:'https://api.deepseek.com', protocol:'chat_completions',
+        streaming_status:'unverified', verification_status:'unverified', verified_at_utc_msc:null },
+    }
+    const savedProfile = profile({ id:43, provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com' })
+    const savedCapability = {
+      provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com', protocol:'chat_completions',
+      supports_stream:0, verification_status:'unverified', verified_at_utc_msc:null,
+      context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216,
+      token_limits_source:'manual_confirmed', token_limits_status:'confirmed',
+    }
+    mockTx
+      .mockResolvedValueOnce([{ insertId:43 }, []])
+      .mockResolvedValueOnce([{ affectedRows:1 }, []])
+    mockQueryOne.mockResolvedValueOnce(savedProfile).mockResolvedValueOnce(savedCapability)
+    const verify = vi.fn().mockResolvedValue(verification)
+    const result = await saveModelProfileWithValidation({ userId:1, callerRole:'pro', verify,
+      payload:{ provider:'deepseek', model_name:'deepseek-chat', api_key:'pending-key',
+        context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216 } })
+    expect(result.transport_capabilities.streaming).toMatchObject({ status:'unverified' })
+    expect(result.verification.streaming).toMatchObject({ status:'unverified' })
+    expect(mockTx.mock.calls[1][1]).toEqual(expect.arrayContaining([1, 'deepseek', 'deepseek-chat', 'https://api.deepseek.com', 'chat_completions', 'unverified']))
+  })
+
+  it('preserves an existing verified stream conclusion when a same-identity save is temporarily unverified', async () => {
+    const existing = profile({ id:44, provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com', updated_at:'2026-07-15 12:00:00' })
+    const oldCapability = {
+      provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com', protocol:'chat_completions',
+      supports_stream:1, verification_status:'verified', verified_at_utc_msc:1721035200000,
+      context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216,
+      token_limits_source:'manual_confirmed', token_limits_status:'confirmed',
+    }
+    const verification = { ok:true, verification:{ connection:{ status:'passed' }, streaming:{ status:'unverified' } },
+      capabilities:{ provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com',
+        protocol:'chat_completions', streaming_status:'unverified', verification_status:'unverified', verified_at_utc_msc:null } }
+    mockQueryOne.mockResolvedValueOnce(existing).mockResolvedValueOnce(oldCapability)
+      .mockResolvedValueOnce({ ...existing, updated_at:'2026-07-15 12:00:00' }).mockResolvedValueOnce(oldCapability)
+    mockTx.mockResolvedValueOnce([{ affectedRows:1 }, []]).mockResolvedValueOnce([{ affectedRows:1 }, []])
+    const result = await saveModelProfileWithValidation({ id:44, userId:1, callerRole:'pro', verify:vi.fn().mockResolvedValue(verification),
+      payload:{ provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com',
+        expected_updated_at:'2026-07-15 12:00:00', context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216 } })
+    expect(result.transport_capabilities.streaming).toMatchObject({ status:'supported', verified_at_utc_msc:1721035200000 })
+    expect(result.verification.streaming).toMatchObject({ status:'unverified' })
+    expect(mockTx.mock.calls[1][1]).toEqual(expect.arrayContaining([1, 'deepseek', 'deepseek-chat', 'https://api.deepseek.com', 'chat_completions', 'verified']))
+    expect(mockTx.mock.calls[1][1]).toEqual(expect.arrayContaining([1721035200000]))
+  })
+
   it('keeps a stored capability unchanged when connection-test proof becomes stale', async () => {
     const existing = profile({ id:22, updated_at:'2026-07-15 12:00:00' })
     mockTx.mockResolvedValueOnce([[existing], []])
@@ -465,6 +516,23 @@ describe('model profile authorization and defaults', () => {
       api_base_url:existing.api_base_url, protocol:'chat_completions', streaming_status:'supported', verification_status:'verified' } }
     await expect(persistModelProfileVerification({ profileId:23, userId:1,
       expectedUpdatedAt:existing.updated_at, verification })).rejects.toThrow('model_profile_conflict')
+    expect(mockTx).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not overwrite an existing verified capability during an unverified recheck', async () => {
+    const existing = profile({ id:45, provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com', updated_at:'2026-07-15 12:00:00' })
+    const oldCapability = { provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com', protocol:'chat_completions',
+      supports_stream:1, verification_status:'verified', verified_at_utc_msc:1721035200000,
+      context_window_tokens:1048576, max_input_tokens:1048576, max_output_tokens:393216,
+      token_limits_source:'manual_confirmed', token_limits_status:'confirmed' }
+    const verification = { ok:true, verification:{ connection:{ status:'passed' }, streaming:{ status:'unverified', reason:'http_524' } },
+      capabilities:{ provider:'deepseek', model_name:'deepseek-chat', api_base_url:'https://api.deepseek.com', protocol:'chat_completions',
+        streaming_status:'unverified', verification_status:'unverified', verified_at_utc_msc:null } }
+    mockTx.mockResolvedValueOnce([[existing], []]).mockResolvedValueOnce([[oldCapability], []])
+    mockQueryOne.mockResolvedValueOnce(existing).mockResolvedValueOnce(oldCapability)
+    const result = await persistModelProfileVerification({ profileId:45, userId:1, actorUserId:1,
+      expectedUpdatedAt:existing.updated_at, verification })
+    expect(result.transport_capabilities.streaming).toMatchObject({ status:'supported', verified_at_utc_msc:1721035200000 })
     expect(mockTx).toHaveBeenCalledTimes(2)
   })
 

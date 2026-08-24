@@ -194,7 +194,9 @@ function tokenCapabilityFields(capability, tokenLimits, actorUserId, identity,
     token_limits_updated_by:Number(actorUserId) || null,
     token_limits_updated_at_utc_msc:Date.now(),
     verification_status:verification?.verification_status || (identityChanged ? 'unverified' : (capability?.verification_status || providerVerification)),
-    verified_at_utc_msc:verification?.verified_at_utc_msc || (identityChanged ? null : (capability?.verified_at_utc_msc || null)),
+    verified_at_utc_msc:verification && Object.hasOwn(verification, 'verified_at_utc_msc')
+      ? (verification.verified_at_utc_msc || null)
+      : (identityChanged ? null : (capability?.verified_at_utc_msc || null)),
   }
 }
 
@@ -309,8 +311,9 @@ export async function saveModelProfileWithValidation({ id = null, userId, payloa
   const prepared = await prepareModelProfileForSave({ id, userId, payload, callerRole })
   if (typeof verify !== 'function') throw new Error('model_profile_verification_required')
   const verification = await verify(prepared.runtimeModel, prepared)
+  const streamingStatus = String(verification?.capabilities?.streaming_status || '')
   if (!verification || verification.ok !== true || !verification.capabilities
-      || !['supported', 'unsupported'].includes(String(verification.capabilities.streaming_status || ''))) {
+      || !['supported', 'unsupported', 'unverified'].includes(streamingStatus)) {
     throw new Error('model_profile_verification_result_invalid')
   }
   if (['provider', 'model_name', 'api_base_url', 'protocol'].some(key =>
@@ -318,14 +321,22 @@ export async function saveModelProfileWithValidation({ id = null, userId, payloa
     throw new Error('model_profile_verification_result_invalid')
   }
 
+  const preserveExistingStreamingProof = streamingStatus === 'unverified'
+    && !prepared.identityChanged
+    && prepared.oldCapability?.verification_status === 'verified'
+    && modelCapabilityIdentityMatches(prepared.existing || prepared.identity, prepared.oldCapability)
+  const capabilityVerification = preserveExistingStreamingProof
+    ? { ...prepared.oldCapability }
+    : {
+      ...verification.capabilities,
+      supports_stream:streamingStatus === 'supported',
+      verification_status:streamingStatus === 'unverified' ? 'unverified' : 'verified',
+      verified_at_utc_msc:streamingStatus === 'unverified'
+        ? null : (verification.capabilities.verified_at_utc_msc || Date.now()),
+    }
   const now = beijingNow()
   const capability = tokenCapabilityFields(prepared.oldCapability, prepared.tokenLimits, userId,
-    prepared.identity, 'unverified', prepared.identityChanged, {
-      ...verification.capabilities,
-      supports_stream:verification.capabilities.streaming_status === 'supported',
-      verification_status:'verified',
-      verified_at_utc_msc:verification.capabilities.verified_at_utc_msc || Date.now(),
-    })
+    prepared.identity, 'unverified', prepared.identityChanged, capabilityVerification)
   let profileId = prepared.id
   await withTransaction(async run => {
     if (prepared.id == null) {
@@ -355,7 +366,14 @@ export async function saveModelProfileWithValidation({ id = null, userId, payloa
     }
     await upsertModelProfileCapability(run, profileId, capability, userId)
   })
-  return await getModelProfileById(profileId)
+  const profile = await getModelProfileById(profileId)
+  // Keep the latest probe result available to the save endpoint without
+  // exposing it through ordinary profile reads. The result contains only
+  // bounded status/timing/identity fields; no key, prompt, output, or body.
+  if (profile && typeof profile === 'object') {
+    Object.defineProperty(profile, 'verification', { value:verification.verification || null, enumerable:false, configurable:true })
+  }
+  return profile
 }
 
 /**
@@ -365,8 +383,9 @@ export async function saveModelProfileWithValidation({ id = null, userId, payloa
  */
 export async function persistModelProfileVerification({ profileId, userId, actorUserId = userId,
   expectedUpdatedAt = null, verification } = {}) {
+  const streamingStatus = String(verification?.capabilities?.streaming_status || '')
   if (!verification || verification.ok !== true || !verification.capabilities
-      || !['supported', 'unsupported'].includes(String(verification.capabilities.streaming_status || ''))) {
+      || !['supported', 'unsupported', 'unverified'].includes(streamingStatus)) {
     throw new Error('model_profile_verification_result_invalid')
   }
   await withTransaction(async run => {
@@ -393,11 +412,17 @@ export async function persistModelProfileVerification({ profileId, userId, actor
       String(reported[key] || '') !== String(identity[key] || ''))) {
       throw new Error('model_profile_conflict')
     }
+    const preserveExistingStreamingProof = streamingStatus === 'unverified'
+      && oldCapability.verification_status === 'verified'
+      && modelCapabilityIdentityMatches(existing, oldCapability)
+    if (preserveExistingStreamingProof) return
     const tokenLimits = normalizeModelTokenLimits({}, capabilityRows.length ? oldCapability : existing)
     const capability = tokenCapabilityFields(oldCapability, tokenLimits, actorUserId, identity, 'unverified', false, {
       ...reported,
       supports_stream:reported.streaming_status === 'supported',
-      verification_status:'verified', verified_at_utc_msc:reported.verified_at_utc_msc || Date.now(),
+      verification_status:streamingStatus === 'unverified' ? 'unverified' : 'verified',
+      verified_at_utc_msc:streamingStatus === 'unverified'
+        ? null : (reported.verified_at_utc_msc || Date.now()),
     })
     await upsertModelProfileCapability(run, Number(profileId), capability, actorUserId)
   })

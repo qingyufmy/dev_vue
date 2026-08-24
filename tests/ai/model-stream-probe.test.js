@@ -46,6 +46,21 @@ describe('model stream capability probe', () => {
     const body = JSON.parse(fetch.mock.calls[0][1].body)
     expect(body.stream).toBe(true)
     expect(body.input).toBeTruthy()
+    expect(JSON.stringify(body.input).toLowerCase()).toContain('json')
+  })
+
+  it('accepts a non-empty Responses reasoning delta before response.incomplete', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(sseResponse([
+      'event: response.reasoning_summary_text.delta',
+      'data: {"type":"response.reasoning_summary_text.delta","delta":"thinking"}',
+      '',
+      'event: response.incomplete',
+      'data: {"type":"response.incomplete","response":{"status":"incomplete"}}',
+      '',
+    ].join('\n')))
+    await expect(probeModelStreamCapability(model({
+      provider:'volcengine_agent_plan', api_base_url:'https://gateway.example.test/v1',
+    }))).resolves.toMatchObject({ status:'supported' })
   })
 
   it('marks a valid ordinary JSON response as verified unsupported', async () => {
