@@ -149,5 +149,14 @@ describe('manual trade review v3 worker wiring', () => {
     expect(review).toMatch(/candidateKey:point\.candidate_key, modelTaskId:taskId, inputHash:point\.input_hash, leaseToken:job\.lease_token/)
     expect(review).toContain('promptHash:sha256(JSON.stringify(messages)), outputContractHash:pointOutputContractHash')
     expect(review).toContain('idempotencyKey, inputHash, snapshotHash:runtimeHash')
+    const memoryUsageKinds = [
+      'manual_review_cf_point', 'manual_review_counterfactual', 'manual_review_outcome',
+    ]
+    for (const usageKind of memoryUsageKinds) {
+      expect(review).toContain(usageKind)
+      expect(usageKind.length).toBeLessThanOrEqual(32)
+    }
+    expect(review).not.toContain('manual_trade_review_counterfactual_point_${point.candidate_key}')
+    expect(review).not.toContain('injectionKind:`manual_trade_review_${stage}`')
   })
 })

@@ -25,6 +25,7 @@ export const STRATEGY_MEMORY_CONFLICT_STATUSES = Object.freeze([
 export const STRATEGY_MEMORY_COMPRESSION_STATUSES = Object.freeze([
   'queued', 'leased', 'succeeded', 'succeeded_noop', 'failed', 'stale',
 ])
+export const STRATEGY_MEMORY_INJECTION_USAGE_KIND_MAX_LENGTH = 32
 
 const EMPTY_CONTENT_HASH = sha256('')
 const MAX_CAPACITY_CHARS = 10_000_000
@@ -34,6 +35,14 @@ const DEFAULT_COMPRESSION_LEASE_MS = 15 * 60_000
 // library. Keep the separator explicit so capacity planning cannot silently
 // overrun the durable character limit.
 const DETERMINISTIC_UPDATE_SEPARATOR_CHARS = 2
+
+export function normalizeStrategyMemoryInjectionUsageKind(value) {
+  const normalized = String(value ?? '').trim()
+  if (!normalized || Array.from(normalized).length > STRATEGY_MEMORY_INJECTION_USAGE_KIND_MAX_LENGTH) {
+    throw new Error('strategy_memory_injection_usage_kind_invalid')
+  }
+  return normalized
+}
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex')
@@ -1647,6 +1656,8 @@ export async function reopenStrategyMemoryConflict(conflictIdOrInput, actorArg =
 
 export async function createStrategyMemoryInjectionLog(inputOrStrategyId, actorArg = null, payloadArg = null) {
   const input = requestWithActor(inputOrStrategyId, actorArg, payloadArg)
+  const usageKind = normalizeStrategyMemoryInjectionUsageKind(
+    input.injection_kind ?? input.injectionKind ?? 'analysis')
   const strategy = await getAuthorizedStrategy(input.strategyId, input.actor, 'runtime', input)
   const library = input.library || publicLibrary(await getLibraryRow(strategy.id) || strategyMemoryDefaults(strategy))
   const now = beijingNow()
@@ -1657,14 +1668,14 @@ export async function createStrategyMemoryInjectionLog(inputOrStrategyId, actorA
        period_review_case_id, model_task_id, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [strategy.id, library.version_no, library.content_hash, library.char_count, library.estimated_token_count,
-      input.injection_kind ?? input.injectionKind ?? 'analysis', actorUserId(input.actor),
+      usageKind, actorUserId(input.actor),
       optionalPositiveId(input.signal_id ?? input.signalId), optionalPositiveId(input.inference_snapshot_id ?? input.inferenceSnapshotId),
       optionalPositiveId(input.period_review_case_id ?? input.periodReviewCaseId),
       input.model_task_id ?? input.modelTaskId ?? null, now]
   )
   return { id:Number(result?.insertId || 0) || null, strategy_id:Number(strategy.id), library_version_no:library.version_no,
     library_content_hash:library.content_hash, char_count:library.char_count,
-    estimated_token_count:library.estimated_token_count, usage_kind:input.injection_kind ?? input.injectionKind ?? 'analysis' }
+    estimated_token_count:library.estimated_token_count, usage_kind:usageKind }
 }
 
 export const attachStrategyMemoryInjectionLog = createStrategyMemoryInjectionLog
@@ -1673,11 +1684,15 @@ export async function updateStrategyMemoryInjectionLog(logIdOrInput, payloadArg 
   const input = logIdOrInput && typeof logIdOrInput === 'object'
     ? { ...logIdOrInput }
     : { ...(maybePayload || payloadArg || {}), logId:logIdOrInput }
+  const hasUsageKind = input.usage_kind !== undefined || input.usageKind !== undefined
+  const usageKind = hasUsageKind
+    ? normalizeStrategyMemoryInjectionUsageKind(input.usage_kind ?? input.usageKind)
+    : null
   const id = positiveId(input.log_id ?? input.logId, 'strategy_memory_injection_log_not_found')
   const sets = []
   const params = []
   const add = (column, value) => { sets.push(`${column} = ?`); params.push(value) }
-  if (input.usage_kind !== undefined || input.usageKind !== undefined) add('usage_kind', String(input.usage_kind ?? input.usageKind))
+  if (hasUsageKind) add('usage_kind', usageKind)
   if (input.user_id !== undefined || input.userId !== undefined) add('user_id', optionalPositiveId(input.user_id ?? input.userId))
   if (input.signal_id !== undefined || input.signalId !== undefined) add('signal_id', optionalPositiveId(input.signal_id ?? input.signalId))
   if (input.inference_snapshot_id !== undefined || input.inferenceSnapshotId !== undefined) add('inference_snapshot_id', optionalPositiveId(input.inference_snapshot_id ?? input.inferenceSnapshotId))
@@ -1687,7 +1702,8 @@ export async function updateStrategyMemoryInjectionLog(logIdOrInput, payloadArg 
   params.push(id)
   const result = await queryRun(`UPDATE strategy_memory_injection_logs SET ${sets.join(', ')} WHERE id = ?`, params)
   if (!affected(result)) throw new Error('strategy_memory_injection_log_not_found')
-  return await queryOne('SELECT * FROM strategy_memory_injection_logs WHERE id = ?', [id])
+  const updated = await queryOne('SELECT * FROM strategy_memory_injection_logs WHERE id = ?', [id])
+  return hasUsageKind && updated ? { ...updated, usage_kind:usageKind } : updated
 }
 
 export const updateRuntimeStrategyMemoryInjectionLog = updateStrategyMemoryInjectionLog

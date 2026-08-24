@@ -17,9 +17,12 @@ vi.mock('../../server/db.js', () => ({
 
 import {
   STRATEGY_MEMORY_DEFAULT_CAPACITY_CHARS,
+  STRATEGY_MEMORY_INJECTION_USAGE_KIND_MAX_LENGTH,
   buildStrategyMemoryConflictKey,
+  createStrategyMemoryInjectionLog,
   getStrategyMemoryLibraryForRuntime,
   normalizeStrategyMemoryConflictThreshold,
+  normalizeStrategyMemoryInjectionUsageKind,
   sanitizeStrategyMemoryText,
   sanitizeLegacyStrategyMemoryContent,
   sanitizeStrategyMemoryReviewPackaging,
@@ -34,6 +37,7 @@ import {
   getStrategyMemoryCompressionJobStatus,
   getLatestStrategyMemoryCompressionJobStatus,
   strategyMemoryCharCount,
+  updateStrategyMemoryInjectionLog,
 } from '../../server/routes/ai/strategy-memory-library.js'
 
 const privateStrategy = (overrides = {}) => ({
@@ -99,6 +103,47 @@ describe('unified strategy memory primitives', () => {
     const input = { category:'entry_setup', description:'追涨与策略回调入场冲突', strategy_excerpt:'只允许回调' }
     expect(buildStrategyMemoryConflictKey(input)).toBe(buildStrategyMemoryConflictKey({ ...input }))
     expect(buildStrategyMemoryConflictKey(input)).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('normalizes the durable injection usage kind before writing it', async () => {
+    mockQueryOne.mockResolvedValue(privateStrategy())
+    mockQueryRun.mockResolvedValue({ insertId:41, affectedRows:1 })
+    const result = await createStrategyMemoryInjectionLog({
+      strategyId:5, actor:{ userId:7, role:'user' }, library:library(),
+      injectionKind:'  manual_review_cf_point  ',
+    })
+    expect(STRATEGY_MEMORY_INJECTION_USAGE_KIND_MAX_LENGTH).toBe(32)
+    expect(normalizeStrategyMemoryInjectionUsageKind('  manual_review_cf_point  ')).toBe('manual_review_cf_point')
+    expect(mockQueryRun.mock.calls[0][1][5]).toBe('manual_review_cf_point')
+    expect(result.usage_kind).toBe('manual_review_cf_point')
+  })
+
+  it('normalizes an updated injection usage kind before writing it', async () => {
+    mockQueryRun.mockResolvedValue({ affectedRows:1 })
+    mockQueryOne.mockResolvedValue({ id:41, usage_kind:'stale' })
+    const result = await updateStrategyMemoryInjectionLog({
+      logId:41, usageKind:'  manual_review_outcome  ',
+    })
+    expect(mockQueryRun).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE strategy_memory_injection_logs SET usage_kind = ?'),
+      ['manual_review_outcome', 41],
+    )
+    expect(result.usage_kind).toBe('manual_review_outcome')
+  })
+
+  it.each([
+    ['create empty', () => createStrategyMemoryInjectionLog({
+      strategyId:5, actor:{ userId:7, role:'user' }, library:library(), injectionKind:'   ',
+    })],
+    ['create overlong', () => createStrategyMemoryInjectionLog({
+      strategyId:5, actor:{ userId:7, role:'user' }, library:library(), injectionKind:'x'.repeat(33),
+    })],
+    ['update empty', () => updateStrategyMemoryInjectionLog({ logId:41, usageKind:'   ' })],
+    ['update overlong', () => updateStrategyMemoryInjectionLog({ logId:41, usageKind:'x'.repeat(33) })],
+  ])('rejects an invalid injection usage kind before querying: %s', async (_label, operation) => {
+    await expect(operation()).rejects.toThrow('strategy_memory_injection_usage_kind_invalid')
+    expect(mockQueryOne).not.toHaveBeenCalled()
+    expect(mockQueryRun).not.toHaveBeenCalled()
   })
 
   it('does not echo legacy conditional memory text into a review prompt', () => {

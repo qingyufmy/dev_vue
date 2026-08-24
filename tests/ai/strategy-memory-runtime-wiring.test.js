@@ -32,7 +32,11 @@ describe('unified strategy memory runtime wiring', () => {
     expect(review).toContain('content:memory?.content_text')
     expect(review).toContain('counterfactualPrompt(reviewCase, sources, memorySnapshot)')
     expect(review).toContain('outcomeReviewPrompt(reviewCase, sources, counterfactual, memorySnapshot)')
-    expect(review).toContain('injectionKind:`manual_trade_review_${stage}`')
+    expect(review).toContain('injectionKind:manualTradeReviewMemoryInjectionKind(stage)')
+    for (const usageKind of ['manual_review_cf_point', 'manual_review_counterfactual', 'manual_review_outcome']) {
+      expect(review).toContain(usageKind)
+      expect(usageKind.length).toBeLessThanOrEqual(32)
+    }
   })
 
   it('keeps historical comparison replay on its original frozen user prompt', () => {

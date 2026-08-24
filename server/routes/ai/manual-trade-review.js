@@ -45,6 +45,11 @@ const COUNTERFACTUAL_POINT_V3_OUTPUT_VERSION = MANUAL_TRADE_REVIEW_COUNTERFACTUA
 const MAX_TEXT = 6_000
 const MAX_THESIS = 2_000
 const MAX_CANDIDATES = 20
+const MANUAL_TRADE_REVIEW_MEMORY_INJECTION_KINDS = Object.freeze({
+  counterfactual_point:'manual_review_cf_point',
+  counterfactual:'manual_review_counterfactual',
+  outcome_review:'manual_review_outcome',
+})
 const TERMINAL_JOBS = new Set(['succeeded', 'failed', 'cancelled', 'deferred'])
 const VALID_CASE_STATUSES = new Set(['evidence_pending', 'queued', 'generating', 'draft', 'edited', 'needs_revision', 'approved', 'failed', 'deferred', 'superseded'])
 const VALID_REVIEW_ACTIONS = new Set(['approve', 'mark_problem', 'defer'])
@@ -66,6 +71,12 @@ const MODEL_TASK_ACTIVE_STATES = new Set(['leased', 'preparing', 'submitted', 'p
 let manualReviewTimer = null
 let manualReviewWake = false
 let manualReviewRunning = false
+
+function manualTradeReviewMemoryInjectionKind(stage) {
+  const usageKind = MANUAL_TRADE_REVIEW_MEMORY_INJECTION_KINDS[stage]
+  if (!usageKind) throw new Error('manual_trade_review_stage_invalid')
+  return usageKind
+}
 
 function parse(value, fallback = null) {
   if (value == null || value === '') return fallback
@@ -1114,7 +1125,7 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
     } })
     await createStrategyMemoryInjectionLog({ strategyId:job.strategy_id,
       actor:{ userId:job.user_id, role:'admin' }, library:memorySnapshot,
-      injectionKind:`manual_trade_review_${stage}`, modelTaskId:tracker.taskId })
+      injectionKind:manualTradeReviewMemoryInjectionKind(stage), modelTaskId:tracker.taskId })
     await tracker.persistBudget(budget)
     const requestSignal = () => {
       const signals = [lease.signal, tracker.signal].filter(Boolean)
@@ -1497,7 +1508,7 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
         candidateKey:point.candidate_key, modelTaskId:taskId, inputHash:point.input_hash, leaseToken:job.lease_token }) })
     await createStrategyMemoryInjectionLog({ strategyId:job.strategy_id,
       actor:{ userId:job.user_id, role:'admin' }, library:memorySnapshot,
-      injectionKind:`manual_trade_review_counterfactual_point_${point.candidate_key}`, modelTaskId:tracker.taskId })
+      injectionKind:MANUAL_TRADE_REVIEW_MEMORY_INJECTION_KINDS.counterfactual_point, modelTaskId:tracker.taskId })
     await tracker.persistBudget(budget)
     const requestSignal = () => {
       const signals = [lease.signal, tracker.signal].filter(Boolean)
