@@ -16,6 +16,8 @@ import { buildFrozenStrategyPaths, buildManualReviewEvidenceCatalog, requiredMan
   validateManualReviewEvidenceRefs } from './manual-trade-review-contract.js'
 import { createStrategyMemoryInjectionLog, getStrategyMemoryLibraryForRuntime } from './strategy-memory-library.js'
 import { createManualTradeReviewPrompts } from './manual-trade-review-prompts.js'
+import { createManualTradeReviewPointRepairContext,
+  manualTradeReviewPointRepairTargets } from './manual-trade-review-repair.js'
 import {
   ensureManualTradeReviewCounterfactualPoints,
   readManualTradeReviewCounterfactualPoints,
@@ -95,71 +97,14 @@ const MANUAL_REVIEW_PATH_REPAIR_CODES = new Set([
 ])
 
 function manualTradeReviewPointPathRepairTargets(initialObject, strategySnapshot) {
-  const allowedPaths = buildFrozenStrategyPaths(strategySnapshot)
-  const targets = []
-  const signals = Array.isArray(initialObject?.strategy_signals) ? initialObject.strategy_signals : []
-  signals.forEach((signal, index) => {
-    try {
-      validateFrozenStrategyPath(signal?.strategy_rule_path, strategySnapshot)
-    } catch {
-      targets.push({
-        path:`strategy_signals[${index}].strategy_rule_path`,
-        signal_index:index,
-        current_value:typeof signal?.strategy_rule_path === 'string' ? signal.strategy_rule_path : null,
-      })
-    }
+  const { targets, allowedStrategyPaths } = manualTradeReviewPointRepairTargets(initialObject, {
+    strategySnapshot, includeTimeframes:false,
   })
-  return { targets, allowedPaths }
+  return { targets:targets.map(({ kind:unusedKind, ...target }) => target), allowedPaths:allowedStrategyPaths }
 }
 
 function manualTradeReviewPointPathRepairContext(strategySnapshot, validateOutput) {
-  return {
-    mode:'patch',
-    patchOutputFormat:{ changes:[{
-      path:'exact repair_targets.path', value:'one exact allowed_strategy_rule_paths value',
-    }] },
-    requiredCoverage:'Return exactly one change for every repair target and no other changes.',
-    repairMaxTokens:2_048,
-    repairReasoningEffort:'low',
-    patchRepairInstructions:'只修复 strategy_rule_path。每个 value 必须逐字复制 allowed_strategy_rule_paths 中的一项；不得添加 frozen_strategy.、$、斜杠或解释文字，不得修改方向、价格、保护计划、证据引用或任何其他字段。',
-    validationContext:({ validationError, initialObject }) => {
-      const code = String(validationError?.code || validationError?.message || '')
-      if (!MANUAL_REVIEW_PATH_REPAIR_CODES.has(code)) throw validationError
-      const { targets, allowedPaths } = manualTradeReviewPointPathRepairTargets(initialObject, strategySnapshot)
-      if (!targets.length || !allowedPaths.length) throw validationError
-      return { targets, allowed_strategy_rule_paths:allowedPaths }
-    },
-    repairInput:({ initialObject, validationContext }) => ({
-      repair_targets:(validationContext?.targets || []).map(target => ({
-        ...target,
-        strategy_signal:initialObject?.strategy_signals?.[target.signal_index] || null,
-      })),
-      allowed_strategy_rule_paths:validationContext?.allowed_strategy_rule_paths || [],
-    }),
-    applyRepairPatch:({ initialObject, repairPatch, validationContext }) => {
-      const changes = Array.isArray(repairPatch?.changes) ? repairPatch.changes : []
-      const targets = Array.isArray(validationContext?.targets) ? validationContext.targets : []
-      const allowedPaths = new Set(validationContext?.allowed_strategy_rule_paths || [])
-      if (changes.length !== targets.length) throw new Error('manual_trade_review_v3_strategy_path_repair_coverage_invalid')
-      const targetByPath = new Map(targets.map(target => [target.path, target]))
-      const seen = new Set()
-      const repaired = JSON.parse(JSON.stringify(initialObject))
-      for (const change of changes) {
-        const path = String(change?.path || '')
-        const value = String(change?.value || '').normalize('NFKC').trim()
-        const target = targetByPath.get(path)
-        if (!target || seen.has(path) || !allowedPaths.has(value)) {
-          throw new Error('manual_trade_review_v3_strategy_path_repair_invalid')
-        }
-        if (!repaired?.strategy_signals?.[target.signal_index]) {
-          throw new Error('manual_trade_review_v3_strategy_path_repair_target_missing')
-        }
-        repaired.strategy_signals[target.signal_index].strategy_rule_path = value
-        seen.add(path)
-      }
-      return validateOutput(repaired)
-    },
-  }
+  return createManualTradeReviewPointRepairContext({ strategySnapshot, validateOutput })
 }
 
 function manualTradeReviewOutcomePathRepairTargets(initialObject, strategySnapshot) {
@@ -1348,6 +1293,7 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
       handoff = true
       return { output:normalized.output, outputHash:normalized.normalizedOutputHash, skipped:false, tracker }
     }
+    await tracker.applying()
     await tracker.succeeded({ resultRef:`manual_trade_review_stage:${job.id}:${job.generation_no}:${stage}`,
       resultHash:normalized.normalizedOutputHash })
     return { output:normalized.output, outputHash:normalized.normalizedOutputHash, skipped:false, tracker:null }
@@ -1356,6 +1302,15 @@ async function runManualTradeReviewStage({ stage, job, runtime, runtimeHash, mem
       try { await tracker.stop() } catch (error) { console.error('[ManualTradeReview] stage task stop failed:', error.message) }
     }
   }
+}
+
+function manualTradeReviewV3PointFailureStatus({ saved = false, hold = false, businessAttemptsExhausted = false } = {}) {
+  // A durable normalized output is immutable.  In particular, a later task
+  // transition/reconciliation error must never turn a successfully saved
+  // point into a failed one.
+  if (saved) return null
+  if (hold) return 'status_unknown'
+  return businessAttemptsExhausted ? 'failed' : null
 }
 
 function manualTradeReviewV3PointOffset(candidateKey) {
@@ -1671,6 +1626,7 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
     allowedEvidenceRefs:point.allowed_evidence_refs,
   })
   let tracker = null
+  let saved = false
   try {
     const idempotencyKey = `manual_trade_review:${Number(job.id)}:${generationNo}:counterfactual:${point.candidate_key}`
     tracker = await createModelTaskTracker({
@@ -1712,30 +1668,43 @@ async function runManualTradeReviewV3Point({ point, pointRow, reviewCase, source
       timeout:Math.max(1, Math.min(deadlines.attemptSafetyDeadlineUtcMs, deadlines.taskDeadlineUtcMs) - Date.now()),
       deadlineAtMs:deadlines.attemptSafetyDeadlineUtcMs, followupValidUntilMs:deadlines.taskDeadlineUtcMs,
       signal:requestSignal(), ...callbacks, allowFollowupRequests:true,
-      repairContext:manualTradeReviewPointPathRepairContext(strategySnapshot, validateOutput),
+      repairContext:createManualTradeReviewPointRepairContext({
+        strategySnapshot,
+        strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(strategySnapshot),
+        evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(point.market_data),
+        allowedEvidenceRefs:point.allowed_evidence_refs,
+        validateOutput,
+      }),
       validateObject:validateOutput })
     lease.assertOwned(); tracker.assertOwned()
     const output = validateOutput(raw)
-    const saved = await saveManualTradeReviewCounterfactualPointOutput({ caseId:job.case_id, jobId:job.id,
+    const savedPoint = await saveManualTradeReviewCounterfactualPointOutput({ caseId:job.case_id, jobId:job.id,
       generationNo, candidateKey:point.candidate_key, modelTaskId:tracker.taskId, leaseToken:job.lease_token,
       normalizedOutput:output })
-    await tracker.resultReady({ resultHash:saved.normalizedOutputHash })
+    saved = Boolean(savedPoint.saved)
+    await tracker.resultReady({ resultHash:savedPoint.normalizedOutputHash })
+    await tracker.applying()
     await tracker.succeeded({ resultRef:`manual_trade_review_counterfactual:${job.id}:${generationNo}:${point.candidate_key}`,
-      resultHash:saved.normalizedOutputHash })
-    return { output, outputHash:saved.normalizedOutputHash, skipped:false, modelTaskId:tracker.taskId }
+      resultHash:savedPoint.normalizedOutputHash })
+    return { output, outputHash:savedPoint.normalizedOutputHash, skipped:false, modelTaskId:tracker.taskId }
   } catch (error) {
     const hold = Boolean(error?.manualTradeReviewHold || error?.manualTradeReviewDeferUntilUtcMs)
+    const status = manualTradeReviewV3PointFailureStatus({
+      saved, hold,
+      businessAttemptsExhausted:Number(job.attempt_count || 0) >= Number(job.max_attempts || 3),
+    })
     try {
-      if (hold) await markManualTradeReviewCounterfactualPointUnknown({ caseId:job.case_id, jobId:job.id, generationNo,
+      if (status === 'status_unknown') await markManualTradeReviewCounterfactualPointUnknown({ caseId:job.case_id, jobId:job.id, generationNo,
         candidateKey:point.candidate_key, modelTaskId:tracker?.taskId || pointRow?.modelTaskId || null,
         leaseToken:job.lease_token, errorCode:error?.code || 'manual_trade_review_counterfactual_status_unknown' })
-      else if (error?.manualTradeReviewTerminalTask) await markManualTradeReviewCounterfactualPointFailed({
+      else if (status === 'failed') await markManualTradeReviewCounterfactualPointFailed({
         caseId:job.case_id, jobId:job.id, generationNo, candidateKey:point.candidate_key,
         modelTaskId:tracker?.taskId || pointRow?.modelTaskId || null, leaseToken:job.lease_token,
         errorCode:error?.code || 'manual_trade_review_counterfactual_failed' })
-      // Keep a running point mutable for provider/validation failures.  The
-      // durable model task tracker owns retry scheduling; marking it failed
-      // here would make the next worker reject a retryable task permanently.
+      // Keep a running point mutable for provider/validation failures until
+      // the business retry budget is exhausted.  The durable model task
+      // tracker owns retry scheduling; marking the point failed earlier would
+      // make the next worker reject a retryable point permanently.
     } catch (statusError) {
       console.error('[ManualTradeReview] counterfactual point status update failed:', statusError.message)
     }
@@ -2164,6 +2133,7 @@ export const __manualTradeReviewTest = {
   manualTradeReviewV3PointEvidence, manualTradeReviewV3ServerSummary, manualTradeReviewV3PointBundle,
   manualTradeReviewV3FindAtr, manualTradeReviewV3FindAtrEvidence,
   manualTradeReviewV3ValidatePersistedBundle, manualTradeReviewV3OutputContractHash, manualTradeReviewV3PointContractHash,
+  manualTradeReviewV3PointFailureStatus,
   manualTradeReviewPointPathRepairTargets, manualTradeReviewPointPathRepairContext,
   manualTradeReviewOutcomePathRepairTargets, manualTradeReviewOutcomePathRepairContext,
   applyManualTradeReviewOutcome, recoverAbandonedManualTradeReviewJobs, markJobFailure,

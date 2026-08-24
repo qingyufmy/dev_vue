@@ -148,7 +148,7 @@ describe('manual trade review v3 worker wiring', () => {
     const validationError = new Error('manual_trade_review_v3_strategy_rule_path_invalid')
     const validationContext = repair.validationContext({ validationError, initialObject:initial })
     expect(validationContext.targets).toEqual([{
-      path:'strategy_signals[0].strategy_rule_path', signal_index:0,
+      kind:'strategy_path', path:'strategy_signals[0].strategy_rule_path', signal_index:0,
       current_value:'frozen_strategy.strategy_policy.entry.trend.enabled',
     }])
     expect(validationContext.allowed_strategy_rule_paths).toContain('strategy_policy.entry.trend.enabled')
@@ -179,16 +179,53 @@ describe('manual trade review v3 worker wiring', () => {
     expect(() => repair.applyRepairPatch({
       initialObject:initial, validationContext,
       repairPatch:{ changes:[{ path:'decision', value:'strategy_policy.entry.trend.enabled' }] },
-    })).toThrow('strategy_path_repair_invalid')
+    })).toThrow('point_repair_invalid')
     expect(() => repair.applyRepairPatch({
       initialObject:initial, validationContext,
       repairPatch:{ changes:[{
         path:'strategy_signals[0].strategy_rule_path', value:'strategy_policy.not_real',
       }] },
-    })).toThrow('strategy_path_repair_invalid')
+    })).toThrow('point_repair_invalid')
     const unrelatedError = new Error('manual_trade_review_v3_confidence_invalid')
     expect(() => repair.validationContext({ validationError:unrelatedError, initialObject:initial }))
       .toThrow('manual_trade_review_v3_confidence_invalid')
+  })
+
+  it('keeps non-final model task transitions in result-ready/applying/succeeded order', async () => {
+    const review = await import('node:fs').then(fs => fs.readFileSync(
+      new URL('../../server/routes/ai/manual-trade-review.js', import.meta.url), 'utf8'))
+    const stageStart = review.indexOf('async function runManualTradeReviewStage')
+    const stageEnd = review.indexOf('function manualTradeReviewV3PointFailureStatus')
+    const stageBlock = review.slice(stageStart, stageEnd)
+    const stageReady = stageBlock.indexOf('await tracker.resultReady({ resultHash:normalized.normalizedOutputHash })')
+    const finalApplyReturn = stageBlock.indexOf(
+      'return { output:normalized.output, outputHash:normalized.normalizedOutputHash, skipped:false, tracker }')
+    const nonFinalBlock = stageBlock.slice(finalApplyReturn)
+    const stageApplying = finalApplyReturn + nonFinalBlock.indexOf('await tracker.applying()')
+    const stageSucceeded = finalApplyReturn + nonFinalBlock.indexOf('await tracker.succeeded({ resultRef:`manual_trade_review_stage:')
+    expect(stageReady).toBeGreaterThanOrEqual(0)
+    expect(finalApplyReturn).toBeGreaterThan(stageReady)
+    expect(stageReady).toBeLessThan(stageApplying)
+    expect(stageApplying).toBeLessThan(stageSucceeded)
+
+    const pointStart = review.indexOf('async function runManualTradeReviewV3Point')
+    const pointEnd = review.indexOf('async function runManualTradeReviewV3Counterfactual')
+    const pointBlock = review.slice(pointStart, pointEnd)
+    const pointReady = pointBlock.indexOf('await tracker.resultReady({ resultHash:savedPoint.normalizedOutputHash })')
+    const pointApplying = pointBlock.indexOf('await tracker.applying()', pointReady)
+    const pointSucceeded = pointBlock.indexOf('await tracker.succeeded({ resultRef:`manual_trade_review_counterfactual:')
+    expect(pointReady).toBeGreaterThanOrEqual(0)
+    expect(pointReady).toBeLessThan(pointApplying)
+    expect(pointApplying).toBeLessThan(pointSucceeded)
+  })
+
+  it('only synchronizes a failed point after business retries are exhausted', () => {
+    const status = __manualTradeReviewTest.manualTradeReviewV3PointFailureStatus
+    expect(status({ saved:false, hold:false, businessAttemptsExhausted:false })).toBeNull()
+    expect(status({ saved:false, hold:false, businessAttemptsExhausted:true })).toBe('failed')
+    expect(status({ saved:false, hold:true, businessAttemptsExhausted:true })).toBe('status_unknown')
+    expect(status({ saved:true, hold:false, businessAttemptsExhausted:true })).toBeNull()
+    expect(status({ saved:true, hold:true, businessAttemptsExhausted:true })).toBeNull()
   })
 
   it('repairs only reported v3 outcome path fields and preserves review content', () => {
@@ -241,7 +278,9 @@ describe('manual trade review v3 worker wiring', () => {
     expect(review).toMatch(/candidateKey:point\.candidate_key, modelTaskId:taskId, inputHash:point\.input_hash, leaseToken:job\.lease_token/)
     expect(review).toContain('promptHash:sha256(JSON.stringify(messages)), outputContractHash:pointOutputContractHash')
     expect(review).toContain('allowFollowupRequests:true')
-    expect(review).toContain('repairContext:manualTradeReviewPointPathRepairContext(strategySnapshot, validateOutput)')
+    expect(review).toContain('repairContext:createManualTradeReviewPointRepairContext({')
+    expect(review).toContain('strategyDeclaredTimeframes:deriveManualTradeReviewDeclaredTimeframes(strategySnapshot)')
+    expect(review).toContain('evidenceAvailableTimeframes:deriveManualTradeReviewEvidenceTimeframes(point.market_data)')
     expect(review).toContain('repairContext:outcomeRepairContext')
     expect(review).toContain('allowFollowupRequests:Boolean(repairContext)')
     expect(review).toContain('idempotencyKey, inputHash, snapshotHash:runtimeHash')
