@@ -337,6 +337,26 @@ describe('manual profitable trade counterfactual review contract', () => {
     ))).toBe(true)
   })
 
+  it('ignores an orphaned terminal task from an older generation without touching the current job', async () => {
+    db.queryAll.mockReset()
+    db.queryOne.mockReset()
+    db.queryRun.mockReset()
+    db.queryAll.mockResolvedValueOnce([{
+      task_id:'task-old-generation', task_kind:'manual_analysis',
+      domain_type:'manual_trade_review_job', domain_id:2,
+      status:'completed_stale', error_code:'model_task_status_unknown_deadline_expired',
+      frozen_context_json:JSON.stringify({ generation_no:5 }),
+    }])
+    // Production has job id=2 at generation 7, so the generation-fenced
+    // inspection for this generation-5 task correctly finds no business row.
+    db.queryOne.mockResolvedValueOnce(null)
+
+    await expect(__manualTradeReviewTest.reconcileManualTradeReviewTerminalModelTasks({ limit:10 }))
+      .resolves.toBe(0)
+
+    expect(db.queryRun).not.toHaveBeenCalled()
+  })
+
   it('keys the generic model task by job generation, never by outer attempt', () => {
     expect(__manualTradeReviewTest.manualTradeReviewModelIdempotencyKey({ id:19, case_id:23, generation_no:4, attempt_count:99 }))
       .toBe('manual_trade_review:19:4')

@@ -1086,9 +1086,13 @@ export async function inspectManualTradeReviewModelTask(task) {
 
 async function manualTradeReviewRecoveryUpdateLinkedLedger({ task, business, action, reason }) {
   const job = business?.job || business?.case
+  // A terminal task from an older generation can outlive the single mutable
+  // business job row.  It is audit history only: never project it onto the
+  // current generation and never dereference a missing job/case.
+  if (!job) return false
   const jobId = Number(job?.id || task?.domain_id || 0)
   const generationNo = Number(business?.generationNo || manualTradeReviewRecoveryGeneration(task) || 0)
-  if (!Number.isSafeInteger(jobId) || jobId <= 0 || !Number.isSafeInteger(generationNo) || generationNo <= 0) return
+  if (!Number.isSafeInteger(jobId) || jobId <= 0 || !Number.isSafeInteger(generationNo) || generationNo <= 0) return false
   const now = beijingNow()
   const errorCode = text(reason || 'manual_trade_review_model_task_recovery', 128)
 
@@ -1127,7 +1131,7 @@ async function manualTradeReviewRecoveryUpdateLinkedLedger({ task, business, act
           WHERE jobs.id = ? AND jobs.case_id = ?
             AND jobs.generation_no = ? AND jobs.status = 'queued')`,
     [errorCode, now, Number(job.case_id), jobId, Number(job.case_id), generationNo])
-    return
+    return true
   }
 
   if (action === 'requeued') {
@@ -1159,7 +1163,7 @@ async function manualTradeReviewRecoveryUpdateLinkedLedger({ task, business, act
           WHERE jobs.id = ? AND jobs.case_id = ?
             AND jobs.generation_no = ? AND jobs.status = 'queued')`,
     [errorCode, now, Number(job.case_id), jobId, Number(job.case_id), generationNo])
-    return
+    return true
   }
 
   if (action === 'stale') {
@@ -1194,7 +1198,9 @@ async function manualTradeReviewRecoveryUpdateLinkedLedger({ task, business, act
           WHERE jobs.id = ? AND jobs.case_id = ?
             AND jobs.generation_no = ? AND jobs.status = 'failed')`,
     [errorCode, now, Number(job.case_id), jobId, Number(job.case_id), generationNo])
+    return true
   }
+  return false
 }
 
 async function reconcileManualTradeReviewTerminalModelTasks({ limit = 500 } = {}) {
@@ -1211,9 +1217,9 @@ async function reconcileManualTradeReviewTerminalModelTasks({ limit = 500 } = {}
     const business = await inspectManualTradeReviewModelTask(task)
     if (!business || business.succeeded === true) continue
     const action = String(task.status) === 'completed_stale' ? 'stale' : 'requeued'
-    await manualTradeReviewRecoveryUpdateLinkedLedger({ task, business, action,
+    const updated = await manualTradeReviewRecoveryUpdateLinkedLedger({ task, business, action,
       reason:task.error_code || `manual_trade_review_${action}_reconciliation` })
-    reconciled += 1
+    if (updated) reconciled += 1
   }
   return reconciled
 }
