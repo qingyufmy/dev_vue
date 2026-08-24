@@ -750,6 +750,158 @@ describe('requestJsonObject', () => {
     expect(repairPayload.original_output).toBe('{"summary":"缺少必填字段"}')
   })
 
+  it('supports an opt-in compact repair patch and validates the merged candidate', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"decision_quality":"insufficient_evidence","keep":"原文"}' } }] }) })
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"changes":[{"scope":"root","field":"decision_quality","value":"mixed"}]}' } }] }) })
+    const validateObject = vi.fn((value, validation) => {
+      if (validation.phase === 'initial') {
+        const error = new Error('daily_v3_insufficient_state_without_server_limitation')
+        error.validationContext = { targets:[{ scope:'root', field:'decision_quality' }], outcome_id:null, fields:['$root.decision_quality'] }
+        throw error
+      }
+      return value
+    })
+    const validateRepairOutput = vi.fn(({ repairedObject, repairPatch }) => {
+      expect(repairPatch).toEqual({ changes:[{ scope:'root', field:'decision_quality', value:'mixed' }] })
+      expect(repairedObject).toEqual({ decision_quality:'mixed', keep:'原文' })
+    })
+    const result = await requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:20_000,
+      messages:[{ role:'user', content:'完整冻结证据，不应进入补丁正文' }], validateObject,
+      repairContext:{ mode:'patch', outputFormat:'{"changes":[]}', requiredCoverage:{ outcome_ids:[1] },
+        repairInput:({ initialObject }) => ({ repair_targets:[{
+          scope:'root', field:'decision_quality', current_value:initialObject.decision_quality,
+          allowed_values:['good', 'mixed', 'poor'],
+        }] }),
+        applyRepairPatch:({ initialObject, repairedObject }) => ({ ...initialObject,
+          decision_quality:repairedObject.changes[0].value }),
+        validateRepairOutput, repairMaxTokens:4096, repairReasoningEffort:'low',
+        repairInstructions:'FULL_ONLY_MARKER', patchRepairInstructions:'PATCH_ONLY_MARKER' },
+    })
+    expect(result).toEqual({ decision_quality:'mixed', keep:'原文' })
+    expect(validateObject).toHaveBeenCalledTimes(2)
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    expect(repairBody.max_tokens).toBe(4096)
+    expect(repairBody.temperature).toBe(0)
+    expect(JSON.stringify(repairBody.messages)).not.toContain('完整冻结证据')
+    expect(repairBody.messages[0].content).toContain('PATCH_ONLY_MARKER')
+    expect(repairBody.messages[0].content).not.toContain('FULL_ONLY_MARKER')
+    const repairPayload = JSON.parse(repairBody.messages[1].content)
+    expect(repairPayload.original_output).toBeUndefined()
+    expect(repairPayload.repair_input.repair_targets[0]).toMatchObject({
+      field:'decision_quality', current_value:'insufficient_evidence', allowed_values:['good', 'mixed', 'poor'],
+    })
+  })
+
+  it('uses low reasoning effort for a canonical patch repair when the provider exposes it', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"bad"}' } }] }) })
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"changes":[{"scope":"root","field":"value","value":"fixed"}]}' } }] }) })
+    const validateObject = vi.fn((value, validation) => {
+      if (validation.phase === 'initial') {
+        const error = new Error('patch_value_invalid')
+        error.validationContext = { targets:[{ scope:'root', field:'value' }] }
+        throw error
+      }
+      return value
+    })
+    const result = await requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', provider:'deepseek', model:'test-model',
+      thinkingEnabled:true, reasoningEffort:'max', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], validateObject,
+      repairContext:{ mode:'patch', outputFormat:'{"changes":[]}', repairInput:{ repair_targets:[{
+        scope:'root', field:'value', current_value:'bad', allowed_values:['fixed'],
+      }] }, applyRepairPatch:({ initialObject, repairedObject }) => ({ ...initialObject,
+        value:repairedObject.changes[0].value }), repairReasoningEffort:'low' },
+    })
+    expect(result).toEqual({ value:'fixed' })
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    expect(repairBody.reasoning_effort).toBe('low')
+  })
+
+  it('fails closed when patch repair has no parsed initial object or apply callback', async () => {
+    mockFetch.mockResolvedValueOnce({ ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"bad"}' } }] }) })
+    const validateObject = vi.fn(() => {
+      const error = new Error('patch_value_invalid')
+      error.validationContext = { targets:[{ scope:'root', field:'value' }] }
+      throw error
+    })
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], validateObject,
+      repairContext:{ mode:'patch', repairInput:{ repair_targets:[] } },
+    })).rejects.toThrow('llm_patch_repair_requires_parsed_initial_object_and_apply_repair_patch')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to full repair for a patch-configured JSON parse failure', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'not-json' } }] }) })
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"fixed"}' } }] }) })
+    const result = await requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'完整初始请求' }],
+      repairContext:{ mode:'patch', outputFormat:'{"value":"string"}', patchOutputFormat:'{"changes":[]}',
+        repairInput:{ repair_targets:[{ scope:'root', field:'value', allowed_values:['fixed'] }] },
+        repairInstructions:'FULL_ONLY_MARKER', patchRepairInstructions:'PATCH_ONLY_MARKER' },
+    })
+    expect(result).toEqual({ value:'fixed' })
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    const repairPayload = JSON.parse(repairBody.messages[1].content)
+    expect(repairPayload.output_contract).toBe('{"value":"string"}')
+    expect(repairPayload.original_output).toBe('not-json')
+    expect(repairPayload).not.toHaveProperty('repair_input')
+    expect(repairBody.messages[0].content).toContain('完整、合法的 JSON 对象')
+    expect(repairBody.messages[0].content).not.toContain('语义补丁修复器')
+  })
+
+  it('falls back to full repair when a patch-configured validation error has no targets', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"bad","keep":"原始"}' } }] }) })
+      .mockResolvedValueOnce({ ok:true,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"value":"fixed","keep":"原始"}' } }] }) })
+    const validateObject = vi.fn((value, validation) => {
+      if (validation.phase === 'initial') throw new Error('required_field_missing')
+      return value
+    })
+    const result = await requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'完整初始请求' }], validateObject,
+      repairContext:{ mode:'patch', outputFormat:'{"value":"string","keep":"string"}', patchOutputFormat:'{"changes":[]}',
+        repairInput:{ repair_targets:[{ scope:'root', field:'value', allowed_values:['fixed'] }] },
+        repairInstructions:'FULL_ONLY_MARKER', patchRepairInstructions:'PATCH_ONLY_MARKER' },
+    })
+    expect(result).toEqual({ value:'fixed', keep:'原始' })
+    const repairBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+    const repairPayload = JSON.parse(repairBody.messages[1].content)
+    expect(repairPayload.output_contract).toBe('{"value":"string","keep":"string"}')
+    expect(repairPayload.original_output).toBe('{"value":"bad","keep":"原始"}')
+    expect(repairPayload).not.toHaveProperty('repair_input')
+    expect(repairBody.messages[0].content).toContain('FULL_ONLY_MARKER')
+    expect(repairBody.messages[0].content).not.toContain('PATCH_ONLY_MARKER')
+    expect(validateObject.mock.calls.map(([, validation]) => validation.phase)).toEqual(['initial', 'repair'])
+  })
+
+  it('keeps the original validation error when follow-up repair is disabled', async () => {
+    mockFetch.mockResolvedValueOnce({ ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:'not-json' } }] }) })
+    await expect(requestJsonObject({
+      url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+      messages:[{ role:'user', content:'test' }], allowFollowupRequests:false,
+      repairContext:{ mode:'patch', outputFormat:'{"value":"string"}' },
+    })).rejects.toThrow('ai_response_missing_json_object')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
   it('carries caller and presentation-safe validator context into one compact repair', async () => {
     mockFetch
       .mockResolvedValueOnce({

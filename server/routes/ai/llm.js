@@ -1061,12 +1061,13 @@ function cloneRepairValidationContext(value) {
   }
 }
 
-async function resolveRepairValidationContext(repairContext, validationError) {
+async function resolveRepairValidationContext(repairContext, validationError, initialObject = null) {
   const configuredContext = repairContext?.validationContext
     || repairContext?.validation_context
   const generatedContext = typeof configuredContext === 'function'
     ? await configuredContext({
       validationError,
+      initialObject,
       validationContext:cloneRepairValidationContext(validationError?.validationContext
         || validationError?.validation_context),
     })
@@ -1076,6 +1077,11 @@ async function resolveRepairValidationContext(repairContext, validationError) {
     || validationError?.validation_context)
   if (!callerContext && !errorContext) return null
   return { ...(callerContext || {}), ...(errorContext || {}) }
+}
+
+function hasRepairableTargets(validationContext) {
+  return Array.isArray(validationContext?.targets)
+    && validationContext.targets.some(target => target && typeof target === 'object' && !Array.isArray(target))
 }
 
 export async function requestJsonObject({
@@ -1172,7 +1178,7 @@ export async function requestJsonObject({
     const parsed = parseJsonObject(content)
     initialParsedObject = cloneRepairValidationContext(parsed)
     initialParsedAvailable = Boolean(initialParsedObject)
-    return typeof validateObject === 'function' ? validateObject(parsed, { phase:'initial' }) : parsed
+    return typeof validateObject === 'function' ? await validateObject(parsed, { phase:'initial' }) : parsed
   } catch (exc) {
     if (!allowFollowupRequests) throw exc
     const validUntil = followupValidUntilMs == null ? null : Number(followupValidUntilMs)
@@ -1184,28 +1190,66 @@ export async function requestJsonObject({
     }
     signal?.throwIfAborted()
     await emitModelProgress(onProgress, 'repairing')
-    const repairValidationContext = await resolveRepairValidationContext(repairContext, exc)
+    const repairValidationContext = await resolveRepairValidationContext(repairContext, exc, initialParsedObject)
+    const repairPatchMode = repairContext?.mode === 'patch'
+      && initialParsedAvailable && hasRepairableTargets(repairValidationContext)
+    if (repairPatchMode && typeof repairContext?.applyRepairPatch !== 'function') {
+      const error = new Error('llm_patch_repair_requires_parsed_initial_object_and_apply_repair_patch')
+      error.code = error.message
+      throw error
+    }
+    const repairPayload = {
+      validation_error:String(exc.message || exc.code || 'output_validation_failed'),
+      output_contract:repairPatchMode
+        ? (repairContext?.patchOutputFormat || repairContext?.outputFormat || '{}')
+        : (repairContext?.outputFormat || '{}'),
+      required_coverage:repairContext?.requiredCoverage || null,
+      ...(repairValidationContext ? { validation_context:repairValidationContext } : {}),
+    }
+    const originalOutput = typeof repairContext?.originalOutput === 'function'
+      ? await repairContext.originalOutput({ initialObject:initialParsedObject, originalContent:content,
+        validationError:exc, validationContext:repairValidationContext })
+      : repairContext?.originalOutput ?? repairContext?.original_output
+    if (repairPatchMode) {
+      const customPayload = typeof repairContext?.repairInput === 'function'
+        ? await repairContext.repairInput({ initialObject:initialParsedObject, validationError:exc,
+          validationContext:repairValidationContext })
+        : repairContext?.repairInput
+      if (customPayload != null) repairPayload.repair_input = customPayload
+      else if (originalOutput !== undefined) repairPayload.original_output = originalOutput
+    } else if (repairContext?.mode === 'patch') {
+      // A patch-configured caller can still hit a parse/shape failure.  Keep
+      // that path on the existing full-object repair contract and send the
+      // complete original provider output rather than a patch fragment.
+      repairPayload.original_output = content
+    } else {
+      repairPayload.original_output = originalOutput === undefined ? content : originalOutput
+    }
     const repairMessages = repairContext ? [
       { role:'system', content:[
-        '你是 JSON 输出格式修复器。只能修复字段名、数据类型、枚举值和缺失的必填项，不得重新分析行情，不得改变原输出中已经合法的交易方向、价格、止损止盈、挂单或持仓管理意图。必须严格遵守 output_contract 和 required_coverage，只返回一个完整、合法的 JSON 对象，不要 Markdown、解释或外层包装字段。',
-        repairContext.repairInstructions ? String(repairContext.repairInstructions) : '',
+        repairPatchMode
+          ? '你是 JSON 语义补丁修复器。只能依据同一份冻结证据，为 repair_input.repair_targets 中已报告的目标返回 changes 补丁。每个目标必须且只能出现一次，不得修改未报告字段、文本、成交事实、价格、交易覆盖或证据引用。必须严格遵守 output_contract 和 required_coverage，只返回一个 JSON 对象，不要 Markdown、解释或外层包装字段。'
+          : '你是 JSON 输出格式修复器。只能修复字段名、数据类型、枚举值和缺失的必填项，不得重新分析行情，不得改变原输出中已经合法的交易方向、价格、止损止盈、挂单或持仓管理意图。必须严格遵守 output_contract 和 required_coverage，只返回一个完整、合法的 JSON 对象，不要 Markdown、解释或外层包装字段。',
+        repairPatchMode
+          ? (repairContext.patchRepairInstructions ? String(repairContext.patchRepairInstructions) : '')
+          : (repairContext.repairInstructions ? String(repairContext.repairInstructions) : ''),
       ].filter(Boolean).join('\n') },
-      { role:'user', content:JSON.stringify({
-        validation_error:String(exc.message || exc.code || 'output_validation_failed'),
-        output_contract:repairContext.outputFormat || '{}',
-        required_coverage:repairContext.requiredCoverage || null,
-        original_output:content,
-        ...(repairValidationContext ? { validation_context:repairValidationContext } : {}),
-      }) },
+      { role:'user', content:JSON.stringify(repairPayload) },
     ] : [
       ...messages,
       { role:'assistant', content:content.substring(0, 6000) },
       { role:'user', content:`上一次输出未通过系统校验，错误代码为：${exc.message}。请严格按照最初要求的字段名、数据类型、枚举值和完整覆盖范围修正。必须补齐所有必填字段，只返回修正后的一个 JSON 对象，不要 Markdown，不要解释，不要增加外层包装字段。` },
     ]
-    const repairMaxTokens = resolveConfirmedRequestMaxTokens(repairMessages, maxTokens, modelTaskBudget)
+    const requestedRepairMaxTokens = repairPatchMode
+      ? Math.min(4096, Math.max(1, Number(repairContext?.repairMaxTokens ?? 4096)))
+      : maxTokens
+    const repairMaxTokens = resolveConfirmedRequestMaxTokens(repairMessages, requestedRepairMaxTokens, modelTaskBudget)
+    const repairReasoningEffort = repairPatchMode
+      ? String(repairContext?.repairReasoningEffort ?? 'low')
+      : reasoningEffort
     const repairBody = buildLlmRequestBody({
       protocol, provider, model, temperature: 0, maxTokens:repairMaxTokens, messages: repairMessages,
-      thinkingEnabled, reasoningEffort, supportsStream,
+      thinkingEnabled, reasoningEffort:repairReasoningEffort, supportsStream,
     })
     const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + repairMaxTokens
     const { data: repairedData } = await trackedModelRequest({
@@ -1217,16 +1261,23 @@ export async function requestJsonObject({
     const repaired = extractLlmContent(repairedData, protocol, nativeJsonMode)
     if (!repaired) throw new Error('LLM repair response content is empty')
     await emitModelProgress(onProgress, 'validating')
-    const repairedObject = parseJsonObject(repaired)
+    const repairPatch = repairPatchMode ? parseJsonObject(repaired) : null
+    const repairedObject = repairPatchMode
+      ? await repairContext.applyRepairPatch({
+        initialObject:initialParsedObject, repairedObject:repairPatch, repairPatch,
+        validationError:exc, validationContext:repairValidationContext,
+      })
+      : repairPatch || parseJsonObject(repaired)
     if (initialParsedAvailable && typeof repairContext?.validateRepairOutput === 'function') {
       await repairContext.validateRepairOutput({
         initialObject:initialParsedObject,
         repairedObject,
+        repairPatch,
         validationError:exc,
         validationContext:repairValidationContext,
       })
     }
-    return typeof validateObject === 'function' ? validateObject(repairedObject, { phase:'repair' }) : repairedObject
+    return typeof validateObject === 'function' ? await validateObject(repairedObject, { phase:'repair' }) : repairedObject
   }
 }
 

@@ -9,7 +9,7 @@ function loadPeriodReviewContractHelpers() {
   const end = app.indexOf('function renderReviewSummary', start)
   const source = app.slice(start, end)
   return new Function(`
-    const AI_FRONTEND_BUILD = 'period-review-evidence-retry1'
+    const AI_FRONTEND_BUILD = 'period-review-semantic-repair1'
     const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
     const PERIOD_REVIEW_DAILY_V3_CONTRACT = 'daily-period-review-v3'
     const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -260,6 +260,8 @@ describe('daily period review v3 frontend contract', () => {
     expect(failureText('invalid_daily_v3_contract_version')).toContain('格式版本')
     expect(failureText('evidence_upgrade_failed')).toContain('行情证据')
     expect(failureText('period_market_bridge_unavailable')).toContain('自动继续')
+    expect(failureText('LLM repair HTTP 524')).toContain('主复盘结果已返回')
+    expect(failureText('LLM repair HTTP 524')).toContain('定向修复阶段')
     expect(failureText('period_review_input_budget_exceeded')).not.toContain('period_review_input_budget_exceeded')
 
     const userLabel = loadPeriodReviewEventLabel('user')({ stage: 'preparing', message_code: 'evidence_upgrade_failed' })

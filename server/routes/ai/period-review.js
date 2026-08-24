@@ -1002,6 +1002,14 @@ const DAILY_REVIEW_REPAIR_ENUM_FIELDS = new Set([
   'outcome_attribution.avoidability',
 ])
 const DAILY_REVIEW_REPAIR_ROOT_ENUM_FIELDS = new Set(['$root.decision_quality'])
+const DAILY_REVIEW_REPAIR_ALLOWED_VALUES = Object.freeze({
+  decision_quality:Object.freeze(['good', 'mixed', 'poor']),
+  market_alignment:Object.freeze(['aligned', 'partly_aligned', 'conflict']),
+  strategy_alignment:Object.freeze(['aligned', 'partly_aligned', 'conflict']),
+  risk_execution_status:Object.freeze(['compliant', 'partly_compliant', 'violation']),
+  'outcome_attribution.avoidability':Object.freeze(['avoidable', 'partly_avoidable', 'normal_strategy_loss']),
+  '$root.decision_quality':Object.freeze(['good', 'mixed', 'poor']),
+})
 const V3_MAX_ISSUE_CODES = 20
 const V3_MAX_EVIDENCE_REFS = 50
 const V3_MAX_PRIMARY_CAUSES = 8
@@ -1037,7 +1045,7 @@ export const DAILY_PERIOD_REVIEW_V3_CONTRACT = DAILY_REVIEW_V3_CONTRACT
 // is allowed to write a review, while period_review_contracts describes the
 // output shapes that this server can still read.
 export const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = 'period-review-ui-v1'
-export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-evidence-retry1'
+export const PERIOD_REVIEW_FRONTEND_BUILD = 'period-review-semantic-repair1'
 export const PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS = Object.freeze([
   DAILY_PERIOD_REVIEW_V3_CONTRACT,
   'daily-period-review-v1',
@@ -1110,11 +1118,44 @@ function boundedReviewText(value, field, { maxLength = 8000, required = true } =
   return text
 }
 
-function dailyReviewValidationError(code, { outcomeId, fields = [] } = {}) {
+function normalizeDailyReviewRepairTargets(targets) {
+  if (!Array.isArray(targets)) return []
+  const seen = new Set()
+  const normalized = []
+  for (const target of targets) {
+    if (!target || typeof target !== 'object' || Array.isArray(target)) continue
+    const scope = String(target.scope || '').trim()
+    const field = String(target.field || '').trim()
+    const outcomeId = Number(target.outcome_id)
+    if (!['root', 'trade_assessment'].includes(scope) || !field) continue
+    if (scope === 'root' && field !== 'decision_quality') continue
+    if (scope === 'trade_assessment'
+      && (!Number.isSafeInteger(outcomeId) || outcomeId <= 0 || !DAILY_REVIEW_REPAIR_ENUM_FIELDS.has(field))) continue
+    const normalizedTarget = scope === 'root'
+      ? { scope:'root', field:'decision_quality' }
+      : { scope:'trade_assessment', outcome_id:outcomeId, field }
+    const key = `${normalizedTarget.scope}:${normalizedTarget.outcome_id || ''}:${normalizedTarget.field}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    normalized.push(normalizedTarget)
+  }
+  return normalized
+}
+
+function dailyReviewValidationError(code, { outcomeId, fields = [], targets = [] } = {}) {
   const numericOutcomeId = outcomeId === null || outcomeId === undefined ? NaN : Number(outcomeId)
+  const normalizedFields = [...new Set((Array.isArray(fields) ? fields : []).map(String).filter(Boolean))]
+  const normalizedTargets = normalizeDailyReviewRepairTargets(targets)
+  const compatibleTargets = normalizedTargets.length ? normalizedTargets : [
+    ...normalizedFields.filter(field => field === '$root.decision_quality').map(() => ({ scope:'root', field:'decision_quality' })),
+    ...normalizedFields.filter(field => field !== '$root.decision_quality'
+      && Number.isSafeInteger(Number(numericOutcomeId)) && Number(numericOutcomeId) > 0)
+      .map(field => ({ scope:'trade_assessment', outcome_id:Number(numericOutcomeId), field })),
+  ]
   const validationContext = {
     outcome_id:Number.isSafeInteger(numericOutcomeId) && numericOutcomeId > 0 ? numericOutcomeId : null,
-    fields:[...new Set((Array.isArray(fields) ? fields : []).map(String).filter(Boolean))],
+    fields:normalizedFields,
+    targets:compatibleTargets,
   }
   const error = new Error(code)
   error.code = code
@@ -1233,6 +1274,35 @@ function expectedV3OutcomeResult(netProfit) {
   return value > 0 ? 'profit' : value < 0 ? 'loss' : 'breakeven'
 }
 
+function dailyReviewInsufficientEvidenceTargets(input, outcomeIds, evidenceLimitationsByOutcome) {
+  const known = new Set((Array.isArray(outcomeIds) ? outcomeIds : []).map(Number))
+  const limitations = evidenceLimitationsByOutcome instanceof Map ? evidenceLimitationsByOutcome : new Map()
+  const targets = []
+  const push = target => targets.push(target)
+  const hasLimitation = outcomeId => normalizeDailyReviewServerLimitations(limitations.get(outcomeId)).length > 0
+  for (const item of (Array.isArray(input?.trade_assessments) ? input.trade_assessments : [])) {
+    const outcomeId = Number(item?.outcome_id)
+    if (!known.has(outcomeId) || hasLimitation(outcomeId)) continue
+    if (item?.decision_quality === 'insufficient_evidence') push({ scope:'trade_assessment', outcome_id:outcomeId, field:'decision_quality' })
+    if (item?.market_alignment === 'insufficient_evidence') push({ scope:'trade_assessment', outcome_id:outcomeId, field:'market_alignment' })
+    if (item?.strategy_alignment === 'insufficient_evidence') push({ scope:'trade_assessment', outcome_id:outcomeId, field:'strategy_alignment' })
+    const riskExecutionStatus = String(item?.risk_execution_status
+      || (item?.risk_execution_assessment && typeof item.risk_execution_assessment === 'object'
+        ? item.risk_execution_assessment.status : '')).trim()
+    if (riskExecutionStatus === 'insufficient_evidence') {
+      push({ scope:'trade_assessment', outcome_id:outcomeId, field:'risk_execution_status' })
+    }
+    if (item?.outcome_attribution?.avoidability === 'insufficient_evidence') {
+      push({ scope:'trade_assessment', outcome_id:outcomeId, field:'outcome_attribution.avoidability' })
+    }
+  }
+  const hasServerEvidenceLimitation = [...known].some(hasLimitation)
+  if (input?.decision_quality === 'insufficient_evidence' && !hasServerEvidenceLimitation) {
+    push({ scope:'root', field:'decision_quality' })
+  }
+  return normalizeDailyReviewRepairTargets(targets)
+}
+
 function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext = {}) {
   const normalizedChanContext = normalizeReviewChanContext(chanContext)
   // v3 callers must provide an explicit frozen Chan capability.  Undefined
@@ -1248,6 +1318,15 @@ function normalizeDailyV3Content(input, outcomeIds, chanContext, conflictContext
     normalizeDailyReviewServerLimitations(evidenceLimitationsByOutcome.get(outcomeId)).length > 0)
   const topLevelInsufficientEvidenceDisallowed = input.decision_quality === 'insufficient_evidence'
     && !hasServerEvidenceLimitation
+  const insufficientEvidenceTargets = dailyReviewInsufficientEvidenceTargets(input, outcomeIds, evidenceLimitationsByOutcome)
+  if (insufficientEvidenceTargets.length) {
+    throw dailyReviewValidationError('daily_v3_insufficient_state_without_server_limitation', {
+      targets:insufficientEvidenceTargets,
+      outcomeId:insufficientEvidenceTargets.find(target => target.scope === 'trade_assessment')?.outcome_id ?? null,
+      fields:insufficientEvidenceTargets.map(target => target.scope === 'root'
+        ? '$root.decision_quality' : target.field),
+    })
+  }
   const periodSummary = firstReviewText(input, ['period_summary', 'daily_summary', 'review_summary', 'summary'])
   if (!periodSummary) throw new Error('daily_review_summary_missing')
   if (!DAILY_DECISIONS.has(input.decision_quality)) throw new Error('invalid_daily_review_decision')
@@ -3794,8 +3873,9 @@ function dailyReviewChunkModelContext(chunkEvidence, chanAllowed) {
 }
 
 function dailyReviewChunkRepairValidationContext({ chunkEvidence, chanAllowed, validationError }) {
-  const { outcomeId, fields } = dailyReviewRepairValidationContext(validationError)
-  const rootDecisionQualityReported = fields.includes('$root.decision_quality')
+  const { outcomeId, fields, targets } = dailyReviewRepairValidationContext(validationError)
+  const rootDecisionQualityReported = targets.some(target => target.scope === 'root' && target.field === 'decision_quality')
+    || fields.includes('$root.decision_quality')
   const limitationMap = chunkEvidence.evidenceLimitationsByOutcome instanceof Map
     ? chunkEvidence.evidenceLimitationsByOutcome : new Map()
   const outcomeIds = new Set()
@@ -3811,9 +3891,14 @@ function dailyReviewChunkRepairValidationContext({ chunkEvidence, chanAllowed, v
     if (Array.isArray(items)) for (const item of items) addOutcomeId(item?.outcome_id)
   }
   addOutcomeId(outcomeId)
+  const targetOutcomeIds = targets.filter(target => target.scope === 'trade_assessment')
+    .map(target => target.outcome_id).filter(Number.isSafeInteger)
+  for (const id of targetOutcomeIds) addOutcomeId(id)
+  const allOutcomeIds = [...outcomeIds].sort((left, right) => left - right)
   const policyOutcomeIds = rootDecisionQualityReported
-    ? [...outcomeIds].sort((left, right) => left - right)
-    : outcomeId == null ? [] : [outcomeId]
+    ? allOutcomeIds : [...new Set(targetOutcomeIds)].sort((left, right) => left - right)
+  const contextOutcomeIds = rootDecisionQualityReported
+    ? allOutcomeIds : [...new Set(targetOutcomeIds)].sort((left, right) => left - right)
   const sharedSystemStatistics = compactReviewValue(chunkEvidence.system_statistics, {
     maxBytes:12000, maxArrayItems:32, maxDepth:4,
   })
@@ -3828,10 +3913,10 @@ function dailyReviewChunkRepairValidationContext({ chunkEvidence, chanAllowed, v
     context.insufficient_evidence_policy_by_outcome = dailyReviewInsufficientEvidencePolicy(
       limitationMap, policyOutcomeIds)
   }
-  if (outcomeId == null) {
+  if (!contextOutcomeIds.length) {
     return context
   }
-  const outcomeFilter = item => Number(item?.outcome_id) === outcomeId
+  const outcomeFilter = item => contextOutcomeIds.includes(Number(item?.outcome_id))
   context.review_context = stripHistoricalConditionFields({
     system_statistics:sharedSystemStatistics,
     pre_trade_frozen:Array.isArray(chunkEvidence.pre_trade_frozen)
@@ -3840,10 +3925,10 @@ function dailyReviewChunkRepairValidationContext({ chunkEvidence, chanAllowed, v
       ? chunkEvidence.holding_path.filter(outcomeFilter) : [],
     period_market:sharedPeriodMarket,
   })
-  if (!policyOutcomeIds.length) {
-    context.evidence_limitations_by_outcome = { [String(outcomeId)]:[] }
-    context.insufficient_evidence_policy_by_outcome = dailyReviewInsufficientEvidencePolicy(limitationMap, [outcomeId])
-  }
+  if (!policyOutcomeIds.length) context.evidence_limitations_by_outcome = Object.fromEntries(
+    contextOutcomeIds.map(id => [String(id), normalizeDailyReviewServerLimitations(limitationMap.get(id))]))
+  if (!policyOutcomeIds.length) context.insufficient_evidence_policy_by_outcome = dailyReviewInsufficientEvidencePolicy(
+    limitationMap, contextOutcomeIds)
   return context
 }
 
@@ -3920,50 +4005,159 @@ function dailyReviewRepairValidationContext(validationError) {
   const value = validationError?.validationContext || validationError?.validation_context
   const outcomeId = Number(value?.outcome_id)
   const fields = [...new Set((Array.isArray(value?.fields) ? value.fields : []).map(String).filter(Boolean))]
+  const targets = normalizeDailyReviewRepairTargets(value?.targets)
+  const compatibleTargets = targets.length ? targets : normalizeDailyReviewRepairTargets([
+    ...fields.filter(field => field === '$root.decision_quality').map(() => ({ scope:'root', field:'decision_quality' })),
+    ...fields.filter(field => field !== '$root.decision_quality'
+      && Number.isSafeInteger(outcomeId) && outcomeId > 0)
+      .map(field => ({ scope:'trade_assessment', outcome_id:outcomeId, field })),
+  ])
   return {
     outcomeId:Number.isSafeInteger(outcomeId) && outcomeId > 0 ? outcomeId : null,
     fields,
+    targets:compatibleTargets,
   }
 }
 
-function validateDailyReviewRepairOutput({ initialObject, repairedObject, validationError }) {
-  const { outcomeId, fields } = dailyReviewRepairValidationContext(validationError)
+function dailyReviewRepairTargetSpecs(initialObject, validationError) {
+  const { outcomeId, fields, targets } = dailyReviewRepairValidationContext(validationError)
+  if (!fields.length && !targets.length) return []
+  const effectiveTargets = targets.length ? targets : normalizeDailyReviewRepairTargets([
+    ...fields.filter(field => field === '$root.decision_quality').map(() => ({ scope:'root', field:'decision_quality' })),
+    ...fields.filter(field => field !== '$root.decision_quality'
+      && outcomeId != null).map(field => ({ scope:'trade_assessment', outcome_id:outcomeId, field })),
+  ])
+  if (!effectiveTargets.length) return []
+  const assessments = Array.isArray(initialObject?.trade_assessments) ? initialObject.trade_assessments : []
+  return effectiveTargets.map(target => {
+    if (target.scope === 'root') {
+      return { ...target, path:'decision_quality', current_value:initialObject?.decision_quality,
+        allowed_values:[...DAILY_REVIEW_REPAIR_ALLOWED_VALUES['$root.decision_quality']] }
+    }
+    const matchingIndexes = assessments.reduce((indexes, item, index) => {
+      if (Number(item?.outcome_id) === Number(target.outcome_id)) indexes.push(index)
+      return indexes
+    }, [])
+    if (matchingIndexes.length !== 1 || !DAILY_REVIEW_REPAIR_ENUM_FIELDS.has(target.field)) {
+      throw dailyReviewValidationError('daily_v3_repair_validation_context_invalid', {
+        outcomeId:target.outcome_id, fields:[target.field], targets:[target],
+      })
+    }
+    const assessment = assessments[matchingIndexes[0]]
+    const currentValue = target.field === 'outcome_attribution.avoidability'
+      ? assessment?.outcome_attribution?.avoidability : target.field === 'risk_execution_status'
+        ? assessment?.risk_execution_status
+        : assessment?.[target.field]
+    return { ...target, path:`trade_assessments[${matchingIndexes[0]}].${target.field}`,
+      current_value:currentValue, allowed_values:[...DAILY_REVIEW_REPAIR_ALLOWED_VALUES[target.field]] }
+  })
+}
+
+function repairTargetKey(target) {
+  return `${target?.scope || ''}:${target?.outcome_id || ''}:${target?.field || ''}`
+}
+
+function cloneDailyReviewObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('daily_v3_repair_initial_object_invalid')
+  }
+  try { return JSON.parse(JSON.stringify(value)) } catch { throw new Error('daily_v3_repair_initial_object_invalid') }
+}
+
+function applyDailyReviewRepairPatch(initialObject, repairedObject, validationError) {
+  const changes = Array.isArray(repairedObject?.changes) ? repairedObject.changes : null
+  if (!changes) throw new Error('daily_v3_repair_patch_required')
+  const specs = dailyReviewRepairTargetSpecs(initialObject, validationError)
+  if (!specs.length || changes.length !== specs.length) {
+    throw dailyReviewValidationError('daily_v3_repair_patch_coverage_invalid', {
+      targets:specs.map(({ scope, outcome_id, field }) => ({ scope, ...(outcome_id ? { outcome_id } : {}), field })),
+    })
+  }
+  const specByKey = new Map(specs.map(spec => [repairTargetKey(spec), spec]))
+  const seen = new Set()
+  const candidate = cloneDailyReviewObject(initialObject)
+  for (const change of changes) {
+    if (!change || typeof change !== 'object' || Array.isArray(change)) {
+      throw new Error('daily_v3_repair_patch_change_invalid')
+    }
+    const keys = Object.keys(change).sort()
+    const expectedKeys = change.scope === 'trade_assessment'
+      ? ['field', 'outcome_id', 'scope', 'value'] : ['field', 'scope', 'value']
+    if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+      throw new Error('daily_v3_repair_patch_change_invalid')
+    }
+    const target = change.scope === 'root'
+      ? { scope:'root', field:String(change.field || '') }
+      : { scope:String(change.scope || ''), outcome_id:Number(change.outcome_id), field:String(change.field || '') }
+    const key = repairTargetKey(target)
+    const spec = specByKey.get(key)
+    if (!spec || seen.has(key)) {
+      throw dailyReviewValidationError('daily_v3_repair_patch_target_invalid', { targets:specs })
+    }
+    if (!spec.allowed_values.includes(change.value)) {
+      throw dailyReviewValidationError('daily_v3_repair_patch_value_invalid', { targets:[target] })
+    }
+    seen.add(key)
+    if (target.scope === 'root') candidate.decision_quality = change.value
+    else {
+      const index = Number(spec.path.match(/^trade_assessments\[(\d+)\]/)?.[1])
+      if (!Number.isSafeInteger(index) || !candidate.trade_assessments?.[index]) {
+        throw new Error('daily_v3_repair_patch_target_invalid')
+      }
+      if (target.field === 'outcome_attribution.avoidability') {
+        candidate.trade_assessments[index].outcome_attribution = {
+          ...candidate.trade_assessments[index].outcome_attribution,
+          avoidability:change.value,
+        }
+      } else candidate.trade_assessments[index][target.field] = change.value
+    }
+  }
+  if (seen.size !== specByKey.size) {
+    throw dailyReviewValidationError('daily_v3_repair_patch_coverage_invalid', { targets:specs })
+  }
+  return candidate
+}
+
+function validateDailyReviewRepairOutput({ initialObject, repairedObject, repairPatch = null, validationError }) {
+  const { outcomeId, fields, targets } = dailyReviewRepairValidationContext(validationError)
+  const candidate = repairPatch || Array.isArray(repairedObject?.changes)
+    ? applyDailyReviewRepairPatch(initialObject, repairPatch || repairedObject, validationError)
+    : repairedObject
   // Structural/parse failures have no semantic outcome context. Preserve the
   // generic repair behavior for those errors; v3 semantic failures always
   // carry a stable outcome ID (unless the root field is reported) and enum
   // field paths from the validator.
-  if (!fields.length) return
-  const rootFields = fields.filter(field => DAILY_REVIEW_REPAIR_ROOT_ENUM_FIELDS.has(field))
-  const outcomeFields = fields.filter(field => !DAILY_REVIEW_REPAIR_ROOT_ENUM_FIELDS.has(field))
+  if (!fields.length && !targets.length) return
+  const effectiveTargets = targets.length ? targets : normalizeDailyReviewRepairTargets([
+    ...fields.filter(field => field === '$root.decision_quality').map(() => ({ scope:'root', field:'decision_quality' })),
+    ...fields.filter(field => field !== '$root.decision_quality'
+      && outcomeId != null).map(field => ({ scope:'trade_assessment', outcome_id:outcomeId, field })),
+  ])
   if (fields.some(field => !DAILY_REVIEW_REPAIR_ENUM_FIELDS.has(field)
     && !DAILY_REVIEW_REPAIR_ROOT_ENUM_FIELDS.has(field))) {
     throw dailyReviewValidationError('daily_v3_repair_validation_context_invalid', { outcomeId, fields })
   }
-  if (outcomeFields.length && outcomeId == null) {
+  if (effectiveTargets.some(target => target.scope === 'trade_assessment' && target.outcome_id == null)) {
     throw dailyReviewValidationError('daily_v3_repair_validation_context_invalid', { outcomeId, fields })
   }
-  const assessments = Array.isArray(initialObject?.trade_assessments) ? initialObject.trade_assessments : []
-  const matchingIndexes = assessments.reduce((indexes, item, index) => {
-    if (outcomeId != null && Number(item?.outcome_id) === outcomeId) indexes.push(index)
-    return indexes
-  }, [])
-  if (outcomeFields.length && matchingIndexes.length !== 1) {
-    throw dailyReviewValidationError('daily_v3_repair_validation_context_invalid', { outcomeId, fields })
-  }
-  const allowedPaths = new Set(rootFields.map(field => field === '$root.decision_quality' ? 'decision_quality' : field))
-  for (const field of outcomeFields) allowedPaths.add(`trade_assessments[${matchingIndexes[0]}].${field}`)
-  const differences = dailyReviewRepairDiffPaths(initialObject, repairedObject)
+  const specs = dailyReviewRepairTargetSpecs(initialObject, validationError)
+  const allowedPaths = new Set(specs.map(spec => spec.path))
+  const differences = dailyReviewRepairDiffPaths(initialObject, candidate)
   const unauthorized = differences.filter(path => !allowedPaths.has(path))
   if (unauthorized.length) {
     throw dailyReviewValidationError('daily_v3_repair_output_changed_unreported_field', {
-      outcomeId, fields:unauthorized.slice(0, 20),
+      outcomeId, fields:unauthorized.slice(0, 20), targets:effectiveTargets,
     })
   }
+  return candidate
 }
 
 export const __testDailyReviewChunkMessages = dailyReviewChunkMessages
 export const __testDailyReviewChunkRepairValidationContext = dailyReviewChunkRepairValidationContext
 export const __testValidateDailyReviewRepairOutput = validateDailyReviewRepairOutput
+export const __testDailyReviewRepairTargetSpecs = dailyReviewRepairTargetSpecs
+export const __testApplyDailyReviewRepairPatch = applyDailyReviewRepairPatch
+export const __testBuildDailyReviewRepairInput = buildDailyReviewRepairInput
 
 function validateDailyReviewChunkContent(input, outcomeIds, chanContext, options = {}) {
   const content = validateDailyReviewV3Content(input, outcomeIds, chanContext, options)
@@ -3971,6 +4165,56 @@ function validateDailyReviewChunkContent(input, outcomeIds, chanContext, options
     throw new Error('daily_review_chunk_optimization_scope_invalid')
   }
   return content
+}
+
+async function recordDailyReviewValidationFailure(job, error) {
+  const taskId = String(job?._modelTracker?.taskId || '').trim()
+  if (!taskId) return
+  const context = dailyReviewRepairValidationContext(error)
+  const rawCode = String(error?.code || error?.message || 'validation_failed').trim()
+  const code = /^[a-z0-9_.:-]+$/i.test(rawCode) ? rawCode.slice(0, 128) : 'daily_review_validation_failed'
+  const targets = context.targets || []
+  try {
+    await appendModelTaskEvent(taskId, 'validation_failed', {
+      error_code:code,
+      target_count:targets.length,
+      contains_root_target:targets.some(target => target.scope === 'root'),
+    })
+  } catch (eventError) {
+    console.warn(`[PeriodReview case=${job?.period_case_id || 'unknown'}] validation event:`, safeError(eventError))
+  }
+}
+
+function buildDailyReviewRepairInput(initialObject, validationError) {
+  const { targets } = dailyReviewRepairValidationContext(validationError)
+  const includesRootTarget = targets.some(target => target.scope === 'root')
+  const affectedOutcomeIds = new Set(targets
+    .filter(target => target.scope === 'trade_assessment')
+    .map(target => Number(target.outcome_id))
+    .filter(outcomeId => Number.isSafeInteger(outcomeId) && outcomeId > 0))
+  const currentOutcomeEnums = (Array.isArray(initialObject?.trade_assessments)
+    ? initialObject.trade_assessments : [])
+    .map(assessment => {
+      const outcomeId = Number(assessment?.outcome_id)
+      if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) return null
+      if (!includesRootTarget && !affectedOutcomeIds.has(outcomeId)) return null
+      return {
+        outcome_id:outcomeId,
+        decision_quality:assessment?.decision_quality ?? null,
+        market_alignment:assessment?.market_alignment ?? null,
+        strategy_alignment:assessment?.strategy_alignment ?? null,
+        risk_execution_status:assessment?.risk_execution_status ?? null,
+        'outcome_attribution.avoidability':assessment?.outcome_attribution?.avoidability ?? null,
+      }
+    })
+    .filter(Boolean)
+  return {
+    repair_targets:dailyReviewRepairTargetSpecs(initialObject, validationError).map(target => ({
+      scope:target.scope, ...(target.outcome_id ? { outcome_id:target.outcome_id } : {}), field:target.field,
+      current_value:target.current_value, allowed_values:target.allowed_values,
+    })),
+    current_outcome_enums:currentOutcomeEnums,
+  }
 }
 
 async function generateDailyReview(job, requestModel, dependencies = {}) {
@@ -4125,31 +4369,52 @@ async function generateDailyReview(job, requestModel, dependencies = {}) {
       onProviderQuiet:event => tracker.onProviderQuiet(event),
       onProgress: stage => setPeriodReviewJobStage(job, `daily_chunk_${chunk.chunk_index}_${stage}`),
       allowFollowupRequests:true,
-      repairContext:{ outputFormat:JSON.stringify(chunkShape),
+      repairContext:{ mode:'patch', outputFormat:JSON.stringify(chunkShape), patchOutputFormat:JSON.stringify({ changes:[{
+          scope:'target.scope', field:'target.field', value:'one of target.allowed_values',
+          outcome_id:'target.outcome_id (required only for trade_assessment targets)',
+        }] }),
         requiredCoverage:{ contract_version:DAILY_REVIEW_V3_CONTRACT, outcome_ids:chunkIds,
           chunk_index:chunk.chunk_index, chunk_count:chunkPlan.chunk_count },
         validationContext:({ validationError }) => dailyReviewChunkRepairValidationContext({
           chunkEvidence, chanAllowed, validationError,
         }),
-        repairInstructions:'本次仅允许依据 validation_context.review_context 中同一份冻结证据，重新判断 validation_context 中报告的 outcome_id 与 fields 对应的语义枚举。不得修改成交事实、价格、outcome coverage、任何未被报告的字段或分析范围；不得把 mixed、partly 或其他无证据状态硬编码为替代值；仍须通过服务器校验。',
-        validateRepairOutput:({ initialObject, repairedObject, validationError }) => validateDailyReviewRepairOutput({
-          initialObject, repairedObject, validationError,
+        repairInput:({ initialObject, validationError }) => buildDailyReviewRepairInput(initialObject, validationError),
+        applyRepairPatch:({ initialObject, repairedObject, validationError }) => applyDailyReviewRepairPatch(
+          initialObject, repairedObject, validationError),
+        repairMaxTokens:4096, repairReasoningEffort:'low',
+        repairInstructions:'修复完整 JSON 时必须保持原交易覆盖、成交事实、价格、证据引用和所有已经合法的分析内容，只修复校验错误指出的格式、字段、类型或缺失必填项；仍须通过服务器完整校验。',
+        patchRepairInstructions:'本次仅允许依据 validation_context.review_context 中同一份冻结证据，重新判断 repair_input.repair_targets 中每个目标的语义枚举。changes 是通用目标补丁数组：每一项必须复制一个目标的 scope、field 和 value；trade_assessment 目标还必须复制 outcome_id，root 目标不得包含 outcome_id。changes 必须精确覆盖全部目标，每个目标只能出现一次，并且 value 只能使用该目标的 allowed_values；不得修改成交事实、价格、outcome coverage、任何未被报告的字段或分析范围；不得把 mixed、partly 或其他无证据状态硬编码为替代值；仍须通过服务器校验。',
+        validateRepairOutput:({ initialObject, repairedObject, repairPatch, validationError }) => validateDailyReviewRepairOutput({
+          initialObject, repairedObject, repairPatch, validationError,
         }) },
-      validateObject: value => validateDailyReviewChunkContent(value, chunkIds, chanContext, {
+      validateObject: async value => {
+        try {
+          return validateDailyReviewChunkContent(value, chunkIds, chanContext, {
+            strategyText:strategyMemorySnapshot.strategy_text,
+            memoryText:strategyMemorySnapshot.library.content_text,
+            outcomeFacts:chunkEvidence.outcomeFacts,
+            evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
+            evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
+          })
+        } catch (error) {
+          await recordDailyReviewValidationFailure(job, error)
+          throw error
+        }
+      },
+    })
+    let normalized
+    try {
+      normalized = validateDailyReviewChunkContent(output, chunkIds, chanContext, {
         strategyText:strategyMemorySnapshot.strategy_text,
         memoryText:strategyMemorySnapshot.library.content_text,
         outcomeFacts:chunkEvidence.outcomeFacts,
         evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
         evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
-      }),
-    })
-    const normalized = validateDailyReviewChunkContent(output, chunkIds, chanContext, {
-      strategyText:strategyMemorySnapshot.strategy_text,
-      memoryText:strategyMemorySnapshot.library.content_text,
-      outcomeFacts:chunkEvidence.outcomeFacts,
-      evidenceRefsByOutcome:chunkEvidence.evidenceRefsByOutcome,
-      evidenceLimitationsByOutcome:chunkEvidence.evidenceLimitationsByOutcome,
-    })
+      })
+    } catch (error) {
+      await recordDailyReviewValidationFailure(job, error)
+      throw error
+    }
     const resultHash = await persistCheckpoint(tracker, { role:'chunk', planHash:chunkPlan.plan_hash,
       chunkIndex:chunk.chunk_index, sourceHash:chunk.source_hash, content:normalized })
     await tracker.resultReady({ resultHash, resultRef:`period_review_chunk:${job.period_case_id}:${chunk.chunk_index}` })

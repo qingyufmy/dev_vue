@@ -27,7 +27,8 @@ import { dailyReviewStatistics, groupDailyReviewOutcomes, groupMonthlyReviewCase
   periodReviewFrontendMetadata, periodReviewFrontendContractMismatch,
   buildDailyReviewChunkPlan, compactDailyReviewPeriodMarket,
   __testDailyReviewChunkMessages, __testDailyReviewChunkRepairValidationContext,
-  __testValidateDailyReviewRepairOutput,
+  __testValidateDailyReviewRepairOutput, __testDailyReviewRepairTargetSpecs, __testApplyDailyReviewRepairPatch,
+  __testBuildDailyReviewRepairInput,
   __testGenerateDailyReview,
   dailyReviewRecoveryRuntimeOptions, periodReviewModelInputBudget, selectWholePolicyUpgradeCaseIds,
   periodReviewPreProviderRetryDelayMs, periodReviewPreProviderRetryAt } from '../../server/routes/ai/period-review.js'
@@ -1255,8 +1256,11 @@ describe('daily review model boundary', () => {
       error = caught
     }
     expect(error?.code).toBe('daily_v3_insufficient_state_without_server_limitation')
-    expect(error?.validationContext).toEqual({ outcome_id:1, fields:['decision_quality', '$root.decision_quality'] })
-    expect(error?.validation_context).toEqual({ outcome_id:1, fields:['decision_quality', '$root.decision_quality'] })
+    expect(error?.validationContext).toEqual({ outcome_id:1, fields:['decision_quality', '$root.decision_quality'], targets:[
+      { scope:'trade_assessment', outcome_id:1, field:'decision_quality' },
+      { scope:'root', field:'decision_quality' },
+    ] })
+    expect(error?.validation_context).toEqual(error?.validationContext)
     expect(String(error)).not.toContain('原始逻辑可见')
     expect(JSON.stringify(error)).not.toContain('api_key')
   })
@@ -1281,7 +1285,114 @@ describe('daily review model boundary', () => {
       error = caught
     }
     expect(error?.code).toBe('daily_v3_insufficient_state_without_server_limitation')
-    expect(error?.validationContext).toEqual({ outcome_id:null, fields:['$root.decision_quality'] })
+    expect(error?.validationContext).toEqual({ outcome_id:null, fields:['$root.decision_quality'], targets:[
+      { scope:'root', field:'decision_quality' },
+    ] })
+  })
+
+  it('aggregates every forbidden insufficient-evidence target across outcomes and fields', () => {
+    const content = {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'聚合语义目标', decision_quality:'insufficient_evidence',
+      trade_assessments:[
+        { outcome_id:1, decision_quality:'insufficient_evidence', market_alignment:'insufficient_evidence', strategy_alignment:'aligned',
+          risk_execution_status:'insufficient_evidence', outcome_attribution:{ avoidability:'insufficient_evidence' } },
+        { outcome_id:2, decision_quality:'insufficient_evidence', market_alignment:'aligned', strategy_alignment:'insufficient_evidence',
+          risk_execution_status:'compliant', outcome_attribution:{ avoidability:'partly_avoidable' } },
+      ],
+    }
+    let error
+    try {
+      validateDailyReviewV3Content(content, [1, 2], {
+        chan_requirement:{ status:'disabled' }, chan_evidence_status:'not_applicable',
+      }, { evidenceLimitationsByOutcome:new Map([[1, []], [2, []]]) })
+    } catch (caught) { error = caught }
+    expect(error?.code).toBe('daily_v3_insufficient_state_without_server_limitation')
+    expect(error?.validationContext.targets).toEqual([
+      { scope:'trade_assessment', outcome_id:1, field:'decision_quality' },
+      { scope:'trade_assessment', outcome_id:1, field:'market_alignment' },
+      { scope:'trade_assessment', outcome_id:1, field:'risk_execution_status' },
+      { scope:'trade_assessment', outcome_id:1, field:'outcome_attribution.avoidability' },
+      { scope:'trade_assessment', outcome_id:2, field:'decision_quality' },
+      { scope:'trade_assessment', outcome_id:2, field:'strategy_alignment' },
+      { scope:'root', field:'decision_quality' },
+    ])
+    expect(JSON.stringify(error)).not.toContain('聚合语义目标')
+  })
+
+  it('applies only an exact, allowed repair patch for all reported targets', () => {
+    const initialObject = {
+      output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'保留总结', decision_quality:'insufficient_evidence',
+      trade_assessments:[
+        { outcome_id:1, decision_quality:'insufficient_evidence', market_alignment:'insufficient_evidence',
+          outcome_attribution:{ avoidability:'partly_avoidable' } },
+        { outcome_id:2, decision_quality:'mixed', strategy_alignment:'insufficient_evidence', outcome_attribution:{ avoidability:'avoidable' } },
+      ], risk_observations:[], next_day_actions:[], experience_rules:[], repeated_issues:[], strengths:[], confidence:.5,
+    }
+    const validationError = { validationContext:{ outcome_id:1, fields:['decision_quality', 'market_alignment'], targets:[
+      { scope:'root', field:'decision_quality' },
+      { scope:'trade_assessment', outcome_id:1, field:'decision_quality' },
+      { scope:'trade_assessment', outcome_id:1, field:'market_alignment' },
+      { scope:'trade_assessment', outcome_id:2, field:'strategy_alignment' },
+    ] } }
+    const specs = __testDailyReviewRepairTargetSpecs(initialObject, validationError)
+    expect(specs.map(item => ({ scope:item.scope, outcome_id:item.outcome_id, field:item.field, current_value:item.current_value,
+      allowed_values:item.allowed_values }))).toEqual([
+      { scope:'root', outcome_id:undefined, field:'decision_quality', current_value:'insufficient_evidence', allowed_values:['good', 'mixed', 'poor'] },
+      { scope:'trade_assessment', outcome_id:1, field:'decision_quality', current_value:'insufficient_evidence', allowed_values:['good', 'mixed', 'poor'] },
+      { scope:'trade_assessment', outcome_id:1, field:'market_alignment', current_value:'insufficient_evidence', allowed_values:['aligned', 'partly_aligned', 'conflict'] },
+      { scope:'trade_assessment', outcome_id:2, field:'strategy_alignment', current_value:'insufficient_evidence', allowed_values:['aligned', 'partly_aligned', 'conflict'] },
+    ])
+    const patch = { changes:[
+      { scope:'root', field:'decision_quality', value:'mixed' },
+      { scope:'trade_assessment', outcome_id:1, field:'decision_quality', value:'poor' },
+      { scope:'trade_assessment', outcome_id:1, field:'market_alignment', value:'conflict' },
+      { scope:'trade_assessment', outcome_id:2, field:'strategy_alignment', value:'aligned' },
+    ] }
+    const candidate = __testApplyDailyReviewRepairPatch(initialObject, patch, validationError)
+    expect(candidate.decision_quality).toBe('mixed')
+    expect(candidate.trade_assessments.map(item => [item.decision_quality, item.market_alignment, item.strategy_alignment])).toEqual([
+      ['poor', 'conflict', undefined], ['mixed', undefined, 'aligned'],
+    ])
+    expect(() => __testApplyDailyReviewRepairPatch(initialObject, {
+      changes:patch.changes.slice(0, 3),
+    }, validationError)).toThrow('daily_v3_repair_patch_coverage_invalid')
+    expect(() => __testApplyDailyReviewRepairPatch(initialObject, {
+      changes:[patch.changes[0], patch.changes[0], patch.changes[2], patch.changes[3]],
+    }, validationError)).toThrow('daily_v3_repair_patch_target_invalid')
+    expect(() => __testApplyDailyReviewRepairPatch(initialObject, {
+      changes:[...patch.changes.slice(0, 3), { scope:'trade_assessment', outcome_id:2, field:'strategy_alignment', value:'insufficient_evidence' }],
+    }, validationError)).toThrow('daily_v3_repair_patch_value_invalid')
+    expect(() => __testApplyDailyReviewRepairPatch(initialObject, {
+      changes:[...patch.changes.slice(0, 3), { scope:'trade_assessment', outcome_id:2, field:'period_summary', value:'越权' }],
+    }, validationError)).toThrow('daily_v3_repair_patch_target_invalid')
+  })
+
+  it('sends only affected enum snapshots and expands root repairs to every trade', () => {
+    const initialObject = {
+      trade_assessments:[
+        { outcome_id:1, decision_quality:'insufficient_evidence', market_alignment:'aligned', strategy_alignment:'conflict',
+          risk_execution_status:'compliant', outcome_attribution:{ avoidability:'partly_avoidable' }, original_signal_logic:'不要发送' },
+        { outcome_id:2, decision_quality:'mixed', market_alignment:'partly_aligned', strategy_alignment:'aligned',
+          risk_execution_status:'partly_compliant', outcome_attribution:{ avoidability:'normal_strategy_loss' }, original_signal_logic:'不要发送' },
+      ], period_summary:'不要发送', decision_quality:'insufficient_evidence', secret:'不要发送',
+    }
+    const tradeInput = __testBuildDailyReviewRepairInput(initialObject, { validationContext:{
+      outcome_id:1, fields:['decision_quality'], targets:[{ scope:'trade_assessment', outcome_id:1, field:'decision_quality' }],
+    } })
+    expect(tradeInput.current_outcome_enums).toEqual([{
+      outcome_id:1, decision_quality:'insufficient_evidence', market_alignment:'aligned', strategy_alignment:'conflict',
+      risk_execution_status:'compliant', 'outcome_attribution.avoidability':'partly_avoidable',
+    }])
+    expect(JSON.stringify(tradeInput)).not.toContain('不要发送')
+
+    const rootInput = __testBuildDailyReviewRepairInput(initialObject, { validationContext:{
+      outcome_id:null, fields:['$root.decision_quality'], targets:[{ scope:'root', field:'decision_quality' }],
+    } })
+    expect(rootInput.current_outcome_enums).toHaveLength(2)
+    expect(rootInput.current_outcome_enums.map(item => item.outcome_id)).toEqual([1, 2])
+    expect(rootInput.current_outcome_enums[1]['outcome_attribution.avoidability']).toBe('normal_strategy_loss')
+    expect(JSON.stringify(rootInput)).not.toContain('period_summary')
+    expect(JSON.stringify(rootInput)).not.toContain('secret')
   })
 
   it('sends an explicit per-outcome insufficient-evidence policy and omits unrelated Chan state', () => {
@@ -1362,8 +1473,8 @@ describe('daily review model boundary', () => {
         period_market:{ status:'complete', symbols:{} },
         evidenceLimitationsByOutcome:new Map([[1, []], [2, [{ scope:'holding_path', description:'仅二号限制', unavailable_capabilities:['mfe_mae'] }]]]),
       }, validationError:{ validationContext:{ outcome_id:null, fields:['$root.decision_quality'] } } })
-    expect(rootContext.review_context).not.toHaveProperty('pre_trade_frozen')
-    expect(rootContext.review_context).not.toHaveProperty('holding_path')
+    expect(rootContext.review_context.pre_trade_frozen.map(item => item.outcome_id)).toEqual([1, 2])
+    expect(rootContext.review_context.holding_path.map(item => item.outcome_id)).toEqual([1, 2])
     expect(rootContext.evidence_limitations_by_outcome).toEqual({
       '1':[], '2':[{ scope:'holding_path', description:'仅二号限制', unavailable_capabilities:['mfe_mae'] }],
     })
@@ -1371,8 +1482,8 @@ describe('daily review model boundary', () => {
       '1':{ allowed:false, server_limitations:[] },
       '2':{ allowed:true, server_limitations:[{ scope:'holding_path', description:'仅二号限制', unavailable_capabilities:['mfe_mae'] }] },
     })
-    expect(JSON.stringify(rootContext)).not.toContain('"id":"one"')
-    expect(JSON.stringify(rootContext)).not.toContain('"id":"two"')
+    expect(JSON.stringify(rootContext)).toContain('"id":"one"')
+    expect(JSON.stringify(rootContext)).toContain('"id":"two"')
   })
 
   it('wires the repair diff guard into the generated chunk request, not the merge request', async () => {
@@ -1413,6 +1524,16 @@ describe('daily review model boundary', () => {
     expect(args).toBeTruthy()
     expect(args.validateRepairOutput).toBeUndefined()
     expect(args.repairContext.validateRepairOutput).toEqual(expect.any(Function))
+    const repairOutputContract = JSON.parse(args.repairContext.patchOutputFormat)
+    expect(repairOutputContract).toEqual({ changes:[{
+      scope:'target.scope', field:'target.field', value:'one of target.allowed_values',
+      outcome_id:'target.outcome_id (required only for trade_assessment targets)',
+    }] })
+    expect(args.repairContext.outputFormat).toContain('trade_assessments')
+    expect(args.repairContext.patchOutputFormat).not.toContain('decision_quality')
+    expect(args.repairContext.patchOutputFormat).not.toContain('"outcome_id":1')
+    expect(args.repairContext.repairReasoningEffort).toBe('low')
+    expect(args.repairContext.repairMaxTokens).toBe(4096)
     const initialObject = {
       output_contract_version:DAILY_PERIOD_REVIEW_V3_CONTRACT, period_summary:'原始总结', decision_quality:'mixed',
       trade_assessments:[{ outcome_id:1, decision_quality:'insufficient_evidence', market_alignment:'aligned',
@@ -1813,7 +1934,7 @@ describe('period review frontend contract handshake', () => {
 
   it('publishes UI metadata separately from supported model output contracts', () => {
     expect(PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION).toBe('period-review-ui-v1')
-    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-evidence-retry1')
+    expect(PERIOD_REVIEW_FRONTEND_BUILD).toBe('period-review-semantic-repair1')
     expect(PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS).toEqual(expect.arrayContaining([
       'daily-period-review-v3', 'daily-period-review-v1', 'daily-period-review-v2',
       'period-review-v1', 'period-review-v2',
@@ -1822,18 +1943,18 @@ describe('period review frontend contract handshake', () => {
     expect(periodReviewFrontendMetadata()).toEqual({
       frontend_contract_version:'period-review-ui-v1',
       period_review_contracts:[...PERIOD_REVIEW_SUPPORTED_OUTPUT_CONTRACTS],
-      ai_frontend_build:'period-review-evidence-retry1',
+      ai_frontend_build:'period-review-semantic-repair1',
     })
   })
 
   it('fails closed for missing or stale UI build/contract headers', () => {
     expect(periodReviewFrontendContractMismatch({})).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-evidence-retry1',
+      'X-Aurum-AI-Frontend-Build':'period-review-semantic-repair1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
     })).toBe(false)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-evidence-retry1',
+      'X-Aurum-AI-Frontend-Build':'period-review-semantic-repair1',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
@@ -1845,7 +1966,7 @@ describe('period review frontend contract handshake', () => {
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v0',
     })).toBe(true)
     expect(periodReviewFrontendContractMismatch({
-      'X-Aurum-AI-Frontend-Build':'period-review-evidence-retry1',
+      'X-Aurum-AI-Frontend-Build':'period-review-semantic-repair1',
       'X-Aurum-Period-Review-Frontend-Contract':'period-review-ui-v1',
       'X-Aurum-Period-Review-Contracts':'daily-period-review-v2',
     })).toBe(false)

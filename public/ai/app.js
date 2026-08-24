@@ -226,7 +226,7 @@ const state = {
 // build separate from the shared cache key in index.html: the server can
 // compare these values without forcing a cache-key change for the other AI
 // entry points.
-const AI_FRONTEND_BUILD = "period-review-evidence-retry1";
+const AI_FRONTEND_BUILD = "period-review-semantic-repair1";
 const PERIOD_REVIEW_FRONTEND_CONTRACT_VERSION = "period-review-ui-v1";
 const PERIOD_REVIEW_DAILY_V3_CONTRACT = "daily-period-review-v3";
 const PERIOD_REVIEW_LEGACY_CONTRACTS = new Set([
@@ -8508,6 +8508,7 @@ function periodReviewFailureText(value) {
   if (/invalid_monthly_review_|invalid_monthly_daily_assessment|invalid_monthly_memory/i.test(text)) return "月复盘输出字段或取值不符合要求，系统已自动要求模型修正";
   if (/unknown_.*review_field/i.test(text)) return "模型输出包含多余字段，系统已更新兼容规则，请重新生成";
   if (/model.*unavailable|credential|api.?key/i.test(text)) return "复盘模型暂不可用，请检查模型配置";
+  if (/LLM repair HTTP 5\d\d/i.test(text)) return "主复盘结果已返回，但定向修复阶段的模型服务超时，本轮未保存不合格结果，请重新生成";
   if (/LLM HTTP 5\d\d/i.test(text)) return "模型服务暂时异常，系统稍后会自动重试";
   if (/LLM HTTP 4\d\d/i.test(text)) return "模型请求未被服务商接受，请检查模型配置后重试";
   const localized = text ? localizeReason(text) : "";
