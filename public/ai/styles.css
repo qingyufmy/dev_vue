@@ -4510,6 +4510,338 @@ textarea:focus {
   font-weight: 500;
 }
 
+/* 管理员参数：以运行控制、基础配置、规则与发布为单一编辑流程。 */
+.position-guard-admin-panel-inner {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.position-guard-admin-head {
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.position-guard-admin-head > div:first-child {
+  min-width: 0;
+}
+
+.position-guard-admin-head h3 {
+  margin: 0 0 var(--space-1);
+  font-size: 16px;
+}
+
+.position-guard-admin-head p {
+  max-width: 70ch;
+}
+
+.position-guard-admin-meta {
+  flex: 0 0 auto;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.position-guard-admin-meta > div {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.position-guard-admin-meta > div > span {
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+}
+
+.position-guard-admin-meta small {
+  flex-basis: auto;
+  font-size: 12px;
+  text-align: right;
+}
+
+.position-guard-admin-panel-inner .position-guard-admin-error {
+  padding: var(--space-2) var(--space-3);
+  font-size: 12px;
+}
+
+.position-guard-admin-panel-inner .position-guard-field {
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+.position-guard-admin-panel-inner .position-guard-field input,
+.position-guard-admin-panel-inner .position-guard-field select,
+.position-guard-admin-panel-inner .position-guard-field textarea,
+.position-guard-admin-panel-inner .position-guard-control-reason {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+}
+
+.position-guard-admin-panel-inner .position-guard-check,
+.position-guard-admin-panel-inner .position-guard-switch {
+  gap: var(--space-2);
+}
+
+.position-guard-platform-control-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, auto);
+  gap: var(--space-4);
+  align-items: center;
+  padding: 0 0 var(--space-6);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.position-guard-section-head {
+  min-width: 0;
+}
+
+.position-guard-section-head h4 {
+  margin: var(--space-1) 0 var(--space-1);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.position-guard-section-head p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.position-guard-platform-control {
+  display: grid;
+  grid-template-columns: auto minmax(200px, 280px) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: 0;
+  border-top: 0;
+}
+
+.position-guard-platform-control .position-guard-switch {
+  min-height: 44px;
+}
+
+.position-guard-platform-control .position-guard-control-reason,
+.position-guard-platform-control .btn {
+  min-height: 44px;
+}
+
+.position-guard-control-reason-field {
+  min-width: 0;
+}
+
+.position-guard-basic-config {
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 var(--space-6);
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.position-guard-basic-config legend {
+  margin-bottom: var(--space-3);
+  padding: 0;
+  color: var(--gold-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.position-guard-basic-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.position-guard-basic-fields .position-guard-field {
+  gap: var(--space-2);
+}
+
+.position-guard-admin-form {
+  gap: var(--space-6);
+}
+
+.position-guard-parameter-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.position-guard-parameter-group {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.position-guard-parameter-group legend {
+  margin-bottom: var(--space-3);
+  padding: 0;
+  font-size: 12px;
+}
+
+.position-guard-rule-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.position-guard-rule-block {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input-softer);
+}
+
+.position-guard-rule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.position-guard-rule-head .position-guard-check {
+  min-height: 44px;
+  flex: 1 1 auto;
+}
+
+.position-guard-rule-head .position-guard-check input {
+  width: 18px;
+  height: 18px;
+}
+
+.position-guard-rule-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.position-guard-rule-fields .position-guard-field {
+  gap: var(--space-2);
+}
+
+.position-guard-rule-fields .position-guard-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 44px;
+}
+
+.position-guard-rule-fields .position-guard-field input,
+.position-guard-rule-fields .position-guard-field select,
+.position-guard-basic-fields .position-guard-field input,
+.position-guard-basic-fields .position-guard-field select,
+.position-guard-admin-save-row .position-guard-field select,
+.position-guard-admin-save-row .position-guard-field textarea {
+  min-height: 44px;
+}
+
+.position-guard-check .position-guard-check-label {
+  overflow: visible;
+  white-space: normal;
+}
+
+.position-guard-break-even-note {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.position-guard-admin-save-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 200px) auto;
+  gap: var(--space-4);
+  align-items: end;
+}
+
+.position-guard-admin-save-row .position-guard-reason-field {
+  min-width: 0;
+}
+
+.position-guard-admin-save-row .btn {
+  min-width: 128px;
+  min-height: 44px;
+}
+
+.position-guard-admin-save-row .position-guard-field {
+  gap: var(--space-2);
+}
+
+.position-guard-admin-save-row .position-guard-field textarea {
+  min-height: 88px;
+}
+
+.position-guard-release-section {
+  display: grid;
+  gap: var(--space-4);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 1180px) {
+  .position-guard-platform-control-section {
+    grid-template-columns: 1fr;
+  }
+
+  .position-guard-platform-control {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .position-guard-parameter-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .position-guard-admin-panel-inner {
+    gap: var(--space-4);
+  }
+
+  .position-guard-admin-head,
+  .position-guard-admin-meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .position-guard-admin-meta small {
+    text-align: left;
+  }
+
+  .position-guard-platform-control-section,
+  .position-guard-basic-config {
+    padding: 0 0 var(--space-4);
+  }
+
+  .position-guard-parameter-group {
+    padding: 0;
+  }
+
+  .position-guard-platform-control,
+  .position-guard-basic-fields,
+  .position-guard-rule-fields,
+  .position-guard-admin-save-row {
+    grid-template-columns: 1fr;
+  }
+
+  .position-guard-platform-control .position-guard-switch {
+    justify-content: space-between;
+  }
+
+  .position-guard-platform-control .btn,
+  .position-guard-admin-save-row .btn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .position-guard-switch-control,
+  .position-guard-switch-control i { transition: none; }
+}
+
 .history-protection-value {
   display: inline-flex;
   align-items: center;

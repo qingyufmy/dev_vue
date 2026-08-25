@@ -17245,33 +17245,33 @@ const POSITION_GUARD_DEFAULT_CONFIG = Object.freeze({
 
 const POSITION_GUARD_PARAMETER_GROUPS = [
   {
-    key:"pivot", label:"Pivot", fields:[
-      { path:"pivot_method", label:"计算方式", type:"select", options:["fibonacci", "standard"], optionLabels:{ fibonacci:"Fibonacci", standard:"Standard" } },
+    key:"pivot", label:"枢轴点计算", fields:[
+      { path:"pivot_method", label:"计算方式", type:"select", options:["fibonacci", "standard"], optionLabels:{ fibonacci:"斐波那契法", standard:"标准枢轴点法" } },
     ],
   },
   {
     key:"stop", label:"止损规则", fields:[
       { path:"break_stop.enabled", label:"突破止损", type:"checkbox" },
-      { path:"break_stop.distance_price", label:"突破距离", type:"number", min:0.0001, step:0.01 },
-      { path:"break_stop.open_near_price", label:"开仓贴近距离", type:"number", min:0.0001, step:0.01 },
+      { path:"break_stop.distance_price", label:"突破距离（价格）", type:"number", min:0.0001, step:0.01 },
+      { path:"break_stop.open_near_price", label:"开仓贴近距离（价格）", type:"number", min:0.0001, step:0.01 },
       { path:"pivot_cross_stop.enabled", label:"P点穿越止损", type:"checkbox" },
-      { path:"pivot_cross_stop.distance_price", label:"P点穿越距离", type:"number", min:0.0001, step:0.01 },
-      { path:"pivot_cross_stop.min_duration_seconds", label:"越线持续秒数", type:"number", min:0, max:60, step:1 },
+      { path:"pivot_cross_stop.distance_price", label:"P点穿越距离（价格）", type:"number", min:0.0001, step:0.01 },
+      { path:"pivot_cross_stop.min_duration_seconds", label:"越线持续时间（秒）", type:"number", min:0, max:60, step:1 },
       { path:"retrace_stop.enabled", label:"回踩止损", type:"checkbox" },
-      { path:"retrace_stop.distance_price", label:"回踩破位距离", type:"number", min:0.0001, step:0.01 },
+      { path:"retrace_stop.distance_price", label:"回踩破位距离（价格）", type:"number", min:0.0001, step:0.01 },
     ],
   },
   {
     key:"take-profit", label:"止盈规则", fields:[
       { path:"pivot_take_profit.enabled", label:"P点止盈", type:"checkbox" },
-      { path:"pivot_take_profit.tolerance_price", label:"P点容差", type:"number", min:0.0001, step:0.01 },
-      { path:"pivot_take_profit.close_percent", label:"P点平仓比例", type:"number", min:1, max:100, step:1, closePercent:true },
+      { path:"pivot_take_profit.tolerance_price", label:"P点容差（价格）", type:"number", min:0.0001, step:0.01 },
+      { path:"pivot_take_profit.close_percent", label:"P点平仓比例（%）", type:"number", min:1, max:100, step:1, closePercent:true },
       { path:"pivot_take_profit.move_break_even", label:"P点后移保本", type:"checkbox", breakEven:"pivot_take_profit" },
       { path:"first_target_take_profit.enabled", label:"第一目标位止盈", type:"checkbox" },
-      { path:"first_target_take_profit.tolerance_price", label:"第一目标位容差", type:"number", min:0.0001, step:0.01 },
-      { path:"first_target_take_profit.close_percent", label:"第一目标位平仓比例", type:"number", min:1, max:100, step:1, closePercent:true },
+      { path:"first_target_take_profit.tolerance_price", label:"第一目标位容差（价格）", type:"number", min:0.0001, step:0.01 },
+      { path:"first_target_take_profit.close_percent", label:"第一目标位平仓比例（%）", type:"number", min:1, max:100, step:1, closePercent:true },
       { path:"first_target_take_profit.move_break_even", label:"第一目标位后移保本", type:"checkbox", breakEven:"first_target_take_profit" },
-      { path:"first_target_take_profit.break_even_offset_price", label:"保本偏移", type:"number", min:0.0001, step:0.01 },
+      { path:"first_target_take_profit.break_even_offset_price", label:"保本偏移（价格）", type:"number", min:0.0001, step:0.01 },
     ],
   },
 ];
@@ -17439,7 +17439,16 @@ function positionGuardProfilesList(data = {}) {
 
 function positionGuardFormatVersion(profile = {}) {
   const version = Number(profile.current_version || profile.version_no || 0);
-  return version > 0 ? `v${version}` : "尚未创建版本";
+  return version > 0 ? `第 ${version} 版` : "尚未创建版本";
+}
+
+function positionGuardStatusLabel(status) {
+  return ({ active:"已启用", inactive:"已停用" })[String(status || "").toLowerCase()] || "状态未知";
+}
+
+function positionGuardSymbolLabel(symbol) {
+  const value = String(symbol || "").trim().toUpperCase();
+  return value || "未指定品种";
 }
 
 function positionGuardFormatModified(profile = {}) {
@@ -17458,13 +17467,36 @@ function positionGuardFieldMarkup(field, config) {
   if (field.type === "checkbox") {
     const closePercent = field.breakEven ? Number(positionGuardConfigValue(config, `${field.breakEven}.close_percent`)) : null;
     const disabled = field.breakEven && closePercent === 100;
-    return `<label class="position-guard-check position-guard-field${disabled ? " is-disabled" : ""}" data-position-guard-break-even="${escapeHtml(field.breakEven || "")}"><input id="${id}" type="checkbox" data-position-guard-field="${escapeHtml(field.path)}" ${value === true || Number(value) === 1 ? "checked" : ""} ${disabled ? "disabled" : ""}><span>${escapeHtml(field.label)}</span></label>`;
+    const note = disabled && field.breakEven ? `<small class="position-guard-break-even-note" data-position-guard-break-even-note="${escapeHtml(field.breakEven)}">全部平仓时无需移保本</small>` : field.breakEven ? `<small class="position-guard-break-even-note" data-position-guard-break-even-note="${escapeHtml(field.breakEven)}" hidden>全部平仓时无需移保本</small>` : "";
+    return `<label class="position-guard-check position-guard-field${disabled ? " is-disabled" : ""}" data-position-guard-break-even="${escapeHtml(field.breakEven || "")}"><input id="${id}" type="checkbox" data-position-guard-field="${escapeHtml(field.path)}" ${value === true || Number(value) === 1 ? "checked" : ""} ${disabled ? "disabled" : ""}><span class="position-guard-check-label">${escapeHtml(field.label)}</span>${note}</label>`;
   }
   const min = field.min == null ? "" : ` min="${field.min}"`;
   const max = field.max == null ? "" : ` max="${field.max}"`;
   const step = field.step == null ? "" : ` step="${field.step}"`;
   const closeData = field.closePercent ? ` data-position-guard-close-percent="${escapeHtml(field.path.replace(/\.close_percent$/, ""))}"` : "";
   return `<label class="position-guard-field${field.closePercent ? " position-guard-close-percent" : ""}"><span>${escapeHtml(field.label)}</span><input id="${id}" type="number" inputmode="decimal" data-position-guard-field="${escapeHtml(field.path)}" value="${escapedValue}"${min}${max}${step}${closeData}></label>`;
+}
+
+function positionGuardRuleMarkup(rule, config) {
+  return `<section class="position-guard-rule-block"><header class="position-guard-rule-head">${positionGuardFieldMarkup(rule.toggle, config)}</header><div class="position-guard-rule-fields">${rule.fields.map(field => positionGuardFieldMarkup(field, config)).join("")}</div></section>`;
+}
+
+function positionGuardRuleBlocks(group) {
+  const rules = [];
+  let current = null;
+  for (const field of group.fields) {
+    if (field.type === "checkbox" && field.path.endsWith(".enabled")) {
+      current = { toggle:field, fields:[] };
+      rules.push(current);
+    } else if (current) {
+      current.fields.push(field);
+    }
+  }
+  return rules;
+}
+
+function positionGuardRuleGroupMarkup(group, config) {
+  return `<fieldset class="position-guard-parameter-group position-guard-rule-group"><legend>${escapeHtml(group.label)}</legend><div class="position-guard-rule-list">${positionGuardRuleBlocks(group).map(rule => positionGuardRuleMarkup(rule, config)).join("")}</div></fieldset>`;
 }
 
 function positionGuardConfigDiff(current, next) {
@@ -17545,7 +17577,33 @@ function renderPositionGuardAdminPanel() {
   const control = state.positionGuardControl || {};
   const controlEnabled = control.enabled === true || Number(control.enabled) === 1;
   const errorNotice = state.positionGuardError ? `<p class="position-guard-admin-error" role="alert">参数管理读取失败：${escapeHtml(state.positionGuardError)}。请稍后刷新。</p>` : "";
-  host.innerHTML = `<section class="position-guard-admin-panel-inner" aria-labelledby="positionGuardAdminTitle"><header class="position-guard-admin-head"><div><span class="section-kicker">管理员参数管理</span><h3 id="positionGuardAdminTitle">PivotGuard 参数</h3><p>参数按标准品种版本化维护；保存新版本后只影响之后新纳入监控的持仓。</p></div><div class="position-guard-admin-meta"><span>${escapeHtml(positionGuardFormatVersion(current))}</span><span>${escapeHtml(current.status || "inactive")}</span><small>最后修改：${escapeHtml(positionGuardFormatModified(current))}</small></div></header>${errorNotice}<div class="position-guard-admin-toolbar"><label class="position-guard-field"><span>标准品种</span><select id="positionGuardStandardSymbol">${symbols.map(symbol => `<option value="${escapeHtml(symbol)}" ${symbol === current.standard_symbol ? "selected" : ""}>${escapeHtml(symbol)}</option>`).join("")}</select></label><span class="position-guard-admin-note">当前版本：${escapeHtml(positionGuardFormatVersion(current))} · 状态：${escapeHtml(current.status || "inactive")}</span></div><form id="positionGuardAdminForm" class="position-guard-admin-form"><div class="position-guard-parameter-grid">${POSITION_GUARD_PARAMETER_GROUPS.map(group => `<fieldset class="position-guard-parameter-group"><legend>${escapeHtml(group.label)}</legend><div class="position-guard-fields">${group.fields.map(field => positionGuardFieldMarkup(field, config)).join("")}</div></fieldset>`).join("")}</div><div class="position-guard-admin-save-row"><label class="position-guard-field position-guard-reason-field"><span>保存原因（必填）</span><textarea id="positionGuardAdminReason" rows="2" maxlength="500" placeholder="说明本次参数调整原因"></textarea></label><label class="position-guard-field"><span>版本状态</span><select id="positionGuardAdminStatus"><option value="active" ${current.status === "active" ? "selected" : ""}>启用</option><option value="inactive" ${current.status === "inactive" ? "selected" : ""}>停用</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存新版本</button></div></form><form id="positionGuardAdminControlForm" class="position-guard-platform-control"><div><strong>平台总闸</strong><small>关闭后停止产生新的盯盘动作，已发送命令仍会继续对账。</small></div><label class="position-guard-switch"><span>${controlEnabled ? "已开启" : "已关闭"}</span><input id="positionGuardPlatformEnabled" type="checkbox" role="switch" ${controlEnabled ? "checked" : ""}><span class="position-guard-switch-control" aria-hidden="true"><i></i></span></label><input id="positionGuardControlReason" class="position-guard-control-reason" maxlength="500" placeholder="总闸变更原因（必填）"><button class="btn btn-secondary btn-sm" type="submit">保存总闸</button></form></section>`;
+  const pivotGroup = POSITION_GUARD_PARAMETER_GROUPS.find(group => group.key === "pivot");
+  const ruleGroups = POSITION_GUARD_PARAMETER_GROUPS.filter(group => group.key !== "pivot");
+  const symbolOptions = symbols.map(symbol => `<option value="${escapeHtml(symbol)}" ${symbol === current.standard_symbol ? "selected" : ""}>${escapeHtml(positionGuardSymbolLabel(symbol))}</option>`).join("");
+  host.innerHTML = `
+    <section class="position-guard-admin-panel-inner" aria-labelledby="positionGuardAdminTitle">
+      <header class="position-guard-admin-head">
+        <div><h3 id="positionGuardAdminTitle">自动盯盘参数</h3><p>参数按标准品种版本化维护；保存新版本后只影响之后新纳入监控的持仓。</p></div>
+        <div class="position-guard-admin-meta"><div><span>${escapeHtml(positionGuardFormatVersion(current))}</span><span>${escapeHtml(positionGuardStatusLabel(current.status))}</span></div><small>最后修改：${escapeHtml(positionGuardFormatModified(current))}</small></div>
+      </header>
+      ${errorNotice}
+      <section class="position-guard-platform-control-section" aria-labelledby="positionGuardPlatformControlTitle">
+        <div class="position-guard-section-head"><h4 id="positionGuardPlatformControlTitle">平台总闸</h4><p>关闭后停止产生新的盯盘动作，已发送命令仍会继续对账。</p></div>
+        <form id="positionGuardAdminControlForm" class="position-guard-platform-control">
+          <label class="position-guard-switch"><span>${controlEnabled ? "已开启" : "已关闭"}</span><input id="positionGuardPlatformEnabled" type="checkbox" role="switch" ${controlEnabled ? "checked" : ""}><span class="position-guard-switch-control" aria-hidden="true"><i></i></span></label>
+          <label class="position-guard-field position-guard-control-reason-field"><span>变更原因（必填）</span><input id="positionGuardControlReason" class="position-guard-control-reason" maxlength="500" placeholder="说明本次总闸变更原因"></label>
+          <button class="btn btn-secondary btn-sm" type="submit">保存总闸</button>
+        </form>
+      </section>
+      <form id="positionGuardAdminForm" class="position-guard-admin-form">
+        <fieldset class="position-guard-basic-config"><legend>基础配置</legend><div class="position-guard-basic-fields"><label class="position-guard-field"><span>标准品种</span><select id="positionGuardStandardSymbol">${symbolOptions}</select></label>${pivotGroup?.fields?.map(field => positionGuardFieldMarkup(field, config)).join("") || ""}</div></fieldset>
+        <div class="position-guard-parameter-grid">${ruleGroups.map(group => positionGuardRuleGroupMarkup(group, config)).join("")}</div>
+        <section class="position-guard-release-section" aria-labelledby="positionGuardReleaseTitle">
+          <div class="position-guard-section-head"><h4 id="positionGuardReleaseTitle">保存参数版本</h4><p>填写调整原因并选择状态，保存后将创建一个不可变的新版本。</p></div>
+          <div class="position-guard-admin-save-row"><label class="position-guard-field position-guard-reason-field"><span>保存原因（必填）</span><textarea id="positionGuardAdminReason" rows="2" maxlength="500" placeholder="说明本次参数调整原因"></textarea></label><label class="position-guard-field"><span>版本状态</span><select id="positionGuardAdminStatus"><option value="active" ${current.status === "active" ? "selected" : ""}>启用</option><option value="inactive" ${current.status === "inactive" ? "selected" : ""}>停用</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存新版本</button></div>
+        </section>
+      </form>
+    </section>`;
   syncPositionGuardAdminConditionalFields();
   $("positionGuardStandardSymbol")?.addEventListener("change", event => loadPositionGuardAdminProfile(event.target.value).catch(error => toast(`参数读取失败：${error.message}`, "error")));
   $("positionGuardAdminForm")?.addEventListener("submit", event => savePositionGuardAdminProfile(event));
@@ -17565,6 +17623,8 @@ function syncPositionGuardAdminConditionalFields() {
       breakEven.disabled = disabled;
       if (disabled) breakEven.checked = false;
       breakEven.closest(".position-guard-field")?.classList.toggle("is-disabled", disabled);
+      const note = form.querySelector(`[data-position-guard-break-even-note="${CSS.escape(scope)}"]`);
+      if (note) note.hidden = !disabled;
     }
   });
 }
@@ -17580,10 +17640,10 @@ async function savePositionGuardAdminProfile(event) {
     const next = validatePositionGuardConfig(collectPositionGuardConfig(form, current.config));
     const diff = positionGuardConfigDiff(current.config, next);
     const nextStatus = $("positionGuardAdminStatus")?.value || current.status || "active";
-    if (nextStatus !== current.status) diff.push(["版本状态", `${current.status || "inactive"} → ${nextStatus}`]);
+    if (nextStatus !== current.status) diff.push(["版本状态", `${positionGuardStatusLabel(current.status)} → ${positionGuardStatusLabel(nextStatus)}`]);
     if (!diff.length) { toast("参数和状态都没有变化，无需创建新版本", "info"); return; }
     const confirmed = await showConfirm("确认创建 PivotGuard 新版本？", "保存后将创建不可变的新版本，只影响之后新纳入监控的持仓；已在监控中的持仓继续使用原版本。", {
-      confirmText:"确认保存新版本", cancelText:"返回调整", detailRows:[["标准品种", current.standard_symbol], ...diff, ["保存原因", reason]],
+      confirmText:"确认保存新版本", cancelText:"返回调整", detailRows:[["标准品种", positionGuardSymbolLabel(current.standard_symbol)], ...diff, ["保存原因", reason]],
     });
     if (!confirmed) return;
     if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }

@@ -73,6 +73,45 @@ describe('PivotGuard position management frontend contract', () => {
     expect(app).toContain('data-position-guard-break-even')
   })
 
+  it('keeps administrator-facing labels in Chinese while preserving API values', () => {
+    expect(html).toContain('position-guard-admin-layout3')
+    expect(app).toContain('positionGuardStatusLabel')
+    expect(app).toContain('return version > 0 ? `第 ${version} 版` : "尚未创建版本"')
+    expect(app).toContain('fibonacci:"斐波那契法"')
+    expect(app).toContain('standard:"标准枢轴点法"')
+    expect(app).not.toContain('optionLabels:{ fibonacci:"Fibonacci"')
+    expect(app).not.toContain('optionLabels:{ fibonacci:"Fibonacci", standard:"Standard" }')
+    expect(app).toContain('function positionGuardSymbolLabel(symbol)')
+    expect(app).toContain('return value || "未指定品种"')
+    expect(app).toContain('positionGuardSymbolLabel(symbol)')
+    expect(app).not.toMatch(/>(?:Fibonacci|Standard|active|inactive)</)
+    expect(app).toContain('<h3 id="positionGuardAdminTitle">自动盯盘参数</h3>')
+    expect(app).toContain('<span>${escapeHtml(positionGuardStatusLabel(current.status))}</span>')
+  })
+
+  it('renders the admin form as a control, basics, rules, and release flow', () => {
+    expect(app).toContain('平台总闸')
+    expect(app).toContain('position-guard-platform-control-section')
+    expect(app).toContain('position-guard-basic-config')
+    expect(app).toContain('positionGuardRuleGroupMarkup(group, config)')
+    expect(app).toContain('positionGuardRuleBlocks(group)')
+    expect(app).toContain('position-guard-rule-fields')
+    expect(app).toContain('全部平仓时无需移保本')
+    expect(app).toContain('positionGuardStatusLabel(nextStatus)')
+    expect(app).toContain('position-guard-release-section')
+    expect(app).toContain('保存参数版本')
+  })
+
+  it('keeps the parameter form usable at desktop and mobile widths', () => {
+    expect(css).toContain('.position-guard-parameter-grid {')
+    expect(css).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));')
+    expect(css).toContain('.position-guard-rule-fields {')
+    expect(css).toContain('min-height: 44px;')
+    expect(css).toContain('@media (max-width: 1180px)')
+    expect(css).toContain('@media (max-width: 760px)')
+    expect(css).toContain('.position-guard-switch input:focus-visible')
+  })
+
   it('keeps observer mode read-only and refreshes state on lifecycle events', () => {
     expect(app).toContain('if (isObserverMode()) { toast(observerMessage(), "warning"); return; }')
     expect(app).toContain('renderPositionGuardBadge(state.positionGuardSettings)')
