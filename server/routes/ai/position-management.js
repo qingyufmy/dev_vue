@@ -2166,6 +2166,12 @@ export async function savePositionManagementSettings(userId, input = {}) {
   return getPositionManagementSettings(userId)
 }
 
+function redactPositionGuardTaskForUser(task, admin) {
+  if (admin || String(task?.decision_source || '').toLowerCase() !== 'pivot_guard') return task
+  const { deterministic_evidence_json: _hiddenDeterministicEvidence, ...safeTask } = task
+  return safeTask
+}
+
 export async function listPositionManagementTasks({ userId = null, admin = false, status = null, page = 1, pageSize = 20 } = {}) {
   const safePage = Math.max(1, Number(page) || 1)
   const safeSize = Math.max(1, Math.min(Number(pageSize) || 20, 100))
@@ -2186,7 +2192,8 @@ export async function listPositionManagementTasks({ userId = null, admin = false
     LEFT JOIN users ON users.id = tasks.user_id
     LEFT JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
     ${clause} ORDER BY tasks.id DESC LIMIT ? OFFSET ?`, [...params, safeSize, (normalizedPage - 1) * safeSize])
-  return { tasks:rows, pagination:{ page:normalizedPage, page_size:safeSize, total, pages } }
+  return { tasks:rows.map(row => redactPositionGuardTaskForUser(row, admin)),
+    pagination:{ page:normalizedPage, page_size:safeSize, total, pages } }
 }
 
 export async function getPositionManagementTask(taskId, { userId = null, admin = false } = {}) {
@@ -2214,7 +2221,7 @@ export async function getPositionManagementTask(taskId, { userId = null, admin =
     evaluationIds.length ? queryAll(`SELECT * FROM ai_position_management_evaluations
       WHERE id IN (${evaluationIds.map(() => '?').join(',')}) ORDER BY id`, evaluationIds) : [],
   ])
-  return { task, events, commands, evaluations }
+  return { task:redactPositionGuardTaskForUser(task, admin), events, commands, evaluations }
 }
 
 function parseManagementJson(value, fallback = {}) {

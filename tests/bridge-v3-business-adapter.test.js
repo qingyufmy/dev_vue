@@ -1014,6 +1014,39 @@ describe('Bridge v3 business compatibility adapter', () => {
     }), { timeoutMs:5000 })
   })
 
+  it('preserves a guarded partial-close volume while fencing against the full live position', async () => {
+    const { adapter, gateway } = setup({ positionRows:[{
+      ticket:10, symbol:'XAUUSD', type:0, volume:0.2, magic:234000,
+    }] })
+    const expectedState = {
+      broker_server_key:'BROKER-DEMO', login_account:'12345678', ticket:'10',
+      symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.2,
+    }
+
+    await expect(adapter.execute(42, 'close_system_position', {
+      ticket:'10', volume:0.1, operation_id:'partial-close-op-1', expected_state:expectedState,
+    }, { expectedGeneration:11 })).resolves.toMatchObject({ status:'success' })
+
+    expect(gateway.sendCommand).toHaveBeenCalledWith(42, expect.objectContaining({
+      action:'close_position',
+      params:expect.objectContaining({ ticket:'10', volume:0.1, expected_state:expectedState }),
+    }), { timeoutMs:5000 })
+  })
+
+  it('rejects an oversized guarded partial-close volume', async () => {
+    const { adapter, gateway } = setup({ positionRows:[{
+      ticket:10, symbol:'XAUUSD', type:0, volume:0.2, magic:234000,
+    }] })
+    const expectedState = {
+      ticket:'10', symbol:'XAUUSD', direction:'buy', magic:234000, volume:0.2,
+    }
+
+    await expect(adapter.execute(42, 'close_system_position', {
+      ticket:'10', volume:0.3, expected_state:expectedState,
+    })).resolves.toMatchObject({ status:'rejected', error:'position_close_volume_invalid' })
+    expect(gateway.sendCommand).not.toHaveBeenCalled()
+  })
+
   it('fails closed on changed system identity and treats an absent target as success', async () => {
     const { adapter, gateway } = setup({ orderRows:[{
       ticket:20, symbol:'XAUUSD', side:'buy', type:2, volume_current:0.1, magic:7,

@@ -68,6 +68,12 @@ const state = {
   positionManagementFilters: { status: "", page: 1, pageSize: 10, total: 0 },
   selectedPositionManagementId: null,
   positionManagementRealtimeTimer: null,
+  positionGuardSettings: null,
+  positionGuardProfiles: [],
+  positionGuardProfile: null,
+  positionGuardControl: null,
+  positionGuardLoading: false,
+  positionGuardError: "",
   signalManagementRealtimeTimer: null,
   positions: [],
   pendingOrders: [],
@@ -2912,6 +2918,7 @@ async function handleAccountSwitched(msg = {}) {
     const strategy = selectableSubscriptionStrategies().find(item => Number(item.id) === strategyId);
     if (strategy) hydrateSubscriptionEditor(strategy, subscriptionForStrategyAccount(strategy.id, currentAccount.id));
   }
+  await refreshPositionGuardState({ quiet:true, includeAdmin:true, forceAdmin:true });
   // Heavy account data (history, chart, pending orders and risk details) stays
   // demand-driven: refresh only the page the user is currently viewing.
   await refreshTabData(activeTabId()).catch(() => {});
@@ -3580,6 +3587,7 @@ async function handleBridgeReconnected(msg = {}) {
   await Promise.allSettled([
     loadStatus(), loadAccount(), loadPositions(), loadPendingOrders(), refreshQuote(),
   ]);
+  await refreshPositionGuardState({ quiet:true, includeAdmin:true });
 }
 
 async function handleAccountTransferred(msg = {}) {
@@ -3589,6 +3597,7 @@ async function handleAccountTransferred(msg = {}) {
   state.autoEnabled = false;
   toast(`此 ${bridgePlatformLabel(msg.platform || state.bridgePlatform)} 账户已由另一个平台账号重新连接，当前账号的自动分析和交易发送已关闭`, "warning");
   await Promise.allSettled([loadStatus(), loadStrategyCatalog(), refreshTabData(activeTabId())]);
+  await refreshPositionGuardState({ quiet:true, includeAdmin:true, forceAdmin:true });
 }
 
 function signalManagementTaskAffects(signal, task = {}) {
@@ -3840,6 +3849,9 @@ function connectBridgeStatusWs(onReady) {
             toast(`周末风险控制异常：${reason}`, 'error');
           }
         }
+      } else if (msg.type === 'position_guard_settings_updated' || msg.type === 'position_guard_status_updated' || msg.type === 'position_guard_state_updated') {
+        refreshPositionGuardState({ quiet:true, includeAdmin:state.user?.role === "admin", forceAdmin:true }).catch(() => {});
+        if (activeTabId() === "trading") loadPositionManagement({ quiet:true, preserveSelection:true }).catch(() => {});
       } else if (msg.type === 'position_management_task_updated' || msg.type === 'position_management_settings_updated') {
         const live = $("positionManagementLive");
         if (live) {
@@ -4117,6 +4129,7 @@ async function flushBridgeDataRefresh() {
     const refreshes = [];
     if (streams.has('account')) refreshes.push(loadAccount());
     if (streams.has('positions')) refreshes.push(loadPositions({ refreshSignalTickets:false, liveOnly:true }));
+    if (streams.has('account') || streams.has('positions')) refreshes.push(refreshPositionGuardState({ quiet:true, includeAdmin:false }));
     if (streams.has('history')) markHistoryDirty({ refreshActive:true });
     await Promise.allSettled(refreshes);
   } finally {
@@ -4942,6 +4955,7 @@ async function loadStrategyCatalog() {
   const items = data.strategies || [];
   const subscriptions = data.subscriptions || [];
   state.strategies = items; state.strategySubscriptions = subscriptions; state.tradingAccounts = data.accounts || [];
+  renderPositionGuardBadge(state.positionGuardSettings);
   const summary = $("strategyCatalogSummary");
   if (summary) {
     const active = items.filter(item => item.visibility_status === "active" && Number(item.is_active)).length;
@@ -10007,6 +10021,14 @@ async function bootstrap() {
       startLiveQuoteRefreshTimer();
     }
     if (!isObserverMode()) {
+      void loadStrategyCatalog()
+        .then(() => refreshPositionGuardState({ quiet:true, includeAdmin:true }))
+        .catch(error => console.warn("[PivotGuard] 初始化状态读取失败:", error?.message || error));
+    } else {
+      state.positionGuardSettings = normalizePositionGuardSettings({ status:"unavailable", reason:"当前为观摩模式，只读" }, activeTradingAccount());
+      renderPositionGuardBadge(state.positionGuardSettings);
+    }
+    if (!isObserverMode()) {
       await loadReviewSummary({ announce:false });
       startReviewSummaryPolling();
     }
@@ -10517,6 +10539,29 @@ async function handleAutoSubscriptionClick() {
     toast(`订阅设置加载失败：${userVisibleText(apiErrorMessage(error.message), "请稍后重试")}`, "error");
   } finally {
     _autoSubscriptionEntryLock = false;
+  }
+}
+
+async function handlePositionGuardModeClick() {
+  if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
+  const accountId = positionGuardAccountId();
+  if (!accountId) {
+    toast("没有有效交易账号，暂时不能使用自动盯盘", "warning");
+    return;
+  }
+  const input = $("positionGuardEnabledInput");
+  if (input) {
+    input.checked = !(state.positionGuardSettings?.enabled === true);
+    await handlePositionGuardToggle(input);
+    return;
+  }
+  await refreshPositionGuardState({ quiet:false, includeAdmin:false });
+  const next = $("positionGuardEnabledInput");
+  if (next) {
+    next.checked = !(state.positionGuardSettings?.enabled === true);
+    await handlePositionGuardToggle(next);
+  } else {
+    await handlePositionGuardToggle({ checked:!(state.positionGuardSettings?.enabled === true), disabled:false });
   }
 }
 
@@ -12966,7 +13011,7 @@ function applyRoleUI() {
     el.title = observer ? observerMessage() : '';
   });
 
-  for (const id of ["tradeMode", "autoAnalyzeMode"]) {
+  for (const id of ["tradeMode", "autoAnalyzeMode", "positionGuardMode"]) {
     const badge = document.getElementById(id);
     if (!badge) continue;
     badge.classList.toggle("clickable-badge", !observer);
@@ -12977,8 +13022,11 @@ function applyRoleUI() {
       ? observerMessage()
       : id === "autoAnalyzeMode"
         ? (badge.title || "点击编辑订阅与自动分析设置")
-        : (badge.title || "查看或切换交易发送权限");
+        : id === "positionGuardMode"
+          ? (badge.title || "查看或切换当前账号的自动盯盘")
+          : (badge.title || "查看或切换交易发送权限");
   }
+  renderPositionGuardBadge(state.positionGuardSettings);
 
   document.querySelectorAll('.observer-action-panel').forEach(panel => setObserverPanelLock(panel, observer));
   updateHistoryRangeUI();
@@ -17046,6 +17094,10 @@ const POSITION_MANAGEMENT_STATUS = {
   CLOSE_CONFIRMED: { label:"持仓平仓已确认", tone:"completed" },
   CLOSE_PARTIAL: { label:"持仓仅部分平仓", tone:"failed" },
   CLOSE_UNCERTAIN: { label:"平仓终态待确认", tone:"candidate" },
+  GUARD_INTENT_CREATED: { label:"盯盘动作已锁定", tone:"confirmed" },
+  GUARD_SENT: { label:"盯盘命令已发送", tone:"candidate" },
+  GUARD_RECONCILING: { label:"正在核对盯盘结果", tone:"candidate" },
+  GUARD_UNCERTAIN: { label:"盯盘结果待确认", tone:"candidate" },
   MANUAL_REVIEW: { label:"需要人工复核", tone:"failed" },
   HELD: { label:"继续持有", tone:"completed" },
   COMPLETED: { label:"已完成", tone:"completed" },
@@ -17065,15 +17117,18 @@ function positionManagementMode(mode) {
 }
 
 function positionManagementTaskLabel(type) {
+  if (type === "position_guard") return "自动盯盘";
   return type === "pending_cancel" ? "挂单管理" : "持仓平仓";
 }
 
 function positionManagementTaskMode(task = {}) {
+  if (task.task_type === "position_guard") return "确定性规则";
   return task.task_type === "pending_cancel" ? "自动撤单" : positionManagementMode(task.execution_mode);
 }
 
 function positionManagementActionLabel(action) {
-  return ({ exit:"建议平仓", cancel:"建议取消", hold:"继续持有", keep:"继续保留" })[action] || raw(action);
+  return ({ exit:"建议平仓", cancel:"建议取消", hold:"继续持有", keep:"继续保留",
+    full_exit:"完整平仓", partial_exit:"部分平仓", move_protection:"移动止损" })[action] || raw(action);
 }
 
 const POSITION_MANAGEMENT_DECISION_REASONS = Object.freeze({
@@ -17179,10 +17234,503 @@ function positionManagementConditionText(condition = {}) {
   return "本轮AI引用了原交易论点中的失效条件";
 }
 
+const POSITION_GUARD_DEFAULT_CONFIG = Object.freeze({
+  pivot_method: "fibonacci",
+  break_stop: { enabled:true, distance_price:9, open_near_price:10 },
+  pivot_cross_stop: { enabled:true, distance_price:8, min_duration_seconds:3 },
+  retrace_stop: { enabled:true, distance_price:5 },
+  pivot_take_profit: { enabled:true, tolerance_price:3, close_percent:50, move_break_even:true },
+  first_target_take_profit: { enabled:true, tolerance_price:3, close_percent:50, move_break_even:true, break_even_offset_price:2 },
+});
+
+const POSITION_GUARD_PARAMETER_GROUPS = [
+  {
+    key:"pivot", label:"Pivot", fields:[
+      { path:"pivot_method", label:"计算方式", type:"select", options:["fibonacci", "standard"], optionLabels:{ fibonacci:"Fibonacci", standard:"Standard" } },
+    ],
+  },
+  {
+    key:"stop", label:"止损规则", fields:[
+      { path:"break_stop.enabled", label:"突破止损", type:"checkbox" },
+      { path:"break_stop.distance_price", label:"突破距离", type:"number", min:0.0001, step:0.01 },
+      { path:"break_stop.open_near_price", label:"开仓贴近距离", type:"number", min:0.0001, step:0.01 },
+      { path:"pivot_cross_stop.enabled", label:"P点穿越止损", type:"checkbox" },
+      { path:"pivot_cross_stop.distance_price", label:"P点穿越距离", type:"number", min:0.0001, step:0.01 },
+      { path:"pivot_cross_stop.min_duration_seconds", label:"越线持续秒数", type:"number", min:0, max:60, step:1 },
+      { path:"retrace_stop.enabled", label:"回踩止损", type:"checkbox" },
+      { path:"retrace_stop.distance_price", label:"回踩破位距离", type:"number", min:0.0001, step:0.01 },
+    ],
+  },
+  {
+    key:"take-profit", label:"止盈规则", fields:[
+      { path:"pivot_take_profit.enabled", label:"P点止盈", type:"checkbox" },
+      { path:"pivot_take_profit.tolerance_price", label:"P点容差", type:"number", min:0.0001, step:0.01 },
+      { path:"pivot_take_profit.close_percent", label:"P点平仓比例", type:"number", min:1, max:100, step:1, closePercent:true },
+      { path:"pivot_take_profit.move_break_even", label:"P点后移保本", type:"checkbox", breakEven:"pivot_take_profit" },
+      { path:"first_target_take_profit.enabled", label:"第一目标位止盈", type:"checkbox" },
+      { path:"first_target_take_profit.tolerance_price", label:"第一目标位容差", type:"number", min:0.0001, step:0.01 },
+      { path:"first_target_take_profit.close_percent", label:"第一目标位平仓比例", type:"number", min:1, max:100, step:1, closePercent:true },
+      { path:"first_target_take_profit.move_break_even", label:"第一目标位后移保本", type:"checkbox", breakEven:"first_target_take_profit" },
+      { path:"first_target_take_profit.break_even_offset_price", label:"保本偏移", type:"number", min:0.0001, step:0.01 },
+    ],
+  },
+];
+
+let _positionGuardStateFlight = null;
+
+function positionGuardConfigValue(config, path) {
+  return String(path || "").split(".").reduce((value, key) => value == null ? undefined : value[key], config);
+}
+
+function setPositionGuardConfigValue(config, path, value) {
+  const keys = String(path || "").split(".").filter(Boolean);
+  if (!keys.length) return;
+  let target = config;
+  keys.slice(0, -1).forEach(key => {
+    if (!target[key] || typeof target[key] !== "object") target[key] = {};
+    target = target[key];
+  });
+  target[keys[keys.length - 1]] = value;
+}
+
+function clonePositionGuardConfig(config = {}) {
+  const source = config && typeof config === "object" ? config : {};
+  const clone = JSON.parse(JSON.stringify(POSITION_GUARD_DEFAULT_CONFIG));
+  for (const group of POSITION_GUARD_PARAMETER_GROUPS) {
+    for (const field of group.fields) {
+      const value = positionGuardConfigValue(source, field.path);
+      if (value !== undefined && value !== null && value !== "") setPositionGuardConfigValue(clone, field.path, value);
+    }
+  }
+  return clone;
+}
+
+function parsePositionGuardConfig(value) {
+  if (typeof value === "string") {
+    try { return clonePositionGuardConfig(JSON.parse(value)); } catch { return clonePositionGuardConfig(); }
+  }
+  return clonePositionGuardConfig(value || {});
+}
+
+function activeTradingAccount() {
+  const accounts = Array.isArray(state.tradingAccounts) ? state.tradingAccounts : [];
+  return accounts.find(account => Number(account?.is_active) === 1)
+    || accounts.find(account => account?.observe_status === "active")
+    || accounts[0]
+    || null;
+}
+
+function positionGuardAccountLabel(account = activeTradingAccount()) {
+  if (!account) return "未连接有效交易账号";
+  return [account.nickname || account.login_account || account.login || `账号 #${account.id}`, account.broker_server || account.server]
+    .filter(Boolean).join(" · ");
+}
+
+function positionGuardAccountId() {
+  const value = Number(activeTradingAccount()?.id || 0);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function positionGuardResponseRoot(data = {}) {
+  if (data?.settings && typeof data.settings === "object") return data.settings;
+  if (data?.setting && typeof data.setting === "object") return data.setting;
+  if (data?.position_guard && typeof data.position_guard === "object") return data.position_guard;
+  if (data?.positionGuard && typeof data.positionGuard === "object") return data.positionGuard;
+  return data && typeof data === "object" ? data : {};
+}
+
+function positionGuardCountValue(data = {}, root = {}) {
+  const candidates = [
+    root.qualified_position_count,
+    root.qualified_positions_count,
+    root.eligible_position_count,
+    root.position_count,
+    data.qualified_position_count,
+    data.qualified_positions_count,
+    data.eligible_position_count,
+    data.position_count,
+  ];
+  const value = candidates.find(item => item !== undefined && item !== null && item !== "" && Number.isFinite(Number(item)));
+  return value === undefined ? { known:false, value:null } : { known:true, value:Math.max(0, Number(value)) };
+}
+
+function normalizePositionGuardSettings(data = {}, account = activeTradingAccount()) {
+  const root = positionGuardResponseRoot(data);
+  const status = String(root.runtime_status || root.runtimeState || root.status || data.runtime_status || data.status || "").toLowerCase();
+  const enabled = root.enabled === true || Number(root.enabled) === 1 || data.enabled === true || Number(data.enabled) === 1;
+  const platformEnabled = root.platform_enabled ?? root.platform_control_enabled ?? data.platform_enabled ?? data.platform_control_enabled;
+  const count = positionGuardCountValue(data, root);
+  return {
+    ...root,
+    enabled,
+    status: status || (enabled ? (state._lastGatewayLive ? "running" : "paused") : "disabled"),
+    reason: root.reason || root.pause_reason || root.unavailable_reason || data.reason || "",
+    account_id: Number(root.trading_account_id || data.trading_account_id || account?.id || 0) || null,
+    account: root.account || data.account || account || null,
+    qualified_position_count: count.value,
+    qualified_position_count_known: count.known,
+    platform_enabled: platformEnabled === undefined ? null : Boolean(platformEnabled),
+    updated_at: root.updated_at || root.last_checked_at || data.updated_at || data.last_checked_at || null,
+  };
+}
+
+function positionGuardStatusPresentation(settings = state.positionGuardSettings) {
+  const account = activeTradingAccount();
+  const rawStatus = String(settings?.status || "").toLowerCase();
+  const enabled = settings?.enabled === true;
+  if (isObserverMode() || !account || !settings || settings.error || ["unavailable", "not_configured", "no_profile", "forbidden"].includes(rawStatus)) {
+    return { key:"unavailable", label:"自动盯盘 不可用", tone:"neutral", reason:settings?.reason || (isObserverMode() ? "当前为观摩模式，只读" : !account ? "没有有效交易账号" : "当前配置或权限不可用") };
+  }
+  if (!enabled || ["disabled", "closed", "off"].includes(rawStatus)) {
+    return { key:"disabled", label:"自动盯盘 关闭", tone:"neutral", reason:"当前账号未开启自动盯盘" };
+  }
+  if (["paused", "blocked", "offline", "stopped"].includes(rawStatus) || settings.platform_enabled === false) {
+    return { key:"paused", label:"自动盯盘 已暂停", tone:"warning", reason:settings.reason || "运行前置条件暂未满足" };
+  }
+  return { key:"running", label:"自动盯盘 运行中", tone:"running", reason:settings.reason || "正在按当前参数检查合格系统持仓" };
+}
+
+function renderPositionGuardBadge(settings = state.positionGuardSettings) {
+  const control = $("positionGuardMode");
+  if (!control) return;
+  const presentation = positionGuardStatusPresentation(settings);
+  const observer = isObserverMode();
+  control.className = `status-badge status-${presentation.tone} clickable-badge position-guard-control${observer ? " is-readonly" : ""}`;
+  control.innerHTML = `<span class="badge-dot" aria-hidden="true"></span>${escapeHtml(observer ? `${presentation.label} · 只读` : presentation.label)}`;
+  control.setAttribute("aria-pressed", String(settings?.enabled === true));
+  control.setAttribute("aria-disabled", String(observer || !activeTradingAccount()));
+  control.setAttribute("aria-label", `${presentation.label}。${observer ? "当前为观摩模式，只读" : presentation.reason || "点击切换当前账号的自动盯盘"}`);
+  control.title = observer ? "当前为观摩模式，只读" : `${presentation.reason || "点击切换当前账号的自动盯盘"}`;
+}
+
+function positionGuardCountText(settings = {}) {
+  if (settings.qualified_position_count_known) return `${Number(settings.qualified_position_count || 0)} 个合格系统持仓`;
+  if (state.positionGuardLoading) return "合格持仓：正在核验";
+  return "合格持仓：未知（后端尚未提供数量）";
+}
+
+function positionGuardStatusText(settings = {}) {
+  const presentation = positionGuardStatusPresentation(settings);
+  return settings?.reason && presentation.key !== "disabled"
+    ? `${presentation.label} · ${settings.reason}`
+    : presentation.label;
+}
+
+function positionGuardProfileRoot(data = {}) {
+  const profile = data?.profile || data?.position_guard_profile || data;
+  const version = profile?.current_version || profile?.currentVersion || data?.version || null;
+  const config = profile?.config || version?.config || profile?.config_json || version?.config_json || {};
+  return {
+    ...(profile && typeof profile === "object" ? profile : {}),
+    config:parsePositionGuardConfig(config),
+    current_version_id:Number(profile?.current_version_id || profile?.currentVersionId || version?.id || 0) || null,
+    current_version:Number(profile?.current_version || profile?.version_no || version?.version_no || version?.version || 0) || 0,
+    status:String(profile?.status || data?.status || "inactive").toLowerCase(),
+    standard_symbol:String(profile?.standard_symbol || profile?.standardSymbol || data?.standard_symbol || "XAUUSD").toUpperCase(),
+    modified_by:profile?.modified_by || profile?.updated_by || version?.modified_by || "--",
+    modified_at:profile?.modified_at || profile?.updated_at || version?.created_at || version?.updated_at || null,
+  };
+}
+
+function positionGuardProfilesList(data = {}) {
+  const profiles = Array.isArray(data?.profiles) ? data.profiles : Array.isArray(data) ? data : [];
+  return profiles.map(item => positionGuardProfileRoot(item));
+}
+
+function positionGuardFormatVersion(profile = {}) {
+  const version = Number(profile.current_version || profile.version_no || 0);
+  return version > 0 ? `v${version}` : "尚未创建版本";
+}
+
+function positionGuardFormatModified(profile = {}) {
+  const by = profile.modified_by || "--";
+  const at = profile.modified_at ? compactTimeText(profile.modified_at) : "时间未知";
+  return `${by} · ${at}`;
+}
+
+function positionGuardFieldMarkup(field, config) {
+  const value = positionGuardConfigValue(config, field.path);
+  const id = `positionGuardField_${field.path.replaceAll(".", "_")}`;
+  const escapedValue = escapeHtml(value == null ? "" : String(value));
+  if (field.type === "select") {
+    return `<label class="position-guard-field"><span>${escapeHtml(field.label)}</span><select id="${id}" data-position-guard-field="${escapeHtml(field.path)}">${field.options.map(option => `<option value="${escapeHtml(option)}" ${String(value) === String(option) ? "selected" : ""}>${escapeHtml(field.optionLabels?.[option] || option)}</option>`).join("")}</select></label>`;
+  }
+  if (field.type === "checkbox") {
+    const closePercent = field.breakEven ? Number(positionGuardConfigValue(config, `${field.breakEven}.close_percent`)) : null;
+    const disabled = field.breakEven && closePercent === 100;
+    return `<label class="position-guard-check position-guard-field${disabled ? " is-disabled" : ""}" data-position-guard-break-even="${escapeHtml(field.breakEven || "")}"><input id="${id}" type="checkbox" data-position-guard-field="${escapeHtml(field.path)}" ${value === true || Number(value) === 1 ? "checked" : ""} ${disabled ? "disabled" : ""}><span>${escapeHtml(field.label)}</span></label>`;
+  }
+  const min = field.min == null ? "" : ` min="${field.min}"`;
+  const max = field.max == null ? "" : ` max="${field.max}"`;
+  const step = field.step == null ? "" : ` step="${field.step}"`;
+  const closeData = field.closePercent ? ` data-position-guard-close-percent="${escapeHtml(field.path.replace(/\.close_percent$/, ""))}"` : "";
+  return `<label class="position-guard-field${field.closePercent ? " position-guard-close-percent" : ""}"><span>${escapeHtml(field.label)}</span><input id="${id}" type="number" inputmode="decimal" data-position-guard-field="${escapeHtml(field.path)}" value="${escapedValue}"${min}${max}${step}${closeData}></label>`;
+}
+
+function positionGuardConfigDiff(current, next) {
+  const rows = [];
+  for (const group of POSITION_GUARD_PARAMETER_GROUPS) {
+    for (const field of group.fields) {
+      const before = positionGuardConfigValue(current, field.path);
+      const after = positionGuardConfigValue(next, field.path);
+      const same = field.type === "number"
+        ? Number(before) === Number(after)
+        : field.type === "checkbox"
+          ? (before === true || Number(before) === 1) === (after === true || Number(after) === 1)
+          : before === after;
+      if (!same) rows.push([field.label, `${before === true ? "开启" : before === false ? "关闭" : before ?? "--"} → ${after === true ? "开启" : after === false ? "关闭" : after ?? "--"}`]);
+    }
+  }
+  return rows;
+}
+
+function collectPositionGuardConfig(form, current = {}) {
+  const next = clonePositionGuardConfig(current);
+  form?.querySelectorAll("[data-position-guard-field]").forEach(input => {
+    if (input.disabled) return;
+    const value = input.type === "checkbox" ? input.checked : input.type === "number" ? Number(input.value) : input.value;
+    setPositionGuardConfigValue(next, input.dataset.positionGuardField, value);
+  });
+  form?.querySelectorAll('[data-position-guard-close-percent]').forEach(input => {
+    if (Number(input.value) !== 100) return;
+    const scope = input.dataset.positionGuardClosePercent;
+    setPositionGuardConfigValue(next, `${scope}.move_break_even`, false);
+  });
+  return next;
+}
+
+function validatePositionGuardConfig(config) {
+  for (const group of POSITION_GUARD_PARAMETER_GROUPS) {
+    for (const field of group.fields) {
+      if (field.type !== "number") continue;
+      const value = Number(positionGuardConfigValue(config, field.path));
+      if (!Number.isFinite(value) || (field.min != null && value < field.min) || (field.max != null && value > field.max)) {
+        throw new Error(`${field.label}必须在有效范围内`);
+      }
+    }
+  }
+  return config;
+}
+
+function positionGuardReasonValue(value) {
+  return String(value || "").trim().slice(0, 500);
+}
+
+function renderPositionGuardUserSettings(settings = state.positionGuardSettings) {
+  const host = $("positionGuardUserSettings");
+  if (!host) return;
+  const account = activeTradingAccount();
+  const accountId = positionGuardAccountId();
+  const presentation = positionGuardStatusPresentation(settings);
+  const observer = isObserverMode();
+  const disabled = observer || !accountId || state.positionGuardLoading;
+  const countText = positionGuardCountText(settings || {});
+  host.innerHTML = `<div class="position-guard-user-copy"><div class="position-guard-title-row"><strong>PivotGuard 自动盯盘</strong><span class="position-guard-status-chip is-${presentation.key}" role="status">${escapeHtml(observer ? `${presentation.label} · 只读` : presentation.label)}</span></div><small>默认关闭。只管理当前账号中可精确归属的 AURUM 系统仓，可能自动全平、部分平仓或修改止损。自动分析开关与此功能相互独立。</small><small class="position-guard-admin-note">参数由平台管理员统一维护</small><div class="position-guard-account-meta"><span>当前账号：${escapeHtml(positionGuardAccountLabel(account))}</span><span>${escapeHtml(countText)}</span></div>${presentation.reason && presentation.key !== "disabled" ? `<p class="position-guard-reason" role="status">${escapeHtml(presentation.reason)}</p>` : ""}</div><label class="position-guard-switch"><span>账号开关</span><input id="positionGuardEnabledInput" type="checkbox" role="switch" ${settings?.enabled === true ? "checked" : ""} ${disabled ? "disabled" : ""} aria-describedby="positionGuardUserHelp"><span class="position-guard-switch-control" aria-hidden="true"><i></i></span></label><span id="positionGuardUserHelp" class="sr-only">绑定当前交易账号 ${escapeHtml(positionGuardAccountLabel(account))}</span>`;
+  $("positionGuardEnabledInput")?.addEventListener("change", event => handlePositionGuardToggle(event.target));
+}
+
+function renderPositionGuardAdminPanel() {
+  const host = $("positionGuardAdminPanel");
+  if (!host) return;
+  if (state.user?.role !== "admin") {
+    host.remove();
+    return;
+  }
+  const profiles = Array.isArray(state.positionGuardProfiles) ? state.positionGuardProfiles : [];
+  const current = state.positionGuardProfile || positionGuardProfileRoot({ standard_symbol:profiles[0]?.standard_symbol || "XAUUSD", status:"inactive" });
+  const symbols = [...new Set([current.standard_symbol, ...profiles.map(item => item.standard_symbol)].filter(Boolean))];
+  const config = parsePositionGuardConfig(current.config);
+  const control = state.positionGuardControl || {};
+  const controlEnabled = control.enabled === true || Number(control.enabled) === 1;
+  const errorNotice = state.positionGuardError ? `<p class="position-guard-admin-error" role="alert">参数管理读取失败：${escapeHtml(state.positionGuardError)}。请稍后刷新。</p>` : "";
+  host.innerHTML = `<section class="position-guard-admin-panel-inner" aria-labelledby="positionGuardAdminTitle"><header class="position-guard-admin-head"><div><span class="section-kicker">管理员参数管理</span><h3 id="positionGuardAdminTitle">PivotGuard 参数</h3><p>参数按标准品种版本化维护；保存新版本后只影响之后新纳入监控的持仓。</p></div><div class="position-guard-admin-meta"><span>${escapeHtml(positionGuardFormatVersion(current))}</span><span>${escapeHtml(current.status || "inactive")}</span><small>最后修改：${escapeHtml(positionGuardFormatModified(current))}</small></div></header>${errorNotice}<div class="position-guard-admin-toolbar"><label class="position-guard-field"><span>标准品种</span><select id="positionGuardStandardSymbol">${symbols.map(symbol => `<option value="${escapeHtml(symbol)}" ${symbol === current.standard_symbol ? "selected" : ""}>${escapeHtml(symbol)}</option>`).join("")}</select></label><span class="position-guard-admin-note">当前版本：${escapeHtml(positionGuardFormatVersion(current))} · 状态：${escapeHtml(current.status || "inactive")}</span></div><form id="positionGuardAdminForm" class="position-guard-admin-form"><div class="position-guard-parameter-grid">${POSITION_GUARD_PARAMETER_GROUPS.map(group => `<fieldset class="position-guard-parameter-group"><legend>${escapeHtml(group.label)}</legend><div class="position-guard-fields">${group.fields.map(field => positionGuardFieldMarkup(field, config)).join("")}</div></fieldset>`).join("")}</div><div class="position-guard-admin-save-row"><label class="position-guard-field position-guard-reason-field"><span>保存原因（必填）</span><textarea id="positionGuardAdminReason" rows="2" maxlength="500" placeholder="说明本次参数调整原因"></textarea></label><label class="position-guard-field"><span>版本状态</span><select id="positionGuardAdminStatus"><option value="active" ${current.status === "active" ? "selected" : ""}>启用</option><option value="inactive" ${current.status === "inactive" ? "selected" : ""}>停用</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存新版本</button></div></form><form id="positionGuardAdminControlForm" class="position-guard-platform-control"><div><strong>平台总闸</strong><small>关闭后停止产生新的盯盘动作，已发送命令仍会继续对账。</small></div><label class="position-guard-switch"><span>${controlEnabled ? "已开启" : "已关闭"}</span><input id="positionGuardPlatformEnabled" type="checkbox" role="switch" ${controlEnabled ? "checked" : ""}><span class="position-guard-switch-control" aria-hidden="true"><i></i></span></label><input id="positionGuardControlReason" class="position-guard-control-reason" maxlength="500" placeholder="总闸变更原因（必填）"><button class="btn btn-secondary btn-sm" type="submit">保存总闸</button></form></section>`;
+  syncPositionGuardAdminConditionalFields();
+  $("positionGuardStandardSymbol")?.addEventListener("change", event => loadPositionGuardAdminProfile(event.target.value).catch(error => toast(`参数读取失败：${error.message}`, "error")));
+  $("positionGuardAdminForm")?.addEventListener("submit", event => savePositionGuardAdminProfile(event));
+  $("positionGuardAdminControlForm")?.addEventListener("submit", event => savePositionGuardAdminControl(event));
+  host.querySelectorAll('[data-position-guard-close-percent]').forEach(input => input.addEventListener("input", syncPositionGuardAdminConditionalFields));
+}
+
+function syncPositionGuardAdminConditionalFields() {
+  const form = $("positionGuardAdminForm");
+  if (!form) return;
+  form.querySelectorAll('[data-position-guard-close-percent]').forEach(input => {
+    const scope = input.dataset.positionGuardClosePercent;
+    const value = Number(input.value);
+    const breakEven = form.querySelector(`[data-position-guard-break-even="${CSS.escape(scope)}"] input`);
+    const disabled = value === 100;
+    if (breakEven) {
+      breakEven.disabled = disabled;
+      if (disabled) breakEven.checked = false;
+      breakEven.closest(".position-guard-field")?.classList.toggle("is-disabled", disabled);
+    }
+  });
+}
+
+async function savePositionGuardAdminProfile(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const reason = positionGuardReasonValue($("positionGuardAdminReason")?.value);
+  if (!reason) { toast("请填写保存原因", "warning"); $("positionGuardAdminReason")?.focus(); return; }
+  const current = state.positionGuardProfile || positionGuardProfileRoot({ standard_symbol:$("positionGuardStandardSymbol")?.value || "XAUUSD" });
+  try {
+    const next = validatePositionGuardConfig(collectPositionGuardConfig(form, current.config));
+    const diff = positionGuardConfigDiff(current.config, next);
+    const nextStatus = $("positionGuardAdminStatus")?.value || current.status || "active";
+    if (nextStatus !== current.status) diff.push(["版本状态", `${current.status || "inactive"} → ${nextStatus}`]);
+    if (!diff.length) { toast("参数和状态都没有变化，无需创建新版本", "info"); return; }
+    const confirmed = await showConfirm("确认创建 PivotGuard 新版本？", "保存后将创建不可变的新版本，只影响之后新纳入监控的持仓；已在监控中的持仓继续使用原版本。", {
+      confirmText:"确认保存新版本", cancelText:"返回调整", detailRows:[["标准品种", current.standard_symbol], ...diff, ["保存原因", reason]],
+    });
+    if (!confirmed) return;
+    if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
+    await api(`/api/ai/admin/position-guard/profiles/${encodeURIComponent(current.standard_symbol)}`, { method:"PUT", body:{ config:next, status:nextStatus, reason } });
+    toast("PivotGuard 参数已保存，新版本只影响新纳入持仓", "success");
+    await loadPositionGuardAdmin({ force:true });
+  } catch (error) {
+    toast(error.message || "参数保存失败，请重试", "error");
+  } finally {
+    if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
+  }
+}
+
+async function savePositionGuardAdminControl(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const enabled = $("positionGuardPlatformEnabled")?.checked === true;
+  const reason = positionGuardReasonValue($("positionGuardControlReason")?.value);
+  if (!reason) { toast("请填写平台总闸变更原因", "warning"); $("positionGuardControlReason")?.focus(); return; }
+  const confirmed = await showConfirm(enabled ? "确认开启 PivotGuard 平台总闸？" : "确认关闭 PivotGuard 平台总闸？", enabled ? "开启后，已开启账号且存在合格系统持仓时可能自动全平、部分平仓或修改止损。" : "关闭后停止产生新的盯盘动作，已经发送的命令仍会继续对账。", { confirmText:enabled ? "确认开启" : "确认关闭", cancelText:"取消", danger:enabled });
+  if (!confirmed) return;
+  try {
+    if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
+    await api("/api/ai/admin/position-guard/control", { method:"PUT", body:{ enabled, reason } });
+    toast(`PivotGuard 平台总闸已${enabled ? "开启" : "关闭"}`, "success");
+    await refreshPositionGuardState({ includeAdmin:true, quiet:true, forceAdmin:true });
+  } catch (error) {
+    toast(error.message || "平台总闸保存失败，请重试", "error");
+  } finally {
+    if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
+  }
+}
+
+async function loadPositionGuardAdminProfile(standardSymbol) {
+  if (state.user?.role !== "admin") return null;
+  const symbol = String(standardSymbol || "XAUUSD").trim().toUpperCase();
+  const data = await api(`/api/ai/admin/position-guard/profiles/${encodeURIComponent(symbol)}`);
+  state.positionGuardProfile = positionGuardProfileRoot(data);
+  renderPositionGuardAdminPanel();
+  return state.positionGuardProfile;
+}
+
+async function loadPositionGuardAdmin({ force = false } = {}) {
+  if (state.user?.role !== "admin") return;
+  if (!force && state.positionGuardProfiles.length && state.positionGuardControl) return;
+  try {
+    const [profilesData, controlData] = await Promise.all([
+      api("/api/ai/admin/position-guard/profiles"),
+      api("/api/ai/admin/position-guard/control"),
+    ]);
+    state.positionGuardProfiles = positionGuardProfilesList(profilesData);
+    state.positionGuardControl = controlData?.control || controlData?.position_guard_control || controlData || {};
+    const currentSymbol = state.positionGuardProfile?.standard_symbol || state.positionGuardProfiles[0]?.standard_symbol || "XAUUSD";
+    try { await loadPositionGuardAdminProfile(currentSymbol); }
+    catch (error) {
+      if (error?.status === 404 || error?.code === "position_guard_profile_not_found") {
+        state.positionGuardProfile = positionGuardProfileRoot({ standard_symbol:currentSymbol });
+      } else throw error;
+    }
+  } catch (error) {
+    state.positionGuardError = error.message || "管理员参数暂不可用";
+    state.positionGuardProfiles = state.positionGuardProfiles || [];
+    renderPositionGuardAdminPanel();
+    throw error;
+  }
+  renderPositionGuardAdminPanel();
+}
+
+async function refreshPositionGuardState({ quiet = false, includeAdmin = true, forceAdmin = false } = {}) {
+  if (_positionGuardStateFlight) return _positionGuardStateFlight;
+  _positionGuardStateFlight = (async () => {
+    state.positionGuardLoading = true;
+    renderPositionGuardBadge(state.positionGuardSettings);
+    const account = activeTradingAccount();
+    const accountId = positionGuardAccountId();
+    try {
+      let userData = {};
+      if (isObserverMode()) {
+        state.positionGuardSettings = normalizePositionGuardSettings({ status:"unavailable", reason:"当前为观摩模式，只读" }, account);
+      } else if (!accountId) {
+        state.positionGuardSettings = normalizePositionGuardSettings({ status:"unavailable", reason:"没有有效交易账号" }, account);
+      } else {
+        const query = new URLSearchParams({ trading_account_id:String(accountId) });
+        userData = await api(`/api/ai/position-guard/settings?${query.toString()}`, { timeout:10000 });
+        state.positionGuardSettings = normalizePositionGuardSettings(userData, account);
+      }
+      state.positionGuardError = "";
+      renderPositionGuardBadge(state.positionGuardSettings);
+      if (includeAdmin && state.user?.role === "admin" && !isObserverMode()) {
+        try {
+          await loadPositionGuardAdmin({ force:forceAdmin });
+        } catch (error) {
+          state.positionGuardError = error.message || "管理员参数暂不可用";
+          // User account state remains authoritative even when the separate
+          // admin profile/control endpoints are temporarily unavailable.
+        }
+        renderPositionGuardBadge(state.positionGuardSettings);
+      }
+    } catch (error) {
+      const settingMissing = error?.code === "position_guard_setting_not_found";
+      state.positionGuardError = settingMissing ? "" : (error.message || "自动盯盘状态读取失败");
+      state.positionGuardSettings = normalizePositionGuardSettings(settingMissing
+        ? { status:"disabled", enabled:false, reason:"当前账号默认关闭" }
+        : { status:"unavailable", reason:"自动盯盘状态暂不可确认" }, account);
+      renderPositionGuardBadge(state.positionGuardSettings);
+      if (!quiet) toast(`自动盯盘状态读取失败：${error.message}`, "warning");
+    } finally {
+      state.positionGuardLoading = false;
+      renderPositionGuardBadge(state.positionGuardSettings);
+      if ($("positionGuardUserSettings")) renderPositionGuardUserSettings(state.positionGuardSettings);
+      if ($("positionGuardAdminPanel")) renderPositionGuardAdminPanel();
+    }
+    return state.positionGuardSettings;
+  })();
+  try { return await _positionGuardStateFlight; }
+  finally { _positionGuardStateFlight = null; }
+}
+
+async function handlePositionGuardToggle(input) {
+  if (!input || isObserverMode()) { if (input) input.checked = !input.checked; toast(observerMessage(), "warning"); return; }
+  const account = activeTradingAccount();
+  const accountId = positionGuardAccountId();
+  if (!accountId) { input.checked = false; toast("没有可用的交易账号，暂时不能开启自动盯盘", "warning"); return; }
+  const enabled = input.checked;
+  const settings = state.positionGuardSettings || {};
+  const count = settings.qualified_position_count_known ? `${settings.qualified_position_count} 个` : "正在核验/未知数量的";
+  const detailRows = [["当前账号", positionGuardAccountLabel(account)], ["合格持仓", settings.qualified_position_count_known ? `${settings.qualified_position_count} 个` : "正在核验/未知"]];
+  const confirmed = enabled
+    ? await showConfirm("开启 PivotGuard 自动盯盘？", `开启后，系统可能对${count}合格 AURUM 系统仓自动全平、部分平仓或修改止损。只管理能精确归属到当前账号的系统仓，不处理人工仓或归属不明仓。`, { confirmText:"确认开启", cancelText:"取消", danger:true, detailRows })
+    : await showConfirm("关闭 PivotGuard 自动盯盘？", "关闭后当前账号不再产生新的盯盘动作；已经发送的命令仍会继续完成对账。", { confirmText:"确认关闭", cancelText:"取消", detailRows });
+  if (!confirmed) { input.checked = !enabled; return; }
+  input.disabled = true;
+  try {
+    await api("/api/ai/position-guard/settings", { method:"PUT", body:{ trading_account_id:accountId, enabled } });
+    toast(`当前账号自动盯盘已${enabled ? "开启" : "关闭"}`, "success");
+    await refreshPositionGuardState({ quiet:true, includeAdmin:false });
+  } catch (error) {
+    input.checked = !enabled;
+    toast(error.message || "自动盯盘设置保存失败，请重试", "error");
+  } finally {
+    input.disabled = false;
+  }
+}
+
 function renderPositionManagementOverview(tasks = [], settings = {}, pagination = {}) {
   const host = $("positionManagementOverview");
   if (!host) return;
-  const confirmed = tasks.filter(task => task.status === "EVIDENCE_CONFIRMED").length;
+  const confirmed = tasks.filter(task => task.status === "EVIDENCE_CONFIRMED" && task.task_type !== "position_guard").length;
   const waiting = tasks.filter(task => task.status === "CANDIDATE").length;
   const mode = settings.effective_mode || "display";
   const platformAutoCloseEnabled = ["auto_exit", "auto_reverse"].includes(settings.platform?.maximum_mode);
@@ -17208,7 +17756,9 @@ function renderPositionManagementSettings(settings = {}) {
   const host = $("positionManagementSettingsPanel");
   if (!host) return;
   const user = settings.user || {};
-  host.innerHTML = `<div class="management-settings-copy"><strong>自动平仓</strong><small>默认开启；同一持仓连续两轮有效自动推理都建议平仓才会执行，任意一轮继续持有或输出无效都会清零。AI 挂单和 AI 取消挂单由平台独立控制；你的个人选择不会被平台总闸改写。</small></div><form id="positionManagementSettingsForm" class="management-settings-form"><label><span>运行状态</span><select id="positionManagementModeInput"><option value="display" ${!["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>关闭</option><option value="auto_exit" ${["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>自动平仓</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存设置</button></form>`;
+  host.innerHTML = `<div class="position-management-settings-stack"><section class="position-management-setting-block"><div class="management-settings-copy"><strong>自动平仓</strong><small>默认开启；同一持仓连续两轮有效自动推理都建议平仓才会执行，任意一轮继续持有或输出无效都会清零。AI 挂单和 AI 取消挂单由平台独立控制；你的个人选择不会被平台总闸改写。</small></div><form id="positionManagementSettingsForm" class="management-settings-form"><label><span>运行状态</span><select id="positionManagementModeInput"><option value="display" ${!["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>关闭</option><option value="auto_exit" ${["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>自动平仓</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存设置</button></form></section><section id="positionGuardUserSettings" class="position-management-setting-block position-guard-user-settings" aria-label="PivotGuard 自动盯盘账号开关"></section>${state.user?.role === "admin" ? `<section id="positionGuardAdminPanel" class="position-management-setting-block position-guard-admin-host" aria-label="PivotGuard 管理员参数"></section>` : ""}</div>`;
+  renderPositionGuardUserSettings(state.positionGuardSettings);
+  renderPositionGuardAdminPanel();
   $("positionManagementSettingsForm")?.addEventListener("submit", async event => {
     event.preventDefault();
     const button = event.submitter;
@@ -17233,7 +17783,7 @@ function renderPositionManagementTasks(tasks = [], pagination = {}) {
   const body = $("positionManagementBody");
   if (!body) return;
   if (!tasks.length) {
-    body.innerHTML = `<tr class="empty-row"><td colspan="7">暂无管理任务。只有冻结交易论点命中平仓或取消条件后，才会生成记录。</td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="7">暂无管理任务。冻结交易论点命中平仓/取消条件，或自动盯盘规则触发后，才会生成记录。</td></tr>`;
   } else {
     body.innerHTML = tasks.map(task => {
       const status = positionManagementStatus(task.status);
@@ -17268,6 +17818,8 @@ function renderPositionManagementUnavailable(message) {
 
 async function loadPositionManagement(options = {}) {
   if (isObserverMode()) {
+    state.positionGuardSettings = normalizePositionGuardSettings({ status:"unavailable", reason:"观摩模式只读" }, activeTradingAccount());
+    renderPositionGuardBadge(state.positionGuardSettings);
     renderPositionManagementUnavailable("观摩模式仅展示行情与公开分析，不显示个人账户的持仓管理任务。");
     return;
   }
@@ -17286,6 +17838,7 @@ async function loadPositionManagement(options = {}) {
     state.positionManagementSettings = settings;
     state.positionManagementFilters.page = Number(list.pagination?.page || 1);
     state.positionManagementFilters.total = Number(list.pagination?.total || 0);
+    await refreshPositionGuardState({ quiet:true, includeAdmin:true });
     renderPositionManagementOverview(state.positionManagementTasks, settings, list.pagination || {});
     renderPositionManagementSettings(settings);
     renderPositionManagementTasks(state.positionManagementTasks, list.pagination || {});
@@ -17848,6 +18401,7 @@ function bindEvents() {
 
   // Auto analyze badge — open the current subscription settings.
   $("autoAnalyzeMode")?.addEventListener("click", handleAutoSubscriptionClick);
+  $("positionGuardMode")?.addEventListener("click", handlePositionGuardModeClick);
 
   // Auto badge hover — prevent title flicker during countdown
   const autoMode = $('autoAnalyzeMode');

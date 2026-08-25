@@ -240,7 +240,7 @@ describe('position management exit-only worker', () => {
     expect(server).toContain('startPositionManagementWorker()')
     expect(bridge).toContain('if action == "pending_order_state":')
     expect(bridge).toContain('self.mt5.history_orders_get(ticket=ticket)')
-    expect(worker).toContain("scope:'exit_and_pending_cancel'")
+    expect(worker).toContain("scope:'exit_pending_cancel_and_pivot_guard'")
   })
 })
 

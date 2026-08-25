@@ -15,7 +15,7 @@ import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistory
   buildStrategyContextFromTags, startHistoryCompareRecoveryWorker } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
 import { applyBridgeRuntimeState, getBridgeDiagnostics, getBridgePerformanceSummary, isBridgeAlive,
-  queueRiskSnapshotRecovery } from '../../bridge-ws.js'
+  getBridgeDataRoute, getBridgeGeneration, queueRiskSnapshotRecovery, sendToBrowsers } from '../../bridge-ws.js'
 import { createAiAccessMiddleware } from './observer-access.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource,
   listObserverChannelAssignments, listObserverChannels, listObserverChannelsForUser, listObserverSources,
@@ -45,6 +45,7 @@ import { refreshRecoverableRiskAccounts } from './risk-snapshot-refresh.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 import { resolveBridgeInstallerRelease } from '../../bridge-installer-release.js'
+import { stripBrokerSuffix } from './utils.js'
 
 function riskRefreshFailure(error) {
   return { attempted:0, refreshed:0, recovered:0, still_halted:0,
@@ -71,6 +72,20 @@ import { getPositionManagementSettings, getPositionManagementTask, listPositionM
   savePositionManagementSettings, getPositionManagementAdminSettings,
   saveGlobalPositionManagementControl } from './position-management.js'
 import { getPositionManagementWorkerStatus } from './position-management-worker.js'
+import {
+  getPositionGuardGlobalControl,
+  getPositionGuardProfile,
+  getUserPositionGuardSetting,
+  listPositionGuardProfiles,
+  savePositionGuardGlobalControl,
+  savePositionGuardProfile,
+  saveUserPositionGuardSetting,
+} from './position-guard.js'
+import {
+  exactPositionGuardTarget,
+  getPositionGuardMonitorStatus,
+  requestPositionGuardMonitorRun,
+} from '../../workers/position-guard-monitor-worker.js'
 import { createManualAnalysisJob, getManualAnalysisJob, cancelManualAnalysisJob,
   startManualAnalysisJobs } from './manual-analysis-jobs.js'
 import { startStrategyMemoryCompressionWorker, stopStrategyMemoryCompressionWorker,
@@ -933,6 +948,166 @@ router.get('/ai/position-management/settings', async (req, res) => {
 router.put('/ai/position-management/settings', async (req, res) => {
   try { res.json({ ok:true, ...(await savePositionManagementSettings(req.user.id, req.body || {})) }) }
   catch (error) { reviewError(res, error) }
+})
+
+async function positionGuardUserStatus(userId, tradingAccountId) {
+  const [setting, control, eligibleRows, profiles] = await Promise.all([
+    getUserPositionGuardSetting({ userId, tradingAccountId }),
+    getPositionGuardGlobalControl(),
+    queryAll(`SELECT outcomes.*
+      FROM signal_outcomes outcomes
+      INNER JOIN mt5_account_ownership_history ownership
+        ON ownership.id = outcomes.ownership_history_id
+        AND ownership.user_id = outcomes.user_id
+        AND ownership.trading_account_id = outcomes.trading_account_id
+        AND ownership.ended_at IS NULL
+      WHERE outcomes.user_id = ? AND outcomes.trading_account_id = ?
+        AND outcomes.status = 'open' AND outcomes.attribution_status = 'attributed'
+        AND outcomes.external_intervention = 0 AND outcomes.position_id IS NOT NULL
+        AND outcomes.system_magic = 234000`, [userId, tradingAccountId]),
+    listPositionGuardProfiles(),
+  ])
+  const activeSymbols = new Set(profiles
+    .filter(profile => profile.status === 'active' && profile.current_version_id)
+    .map(profile => profile.standard_symbol))
+  const profiledRows = eligibleRows.filter(row => activeSymbols.has(
+    stripBrokerSuffix(String(row.original_symbol || row.symbol || '')).toUpperCase()))
+  const bridgeOnline = isBridgeAlive(Number(userId))
+  let bridgeDataReady = bridgeOnline && profiledRows.length === 0
+  let qualifiedCount = 0
+  if (bridgeOnline && profiledRows.length > 0) {
+    const route = getBridgeDataRoute(userId, tradingAccountId, { strictAccount:true })
+    if (route) {
+      const inventory = await mt5Bridge(userId, 'system_trade_inventory', {
+        terminal_instance_id:route.terminal_instance_id,
+        account_ref:route.account_ref,
+      }, { noFallback:true, timeoutMs:5_000, expectedGeneration:getBridgeGeneration(userId) })
+        .catch(() => null)
+      if (inventory?.status === 'success') {
+        bridgeDataReady = true
+        qualifiedCount = profiledRows.filter(row => exactPositionGuardTarget(row, inventory)).length
+      }
+    }
+  }
+  let runtimeStatus = 'disabled'
+  let reason = '当前账号默认关闭'
+  if (setting.enabled && !control.enabled) {
+    runtimeStatus = 'paused'
+    reason = '平台自动盯盘总闸已关闭'
+  } else if (setting.enabled && !bridgeOnline) {
+    runtimeStatus = 'paused'
+    reason = '交易终端离线，等待恢复'
+  } else if (setting.enabled && !bridgeDataReady) {
+    runtimeStatus = 'paused'
+    reason = '当前交易账号终端路由或持仓数据暂不可用'
+  } else if (setting.enabled) {
+    runtimeStatus = 'running'
+    reason = '正在按平台参数检查合格系统持仓'
+  }
+  return {
+    ...setting,
+    runtime_status:runtimeStatus,
+    reason,
+    platform_enabled:control.enabled,
+    bridge_connected:bridgeOnline,
+    qualified_position_count:qualifiedCount,
+  }
+}
+
+router.get('/ai/position-guard/settings', async (req, res) => {
+  try {
+    const tradingAccountId = Number(req.query.trading_account_id)
+    res.json({ ok:true, settings:await positionGuardUserStatus(req.user.id, tradingAccountId) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/position-guard/settings', async (req, res) => {
+  try {
+    const tradingAccountId = Number(req.body?.trading_account_id)
+    const setting = await saveUserPositionGuardSetting({
+      userId:req.user.id,
+      tradingAccountId,
+      enabled:req.body?.enabled,
+    })
+    await auditAiMutation(req, 'position_guard_setting_updated', 'trading_account', tradingAccountId, {
+      enabled:setting.enabled,
+    })
+    sendToBrowsers(Number(req.user.id), {
+      type:'position_guard_settings_updated', trading_account_id:tradingAccountId, refresh:true,
+    })
+    requestPositionGuardMonitorRun()
+    res.json({ ok:true, settings:await positionGuardUserStatus(req.user.id, tradingAccountId) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/position-guard/profiles', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    res.json({ ok:true, profiles:await listPositionGuardProfiles({
+      includeConfig:true, adminUserId:req.user.id,
+    }) })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/position-guard/profiles/:standardSymbol', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    const profile = await getPositionGuardProfile({
+      standardSymbol:req.params.standardSymbol,
+      includeConfig:true,
+      adminUserId:req.user.id,
+    })
+    if (!profile) throw new Error('position_guard_profile_not_found')
+    res.json({ ok:true, profile })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/position-guard/profiles/:standardSymbol', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    const profile = await savePositionGuardProfile({
+      adminUserId:req.user.id,
+      standardSymbol:req.params.standardSymbol,
+      config:req.body?.config,
+      status:req.body?.status,
+      reason:req.body?.reason,
+    })
+    await auditAiMutation(req, 'position_guard_profile_version_created', 'position_guard_profile',
+      profile.id, { standard_symbol:profile.standard_symbol, version_no:profile.version_no,
+        config_hash:profile.config_hash, reason:req.body?.reason })
+    requestPositionGuardMonitorRun()
+    for (const row of await queryAll(`SELECT DISTINCT user_id FROM user_position_guard_settings WHERE enabled = 1`)) {
+      sendToBrowsers(Number(row.user_id), { type:'position_guard_status_updated', refresh:true })
+    }
+    res.json({ ok:true, profile })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.get('/ai/admin/position-guard/control', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    res.json({ ok:true, control:await getPositionGuardGlobalControl(),
+      worker:getPositionGuardMonitorStatus() })
+  } catch (error) { reviewError(res, error) }
+})
+
+router.put('/ai/admin/position-guard/control', async (req, res) => {
+  if (!requireAiAdmin(req, res)) return
+  try {
+    const control = await savePositionGuardGlobalControl({
+      adminUserId:req.user.id,
+      enabled:req.body?.enabled,
+      reason:req.body?.reason,
+    })
+    await auditAiMutation(req, 'position_guard_control_updated', 'global_position_guard_control', 1, {
+      enabled:control.enabled, reason:control.reason,
+    })
+    requestPositionGuardMonitorRun()
+    for (const row of await queryAll(`SELECT DISTINCT user_id FROM user_position_guard_settings WHERE enabled = 1`)) {
+      sendToBrowsers(Number(row.user_id), { type:'position_guard_status_updated', refresh:true })
+    }
+    res.json({ ok:true, control, worker:getPositionGuardMonitorStatus() })
+  } catch (error) { reviewError(res, error) }
 })
 
 router.get('/ai/position-management', async (req, res) => {

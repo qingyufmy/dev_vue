@@ -6927,6 +6927,161 @@ const migrations = [
         if (!existing.has(name)) await queryRun(`ALTER TABLE risk_account_state ${definition}`)
       }
     }
+  },
+  {
+    id: '200_pivot_guard_position_management',
+    async up() {
+      await queryRun(`CREATE TABLE IF NOT EXISTS global_position_guard_control (
+        id INT NOT NULL PRIMARY KEY,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        changed_by INT DEFAULT NULL,
+        reason VARCHAR(1000) DEFAULT NULL,
+        updated_at DATETIME NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+      await queryRun(`INSERT INTO global_position_guard_control
+        (id, enabled, changed_by, reason, updated_at)
+        VALUES (1, 0, NULL, NULL, ?) ON DUPLICATE KEY UPDATE id = id`, [beijingNow()])
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS user_position_guard_settings (
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 0,
+        enabled_at DATETIME DEFAULT NULL,
+        disabled_at DATETIME DEFAULT NULL,
+        updated_at DATETIME NOT NULL,
+        PRIMARY KEY (user_id, trading_account_id),
+        KEY idx_position_guard_user_enabled (user_id, enabled, updated_at),
+        KEY idx_position_guard_account_enabled (trading_account_id, enabled, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS position_guard_profiles (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        standard_symbol VARCHAR(64) NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'active',
+        current_version_id BIGINT DEFAULT NULL,
+        changed_by INT DEFAULT NULL,
+        reason VARCHAR(1000) DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_position_guard_profile_symbol (standard_symbol),
+        KEY idx_position_guard_profile_status (status, updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS position_guard_profile_versions (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        profile_id BIGINT NOT NULL,
+        version_no INT NOT NULL,
+        config_json LONGTEXT NOT NULL,
+        config_hash CHAR(64) NOT NULL,
+        reason VARCHAR(1000) NOT NULL,
+        created_by INT NOT NULL,
+        created_at DATETIME NOT NULL,
+        UNIQUE KEY uk_position_guard_profile_version (profile_id, version_no),
+        KEY idx_position_guard_profile_version_hash (profile_id, config_hash),
+        KEY idx_position_guard_profile_version_created (created_at, profile_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      await queryRun(`CREATE TABLE IF NOT EXISTS position_guard_position_states (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        outcome_id BIGINT NOT NULL,
+        user_id INT NOT NULL,
+        trading_account_id INT NOT NULL,
+        ownership_history_id BIGINT DEFAULT NULL,
+        ticket VARCHAR(64) NOT NULL,
+        original_symbol VARCHAR(64) NOT NULL,
+        standard_symbol VARCHAR(64) NOT NULL,
+        profile_version_id BIGINT DEFAULT NULL,
+        config_hash CHAR(64) DEFAULT NULL,
+        pivot_business_date DATE DEFAULT NULL,
+        pivot_snapshot_json LONGTEXT DEFAULT NULL,
+        pivot_d1_time_utc_ms BIGINT DEFAULT NULL,
+        pivot_tp_done TINYINT(1) NOT NULL DEFAULT 0,
+        first_target_done TINYINT(1) NOT NULL DEFAULT 0,
+        break_even_done TINYINT(1) NOT NULL DEFAULT 0,
+        break_even_pending TINYINT(1) NOT NULL DEFAULT 0,
+        pending_break_even_price DECIMAL(20,8) DEFAULT NULL,
+        pending_break_even_trigger VARCHAR(64) DEFAULT NULL,
+        pivot_cross_since_utc_ms BIGINT DEFAULT NULL,
+        pending_task_id BIGINT DEFAULT NULL,
+        retry_after DATETIME DEFAULT NULL,
+        last_error_code VARCHAR(96) DEFAULT NULL,
+        state_version BIGINT NOT NULL DEFAULT 1,
+        last_evaluated_at DATETIME DEFAULT NULL,
+        last_completed_at DATETIME DEFAULT NULL,
+        completed_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL,
+        updated_at DATETIME NOT NULL,
+        UNIQUE KEY uk_position_guard_state_outcome (outcome_id),
+        KEY idx_position_guard_state_account (user_id, trading_account_id, completed_at, updated_at),
+        KEY idx_position_guard_state_ticket (trading_account_id, ticket, completed_at),
+        KEY idx_position_guard_state_profile (profile_version_id, standard_symbol),
+        KEY idx_position_guard_state_pending (pending_task_id, completed_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+
+      const taskColumns = [
+        ['decision_source', 'VARCHAR(32) DEFAULT NULL'],
+        ['position_guard_state_id', 'BIGINT DEFAULT NULL'],
+        ['trigger_code', 'VARCHAR(64) DEFAULT NULL'],
+        ['deterministic_evidence_json', 'LONGTEXT DEFAULT NULL'],
+      ]
+      for (const [name, definition] of taskColumns) {
+        const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_position_management_tasks'
+            AND COLUMN_NAME = ?`, [name])
+        if (!rows.length) await queryRun(`ALTER TABLE ai_position_management_tasks ADD COLUMN ${name} ${definition}`)
+      }
+      const taskIndex = await queryAll(`SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_position_management_tasks'
+          AND INDEX_NAME = 'idx_position_management_guard_state'`)
+      if (!taskIndex.length) {
+        await queryRun(`CREATE INDEX idx_position_management_guard_state
+          ON ai_position_management_tasks (position_guard_state_id, status, updated_at)`)
+      }
+
+      const canonicalJson = value => Array.isArray(value) ? value.map(canonicalJson)
+        : value && typeof value === 'object'
+          ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalJson(value[key])]))
+          : value
+      const defaultConfig = {
+        pivot_method: 'fibonacci',
+        break_stop: { enabled: true, distance_price: 9, open_near_price: 10 },
+        pivot_cross_stop: { enabled: true, distance_price: 8, min_duration_seconds: 3 },
+        retrace_stop: { enabled: true, distance_price: 5 },
+        pivot_take_profit: { enabled: true, tolerance_price: 3, close_percent: 50, move_break_even: true },
+        first_target_take_profit: {
+          enabled: true, tolerance_price: 3, close_percent: 50,
+          move_break_even: true, break_even_offset_price: 2,
+        },
+      }
+      const defaultConfigJson = JSON.stringify(canonicalJson(defaultConfig))
+      const defaultConfigHash = crypto.createHash('sha256').update(defaultConfigJson).digest('hex')
+      const now = beijingNow()
+      await queryRun(`INSERT INTO position_guard_profiles
+        (standard_symbol, status, current_version_id, changed_by, reason, created_at, updated_at)
+        VALUES ('XAUUSD', 'active', NULL, 0, '系统内置默认参数', ?, ?)
+        ON DUPLICATE KEY UPDATE standard_symbol = VALUES(standard_symbol)`, [now, now])
+      const profile = await queryOne(`SELECT id, current_version_id FROM position_guard_profiles
+        WHERE standard_symbol = 'XAUUSD' LIMIT 1`)
+      if (profile) {
+        let version = await queryOne(`SELECT id, version_no FROM position_guard_profile_versions
+          WHERE profile_id = ? AND config_hash = ? LIMIT 1`, [profile.id, defaultConfigHash])
+        if (!version) {
+          const latest = await queryOne(`SELECT version_no FROM position_guard_profile_versions
+            WHERE profile_id = ? ORDER BY version_no DESC LIMIT 1`, [profile.id])
+          const versionNo = Number(latest?.version_no || 0) + 1
+          const inserted = await queryRun(`INSERT INTO position_guard_profile_versions
+            (profile_id, version_no, config_json, config_hash, reason, created_by, created_at)
+            VALUES (?, ?, ?, ?, '系统内置默认参数', 0, ?)`,
+          [profile.id, versionNo, defaultConfigJson, defaultConfigHash, now])
+          version = { id: inserted.insertId, version_no: versionNo }
+        }
+        if (!profile.current_version_id) {
+          await queryRun(`UPDATE position_guard_profiles
+            SET current_version_id = ?, status = 'active', updated_at = ? WHERE id = ?`,
+          [version.id, now, profile.id])
+        }
+      }
+    }
   }
 ]
 

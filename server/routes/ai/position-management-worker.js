@@ -8,6 +8,10 @@ import {
   claimPositionManagementLease,
   transitionPositionManagementTask,
 } from './position-management.js'
+import {
+  POSITION_GUARD_EXECUTION_STATES,
+  processPositionGuardExecutionTask,
+} from './position-guard-execution.js'
 
 const SYSTEM_MAGIC = 234000
 const WORKER_INTERVAL_MS = 15_000
@@ -25,9 +29,10 @@ const MODE_RANK = new Map([['display', 0], ['auto_exit', 1], ['auto_reverse', 2]
 
 let workerTimer = null
 let workerRunning = false
+let workerWakeQueued = false
 const runtimeStatus = {
   installed:true,
-  scope:'exit_and_pending_cancel',
+  scope:'exit_pending_cancel_and_pivot_guard',
   running:false,
   last_started_at:null,
   last_finished_at:null,
@@ -1175,6 +1180,7 @@ async function processTask(taskId, bridge) {
 export async function runPositionManagementWorkerOnce({ bridge = mt5Bridge, limit = 10 } = {}) {
   if (workerRunning) return { skipped:true, reason:'worker_already_running' }
   workerRunning = true
+  workerWakeQueued = false
   runtimeStatus.running = true
   runtimeStatus.last_started_at = beijingNow()
   runtimeStatus.last_error = null
@@ -1183,16 +1189,19 @@ export async function runPositionManagementWorkerOnce({ bridge = mt5Bridge, limi
     const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 50))
     processed += await expireInactiveAutomaticExitCandidates(safeLimit)
     const states = [...new Set(['EVIDENCE_CONFIRMED', ...PREPARATION_RECOVERY_STATES,
-      ...CLOSE_RECOVERY_STATES, ...PENDING_RECOVERY_STATES])]
-    const rows = await queryAll(`SELECT id FROM ai_position_management_tasks
-      WHERE task_type IN ('position_exit','pending_cancel')
+      ...CLOSE_RECOVERY_STATES, ...PENDING_RECOVERY_STATES, ...POSITION_GUARD_EXECUTION_STATES])]
+    const rows = await queryAll(`SELECT id, task_type FROM ai_position_management_tasks
+      WHERE task_type IN ('position_exit','pending_cancel','position_guard')
         AND status IN (${states.map(() => '?').join(',')})
         AND (lease_token IS NULL OR lease_expires_at < NOW())
         AND (status <> 'EVIDENCE_CONFIRMED' OR execution_mode IN ('auto_exit','auto_reverse'))
       ORDER BY updated_at ASC, id ASC LIMIT ?`, [...states, safeLimit])
     for (const row of rows) {
       try {
-        if (await processTask(Number(row.id), bridge)) processed += 1
+        const handled = row.task_type === 'position_guard'
+          ? await processPositionGuardExecutionTask(Number(row.id), { bridge })
+          : await processTask(Number(row.id), bridge)
+        if (handled) processed += 1
       } catch (error) {
         runtimeStatus.last_error = error.message
         const transition = error?.fromStatus && error?.toStatus
@@ -1206,7 +1215,19 @@ export async function runPositionManagementWorkerOnce({ bridge = mt5Bridge, limi
     workerRunning = false
     runtimeStatus.running = false
     runtimeStatus.last_finished_at = beijingNow()
+    if (workerWakeQueued) setImmediate(() => runPositionManagementWorkerOnce({ bridge }).catch(error => {
+      runtimeStatus.last_error = error.message
+      console.error('[PositionManagementWorker]', error.message)
+    }))
   }
+}
+
+export function requestPositionManagementWorkerRun() {
+  workerWakeQueued = true
+  setImmediate(() => runPositionManagementWorkerOnce().catch(error => {
+    runtimeStatus.last_error = error.message
+    console.error('[PositionManagementWorker]', error.message)
+  }))
 }
 
 export function startPositionManagementWorker(intervalMs = WORKER_INTERVAL_MS) {
@@ -1219,7 +1240,7 @@ export function startPositionManagementWorker(intervalMs = WORKER_INTERVAL_MS) {
   workerTimer = setInterval(run, Math.max(5_000, Number(intervalMs) || WORKER_INTERVAL_MS))
   workerTimer.unref?.()
   run()
-  console.log('[PositionManagementWorker] Started in guarded exit and pending-cancel mode')
+  console.log('[PositionManagementWorker] Started in guarded exit, pending-cancel and PivotGuard mode')
 }
 
 export function stopPositionManagementWorker() {

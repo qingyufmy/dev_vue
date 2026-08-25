@@ -48,7 +48,11 @@ import { recoverAbandonedAutoInferenceTasks } from './routes/ai/model-task-runti
 import { recoverAbandonedPeriodReviewModelTasks } from './routes/ai/period-review.js'
 import { startOrderIntentReconciler, stopOrderIntentReconciler } from './routes/ai/order-intents.js'
 import { stopAutoSchedulers, stopPendingReconciler } from './routes/ai/scheduler.js'
-import { startPositionManagementWorker } from './routes/ai/position-management-worker.js'
+import { startPositionManagementWorker, stopPositionManagementWorker } from './routes/ai/position-management-worker.js'
+import {
+  startPositionGuardMonitorWorker,
+  stopPositionGuardMonitorWorker,
+} from './workers/position-guard-monitor-worker.js'
 import { tokenVersionMatches } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
 import { startMonitor } from './crypto/monitor.js'
@@ -412,6 +416,8 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
     const manualTradeReviewAggregateStop = stopManualTradeReviewAggregateWorker()
     const strategyMemoryCompressionStop = stopStrategyMemoryCompressionWorker()
     const strategyMemoryConsistencyStop = stopStrategyMemoryConsistencyWorker()
+    const positionGuardMonitorStop = stopPositionGuardMonitorWorker()
+    const positionManagementStop = stopPositionManagementWorker()
     clearShutdownTimers()
 
     await Promise.all([
@@ -426,6 +432,8 @@ export function gracefulShutdown({ signal = 'manual', timeoutMs = SHUTDOWN_TIMEO
       waitForShutdownTask(manualTradeReviewAggregateStop, 'manual trade review aggregate worker', timeout),
       Promise.resolve(strategyMemoryCompressionStop),
       Promise.resolve(strategyMemoryConsistencyStop),
+      Promise.resolve(positionGuardMonitorStop),
+      Promise.resolve(positionManagementStop),
     ])
 
     // Stop accepting HTTP work only after scheduler rounds have been fenced;
@@ -532,6 +540,7 @@ installGracefulShutdownHandlers()
   await initAutoSchedulers()
   startOrderIntentReconciler()
   startPositionManagementWorker()
+  startPositionGuardMonitorWorker()
   startAdminPositionProtectionWorker()
   startPeriodReviewWorker()
   startStrategyMemoryCompressionWorker()

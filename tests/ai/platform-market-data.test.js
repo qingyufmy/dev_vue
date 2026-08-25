@@ -192,6 +192,29 @@ describe('platform market data', () => {
     expect(result.market_meta.source).toBe('user_bridge_fallback')
   })
 
+  it('keeps an explicit user account route on fallback D1 requests', async () => {
+    bridge.activeId.mockResolvedValue(null)
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.s',
+      rates:[rate(0, 2000), rate(1, 2001), rate(2, 2002)] })
+    const platformRoute = {
+      terminal_instance_id:'user-terminal-11',
+      account_ref:{ broker_server:'Broker-Demo', login:'12345' },
+      platform:'mt5',
+    }
+
+    const result = await getPlatformRates(7, {
+      symbol:'XAUUSD.s', timeframe:'D1', count:3, prefer_user_source:true,
+      platform_trading_account_id:11, platform_route:platformRoute,
+    })
+
+    expect(bridge.clock).toHaveBeenCalledWith(7, 11)
+    expect(mt5Bridge).toHaveBeenCalledWith(7, 'rates', expect.objectContaining({
+      symbol:'XAUUSD.s', timeframe:'D1', terminal_instance_id:'user-terminal-11',
+      account_ref:platformRoute.account_ref,
+    }), expect.any(Object))
+    expect(result.market_meta.source).toBe('user_bridge_fallback')
+  })
+
   it('does not silently fall back when the configured default source is offline', async () => {
     db.queryOne.mockImplementation(async sql => {
       if (sql.includes('FROM ai_observer_channels')) {

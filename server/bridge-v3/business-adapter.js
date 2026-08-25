@@ -594,7 +594,18 @@ export function createBridgeV3BusinessAdapter({
         }
       }
     }
-    return { params:{ ...params, ticket:target.ticket, volume:kind === 'position' ? target.volume : undefined } }
+    let requestedVolume = kind === 'position' ? Number(target.volume) : undefined
+    if (action === 'close_system_position' && params.volume != null) {
+      const partialVolume = Number(params.volume)
+      const currentVolume = Number(target.volume)
+      if (!Number.isFinite(partialVolume) || partialVolume <= 0
+        || !Number.isFinite(currentVolume) || currentVolume <= 0
+        || partialVolume > currentVolume + 1e-8) {
+        return { result:rejectedManagementResult('position_close_volume_invalid', target.ticket) }
+      }
+      requestedVolume = partialVolume
+    }
+    return { params:{ ...params, ticket:target.ticket, volume:requestedVolume } }
   }
 
   function classifyQuoteMarket(quote, checkedAt, platform) {

@@ -1069,7 +1069,15 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   if (platformUserId && params.require_platform_source === true) {
     return { status:'error', error:'platform_market_source_unavailable', message:'默认观摩源暂时无法提供该品种行情' }
   }
-  const fallbackClock = getPlatformMarketClockState(requestUserId)
+  const fallbackRoute = params.platform_route && typeof params.platform_route === 'object'
+    ? {
+        terminal_instance_id:params.platform_route.terminal_instance_id,
+        account_ref:params.platform_route.account_ref,
+      }
+    : {}
+  const fallbackClock = params.platform_trading_account_id
+    ? getPlatformMarketClockState(requestUserId, params.platform_trading_account_id)
+    : getPlatformMarketClockState(requestUserId)
   const existingFallbackSource = await findSource(requestUserId, fallbackClock)
     .catch(() => ({ id:null }))
   const fallbackStandardSymbol = stripBrokerSuffix(symbol)
@@ -1084,6 +1092,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   const fallbackProbeOnly = !fallbackReviewRange && fallbackCached.rates.length >= count - 1
   const fallbackFetchCount = fallbackReviewRange ? count : (fallbackProbeOnly ? 3 : count + 1)
   let fallback = await mt5Bridge(requestUserId, 'rates', { symbol, timeframe, count:fallbackFetchCount,
+    ...fallbackRoute,
     ...(fallbackReviewRange ? { start_utc_msc:fallbackRangeStart, end_utc_msc:fallbackRangeEnd } : {}) },
   { timeoutMs:fallbackReviewRange ? 30000 : 15000, noFallback:true })
   const fallbackRangeResponseAudit = fallbackReviewRange && fallback && typeof fallback === 'object'
@@ -1147,7 +1156,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   let fallbackGapVerification = { status:'none', rates:[], source_gaps:[], filled_gaps:[] }
   if (fallbackGaps.length) {
     fallbackGapVerification = await verifyCachedGapsWithBridge(requestUserId, symbol, timeframe,
-      fallbackGaps, effectiveFallbackClock, existingFallbackSource, {},
+      fallbackGaps, effectiveFallbackClock, existingFallbackSource, fallbackRoute,
       [...fallbackCached.rates, ...fallbackSplit.closedRates])
     if (fallbackGapVerification.error) {
       return { status:'error', error:fallbackGapVerification.error, message:'Bridge 未能覆盖并核验缓存缺口' }
@@ -1163,7 +1172,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
   const fallbackRefillNeeded = !fallbackReviewRange
     && (fallbackIdentityChanged || fallbackBoundaryGap)
   if (fallbackRefillNeeded) {
-    const refill = await mt5Bridge(requestUserId, 'rates', { symbol, timeframe, count:count + 1 },
+    const refill = await mt5Bridge(requestUserId, 'rates', { symbol, timeframe, count:count + 1, ...fallbackRoute },
       { timeoutMs:15000, noFallback:true })
     if (refill?.status !== 'success' || !Array.isArray(refill.rates) || refill.rates.length === 0) {
       return { status:'error', error:'rates_gap_refill_failed', message:refill?.message || refill?.error || 'K 线缓存缺口补齐失败' }
@@ -1195,7 +1204,7 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
       return { status:'error', error:'rates_gap_verification_source_identity_changed', message:'行情来源身份已变化，缓存缺口无法核验' }
     }
     const postVerification = await verifyCachedGapsWithBridge(requestUserId, symbol, timeframe,
-      fallbackPostRefillGaps, effectiveFallbackClock, existingFallbackSource, {},
+      fallbackPostRefillGaps, effectiveFallbackClock, existingFallbackSource, fallbackRoute,
       [...fallbackCached.rates, ...fallbackSplit.closedRates])
     if (postVerification.error) {
       return { status:'error', error:postVerification.error, message:'Bridge 未能覆盖并核验缓存缺口' }
