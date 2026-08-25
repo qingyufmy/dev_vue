@@ -70,9 +70,13 @@ describe('account metrics', () => {
       increment: { requested_cursor: {}, through_cursor: {}, closed_positions: [], account_events: [] },
     }, DEFAULT_RISK_POLICY)
     expect(result).toMatchObject({ halt_status: 'active', halt_reason: null, data_complete: true })
+    expect(result.transition).toMatchObject({ recovered:true, previous_reason:'R3_RISK_DATA_INCOMPLETE', next_status:'active' })
+    expect(result.last_recovered_at).toBe('2026-07-15 21:00:00')
     const update = updates.find(item => item.sql.startsWith('UPDATE risk_account_state'))
     expect(update.params).toContain('active')
     expect(update.params).toContain(1)
+    expect(update.sql).toContain('halt_started_at')
+    expect(update.sql).toContain('last_recovered_at')
   })
 
   it('aggregates partial closes by complete position', () => {
@@ -109,6 +113,21 @@ describe('account metrics', () => {
     const withdrawal = calculateAccountRiskMetrics({ ...snapshot({ account: { equity: 9500, currency: 'USD' }, historyAll: history([], { deposit: 500 }), historyToday: history() }), previousState: { ...stateRow, cumulative_cash_flow: 1000, equity_high_water: 10000 } })
     expect(withdrawal.equity_high_water).toBe(9500)
     expect(withdrawal.drawdown_pct).toBe(0)
+  })
+
+  it('resets daily loss on a new MT5 business date but preserves cross-day high-water drawdown', () => {
+    const result = calculateAccountRiskMetrics({
+      risk_snapshot_version:1,
+      account:{ equity:9200, currency:'USD' }, positions:[], pending:[], instruments:{}, fxRates:{},
+      snapshot_complete:true, businessDate:'2026-07-16', timezone_offset_minutes:180,
+      clock_status:'verified', previousState:{ ...stateRow, day_realized_net:-200 },
+      increment:{ requested_cursor:{}, through_cursor:{}, closed_positions:[], account_events:[] },
+    })
+    expect(result.day_start_equity).toBe(9200)
+    expect(result.daily_loss_pct).toBe(0)
+    expect(result.equity_high_water).toBe(10000)
+    expect(result.drawdown_pct).toBe(8)
+    expect(result.data_complete).toBe(true)
   })
 
   it('fails closed when full position history was paginated', () => {

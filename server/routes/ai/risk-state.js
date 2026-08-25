@@ -16,6 +16,17 @@ const IDENTITY_SYNC_RETRY_MAX_DELAY_MS = 100
 const IDENTITY_SYNC_RETRY_JITTER_MS = 10
 const identitySyncFlights = new Map()
 
+// These are the only risk reasons that the background snapshot worker may
+// resolve.  Kill switches, protection incidents and account-ownership/permission
+// fences are deliberately kept outside this list so a data refresh can never
+// clear an operator or identity decision.
+export const AUTO_RECOVERABLE_RISK_REASONS = Object.freeze([
+  'R3_RISK_DATA_INCOMPLETE',
+  'R3.1_DAILY_LOSS_LIMIT',
+  'R3.2_CONSECUTIVE_LOSS_COOLDOWN',
+  'R3.3_MAX_DRAWDOWN',
+])
+
 // MySQL deadlocks are safe to retry only for this idempotent identity transaction.
 const isIdentityDeadlock = error => {
   const code = String(error?.code || '').trim().toUpperCase()
@@ -229,10 +240,79 @@ export function calculateAccountRiskMetrics(input = {}) {
   }
 }
 
+function riskStateTransition(state, nextStatus, nextReason, now) {
+  const previousStatus = String(state?.halt_status || 'active')
+  const previousReason = state?.halt_reason == null ? null : String(state.halt_reason)
+  const normalizedStatus = String(nextStatus || 'active')
+  const normalizedReason = nextReason == null ? null : String(nextReason)
+  const statusChanged = previousStatus !== normalizedStatus
+  const reasonChanged = previousReason !== normalizedReason
+  const changed = statusChanged || reasonChanged
+  const previousActive = previousStatus === 'active'
+  const nextActive = normalizedStatus === 'active'
+  return {
+    changed,
+    recovered: changed && !previousActive && nextActive,
+    halted: changed && previousActive && !nextActive,
+    reasonChanged: changed && reasonChanged,
+    previous_status: previousStatus,
+    previous_reason: previousReason,
+    next_status: normalizedStatus,
+    next_reason: normalizedReason,
+    halt_started_at: previousActive && !nextActive
+      ? now : (state?.halt_started_at || null),
+    halt_reason_changed_at: !nextActive && reasonChanged
+      ? now : (state?.halt_reason_changed_at || null),
+    last_recovered_at: !previousActive && nextActive
+      ? now : (state?.last_recovered_at || null),
+  }
+}
+
+async function auditRiskStateTransitionTx(run, userId, accountId, transition, metrics, trigger) {
+  if (!transition?.changed) return
+  const action = transition.recovered
+    ? 'risk_account_recovered'
+    : transition.halted
+      ? 'risk_account_halted'
+      : 'risk_account_halt_reason_changed'
+  const detail = JSON.stringify({
+    previous_status:transition.previous_status,
+    previous_reason:transition.previous_reason,
+    status:transition.next_status,
+    reason:transition.next_reason,
+    daily_loss_pct:metrics?.daily_loss_pct ?? null,
+    drawdown_pct:metrics?.drawdown_pct ?? null,
+    consecutive_losses:metrics?.consecutive_losses ?? null,
+    business_date:metrics?.business_date ?? null,
+    snapshot_at:metrics?.last_risk_snapshot_at ?? null,
+    trigger:String(trigger || 'risk_snapshot'),
+  }).slice(0, 5000)
+  // Keep the audit write in the same transaction as the state transition.  If
+  // the audit table is unavailable the transaction rolls back and the account
+  // remains fail-closed instead of reporting an unaudited recovery.
+  await run(`INSERT INTO audit_logs
+    (user_id, user_email, user_nickname, action, target_type, target_id, detail, ip, user_agent)
+    VALUES (?, '', '', ?, 'trading_account', ?, ?, '', '')`,
+  [userId, action, accountId, detail])
+}
+
 export async function refreshRiskAccountState(userId, accountId, snapshot, policy) {
   return withTransaction(async run => {
+    const account = await txOne(run, `SELECT id, user_id, review_status, observe_status, is_deleted
+      FROM trading_accounts WHERE id = ? AND user_id = ? FOR UPDATE`, [accountId, userId])
+    if (!account || account.is_deleted) throw new Error('trading_account_not_found')
     const state = await txOne(run, 'SELECT * FROM risk_account_state WHERE trading_account_id = ? AND user_id = ? FOR UPDATE', [accountId, userId])
     if (!state) throw new Error('risk_account_state_not_found')
+    const nonRecoverable = state.user_kill_switch
+      || state.halt_status === 'protection_incident'
+      || String(state.halt_reason || '').startsWith('R6_')
+      || !['approved', ''].includes(String(account.review_status || 'approved'))
+      || String(account.observe_status || '') !== 'active'
+    if (nonRecoverable) {
+      return { ...state, preserved:true, transition:null,
+        halt_status:String(state.halt_status || 'active'),
+        halt_reason:state.halt_reason || null }
+    }
     const metrics = calculateAccountRiskMetrics({ ...snapshot, previousState: state })
     let haltReason = null
     if (!metrics.data_complete) haltReason = 'R3_RISK_DATA_INCOMPLETE'
@@ -244,16 +324,25 @@ export async function refreshRiskAccountState(userId, accountId, snapshot, polic
     if (!cooldownUntil) cooldownUntil = consecutiveLossCooldownUntil(metrics, previousLosses, policy)
     if (!haltReason && cooldownUntil) haltReason = 'R3.2_CONSECUTIVE_LOSS_COOLDOWN'
     const now = beijingNow()
+    const nextStatus = haltReason ? 'halted' : 'active'
+    const transition = riskStateTransition(state, nextStatus, haltReason, now)
     await run(`UPDATE risk_account_state SET business_date = ?, day_start_equity = ?, day_realized_net = ?, day_floating_pnl = ?,
       cumulative_cash_flow = ?, equity_high_water = ?, drawdown_pct = ?, consecutive_losses = ?, cooldown_until = ?,
       halt_status = ?, halt_reason = ?, data_complete = ?, data_incomplete_reason = ?, last_deal_time_msc = ?,
-      last_deal_ticket = ?, last_risk_snapshot_at = ?, updated_at = ? WHERE trading_account_id = ? AND user_id = ?`,
+      last_deal_ticket = ?, last_risk_snapshot_at = ?, halt_started_at = ?, halt_reason_changed_at = ?,
+      last_recovered_at = ?, updated_at = ? WHERE trading_account_id = ? AND user_id = ?`,
     [metrics.business_date, metrics.day_start_equity, metrics.realized, metrics.floating, metrics.cumulative_cash_flow,
       metrics.equity_high_water, metrics.drawdown_pct, metrics.consecutive_losses, cooldownUntil,
       haltReason ? 'halted' : 'active', haltReason, metrics.data_complete ? 1 : 0,
       (metrics.data_incomplete_reasons || []).join(',').slice(0, 255) || null,
-      metrics.last_deal_time_msc || 0, metrics.last_deal_ticket || 0, now, now, accountId, userId])
-    return { ...metrics, halt_status: haltReason ? 'halted' : 'active', halt_reason: haltReason, cooldown_until: cooldownUntil }
+      metrics.last_deal_time_msc || 0, metrics.last_deal_ticket || 0, now,
+      transition.halt_started_at, transition.halt_reason_changed_at, transition.last_recovered_at,
+      now, accountId, userId])
+    await auditRiskStateTransitionTx(run, userId, accountId, transition,
+      { ...metrics, last_risk_snapshot_at:now }, snapshot?.risk_refresh_trigger)
+    return { ...metrics, halt_status: nextStatus, halt_reason: haltReason, cooldown_until: cooldownUntil,
+      halt_started_at:transition.halt_started_at, halt_reason_changed_at:transition.halt_reason_changed_at,
+      last_recovered_at:transition.last_recovered_at, transition }
   })
 }
 
@@ -313,11 +402,17 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
         review_status:reviewStatus, observe_status:observeStatus }
     }
     if (!canClaimOwnership) {
-      await run(`INSERT INTO risk_account_state (trading_account_id, user_id, halt_status, halt_reason, data_complete, created_at, updated_at)
-        VALUES (?, ?, 'halted', 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 0, ?, ?)
+      await run(`INSERT INTO risk_account_state
+        (trading_account_id, user_id, halt_status, halt_reason, data_complete,
+         halt_started_at, halt_reason_changed_at, created_at, updated_at)
+        VALUES (?, ?, 'halted', 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 0, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), halt_status = 'halted',
-          halt_reason = 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', data_complete = 0, updated_at = VALUES(updated_at)`,
-      [matched.id, userId, now, now])
+          halt_started_at = COALESCE(halt_started_at, VALUES(halt_started_at)),
+          halt_reason_changed_at = CASE WHEN COALESCE(halt_reason, '') <> VALUES(halt_reason)
+            THEN VALUES(halt_reason_changed_at) ELSE halt_reason_changed_at END,
+          halt_reason = 'R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', data_complete = 0,
+          updated_at = VALUES(updated_at)`,
+      [matched.id, userId, now, now, now, now])
       return {
         accountId: Number(matched.id), switched: false, verified: false, anomalyCode,
         ownershipTransferred: false, previousOwnerUserIds: [],
@@ -347,8 +442,11 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
         WHERE id IN (${placeholders})`, [now, ...previousAccountIds])
       await run(`UPDATE strategy_subscriptions SET execution_enabled = 0, updated_at = ?
         WHERE trading_account_id IN (${placeholders}) AND is_deleted = 0`, [now, ...previousAccountIds])
-      await run(`UPDATE risk_account_state SET halt_status = 'halted', halt_reason = 'R6_ACCOUNT_TRANSFERRED',
-        data_complete = 0, updated_at = ? WHERE trading_account_id IN (${placeholders})`, [now, ...previousAccountIds])
+      await run(`UPDATE risk_account_state SET halt_started_at = COALESCE(halt_started_at, ?),
+        halt_reason_changed_at = CASE WHEN COALESCE(halt_reason, '') <> 'R6_ACCOUNT_TRANSFERRED'
+          THEN ? ELSE halt_reason_changed_at END,
+        halt_status = 'halted', halt_reason = 'R6_ACCOUNT_TRANSFERRED', data_complete = 0, updated_at = ?
+        WHERE trading_account_id IN (${placeholders})`, [now, now, now, ...previousAccountIds])
     }
     if (uniquePreviousOwnerUserIds.length) {
       const placeholders = uniquePreviousOwnerUserIds.map(() => '?').join(',')
@@ -396,6 +494,8 @@ export async function syncTradingAccountIdentity(userId, snapshot, requestedAcco
         data_complete = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED') THEN 0 ELSE data_complete END,
         data_incomplete_reason = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED') THEN NULL ELSE data_incomplete_reason END,
         halt_status = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED') THEN 'active' ELSE halt_status END,
+        last_recovered_at = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED')
+          THEN VALUES(updated_at) ELSE last_recovered_at END,
         halt_reason = CASE WHEN halt_reason IN ('R6_ACCOUNT_TRADE_PERMISSION_REQUIRED', 'R6_ACCOUNT_TRANSFERRED') THEN NULL ELSE halt_reason END,
         updated_at = VALUES(updated_at)`,
     [matched.id, userId, now, now])
@@ -470,15 +570,23 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
     shadowRules.push({ code: 'R3.2_CONSECUTIVE_LOSS_COOLDOWN', outcome: 'shadow_reject', details: { until: cooldownUntil } })
     cooldownUntil = null
   }
+  const now = beijingNow()
+  const nextStatus = haltReason ? 'halted' : 'active'
+  const transition = riskStateTransition(state, nextStatus, haltReason, now)
   await run(`UPDATE risk_account_state SET business_date = ?, day_start_equity = ?, day_realized_net = ?, day_floating_pnl = ?,
     cumulative_cash_flow = ?, equity_high_water = ?, drawdown_pct = ?, consecutive_losses = ?, cooldown_until = ?,
     halt_status = ?, halt_reason = ?, data_complete = ?, data_incomplete_reason = ?, last_deal_time_msc = ?,
-    last_deal_ticket = ?, last_risk_snapshot_at = ?, updated_at = ? WHERE trading_account_id = ?`,
+    last_deal_ticket = ?, last_risk_snapshot_at = ?, halt_started_at = ?, halt_reason_changed_at = ?,
+    last_recovered_at = ?, updated_at = ? WHERE trading_account_id = ?`,
   [metrics.business_date, metrics.day_start_equity, metrics.realized, metrics.floating, metrics.cumulative_cash_flow,
     metrics.equity_high_water, metrics.drawdown_pct, metrics.consecutive_losses, cooldownUntil,
     haltReason ? 'halted' : 'active', haltReason, metrics.data_complete ? 1 : 0,
     (metrics.data_incomplete_reasons || []).join(',').slice(0, 255) || null,
-    metrics.last_deal_time_msc || 0, metrics.last_deal_ticket || 0, beijingNow(), beijingNow(), accountId])
+    metrics.last_deal_time_msc || 0, metrics.last_deal_ticket || 0, now,
+    transition.halt_started_at, transition.halt_reason_changed_at, transition.last_recovered_at,
+    now, accountId])
+  await auditRiskStateTransitionTx(run, userId, accountId, transition,
+    { ...metrics, last_risk_snapshot_at:now }, 'order_risk')
   if (haltReason) return blocked(haltReason, metrics)
   if (cooldownUntil) return blocked('R3.2_CONSECUTIVE_LOSS_COOLDOWN', { until: cooldownUntil })
 

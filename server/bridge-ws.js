@@ -25,6 +25,8 @@ import { applyDefaultObserverClockBootstrap, trustedTerminalClock,
   validateExecutionClockContext } from './routes/ai/terminal-clock.js'
 import { getInferenceSnapshotEvidence, getInferenceVisualizationSnapshot } from './routes/ai/inference-snapshots.js'
 import { executionValidationRejection, readExecutionValidation } from './routes/ai/signal-execution-validation.js'
+import { hasActiveBridgeDeliveryExecution,
+  isBridgeDeliveryMaintenancePaused } from './bridge-v3/update-maintenance-registry.js'
 
 export { applyDefaultObserverClockBootstrap } from './routes/ai/terminal-clock.js'
 
@@ -36,7 +38,12 @@ import { JWT_SECRET } from './config.js'
 const browsers = new Map()      // userId -> Set<ws>
 const adminBrowsers = new Set() // authenticated admin console sockets
 const historyPlatformPrepareJobs = new Map()
+// One recovery scheduler per user. A timeout is scheduled only while the
+// database reports a recoverable risk state; normal active accounts are never
+// polled by this path.
 const riskSnapshotRefreshTimers = new Map()
+const RISK_REFRESH_INTERVAL_MS = 60_000
+const RISK_REFRESH_MAX_BACKOFF_MS = 300_000
 let adminUserId = null          // cached admin userId for fallback
 let adminUserIdLastCheck = 0
 const ADMIN_CACHE_TTL = ADMIN_CACHE_TTL_MS
@@ -271,24 +278,106 @@ async function preparePlatformHistoryOnTerminalReady(userId, route, accountId) {
   }
 }
 
-function queueIncompleteRiskSnapshotRefresh(userId, ai, delayMs = 250) {
+function stopRiskSnapshotRefresh(userId) {
   const numericUserId = Number(userId)
-  const existing = riskSnapshotRefreshTimers.get(numericUserId)
-  if (existing) clearTimeout(existing)
-  const timer = setTimeout(() => {
-    riskSnapshotRefreshTimers.delete(numericUserId)
-    ai.refreshIncompleteRiskAccounts(numericUserId).then(result => {
-      if (Number(result?.refreshed || 0) <= 0) return
-      broadcastAdminEvent('risk', 'snapshot_refreshed', {
-        user_id:numericUserId,
-        refreshed:Number(result.refreshed),
-      }, { scopes:['risk-audit'], refresh:true })
-    }).catch(error => {
-      console.warn(`[RiskSnapshot] Background refresh failed user=${numericUserId}:`, error.message)
+  const entry = riskSnapshotRefreshTimers.get(numericUserId)
+  if (!entry) return
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.timer = null
+  entry.cancelled = true
+  riskSnapshotRefreshTimers.delete(numericUserId)
+}
+
+function scheduleRiskSnapshotRefresh(userId, entry, delayMs) {
+  if (entry.cancelled || riskSnapshotRefreshTimers.get(Number(userId)) !== entry) return
+  if (entry.timer) clearTimeout(entry.timer)
+  entry.timer = setTimeout(() => {
+    entry.timer = null
+    runRiskSnapshotRefresh(Number(userId), entry).catch(error => {
+      console.warn(`[RiskSnapshot] Background refresh failed user=${Number(userId)}:`, error.message)
     })
   }, Math.max(0, Number(delayMs) || 0))
-  timer.unref?.()
-  riskSnapshotRefreshTimers.set(numericUserId, timer)
+  entry.timer.unref?.()
+}
+
+async function runRiskSnapshotRefresh(userId, entry) {
+  if (entry.cancelled || riskSnapshotRefreshTimers.get(Number(userId)) !== entry) return
+  if (entry.running) { entry.pending = true; return }
+  if (!isBridgeAlive(userId)) { stopRiskSnapshotRefresh(userId); return }
+  if (isBridgeDeliveryMaintenancePaused(userId)
+    || hasActiveBridgeDeliveryExecution([userId])) {
+    scheduleRiskSnapshotRefresh(userId, entry, RISK_REFRESH_INTERVAL_MS)
+    return
+  }
+  entry.running = true
+  let result = null
+  let failed = false
+  try {
+    const refresh = entry.ai.refreshRecoverableRiskAccounts || entry.ai.refreshIncompleteRiskAccounts
+    if (typeof refresh !== 'function') throw new Error('risk_snapshot_refresh_unavailable')
+    result = await refresh(Number(userId), { trigger:'bridge_background' })
+    if (Number(result?.refreshed || 0) > 0 || Number(result?.recovered || 0) > 0) {
+      broadcastAdminEvent('risk', 'snapshot_refreshed', {
+        user_id:Number(userId), refreshed:Number(result.refreshed || 0),
+        recovered:Number(result.recovered || 0),
+      }, { scopes:['risk-audit'], refresh:true })
+    }
+  } catch (error) {
+    failed = true
+    entry.failures = Math.min(3, Number(entry.failures || 0) + 1)
+    console.warn(`[RiskSnapshot] Background refresh failed user=${Number(userId)}:`, error.message)
+  } finally {
+    entry.running = false
+  }
+  if (entry.cancelled || riskSnapshotRefreshTimers.get(Number(userId)) !== entry) return
+  if (!isBridgeAlive(userId) || result?.bridge_connected === false) {
+    stopRiskSnapshotRefresh(userId)
+    return
+  }
+  if (entry.pending) {
+    entry.pending = false
+    scheduleRiskSnapshotRefresh(userId, entry, 0)
+    return
+  }
+  const remaining = Number(result?.recoverable_remaining || 0)
+    || (result ? 0 : 1)
+  if (!remaining) {
+    stopRiskSnapshotRefresh(userId)
+    return
+  }
+  if (Number(result?.refreshed || 0) > 0) entry.failures = 0
+  else if (!failed) entry.failures = Math.min(3, Number(entry.failures || 0) + 1)
+  const delay = Math.min(RISK_REFRESH_MAX_BACKOFF_MS,
+    RISK_REFRESH_INTERVAL_MS * (2 ** Number(entry.failures || 0)))
+  scheduleRiskSnapshotRefresh(userId, entry, delay)
+}
+
+function queueIncompleteRiskSnapshotRefresh(userId, ai, delayMs = 250) {
+  const numericUserId = Number(userId)
+  let entry = riskSnapshotRefreshTimers.get(numericUserId)
+  if (!entry) {
+    entry = { ai, timer:null, running:false, pending:false, failures:0, cancelled:false }
+    riskSnapshotRefreshTimers.set(numericUserId, entry)
+  } else {
+    entry.ai = ai
+    entry.cancelled = false
+  }
+  if (entry.running) { entry.pending = true; return }
+  scheduleRiskSnapshotRefresh(numericUserId, entry, delayMs)
+}
+
+// Public arming point for a newly persisted R3 halt while the Bridge is already
+// online. The dynamic import avoids turning the Bridge/AI module relationship
+// into a new static cycle.
+export function queueRiskSnapshotRecovery(userId, delayMs = 250) {
+  const numericUserId = Number(userId)
+  if (!(numericUserId > 0) || !isBridgeAlive(numericUserId)) return false
+  void import('./routes/ai/index.js').then(ai => {
+    if (isBridgeAlive(numericUserId)) queueIncompleteRiskSnapshotRefresh(numericUserId, ai, delayMs)
+  }).catch(error => {
+    console.warn(`[RiskSnapshot] Failed to arm recovery user=${numericUserId}:`, error.message)
+  })
+  return true
 }
 
 async function synchronizeBridgeV3TerminalIdentity({ userId, terminal, connectionGeneration }) {
@@ -402,6 +491,7 @@ async function forgetBridgeV3TerminalIdentity({ userId, terminal, connectionGene
     terminal_instance_id:terminal.terminal_instance_id,
   }, { scopes:['overview', 'users', 'ai-operations', 'risk-audit'] })
   if (!isBridgeAlive(Number(userId))) {
+    stopRiskSnapshotRefresh(Number(userId))
     const ai = await import('./routes/ai/index.js')
     await Promise.allSettled([
       ai.stopAutoScheduler(Number(userId)),

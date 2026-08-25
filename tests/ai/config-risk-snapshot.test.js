@@ -26,6 +26,10 @@ vi.mock('../../server/routes/ai/risk-policy.js', () => ({
 }))
 
 vi.mock('../../server/routes/ai/risk-state.js', () => ({
+  AUTO_RECOVERABLE_RISK_REASONS:[
+    'R3_RISK_DATA_INCOMPLETE', 'R3.1_DAILY_LOSS_LIMIT',
+    'R3.2_CONSECUTIVE_LOSS_COOLDOWN', 'R3.3_MAX_DRAWDOWN',
+  ],
   evaluateStatefulRiskTx:vi.fn(), syncTradingAccountIdentity:vi.fn(),
 }))
 

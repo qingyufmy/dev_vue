@@ -14,7 +14,8 @@ import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistory
   cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
   buildStrategyContextFromTags, startHistoryCompareRecoveryWorker } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
-import { applyBridgeRuntimeState, getBridgeDiagnostics, getBridgePerformanceSummary, isBridgeAlive } from '../../bridge-ws.js'
+import { applyBridgeRuntimeState, getBridgeDiagnostics, getBridgePerformanceSummary, isBridgeAlive,
+  queueRiskSnapshotRecovery } from '../../bridge-ws.js'
 import { createAiAccessMiddleware } from './observer-access.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource,
   listObserverChannelAssignments, listObserverChannels, listObserverChannelsForUser, listObserverSources,
@@ -40,10 +41,23 @@ import { listStrategies, getStrategyById, createStrategy, updateStrategy, getStr
 import { buildStrategyDataCapabilitiesCatalog } from './strategy-policy.js'
 import { resolveEffectiveRiskPolicy, submitRiskPolicyChanges, normalizePlatformRiskConfig, RISK_RULES, DEFAULT_RISK_POLICY } from './risk-policy.js'
 import { setUserKillSwitch, setGlobalKillSwitch } from './risk-state.js'
-import { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
+import { refreshRecoverableRiskAccounts } from './risk-snapshot-refresh.js'
 import { getEffectiveFeatureFlags, updateAiFeatureFlags, updateRiskRuleRollout, getAiRolloutHealth } from './rollout-governance.js'
 import { rotateModelProfileCredentials, finalizeLegacyCredentialCleanup } from './model-profiles.js'
 import { resolveBridgeInstallerRelease } from '../../bridge-installer-release.js'
+
+function riskRefreshFailure(error) {
+  return { attempted:0, refreshed:0, recovered:0, still_halted:0,
+    recoverable_remaining:0, results:[], pending_reason:'risk_refresh_failed',
+    error:String(error?.message || error || 'risk_refresh_failed') }
+}
+
+function armRiskRecoveryIfNeeded(userId, result) {
+  if (result?.bridge_connected !== false && Number(result?.recoverable_remaining || 0) > 0) {
+    queueRiskSnapshotRecovery(userId)
+  }
+  return result
+}
 import { getInferencePreference, saveInferencePreference } from './inference-preferences.js'
 import { prepareEligibleDailyReviews, prepareEligibleMonthlyReviews,
   runDailyReviewWorkerOnce, runMonthlyReviewWorkerOnce, listPeriodReviewCases, getPeriodReviewCase,
@@ -850,8 +864,14 @@ router.get('/ai/risk-center', authMiddleware, async (req, res) => {
     const subscriptions = await listSubscriptions(req.user.id, req.user.role)
     const rows = await Promise.all(accounts.map(async account => {
       const [riskState, performance, effective] = await Promise.all([
-        queryAll(`SELECT halt_status, halt_reason, drawdown_pct, consecutive_losses,
-          cooldown_until, user_kill_switch, data_complete, data_incomplete_reason, last_risk_snapshot_at
+        queryAll(`SELECT halt_status, halt_reason, business_date, day_start_equity, day_realized_net,
+          day_floating_pnl, equity_high_water,
+          CASE WHEN day_start_equity > 0
+            THEN GREATEST(0, -(day_realized_net + LEAST(0, day_floating_pnl)) / day_start_equity * 100)
+            ELSE NULL END AS daily_loss_pct,
+          drawdown_pct, consecutive_losses,
+          cooldown_until, user_kill_switch, data_complete, data_incomplete_reason, last_risk_snapshot_at,
+          halt_started_at, halt_reason_changed_at, last_recovered_at
           FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id]),
         getBridgePerformanceSummary(req.user.id, account.id),
         resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }),
@@ -864,7 +884,14 @@ router.get('/ai/risk-center', authMiddleware, async (req, res) => {
 })
 
 router.post('/ai/risk-center/refresh', authMiddleware, async (req, res) => {
-  try { res.json({ ok: true, ...(await refreshIncompleteRiskAccounts(req.user.id)) }) }
+  try {
+    const accountId = Number(req.body?.account_id || 0) || null
+    const refreshed = await refreshRecoverableRiskAccounts(req.user.id, {
+      accountId, trigger:'risk_center_manual',
+    })
+    armRiskRecoveryIfNeeded(req.user.id, refreshed)
+    res.json({ ok:true, ...refreshed })
+  }
   catch (error) { reviewError(res, error) }
 })
 
@@ -886,7 +913,15 @@ router.put('/ai/risk-center/:accountId', authMiddleware, async (req, res) => {
       const inserted = await queryRun(`INSERT INTO risk_policy_sets (scope, owner_user_id, trading_account_id, name, status, created_at, updated_at) VALUES ('account', ?, ?, ?, 'active', ?, ?)`, [req.user.id, accountId, `账户 ${accountId} 自定义风控`, now, now])
       sets = [{ id: inserted.insertId }]
     }
-    res.json({ ok: true, result: await submitRiskPolicyChanges({ policySetId: sets[0].id, actorId: req.user.id, changes: req.body?.changes || {}, reason: req.body?.reason || '用户更新账户风控' }) })
+    const result = await submitRiskPolicyChanges({ policySetId: sets[0].id, actorId: req.user.id, changes: req.body?.changes || {}, reason: req.body?.reason || '用户更新账户风控' })
+    let risk_refresh
+    try {
+      risk_refresh = await refreshRecoverableRiskAccounts(req.user.id, {
+        accountId, includeActive:true, trigger:'policy_save',
+      })
+    } catch (error) { risk_refresh = riskRefreshFailure(error) }
+    armRiskRecoveryIfNeeded(req.user.id, risk_refresh)
+    res.json({ ok:true, result, risk_refresh })
   } catch (error) { reviewError(res, error) }
 })
 
@@ -1152,7 +1187,14 @@ router.put('/ai/admin/users/:userId/accounts/:accountId/risk', authMiddleware, a
     }
     const result = await submitRiskPolicyChanges({ policySetId:set.id, actorId:req.user.id,
       changes:req.body?.changes || {}, reason:req.body?.reason || '管理员在统一管理后台更新用户风控' })
-    res.json({ ok:true, result })
+    let risk_refresh
+    try {
+      risk_refresh = await refreshRecoverableRiskAccounts(targetUserId, {
+        accountId, includeActive:true, trigger:'admin_policy_save',
+      })
+    } catch (error) { risk_refresh = riskRefreshFailure(error) }
+    armRiskRecoveryIfNeeded(targetUserId, risk_refresh)
+    res.json({ ok:true, result, risk_refresh })
   } catch (error) { reviewError(res, error) }
 })
 
@@ -1698,6 +1740,7 @@ export { RISK_RULES, DEFAULT_RISK_POLICY, resolveEffectiveRiskPolicy, submitRisk
   evaluateCoreRisk } from './risk-policy.js'
 export { calculateAccountRiskMetrics, aggregateClosedPositions,
   setUserKillSwitch, setGlobalKillSwitch, syncTradingAccountIdentity } from './risk-state.js'
+export { refreshRecoverableRiskAccounts } from './risk-snapshot-refresh.js'
 export { refreshIncompleteRiskAccounts } from './risk-snapshot-refresh.js'
 export { normalizePerformanceDay, nextPerformanceWindow, recentPerformanceWindow,
   getAccountPerformanceSyncWindow, saveAccountPerformanceChunk,

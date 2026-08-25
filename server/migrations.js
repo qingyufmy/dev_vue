@@ -6911,6 +6911,22 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '199_risk_state_transition_timestamps',
+    async up() {
+      const additions = [
+        ['halt_started_at', 'ADD COLUMN halt_started_at DATETIME DEFAULT NULL AFTER halt_reason'],
+        ['halt_reason_changed_at', 'ADD COLUMN halt_reason_changed_at DATETIME DEFAULT NULL AFTER halt_started_at'],
+        ['last_recovered_at', 'ADD COLUMN last_recovered_at DATETIME DEFAULT NULL AFTER halt_reason_changed_at'],
+      ]
+      const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'risk_account_state'`)
+      const existing = new Set(rows.map(row => String(row.COLUMN_NAME)))
+      for (const [name, definition] of additions) {
+        if (!existing.has(name)) await queryRun(`ALTER TABLE risk_account_state ${definition}`)
+      }
+    }
   }
 ]
 

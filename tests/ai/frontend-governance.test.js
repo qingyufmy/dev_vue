@@ -1744,7 +1744,19 @@ describe('route permissions and credential redaction', () => {
     const end = routes.indexOf("router.post('/ai/risk-center/refresh'", start)
     const route = routes.slice(start, end)
     expect(route).toContain('drawdown_pct')
+    expect(route).toContain('AS daily_loss_pct')
     expect(route).toContain('consecutive_losses')
+  })
+
+  it('distinguishes daily loss from cross-day high-water drawdown and keeps pending Bridge copy honest', () => {
+    expect(routes).toContain('refreshRecoverableRiskAccounts')
+    expect(routes).toContain('includeActive:true')
+    expect(routes).toContain('armRiskRecoveryIfNeeded')
+    expect(app).toContain('当日亏损')
+    expect(app).toContain('历史高水位回撤按跨交易日累计')
+    expect(app).toContain('等待 Bridge 完整风险快照')
+    expect(app).toContain('该状态产生于审计字段上线前，准确触发时间未知')
+    expect(app).toContain('risk_refresh')
   })
 
   it('requires authentication on every new route and an admin role on global controls', () => {

@@ -10,7 +10,7 @@ import { resolveAiTaskModel } from './model-profiles.js'
 import { prepareAndExecuteOrderIntent } from './order-intents.js'
 import { DEFAULT_AI_VOLUME_STEP, evaluateCoreRisk, persistRiskDecision, resolveEffectiveRiskPolicy, resolvePlatformAiVolumeRange } from './risk-policy.js'
 import { normalizePositionSizeTier, positionSizeFactor } from './position-sizing.js'
-import { evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
+import { AUTO_RECOVERABLE_RISK_REASONS, evaluateStatefulRiskTx, syncTradingAccountIdentity } from './risk-state.js'
 import { getRiskRuleRolloutModes } from './rollout-governance.js'
 import { getInferencePreference } from './inference-preferences.js'
 import { parseStrategyPolicy } from './strategy-policy.js'
@@ -869,6 +869,14 @@ export async function executeOrderCore(userId, config, request, action, options 
     },
     enrichRequest:enrichOrderRequest,
   })
+  if (AUTO_RECOVERABLE_RISK_REASONS.includes(String(result?.reason || result?.reason_code || ''))) {
+    try {
+      const { queueRiskSnapshotRecovery } = await import('../../bridge-ws.js')
+      queueRiskSnapshotRecovery(userId)
+    } catch (error) {
+      console.warn(`[RiskSnapshot] Failed to arm recovery after risk rejection user=${userId}:`, error.message)
+    }
+  }
   await insertAudit(null, userId, action, request.symbol, request, result, result.status)
   return result
 }

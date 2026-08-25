@@ -2213,6 +2213,20 @@ describe('bridge-reported market state', () => {
     expect(disconnect).toContain('ai.removeUserRuntimeAutoSubscription(Number(userId))')
   })
 
+  it('keeps risk recovery single-flight, bounded, and tied to Bridge availability', () => {
+    const source = readFileSync(new URL('../server/bridge-ws.js', import.meta.url), 'utf8')
+    expect(source).toContain('const RISK_REFRESH_INTERVAL_MS = 60_000')
+    expect(source).toContain('const RISK_REFRESH_MAX_BACKOFF_MS = 300_000')
+    expect(source).toContain('if (entry.running) { entry.pending = true; return }')
+    expect(source).toContain('result?.recoverable_remaining')
+    expect(source).toContain('stopRiskSnapshotRefresh(Number(userId))')
+    expect(source).toContain("refresh(Number(userId), { trigger:'bridge_background' })")
+    expect(source).toContain('hasActiveBridgeDeliveryExecution([userId])')
+    expect(source).toContain('isBridgeDeliveryMaintenancePaused(userId)')
+    expect(source).toContain('if (entry.pending)')
+    expect(source).toContain('export function queueRiskSnapshotRecovery')
+  })
+
   it('maps explicit bridge states to the legacy trade-mode contract', () => {
     expect(normalizeBridgeMarketState({ market_state_version: 1, market_state: 'open', market_reason: 'tick_advancing',
       symbol: 'XAUUSD', symbol_trade_mode: 4, tick_progressing: true }, 1000)).toMatchObject({
