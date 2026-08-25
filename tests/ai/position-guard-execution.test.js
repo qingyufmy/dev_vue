@@ -7,10 +7,12 @@ vi.mock('../../server/db.js', () => ({
   queryAll:vi.fn(), queryOne:vi.fn(), queryRun:vi.fn(), withTransaction:vi.fn(),
 }))
 vi.mock('../../server/bridge-ws.js', () => ({
-  broadcastPositionManagementTask:vi.fn(), getBridgeGeneration:vi.fn(), isBridgeAlive:vi.fn(),
+  getBridgeGeneration:vi.fn(), isBridgeAlive:vi.fn(),
 }))
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge:vi.fn() }))
-vi.mock('../../server/routes/ai/position-management.js', () => ({ claimPositionManagementLease:vi.fn() }))
+vi.mock('../../server/routes/ai/position-management.js', () => ({
+  broadcastPositionManagementTask:vi.fn(), claimPositionManagementLease:vi.fn(),
+}))
 
 const {
   _positionGuardExecutionInternals,
