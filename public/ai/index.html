@@ -27,7 +27,7 @@
     <link rel="icon" href="/favicon.ico?v=20260814ema34toggle1" sizes="any">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=20260814ema34toggle1">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=20260814ema34toggle1">
-    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2-admin-dispatch-details1-admin-strategy-close-confirm1-manual-review-evidence1-manual-review-v3aggregate1-manual-review-frontend3-daily-review-v3-period-review-compact1-period-review-nav1-strategy-direction-interlock1-period-review-short-holding1-period-review-evidence-retry1-position-protection-modal2-observer-position-management1-admin-pending-cancel-modal1-signal-management-collapse1-pivotguard-frontend1" />
+    <link rel="stylesheet" href="/ai/styles.css?v=20260814ema34toggle1&rev=model-purpose-routing1-model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2-admin-dispatch-details1-admin-strategy-close-confirm1-manual-review-evidence1-manual-review-v3aggregate1-manual-review-frontend3-daily-review-v3-period-review-compact1-period-review-nav1-strategy-direction-interlock1-period-review-short-holding1-period-review-evidence-retry1-position-protection-modal2-observer-position-management1-admin-pending-cancel-modal1-signal-management-collapse1-pivotguard-frontend1-position-management-redesign1" />
     <link rel="stylesheet" href="/ai/responsive.css?v=20260814ema34toggle1&rev=model-decision-execution1-20260813strategy-authority1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata4-strategy-editor-workbench6-admin-strategy-dispatch1-admin-strategy-close1-manual-order-ticket1-admin-dispatch-switch1-model-management-directory2" />
   </head>
   <body>
@@ -959,8 +959,8 @@
             <section class="position-management-panel workspace-subpanel" data-workspace-panel="trading" data-workspace-view="management" hidden aria-labelledby="positionManagementTitle">
               <header class="position-management-head">
                 <div>
-                  <span id="positionManagementModeKicker" class="section-kicker">统一推理 · 等待读取</span>
-                  <h2 id="positionManagementTitle">自动平仓与挂单管理</h2>
+                  <span id="positionManagementModeKicker" class="section-kicker">持仓自动化中心 · 等待读取</span>
+                  <h2 id="positionManagementTitle">AI持仓管理</h2>
                   <p id="positionManagementModeDescription">自动平仓、AI 挂单和 AI 取消挂单使用三项独立的平台能力控制。</p>
                 </div>
                 <div class="position-management-head-actions">
@@ -971,15 +971,20 @@
               <section id="positionManagementOverview" class="insight-strip position-management-overview" aria-label="AI持仓管理概览">
                 <div class="workspace-skeleton"></div>
               </section>
-              <section id="positionManagementSettingsPanel" class="position-management-settings" aria-label="AI持仓管理运行设置">
-                <div class="workspace-skeleton"></div>
-              </section>
-              <div class="position-management-toolbar">
-                <label><span>任务状态</span><select id="positionManagementStatusFilter" class="filter-select" aria-label="筛选AI持仓管理任务"><option value="">全部状态</option><option value="CANDIDATE">等待下一轮确认</option><option value="EVIDENCE_CONFIRMED">已确认待执行</option><option value="GUARD_RECONCILING">盯盘结果核对中</option><option value="GUARD_UNCERTAIN">盯盘结果待确认</option><option value="HELD">确认已清零</option><option value="COMPLETED">已完成</option><option value="MANUAL_REVIEW">需要人工复核</option><option value="FAILED">异常</option><option value="EXPIRED">持仓已结束</option></select></label>
-                <p id="positionManagementSafetyNote"><i data-lucide="shield-check" size="14"></i>正在读取平台 AI 交易执行能力…</p>
-              </div>
               <div class="position-management-layout">
                 <section class="card position-management-list-card" aria-label="AI持仓管理任务列表">
+                  <header class="position-management-list-head">
+                    <div>
+                      <span class="section-kicker">活动队列</span>
+                      <h3>管理任务</h3>
+                      <p>优先处理需要确认或复核的持仓与挂单；选择一行查看完整证据。</p>
+                    </div>
+                    <span id="positionManagementQueueMeta" class="position-management-queue-meta">正在读取任务…</span>
+                  </header>
+                  <div class="position-management-toolbar" role="search" aria-label="筛选AI持仓管理任务">
+                    <label><span>任务状态</span><select id="positionManagementStatusFilter" class="filter-select" aria-label="筛选AI持仓管理任务"><option value="">全部状态</option><option value="CANDIDATE">等待下一轮确认</option><option value="EVIDENCE_CONFIRMED">已确认待执行</option><option value="GUARD_RECONCILING">盯盘结果核对中</option><option value="GUARD_UNCERTAIN">盯盘结果待确认</option><option value="HELD">确认已清零</option><option value="COMPLETED">已完成</option><option value="MANUAL_REVIEW">需要人工复核</option><option value="FAILED">异常</option><option value="EXPIRED">持仓已结束</option></select></label>
+                    <p id="positionManagementSafetyNote"><i data-lucide="shield-check" size="14"></i>正在读取平台 AI 交易执行能力…</p>
+                  </div>
                   <div class="table-wrap">
                     <table class="data-table position-management-table">
                       <thead><tr><th>持仓 / 品种</th><th>任务</th><th>AI建议</th><th>确认进度</th><th>运行方式</th><th data-bridge-platform-template="最近判断（{platform}）">最近判断（交易平台）</th><th>详情</th></tr></thead>
@@ -992,6 +997,12 @@
                   <div class="position-management-empty"><i data-lucide="scan-search" size="22"></i><strong>选择一条管理任务</strong><span>查看具体交易平台持仓、每轮 AI 判断、连续确认进度与实际执行状态。</span></div>
                 </aside>
               </div>
+              <details id="positionManagementSettingsDisclosure" class="position-management-settings-disclosure">
+                <summary><span><i data-lucide="sliders-horizontal" size="15"></i>自动化设置</span><small>个人开关与平台参数按权限显示，默认收起</small></summary>
+                <section id="positionManagementSettingsPanel" class="position-management-settings" aria-label="AI持仓管理运行设置">
+                  <div class="workspace-skeleton"></div>
+                </section>
+              </details>
             </section>
           </div>
           </div>
@@ -1491,7 +1502,7 @@
       });
     }
     </script>
-    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2-admin-dispatch-user-label1-admin-dispatch-details1-manual-review-create-ref1-riskmetadataround1-manual-review-frontend2-manual-review-durable-stage1-manual-review-v3aggregate1-manual-review-frontend3-position-ticket-refresh1-position-ticket-retry1-daily-review-v3-daily-review-v3fix1-period-review-contract-refresh1-admin-pending-dispatch1-period-review-short-holding1-period-review-second-remediation1-period-review-evidence-retry1-period-review-semantic-repair1-pending-fill-ticket-binding1-position-protection-modal2-observer-position-management1-admin-pending-cancel-modal1-signal-management-collapse1-history-pagination-account-key1-pivotguard-frontend1&rev=period-review-compact1-period-review-nav1-strategy-direction-interlock1-model-stream-capability1-manual-review-snapshot-fix1-memory-consistency-retry1-conflict-history1-manual-review-counterfactual-market1-manual-review-fence-hash1-lookback30d1"></script>
+    <script src="/ai/app.js?v=20260814ema34toggle1&build=signalbandwidth1-notifications1-analysisloading1-signal-history-v5-20260813strategy-authority1-model-decision-execution1-memory-workbench3-compressionobs2-manualmt4history1-no-legacy-diagnostics1-strategydata5-strategy-editor-workbench6-model-purpose-routing1-admin-strategy-dispatch1-admin-strategy-close1-execution-advice-reason1-history-source-label1-admin-dispatch-volume1-admin-dispatch-reason-optional1-manual-order-ticket1-admin-dispatch-optional-protection1-admin-dispatch-source-count1-history-ticket-binding1-model-management-directory2-admin-dispatch-user-label1-admin-dispatch-details1-manual-review-create-ref1-riskmetadataround1-manual-review-frontend2-manual-review-durable-stage1-manual-review-v3aggregate1-manual-review-frontend3-position-ticket-refresh1-position-ticket-retry1-daily-review-v3-daily-review-v3fix1-period-review-contract-refresh1-admin-pending-dispatch1-period-review-short-holding1-period-review-second-remediation1-period-review-evidence-retry1-period-review-semantic-repair1-pending-fill-ticket-binding1-position-protection-modal2-observer-position-management1-admin-pending-cancel-modal1-signal-management-collapse1-history-pagination-account-key1-pivotguard-frontend1&rev=period-review-compact1-period-review-nav1-strategy-direction-interlock1-model-stream-capability1-manual-review-snapshot-fix1-memory-consistency-retry1-conflict-history1-manual-review-counterfactual-market1-manual-review-fence-hash1-lookback30d1-position-management-redesign1"></script>
 
     <!-- Changelog Modal -->
     <div id="changelogModal" class="modal-overlay" style="display:none">

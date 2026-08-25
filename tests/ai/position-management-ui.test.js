@@ -65,7 +65,10 @@ describe('AI position management workspace', () => {
 
   it('lets the user enable automatic close without account-level admin authorization', () => {
     expect(html).toContain('positionManagementSettingsPanel')
+    expect(html).toContain('id="positionManagementSettingsDisclosure"')
+    expect(html).not.toContain('id="positionManagementSettingsDisclosure" open')
     expect(app).toContain('positionManagementSettingsForm')
+    expect(app).toContain('position-management-setting-disclosure')
     expect(app).not.toContain('自动反手（尚未开放）')
     expect(app).toContain('AI 挂单和 AI 取消挂单使用独立的平台开关')
     expect(app).toContain('自动平仓')
@@ -90,6 +93,15 @@ describe('AI position management workspace', () => {
     expect(css).toContain('.management-confirmation-row')
     expect(css).toContain('@media (max-width: 760px)')
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
+    expect(css).toContain('content: attr(data-label)')
+    expect(app).toContain('data-label="持仓 / 品种"')
+  })
+
+  it('keeps the task queue ahead of progressive automation settings', () => {
+    expect(html).toContain('id="positionManagementQueueMeta"')
+    expect(html.indexOf('class="position-management-layout"')).toBeLessThan(html.indexOf('id="positionManagementSettingsDisclosure"'))
+    expect(app).toContain('当前页处理中')
+    expect(app).toContain('当前页复核 / 异常')
   })
 
   it('shows compact management coverage when large portfolios are rotated', () => {

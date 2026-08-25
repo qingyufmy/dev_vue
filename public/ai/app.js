@@ -17525,6 +17525,8 @@ function renderPositionGuardUserSettings(settings = state.positionGuardSettings)
   const observer = isObserverMode();
   const disabled = observer || !accountId || state.positionGuardLoading;
   const countText = positionGuardCountText(settings || {});
+  const summary = $("positionGuardSettingsSummary");
+  if (summary) summary.textContent = observer ? "观摩只读" : presentation.label.replace(/^自动盯盘\s*/, "");
   host.innerHTML = `<div class="position-guard-user-copy"><div class="position-guard-title-row"><strong>PivotGuard 自动盯盘</strong><span class="position-guard-status-chip is-${presentation.key}" role="status">${escapeHtml(observer ? `${presentation.label} · 只读` : presentation.label)}</span></div><small>默认关闭。只管理当前账号中可精确归属的 AURUM 系统仓，可能自动全平、部分平仓或修改止损。自动分析开关与此功能相互独立。</small><small class="position-guard-admin-note">参数由平台管理员统一维护</small><div class="position-guard-account-meta"><span>当前账号：${escapeHtml(positionGuardAccountLabel(account))}</span><span>${escapeHtml(countText)}</span></div>${presentation.reason && presentation.key !== "disabled" ? `<p class="position-guard-reason" role="status">${escapeHtml(presentation.reason)}</p>` : ""}</div><label class="position-guard-switch"><span>账号开关</span><input id="positionGuardEnabledInput" type="checkbox" role="switch" ${settings?.enabled === true ? "checked" : ""} ${disabled ? "disabled" : ""} aria-describedby="positionGuardUserHelp"><span class="position-guard-switch-control" aria-hidden="true"><i></i></span></label><span id="positionGuardUserHelp" class="sr-only">绑定当前交易账号 ${escapeHtml(positionGuardAccountLabel(account))}</span>`;
   $("positionGuardEnabledInput")?.addEventListener("change", event => handlePositionGuardToggle(event.target));
 }
@@ -17730,23 +17732,33 @@ async function handlePositionGuardToggle(input) {
 function renderPositionManagementOverview(tasks = [], settings = {}, pagination = {}) {
   const host = $("positionManagementOverview");
   if (!host) return;
-  const confirmed = tasks.filter(task => task.status === "EVIDENCE_CONFIRMED" && task.task_type !== "position_guard").length;
-  const waiting = tasks.filter(task => task.status === "CANDIDATE").length;
+  const taskStatuses = tasks.map(task => String(task.status || "").toUpperCase());
+  const attentionStatuses = new Set(["MANUAL_REVIEW", "FAILED", "REJECTED", "PENDING_FILLED_DURING_CANCEL", "PENDING_UNCERTAIN", "CLOSE_PARTIAL", "CLOSE_UNCERTAIN", "GUARD_UNCERTAIN"]);
+  const terminalStatuses = new Set(["HELD", "COMPLETED", "EXIT_ONLY_COMPLETED", "REJECTED", "FAILED", "EXPIRED", "PENDING_CANCEL_CONFIRMED", "CLOSE_CONFIRMED"]);
+  const waiting = taskStatuses.filter(status => status === "CANDIDATE").length;
+  const attention = taskStatuses.filter(status => attentionStatuses.has(status)).length;
+  const inProgress = taskStatuses.filter(status => !terminalStatuses.has(status) && !attentionStatuses.has(status)).length;
+  const reconciling = taskStatuses.filter(status => status.endsWith("_RECONCILING")).length;
   const mode = settings.effective_mode || "display";
   const platformAutoCloseEnabled = ["auto_exit", "auto_reverse"].includes(settings.platform?.maximum_mode);
   const pendingOrderEnabled = Number(settings.platform?.ai_pending_order_enabled ?? 0) === 1;
   const pendingCancelEnabled = Number(settings.platform?.ai_pending_cancel_enabled ?? 0) === 1;
+  const guardPresentation = positionGuardStatusPresentation(state.positionGuardSettings);
+  const accountLabel = positionGuardAccountLabel(activeTradingAccount());
   const kicker = $("positionManagementModeKicker");
-  if (kicker) kicker.textContent = `统一推理 · ${positionManagementMode(mode)}`;
+  if (kicker) kicker.textContent = `持仓自动化中心 · ${positionManagementMode(mode)}`;
   const description = $("positionManagementModeDescription");
   if (description) description.textContent = mode === "auto_exit"
     ? `自动平仓已生效；同一持仓连续两轮自动推理均建议平仓后，系统才会提交平仓。AI 取消挂单${pendingCancelEnabled ? "已开启" : "已由平台关闭"}。`
-    : `自动平仓已关闭；AI 取消挂单${pendingCancelEnabled ? "仍独立运行" : "也已由平台关闭"}。`;
+    : `自动平仓已关闭；AI 取消挂单${pendingCancelEnabled ? "仍独立运行" : "也已由平台关闭"}。先查看任务队列，再按需展开个人设置。`;
   host.innerHTML = `
-    <article class="insight-item primary"><span>当前运行方式</span><strong>${escapeHtml(positionManagementMode(mode))}</strong><small>平台总闸：${platformAutoCloseEnabled ? "已开启" : "已关闭"}</small></article>
-    <article class="insight-item"><span>管理任务</span><strong class="num">${Number(pagination.total || 0)}</strong><small>全部可追踪记录</small></article>
-    <article class="insight-item success"><span>连续确认完成</span><strong class="num">${confirmed}</strong><small>当前页已达到 2/2</small></article>
-    <article class="insight-item warning"><span>等待下一轮</span><strong class="num">${waiting}</strong><small>当前页仍处于 1/2</small></article>`;
+    <div class="position-management-status-grid">
+      <article class="insight-item primary"><span>当前模式</span><strong>${escapeHtml(positionManagementMode(mode))}</strong><small>平台总闸：${platformAutoCloseEnabled ? "已开启" : "已关闭"}</small></article>
+      <article class="insight-item ${guardPresentation.tone === "running" ? "success" : guardPresentation.tone === "warning" ? "warning" : ""}"><span>当前账号 · PivotGuard</span><strong>${escapeHtml(guardPresentation.label.replace(/^自动盯盘\s*/, ""))}</strong><small title="${escapeHtml(accountLabel)}">${escapeHtml(accountLabel)}</small></article>
+      <article class="insight-item ${inProgress > 0 ? "warning" : "success"}"><span>当前页处理中</span><strong class="num">${inProgress}</strong><small>${waiting} 条等待判断 · ${reconciling} 条执行核对</small></article>
+      <article class="insight-item ${attention > 0 ? "danger" : "success"}"><span>当前页复核 / 异常</span><strong class="num">${attention}</strong><small>${attention > 0 ? "请打开任务详情核对原因" : "当前页没有待人工处理项"}</small></article>
+    </div>
+    <div class="position-management-overview-foot"><span>全部任务 <strong class="num">${Number(pagination.total || 0)}</strong></span><span>当前页指标会随任务状态筛选更新</span></div>`;
   const note = $("positionManagementSafetyNote");
   if (note) note.innerHTML = `<i data-lucide="shield-check" size="14"></i>平台能力：自动平仓 ${platformAutoCloseEnabled ? "开启" : "关闭"} · AI 挂单 ${pendingOrderEnabled ? "开启" : "关闭"} · AI 取消挂单 ${pendingCancelEnabled ? "开启" : "关闭"}`;
   initIcons();
@@ -17756,9 +17768,27 @@ function renderPositionManagementSettings(settings = {}) {
   const host = $("positionManagementSettingsPanel");
   if (!host) return;
   const user = settings.user || {};
-  host.innerHTML = `<div class="position-management-settings-stack"><section class="position-management-setting-block"><div class="management-settings-copy"><strong>自动平仓</strong><small>默认开启；同一持仓连续两轮有效自动推理都建议平仓才会执行，任意一轮继续持有或输出无效都会清零。AI 挂单和 AI 取消挂单由平台独立控制；你的个人选择不会被平台总闸改写。</small></div><form id="positionManagementSettingsForm" class="management-settings-form"><label><span>运行状态</span><select id="positionManagementModeInput"><option value="display" ${!["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>关闭</option><option value="auto_exit" ${["auto_exit", "auto_reverse"].includes(user.execution_mode) ? "selected" : ""}>自动平仓</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存设置</button></form></section><section id="positionGuardUserSettings" class="position-management-setting-block position-guard-user-settings" aria-label="PivotGuard 自动盯盘账号开关"></section>${state.user?.role === "admin" ? `<section id="positionGuardAdminPanel" class="position-management-setting-block position-guard-admin-host" aria-label="PivotGuard 管理员参数"></section>` : ""}</div>`;
+  const modeEnabled = ["auto_exit", "auto_reverse"].includes(user.execution_mode);
+  const guardPresentation = positionGuardStatusPresentation(state.positionGuardSettings);
+  host.innerHTML = `<div class="position-management-settings-stack">
+    <details class="position-management-setting-disclosure">
+      <summary><span><i data-lucide="shield-check" size="15"></i>自动平仓</span><span id="positionManagementSettingsSummary" class="position-management-setting-state is-${modeEnabled ? "active" : "off"}">${modeEnabled ? "已开启" : "已关闭"}</span></summary>
+      <div class="position-management-setting-content">
+        <section class="position-management-setting-block">
+          <div class="management-settings-copy"><strong>个人运行方式</strong><small>默认开启；同一持仓连续两轮有效自动推理都建议平仓才会执行，任意一轮继续持有或输出无效都会清零。AI 挂单和 AI 取消挂单由平台独立控制；你的个人选择不会被平台总闸改写。</small></div>
+          <form id="positionManagementSettingsForm" class="management-settings-form"><label><span>运行状态</span><select id="positionManagementModeInput"><option value="display" ${!modeEnabled ? "selected" : ""}>关闭</option><option value="auto_exit" ${modeEnabled ? "selected" : ""}>自动平仓</option></select></label><button class="btn btn-primary btn-sm" type="submit">保存设置</button></form>
+        </section>
+      </div>
+    </details>
+    <details class="position-management-setting-disclosure">
+      <summary><span><i data-lucide="radar" size="15"></i>PivotGuard 自动盯盘</span><span id="positionGuardSettingsSummary" class="position-management-setting-state is-${escapeHtml(guardPresentation.key)}">${escapeHtml(guardPresentation.label.replace(/^自动盯盘\s*/, ""))}</span></summary>
+      <div class="position-management-setting-content"><section id="positionGuardUserSettings" class="position-management-setting-block position-guard-user-settings" aria-label="PivotGuard 自动盯盘账号开关"></section></div>
+    </details>
+    ${state.user?.role === "admin" ? `<details class="position-management-setting-disclosure position-guard-admin-disclosure"><summary><span><i data-lucide="settings-2" size="15"></i>管理员参数</span><small>仅管理员可修改版本与平台总闸</small></summary><div class="position-management-setting-content"><section id="positionGuardAdminPanel" class="position-management-setting-block position-guard-admin-host" aria-label="PivotGuard 管理员参数"></section></div></details>` : ""}
+  </div>`;
   renderPositionGuardUserSettings(state.positionGuardSettings);
   renderPositionGuardAdminPanel();
+  initIcons();
   $("positionManagementSettingsForm")?.addEventListener("submit", async event => {
     event.preventDefault();
     const button = event.submitter;
@@ -17782,6 +17812,8 @@ function renderPositionManagementSettings(settings = {}) {
 function renderPositionManagementTasks(tasks = [], pagination = {}) {
   const body = $("positionManagementBody");
   if (!body) return;
+  const queueMeta = $("positionManagementQueueMeta");
+  if (queueMeta) queueMeta.textContent = `${Number(pagination.total || 0)} 条记录 · 第 ${Number(pagination.page || 1)} 页`;
   if (!tasks.length) {
     body.innerHTML = `<tr class="empty-row"><td colspan="7">暂无管理任务。冻结交易论点命中平仓/取消条件，或自动盯盘规则触发后，才会生成记录。</td></tr>`;
   } else {
@@ -17793,13 +17825,13 @@ function renderPositionManagementTasks(tasks = [], pagination = {}) {
       const ticket = task.target_position_id || task.target_pending_ticket;
       const targetMeta = [ticket ? `#${ticket}` : "未找到当前订单", positionManagementDirection(task.target_direction), Number(task.target_volume) > 0 ? `${Number(task.target_volume)}手` : ""].filter(Boolean).join(" · ");
       return `<tr class="${selected ? "selected" : ""}" data-position-management-row="${Number(task.id)}">
-        <td><span class="management-group-cell"><strong>${escapeHtml(task.standard_symbol || task.original_symbol || "--")}</strong><small title="${escapeHtml(targetMeta)}">${escapeHtml(targetMeta)}</small></span></td>
-        <td><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(positionManagementTaskLabel(task.task_type))}</span></td>
-        <td><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></td>
-        <td><span class="management-state ${evidenceMeta.tone}">${escapeHtml(evidenceMeta.label)}</span></td>
-        <td><span class="management-mode ${escapeHtml(task.execution_mode || "display")}">${escapeHtml(positionManagementTaskMode(task))}</span></td>
-        <td class="num" title="最近一次判断时间（${bridgePlatformLabel()}）">${escapeHtml(compactTimeText(positionManagementDecisionTime(task)))}</td>
-        <td><button class="management-detail-btn" type="button" data-position-management-id="${Number(task.id)}" aria-label="查看 ${escapeHtml(task.standard_symbol || task.original_symbol || "任务")} 管理详情">查看</button></td>
+        <td data-label="持仓 / 品种"><span class="management-group-cell"><strong>${escapeHtml(task.standard_symbol || task.original_symbol || "--")}</strong><small title="${escapeHtml(targetMeta)}">${escapeHtml(targetMeta)}</small></span></td>
+        <td data-label="任务"><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(positionManagementTaskLabel(task.task_type))}</span></td>
+        <td data-label="AI建议"><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></td>
+        <td data-label="确认进度"><span class="management-state ${evidenceMeta.tone}">${escapeHtml(evidenceMeta.label)}</span></td>
+        <td data-label="运行方式"><span class="management-mode ${escapeHtml(task.execution_mode || "display")}">${escapeHtml(positionManagementTaskMode(task))}</span></td>
+        <td data-label="最近判断" class="num" title="最近一次判断时间（${bridgePlatformLabel()}）">${escapeHtml(compactTimeText(positionManagementDecisionTime(task)))}</td>
+        <td data-label="详情"><button class="management-detail-btn" type="button" data-position-management-id="${Number(task.id)}" aria-label="查看 ${escapeHtml(task.standard_symbol || task.original_symbol || "任务")} 管理详情">查看详情</button></td>
       </tr>`;
     }).join("");
   }
@@ -17810,7 +17842,9 @@ function renderPositionManagementUnavailable(message) {
   const body = $("positionManagementBody");
   if (body) body.innerHTML = `<tr class="empty-row"><td colspan="7">${escapeHtml(message)}</td></tr>`;
   const overview = $("positionManagementOverview");
-  if (overview) overview.innerHTML = `<article class="insight-item"><span>AI持仓管理</span><strong>当前不可用</strong><small>${escapeHtml(message)}</small></article>`;
+  if (overview) overview.innerHTML = `<div class="position-management-status-grid"><article class="insight-item danger"><span>AI持仓管理</span><strong>当前不可用</strong><small>${escapeHtml(message)}</small></article></div>`;
+  const queueMeta = $("positionManagementQueueMeta");
+  if (queueMeta) queueMeta.textContent = "当前不可用";
   const settings = $("positionManagementSettingsPanel");
   if (settings) settings.innerHTML = `<div class="position-management-empty"><strong>运行设置暂不可用</strong><span>${escapeHtml(message)}</span></div>`;
   $("positionManagementPager")?.replaceChildren();
