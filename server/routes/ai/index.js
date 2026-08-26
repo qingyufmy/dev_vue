@@ -81,6 +81,7 @@ import {
   savePositionGuardProfile,
   saveUserPositionGuardSetting,
 } from './position-guard.js'
+import { positionGuardFeatureGate } from './position-guard-feature.js'
 import {
   exactPositionGuardTarget,
   getPositionGuardMonitorStatus,
@@ -1046,10 +1047,13 @@ async function positionGuardUserStatus(userId, tradingAccountId) {
   }
 }
 
+router.use('/ai/position-guard', positionGuardFeatureGate)
+router.use('/ai/admin/position-guard', positionGuardFeatureGate)
+
 router.get('/ai/position-guard/settings', async (req, res) => {
   try {
     const tradingAccountId = Number(req.query.trading_account_id)
-    res.json({ ok:true, settings:await positionGuardUserStatus(req.user.id, tradingAccountId) })
+    res.json({ ok:true, feature_enabled:true, settings:await positionGuardUserStatus(req.user.id, tradingAccountId) })
   } catch (error) { reviewError(res, error) }
 })
 

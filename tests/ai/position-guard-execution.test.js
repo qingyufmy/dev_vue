@@ -1,5 +1,17 @@
 import fs from 'node:fs'
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+
+const previousPositionGuardFeature = process.env.POSITION_GUARD_FEATURE_ENABLED
+beforeAll(() => { process.env.POSITION_GUARD_FEATURE_ENABLED = 'true' })
+afterAll(() => {
+  if (previousPositionGuardFeature === undefined) delete process.env.POSITION_GUARD_FEATURE_ENABLED
+  else process.env.POSITION_GUARD_FEATURE_ENABLED = previousPositionGuardFeature
+})
+
+const positionManagementMocks = vi.hoisted(() => ({
+  broadcastPositionManagementTask:vi.fn(),
+  claimPositionManagementLease:vi.fn(),
+}))
 
 vi.mock('../../server/db.js', () => ({
   beijingAfter:vi.fn(() => '2026-08-25 18:01:00'),
@@ -11,13 +23,15 @@ vi.mock('../../server/bridge-ws.js', () => ({
 }))
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge:vi.fn() }))
 vi.mock('../../server/routes/ai/position-management.js', () => ({
-  broadcastPositionManagementTask:vi.fn(), claimPositionManagementLease:vi.fn(),
+  broadcastPositionManagementTask:positionManagementMocks.broadcastPositionManagementTask,
+  claimPositionManagementLease:positionManagementMocks.claimPositionManagementLease,
 }))
 
 const {
   _positionGuardExecutionInternals,
   classifyPositionGuardReconciliation,
   normalizePositionGuardPartialVolume,
+  processPositionGuardExecutionTask,
   validatePositionGuardExecutionPreconditions,
 } = await import('../../server/routes/ai/position-guard-execution.js')
 
@@ -165,5 +179,18 @@ describe('position guard execution helpers', () => {
     expect(resume).toContain('validatePositionGuardExecutionPreconditions')
     expect(resume).toContain('revalidateLiveTrigger')
     expect(resume.indexOf('revalidateLiveTrigger')).toBeLessThan(resume.indexOf('executePrepared(context'))
+  })
+
+  it('does not claim or process a task while the deployment gate is disabled', async () => {
+    const previous = process.env.POSITION_GUARD_FEATURE_ENABLED
+    delete process.env.POSITION_GUARD_FEATURE_ENABLED
+    try {
+      positionManagementMocks.claimPositionManagementLease.mockClear()
+      await expect(processPositionGuardExecutionTask(9, { bridge:vi.fn() })).resolves.toBe(false)
+      expect(positionManagementMocks.claimPositionManagementLease).not.toHaveBeenCalled()
+    } finally {
+      if (previous === undefined) delete process.env.POSITION_GUARD_FEATURE_ENABLED
+      else process.env.POSITION_GUARD_FEATURE_ENABLED = previous
+    }
   })
 })

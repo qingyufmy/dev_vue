@@ -68,6 +68,9 @@ const state = {
   positionManagementFilters: { status: "", page: 1, pageSize: 10, total: 0 },
   selectedPositionManagementId: null,
   positionManagementRealtimeTimer: null,
+  // Deployment-level PivotGuard capability is unknown until the gated API
+  // returns an explicit success. Keep the UI hidden while it is unknown.
+  positionGuardFeatureEnabled: null,
   positionGuardSettings: null,
   positionGuardProfiles: [],
   positionGuardProfile: null,
@@ -10556,6 +10559,7 @@ async function handleAutoSubscriptionClick() {
 }
 
 async function handlePositionGuardModeClick() {
+  if (!positionGuardFeatureIsEnabled()) return;
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const accountId = positionGuardAccountId();
   if (!accountId) {
@@ -17356,6 +17360,34 @@ function positionGuardAccountId() {
   return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
+function positionGuardFeatureIsEnabled() {
+  return state.positionGuardFeatureEnabled === true;
+}
+
+function isPositionGuardFeatureDisabledError(error) {
+  return Number(error?.status) === 404 && error?.code === "position_guard_feature_disabled";
+}
+
+function setPositionGuardFeatureEnabled(enabled) {
+  state.positionGuardFeatureEnabled = enabled === true ? true : enabled === false ? false : null;
+  const control = $("positionGuardMode");
+  if (control) control.hidden = !positionGuardFeatureIsEnabled();
+}
+
+function disablePositionGuardFeature() {
+  setPositionGuardFeatureEnabled(false);
+  state.positionGuardSettings = null;
+  state.positionGuardError = "";
+  state.positionGuardProfiles = [];
+  state.positionGuardProfile = null;
+  state.positionGuardControl = null;
+  renderPositionGuardBadge(state.positionGuardSettings);
+  document.querySelectorAll('.position-guard-overview-card').forEach(element => element.remove());
+  document.querySelectorAll('.position-guard-user-disclosure, .position-guard-admin-disclosure').forEach(element => element.remove());
+  renderPositionGuardUserSettings(state.positionGuardSettings);
+  renderPositionGuardAdminPanel();
+}
+
 function positionGuardResponseRoot(data = {}) {
   if (data?.settings && typeof data.settings === "object") return data.settings;
   if (data?.setting && typeof data.setting === "object") return data.setting;
@@ -17418,6 +17450,11 @@ function positionGuardStatusPresentation(settings = state.positionGuardSettings)
 function renderPositionGuardBadge(settings = state.positionGuardSettings) {
   const control = $("positionGuardMode");
   if (!control) return;
+  if (!positionGuardFeatureIsEnabled()) {
+    control.hidden = true;
+    return;
+  }
+  control.hidden = false;
   const presentation = positionGuardStatusPresentation(settings);
   const observer = isObserverMode();
   control.className = `status-badge status-${presentation.tone} clickable-badge position-guard-control${observer ? " is-readonly" : ""}`;
@@ -17576,6 +17613,10 @@ function positionGuardReasonValue(value) {
 function renderPositionGuardUserSettings(settings = state.positionGuardSettings) {
   const host = $("positionGuardUserSettings");
   if (!host) return;
+  if (!positionGuardFeatureIsEnabled()) {
+    host.replaceChildren();
+    return;
+  }
   const account = activeTradingAccount();
   const accountId = positionGuardAccountId();
   const presentation = positionGuardStatusPresentation(settings);
@@ -17591,6 +17632,10 @@ function renderPositionGuardUserSettings(settings = state.positionGuardSettings)
 function renderPositionGuardAdminPanel() {
   const host = $("positionGuardAdminPanel");
   if (!host) return;
+  if (!positionGuardFeatureIsEnabled()) {
+    host.replaceChildren();
+    return;
+  }
   if (state.user?.role !== "admin") {
     host.remove();
     return;
@@ -17656,6 +17701,7 @@ function syncPositionGuardAdminConditionalFields() {
 
 async function savePositionGuardAdminProfile(event) {
   event.preventDefault();
+  if (!positionGuardFeatureIsEnabled()) return;
   const form = event.currentTarget;
   const button = form.querySelector('button[type="submit"]');
   const reason = positionGuardReasonValue($("positionGuardAdminReason")?.value);
@@ -17676,6 +17722,10 @@ async function savePositionGuardAdminProfile(event) {
     toast("PivotGuard 参数已保存，新版本只影响新纳入持仓", "success");
     await loadPositionGuardAdmin({ force:true });
   } catch (error) {
+    if (isPositionGuardFeatureDisabledError(error)) {
+      disablePositionGuardFeature();
+      return;
+    }
     toast(error.message || "参数保存失败，请重试", "error");
   } finally {
     if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
@@ -17684,6 +17734,7 @@ async function savePositionGuardAdminProfile(event) {
 
 async function savePositionGuardAdminControl(event) {
   event.preventDefault();
+  if (!positionGuardFeatureIsEnabled()) return;
   const form = event.currentTarget;
   const button = form.querySelector('button[type="submit"]');
   const enabled = $("positionGuardPlatformEnabled")?.checked === true;
@@ -17697,6 +17748,10 @@ async function savePositionGuardAdminControl(event) {
     toast(`PivotGuard 平台总闸已${enabled ? "开启" : "关闭"}`, "success");
     await refreshPositionGuardState({ includeAdmin:true, quiet:true, forceAdmin:true });
   } catch (error) {
+    if (isPositionGuardFeatureDisabledError(error)) {
+      disablePositionGuardFeature();
+      return;
+    }
     toast(error.message || "平台总闸保存失败，请重试", "error");
   } finally {
     if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
@@ -17704,16 +17759,24 @@ async function savePositionGuardAdminControl(event) {
 }
 
 async function loadPositionGuardAdminProfile(standardSymbol) {
-  if (state.user?.role !== "admin") return null;
+  if (!positionGuardFeatureIsEnabled() || state.user?.role !== "admin") return null;
   const symbol = String(standardSymbol || "XAUUSD").trim().toUpperCase();
-  const data = await api(`/api/ai/admin/position-guard/profiles/${encodeURIComponent(symbol)}`);
-  state.positionGuardProfile = positionGuardProfileRoot(data);
-  renderPositionGuardAdminPanel();
-  return state.positionGuardProfile;
+  try {
+    const data = await api(`/api/ai/admin/position-guard/profiles/${encodeURIComponent(symbol)}`);
+    state.positionGuardProfile = positionGuardProfileRoot(data);
+    renderPositionGuardAdminPanel();
+    return state.positionGuardProfile;
+  } catch (error) {
+    if (isPositionGuardFeatureDisabledError(error)) {
+      disablePositionGuardFeature();
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function loadPositionGuardAdmin({ force = false } = {}) {
-  if (state.user?.role !== "admin") return;
+  if (!positionGuardFeatureIsEnabled() || state.user?.role !== "admin") return;
   if (!force && state.positionGuardProfiles.length && state.positionGuardControl) return;
   try {
     const [profilesData, controlData] = await Promise.all([
@@ -17730,6 +17793,10 @@ async function loadPositionGuardAdmin({ force = false } = {}) {
       } else throw error;
     }
   } catch (error) {
+    if (isPositionGuardFeatureDisabledError(error)) {
+      disablePositionGuardFeature();
+      return null;
+    }
     state.positionGuardError = error.message || "管理员参数暂不可用";
     state.positionGuardProfiles = state.positionGuardProfiles || [];
     renderPositionGuardAdminPanel();
@@ -17741,6 +17808,11 @@ async function loadPositionGuardAdmin({ force = false } = {}) {
 async function refreshPositionGuardState({ quiet = false, includeAdmin = true, forceAdmin = false } = {}) {
   if (_positionGuardStateFlight) return _positionGuardStateFlight;
   _positionGuardStateFlight = (async () => {
+    if (state.positionGuardFeatureEnabled === false) {
+      state.positionGuardSettings = null;
+      renderPositionGuardBadge(state.positionGuardSettings);
+      return state.positionGuardSettings;
+    }
     state.positionGuardLoading = true;
     renderPositionGuardBadge(state.positionGuardSettings);
     const account = activeTradingAccount();
@@ -17754,6 +17826,14 @@ async function refreshPositionGuardState({ quiet = false, includeAdmin = true, f
       } else {
         const query = new URLSearchParams({ trading_account_id:String(accountId) });
         userData = await api(`/api/ai/position-guard/settings?${query.toString()}`, { timeout:10000 });
+        if (userData?.feature_enabled !== true) {
+          setPositionGuardFeatureEnabled(null);
+          state.positionGuardSettings = null;
+          state.positionGuardError = "";
+          renderPositionGuardBadge(state.positionGuardSettings);
+          return state.positionGuardSettings;
+        }
+        setPositionGuardFeatureEnabled(true);
         state.positionGuardSettings = normalizePositionGuardSettings(userData, account);
       }
       state.positionGuardError = "";
@@ -17769,6 +17849,10 @@ async function refreshPositionGuardState({ quiet = false, includeAdmin = true, f
         renderPositionGuardBadge(state.positionGuardSettings);
       }
     } catch (error) {
+      if (isPositionGuardFeatureDisabledError(error)) {
+        disablePositionGuardFeature();
+        return state.positionGuardSettings;
+      }
       const settingMissing = error?.code === "position_guard_setting_not_found";
       state.positionGuardError = settingMissing ? "" : (error.message || "自动盯盘状态读取失败");
       state.positionGuardSettings = normalizePositionGuardSettings(settingMissing
@@ -17789,6 +17873,10 @@ async function refreshPositionGuardState({ quiet = false, includeAdmin = true, f
 }
 
 async function handlePositionGuardToggle(input) {
+  if (!positionGuardFeatureIsEnabled()) {
+    if (input) input.checked = !input.checked;
+    return;
+  }
   if (!input || isObserverMode()) { if (input) input.checked = !input.checked; toast(observerMessage(), "warning"); return; }
   const account = activeTradingAccount();
   const accountId = positionGuardAccountId();
@@ -17807,6 +17895,11 @@ async function handlePositionGuardToggle(input) {
     toast(`当前账号自动盯盘已${enabled ? "开启" : "关闭"}`, "success");
     await refreshPositionGuardState({ quiet:true, includeAdmin:false });
   } catch (error) {
+    if (isPositionGuardFeatureDisabledError(error)) {
+      disablePositionGuardFeature();
+      input.checked = false;
+      return;
+    }
     input.checked = !enabled;
     toast(error.message || "自动盯盘设置保存失败，请重试", "error");
   } finally {
@@ -17830,6 +17923,9 @@ function renderPositionManagementOverview(tasks = [], settings = {}, pagination 
   const pendingCancelEnabled = Number(settings.platform?.ai_pending_cancel_enabled ?? 0) === 1;
   const guardPresentation = positionGuardStatusPresentation(state.positionGuardSettings);
   const accountLabel = positionGuardAccountLabel(activeTradingAccount());
+  const guardCard = positionGuardFeatureIsEnabled()
+    ? `<article class="insight-item position-guard-overview-card ${guardPresentation.tone === "running" ? "success" : guardPresentation.tone === "warning" ? "warning" : ""}"><span>当前账号 · PivotGuard</span><strong>${escapeHtml(guardPresentation.label.replace(/^自动盯盘\s*/, ""))}</strong><small title="${escapeHtml(accountLabel)}">${escapeHtml(accountLabel)}</small></article>`
+    : "";
   const kicker = $("positionManagementModeKicker");
   if (kicker) kicker.textContent = `持仓自动化中心 · ${positionManagementMode(mode)}`;
   const description = $("positionManagementModeDescription");
@@ -17839,7 +17935,7 @@ function renderPositionManagementOverview(tasks = [], settings = {}, pagination 
   host.innerHTML = `
     <div class="position-management-status-grid">
       <article class="insight-item primary"><span>当前模式</span><strong>${escapeHtml(positionManagementMode(mode))}</strong><small>平台总闸：${platformAutoCloseEnabled ? "已开启" : "已关闭"}</small></article>
-      <article class="insight-item ${guardPresentation.tone === "running" ? "success" : guardPresentation.tone === "warning" ? "warning" : ""}"><span>当前账号 · PivotGuard</span><strong>${escapeHtml(guardPresentation.label.replace(/^自动盯盘\s*/, ""))}</strong><small title="${escapeHtml(accountLabel)}">${escapeHtml(accountLabel)}</small></article>
+      ${guardCard}
       <article class="insight-item ${inProgress > 0 ? "warning" : "success"}"><span>当前页处理中</span><strong class="num">${inProgress}</strong><small>${waiting} 条等待判断 · ${reconciling} 条执行核对</small></article>
       <article class="insight-item ${attention > 0 ? "danger" : "success"}"><span>当前页复核 / 异常</span><strong class="num">${attention}</strong><small>${attention > 0 ? "请打开任务详情核对原因" : "当前页没有待人工处理项"}</small></article>
     </div>
@@ -17854,6 +17950,7 @@ function renderPositionManagementSettings(settings = {}) {
   if (!host) return;
   const user = settings.user || {};
   const modeEnabled = ["auto_exit", "auto_reverse"].includes(user.execution_mode);
+  const guardEnabled = positionGuardFeatureIsEnabled();
   const guardPresentation = positionGuardStatusPresentation(state.positionGuardSettings);
   host.innerHTML = `<div class="position-management-settings-stack">
     <details class="position-management-setting-disclosure">
@@ -17865,14 +17962,16 @@ function renderPositionManagementSettings(settings = {}) {
         </section>
       </div>
     </details>
-    <details class="position-management-setting-disclosure">
+    ${guardEnabled ? `<details class="position-management-setting-disclosure position-guard-user-disclosure">
       <summary><span><i data-lucide="radar" size="15"></i>PivotGuard 自动盯盘</span><span id="positionGuardSettingsSummary" class="position-management-setting-state is-${escapeHtml(guardPresentation.key)}">${escapeHtml(guardPresentation.label.replace(/^自动盯盘\s*/, ""))}</span></summary>
       <div class="position-management-setting-content"><section id="positionGuardUserSettings" class="position-management-setting-block position-guard-user-settings" aria-label="PivotGuard 自动盯盘账号开关"></section></div>
     </details>
-    ${state.user?.role === "admin" ? `<details class="position-management-setting-disclosure position-guard-admin-disclosure"><summary><span><i data-lucide="settings-2" size="15"></i>管理员参数</span><small>仅管理员可修改版本与平台总闸</small></summary><div class="position-management-setting-content"><section id="positionGuardAdminPanel" class="position-management-setting-block position-guard-admin-host" aria-label="PivotGuard 管理员参数"></section></div></details>` : ""}
+    ${state.user?.role === "admin" ? `<details class="position-management-setting-disclosure position-guard-admin-disclosure"><summary><span><i data-lucide="settings-2" size="15"></i>管理员参数</span><small>仅管理员可修改版本与平台总闸</small></summary><div class="position-management-setting-content"><section id="positionGuardAdminPanel" class="position-management-setting-block position-guard-admin-host" aria-label="PivotGuard 管理员参数"></section></div></details>` : ""}` : ""}
   </div>`;
-  renderPositionGuardUserSettings(state.positionGuardSettings);
-  renderPositionGuardAdminPanel();
+  if (guardEnabled) {
+    renderPositionGuardUserSettings(state.positionGuardSettings);
+    renderPositionGuardAdminPanel();
+  }
   initIcons();
   $("positionManagementSettingsForm")?.addEventListener("submit", async event => {
     event.preventDefault();

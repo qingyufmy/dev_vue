@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const previousPositionGuardFeature = process.env.POSITION_GUARD_FEATURE_ENABLED
+process.env.POSITION_GUARD_FEATURE_ENABLED = 'true'
 
 const mocks = vi.hoisted(() => ({
   beijingNow:vi.fn(() => '2026-08-26 09:00:00'),
@@ -53,6 +56,8 @@ vi.mock('../../server/routes/ai/utils.js', () => ({ stripBrokerSuffix:mocks.stri
 const {
   resetPositionGuardMonitorForTests,
   runPositionGuardMonitorOnce,
+  requestPositionGuardMonitorRun,
+  startPositionGuardMonitorWorker,
 } = await import('../../server/workers/position-guard-monitor-worker.js')
 
 const account = {
@@ -62,6 +67,11 @@ const account = {
   broker_server_key:'Broker-Server',
   login_account:'123456',
 }
+
+afterAll(() => {
+  if (previousPositionGuardFeature === undefined) delete process.env.POSITION_GUARD_FEATURE_ENABLED
+  else process.env.POSITION_GUARD_FEATURE_ENABLED = previousPositionGuardFeature
+})
 const outcome = {
   id:7,
   user_id:1,
@@ -184,5 +194,34 @@ describe('position guard monitor database state compatibility', () => {
     ])
     expect(mocks.withTransaction).not.toHaveBeenCalled()
     expect(mocks.requestPositionManagementWorkerRun).not.toHaveBeenCalled()
+  })
+
+  it('fails closed before reading the database when the deployment gate is off', async () => {
+    const previous = process.env.POSITION_GUARD_FEATURE_ENABLED
+    delete process.env.POSITION_GUARD_FEATURE_ENABLED
+    try {
+      resetPositionGuardMonitorForTests()
+      vi.clearAllMocks()
+      const result = await runPositionGuardMonitorOnce({
+        quoteProvider:vi.fn(),
+      })
+      expect(result).toEqual({
+        skipped:true,
+        reason:'position_guard_feature_disabled',
+        evaluated:0,
+        created:0,
+      })
+      expect(mocks.getPositionGuardGlobalControl).not.toHaveBeenCalled()
+      expect(mocks.listEnabledPositionGuardAccounts).not.toHaveBeenCalled()
+      expect(mocks.queryAll).not.toHaveBeenCalled()
+      expect(mocks.queryOne).not.toHaveBeenCalled()
+      expect(mocks.queryRun).not.toHaveBeenCalled()
+      expect(mocks.mt5Bridge).not.toHaveBeenCalled()
+      expect(requestPositionGuardMonitorRun()).toEqual({ skipped:true, reason:'position_guard_feature_disabled' })
+      expect(startPositionGuardMonitorWorker()).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.POSITION_GUARD_FEATURE_ENABLED
+      else process.env.POSITION_GUARD_FEATURE_ENABLED = previous
+    }
   })
 })

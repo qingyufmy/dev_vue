@@ -5,6 +5,7 @@ import { mt5Bridge } from './market-data.js'
 import { broadcastPositionManagementTask, claimPositionManagementLease } from './position-management.js'
 import { evaluatePositionGuard } from './position-guard-engine.js'
 import { validatePositionGuardQuoteSnapshot } from './position-guard-quote-cache.js'
+import { isPositionGuardFeatureEnabled } from './position-guard-feature.js'
 import { stripBrokerSuffix } from './utils.js'
 
 const SYSTEM_MAGIC = 234000
@@ -616,6 +617,7 @@ async function reconcile(context, lease, bridge) {
 }
 
 async function executePrepared(context, lease, bridge) {
+  if (!isPositionGuardFeatureEnabled()) return false
   let { task, command } = context
   const expectedState = parseJson(command.expected_state_json, {})
   const request = parseJson(command.request_json, {})
@@ -632,6 +634,7 @@ async function executePrepared(context, lease, bridge) {
   const result = await bridge(task.user_id, bridgeAction, params, {
     noFallback:true, timeoutMs:15_000, expectedGeneration:Number(task.bridge_generation),
     beforeWrite:async ({ commandId, bridgeGeneration }) => {
+      if (!isPositionGuardFeatureEnabled()) return false
       task = await markSending(task, lease, command, commandId, bridgeGeneration)
       return true
     },
@@ -650,9 +653,11 @@ async function executePrepared(context, lease, bridge) {
 }
 
 export async function processPositionGuardExecutionTask(taskId, { bridge = mt5Bridge } = {}) {
+  if (!isPositionGuardFeatureEnabled()) return false
   const lease = await claimPositionManagementLease(taskId, LEASE_SECONDS)
   if (!lease) return false
   try {
+    if (!isPositionGuardFeatureEnabled()) return false
     let context = await loadContext(taskId)
     if (!context || !ACTIVE_STATES.has(context.task.status) || context.task.task_type !== 'position_guard') return false
     if (context.task.status === 'EVIDENCE_CONFIRMED') {

@@ -12,6 +12,7 @@ import {
   POSITION_GUARD_EXECUTION_STATES,
   processPositionGuardExecutionTask,
 } from './position-guard-execution.js'
+import { isPositionGuardFeatureEnabled } from './position-guard-feature.js'
 
 const SYSTEM_MAGIC = 234000
 const WORKER_INTERVAL_MS = 15_000
@@ -1190,14 +1191,19 @@ export async function runPositionManagementWorkerOnce({ bridge = mt5Bridge, limi
     processed += await expireInactiveAutomaticExitCandidates(safeLimit)
     const states = [...new Set(['EVIDENCE_CONFIRMED', ...PREPARATION_RECOVERY_STATES,
       ...CLOSE_RECOVERY_STATES, ...PENDING_RECOVERY_STATES, ...POSITION_GUARD_EXECUTION_STATES])]
+    const taskTypes = isPositionGuardFeatureEnabled()
+      ? ['position_exit', 'pending_cancel', 'position_guard']
+      : ['position_exit', 'pending_cancel']
+    const taskTypePlaceholders = taskTypes.map(() => '?').join(',')
     const rows = await queryAll(`SELECT id, task_type FROM ai_position_management_tasks
-      WHERE task_type IN ('position_exit','pending_cancel','position_guard')
+      WHERE task_type IN (${taskTypePlaceholders})
         AND status IN (${states.map(() => '?').join(',')})
         AND (lease_token IS NULL OR lease_expires_at < NOW())
         AND (status <> 'EVIDENCE_CONFIRMED' OR execution_mode IN ('auto_exit','auto_reverse'))
-      ORDER BY updated_at ASC, id ASC LIMIT ?`, [...states, safeLimit])
+      ORDER BY updated_at ASC, id ASC LIMIT ?`, [...taskTypes, ...states, safeLimit])
     for (const row of rows) {
       try {
+        if (row.task_type === 'position_guard' && !isPositionGuardFeatureEnabled()) continue
         const handled = row.task_type === 'position_guard'
           ? await processPositionGuardExecutionTask(Number(row.id), { bridge })
           : await processTask(Number(row.id), bridge)

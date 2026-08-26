@@ -53,6 +53,7 @@ import {
   startPositionGuardMonitorWorker,
   stopPositionGuardMonitorWorker,
 } from './workers/position-guard-monitor-worker.js'
+import { isPositionGuardFeatureEnabled } from './routes/ai/position-guard-feature.js'
 import { tokenVersionMatches } from './middleware/auth.js'
 import { initBridgeWS } from './bridge-ws.js'
 import { startMonitor } from './crypto/monitor.js'
@@ -540,7 +541,11 @@ installGracefulShutdownHandlers()
   await initAutoSchedulers()
   startOrderIntentReconciler()
   startPositionManagementWorker()
-  startPositionGuardMonitorWorker()
+  if (isPositionGuardFeatureEnabled()) {
+    startPositionGuardMonitorWorker()
+  } else {
+    console.log('[PositionGuardMonitor] Deployment feature disabled; monitor not started')
+  }
   startAdminPositionProtectionWorker()
   startPeriodReviewWorker()
   startStrategyMemoryCompressionWorker()

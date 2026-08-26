@@ -1,4 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+const previousPositionGuardFeature = process.env.POSITION_GUARD_FEATURE_ENABLED
+beforeAll(() => { process.env.POSITION_GUARD_FEATURE_ENABLED = 'true' })
+afterAll(() => {
+  if (previousPositionGuardFeature === undefined) delete process.env.POSITION_GUARD_FEATURE_ENABLED
+  else process.env.POSITION_GUARD_FEATURE_ENABLED = previousPositionGuardFeature
+})
 import {
   exactPositionGuardTarget,
   positionGuardBusinessDate,

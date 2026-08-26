@@ -1,4 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+
+const previousPositionGuardFeature = process.env.POSITION_GUARD_FEATURE_ENABLED
+beforeAll(() => { process.env.POSITION_GUARD_FEATURE_ENABLED = 'true' })
+afterAll(() => {
+  if (previousPositionGuardFeature === undefined) delete process.env.POSITION_GUARD_FEATURE_ENABLED
+  else process.env.POSITION_GUARD_FEATURE_ENABLED = previousPositionGuardFeature
+})
 import { readFileSync } from 'node:fs'
 import { queryRun, withTransaction } from '../../server/db.js'
 

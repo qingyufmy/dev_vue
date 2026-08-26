@@ -19,8 +19,8 @@ describe('AI position management workspace', () => {
     expect(stylesVersion).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
     expect(appVersion).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
     expect(stylesVersion).toBe(appVersion)
-    expect(stylesVersion).toContain('position-guard-review1')
-    expect(appVersion).toContain('position-guard-review1')
+    expect(html).toContain('position-guard-review1')
+    expect(html).toContain('position-guard-deploy-gate1')
   })
 
   it('keeps position management inside AI trader instead of adding another top-level module', () => {

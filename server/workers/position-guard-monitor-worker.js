@@ -9,6 +9,7 @@ import {
   getPositionGuardGlobalControl,
   listEnabledPositionGuardAccounts,
 } from '../routes/ai/position-guard.js'
+import { isPositionGuardFeatureEnabled } from '../routes/ai/position-guard-feature.js'
 import { requestPositionManagementWorkerRun } from '../routes/ai/position-management-worker.js'
 import { stripBrokerSuffix } from '../routes/ai/utils.js'
 
@@ -504,6 +505,11 @@ async function processAccount(account, dependencies) {
 export async function runPositionGuardMonitorOnce({
   bridge = mt5Bridge, rates = getPlatformRates, quoteProvider = getPositionGuardQuote, now = Date.now(),
 } = {}) {
+  if (!isPositionGuardFeatureEnabled()) {
+    stopPositionGuardMonitorWorker()
+    runtimeStatus.last_skip_reason = 'position_guard_feature_disabled'
+    return { skipped:true, reason:'position_guard_feature_disabled', evaluated:0, created:0 }
+  }
   if (workerRunning) return { skipped:true, reason:'worker_already_running' }
   workerRunning = true
   runtimeStatus.running = true
@@ -560,17 +566,29 @@ function runGuarded() {
 }
 
 export function requestPositionGuardMonitorRun() {
+  if (!isPositionGuardFeatureEnabled()) {
+    stopPositionGuardMonitorWorker()
+    runtimeStatus.last_skip_reason = 'position_guard_feature_disabled'
+    return { skipped:true, reason:'position_guard_feature_disabled' }
+  }
   accountNextCheck.clear()
   wakeQueued = true
   setImmediate(runGuarded)
+  return { skipped:false }
 }
 
 export function startPositionGuardMonitorWorker(intervalMs = ACTIVE_INTERVAL_MS) {
+  if (!isPositionGuardFeatureEnabled()) {
+    stopPositionGuardMonitorWorker()
+    runtimeStatus.last_skip_reason = 'position_guard_feature_disabled'
+    return false
+  }
   if (workerTimer) return
   workerTimer = setInterval(runGuarded, Math.max(ACTIVE_INTERVAL_MS, Number(intervalMs) || ACTIVE_INTERVAL_MS))
   workerTimer.unref?.()
   runGuarded()
   console.log('[PositionGuardMonitor] Started with 5-second active-position cadence')
+  return true
 }
 
 export function stopPositionGuardMonitorWorker() {
