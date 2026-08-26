@@ -293,6 +293,20 @@ async function persistObserve(state, evaluation) {
   return Number(result?.changes ?? result?.affectedRows ?? 0) === 1
 }
 
+async function persistEvaluationFailure(state, evaluation) {
+  const rawCode = evaluation?.error?.code
+  const code = typeof rawCode === 'string' && rawCode.trim()
+    ? rawCode.trim().slice(0, 96)
+    : 'position_guard_evaluation_failed'
+  const now = beijingNow()
+  const result = await queryRun(`UPDATE position_guard_position_states
+    SET last_evaluated_at = ?, last_error_code = ?, updated_at = ?
+    WHERE id = ? AND state_version = ? AND pending_task_id IS NULL AND completed_at IS NULL`, [
+    now, code, now, state.id, state.state_version,
+  ])
+  return Number(result?.changes ?? result?.affectedRows ?? 0) === 1
+}
+
 function normalizedActionEvidence(action) {
   const normalized = { ...action }
   if (normalized.type === 'move_protection' && normalized.stop_loss == null) {
@@ -471,7 +485,10 @@ async function processAccount(account, dependencies) {
         now_ms:Number(quote.observed_at_utc_msc),
       })
       evaluated += 1
-      if (!evaluation.ok) continue
+      if (!evaluation.ok) {
+        await persistEvaluationFailure(state, evaluation)
+        continue
+      }
       if (evaluation.action?.side_effect !== true || evaluation.action?.type === 'observe') {
         await persistObserve(state, evaluation)
         continue

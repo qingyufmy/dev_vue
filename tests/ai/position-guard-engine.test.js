@@ -374,6 +374,41 @@ describe('fail-closed validation and scope', () => {
       .toMatchObject({ ok: false, error: { code: 'invalid_config_field' } })
   })
 
+  it('accepts the nullable timestamp and numeric TINYINT stage values returned by MySQL', () => {
+    const result = evaluate({
+      params: disableAllExcept('break_stop'),
+      stage_state: {
+        pivot_cross_since_utc_ms: null,
+        pivot_tp_done: 0,
+        first_target_done: 1,
+        break_even_pending: 0,
+        break_even_done: 1,
+      },
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.action.type).toBe(ACTION_TYPES.OBSERVE)
+    expect(result.next_stage_state).toMatchObject({
+      pivotCrossSinceMs: null,
+      pivotTakeProfitDone: false,
+      firstTargetDone: true,
+      breakEvenPending: false,
+      breakEvenDone: true,
+    })
+  })
+
+  it.each([
+    ['timestamp', { pivot_cross_since_utc_ms: 'not-a-timestamp' }, 'invalid_stage_state_timestamp'],
+    ['flag', { first_target_done: 2 }, 'invalid_stage_state_flag'],
+    ['flag', { first_target_done: '1' }, 'invalid_stage_state_flag'],
+    ['flag', { first_target_done: null }, 'invalid_stage_state_flag'],
+  ])('rejects an invalid non-null stage %s value', (_name, stageState, code) => {
+    expect(evaluate({ stage_state: stageState })).toMatchObject({
+      ok: false,
+      error: { code },
+    })
+  })
+
   it('does not contain removed account-level protection state or execution controls', () => {
     const source = readFileSync(new URL('../../server/routes/ai/position-guard-engine.js', import.meta.url), 'utf8')
 

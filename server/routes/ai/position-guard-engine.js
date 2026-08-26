@@ -140,32 +140,27 @@ function normalizeStageState(stageState) {
   const readFlag = (keys, fallback = false) => {
     const value = readFirst(stageState, keys)
     if (value === undefined) return fallback
-    return typeof value === 'boolean' ? value : null
+    if (typeof value === 'boolean') return value
+    if (value === 0) return false
+    if (value === 1) return true
+    return null
   }
   const readTimestamp = (keys) => {
     const value = readFirst(stageState, keys)
     if (value === undefined || value === null) return null
     return readFinite(value, { min: 0 })
   }
-  const pivotCrossSinceMs = readTimestamp([
+  const pivotCrossSinceKeys = [
     'pivotCrossSinceMs',
     'pivot_cross_since_ms',
     'pivot_cross_since_utc_ms',
     'pivotStopSinceMs',
     'pivot_stop_since_ms',
-  ])
-  if (pivotCrossSinceMs === null && readFirst(stageState, [
-    'pivotCrossSinceMs',
-    'pivot_cross_since_ms',
-    'pivot_cross_since_utc_ms',
-    'pivotStopSinceMs',
-    'pivot_stop_since_ms',
-  ]) !== undefined && readFirst(stageState, [
-    'pivotCrossSinceMs',
-    'pivot_cross_since_ms',
-    'pivotStopSinceMs',
-    'pivot_stop_since_ms',
-  ]) !== null) {
+  ]
+  const pivotCrossSinceValue = readFirst(stageState, pivotCrossSinceKeys)
+  const pivotCrossSinceMs = readTimestamp(pivotCrossSinceKeys)
+  if (pivotCrossSinceValue !== undefined && pivotCrossSinceValue !== null
+    && pivotCrossSinceMs === null) {
     return failure('invalid_stage_state_timestamp')
   }
 
