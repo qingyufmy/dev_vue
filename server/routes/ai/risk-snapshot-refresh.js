@@ -7,7 +7,7 @@ import { queryAll, queryOne, parseBeijing } from '../../db.js'
 import { getBridgeDataRoute, sendBridgeCommand, isBridgeAlive } from '../../bridge-ws.js'
 import { stripBrokerSuffix } from './utils.js'
 import { resolveEffectiveRiskPolicy } from './risk-policy.js'
-import { AUTO_RECOVERABLE_RISK_REASONS, refreshRiskAccountState } from './risk-state.js'
+import { AUTO_RECOVERABLE_RISK_REASONS, forceResetRiskAccountState, refreshRiskAccountState } from './risk-state.js'
 
 const midpoint = quote => {
   const bid = Number(quote?.bid), ask = Number(quote?.ask)
@@ -49,14 +49,14 @@ function routeStillCurrent(userId, accountId, route) {
   return sameIdentity(current.account_ref, route.account_ref)
 }
 
-async function refreshOne(userId, row, { trigger = 'background', route } = {}) {
+const riskFlightKey = (userId, accountId) => `${Number(userId)}:${Number(accountId)}`
+
+async function performRiskRefresh(userId, row, { trigger = 'background', route, forceReset = false, resetReason = '', flightEntry = null } = {}) {
   const routeResult = route ? { route } : routeForAccount(userId, row)
   if (routeResult.error) return { account_id:Number(row.trading_account_id), refreshed:false, error:routeResult.error }
   const selectedRoute = routeResult.route
   const accountId = Number(row.trading_account_id)
-  const key = `${Number(userId)}:${accountId}:${String(selectedRoute.terminal_instance_id)}:${Number(selectedRoute.connection_generation || 0)}`
-  const existing = riskRefreshFlights.get(key)
-  if (existing) return existing
+  if (flightEntry) flightEntry.route = selectedRoute
 
   const task = (async () => {
     const params = routeParams(selectedRoute)
@@ -102,11 +102,12 @@ async function refreshOne(userId, row, { trigger = 'background', route } = {}) {
 
     // Quotes may take long enough for the terminal to reconnect. Do not let a
     // late result from the old connection update the newly routed account.
-    const resolved = await resolveEffectiveRiskPolicy({ userId, tradingAccountId:accountId })
+    const resolved = forceReset ? null
+      : await resolveEffectiveRiskPolicy({ userId, tradingAccountId:accountId })
     if (!routeStillCurrent(userId, accountId, selectedRoute)) {
       return { account_id:accountId, refreshed:false, error:'bridge_route_changed' }
     }
-    const state = await refreshRiskAccountState(userId, accountId, {
+    const snapshot = {
       account:result.account || {}, positions:result.positions || [], pending:result.pending || [],
       instruments, fxRates, snapshot_complete:result.complete === true,
       data_incomplete_reasons:result.incomplete_reasons || [],
@@ -115,14 +116,48 @@ async function refreshOne(userId, row, { trigger = 'background', route } = {}) {
         || result.timezone_offset_minutes === '' ? null : Number(result.timezone_offset_minutes),
       clock_status:result.clock_status || '', businessDate:result.business_date,
       increment:result.increment || {}, risk_refresh_trigger:trigger,
-    }, resolved.policy)
+    }
+    const state = forceReset
+      ? await forceResetRiskAccountState(userId, accountId, snapshot, resetReason)
+      : await refreshRiskAccountState(userId, accountId, snapshot, resolved.policy)
     return { account_id:accountId, refreshed:true, complete:result.complete === true,
-      recovered:Boolean(state.transition?.recovered), state }
+      recovered:Boolean(state.transition?.recovered || state.manual_reset), manual_reset:Boolean(state.manual_reset), state }
   })()
-  riskRefreshFlights.set(key, task)
-  try { return await task } finally {
-    if (riskRefreshFlights.get(key) === task) riskRefreshFlights.delete(key)
+  return task
+}
+
+function trackRiskRefreshFlight(key, entry, task) {
+  entry.promise = Promise.resolve(task).finally(() => {
+    if (riskRefreshFlights.get(key) === entry) riskRefreshFlights.delete(key)
+  })
+  riskRefreshFlights.set(key, entry)
+  return entry.promise
+}
+
+function refreshOne(userId, row, options = {}) {
+  const accountId = Number(row.trading_account_id)
+  const key = riskFlightKey(userId, accountId)
+  const forceReset = options.forceReset === true
+  const existing = riskRefreshFlights.get(key)
+  if (existing) {
+    // A normal refresh can always merge into the current account flight. A
+    // manual reset is different: it must not be mistaken for that snapshot.
+    if (!forceReset || existing.kind === 'manual') return existing.promise
+    const entry = { kind:'manual', force_reset:true, account_id:accountId, route:null, promise:null }
+    riskRefreshFlights.set(key, entry)
+    const task = existing.promise.catch(() => null).then(async () => {
+      // The ordinary flight may have used an old cursor or terminal. Read the
+      // candidate again and let performRiskRefresh obtain a fresh strict route.
+      const latestRows = await selectRecoverableRiskRows(userId, { accountId, includeActive:true })
+      const latestRow = latestRows.find(item => Number(item.trading_account_id) === accountId) || row
+      return performRiskRefresh(userId, latestRow, { ...options, route:undefined, flightEntry:entry })
+    })
+    return trackRiskRefreshFlight(key, entry, task)
   }
+  const entry = { kind:forceReset ? 'manual' : 'normal', force_reset:forceReset,
+    account_id:accountId, route:null, promise:null }
+  riskRefreshFlights.set(key, entry)
+  return trackRiskRefreshFlight(key, entry, performRiskRefresh(userId, row, { ...options, flightEntry:entry }))
 }
 
 async function selectRecoverableRiskRows(userId, { accountId = null, includeActive = false } = {}) {
@@ -153,8 +188,10 @@ async function selectRecoverableRiskRows(userId, { accountId = null, includeActi
 export async function refreshRecoverableRiskAccounts(userId, options = {}) {
   const numericUserId = Number(userId)
   const accountId = Number(options.accountId || 0) || null
-  const includeActive = options.includeActive === true && accountId != null
+  const forceReset = options.forceReset === true && accountId != null
+  const includeActive = (options.includeActive === true || forceReset) && accountId != null
   const trigger = String(options.trigger || 'background')
+  const resetReason = String(options.resetReason || '').trim().slice(0, 500)
   if (!isBridgeAlive(numericUserId)) {
     return { attempted:0, refreshed:0, recovered:0, still_halted:0, recoverable_remaining:0,
       results:[], bridge_connected:false, pending_reason:'bridge_terminal_not_connected' }
@@ -162,7 +199,7 @@ export async function refreshRecoverableRiskAccounts(userId, options = {}) {
   const rows = await selectRecoverableRiskRows(numericUserId, { accountId, includeActive })
   const results = []
   for (const row of rows) {
-    try { results.push(await refreshOne(numericUserId, row, { trigger })) }
+    try { results.push(await refreshOne(numericUserId, row, { trigger, forceReset, resetReason })) }
     catch (error) {
       results.push({ account_id:Number(row.trading_account_id), refreshed:false,
         error:String(error?.message || error) })

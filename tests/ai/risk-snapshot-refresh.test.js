@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   queryAll:vi.fn(), queryOne:vi.fn(), sendBridgeCommand:vi.fn(), isBridgeAlive:vi.fn(),
   getBridgeDataRoute:vi.fn(), resolvePolicy:vi.fn(), refreshRiskAccountState:vi.fn(),
+  forceResetRiskAccountState:vi.fn(),
 }))
 
 vi.mock('../../server/db.js', () => ({
@@ -23,6 +24,7 @@ vi.mock('../../server/routes/ai/risk-state.js', () => ({
     'R3_RISK_DATA_INCOMPLETE', 'R3.1_DAILY_LOSS_LIMIT',
     'R3.2_CONSECUTIVE_LOSS_COOLDOWN', 'R3.3_MAX_DRAWDOWN',
   ],
+  forceResetRiskAccountState:(...args) => mocks.forceResetRiskAccountState(...args),
   refreshRiskAccountState:(...args) => mocks.refreshRiskAccountState(...args),
 }))
 
@@ -59,6 +61,9 @@ describe('recoverable risk snapshot refresh', () => {
     mocks.refreshRiskAccountState.mockResolvedValue({
       halt_status:'active', halt_reason:null, data_complete:true,
       transition:{ recovered:true },
+    })
+    mocks.forceResetRiskAccountState.mockResolvedValue({
+      halt_status:'active', halt_reason:null, data_complete:true, manual_reset:true,
     })
   })
 
@@ -127,5 +132,68 @@ describe('recoverable risk snapshot refresh', () => {
     expect(sql).toContain('AND ta.id = ?')
     expect(mocks.refreshRiskAccountState).toHaveBeenCalledWith(2, 4,
       expect.objectContaining({ risk_refresh_trigger:'policy_save' }), expect.anything())
+  })
+
+  it('uses a verified targeted snapshot for an audited manual reset', async () => {
+    const result = await refreshRecoverableRiskAccounts(2, {
+      accountId:4, forceReset:true, resetReason:'用户确认恢复', trigger:'risk_center_manual_reset',
+    })
+    expect(result).toMatchObject({ attempted:1, refreshed:1, recovered:1 })
+    expect(result.results[0]).toMatchObject({ manual_reset:true })
+    expect(mocks.queryAll.mock.calls[0][0]).toContain('OR ta.id = ?')
+    expect(mocks.forceResetRiskAccountState).toHaveBeenCalledWith(2, 4,
+      expect.objectContaining({ businessDate:'2026-08-25', timezone_offset_minutes:180,
+        clock_status:'verified', snapshot_complete:true }), '用户确认恢复')
+    expect(mocks.refreshRiskAccountState).not.toHaveBeenCalled()
+  })
+
+  it('waits for an ordinary flight, then re-fetches the strict route for one manual reset', async () => {
+    let snapshotCalls = 0
+    let releaseOrdinary
+    const ordinarySnapshot = new Promise(resolve => { releaseOrdinary = resolve })
+    mocks.sendBridgeCommand.mockImplementation((userId, command) => {
+      if (command !== 'risk_snapshot') return { status:'success', bid:1, ask:1 }
+      snapshotCalls += 1
+      return snapshotCalls === 1 ? ordinarySnapshot : completeSnapshot()
+    })
+    const ordinary = refreshRecoverableRiskAccounts(2)
+    await vi.waitFor(() => expect(snapshotCalls).toBe(1))
+    const manual = refreshRecoverableRiskAccounts(2, {
+      accountId:4, includeActive:true, forceReset:true,
+      resetReason:'用户确认恢复', trigger:'risk_center_manual_reset',
+    })
+    releaseOrdinary(completeSnapshot())
+    const [ordinaryResult, manualResult] = await Promise.all([ordinary, manual])
+    expect(ordinaryResult.refreshed).toBe(1)
+    expect(manualResult.results[0]).toMatchObject({ refreshed:true, manual_reset:true })
+    expect(snapshotCalls).toBe(2)
+    expect(mocks.refreshRiskAccountState).toHaveBeenCalledTimes(1)
+    expect(mocks.forceResetRiskAccountState).toHaveBeenCalledTimes(1)
+  })
+
+  it('coalesces concurrent manual resets into one forced snapshot and write', async () => {
+    let releaseSnapshot
+    const snapshot = new Promise(resolve => { releaseSnapshot = resolve })
+    let snapshotCalls = 0
+    mocks.sendBridgeCommand.mockImplementation((userId, command) => {
+      if (command !== 'risk_snapshot') return { status:'success', bid:1, ask:1 }
+      snapshotCalls += 1
+      return snapshot
+    })
+    const first = refreshRecoverableRiskAccounts(2, {
+      accountId:4, includeActive:true, forceReset:true,
+      resetReason:'用户确认恢复', trigger:'risk_center_manual_reset',
+    })
+    await vi.waitFor(() => expect(snapshotCalls).toBe(1))
+    const second = refreshRecoverableRiskAccounts(2, {
+      accountId:4, includeActive:true, forceReset:true,
+      resetReason:'重复点击', trigger:'risk_center_manual_reset',
+    })
+    releaseSnapshot(completeSnapshot())
+    const [left, right] = await Promise.all([first, second])
+    expect(left.results[0]).toMatchObject({ manual_reset:true })
+    expect(right.results[0]).toMatchObject({ manual_reset:true })
+    expect(snapshotCalls).toBe(1)
+    expect(mocks.forceResetRiskAccountState).toHaveBeenCalledTimes(1)
   })
 })

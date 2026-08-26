@@ -7082,6 +7082,22 @@ const migrations = [
         }
       }
     }
+  },
+  {
+    id: '201_risk_reset_baseline_and_semantic_version',
+    async up() {
+      const additions = [
+        ['manual_reset_business_date', 'ADD COLUMN manual_reset_business_date DATE DEFAULT NULL'],
+        ['manual_reset_floating_baseline', 'ADD COLUMN manual_reset_floating_baseline DECIMAL(20,8) DEFAULT NULL'],
+        ['risk_calculation_version', 'ADD COLUMN risk_calculation_version SMALLINT NOT NULL DEFAULT 0'],
+      ]
+      const rows = await queryAll(`SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'risk_account_state'`)
+      const existing = new Set(rows.map(row => String(row.COLUMN_NAME)))
+      for (const [name, definition] of additions) {
+        if (!existing.has(name)) await queryRun(`ALTER TABLE risk_account_state ${definition}`)
+      }
+    }
   }
 ]
 

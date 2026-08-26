@@ -10,7 +10,8 @@ vi.mock('../../server/db.js', () => db)
 import { DEFAULT_RISK_POLICY } from '../../server/routes/ai/risk-policy.js'
 import {
   aggregateClosedPositions, calculateAccountRiskMetrics, consecutiveLossCooldownUntil, evaluateStatefulRiskTx,
-  refreshRiskAccountState, setGlobalKillSwitch, syncTradingAccountIdentity,
+  forceResetRiskAccountState, refreshRiskAccountState, RISK_CALCULATION_SEMANTIC_VERSION,
+  setGlobalKillSwitch, syncTradingAccountIdentity,
 } from '../../server/routes/ai/risk-state.js'
 
 const accountRow = {
@@ -77,6 +78,8 @@ describe('account metrics', () => {
     expect(update.params).toContain(1)
     expect(update.sql).toContain('halt_started_at')
     expect(update.sql).toContain('last_recovered_at')
+    expect(update.sql).toContain('manual_reset_business_date')
+    expect(update.sql).toContain('risk_calculation_version')
   })
 
   it('aggregates partial closes by complete position', () => {
@@ -107,15 +110,15 @@ describe('account metrics', () => {
   })
 
   it('corrects high-water equity for deposits and withdrawals', () => {
-    const deposit = calculateAccountRiskMetrics({ ...snapshot({ account: { equity: 10500, currency: 'USD' }, historyAll: history([], { deposit: 1500 }), historyToday: history() }), previousState: { ...stateRow, cumulative_cash_flow: 1000, equity_high_water: 10000 } })
+    const deposit = calculateAccountRiskMetrics({ ...snapshot({ account: { equity: 10500, currency: 'USD' }, historyAll: history([], { deposit: 1500 }), historyToday: history() }), previousState: { ...stateRow, cumulative_cash_flow: 1000, equity_high_water: 10000 }, businessDate:'2026-07-15' })
     expect(deposit.equity_high_water).toBe(10500)
     expect(deposit.drawdown_pct).toBe(0)
-    const withdrawal = calculateAccountRiskMetrics({ ...snapshot({ account: { equity: 9500, currency: 'USD' }, historyAll: history([], { deposit: 500 }), historyToday: history() }), previousState: { ...stateRow, cumulative_cash_flow: 1000, equity_high_water: 10000 } })
+    const withdrawal = calculateAccountRiskMetrics({ ...snapshot({ account: { equity: 9500, currency: 'USD' }, historyAll: history([], { deposit: 500 }), historyToday: history() }), previousState: { ...stateRow, cumulative_cash_flow: 1000, equity_high_water: 10000 }, businessDate:'2026-07-15' })
     expect(withdrawal.equity_high_water).toBe(9500)
     expect(withdrawal.drawdown_pct).toBe(0)
   })
 
-  it('resets daily loss on a new MT5 business date but preserves cross-day high-water drawdown', () => {
+  it('resets daily loss and high-water drawdown on a new MT5 business date', () => {
     const result = calculateAccountRiskMetrics({
       risk_snapshot_version:1,
       account:{ equity:9200, currency:'USD' }, positions:[], pending:[], instruments:{}, fxRates:{},
@@ -125,9 +128,56 @@ describe('account metrics', () => {
     })
     expect(result.day_start_equity).toBe(9200)
     expect(result.daily_loss_pct).toBe(0)
-    expect(result.equity_high_water).toBe(10000)
-    expect(result.drawdown_pct).toBe(8)
+    expect(result.equity_high_water).toBe(9200)
+    expect(result.drawdown_pct).toBe(0)
     expect(result.data_complete).toBe(true)
+  })
+
+  it('uses the manual reset floating baseline instead of counting unchanged open loss', () => {
+    const previousState = { ...stateRow, risk_calculation_version:RISK_CALCULATION_SEMANTIC_VERSION,
+      manual_reset_business_date:'2026-07-15', manual_reset_floating_baseline:-900,
+      day_realized_net:0, day_start_equity:10000, last_deal_time_msc:1000, last_deal_ticket:10 }
+    const base = {
+      risk_snapshot_version:1, account:{ equity:10000, currency:'USD' }, pending:[], instruments:{}, fxRates:{},
+      snapshot_complete:true, businessDate:'2026-07-15', timezone_offset_minutes:180, clock_status:'verified', previousState,
+      increment:{ requested_cursor:{ time_msc:1000, ticket:10 }, through_cursor:{ time_msc:1000, ticket:10 }, closed_positions:[], account_events:[] },
+    }
+    const unchanged = calculateAccountRiskMetrics({ ...base,
+      positions:[{ symbol:'XAUUSD', profit:-900 }] })
+    expect(unchanged).toMatchObject({ day_floating_pnl:0, daily_loss_pct:0 })
+
+    const worsened = calculateAccountRiskMetrics({ ...base,
+      account:{ equity:9900, currency:'USD' }, positions:[{ symbol:'XAUUSD', profit:-1000 }] })
+    expect(worsened).toMatchObject({ day_floating_pnl:-100, daily_loss_pct:1 })
+
+    const closed = calculateAccountRiskMetrics({ ...base, account:{ equity:10000, currency:'USD' }, positions:[],
+      increment:{ requested_cursor:{ time_msc:1000, ticket:10 }, through_cursor:{ time_msc:2000, ticket:20 },
+        closed_positions:[{ close_time_msc:2000, close_deal_ticket:20, business_date:'2026-07-15', net:-900 }], account_events:[] } })
+    expect(closed).toMatchObject({ realized:-900, day_floating_pnl:900, daily_loss_pct:0 })
+  })
+
+  it('clears the manual reset baseline when the MT5 business date changes', () => {
+    const result = calculateAccountRiskMetrics({
+      risk_snapshot_version:1, account:{ equity:9200, currency:'USD' }, positions:[], pending:[], instruments:{}, fxRates:{},
+      snapshot_complete:true, businessDate:'2026-07-16', timezone_offset_minutes:180, clock_status:'verified',
+      previousState:{ ...stateRow, risk_calculation_version:RISK_CALCULATION_SEMANTIC_VERSION,
+        manual_reset_business_date:'2026-07-15', manual_reset_floating_baseline:-900, day_realized_net:0 },
+      increment:{ requested_cursor:{}, through_cursor:{}, closed_positions:[], account_events:[] },
+    })
+    expect(result).toMatchObject({ manual_reset_business_date:null, manual_reset_floating_baseline:null,
+      day_floating_pnl:0, daily_loss_pct:0 })
+  })
+
+  it('rebases legacy same-day high-water on a trusted first snapshot without clearing realized loss', () => {
+    const result = calculateAccountRiskMetrics({
+      risk_snapshot_version:1, account:{ equity:9500, currency:'USD' }, positions:[], pending:[], instruments:{}, fxRates:{},
+      snapshot_complete:true, businessDate:'2026-07-15', timezone_offset_minutes:180, clock_status:'verified',
+      previousState:{ ...stateRow, risk_calculation_version:0, day_realized_net:-300,
+        day_start_equity:10000, equity_high_water:12000 },
+      increment:{ requested_cursor:{}, through_cursor:{}, closed_positions:[], account_events:[] },
+    })
+    expect(result).toMatchObject({ realized:-300, equity_high_water:9500, drawdown_pct:0,
+      risk_calculation_version:RISK_CALCULATION_SEMANTIC_VERSION, risk_calculation_rebased:true })
   })
 
   it('fails closed when full position history was paginated', () => {
@@ -199,6 +249,51 @@ describe('account metrics', () => {
     expect(result.data_complete).toBe(false)
     expect(result.data_incomplete_reasons).toContain('terminal_clock_unverified')
   })
+
+  it('force-resets the current MT5-day risk counters and audits the override', async () => {
+    const updates = []
+    const run = runner({
+      state:{ ...stateRow, halt_status:'halted', halt_reason:'R3.3_MAX_DRAWDOWN',
+        day_realized_net:-500, day_floating_pnl:-200, drawdown_pct:9, consecutive_losses:4,
+        cooldown_until:'2026-07-16 10:00:00', last_deal_time_msc:1000, last_deal_ticket:10 },
+      updates,
+    })
+    db.withTransaction.mockImplementation(async fn => fn(run))
+    const result = await forceResetRiskAccountState(2, 4, {
+      account:{ equity:9300, currency:'USD' }, positions:[{ symbol:'XAUUSD', profit:-900, swap:0 }], snapshot_complete:true,
+      risk_snapshot_version:1, data_incomplete_reasons:[],
+      businessDate:'2026-07-15', timezone_offset_minutes:180, clock_status:'verified',
+      increment:{ through_cursor:{ time_msc:2000, ticket:20 } },
+    }, '用户确认恢复')
+    expect(result).toMatchObject({ manual_reset:true, halt_status:'active', halt_reason:null,
+      business_date:'2026-07-15', day_realized_net:0, day_floating_pnl:0,
+      manual_reset_business_date:'2026-07-15', manual_reset_floating_baseline:-900,
+      equity_high_water:9300, drawdown_pct:0, consecutive_losses:0,
+      risk_calculation_version:RISK_CALCULATION_SEMANTIC_VERSION })
+    const update = updates.find(item => item.sql.startsWith('UPDATE risk_account_state'))
+    expect(update.sql).toContain("halt_status = 'active'")
+    expect(update.sql).toContain('day_realized_net = 0')
+    expect(update.sql).toContain('manual_reset_floating_baseline')
+    expect(update.params).toContain(2000)
+    expect(run.mock.calls.some(([sql]) => String(sql).includes("'risk_account_manual_reset'"))).toBe(true)
+  })
+
+  it('refuses a manual reset unless the incremental MT5 snapshot is complete and verified', async () => {
+    const run = runner({ state:{ ...stateRow, halt_status:'halted', halt_reason:'R3.3_MAX_DRAWDOWN' } })
+    db.withTransaction.mockImplementation(async fn => fn(run))
+    const base = {
+      account:{ equity:9300, currency:'USD' }, positions:[], snapshot_complete:true,
+      risk_snapshot_version:1, data_incomplete_reasons:[], businessDate:'2026-07-15',
+      timezone_offset_minutes:180, clock_status:'verified', increment:{ through_cursor:{} },
+    }
+    await expect(forceResetRiskAccountState(2, 4,
+      { ...base, data_incomplete_reasons:['positions_incomplete'] }, '用户确认恢复'))
+      .rejects.toThrow('risk_manual_reset_snapshot_unverified')
+    await expect(forceResetRiskAccountState(2, 4,
+      { ...base, risk_snapshot_version:0 }, '用户确认恢复'))
+      .rejects.toThrow('risk_manual_reset_snapshot_unverified')
+    expect(run.mock.calls.some(([sql]) => String(sql).startsWith('UPDATE risk_account_state'))).toBe(false)
+  })
 })
 
 describe('stateful gate', () => {
@@ -236,6 +331,8 @@ describe('stateful gate', () => {
     })
     expect(result.reject_code).toBeUndefined()
     expect(updates[0].params).toContain('active')
+    expect(updates[0].sql).toContain('manual_reset_floating_baseline')
+    expect(updates[0].sql).toContain('risk_calculation_version')
   })
 
   it('does not re-arm an expired consecutive-loss cooldown without a new threshold crossing', async () => {

@@ -9,12 +9,24 @@ const txOne = async (run, sql, params = []) => ((await run(sql, params))[0] || [
 const nowDate = () => beijingNow().slice(0, 10)
 const validTimezoneOffset = value => value !== null && value !== undefined && value !== ''
   && Number.isInteger(Number(value)) && Number(value) >= -720 && Number(value) <= 840
+const validBusinessDate = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))
+const verifiedClock = value => {
+  const status = String(value || '').trim().toLowerCase()
+  return status && !['unknown', 'unavailable', 'unverified', 'calibrating', 'fallback'].includes(status)
+}
+const absoluteFloatingPnl = (positions = []) => positions.reduce((sum, item) =>
+  sum + toNumber(item.profit) + toNumber(item.swap), 0)
 
 const IDENTITY_SYNC_MAX_ATTEMPTS = 3
 const IDENTITY_SYNC_RETRY_BASE_DELAY_MS = 10
 const IDENTITY_SYNC_RETRY_MAX_DELAY_MS = 100
 const IDENTITY_SYNC_RETRY_JITTER_MS = 10
 const identitySyncFlights = new Map()
+
+// This is the persisted meaning of the risk counters, not the Bridge wire
+// snapshot version. A zero/NULL row is legacy and is upgraded only after a
+// complete snapshot with a verified MT5 clock.
+export const RISK_CALCULATION_SEMANTIC_VERSION = 2
 
 // These are the only risk reasons that the background snapshot worker may
 // resolve.  Kill switches, protection incidents and account-ownership/permission
@@ -125,14 +137,29 @@ function calculateIncrementalMetrics({ account, positions = [], pending = [], in
   const capitalDelta = accountEvents.filter(item => item.category === 'capital').reduce((sum, item) => sum + toNumber(item.amount), 0)
   const realized = (newDay ? 0 : toNumber(previousState.day_realized_net)) + currentClosedNet + currentPnlAdjustments
   const floating = positions.reduce((sum, item) => sum + toNumber(item.profit) + toNumber(item.swap), 0)
+  const resetBusinessDate = String(previousState.manual_reset_business_date || '')
+  const resetFloatingBaseline = Number(previousState.manual_reset_floating_baseline)
+  const manualBaselineActive = !newDay && validBusinessDate(businessDate)
+    && resetBusinessDate === String(businessDate) && Number.isFinite(resetFloatingBaseline)
+  const effectiveFloating = manualBaselineActive ? floating - resetFloatingBaseline : floating
   const equity = toNumber(account?.equity)
   const dayStartEquity = newDay || !(toNumber(previousState.day_start_equity) > 0)
     ? equity - realized - floating - currentCapitalDelta : toNumber(previousState.day_start_equity)
-  const dailyPnl = realized + Math.min(0, floating)
+  const dailyPnl = manualBaselineActive ? realized + effectiveFloating : realized + Math.min(0, floating)
   const dailyLossPct = dayStartEquity > 0 ? Math.max(0, -dailyPnl / dayStartEquity * 100) : null
   const cumulativeCashFlow = toNumber(previousState.cumulative_cash_flow) + capitalDelta
+  const previousCalculationVersion = Math.max(0, Number(previousState.risk_calculation_version) || 0)
+  const legacyRebaseCandidate = snapshot_complete && validBusinessDate(businessDate)
+    && validTimezoneOffset(timezone_offset_minutes) && verifiedClock(clockStatus)
+    && equity > 0 && reasons.length === 0 && dailyLossPct != null
   const oldHigh = toNumber(previousState.equity_high_water) || equity
-  const correctedHigh = oldHigh + capitalDelta
+  // Maximum drawdown is an MT5-day guard. A new terminal business date starts
+  // from the first complete snapshot's current equity and never inherits the
+  // previous day's peak.
+  const correctedHigh = newDay
+    ? equity
+    : (legacyRebaseCandidate && previousCalculationVersion < RISK_CALCULATION_SEMANTIC_VERSION
+        ? equity : oldHigh + capitalDelta)
   const highWater = Math.max(equity, correctedHigh)
   const drawdownPct = highWater > 0 ? Math.max(0, (highWater - equity) / highWater * 100) : null
   let consecutiveLosses = toNumber(previousState.consecutive_losses)
@@ -145,12 +172,21 @@ function calculateIncrementalMetrics({ account, positions = [], pending = [], in
   }
   const notional = exposureNotional([...positions, ...pending], instruments, account?.currency, fxRates)
   const dataComplete = snapshot_complete && reasons.length === 0 && equity > 0 && dailyLossPct != null && drawdownPct != null
+  const trustedCompleteSnapshot = dataComplete && validBusinessDate(businessDate)
+    && validTimezoneOffset(timezone_offset_minutes) && verifiedClock(clockStatus)
+  const riskCalculationRebased = trustedCompleteSnapshot
+    && previousCalculationVersion < RISK_CALCULATION_SEMANTIC_VERSION && !newDay
+  const riskCalculationVersion = trustedCompleteSnapshot
+    ? RISK_CALCULATION_SEMANTIC_VERSION : previousCalculationVersion
   const nextCursor = compareCursor(throughCursor, stateCursor) >= 0 ? throughCursor : stateCursor
   return {
     business_date: businessDate, equity, realized, floating, day_start_equity: dayStartEquity,
-    daily_loss_pct: dailyLossPct, cumulative_cash_flow: cumulativeCashFlow, equity_high_water: highWater,
+    day_floating_pnl:effectiveFloating, daily_loss_pct: dailyLossPct, cumulative_cash_flow: cumulativeCashFlow, equity_high_water: highWater,
     drawdown_pct: drawdownPct, consecutive_losses: consecutiveLosses, notional, data_complete: dataComplete,
     data_incomplete_reasons: reasons, last_deal_time_msc: nextCursor[0], last_deal_ticket: nextCursor[1],
+    manual_reset_business_date:manualBaselineActive ? resetBusinessDate : null,
+    manual_reset_floating_baseline:manualBaselineActive ? resetFloatingBaseline : null,
+    risk_calculation_version:riskCalculationVersion, risk_calculation_rebased:riskCalculationRebased,
     loss_streak_events:lossStreakEvents,
     timezone_offset_minutes:validTimezoneOffset(timezone_offset_minutes) ? Number(timezone_offset_minutes) : null,
     clock_status:clockStatus || 'unknown',
@@ -203,7 +239,7 @@ function exposureNotional(items, instruments, accountCurrency, fxRates = {}) {
 
 export function calculateAccountRiskMetrics(input = {}) {
   if (input.risk_snapshot_version >= 1) return calculateIncrementalMetrics(input)
-  const { account, positions = [], pending = [], historyToday, historyAll, instruments = {}, fxRates = {}, previousState = {}, businessDate = nowDate(), snapshot_complete = true } = input
+  const { account, positions = [], pending = [], historyToday, historyAll, instruments = {}, fxRates = {}, previousState = {}, businessDate = nowDate(), snapshot_complete = true, timezone_offset_minutes = null, clock_status = '' } = input
   const todayOrders = historyToday?.orders || []
   const realized = todayOrders.reduce((sum, item) => sum + toNumber(item.profit) + toNumber(item.commission) + toNumber(item.swap) + toNumber(item.fee), 0)
   const floating = positions.reduce((sum, item) => sum + toNumber(item.profit) + toNumber(item.swap), 0)
@@ -213,13 +249,26 @@ export function calculateAccountRiskMetrics(input = {}) {
   const newDay = previousState.business_date !== businessDate
   const dayStartEquity = newDay || !(toNumber(previousState.day_start_equity) > 0)
     ? equity - realized - floating - todayCash : toNumber(previousState.day_start_equity)
-  const dailyPnl = realized + Math.min(0, floating)
+  const resetBusinessDate = String(previousState.manual_reset_business_date || '')
+  const resetFloatingBaseline = Number(previousState.manual_reset_floating_baseline)
+  const manualBaselineActive = !newDay && validBusinessDate(businessDate)
+    && resetBusinessDate === String(businessDate) && Number.isFinite(resetFloatingBaseline)
+  const effectiveFloating = manualBaselineActive ? floating - resetFloatingBaseline : floating
+  const dailyPnl = manualBaselineActive ? realized + effectiveFloating : realized + Math.min(0, floating)
   const dailyLossPct = dayStartEquity > 0 ? Math.max(0, -dailyPnl / dayStartEquity * 100) : null
 
   const oldCash = previousState.cumulative_cash_flow == null ? allCash : toNumber(previousState.cumulative_cash_flow)
-  const oldHigh = toNumber(previousState.equity_high_water) || equity
   const cashDelta = allCash - oldCash
-  const correctedHigh = oldHigh + cashDelta
+  const previousCalculationVersion = Math.max(0, Number(previousState.risk_calculation_version) || 0)
+  const legacyRebaseCandidate = snapshot_complete && validBusinessDate(businessDate)
+    && validTimezoneOffset(timezone_offset_minutes) && verifiedClock(clock_status)
+    && equity > 0 && historyComplete(historyToday) && historyComplete(historyAll)
+    && dailyLossPct != null
+  const oldHigh = toNumber(previousState.equity_high_water) || equity
+  const correctedHigh = newDay
+    ? equity
+    : (legacyRebaseCandidate && previousCalculationVersion < RISK_CALCULATION_SEMANTIC_VERSION
+        ? equity : oldHigh + cashDelta)
   const highWater = Math.max(equity, correctedHigh)
   const drawdownPct = highWater > 0 ? Math.max(0, (highWater - equity) / highWater * 100) : null
   const closed = aggregateClosedPositions(historyAll?.orders || [])
@@ -231,12 +280,21 @@ export function calculateAccountRiskMetrics(input = {}) {
   const allItems = [...positions, ...pending]
   const notional = exposureNotional(allItems, instruments, account?.currency, fxRates)
   const dataComplete = snapshot_complete && equity > 0 && historyComplete(historyToday) && historyComplete(historyAll) && dailyLossPct != null && drawdownPct != null
+  const trustedCompleteSnapshot = dataComplete && validBusinessDate(businessDate)
+    && validTimezoneOffset(timezone_offset_minutes) && verifiedClock(clock_status)
+  const riskCalculationRebased = trustedCompleteSnapshot
+    && previousCalculationVersion < RISK_CALCULATION_SEMANTIC_VERSION && !newDay
+  const riskCalculationVersion = trustedCompleteSnapshot
+    ? RISK_CALCULATION_SEMANTIC_VERSION : previousCalculationVersion
   return {
     business_date: businessDate, equity, realized, floating, day_start_equity: dayStartEquity,
-    daily_loss_pct: dailyLossPct, cumulative_cash_flow: allCash, equity_high_water: highWater,
+    day_floating_pnl:effectiveFloating, daily_loss_pct: dailyLossPct, cumulative_cash_flow: allCash, equity_high_water: highWater,
     drawdown_pct: drawdownPct, consecutive_losses: consecutiveLosses, notional, data_complete: dataComplete,
     data_incomplete_reasons: dataComplete ? [] : ['legacy_history_incomplete'],
     last_deal_time_msc: toNumber(previousState.last_deal_time_msc), last_deal_ticket: toNumber(previousState.last_deal_ticket),
+    manual_reset_business_date:manualBaselineActive ? resetBusinessDate : null,
+    manual_reset_floating_baseline:manualBaselineActive ? resetFloatingBaseline : null,
+    risk_calculation_version:riskCalculationVersion, risk_calculation_rebased:riskCalculationRebased,
   }
 }
 
@@ -329,20 +387,105 @@ export async function refreshRiskAccountState(userId, accountId, snapshot, polic
     await run(`UPDATE risk_account_state SET business_date = ?, day_start_equity = ?, day_realized_net = ?, day_floating_pnl = ?,
       cumulative_cash_flow = ?, equity_high_water = ?, drawdown_pct = ?, consecutive_losses = ?, cooldown_until = ?,
       halt_status = ?, halt_reason = ?, data_complete = ?, data_incomplete_reason = ?, last_deal_time_msc = ?,
-      last_deal_ticket = ?, last_risk_snapshot_at = ?, halt_started_at = ?, halt_reason_changed_at = ?,
-      last_recovered_at = ?, updated_at = ? WHERE trading_account_id = ? AND user_id = ?`,
-    [metrics.business_date, metrics.day_start_equity, metrics.realized, metrics.floating, metrics.cumulative_cash_flow,
+      last_deal_ticket = ?, last_risk_snapshot_at = ?, manual_reset_business_date = ?,
+      manual_reset_floating_baseline = ?, risk_calculation_version = ?, halt_started_at = ?,
+      halt_reason_changed_at = ?, last_recovered_at = ?, updated_at = ?
+      WHERE trading_account_id = ? AND user_id = ?`,
+    [metrics.business_date, metrics.day_start_equity, metrics.realized, metrics.day_floating_pnl ?? metrics.floating, metrics.cumulative_cash_flow,
       metrics.equity_high_water, metrics.drawdown_pct, metrics.consecutive_losses, cooldownUntil,
       haltReason ? 'halted' : 'active', haltReason, metrics.data_complete ? 1 : 0,
       (metrics.data_incomplete_reasons || []).join(',').slice(0, 255) || null,
       metrics.last_deal_time_msc || 0, metrics.last_deal_ticket || 0, now,
-      transition.halt_started_at, transition.halt_reason_changed_at, transition.last_recovered_at,
+      metrics.manual_reset_business_date, metrics.manual_reset_floating_baseline,
+      metrics.risk_calculation_version || 0, transition.halt_started_at,
+      transition.halt_reason_changed_at, transition.last_recovered_at,
       now, accountId, userId])
     await auditRiskStateTransitionTx(run, userId, accountId, transition,
       { ...metrics, last_risk_snapshot_at:now }, snapshot?.risk_refresh_trigger)
     return { ...metrics, halt_status: nextStatus, halt_reason: haltReason, cooldown_until: cooldownUntil,
       halt_started_at:transition.halt_started_at, halt_reason_changed_at:transition.halt_reason_changed_at,
       last_recovered_at:transition.last_recovered_at, transition }
+  })
+}
+
+export async function forceResetRiskAccountState(userId, accountId, snapshot, reason = '') {
+  return withTransaction(async run => {
+    const account = await txOne(run, `SELECT id, user_id, review_status, observe_status, is_deleted
+      FROM trading_accounts WHERE id = ? AND user_id = ? FOR UPDATE`, [accountId, userId])
+    if (!account || account.is_deleted) throw new Error('trading_account_not_found')
+    const state = await txOne(run, 'SELECT * FROM risk_account_state WHERE trading_account_id = ? AND user_id = ? FOR UPDATE', [accountId, userId])
+    if (!state) throw new Error('risk_account_state_not_found')
+    if (state.user_kill_switch || state.halt_status === 'protection_incident'
+      || String(state.halt_reason || '').startsWith('R6_')
+      || !['approved', ''].includes(String(account.review_status || 'approved'))
+      || String(account.observe_status || '') !== 'active') {
+      throw new Error('risk_manual_reset_not_allowed')
+    }
+
+    const businessDate = String(snapshot?.businessDate || '')
+    const timezoneOffsetMinutes = snapshot?.timezone_offset_minutes
+    const clockStatus = String(snapshot?.clock_status || '').trim().toLowerCase()
+    const equity = toNumber(snapshot?.account?.equity)
+    const floatingBaseline = absoluteFloatingPnl(snapshot?.positions || [])
+    const incompleteReasons = (snapshot?.data_incomplete_reasons || []).map(String).filter(Boolean)
+    if (snapshot?.snapshot_complete !== true || Number(snapshot?.risk_snapshot_version || 0) < 1
+      || incompleteReasons.length > 0 || !validBusinessDate(businessDate)
+      || !validTimezoneOffset(timezoneOffsetMinutes) || !clockStatus
+      || !verifiedClock(clockStatus)
+      || !(equity > 0)) {
+      throw new Error('risk_manual_reset_snapshot_unverified')
+    }
+
+    const previousCursor = [Math.max(0, Number(state.last_deal_time_msc) || 0), Math.max(0, Number(state.last_deal_ticket) || 0)]
+    const snapshotCursor = cursorOf(snapshot?.increment?.through_cursor)
+    const nextCursor = compareCursor(snapshotCursor, previousCursor) >= 0 ? snapshotCursor : previousCursor
+    const now = beijingNow()
+    await run(`UPDATE risk_account_state SET business_date = ?, manual_reset_business_date = ?,
+      manual_reset_floating_baseline = ?, day_start_equity = ?, day_realized_net = 0,
+      day_floating_pnl = 0, equity_high_water = ?, drawdown_pct = 0, consecutive_losses = 0,
+      cooldown_until = NULL, halt_status = 'active', halt_reason = NULL, data_complete = 1,
+      risk_calculation_version = ?,
+      data_incomplete_reason = NULL, last_deal_time_msc = ?, last_deal_ticket = ?,
+      last_risk_snapshot_at = ?, last_recovered_at = ?, updated_at = ?
+      WHERE trading_account_id = ? AND user_id = ?`,
+    [businessDate, businessDate, floatingBaseline, equity, equity,
+      RISK_CALCULATION_SEMANTIC_VERSION, nextCursor[0], nextCursor[1], now, now, now, accountId, userId])
+    const detail = JSON.stringify({
+      previous_status:String(state.halt_status || 'active'),
+      previous_reason:state.halt_reason || null,
+      business_date:businessDate,
+      equity,
+      timezone_offset_minutes:Number(timezoneOffsetMinutes),
+      clock_status:clockStatus,
+      reason:String(reason || '').trim().slice(0, 500),
+      floating_baseline:floatingBaseline,
+      reset_fields:['day_realized_net', 'day_floating_pnl', 'equity_high_water', 'drawdown_pct', 'consecutive_losses', 'cooldown_until', 'manual_reset_floating_baseline'],
+    }).slice(0, 5000)
+    await run(`INSERT INTO audit_logs
+      (user_id, user_email, user_nickname, action, target_type, target_id, detail, ip, user_agent)
+      VALUES (?, '', '', 'risk_account_manual_reset', 'trading_account', ?, ?, '', '')`,
+    [userId, accountId, detail])
+    return {
+      business_date:businessDate,
+      day_start_equity:equity,
+      day_realized_net:0,
+      day_floating_pnl:0,
+      manual_reset_business_date:businessDate,
+      manual_reset_floating_baseline:floatingBaseline,
+      equity_high_water:equity,
+      drawdown_pct:0,
+      consecutive_losses:0,
+      cooldown_until:null,
+      halt_status:'active',
+      halt_reason:null,
+      data_complete:true,
+      last_risk_snapshot_at:now,
+      last_recovered_at:now,
+      risk_calculation_version:RISK_CALCULATION_SEMANTIC_VERSION,
+      manual_reset:true,
+      previous_status:String(state.halt_status || 'active'),
+      previous_reason:state.halt_reason || null,
+    }
   })
 }
 
@@ -576,14 +719,17 @@ export async function evaluateStatefulRiskTx(run, { userId, accountId, intentId,
   await run(`UPDATE risk_account_state SET business_date = ?, day_start_equity = ?, day_realized_net = ?, day_floating_pnl = ?,
     cumulative_cash_flow = ?, equity_high_water = ?, drawdown_pct = ?, consecutive_losses = ?, cooldown_until = ?,
     halt_status = ?, halt_reason = ?, data_complete = ?, data_incomplete_reason = ?, last_deal_time_msc = ?,
-    last_deal_ticket = ?, last_risk_snapshot_at = ?, halt_started_at = ?, halt_reason_changed_at = ?,
-    last_recovered_at = ?, updated_at = ? WHERE trading_account_id = ?`,
-  [metrics.business_date, metrics.day_start_equity, metrics.realized, metrics.floating, metrics.cumulative_cash_flow,
+    last_deal_ticket = ?, last_risk_snapshot_at = ?, manual_reset_business_date = ?,
+    manual_reset_floating_baseline = ?, risk_calculation_version = ?, halt_started_at = ?,
+    halt_reason_changed_at = ?, last_recovered_at = ?, updated_at = ? WHERE trading_account_id = ?`,
+  [metrics.business_date, metrics.day_start_equity, metrics.realized, metrics.day_floating_pnl ?? metrics.floating, metrics.cumulative_cash_flow,
     metrics.equity_high_water, metrics.drawdown_pct, metrics.consecutive_losses, cooldownUntil,
     haltReason ? 'halted' : 'active', haltReason, metrics.data_complete ? 1 : 0,
     (metrics.data_incomplete_reasons || []).join(',').slice(0, 255) || null,
     metrics.last_deal_time_msc || 0, metrics.last_deal_ticket || 0, now,
-    transition.halt_started_at, transition.halt_reason_changed_at, transition.last_recovered_at,
+    metrics.manual_reset_business_date, metrics.manual_reset_floating_baseline,
+    metrics.risk_calculation_version || 0, transition.halt_started_at,
+    transition.halt_reason_changed_at, transition.last_recovered_at,
     now, accountId])
   await auditRiskStateTransitionTx(run, userId, accountId, transition,
     { ...metrics, last_risk_snapshot_at:now }, 'order_risk')

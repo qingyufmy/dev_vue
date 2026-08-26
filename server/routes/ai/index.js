@@ -880,14 +880,28 @@ router.get('/ai/risk-center', authMiddleware, async (req, res) => {
     const rows = await Promise.all(accounts.map(async account => {
       const [riskState, performance, effective] = await Promise.all([
         queryAll(`SELECT halt_status, halt_reason, business_date, day_start_equity, day_realized_net,
-          day_floating_pnl, equity_high_water,
+          day_floating_pnl, equity_high_water, manual_reset_business_date,
           CASE WHEN day_start_equity > 0
-            THEN GREATEST(0, -(day_realized_net + LEAST(0, day_floating_pnl)) / day_start_equity * 100)
+            THEN GREATEST(0, -(day_realized_net + CASE
+              WHEN manual_reset_business_date = business_date THEN day_floating_pnl
+              ELSE LEAST(0, day_floating_pnl)
+            END) / day_start_equity * 100)
             ELSE NULL END AS daily_loss_pct,
           drawdown_pct, consecutive_losses,
           cooldown_until, user_kill_switch, data_complete, data_incomplete_reason, last_risk_snapshot_at,
-          halt_started_at, halt_reason_changed_at, last_recovered_at
-          FROM risk_account_state WHERE trading_account_id = ? LIMIT 1`, [account.id]),
+          halt_started_at, halt_reason_changed_at, last_recovered_at,
+          (SELECT mds.timezone_offset_minutes FROM market_data_sources mds
+            WHERE mds.bridge_user_id = ras.user_id
+              AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
+              AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
+            ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1) AS timezone_offset_minutes,
+          (SELECT mds.clock_status FROM market_data_sources mds
+            WHERE mds.bridge_user_id = ras.user_id
+              AND UPPER(COALESCE(mds.broker_server, '')) = UPPER(ta.broker_server)
+              AND CAST(COALESCE(mds.account_login, 0) AS CHAR) = CAST(ta.login_account AS CHAR)
+            ORDER BY mds.last_calibrated_at DESC, mds.id DESC LIMIT 1) AS clock_status
+          FROM risk_account_state ras JOIN trading_accounts ta ON ta.id = ras.trading_account_id
+          WHERE ras.trading_account_id = ? LIMIT 1`, [account.id]),
         getBridgePerformanceSummary(req.user.id, account.id),
         resolveEffectiveRiskPolicy({ userId: req.user.id, tradingAccountId: account.id }),
       ])
@@ -908,6 +922,24 @@ router.post('/ai/risk-center/refresh', authMiddleware, async (req, res) => {
     res.json({ ok:true, ...refreshed })
   }
   catch (error) { reviewError(res, error) }
+})
+
+router.post('/ai/risk-center/:accountId/manual-reset', authMiddleware, async (req, res) => {
+  try {
+    const accountId = Number(req.params.accountId || 0)
+    if (!Number.isSafeInteger(accountId) || accountId <= 0) {
+      return res.status(400).json({ ok:false, error:'account_id_invalid' })
+    }
+    const reason = String(req.body?.reason || '').trim()
+    if (!reason) return res.status(400).json({ ok:false, error:'manual_reset_reason_required' })
+    const reset = await refreshRecoverableRiskAccounts(req.user.id, {
+      accountId,
+      forceReset:true,
+      resetReason:reason,
+      trigger:'risk_center_manual_reset',
+    })
+    res.json({ ok:true, ...reset })
+  } catch (error) { reviewError(res, error) }
 })
 
 router.post('/ai/risk-center/:accountId/kill-switch', authMiddleware, async (req, res) => {

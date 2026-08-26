@@ -974,6 +974,9 @@ const REASON_MAP = {
   lock_lost_before_send: "任务执行权已失效，订单未发送到交易平台",
   bridge_upgrade_required_for_incremental_risk: "桥接软件版本过旧，请从源码重启或升级到最新版后重试",
   risk_snapshot_failed: "无法获取完整的交易平台风险快照，已为安全起见阻止交易",
+  risk_manual_reset_not_allowed: "当前暂停属于账户权限、紧急停止或保护事件，不能通过手动恢复重置",
+  risk_manual_reset_snapshot_unverified: "无法取得身份匹配且时钟可信的完整 MT5 快照，未执行手动恢复",
+  manual_reset_reason_required: "请输入手动恢复原因",
   confirmation_required: "需要人工确认",
   rejected: "风控拒绝",
   success: "成功",
@@ -6612,20 +6615,29 @@ function riskStateNeedsRecovery(state = {}) {
 }
 function riskRecoveryExplanation(state = {}) {
   const reason = String(state.halt_reason || "");
-  if (reason === "R3.3_MAX_DRAWDOWN") return "历史高水位回撤按跨交易日累计，不会在 MT5 日期切换时归零；净值恢复至阈值以内并通过完整快照后自动解除。";
+  if (reason === "R3.3_MAX_DRAWDOWN") return "当日高水位回撤按 MT5 交易日计算；MT5 日期切换后将在下一次完整快照中重建当日高水位并自动恢复。";
   if (reason === "R3.1_DAILY_LOSS_LIMIT") return "当日亏损按 MT5 交易日计算；交易日切换后将在下一次完整快照中按新交易日重新计算。";
   if (reason === "R3.2_CONSECUTIVE_LOSS_COOLDOWN") return "连续亏损冷却期到期后，需要 Bridge 完整快照确认才会自动解除。";
   if (reason === "R3_RISK_DATA_INCOMPLETE" || !state.data_complete) return "Bridge 风控数据不完整，补齐并通过完整快照后才会重新计算。";
   return "当前暂停状态需要完整风险快照确认，系统不会直接清空风控状态。";
 }
+function riskMt5Time(value, state = {}) {
+  if (!value) return null;
+  const offset = terminalQuoteTimezoneOffsetMinutes(state);
+  const utcMsc = parseBeijingServerTime(value);
+  const terminalTime = Number.isFinite(utcMsc) && offset !== null
+    ? terminalTimeFromUtcMsc(utcMsc, offset) : null;
+  return terminalTime || `${String(value).replace("T", " ").slice(0, 19)}（系统时间）`;
+}
 function riskSnapshotFreshnessText(state = {}) {
   if (!state.last_risk_snapshot_at) return "等待 Bridge 完整风险快照";
   const complete = !(state.data_complete === false || Number(state.data_complete) === 0);
-  return complete ? `最后完整快照：${state.last_risk_snapshot_at}` : `最近快照 ${state.last_risk_snapshot_at}，数据不完整，等待 Bridge`;
+  const time = riskMt5Time(state.last_risk_snapshot_at, state);
+  return complete ? `最后完整快照（MT5）：${time}` : `最近快照（MT5）${time}，数据不完整，等待 Bridge`;
 }
 function riskHaltTimingText(state = {}) {
-  if (state.halt_reason_changed_at) return `当前暂停原因开始：${state.halt_reason_changed_at}`;
-  if (state.halt_started_at) return `本轮暂停开始：${state.halt_started_at}`;
+  if (state.halt_reason_changed_at) return `当前暂停原因开始（MT5）：${riskMt5Time(state.halt_reason_changed_at, state)}`;
+  if (state.halt_started_at) return `本轮暂停开始（MT5）：${riskMt5Time(state.halt_started_at, state)}`;
   return "该状态产生于审计字段上线前，准确触发时间未知";
 }
 function displayRiskNumber(value, digits = 2) {
@@ -6863,8 +6875,9 @@ async function loadRiskCenter({ preserveRuleState = true, preserveRuleDrafts = p
     const reason = stateInfo.halt_reason === "R3_RISK_DATA_INCOMPLETE"
       ? `风控数据不完整：${riskDataIncompleteText(stateInfo.data_incomplete_reason)}`
       : stateInfo.halt_reason ? riskDecisionLabel(stateInfo.halt_reason) : (!dataComplete ? riskDataIncompleteText(stateInfo.data_incomplete_reason) : "当前没有触发停止交易的条件");
-    const metricText = `当日亏损 ${displayRiskNumber(stateInfo.daily_loss_pct)}% · 历史高水位回撤 ${displayRiskNumber(stateInfo.drawdown_pct)}%`;
-    return `<article class="workspace-panel risk-status-card ${active && dataComplete ? 'is-safe' : 'is-alert'}" data-risk-status-account="${row.account.id}"><div class="risk-status-icon"><i data-lucide="${active && dataComplete ? 'shield-check' : 'shield-alert'}" size="22"></i></div><div class="risk-status-main"><div class="workspace-row-title">${escapeHtml(row.account.nickname || row.account.login_account)} <span class="status-chip ${active && dataComplete ? 'success' : 'danger'}">${active && dataComplete ? '允许交易' : '已暂停新开仓'}</span></div><p>${escapeHtml(reason)}</p><div class="workspace-row-meta"><span>${escapeHtml(row.account.broker_server)}</span><span>数据${dataComplete ? '完整' : '不完整'}</span><span>${escapeHtml(metricText)}</span><span>连亏 ${escapeHtml(stateInfo.consecutive_losses ?? '--')}</span><span>${escapeHtml(riskSnapshotFreshnessText(stateInfo))}</span>${!active ? `<span>${escapeHtml(riskHaltTimingText(stateInfo))}</span>` : ''}</div>${!active ? `<small class="risk-recovery-explanation">${escapeHtml(riskRecoveryExplanation(stateInfo))}</small>` : ''}</div><div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" type="button" data-open-workspace-tab="risk" data-open-workspace-target="rules">查看规则</button><button class="btn ${stateInfo.user_kill_switch ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${stateInfo.user_kill_switch ? '0' : '1'}">${stateInfo.user_kill_switch ? '解除紧急停止' : '紧急停止新开仓'}</button></div></article>`;
+    const metricText = `当日亏损 ${displayRiskNumber(stateInfo.daily_loss_pct)}% · 当日高水位回撤 ${displayRiskNumber(stateInfo.drawdown_pct)}%`;
+    const canManualReset = !active && !stateInfo.user_kill_switch && AUTO_RECOVERABLE_RISK_REASONS.has(String(stateInfo.halt_reason || ""));
+    return `<article class="workspace-panel risk-status-card ${active && dataComplete ? 'is-safe' : 'is-alert'}" data-risk-status-account="${row.account.id}"><div class="risk-status-icon"><i data-lucide="${active && dataComplete ? 'shield-check' : 'shield-alert'}" size="22"></i></div><div class="risk-status-main"><div class="workspace-row-title">${escapeHtml(row.account.nickname || row.account.login_account)} <span class="status-chip ${active && dataComplete ? 'success' : 'danger'}">${active && dataComplete ? '允许交易' : '已暂停新开仓'}</span></div><p>${escapeHtml(reason)}</p><div class="workspace-row-meta"><span>${escapeHtml(row.account.broker_server)}</span><span>数据${dataComplete ? '完整' : '不完整'}</span><span>${escapeHtml(metricText)}</span><span>连亏 ${escapeHtml(stateInfo.consecutive_losses ?? '--')}</span><span>${escapeHtml(riskSnapshotFreshnessText(stateInfo))}</span>${!active ? `<span>${escapeHtml(riskHaltTimingText(stateInfo))}</span>` : ''}</div>${!active ? `<small class="risk-recovery-explanation">${escapeHtml(riskRecoveryExplanation(stateInfo))}</small>` : ''}</div><div class="workspace-row-actions"><button class="btn btn-secondary btn-sm" type="button" data-open-workspace-tab="risk" data-open-workspace-target="rules">查看规则</button>${canManualReset ? `<button class="btn btn-primary btn-sm" type="button" data-risk-manual-reset="${row.account.id}">手动恢复</button>` : ''}<button class="btn ${stateInfo.user_kill_switch ? 'btn-secondary' : 'btn-danger'} btn-sm" data-kill-switch="${row.account.id}" data-enabled="${stateInfo.user_kill_switch ? '0' : '1'}">${stateInfo.user_kill_switch ? '解除紧急停止' : '紧急停止新开仓'}</button></div></article>`;
   }).join("") : '<div class="workspace-panel empty-state"><strong>没有已登记的交易账户</strong><span>连接 Bridge 后会在这里显示账户交易状态。</span></div>';
   host.innerHTML = rows.length ? rows.map(row => {
     const stateInfo = row.risk_state || {}, killEnabled = Boolean(stateInfo.user_kill_switch);
@@ -18915,6 +18928,7 @@ function bindEvents() {
     const strategyMemoryConflictOnly = event.target.closest("[data-strategy-memory-conflict-only]");
     const manualReviewAction = event.target.closest("[data-manual-review-action]");
     const riskSave = event.target.closest("[data-risk-save]");
+    const riskManualReset = event.target.closest("[data-risk-manual-reset]");
     const killSwitch = event.target.closest("[data-kill-switch]");
     const strategyAction = event.target.closest("[data-strategy-action]");
     const subscriptionAction = event.target.closest("[data-subscription-action]");
@@ -19345,6 +19359,29 @@ function bindEvents() {
         reviewAction.disabled = false;
         if (isPeriodReviewMutation) state.periodReviewMutationInFlight = false;
       }
+      return;
+    }
+    if (riskManualReset) {
+      const accountId = Number(riskManualReset.dataset.riskManualReset);
+      const confirmed = await showConfirm("确认手动恢复账户", "该操作会忽略当前 R3 风控暂停，并把本 MT5 交易日累计风控状态重置为 0。后续新增亏损仍会继续触发风控。", {
+        confirmText:"确认重置并恢复", cancelText:"取消", danger:true,
+        detailRows:[["影响账户", `#${accountId}`, "danger"], ["重置范围", "当日亏损、当日高水位回撤、连亏与冷却"]],
+      });
+      if (!confirmed) return;
+      const reason = prompt("请输入手动恢复原因（将写入审计日志）");
+      if (!String(reason || "").trim()) return;
+      riskManualReset.disabled = true;
+      riskManualReset.setAttribute("aria-busy", "true");
+      try {
+        const result = await api(`/api/ai/risk-center/${accountId}/manual-reset`, { method:"POST", body:{ reason:String(reason).trim() } });
+        const item = (result.results || [])[0] || {};
+        if (result.bridge_connected === false) toast("Bridge 未连接，无法确认 MT5 交易日，未执行重置", "warning");
+        else if (item.error) toast(localizeReason(item.error), "error");
+        else if (item.manual_reset || Number(result.recovered || 0) > 0) toast("当日风控累计已重置，账户已手动恢复", "success");
+        else toast("账户未执行手动恢复，请检查账户状态", "warning");
+        await loadRiskCenter({ preserveRuleState:true, preserveRuleDrafts:true });
+      } catch (error) { toast(localizeReason(error.code || error.message), "error"); }
+      finally { riskManualReset.disabled = false; riskManualReset.removeAttribute("aria-busy"); }
       return;
     }
     if (killSwitch) {
