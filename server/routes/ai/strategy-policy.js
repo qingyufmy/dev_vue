@@ -262,6 +262,31 @@ export function setEma34DeclarationEnabled(strategyPolicyValue, enabled, { marke
   }
 }
 
+/**
+ * Change only the source timeframe of one existing EMA34 declaration.
+ * Advanced ids, parameters, constraints and prompt rules remain untouched.
+ */
+export function setEma34DeclarationTimeframe(strategyPolicyValue, timeframe, { marketDataPlan } = {}) {
+  const policy = parsePolicyObject(strategyPolicyValue)
+  const normalizedTimeframe = String(timeframe || '').trim().toUpperCase()
+  const planned = new Set((marketDataPlan?.timeframes || []).map(item => String(item?.timeframe || '').toUpperCase()))
+  if (!normalizedTimeframe) throw new Error('ema34_timeframe_required')
+  if (!planned.has(normalizedTimeframe)) throw new Error('ema34_timeframe_not_in_market_plan')
+  const indicators = Array.isArray(policy?.indicators) ? policy.indicators : []
+  const candidates = indicators.filter(isEma34LikeIndicator)
+  if (candidates.length !== 1) throw new Error('strategy_indicator_advanced_configuration')
+  const target = candidates[0]
+  policy.indicators = indicators.map(indicator => indicator === target
+    ? { ...indicator, source:{ ...(indicator.source || {}), timeframe:normalizedTimeframe } }
+    : indicator)
+  const strategyPolicyJson = normalizePolicyForStorage(policy, marketDataPlan)
+  return {
+    strategyPolicyJson,
+    useEma34Filter:Boolean(policy.indicators.some(item => isEma34LikeIndicator(item) && item.enabled !== false)),
+    capabilityState:describeSimpleIndicatorCapabilities(policy, false),
+  }
+}
+
 function normalizePolicyForStorage(policy, marketDataPlan) {
   compileStrategyPolicy(policy, { marketDataPlan })
   return canonicalPolicyJson(policy)

@@ -363,6 +363,37 @@ describe('strategy visibility and mutation permissions', () => {
       source:{ timeframe:'M5' }, params:{ period:34 } })
   })
 
+  it('updates an advanced EMA34 timeframe without changing its id, parameters or rules', async () => {
+    const advanced = structuredClone(DECLARED_EMA34_POLICY)
+    advanced.constraints = [{ id:'ema_ready', scope:'new_entry', phases:['post_inference'],
+      require:{ left:{ ref:'indicators.entry_ema34.ready' }, op:'eq', right:true },
+      on_fail:'hold_new_entry', counts_as_trigger:false }]
+    advanced.prompt_rules = [{ id:'keep_rule', text:'保留原规则' }]
+    const existing = { ...PRIVATE, strategy_policy_json:JSON.stringify(advanced), use_ema34_filter:1, version:4,
+      market_data_plan_json:JSON.stringify({ primary_timeframe:'M5', timeframes:[
+        { timeframe:'M5', kline_count:60 }, { timeframe:'M1', kline_count:100 },
+      ] }), system_prompt:'保持策略正文不变' }
+    db.queryOne.mockImplementation(statement => statement.includes('FROM users') ? PRO : existing)
+    await updateStrategy(2, 2, 'user', {
+      expected_version:4,
+      market_data_plan:{ primary_timeframe:'M5', timeframes:[
+        { timeframe:'M5', kline_count:60 }, { timeframe:'M1', kline_count:100 },
+      ] },
+      use_ema34_filter:true,
+      ema34_timeframe:'M1',
+    })
+    const update = db.queryRun.mock.calls[0][1]
+    const policy = JSON.parse(update[17])
+    expect(update[2]).toBe('保持策略正文不变')
+    expect(update[7]).toBe(1)
+    expect(policy.indicators[0]).toEqual({
+      ...advanced.indicators[0],
+      source:{ ...advanced.indicators[0].source, timeframe:'M1' },
+    })
+    expect(policy.constraints).toEqual(advanced.constraints)
+    expect(policy.prompt_rules).toEqual(advanced.prompt_rules)
+  })
+
   it('requires confirmation before enabling an off-mode policy and restores shadow mode after confirmation', async () => {
     const offPolicy = { ...DECLARED_EMA34_POLICY, mode:'off' }
     const existing = { ...PRIVATE, strategy_policy_json:JSON.stringify(offPolicy), use_ema34_filter:0, version:4,

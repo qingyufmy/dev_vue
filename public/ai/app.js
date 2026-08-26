@@ -5833,6 +5833,7 @@ function strategyEma34State(strategy = {}) {
     canonical: canonical || (capabilityStatus === "managed" ? { id:"ema34", kind:"ema", enabled:capability.enabled !== false, source:{ timeframe:capability.timeframe } } : null),
     advanced: capabilityStatus === "advanced" || advanced,
     advancedDeclaration,
+    timeframeEditable: candidates.length === 1,
     enabled: capability ? capability.enabled !== false : Boolean((canonical || advancedDeclaration) && (canonical || advancedDeclaration).enabled !== false),
     legacyOnly: capabilityStatus === "legacy_unconfigured" || (legacyEnabled && !canonical && !advanced),
     capabilityStatus,
@@ -5986,7 +5987,7 @@ function syncStrategyDataCapabilityUI() {
     const previous = emaSelect.value || configuredTimeframe || selectedTimeframes[0] || "";
     emaSelect.innerHTML = emaTimeframes.map(timeframe => `<option value="${escapeHtml(timeframe)}">${escapeHtml(timeframe)} · 已收盘 K 线</option>`).join("");
     emaSelect.value = emaTimeframes.includes(previous) ? previous : emaTimeframes[0] || "";
-    emaSelect.disabled = !ema?.checked || emaState.advanced || !selectedTimeframes.length;
+    emaSelect.disabled = !ema?.checked || (emaState.advanced && !emaState.timeframeEditable) || !selectedTimeframes.length;
   }
   if (ema) {
     ema.disabled = !selectedTimeframes.length && !emaState.advanced;
@@ -6007,7 +6008,7 @@ function syncStrategyDataCapabilityUI() {
   const advanced = $("strategyAdvancedPolicyState");
   if (advanced) {
     advanced.innerHTML = emaState.advanced
-      ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="sliders-horizontal" size="15"></i></span><span><strong>高级配置</strong><small>周期和参数保持只读；开关仅控制是否提供 EMA34 数据。关闭后不会修改策略正文，请自行调整正文中的相关逻辑。</small></span>`
+      ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="sliders-horizontal" size="15"></i></span><span><strong>高级配置</strong><small>${emaState.timeframeEditable ? "计算周期可修改；指标参数、约束和策略规则保持不变。" : "检测到多个或不可识别的 EMA34 声明，周期和参数保持只读。"}开关仅控制是否提供 EMA34 数据，关闭后不会修改策略正文。</small></span>`
       : emaState.legacyOnly
         ? `<span class="strategy-state-icon" aria-hidden="true"><i data-lucide="info" size="15"></i></span><span><strong>旧 EMA 状态</strong><small>旧配置未产生 EMA34 数据；重新开启并保存后才会按新声明提供。</small></span>`
         : state.strategyDataCapabilitiesStatus === "error"
@@ -6220,7 +6221,8 @@ async function saveStrategyEditor() {
     model_profile_id:$("strategyModelProfile").value ? Number($("strategyModelProfile").value) : null,
     scope,
     visibility_status:visibilityStatus };
-  if (!emaState.advanced) body.indicator_declarations = indicatorDeclarationsForStrategyPayload(strategy, emaEnabled, emaTimeframe);
+  if (emaState.advanced && emaState.timeframeEditable) body.ema34_timeframe = emaTimeframe;
+  else if (!emaState.advanced) body.indicator_declarations = indicatorDeclarationsForStrategyPayload(strategy, emaEnabled, emaTimeframe);
   if (id) body.expected_version = Number(editor.dataset.strategyVersion || strategy.version || 1);
   if (confirmEnableDataRuntime) body.confirm_enable_data_runtime = true;
   strategyEditorDataError("");
@@ -10559,7 +10561,7 @@ async function handleAutoSubscriptionClick() {
 }
 
 async function handlePositionGuardModeClick() {
-  if (!positionGuardFeatureIsEnabled()) return;
+  if (!positionGuardUserControlsVisible()) return;
   if (isObserverMode()) { toast(observerMessage(), "warning"); return; }
   const accountId = positionGuardAccountId();
   if (!accountId) {
@@ -17364,6 +17366,10 @@ function positionGuardFeatureIsEnabled() {
   return state.positionGuardFeatureEnabled === true;
 }
 
+function positionGuardUserControlsVisible(settings = state.positionGuardSettings) {
+  return positionGuardFeatureIsEnabled() && settings?.platform_enabled === true;
+}
+
 function isPositionGuardFeatureDisabledError(error) {
   return Number(error?.status) === 404 && error?.code === "position_guard_feature_disabled";
 }
@@ -17371,7 +17377,7 @@ function isPositionGuardFeatureDisabledError(error) {
 function setPositionGuardFeatureEnabled(enabled) {
   state.positionGuardFeatureEnabled = enabled === true ? true : enabled === false ? false : null;
   const control = $("positionGuardMode");
-  if (control) control.hidden = !positionGuardFeatureIsEnabled();
+  if (control) control.hidden = !positionGuardUserControlsVisible();
 }
 
 function disablePositionGuardFeature() {
@@ -17450,7 +17456,10 @@ function positionGuardStatusPresentation(settings = state.positionGuardSettings)
 function renderPositionGuardBadge(settings = state.positionGuardSettings) {
   const control = $("positionGuardMode");
   if (!control) return;
-  if (!positionGuardFeatureIsEnabled()) {
+  const userControlsVisible = positionGuardUserControlsVisible(settings);
+  document.querySelectorAll('.position-guard-user-disclosure, .position-guard-overview-card')
+    .forEach(element => { element.hidden = !userControlsVisible; });
+  if (!userControlsVisible) {
     control.hidden = true;
     return;
   }
@@ -17873,7 +17882,7 @@ async function refreshPositionGuardState({ quiet = false, includeAdmin = true, f
 }
 
 async function handlePositionGuardToggle(input) {
-  if (!positionGuardFeatureIsEnabled()) {
+  if (!positionGuardUserControlsVisible()) {
     if (input) input.checked = !input.checked;
     return;
   }
@@ -17923,7 +17932,7 @@ function renderPositionManagementOverview(tasks = [], settings = {}, pagination 
   const pendingCancelEnabled = Number(settings.platform?.ai_pending_cancel_enabled ?? 0) === 1;
   const guardPresentation = positionGuardStatusPresentation(state.positionGuardSettings);
   const accountLabel = positionGuardAccountLabel(activeTradingAccount());
-  const guardCard = positionGuardFeatureIsEnabled()
+  const guardCard = positionGuardUserControlsVisible()
     ? `<article class="insight-item position-guard-overview-card ${guardPresentation.tone === "running" ? "success" : guardPresentation.tone === "warning" ? "warning" : ""}"><span>当前账号 · PivotGuard</span><strong>${escapeHtml(guardPresentation.label.replace(/^自动盯盘\s*/, ""))}</strong><small title="${escapeHtml(accountLabel)}">${escapeHtml(accountLabel)}</small></article>`
     : "";
   const kicker = $("positionManagementModeKicker");
@@ -17950,7 +17959,8 @@ function renderPositionManagementSettings(settings = {}) {
   if (!host) return;
   const user = settings.user || {};
   const modeEnabled = ["auto_exit", "auto_reverse"].includes(user.execution_mode);
-  const guardEnabled = positionGuardFeatureIsEnabled();
+  const guardFeatureEnabled = positionGuardFeatureIsEnabled();
+  const guardUserVisible = positionGuardUserControlsVisible();
   const guardPresentation = positionGuardStatusPresentation(state.positionGuardSettings);
   host.innerHTML = `<div class="position-management-settings-stack">
     <details class="position-management-setting-disclosure">
@@ -17962,13 +17972,13 @@ function renderPositionManagementSettings(settings = {}) {
         </section>
       </div>
     </details>
-    ${guardEnabled ? `<details class="position-management-setting-disclosure position-guard-user-disclosure">
+    ${guardUserVisible ? `<details class="position-management-setting-disclosure position-guard-user-disclosure">
       <summary><span><i data-lucide="radar" size="15"></i>PivotGuard 自动盯盘</span><span id="positionGuardSettingsSummary" class="position-management-setting-state is-${escapeHtml(guardPresentation.key)}">${escapeHtml(guardPresentation.label.replace(/^自动盯盘\s*/, ""))}</span></summary>
       <div class="position-management-setting-content"><section id="positionGuardUserSettings" class="position-management-setting-block position-guard-user-settings" aria-label="PivotGuard 自动盯盘账号开关"></section></div>
     </details>
-    ${state.user?.role === "admin" ? `<details class="position-management-setting-disclosure position-guard-admin-disclosure"><summary><span><i data-lucide="settings-2" size="15"></i>管理员参数</span><small>仅管理员可修改版本与平台总闸</small></summary><div class="position-management-setting-content"><section id="positionGuardAdminPanel" class="position-management-setting-block position-guard-admin-host" aria-label="PivotGuard 管理员参数"></section></div></details>` : ""}` : ""}
+    ` : ""}${guardFeatureEnabled && state.user?.role === "admin" ? `<details class="position-management-setting-disclosure position-guard-admin-disclosure"><summary><span><i data-lucide="settings-2" size="15"></i>管理员参数</span><small>仅管理员可修改版本与平台总闸</small></summary><div class="position-management-setting-content"><section id="positionGuardAdminPanel" class="position-management-setting-block position-guard-admin-host" aria-label="PivotGuard 管理员参数"></section></div></details>` : ""}
   </div>`;
-  if (guardEnabled) {
+  if (guardFeatureEnabled) {
     renderPositionGuardUserSettings(state.positionGuardSettings);
     renderPositionGuardAdminPanel();
   }

@@ -7,6 +7,7 @@ import {
   describeSimpleIndicatorCapabilities,
   mergeSimpleIndicatorDeclarations,
   setEma34DeclarationEnabled,
+  setEma34DeclarationTimeframe,
   parseStrategyPolicy,
   prepareStrategyDataRuntime,
   buildStrategyRuntimeSnapshot,
@@ -153,6 +154,29 @@ describe('strategy policy', () => {
     })
     expect(() => mergeSimpleIndicatorDeclarations({ strategyPolicyValue:referenced, marketDataPlan,
       declarations:[] })).toThrow('strategy_indicator_advanced_configuration')
+  })
+
+  it('changes only the timeframe of one advanced EMA34 declaration', () => {
+    const advanced = declaredEmaPolicy()
+    advanced.constraints = [{ id:'ema_ready', scope:'new_entry', phases:['post_inference'],
+      require:{ left:{ ref:'indicators.entry_ema34.ready' }, op:'eq', right:true },
+      on_fail:'hold_new_entry', counts_as_trigger:false }]
+    advanced.prompt_rules = [{ id:'keep_rule', text:'保留原规则' }]
+    const marketDataPlan = { primary_timeframe:'M5', timeframes:[
+      { timeframe:'M5', kline_count:100 }, { timeframe:'M1', kline_count:100 },
+    ] }
+    const changed = setEma34DeclarationTimeframe(advanced, 'm1', { marketDataPlan })
+    const policy = JSON.parse(changed.strategyPolicyJson)
+    expect(changed).toMatchObject({ useEma34Filter:true,
+      capabilityState:{ ema34:{ status:'advanced', enabled:true, timeframe:'M1' } } })
+    expect(policy.indicators[0]).toEqual({
+      ...advanced.indicators[0],
+      source:{ ...advanced.indicators[0].source, timeframe:'M1' },
+    })
+    expect(policy.constraints).toEqual(advanced.constraints)
+    expect(policy.prompt_rules).toEqual(advanced.prompt_rules)
+    expect(() => setEma34DeclarationTimeframe(advanced, 'H1', { marketDataPlan }))
+      .toThrow('ema34_timeframe_not_in_market_plan')
   })
 
   it('rejects missing or out-of-plan EMA34 periods', () => {

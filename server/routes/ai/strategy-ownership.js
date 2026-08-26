@@ -8,6 +8,7 @@ import { stripBrokerSuffix, stripStrategyControlTags } from './utils.js'
 import { CHAN_SUPPORTED_TIMEFRAMES, STRATEGY_DATA_CAPABILITIES_VERSION, describeSimpleIndicatorCapabilities,
   mergeSimpleIndicatorDeclarations, normalizeEntryMethods, normalizeMarketDataPlan,
   normalizeUseChanAnalysis, normalizeUseEma34Filter, parseStrategyPolicy, setEma34DeclarationEnabled,
+  setEma34DeclarationTimeframe,
   validateChanTimeframes } from './strategy-policy.js'
 import { canonicalPolicyJson, compileStrategyPolicy, StrategyPolicyValidationError } from './strategy-policy-compiler.js'
 import { normalizeSubscriptionSchedule } from './subscription-schedule.js'
@@ -44,8 +45,27 @@ function requestedStrategyPolicy(payload = {}) {
 
 function resolveStrategyPolicyMutation({ existingPolicy = null, payload = {}, marketDataPlan }) {
   const requestedPolicy = requestedStrategyPolicy(payload)
-  if (payload.indicator_declarations !== undefined && requestedPolicy !== undefined) {
+  const hasTimeframeOverride = Object.hasOwn(payload, 'ema34_timeframe')
+  if ((payload.indicator_declarations !== undefined && requestedPolicy !== undefined)
+      || (hasTimeframeOverride && (payload.indicator_declarations !== undefined || requestedPolicy !== undefined))) {
     throw new Error('strategy_policy_mutation_ambiguous')
+  }
+  if (hasTimeframeOverride) {
+    let mutation = setEma34DeclarationTimeframe(existingPolicy, payload.ema34_timeframe, { marketDataPlan })
+    if (payload.use_ema34_filter !== undefined) {
+      const requestedEnabled = normalizeUseEma34Filter(payload.use_ema34_filter)
+      let normalizedPolicy = mutation.strategyPolicyJson
+      if (requestedEnabled && normalizedPolicy) {
+        const policy = JSON.parse(normalizedPolicy)
+        if (String(policy.mode || '').toLowerCase() === 'off') {
+          if (payload.confirm_enable_data_runtime !== true) throw new Error('strategy_data_runtime_confirmation_required')
+          policy.mode = 'shadow'
+          normalizedPolicy = canonicalPolicyJson(policy)
+        }
+      }
+      mutation = setEma34DeclarationEnabled(normalizedPolicy, requestedEnabled, { marketDataPlan })
+    }
+    return mutation
   }
   if (payload.indicator_declarations !== undefined) {
     return mergeSimpleIndicatorDeclarations({
@@ -415,6 +435,7 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
     : normalizeMarketDataPlan(existing.market_data_plan_json, { prompt: existing.system_prompt })
   const requestedPolicy = requestedStrategyPolicy(payload)
   const policyNeedsValidation = requestedPolicy !== undefined || payload.indicator_declarations !== undefined
+    || payload.ema34_timeframe !== undefined
     || payload.market_data_plan !== undefined || payload.use_ema34_filter !== undefined
   const policyMutation = policyNeedsValidation
     ? resolveStrategyPolicyMutation({ existingPolicy:existing.strategy_policy_json, payload, marketDataPlan })
@@ -444,6 +465,7 @@ export async function updateStrategy(strategyId, userId, userRole, payload = {})
     || payload.market_data_plan !== undefined || payload.entry_methods !== undefined || payload.use_chan_analysis !== undefined
     || payload.use_ema34_filter !== undefined || payload.include_portfolio_context !== undefined
     || requestedPolicy !== undefined || payload.indicator_declarations !== undefined
+    || payload.ema34_timeframe !== undefined
     || payload.interval_minutes !== undefined || payload.sort_order !== undefined
     || payload.model_profile_id !== undefined || payload.visibility_status !== undefined
     || payload.version_label !== undefined
