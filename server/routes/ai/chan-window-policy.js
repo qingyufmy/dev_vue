@@ -1,18 +1,18 @@
-// Fixed Chan history-window policy for the production v6 calculation path.
+// Fixed Chan history-window policy for the production v7 calculation path.
 //
 // The policy is deliberately small and immutable.  Strategy-visible candle
 // counts remain owned by the strategy tags; this module only describes the
 // additional server-side history required by Chan structure calculations.
 
-export const CHAN_WINDOW_POLICY_VERSION = 'chan_window_v6'
+export const CHAN_WINDOW_POLICY_VERSION = 'chan_window_v7'
 export const CHAN_WINDOW_POLICY_ID = 'dao_xau_v1'
 
 export const CHAN_WINDOW_POLICIES = Object.freeze({
   [CHAN_WINDOW_POLICY_ID]: Object.freeze({
-    M5: Object.freeze({ target: 800, validators: Object.freeze([600, 700, 800]) }),
-    M15: Object.freeze({ target: 1000, validators: Object.freeze([800, 900, 1000]) }),
-    H1: Object.freeze({ target: 1200, validators: Object.freeze([1000, 1100, 1200]) }),
-    H4: Object.freeze({ target: 800, validators: Object.freeze([600, 700, 800]) }),
+    M5: Object.freeze({ target: 1800, validators: Object.freeze([1400, 1600, 1800]) }),
+    M15: Object.freeze({ target: 2000, validators: Object.freeze([1600, 1800, 2000]) }),
+    H1: Object.freeze({ target: 1800, validators: Object.freeze([1400, 1600, 1800]) }),
+    H4: Object.freeze({ target: 1000, validators: Object.freeze([600, 800, 1000]) }),
   }),
 })
 
@@ -42,7 +42,7 @@ export function getChanWindowPolicy(timeframe, policyId = CHAN_WINDOW_POLICY_ID)
   const tf = normalizeTimeframe(timeframe)
   const configured = CHAN_WINDOW_POLICIES[policyId]?.[tf]
   if (configured) return freezePolicy(tf, configured)
-  // Non-configured periods are explicitly unsupported for v6. Callers can
+  // Non-configured periods are explicitly unsupported by this policy. Callers can
   // retain their legacy v5 path or fail closed; they never silently inherit
   // one of the configured period windows.
   return Object.freeze({

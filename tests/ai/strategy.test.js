@@ -22,8 +22,8 @@ vi.mock('../../server/routes/ai/market-data.js', () => ({
     account: { balance: 10000, equity: 10500 },
     ...(options.computeChan ? { chan: {
       source_history_count: rates.length,
-      segment_count: rates[0]?.chan_segment_count ?? (rates.length >= (timeframe === 'H1' ? 1200 : 800) ? 1 : 0),
-      center_count: rates[0]?.chan_center_count ?? (rates.length >= (timeframe === 'H1' ? 1200 : 800) ? 1 : 0),
+      segment_count: rates[0]?.chan_segment_count ?? (rates.length >= Number(options.chanMaximumHistoryCount || 0) ? 1 : 0),
+      center_count: rates[0]?.chan_center_count ?? (rates.length >= Number(options.chanMaximumHistoryCount || 0) ? 1 : 0),
       latest_center: rates[0]?.chan_center_count > 0 ? {
         entry_segment_stable_id: rates[0]?.chan_entry_segment_stable_id ?? null,
         entry_segment_id: rates[0]?.chan_entry_segment_id ?? null,
@@ -73,7 +73,7 @@ describe('buildStrategyContextFromTags', () => {
   })
 
   it('已有2000根缠论回退数据时不会重复请求2000根', async () => {
-    const rates = Array.from({ length: 2000 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    const rates = Array.from({ length: 1800 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
     await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'H1', rates, 'manual'
     )
@@ -89,21 +89,21 @@ describe('buildStrategyContextFromTags', () => {
   })
 
   it('缠论使用固定周期目标历史但模型K线保持标签数量', async () => {
-    const rates = Array.from({ length: 1200 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
+    const rates = Array.from({ length: 1800 }, (_, i) => ({ time: `t${i}`, open: '2000', high: '2010', low: '1990', close: '2005', tick_volume: '100' }))
     mockMt5Bridge.mockResolvedValueOnce({ rates })
     const result = await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
     )
-    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1200 }))
+    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1800 }))
     expect(result.timeframes.H1.klines).toHaveLength(80)
-    expect(result.timeframes.H1.klines[0].time).toBe('t1120')
-    expect(result.visualization_klines.H1).toHaveLength(1200)
+    expect(result.timeframes.H1.klines[0].time).toBe('t1720')
+    expect(result.visualization_klines.H1).toHaveLength(1800)
     expect(result.visualization_klines.H1[0].time).toBe('t0')
     expect(JSON.stringify(result)).not.toContain('visualization_klines')
   })
 
   it('直接传递各周期原始缠论结构且不生成跨周期汇总字段', async () => {
-    const rates = Array.from({ length:800 }, (_, i) => ({
+    const rates = Array.from({ length:1800 }, (_, i) => ({
       time:`raw-${i}`, open:'2000', high:'2010', low:'1990', close:'2005', tick_volume:'100',
       chan_marker:'M5-raw-structure',
     }))
@@ -121,7 +121,7 @@ describe('buildStrategyContextFromTags', () => {
     const result = await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
     )
-    expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1200 }))
+    expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1800 }))
     expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
     expect(result.timeframes.H1.klines).toHaveLength(80)
     expect(result.timeframes.H1.klines[0].time).toBe('a220')
@@ -137,7 +137,7 @@ describe('buildStrategyContextFromTags', () => {
     const result = await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
     )
-    expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1200 }))
+    expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1800 }))
     expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
     expect(result.timeframes.H1.klines).toHaveLength(80)
     expect(result.timeframes.H1.klines[0].time).toBe('a220')
@@ -152,7 +152,7 @@ describe('buildStrategyContextFromTags', () => {
     await buildStrategyContextFromTags(
       1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual'
     )
-    expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1200 }))
+    expect(mockMt5Bridge).toHaveBeenNthCalledWith(1, 1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1800 }))
     expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
   })
 
@@ -162,11 +162,11 @@ describe('buildStrategyContextFromTags', () => {
     mockMt5Bridge.mockResolvedValueOnce({ rates: rates300 }).mockResolvedValue({ rates: rates2000 })
     const args = [1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:H1:80}} {{USE_CHAN}}', 'M5', [], 'manual']
     await buildStrategyContextFromTags(...args)
-    expect(resolveChanHistoryCount(1, 'XAUUSD', 'H1', 80, true)).toBe(1200)
+    expect(resolveChanHistoryCount(1, 'XAUUSD', 'H1', 80, true)).toBe(1800)
     mockMt5Bridge.mockClear()
     await buildStrategyContextFromTags(...args)
     expect(mockMt5Bridge).toHaveBeenCalledTimes(1)
-    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1200 }))
+    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1', count: 1800 }))
   })
   it('reports missing timeframes as a partial strategy context', async () => {
     const fallbackRates = Array.from({ length: 100 }, (_, i) => ({
@@ -186,7 +186,6 @@ describe('buildStrategyContextFromTags', () => {
     expect(result.timeframes).not.toHaveProperty('H1')
   })
 })
-
 describe('历史快照 Chan runtime detection', () => {
   it('recognizes the new per-timeframe raw Chan shape', () => {
     const samples = [{ market_snapshot: { strategy_context: {

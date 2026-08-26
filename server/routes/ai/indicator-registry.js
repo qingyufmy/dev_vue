@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
+import { timeframeIntervalMs } from './utils.js'
 
-export const INDICATOR_ALGORITHM_VERSION = 'indicator-registry-v2'
+export const INDICATOR_ALGORITHM_VERSION = 'indicator-registry-v3'
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex')
@@ -167,6 +168,22 @@ function calculateMovingAverage(calculator, bars, definition, source = {}) {
     if (source.lastBarClosed === false) rows = rows.slice(0, -1)
     else if (source.lastBarClosed !== true) return baseEvidence(definition, source, false, 'indicator_bar_close_state_unknown')
   }
+  const latestRow = rows.at(-1)
+  const referenceTimeUtcMs = Number(source.referenceTimeUtcMs ?? source.reference_time_utc_msc)
+  const intervalMs = timeframeIntervalMs(definition.source.timeframe)
+  const latestClosedBarTimeUtcMs = Number(latestRow?.time) + intervalMs
+  const staleToleranceMs = Number.isFinite(Number(source.staleToleranceMs ?? source.stale_tolerance_ms))
+    ? Math.max(0, Number(source.staleToleranceMs ?? source.stale_tolerance_ms))
+    : Math.max(120_000, intervalMs * 2)
+  if (Number.isFinite(referenceTimeUtcMs) && Number.isFinite(latestClosedBarTimeUtcMs)
+    && referenceTimeUtcMs - latestClosedBarTimeUtcMs > staleToleranceMs) {
+    return baseEvidence(definition, source, false, 'indicator_source_stale', null, latestRow, rows.length, {
+      reference_time_utc_msc:referenceTimeUtcMs,
+      latest_closed_bar_time_utc_msc:latestClosedBarTimeUtcMs,
+      source_age_ms:referenceTimeUtcMs - latestClosedBarTimeUtcMs,
+      stale_tolerance_ms:staleToleranceMs,
+    })
+  }
   const period = Number(definition.params.period)
   const minimumBars = Math.max(period, Number(definition.params.minimum_bars || period))
   if (rows.length < minimumBars) {
@@ -213,6 +230,8 @@ export function calculatePolicyIndicators(compiledPolicy, frameSources = {}) {
       lastBarClosed:frame.lastBarClosed,
       internalGapUnresolved:frame.internalGapUnresolved,
       marketSource:frame.marketSource,
+      referenceTimeUtcMs:frame.referenceTimeUtcMs ?? frame.reference_time_utc_msc,
+      staleToleranceMs:frame.staleToleranceMs ?? frame.stale_tolerance_ms,
     })
   }
   return result

@@ -14,7 +14,13 @@ describe('Chan model payload projection', () => {
       recent_bis: [{ id: 2 }],
       current_segment: { id: 3, confirmed: true, state: 'active', reason: '结构证据' },
       prev_segment: { id: 4 },
-      candidate_segment: { id: 5 },
+      candidate_segment: {
+        id: 5,
+        confirmation_state:'awaiting_reverse_feature_fractal',
+        confirmation_required:'reverse_feature_fractal',
+        pending_endpoint_feature_gap:true,
+        pending_endpoint_price:4696.7,
+      },
       current_center: { lower: 1990, upper: 2010 },
       latest_center: { lower: 1980, upper: 2000 },
       latest_bi_center: { lower: 1970, upper: 1990 },
@@ -50,6 +56,13 @@ describe('Chan model payload projection', () => {
     expect(projected.current_bi).not.toBe(chan.current_bi)
     expect(projected.current_bi.points).not.toBe(chan.current_bi.points)
     expect(projected.current_segment).toMatchObject({ confirmed:true, state:'active', reason:'结构证据' })
+    expect(projected.candidate_segment).toMatchObject({
+      id:5,
+      confirmation_state:'awaiting_reverse_feature_fractal',
+      confirmation_required:'reverse_feature_fractal',
+      pending_endpoint_feature_gap:true,
+      pending_endpoint_price:4696.7,
+    })
     expect(projected).not.toHaveProperty('trend_state')
     expect(projected).not.toHaveProperty('price_vs_center')
     expect(projected.evidence_capabilities).toEqual(Object.fromEntries(

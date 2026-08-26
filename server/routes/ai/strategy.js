@@ -338,8 +338,8 @@ function compareVisibleRates(rates, decisionUtcMs, timeframe, count, includeChan
   const policy = includeChan ? getChanWindowPolicy(timeframe) : null
   const requested = Math.max(Number(count) || 100, policy?.target || 0)
   // Historical comparison is frozen to the same period-specific Chan target
-  // used by live inference.  A strategy indicator may carry more history, but
-  // it must not make Chan reintroduce the old 2000-bar window.
+  // used by live inference. A strategy indicator may carry more history, but
+  // it must not change the Chan policy window.
   return closed.slice(-requested)
 }
 
@@ -579,6 +579,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   const timeframes = {}
   const visualizationKlines = {}
   const policyIndicatorSources = {}
+  const indicatorReferenceTimeUtcMs = Date.now()
   const missingTimeframes = []
   for (const { tf, count } of tags) {
     const chanPolicy = useChan ? getChanWindowPolicy(tf) : null
@@ -626,6 +627,7 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
       lastBarClosed:typeof chanDataQuality?.last_bar_closed === 'boolean' ? chanDataQuality.last_bar_closed : null,
       internalGapUnresolved:chanDataQuality?.internal_gap_unresolved === true,
       marketSource:chanDataQuality?.source || chanDataQuality?.source_type || null,
+      referenceTimeUtcMs:indicatorReferenceTimeUtcMs,
     }
     if (chanEnabledForTimeframe) visualizationKlines[tf] = compactRates(rates.slice(-chanPolicy.target))
   }
@@ -2023,6 +2025,7 @@ export async function handleHistoryCompare(userId, params, options = {}) {
         bars:compactRates(contextRates), lastBarClosed:true,
         internalGapUnresolved:historicalDataQuality.internal_gap_unresolved === true,
         marketSource:historicalDataQuality.source || 'historical_compare',
+        referenceTimeUtcMs:decisionUtcMs,
       }
     }
     const primaryRates = compareVisibleRates(

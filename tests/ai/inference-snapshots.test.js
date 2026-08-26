@@ -105,7 +105,7 @@ describe('inference snapshot evidence', () => {
     })
     expect(resolveFrozenChanRequirement({}, {})).toMatchObject({ status:'unknown', source:'unresolved' })
   })
-  it('freezes the Chan v6 policy, capabilities and continuity metadata', () => {
+  it('freezes the current Chan policy, capabilities and continuity metadata', () => {
     const result = prepareInferenceSnapshot({
       systemPrompt:'system', userPrompt:'payload',
       marketSnapshot:{ strategy_context:{ timeframes:{ M5:{ summary:{ chan:{
@@ -119,8 +119,8 @@ describe('inference snapshot evidence', () => {
       } } } } } },
     })
     expect(result.marketSnapshot.strategy_context.timeframes.M5.summary.chan).toMatchObject({
-      window_policy_version:'chan_window_v6', maximum_history_count:800,
-      validation_window_counts:[600, 700, 800],
+      window_policy_version:'chan_window_v7', maximum_history_count:1800,
+      validation_window_counts:[1400, 1600, 1800],
       evidence_capabilities:{ data_complete:true, center_structure_usable:false },
       continuity:{
         calendar_version:'xauusd-fixed-holiday-v1',

@@ -19,7 +19,7 @@ describe('frozen market diagnostics', () => {
     const second = buildFrozenChanSnapshotDiagnostics(row)
     expect(first).toEqual(second)
     expect(first.frames.H1).toMatchObject({
-      candle_count:1, target_window:1200, validation_windows:[1000, 1100, 1200],
+      candle_count:1, target_window:1800, validation_windows:[1400, 1600, 1800],
       segment_count:3, segment_direction:'down', segment_stable_id:'segment:3',
       center_core_stable_id:'center:1', center_entry_segment_stable_id:'segment:2',
     })

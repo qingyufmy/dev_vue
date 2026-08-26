@@ -282,6 +282,11 @@ const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
   pending_action: "必须字段。仅允许 none | keep | cancel。none 表示本轮不管理现有挂单；keep 表示保留模型选中的挂单；cancel 表示取消模型选中的挂单。新信号与挂单管理是相互独立的结论",
   pending_action_reason: "中文说明挂单处理的策略依据。pending_action 为 cancel 时必须填写；其他动作可返回空字符串",
   management_direction: "必须字段。仅允许 buy | sell | none。需要取消挂单时填写被管理挂单方向；其他情况填 none",
+  hard_gate_status: "必须字段。仅表示按当前策略本轮是否允许新开仓或加仓，仅允许 pass | fail。交易信号必须为pass；hold必须为fail。不得用评分、置信度或文字理由覆盖该字段",
+  hard_gate_failures: ["必须字段。逐项填写当前策略中未通过的新入场必要条件，使用简短稳定标识；交易信号必须为空数组，hold至少填写一项。字段内容必须与signal_type、方向、decision_summary、key_reasons、analysis和reasoning一致"],
+  minimum_reward_to_risk: "必须字段。当前策略正文明确规定最低收益风险要求时，原样填写该正数；策略未规定时返回null。该字段只复述当前策略门槛，不得擅自增加全局默认值",
+  recommended_reward_to_risk: "必须字段。交易信号按当前策略指定的口径填写推荐止盈档位对应的收益风险比正数；hold或当前策略不要求时返回null。必须与入场价、止损价、recommended_take_profit_tier及reasoning中的结论一致",
+  reward_to_risk_status: "必须字段。仅允许 pass | fail | not_applicable。当前策略规定收益风险门槛时，交易信号必须为pass；未达到门槛时必须为fail并输出hold。当前策略没有该门槛时使用not_applicable。该字段是模型自检声明，不替代独立风控",
   limit_price: "挂单价。buy_limit/sell_limit:入场价，订单直接挂在此价；buy_stop/sell_stop:触发价，价格到达后以市价成交；buy_stop_limit/sell_stop_limit:触发价，到达后按stop_limit_price挂限价单。价格必须满足对应订单类型的机械方向关系；具体入场逻辑只按当前策略正文判断",
   stop_limit_price: "Stop Limit 触发后挂出的限价，仅buy_stop_limit/sell_stop_limit时必填。limit_price始终是突破触发价：buy_stop_limit 的触发价高于当前价，stop_limit_price不得高于触发价；sell_stop_limit 的触发价低于当前价，stop_limit_price不得低于触发价",
   pending_valid_minutes: "挂单有效期(分钟)，1-1440，默认240",
@@ -1448,9 +1453,15 @@ export async function maybeAiSignal(db, config, market, promptOverride) {
 ## 持仓与挂单管理输出合同
 position_management_context 是服务端提供的去身份化实时事实，平台策略的管理组只来自本轮观摩源当前 reference portfolio 中仍存在且已精确归属的持仓或挂单。观摩源当前没有持仓和挂单时，管理组为空；历史 thesis、旧 outcome 或订阅用户仍存续的订单不能生成管理组。每个输入的管理组都必须完整返回，并严格使用输出合同允许的枚举、对象标识和证据引用。当前事实只用于判断订单是否符合行情：持仓依据当前 entry_price/current_price/actual_stop_loss/actual_take_profit/volume，挂单依据 trigger_price/actual_stop_loss/actual_take_profit/volume；不得使用原始入场论点、原始保护价或失效条件替代当前事实。volume 与 exposure_summary 仅用于判断 allow_add 或 hold_no_add，禁止返回绝对手数。decision_context_status=available 且 reference_facts_status=available 才能提出 cancel/exit；证据缺失或不可用时只能安全保留，不得凭冻结论点恢复已消失的管理组。不得伪造不存在的终端事实，也不得引用 subscriber terminal ref。模型只输出当前输入管理组的判断；只有合法 cancel/exit 结论才由服务端按冻结 origin_signal_id 经 delivery、order intent、outcome 唯一 lineage 解析订阅执行目标，hold/keep/observe 不遍历订阅库存。服务端只校验字段、归属、证据引用、幂等和执行安全；不得推测账户身份、余额、权益、金额盈亏或订阅用户手数。` : ''
     const declaredIndicators = market?.strategy_context?.indicators
-    const managedEma34Identity = declaredIndicators && Object.hasOwn(declaredIndicators, 'ema34')
-      ? ' strategy_context.indicators.ema34 是系统按策略声明计算的 EMA34 数据。'
-      : ''
+    const managedEma34Keys = declaredIndicators && typeof declaredIndicators === 'object'
+      ? Object.entries(declaredIndicators).filter(([id, evidence]) => {
+          const period = Number(evidence?.params?.period ?? evidence?.analysis?.period)
+          return id === 'ema34' || id === 'entry_ema34'
+            || (String(evidence?.kind || '').toLowerCase() === 'ema' && period === 34)
+        }).map(([id]) => id)
+      : []
+    const managedEma34Identity = managedEma34Keys
+      .map(id => ` strategy_context.indicators.${id} 是系统按策略声明计算的 EMA34 数据。`).join('')
     const declaredIndicatorRule = declaredIndicators && typeof declaredIndicators === 'object'
       && Object.keys(declaredIndicators).length > 0
       ? `\n\n## 系统提供的数据\nstrategy_context.indicators 仅包含当前策略显式声明、由服务端通用指标工具计算的中性事实。${managedEma34Identity} ready、reason、source、bar、value、analysis 与 evidence_hash 都是数据证据，不是服务端交易结论。如何解释这些指标、采用哪个周期以及是否交易，只以当前策略正文为准；不得自行增加策略未声明的指标、门槛或周期职责。`
@@ -1816,7 +1827,8 @@ const MODEL_DECISION_FIELDS = Object.freeze([
   'pending_action_reason', 'management_direction', 'limit_price', 'stop_limit_price',
   'pending_valid_minutes', 'stop_loss_price', 'take_profit_1_price',
   'take_profit_2_price', 'take_profit_3_price', 'recommended_take_profit_tier',
-  'bullish_score', 'bearish_score',
+  'bullish_score', 'bearish_score', 'hard_gate_status', 'hard_gate_failures',
+  'minimum_reward_to_risk', 'recommended_reward_to_risk', 'reward_to_risk_status',
 ])
 
 function currentModelDecision(parsed = {}) {

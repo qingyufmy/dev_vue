@@ -16,10 +16,13 @@ function makeRates(n, base = 4000) {
   return rates
 }
 
-function makeStableChanRates(n, step = 300000) {
+function makeStableChanRates(n, step = 300000, phase = 25) {
   return Array.from({ length: n }, (_, index) => {
-    const close = 100 + Math.sin(index * 0.02) * 20
-      + Math.sin(index * 0.06) * 10 + Math.sin(index * 0.35) * 3
+    // Keep the terminal phase on a confirmed center/entry boundary for every
+    // production policy length so trusted-anchor paths are exercised.
+    const phaseIndex = index + phase
+    const close = 100 + Math.sin(phaseIndex * 0.02) * 20
+      + Math.sin(phaseIndex * 0.06) * 10 + Math.sin(phaseIndex * 0.35) * 3
     return {
       time:`t${index}`,
       time_utc_msc:1784185200000 + index * step,
@@ -40,33 +43,33 @@ function expectHiddenChanEvidence(result) {
   }
 }
 
-describe('Chan v6 window policy', () => {
+describe('Chan v7 window policy', () => {
   it.each([
-    ['M5', 800, [600, 700, 800]],
-    ['M15', 1000, [800, 900, 1000]],
-    ['H1', 1200, [1000, 1100, 1200]],
-    ['H4', 800, [600, 700, 800]],
+    ['M5', 1800, [1400, 1600, 1800]],
+    ['M15', 2000, [1600, 1800, 2000]],
+    ['H1', 1800, [1400, 1600, 1800]],
+    ['H4', 1000, [600, 800, 1000]],
   ])('uses the fixed %s target and adjacent validators', (timeframe, target, validators) => {
     expect(getChanWindowPolicy(timeframe)).toMatchObject({
       supported:true, target, maximumHistoryCount:target,
       validators, validationWindowCounts:validators,
-      windowPolicyVersion:'chan_window_v6',
+      windowPolicyVersion:'chan_window_v7',
     })
   })
 
-  it('does not silently assign a v6 window to an unsupported timeframe', () => {
+  it('does not silently assign a v7 window to an unsupported timeframe', () => {
     expect(getChanWindowPolicy('M30')).toMatchObject({
       supported:false, target:0, validators:[], windowPolicyVersion:'unsupported',
     })
   })
 
   it('ignores a prefix outside the fixed target window', () => {
-    const tail = makeRates(800)
+    const tail = makeRates(1800)
     const withPrefix = [...makeRates(250, 9000), ...tail]
     const first = computeChan(withPrefix, 'M5', [])
     const second = computeChan(tail, 'M5', [])
-    expect(first).toMatchObject({ source_history_count:1050, calculation_window_count:800, raw_bar_count:800 })
-    expect(second).toMatchObject({ source_history_count:800, calculation_window_count:800, raw_bar_count:800 })
+    expect(first).toMatchObject({ source_history_count:2050, calculation_window_count:1800, raw_bar_count:1800 })
+    expect(second).toMatchObject({ source_history_count:1800, calculation_window_count:1800, raw_bar_count:1800 })
     expect(first.current_segment).toEqual(second.current_segment)
     expect(first.latest_center).toEqual(second.latest_center)
   })
@@ -141,11 +144,11 @@ describe('Chan v6 window policy', () => {
   })
 
   it('ignores an unresolved gap whose details are outside the fixed Chan slice', () => {
-    const rates = makeRates(1000).map((rate, index) => ({
+    const rates = makeRates(2000).map((rate, index) => ({
       ...rate, time_utc_msc:1784185200000 + index * 300000,
     }))
     const result = computeChan(rates, 'M5', [], {
-      requestedHistoryCount:800,
+      requestedHistoryCount:1800,
       dataQuality:{
         source_id:1, platform:'mt5', clock_status:'verified', last_bar_closed:true,
         cache_internal_gap_unresolved:true,
@@ -156,7 +159,7 @@ describe('Chan v6 window policy', () => {
         }],
       },
     })
-    expect(result.calculation_window_count).toBe(800)
+    expect(result.calculation_window_count).toBe(1800)
     expect(result.cache_internal_gap_unresolved).toBe(false)
     expect(result.evidence_capabilities.data_complete).toBe(true)
   })
@@ -425,6 +428,38 @@ describe('buildSegments', () => {
     expect(segments[0].bi_ids).toEqual([1, 2, 3])
   })
 
+  it('有缺口端点在反向特征序列分型前保持候选，确认后端点不漂移', () => {
+    const makeBi = (id, dir, start, end) => ({ id, dir, raw_start_idx:id * 2 - 2,
+      raw_end_idx:id * 2 - 1, start_price:start, end_price:end,
+      high:Math.max(start, end), low:Math.min(start, end) })
+    const waiting = [
+      makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
+      makeBi(3, 'up', 110, 140), makeBi(4, 'down', 140, 130),
+      makeBi(5, 'up', 130, 135), makeBi(6, 'down', 135, 100),
+      makeBi(7, 'up', 100, 120), makeBi(8, 'down', 120, 110),
+    ]
+    const before = buildSegments(waiting)
+    expect(before.segments).toHaveLength(0)
+    expect(before.candidate).toMatchObject({
+      confirmation_state:'awaiting_reverse_feature_fractal',
+      confirmation_required:'reverse_feature_fractal',
+      pending_endpoint_feature_gap:true,
+      pending_endpoint_feature_bi_id:4,
+      pending_endpoint_segment_bi_id:3,
+      pending_endpoint_price:140,
+    })
+
+    const after = buildSegments([...waiting, makeBi(9, 'up', 110, 125)])
+    expect(after.segments[0]).toMatchObject({
+      dir:'up', start_bi_id:1, end_bi_id:3, start_price:100, end_price:140,
+      confirmation:'gap_reverse_confirmed',
+    })
+    expect(after.candidate).toMatchObject({
+      dir:'down', start_price:140,
+      confirmation_state:'awaiting_reverse_feature_fractal',
+    })
+  })
+
   it('缺口后只有价格破坏但无第二特征序列分型时不确认', () => {
     const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
     const bis = [
@@ -432,10 +467,15 @@ describe('buildSegments', () => {
       makeBi(3, 'up', 110, 140), makeBi(4, 'down', 140, 130),
       makeBi(5, 'up', 130, 135), makeBi(6, 'down', 135, 100),
     ]
-    expect(buildSegments(bis).segments).toHaveLength(0)
+    const result = buildSegments(bis)
+    expect(result.segments).toHaveLength(0)
+    expect(result.candidate).toMatchObject({
+      confirmation_state:'awaiting_reverse_feature_fractal',
+      confirmation_required:'reverse_feature_fractal',
+    })
   })
 
-  it('等待第二特征序列时原上涨方向创新高会使候选失效', () => {
+  it('等待第二特征序列时原方向创新高会废弃旧端点并迁移到新端点', () => {
     const makeBi = (id, dir, start, end) => ({ id, dir, start_price: start, end_price: end, high: Math.max(start, end), low: Math.min(start, end) })
     const bis = [
       makeBi(1, 'up', 100, 120), makeBi(2, 'down', 120, 110),
@@ -444,7 +484,14 @@ describe('buildSegments', () => {
       makeBi(7, 'up', 100, 120), makeBi(8, 'down', 120, 110),
       makeBi(9, 'up', 110, 125),
     ]
-    expect(buildSegments(bis).segments).toHaveLength(0)
+    const result = buildSegments(bis)
+    expect(result.segments).toHaveLength(0)
+    expect(result.candidate).toMatchObject({
+      confirmation_state:'awaiting_reverse_feature_fractal',
+      pending_endpoint_feature_bi_id:6,
+      pending_endpoint_segment_bi_id:5,
+      pending_endpoint_price:145,
+    })
   })
 
   it('无缺口特征序列底分型对称确认下跌线段', () => {
@@ -1172,6 +1219,8 @@ describe('computeChan', () => {
       }
     })
     const result = computeChan(rates, 'H1', [], {
+      maximumHistoryCount:1200,
+      validationWindowCounts:[1000, 1100, 1200],
       dataQuality:{
         platform:'mt4', source_id:9, timezone_offset_minutes:180,
         clock_status:'mt4_current_offset', clock_sample_age_ms:0, last_bar_closed:true,
@@ -1203,6 +1252,8 @@ describe('computeChan', () => {
       }
     })
     const result = computeChan(rates, 'M5', [], {
+      maximumHistoryCount:800,
+      validationWindowCounts:[600, 700, 800],
       dataQuality:{ platform:'mt5', source_id:9, clock_status:'verified', last_bar_closed:true },
     })
     expect(result).toMatchObject({
@@ -1480,8 +1531,8 @@ describe('computeChan', () => {
     })
 
     expect(result.source_history_count).toBe(2001)
-    expect(result.calculation_window_count).toBe(800)
-    expect(result.raw_bar_count).toBe(800)
+    expect(result.calculation_window_count).toBe(1800)
+    expect(result.raw_bar_count).toBe(1800)
   })
 
   it('segment_count不等于bi_count', () => {
@@ -1496,10 +1547,10 @@ describe('computeChan', () => {
 
 describe('computeChan trusted anchor recovery', () => {
   const periods = [
-    ['M5', 800],
-    ['M15', 1000],
-    ['H1', 1200],
-    ['H4', 800],
+    ['M5', 1800],
+    ['M15', 2000],
+    ['H1', 1800],
+    ['H4', 1000],
   ]
 
   function trustedAnchorFrom(result) {
@@ -1513,7 +1564,7 @@ describe('computeChan trusted anchor recovery', () => {
 
   it.each(periods)('skips a %s anchor that is before the closed window and preserves stable structure',
     (timeframe, target) => {
-      const rates = makeStableChanRates(target)
+      const rates = makeStableChanRates(target, 300000, timeframe === 'H4' ? 0 : 25)
       const plain = computeChan(rates, timeframe, [], { dataQuality:chanDataQuality() })
       const requestedAnchor = {
         anchor_time_utc_msc:rates[0].time_utc_msc - 300000,
@@ -1543,7 +1594,7 @@ describe('computeChan trusted anchor recovery', () => {
 
   it.each(periods)('keeps the normal %s trusted-anchor path authoritative',
     (timeframe, target) => {
-      const rates = makeStableChanRates(target)
+      const rates = makeStableChanRates(target, 300000, timeframe === 'H4' ? 0 : 25)
       const options = { dataQuality:chanDataQuality() }
       const plain = computeChan(rates, timeframe, [], options)
       const requestedAnchor = trustedAnchorFrom(plain)
@@ -1565,7 +1616,7 @@ describe('computeChan trusted anchor recovery', () => {
 
   it.each(periods)('reuses the same unanchored evidence after %s anchor identity failures',
     (timeframe, target) => {
-      const rates = makeStableChanRates(target)
+      const rates = makeStableChanRates(target, 300000, timeframe === 'H4' ? 0 : 25)
       const options = { dataQuality:chanDataQuality() }
       const plain = computeChan(rates, timeframe, [], options)
       const trustedAnchor = trustedAnchorFrom(plain)
@@ -1601,7 +1652,7 @@ describe('computeChan trusted anchor recovery', () => {
     }, 120000)
 
   it.each(periods)('fails closed for a future %s trusted anchor', (timeframe, target) => {
-    const rates = makeStableChanRates(target)
+    const rates = makeStableChanRates(target, 300000, timeframe === 'H4' ? 0 : 25)
     const requestedAnchor = {
       anchor_time_utc_msc:rates.at(-1).time_utc_msc + 300000,
       bootstrap_core_stable_id:'future-core',
@@ -1628,7 +1679,7 @@ describe('computeChan trusted anchor recovery', () => {
   }, 30000)
 
   it('distinguishes equal and interior UTC anchors from a before-window anchor', () => {
-    const rates = makeStableChanRates(800)
+    const rates = makeStableChanRates(1800)
     for (const anchorTime of [rates[0].time_utc_msc, rates[1].time_utc_msc]) {
       const result = computeChan(rates, 'M5', [], {
         dataQuality:chanDataQuality(),

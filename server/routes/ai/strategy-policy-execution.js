@@ -86,6 +86,7 @@ async function loadFreshIndicatorSources(userId, request, compiledPolicy, ratesP
         ? response.market_meta.last_bar_closed : null,
       internalGapUnresolved:response.market_meta?.internal_gap_unresolved === true,
       marketSource:response.market_meta?.source || 'platform_market_bridge',
+      referenceTimeUtcMs:Date.now(),
     }]
   }))
   return Object.fromEntries(entries)

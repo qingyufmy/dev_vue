@@ -519,6 +519,8 @@ export function prepareStrategyDataRuntime(policy, strategyContext, { rawPolicy 
       timezoneOffsetMinutes:has('timezoneOffsetMinutes', 'timezone_offset_minutes'),
       marketSource:has('marketSource', 'market_source') || quality.source_type || quality.platform || null,
       lastBarClosed:has('lastBarClosed', 'last_bar_closed'),
+      referenceTimeUtcMs:has('referenceTimeUtcMs', 'reference_time_utc_msc'),
+      staleToleranceMs:has('staleToleranceMs', 'stale_tolerance_ms'),
       internalGapUnresolved:source?.internalGapUnresolved !== undefined
         ? source.internalGapUnresolved : source?.internal_gap_unresolved !== undefined
           ? source.internal_gap_unresolved : Boolean(quality.cache_internal_gap_unresolved),

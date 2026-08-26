@@ -124,6 +124,45 @@ describe('calculateMarketData', () => {
     expect(result.support_resistance.r2).toBeGreaterThan(result.support_resistance.r1)
   })
 
+  it('freezes one breakout reference before two different closed confirmation bars', () => {
+    const rates = Array.from({ length:22 }, (_, index) => ({
+      time:`2026-01-01 00:${String(index).padStart(2, '0')}:00`,
+      time_utc_msc:1_800_000_000_000 + index * 60_000,
+      open:100, high:index < 20 ? 110 : index === 20 ? 121 : 125,
+      low:index === 21 ? 120 : 90, close:index < 20 ? 100 : index === 20 ? 120 : 124,
+      tick_volume:100,
+    }))
+    const result = calculateMarketData('XAUUSD', 'M15', rates, baseAccount, [], {
+      chanDataQuality:{ last_bar_closed:true },
+    })
+    expect(result.support_resistance.two_closed_bar_breakout).toMatchObject({
+      ready:true,
+      reference_high:110,
+      reference_excludes_last_closed_bars:2,
+      up:{ first_close_beyond:true, second_close_beyond:true, complete:true, confirmation_type:'continuation' },
+      down:{ complete:false },
+    })
+  })
+
+  it('does not treat one breakout candle as two confirmation events', () => {
+    const rates = Array.from({ length:22 }, (_, index) => ({
+      time:`2026-01-01 00:${String(index).padStart(2, '0')}:00`,
+      time_utc_msc:1_800_000_000_000 + index * 60_000,
+      open:100, high:index === 21 ? 125 : 110,
+      low:90, close:index === 21 ? 124 : 100,
+      tick_volume:100,
+    }))
+    const result = calculateMarketData('XAUUSD', 'M15', rates, baseAccount, [], {
+      chanDataQuality:{ last_bar_closed:true },
+    })
+    expect(result.support_resistance.two_closed_bar_breakout.up).toMatchObject({
+      first_close_beyond:false,
+      second_close_beyond:true,
+      complete:false,
+      confirmation_type:'none',
+    })
+  })
+
   it('计算 K 线形态', () => {
     const rates = generateRates(50)
     const result = calculateMarketData('XAUUSD', 'M5', rates, baseAccount, basePositions)

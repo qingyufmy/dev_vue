@@ -277,7 +277,7 @@ describe('strategy policy', () => {
     } })
     expect(runtime).toMatchObject({ strategy_id:7, strategy_version:3, scope:'private',
       data_capabilities_version:'strategy-data-capabilities-v1', use_chan_analysis:false,
-      entry_methods:['market'], window_policy_version:'chan_window_v6' })
+      entry_methods:['market'], window_policy_version:'chan_window_v7' })
     expect(runtime.runtime_config_hash).toMatch(/^[a-f0-9]{64}$/)
   })
 })

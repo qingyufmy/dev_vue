@@ -224,6 +224,23 @@ describe('generic indicator registry', () => {
     expect(calculateIndicator(definition, disordered, { lastBarClosed:true }))
       .toMatchObject({ ready:false, reason:'indicator_bar_time_not_strictly_increasing' })
   })
+
+  it('fails closed when the latest closed indicator bar is stale for the decision time', () => {
+    const compiled = compileStrategyPolicy(policyFixture(), { marketDataPlan:plan('M30', 'D1') })
+    const definition = { ...compiled.indicators[0], source:{ ...compiled.indicators[0].source, timeframe:'M1' } }
+    const stale = calculateIndicator(definition, bars, {
+      lastBarClosed:true, marketSource:'fixture', referenceTimeUtcMs:600_000_000,
+    })
+    expect(stale).toMatchObject({
+      ready:false, reason:'indicator_source_stale', bars_used:6,
+      analysis:{ reference_time_utc_msc:600_000_000, latest_closed_bar_time_utc_msc:301_060_000,
+        source_age_ms:298_940_000, stale_tolerance_ms:120_000 },
+    })
+    const fresh = calculateIndicator(definition, bars, {
+      lastBarClosed:true, marketSource:'fixture', referenceTimeUtcMs:301_120_000,
+    })
+    expect(fresh).toMatchObject({ ready:true, reason:'ready' })
+  })
 })
 
 describe('workflow and constraint execution', () => {
@@ -337,9 +354,12 @@ describe('workflow and constraint execution', () => {
     const runtime = { mode:'enforce', policy_hash:policy.policy_hash, compiled_policy:policy, workflow_state:{} }
     let snapshotReads = 0
     const snapshotLoader = async () => { snapshotReads += 1; return { strategy_runtime_json:JSON.stringify(runtime) } }
+    const now = Date.now()
     const ratesProvider = async () => ({
       status:'success',
-      rates:[1, 2, 3, 4, 5].map((close, index) => ({ time_utc_msc:1_000 + index * 60_000, open:close, high:close, low:close, close })),
+      rates:[1, 2, 3, 4, 5].map((close, index) => ({
+        time_utc_msc:now - (5 - index) * 1_800_000, open:close, high:close, low:close, close,
+      })),
       market_meta:{ last_bar_closed:true, source:'fixture' },
     })
     const gate = await evaluateSignalStrategyPolicyBeforeSubmission({

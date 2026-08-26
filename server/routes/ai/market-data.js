@@ -18,6 +18,71 @@ export function computeAtr14(rates) {
   return atrWindow.length > 0 ? atrWindow.reduce((a, b) => a + b, 0) / atrWindow.length : 0
 }
 
+export function buildTwoClosedBarBreakoutEvidence(closedRates, lookbackBars = 20) {
+  const lookback = Math.max(3, Math.trunc(Number(lookbackBars) || 20))
+  const rows = Array.isArray(closedRates) ? closedRates : []
+  if (rows.length < lookback + 2) {
+    return {
+      ready:false,
+      reason:'breakout_reference_history_insufficient',
+      lookback_bars:lookback,
+      reference_excludes_last_closed_bars:2,
+    }
+  }
+  const referenceRows = rows.slice(-(lookback + 2), -2)
+  const first = rows.at(-2)
+  const second = rows.at(-1)
+  const referenceHigh = Math.max(...referenceRows.map(row => Number(row.high)))
+  const referenceLow = Math.min(...referenceRows.map(row => Number(row.low)))
+  const firstClose = Number(first?.close)
+  const secondClose = Number(second?.close)
+  const secondHigh = Number(second?.high)
+  const secondLow = Number(second?.low)
+  if (![referenceHigh, referenceLow, firstClose, secondClose, secondHigh, secondLow].every(Number.isFinite)) {
+    return {
+      ready:false,
+      reason:'breakout_reference_non_finite_price',
+      lookback_bars:lookback,
+      reference_excludes_last_closed_bars:2,
+    }
+  }
+  const upFirst = firstClose > referenceHigh
+  const upSecond = secondClose > referenceHigh
+  const downFirst = firstClose < referenceLow
+  const downSecond = secondClose < referenceLow
+  const bar = row => ({
+    time:row?.time ?? null,
+    time_utc_msc:Number.isFinite(Number(row?.time_utc_msc)) ? Number(row.time_utc_msc) : null,
+    high:round5(Number(row?.high)),
+    low:round5(Number(row?.low)),
+    close:round5(Number(row?.close)),
+  })
+  return {
+    ready:true,
+    reason:'ready',
+    lookback_bars:lookback,
+    reference_excludes_last_closed_bars:2,
+    reference_high:round5(referenceHigh),
+    reference_low:round5(referenceLow),
+    first_bar:bar(first),
+    second_bar:bar(second),
+    up:{
+      first_close_beyond:upFirst,
+      second_close_beyond:upSecond,
+      complete:upFirst && upSecond,
+      confirmation_type:upFirst && upSecond
+        ? (secondLow <= referenceHigh ? 'retest' : 'continuation') : 'none',
+    },
+    down:{
+      first_close_beyond:downFirst,
+      second_close_beyond:downSecond,
+      complete:downFirst && downSecond,
+      confirmation_type:downFirst && downSecond
+        ? (secondHigh >= referenceLow ? 'retest' : 'continuation') : 'none',
+    },
+  }
+}
+
 const _bridgeLocks = new Map()
 
 // === Chan Theory Constants ===
@@ -349,20 +414,78 @@ function makeFeature(bi, index) {
 // In the gap case, the first feature fractal is only a candidate. The segment
 // ends there after the new reverse segment's standard feature sequence forms
 // its own opposite fractal. A new old-direction extreme invalidates it first.
-function confirmGapEndpoint(bis, endpointIndex, oldDirection) {
+function evaluateGapEndpointConfirmation(bis, endpointIndex, oldDirection) {
   const endpointBi = bis[endpointIndex]
-  if (!endpointBi) return false
+  if (!endpointBi) return { confirmed:false, state:'endpoint_missing' }
   const reverseDirection = oldDirection === 'up' ? 'down' : 'up'
   const secondFeatures = []
   for (let i = endpointIndex + 1; i < bis.length; i += 2) {
     const bi = bis[i]
     if (!bi || bi.dir !== oldDirection) break
-    if (oldDirection === 'up' && bi.high > endpointBi.high) return false
-    if (oldDirection === 'down' && bi.low < endpointBi.low) return false
+    if (oldDirection === 'up' && bi.high > endpointBi.high) {
+      return { confirmed:false, state:'invalidated_by_old_direction_extreme', invalidated_by_bi_id:bi.id }
+    }
+    if (oldDirection === 'down' && bi.low < endpointBi.low) {
+      return { confirmed:false, state:'invalidated_by_old_direction_extreme', invalidated_by_bi_id:bi.id }
+    }
     secondFeatures.push(makeFeature(bi, i))
-    if (findFeatureFractals(secondFeatures, reverseDirection).length > 0) return true
+    if (findFeatureFractals(secondFeatures, reverseDirection).length > 0) {
+      return { confirmed:true, state:'reverse_feature_fractal_confirmed', confirmed_by_bi_id:bi.id }
+    }
   }
-  return false
+  return { confirmed:false, state:'awaiting_reverse_feature_fractal' }
+}
+
+function confirmGapEndpoint(bis, endpointIndex, oldDirection) {
+  return evaluateGapEndpointConfirmation(bis, endpointIndex, oldDirection).confirmed
+}
+
+function pendingSegmentConfirmation(bis, startIndex, segmentDirection) {
+  const featureDirection = segmentDirection === 'up' ? 'down' : 'up'
+  const rawFeatures = []
+  for (let i = startIndex + 1; i < bis.length; i += 2) {
+    const bi = bis[i]
+    if (!bi || bi.dir !== featureDirection) break
+    rawFeatures.push(makeFeature(bi, i))
+  }
+  let invalidatedEndpointCount = 0
+  for (const { prev, cur } of findFeatureFractalCandidates(rawFeatures, segmentDirection)) {
+    const endpointIndex = segmentDirection === 'up' ? cur.high_source_index : cur.low_source_index
+    const strokeCount = endpointIndex - startIndex
+    if (strokeCount < MIN_BIS_PER_SEGMENT || strokeCount % 2 === 0) continue
+    const hasGap = !rangesOverlap(prev, cur)
+    if (!hasGap) continue
+    const confirmation = evaluateGapEndpointConfirmation(bis, endpointIndex, segmentDirection)
+    if (confirmation.confirmed) continue
+    if (confirmation.state === 'invalidated_by_old_direction_extreme') {
+      invalidatedEndpointCount++
+      continue
+    }
+    const endpointFeatureBi = bis[endpointIndex]
+    const endpointSegmentBi = bis[endpointIndex - 1]
+    return {
+      confirmation_state:'awaiting_reverse_feature_fractal',
+      confirmation_required:'reverse_feature_fractal',
+      pending_endpoint_feature_gap:true,
+      pending_endpoint_feature_bi_id:endpointFeatureBi?.id ?? null,
+      pending_endpoint_segment_bi_id:endpointSegmentBi?.id ?? null,
+      pending_endpoint_price:segmentDirection === 'up'
+        ? Number(endpointFeatureBi?.high) : Number(endpointFeatureBi?.low),
+      pending_endpoint_raw_idx:Number.isFinite(Number(endpointFeatureBi?.raw_start_idx))
+        ? Number(endpointFeatureBi.raw_start_idx) : null,
+      invalidated_endpoint_count:invalidatedEndpointCount,
+    }
+  }
+  return {
+    confirmation_state:'awaiting_first_feature_fractal',
+    confirmation_required:'first_feature_fractal',
+    pending_endpoint_feature_gap:null,
+    pending_endpoint_feature_bi_id:null,
+    pending_endpoint_segment_bi_id:null,
+    pending_endpoint_price:null,
+    pending_endpoint_raw_idx:null,
+    invalidated_endpoint_count:invalidatedEndpointCount,
+  }
 }
 
 function findSegmentEndpoint(bis, startIndex, segmentDirection) {
@@ -434,6 +557,7 @@ function buildSegmentsFromAnchor(confirmedBis, options = {}) {
   let candidate = null
   if (tailBis.length > 0) {
     const dir = tailBis[0].dir
+    const lifecycle = pendingSegmentConfirmation(confirmedBis, startIndex, dir)
     const directionalBis = tailBis
       .filter(b => b.dir === dir)
       .filter(b => Number.isFinite(Number(b.end_price)))
@@ -453,6 +577,7 @@ function buildSegmentsFromAnchor(confirmedBis, options = {}) {
       // extreme. Keep the full stroke span for structure calculations, while
       // pairing the displayed endpoint price with the bar where it occurred.
       endpoint_raw_idx: Number.isFinite(Number(endpointBi?.raw_end_idx)) ? Number(endpointBi.raw_end_idx) : null,
+      ...lifecycle,
     }
   }
 
@@ -943,6 +1068,20 @@ function detectFormingDivergence(candidate, segments, bis, macdHist, centers = [
 function summarizeSegment(segment, bis = [], rates = []) {
   if (!segment) return null
   const location = segmentLocation(segment, bis, rates)
+  const lifecycle = segment.confirmation_state ? {
+    confirmation_state:segment.confirmation_state,
+    confirmation_required:segment.confirmation_required || null,
+    pending_endpoint_feature_gap:segment.pending_endpoint_feature_gap ?? null,
+    pending_endpoint_feature_bi_id:segment.pending_endpoint_feature_bi_id ?? null,
+    pending_endpoint_segment_bi_id:segment.pending_endpoint_segment_bi_id ?? null,
+    pending_endpoint_price:segment.pending_endpoint_price != null
+      && Number.isFinite(Number(segment.pending_endpoint_price))
+      ? round5(segment.pending_endpoint_price) : null,
+    pending_endpoint_raw_idx:segment.pending_endpoint_raw_idx != null
+      && Number.isFinite(Number(segment.pending_endpoint_raw_idx))
+      ? Number(segment.pending_endpoint_raw_idx) : null,
+    invalidated_endpoint_count:Number(segment.invalidated_endpoint_count || 0),
+  } : {}
   return {
     id: segment.id,
     stable_id: location?.stable_id ?? null,
@@ -962,6 +1101,7 @@ function summarizeSegment(segment, bis = [], rates = []) {
     end_broker_time: location?.end_broker_time ?? null,
     start_time_utc_msc: location?.start_time_utc_msc ?? null,
     end_time_utc_msc: location?.end_time_utc_msc ?? null,
+    ...lifecycle,
   }
 }
 
@@ -3268,7 +3408,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, buildChanEvidenceCapabilities, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence }
+export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, buildChanEvidenceCapabilities, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, evaluateGapEndpointConfirmation, pendingSegmentConfirmation }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()
@@ -3388,6 +3528,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
     : rates.length > 1 ? rates.slice(0, -1) : []
   const lastClosedRate = closedRates.at(-1) || null
   const atr14Closed = computeAtr14(closedRates)
+  const twoBarBreakout = buildTwoClosedBarBreakoutEvidence(closedRates)
 
   const recentHighs = highs.length >= 20 ? highs.slice(-20) : highs
   const recentLows = lows.length >= 20 ? lows.slice(-20) : lows
@@ -3496,6 +3637,7 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
     support_resistance: {
       pivot: round5(pivot), r1: round5(r1), r2: round5(r2), s1: round5(s1), s2: round5(s2),
       recent_high: round5(recentHigh), recent_low: round5(recentLow),
+      two_closed_bar_breakout:twoBarBreakout,
     },
     kline_patterns: {
       last_candle: {

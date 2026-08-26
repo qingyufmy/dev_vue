@@ -184,6 +184,11 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema.position_action).toContain('signal_type=hold、entry_method=observe、position_action=hold_no_add')
     expect(schema.position_action).toContain('无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe')
     expect(schema.position_action).toContain('禁止同时输出反向交易与 position_action=open')
+    expect(schema.hard_gate_status).toContain('当前策略')
+    expect(schema.hard_gate_failures[0]).toContain('signal_type')
+    expect(schema.minimum_reward_to_risk).toContain('不得擅自增加全局默认值')
+    expect(schema.recommended_reward_to_risk).toContain('recommended_take_profit_tier')
+    expect(schema.reward_to_risk_status).toContain('不替代独立风控')
   })
 
   it('describes confidence as conclusion certainty rather than a win-rate estimate', () => {
@@ -196,6 +201,9 @@ describe('buildStrategyOutputFormat', () => {
     expect(rendered).not.toContain('EMA34')
     expect(rendered).not.toMatch(/BUY\/SELL弱优势|HOLD时|0\.52-0\.62|0\.63-0\.74/)
     expect(rendered).not.toContain('R:R')
+    expect(rendered).not.toContain('1.5')
+    expect(rendered).not.toContain('缠论')
+    expect(rendered).not.toContain('M15')
     expect(rendered).not.toContain('按以下顺序')
     expect(rendered).not.toContain('方向优势不清晰')
     expect(rendered).toContain('signal_type')
@@ -2006,6 +2014,7 @@ describe('maybeAiSignal', () => {
       ready:true, kind:'ema', value:1998.25, source:{ timeframe:'M5', bar_scope:'closed_only' },
     })
     expect(evidence.systemPrompt).toContain('系统提供的数据')
+    expect(evidence.systemPrompt).toContain('strategy_context.indicators.entry_ema34 是系统按策略声明计算的 EMA34 数据')
     expect(evidence.systemPrompt).toContain('中性事实')
     expect(evidence.systemPrompt).not.toContain('价格在 EMA34 上方')
     expect(evidence.systemPrompt).not.toContain('strategy_policy_trace')
@@ -2317,6 +2326,20 @@ describe('normalizeAiSignal - L5 strict schema', () => {
       take_profit_1_price:2020, take_profit_2_price:null, take_profit_3_price:null,
       execution_validation:{ status:'eligible', eligible:true, reason_codes:[] },
       model_decision:{ signal_type:'buy', confidence:0.67, analysis:'模型原始分析', reasoning:'模型原始理由' },
+    })
+  })
+
+  it('keeps generic consistency declarations as audit data without enforcing a strategy ratio', () => {
+    const result = normalizeAiSignal({
+      _inference_source:'ai', signal_type:'buy', entry_method:'market', confidence:0.67,
+      ...strictTradeFields, stop_loss_price:1990, take_profit_1_price:2005,
+      recommended_take_profit_tier:1, hard_gate_status:'pass', hard_gate_failures:[],
+      minimum_reward_to_risk:1.5, recommended_reward_to_risk:0.5, reward_to_risk_status:'pass',
+    }, config, market)
+    expect(result.execution_validation).toEqual({ status:'eligible', eligible:true, reason_codes:[] })
+    expect(result.model_decision).toMatchObject({
+      hard_gate_status:'pass', hard_gate_failures:[], minimum_reward_to_risk:1.5,
+      recommended_reward_to_risk:0.5, reward_to_risk_status:'pass',
     })
   })
 
