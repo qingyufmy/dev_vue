@@ -2707,8 +2707,7 @@ function selectStableChanResult(candidates, options = {}) {
     consensusDivergence || emptyDivergence(divergenceFailureReason), confirmedReliability)
   const formingFailureReason = formingConsensus.eligibleCount < 2
     ? 'forming_evidence_unavailable' : 'forming_cross_window_unstable'
-  return {
-    ...selected,
+  return updateClonedChanResult(selected, {
     status: confirmedStatus,
     reliability: confirmedReliability,
     window_stable: true,
@@ -2756,7 +2755,26 @@ function selectStableChanResult(candidates, options = {}) {
     cross_window_forming_support_count:formingWinner?.length || 0,
     cross_window_forming_validator_count:formingConsensus.eligibleCount,
     cross_window_trend_support_count:derivedCandidates.length,
-  }
+  })
+}
+
+// Keep the result object created by computeChanWindow when applying a
+// diagnostic or capability downgrade. Chan's cross-window selectors retain
+// their audit evidence on non-enumerable properties; creating a new object
+// with object spread would silently discard that evidence.
+function updateChanResultInPlace(result, updates = {}) {
+  if (!result || typeof result !== 'object') return result
+  Object.assign(result, updates)
+  return result
+}
+
+// Cross-window selection historically returned a new result. Preserve that
+// non-mutating contract while copying the hidden audit evidence that object
+// spread used to drop.
+function updateClonedChanResult(result, updates = {}) {
+  if (!result || typeof result !== 'object') return result
+  const clone = Object.create(Object.getPrototypeOf(result), Object.getOwnPropertyDescriptors(result))
+  return updateChanResultInPlace(clone, updates)
 }
 
 function suppressUnconfirmedWindowStructure(primary) {
@@ -2767,8 +2785,7 @@ function suppressUnconfirmedWindowStructure(primary) {
     'segments_not_confirmed',
     'no_valid_center',
   ])]
-  return {
-    ...primary,
+  return updateChanResultInPlace(primary, {
     status: Number(primary.active_bi_count || primary.bi_count) >= 3 ? 'segment_history_unresolved' : primary.status,
     reliability: 'low',
     window_stable: false,
@@ -2827,7 +2844,7 @@ function suppressUnconfirmedWindowStructure(primary) {
       ])],
     },
     warnings,
-  }
+  })
 }
 
 function resolveUnanchoredStructureReason(result) {
@@ -2897,8 +2914,7 @@ function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationW
       trend_state:primary.trend_state,
       entry_candidates:primary.entry_candidates,
     }
-  return {
-    ...primary,
+  return updateChanResultInPlace(primary, {
     status:primary.status === 'ok' ? 'partial' : primary.status,
     reliability,
     warnings,
@@ -2936,7 +2952,7 @@ function protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationW
     source_history_count:sourceHistoryCount,
     calculation_window_count:calculationWindowCount,
     window_selection:'full_window_unanchored',
-  }
+  })
 }
 
 function computeChan(rates, timeframe, macdHist, options = {}) {
@@ -2990,6 +3006,14 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const calculationEndUtcMs = Number(calculationRates?.at?.(-1)?.time_utc_msc)
   const rawDataQuality = options.dataQuality && typeof options.dataQuality === 'object'
     ? options.dataQuality : null
+  // Anchor scope is determined against the same closed-bar slice that
+  // computeChanWindow uses.  Comparing against the raw (possibly forming)
+  // tail would allow an anchor from the future to enter the anchored path.
+  const closedCalculationRates = rawDataQuality?.last_bar_closed === true
+    ? calculationRates
+    : (Array.isArray(calculationRates) ? calculationRates.slice(0, -1) : [])
+  const closedCalculationStartUtcMs = Number(closedCalculationRates?.[0]?.time_utc_msc)
+  const closedCalculationEndUtcMs = Number(closedCalculationRates?.at?.(-1)?.time_utc_msc)
   const withinCalculationWindow = item => {
     const from = Number(item?.from_utc_msc)
     const to = Number(item?.to_utc_msc)
@@ -3028,49 +3052,101 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const requestedTrustedAnchorTime = Number(
     requestedTrustedAnchor.anchor_time_utc_msc ?? options.trustedStructureAnchorUtcMs)
   const hasTrustedAnchor = Number.isFinite(requestedTrustedAnchorTime) && requestedTrustedAnchorTime > 0
+  const requestedAnchorCoreStableId = String(requestedTrustedAnchor.bootstrap_core_stable_id || '').trim() || null
+  const requestedAnchorEntryStableId = String(requestedTrustedAnchor.bootstrap_entry_segment_stable_id || '').trim() || null
+  const requestedAnchorLastConfirmedTime = Number(requestedTrustedAnchor.last_confirmed_segment_time_utc_msc)
+  const normalizedRequestedAnchorLastConfirmedTime = Number.isFinite(requestedAnchorLastConfirmedTime)
+    && requestedAnchorLastConfirmedTime > 0 ? requestedAnchorLastConfirmedTime : null
+  const unanchoredOptions = {
+    ...calculationOptions,
+    trustedStructureAnchor:null,
+    trustedStructureAnchorUtcMs:null,
+  }
+  const applyAnchorFallbackDiagnostics = (unanchored, anchorWarnings, diagnostics = {}) => updateChanResultInPlace(unanchored, {
+    status:'partial',
+    reliability:unanchored.reliability === 'high' ? 'medium' : unanchored.reliability,
+    warnings:[...new Set([...(unanchored.warnings || []), ...anchorWarnings])],
+    structure_anchor:{
+      ...(unanchored.structure_anchor || {}),
+      requested_time_utc_msc:requestedTrustedAnchorTime,
+      requested_core_stable_id:requestedAnchorCoreStableId,
+      requested_entry_segment_stable_id:requestedAnchorEntryStableId,
+      requested_last_confirmed_segment_time_utc_msc:normalizedRequestedAnchorLastConfirmedTime,
+      matched:false,
+      time_matched:diagnostics.time_matched === true,
+      identity_matched:diagnostics.identity_matched === true,
+      last_confirmed_segment_not_regressed:diagnostics.last_confirmed_segment_not_regressed === true,
+    },
+  })
+  const anchorOutsideClosedWindow = hasTrustedAnchor
+    && Number.isFinite(closedCalculationStartUtcMs)
+    && requestedTrustedAnchorTime < closedCalculationStartUtcMs
+  const anchorAfterClosedWindow = hasTrustedAnchor
+    && Number.isFinite(closedCalculationEndUtcMs)
+    && requestedTrustedAnchorTime > closedCalculationEndUtcMs
   let effectiveCalculationOptions = calculationOptions
-  let primary = computeChanWindow(calculationRates, timeframe, calculationMacdHist, calculationOptions)
-  let trustedAnchorMatched = hasTrustedAnchor && primary.structure_anchor?.matched === true
-  if (hasTrustedAnchor && !trustedAnchorMatched) {
-    const failedAnchorDiagnostics = primary.structure_anchor || {}
-    const anchorWarnings = (primary.warnings || []).filter(item => item.startsWith('structure_anchor_'))
-    const unanchoredOptions = {
-      ...calculationOptions,
-      trustedStructureAnchor:null,
-      trustedStructureAnchorUtcMs:null,
-    }
+  let primary
+  let trustedAnchorMatched = false
+  if (anchorOutsideClosedWindow) {
+    // A persisted anchor can legitimately age out of the bounded window. Do
+    // not spend a calculation on an anchored slice that cannot contain it;
+    // use the normal unanchored path and retain the requested identity as a
+    // diagnostic only.
     effectiveCalculationOptions = unanchoredOptions
     const unanchored = computeChanWindow(calculationRates, timeframe, calculationMacdHist, unanchoredOptions)
-    primary = {
-      ...unanchored,
-      status:'partial',
-      reliability:unanchored.reliability === 'high' ? 'medium' : unanchored.reliability,
-      warnings:[...new Set([...(unanchored.warnings || []), ...anchorWarnings])],
-      structure_anchor:{
-        ...(unanchored.structure_anchor || {}),
-        requested_time_utc_msc:requestedTrustedAnchorTime,
-        requested_core_stable_id:String(requestedTrustedAnchor.bootstrap_core_stable_id || '').trim() || null,
-        requested_entry_segment_stable_id:String(requestedTrustedAnchor.bootstrap_entry_segment_stable_id || '').trim() || null,
-        requested_last_confirmed_segment_time_utc_msc:
-          Number(requestedTrustedAnchor.last_confirmed_segment_time_utc_msc) || null,
-        matched:false,
-        time_matched:failedAnchorDiagnostics.time_matched === true,
-        identity_matched:failedAnchorDiagnostics.identity_matched === true,
-        last_confirmed_segment_not_regressed:
-          failedAnchorDiagnostics.last_confirmed_segment_not_regressed === true,
-      },
+    primary = applyAnchorFallbackDiagnostics(unanchored, ['structure_anchor_outside_window'])
+  } else if (anchorAfterClosedWindow) {
+    // A future anchor is invalid input. Calculate once without it so the
+    // result remains structurally inspectable, then fail closed before any
+    // unanchored evidence can be promoted as authoritative.
+    effectiveCalculationOptions = unanchoredOptions
+    const unanchored = computeChanWindow(calculationRates, timeframe, calculationMacdHist, unanchoredOptions)
+    const failedClosed = suppressUnconfirmedWindowStructure(unanchored)
+    primary = applyAnchorFallbackDiagnostics(failedClosed, ['structure_anchor_future'])
+    return updateChanResultInPlace(primary, {
+      status:primary.status === 'ok' ? 'partial' : primary.status,
+      reliability:'low',
+      window_stable:false,
+      structure_topology_reliable:false,
+      authoritative_terminal_chain_confirmed:false,
+      evidence_capabilities:buildChanEvidenceCapabilities(primary, {
+        segment_direction_usable:false,
+        center_structure_usable:false,
+        entry_structure_usable:false,
+        divergence_usable:false,
+        reason_codes:['structure_anchor_future'],
+      }),
+      source_history_count:sourceHistoryCount,
+      calculation_window_count:calculationWindowCount,
+      maximum_history_count:maximumHistoryCount,
+      validation_window_counts:validationWindowCounts,
+      window_policy_version:windowPolicyVersion,
+      window_selection:'full_window_unresolved',
+    })
+  } else {
+    primary = computeChanWindow(calculationRates, timeframe, calculationMacdHist, calculationOptions)
+    trustedAnchorMatched = hasTrustedAnchor && primary.structure_anchor?.matched === true
+    if (hasTrustedAnchor && !trustedAnchorMatched) {
+      const failedAnchorDiagnostics = primary.structure_anchor || {}
+      const anchorWarnings = (primary.warnings || []).filter(item => item.startsWith('structure_anchor_'))
+      effectiveCalculationOptions = unanchoredOptions
+      const unanchored = computeChanWindow(calculationRates, timeframe, calculationMacdHist, unanchoredOptions)
+      primary = applyAnchorFallbackDiagnostics(unanchored, anchorWarnings, {
+        time_matched:failedAnchorDiagnostics.time_matched,
+        identity_matched:failedAnchorDiagnostics.identity_matched,
+        last_confirmed_segment_not_regressed:failedAnchorDiagnostics.last_confirmed_segment_not_regressed,
+      })
+      trustedAnchorMatched = false
     }
-    trustedAnchorMatched = false
   }
   if (trustedAnchorMatched || options.fractalsForTest || !Array.isArray(calculationRates)) {
-    return {
-      ...primary,
-      authoritative_terminal_chain_confirmed: trustedAnchorMatched
-        && Number(primary.segment_count) >= 2,
+    const authoritativeTerminalChainConfirmed = trustedAnchorMatched
+      && Number(primary.segment_count) >= 2
+    return updateChanResultInPlace(primary, {
+      authoritative_terminal_chain_confirmed: authoritativeTerminalChainConfirmed,
       evidence_capabilities:buildChanEvidenceCapabilities({
         ...primary,
-        authoritative_terminal_chain_confirmed: trustedAnchorMatched
-          && Number(primary.segment_count) >= 2,
+        authoritative_terminal_chain_confirmed:authoritativeTerminalChainConfirmed,
       }),
       source_history_count:sourceHistoryCount,
       calculation_window_count:calculationWindowCount,
@@ -3078,15 +3154,15 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
       validation_window_counts:validationWindowCounts,
       window_policy_version:windowPolicyVersion,
       window_selection:trustedAnchorMatched ? 'trusted_anchor' : 'full_window',
-    }
+    })
   }
   if (calculationWindowCount < 300) {
-    return {
-      ...protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationWindowCount),
+    const protectedResult = protectUnanchoredShortHistory(primary, sourceHistoryCount, calculationWindowCount)
+    return updateChanResultInPlace(protectedResult, {
       maximum_history_count:maximumHistoryCount,
       validation_window_counts:validationWindowCounts,
       window_policy_version:windowPolicyVersion,
-    }
+    })
   }
   const sizes = validationWindowCounts.filter(size => size <= calculationWindowCount)
   if (!sizes.includes(calculationWindowCount) && calculationWindowCount <= maximumHistoryCount) {
@@ -3105,15 +3181,15 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     minimumCenterContextBars:CHAN_CENTER_MIN_CONTEXT_BARS,
   })
   if (!selected) {
-    return {
-      ...suppressUnconfirmedWindowStructure(primary),
+    const suppressedResult = suppressUnconfirmedWindowStructure(primary)
+    return updateChanResultInPlace(suppressedResult, {
       source_history_count:sourceHistoryCount,
       calculation_window_count:calculationWindowCount,
       maximum_history_count:maximumHistoryCount,
       validation_window_counts:validationWindowCounts,
       window_policy_version:windowPolicyVersion,
       window_selection: 'full_window_unresolved',
-    }
+    })
   }
   const temporalEvidence = buildFullWindowTemporalEvidence(calculationRates, timeframe, effectiveCalculationOptions, primary)
   const crossWindowBootstrap = evaluateCrossWindowBootstrapEvidence(
@@ -3148,8 +3224,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   const warnings = [...new Set([...(selected.warnings || []), ...bootstrapWarning])]
   const reliability = !bootstrapUsableNow && selected.reliability === 'high' ? 'medium' : selected.reliability
   const protectedEvidence = protectBootstrapDependentEvidence(selected, bootstrapUsableNow, reliability, anchorUnavailableReason)
-  return {
-    ...selected,
+  return updateChanResultInPlace(selected, {
     status:warnings.length > 0 ? 'partial' : selected.status,
     reliability,
     warnings,
@@ -3189,7 +3264,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     validation_window_counts:validationWindowCounts,
     window_policy_version:windowPolicyVersion,
     window_selection: 'full_window_cross_confirmed',
-  }
+  })
 }
 
 // Export for testing

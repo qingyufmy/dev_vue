@@ -2161,10 +2161,23 @@ describe('maybeAiSignal', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body)
     const userPayload = JSON.parse(body.messages[1].content.replace('市场数据 JSON：\n', ''))
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeDefined()
-    expect(userPayload.strategy_context.timeframes.M5.summary.chan).toEqual({ current_segment:{ id:1, confirmed:true } })
+    expect(userPayload.strategy_context.timeframes.M5.summary.chan).toEqual({
+      current_segment:{ id:1, confirmed:true },
+      evidence_capabilities:{
+        history_complete:false,
+        continuity_complete:false,
+        topology_input_complete:false,
+        data_complete:false,
+        segment_direction_usable:false,
+        center_structure_usable:false,
+        entry_structure_usable:true,
+        divergence_usable:false,
+      },
+    })
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).not.toHaveProperty('status')
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).not.toHaveProperty('trend_state')
-    expect(userPayload.strategy_context.timeframes.M5.summary.chan).not.toHaveProperty('evidence_capabilities')
+    expect(userPayload.strategy_context.timeframes.M5.summary.chan.evidence_capabilities)
+      .not.toHaveProperty('reason_codes')
     expect(userPayload.strategy_context).not.toHaveProperty('visualization_klines')
     expect(userPayload).not.toHaveProperty('atr_anchor')
     expect(userPayload).not.toHaveProperty('atr_anchor_tf')

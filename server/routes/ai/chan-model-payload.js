@@ -1,4 +1,5 @@
-// Keep the model-facing Chan payload limited to calculated structure objects.
+// Keep the model-facing Chan payload limited to calculated structure objects
+// and a small boolean evidence-capability whitelist.
 // The complete Chan result remains in the internal market snapshot for audit
 // and replay; this module only creates an isolated model-bound projection.
 
@@ -19,19 +20,34 @@ export const CHAN_MODEL_STRUCTURE_FIELDS = Object.freeze([
   'entry_candidates',
 ])
 
+export const CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS = Object.freeze([
+  'history_complete',
+  'continuity_complete',
+  'topology_input_complete',
+  'data_complete',
+  'segment_direction_usable',
+  'center_structure_usable',
+  'entry_structure_usable',
+  'divergence_usable',
+])
+
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function containsJsonReference(value, seen = new WeakSet()) {
-  if (Array.isArray(value)) return value.some(item => containsJsonReference(item, seen))
+function containsJsonReferenceOrCycle(value, visiting = new WeakSet(), visited = new WeakSet()) {
   if (!value || typeof value !== 'object') return false
   if (Object.prototype.hasOwnProperty.call(value, '$ref')) return true
-  if (seen.has(value)) return false
-  seen.add(value)
-  return Object.values(value).some(item => containsJsonReference(item, seen))
+  if (visiting.has(value)) return true
+  if (visited.has(value)) return false
+  visiting.add(value)
+  const children = Array.isArray(value) ? value : Object.values(value)
+  const forbidden = children.some(item => containsJsonReferenceOrCycle(item, visiting, visited))
+  visiting.delete(value)
+  visited.add(value)
+  return forbidden
 }
 
 function throwReferenceForbidden() {
@@ -41,15 +57,20 @@ function throwReferenceForbidden() {
 }
 
 /**
- * Project one computed Chan result onto the fixed model-facing structure
- * contract. Existing values are copied without interpretation or mutation.
+ * Project one computed Chan result onto the fixed model-facing structure and
+ * capability contract. Existing structure values are copied without mutation;
+ * capability values are normalized to booleans and internal reasons are omitted.
  */
 export function projectChanStructureForModel(chan) {
   if (!isObject(chan)) return {}
-  if (containsJsonReference(chan)) throwReferenceForbidden()
+  if (containsJsonReferenceOrCycle(chan)) throwReferenceForbidden()
   const projected = {}
   for (const field of CHAN_MODEL_STRUCTURE_FIELDS) {
     if (hasOwn(chan, field)) projected[field] = structuredClone(chan[field])
+  }
+  if (isObject(chan.evidence_capabilities)) {
+    projected.evidence_capabilities = Object.fromEntries(CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS
+      .map(field => [field, chan.evidence_capabilities[field] === true]))
   }
   return projected
 }

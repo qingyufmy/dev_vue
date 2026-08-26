@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS,
   CHAN_MODEL_STRUCTURE_FIELDS,
   projectChanStructureForModel,
   projectStrategyContextChanForModel,
 } from '../../server/routes/ai/chan-model-payload.js'
 
 describe('Chan model payload projection', () => {
-  it('keeps only the fourteen structure fields and deep-clones their values', () => {
+  it('keeps only the structure fields and boolean evidence capability whitelist', () => {
     const chan = {
       current_bi: { id: 1, points: [{ price: 2000 }] },
       developing_bi: null,
@@ -25,14 +26,25 @@ describe('Chan model payload projection', () => {
       trend_state: 'up',
       price_vs_center: 'above',
       status: 'partial',
-      evidence_capabilities: { entry_structure_usable: false },
+      evidence_capabilities: {
+        history_complete:true,
+        continuity_complete:true,
+        topology_input_complete:true,
+        data_complete:true,
+        segment_direction_usable:true,
+        center_structure_usable:false,
+        entry_structure_usable:false,
+        divergence_usable:false,
+        reason_codes:['internal-only'],
+      },
       warnings: ['internal-only'],
     }
 
     const projected = projectChanStructureForModel(chan)
 
-    expect(Object.keys(projected)).toEqual(CHAN_MODEL_STRUCTURE_FIELDS)
-    expect(projected).toEqual(Object.fromEntries(CHAN_MODEL_STRUCTURE_FIELDS
+    expect(Object.keys(projected)).toEqual([...CHAN_MODEL_STRUCTURE_FIELDS, 'evidence_capabilities'])
+    expect(Object.fromEntries(CHAN_MODEL_STRUCTURE_FIELDS.map(field => [field, projected[field]])))
+      .toEqual(Object.fromEntries(CHAN_MODEL_STRUCTURE_FIELDS
       .filter(field => Object.prototype.hasOwnProperty.call(chan, field))
       .map(field => [field, chan[field]])))
     expect(projected.current_bi).not.toBe(chan.current_bi)
@@ -40,12 +52,17 @@ describe('Chan model payload projection', () => {
     expect(projected.current_segment).toMatchObject({ confirmed:true, state:'active', reason:'结构证据' })
     expect(projected).not.toHaveProperty('trend_state')
     expect(projected).not.toHaveProperty('price_vs_center')
-    expect(projected).not.toHaveProperty('evidence_capabilities')
+    expect(projected.evidence_capabilities).toEqual(Object.fromEntries(
+      CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS.map(field => [field, chan.evidence_capabilities[field] === true]),
+    ))
+    expect(projected.evidence_capabilities).not.toHaveProperty('reason_codes')
     expect(projected).not.toHaveProperty('status')
     expect(projected).not.toHaveProperty('warnings')
 
     projected.current_bi.points[0].price = 1
     expect(chan.current_bi.points[0].price).toBe(2000)
+    projected.evidence_capabilities.history_complete = false
+    expect(chan.evidence_capabilities.history_complete).toBe(true)
   })
 
   it('does not invent absent fields and preserves explicit null structure values', () => {
@@ -62,6 +79,7 @@ describe('Chan model payload projection', () => {
       timeframes: {
         H1: { summary: { chan: {
           current_segment: { id: 1 }, trend_state: 'up', structure_topology_reliable: true,
+          evidence_capabilities:{ data_complete:true, reason_codes:['private'] },
         } }, klines: [{ close:2000 }] },
         M5: { summary: { chan: null }, klines: [] },
         M15: { summary: { other: true } },
@@ -72,7 +90,11 @@ describe('Chan model payload projection', () => {
 
     expect(projected).not.toBe(context)
     expect(projected.indicators).not.toBe(context.indicators)
-    expect(projected.timeframes.H1.summary.chan).toEqual({ current_segment:{ id:1 } })
+    expect(projected.timeframes.H1.summary.chan).toEqual({
+      current_segment:{ id:1 },
+      evidence_capabilities:Object.fromEntries(CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS
+        .map(field => [field, field === 'data_complete'])),
+    })
     expect(projected.timeframes.H1.summary.chan).not.toHaveProperty('trend_state')
     expect(projected.timeframes.H1.summary.chan).not.toHaveProperty('structure_topology_reliable')
     expect(projected.timeframes.M5.summary.chan).toBeNull()
@@ -86,6 +108,13 @@ describe('Chan model payload projection', () => {
       current_segment: { $ref:'#/legacy/current_segment' },
     } } } } }
     expect(() => projectStrategyContextChanForModel(context))
+      .toThrow('chan_model_payload_reference_forbidden')
+  })
+
+  it('rejects cyclic model-facing Chan structures', () => {
+    const chan = { current_segment:{ id:1 } }
+    chan.current_segment.parent = chan
+    expect(() => projectChanStructureForModel(chan))
       .toThrow('chan_model_payload_reference_forbidden')
   })
 })

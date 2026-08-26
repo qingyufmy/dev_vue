@@ -16,6 +16,30 @@ function makeRates(n, base = 4000) {
   return rates
 }
 
+function makeStableChanRates(n, step = 300000) {
+  return Array.from({ length: n }, (_, index) => {
+    const close = 100 + Math.sin(index * 0.02) * 20
+      + Math.sin(index * 0.06) * 10 + Math.sin(index * 0.35) * 3
+    return {
+      time:`t${index}`,
+      time_utc_msc:1784185200000 + index * step,
+      open:close, high:close + 1, low:close - 1, close, tick_volume:1,
+    }
+  })
+}
+
+function chanDataQuality() {
+  return { platform:'mt5', source_id:9, clock_status:'verified', last_bar_closed:true }
+}
+
+function expectHiddenChanEvidence(result) {
+  for (const key of ['_confirmed_segments', '_confirmed_centers', '_closed_rate_times_utc_msc']) {
+    expect(Object.prototype.hasOwnProperty.call(result, key)).toBe(true)
+    expect(Object.prototype.propertyIsEnumerable.call(result, key)).toBe(false)
+    expect(Array.isArray(result[key])).toBe(true)
+  }
+}
+
 describe('Chan v6 window policy', () => {
   it.each([
     ['M5', 800, [600, 700, 800]],
@@ -1470,6 +1494,152 @@ describe('computeChan', () => {
   })
 })
 
+describe('computeChan trusted anchor recovery', () => {
+  const periods = [
+    ['M5', 800],
+    ['M15', 1000],
+    ['H1', 1200],
+    ['H4', 800],
+  ]
+
+  function trustedAnchorFrom(result) {
+    return {
+      anchor_time_utc_msc:result.structure_anchor.recommended_time_utc_msc,
+      bootstrap_core_stable_id:result.structure_anchor.bootstrap_core_stable_id,
+      bootstrap_entry_segment_stable_id:result.structure_anchor.bootstrap_entry_segment_stable_id,
+      last_confirmed_segment_time_utc_msc:result.structure_anchor.last_confirmed_segment_time_utc_msc,
+    }
+  }
+
+  it.each(periods)('skips a %s anchor that is before the closed window and preserves stable structure',
+    (timeframe, target) => {
+      const rates = makeStableChanRates(target)
+      const plain = computeChan(rates, timeframe, [], { dataQuality:chanDataQuality() })
+      const requestedAnchor = {
+        anchor_time_utc_msc:rates[0].time_utc_msc - 300000,
+        bootstrap_core_stable_id:'outside-window-core',
+        bootstrap_entry_segment_stable_id:'outside-window-entry',
+        last_confirmed_segment_time_utc_msc:rates[0].time_utc_msc - 300000,
+      }
+      const result = computeChan(rates, timeframe, [], {
+        dataQuality:chanDataQuality(), trustedStructureAnchor:requestedAnchor,
+      })
+
+      expect(result.warnings).toContain('structure_anchor_outside_window')
+      expect(result.warnings).not.toContain('structure_anchor_not_found')
+      expect(result.structure_anchor).toMatchObject({
+        requested_time_utc_msc:requestedAnchor.anchor_time_utc_msc,
+        requested_core_stable_id:requestedAnchor.bootstrap_core_stable_id,
+        requested_entry_segment_stable_id:requestedAnchor.bootstrap_entry_segment_stable_id,
+        requested_last_confirmed_segment_time_utc_msc:requestedAnchor.last_confirmed_segment_time_utc_msc,
+        matched:false, time_matched:false, identity_matched:false,
+      })
+      expect(result.window_stable).toBe(plain.window_stable)
+      expect(result.segment_count).toBe(plain.segment_count)
+      expect(result.center_count).toBe(plain.center_count)
+      expect(result.current_segment?.stable_id).toBe(plain.current_segment?.stable_id)
+      expectHiddenChanEvidence(result)
+    }, 30000)
+
+  it.each(periods)('keeps the normal %s trusted-anchor path authoritative',
+    (timeframe, target) => {
+      const rates = makeStableChanRates(target)
+      const options = { dataQuality:chanDataQuality() }
+      const plain = computeChan(rates, timeframe, [], options)
+      const requestedAnchor = trustedAnchorFrom(plain)
+      expect(requestedAnchor.anchor_time_utc_msc).toBeGreaterThan(rates[0].time_utc_msc)
+      const result = computeChan(rates, timeframe, [], {
+        ...options, trustedStructureAnchor:requestedAnchor,
+      })
+
+      expect(result.structure_anchor).toMatchObject({
+        requested_time_utc_msc:requestedAnchor.anchor_time_utc_msc,
+        matched:true, time_matched:true, identity_matched:true,
+        last_confirmed_segment_not_regressed:true, current_result_usable:true,
+      })
+      expect(result.current_segment?.stable_id).toBe(plain.current_segment?.stable_id)
+      expect(result.latest_center?.core_stable_id).toBe(plain.latest_center?.core_stable_id)
+      expect(result.evidence_capabilities.entry_structure_usable).toBe(true)
+      expectHiddenChanEvidence(result)
+    }, 30000)
+
+  it.each(periods)('reuses the same unanchored evidence after %s anchor identity failures',
+    (timeframe, target) => {
+      const rates = makeStableChanRates(target)
+      const options = { dataQuality:chanDataQuality() }
+      const plain = computeChan(rates, timeframe, [], options)
+      const trustedAnchor = trustedAnchorFrom(plain)
+      const cases = [
+        {
+          warning:'structure_anchor_identity_missing',
+          anchor:{ anchor_time_utc_msc:trustedAnchor.anchor_time_utc_msc },
+        },
+        {
+          warning:'structure_anchor_identity_mismatch',
+          anchor:{ ...trustedAnchor, bootstrap_core_stable_id:'wrong-core' },
+        },
+        {
+          warning:'structure_anchor_last_segment_regressed',
+          anchor:{
+            ...trustedAnchor,
+            last_confirmed_segment_time_utc_msc:trustedAnchor.last_confirmed_segment_time_utc_msc + 300000,
+          },
+        },
+      ]
+
+      for (const item of cases) {
+        const result = computeChan(rates, timeframe, [], {
+          ...options, trustedStructureAnchor:item.anchor,
+        })
+        expect(result.warnings).toContain(item.warning)
+        expect(result.structure_anchor.matched).toBe(false)
+        expect(result.current_segment?.stable_id).toBe(plain.current_segment?.stable_id)
+        expect(result.segment_count).toBe(plain.segment_count)
+        expect(result.center_count).toBe(plain.center_count)
+        expectHiddenChanEvidence(result)
+      }
+    }, 120000)
+
+  it.each(periods)('fails closed for a future %s trusted anchor', (timeframe, target) => {
+    const rates = makeStableChanRates(target)
+    const requestedAnchor = {
+      anchor_time_utc_msc:rates.at(-1).time_utc_msc + 300000,
+      bootstrap_core_stable_id:'future-core',
+      bootstrap_entry_segment_stable_id:'future-entry',
+      last_confirmed_segment_time_utc_msc:rates.at(-1).time_utc_msc + 300000,
+    }
+    const result = computeChan(rates, timeframe, [], {
+      dataQuality:chanDataQuality(), trustedStructureAnchor:requestedAnchor,
+    })
+
+    expect(result.warnings).toContain('structure_anchor_future')
+    expect(result.warnings).not.toContain('structure_anchor_outside_window')
+    expect(result.structure_anchor).toMatchObject({
+      requested_time_utc_msc:requestedAnchor.anchor_time_utc_msc,
+      requested_core_stable_id:requestedAnchor.bootstrap_core_stable_id,
+      requested_entry_segment_stable_id:requestedAnchor.bootstrap_entry_segment_stable_id,
+      matched:false, current_result_usable:false,
+    })
+    expect(result.evidence_capabilities).toMatchObject({
+      segment_direction_usable:false, center_structure_usable:false,
+      entry_structure_usable:false, divergence_usable:false,
+    })
+    expectHiddenChanEvidence(result)
+  }, 30000)
+
+  it('distinguishes equal and interior UTC anchors from a before-window anchor', () => {
+    const rates = makeStableChanRates(800)
+    for (const anchorTime of [rates[0].time_utc_msc, rates[1].time_utc_msc]) {
+      const result = computeChan(rates, 'M5', [], {
+        dataQuality:chanDataQuality(),
+        trustedStructureAnchor:{ anchor_time_utc_msc:anchorTime },
+      })
+      expect(result.warnings).not.toContain('structure_anchor_outside_window')
+      expect(result.structure_anchor.requested_time_utc_msc).toBe(anchorTime)
+    }
+  }, 30000)
+})
+
 describe('calculateMacdSeries', () => {
   it('histSeries长度等于closes长度', () => {
     const closes = [100, 102, 101, 103, 105, 104, 106, 108, 107, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130]
@@ -1783,10 +1953,18 @@ describe('persistent Chan structure anchor', () => {
       divergence:{ type:'none' }, forming_divergence:{ type:'none' }, recent_divergences:[], entry_candidates:[],
     })
     const primary = candidate(chain, 2000)
+    Object.defineProperties(primary, {
+      _confirmed_segments:{ value:chain, enumerable:false },
+      _confirmed_centers:{ value:[], enumerable:false },
+      _closed_rate_times_utc_msc:{ value:[100, 300, 500, 700], enumerable:false },
+    })
     const selected = selectStableChanResult([
       primary, candidate(chain.slice(-3), 600), candidate(chain.slice(-2), 500),
     ], { authoritativeCandidate:primary })
 
+    expect(selected).not.toBe(primary)
+    expect(primary).not.toHaveProperty('cross_window_total_count')
+    expectHiddenChanEvidence(selected)
     expect(selected.segment_count).toBe(4)
     expect(selected.current_segment.stable_id).toBe('d')
     expect(selected.authoritative_terminal_chain_confirmed).toBe(true)
