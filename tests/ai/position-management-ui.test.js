@@ -19,6 +19,8 @@ describe('AI position management workspace', () => {
     expect(stylesVersion).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
     expect(appVersion).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
     expect(stylesVersion).toBe(appVersion)
+    expect(stylesVersion).toContain('position-guard-review1')
+    expect(appVersion).toContain('position-guard-review1')
   })
 
   it('keeps position management inside AI trader instead of adding another top-level module', () => {
@@ -46,6 +48,24 @@ describe('AI position management workspace', () => {
     expect(app).toContain('${bridgePlatformLabel()} 挂单')
     expect(app).toContain('不会创建 ${bridgePlatformLabel()} 平仓命令')
     expect(html).not.toContain('data-action="execute-position-management"')
+  })
+
+  it('renders a dedicated Chinese PivotGuard review branch with evidence and MT5 reconciliation fields', () => {
+    const branchStart = app.indexOf('if (task.task_type === "position_guard")')
+    const branchEnd = app.indexOf('const pendingCancelTask', branchStart)
+    const rendererStart = app.indexOf('function renderPositionGuardReviewDetail')
+    const guardBranch = app.slice(rendererStart, branchEnd)
+    expect(branchStart).toBeGreaterThan(-1)
+    expect(guardBranch).toContain('自动盯盘复查')
+    expect(guardBranch).toContain('触发证据')
+    expect(guardBranch).toContain('计划与实际动作')
+    expect(guardBranch).toContain('参数与 D1 快照')
+    expect(guardBranch).toContain('交易终端结果')
+    expect(guardBranch).toContain('状态时间线')
+    expect(guardBranch).not.toContain('暂无模型说明')
+    expect(guardBranch).not.toContain('连续自动推理确认')
+    expect(app).toContain('position_guard_review')
+    expect(app).toContain('管理动作')
   })
 
   it('refreshes the active workspace from WSS task events', () => {
@@ -95,6 +115,10 @@ describe('AI position management workspace', () => {
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toContain('content: attr(data-label)')
     expect(app).toContain('data-label="持仓 / 品种"')
+    expect(css).toContain('.position-guard-review-grid')
+    expect(css).toContain('.position-guard-review-section')
+    expect(css).toContain('min-width: 420px')
+    expect(css).toContain('font-variant-numeric: tabular-nums')
   })
 
   it('keeps the task queue ahead of progressive automation settings', () => {

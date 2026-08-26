@@ -17109,7 +17109,14 @@ const POSITION_MANAGEMENT_STATUS = {
 
 function positionManagementStatus(status) {
   return POSITION_MANAGEMENT_STATUS[String(status || "").toUpperCase()]
-    || { label:String(status || "未知状态"), tone:"" };
+    || { label:"未知状态", tone:"" };
+}
+
+function positionManagementTaskStatus(task = {}) {
+  if (task.task_type === "position_guard" && String(task.status || "").toUpperCase() === "EVIDENCE_CONFIRMED") {
+    return { label:"规则已触发", tone:"confirmed" };
+  }
+  return positionManagementStatus(task.status);
 }
 
 function positionManagementMode(mode) {
@@ -17128,7 +17135,7 @@ function positionManagementTaskMode(task = {}) {
 
 function positionManagementActionLabel(action) {
   return ({ exit:"建议平仓", cancel:"建议取消", hold:"继续持有", keep:"继续保留",
-    full_exit:"完整平仓", partial_exit:"部分平仓", move_protection:"移动止损" })[action] || raw(action);
+    full_exit:"完整平仓", partial_exit:"部分平仓", move_protection:"移动止损" })[action] || (action ? "管理动作" : "--");
 }
 
 const POSITION_MANAGEMENT_DECISION_REASONS = Object.freeze({
@@ -17199,6 +17206,11 @@ function positionManagementDirection(direction) {
 }
 
 function positionManagementConfirmationMeta(task = {}, evidence = {}) {
+  if (task.task_type === "position_guard") {
+    return evidence.status === "confirmed" || task.status !== "CANDIDATE"
+      ? { label:"规则已确认", tone:"confirmed", count:1, required:1 }
+      : { label:"等待规则触发", tone:"candidate", count:0, required:1 };
+  }
   if (task.task_type === "pending_cancel") {
     if (task.status === "EXPIRED") return { label:"旧撤单复核已结束", tone:"expired", count:0, required:1 };
     return evidence.status === "confirmed" || task.status !== "CANDIDATE"
@@ -17878,7 +17890,7 @@ function renderPositionManagementTasks(tasks = [], pagination = {}) {
     body.innerHTML = `<tr class="empty-row"><td colspan="7">暂无管理任务。冻结交易论点命中平仓/取消条件，或自动盯盘规则触发后，才会生成记录。</td></tr>`;
   } else {
     body.innerHTML = tasks.map(task => {
-      const status = positionManagementStatus(task.status);
+      const status = positionManagementTaskStatus(task);
       const evidence = parseJsonField(task.evidence_validation_json, {});
       const evidenceMeta = positionManagementConfirmationMeta(task, evidence);
       const selected = Number(state.selectedPositionManagementId) === Number(task.id);
@@ -17887,7 +17899,7 @@ function renderPositionManagementTasks(tasks = [], pagination = {}) {
       return `<tr class="${selected ? "selected" : ""}" data-position-management-row="${Number(task.id)}">
         <td data-label="持仓 / 品种"><span class="management-group-cell"><strong>${escapeHtml(task.standard_symbol || task.original_symbol || "--")}</strong><small title="${escapeHtml(targetMeta)}">${escapeHtml(targetMeta)}</small></span></td>
         <td data-label="任务"><span class="management-state ${escapeHtml(status.tone)}">${escapeHtml(positionManagementTaskLabel(task.task_type))}</span></td>
-        <td data-label="AI建议"><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></td>
+        <td data-label="管理动作"><span class="management-action ${escapeHtml(task.candidate_action || "")}">${escapeHtml(positionManagementActionLabel(task.candidate_action))}</span></td>
         <td data-label="确认进度"><span class="management-state ${evidenceMeta.tone}">${escapeHtml(evidenceMeta.label)}</span></td>
         <td data-label="运行方式"><span class="management-mode ${escapeHtml(task.execution_mode || "display")}">${escapeHtml(positionManagementTaskMode(task))}</span></td>
         <td data-label="最近判断" class="num" title="最近一次判断时间（${bridgePlatformLabel()}）">${escapeHtml(compactTimeText(positionManagementDecisionTime(task)))}</td>
@@ -17908,6 +17920,91 @@ function renderPositionManagementUnavailable(message) {
   const settings = $("positionManagementSettingsPanel");
   if (settings) settings.innerHTML = `<div class="position-management-empty"><strong>运行设置暂不可用</strong><span>${escapeHtml(message)}</span></div>`;
   $("positionManagementPager")?.replaceChildren();
+}
+
+const POSITION_GUARD_REVIEW_EVENT_LABELS = Object.freeze({
+  position_guard_action_confirmed:"规则已触发，已生成持仓管理动作",
+  position_guard_intent_created:"执行前条件已确认，已创建平台指令",
+  position_guard_send_started:"已通过最终校验并发送到交易终端",
+  position_guard_reconciliation_started:"正在读取交易终端当前持仓核对结果",
+  position_guard_reconciliation_pending:"交易终端尚未显示最终结果，等待下一次复核",
+  position_guard_manual_review_required:"交易终端结果与预期不一致，需要人工复核",
+  position_guard_reconciliation_timeout:"交易终端结果超时未确认，需要人工复核",
+  position_guard_send_blocked:"平台指令在发送前被安全校验阻止",
+  position_guard_precondition_rejected:"执行前条件未通过，未发送平台指令",
+  position_guard_live_trigger_rejected:"实时复核时规则已不再触发，未发送平台指令",
+  position_guard_request_invalid:"执行参数未通过安全校验，未发送平台指令",
+  position_guard_command_state_invalid:"持久化指令状态异常，已停止自动处理",
+  position_guard_prepared_precondition_rejected:"恢复待发送指令时执行条件已变化，未发送平台指令",
+  position_guard_prepared_live_trigger_rejected:"恢复待发送指令时规则已不再触发，未发送平台指令",
+ });
+
+function positionGuardReviewNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function positionGuardReviewPrice(value) {
+  return priceDisplay(value);
+}
+
+function positionGuardReviewVolume(value) {
+  const parsed = positionGuardReviewNumber(value);
+  if (parsed === null || parsed <= 0) return "--";
+  return String(Number(parsed.toFixed(8)));
+}
+
+function positionGuardReviewPercent(value) {
+  const parsed = positionGuardReviewNumber(value);
+  return parsed === null ? "--" : `${fmt(parsed, 2)}%`;
+}
+
+function positionGuardReviewComparison(review = {}) {
+  const trigger = review.trigger || {};
+  const live = positionGuardReviewPrice(trigger.live_price);
+  const line = positionGuardReviewPrice(trigger.trigger_line ?? trigger.threshold_price);
+  const operator = trigger.comparison_operator || "";
+  if (live === "--" || line === "--" || !operator) return "当前无法形成完整比较式";
+  return `实时价 ${live} ${operator} 触发线 ${line}`;
+}
+
+function positionGuardReviewEventSummary(event = {}) {
+  const type = String(event.event_type || "").toLowerCase();
+  if (POSITION_GUARD_REVIEW_EVENT_LABELS[type]) return POSITION_GUARD_REVIEW_EVENT_LABELS[type];
+  const summary = String(event.summary || "").trim();
+  return /[\u4e00-\u9fff]/.test(summary) ? summary.replaceAll("PivotGuard", "自动盯盘") : "自动盯盘状态已更新";
+}
+
+function renderPositionGuardReviewDetail({ id, task = {}, review = {}, status = {}, commands = [], events = [] } = {}) {
+  const position = review.position || {};
+  const trigger = review.trigger || {};
+  const plan = review.plan || {};
+  const profile = review.profile || {};
+  const d1 = review.d1 || {};
+  const mt5 = review.mt5 || {};
+  const commandRows = Array.isArray(mt5.commands) && mt5.commands.length
+    ? mt5.commands : (Array.isArray(commands) ? commands : []);
+  const direction = position.direction_label || positionManagementDirection(position.direction);
+  const volume = positionGuardReviewVolume(position.volume);
+  const actionLabel = review.action?.label || positionManagementActionLabel(task.candidate_action);
+  const statusLabel = status.label || "未知状态";
+  const completedAt = review.confirmed_at || task.completed_at || task.updated_at || null;
+  const mt5Command = mt5.command_label || "尚未创建平台指令";
+  const mt5Rows = commandRows.length ? commandRows.map((command, index) => `<li class="position-guard-mt5-command-row"><span class="position-guard-command-index">${index + 1}</span><div><strong>${escapeHtml(command.command_label || "平台管理指令")}</strong><span>${escapeHtml(command.send_label || "发送状态待确认")} · ${escapeHtml(command.reconciliation_label || "复核状态待确认")}</span><small>${command.retcode != null ? `平台返回码 ${escapeHtml(command.retcode)}` : "未记录平台返回码"}${command.fill_price != null ? ` · 成交价 ${escapeHtml(positionGuardReviewPrice(command.fill_price))}` : ""}</small></div></li>`).join("") : `<li class="position-guard-mt5-empty">尚未创建平台指令。</li>`;
+  const timeline = Array.isArray(events) && events.length ? `<ol class="management-timeline position-guard-review-timeline">${events.map(event => `<li><time title="交易终端服务器时间"><span>${escapeHtml(bridgePlatformLabel())}</span>${escapeHtml(compactTimeText(positionManagementEventTime(event)))}</time><span><strong>${escapeHtml(positionManagementStatus(event.to_status).label)}</strong><br>${escapeHtml(positionGuardReviewEventSummary(event))}</span></li>`).join("")}</ol>` : `<p class="position-guard-review-muted">暂无状态记录。</p>`;
+  return `
+    <div class="position-guard-review-shell">
+      <header class="position-guard-review-head">
+        <div><span class="position-guard-review-label">任务 #${escapeHtml(id)} · 自动盯盘</span><h3>${escapeHtml(position.symbol || task.standard_symbol || task.original_symbol || "管理任务")} · #${escapeHtml(position.ticket || task.target_position_id || "--")}</h3><p>${escapeHtml(direction)} · ${escapeHtml(volume)} 手 · ${escapeHtml(actionLabel)}</p></div><span class="management-state ${escapeHtml(status.tone || "")}">${escapeHtml(statusLabel)}</span>
+      </header>
+      <section class="position-guard-review-conclusion" aria-label="自动盯盘复查结论"><span>自动盯盘复查</span><strong>${escapeHtml(review.conclusion || "当前没有可用的规则结论。")}</strong><small>规则版本 ${escapeHtml(profile.version_no == null ? "--" : String(profile.version_no))} · ${escapeHtml(completedAt ? compactTimeText(positionManagementEventTime({ created_at:completedAt })) : "尚未完成")}</small></section>
+      <section class="position-guard-review-section"><header><div><h4>触发证据</h4><p>${escapeHtml(review.rule?.label || "自动盯盘规则")}</p></div><span class="management-action ${escapeHtml(review.action?.code || "")}">${escapeHtml(review.action?.label || "管理动作")}</span></header><div class="position-guard-review-grid"><div><span>触发目标价</span><strong>${escapeHtml(positionGuardReviewPrice(trigger.target_price))}</strong></div><div><span>容差</span><strong>${escapeHtml(positionGuardReviewPrice(trigger.tolerance_price))}</strong></div><div><span>触发线</span><strong>${escapeHtml(positionGuardReviewPrice(trigger.trigger_line ?? trigger.threshold_price))}</strong></div><div><span>实时价</span><strong>${escapeHtml(positionGuardReviewPrice(trigger.live_price))}</strong></div><div><span>卖价 / 买价</span><strong>${escapeHtml(positionGuardReviewPrice(trigger.bid))} / ${escapeHtml(positionGuardReviewPrice(trigger.ask))}</strong></div><div><span>比较结果</span><strong class="position-guard-comparison-${trigger.comparison_hit ? "hit" : "not-hit"}">${escapeHtml(positionGuardReviewComparison(review))} · ${trigger.comparison_hit ? "命中" : "未命中"}</strong></div></div></section>
+      <section class="position-guard-review-section"><header><div><h4>计划与实际动作</h4><p>${escapeHtml(actionLabel)}</p></div><span class="position-guard-review-result">${plan.fallback_reason ? "已按交易规则调整" : "按当前参数执行"}</span></header><div class="position-guard-review-grid position-guard-action-grid"><div><span>配置比例</span><strong>${escapeHtml(positionGuardReviewPercent(plan.configured_percent ?? plan.configured_close_percent))}</strong></div><div><span>计划平仓手数</span><strong>${escapeHtml(positionGuardReviewVolume(plan.planned_volume ?? plan.requested_volume))}</strong></div><div><span>实际比例</span><strong>${escapeHtml(positionGuardReviewPercent(plan.actual_percent ?? plan.actual_close_percent))}</strong></div><div><span>实际手数</span><strong>${escapeHtml(positionGuardReviewVolume(plan.actual_volume))}</strong></div></div>${plan.fallback_reason ? `<p class="position-guard-review-fallback">${escapeHtml(plan.fallback_reason)}</p>` : ""}</section>
+      <details class="position-guard-review-disclosure"><summary>参数与 D1 快照</summary><div class="position-guard-review-section"><div class="position-guard-review-grid"><div><span>枢轴计算方式</span><strong>${escapeHtml(profile.pivot_method === "fibonacci" ? "斐波那契法" : profile.pivot_method === "standard" ? "标准枢轴点法" : "--")}</strong></div><div><span>规则版本</span><strong>${escapeHtml(profile.version_no == null ? "--" : String(profile.version_no))}</strong></div><div><span>D1 最高</span><strong>${escapeHtml(positionGuardReviewPrice(d1.high))}</strong></div><div><span>D1 最低</span><strong>${escapeHtml(positionGuardReviewPrice(d1.low))}</strong></div><div><span>D1 收盘</span><strong>${escapeHtml(positionGuardReviewPrice(d1.close))}</strong></div><div><span>入场 / 止损 / 止盈</span><strong>${escapeHtml(positionGuardReviewPrice(position.open_price))} / ${escapeHtml(positionGuardReviewPrice(position.stop_loss))} / ${escapeHtml(positionGuardReviewPrice(position.take_profit))}</strong></div></div></div></details>
+      <section class="position-guard-review-section"><header><div><h4>交易终端结果</h4><p>${escapeHtml(mt5Command)}</p></div><span class="management-state ${mt5.reconciliation_status === "confirmed" ? "completed" : mt5.reconciliation_status === "manual_review" ? "failed" : "candidate"}">${escapeHtml(mt5.reconciliation_label || "尚未复核")}</span></header><div class="position-guard-review-grid"><div><span>发送状态</span><strong>${escapeHtml(mt5.send_label || "尚未发送")}</strong></div><div><span>智桥状态</span><strong>${escapeHtml(mt5.bridge_label || "尚未收到智桥返回")}</strong></div><div><span>平台返回码</span><strong>${escapeHtml(mt5.retcode == null ? "--" : String(mt5.retcode))}</strong></div><div><span>成交价</span><strong>${escapeHtml(positionGuardReviewPrice(mt5.fill_price))}</strong></div><div><span>创建时间</span><strong>${escapeHtml(mt5.created_at ? compactTimeText(positionManagementEventTime({ created_at:mt5.created_at })) : "--")}</strong></div><div><span>确认时间</span><strong>${escapeHtml(mt5.reconciled_at ? compactTimeText(positionManagementEventTime({ created_at:mt5.reconciled_at })) : "--")}</strong></div></div><ul class="position-guard-mt5-command-list">${mt5Rows}</ul></section>
+      <section class="position-guard-review-section"><header><div><h4>状态时间线</h4><p>按交易终端服务器时间记录</p></div><span>${events.length} 条记录</span></header>${timeline}</section>
+    </div>`;
 }
 
 async function loadPositionManagement(options = {}) {
@@ -17961,7 +18058,7 @@ async function loadPositionManagementDetail(taskId, options = {}) {
     const task = result.task || {};
     const evaluation = parseJsonField(task.model_evaluation_json, {});
     const evidence = parseJsonField(task.evidence_validation_json, {});
-    const status = positionManagementStatus(task.status);
+    const status = positionManagementTaskStatus(task);
     const confirmation = positionManagementConfirmationMeta(task, evidence);
     const conditions = parseJsonField(task.invalidation_conditions_json, []);
     const snapshot = parseJsonField(task.target_snapshot_json, {});
@@ -17971,6 +18068,12 @@ async function loadPositionManagementDetail(taskId, options = {}) {
     })) : [];
     const events = Array.isArray(result.events) ? result.events : [];
     const commands = Array.isArray(result.commands) ? result.commands : [];
+    if (task.task_type === "position_guard") {
+      const review = result.position_guard_review || task.position_guard_review || {};
+      host.innerHTML = renderPositionGuardReviewDetail({ id, task, review, status, commands, events });
+      initIcons();
+      return;
+    }
     const pendingCancelTask = task.task_type === "pending_cancel";
     const ticket = task.target_position_id || task.target_pending_ticket || "--";
     const targetActive = pendingCancelTask

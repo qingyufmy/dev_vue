@@ -273,6 +273,22 @@ describe('PivotGuard rule evaluation', () => {
     expect(result.action.next_protection).toBeUndefined()
   })
 
+  it('keeps camel and snake stage aliases completed on a minimum-volume fallback full exit', () => {
+    const result = evaluate({
+      params: disableAllExcept('pivot_take_profit'),
+      position: position({ direction:'buy', open:95, current:99, volume:0.01 }),
+      quote:{ bid:99, ask:99.1 },
+    })
+    expect(result.action.type).toBe(ACTION_TYPES.FULL_EXIT)
+    expect(result.action.fallback_code).toBe('partial_volume_below_minimum')
+    expect(result.next_stage_state).toMatchObject({
+      pivotTakeProfitDone:true,
+      pivot_tp_done:true,
+      firstTargetDone:true,
+      first_target_done:true,
+    })
+  })
+
   it('skips an already completed stage on the same snapshot', () => {
     const result = evaluate({
       params: {

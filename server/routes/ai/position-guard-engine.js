@@ -653,6 +653,11 @@ function takeProfitAction(reasonCode, position, state, params, contract, stage, 
   const config = stage === 'pivot_take_profit'
     ? params.pivot_take_profit
     : params.first_target_take_profit
+  const stageState = {
+    ...state,
+    pivotTakeProfitDone: stage === 'pivot_take_profit' ? true : state.pivotTakeProfitDone,
+    firstTargetDone: stage === 'first_target_take_profit' ? true : state.firstTargetDone,
+  }
   const base = {
     ticket: position.ticket,
     symbol: position.symbol,
@@ -661,12 +666,12 @@ function takeProfitAction(reasonCode, position, state, params, contract, stage, 
     stage,
   }
   if (config.close_percent >= 100) {
-    return fullExit(reasonCode, position, state, base)
+    return fullExit(reasonCode, position, stageState, base)
   }
 
   const closeVolume = normalizePartialVolume(position.volume, config.close_percent, contract)
   if (closeVolume === null) {
-    return fullExit(reasonCode, position, state, {
+    return fullExit(reasonCode, position, stageState, {
       ...base,
       close_percent: 100,
       close_volume: position.volume,
@@ -674,7 +679,7 @@ function takeProfitAction(reasonCode, position, state, params, contract, stage, 
     })
   }
 
-  const stageResult = nextProtectionForStage(state, params, contract, position, stage)
+  const stageResult = nextProtectionForStage(stageState, params, contract, position, stage)
   const action = {
     type: ACTION_TYPES.PARTIAL_EXIT,
     trigger_code: reasonCode,
@@ -910,10 +915,15 @@ export function evaluatePositionGuard(input = {}) {
         levels,
       )
       if (result.ok && pivotIsFirstTarget && result.next_stage_state) {
-        result.next_stage_state.firstTargetDone = true
+        const completedState = {
+          ...nextState,
+          pivotTakeProfitDone:true,
+          firstTargetDone:true,
+        }
+        result.next_stage_state = canonicalState(completedState)
         if (result.action.type === ACTION_TYPES.PARTIAL_EXIT && params.first_target_take_profit.move_break_even) {
           const protectionState = nextProtectionForStage(
-            { ...nextState, pivotTakeProfitDone: true, firstTargetDone: true },
+            completedState,
             params,
             contract,
             position,

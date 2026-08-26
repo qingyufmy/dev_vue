@@ -2166,10 +2166,308 @@ export async function savePositionManagementSettings(userId, input = {}) {
   return getPositionManagementSettings(userId)
 }
 
-function redactPositionGuardTaskForUser(task, admin) {
-  if (admin || String(task?.decision_source || '').toLowerCase() !== 'pivot_guard') return task
-  const { deterministic_evidence_json: _hiddenDeterministicEvidence, ...safeTask } = task
-  return safeTask
+const POSITION_GUARD_TRIGGER_LABELS = Object.freeze({
+  none:'继续观察',
+  pivot_cross_stop:'P点穿越止损',
+  pivot_cross_pending:'P点穿越观察',
+  retrace_stop:'回踩止损',
+  break_stop:'突破止损',
+  pivot_take_profit:'P点止盈',
+  first_target_take_profit:'第一目标位止盈',
+  break_even:'保本止损',
+  break_even_pending:'保本止损等待',
+  protection_already_stricter:'已有更严格止损',
+  protection_not_ready:'保本止损暂不可修改',
+})
+
+const POSITION_GUARD_ACTION_LABELS = Object.freeze({
+  observe:'继续观察',
+  full_exit:'完整平仓',
+  partial_exit:'部分平仓',
+  move_protection:'移动止损',
+})
+
+const POSITION_GUARD_FALLBACK_LABELS = Object.freeze({
+  partial_volume_below_minimum:'按比例计算的手数低于品种最小手数或步长，已改为完整平仓',
+})
+
+const POSITION_GUARD_COMMAND_LABELS = Object.freeze({
+  close_system_position:'平仓指令',
+  modify_system_position_protection:'保护价修改指令',
+})
+
+const POSITION_GUARD_SEND_LABELS = Object.freeze({
+  prepared:'已准备', sending:'发送中', acknowledged:'已收到平台确认', rejected:'平台已拒绝', uncertain:'发送结果待确认',
+})
+
+const POSITION_GUARD_RECONCILIATION_LABELS = Object.freeze({
+  pending:'等待持仓复核', confirmed:'持仓结果已确认', manual_review:'需要人工复核', filled_during_cancel:'执行期间状态已变化',
+})
+
+function isPositionGuardTask(task = {}) {
+  return String(task.task_type || '').toLowerCase() === 'position_guard'
+    || String(task.decision_source || '').toLowerCase() === 'pivot_guard'
+}
+
+function positionGuardFinite(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function positionGuardText(value, max = 160) {
+  return typeof value === 'string' ? value.trim().slice(0, max) : ''
+}
+
+function positionGuardJson(value, fallback = {}) {
+  return parseManagementJson(value, fallback)
+}
+
+function positionGuardFirstFinite(...values) {
+  for (const value of values) {
+    const parsed = positionGuardFinite(value)
+    if (parsed !== null) return parsed
+  }
+  return null
+}
+
+function positionGuardTriggerLabel(code) {
+  const normalized = positionGuardText(code, 64).toLowerCase()
+  return POSITION_GUARD_TRIGGER_LABELS[normalized] || (normalized ? '自动盯盘规则触发' : '继续观察')
+}
+
+function positionGuardActionLabel(code) {
+  const normalized = positionGuardText(code, 32).toLowerCase()
+  return POSITION_GUARD_ACTION_LABELS[normalized] || (normalized ? '管理动作' : '继续观察')
+}
+
+function positionGuardDirectionLabel(direction) {
+  const normalized = positionGuardText(direction, 16).toLowerCase()
+  return normalized === 'buy' ? '买入' : normalized === 'sell' ? '卖出' : '未知方向'
+}
+
+function positionGuardRuleParams(evidence, action) {
+  const params = evidence?.params && typeof evidence.params === 'object' ? evidence.params : {}
+  const stage = positionGuardText(action?.stage, 64).toLowerCase()
+  const trigger = positionGuardText(action?.trigger_code, 64).toLowerCase()
+  const section = stage && params[stage] && typeof params[stage] === 'object'
+    ? params[stage]
+    : trigger === 'first_target_take_profit' ? params.first_target_take_profit
+      : trigger === 'pivot_take_profit' ? params.pivot_take_profit : null
+  return section && typeof section === 'object' ? section : {}
+}
+
+function positionGuardCommandProjection(command = {}) {
+  const bridgeResult = positionGuardJson(command.bridge_result_json, {})
+  const bridgeStatus = positionGuardText(bridgeResult.status || bridgeResult.result?.status || bridgeResult.data?.status, 40).toLowerCase() || null
+  const sendStatus = positionGuardText(command.send_status, 32).toLowerCase() || null
+  const reconciliationStatus = positionGuardText(command.reconciliation_status, 40).toLowerCase() || null
+  const retcode = positionGuardFirstFinite(
+    bridgeResult.retcode, bridgeResult.return_code, bridgeResult.result?.retcode,
+    bridgeResult.mt5_result?.retcode, bridgeResult.response?.retcode, bridgeResult.data?.retcode,
+  )
+  const fillPrice = positionGuardFirstFinite(
+    bridgeResult.fill_price, bridgeResult.execution_price, bridgeResult.deal_price,
+    bridgeResult.exit_price, bridgeResult.close_price, bridgeResult.price,
+    bridgeResult.result?.price, bridgeResult.result?.fill_price,
+    bridgeResult.result?.exit_price, bridgeResult.result?.close_price,
+    bridgeResult.mt5_result?.price, bridgeResult.mt5_result?.fill_price,
+    bridgeResult.data?.price, bridgeResult.data?.fill_price, bridgeResult.data?.exit_price,
+  )
+  const commandType = positionGuardText(command.command_type, 48).toLowerCase() || null
+  const sendLabel = POSITION_GUARD_SEND_LABELS[sendStatus] || (sendStatus ? '发送状态待确认' : '尚未发送')
+  const reconciliationLabel = POSITION_GUARD_RECONCILIATION_LABELS[reconciliationStatus]
+    || (reconciliationStatus ? '复核状态待确认' : '尚未复核')
+  const bridgeLabel = bridgeStatus === 'success' || bridgeStatus === 'acknowledged' ? '智桥已确认'
+    : bridgeStatus === 'rejected' ? '智桥已拒绝'
+      : bridgeStatus ? '智桥返回待确认' : '尚未收到智桥返回'
+  return {
+    command_type:commandType,
+    command_label:POSITION_GUARD_COMMAND_LABELS[commandType] || '平台管理指令',
+    send_status:sendStatus,
+    send_label:sendLabel,
+    reconciliation_status:reconciliationStatus,
+    reconciliation_label:reconciliationLabel,
+    bridge_status:bridgeStatus,
+    bridge_label:bridgeLabel,
+    retcode,
+    fill_price:fillPrice,
+    created_at:command.created_at || null,
+    updated_at:command.updated_at || null,
+    reconciled_at:command.reconciled_at || null,
+    confirmed_at:command.reconciled_at || null,
+  }
+}
+
+/**
+ * Build the user-facing, account-route-free audit projection for one
+ * deterministic PivotGuard task.  The source task and command JSON stay on
+ * the server; this projection contains only the values needed to reproduce
+ * the rule decision and verify the MT5 result.
+ */
+export function buildPositionGuardReview(task = {}, { commands = [] } = {}) {
+  const evidence = positionGuardJson(task.deterministic_evidence_json, {})
+  const action = evidence.action && typeof evidence.action === 'object' ? evidence.action : {}
+  const positionEvidence = evidence.position && typeof evidence.position === 'object' ? evidence.position : {}
+  const params = evidence.params && typeof evidence.params === 'object' ? evidence.params : {}
+  const d1Source = evidence.d1 && typeof evidence.d1 === 'object' ? evidence.d1 : {}
+  const triggerCode = positionGuardText(task.trigger_code || action.trigger_code, 64).toLowerCase() || 'none'
+  const actionCode = positionGuardText(task.candidate_action || action.type, 32).toLowerCase() || 'observe'
+  const direction = positionGuardText(positionEvidence.direction || task.target_direction, 16).toLowerCase() || null
+  const section = positionGuardRuleParams(evidence, action)
+  const targetPrice = positionGuardFirstFinite(action.target_level, action.key_level, action.protection_price,
+    action.new_sl, action.stop_loss, action.price)
+  const tolerance = positionGuardFirstFinite(section.tolerance_price)
+  const threshold = positionGuardFirstFinite(action.threshold_price)
+  const bid = positionGuardFirstFinite(evidence.quote?.bid, action.bid)
+  const ask = positionGuardFirstFinite(evidence.quote?.ask, action.ask)
+  const livePrice = positionGuardFirstFinite(action.close_price, evidence.quote?.close_price,
+    direction === 'buy' ? bid : ask, positionEvidence.current_price)
+  const derivedThreshold = threshold !== null ? threshold
+    : targetPrice !== null && tolerance !== null && ['buy', 'sell'].includes(direction)
+      ? (['pivot_take_profit', 'first_target_take_profit'].includes(triggerCode)
+          ? (direction === 'buy' ? targetPrice - tolerance : targetPrice + tolerance)
+          : null)
+      : null
+  const comparisonOperator = derivedThreshold === null || livePrice === null ? null
+    : ['pivot_take_profit', 'first_target_take_profit'].includes(triggerCode)
+      ? (direction === 'buy' ? '>=' : '<=')
+      : ['break_stop', 'pivot_cross_stop', 'retrace_stop'].includes(triggerCode)
+        ? (direction === 'buy' ? '<=' : '>=') : null
+  const comparisonHit = comparisonOperator === '>=' ? livePrice >= derivedThreshold
+    : comparisonOperator === '<=' ? livePrice <= derivedThreshold
+      : comparisonOperator === '>' ? livePrice > derivedThreshold
+        : comparisonOperator === '<' ? livePrice < derivedThreshold : actionCode !== 'observe'
+  const volume = positionGuardFirstFinite(positionEvidence.volume, task.target_expected_volume, task.target_volume)
+  const configuredPercent = positionGuardFirstFinite(section.close_percent, action.close_percent)
+  const requestedVolume = volume !== null && configuredPercent !== null ? volume * configuredPercent / 100 : null
+  const actualVolume = positionGuardFirstFinite(action.close_volume)
+  const actualPercent = actualVolume !== null && volume ? actualVolume / volume * 100
+    : positionGuardFirstFinite(action.close_percent)
+  const fallbackCode = positionGuardText(action.fallback_code, 80).toLowerCase() || null
+  const fallbackReason = fallbackCode ? (POSITION_GUARD_FALLBACK_LABELS[fallbackCode] || '实际执行动作与计划比例不同，系统按交易规则完成降级处理') : null
+  const projectedCommands = (Array.isArray(commands) ? commands : []).map(positionGuardCommandProjection)
+  const primaryCommand = projectedCommands.at(-1) || {
+    command_type:null, command_label:'尚未创建平台指令', send_status:null, send_label:'尚未发送',
+    reconciliation_status:null, reconciliation_label:'尚未复核', bridge_status:null,
+    bridge_label:'尚未收到智桥返回', retcode:null, fill_price:null,
+    created_at:null, updated_at:null, reconciled_at:null, confirmed_at:null,
+  }
+  const profile = {
+    version_id:positionGuardFinite(evidence.profile?.version_id),
+    version_no:positionGuardFinite(evidence.profile?.version_no),
+    pivot_method:positionGuardText(params.pivot_method, 32).toLowerCase() || null,
+  }
+  const rule = { code:triggerCode, label:positionGuardTriggerLabel(triggerCode) }
+  const actionProjection = { code:actionCode, label:positionGuardActionLabel(actionCode) }
+  const position = {
+    ticket:positionGuardText(positionEvidence.ticket || task.target_position_id, 96) || null,
+    symbol:positionGuardText(positionEvidence.symbol || task.original_symbol || task.standard_symbol, 64) || null,
+    direction,
+    direction_label:positionGuardDirectionLabel(direction),
+    volume,
+    open_price:positionGuardFirstFinite(positionEvidence.price_open, positionEvidence.open_price),
+    stop_loss:positionGuardFirstFinite(positionEvidence.sl, positionEvidence.stop_loss, task.target_actual_stop_loss),
+    take_profit:positionGuardFirstFinite(positionEvidence.tp, positionEvidence.take_profit, task.target_actual_take_profit),
+  }
+  const trigger = {
+    target_price:targetPrice,
+    tolerance_price:tolerance,
+    threshold_price:derivedThreshold,
+    trigger_line:derivedThreshold,
+    live_price:livePrice,
+    bid,
+    ask,
+    comparison_operator:comparisonOperator,
+    comparison_hit:comparisonOperator ? Boolean(comparisonHit) : actionCode !== 'observe',
+    comparison:`${livePrice ?? '--'} ${comparisonOperator || ''} ${derivedThreshold ?? '--'}`.trim(),
+  }
+  const plan = {
+    configured_percent:configuredPercent,
+    configured_close_percent:configuredPercent,
+    requested_volume:requestedVolume,
+    planned_volume:requestedVolume,
+    actual_percent:actualPercent,
+    actual_close_percent:actualPercent,
+    actual_volume:actualVolume,
+    fallback_code:fallbackCode,
+    fallback_reason:fallbackReason,
+  }
+  const d1 = {
+    high:positionGuardFirstFinite(d1Source.high, d1Source.H),
+    low:positionGuardFirstFinite(d1Source.low, d1Source.L),
+    close:positionGuardFirstFinite(d1Source.close, d1Source.C),
+  }
+  const conclusion = fallbackReason
+    ? `${rule.label}已触发，系统${actionProjection.label}；${fallbackReason}`
+    : actionCode === 'observe' ? `${rule.label}，当前继续观察。`
+      : `${rule.label}已触发，系统执行${actionProjection.label}。`
+  return {
+    source:'deterministic_pivot_guard',
+    rule, rule_code:rule.code, rule_label:rule.label,
+    action:actionProjection, action_code:actionProjection.code, action_label:actionProjection.label,
+    conclusion,
+    position,
+    profile,
+    trigger,
+    plan,
+    d1,
+    mt5:{ ...primaryCommand, commands:projectedCommands },
+    created_at:task.created_at || null,
+    confirmed_at:primaryCommand.reconciled_at || (String(task.status || '').toUpperCase() === 'COMPLETED' ? task.completed_at || task.updated_at || null : null),
+  }
+}
+
+export function redactPositionGuardCommandForUser(command = {}) {
+  const projection = positionGuardCommandProjection(command)
+  return {
+    id:managementNumber(command.id),
+    task_id:managementNumber(command.task_id),
+    command_sequence:managementNumber(command.command_sequence),
+    command_type:projection.command_type,
+    command_label:projection.command_label,
+    send_status:projection.send_status,
+    send_label:projection.send_label,
+    reconciliation_status:projection.reconciliation_status,
+    reconciliation_label:projection.reconciliation_label,
+    bridge_status:projection.bridge_status,
+    bridge_label:projection.bridge_label,
+    retcode:projection.retcode,
+    fill_price:projection.fill_price,
+    created_at:projection.created_at,
+    updated_at:projection.updated_at,
+    reconciled_at:projection.reconciled_at,
+    confirmed_at:projection.confirmed_at,
+  }
+}
+
+export function redactPositionGuardEventForUser(event = {}) {
+  return {
+    id:managementNumber(event.id),
+    task_id:managementNumber(event.task_id),
+    from_status:positionGuardText(event.from_status, 40) || null,
+    to_status:positionGuardText(event.to_status, 40) || null,
+    event_type:positionGuardText(event.event_type, 80) || null,
+    summary:positionGuardText(event.summary, 500) || null,
+    actor_type:positionGuardText(event.actor_type, 32) || null,
+    created_at:event.created_at || null,
+  }
+}
+
+export function redactPositionGuardTaskForUser(task, admin, commands = []) {
+  if (!isPositionGuardTask(task)) return task
+  const review = buildPositionGuardReview(task, { commands })
+  if (admin) return { ...task, position_guard_review:review }
+  const {
+    deterministic_evidence_json: _hiddenDeterministicEvidence,
+    broker_server_key: _hiddenBrokerServer,
+    login_account: _hiddenLogin,
+    ownership_history_id: _hiddenOwnership,
+    bridge_generation: _hiddenBridgeGeneration,
+    model_evaluation_json: _hiddenModelEvaluation,
+    ...safeTask
+  } = task
+  return { ...safeTask, position_guard_review:review }
 }
 
 export async function listPositionManagementTasks({ userId = null, admin = false, status = null, page = 1, pageSize = 20 } = {}) {
@@ -2221,7 +2519,16 @@ export async function getPositionManagementTask(taskId, { userId = null, admin =
     evaluationIds.length ? queryAll(`SELECT * FROM ai_position_management_evaluations
       WHERE id IN (${evaluationIds.map(() => '?').join(',')}) ORDER BY id`, evaluationIds) : [],
   ])
-  return { task:redactPositionGuardTaskForUser(task, admin), events, commands, evaluations }
+  const review = buildPositionGuardReview(task, { commands })
+  return {
+    task:redactPositionGuardTaskForUser(task, admin, commands),
+    events:admin || !isPositionGuardTask(task)
+      ? events : events.map(redactPositionGuardEventForUser),
+    commands:admin || !isPositionGuardTask(task)
+      ? commands : commands.map(redactPositionGuardCommandForUser),
+    evaluations,
+    ...(isPositionGuardTask(task) ? { position_guard_review:review } : {}),
+  }
 }
 
 function parseManagementJson(value, fallback = {}) {
@@ -2349,15 +2656,29 @@ export function buildSignalManagementActions({
 } = {}) {
   const source = management?.position_management && typeof management.position_management === 'object'
     ? management.position_management : management
-  if (!source || typeof source !== 'object' || Array.isArray(source)) return []
+  const safeSource = source && typeof source === 'object' && !Array.isArray(source) ? source : {}
   const signalNumber = managementNumber(signalId)
+  const directGuardTasks = (tasks || []).filter(task => String(task?.task_type || '') === 'position_guard'
+    && signalNumber
+    && [task.decision_signal_id, task.origin_signal_id].map(managementNumber).includes(signalNumber))
   const specs = [
-    ...(Array.isArray(source.pending_evaluations) ? source.pending_evaluations : [])
+    ...(Array.isArray(safeSource.pending_evaluations) ? safeSource.pending_evaluations : [])
       .filter(item => String(item?.action || '').toLowerCase() === 'cancel')
       .map(item => ({ ...item, task_type:'pending_cancel', action_type:'pending_cancel', action:'cancel' })),
-    ...(Array.isArray(source.position_evaluations) ? source.position_evaluations : [])
+    ...(Array.isArray(safeSource.position_evaluations) ? safeSource.position_evaluations : [])
       .filter(item => ['exit', 'hold'].includes(String(item?.action || '').toLowerCase()))
       .map(item => ({ ...item, task_type:'position_exit', action_type:'position_exit', action:String(item.action).toLowerCase() })),
+    ...directGuardTasks.map(task => {
+      const review = task.position_guard_review || buildPositionGuardReview(task)
+      return {
+        ...task,
+        task_type:'position_guard',
+        action_type:'position_guard',
+        action:String(task.candidate_action || review.action_code || 'observe').toLowerCase(),
+        reason:review.conclusion || '自动盯盘已生成管理动作',
+        from_position_guard_task:true,
+      }
+    }),
   ]
   const result = []
   for (const spec of specs) {
@@ -2408,6 +2729,9 @@ export function buildSignalManagementActions({
         if (!reset) continue
         inferenceEffect = validationStatus === 'invalid' ? 'invalid_reset' : 'confirmation_reset'
         confirmationCount = 0
+      } else if (spec.task_type === 'position_guard') {
+        inferenceEffect = task ? 'deterministic_action' : 'display_only'
+        confirmationCount = task ? 1 : 0
       } else if (evaluation) {
         if (validationStatus === 'invalid') {
           inferenceEffect = taskResetByEvaluation(task, evaluation, signalNumber) ? 'invalid_reset' : 'display_only'
@@ -2438,6 +2762,8 @@ export function buildSignalManagementActions({
           ? (String(spec.cancel_reason_code || '').toLowerCase() || null) : null,
         exit_reason_code:spec.task_type === 'position_exit'
           ? (String(spec.exit_reason_code || '').toLowerCase() || null) : null,
+        position_guard_trigger_code:spec.task_type === 'position_guard'
+          ? (String(task?.trigger_code || spec.trigger_code || '').toLowerCase() || null) : null,
         ticket:targetTicket,
         target_ticket:targetTicket,
         target_role:managementText(target?.target_role, 24) || null,
@@ -2446,7 +2772,9 @@ export function buildSignalManagementActions({
         account_label:managementTargetAccount(target),
         mapping_status:mappingStatus,
         mapping_reason:managementText(target?.mapping_reason || target?.excluded_reason, 240) || null,
-        reason:managementReason(spec, evaluation, task),
+        reason:spec.task_type === 'position_guard'
+          ? (spec.reason || task?.position_guard_review?.conclusion || '自动盯盘已生成管理动作')
+          : managementReason(spec, evaluation, task),
         validation_status:validationStatus,
         inference_effect:inferenceEffect,
         confirmation_count:confirmationCount,
@@ -2463,7 +2791,8 @@ export function buildSignalManagementActions({
 /**
  * Load management evidence for a signal while enforcing the requested user
  * scope.  Missing/older management tables degrade to the decision-only
- * payload so signal detail remains usable during rolling upgrades.
+ * payload so signal detail remains usable during rolling upgrades; deterministic
+ * PivotGuard tasks are also linked by their original/decision signal ids.
  */
 export async function loadSignalManagementActions(userId, signalId, {
   management = null, admin = false,
@@ -2477,14 +2806,9 @@ export async function loadSignalManagementActions(userId, signalId, {
   // fetch an unscoped signal row here: shared/observer signals can be owned by
   // another account even though the current user has a delivery for them.
   const source = management
-  const decision = source?.position_management && typeof source.position_management === 'object'
-    ? source.position_management : source
-  const hasVisibleDecision = decision && typeof decision === 'object' && !Array.isArray(decision)
-    && ((Array.isArray(decision.pending_evaluations) && decision.pending_evaluations
-      .some(item => String(item?.action || '').toLowerCase() === 'cancel'))
-      || (Array.isArray(decision.position_evaluations) && decision.position_evaluations
-        .some(item => ['exit', 'hold'].includes(String(item?.action || '').toLowerCase()))))
-  if (!hasVisibleDecision) return []
+  // A deterministic PivotGuard task can exist without a model-generated
+  // position evaluation.  Keep loading the task by the original/decision
+  // signal ids so it remains visible in signal review as well as the queue.
 
   let evaluations = []
   try {
@@ -2522,7 +2846,7 @@ export async function loadSignalManagementActions(userId, signalId, {
       FROM ai_position_management_tasks tasks
       LEFT JOIN signal_outcomes outcomes ON outcomes.id = tasks.outcome_id
       WHERE ${admin ? '' : 'tasks.user_id = ? AND '}
-        tasks.task_type IN ('position_exit','pending_cancel')
+        tasks.task_type IN ('position_exit','pending_cancel','position_guard')
         AND (${taskConditions.join(' OR ')})
       ORDER BY tasks.updated_at DESC, tasks.id DESC LIMIT 100`, admin ? taskParams : [scopedUserId, ...taskParams])
   } catch (error) {

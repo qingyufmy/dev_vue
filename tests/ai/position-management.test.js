@@ -14,6 +14,8 @@ vi.mock('../../server/bridge-ws.js', () => ({
 import {
   POSITION_MANAGEMENT_CONTRACT_VERSION,
   AUTO_EXIT_CONFIRMATIONS_REQUIRED,
+  buildPositionGuardReview,
+  redactPositionGuardEventForUser,
   buildPositionManagementAsOf,
   buildPositionManagementOutputFormat,
   buildSignalManagementActions,
@@ -33,7 +35,9 @@ import {
   savePositionManagementSettings,
   supersedePositionManagementCandidates,
   targetMatchesPositionManagementTask,
+  redactPositionGuardCommandForUser,
   validatePositionManagementResponse,
+  redactPositionGuardTaskForUser,
 } from '../../server/routes/ai/position-management.js'
 import { queryAll, queryOne, queryRun, withTransaction } from '../../server/db.js'
 import { getBridgeGeneration } from '../../server/bridge-ws.js'
@@ -1827,7 +1831,8 @@ describe('durable state and protection boundaries', () => {
 
   it('keeps pending cancellation display-only when no task exists and scopes enrichment by user', async () => {
     expect(await loadSignalManagementActions(7, 105, { management:null })).toEqual([])
-    expect(queryAll).not.toHaveBeenCalled()
+    expect(queryAll).toHaveBeenCalled()
+    expect(queryAll.mock.calls[1][0]).toContain("'position_guard'")
 
     const management = { pending_evaluations:[{
       management_group_id:'pending_group_01', action:'cancel', reason:'挂单条件失效',
@@ -1875,5 +1880,106 @@ describe('durable state and protection boundaries', () => {
     expect(mappingSql).toContain('WHERE outcomes.id IN (?)')
     expect(queryAll.mock.calls[2][1]).toEqual([900])
     expect(mappingSql).not.toContain('outcomes.signal_id = ?')
+  })
+
+  it('projects deterministic PivotGuard evidence and the minimum-volume full-exit fallback', () => {
+    const task = {
+      id:315, decision_source:'pivot_guard', candidate_action:'full_exit', trigger_code:'pivot_take_profit',
+      standard_symbol:'XAUUSD', original_symbol:'XAUUSD', target_position_id:'100315',
+      broker_server_key:'private-route', login_account:'private-login',
+      deterministic_evidence_json:JSON.stringify({
+        profile:{ version_id:11, version_no:1 },
+        position:{ ticket:'100315', symbol:'XAUUSD', direction:'buy', volume:0.01, price_open:4645.34, sl:4629, tp:4660 },
+        quote:{ bid:4652.52, ask:4652.62 },
+        params:{ pivot_method:'fibonacci', pivot_take_profit:{ tolerance_price:3, close_percent:50 } },
+        d1:{ high:4696.65, low:4605.37, close:4658.71 },
+        action:{ type:'full_exit', trigger_code:'pivot_take_profit', target_level:4653.58,
+          close_percent:100, close_volume:0.01, close_price:4652.52, fallback_code:'partial_volume_below_minimum' },
+      }),
+    }
+    const review = buildPositionGuardReview(task, { commands:[{
+      id:1, task_id:315, command_type:'close_system_position', send_status:'acknowledged',
+      reconciliation_status:'confirmed', bridge_result_json:JSON.stringify({ status:'success', retcode:10009, price:4652.62 }),
+      created_at:'2026-08-25 09:50:38', updated_at:'2026-08-25 09:50:41', reconciled_at:'2026-08-25 09:50:53',
+    }] })
+    expect(review).toMatchObject({
+      rule:{ code:'pivot_take_profit', label:'P点止盈' },
+      action:{ code:'full_exit', label:'完整平仓' },
+      position:{ symbol:'XAUUSD', direction:'buy', volume:0.01, open_price:4645.34, stop_loss:4629, take_profit:4660 },
+      profile:{ version_no:1, pivot_method:'fibonacci' },
+      trigger:{ target_price:4653.58, tolerance_price:3, trigger_line:4650.58, live_price:4652.52, bid:4652.52, ask:4652.62, comparison_operator:'>=', comparison_hit:true },
+      plan:{ configured_percent:50, planned_volume:0.005, actual_percent:100, actual_volume:0.01, fallback_code:'partial_volume_below_minimum' },
+      d1:{ high:4696.65, low:4605.37, close:4658.71 },
+      mt5:{ send_status:'acknowledged', reconciliation_status:'confirmed', retcode:10009, fill_price:4652.62 },
+    })
+    expect(review.conclusion).toContain('已改为完整平仓')
+  })
+
+  it('does not expose route, login, or raw deterministic evidence to ordinary users', () => {
+    const task = {
+      id:1, decision_source:'pivot_guard', candidate_action:'full_exit', trigger_code:'break_stop',
+      broker_server_key:'private-route', login_account:'private-login', ownership_history_id:8,
+      bridge_generation:9, model_evaluation_json:'{"route":{"login":"private-login"}}',
+      deterministic_evidence_json:'{"route":{"login":"private-login"}}',
+      position_guard_state_id:3, standard_symbol:'XAUUSD', original_symbol:'XAUUSD', target_position_id:'42',
+    }
+    const safe = redactPositionGuardTaskForUser(task, false)
+    expect(safe).not.toHaveProperty('deterministic_evidence_json')
+    expect(safe).not.toHaveProperty('broker_server_key')
+    expect(safe).not.toHaveProperty('login_account')
+    expect(safe).not.toHaveProperty('ownership_history_id')
+    expect(safe).not.toHaveProperty('bridge_generation')
+    expect(safe).not.toHaveProperty('model_evaluation_json')
+    expect(safe.position_guard_review).toBeTypeOf('object')
+  })
+
+  it('returns only a Chinese command summary for ordinary PivotGuard users', () => {
+    const safe = redactPositionGuardCommandForUser({
+      id:9, task_id:315, command_sequence:1, operation_id:'private-operation',
+      command_type:'close_system_position', send_status:'acknowledged',
+      expected_state_json:'{"broker_server_key":"private-route","login_account":"private-login"}',
+      request_json:'{"ticket":"100315","volume":0.01}',
+      bridge_command_id:'private-bridge-command',
+      bridge_result_json:'{"status":"success","retcode":10009,"price":4652.62}',
+      reconciliation_status:'confirmed', reconciled_at:'2026-08-25 09:50:53',
+    })
+    expect(safe).toMatchObject({ command_label:'平仓指令', send_label:'已收到平台确认',
+      reconciliation_label:'持仓结果已确认', retcode:10009, fill_price:4652.62 })
+    expect(safe).not.toHaveProperty('operation_id')
+    expect(safe).not.toHaveProperty('expected_state_json')
+    expect(safe).not.toHaveProperty('request_json')
+    expect(safe).not.toHaveProperty('bridge_command_id')
+    expect(safe).not.toHaveProperty('bridge_result_json')
+  })
+
+  it('removes raw event details from the ordinary-user PivotGuard timeline', () => {
+    const safe = redactPositionGuardEventForUser({
+      id:12, task_id:315, from_status:'GUARD_SENT', to_status:'COMPLETED',
+      event_type:'position_guard_action_confirmed', summary:'MT5 已确认 PivotGuard 动作结果',
+      details_json:'{"target":{"login":"private-login"},"operation_id":"private-operation"}',
+      actor_type:'worker', created_at:'2026-08-25 09:50:53',
+    })
+    expect(safe).toMatchObject({ id:12, task_id:315, to_status:'COMPLETED',
+      event_type:'position_guard_action_confirmed', actor_type:'worker' })
+    expect(safe).not.toHaveProperty('details_json')
+  })
+
+  it('links a deterministic PivotGuard task back to the originating signal management view', () => {
+    const actions = buildSignalManagementActions({
+      signalId:55,
+      management:null,
+      tasks:[{
+        id:315, task_type:'position_guard', candidate_action:'full_exit', trigger_code:'pivot_take_profit',
+        status:'COMPLETED', origin_signal_id:55, decision_signal_id:55,
+        management_group_id:'guard-group', outcome_id:901, target_position_id:'100315',
+        position_guard_review:{ action_code:'full_exit', conclusion:'P点止盈已触发，系统完整平仓。' },
+      }],
+    })
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toMatchObject({
+      action_type:'position_guard', task_type:'position_guard', action:'full_exit',
+      task_id:315, target_ticket:'100315', position_guard_trigger_code:'pivot_take_profit',
+      reason:'P点止盈已触发，系统完整平仓。', inference_effect:'deterministic_action',
+    })
   })
 })
