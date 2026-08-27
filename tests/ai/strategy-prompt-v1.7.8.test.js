@@ -89,6 +89,14 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
     expect(prompt).not.toContain('过滤结论：[通过 / 未通过 / 不可用]')
   })
 
+  it('keeps unchecked downstream gates out of hard gate failures', () => {
+    expect(prompt).toContain('`hard_gate_failures` 只列出已经实际检查并阻断流程的最早门槛')
+    expect(prompt).toContain('任何状态为“未检查”的下游步骤都不得写入 `hard_gate_failures`')
+    expect(prompt).toContain('H1/H4不明确时，M15、常规M5和M1均为未检查且不得列为失败')
+    expect(prompt).toContain('M15路径未通过时，尚未进入的常规M5和M1不得列为失败')
+    expect(prompt).toContain('失败清单只保留本轮实际检查过的最早阻断事实')
+  })
+
   it('uses the current system trend state instead of forcing direction from an old confirmed segment', () => {
     expect(prompt).toContain('current_segment.broken=true')
     expect(prompt).toContain('不表示趋势已经被破坏')
