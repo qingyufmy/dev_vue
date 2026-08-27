@@ -79,6 +79,16 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
     expect(prompt).not.toMatch(/\b0\.0[1-9]\s*手/)
   })
 
+  it('checks EMA34 only after a prior path has established one candidate direction', () => {
+    expect(prompt).toContain('只有前序流程已经通过“路径A或路径B＋M5触发”，或路径C完整通过')
+    expect(prompt).toContain('候选方向必须为“无”、比较结果必须为“无法比较”、过滤结论必须为“未检查”')
+    expect(prompt).toContain('不得提前使用EMA34选择方向')
+    expect(prompt).toContain('不得把“未检查”写成“未通过”')
+    expect(prompt).toContain('不得将其列入 `hard_gate_failures`')
+    expect(prompt.match(/过滤结论：\[通过 \/ 未通过 \/ 不可用 \/ 未检查\]/g)).toHaveLength(2)
+    expect(prompt).not.toContain('过滤结论：[通过 / 未通过 / 不可用]')
+  })
+
   it('uses the current system trend state instead of forcing direction from an old confirmed segment', () => {
     expect(prompt).toContain('current_segment.broken=true')
     expect(prompt).toContain('不表示趋势已经被破坏')

@@ -779,7 +779,7 @@ describe('detectDivergence', () => {
     const macd = [...Array(41).fill(0), ...Array(12).fill(5)]
     const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, macd, centers)
-    expect(result.type).toBe('none')
+    expect(result).toMatchObject({ type:'none', state:'evaluated', confirmed:false })
     expect(result.reason).toBe('no_price_extreme_break')
   })
 
@@ -797,7 +797,7 @@ describe('detectDivergence', () => {
     const macd = [...Array(40).fill(0), ...Array(12).fill(-5)]
     const centers = [{ status: 'confirmed', start_segment_id: 3, end_segment_id: 3 }]
     const result = detectDivergence(segs, bis, macd, centers)
-    expect(result.type).toBe('none')
+    expect(result).toMatchObject({ type:'none', state:'evaluated', confirmed:false })
     expect(result.reason).toBe('no_price_extreme_break')
   })
 
@@ -810,7 +810,7 @@ describe('detectDivergence', () => {
     const macd = [5, 5, 5, 3, 3, 3]
     const centers = [{ status: 'confirmed', start_segment_id: 10, end_segment_id: 10 }]
     const result = detectDivergence(segs, bis, macd, centers)
-    expect(result.type).toBe('none')
+    expect(result).toMatchObject({ type:'none', state:'evaluated', confirmed:false })
     expect(result.reason).toBe('not_after_center')
   })
 
@@ -912,7 +912,7 @@ describe('detectDivergence', () => {
     ]
     const bis = Array.from({ length: 6 }, (_, i) => ({ id: i + 1, raw_start_idx: 10 + i, raw_end_idx: 10 + i }))
     const result = detectDivergence(segs, bis, Array(80).fill(2), [{ start_segment_id: 2, end_segment_id: 4 }])
-    expect(result).toMatchObject({ type: 'none', strength: 'none', reason: 'macd_warmup_overlap' })
+    expect(result).toMatchObject({ type: 'none', state: 'unavailable', strength: 'none', reason: 'macd_warmup_overlap' })
   })
 
   it('仅高度缩小时返回弱背驰', () => {
@@ -924,6 +924,24 @@ describe('detectDivergence', () => {
     const hist = [...Array(40).fill(0), 6, 1, 1, 4, 4, 4]
     const result = detectDivergence(segs, bis, hist, [{ start_segment_id: 2, end_segment_id: 4 }])
     expect(result).toMatchObject({ type: 'top', strength: 'weak', reason: 'macd_height_divergence_only', peak_prev: 6, peak_cur: 4 })
+  })
+
+  it('确认窗口未形成背驰时标记为已评估而非不可用', () => {
+    const segs = [
+      { id: 1, dir: 'down', bi_ids: [1, 2, 3], weak: false, high: 120, low: 90 },
+      { id: 2, dir: 'up', bi_ids: [4, 5, 6], weak: false, high: 125, low: 95 },
+      { id: 3, dir: 'down', bi_ids: [7, 8, 9], weak: false, high: 118, low: 95 },
+      { id: 4, dir: 'up', bi_ids: [10, 11, 12], weak: false, high: 130, low: 100 },
+    ]
+    const bis = [
+      { id: 4, raw_start_idx: 40, raw_end_idx: 41 }, { id: 5, raw_start_idx: 42, raw_end_idx: 43 }, { id: 6, raw_start_idx: 44, raw_end_idx: 45 },
+      { id: 10, raw_start_idx: 46, raw_end_idx: 47 }, { id: 11, raw_start_idx: 48, raw_end_idx: 49 }, { id: 12, raw_start_idx: 50, raw_end_idx: 51 },
+    ]
+    const result = detectDivergence(
+      segs, bis, [...Array(40).fill(0), ...Array(12).fill(5)],
+      [{ status:'confirmed', start_segment_id:3, end_segment_id:3 }],
+    )
+    expect(result).toMatchObject({ type:'none', state:'evaluated', confirmed:false, reason:'macd_no_divergence' })
   })
 
   it('仅面积缩小时返回弱背驰', () => {

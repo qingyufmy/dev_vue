@@ -972,7 +972,26 @@ function buildCenters(components, options = {}) {
 }
 
 // === Chan Theory: Divergence Detection (conservative) ===
+// These reasons mean the confirmed evidence was evaluated and did not produce
+// a divergence. Keep this set shared by result state and cross-window evidence
+// quorum so a negative result cannot be reported as unavailable in one
+// projection and conclusive in another.
+const DETERMINISTIC_NO_DIVERGENCE_REASONS = new Set([
+  'macd_no_divergence', 'no_price_extreme_break', 'not_after_center',
+])
+
 function divergenceResult(reason, overrides = {}) {
+  const hasConfirmedDirectionalEvidence = (overrides.type === 'top' || overrides.type === 'bottom')
+    && overrides.confirmed === true
+  const state = overrides.state === 'forming'
+    ? 'forming'
+    : DETERMINISTIC_NO_DIVERGENCE_REASONS.has(String(reason || ''))
+      ? 'evaluated'
+      : hasConfirmedDirectionalEvidence
+        ? 'confirmed'
+        : overrides.state === 'evaluated'
+          ? 'evaluated'
+          : 'unavailable'
   return {
     type: 'none', state: 'unavailable', confirmed: false, segment_confirmed: false, strength: 'none', reason,
     divergence_key: null,
@@ -982,6 +1001,7 @@ function divergenceResult(reason, overrides = {}) {
     area_ratio: null, peak_ratio: null, area_reduction_pct: null, peak_reduction_pct: null,
     price_extreme_cur: 0, price_extreme_prev: 0,
     ...overrides,
+    state,
   }
 }
 
@@ -2607,17 +2627,14 @@ function evaluateCrossWindowBootstrapEvidence(candidates, authoritativeCandidate
   }
 }
 
-const CONCLUSIVE_DIVERGENCE_NONE_REASONS = new Set([
-  'macd_no_divergence', 'no_price_extreme_break', 'not_after_center',
-])
 const CONCLUSIVE_FORMING_NONE_REASONS = new Set([
-  ...CONCLUSIVE_DIVERGENCE_NONE_REASONS, 'forming_departure_not_confirmed', 'no_forming_segment',
+  ...DETERMINISTIC_NO_DIVERGENCE_REASONS, 'forming_departure_not_confirmed', 'no_forming_segment',
 ])
 
 function stableDivergenceEvidenceKey(divergence, forming = false) {
   const hasDirectionalEvidence = divergence?.type === 'top' || divergence?.type === 'bottom'
   if (!hasDirectionalEvidence) {
-    const conclusiveReasons = forming ? CONCLUSIVE_FORMING_NONE_REASONS : CONCLUSIVE_DIVERGENCE_NONE_REASONS
+    const conclusiveReasons = forming ? CONCLUSIVE_FORMING_NONE_REASONS : DETERMINISTIC_NO_DIVERGENCE_REASONS
     return conclusiveReasons.has(String(divergence?.reason || '')) ? 'none' : null
   }
   if (!forming && divergence?.confirmed !== true) return null
@@ -2872,7 +2889,7 @@ function selectStableChanResult(candidates, options = {}) {
       return { ...candidate, divergence:emptyDivergence('center_reference_mismatch') }
     }
     const directional = divergence?.type === 'top' || divergence?.type === 'bottom'
-    if (!directional && CONCLUSIVE_DIVERGENCE_NONE_REASONS.has(String(divergence?.reason || ''))) {
+    if (!directional && DETERMINISTIC_NO_DIVERGENCE_REASONS.has(String(divergence?.reason || ''))) {
       const localCenter = candidate?.latest_center || null
       const sameEntry = Boolean(latestConsensusCenter.entry_segment_stable_id
         && localCenter?.entry_segment_stable_id === latestConsensusCenter.entry_segment_stable_id)
