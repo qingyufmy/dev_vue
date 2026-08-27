@@ -242,6 +242,42 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema.pending_action).toContain('keep 表示保留模型选中的挂单')
   })
 
+  it('overrides stale database field descriptions with the generic output contract', () => {
+    const staleDescription = '旧版专用规则：缠论 M15 EMA34 ATR；旧版绝对价格与距离混用'
+    const relatedFields = [
+      'confidence', 'bullish_score', 'bearish_score', 'position_size_tier', 'position_size_reason',
+      'position_action', 'pending_action', 'pending_action_reason', 'management_direction',
+      'hard_gate_status', 'hard_gate_failures', 'minimum_reward_to_risk', 'recommended_reward_to_risk',
+      'reward_to_risk_status', 'limit_price', 'stop_limit_price', 'pending_valid_minutes',
+      'stop_loss_price', 'take_profit_1_price', 'take_profit_2_price', 'take_profit_3_price',
+      'recommended_take_profit_tier', 'decision_summary', 'trigger_condition', 'invalidation_condition',
+      'key_reasons', 'risk_factors', 'analysis', 'reasoning',
+    ]
+    const staleBaseFormat = JSON.stringify(Object.fromEntries(relatedFields.map(key => [key, staleDescription])))
+    const schema = JSON.parse(buildStrategyOutputFormat(staleBaseFormat, ['market', 'limit', 'stop_limit']).outputFormat)
+    const rendered = JSON.stringify(schema)
+
+    expect(rendered).not.toMatch(/缠论|M15|EMA34|ATR/)
+    expect(schema.pending_action).toContain('数组缺失、为空或没有可识别的目标挂单时，必须为 none')
+    expect(schema.pending_action).toContain('keep 或 cancel 只能针对输入中可识别的现有挂单')
+    expect(schema.pending_action).toContain('pending_action 为 none 或 keep 时，pending_action_reason 必须为空字符串且 management_direction 必须为 none')
+    expect(schema.pending_action).toContain('pending_action 为 cancel 时，必须填写 management_direction=buy 或 sell 及简体中文 pending_action_reason')
+    expect(schema.pending_action_reason).toContain('pending_action 为 cancel 时')
+    expect(schema.pending_action_reason).toContain('pending_action 为 none 或 keep 时必须返回空字符串')
+    expect(schema.management_direction).toContain('pending_action 为 cancel 时')
+    expect(schema.management_direction).toContain('pending_action 为 none 或 keep 时必须填 none')
+
+    for (const key of ['limit_price', 'stop_limit_price', 'stop_loss_price',
+      'take_profit_1_price', 'take_profit_2_price', 'take_profit_3_price']) {
+      expect(schema[key]).toContain('signal_type=hold 或 entry_method=observe 时必须为 null')
+      expect(schema[key]).toContain('绝对价格点位')
+    }
+    expect(schema.entry_method).toContain('市价信号（entry_method=market）的挂单专用字段 limit_price、stop_limit_price、pending_valid_minutes 必须为 null')
+    expect(schema.pending_valid_minutes).toContain('市价信号以及 signal_type=hold 或 entry_method=observe 时必须为 null')
+    expect(schema.recommended_take_profit_tier).toContain('signal_type=hold 或 entry_method=observe 时必须为 null')
+    expect(schema.limit_price).toContain('禁止把绝对价位写成“上涨/下跌 N 点（某绝对价位）”')
+  })
+
   it('requires the model to report usage only for retrieved experience ids', () => {
     const schema = JSON.parse(buildStrategyOutputFormat(null, ['market'], { selectedItemIds:[7, 9] }).outputFormat)
     expect(schema.experience_usage.considered_ids).toEqual([7, 9])

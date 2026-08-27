@@ -269,38 +269,44 @@ function localizeAiSignalUserVisibleFields(signal) {
   return signal
 }
 
+const PRICE_POINT_OUTPUT_RULE = '所有 *_price 字段均表示绝对价格点位（例如 4600.50），不是价差、距离或点数。中文叙述出现“上涨/下跌 N 点”或“距离基准 N”时，必须明确 N 是距离及其基准价格；禁止把绝对价位写成“上涨/下跌 N 点（某绝对价位）”。'
+
+const GENERIC_OUTPUT_FIELD_DESCRIPTIONS = Object.freeze({
+  confidence: '0.00-1.00 的数字，表示模型对依据当前策略和输入事实所得本轮结论的把握度；signal_type=hold 时表示对当前不满足策略交易条件这一结论的把握度；不是胜率，不得写成百分比',
+  bullish_score: '可选数字，表示输入行情的多方倾向；不代表胜率或执行概率',
+  bearish_score: '可选数字，表示输入行情的空方倾向；不代表胜率或执行概率',
+  position_size_tier: '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数',
+  position_size_reason: '必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数',
+  position_action: '必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达。当前管理组仍有反方向持仓或挂单时，即使判断可能反转，也只能在 position_evaluations 中标记 reversal_candidate，禁止同时输出反向交易与 position_action=open；必须先完成旧方向退出并等待后续空仓快照重新推理',
+  pending_action: '必须字段。仅允许 none | keep | cancel。先依据输入中明确提供的当前挂单集合（通常为 pending_orders）判断：数组缺失、为空或没有可识别的目标挂单时，必须为 none。keep 或 cancel 只能针对输入中可识别的现有挂单；keep 表示保留模型选中的挂单（该挂单必须在输入中可识别且现有），cancel 表示取消模型选中的现有挂单。none 表示本轮不管理现有挂单。pending_action 为 none 或 keep 时，pending_action_reason 必须为空字符串且 management_direction 必须为 none；pending_action 为 cancel 时，必须填写 management_direction=buy 或 sell 及简体中文 pending_action_reason。新信号与挂单管理是相互独立的结论',
+  pending_action_reason: '必须字段，字符串。pending_action 为 cancel 时，必须使用简体中文说明针对输入中可识别现有挂单的取消依据；pending_action 为 none 或 keep 时必须返回空字符串',
+  management_direction: '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 时，填写输入中可识别且实际被管理的现有挂单方向；pending_action 为 none 或 keep 时必须填 none',
+  hard_gate_status: '必须字段。仅表示按当前策略本轮是否允许新开仓或加仓，仅允许 pass | fail。交易信号必须为 pass；hold 必须为 fail。不得用评分、置信度或文字理由覆盖该字段',
+  hard_gate_failures: ['必须字段。逐项填写当前策略中未通过的新入场必要条件，使用简短稳定标识；交易信号必须为空数组，hold 至少填写一项。字段内容必须与 signal_type、方向、decision_summary、key_reasons、analysis 和 reasoning 一致'],
+  minimum_reward_to_risk: '必须字段。当前策略正文明确规定最低收益风险要求时，原样填写该正数；策略未规定时返回 null。该字段只复述当前策略门槛，不得擅自增加全局默认值',
+  recommended_reward_to_risk: '必须字段。交易信号按当前策略指定的口径填写推荐止盈档位对应的收益风险比正数；hold 或当前策略不要求时返回 null。必须与入场价、止损价、recommended_take_profit_tier 及 reasoning 中的结论一致',
+  reward_to_risk_status: '必须字段。仅允许 pass | fail | not_applicable。当前策略规定收益风险门槛时，交易信号必须为 pass；未达到门槛时必须为 fail 并输出 hold。当前策略没有该门槛时使用 not_applicable。该字段是模型自检声明，不替代独立风控',
+  limit_price: `${PRICE_POINT_OUTPUT_RULE} buy_limit/sell_limit：入场价，订单直接挂在此价；buy_stop/sell_stop：触发价，价格到达后以市价成交；buy_stop_limit/sell_stop_limit：触发价，到达后按 stop_limit_price 挂限价单。价格必须满足对应订单类型的机械方向关系。signal_type=hold 或 entry_method=observe 时必须为 null；市价信号（entry_method=market）也必须为 null。`,
+  stop_limit_price: `${PRICE_POINT_OUTPUT_RULE} 仅 buy_stop_limit/sell_stop_limit（entry_method=stop_limit）时填写触发后挂出的限价；其他挂单类型、市价信号以及 signal_type=hold 或 entry_method=observe 时必须为 null。limit_price 是触发价：买入触发价高于当前价，卖出触发价低于当前价；触发后的限价须满足相应方向关系。`,
+  pending_valid_minutes: '挂单有效期（分钟），仅挂单入场信号可填写，取值 1-1440，默认 240；市价信号以及 signal_type=hold 或 entry_method=observe 时必须为 null',
+  stop_loss_price: `${PRICE_POINT_OUTPUT_RULE} 交易信号（市价或挂单）必须给出；signal_type=hold 或 entry_method=observe 时必须为 null。买单止损须低于入场参考价，卖单止损须高于入场参考价；具体止损逻辑只按当前策略正文判断。`,
+  take_profit_1_price: `${PRICE_POINT_OUTPUT_RULE} 交易信号（市价或挂单）必须给出；signal_type=hold 或 entry_method=observe 时必须为 null。买单目标价须高于入场参考价，卖单目标价须低于入场参考价。`,
+  take_profit_2_price: `${PRICE_POINT_OUTPUT_RULE} 交易信号可选；signal_type=hold 或 entry_method=observe 时必须为 null。提供时须与方向一致，并位于第一目标价之后。`,
+  take_profit_3_price: `${PRICE_POINT_OUTPUT_RULE} 交易信号可选；signal_type=hold 或 entry_method=observe 时必须为 null。提供时须与方向一致，并位于第二目标价之后。`,
+  recommended_take_profit_tier: '必须字段。非 hold 的交易信号仅允许 1、2、3，并且对应目标价格必须存在；signal_type=hold 或 entry_method=observe 时必须为 null',
+  decision_summary: '必填，简体中文，一句话给出结论；不超过 80 字',
+  trigger_condition: '简体中文，说明该建议成立或挂单触发需要满足的市场条件；没有额外条件时返回空字符串',
+  invalidation_condition: '交易信号必填，使用简体中文说明什么市场变化会使当前建议失效，并与止损依据一致；hold 时可说明重新评估条件',
+  key_reasons: ['2 至 4 条关键行情依据，每条不超过 60 字，不包含账户、持仓或风控结论'],
+  risk_factors: ['0 至 4 条市场层面的不利因素，每条不超过 60 字，不包含账户或仓位信息'],
+  analysis: '简体中文，依据当前策略和输入事实自由组织行情分析',
+  reasoning: '简体中文，说明结论依据和与输出字段对应的处理理由；如涉及挂单，再说明本轮保留、取消或不管理的依据'
+})
+
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
-  signal_type: "buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价订单；buy_limit/sell_limit=限价订单；buy_stop/sell_stop=止损订单；buy_stop_limit/sell_stop_limit=止损限价订单；hold=observe",
-  entry_method: "必须字段。仅允许 market | limit | stop | stop_limit | observe，并且必须与signal_type一致：buy/sell=market，*_limit=limit，*_stop=stop，*_stop_limit=stop_limit，hold=observe",
-  confidence: "0.00-1.00 的数字，表示模型对依据当前策略和输入事实所得本轮结论的把握度；signal_type=hold 时表示对当前不满足策略交易条件这一结论的把握度；不是胜率，不得写成百分比",
-  bullish_score: "可选数字，表示输入行情的多方倾向；不代表胜率或执行概率",
-  bearish_score: "可选数字，表示输入行情的空方倾向；不代表胜率或执行概率",
-  position_size_tier: "必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓、标准仓。不得返回具体手数或自定义系数",
-  position_size_reason: "必须字段。使用简体中文说明为什么选择该仓位档位，不得猜测用户账户余额或手数",
-  position_action: "必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达。当前管理组仍有反方向持仓或挂单时，即使判断可能反转，也只能在 position_evaluations 中标记 reversal_candidate，禁止同时输出反向交易与 position_action=open；必须先完成旧方向退出并等待后续空仓快照重新推理",
-  pending_action: "必须字段。仅允许 none | keep | cancel。none 表示本轮不管理现有挂单；keep 表示保留模型选中的挂单；cancel 表示取消模型选中的挂单。新信号与挂单管理是相互独立的结论",
-  pending_action_reason: "中文说明挂单处理的策略依据。pending_action 为 cancel 时必须填写；其他动作可返回空字符串",
-  management_direction: "必须字段。仅允许 buy | sell | none。需要取消挂单时填写被管理挂单方向；其他情况填 none",
-  hard_gate_status: "必须字段。仅表示按当前策略本轮是否允许新开仓或加仓，仅允许 pass | fail。交易信号必须为pass；hold必须为fail。不得用评分、置信度或文字理由覆盖该字段",
-  hard_gate_failures: ["必须字段。逐项填写当前策略中未通过的新入场必要条件，使用简短稳定标识；交易信号必须为空数组，hold至少填写一项。字段内容必须与signal_type、方向、decision_summary、key_reasons、analysis和reasoning一致"],
-  minimum_reward_to_risk: "必须字段。当前策略正文明确规定最低收益风险要求时，原样填写该正数；策略未规定时返回null。该字段只复述当前策略门槛，不得擅自增加全局默认值",
-  recommended_reward_to_risk: "必须字段。交易信号按当前策略指定的口径填写推荐止盈档位对应的收益风险比正数；hold或当前策略不要求时返回null。必须与入场价、止损价、recommended_take_profit_tier及reasoning中的结论一致",
-  reward_to_risk_status: "必须字段。仅允许 pass | fail | not_applicable。当前策略规定收益风险门槛时，交易信号必须为pass；未达到门槛时必须为fail并输出hold。当前策略没有该门槛时使用not_applicable。该字段是模型自检声明，不替代独立风控",
-  limit_price: "挂单价。buy_limit/sell_limit:入场价，订单直接挂在此价；buy_stop/sell_stop:触发价，价格到达后以市价成交；buy_stop_limit/sell_stop_limit:触发价，到达后按stop_limit_price挂限价单。价格必须满足对应订单类型的机械方向关系；具体入场逻辑只按当前策略正文判断",
-  stop_limit_price: "Stop Limit 触发后挂出的限价，仅buy_stop_limit/sell_stop_limit时必填。limit_price始终是突破触发价：buy_stop_limit 的触发价高于当前价，stop_limit_price不得高于触发价；sell_stop_limit 的触发价低于当前价，stop_limit_price不得低于触发价",
-  pending_valid_minutes: "挂单有效期(分钟)，1-1440，默认240",
-  stop_loss_price: "数字，buy/sell/挂单必须由模型给出，hold可为null。买单止损须低于入场价，卖单止损须高于入场价；具体止损逻辑只按当前策略正文判断，服务端不补齐或改写模型止损",
-  take_profit_1_price: "第一目标价，数字，buy/sell/挂单必须给出，hold可为null。买单目标价须高于入场价，卖单目标价须低于入场价；服务端只校验机械方向关系",
-  take_profit_2_price: "第二目标价，数字，可选；buy/sell/挂单提供时必须与方向一致并位于第一目标价之后",
-  take_profit_3_price: "第三目标价，数字，可选；提供时必须与方向一致并位于第二目标价之后",
-  recommended_take_profit_tier: "必须字段。非hold仅允许1、2、3，并且对应目标价格必须存在；hold返回null",
-  decision_summary: "必填，中文，一句话给出结论；不超过80字",
-  trigger_condition: "中文，说明该建议成立或挂单触发需要满足的市场条件；没有额外条件时返回空字符串",
-  invalidation_condition: "交易信号必填，中文说明什么市场变化会使当前建议失效，并与止损依据一致；hold时可说明重新评估条件",
-  key_reasons: ["2至4条关键行情依据，每条不超过60字，不包含账户、持仓或风控结论"],
-  risk_factors: ["0至4条市场层面的不利因素，每条不超过60字，不包含账户或仓位信息"],
-  analysis: "中文，依据当前策略和输入事实自由组织行情分析",
-  reasoning: "中文，说明结论依据和与输出字段对应的处理理由；如涉及挂单，再说明本轮保留、取消或不管理的依据"
+  signal_type: 'buy | sell | hold | buy_limit | sell_limit | buy_stop | sell_stop | buy_stop_limit | sell_stop_limit。禁止其他值。buy/sell=市价订单；buy_limit/sell_limit=限价订单；buy_stop/sell_stop=止损订单；buy_stop_limit/sell_stop_limit=止损限价订单；hold=observe',
+  entry_method: '必须字段。仅允许 market | limit | stop | stop_limit | observe，并且必须与 signal_type 一致：buy/sell=market，*_limit=limit，*_stop=stop，*_stop_limit=stop_limit，hold=observe。市价信号的挂单专用字段 limit_price、stop_limit_price、pending_valid_minutes 必须为 null',
+  ...GENERIC_OUTPUT_FIELD_DESCRIPTIONS
 }, null, 2)
 
 export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, experienceSelection = null) {
@@ -308,18 +314,16 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   let schema
   try { schema = JSON.parse(baseFormat || DEFAULT_OUTPUT_FORMAT) } catch { schema = JSON.parse(DEFAULT_OUTPUT_FORMAT) }
   if (!schema || Array.isArray(schema) || typeof schema !== 'object') schema = JSON.parse(DEFAULT_OUTPUT_FORMAT)
+  // Database schemas may still contain descriptions from older strategy
+  // versions. Keep the shape supplied by the caller, but always replace the
+  // code-owned generic field descriptions before adding dynamic capabilities.
+  Object.assign(schema, GENERIC_OUTPUT_FIELD_DESCRIPTIONS)
   const signalTypes = signalTypesForEntryMethods(methods)
   const labels = { market: '市价', limit: '限价挂单', stop: '突破挂单', stop_limit: '突破限价挂单' }
   schema.signal_type = `仅允许 ${signalTypes.join(' | ')}。hold 表示观望；本策略支持的入场方式：${methods.map(item => labels[item]).join('、')}。禁止输出未列出的信号类型。`
-  schema.entry_method = `必须字段。仅允许 observe | ${methods.join(' | ')}；hold 必须对应 observe，其他信号必须与 signal_type 一致。`
+  schema.entry_method = `必须字段。仅允许 observe | ${methods.join(' | ')}；hold 必须对应 observe，其他信号必须与 signal_type 一致。市价信号（entry_method=market）的挂单专用字段 limit_price、stop_limit_price、pending_valid_minutes 必须为 null。`
   delete schema.recommended_volume
   delete schema.cancel_pending
-  schema.position_size_tier = '必须字段。hold 返回 observe；交易信号仅允许 probe | light | standard，分别表示试探仓、轻仓和标准仓。不得返回具体手数或自定义系数。'
-  schema.position_size_reason = '必须字段。使用简体中文说明仓位档位的行情依据；不得猜测用户账户余额或手数。'
-  schema.position_action = '必须字段。表达当前策略对新开仓或加仓的结论；仅允许 open | hold_no_add | allow_add | observe，并遵守以下分支：无同向持仓且需要交易时，交易信号只能使用 position_action=open；已有同向持仓且允许加仓时，交易信号使用 position_action=allow_add；已有同向持仓且不加仓时，必须同时输出 signal_type=hold、entry_method=observe、position_action=hold_no_add；无交易或纯观望时，必须同时输出 signal_type=hold、entry_method=observe、position_action=observe。退出已有持仓通过 position_evaluations 表达。当前管理组仍有反方向持仓或挂单时，即使判断可能反转，也只能在 position_evaluations 中标记 reversal_candidate，禁止同时输出反向交易与 position_action=open；必须先完成旧方向退出并等待后续空仓快照重新推理。'
-  schema.pending_action = '必须字段。仅允许 none | keep | cancel。none 表示本轮不管理现有挂单；keep 表示保留模型选中的挂单；cancel 表示取消模型选中的挂单。新信号与挂单管理是相互独立的结论。'
-  schema.pending_action_reason = '中文字符串。pending_action 为 cancel 时必须填写当前策略依据；其他动作返回空字符串。'
-  schema.management_direction = '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 时填写被管理挂单方向；其他情况填 none。'
   const experienceIds = [...new Set((experienceSelection?.selectedItemIds || []).map(Number).filter(id => Number.isInteger(id) && id > 0))]
   const experienceRefs = [...new Set((experienceSelection?.selectedRefs || experienceIds.map(id => `item:${id}`))
     .map(value => String(value || '').trim()).filter(Boolean))]
@@ -337,7 +341,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   } else if (!methods.includes('stop_limit')) {
     delete schema.stop_limit_price
   }
-  schema.reasoning = `中文，依据当前策略正文说明信号方向和为何从策略允许的入场方式（${methods.map(item => labels[item]).join('、')}）中选择当前方式。${hasPending ? '如涉及挂单，再说明策略对挂单的判断。' : '本策略未声明挂单能力，不得返回挂单类型。'}`
+  schema.reasoning = `简体中文，依据当前策略正文说明信号方向和为何从策略允许的入场方式（${methods.map(item => labels[item]).join('、')}）中选择当前方式。${hasPending ? '如涉及挂单，再说明策略对挂单的判断。' : '本策略未声明挂单能力，不得返回挂单类型。'}`
   return { outputFormat: JSON.stringify(schema, null, 2), hasPending }
 }
 
