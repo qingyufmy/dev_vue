@@ -56,6 +56,9 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
 
   it('does not duplicate objective indicator formulas already supplied by the system', () => {
     expect(prompt).toContain('strategy_context.indicators.entry_ema34')
+    expect(prompt).toContain('entry_ema34.source.timeframe')
+    expect(prompt).toContain('`raw_policy.prompt_rules`')
+    expect(prompt).toContain('该文字视为过期说明')
     expect(prompt).not.toContain('strategy_context.indicators.ema34')
     expect(prompt).toContain('reason=indicator_source_stale')
     expect(prompt).toContain('summary.atr_14_closed')
@@ -76,15 +79,18 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
     expect(prompt).not.toMatch(/\b0\.0[1-9]\s*手/)
   })
 
-  it('does not let lifecycle labels or momentum warnings veto a confirmed H1 trend', () => {
+  it('uses the current system trend state instead of forcing direction from an old confirmed segment', () => {
     expect(prompt).toContain('current_segment.broken=true')
     expect(prompt).toContain('不表示趋势已经被破坏')
     expect(prompt).toContain('反向未确认候选')
-    expect(prompt).toContain('不能单独否定')
+    expect(prompt).toContain('summary.chan.trend_state')
+    expect(prompt).toContain('current_segment` 仅是历史确认结构')
+    expect(prompt).toContain('trend_state.direction=neutral')
+    expect(prompt).toContain('不得把旧线段端点距离作为趋势硬仲裁条件')
     expect(prompt).toContain('超买/超卖')
     expect(prompt).toContain('不同周期最后已收盘时间不同也不等于数据陈旧')
-    expect(prompt).toContain('H1硬仲裁')
-    expect(prompt).toContain('不得再以该候选、`broken=true`、MACD、RSI或4H为理由')
+    expect(prompt).not.toContain('H1硬仲裁：')
+    expect(prompt).not.toContain('不得再以该候选、`broken=true`、MACD、RSI或4H为理由')
   })
 
   it('uses supplied objective H1 fields when Chan direction evidence is unavailable', () => {

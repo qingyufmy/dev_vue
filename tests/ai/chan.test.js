@@ -129,6 +129,24 @@ describe('Chan v7 window policy', () => {
     expect(centerOnly.divergence_usable).toBe(false)
   })
 
+  it('将not_after_center视为可评估的确定性无背驰', () => {
+    const result = buildChanEvidenceCapabilities({
+      history_sufficient:true, closed_history_sufficient:true,
+      cache_internal_gap_unresolved:false, structure_time_key_reliable:true,
+      time_location_reliable:true, window_stable:true,
+      authoritative_terminal_chain_confirmed:true, segment_count:4,
+      current_segment:{ dir:'up' }, center_count:1,
+      structure_topology_reliable:true,
+      latest_center:{ entry_segment_id:2, entry_segment_stable_id:'entry' },
+      structure_anchor:{ current_result_usable:true }, closed_bar_count:100,
+      divergence:{ type:'none', confirmed:false, reason:'not_after_center' },
+    })
+
+    expect(result.divergence_usable).toBe(true)
+    expect(result.reason_codes).not.toContain('divergence_evidence_unavailable')
+    expect(result.reason_codes).not.toContain('divergence_unusable')
+  })
+
   it('fails the structural direction capability on an unresolved continuity state', () => {
     const result = buildChanEvidenceCapabilities({
       history_sufficient:true, closed_history_sufficient:true,

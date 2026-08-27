@@ -102,15 +102,16 @@ M1 EMA34只负责最后的新入场方向过滤：
 
 `current_segment` 表示最新已确认线段，不等于当前价格正在运行的摆动。`candidate_segment.confirmed=false` 或 `developing_bi.confirmed=false` 时，只能描述为形成中，不得据此宣称线段已反转、背驰已确认或买卖点成立，也不得计入M15-1、M15-3或M5系统Chan触发。判断价格位于中枢内外时，必须用本轮最新已收盘价与系统 `ZL/ZH` 直接比较，不得用旧线段端点代替当前价格。
 
-`current_segment.broken=true` 或 `ended_reason=broken` 只表示该已确认线段的端点已按系统规则完成，不表示趋势已经被破坏，也不代表反向趋势成立。不得因为字段名 `broken` 单独把1H趋势判为不明确。
+`current_segment.broken=true` 或 `ended_reason=broken` 只表示该已确认线段的端点已按系统规则完成，不表示趋势已经被破坏，也不代表该历史线段方向仍是当前趋势，更不代表反向趋势成立。不得因为字段名 `broken` 单独把1H趋势判为不明确。
 
-反向 `candidate_segment` 或反向 `developing_bi` 只是形成中的回撤/反弹，不是已确认趋势反转，也不能单独构成“价格结构与Chan冲突”。如果最新已收盘1H价格已重新站回最新确认线段端点的原趋势侧，且已收盘普通价格结构仍保持同向HH/HL或LH/LL，则应把该候选解释为未确认回撤/反弹，继续采用已确认趋势；只有相反方向获得独立的已收盘结构破坏与方向重建证据，才可把旧趋势降级为不明确或确认反转。
+反向 `candidate_segment` 或反向 `developing_bi` 只是形成中的回撤/反弹，不是已确认趋势反转，也不能单独构成“价格结构与Chan冲突”。但历史 `current_segment.dir`、旧端点、`broken` 状态或未确认候选也不能单独定义当前趋势；当前Chan结构状态以系统 `summary.chan.trend_state` 为准。当 `trend_state.direction=neutral`，或其 `state/phase` 表明 `consolidation/range` 时，应归类为中枢震荡或结构不明确，不得仅因价格位于旧线段端点某一侧而强制恢复旧趋势。只有系统给出的当前方向状态与独立已收盘价格结构相互支持时，才可确认方向。
 
 `candidate_segment.confirmation_state` 只描述确认生命周期：`awaiting_first_feature_fractal` 表示等待第一特征序列分型，`awaiting_reverse_feature_fractal` 表示有缺口端点正在等待反向特征序列分型。两种状态都仍是未确认候选，只能用于解释结构为何滞后，不能计入M15-1、M15-3、M5系统Chan触发或顺势延续路径。
 
 ### 2.4 系统客观数据
 
 - M1 EMA34只读取 `strategy_context.indicators.entry_ema34`。
+- `entry_ema34.source.timeframe`、`source.field` 与 `source.bar_scope` 是EMA34来源的唯一事实。若策略运行时、`raw_policy.prompt_rules` 或其他自然语言说明写了不同周期或来源，该文字视为过期说明；不得据此把结构化EMA34证据标为不可用、切换周期或自行重算。
 - 各周期MACD、ATR、支撑阻力、最近高低点和系统已识别K线形态，只读取对应周期summary或指标对象。
 - M15与M5突破只读取各自 `summary.support_resistance.two_closed_bar_breakout`。当前窗口证据读取方向对象的 `complete`；已经随窗口滚动的最近确认事件读取 `recent_confirmed.up/down`。系统已为每个事件冻结两根确认K线之前的同一个参考位，并给出 `first_bar`、`second_bar`、方向、`confirmation_type`、`age_closed_bars`、`still_valid`、`invalidation_bar` 和客观 `reclaim` 生命周期；不得自行更换参考位、重算突破、重算回收或推测失效。
 - 路径A止损波动校验读取M15 `summary.atr_14_closed`；路径B采用M5触发入场时读取M5 `summary.atr_14_closed`。两条路径不得混用周期。
@@ -144,7 +145,7 @@ EMA34只有在以下条件全部满足时才可使用：
 
 1. 先检查1H是否存在数据不足、中枢粘连、结构多解、高低点混乱或方向冲突；Chan方向能力不可用本身不等于普通价格数据不足。
 2. 存在任一未解决否决项时，1H判为不明确，启用4H降级判断。
-3. 没有否决项后，再以系统已确认线段、中枢离开和已收盘HH/HL或LH/LL为主要方向依据。
+3. 没有否决项后，先读取系统 `summary.chan.trend_state` 判断当前Chan结构状态，再结合已确认线段、中枢离开和已收盘HH/HL或LH/LL验证方向；`current_segment` 仅是历史确认结构，不能绕过当前 `trend_state` 单独定向。
 4. MACD只能确认价格或结构方向，不能单独定义趋势。
 5. 反向未确认候选、反向未确认笔、RSI超买/超卖、价格位于布林带外或价格远离均线都只能作为风险提示，不能单独否定已由确认线段与已收盘价格结构共同支持的1H趋势。
 6. `current_segment.broken=true` 是已确认线段的正常完成状态，不是趋势否决项；不同周期最后已收盘时间不同也不等于数据陈旧，只按各周期自己的已收盘K线判断。
@@ -156,7 +157,7 @@ EMA34只有在以下条件全部满足时才可使用：
 - 系统确认的线段方向清晰且未处于中枢反复粘连；
 - 已收盘价格形成清晰的多头HH＋HL或空头LH＋LL；
 - 系统确认的中枢离开方向与价格结构一致。
-- 最新确认线段方向清晰，形成中的反向候选尚未确认，而最新已收盘价已重新站回确认线段端点的原趋势侧，并继续形成同向HH/HL或LH/LL。
+- 系统 `summary.chan.trend_state.direction` 明确，且其方向获得最新已收盘HH/HL或LH/LL、确认中枢离开或其他系统当前确认结构支持。
 
 H1系统Chan `segment_direction_usable=false` 时，不得仅因Chan不可用就把H1判为不明确，也不得读取不可用的Chan线段方向。改用以下系统字段直映射：
 
@@ -178,7 +179,7 @@ H1系统Chan `segment_direction_usable=false` 时，不得仅因Chan不可用就
 
 上述“不明确”必须有已收盘的实质矛盾证据。仅存在反向未确认候选、`broken=true`、超买/超卖或不同周期收盘时间差，均不构成结构冲突。
 
-H1硬仲裁：当 `current_segment.dir=up`、反向 `candidate_segment.confirmed=false`，且最新1H已收盘价已经重新收在 `current_segment.end_price` 上方时，不得再以该候选、`broken=true`、MACD、RSI或4H为理由把H1判为不明确；在没有独立已收盘LH/LL反转结构时，H1按多头趋势处理。空头情形完全对称：`current_segment.dir=down` 且最新1H已收盘价重新收在其 `end_price` 下方时，在没有独立已收盘HH/HL反转结构前按空头趋势处理。
+当 `summary.chan.trend_state.direction=neutral`，或 `state/phase` 为 `consolidation/range` 时，不得使用旧 `current_segment.dir`、旧 `end_price`、`broken=true` 或未确认候选覆盖该当前状态。此时若普通已收盘价格结构也不能独立确认方向，H1按中枢震荡或结构不明确处理并启用4H降级；不得把旧线段端点距离作为趋势硬仲裁条件。
 
 背驰、谐波反转或单根裸K不能单独翻转H1趋势。若H1已收盘结构出现明确破坏、回抽确认和方向重建，先把旧趋势重新分类为不明确或新趋势，再从第一步重新执行完整流程。
 

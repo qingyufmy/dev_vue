@@ -1605,7 +1605,7 @@ function buildChanEvidenceCapabilities(result, overrides = {}) {
   const divergenceEvidenceUnavailable = new Set([
     'no_macd_data', 'insufficient_valid_segments', 'no_valid_center',
     'no_cross_window_center', 'center_reference_mismatch', 'no_entry_segment',
-    'not_after_center', 'macd_warmup_overlap', 'invalid_macd_area',
+    'macd_warmup_overlap', 'invalid_macd_area',
     'divergence_evidence_unavailable', 'divergence_cross_window_unstable',
   ]).has(divergenceReason) || !hasDivergenceEvidence
   const divergence = overrides.divergence_usable ?? (
@@ -3618,6 +3618,14 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
       { trend_strength: 0, data_confidence: 0.1 },
     )
   }
+  const lastBarClosed = options.chanDataQuality?.last_bar_closed === true
+  // Keep the forming bar available for the explicit live price and ATR
+  // fields, but never let it influence evidence that is presented as closed
+  // market data.  When the source says the final bar is closed, this is the
+  // full input and therefore preserves the historical behaviour.
+  const closedRates = lastBarClosed
+    ? rates
+    : rates.length > 1 ? rates.slice(0, -1) : []
   const closes = rates.map(r => parseFloat(r.close))
   const highs = rates.map(r => parseFloat(r.high))
   const lows = rates.map(r => parseFloat(r.low))
@@ -3626,8 +3634,18 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const n = closes.length
   const latest = closes[n - 1]
   const first = closes[0]
+  const closedCloses = closedRates.map(r => parseFloat(r.close))
+  const closedHighs = closedRates.map(r => parseFloat(r.high))
+  const closedLows = closedRates.map(r => parseFloat(r.low))
+  const closedOpens = closedRates.map(r => parseFloat(r.open))
+  const closedVolumes = closedRates.map(r => parseInt(r.tick_volume || 0))
+  const closedN = closedCloses.length
+  const closedLatest = closedCloses.at(-1)
+  const hasClosedData = closedN > 0 && Number.isFinite(closedLatest)
+  const evidenceLatest = hasClosedData ? closedLatest : 0
 
   function ema(data, period) {
+    if (data.length === 0) return 0
     if (data.length < period) return data[data.length - 1]
     const k = 2 / (period + 1)
     let e = data.slice(0, period).reduce((a, b) => a + b, 0) / period
@@ -3648,55 +3666,62 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
     return 100 - 100 / (1 + avgGain / avgLoss)
   }
 
-  const smaWindow = n >= 20 ? closes.slice(-20) : closes
-  const sma20 = smaWindow.reduce((a, b) => a + b, 0) / smaWindow.length
-  const sma50Window = n >= 50 ? closes.slice(-50) : closes
-  const sma50 = sma50Window.reduce((a, b) => a + b, 0) / sma50Window.length
+  const smaWindow = closedN >= 20 ? closedCloses.slice(-20) : closedCloses
+  const sma20 = smaWindow.length > 0
+    ? smaWindow.reduce((a, b) => a + b, 0) / smaWindow.length : 0
+  const sma50Window = closedN >= 50 ? closedCloses.slice(-50) : closedCloses
+  const sma50 = sma50Window.length > 0
+    ? sma50Window.reduce((a, b) => a + b, 0) / sma50Window.length : 0
 
-  const ema12 = ema(closes, 12)
-  const ema26 = ema(closes, 26)
-  const macdSeries = calculateMacdSeries(closes)
+  const ema12 = ema(closedCloses, 12)
+  const ema26 = ema(closedCloses, 26)
+  const macdSeries = calculateMacdSeries(closedCloses)
   const macdLine = macdSeries.latestDif
   const macdSignal = macdSeries.latestDea
   const macdHistogram = macdSeries.latestHist
 
-  const rsi14 = calcRsi(closes, 14)
+  const rsi14 = calcRsi(closedCloses, 14)
 
-  const bbStd = Math.sqrt(smaWindow.reduce((sum, v) => sum + (v - sma20) ** 2, 0) / smaWindow.length)
+  const bbStd = smaWindow.length > 0
+    ? Math.sqrt(smaWindow.reduce((sum, v) => sum + (v - sma20) ** 2, 0) / smaWindow.length) : 0
   const bbUpper = sma20 + 2 * bbStd
   const bbLower = sma20 - 2 * bbStd
   const bbWidth = bbUpper - bbLower
-  const bbPosition = bbWidth > 0 ? (latest - bbLower) / bbWidth : 0.5
+  const bbPosition = hasClosedData && bbWidth > 0 ? (evidenceLatest - bbLower) / bbWidth : 0.5
 
   const atr14 = computeAtr14(rates)
-  const closedRates = options.chanDataQuality?.last_bar_closed === true
-    ? rates
-    : rates.length > 1 ? rates.slice(0, -1) : []
   const lastClosedRate = closedRates.at(-1) || null
   const atr14Closed = computeAtr14(closedRates)
   const twoBarBreakout = buildTwoClosedBarBreakoutEvidence(closedRates)
 
-  const recentHighs = highs.length >= 20 ? highs.slice(-20) : highs
-  const recentLows = lows.length >= 20 ? lows.slice(-20) : lows
-  const recentHigh = Math.max(...recentHighs)
-  const recentLow = Math.min(...recentLows)
+  const recentHighs = closedN >= 20 ? closedHighs.slice(-20) : closedHighs
+  const recentLows = closedN >= 20 ? closedLows.slice(-20) : closedLows
+  const recentHigh = recentHighs.length > 0 ? Math.max(...recentHighs) : 0
+  const recentLow = recentLows.length > 0 ? Math.min(...recentLows) : 0
   const recentRange = Math.max(recentHigh - recentLow, 0.00001)
-  const rangePosition = (latest - recentLow) / recentRange
+  const rangePosition = hasClosedData ? (evidenceLatest - recentLow) / recentRange : 0.5
 
-  const prevH = highs[n - 2] || latest, prevL = lows[n - 2] || latest, prevC = closes[n - 2] || latest
+  // A forming tail is not a completed reference candle.  For live input the
+  // latest closed candle is the pivot source; for an explicitly closed input
+  // preserve the previous-candle convention used by the original calculation.
+  const pivotIndex = lastBarClosed ? closedN - 2 : closedN - 1
+  const fallbackPivotHigh = Number.isFinite(evidenceLatest) ? evidenceLatest : 0
+  const prevH = closedHighs[pivotIndex] ?? fallbackPivotHigh
+  const prevL = closedLows[pivotIndex] ?? fallbackPivotHigh
+  const prevC = closedCloses[pivotIndex] ?? fallbackPivotHigh
   const pivot = (prevH + prevL + prevC) / 3
   const r1 = 2 * pivot - prevL
   const s1 = 2 * pivot - prevH
   const r2 = pivot + (prevH - prevL)
   const s2 = pivot - (prevH - prevL)
 
-  const momentum3 = n >= 4 ? ((latest - closes[n - 4]) / closes[n - 4]) * 100 : 0
-  const momentum10 = n >= 11 ? ((latest - closes[n - 11]) / closes[n - 11]) * 100 : 0
-  const momentum20 = n >= 21 ? ((latest - closes[n - 21]) / closes[n - 21]) * 100 : 0
-  const smaDistancePct = latest ? ((latest - sma20) / latest) * 100 : 0
-  const ranges = highs.map((h, i) => h - lows[i])
-  const avgVolatility = ranges.reduce((a, b) => a + b, 0) / ranges.length
-  const volatilityPct = latest ? (avgVolatility / latest) * 100 : 0
+  const momentum3 = closedN >= 4 ? ((evidenceLatest - closedCloses[closedN - 4]) / closedCloses[closedN - 4]) * 100 : 0
+  const momentum10 = closedN >= 11 ? ((evidenceLatest - closedCloses[closedN - 11]) / closedCloses[closedN - 11]) * 100 : 0
+  const momentum20 = closedN >= 21 ? ((evidenceLatest - closedCloses[closedN - 21]) / closedCloses[closedN - 21]) * 100 : 0
+  const smaDistancePct = evidenceLatest ? ((evidenceLatest - sma20) / evidenceLatest) * 100 : 0
+  const ranges = closedHighs.map((h, i) => h - closedLows[i])
+  const avgVolatility = ranges.length > 0 ? ranges.reduce((a, b) => a + b, 0) / ranges.length : 0
+  const volatilityPct = evidenceLatest ? (avgVolatility / evidenceLatest) * 100 : 0
 
   const trendStrength = clamp(Math.abs(smaDistancePct) / Math.max(volatilityPct * 0.8, 0.0001), 0, 1)
   let momentumAlignment = 0
@@ -3706,20 +3731,25 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
   const noisePenalty = clamp(volatilityPct / 0.45, 0, 0.18)
   const dataConfidence = clamp(Math.round((edgeScore - noisePenalty) * 100) / 100, 0.05, 0.95)
 
-  const lastBody = Math.abs(closes[n - 1] - opens[n - 1])
-  const lastRange = Math.max(highs[n - 1] - lows[n - 1], 0.00001)
-  const lastUpperWick = highs[n - 1] - Math.max(closes[n - 1], opens[n - 1])
-  const lastLowerWick = Math.min(closes[n - 1], opens[n - 1]) - lows[n - 1]
-  const isDoji = lastBody < lastRange * 0.1
-  const isHammer = lastLowerWick > lastBody * 2 && lastUpperWick < lastBody * 0.5
-  const isShootingStar = lastUpperWick > lastBody * 2 && lastLowerWick < lastBody * 0.5
-  const isEngulfing = n >= 2 && (
-    (closes[n - 1] > opens[n - 1] && closes[n - 2] < opens[n - 2] && closes[n - 1] > opens[n - 2] && opens[n - 1] < closes[n - 2]) ||
-    (closes[n - 1] < opens[n - 1] && closes[n - 2] > opens[n - 2] && closes[n - 1] < opens[n - 2] && opens[n - 1] > closes[n - 2])
+  const lastClosedIndex = closedN - 1
+  const hasLastClosedCandle = lastClosedIndex >= 0
+  const lastBody = hasLastClosedCandle ? Math.abs(closedCloses[lastClosedIndex] - closedOpens[lastClosedIndex]) : 0
+  const lastRange = hasLastClosedCandle
+    ? Math.max(closedHighs[lastClosedIndex] - closedLows[lastClosedIndex], 0.00001) : 1
+  const lastUpperWick = hasLastClosedCandle
+    ? closedHighs[lastClosedIndex] - Math.max(closedCloses[lastClosedIndex], closedOpens[lastClosedIndex]) : 0
+  const lastLowerWick = hasLastClosedCandle
+    ? Math.min(closedCloses[lastClosedIndex], closedOpens[lastClosedIndex]) - closedLows[lastClosedIndex] : 0
+  const isDoji = hasLastClosedCandle && lastBody < lastRange * 0.1
+  const isHammer = hasLastClosedCandle && lastLowerWick > lastBody * 2 && lastUpperWick < lastBody * 0.5
+  const isShootingStar = hasLastClosedCandle && lastUpperWick > lastBody * 2 && lastLowerWick < lastBody * 0.5
+  const isEngulfing = closedN >= 2 && (
+    (closedCloses[lastClosedIndex] > closedOpens[lastClosedIndex] && closedCloses[lastClosedIndex - 1] < closedOpens[lastClosedIndex - 1] && closedCloses[lastClosedIndex] > closedOpens[lastClosedIndex - 1] && closedOpens[lastClosedIndex] < closedCloses[lastClosedIndex - 1]) ||
+    (closedCloses[lastClosedIndex] < closedOpens[lastClosedIndex] && closedCloses[lastClosedIndex - 1] > closedOpens[lastClosedIndex - 1] && closedCloses[lastClosedIndex] < closedOpens[lastClosedIndex - 1] && closedOpens[lastClosedIndex] > closedCloses[lastClosedIndex - 1])
   )
 
-  const avgVolume = volumes.length > 0 ? volumes.reduce((a, b) => a + b, 0) / volumes.length : 0
-  const lastVolume = volumes[n - 1] || 0
+  const avgVolume = closedVolumes.length > 0 ? closedVolumes.reduce((a, b) => a + b, 0) / closedVolumes.length : 0
+  const lastVolume = closedVolumes.at(-1) || 0
   const volumeRatio = avgVolume > 0 ? lastVolume / avgVolume : 1
 
   const longPositions = positions.filter(p => p.type === 'buy')
@@ -3793,8 +3823,8 @@ export function calculateMarketData(symbol, timeframe, rates, account, positions
         lower_wick_ratio: round3(lastLowerWick / lastRange),
       },
       trend_candles: {
-        bullish_count: closes.slice(-5).filter((c, i) => i > 0 && c > opens[opens.length - 5 + i]).length,
-        bearish_count: closes.slice(-5).filter((c, i) => i > 0 && c < opens[opens.length - 5 + i]).length,
+        bullish_count: closedCloses.slice(-5).filter((c, i) => i > 0 && c > closedOpens[closedN - Math.min(closedN, 5) + i]).length,
+        bearish_count: closedCloses.slice(-5).filter((c, i) => i > 0 && c < closedOpens[closedN - Math.min(closedN, 5) + i]).length,
       },
     },
     volume: { current: lastVolume, average: Math.round(avgVolume), ratio: round2(volumeRatio) },

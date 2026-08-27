@@ -103,6 +103,47 @@ describe('calculateMarketData', () => {
     expect(liveChanged.atr_14).not.toBe(baseline.atr_14)
   })
 
+  it('未确认最后一根K线时所有闭盘证据保持不变，实时价格和ATR仍可更新', () => {
+    const rates = generateRates(80)
+    const changed = rates.map(rate => ({ ...rate }))
+    changed[changed.length - 1] = {
+      ...changed[changed.length - 1],
+      open: '5100', high: '5200', low: '4900', close: '5150', tick_volume: '9999',
+    }
+    const baseline = calculateMarketData('XAUUSD', 'H1', rates, baseAccount, basePositions)
+    const liveChanged = calculateMarketData('XAUUSD', 'H1', changed, baseAccount, basePositions)
+
+    for (const key of [
+      'sma_20', 'sma_50', 'ema_12', 'ema_26', 'avg_volatility',
+      'recent_high_20', 'recent_low_20', 'range_position_20', 'sma_distance_pct',
+      'momentum_3_pct', 'momentum_10_pct', 'momentum_20_pct', 'volatility_pct',
+      'macd', 'rsi_14', 'bollinger', 'atr_14_closed', 'support_resistance',
+      'kline_patterns', 'volume', 'last_closed_bar',
+    ]) {
+      expect(liveChanged[key]).toEqual(baseline[key])
+    }
+    expect(liveChanged.latest_price).not.toBe(baseline.latest_price)
+    expect(liveChanged.atr_14).not.toBe(baseline.atr_14)
+  })
+
+  it('明确标记最后一根K线已收盘时仍使用完整输入', () => {
+    const rates = generateRates(80)
+    const changed = rates.map(rate => ({ ...rate }))
+    changed[changed.length - 1] = {
+      ...changed[changed.length - 1],
+      open: '5100', high: '5200', low: '4900', close: '5150', tick_volume: '9999',
+    }
+    const options = { chanDataQuality: { last_bar_closed: true } }
+    const baseline = calculateMarketData('XAUUSD', 'H1', rates, baseAccount, basePositions, options)
+    const changedResult = calculateMarketData('XAUUSD', 'H1', changed, baseAccount, basePositions, options)
+
+    expect(changedResult.latest_price).not.toBe(baseline.latest_price)
+    expect(changedResult.sma_20).not.toBe(baseline.sma_20)
+    expect(changedResult.macd).not.toEqual(baseline.macd)
+    expect(changedResult.kline_patterns).not.toEqual(baseline.kline_patterns)
+    expect(changedResult.volume).not.toEqual(baseline.volume)
+  })
+
   it('扩展缠论历史不会改变普通指标窗口', () => {
     const history = generateRates(300)
     const visible = history.slice(-80)
@@ -493,7 +534,7 @@ describe('calculateMarketData', () => {
   it('MACD输出line/signal/histogram来自同一套序列', () => {
     const rates = generateRates(80)
     const result = calculateMarketData('XAUUSD', 'M5', rates, baseAccount, basePositions)
-    const series = __chanTest.calculateMacdSeries(rates.map(r => parseFloat(r.close)))
+    const series = __chanTest.calculateMacdSeries(rates.slice(0, -1).map(r => parseFloat(r.close)))
     expect(result.macd.line).toBeCloseTo(series.latestDif, 5)
     expect(result.macd.signal).toBeCloseTo(series.latestDea, 5)
     expect(result.macd.histogram).toBeCloseTo(series.latestHist, 5)
