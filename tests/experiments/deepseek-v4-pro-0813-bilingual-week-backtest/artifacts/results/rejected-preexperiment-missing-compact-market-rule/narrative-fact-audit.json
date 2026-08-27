@@ -1,0 +1,100 @@
+{
+  "audit_version": "frozen-request-narrative-fact-audit-v1",
+  "scope": {
+    "formal_records_audited": 32,
+    "decision_points": 8,
+    "groups": ["zh_zh", "zh_en", "en_zh", "en_en"],
+    "fields": ["analysis", "reasoning", "key_reasons", "risk_factors"],
+    "fact_source": "the frozen market JSON in the same request only",
+    "external_calls": false
+  },
+  "results": {
+    "explicitly_contradictory_records": 12,
+    "explicit_contradiction_rate": 0.375,
+    "explicit_contradictions_by_group": {
+      "zh_zh": 4,
+      "zh_en": 3,
+      "en_zh": 2,
+      "en_en": 3
+    },
+    "records_without_directly_falsified_fact": 20,
+    "invented_numeric_values_found": 0,
+    "fully_supported_entire_narratives": 0,
+    "records_with_at_least_one_not_independently_verifiable_path_claim": 32,
+    "surface_hold_contract_consistent": 32,
+    "gate_failure_sequence_self_consistent": 6,
+    "gate_failure_sequence_self_consistent_by_group": {
+      "zh_zh": 0,
+      "zh_en": 3,
+      "en_zh": 1,
+      "en_en": 2
+    },
+    "gate_failure_sequence_inconsistent": 26,
+    "h1_unclear_but_h4_not_enabled": 13
+  },
+  "contradiction_records": [
+    {"decision_id": "h1-1787324400000", "group": "zh_zh", "kind": "momentum_sign_and_four-way-alignment"},
+    {"decision_id": "h1-1787554800000", "group": "zh_zh", "kind": "nonexistent_recent_event_described_as_invalid"},
+    {"decision_id": "h1-1787554800000", "group": "zh_en", "kind": "nonexistent_recent_event_described_as_invalid"},
+    {"decision_id": "h1-1787554800000", "group": "en_en", "kind": "nonexistent_recent_event_and_reclaim_state"},
+    {"decision_id": "h1-1787666400000", "group": "zh_zh", "kind": "four_bearish_mapping_facts_called_not_aligned"},
+    {"decision_id": "h1-1787666400000", "group": "zh_en", "kind": "four_bearish_mapping_facts_called_not_aligned"},
+    {"decision_id": "h1-1787666400000", "group": "en_zh", "kind": "four_bearish_mapping_facts_called_not_aligned"},
+    {"decision_id": "h1-1787666400000", "group": "en_en", "kind": "four_bearish_mapping_facts_called_not_aligned"},
+    {"decision_id": "h1-1787720400000", "group": "zh_zh", "kind": "four_bearish_mapping_facts_called_unclear"},
+    {"decision_id": "h1-1787720400000", "group": "zh_en", "kind": "four_bearish_mapping_facts_called_unclear"},
+    {"decision_id": "h1-1787720400000", "group": "en_zh", "kind": "four_bearish_mapping_facts_called_unclear"},
+    {"decision_id": "h1-1787720400000", "group": "en_en", "kind": "four_bearish_mapping_facts_called_unclear"}
+  ],
+  "gate_failure_sequence_consistent_records": [
+    {"decision_id": "h1-1787216400000", "group": "en_zh"},
+    {"decision_id": "h1-1787324400000", "group": "zh_en"},
+    {"decision_id": "h1-1787554800000", "group": "en_en"},
+    {"decision_id": "h1-1787554800000", "group": "zh_en"},
+    {"decision_id": "h1-1787612400000", "group": "en_en"},
+    {"decision_id": "h1-1787612400000", "group": "zh_en"}
+  ],
+  "examples": [
+    {
+      "decision_id": "h1-1787324400000",
+      "group": "zh_zh",
+      "claim": "H1 non-Chan mapping inputs were all aligned and momentum_3 was positive",
+      "frozen_fact_paths": [
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend"
+      ],
+      "finding": "momentum_3_pct was -0.119, so the four inputs were not all aligned"
+    },
+    {
+      "decision_id": "h1-1787554800000",
+      "group": "en_en",
+      "claim": "M5 recent_confirmed.up reclaim existed but was no longer valid",
+      "frozen_fact_paths": [
+        "strategy_context.timeframes.M5.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+        "strategy_context.timeframes.M5.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.reclaim.found",
+        "strategy_context.timeframes.M5.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid"
+      ],
+      "finding": "found=false, reclaim.found=false, still_valid=null; the event did not exist"
+    },
+    {
+      "decision_id": "h1-1787666400000",
+      "group": "all_four",
+      "claim": "H1 direction was unclear because the four deterministic mapping inputs were not aligned",
+      "frozen_fact_paths": [
+        "strategy_context.timeframes.H1.summary.latest_price",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend"
+      ],
+      "finding": "close=4616.56 < sma_20=4643.6795, momentum_3=-0.49, momentum_10=-0.37, MACD=bearish; all four were bearish"
+    }
+  ],
+  "interpretation": {
+    "numeric_fabrication": "No narrated number was found outside the same frozen request; errors were mainly reversed logic or invented event state.",
+    "unverifiable_claims": "Every response asserted M15 Path A 0/6 and absence of PRZ/naked-candle/false-breakout/key-level reaction without independently auditable anchors. These are not counted as explicit contradictions, but cannot be treated as proven.",
+    "hold_decision": "No frozen boolean facts showed a complete Path B+M5+EMA34 or Path C chain. Hold was conservative and understandable, but Path A and subjective price-action claims were not independently recomputed, so 32 holds cannot be proven optimal.",
+    "boundary": "This audit did not recompute Chan, harmonic patterns, or subjective candle structures and used no external source. Ambiguous wording was classified as unverifiable rather than contradictory."
+  }
+}

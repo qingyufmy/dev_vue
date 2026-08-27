@@ -1,0 +1,2226 @@
+{
+  "report_version": "deepseek-v4-pro-0813-bilingual-2x2-report-v3",
+  "model": "deepseek-v4-pro-0813",
+  "base_url": "https://ai-api.finpoints.tech/v1",
+  "parameters": {
+    "temperature": 0.0,
+    "top_p": 1,
+    "max_tokens": 8192,
+    "translation_max_tokens": 8192,
+    "formal_timeout_seconds": 240,
+    "formal_retry_count": 1,
+    "formal_thinking": {
+      "type": "disabled"
+    },
+    "translation_thinking": {
+      "type": "disabled"
+    },
+    "stream": false,
+    "response_format": {
+      "type": "json_object"
+    }
+  },
+  "design": {
+    "cells": [
+      {
+        "group": "zh_zh",
+        "strategy_language": "zh",
+        "schema_language": "zh"
+      },
+      {
+        "group": "zh_en",
+        "strategy_language": "zh",
+        "schema_language": "en"
+      },
+      {
+        "group": "en_zh",
+        "strategy_language": "en",
+        "schema_language": "zh"
+      },
+      {
+        "group": "en_en",
+        "strategy_language": "en",
+        "schema_language": "en"
+      }
+    ],
+    "requested_samples": 8,
+    "actual_samples": 8,
+    "formal_calls_expected": 32,
+    "market_payload_shared": true,
+    "response_language": "zh-CN (fixed across all cells by the VM contract)",
+    "strategy_factor": "strategy body plus its compact-input rule language; semantics intended equivalent",
+    "schema_factor": "output-contract block language only; task wrapper, keys, enums, response language, and semantics fixed",
+    "user_wrapper_language": "zh-CN (fixed across all cells)",
+    "position_management_schema": "not included; empty-account historical replay",
+    "snapshot_build_mode": "verified_cache_from_clean_vm_commit",
+    "local_runtime_paths_clean_at_run": true
+  },
+  "source": {
+    "vm_commit": "e311daa4d40895a3209cc1264745ba04d9ee7c04",
+    "local_commit": "f2394c0c563cc729d3a62e6464fcb263f4128635",
+    "snapshot_runtime_commit": "e311daa4d40895a3209cc1264745ba04d9ee7c04",
+    "vm_branch": "dev_codex",
+    "vm_exported_at_utc": "2026-08-27T09:55:14.357028+00:00",
+    "symbol": "XAUUSD.s",
+    "strategy": {
+      "id": 1,
+      "title": "道诚实战精选策略",
+      "description": "> 适用体系：缠论（背驰+三类买卖点）× 谐波交易 × 裸K形态> 周期结构：1H 趋势主判 → （4H 降级备判）→ 15min 确认 → 5min 精确入场",
+      "symbols_json": "[\"XAUUSD\"]",
+      "market_data_plan_json": "{\"primary_timeframe\":\"H1\",\"timeframes\":[{\"timeframe\":\"H1\",\"kline_count\":150},{\"timeframe\":\"M1\",\"kline_count\":30},{\"timeframe\":\"M5\",\"kline_count\":100},{\"timeframe\":\"M15\",\"kline_count\":150},{\"timeframe\":\"H4\",\"kline_count\":100}]}",
+      "strategy_policy_json": "{\"constraints\":[{\"counts_as_trigger\":false,\"id\":\"entry_indicator_ready\",\"on_fail\":\"hold_new_entry\",\"phases\":[\"post_inference\",\"pre_submit\"],\"require\":{\"left\":{\"ref\":\"indicators.entry_ema34.ready\"},\"op\":\"eq\",\"right\":true},\"scope\":\"new_entry\"},{\"counts_as_trigger\":false,\"id\":\"buy_indicator_relation\",\"on_fail\":\"hold_new_entry\",\"phases\":[\"post_inference\",\"pre_submit\"],\"require\":{\"left\":{\"ref\":\"indicators.entry_ema34.bar.close\"},\"op\":\"gt\",\"right\":{\"ref\":\"indicators.entry_ema34.value\"}},\"scope\":\"new_entry\",\"when\":{\"left\":{\"ref\":\"signal.side\"},\"op\":\"eq\",\"right\":\"buy\"}},{\"counts_as_trigger\":false,\"id\":\"sell_indicator_relation\",\"on_fail\":\"hold_new_entry\",\"phases\":[\"post_inference\",\"pre_submit\"],\"require\":{\"left\":{\"ref\":\"indicators.entry_ema34.bar.close\"},\"op\":\"lt\",\"right\":{\"ref\":\"indicators.entry_ema34.value\"}},\"scope\":\"new_entry\",\"when\":{\"left\":{\"ref\":\"signal.side\"},\"op\":\"eq\",\"right\":\"sell\"}}],\"features\":[],\"indicators\":[{\"enabled\":true,\"id\":\"entry_ema34\",\"kind\":\"ema\",\"params\":{\"evidence_window\":5,\"minimum_bars\":34,\"period\":34,\"warmup_target_bars\":170},\"source\":{\"bar_scope\":\"closed_only\",\"field\":\"close\",\"timeframe\":\"M1\"}}],\"mode\":\"enforce\",\"prompt_rules\":[{\"id\":\"entry_indicator_filter\",\"text\":\"系统按 entry_ema34.source 提供的已收盘 EMA34 是短线行情证据和新入场方向过滤器；可用于说明位置、斜率、距离、持续性与最近穿越，但不计作 M15 确认或 M5 触发，也不构成退出持仓或撤销挂单的理由。\"}],\"schema_version\":\"strategy-policy-v1\",\"ui\":{\"groups\":[{\"control\":\"rule_switch\",\"id\":\"entry_indicator\",\"label\":\"EMA34 入场过滤\",\"rule_ref\":\"entry_ema34\"}]},\"workflow\":{\"default_decision\":\"allow\",\"selectors\":[],\"stages\":[]}}",
+      "entry_methods_json": "[\"market\",\"limit\",\"stop\",\"stop_limit\"]",
+      "use_chan_analysis": 1,
+      "use_ema34_filter": 1,
+      "interval_minutes": 5,
+      "is_active": 1,
+      "sort_order": 0,
+      "created_at": "2026-07-01 14:22:17",
+      "updated_at": "2026-08-27 14:44:41",
+      "scope": "platform",
+      "inference_mode": "platform_model",
+      "visibility_status": "active",
+      "version": 38,
+      "version_label": "v2.1"
+    },
+    "strategy_body_sha256": "04f30b707b59c35f570959e7597baffebf48afd2d9a8ac2a994ac0a067e87de3",
+    "output_schema_version": "c0e8f990788032c33a2839b5481d000fb9c375eeb4657dfbae62d3af5a802a69",
+    "output_schema_sha256": "640e8a3e26c09d135453ee10b4a2ef6f5ee1c68f074053c513e332fba422cbca",
+    "latest_inference_snapshot": {
+      "strategy_version": 38,
+      "output_schema_version": "c0e8f990788032c33a2839b5481d000fb9c375eeb4657dfbae62d3af5a802a69",
+      "prompt_hash": "f029ca0ebc075c5665a673f3e421dd32c7dbd4feaf4b3ff4956db2be86abc835",
+      "created_at": "2026-08-27 17:52:16"
+    },
+    "runtime_data_plan": {
+      "primary_timeframe": "H1",
+      "timeframes": [
+        {
+          "timeframe": "H1",
+          "kline_count": 150
+        },
+        {
+          "timeframe": "M1",
+          "kline_count": 30
+        },
+        {
+          "timeframe": "M5",
+          "kline_count": 100
+        },
+        {
+          "timeframe": "M15",
+          "kline_count": 150
+        },
+        {
+          "timeframe": "H4",
+          "kline_count": 100
+        }
+      ]
+    },
+    "entry_methods": [
+      "market",
+      "limit",
+      "stop",
+      "stop_limit"
+    ],
+    "chan_window_policy_version": "chan_window_v7",
+    "market_window": {
+      "window_days": 7,
+      "outcome_hours": 12,
+      "start_utc": "2026-08-20T08:00:45.345Z",
+      "end_utc": "2026-08-27T08:00:45.345Z",
+      "outcome_end_utc": "2026-08-27T20:00:45.345Z",
+      "warmup_start_utc": "2025-11-21T08:00:45.345Z",
+      "start_utc_msc": 1787212845345,
+      "end_utc_msc": 1787817645345,
+      "outcome_end_utc_msc": 1787860845345,
+      "warmup_start_utc_msc": 1763712045345,
+      "warmup_start_by_timeframe_utc_msc": {
+        "H1": 1776729645345,
+        "M1": 1787194605345,
+        "M5": 1786339245345,
+        "M15": 1784304045345,
+        "H4": 1763712045345
+      }
+    },
+    "data_metadata": {
+      "artifact_version": "market-data-v1",
+      "market_data_sha256": "192ac3705497b1c18405dd38dd3ae62a97a407ecaa0b0dbb3a33551f5e883f4f",
+      "market_data_file_sha256": "61b76dbb35ca27ed1596429dd7342e53ec29d34e4198884e916e80faebeae793",
+      "market_data_bytes": 6043566,
+      "symbol": "XAUUSD.s",
+      "clock": {
+        "status": "verified",
+        "method": "advancing_tick_15_minute_offset",
+        "symbol": "XAUUSD.s",
+        "first_raw_time_msc": 1787828445198,
+        "last_raw_time_msc": 1787828445452,
+        "first_sampled_utc_msc": 1787817644844,
+        "last_sampled_utc_msc": 1787817645345,
+        "raw_time_advanced": true,
+        "attempts": 3,
+        "broker_offset_seconds": 10800,
+        "broker_offset_minutes": 180,
+        "normalized_last_tick_utc_msc": 1787817645452,
+        "residual_seconds": 0.107,
+        "tick_age_seconds": -0.107,
+        "fresh": true
+      },
+      "terminal_path": "D:\\Program Files\\MetaTrader 5\\terminal64.exe",
+      "python_version": "3.11.15",
+      "metatrader5_python_version": "5.0.6147",
+      "copy_rates_range_calls": 7,
+      "plan": {
+        "primary_timeframe": "H1",
+        "timeframes": [
+          {
+            "timeframe": "H1",
+            "kline_count": 150
+          },
+          {
+            "timeframe": "M1",
+            "kline_count": 30
+          },
+          {
+            "timeframe": "M5",
+            "kline_count": 100
+          },
+          {
+            "timeframe": "M15",
+            "kline_count": 150
+          },
+          {
+            "timeframe": "H4",
+            "kline_count": 100
+          }
+        ]
+      },
+      "bar_counts": {
+        "H1": 2115,
+        "M1": 7190,
+        "M5": 3617,
+        "M15": 2635,
+        "H4": 1175
+      },
+      "bars_before_score_window": {
+        "H1": 2000,
+        "M1": 303,
+        "M5": 2238,
+        "M15": 2175,
+        "H4": 1145
+      },
+      "required_before_score_window": {
+        "H1": 1800,
+        "M1": 170,
+        "M5": 1800,
+        "M15": 2000,
+        "H4": 1000
+      },
+      "warmup_start_by_timeframe_utc": {
+        "H1": "2026-04-21T00:00:45.345Z",
+        "M1": "2026-08-20T02:56:45.345Z",
+        "M5": "2026-08-10T05:20:45.345Z",
+        "M15": "2026-07-17T16:00:45.345Z",
+        "H4": "2025-11-21T08:00:45.345Z"
+      },
+      "source": {
+        "vm_commit": "e31a91e3e85e9d34d66ec2da859c4c2f07bb2805",
+        "local_commit": "e31a91e3e85e9d34d66ec2da859c4c2f07bb2805",
+        "vm_branch": "dev_codex"
+      },
+      "accounts_exported": false
+    }
+  },
+  "source_hashes": {
+    "strategy_zh_sha256": "04f30b707b59c35f570959e7597baffebf48afd2d9a8ac2a994ac0a067e87de3",
+    "schema_zh_sha256": "640e8a3e26c09d135453ee10b4a2ef6f5ee1c68f074053c513e332fba422cbca",
+    "strategy_en_sha256": "3c2ad39014bc84bf495752336aa5330708cb435e4c89b7ef433fcb2a153dd95b",
+    "schema_en_sha256": "fca98f307955191a7cdc6cbe1189f57947f675f2495d2908b1bc8651c69015ba",
+    "runtime_metadata_sha256": "435e268909fd6f809e65a7433f8bf2650e638fa69889e74dc2bb6238820e6f9d",
+    "market_data_file_sha256": "61b76dbb35ca27ed1596429dd7342e53ec29d34e4198884e916e80faebeae793",
+    "market_data_payload_sha256": "192ac3705497b1c18405dd38dd3ae62a97a407ecaa0b0dbb3a33551f5e883f4f"
+  },
+  "source_sizes": {
+    "strategy_zh_chars": 24805,
+    "strategy_zh_bytes": 53268,
+    "strategy_en_chars": 68355,
+    "strategy_en_bytes": 68446,
+    "schema_zh_bytes": 6691,
+    "schema_en_bytes": 9045
+  },
+  "translation_audit": {
+    "passed": true,
+    "errors": [],
+    "strategy_protected_tokens_zh": {
+      "1": 77,
+      "4": 33,
+      "15": 9,
+      "H1": 28,
+      "5": 26,
+      "7.8": 1,
+      "2": 23,
+      "3": 40,
+      "M5": 77,
+      "M1": 39,
+      "2.1": 1,
+      "M15": 102,
+      "2.2": 1,
+      "2.3": 1,
+      "strategy_context.timeframes": 1,
+      "summary.chan": 1,
+      "H4": 3,
+      "6": 23,
+      "7": 6,
+      "summary.chan.evidence_capabilities.history_complete": 1,
+      "summary.chan.evidence_capabilities.continuity_complete": 1,
+      "summary.chan.evidence_capabilities.topology_input_complete": 1,
+      "summary.chan.evidence_capabilities.data_complete": 1,
+      "summary.chan.evidence_capabilities.segment_direction_usable": 1,
+      "summary.chan.evidence_capabilities.center_structure_usable": 1,
+      "summary.chan.evidence_capabilities.entry_structure_usable": 1,
+      "summary.chan.evidence_capabilities.divergence_usable": 1,
+      "divergence.confirmed": 2,
+      "candidate_segment.confirmed": 1,
+      "developing_bi.confirmed": 1,
+      "current_segment.broken": 2,
+      "current_segment.dir": 2,
+      "summary.chan.trend_state": 2,
+      "trend_state.direction": 1,
+      "candidate_segment.confirmation_state": 1,
+      "2.4": 1,
+      "strategy_context.indicators.entry_ema34": 3,
+      "entry_ema34.source.timeframe": 1,
+      "source.field": 2,
+      "source.bar_scope": 2,
+      "raw_policy.prompt_rules": 1,
+      "summary.support_resistance.two_closed_bar_breakout": 2,
+      "recent_confirmed.up": 3,
+      "summary.atr_14_closed": 7,
+      "last_closed_bar.close": 4,
+      "macd.trend": 5,
+      "2.5": 1,
+      "source.timeframe": 1,
+      "8": 4,
+      "summary.chan.trend_state.direction": 2,
+      "0": 12,
+      "3%": 3,
+      "8%": 3,
+      "up.complete": 1,
+      "down.complete": 1,
+      "summary.support_resistance.two_closed_bar_breakout.ready": 1,
+      "summary.support_resistance.two_closed_bar_breakout.recent_confirmed": 1,
+      "recent_confirmed.down": 1,
+      "reclaim.found": 1,
+      "reclaim.recovery_direction": 1,
+      "reclaim.bars_after_confirmation": 1,
+      "reclaim.reclaim_close_beyond_breakout_bars": 1,
+      "reclaim.confirmed": 1,
+      "reclaim.confirmation_close_beyond_reclaim_extreme": 1,
+      "reclaim.age_closed_bars": 1,
+      "reclaim.still_valid": 1,
+      "reclaim.invalidation_bar": 1,
+      "9": 2,
+      "0.382": 2,
+      "0.5": 1,
+      "0.886": 2,
+      "0.786": 1,
+      "1.27": 1,
+      "1.618": 3,
+      "0.618": 1,
+      "1.13": 2,
+      "1.5": 14,
+      "6.1": 1,
+      "6.2": 1,
+      "first_bar.low": 1,
+      "second_bar.low": 1,
+      "first_bar.high": 1,
+      "second_bar.high": 1,
+      "reclaim.sweep_extreme": 3,
+      "6.3": 1,
+      "6.4": 1,
+      "6.5": 1,
+      "10": 1,
+      "11": 1,
+      "12": 1,
+      "13": 1,
+      "14": 1,
+      "16": 1,
+      "17": 1,
+      "18": 1,
+      "19": 1,
+      "20": 1,
+      "21": 1,
+      "22": 1,
+      "23": 1,
+      "24": 1,
+      "25": 1,
+      "26": 1,
+      "27": 1,
+      "28": 1
+    },
+    "strategy_protected_tokens_en": {
+      "1": 77,
+      "4": 33,
+      "15": 9,
+      "H1": 28,
+      "5": 26,
+      "7.8": 1,
+      "2": 23,
+      "3": 40,
+      "M5": 77,
+      "M1": 39,
+      "2.1": 1,
+      "M15": 102,
+      "2.2": 1,
+      "2.3": 1,
+      "strategy_context.timeframes": 1,
+      "summary.chan": 1,
+      "H4": 3,
+      "6": 23,
+      "7": 6,
+      "summary.chan.evidence_capabilities.history_complete": 1,
+      "summary.chan.evidence_capabilities.continuity_complete": 1,
+      "summary.chan.evidence_capabilities.topology_input_complete": 1,
+      "summary.chan.evidence_capabilities.data_complete": 1,
+      "summary.chan.evidence_capabilities.segment_direction_usable": 1,
+      "summary.chan.evidence_capabilities.center_structure_usable": 1,
+      "summary.chan.evidence_capabilities.entry_structure_usable": 1,
+      "summary.chan.evidence_capabilities.divergence_usable": 1,
+      "divergence.confirmed": 2,
+      "candidate_segment.confirmed": 1,
+      "developing_bi.confirmed": 1,
+      "current_segment.broken": 2,
+      "current_segment.dir": 2,
+      "summary.chan.trend_state": 2,
+      "trend_state.direction": 1,
+      "candidate_segment.confirmation_state": 1,
+      "2.4": 1,
+      "strategy_context.indicators.entry_ema34": 3,
+      "entry_ema34.source.timeframe": 1,
+      "source.field": 2,
+      "source.bar_scope": 2,
+      "raw_policy.prompt_rules": 1,
+      "summary.support_resistance.two_closed_bar_breakout": 2,
+      "recent_confirmed.up": 3,
+      "summary.atr_14_closed": 7,
+      "last_closed_bar.close": 4,
+      "macd.trend": 5,
+      "2.5": 1,
+      "source.timeframe": 1,
+      "8": 4,
+      "summary.chan.trend_state.direction": 2,
+      "0": 12,
+      "3%": 3,
+      "8%": 3,
+      "up.complete": 1,
+      "down.complete": 1,
+      "summary.support_resistance.two_closed_bar_breakout.ready": 1,
+      "summary.support_resistance.two_closed_bar_breakout.recent_confirmed": 1,
+      "recent_confirmed.down": 1,
+      "reclaim.found": 1,
+      "reclaim.recovery_direction": 1,
+      "reclaim.bars_after_confirmation": 1,
+      "reclaim.reclaim_close_beyond_breakout_bars": 1,
+      "reclaim.confirmed": 1,
+      "reclaim.confirmation_close_beyond_reclaim_extreme": 1,
+      "reclaim.age_closed_bars": 1,
+      "reclaim.still_valid": 1,
+      "reclaim.invalidation_bar": 1,
+      "9": 2,
+      "0.382": 2,
+      "0.5": 1,
+      "0.886": 2,
+      "0.786": 1,
+      "1.27": 1,
+      "1.618": 3,
+      "0.618": 1,
+      "1.13": 2,
+      "1.5": 14,
+      "6.1": 1,
+      "6.2": 1,
+      "first_bar.low": 1,
+      "second_bar.low": 1,
+      "first_bar.high": 1,
+      "second_bar.high": 1,
+      "reclaim.sweep_extreme": 3,
+      "6.3": 1,
+      "6.4": 1,
+      "6.5": 1,
+      "10": 1,
+      "11": 1,
+      "12": 1,
+      "13": 1,
+      "14": 1,
+      "16": 1,
+      "17": 1,
+      "18": 1,
+      "19": 1,
+      "20": 1,
+      "21": 1,
+      "22": 1,
+      "23": 1,
+      "24": 1,
+      "25": 1,
+      "26": 1,
+      "27": 1,
+      "28": 1
+    },
+    "schema_keys_zh": [
+      "signal_type",
+      "entry_method",
+      "confidence",
+      "bullish_score",
+      "bearish_score",
+      "position_size_tier",
+      "position_size_reason",
+      "position_action",
+      "pending_action",
+      "pending_action_reason",
+      "management_direction",
+      "hard_gate_status",
+      "hard_gate_failures",
+      "minimum_reward_to_risk",
+      "recommended_reward_to_risk",
+      "reward_to_risk_status",
+      "limit_price",
+      "stop_limit_price",
+      "pending_valid_minutes",
+      "stop_loss_price",
+      "take_profit_1_price",
+      "take_profit_2_price",
+      "take_profit_3_price",
+      "recommended_take_profit_tier",
+      "decision_summary",
+      "trigger_condition",
+      "invalidation_condition",
+      "key_reasons",
+      "risk_factors",
+      "analysis",
+      "reasoning",
+      "experience_usage"
+    ],
+    "schema_keys_en": [
+      "signal_type",
+      "entry_method",
+      "confidence",
+      "bullish_score",
+      "bearish_score",
+      "position_size_tier",
+      "position_size_reason",
+      "position_action",
+      "pending_action",
+      "pending_action_reason",
+      "management_direction",
+      "hard_gate_status",
+      "hard_gate_failures",
+      "minimum_reward_to_risk",
+      "recommended_reward_to_risk",
+      "reward_to_risk_status",
+      "limit_price",
+      "stop_limit_price",
+      "pending_valid_minutes",
+      "stop_loss_price",
+      "take_profit_1_price",
+      "take_profit_2_price",
+      "take_profit_3_price",
+      "recommended_take_profit_tier",
+      "decision_summary",
+      "trigger_condition",
+      "invalidation_condition",
+      "key_reasons",
+      "risk_factors",
+      "analysis",
+      "reasoning",
+      "experience_usage"
+    ],
+    "source": "model_chunked_cached",
+    "model": "deepseek-v4-pro-0813",
+    "translation_calls": 8,
+    "strategy_chunk_count": 7,
+    "translation_algorithm": "protected-mask-v2",
+    "source_binding_verified": true,
+    "strategy_source_sha256": "04f30b707b59c35f570959e7597baffebf48afd2d9a8ac2a994ac0a067e87de3",
+    "schema_source_sha256": "59848e0b10afdaa393eae38cfa8b24e15589d579065425220692fe18b9da3289",
+    "strategy_translation_sha256": "3c2ad39014bc84bf495752336aa5330708cb435e4c89b7ef433fcb2a153dd95b",
+    "schema_translation_sha256": "89dfc066a152867d0d123b2ea5279bca1cd5402a8c338a7a4def119a86ceee57",
+    "strategy_chunk_bindings": [
+      {
+        "index": 1,
+        "source_sha256": "48054c968d996337bf85168558cd2065cda129d013f58a380206fb8ebd5056f5",
+        "translation_sha256": "377df913f8791d50dddd2e6b6af3582c14da384a5baed1b16b51e5a9d7bce9a8"
+      },
+      {
+        "index": 2,
+        "source_sha256": "55fa1b7feefc7c48261bf08a0caaeff9b0ee05f9a4733178a45b7b1893337665",
+        "translation_sha256": "0cdfece72b443d35b03786196833d142c86b036977496fda4062b7096b34faac"
+      },
+      {
+        "index": 3,
+        "source_sha256": "912f8618d0959472e6d2e39cf74eb04004cf39a52a4a4361d598f49f89ba9b84",
+        "translation_sha256": "5777569e9f738c96df07c70482ae3021330ed15438bd960ed60d48540a086c7a"
+      },
+      {
+        "index": 4,
+        "source_sha256": "a99cdef622b3e50dc00efa0c59ff2af2ff1e3e45737885b85d3a32656180bc16",
+        "translation_sha256": "816f19f1e050b85da04604e412d201ba7d6b29eba5eb84231f0c91643e3c97d9"
+      },
+      {
+        "index": 5,
+        "source_sha256": "70e27f6595afe88a5ce37c5e4fd3a78d2087ce524624a9ff445491766280d12a",
+        "translation_sha256": "96551b3a1339ccee5a0f78738b36b44bfceab6cd2d177f3585ddb151b1357ecb"
+      },
+      {
+        "index": 6,
+        "source_sha256": "cc66e94ed7f6d39b7eeba46cc68497e0eb8bbb931f34b16bf1eda7ce979c6089",
+        "translation_sha256": "225a4a4e02f3c7390d6e90a15c75ce22d27cd4c9aa8c5633af462f405e970ec5"
+      },
+      {
+        "index": 7,
+        "source_sha256": "83c64fd9a8eac79200b253fab6e74d740a60d7bd24e26a2c58cd49bba3da027a",
+        "translation_sha256": "199901f4bfbd7a50c270ee14e607998edd0a1f8cab37d19184b04d7e827a2971"
+      }
+    ],
+    "schema_request_sha256": "4946b309b0a2516eac94d4ad71f1c830ffd7eba1f8c6021d46a3b56a07d66b71",
+    "schema_response_sha256": "21fbc8838c507d6e8fef461f6f107c3505f2fbdba705cf8eed52739dd144612a"
+  },
+  "out_of_band_attempts": {
+    "schema_version": "out-of-band-provider-attempts-v3",
+    "billing_status": "unknown_without_provider_billing_ledger",
+    "events": [
+      {
+        "phase": "whole_document_translation_preflight",
+        "related_batch": "translation_provenance",
+        "included_in_final_2x2": false,
+        "thinking_mode": "provider_default",
+        "observed_network_timeouts": 1,
+        "interrupted_in_flight": 1,
+        "timeout_seconds": 120,
+        "http_response_persisted": false
+      },
+      {
+        "phase": "chunk_translation_preflight",
+        "related_batch": "translation_provenance",
+        "included_in_final_2x2": false,
+        "thinking_mode": "provider_default",
+        "observed_network_timeouts": 1,
+        "interrupted_in_flight": 1,
+        "timeout_seconds": 120,
+        "http_response_persisted": false
+      },
+      {
+        "phase": "formal_analysis",
+        "related_batch": "max_thinking_pilot",
+        "included_in_final_2x2": false,
+        "decision_id": "h1-1787216400000",
+        "group": "zh_en",
+        "thinking_mode": "enabled_max",
+        "observed_network_timeouts": 3,
+        "interrupted_in_flight": 2,
+        "timeout_seconds": 120,
+        "http_response_persisted": false,
+        "follow_up": "resume with 240-second timeout and at most one retry"
+      },
+      {
+        "phase": "formal_analysis",
+        "related_batch": "max_thinking_pilot",
+        "included_in_final_2x2": false,
+        "decision_id": "h1-1787216400000",
+        "group": "en_zh",
+        "thinking_mode": "enabled_max",
+        "observed_network_timeouts": 1,
+        "interrupted_in_flight": 1,
+        "timeout_seconds": 240,
+        "http_response_persisted": false,
+        "follow_up": "exclude max-thinking tail-latency pilot from the primary 2x2 language effects"
+      },
+      {
+        "phase": "primary_2x2_initial_batch",
+        "related_batch": "rejected-preexperiment-missing-compact-market-rule",
+        "included_in_final_2x2": false,
+        "decision_id": "h1-1787324400000",
+        "group": "zh_en",
+        "thinking_mode": "disabled",
+        "observed_failed_record": "api_request_failed:429",
+        "attempt_count": "unavailable_in_failed_record",
+        "follow_up": "the excluded pre-experiment later completed; this 429 does not belong to the replacement formal request set"
+      }
+    ]
+  },
+  "excluded_preexperiment_records": 41,
+  "excluded_preexperiment_batches": [
+    {
+      "name": "rejected-preexperiment-missing-compact-market-rule",
+      "records": 32
+    },
+    {
+      "name": "rejected-preexperiment-schema-language-conflict",
+      "records": 9
+    }
+  ],
+  "max_thinking_pilot": {
+    "included_in_primary_effects": false,
+    "thinking": {
+      "type": "enabled",
+      "reasoning_effort": "max"
+    },
+    "persisted_records": 2,
+    "successes": 1,
+    "failures": 1,
+    "successful_latency_ms": [
+      83523.634
+    ],
+    "attempts": [
+      {
+        "attempt": 1,
+        "http_status": null,
+        "latency_ms": 120683.41,
+        "retryable": true
+      },
+      {
+        "attempt": 2,
+        "http_status": 200,
+        "latency_ms": 83523.634
+      }
+    ],
+    "timeout_or_network_attempts": 1,
+    "usage": [
+      {
+        "prompt_tokens": 70139,
+        "total_tokens": 73611,
+        "completion_tokens": 3472,
+        "prompt_tokens_details": {
+          "cached_tokens": 69632
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 2522
+        }
+      }
+    ],
+    "failure_errors": [
+      "api_request_failed:524"
+    ],
+    "interpretation": "transport-tail pilot only; excluded from all language main effects and interactions"
+  },
+  "narrative_fact_audit": {
+    "audit_version": "2.0",
+    "scope": {
+      "source_directory": "artifacts/results/calls",
+      "formal_records_audited": 32,
+      "decision_points": 8,
+      "groups": {
+        "zh_zh": 8,
+        "zh_en": 8,
+        "en_zh": 8,
+        "en_en": 8
+      },
+      "formal_record_set_sha256": "86245ed857511bd64b0552358df3592f9d2af1eb971b541d369ff92e9061381f",
+      "response_fields_audited": [
+        "parsed_output.analysis",
+        "parsed_output.reasoning",
+        "parsed_output.key_reasons",
+        "parsed_output.risk_factors",
+        "parsed_output.decision_summary",
+        "parsed_output.hard_gate_status",
+        "parsed_output.hard_gate_failures"
+      ],
+      "fact_source": "The frozen market JSON embedded in the same record.request.messages user message.",
+      "excluded_from_conclusions": [
+        "rejected-preexperiment-*",
+        "max-thinking-pilot",
+        "all external model, VM, MT5, and network state"
+      ]
+    },
+    "methodology": {
+      "read_only_source_audit": true,
+      "external_calls_made": false,
+      "subjective_chan_or_harmonic_recalculation": false,
+      "explicit_contradiction_rule": "Counted only when a response statement directly conflicts with a frozen structured field, attributes an event to the wrong timeframe, asserts a nonexistent event state, or reaches the opposite result from the strategy's deterministic H1 non-Chan four-field mapping.",
+      "not_independently_verifiable_rule": "Claims requiring a fresh harmonic, Chan, HH/HL, naked-candle, false-breakout, or key-level-reaction interpretation were not independently recomputed. A pass/fail claim without a frozen deterministic adjudicator and auditable closed-time/key-level anchors is classified as not independently verifiable rather than as an explicit contradiction.",
+      "gate_sequence_rule": "A sequence is self-consistent only if its reasoning statuses and hard_gate_failures contain the earliest actually checked blocker, omit unchecked/not-reached downstream items, do not retain H1 as a blocker after the H4 fallback resolves the direction, and do not mark regular M5 failed after both regular M15 paths already blocked it. Path C is treated as an independent alternative path.",
+      "numeric_check": "Every narrative numeric literal other than fixed strategy constants was matched against a scalar present in the same frozen request, followed by manual timeframe/path checks for cited examples."
+    },
+    "results": {
+      "explicitly_contradictory_records": 14,
+      "explicit_contradiction_rate": 0.4375,
+      "explicit_contradictions_by_group": {
+        "zh_zh": 3,
+        "zh_en": 4,
+        "en_zh": 3,
+        "en_en": 4
+      },
+      "records_without_directly_falsified_fact": 18,
+      "invented_numeric_values_found": 0,
+      "fully_supported_entire_narratives": 0,
+      "records_with_at_least_one_not_independently_verifiable_path_claim": 32,
+      "surface_hold_contract_consistent": 32,
+      "gate_failure_sequence_self_consistent": 5,
+      "gate_failure_sequence_self_consistent_by_group": {
+        "zh_zh": 2,
+        "zh_en": 0,
+        "en_zh": 2,
+        "en_en": 1
+      },
+      "gate_failure_sequence_inconsistent": 27,
+      "h1_unclear_but_h4_not_enabled": 15
+    },
+    "record_matrix": {
+      "h1-1787216400000": {
+        "en_en": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "en_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_en": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        }
+      },
+      "h1-1787274000000": {
+        "en_en": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "en_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_en": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        }
+      },
+      "h1-1787324400000": {
+        "en_en": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "en_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": true
+        },
+        "zh_en": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        }
+      },
+      "h1-1787554800000": {
+        "en_en": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": true
+        },
+        "en_zh": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_en": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_zh": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": true
+        }
+      },
+      "h1-1787612400000": {
+        "en_en": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "en_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": true
+        },
+        "zh_en": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": true
+        }
+      },
+      "h1-1787666400000": {
+        "en_en": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "en_zh": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_en": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_zh": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        }
+      },
+      "h1-1787720400000": {
+        "en_en": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "en_zh": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_en": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_zh": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        }
+      },
+      "h1-1787774400000": {
+        "en_en": {
+          "direct_fact_classification": "explicit_contradiction",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "en_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_en": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        },
+        "zh_zh": {
+          "direct_fact_classification": "no_directly_falsified_fact",
+          "gate_failure_sequence_self_consistent": false
+        }
+      }
+    },
+    "contradiction_records": [
+      {
+        "decision_id": "h1-1787324400000",
+        "group": "zh_en",
+        "request_sha256": "6a64767c1c8929bc90578b4e766b3f126c6d6a5e7becfed793ff480af35820e3",
+        "response_sha256": "797ff33f2ab060031e135a5a8838961d935d2a80eba22f6738dbefbd0f88886a",
+        "response_fields": [
+          "parsed_output.analysis"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.age_closed_bars"
+        ],
+        "frozen_evidence": {
+          "found": false,
+          "age_closed_bars": null
+        },
+        "conflicting_statement": "M15路径B称 recent_confirmed.up 年龄为5根M15已收盘K线。",
+        "assessment": "The response imported an age-5 up event into M15 even though the frozen M15 event is absent. The age-5 event exists on H1, not M15."
+      },
+      {
+        "decision_id": "h1-1787554800000",
+        "group": "en_en",
+        "request_sha256": "2806e8a96ea72cd71602caf2c416df8abf89b56cd111353f74f8a7a165c36100",
+        "response_sha256": "a9dbcf4b156b850b58e0f9ecca38bdd49aa8d39dac09fd5c3eb675bad9607ff4",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.reasoning"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid"
+        ],
+        "frozen_evidence": {
+          "found": false,
+          "still_valid": null
+        },
+        "conflicting_statement": "M15 Path B称 recent_confirmed.up found=true、still_valid=false。",
+        "assessment": "The frozen M15 record has no recent up event; it is not an existing invalid event."
+      },
+      {
+        "decision_id": "h1-1787554800000",
+        "group": "en_zh",
+        "request_sha256": "f43be0200c6d998f6097e57d2beaaa11659bbb0869163d025416193ca9abb838",
+        "response_sha256": "96877a4fc282573337d4dbf73e36e0e0ac755d9aa817c5d0302fbcd004f4cbb2",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.key_reasons"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid"
+        ],
+        "frozen_evidence": {
+          "found": false,
+          "still_valid": null
+        },
+        "conflicting_statement": "M15 recent_confirmed中的up事件被描述为已失效。",
+        "assessment": "No M15 up event exists in the frozen record, so describing it as an invalidated event is false."
+      },
+      {
+        "decision_id": "h1-1787554800000",
+        "group": "zh_en",
+        "request_sha256": "49748c9ea0c05b9707c978087e9c2b199c96c9db41072e90cb1d203ff3735c12",
+        "response_sha256": "0f41f0f5163ea0a27fd3abe3161d3bae3dba49a4e7dd3d2b2e8019bf03f77780",
+        "response_fields": [
+          "parsed_output.analysis"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid"
+        ],
+        "frozen_evidence": {
+          "found": false,
+          "still_valid": null
+        },
+        "conflicting_statement": "M15 recent_confirmed.up被描述为已失效。",
+        "assessment": "The response converted a nonexistent event into an invalid event."
+      },
+      {
+        "decision_id": "h1-1787554800000",
+        "group": "zh_zh",
+        "request_sha256": "f6d367d18d02acaf75ad160f1062e0f5699227582034c596baeab1302a2e5dfe",
+        "response_sha256": "7c593ef9c09169ca1555c8cf13471f24e18bd231e330a71a122733a2548bd2a5",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.reasoning"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid",
+          "strategy_context.timeframes.M5.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.found",
+          "strategy_context.timeframes.M5.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.reclaim.found"
+        ],
+        "frozen_evidence": {
+          "M15_recent_up_found": false,
+          "M15_recent_up_still_valid": null,
+          "M5_recent_down_found": false,
+          "M5_recent_down_reclaim_found": false
+        },
+        "conflicting_statement": "M15近期有效事件、Path C反向突破回收事件均被描述为已失效。",
+        "assessment": "Both referenced event lifecycles are absent, not existing invalidated events."
+      },
+      {
+        "decision_id": "h1-1787666400000",
+        "group": "en_en",
+        "request_sha256": "5fa3d35f6051ab265a78cf9d23e7ed6395b72dd502117206c1f09e76f64f6124",
+        "response_sha256": "cb23856a40f0b94cae05753c1fad3a87df7660bfcad95817988ee5bd891cf652",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.reasoning",
+          "parsed_output.key_reasons"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+          "strategy_context.timeframes.H1.summary.sma_20",
+          "strategy_context.timeframes.H1.summary.momentum_3_pct",
+          "strategy_context.timeframes.H1.summary.momentum_10_pct",
+          "strategy_context.timeframes.H1.summary.macd.trend",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down"
+        ],
+        "frozen_evidence": {
+          "close": 4616.56,
+          "sma_20": 4643.6795,
+          "momentum_3_pct": -0.49,
+          "momentum_10_pct": -0.37,
+          "macd_trend": "bearish",
+          "M15_recent_down": {
+            "found": true,
+            "complete": true,
+            "age_closed_bars": 1,
+            "still_valid": true
+          }
+        },
+        "conflicting_statement": "四项被称为并非全部同向，H1被判不明确；M15 recent_confirmed又被称为无有效事件。",
+        "assessment": "All four deterministic H1 fields are bearish, and M15 has a valid recent down event."
+      },
+      {
+        "decision_id": "h1-1787666400000",
+        "group": "en_zh",
+        "request_sha256": "38edecff042057fec24ab6bb28e6e4d8ffabf72f0f80725eab599e506d00d732",
+        "response_sha256": "a90bb0763da9d4f7efed2a49188b08479e114a562602ed7d6028df43e5556f69",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.reasoning",
+          "parsed_output.key_reasons"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+          "strategy_context.timeframes.H1.summary.sma_20",
+          "strategy_context.timeframes.H1.summary.momentum_3_pct",
+          "strategy_context.timeframes.H1.summary.momentum_10_pct",
+          "strategy_context.timeframes.H1.summary.macd.trend"
+        ],
+        "frozen_evidence": {
+          "close": 4616.56,
+          "sma_20": 4643.6795,
+          "momentum_3_pct": -0.49,
+          "momentum_10_pct": -0.37,
+          "macd_trend": "bearish"
+        },
+        "conflicting_statement": "价格、两项动量和MACD全部偏空，却仍称存在未解决方向矛盾并将H1判为不明确。",
+        "assessment": "The strategy's deterministic H1 non-Chan mapping is fully bearish; an unavailable Chan direction cannot veto it."
+      },
+      {
+        "decision_id": "h1-1787666400000",
+        "group": "zh_en",
+        "request_sha256": "051ea3c4f4648ab4d1263afa3db3105b5d8a8b7d9128535929d8bd1be3510b95",
+        "response_sha256": "01d7a4ac0560449b7e2eb9f0b66f03af33d1a976474f2fa8ffeac60591264950",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.reasoning",
+          "parsed_output.key_reasons"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+          "strategy_context.timeframes.H1.summary.sma_20",
+          "strategy_context.timeframes.H1.summary.momentum_3_pct",
+          "strategy_context.timeframes.H1.summary.momentum_10_pct",
+          "strategy_context.timeframes.H1.summary.macd.trend",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down"
+        ],
+        "frozen_evidence": {
+          "close": 4616.56,
+          "sma_20": 4643.6795,
+          "momentum_3_pct": -0.49,
+          "momentum_10_pct": -0.37,
+          "macd_trend": "bearish",
+          "M15_recent_down": {
+            "found": true,
+            "complete": true,
+            "age_closed_bars": 1,
+            "still_valid": true
+          }
+        },
+        "conflicting_statement": "列出四项全部偏空后仍称非Chan四项并非全部同向；并称M15无有效顺势事件。",
+        "assessment": "Both the deterministic H1 conclusion and the stated M15 event absence conflict with frozen fields."
+      },
+      {
+        "decision_id": "h1-1787666400000",
+        "group": "zh_zh",
+        "request_sha256": "7b5b154da6bc5b2abe7a8960b6593b59b79a36aab748cfa6a341bc717156ecaa",
+        "response_sha256": "0eb1c6c17f1ec32be41bb7bde27681cc6122a8f4ace66ee8ea0909053f1a9246",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.key_reasons"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+          "strategy_context.timeframes.H1.summary.sma_20",
+          "strategy_context.timeframes.H1.summary.momentum_3_pct",
+          "strategy_context.timeframes.H1.summary.momentum_10_pct",
+          "strategy_context.timeframes.H1.summary.macd.trend",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down"
+        ],
+        "frozen_evidence": {
+          "close": 4616.56,
+          "sma_20": 4643.6795,
+          "momentum_3_pct": -0.49,
+          "momentum_10_pct": -0.37,
+          "macd_trend": "bearish",
+          "M15_recent_down": {
+            "found": true,
+            "complete": true,
+            "age_closed_bars": 1,
+            "still_valid": true
+          }
+        },
+        "conflicting_statement": "四项被称为未全部同向，且M15被称为无当前窗口或近期有效顺势事件。",
+        "assessment": "The frozen H1 fields are unanimously bearish and M15 has a valid recent down event."
+      },
+      {
+        "decision_id": "h1-1787720400000",
+        "group": "en_en",
+        "request_sha256": "5122ac9ea2f2f461635843e8b4ac7a2189f2e1e19f11e92007d11af527f7dafc",
+        "response_sha256": "d3d897121f2ffc1ef58b710b021adbf0ba6babee6f311fa28033768cbd980bbf",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.key_reasons",
+          "parsed_output.risk_factors"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+          "strategy_context.timeframes.H1.summary.sma_20",
+          "strategy_context.timeframes.H1.summary.momentum_3_pct",
+          "strategy_context.timeframes.H1.summary.momentum_10_pct",
+          "strategy_context.timeframes.H1.summary.macd.trend"
+        ],
+        "frozen_evidence": {
+          "close": 4640.63,
+          "sma_20": 4646.487,
+          "momentum_3_pct": -0.352,
+          "momentum_10_pct": -0.167,
+          "macd_trend": "bearish"
+        },
+        "conflicting_statement": "H1非Chan四要素被称为未同向，趋势不明确。",
+        "assessment": "All four deterministic H1 fields are bearish."
+      },
+      {
+        "decision_id": "h1-1787720400000",
+        "group": "en_zh",
+        "request_sha256": "2d548f2c19150c1687236a35cec97f6161d821337856edecb20ef4659a57e7f5",
+        "response_sha256": "36a88a53254d36d193b12c7ddbbb8d0ae69258aaab222438d0a457bae70850a7",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.reasoning",
+          "parsed_output.key_reasons"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+          "strategy_context.timeframes.H1.summary.sma_20",
+          "strategy_context.timeframes.H1.summary.momentum_3_pct",
+          "strategy_context.timeframes.H1.summary.momentum_10_pct",
+          "strategy_context.timeframes.H1.summary.macd.trend"
+        ],
+        "frozen_evidence": {
+          "close": 4640.63,
+          "sma_20": 4646.487,
+          "momentum_3_pct": -0.352,
+          "momentum_10_pct": -0.167,
+          "macd_trend": "bearish"
+        },
+        "conflicting_statement": "逐项列出四个空头条件后仍称四项并非全部同向。",
+        "assessment": "The statement directly contradicts the listed frozen values."
+      },
+      {
+        "decision_id": "h1-1787720400000",
+        "group": "zh_en",
+        "request_sha256": "f9ea0d4834e3f5babc01dc64a95f0804495765b8ff011e89809d420214195984",
+        "response_sha256": "a76eb8dda1c5823ae6c2d055b2dc97a7936650f1bf101ff340f793c34464bef7",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.key_reasons"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+          "strategy_context.timeframes.H1.summary.sma_20",
+          "strategy_context.timeframes.H1.summary.momentum_3_pct",
+          "strategy_context.timeframes.H1.summary.momentum_10_pct",
+          "strategy_context.timeframes.H1.summary.macd.trend"
+        ],
+        "frozen_evidence": {
+          "close": 4640.63,
+          "sma_20": 4646.487,
+          "momentum_3_pct": -0.352,
+          "momentum_10_pct": -0.167,
+          "macd_trend": "bearish"
+        },
+        "conflicting_statement": "收盘、两项动量、MACD全部偏空后仍称四项未全部同向。",
+        "assessment": "The deterministic non-Chan mapping is fully bearish."
+      },
+      {
+        "decision_id": "h1-1787720400000",
+        "group": "zh_zh",
+        "request_sha256": "f9899fb128b18a3f21d7467834d798227ce2d794179e5f89ee3aab67d4983f86",
+        "response_sha256": "6397b10df5912c32621473afc95ade37594805f017aa339bfe7021af4169c3ce",
+        "response_fields": [
+          "parsed_output.analysis",
+          "parsed_output.reasoning",
+          "parsed_output.key_reasons"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+          "strategy_context.timeframes.H1.summary.sma_20",
+          "strategy_context.timeframes.H1.summary.momentum_3_pct",
+          "strategy_context.timeframes.H1.summary.momentum_10_pct",
+          "strategy_context.timeframes.H1.summary.macd.trend"
+        ],
+        "frozen_evidence": {
+          "close": 4640.63,
+          "sma_20": 4646.487,
+          "momentum_3_pct": -0.352,
+          "momentum_10_pct": -0.167,
+          "macd_trend": "bearish"
+        },
+        "conflicting_statement": "逐项列出全部空头值后仍称四项未全部同向。",
+        "assessment": "The conclusion is the opposite of the frozen deterministic mapping."
+      },
+      {
+        "decision_id": "h1-1787774400000",
+        "group": "en_en",
+        "request_sha256": "6ff54ffe1a629c19b018465a8de04df4b58a3cd30116af968acb771b9a627648",
+        "response_sha256": "a0df22a45d55f89243a4316ab4703008791be23441400988e06b2a80431eba49",
+        "response_fields": [
+          "parsed_output.analysis"
+        ],
+        "market_field_paths": [
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.found",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.complete",
+          "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.age_closed_bars"
+        ],
+        "frozen_evidence": {
+          "found": false,
+          "complete": false,
+          "age_closed_bars": null
+        },
+        "conflicting_statement": "M15 recent_confirmed被称为仅有down事件。",
+        "assessment": "The down event exists on H1, not M15; frozen M15 has no recent down event."
+      }
+    ],
+    "not_independently_verifiable_claim_classes": [
+      {
+        "claim_class": "M15 Path A blanket pass/fail counts",
+        "coverage": "All 32 records include a Path A count or item-state conclusion; most assert zero without auditable closed-time/key-level anchors, while h1-1787612400000/en_zh asserts one self-identified false-breakout vote without a frozen deterministic false-breakout adjudicator."
+      },
+      {
+        "claim_class": "Harmonic PRZ, naked-candle, false-breakout, and key-level-reaction absence",
+        "coverage": "The request contains OHLC and partial structured facts, but no independent evaluator proving the universal absence statements. These were not recomputed."
+      },
+      {
+        "claim_class": "Ordinary HH/HL, opportunity-location, and trend interpretation",
+        "coverage": "When responses rely on unanchored ordinary price structure to override mixed direct-mapping fields, the conclusion remains an interpretation unless closed times and swing points are identified."
+      }
+    ],
+    "gate_sequence_findings": {
+      "self_consistent_records": [
+        {
+          "decision_id": "h1-1787324400000",
+          "group": "en_zh"
+        },
+        {
+          "decision_id": "h1-1787554800000",
+          "group": "en_en"
+        },
+        {
+          "decision_id": "h1-1787554800000",
+          "group": "zh_zh"
+        },
+        {
+          "decision_id": "h1-1787612400000",
+          "group": "en_zh"
+        },
+        {
+          "decision_id": "h1-1787612400000",
+          "group": "zh_zh"
+        }
+      ],
+      "representative_inconsistencies": [
+        {
+          "decision_id": "h1-1787216400000",
+          "group": "en_en",
+          "issue": "H1 is Unclear and H4 is Not Enabled, yet M15 failures plus M5_trigger_unchecked and M1_ema34_unchecked are written into hard_gate_failures."
+        },
+        {
+          "decision_id": "h1-1787274000000",
+          "group": "zh_en",
+          "issue": "H4 is reported Pass, but H1_trend_unclear remains a hard failure instead of allowing the H4 fallback to resolve final direction."
+        },
+        {
+          "decision_id": "h1-1787554800000",
+          "group": "en_zh",
+          "issue": "Both regular M15 paths fail, but regular M5 is still marked Fail rather than Not Checked."
+        },
+        {
+          "decision_id": "h1-1787774400000",
+          "group": "en_en",
+          "issue": "M1_ema34_not_checked is included as a hard failure, and regular M5 is marked failed after earlier trend/M15 blockers."
+        }
+      ],
+      "h1_unclear_but_h4_not_enabled_by_group": {
+        "zh_zh": 3,
+        "zh_en": 4,
+        "en_zh": 3,
+        "en_en": 5
+      },
+      "h4_status_boundary_note": "h1-1787274000000/zh_zh says H4=[未启用/降级后仍不明确], but its analysis actually evaluates H4. It is not counted in h1_unclear_but_h4_not_enabled; the mixed status text is a separate wording inconsistency."
+    },
+    "limitations": [
+      "This audit does not determine whether every hold was the economically optimal decision.",
+      "No subjective Chan, harmonic, HH/HL, candle-pattern, or key-level analysis was recomputed.",
+      "A numeric value appearing somewhere in the frozen request does not by itself prove correct timeframe attribution; event/timeframe attribution was manually checked for every explicit contradiction.",
+      "No conclusion uses rejected-preexperiment records or any external runtime state."
+    ]
+  },
+  "narrative_contradiction_effects": {
+    "by_group": {
+      "zh_zh": 0.375,
+      "zh_en": 0.5,
+      "en_zh": 0.375,
+      "en_en": 0.5
+    },
+    "strategy_language_effect_en_minus_zh": 0.0,
+    "output_contract_language_effect_en_minus_zh": 0.125,
+    "interaction": 0.0
+  },
+  "integrity_checks": {
+    "formal_record_binding": {
+      "formal_records": 32,
+      "formal_record_set_sha256": "86245ed857511bd64b0552358df3592f9d2af1eb971b541d369ff92e9061381f",
+      "records": [
+        {
+          "decision_id": "h1-1787216400000",
+          "group": "en_en",
+          "request_sha256": "4aa343f9c2adf3486afb16313a99a2fd8bf433852e73bcd8c114ad7561e0d819",
+          "response_sha256": "292f5d07e29b51a3d2f64faf73f178c168e57ead4be033018d68a8f57b7c34d1"
+        },
+        {
+          "decision_id": "h1-1787216400000",
+          "group": "en_zh",
+          "request_sha256": "7c7c9f16cb4913058ec2bbfb6c58f5e807b6024d2a34b87a9edf1c2850394d2c",
+          "response_sha256": "10e6616e6b15b47e89c251fb80ace6b1139bf2554d671cc9d54974fd4f337276"
+        },
+        {
+          "decision_id": "h1-1787216400000",
+          "group": "zh_en",
+          "request_sha256": "9a6e8508600135df817576b2b6aa05bdc9164278150befeef015c4640839a9f6",
+          "response_sha256": "98492774ff8795bbe27c24e2f30443c92c17ebb900eccd59e3239d7a6c7b1755"
+        },
+        {
+          "decision_id": "h1-1787216400000",
+          "group": "zh_zh",
+          "request_sha256": "c968bc1b743f2377f55ec075aca5c95546de96c8574c6b237bffccc87a35c22e",
+          "response_sha256": "67e84ba6cc4f51c826bbed90578f00f08f905997318b92f3a8364b5ed034951b"
+        },
+        {
+          "decision_id": "h1-1787274000000",
+          "group": "en_en",
+          "request_sha256": "0cacb40e09c50d85b8ef99d1efdcc9b438bff3e735e48c1c52686a8b951edcd2",
+          "response_sha256": "037d4a5fd9126167c8b1111133df9e3bf90a47bb9fcc6bb3e54aee0dc6326625"
+        },
+        {
+          "decision_id": "h1-1787274000000",
+          "group": "en_zh",
+          "request_sha256": "4f452cbd00d508487334a163c229506fcedfc45871b3671c472b9e1e356ee686",
+          "response_sha256": "177f90356e5e299dc6574a6ba73a2e82bb6f22017542d3230375acc82b19b359"
+        },
+        {
+          "decision_id": "h1-1787274000000",
+          "group": "zh_en",
+          "request_sha256": "27ace6339dee09f8af8a5c700c4039d67de6f3dceb423b701f1247ad52aefa9e",
+          "response_sha256": "bd7ee6813921b5fa7d2dadf83b0699d253136c6a43b57315ca71c30c3634fdb4"
+        },
+        {
+          "decision_id": "h1-1787274000000",
+          "group": "zh_zh",
+          "request_sha256": "3195896ae3295a8c4c0019edd1dc0ca2a9955891a4bafcf13bb8d982104d0cad",
+          "response_sha256": "1f05505ef43f254c4b282a82b4443a1fcd8d8511927336f88419e682167c22ac"
+        },
+        {
+          "decision_id": "h1-1787324400000",
+          "group": "en_en",
+          "request_sha256": "1e525e72cb5f58f71f02f26ddc2762ff3764646b5fa54fb1ff12c806735b4181",
+          "response_sha256": "efdee48cde78193b4860ba36470208283271cf4b24504b1d95bcdff8620354a3"
+        },
+        {
+          "decision_id": "h1-1787324400000",
+          "group": "en_zh",
+          "request_sha256": "63ebcd487d2da15fbea39b32ef31902661f78353a351442037143e80c08da9a4",
+          "response_sha256": "b6044e40109ff69ca2196c8d520e0bc13f1cdd7a49fc79c958a02103ce58b9a9"
+        },
+        {
+          "decision_id": "h1-1787324400000",
+          "group": "zh_en",
+          "request_sha256": "6a64767c1c8929bc90578b4e766b3f126c6d6a5e7becfed793ff480af35820e3",
+          "response_sha256": "797ff33f2ab060031e135a5a8838961d935d2a80eba22f6738dbefbd0f88886a"
+        },
+        {
+          "decision_id": "h1-1787324400000",
+          "group": "zh_zh",
+          "request_sha256": "46d293e95829fed7196bddd3a7797aaa626cb19755c0243eacb31f2e6961ce3b",
+          "response_sha256": "e2470985d0bf87f50f5703b4a127e42e8976a4d71da1d4409544cd786e0d7759"
+        },
+        {
+          "decision_id": "h1-1787554800000",
+          "group": "en_en",
+          "request_sha256": "2806e8a96ea72cd71602caf2c416df8abf89b56cd111353f74f8a7a165c36100",
+          "response_sha256": "a9dbcf4b156b850b58e0f9ecca38bdd49aa8d39dac09fd5c3eb675bad9607ff4"
+        },
+        {
+          "decision_id": "h1-1787554800000",
+          "group": "en_zh",
+          "request_sha256": "f43be0200c6d998f6097e57d2beaaa11659bbb0869163d025416193ca9abb838",
+          "response_sha256": "96877a4fc282573337d4dbf73e36e0e0ac755d9aa817c5d0302fbcd004f4cbb2"
+        },
+        {
+          "decision_id": "h1-1787554800000",
+          "group": "zh_en",
+          "request_sha256": "49748c9ea0c05b9707c978087e9c2b199c96c9db41072e90cb1d203ff3735c12",
+          "response_sha256": "0f41f0f5163ea0a27fd3abe3161d3bae3dba49a4e7dd3d2b2e8019bf03f77780"
+        },
+        {
+          "decision_id": "h1-1787554800000",
+          "group": "zh_zh",
+          "request_sha256": "f6d367d18d02acaf75ad160f1062e0f5699227582034c596baeab1302a2e5dfe",
+          "response_sha256": "7c593ef9c09169ca1555c8cf13471f24e18bd231e330a71a122733a2548bd2a5"
+        },
+        {
+          "decision_id": "h1-1787612400000",
+          "group": "en_en",
+          "request_sha256": "3a5c395851b37a378a7ee7dd88ff5f82bd5af0bbb166c45fdfb599f2b9973457",
+          "response_sha256": "2864448f31138ebfb1000eee176832b22fe9c6b849d43191409511514c53085c"
+        },
+        {
+          "decision_id": "h1-1787612400000",
+          "group": "en_zh",
+          "request_sha256": "45f8edd40a3bb5973a106325c7e6b29ed394d48a175523cba333924bdb17b984",
+          "response_sha256": "1ebae65138f7974b689fc1f0e5fe398d73374af34dce0cfac3c1c2440deccdc0"
+        },
+        {
+          "decision_id": "h1-1787612400000",
+          "group": "zh_en",
+          "request_sha256": "794322a4a2f1cdb4dfd1d9324a5686ce1cfebb89d4e50028eabae54a5ecd88a1",
+          "response_sha256": "3d9687c8a50b23b17b63728636884eebecdbac0d3540e3de29f49401b9896408"
+        },
+        {
+          "decision_id": "h1-1787612400000",
+          "group": "zh_zh",
+          "request_sha256": "e35c78c8e571964579a06235fd98b0c0535f16ba68cbfb11778b6a9c712a7366",
+          "response_sha256": "bbad81326a4a71843de3c7d5cc3713ad21e2bcf9423f4aecd21875103b14fe95"
+        },
+        {
+          "decision_id": "h1-1787666400000",
+          "group": "en_en",
+          "request_sha256": "5fa3d35f6051ab265a78cf9d23e7ed6395b72dd502117206c1f09e76f64f6124",
+          "response_sha256": "cb23856a40f0b94cae05753c1fad3a87df7660bfcad95817988ee5bd891cf652"
+        },
+        {
+          "decision_id": "h1-1787666400000",
+          "group": "en_zh",
+          "request_sha256": "38edecff042057fec24ab6bb28e6e4d8ffabf72f0f80725eab599e506d00d732",
+          "response_sha256": "a90bb0763da9d4f7efed2a49188b08479e114a562602ed7d6028df43e5556f69"
+        },
+        {
+          "decision_id": "h1-1787666400000",
+          "group": "zh_en",
+          "request_sha256": "051ea3c4f4648ab4d1263afa3db3105b5d8a8b7d9128535929d8bd1be3510b95",
+          "response_sha256": "01d7a4ac0560449b7e2eb9f0b66f03af33d1a976474f2fa8ffeac60591264950"
+        },
+        {
+          "decision_id": "h1-1787666400000",
+          "group": "zh_zh",
+          "request_sha256": "7b5b154da6bc5b2abe7a8960b6593b59b79a36aab748cfa6a341bc717156ecaa",
+          "response_sha256": "0eb1c6c17f1ec32be41bb7bde27681cc6122a8f4ace66ee8ea0909053f1a9246"
+        },
+        {
+          "decision_id": "h1-1787720400000",
+          "group": "en_en",
+          "request_sha256": "5122ac9ea2f2f461635843e8b4ac7a2189f2e1e19f11e92007d11af527f7dafc",
+          "response_sha256": "d3d897121f2ffc1ef58b710b021adbf0ba6babee6f311fa28033768cbd980bbf"
+        },
+        {
+          "decision_id": "h1-1787720400000",
+          "group": "en_zh",
+          "request_sha256": "2d548f2c19150c1687236a35cec97f6161d821337856edecb20ef4659a57e7f5",
+          "response_sha256": "36a88a53254d36d193b12c7ddbbb8d0ae69258aaab222438d0a457bae70850a7"
+        },
+        {
+          "decision_id": "h1-1787720400000",
+          "group": "zh_en",
+          "request_sha256": "f9ea0d4834e3f5babc01dc64a95f0804495765b8ff011e89809d420214195984",
+          "response_sha256": "a76eb8dda1c5823ae6c2d055b2dc97a7936650f1bf101ff340f793c34464bef7"
+        },
+        {
+          "decision_id": "h1-1787720400000",
+          "group": "zh_zh",
+          "request_sha256": "f9899fb128b18a3f21d7467834d798227ce2d794179e5f89ee3aab67d4983f86",
+          "response_sha256": "6397b10df5912c32621473afc95ade37594805f017aa339bfe7021af4169c3ce"
+        },
+        {
+          "decision_id": "h1-1787774400000",
+          "group": "en_en",
+          "request_sha256": "6ff54ffe1a629c19b018465a8de04df4b58a3cd30116af968acb771b9a627648",
+          "response_sha256": "a0df22a45d55f89243a4316ab4703008791be23441400988e06b2a80431eba49"
+        },
+        {
+          "decision_id": "h1-1787774400000",
+          "group": "en_zh",
+          "request_sha256": "d3a4bb4ea801493157482ce2795864bdd692beb33ef3fad79e6c431509c23d5f",
+          "response_sha256": "1f4b06145d28d6e0ead63dba7fedd110239fab8df9ebab7aeb2086ae9e589c7c"
+        },
+        {
+          "decision_id": "h1-1787774400000",
+          "group": "zh_en",
+          "request_sha256": "cace8ee34432ecc06e8097a445eb5b4e26a9c85202f2c8118adf68439b1eae76",
+          "response_sha256": "899d93f15accd41be0b3451ba78c537a9a512ff325617ac50e8c823e7f819fba"
+        },
+        {
+          "decision_id": "h1-1787774400000",
+          "group": "zh_zh",
+          "request_sha256": "8b2e49957c6a2b1b732ddf2aaa0fe79f905ae09bd8ebadab9998acb6088ff854",
+          "response_sha256": "74f14f371b654e6605d3d3e9fe584042ad7bca08e656809ff819c55f2d7a85b7"
+        }
+      ]
+    },
+    "call_order_balance": {
+      "zh_zh": {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+        "3": 2
+      },
+      "zh_en": {
+        "1": 2,
+        "0": 2,
+        "3": 2,
+        "2": 2
+      },
+      "en_zh": {
+        "2": 2,
+        "3": 2,
+        "0": 2,
+        "1": 2
+      },
+      "en_en": {
+        "3": 2,
+        "2": 2,
+        "1": 2,
+        "0": 2
+      }
+    },
+    "each_group_occupied_each_order_twice": true,
+    "same_market_payload_within_each_pair": true,
+    "pair_market_payload_hash_counts": {
+      "h1-1787216400000": 1,
+      "h1-1787274000000": 1,
+      "h1-1787324400000": 1,
+      "h1-1787554800000": 1,
+      "h1-1787612400000": 1,
+      "h1-1787666400000": 1,
+      "h1-1787720400000": 1,
+      "h1-1787774400000": 1
+    }
+  },
+  "groups": {
+    "zh_zh": {
+      "total_calls": 8,
+      "transport_success": 8,
+      "json_parse_success": 8,
+      "contract_success": 0,
+      "structural_contract_success": 8,
+      "transport_success_rate": 1.0,
+      "json_parse_rate": 1.0,
+      "contract_compliance_rate": 0.0,
+      "structural_contract_compliance_rate": 1.0,
+      "natural_language_adherence_rate": 1.0,
+      "core_narrative_chinese_compliance_count": 8,
+      "core_narrative_chinese_compliance_rate": 1.0,
+      "validation_error_distribution": {
+        "experience_influence_nonempty_without_memory": 8
+      },
+      "deterministic_contradiction_count": 0,
+      "deterministic_contradiction_rate": 0.0,
+      "deterministic_contradiction_interpretation": "cross-field/price/RR inconsistency proxy; not a complete hallucination verdict",
+      "signal_distribution": {
+        "hold": 8
+      },
+      "entry_method_distribution": {
+        "observe": 8
+      },
+      "hard_gate_distribution": {
+        "fail": 8
+      },
+      "hard_gate_failure_distribution": {
+        "H1_trend_unclear": 4,
+        "M15_pathA_insufficient": 4,
+        "M15_pathB_not_passed": 4,
+        "pathC_not_passed": 4,
+        "M15_path_A_insufficient": 2,
+        "M15_path_B_not_passed": 2,
+        "M5_trigger_not_passed": 2,
+        "M15_PATH_A_INSUFFICIENT": 1,
+        "M15_PATH_B_NOT_PASSED": 1,
+        "PATH_C_NOT_PASSED": 1,
+        "M15路径A独立通过数量不足2/6": 1,
+        "M15路径B未通过": 1,
+        "路径C未通过": 1
+      },
+      "confidence_mean": 0.92,
+      "confidence_min": 0.92,
+      "confidence_max": 0.92,
+      "bullish_score_mean": 0.51,
+      "bearish_score_mean": 0.49,
+      "no_memory_instruction_echo_count": 8,
+      "no_memory_instruction_echo_rate": 1.0,
+      "no_memory_instruction_echo_interpretation": "non-empty experience_usage.influence despite no memory input; semantic contract failure, not a market-fact hallucination",
+      "backtest_status_distribution": {
+        "not_applicable": 8
+      },
+      "performance_eligible": 0,
+      "performance_excluded": 8,
+      "performance_exclusion_distribution": {
+        "hold_has_no_trade_replay": 8
+      },
+      "filled": 0,
+      "wins_tp": 0,
+      "fill_rate": null,
+      "win_rate_among_filled": null,
+      "mfe_price_mean": null,
+      "mae_price_mean": null,
+      "return_pct_mean_filled": null,
+      "direction_return_4h_pct_mean": null,
+      "direction_return_12h_pct_mean": null,
+      "latency": {
+        "count": 8,
+        "p50_ms": 25431.183,
+        "p95_ms": 32427.153549999995
+      },
+      "request_bytes_total": 1566955,
+      "response_bytes_total": 31904,
+      "prompt_tokens_total": 559885,
+      "completion_tokens_total": 8322,
+      "reasoning_tokens_total": null,
+      "prompt_tokens_mean": 69985.625,
+      "completion_tokens_mean": 1040.25
+    },
+    "zh_en": {
+      "total_calls": 8,
+      "transport_success": 8,
+      "json_parse_success": 8,
+      "contract_success": 1,
+      "structural_contract_success": 8,
+      "transport_success_rate": 1.0,
+      "json_parse_rate": 1.0,
+      "contract_compliance_rate": 0.125,
+      "structural_contract_compliance_rate": 1.0,
+      "natural_language_adherence_rate": 0.9293414918414918,
+      "core_narrative_chinese_compliance_count": 8,
+      "core_narrative_chinese_compliance_rate": 1.0,
+      "validation_error_distribution": {
+        "experience_influence_nonempty_without_memory": 7
+      },
+      "deterministic_contradiction_count": 0,
+      "deterministic_contradiction_rate": 0.0,
+      "deterministic_contradiction_interpretation": "cross-field/price/RR inconsistency proxy; not a complete hallucination verdict",
+      "signal_distribution": {
+        "hold": 8
+      },
+      "entry_method_distribution": {
+        "observe": 8
+      },
+      "hard_gate_distribution": {
+        "fail": 8
+      },
+      "hard_gate_failure_distribution": {
+        "H1_trend_unclear": 5,
+        "M15_pathA_insufficient": 8,
+        "M15_pathB_not_passed": 8,
+        "pathC_not_passed": 6,
+        "H1_chan_direction_unusable": 2,
+        "M5_trigger_not_passed": 2,
+        "M1_ema34_not_checked": 2,
+        "M5_trigger_not_reached": 1
+      },
+      "confidence_mean": 0.895,
+      "confidence_min": 0.82,
+      "confidence_max": 0.92,
+      "bullish_score_mean": 0.5275,
+      "bearish_score_mean": 0.4725,
+      "no_memory_instruction_echo_count": 7,
+      "no_memory_instruction_echo_rate": 0.875,
+      "no_memory_instruction_echo_interpretation": "non-empty experience_usage.influence despite no memory input; semantic contract failure, not a market-fact hallucination",
+      "backtest_status_distribution": {
+        "not_applicable": 8
+      },
+      "performance_eligible": 0,
+      "performance_excluded": 8,
+      "performance_exclusion_distribution": {
+        "hold_has_no_trade_replay": 8
+      },
+      "filled": 0,
+      "wins_tp": 0,
+      "fill_rate": null,
+      "win_rate_among_filled": null,
+      "mfe_price_mean": null,
+      "mae_price_mean": null,
+      "return_pct_mean_filled": null,
+      "direction_return_4h_pct_mean": null,
+      "direction_return_12h_pct_mean": null,
+      "latency": {
+        "count": 8,
+        "p50_ms": 27326.7875,
+        "p95_ms": 30682.64585
+      },
+      "request_bytes_total": 1585907,
+      "response_bytes_total": 32785,
+      "prompt_tokens_total": 562165,
+      "completion_tokens_total": 8651,
+      "reasoning_tokens_total": null,
+      "prompt_tokens_mean": 70270.625,
+      "completion_tokens_mean": 1081.375
+    },
+    "en_zh": {
+      "total_calls": 8,
+      "transport_success": 8,
+      "json_parse_success": 8,
+      "contract_success": 0,
+      "structural_contract_success": 8,
+      "transport_success_rate": 1.0,
+      "json_parse_rate": 1.0,
+      "contract_compliance_rate": 0.0,
+      "structural_contract_compliance_rate": 1.0,
+      "natural_language_adherence_rate": 1.0,
+      "core_narrative_chinese_compliance_count": 8,
+      "core_narrative_chinese_compliance_rate": 1.0,
+      "validation_error_distribution": {
+        "experience_influence_nonempty_without_memory": 8
+      },
+      "deterministic_contradiction_count": 0,
+      "deterministic_contradiction_rate": 0.0,
+      "deterministic_contradiction_interpretation": "cross-field/price/RR inconsistency proxy; not a complete hallucination verdict",
+      "signal_distribution": {
+        "hold": 8
+      },
+      "entry_method_distribution": {
+        "observe": 8
+      },
+      "hard_gate_distribution": {
+        "fail": 8
+      },
+      "hard_gate_failure_distribution": {
+        "H1_trend_unclear": 5,
+        "M15_path_not_reached": 1,
+        "M5_trigger_not_reached": 1,
+        "M1_ema34_not_checked": 2,
+        "M15_path_A_insufficient": 4,
+        "M15_path_B_failed": 4,
+        "path_C_failed": 3,
+        "M15_PATH_A_INSUFFICIENT": 2,
+        "M15_PATH_B_FAILED": 2,
+        "PATH_C_FAILED": 2,
+        "M15_path_C_failed": 1,
+        "M15_pathA_insufficient": 1,
+        "M15_pathB_failed": 1,
+        "M5_trigger_not_checked": 1
+      },
+      "confidence_mean": 0.92,
+      "confidence_min": 0.92,
+      "confidence_max": 0.92,
+      "bullish_score_mean": 0.51,
+      "bearish_score_mean": 0.49,
+      "no_memory_instruction_echo_count": 8,
+      "no_memory_instruction_echo_rate": 1.0,
+      "no_memory_instruction_echo_interpretation": "non-empty experience_usage.influence despite no memory input; semantic contract failure, not a market-fact hallucination",
+      "backtest_status_distribution": {
+        "not_applicable": 8
+      },
+      "performance_eligible": 0,
+      "performance_excluded": 8,
+      "performance_exclusion_distribution": {
+        "hold_has_no_trade_replay": 8
+      },
+      "filled": 0,
+      "wins_tp": 0,
+      "fill_rate": null,
+      "win_rate_among_filled": null,
+      "mfe_price_mean": null,
+      "mae_price_mean": null,
+      "return_pct_mean_filled": null,
+      "direction_return_4h_pct_mean": null,
+      "direction_return_12h_pct_mean": null,
+      "latency": {
+        "count": 8,
+        "p50_ms": 27612.0445,
+        "p95_ms": 30480.07495
+      },
+      "request_bytes_total": 1689571,
+      "response_bytes_total": 32766,
+      "prompt_tokens_total": 573381,
+      "completion_tokens_total": 8391,
+      "reasoning_tokens_total": null,
+      "prompt_tokens_mean": 71672.625,
+      "completion_tokens_mean": 1048.875
+    },
+    "en_en": {
+      "total_calls": 8,
+      "transport_success": 8,
+      "json_parse_success": 8,
+      "contract_success": 3,
+      "structural_contract_success": 8,
+      "transport_success_rate": 1.0,
+      "json_parse_rate": 1.0,
+      "contract_compliance_rate": 0.375,
+      "structural_contract_compliance_rate": 1.0,
+      "natural_language_adherence_rate": 0.9423076923076923,
+      "core_narrative_chinese_compliance_count": 7,
+      "core_narrative_chinese_compliance_rate": 0.875,
+      "validation_error_distribution": {
+        "experience_influence_nonempty_without_memory": 5
+      },
+      "deterministic_contradiction_count": 0,
+      "deterministic_contradiction_rate": 0.0,
+      "deterministic_contradiction_interpretation": "cross-field/price/RR inconsistency proxy; not a complete hallucination verdict",
+      "signal_distribution": {
+        "hold": 8
+      },
+      "entry_method_distribution": {
+        "observe": 8
+      },
+      "hard_gate_distribution": {
+        "fail": 8
+      },
+      "hard_gate_failure_distribution": {
+        "h1_chan_direction_unavailable": 2,
+        "h1_non_chan_direction_unclear": 2,
+        "m15_path_a_insufficient": 3,
+        "m15_path_b_failed": 3,
+        "path_c_failed": 2,
+        "m5_trigger_unchecked": 1,
+        "m1_ema34_unchecked": 1,
+        "m5_trigger_failed": 2,
+        "m1_ema34_not_checked": 1,
+        "M15_PATH_A_INSUFFICIENT": 1,
+        "M15_PATH_B_FAILED": 1,
+        "PATH_C_FAILED": 1,
+        "H1_chan_direction_unavailable": 1,
+        "M15_path_a_insufficient": 1,
+        "M15_path_b_failed": 1,
+        "M5_trigger_unchecked": 1,
+        "M1_ema34_unchecked": 1,
+        "H1_trend_unclear": 3,
+        "M15_path_A_insufficient": 3,
+        "M15_path_B_failed": 3,
+        "path_C_failed": 2,
+        "M5_trigger_failed": 2,
+        "M1_ema34_not_checked": 2
+      },
+      "confidence_mean": 0.9225000000000001,
+      "confidence_min": 0.92,
+      "confidence_max": 0.93,
+      "bullish_score_mean": 0.52,
+      "bearish_score_mean": 0.48,
+      "no_memory_instruction_echo_count": 5,
+      "no_memory_instruction_echo_rate": 0.625,
+      "no_memory_instruction_echo_interpretation": "non-empty experience_usage.influence despite no memory input; semantic contract failure, not a market-fact hallucination",
+      "backtest_status_distribution": {
+        "not_applicable": 8
+      },
+      "performance_eligible": 0,
+      "performance_excluded": 8,
+      "performance_exclusion_distribution": {
+        "hold_has_no_trade_replay": 8
+      },
+      "filled": 0,
+      "wins_tp": 0,
+      "fill_rate": null,
+      "win_rate_among_filled": null,
+      "mfe_price_mean": null,
+      "mae_price_mean": null,
+      "return_pct_mean_filled": null,
+      "direction_return_4h_pct_mean": null,
+      "direction_return_12h_pct_mean": null,
+      "latency": {
+        "count": 8,
+        "p50_ms": 26894.813000000002,
+        "p95_ms": 29006.076950000002
+      },
+      "request_bytes_total": 1708523,
+      "response_bytes_total": 31948,
+      "prompt_tokens_total": 575661,
+      "completion_tokens_total": 8214,
+      "reasoning_tokens_total": null,
+      "prompt_tokens_mean": 71957.625,
+      "completion_tokens_mean": 1026.75
+    }
+  },
+  "effects": {
+    "transport_success_rate": {
+      "by_group": {
+        "zh_zh": 1.0,
+        "zh_en": 1.0,
+        "en_zh": 1.0,
+        "en_en": 1.0
+      },
+      "strategy_language_effect_en_minus_zh": 0.0,
+      "schema_language_effect_en_minus_zh": 0.0,
+      "interaction": 0.0
+    },
+    "json_parse_rate": {
+      "by_group": {
+        "zh_zh": 1.0,
+        "zh_en": 1.0,
+        "en_zh": 1.0,
+        "en_en": 1.0
+      },
+      "strategy_language_effect_en_minus_zh": 0.0,
+      "schema_language_effect_en_minus_zh": 0.0,
+      "interaction": 0.0
+    },
+    "contract_compliance_rate": {
+      "by_group": {
+        "zh_zh": 0.0,
+        "zh_en": 0.125,
+        "en_zh": 0.0,
+        "en_en": 0.375
+      },
+      "strategy_language_effect_en_minus_zh": 0.125,
+      "schema_language_effect_en_minus_zh": 0.25,
+      "interaction": 0.25
+    },
+    "structural_contract_compliance_rate": {
+      "by_group": {
+        "zh_zh": 1.0,
+        "zh_en": 1.0,
+        "en_zh": 1.0,
+        "en_en": 1.0
+      },
+      "strategy_language_effect_en_minus_zh": 0.0,
+      "schema_language_effect_en_minus_zh": 0.0,
+      "interaction": 0.0
+    },
+    "natural_language_adherence_rate": {
+      "by_group": {
+        "zh_zh": 1.0,
+        "zh_en": 0.9293414918414918,
+        "en_zh": 1.0,
+        "en_en": 0.9423076923076923
+      },
+      "strategy_language_effect_en_minus_zh": 0.00648310023310017,
+      "schema_language_effect_en_minus_zh": -0.06417540792540799,
+      "interaction": 0.01296620046620045
+    },
+    "core_narrative_chinese_compliance_rate": {
+      "by_group": {
+        "zh_zh": 1.0,
+        "zh_en": 1.0,
+        "en_zh": 1.0,
+        "en_en": 0.875
+      },
+      "strategy_language_effect_en_minus_zh": -0.0625,
+      "schema_language_effect_en_minus_zh": -0.0625,
+      "interaction": -0.125
+    },
+    "deterministic_contradiction_rate": {
+      "by_group": {
+        "zh_zh": 0.0,
+        "zh_en": 0.0,
+        "en_zh": 0.0,
+        "en_en": 0.0
+      },
+      "strategy_language_effect_en_minus_zh": 0.0,
+      "schema_language_effect_en_minus_zh": 0.0,
+      "interaction": 0.0
+    },
+    "fill_rate": {
+      "by_group": {
+        "zh_zh": null,
+        "zh_en": null,
+        "en_zh": null,
+        "en_en": null
+      },
+      "strategy_language_effect_en_minus_zh": null,
+      "schema_language_effect_en_minus_zh": null,
+      "interaction": null
+    },
+    "win_rate_among_filled": {
+      "by_group": {
+        "zh_zh": null,
+        "zh_en": null,
+        "en_zh": null,
+        "en_en": null
+      },
+      "strategy_language_effect_en_minus_zh": null,
+      "schema_language_effect_en_minus_zh": null,
+      "interaction": null
+    },
+    "latency.p50_ms": {
+      "by_group": {
+        "zh_zh": 25431.183,
+        "zh_en": 27326.7875,
+        "en_zh": 27612.0445,
+        "en_en": 26894.813000000002
+      },
+      "strategy_language_effect_en_minus_zh": 874.4435000000012,
+      "schema_language_effect_en_minus_zh": 589.1864999999998,
+      "interaction": -2612.8359999999957
+    },
+    "latency.p95_ms": {
+      "by_group": {
+        "zh_zh": 32427.153549999995,
+        "zh_en": 30682.64585,
+        "en_zh": 30480.07495,
+        "en_en": 29006.076950000002
+      },
+      "strategy_language_effect_en_minus_zh": -1811.8237499999996,
+      "schema_language_effect_en_minus_zh": -1609.2528499999971,
+      "interaction": 270.5096999999987
+    },
+    "request_bytes_total": {
+      "by_group": {
+        "zh_zh": 1566955.0,
+        "zh_en": 1585907.0,
+        "en_zh": 1689571.0,
+        "en_en": 1708523.0
+      },
+      "strategy_language_effect_en_minus_zh": 122616.0,
+      "schema_language_effect_en_minus_zh": 18952.0,
+      "interaction": 0.0
+    },
+    "response_bytes_total": {
+      "by_group": {
+        "zh_zh": 31904.0,
+        "zh_en": 32785.0,
+        "en_zh": 32766.0,
+        "en_en": 31948.0
+      },
+      "strategy_language_effect_en_minus_zh": 12.5,
+      "schema_language_effect_en_minus_zh": 31.5,
+      "interaction": -1699.0
+    },
+    "prompt_tokens_mean": {
+      "by_group": {
+        "zh_zh": 69985.625,
+        "zh_en": 70270.625,
+        "en_zh": 71672.625,
+        "en_en": 71957.625
+      },
+      "strategy_language_effect_en_minus_zh": 1687.0,
+      "schema_language_effect_en_minus_zh": 285.0,
+      "interaction": 0.0
+    },
+    "completion_tokens_mean": {
+      "by_group": {
+        "zh_zh": 1040.25,
+        "zh_en": 1081.375,
+        "en_zh": 1048.875,
+        "en_en": 1026.75
+      },
+      "strategy_language_effect_en_minus_zh": -23.0,
+      "schema_language_effect_en_minus_zh": 9.5,
+      "interaction": -63.25
+    },
+    "confidence_mean": {
+      "by_group": {
+        "zh_zh": 0.92,
+        "zh_en": 0.895,
+        "en_zh": 0.92,
+        "en_en": 0.9225000000000001
+      },
+      "strategy_language_effect_en_minus_zh": 0.013750000000000151,
+      "schema_language_effect_en_minus_zh": -0.011249999999999982,
+      "interaction": 0.02750000000000008
+    },
+    "bullish_score_mean": {
+      "by_group": {
+        "zh_zh": 0.51,
+        "zh_en": 0.5275,
+        "en_zh": 0.51,
+        "en_en": 0.52
+      },
+      "strategy_language_effect_en_minus_zh": -0.003750000000000031,
+      "schema_language_effect_en_minus_zh": 0.013749999999999929,
+      "interaction": -0.007499999999999951
+    },
+    "bearish_score_mean": {
+      "by_group": {
+        "zh_zh": 0.49,
+        "zh_en": 0.4725,
+        "en_zh": 0.49,
+        "en_en": 0.48
+      },
+      "strategy_language_effect_en_minus_zh": 0.003750000000000031,
+      "schema_language_effect_en_minus_zh": -0.01375000000000004,
+      "interaction": 0.007500000000000007
+    },
+    "no_memory_instruction_echo_rate": {
+      "by_group": {
+        "zh_zh": 1.0,
+        "zh_en": 0.875,
+        "en_zh": 1.0,
+        "en_en": 0.625
+      },
+      "strategy_language_effect_en_minus_zh": -0.125,
+      "schema_language_effect_en_minus_zh": -0.25,
+      "interaction": -0.25
+    }
+  },
+  "overall_zhzh_vs_enen": {
+    "pair_count": 8,
+    "direction_agreement_count": 8,
+    "direction_agreement": 1.0,
+    "entry_method_agreement_count": 8,
+    "entry_method_agreement": 1.0,
+    "all_cell_direction_agreement_count": 8,
+    "all_cell_direction_agreement": 1.0,
+    "all_cell_entry_agreement_count": 8,
+    "all_cell_entry_agreement": 1.0,
+    "contract_both_count": 0,
+    "contract_both": 0.0,
+    "confidence_span_mean_all_cells": 0.027500000000000024,
+    "bullish_score_span_mean_all_cells": 0.04125000000000003,
+    "bearish_score_span_mean_all_cells": 0.041249999999999995,
+    "price_differences": [
+      {
+        "limit_price": null,
+        "stop_limit_price": null,
+        "stop_loss_price": null,
+        "take_profit_1_price": null,
+        "take_profit_2_price": null,
+        "take_profit_3_price": null
+      },
+      {
+        "limit_price": null,
+        "stop_limit_price": null,
+        "stop_loss_price": null,
+        "take_profit_1_price": null,
+        "take_profit_2_price": null,
+        "take_profit_3_price": null
+      },
+      {
+        "limit_price": null,
+        "stop_limit_price": null,
+        "stop_loss_price": null,
+        "take_profit_1_price": null,
+        "take_profit_2_price": null,
+        "take_profit_3_price": null
+      },
+      {
+        "limit_price": null,
+        "stop_limit_price": null,
+        "stop_loss_price": null,
+        "take_profit_1_price": null,
+        "take_profit_2_price": null,
+        "take_profit_3_price": null
+      },
+      {
+        "limit_price": null,
+        "stop_limit_price": null,
+        "stop_loss_price": null,
+        "take_profit_1_price": null,
+        "take_profit_2_price": null,
+        "take_profit_3_price": null
+      },
+      {
+        "limit_price": null,
+        "stop_limit_price": null,
+        "stop_loss_price": null,
+        "take_profit_1_price": null,
+        "take_profit_2_price": null,
+        "take_profit_3_price": null
+      },
+      {
+        "limit_price": null,
+        "stop_limit_price": null,
+        "stop_loss_price": null,
+        "take_profit_1_price": null,
+        "take_profit_2_price": null,
+        "take_profit_3_price": null
+      },
+      {
+        "limit_price": null,
+        "stop_limit_price": null,
+        "stop_loss_price": null,
+        "take_profit_1_price": null,
+        "take_profit_2_price": null,
+        "take_profit_3_price": null
+      }
+    ]
+  },
+  "limitations": [
+    "small descriptive sample; no significance claim",
+    "historical simulation only, not trading advice",
+    "empty-account replay without position-management schema",
+    "future M1 availability and stop-limit support are explicitly status-coded"
+  ]
+}

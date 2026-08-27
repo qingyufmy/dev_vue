@@ -1,0 +1,11 @@
+{
+  "verification_version": "clean-runtime-snapshot-rebuild-v1",
+  "verified_at_utc": "2026-08-27T09:57:29.7006707Z",
+  "clean_worktree_commit": "e311daa4d40895a3209cc1264745ba04d9ee7c04",
+  "runtime_paths": "server/routes/ai",
+  "runtime_diff_exit": 0,
+  "snapshot_sha256": "ccdf5d48a1d7d567cd3b1adc79ae4cea6bd48cce14b3f360569cacd1198fcff2",
+  "exact_clean_rebuild_match": true,
+  "main_worktree_runtime_edit_excluded": "server/routes/ai/llm.js",
+  "authority": "VM commit and clean detached worktree"
+}

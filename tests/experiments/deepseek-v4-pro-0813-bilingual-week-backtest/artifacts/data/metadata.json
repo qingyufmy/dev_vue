@@ -1,0 +1,87 @@
+{
+  "artifact_version": "market-data-v1",
+  "market_data_sha256": "192ac3705497b1c18405dd38dd3ae62a97a407ecaa0b0dbb3a33551f5e883f4f",
+  "market_data_file_sha256": "61b76dbb35ca27ed1596429dd7342e53ec29d34e4198884e916e80faebeae793",
+  "market_data_bytes": 6043566,
+  "symbol": "XAUUSD.s",
+  "clock": {
+    "status": "verified",
+    "method": "advancing_tick_15_minute_offset",
+    "symbol": "XAUUSD.s",
+    "first_raw_time_msc": 1787828445198,
+    "last_raw_time_msc": 1787828445452,
+    "first_sampled_utc_msc": 1787817644844,
+    "last_sampled_utc_msc": 1787817645345,
+    "raw_time_advanced": true,
+    "attempts": 3,
+    "broker_offset_seconds": 10800,
+    "broker_offset_minutes": 180,
+    "normalized_last_tick_utc_msc": 1787817645452,
+    "residual_seconds": 0.107,
+    "tick_age_seconds": -0.107,
+    "fresh": true
+  },
+  "terminal_path": "D:\\Program Files\\MetaTrader 5\\terminal64.exe",
+  "python_version": "3.11.15",
+  "metatrader5_python_version": "5.0.6147",
+  "copy_rates_range_calls": 7,
+  "plan": {
+    "primary_timeframe": "H1",
+    "timeframes": [
+      {
+        "timeframe": "H1",
+        "kline_count": 150
+      },
+      {
+        "timeframe": "M1",
+        "kline_count": 30
+      },
+      {
+        "timeframe": "M5",
+        "kline_count": 100
+      },
+      {
+        "timeframe": "M15",
+        "kline_count": 150
+      },
+      {
+        "timeframe": "H4",
+        "kline_count": 100
+      }
+    ]
+  },
+  "bar_counts": {
+    "H1": 2115,
+    "M1": 7190,
+    "M5": 3617,
+    "M15": 2635,
+    "H4": 1175
+  },
+  "bars_before_score_window": {
+    "H1": 2000,
+    "M1": 303,
+    "M5": 2238,
+    "M15": 2175,
+    "H4": 1145
+  },
+  "required_before_score_window": {
+    "H1": 1800,
+    "M1": 170,
+    "M5": 1800,
+    "M15": 2000,
+    "H4": 1000
+  },
+  "warmup_start_by_timeframe_utc": {
+    "H1": "2026-04-21T00:00:45.345Z",
+    "M1": "2026-08-20T02:56:45.345Z",
+    "M5": "2026-08-10T05:20:45.345Z",
+    "M15": "2026-07-17T16:00:45.345Z",
+    "H4": "2025-11-21T08:00:45.345Z"
+  },
+  "source": {
+    "vm_commit": "e31a91e3e85e9d34d66ec2da859c4c2f07bb2805",
+    "local_commit": "e31a91e3e85e9d34d66ec2da859c4c2f07bb2805",
+    "vm_branch": "dev_codex"
+  },
+  "accounts_exported": false
+}

@@ -1,0 +1,471 @@
+{
+  "artifact_version": "deepseek-v4-pro-0813-bilingual-week-backtest-v1",
+  "exported_at_utc": "2026-08-27T09:55:14.357028+00:00",
+  "source": {
+    "vm_host": "aurum-vm",
+    "remote_dir": "/www/wwwroot/aurum-ai",
+    "git_branch": "dev_codex",
+    "git_commit": "e311daa4d40895a3209cc1264745ba04d9ee7c04",
+    "git_status_porcelain": "",
+    "output_schema_source": "server/routes/ai/llm.js::buildStrategyOutputFormat"
+  },
+  "strategy": {
+    "id": 1,
+    "title": "道诚实战精选策略",
+    "description": "> 适用体系：缠论（背驰+三类买卖点）× 谐波交易 × 裸K形态> 周期结构：1H 趋势主判 → （4H 降级备判）→ 15min 确认 → 5min 精确入场",
+    "symbols_json": "[\"XAUUSD\"]",
+    "market_data_plan_json": "{\"primary_timeframe\":\"H1\",\"timeframes\":[{\"timeframe\":\"H1\",\"kline_count\":150},{\"timeframe\":\"M1\",\"kline_count\":30},{\"timeframe\":\"M5\",\"kline_count\":100},{\"timeframe\":\"M15\",\"kline_count\":150},{\"timeframe\":\"H4\",\"kline_count\":100}]}",
+    "strategy_policy_json": "{\"constraints\":[{\"counts_as_trigger\":false,\"id\":\"entry_indicator_ready\",\"on_fail\":\"hold_new_entry\",\"phases\":[\"post_inference\",\"pre_submit\"],\"require\":{\"left\":{\"ref\":\"indicators.entry_ema34.ready\"},\"op\":\"eq\",\"right\":true},\"scope\":\"new_entry\"},{\"counts_as_trigger\":false,\"id\":\"buy_indicator_relation\",\"on_fail\":\"hold_new_entry\",\"phases\":[\"post_inference\",\"pre_submit\"],\"require\":{\"left\":{\"ref\":\"indicators.entry_ema34.bar.close\"},\"op\":\"gt\",\"right\":{\"ref\":\"indicators.entry_ema34.value\"}},\"scope\":\"new_entry\",\"when\":{\"left\":{\"ref\":\"signal.side\"},\"op\":\"eq\",\"right\":\"buy\"}},{\"counts_as_trigger\":false,\"id\":\"sell_indicator_relation\",\"on_fail\":\"hold_new_entry\",\"phases\":[\"post_inference\",\"pre_submit\"],\"require\":{\"left\":{\"ref\":\"indicators.entry_ema34.bar.close\"},\"op\":\"lt\",\"right\":{\"ref\":\"indicators.entry_ema34.value\"}},\"scope\":\"new_entry\",\"when\":{\"left\":{\"ref\":\"signal.side\"},\"op\":\"eq\",\"right\":\"sell\"}}],\"features\":[],\"indicators\":[{\"enabled\":true,\"id\":\"entry_ema34\",\"kind\":\"ema\",\"params\":{\"evidence_window\":5,\"minimum_bars\":34,\"period\":34,\"warmup_target_bars\":170},\"source\":{\"bar_scope\":\"closed_only\",\"field\":\"close\",\"timeframe\":\"M1\"}}],\"mode\":\"enforce\",\"prompt_rules\":[{\"id\":\"entry_indicator_filter\",\"text\":\"系统按 entry_ema34.source 提供的已收盘 EMA34 是短线行情证据和新入场方向过滤器；可用于说明位置、斜率、距离、持续性与最近穿越，但不计作 M15 确认或 M5 触发，也不构成退出持仓或撤销挂单的理由。\"}],\"schema_version\":\"strategy-policy-v1\",\"ui\":{\"groups\":[{\"control\":\"rule_switch\",\"id\":\"entry_indicator\",\"label\":\"EMA34 入场过滤\",\"rule_ref\":\"entry_ema34\"}]},\"workflow\":{\"default_decision\":\"allow\",\"selectors\":[],\"stages\":[]}}",
+    "entry_methods_json": "[\"market\",\"limit\",\"stop\",\"stop_limit\"]",
+    "use_chan_analysis": 1,
+    "use_ema34_filter": 1,
+    "interval_minutes": 5,
+    "is_active": 1,
+    "sort_order": 0,
+    "created_at": "2026-07-01 14:22:17",
+    "updated_at": "2026-08-27 14:44:41",
+    "scope": "platform",
+    "inference_mode": "platform_model",
+    "visibility_status": "active",
+    "version": 38,
+    "version_label": "v2.1"
+  },
+  "strategy_body_sha256": "04f30b707b59c35f570959e7597baffebf48afd2d9a8ac2a994ac0a067e87de3",
+  "strategy_body_chars": 24805,
+  "output_schema_sha256": "640e8a3e26c09d135453ee10b4a2ef6f5ee1c68f074053c513e332fba422cbca",
+  "output_schema_version": "c0e8f990788032c33a2839b5481d000fb9c375eeb4657dfbae62d3af5a802a69",
+  "output_schema_chars": 3739,
+  "policy": {
+    "entry_methods": [
+      "market",
+      "limit",
+      "stop",
+      "stop_limit"
+    ],
+    "market_data_plan": {
+      "primary_timeframe": "H1",
+      "timeframes": [
+        {
+          "timeframe": "H1",
+          "kline_count": 150
+        },
+        {
+          "timeframe": "M1",
+          "kline_count": 30
+        },
+        {
+          "timeframe": "M5",
+          "kline_count": 100
+        },
+        {
+          "timeframe": "M15",
+          "kline_count": 150
+        },
+        {
+          "timeframe": "H4",
+          "kline_count": 100
+        }
+      ]
+    },
+    "use_chan_analysis": true,
+    "use_ema34_filter": true,
+    "strategy_policy": {
+      "constraints": [
+        {
+          "counts_as_trigger": false,
+          "id": "entry_indicator_ready",
+          "on_fail": "hold_new_entry",
+          "phases": [
+            "post_inference",
+            "pre_submit"
+          ],
+          "require": {
+            "left": {
+              "ref": "indicators.entry_ema34.ready"
+            },
+            "op": "eq",
+            "right": true
+          },
+          "scope": "new_entry"
+        },
+        {
+          "counts_as_trigger": false,
+          "id": "buy_indicator_relation",
+          "on_fail": "hold_new_entry",
+          "phases": [
+            "post_inference",
+            "pre_submit"
+          ],
+          "require": {
+            "left": {
+              "ref": "indicators.entry_ema34.bar.close"
+            },
+            "op": "gt",
+            "right": {
+              "ref": "indicators.entry_ema34.value"
+            }
+          },
+          "scope": "new_entry",
+          "when": {
+            "left": {
+              "ref": "signal.side"
+            },
+            "op": "eq",
+            "right": "buy"
+          }
+        },
+        {
+          "counts_as_trigger": false,
+          "id": "sell_indicator_relation",
+          "on_fail": "hold_new_entry",
+          "phases": [
+            "post_inference",
+            "pre_submit"
+          ],
+          "require": {
+            "left": {
+              "ref": "indicators.entry_ema34.bar.close"
+            },
+            "op": "lt",
+            "right": {
+              "ref": "indicators.entry_ema34.value"
+            }
+          },
+          "scope": "new_entry",
+          "when": {
+            "left": {
+              "ref": "signal.side"
+            },
+            "op": "eq",
+            "right": "sell"
+          }
+        }
+      ],
+      "features": [],
+      "indicators": [
+        {
+          "enabled": true,
+          "id": "entry_ema34",
+          "kind": "ema",
+          "params": {
+            "evidence_window": 5,
+            "minimum_bars": 34,
+            "period": 34,
+            "warmup_target_bars": 170
+          },
+          "source": {
+            "bar_scope": "closed_only",
+            "field": "close",
+            "timeframe": "M1"
+          }
+        }
+      ],
+      "mode": "enforce",
+      "prompt_rules": [
+        {
+          "id": "entry_indicator_filter",
+          "text": "系统按 entry_ema34.source 提供的已收盘 EMA34 是短线行情证据和新入场方向过滤器；可用于说明位置、斜率、距离、持续性与最近穿越，但不计作 M15 确认或 M5 触发，也不构成退出持仓或撤销挂单的理由。"
+        }
+      ],
+      "schema_version": "strategy-policy-v1",
+      "ui": {
+        "groups": [
+          {
+            "control": "rule_switch",
+            "id": "entry_indicator",
+            "label": "EMA34 入场过滤",
+            "rule_ref": "entry_ema34"
+          }
+        ]
+      },
+      "workflow": {
+        "default_decision": "allow",
+        "selectors": [],
+        "stages": []
+      }
+    },
+    "compiled_policy": {
+      "constraints": [
+        {
+          "counts_as_trigger": false,
+          "id": "entry_indicator_ready",
+          "on_fail": "hold_new_entry",
+          "phases": [
+            "post_inference",
+            "pre_submit"
+          ],
+          "require": {
+            "left": {
+              "ref": "indicators.entry_ema34.ready"
+            },
+            "op": "eq",
+            "right": true
+          },
+          "scope": "new_entry"
+        },
+        {
+          "counts_as_trigger": false,
+          "id": "buy_indicator_relation",
+          "on_fail": "hold_new_entry",
+          "phases": [
+            "post_inference",
+            "pre_submit"
+          ],
+          "require": {
+            "left": {
+              "ref": "indicators.entry_ema34.bar.close"
+            },
+            "op": "gt",
+            "right": {
+              "ref": "indicators.entry_ema34.value"
+            }
+          },
+          "scope": "new_entry",
+          "when": {
+            "left": {
+              "ref": "signal.side"
+            },
+            "op": "eq",
+            "right": "buy"
+          }
+        },
+        {
+          "counts_as_trigger": false,
+          "id": "sell_indicator_relation",
+          "on_fail": "hold_new_entry",
+          "phases": [
+            "post_inference",
+            "pre_submit"
+          ],
+          "require": {
+            "left": {
+              "ref": "indicators.entry_ema34.bar.close"
+            },
+            "op": "lt",
+            "right": {
+              "ref": "indicators.entry_ema34.value"
+            }
+          },
+          "scope": "new_entry",
+          "when": {
+            "left": {
+              "ref": "signal.side"
+            },
+            "op": "eq",
+            "right": "sell"
+          }
+        }
+      ],
+      "engine_version": "strategy-policy-engine-v2",
+      "features": [],
+      "indicators": [
+        {
+          "enabled": true,
+          "id": "entry_ema34",
+          "kind": "ema",
+          "params": {
+            "evidence_window": 5,
+            "minimum_bars": 34,
+            "period": 34,
+            "warmup_target_bars": 170
+          },
+          "source": {
+            "bar_scope": "closed_only",
+            "field": "close",
+            "timeframe": "M1"
+          }
+        }
+      ],
+      "mode": "enforce",
+      "prompt_rules": [
+        {
+          "id": "entry_indicator_filter",
+          "text": "系统按 entry_ema34.source 提供的已收盘 EMA34 是短线行情证据和新入场方向过滤器；可用于说明位置、斜率、距离、持续性与最近穿越，但不计作 M15 确认或 M5 触发，也不构成退出持仓或撤销挂单的理由。"
+        }
+      ],
+      "schema_version": "strategy-policy-v1",
+      "ui": {
+        "groups": [
+          {
+            "control": "rule_switch",
+            "id": "entry_indicator",
+            "label": "EMA34 入场过滤",
+            "rule_ref": "entry_ema34"
+          }
+        ]
+      },
+      "workflow": {
+        "default_decision": "allow",
+        "selectors": [],
+        "stages": []
+      },
+      "policy_hash": "6412f5c8d1d13f05372050c64cbcb35b7863792f1865330466d6319dea9b9280"
+    },
+    "policy_mode": "enforce",
+    "policy_hash": "6412f5c8d1d13f05372050c64cbcb35b7863792f1865330466d6319dea9b9280"
+  },
+  "data_plan": {
+    "primary_timeframe": "H1",
+    "timeframes": [
+      {
+        "timeframe": "H1",
+        "kline_count": 150
+      },
+      {
+        "timeframe": "M1",
+        "kline_count": 30
+      },
+      {
+        "timeframe": "M5",
+        "kline_count": 100
+      },
+      {
+        "timeframe": "M15",
+        "kline_count": 150
+      },
+      {
+        "timeframe": "H4",
+        "kline_count": 100
+      }
+    ]
+  },
+  "entry_methods": [
+    "market",
+    "limit",
+    "stop",
+    "stop_limit"
+  ],
+  "use_chan_analysis": true,
+  "use_ema34_filter": true,
+  "strategy_policy_hash": "6412f5c8d1d13f05372050c64cbcb35b7863792f1865330466d6319dea9b9280",
+  "chan_window_policy_version": "chan_window_v7",
+  "chan_window_policy_id": "dao_xau_v1",
+  "chan_policies": {
+    "M1": {
+      "timeframe": "M1",
+      "target": 0,
+      "validators": [],
+      "maximumHistoryCount": 0,
+      "validationWindowCounts": [],
+      "windowPolicyVersion": "unsupported",
+      "policyId": "dao_xau_v1",
+      "supported": false,
+      "reason": "unsupported_timeframe_policy"
+    },
+    "M5": {
+      "timeframe": "M5",
+      "target": 1800,
+      "validators": [
+        1400,
+        1600,
+        1800
+      ],
+      "maximumHistoryCount": 1800,
+      "validationWindowCounts": [
+        1400,
+        1600,
+        1800
+      ],
+      "windowPolicyVersion": "chan_window_v7",
+      "policyId": "dao_xau_v1",
+      "supported": true
+    },
+    "M15": {
+      "timeframe": "M15",
+      "target": 2000,
+      "validators": [
+        1600,
+        1800,
+        2000
+      ],
+      "maximumHistoryCount": 2000,
+      "validationWindowCounts": [
+        1600,
+        1800,
+        2000
+      ],
+      "windowPolicyVersion": "chan_window_v7",
+      "policyId": "dao_xau_v1",
+      "supported": true
+    },
+    "M30": {
+      "timeframe": "M30",
+      "target": 0,
+      "validators": [],
+      "maximumHistoryCount": 0,
+      "validationWindowCounts": [],
+      "windowPolicyVersion": "unsupported",
+      "policyId": "dao_xau_v1",
+      "supported": false,
+      "reason": "unsupported_timeframe_policy"
+    },
+    "H1": {
+      "timeframe": "H1",
+      "target": 1800,
+      "validators": [
+        1400,
+        1600,
+        1800
+      ],
+      "maximumHistoryCount": 1800,
+      "validationWindowCounts": [
+        1400,
+        1600,
+        1800
+      ],
+      "windowPolicyVersion": "chan_window_v7",
+      "policyId": "dao_xau_v1",
+      "supported": true
+    },
+    "H4": {
+      "timeframe": "H4",
+      "target": 1000,
+      "validators": [
+        600,
+        800,
+        1000
+      ],
+      "maximumHistoryCount": 1000,
+      "validationWindowCounts": [
+        600,
+        800,
+        1000
+      ],
+      "windowPolicyVersion": "chan_window_v7",
+      "policyId": "dao_xau_v1",
+      "supported": true
+    },
+    "D1": {
+      "timeframe": "D1",
+      "target": 0,
+      "validators": [],
+      "maximumHistoryCount": 0,
+      "validationWindowCounts": [],
+      "windowPolicyVersion": "unsupported",
+      "policyId": "dao_xau_v1",
+      "supported": false,
+      "reason": "unsupported_timeframe_policy"
+    },
+    "W1": {
+      "timeframe": "W1",
+      "target": 0,
+      "validators": [],
+      "maximumHistoryCount": 0,
+      "validationWindowCounts": [],
+      "windowPolicyVersion": "unsupported",
+      "policyId": "dao_xau_v1",
+      "supported": false,
+      "reason": "unsupported_timeframe_policy"
+    }
+  },
+  "latest_inference_snapshot": {
+    "strategy_version": 38,
+    "output_schema_version": "c0e8f990788032c33a2839b5481d000fb9c375eeb4657dfbae62d3af5a802a69",
+    "prompt_hash": "f029ca0ebc075c5665a673f3e421dd32c7dbd4feaf4b3ff4956db2be86abc835",
+    "created_at": "2026-08-27 17:52:16"
+  },
+  "historical_simulation": {
+    "position_management_schema": "not included; empty-account A/B replay",
+    "account_data_exported": false
+  }
+}

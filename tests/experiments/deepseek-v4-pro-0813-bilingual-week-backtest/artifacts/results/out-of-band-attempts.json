@@ -1,0 +1,63 @@
+{
+  "schema_version": "out-of-band-provider-attempts-v3",
+  "billing_status": "unknown_without_provider_billing_ledger",
+  "events": [
+    {
+      "phase": "whole_document_translation_preflight",
+      "related_batch": "translation_provenance",
+      "included_in_final_2x2": false,
+      "thinking_mode": "provider_default",
+      "observed_network_timeouts": 1,
+      "interrupted_in_flight": 1,
+      "timeout_seconds": 120,
+      "http_response_persisted": false
+    },
+    {
+      "phase": "chunk_translation_preflight",
+      "related_batch": "translation_provenance",
+      "included_in_final_2x2": false,
+      "thinking_mode": "provider_default",
+      "observed_network_timeouts": 1,
+      "interrupted_in_flight": 1,
+      "timeout_seconds": 120,
+      "http_response_persisted": false
+    },
+    {
+      "phase": "formal_analysis",
+      "related_batch": "max_thinking_pilot",
+      "included_in_final_2x2": false,
+      "decision_id": "h1-1787216400000",
+      "group": "zh_en",
+      "thinking_mode": "enabled_max",
+      "observed_network_timeouts": 3,
+      "interrupted_in_flight": 2,
+      "timeout_seconds": 120,
+      "http_response_persisted": false,
+      "follow_up": "resume with 240-second timeout and at most one retry"
+    },
+    {
+      "phase": "formal_analysis",
+      "related_batch": "max_thinking_pilot",
+      "included_in_final_2x2": false,
+      "decision_id": "h1-1787216400000",
+      "group": "en_zh",
+      "thinking_mode": "enabled_max",
+      "observed_network_timeouts": 1,
+      "interrupted_in_flight": 1,
+      "timeout_seconds": 240,
+      "http_response_persisted": false,
+      "follow_up": "exclude max-thinking tail-latency pilot from the primary 2x2 language effects"
+    },
+    {
+      "phase": "primary_2x2_initial_batch",
+      "related_batch": "rejected-preexperiment-missing-compact-market-rule",
+      "included_in_final_2x2": false,
+      "decision_id": "h1-1787324400000",
+      "group": "zh_en",
+      "thinking_mode": "disabled",
+      "observed_failed_record": "api_request_failed:429",
+      "attempt_count": "unavailable_in_failed_record",
+      "follow_up": "the excluded pre-experiment later completed; this 429 does not belong to the replacement formal request set"
+    }
+  ]
+}

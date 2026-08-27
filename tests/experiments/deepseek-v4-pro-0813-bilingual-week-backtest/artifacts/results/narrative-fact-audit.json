@@ -1,0 +1,425 @@
+{
+  "audit_version": "2.0",
+  "scope": {
+    "source_directory": "artifacts/results/calls",
+    "formal_records_audited": 32,
+    "decision_points": 8,
+    "groups": {
+      "zh_zh": 8,
+      "zh_en": 8,
+      "en_zh": 8,
+      "en_en": 8
+    },
+    "formal_record_set_sha256": "86245ed857511bd64b0552358df3592f9d2af1eb971b541d369ff92e9061381f",
+    "response_fields_audited": [
+      "parsed_output.analysis",
+      "parsed_output.reasoning",
+      "parsed_output.key_reasons",
+      "parsed_output.risk_factors",
+      "parsed_output.decision_summary",
+      "parsed_output.hard_gate_status",
+      "parsed_output.hard_gate_failures"
+    ],
+    "fact_source": "The frozen market JSON embedded in the same record.request.messages user message.",
+    "excluded_from_conclusions": [
+      "rejected-preexperiment-*",
+      "max-thinking-pilot",
+      "all external model, VM, MT5, and network state"
+    ]
+  },
+  "methodology": {
+    "read_only_source_audit": true,
+    "external_calls_made": false,
+    "subjective_chan_or_harmonic_recalculation": false,
+    "explicit_contradiction_rule": "Counted only when a response statement directly conflicts with a frozen structured field, attributes an event to the wrong timeframe, asserts a nonexistent event state, or reaches the opposite result from the strategy's deterministic H1 non-Chan four-field mapping.",
+    "not_independently_verifiable_rule": "Claims requiring a fresh harmonic, Chan, HH/HL, naked-candle, false-breakout, or key-level-reaction interpretation were not independently recomputed. A pass/fail claim without a frozen deterministic adjudicator and auditable closed-time/key-level anchors is classified as not independently verifiable rather than as an explicit contradiction.",
+    "gate_sequence_rule": "A sequence is self-consistent only if its reasoning statuses and hard_gate_failures contain the earliest actually checked blocker, omit unchecked/not-reached downstream items, do not retain H1 as a blocker after the H4 fallback resolves the direction, and do not mark regular M5 failed after both regular M15 paths already blocked it. Path C is treated as an independent alternative path.",
+    "numeric_check": "Every narrative numeric literal other than fixed strategy constants was matched against a scalar present in the same frozen request, followed by manual timeframe/path checks for cited examples."
+  },
+  "results": {
+    "explicitly_contradictory_records": 14,
+    "explicit_contradiction_rate": 0.4375,
+    "explicit_contradictions_by_group": {
+      "zh_zh": 3,
+      "zh_en": 4,
+      "en_zh": 3,
+      "en_en": 4
+    },
+    "records_without_directly_falsified_fact": 18,
+    "invented_numeric_values_found": 0,
+    "fully_supported_entire_narratives": 0,
+    "records_with_at_least_one_not_independently_verifiable_path_claim": 32,
+    "surface_hold_contract_consistent": 32,
+    "gate_failure_sequence_self_consistent": 5,
+    "gate_failure_sequence_self_consistent_by_group": {
+      "zh_zh": 2,
+      "zh_en": 0,
+      "en_zh": 2,
+      "en_en": 1
+    },
+    "gate_failure_sequence_inconsistent": 27,
+    "h1_unclear_but_h4_not_enabled": 15
+  },
+  "record_matrix": {
+    "h1-1787216400000": {
+      "en_en": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "en_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "zh_en": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "zh_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false }
+    },
+    "h1-1787274000000": {
+      "en_en": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "en_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "zh_en": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "zh_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false }
+    },
+    "h1-1787324400000": {
+      "en_en": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "en_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": true },
+      "zh_en": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "zh_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false }
+    },
+    "h1-1787554800000": {
+      "en_en": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": true },
+      "en_zh": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "zh_en": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "zh_zh": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": true }
+    },
+    "h1-1787612400000": {
+      "en_en": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "en_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": true },
+      "zh_en": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "zh_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": true }
+    },
+    "h1-1787666400000": {
+      "en_en": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "en_zh": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "zh_en": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "zh_zh": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false }
+    },
+    "h1-1787720400000": {
+      "en_en": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "en_zh": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "zh_en": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "zh_zh": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false }
+    },
+    "h1-1787774400000": {
+      "en_en": { "direct_fact_classification": "explicit_contradiction", "gate_failure_sequence_self_consistent": false },
+      "en_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "zh_en": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false },
+      "zh_zh": { "direct_fact_classification": "no_directly_falsified_fact", "gate_failure_sequence_self_consistent": false }
+    }
+  },
+  "contradiction_records": [
+    {
+      "decision_id": "h1-1787324400000",
+      "group": "zh_en",
+      "request_sha256": "6a64767c1c8929bc90578b4e766b3f126c6d6a5e7becfed793ff480af35820e3",
+      "response_sha256": "797ff33f2ab060031e135a5a8838961d935d2a80eba22f6738dbefbd0f88886a",
+      "response_fields": ["parsed_output.analysis"],
+      "market_field_paths": [
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.age_closed_bars"
+      ],
+      "frozen_evidence": { "found": false, "age_closed_bars": null },
+      "conflicting_statement": "M15路径B称 recent_confirmed.up 年龄为5根M15已收盘K线。",
+      "assessment": "The response imported an age-5 up event into M15 even though the frozen M15 event is absent. The age-5 event exists on H1, not M15."
+    },
+    {
+      "decision_id": "h1-1787554800000",
+      "group": "en_en",
+      "request_sha256": "2806e8a96ea72cd71602caf2c416df8abf89b56cd111353f74f8a7a165c36100",
+      "response_sha256": "a9dbcf4b156b850b58e0f9ecca38bdd49aa8d39dac09fd5c3eb675bad9607ff4",
+      "response_fields": ["parsed_output.analysis", "parsed_output.reasoning"],
+      "market_field_paths": [
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid"
+      ],
+      "frozen_evidence": { "found": false, "still_valid": null },
+      "conflicting_statement": "M15 Path B称 recent_confirmed.up found=true、still_valid=false。",
+      "assessment": "The frozen M15 record has no recent up event; it is not an existing invalid event."
+    },
+    {
+      "decision_id": "h1-1787554800000",
+      "group": "en_zh",
+      "request_sha256": "f43be0200c6d998f6097e57d2beaaa11659bbb0869163d025416193ca9abb838",
+      "response_sha256": "96877a4fc282573337d4dbf73e36e0e0ac755d9aa817c5d0302fbcd004f4cbb2",
+      "response_fields": ["parsed_output.analysis", "parsed_output.key_reasons"],
+      "market_field_paths": [
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid"
+      ],
+      "frozen_evidence": { "found": false, "still_valid": null },
+      "conflicting_statement": "M15 recent_confirmed中的up事件被描述为已失效。",
+      "assessment": "No M15 up event exists in the frozen record, so describing it as an invalidated event is false."
+    },
+    {
+      "decision_id": "h1-1787554800000",
+      "group": "zh_en",
+      "request_sha256": "49748c9ea0c05b9707c978087e9c2b199c96c9db41072e90cb1d203ff3735c12",
+      "response_sha256": "0f41f0f5163ea0a27fd3abe3161d3bae3dba49a4e7dd3d2b2e8019bf03f77780",
+      "response_fields": ["parsed_output.analysis"],
+      "market_field_paths": [
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid"
+      ],
+      "frozen_evidence": { "found": false, "still_valid": null },
+      "conflicting_statement": "M15 recent_confirmed.up被描述为已失效。",
+      "assessment": "The response converted a nonexistent event into an invalid event."
+    },
+    {
+      "decision_id": "h1-1787554800000",
+      "group": "zh_zh",
+      "request_sha256": "f6d367d18d02acaf75ad160f1062e0f5699227582034c596baeab1302a2e5dfe",
+      "response_sha256": "7c593ef9c09169ca1555c8cf13471f24e18bd231e330a71a122733a2548bd2a5",
+      "response_fields": ["parsed_output.analysis", "parsed_output.reasoning"],
+      "market_field_paths": [
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.found",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.up.still_valid",
+        "strategy_context.timeframes.M5.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.found",
+        "strategy_context.timeframes.M5.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.reclaim.found"
+      ],
+      "frozen_evidence": {
+        "M15_recent_up_found": false,
+        "M15_recent_up_still_valid": null,
+        "M5_recent_down_found": false,
+        "M5_recent_down_reclaim_found": false
+      },
+      "conflicting_statement": "M15近期有效事件、Path C反向突破回收事件均被描述为已失效。",
+      "assessment": "Both referenced event lifecycles are absent, not existing invalidated events."
+    },
+    {
+      "decision_id": "h1-1787666400000",
+      "group": "en_en",
+      "request_sha256": "5fa3d35f6051ab265a78cf9d23e7ed6395b72dd502117206c1f09e76f64f6124",
+      "response_sha256": "cb23856a40f0b94cae05753c1fad3a87df7660bfcad95817988ee5bd891cf652",
+      "response_fields": ["parsed_output.analysis", "parsed_output.reasoning", "parsed_output.key_reasons"],
+      "market_field_paths": [
+        "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down"
+      ],
+      "frozen_evidence": {
+        "close": 4616.56,
+        "sma_20": 4643.6795,
+        "momentum_3_pct": -0.49,
+        "momentum_10_pct": -0.37,
+        "macd_trend": "bearish",
+        "M15_recent_down": { "found": true, "complete": true, "age_closed_bars": 1, "still_valid": true }
+      },
+      "conflicting_statement": "四项被称为并非全部同向，H1被判不明确；M15 recent_confirmed又被称为无有效事件。",
+      "assessment": "All four deterministic H1 fields are bearish, and M15 has a valid recent down event."
+    },
+    {
+      "decision_id": "h1-1787666400000",
+      "group": "en_zh",
+      "request_sha256": "38edecff042057fec24ab6bb28e6e4d8ffabf72f0f80725eab599e506d00d732",
+      "response_sha256": "a90bb0763da9d4f7efed2a49188b08479e114a562602ed7d6028df43e5556f69",
+      "response_fields": ["parsed_output.analysis", "parsed_output.reasoning", "parsed_output.key_reasons"],
+      "market_field_paths": [
+        "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend"
+      ],
+      "frozen_evidence": { "close": 4616.56, "sma_20": 4643.6795, "momentum_3_pct": -0.49, "momentum_10_pct": -0.37, "macd_trend": "bearish" },
+      "conflicting_statement": "价格、两项动量和MACD全部偏空，却仍称存在未解决方向矛盾并将H1判为不明确。",
+      "assessment": "The strategy's deterministic H1 non-Chan mapping is fully bearish; an unavailable Chan direction cannot veto it."
+    },
+    {
+      "decision_id": "h1-1787666400000",
+      "group": "zh_en",
+      "request_sha256": "051ea3c4f4648ab4d1263afa3db3105b5d8a8b7d9128535929d8bd1be3510b95",
+      "response_sha256": "01d7a4ac0560449b7e2eb9f0b66f03af33d1a976474f2fa8ffeac60591264950",
+      "response_fields": ["parsed_output.analysis", "parsed_output.reasoning", "parsed_output.key_reasons"],
+      "market_field_paths": [
+        "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down"
+      ],
+      "frozen_evidence": {
+        "close": 4616.56,
+        "sma_20": 4643.6795,
+        "momentum_3_pct": -0.49,
+        "momentum_10_pct": -0.37,
+        "macd_trend": "bearish",
+        "M15_recent_down": { "found": true, "complete": true, "age_closed_bars": 1, "still_valid": true }
+      },
+      "conflicting_statement": "列出四项全部偏空后仍称非Chan四项并非全部同向；并称M15无有效顺势事件。",
+      "assessment": "Both the deterministic H1 conclusion and the stated M15 event absence conflict with frozen fields."
+    },
+    {
+      "decision_id": "h1-1787666400000",
+      "group": "zh_zh",
+      "request_sha256": "7b5b154da6bc5b2abe7a8960b6593b59b79a36aab748cfa6a341bc717156ecaa",
+      "response_sha256": "0eb1c6c17f1ec32be41bb7bde27681cc6122a8f4ace66ee8ea0909053f1a9246",
+      "response_fields": ["parsed_output.analysis", "parsed_output.key_reasons"],
+      "market_field_paths": [
+        "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down"
+      ],
+      "frozen_evidence": {
+        "close": 4616.56,
+        "sma_20": 4643.6795,
+        "momentum_3_pct": -0.49,
+        "momentum_10_pct": -0.37,
+        "macd_trend": "bearish",
+        "M15_recent_down": { "found": true, "complete": true, "age_closed_bars": 1, "still_valid": true }
+      },
+      "conflicting_statement": "四项被称为未全部同向，且M15被称为无当前窗口或近期有效顺势事件。",
+      "assessment": "The frozen H1 fields are unanimously bearish and M15 has a valid recent down event."
+    },
+    {
+      "decision_id": "h1-1787720400000",
+      "group": "en_en",
+      "request_sha256": "5122ac9ea2f2f461635843e8b4ac7a2189f2e1e19f11e92007d11af527f7dafc",
+      "response_sha256": "d3d897121f2ffc1ef58b710b021adbf0ba6babee6f311fa28033768cbd980bbf",
+      "response_fields": ["parsed_output.analysis", "parsed_output.key_reasons", "parsed_output.risk_factors"],
+      "market_field_paths": [
+        "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend"
+      ],
+      "frozen_evidence": { "close": 4640.63, "sma_20": 4646.487, "momentum_3_pct": -0.352, "momentum_10_pct": -0.167, "macd_trend": "bearish" },
+      "conflicting_statement": "H1非Chan四要素被称为未同向，趋势不明确。",
+      "assessment": "All four deterministic H1 fields are bearish."
+    },
+    {
+      "decision_id": "h1-1787720400000",
+      "group": "en_zh",
+      "request_sha256": "2d548f2c19150c1687236a35cec97f6161d821337856edecb20ef4659a57e7f5",
+      "response_sha256": "36a88a53254d36d193b12c7ddbbb8d0ae69258aaab222438d0a457bae70850a7",
+      "response_fields": ["parsed_output.analysis", "parsed_output.reasoning", "parsed_output.key_reasons"],
+      "market_field_paths": [
+        "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend"
+      ],
+      "frozen_evidence": { "close": 4640.63, "sma_20": 4646.487, "momentum_3_pct": -0.352, "momentum_10_pct": -0.167, "macd_trend": "bearish" },
+      "conflicting_statement": "逐项列出四个空头条件后仍称四项并非全部同向。",
+      "assessment": "The statement directly contradicts the listed frozen values."
+    },
+    {
+      "decision_id": "h1-1787720400000",
+      "group": "zh_en",
+      "request_sha256": "f9ea0d4834e3f5babc01dc64a95f0804495765b8ff011e89809d420214195984",
+      "response_sha256": "a76eb8dda1c5823ae6c2d055b2dc97a7936650f1bf101ff340f793c34464bef7",
+      "response_fields": ["parsed_output.analysis", "parsed_output.key_reasons"],
+      "market_field_paths": [
+        "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend"
+      ],
+      "frozen_evidence": { "close": 4640.63, "sma_20": 4646.487, "momentum_3_pct": -0.352, "momentum_10_pct": -0.167, "macd_trend": "bearish" },
+      "conflicting_statement": "收盘、两项动量、MACD全部偏空后仍称四项未全部同向。",
+      "assessment": "The deterministic non-Chan mapping is fully bearish."
+    },
+    {
+      "decision_id": "h1-1787720400000",
+      "group": "zh_zh",
+      "request_sha256": "f9899fb128b18a3f21d7467834d798227ce2d794179e5f89ee3aab67d4983f86",
+      "response_sha256": "6397b10df5912c32621473afc95ade37594805f017aa339bfe7021af4169c3ce",
+      "response_fields": ["parsed_output.analysis", "parsed_output.reasoning", "parsed_output.key_reasons"],
+      "market_field_paths": [
+        "strategy_context.timeframes.H1.summary.last_closed_bar.close",
+        "strategy_context.timeframes.H1.summary.sma_20",
+        "strategy_context.timeframes.H1.summary.momentum_3_pct",
+        "strategy_context.timeframes.H1.summary.momentum_10_pct",
+        "strategy_context.timeframes.H1.summary.macd.trend"
+      ],
+      "frozen_evidence": { "close": 4640.63, "sma_20": 4646.487, "momentum_3_pct": -0.352, "momentum_10_pct": -0.167, "macd_trend": "bearish" },
+      "conflicting_statement": "逐项列出全部空头值后仍称四项未全部同向。",
+      "assessment": "The conclusion is the opposite of the frozen deterministic mapping."
+    },
+    {
+      "decision_id": "h1-1787774400000",
+      "group": "en_en",
+      "request_sha256": "6ff54ffe1a629c19b018465a8de04df4b58a3cd30116af968acb771b9a627648",
+      "response_sha256": "a0df22a45d55f89243a4316ab4703008791be23441400988e06b2a80431eba49",
+      "response_fields": ["parsed_output.analysis"],
+      "market_field_paths": [
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.found",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.complete",
+        "strategy_context.timeframes.M15.summary.support_resistance.two_closed_bar_breakout.recent_confirmed.down.age_closed_bars"
+      ],
+      "frozen_evidence": { "found": false, "complete": false, "age_closed_bars": null },
+      "conflicting_statement": "M15 recent_confirmed被称为仅有down事件。",
+      "assessment": "The down event exists on H1, not M15; frozen M15 has no recent down event."
+    }
+  ],
+  "not_independently_verifiable_claim_classes": [
+    {
+      "claim_class": "M15 Path A blanket pass/fail counts",
+      "coverage": "All 32 records include a Path A count or item-state conclusion; most assert zero without auditable closed-time/key-level anchors, while h1-1787612400000/en_zh asserts one self-identified false-breakout vote without a frozen deterministic false-breakout adjudicator."
+    },
+    {
+      "claim_class": "Harmonic PRZ, naked-candle, false-breakout, and key-level-reaction absence",
+      "coverage": "The request contains OHLC and partial structured facts, but no independent evaluator proving the universal absence statements. These were not recomputed."
+    },
+    {
+      "claim_class": "Ordinary HH/HL, opportunity-location, and trend interpretation",
+      "coverage": "When responses rely on unanchored ordinary price structure to override mixed direct-mapping fields, the conclusion remains an interpretation unless closed times and swing points are identified."
+    }
+  ],
+  "gate_sequence_findings": {
+    "self_consistent_records": [
+      { "decision_id": "h1-1787324400000", "group": "en_zh" },
+      { "decision_id": "h1-1787554800000", "group": "en_en" },
+      { "decision_id": "h1-1787554800000", "group": "zh_zh" },
+      { "decision_id": "h1-1787612400000", "group": "en_zh" },
+      { "decision_id": "h1-1787612400000", "group": "zh_zh" }
+    ],
+    "representative_inconsistencies": [
+      {
+        "decision_id": "h1-1787216400000",
+        "group": "en_en",
+        "issue": "H1 is Unclear and H4 is Not Enabled, yet M15 failures plus M5_trigger_unchecked and M1_ema34_unchecked are written into hard_gate_failures."
+      },
+      {
+        "decision_id": "h1-1787274000000",
+        "group": "zh_en",
+        "issue": "H4 is reported Pass, but H1_trend_unclear remains a hard failure instead of allowing the H4 fallback to resolve final direction."
+      },
+      {
+        "decision_id": "h1-1787554800000",
+        "group": "en_zh",
+        "issue": "Both regular M15 paths fail, but regular M5 is still marked Fail rather than Not Checked."
+      },
+      {
+        "decision_id": "h1-1787774400000",
+        "group": "en_en",
+        "issue": "M1_ema34_not_checked is included as a hard failure, and regular M5 is marked failed after earlier trend/M15 blockers."
+      }
+    ],
+    "h1_unclear_but_h4_not_enabled_by_group": {
+      "zh_zh": 3,
+      "zh_en": 4,
+      "en_zh": 3,
+      "en_en": 5
+    },
+    "h4_status_boundary_note": "h1-1787274000000/zh_zh says H4=[未启用/降级后仍不明确], but its analysis actually evaluates H4. It is not counted in h1_unclear_but_h4_not_enabled; the mixed status text is a separate wording inconsistency."
+  },
+  "limitations": [
+    "This audit does not determine whether every hold was the economically optimal decision.",
+    "No subjective Chan, harmonic, HH/HL, candle-pattern, or key-level analysis was recomputed.",
+    "A numeric value appearing somewhere in the frozen request does not by itself prove correct timeframe attribution; event/timeframe attribution was manually checked for every explicit contradiction.",
+    "No conclusion uses rejected-preexperiment records or any external runtime state."
+  ]
+}
