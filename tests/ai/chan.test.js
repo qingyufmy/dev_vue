@@ -1092,6 +1092,72 @@ describe('advanced Chan structure evidence', () => {
     })
   })
 
+  it('only labels a closed center as returned when price is actually inside', () => {
+    const segments = [segment(1, 'up', 90, 115), segment(2, 'down', 95, 112)]
+    const center = [{ id: 1, zl: 100, zh: 110, status: 'closed', closed_by_segment_id: 2 }]
+
+    expect(classifyChanTrend(segments, center, 105, { type:'none' }, 'high')).toMatchObject({
+      state:'consolidation', direction:'neutral', reason:'price_returned_to_center',
+    })
+    expect(classifyChanTrend(segments, center, 125, { type:'none' }, 'high')).toMatchObject({
+      state:'upward_breakout_pending', direction:'up', phase:'breakout_candidate', confidence:'low',
+      reason:'price_above_closed_center_without_confirmed_rebreakout',
+    })
+  })
+
+  it('recognizes a confirmed same-direction close and a later confirmed rebreakout', () => {
+    const directlyClosed = [segment(1, 'down', 90, 112), segment(2, 'up', 98, 120)]
+    const directCenter = [{ id:1, zl:100, zh:110, status:'closed', closed_by_segment_id:2 }]
+    expect(classifyChanTrend(directlyClosed, directCenter, 125, { type:'none' }, 'high')).toMatchObject({
+      state:'upward_breakout', direction:'up', reason:'price_above_closed_center', segment_id:2,
+    })
+
+    const rebroken = [
+      segment(1, 'up', 90, 115), segment(2, 'down', 95, 112), segment(3, 'up', 101, 125),
+    ]
+    const rebrokenCenter = [{ id:1, zl:100, zh:110, status:'closed', closed_by_segment_id:2 }]
+    expect(classifyChanTrend(rebroken, rebrokenCenter, 123, { type:'none' }, 'high')).toMatchObject({
+      state:'upward_breakout', direction:'up', phase:'breakout',
+      reason:'price_above_closed_center_after_confirmed_rebreakout', segment_id:3,
+    })
+  })
+
+  it('keeps the confirmed direction but exposes an unconfirmed opposite segment transition', () => {
+    const segments = [segment(1, 'down', 90, 112), segment(2, 'up', 95, 125)]
+    const forming = { id:3, dir:'down', bi_ids:[7, 8, 9] }
+    expect(classifyChanTrend(segments, [], 118, { type:'none' }, 'high', forming)).toMatchObject({
+      state:'structural_rise_transition', direction:'up', phase:'transition',
+      reversal_bias:'down', confidence:'low', reason:'forming_opposite_segment_unconfirmed',
+      segment_id:2, candidate_segment_id:3, candidate_direction:'down',
+    })
+  })
+
+  it('separates a forming segment price extreme from its latest included evidence', () => {
+    const rates = Array.from({ length:12 }, (_, index) => ({
+      time:`t${index}`, time_utc_msc:1784185200000 + index * 300000,
+    }))
+    const bis = [
+      { id:1, raw_start_idx:0, raw_end_idx:2, high:130, low:118 },
+      { id:2, raw_start_idx:2, raw_end_idx:5, high:128, low:120 },
+      { id:3, raw_start_idx:5, raw_end_idx:8, high:126, low:121 },
+      { id:4, raw_start_idx:8, raw_end_idx:11, high:127, low:122 },
+    ]
+    const base = {
+      dir:'down', bi_ids:[1, 2, 3], start_price:130, end_price:118,
+      endpoint_raw_idx:2, confirmation_state:'awaiting_first_feature_fractal',
+    }
+    const first = summarizeSegment(buildFormingSegment(base, bis, 3), bis, rates)
+    const advanced = summarizeSegment(buildFormingSegment({ ...base, bi_ids:[1, 2, 3, 4] }, bis, 3), bis, rates)
+
+    expect(first).toMatchObject({
+      confirmed:false, lifecycle_state:'forming_unconfirmed', endpoint_semantics:'directional_extreme',
+      end_index:2, observation_end_index:8, last_included_bi_id:3,
+    })
+    expect(advanced.end_time_utc_msc).toBe(first.end_time_utc_msc)
+    expect(advanced.observation_end_time_utc_msc).toBeGreaterThan(first.observation_end_time_utc_msc)
+    expect(advanced).toMatchObject({ observation_end_index:11, last_included_bi_id:4 })
+  })
+
   it('emits first-buy evidence but disables it when structure reliability is low', () => {
     const segments = [segment(1, 'up', 95, 125), segment(2, 'down', 85, 118)]
     const centers = [{ id:3, zl:95, zh:105, entry_segment_id:1, departure_segment_id:2 }]
