@@ -22,6 +22,8 @@ describe('PivotGuard position management frontend contract', () => {
     expect(app).toContain('自动盯盘 运行中')
     expect(app).toContain('自动盯盘 已暂停')
     expect(app).toContain('自动盯盘 不可用')
+    expect(css).toContain('.position-guard-control[hidden] { display:none !important; }')
+    expect(html).toContain('position-guard-visibility2')
   })
 
   it('keeps the ordinary-user renderer free of parameter values and config JSON', () => {

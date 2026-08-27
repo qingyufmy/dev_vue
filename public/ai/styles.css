@@ -3549,6 +3549,7 @@ textarea:focus {
 .position-guard-platform-control .btn { flex:0 0 auto; }
 
 .position-guard-control { max-width:220px; }
+.position-guard-control[hidden] { display:none !important; }
 .position-guard-control.status-running { color:#10b981; background:rgba(16,185,129,.12); border-color:rgba(16,185,129,.38); }
 .position-guard-control.status-running .badge-dot { background:#10b981; box-shadow:0 0 4px rgba(16,185,129,.5); }
 .position-guard-control.is-readonly { cursor:not-allowed; }
