@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const prompt = readFileSync(new URL('../../docs/行情分析Agent-v1.7.7-完整提示词.md', import.meta.url), 'utf8')
+const prompt = readFileSync(new URL('../../docs/行情分析Agent-v1.7.8-完整提示词.md', import.meta.url), 'utf8')
 
-describe('行情分析 Agent v1.7.7 prompt contract', () => {
+describe('行情分析 Agent v1.7.8 prompt contract', () => {
   it('keeps the original multi-timeframe workflow and restores six M15 candidates', () => {
     expect(prompt).toContain('1H趋势主判')
     expect(prompt).toContain('4H降级备判')
@@ -32,8 +32,8 @@ describe('行情分析 Agent v1.7.7 prompt contract', () => {
     expect(prompt).toContain('M5近期突破事件只延续M5触发生命周期，不能替代M15门槛')
     expect(prompt).toContain('对象缺失或未准备完成时路径B不可用')
     expect(prompt).toContain('不得改用本轮动态R1/S1或自行重算关键位')
-    expect(prompt).toContain('M15总路径判定：路径A满足至少2/6，或路径B全部通过')
-    expect(prompt).toContain('AND（M15路径A六项中至少两个独立通过 OR M15路径B全部通过）')
+    expect(prompt).toContain('M15常规路径判定：路径A满足至少2/6，或路径B全部通过')
+    expect(prompt).toContain('AND（（M15路径A六项中至少两个独立通过 OR M15路径B全部通过）AND M5至少一项已收盘触发')
     expect(prompt).toContain('不能计入M15-1、M15-3、M5系统Chan触发或顺势延续路径')
     expect(prompt).not.toContain('M15六项中至少两个独立通过\nAND M5')
   })
@@ -110,7 +110,7 @@ describe('行情分析 Agent v1.7.7 prompt contract', () => {
       'M15-6关键位反应=[通过/未通过/不可用/未检查]',
       'M15路径A独立通过数=[0-6]',
       'M15路径B=[通过/未通过/不可用/未检查]',
-      'M15采用路径=[路径A/路径B/无]',
+      '采用路径=[路径A/路径B/路径C/无]',
     ]) expect(prompt).toContain(marker)
     expect(prompt).toContain('同一底层证据不得换名称重复计票')
   })
@@ -146,6 +146,31 @@ describe('行情分析 Agent v1.7.7 prompt contract', () => {
     expect(prompt).toContain('禁止把未采用路径的状态写入 `hard_gate_failures`')
     expect(prompt).toContain('先从 `hard_gate_failures` 删除所有“路径A不足2/6')
     expect(prompt).toContain('“没有更远的历史阻力或支撑”本身不是强制观望理由')
+  })
+
+  it('adds a bounded H1-aligned failed-breakout reclaim path without weakening normal M15 paths', () => {
+    for (const marker of [
+      '路径C：H1同向的M5反向突破回收',
+      '路径C短线回收观察',
+      '路径C不是一般逆势反转',
+      '只读取M5 `summary.support_resistance.two_closed_bar_breakout.recent_confirmed`',
+      '`reclaim.bars_after_confirmation` 必须是1至3的整数',
+      '第一根收回K线只能生成候选，不能入场',
+      '`reclaim.reclaim_close_beyond_breakout_bars` 必须严格为 `true`',
+      '`reclaim.confirmed=true`',
+      '`reclaim.confirmation_close_beyond_reclaim_extreme=true`',
+      '不得由模型自行重算这两个布尔值',
+      '`reclaim.age_closed_bars` 必须是1至3的整数',
+      '`reclaim.still_valid=true`',
+      'M15不得存在仍有效、年龄不超过3根M15已收盘K线',
+      '同一个反向突破事件只能生成一次路径C交易候选',
+      '路径C已经包含M5反向突破、收回和独立确认的完整触发生命周期',
+      '路径C只读取M5 `reclaim.sweep_extreme`',
+      'OR 路径C全部通过',
+    ]) expect(prompt).toContain(marker)
+    expect(prompt).toContain('路径A满足至少2/6，或路径B全部通过')
+    expect(prompt).toContain('路径C只能按其完整客观生命周期独立通过，不能给路径A/B补票')
+    expect(prompt).not.toContain('路径C第一根收回K线可以直接入场')
   })
 
   it('requires a final field-consistency self-check without turning it into platform-wide risk policy', () => {

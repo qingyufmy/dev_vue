@@ -21,6 +21,22 @@ export function computeAtr14(rates) {
 export function buildTwoClosedBarBreakoutEvidence(closedRates, lookbackBars = 20) {
   const lookback = Math.max(3, Math.trunc(Number(lookbackBars) || 20))
   const rows = Array.isArray(closedRates) ? closedRates : []
+  const emptyReclaim = () => ({
+    found:false,
+    recovery_direction:null,
+    bars_after_confirmation:null,
+    age_closed_bars:null,
+    reference_price:null,
+    sweep_extreme:null,
+    reclaim_bar:null,
+    confirmation_bar:null,
+    confirmation_type:'none',
+    confirmed:false,
+    reclaim_close_beyond_breakout_bars:false,
+    confirmation_close_beyond_reclaim_extreme:false,
+    still_valid:null,
+    invalidation_bar:null,
+  })
   const emptyRecentDirection = () => ({
     found:false,
     complete:false,
@@ -32,6 +48,7 @@ export function buildTwoClosedBarBreakoutEvidence(closedRates, lookbackBars = 20
     confirmation_type:'none',
     still_valid:null,
     invalidation_bar:null,
+    reclaim:emptyReclaim(),
   })
   const emptyRecentConfirmed = () => ({
     up:emptyRecentDirection(),
@@ -44,8 +61,62 @@ export function buildTwoClosedBarBreakoutEvidence(closedRates, lookbackBars = 20
     low:round5(Number(row?.low)),
     close:round5(Number(row?.close)),
   })
+  const buildReclaim = (direction, firstIndex, secondIndex, reference) => {
+    const recoveryDirection = direction === 'up' ? 'down' : 'up'
+    const isRecoveryClose = close => Number.isFinite(close)
+      && (direction === 'up' ? close <= reference : close >= reference)
+    const isOriginalClose = close => Number.isFinite(close)
+      && (direction === 'up' ? close > reference : close < reference)
+    const reclaimIndex = rows.findIndex((row, index) => index > secondIndex && isRecoveryClose(Number(row?.close)))
+    if (reclaimIndex < 0) return emptyReclaim()
+
+    const confirmationIndex = rows.findIndex((row, index) => index > reclaimIndex && isRecoveryClose(Number(row?.close)))
+    const confirmation = confirmationIndex >= 0 ? rows[confirmationIndex] : null
+    const confirmationBar = confirmation ? bar(confirmation) : null
+    const confirmationType = confirmation
+      ? (direction === 'up'
+        ? Number(confirmation?.high) >= reference ? 'retest' : 'hold'
+        : Number(confirmation?.low) <= reference ? 'retest' : 'hold')
+      : 'none'
+    const invalidation = rows.slice(reclaimIndex + 1).find(row => isOriginalClose(Number(row?.close))) || null
+    const sweepValues = rows.slice(firstIndex, reclaimIndex + 1)
+      .map(row => Number(direction === 'up' ? row?.high : row?.low))
+      .filter(Number.isFinite)
+    const sweepExtreme = sweepValues.length > 0
+      ? (direction === 'up' ? Math.max(...sweepValues) : Math.min(...sweepValues))
+      : null
+    const first = rows[firstIndex]
+    const second = rows[secondIndex]
+    const reclaim = rows[reclaimIndex]
+    const reclaimClose = Number(reclaim?.close)
+    const reclaimCloseBeyondBreakoutBars = direction === 'up'
+      ? reclaimClose < Math.min(Number(first?.low), Number(second?.low))
+      : reclaimClose > Math.max(Number(first?.high), Number(second?.high))
+    const confirmationClose = Number(confirmation?.close)
+    const confirmationCloseBeyondReclaimExtreme = confirmation
+      ? (direction === 'up'
+        ? confirmationClose < Number(reclaim?.low)
+        : confirmationClose > Number(reclaim?.high))
+      : false
+    return {
+      found:true,
+      recovery_direction:recoveryDirection,
+      bars_after_confirmation:reclaimIndex - secondIndex,
+      age_closed_bars:rows.length - 1 - reclaimIndex,
+      reference_price:round5(reference),
+      sweep_extreme:sweepExtreme === null ? null : round5(sweepExtreme),
+      reclaim_bar:bar(rows[reclaimIndex]),
+      confirmation_bar:confirmationBar,
+      confirmation_type:confirmationType,
+      confirmed:confirmationIndex >= 0,
+      reclaim_close_beyond_breakout_bars:reclaimCloseBeyondBreakoutBars,
+      confirmation_close_beyond_reclaim_extreme:confirmationCloseBeyondReclaimExtreme,
+      still_valid:invalidation === null,
+      invalidation_bar:invalidation ? bar(invalidation) : null,
+    }
+  }
   const recentConfirmed = emptyRecentConfirmed()
-  const recentCandidateLimit = 6
+  const recentCandidateLimit = 8
   const firstCandidateIndex = Math.max(lookback + 1, rows.length - recentCandidateLimit)
   for (let secondIndex = rows.length - 1; secondIndex >= firstCandidateIndex; secondIndex--) {
     const firstIndex = secondIndex - 1
@@ -81,6 +152,7 @@ export function buildTwoClosedBarBreakoutEvidence(closedRates, lookbackBars = 20
         confirmation_type:confirmationType,
         still_valid:invalidation === null,
         invalidation_bar:invalidation ? bar(invalidation) : null,
+        reclaim:buildReclaim(direction, firstIndex, secondIndex, reference),
       }
     }
     if (!recentConfirmed.up.found && upFirst && upSecond) {

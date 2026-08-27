@@ -23,6 +23,29 @@ describe('calculateMarketData', () => {
     return rates
   }
 
+  function makeBreakoutRates(direction = 'up', trailingBars = []) {
+    const isUp = direction === 'up'
+    const rates = Array.from({ length:22 }, (_, index) => ({
+      time:`2026-01-01 00:${String(index).padStart(2, '0')}:00`,
+      time_utc_msc:1_800_000_000_000 + index * 60_000,
+      open:100,
+      high:index < 20 ? 110 : isUp ? index === 20 ? 121 : 125 : index === 20 ? 85 : 80,
+      low:index < 20 ? 90 : isUp ? index === 20 ? 115 : 120 : index === 20 ? 79 : 75,
+      close:index < 20 ? 100 : isUp ? index === 20 ? 120 : 124 : index === 20 ? 80 : 76,
+      tick_volume:100,
+    }))
+    return rates.concat(trailingBars.map((bar, offset) => ({
+      time:`2026-01-01 00:${String(22 + offset).padStart(2, '0')}:00`,
+      time_utc_msc:1_800_000_000_000 + (22 + offset) * 60_000,
+      open:100,
+      high:110,
+      low:90,
+      close:100,
+      tick_volume:100,
+      ...bar,
+    })))
+  }
+
   it('返回基本字段', () => {
     const rates = generateRates(50)
     const result = calculateMarketData('XAUUSD', 'M5', rates, baseAccount, basePositions)
@@ -142,9 +165,149 @@ describe('calculateMarketData', () => {
       up:{ first_close_beyond:true, second_close_beyond:true, complete:true, confirmation_type:'continuation' },
       down:{ complete:false },
       recent_confirmed:{
-        up:{ found:true, complete:true, age_closed_bars:0, reference_high:110, reference_low:90, still_valid:true, invalidation_bar:null },
-        down:{ found:false, complete:false },
+        up:{ found:true, complete:true, age_closed_bars:0, reference_high:110, reference_low:90, still_valid:true, invalidation_bar:null, reclaim:{ found:false, confirmed:false, confirmation_type:'none', still_valid:null } },
+        down:{ found:false, complete:false, reclaim:{ found:false, confirmed:false, confirmation_type:'none', still_valid:null } },
       },
+    })
+  })
+
+  it('reports a closed-bar reclaim candidate before an independent confirmation', () => {
+    const result = calculateMarketData('XAUUSD', 'M15', makeBreakoutRates('up', [
+      { open:124, high:125, low:108, close:109 },
+    ]), baseAccount, [], { chanDataQuality:{ last_bar_closed:true } })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up.reclaim).toEqual({
+      found:true,
+      recovery_direction:'down',
+      bars_after_confirmation:1,
+      age_closed_bars:0,
+      reference_price:110,
+      sweep_extreme:125,
+      reclaim_bar:{ time:'2026-01-01 00:22:00', high:125, low:108, close:109, time_utc_msc:1_800_000_000_000 + 22 * 60_000 },
+      confirmation_bar:null,
+      confirmation_type:'none',
+      confirmed:false,
+      reclaim_close_beyond_breakout_bars:true,
+      confirmation_close_beyond_reclaim_extreme:false,
+      still_valid:true,
+      invalidation_bar:null,
+    })
+  })
+
+  it('reports full breakout-bar recovery and independent extreme extension as objective booleans', () => {
+    const result = calculateMarketData('XAUUSD', 'M15', makeBreakoutRates('up', [
+      { open:124, high:125, low:108, close:109 },
+      { open:108, high:109, low:106, close:107 },
+    ]), baseAccount, [], { chanDataQuality:{ last_bar_closed:true } })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up.reclaim).toMatchObject({
+      found:true,
+      reclaim_close_beyond_breakout_bars:true,
+      confirmation_close_beyond_reclaim_extreme:true,
+      confirmed:true,
+    })
+  })
+
+  it.each([
+    { label:'hold', confirmation:{ open:109, high:109, low:106, close:108 } },
+    { label:'retest', confirmation:{ open:109, high:111, low:106, close:108 } },
+  ])('confirms the reclaim on the next independent closed bar as $label', ({ label, confirmation }) => {
+    const result = calculateMarketData('XAUUSD', 'M15', makeBreakoutRates('up', [
+      { open:124, high:125, low:108, close:109 },
+      confirmation,
+    ]), baseAccount, [], { chanDataQuality:{ last_bar_closed:true } })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up.reclaim).toMatchObject({
+      found:true,
+      recovery_direction:'down',
+      bars_after_confirmation:1,
+      age_closed_bars:1,
+      confirmation_bar:{ time:'2026-01-01 00:23:00', close:108 },
+      confirmation_type:label,
+      confirmed:true,
+      still_valid:true,
+      invalidation_bar:null,
+    })
+  })
+
+  it('keeps a reclaim objectively observable after more than three closed bars', () => {
+    const result = calculateMarketData('XAUUSD', 'M15', makeBreakoutRates('up', [
+      { open:124, high:125, low:108, close:109 },
+      { open:109, high:109, low:106, close:108 },
+      { open:108, high:109, low:105, close:107 },
+      { open:107, high:108, low:104, close:106 },
+      { open:106, high:107, low:103, close:105 },
+    ]), baseAccount, [], { chanDataQuality:{ last_bar_closed:true } })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up).toMatchObject({
+      found:true,
+      age_closed_bars:5,
+      first_bar:{ time:'2026-01-01 00:20:00' },
+      second_bar:{ time:'2026-01-01 00:21:00' },
+      reclaim:{
+        found:true,
+        bars_after_confirmation:1,
+        age_closed_bars:4,
+        confirmed:true,
+        still_valid:true,
+      },
+    })
+  })
+
+  it('keeps a six-bar-old confirmed event inside the extended lifecycle scan window', () => {
+    const result = calculateMarketData('XAUUSD', 'M15', makeBreakoutRates('down', [
+      { open:91, high:94, low:89, close:92 },
+      { open:92, high:95, low:90, close:93 },
+      { open:93, high:96, low:91, close:94 },
+      { open:94, high:97, low:92, close:95 },
+      { open:95, high:98, low:93, close:96 },
+      { open:96, high:99, low:94, close:97 },
+    ]), baseAccount, [], { chanDataQuality:{ last_bar_closed:true } })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.down).toMatchObject({
+      found:true,
+      age_closed_bars:6,
+      reclaim:{
+        found:true,
+        bars_after_confirmation:1,
+        age_closed_bars:5,
+        confirmed:true,
+        still_valid:true,
+      },
+    })
+  })
+
+  it('records the first original-direction close that invalidates a confirmed reclaim', () => {
+    const result = calculateMarketData('XAUUSD', 'M15', makeBreakoutRates('up', [
+      { open:124, high:125, low:108, close:109 },
+      { open:109, high:109, low:106, close:108 },
+      { open:108, high:113, low:107, close:112 },
+      { open:112, high:114, low:110, close:111 },
+    ]), baseAccount, [], { chanDataQuality:{ last_bar_closed:true } })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up.reclaim).toMatchObject({
+      found:true,
+      confirmed:true,
+      confirmation_type:'hold',
+      still_valid:false,
+      invalidation_bar:{ time:'2026-01-01 00:24:00', close:112 },
+    })
+  })
+
+  it('applies reclaim evidence symmetrically to down breakouts', () => {
+    const result = calculateMarketData('XAUUSD', 'M15', makeBreakoutRates('down', [
+      { open:76, high:92, low:75, close:91 },
+      { open:91, high:94, low:89, close:92 },
+    ]), baseAccount, [], { chanDataQuality:{ last_bar_closed:true } })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.down.reclaim).toMatchObject({
+      found:true,
+      recovery_direction:'up',
+      bars_after_confirmation:1,
+      age_closed_bars:1,
+      reference_price:90,
+      sweep_extreme:75,
+      reclaim_bar:{ time:'2026-01-01 00:22:00', close:91 },
+      confirmation_bar:{ time:'2026-01-01 00:23:00', close:92 },
+      confirmation_type:'retest',
+      confirmed:true,
+      reclaim_close_beyond_breakout_bars:true,
+      confirmation_close_beyond_reclaim_extreme:false,
+      still_valid:true,
+      invalidation_bar:null,
     })
   })
 
