@@ -21,12 +21,91 @@ export function computeAtr14(rates) {
 export function buildTwoClosedBarBreakoutEvidence(closedRates, lookbackBars = 20) {
   const lookback = Math.max(3, Math.trunc(Number(lookbackBars) || 20))
   const rows = Array.isArray(closedRates) ? closedRates : []
+  const emptyRecentDirection = () => ({
+    found:false,
+    complete:false,
+    age_closed_bars:null,
+    reference_high:null,
+    reference_low:null,
+    first_bar:null,
+    second_bar:null,
+    confirmation_type:'none',
+    still_valid:null,
+    invalidation_bar:null,
+  })
+  const emptyRecentConfirmed = () => ({
+    up:emptyRecentDirection(),
+    down:emptyRecentDirection(),
+  })
+  const bar = row => ({
+    time:row?.time ?? null,
+    time_utc_msc:Number.isFinite(Number(row?.time_utc_msc)) ? Number(row.time_utc_msc) : null,
+    high:round5(Number(row?.high)),
+    low:round5(Number(row?.low)),
+    close:round5(Number(row?.close)),
+  })
+  const recentConfirmed = emptyRecentConfirmed()
+  const recentCandidateLimit = 6
+  const firstCandidateIndex = Math.max(lookback + 1, rows.length - recentCandidateLimit)
+  for (let secondIndex = rows.length - 1; secondIndex >= firstCandidateIndex; secondIndex--) {
+    const firstIndex = secondIndex - 1
+    const referenceRows = rows.slice(firstIndex - lookback, firstIndex)
+    if (referenceRows.length !== lookback) continue
+    const first = rows[firstIndex]
+    const second = rows[secondIndex]
+    const referenceHigh = Math.max(...referenceRows.map(row => Number(row?.high)))
+    const referenceLow = Math.min(...referenceRows.map(row => Number(row?.low)))
+    const firstClose = Number(first?.close)
+    const secondClose = Number(second?.close)
+    const secondHigh = Number(second?.high)
+    const secondLow = Number(second?.low)
+    if (![referenceHigh, referenceLow, firstClose, secondClose, secondHigh, secondLow].every(Number.isFinite)) continue
+    const upFirst = firstClose > referenceHigh
+    const upSecond = secondClose > referenceHigh
+    const downFirst = firstClose < referenceLow
+    const downSecond = secondClose < referenceLow
+    const makeRecentEvent = (direction, complete, confirmationType) => {
+      const reference = direction === 'up' ? referenceHigh : referenceLow
+      const invalidation = rows.slice(secondIndex + 1).find(row => {
+        const close = Number(row?.close)
+        return Number.isFinite(close) && (direction === 'up' ? close <= reference : close >= reference)
+      }) || null
+      return {
+        found:true,
+        complete,
+        age_closed_bars:rows.length - 1 - secondIndex,
+        reference_high:round5(referenceHigh),
+        reference_low:round5(referenceLow),
+        first_bar:bar(first),
+        second_bar:bar(second),
+        confirmation_type:confirmationType,
+        still_valid:invalidation === null,
+        invalidation_bar:invalidation ? bar(invalidation) : null,
+      }
+    }
+    if (!recentConfirmed.up.found && upFirst && upSecond) {
+      recentConfirmed.up = makeRecentEvent(
+        'up',
+        true,
+        secondLow <= referenceHigh ? 'retest' : 'continuation',
+      )
+    }
+    if (!recentConfirmed.down.found && downFirst && downSecond) {
+      recentConfirmed.down = makeRecentEvent(
+        'down',
+        true,
+        secondHigh >= referenceLow ? 'retest' : 'continuation',
+      )
+    }
+    if (recentConfirmed.up.found && recentConfirmed.down.found) break
+  }
   if (rows.length < lookback + 2) {
     return {
       ready:false,
       reason:'breakout_reference_history_insufficient',
       lookback_bars:lookback,
       reference_excludes_last_closed_bars:2,
+      recent_confirmed:recentConfirmed,
     }
   }
   const referenceRows = rows.slice(-(lookback + 2), -2)
@@ -44,19 +123,13 @@ export function buildTwoClosedBarBreakoutEvidence(closedRates, lookbackBars = 20
       reason:'breakout_reference_non_finite_price',
       lookback_bars:lookback,
       reference_excludes_last_closed_bars:2,
+      recent_confirmed:recentConfirmed,
     }
   }
   const upFirst = firstClose > referenceHigh
   const upSecond = secondClose > referenceHigh
   const downFirst = firstClose < referenceLow
   const downSecond = secondClose < referenceLow
-  const bar = row => ({
-    time:row?.time ?? null,
-    time_utc_msc:Number.isFinite(Number(row?.time_utc_msc)) ? Number(row.time_utc_msc) : null,
-    high:round5(Number(row?.high)),
-    low:round5(Number(row?.low)),
-    close:round5(Number(row?.close)),
-  })
   return {
     ready:true,
     reason:'ready',
@@ -80,6 +153,7 @@ export function buildTwoClosedBarBreakoutEvidence(closedRates, lookbackBars = 20
       confirmation_type:downFirst && downSecond
         ? (secondHigh >= referenceLow ? 'retest' : 'continuation') : 'none',
     },
+    recent_confirmed:recentConfirmed,
   }
 }
 

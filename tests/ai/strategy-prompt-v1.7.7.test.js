@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const prompt = readFileSync(new URL('../../docs/行情分析Agent-v1.7.6-完整提示词.md', import.meta.url), 'utf8')
+const prompt = readFileSync(new URL('../../docs/行情分析Agent-v1.7.7-完整提示词.md', import.meta.url), 'utf8')
 
-describe('行情分析 Agent v1.7.6 prompt contract', () => {
+describe('行情分析 Agent v1.7.7 prompt contract', () => {
   it('keeps the original multi-timeframe workflow and restores six M15 candidates', () => {
     expect(prompt).toContain('1H趋势主判')
     expect(prompt).toContain('4H降级备判')
@@ -25,6 +25,11 @@ describe('行情分析 Agent v1.7.6 prompt contract', () => {
     expect(prompt).toContain('路径B——顺势延续确认')
     expect(prompt).toContain('首次突破与二次确认必须是两根不同的M15 K线')
     expect(prompt).toContain('summary.support_resistance.two_closed_bar_breakout')
+    expect(prompt).toContain('recent_confirmed.up/down')
+    expect(prompt).toContain('`age_closed_bars` 为0至3的整数')
+    expect(prompt).toContain('近期事件超过3根M15已收盘K线')
+    expect(prompt).toContain('近期M5突破事件必须仍有效且年龄不超过3根M5已收盘K线')
+    expect(prompt).toContain('M5近期突破事件只延续M5触发生命周期，不能替代M15门槛')
     expect(prompt).toContain('对象缺失或未准备完成时路径B不可用')
     expect(prompt).toContain('不得改用本轮动态R1/S1或自行重算关键位')
     expect(prompt).toContain('M15总路径判定：路径A满足至少2/6，或路径B全部通过')
@@ -82,6 +87,18 @@ describe('行情分析 Agent v1.7.6 prompt contract', () => {
     expect(prompt).toContain('不得再以该候选、`broken=true`、MACD、RSI或4H为理由')
   })
 
+  it('uses supplied objective H1 fields when Chan direction evidence is unavailable', () => {
+    expect(prompt).toContain('H1系统Chan `segment_direction_usable=false`')
+    expect(prompt).toContain('`last_closed_bar.close > sma_20`')
+    expect(prompt).toContain('`momentum_3_pct > 0`')
+    expect(prompt).toContain('`momentum_10_pct > 0`')
+    expect(prompt).toContain('`macd.trend=bullish`')
+    expect(prompt).toContain('不得根据K线重新计算均线、动量或MACD')
+    expect(prompt).toContain('单个阻力/支撑只影响入场空间和净风险收益')
+    expect(prompt).toContain('必须在趋势依据中原样引用本轮H1 summary的实际')
+    expect(prompt).toContain('禁止引用其他周期数值、EMA数值或自行推导值冒充H1字段')
+  })
+
   it('requires the auditable reasoning prefix and evidence-level deduplication', () => {
     for (const marker of [
       'H1=[通过/不明确/不可用]',
@@ -100,14 +117,35 @@ describe('行情分析 Agent v1.7.6 prompt contract', () => {
 
   it('maps the objective two-bar completion boolean without model discretion', () => {
     expect(prompt).toContain('先执行布尔直映射，不允许主观解释')
-    expect(prompt).toContain('`up.complete` 不是严格布尔值 `true`，路径B必须为“未通过”')
-    expect(prompt).toContain('`down.complete` 不是严格布尔值 `true`，路径B必须为“未通过”')
+    expect(prompt).toContain('最终做多时 `up.complete=true`，最终做空时 `down.complete=true`')
+    expect(prompt).toContain('两种证据均不满足时路径B必须为“未通过”')
+    expect(prompt).toContain('不得跨方向选取事件')
   })
 
   it('maps pullback prices to legal limit orders instead of stop-limit orders', () => {
     expect(prompt).toContain('计划做多且入场价低于当前Ask时只能使用 `buy_limit/limit`')
     expect(prompt).toContain('计划做空且入场价高于当前Bid时只能使用 `sell_limit/limit`')
     expect(prompt).toContain('把低于现价的回踩买入称为“突破限价”不能改变订单类型')
+  })
+
+  it('uses path-specific stop evidence and audits a pullback order before holding', () => {
+    expect(prompt).toContain('路径A止损波动校验读取M15')
+    expect(prompt).toContain('路径B采用M5触发入场时读取M5')
+    expect(prompt).toContain('不允许自行调换优先级')
+    expect(prompt).toContain('`first_bar.low` 与 `second_bar.low` 较低者一侧')
+    expect(prompt).toContain('`first_bar.high` 与 `second_bar.high` 较高者一侧')
+    expect(prompt).toContain('不得把同一对象用于描述区间下边界的远端 `reference_low` 当作第一保护价锚点')
+    expect(prompt).toContain('市价追入的净风险收益不合格时，必须继续检查一次合法的系统回踩位挂单')
+    expect(prompt).toContain('不得只写“市价风险收益不足”就直接观望')
+    expect(prompt).toContain('回踩方案必须执行方向单调性自检')
+    expect(prompt).toContain('做多候选入场价降低只会缩小风险并扩大目标空间')
+    expect(prompt).toContain('做空候选入场价升高同样只会缩小风险并扩大目标空间')
+    expect(prompt).toContain('最终归约必须按以下顺序执行')
+    expect(prompt).toContain('不得把“回踩方案未通过M1方向过滤”列为失败原因')
+    expect(prompt).toContain('不能保留已被通过证据排除的失败项')
+    expect(prompt).toContain('禁止把未采用路径的状态写入 `hard_gate_failures`')
+    expect(prompt).toContain('先从 `hard_gate_failures` 删除所有“路径A不足2/6')
+    expect(prompt).toContain('“没有更远的历史阻力或支撑”本身不是强制观望理由')
   })
 
   it('requires a final field-consistency self-check without turning it into platform-wide risk policy', () => {

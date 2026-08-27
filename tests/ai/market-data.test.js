@@ -141,6 +141,69 @@ describe('calculateMarketData', () => {
       reference_excludes_last_closed_bars:2,
       up:{ first_close_beyond:true, second_close_beyond:true, complete:true, confirmation_type:'continuation' },
       down:{ complete:false },
+      recent_confirmed:{
+        up:{ found:true, complete:true, age_closed_bars:0, reference_high:110, reference_low:90, still_valid:true, invalidation_bar:null },
+        down:{ found:false, complete:false },
+      },
+    })
+  })
+
+  it.each([1, 2, 3])('keeps the latest confirmed event observable for age %i after the current window rolls forward', age => {
+    const rates = Array.from({ length:22 }, (_, index) => ({
+      time:`2026-01-01 00:${String(index).padStart(2, '0')}:00`,
+      time_utc_msc:1_800_000_000_000 + index * 60_000,
+      open:100,
+      high:index < 20 ? 110 : index === 20 ? 121 : 125,
+      low:index === 21 ? 120 : 90,
+      close:index < 20 ? 100 : index === 20 ? 120 : 124,
+      tick_volume:100,
+    }))
+    const laterRates = rates.concat([115, 116, 117].slice(0, age).map((close, offset) => ({
+      time:`2026-01-01 00:${String(22 + offset).padStart(2, '0')}:00`,
+      time_utc_msc:1_800_000_000_000 + (22 + offset) * 60_000,
+      open:115, high:118, low:114, close, tick_volume:100,
+    })))
+    const result = calculateMarketData('XAUUSD', 'M15', laterRates, baseAccount, [], {
+      chanDataQuality:{ last_bar_closed:true },
+    })
+    expect(result.support_resistance.two_closed_bar_breakout.up.complete).toBe(false)
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up).toMatchObject({
+      found:true,
+      complete:true,
+      age_closed_bars:age,
+      reference_high:110,
+      reference_low:90,
+      still_valid:true,
+      invalidation_bar:null,
+      first_bar:{ time:'2026-01-01 00:20:00' },
+      second_bar:{ time:'2026-01-01 00:21:00' },
+    })
+  })
+
+  it('marks a confirmed event invalid only at the first later close returning to its reference', () => {
+    const rates = Array.from({ length:22 }, (_, index) => ({
+      time:`2026-01-01 00:${String(index).padStart(2, '0')}:00`,
+      time_utc_msc:1_800_000_000_000 + index * 60_000,
+      open:100,
+      high:index < 20 ? 110 : index === 20 ? 121 : 125,
+      low:index === 21 ? 120 : 90,
+      close:index < 20 ? 100 : index === 20 ? 120 : 124,
+      tick_volume:100,
+    }))
+    const laterRates = rates.concat([
+      { time:'2026-01-01 00:22:00', time_utc_msc:1_800_000_000_000 + 22 * 60_000, open:115, high:118, low:114, close:115, tick_volume:100 },
+      { time:'2026-01-01 00:23:00', time_utc_msc:1_800_000_000_000 + 23 * 60_000, open:112, high:114, low:108, close:110, tick_volume:100 },
+    ])
+    const result = calculateMarketData('XAUUSD', 'M15', laterRates, baseAccount, [], {
+      chanDataQuality:{ last_bar_closed:true },
+    })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up).toMatchObject({
+      found:true,
+      complete:true,
+      age_closed_bars:2,
+      reference_high:110,
+      still_valid:false,
+      invalidation_bar:{ time:'2026-01-01 00:23:00', close:110 },
     })
   })
 
@@ -160,6 +223,42 @@ describe('calculateMarketData', () => {
       second_close_beyond:true,
       complete:false,
       confirmation_type:'none',
+    })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up).toMatchObject({
+      found:false,
+      complete:false,
+      age_closed_bars:null,
+      invalidation_bar:null,
+    })
+  })
+
+  it('applies the recent confirmation lifecycle symmetrically to down breakouts', () => {
+    const rates = Array.from({ length:22 }, (_, index) => ({
+      time:`2026-01-01 00:${String(index).padStart(2, '0')}:00`,
+      time_utc_msc:1_800_000_000_000 + index * 60_000,
+      open:100,
+      high:110,
+      low:90,
+      close:index < 20 ? 100 : index === 20 ? 80 : 76,
+      tick_volume:100,
+    }))
+    const result = calculateMarketData('XAUUSD', 'M15', rates, baseAccount, [], {
+      chanDataQuality:{ last_bar_closed:true },
+    })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.down).toMatchObject({
+      found:true,
+      complete:true,
+      age_closed_bars:0,
+      reference_high:110,
+      reference_low:90,
+      still_valid:true,
+      invalidation_bar:null,
+      first_bar:{ close:80 },
+      second_bar:{ close:76 },
+    })
+    expect(result.support_resistance.two_closed_bar_breakout.recent_confirmed.up).toMatchObject({
+      found:false,
+      complete:false,
     })
   })
 
