@@ -14,6 +14,8 @@ export const CHAN_MODEL_STRUCTURE_FIELDS = Object.freeze([
   'latest_center',
   'latest_bi_center',
   'active_center',
+  'price_vs_center',
+  'trend_state',
   'divergence',
   'forming_divergence',
   'recent_divergences',

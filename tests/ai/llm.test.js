@@ -2187,7 +2187,9 @@ describe('maybeAiSignal', () => {
     }
     const market = { symbol: 'XAUUSD', timeframe: 'M5', timestamp: '2026-01-01', latest_price: 2000, price_change: 10, price_change_pct: 0.5, account: { balance: 10000 }, positions: [], kline_count: 100, atr_anchor: 15, atr_anchor_tf: 'H1',
       strategy_context: { visualization_klines: { M5: [{ time: 'internal-only' }] }, timeframes: { M5: { klines:[{ time:'2026-01-01 00:00:00', time_utc_msc:1, time_server_msc:2, captured_at_utc_msc:3, open:1, high:2, low:0.5, close:1.5, tick_volume:10, spread:1 }], summary: { chan: {
-        current_segment: { id:1, confirmed:true }, status:'ok', trend_state:'up', evidence_capabilities:{ entry_structure_usable:true },
+        current_segment:{ id:1, confirmed:true }, status:'ok', price_vs_center:'above',
+        trend_state:{ state:'upward_breakout', direction:'up', phase:'breakout', confidence:'medium' },
+        evidence_capabilities:{ entry_structure_usable:true },
       } } } } }
     }
     const originalChan = structuredClone(market.strategy_context.timeframes.M5.summary.chan)
@@ -2197,6 +2199,8 @@ describe('maybeAiSignal', () => {
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toBeDefined()
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).toEqual({
       current_segment:{ id:1, confirmed:true },
+      price_vs_center:'above',
+      trend_state:{ state:'upward_breakout', direction:'up', phase:'breakout', confidence:'medium' },
       evidence_capabilities:{
         history_complete:false,
         continuity_complete:false,
@@ -2209,7 +2213,6 @@ describe('maybeAiSignal', () => {
       },
     })
     expect(userPayload.strategy_context.timeframes.M5.summary.chan).not.toHaveProperty('status')
-    expect(userPayload.strategy_context.timeframes.M5.summary.chan).not.toHaveProperty('trend_state')
     expect(userPayload.strategy_context.timeframes.M5.summary.chan.evidence_capabilities)
       .not.toHaveProperty('reason_codes')
     expect(userPayload.strategy_context).not.toHaveProperty('visualization_klines')

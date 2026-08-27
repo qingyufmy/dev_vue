@@ -29,7 +29,10 @@ describe('Chan model payload projection', () => {
       forming_divergence: { type: '候选' },
       recent_divergences: [{ type: '顶背驰' }],
       entry_candidates: [{ type: '一买', price: 1995 }],
-      trend_state: 'up',
+      trend_state: {
+        state:'upward_breakout', direction:'up', phase:'breakout', confidence:'medium',
+        reason:'price_above_closed_center_after_confirmed_rebreakout', center_id:1, segment_id:9,
+      },
       price_vs_center: 'above',
       status: 'partial',
       evidence_capabilities: {
@@ -63,8 +66,9 @@ describe('Chan model payload projection', () => {
       pending_endpoint_feature_gap:true,
       pending_endpoint_price:4696.7,
     })
-    expect(projected).not.toHaveProperty('trend_state')
-    expect(projected).not.toHaveProperty('price_vs_center')
+    expect(projected.trend_state).toEqual(chan.trend_state)
+    expect(projected.trend_state).not.toBe(chan.trend_state)
+    expect(projected.price_vs_center).toBe('above')
     expect(projected.evidence_capabilities).toEqual(Object.fromEntries(
       CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS.map(field => [field, chan.evidence_capabilities[field] === true]),
     ))
@@ -91,7 +95,9 @@ describe('Chan model payload projection', () => {
       indicators: { entry_ema34: { ready:true, value:2001 } },
       timeframes: {
         H1: { summary: { chan: {
-          current_segment: { id: 1 }, trend_state: 'up', structure_topology_reliable: true,
+          current_segment: { id: 1 },
+          trend_state:{ state:'structural_rise_transition', direction:'up', phase:'transition' },
+          price_vs_center:'none', structure_topology_reliable: true,
           evidence_capabilities:{ data_complete:true, reason_codes:['private'] },
         } }, klines: [{ close:2000 }] },
         M5: { summary: { chan: null }, klines: [] },
@@ -105,14 +111,15 @@ describe('Chan model payload projection', () => {
     expect(projected.indicators).not.toBe(context.indicators)
     expect(projected.timeframes.H1.summary.chan).toEqual({
       current_segment:{ id:1 },
+      price_vs_center:'none',
+      trend_state:{ state:'structural_rise_transition', direction:'up', phase:'transition' },
       evidence_capabilities:Object.fromEntries(CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS
         .map(field => [field, field === 'data_complete'])),
     })
-    expect(projected.timeframes.H1.summary.chan).not.toHaveProperty('trend_state')
     expect(projected.timeframes.H1.summary.chan).not.toHaveProperty('structure_topology_reliable')
     expect(projected.timeframes.M5.summary.chan).toBeNull()
     expect(projected.timeframes.M15.summary).toEqual({ other:true })
-    expect(context.timeframes.H1.summary.chan).toHaveProperty('trend_state', 'up')
+    expect(context.timeframes.H1.summary.chan).toHaveProperty('trend_state.state', 'structural_rise_transition')
     expect(context.timeframes.H1.summary.chan).toHaveProperty('structure_topology_reliable', true)
   })
 
