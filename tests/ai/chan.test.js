@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 import { getChanWindowPolicy } from '../../server/routes/ai/chan-window-policy.js'
 
-const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, computeChan, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, buildChanEvidenceCapabilities } = __chanTest
+const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeLatestConfirmedFractal, inspectSegmentCandidateLifecycle, buildLatestChanStructure, summarizeSegment, summarizeCenter, classifyChanTrend, prioritizeLatestChanStructure, detectChanEntryCandidates, computeChan, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, buildChanEvidenceCapabilities } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -1248,6 +1248,92 @@ describe('advanced Chan structure evidence', () => {
   })
 })
 
+describe('latest closed-market Chan structure', () => {
+  const rate = (brokerTime, high, low, close = (high + low) / 2) => ({
+    time:brokerTime,
+    time_utc_msc:Date.parse(`${brokerTime.replace(' ', 'T')}+03:00`),
+    open:close, high, low, close, tick_volume:1,
+  })
+
+  it('confirms the Aug-19 bottom only after the right-side H1 bar closes', () => {
+    const rates = [
+      rate('2026-08-19 02:00:00', 4346.51, 4328.92, 4334.74),
+      rate('2026-08-19 04:00:00', 4343.78, 4332.76, 4333.82),
+      rate('2026-08-19 05:00:00', 4338.44, 4327.25, 4333),
+      rate('2026-08-19 06:00:00', 4347.27, 4331.7, 4338.15),
+    ]
+    const beforeRightBar = normalizeBarsForChan(rates.slice(0, -1))
+    expect(detectFractals(beforeRightBar)).toEqual([])
+
+    const normalized = normalizeBarsForChan(rates)
+    const fractals = detectFractals(normalized)
+    const latest = summarizeLatestConfirmedFractal(fractals, normalized, rates)
+    expect(latest).toMatchObject({
+      type:'bottom', price:4327.25, time:'2026-08-19 05:00:00',
+      confirmed_by_bar_time:'2026-08-19 06:00:00', confirmed:true,
+    })
+  })
+
+  it('turns the Aug-25 confirmed top into a current down reversal watch, not an old-center up verdict', () => {
+    const rates = [
+      rate('2026-08-25 05:00:00', 4683.01, 4666.88, 4679.87),
+      rate('2026-08-25 06:00:00', 4696.65, 4675.18, 4684.24),
+      rate('2026-08-25 07:00:00', 4686.21, 4656.61, 4657.99),
+    ]
+    const normalized = normalizeBarsForChan(rates)
+    const fractals = detectFractals(normalized)
+    const latestStructure = buildLatestChanStructure({
+      fractals, normalizedBars:normalized, rates,
+      currentBi:{ id:9, dir:'up', start_price:4625.19, end_price:4696.65, confirmed:true },
+      developingBi:{ dir:'down', start_price:4696.65, end_price:4656.61, confirmed:false },
+      currentSegment:{ id:7, dir:'up', confirmed:true, last_included_bi_id:4 },
+      candidateSegment:null,
+    })
+    const result = prioritizeLatestChanStructure({
+      state:'upward_breakout', direction:'up', phase:'breakout', reversal_bias:'none',
+      confidence:'medium', reason:'price_above_closed_center_after_confirmed_rebreakout',
+      center_id:1, segment_id:7,
+    }, latestStructure, 'medium')
+
+    expect(result.latest_structure).toMatchObject({
+      latest_confirmed_fractal:{ type:'top', price:4696.65 },
+      local_state:'reversal_watch', local_bias:'down', background_bias:'up',
+      active_segment:null, historical_context_used_for_direction:false,
+    })
+    expect(result.trend_state).toMatchObject({
+      state:'up_reversal_watch', direction:'up', reversal_bias:'down', local_bias:'down',
+      background_direction:'up', reason:'latest_confirmed_top_fractal_with_developing_down_bi',
+    })
+  })
+
+  it('retires a long-lived candidate after its origin is crossed without rewriting short candidates', () => {
+    const makeBi = (id, dir, start, end) => ({
+      id, dir, start_price:start, end_price:end,
+      high:Math.max(start, end), low:Math.min(start, end),
+      raw_start_idx:id * 2 - 2, raw_end_idx:id * 2 - 1,
+    })
+    const shortCandidateBis = [
+      makeBi(1, 'up', 100, 110), makeBi(2, 'down', 110, 95),
+      makeBi(3, 'up', 95, 105), makeBi(4, 'down', 105, 90),
+    ]
+    const shortCandidate = { dir:'up', start_price:100, bi_ids:[1, 2, 3, 4] }
+    expect(inspectSegmentCandidateLifecycle(shortCandidate, shortCandidateBis).invalidated).toBe(false)
+    expect(buildFormingSegment(shortCandidate, shortCandidateBis, 1)).not.toBeNull()
+
+    const staleBis = [
+      makeBi(1, 'down', 130, 110), makeBi(2, 'up', 110, 135),
+      makeBi(3, 'down', 135, 105), makeBi(4, 'up', 105, 140),
+      makeBi(5, 'down', 140, 108), makeBi(6, 'up', 108, 145),
+      makeBi(7, 'down', 145, 112),
+    ]
+    const staleCandidate = { dir:'down', start_price:130, bi_ids:staleBis.map(item => item.id) }
+    expect(inspectSegmentCandidateLifecycle(staleCandidate, staleBis)).toMatchObject({
+      invalidated:true, reason:'candidate_origin_broken_by_opposite_extreme', invalidatedByBiId:2,
+    })
+    expect(buildFormingSegment(staleCandidate, staleBis, 1)).toBeNull()
+  })
+})
+
 describe('computeChan', () => {
   it('K线不足返回insufficient_klines', () => {
     const rates = makeRates(5)
@@ -1438,7 +1524,7 @@ describe('computeChan', () => {
   it('reports read-only bi centers separately from execution-grade segment centers', () => {
     const rates = makeRates(50)
     const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(rate => Number(rate.close))).histSeries)
-    expect(result).toMatchObject({ algorithm_version: 'chan_structure_v6', center_level: 'segment' })
+    expect(result).toMatchObject({ algorithm_version: 'chan_structure_v7', center_level: 'segment' })
     expect(result.bi_center_count).toBeGreaterThan(0)
     expect(result.latest_bi_center).toMatchObject({ structure_level: 'bi' })
     expect(result.center_count).toBe(0)

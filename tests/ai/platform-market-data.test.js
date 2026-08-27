@@ -536,7 +536,7 @@ describe('platform market data', () => {
       chan_last_confirmed_segment_utc_msc:1784192400000,
     })
     expect(db.queryOne).toHaveBeenCalledWith(expect.stringContaining('algorithm_version = ?'), [
-      10, 'XAUUSD', 'M1', 'chan_structure_v6',
+      10, 'XAUUSD', 'M1', 'chan_structure_v7',
     ])
   })
 
@@ -563,7 +563,7 @@ describe('platform market data', () => {
       chan_last_confirmed_segment_utc_msc:1784192400000,
     })
     expect(db.queryOne).toHaveBeenCalledWith(expect.stringContaining('algorithm_version = ?'), [
-      10, 'XAUUSD', 'M1', 'chan_structure_v6',
+      10, 'XAUUSD', 'M1', 'chan_structure_v7',
     ])
   })
 
@@ -1015,7 +1015,7 @@ describe('platform market data', () => {
       7, 'Demo', '123456', 'mt5|demo|123456', 180, 'verified', 15,
     ])
     expect(db.queryOne).toHaveBeenCalledWith(expect.stringContaining('algorithm_version = ?'), [
-      17, 'XAUUSD', 'M5', 'chan_structure_v6',
+      17, 'XAUUSD', 'M5', 'chan_structure_v7',
     ])
     expect(result.market_meta).toMatchObject({
       source:'user_bridge_fallback', source_user_id:7, source_id:17,
@@ -1083,7 +1083,7 @@ describe('platform market data', () => {
       bootstrap_observation_time_utc_msc:1784190300000,
     })).resolves.toBe(true)
     expect(db.queryRun).toHaveBeenCalledWith(expect.stringContaining('algorithm_version = VALUES(algorithm_version)'), [
-      9, 'XAUUSD', 'M5', 'chan_structure_v6', 1784185500000, 1784190000000,
+      9, 'XAUUSD', 'M5', 'chan_structure_v7', 1784185500000, 1784190000000,
       'core-b', 'entry-b', 1784190300000,
     ])
     const anchorWriteSql = db.queryRun.mock.calls.find(([sql]) => sql.includes('INSERT INTO chan_structure_anchors'))?.[0]

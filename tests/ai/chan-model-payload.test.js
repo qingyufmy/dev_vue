@@ -9,13 +9,18 @@ import {
 describe('Chan model payload projection', () => {
   it('keeps only the structure fields and boolean evidence capability whitelist', () => {
     const chan = {
+      latest_structure: {
+        local_state:'reversal_watch', local_bias:'down', background_bias:'up',
+        latest_confirmed_fractal:{ type:'top', price:2010 },
+        active_segment:{ stable_id:'segment-5', confirmed:false },
+      },
       current_bi: { id: 1, points: [{ price: 2000 }] },
       developing_bi: null,
       recent_bis: [{ id: 2 }],
       current_segment: { id: 3, confirmed: true, state: 'active', reason: '结构证据' },
       prev_segment: { id: 4 },
       candidate_segment: {
-        id: 5,
+        id: 5, stable_id:'segment-5',
         confirmation_state:'awaiting_reverse_feature_fractal',
         confirmation_required:'reverse_feature_fractal',
         pending_endpoint_feature_gap:true,
@@ -51,14 +56,20 @@ describe('Chan model payload projection', () => {
 
     const projected = projectChanStructureForModel(chan)
 
-    expect(Object.keys(projected)).toEqual([...CHAN_MODEL_STRUCTURE_FIELDS, 'evidence_capabilities'])
-    expect(Object.fromEntries(CHAN_MODEL_STRUCTURE_FIELDS.map(field => [field, projected[field]])))
-      .toEqual(Object.fromEntries(CHAN_MODEL_STRUCTURE_FIELDS
-      .filter(field => Object.prototype.hasOwnProperty.call(chan, field))
-      .map(field => [field, chan[field]])))
+    const retiredFields = new Set(['current_segment', 'prev_segment', 'current_center', 'latest_center'])
+    expect(Object.keys(projected)).toEqual([
+      ...CHAN_MODEL_STRUCTURE_FIELDS.filter(field => Object.prototype.hasOwnProperty.call(chan, field)
+        && !retiredFields.has(field)),
+      'evidence_capabilities',
+    ])
     expect(projected.current_bi).not.toBe(chan.current_bi)
     expect(projected.current_bi.points).not.toBe(chan.current_bi.points)
-    expect(projected.current_segment).toMatchObject({ confirmed:true, state:'active', reason:'结构证据' })
+    expect(projected).not.toHaveProperty('current_segment')
+    expect(projected).not.toHaveProperty('prev_segment')
+    expect(projected).not.toHaveProperty('current_center')
+    expect(projected).not.toHaveProperty('latest_center')
+    expect(projected.latest_structure).toEqual(chan.latest_structure)
+    expect(projected.latest_structure).not.toBe(chan.latest_structure)
     expect(projected.candidate_segment).toMatchObject({
       id:5,
       confirmation_state:'awaiting_reverse_feature_fractal',

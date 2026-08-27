@@ -4,6 +4,7 @@
 // and replay; this module only creates an isolated model-bound projection.
 
 export const CHAN_MODEL_STRUCTURE_FIELDS = Object.freeze([
+  'latest_structure',
   'current_bi',
   'developing_bi',
   'recent_bis',
@@ -27,6 +28,7 @@ export const CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS = Object.freeze([
   'continuity_complete',
   'topology_input_complete',
   'data_complete',
+  'local_structure_usable',
   'segment_direction_usable',
   'center_structure_usable',
   'entry_structure_usable',
@@ -69,6 +71,28 @@ export function projectChanStructureForModel(chan) {
   const projected = {}
   for (const field of CHAN_MODEL_STRUCTURE_FIELDS) {
     if (hasOwn(chan, field)) projected[field] = structuredClone(chan[field])
+  }
+  // v7 separates the latest active market structure from historical topology.
+  // Keep legacy projections unchanged, but when latest_structure is present do
+  // not send retired segments/centers beside the current judgement.
+  if (isObject(chan.latest_structure)) {
+    delete projected.prev_segment
+    delete projected.current_center
+    delete projected.latest_center
+    const activeSegment = chan.latest_structure.active_segment
+    const activeStableId = String(activeSegment?.stable_id || '')
+    const currentStableId = String(chan.current_segment?.stable_id || '')
+    const candidateStableId = String(chan.candidate_segment?.stable_id || '')
+    const confirmedActiveMatches = activeSegment?.confirmed === true
+      && activeStableId && activeStableId === currentStableId
+    const formingActiveMatches = activeSegment?.confirmed === false
+      && activeStableId && activeStableId === candidateStableId
+    if (!confirmedActiveMatches) delete projected.current_segment
+    if (!formingActiveMatches) delete projected.candidate_segment
+    if (!isObject(chan.active_center)) {
+      delete projected.active_center
+      delete projected.price_vs_center
+    }
   }
   if (isObject(chan.evidence_capabilities)) {
     projected.evidence_capabilities = Object.fromEntries(CHAN_MODEL_EVIDENCE_CAPABILITY_FIELDS

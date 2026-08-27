@@ -109,7 +109,7 @@ describe('inference snapshot evidence', () => {
     const result = prepareInferenceSnapshot({
       systemPrompt:'system', userPrompt:'payload',
       marketSnapshot:{ strategy_context:{ timeframes:{ M5:{ summary:{ chan:{
-        algorithm_version:'chan_structure_v6', history_sufficient:true,
+        algorithm_version:'chan_structure_v7', history_sufficient:true,
         closed_history_sufficient:true, cache_internal_gap_unresolved:false,
         evidence_capabilities:{ data_complete:true, segment_direction_usable:true,
           center_structure_usable:false, entry_structure_usable:false, divergence_usable:false,
@@ -139,7 +139,7 @@ describe('inference snapshot evidence', () => {
           source_id:17, source_key:'mt5|broker-demo|9001', platform:'mt5', broker_server:'Broker-Demo', account_login:'9001',
           continuity_policy_match:true, continuity_status:'reliable',
           continuity_result:{ classification:'composite_closure', expected:true, components:[{ kind:'daily_maintenance' }] } },
-        chan:{ algorithm_version:'chan_structure_v6', history_sufficient:true,
+        chan:{ algorithm_version:'chan_structure_v7', history_sufficient:true,
           cache_internal_gap_unresolved:false, evidence_capabilities:{ data_complete:true },
         },
       } } } } },

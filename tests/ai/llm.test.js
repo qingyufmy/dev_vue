@@ -2242,6 +2242,7 @@ describe('maybeAiSignal', () => {
         continuity_complete:false,
         topology_input_complete:false,
         data_complete:false,
+        local_structure_usable:false,
         segment_direction_usable:false,
         center_structure_usable:false,
         entry_structure_usable:true,

@@ -43,6 +43,10 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
     expect(prompt).toContain('不得根据原始K线重新计算、补算、修正或覆盖分型、笔、线段、中枢、背驰和买卖点')
     expect(prompt).toContain('divergence_usable')
     expect(prompt).toContain('entry_structure_usable')
+    expect(prompt).toContain('local_structure_usable')
+    expect(prompt).toContain('`latest_structure` 是系统对本轮最后已收盘行情的当前结构摘要')
+    expect(prompt).toContain('`background_bias` 只表示已经退役的旧线段、旧中枢或旧突破背景')
+    expect(prompt).toContain('不得从原始K线重建')
     expect(prompt).toContain('current_segment` 表示最新已确认线段，不等于当前价格正在运行的摆动')
     expect(prompt).toContain('candidate_segment.confirmed=false')
     expect(prompt).toContain('entry_structure_usable=true` 但 `entry_candidates=[]` 时，M15-3是“未通过”而不是“不可用”')
@@ -105,10 +109,34 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
     expect(prompt).toContain('current_segment` 仅是历史确认结构')
     expect(prompt).toContain('trend_state.direction=neutral')
     expect(prompt).toContain('不得把旧线段端点距离作为趋势硬仲裁条件')
+    expect(prompt).toContain('`local_bias` 是当前机会方向')
+    expect(prompt).toContain('旧趋势不得覆盖它')
     expect(prompt).toContain('超买/超卖')
     expect(prompt).toContain('不同周期最后已收盘时间不同也不等于数据陈旧')
     expect(prompt).not.toContain('H1硬仲裁：')
     expect(prompt).not.toContain('不得再以该候选、`broken=true`、MACD、RSI或4H为理由')
+  })
+
+  it('lets a system-confirmed latest reversal watch enter path A or complete path C only', () => {
+    expect(prompt).toContain('`latest_structure.local_state=reversal_watch`')
+    expect(prompt).toContain('`local_structure_usable=true`')
+    expect(prompt).toContain('`local_bias` 唯一为 `up` 或 `down`')
+    expect(prompt).toContain('同一 `local_bias` 也可作为1H反转观察方向送入M15路径A继续确认')
+    expect(prompt).toContain('不得直接下单')
+    expect(prompt).toContain('不得直接下单或使用路径B')
+    expect(prompt).toContain('不能使用路径B或直接下单')
+    expect(prompt).toContain('M15路径A至少2/6、M5已收盘触发、M1 EMA34、止损、净风险收益和通用执行门槛')
+    expect(prompt).toContain('采用路径C时必须满足路径C的全部生命周期、M1 EMA34、保护价、净风险收益和通用执行门槛')
+    expect(prompt).toContain('路径C交易方向固定等于该 `local_bias`')
+    expect(prompt).toContain('原始 `candidate_segment`、`developing_bi` 不能作为路径C入口或方向依据')
+    expect(prompt).toContain('H1系统最新 `reversal_watch` 且 `local_structure_usable=true`、`local_bias` 唯一为 `up/down` 且采用路径A或路径C')
+    expect(prompt).toContain('对路径C的H1反转观察入口只执行客观布尔直映射')
+    expect(prompt).toContain('H1入口判定为“通过”')
+    expect(prompt).toContain('路径C交易方向固定等于该 `local_bias`')
+    expect(prompt).toContain('不得再因 `trend_state.direction`、`background_direction`、`background_bias`、`confirmed_direction`、`developing_bi` 未确认、H4旧背景或“M15未共振”否决这个H1入口')
+    expect(prompt).toContain('回到该 `local_bias` 方向')
+    expect(prompt).not.toContain('reversal_watch只能路径A')
+    expect(prompt).not.toContain('reversal_watch时不能使用路径C')
   })
 
   it('uses supplied objective H1 fields when Chan direction evidence is unavailable', () => {
@@ -150,6 +178,11 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
     expect(prompt).toContain('计划做多且入场价低于当前Ask时只能使用 `buy_limit/limit`')
     expect(prompt).toContain('计划做空且入场价高于当前Bid时只能使用 `sell_limit/limit`')
     expect(prompt).toContain('把低于现价的回踩买入称为“突破限价”不能改变订单类型')
+    expect(prompt).toContain('市价信号的实际成交价由平台执行前的新鲜Bid/Ask确定')
+    expect(prompt).toContain('模型输出 `market` 时必须保持 `limit_price=null`、`stop_limit_price=null`')
+    expect(prompt).toContain('输入没有Bid/Ask时，只禁止生成需要本轮报价校验的 `limit`、`stop`、`stop_limit` 挂单')
+    expect(prompt).toContain('不得因此否决已通过路径、止损和净风险收益的 `market` 信号')
+    expect(prompt).toContain('平台校验失败时再阻止执行，不能把该执行前校验缺失改写为策略路径失败')
   })
 
   it('uses path-specific stop evidence and audits a pullback order before holding', () => {
@@ -174,9 +207,16 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
 
   it('adds a bounded H1-aligned failed-breakout reclaim path without weakening normal M15 paths', () => {
     for (const marker of [
-      '路径C：H1同向的M5反向突破回收',
+      '路径C：H1同向或H1反转观察方向同向的M5反向突破回收',
       '路径C短线回收观察',
       '路径C不是一般逆势反转',
+      '路径C必须先满足以下两类H1入口之一',
+      '明确H1趋势入口',
+      'H1反转观察入口',
+      '路径C交易方向必须与H1趋势完全一致',
+      '路径C交易方向必须与该 `local_bias` 完全一致',
+      '原始 `developing_bi`、`candidate_segment`、旧线段方向或模型推导方向均不可用',
+      '路径C本身不是直接订单信号',
       '只读取M5 `summary.support_resistance.two_closed_bar_breakout.recent_confirmed`',
       '`reclaim.bars_after_confirmation` 必须是1至3的整数',
       '第一根收回K线只能生成候选，不能入场',
@@ -184,15 +224,30 @@ describe('行情分析 Agent v1.7.8 prompt contract', () => {
       '`reclaim.confirmed=true`',
       '`reclaim.confirmation_close_beyond_reclaim_extreme=true`',
       '不得由模型自行重算这两个布尔值',
-      '`reclaim.age_closed_bars` 必须是1至3的整数',
+      '`reclaim.age_closed_bars` 必须按H1入口分别判断',
+      '明确H1趋势入口仍必须是1至3的整数',
+      'H1 `reversal_watch` 入口必须严格为1，表示独立确认完成后的唯一首次候选周期',
+      '年龄为2或3时该入口已过期，不得交易',
       '`reclaim.still_valid=true`',
       'M15不得存在仍有效、年龄不超过3根M15已收盘K线',
       '同一个反向突破事件只能生成一次路径C交易候选',
       '路径C已经包含M5反向突破、收回和独立确认的完整触发生命周期',
       '路径C只读取M5 `reclaim.sweep_extreme`',
+      '路径C随后仍必须通过M1 EMA34方向过滤、保护价、净风险收益、订单合法性、重复订单和平台风险控制',
+      '路径C必须按以下唯一顺序归约，不允许跨周期、跨方向或定性改写系统布尔值',
+      '做多只选 `recent_confirmed.down`，做空只选 `recent_confirmed.up`',
+      '不得读取H1或M15同名事件冒充M5事件',
+      '所有必需布尔值、方向、年龄和有效性均通过时，M5回收生命周期必须判为“通过”',
+      '做多只检查M15 `down.complete` 与 `recent_confirmed.down`',
+      '做空只检查M15 `up.complete` 与 `recent_confirmed.up`',
+      '必须在 `reasoning` 引用实际失败字段的完整周期、方向、字段路径和值',
+      '当前 `recent_confirmed` 或 `reclaim` 对象存在本身不等于以前已经生成过候选',
+      '只有输入中存在显式 `prior event usage`、已交付信号或同事件订单记录时，才可判定该事件已被使用',
+      '缺少这些显式记录时不得臆测重复',
       'OR 路径C全部通过',
     ]) expect(prompt).toContain(marker)
     expect(prompt).toContain('路径A满足至少2/6，或路径B全部通过')
+    expect(prompt).toContain('路径A少于两个独立通过时，采用路径A的本轮不得新入场')
     expect(prompt).toContain('路径C只能按其完整客观生命周期独立通过，不能给路径A/B补票')
     expect(prompt).not.toContain('路径C第一根收回K线可以直接入场')
   })

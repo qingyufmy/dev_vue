@@ -247,7 +247,7 @@ const CHAN_ENTRY_MAX_AGE_BARS = 20
 // prefix before center evidence so boundary-truncated windows do not vote.
 const CHAN_CENTER_MIN_CONTEXT_BARS = 150
 const MT4_CLOCK_SAMPLE_MAX_AGE_MS = 5 * 60 * 1000
-const CHAN_RULE_PROFILE = 'new_bi_feature_sequence_quorum'
+const CHAN_RULE_PROFILE = 'new_bi_feature_sequence_quorum_latest_active'
 const DEBUG_CHAN = process.env.DEBUG_CHAN === '1'
 
 function roundMacdEvidence(value) {
@@ -462,6 +462,57 @@ function buildDevelopingBi(activePivot, rates) {
       : null
   }
   return null
+}
+
+function summarizeLatestConfirmedFractal(fractals, normalizedBars, rates) {
+  const fractal = Array.isArray(fractals) ? fractals.at(-1) : null
+  if (!fractal) return null
+  const extremeRawIndex = Number(fractal.extreme_raw_idx ?? fractal.raw_start_idx ?? fractal.raw_idx)
+  const confirmationBar = Array.isArray(normalizedBars) ? normalizedBars[Number(fractal.idx) + 1] : null
+  const confirmationRawIndex = Number(confirmationBar?.raw_end_idx ?? confirmationBar?.raw_idx)
+  const extremeRate = Number.isFinite(extremeRawIndex) ? rates?.[extremeRawIndex] : null
+  const confirmationRate = Number.isFinite(confirmationRawIndex) ? rates?.[confirmationRawIndex] : null
+  const timeUtcMs = Number(extremeRate?.time_utc_msc)
+  const confirmedByBarUtcMs = Number(confirmationRate?.time_utc_msc)
+  return {
+    type:fractal.type,
+    price:round5(fractal.price),
+    time:extremeRate?.time ?? fractal.time ?? null,
+    time_utc_msc:Number.isFinite(timeUtcMs) ? timeUtcMs : null,
+    confirmed_by_bar_time:confirmationRate?.time ?? null,
+    confirmed_by_bar_time_utc_msc:Number.isFinite(confirmedByBarUtcMs) ? confirmedByBarUtcMs : null,
+    confirmed:true,
+  }
+}
+
+function inspectSegmentCandidateLifecycle(candidate, bis) {
+  if (!candidate || !Array.isArray(candidate.bi_ids) || candidate.bi_ids.length === 0) {
+    return { candidateBis:[], invalidated:false, invalidatedByBiId:null, reason:null }
+  }
+  const candidateBis = candidate.bi_ids.map(id => bis.find(b => b.id === id)).filter(Boolean)
+  const startPrice = Number(candidate.start_price)
+  if (!Number.isFinite(startPrice)) {
+    return { candidateBis, invalidated:true, invalidatedByBiId:null, reason:'candidate_start_price_invalid' }
+  }
+  const originCrossingBi = candidate.dir === 'down'
+    ? candidateBis.find(bi => Number(bi.high) > startPrice)
+    : candidate.dir === 'up'
+      ? candidateBis.find(bi => Number(bi.low) < startPrice)
+      : null
+  // A normal unconfirmed segment can temporarily cross its origin while its
+  // feature sequence is still forming. Retire it from *current* direction
+  // only after a full two-sided feature sequence (at least 2*3+1 bis) has
+  // accumulated without producing a new confirmed boundary. This preserves
+  // strict historical segment construction while preventing a long-lived
+  // candidate from masquerading as the latest market judgement.
+  const invalidatingBi = candidateBis.length >= MIN_BIS_PER_SEGMENT * 2 + 1
+    ? originCrossingBi : null
+  return {
+    candidateBis,
+    invalidated:Boolean(invalidatingBi),
+    invalidatedByBiId:invalidatingBi?.id ?? null,
+    reason:invalidatingBi ? 'candidate_origin_broken_by_opposite_extreme' : null,
+  }
 }
 
 function rangesOverlap(a, b) {
@@ -1210,7 +1261,9 @@ function detectDivergenceHistory(segments, bis, macdHist, centers = [], rates = 
 
 function buildFormingSegment(candidate, bis, nextId) {
   if (!candidate || !Array.isArray(candidate.bi_ids) || candidate.bi_ids.length < MIN_BIS_PER_SEGMENT) return null
-  const candidateBis = candidate.bi_ids.map(id => bis.find(b => b.id === id)).filter(Boolean)
+  const lifecycle = inspectSegmentCandidateLifecycle(candidate, bis)
+  if (lifecycle.invalidated) return null
+  const candidateBis = lifecycle.candidateBis
   if (candidateBis.length < MIN_BIS_PER_SEGMENT) return null
   return {
     ...candidate,
@@ -1225,7 +1278,8 @@ function buildFormingSegment(candidate, bis, nextId) {
 
 function summarizeSegmentCandidate(candidate, bis, rates, nextId) {
   if (!candidate || !Array.isArray(candidate.bi_ids) || candidate.bi_ids.length === 0) return null
-  const candidateBis = candidate.bi_ids.map(id => bis.find(b => b.id === id)).filter(Boolean)
+  const lifecycle = inspectSegmentCandidateLifecycle(candidate, bis)
+  const candidateBis = lifecycle.candidateBis
   if (candidateBis.length === 0) return null
   const observedCandidate = {
     ...candidate,
@@ -1238,9 +1292,14 @@ function summarizeSegmentCandidate(candidate, bis, rates, nextId) {
   return {
     ...summarizeSegment(observedCandidate, bis, rates),
     confirmed:false,
-    lifecycle_state:candidate.bi_ids.length >= MIN_BIS_PER_SEGMENT
-      ? 'forming_unconfirmed' : 'early_forming_unconfirmed',
-    structure_role:'forming_candidate',
+    lifecycle_state:lifecycle.invalidated
+      ? 'invalidated'
+      : candidate.bi_ids.length >= MIN_BIS_PER_SEGMENT
+        ? 'forming_unconfirmed' : 'early_forming_unconfirmed',
+    active_for_current_state:!lifecycle.invalidated,
+    invalidated_reason:lifecycle.reason,
+    invalidated_by_bi_id:lifecycle.invalidatedByBiId,
+    structure_role:lifecycle.invalidated ? 'historical_invalidated_candidate' : 'forming_candidate',
   }
 }
 
@@ -1368,6 +1427,8 @@ function emptyTrendState(reason = 'structure_unavailable') {
   return {
     state: 'unavailable',
     direction: 'neutral',
+    local_bias: 'neutral',
+    background_direction: 'neutral',
     phase: 'unknown',
     reversal_bias: 'none',
     confidence: 'low',
@@ -1377,13 +1438,70 @@ function emptyTrendState(reason = 'structure_unavailable') {
   }
 }
 
+function buildLatestChanStructure({ fractals, activePivot = null, normalizedBars, rates, currentBi, developingBi,
+  currentSegment, candidateSegment }) {
+  // The latest raw fractal can be too close to the previous pivot to form a
+  // legal bi. Current structure must follow the pivot accepted by buildBis,
+  // otherwise the reported fractal can contradict current_bi/developing_bi.
+  const latestFractal = summarizeLatestConfirmedFractal(
+    activePivot ? [activePivot] : fractals, normalizedBars, rates)
+  const confirmedDirection = ['up', 'down'].includes(currentBi?.dir) ? currentBi.dir : null
+  const developingDirection = ['up', 'down'].includes(developingBi?.dir) ? developingBi.dir : null
+  const reversalWatch = Boolean(confirmedDirection && developingDirection && confirmedDirection !== developingDirection)
+  const localBias = reversalWatch ? developingDirection : confirmedDirection || developingDirection || 'neutral'
+  const currentBiId = Number(currentBi?.id)
+  const candidateConnected = candidateSegment?.active_for_current_state === true
+    && Number(candidateSegment?.last_included_bi_id) === currentBiId
+  const confirmedSegmentConnected = currentSegment?.confirmed === true
+    && Number(currentSegment?.last_included_bi_id) === currentBiId
+  const activeSegment = candidateConnected
+    ? candidateSegment
+    : confirmedSegmentConnected ? currentSegment : null
+  const latestRateUtcMs = Number(rates?.at?.(-1)?.time_utc_msc)
+  const basis = []
+  if (latestFractal) basis.push(`latest_confirmed_${latestFractal.type}_fractal`)
+  if (confirmedDirection) basis.push(`latest_confirmed_${confirmedDirection}_bi`)
+  if (developingDirection) basis.push(`developing_${developingDirection}_bi`)
+  if (candidateSegment?.lifecycle_state === 'invalidated') basis.push('historical_candidate_retired')
+  return {
+    as_of_time_utc_msc:Number.isFinite(latestRateUtcMs) ? latestRateUtcMs : null,
+    latest_confirmed_fractal:latestFractal,
+    latest_confirmed_bi:currentBi ? {
+      id:currentBi.id ?? null,
+      dir:confirmedDirection,
+      start_price:round5(currentBi.start_price),
+      end_price:round5(currentBi.end_price),
+      confirmed:true,
+    } : null,
+    developing_bi:developingBi ? { ...developingBi } : null,
+    active_segment:activeSegment ? {
+      stable_id:activeSegment.stable_id ?? null,
+      dir:activeSegment.dir,
+      lifecycle_state:activeSegment.lifecycle_state,
+      confirmed:activeSegment.confirmed === true,
+      connected_to_latest_bi:true,
+      start_price:activeSegment.start_price,
+      end_price:activeSegment.end_price,
+      last_included_bi_id:activeSegment.last_included_bi_id ?? null,
+    } : null,
+    local_state:reversalWatch ? 'reversal_watch'
+      : confirmedDirection || developingDirection ? 'continuation' : 'unavailable',
+    local_bias:localBias,
+    confirmed_direction:confirmedDirection || 'neutral',
+    developing_direction:developingDirection || 'neutral',
+    background_bias:'neutral',
+    historical_context_used_for_direction:false,
+    basis,
+  }
+}
+
 function capStructureConfidence(reliability, preferred = 'medium') {
   if (reliability === 'low') return 'low'
   if (reliability === 'high') return preferred
   return preferred === 'high' ? 'medium' : preferred
 }
 
-function classifyChanTrend(segments, centers, latestPrice, divergence, reliability = 'low', formingSegment = null) {
+function classifyChanTrendBackground(segments, centers, latestPrice, divergence, reliability = 'low', formingSegment = null) {
   const validSegments = segments.filter(segment => !segment.weak && (
     (Array.isArray(segment.bi_ids) && segment.bi_ids.length >= MIN_BIS_PER_SEGMENT)
     || Number(segment.bi_count) >= MIN_BIS_PER_SEGMENT
@@ -1508,6 +1626,77 @@ function classifyChanTrend(segments, centers, latestPrice, divergence, reliabili
     phase: 'structure', reversal_bias: 'none', confidence: 'low', reason: 'segments_without_center',
     center_id: null, segment_id: latestSegment.id,
   }
+}
+
+function prioritizeLatestChanStructure(backgroundTrend, latestStructure, reliability = 'low') {
+  if (!latestStructure || typeof latestStructure !== 'object') {
+    return { trend_state:backgroundTrend, latest_structure:latestStructure ?? null }
+  }
+  const backgroundDirection = ['up', 'down'].includes(backgroundTrend?.direction)
+    ? backgroundTrend.direction : 'neutral'
+  const confirmedDirection = ['up', 'down'].includes(latestStructure.confirmed_direction)
+    ? latestStructure.confirmed_direction : null
+  const developingDirection = ['up', 'down'].includes(latestStructure.developing_direction)
+    ? latestStructure.developing_direction : null
+  const updatedLatestStructure = {
+    ...latestStructure,
+    background_bias:backgroundDirection,
+  }
+  if (!confirmedDirection) {
+    return {
+      trend_state:{ ...backgroundTrend, background_direction:backgroundDirection,
+        local_bias:latestStructure.local_bias || 'neutral' },
+      latest_structure:updatedLatestStructure,
+    }
+  }
+  if (developingDirection && developingDirection !== confirmedDirection) {
+    const fractalType = latestStructure.latest_confirmed_fractal?.type
+    return {
+      trend_state:{
+        ...backgroundTrend,
+        state:confirmedDirection === 'up' ? 'up_reversal_watch' : 'down_reversal_watch',
+        direction:confirmedDirection,
+        local_bias:developingDirection,
+        background_direction:backgroundDirection,
+        phase:'transition',
+        reversal_bias:developingDirection,
+        confidence:'low',
+        reason:fractalType
+          ? `latest_confirmed_${fractalType}_fractal_with_developing_${developingDirection}_bi`
+          : `latest_confirmed_${confirmedDirection}_bi_with_developing_${developingDirection}_bi`,
+      },
+      latest_structure:updatedLatestStructure,
+    }
+  }
+  if (backgroundDirection !== 'neutral' && confirmedDirection !== backgroundDirection) {
+    return {
+      trend_state:{
+        ...backgroundTrend,
+        state:confirmedDirection === 'up' ? 'up_transition_confirmed' : 'down_transition_confirmed',
+        direction:confirmedDirection,
+        local_bias:confirmedDirection,
+        background_direction:backgroundDirection,
+        phase:'transition',
+        reversal_bias:'none',
+        confidence:capStructureConfidence(reliability, 'medium'),
+        reason:`latest_confirmed_${confirmedDirection}_bi_opposes_background`,
+      },
+      latest_structure:updatedLatestStructure,
+    }
+  }
+  return {
+    trend_state:{ ...backgroundTrend, direction:confirmedDirection, local_bias:confirmedDirection,
+      background_direction:backgroundDirection },
+    latest_structure:updatedLatestStructure,
+  }
+}
+
+function classifyChanTrend(segments, centers, latestPrice, divergence, reliability = 'low', formingSegment = null,
+  latestStructure = null) {
+  const backgroundTrend = classifyChanTrendBackground(
+    segments, centers, latestPrice, divergence, reliability, formingSegment)
+  if (!latestStructure) return backgroundTrend
+  return prioritizeLatestChanStructure(backgroundTrend, latestStructure, reliability).trend_state
 }
 
 function detectChanEntryCandidates(segments, centers, divergence, recentDivergences, bis, rates, reliability, structureTimeKeyReliable, activeBiRunId = null) {
@@ -1672,6 +1861,13 @@ function buildChanEvidenceCapabilities(result, overrides = {}) {
   const absoluteTimeLocationReliable = overrides.absolute_time_location_reliable
     ?? (result?.absolute_time_location_reliable ?? result?.time_location_reliable === true)
   const dataComplete = overrides.data_complete ?? topologyInputComplete
+  const localStructure = overrides.local_structure_usable ?? (
+    dataComplete
+      && result?.latest_structure
+      && ['up', 'down'].includes(result.latest_structure.local_bias)
+      && Boolean(result.latest_structure.latest_confirmed_fractal
+        || result.latest_structure.latest_confirmed_bi)
+  )
   const currentSegmentDirection = result?.current_segment?.dir
   const segmentDirectionValue = ['up', 'down'].includes(currentSegmentDirection)
     ? currentSegmentDirection : result?.trend_state?.direction
@@ -1714,6 +1910,7 @@ function buildChanEvidenceCapabilities(result, overrides = {}) {
     ? 'cache_internal_gap_unresolved' : 'data_incomplete')
   if (!continuityComplete) reasonCodes.add('continuity_incomplete')
   if (!absoluteTimeLocationReliable) reasonCodes.add('absolute_time_location_unreliable')
+  if (!localStructure) reasonCodes.add('local_structure_unusable')
   if (!segmentDirection) reasonCodes.add('segment_direction_unusable')
   if (!centerStructure) reasonCodes.add(Number(result?.center_count) > 0
     ? 'center_structure_unusable' : 'no_confirmed_center')
@@ -1727,6 +1924,7 @@ function buildChanEvidenceCapabilities(result, overrides = {}) {
     topology_input_complete: Boolean(topologyInputComplete),
     absolute_time_location_reliable: Boolean(absoluteTimeLocationReliable),
     data_complete: Boolean(dataComplete),
+    local_structure_usable:Boolean(localStructure),
     segment_direction_usable: Boolean(segmentDirection),
     center_structure_usable: Boolean(centerStructure),
     entry_structure_usable: Boolean(entryStructure),
@@ -1815,9 +2013,11 @@ function emptyChanResult(overrides = {}) {
     current_bi: null,
     developing_bi: null,
     recent_bis: [],
+    latest_structure: null,
     current_segment: null,
     prev_segment: null,
     candidate_segment: null,
+    historical_candidate_segment: null,
     current_center: null,
     active_center: null,
     latest_center: null,
@@ -2000,6 +2200,10 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
       developing_bi: developingBi,
       recent_bis: activeConfirmedBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
+      latest_structure:buildLatestChanStructure({
+        fractals, activePivot, normalizedBars:bars, rates:closedRates, currentBi:lastBi, developingBi,
+        currentSegment:null, candidateSegment:null,
+      }),
       divergence: emptyDivergence('insufficient_bis'),
       warnings,
     })
@@ -2108,7 +2312,11 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     .sort((a, b) => Number(a.departure_segment?.end_index || 0) - Number(b.departure_segment?.end_index || 0))
     .slice(-FEED_LAST_N_DIVERGENCES)
   const formingSegment = buildFormingSegment(candidate, allBis, (lastSeg?.id || 0) + 1)
-  const candidateSegmentSummary = summarizeSegmentCandidate(candidate, allBis, closedRates, (lastSeg?.id || 0) + 1)
+  const candidateSegmentDiagnostic = summarizeSegmentCandidate(candidate, allBis, closedRates, (lastSeg?.id || 0) + 1)
+  const candidateSegmentSummary = candidateSegmentDiagnostic?.active_for_current_state === false
+    ? null : candidateSegmentDiagnostic
+  const historicalCandidateSegment = candidateSegmentDiagnostic?.active_for_current_state === false
+    ? candidateSegmentDiagnostic : null
   const formingDivergence = detectFormingDivergence(candidate, validSegs, allBis, closedMacdHist, centers, closedRates)
   if (divergence.type !== 'none') {
     // ok
@@ -2153,7 +2361,22 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   else if (validSegs.length > 0 && centers.length === 0) status = 'partial'
   else if (warnings.length > 0) status = 'partial'
 
-  const trendState = classifyChanTrend(validSegs, centers, latest, divergence, reliability, formingSegment)
+  const latestStructureBase = buildLatestChanStructure({
+    fractals,
+    activePivot,
+    normalizedBars:bars,
+    rates:closedRates,
+    currentBi:lastBi,
+    developingBi,
+    currentSegment:confirmedSegmentSummaries.at(-1) || null,
+    candidateSegment:candidateSegmentDiagnostic,
+  })
+  const backgroundTrendState = classifyChanTrend(
+    validSegs, centers, latest, divergence, reliability, formingSegment)
+  const prioritizedStructure = prioritizeLatestChanStructure(
+    backgroundTrendState, latestStructureBase, reliability)
+  const trendState = prioritizedStructure.trend_state
+  const latestStructure = prioritizedStructure.latest_structure
   const entryCandidates = detectChanEntryCandidates(validSegs, centers, divergence, currentRunRecentDivergences,
     allBis, closedRates, reliability, structureTimeKeyReliable, activeRunId)
   const entrySegment = latestCenter ? validSegs.find(segment => segment.id === latestCenter.entry_segment_id) || null : null
@@ -2257,6 +2480,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     prev_segment: confirmedSegmentSummaries.at(-2)
       ? { ...confirmedSegmentSummaries.at(-2), structure_role:'previous_confirmed' } : null,
     candidate_segment:candidateSegmentSummary,
+    historical_candidate_segment:historicalCandidateSegment,
     current_center:confirmedCenterSummaries.at(-1) || null,
     active_center:activeCenter ? confirmedCenterSummaries.find(center => center.id === activeCenter.id) || null : null,
     latest_center:confirmedCenterSummaries.at(-1) || null,
@@ -2265,6 +2489,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     divergence,
     forming_divergence: formingDivergence,
     recent_divergences: recentDivergences,
+    latest_structure:latestStructure,
     trend_state: trendState,
     entry_candidates: entryCandidates,
     warnings,
@@ -3085,9 +3310,12 @@ function selectStableChanResult(candidates, options = {}) {
     ? 'none'
     : latestPrice > Number(latestConsensusCenter.zh) ? 'above'
       : latestPrice < Number(latestConsensusCenter.zl) ? 'below' : 'inside'
-  const trendState = classifyChanTrend(consensus.segments, summarizedCenters, latestPrice,
+  const backgroundTrendState = classifyChanTrend(consensus.segments, summarizedCenters, latestPrice,
     consensusDivergence || emptyDivergence(divergenceFailureReason), confirmedReliability,
     selected.candidate_segment)
+  const prioritizedStructure = prioritizeLatestChanStructure(
+    backgroundTrendState, selected.latest_structure, confirmedReliability)
+  const trendState = prioritizedStructure.trend_state
   const formingFailureReason = formingConsensus.eligibleCount < 2
     ? 'forming_evidence_unavailable' : 'forming_cross_window_unstable'
   return updateClonedChanResult(selected, {
@@ -3121,6 +3349,7 @@ function selectStableChanResult(candidates, options = {}) {
     divergence:consensusDivergence || emptyDivergence(divergenceFailureReason),
     forming_divergence:consensusFormingDivergence || emptyDivergence(formingFailureReason),
     recent_divergences: recentDivergences,
+    latest_structure:prioritizedStructure.latest_structure,
     trend_state:trendState,
     entry_candidates: entryCandidates,
     warnings: uniqueWarnings,
@@ -3219,6 +3448,7 @@ function suppressUnconfirmedWindowStructure(primary) {
       absolute_time_location_reliable: primary?.absolute_time_location_reliable
         ?? primary?.time_location_reliable === true,
       data_complete: primary?.evidence_capabilities?.data_complete === true,
+      local_structure_usable:primary?.evidence_capabilities?.local_structure_usable === true,
       segment_direction_usable: false,
       center_structure_usable: false,
       entry_structure_usable: false,
@@ -3270,7 +3500,8 @@ function protectBootstrapDependentEvidence(selected, usable, reliability, unavai
     trend_state:classifyChanTrend(
       [selected?.prev_segment, selected?.current_segment].filter(Boolean),
       [selected?.latest_center].filter(Boolean),
-      Number(selected?.latest_price), divergence, reliability, selected?.candidate_segment),
+      Number(selected?.latest_price), divergence, reliability, selected?.candidate_segment,
+      selected?.latest_structure),
     entry_candidates:[],
     evidence_capabilities:buildChanEvidenceCapabilities(selected, {
       entry_structure_usable:false,
@@ -3653,7 +3884,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, detectChanEntryCandidates, emptyChanResult, buildChanEvidenceCapabilities, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, evaluateGapEndpointConfirmation, pendingSegmentConfirmation }
+export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, summarizeLatestConfirmedFractal, inspectSegmentCandidateLifecycle, buildLatestChanStructure, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, prioritizeLatestChanStructure, detectChanEntryCandidates, emptyChanResult, buildChanEvidenceCapabilities, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, evaluateGapEndpointConfirmation, pendingSegmentConfirmation }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()

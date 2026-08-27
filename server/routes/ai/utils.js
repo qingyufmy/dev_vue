@@ -10,7 +10,7 @@ export const STRATEGY_TIMEFRAME_COUNTS = { H4: 50, H1: 80, M15: 100, M5: 60 }
 // chan-window-policy.js instead of these global limits.
 export const CHAN_HISTORY_COUNT = 300
 export const CHAN_MAX_HISTORY_COUNT = 2000
-export const CHAN_ALGORITHM_VERSION = 'chan_structure_v6'
+export const CHAN_ALGORITHM_VERSION = 'chan_structure_v7'
 
 const BROKER_SUFFIX_RE = /^([A-Z0-9]{4,12})\.(?:a|s|c|pro|std|z|ecn|m|raw|mini)$/i
 const GENERIC_MARKET_SUFFIX_RE = /^([A-Z0-9]{6,12})\.[A-Z0-9_-]{1,16}$/i
