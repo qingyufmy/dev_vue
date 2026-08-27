@@ -1,5 +1,5 @@
 import { queryAll, queryOne, queryRun } from '../../db.js'
-import { cacheGetJSON, cacheSetJSON } from '../../redis.js'
+import { cacheDel, cacheGetJSON, cacheSetJSON } from '../../redis.js'
 import { getActivePlatformBridgeUserId, getBridgeDataRoute, getPlatformMarketClockState } from '../../bridge-ws.js'
 import { mt5Bridge } from './market-data.js'
 import { CHAN_ALGORITHM_VERSION, stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
@@ -14,13 +14,16 @@ const WRITE_BATCH_SIZE = 250
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 const VERIFIED_SOURCE_GAP_TTL_MS = 24 * 60 * 60 * 1000
 const MAX_VERIFIED_SOURCE_GAPS = 2048
+const VERIFIED_SOURCE_GAP_CACHE_PREFIX = 'market:verified-source-gap:v1'
 const MAX_EXPECTED_DAILY_CLOSURE_MS = 4 * 60 * 60 * 1000
 const FUTURE_RATE_TOLERANCE_MS = 2 * 60 * 1000
 const recentSampleAt = new Map()
 const inFlightRates = new Map()
 // A cache gap that the same terminal has independently returned is an
-// observed source property, not a cache corruption. Keep that verification
-// in-process so every probe does not issue the same bounded Bridge request.
+// observed source property, not a cache corruption. Keep a bounded in-memory
+// hot layer and mirror it to Redis so a process restart does not discard a
+// still-valid verification. Redis failures never turn an unverified gap into
+// a verified one; the in-memory layer is only a best-effort hot cache.
 const verifiedSourceGaps = new Map()
 const closedCacheWrites = new Map()
 let lastCleanupAt = 0
@@ -472,27 +475,113 @@ function duplicateGapDetected(integrity) {
 }
 
 function sourceGapKey(sourceId, sourceKey, standardSymbol, timeframe, gap) {
-  return [sourceId || 0, sourceKey || '', standardSymbol, timeframe,
+  return [VERIFIED_SOURCE_GAP_CACHE_PREFIX,
+    encodeURIComponent(String(Number(sourceId) || 0)),
+    encodeURIComponent(String(sourceKey || '')),
+    encodeURIComponent(String(standardSymbol || '').toUpperCase()),
+    encodeURIComponent(String(timeframe || '').toUpperCase()),
     Number(gap.from_utc_msc), Number(gap.to_utc_msc)].join(':')
 }
 
-function getVerifiedSourceGap(key, now = Date.now()) {
-  const record = verifiedSourceGaps.get(key)
-  if (!record) return null
-  if (now - Number(record.verified_at || 0) >= VERIFIED_SOURCE_GAP_TTL_MS) {
-    verifiedSourceGaps.delete(key)
-    return null
+function gapRecordContext(sourceId, sourceKey, standardSymbol, timeframe, gap, intervalMs) {
+  return {
+    sourceId:Number(sourceId) || 0,
+    sourceKey:String(sourceKey || ''),
+    standardSymbol:String(standardSymbol || '').toUpperCase(),
+    timeframe:String(timeframe || '').toUpperCase(),
+    fromUtcMs:Number(gap?.from_utc_msc),
+    toUtcMs:Number(gap?.to_utc_msc),
+    expectedMissingTimes:expectedGapTimes(gap, intervalMs) || [],
   }
-  return record
 }
 
-function rememberVerifiedSourceGap(key, record) {
+function isVerifiedSourceGapRecord(record, context, now = Date.now()) {
+  if (!record || typeof record !== 'object' || Array.isArray(record) || !context) return false
+  const fields = ['source_id', 'source_key', 'symbol', 'timeframe', 'from_utc_msc',
+    'to_utc_msc', 'verified_at', 'missing_times']
+  if (Object.keys(record).some(field => !fields.includes(field))) return false
+  if (!Number.isSafeInteger(record.source_id) || record.source_id < 0
+    || record.source_id !== context.sourceId
+    || typeof record.source_key !== 'string' || record.source_key !== context.sourceKey
+    || typeof record.symbol !== 'string' || record.symbol !== context.standardSymbol
+    || typeof record.timeframe !== 'string' || record.timeframe !== context.timeframe
+    || !Number.isSafeInteger(record.from_utc_msc) || record.from_utc_msc !== context.fromUtcMs
+    || !Number.isSafeInteger(record.to_utc_msc) || record.to_utc_msc !== context.toUtcMs
+    || !Number.isSafeInteger(record.verified_at) || record.verified_at <= 0
+    || record.verified_at > now
+    || now - record.verified_at >= VERIFIED_SOURCE_GAP_TTL_MS
+    || !Array.isArray(record.missing_times)
+    || record.missing_times.length !== context.expectedMissingTimes.length) return false
+  return record.missing_times.every((time, index) => Number.isSafeInteger(time)
+    && time === context.expectedMissingTimes[index])
+}
+
+function rememberVerifiedSourceGapInMemory(key, record) {
   if (verifiedSourceGaps.size >= MAX_VERIFIED_SOURCE_GAPS) {
     const oldest = [...verifiedSourceGaps.entries()]
       .sort((left, right) => Number(left[1]?.verified_at || 0) - Number(right[1]?.verified_at || 0))[0]
     if (oldest) verifiedSourceGaps.delete(oldest[0])
   }
   verifiedSourceGaps.set(key, record)
+}
+
+async function getVerifiedSourceGap(key, context, now = Date.now()) {
+  const memoryRecord = verifiedSourceGaps.get(key)
+  if (memoryRecord) {
+    if (isVerifiedSourceGapRecord(memoryRecord, context, now)) return memoryRecord
+    verifiedSourceGaps.delete(key)
+  }
+  let persistentRecord = null
+  try {
+    persistentRecord = await cacheGetJSON(key)
+  } catch {
+    // Redis helpers normally swallow errors. Keep this guard so a custom
+    // cache implementation cannot turn an unavailable Redis into a pass.
+  }
+  if (isVerifiedSourceGapRecord(persistentRecord, context, now)) {
+    rememberVerifiedSourceGapInMemory(key, persistentRecord)
+    return persistentRecord
+  }
+  if (persistentRecord !== null && persistentRecord !== undefined) {
+    try {
+      await cacheDel(key)
+    } catch {
+      // An invalid marker is ignored even if its cleanup cannot be completed.
+    }
+  }
+  return null
+}
+
+async function rememberVerifiedSourceGap(key, context, missingTimes, verifiedAt = Date.now()) {
+  const record = {
+    source_id:context.sourceId,
+    source_key:context.sourceKey,
+    symbol:context.standardSymbol,
+    timeframe:context.timeframe,
+    from_utc_msc:context.fromUtcMs,
+    to_utc_msc:context.toUtcMs,
+    verified_at:verifiedAt,
+    missing_times:[...missingTimes],
+  }
+  if (!isVerifiedSourceGapRecord(record, context, verifiedAt)) return false
+  rememberVerifiedSourceGapInMemory(key, record)
+  try {
+    await cacheSetJSON(key, record, CACHE_TTL_SECONDS)
+  } catch {
+    // The in-memory hot layer remains valid for this process. A later
+    // process will re-verify if Redis could not retain the marker.
+  }
+  return true
+}
+
+async function forgetVerifiedSourceGap(key) {
+  verifiedSourceGaps.delete(key)
+  try {
+    await cacheDel(key)
+  } catch {
+    // Cache deletion is best effort; a future read validates the marker
+    // against the current gap and will never accept a mismatched record.
+  }
 }
 
 function expectedGapTimes(gap, intervalMs) {
@@ -546,10 +635,44 @@ function normalizeGapVerificationRates(response, clock, symbol, timeframe, start
   return { rates:inWindow, missing_times:theoreticalTimes.filter(time => !bridgeTimes.has(time)) }
 }
 
+function splitGapVerificationBatches(gaps, intervalMs) {
+  const batches = []
+  let current = []
+  let startUtcMs = null
+  let endUtcMs = null
+  const flush = () => {
+    if (current.length) batches.push({ gaps:current, startUtcMs, endUtcMs })
+    current = []
+    startUtcMs = null
+    endUtcMs = null
+  }
+  for (const gap of [...gaps].sort((left, right) => Number(left.from_utc_msc) - Number(right.from_utc_msc)
+    || Number(left.to_utc_msc) - Number(right.to_utc_msc))) {
+    const gapStartUtcMs = Number(gap.from_utc_msc)
+    const gapEndUtcMs = Number(gap.to_utc_msc) + intervalMs
+    const candidateStartUtcMs = current.length ? startUtcMs : gapStartUtcMs
+    const candidateEndUtcMs = current.length ? Math.max(endUtcMs, gapEndUtcMs) : gapEndUtcMs
+    const candidateSpanSteps = (candidateEndUtcMs - candidateStartUtcMs) / intervalMs
+    if (current.length && (!Number.isInteger(candidateSpanSteps) || candidateSpanSteps > CACHE_LIMIT)) flush()
+    if (!current.length) {
+      current = [gap]
+      startUtcMs = gapStartUtcMs
+      endUtcMs = gapEndUtcMs
+    } else {
+      current.push(gap)
+      endUtcMs = candidateEndUtcMs
+    }
+  }
+  flush()
+  return batches
+}
+
 /**
  * Verify cache-only gaps with the exact same Bridge source. A source that
- * returns the same missing opens is recorded as observed-only; a response
- * containing those opens repairs the cache. No broad count refill is used.
+ * returns the same missing opens is recorded as an observed source property;
+ * a response containing those opens repairs the cache. Distant gaps are
+ * verified in bounded, ordered windows so one large historical range cannot
+ * exceed the cache limit. No broad count refill is used.
  */
 async function verifyCachedGapsWithBridge(bridgeUserId, symbol, timeframe, gaps, clock, source,
   platformRoute = {}, observedRates = []) {
@@ -566,53 +689,78 @@ async function verifyCachedGapsWithBridge(bridgeUserId, symbol, timeframe, gaps,
     return { error:'rates_gap_verification_source_identity_changed' }
   }
   const standardSymbol = stripBrokerSuffix(symbol)
-  // The two cached candles that bound the gap are sufficient to prove that
-  // the terminal is answering for the same window. Extending one interval
-  // before the left boundary can cross a separate market closure and turn a
-  // valid source gap into a false "window incomplete" result.
-  const startUtcMs = Math.min(...validGaps.map(gap => Number(gap.from_utc_msc)))
-  const endUtcMs = Math.max(...validGaps.map(gap => Number(gap.to_utc_msc) + intervalMs))
-  const count = Math.min(CACHE_LIMIT, Math.max(2, Math.ceil((endUtcMs - startUtcMs) / intervalMs) + 1))
-  const expectedMissingTimes = [...new Set(validGaps.flatMap(gap => expectedGapTimes(gap, intervalMs) || []))]
-  const expectedObservedTimes = [...new Set((Array.isArray(observedRates) ? observedRates : [])
-    .map(rate => Number(rate?.time_utc_msc))
-    .filter(time => Number.isFinite(time) && time >= startUtcMs && time < endUtcMs))]
-  const keys = validGaps.map(gap => sourceGapKey(source?.id, identity.sourceKey, standardSymbol, timeframe, gap))
-  const cachedResults = validGaps.map((gap, index) => getVerifiedSourceGap(keys[index]) ? gap : null).filter(Boolean)
-  const pending = validGaps.filter((gap, index) => !getVerifiedSourceGap(keys[index]))
-  if (!pending.length) return { status:'verified_source_gap', rates:[], source_gaps:cachedResults, filled_gaps:[] }
-
-  const response = await mt5Bridge(bridgeUserId, 'rates', {
-    symbol, timeframe, count, start_utc_msc:startUtcMs, end_utc_msc:endUtcMs, ...platformRoute,
-  }, { timeoutMs:30000, noFallback:true })
-  const effectiveClock = effectiveResponseClock(clock, response, response?.rates)
-  const responseIdentity = sourceIdentity(bridgeUserId, effectiveClock)
-  if (!hasStableSourceIdentity(responseIdentity) || responseIdentity.sourceKey !== identity.sourceKey) {
-    return { error:'rates_gap_verification_source_identity_changed' }
+  const sourceId = Number(source?.id) || 0
+  const keys = validGaps.map(gap => sourceGapKey(sourceId, identity.sourceKey, standardSymbol, timeframe, gap))
+  const contexts = validGaps.map(gap => gapRecordContext(sourceId, identity.sourceKey,
+    standardSymbol, timeframe, gap, intervalMs))
+  const records = await Promise.all(keys.map((key, index) => getVerifiedSourceGap(key, contexts[index])))
+  const cachedResults = []
+  const pending = []
+  for (let index = 0; index < validGaps.length; index += 1) {
+    if (records[index]) cachedResults.push(validGaps[index])
+    else pending.push({ gap:validGaps[index], key:keys[index], context:contexts[index] })
   }
-  const normalized = normalizeGapVerificationRates(response, effectiveClock, symbol, timeframe, startUtcMs, endUtcMs,
-    expectedObservedTimes, expectedMissingTimes)
-  if (normalized.error) return { error:normalized.error }
-  const ratesByTime = new Map(normalized.rates.map(rate => [Number(rate.time_utc_msc), rate]))
+  if (!pending.length) {
+    return { status:'verified_source_gap', rates:[], source_gaps:cachedResults, filled_gaps:[],
+      source_identity:identity, clock }
+  }
+
   const sourceGaps = [...cachedResults]
   const filledGaps = []
-  for (const gap of pending) {
-    const expected = expectedGapTimes(gap, intervalMs)
-    const missing = expected.filter(time => !ratesByTime.has(time))
-    if (missing.length === expected.length) {
-      sourceGaps.push(gap)
-      rememberVerifiedSourceGap(sourceGapKey(source?.id, identity.sourceKey, standardSymbol, timeframe, gap), {
-        verified_at:Date.now(), missing_times:missing,
-      })
-    } else if (missing.length === 0) {
-      filledGaps.push(gap)
-    } else {
-      return { error:'rates_gap_verification_window_incomplete' }
+  const verificationRates = []
+  let effectiveClock = clock
+  let responseIdentity = identity
+  let verificationStartUtcMs = null
+  let verificationEndUtcMs = null
+  for (const batch of splitGapVerificationBatches(pending.map(item => item.gap), intervalMs)) {
+    verificationStartUtcMs = verificationStartUtcMs == null ? batch.startUtcMs
+      : Math.min(verificationStartUtcMs, batch.startUtcMs)
+    verificationEndUtcMs = verificationEndUtcMs == null ? batch.endUtcMs
+      : Math.max(verificationEndUtcMs, batch.endUtcMs)
+    const batchItems = batch.gaps.map(gap => pending.find(item => item.gap === gap))
+    const expectedMissingTimes = [...new Set(batchItems.flatMap(item => item.context.expectedMissingTimes))]
+    const expectedObservedTimes = [...new Set((Array.isArray(observedRates) ? observedRates : [])
+      .map(rate => Number(rate?.time_utc_msc))
+      .filter(time => Number.isFinite(time) && time >= batch.startUtcMs && time < batch.endUtcMs))]
+    const spanSteps = (batch.endUtcMs - batch.startUtcMs) / intervalMs
+    if (!Number.isInteger(spanSteps) || spanSteps < 1 || spanSteps > CACHE_LIMIT) {
+      return { error:'rates_gap_verification_window_invalid' }
+    }
+    const count = Math.min(CACHE_LIMIT, Math.max(2, Math.ceil(spanSteps) + 1))
+    const response = await mt5Bridge(bridgeUserId, 'rates', {
+      symbol, timeframe, count, start_utc_msc:batch.startUtcMs, end_utc_msc:batch.endUtcMs, ...platformRoute,
+    }, { timeoutMs:30000, noFallback:true })
+    effectiveClock = effectiveResponseClock(effectiveClock, response, response?.rates)
+    responseIdentity = sourceIdentity(bridgeUserId, effectiveClock)
+    if (!hasStableSourceIdentity(responseIdentity) || responseIdentity.sourceKey !== identity.sourceKey) {
+      return { error:'rates_gap_verification_source_identity_changed' }
+    }
+    const normalized = normalizeGapVerificationRates(response, effectiveClock, symbol, timeframe,
+      batch.startUtcMs, batch.endUtcMs, expectedObservedTimes, expectedMissingTimes)
+    if (normalized.error) return { error:normalized.error }
+    const ratesByTime = new Map(normalized.rates.map(rate => [Number(rate.time_utc_msc), rate]))
+    for (const item of batchItems) {
+      const expected = item.context.expectedMissingTimes
+      const missing = expected.filter(time => !ratesByTime.has(time))
+      if (missing.length === expected.length) {
+        sourceGaps.push(item.gap)
+        const remembered = await rememberVerifiedSourceGap(item.key, item.context, missing)
+        if (!remembered) return { error:'rates_gap_verification_failed' }
+      } else if (missing.length === 0) {
+        filledGaps.push(item.gap)
+        for (const time of expected) {
+          const filledRate = ratesByTime.get(time)
+          if (filledRate) verificationRates.push(filledRate)
+        }
+        await forgetVerifiedSourceGap(item.key)
+      } else {
+        return { error:'rates_gap_verification_window_incomplete' }
+      }
     }
   }
-  return { status:sourceGaps.length ? 'verified_source_gap' : 'filled', rates:normalized.rates,
+  return { status:sourceGaps.length ? 'verified_source_gap' : 'filled', rates:verificationRates,
     source_gaps:sourceGaps, filled_gaps:filledGaps, source_identity:responseIdentity,
-    clock:effectiveClock, start_utc_msc:startUtcMs, end_utc_msc:endUtcMs }
+    clock:effectiveClock, start_utc_msc:verificationStartUtcMs, end_utc_msc:verificationEndUtcMs }
 }
 
 async function persistClosedCandles(sourceId, brokerSymbol, timeframe, closedRates) {
@@ -828,8 +976,10 @@ async function getPlatformRatesCore(requestUserId, platformUserId, params) {
         }
         const rangeSourceIdentity = sourceIdentity(platformUserId, effectiveClock)
         for (const gap of rangeSourceGaps) {
-          rememberVerifiedSourceGap(sourceGapKey(sourceId, rangeSourceIdentity.sourceKey,
-            stripBrokerSuffix(symbol), timeframe, gap), { verified_at:Date.now(), missing_times:expectedGapTimes(gap, intervalMs) })
+          const gapContext = gapRecordContext(sourceId, rangeSourceIdentity.sourceKey,
+            stripBrokerSuffix(symbol), timeframe, gap, intervalMs)
+          await rememberVerifiedSourceGap(sourceGapKey(sourceId, rangeSourceIdentity.sourceKey,
+            stripBrokerSuffix(symbol), timeframe, gap), gapContext, gapContext.expectedMissingTimes)
         }
         return { ...response, rates:closedRates, market_meta:{
           source:'platform_admin_bridge_range', source_user_id:platformUserId, source_id:sourceId,

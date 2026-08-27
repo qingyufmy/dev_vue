@@ -2373,7 +2373,11 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     const primaryHistoryCount = resolveChanHistoryCount(inferenceUserId, symbol, primaryTf, primaryCount, useChanAnalysis)
     const t1 = Date.now()
     const ratesResp = await platformRates(inferenceUserId, { symbol, timeframe: primaryTf, count: primaryHistoryCount })
-    if (!ratesResp || ratesResp.status === 'error') { l(`BLOCKED: rates failed`); return { status: 'blocked', reason: 'rates_failed' } }
+    if (!ratesResp || ratesResp.status === 'error') {
+      const ratesError = String(ratesResp?.error || 'unknown').slice(0, 120)
+      l(`BLOCKED: rates failed (code=${ratesError}, tf=${primaryTf}, count=${primaryHistoryCount})`)
+      return { status: 'blocked', reason: 'rates_failed' }
+    }
     const rates = ratesResp.rates || []
     if (!Array.isArray(rates) || rates.length === 0) { l(`BLOCKED: rates empty`); return { status: 'blocked', reason: 'rates_empty' } }
     l(`rates done (${Date.now()-t1}ms, bars=${rates.length}, tf=${primaryTf})`)

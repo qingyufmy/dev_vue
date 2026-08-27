@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const db = vi.hoisted(() => ({ queryAll: vi.fn(), queryOne: vi.fn(), queryRun: vi.fn(), withTransaction: vi.fn() }))
 const bridge = vi.hoisted(() => ({ activeId: vi.fn(), clock: vi.fn(), dataRoute: vi.fn() }))
 const mt5Bridge = vi.hoisted(() => vi.fn())
-const redis = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn() }))
+const redis = vi.hoisted(() => ({ get: vi.fn(), set: vi.fn(), del: vi.fn() }))
 
 vi.mock('../../server/db.js', () => db)
 vi.mock('../../server/bridge-ws.js', () => ({
@@ -12,7 +12,7 @@ vi.mock('../../server/bridge-ws.js', () => ({
   getPlatformMarketClockState: bridge.clock,
 }))
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge }))
-vi.mock('../../server/redis.js', () => ({ cacheGetJSON: redis.get, cacheSetJSON: redis.set }))
+vi.mock('../../server/redis.js', () => ({ cacheDel: redis.del, cacheGetJSON: redis.get, cacheSetJSON: redis.set }))
 
 import { buildRatesRequestKey, getPlatformRates, inspectRateContinuity, saveChanStructureAnchor } from '../../server/routes/ai/platform-market-data.js'
 
@@ -21,6 +21,12 @@ const rate = (minute, close) => ({
   time_utc_msc: 1784185200000 + minute * 60000, timezone_offset_minutes: 180,
   clock_status: 'verified', open: close - 1, high: close + 1, low: close - 2,
   close, tick_volume: 100, spread: 2,
+})
+const historicalRate = (index, close = 2000 + index) => ({
+  ...rate(0, close),
+  time: '2026-07-16 10:00:00',
+  time_msc: 1784196000000 + index * 60000,
+  time_utc_msc: 1784185200000 + index * 60000,
 })
 
 describe('platform market data', () => {
@@ -35,6 +41,7 @@ describe('platform market data', () => {
     db.withTransaction.mockImplementation(async callback => callback(vi.fn().mockResolvedValue([[], []])))
     redis.get.mockResolvedValue(null)
     redis.set.mockResolvedValue(undefined)
+    redis.del.mockResolvedValue(undefined)
   })
 
   it('does not coalesce review hydration with a smaller live request', () => {
@@ -814,6 +821,141 @@ describe('platform market data', () => {
 
     expect(result).toMatchObject({ status:'error', error:'rates_gap_verification_failed' })
     expect(result.market_meta).toBeUndefined()
+  })
+
+  it('splits distant cache gaps into bounded exact Bridge windows', async () => {
+    db.queryOne.mockResolvedValue({ id:81 })
+    const cache = [
+      ...Array.from({ length:101 }, (_, index) => historicalRate(index)).filter((_, index) => index !== 2),
+      ...Array.from({ length:702 }, (_, index) => historicalRate(1800 + index)),
+      ...Array.from({ length:98 }, (_, index) => historicalRate(2503 + index)),
+    ]
+    redis.get.mockImplementation(async key => key.startsWith('market:verified-source-gap:') ? null : cache)
+    mt5Bridge
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        historicalRate(2598), historicalRate(2599), historicalRate(2600),
+      ] })
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        ...cache.filter(item => item.time_utc_msc >= historicalRate(1).time_utc_msc
+          && item.time_utc_msc < historicalRate(1801).time_utc_msc),
+      ] })
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        historicalRate(2501), historicalRate(2503),
+      ] })
+
+    const result = await getPlatformRates(7, {
+      symbol:'XAUUSD', timeframe:'M1', count:3000, review_window:true,
+    })
+
+    expect(result.status).toBe('success')
+    const exactCalls = mt5Bridge.mock.calls.filter(([, command, params]) => command === 'rates'
+      && Number.isFinite(params.start_utc_msc))
+    expect(exactCalls).toHaveLength(2)
+    expect(exactCalls[0][2]).toMatchObject({
+      start_utc_msc:historicalRate(1).time_utc_msc,
+      end_utc_msc:historicalRate(1801).time_utc_msc,
+      count:1801,
+    })
+    expect(exactCalls[1][2]).toMatchObject({
+      start_utc_msc:historicalRate(2501).time_utc_msc,
+      end_utc_msc:historicalRate(2504).time_utc_msc,
+      count:4,
+    })
+    expect(result.market_meta).toMatchObject({
+      cache_internal_gap_detected:true,
+      cache_internal_gap_verified_source:true,
+      cache_internal_gap_status:'verified_source_gap',
+      cache_internal_gap_unresolved:false,
+    })
+  })
+
+  it('reuses a valid Redis gap marker after the in-memory layer is empty', async () => {
+    db.queryOne.mockResolvedValue({ id:82 })
+    const cache = [historicalRate(0), historicalRate(1), historicalRate(3), historicalRate(4)]
+    const gapFrom = historicalRate(1).time_utc_msc
+    const gapTo = historicalRate(3).time_utc_msc
+    const missing = historicalRate(2).time_utc_msc
+    redis.get.mockImplementation(async key => key.startsWith('market:verified-source-gap:')
+      ? {
+          source_id:82, source_key:'mt5|demo|123456', symbol:'XAUUSD', timeframe:'M1',
+          from_utc_msc:gapFrom, to_utc_msc:gapTo, verified_at:Date.now(), missing_times:[missing],
+        }
+      : cache)
+    mt5Bridge.mockResolvedValue({ status:'success', symbol:'XAUUSD.a', rates:[
+      historicalRate(3), historicalRate(4), historicalRate(5),
+    ] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:4 })
+
+    expect(result.status).toBe('success')
+    expect(mt5Bridge).toHaveBeenCalledTimes(1)
+    expect(mt5Bridge.mock.calls.some(([, command, params]) => command === 'rates'
+      && Number.isFinite(params.start_utc_msc))).toBe(false)
+    expect(redis.set.mock.calls.some(([key]) => key.startsWith('market:verified-source-gap:'))).toBe(false)
+    expect(result.market_meta).toMatchObject({
+      cache_internal_gap_verified_source:true,
+      cache_internal_gap_status:'verified_source_gap',
+      cache_internal_gap_unresolved:false,
+    })
+  })
+
+  it.each(['invalid', 'expired'])('does not trust a Redis %s gap marker', async markerState => {
+    const sourceId = markerState === 'invalid' ? 83 : 84
+    db.queryOne.mockResolvedValue({ id:sourceId })
+    const cache = [historicalRate(0), historicalRate(1), historicalRate(3), historicalRate(4)]
+    const gapFrom = historicalRate(1).time_utc_msc
+    const gapTo = historicalRate(3).time_utc_msc
+    const missing = historicalRate(2).time_utc_msc
+    redis.get.mockImplementation(async key => key.startsWith('market:verified-source-gap:')
+      ? {
+          source_id:sourceId, source_key:'mt5|demo|123456', symbol:'XAUUSD', timeframe:'M1',
+          from_utc_msc:gapFrom, to_utc_msc:gapTo,
+          verified_at:markerState === 'expired' ? Date.now() - 86400000 : Date.now(),
+          missing_times:markerState === 'invalid' ? [gapTo] : [missing],
+        }
+      : cache)
+    mt5Bridge
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        historicalRate(3), historicalRate(4), historicalRate(5),
+      ] })
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        historicalRate(1), historicalRate(3),
+      ] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:4 })
+
+    expect(result.status).toBe('success')
+    expect(mt5Bridge.mock.calls.some(([, command, params]) => command === 'rates'
+      && Number.isFinite(params.start_utc_msc))).toBe(true)
+    expect(redis.del).toHaveBeenCalledWith(expect.stringContaining(`market:verified-source-gap:v1:${sourceId}`))
+  })
+
+  it('fails closed when a later bounded gap-verification batch fails', async () => {
+    db.queryOne.mockResolvedValue({ id:85 })
+    const cache = [
+      ...Array.from({ length:101 }, (_, index) => historicalRate(index)).filter((_, index) => index !== 2),
+      ...Array.from({ length:702 }, (_, index) => historicalRate(1800 + index)),
+      ...Array.from({ length:98 }, (_, index) => historicalRate(2503 + index)),
+    ]
+    redis.get.mockImplementation(async key => key.startsWith('market:verified-source-gap:') ? null : cache)
+    mt5Bridge
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        historicalRate(2598), historicalRate(2599), historicalRate(2600),
+      ] })
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        ...cache.filter(item => item.time_utc_msc >= historicalRate(1).time_utc_msc
+          && item.time_utc_msc < historicalRate(1801).time_utc_msc),
+      ] })
+      .mockResolvedValueOnce({ status:'error', error:'bridge_unavailable' })
+
+    const result = await getPlatformRates(7, {
+      symbol:'XAUUSD', timeframe:'M1', count:3000, review_window:true,
+    })
+
+    expect(result).toMatchObject({ status:'error', error:'rates_gap_verification_failed' })
+    expect(result.market_meta).toBeUndefined()
+    expect(mt5Bridge.mock.calls.filter(([, command, params]) => command === 'rates'
+      && Number.isFinite(params.start_utc_msc))).toHaveLength(2)
   })
 
   it('uses a partial hot cache as the baseline and refreshes the full window', async () => {
