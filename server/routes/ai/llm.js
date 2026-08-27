@@ -26,7 +26,6 @@ const DEBUG_LLM = process.env.DEBUG_LLM === '1' || DEBUG_LLM_PAYLOAD
 // Historical/read-only normalization still uses the legacy synthesized TP
 // values. New provider results return before this compatibility path.
 const LEGACY_TP_FROM_SL = { tp1: 1.5, tp2: 2.5, tp3: 4.0 }
-export const AUTO_INFERENCE_MAX_PROMPT_CHARS = 120_000
 export const INFERENCE_KLINE_FIELDS = Object.freeze([
   'time',
   'time_utc_msc',
@@ -1572,10 +1571,6 @@ position_management_context 是服务端提供的去身份化实时事实，平�
     const renderedUserPrompt = typeof config._comparison_replay_user_prompt === 'string'
       ? config._comparison_replay_user_prompt
       : '市场数据 JSON：\n' + JSON.stringify(aiPayload)
-    const promptChars = cleanPrompt.length + renderedUserPrompt.length
-    if (String(config._usage || '').startsWith('auto') && promptChars > AUTO_INFERENCE_MAX_PROMPT_CHARS) {
-      throw new Error(`auto_inference_prompt_budget_exceeded:${promptChars}`)
-    }
     const usageKind = String(config._usage || 'manual')
     const taskKind = usageKind.startsWith('auto') ? 'auto_inference'
       : usageKind === 'model_compare' ? 'model_compare' : 'manual_analysis'

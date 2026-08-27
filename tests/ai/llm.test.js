@@ -17,6 +17,8 @@ describe('model output budgets', () => {
   it('does not expose a profile max_tokens runtime helper', () => {
     const source = readFileSync(new URL('../../server/routes/ai/llm.js', import.meta.url), 'utf8')
     expect(source).not.toContain('configuredModelMaxTokens')
+    expect(source).not.toContain('AUTO_INFERENCE_MAX_PROMPT_CHARS')
+    expect(source).not.toContain('auto_inference_prompt_budget_exceeded')
   })
 
   it('recomputes shared-context room for both initial and repair messages', () => {
@@ -1517,6 +1519,29 @@ describe('maybeAiSignal', () => {
     release()
     await request
     expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses confirmed model token limits for an auto prompt larger than the retired character cap', async () => {
+    mockFetch.mockResolvedValue({
+      ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify({
+        signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+        position_size_tier:'observe', position_size_reason:'等待', position_action:'observe',
+        pending_action:'none', pending_action_reason:'', management_direction:'none',
+        analysis:'等待', reasoning:'模型能力允许本次输入',
+      }) } }] }),
+    })
+    const result = await maybeAiSignal(null, {
+      api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+      _usage:'auto_platform', _strategyMemoryLibraryContext:'记忆'.repeat(70_000),
+    }, { symbol:'XAUUSD', timeframe:'H1', latest_price:2000,
+      strategy_context:{ timeframes:{} } })
+
+    expect(result._inference_source).toBe('ai')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(JSON.stringify(body.messages).length).toBeGreaterThan(120_000)
+    expect(body.max_tokens).toBe(393_216)
   })
 
   it('无配置返回 hold', async () => {
