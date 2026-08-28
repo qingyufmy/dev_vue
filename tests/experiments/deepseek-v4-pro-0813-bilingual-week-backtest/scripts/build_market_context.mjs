@@ -18,6 +18,9 @@ import { projectStrategyContextChanForModel } from '../../../../server/routes/ai
 import { compactInferenceMarketPayload } from '../../../../server/routes/ai/llm.js'
 
 const TIMEFRAME_MINUTES = { M1:1, M5:5, M15:15, M30:30, H1:60, H4:240, D1:1440, W1:10080 }
+const SHA256_PATTERN = /^[a-f0-9]{64}$/i
+const REPLAY_SOURCE_ID_BASE = 1_000_000_000_000_000
+const REPLAY_SOURCE_IDENTITY_MODE = 'historical_replay_synthetic'
 
 function argValue(args, name, fallback = null) {
   const index = args.indexOf(name)
@@ -44,6 +47,74 @@ function parseDecisionMs(value) {
 
 function hash(value) {
   return crypto.createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex')
+}
+
+function normalizeSha256(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return SHA256_PATTERN.test(normalized) ? normalized : null
+}
+
+/**
+ * Return only stable, market-data-bearing fields for the fallback identity.
+ * Capture/clock metadata is intentionally excluded because it can vary when
+ * the same frozen dataset is copied or replayed on another machine.
+ */
+function stableDatasetIdentity(marketData = {}) {
+  const timeframes = Object.fromEntries(Object.entries(marketData.timeframes || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([timeframe, frame]) => [timeframe, {
+      timeframe:frame?.timeframe || timeframe,
+      minutes:Number(frame?.minutes) || null,
+      bars:(frame?.bars || frame?.klines || []).map(bar => ({
+        time:bar?.time ?? null,
+        time_utc_msc:bar?.time_utc_msc ?? null,
+        time_server_msc:bar?.time_server_msc ?? null,
+        open:bar?.open ?? null,
+        high:bar?.high ?? null,
+        low:bar?.low ?? null,
+        close:bar?.close ?? null,
+        tick_volume:bar?.tick_volume ?? null,
+        spread:bar?.spread ?? null,
+      })),
+    }]))
+  return {
+    schema_version:marketData.schema_version || null,
+    symbol:marketData.symbol || null,
+    standard_symbol:marketData.standard_symbol || null,
+    timeframes,
+  }
+}
+
+function replayDatasetHash(marketData = {}) {
+  const frozenHash = normalizeSha256(marketData.market_data_sha256)
+  if (frozenHash) return { value:frozenHash, source:'market_data_sha256' }
+  const fileHash = normalizeSha256(marketData.market_data_file_sha256)
+  if (fileHash) return { value:fileHash, source:'market_data_file_sha256' }
+  return { value:hash(stableDatasetIdentity(marketData)), source:'stable_dataset_identity' }
+}
+
+/**
+ * Build an identity that cannot be mistaken for a production MT source.
+ * The large numeric namespace remains a positive safe integer for the
+ * production Chan validator, while source_key/mode make the synthetic origin
+ * explicit in audit output.
+ */
+export function buildReplaySourceIdentity(marketData = {}) {
+  const dataset = replayDatasetHash(marketData)
+  const identityDigest = crypto.createHash('sha256')
+    .update(`${REPLAY_SOURCE_IDENTITY_MODE}|${dataset.value}`, 'utf8').digest('hex')
+  // Thirteen hexadecimal digits fit below Number.MAX_SAFE_INTEGER even after
+  // adding the reserved namespace base, avoiding an unnecessary small modulo
+  // space and making accidental cross-dataset ID collisions less likely.
+  const digestPrefix = Number.parseInt(identityDigest.slice(0, 13), 16)
+  const sourceId = REPLAY_SOURCE_ID_BASE + digestPrefix
+  return {
+    source_id:sourceId,
+    source_key:`${REPLAY_SOURCE_IDENTITY_MODE}|${dataset.source}:${dataset.value}`,
+    source_identity_mode:REPLAY_SOURCE_IDENTITY_MODE,
+    dataset_hash:dataset.value,
+    dataset_hash_source:dataset.source,
+  }
 }
 
 function localCommit(repoRoot) {
@@ -97,7 +168,7 @@ function strategyFromMetadata(metadata) {
   }
 }
 
-function dataQuality(marketData, decisionMs, timeframe, frame) {
+export function dataQuality(marketData, decisionMs, timeframe, frame, sourceIdentity = buildReplaySourceIdentity(marketData)) {
   const offset = Number(marketData.clock?.broker_offset_seconds)
   return {
     source:'local_mt5',
@@ -106,10 +177,31 @@ function dataQuality(marketData, decisionMs, timeframe, frame) {
     timezone_offset_minutes:Number.isFinite(offset) ? offset / 60 : null,
     last_bar_closed:true,
     cache_internal_gap_unresolved:false,
-    source_id:null,
+    source_id:sourceIdentity.source_id,
+    source_key:sourceIdentity.source_key,
+    source_identity_mode:sourceIdentity.source_identity_mode,
     reference_time_utc_msc:decisionMs,
     timeframe,
     bar_count:Array.isArray(frame?.bars) ? frame.bars.length : 0,
+  }
+}
+
+export function buildPolicySource(timeframe, bars, decisionMs, sourceIdentity, staleToleranceMs) {
+  return {
+    bars,
+    lastBarClosed:true,
+    internalGapUnresolved:false,
+    marketSource:'local_mt5',
+    sourceId:sourceIdentity.source_id,
+    sourceKey:sourceIdentity.source_key,
+    sourceIdentityMode:sourceIdentity.source_identity_mode,
+    // Keep snake-case aliases in the private map so this replay artifact is
+    // easy to inspect independently of the runtime's camel-case adapter.
+    source_id:sourceIdentity.source_id,
+    source_key:sourceIdentity.source_key,
+    source_identity_mode:sourceIdentity.source_identity_mode,
+    referenceTimeUtcMs:decisionMs,
+    staleToleranceMs,
   }
 }
 
@@ -129,7 +221,7 @@ function slimSummary(summary, decisionMs) {
   return slim
 }
 
-function buildOneSnapshot({ metadata, marketData, decisionMs }) {
+export function buildOneSnapshot({ metadata, marketData, decisionMs, sourceIdentity = buildReplaySourceIdentity(marketData) }) {
   const strategy = strategyFromMetadata(metadata)
   const policy = parseStrategyPolicy(strategy)
   if (String(metadata.chan_window_policy_version || '') !== CHAN_WINDOW_POLICY_VERSION) {
@@ -166,7 +258,7 @@ function buildOneSnapshot({ metadata, marketData, decisionMs }) {
       missing.push(timeframe)
       continue
     }
-    const quality = dataQuality(marketData, decisionMs, timeframe, sourceFrame)
+    const quality = dataQuality(marketData, decisionMs, timeframe, sourceFrame, sourceIdentity)
     const summary = calculateMarketData('XAUUSD', timeframe, visible, null, [], {
       computeChan:chanEnabled,
       chanRates:hidden,
@@ -185,14 +277,13 @@ function buildOneSnapshot({ metadata, marketData, decisionMs }) {
         : {}),
     }
     const hiddenCompact = compactRates(hidden)
-    policySources[timeframe] = {
-      bars:hiddenCompact,
-      lastBarClosed:true,
-      internalGapUnresolved:false,
-      marketSource:'local_mt5',
-      referenceTimeUtcMs:decisionMs,
-      staleToleranceMs:Math.max(120_000, TIMEFRAME_MINUTES[timeframe] * 120_000),
-    }
+    policySources[timeframe] = buildPolicySource(
+      timeframe,
+      hiddenCompact,
+      decisionMs,
+      sourceIdentity,
+      Math.max(120_000, TIMEFRAME_MINUTES[timeframe] * 120_000),
+    )
     sourceByTimeframe[timeframe] = { hidden_count:hidden.length, visible_count:visible.length, chan_enabled:chanEnabled, indicator_history:indicatorHistory }
   }
   const context = {
@@ -269,6 +360,7 @@ function buildOneSnapshot({ metadata, marketData, decisionMs }) {
     model_payload_mode:'projectStrategyContextChanForModel+compactInferenceMarketPayload',
     future_leakage:futureLeakage,
     strategy_data_runtime:strategyDataRuntime,
+    source_identity:sourceIdentity,
     source_window:{ timeframes:sourceByTimeframe },
   }
 }
@@ -289,7 +381,13 @@ function main() {
     && String(metadata.source.git_commit).toLowerCase() !== String(localRepoCommit).toLowerCase()) {
     throw new Error('vm_local_commit_mismatch')
   }
-  const snapshots = decisionValues.map(value => buildOneSnapshot({ metadata, marketData, decisionMs:parseDecisionMs(value) }))
+  const sourceIdentity = buildReplaySourceIdentity(marketData)
+  const snapshots = decisionValues.map(value => buildOneSnapshot({
+    metadata,
+    marketData,
+    decisionMs:parseDecisionMs(value),
+    sourceIdentity,
+  }))
   const result = {
     schema_version:'strategy-market-snapshots-v1',
     market_data_sha256:marketData.market_data_sha256 || null,
@@ -298,6 +396,7 @@ function main() {
     vm_commit:metadata.source?.git_commit || null,
     local_repo_commit:localRepoCommit,
     chan_window_policy_version:CHAN_WINDOW_POLICY_VERSION,
+    source_identity:sourceIdentity,
     snapshots,
   }
   fs.mkdirSync(path.dirname(outputPath), { recursive:true })
@@ -305,11 +404,13 @@ function main() {
   process.stdout.write(JSON.stringify({ ok:true, snapshot_count:snapshots.length, local_repo_commit:localRepoCommit }))
 }
 
-try {
-  main()
-  process.exit(0)
-} catch (error) {
-  const code = /^[a-z0-9_.:-]+$/i.test(String(error?.message || '')) ? String(error.message) : 'context_build_failed'
-  process.stderr.write(code)
-  process.exit(1)
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main()
+    process.exit(0)
+  } catch (error) {
+    const code = /^[a-z0-9_.:-]+$/i.test(String(error?.message || '')) ? String(error.message) : 'context_build_failed'
+    process.stderr.write(code)
+    process.exit(1)
+  }
 }
