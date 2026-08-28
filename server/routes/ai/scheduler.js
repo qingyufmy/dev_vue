@@ -5,8 +5,9 @@ import { getOwnBridgeMarketState, getPlatformMarketClockState, recordBridgeMarke
 import { mt5Bridge, platformRates, calculateMarketData } from './market-data.js'
 import { maybeAiSignal } from './llm.js'
 import { insertAudit, signalOrderPayload, getExecuteRiskConfig, getAutoPromptTypeById, getAutoPromptTypes, getUnifiedAutoInferenceConfig, getAutoSubscribers, getDeliveryExecuteRiskConfig, getDeliverySubscriptionRuntime, parsePromptSymbols, resolveEffectiveSymbols, executeOrderCore, isAiPendingOrderRequest, assertAiPendingOrderEnabled, assertAiPendingCancelEnabled } from './config.js'
-import { attachAtrAnchor, buildStrategyContextFromTags, loadPrivatePortfolioContext, resolveChanHistoryCount } from './strategy.js'
-import { attachSignalTiming, signalTtlSeconds, stripBrokerSuffix } from './utils.js'
+import { attachAtrAnchor, buildStrategyContextFromTags, loadPrivatePortfolioContext,
+  resolveChanHistoryCount, resolveStrategyEvaluationTimeframe } from './strategy.js'
+import { attachSignalTiming, signalTtlSeconds, stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 import { getRedis, isRedisAvailable } from '../../redis.js'
 import { currentWeeklyFlattenEnd, isWeeklyFlattenWindow } from '../../jobs/weekly-risk-window.js'
 import crypto from 'crypto'
@@ -105,15 +106,28 @@ function parseFrozenModelTaskContext(task) {
  * protects against duplicate provider work after a process/Redis restart.
  * Non-terminal and status-unknown tasks are never retried by this scheduler.
  */
-export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinutes = 5, nowMs = Date.now()) {
+export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinutes = 5, nowMs = Date.now(), options = {}) {
+  if (nowMs && typeof nowMs === 'object') {
+    options = nowMs
+    nowMs = options.nowMs == null ? Date.now() : options.nowMs
+  }
+  const scheduleMode = String(options?.scheduleMode || AUTO_INFERENCE_SCHEDULE_MODE_COMPLETION)
+  const scheduleSlotId = String(options?.slotId || '').trim()
   const domainId = autoModelTaskDomainId(promptTypeId, symbol)
+  const slotConsumedSelect = scheduleSlotId
+    ? `EXISTS (SELECT 1 FROM ai_model_tasks slot_task
+      WHERE slot_task.task_kind = 'auto_inference' AND slot_task.idempotency_key = ?) AS schedule_slot_consumed`
+    : '0 AS schedule_slot_consumed'
   const task = await queryOne(`SELECT task_id, status, task_deadline_at_utc_msc, completed_at_utc_msc, result_valid_until_utc_msc,
       frozen_context_json, created_at_utc_msc, updated_at_utc_msc,
+      idempotency_key,
+      ${slotConsumedSelect},
       EXISTS (SELECT 1 FROM ai_model_task_attempts a WHERE a.task_id = ai_model_tasks.task_id) AS provider_request_started
     FROM ai_model_tasks
     WHERE task_kind = 'auto_inference' AND domain_type = 'strategy_symbol' AND domain_id = ?
     ORDER BY CASE WHEN status IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')
-      THEN 1 ELSE 0 END, created_at_utc_msc DESC, updated_at_utc_msc DESC LIMIT 1`, [domainId])
+    THEN 1 ELSE 0 END, created_at_utc_msc DESC, updated_at_utc_msc DESC LIMIT 1`, scheduleSlotId
+    ? [scheduleSlotId, domainId] : [domainId])
   if (!task) return { allowed:true, domainId, task:null }
 
   const status = String(task.status || '').toLowerCase()
@@ -150,10 +164,16 @@ export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinut
   if (!Number.isFinite(completedAt) || completedAt <= 0) {
     return { allowed:false, reason:'model_task_completion_unknown', task, domainId }
   }
+  if (scheduleMode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED && Number(task.schedule_slot_consumed) === 1) {
+    return { allowed:false, reason:'schedule_slot_consumed', task, domainId }
+  }
   const frozen = parseFrozenModelTaskContext(task)
   const providerStarted = Number(task.provider_request_started) === 1
     || (task.provider_request_started == null && frozen.provider_request_started !== false)
-  const configuredMinutes = Math.max(1, Number(frozen.interval_minutes) || Number(intervalMinutes) || 5)
+  const configuredMinutes = normalizeScheduleIntervalMinutes(frozen.interval_minutes || intervalMinutes)
+  if (scheduleMode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED) {
+    return { allowed:true, domainId, task }
+  }
   const cooldownMs = providerStarted ? configuredMinutes * 60_000 : 0
   const nextAllowedAt = completedAt + cooldownMs
   if (nextAllowedAt > nowMs) {
@@ -171,7 +191,7 @@ export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinut
 
 function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAtMs, strategy,
   config, market, marketMeta, primaryTimeframe, intervalMinutes, resultValidUntilUtcMsc,
-  taskDeadlineAtUtcMsc = null, renderedEvidence = null, strategyDataRuntime = null }) {
+  taskDeadlineAtUtcMsc = null, renderedEvidence = null, strategyDataRuntime = null, schedule = null }) {
   const marketJson = JSON.stringify(market || {})
   const evidencePrompt = renderedEvidence
     ? `${renderedEvidence.systemPrompt || ''}\n${renderedEvidence.userPrompt || ''}`
@@ -186,8 +206,22 @@ function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAt
   const taskDeadlineAtUtcMs = Number(taskDeadlineAtUtcMsc)
     || modelTaskDeadlines('auto_inference', { nowUtcMs:cycleStartedAtMs }).taskDeadlineUtcMs
   const trustedClock = marketMeta && trustedTerminalClock(marketMeta) ? marketMeta : null
+  const scheduleMode = String(schedule?.mode || AUTO_INFERENCE_SCHEDULE_MODE_COMPLETION)
+  const scheduleSlotId = String(schedule?.slotId || cycleId || '').trim() || null
+  const scheduleIntervalMinutes = normalizeScheduleIntervalMinutes(schedule?.intervalMinutes || intervalMinutes)
+  const scheduledAtUtcMs = Number(schedule?.eligibleAtUtcMsc) > 0
+    ? Number(schedule.eligibleAtUtcMsc) : cycleStartedAtMs
   const frozenContext = {
     cycle_id:cycleId,
+    schedule_mode:scheduleMode,
+    schedule_slot_id:scheduleSlotId,
+    schedule_interval_minutes:scheduleIntervalMinutes,
+    slot_boundary_utc_msc:Number(schedule?.slotBoundaryUtcMsc) || null,
+    slot_boundary_terminal_msc:Number(schedule?.slotBoundaryTerminalMsc) || null,
+    slot_eligible_at_utc_msc:Number(schedule?.eligibleAtUtcMsc) || null,
+    slot_window_expires_at_utc_msc:Number(schedule?.windowExpiresAtUtcMsc) || null,
+    cycle_started_at_utc_msc:Number(cycleStartedAtMs) || null,
+    slot_start_lag_ms:Number(schedule?.slotStartLagMs) >= 0 ? Number(schedule.slotStartLagMs) : null,
     domain_id:autoModelTaskDomainId(promptTypeId, symbol),
     strategy_id:Number(strategy?.id || promptTypeId),
     strategy_version:Number(strategy?.version || 1),
@@ -233,7 +267,7 @@ function buildAutoModelTaskInput({ promptTypeId, symbol, cycleId, cycleStartedAt
     protocol:String(config?.protocol || config?._protocol || 'chat_completions'),
     credentialSource:config?._credential_source || null,
     frozenContext,
-    scheduledAtUtcMs:cycleStartedAtMs,
+    scheduledAtUtcMs,
     taskDeadlineAtUtcMs,
     // The model-task runtime consumes the camelCase `...UtcMs` contract and
     // maps it to the durable `result_valid_until_utc_msc` column. Keep the
@@ -766,6 +800,261 @@ function normalizeSymbolForScheduler(sym) {
   return stripBrokerSuffix(sym)
 }
 
+const AUTO_INFERENCE_SCHEDULE_MODE_COMPLETION = 'completion_interval'
+const AUTO_INFERENCE_SCHEDULE_MODE_SHADOW = 'shadow'
+const AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED = 'bar_aligned_v1'
+const AUTO_INFERENCE_SCHEDULE_GRACE_MS = 3_000
+const AUTO_INFERENCE_SCHEDULE_WINDOW_MS = 30_000
+const AUTO_INFERENCE_SCHEDULE_RETRY_MS = 2_000
+
+export function normalizeScheduleIntervalMinutes(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return 5
+  return Math.max(1, Math.round(number))
+}
+
+function normalizedScheduleClockOffset(value) {
+  const number = Number(value)
+  return Number.isInteger(number) && number >= -720 && number <= 840 ? number : null
+}
+
+function scheduleClockInput({ nowUtcMs, timezoneOffsetMinutes, intervalMinutes } = {}) {
+  const now = Number(nowUtcMs)
+  const offset = normalizedScheduleClockOffset(timezoneOffsetMinutes)
+  const interval = normalizeScheduleIntervalMinutes(intervalMinutes)
+  if (!Number.isFinite(now) || now <= 0 || offset === null) return null
+  const intervalMs = interval * 60_000
+  const terminalNowMs = now + offset * 60_000
+  const terminalBoundaryMs = Math.floor(terminalNowMs / intervalMs) * intervalMs
+  return { nowMs:now, offset, interval, intervalMs, terminalNowMs, terminalBoundaryMs,
+    boundaryUtcMs:terminalBoundaryMs - offset * 60_000 }
+}
+
+function scheduleSlotDetails({ boundaryUtcMs, boundaryTerminalMs, intervalMs, offset,
+  graceMs = AUTO_INFERENCE_SCHEDULE_GRACE_MS, admissionWindowMs = AUTO_INFERENCE_SCHEDULE_WINDOW_MS } = {}) {
+  const boundary = Number(boundaryUtcMs)
+  const terminalBoundary = Number(boundaryTerminalMs)
+  const grace = Math.max(0, Number(graceMs) || 0)
+  const window = Math.max(0, Number(admissionWindowMs) || 0)
+  const eligibleAt = boundary + grace
+  const windowExpires = eligibleAt + window
+  return {
+    mode:AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED,
+    slot_boundary_utc_msc:boundary,
+    slot_boundary_terminal_msc:terminalBoundary,
+    eligible_at_utc_msc:eligibleAt,
+    window_expires_at_utc_msc:windowExpires,
+    next_eligible_at_utc_msc:boundary + Number(intervalMs),
+    timezone_offset_minutes:offset,
+  }
+}
+
+export function scheduleSlotAtOrBefore({ nowUtcMs, timezoneOffsetMinutes, intervalMinutes,
+  graceMs = AUTO_INFERENCE_SCHEDULE_GRACE_MS, admissionWindowMs = AUTO_INFERENCE_SCHEDULE_WINDOW_MS } = {}) {
+  const clock = scheduleClockInput({ nowUtcMs, timezoneOffsetMinutes, intervalMinutes })
+  if (!clock) return { mode:AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED, status:'unavailable' }
+  const slot = scheduleSlotDetails({ boundaryUtcMs:clock.boundaryUtcMs,
+    boundaryTerminalMs:clock.terminalBoundaryMs, intervalMs:clock.intervalMs, offset:clock.offset,
+    graceMs, admissionWindowMs })
+  const now = clock.nowMs
+  const status = now < slot.eligible_at_utc_msc ? 'before_slot'
+    : now <= slot.window_expires_at_utc_msc ? 'admissible' : 'missed'
+  return { ...slot, status,
+    next_eligible_at_utc_msc:status === 'missed'
+      ? slot.slot_boundary_utc_msc + clock.intervalMs + Math.max(0, Number(graceMs) || 0)
+      : slot.slot_boundary_utc_msc + clock.intervalMs + Math.max(0, Number(graceMs) || 0),
+    next_slot_boundary_utc_msc:slot.slot_boundary_utc_msc + clock.intervalMs,
+    next_slot_boundary_terminal_msc:slot.slot_boundary_terminal_msc + clock.intervalMs,
+  }
+}
+
+export function nextScheduleSlotAfter({ afterUtcMs, timezoneOffsetMinutes, intervalMinutes,
+  graceMs = AUTO_INFERENCE_SCHEDULE_GRACE_MS, admissionWindowMs = AUTO_INFERENCE_SCHEDULE_WINDOW_MS } = {}) {
+  const clock = scheduleClockInput({ nowUtcMs:afterUtcMs, timezoneOffsetMinutes, intervalMinutes })
+  if (!clock) return { mode:AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED, status:'unavailable' }
+  const boundaryUtcMs = clock.boundaryUtcMs + (clock.boundaryUtcMs <= clock.nowMs ? clock.intervalMs : 0)
+  const boundaryTerminalMs = boundaryUtcMs + clock.offset * 60_000
+  const slot = scheduleSlotDetails({ boundaryUtcMs, boundaryTerminalMs,
+    intervalMs:clock.intervalMs, offset:clock.offset, graceMs, admissionWindowMs })
+  return { ...slot, status:'before_slot',
+    next_eligible_at_utc_msc:slot.eligible_at_utc_msc,
+    next_slot_boundary_utc_msc:slot.slot_boundary_utc_msc,
+    next_slot_boundary_terminal_msc:slot.slot_boundary_terminal_msc,
+  }
+}
+
+export function scheduleSlotAdmission({ nowUtcMs, timezoneOffsetMinutes, intervalMinutes,
+  graceMs = AUTO_INFERENCE_SCHEDULE_GRACE_MS, admissionWindowMs = AUTO_INFERENCE_SCHEDULE_WINDOW_MS } = {}) {
+  const current = scheduleSlotAtOrBefore({ nowUtcMs, timezoneOffsetMinutes, intervalMinutes, graceMs, admissionWindowMs })
+  if (current.status === 'unavailable') return current
+  if (current.status !== 'missed') return current
+  const next = nextScheduleSlotAfter({ afterUtcMs:nowUtcMs, timezoneOffsetMinutes, intervalMinutes, graceMs, admissionWindowMs })
+  return { ...current, status:'missed',
+    next_eligible_at_utc_msc:next.eligible_at_utc_msc,
+    next_slot_boundary_utc_msc:next.slot_boundary_utc_msc,
+    next_slot_boundary_terminal_msc:next.slot_boundary_terminal_msc,
+  }
+}
+
+export function autoInferenceSlotKey({ promptTypeId, symbol, slotBoundaryUtcMsc } = {}) {
+  return `auto-slot-v1:${Number(promptTypeId)}:${normalizeSymbolForScheduler(symbol)}:${Number(slotBoundaryUtcMsc)}`
+}
+
+export function nextAlignedRetryDeadline({ notBeforeUtcMs, timezoneOffsetMinutes, intervalMinutes,
+  graceMs = AUTO_INFERENCE_SCHEDULE_GRACE_MS, admissionWindowMs = AUTO_INFERENCE_SCHEDULE_WINDOW_MS } = {}) {
+  const notBefore = Number(notBeforeUtcMs)
+  const current = scheduleSlotAtOrBefore({ nowUtcMs:notBefore, timezoneOffsetMinutes, intervalMinutes,
+    graceMs, admissionWindowMs })
+  if (current.status === 'unavailable') return current
+  if (notBefore <= Number(current.eligible_at_utc_msc)) {
+    return { ...current, status:'before_slot', not_before_utc_msc:notBefore,
+      next_eligible_at_utc_msc:current.eligible_at_utc_msc,
+      next_slot_boundary_utc_msc:current.slot_boundary_utc_msc,
+      next_slot_boundary_terminal_msc:current.slot_boundary_terminal_msc }
+  }
+  const next = nextScheduleSlotAfter({ afterUtcMs:current.slot_boundary_utc_msc,
+    timezoneOffsetMinutes, intervalMinutes, graceMs, admissionWindowMs })
+  if (next.status === 'unavailable') return next
+  return { ...next, status:'before_slot', not_before_utc_msc:notBefore,
+    next_eligible_at_utc_msc:next.eligible_at_utc_msc,
+    next_slot_boundary_utc_msc:next.slot_boundary_utc_msc,
+    next_slot_boundary_terminal_msc:next.slot_boundary_terminal_msc }
+}
+
+function parseScheduleAllowlist() {
+  return new Set(String(process.env.AUTO_INFERENCE_BAR_ALIGNED_KEYS || '')
+    .split(',').map(value => value.trim()).filter(Boolean)
+    .map(value => {
+      const separator = value.indexOf(':')
+      if (separator < 0) return value
+      return `${value.slice(0, separator)}:${normalizeSymbolForScheduler(value.slice(separator + 1))}`
+    }))
+}
+
+export function resolveAutoInferenceScheduleMode(key) {
+  const requested = String(process.env.AUTO_INFERENCE_SCHEDULE_MODE || 'bar_aligned').trim().toLowerCase()
+  const mode = [AUTO_INFERENCE_SCHEDULE_MODE_COMPLETION, AUTO_INFERENCE_SCHEDULE_MODE_SHADOW, 'bar_aligned']
+    .includes(requested) ? requested : 'bar_aligned'
+  if (mode !== 'bar_aligned') return mode
+  const allowlist = parseScheduleAllowlist()
+  if (allowlist.size > 0 && !allowlist.has(String(key || '').trim())) return AUTO_INFERENCE_SCHEDULE_MODE_COMPLETION
+  return AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED
+}
+
+function terminalScheduleLabel(terminalMs) {
+  const value = Number(terminalMs)
+  if (!Number.isFinite(value) || value <= 0) return ''
+  return new Date(value).toISOString().replace('T', ' ').replace(/\.000Z$/, '')
+}
+
+function scheduleStateForAdmission(state, admission, clock = {}) {
+  if (!state || !admission || admission.status === 'unavailable') return
+  const slotBoundary = Number(admission.slot_boundary_utc_msc)
+  const slotId = autoInferenceSlotKey({ promptTypeId:state.promptTypeId, symbol:state.symbol, slotBoundaryUtcMsc:slotBoundary })
+  state.currentSlotId = slotId
+  state.slotBoundaryUtcMsc = slotBoundary
+  state.slotBoundaryTerminalMsc = Number(admission.slot_boundary_terminal_msc) || null
+  state.currentSlotBoundaryUtc = Number.isFinite(slotBoundary) && slotBoundary > 0
+    ? new Date(slotBoundary).toISOString() : ''
+  state.currentSlotBoundaryTerminal = terminalScheduleLabel(state.slotBoundaryTerminalMsc)
+  state.slotEligibleAtUtcMsc = Number(admission.eligible_at_utc_msc) || null
+  state.slotWindowExpiresAtUtcMsc = Number(admission.window_expires_at_utc_msc) || null
+  state.nextEligibleAtUtcMsc = Number(admission.status === 'before_slot'
+    ? admission.eligible_at_utc_msc : admission.next_eligible_at_utc_msc) || null
+  const displayedTerminalBoundary = admission.status === 'before_slot'
+    ? admission.slot_boundary_terminal_msc
+    : admission.next_slot_boundary_terminal_msc || admission.slot_boundary_terminal_msc
+  state.nextRunAtTerminal = terminalScheduleLabel(Number(displayedTerminalBoundary) || 0)
+  state.terminalTimezoneOffsetMinutes = Number.isFinite(Number(clock.timezone_offset_minutes))
+    ? Number(clock.timezone_offset_minutes) : Number(admission.timezone_offset_minutes)
+  state.terminalClockStatus = String(clock.clock_status || clock.source_clock_status || '') || null
+  state.terminalClockSource = String(clock.clock_source || clock.source || '') || null
+  return slotId
+}
+
+function markSkippedScheduleSlot(state, slotId, reason) {
+  if (!state || !slotId || state.lastEvaluatedSlotId === slotId) return
+  state.lastEvaluatedSlotId = slotId
+  state.lastSkippedSlotId = slotId
+  state.lastSkippedSlotReason = reason
+  state.skippedSlotCount = Number(state.skippedSlotCount || 0) + 1
+}
+
+function markSlotsCrossedWhileInFlight(state, finalizedAtMs = Date.now()) {
+  const offset = normalizedScheduleClockOffset(state?.terminalTimezoneOffsetMinutes)
+  const originalBoundary = Number(state?.slotBoundaryUtcMsc)
+  if (offset === null || !Number.isFinite(originalBoundary) || originalBoundary <= 0) return 0
+  const intervalMs = normalizeScheduleIntervalMinutes(state?.intervalMinutes) * 60_000
+  const admission = scheduleSlotAtOrBefore({
+    nowUtcMs:finalizedAtMs,
+    timezoneOffsetMinutes:offset,
+    intervalMinutes:state?.intervalMinutes,
+  })
+  if (admission.status === 'unavailable') return 0
+  let latestConsumedBoundary = Number(admission.slot_boundary_utc_msc)
+  if (Number(finalizedAtMs) < Number(admission.eligible_at_utc_msc)) latestConsumedBoundary -= intervalMs
+  const crossedCount = Math.max(0, Math.floor((latestConsumedBoundary - originalBoundary) / intervalMs))
+  if (crossedCount <= 0) return 0
+  const lastSlotId = autoInferenceSlotKey({ promptTypeId:state.promptTypeId,
+    symbol:state.symbol, slotBoundaryUtcMsc:latestConsumedBoundary })
+  if (state.lastEvaluatedSlotId !== lastSlotId) {
+    state.lastEvaluatedSlotId = lastSlotId
+    state.lastSkippedSlotId = lastSlotId
+    state.lastSkippedSlotReason = 'schedule_slot_in_flight'
+    state.skippedSlotCount = Number(state.skippedSlotCount || 0) + crossedCount
+  }
+  return crossedCount
+}
+
+function alignedMarketReadiness({ market, config, strategy, primaryTimeframe, schedule } = {}) {
+  const plan = Array.isArray(config?._market_data_plan?.timeframes)
+    ? config._market_data_plan.timeframes
+      .map(item => ({ timeframe:String(item?.timeframe || '').toUpperCase(), kline_count:item?.kline_count }))
+      .filter(item => item.timeframe)
+    : []
+  const evaluationTimeframe = typeof resolveStrategyEvaluationTimeframe === 'function'
+    ? resolveStrategyEvaluationTimeframe(strategy, plan) : null
+  const contextTimeframes = market?.strategy_context?.timeframes || {}
+  const context = evaluationTimeframe ? contextTimeframes[evaluationTimeframe] : null
+  const timeframe = String(evaluationTimeframe || primaryTimeframe || '').toUpperCase()
+  const durationMs = timeframeIntervalMs(timeframe)
+  const slotBoundaryUtcMs = Number(schedule?.slotBoundaryUtcMsc)
+  const offsetMinutes = normalizedScheduleClockOffset(schedule?.timezoneOffsetMinutes)
+  const lastClosedUtcMs = Number(context?.summary?.last_closed_bar?.time_utc_msc)
+  if (!timeframe || !Number.isFinite(durationMs) || durationMs <= 0
+    || !Number.isFinite(slotBoundaryUtcMs) || slotBoundaryUtcMs <= 0 || offsetMinutes === null
+    || !Number.isFinite(lastClosedUtcMs) || lastClosedUtcMs <= 0) {
+    return { ready:false, checked:true, timeframe:timeframe || null,
+      reason:'schedule_market_not_ready', expected_closed_open_utc_msc:null,
+      actual_closed_open_utc_msc:Number.isFinite(lastClosedUtcMs) ? lastClosedUtcMs : null }
+  }
+  const offsetMs = offsetMinutes * 60_000
+  const expectedClosedOpenUtcMs = Math.floor((slotBoundaryUtcMs + offsetMs) / durationMs) * durationMs
+    - durationMs - offsetMs
+  const ready = lastClosedUtcMs === expectedClosedOpenUtcMs
+  return {
+    ready,
+    checked:true,
+    timeframe,
+    reason:ready ? null : 'schedule_market_not_ready',
+    expected_closed_open_utc_msc:expectedClosedOpenUtcMs,
+    actual_closed_open_utc_msc:lastClosedUtcMs,
+  }
+}
+
+function scheduleNextAlignedSlot(state, nowMs = Date.now()) {
+  const offset = normalizedScheduleClockOffset(state?.terminalTimezoneOffsetMinutes)
+  if (offset === null) return null
+  const afterUtcMs = Math.max(Number(nowMs) || 0, Number(state?.slotBoundaryUtcMsc) || 0)
+  const next = nextScheduleSlotAfter({ afterUtcMs,
+    timezoneOffsetMinutes:offset, intervalMinutes:state?.intervalMinutes })
+  if (next.status === 'unavailable') return null
+  state.nextEligibleAtUtcMsc = Number(next.eligible_at_utc_msc) || null
+  state.nextRunAtTerminal = terminalScheduleLabel(next.slot_boundary_terminal_msc)
+  schedulerNextRunAt(state, next.eligible_at_utc_msc, nowMs)
+  return next
+}
+
 function buildSchedulerKey(promptTypeId, symbol) {
   return `${promptTypeId}:${normalizeSymbolForScheduler(symbol)}`
 }
@@ -841,6 +1130,27 @@ function schedulerStateEventData(key, state, updatedAtUtc) {
     subscriber_count:Number(state?.subscriberCount || state?.subscribers?.size || 0),
     next_run_in_seconds:Number(state?.nextRunInSeconds || 0),
     next_run_at_utc:String(state?.nextRunAtUtc || ''),
+    schedule_mode:String(state?.scheduleMode || ''),
+    schedule_interval_minutes:Number(state?.scheduleIntervalMinutes || state?.intervalMinutes || 5),
+    current_slot_id:String(state?.currentSlotId || ''),
+    current_slot_boundary_utc:String(state?.currentSlotBoundaryUtc || ''),
+    current_slot_boundary_terminal:String(state?.currentSlotBoundaryTerminal || ''),
+    slot_boundary_utc_msc:Number(state?.slotBoundaryUtcMsc || 0),
+    slot_boundary_terminal_msc:Number(state?.slotBoundaryTerminalMsc || 0),
+    slot_eligible_at_utc_msc:Number(state?.slotEligibleAtUtcMsc || 0),
+    slot_window_expires_at_utc_msc:Number(state?.slotWindowExpiresAtUtcMsc || 0),
+    next_eligible_at_utc_msc:Number(state?.nextEligibleAtUtcMsc || 0),
+    next_run_at_terminal:String(state?.nextRunAtTerminal || ''),
+    slot_start_lag_ms:Number(state?.slotStartLagMs || 0),
+    last_skipped_slot_id:String(state?.lastSkippedSlotId || ''),
+    last_skipped_slot_reason:String(state?.lastSkippedSlotReason || ''),
+    skipped_slot_count:Number(state?.skippedSlotCount || 0),
+    terminal_timezone_offset_minutes:state?.terminalTimezoneOffsetMinutes != null
+      && state.terminalTimezoneOffsetMinutes !== ''
+      && Number.isFinite(Number(state.terminalTimezoneOffsetMinutes))
+      ? Number(state.terminalTimezoneOffsetMinutes) : null,
+    terminal_clock_status:String(state?.terminalClockStatus || ''),
+    terminal_clock_source:String(state?.terminalClockSource || ''),
     updated_at:String(updatedAtUtc || state?.stateUpdatedAtUtc || new Date().toISOString()),
   }
 }
@@ -853,6 +1163,12 @@ function schedulerStateEventSignature(data) {
     subscriber_count:data.subscriber_count,
     skipped_overlap_count:data.skipped_overlap_count,
     next_run_at_utc:data.next_run_at_utc,
+    schedule_mode:data.schedule_mode,
+    current_slot_id:data.current_slot_id,
+    next_eligible_at_utc_msc:data.next_eligible_at_utc_msc,
+    last_skipped_slot_id:data.last_skipped_slot_id,
+    last_skipped_slot_reason:data.last_skipped_slot_reason,
+    skipped_slot_count:data.skipped_slot_count,
   })
 }
 
@@ -1066,6 +1382,24 @@ export async function updateSchedulerRedisState(key, state) {
       wait_reason: state.waitReason || '',
       next_run_in_seconds: String(state.nextRunInSeconds || 0),
       next_run_at_utc: state.nextRunAtUtc || '',
+      schedule_mode: state.scheduleMode || '',
+      schedule_interval_minutes: String(state.scheduleIntervalMinutes || state.intervalMinutes || 5),
+      current_slot_id: state.currentSlotId || '',
+      current_slot_boundary_utc: state.currentSlotBoundaryUtc || '',
+      current_slot_boundary_terminal: state.currentSlotBoundaryTerminal || '',
+      slot_boundary_utc_msc: String(state.slotBoundaryUtcMsc || ''),
+      slot_boundary_terminal_msc: String(state.slotBoundaryTerminalMsc || ''),
+      slot_eligible_at_utc_msc: String(state.slotEligibleAtUtcMsc || ''),
+      slot_window_expires_at_utc_msc: String(state.slotWindowExpiresAtUtcMsc || ''),
+      next_eligible_at_utc_msc: String(state.nextEligibleAtUtcMsc || ''),
+      next_run_at_terminal: state.nextRunAtTerminal || '',
+      slot_start_lag_ms: String(state.slotStartLagMs || 0),
+      last_skipped_slot_id: state.lastSkippedSlotId || '',
+      last_skipped_slot_reason: state.lastSkippedSlotReason || '',
+      skipped_slot_count: String(state.skippedSlotCount || 0),
+      terminal_timezone_offset_minutes: state.terminalTimezoneOffsetMinutes == null ? '' : String(state.terminalTimezoneOffsetMinutes),
+      terminal_clock_status: state.terminalClockStatus || '',
+      terminal_clock_source: state.terminalClockSource || '',
       state_updated_at_utc: stateUpdatedAtUtc,
       last_run_at: state.lastRunAt || '',
       stage: state.stage || 'idle',
@@ -1136,11 +1470,11 @@ export async function getUserAutoRuntimeStatus(userId) {
     WHERE user_id = ? AND is_deleted = 0 AND execution_enabled = 1
     ORDER BY updated_at DESC, id DESC LIMIT 1`, [userId])
   if (!activeSubscription) {
-    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'idle', last_error: '', next_run_in_seconds: 0, next_run_at_utc: '', state_updated_at_utc: '', last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
+    return { enabled: false, running: false, paused_reason: 'disabled', prompt_type_id: null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'idle', last_error: '', next_run_in_seconds: 0, next_run_at_utc: '', next_run_at_terminal: '', schedule_mode: '', state_updated_at_utc: '', last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
   }
   const scheduler = await queryOne('SELECT * FROM auto_scheduler WHERE user_id = ?', [userId])
   if (!scheduler || !scheduler.enabled) {
-    return { enabled: true, running: false, paused_reason: 'no_runtime_scheduler', prompt_type_id: Number(activeSubscription.strategy_id) || null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'paused', last_error: '', next_run_in_seconds: 0, next_run_at_utc: '', state_updated_at_utc: '', last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
+    return { enabled: true, running: false, paused_reason: 'no_runtime_scheduler', prompt_type_id: Number(activeSubscription.strategy_id) || null, prompt_type_name: '', selected_symbols: [], active_scheduler_keys: [], subscriber_count: 0, in_flight: false, active_cycles: [], stage: 'paused', last_error: '', next_run_in_seconds: 0, next_run_at_utc: '', next_run_at_terminal: '', schedule_mode: resolveAutoInferenceScheduleMode(`${Number(activeSubscription.strategy_id) || 0}:`), state_updated_at_utc: '', last_run_at: '', last_signal_id: null, admin_bridge_online: false, market_state: { isOpen: false, reason: 'unknown' }, redis_available: false }
   }
 
   let selectedSymbols = []
@@ -1179,6 +1513,17 @@ export async function getUserAutoRuntimeStatus(userId) {
   let overallLastRunAt = ''
   let overallLastSignalId = null
   let latestStateUpdatedAtUtc = ''
+  let overallScheduleMode = ''
+  let overallScheduleIntervalMinutes = 0
+  let overallNextRunAtTerminal = ''
+  let overallCurrentSlotId = ''
+  let overallSlotStartLagMs = 0
+  let overallLastSkippedSlotId = ''
+  let overallLastSkippedSlotReason = ''
+  let overallSkippedSlotCount = 0
+  let overallTerminalClockStatus = ''
+  let overallTerminalClockSource = ''
+  let overallTerminalTimezoneOffsetMinutes = null
   let totalSubscribers = 0
   const activeCycles = []
 
@@ -1197,6 +1542,20 @@ export async function getUserAutoRuntimeStatus(userId) {
     if (st.lastRunAt && (!overallLastRunAt || st.lastRunAt > overallLastRunAt)) overallLastRunAt = st.lastRunAt
     if (st.lastSignalId) overallLastSignalId = st.lastSignalId
     if (st.stateUpdatedAtUtc && st.stateUpdatedAtUtc > latestStateUpdatedAtUtc) latestStateUpdatedAtUtc = st.stateUpdatedAtUtc
+    if (!overallScheduleMode) overallScheduleMode = String(st.scheduleMode || '')
+    if (!overallScheduleIntervalMinutes) overallScheduleIntervalMinutes = Number(st.scheduleIntervalMinutes || st.intervalMinutes || 0)
+    if (!overallNextRunAtTerminal) overallNextRunAtTerminal = String(st.nextRunAtTerminal || '')
+    if (!overallCurrentSlotId) overallCurrentSlotId = String(st.currentSlotId || '')
+    if (!overallSlotStartLagMs) overallSlotStartLagMs = Number(st.slotStartLagMs || 0)
+    if (!overallLastSkippedSlotId) overallLastSkippedSlotId = String(st.lastSkippedSlotId || '')
+    if (!overallLastSkippedSlotReason) overallLastSkippedSlotReason = String(st.lastSkippedSlotReason || '')
+    overallSkippedSlotCount = Math.max(overallSkippedSlotCount, Number(st.skippedSlotCount || 0))
+    if (!overallTerminalClockStatus) overallTerminalClockStatus = String(st.terminalClockStatus || '')
+    if (!overallTerminalClockSource) overallTerminalClockSource = String(st.terminalClockSource || '')
+    if (overallTerminalTimezoneOffsetMinutes === null && st.terminalTimezoneOffsetMinutes != null
+      && st.terminalTimezoneOffsetMinutes !== '' && Number.isFinite(Number(st.terminalTimezoneOffsetMinutes))) {
+      overallTerminalTimezoneOffsetMinutes = Number(st.terminalTimezoneOffsetMinutes)
+    }
     if (st.inFlight) {
       activeCycles.push({
         cycle_id: st.cycleId || `${key}:running`,
@@ -1215,7 +1574,7 @@ export async function getUserAutoRuntimeStatus(userId) {
     // unavailable. Redis can add a second constraint, but must not become
     // the only source of the next-run timestamp.
     let keyNextRunAtMs = schedulerRuntimeNextRunAt(st, null, statusNowMs)
-    if (redis) {
+    if (redis && st.scheduleMode !== AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED) {
       try {
         const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
         keyNextRunAtMs = schedulerRuntimeNextRunAt(st, ttl, statusNowMs)
@@ -1293,6 +1652,17 @@ export async function getUserAutoRuntimeStatus(userId) {
     paused_reason: pausedReason,
     next_run_in_seconds: nextRunSeconds,
     next_run_at_utc: nextRunAtUtc,
+    next_run_at_terminal: overallNextRunAtTerminal,
+    schedule_mode: overallScheduleMode,
+    schedule_interval_minutes: overallScheduleIntervalMinutes || normalizeScheduleIntervalMinutes(scheduler.interval_minutes),
+    current_slot_id: overallCurrentSlotId,
+    slot_start_lag_ms: overallSlotStartLagMs,
+    last_skipped_slot_id: overallLastSkippedSlotId,
+    last_skipped_slot_reason: overallLastSkippedSlotReason,
+    skipped_slot_count: overallSkippedSlotCount,
+    terminal_timezone_offset_minutes: overallTerminalTimezoneOffsetMinutes,
+    terminal_clock_status: overallTerminalClockStatus,
+    terminal_clock_source: overallTerminalClockSource,
     state_updated_at_utc: latestStateUpdatedAtUtc,
     last_run_at: overallLastRunAt,
     last_signal_id: overallLastSignalId,
@@ -1419,6 +1789,14 @@ function retryDelayMs(reason, consecutiveFailures = 1) {
     case 'deployment_draining':
     case 'deployment_drain_check_failed':
       return 5000
+    case 'terminal_clock_unverified':
+      return 15000
+    case 'waiting_schedule_slot':
+    case 'schedule_slot_missed':
+    case 'schedule_slot_consumed':
+    case 'schedule_slot_in_flight':
+    case 'schedule_market_not_ready':
+      return 2000
     case 'market_closed':
     case 'market_restricted':
       return 15000
@@ -1553,6 +1931,12 @@ function schedulerWaitLabel(reason) {
     model_task_status_unknown: '模型服务商状态暂不可确认，暂停重复请求',
     model_task_cooldown: '本轮模型任务已完成，等待完整配置周期',
     model_task_completion_unknown: '模型任务完成时间未知，等待恢复确认',
+    waiting_schedule_slot: '等待下一个固定分析时间',
+    schedule_slot_missed: '本次固定分析时间已错过，等待下一次',
+    schedule_slot_consumed: '本次固定分析时间已经完成，等待下一次',
+    schedule_slot_in_flight: '上一轮仍在运行，本次固定分析时间已跳过',
+    schedule_market_not_ready: '固定分析时间的行情尚未就绪，等待下一次确认',
+    terminal_clock_unverified: '交易终端时间尚未校准，自动分析已暂停',
     model_task_gate_failed: '模型任务运行时不可用，等待恢复',
     deployment_draining: '系统正在安全排空，等待任务完成',
     deployment_drain_check_failed: '部署排空状态暂不可确认，暂停启动新分析',
@@ -1578,6 +1962,25 @@ function failedCycleCooldownSeconds(intervalMinutes, reason, consecutiveFailures
   return providerRequestStarted
     ? Math.max(completionIntervalCooldownSeconds(intervalMinutes), retrySeconds)
     : retrySeconds
+}
+
+function alignedCycleNextDeadline(state, { cycleStatus, cycleReason, providerRequestStarted, nowMs = Date.now() } = {}) {
+  const offset = normalizedScheduleClockOffset(state?.terminalTimezoneOffsetMinutes)
+  if (offset === null) return null
+  const intervalMinutes = normalizeScheduleIntervalMinutes(state?.intervalMinutes)
+  const retryNotBefore = providerRequestStarted
+    ? Number(nowMs) + retryDelayMs(cycleReason, state?._consecutiveModelFailures)
+    : Number(nowMs)
+  const canShortRetry = !providerRequestStarted
+    && cycleStatus !== 'success'
+    && !['schedule_slot_consumed', 'schedule_slot_in_flight', 'schedule_slot_missed', 'weekly_flatten_window'].includes(String(cycleReason || ''))
+    && Number(state?.slotWindowExpiresAtUtcMsc) > Number(nowMs)
+  if (canShortRetry) {
+    return Math.min(Number(state.slotWindowExpiresAtUtcMsc), Number(nowMs) + AUTO_INFERENCE_SCHEDULE_RETRY_MS)
+  }
+  const next = nextAlignedRetryDeadline({ notBeforeUtcMs:retryNotBefore,
+    timezoneOffsetMinutes:offset, intervalMinutes })
+  return Number(next?.eligible_at_utc_msc) > Number(nowMs) ? Number(next.eligible_at_utc_msc) : null
 }
 
 function broadcastAutoProgressDone(promptTypeId, symbol, status, reason, cycleSnapshot) {
@@ -1714,7 +2117,9 @@ export async function reconcileAutoSchedulers({ suppressErrors = false } = {}) {
     for (const k of neededKeys) {
       const meta = neededKeyMeta[k]
       if (autoSchedulerState[k]?.running) {
-        autoSchedulerState[k].intervalMinutes = meta.intervalMinutes
+        autoSchedulerState[k].intervalMinutes = normalizeScheduleIntervalMinutes(meta.intervalMinutes)
+        autoSchedulerState[k].scheduleIntervalMinutes = autoSchedulerState[k].intervalMinutes
+        autoSchedulerState[k].scheduleMode = resolveAutoInferenceScheduleMode(k)
         autoSchedulerState[k].subscriberCount = autoSchedulerState[k].subscribers?.size || 0
         await updateSchedulerRedisState(k, autoSchedulerState[k])
       } else {
@@ -1751,7 +2156,9 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     key,
     promptTypeId,
     symbol,
-    intervalMinutes,
+    intervalMinutes:normalizeScheduleIntervalMinutes(intervalMinutes),
+    scheduleMode:resolveAutoInferenceScheduleMode(key),
+    scheduleIntervalMinutes:normalizeScheduleIntervalMinutes(intervalMinutes),
     running: true,
     timer: null,
     inFlight: false,
@@ -1770,6 +2177,23 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     cycleId: '',
     cycleStartedAt: '',
     stageUpdatedAt: '',
+    currentSlotId: '',
+    currentSlotBoundaryUtc: '',
+    currentSlotBoundaryTerminal: '',
+    lastEvaluatedSlotId: '',
+    slotBoundaryUtcMsc: null,
+    slotBoundaryTerminalMsc: null,
+    slotEligibleAtUtcMsc: null,
+    slotWindowExpiresAtUtcMsc: null,
+    nextEligibleAtUtcMsc: null,
+    nextRunAtTerminal: '',
+    slotStartLagMs: 0,
+    lastSkippedSlotId: '',
+    lastSkippedSlotReason: '',
+    skippedSlotCount: 0,
+    terminalTimezoneOffsetMinutes: null,
+    terminalClockStatus: '',
+    terminalClockSource: '',
     _waitCount: 0,
     _lastLoggedWaitReason: '',
     _lastWaitLogAtMs: 0,
@@ -1792,6 +2216,10 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
   const runTick = async () => {
     const st = autoSchedulerState[key]
     if (!st?.running) return
+    st.scheduleMode = resolveAutoInferenceScheduleMode(key)
+    st.scheduleIntervalMinutes = normalizeScheduleIntervalMinutes(st.intervalMinutes)
+    st.intervalMinutes = st.scheduleIntervalMinutes
+    const alignedMode = st.scheduleMode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED
 
     const redis = getRedis()
     if (!redis || !isRedisAvailable()) {
@@ -1808,7 +2236,11 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
 
     try {
       const ttl = await redis.ttl(`${REDIS_COOLDOWN_PREFIX}${key}`)
-      if (ttl > 0) {
+      // In aligned mode the cooldown key is only an acceleration hint written
+      // by this scheduler.  The absolute terminal slot below is authoritative;
+      // ignoring a legacy completion-based TTL prevents an old task from
+      // shifting the first aligned run after a restart.
+      if (!alignedMode && ttl > 0) {
         schedulerNextRun(st, ttl)
         st.waitReason = 'cooldown'
         await updateSchedulerRedisState(key, st)
@@ -1860,7 +2292,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       return
     }
 
-    schedulerNextRun(st, 0)
+    if (!alignedMode) schedulerNextRun(st, 0)
 
     // Refresh subscribers
     try {
@@ -1889,8 +2321,87 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     }
     const marketBridge = await resolveStrategyMarketBridge(ptRow)
     const marketUserId = marketBridge.userId
-    const marketClock = getPlatformMarketClockState(
+    let marketClock = getPlatformMarketClockState(
       marketUserId, marketBridge.source?.trading_account_id)
+    let scheduleClockProbe = null
+    if ([AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED, AUTO_INFERENCE_SCHEDULE_MODE_SHADOW].includes(st.scheduleMode)
+      && !trustedTerminalClock(marketClock || {}) && marketUserId && isBridgeAlive(marketUserId)) {
+      try {
+        scheduleClockProbe = await mt5Bridge(marketUserId, 'market_state', { symbol }, { timeoutMs:5000, noFallback:true })
+        if (scheduleClockProbe?.status === 'success') {
+          recordBridgeMarketState(marketUserId, scheduleClockProbe, Date.now(), {
+            tradingAccountId:marketBridge.source?.trading_account_id,
+          })
+          marketClock = getPlatformMarketClockState(
+            marketUserId, marketBridge.source?.trading_account_id)
+        }
+      } catch (error) {
+        console.warn(`[UnifiedScheduler] ${key}: terminal clock bootstrap failed: ${error.message}`)
+      }
+    }
+    if (st.scheduleMode === AUTO_INFERENCE_SCHEDULE_MODE_SHADOW) {
+      if (trustedTerminalClock(marketClock || {})) {
+        const shadowAdmission = scheduleSlotAdmission({
+          nowUtcMs:Date.now(),
+          timezoneOffsetMinutes:marketClock.timezone_offset_minutes,
+          intervalMinutes:st.intervalMinutes,
+        })
+        scheduleStateForAdmission(st, shadowAdmission, marketClock)
+        st.slotStartLagMs = shadowAdmission.status === 'admissible'
+          ? Math.max(0, Date.now() - Number(shadowAdmission.eligible_at_utc_msc)) : 0
+      } else {
+        st.terminalTimezoneOffsetMinutes = null
+        st.terminalClockStatus = String(marketClock?.clock_status || '') || null
+        st.terminalClockSource = String(marketClock?.clock_source || marketClock?.source || '') || null
+      }
+    }
+    if (alignedMode) {
+      if (!trustedTerminalClock(marketClock || {})) {
+        st.lastError = null
+        st.waitReason = 'terminal_clock_unverified'
+        schedulerNextRun(st, Math.ceil(retryDelayMs('terminal_clock_unverified') / 1000))
+        await updateSchedulerRedisState(key, st)
+        scheduleTick(retryDelayMs('terminal_clock_unverified'))
+        return
+      }
+      const admission = scheduleSlotAdmission({
+        nowUtcMs:Date.now(),
+        timezoneOffsetMinutes:marketClock.timezone_offset_minutes,
+        intervalMinutes:st.intervalMinutes,
+      })
+      scheduleStateForAdmission(st, admission, marketClock)
+      st._scheduleAdmission = admission
+      if (admission.status === 'before_slot') {
+        st.lastError = null
+        st.waitReason = 'waiting_schedule_slot'
+        schedulerNextRunAt(st, admission.eligible_at_utc_msc)
+        await updateSchedulerRedisState(key, st)
+        scheduleTick(Math.max(1000, Number(admission.eligible_at_utc_msc) - Date.now()))
+        return
+      }
+      if (admission.status === 'missed') {
+        const missedSlotId = autoInferenceSlotKey({ promptTypeId, symbol,
+          slotBoundaryUtcMsc:admission.slot_boundary_utc_msc })
+        markSkippedScheduleSlot(st, missedSlotId, 'schedule_slot_missed')
+        st.lastError = null
+        st.waitReason = 'schedule_slot_missed'
+        schedulerNextRunAt(st, admission.next_eligible_at_utc_msc)
+        await updateSchedulerRedisState(key, st)
+        scheduleTick(Math.max(1000, Number(admission.next_eligible_at_utc_msc) - Date.now()))
+        return
+      }
+      st.currentSlotId = autoInferenceSlotKey({ promptTypeId, symbol,
+        slotBoundaryUtcMsc:admission.slot_boundary_utc_msc })
+      st.slotStartLagMs = Math.max(0, Date.now() - Number(admission.eligible_at_utc_msc))
+      st.lastError = null
+      st.waitReason = ''
+      schedulerNextRun(st, 0)
+      await updateSchedulerRedisState(key, st)
+    } else {
+      st._scheduleAdmission = null
+      st.currentSlotId = ''
+      st.slotStartLagMs = 0
+    }
     if (isWeeklyFlattenWindow(new Date(), marketClock.timezone_offset_minutes)) {
       const end = currentWeeklyFlattenEnd(new Date(), marketClock.timezone_offset_minutes)
       const delay = Math.max(1000, Number(end?.getTime() || Date.now() + 60_000) - Date.now())
@@ -1923,7 +2434,7 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       return
     }
 
-    const marketProbe = await mt5Bridge(marketUserId, 'market_state', { symbol }, { timeoutMs: 5000, noFallback: true })
+    const marketProbe = scheduleClockProbe || await mt5Bridge(marketUserId, 'market_state', { symbol }, { timeoutMs: 5000, noFallback: true })
     if (marketProbe?.status === 'success') recordBridgeMarketState(marketUserId, marketProbe, Date.now(), {
       tradingAccountId:marketBridge.source?.trading_account_id,
     })
@@ -1952,7 +2463,10 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     // auto-inference task for this strategy/symbol is active or status-unknown.
     let modelTaskGate
     try {
-      modelTaskGate = await checkAutoModelTaskGate(promptTypeId, symbol, st.intervalMinutes)
+      modelTaskGate = await checkAutoModelTaskGate(promptTypeId, symbol, st.intervalMinutes, Date.now(), {
+        scheduleMode:st.scheduleMode,
+        slotId:alignedMode ? st.currentSlotId : null,
+      })
     } catch (error) {
       st.lastError = 'model_task_gate_failed'
       st.waitReason = 'model_task_gate_failed'
@@ -1964,6 +2478,17 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     if (!modelTaskGate.allowed) {
       st.lastError = modelTaskGate.reason === 'model_task_status_unknown' ? 'model_task_status_unknown' : null
       st.waitReason = modelTaskGate.reason
+      const skipAlignedSlot = alignedMode
+        && ['model_task_active', 'model_task_status_unknown'].includes(modelTaskGate.reason)
+      if (skipAlignedSlot) {
+        markSkippedScheduleSlot(st, st.currentSlotId, 'schedule_slot_in_flight')
+      }
+      if (alignedMode && (skipAlignedSlot || modelTaskGate.reason === 'schedule_slot_consumed')) {
+        scheduleNextAlignedSlot(st)
+        await updateSchedulerRedisState(key, st)
+        scheduleTick(Math.max(1000, st.nextRunInSeconds * 1000))
+        return
+      }
       const modelTaskDeadlineMs = Number(modelTaskGate.nextAllowedAt)
       const hasModelTaskDeadline = Number.isFinite(modelTaskDeadlineMs) && modelTaskDeadlineMs > 0
       if (hasModelTaskDeadline) schedulerNextRunAt(st, modelTaskDeadlineMs)
@@ -2000,6 +2525,15 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       scheduleTick(tickIntervalMs)
       return
     }
+    if (alignedMode && Date.now() > Number(st.slotWindowExpiresAtUtcMsc)) {
+      markSkippedScheduleSlot(st, st.currentSlotId, 'schedule_slot_missed')
+      st.lastError = ''
+      st.waitReason = 'schedule_slot_missed'
+      scheduleNextAlignedSlot(st)
+      await updateSchedulerRedisState(key, st)
+      scheduleTick(Math.max(1000, st.nextRunInSeconds * 1000))
+      return
+    }
     const lockToken = await acquireLock(key)
     if (!st.running || autoSchedulersStopping) {
       if (lockToken) await finalizeLock(key, lockToken, 0).catch(() => {})
@@ -2010,12 +2544,20 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       // still finishing this key. Treat contention as a wait state rather
       // than a platform error, and publish it immediately to the dashboard.
       st.lastError = ''
-      st.waitReason = 'lock_busy'
-      schedulerNextRun(st, await schedulerLockWaitSeconds(key))
+      if (alignedMode) {
+        st.waitReason = 'schedule_slot_in_flight'
+        markSkippedScheduleSlot(st, st.currentSlotId, 'schedule_slot_in_flight')
+        scheduleNextAlignedSlot(st)
+      } else {
+        st.waitReason = 'lock_busy'
+        schedulerNextRun(st, await schedulerLockWaitSeconds(key))
+      }
       st.stage = 'idle'
       st.stageLabel = ''
       await updateSchedulerRedisState(key, st)
-      scheduleTick(Math.min(tickIntervalMs, st.nextRunInSeconds * 1000))
+      scheduleTick(alignedMode
+        ? Math.max(1000, st.nextRunInSeconds * 1000)
+        : Math.min(tickIntervalMs, st.nextRunInSeconds * 1000))
       return
     }
     const maintenanceBeganWhileLocking = schedulerUpdateMaintenanceReason(ptRow, marketUserId)
@@ -2038,7 +2580,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     st.cycleStartedAt = new Date().toISOString()
     st.stageUpdatedAt = st.cycleStartedAt
     schedulerNextRun(st, 0)
-    st.cycleId = `${key}:${Date.now()}`
+    st.cycleId = alignedMode && st.currentSlotId
+      ? st.currentSlotId : `${key}:${Date.now()}`
     st.lastError = ''
     st.waitReason = ''
 
@@ -2073,6 +2616,17 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         cycleId: st.cycleId,
         cycleStartedAtMs: Date.parse(st.cycleStartedAt) || Date.now(),
         intervalMinutes: st.intervalMinutes,
+        schedule: alignedMode ? {
+          mode:st.scheduleMode,
+          slotId:st.currentSlotId,
+          intervalMinutes:st.intervalMinutes,
+          slotBoundaryUtcMsc:st.slotBoundaryUtcMsc,
+          slotBoundaryTerminalMsc:st.slotBoundaryTerminalMsc,
+          eligibleAtUtcMsc:st.slotEligibleAtUtcMsc,
+          windowExpiresAtUtcMsc:st.slotWindowExpiresAtUtcMsc,
+          slotStartLagMs:st.slotStartLagMs,
+          timezoneOffsetMinutes:st.terminalTimezoneOffsetMinutes,
+        } : { mode:st.scheduleMode, intervalMinutes:st.intervalMinutes },
       })
       if (cycleResult?.status === 'success') {
         st._consecutiveModelFailures = 0
@@ -2100,15 +2654,22 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
       if (lockGuard.renewTimer) clearInterval(lockGuard.renewTimer)
       if (previousOnProviderRequest) resolvedConfig._onProviderRequest = previousOnProviderRequest
       else delete resolvedConfig._onProviderRequest
-      // A successful cycle receives the full configured interval after all
-      // inference, persistence and delivery work has completed. Model runtime
-      // must not consume any part of the interval before the next cycle.
+      // Aligned mode advances to the first eligible future terminal slot;
+      // completion_interval preserves the legacy full post-completion wait.
       const finalizedAtMs = Date.now()
-      const cooldownSecs = cycleStatus === 'success'
-        ? completionIntervalCooldownSeconds(st.intervalMinutes, finalizedAtMs)
-        : failedCycleCooldownSeconds(st.intervalMinutes, cycleReason, st._consecutiveModelFailures, providerRequestStarted)
-      const recoveryDeadlineMs = finalizedAtMs + cooldownSecs * 1000
-      schedulerNextRun(st, cooldownSecs, finalizedAtMs)
+      if (alignedMode) markSlotsCrossedWhileInFlight(st, finalizedAtMs)
+      const alignedDeadlineMs = alignedMode
+        ? alignedCycleNextDeadline(st, {
+          cycleStatus, cycleReason, providerRequestStarted, nowMs:finalizedAtMs,
+        }) : null
+      const cooldownSecs = alignedDeadlineMs
+        ? Math.max(1, Math.ceil((alignedDeadlineMs - finalizedAtMs) / 1000))
+        : cycleStatus === 'success'
+          ? completionIntervalCooldownSeconds(st.intervalMinutes, finalizedAtMs)
+          : failedCycleCooldownSeconds(st.intervalMinutes, cycleReason, st._consecutiveModelFailures, providerRequestStarted)
+      const recoveryDeadlineMs = alignedDeadlineMs || finalizedAtMs + cooldownSecs * 1000
+      if (alignedDeadlineMs) schedulerNextRunAt(st, alignedDeadlineMs, finalizedAtMs)
+      else schedulerNextRun(st, cooldownSecs, finalizedAtMs)
       const finalized = await finalizeLock(key, lockToken, cooldownSecs)
       if (!finalized) {
         st.waitReason = 'finalize_failed'
@@ -2219,8 +2780,10 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         }
         scheduleRecovery(_recoveryFn, 10000)
       } else {
-        const delay = cycleStatus === 'success' ? tickIntervalMs
-          : retryDelayMs(cycleReason, st._consecutiveModelFailures)
+        const delay = alignedMode
+          ? Math.max(1000, Number.parseInt(st.nextRunInSeconds, 10) * 1000 || tickIntervalMs)
+          : cycleStatus === 'success' ? tickIntervalMs
+            : retryDelayMs(cycleReason, st._consecutiveModelFailures)
         scheduleTick(delay)
       }
     }
@@ -2241,7 +2804,8 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
     return promise
   }
 
-  scheduleTick(tickIntervalMs)
+  scheduleTick(autoSchedulerState[key]?.scheduleMode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED
+    ? 0 : tickIntervalMs)
 }
 
 async function stopUnifiedScheduler(promptTypeId, symbol) {
@@ -2274,7 +2838,8 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
   const l = (msg) => console.log(`[UnifiedCycle ${key}] ${ts()} ${symbol}: ${msg}`)
   const cycleId = String(preflight.cycleId || `${key}:${Date.now()}`)
   const cycleStartedAtMs = Number(preflight.cycleStartedAtMs) || Date.now()
-  const intervalMinutes = Math.max(1, Number(preflight.intervalMinutes) || 5)
+  const intervalMinutes = normalizeScheduleIntervalMinutes(preflight.intervalMinutes)
+  const schedule = preflight.schedule || null
   let modelTaskTracker = null
   let modelTaskSettled = false
   let cycleError = null
@@ -2397,6 +2962,14 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     market.requested_timeframes = market.strategy_context.required_timeframes || usedTimeframes
     market.used_timeframes = market.strategy_context.used_timeframes || Object.keys(market.strategy_context?.timeframes || {})
     market.missing_timeframes = market.strategy_context.missing_timeframes || market.requested_timeframes.filter(tf => !market.used_timeframes.includes(tf))
+    if (schedule?.mode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED) {
+      const readiness = alignedMarketReadiness({ market, config, strategy:pt,
+        primaryTimeframe:primaryTf, schedule })
+      if (!readiness.ready) {
+        l(`BLOCKED: aligned market data not ready (tf=${readiness.timeframe || primaryTf}, expected=${readiness.expected_closed_open_utc_msc || '-'}, actual=${readiness.actual_closed_open_utc_msc || '-'})`)
+        return { status:'blocked', reason:'schedule_market_not_ready' }
+      }
+    }
     if (!isPrivate) {
       platformReferenceSource = await getObserverSourceForStrategy(promptTypeId)
       if (platformReferenceSource && Number(platformReferenceSource.bridge_user_id) === Number(inferenceUserId)) {
@@ -2474,12 +3047,27 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       promptTypeId, symbol, cycleId, cycleStartedAtMs, strategy:pt, config,
       market, marketMeta:ratesResp.market_meta, primaryTimeframe:primaryTf,
       intervalMinutes, resultValidUntilUtcMsc, taskDeadlineAtUtcMsc,
-      strategyDataRuntime,
+      strategyDataRuntime, schedule,
     })
+    if (schedule?.mode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED
+      && Date.now() > Number(schedule.windowExpiresAtUtcMsc)) {
+      l(`BLOCKED: aligned schedule admission window expired before model task creation (${schedule.slotId || cycleId})`)
+      return { status:'blocked', reason:'schedule_slot_missed' }
+    }
     const createTracker = getAutoModelTaskTrackerFactory()
-    modelTaskTracker = await createTracker(modelTaskInput, {
-      workerId:`auto:${process.pid}:${cycleId}`,
-    })
+    try {
+      modelTaskTracker = await createTracker(modelTaskInput, {
+        workerId:`auto:${process.pid}:${cycleId}`,
+      })
+    } catch (error) {
+      const duplicateSlot = schedule?.mode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED
+        && ['model_task_duplicate_active', 'model_task_duplicate_terminal'].includes(String(error?.code || ''))
+      if (duplicateSlot) {
+        l(`BLOCKED: aligned schedule slot already consumed (${schedule.slotId || cycleId})`)
+        return { status:'blocked', reason:'schedule_slot_consumed' }
+      }
+      throw error
+    }
     if (!modelTaskTracker?.active || !modelTaskTracker.taskId) {
       const error = new Error('model_task_tracker_inactive')
       error.code = 'model_task_tracker_inactive'
@@ -4407,6 +4995,17 @@ export const __schedulerTest = {
   nextCompletionIntervalDeadlineMs,
   completionIntervalCooldownSeconds,
   failedCycleCooldownSeconds,
+  normalizeScheduleIntervalMinutes,
+  scheduleSlotAtOrBefore,
+  nextScheduleSlotAfter,
+  scheduleSlotAdmission,
+  autoInferenceSlotKey,
+  nextAlignedRetryDeadline,
+  resolveAutoInferenceScheduleMode,
+  alignedMarketReadiness,
+  alignedCycleNextDeadline,
+  scheduleNextAlignedSlot,
+  markSlotsCrossedWhileInFlight,
   schedulerNextRunAt,
   schedulerRuntimeNextRunAt,
   autoModelTaskDomainId,

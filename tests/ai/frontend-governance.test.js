@@ -347,7 +347,7 @@ describe('AI governance navigation and DOM contract', () => {
     const safetyBranch = app.slice(safetyBranchStart, safetyBranchEnd)
     expect(safetyBranch).not.toContain('model_task_cooldown')
     expect(app).toContain("s.wait_reason || s.paused_reason")
-    expect(app).toContain('本轮模型任务已完成，等待完整配置周期')
+    expect(app).toContain('本轮模型任务已完成，等待下一计划时间')
   })
 
   it('checks the deployment drain lease before new scheduler cycles', () => {

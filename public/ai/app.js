@@ -752,7 +752,13 @@ const REASON_MAP = {
   admin_account_excluded: "与管理员源账户相同，已作为源账户单独执行",
   model_task_status_unknown: "模型服务商状态暂不可确认，正在安全恢复并避免重复请求",
   model_task_active: "上一轮模型任务仍在运行，等待完成",
-  model_task_cooldown: "本轮模型任务已完成，等待完整配置周期",
+  model_task_cooldown: "本轮模型任务已完成，等待下一计划时间",
+  waiting_schedule_slot: "等待下一个固定分析时间",
+  schedule_slot_missed: "本次固定时间已错过，等待下一次",
+  schedule_slot_consumed: "本次固定时间已完成，等待下一次",
+  schedule_slot_in_flight: "上一轮跨过本次固定时间，已跳过本次",
+  schedule_market_not_ready: "固定时间行情尚未就绪，等待下一次",
+  terminal_clock_unverified: "交易终端时间尚未校准，暂停自动分析",
   model_task_completion_unknown: "模型任务完成时间未知，等待恢复确认",
   model_task_gate_failed: "模型任务运行时暂不可用，等待恢复",
   deployment_draining: "系统正在安全排空，等待任务完成",
@@ -1430,7 +1436,13 @@ const AUTO_REASON_LABELS = {
   private_portfolio_context_unavailable: '持仓或挂单数据不完整',
   model_task_status_unknown: '模型服务商状态暂不可确认，正在安全恢复并避免重复请求',
   model_task_active: '上一轮模型任务仍在运行，等待完成',
-  model_task_cooldown: '本轮模型任务已完成，等待完整配置周期',
+  model_task_cooldown: '本轮模型任务已完成，等待下一计划时间',
+  waiting_schedule_slot: '等待下一个固定分析时间',
+  schedule_slot_missed: '本次固定时间已错过，等待下一次',
+  schedule_slot_consumed: '本次固定时间已完成，等待下一次',
+  schedule_slot_in_flight: '上一轮跨过本次固定时间，已跳过本次',
+  schedule_market_not_ready: '固定时间行情尚未就绪，等待下一次',
+  terminal_clock_unverified: '交易终端时间尚未校准，暂停自动分析',
   model_task_completion_unknown: '模型任务完成时间未知，等待恢复确认',
   model_task_gate_failed: '模型任务运行时暂不可用，等待恢复',
   deployment_draining: '系统正在安全排空，等待任务完成',
@@ -1671,7 +1683,7 @@ function renderAutoAnalyzeBadge(s) {
       progress_seq: 0, started_at: s.cycle_started_at || '',
     }], ptName);
     return;
-  } else if (['model_task_status_unknown', 'model_task_active', 'model_task_completion_unknown', 'model_task_gate_failed', 'deployment_draining', 'deployment_drain_check_failed'].includes(String(s.wait_reason || s.paused_reason || ''))) {
+  } else if (['model_task_status_unknown', 'model_task_active', 'model_task_completion_unknown', 'model_task_gate_failed', 'deployment_draining', 'deployment_drain_check_failed', 'terminal_clock_unverified', 'schedule_market_not_ready'].includes(String(s.wait_reason || s.paused_reason || ''))) {
     const reason = String(s.wait_reason || s.paused_reason || '')
     const safeStatus = autoReasonText(reason)
     const countdownText = remaining !== null && remaining > 0
@@ -1701,8 +1713,11 @@ function renderAutoAnalyzeBadge(s) {
     const countdown = `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
     label = `自动分析 · ${countdown}`;
     type = 'active';
-    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启\n下次运行：等待倒计时结束`;
-    if (s.paused_reason) title += `\n内部状态：${autoReasonText(s.paused_reason)}`;
+    const alignedMode = String(s.schedule_mode || '') === 'bar_aligned_v1';
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：开启\n调度方式：${alignedMode ? '按终端K线边界运行' : '按配置间隔运行'}\n下次运行：等待倒计时结束`;
+    if (s.next_run_at_terminal) title += `\n终端计划时间：${s.next_run_at_terminal}`;
+    const runtimeReason = s.paused_reason || s.wait_reason;
+    if (runtimeReason) title += `\n内部状态：${autoReasonText(runtimeReason)}`;
     if (s.market_state) title += `\n市场状态：${autoReasonText(s.market_state.reason)}`;
   } else {
     label = '自动分析已开启';
@@ -2044,7 +2059,13 @@ const API_ERROR_MESSAGES = {
   history_cursor_range_incomplete: "正在准备所选范围的交易记录，请稍后刷新",
   model_task_status_unknown: "模型服务商状态暂不可确认，系统正在安全恢复并避免重复请求",
   model_task_active: "上一轮模型任务仍在运行，请等待完成",
-  model_task_cooldown: "本轮模型任务已完成，请等待完整配置周期",
+  model_task_cooldown: "本轮模型任务已完成，请等待下一计划时间",
+  waiting_schedule_slot: "正在等待下一个固定分析时间",
+  schedule_slot_missed: "本次固定分析时间已错过，系统不会补跑",
+  schedule_slot_consumed: "本次固定分析时间已经完成",
+  schedule_slot_in_flight: "上一轮仍在运行，本次固定分析时间已跳过",
+  schedule_market_not_ready: "固定分析时间的行情尚未就绪，本次已安全跳过",
+  terminal_clock_unverified: "交易终端时间尚未校准，自动分析已暂停",
   model_task_completion_unknown: "模型任务完成时间未知，系统正在等待恢复确认",
   model_task_gate_failed: "模型任务运行时暂不可用，系统正在等待恢复",
   deployment_draining: "系统正在安全排空，请等待任务完成",

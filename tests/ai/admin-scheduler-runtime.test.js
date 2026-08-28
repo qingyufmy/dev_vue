@@ -69,6 +69,9 @@ describe('admin scheduler runtime fallback', () => {
       hgetall: vi.fn(async () => ({
         running:'1', wait_reason:'cooldown', next_run_in_seconds:'145',
         next_run_at_utc:'2026-08-05T05:02:25.000Z', state_updated_at_utc:'2026-08-05T04:59:58.000Z',
+        schedule_mode:'bar_aligned_v1', schedule_interval_minutes:'5',
+        current_slot_id:'auto-slot-v1:7:XAUUSD:1', next_run_at_terminal:'2026-08-05 08:05:03',
+        skipped_slot_count:'2', last_skipped_slot_reason:'schedule_slot_in_flight',
         subscriber_count:'2',
       })),
       scard: vi.fn(async () => 2),
@@ -84,6 +87,12 @@ describe('admin scheduler runtime fallback', () => {
       next_run_in_seconds:107,
       next_run_at_utc:'2026-08-05T05:01:47.000Z',
       state_updated_at_utc:'2026-08-05T04:59:58.000Z',
+      schedule_mode:'bar_aligned_v1',
+      schedule_interval_minutes:5,
+      current_slot_id:'auto-slot-v1:7:XAUUSD:1',
+      next_run_at_terminal:'2026-08-05 08:05:03',
+      skipped_slot_count:2,
+      last_skipped_slot_reason:'schedule_slot_in_flight',
     })
     expect(fakeRedis.ttl).toHaveBeenCalledWith('auto:scheduler:cooldown:7:XAUUSD')
   })

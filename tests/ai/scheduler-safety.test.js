@@ -69,6 +69,7 @@ vi.mock('../../server/routes/ai/strategy.js', () => ({
   attachAtrAnchor: vi.fn(),
   loadPrivatePortfolioContext: vi.fn(() => ({ positions:[], pendingOrders:[] })),
   resolveChanHistoryCount: vi.fn((_userId, _symbol, _timeframe, requestedCount) => requestedCount),
+  resolveStrategyEvaluationTimeframe: vi.fn(() => 'M5'),
 }))
 
 vi.mock('../../server/routes/ai/utils.js', () => ({
@@ -78,6 +79,8 @@ vi.mock('../../server/routes/ai/utils.js', () => ({
   round2: vi.fn((n) => n),
   parseTimeframeTags: vi.fn(() => []),
   stripBrokerSuffix: vi.fn((s) => String(s || '').replace(/\.(s|c|pro|std|z|ecn|m)$/i, '').toUpperCase()),
+  timeframeIntervalMs: vi.fn((tf) => ({ M1:60_000, M5:300_000, M15:900_000,
+    M30:1_800_000, H1:3_600_000, H4:14_400_000, D1:86_400_000 })[String(tf).toUpperCase()] || 900_000),
 }))
 
 vi.mock('../../server/redis.js', () => ({
@@ -494,6 +497,75 @@ describe('post-completion scheduler cooldown', () => {
   })
 })
 
+describe('terminal-clock aligned automatic inference slots', () => {
+  const at = (minute, second = 0, ms = 0) => Date.UTC(2026, 6, 24, 12, minute, second, ms)
+
+  it('admits only after the three-second grace and closes the thirty-second window', () => {
+    expect(__schedulerTest.scheduleSlotAdmission({
+      nowUtcMs:at(5, 2), timezoneOffsetMinutes:180, intervalMinutes:5,
+    })).toMatchObject({ status:'before_slot', eligible_at_utc_msc:at(5, 3) })
+    expect(__schedulerTest.scheduleSlotAdmission({
+      nowUtcMs:at(5, 3), timezoneOffsetMinutes:180, intervalMinutes:5,
+    })).toMatchObject({ status:'admissible', window_expires_at_utc_msc:at(5, 33) })
+    expect(__schedulerTest.scheduleSlotAdmission({
+      nowUtcMs:at(5, 34), timezoneOffsetMinutes:180, intervalMinutes:5,
+    })).toMatchObject({ status:'missed', next_eligible_at_utc_msc:at(10, 3) })
+  })
+
+  it('uses terminal-local boundaries even for a half-hour timezone offset', () => {
+    const admission = __schedulerTest.scheduleSlotAdmission({
+      nowUtcMs:Date.UTC(2026, 6, 24, 6, 30, 3),
+      timezoneOffsetMinutes:330,
+      intervalMinutes:60,
+    })
+    expect(admission).toMatchObject({
+      status:'admissible',
+      slot_boundary_utc_msc:Date.UTC(2026, 6, 24, 6, 30, 0),
+      slot_boundary_terminal_msc:Date.UTC(2026, 6, 24, 12, 0, 0),
+    })
+  })
+
+  it('builds one deterministic key for a strategy, normalized symbol and slot', () => {
+    expect(__schedulerTest.autoInferenceSlotKey({
+      promptTypeId:7, symbol:'XAUUSD.s', slotBoundaryUtcMsc:at(5),
+    })).toBe(`auto-slot-v1:7:XAUUSD:${at(5)}`)
+  })
+
+  it('moves a completed or provider-started cycle to the next future slot', () => {
+    expect(__schedulerTest.nextAlignedRetryDeadline({
+      notBeforeUtcMs:at(5, 20), timezoneOffsetMinutes:180, intervalMinutes:5,
+    })).toMatchObject({ eligible_at_utc_msc:at(10, 3) })
+  })
+
+  it('counts only aligned slots whose eligibility passed while inference was in flight', () => {
+    const beforeEligibility = { promptTypeId:7, symbol:'XAUUSD', intervalMinutes:5,
+      terminalTimezoneOffsetMinutes:180, slotBoundaryUtcMsc:at(5), skippedSlotCount:0 }
+    expect(__schedulerTest.markSlotsCrossedWhileInFlight(beforeEligibility, at(10, 2))).toBe(0)
+
+    const crossed = { ...beforeEligibility }
+    expect(__schedulerTest.markSlotsCrossedWhileInFlight(crossed, at(12))).toBe(1)
+    expect(crossed).toMatchObject({
+      skippedSlotCount:1,
+      lastSkippedSlotId:`auto-slot-v1:7:XAUUSD:${at(10)}`,
+      lastSkippedSlotReason:'schedule_slot_in_flight',
+    })
+  })
+
+  it('requires the exact objective latest closed candle for the evaluation timeframe', () => {
+    const base = {
+      config:{ _market_data_plan:{ timeframes:[{ timeframe:'M5', kline_count:150 }] } },
+      strategy:{ interval_minutes:5 }, primaryTimeframe:'H1',
+      schedule:{ slotBoundaryUtcMsc:at(5), timezoneOffsetMinutes:180 },
+    }
+    expect(__schedulerTest.alignedMarketReadiness({ ...base, market:{ strategy_context:{ timeframes:{
+      M5:{ summary:{ last_closed_bar:{ time_utc_msc:at(0) } } },
+    } } } })).toMatchObject({ ready:true, timeframe:'M5', expected_closed_open_utc_msc:at(0) })
+    expect(__schedulerTest.alignedMarketReadiness({ ...base, market:{ strategy_context:{ timeframes:{
+      M5:{ summary:{ last_closed_bar:{ time_utc_msc:at(0) - 300_000 } } },
+    } } } })).toMatchObject({ ready:false, reason:'schedule_market_not_ready' })
+  })
+})
+
 describe('durable automatic model-task gate', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -543,6 +615,27 @@ describe('durable automatic model-task gate', () => {
       .resolves.toMatchObject({ allowed:true })
   })
 
+  it('uses the durable slot key instead of completion cooldown in aligned mode', async () => {
+    const completedAt = 1_000_000
+    db.queryOne.mockResolvedValue({
+      task_id:'task-aligned', status:'succeeded', completed_at_utc_msc:completedAt,
+      provider_request_started:1, schedule_slot_consumed:0,
+      frozen_context_json:JSON.stringify({ interval_minutes:5 }),
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, completedAt + 1, {
+      scheduleMode:'bar_aligned_v1', slotId:'auto-slot-v1:7:XAUUSD:1200000',
+    })).resolves.toMatchObject({ allowed:true })
+    expect(db.queryOne.mock.calls[0][1][0]).toBe('auto-slot-v1:7:XAUUSD:1200000')
+
+    db.queryOne.mockResolvedValue({
+      task_id:'task-same-slot', status:'succeeded', completed_at_utc_msc:completedAt,
+      provider_request_started:1, schedule_slot_consumed:1,
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, completedAt + 1, {
+      scheduleMode:'bar_aligned_v1', slotId:'auto-slot-v1:7:XAUUSD:1200000',
+    })).resolves.toMatchObject({ allowed:false, reason:'schedule_slot_consumed' })
+  })
+
   it('anchors the scheduler deadline at completedAt plus interval without doubling it', async () => {
     const completedAt = 1_000_000
     const nowMs = completedAt + 1
@@ -586,6 +679,28 @@ describe('durable automatic model-task gate', () => {
       strategy_data_runtime_version:'strategy-data-runtime-v1', strategy_policy_hash:'a'.repeat(64),
       indicator_evidence_hashes:{ entry_ema34:'b'.repeat(64) } })
     expect(input.taskDeadlineAtUtcMs).toBe(601_000)
+  })
+
+  it('freezes aligned schedule identity and uses slot eligibility as scheduled time', () => {
+    const input = __schedulerTest.buildAutoModelTaskInput({
+      promptTypeId:7, symbol:'XAUUSD.s', cycleId:'auto-slot-v1:7:XAUUSD:1000000',
+      cycleStartedAtMs:1_003_500, intervalMinutes:5,
+      strategy:{ id:7, version:3, scope:'platform' },
+      config:{ api_provider:'deepseek', model_name:'deepseek-chat', system_prompt:'system' },
+      market:{ symbol:'XAUUSD', latest_price:2000 },
+      marketMeta:{ timezone_offset_minutes:180, clock_status:'progressing_tick', source:'bridge' },
+      primaryTimeframe:'M5', resultValidUntilUtcMsc:1_100_000,
+      schedule:{ mode:'bar_aligned_v1', slotId:'auto-slot-v1:7:XAUUSD:1000000',
+        intervalMinutes:5, slotBoundaryUtcMsc:1_000_000, slotBoundaryTerminalMsc:11_800_000,
+        eligibleAtUtcMsc:1_003_000, windowExpiresAtUtcMsc:1_033_000, slotStartLagMs:500 },
+    })
+    expect(input).toMatchObject({
+      idempotencyKey:'auto-slot-v1:7:XAUUSD:1000000', scheduledAtUtcMs:1_003_000,
+      frozenContext:{ schedule_mode:'bar_aligned_v1',
+        schedule_slot_id:'auto-slot-v1:7:XAUUSD:1000000', schedule_interval_minutes:5,
+        slot_boundary_utc_msc:1_000_000, slot_eligible_at_utc_msc:1_003_000,
+        slot_window_expires_at_utc_msc:1_033_000, slot_start_lag_ms:500 },
+    })
   })
 
   it('does not shorten the automatic task budget to the legacy profile timeout', () => {
