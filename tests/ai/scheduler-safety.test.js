@@ -449,10 +449,11 @@ describe('scheduler wait cadence', () => {
     expect(__schedulerTest.schedulerWaitLabel('market_closed')).toBe('市场休市，等待开市')
   })
 
-  it('waits at least one full configured interval after every provider-started failure', () => {
+  it('keeps model failures on the configured cadence without exponential backoff', () => {
     expect(__schedulerTest.failedCycleCooldownSeconds(5, 'ai_failed', 1, true)).toBe(300)
     expect(__schedulerTest.failedCycleCooldownSeconds(5, 'ai_failed', 4, true)).toBe(300)
-    expect(__schedulerTest.failedCycleCooldownSeconds(2, 'ai_failed', 4, true)).toBe(300)
+    expect(__schedulerTest.failedCycleCooldownSeconds(2, 'ai_failed', 4, true)).toBe(120)
+    expect(__schedulerTest.failedCycleCooldownSeconds(5, 'ai_failed', 4, false)).toBe(300)
     expect(__schedulerTest.failedCycleCooldownSeconds(5, 'exception', 1, false)).toBe(20)
   })
 
@@ -535,6 +536,16 @@ describe('terminal-clock aligned automatic inference slots', () => {
     expect(__schedulerTest.nextAlignedRetryDeadline({
       notBeforeUtcMs:at(5, 20), timezoneOffsetMinutes:180, intervalMinutes:5,
     })).toMatchObject({ eligible_at_utc_msc:at(10, 3) })
+  })
+
+  it('does not let repeated model failures skip the next aligned slot', () => {
+    expect(__schedulerTest.alignedCycleNextDeadline({
+      terminalTimezoneOffsetMinutes:180, intervalMinutes:5,
+      _consecutiveModelFailures:4,
+    }, {
+      cycleStatus:'blocked', cycleReason:'ai_failed', providerRequestStarted:true,
+      nowMs:at(9, 30),
+    })).toBe(at(10, 3))
   })
 
   it('counts only aligned slots whose eligibility passed while inference was in flight', () => {
@@ -634,6 +645,85 @@ describe('durable automatic model-task gate', () => {
     await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, completedAt + 1, {
       scheduleMode:'bar_aligned_v1', slotId:'auto-slot-v1:7:XAUUSD:1200000',
     })).resolves.toMatchObject({ allowed:false, reason:'schedule_slot_consumed' })
+  })
+
+  it('allows an explicit failed provider attempt at the next normal interval', async () => {
+    const failedAt = 1_000_000
+    db.queryOne.mockResolvedValue({
+      task_id:'task-failed-fetch', status:'status_unknown',
+      task_deadline_at_utc_msc:failedAt + 600_000,
+      updated_at_utc_msc:failedAt,
+      latest_attempt_status:'failed', latest_attempt_updated_at_utc_msc:failedAt,
+      frozen_context_json:JSON.stringify({ interval_minutes:5 }),
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, failedAt + 1))
+      .resolves.toMatchObject({
+        allowed:false, reason:'model_task_failure_interval',
+        nextAllowedAt:failedAt + 300_000, nextRunInSeconds:300,
+      })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, failedAt + 300_001))
+      .resolves.toMatchObject({ allowed:true })
+  })
+
+  it('still blocks a genuinely active request even if a failed attempt row is visible', async () => {
+    db.queryOne.mockResolvedValue({
+      task_id:'task-active-failure', status:'provider_running',
+      latest_attempt_status:'failed', latest_attempt_updated_at_utc_msc:1_000_000,
+      provider_request_started:1,
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, 1_300_001))
+      .resolves.toMatchObject({ allowed:false, reason:'model_task_active' })
+  })
+
+  it('does not bypass a still-valid lease on an unknown failed task', async () => {
+    const nowMs = 1_000_000
+    db.queryOne.mockResolvedValue({
+      task_id:'task-failed-live-lease', status:'status_unknown',
+      lease_expires_at_utc_msc:nowMs + 60_000,
+      latest_attempt_status:'failed', latest_attempt_updated_at_utc_msc:nowMs - 300_000,
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, nowMs))
+      .resolves.toMatchObject({
+        allowed:false, reason:'model_task_active',
+        nextAllowedAt:nowMs + 60_000, nextRunInSeconds:60,
+      })
+  })
+
+  it('does not let a stale failed-attempt marker replace a successful cooldown', async () => {
+    const completedAt = 1_000_000
+    db.queryOne.mockResolvedValue({
+      task_id:'task-success-after-retry', status:'succeeded', completed_at_utc_msc:completedAt,
+      provider_request_started:1, latest_attempt_status:'failed',
+      latest_attempt_updated_at_utc_msc:completedAt - 300_000,
+      frozen_context_json:JSON.stringify({ interval_minutes:5 }),
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, completedAt + 1))
+      .resolves.toMatchObject({ allowed:false, reason:'model_task_cooldown', nextRunInSeconds:300 })
+  })
+
+  it('preserves aligned-slot idempotency while recovering a failed attempt', async () => {
+    const failedAt = 1_000_000
+    db.queryOne.mockResolvedValue({
+      task_id:'task-failed-slot', status:'status_unknown', schedule_slot_consumed:1,
+      latest_attempt_status:'failed', latest_attempt_updated_at_utc_msc:failedAt,
+      frozen_context_json:JSON.stringify({ interval_minutes:5 }),
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, failedAt + 1, {
+      scheduleMode:'bar_aligned_v1', slotId:'auto-slot-v1:7:XAUUSD:1200000',
+    })).resolves.toMatchObject({ allowed:false, reason:'schedule_slot_consumed' })
+  })
+
+  it('allows the next aligned slot even when the previous failure ended at its boundary', async () => {
+    const failedAt = Date.UTC(2026, 6, 24, 12, 54, 50)
+    const nextSlotEligibleAt = Date.UTC(2026, 6, 24, 12, 55, 3)
+    db.queryOne.mockResolvedValue({
+      task_id:'task-failed-slot-boundary', status:'status_unknown', schedule_slot_consumed:0,
+      latest_attempt_status:'failed', latest_attempt_updated_at_utc_msc:failedAt,
+      frozen_context_json:JSON.stringify({ interval_minutes:5 }),
+    })
+    await expect(__schedulerTest.checkAutoModelTaskGate(7, 'XAUUSD', 5, nextSlotEligibleAt, {
+      scheduleMode:'bar_aligned_v1', slotId:'auto-slot-v1:7:XAUUSD:1234567890',
+    })).resolves.toMatchObject({ allowed:true })
   })
 
   it('anchors the scheduler deadline at completedAt plus interval without doubling it', async () => {

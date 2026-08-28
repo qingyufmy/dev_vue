@@ -143,6 +143,35 @@ describe('authoritative model task tracker', () => {
     await tracker.stop()
   })
 
+  it('lets only the auto-inference opt-in terminalize a response-less provider failure', async () => {
+    const tracker = await createModelTaskTracker({ taskKind:'auto_inference', idempotencyKey:'auto:provider-failed' }, {
+      renewIntervalMs:60_000,
+    })
+    await tracker.onProviderRequest({ phase:'request', providerRequestId:'req-auto-failed' })
+    await tracker.failed(new Error('fetch failed'), true, { terminalOnFailure:true })
+
+    expect(tracker.status).toBe('failed_terminal')
+    expect(runtime.transitionModelTask.mock.calls.map(([, status]) => status))
+      .toEqual(['preparing', 'submitted', 'failed_terminal'])
+    await tracker.stop()
+
+    const unknownTracker = await createModelTaskTracker({ taskKind:'auto_inference', idempotencyKey:'auto:unknown-failed' }, {
+      renewIntervalMs:60_000,
+    })
+    await unknownTracker.onProviderRequest({ phase:'request' })
+    await unknownTracker.failed(new Error('fetch failed'), true, { terminalOnFailure:true })
+    expect(unknownTracker.status).toBe('failed_terminal')
+    await unknownTracker.stop()
+
+    const manualTracker = await createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'manual:provider-failed' }, {
+      renewIntervalMs:60_000,
+    })
+    await manualTracker.onProviderRequest({ phase:'request', providerRequestId:'req-manual-failed' })
+    await manualTracker.failed(new Error('fetch failed'), true, { terminalOnFailure:true })
+    expect(manualTracker.status).toBe('provider_quiet')
+    await manualTracker.stop()
+  })
+
   it('maps explicit HTTP 429 to controlled retry_wait and terminal after exhaustion', async () => {
     const retryTracker = await createModelTaskTracker({ taskKind:'daily_review', idempotencyKey:'daily:http-429-retry' }, { renewIntervalMs:60_000 })
     await retryTracker.onProviderRequest({ phase:'request' })

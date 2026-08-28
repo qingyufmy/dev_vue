@@ -59,6 +59,7 @@ export async function createModelTaskTracker(input, {
   leaseMs = 120_000,
   renewIntervalMs = 30_000,
 } = {}) {
+  const autoTerminalOnFailure = String(input?.taskKind || '') === 'auto_inference'
   const createdResult = await createModelTask(input)
   const taskFromCreate = createdResult?.task
   if (!taskFromCreate) throw trackerError('model_task_create_failed')
@@ -338,7 +339,7 @@ export async function createModelTaskTracker(input, {
     }),
     completedStale:reason => transitionToTerminal('completed_stale', reason),
     completedRejected:reason => transitionToTerminal('completed_rejected', reason),
-    failed:(error, exhausted = false) => enqueue(async () => {
+    failed:(error, exhausted = false, options = {}) => enqueue(async () => {
       pendingTransactionalSuccess = null
       // Once a validated result reached result_ready/applying, retry_wait would
       // require replaying an output that is no longer durably stored in the
@@ -381,6 +382,15 @@ export async function createModelTaskTracker(input, {
         } else {
           target = 'failed_terminal'
         }
+      }
+
+      // Automatic inference may explicitly choose to end a response-less
+      // provider failure after recording it.  Keep this opt-in so manual and
+      // other background workflows retain the conservative status_unknown /
+      // provider_quiet reconciliation semantics by default.
+      if (autoTerminalOnFailure && options?.terminalOnFailure === true
+        && ['status_unknown', 'provider_quiet'].includes(target)) {
+        target = 'failed_terminal'
       }
 
       if (['leased', 'preparing', 'submitted', 'provider_running', 'provider_quiet', 'status_unknown',

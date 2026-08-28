@@ -86,6 +86,9 @@ const MARKET_WAIT_REASONS = new Set([
 const AUTO_MODEL_TASK_TERMINAL_STATES = new Set([
   'cancelled', 'failed_terminal', 'succeeded', 'completed_stale', 'completed_rejected',
 ])
+const AUTO_MODEL_TASK_FAILED_RETRY_STATES = new Set([
+  'status_unknown', 'retry_wait', 'failed_terminal', 'completed_stale',
+])
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value == null ? '' : value)).digest('hex')
@@ -104,7 +107,9 @@ function parseFrozenModelTaskContext(task) {
 /**
  * Durable scheduler gate. Redis protects the live worker, while this check
  * protects against duplicate provider work after a process/Redis restart.
- * Non-terminal and status-unknown tasks are never retried by this scheduler.
+ * Non-terminal tasks remain fenced; a status-unknown task is retried only
+ * when its latest provider attempt is explicitly failed and its normal
+ * configured interval has elapsed.
  */
 export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinutes = 5, nowMs = Date.now(), options = {}) {
   if (nowMs && typeof nowMs === 'object') {
@@ -118,11 +123,15 @@ export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinut
     ? `EXISTS (SELECT 1 FROM ai_model_tasks slot_task
       WHERE slot_task.task_kind = 'auto_inference' AND slot_task.idempotency_key = ?) AS schedule_slot_consumed`
     : '0 AS schedule_slot_consumed'
-  const task = await queryOne(`SELECT task_id, status, task_deadline_at_utc_msc, completed_at_utc_msc, result_valid_until_utc_msc,
+  const task = await queryOne(`SELECT task_id, status, lease_expires_at_utc_msc, task_deadline_at_utc_msc, completed_at_utc_msc, result_valid_until_utc_msc,
       frozen_context_json, created_at_utc_msc, updated_at_utc_msc,
       idempotency_key,
       ${slotConsumedSelect},
-      EXISTS (SELECT 1 FROM ai_model_task_attempts a WHERE a.task_id = ai_model_tasks.task_id) AS provider_request_started
+      EXISTS (SELECT 1 FROM ai_model_task_attempts a WHERE a.task_id = ai_model_tasks.task_id) AS provider_request_started,
+      (SELECT a.status FROM ai_model_task_attempts a
+        WHERE a.task_id = ai_model_tasks.task_id ORDER BY a.id DESC LIMIT 1) AS latest_attempt_status,
+      (SELECT a.updated_at_utc_msc FROM ai_model_task_attempts a
+        WHERE a.task_id = ai_model_tasks.task_id ORDER BY a.id DESC LIMIT 1) AS latest_attempt_updated_at_utc_msc
     FROM ai_model_tasks
     WHERE task_kind = 'auto_inference' AND domain_type = 'strategy_symbol' AND domain_id = ?
     ORDER BY CASE WHEN status IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')
@@ -131,7 +140,61 @@ export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinut
   if (!task) return { allowed:true, domainId, task:null }
 
   const status = String(task.status || '').toLowerCase()
+  const frozen = parseFrozenModelTaskContext(task)
+  const providerStarted = Number(task.provider_request_started) === 1
+    || (task.provider_request_started == null && frozen.provider_request_started !== false)
+  const configuredMinutes = normalizeScheduleIntervalMinutes(frozen.interval_minutes || intervalMinutes)
+  const latestAttemptStatus = String(task.latest_attempt_status || '').toLowerCase()
+  const explicitProviderFailure = latestAttemptStatus === 'failed' && AUTO_MODEL_TASK_FAILED_RETRY_STATES.has(status)
+  const failureAt = Number(task.latest_attempt_updated_at_utc_msc)
+    || Number(task.updated_at_utc_msc)
+    || Number(task.completed_at_utc_msc)
+  const failureNextAllowedAt = explicitProviderFailure && Number.isFinite(failureAt) && failureAt > 0
+    ? failureAt + configuredMinutes * 60_000 : null
+  const leaseExpiresAt = Number(task.lease_expires_at_utc_msc)
+  const leaseActive = Number.isFinite(leaseExpiresAt) && leaseExpiresAt > nowMs
+  const failureIntervalGate = () => {
+    if (!failureNextAllowedAt || failureNextAllowedAt <= nowMs) return null
+    return {
+      allowed:false,
+      reason:'model_task_failure_interval',
+      task,
+      domainId,
+      nextAllowedAt:failureNextAllowedAt,
+      nextRunInSeconds:Math.max(1, Math.ceil((failureNextAllowedAt - nowMs) / 1000)),
+    }
+  }
   if (!AUTO_MODEL_TASK_TERMINAL_STATES.has(status)) {
+    // A persisted provider attempt with an explicit failed outcome is eligible
+    // for the next normal run. Do not let the conservative
+    // status_unknown deadline mask an attempt that already failed at the
+    // provider boundary.  A consumed aligned slot still wins below, so a
+    // restart cannot repeat the same strategy/symbol/slot.
+    const failureRetryStatus = status === 'status_unknown' || status === 'retry_wait'
+    if (explicitProviderFailure && failureRetryStatus) {
+      if (leaseActive) {
+        return {
+          allowed:false,
+          reason:'model_task_active',
+          task,
+          domainId,
+          nextAllowedAt:leaseExpiresAt,
+          nextRunInSeconds:Math.max(1, Math.ceil((leaseExpiresAt - nowMs) / 1000)),
+        }
+      }
+      if (scheduleMode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED
+        && Number(task.schedule_slot_consumed) === 1) {
+        return { allowed:false, reason:'schedule_slot_consumed', task, domainId }
+      }
+      // Aligned scheduling is governed by the next terminal slot. Applying a
+      // completion-based failure delay here could miss the very next slot
+      // when a failed request ends near its boundary.
+      if (scheduleMode !== AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED) {
+        const failureWait = failureIntervalGate()
+        if (failureWait) return failureWait
+      }
+      return { allowed:true, domainId, task }
+    }
     const taskDeadlineAtUtcMs = Number(task.task_deadline_at_utc_msc)
     if (status === 'status_unknown' && Number.isFinite(taskDeadlineAtUtcMs) && taskDeadlineAtUtcMs > nowMs) {
       return {
@@ -167,10 +230,10 @@ export async function checkAutoModelTaskGate(promptTypeId, symbol, intervalMinut
   if (scheduleMode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED && Number(task.schedule_slot_consumed) === 1) {
     return { allowed:false, reason:'schedule_slot_consumed', task, domainId }
   }
-  const frozen = parseFrozenModelTaskContext(task)
-  const providerStarted = Number(task.provider_request_started) === 1
-    || (task.provider_request_started == null && frozen.provider_request_started !== false)
-  const configuredMinutes = normalizeScheduleIntervalMinutes(frozen.interval_minutes || intervalMinutes)
+  if (scheduleMode !== AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED) {
+    const failureWait = failureIntervalGate()
+    if (failureWait) return failureWait
+  }
   if (scheduleMode === AUTO_INFERENCE_SCHEDULE_MODE_ALIGNED) {
     return { allowed:true, domainId, task }
   }
@@ -1929,6 +1992,7 @@ function schedulerWaitLabel(reason) {
     lock_busy: '上一轮分析仍在结束，等待释放调度权',
     model_task_active: '上一轮模型任务仍在运行，等待完成',
     model_task_status_unknown: '模型服务商状态暂不可确认，暂停重复请求',
+    model_task_failure_interval: '模型请求失败，等待下一个正常分析周期',
     model_task_cooldown: '本轮模型任务已完成，等待完整配置周期',
     model_task_completion_unknown: '模型任务完成时间未知，等待恢复确认',
     waiting_schedule_slot: '等待下一个固定分析时间',
@@ -1958,6 +2022,11 @@ function completionIntervalCooldownSeconds(intervalMinutes, completedAtMs = Date
 }
 
 function failedCycleCooldownSeconds(intervalMinutes, reason, consecutiveFailures = 1, providerRequestStarted = false) {
+  // A completed provider failure is not an invitation to retry faster than
+  // the configured analysis cadence.  Keep the cadence fixed even when the
+  // historical failure counter is high; the counter must not create a hidden
+  // exponential pause between otherwise normal slots.
+  if (String(reason || '') === 'ai_failed') return completionIntervalCooldownSeconds(intervalMinutes)
   const retrySeconds = Math.ceil(retryDelayMs(reason, consecutiveFailures) / 1000)
   return providerRequestStarted
     ? Math.max(completionIntervalCooldownSeconds(intervalMinutes), retrySeconds)
@@ -1968,10 +2037,11 @@ function alignedCycleNextDeadline(state, { cycleStatus, cycleReason, providerReq
   const offset = normalizedScheduleClockOffset(state?.terminalTimezoneOffsetMinutes)
   if (offset === null) return null
   const intervalMinutes = normalizeScheduleIntervalMinutes(state?.intervalMinutes)
-  const retryNotBefore = providerRequestStarted
+  const modelFailure = String(cycleReason || '') === 'ai_failed'
+  const retryNotBefore = providerRequestStarted && !modelFailure
     ? Number(nowMs) + retryDelayMs(cycleReason, state?._consecutiveModelFailures)
     : Number(nowMs)
-  const canShortRetry = !providerRequestStarted
+  const canShortRetry = !providerRequestStarted && !modelFailure
     && cycleStatus !== 'success'
     && !['schedule_slot_consumed', 'schedule_slot_in_flight', 'schedule_slot_missed', 'weekly_flatten_window'].includes(String(cycleReason || ''))
     && Number(state?.slotWindowExpiresAtUtcMsc) > Number(nowMs)
@@ -2783,7 +2853,9 @@ async function startUnifiedScheduler(promptTypeId, symbol, intervalMinutes = 5) 
         const delay = alignedMode
           ? Math.max(1000, Number.parseInt(st.nextRunInSeconds, 10) * 1000 || tickIntervalMs)
           : cycleStatus === 'success' ? tickIntervalMs
-            : retryDelayMs(cycleReason, st._consecutiveModelFailures)
+            : cycleReason === 'ai_failed'
+              ? Math.max(1000, cooldownSecs * 1000)
+              : retryDelayMs(cycleReason, st._consecutiveModelFailures)
         scheduleTick(delay)
       }
     }
@@ -3105,7 +3177,7 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
       if (providerRequestCount > 1 && !controlledRepair) {
         const error = new Error('auto_inference_duplicate_provider_request')
         error.code = 'auto_inference_duplicate_provider_request'
-        await modelTaskTracker.failed(error, true)
+        await modelTaskTracker.failed(error, true, { terminalOnFailure:true })
         throw error
       }
       if (typeof previousOnProviderRequest === 'function') await previousOnProviderRequest(event)
@@ -3144,13 +3216,21 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
     signal.execution_valid_until_utc_msc = resultValidUntilUtcMsc
     l(`AI done (${Date.now()-t3}ms, type=${signal.signal_type}, confidence=${signal.confidence}, source=${aiSource})`)
     if (aiSource === 'ai_error_hold') {
-      l(`BLOCKED: AI inference failed (${signal.reasoning || 'unknown error'})`)
-      await modelTaskTracker.failed({ code:'ai_failed', message:signal.reasoning || 'ai_failed' }, true)
+      l(`FAILED: AI inference failed; next normal schedule remains eligible (${signal.reasoning || 'unknown error'})`)
+      const failureMessage = signal.reasoning || 'ai_failed'
+      // Automatic inference has an explicit failure result at this boundary.
+      // End response-less status_unknown/provider_quiet tasks so they cannot
+      // remain the highest-priority active row after a restart. The opt-in is
+      // intentionally limited to this scheduler; manual/background trackers
+      // retain their conservative reconciliation behavior by default.
+      await modelTaskTracker.failed({ code:'ai_failed', message:failureMessage }, true, {
+        terminalOnFailure:true,
+      })
       modelTaskSettled = true
       await insertAudit(null, isPrivate ? inferenceUserId : 0, 'ai_auto_scan', symbol,
         { trigger: 'timer', prompt_type_id: promptTypeId, symbol, timeframe: primaryTf },
         { status: 'error', reason: 'ai_failed', message: signal.reasoning || '' }, 'error')
-      return { status: 'blocked', reason: 'ai_failed' }
+      return { status: 'error', reason: 'ai_failed' }
     }
 
     if (!isPrivate) {
@@ -3508,7 +3588,9 @@ async function runUnifiedAutoCycle(promptTypeId, symbol, lockGuard, preflight = 
         const staleFailure = ['model_task_result_expired', 'model_task_fence_lost', 'terminal_clock_untrusted',
           'strategy_version_changed', 'auto_cycle_changed'].includes(String(cycleError?.code || cycleError?.message || ''))
         if (staleFailure) await modelTaskTracker.completedStale(String(cycleError?.code || cycleError?.message))
-        else await modelTaskTracker.failed({ code:String(cycleError?.code || 'auto_inference_cycle_failed'), message:String(cycleError?.message || 'auto inference cycle failed') }, true)
+        else await modelTaskTracker.failed({ code:String(cycleError?.code || 'auto_inference_cycle_failed'), message:String(cycleError?.message || 'auto inference cycle failed') }, true, {
+          terminalOnFailure:true,
+        })
         modelTaskSettled = true
       } catch (error) {
         console.error(`[ModelTask] failed transition for ${modelTaskTracker.taskId}:`, error.message)
