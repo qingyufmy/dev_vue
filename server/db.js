@@ -65,7 +65,7 @@ export function getDB() {
     })
 
     // Keepalive: ping every 30 minutes to prevent idle timeout
-    setInterval(async () => {
+    const keepaliveTimer = setInterval(async () => {
       try {
         const conn = await pool.getConnection()
         await conn.ping()
@@ -74,6 +74,9 @@ export function getDB() {
         console.error('[DB] Keepalive ping failed:', e.message)
       }
     }, 30 * 60 * 1000)
+    // A keepalive should not prevent one-off diagnostics and maintenance
+    // scripts from exiting after they close the pool.
+    keepaliveTimer.unref()
   }
   return pool
 }
