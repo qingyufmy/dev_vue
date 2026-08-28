@@ -3479,16 +3479,20 @@ function resolveUnanchoredStructureReason(result) {
 
 function protectBootstrapDependentEvidence(selected, usable, reliability, unavailableReason = null) {
   if (usable) {
+    const usableSelected = {
+      ...selected,
+      structure_anchor:{
+        ...(selected?.structure_anchor || {}),
+        current_result_usable:true,
+      },
+    }
     return {
       divergence:selected.divergence,
       forming_divergence:selected.forming_divergence,
       recent_divergences:selected.recent_divergences,
       trend_state:selected.trend_state,
       entry_candidates:selected.entry_candidates,
-      evidence_capabilities:buildChanEvidenceCapabilities(selected, {
-        entry_structure_usable:selected.evidence_capabilities?.entry_structure_usable,
-        divergence_usable:selected.evidence_capabilities?.divergence_usable,
-      }),
+      evidence_capabilities:buildChanEvidenceCapabilities(usableSelected),
     }
   }
   const reason = String(unavailableReason || resolveUnanchoredStructureReason(selected))
@@ -3822,21 +3826,21 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
     && selected.authoritative_terminal_chain_confirmed === true
     && temporalEvidence.temporal_identity_stable === true
     && crossWindowBootstrap.stable
-  // The unanchored calculation is phase one only: it may recommend and persist
-  // an independently confirmed boundary, but it never publishes entry-dependent
-  // evidence.  `pending` is reserved for that exact two-phase hand-off.  A
-  // missing/unstable center or entry is an unavailable state, not a promise
-  // that another request will complete an anchor.
+  // A fully cross-confirmed unanchored calculation may publish entry-dependent
+  // evidence immediately. Persisting the same boundary still gives later
+  // cycles a trusted continuity anchor, but a second scheduler cycle is not an
+  // extra eligibility gate once the full-window, temporal and entry identities
+  // have already converged in this calculation.
   const recommendedAnchorTime = promotionReady
     ? Number(temporalEvidence.temporal_entry_start_time_utc_msc) || null : null
   const bootstrapCandidate = Boolean(promotionReady
     && Number(recommendedAnchorTime) > 0
     && temporalEvidence.temporal_core_stable_id
     && temporalEvidence.temporal_entry_segment_stable_id)
-  const bootstrapUsableNow = false
-  const anchorUnavailableReason = bootstrapCandidate
-    ? 'structure_anchor_bootstrap_pending' : resolveUnanchoredStructureReason(selected)
-  const bootstrapWarning = bootstrapCandidate ? ['structure_anchor_bootstrap_pending'] : [anchorUnavailableReason]
+  const bootstrapUsableNow = bootstrapCandidate
+  const anchorUnavailableReason = bootstrapUsableNow
+    ? null : resolveUnanchoredStructureReason(selected)
+  const bootstrapWarning = anchorUnavailableReason ? [anchorUnavailableReason] : []
   const warnings = [...new Set([...(selected.warnings || []), ...bootstrapWarning])]
   const reliability = !bootstrapUsableNow && selected.reliability === 'high' ? 'medium' : selected.reliability
   const protectedEvidence = protectBootstrapDependentEvidence(selected, bootstrapUsableNow, reliability, anchorUnavailableReason)

@@ -584,9 +584,14 @@ export async function buildStrategyContextFromTags(userId, symbol, account, posi
   for (const { tf, count } of tags) {
     const chanPolicy = useChan ? getChanWindowPolicy(tf) : null
     const chanEnabledForTimeframe = Boolean(useChan && chanPolicy?.supported !== false)
+    // platformRates may include the currently forming bar.  The indicator
+    // registry removes that bar for `closed_only`, so request one additional
+    // source bar to preserve the declaration's complete required history.
+    // Non-closed indicators keep their previous request size.
     const indicatorHistoryCount = Math.max(0, ...(compiledPolicy?.indicators || [])
       .filter(definition => definition.enabled && definition.source?.timeframe === tf)
-      .map(indicatorRequiredHistory))
+      .map(definition => indicatorRequiredHistory(definition)
+        + (definition.source?.bar_scope === 'closed_only' ? 1 : 0)))
     const historyCount = Math.max(resolveChanHistoryCount(userId, symbol, tf, count, chanEnabledForTimeframe), indicatorHistoryCount)
     let rates
     let chanDataQuality = null

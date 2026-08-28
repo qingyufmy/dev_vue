@@ -1429,7 +1429,7 @@ describe('computeChan', () => {
     expect(result.warnings).not.toContain('structure_anchor_bootstrap_pending')
   })
 
-  it('reports pending only for a confirmed two-phase anchor candidate', () => {
+  it('publishes entry-dependent evidence immediately for a fully confirmed anchor candidate', () => {
     const rates = Array.from({ length: 800 }, (_, index) => {
       const close = 100 + Math.sin(index * 0.02) * 20
         + Math.sin(index * 0.06) * 10 + Math.sin(index * 0.35) * 3
@@ -1448,14 +1448,15 @@ describe('computeChan', () => {
       center_count:1,
       evidence_capabilities:{ segment_direction_usable:true },
       structure_anchor:{
-        bootstrap_state:'confirmed', current_result_usable:false,
+        bootstrap_state:'confirmed', current_result_usable:true,
         recommended_time_utc_msc:expect.any(Number),
         bootstrap_identity:expect.any(String),
       },
     })
-    expect(result.warnings).toContain('structure_anchor_bootstrap_pending')
-    expect(result.divergence.reason).toBe('structure_anchor_bootstrap_pending')
-    expect(result.entry_candidates).toEqual([])
+    expect(result.evidence_capabilities.entry_structure_usable).toBe(true)
+    expect(result.evidence_capabilities.divergence_usable).toBe(true)
+    expect(result.warnings).not.toContain('structure_anchor_bootstrap_pending')
+    expect(result.divergence.reason).not.toBe('structure_anchor_bootstrap_pending')
   })
 
   it('accepts a fresh MT4 current-offset key only for source-scoped structure identity', () => {

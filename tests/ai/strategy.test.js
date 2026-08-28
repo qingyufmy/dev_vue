@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { attachAtrAnchor, buildStrategyContextFromTags, chanNeedsMoreHistory, loadPrivatePortfolioContext, resolveChanHistoryCount, shouldPersistChanAnchor, __strategyTest } from '../../server/routes/ai/strategy.js'
+import { calculatePolicyIndicators } from '../../server/routes/ai/indicator-registry.js'
 
 const mockMt5Bridge = vi.fn()
 vi.mock('../../server/routes/ai/market-data.js', () => ({
@@ -86,6 +87,34 @@ describe('buildStrategyContextFromTags', () => {
       1, 'XAUUSD', { balance: 10000 }, [], prompt, 'M5', [], 'manual'
     )
     expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', expect.objectContaining({ timeframe: 'H1' }))
+  })
+
+  it('closed_only 指标请求额外一根 K 线以抵消形成中 K 线剔除', async () => {
+    const compiledPolicy = {
+      indicators: [{
+        id: 'entry_ema34', kind: 'ema', enabled: true,
+        source: { timeframe: 'M5', field: 'close', bar_scope: 'closed_only' },
+        params: { period: 34, minimum_bars: 34, warmup_target_bars: 34 },
+      }],
+    }
+    const rates = Array.from({ length: 35 }, (_, index) => ({
+      time_utc_msc: Date.now() - ((34 - index) * 300_000),
+      time: `m5-${index}`,
+      open: '2000', high: '2010', low: '1990', close: String(2000 + index), tick_volume: '100',
+    }))
+    mockMt5Bridge.mockResolvedValueOnce({
+      rates,
+      market_meta: { last_bar_closed: false, source: 'fixture' },
+    })
+
+    const result = await buildStrategyContextFromTags(
+      1, 'XAUUSD', { balance: 10000 }, [], '分析 {{MTF:M5:20}}', 'M5', [], 'manual', null, false, null, compiledPolicy
+    )
+
+    expect(mockMt5Bridge).toHaveBeenCalledWith(1, 'rates', { timeframe: 'M5', count: 35, symbol: 'XAUUSD' })
+    expect(result.policyIndicatorSources.M5.bars).toHaveLength(35)
+    expect(calculatePolicyIndicators(compiledPolicy, result.policyIndicatorSources).entry_ema34)
+      .toMatchObject({ ready: true, bars_used: 34 })
   })
 
   it('缠论使用固定周期目标历史但模型K线保持标签数量', async () => {
