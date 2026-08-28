@@ -442,26 +442,126 @@ function buildBis(fractals, bars) {
   return { bis, runs, invalidCount, activeRunId: runId, activePivot: anchor || null, lastDiscontinuity }
 }
 
-function buildDevelopingBi(activePivot, rates) {
-  if (!activePivot || !Array.isArray(rates) || rates.length === 0) return null
+function inspectActivePivotLifecycle(activePivot, closedRates) {
+  if (!activePivot || !Array.isArray(closedRates) || closedRates.length === 0) {
+    return {
+      state:'unavailable', origin_breached:false, breach_price:null, breach_raw_index:null,
+      breach_time:null, breach_time_utc_msc:null, continuation_extreme_price:null,
+      continuation_extreme_raw_index:null, continuation_extreme_time:null,
+      continuation_extreme_time_utc_msc:null,
+    }
+  }
   const pivotRawEnd = Number(activePivot.extreme_raw_idx ?? activePivot.raw_end_idx ?? activePivot.raw_idx)
-  const afterPivotIndex = Number.isFinite(pivotRawEnd) ? pivotRawEnd + 1 : rates.length - 1
-  const developingRates = rates.slice(Math.max(afterPivotIndex, 0))
+  const afterPivotIndex = Number.isFinite(pivotRawEnd) ? pivotRawEnd + 1 : closedRates.length
+  const startIndex = Math.max(afterPivotIndex, 0)
+  const postPivotRates = closedRates.slice(startIndex)
+  let extreme = null
+  for (let offset = 0; offset < postPivotRates.length; offset++) {
+    const rate = postPivotRates[offset]
+    const price = Number(activePivot.type === 'bottom' ? rate?.low : rate?.high)
+    if (!Number.isFinite(price)) continue
+    if (!extreme || (activePivot.type === 'bottom' ? price < extreme.price : price > extreme.price)) {
+      extreme = { price, rawIndex:startIndex + offset, rate }
+    }
+  }
+  const pivotPrice = Number(activePivot.price)
+  const originBreached = Boolean(extreme && Number.isFinite(pivotPrice) && (
+    activePivot.type === 'bottom' ? extreme.price < pivotPrice
+      : activePivot.type === 'top' ? extreme.price > pivotPrice : false
+  ))
+  const extremeTimeUtcMs = Number(extreme?.rate?.time_utc_msc)
+  return {
+    state:originBreached ? 'origin_breached' : 'active',
+    origin_breached:originBreached,
+    breach_price:originBreached ? round5(extreme.price) : null,
+    breach_raw_index:originBreached ? extreme.rawIndex : null,
+    breach_time:originBreached ? extreme.rate?.time ?? null : null,
+    breach_time_utc_msc:originBreached && Number.isFinite(extremeTimeUtcMs) && extremeTimeUtcMs > 0 ? extremeTimeUtcMs : null,
+    continuation_extreme_price:originBreached ? round5(extreme.price) : null,
+    continuation_extreme_raw_index:originBreached ? extreme.rawIndex : null,
+    continuation_extreme_time:originBreached ? extreme.rate?.time ?? null : null,
+    continuation_extreme_time_utc_msc:originBreached && Number.isFinite(extremeTimeUtcMs) && extremeTimeUtcMs > 0 ? extremeTimeUtcMs : null,
+  }
+}
+
+function buildDevelopingBi(activePivot, closedRates, pivotLifecycle = null) {
+  if (!activePivot || !Array.isArray(closedRates) || closedRates.length === 0) return null
+  const lifecycle = pivotLifecycle || inspectActivePivotLifecycle(activePivot, closedRates)
+  if (lifecycle.state !== 'active') return null
+  const pivotRawEnd = Number(activePivot.extreme_raw_idx ?? activePivot.raw_end_idx ?? activePivot.raw_idx)
+  const afterPivotIndex = Number.isFinite(pivotRawEnd) ? pivotRawEnd + 1 : closedRates.length
+  const startIndex = Math.max(afterPivotIndex, 0)
+  const developingRates = closedRates.slice(startIndex)
+  const pivotRate = Number.isFinite(pivotRawEnd) ? closedRates[pivotRawEnd] : null
+  const summarizeDevelopingBi = (dir, endPrice, endRawIndex) => {
+    const endRate = Number.isFinite(endRawIndex) ? closedRates[endRawIndex] : null
+    const startTimeUtcMs = Number(pivotRate?.time_utc_msc)
+    const endTimeUtcMs = Number(endRate?.time_utc_msc)
+    return {
+      dir,
+      start_price:round5(activePivot.price),
+      end_price:round5(endPrice),
+      confirmed:false,
+      start_raw_index:Number.isFinite(pivotRawEnd) ? pivotRawEnd : null,
+      end_raw_index:Number.isFinite(endRawIndex) ? endRawIndex : null,
+      start_broker_time:pivotRate?.time ?? activePivot.time ?? null,
+      end_broker_time:endRate?.time ?? null,
+      start_time_utc_msc:Number.isFinite(startTimeUtcMs) && startTimeUtcMs > 0 ? startTimeUtcMs : null,
+      end_time_utc_msc:Number.isFinite(endTimeUtcMs) && endTimeUtcMs > 0 ? endTimeUtcMs : null,
+    }
+  }
   if (activePivot.type === 'bottom') {
-    const highs = developingRates.map(rate => Number(rate.high)).filter(Number.isFinite)
-    const developingHigh = highs.length > 0 ? Math.max(...highs) : NaN
+    let developingHigh = NaN
+    let developingHighRawIndex = null
+    developingRates.forEach((rate, offset) => {
+      const high = Number(rate?.high)
+      if (Number.isFinite(high) && (!Number.isFinite(developingHigh) || high > developingHigh)) {
+        developingHigh = high
+        developingHighRawIndex = startIndex + offset
+      }
+    })
     return Number.isFinite(developingHigh) && developingHigh > activePivot.price
-      ? { dir: 'up', start_price: round5(activePivot.price), end_price: round5(developingHigh), confirmed: false }
+      ? summarizeDevelopingBi('up', developingHigh, developingHighRawIndex)
       : null
   }
   if (activePivot.type === 'top') {
-    const lows = developingRates.map(rate => Number(rate.low)).filter(Number.isFinite)
-    const developingLow = lows.length > 0 ? Math.min(...lows) : NaN
+    let developingLow = NaN
+    let developingLowRawIndex = null
+    developingRates.forEach((rate, offset) => {
+      const low = Number(rate?.low)
+      if (Number.isFinite(low) && (!Number.isFinite(developingLow) || low < developingLow)) {
+        developingLow = low
+        developingLowRawIndex = startIndex + offset
+      }
+    })
     return Number.isFinite(developingLow) && developingLow < activePivot.price
-      ? { dir: 'down', start_price: round5(activePivot.price), end_price: round5(developingLow), confirmed: false }
+      ? summarizeDevelopingBi('down', developingLow, developingLowRawIndex)
       : null
   }
   return null
+}
+
+function summarizeBi(bi, rates = []) {
+  if (!bi) return null
+  const startRawIndex = Number(bi.raw_start_idx ?? bi.start_raw_index)
+  const endRawIndex = Number(bi.raw_end_idx ?? bi.end_raw_index)
+  const startRate = Number.isFinite(startRawIndex) ? rates[startRawIndex] : null
+  const endRate = Number.isFinite(endRawIndex) ? rates[endRawIndex] : null
+  const startTimeUtcMs = Number(startRate?.time_utc_msc ?? bi.start_time_utc_msc)
+  const endTimeUtcMs = Number(endRate?.time_utc_msc ?? bi.end_time_utc_msc)
+  return {
+    ...(bi.id == null ? {} : { id:bi.id }),
+    dir:bi.dir,
+    start_price:round5(bi.start_price),
+    end_price:round5(bi.end_price),
+    confirmed:bi.confirmed === true,
+    start_raw_index:Number.isFinite(startRawIndex) ? startRawIndex : null,
+    end_raw_index:Number.isFinite(endRawIndex) ? endRawIndex : null,
+    start_broker_time:startRate?.time ?? bi.start_broker_time ?? null,
+    end_broker_time:endRate?.time ?? bi.end_broker_time ?? null,
+    start_time_utc_msc:Number.isFinite(startTimeUtcMs) && startTimeUtcMs > 0 ? startTimeUtcMs : null,
+    end_time_utc_msc:Number.isFinite(endTimeUtcMs) && endTimeUtcMs > 0 ? endTimeUtcMs : null,
+  }
 }
 
 function summarizeLatestConfirmedFractal(fractals, normalizedBars, rates) {
@@ -1438,17 +1538,27 @@ function emptyTrendState(reason = 'structure_unavailable') {
   }
 }
 
-function buildLatestChanStructure({ fractals, activePivot = null, normalizedBars, rates, currentBi, developingBi,
-  currentSegment, candidateSegment }) {
+function buildLatestChanStructure({ fractals, activePivot = null, activePivotLifecycle = null, normalizedBars, rates,
+  currentBi, developingBi, currentSegment, candidateSegment }) {
   // The latest raw fractal can be too close to the previous pivot to form a
   // legal bi. Current structure must follow the pivot accepted by buildBis,
   // otherwise the reported fractal can contradict current_bi/developing_bi.
-  const latestFractal = summarizeLatestConfirmedFractal(
-    activePivot ? [activePivot] : fractals, normalizedBars, rates)
+  const effectiveActivePivot = activePivot || (Array.isArray(fractals) ? fractals.at(-1) : null)
+  const pivotLifecycle = activePivotLifecycle || inspectActivePivotLifecycle(effectiveActivePivot, rates)
+  const latestFractalBase = summarizeLatestConfirmedFractal(
+    effectiveActivePivot ? [effectiveActivePivot] : fractals, normalizedBars, rates)
+  const latestFractal = latestFractalBase ? {
+    ...latestFractalBase,
+    active_for_developing_bi:pivotLifecycle.state === 'active',
+  } : null
   const confirmedDirection = ['up', 'down'].includes(currentBi?.dir) ? currentBi.dir : null
-  const developingDirection = ['up', 'down'].includes(developingBi?.dir) ? developingBi.dir : null
+  const developingDirection = pivotLifecycle.state === 'active' && ['up', 'down'].includes(developingBi?.dir)
+    ? developingBi.dir : null
   const reversalWatch = Boolean(confirmedDirection && developingDirection && confirmedDirection !== developingDirection)
   const localBias = reversalWatch ? developingDirection : confirmedDirection || developingDirection || 'neutral'
+  const directionBasis = reversalWatch ? 'developing_bi'
+    : confirmedDirection && pivotLifecycle.state === 'origin_breached' ? 'confirmed_bi_continuation'
+      : confirmedDirection ? 'confirmed_bi' : developingDirection ? 'developing_bi' : 'unavailable'
   const currentBiId = Number(currentBi?.id)
   const candidateConnected = candidateSegment?.active_for_current_state === true
     && Number(candidateSegment?.last_included_bi_id) === currentBiId
@@ -1462,18 +1572,13 @@ function buildLatestChanStructure({ fractals, activePivot = null, normalizedBars
   if (latestFractal) basis.push(`latest_confirmed_${latestFractal.type}_fractal`)
   if (confirmedDirection) basis.push(`latest_confirmed_${confirmedDirection}_bi`)
   if (developingDirection) basis.push(`developing_${developingDirection}_bi`)
+  if (pivotLifecycle.state === 'origin_breached') basis.push('active_pivot_origin_breached')
   if (candidateSegment?.lifecycle_state === 'invalidated') basis.push('historical_candidate_retired')
   return {
     as_of_time_utc_msc:Number.isFinite(latestRateUtcMs) ? latestRateUtcMs : null,
     latest_confirmed_fractal:latestFractal,
-    latest_confirmed_bi:currentBi ? {
-      id:currentBi.id ?? null,
-      dir:confirmedDirection,
-      start_price:round5(currentBi.start_price),
-      end_price:round5(currentBi.end_price),
-      confirmed:true,
-    } : null,
-    developing_bi:developingBi ? { ...developingBi } : null,
+    latest_confirmed_bi:summarizeBi(currentBi, rates),
+    developing_bi:developingDirection && developingBi ? { ...developingBi } : null,
     active_segment:activeSegment ? {
       stable_id:activeSegment.stable_id ?? null,
       dir:activeSegment.dir,
@@ -1489,6 +1594,14 @@ function buildLatestChanStructure({ fractals, activePivot = null, normalizedBars
     local_bias:localBias,
     confirmed_direction:confirmedDirection || 'neutral',
     developing_direction:developingDirection || 'neutral',
+    active_pivot_state:pivotLifecycle.state,
+    direction_basis:directionBasis,
+    pivot_breach_price:pivotLifecycle.breach_price,
+    pivot_breach_time:pivotLifecycle.breach_time,
+    pivot_breach_time_utc_msc:pivotLifecycle.breach_time_utc_msc,
+    continuation_extreme_price:pivotLifecycle.continuation_extreme_price,
+    continuation_extreme_time:pivotLifecycle.continuation_extreme_time,
+    continuation_extreme_time_utc_msc:pivotLifecycle.continuation_extreme_time_utc_msc,
     background_bias:'neutral',
     historical_context_used_for_direction:false,
     basis,
@@ -1636,7 +1749,9 @@ function prioritizeLatestChanStructure(backgroundTrend, latestStructure, reliabi
     ? backgroundTrend.direction : 'neutral'
   const confirmedDirection = ['up', 'down'].includes(latestStructure.confirmed_direction)
     ? latestStructure.confirmed_direction : null
-  const developingDirection = ['up', 'down'].includes(latestStructure.developing_direction)
+  const activePivotState = String(latestStructure.active_pivot_state || '')
+  const developingDirection = (!activePivotState || activePivotState === 'active')
+    && ['up', 'down'].includes(latestStructure.developing_direction)
     ? latestStructure.developing_direction : null
   const updatedLatestStructure = {
     ...latestStructure,
@@ -2054,7 +2169,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   if (!historySufficient) warnings.push('history_bars_below_requested')
   const lastBarClosed = dataQuality?.last_bar_closed === true
   const closedRates = Array.isArray(rates) ? (lastBarClosed ? rates : rates.slice(0, -1)) : []
-  const latest = parseFloat(rates?.at?.(-1)?.close)
+  const latest = parseFloat(closedRates.at(-1)?.close)
   const windowStartTimeUtcMs = Number(closedRates[0]?.time_utc_msc || rates?.[0]?.time_utc_msc) || null
   const windowEndTimeUtcMs = Number(closedRates.at(-1)?.time_utc_msc || rates?.at?.(-1)?.time_utc_msc) || null
   const requestedClosedHistoryCount = Math.max(requestedHistoryCount - (lastBarClosed ? 0 : 1), 0)
@@ -2157,7 +2272,8 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     .map(run => run.filter(b => b.confirmed !== false))
     .filter(run => run.length > 0)
   const activeConfirmedBis = confirmedBiRuns.find(run => run[0]?.run_id === activeRunId) || []
-  const developingBi = buildDevelopingBi(activePivot, rates)
+  const activePivotLifecycle = inspectActivePivotLifecycle(activePivot, closedRates)
+  const developingBi = buildDevelopingBi(activePivot, closedRates, activePivotLifecycle)
   if (activeConfirmedBis.length < 3) {
     warnings.push('insufficient_confirmed_bis')
     const lastBi = activeConfirmedBis.at(-1) || null
@@ -2197,11 +2313,12 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
       active_bi_run_id: activeRunId,
       bi_discontinuity_count: invalidCount,
       last_bi_discontinuity: lastDiscontinuity,
-      current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
+      current_bi:summarizeBi(lastBi, closedRates),
       developing_bi: developingBi,
-      recent_bis: activeConfirmedBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
+      recent_bis:activeConfirmedBis.slice(-FEED_LAST_N_BIS).map(bi => summarizeBi(bi, closedRates)),
       latest_structure:buildLatestChanStructure({
-        fractals, activePivot, normalizedBars:bars, rates:closedRates, currentBi:lastBi, developingBi,
+        fractals, activePivot, activePivotLifecycle, normalizedBars:bars, rates:closedRates,
+        currentBi:lastBi, developingBi,
         currentSegment:null, candidateSegment:null,
       }),
       divergence: emptyDivergence('insufficient_bis'),
@@ -2364,6 +2481,7 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
   const latestStructureBase = buildLatestChanStructure({
     fractals,
     activePivot,
+    activePivotLifecycle,
     normalizedBars:bars,
     rates:closedRates,
     currentBi:lastBi,
@@ -2472,9 +2590,9 @@ function computeChanWindow(rates, timeframe, macdHist, options = {}) {
     confirmed_structure_age_semantics: 'diagnostic_only_no_expiry',
     historical_segment_run_count: priorHistoricalSegmentRuns.length + historicalSegmentRuns.length,
     historical_segment_count: [...priorHistoricalSegmentRuns, ...historicalSegmentRuns].reduce((sum, run) => sum + run.length, 0),
-    current_bi: lastBi ? { id: lastBi.id, dir: lastBi.dir, start_price: round5(lastBi.start_price), end_price: round5(lastBi.end_price), confirmed: lastBi.confirmed } : null,
+    current_bi:summarizeBi(lastBi, closedRates),
     developing_bi: developingBi,
-    recent_bis: activeConfirmedBis.slice(-FEED_LAST_N_BIS).map(b => ({ id: b.id, dir: b.dir, start_price: round5(b.start_price), end_price: round5(b.end_price), confirmed: b.confirmed })),
+    recent_bis:activeConfirmedBis.slice(-FEED_LAST_N_BIS).map(bi => summarizeBi(bi, closedRates)),
     current_segment: confirmedSegmentSummaries.at(-1)
       ? { ...confirmedSegmentSummaries.at(-1), structure_role:'latest_confirmed' } : null,
     prev_segment: confirmedSegmentSummaries.at(-2)
@@ -3581,7 +3699,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
   if (policy.supported === false && !options.windowPolicy) {
     return emptyChanResult({
       timeframe,
-      algorithm_version: 'chan_structure_v5',
+      algorithm_version: CHAN_ALGORITHM_VERSION,
       status: 'unsupported_policy',
       warnings: ['chan_window_policy_unsupported_timeframe'],
       source_history_count: sourceHistoryCount,
@@ -3888,7 +4006,7 @@ function computeChan(rates, timeframe, macdHist, options = {}) {
 }
 
 // Export for testing
-export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, buildDevelopingBi, summarizeLatestConfirmedFractal, inspectSegmentCandidateLifecycle, buildLatestChanStructure, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, prioritizeLatestChanStructure, detectChanEntryCandidates, emptyChanResult, buildChanEvidenceCapabilities, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, evaluateGapEndpointConfirmation, pendingSegmentConfirmation }
+export const __chanTest = { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, inspectActivePivotLifecycle, buildDevelopingBi, summarizeBi, summarizeLatestConfirmedFractal, inspectSegmentCandidateLifecycle, buildLatestChanStructure, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeSegment, summarizeCenter, classifyChanTrend, prioritizeLatestChanStructure, detectChanEntryCandidates, emptyChanResult, buildChanEvidenceCapabilities, computeChan, computeChanWindow, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, evaluateGapEndpointConfirmation, pendingSegmentConfirmation }
 
 export async function mt5Bridge(userId, action, params = {}, options = {}) {
   const prev = _bridgeLocks.get(userId) || Promise.resolve()

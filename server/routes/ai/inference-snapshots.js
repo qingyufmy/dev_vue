@@ -5,7 +5,7 @@ import { stripBrokerSuffix, CHAN_ALGORITHM_VERSION } from './utils.js'
 import { getChanWindowPolicy, CHAN_WINDOW_POLICY_VERSION } from './chan-window-policy.js'
 
 export const MAX_INFERENCE_SNAPSHOT_BYTES = 512 * 1024
-export const CHAN_MODEL_PAYLOAD_VERSION = 'chan_model_payload_v1'
+export const CHAN_MODEL_PAYLOAD_VERSION = 'chan_model_payload_v2'
 const SECRET_KEY = /(api[_-]?key|authorization|credential|password|secret|token)/i
 const ACCOUNT_PRIVATE_KEY = new Set([
   'account', 'balance', 'equity', 'credit', 'margin', 'free_margin', 'margin_level',

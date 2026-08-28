@@ -11,10 +11,15 @@ describe('Chan model payload projection', () => {
     const chan = {
       latest_structure: {
         local_state:'reversal_watch', local_bias:'down', background_bias:'up',
+        active_pivot_state:'active', direction_basis:'developing_bi',
         latest_confirmed_fractal:{ type:'top', price:2010 },
+        latest_confirmed_bi:{ id:1, dir:'up', start_price:1990, end_price:2010, confirmed:true,
+          start_time_utc_msc:1, end_time_utc_msc:2 },
+        pivot_breach_time_utc_msc:3,
         active_segment:{ stable_id:'segment-5', confirmed:false },
       },
-      current_bi: { id: 1, points: [{ price: 2000 }] },
+      current_bi: { id:1, dir:'up', start_price:1990, end_price:2010, confirmed:true,
+        start_time_utc_msc:1, end_time_utc_msc:2 },
       developing_bi: null,
       recent_bis: [{ id: 2 }],
       current_segment: { id: 3, confirmed: true, state: 'active', reason: '结构证据' },
@@ -63,12 +68,18 @@ describe('Chan model payload projection', () => {
       'evidence_capabilities',
     ])
     expect(projected.current_bi).not.toBe(chan.current_bi)
-    expect(projected.current_bi.points).not.toBe(chan.current_bi.points)
+    expect(projected.current_bi).toEqual({ id:1, dir:'up', start_price:1990, end_price:2010, confirmed:true })
+    expect(projected.current_bi).not.toHaveProperty('start_time_utc_msc')
     expect(projected).not.toHaveProperty('current_segment')
     expect(projected).not.toHaveProperty('prev_segment')
     expect(projected).not.toHaveProperty('current_center')
     expect(projected).not.toHaveProperty('latest_center')
-    expect(projected.latest_structure).toEqual(chan.latest_structure)
+    expect(projected.latest_structure).toMatchObject({
+      local_state:'reversal_watch', active_pivot_state:'active', direction_basis:'developing_bi',
+      latest_confirmed_bi:{ id:1, dir:'up', start_price:1990, end_price:2010, confirmed:true },
+    })
+    expect(projected.latest_structure).not.toHaveProperty('pivot_breach_time_utc_msc')
+    expect(projected.latest_structure.latest_confirmed_bi).not.toHaveProperty('start_time_utc_msc')
     expect(projected.latest_structure).not.toBe(chan.latest_structure)
     expect(projected.candidate_segment).toMatchObject({
       id:5,
@@ -87,8 +98,8 @@ describe('Chan model payload projection', () => {
     expect(projected).not.toHaveProperty('status')
     expect(projected).not.toHaveProperty('warnings')
 
-    projected.current_bi.points[0].price = 1
-    expect(chan.current_bi.points[0].price).toBe(2000)
+    projected.current_bi.start_price = 1
+    expect(chan.current_bi.start_price).toBe(1990)
     projected.evidence_capabilities.history_complete = false
     expect(chan.evidence_capabilities.history_complete).toBe(true)
   })

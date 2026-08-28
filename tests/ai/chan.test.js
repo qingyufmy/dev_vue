@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { __chanTest } from '../../server/routes/ai/market-data.js'
 import { getChanWindowPolicy } from '../../server/routes/ai/chan-window-policy.js'
 
-const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeLatestConfirmedFractal, inspectSegmentCandidateLifecycle, buildLatestChanStructure, summarizeSegment, summarizeCenter, classifyChanTrend, prioritizeLatestChanStructure, detectChanEntryCandidates, computeChan, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, buildChanEvidenceCapabilities } = __chanTest
+const { calculateMacdSeries, roundMacdEvidence, normalizeBarsForChan, detectFractals, buildBis, inspectActivePivotLifecycle, buildDevelopingBi, normalizeFeatureSequence, buildSegments, buildCenters, detectDivergence, detectDivergenceHistory, detectFormingDivergence, buildFormingSegment, summarizeLatestConfirmedFractal, inspectSegmentCandidateLifecycle, buildLatestChanStructure, summarizeSegment, summarizeCenter, classifyChanTrend, prioritizeLatestChanStructure, detectChanEntryCandidates, computeChan, selectStableChanResult, summarizeTemporalBootstrapEvidence, evaluateCrossWindowBootstrapEvidence, protectBootstrapDependentEvidence, buildChanEvidenceCapabilities } = __chanTest
 
 function makeRates(n, base = 4000) {
   const rates = []
@@ -1298,12 +1298,81 @@ describe('latest closed-market Chan structure', () => {
     expect(result.latest_structure).toMatchObject({
       latest_confirmed_fractal:{ type:'top', price:4696.65 },
       local_state:'reversal_watch', local_bias:'down', background_bias:'up',
+      active_pivot_state:'active', direction_basis:'developing_bi',
       active_segment:null, historical_context_used_for_direction:false,
     })
     expect(result.trend_state).toMatchObject({
       state:'up_reversal_watch', direction:'up', reversal_bias:'down', local_bias:'down',
       background_direction:'up', reason:'latest_confirmed_top_fractal_with_developing_down_bi',
     })
+  })
+
+  it.each([
+    {
+      label:'bottom', pivot:{ type:'bottom', price:100, extreme_raw_idx:1 },
+      currentBi:{ id:7, dir:'down', start_price:130, end_price:100, confirmed:true },
+      rates:[rate('2026-08-27 01:00:00', 110, 105), rate('2026-08-27 01:05:00', 106, 100),
+        rate('2026-08-27 01:10:00', 120, 104), rate('2026-08-27 01:15:00', 116, 95)],
+      expectedBias:'down', breachPrice:95,
+    },
+    {
+      label:'top', pivot:{ type:'top', price:130, extreme_raw_idx:1 },
+      currentBi:{ id:7, dir:'up', start_price:100, end_price:130, confirmed:true },
+      rates:[rate('2026-08-27 01:00:00', 125, 110), rate('2026-08-27 01:05:00', 130, 115),
+        rate('2026-08-27 01:10:00', 126, 105), rate('2026-08-27 01:15:00', 135, 110)],
+      expectedBias:'up', breachPrice:135,
+    },
+  ])('invalidates a developing bi after the accepted $label pivot origin is breached', sample => {
+    const lifecycle = inspectActivePivotLifecycle(sample.pivot, sample.rates)
+    expect(lifecycle).toMatchObject({
+      state:'origin_breached', origin_breached:true, breach_price:sample.breachPrice,
+    })
+    expect(buildDevelopingBi(sample.pivot, sample.rates, lifecycle)).toBeNull()
+    const latest = buildLatestChanStructure({
+      fractals:[sample.pivot], activePivot:sample.pivot, activePivotLifecycle:lifecycle,
+      normalizedBars:sample.rates.map((item, idx) => ({ ...item, idx, raw_idx:idx, raw_end_idx:idx })),
+      rates:sample.rates, currentBi:sample.currentBi, developingBi:null,
+      currentSegment:null, candidateSegment:null,
+    })
+    expect(latest).toMatchObject({
+      local_state:'continuation', local_bias:sample.expectedBias,
+      active_pivot_state:'origin_breached', direction_basis:'confirmed_bi_continuation',
+      pivot_breach_price:sample.breachPrice,
+      latest_confirmed_fractal:{ active_for_developing_bi:false },
+    })
+  })
+
+  it('regresses signal 16401: the 4551.53 bottom cannot remain an up reversal origin after closed lows reach 4532.12', () => {
+    const rates = [
+      rate('2026-08-28 18:20:00', 4558.4, 4551.53, 4555.2),
+      rate('2026-08-28 18:25:00', 4569.19, 4554.1, 4564.8),
+      rate('2026-08-28 18:35:00', 4560.1, 4546.78, 4550.3),
+      rate('2026-08-28 18:40:00', 4551.2, 4534.58, 4538.2),
+      rate('2026-08-28 18:45:00', 4541.8, 4532.12, 4535.87),
+    ]
+    const activePivot = { type:'bottom', price:4551.53, extreme_raw_idx:0, idx:0, time:rates[0].time }
+    const lifecycle = inspectActivePivotLifecycle(activePivot, rates)
+    expect(lifecycle).toMatchObject({
+      state:'origin_breached', breach_price:4532.12,
+      breach_time:'2026-08-28 18:45:00', continuation_extreme_price:4532.12,
+    })
+    const latest = buildLatestChanStructure({
+      fractals:[activePivot], activePivot, activePivotLifecycle:lifecycle,
+      normalizedBars:rates.map((item, idx) => ({ ...item, idx, raw_idx:idx, raw_end_idx:idx })),
+      rates, currentBi:{ id:11, dir:'down', start_price:4582.7, end_price:4551.53, confirmed:true },
+      developingBi:null, currentSegment:null, candidateSegment:null,
+    })
+    expect(latest).toMatchObject({
+      developing_bi:null, developing_direction:'neutral', local_state:'continuation', local_bias:'down',
+      active_pivot_state:'origin_breached', direction_basis:'confirmed_bi_continuation',
+    })
+  })
+
+  it.each([
+    [{ type:'bottom', price:100, extreme_raw_idx:0 }, [rate('2026-08-27 01:00:00', 105, 100), rate('2026-08-27 01:05:00', 110, 100)]],
+    [{ type:'top', price:130, extreme_raw_idx:0 }, [rate('2026-08-27 01:00:00', 130, 120), rate('2026-08-27 01:05:00', 130, 110)]],
+  ])('does not treat an equal pivot extreme as an origin breach', (pivot, rates) => {
+    expect(inspectActivePivotLifecycle(pivot, rates)).toMatchObject({ state:'active', origin_breached:false })
   })
 
   it('retires a long-lived candidate after its origin is crossed without rewriting short candidates', () => {
@@ -1375,7 +1444,9 @@ describe('computeChan', () => {
     expect(second.bi_count).toBe(first.bi_count)
     expect(second.segment_count).toBe(first.segment_count)
     expect(second.center_count).toBe(first.center_count)
-    expect(second.developing_bi).not.toEqual(first.developing_bi)
+    expect(second.developing_bi).toEqual(first.developing_bi)
+    expect(second.latest_price).toBe(first.latest_price)
+    expect(second.latest_structure).toEqual(first.latest_structure)
   })
 
   it('marks Chan time locations unreliable when the market clock is unverified', () => {
@@ -1525,7 +1596,7 @@ describe('computeChan', () => {
   it('reports read-only bi centers separately from execution-grade segment centers', () => {
     const rates = makeRates(50)
     const result = computeChan(rates, 'M5', calculateMacdSeries(rates.map(rate => Number(rate.close))).histSeries)
-    expect(result).toMatchObject({ algorithm_version: 'chan_structure_v7', center_level: 'segment' })
+    expect(result).toMatchObject({ algorithm_version: 'chan_structure_v8', center_level: 'segment' })
     expect(result.bi_center_count).toBeGreaterThan(0)
     expect(result.latest_bi_center).toMatchObject({ structure_level: 'bi' })
     expect(result.center_count).toBe(0)
@@ -1571,10 +1642,13 @@ describe('computeChan', () => {
       fractal(12, 'top', 130),
     ]
     const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
-    expect(result.developing_bi).toMatchObject({ dir: 'down', start_price: 130, end_price: 80, confirmed: false })
+    expect(result.developing_bi).toMatchObject({
+      dir:'down', start_price:130, end_price:80, confirmed:false,
+      start_broker_time:'t12', end_broker_time:'t20', start_raw_index:12, end_raw_index:20,
+    })
   })
 
-  it('anchors the developing bi to the last pivot accepted by bi construction', () => {
+  it('invalidates the developing bi when the last accepted top is breached before a legal bottom', () => {
     const rates = Array.from({ length: 31 }, (_, i) => ({ time: `t${i}`, open: 115, high: 120, low: 110, close: 115, tick_volume: 1 }))
     rates[20] = { ...rates[20], high: 140, low: 120, close: 130 }
     const fractal = (idx, type, price) => ({ idx, raw_start_idx: idx, raw_end_idx: idx, type, price, high: price, low: price, time: `t${idx}` })
@@ -1586,7 +1660,11 @@ describe('computeChan', () => {
       fractal(14, 'bottom', 115), // Rejected: fewer than five processed bars from the accepted top.
     ]
     const result = computeChan(rates, 'M5', Array(rates.length).fill(0), { fractalsForTest: fractals })
-    expect(result.developing_bi).toMatchObject({ dir: 'down', start_price: 130, end_price: 110, confirmed: false })
+    expect(result.developing_bi).toBeNull()
+    expect(result.latest_structure).toMatchObject({
+      active_pivot_state:'origin_breached', local_state:'continuation', local_bias:'up',
+      pivot_breach_price:140,
+    })
   })
 
   it('returns a developing bi even when fewer than three confirmed bis exist', () => {

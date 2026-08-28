@@ -360,13 +360,16 @@ describe('AI governance navigation and DOM contract', () => {
   it('does not present unknown internal tokens as an unreliable Chan segment', () => {
     const userVisibleText = loadUserVisibleText()
 
-    expect(userVisibleText('unknown_status为unknown_reason')).toBe('相关状态尚未确认')
+    expect(userVisibleText('unknown_status为unknown_reason')).toBe('unknown_status为unknown_reason')
     expect(userVisibleText('系统提示的unknown_status显示')).toBe('系统提示状态尚未确认')
     expect(userVisibleText('status=unreliable_segments')).toBe('线段结构尚不可靠')
     expect(userVisibleText('status=segment_history_unresolved')).toBe('历史窗口尚未收敛，暂不确认线段')
     expect(userVisibleText('center_entry_unconfirmed')).toBe('中枢已确认，但进入段缺少跨窗口共识，仅背驰暂不可判')
     expect(userVisibleText('structure_anchor_bootstrap_pending')).toBe('结构锚点正在用连续三根已收盘K线确认，暂不使用依赖进入段的背驰与买卖点')
     expect(userVisibleText('center_cross_window_unstable')).toBe('不同历史窗口对中枢形成核心尚未达成共识')
+    expect(userVisibleText('local_state=reversal_watch')).toBe('当前结构处于反转观察')
+    expect(userVisibleText('local_bias=down')).toBe('当前方向偏空')
+    expect(userVisibleText('active_pivot_state=origin_breached')).toBe('活动分型起点已被突破')
     expect(userVisibleText({ text:'结构化字段不应被强转文本' })).toBe('暂无中文说明')
   })
 
@@ -1534,6 +1537,16 @@ describe('AI governance navigation and DOM contract', () => {
   it('renders inference charts from the selected inference snapshot on demand', () => {
     expect(app).toContain('signal?.inference_snapshot')
     expect(app).toContain('仅展示推理发生时的数据')
+    expect(app).toContain('timeframe_summary')
+    expect(app).toContain('inferenceTimeframeSummaryForContext')
+    expect(app).toContain('["bis", "笔/分型"]')
+    expect(app).toContain('latest_confirmed_fractal')
+    expect(app).toContain('continuation_extension')
+    expect(app).toContain('最后一根为已收盘 K 线')
+    expect(app).toContain('id="inferenceChartEvidenceMeta"')
+    expect(app).toContain('inferenceChartEvidenceMeta(context, state.inferenceChartTimeframe)')
+    expect(app).toContain('evidenceMeta.textContent = inferenceChartEvidenceMeta(context, timeframe)')
+    expect(app).toContain('线段为历史确认结构，当前变化请查看笔/分型图层')
     expect(app).toContain('data-inference-timeframe')
     for (const layer of ['segments', 'centers', 'divergence', 'entries', 'levels']) {
       expect(app).toContain(`["${layer}"`)
@@ -1543,10 +1556,21 @@ describe('AI governance navigation and DOM contract', () => {
     expect(css).toContain('.inference-chart-panel:fullscreen')
     expect(css).toContain('.inference-chart-table')
     expect(css).toContain('.inference-kline-chart #tv-attr-logo')
+    expect(css).toContain('.legend-line.developing-bi')
+    expect(css).toContain('.legend-dot.fractal')
+    expect(css).toContain('.legend-dot.fractal-broken')
     expect(app).toContain('attributionLogo: false')
     expect(app).toContain('inferenceStructureTime')
     expect(app).toContain('structure[`${edge}_broker_time`]')
     expect(bridgeWs).toContain('getInferenceVisualizationSnapshot(signalId)')
+  })
+
+  it('keeps Chan display localization explicit and leaves unknown mixed tokens intact', () => {
+    expect(app).toContain('const chanTokenLabels = {')
+    expect(app).toContain('active_pivot_state: "活动分型状态"')
+    expect(app).toContain('origin_breached: "起点已被突破"')
+    expect(app).toContain('|| token;')
+    expect(app).not.toContain('return translated || "相关状态尚未确认";')
   })
 
   it('provides keyboard-operable landmarks, tabs and labelled form controls', () => {

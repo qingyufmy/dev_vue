@@ -228,7 +228,7 @@ const state = {
   autoProgressVisual: {},
   inferenceChartTimeframe: null,
   inferenceChartSignalKey: null,
-  inferenceChartLayers: { segments: true, centers: true, divergence: true, entries: true, levels: true },
+  inferenceChartLayers: { segments: true, bis: true, centers: true, divergence: true, entries: true, levels: true },
 };
 
 // Period-review content is a versioned UI contract.  Keep the functional
@@ -1816,6 +1816,39 @@ function userVisibleText(value, fallback = "暂无中文说明") {
   const cleanLocalizedText = input => String(input || "")
     .replace(/相关状态尚未确认(?:\s*(?:为|[:：=、，;；和及])\s*相关状态尚未确认)+/g, "相关状态尚未确认")
     .replace(/系统提示的相关状态尚未确认显示/g, "系统提示状态尚未确认");
+  const chanTokenLabels = {
+    local_state: "当前结构状态",
+    local_bias: "当前方向",
+    confirmed_direction: "已确认方向",
+    developing_direction: "形成中方向",
+    latest_structure: "最新结构摘要",
+    latest_confirmed_fractal: "最新已确认分型",
+    latest_confirmed_bi: "最新已确认笔",
+    current_bi: "当前已确认笔",
+    recent_bis: "最近已确认笔",
+    developing_bi: "形成中笔",
+    active_pivot_state: "活动分型状态",
+    direction_basis: "方向依据",
+    pivot_breach_price: "分型突破价格",
+    pivot_breach_time: "分型突破时间",
+    continuation_extension: "未确认延伸",
+    continuation_extreme_price: "延伸极值价格",
+    continuation_extreme_time: "延伸极值时间",
+    reversal_watch: "反转观察",
+    origin_breached: "起点已被突破",
+    confirmed_bi_continuation: "已确认笔延续",
+    active: "活动中",
+    unavailable: "暂不可用",
+    continuation: "延续",
+    neutral: "中性",
+    up: "向上",
+    down: "向下",
+    confirmed: "已确认",
+    forming_unconfirmed: "形成中未确认",
+    still_valid: "仍有效",
+    invalidated: "已失效",
+    active_for_developing_bi: "可用于形成中笔",
+  };
   const replacements = [
     [/\bstructure_topology_reliable\s*=\s*true\b/gi, "线段与中枢结构拓扑已确认"],
     [/\bstructure_topology_reliable\s*=\s*false\b/gi, "线段与中枢结构拓扑尚未确认"],
@@ -1846,6 +1879,19 @@ function userVisibleText(value, fallback = "暂无中文说明") {
     [/\bdivergence_cross_window_unstable\b/gi, "不同历史窗口的背驰证据尚未收敛"],
     [/\bforming_evidence_unavailable\b/gi, "候选背驰所需的有效证据不足"],
     [/\bforming_cross_window_unstable\b/gi, "不同历史窗口的候选背驰证据尚未收敛"],
+    [/系统提示的[a-z][a-z0-9]*(?:_[a-z0-9]+)*显示/gi, "系统提示状态尚未确认"],
+    [/\blocal_state\s*(?:=|为|:|：)\s*reversal_watch\b/gi, "当前结构处于反转观察"],
+    [/\blocal_state\s*(?:=|为|:|：)\s*continuation\b/gi, "当前结构延续"],
+    [/\blocal_state\s*(?:=|为|:|：)\s*unavailable\b/gi, "当前结构暂不可用"],
+    [/\blocal_bias\s*(?:=|为|:|：)\s*up\b/gi, "当前方向偏多"],
+    [/\blocal_bias\s*(?:=|为|:|：)\s*down\b/gi, "当前方向偏空"],
+    [/\blocal_bias\s*(?:=|为|:|：)\s*neutral\b/gi, "当前方向中性"],
+    [/\bactive_pivot_state\s*(?:=|为|:|：)\s*origin_breached\b/gi, "活动分型起点已被突破"],
+    [/\bactive_pivot_state\s*(?:=|为|:|：)\s*active\b/gi, "活动分型仍有效"],
+    [/\bdirection_basis\s*(?:=|为|:|：)\s*confirmed_bi_continuation\b/gi, "方向依据为已确认笔延续"],
+    [/\bdirection_basis\s*(?:=|为|:|：)\s*developing_bi\b/gi, "方向依据为形成中笔"],
+    [/\b(?:still_valid|active_for_developing_bi)\s*(?:=|为|:|：)\s*true\b/gi, "结构仍有效"],
+    [/\b(?:still_valid|active_for_developing_bi)\s*(?:=|为|:|：)\s*false\b/gi, "结构已失效"],
     [/\bno_cross_window_center\b/gi, "尚无跨窗口确认的中枢"],
     [/\binsufficient_confirmed_bis\b/gi, "已确认笔数量不足"],
     [/\binsufficient_bis\b/gi, "确认笔数量不足"],
@@ -1866,14 +1912,13 @@ function userVisibleText(value, fallback = "暂无中文说明") {
   text = text.replace(/\b((?:M|H|D)\d+|\d+H)\s*缠论趋势?为[“"]线段结构尚不可靠[”"]/gi, "$1 尚未形成可靠的确认线段")
     .replace(/\b((?:M|H|D)\d+|\d+H)\s*缠论为[“"]线段结构尚不可靠[”"]/gi, "$1 尚未形成可靠的确认线段")
     .replace(/可靠性低/g, "结构可靠性较低")
-    .replace(/\bagreement\s*=\s*[a-z_]+\b/gi, "多周期方向状态尚未确认")
-    .replace(/\breliability\s*=\s*[a-z_]+\b/gi, "结构可靠性尚未确认")
-    .replace(/\b(?:status|trend_state|context_status|alignment_with_higher|window_stable|time_location_reliable)\s*=\s*[a-z_]+\b/gi, "相关结构状态尚未确认");
+    .replace(/\bstatus\s*=\s*unreliable_segments\b/gi, "线段结构尚不可靠")
+    .replace(/\bstatus\s*=\s*segment_history_unresolved\b/gi, "历史窗口尚未收敛，暂不确认线段");
   const localized = localizeReason(text);
   if (localized !== text) return cleanLocalizedText(localized);
   const replaced = text.replace(/\b(?:R\d(?:\.[0-9A-Z]+)?_[A-Z0-9._-]+|PX\.[A-Z0-9._-]+|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/gi, token => {
-    const translated = REASON_MAP[token] || RISK_DECISION_LABELS[token];
-    return translated || "相关状态尚未确认";
+    const translated = REASON_MAP[token] || RISK_DECISION_LABELS[token] || chanTokenLabels[token.toLowerCase()];
+    return translated || token;
   });
   if (/[A-Za-z]/.test(replaced) && !/[\u4e00-\u9fff]/.test(replaced)) return fallback;
   return cleanLocalizedText(replaced);
@@ -13890,18 +13935,32 @@ function inferenceSnapshotContext(signal) {
     ? snapshot.market_snapshot
     : signalMarketData(signal);
   const frames = market?.strategy_context?.timeframes || signalMarketData(signal)?.strategy_context?.timeframes || {};
+  const timeframeSummaries = {};
+  for (const [rawTimeframe, value] of Object.entries(frames)) {
+    const timeframe = String(rawTimeframe || "").trim().toUpperCase();
+    if (timeframe && value && typeof value === "object") timeframeSummaries[timeframe] = value;
+  }
+  for (const [rawTimeframe, value] of Object.entries(snapshot.timeframe_summaries || {})) {
+    const timeframe = String(rawTimeframe || "").trim().toUpperCase();
+    if (timeframe && value && typeof value === "object") timeframeSummaries[timeframe] = value;
+  }
   const klines = { ...(snapshot.klines || {}) };
   for (const [timeframe, value] of Object.entries(frames)) {
     if (!Array.isArray(klines[timeframe]) && Array.isArray(value?.klines)) klines[timeframe] = value.klines;
   }
   const signalKey = String(signal?.id ?? "");
   for (const timeframe of Array.isArray(snapshot.available_timeframes) ? snapshot.available_timeframes : []) {
-    const evidence = getSignalCacheEntry(_signalEvidenceCache, inferenceEvidenceCacheKey(signalKey, timeframe, snapshot.id));
-    if (evidence && !Array.isArray(klines[timeframe])) {
-      klines[timeframe] = Array.isArray(evidence.klines) ? evidence.klines : [];
+    const normalizedTimeframe = String(timeframe || "").trim().toUpperCase();
+    const evidence = getSignalCacheEntry(_signalEvidenceCache, inferenceEvidenceCacheKey(signalKey, normalizedTimeframe, snapshot.id));
+    if (evidence?.timeframe_summary && typeof evidence.timeframe_summary === "object") {
+      timeframeSummaries[normalizedTimeframe] = evidence.timeframe_summary;
+    }
+    const existingKlineKey = Object.keys(klines).find(key => String(key).trim().toUpperCase() === normalizedTimeframe);
+    if (evidence && !Array.isArray(existingKlineKey ? klines[existingKlineKey] : null)) {
+      klines[normalizedTimeframe] = Array.isArray(evidence.klines) ? evidence.klines : [];
     }
   }
-  return { snapshot, market, frames, klines };
+  return { snapshot, market, frames, timeframeSummaries, klines };
 }
 
 function inferenceRateTime(value) {
@@ -13995,9 +14054,77 @@ async function ensureInferenceEvidence(signal, timeframe, renderVersion) {
   return flight;
 }
 
+function inferenceTimeframeSummaryForContext(context, timeframe) {
+  const normalized = String(timeframe || "").trim().toUpperCase();
+  return context.timeframeSummaries?.[normalized]
+    || context.frames?.[normalized]
+    || context.frames?.[timeframe]
+    || context.market?.strategy_context?.timeframes?.[normalized]
+    || context.market?.strategy_context?.timeframes?.[timeframe]
+    || null;
+}
+
+function inferenceMarketDataQualityForTimeframe(context, timeframe) {
+  const frame = inferenceTimeframeSummaryForContext(context, timeframe);
+  return frame?.summary?.market_data_quality
+    || frame?.market_data_quality
+    || null;
+}
+
+function inferenceLastClosedBarForTimeframe(context, timeframe) {
+  const frame = inferenceTimeframeSummaryForContext(context, timeframe);
+  return frame?.summary?.last_closed_bar
+    || frame?.last_closed_bar
+    || null;
+}
+
+function inferenceFrozenPlatformLabel(context, timeframe) {
+  const quality = inferenceMarketDataQualityForTimeframe(context, timeframe);
+  const platform = String(quality?.platform || quality?.source_identity?.platform || "").trim();
+  if (platform) return bridgePlatformLabel(platform);
+  const source = String(context.snapshot?.market_source || "").trim();
+  if (source === "platform_market_bridge" || source === "platform_admin_bridge") return "平台观摩源";
+  return "平台未记录";
+}
+
+function inferenceBarClosureLabel(context, timeframe) {
+  const quality = inferenceMarketDataQualityForTimeframe(context, timeframe);
+  if (quality?.last_bar_closed === true) return "最后一根为已收盘 K 线";
+  if (quality?.last_bar_closed === false) return "最后一根为推理时未收盘 K 线";
+  return "最后一根收盘状态未记录";
+}
+
+function inferenceChartEvidenceMeta(context, timeframe) {
+  const normalized = String(timeframe || "").trim().toUpperCase();
+  const snapshotStatus = context.snapshot?.evidence_status;
+  const sourceLabel = ["platform_market_bridge", "platform_admin_bridge"].includes(context.snapshot?.market_source)
+    ? "平台默认观摩源行情"
+    : "推理时行情";
+  const rows = Object.entries(context.klines || {}).find(([key]) => String(key).trim().toUpperCase() === normalized)?.[1];
+  const visibleCount = Array.isArray(rows)
+    ? rows.length
+    : Number(Object.entries(context.snapshot?.timeframe_counts || {})
+      .find(([key]) => String(key).trim().toUpperCase() === normalized)?.[1] || 0);
+  const evidenceLabel = visibleCount
+    ? (snapshotStatus === "incomplete" ? `保留最近 ${Math.min(visibleCount, 500)} 根` : `${Math.min(visibleCount, 500)} 根证据完整`)
+    : "正在读取当前周期证据";
+  const frozenPlatformLabel = inferenceFrozenPlatformLabel(context, normalized);
+  const barClosureLabel = inferenceBarClosureLabel(context, normalized);
+  return `${sourceLabel} · ${evidenceLabel} · 仅展示推理发生时的数据 · 冻结 ${frozenPlatformLabel} 时间 · ${barClosureLabel}`;
+}
+
+function inferenceRawStructureTime(structure, edge = "end") {
+  if (!structure || typeof structure !== "object") return null;
+  const rawTime = structure[`${edge}_broker_time`] ?? structure[`${edge}_time`]
+    ?? structure[`${edge}_time_utc_msc`]
+    ?? (edge === "start" ? structure.time_utc_msc ?? structure.time : null);
+  return inferenceRateTime(rawTime);
+}
+
 function chanSummaryForTimeframe(context, timeframe) {
-  return context.frames?.[timeframe]?.summary?.chan
-    || context.market?.strategy_context?.timeframes?.[timeframe]?.summary?.chan
+  const frame = inferenceTimeframeSummaryForContext(context, timeframe);
+  return frame?.summary?.chan
+    || frame?.chan
     || null;
 }
 
@@ -14036,22 +14163,12 @@ function inferenceChartShell(signal) {
   } else if (!state.inferenceChartTimeframe || !available.includes(state.inferenceChartTimeframe)) {
     state.inferenceChartTimeframe = available[0];
   }
-  const snapshotStatus = context.snapshot?.evidence_status;
-  const sourceLabel = ["platform_market_bridge", "platform_admin_bridge"].includes(context.snapshot?.market_source)
-    ? "平台默认观摩源行情"
-    : "推理时行情";
-  const visibleCount = Array.isArray(context.klines[state.inferenceChartTimeframe])
-    ? context.klines[state.inferenceChartTimeframe].length
-    : Number(context.snapshot?.timeframe_counts?.[state.inferenceChartTimeframe] || 0);
-  const evidenceLabel = visibleCount
-    ? (snapshotStatus === "incomplete" ? `保留最近 ${Math.min(visibleCount, 500)} 根` : `${Math.min(visibleCount, 500)} 根证据完整`)
-    : "正在读取当前周期证据";
   const layerButtons = [
-    ["segments", "线段"], ["centers", "中枢"], ["divergence", "背驰"], ["entries", "买卖点"], ["levels", "执行价位"],
+    ["segments", "线段"], ["bis", "笔/分型"], ["centers", "中枢"], ["divergence", "背驰"], ["entries", "买卖点"], ["levels", "执行价位"],
   ].map(([key, label]) => `<button type="button" class="inference-layer-btn ${state.inferenceChartLayers[key] ? "active" : ""}" data-inference-layer="${key}" aria-pressed="${state.inferenceChartLayers[key]}">${label}</button>`).join("");
   return `<section id="inferenceChartPanel" class="inference-chart-panel" aria-labelledby="inferenceChartTitle">
     <div class="inference-chart-header">
-      <div><span class="analysis-section-title"><i data-lucide="candlestick-chart" size="15"></i><strong id="inferenceChartTitle">K 线与结构证据</strong></span><small>${escapeHtml(sourceLabel)} · ${escapeHtml(evidenceLabel)} · 仅展示推理发生时的数据 · ${bridgePlatformLabel()} 时间 · 最后一根为推理时未收盘 K 线</small></div>
+      <div><span class="analysis-section-title"><i data-lucide="candlestick-chart" size="15"></i><strong id="inferenceChartTitle">K 线与结构证据</strong></span><small id="inferenceChartEvidenceMeta">${escapeHtml(inferenceChartEvidenceMeta(context, state.inferenceChartTimeframe))}</small></div>
       <button id="inferenceChartFullscreen" type="button" class="chart-icon-btn" aria-label="全屏查看 K 线图" title="全屏查看"><i data-lucide="maximize-2" size="15"></i></button>
     </div>
     <div class="inference-chart-toolbar">
@@ -14073,7 +14190,9 @@ function chartIndexTime(candles, value) {
 function inferenceStructureTime(candles, structure, edge, chan = {}) {
   if (!candles.length || !structure) return null;
   const first = candles[0].time, last = candles.at(-1).time;
-  const rawTime = structure[`${edge}_broker_time`] ?? structure[`${edge}_time`];
+  const rawTime = structure[`${edge}_broker_time`] ?? structure[`${edge}_time`]
+    ?? structure[`${edge}_time_utc_msc`]
+    ?? (edge === "start" ? structure.time_utc_msc ?? structure.time : null);
   const structureTime = inferenceRateTime(rawTime);
   if (Number.isFinite(structureTime) && structureTime >= first && structureTime <= last) {
     const exact = candles.find(item => item.time === structureTime);
@@ -14163,6 +14282,8 @@ function renderInferenceChart(signal, renderVersion) {
   }
   const context = inferenceSnapshotContext(signal);
   const timeframe = state.inferenceChartTimeframe;
+  const evidenceMeta = $("inferenceChartEvidenceMeta");
+  if (evidenceMeta) evidenceMeta.textContent = inferenceChartEvidenceMeta(context, timeframe);
   const candles = normalizeInferenceRates(context.klines?.[timeframe]);
   if (!candles.length) {
     const available = Array.isArray(context.snapshot?.available_timeframes)
@@ -14202,17 +14323,116 @@ function renderInferenceChart(signal, renderVersion) {
   _inferenceCandleSeries = candleSeries;
 
   const chan = chanSummaryForTimeframe(context, timeframe) || {};
+  const latestStructure = chan.latest_structure && typeof chan.latest_structure === "object"
+    ? chan.latest_structure : {};
+  const currentBi = chan.current_bi || latestStructure.latest_confirmed_bi || null;
+  const recentBis = Array.isArray(chan.recent_bis) ? chan.recent_bis : [];
+  const developingBi = latestStructure.developing_bi || chan.developing_bi || null;
+  const latestFractal = latestStructure.latest_confirmed_fractal || chan.latest_confirmed_fractal || null;
+  const suppliedContinuationExtension = latestStructure.continuation_extension
+    || chan.continuation_extension || null;
+  const derivedContinuationExtension = !suppliedContinuationExtension
+    && latestStructure.active_pivot_state === "origin_breached"
+    && Number.isFinite(Number(latestStructure.continuation_extreme_price))
+    ? {
+        start_price: Number(latestFractal?.price ?? currentBi?.end_price),
+        end_price: Number(latestStructure.continuation_extreme_price),
+        start_time: inferenceRawStructureTime(latestFractal, "start")
+          ?? inferenceRawStructureTime(currentBi, "end"),
+        end_time: inferenceRateTime(latestStructure.continuation_extreme_time_utc_msc
+          ?? latestStructure.continuation_extreme_time),
+        confirmed: false,
+      }
+    : null;
+  const continuationExtension = suppliedContinuationExtension || derivedContinuationExtension;
   const legend = [];
+  const markers = [];
   let structureOutsideWindow = false;
+  let structureCoverageLag = false;
   if (state.inferenceChartLayers.segments) {
-    const segments = [chan.prev_segment, chan.current_segment, chan.candidate_segment].filter(Boolean);
-    let segmentLines = 0;
+    const segments = [chan.prev_segment, chan.current_segment, chan.candidate_segment]
+      .filter(segment => segment && segment.active_for_current_state !== false && segment.lifecycle_state !== "invalidated");
+    let confirmedSegmentLines = 0;
+    let formingSegmentLines = 0;
     for (const segment of segments) {
       const start = inferenceStructureTime(candles, segment, "start", chan), end = inferenceStructureTime(candles, segment, "end", chan);
       if (start == null || end == null) { structureOutsideWindow = true; continue; }
-      if (addInferenceLine(chart, [{ time: start, value: Number(segment.start_price) }, { time: end, value: Number(segment.end_price) }], { color: segment.confirmed === false ? "#94a3b8" : "#e8c957", lineStyle: segment.confirmed === false ? 2 : 0 })) segmentLines += 1;
+      if (addInferenceLine(chart, [{ time: start, value: Number(segment.start_price) }, { time: end, value: Number(segment.end_price) }], { color: segment.confirmed === false ? "#94a3b8" : "#e8c957", lineStyle: segment.confirmed === false ? 2 : 0 })) {
+        if (segment.confirmed === false) formingSegmentLines += 1;
+        else confirmedSegmentLines += 1;
+      }
     }
-    if (segmentLines) legend.push('<span><i class="legend-line segment"></i>线段</span>');
+    if (confirmedSegmentLines) legend.push('<span><i class="legend-line segment"></i>已确认线段</span>');
+    if (formingSegmentLines) legend.push('<span><i class="legend-line segment-forming"></i>形成中线段（未确认）</span>');
+  }
+  if (state.inferenceChartLayers.bis) {
+    const currentBiKey = currentBi
+      ? `${currentBi.id ?? ""}:${currentBi.start_raw_index ?? currentBi.start_index ?? ""}:${currentBi.end_raw_index ?? currentBi.end_index ?? ""}`
+      : null;
+    const confirmedBis = [
+      ...recentBis.filter(Boolean).map(bi => ({ bi, current: false })),
+      ...(currentBi ? [{ bi: currentBi, current: true }] : []),
+    ].filter(({ bi, current }) => {
+      if (current) return true;
+      const key = `${bi.id ?? ""}:${bi.start_raw_index ?? bi.start_index ?? ""}:${bi.end_raw_index ?? bi.end_index ?? ""}`;
+      return key !== currentBiKey;
+    });
+    let confirmedBiLines = 0;
+    for (const { bi, current } of confirmedBis) {
+      const start = inferenceStructureTime(candles, bi, "start", chan);
+      const end = inferenceStructureTime(candles, bi, "end", chan);
+      if (start == null || end == null) { structureOutsideWindow = true; continue; }
+      if (addInferenceLine(chart, [{ time: start, value: Number(bi.start_price) }, { time: end, value: Number(bi.end_price) }], {
+        color: current ? "#e8c957" : "#91a4bf",
+        lineStyle: bi.confirmed === false ? 2 : 0,
+        lineWidth: current ? 2 : 1,
+      })) confirmedBiLines += 1;
+    }
+    if (confirmedBiLines) legend.push('<span><i class="legend-line bi"></i>已确认笔</span>');
+
+    if (developingBi) {
+      const start = inferenceStructureTime(candles, developingBi, "start", chan);
+      const end = inferenceStructureTime(candles, developingBi, "end", chan);
+      if (start == null || end == null) structureOutsideWindow = true;
+      else if (addInferenceLine(chart, [{ time: start, value: Number(developingBi.start_price) }, { time: end, value: Number(developingBi.end_price) }], {
+        color: "#61a8ff", lineStyle: 2, lineWidth: 2,
+      })) legend.push('<span><i class="legend-line developing-bi"></i>形成中笔（未确认）</span>');
+    }
+
+    if (latestFractal) {
+      const time = inferenceStructureTime(candles, latestFractal, "start", chan);
+      const bottom = String(latestFractal.type || "").toLowerCase() === "bottom";
+      const fractalOriginBreached = latestFractal.active_for_developing_bi === false
+        || latestStructure.active_pivot_state === "origin_breached"
+        || chan.active_pivot_state === "origin_breached";
+      const fractalLegendLabel = fractalOriginBreached
+        ? "历史已确认分型（起点已破坏）"
+        : "最新已确认分型";
+      const fractalText = bottom
+        ? (fractalOriginBreached ? "底分型（历史已确认·起点已破坏）" : "底分型")
+        : (fractalOriginBreached ? "顶分型（历史已确认·起点已破坏）" : "顶分型");
+      if (time == null) structureOutsideWindow = true;
+      else {
+        markers.push({
+          time,
+          position: bottom ? "belowBar" : "aboveBar",
+          color: fractalOriginBreached ? "#94a3b8" : (bottom ? "#30c99b" : "#ff6b76"),
+          shape: bottom ? "arrowUp" : "arrowDown",
+          text: fractalText,
+        });
+        legend.push(`<span><i class="legend-dot ${fractalOriginBreached ? "fractal-broken" : "fractal"}"></i>${fractalLegendLabel}</span>`);
+      }
+    }
+
+    if (continuationExtension && Number.isFinite(Number(continuationExtension.start_price))
+      && Number.isFinite(Number(continuationExtension.end_price))) {
+      const start = inferenceStructureTime(candles, continuationExtension, "start", chan);
+      const end = inferenceStructureTime(candles, continuationExtension, "end", chan);
+      if (start == null || end == null) structureOutsideWindow = true;
+      else if (addInferenceLine(chart, [{ time: start, value: Number(continuationExtension.start_price) }, { time: end, value: Number(continuationExtension.end_price) }], {
+        color: "#d7b96a", lineStyle: 2, lineWidth: 2,
+      })) legend.push('<span><i class="legend-line continuation"></i>未确认延伸</span>');
+    }
   }
   if (state.inferenceChartLayers.centers) {
     const center = chan.active_center || chan.latest_center || chan.current_center;
@@ -14230,15 +14450,16 @@ function renderInferenceChart(signal, renderVersion) {
       }
     }
   }
-  const markers = [];
   if (state.inferenceChartLayers.divergence) {
+    let divergenceMarkerCount = 0;
     for (const divergence of (chan.recent_divergences || []).slice(-3)) {
       const time = inferenceStructureTime(candles, divergence?.departure_segment, "end", chan);
       if (time == null) { structureOutsideWindow = true; continue; }
       const bottom = divergence.type === "bottom";
       markers.push({ time, position: bottom ? "belowBar" : "aboveBar", color: bottom ? "#30c99b" : "#ff6b76", shape: bottom ? "arrowUp" : "arrowDown", text: bottom ? "底背驰" : "顶背驰" });
+      divergenceMarkerCount += 1;
     }
-    if (markers.length) legend.push('<span><i class="legend-dot divergence"></i>已确认背驰</span>');
+    if (divergenceMarkerCount) legend.push('<span><i class="legend-dot divergence"></i>已确认背驰</span>');
   }
   if (state.inferenceChartLayers.entries) {
     const entryLabels = { first_buy: "一买", second_buy: "二买", third_buy: "三买", first_sell: "一卖", second_sell: "二卖", third_sell: "三卖" };
@@ -14266,7 +14487,21 @@ function renderInferenceChart(signal, renderVersion) {
     }
     legend.push('<span><i class="legend-line levels"></i>AI 入场 / 止损 / 止盈</span>');
   }
+  const lastClosedBar = inferenceLastClosedBarForTimeframe(context, timeframe);
+  const lastClosedTime = inferenceRateTime(lastClosedBar?.time_utc_msc ?? lastClosedBar?.time);
+  const structureTimes = [
+    ...[chan.prev_segment, chan.current_segment, chan.candidate_segment, currentBi, developingBi]
+      .map(structure => inferenceRawStructureTime(structure, "end")),
+    ...recentBis.map(structure => inferenceRawStructureTime(structure, "end")),
+    inferenceRawStructureTime(latestFractal, "start"),
+    inferenceRawStructureTime(continuationExtension, "end"),
+  ].filter(Number.isFinite);
+  const latestKnownStructureTime = structureTimes.length ? Math.max(...structureTimes) : null;
+  const typicalStep = candles.length > 1 ? Math.max(1, candles.at(-1).time - candles.at(-2).time) : 0;
+  if (Number.isFinite(lastClosedTime) && Number.isFinite(latestKnownStructureTime)
+    && latestKnownStructureTime < lastClosedTime - typicalStep) structureCoverageLag = true;
   if (structureOutsideWindow) legend.push('<span class="is-warning"><i data-lucide="info" size="12"></i>旧快照未保存完整结构区间，已隐藏无法精确定位的图层</span>');
+  if (structureCoverageLag) legend.push('<span class="is-warning"><i data-lucide="info" size="12"></i>线段为历史确认结构，当前变化请查看笔/分型图层</span>');
   $("inferenceChartLegend").innerHTML = legend.join("") || '<span class="muted">当前周期没有可展示的结构图层</span>';
   initIcons();
   $("inferenceKlineTableBody").innerHTML = candles.slice(-10).reverse().map(item => `<tr><td>${escapeHtml(inferenceChartTimeLabel(item.time))}</td><td>${fmt(item.open, 2)}</td><td>${fmt(item.high, 2)}</td><td>${fmt(item.low, 2)}</td><td>${fmt(item.close, 2)}</td></tr>`).join("");

@@ -10721,11 +10721,17 @@ a.signal-link:hover {
 .inference-chart-legend i { display: inline-block; flex: 0 0 auto; }
 .legend-line { width: 16px; height: 2px; border-radius: 2px; }
 .legend-line.segment { background: #e8c957; }
+.legend-line.segment-forming { height: 0; border-top: 2px dashed #94a3b8; }
+.legend-line.bi { height: 1px; background: #91a4bf; }
+.legend-line.developing-bi { height: 0; border-top: 2px dashed #61a8ff; }
+.legend-line.continuation { height: 0; border-top: 2px dotted #d7b96a; }
 .legend-line.levels { border-top: 1px dashed #61a8ff; }
 .legend-box { width: 14px; height: 8px; border: 1px dashed #7c8da8; border-radius: 2px; }
 .legend-dot { width: 7px; height: 7px; border-radius: 50%; }
 .legend-dot.divergence { background: #ff6b76; }
 .legend-dot.entry { background: #61a8ff; }
+.legend-dot.fractal { background: #30c99b; border: 1px solid #ff6b76; }
+.legend-dot.fractal-broken { background: #94a3b8; border: 1px dashed #d7b96a; }
 
 .inference-chart-table {
   border-top: 1px solid rgba(148, 163, 184, .08);

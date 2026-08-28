@@ -60,6 +60,33 @@ function throwReferenceForbidden() {
   throw error
 }
 
+const CHAN_MODEL_BI_FIELDS = Object.freeze([
+  'id', 'dir', 'start_price', 'end_price', 'confirmed',
+])
+
+function projectBiForModel(bi) {
+  if (!isObject(bi)) return bi ?? null
+  return Object.fromEntries(CHAN_MODEL_BI_FIELDS
+    .filter(field => hasOwn(bi, field))
+    .map(field => [field, structuredClone(bi[field])]))
+}
+
+function stripLatestStructureVisualizationFields(latestStructure) {
+  if (!isObject(latestStructure)) return latestStructure
+  const projected = structuredClone(latestStructure)
+  if (isObject(projected.latest_confirmed_bi)) {
+    projected.latest_confirmed_bi = projectBiForModel(projected.latest_confirmed_bi)
+  }
+  if (isObject(projected.developing_bi)) {
+    projected.developing_bi = projectBiForModel(projected.developing_bi)
+  }
+  delete projected.pivot_breach_time
+  delete projected.pivot_breach_time_utc_msc
+  delete projected.continuation_extreme_time
+  delete projected.continuation_extreme_time_utc_msc
+  return projected
+}
+
 /**
  * Project one computed Chan result onto the fixed model-facing structure and
  * capability contract. Existing structure values are copied without mutation;
@@ -72,6 +99,12 @@ export function projectChanStructureForModel(chan) {
   for (const field of CHAN_MODEL_STRUCTURE_FIELDS) {
     if (hasOwn(chan, field)) projected[field] = structuredClone(chan[field])
   }
+  if (isObject(projected.latest_structure)) {
+    projected.latest_structure = stripLatestStructureVisualizationFields(projected.latest_structure)
+  }
+  if (isObject(projected.current_bi)) projected.current_bi = projectBiForModel(projected.current_bi)
+  if (isObject(projected.developing_bi)) projected.developing_bi = projectBiForModel(projected.developing_bi)
+  if (Array.isArray(projected.recent_bis)) projected.recent_bis = projected.recent_bis.map(projectBiForModel)
   // v7 separates the latest active market structure from historical topology.
   // Keep legacy projections unchanged, but when latest_structure is present do
   // not send retired segments/centers beside the current judgement.

@@ -74,6 +74,27 @@ describe('shared market inference boundary', () => {
     expect(stringDisabled.strategyRuntime).not.toHaveProperty('chan_model_payload_version')
   })
 
+  it('preserves Chan bi coordinates in the frozen audit snapshot for exact chart replay', () => {
+    const currentBi = {
+      id:7, dir:'down', start_price:4582.7, end_price:4551.53, confirmed:true,
+      start_broker_time:'2026-08-28 17:40:00', end_broker_time:'2026-08-28 18:20:00',
+      start_time_utc_msc:1787928000000, end_time_utc_msc:1787930400000,
+    }
+    const result = prepareInferenceSnapshot({
+      marketSnapshot:{ strategy_context:{ timeframes:{ M5:{ summary:{ chan:{
+        algorithm_version:'chan_structure_v8', current_bi:currentBi, recent_bis:[currentBi],
+        latest_structure:{ active_pivot_state:'origin_breached', direction_basis:'confirmed_bi_continuation',
+          continuation_extreme_price:4532.12, continuation_extreme_time_utc_msc:1787931900000 },
+      } } } } } },
+    })
+    const frozenChan = result.marketSnapshot.strategy_context.timeframes.M5.summary.chan
+    expect(frozenChan.current_bi).toEqual(currentBi)
+    expect(frozenChan.recent_bis[0]).toEqual(currentBi)
+    expect(frozenChan.latest_structure).toMatchObject({
+      active_pivot_state:'origin_breached', continuation_extreme_time_utc_msc:1787931900000,
+    })
+  })
+
   it('does not expose server judgment scores or undeclared ATR anchors to the model snapshot', () => {
     const result = buildSharedMarketSnapshot({
       symbol:'XAUUSD', timeframe:'M5', atr_14:8,
@@ -109,7 +130,7 @@ describe('inference snapshot evidence', () => {
     const result = prepareInferenceSnapshot({
       systemPrompt:'system', userPrompt:'payload',
       marketSnapshot:{ strategy_context:{ timeframes:{ M5:{ summary:{ chan:{
-        algorithm_version:'chan_structure_v7', history_sufficient:true,
+        algorithm_version:'chan_structure_v8', history_sufficient:true,
         closed_history_sufficient:true, cache_internal_gap_unresolved:false,
         evidence_capabilities:{ data_complete:true, segment_direction_usable:true,
           center_structure_usable:false, entry_structure_usable:false, divergence_usable:false,
