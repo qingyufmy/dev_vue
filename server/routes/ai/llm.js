@@ -282,7 +282,7 @@ const GENERIC_OUTPUT_FIELD_DESCRIPTIONS = Object.freeze({
   pending_action_reason: '必须字段，字符串。pending_action 为 cancel 时，必须使用简体中文说明针对输入中可识别现有挂单的取消依据；pending_action 为 none 或 keep 时必须返回空字符串',
   management_direction: '必须字段。仅允许 buy | sell | none。pending_action 为 cancel 时，填写输入中可识别且实际被管理的现有挂单方向；pending_action 为 none 或 keep 时必须填 none',
   hard_gate_status: '必须字段。仅表示按当前策略本轮是否允许新开仓或加仓，仅允许 pass | fail。交易信号必须为 pass；hold 必须为 fail。不得用评分、置信度或文字理由覆盖该字段',
-  hard_gate_failures: ['必须字段。逐项填写当前策略中未通过的新入场必要条件，使用简短稳定标识；交易信号必须为空数组，hold 至少填写一项。字段内容必须与 signal_type、方向、decision_summary、key_reasons、analysis 和 reasoning 一致'],
+  hard_gate_failures: ['必须字段。只列本轮已实际检查、结论为未通过或不可用且直接阻断新入场的必要条件，使用简短稳定标识，并优先保留最早阻断项；被前置条件阻断而未检查、未评估或未到达的下游项，以及未采用的替代分支，不得列入。交易信号必须为空数组，hold 至少填写一项。字段内容必须与 signal_type、方向、decision_summary、key_reasons、risk_factors、analysis 和 reasoning 使用同一组检查状态和事实'],
   minimum_reward_to_risk: '必须字段。当前策略正文明确规定最低收益风险要求时，原样填写该正数；策略未规定时返回 null。该字段只复述当前策略门槛，不得擅自增加全局默认值',
   recommended_reward_to_risk: '必须字段。交易信号按当前策略指定的口径填写推荐止盈档位对应的收益风险比正数；hold 或当前策略不要求时返回 null。必须与入场价、止损价、recommended_take_profit_tier 及 reasoning 中的结论一致',
   reward_to_risk_status: '必须字段。仅允许 pass | fail | not_applicable。pass 表示存在完整可计算的交易计划且达到当前策略门槛；fail 表示存在完整可计算的交易候选，但仅因实际收益风险比低于当前策略门槛而输出 hold；not_applicable 表示 signal_type=hold 且 entry_method=observe，尚未形成唯一完整交易候选、尚未进入收益风险检查，或当前策略没有收益风险门槛。该字段是模型自检声明，不替代独立风控',
@@ -297,10 +297,10 @@ const GENERIC_OUTPUT_FIELD_DESCRIPTIONS = Object.freeze({
   decision_summary: '必填，简体中文，一句话给出结论；不超过 80 字',
   trigger_condition: '简体中文，说明该建议成立或挂单触发需要满足的市场条件；没有额外条件时返回空字符串',
   invalidation_condition: '交易信号必填，使用简体中文说明什么市场变化会使当前建议失效，并与止损依据一致；hold 时可说明重新评估条件',
-  key_reasons: ['2 至 4 条关键行情依据，每条不超过 60 字，不包含账户、持仓或风控结论'],
-  risk_factors: ['0 至 4 条市场层面的不利因素，每条不超过 60 字，不包含账户或仓位信息'],
-  analysis: '简体中文，依据当前策略和输入事实自由组织行情分析',
-  reasoning: '简体中文，说明结论依据和与输出字段对应的处理理由；如涉及挂单，再说明本轮保留、取消或不管理的依据'
+  key_reasons: ['2 至 4 条本轮已实际检查的关键行情依据，每条不超过 60 字，不包含账户、持仓或风控结论。任何在其他字段中标记为未检查、未评估或未到达的步骤、证据或指标，不得在此写成已检查事实或方向依据'],
+  risk_factors: ['0 至 4 条本轮已实际检查的市场层面不利因素，每条不超过 60 字，不包含账户或仓位信息。任何在其他字段中标记为未检查、未评估或未到达的步骤、证据或指标，不得在此写成已确认风险、失败原因或否决依据'],
+  analysis: '简体中文，依据当前策略和输入事实自由组织行情分析。必须与其他输出字段使用同一组检查状态和事实；某项一旦标记为未检查、未评估或未到达，只能说明其未被本轮采用，不得同时给出该项的通过、失败、方向或风险结论',
+  reasoning: '简体中文，说明结论依据和与输出字段对应的处理理由；如涉及挂单，再说明本轮保留、取消或不管理的依据。必须与 hard_gate_failures、key_reasons、risk_factors 和 analysis 的检查状态一致，不得把未检查、未评估或未到达的项目改写成已检查事实、失败项、不利因素或方向依据'
 })
 
 const DEFAULT_OUTPUT_FORMAT = JSON.stringify({
@@ -341,7 +341,7 @@ export function buildStrategyOutputFormat(baseFormat, allowedEntryMethods, exper
   } else if (!methods.includes('stop_limit')) {
     delete schema.stop_limit_price
   }
-  schema.reasoning = `简体中文，依据当前策略正文说明信号方向和为何从策略允许的入场方式（${methods.map(item => labels[item]).join('、')}）中选择当前方式。${hasPending ? '如涉及挂单，再说明策略对挂单的判断。' : '本策略未声明挂单能力，不得返回挂单类型。'}`
+  schema.reasoning = `简体中文，依据当前策略正文说明信号方向和为何从策略允许的入场方式（${methods.map(item => labels[item]).join('、')}）中选择当前方式。${hasPending ? '如涉及挂单，再说明策略对挂单的判断。' : '本策略未声明挂单能力，不得返回挂单类型。'}必须与 hard_gate_failures、key_reasons、risk_factors 和 analysis 的检查状态一致，不得把未检查、未评估或未到达的项目改写成已检查事实、失败项、不利因素或方向依据。`
   return { outputFormat: JSON.stringify(schema, null, 2), hasPending }
 }
 
