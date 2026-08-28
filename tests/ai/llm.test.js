@@ -190,7 +190,8 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema.hard_gate_failures[0]).toContain('signal_type')
     expect(schema.minimum_reward_to_risk).toContain('不得擅自增加全局默认值')
     expect(schema.recommended_reward_to_risk).toContain('recommended_take_profit_tier')
-    expect(schema.reward_to_risk_status).toContain('不替代独立风控')
+    expect(schema.recommended_reward_to_risk).toContain('hold 或当前策略不要求时返回 null')
+    expect(schema.reward_to_risk_status).toBe('必须字段。仅允许 pass | fail | not_applicable。pass 表示存在完整可计算的交易计划且达到当前策略门槛；fail 表示存在完整可计算的交易候选，但仅因实际收益风险比低于当前策略门槛而输出 hold；not_applicable 表示 signal_type=hold 且 entry_method=observe，尚未形成唯一完整交易候选、尚未进入收益风险检查，或当前策略没有收益风险门槛。该字段是模型自检声明，不替代独立风控')
   })
 
   it('describes confidence as conclusion certainty rather than a win-rate estimate', () => {

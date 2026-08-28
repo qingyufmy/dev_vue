@@ -285,7 +285,7 @@ const GENERIC_OUTPUT_FIELD_DESCRIPTIONS = Object.freeze({
   hard_gate_failures: ['必须字段。逐项填写当前策略中未通过的新入场必要条件，使用简短稳定标识；交易信号必须为空数组，hold 至少填写一项。字段内容必须与 signal_type、方向、decision_summary、key_reasons、analysis 和 reasoning 一致'],
   minimum_reward_to_risk: '必须字段。当前策略正文明确规定最低收益风险要求时，原样填写该正数；策略未规定时返回 null。该字段只复述当前策略门槛，不得擅自增加全局默认值',
   recommended_reward_to_risk: '必须字段。交易信号按当前策略指定的口径填写推荐止盈档位对应的收益风险比正数；hold 或当前策略不要求时返回 null。必须与入场价、止损价、recommended_take_profit_tier 及 reasoning 中的结论一致',
-  reward_to_risk_status: '必须字段。仅允许 pass | fail | not_applicable。当前策略规定收益风险门槛时，交易信号必须为 pass；未达到门槛时必须为 fail 并输出 hold。当前策略没有该门槛时使用 not_applicable。该字段是模型自检声明，不替代独立风控',
+  reward_to_risk_status: '必须字段。仅允许 pass | fail | not_applicable。pass 表示存在完整可计算的交易计划且达到当前策略门槛；fail 表示存在完整可计算的交易候选，但仅因实际收益风险比低于当前策略门槛而输出 hold；not_applicable 表示 signal_type=hold 且 entry_method=observe，尚未形成唯一完整交易候选、尚未进入收益风险检查，或当前策略没有收益风险门槛。该字段是模型自检声明，不替代独立风控',
   limit_price: `${PRICE_POINT_OUTPUT_RULE} buy_limit/sell_limit：入场价，订单直接挂在此价；buy_stop/sell_stop：触发价，价格到达后以市价成交；buy_stop_limit/sell_stop_limit：触发价，到达后按 stop_limit_price 挂限价单。价格必须满足对应订单类型的机械方向关系。signal_type=hold 或 entry_method=observe 时必须为 null；市价信号（entry_method=market）也必须为 null。`,
   stop_limit_price: `${PRICE_POINT_OUTPUT_RULE} 仅 buy_stop_limit/sell_stop_limit（entry_method=stop_limit）时填写触发后挂出的限价；其他挂单类型、市价信号以及 signal_type=hold 或 entry_method=observe 时必须为 null。limit_price 是触发价：买入触发价高于当前价，卖出触发价低于当前价；触发后的限价须满足相应方向关系。`,
   pending_valid_minutes: '挂单有效期（分钟），仅挂单入场信号可填写，取值 1-1440，默认 240；市价信号以及 signal_type=hold 或 entry_method=observe 时必须为 null',
