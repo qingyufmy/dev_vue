@@ -9,7 +9,7 @@ const providerCapabilitiesMock = vi.hoisted(() => ({
   })),
 }))
 vi.mock('../../server/routes/ai/model-provider-capabilities.js', () => providerCapabilitiesMock)
-import { requestJsonObject, resolveConfirmedRequestMaxTokens, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS, projectPositionManagementContextForModel } from '../../server/routes/ai/llm.js'
+import { requestJsonObject, resolveConfirmedRequestMaxTokens, resolveModelRequestDeadline, maybeAiSignal, normalizeAiSignal, buildModelComparisonSignal, buildStrategyOutputFormat, formatPendingValidUntilUtc, validateAiSignalResponse, localizeInferenceNarrative, compactInferenceMarketPayload, extractTokenUsage, modelResponseCompletion, INFERENCE_KLINE_FIELDS, projectPositionManagementContextForModel } from '../../server/routes/ai/llm.js'
 import { compactRates, DEFAULT_PROMPT } from '../../server/routes/ai/utils.js'
 import { POSITION_MANAGEMENT_CONTRACT_VERSION } from '../../server/routes/ai/position-management.js'
 
@@ -29,6 +29,30 @@ describe('model output budgets', () => {
     expect(resolveConfirmedRequestMaxTokens(initial, 80, budget)).toBe(80)
     expect(resolveConfirmedRequestMaxTokens(repair, 80, budget)).toBeLessThan(80)
   })
+})
+
+describe('model request timeout caps', () => {
+  const nowMs = 1_000_000
+  const taskDeadlineAtMs = nowMs + 600_000
+
+  it.each([
+    [180_000, nowMs + 180_000],
+    [300_000, nowMs + 300_000],
+  ])('caps the shared request deadline at %s ms', (configuredTimeoutMs, expectedDeadlineAtMs) => {
+    expect(resolveModelRequestDeadline({ nowMs, taskDeadlineAtMs, configuredTimeoutMs }))
+      .toBe(expectedDeadlineAtMs)
+  })
+
+  it('keeps the shorter existing task window', () => {
+    expect(resolveModelRequestDeadline({ nowMs, taskDeadlineAtMs:nowMs + 120_000,
+      configuredTimeoutMs:300_000 })).toBe(nowMs + 120_000)
+  })
+
+  it.each([undefined, null, '', 0, -1, 'invalid', Number.NaN, Number.POSITIVE_INFINITY])
+    ('falls back to the existing task deadline for invalid timeout %s', configuredTimeoutMs => {
+      expect(resolveModelRequestDeadline({ nowMs, taskDeadlineAtMs, configuredTimeoutMs }))
+        .toBe(taskDeadlineAtMs)
+    })
 })
 
 describe('position management model privacy projection', () => {
@@ -501,6 +525,35 @@ vi.stubGlobal('fetch', mockFetch)
 describe('requestJsonObject', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('shares the configured deadline across the initial request and JSON repair', async () => {
+    const nowMs = Date.now()
+    const timeoutValues = []
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation(timeoutMs => {
+      timeoutValues.push(timeoutMs)
+      return new AbortController().signal
+    })
+    mockFetch
+      .mockResolvedValueOnce({ ok:true, status:200,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'not-json' } }] }) })
+      .mockResolvedValueOnce({ ok:true, status:200,
+        json:() => Promise.resolve({ choices:[{ message:{ content:'{"fixed":true}' } }] }) })
+
+    try {
+      const result = await requestJsonObject({
+        url:'https://api.example.test', apiKey:'test-key', model:'test-model', maxTokens:2000,
+        messages:[{ role:'user', content:'test' }], timeout:600_000,
+        deadlineAtMs:nowMs + 600_000, requestTimeoutMs:180_000,
+      })
+      expect(result).toEqual({ fixed:true })
+      expect(timeoutValues).toHaveLength(2)
+      expect(timeoutValues[0]).toBeLessThanOrEqual(180_000)
+      expect(timeoutValues[0]).toBeGreaterThan(179_000)
+      expect(timeoutValues[1]).toBeLessThanOrEqual(timeoutValues[0])
+    } finally {
+      timeoutSpy.mockRestore()
+    }
   })
 
   it('成功解析 JSON 响应', async () => {
@@ -1537,6 +1590,36 @@ describe('normalizeAiSignal', () => {
 describe('maybeAiSignal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('applies the model request timeout to auto inference', async () => {
+    const timeoutValues = []
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation(timeoutMs => {
+      timeoutValues.push(timeoutMs)
+      return new AbortController().signal
+    })
+    mockFetch.mockResolvedValue({
+      ok:true,
+      json:() => Promise.resolve({ choices:[{ message:{ content:JSON.stringify({
+        signal_type:'hold', entry_method:'observe', confidence:0.6, recommended_volume:0,
+        position_size_tier:'observe', position_size_reason:'等待', position_action:'observe',
+        pending_action:'none', pending_action_reason:'', management_direction:'none',
+        analysis:'等待', reasoning:'自动推理超时配置测试',
+      }) } }] }),
+    })
+
+    try {
+      const result = await maybeAiSignal(null, {
+        api_key_encrypted:'test-key', api_provider:'deepseek', model_name:'deepseek-chat',
+        _usage:'auto_platform', request_timeout_ms:180_000,
+      }, { symbol:'XAUUSD', timeframe:'M5', latest_price:2000, strategy_context:{ timeframes:{} } })
+      expect(result._inference_source).toBe('ai')
+      expect(timeoutValues).toHaveLength(1)
+      expect(timeoutValues[0]).toBeLessThanOrEqual(180_000)
+      expect(timeoutValues[0]).toBeGreaterThan(179_000)
+    } finally {
+      timeoutSpy.mockRestore()
+    }
   })
 
   it('waits for inference preparation persistence before sending the provider request', async () => {

@@ -471,6 +471,24 @@ function assertModelResponseComplete(data, protocol) {
   throw error
 }
 
+function normalizeRequestTimeoutMs(value) {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  const timeout = Number(value)
+  return Number.isSafeInteger(timeout) && timeout > 0 ? timeout : null
+}
+
+export function resolveModelRequestDeadline({ nowMs = Date.now(), taskDeadlineAtMs,
+  configuredTimeoutMs = null } = {}) {
+  const now = Number(nowMs)
+  const taskDeadline = Number(taskDeadlineAtMs)
+  if (!Number.isFinite(now) || !Number.isFinite(taskDeadline)) return taskDeadline
+  const configuredTimeout = normalizeRequestTimeoutMs(configuredTimeoutMs)
+  return configuredTimeout === null
+    ? taskDeadline
+    : Math.min(taskDeadline, now + configuredTimeout)
+}
+
 function remainingRequestTimeout(deadlineAtMs, configuredTimeoutMs) {
   const remaining = Math.trunc(Number(deadlineAtMs) - Date.now())
   if (!Number.isFinite(remaining) || remaining <= 0) {
@@ -1178,16 +1196,22 @@ export async function requestJsonObject({
   providerQuietAfterMs = 60_000, repairContext = null,
   allowFollowupRequests = true, deadlineAtMs = null,
   followupValidUntilMs = null, minimumFollowupWindowMs = 15_000,
-  modelTaskBudget = null,
+  modelTaskBudget = null, requestTimeoutMs = null,
 }) {
   if (apiKey && /[^ -~]/.test(apiKey)) {
     throw new Error('API key contains non-ASCII characters, please check your configuration')
   }
   signal?.throwIfAborted()
   const initialMaxTokens = resolveConfirmedRequestMaxTokens(messages, maxTokens, modelTaskBudget)
+  const nowMs = Date.now()
   const taskDeadlineAtMs = deadlineAtMs != null && Number.isFinite(Number(deadlineAtMs))
     ? Number(deadlineAtMs)
-    : Date.now() + Math.max(1, Math.trunc(Number(timeout) || 120000))
+    : nowMs + Math.max(1, Math.trunc(Number(timeout) || 120000))
+  // A model profile timeout is a request-level cap, not a replacement for the
+  // scheduler/task deadline. Compute one shared absolute deadline once so a
+  // controlled JSON repair cannot receive a fresh full timeout window.
+  const requestDeadlineAtMs = resolveModelRequestDeadline({ nowMs,
+    taskDeadlineAtMs, configuredTimeoutMs:requestTimeoutMs })
   let resolvedCapabilities = capabilities
   if (!resolvedCapabilities || typeof resolvedCapabilities.supports_stream !== 'boolean') {
     try {
@@ -1214,10 +1238,10 @@ export async function requestJsonObject({
   const estimatedTokens = Math.ceil(JSON.stringify(messages).length / 4) + initialMaxTokens
   await emitModelProgress(onProgress, 'model_request')
   const { response, data } = await trackedModelRequest({
-    url, apiKey, body, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
+    url, apiKey, body, timeout:remainingRequestTimeout(requestDeadlineAtMs, timeout), usageContext,
     estimatedTokens, phase: 'request', provider, signal, onProviderRequest, onProviderUsage,
     onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
-    deadlineAtMs:taskDeadlineAtMs, modelTaskBudget,
+    deadlineAtMs:requestDeadlineAtMs, modelTaskBudget,
   })
   const nativeJsonMode = usesNativeJsonMode(provider, protocol)
   let content = extractLlmContent(data, protocol, nativeJsonMode)
@@ -1242,10 +1266,10 @@ export async function requestJsonObject({
     })
     const emptyRetryEstimate = Math.ceil(JSON.stringify(emptyRetryMessages).length / 4) + emptyRetryMaxTokens
     const { data: emptyRetryData } = await trackedModelRequest({
-      url, apiKey, body:emptyRetryBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
+      url, apiKey, body:emptyRetryBody, timeout:remainingRequestTimeout(requestDeadlineAtMs, timeout), usageContext,
       estimatedTokens:emptyRetryEstimate, phase:'repair', provider, signal, onProviderRequest, onProviderUsage,
       onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
-      deadlineAtMs:taskDeadlineAtMs, modelTaskBudget,
+      deadlineAtMs:requestDeadlineAtMs, modelTaskBudget,
     })
     content = extractLlmContent(emptyRetryData, protocol, true)
   }
@@ -1338,10 +1362,10 @@ export async function requestJsonObject({
     })
     const repairEstimate = Math.ceil(JSON.stringify(repairMessages).length / 4) + repairMaxTokens
     const { data: repairedData } = await trackedModelRequest({
-      url, apiKey, body: repairBody, timeout:remainingRequestTimeout(taskDeadlineAtMs, timeout), usageContext,
+      url, apiKey, body: repairBody, timeout:remainingRequestTimeout(requestDeadlineAtMs, timeout), usageContext,
       estimatedTokens: repairEstimate, phase: 'repair', provider, signal, onProviderRequest, onProviderUsage,
       onProviderActivity, onProviderQuiet, providerQuietAfterMs, protocol, supportsStream,
-      deadlineAtMs:taskDeadlineAtMs, modelTaskBudget,
+      deadlineAtMs:requestDeadlineAtMs, modelTaskBudget,
     })
     const repaired = extractLlmContent(repairedData, protocol, nativeJsonMode)
     if (!repaired) throw new Error('LLM repair response content is empty')
@@ -1661,6 +1685,7 @@ position_management_context 是服务端提供的去身份化实时事实，平�
       protocol,
       capabilities,
       modelProfileId:config._model_profile_id || null,
+      requestTimeoutMs:taskKind === 'auto_inference' ? config.request_timeout_ms : null,
       timeout: Math.max(1, requestDeadlineAtMs - Date.now()),
       deadlineAtMs:requestDeadlineAtMs,
       followupValidUntilMs:Number(config._followupValidUntilUtcMs)
