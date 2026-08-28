@@ -291,6 +291,33 @@ describe('model task runtime state and fencing', () => {
     expect(mockQueryRun.mock.calls[0][1]).toContain('ai_signals:88')
   })
 
+  it('keeps an active auto inference active even when a durable signal exists', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'task-live-applied', status:'applying',
+      lease_expires_at_utc_msc:200_000, task_deadline_at_utc_msc:300_000, fencing_token:4 }])
+
+    await expect(recoverAbandonedAutoInferenceTasks({ nowUtcMs:100_000 })).resolves.toEqual({
+      scanned:1, succeeded:0, statusUnknown:0, stale:0, active:1,
+    })
+    expect(mockQueryOne).not.toHaveBeenCalled()
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('does not reconcile an applied auto inference when the lease guard no longer matches', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'task-renewed-applied', status:'applying',
+      lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:300_000, fencing_token:5 }])
+    mockQueryOne.mockResolvedValueOnce({ id:90 })
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:0 })
+
+    await expect(recoverAbandonedAutoInferenceTasks({ nowUtcMs:100_000 })).resolves.toEqual({
+      scanned:1, succeeded:0, statusUnknown:0, stale:0, active:0,
+    })
+    expect(mockQueryRun).toHaveBeenCalledTimes(1)
+    expect(mockQueryRun.mock.calls[0][0]).toContain('status = ?')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('fencing_token = ?')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('lease_expires_at_utc_msc <= ?')
+    expect(mockQueryRun.mock.calls[0][1]).toEqual(expect.arrayContaining(['applying', 5, 100_000]))
+  })
+
   it('marks an interrupted submitted auto request unknown and never resets it to queued', async () => {
     mockQueryAll.mockResolvedValueOnce([{ task_id:'task-submitted', status:'submitted',
       lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:200_000 }])
@@ -325,6 +352,37 @@ describe('model task runtime state and fencing', () => {
       inspectBusiness:vi.fn().mockResolvedValue({ job:{ id:1 }, succeeded:false }) }))
       .resolves.toMatchObject({ scanned:1, active:1, statusUnknown:0, stale:0 })
     expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('keeps an active business task active even when its durable result exists', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'healthy-result', status:'applying',
+      lease_expires_at_utc_msc:200_000, task_deadline_at_utc_msc:300_000,
+      fencing_token:6, provider_attempt_started:1 }])
+    const inspectBusiness = vi.fn().mockResolvedValue({
+      job:{ id:2 }, succeeded:true, resultRef:'period_review_case:2', resultHash:'hash-2',
+    })
+
+    await expect(recoverAbandonedBusinessModelTasks({ nowUtcMs:100_000, inspectBusiness }))
+      .resolves.toMatchObject({ scanned:1, active:1, succeeded:0, statusUnknown:0, stale:0 })
+    expect(inspectBusiness).not.toHaveBeenCalled()
+    expect(mockQueryRun).not.toHaveBeenCalled()
+  })
+
+  it('reconciles an expired business result with an atomic lease guard', async () => {
+    mockQueryAll.mockResolvedValueOnce([{ task_id:'expired-result', status:'applying',
+      lease_expires_at_utc_msc:90_000, task_deadline_at_utc_msc:300_000,
+      fencing_token:7, provider_attempt_started:1 }])
+    mockQueryRun.mockResolvedValueOnce({ affectedRows:1 }).mockResolvedValueOnce({ affectedRows:1 })
+    const inspectBusiness = vi.fn().mockResolvedValue({
+      job:{ id:3 }, succeeded:true, resultRef:'period_review_case:3', resultHash:'hash-3',
+    })
+
+    await expect(recoverAbandonedBusinessModelTasks({ nowUtcMs:100_000, inspectBusiness }))
+      .resolves.toMatchObject({ scanned:1, active:0, succeeded:1, statusUnknown:0, stale:0 })
+    expect(mockQueryRun.mock.calls[0][0]).toContain('status = ?')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('fencing_token = ?')
+    expect(mockQueryRun.mock.calls[0][0]).toContain('lease_expires_at_utc_msc <= ?')
+    expect(mockQueryRun.mock.calls[0][1]).toEqual(expect.arrayContaining(['applying', 7, 100_000]))
   })
 
   it('supports an optional domain filter without scanning ordinary manual analysis tasks', async () => {

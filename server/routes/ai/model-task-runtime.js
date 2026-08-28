@@ -505,15 +505,19 @@ export async function markModelTaskStatusUnknownById(taskId, reason = 'provider_
 // disappeared (for example, the process died immediately after ai_signals
 // committed). The result row is the proof that applying already completed, so
 // finish the envelope without allowing a stale worker to write any new data.
-export async function markModelTaskSucceededFromResult(taskId, { resultRef = null, resultHash = null } = {}) {
-  const now = Date.now()
+// Recovery callers pass an atomic lease/status/fencing guard; manual callers
+// retain the historical unguarded reconciliation semantics.
+export async function markModelTaskSucceededFromResult(taskId,
+  { resultRef = null, resultHash = null } = {}, guard = {}) {
+  const now = Number(guard.nowUtcMs) || Date.now()
+  const where = recoveryWhere({ ...guard, taskId, nowUtcMs:now })
   const result = await queryRun(`UPDATE ai_model_tasks SET status='succeeded',
     result_ref=COALESCE(?, result_ref), result_hash=COALESCE(?, result_hash),
     error_code=NULL, error_message=NULL, completed_at_utc_msc=?,
     lease_token=NULL, lease_owner=NULL, lease_expires_at_utc_msc=NULL,
     last_activity_at_utc_msc=?, updated_at_utc_msc=?
-    WHERE task_id=? AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')`,
-  [resultRef, resultHash, now, now, now, String(taskId)])
+    WHERE ${where.sql} AND status NOT IN ('cancelled','failed_terminal','succeeded','completed_stale','completed_rejected')`,
+  [resultRef, resultHash, now, now, now, ...where.params])
   if (Number(result?.affectedRows ?? result?.changes ?? 0) > 0) {
     await appendModelTaskEvent(String(taskId), 'task_reconciled_from_result', { result_ref:resultRef })
     return true
@@ -602,6 +606,13 @@ export async function recoverAbandonedBusinessModelTasks({
   const now = Number(nowUtcMs) || Date.now()
 
   for (const task of tasks) {
+    const leaseExpiresAt = Number(task.lease_expires_at_utc_msc)
+    const leaseExpired = !Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now
+    if (!leaseExpired) {
+      result.active += 1
+      continue
+    }
+
     let business = null
     try {
       business = typeof inspectBusiness === 'function' ? await inspectBusiness(task) : null
@@ -614,18 +625,15 @@ export async function recoverAbandonedBusinessModelTasks({
     if (business?.succeeded === true) {
       if (await markModelTaskSucceededFromResult(task.task_id, {
         resultRef:business.resultRef || null, resultHash:business.resultHash || null,
+      }, {
+        expectedStatus:String(task.status), fencingToken:Number(task.fencing_token || 0),
+        nowUtcMs:now, requireLeaseExpired:true,
       })) result.succeeded += 1
       continue
     }
 
-    const leaseExpiresAt = Number(task.lease_expires_at_utc_msc)
-    const leaseExpired = !Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now
     const deadlineAt = Number(task.task_deadline_at_utc_msc)
     const deadlineReached = Number.isFinite(deadlineAt) && deadlineAt > 0 && deadlineAt <= now
-    if (!leaseExpired && !deadlineReached) {
-      result.active += 1
-      continue
-    }
 
     const status = String(task.status || '')
     if (status === 'status_unknown') {
@@ -696,17 +704,22 @@ export async function recoverAbandonedAutoInferenceTasks({ nowUtcMs = Date.now()
     ORDER BY updated_at_utc_msc LIMIT ?`, [Math.max(1, Math.min(1000, Number(limit) || 500))])
   const result = { scanned:tasks.length, succeeded:0, statusUnknown:0, stale:0, active:0 }
   for (const task of tasks) {
-    const applied = await queryOne('SELECT id FROM ai_signals WHERE inference_task_id = ? LIMIT 1', [task.task_id])
-    if (applied?.id) {
-      if (await markModelTaskSucceededFromResult(task.task_id, { resultRef:`ai_signals:${applied.id}` })) result.succeeded += 1
-      continue
-    }
-    const leaseExpired = !Number(task.lease_expires_at_utc_msc) || Number(task.lease_expires_at_utc_msc) <= now
-    const deadlineExpired = Number(task.task_deadline_at_utc_msc) > 0 && Number(task.task_deadline_at_utc_msc) <= now
-    if (!leaseExpired && !deadlineExpired) {
+    const leaseExpiresAt = Number(task.lease_expires_at_utc_msc)
+    const leaseExpired = !Number.isFinite(leaseExpiresAt) || leaseExpiresAt <= now
+    if (!leaseExpired) {
       result.active += 1
       continue
     }
+
+    const applied = await queryOne('SELECT id FROM ai_signals WHERE inference_task_id = ? LIMIT 1', [task.task_id])
+    if (applied?.id) {
+      if (await markModelTaskSucceededFromResult(task.task_id, { resultRef:`ai_signals:${applied.id}` }, {
+        expectedStatus:String(task.status), fencingToken:Number(task.fencing_token || 0),
+        nowUtcMs:now, requireLeaseExpired:true,
+      })) result.succeeded += 1
+      continue
+    }
+    const deadlineExpired = Number(task.task_deadline_at_utc_msc) > 0 && Number(task.task_deadline_at_utc_msc) <= now
     if (['submitted','provider_running','provider_quiet'].includes(task.status) && !deadlineExpired) {
       if (await markModelTaskStatusUnknownById(task.task_id, 'auto_inference_provider_status_unknown_after_restart', {
         expectedStatus:String(task.status), fencingToken:Number(task.fencing_token || 0), nowUtcMs:now,
