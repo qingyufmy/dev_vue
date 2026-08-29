@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   withTransaction:vi.fn(),
   getBridgeDataRoute:vi.fn(),
   getBridgeGeneration:vi.fn(() => 7),
+  getOwnBridgeMarketState:vi.fn(() => ({ alive:true, isOpen:true, reason:'market_open' })),
   mt5Bridge:vi.fn(),
   getPlatformRates:vi.fn(),
   evaluatePositionGuard:vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('../../server/db.js', () => ({
 vi.mock('../../server/bridge-ws.js', () => ({
   getBridgeDataRoute:mocks.getBridgeDataRoute,
   getBridgeGeneration:mocks.getBridgeGeneration,
+  getOwnBridgeMarketState:mocks.getOwnBridgeMarketState,
 }))
 vi.mock('../../server/routes/ai/market-data.js', () => ({ mt5Bridge:mocks.mt5Bridge }))
 vi.mock('../../server/routes/ai/platform-market-data.js', () => ({ getPlatformRates:mocks.getPlatformRates }))
@@ -194,6 +196,49 @@ describe('position guard monitor database state compatibility', () => {
     ])
     expect(mocks.withTransaction).not.toHaveBeenCalled()
     expect(mocks.requestPositionManagementWorkerRun).not.toHaveBeenCalled()
+  })
+
+  it('skips a trusted market closure before reading outcomes or inventory', async () => {
+    mocks.getOwnBridgeMarketState.mockReturnValue({
+      alive:true, isOpen:false, reason:'market_closed', tradeMode:0,
+    })
+
+    const result = await runPositionGuardMonitorOnce({
+      now:Date.parse('2026-08-26T00:00:01.000Z'),
+      quoteProvider:vi.fn(),
+    })
+
+    expect(result).toMatchObject({ skipped:false, active:0, evaluated:0, created:0 })
+    expect(mocks.getOwnBridgeMarketState).toHaveBeenCalledWith(account.user_id)
+    expect(mocks.queryAll).not.toHaveBeenCalled()
+    expect(mocks.queryOne).not.toHaveBeenCalled()
+    expect(mocks.mt5Bridge).not.toHaveBeenCalled()
+    expect(mocks.evaluatePositionGuard).not.toHaveBeenCalled()
+    expect(mocks.requestPositionManagementWorkerRun).not.toHaveBeenCalled()
+  })
+
+  it('rechecks a closed account on the slower cadence and resumes when open', async () => {
+    const closedState = { alive:true, isOpen:false, reason:'market_closed', tradeMode:0 }
+    const openState = { alive:true, isOpen:true, reason:'market_open', tradeMode:4 }
+    mocks.getOwnBridgeMarketState.mockReturnValue(closedState)
+    const first = await runPositionGuardMonitorOnce({
+      now:Date.parse('2026-08-26T00:00:01.000Z'), quoteProvider:vi.fn(),
+    })
+    expect(first).toMatchObject({ evaluated:0, created:0 })
+
+    mocks.getOwnBridgeMarketState.mockReturnValue(openState)
+    const beforeRetry = await runPositionGuardMonitorOnce({
+      now:Date.parse('2026-08-26T00:00:30.000Z'), quoteProvider:vi.fn(),
+    })
+    expect(beforeRetry).toMatchObject({ evaluated:0, created:0 })
+    expect(mocks.getOwnBridgeMarketState).toHaveBeenCalledTimes(1)
+
+    const afterRetry = await runPositionGuardMonitorOnce({
+      now:Date.parse('2026-08-26T00:01:01.000Z'), quoteProvider:vi.fn(async () => ({ ok:false })),
+    })
+    expect(afterRetry).toMatchObject({ skipped:false, evaluated:0, created:0 })
+    expect(mocks.getOwnBridgeMarketState).toHaveBeenCalledTimes(2)
+    expect(mocks.queryAll).toHaveBeenCalled()
   })
 
   it('fails closed before reading the database when the deployment gate is off', async () => {

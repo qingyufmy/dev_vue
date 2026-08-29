@@ -12,6 +12,8 @@ vi.mock('../../server/db.js', () => ({
 
 vi.mock('../../server/bridge-ws.js', () => ({
   isBridgeAlive: vi.fn(() => true),
+  getOwnBridgeMarketState: vi.fn(() => ({ alive:true, isOpen:true, reason:'market_open' })),
+  getPlatformMarketClockState: vi.fn(() => ({ timezone_offset_minutes:480 })),
   getOwnBridgeTradeMode: vi.fn(() => 4),
   getBridgeTradeMode: vi.fn(() => 4),
   sendBridgeCommand: vi.fn(),
@@ -98,6 +100,7 @@ import { __schedulerTest, autoSchedulerState, getSubscriptionIndexHealth, getUse
 import * as db from '../../server/db.js'
 import * as marketData from '../../server/routes/ai/market-data.js'
 import * as bridgeWs from '../../server/bridge-ws.js'
+import * as config from '../../server/routes/ai/config.js'
 import * as redis from '../../server/redis.js'
 
 afterEach(() => {
@@ -300,6 +303,34 @@ describe('automatic-analysis control state', () => {
 
     await expect(getUserAutoRuntimeStatus(42)).resolves.toMatchObject({
       enabled:true, running:false, paused_reason:'no_runtime_scheduler', prompt_type_id:7,
+    })
+  })
+
+  it('reports a trusted market closure before a per-key wait reason is written', async () => {
+    db.queryOne
+      .mockResolvedValueOnce({ strategy_id:7, symbols_json:null })
+      .mockResolvedValueOnce({
+        enabled:1, prompt_type_id:7, selected_symbols_json:null, interval_minutes:5,
+      })
+      .mockResolvedValueOnce(null)
+    config.getAutoPromptTypeById.mockReturnValue({
+      id:7, title:'test', scope:'private', owner_user_id:42, symbols_json:'["XAUUSD"]',
+    })
+    bridgeWs.getOwnBridgeMarketState.mockReturnValue({
+      alive:true, isOpen:false, reason:'market_closed', tradeMode:0,
+    })
+    autoSchedulerState['7:XAUUSD'] = {
+      subscribers:new Set([42]), inFlight:false, waitReason:'', lastError:null,
+      lastRunAt:null, lastSignalId:null, stateUpdatedAtUtc:'', scheduleMode:'',
+      scheduleIntervalMinutes:5, intervalMinutes:5, nextRunAtUtc:'',
+      nextRunAtTerminal:'', currentSlotId:'', slotStartLagMs:0,
+      lastSkippedSlotId:'', lastSkippedSlotReason:'', skippedSlotCount:0,
+      terminalClockStatus:'', terminalClockSource:'', terminalTimezoneOffsetMinutes:null,
+    }
+
+    await expect(getUserAutoRuntimeStatus(42)).resolves.toMatchObject({
+      enabled:true, running:false, paused_reason:'market_closed',
+      market_state:{ alive:true, isOpen:false, reason:'market_closed' },
     })
   })
 })

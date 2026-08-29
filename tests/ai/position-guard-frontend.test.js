@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 const css = readFileSync(new URL('../../public/ai/styles.css', import.meta.url), 'utf8')
+const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.meta.url), 'utf8')
 
 function functionBody(source, name) {
   const start = source.indexOf(`function ${name}`)
@@ -22,6 +23,8 @@ describe('PivotGuard position management frontend contract', () => {
     expect(app).toContain('自动盯盘 运行中')
     expect(app).toContain('自动盯盘 已暂停')
     expect(app).toContain('自动盯盘 不可用')
+    expect(app).toContain('settings?.market_state?.reason')
+    expect(app).toContain('市场休市，自动盯盘已暂停')
     expect(css).toContain('.position-guard-control[hidden] { display:none !important; }')
     expect(html).toContain('position-guard-visibility2')
   })
@@ -124,5 +127,18 @@ describe('PivotGuard position management frontend contract', () => {
     expect(css).toContain('.position-guard-switch input:focus-visible')
     expect(css).toContain('.position-guard-parameter-grid')
     expect(css).toContain('@media (max-width: 760px)')
+  })
+
+  it('falls back to the authoritative market closure in degraded status responses', () => {
+    expect(app).toContain('s.market_state?.reason')
+    expect(app).toContain("const marketClosedFallback = s.market_state?.alive === true && marketStateReason === 'market_closed'")
+    expect(app).toContain("const pauseReason = 'market_closed'")
+    expect(app).toContain('const liveTradeMode = Number(state.marketTradeMode)')
+    expect(app).toContain('liveTradeMode === 0')
+    expect(app).toContain('syncMarketDependentRuntimeStatus(previousTradeMode, tradeMode)')
+    expect(app).toContain('refreshPositionGuardState({ quiet:true, includeAdmin:false })')
+    expect(routes).toContain('getOwnBridgeMarketState')
+    expect(routes).toContain("reason = '市场休市，自动盯盘已暂停'")
+    expect(routes).toContain('market_state:marketState')
   })
 })

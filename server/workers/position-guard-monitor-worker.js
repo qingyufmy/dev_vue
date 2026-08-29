@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { beijingNow, parseBeijing, queryAll, queryOne, queryRun, withTransaction } from '../db.js'
-import { getBridgeDataRoute, getBridgeGeneration } from '../bridge-ws.js'
+import { getBridgeDataRoute, getBridgeGeneration, getOwnBridgeMarketState } from '../bridge-ws.js'
 import { mt5Bridge } from '../routes/ai/market-data.js'
 import { getPlatformRates } from '../routes/ai/platform-market-data.js'
 import { evaluatePositionGuard } from '../routes/ai/position-guard-engine.js'
@@ -416,6 +416,23 @@ async function createActionTask({ account, route, outcome, target, state, profil
 
 async function processAccount(account, dependencies) {
   const { bridge, rates, quoteProvider } = dependencies
+  // A fresh, explicit market closure is a normal pause for this account. Do
+  // this check before loading eligible outcomes or inventory so a closed
+  // market cannot cause evaluation or create a management action. Unknown,
+  // stale, and offline states deliberately continue through the existing
+  // fail-closed paths below.
+  const marketState = getOwnBridgeMarketState(account.user_id)
+  if (marketState?.alive === true
+    && String(marketState.reason || '').toLowerCase() === 'market_closed') {
+    return {
+      active:false,
+      interval:OFFLINE_INTERVAL_MS,
+      reason:'market_closed',
+      market_state:marketState,
+      evaluated:0,
+      created:0,
+    }
+  }
   const route = getBridgeDataRoute(account.user_id, account.trading_account_id, { strictAccount:true })
   if (!route || Number(route.connection_epoch) <= 0) {
     return { active:false, interval:OFFLINE_INTERVAL_MS, reason:'bridge_offline', evaluated:0, created:0 }
@@ -518,6 +535,7 @@ export async function runPositionGuardMonitorOnce({
   let activeAccounts = 0
   let evaluated = 0
   let created = 0
+  let marketClosed = false
   try {
     const control = await getPositionGuardGlobalControl()
     if (!control.enabled) {
@@ -536,6 +554,7 @@ export async function runPositionGuardMonitorOnce({
       try {
         const result = await processAccount(account, { bridge, rates, quoteProvider })
         if (result.active) activeAccounts += 1
+        if (result.reason === 'market_closed') marketClosed = true
         evaluated += result.evaluated
         created += result.created
         accountNextCheck.set(key, Number(now) + result.interval)
@@ -548,7 +567,7 @@ export async function runPositionGuardMonitorOnce({
     runtimeStatus.active_accounts = activeAccounts
     runtimeStatus.evaluated_positions += evaluated
     runtimeStatus.created_tasks += created
-    runtimeStatus.last_skip_reason = null
+    runtimeStatus.last_skip_reason = marketClosed ? 'market_closed' : null
     return { skipped:false, enabled:accounts.length, active:activeAccounts, evaluated, created }
   } finally {
     wakeQueued = false

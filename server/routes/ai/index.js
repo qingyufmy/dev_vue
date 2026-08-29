@@ -14,7 +14,7 @@ import { handleAnalyze, handleAnalyzeCompare, startHistoryCompareJob, getHistory
   cancelHistoryCompareJob, listHistoryCompareJobs, deleteHistoryCompareJob,
   buildStrategyContextFromTags, startHistoryCompareRecoveryWorker } from './strategy.js'
 import { initAutoSchedulers, startAutoScheduler, stopAutoScheduler, isAutoSchedulerRunning, reconcileAutoSchedulers, getUserAutoRuntimeStatus, removeUserRuntimeAutoSubscription } from './scheduler.js'
-import { applyBridgeRuntimeState, getBridgeDiagnostics, getBridgePerformanceSummary, isBridgeAlive,
+import { applyBridgeRuntimeState, getBridgeDiagnostics, getBridgePerformanceSummary, getOwnBridgeMarketState, isBridgeAlive,
   getBridgeDataRoute, getBridgeGeneration, queueRiskSnapshotRecovery, sendToBrowsers } from '../../bridge-ws.js'
 import { createAiAccessMiddleware } from './observer-access.js'
 import { createObserverChannel, createObserverSource, deleteObserverChannel, deleteObserverSource,
@@ -1006,6 +1006,16 @@ async function positionGuardUserStatus(userId, tradingAccountId) {
   const profiledRows = eligibleRows.filter(row => activeSymbols.has(
     stripBrokerSuffix(String(row.original_symbol || row.symbol || '')).toUpperCase()))
   const bridgeOnline = isBridgeAlive(Number(userId))
+  const marketSymbol = profiledRows[0]?.original_symbol
+    || [...activeSymbols][0]
+    || null
+  // This status is read-only and must use the bridge's own fresh market-state
+  // evidence.  Do not infer a closure from the local weekday, a stale quote,
+  // or the absence of an inventory response.
+  const marketState = getOwnBridgeMarketState(Number(userId), marketSymbol)
+  const marketClosed = bridgeOnline
+    && marketState?.alive === true
+    && String(marketState.reason || '').toLowerCase() === 'market_closed'
   let bridgeDataReady = bridgeOnline && profiledRows.length === 0
   let qualifiedCount = 0
   if (bridgeOnline && profiledRows.length > 0) {
@@ -1024,7 +1034,10 @@ async function positionGuardUserStatus(userId, tradingAccountId) {
   }
   let runtimeStatus = 'disabled'
   let reason = '当前账号默认关闭'
-  if (setting.enabled && !control.enabled) {
+  if (setting.enabled && marketClosed) {
+    runtimeStatus = 'paused'
+    reason = '市场休市，自动盯盘已暂停'
+  } else if (setting.enabled && !control.enabled) {
     runtimeStatus = 'paused'
     reason = '平台自动盯盘总闸已关闭'
   } else if (setting.enabled && !bridgeOnline) {
@@ -1044,6 +1057,7 @@ async function positionGuardUserStatus(userId, tradingAccountId) {
     platform_enabled:control.enabled,
     bridge_connected:bridgeOnline,
     qualified_position_count:qualifiedCount,
+    market_state:marketState,
   }
 }
 

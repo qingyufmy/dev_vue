@@ -1638,6 +1638,8 @@ function renderAutoAnalyzeBadge(s) {
   const ptName = s.prompt_type_name || '';
   const symbols = s.selected_symbols || [];
   const symbolsStr = symbols.join('、') || '未选择品种';
+  const marketStateReason = String(s.market_state?.reason || '').toLowerCase();
+  const marketClosedFallback = s.market_state?.alive === true && marketStateReason === 'market_closed';
 
   // Calculate remaining time from the server's seconds and receipt timestamp;
   // fall back to the absolute UTC deadline for older/degraded responses.
@@ -1683,6 +1685,16 @@ function renderAutoAnalyzeBadge(s) {
       progress_seq: 0, started_at: s.cycle_started_at || '',
     }], ptName);
     return;
+  } else if (marketClosedFallback) {
+    const pauseReason = 'market_closed';
+    const presentation = marketPausePresentation(pauseReason);
+    label = presentation.label;
+    type = presentation.type;
+    const msState = s.market_state || {};
+    title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：${presentation.status}`;
+    title += `\n市场状态：${autoReasonText(msState.reason || pauseReason)}`;
+    if (msState.tickAgeMs) title += `\n行情延迟：${msState.tickAgeMs}毫秒`;
+    if (msState.mt5TimeStr) title += `\n桥接行情时间：${msState.mt5TimeStr}`;
   } else if (['model_task_status_unknown', 'model_task_active', 'model_task_completion_unknown', 'model_task_gate_failed', 'deployment_draining', 'deployment_drain_check_failed', 'terminal_clock_unverified', 'schedule_market_not_ready'].includes(String(s.wait_reason || s.paused_reason || ''))) {
     const reason = String(s.wait_reason || s.paused_reason || '')
     const safeStatus = autoReasonText(reason)
@@ -1699,12 +1711,13 @@ function renderAutoAnalyzeBadge(s) {
       : '为避免重复请求，系统不会在恢复确认前重新发起分析'
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：${safeStatus}${countdown}\n${safetyNote}`
   } else if (s.paused_reason && marketPausePresentation(s.paused_reason)) {
-    const presentation = marketPausePresentation(s.paused_reason);
+    const pauseReason = s.paused_reason;
+    const presentation = marketPausePresentation(pauseReason);
     label = presentation.label;
     type = presentation.type;
     const msState = s.market_state || {};
     title = `策略：${ptName || '未选择'}\n品种：${symbolsStr}\n状态：${presentation.status}`;
-    title += `\n市场状态：${autoReasonText(msState.reason || s.paused_reason)}`;
+    title += `\n市场状态：${autoReasonText(msState.reason || pauseReason)}`;
     if (msState.tickAgeMs) title += `\n行情延迟：${msState.tickAgeMs}毫秒`;
     if (msState.mt5TimeStr) title += `\n桥接行情时间：${msState.mt5TimeStr}`;
   } else if (remaining !== null && remaining > 0) {
@@ -3987,12 +4000,33 @@ function connectBridgeStatusWs(onReady) {
   ws.onerror = () => { _fireReady(); };
 }
 
+function syncMarketDependentRuntimeStatus(previousTradeMode, nextTradeMode) {
+  const previous = Number(previousTradeMode);
+  const next = Number(nextTradeMode);
+  const previousKnown = Number.isInteger(previous) && previous >= 0 && previous <= 4;
+  const nextKnown = Number.isInteger(next) && next >= 0 && next <= 4;
+
+  // The live bridge market mode is fresher than the last settings response.
+  // Render a confirmed closure immediately; preserve the enabled preference so
+  // the worker can resume after the market opens again.
+  if (nextKnown && next === 0) renderPositionGuardBadge(state.positionGuardSettings);
+
+  const crossedClosedBoundary = previousKnown && nextKnown && ((previous === 0) !== (next === 0));
+  if (crossedClosedBoundary && state.token && state.positionGuardFeatureEnabled !== false) {
+    refreshPositionGuardState({ quiet:true, includeAdmin:false }).catch(() => {});
+  }
+}
+
 // Market status display helper
 function updateMarketStatus(tradeMode) {
+  const previousTradeMode = state.marketTradeMode;
+  state.marketTradeMode = tradeMode;
   const dot = document.getElementById('marketStatusDot');
   const text = document.getElementById('marketStatusText');
-  if (!dot || !text) return;
-  state.marketTradeMode = tradeMode;
+  if (!dot || !text) {
+    syncMarketDependentRuntimeStatus(previousTradeMode, tradeMode);
+    return;
+  }
   if (tradeMode === -2) {
     dot.className = 'market-dot market-dot-closeonly';
     text.className = 'market-status-text market-status-text-closeonly';
@@ -4000,6 +4034,7 @@ function updateMarketStatus(tradeMode) {
     setBadge('marketStatus', '行情停滞', 'warning');
     const b = document.getElementById('marketStatus');
     if (b) b.title = `市场状态：${bridgePlatformLabel()} 报价暂未更新，系统不会按开市处理`;
+    syncMarketDependentRuntimeStatus(previousTradeMode, tradeMode);
     return;
   }
   if (tradeMode < 0) {
@@ -4009,6 +4044,7 @@ function updateMarketStatus(tradeMode) {
     setBadge('marketStatus', '检测中', 'neutral');
     const b = document.getElementById('marketStatus');
     if (b) b.title = '市场状态：正在检测市场状态';
+    syncMarketDependentRuntimeStatus(previousTradeMode, tradeMode);
     return;
   }
   const map = {
@@ -4025,6 +4061,7 @@ function updateMarketStatus(tradeMode) {
   setBadge('marketStatus', label, badgeType);
   const badge = document.getElementById('marketStatus');
   if (badge) badge.title = '\u5E02\u573A\u72B6\u6001\uFF1A' + tip;
+  syncMarketDependentRuntimeStatus(previousTradeMode, tradeMode);
 }
 
 function updateMarketStatusFromQuote(quote) {
@@ -17697,11 +17734,23 @@ function positionGuardStatusPresentation(settings = state.positionGuardSettings)
   const account = activeTradingAccount();
   const rawStatus = String(settings?.status || "").toLowerCase();
   const enabled = settings?.enabled === true;
+  const liveTradeMode = Number(state.marketTradeMode);
+  const liveTradeModeKnown = Number.isInteger(liveTradeMode) && liveTradeMode >= 0 && liveTradeMode <= 4;
+  const marketClosed = liveTradeModeKnown
+    ? liveTradeMode === 0
+    : settings?.market_state?.alive === true
+      && String(settings?.market_state?.reason || "").toLowerCase() === "market_closed";
   if (isObserverMode() || !account || !settings || settings.error || ["unavailable", "not_configured", "no_profile", "forbidden"].includes(rawStatus)) {
     return { key:"unavailable", label:"自动盯盘 不可用", tone:"neutral", reason:settings?.reason || (isObserverMode() ? "当前为观摩模式，只读" : !account ? "没有有效交易账号" : "当前配置或权限不可用") };
   }
   if (!enabled || ["disabled", "closed", "off"].includes(rawStatus)) {
     return { key:"disabled", label:"自动盯盘 关闭", tone:"neutral", reason:"当前账号未开启自动盯盘" };
+  }
+  // Older/degraded responses may report a running status while still
+  // carrying the bridge's authoritative market state. A confirmed closure
+  // must win over that stale status, while the enabled switch remains on.
+  if (marketClosed) {
+    return { key:"paused", label:"自动盯盘 已暂停", tone:"warning", reason:"市场休市，自动盯盘已暂停" };
   }
   if (["paused", "blocked", "offline", "stopped"].includes(rawStatus) || settings.platform_enabled === false) {
     return { key:"paused", label:"自动盯盘 已暂停", tone:"warning", reason:settings.reason || "运行前置条件暂未满足" };

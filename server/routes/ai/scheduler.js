@@ -619,6 +619,14 @@ function summarizeRuntimeMarketStates(states = []) {
   }
 }
 
+// `getOwnBridgeMarketState` is the only source of market state accepted by
+// the runtime badge.  It already applies the bridge freshness rules; keep the
+// status projection limited to the explicit closed state so a stale/unknown
+// snapshot cannot be presented as a confirmed market closure.
+function isTrustedMarketClosedState(state) {
+  return state?.alive === true && String(state.reason || '').toLowerCase() === 'market_closed'
+}
+
 // === Permission gate: can user execute auto trades (cancel/submit) ===
 async function isUserEligibleForAutoExecution(userId) {
   if (!isBridgeAlive(userId)) return false
@@ -1676,7 +1684,14 @@ export async function getUserAutoRuntimeStatus(userId) {
       && activeSubscription.outside_window_behavior !== 'signals_only') pausedReason = 'outside_schedule'
   }
   if (!pausedReason) {
-    if (activeKeys.length === 0) {
+    // A fresh bridge market-state result is authoritative even when the
+    // per-symbol scheduler has not written its waitReason yet (for example
+    // immediately after a restart).  Keep this ahead of the runtime-key
+    // fallback so a closed market is not shown as an active countdown or a
+    // generic scheduler-sync pause.
+    if (isTrustedMarketClosedState(marketState)) {
+      pausedReason = 'market_closed'
+    } else if (activeKeys.length === 0) {
       const userBridgeAlive = isBridgeAlive(userId)
       pausedReason = userBridgeAlive ? 'no_runtime_scheduler' : 'user_bridge_offline'
     } else if (!marketBridgeOnline) {
@@ -5099,6 +5114,7 @@ export const __schedulerTest = {
   assertAutoInferenceOrderSendTx,
   schedulerUpdateMaintenanceReason,
   isMarketWaitReason,
+  isTrustedMarketClosedState,
   summarizeRuntimeMarketStates,
   getPeriodicRuntime: () => ({
     autoReconcilerInFlight:Boolean(_reconcileInFlight),
