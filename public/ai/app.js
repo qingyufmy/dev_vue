@@ -515,7 +515,11 @@ function standardMarketSymbol(symbol) {
 }
 
 function setGlobalSymbol(symbol, options = {}) {
+  const previousSymbol = getGlobalSymbol();
   localStorage.setItem(SYMBOL_STORAGE_KEY, symbol);
+  if (String(previousSymbol || '').trim().toUpperCase() !== String(symbol || '').trim().toUpperCase()) {
+    invalidateKlineRequestContext();
+  }
   state.platformMarketSourceActive = false;
   state.lastObserverQuote = null;
   for (const id of _symSelectors) {
@@ -2404,6 +2408,7 @@ function syncAiAccess(access) {
   document.body.dataset.aiAccessReason = access.reason || "full";
   const changed = Boolean(previousMode) && (previousMode !== access.mode || previousReason !== access.reason);
   const personalBridgeRestored = previousMode === "observer" && access.mode !== "observer";
+  if (changed) invalidateKlineRequestContext();
   if (!isObserverMode()) {
     state.observerChannels = [];
     state.selectedObserverChannelId = null;
@@ -2613,6 +2618,7 @@ function setHistoryAccountIdentity(identity) {
   const nextKey = historyStableAccountKey(next);
   if (previousKey !== nextKey) cancelHistoryLegacySummaryRetry();
   if (previousKey && nextKey && previousKey !== nextKey) {
+    invalidateKlineRequestContext();
     cancelHistoryPrepareRetry();
     _historyQueryGeneration += 1;
     state.historyQueryGeneration = _historyQueryGeneration;
@@ -2781,6 +2787,7 @@ function stopRealtimeSync() {
 }
 
 function clearAccountContextCaches() {
+  invalidateKlineRequestContext();
   _ticketMapContextGeneration += 1;
   const abandonedTicketRefreshResolve = _signalTicketRefreshResolve;
   if (_signalTicketRefreshTimer) {
@@ -3664,6 +3671,7 @@ function scheduleHistoryFreshnessRetry(data, query = _historyQueryState) {
 
 async function handleBridgeReconnected(msg = {}) {
   if (msg.platform) updateBridgePlatformUI(msg.platform);
+  invalidateKlineRequestContext();
   // A transport reconnect with the same terminal/account identity does not
   // invalidate history cursors or account-scoped caches.  Refresh only the
   // lightweight live state needed to paint the recovered connection.
@@ -3673,6 +3681,7 @@ async function handleBridgeReconnected(msg = {}) {
     loadStatus(), loadAccount(), loadPositions(), loadPendingOrders(), refreshQuote(),
   ]);
   await refreshPositionGuardState({ quiet:true, includeAdmin:true });
+  if (activeTabId() === 'dashboard') loadKlineData().catch(() => {});
 }
 
 async function handleAccountTransferred(msg = {}) {
@@ -4519,6 +4528,7 @@ function handleHeartbeat(msg) {
 
 // Handle bridge disconnect notification
 function handleDisconnect(msg) {
+  invalidateKlineRequestContext();
   renderGatewayConnectionBadge(false, false);
   setBadge("tradeMode", "请先启动桥接", "neutral");
   // Bridge connectivity pauses the runtime subscription but does not change
@@ -10870,8 +10880,15 @@ let _klineTimeframe = 'M5';
 let _klineLastBar = null;
 let _klineCandles = [];
 let _klineDataKey = '';
+let _klineDataContextKey = '';
 let _klineRequestVersion = 0;
 let _klineDataAvailable = false;
+let _klineFullRefreshFlight = null;
+let _klineFullRefreshContextKey = '';
+let _klineTailRefreshFlight = null;
+let _klineTailRefreshContextKey = '';
+let _klineVolumeByTime = new Map();
+let _klineSourceMeta = null;
 let _klinePositionSeries = [];
 let _klinePositionTooltip = null;
 const KLINE_POSITION_ENTRY_BUY_COLOR = '#ef4444';
@@ -10882,6 +10899,35 @@ let _klineMutationObserver = null;
 let _klineResizeObserver = null;
 let _klineDeferredObserver = null;
 let _klineVisibleRangeSyncing = false;
+const KLINE_FULL_COUNT = 200;
+const KLINE_TAIL_COUNT = 3;
+const KLINE_MAX_CANDLES = 200;
+
+function selectedKlineSymbol() {
+  return $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
+}
+
+function klineTimeframeSeconds(timeframe = _klineTimeframe) {
+  return { M1:60, M5:300, M15:900, M30:1800, H1:3600, H4:14400, D1:86400 }[
+    String(timeframe || '').trim().toUpperCase()
+  ] || 300;
+}
+
+function klineContextKey(symbol = selectedKlineSymbol(), timeframe = _klineTimeframe) {
+  return JSON.stringify({
+    request_key:klineRequestKey(symbol, timeframe),
+    account_context_generation:Number(state._accountContextGeneration || 0),
+    observer_mode:isObserverMode(),
+    observer_channel_id:isObserverMode() ? Number(state.selectedObserverChannelId || 0) || null : null,
+  });
+}
+
+// A context transition invalidates every in-flight full or tail response. The
+// caller that changed the context is responsible for starting the authoritative
+// full load; an old response must never repaint the next account/source.
+function invalidateKlineRequestContext() {
+  _klineRequestVersion += 1;
+}
 
 function mt5BrokerTimeSeconds(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -10960,6 +11006,9 @@ function clearKlineData(status = '暂无行情', key = null) {
   _klineDataAvailable = false;
   _klineCandles = [];
   _klineLastBar = null;
+  _klineVolumeByTime = new Map();
+  _klineSourceMeta = null;
+  _klineDataContextKey = '';
   if (key != null) _klineDataKey = key;
   clearKlinePositionEntries();
   try { _klineSeries?.setData([]); } catch { /* chart may not be ready */ }
@@ -11319,81 +11368,352 @@ function _createKlineChart(container) {
   });
 }
 
+function klineSourceMetaKey(meta = {}) {
+  const sourceKey = String(meta.source_key || '').trim().toLowerCase();
+  const sourceId = Number(meta.source_id);
+  const platform = String(meta.platform || '').trim().toLowerCase();
+  const brokerServer = String(meta.broker_server || '').trim().toLowerCase();
+  const accountLogin = String(meta.account_login || '').trim();
+  const offset = Number(meta.timezone_offset_minutes);
+  const identityFieldsPresent = sourceKey || (Number.isSafeInteger(sourceId) && sourceId > 0)
+    || platform || brokerServer || accountLogin;
+  if (!identityFieldsPresent) {
+    const sourceLabel = String(meta.source || '').trim().toLowerCase();
+    return sourceLabel ? `label:${sourceLabel}` : '';
+  }
+  return JSON.stringify({
+    sourceKey:sourceKey || null,
+    sourceId:Number.isSafeInteger(sourceId) && sourceId > 0 ? sourceId : null,
+    platform:platform || null,
+    brokerServer:brokerServer || null,
+    accountLogin:accountLogin || null,
+    timezoneOffset:Number.isInteger(offset) ? offset : null,
+  });
+}
+
+function klineSymbolIdentity(value) {
+  return klineSymbolKey(value).replace(/\.(a|s|c|pro|std|z|ecn|m|raw|mini)$/i, '');
+}
+
+function klineResponseSymbolMatches(data, symbol, meta = {}) {
+  const responseSymbol = String(data?.symbol || meta.broker_symbol || '').trim();
+  return !responseSymbol || klineSymbolIdentity(responseSymbol) === klineSymbolIdentity(symbol);
+}
+
+function klineRateTimeSeconds(row = {}) {
+  const brokerTime = mt5BrokerTimeSeconds(row.time);
+  if (brokerTime != null) return brokerTime;
+  const numericTime = Number(row.time);
+  if (Number.isFinite(numericTime) && numericTime > 0) {
+    return Math.floor(numericTime > 1e12 ? numericTime / 1000 : numericTime);
+  }
+  for (const field of ['time_server_msc', 'time_msc', 'time_utc_msc']) {
+    const value = Number(row[field]);
+    if (Number.isFinite(value) && value > 0) return Math.floor(value > 1e12 ? value / 1000 : value);
+  }
+  return null;
+}
+
+function klineVolumeValue(row = {}) {
+  const volume = Number(row.tick_volume ?? row.volume ?? 0);
+  return Number.isFinite(volume) && volume >= 0 ? volume : null;
+}
+
+function normalizeKlineRateRows(data, { strictOrder = false, maxCount = null } = {}) {
+  if (!Array.isArray(data?.rates) || !data.rates.length) return { ok:false, reason:'rates_empty' };
+  if (Number.isInteger(maxCount) && data.rates.length > maxCount) return { ok:false, reason:'rates_count_exceeded' };
+  const rows = [];
+  const seen = new Set();
+  let previousTime = null;
+  for (const row of data.rates) {
+    const time = klineRateTimeSeconds(row);
+    const open = Number(row?.open);
+    const high = Number(row?.high);
+    const low = Number(row?.low);
+    const close = Number(row?.close);
+    if (!Number.isSafeInteger(time) || time <= 0
+      || ![open, high, low, close].every(Number.isFinite)
+      || open <= 0 || high <= 0 || low <= 0 || close <= 0
+      || high < Math.max(open, close) || low > Math.min(open, close)
+      || klineVolumeValue(row) == null) {
+      return { ok:false, reason:'rates_invalid_ohlc_or_time' };
+    }
+    if (seen.has(time)) return { ok:false, reason:'rates_duplicate_open_time' };
+    if (strictOrder && previousTime != null && time <= previousTime) {
+      return { ok:false, reason:'rates_out_of_order' };
+    }
+    seen.add(time);
+    previousTime = time;
+    rows.push({
+      row,
+      candle:{ time, open, high, low, close },
+      volume:klineVolumeValue(row),
+    });
+  }
+  if (!strictOrder) rows.sort((left, right) => left.candle.time - right.candle.time);
+  return { ok:true, rows };
+}
+
+function klineClosureBoundaryMs(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return null;
+  return number > 1e12 ? number : number * 1000;
+}
+
+function klineExpectedClosureCoversGap(previousTime, nextTime, timeframe, meta = {}) {
+  const intervalMs = klineTimeframeSeconds(timeframe) * 1000;
+  const missingStart = previousTime * 1000 + intervalMs;
+  const missingEnd = nextTime * 1000;
+  const observedGapMs = (nextTime - previousTime) * 1000;
+  const closures = [
+    ...(Array.isArray(meta.expected_closures) ? meta.expected_closures : []),
+    ...(Array.isArray(meta.audit_expected_closures) ? meta.audit_expected_closures : []),
+  ];
+  return closures.some(closure => {
+    const start = klineClosureBoundaryMs(closure?.from_utc_msc ?? closure?.start_utc_msc
+      ?? closure?.closure_start_utc_msc ?? closure?.start);
+    const end = klineClosureBoundaryMs(closure?.to_utc_msc ?? closure?.end_utc_msc
+      ?? closure?.closure_end_utc_msc ?? closure?.end);
+    const closureGapMs = Number(closure?.gap_ms);
+    // Candle timestamps intentionally stay in terminal/broker wall time while
+    // continuity evidence is UTC. Their absolute values may differ by the
+    // broker offset, but the elapsed gap is identical.
+    return (start != null && end != null && start <= missingStart && end >= missingEnd)
+      || (Number.isFinite(closureGapMs) && Math.abs(closureGapMs - observedGapMs) < intervalMs);
+  });
+}
+
+function klineTailContinuityValid(existingCandles, incomingRows, timeframe, meta = {}) {
+  const interval = klineTimeframeSeconds(timeframe);
+  const currentLastTime = Number(existingCandles.at(-1)?.time);
+  const incomingTimes = incomingRows.map(item => item.candle.time);
+  if (!incomingTimes.length) return false;
+  if (Number.isFinite(currentLastTime) && incomingTimes.at(-1) < currentLastTime) return false;
+  const local = new Map(existingCandles.slice(-KLINE_TAIL_COUNT).map(candle => [Number(candle.time), candle]));
+  incomingRows.forEach(item => local.set(item.candle.time, item.candle));
+  const times = [...local.keys()].sort((left, right) => left - right);
+  for (let index = 1; index < times.length; index += 1) {
+    const previous = times[index - 1];
+    const next = times[index];
+    if (next - previous === interval) continue;
+    if (next - previous < interval || !klineExpectedClosureCoversGap(previous, next, timeframe, meta)) return false;
+  }
+  return true;
+}
+
+function klineCandleChanged(left, right) {
+  return !left || !right || left.time !== right.time
+    || left.open !== right.open || left.high !== right.high
+    || left.low !== right.low || left.close !== right.close;
+}
+
+function applyKlineSourceMeta(meta = {}, symbol) {
+  const sourceBadge = $('klineDataSource');
+  const platform = String(meta.source || '').startsWith('platform_');
+  state.platformMarketSourceActive = platform;
+  if (!sourceBadge) return;
+  const offset = Number.isFinite(Number(meta.timezone_offset_minutes))
+    ? `UTC${Number(meta.timezone_offset_minutes) >= 0 ? '+' : ''}${Number(meta.timezone_offset_minutes) / 60}` : '时区待校验';
+  sourceBadge.textContent = `${platform ? '平台行情' : '本人行情'} · ${offset}`;
+  sourceBadge.classList.toggle('is-platform', platform);
+  sourceBadge.classList.toggle('is-fallback', !platform);
+  sourceBadge.title = `品种：${meta.broker_symbol || symbol}；时钟：${meta.clock_status || 'unknown'}；当前 K 线实时获取，不写入缓存`;
+  sourceBadge.dataset.state = 'ready';
+}
+
+function klineSourceMetaCompatible(previousMeta, nextMeta) {
+  return klineSourceMetaKey(previousMeta) === klineSourceMetaKey(nextMeta);
+}
+
+function mergeKlineTailRows(existingCandles, incomingRows) {
+  const byTime = new Map(existingCandles.map(candle => [Number(candle.time), {
+    candle:{ ...candle },
+    volume:_klineVolumeByTime.get(Number(candle.time)) || 0,
+  }]));
+  for (const item of incomingRows) {
+    byTime.set(item.candle.time, { candle:{ ...item.candle }, volume:item.volume });
+  }
+  const entries = [...byTime.values()].sort((left, right) => left.candle.time - right.candle.time);
+  return entries.slice(-KLINE_MAX_CANDLES);
+}
+
 async function loadKlineData() {
   if (document.hidden || activeTabId() !== 'dashboard') return;
   if (!_klineSeries) return; // Chart not initialized yet (e.g. admin on dashboard tab)
-  const symbol = $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD";
-  const timeframe = _klineTimeframe;
-  const requestVersion = ++_klineRequestVersion;
-  const requestKey = klineRequestKey(symbol, timeframe);
-  const preserveVisibleRange = _klineDataAvailable && _klineDataKey === requestKey;
-  const isCurrentRequest = () => requestVersion === _klineRequestVersion
-    && requestKey === klineRequestKey(
-      $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD",
-      _klineTimeframe,
-    );
-  if (_klineDataKey !== requestKey) clearKlineData('暂无行情', requestKey);
-  try {
-    const data = await wsApi('rates', { symbol, timeframe, count: 200 });
-    if (!isCurrentRequest()) return;
-    if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) {
-      clearKlineData(data?.status === 'success' ? '暂无行情' : '读取失败', requestKey);
-      return;
-    }
-    const sourceBadge = $('klineDataSource');
-    if (sourceBadge) {
-      const meta = data.market_meta || {};
-      const offset = Number.isFinite(Number(meta.timezone_offset_minutes))
-        ? `UTC${Number(meta.timezone_offset_minutes) >= 0 ? '+' : ''}${Number(meta.timezone_offset_minutes) / 60}` : '时区待校验';
-      const platform = String(meta.source || '').startsWith('platform_');
-      state.platformMarketSourceActive = platform;
-      sourceBadge.textContent = `${platform ? '平台行情' : '本人行情'} · ${offset}`;
-      sourceBadge.classList.toggle('is-platform', platform);
-      sourceBadge.classList.toggle('is-fallback', !platform);
-      sourceBadge.title = `品种：${meta.broker_symbol || symbol}；时钟：${meta.clock_status || 'unknown'}；当前 K 线实时获取，不写入缓存`;
-    }
-
-    const cleanRows = new Map();
-    for (const row of data.rates) {
-      const time = mt5BrokerTimeSeconds(row?.time);
-      const open = Number(row?.open), high = Number(row?.high), low = Number(row?.low), close = Number(row?.close);
-      if (!Number.isFinite(time) || ![open, high, low, close].every(Number.isFinite)) continue;
-      if (open <= 0 || high <= 0 || low <= 0 || close <= 0 || high < low) continue;
-      cleanRows.set(time, { row, candle: { time, open, high, low, close } });
-    }
-    const normalized = [...cleanRows.values()].sort((a, b) => a.candle.time - b.candle.time);
-    const candles = normalized.map(item => item.candle);
-    if (!candles.length) {
+  const currentContextKey = klineContextKey(selectedKlineSymbol(), _klineTimeframe);
+  if (_klineFullRefreshFlight && _klineFullRefreshContextKey === currentContextKey) return _klineFullRefreshFlight;
+  const flight = (async () => {
+    const symbol = selectedKlineSymbol();
+    const timeframe = _klineTimeframe;
+    const requestVersion = ++_klineRequestVersion;
+    const requestKey = klineRequestKey(symbol, timeframe);
+    const requestContextKey = klineContextKey(symbol, timeframe);
+    const preserveVisibleRange = _klineDataAvailable && _klineDataKey === requestKey
+      && _klineDataContextKey === requestContextKey;
+    const isCurrentRequest = () => requestVersion === _klineRequestVersion
+      && requestContextKey === klineContextKey(selectedKlineSymbol(), _klineTimeframe);
+    if (_klineDataKey !== requestKey || _klineDataContextKey !== requestContextKey) {
       clearKlineData('暂无行情', requestKey);
-      return;
+      _klineDataContextKey = requestContextKey;
     }
-    const volumes = normalized.map(({ row, candle }) => ({
-      time: candle.time,
-      value: Math.max(0, Number(row.tick_volume || row.volume || 0) || 0),
-      color: candle.close >= candle.open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
-    }));
+    try {
+      const data = await wsApi('rates', { symbol, timeframe, count: KLINE_FULL_COUNT });
+      if (!isCurrentRequest()) return;
+      if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) {
+        clearKlineData(data?.status === 'success' ? '暂无行情' : '读取失败', requestKey);
+        return;
+      }
+      const meta = data.market_meta && typeof data.market_meta === 'object' ? data.market_meta : {};
+      if (!klineResponseSymbolMatches(data, symbol, meta)) {
+        clearKlineData('读取失败', requestKey);
+        return;
+      }
+      const normalized = normalizeKlineRateRows(data);
+      if (!normalized.ok) {
+        clearKlineData('读取失败', requestKey);
+        return;
+      }
+      // Keep the frontend window bounded even if a compatible server returns
+      // more than the requested count during a rolling/full response race.
+      const fullRows = normalized.rows.slice(-KLINE_MAX_CANDLES);
+      const candles = fullRows.map(item => item.candle);
+      const volumes = fullRows.map(({ candle, volume }) => ({
+        time:candle.time,
+        value:volume,
+        color:candle.close >= candle.open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
+      }));
 
-    const previousRange = preserveVisibleRange ? getKlineVisibleLogicalRange() : null;
-    _klineSeries.setData(candles);
-    _klineVolumeSeries.setData(volumes);
-    _klineCandles = candles;
-    _klineLastBar = candles[candles.length - 1];
-    _klineDataKey = requestKey;
-    _klineDataAvailable = true;
-    if (sourceBadge) sourceBadge.dataset.state = 'ready';
-    syncKlinePositionEntries();
+      const previousRange = preserveVisibleRange ? getKlineVisibleLogicalRange() : null;
+      _klineSeries.setData(candles);
+      _klineVolumeSeries.setData(volumes);
+      _klineCandles = candles;
+      _klineVolumeByTime = new Map(fullRows.map(item => [item.candle.time, item.volume]));
+      _klineLastBar = candles[candles.length - 1];
+      _klineDataKey = requestKey;
+      _klineDataContextKey = requestContextKey;
+      _klineSourceMeta = meta;
+      _klineDataAvailable = true;
+      applyKlineSourceMeta(meta, symbol);
+      syncKlinePositionEntries();
 
-    // Update last price display
-    setText('klineLastPrice', candles.at(-1).close.toFixed(2));
+      // Update last price display
+      setText('klineLastPrice', candles.at(-1).close.toFixed(2));
 
-    if (preserveVisibleRange && previousRange) setKlineVisibleLogicalRange(previousRange, candles.length);
-    else _klineChart.timeScale().fitContent();
-  } catch (e) {
-    if (!isCurrentRequest()) return;
-    clearKlineData('读取失败', requestKey);
-    const bridgeUnavailable = state._lastGatewayLive !== true;
-    if (!bridgeUnavailable && !String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
-      console.error('loadKlineData:', e);
+      if (preserveVisibleRange && previousRange) setKlineVisibleLogicalRange(previousRange, candles.length);
+      else _klineChart.timeScale().fitContent();
+    } catch (e) {
+      if (!isCurrentRequest()) return;
+      clearKlineData('读取失败', requestKey);
+      const bridgeUnavailable = state._lastGatewayLive !== true;
+      if (!bridgeUnavailable && !String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
+        console.error('loadKlineData:', e);
+      }
+    }
+  })();
+  _klineFullRefreshFlight = flight;
+  _klineFullRefreshContextKey = klineContextKey(selectedKlineSymbol(), _klineTimeframe);
+  try {
+    return await flight;
+  } finally {
+    if (_klineFullRefreshFlight === flight) {
+      _klineFullRefreshFlight = null;
+      _klineFullRefreshContextKey = '';
+    }
+  }
+}
+
+async function refreshKlineTail() {
+  if (document.hidden || activeTabId() !== 'dashboard') return;
+  if (!_klineSeries) return;
+  const currentContextKey = klineContextKey(selectedKlineSymbol(), _klineTimeframe);
+  if (_klineFullRefreshFlight && _klineFullRefreshContextKey === currentContextKey) return _klineFullRefreshFlight;
+  if (_klineTailRefreshFlight && _klineTailRefreshContextKey === currentContextKey) return _klineTailRefreshFlight;
+  if (_klineFullRefreshFlight) return loadKlineData();
+  if (!_klineDataAvailable) return loadKlineData();
+
+  const symbol = selectedKlineSymbol();
+  const timeframe = _klineTimeframe;
+  const requestKey = klineRequestKey(symbol, timeframe);
+  const requestContextKey = klineContextKey(symbol, timeframe);
+  if (_klineDataKey !== requestKey || _klineDataContextKey !== requestContextKey) return loadKlineData();
+  const requestVersion = ++_klineRequestVersion;
+  const flight = (async () => {
+    const isCurrentRequest = () => requestVersion === _klineRequestVersion
+      && requestContextKey === klineContextKey(selectedKlineSymbol(), _klineTimeframe)
+      && requestKey === _klineDataKey
+      && requestContextKey === _klineDataContextKey;
+    try {
+      const data = await wsApi('rates', { symbol, timeframe, count: KLINE_TAIL_COUNT });
+      if (!isCurrentRequest()) return;
+      // A server/transport failure leaves the last good chart in place. The
+      // next periodic tail request retries it without creating a request storm.
+      if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) return;
+      const meta = data.market_meta && typeof data.market_meta === 'object' ? data.market_meta : {};
+      if (!klineResponseSymbolMatches(data, symbol, meta)
+        || !klineSourceMetaCompatible(_klineSourceMeta || {}, meta)) {
+        return loadKlineData();
+      }
+      const normalized = normalizeKlineRateRows(data, { strictOrder:true, maxCount:KLINE_TAIL_COUNT });
+      if (!normalized.ok || !klineTailContinuityValid(_klineCandles, normalized.rows, timeframe, meta)) {
+        return loadKlineData();
+      }
+
+      const previousRange = getKlineVisibleLogicalRange();
+      const previousLastTime = Number(_klineLastBar?.time);
+      const existingByTime = new Map(_klineCandles.map(candle => [Number(candle.time), candle]));
+      const mergedEntries = mergeKlineTailRows(_klineCandles, normalized.rows);
+      const mergedCandles = mergedEntries.map(entry => entry.candle);
+      const changedHistoricalCandle = normalized.rows.some(item => {
+        const previous = existingByTime.get(item.candle.time);
+        return previous && item.candle.time < previousLastTime && klineCandleChanged(previous, item.candle);
+      });
+      const trimmed = mergedCandles.length !== _klineCandles.length + normalized.rows.filter(item => !existingByTime.has(item.candle.time)).length;
+      if (changedHistoricalCandle || trimmed) {
+        _klineSeries.setData(mergedCandles);
+        _klineVolumeSeries.setData(mergedEntries.map(({ candle, volume }) => ({
+          time:candle.time,
+          value:volume,
+          color:candle.close >= candle.open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
+        })));
+        if (previousRange) setKlineVisibleLogicalRange(previousRange, mergedCandles.length);
+      } else {
+        for (const item of normalized.rows) {
+          const previous = existingByTime.get(item.candle.time);
+          const canUpdateSeries = !previous || item.candle.time >= previousLastTime;
+          if (canUpdateSeries) _klineSeries.update(item.candle);
+          if (canUpdateSeries || (previous && klineCandleChanged(previous, item.candle))) {
+            _klineVolumeSeries.update({
+              time:item.candle.time,
+              value:item.volume,
+              color:item.candle.close >= item.candle.open ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)',
+            });
+          }
+        }
+        if (previousRange) setKlineVisibleLogicalRange(previousRange, mergedCandles.length);
+      }
+      _klineCandles = mergedCandles;
+      _klineVolumeByTime = new Map(mergedEntries.map(({ candle, volume }) => [candle.time, volume]));
+      _klineLastBar = mergedCandles.at(-1);
+      _klineSourceMeta = meta;
+      applyKlineSourceMeta(meta, symbol);
+      syncKlinePositionEntries();
+      setText('klineLastPrice', _klineLastBar.close.toFixed(2));
+    } catch (e) {
+      // Keep the last trusted window and let the next timer retry. A context
+      // transition or a newer full load already invalidates this response.
+      if (isCurrentRequest() && !String(e.message || '').includes('WebSocket') && !String(e.message || '').includes('未连接')) {
+        console.warn('refreshKlineTail:', e.message || e);
+      }
+    }
+  })();
+  _klineTailRefreshFlight = flight;
+  _klineTailRefreshContextKey = requestContextKey;
+  try {
+    return await flight;
+  } finally {
+    if (_klineTailRefreshFlight === flight) {
+      _klineTailRefreshFlight = null;
+      _klineTailRefreshContextKey = '';
     }
   }
 }
@@ -11406,13 +11726,15 @@ async function refreshKlineVolume() {
   const timeframe = _klineTimeframe;
   const requestVersion = _klineRequestVersion;
   const requestKey = klineRequestKey(symbol, timeframe);
+  const requestContextKey = klineContextKey(symbol, timeframe);
   try {
     const data = await wsApi('rates', { symbol, timeframe, count: 1 });
     if (requestVersion !== _klineRequestVersion || requestKey !== _klineDataKey
+      || requestContextKey !== _klineDataContextKey
       || requestKey !== klineRequestKey(
         $("quoteSymbolSelect")?.value || $("tradeSymbolSelect")?.value || "XAUUSD",
         _klineTimeframe,
-      )) return;
+      ) || requestContextKey !== klineContextKey(selectedKlineSymbol(), _klineTimeframe)) return;
     if (!data || data.status !== 'success' || !Array.isArray(data.rates) || !data.rates.length) {
       clearKlineData(data?.status === 'success' ? '暂无行情' : '读取失败', requestKey);
       return;
@@ -11457,8 +11779,8 @@ function updateKlineTick(bid, ask, quote = {}) {
   } else if (barTime > _klineLastBar.time) {
     _klineLastBar = { time: barTime, open: price, high: price, low: price, close: price };
     _klineSeries.update(_klineLastBar);
-    // New bar: refresh historical data for correct volume
-    setTimeout(loadKlineData, 500);
+    // New bar: refresh only the tail for authoritative OHLC/volume correction.
+    setTimeout(() => refreshKlineTail().catch(() => {}), 500);
   }
 
   setText('klineLastPrice', Number(bid).toFixed(2));
@@ -11516,16 +11838,19 @@ function startKlineRefreshTimer() {
   _klineRefreshTimer = null;
   if (document.hidden || activeTabId() !== 'dashboard') return;
   const intervalMs = { M1: 30000, M5: 30000, M15: 60000, M30: 60000, H1: 120000, H4: 300000, D1: 600000 }[_klineTimeframe] || 60000;
-  _klineRefreshTimer = setInterval(() => { loadKlineData().catch(() => {}); }, intervalMs);
+  _klineRefreshTimer = setInterval(() => { refreshKlineTail().catch(() => {}); }, intervalMs);
 }
 
 // Period button click → reload K-line data
 function switchKlineTimeframe(tf) {
+  if (String(tf || '').trim().toUpperCase() !== String(_klineTimeframe || '').trim().toUpperCase()) {
+    invalidateKlineRequestContext();
+  }
   _klineTimeframe = tf;
   document.querySelectorAll('.kline-period-btn').forEach(function(b) {
     b.classList.toggle('active', b.dataset.tf === tf);
   });
-  loadKlineData();
+  loadKlineData().catch(() => {});
   startKlineRefreshTimer();
 }
 
@@ -11902,6 +12227,7 @@ function observerChannelStorageKey() {
 function syncSelectedObserverChannel(channelId) {
   const normalizedId = Number(channelId) || null;
   if (!normalizedId) return;
+  if (normalizedId !== state.selectedObserverChannelId) invalidateKlineRequestContext();
   state.selectedObserverChannelId = normalizedId;
   localStorage.setItem(observerChannelStorageKey(), String(normalizedId));
   renderObserverChannelControl();
