@@ -9,6 +9,10 @@ import { getMarketSessionPolicyMode, resolveMarketSessionPolicy } from './market
 import { wakePeriodReviewEvidenceWaiters } from './period-review-evidence-wake.js'
 
 const CACHE_LIMIT = 2000
+// Bridge rates requests support up to 5000 rows. Keep this transport bound
+// separate from the 2000-row application cache so a weekend-sized M1 gap can
+// be verified in one bounded exact-range request without widening cache state.
+const BRIDGE_RATES_LIMIT = 5000
 const CACHE_TTL_SECONDS = 24 * 60 * 60
 const WRITE_BATCH_SIZE = 250
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -589,7 +593,7 @@ function expectedGapTimes(gap, intervalMs) {
   const to = Number(gap?.to_utc_msc)
   if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || !intervalMs) return null
   const steps = (to - from) / intervalMs
-  if (!Number.isInteger(steps) || steps < 2 || steps > CACHE_LIMIT - 1) return null
+  if (!Number.isInteger(steps) || steps < 2 || steps > BRIDGE_RATES_LIMIT - 1) return null
   const times = []
   for (let cursor = from + intervalMs; cursor < to; cursor += intervalMs) times.push(cursor)
   return times
@@ -624,7 +628,7 @@ function normalizeGapVerificationRates(response, clock, symbol, timeframe, start
   if (missingObservedTimes.length) return { error:'rates_gap_verification_source_mismatch' }
   const intervalMs = timeframeIntervalMs(timeframe)
   const spanSteps = (endUtcMs - startUtcMs) / intervalMs
-  if (!Number.isInteger(spanSteps) || spanSteps < 1 || spanSteps > CACHE_LIMIT) {
+  if (!Number.isInteger(spanSteps) || spanSteps < 1 || spanSteps > BRIDGE_RATES_LIMIT) {
     return { error:'rates_gap_verification_window_invalid' }
   }
   const theoreticalTimes = []
@@ -653,6 +657,8 @@ function splitGapVerificationBatches(gaps, intervalMs) {
     const candidateStartUtcMs = current.length ? startUtcMs : gapStartUtcMs
     const candidateEndUtcMs = current.length ? Math.max(endUtcMs, gapEndUtcMs) : gapEndUtcMs
     const candidateSpanSteps = (candidateEndUtcMs - candidateStartUtcMs) / intervalMs
+    // Keep independent gaps in cache-sized batches. A single contiguous gap
+    // may still use the larger Bridge transport window validated below.
     if (current.length && (!Number.isInteger(candidateSpanSteps) || candidateSpanSteps > CACHE_LIMIT)) flush()
     if (!current.length) {
       current = [gap]
@@ -672,7 +678,7 @@ function splitGapVerificationBatches(gaps, intervalMs) {
  * returns the same missing opens is recorded as an observed source property;
  * a response containing those opens repairs the cache. Distant gaps are
  * verified in bounded, ordered windows so one large historical range cannot
- * exceed the cache limit. No broad count refill is used.
+ * exceed the Bridge rates limit. No broad count refill is used.
  */
 async function verifyCachedGapsWithBridge(bridgeUserId, symbol, timeframe, gaps, clock, source,
   platformRoute = {}, observedRates = []) {
@@ -723,10 +729,10 @@ async function verifyCachedGapsWithBridge(bridgeUserId, symbol, timeframe, gaps,
       .map(rate => Number(rate?.time_utc_msc))
       .filter(time => Number.isFinite(time) && time >= batch.startUtcMs && time < batch.endUtcMs))]
     const spanSteps = (batch.endUtcMs - batch.startUtcMs) / intervalMs
-    if (!Number.isInteger(spanSteps) || spanSteps < 1 || spanSteps > CACHE_LIMIT) {
+    if (!Number.isInteger(spanSteps) || spanSteps < 1 || spanSteps > BRIDGE_RATES_LIMIT) {
       return { error:'rates_gap_verification_window_invalid' }
     }
-    const count = Math.min(CACHE_LIMIT, Math.max(2, Math.ceil(spanSteps) + 1))
+    const count = Math.min(BRIDGE_RATES_LIMIT, Math.max(2, Math.ceil(spanSteps) + 1))
     const response = await mt5Bridge(bridgeUserId, 'rates', {
       symbol, timeframe, count, start_utc_msc:batch.startUtcMs, end_utc_msc:batch.endUtcMs, ...platformRoute,
     }, { timeoutMs:30000, noFallback:true })

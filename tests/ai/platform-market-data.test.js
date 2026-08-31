@@ -869,6 +869,52 @@ describe('platform market data', () => {
     })
   })
 
+  it('verifies one long cache gap within the Bridge range limit', async () => {
+    db.queryOne.mockResolvedValue({ id:86 })
+    const cache = [historicalRate(0), historicalRate(3000)]
+    redis.get.mockImplementation(async key => key.startsWith('market:verified-source-gap:') ? null : cache)
+    mt5Bridge
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+        historicalRate(3000), historicalRate(3001), historicalRate(3002),
+      ] })
+      .mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', range_complete:true, rates:[
+        historicalRate(0), historicalRate(3000),
+      ] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:2000 })
+
+    expect(result.status).toBe('success')
+    const exactCalls = mt5Bridge.mock.calls.filter(([, command, params]) => command === 'rates'
+      && Number.isFinite(params.start_utc_msc))
+    expect(exactCalls).toHaveLength(1)
+    expect(exactCalls[0][2]).toMatchObject({
+      start_utc_msc:historicalRate(0).time_utc_msc,
+      end_utc_msc:historicalRate(3001).time_utc_msc,
+    })
+    expect(exactCalls[0][2].count).toBeLessThanOrEqual(5000)
+    expect(result.market_meta).toMatchObject({
+      cache_internal_gap_detected:true,
+      cache_internal_gap_verified_source:true,
+      cache_internal_gap_status:'verified_source_gap',
+      cache_internal_gap_unresolved:false,
+    })
+  })
+
+  it('fails closed for a cache gap beyond the Bridge range limit', async () => {
+    db.queryOne.mockResolvedValue({ id:87 })
+    const cache = [historicalRate(0), historicalRate(5001)]
+    redis.get.mockImplementation(async key => key.startsWith('market:verified-source-gap:') ? null : cache)
+    mt5Bridge.mockResolvedValueOnce({ status:'success', symbol:'XAUUSD.a', rates:[
+      historicalRate(5001), historicalRate(5002), historicalRate(5003),
+    ] })
+
+    const result = await getPlatformRates(7, { symbol:'XAUUSD', timeframe:'M1', count:2000 })
+
+    expect(result).toMatchObject({ status:'error', error:'rates_gap_verification_window_invalid' })
+    expect(mt5Bridge.mock.calls.filter(([, command, params]) => command === 'rates'
+      && Number.isFinite(params.start_utc_msc))).toHaveLength(0)
+  })
+
   it('reuses a valid Redis gap marker after the in-memory layer is empty', async () => {
     db.queryOne.mockResolvedValue({ id:82 })
     const cache = [historicalRate(0), historicalRate(1), historicalRate(3), historicalRate(4)]
