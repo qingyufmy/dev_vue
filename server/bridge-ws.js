@@ -67,6 +67,16 @@ export const BRIDGE_WS_LIMITS = Object.freeze({
   maxBrowserMessageBytes: 256 * 1024,
 })
 
+export function browserWsPerMessageDeflateOptions(env = process.env) {
+  if (String(env?.BROWSER_WS_PERMESSAGE_DEFLATE || '').trim() !== '1') return false
+  return {
+    threshold: 1024,
+    concurrencyLimit: 4,
+    clientNoContextTakeover: true,
+    serverNoContextTakeover: true,
+  }
+}
+
 async function refreshDefaultObserverClock() {
   if (defaultObserverClockRefresh) return defaultObserverClockRefresh
   defaultObserverClockRefresh = getDefaultObserverSourceClock()
@@ -929,7 +939,11 @@ export function initBridgeWS(server) {
   defaultObserverClockCache = null
   defaultObserverClockLastRefresh = 0
   refreshDefaultObserverClock().catch(() => {})
-  wss = new WebSocketServer({ noServer: true, maxPayload: BRIDGE_WS_LIMITS.maxPayloadBytes })
+  wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: BRIDGE_WS_LIMITS.maxPayloadBytes,
+    perMessageDeflate: browserWsPerMessageDeflateOptions(),
+  })
   const v3Gateway = createBridgeV3Gateway({
     onTerminalRouteInvalidated:invalidateBridgeV3TerminalRoute,
     onTerminalReady:synchronizeBridgeV3TerminalIdentity,
