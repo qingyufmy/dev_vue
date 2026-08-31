@@ -1,4 +1,4 @@
-@import url("fonts.css");
+@import url("fonts.css?v=20260831fonttraffic1");
 
 :root {
   --bg-base: #080b14;
@@ -67,8 +67,8 @@
   --border-gold: rgba(212, 175, 55, 0.4);
   --border-active: #d4af37;
 
-  --font-display: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
-  --font-ui: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --font-display: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-ui: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "Roboto Mono", Consolas, monospace;
 
   /* Product type scale: caption / body / section / page. */
