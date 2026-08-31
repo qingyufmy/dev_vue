@@ -27,6 +27,7 @@ import { getInferenceSnapshotEvidence, getInferenceVisualizationSnapshot } from 
 import { executionValidationRejection, readExecutionValidation } from './routes/ai/signal-execution-validation.js'
 import { hasActiveBridgeDeliveryExecution,
   isBridgeDeliveryMaintenancePaused } from './bridge-v3/update-maintenance-registry.js'
+import { browserWsBandwidthMetrics, browserWsJsonByteLength } from './browser-ws-bandwidth-metrics.js'
 
 export { applyDefaultObserverClockBootstrap } from './routes/ai/terminal-clock.js'
 
@@ -2916,6 +2917,15 @@ function applyVisibleSignalRecord(row, delivery, source, { target = null, includ
 
 async function handleBrowserCommand(ws, userId, msg) {
   const { command_id, action, params = {} } = msg
+  let bandwidthMetric = null
+  if (browserWsBandwidthMetrics.enabled) {
+    try {
+      bandwidthMetric = browserWsBandwidthMetrics.begin(action, browserWsJsonByteLength(msg))
+    } catch {}
+  }
+  const finishBandwidthMetric = (responseBytes, status) => {
+    try { bandwidthMetric?.finish(responseBytes, status) } catch {}
+  }
   const autoExecuteRequested = params?.auto_execute === true
     || String(params?.auto_execute || '').toLowerCase() === 'true'
   const analyzeParams = action === 'analyze'
@@ -2923,10 +2933,29 @@ async function handleBrowserCommand(ws, userId, msg) {
   const autoExecuteGuard = action === 'analyze' && autoExecuteRequested
     ? createBrowserAutoExecuteGuard(userId, ws) : null
   const reply = (data) => {
-    if (ws.readyState === 1) {
-      try { ws.send(JSON.stringify(buildBrowserCommandResult(command_id, data))) } catch (error) {
-        console.error(`[BridgeWS] browser command reply failed command=${command_id}:`, error.message)
-      }
+    if (ws.readyState !== 1) {
+      finishBandwidthMetric(0, 'not_sent')
+      return
+    }
+    let json
+    try {
+      // Serialize once and reuse the exact string for both the actual send and
+      // the logical UTF-8 response byte metric.  The metric never sees data.
+      json = JSON.stringify(buildBrowserCommandResult(command_id, data))
+    } catch (error) {
+      finishBandwidthMetric(0, 'serialization_error')
+      console.error(`[BridgeWS] browser command reply failed command=${command_id}:`, error.message)
+      return
+    }
+    const responseBytes = wsMessageByteLength(json)
+    const responseStatus = data?.status === 'success'
+      ? 'success' : data?.status === 'error' ? 'error' : 'other'
+    try {
+      ws.send(json)
+      finishBandwidthMetric(responseBytes, responseStatus)
+    } catch (error) {
+      finishBandwidthMetric(responseBytes, 'send_error')
+      console.error(`[BridgeWS] browser command reply failed command=${command_id}:`, error.message)
     }
   }
 
