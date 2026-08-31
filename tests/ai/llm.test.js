@@ -298,6 +298,15 @@ describe('buildStrategyOutputFormat', () => {
     expect(schema.pending_action_reason).toContain('pending_action 为 none 或 keep 时必须返回空字符串')
     expect(schema.management_direction).toContain('pending_action 为 cancel 时')
     expect(schema.management_direction).toContain('pending_action 为 none 或 keep 时必须填 none')
+    for (const key of ['bullish_score', 'bearish_score']) {
+      expect(schema[key]).toContain('必须字段')
+      expect(schema[key]).toContain('0-100 的数字')
+      expect(schema[key]).toContain('bullish_score 与 bearish_score 合计必须为 100')
+      expect(schema[key]).toContain('不代表胜率或执行概率')
+      expect(schema[key]).toContain('行情无明显方向或证据均衡时必须返回 50/50')
+      expect(schema[key]).toContain('禁止省略、返回 null 或非数字')
+      expect(schema[key]).not.toContain(staleDescription)
+    }
 
     for (const key of ['limit_price', 'stop_limit_price', 'stop_loss_price',
       'take_profit_1_price', 'take_profit_2_price', 'take_profit_3_price']) {
