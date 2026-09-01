@@ -25,6 +25,8 @@ npm run test:watch   # 持续运行受影响的测试
 
 JavaScript 使用两空格缩进、无分号风格和 ESM `import`/`export`。函数与变量使用 `camelCase`，类使用 `PascalCase`，模块文件使用 kebab-case。项目未配置统一格式化或 lint 工具，修改后应匹配相邻代码，并对 JavaScript 执行 `node --check`。前端文案使用中文，内部错误码保持稳定。SQL 必须使用参数占位符，禁止拼接用户输入。
 
+本轮新前端统一执行 `docs/vue-frontend-requirements-standard.md`：使用 Vue 3、TypeScript 严格模式、Vite、Composition API、shadcn-vue 与唯一共享组件源。`www`、`trade`、`admin` 三个应用禁止互相导入；业务页面优先组合已批准的 shadcn-vue 组件，禁止引入第二套通用 UI 库或重复手写已有控件。新增或更新组件必须使用官方 `shadcn-vue` CLI，并在实现前读取对应组件的当前文档；修改共享 UI 包必须验证三个应用。
+
 ## 测试要求
 
 测试框架为 Vitest，JavaScript 测试命名为 `*.test.js`；MT5 Worker 使用 `bridge/native/workers/mt5/tests/test_*.py`，Rust 使用 Cargo 工作区测试。修复问题时必须增加回归测试，重点覆盖权限、迁移、调度状态、MT4/MT5 时间、订单执行、SQLite 与缓存边界。先运行定向测试，再按影响范围运行 `npm test` 与 `scripts/bridge-native/test-native.ps1 -SkipRelease`；涉及服务运行链路时还需启动项目并检查 `/health`。
