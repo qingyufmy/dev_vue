@@ -3,7 +3,7 @@ import { queryAll, queryOne, queryRun, withTransaction, beijingNow } from '../..
 import { broadcastAdminEvent, getBridgeGeneration, sendToBrowsers } from '../../bridge-ws.js'
 import { stripBrokerSuffix, timeframeIntervalMs } from './utils.js'
 
-export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.9'
+export const POSITION_MANAGEMENT_CONTRACT_VERSION = 'position-management-v1.10'
 export const POSITION_MANAGEMENT_MODES = ['display', 'auto_exit', 'auto_reverse']
 export const POSITION_MANAGEMENT_MAX_GROUPS = 20
 export const POSITION_MANAGEMENT_MAX_CONTEXT_CHARS = 32_000
@@ -664,7 +664,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
       action:'仅允许 keep | cancel',
       market_alignment:'仅允许 aligned | misaligned | uncertain；misaligned 必须 cancel，uncertain 必须 keep，aligned 可 keep 或 cancel（cancel 必须填写合法原因码）',
       cancel_reason_code:'action=cancel 时填写当前策略定义的 lowercase_snake_case 原因码；keep 时为 null',
-      reason:'简体中文说明当前策略为何保留或取消该挂单',
+      reason:'简体中文说明当前策略为何保留或取消该挂单。只能引用本轮当前事实；涉及价格时必须原样使用平台提供的当前价、挂单价、止损和止盈，不得编造、替换或写反价格大小关系',
       evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
     })),
     position_evaluations:(context.position_groups || []).map(group => ({
@@ -675,7 +675,7 @@ export function buildPositionManagementOutputFormat(baseMarketFormat, context) {
       market_alignment:'仅允许 aligned | misaligned | uncertain；misaligned 必须 exit，uncertain 必须 hold，aligned 可 hold 或 exit（exit 必须填写合法原因码）',
       exit_reason_code:'action=exit 时填写当前策略定义的 lowercase_snake_case 原因码；hold 时为 null',
       reversal_candidate:'布尔值，仅为解释性判断，不是执行命令',
-      reason:'简体中文说明当前策略为何继续持有或退出该持仓',
+      reason:'简体中文说明当前策略为何继续持有或退出该持仓。只能引用本轮当前事实；涉及价格时必须原样使用平台提供的当前价、持仓入场价、实际止损和实际止盈，不得编造、替换或写反价格大小关系',
       evidence_refs:`只能引用：${(group.allowed_evidence_refs || []).join('、') || '空集合'}`,
     })),
     analysis:'简体中文行情分析',
@@ -1272,15 +1272,22 @@ export function resolveAutomaticExitConfirmation(current, previous = null) {
     return { validation_status:'valid', confirmation_count:1, reset_reason:null }
   }
 
-  // Confirmation must come from the immediately previous actual closed bar
-  // in the current strategy window.  Do not infer adjacency from a fixed
-  // timeframe duration: weekends, holidays and broker data gaps are valid
-  // reasons for UTC timestamps to be farther apart.
+  // The immediately previous valid evaluation may confirm either from a fresh
+  // snapshot inside the same primary closed bar or from the actual previous
+  // primary closed bar.  The former is required when the automatic scheduler
+  // evaluates more frequently than the strategy's primary timeframe.  Do not
+  // infer adjacency from a fixed duration: weekends, holidays and broker data
+  // gaps are valid reasons for UTC timestamps to be farther apart.
   const previousEvaluationBar = Number(previous?.closed_bar_time_utc_ms)
+  const currentEvaluationBar = Number(current?.closed_bar_time_utc_ms)
   const currentPreviousBar = Number(current?.previous_closed_bar_time_utc_ms)
-  if (!Number.isFinite(previousEvaluationBar) || previousEvaluationBar <= 0
-    || !Number.isFinite(currentPreviousBar) || currentPreviousBar <= 0
-    || previousEvaluationBar !== currentPreviousBar) {
+  const samePrimaryClosedBar = Number.isFinite(previousEvaluationBar) && previousEvaluationBar > 0
+    && Number.isFinite(currentEvaluationBar) && currentEvaluationBar > 0
+    && previousEvaluationBar === currentEvaluationBar
+  const actualPreviousClosedBar = Number.isFinite(previousEvaluationBar) && previousEvaluationBar > 0
+    && Number.isFinite(currentPreviousBar) && currentPreviousBar > 0
+    && previousEvaluationBar === currentPreviousBar
+  if (!samePrimaryClosedBar && !actualPreviousClosedBar) {
     return { validation_status:'valid', confirmation_count:1,
       reset_reason:'automatic_confirmation_bar_gap' }
   }

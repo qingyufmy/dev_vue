@@ -519,6 +519,8 @@ describe('position management strategy-authoritative contract', () => {
     expect(schema).toContain('exit_reason_code')
     expect(schema).toContain('market_alignment')
     expect(schema).toContain('lowercase_snake_case')
+    expect(schema).toContain('实际止损和实际止盈')
+    expect(schema).toContain('不得编造、替换或写反价格大小关系')
     expect(schema).not.toContain('matched_condition_id')
     expect(schema).not.toContain('cancel_replace')
     expect(schema).not.toContain('"reverse"')
@@ -607,7 +609,7 @@ describe('consecutive automatic-inference exit confirmation', () => {
 
   it('requires two distinct current-contract inferences and snapshots', () => {
     expect(AUTO_EXIT_CONFIRMATIONS_REQUIRED).toBe(2)
-    expect(POSITION_MANAGEMENT_CONTRACT_VERSION).toBe('position-management-v1.9')
+    expect(POSITION_MANAGEMENT_CONTRACT_VERSION).toBe('position-management-v1.10')
     expect(resolveAutomaticExitConfirmation({ action:'exit', market_alignment:'misaligned', decision_signal_id:101,
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION }, null))
       .toMatchObject({ validation_status:'valid', confirmation_count:1 })
@@ -618,6 +620,35 @@ describe('consecutive automatic-inference exit confirmation', () => {
       market_snapshot_hash:'sha256:snapshot-a', contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
       closed_bar_time_utc_ms:1784736900000,
     })).toMatchObject({ validation_status:'valid', confirmation_count:2 })
+  })
+
+  it('accepts two distinct scheduler snapshots inside the same primary closed bar', () => {
+    const h1Close = Date.parse('2026-08-31T13:00:00.000Z')
+    expect(resolveAutomaticExitConfirmation({
+      action:'exit', market_alignment:'misaligned', decision_signal_id:302, task_id:82,
+      market_snapshot_hash:'sha256:same-h1-fresh-b', closed_bar_time_utc_ms:h1Close,
+      previous_closed_bar_time_utc_ms:Date.parse('2026-08-31T12:00:00.000Z'),
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+    }, {
+      action:'exit', market_alignment:'misaligned', validation_status:'valid',
+      decision_signal_id:301, task_id:81, market_snapshot_hash:'sha256:same-h1-fresh-a',
+      closed_bar_time_utc_ms:h1Close, contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+    })).toMatchObject({ validation_status:'valid', confirmation_count:2, reset_reason:null })
+  })
+
+  it('does not treat a duplicate snapshot inside the same primary closed bar as confirmation', () => {
+    const h1Close = Date.parse('2026-08-31T13:00:00.000Z')
+    expect(resolveAutomaticExitConfirmation({
+      action:'exit', market_alignment:'misaligned', decision_signal_id:402, task_id:92,
+      market_snapshot_hash:'sha256:duplicate', closed_bar_time_utc_ms:h1Close,
+      previous_closed_bar_time_utc_ms:Date.parse('2026-08-31T12:00:00.000Z'),
+      contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+    }, {
+      action:'exit', market_alignment:'misaligned', validation_status:'valid',
+      decision_signal_id:401, task_id:91, market_snapshot_hash:'sha256:duplicate',
+      closed_bar_time_utc_ms:h1Close, contract_version:POSITION_MANAGEMENT_CONTRACT_VERSION,
+    })).toMatchObject({ validation_status:'valid', confirmation_count:1,
+      reset_reason:'automatic_confirmation_identity_not_distinct' })
   })
 
   it('does not combine exit confirmations across a closed-bar gap', () => {
