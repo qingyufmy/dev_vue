@@ -25,7 +25,7 @@ npm run test:watch   # 持续运行受影响的测试
 
 JavaScript 使用两空格缩进、无分号风格和 ESM `import`/`export`。函数与变量使用 `camelCase`，类使用 `PascalCase`，模块文件使用 kebab-case。项目未配置统一格式化或 lint 工具，修改后应匹配相邻代码，并对 JavaScript 执行 `node --check`。前端文案使用中文，内部错误码保持稳定。SQL 必须使用参数占位符，禁止拼接用户输入。
 
-本轮新前端统一执行 `docs/vue-frontend-requirements-standard.md`：使用 Vue 3、TypeScript 严格模式、Vite、Composition API、shadcn-vue 与唯一共享组件源。`www`、`trade`、`admin` 三个应用禁止互相导入；业务页面优先组合已批准的 shadcn-vue 组件，禁止引入第二套通用 UI 库或重复手写已有控件。新增或更新组件必须使用官方 `shadcn-vue` CLI，并在实现前读取对应组件的当前文档；修改共享 UI 包必须验证三个应用。
+本轮新前端统一执行 `docs/vue-frontend-requirements-standard.md`：使用 Vue 3、TypeScript 严格模式、Composition API、shadcn-vue 与唯一共享组件源；`www` 使用 Nuxt 4 的 Vite 构建链和混合渲染，`trade`、`admin` 使用 Vue 3 + Vite SPA。`www`、`trade`、`admin` 三个应用禁止互相导入；业务页面优先组合已批准的 shadcn-vue 组件，禁止引入第二套通用 UI 库或重复手写已有控件。新增或更新组件必须使用官方 `shadcn-vue` CLI，并在实现前读取对应组件的当前文档；修改共享 UI 包必须验证三个应用。统一身份与子域会话必须遵守 `docs/single-sign-on-authentication-architecture.md`，禁止恢复浏览器长期 JWT、父域共享认证 Cookie 或跨应用复制 Token。
 
 ## 测试要求
 
@@ -112,6 +112,8 @@ AI 不得给出绝对手数，只能从“不建仓、试探仓、轻仓、标�
 
 产品战略与视觉规范分别以根目录 `PRODUCT.md` 和 `DESIGN.md` 为准，Impeccable 扩展令牌位于 `.impeccable/design.json`。AI 交易实验室的创意主轴是“智能交易团队”：专业科技、亲切易懂、可信克制；界面必须结论优先、状态可解释、安全边界可见，并通过渐进披露兼顾小白与专业用户。用户可见文案使用自然中文，不直接暴露英文异常或内部规则码。视觉保持深蓝黑工作面、稀缺金色焦点和明确语义色，避免信息无优先级、卡片层层嵌套、游戏化霓虹、过量渐变、炫光和无意义动画。所有新界面与重构以 WCAG 2.1 AA 为基线，并支持键盘焦点、非颜色状态表达和 `prefers-reduced-motion`。
 
-## 前端边界与统一会话
+## 旧版前端边界与当前运行态会话（仅迁移参考）
+
+以下路径和 `/shared/session.js` 规则只描述尚未删除的旧版运行态，供功能迁移和回归参考；新版 `www`、`trade`、`admin` 不得继承该路由组织或客户端令牌同步方式，必须执行 `docs/single-sign-on-authentication-architecture.md`。
 
 主站、AI 交易实验室和账户中心是三套独立前端，分别使用 `/`、`/ai/` 和 `/account/`；AI 登录注册使用 `/ai/auth/`，主站登录注册继续使用 `/auth/`。它们只能复用同一套后端认证、用户、订阅、支付和通知接口，不得互相依赖页面组件或路由状态。主站只通过普通导航链接进入 `/ai/`；主站与 AI 内的账户入口分别通过模态窗口承载 `/account/?embed=main` 和 `/account/?embed=ai`，其中主站嵌入模式必须实时跟随主站深浅主题。同源会话由 `/shared/session.js` 统一读写；任一前端退出时必须清除全部兼容令牌、广播退出事件，并使主站和 AI 同时失效。AI 退出后固定返回 `/ai/auth/`，不得跳回主站登录页。

@@ -2,9 +2,11 @@
 
 > 状态：强制执行
 >
-> 版本：1.0
+> 版本：1.1
 >
 > 建立日期：2026-09-01
+>
+> 最近更新：2026-09-02
 >
 > 适用应用：`www`、`trade`、`admin`
 
@@ -26,7 +28,8 @@
 | --- | --- | --- |
 | 前端框架 | Vue 3 | 禁止新增 Vue 2、React 或其它页面框架 |
 | 语言 | TypeScript 严格模式 | 生产代码禁止用 `any`、双重断言或关闭类型检查逃避合同问题 |
-| 构建 | Vite | 三个应用分别配置、构建和输出 |
+| 应用框架 | `www` 使用 Nuxt 4；`trade`、`admin` 使用 Vue 3 SPA | 统一 Vue 生态，按内容站与高交互应用分别选择渲染方式 |
+| 构建 | Nuxt 4 的 Vite 构建链 / 直接 Vite | 三个应用分别配置、构建和输出 |
 | Vue 写法 | Composition API、`<script setup lang="ts">`、SFC | 不混用 Class API；Options API 仅限有证据的第三方兼容边界 |
 | 路由 | Vue Router | 每个应用独立路由表和守卫 |
 | 服务端状态 | TanStack Query for Vue | 请求、缓存、失效、取消和重试集中管理 |
@@ -47,7 +50,7 @@
 ```text
 frontend/
   apps/
-    www/
+    www/                 # Nuxt 4，公开内容使用 SSR/SSG/Hybrid
     trade/
     admin/
   packages/
@@ -64,6 +67,13 @@ frontend/
 - 环境配置、构建配置、测试配置和部署产物。
 - 权限守卫、API 门面和业务功能模块。
 - 独立失败边界；一个应用构建或运行失败不得影响另外两个已部署应用。
+
+渲染边界：
+
+- `www` 公开首页、课程、分类、企业展示和需要搜索引擎收录的页面使用 Nuxt 预渲染、SSR 或按路由缓存。
+- `www` 登录后的高度动态区域可以按路由使用客户端渲染，不为了形式统一强制 SSR。
+- `trade`、`admin` 使用 Vite SPA；行情、图表、WebSocket、表格和表单不得引入无收益的服务端渲染与水合复杂度。
+- `packages/ui` 保持纯 Vue，不导入 Nuxt API；只有主站的应用适配层可以使用 `ClientOnly`、SSR 宽度或 Nuxt 专用能力。
 
 禁止：
 
@@ -267,11 +277,18 @@ Pinia 不保存：
 ## 8. 路由、登录与子域
 
 - `www`、`trade`、`admin` 使用独立路由表和独立登录页。
+- 独立登录页负责当前应用说明和发起登录；账号、密码、验证码、注册、找回和 MFA 的权威表单由 `auth.<domain>` 统一提供。
+- 登录使用 OpenID Connect Authorization Code Flow + PKCE；禁止 Implicit Flow、父域共享 Cookie 和前端持久化访问令牌。
+- 每个应用通过自己的 `/auth/callback` 建立 Host-only `Secure`、`HttpOnly`、`SameSite=Strict` 服务端会话，不设置 Cookie `Domain`。
 - 登录成功后的返回地址只能是当前应用允许的内部路径，防止开放重定向。
 - 路由级功能使用动态导入；导航不得预加载所有大型页面。
 - 路由参数和查询参数进入模块前必须校验。
 - 无权限、未登录、资源不存在和系统异常使用不同页面或状态。
-- 子域会话策略由后端安全方案统一定义；前端不得自行复制令牌到其它子域。
+- 前端 API 客户端只访问当前应用同源 API，不读取 Cookie、不添加长期 Bearer Token，也不得自行复制身份到其它子域。
+- `/api/v4/session` 提供当前应用会话摘要和 CSRF Token；所有写操作发送 `X-CSRF-Token`，后端同时校验精确 Origin。
+- `trade` 通过同源会话申请短时、单次 WebSocket 连接票据；组件不得把 Cookie、访问令牌或用户 ID 拼入 WebSocket 权限判断。
+- 退出必须明确区分当前应用、全部网站和全部设备；普通退出不得误撤 Bridge 设备会话。
+- 单点登录方案、接口、数据结构、迁移和验收统一见 [单点登录与统一认证架构方案](./single-sign-on-authentication-architecture.md)。
 
 ## 9. 响应式与触控
 
@@ -380,15 +397,15 @@ Pinia 不保存：
 - 增加写操作幂等、资源 revision、交易未知结果和阶段状态，避免用户重复提交造成重复交易。
 - 增加模块错误边界、共享包跨应用验证和应用独立部署要求，限制修改影响面。
 - 增加 Registry 来源、版本、许可证和更新审查，控制源码分发组件的供应链风险。
-- 增加子域返回地址、会话和敏感数据规则；具体 Cookie、CSRF 和 API 域名仍由后端安全方案冻结。
+- 增加子域返回地址、会话和敏感数据规则；后续联动复核已冻结 Host-only Cookie、CSRF、OIDC Code + PKCE 和应用同源 BFF 边界。
 - 增加移动端危险操作、软键盘、表格详情和 320 像素验收，避免“响应式通过但无法操作”。
 
-第二轮结论：规范可以作为搭建和代码审查门；在后端合同、认证方案和视觉系统冻结后需做一次联动复核。
+第二轮结论：规范可以作为搭建和代码审查门；认证联动方案已冻结，后端业务合同和视觉系统冻结后仍需分别复核。
 
 ## 17. 当前待冻结项和剩余风险
 
 - 主站和管理后台的完整功能盘点尚未完成，模块清单可能继续扩展。
-- API OpenAPI 合同、实时消息合同和子域认证方案尚未冻结。
+- API OpenAPI 合同和实时业务消息合同尚未冻结；子域认证架构已冻结，但正式域名、密钥轮换、管理员 MFA 和会话有效期仍待实施阶段确认。
 - shadcn-vue 的 preset、字体、图标、主题令牌和专业行情图表库尚未选定。
 - shadcn-vue 组件会进入仓库源码；如果绕过统一组件源或把业务修改直接写入基础组件，仍会产生跨应用影响。
 - 真实普通交易者的可用性需要原型测试，规范和自动测试不能替代用户验收。
@@ -396,6 +413,11 @@ Pinia 不保存：
 ## 18. 官方依据
 
 - [Vue Composition API FAQ](https://vuejs.org/guide/extras/composition-api-faq)
+- [Nuxt Rendering Modes](https://nuxt.com/docs/4.x/guide/concepts/rendering)
 - [shadcn-vue Introduction](https://www.shadcn-vue.com/docs/introduction)
 - [shadcn-vue Vite Installation](https://www.shadcn-vue.com/docs/installation/vite)
+- [shadcn-vue Nuxt Installation](https://v3.shadcn-vue.com/docs/installation/nuxt)
 - [shadcn-vue CLI](https://www.shadcn-vue.com/docs/cli)
+- [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0-18.html)
+- [RFC 9700: OAuth 2.0 Security Best Current Practice](https://www.rfc-editor.org/rfc/rfc9700.html)
+- [RFC 10017: OAuth 2.0 for Browser-Based Applications](https://www.rfc-editor.org/rfc/rfc10017.html)

@@ -2,9 +2,11 @@
 
 > 状态：持续维护中的权威需求文档
 >
-> 版本：0.1
+> 版本：0.2
 >
 > 建立日期：2026-09-01
+>
+> 最近更新：2026-09-02
 >
 > 适用范围：主站、AI 交易实验室、管理后台、量见智桥
 
@@ -19,6 +21,7 @@
 - 保留当前系统已经存在的业务功能作为迁移清单，重构不得漏功能。
 - AI 交易实验室当前功能以 [AI 交易实验室前端功能盘点](./ai-trading-lab-frontend-function-inventory.md) 为盘点基准；该文档只说明“有什么”，不约束新版“怎么设计”。
 - 三套 Vue 前端的工程、组件、交互、响应式、性能和验收要求以 [Vue 前端重构需求规范](./vue-frontend-requirements-standard.md) 为强制标准。
+- 三个子域的身份、会话、退出、WebSocket 和 Bridge 授权边界以 [单点登录与统一认证架构方案](./single-sign-on-authentication-architecture.md) 为强制标准。
 - 主站和管理后台在正式设计前，也必须分别完成同等粒度的现有功能盘点。
 
 ## 2. 产品与用户定位
@@ -65,8 +68,8 @@ apps/admin ┘
 ```
 
 - 任何前端应用不得导入另一个应用的页面、业务组件、状态、路由或 API 模块。
-- 登录态、权限、环境变量、路由守卫和部署配置分别维护。
-- 子域之间不依赖前端内存共享状态；跨域身份使用服务端定义的安全会话机制。
+- 登录态、权限、环境变量、路由守卫和部署配置分别维护；身份中心只统一认证，不替代各应用授权。
+- 子域之间不依赖前端内存共享状态；跨域身份使用 Authorization Code + PKCE，各应用建立独立 Host-only 服务端会话。
 - 一个应用构建或部署失败，不得阻塞另外两个应用的已有线上版本。
 - 一个业务模块的改动默认只运行该模块与所属应用的测试；只有修改共享包时才扩大验证范围。
 
@@ -74,9 +77,9 @@ apps/admin ┘
 
 ### 4.1 已锁定选择
 
-- 框架：Vue 3。
+- 框架：统一使用 Vue 3；主站使用 Nuxt 4，AI 交易实验室与管理后台使用 Vue 3 SPA。
 - 语言：TypeScript 严格模式。
-- 构建：Vite。
+- 构建：主站使用 Nuxt 4 的 Vite 构建链和混合渲染；AI 交易实验室与管理后台直接使用 Vite。
 - 组件组织：Composition API、`<script setup>`、单文件组件。
 - UI 组件体系：`shadcn-vue`，三套前端统一使用。
 - 样式基础：Tailwind CSS 与语义化设计令牌。
@@ -91,7 +94,7 @@ Vue 官方说明 Composition API 有利于逻辑复用、复杂组件的关注�
 frontend/
   apps/
     www/
-      src/features/
+      app/features/
     trade/
       src/features/
     admin/
@@ -252,27 +255,44 @@ Windows 7 SP1 是硬性兼容目标，不能用“在开发机可运行”代替
 - 请求和命令必须有超时、取消、幂等和重复响应处理。
 - 任一模块加载失败只影响该模块，应用壳层、其它路由和已缓存模块保持可用。
 
+### 6.3 单点登录与应用会话
+
+- 新增 `auth.<domain>` 作为统一身份中心，集中处理登录、注册、验证码、找回密码、MFA 和账号恢复。
+- `www`、`trade`、`admin` 保留独立登录入口和回调地址，通过 OpenID Connect Authorization Code Flow + PKCE 获取身份，不在应用间传递 Token。
+- 三个应用分别使用不设置 `Domain` 的 `Secure`、`HttpOnly`、`SameSite=Strict` Host-only Cookie；禁止父域共享认证 Cookie。
+- 浏览器不得把访问令牌或刷新令牌写入 Local Storage、Session Storage、IndexedDB、URL 或 JavaScript 可读 Cookie。
+- 浏览器只调用当前应用同源 API；后端逻辑 BFF 根据服务端会话完成身份注入和权限校验，不为三个应用强制拆分微服务。
+- 单点登录只统一系统用户身份；管理员角色、会员、交易账户归属、观摩权限和资源权限仍由各接口独立校验。
+- `trade` WebSocket 使用当前会话签发的短时单次连接票据；Bridge 继续使用独立设备配对和刷新会话，不复用浏览器 SSO。
+- 退出分为当前应用、全部网站和全部设备三种范围，避免普通退出误断 Bridge。
+- 当前客户端可读 JWT 只作为旧版迁移来源；新版切换时允许用户重新登录一次，不把旧 JWT 自动兑换成新会话。
+
+具体接口、两张新增表、迁移顺序、回滚和验收见 [单点登录与统一认证架构方案](./single-sign-on-authentication-architecture.md)。
+
 ## 7. 实施顺序
 
 1. 完成主站、交易实验室、管理后台三份现有功能盘点和迁移矩阵。
-2. 建立三应用工作区、包依赖边界、合同包和 CI 边界测试。
+2. 建立 Nuxt 主站、两套 Vite SPA、包依赖边界、合同包和 CI 边界测试。
 3. 建立唯一 shadcn-vue 组件源、设计令牌、组件 Registry 和示例页。
-4. 先做真实数据合同与一条端到端竖切，再按业务模块逐一迁移。
-5. 每个模块完成设计、实现、模块测试、所属应用构建和多终端验收后再进入下一模块。
-6. 并行完成 Bridge 两个 Win7 原型和自动更新迁移验证，原型通过后冻结客户端技术栈。
-7. 所有功能迁移、数据迁移、回归和灰度验证完成后，才删除旧前端、旧接口或旧客户端实现。
+4. 建立统一身份中心、应用独立会话和迁移表；先以 `trade` 完成登录、HTTP、WebSocket 端到端竖切。
+5. 先做真实数据合同与一条交易业务端到端竖切，再按业务模块逐一迁移。
+6. 每个模块完成设计、实现、模块测试、所属应用构建和多终端验收后再进入下一模块。
+7. 并行完成 Bridge 两个 Win7 原型和自动更新迁移验证，原型通过后冻结客户端技术栈。
+8. 所有功能迁移、数据迁移、回归和灰度验证完成后，才删除旧前端、旧接口或旧客户端实现。
 
 ## 8. 验收门
 
 ### 8.1 前端
 
 - 三个子域可独立安装依赖、测试、构建和部署。
+- 主站公开内容可预渲染或服务端渲染；交易实验室和管理后台保持纯客户端应用，不承担无收益的 SSR。
 - 应用之间无源码级业务依赖。
 - 所有交互控件优先来自统一 shadcn-vue 组件源。
 - 组件状态覆盖默认、悬停、聚焦、禁用、加载、空、错误和成功。
 - 普通交易者无需了解系统内部结构即可完成核心流程。
 - 桌面、平板和手机没有横向溢出、遮挡或不可达操作。
 - 模块级变更通过依赖边界测试，未修改应用的构建产物不发生非预期变化。
+- 单点登录后跨应用无需再次输入密码，但三个应用 Cookie 和权限保持隔离，浏览器存储中不存在长期 Token。
 
 ### 8.2 Bridge
 
@@ -294,6 +314,8 @@ Windows 7 SP1 是硬性兼容目标，不能用“在开发机可运行”代替
 - 为避免组件框架和专业图表冲突，明确通用 UI 只使用 shadcn-vue，行情图表允许专用组件。
 - 为避免从零重写时漏功能，保留功能盘点作为迁移输入，但不保留旧 UI 方案。
 - Bridge 不在方案阶段继续扩展本地业务，只保留数据、执行、诊断和更新，符合最小职责。
+- 三应用原统一直接使用 Vite 会忽略主站 SEO 与内容首屏需求，调整为 Nuxt 主站和两套 Vite SPA，仍保持单一 Vue 生态。
+- 单点登录没有拆分认证微服务或增加动态客户端平台，只在现有后端中增加统一认证模块、两个数据表和三个逻辑会话边界。
 
 剩余风险：主站和管理后台尚未形成同等粒度的功能盘点；Bridge 当前已有大量能力，最终是复用核心还是重写，需要原型和代码审计后决定。
 
@@ -309,6 +331,8 @@ Windows 7 SP1 是硬性兼容目标，不能用“在开发机可运行”代替
 - 前端补充合同包、账户/终端/修订隔离、取消和重复响应处理，降低实时数据串号风险。
 - 删除旧实现被推迟到功能、数据、更新和回滚全部验收之后，避免迁移期间失去可恢复路径。
 - 共享组件包仍可能成为跨应用影响面，因此共享包变更必须触发三应用验证，业务功能不得进入共享包。
+- 子域共享 Cookie 会扩大管理后台风险，改为 OIDC Code + PKCE 和每应用 Host-only 会话；同时补充 CSRF、精确 Origin、WebSocket 单次票据与三种退出范围。
+- 旧 JWT 不自动兑换新会话，切换时允许用户重新登录一次，避免把可读长期令牌风险带入新架构。
 
 剩余风险：Windows 7 已停止系统支持，TLS、根证书、代理环境和第三方依赖可能成为实机阻塞；shadcn-vue 是源码分发模式，若缺少统一 Registry 和升级审查，仍可能产生组件分叉。
 
@@ -328,7 +352,15 @@ Windows 7 SP1 是硬性兼容目标，不能用“在开发机可运行”代替
 - 要求：三套 Vue 前端统一执行独立的模块、shadcn-vue、数据状态、响应式、可访问性、性能、安全、测试和完成定义。
 - 影响：新增 `vue-frontend-requirements-standard.md` 作为强制规范，并删除强制创建空模块目录的过度设计要求。
 - 是否改变既有基线：是，对前端工程要求做了可执行化和最小化修正。
-- 待确认项：视觉 preset、字体、图标、主题令牌、专业行情图表库和子域认证方案。
+- 待确认项：视觉 preset、字体、图标、主题令牌和专业行情图表库；子域认证方案已冻结，生产域名、密钥轮换和 MFA 方式待实施阶段冻结。
+
+### 2026-09-02：Vue 分层架构与单点登录
+
+- 范围：www / trade / admin / backend / bridge
+- 要求：主站使用 Nuxt 4 的 SSR/SSG/Hybrid 能力，交易实验室和管理后台使用 Vue 3 + Vite SPA；三个应用通过统一身份中心实现 SSO，但各自持有 Host-only 服务端会话。
+- 影响：修订原“三应用统一直接使用 Vite”的基线；新增认证授权码、服务端会话、CSRF、WebSocket 单次票据、三种退出范围和旧 JWT 清理方案。
+- 是否改变既有基线：是，仍统一 Vue 生态和 shadcn-vue，但按产品性质选择渲染方式并冻结子域认证边界。
+- 待确认项：正式域名、身份中心签名密钥轮换、管理员 MFA 方式和会话最终有效期。
 
 后续每次新增要求按以下格式追加，并同步修改正文相关章节：
 
@@ -344,7 +376,11 @@ Windows 7 SP1 是硬性兼容目标，不能用“在开发机可运行”代替
 ## 12. 官方依据
 
 - [Vue Composition API FAQ](https://vuejs.org/guide/extras/composition-api-faq)
+- [Nuxt Rendering Modes](https://nuxt.com/docs/4.x/guide/concepts/rendering)
 - [shadcn-vue Introduction](https://shadcn-vue.com/docs/introduction)
+- [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0-18.html)
+- [RFC 9700: OAuth 2.0 Security Best Current Practice](https://www.rfc-editor.org/rfc/rfc9700.html)
+- [RFC 10017: OAuth 2.0 for Browser-Based Applications](https://www.rfc-editor.org/rfc/rfc10017.html)
 - [Electron: Farewell, Windows 7/8/8.1](https://www.electronjs.org/blog/windows-7-to-8-1-deprecation-notice)
 - [Rust platform support](https://doc.rust-lang.org/rustc/platform-support.html)
 - [Rust Windows 7 target](https://doc.rust-lang.org/nightly/rustc/platform-support/win7-windows-msvc.html)
