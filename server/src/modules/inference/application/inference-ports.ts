@@ -1,4 +1,4 @@
-import type { AnalysisInputSnapshot, AnalysisRun, MarketAnalysisDetail, MarketAnalysisResult, MarketAnalysisSummary, TraderDecisionDetail, TraderDecisionResult, TraderDecisionSummary, TraderInputSnapshot, TraderRun } from '../domain/inference.js'
+import type { AnalysisInputSnapshot, AnalysisRun, AnalysisWorkClaim, JsonObject, MarketAnalysisDetail, MarketAnalysisResult, MarketAnalysisSummary, TraderDecisionDetail, TraderDecisionResult, TraderDecisionSummary, TraderInputSnapshot, TraderRun } from '../domain/inference.js'
 
 export interface QueueAnalysisInput {
   id: string
@@ -7,6 +7,8 @@ export interface QueueAnalysisInput {
   strategyVersionId: string
   symbol: string
   trigger: 'manual' | 'scheduled' | 'event'
+  scheduleSlot: string | null
+  marketSourceAccountId: string | null
   idempotencyKey: string
   requestedAt: string
   manualCooldownSeconds: number
@@ -19,6 +21,13 @@ export interface BeginAnalysisInput {
   snapshotId: string
   snapshot: AnalysisInputSnapshot
   snapshotHash: string
+  taskId: string
+  attemptId: string
+  modelProfileId: string | null
+  provider: string
+  model: string
+  workerId: string
+  deadlineAt: string
 }
 
 export interface CompleteAnalysisInput {
@@ -26,7 +35,27 @@ export interface CompleteAnalysisInput {
   userId: number
   expectedRevision: number
   marketAnalysisId: string
+  taskId: string
+  attemptId: string
+  fencingToken: number
+  usage: JsonObject | null
   result: MarketAnalysisResult
+}
+
+export interface FailAnalysisAttemptInput {
+  runId: string
+  userId: number
+  expectedRevision: number
+  taskId: string
+  attemptId: string
+  attemptNumber: number
+  fencingToken: number
+  provider: string
+  model: string
+  errorCode: string
+  failureStatus: 'failed' | 'timed_out' | 'contract_invalid'
+  retryable: boolean
+  maxAttempts: number
 }
 
 export interface RequestTraderEvaluationInput {
@@ -61,8 +90,11 @@ export interface CompleteTraderInput {
 
 export interface InferenceRepository {
   queueAnalysis(input: QueueAnalysisInput): Promise<AnalysisRun>
-  beginAnalysis(input: BeginAnalysisInput): Promise<AnalysisRun>
+  getAnalysisRun(runId: string): Promise<AnalysisRun | null>
+  beginAnalysis(input: BeginAnalysisInput): Promise<AnalysisWorkClaim>
   completeAnalysis(input: CompleteAnalysisInput): Promise<{ analysis: MarketAnalysisSummary; traderRuns: TraderRun[] }>
+  failAnalysisAttempt(input: FailAnalysisAttemptInput): Promise<AnalysisWorkClaim | null>
+  failQueuedAnalysis(runId: string, errorCode: string): Promise<void>
   requestTraderEvaluation(input: RequestTraderEvaluationInput): Promise<TraderRun>
   beginTrader(input: BeginTraderInput): Promise<TraderRun>
   completeTrader(input: CompleteTraderInput): Promise<TraderDecisionSummary>

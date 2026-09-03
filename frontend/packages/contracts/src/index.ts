@@ -208,14 +208,14 @@ export const analysisJobSchema = z.object({
 export const analysisJobResponseSchema = z.object({ data: analysisJobSchema, meta: responseMetaSchema })
 
 export const marketBiasSchema = z.enum(['bullish', 'bearish', 'neutral', 'uncertain'])
-export const marketRecommendationSchema = z.enum(['observe', 'long_candidate', 'short_candidate', 'manage_existing'])
+export const marketOpportunitySchema = z.enum(['none', 'long_setup', 'short_setup'])
 export const marketAnalysisSummarySchema = z.object({
   analysis_id: z.string().min(1),
   strategy_id: z.string().min(1),
   strategy_version_id: z.string().min(1),
   symbol: z.string().min(1),
   market_bias: marketBiasSchema,
-  recommendation: marketRecommendationSchema,
+  opportunity: marketOpportunitySchema,
   confidence: z.number().min(0).max(100),
   summary: z.string(),
   analyzed_at: z.iso.datetime({ offset: true }),
@@ -223,7 +223,7 @@ export const marketAnalysisSummarySchema = z.object({
   revision: numericRevisionSchema,
 }).transform((value) => ({
   analysisId: value.analysis_id, strategyId: value.strategy_id, strategyVersionId: value.strategy_version_id,
-  symbol: value.symbol, marketBias: value.market_bias, recommendation: value.recommendation,
+  symbol: value.symbol, marketBias: value.market_bias, opportunity: value.opportunity,
   confidence: value.confidence, summary: value.summary, analyzedAt: value.analyzed_at,
   validUntil: value.valid_until, revision: value.revision,
 }))
@@ -245,6 +245,24 @@ const traderExecutableActionValues = ['market_order', 'pending_order', 'modify_p
 export const traderExecutableActionSchema = z.enum(traderExecutableActionValues)
 export const traderActionSchema = z.enum(['hold', ...traderExecutableActionValues])
 export const traderDecisionStatusSchema = z.enum(['proposed', 'stale', 'risk_rejected', 'accepted'])
+export const traderTaskModeSchema = z.enum(['entry', 'manage', 'both'])
+export const traderRunSchema = z.object({
+  trader_run_id: z.string().min(1),
+  analysis_id: z.string().min(1),
+  trading_account_id: z.string().min(1),
+  strategy_id: z.string().min(1),
+  strategy_version_id: z.string().min(1),
+  task_mode: traderTaskModeSchema,
+  status: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'expired']),
+  created_at: z.iso.datetime({ offset: true }),
+  updated_at: z.iso.datetime({ offset: true }),
+  revision: numericRevisionSchema,
+}).transform((value) => ({
+  traderRunId: value.trader_run_id, analysisId: value.analysis_id, tradingAccountId: value.trading_account_id,
+  strategyId: value.strategy_id, strategyVersionId: value.strategy_version_id, taskMode: value.task_mode,
+  status: value.status, createdAt: value.created_at, updatedAt: value.updated_at, revision: value.revision,
+}))
+export const traderRunResponseSchema = z.object({ data: traderRunSchema, meta: responseMetaSchema })
 export const traderDecisionSummarySchema = z.object({
   decision_id: z.string().min(1),
   analysis_id: z.string().min(1),
@@ -317,6 +335,8 @@ export type AnalysisJobCreate = z.infer<typeof analysisJobCreateSchema>
 export type AnalysisJob = z.infer<typeof analysisJobSchema>
 export type MarketAnalysisSummary = z.infer<typeof marketAnalysisSummarySchema>
 export type MarketAnalysisDetail = z.infer<typeof marketAnalysisDetailSchema>
+export type TraderTaskMode = z.infer<typeof traderTaskModeSchema>
+export type TraderRun = z.infer<typeof traderRunSchema>
 export type TraderDecisionSummary = z.infer<typeof traderDecisionSummarySchema>
 export type TraderDecisionDetail = z.infer<typeof traderDecisionDetailSchema>
 export type InferenceRealtimeEvent = z.infer<typeof inferenceRealtimeEventSchema>

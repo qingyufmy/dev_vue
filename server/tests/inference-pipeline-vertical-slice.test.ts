@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest'
 import { contentHash, InferenceError, InferenceService, inferenceRoutes, snapshotHash, type AnalysisInputSnapshot, type AnalysisRun, type InferenceRepository, type MarketAnalysisSummary, type TraderDecisionSummary, type TraderInputSnapshot, type TraderRun } from '../src/modules/inference/index.js'
 import { StrategyService, type StrategyCatalog, type StrategyKind, type StrategySummary, type StrategyVersion } from '../src/modules/strategies/index.js'
 
-const analysisVersion: StrategyVersion = { id: '11', strategyId: '10', kind: 'analysis', version: 1, promptText: '只分析行情', promptHash: 'a'.repeat(64), inputContractVersion: 'market-analysis-input/v1', outputContractVersion: 'market-analysis/v1' }
-const traderVersion: StrategyVersion = { id: '21', strategyId: '20', kind: 'trader', version: 1, promptText: '结合账户给出动作', promptHash: 'b'.repeat(64), inputContractVersion: 'account-trader-input/v1', outputContractVersion: 'trade-decision/v1' }
+const analysisVersion: StrategyVersion = { id: '11', strategyId: '10', kind: 'analysis', version: 1, promptText: '只分析行情', promptHash: 'a'.repeat(64), config: {}, inputContractVersion: 'market-analysis-input/v1', outputContractVersion: 'market-analysis/v1' }
+const traderVersion: StrategyVersion = { id: '21', strategyId: '20', kind: 'trader', version: 1, promptText: '结合账户给出动作', promptHash: 'b'.repeat(64), config: {}, inputContractVersion: 'account-trader-input/v1', outputContractVersion: 'trade-decision/v1' }
 
 class MemoryStrategies implements StrategyCatalog {
   async listAvailable(_userId: number, kind?: StrategyKind): Promise<StrategySummary[]> { return [analysisVersion, traderVersion].filter(item => !kind || item.kind === kind).map(item => ({ id: item.strategyId, kind: item.kind, scope: 'user', ownerUserId: 42, name: item.kind, description: '', status: 'active', activeVersionId: item.id, revision: 1 })) }
@@ -21,8 +21,11 @@ class MemoryInference implements InferenceRepository {
   completeTraderInput: Parameters<InferenceRepository['completeTrader']>[0] | null = null
 
   async queueAnalysis(input: Parameters<InferenceRepository['queueAnalysis']>[0]) { this.queueInput = input; return analysisRun(input.id, input.trigger) }
-  async beginAnalysis(input: Parameters<InferenceRepository['beginAnalysis']>[0]) { this.beginAnalysisInput = input; return { ...analysisRun(input.runId, 'manual'), status: 'running' as const, inputSnapshotId: input.snapshotId, revision: 2 } }
+  async getAnalysisRun(id: string) { return analysisRun(id, 'manual') }
+  async beginAnalysis(input: Parameters<InferenceRepository['beginAnalysis']>[0]) { this.beginAnalysisInput = input; return { run: { ...analysisRun(input.runId, 'manual'), status: 'running' as const, inputSnapshotId: input.snapshotId, modelTaskId: input.taskId, revision: 2 }, taskId: input.taskId, attemptId: input.attemptId, attemptNumber: 1, fencingToken: 1 } }
   async completeAnalysis(input: Parameters<InferenceRepository['completeAnalysis']>[0]) { this.completeAnalysisInput = input; return { analysis: marketAnalysis(input.marketAnalysisId), traderRuns: input.runId.includes('scheduled') ? [traderRun('trader-auto')] : [] } }
+  async failAnalysisAttempt() { return null }
+  async failQueuedAnalysis() {}
   async requestTraderEvaluation(input: Parameters<InferenceRepository['requestTraderEvaluation']>[0]) { this.traderInput = input; return traderRun(input.id) }
   async beginTrader(input: Parameters<InferenceRepository['beginTrader']>[0]) { this.beginTraderInput = input; return { ...traderRun(input.runId), status: 'running' as const, inputSnapshotId: input.snapshotId, revision: 2 } }
   async completeTrader(input: Parameters<InferenceRepository['completeTrader']>[0]) { this.completeTraderInput = input; return decision(input.decisionId) }
@@ -33,16 +36,17 @@ class MemoryInference implements InferenceRepository {
   async listTraderDecisions(userId: number, accountId: string) { return userId === 42 && accountId === '7' ? [decision('d1')] : [] }
 }
 
-function analysisRun(id: string, trigger: AnalysisRun['trigger']): AnalysisRun { return { id, userId: 42, strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', trigger, status: 'queued', inputSnapshotId: null, marketAnalysisId: null, createdAt: '2026-09-03T08:00:00.000Z', updatedAt: '2026-09-03T08:00:00.000Z', revision: 1 } }
-function marketAnalysis(id: string): MarketAnalysisSummary { return { id, userId: 42, strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', marketBias: 'bullish', recommendation: 'long_candidate', confidence: 76, summary: '结构偏多', analyzedAt: analysisResult.analyzedAt, validUntil: analysisResult.validUntil, inputSnapshotHash: 'c'.repeat(64), revision: 1 } }
-function traderRun(id: string): TraderRun { return { id, userId: 42, tradingAccountId: '7', subscriptionId: '30', subscriptionRevision: 4, marketAnalysisId: 'a1', strategyId: '20', strategyVersionId: '21', status: 'queued', inputSnapshotId: null, decisionId: null, createdAt: '2026-09-03T08:00:01.000Z', updatedAt: '2026-09-03T08:00:01.000Z', revision: 1 } }
+function analysisRun(id: string, trigger: AnalysisRun['trigger']): AnalysisRun { return { id, userId: 42, strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', marketSourceAccountId: null, trigger, scheduleSlot: null, status: 'queued', inputSnapshotId: null, modelTaskId: null, marketAnalysisId: null, createdAt: '2026-09-03T08:00:00.000Z', updatedAt: '2026-09-03T08:00:00.000Z', revision: 1 } }
+function analysisClaim(id: string) { return { run: { ...analysisRun(id, id.includes('scheduled') ? 'scheduled' : 'manual'), status: 'running' as const, revision: 2 }, taskId: `task-${id}`, attemptId: `attempt-${id}`, attemptNumber: 1, fencingToken: 1 } }
+function marketAnalysis(id: string): MarketAnalysisSummary { return { id, userId: 42, strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', marketBias: 'bullish', opportunity: 'long_setup', confidence: 76, summary: '结构偏多', analyzedAt: analysisResult.analyzedAt, validUntil: analysisResult.validUntil, inputSnapshotHash: 'c'.repeat(64), revision: 1 } }
+function traderRun(id: string): TraderRun { return { id, userId: 42, tradingAccountId: '7', subscriptionId: '30', subscriptionRevision: 4, marketAnalysisId: 'a1', strategyId: '20', strategyVersionId: '21', taskMode: 'entry', positionsRevision: 0, pendingOrdersRevision: 0, status: 'queued', inputSnapshotId: null, decisionId: null, createdAt: '2026-09-03T08:00:01.000Z', updatedAt: '2026-09-03T08:00:01.000Z', revision: 1 } }
 function decision(id: string): TraderDecisionSummary { return { id, userId: 42, tradingAccountId: '7', marketAnalysisId: 'a1', strategyId: '20', strategyVersionId: '21', action: 'hold', side: null, confidence: 80, summary: '等待更好价格', status: 'proposed', inputSnapshotHash: 'd'.repeat(64), createdAt: '2026-09-03T08:00:02.000Z', revision: 1 } }
 
-const analysisResult = { marketBias: 'bullish' as const, recommendation: 'long_candidate' as const, confidence: 76, summary: '结构偏多', marketRegime: 'trend', supportingEvidence: ['H1 多头'], counterEvidence: ['点差扩大'], keyLevels: { support: '3530' }, invalidation: { price: '3520' }, dataGaps: [], analysisBody: '完整分析正文', analyzedAt: '2026-09-03T08:00:00.000Z', validUntil: '2026-09-03T08:03:00.000Z' }
+const analysisResult = { marketBias: 'bullish' as const, opportunity: 'long_setup' as const, confidence: 76, summary: '结构偏多', marketRegime: 'trend', supportingEvidence: ['H1 多头'], counterEvidence: ['点差扩大'], keyLevels: { support: '3530' }, invalidation: { price: '3520' }, dataGaps: [], analysisBody: '完整分析正文', analyzedAt: '2026-09-03T08:00:00.000Z', validUntil: '2026-09-03T08:03:00.000Z' }
 const holdDecision = { action: 'hold' as const, side: null, confidence: 80, summary: '等待更好价格', actions: [], reasoning: '当前价格不在候选区域' }
 const analysisSnapshot: AnalysisInputSnapshot = { kind: 'analysis', strategy: { id: '10', versionId: '11', promptHash: 'a'.repeat(64), promptText: '只分析行情' }, market: { symbol: 'XAUUSD', candles_revision: 8 }, macro: { revision: 3 }, capturedAt: '2026-09-03T08:00:00.000Z' }
 const frozenAnalysis = { market_bias: 'bullish', confidence: 76 }
-const traderSnapshot: TraderInputSnapshot = { kind: 'trader', strategy: { id: '20', versionId: '21', promptHash: 'b'.repeat(64), promptText: '结合账户给出动作' }, analysis: { id: 'a1', contentHash: contentHash(frozenAnalysis), result: frozenAnalysis }, account: { id: '7' }, positions: [], pendingOrders: [], quote: { bid: '3530' }, contract: { symbol: 'XAUUSD' }, risk: { enabled: true }, subscriptionRevision: 4, capturedAt: '2026-09-03T08:00:01.000Z' }
+const traderSnapshot: TraderInputSnapshot = { kind: 'trader', taskMode: 'entry', strategy: { id: '20', versionId: '21', promptHash: 'b'.repeat(64), promptText: '结合账户给出动作' }, analysis: { id: 'a1', contentHash: contentHash(frozenAnalysis), result: frozenAnalysis }, account: { id: '7' }, positions: [], pendingOrders: [], quote: { bid: '3530' }, contract: { symbol: 'XAUUSD' }, risk: { enabled: true }, subscriptionRevision: 4, positionsRevision: 0, pendingOrdersRevision: 0, capturedAt: '2026-09-03T08:00:01.000Z' }
 
 describe('Stage 12A analyst and account-trader pipeline', () => {
   it('queues manual analysis only against an active analysis strategy and applies the 3-minute server cooldown contract', async () => {
@@ -61,8 +65,8 @@ describe('Stage 12A analyst and account-trader pipeline', () => {
 
   it('keeps the trigger authoritative in persistence instead of accepting a caller-controlled fan-out flag', async () => {
     const repository = new MemoryInference(); const service = new InferenceService(repository, new StrategyService(new MemoryStrategies()))
-    await expect(service.completeAnalysis(42, 'run-manual', 2, analysisResult)).resolves.toMatchObject({ traderRuns: [] })
-    await expect(service.completeAnalysis(42, 'run-scheduled', 2, analysisResult)).resolves.toMatchObject({ traderRuns: [{ tradingAccountId: '7' }] })
+    await expect(service.completeAnalysis(analysisClaim('run-manual'), analysisResult)).resolves.toMatchObject({ traderRuns: [] })
+    await expect(service.completeAnalysis(analysisClaim('run-scheduled'), analysisResult)).resolves.toMatchObject({ traderRuns: [{ tradingAccountId: '7' }] })
     expect(repository.completeAnalysisInput).not.toHaveProperty('fanOutToSubscribers')
   })
 

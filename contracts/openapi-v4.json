@@ -1313,7 +1313,7 @@
       },
       "MarketAnalysisSummary": {
         "type": "object",
-        "required": ["analysis_id", "strategy_id", "strategy_version_id", "symbol", "market_bias", "recommendation", "confidence", "summary", "analyzed_at", "valid_until", "revision"],
+        "required": ["analysis_id", "strategy_id", "strategy_version_id", "symbol", "market_bias", "opportunity", "confidence", "summary", "analyzed_at", "valid_until", "revision"],
         "additionalProperties": false,
         "properties": {
           "analysis_id": { "$ref": "#/components/schemas/OpaqueId" },
@@ -1321,7 +1321,7 @@
           "strategy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
           "symbol": { "$ref": "#/components/schemas/Symbol" },
           "market_bias": { "type": "string", "enum": ["bullish", "bearish", "neutral", "uncertain"] },
-          "recommendation": { "type": "string", "enum": ["observe", "long_candidate", "short_candidate", "manage_existing"] },
+          "opportunity": { "type": "string", "enum": ["none", "long_setup", "short_setup"] },
           "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
           "summary": { "type": "string", "maxLength": 2000 },
           "analyzed_at": { "$ref": "#/components/schemas/UtcDateTime" },
@@ -1375,7 +1375,7 @@
       },
       "TraderRun": {
         "type": "object",
-        "required": ["trader_run_id", "analysis_id", "trading_account_id", "strategy_id", "strategy_version_id", "status", "created_at", "updated_at", "revision"],
+        "required": ["trader_run_id", "analysis_id", "trading_account_id", "strategy_id", "strategy_version_id", "task_mode", "status", "created_at", "updated_at", "revision"],
         "additionalProperties": false,
         "properties": {
           "trader_run_id": { "$ref": "#/components/schemas/OpaqueId" },
@@ -1383,6 +1383,7 @@
           "trading_account_id": { "$ref": "#/components/schemas/OpaqueId" },
           "strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
           "strategy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "task_mode": { "type": "string", "enum": ["entry", "manage", "both"] },
           "status": { "type": "string", "enum": ["queued", "running", "succeeded", "failed", "cancelled", "expired"] },
           "created_at": { "$ref": "#/components/schemas/UtcDateTime" },
           "updated_at": { "$ref": "#/components/schemas/UtcDateTime" },

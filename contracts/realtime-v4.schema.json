@@ -227,26 +227,27 @@
     },
     "MarketAnalysisSummaryData": {
       "type": "object",
-      "required": ["analysis_id", "strategy_id", "symbol", "market_bias", "recommendation", "confidence", "valid_until"],
+      "required": ["analysis_id", "strategy_id", "symbol", "market_bias", "opportunity", "confidence", "valid_until"],
       "additionalProperties": false,
       "properties": {
         "analysis_id": { "$ref": "#/$defs/OpaqueId" },
         "strategy_id": { "$ref": "#/$defs/OpaqueId" },
         "symbol": { "$ref": "#/$defs/Symbol" },
         "market_bias": { "type": "string", "enum": ["bullish", "bearish", "neutral", "uncertain"] },
-        "recommendation": { "type": "string", "enum": ["observe", "long_candidate", "short_candidate", "manage_existing"] },
+        "opportunity": { "type": "string", "enum": ["none", "long_setup", "short_setup"] },
         "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
         "valid_until": { "$ref": "#/$defs/UtcDateTime" }
       }
     },
     "TraderJobData": {
       "type": "object",
-      "required": ["trader_run_id", "analysis_id", "trading_account_id", "status", "updated_at"],
+      "required": ["trader_run_id", "analysis_id", "trading_account_id", "task_mode", "status", "updated_at"],
       "additionalProperties": false,
       "properties": {
         "trader_run_id": { "$ref": "#/$defs/OpaqueId" },
         "analysis_id": { "$ref": "#/$defs/OpaqueId" },
         "trading_account_id": { "$ref": "#/$defs/OpaqueId" },
+        "task_mode": { "type": "string", "enum": ["entry", "manage", "both"] },
         "status": { "type": "string", "enum": ["queued", "running", "succeeded", "failed", "cancelled", "expired"] },
         "updated_at": { "$ref": "#/$defs/UtcDateTime" }
       }

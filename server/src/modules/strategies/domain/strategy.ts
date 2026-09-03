@@ -21,6 +21,7 @@ export interface StrategyVersion {
   version: number
   promptText: string
   promptHash: string
+  config: Record<string, unknown>
   inputContractVersion: string
   outputContractVersion: string
 }

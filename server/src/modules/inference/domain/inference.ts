@@ -7,10 +7,11 @@ export type JsonObject = { [key: string]: JsonValue }
 export type AnalysisTrigger = 'manual' | 'scheduled' | 'event'
 export type InferenceRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'expired'
 export type MarketBias = 'bullish' | 'bearish' | 'neutral' | 'uncertain'
-export type MarketRecommendation = 'observe' | 'long_candidate' | 'short_candidate' | 'manage_existing'
+export type MarketOpportunity = 'none' | 'long_setup' | 'short_setup'
 export type TraderActionKind = 'hold' | 'market_order' | 'pending_order' | 'modify_position' | 'close_position' | 'modify_order' | 'cancel_order'
 export type TraderExecutableActionKind = Exclude<TraderActionKind, 'hold'>
 export type TraderDecisionStatus = 'proposed' | 'stale' | 'risk_rejected' | 'accepted'
+export type TraderTaskMode = 'entry' | 'manage' | 'both'
 
 export interface AnalysisRun {
   id: string
@@ -18,9 +19,12 @@ export interface AnalysisRun {
   strategyId: string
   strategyVersionId: string
   symbol: string
+  marketSourceAccountId: string | null
   trigger: AnalysisTrigger
+  scheduleSlot: string | null
   status: InferenceRunStatus
   inputSnapshotId: string | null
+  modelTaskId: string | null
   marketAnalysisId: string | null
   createdAt: string
   updatedAt: string
@@ -34,7 +38,7 @@ export interface MarketAnalysisSummary {
   strategyVersionId: string
   symbol: string
   marketBias: MarketBias
-  recommendation: MarketRecommendation
+  opportunity: MarketOpportunity
   confidence: number
   summary: string
   analyzedAt: string
@@ -45,7 +49,7 @@ export interface MarketAnalysisSummary {
 
 export interface MarketAnalysisResult {
   marketBias: MarketBias
-  recommendation: MarketRecommendation
+  opportunity: MarketOpportunity
   confidence: number
   summary: string
   marketRegime: string
@@ -90,6 +94,7 @@ export interface AnalysisInputSnapshot {
 
 export interface TraderInputSnapshot {
   kind: 'trader'
+  taskMode: TraderTaskMode
   strategy: { id: string; versionId: string; promptHash: string; promptText: string }
   analysis: { id: string; contentHash: string; result: JsonObject }
   account: JsonObject
@@ -99,6 +104,8 @@ export interface TraderInputSnapshot {
   contract: JsonObject
   risk: JsonObject
   subscriptionRevision: number
+  positionsRevision: number
+  pendingOrdersRevision: number
   capturedAt: string
 }
 
@@ -113,6 +120,9 @@ export interface TraderRun {
   marketAnalysisId: string
   strategyId: string
   strategyVersionId: string
+  taskMode: TraderTaskMode
+  positionsRevision: number
+  pendingOrdersRevision: number
   status: InferenceRunStatus
   inputSnapshotId: string | null
   decisionId: string | null
@@ -143,6 +153,14 @@ export interface TraderDecisionDetail {
   result: TraderDecisionResult
 }
 
+export interface AnalysisWorkClaim {
+  run: AnalysisRun
+  taskId: string
+  attemptId: string
+  attemptNumber: number
+  fencingToken: number
+}
+
 export class InferenceError extends Error {
   constructor(public readonly code: string, public readonly status: number, public readonly retryAfterMs?: number) {
     super(code)
@@ -157,6 +175,24 @@ export function normalizeSymbol(value: string) {
 
 export function assertConfidence(value: number) {
   if (!Number.isFinite(value) || value < 0 || value > 100) throw new InferenceError('confidence_invalid', 422)
+}
+
+export function assertMarketAnalysisResult(value: MarketAnalysisResult) {
+  if (!['bullish', 'bearish', 'neutral', 'uncertain'].includes(value.marketBias)) throw new InferenceError('market_bias_invalid', 422)
+  if (!['none', 'long_setup', 'short_setup'].includes(value.opportunity)) throw new InferenceError('market_opportunity_invalid', 422)
+  if (![value.summary, value.marketRegime, value.analysisBody].every(item => typeof item === 'string')) throw new InferenceError('analysis_text_invalid', 422)
+  if (![value.supportingEvidence, value.counterEvidence, value.dataGaps].every(items => Array.isArray(items) && items.every(item => typeof item === 'string'))) throw new InferenceError('analysis_evidence_invalid', 422)
+  if (!isJsonObject(value.keyLevels) || !isJsonObject(value.invalidation)) throw new InferenceError('analysis_structure_invalid', 422)
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function traderTaskMode(opportunity: MarketOpportunity, hasPositions: boolean, hasPendingOrders: boolean): TraderTaskMode | null {
+  const hasExposure = hasPositions || hasPendingOrders
+  if (opportunity === 'none') return hasExposure ? 'manage' : null
+  return hasExposure ? 'both' : 'entry'
 }
 
 const forbiddenContextKeys = new Set(['conversation_id', 'previous_response_id', 'thread_id', 'chat_history', 'messages'])

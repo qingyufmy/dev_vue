@@ -21,6 +21,7 @@ interface VersionRow extends RowDataPacket {
   version_number: number
   prompt_text: string
   prompt_sha256: string
+  config_json: string | object
   input_contract_version: string
   output_contract_version: string
 }
@@ -42,13 +43,18 @@ export class MysqlStrategyCatalog implements StrategyCatalog {
   }
 
   async findActiveVersion(userId: number, strategyId: string) {
-    const [rows] = await this.pool.execute<VersionRow[]>(`SELECT CAST(v.id AS CHAR) id,CAST(v.strategy_id AS CHAR) strategy_id,s.kind,v.version_number,v.prompt_text,v.prompt_sha256,v.input_contract_version,v.output_contract_version FROM strategies s INNER JOIN strategy_versions v ON v.id=s.active_version_id AND v.strategy_id=s.id WHERE s.id=? AND s.status='active' AND s.deleted_at_utc IS NULL AND (s.scope='platform' OR s.owner_user_id=?) LIMIT 1`, [strategyId, userId])
+    const [rows] = await this.pool.execute<VersionRow[]>(`SELECT CAST(v.id AS CHAR) id,CAST(v.strategy_id AS CHAR) strategy_id,s.kind,v.version_number,v.prompt_text,v.prompt_sha256,v.config_json,v.input_contract_version,v.output_contract_version FROM strategies s INNER JOIN strategy_versions v ON v.id=s.active_version_id AND v.strategy_id=s.id WHERE s.id=? AND s.status='active' AND s.deleted_at_utc IS NULL AND (s.scope='platform' OR s.owner_user_id=?) LIMIT 1`, [strategyId, userId])
     const row = rows[0]
     if (!row) return null
     const version: StrategyVersion = {
       id: row.id, strategyId: row.strategy_id, kind: row.kind, version: Number(row.version_number), promptText: row.prompt_text,
-      promptHash: row.prompt_sha256, inputContractVersion: row.input_contract_version, outputContractVersion: row.output_contract_version,
+      promptHash: row.prompt_sha256, config: parseConfig(row.config_json), inputContractVersion: row.input_contract_version, outputContractVersion: row.output_contract_version,
     }
     return version
   }
+}
+
+function parseConfig(value: string | object) {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
 }

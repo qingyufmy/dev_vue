@@ -319,8 +319,8 @@
 | `positions.changed` | upsert/remove 和账户 revision | positions HTTP |
 | `pending_orders.changed` | upsert/remove 和账户 revision | pending orders HTTP |
 | `analysis.job.changed` | 分析任务排队、运行、完成、失败或过期 | analysis job HTTP |
-| `market_analysis.created` | 最新市场分析摘要，不含完整推理 | market analyses HTTP |
-| `trader.job.changed` | 单个交易账户的交易员任务状态 | trade decisions HTTP |
+| `market_analysis.created` | 最新市场分析摘要及 `opportunity`，不含完整推理 | market analyses HTTP |
+| `trader.job.changed` | 单个交易账户的交易员任务状态及 `task_mode`（entry/manage/both） | trade decisions HTTP |
 | `trade_decision.created` | 单个交易账户的动作建议摘要，不含完整正文 | trade decisions HTTP |
 | `risk.status.changed` | kill switch、规则 revision、当前状态 | risk snapshot HTTP |
 | `risk.alert.created` | 新风险告警摘要 | risk decisions HTTP |
