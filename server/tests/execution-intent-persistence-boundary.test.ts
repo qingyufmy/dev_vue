@@ -46,7 +46,7 @@ describe('Stage 12E persistence and transport boundaries', () => {
   it('keeps the MySQL preparation transaction free of terminal and network calls and writes one small outbox invalidation', async () => {
     const repository = await readFile(new URL('../src/modules/execution/infrastructure/mysql-execution-repository.ts', import.meta.url), 'utf8')
     expect(repository).toContain("'operation.changed'")
-    expect(repository).toContain("status='active' AND expires_at_utc>UTC_TIMESTAMP(3)")
+    expect(repository).toContain("status IN ('active','committed') FOR UPDATE")
     expect(repository).toContain('FOR UPDATE')
     expect(repository).not.toMatch(/bridge|fetch\(|axios|websocket|ordersend/i)
   })
@@ -54,7 +54,7 @@ describe('Stage 12E persistence and transport boundaries', () => {
   it('publishes the Stage 12E operation contract while keeping action payloads off realtime', async () => {
     const openapi = await readFile(new URL('../../contracts/openapi-v4.json', import.meta.url), 'utf8')
     const realtime = await readFile(new URL('../../contracts/realtime-v4.schema.json', import.meta.url), 'utf8')
-    expect(openapi).toContain('stage-12e-execution-intent-reservation')
+    expect(openapi).toContain('stage-12f-bridge-command-reconciliation')
     expect(openapi).toContain('/operations/{operation_id}')
     expect(realtime).toContain('operation.changed')
     expect(realtime).not.toContain('expected_state_sha256')

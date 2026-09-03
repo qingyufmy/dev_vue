@@ -1,0 +1,396 @@
+import { randomUUID } from 'node:crypto'
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
+import type {
+  BridgeCommandRepository, BridgeResultPersistence,
+} from '../application/bridge-command-ports.js'
+import {
+  BridgeCommandError, bridgeCommandInputMatches, routeContinues, routeMatches,
+  type BridgeCommand, type BridgeCommandAcceptedEnvelope, type BridgeCommandResultEnvelope, type BridgeWireRoute,
+} from '../domain/bridge-command.js'
+import { sha256Canonical } from '../domain/execution.js'
+import type { TraderAction } from '../../inference/domain/inference.js'
+
+interface CommandRow extends RowDataPacket {
+  id: string; execution_intent_id: string; command_sequence: number; user_id: number; trading_account_id: string
+  terminal_profile_id: string; terminal_instance_id: string; broker_server: string; account_login: string
+  connection_epoch: string | number; action: BridgeCommand['action']; idempotency_key: string; request_sha256: string
+  status: BridgeCommand['status']; issued_at_utc: Date; deadline_at_utc: Date; dispatched_at_utc: Date | null
+  accepted_at_utc: Date | null; completed_at_utc: Date | null; error_code: string | null
+  terminal_code: string | null; result_sha256: string | null; result_message_id: string | null; revision: number
+  created_at_utc: Date; updated_at_utc: Date; request_envelope_json: string | BridgeCommand['request']
+}
+interface CommandLocator extends RowDataPacket { id: string; trading_account_id: string; execution_intent_id: string }
+interface IntentRow extends RowDataPacket { id: string; operation_id: string; user_id: number; trading_account_id: string; action_kind: string; status: string; revision: number; expires_at_utc: Date }
+interface ExistingResultRow extends RowDataPacket { bridge_command_id: string; result_sha256: string }
+interface PriorResultRow extends RowDataPacket { status: BridgeCommandResultEnvelope['payload']['status'] }
+interface CountRow extends RowDataPacket { status: string; quantity: number }
+interface IntentPayloadRow extends RowDataPacket { action_json: string | TraderAction; action_sha256: string }
+interface TradeStateRow extends RowDataPacket {
+  terminal_instance_id: string; connection_epoch: string | number; projection_revision: string | number
+  state_json: string | Record<string, unknown>; state_sha256: string
+}
+
+const selectCommand = `SELECT c.*,p.request_envelope_json FROM bridge_commands_v4 c
+  INNER JOIN bridge_command_payloads_v4 p ON p.bridge_command_id=c.id`
+
+export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
+  constructor(private readonly pool: Pool) {}
+
+  async create(command: BridgeCommand) {
+    return transaction(this.pool, async connection => {
+      await lockAccount(connection, command.accountId)
+      const [existingRows] = await connection.execute<CommandRow[]>(`${selectCommand} WHERE c.execution_intent_id=? AND c.command_sequence=? LIMIT 1 FOR UPDATE`, [command.executionIntentId, command.commandSequence])
+      const existing = existingRows[0]
+      if (existing) {
+        const mapped = mapCommand(existing)
+        if (!bridgeCommandInputMatches(mapped, {
+          executionIntentId: command.executionIntentId, commandSequence: command.commandSequence,
+          userId: command.userId, accountId: command.accountId, terminalProfileId: command.terminalProfileId,
+          route: command.route, action: command.action, params: command.request.payload.params,
+          expectedState: command.request.payload.expected_state, deadlineAt: command.deadlineAt,
+        })) {
+          throw new BridgeCommandError('bridge_command_idempotency_conflict', 409)
+        }
+        return mapped
+      }
+      await lockExactRoute(connection, command)
+      const intent = await lockIntent(connection, command.executionIntentId)
+      if (intent.user_id !== command.userId || String(intent.trading_account_id) !== command.accountId
+        || intent.status !== 'prepared' || intent.expires_at_utc.getTime() <= Date.parse(command.issuedAt)
+        || Date.parse(command.deadlineAt) > intent.expires_at_utc.getTime() || bridgeAction(intent.action_kind) !== command.action) {
+        throw new BridgeCommandError('bridge_command_intent_not_prepared', 409)
+      }
+      const [payloadRows] = await connection.execute<IntentPayloadRow[]>('SELECT action_json,action_sha256 FROM execution_intent_payloads WHERE execution_intent_id=? LIMIT 1', [intent.id])
+      const sourceAction = payloadRows[0] ? parse<TraderAction>(payloadRows[0].action_json) : null
+      if (!sourceAction || sha256Canonical(sourceAction) !== payloadRows[0]!.action_sha256) throw new BridgeCommandError('bridge_command_intent_payload_invalid', 409)
+      assertCommandMatchesIntent(command, sourceAction)
+      await assertExpectedStateMatchesSnapshot(connection, command, sourceAction)
+      await connection.execute(`INSERT INTO bridge_commands_v4
+        (id,execution_intent_id,command_sequence,user_id,trading_account_id,terminal_profile_id,terminal_instance_id,broker_server,account_login,connection_epoch,action,idempotency_key,request_sha256,status,issued_at_utc,deadline_at_utc,dispatched_at_utc,accepted_at_utc,completed_at_utc,error_code,terminal_code,result_sha256,result_message_id,revision,created_at_utc,updated_at_utc)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1,?,?)`, [
+        command.id, command.executionIntentId, command.commandSequence, command.userId, command.accountId,
+        command.terminalProfileId, command.route.terminalInstanceId, command.route.brokerServer, command.route.login,
+        command.route.connectionEpoch, command.action, command.idempotencyKey, command.requestHash,
+        command.issuedAt, command.deadlineAt, command.createdAt, command.updatedAt,
+      ])
+      const paramsJson = JSON.stringify(command.request.payload.params)
+      const expectedJson = command.request.payload.expected_state === null ? null : JSON.stringify(command.request.payload.expected_state)
+      const envelopeJson = JSON.stringify(command.request)
+      await connection.execute(`INSERT INTO bridge_command_payloads_v4 (bridge_command_id,params_json,expected_state_json,request_envelope_json,payload_bytes) VALUES (?,?,?,?,?)`, [
+        command.id, paramsJson, expectedJson, envelopeJson,
+        Buffer.byteLength(paramsJson) + (expectedJson ? Buffer.byteLength(expectedJson) : 0) + Buffer.byteLength(envelopeJson),
+      ])
+      await commandEvent(connection, command.id, 'bridge.command.queued', null, 'queued', null, null, 1, command.requestHash, command.createdAt)
+      return command
+    })
+  }
+
+  async get(commandId: string) {
+    const [rows] = await this.pool.execute<CommandRow[]>(`${selectCommand} WHERE c.id=? LIMIT 1`, [commandId])
+    return rows[0] ? mapCommand(rows[0]) : null
+  }
+
+  async markDispatched(commandId: string, expectedRevision: number, now: string) {
+    return this.locked(commandId, async (connection, command, intent) => {
+      if (command.status !== 'queued' || command.revision !== expectedRevision) conflict()
+      if (Date.parse(command.deadlineAt) <= Date.parse(now)) throw new BridgeCommandError('bridge_command_deadline_expired', 409)
+      const next = await moveCommand(connection, command, 'dispatched', now, null, { dispatched: now })
+      await moveIntent(connection, intent, 'dispatching', now, null)
+      await refreshOperation(connection, intent.operation_id, now)
+      return next
+    }, true)
+  }
+
+  async markAccepted(envelope: BridgeCommandAcceptedEnvelope, now: string) {
+    return this.locked(envelope.payload.command_id, async (connection, command, intent) => {
+      if (!routeMatches(command, envelope.route)) throw new BridgeCommandError('bridge_command_route_mismatch', 409)
+      if (['accepted', 'succeeded', 'rejected', 'failed', 'reconciling'].includes(command.status)) return command
+      if (command.status === 'uncertain' && command.resultHash) return command
+      if (command.status !== 'dispatched' && command.status !== 'uncertain') conflict()
+      const next = await moveCommand(connection, command, 'accepted', now, null, { accepted: new Date(envelope.payload.accepted_at_utc_msc).toISOString() })
+      await moveIntent(connection, intent, 'awaiting_result', now, null)
+      await refreshOperation(connection, intent.operation_id, now)
+      return next
+    })
+  }
+
+  async markPreDispatchFailed(commandId: string, expectedRevision: number, errorCode: string, now: string) {
+    return this.locked(commandId, async (connection, command, intent) => {
+      if (command.status !== 'queued' || command.revision !== expectedRevision) conflict()
+      const next = await moveCommand(connection, command, 'failed', now, errorCode, { completed: now })
+      await moveIntent(connection, intent, 'failed', now, errorCode, true)
+      await settleReservation(connection, intent.id, 'released', errorCode, now)
+      await refreshOperation(connection, intent.operation_id, now)
+      return next
+    })
+  }
+
+  async markUncertain(commandId: string, expectedRevision: number, errorCode: string, now: string) {
+    return this.locked(commandId, async (connection, command, intent) => {
+      if (!['dispatched', 'accepted', 'reconciling'].includes(command.status) || command.revision !== expectedRevision) conflict()
+      const next = await moveCommand(connection, command, 'uncertain', now, errorCode)
+      await moveIntent(connection, intent, 'uncertain', now, errorCode)
+      await refreshOperation(connection, intent.operation_id, now)
+      return next
+    })
+  }
+
+  async persistResult(envelope: BridgeCommandResultEnvelope, resultHash: string, now: string): Promise<BridgeResultPersistence> {
+    return this.locked(envelope.payload.command_id, async (connection, command, intent) => {
+      if (!routeContinues(command, envelope.route) || envelope.payload.action !== command.action) throw new BridgeCommandError('bridge_command_result_route_mismatch', 409)
+      const [messageRows] = await connection.execute<ExistingResultRow[]>('SELECT bridge_command_id,result_sha256 FROM bridge_command_results_v4 WHERE message_id=? LIMIT 1 FOR UPDATE', [envelope.message_id])
+      if (messageRows[0]) {
+        if (messageRows[0].bridge_command_id !== command.id || messageRows[0].result_sha256 !== resultHash) throw new BridgeCommandError('bridge_command_result_message_conflict', 409)
+        return { command, disposition: 'duplicate' }
+      }
+      if (command.resultHash === resultHash) return { command, disposition: 'duplicate' }
+      let priorResultStatus: BridgeCommandResultEnvelope['payload']['status'] | null = null
+      if (command.resultHash !== null) {
+        const [priorRows] = await connection.execute<PriorResultRow[]>(
+          'SELECT status FROM bridge_command_results_v4 WHERE bridge_command_id=? AND result_sha256=? ORDER BY id DESC LIMIT 1 FOR UPDATE',
+          [command.id, command.resultHash],
+        )
+        priorResultStatus = priorRows[0]?.status ?? null
+      }
+      const reconciledTerminalResult = command.resultHash !== null
+        && command.status === 'reconciling'
+        && priorResultStatus === 'uncertain'
+      const conflictResult = command.resultHash !== null && command.resultHash !== resultHash && !reconciledTerminalResult
+      await connection.execute(`INSERT INTO bridge_command_results_v4 (bridge_command_id,message_id,result_sha256,action,status,result_json,error_code,terminal_code,completed_at_utc,received_at_utc,conflict) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [
+        command.id, envelope.message_id, resultHash, envelope.payload.action, envelope.payload.status,
+        envelope.payload.result === null ? null : JSON.stringify(envelope.payload.result), envelope.payload.error_code,
+        envelope.payload.terminal_code === undefined || envelope.payload.terminal_code === null ? null : String(envelope.payload.terminal_code),
+        new Date(envelope.payload.completed_at_utc_msc).toISOString(), now, conflictResult ? 1 : 0,
+      ])
+      if (conflictResult) {
+        const next = await moveCommand(connection, command, 'uncertain', now, 'bridge_result_conflict', {}, resultHash)
+        if (intent.status !== 'uncertain') await moveIntent(connection, intent, 'uncertain', now, 'bridge_result_conflict')
+        await holdReservationForConflict(connection, intent.id, now)
+        await refreshOperation(connection, intent.operation_id, now)
+        return { command: next, disposition: 'conflict' }
+      }
+      if (!['dispatched', 'accepted', 'uncertain', 'reconciling'].includes(command.status)) conflict()
+      const completed = new Date(envelope.payload.completed_at_utc_msc).toISOString()
+      const next = await moveCommand(connection, command, envelope.payload.status, now, envelope.payload.error_code,
+        { completed, terminalCode: envelope.payload.terminal_code ?? null, resultHash, resultMessageId: envelope.message_id }, resultHash)
+      await moveIntent(connection, intent, envelope.payload.status, now, envelope.payload.error_code,
+        envelope.payload.status !== 'uncertain', completed)
+      if (envelope.payload.status === 'succeeded') await settleReservation(connection, intent.id, 'committed', null, now)
+      if (envelope.payload.status === 'rejected' || envelope.payload.status === 'failed') await settleReservation(connection, intent.id, 'released', envelope.payload.error_code ?? `bridge_${envelope.payload.status}`, now)
+      await refreshOperation(connection, intent.operation_id, now)
+      return { command: next, disposition: 'persisted' }
+    }, false, envelope.route)
+  }
+
+  async beginReconciliation(commandId: string, expectedRevision: number, now: string) {
+    return this.locked(commandId, async (connection, command, intent) => {
+      if (command.status !== 'uncertain' || command.revision !== expectedRevision) conflict()
+      if (command.errorCode === 'bridge_result_conflict') throw new BridgeCommandError('bridge_command_conflict_manual_review_required', 409)
+      const next = await moveCommand(connection, command, 'reconciling', now, null)
+      if (intent.status !== 'reconciling') await moveIntent(connection, intent, 'reconciling', now, null)
+      return next
+    })
+  }
+
+  private async locked<T>(commandId: string, work: (connection: PoolConnection, command: BridgeCommand, intent: IntentRow) => Promise<T>, requireCurrentRoute = false, resultRoute: BridgeWireRoute | null = null) {
+    const [locatorRows] = await this.pool.execute<CommandLocator[]>('SELECT id,CAST(trading_account_id AS CHAR) trading_account_id,execution_intent_id FROM bridge_commands_v4 WHERE id=? LIMIT 1', [commandId])
+    const locator = locatorRows[0]
+    if (!locator) throw new BridgeCommandError('bridge_command_not_found', 404)
+    const routeCandidate = requireCurrentRoute || resultRoute ? await this.get(commandId) : null
+    if ((requireCurrentRoute || resultRoute) && !routeCandidate) throw new BridgeCommandError('bridge_command_not_found', 404)
+    return transaction(this.pool, async connection => {
+      await lockAccount(connection, locator.trading_account_id)
+      if (routeCandidate && requireCurrentRoute) await lockExactRoute(connection, routeCandidate)
+      if (routeCandidate && resultRoute) await lockResultRoute(connection, routeCandidate, resultRoute)
+      const intent = await lockIntent(connection, locator.execution_intent_id)
+      const [rows] = await connection.execute<CommandRow[]>(`${selectCommand} WHERE c.id=? LIMIT 1 FOR UPDATE`, [commandId])
+      if (!rows[0]) throw new BridgeCommandError('bridge_command_not_found', 404)
+      return work(connection, mapCommand(rows[0]), intent)
+    })
+  }
+}
+
+async function transaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>) {
+  const connection = await pool.getConnection()
+  try { await connection.beginTransaction(); const value = await work(connection); await connection.commit(); return value }
+  catch (error) { await connection.rollback(); throw error }
+  finally { connection.release() }
+}
+
+async function lockExactRoute(connection: PoolConnection, command: BridgeCommand) {
+  const [rows] = await connection.execute<RowDataPacket[]>(`SELECT a.id FROM trading_accounts a
+    INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.user_id=? AND o.role='owner' AND o.revoked_at_utc IS NULL
+    INNER JOIN terminal_profiles p ON p.id=? AND p.user_id=? AND p.deleted_at_utc IS NULL
+    INNER JOIN terminal_account_bindings b ON b.trading_account_id=a.id AND b.terminal_profile_id=p.id AND b.terminal_instance_id=? AND b.unbound_at_utc IS NULL
+    INNER JOIN bridge_connection_sessions s ON s.trading_account_id=a.id AND s.user_id=? AND s.terminal_profile_id=b.terminal_profile_id AND s.terminal_instance_id=b.terminal_instance_id AND s.connection_epoch_v4=? AND s.disconnected_at_utc IS NULL
+    INNER JOIN account_runtime_snapshots snap ON snap.trading_account_id=a.id AND snap.trade_permission=1
+    WHERE a.id=? AND BINARY a.broker_server=BINARY ? AND BINARY a.account_login=BINARY ? AND a.deleted_at_utc IS NULL FOR UPDATE`, [
+    command.userId, command.terminalProfileId, command.userId, command.route.terminalInstanceId, command.userId, command.route.connectionEpoch,
+    command.accountId, command.route.brokerServer, command.route.login,
+  ])
+  if (!rows[0]) throw new BridgeCommandError('bridge_command_route_unavailable', 409)
+}
+
+async function lockResultRoute(connection: PoolConnection, command: BridgeCommand, route: BridgeWireRoute) {
+  if (!routeContinues(command, route)) throw new BridgeCommandError('bridge_command_result_route_mismatch', 409)
+  const [rows] = await connection.execute<RowDataPacket[]>(`SELECT s.id FROM bridge_connection_sessions s
+    INNER JOIN terminal_profiles p ON p.id=s.terminal_profile_id AND p.user_id=s.user_id AND p.deleted_at_utc IS NULL
+    WHERE s.user_id=? AND s.trading_account_id=? AND s.terminal_profile_id=? AND s.terminal_instance_id=?
+      AND s.connection_epoch_v4=? AND s.disconnected_at_utc IS NULL FOR UPDATE`, [
+    command.userId, command.accountId, command.terminalProfileId, route.terminal_instance_id, route.connection_epoch,
+  ])
+  if (!rows[0]) throw new BridgeCommandError('bridge_command_result_session_invalid', 409)
+}
+
+async function lockAccount(connection: PoolConnection, accountId: string) {
+  const [rows] = await connection.execute<RowDataPacket[]>('SELECT id FROM trading_accounts WHERE id=? AND deleted_at_utc IS NULL FOR UPDATE', [accountId])
+  if (!rows[0]) throw new BridgeCommandError('bridge_command_account_not_found', 404)
+}
+
+async function lockIntent(connection: PoolConnection, intentId: string) {
+  const [rows] = await connection.execute<IntentRow[]>('SELECT id,operation_id,user_id,CAST(trading_account_id AS CHAR) trading_account_id,action_kind,status,revision,expires_at_utc FROM execution_intents WHERE id=? LIMIT 1 FOR UPDATE', [intentId])
+  if (!rows[0]) throw new BridgeCommandError('bridge_command_intent_not_found', 404)
+  return rows[0]
+}
+
+async function moveCommand(connection: PoolConnection, command: BridgeCommand, status: BridgeCommand['status'], now: string,
+  errorCode: string | null, fields: { dispatched?: string; accepted?: string; completed?: string; terminalCode?: string | number | null; resultHash?: string; resultMessageId?: string } = {}, evidenceHash: string | null = null) {
+  const [result] = await connection.execute<ResultSetHeader>(`UPDATE bridge_commands_v4 SET status=?,dispatched_at_utc=COALESCE(?,dispatched_at_utc),accepted_at_utc=COALESCE(?,accepted_at_utc),completed_at_utc=COALESCE(?,completed_at_utc),error_code=?,terminal_code=COALESCE(?,terminal_code),result_sha256=COALESCE(?,result_sha256),result_message_id=COALESCE(?,result_message_id),updated_at_utc=?,revision=revision+1 WHERE id=? AND revision=?`, [
+    status, fields.dispatched ?? null, fields.accepted ?? null, fields.completed ?? null, errorCode,
+    fields.terminalCode === undefined || fields.terminalCode === null ? null : String(fields.terminalCode), fields.resultHash ?? null,
+    fields.resultMessageId ?? null, now, command.id, command.revision,
+  ])
+  if (result.affectedRows !== 1) conflict()
+  await commandEvent(connection, command.id, `bridge.command.${status}`, command.status, status, errorCode, command.revision, command.revision + 1, evidenceHash, now)
+  const [rows] = await connection.execute<CommandRow[]>(`${selectCommand} WHERE c.id=? LIMIT 1`, [command.id])
+  return mapCommand(rows[0]!)
+}
+
+async function moveIntent(connection: PoolConnection, intent: IntentRow, status: string, now: string, errorCode: string | null, terminal = false, completedAt = now) {
+  const [result] = await connection.execute<ResultSetHeader>('UPDATE execution_intents SET status=?,error_code=?,updated_at_utc=?,completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?', [status, errorCode, now, terminal ? completedAt : null, intent.id, intent.revision])
+  if (result.affectedRows !== 1) conflict()
+  await connection.execute(`INSERT INTO execution_intent_events (execution_intent_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,?,?,?,?,?,?,JSON_OBJECT(),?)`, [intent.id, `execution.intent.${status}`, intent.status, status, errorCode, intent.revision, intent.revision + 1, now])
+  intent.status = status; intent.revision += 1
+}
+
+async function settleReservation(connection: PoolConnection, intentId: string, status: 'committed' | 'released', reason: string | null, now: string) {
+  const [rows] = await connection.execute<(RowDataPacket & { id: string; revision: number })[]>('SELECT id,revision FROM risk_reservations_v4 WHERE execution_intent_id=? AND status=\'active\' LIMIT 1 FOR UPDATE', [intentId])
+  const row = rows[0]; if (!row) return
+  const released = status === 'released' ? now : null
+  await connection.execute('UPDATE risk_reservations_v4 SET status=?,released_at_utc=?,release_reason=?,updated_at_utc=?,revision=revision+1 WHERE id=? AND revision=?', [status, released, reason, now, row.id, row.revision])
+  await connection.execute(`INSERT INTO risk_reservation_events_v4 (risk_reservation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,occurred_at_utc) VALUES (?,?, 'active',?,?,?,?,?)`, [row.id, `risk.reservation.${status}`, status, reason, row.revision, row.revision + 1, now])
+}
+
+async function holdReservationForConflict(connection: PoolConnection, intentId: string, now: string) {
+  const [rows] = await connection.execute<(RowDataPacket & { id: string; status: string; revision: number })[]>('SELECT id,status,revision FROM risk_reservations_v4 WHERE execution_intent_id=? LIMIT 1 FOR UPDATE', [intentId])
+  const row = rows[0]
+  if (!row || row.status === 'active') return
+  await connection.execute(`UPDATE risk_reservations_v4 SET status='active',released_at_utc=NULL,release_reason=NULL,updated_at_utc=?,revision=revision+1 WHERE id=? AND revision=?`, [now, row.id, row.revision])
+  await connection.execute(`INSERT INTO risk_reservation_events_v4 (risk_reservation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,occurred_at_utc) VALUES (?,'risk.reservation.reactivated',?,'active','bridge_result_conflict',?,?,?)`, [row.id, row.status, row.revision, row.revision + 1, now])
+}
+
+async function assertExpectedStateMatchesSnapshot(connection: PoolConnection, command: BridgeCommand, action: TraderAction) {
+  if (command.action === 'order.place') return
+  const expected = command.request.payload.expected_state
+  const ticket = command.request.payload.params.ticket
+  if (!expected || typeof ticket !== 'string') mismatch()
+  const entityKind = command.action.startsWith('position.') ? 'position' : 'pending_order'
+  const revisionKey = entityKind === 'position' ? 'positionsRevision' : 'pendingOrdersRevision'
+  const sourceRevision = action.expectedState[revisionKey]
+  if (typeof sourceRevision !== 'number' || !Number.isSafeInteger(sourceRevision) || sourceRevision < 1) mismatch()
+  const [rows] = await connection.execute<TradeStateRow[]>(`SELECT terminal_instance_id,connection_epoch,projection_revision,state_json,state_sha256
+    FROM bridge_trade_state_snapshots_v4
+    WHERE trading_account_id=? AND entity_kind=? AND ticket=? LIMIT 1 FOR UPDATE`, [command.accountId, entityKind, ticket])
+  const row = rows[0]
+  const state = row ? parse<Record<string, unknown>>(row.state_json) : null
+  if (!row || row.terminal_instance_id !== command.route.terminalInstanceId
+    || Number(row.connection_epoch) !== command.route.connectionEpoch
+    || Number(row.projection_revision) !== Number(sourceRevision)
+    || !state || sha256Canonical(state) !== row.state_sha256
+    || sha256Canonical(state) !== sha256Canonical(expected)) mismatch()
+}
+
+async function refreshOperation(connection: PoolConnection, operationId: string, now: string) {
+  const [rows] = await connection.execute<CountRow[]>('SELECT status,COUNT(*) quantity FROM execution_intents WHERE operation_id=? GROUP BY status FOR UPDATE', [operationId])
+  const counts = new Map(rows.map(row => [row.status, Number(row.quantity)]))
+  const total = [...counts.values()].reduce((sum, value) => sum + value, 0)
+  const success = counts.get('succeeded') ?? 0
+  const active = ['preparing', 'risk_pending', 'prepared', 'dispatching', 'awaiting_result', 'reconciling'].some(status => counts.has(status))
+  const uncertain = (counts.get('uncertain') ?? 0) > 0
+  let status = uncertain ? 'uncertain' : active ? 'running' : success === total ? 'succeeded'
+    : success > 0 ? 'partially_succeeded' : (counts.get('rejected') ?? 0) > 0 ? 'rejected' : 'failed'
+  const terminal = !['running', 'uncertain'].includes(status)
+  const [operationRows] = await connection.execute<(RowDataPacket & { status: string; revision: number })[]>('SELECT status,revision FROM operations WHERE id=? LIMIT 1 FOR UPDATE', [operationId])
+  const current = operationRows[0]; if (!current || current.status === status) return
+  await connection.execute('UPDATE operations SET status=?,updated_at_utc=?,completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?', [status, now, terminal ? now : null, operationId, current.revision])
+  await connection.execute(`INSERT INTO operation_events (operation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,?,?,?,NULL,?,?,JSON_OBJECT(),?)`, [operationId, `operation.${status}`, current.status, status, current.revision, current.revision + 1, now])
+  await connection.execute(`INSERT INTO outbox_events (event_id,aggregate_type,aggregate_id,event_type,payload_json,status,attempts,available_at_utc,created_at_utc) VALUES (?,?,?,'operation.changed',?,'pending',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [randomUUID(), 'operation', operationId, JSON.stringify({ operation_id: operationId, status, revision: String(current.revision + 1), updated_at: now })])
+}
+
+async function commandEvent(connection: PoolConnection, id: string, type: string, from: string | null, to: string, reason: string | null,
+  fromRevision: number | null, toRevision: number, evidenceHash: string | null, at: string) {
+  await connection.execute(`INSERT INTO bridge_command_events_v4 (bridge_command_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,evidence_sha256,occurred_at_utc) VALUES (?,?,?,?,?,?,?,?,?)`, [id, type, from, to, reason, fromRevision, toRevision, evidenceHash, at])
+}
+
+function mapCommand(row: CommandRow): BridgeCommand {
+  return {
+    id: row.id, executionIntentId: row.execution_intent_id, commandSequence: Number(row.command_sequence),
+    userId: Number(row.user_id), accountId: String(row.trading_account_id), terminalProfileId: row.terminal_profile_id,
+    route: { terminalInstanceId: row.terminal_instance_id, brokerServer: row.broker_server, login: row.account_login, connectionEpoch: Number(row.connection_epoch) },
+    action: row.action, idempotencyKey: row.idempotency_key, requestHash: row.request_sha256, status: row.status,
+    issuedAt: utc(row.issued_at_utc)!, deadlineAt: utc(row.deadline_at_utc)!, dispatchedAt: utc(row.dispatched_at_utc),
+    acceptedAt: utc(row.accepted_at_utc), completedAt: utc(row.completed_at_utc), errorCode: row.error_code,
+    terminalCode: row.terminal_code, resultHash: row.result_sha256, resultMessageId: row.result_message_id,
+    revision: Number(row.revision), createdAt: utc(row.created_at_utc)!, updatedAt: utc(row.updated_at_utc)!,
+    request: parse(row.request_envelope_json),
+  }
+}
+function parse<T>(value: string | T): T { return typeof value === 'string' ? JSON.parse(value) as T : value }
+function utc(value: Date | null) { return value ? new Date(value).toISOString() : null }
+function conflict(): never { throw new BridgeCommandError('bridge_command_revision_conflict', 409) }
+function bridgeAction(kind: string): BridgeCommand['action'] | null {
+  if (kind === 'market_order' || kind === 'pending_order') return 'order.place'
+  if (kind === 'modify_position') return 'position.protection.set'
+  if (kind === 'close_position') return 'position.close'
+  if (kind === 'modify_order') return 'pending_order.modify'
+  if (kind === 'cancel_order') return 'pending_order.cancel'
+  return null
+}
+
+function assertCommandMatchesIntent(command: BridgeCommand, action: TraderAction) {
+  if (bridgeAction(action.kind) !== command.action) throw new BridgeCommandError('bridge_command_intent_action_mismatch', 409)
+  const source = action.parameters
+  const target = command.request.payload.params
+  const same = (sourceKey: string, targetKey = sourceKey) => source[sourceKey] === undefined || String(source[sourceKey]) === String(target[targetKey])
+  const noUnexpected = (serverKeys: string[]) => Object.keys(target).every(key => serverKeys.includes(key) || source[key] !== undefined)
+  switch (action.kind) {
+    case 'market_order':
+      if (target.order_type !== 'market' || !same('symbol') || !same('side', 'direction') || !same('volume')
+        || !same('stop_loss') || !same('take_profit') || !noUnexpected(['direction', 'order_type', 'magic', 'deviation'])) mismatch()
+      break
+    case 'pending_order': {
+      const direction = String(source.type ?? '').startsWith('buy_') ? 'buy' : 'sell'
+      if (!same('symbol') || !same('type', 'order_type') || target.direction !== direction || !same('volume') || !same('price')
+        || !same('stop_limit_price') || !same('stop_loss') || !same('take_profit') || !same('expiration_utc_msc')
+        || !noUnexpected(['direction', 'order_type', 'magic', 'deviation'])) mismatch()
+      break
+    }
+    case 'modify_position':
+      if (!same('ticket') || !same('stop_loss') || !same('remove_stop_loss') || !same('take_profit') || !same('remove_take_profit')
+        || !noUnexpected([])) mismatch()
+      break
+    case 'close_position':
+      if (!same('ticket') || !same('volume') || !noUnexpected(['deviation'])) mismatch()
+      break
+    case 'modify_order':
+      if (!same('ticket') || !same('price') || !same('stop_limit_price') || !same('stop_loss') || !same('remove_stop_loss')
+        || !same('take_profit') || !same('remove_take_profit') || !same('expiration_utc_msc') || !same('remove_expiration')
+        || !noUnexpected([])) mismatch()
+      break
+    case 'cancel_order':
+      if (!same('ticket') || !noUnexpected([])) mismatch()
+      break
+  }
+  if (command.request.payload.expected_state !== null && command.request.payload.expected_state.ticket !== target.ticket) mismatch()
+}
+function mismatch(): never { throw new BridgeCommandError('bridge_command_intent_payload_mismatch', 409) }

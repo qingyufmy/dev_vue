@@ -17,7 +17,7 @@ export const EXECUTION_INTENT_STATUSES = [
 ] as const
 export type ExecutionIntentStatus = typeof EXECUTION_INTENT_STATUSES[number]
 
-export const RISK_RESERVATION_STATUSES = ['active', 'committed', 'released', 'expired'] as const
+export const RISK_RESERVATION_STATUSES = ['active', 'committed', 'absorbed', 'released', 'expired'] as const
 export type RiskReservationStatus = typeof RISK_RESERVATION_STATUSES[number]
 
 export type ExecutionPreparationNoopReason = 'no_approved_actions'

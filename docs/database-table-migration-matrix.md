@@ -105,7 +105,7 @@
 | `bridge_v3_orders_latest` | 2 | 重塑 | `terminal_order_snapshots` | 持仓、挂单和历史订单类型明确；ticket 唯一范围包含交易账户 |
 | `bridge_v3_deals` | 0 | 重塑 | `terminal_deals` | 交易账户 + deal_ticket 唯一；金额/价格/手数 DECIMAL；来源原文可留 payload |
 | `bridge_v3_stream_revisions` | 243 | 重塑 | `terminal_stream_revisions` | 账户、连接世代、stream 唯一；浏览器和 Bridge revision 不混用 |
-| `bridge_v3_command_ledger` | 3,525 | 重塑 | `bridge_commands` | command_id、幂等哈希、目标账户、状态、deadline 和回执完整迁移；任何可能送达 MT 的未知结果保持 `uncertain` |
+| `bridge_v3_command_ledger` | 3,525 | 重塑 | `bridge_commands_v4`、`bridge_command_payloads_v4`、`bridge_command_results_v4`、`bridge_command_events_v4`、`bridge_trade_state_snapshots_v4` | Stage 12F 先旁路建立服务端 V4 命令账本；command_id、幂等哈希、精确 route、deadline、可信 expected-state 快照和每份回执证据分层保存。旧账本暂不自动回填；任何可能送达 MT 的未知结果保持 `uncertain`，只能对账、不得重放 |
 | `bridge_v3_command_events` | 10,506 | 重塑 | `bridge_command_events` | 追加写并外键到命令；事件 payload 继续保留，按 command_id + id 游标读取 |
 | `trading_accounts` | 4 | 重塑 | `trading_accounts` | 新唯一键 `platform + normalized broker_server + login_account`；不再把 user_id 作为实体身份；现有重复身份先合并为一个实体，不删除历史引用 |
 | `mt5_account_bindings` | 3 | 合并 | `trading_account_ownerships`、`terminal_bindings` | 去除 MT5 专属命名并支持 MT4；current binding 作为当前归属投影，first/last connected 保留 |

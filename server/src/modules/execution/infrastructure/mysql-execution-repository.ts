@@ -97,7 +97,7 @@ export class MysqlExecutionRepository implements ExecutionRepository {
       }
       const releasedRules = await validateManualRelease(connection, currentSource)
       const capacity = await accountCapacity(connection, input.accountId, currentSource.accountRiskRevision)
-      const [reservationRows] = await connection.execute<ReservationTotalRow[]>(`SELECT COALESCE(SUM(reserved_volume),0) reserved_volume,COALESCE(SUM(reserved_open_positions),0) reserved_open_positions,COALESCE(SUM(reserved_pending_orders),0) reserved_pending_orders,COALESCE(SUM(reserved_daily_opens),0) reserved_daily_opens FROM risk_reservations_v4 WHERE trading_account_id=? AND status='active' AND expires_at_utc>UTC_TIMESTAMP(3) FOR UPDATE`, [input.accountId])
+      const [reservationRows] = await connection.execute<ReservationTotalRow[]>(`SELECT COALESCE(SUM(reserved_volume),0) reserved_volume,COALESCE(SUM(reserved_open_positions),0) reserved_open_positions,COALESCE(SUM(reserved_pending_orders),0) reserved_pending_orders,COALESCE(SUM(reserved_daily_opens),0) reserved_daily_opens FROM risk_reservations_v4 WHERE trading_account_id=? AND status IN ('active','committed') FOR UPDATE`, [input.accountId])
       assertCapacity(policy, capacity, reservationRows[0]!, input.bundle.reservations, releasedRules)
       const [clockRows] = await connection.execute<(RowDataPacket & { current: number })[]>('SELECT IF(? > UTC_TIMESTAMP(3),1,0) current', [input.bundle.intents[0]!.expiresAt])
       if (!clockRows[0]?.current) throw new ExecutionError('execution_source_expired', 409)

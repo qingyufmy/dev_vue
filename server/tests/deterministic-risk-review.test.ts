@@ -256,7 +256,7 @@ describe('Stage 12D deterministic risk review', () => {
     expect(openapi).toContain('/risk-accounts/{account_id}/summary')
     expect(openapi).toContain('/risk-decisions/{risk_decision_id}')
     expect(openapi).toContain('approved_actions')
-    expect(openapi).toContain('stage-12e-execution-intent-reservation')
+    expect(openapi).toContain('stage-12f-bridge-command-reconciliation')
     expect(openapi).toContain('/risk-accounts/{account_id}/manual-release')
     expect(realtime).toContain('risk.policy.changed')
     expect(realtime).toContain('risk.summary.changed')
