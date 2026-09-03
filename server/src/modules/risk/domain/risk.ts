@@ -383,7 +383,11 @@ function evaluateAction(action: TraderAction, input: RiskEvaluationInput, ask: n
   const reference = decimal(params.reference_price, 'risk_reference_price_invalid')
   if (reference <= 0) return fail('RISK_REFERENCE_PRICE_INVALID')
   if (Math.abs(entry - reference) / reference * 100 > input.policy.values.maxPriceDeviationPercent) return fail('RISK_PRICE_DEVIATION_LIMIT')
-  pass('RISK_ACTION_APPROVED', { risk_percent: Number(riskPercent.toFixed(6)), volume })
+  pass('RISK_ACTION_APPROVED', {
+    risk_amount: Number(riskAmount.toFixed(8)),
+    risk_percent: Number(riskPercent.toFixed(6)),
+    volume,
+  })
   return { rejectCode: null, addedVolume: volume, rules }
 }
 

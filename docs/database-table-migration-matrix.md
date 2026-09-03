@@ -189,7 +189,8 @@
 
 | 源表 | 行数 | 动作 | 目标 | 转换与对账重点 |
 | --- | ---: | --- | --- | --- |
-| `order_intents` | 412 | 重塑 | `operations`、`execution_intents`、`execution_intent_payloads` | 保留旧 intent ID/幂等键；公共操作与账户级意图分离，request/risk/bridge/result 大载荷拆表；状态映射遵循统一状态机 |
+| `order_intents` | 412 | 重塑 | `operations`、`execution_intents`、`execution_intent_payloads` | Stage 12E 先旁路建新表，不改旧记录；保留旧 intent ID/幂等键，公共操作与账户级意图分离，request/risk/bridge/result 大载荷拆表；状态映射遵循统一状态机 |
+| `risk_reservations` | 362 | 重塑 | `risk_reservations_v4`、`risk_reservation_events_v4` | Stage 12E 使用 V4 后缀避免旧同名结构被静默复用；活动/提交/释放/过期显式建模，可能已发送的旧预留必须结合 intent/Bridge 证据迁移，不得直接释放或重放 |
 | `admin_strategy_trade_dispatches` | 7 | 重塑 | `operations`、`execution_distributions` | 冻结策略版本、目标集合、预览 hash 和统计保留；父状态允许 `partially_succeeded` |
 | `admin_strategy_trade_targets` | 22 | 重塑 | `execution_distribution_targets`、`execution_intents` | 每个账户一个不可变目标和独立 intent；账户/订阅/风险/归属快照进入 payload，目标不得在重试时重新发现 |
 | `admin_strategy_pending_cancel_jobs` | 3 | 合并 | `operations`、`execution_batches` | 操作类型 `distributed_pending_cancel`；来源 dispatch/signal 精确关联 |

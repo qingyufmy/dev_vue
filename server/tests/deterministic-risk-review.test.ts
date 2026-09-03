@@ -133,7 +133,7 @@ describe('Stage 12D deterministic risk review', () => {
     const result = evaluateRisk(candidate, now)
     expect(result).toMatchObject({ status: 'approved', rejectCode: null, approvedActions: [{ actionId: 'action-1' }] })
     expect(candidate.result).toEqual(original)
-    expect(result.rules.some(rule => rule.code === 'RISK_ACTION_APPROVED')).toBe(true)
+    expect(result.rules).toContainEqual(expect.objectContaining({ code: 'RISK_ACTION_APPROVED', details: expect.objectContaining({ risk_amount: 92, risk_percent: 0.92, volume: 0.1 }) }))
   })
 
   it('rejects incomplete state, stale expected revisions and per-trade risk deterministically', () => {
@@ -256,7 +256,7 @@ describe('Stage 12D deterministic risk review', () => {
     expect(openapi).toContain('/risk-accounts/{account_id}/summary')
     expect(openapi).toContain('/risk-decisions/{risk_decision_id}')
     expect(openapi).toContain('approved_actions')
-    expect(openapi).toContain('stage-12d1-manual-risk-release')
+    expect(openapi).toContain('stage-12e-execution-intent-reservation')
     expect(openapi).toContain('/risk-accounts/{account_id}/manual-release')
     expect(realtime).toContain('risk.policy.changed')
     expect(realtime).toContain('risk.summary.changed')
