@@ -141,6 +141,17 @@ describe('Bridge V4 server command lifecycle', () => {
     expect(repo.reservation).toBe('committed')
   })
 
+  it('converts a crash-left dispatched command to uncertain and reconciles without replay', async () => {
+    const repo = new MemoryBridgeRepository(); const transport = new MemoryTransport(repo.trace)
+    const service = new BridgeCommandService(repo); const command = await service.create(input(), NOW)
+    await repo.markDispatched(command.id, 1, NOW.toISOString())
+    const reconciling = await service.reconcile(command.id, transport, null, NOW)
+    expect(reconciling.status).toBe('reconciling')
+    expect(repo.trace).toContain('persist:uncertain')
+    expect(transport.messages.map(item => item.type)).toEqual(['command.reconcile'])
+    expect(transport.messages).not.toContainEqual(expect.objectContaining({ type: 'command.request' }))
+  })
+
   it('retries an interrupted reconciling query without replaying the trading command', async () => {
     const repo = new MemoryBridgeRepository(); const firstTransport = new MemoryTransport(repo.trace)
     const service = new BridgeCommandService(repo); const command = await service.create(input(), NOW)

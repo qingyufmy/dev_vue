@@ -158,6 +158,10 @@ async function insertBundle(connection: PoolConnection, bundle: PreparedExecutio
     const expectedJson = JSON.stringify(intent.action.expectedState)
     await connection.execute(`INSERT INTO execution_intent_payloads (execution_intent_id,action_json,action_sha256,expected_state_json,expected_state_sha256,payload_bytes) VALUES (?,?,?,?,?,?)`, [intent.id, actionJson, sha256Canonical(intent.action), expectedJson, intent.expectedStateHash, Buffer.byteLength(actionJson) + Buffer.byteLength(expectedJson)])
     await connection.execute(`INSERT INTO execution_intent_events (execution_intent_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,'execution.intent.prepared',NULL,'prepared',NULL,NULL,1,JSON_OBJECT(),?)`, [intent.id, intent.createdAt])
+    await outbox(connection, 'execution_intent', intent.id, 'execution.intent.prepared', {
+      intent_id: intent.id,
+      trading_account_id: intent.accountId,
+    })
   }
   for (const reservation of bundle.reservations) {
     await connection.execute(`INSERT INTO risk_reservations_v4 (id,execution_intent_id,user_id,trading_account_id,symbol,account_currency,reserved_volume,reserved_risk_amount,reserved_risk_percent,reserved_open_positions,reserved_pending_orders,reserved_daily_opens,status,expires_at_utc,released_at_utc,release_reason,created_at_utc,updated_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [reservation.id, reservation.executionIntentId, reservation.userId, reservation.accountId, reservation.symbol, reservation.accountCurrency, reservation.reservedVolume, reservation.reservedRiskAmount, reservation.reservedRiskPercent, reservation.reservedOpenPositions, reservation.reservedPendingOrders, reservation.reservedDailyOpens, reservation.status, reservation.expiresAt, reservation.releasedAt, reservation.releaseReason, reservation.createdAt, reservation.updatedAt, reservation.revision])

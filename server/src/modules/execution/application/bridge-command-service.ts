@@ -18,12 +18,23 @@ export class BridgeCommandService {
     return this.repository.create(candidate)
   }
 
+  async findByIntent(executionIntentId: string, commandSequence = 1) {
+    return this.repository.get(bridgeCommandId(executionIntentId, commandSequence))
+  }
+
   /** Resume only a durable queued command after a worker crash; never re-send a possibly dispatched command. */
   async resume(executionIntentId: string, commandSequence: number, transport: BridgeCommandTransport, now = new Date()) {
     const command = await this.repository.get(bridgeCommandId(executionIntentId, commandSequence))
     if (!command) return null
     if (command.status !== 'queued') return { command, dispatched: false }
     return { command: await this.dispatch(command.id, transport, now), dispatched: true }
+  }
+
+  /** Queue consumers may be delivered more than once. Only a durable queued command may cross the socket boundary. */
+  async dispatchQueued(commandId: string, transport: BridgeCommandTransport, now = new Date()) {
+    const command = await this.required(commandId)
+    if (command.status !== 'queued') return { command, dispatched: false as const }
+    return { command: await this.dispatch(command.id, transport, now), dispatched: true as const }
   }
 
   /** Persist dispatched before attempting a socket write; a thrown write is possibly sent. */
@@ -74,12 +85,15 @@ export class BridgeCommandService {
 
   /** Reconciliation queries the durable Bridge ledger and never resends command.request. */
   async reconcile(commandId: string, transport: BridgeCommandTransport, terminalTicket: string | null, now = new Date()) {
-    const command = await this.required(commandId)
+    let command = await this.required(commandId)
     const activeRoute = await transport.currentRoute(command)
     if (!activeRoute) return command
     const wireRoute = { terminal_instance_id: activeRoute.terminalInstanceId,
       account_ref: { broker_server: activeRoute.brokerServer, login: activeRoute.login }, connection_epoch: activeRoute.connectionEpoch }
     if (!routeContinues(command, wireRoute)) throw new BridgeCommandError('bridge_command_reconcile_route_mismatch', 409)
+    if (command.status === 'dispatched' || command.status === 'accepted') {
+      command = await this.repository.markUncertain(command.id, command.revision, 'bridge_connection_interrupted', now.toISOString())
+    }
     const message = reconcileEnvelope(command, terminalTicket, now, wireRoute)
     const reconciling = command.status === 'reconciling'
       ? command

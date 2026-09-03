@@ -7,6 +7,8 @@ allowBuilds:
   bufferutil: true
   core-js: true
   esbuild: true
+  # BullMQ works without this optional native accelerator; keep installs script-free here.
+  msgpackr-extract: false
   utf-8-validate: true
   vue-demi: true
 

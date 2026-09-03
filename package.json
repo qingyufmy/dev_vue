@@ -21,6 +21,10 @@
     "test:frontend": "pnpm run verify:frontend-boundaries && pnpm -r --filter ./frontend/** --if-present run test",
     "verify:frontend-boundaries": "node frontend/scripts/verify-boundaries.mjs",
     "typecheck:server": "tsc -p server/tsconfig.json --noEmit",
+    "build:server:v4": "tsc -p server/tsconfig.build.json",
+    "start:v4:bridge": "node server/dist-v4/entrypoints/bridge-gateway.js",
+    "start:v4:outbox": "node server/dist-v4/entrypoints/outbox-dispatcher.js",
+    "start:v4:execution": "node server/dist-v4/entrypoints/worker-execution.js",
     "verify:payment-schema": "node scripts/verify-payment-schema.mjs"
   },
   "dependencies": {
@@ -31,6 +35,7 @@
     "@scure/bip39": "^2.2.0",
     "@solana/web3.js": "^1.98.4",
     "bcryptjs": "^2.4.3",
+    "bullmq": "6.3.4",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
@@ -54,6 +59,7 @@
   "devDependencies": {
     "@types/bcryptjs": "2.4.6",
     "@types/node": "24.13.3",
+    "@types/ws": "8.18.1",
     "typescript": "6.0.3",
     "vitest": "^3.2.7"
   },

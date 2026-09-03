@@ -87,6 +87,12 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
         Buffer.byteLength(paramsJson) + (expectedJson ? Buffer.byteLength(expectedJson) : 0) + Buffer.byteLength(envelopeJson),
       ])
       await commandEvent(connection, command.id, 'bridge.command.queued', null, 'queued', null, null, 1, command.requestHash, command.createdAt)
+      await connection.execute(`INSERT INTO outbox_events
+        (event_id,aggregate_type,aggregate_id,event_type,payload_json,status,attempts,available_at_utc,created_at_utc)
+        VALUES (?,?,?,'bridge.command.queued',?,'pending',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [
+        randomUUID(), 'bridge_command', command.id,
+        JSON.stringify({ command_id: command.id, trading_account_id: command.accountId }),
+      ])
       return command
     })
   }
@@ -206,7 +212,7 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
         WHERE r2.bridge_command_id=c.id AND r2.result_sha256=c.result_sha256
         ORDER BY r2.id DESC LIMIT 1
       )
-      WHERE c.trading_account_id=? AND c.status IN ('uncertain','reconciling')
+      WHERE c.trading_account_id=? AND c.status IN ('dispatched','accepted','uncertain','reconciling')
         AND c.terminal_instance_id=? AND BINARY c.broker_server=BINARY ? AND BINARY c.account_login=BINARY ?
         AND c.connection_epoch<=?
       ORDER BY c.updated_at_utc,c.id LIMIT ?`, [
