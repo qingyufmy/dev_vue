@@ -30,6 +30,8 @@ test_stderr.txt
 _build/
 build/
 dist/
+.nuxt/
+.output/
 bridge/release-artifacts/
 bridge/.test-artifacts/
 

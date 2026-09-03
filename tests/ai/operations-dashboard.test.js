@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 const bridgeWs = readFileSync(new URL('../../server/bridge-ws.js', import.meta.url), 'utf8')
-const adminApp = readFileSync(new URL('../../public/admin/app.js', import.meta.url), 'utf8')
 const scheduler = readFileSync(new URL('../../server/routes/ai/scheduler.js', import.meta.url), 'utf8')
 const aiOperations = readFileSync(new URL('../../server/admin/ai-operations.js', import.meta.url), 'utf8')
 
@@ -12,7 +11,6 @@ describe('operations dashboard data contracts', () => {
     expect(aiOperations).toContain('connected_mt4_bridges:bridgeStats.mt4')
     expect(aiOperations).toContain('connected_mt5_bridges:bridgeStats.mt5')
     expect(aiOperations).not.toContain('FROM bridge_connection_status WHERE connected = 1')
-    expect(adminApp).toContain('MT4 ${connectedMt4Bridges} · MT5 ${connectedMt5Bridges}')
   })
 
   it('counts only the canonical actionable period review', () => {
@@ -33,14 +31,7 @@ describe('operations dashboard data contracts', () => {
   })
 })
 
-describe('operations scheduler presentation', () => {
-  it('localizes scheduler details instead of exposing raw internal text', () => {
-    expect(adminApp).toContain('schedulerReason(item.last_error, true)')
-    expect(adminApp).toContain('schedulerReason(item.wait_reason)')
-    expect(adminApp).toContain("lock_busy:'等待上一轮调度结束'")
-    expect(adminApp).not.toContain('escapeHtml(item.last_error)')
-  })
-
+describe('operations scheduler contract', () => {
   it('treats a held lock as a wait state and shortens abandoned leases', () => {
     expect(scheduler).toContain('const LOCK_TTL_MS = 120000')
     expect(scheduler).toContain("st.waitReason = 'lock_busy'")

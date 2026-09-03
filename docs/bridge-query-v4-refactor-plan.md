@@ -1,5 +1,7 @@
 # 量见智桥 Query V4 代码复杂度精简与通用数据查询方案
 
+> 历史方案说明：本文记录 2026-08-11 的旧 Bridge 渐进迁移设计，其中 V3 兼容、通用 `select/filter/sort` 和本地 `performance_daily` 不再作为本轮全新 V4 的实现目标。当前权威边界以 [Bridge V4 Windows 7 架构、安装与更新技术冻结方案](./bridge-v4-win7-architecture-and-packaging-plan.md) 和 [API V4、浏览器实时协议 V4 与 Bridge 设备协议 V4](./api-v4-and-realtime-protocol.md) 的阶段 8 修订为准；本文只作为 SQLite、幂等、游标和服务器组合原则的历史输入。
+
 ## 1. 文档状态
 
 - 状态：正式方案完成，留待后续实施；当前未实现、未发布、未部署。

@@ -2,21 +2,23 @@
 
 ## 项目结构与模块划分
 
-- `server/` 是 Node.js ESM 后端；HTTP 路由位于 `server/routes/`，AI 推理、策略、风控、复盘、记忆和模型对比集中在 `server/routes/ai/`。
-- `public/` 存放静态前端资源。AI 交易实验室主要由 `public/ai/index.html`、`app.js` 和 `styles.css` 构成，无单独前端构建步骤。
-- `bridge/native/apps/bridge-ui/` 是量见智桥 Windows 界面与托盘程序；`bridge/native/` 包含 Rust 3.0 核心、启动器、安装器、MT4 通信、SQLite、传输和更新运行时；MT5 官方 Python 库只封装在 `bridge/native/workers/mt5/` Worker 中。
-- `scripts/bridge-native/` 用于本地原生链路验证，`scripts/bridge-release/` 用于构建安装器、生成更新包、签名、上传和发布。`public/ai/` 不再存放可执行桥接客户端源码或安装包。
+- `server/` 当前保留旧后端作为功能和迁移输入；新版后端按模块化单体逐域迁入 `server/modules/`、`server/db/` 和独立运行角色，具体以重构路线图为准。
+- 新版前端目标目录为 `frontend/apps/www`、`frontend/apps/trade`、`frontend/apps/admin` 和唯一共享组件源 `frontend/packages/ui`。开始 Vue 工程重构时删除本仓库旧 `public/` 手写页面、旧 `account/`、`admin/`、`ai/`、`shared/` 等前端实现，不在新工程中保留兼容副本；`public/` 后续只允许构建产物或明确的静态资源，不再直接维护业务页面。
+- 旧版功能、字段、交互和运行行为需要参考时，只读查询 `D:\dev_codex\wall-street-skill-local`；禁止把旧前端源码整段复制回 `dev_vue`，也禁止在参考仓库中实施本轮重构。
+- Bridge V4 正式实现位于本轮冻结后的 Bridge 目录；当前 `bridge/prototypes/net48-win7/` 是与旧版隔离的验证原型。MT4、MT5、SQLite、安装和更新均按 `docs/bridge-v4-win7-architecture-and-packaging-plan.md` 收口。
 - `tests/` 按后端模块组织；AI、路由和加密货币相关测试分别位于 `tests/ai/`、`tests/routes/` 和 `tests/crypto/`。
-- 数据库变更统一写入 `server/migrations.js`；方案、实现记录和运维文档放在 `docs/`。
+- 新版数据库重构统一执行 `docs/database-normalization-and-data-migration-plan.md` 和 `docs/database-table-migration-matrix.md`。165 张源表必须保持逐表覆盖；未知表、重复映射、未知时间语义或未解释对账差异均失败关闭。旧 `server/migrations.js` 只作为历史迁移输入，不再继续追加；新迁移拆分到 `server/db/migrations/`。公网仍运行旧结构，因此仓库必须永久保留从已识别旧版本升级到 V4 的完整迁移链、校验和、回填 checkpoint 和 legacy ID 映射；迁移文件一经在任何共享环境执行禁止修改、删除、重排或压缩，只能追加纠正迁移。方案、实现记录和运维文档放在 `docs/`。
 
 ## 安装、测试与本地运行
 
 ```powershell
-npm install          # 安装依赖
-npm run dev          # 监听文件变化并启动 3000 端口服务
-npm start            # 以常规模式启动服务
-npm test             # 运行全部 Vitest 测试
-npm run test:watch   # 持续运行受影响的测试
+pnpm install              # 安装根项目与三端前端工作区依赖
+pnpm run dev              # 监听旧后端（迁移阶段临时入口）
+pnpm run dev:www          # 启动主站
+pnpm run dev:trade        # 启动 AI 交易实验室
+pnpm run dev:admin        # 启动管理后台
+pnpm run test:frontend    # 验证三端前端与共享包
+pnpm test                 # 运行根项目 Vitest 测试
 ```
 
 定向测试示例：`npx vitest run tests/ai/strategy.test.js`。验证量见智桥 3.0 使用 `powershell -File scripts/bridge-native/test-native.ps1 -SkipRelease`；完整安装器必须通过 `scripts/bridge-release/build-full-installer.ps1` 及发布脚本构建，禁止恢复旧 Python GUI、Nuitka 打包或把 EXE 放回 `public/ai/`。启动或重启项目、桥接软件时必须使用可见的 PowerShell 控制台，便于观察运行日志和异常。重启前不仅要停止对应服务或桥接进程，还必须关闭承载它的旧显式 PowerShell 控制台，禁止遗留空控制台窗口。项目重启前必须先检查 3000 端口；若仍有监听进程，先停止并再次确认端口已无监听，再启动新服务。启动后必须检查 `/health`，不得在旧服务尚未退出时直接重复启动。
@@ -25,11 +27,29 @@ npm run test:watch   # 持续运行受影响的测试
 
 JavaScript 使用两空格缩进、无分号风格和 ESM `import`/`export`。函数与变量使用 `camelCase`，类使用 `PascalCase`，模块文件使用 kebab-case。项目未配置统一格式化或 lint 工具，修改后应匹配相邻代码，并对 JavaScript 执行 `node --check`。前端文案使用中文，内部错误码保持稳定。SQL 必须使用参数占位符，禁止拼接用户输入。
 
-本轮新前端统一执行 `docs/vue-frontend-requirements-standard.md`：使用 Vue 3、TypeScript 严格模式、Composition API、shadcn-vue 与唯一共享组件源；`www` 使用 Nuxt 4 的 Vite 构建链和混合渲染，`trade`、`admin` 使用 Vue 3 + Vite SPA。`www`、`trade`、`admin` 三个应用禁止互相导入；业务页面优先组合已批准的 shadcn-vue 组件，禁止引入第二套通用 UI 库或重复手写已有控件。新增或更新组件必须使用官方 `shadcn-vue` CLI，并在实现前读取对应组件的当前文档；修改共享 UI 包必须验证三个应用。统一身份与子域会话必须遵守 `docs/single-sign-on-authentication-architecture.md`，禁止恢复浏览器长期 JWT、父域共享认证 Cookie 或跨应用复制 Token。
+数据库新代码统一使用 UTC 会话和 `DATETIME(3)`。路由、WebSocket 处理器与前端 BFF 禁止直接写 SQL，统一通过所属业务模块的 repository；新查询禁止 `SELECT *`。事务必须按项目规定的固定锁序加锁，模型、Bridge、MT 与其它外部调用必须在事务外执行；只有幂等的完整事务可以对死锁错误做有上限重试。数据回填必须可断点续跑并提供逐用户对账，未经明确授权和删除门验收不得删除旧表、旧列或用户数据。
+
+本轮新前端统一执行 `docs/vue-frontend-requirements-standard.md` 和 `design-system/aurum-v4/MASTER.md`：使用 Vue 3、TypeScript 严格模式、Composition API、Tailwind CSS 4、shadcn-vue（Reka 基座）与唯一共享组件源；`www` 使用 Nuxt 4 的 Vite 构建链和混合渲染，`trade`、`admin` 使用 Vue 3 + Vite SPA。`www`、`trade`、`admin` 三个应用禁止互相导入；业务页面优先组合已批准的 shadcn-vue 组件，禁止引入第二套通用 UI 库或重复手写已有控件。新增或更新组件必须使用官方 `shadcn-vue` CLI，并在实现前读取对应组件的当前文档；修改共享 UI 包必须验证三个应用。统一身份与子域会话必须遵守 `docs/single-sign-on-authentication-architecture.md`，禁止恢复浏览器长期 JWT、父域共享认证 Cookie 或跨应用复制 Token。
+
+## 后端与后台任务硬边界
+
+后端目标架构以 `docs/backend-target-architecture.md` 为准。HTTP API、浏览器实时网关、Bridge 设备网关、调度器和后台 Worker 是独立运行角色，但仍属于同一代码库的模块化单体，不得为形式上的“解耦”拆成微服务。
+
+HTTP API 和两个网关进程禁止启动业务 `setInterval`、业务 `setTimeout`、数据库轮询器或任务消费者。所有后台任务必须异步登记，由独立 Worker 进程处理；交易执行与对账、AI 分析与模型调用、复盘记忆、支付会员、通知集成、维护清理分别使用隔离队列和进程组，一个任务故障或阻塞不得占用其它任务组资源或导致主进程退出。
+
+路由只负责合同、认证、授权、幂等和调用应用用例，禁止直接写 SQL。Worker 调用应用服务，不得调用路由处理器或通过 HTTP 回调本服务。关键交易、支付和会员副作用使用“业务事务 + outbox + 确定性任务 ID + 幂等消费者”；队列只负责投递和唤醒，MySQL 仍是业务权威。
+
+所有自动信号、用户手动交易、策略订阅者分发、分发平仓、AI 持仓管理、风控保护和管理员交易命令必须通过统一 `execution` 应用域，禁止各模块自行实现另一套 Bridge 发单。公共 operation、账户级 execution intent、Bridge command 和终端资源状态按 `docs/trade-execution-state-machine.md` 分层维护；不得创建一个混合全部领域含义的巨型状态枚举。
+
+服务端一旦持久化 Bridge 命令已投递并尝试写出，就进入不可普通重试区。任何可能已送达 MT 但结果不能确认的情况必须为 `uncertain` 并进入对账，禁止标成 failed 后自动重发。Bridge accepted 或成功回执均不能单独证明交易完成；必须用 ticket、持仓、挂单、订单或成交历史复核目标资源。批量分发必须冻结目标，并为每个账户创建独立子 operation；分发平仓只能使用原 distribution/outcome/ticket 精确归因，禁止按品种或策略模糊平仓。
+
+CPU 密集型工作必须进入受限线程池或隔离子进程；外部模型、邮件、短信、链上、存储和 Bridge 等 I/O 禁止放在数据库事务中。每个运行角色必须有独立连接池、并发上限、超时、退避、熔断、优雅停机和可观测指标。
+
+正式环境继续使用宝塔 Node 项目管理：只注册一个 `aurum_ai` PM2 项目，以 `ecosystem.config.cjs` 的 `apps` 数组管理 API、两个网关、scheduler 和各 Worker。面板负载实例数保持 1，生产自动重载关闭，包管理器与仓库一致使用 pnpm；禁止把每个 Worker 建成独立宝塔项目，也禁止把数据库迁移放入多进程启动入口。
 
 ## 测试要求
 
-测试框架为 Vitest，JavaScript 测试命名为 `*.test.js`；MT5 Worker 使用 `bridge/native/workers/mt5/tests/test_*.py`，Rust 使用 Cargo 工作区测试。修复问题时必须增加回归测试，重点覆盖权限、迁移、调度状态、MT4/MT5 时间、订单执行、SQLite 与缓存边界。先运行定向测试，再按影响范围运行 `npm test` 与 `scripts/bridge-native/test-native.ps1 -SkipRelease`；涉及服务运行链路时还需启动项目并检查 `/health`。
+测试框架为 Vitest，JavaScript 测试命名为 `*.test.js`；MT5 Worker 使用 `bridge/native/workers/mt5/tests/test_*.py`，Rust 使用 Cargo 工作区测试。修复问题时必须增加回归测试，重点覆盖权限、迁移、调度状态、MT4/MT5 时间、订单执行、SQLite 与缓存边界。先运行定向测试，再按影响范围运行 `pnpm test` 与 `scripts/bridge-native/test-native.ps1 -SkipRelease`；涉及服务运行链路时还需启动项目并检查 `/health`。
 
 ## 提交与合并要求
 
@@ -37,7 +57,7 @@ JavaScript 使用两空格缩进、无分号风格和 ESM `import`/`export`。�
 
 ## 安全与 Agent 专用约定
 
-从 `server/.env.example` 创建本地配置，禁止提交凭据。保持 `/api` 与 `/aurum-api` 兼容。工作区中已有的未提交文件属于用户，不得顺带修改或提交。修改前检查完整调用链，修改后执行回归验证。每次完成用户要求的文件修改并通过相应验证后，主 Agent 必须自动创建单一职责的 Conventional Commit，并推送到 Gitee 的当前工作分支（本仓库默认 `dev_codex`），无需等待用户再次提醒。提交前必须显式审查并只暂存本次任务的文件或区块，不得带入用户或其他任务已有的未提交改动；如果测试失败、远端分支发生分叉、缺少推送权限或无法安全拆分共享文件，必须停止提交和推送并向用户说明阻塞，禁止强推或扩大提交范围。纯只读检查或诊断、用户明确要求不提交或不推送、以及尚未完成的阶段性工作除外。
+从 `server/.env.example` 创建本地配置，禁止提交凭据。旧版维护只能在其原边界内修复；本轮新接口统一使用 `/api/v4`，执行 `docs/api-v4-and-realtime-protocol.md`，不得为 V4 新增 `/api`、`/aurum-api` 或浏览器 WebSocket RPC 兼容入口。旧接口的删除与流量切换只能在阶段 17 经用户逐项确认。工作区中已有的未提交文件属于用户，不得顺带修改或提交。修改前检查完整调用链，修改后执行回归验证。每次完成用户要求的文件修改并通过相应验证后，主 Agent 必须自动创建单一职责的 Conventional Commit，并推送到 Gitee 的当前工作分支（本轮重构分支为 `dev_vue`），无需等待用户再次提醒。提交前必须显式审查并只暂存本次任务的文件或区块，不得带入用户或其他任务已有的未提交改动；如果测试失败、远端分支发生分叉、缺少推送权限或无法安全拆分共享文件，必须停止提交和推送并向用户说明阻塞，禁止强推或扩大提交范围。纯只读检查或诊断、用户明确要求不提交或不推送、以及尚未完成的阶段性工作除外。
 
 凡是向用户提交正式实施方案，必须在实施前对最终方案连续复审两遍，并把两轮结论、相应调整和剩余风险写入方案。第一轮核对需求覆盖、业务边界、现有能力复用、最小改动和是否设计过度；第二轮基于第一轮调整后的最终版本，检查兼容性、数据与迁移、并发与幂等、异常恢复、时间语义、安全、测试、回滚以及可能引入的连带 Bug。两轮复审必须独立且有实际检查内容，禁止用重复表述代替；如果第二轮仍发现实质问题，先修改方案并重新完成第二轮，确认符合需求后才能标记为可实施。
 
@@ -51,13 +71,23 @@ JavaScript 使用两空格缩进、无分号风格和 ESM `import`/`export`。�
 
 ## Bridge 运行时硬边界
 
+Bridge V4 的 Win7 技术方向执行 `docs/bridge-v4-win7-architecture-and-packaging-plan.md`：首选原型为 `.NET Framework 4.8 + WinForms + MT4 精简 EA + MT5 官方 Python Worker + 本机命名管道 + Inno Setup`，Rust Win7 Tier 3 只作同范围对照。每个 MT5 终端档案使用独立 Worker 子进程，必须复用统一数据和交易合同，禁止安装 MT5 EA 或复制第二套交易逻辑。Win7 MT5 只能加载发布包中固定并验签的 Python 3.8 x64、NumPy 和 MetaTrader5 模块，不得使用系统 Python、联网装包、Python GUI、PyInstaller/Nuitka、UPX 或 one-file 自解包；旧 Worker 的现代 NumPy 锁文件不得直接作为 Win7 依赖。官方 MT5 Python 初始化不能任意选择非 portable 数据目录，同时在线的多个 MT5 档案必须使用独立安装路径或经实测的独立 portable 实例，禁止只按账号猜测连接。实机矩阵完成前不得宣称技术栈最终定型或 Win7 已兼容。Windows 7 上禁止依赖框架自带 `ClientWebSocket`；WSS 必须通过独立 RFC 6455/TLS 原型、协议测试和真实系统验证。禁止 Electron、WebView 或把现代 .NET 运行时伪装为 Win7 兼容方案。
+
+Bridge 下载与安装必须自动处理 `.NET Framework 4.8` 依赖：用注册表 `Release >= 528040` 判断 4.8 或更高版本；下载页同时提供在线安装包和包含官方 x86/x64 Runtime 的离线完整包。在线依赖只能从 Microsoft 官方 HTTPS 获取并校验签名、产品和 SHA-256；不得捆绑 Developer Pack、现代 `.NET Desktop Runtime` 或使用第三方镜像。依赖要求重启时必须安全续装，未完成依赖不得把 Bridge 标记为安装成功。
+
+V3 到 V4 自动升级必须保留安装根目录的稳定 `AURUMBridge.Launcher.exe` 系统入口，并执行“V3 更新器安装且健康验证仍保留 V3 Launcher 的过渡候选 → 候选健康后原子提升同目录 Win32 x86 原生入口为根稳定启动器 → 原生入口校验并安装 4.8 → 复用旧 V3 Launcher 健康/就绪回滚 → V4 版本目录托管 Launcher 接管”的两跳流程。禁止在候选健康前用原生入口覆盖候选 V3 Launcher；legacy 状态为 `rolled_back` 时必须先委托旧 Launcher 归一化并修复 V4 指针，只有 `healthy` 才能直接进入托管 V4。不得直接让缺少 4.8 的 V3 客户端激活托管 V4，不得要求用户重新创建桌面快捷方式、自启动或卸载项，也不得在原生过渡入口中复制下载器、业务协议、终端访问或自动分析调度。正式发布密钥签名、缺 4.8 的 Win7 SP1 重启续装和最终故障矩阵通过前，不得向 V3 客户端投放 V4 更新清单。
+
 量见智桥只发现并连接用户已经启动的 MT4/MT5，禁止自动启动、自动恢复启动或关闭交易终端。退出、暂停、重启或卸载 Bridge 不得关闭 MT4/MT5，也不得改变终端保存的登录状态。首次安装默认选择 MT5；后续启动必须恢复用户已保存的平台选择。
 
 MT4 EA、MT5 Worker、本地终端发现和数据采集独立于网站授权。网站授权只负责 Bridge 与服务器之间的身份认证和通信权限；未授权、授权失效或会员到期不得阻止本地终端识别和本地采集，但必须暂停服务器连接并向用户显示明确原因。MT4 的“安装/修复 EA”只负责复制、更新和检查 EA 文件，不得自动操作用户图表或交易终端。
 
+Bridge 不实现任何策略、风控、会员、连接额度、允许品种、交易时段、手数、止盈止损或经纪商规格业务限制；这些全部由服务端决策。Bridge 收到确定性命令后不得重新计算、收紧或改写参数，只负责调用目标 MT4/MT5 并回传成功、失败、原始终端代码、实际资源状态或 `uncertain`。本机仍必须校验消息完整性、终端/账户/连接代次、截止时间、幂等键和精确目标身份，因为服务端无法阻止已经进入用户电脑的重复、过期、串号或竞态命令；这些属于分布式执行安全，不得扩展为业务规则。
+
 用户从网页主动关闭 Bridge 后，客户端必须保持服务器连接暂停，不得自动重连；只有用户再次主动开启后才能恢复。暂停期间网页进入观摩模式，本地 MT4/MT5 和其中已有订单不受影响。
 
 历史交易首次从 MT4/MT5 按有界游标分批同步到每个档案独立的 SQLite，之后按分页和筛选条件读取；禁止重新引入无边界全量历史响应。SQLite 是可重建的本地读取模型、离线缓存和对账证据，不是经纪商交易真相。止损止盈应从对应开仓历史订单补齐；开仓订单同样为 `0` 时表示未设置，禁止根据备注、平仓原因或价格接近程度猜测。强制刷新用于唤醒同步和读取最新投影，不得通过清库掩盖源数据问题。
+
+K 线、历史订单、历史成交和资金事件等大体量事实必须按终端档案缓存到独立 SQLite。K 线以品种、周期和 UTC 开盘时间幂等写入，当前 K 线可更新、收线后稳定保存；历史按有界 UTC 时间片和稳定时间/票号游标增量补齐。服务端精确查询优先读取已覆盖的本地投影，缺口才唤醒终端；分页、帧上限、队列和磁盘水位只用于可靠性保护，不得静默截断、跨账户复用或伪装完整。
 
 Bridge 与 AI 交易实验室的内部排序、游标、过期时间和跨系统比较统一使用 UTC；交易业务日、K 线展示、风控窗口、复盘与订阅调度统一使用对应 `terminal_instance_id + broker_server + login` 的 MT4/MT5 终端服务器时间。MT5 只能用持续推进的新鲜报价与当前 UTC 校准时差；休市或报价不推进时只能沿用该终端上次已验证并持久化的时差，禁止从陈旧报价的时间差重新推断。首次安装且没有自身可信时差时，仅可临时继承与目标账户 `broker_server` 完全一致、最近 7 天内已校准的默认观摩源时差，并标记为 `observer_bootstrap`；不得把继承值持久化为当前终端的已验证时差，终端报价恢复推进后必须立即由自身校准结果替换。观摩源不匹配或证据过期时，所有依赖终端时间的动作必须暂停并明确标记时钟未校准，禁止回退到固定 `UTC+3`、北京时间、用户级或平台级共享时差。时间证据应同时保留 UTC、终端服务器时间、时差、校准状态和继承来源。
 
@@ -82,7 +112,9 @@ MT5 交易历史以“经纪商服务器 + 登录账号”的连续账户口径�
 
 同一台 Windows 主机运行多个观摩源时，由量见智桥 3.0 总控在同一界面管理隔离运行时；默认档案位于 `%APPDATA%\\AURUM\\BridgeV3`，命名观摩档案位于其 `profiles/<name>` 子目录。每个档案使用独立观摩源账号、终端绑定、凭据、SQLite 和日志，禁止多个来源共用默认档案或终端身份。
 
-管理员登录量见智桥后提供“新增观摩源”入口；新来源必须先验证 `plan_source=observer_source` 的专用账户，并绑定未被其他档案使用的独立终端目录和交易账户。观摩源由 3.0 核心以隔离档案运行，不再启动旧版子 Bridge 界面。普通用户不显示观摩源和管理员连接设置入口，且一个客户端只连接一个本人交易账户。
+管理员登录量见智桥后提供“新增观摩源”入口；新来源必须先验证 `plan_source=observer_source` 的专用账户，并绑定未被其他档案使用的独立终端目录和交易账户。观摩源由 Bridge Core 以隔离档案运行，不再启动旧版子 Bridge 界面。普通用户不显示观摩源和管理员连接设置入口。每个系统用户默认拥有 1 条 MT4/MT5 共用账户 WebSocket 并发连接额度，并可通过有效购买或赠送权益增加上限；额度只统计当前有效账户 WebSocket，按用户跨设备汇总，正常断开立即释放、异常断开按 lease TTL 释放。Bridge 支持新增、断开、删除和更换多个本人终端档案，但每个档案、Worker 和 WebSocket 只连接一个账户，同一稳定交易账户同一时刻只允许一个可交易 route。管理员观摩源使用独立额度。具体以 `docs/bridge-connection-quota-and-account-subscription-model.md` 为准。
+
+策略订阅必须绑定具体 `trading_account_id`，禁止恢复“每个用户只能有一个活动订阅”的用户级单例。不同账户的策略、品种、接收时段、自动分析、交易发送、风险配置和运行状态必须隔离；一个账户的断线、暂停、删除本地档案或修改不得影响另一个账户。连接额度只控制当前账户 WebSocket 并发数，不限制历史/离线账户数量，也不得合并账户风险、持仓、挂单、交易队列或实时 revision。
 
 自动推理默认按可信 MT4/MT5 终端服务器时间的固定时间槽运行：配置 5 分钟对应每个 5 分钟边界，配置 10 分钟对应每个 10 分钟边界；边界后必须保留行情推进缓冲并验证客观已收盘数据。慢推理期间错过的时间槽直接丢弃，不补跑、不排队，也不得立即连续推理；失败退避长于正常间隔时选择退避到期后的首个未来时间槽。尚未发起模型请求的前置条件检查只可在当前槽准入窗口内短周期复查。相同“策略 + 标准品种 + 时间槽”必须以数据库确定性幂等键和 Redis 锁共同防重；终端时钟不可信时失败关闭，不得回退到北京时间、VM时间或固定 UTC 偏移。`AUTO_INFERENCE_SCHEDULE_MODE=completion_interval` 仅作为紧急回滚兼容，`shadow` 仅记录对齐计划而不得改变执行。`inference_snapshots.klines_json` 兼容普通 JSON 与 `gzip-base64:` 压缩格式，读取必须统一使用 `parseSnapshotJson()`，不得直接 `JSON.parse()`。模型调用流量以 `ai_model_usage_logs` 中的请求字节、响应字节和耗时字段为准。
 模型结构化输出参数必须按供应商与协议白名单启用，不得向所有 OpenAI 兼容端点统一写死。DeepSeek Chat API 使用 `response_format: { type: 'json_object' }`；火山 Agent Plan Responses API 使用 `text.format: { type: 'json_object' }`。现有动态输出模板与后端字段校验仍是交易合同，JSON Mode 只负责保证 JSON 语法，不得替代业务校验。

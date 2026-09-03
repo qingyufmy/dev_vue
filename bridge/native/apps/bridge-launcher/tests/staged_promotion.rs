@@ -61,6 +61,40 @@ fn newer_versioned_launcher_atomically_promotes_over_an_older_stable_launcher() 
     fs::remove_dir_all(root).expect("cleanup");
 }
 
+#[test]
+#[ignore = "requires older V3 and native transition PE fixtures"]
+fn healthy_v3_transition_atomically_promotes_the_native_stable_launcher() {
+    let staged_v3 = PathBuf::from(env!("CARGO_BIN_EXE_liangjian-bridge-launcher"));
+    let older = PathBuf::from(
+        std::env::var_os("AURUM_TEST_OLDER_LAUNCHER").expect("older launcher fixture"),
+    );
+    let transition = PathBuf::from(
+        std::env::var_os("AURUM_TEST_TRANSITION_LAUNCHER").expect("transition launcher fixture"),
+    );
+    let root = test_directory();
+    let staged = root.join("versions/3.0.5/launcher/AURUMBridge.Launcher.exe");
+    let staged_transition = root.join("versions/3.0.5/launcher/AURUMBridge.TransitionLauncher.exe");
+    let stable = root.join("AURUMBridge.Launcher.exe");
+    fs::create_dir_all(staged.parent().expect("staged parent")).expect("staged directory");
+    fs::copy(staged_v3, &staged).expect("staged V3 launcher");
+    fs::copy(&transition, &staged_transition).expect("staged transition launcher");
+    fs::copy(older, &stable).expect("older stable launcher");
+    fs::write(
+        root.join("current.json"),
+        br#"{"active_version":"3.0.5","last_known_good_version":"3.0.5","status":"healthy","expected_terminal_instance_ids":[],"updated_at_utc_msc":1800000000000}"#,
+    )
+    .expect("healthy pointer");
+    assert_eq!(
+        bridge_update::promote_staged_transition_launcher(&staged, "3.0.5"),
+        Ok(true)
+    );
+    assert_eq!(
+        fs::read(&stable).expect("promoted launcher"),
+        fs::read(&transition).expect("transition launcher")
+    );
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
 fn test_directory() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

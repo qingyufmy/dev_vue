@@ -1,0 +1,488 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.aurum.invalid/realtime-v4.schema.json",
+  "title": "AURUM Browser Realtime Protocol V4",
+  "oneOf": [
+    { "$ref": "#/$defs/ClientMessage" },
+    { "$ref": "#/$defs/ServerMessage" }
+  ],
+  "$defs": {
+    "OpaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 191
+    },
+    "Revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "Decimal": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+    },
+    "UtcDateTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "Symbol": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "Timeframe": {
+      "type": "string",
+      "enum": ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
+    },
+    "Scope": {
+      "type": "object",
+      "required": ["user_id", "trading_account_id", "terminal_instance_id", "observer_channel_id"],
+      "additionalProperties": false,
+      "properties": {
+        "user_id": { "$ref": "#/$defs/OpaqueId" },
+        "trading_account_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "terminal_instance_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "observer_channel_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        }
+      }
+    },
+    "ResourceRef": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "BaseEvent": {
+      "type": "object",
+      "required": ["v", "event_id", "type", "occurred_at", "sequence", "scope", "resource", "revision", "data", "correlation_id"],
+      "properties": {
+        "v": { "const": 4 },
+        "event_id": { "$ref": "#/$defs/OpaqueId" },
+        "type": { "$ref": "#/$defs/ServerEventType" },
+        "occurred_at": { "$ref": "#/$defs/UtcDateTime" },
+        "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "scope": { "$ref": "#/$defs/Scope" },
+        "resource": { "$ref": "#/$defs/ResourceRef" },
+        "revision": { "$ref": "#/$defs/Revision" },
+        "data": { "type": "object" },
+        "correlation_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        }
+      }
+    },
+    "ServerEventType": {
+      "type": "string",
+      "enum": [
+        "runtime.bridge.changed",
+        "runtime.market.changed",
+        "runtime.analysis.changed",
+        "terminal.timezone.changed",
+        "account.metrics.changed",
+        "market.quote.updated",
+        "market.candle.updated",
+        "market.candle.closed",
+        "positions.changed",
+        "pending_orders.changed",
+        "signal.created",
+        "signal.execution.changed",
+        "risk.status.changed",
+        "risk.alert.created",
+        "operation.changed",
+        "notification.created",
+        "payment.status.changed",
+        "admin.alert.created"
+      ]
+    },
+    "RuntimeBridgeData": {
+      "type": "object",
+      "required": ["state", "platform", "bridge_version", "last_seen_at"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string", "enum": ["online", "offline", "paused", "replaced", "unauthorized"] },
+        "platform": { "type": ["string", "null"], "enum": ["mt4", "mt5", null] },
+        "bridge_version": { "type": ["string", "null"], "maxLength": 64 },
+        "last_seen_at": { "$ref": "#/$defs/UtcDateTime" }
+      }
+    },
+    "RuntimeMarketData": {
+      "type": "object",
+      "required": ["state", "trade_mode"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "type": "string", "enum": ["open", "closed", "paused", "unknown"] },
+        "trade_mode": { "type": "string", "enum": ["full", "long_only", "short_only", "close_only", "disabled", "unknown"] }
+      }
+    },
+    "RuntimeAnalysisData": {
+      "type": "object",
+      "required": ["enabled", "state", "next_run_at"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "state": { "type": "string", "enum": ["idle", "waiting", "running", "backoff", "paused", "failed"] },
+        "next_run_at": {
+          "oneOf": [{ "$ref": "#/$defs/UtcDateTime" }, { "type": "null" }]
+        },
+        "last_error_code": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
+    "TerminalTimezoneData": {
+      "type": "object",
+      "required": ["timezone_offset_minutes", "clock_status", "calibration_source", "calibrated_at"],
+      "additionalProperties": false,
+      "properties": {
+        "timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
+        "clock_status": { "type": "string", "enum": ["calibrated", "observer_bootstrap", "stale", "unavailable"] },
+        "calibration_source": { "type": ["string", "null"], "maxLength": 64 },
+        "calibrated_at": {
+          "oneOf": [{ "$ref": "#/$defs/UtcDateTime" }, { "type": "null" }]
+        }
+      }
+    },
+    "AccountMetricsData": {
+      "type": "object",
+      "required": ["balance", "equity", "margin", "free_margin", "floating_profit", "currency", "observed_at"],
+      "additionalProperties": false,
+      "properties": {
+        "balance": { "$ref": "#/$defs/Decimal" },
+        "equity": { "$ref": "#/$defs/Decimal" },
+        "margin": { "$ref": "#/$defs/Decimal" },
+        "free_margin": { "$ref": "#/$defs/Decimal" },
+        "floating_profit": { "$ref": "#/$defs/Decimal" },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 12 },
+        "observed_at": { "$ref": "#/$defs/UtcDateTime" }
+      }
+    },
+    "QuoteData": {
+      "type": "object",
+      "required": ["symbol", "bid", "ask", "spread", "observed_at"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": { "$ref": "#/$defs/Symbol" },
+        "bid": { "$ref": "#/$defs/Decimal" },
+        "ask": { "$ref": "#/$defs/Decimal" },
+        "last": {
+          "oneOf": [{ "$ref": "#/$defs/Decimal" }, { "type": "null" }]
+        },
+        "spread": { "$ref": "#/$defs/Decimal" },
+        "observed_at": { "$ref": "#/$defs/UtcDateTime" }
+      }
+    },
+    "CandleData": {
+      "type": "object",
+      "required": ["symbol", "timeframe", "open_time", "open", "high", "low", "close", "tick_volume", "closed"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": { "$ref": "#/$defs/Symbol" },
+        "timeframe": { "$ref": "#/$defs/Timeframe" },
+        "open_time": { "$ref": "#/$defs/UtcDateTime" },
+        "open": { "$ref": "#/$defs/Decimal" },
+        "high": { "$ref": "#/$defs/Decimal" },
+        "low": { "$ref": "#/$defs/Decimal" },
+        "close": { "$ref": "#/$defs/Decimal" },
+        "tick_volume": { "$ref": "#/$defs/Decimal" },
+        "closed": { "type": "boolean" }
+      }
+    },
+    "CollectionDeltaData": {
+      "type": "object",
+      "required": ["upserts", "removes"],
+      "additionalProperties": false,
+      "properties": {
+        "upserts": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "type": "object" }
+        },
+        "removes": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "type": "string", "minLength": 1, "maxLength": 191 }
+        }
+      }
+    },
+    "SignalSummaryData": {
+      "type": "object",
+      "required": ["signal_id", "strategy_id", "symbol", "direction", "action", "confidence", "execution_status"],
+      "additionalProperties": false,
+      "properties": {
+        "signal_id": { "$ref": "#/$defs/OpaqueId" },
+        "strategy_id": { "$ref": "#/$defs/OpaqueId" },
+        "symbol": { "$ref": "#/$defs/Symbol" },
+        "direction": { "type": "string", "enum": ["bullish", "bearish", "neutral"] },
+        "action": { "type": "string", "enum": ["observe", "buy", "sell", "place_pending", "hold", "modify", "close", "cancel"] },
+        "confidence": { "$ref": "#/$defs/Decimal" },
+        "execution_status": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "OperationData": {
+      "type": "object",
+      "required": ["operation_id", "kind", "status", "updated_at"],
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/OpaqueId" },
+        "kind": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["accepted", "queued", "running", "succeeded", "partially_succeeded", "rejected", "failed", "uncertain", "cancelled", "expired"] },
+        "updated_at": { "$ref": "#/$defs/UtcDateTime" },
+        "resource_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "error_code": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
+    "SummaryData": {
+      "type": "object",
+      "required": ["id", "status"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "$ref": "#/$defs/OpaqueId" },
+        "status": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "TypedEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEvent" },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "type": { "const": "runtime.bridge.changed" },
+                "data": { "$ref": "#/$defs/RuntimeBridgeData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "runtime.market.changed" },
+                "data": { "$ref": "#/$defs/RuntimeMarketData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "runtime.analysis.changed" },
+                "data": { "$ref": "#/$defs/RuntimeAnalysisData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "terminal.timezone.changed" },
+                "data": { "$ref": "#/$defs/TerminalTimezoneData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "account.metrics.changed" },
+                "data": { "$ref": "#/$defs/AccountMetricsData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "market.quote.updated" },
+                "data": { "$ref": "#/$defs/QuoteData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "enum": ["market.candle.updated", "market.candle.closed"] },
+                "data": { "$ref": "#/$defs/CandleData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "enum": ["positions.changed", "pending_orders.changed"] },
+                "data": { "$ref": "#/$defs/CollectionDeltaData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "enum": ["signal.created", "signal.execution.changed"] },
+                "data": { "$ref": "#/$defs/SignalSummaryData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "const": "operation.changed" },
+                "data": { "$ref": "#/$defs/OperationData" }
+              }
+            },
+            {
+              "properties": {
+                "type": { "enum": ["risk.status.changed", "risk.alert.created", "notification.created", "payment.status.changed", "admin.alert.created"] },
+                "data": { "$ref": "#/$defs/SummaryData" }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Welcome": {
+      "type": "object",
+      "required": ["v", "type", "connection_id", "server_time", "heartbeat_interval_ms", "max_frame_bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "type": { "const": "system.welcome" },
+        "connection_id": { "$ref": "#/$defs/OpaqueId" },
+        "server_time": { "$ref": "#/$defs/UtcDateTime" },
+        "heartbeat_interval_ms": { "type": "integer", "minimum": 5000, "maximum": 60000 },
+        "max_frame_bytes": { "type": "integer", "minimum": 1024, "maximum": 65536 }
+      }
+    },
+    "SubscriptionReady": {
+      "type": "object",
+      "required": ["v", "type", "request_id", "subscriptions"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "type": { "const": "subscription.ready" },
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "subscriptions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["subscription_id", "target", "revision"],
+            "additionalProperties": false,
+            "properties": {
+              "subscription_id": { "$ref": "#/$defs/OpaqueId" },
+              "target": { "$ref": "#/$defs/SubscriptionTarget" },
+              "revision": { "$ref": "#/$defs/Revision" }
+            }
+          }
+        }
+      }
+    },
+    "ResyncRequired": {
+      "type": "object",
+      "required": ["v", "type", "request_id", "targets", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "type": { "const": "subscription.resync_required" },
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "targets": { "type": "array", "items": { "$ref": "#/$defs/SubscriptionTarget" } },
+        "reason": { "type": "string", "enum": ["revision_unknown", "revision_gap", "scope_changed", "authorization_changed"] }
+      }
+    },
+    "Heartbeat": {
+      "type": "object",
+      "required": ["v", "type", "sent_at"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "type": { "const": "system.heartbeat" },
+        "sent_at": { "$ref": "#/$defs/UtcDateTime" }
+      }
+    },
+    "ProtocolError": {
+      "type": "object",
+      "required": ["v", "type", "code", "message", "retryable"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "type": { "const": "protocol.error" },
+        "request_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,127}$" },
+        "message": { "type": "string", "maxLength": 512 },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "SubscriptionTarget": {
+      "type": "object",
+      "required": ["kind", "after_revision"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "operations", "notifications", "payment", "admin_alerts"] },
+        "trading_account_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "observer_channel_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "symbol": {
+          "oneOf": [{ "$ref": "#/$defs/Symbol" }, { "type": "null" }]
+        },
+        "timeframe": {
+          "oneOf": [{ "$ref": "#/$defs/Timeframe" }, { "type": "null" }]
+        },
+        "resource_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "after_revision": {
+          "oneOf": [{ "$ref": "#/$defs/Revision" }, { "type": "null" }]
+        }
+      }
+    },
+    "Subscribe": {
+      "type": "object",
+      "required": ["v", "type", "request_id", "targets"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "type": { "const": "subscription.subscribe" },
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/SubscriptionTarget" }
+        }
+      }
+    },
+    "Unsubscribe": {
+      "type": "object",
+      "required": ["v", "type", "request_id", "subscription_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "type": { "const": "subscription.unsubscribe" },
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "subscription_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/OpaqueId" }
+        }
+      }
+    },
+    "Ping": {
+      "type": "object",
+      "required": ["v", "type", "request_id", "sent_at"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "type": { "const": "system.ping" },
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "sent_at": { "$ref": "#/$defs/UtcDateTime" }
+      }
+    },
+    "ClientMessage": {
+      "oneOf": [
+        { "$ref": "#/$defs/Subscribe" },
+        { "$ref": "#/$defs/Unsubscribe" },
+        { "$ref": "#/$defs/Ping" }
+      ]
+    },
+    "ServerMessage": {
+      "oneOf": [
+        { "$ref": "#/$defs/Welcome" },
+        { "$ref": "#/$defs/SubscriptionReady" },
+        { "$ref": "#/$defs/ResyncRequired" },
+        { "$ref": "#/$defs/Heartbeat" },
+        { "$ref": "#/$defs/ProtocolError" },
+        { "$ref": "#/$defs/TypedEvent" }
+      ]
+    }
+  }
+}

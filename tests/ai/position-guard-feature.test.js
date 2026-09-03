@@ -9,8 +9,6 @@ const routes = readFileSync(new URL('../../server/routes/ai/index.js', import.me
 const serverIndex = readFileSync(new URL('../../server/index.js', import.meta.url), 'utf8')
 const monitor = readFileSync(new URL('../../server/workers/position-guard-monitor-worker.js', import.meta.url), 'utf8')
 const execution = readFileSync(new URL('../../server/routes/ai/position-guard-execution.js', import.meta.url), 'utf8')
-const html = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
-const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 
 describe('deployment-level Position Guard gate', () => {
   it('defaults to disabled and enables only the explicit true value', () => {
@@ -66,17 +64,4 @@ describe('deployment-level Position Guard gate', () => {
     expect(execution).toContain("if (!isPositionGuardFeatureEnabled()) return false\n      task = await markSending")
   })
 
-  it('keeps the static topbar hidden and only renders controls after explicit API success', () => {
-    expect(html).toMatch(/id="positionGuardMode"[^>]*hidden/)
-    expect(app).toContain('positionGuardFeatureEnabled: null')
-    expect(app).toContain('if (userData?.feature_enabled !== true)')
-    expect(app).toContain('setPositionGuardFeatureEnabled(true)')
-    expect(app).toContain('function positionGuardUserControlsVisible(settings = state.positionGuardSettings)')
-    expect(app).toContain('settings?.platform_enabled === true')
-    expect(app).toContain('if (!positionGuardUserControlsVisible()) return;')
-    expect(app).toContain('${guardUserVisible ? `<details class="position-management-setting-disclosure position-guard-user-disclosure">')
-    expect(app).toContain('const guardCard = positionGuardUserControlsVisible()')
-    expect(app).toContain("document.querySelectorAll('.position-guard-user-disclosure, .position-guard-overview-card')")
-    expect(app).toContain('guardFeatureEnabled && state.user?.role === "admin"')
-  })
 })

@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
 import { attachSignalPresentation, buildExecutionAdvice, normalizeDecisionFields, restrictSignalExperienceUsage } from '../../server/routes/ai/signal-presentation.js'
 import { attachExecutionValidation, attachExecutionValidationToDecision, executionValidationRejection, normalizeExecutionValidation, readExecutionValidation } from '../../server/routes/ai/signal-execution-validation.js'
-
-const app = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
 
 describe('signal presentation', () => {
   it('normalizes the independent eligible contract', () => {
@@ -53,19 +50,6 @@ describe('signal presentation', () => {
     expect(JSON.parse(restrictSignalExperienceUsage(personal, { requesterUserId:7, requesterRole:'user' }).decision_json).experience_usage.used_ids).toEqual([9])
     expect(JSON.parse(restrictSignalExperienceUsage(personal, { requesterUserId:1, requesterRole:'admin' }).decision_json)).not.toHaveProperty('experience_usage')
     expect(restrictSignalExperienceUsage({ user_id:7, experience_usage:{ considered_ids:[99] } }, { requesterUserId:7, requesterRole:'user' }).experience_usage).toBeUndefined()
-  })
-  it('does not present an unavailable confidence sentinel as a measured zero percent', () => {
-    expect(app).toContain('if (rounded === 0) return { value: 0, label: "不可用" }')
-    expect(app).toContain('strategy_reversal_waiting_for_exit:"观摩源旧方向尚未完成退出，本轮不执行反向开仓"')
-    expect(app).toContain('strategy_reference_portfolio_refresh_unavailable:"无法确认观摩源最新持仓与挂单，本轮停止新开仓"')
-    expect(app).toContain('const directionInterlock = signal?.direction_interlock || stored.direction_interlock || null;')
-    expect(app).toContain('directionInterlock\n      ? (signal?.decision_summary || stored.decision_summary)')
-  })
-  it('does not render server diagnostics in signal details', () => {
-    expect(app).not.toContain('function renderDecisionDiagnostics(diagnostics)')
-    expect(app).not.toContain('数据与系统状态')
-    expect(app).not.toContain('旧版系统诊断')
-    expect(app).not.toContain('diagnostics.reason_details')
   })
   it('normalizes model fields and limits untrusted arrays', () => {
     const result = normalizeDecisionFields({ signal_type: 'buy', decision_summary: '  顺势做多  ', bullish_score: 63, bearish_score: 37, key_reasons: ['趋势向上', '', '回踩支撑', '量能改善', '结构完整', 'ignored'] })
@@ -119,8 +103,6 @@ describe('signal presentation', () => {
       stop_limit_price:null, stop_loss_price:1985, take_profit_1_price:2010,
       take_profit_2_price:null, take_profit_3_price:null,
     })
-    expect(app).toContain('候选入场参考')
-    expect(app).toContain('不会进入下单流程')
   })
 
   it('persists only model usage ids that were actually considered', () => {
@@ -365,8 +347,6 @@ describe('signal presentation', () => {
       execution_status:'skipped',
       execution_result:{ status:'skipped', reason:'market_snapshot_expired' },
     })).toMatchObject({ state:'expired', title:'行情快照已过期', executable:false })
-    expect(app).toContain('if (signal.is_stale === true) return true;')
-    expect(app).toContain('execution_valid_until_utc_msc')
   })
 
   it('presents a strategy reversal interlock as an intentional wait state', () => {

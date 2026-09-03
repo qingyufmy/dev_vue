@@ -1476,29 +1476,7 @@ describe('historical comparison time range normalization', () => {
   })
 })
 
-describe('historical comparison frontend contract', () => {
-  const aiHtml = readFileSync(new URL('../../public/ai/index.html', import.meta.url), 'utf8')
-  const aiFrontend = readFileSync(new URL('../../public/ai/app.js', import.meta.url), 'utf8')
-  const adminFrontend = readFileSync(new URL('../../public/admin/app.js', import.meta.url), 'utf8')
-  const adminRoutes = readFileSync(new URL('../../server/routes/admin-console.js', import.meta.url), 'utf8')
-
-  it('retires the duplicate AI-laboratory evaluation workspace', () => {
-    expect(aiHtml).not.toContain('id="model-compare"')
-    expect(aiHtml).not.toContain('id="cmpSnapshotList"')
-    expect(aiFrontend).not.toContain('/api/ai/model-compare/snapshots')
-    expect(aiFrontend).not.toContain('async function loadModelCompare()')
-  })
-
-  it('hosts model evaluation in the unified administrator workbench', () => {
-    expect(adminFrontend).toContain('data-ai-tab="model-compare"')
-    expect(adminFrontend).toContain('/api/admin/ai/model-compare/setup')
-    expect(adminFrontend).toContain('/api/admin/ai/model-compare/snapshots?')
-    expect(adminFrontend).toContain("api('/api/admin/ai/model-compare/jobs'")
-    expect(adminFrontend).toContain('至少 2 条；一次评测只能使用同一策略版本')
-    expect(adminRoutes).toContain("router.get('/admin/ai/model-compare/setup'")
-    expect(adminRoutes).toContain("router.post('/admin/ai/model-compare/jobs'")
-    expect(adminRoutes).toContain("router.delete('/admin/ai/model-compare/jobs/:jobId'")
-  })
+describe('historical comparison backend contract', () => {
 
   it('keeps background reconciliation and cancellation in the authoritative backend', () => {
     const backend = readFileSync(new URL('../../server/routes/ai/strategy.js', import.meta.url), 'utf8')

@@ -180,12 +180,25 @@ class Mt5TradeExecutor:
             "action": self.mt5.TRADE_ACTION_MODIFY,
             "order": ticket,
         }
+        desired: dict[str, float | int] = {}
         for source, target in (("price", "price"), ("stop_loss", "sl"),
                                ("take_profit", "tp"), ("stop_limit_price", "stoplimit")):
             if params.get(source) is not None:
-                request[target] = self._positive(params[source], source)
+                desired[source] = self._positive(params[source], source)
+                request[target] = desired[source]
+        for flag, source, target in (("remove_stop_loss", "stop_loss", "sl"),
+                                     ("remove_take_profit", "take_profit", "tp")):
+            if params.get(flag) is True:
+                desired[source] = 0.0
+                request[target] = 0.0
         if params.get("expiration") is not None:
-            request["expiration"] = int(params["expiration"])
+            desired["expiration"] = int(params["expiration"])
+            request["expiration"] = desired["expiration"]
+        if params.get("remove_expiration") is True:
+            desired["expiration"] = 0
+            request["expiration"] = 0
+        if not desired:
+            raise TradeError("pending_order_change_required")
         sent = self._send(command, request)
         if sent["status"] == "rejected":
             return sent
@@ -196,10 +209,11 @@ class Mt5TradeExecutor:
         aliases = {"price": "price_open", "stop_loss": "sl", "take_profit": "tp",
                    "stop_limit_price": "price_stoplimit", "expiration": "time_expiration"}
         for source, target in aliases.items():
-            if params.get(source) is None:
+            if source not in desired:
                 continue
             actual = float(getattr(verified[0], target, 0) or 0)
-            if abs(actual - float(params[source])) > self._price_tolerance(verified[0].symbol):
+            tolerance = 0 if source == "expiration" else self._price_tolerance(verified[0].symbol)
+            if abs(actual - float(desired[source])) > tolerance:
                 return self._result(command, "uncertain", "pending_order_change_not_applied",
                                     raw=sent.get("raw_result"), evidence=sent.get("evidence"))
         raw = dict(sent.get("raw_result") or {})
@@ -233,18 +247,20 @@ class Mt5TradeExecutor:
             price = self._positive(value, "protection_price")
             return round(round(price / tick_size) * tick_size, digits)
 
-        next_sl = normalized(params.get("stop_loss"), position.sl)
-        next_tp = normalized(params.get("take_profit"), position.tp)
+        remove_sl = params.get("remove_stop_loss") is True
+        remove_tp = params.get("remove_take_profit") is True
+        next_sl = 0.0 if remove_sl else normalized(params.get("stop_loss"), position.sl)
+        next_tp = 0.0 if remove_tp else normalized(params.get("take_profit"), position.tp)
         minimum_points = max(int(getattr(info, "trade_stops_level", 0) or 0),
                              int(getattr(info, "trade_freeze_level", 0) or 0))
         minimum_distance = minimum_points * point
         is_buy = int(position.type) == int(self.mt5.POSITION_TYPE_BUY)
-        if params.get("stop_loss") is not None:
+        if params.get("stop_loss") is not None and not remove_sl:
             valid = next_sl < float(tick.bid) - minimum_distance if is_buy \
                 else next_sl > float(tick.ask) + minimum_distance
             if not valid:
                 raise TradeError("stop_loss_direction_or_distance_invalid")
-        if params.get("take_profit") is not None:
+        if params.get("take_profit") is not None and not remove_tp:
             valid = next_tp > float(tick.ask) + minimum_distance if is_buy \
                 else next_tp < float(tick.bid) - minimum_distance
             if not valid:
@@ -625,11 +641,17 @@ class Mt5TradeExecutor:
             aliases = {"price": "price", "stop_loss": "stop_loss",
                        "take_profit": "take_profit", "stop_limit_price": "stop_limit_price",
                        "expiration": "expiration"}
+            expected_values = {key: original[key] for key in aliases if key in original}
+            if original.get("remove_stop_loss") is True:
+                expected_values["stop_loss"] = 0
+            if original.get("remove_take_profit") is True:
+                expected_values["take_profit"] = 0
+            if original.get("remove_expiration") is True:
+                expected_values["expiration"] = 0
             tolerance = self._price_tolerance(str(observed.get("symbol") or ""))
-            for expected_key, actual_key in aliases.items():
-                if expected_key not in original:
-                    continue
-                expected = float(original[expected_key])
+            for expected_key, expected_raw in expected_values.items():
+                actual_key = aliases[expected_key]
+                expected = float(expected_raw)
                 actual = float(observed.get(actual_key) or 0)
                 if expected_key == "expiration":
                     if int(expected) != int(actual):
@@ -642,10 +664,14 @@ class Mt5TradeExecutor:
             if source != "active_position":
                 return unresolved("position_not_active")
             tolerance = self._price_tolerance(str(observed.get("symbol") or ""))
-            for expected_key in ("stop_loss", "take_profit"):
-                if expected_key not in original:
-                    continue
-                expected = float(original[expected_key] or 0)
+            expected_values = {key: original[key] for key in ("stop_loss", "take_profit")
+                               if key in original}
+            if original.get("remove_stop_loss") is True:
+                expected_values["stop_loss"] = 0
+            if original.get("remove_take_profit") is True:
+                expected_values["take_profit"] = 0
+            for expected_key, expected_raw in expected_values.items():
+                expected = float(expected_raw or 0)
                 actual = float(observed.get(expected_key) or 0)
                 if abs(expected - actual) > tolerance:
                     return unresolved("position_protection_not_applied")

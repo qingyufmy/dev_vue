@@ -1,8 +1,9 @@
 {
   "name": "wall-street-skill",
   "version": "2.3.4",
+  "private": true,
   "type": "module",
-  "packageManager": "npm@10.9.8",
+  "packageManager": "pnpm@11.19.0",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -11,6 +12,15 @@
     "dev": "node --watch server/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "dev:www": "pnpm --filter @aurum/www dev",
+    "dev:trade": "pnpm --filter @aurum/trade dev",
+    "dev:admin": "pnpm --filter @aurum/admin dev",
+    "dev:auth": "pnpm --filter @aurum/auth dev",
+    "build:frontend": "pnpm run verify:frontend-boundaries && pnpm -r --filter ./frontend/** --if-present run build",
+    "typecheck:frontend": "pnpm -r --filter ./frontend/** --if-present run typecheck",
+    "test:frontend": "pnpm run verify:frontend-boundaries && pnpm -r --filter ./frontend/** --if-present run test",
+    "verify:frontend-boundaries": "node frontend/scripts/verify-boundaries.mjs",
+    "typecheck:server": "tsc -p server/tsconfig.json --noEmit",
     "verify:payment-schema": "node scripts/verify-payment-schema.mjs"
   },
   "dependencies": {
@@ -26,6 +36,7 @@
     "dotenv": "^17.4.2",
     "express": "^4.21.0",
     "express-rate-limit": "^8.6.0",
+    "fastify": "5.12.1",
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^1.4.5-lts.1",
@@ -41,6 +52,9 @@
     "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@types/bcryptjs": "2.4.6",
+    "@types/node": "24.13.3",
+    "typescript": "6.0.3",
     "vitest": "^3.2.7"
   },
   "overrides": {

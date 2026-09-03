@@ -1,0 +1,14 @@
+packages:
+  - frontend/apps/*
+  - frontend/packages/*
+
+allowBuilds:
+  '@alicloud/openapi-core': true
+  bufferutil: true
+  core-js: true
+  esbuild: true
+  utf-8-validate: true
+  vue-demi: true
+
+minimumReleaseAgeExclude:
+  - vue-router@5.3.1

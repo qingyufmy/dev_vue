@@ -5,14 +5,14 @@ const root = new URL('../', import.meta.url)
 
 describe('repository hygiene', () => {
   it('uses one package manager and does not keep generated test logs in source control', () => {
-    expect(existsSync(new URL('package-lock.json', root))).toBe(true)
-    expect(existsSync(new URL('pnpm-lock.yaml', root))).toBe(false)
-    expect(existsSync(new URL('pnpm-workspace.yaml', root))).toBe(false)
+    expect(existsSync(new URL('package-lock.json', root))).toBe(false)
+    expect(existsSync(new URL('pnpm-lock.yaml', root))).toBe(true)
+    expect(existsSync(new URL('pnpm-workspace.yaml', root))).toBe(true)
     expect(existsSync(new URL('test_output.txt', root))).toBe(false)
     expect(existsSync(new URL('test_stderr.txt', root))).toBe(false)
 
     const pkg = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'))
-    expect(pkg.packageManager).toMatch(/^npm@/)
+    expect(pkg.packageManager).toMatch(/^pnpm@/)
   })
 
   it('keeps Bridge startup independent from the heavyweight AI scheduler and config modules', () => {

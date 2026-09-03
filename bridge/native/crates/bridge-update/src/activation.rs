@@ -16,6 +16,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 
 const POINTER_FILE_NAME: &str = "current.json";
 const LAUNCHER_FILE_NAME: &str = "AURUMBridge.Launcher.exe";
+const TRANSITION_LAUNCHER_FILE_NAME: &str = "AURUMBridge.TransitionLauncher.exe";
 const MAXIMUM_POINTER_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -304,6 +305,40 @@ pub fn promote_staged_launcher(
         return Ok(false);
     }
     promote_launcher_file(&staged_launcher, &stable_launcher, &candidate_version)?;
+    Ok(true)
+}
+
+pub fn promote_staged_transition_launcher(
+    staged_launcher: impl AsRef<Path>,
+    launched_version: &str,
+) -> Result<bool, UpdateError> {
+    let staged_launcher = std::path::absolute(staged_launcher.as_ref())
+        .map_err(|_| UpdateError::new("update_launcher_promotion_invalid"))?;
+    let (install_root, staged_version) = staged_launcher_identity(&staged_launcher)?;
+    if staged_version != launched_version || DotNetVersion::parse(launched_version).is_none() {
+        return Err(UpdateError::new("update_launcher_promotion_invalid"));
+    }
+    let transition_launcher = staged_launcher.with_file_name(TRANSITION_LAUNCHER_FILE_NAME);
+    if !transition_launcher.is_file() {
+        return Err(UpdateError::new("update_launcher_promotion_invalid"));
+    }
+    let pointer = ReleaseActivationStore::new(install_root.join(POINTER_FILE_NAME))?.load()?;
+    if pointer.status != "healthy"
+        || pointer.active_version != launched_version
+        || pointer.last_known_good_version != launched_version
+    {
+        return Err(UpdateError::new("update_launcher_promotion_not_healthy"));
+    }
+    let stable_launcher = install_root.join(LAUNCHER_FILE_NAME);
+    if !stable_launcher.is_file() {
+        return Err(UpdateError::new("update_launcher_promotion_invalid"));
+    }
+    let candidate_version = read_file_version(&transition_launcher)?;
+    let stable_version = read_file_version(&stable_launcher)?;
+    if !should_promote_launcher_versions(&candidate_version, &stable_version)? {
+        return Ok(false);
+    }
+    promote_launcher_file(&transition_launcher, &stable_launcher, &candidate_version)?;
     Ok(true)
 }
 

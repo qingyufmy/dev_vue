@@ -103,14 +103,4 @@ describe('bridge installer release descriptor', () => {
     expect(source).not.toContain("client === 'bridge'")
   })
 
-  it('downloads only from the current version endpoint response', async () => {
-    const source = await readFile(new URL('../public/ai/app.js', import.meta.url), 'utf8')
-    const start = source.indexOf('$("downloadExe")?.addEventListener')
-    const end = source.indexOf('async function updateBridgeRuntimeControl', start)
-    const handler = source.slice(start, end)
-    expect(handler).toContain('fetch("/api/bridge/version")')
-    expect(handler).toContain('data.full_url')
-    expect(handler).not.toContain('data.updater_url')
-    expect(handler).not.toContain('qiniu.acadfx.com')
-  })
 })

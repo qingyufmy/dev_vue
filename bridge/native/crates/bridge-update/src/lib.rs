@@ -6,7 +6,7 @@ mod staging;
 
 pub use activation::{
     ReleaseActivationPointer, ReleaseActivationStore, pending_launcher_handoff,
-    promote_staged_launcher,
+    promote_staged_launcher, promote_staged_transition_launcher,
 };
 pub use coordinator::{
     BridgeUpdateCoordinator, BridgeUpdateEnvironment, InstallationIdentityStore, StagedRelease,

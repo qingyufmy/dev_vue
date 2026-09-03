@@ -1,0 +1,1291 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AURUM API V4 Contract Backbone",
+    "version": "4.0.0",
+    "description": "HTTP common contract, server-side SSO sessions and trade vertical slices. Domain schemas expand here during implementation.",
+    "license": { "name": "Proprietary", "identifier": "LicenseRef-Proprietary" }
+  },
+  "servers": [
+    {
+      "url": "/api/v4",
+      "description": "Same-origin application API"
+    }
+  ],
+  "tags": [
+    { "name": "Session", "description": "Host-only application session and SSO lifecycle" },
+    { "name": "Context", "description": "Authorized user and trading scope" },
+    { "name": "Realtime", "description": "Browser realtime connection bootstrap" },
+    { "name": "Accounts", "description": "Trading account snapshots" },
+    { "name": "Market", "description": "Quotes and candle history" },
+    { "name": "Execution", "description": "Positions and asynchronous operations" },
+    { "name": "Analysis", "description": "AI analysis jobs and signals" },
+    { "name": "Risk", "description": "Account risk policy" },
+    { "name": "Bridge", "description": "Bridge device credential lifecycle" }
+  ],
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "operationId": "loginAtIdentityCenter",
+        "summary": "Authenticate at auth host and continue an Authorization Code + PKCE request",
+        "tags": ["Session"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthLoginRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Authentication succeeded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthLoginResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/session": {
+      "get": {
+        "operationId": "getApplicationSession",
+        "summary": "Get the current Host-only application session",
+        "tags": ["Session"],
+        "responses": {
+          "200": { "description": "Current session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/session/logout": {
+      "post": {
+        "operationId": "logoutCurrentApplication",
+        "summary": "Revoke only the current application session",
+        "tags": ["Session"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
+        "responses": { "204": { "description": "Current application session revoked" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/session/logout-web": {
+      "post": {
+        "operationId": "logoutAllWebApplications",
+        "summary": "Revoke auth, www, trade and admin web sessions without revoking Bridge",
+        "tags": ["Session"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
+        "responses": { "204": { "description": "All website sessions revoked" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/session/revoke-all": {
+      "post": {
+        "operationId": "revokeAllSessionsAndDevices",
+        "summary": "After recent authentication, revoke all website and Bridge device sessions",
+        "tags": ["Session"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
+        "responses": { "204": { "description": "All website and device sessions revoked" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" } }
+      }
+    },
+    "/bridge/legacy-credential-exchanges": {
+      "post": {
+        "operationId": "exchangeLegacyBridgeCredential",
+        "summary": "Rotate a valid V3 refresh credential into a V4 device refresh credential",
+        "tags": ["Bridge"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LegacyBridgeCredentialExchange" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "V4 device refresh credential issued; the V3 credential remains valid for rollback",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BridgeRefreshCredentialResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/bridge/session-tokens": {
+      "post": {
+        "operationId": "createBridgeSessionToken",
+        "summary": "Exchange a V4 device refresh credential for a short-lived Bridge session token",
+        "tags": ["Bridge"],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BridgeSessionTokenRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Short-lived, one-time Bridge session token created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BridgeSessionTokenResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/trading-context": {
+      "get": {
+        "operationId": "getTradingContext",
+        "summary": "Get the current trading context",
+        "tags": ["Context"],
+        "responses": {
+          "200": {
+            "description": "Current user trading scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TradingContextResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "put": {
+        "operationId": "replaceTradingContext",
+        "summary": "Select one owned trading account or an authorized observer channel",
+        "tags": ["Context"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingContextInput" } } } },
+        "responses": {
+          "200": { "description": "Trading context replaced", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingContextResponse" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/trading-context/observer": {
+      "delete": {
+        "operationId": "leaveObserverMode",
+        "summary": "Exit observer mode and restore the first owned account when available",
+        "tags": ["Context"],
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/ExpectedRevisionQuery" }
+        ],
+        "responses": {
+          "200": { "description": "Observer mode exited", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingContextResponse" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/trading-accounts": {
+      "get": {
+        "operationId": "listTradingAccounts",
+        "summary": "List trading accounts owned by the current system user",
+        "tags": ["Accounts"],
+        "responses": { "200": { "description": "Owned trading accounts", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingAccountListResponse" } } } } }
+      }
+    },
+    "/bridge/connection-capacity": {
+      "get": {
+        "operationId": "getBridgeConnectionCapacity",
+        "summary": "Get included, purchased and currently used trading-account connection capacity",
+        "tags": ["Bridge"],
+        "responses": { "200": { "description": "Connection capacity", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConnectionCapacityResponse" } } } } }
+      }
+    },
+    "/bridge/terminal-profiles": {
+      "get": {
+        "operationId": "listTerminalProfiles",
+        "summary": "List replaceable MT4 and MT5 terminal profiles without counting offline profiles as capacity",
+        "tags": ["Bridge"],
+        "responses": { "200": { "description": "Terminal profiles", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TerminalProfileListResponse" } } } } }
+      }
+    },
+    "/observer-channels": {
+      "get": {
+        "operationId": "listObserverChannels",
+        "summary": "List observer channels authorized for the current user",
+        "tags": ["Context"],
+        "responses": { "200": { "description": "Authorized observer channels", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverChannelListResponse" } } } } }
+      }
+    },
+    "/realtime/tickets": {
+      "post": {
+        "operationId": "createRealtimeTicket",
+        "summary": "Create a one-time realtime connection ticket",
+        "tags": ["Realtime"],
+        "description": "Sets a short-lived, one-time, HttpOnly realtime ticket cookie.",
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "responses": {
+          "201": {
+            "description": "Realtime ticket created",
+            "headers": {
+              "Set-Cookie": {
+                "description": "Short-lived one-time ticket restricted to /realtime/v4",
+                "schema": { "type": "string" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RealtimeTicketResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/trading-accounts/{account_id}/snapshot": {
+      "get": {
+        "operationId": "getTradingAccountSnapshot",
+        "summary": "Get a consistent trading account snapshot",
+        "tags": ["Accounts"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountId" },
+          { "$ref": "#/components/parameters/ObserverChannelIdQuery" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consistent account snapshot",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TradingWorkspaceResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/market/quotes/{symbol}": {
+      "get": {
+        "operationId": "getMarketQuote",
+        "summary": "Get the current quote for one symbol",
+        "tags": ["Market"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdQuery" },
+          { "$ref": "#/components/parameters/Symbol" },
+          { "$ref": "#/components/parameters/ObserverChannelIdQuery" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current quote snapshot",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/QuoteResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/market/candles": {
+      "get": {
+        "operationId": "listMarketCandles",
+        "summary": "List a historical candle window",
+        "tags": ["Market"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdQuery" },
+          { "$ref": "#/components/parameters/SymbolQuery" },
+          { "$ref": "#/components/parameters/Timeframe" },
+          { "$ref": "#/components/parameters/CandlePageSize" },
+          { "$ref": "#/components/parameters/ObserverChannelIdQuery" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical candle window",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CandleListResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/positions": {
+      "get": {
+        "operationId": "listPositions",
+        "summary": "List current positions",
+        "tags": ["Execution"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdQuery" },
+          { "$ref": "#/components/parameters/PageSize" },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current positions",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PositionListResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/positions/{ticket}/close-commands": {
+      "post": {
+        "operationId": "createPositionCloseCommand",
+        "summary": "Create an asynchronous position close command",
+        "tags": ["Execution"],
+        "parameters": [
+          { "$ref": "#/components/parameters/Ticket" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PositionCloseCommand" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Command durably accepted, not necessarily executed by MT",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OperationResponse" }
+              }
+            }
+          },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/analysis-jobs": {
+      "post": {
+        "operationId": "createAnalysisJob",
+        "summary": "Create a manual analysis job",
+        "tags": ["Analysis"],
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AnalysisJobCreate" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Analysis accepted",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OperationResponse" }
+              }
+            }
+          },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/operations/{operation_id}": {
+      "get": {
+        "operationId": "getOperation",
+        "summary": "Get an asynchronous operation",
+        "tags": ["Execution"],
+        "parameters": [
+          { "$ref": "#/components/parameters/OperationId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current operation state",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OperationResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/signals": {
+      "get": {
+        "operationId": "listSignals",
+        "summary": "List AI signal summaries",
+        "tags": ["Analysis"],
+        "parameters": [
+          { "$ref": "#/components/parameters/PageSize" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/SymbolQueryOptional" },
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "schema": { "$ref": "#/components/schemas/OpaqueId" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signal summaries",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SignalListResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/signals/{signal_id}": {
+      "get": {
+        "operationId": "getSignal",
+        "summary": "Get a complete AI signal",
+        "tags": ["Analysis"],
+        "parameters": [
+          { "$ref": "#/components/parameters/SignalId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full signal reasoning and execution relationship",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SignalDetailResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/risk-accounts/{account_id}/policy": {
+      "get": {
+        "operationId": "getRiskPolicy",
+        "summary": "Get an account risk policy",
+        "tags": ["Risk"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Risk policy",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RiskPolicyResponse" }
+              }
+            }
+          },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "put": {
+        "operationId": "replaceRiskPolicy",
+        "summary": "Replace an account risk policy",
+        "tags": ["Risk"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountId" },
+          { "$ref": "#/components/parameters/IfMatch" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RiskPolicyInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Risk policy replaced",
+            "headers": {
+              "ETag": { "$ref": "#/components/headers/ETag" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RiskPolicyResponse" }
+              }
+            }
+          },
+          "412": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "applicationSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-aurum_session",
+        "description": "Logical placeholder. Each application uses its own Host-only session cookie name."
+      }
+    },
+    "parameters": {
+      "AccountId": {
+        "name": "account_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/OpaqueId" }
+      },
+      "AccountIdQuery": {
+        "name": "account_id",
+        "in": "query",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/OpaqueId" }
+      },
+      "ObserverChannelIdQuery": {
+        "name": "observer_channel_id",
+        "in": "query",
+        "required": false,
+        "description": "Authorized observer channel required when reading an account the current user does not own.",
+        "schema": { "$ref": "#/components/schemas/OpaqueId" }
+      },
+      "ExpectedRevisionQuery": {
+        "name": "expected_revision",
+        "in": "query",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/Revision" }
+      },
+      "Symbol": {
+        "name": "symbol",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/Symbol" }
+      },
+      "SymbolQuery": {
+        "name": "symbol",
+        "in": "query",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/Symbol" }
+      },
+      "SymbolQueryOptional": {
+        "name": "symbol",
+        "in": "query",
+        "schema": { "$ref": "#/components/schemas/Symbol" }
+      },
+      "Timeframe": {
+        "name": "timeframe",
+        "in": "query",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/Timeframe" }
+      },
+      "CandlePageSize": {
+        "name": "page_size",
+        "in": "query",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 500, "default": 200 }
+      },
+      "PageSize": {
+        "name": "page_size",
+        "in": "query",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": { "type": ["string", "null"], "maxLength": 2048 }
+      },
+      "Ticket": {
+        "name": "ticket",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/Ticket" }
+      },
+      "OperationId": {
+        "name": "operation_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/OpaqueId" }
+      },
+      "SignalId": {
+        "name": "signal_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/OpaqueId" }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 16, "maxLength": 128 }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 3, "maxLength": 128 }
+      },
+      "CsrfToken": {
+        "name": "X-CSRF-Token",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 16, "maxLength": 256 }
+      }
+    },
+    "headers": {
+      "ETag": {
+        "description": "Opaque resource revision as an HTTP entity tag",
+        "schema": { "type": "string" }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Problem details",
+        "content": {
+          "application/problem+json": {
+            "schema": { "$ref": "#/components/schemas/Problem" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "OpaqueId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 191
+      },
+      "Revision": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "Decimal": {
+        "type": "string",
+        "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+      },
+      "UtcDateTime": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "Z$"
+      },
+      "Symbol": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9._-]+$"
+      },
+      "Ticket": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[0-9A-Za-z._:-]+$"
+      },
+      "Timeframe": {
+        "type": "string",
+        "enum": ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+      },
+      "Meta": {
+        "type": "object",
+        "required": ["request_id", "generated_at"],
+        "additionalProperties": false,
+        "properties": {
+          "request_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "generated_at": { "$ref": "#/components/schemas/UtcDateTime" }
+        }
+      },
+      "PageMeta": {
+        "type": "object",
+        "required": ["request_id", "generated_at", "page_size", "next_cursor", "has_more"],
+        "additionalProperties": false,
+        "properties": {
+          "request_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "generated_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "page_size": { "type": "integer", "minimum": 0, "maximum": 500 },
+          "next_cursor": { "type": ["string", "null"] },
+          "has_more": { "type": "boolean" }
+        }
+      },
+      "FieldProblem": {
+        "type": "object",
+        "required": ["field", "code", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "field": { "type": "string", "maxLength": 256 },
+          "code": { "type": "string", "maxLength": 128 },
+          "message": { "type": "string", "maxLength": 512 }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "required": ["type", "title", "status", "code", "detail", "instance", "correlation_id", "retryable"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string", "format": "uri-reference" },
+          "title": { "type": "string", "maxLength": 256 },
+          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+          "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,127}$" },
+          "detail": { "type": "string", "maxLength": 2048 },
+          "instance": { "type": "string", "maxLength": 2048 },
+          "correlation_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "retryable": { "type": "boolean" },
+          "retry_after_ms": { "type": "integer", "minimum": 0 },
+          "errors": {
+            "type": "array",
+            "maxItems": 50,
+            "items": { "$ref": "#/components/schemas/FieldProblem" }
+          }
+        }
+      },
+      "AuthorizationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["client_id", "redirect_uri", "response_type", "scope", "state", "nonce", "code_challenge", "code_challenge_method"],
+        "properties": {
+          "client_id": { "type": "string", "enum": ["www-web", "trade-web", "admin-web"] },
+          "redirect_uri": { "type": "string", "format": "uri" },
+          "response_type": { "const": "code" },
+          "scope": { "const": "openid profile" },
+          "state": { "type": "string", "minLength": 24, "maxLength": 128 },
+          "nonce": { "type": "string", "minLength": 24, "maxLength": 128 },
+          "code_challenge": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+          "code_challenge_method": { "const": "S256" }
+        }
+      },
+      "AuthLoginRequest": {
+        "allOf": [
+          { "$ref": "#/components/schemas/AuthorizationRequest" },
+          {
+            "type": "object",
+            "required": ["login", "password", "remember"],
+            "properties": {
+              "login": { "type": "string", "minLength": 1, "maxLength": 255 },
+              "password": { "type": "string", "minLength": 1, "maxLength": 1024, "writeOnly": true },
+              "remember": { "type": "boolean" }
+            }
+          }
+        ]
+      },
+      "AuthLoginResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["redirect_to"],
+            "additionalProperties": false,
+            "properties": { "redirect_to": { "type": "string", "format": "uri" } }
+          },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "required": ["user", "app", "permissions", "authenticated_at", "mfa_level", "csrf_token"],
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "type": "object",
+            "required": ["id", "display_name", "avatar_url"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/components/schemas/OpaqueId" },
+              "display_name": { "type": "string", "minLength": 1, "maxLength": 100 },
+              "avatar_url": { "type": ["string", "null"], "format": "uri-reference" }
+            }
+          },
+          "app": { "type": "string", "enum": ["www", "trade", "admin"] },
+          "permissions": { "type": "array", "uniqueItems": true, "items": { "type": "string", "maxLength": 128 } },
+          "authenticated_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "mfa_level": { "type": "string", "enum": ["none", "otp", "strong"] },
+          "csrf_token": { "type": "string", "minLength": 16, "maxLength": 256 }
+        }
+      },
+      "SessionResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/Session" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "BridgeDeviceId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "BridgeRefreshToken": {
+        "type": "string",
+        "minLength": 40,
+        "maxLength": 512,
+        "pattern": "^\\S+$"
+      },
+      "LegacyBridgeCredentialExchange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "legacy_refresh_token", "installation_id", "profile_id", "source_fingerprint"],
+        "properties": {
+          "schema_version": { "const": 1 },
+          "legacy_refresh_token": { "$ref": "#/components/schemas/BridgeRefreshToken" },
+          "installation_id": { "$ref": "#/components/schemas/BridgeDeviceId" },
+          "profile_id": { "$ref": "#/components/schemas/BridgeDeviceId" },
+          "source_fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        }
+      },
+      "BridgeRefreshCredential": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["credential_type", "refresh_token", "generation", "session_token_path", "websocket_path"],
+        "properties": {
+          "credential_type": { "const": "bridge_refresh" },
+          "refresh_token": { "$ref": "#/components/schemas/BridgeRefreshToken" },
+          "generation": { "type": "integer", "minimum": 1 },
+          "session_token_path": { "const": "/api/v4/bridge/session-tokens" },
+          "websocket_path": { "const": "/bridge/v4/ws" }
+        }
+      },
+      "BridgeRefreshCredentialResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/BridgeRefreshCredential" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "BridgeSessionTokenRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["refresh_token", "installation_id", "profile_id"],
+        "properties": {
+          "refresh_token": { "$ref": "#/components/schemas/BridgeRefreshToken" },
+          "installation_id": { "$ref": "#/components/schemas/BridgeDeviceId" },
+          "profile_id": { "$ref": "#/components/schemas/BridgeDeviceId" }
+        }
+      },
+      "BridgeSessionToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["credential_type", "access_token", "expires_in_seconds", "websocket_path"],
+        "properties": {
+          "credential_type": { "const": "bridge_session" },
+          "access_token": { "type": "string", "minLength": 40, "maxLength": 128 },
+          "expires_in_seconds": { "type": "integer", "minimum": 1, "maximum": 60 },
+          "websocket_path": { "const": "/bridge/v4/ws" }
+        }
+      },
+      "BridgeSessionTokenResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/BridgeSessionToken" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "TradingContext": {
+        "type": "object",
+        "required": ["mode", "user_id", "account_id", "observer_channel_id", "read_only", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "mode": { "type": "string", "enum": ["full", "observer", "blocked"] },
+          "user_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "account_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "observer_channel_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "read_only": { "type": "boolean" },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "TradingContextResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/TradingContext" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "TradingContextInput": {
+        "type": "object",
+        "required": ["mode", "expected_revision"],
+        "additionalProperties": false,
+        "properties": {
+          "mode": { "type": "string", "enum": ["full", "observer"] },
+          "account_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "observer_channel_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "expected_revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "TradingAccount": {
+        "type": "object",
+        "required": ["id", "platform", "login", "server", "currency", "terminal_profile_id", "terminal_instance_id", "bridge_state", "trade_permission", "last_seen_at"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "platform": { "type": "string", "enum": ["mt4", "mt5"] },
+          "login": { "type": "string", "maxLength": 64 },
+          "server": { "type": "string", "maxLength": 191 },
+          "currency": { "type": "string", "minLength": 3, "maxLength": 12 },
+          "terminal_profile_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "terminal_instance_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "bridge_state": { "type": "string", "enum": ["online", "offline", "paused", "replaced", "unauthorized"] },
+          "trade_permission": { "type": "boolean" },
+          "last_seen_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] }
+        }
+      },
+      "TradingAccountListResponse": {
+        "type": "object", "required": ["data", "meta"],
+        "properties": { "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/TradingAccount" } } } }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ConnectionCapacityResponse": {
+        "type": "object", "required": ["data", "meta"],
+        "properties": { "data": { "type": "object", "required": ["included", "purchased", "total", "active", "available"], "additionalProperties": false, "properties": { "included": { "type": "integer", "minimum": 1 }, "purchased": { "type": "integer", "minimum": 0 }, "total": { "type": "integer", "minimum": 1 }, "active": { "type": "integer", "minimum": 0 }, "available": { "type": "integer", "minimum": 0 } } }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "TerminalProfileListResponse": {
+        "type": "object", "required": ["data", "meta"],
+        "properties": { "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "type": "object", "required": ["id", "display_name", "platform", "installation_id", "account_id", "connection_state", "last_seen_at"], "additionalProperties": false, "properties": { "id": { "$ref": "#/components/schemas/OpaqueId" }, "display_name": { "type": "string" }, "platform": { "type": "string", "enum": ["mt4", "mt5"] }, "installation_id": { "$ref": "#/components/schemas/OpaqueId" }, "account_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] }, "connection_state": { "type": "string", "enum": ["online", "offline", "paused"] }, "last_seen_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] } } } } } }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ObserverChannelListResponse": {
+        "type": "object", "required": ["data", "meta"],
+        "properties": { "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "type": "object", "required": ["id", "display_name", "source_account_id", "active"], "additionalProperties": false, "properties": { "id": { "$ref": "#/components/schemas/OpaqueId" }, "display_name": { "type": "string" }, "source_account_id": { "$ref": "#/components/schemas/OpaqueId" }, "active": { "type": "boolean" } } } } } }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "RealtimeTicket": {
+        "type": "object",
+        "required": ["ws_url", "protocol", "expires_at", "capabilities"],
+        "additionalProperties": false,
+        "properties": {
+          "ws_url": { "type": "string", "pattern": "^/realtime/v4$" },
+          "protocol": { "const": "aurum.realtime.v4" },
+          "expires_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "capabilities": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "maxLength": 64 }
+          }
+        }
+      },
+      "RealtimeTicketResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/RealtimeTicket" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "AccountSnapshot": {
+        "type": "object",
+        "required": ["id", "platform", "login", "server", "currency", "terminal_profile_id", "terminal_instance_id", "bridge_state", "trade_permission", "last_seen_at", "balance", "equity", "margin", "free_margin", "floating_profit", "leverage", "timezone_offset_minutes", "clock_status", "observed_at", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "terminal_instance_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "terminal_profile_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "platform": { "type": "string", "enum": ["mt4", "mt5"] },
+          "server": { "type": "string", "maxLength": 191 },
+          "login": { "type": "string", "maxLength": 64 },
+          "bridge_state": { "type": "string", "enum": ["online", "offline", "paused", "replaced", "unauthorized"] },
+          "trade_permission": { "type": "boolean" },
+          "last_seen_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "balance": { "$ref": "#/components/schemas/Decimal" },
+          "equity": { "$ref": "#/components/schemas/Decimal" },
+          "margin": { "$ref": "#/components/schemas/Decimal" },
+          "free_margin": { "$ref": "#/components/schemas/Decimal" },
+          "floating_profit": { "$ref": "#/components/schemas/Decimal" },
+          "leverage": { "type": ["integer", "null"], "minimum": 1 },
+          "currency": { "type": "string", "minLength": 3, "maxLength": 12 },
+          "timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
+          "clock_status": { "type": "string", "enum": ["calibrated", "observer_bootstrap", "stale", "unavailable"] },
+          "observed_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "AccountSnapshotResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/AccountSnapshot" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "TradingWorkspaceResponse": {
+        "type": "object", "required": ["data", "meta"],
+        "properties": {
+          "data": {
+            "type": "object", "required": ["account", "snapshot", "symbols", "positions", "pending_orders"], "additionalProperties": false,
+            "properties": {
+              "account": { "$ref": "#/components/schemas/TradingAccount" },
+              "snapshot": { "oneOf": [{ "$ref": "#/components/schemas/AccountSnapshot" }, { "type": "null" }] },
+              "symbols": { "type": "array", "items": { "$ref": "#/components/schemas/Symbol" } },
+              "positions": { "type": "object", "required": ["revision", "items"], "properties": { "revision": { "$ref": "#/components/schemas/Revision" }, "items": { "type": "array", "items": { "$ref": "#/components/schemas/Position" } } } },
+              "pending_orders": { "type": "object", "required": ["revision", "items"], "properties": { "revision": { "$ref": "#/components/schemas/Revision" }, "items": { "type": "array", "items": { "$ref": "#/components/schemas/PendingOrder" } } } }
+            }
+          },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "Quote": {
+        "type": "object",
+        "required": ["account_id", "symbol", "bid", "ask", "spread", "observed_at", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "bid": { "$ref": "#/components/schemas/Decimal" },
+          "ask": { "$ref": "#/components/schemas/Decimal" },
+          "last": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "spread": { "$ref": "#/components/schemas/Decimal" },
+          "trade_mode": { "type": "string", "enum": ["full", "long_only", "short_only", "close_only", "disabled", "unknown"] },
+          "observed_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "QuoteResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "oneOf": [{ "$ref": "#/components/schemas/Quote" }, { "type": "null" }] },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "Candle": {
+        "type": "object",
+        "required": ["account_id", "symbol", "timeframe", "open_time", "open", "high", "low", "close", "tick_volume", "closed", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "timeframe": { "$ref": "#/components/schemas/Timeframe" },
+          "open_time": { "$ref": "#/components/schemas/UtcDateTime" },
+          "open": { "$ref": "#/components/schemas/Decimal" },
+          "high": { "$ref": "#/components/schemas/Decimal" },
+          "low": { "$ref": "#/components/schemas/Decimal" },
+          "close": { "$ref": "#/components/schemas/Decimal" },
+          "tick_volume": { "$ref": "#/components/schemas/Decimal" },
+          "closed": { "type": "boolean" },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "CandleListResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Candle" } } } },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "Position": {
+        "type": "object",
+        "required": ["ticket", "account_id", "symbol", "side", "volume", "open_price", "current_price", "stop_loss", "take_profit", "floating_profit", "opened_at", "source", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "ticket": { "$ref": "#/components/schemas/Ticket" },
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "side": { "type": "string", "enum": ["buy", "sell"] },
+          "volume": { "$ref": "#/components/schemas/Decimal" },
+          "open_price": { "$ref": "#/components/schemas/Decimal" },
+          "current_price": { "$ref": "#/components/schemas/Decimal" },
+          "stop_loss": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "take_profit": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "floating_profit": { "$ref": "#/components/schemas/Decimal" },
+          "opened_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "source": { "type": "string", "enum": ["manual", "signal", "unknown"] },
+          "signal_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "PositionListResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/Position" } },
+          "meta": { "$ref": "#/components/schemas/PageMeta" }
+        }
+      },
+      "PendingOrder": {
+        "type": "object",
+        "required": ["ticket", "account_id", "symbol", "type", "volume", "price", "stop_loss", "take_profit", "created_at", "expires_at", "source", "signal_id", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "ticket": { "$ref": "#/components/schemas/Ticket" }, "account_id": { "$ref": "#/components/schemas/OpaqueId" }, "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "type": { "type": "string", "enum": ["buy_limit", "sell_limit", "buy_stop", "sell_stop", "buy_stop_limit", "sell_stop_limit"] },
+          "volume": { "$ref": "#/components/schemas/Decimal" }, "price": { "$ref": "#/components/schemas/Decimal" },
+          "stop_loss": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "take_profit": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "created_at": { "$ref": "#/components/schemas/UtcDateTime" }, "expires_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "source": { "type": "string", "enum": ["manual", "signal", "unknown"] }, "signal_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] }, "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "PositionCloseCommand": {
+        "type": "object",
+        "required": ["account_id", "confirm", "expected_state"],
+        "additionalProperties": false,
+        "properties": {
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "confirm": { "const": true },
+          "volume": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "expected_state": {
+            "type": "object",
+            "required": ["position_revision"],
+            "additionalProperties": false,
+            "properties": {
+              "position_revision": { "$ref": "#/components/schemas/Revision" },
+              "volume": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }
+            }
+          },
+          "distribution": {
+            "type": ["object", "null"],
+            "required": ["strategy_id"],
+            "additionalProperties": false,
+            "properties": {
+              "strategy_id": { "$ref": "#/components/schemas/OpaqueId" }
+            }
+          }
+        }
+      },
+      "AnalysisJobCreate": {
+        "type": "object",
+        "required": ["strategy_id", "symbol", "mode"],
+        "additionalProperties": false,
+        "properties": {
+          "strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "mode": { "const": "manual" },
+          "auto_execute": { "type": "boolean", "default": false }
+        }
+      },
+      "Operation": {
+        "type": "object",
+        "required": ["operation_id", "kind", "status", "accepted_at", "updated_at", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "kind": { "type": "string", "maxLength": 128 },
+          "status": { "type": "string", "enum": ["accepted", "queued", "running", "succeeded", "partially_succeeded", "rejected", "failed", "uncertain", "cancelled", "expired"] },
+          "accepted_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "updated_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "completed_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "resource_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "error_code": { "type": ["string", "null"], "maxLength": 128 },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "OperationResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/Operation" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "SignalSummary": {
+        "type": "object",
+        "required": ["signal_id", "strategy_id", "symbol", "direction", "action", "confidence", "created_at", "execution_status", "revision"],
+        "properties": {
+          "signal_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "direction": { "type": "string", "enum": ["bullish", "bearish", "neutral"] },
+          "action": { "type": "string", "enum": ["observe", "buy", "sell", "place_pending", "hold", "modify", "close", "cancel"] },
+          "confidence": { "$ref": "#/components/schemas/Decimal" },
+          "created_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "execution_status": { "type": "string", "enum": ["not_applicable", "pending", "accepted", "succeeded", "rejected", "failed", "uncertain", "expired"] },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "SignalDetail": {
+        "allOf": [
+          { "$ref": "#/components/schemas/SignalSummary" },
+          {
+            "type": "object",
+            "required": ["summary", "reasoning", "order_parameters"],
+            "properties": {
+              "summary": { "type": "string" },
+              "reasoning": { "type": "string" },
+              "order_parameters": {
+                "type": ["object", "null"],
+                "additionalProperties": true
+              }
+            }
+          }
+        ]
+      },
+      "SignalListResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/SignalSummary" } },
+          "meta": { "$ref": "#/components/schemas/PageMeta" }
+        }
+      },
+      "SignalDetailResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/SignalDetail" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "RiskPolicyInput": {
+        "type": "object",
+        "required": ["max_risk_per_trade_percent", "max_daily_loss_percent", "max_open_positions", "trade_send_enabled"],
+        "properties": {
+          "max_risk_per_trade_percent": { "$ref": "#/components/schemas/Decimal" },
+          "max_daily_loss_percent": { "$ref": "#/components/schemas/Decimal" },
+          "max_open_positions": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "trade_send_enabled": { "type": "boolean" }
+        }
+      },
+      "RiskPolicy": {
+        "allOf": [
+          { "$ref": "#/components/schemas/RiskPolicyInput" },
+          {
+            "type": "object",
+            "required": ["account_id", "revision", "updated_at"],
+            "properties": {
+              "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+              "revision": { "$ref": "#/components/schemas/Revision" },
+              "updated_at": { "$ref": "#/components/schemas/UtcDateTime" }
+            }
+          }
+        ]
+      },
+      "RiskPolicyResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/RiskPolicy" },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      }
+    }
+  },
+  "security": [
+    { "applicationSession": [] }
+  ],
+  "x-contract-status": "stage-10-sso-vertical-slice"
+}

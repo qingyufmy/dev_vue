@@ -1,0 +1,863 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.aurum.invalid/bridge-v4.schema.json",
+  "title": "AURUM Bridge Device Protocol V4",
+  "$comment": "Stage 8 prototype contract. Resource and action names are frozen for the net48/Win7 prototype; resource-specific request/response payload shapes remain under implementation and must pass the Stage 8 real-machine gate before final freeze.",
+  "oneOf": [
+    { "$ref": "#/$defs/SessionHello" },
+    { "$ref": "#/$defs/SessionWelcome" },
+    { "$ref": "#/$defs/Heartbeat" },
+    { "$ref": "#/$defs/HeartbeatAck" },
+    { "$ref": "#/$defs/QueryRequest" },
+    { "$ref": "#/$defs/QueryResponse" },
+    { "$ref": "#/$defs/QueryError" },
+    { "$ref": "#/$defs/DataPersistedAck" },
+    { "$ref": "#/$defs/StreamSubscribe" },
+    { "$ref": "#/$defs/StreamUnsubscribe" },
+    { "$ref": "#/$defs/StreamEvent" },
+    { "$ref": "#/$defs/StreamAck" },
+    { "$ref": "#/$defs/CommandRequest" },
+    { "$ref": "#/$defs/CommandAccepted" },
+    { "$ref": "#/$defs/CommandResult" },
+    { "$ref": "#/$defs/CommandResultAck" },
+    { "$ref": "#/$defs/CommandReconcile" },
+    { "$ref": "#/$defs/ReleaseAvailable" },
+    { "$ref": "#/$defs/ReleaseStatus" },
+    { "$ref": "#/$defs/ProtocolError" }
+  ],
+  "$defs": {
+    "OpaqueId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 191,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+    },
+    "UtcMsc": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "Decimal": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+    },
+    "PositiveDecimal": {
+      "type": "string",
+      "pattern": "^(?:0\\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\\.[0-9]+)?)$"
+    },
+    "Ticket": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$"
+    },
+    "AccountRef": {
+      "type": "object",
+      "required": ["broker_server", "login"],
+      "additionalProperties": false,
+      "properties": {
+        "broker_server": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "login": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "Route": {
+      "type": "object",
+      "required": ["terminal_instance_id", "account_ref", "connection_epoch"],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_instance_id": { "$ref": "#/$defs/OpaqueId" },
+        "account_ref": { "$ref": "#/$defs/AccountRef" },
+        "connection_epoch": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "BaseEnvelope": {
+      "type": "object",
+      "required": ["v", "message_id", "type", "sent_at_utc_msc", "correlation_id", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 4 },
+        "message_id": { "$ref": "#/$defs/OpaqueId" },
+        "type": { "type": "string", "maxLength": 64 },
+        "sent_at_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "correlation_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "route": { "$ref": "#/$defs/Route" },
+        "payload": { "type": "object" }
+      }
+    },
+    "RoutedEnvelope": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEnvelope" },
+        {
+          "type": "object",
+          "required": ["route"],
+          "properties": {
+            "route": { "$ref": "#/$defs/Route" }
+          }
+        }
+      ]
+    },
+    "Capability": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+    },
+    "QueryResource": {
+      "type": "string",
+      "enum": [
+        "terminal.info",
+        "terminal.clock",
+        "account.snapshot",
+        "market.symbols",
+        "market.instrument",
+        "market.quote",
+        "market.candles",
+        "trading.positions",
+        "trading.pending_orders",
+        "history.orders",
+        "history.trades",
+        "history.deals",
+        "execution.lookup",
+        "diagnostics.health"
+      ]
+    },
+    "PersistedResource": {
+      "type": "string",
+      "enum": ["market.candles", "history.orders", "history.trades", "history.deals"]
+    },
+    "StreamResource": {
+      "type": "string",
+      "enum": ["account", "positions", "pending_orders", "quotes", "current_candle", "terminal.status", "terminal.clock"]
+    },
+    "CommandAction": {
+      "type": "string",
+      "enum": [
+        "order.place",
+        "position.protection.set",
+        "position.close",
+        "pending_order.modify",
+        "pending_order.cancel",
+        "execution.lookup"
+      ]
+    },
+    "SessionHelloPayload": {
+      "type": "object",
+      "required": ["session_id", "installation_id", "profile_id", "bridge_version", "protocol_versions", "platforms", "capabilities", "limits", "terminals"],
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "$ref": "#/$defs/OpaqueId" },
+        "installation_id": { "$ref": "#/$defs/OpaqueId" },
+        "profile_id": { "$ref": "#/$defs/OpaqueId" },
+        "bridge_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "protocol_versions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 4, "maximum": 4 }
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["mt4", "mt5"] }
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/Capability" }
+        },
+        "limits": {
+          "type": "object",
+          "required": ["max_frame_bytes", "max_page_size", "max_inflight_queries", "max_inflight_commands"],
+          "additionalProperties": false,
+          "properties": {
+            "max_frame_bytes": { "type": "integer", "minimum": 65536, "maximum": 524288 },
+            "max_page_size": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "max_inflight_queries": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "max_inflight_commands": { "type": "integer", "minimum": 1, "maximum": 32 }
+          }
+        },
+        "terminals": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "required": ["route", "platform", "terminal_version", "trade_permission", "clock_status"],
+            "additionalProperties": false,
+            "properties": {
+              "route": { "$ref": "#/$defs/Route" },
+              "platform": { "type": "string", "enum": ["mt4", "mt5"] },
+              "terminal_version": { "type": "string", "maxLength": 64 },
+              "trade_permission": { "type": "string", "enum": ["full", "read_only", "disabled", "unknown"] },
+              "timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
+              "clock_status": { "type": "string", "enum": ["calibrated", "observer_bootstrap", "stale", "unavailable"] }
+            }
+          }
+        }
+      }
+    },
+    "SessionHello": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "session.hello" },
+            "payload": { "$ref": "#/$defs/SessionHelloPayload" }
+          }
+        }
+      ]
+    },
+    "SessionWelcome": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "session.welcome" },
+            "payload": {
+              "type": "object",
+              "required": ["session_id", "connection_id", "accepted_protocol_version", "heartbeat_interval_ms", "limits"],
+              "additionalProperties": false,
+              "properties": {
+                "session_id": { "$ref": "#/$defs/OpaqueId" },
+                "connection_id": { "$ref": "#/$defs/OpaqueId" },
+                "accepted_protocol_version": { "const": 4 },
+                "heartbeat_interval_ms": { "type": "integer", "minimum": 5000, "maximum": 60000 },
+                "limits": {
+                  "type": "object",
+                  "required": ["max_frame_bytes", "max_page_size", "max_inflight_queries", "max_inflight_commands"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "max_frame_bytes": { "type": "integer", "minimum": 65536, "maximum": 524288 },
+                    "max_page_size": { "type": "integer", "minimum": 1, "maximum": 500 },
+                    "max_inflight_queries": { "type": "integer", "minimum": 1, "maximum": 64 },
+                    "max_inflight_commands": { "type": "integer", "minimum": 1, "maximum": 32 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "HeartbeatPayload": {
+      "type": "object",
+      "required": ["session_id", "last_received_message_id", "queue"],
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "$ref": "#/$defs/OpaqueId" },
+        "last_received_message_id": {
+          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        },
+        "queue": {
+          "type": "object",
+          "required": ["commands", "results", "queries", "stream_events"],
+          "additionalProperties": false,
+          "properties": {
+            "commands": { "type": "integer", "minimum": 0 },
+            "results": { "type": "integer", "minimum": 0 },
+            "queries": { "type": "integer", "minimum": 0 },
+            "stream_events": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "Heartbeat": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "system.heartbeat" },
+            "payload": { "$ref": "#/$defs/HeartbeatPayload" }
+          }
+        }
+      ]
+    },
+    "HeartbeatAck": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "system.heartbeat_ack" },
+            "payload": { "$ref": "#/$defs/HeartbeatPayload" }
+          }
+        }
+      ]
+    },
+    "EmptyQueryParams": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "CursorPageParams": {
+      "type": "object",
+      "required": ["limit", "cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "cursor": { "type": ["string", "null"], "maxLength": 2048 }
+      }
+    },
+    "SymbolParams": {
+      "type": "object",
+      "required": ["symbol"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "QuoteParams": {
+      "type": "object",
+      "required": ["symbols"],
+      "additionalProperties": false,
+      "properties": {
+        "symbols": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+        }
+      }
+    },
+    "CandlesParams": {
+      "type": "object",
+      "required": ["symbol", "timeframe"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "timeframe": { "type": "string", "enum": ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"] },
+        "count": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "range_start_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "range_end_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "cursor": { "type": ["string", "null"], "maxLength": 2048 }
+      },
+      "oneOf": [
+        { "required": ["count"], "not": { "anyOf": [{ "required": ["range_start_utc_msc"] }, { "required": ["range_end_utc_msc"] }, { "required": ["limit"] }, { "required": ["cursor"] }] } },
+        { "required": ["range_start_utc_msc", "range_end_utc_msc", "limit", "cursor"], "not": { "required": ["count"] } }
+      ]
+    },
+    "TradingCollectionParams": {
+      "type": "object",
+      "required": ["limit", "cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "cursor": { "type": ["string", "null"], "maxLength": 2048 },
+        "symbol": { "type": ["string", "null"], "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "HistoryParams": {
+      "type": "object",
+      "required": ["range_start_utc_msc", "range_end_utc_msc", "limit", "cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "range_start_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "range_end_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "cursor": { "type": ["string", "null"], "maxLength": 2048 }
+      }
+    },
+    "ExecutionLookupParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": { "type": "string", "minLength": 16, "maxLength": 191 },
+        "ticket": { "$ref": "#/$defs/Ticket" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "magic": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      },
+      "oneOf": [
+        { "required": ["idempotency_key", "symbol", "magic"], "not": { "required": ["ticket"] } },
+        { "required": ["ticket"], "not": { "anyOf": [{ "required": ["idempotency_key"] }, { "required": ["symbol"] }, { "required": ["magic"] }] } }
+      ]
+    },
+    "DiagnosticsParams": {
+      "type": "object",
+      "required": ["level"],
+      "additionalProperties": false,
+      "properties": {
+        "level": { "type": "string", "enum": ["basic", "full"] }
+      }
+    },
+    "QuerySpec": {
+      "type": "object",
+      "required": ["request_id", "resource", "params", "deadline_utc_msc"],
+      "additionalProperties": false,
+      "properties": {
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "resource": { "$ref": "#/$defs/QueryResource" },
+        "params": { "type": "object" },
+        "deadline_utc_msc": { "$ref": "#/$defs/UtcMsc" }
+      },
+      "allOf": [
+        { "if": { "properties": { "resource": { "enum": ["terminal.info", "terminal.clock", "account.snapshot"] } } }, "then": { "properties": { "params": { "$ref": "#/$defs/EmptyQueryParams" } } } },
+        { "if": { "properties": { "resource": { "const": "market.symbols" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/CursorPageParams" } } } },
+        { "if": { "properties": { "resource": { "const": "market.instrument" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/SymbolParams" } } } },
+        { "if": { "properties": { "resource": { "const": "market.quote" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/QuoteParams" } } } },
+        { "if": { "properties": { "resource": { "const": "market.candles" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/CandlesParams" } } } },
+        { "if": { "properties": { "resource": { "enum": ["trading.positions", "trading.pending_orders"] } } }, "then": { "properties": { "params": { "$ref": "#/$defs/TradingCollectionParams" } } } },
+        { "if": { "properties": { "resource": { "enum": ["history.orders", "history.trades", "history.deals"] } } }, "then": { "properties": { "params": { "$ref": "#/$defs/HistoryParams" } } } },
+        { "if": { "properties": { "resource": { "const": "execution.lookup" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/ExecutionLookupParams" } } } },
+        { "if": { "properties": { "resource": { "const": "diagnostics.health" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/DiagnosticsParams" } } } }
+      ]
+    },
+    "QueryRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "query.request" },
+            "payload": { "$ref": "#/$defs/QuerySpec" }
+          }
+        }
+      ]
+    },
+    "QueryResponsePayload": {
+      "type": "object",
+      "required": ["request_id", "resource", "observed_at_utc_msc", "source_revision", "source", "items", "has_more", "next_cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "resource": { "$ref": "#/$defs/QueryResource" },
+        "observed_at_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "source_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source": { "type": "string", "enum": ["terminal", "local_projection"] },
+        "items": { "type": "array", "maxItems": 500, "items": { "type": "object" } },
+        "has_more": { "type": "boolean" },
+        "next_cursor": { "type": ["string", "null"], "maxLength": 2048 }
+      }
+    },
+    "QueryResponse": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "query.response" },
+            "payload": { "$ref": "#/$defs/QueryResponsePayload" }
+          }
+        }
+      ]
+    },
+    "QueryError": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "query.error" },
+            "payload": {
+              "type": "object",
+              "required": ["request_id", "resource", "code", "message", "retryable"],
+              "additionalProperties": false,
+              "properties": {
+                "request_id": { "$ref": "#/$defs/OpaqueId" },
+                "resource": { "$ref": "#/$defs/QueryResource" },
+                "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,127}$" },
+                "message": { "type": "string", "maxLength": 512 },
+                "retryable": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "DataPersistedAck": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "data.persisted.ack" },
+            "payload": {
+              "type": "object",
+              "required": ["resource", "scope_key", "range_start_utc_msc", "range_end_utc_msc", "source_revision", "status", "persisted_at_utc_msc"],
+              "additionalProperties": false,
+              "properties": {
+                "resource": { "$ref": "#/$defs/PersistedResource" },
+                "scope_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "range_start_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+                "range_end_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+                "source_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "status": { "type": "string", "enum": ["persisted", "duplicate"] },
+                "persisted_at_utc_msc": { "$ref": "#/$defs/UtcMsc" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StreamControlPayload": {
+      "type": "object",
+      "required": ["subscription_id", "stream", "filter"],
+      "additionalProperties": false,
+      "properties": {
+        "subscription_id": { "$ref": "#/$defs/OpaqueId" },
+        "stream": { "$ref": "#/$defs/StreamResource" },
+        "filter": { "type": "object", "maxProperties": 16 },
+        "after_revision": { "type": ["string", "null"], "maxLength": 128 },
+        "max_updates_per_second": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "StreamSubscribe": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "stream.subscribe" },
+            "payload": { "$ref": "#/$defs/StreamControlPayload" }
+          }
+        }
+      ]
+    },
+    "StreamUnsubscribe": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "stream.unsubscribe" },
+            "payload": {
+              "type": "object",
+              "required": ["subscription_id"],
+              "additionalProperties": false,
+              "properties": {
+                "subscription_id": { "$ref": "#/$defs/OpaqueId" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StreamEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "stream.event" },
+            "payload": {
+              "type": "object",
+              "required": ["subscription_id", "stream", "revision", "base_revision", "full_snapshot", "observed_at_utc_msc", "source_time_msc", "upserts", "deletes"],
+              "additionalProperties": false,
+              "properties": {
+                "subscription_id": { "$ref": "#/$defs/OpaqueId" },
+                "stream": { "$ref": "#/$defs/StreamResource" },
+                "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+                "base_revision": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+                "full_snapshot": { "type": "boolean" },
+                "observed_at_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+                "source_time_msc": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+                "upserts": { "type": "array", "maxItems": 10000, "items": { "type": "object" } },
+                "deletes": { "type": "array", "maxItems": 10000, "items": { "type": "string", "minLength": 1, "maxLength": 64 } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StreamAck": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "stream.ack" },
+            "payload": {
+              "type": "object",
+              "required": ["subscription_id", "stream", "revision", "status"],
+              "additionalProperties": false,
+              "properties": {
+                "subscription_id": { "$ref": "#/$defs/OpaqueId" },
+                "stream": { "$ref": "#/$defs/StreamResource" },
+                "revision": { "type": "integer", "minimum": 1 },
+                "status": { "type": "string", "enum": ["applied", "duplicate", "resync_required"] }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CommandSpec": {
+      "type": "object",
+      "required": ["command_id", "idempotency_key", "action", "issued_at_utc_msc", "deadline_utc_msc", "params", "expected_state"],
+      "additionalProperties": false,
+      "properties": {
+        "command_id": { "$ref": "#/$defs/OpaqueId" },
+        "idempotency_key": { "type": "string", "minLength": 16, "maxLength": 191 },
+        "action": { "$ref": "#/$defs/CommandAction" },
+        "issued_at_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "deadline_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "params": { "type": "object", "maxProperties": 64 },
+        "expected_state": { "type": ["object", "null"], "maxProperties": 32 }
+      },
+      "allOf": [
+        { "if": { "properties": { "action": { "const": "order.place" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/OrderPlaceParams" }, "expected_state": { "type": "null" } } } },
+        { "if": { "properties": { "action": { "const": "position.protection.set" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/PositionProtectionSetParams" }, "expected_state": { "$ref": "#/$defs/ExpectedTradeState" } } } },
+        { "if": { "properties": { "action": { "const": "position.close" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/PositionCloseParams" }, "expected_state": { "$ref": "#/$defs/ExpectedTradeState" } } } },
+        { "if": { "properties": { "action": { "const": "pending_order.modify" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/PendingOrderModifyParams" }, "expected_state": { "$ref": "#/$defs/ExpectedTradeState" } } } },
+        { "if": { "properties": { "action": { "const": "pending_order.cancel" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/PendingOrderCancelParams" }, "expected_state": { "$ref": "#/$defs/ExpectedTradeState" } } } },
+        { "if": { "properties": { "action": { "const": "execution.lookup" } } }, "then": { "properties": { "params": { "$ref": "#/$defs/ExecutionLookupParams" }, "expected_state": { "type": "null" } } } }
+      ]
+    },
+    "TradeDirection": {
+      "type": "string",
+      "enum": ["buy", "sell"]
+    },
+    "TradeOrderType": {
+      "type": "string",
+      "enum": ["market", "buy_limit", "buy_stop", "buy_stop_limit", "sell_limit", "sell_stop", "sell_stop_limit"]
+    },
+    "ExpectedTradeState": {
+      "type": "object",
+      "required": ["ticket", "symbol", "direction", "order_type", "magic", "volume", "open_price", "stop_limit_price", "stop_loss", "take_profit", "expiration_utc_msc"],
+      "additionalProperties": false,
+      "properties": {
+        "ticket": { "$ref": "#/$defs/Ticket" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "direction": { "$ref": "#/$defs/TradeDirection" },
+        "order_type": { "$ref": "#/$defs/TradeOrderType" },
+        "magic": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "volume": { "$ref": "#/$defs/PositiveDecimal" },
+        "open_price": { "$ref": "#/$defs/PositiveDecimal" },
+        "stop_limit_price": { "oneOf": [{ "$ref": "#/$defs/PositiveDecimal" }, { "type": "null" }] },
+        "stop_loss": { "oneOf": [{ "$ref": "#/$defs/PositiveDecimal" }, { "type": "null" }] },
+        "take_profit": { "oneOf": [{ "$ref": "#/$defs/PositiveDecimal" }, { "type": "null" }] },
+        "expiration_utc_msc": { "oneOf": [{ "$ref": "#/$defs/UtcMsc" }, { "type": "null" }] }
+      }
+    },
+    "OrderPlaceParams": {
+      "type": "object",
+      "required": ["symbol", "direction", "order_type", "volume", "magic", "deviation"],
+      "additionalProperties": false,
+      "properties": {
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "direction": { "$ref": "#/$defs/TradeDirection" },
+        "order_type": { "$ref": "#/$defs/TradeOrderType" },
+        "volume": { "$ref": "#/$defs/PositiveDecimal" },
+        "price": { "$ref": "#/$defs/PositiveDecimal" },
+        "stop_limit_price": { "$ref": "#/$defs/PositiveDecimal" },
+        "stop_loss": { "$ref": "#/$defs/PositiveDecimal" },
+        "take_profit": { "$ref": "#/$defs/PositiveDecimal" },
+        "expiration_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "magic": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "deviation": { "type": "integer", "minimum": 0, "maximum": 100000 }
+      },
+      "allOf": [
+        { "if": { "properties": { "order_type": { "const": "market" } } }, "then": { "not": { "anyOf": [{ "required": ["price"] }, { "required": ["stop_limit_price"] }, { "required": ["expiration_utc_msc"] }] } }, "else": { "required": ["price"] } },
+        { "if": { "properties": { "order_type": { "enum": ["buy_stop_limit", "sell_stop_limit"] } } }, "then": { "required": ["stop_limit_price"] }, "else": { "not": { "required": ["stop_limit_price"] } } },
+        { "if": { "properties": { "direction": { "const": "buy" } } }, "then": { "properties": { "order_type": { "enum": ["market", "buy_limit", "buy_stop", "buy_stop_limit"] } } } },
+        { "if": { "properties": { "direction": { "const": "sell" } } }, "then": { "properties": { "order_type": { "enum": ["market", "sell_limit", "sell_stop", "sell_stop_limit"] } } } }
+      ]
+    },
+    "PositionProtectionSetParams": {
+      "type": "object",
+      "required": ["ticket"],
+      "additionalProperties": false,
+      "properties": {
+        "ticket": { "$ref": "#/$defs/Ticket" },
+        "stop_loss": { "$ref": "#/$defs/PositiveDecimal" },
+        "remove_stop_loss": { "const": true },
+        "take_profit": { "$ref": "#/$defs/PositiveDecimal" },
+        "remove_take_profit": { "const": true }
+      },
+      "anyOf": [{ "required": ["stop_loss"] }, { "required": ["remove_stop_loss"] }, { "required": ["take_profit"] }, { "required": ["remove_take_profit"] }],
+      "not": { "anyOf": [{ "required": ["stop_loss", "remove_stop_loss"] }, { "required": ["take_profit", "remove_take_profit"] }] }
+    },
+    "PositionCloseParams": {
+      "type": "object",
+      "required": ["ticket", "deviation"],
+      "additionalProperties": false,
+      "properties": {
+        "ticket": { "$ref": "#/$defs/Ticket" },
+        "volume": { "$ref": "#/$defs/PositiveDecimal" },
+        "deviation": { "type": "integer", "minimum": 0, "maximum": 100000 }
+      }
+    },
+    "PendingOrderModifyParams": {
+      "type": "object",
+      "required": ["ticket"],
+      "additionalProperties": false,
+      "properties": {
+        "ticket": { "$ref": "#/$defs/Ticket" },
+        "price": { "$ref": "#/$defs/PositiveDecimal" },
+        "stop_limit_price": { "$ref": "#/$defs/PositiveDecimal" },
+        "stop_loss": { "$ref": "#/$defs/PositiveDecimal" },
+        "remove_stop_loss": { "const": true },
+        "take_profit": { "$ref": "#/$defs/PositiveDecimal" },
+        "remove_take_profit": { "const": true },
+        "expiration_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "remove_expiration": { "const": true }
+      },
+      "anyOf": [{ "required": ["price"] }, { "required": ["stop_limit_price"] }, { "required": ["stop_loss"] }, { "required": ["remove_stop_loss"] }, { "required": ["take_profit"] }, { "required": ["remove_take_profit"] }, { "required": ["expiration_utc_msc"] }, { "required": ["remove_expiration"] }],
+      "not": { "anyOf": [{ "required": ["stop_loss", "remove_stop_loss"] }, { "required": ["take_profit", "remove_take_profit"] }, { "required": ["expiration_utc_msc", "remove_expiration"] }] }
+    },
+    "PendingOrderCancelParams": {
+      "type": "object",
+      "required": ["ticket"],
+      "additionalProperties": false,
+      "properties": {
+        "ticket": { "$ref": "#/$defs/Ticket" }
+      }
+    },
+    "CommandRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "command.request" },
+            "payload": { "$ref": "#/$defs/CommandSpec" }
+          }
+        }
+      ]
+    },
+    "CommandAccepted": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "command.accepted" },
+            "payload": {
+              "type": "object",
+              "required": ["command_id", "status", "accepted_at_utc_msc"],
+              "additionalProperties": false,
+              "properties": {
+                "command_id": { "$ref": "#/$defs/OpaqueId" },
+                "status": { "type": "string", "enum": ["recorded", "duplicate"] },
+                "accepted_at_utc_msc": { "$ref": "#/$defs/UtcMsc" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CommandResultPayload": {
+      "type": "object",
+      "required": ["command_id", "action", "status", "completed_at_utc_msc", "result", "error_code"],
+      "additionalProperties": false,
+      "properties": {
+        "command_id": { "$ref": "#/$defs/OpaqueId" },
+        "action": { "$ref": "#/$defs/CommandAction" },
+        "status": { "type": "string", "enum": ["succeeded", "rejected", "failed", "uncertain"] },
+        "completed_at_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "result": { "type": ["object", "null"], "maxProperties": 64 },
+        "error_code": { "type": ["string", "null"], "maxLength": 128 },
+        "terminal_code": { "type": ["string", "integer", "null"] }
+      }
+    },
+    "CommandResult": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "command.result" },
+            "payload": { "$ref": "#/$defs/CommandResultPayload" }
+          }
+        }
+      ]
+    },
+    "CommandResultAck": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "command.result_ack" },
+            "payload": {
+              "type": "object",
+              "required": ["command_id", "status"],
+              "additionalProperties": false,
+              "properties": {
+                "command_id": { "$ref": "#/$defs/OpaqueId" },
+                "status": { "type": "string", "enum": ["persisted", "duplicate"] }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CommandReconcile": {
+      "allOf": [
+        { "$ref": "#/$defs/RoutedEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "command.reconcile" },
+            "payload": {
+              "type": "object",
+              "required": ["command_id", "action"],
+              "additionalProperties": false,
+              "properties": {
+                "command_id": { "$ref": "#/$defs/OpaqueId" },
+                "action": { "$ref": "#/$defs/CommandAction" },
+                "terminal_ticket": { "type": ["string", "null"], "maxLength": 64 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ReleaseAvailable": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "release.available" },
+            "payload": {
+              "type": "object",
+              "required": ["release_id", "release_version", "rollout_channel", "reason", "manifest_url", "restart_not_before_utc_msc"],
+              "additionalProperties": false,
+              "properties": {
+                "release_id": { "$ref": "#/$defs/OpaqueId" },
+                "release_version": { "type": "string", "pattern": "^\\d+\\.\\d+(?:\\.\\d+){0,2}$" },
+                "rollout_channel": { "type": "string", "enum": ["internal", "stable"] },
+                "reason": { "type": "string", "enum": ["published", "rollback"] },
+                "manifest_url": { "type": "string", "format": "uri" },
+                "restart_not_before_utc_msc": { "$ref": "#/$defs/UtcMsc" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ReleaseStatus": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "release.status" },
+            "payload": {
+              "type": "object",
+              "required": ["release_id", "target_version", "state", "reported_at_utc_msc"],
+              "additionalProperties": false,
+              "properties": {
+                "release_id": { "$ref": "#/$defs/OpaqueId" },
+                "target_version": { "type": "string", "maxLength": 64 },
+                "state": { "type": "string", "enum": ["healthy", "rolled_back", "failed"] },
+                "reported_at_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+                "error_code": { "type": ["string", "null"], "maxLength": 128 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ProtocolError": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseEnvelope" },
+        {
+          "properties": {
+            "type": { "const": "protocol.error" },
+            "payload": {
+              "type": "object",
+              "required": ["code", "message", "fatal", "retryable"],
+              "additionalProperties": false,
+              "properties": {
+                "request_id": {
+                  "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+                },
+                "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,127}$" },
+                "message": { "type": "string", "maxLength": 512 },
+                "fatal": { "type": "boolean" },
+                "retryable": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

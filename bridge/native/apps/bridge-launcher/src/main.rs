@@ -68,10 +68,16 @@ fn run_launch(
         .map_err(|error| (error.code(), FailureMode::Startup { automatic }))?
         .launch(startup.start_minimized)
         .map_err(|error| (error.code(), FailureMode::Startup { automatic }))?;
-    if context.staged_version.as_deref() == Some(launched_version.as_str())
-        && let Err(error) = bridge_update::promote_staged_launcher(&executable, &launched_version)
-    {
-        record_launcher_promotion_failure(&install_root, &launched_version, error.code());
+    if context.staged_version.as_deref() == Some(launched_version.as_str()) {
+        let transition = executable.with_file_name("AURUMBridge.TransitionLauncher.exe");
+        let promotion = if transition.is_file() {
+            bridge_update::promote_staged_transition_launcher(&executable, &launched_version)
+        } else {
+            bridge_update::promote_staged_launcher(&executable, &launched_version)
+        };
+        if let Err(error) = promotion {
+            record_launcher_promotion_failure(&install_root, &launched_version, error.code());
+        }
     }
     Ok(())
 }

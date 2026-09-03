@@ -184,6 +184,10 @@ class FakeMt5:
         elif action == self.TRADE_ACTION_MODIFY:
             self.orders = [item._replace(
                 price_open=request.get("price", item.price_open),
+                sl=request.get("sl", item.sl),
+                tp=request.get("tp", item.tp),
+                price_stoplimit=request.get("stoplimit", item.price_stoplimit),
+                time_expiration=request.get("expiration", item.time_expiration),
             ) if item.ticket == request["order"] else item for item in self.orders]
         elif action == self.TRADE_ACTION_DEAL and request.get("position"):
             self.positions = [
@@ -1309,6 +1313,45 @@ class WorkerTests(unittest.TestCase):
         closed = self.worker.handle(self.command_request("execute_command", close))
         self.assertEqual("succeeded", closed["payload"]["result"]["status"])
         self.assertEqual([], self.mt5.positions)
+
+    def test_position_protection_can_be_removed_explicitly(self):
+        expected = {"ticket": "101", "symbol": "XAUUSD.s", "direction": "buy",
+                    "magic": 234000, "volume": 0.01,
+                    "stop_loss": 2290.0, "take_profit": 2320.0}
+        command = self.command("modify_position", {
+            "ticket": "101", "remove_stop_loss": True, "remove_take_profit": True,
+            "expected_state": expected,
+        }, "command_01JREMOVEPT")
+
+        response = self.worker.handle(self.command_request("execute_command", command))
+
+        self.assertEqual("succeeded", response["payload"]["result"]["status"])
+        self.assertEqual(0.0, self.mt5.sent[-1]["sl"])
+        self.assertEqual(0.0, self.mt5.sent[-1]["tp"])
+        self.assertEqual(0.0, self.mt5.positions[0].sl)
+        self.assertEqual(0.0, self.mt5.positions[0].tp)
+
+    def test_pending_order_protection_and_expiration_can_be_removed_explicitly(self):
+        self.mt5.orders = [Order(303, "XAUUSD.s", 0.02, 0.02, 2, 234000,
+                                 "AI-MODIFY", 2280.0, 2270.0, 2310.0, 0.0, 1900000000)]
+        command = self.command("modify_order", {
+            "ticket": "303", "remove_stop_loss": True, "remove_take_profit": True,
+            "remove_expiration": True,
+            "expected_state": {
+                "ticket": "303", "symbol": "XAUUSD.s", "direction": "buy",
+                "magic": 234000, "volume": 0.02,
+            },
+        }, "command_01JREMOVEPO")
+
+        response = self.worker.handle(self.command_request("execute_command", command))
+
+        self.assertEqual("succeeded", response["payload"]["result"]["status"])
+        self.assertEqual(0.0, self.mt5.sent[-1]["sl"])
+        self.assertEqual(0.0, self.mt5.sent[-1]["tp"])
+        self.assertEqual(0, self.mt5.sent[-1]["expiration"])
+        self.assertEqual(0.0, self.mt5.orders[0].sl)
+        self.assertEqual(0.0, self.mt5.orders[0].tp)
+        self.assertEqual(0, self.mt5.orders[0].time_expiration)
 
     def test_requested_partial_close_succeeds_only_at_the_exact_remaining_volume(self):
         self.mt5.positions = [Position(404, "XAUUSD.s", 0.02, 0, 234000, 2290.0, 2320.0)]

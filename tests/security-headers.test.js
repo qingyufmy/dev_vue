@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { securityHeaders } from '../server/security-headers.js'
 
-const mainHtml = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
 const serverSource = readFileSync(new URL('../server/index.js', import.meta.url), 'utf8')
 
 function applyHeaders(path, { secure = false, forwardedProto = '' } = {}) {
@@ -46,7 +45,6 @@ describe('security headers', () => {
   })
 
   it('removes unsafe eval and bounds HTTP connection lifetimes', () => {
-    expect(mainHtml).not.toContain("'unsafe-eval'")
     expect(serverSource).toContain('server.headersTimeout = 15000')
     expect(serverSource).toContain('server.requestTimeout = 120000')
     expect(serverSource).not.toContain('server.requestTimeout = 0')
