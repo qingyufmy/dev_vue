@@ -108,8 +108,14 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     const [rows] = await this.pool.execute<CandleRow[]>(`SELECT * FROM (SELECT CAST(trading_account_id AS CHAR) trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision FROM market_candles WHERE trading_account_id=? AND symbol=? AND timeframe=? ORDER BY open_time_utc DESC LIMIT ?) tail ORDER BY open_time_utc`, [accountId, symbol, timeframe, limit])
     return rows.map(row => ({ accountId: row.trading_account_id, symbol: row.symbol, timeframe: row.timeframe, openTime: utc(row.open_time_utc)!, open: String(row.open_price), high: String(row.high_price), low: String(row.low_price), close: String(row.close_price), tickVolume: String(row.tick_volume), closed: Boolean(row.closed), revision: Number(row.revision) }))
   }
-  async listPositions(accountId: string) { const [rows] = await this.pool.execute<PayloadRow[]>('SELECT payload_json FROM open_position_snapshots WHERE trading_account_id=? ORDER BY ticket', [accountId]); const items = rows.map(row => parsePayload<OpenPosition>(row.payload_json)); return { revision: Math.max(0, ...items.map(item => item.revision)), items } }
-  async listPendingOrders(accountId: string) { const [rows] = await this.pool.execute<PayloadRow[]>('SELECT payload_json FROM pending_order_snapshots WHERE trading_account_id=? ORDER BY ticket', [accountId]); const items = rows.map(row => parsePayload<PendingOrder>(row.payload_json)); return { revision: Math.max(0, ...items.map(item => item.revision)), items } }
+  async listPositions(accountId: string) {
+    const [rows] = await this.pool.execute<PayloadRow[]>('SELECT payload_json FROM open_position_snapshots WHERE trading_account_id=? ORDER BY ticket', [accountId])
+    return { revision: await this.latestRevision(accountId, 'positions', 'open'), items: rows.map(row => parsePayload<OpenPosition>(row.payload_json)) }
+  }
+  async listPendingOrders(accountId: string) {
+    const [rows] = await this.pool.execute<PayloadRow[]>('SELECT payload_json FROM pending_order_snapshots WHERE trading_account_id=? ORDER BY ticket', [accountId])
+    return { revision: await this.latestRevision(accountId, 'pending_orders', 'open'), items: rows.map(row => parsePayload<PendingOrder>(row.payload_json)) }
+  }
   async latestRevision(accountId: string, resource: RealtimeResource, resourceId: string) { const [rows] = await this.pool.execute<RevisionRow[]>('SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind=? AND resource_id=?', [accountId, resource, resourceId]); return Number(rows[0]?.revision ?? 0) }
   async getPurchasedCapacity(userId: number) { const [rows] = await this.pool.execute<CapacityRow[]>(`SELECT COALESCE(SUM(quantity),0) quantity FROM bridge_connection_capacity_grants WHERE user_id=? AND revoked_at_utc IS NULL AND starts_at_utc<=UTC_TIMESTAMP(3) AND (expires_at_utc IS NULL OR expires_at_utc>UTC_TIMESTAMP(3))`, [userId]); return Number(rows[0]?.quantity ?? 0) }
 

@@ -1393,7 +1393,7 @@
       "TraderRunResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/TraderRun" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
       "TradeDecisionSummary": {
         "type": "object",
-        "required": ["decision_id", "analysis_id", "trading_account_id", "strategy_id", "strategy_version_id", "action", "side", "confidence", "summary", "status", "created_at", "revision"],
+        "required": ["decision_id", "analysis_id", "trading_account_id", "strategy_id", "strategy_version_id", "action", "side", "confidence", "summary", "status", "stale_reason", "created_at", "revision"],
         "additionalProperties": false,
         "properties": {
           "decision_id": { "$ref": "#/components/schemas/OpaqueId" },
@@ -1406,6 +1406,7 @@
           "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
           "summary": { "type": "string", "maxLength": 2000 },
           "status": { "type": "string", "enum": ["proposed", "stale", "risk_rejected", "accepted"] },
+          "stale_reason": { "type": ["string", "null"], "maxLength": 128 },
           "created_at": { "$ref": "#/components/schemas/UtcDateTime" },
           "revision": { "$ref": "#/components/schemas/Revision" }
         }
@@ -1460,5 +1461,5 @@
   "security": [
     { "applicationSession": [] }
   ],
-  "x-contract-status": "stage-12a-analyst-trader-core"
+  "x-contract-status": "stage-12c-account-trader-worker"
 }

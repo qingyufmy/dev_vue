@@ -1,4 +1,4 @@
-import type { AnalysisInputSnapshot, AnalysisRun, AnalysisWorkClaim, JsonObject, MarketAnalysisDetail, MarketAnalysisResult, MarketAnalysisSummary, TraderDecisionDetail, TraderDecisionResult, TraderDecisionSummary, TraderInputSnapshot, TraderRun } from '../domain/inference.js'
+import type { AnalysisInputSnapshot, AnalysisRun, AnalysisWorkClaim, JsonObject, MarketAnalysisDetail, MarketAnalysisResult, MarketAnalysisSummary, TraderDecisionDetail, TraderDecisionResult, TraderDecisionSummary, TraderInputSnapshot, TraderRun, TraderWorkClaim } from '../domain/inference.js'
 
 export interface QueueAnalysisInput {
   id: string
@@ -78,6 +78,13 @@ export interface BeginTraderInput {
   snapshotId: string
   snapshot: TraderInputSnapshot
   snapshotHash: string
+  taskId: string
+  attemptId: string
+  modelProfileId: string | null
+  provider: string
+  model: string
+  workerId: string
+  deadlineAt: string
 }
 
 export interface CompleteTraderInput {
@@ -85,19 +92,28 @@ export interface CompleteTraderInput {
   userId: number
   expectedRevision: number
   decisionId: string
+  taskId: string
+  attemptId: string
+  fencingToken: number
+  usage: JsonObject | null
   result: TraderDecisionResult
 }
+
+export interface FailTraderAttemptInput extends FailAnalysisAttemptInput {}
 
 export interface InferenceRepository {
   queueAnalysis(input: QueueAnalysisInput): Promise<AnalysisRun>
   getAnalysisRun(runId: string): Promise<AnalysisRun | null>
+  getTraderRun(runId: string): Promise<TraderRun | null>
   beginAnalysis(input: BeginAnalysisInput): Promise<AnalysisWorkClaim>
   completeAnalysis(input: CompleteAnalysisInput): Promise<{ analysis: MarketAnalysisSummary; traderRuns: TraderRun[] }>
   failAnalysisAttempt(input: FailAnalysisAttemptInput): Promise<AnalysisWorkClaim | null>
   failQueuedAnalysis(runId: string, errorCode: string): Promise<void>
   requestTraderEvaluation(input: RequestTraderEvaluationInput): Promise<TraderRun>
-  beginTrader(input: BeginTraderInput): Promise<TraderRun>
+  beginTrader(input: BeginTraderInput): Promise<TraderWorkClaim>
   completeTrader(input: CompleteTraderInput): Promise<TraderDecisionSummary>
+  failTraderAttempt(input: FailTraderAttemptInput): Promise<TraderWorkClaim | null>
+  failQueuedTrader(runId: string, errorCode: string): Promise<void>
   getAnalysis(userId: number, analysisId: string): Promise<MarketAnalysisSummary | null>
   getAnalysisDetail(userId: number, analysisId: string): Promise<MarketAnalysisDetail | null>
   listAnalyses(userId: number, limit: number): Promise<MarketAnalysisSummary[]>

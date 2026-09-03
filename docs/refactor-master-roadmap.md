@@ -215,4 +215,5 @@
 - 阶段 11 已完成实现与离线验证，正式记录见 [阶段 11：账户、终端与实时行情竖切验收记录](./stage11-account-terminal-realtime-vertical-slice-report.md)。已建立账户归属、当前在线连接额度、终端档案、观摩上下文、账户快照、实时报价、K 线与成交量、持仓、挂单和浏览器精确恢复链路；投影数据与 revision 原子提交，浏览器按单账户、单资源隔离订阅。迁移未执行，真实 MySQL/Redis/Bridge/MT4/MT5/浏览器验收明确延期到阶段 15–16，不据此宣称实机门已通过。
 - 阶段 12A 已完成实现与离线验证，正式记录见 [阶段 12A：分析师与账户级交易员核心验收记录](./stage12a-analyst-trader-core-report.md)。V4 已把系统用户归属的不可变 `market_analysis`、交易账户级 `trade_decision` 与后续 `execution_intent` 分开，手动分析不再携带自动执行开关；策略固定为 `analysis` 和 `trader` 两类，交易员按账户订阅 revision 独立排队，完整正文走 HTTP，小型状态变化走 WebSocket。迁移未执行，模型 Worker、确定性风控接线、真实 MySQL/Redis、多账户和 MT 验收仍属后续子阶段。
 - 阶段 12B 已完成实现与离线验证，正式记录见 [阶段 12B：分析调度、Worker 与条件扇出验收记录](./stage12b-analysis-scheduler-worker-report.md)。同用户、同分析策略版本、同品种、同五分钟槽只生成一份分析；行情、宏观和提示词被显式冻结；模型 task/attempt 有界重试并用 fencing 拒绝迟到结果；仅“有市场机会”或“已有持仓/挂单”的账户创建 `entry/manage/both` 交易员任务。迁移未执行，真实 provider、Trader Worker、确定性风控接线和实机验收仍属后续子阶段。
-- 下一子阶段为 12C“账户级 Trader Worker”：冻结单账户指标、持仓、挂单、目标报价、合约和风险摘要，完成结构化交易决定、同账户租约与结果过期校验，但仍不接 Bridge、不创建可执行订单。开始前需重新介绍账户数据刷新、并发、超时和模拟验收边界，并取得用户确认。
+- 阶段 12C 已完成实现与离线验证，正式记录见 [阶段 12C：账户级 Trader Worker 验收记录](./stage12c-account-trader-worker-report.md)。单账户指标、持仓、挂单、目标报价、合约和风险摘要均显式冻结；同账户任务串行领取，模型 attempt 有界重试，迟到结果保存为 `stale`，且不接 Bridge、不创建可执行订单。
+- 下一子阶段为 12D“确定性风险策略与决定评审”：规范化风险策略版本、平台边界和账户级覆盖，生成账户风险摘要，并对 `trade_decision` 做服务端确定性评审。开始前需介绍旧风险数据迁移、可编辑与不可关闭规则、并发版本和测试边界，并取得用户确认。

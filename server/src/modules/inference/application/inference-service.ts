@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { StrategyService } from '../../strategies/application/strategy-service.js'
-import type { AnalysisInputSnapshot, AnalysisWorkClaim, JsonObject, MarketAnalysisResult, TraderDecisionResult, TraderInputSnapshot } from '../domain/inference.js'
-import { assertConfidence, assertMarketAnalysisResult, contentHash, InferenceError, normalizeSymbol, snapshotHash } from '../domain/inference.js'
+import type { AnalysisInputSnapshot, AnalysisWorkClaim, JsonObject, MarketAnalysisResult, TraderDecisionResult, TraderInputSnapshot, TraderWorkClaim } from '../domain/inference.js'
+import { assertConfidence, assertMarketAnalysisResult, assertTraderDecisionResult, contentHash, InferenceError, normalizeSymbol, snapshotHash } from '../domain/inference.js'
 import type { InferenceRepository } from './inference-ports.js'
 
 const MANUAL_COOLDOWN_SECONDS = 180
@@ -71,20 +71,32 @@ export class InferenceService {
     return this.repository.requestTraderEvaluation({ ...input, id: randomUUID(), userId, idempotencyKey, requestedAt: now.toISOString() })
   }
 
-  async beginTrader(userId: number, runId: string, expectedRevision: number, snapshot: TraderInputSnapshot) {
+  async beginTrader(userId: number, runId: string, expectedRevision: number, snapshot: TraderInputSnapshot, model: { profileId: string | null; provider: string; model: string }, workerId: string, deadlineAt: string) {
     if (typeof snapshot.account.id !== 'string' || !snapshot.account.id) throw new InferenceError('trader_account_snapshot_invalid', 422)
     if (contentHash(snapshot.analysis.result) !== snapshot.analysis.contentHash) throw new InferenceError('trader_analysis_payload_hash_mismatch', 422)
-    return this.repository.beginTrader({ runId, userId, expectedRevision, snapshotId: randomUUID(), snapshot, snapshotHash: snapshotHash(snapshot) })
+    return this.repository.beginTrader({
+      runId, userId, expectedRevision, snapshotId: randomUUID(), snapshot, snapshotHash: snapshotHash(snapshot),
+      taskId: randomUUID(), attemptId: randomUUID(), modelProfileId: model.profileId, provider: model.provider,
+      model: model.model, workerId, deadlineAt,
+    })
   }
 
-  async completeTrader(userId: number, runId: string, expectedRevision: number, result: TraderDecisionResult) {
+  async completeTrader(claim: TraderWorkClaim, snapshot: TraderInputSnapshot, result: TraderDecisionResult, usage: JsonObject | null = null) {
     assertConfidence(result.confidence)
-    if (result.action === 'hold' && result.actions.length > 0) throw new InferenceError('hold_actions_forbidden', 422)
-    if (result.action !== 'hold' && result.actions.length === 0) throw new InferenceError('trader_actions_required', 422)
-    if (result.action !== 'hold' && !result.actions.some(action => action.kind === result.action)) throw new InferenceError('trader_action_summary_mismatch', 422)
-    const actionIds = new Set(result.actions.map(action => action.actionId))
-    if (actionIds.size !== result.actions.length) throw new InferenceError('trader_action_id_duplicate', 422)
-    return this.repository.completeTrader({ runId, userId, expectedRevision, decisionId: randomUUID(), result })
+    assertTraderDecisionResult(result, snapshot)
+    return this.repository.completeTrader({
+      runId: claim.run.id, userId: claim.run.userId, expectedRevision: claim.run.revision, decisionId: randomUUID(),
+      taskId: claim.taskId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, usage, result,
+    })
+  }
+
+  failTraderAttempt(claim: TraderWorkClaim, model: { provider: string; model: string }, error: { code: string; status: 'failed' | 'timed_out' | 'contract_invalid'; retryable: boolean }, maxAttempts: number) {
+    return this.repository.failTraderAttempt({
+      runId: claim.run.id, userId: claim.run.userId, expectedRevision: claim.run.revision,
+      taskId: claim.taskId, attemptId: claim.attemptId, attemptNumber: claim.attemptNumber,
+      fencingToken: claim.fencingToken, provider: model.provider, model: model.model,
+      errorCode: error.code, failureStatus: error.status, retryable: error.retryable, maxAttempts,
+    })
   }
 
   analysis(userId: number, analysisId: string) { return this.repository.getAnalysisDetail(userId, analysisId) }
