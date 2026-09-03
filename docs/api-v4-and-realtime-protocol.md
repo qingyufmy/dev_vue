@@ -212,7 +212,8 @@
 | trading context | `/trading-context`、`/trading-accounts` | 当前系统用户作用域、账户和观摩频道 |
 | market | `/market/symbols`、`/market/quotes`、`/market/candles`、`/macro-snapshots` | 精准报价、历史 K 线和宏观数据 |
 | execution | `/positions`、`/pending-orders`、`/order-intents`、`/operations` | 当前交易资源、命令受理和状态恢复 |
-| analysis | `/signals`、`/analysis-jobs`、`/analysis-sessions` | 手动/自动分析、最新信号和完整推理 |
+| analysis | `/market-analyses`、`/analysis-jobs` | 手动/自动行情分析、分析历史和完整推理；记录按系统用户归类 |
+| trader | `/trade-decisions`、`/market-analyses/{analysis_id}/trader-evaluations` | 每个交易账户独立的二次判断和动作建议，不直接执行交易 |
 | strategy | `/strategies`、`/strategy-versions`、`/strategy-subscriptions` | 私有/平台策略、版本和用户订阅 |
 | models | `/model-profiles`、`/model-routes`、`/model-evaluations` | 个人/平台模型、默认模型和用途路由 |
 | risk | `/risk-accounts`、`/risk-policies`、`/risk-snapshots`、`/risk-decisions` | 当前账户规则、快照、告警和决策 |
@@ -317,8 +318,10 @@
 | `market.candle.closed` | 已收线蜡烛和下一根起点 | candle HTTP |
 | `positions.changed` | upsert/remove 和账户 revision | positions HTTP |
 | `pending_orders.changed` | upsert/remove 和账户 revision | pending orders HTTP |
-| `signal.created` | 最新信号摘要，不含完整推理 | signals HTTP |
-| `signal.execution.changed` | 信号分发/执行/失效状态 | signal/operation HTTP |
+| `analysis.job.changed` | 分析任务排队、运行、完成、失败或过期 | analysis job HTTP |
+| `market_analysis.created` | 最新市场分析摘要，不含完整推理 | market analyses HTTP |
+| `trader.job.changed` | 单个交易账户的交易员任务状态 | trade decisions HTTP |
+| `trade_decision.created` | 单个交易账户的动作建议摘要，不含完整正文 | trade decisions HTTP |
 | `risk.status.changed` | kill switch、规则 revision、当前状态 | risk snapshot HTTP |
 | `risk.alert.created` | 新风险告警摘要 | risk decisions HTTP |
 | `operation.changed` | 异步命令或任务状态、错误摘要 | operation HTTP |

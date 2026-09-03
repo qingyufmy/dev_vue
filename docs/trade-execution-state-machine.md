@@ -377,7 +377,7 @@ trading_account_id + terminal_instance_id + ownership_epoch
 
 不得把 API key、刷新令牌、完整账号凭据或模型密钥写入事件。原始 Bridge 结果和大快照保存在受控证据表/对象中，事件只保存引用和哈希。
 
-浏览器通过 `operation.changed`、`signal.execution.changed`、`positions.changed` 和 `pending_orders.changed` 获得增量；刷新或 revision 缺口时使用 HTTP 恢复权威快照。
+浏览器通过 `operation.changed`、`trade_decision.created`、`positions.changed` 和 `pending_orders.changed` 获得增量；刷新或 revision 缺口时使用 HTTP 恢复权威快照。`trade_decision` 只是 AI 交易员建议，进入本状态机后的 operation 才表示服务端已受理执行链。
 
 ## 12. 前端展示规则
 

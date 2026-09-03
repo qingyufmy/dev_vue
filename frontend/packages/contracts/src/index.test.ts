@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { marketCandleSchema, observerChannelSchema, tradingContextSchema, tradingWorkspaceResponseSchema, sessionResponseSchema } from './index'
+import { analysisJobCreateSchema, marketAnalysisSummarySchema, marketCandleSchema, observerChannelSchema, traderDecisionSummarySchema, tradingContextSchema, tradingWorkspaceResponseSchema, sessionResponseSchema } from './index'
 
 describe('sessionResponseSchema', () => {
   it('accepts the normalized V4 session envelope', () => {
@@ -43,5 +43,17 @@ describe('trading V4 contracts', () => {
   it('rejects legacy or accidental camelCase at the HTTP boundary', () => {
     expect(tradingContextSchema.safeParse({ userId: '7', mode: 'full', accountId: '21', observerChannelId: null, readOnly: false, revision: '3' }).success).toBe(false)
     expect(tradingWorkspaceResponseSchema.safeParse({ data: { pendingOrders: [] }, meta: {} }).success).toBe(false)
+  })
+})
+
+describe('analyst and account-trader V4 contracts', () => {
+  it('keeps manual analysis separate from account execution', () => {
+    expect(analysisJobCreateSchema.safeParse({ strategy_id: '10', symbol: 'XAUUSD', mode: 'manual' }).success).toBe(true)
+    expect(analysisJobCreateSchema.safeParse({ strategy_id: '10', symbol: 'XAUUSD', mode: 'manual', auto_execute: true }).success).toBe(false)
+  })
+
+  it('uses distinct market-analysis and account-level decision summaries', () => {
+    expect(marketAnalysisSummarySchema.parse({ analysis_id: 'a1', strategy_id: '10', strategy_version_id: '11', symbol: 'XAUUSD', market_bias: 'bullish', recommendation: 'long_candidate', confidence: 76, summary: '结构偏多', analyzed_at: '2026-09-03T08:00:00.000Z', valid_until: '2026-09-03T08:03:00.000Z', revision: '1' })).toMatchObject({ analysisId: 'a1', marketBias: 'bullish', recommendation: 'long_candidate' })
+    expect(traderDecisionSummarySchema.parse({ decision_id: 'd1', analysis_id: 'a1', trading_account_id: '7', strategy_id: '20', strategy_version_id: '21', action: 'hold', side: null, confidence: 80, summary: '账户保证金不足', status: 'proposed', created_at: '2026-09-03T08:00:01.000Z', revision: '1' })).toMatchObject({ decisionId: 'd1', tradingAccountId: '7', action: 'hold' })
   })
 })
