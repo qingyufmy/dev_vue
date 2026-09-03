@@ -79,19 +79,19 @@ export class MysqlRiskRepository implements RiskRepository {
       })
       let setId = current?.set_id
       if (!setId) {
-        const [inserted] = await connection.execute<ResultSetHeader>(`INSERT INTO risk_policy_sets (scope,owner_user_id,trading_account_id,name,status,revision,created_at_utc,updated_at_utc) VALUES ('account',?,?,?,'active',0,?,?)`, [input.userId, input.accountId, `Account ${input.accountId} risk policy`, input.changedAt, input.changedAt])
+        const [inserted] = await connection.execute<ResultSetHeader>(`INSERT INTO risk_policy_sets_v4 (scope,owner_user_id,trading_account_id,name,status,revision,created_at_utc,updated_at_utc) VALUES ('account',?,?,?,'active',0,?,?)`, [input.userId, input.accountId, `Account ${input.accountId} risk policy`, input.changedAt, input.changedAt])
         setId = String(inserted.insertId)
       }
-      else await connection.execute('SELECT id FROM risk_policy_sets WHERE id=? FOR UPDATE', [setId])
+      else await connection.execute('SELECT id FROM risk_policy_sets_v4 WHERE id=? FOR UPDATE', [setId])
       const nextRevision = input.expectedRevision + 1
       const document = JSON.stringify(nextPatch)
       const documentHash = sha256(nextPatch)
-      const [versions] = await connection.execute<(RowDataPacket & { version_number: number })[]>('SELECT COALESCE(MAX(version_number),0)+1 version_number FROM risk_policy_versions WHERE policy_set_id=?', [setId])
-      const [version] = await connection.execute<ResultSetHeader>(`INSERT INTO risk_policy_versions (policy_set_id,version_number,policy_json,policy_sha256,created_by_user_id,change_reason,created_at_utc) VALUES (?,?,?,?,?,?,?)`, [setId, Number(versions[0]?.version_number ?? 1), document, documentHash, input.actorUserId, input.reason, input.changedAt])
-      const [updated] = await connection.execute<ResultSetHeader>('UPDATE risk_policy_sets SET active_version_id=?,revision=?,updated_at_utc=? WHERE id=? AND revision=?', [version.insertId, nextRevision, input.changedAt, setId, input.expectedRevision])
+      const [versions] = await connection.execute<(RowDataPacket & { version_number: number })[]>('SELECT COALESCE(MAX(version_number),0)+1 version_number FROM risk_policy_versions_v4 WHERE policy_set_id=?', [setId])
+      const [version] = await connection.execute<ResultSetHeader>(`INSERT INTO risk_policy_versions_v4 (policy_set_id,version_number,policy_json,policy_sha256,created_by_user_id,change_reason,created_at_utc) VALUES (?,?,?,?,?,?,?)`, [setId, Number(versions[0]?.version_number ?? 1), document, documentHash, input.actorUserId, input.reason, input.changedAt])
+      const [updated] = await connection.execute<ResultSetHeader>('UPDATE risk_policy_sets_v4 SET active_version_id=?,revision=?,updated_at_utc=? WHERE id=? AND revision=?', [version.insertId, nextRevision, input.changedAt, setId, input.expectedRevision])
       if (updated.affectedRows !== 1) throw new RiskError('risk_policy_revision_conflict', 412)
       for (const key of Object.keys(input.patch).sort()) {
-        await connection.execute(`INSERT INTO risk_policy_change_items (policy_set_id,policy_version_id,field_code,old_value_json,new_value_json,change_class,requested_by_user_id,reason,changed_at_utc) VALUES (?,?,?,?,?,?,?,?,?)`, [setId, version.insertId, key, JSON.stringify(currentPatch[key as keyof AccountRiskPolicyPatch] ?? null), JSON.stringify(input.patch[key as keyof AccountRiskPolicyPatch] ?? null), changeClass(key, currentPatch, input.patch), input.actorUserId, input.reason, input.changedAt])
+        await connection.execute(`INSERT INTO risk_policy_change_items_v4 (policy_set_id,policy_version_id,field_code,old_value_json,new_value_json,change_class,requested_by_user_id,reason,changed_at_utc) VALUES (?,?,?,?,?,?,?,?,?)`, [setId, version.insertId, key, JSON.stringify(currentPatch[key as keyof AccountRiskPolicyPatch] ?? null), JSON.stringify(input.patch[key as keyof AccountRiskPolicyPatch] ?? null), changeClass(key, currentPatch, input.patch), input.actorUserId, input.reason, input.changedAt])
       }
       await outbox(connection, 'risk_policy', setId, 'risk.policy.changed', { account_id: input.accountId, policy_version_id: String(version.insertId), revision: String(nextRevision) })
       const [releaseRows] = await connection.execute<ManualReleaseRow[]>(`${manualReleaseSelect} WHERE r.trading_account_id=? AND r.status='active' FOR UPDATE`, [input.accountId])
@@ -240,8 +240,8 @@ export class MysqlRiskRepository implements RiskRepository {
           || !manualReleaseStillValid(release, summary, new Date())) throw new RiskError('risk_manual_release_revision_conflict', 409)
       }
       const payload = JSON.stringify(input.evaluation)
-      await connection.execute(`INSERT INTO risk_decisions (id,trade_decision_id,user_id,trading_account_id,platform_policy_version_id,account_policy_version_id,policy_set_revision,account_risk_revision,manual_release_id,decision_status,reject_code,policy_sha256,revision,created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)`, [input.riskDecisionId, input.decisionId, identity.user_id, identity.trading_account_id, policy.platformPolicyVersionId, policy.accountPolicyVersionId, policy.policySetRevision, input.accountRiskRevision, input.evaluation.manualReleaseId, input.evaluation.status, input.evaluation.rejectCode, input.evaluation.policyHash, input.evaluation.evaluatedAt])
-      await connection.execute('INSERT INTO risk_decision_payloads (risk_decision_id,evaluation_json,payload_sha256,payload_bytes) VALUES (?,?,?,?)', [input.riskDecisionId, payload, sha256(input.evaluation), Buffer.byteLength(payload)])
+      await connection.execute(`INSERT INTO risk_decisions_v4 (id,trade_decision_id,user_id,trading_account_id,platform_policy_version_id,account_policy_version_id,policy_set_revision,account_risk_revision,manual_release_id,decision_status,reject_code,policy_sha256,revision,created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)`, [input.riskDecisionId, input.decisionId, identity.user_id, identity.trading_account_id, policy.platformPolicyVersionId, policy.accountPolicyVersionId, policy.policySetRevision, input.accountRiskRevision, input.evaluation.manualReleaseId, input.evaluation.status, input.evaluation.rejectCode, input.evaluation.policyHash, input.evaluation.evaluatedAt])
+      await connection.execute('INSERT INTO risk_decision_payloads_v4 (risk_decision_id,evaluation_json,payload_sha256,payload_bytes) VALUES (?,?,?,?)', [input.riskDecisionId, payload, sha256(input.evaluation), Buffer.byteLength(payload)])
       const tradeStatus = input.evaluation.status === 'approved' ? 'accepted' : 'risk_rejected'
       await connection.execute('UPDATE trade_decisions SET risk_decision_id=?,status=?,revision=revision+1 WHERE id=?', [input.riskDecisionId, tradeStatus, input.decisionId])
       await outbox(connection, 'risk_decision', input.riskDecisionId, 'risk.decision.created', { risk_decision_id: input.riskDecisionId, decision_id: input.decisionId, account_id: identity.trading_account_id, status: input.evaluation.status, reject_code: input.evaluation.rejectCode })
@@ -251,7 +251,7 @@ export class MysqlRiskRepository implements RiskRepository {
   }
 
   async getDecision(userId: number, decisionId: string) {
-    const [rows] = await this.pool.execute<RiskDecisionDetailRow[]>(`SELECT ${riskDecisionFields},p.evaluation_json FROM risk_decisions rd INNER JOIN risk_decision_payloads p ON p.risk_decision_id=rd.id WHERE rd.id=? AND rd.user_id=? LIMIT 1`, [decisionId, userId])
+    const [rows] = await this.pool.execute<RiskDecisionDetailRow[]>(`SELECT ${riskDecisionFields},p.evaluation_json FROM risk_decisions_v4 rd INNER JOIN risk_decision_payloads_v4 p ON p.risk_decision_id=rd.id WHERE rd.id=? AND rd.user_id=? LIMIT 1`, [decisionId, userId])
     return rows[0] ? { ...mapDecision(rows[0]), evaluation: parse<RiskEvaluationResult>(rows[0].evaluation_json) } : null
   }
 
@@ -267,12 +267,12 @@ export class MysqlRiskRepository implements RiskRepository {
 }
 
 const riskDecisionFields = `rd.id,rd.trade_decision_id,rd.user_id,CAST(rd.trading_account_id AS CHAR) trading_account_id,rd.decision_status,rd.reject_code,CAST(rd.platform_policy_version_id AS CHAR) platform_policy_version_id,CAST(rd.account_policy_version_id AS CHAR) account_policy_version_id,rd.account_risk_revision,rd.manual_release_id,rd.created_at_utc,rd.revision`
-const riskDecisionSelect = `SELECT ${riskDecisionFields} FROM risk_decisions rd`
+const riskDecisionSelect = `SELECT ${riskDecisionFields} FROM risk_decisions_v4 rd`
 const manualReleaseFields = `r.id,r.user_id,CAST(r.trading_account_id AS CHAR) trading_account_id,CAST(r.platform_policy_version_id AS CHAR) platform_policy_version_id,CAST(r.account_policy_version_id AS CHAR) account_policy_version_id,r.policy_set_revision,r.status,r.released_rules_json,r.baseline_json,r.risk_state_revision,r.breach_fingerprint,r.reason,r.expires_at_utc,r.created_at_utc,r.invalidated_at_utc,r.invalidation_reason,r.revision,r.request_sha256`
 const manualReleaseSelect = `SELECT ${manualReleaseFields} FROM risk_manual_releases r`
 
 function policySelect(where: string, lock = false) {
-  return `SELECT CAST(p.id AS CHAR) set_id,p.scope,p.owner_user_id,CAST(p.trading_account_id AS CHAR) trading_account_id,p.revision set_revision,CAST(v.id AS CHAR) version_id,v.policy_json,p.updated_at_utc FROM risk_policy_sets p INNER JOIN risk_policy_versions v ON v.id=p.active_version_id AND v.policy_set_id=p.id WHERE p.status='active' AND ${where} LIMIT 1${lock ? ' FOR SHARE' : ''}`
+  return `SELECT CAST(p.id AS CHAR) set_id,p.scope,p.owner_user_id,CAST(p.trading_account_id AS CHAR) trading_account_id,p.revision set_revision,CAST(v.id AS CHAR) version_id,v.policy_json,p.updated_at_utc FROM risk_policy_sets_v4 p INNER JOIN risk_policy_versions_v4 v ON v.id=p.active_version_id AND v.policy_set_id=p.id WHERE p.status='active' AND ${where} LIMIT 1${lock ? ' FOR SHARE' : ''}`
 }
 
 async function effectivePolicyOnConnection(connection: PoolConnection, userId: number, accountId: string) {

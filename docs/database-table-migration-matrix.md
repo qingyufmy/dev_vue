@@ -222,6 +222,8 @@ operations
 
 ## 11. 风控政策、决策和账户状态（9 张）
 
+迁移期间，旧库已经存在且字段不同的 `risk_policy_sets`、`risk_policy_versions`、`risk_policy_change_items`、`risk_decisions` 必须保留给旧程序读取；V4 先落到对应 `_v4` 旁路表。只有回填、拒绝清单、行数/哈希双读对账及流量切换全部通过后，才允许在最终清理迁移中归档旧表并把 V4 表规范化为下表目标名称。
+
 | 源表 | 行数 | 动作 | 目标 | 转换与对账重点 |
 | --- | ---: | --- | --- | --- |
 | `risk_policy_sets` | 3 | 保留 | `risk_policy_sets` | scope/owner/account 明确；active_version 外键，修改使用 revision/CAS |

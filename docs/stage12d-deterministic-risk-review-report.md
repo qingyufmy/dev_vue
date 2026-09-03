@@ -108,6 +108,7 @@ WebSocket 只发送 `risk.policy.changed`、`risk.summary.changed`、`risk.decis
 ## 9. 剩余风险与下一阶段
 
 - 本阶段没有在真实 MySQL/MariaDB 上执行迁移，需要阶段 15 的旁路库演练验证 DDL、约束、默认平台版本和旧数据回填。
+- 2026-09-03 对 `dev_vue` 导入库只读复核确认：旧库已有 395 行 `risk_decisions`、3 行 `risk_policy_sets`、10 行 `risk_policy_versions` 和 60 行 `risk_policy_change_items`，且字段与 V4 不同。为避免 `CREATE TABLE IF NOT EXISTS` 静默复用旧结构，V4 旁路表改用 `_v4` 后缀；旧表保持原名、原行数和旧程序可读，待完整回填、双读对账和停机切换后再单独清理并规范化最终名称。
 - 秒级报价 revision 可能让较慢的评审失效。这是正确的安全行为；阶段 12E 应使用最新报价构造执行意图并限制最大偏移，而不是放宽 revision 校验。账户风险摘要默认超过 30 秒同样拒绝新增风险。
 - 经纪商 `order_calc_profit` 尚未进入 V4 风险计算，当前使用合约 tick size/tick value。实机前必须对 CFD、外汇、金属和不同账户币种逐类验证，无法证明时失败关闭。
 - 平台风险后台写入接口、全局控制操作和审计权限将在管理后台/API 阶段接入，不能复用普通用户账户接口。

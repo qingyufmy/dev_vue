@@ -3,7 +3,7 @@
 -- Existing V4 and legacy rows are preserved. This migration does not create execution intents,
 -- reservations, Bridge commands or terminal operations, and it performs no external I/O.
 
-CREATE TABLE IF NOT EXISTS risk_policy_sets (
+CREATE TABLE IF NOT EXISTS risk_policy_sets_v4 (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   scope ENUM('platform','account') NOT NULL,
   owner_user_id INT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS risk_policy_sets (
   )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS risk_policy_versions (
+CREATE TABLE IF NOT EXISTS risk_policy_versions_v4 (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   policy_set_id BIGINT UNSIGNED NOT NULL,
   version_number INT UNSIGNED NOT NULL,
@@ -50,15 +50,15 @@ CREATE TABLE IF NOT EXISTS risk_policy_versions (
   UNIQUE KEY uk_risk_policy_version_identity (id, policy_set_id),
   UNIQUE KEY uk_risk_policy_version_number (policy_set_id, version_number),
   UNIQUE KEY uk_risk_policy_version_legacy (legacy_source_table, legacy_id),
-  CONSTRAINT fk_risk_policy_version_set FOREIGN KEY (policy_set_id) REFERENCES risk_policy_sets (id),
+  CONSTRAINT fk_risk_policy_version_set FOREIGN KEY (policy_set_id) REFERENCES risk_policy_sets_v4 (id),
   CONSTRAINT fk_risk_policy_version_actor FOREIGN KEY (created_by_user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE risk_policy_sets
+ALTER TABLE risk_policy_sets_v4
   ADD CONSTRAINT fk_risk_policy_active_version
-    FOREIGN KEY (active_version_id, id) REFERENCES risk_policy_versions (id, policy_set_id);
+    FOREIGN KEY (active_version_id, id) REFERENCES risk_policy_versions_v4 (id, policy_set_id);
 
-CREATE TABLE IF NOT EXISTS risk_policy_change_items (
+CREATE TABLE IF NOT EXISTS risk_policy_change_items_v4 (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   policy_set_id BIGINT UNSIGNED NOT NULL,
   policy_version_id BIGINT UNSIGNED NOT NULL,
@@ -71,8 +71,8 @@ CREATE TABLE IF NOT EXISTS risk_policy_change_items (
   changed_at_utc DATETIME(3) NOT NULL,
   PRIMARY KEY (id),
   KEY idx_risk_policy_changes (policy_set_id, changed_at_utc, id),
-  CONSTRAINT fk_risk_policy_change_set FOREIGN KEY (policy_set_id) REFERENCES risk_policy_sets (id),
-  CONSTRAINT fk_risk_policy_change_version FOREIGN KEY (policy_version_id) REFERENCES risk_policy_versions (id),
+  CONSTRAINT fk_risk_policy_change_set FOREIGN KEY (policy_set_id) REFERENCES risk_policy_sets_v4 (id),
+  CONSTRAINT fk_risk_policy_change_version FOREIGN KEY (policy_version_id) REFERENCES risk_policy_versions_v4 (id),
   CONSTRAINT fk_risk_policy_change_actor FOREIGN KEY (requested_by_user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS risk_state_events (
   CONSTRAINT fk_risk_state_event_user FOREIGN KEY (user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS risk_decisions (
+CREATE TABLE IF NOT EXISTS risk_decisions_v4 (
   id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   trade_decision_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   user_id INT NOT NULL,
@@ -155,54 +155,54 @@ CREATE TABLE IF NOT EXISTS risk_decisions (
   CONSTRAINT fk_risk_decision_trade FOREIGN KEY (trade_decision_id) REFERENCES trade_decisions (id),
   CONSTRAINT fk_risk_decision_user FOREIGN KEY (user_id) REFERENCES users (id),
   CONSTRAINT fk_risk_decision_account FOREIGN KEY (trading_account_id) REFERENCES trading_accounts (id),
-  CONSTRAINT fk_risk_decision_platform_policy FOREIGN KEY (platform_policy_version_id) REFERENCES risk_policy_versions (id),
-  CONSTRAINT fk_risk_decision_account_policy FOREIGN KEY (account_policy_version_id) REFERENCES risk_policy_versions (id),
+  CONSTRAINT fk_risk_decision_platform_policy FOREIGN KEY (platform_policy_version_id) REFERENCES risk_policy_versions_v4 (id),
+  CONSTRAINT fk_risk_decision_account_policy FOREIGN KEY (account_policy_version_id) REFERENCES risk_policy_versions_v4 (id),
   CONSTRAINT chk_risk_decision_reject CHECK (
     (decision_status='approved' AND reject_code IS NULL) OR
     (decision_status='rejected' AND reject_code IS NOT NULL)
   )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS risk_decision_payloads (
+CREATE TABLE IF NOT EXISTS risk_decision_payloads_v4 (
   risk_decision_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   evaluation_json JSON NOT NULL,
   payload_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   payload_bytes BIGINT UNSIGNED NOT NULL,
   PRIMARY KEY (risk_decision_id),
-  CONSTRAINT fk_risk_decision_payload FOREIGN KEY (risk_decision_id) REFERENCES risk_decisions (id)
+  CONSTRAINT fk_risk_decision_payload FOREIGN KEY (risk_decision_id) REFERENCES risk_decisions_v4 (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO global_risk_controls (id,kill_switch,reason,changed_by_user_id,revision,updated_at_utc)
 VALUES (1,0,'V4 deterministic risk bootstrap',NULL,1,UTC_TIMESTAMP(3))
 ON DUPLICATE KEY UPDATE id=id;
 
-INSERT INTO risk_policy_sets (scope,owner_user_id,trading_account_id,name,status,revision,created_at_utc,updated_at_utc)
+INSERT INTO risk_policy_sets_v4 (scope,owner_user_id,trading_account_id,name,status,revision,created_at_utc,updated_at_utc)
 SELECT 'platform',NULL,NULL,'Platform risk boundary','active',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
-WHERE NOT EXISTS (SELECT 1 FROM risk_policy_sets WHERE scope='platform' AND status='active');
+WHERE NOT EXISTS (SELECT 1 FROM risk_policy_sets_v4 WHERE scope='platform' AND status='active');
 
 SET @risk_platform_set_id := (
-  SELECT id FROM risk_policy_sets WHERE scope='platform' AND status='active' ORDER BY id LIMIT 1
+  SELECT id FROM risk_policy_sets_v4 WHERE scope='platform' AND status='active' ORDER BY id LIMIT 1
 );
 SET @risk_platform_default_json := '{"allowedSymbols":["*"],"requireStopLoss":true,"failClosedOnIncompleteData":true,"maxRiskPerTradePercent":1,"maxDailyLossPercent":3,"maxDrawdownPercent":8,"maxOpenPositions":10,"maxPendingOrders":20,"maxTotalVolume":1,"maxSpreadPoints":120,"maxQuoteAgeSeconds":15,"maxRiskSummaryAgeSeconds":30,"maxDecisionAgeSeconds":300,"maxPriceDeviationPercent":0.1,"minOpenIntervalSeconds":30,"maxDailyOpenCount":20,"consecutiveLossLimit":3,"lossCooldownMinutes":60,"pendingValidMinutes":180,"weekendCloseMinutes":60}';
 
-INSERT INTO risk_policy_versions (policy_set_id,version_number,policy_json,policy_sha256,created_by_user_id,change_reason,created_at_utc)
+INSERT INTO risk_policy_versions_v4 (policy_set_id,version_number,policy_json,policy_sha256,created_by_user_id,change_reason,created_at_utc)
 SELECT @risk_platform_set_id,0,@risk_platform_default_json,SHA2(@risk_platform_default_json,256),NULL,'V4 deterministic risk bootstrap',UTC_TIMESTAMP(3)
-WHERE NOT EXISTS (SELECT 1 FROM risk_policy_versions WHERE policy_set_id=@risk_platform_set_id);
+WHERE NOT EXISTS (SELECT 1 FROM risk_policy_versions_v4 WHERE policy_set_id=@risk_platform_set_id);
 
-UPDATE risk_policy_sets p
-INNER JOIN risk_policy_versions v ON v.policy_set_id=p.id AND v.version_number=0
+UPDATE risk_policy_sets_v4 p
+INNER JOIN risk_policy_versions_v4 v ON v.policy_set_id=p.id AND v.version_number=0
 SET p.active_version_id=v.id
 WHERE p.id=@risk_platform_set_id AND p.active_version_id IS NULL;
 
 ALTER TABLE trade_decisions
   ADD COLUMN risk_decision_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL AFTER stale_reason,
   ADD UNIQUE KEY uk_trade_decision_risk (risk_decision_id),
-  ADD CONSTRAINT fk_trade_decision_risk FOREIGN KEY (risk_decision_id) REFERENCES risk_decisions (id);
+  ADD CONSTRAINT fk_trade_decision_risk FOREIGN KEY (risk_decision_id) REFERENCES risk_decisions_v4 (id);
 
 -- Legacy migration is a bounded release job, never an unbounded startup DDL transaction:
--- risk_policy_sets/versions/change_items retain their legacy IDs through the unique source mapping;
+-- risk_policy_sets_v4/versions/change_items retain their legacy IDs through the unique source mapping;
 -- risk_account_state is transformed into account_risk_states plus append-only risk_state_events;
--- risk_decisions keep the old intent lineage as migration evidence until Stage 12E maps execution intents;
+-- risk_decisions_v4 keeps the old intent lineage as migration evidence until Stage 12E maps execution intents;
 -- risk_profiles merge into account policy versions without deleting their source rows;
 -- risk_rule_rollouts and global_risk_control are reconciled into the platform version/control revision.
 -- Backfill checkpoints, row counts, rejected rows and hashes are recorded by the release migration runner.
