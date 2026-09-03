@@ -97,6 +97,9 @@
         "market_analysis.created",
         "trader.job.changed",
         "trade_decision.created",
+        "risk.policy.changed",
+        "risk.summary.changed",
+        "risk.decision.created",
         "risk.status.changed",
         "risk.alert.created",
         "operation.changed",
@@ -267,6 +270,38 @@
         "stale_reason": { "type": ["string", "null"], "maxLength": 128 }
       }
     },
+    "RiskPolicyChangedData": {
+      "type": "object",
+      "required": ["account_id", "policy_version_id", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "account_id": { "$ref": "#/$defs/OpaqueId" },
+        "policy_version_id": { "$ref": "#/$defs/OpaqueId" },
+        "revision": { "$ref": "#/$defs/Revision" }
+      }
+    },
+    "RiskSummaryChangedData": {
+      "type": "object",
+      "required": ["account_id", "data_complete", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "account_id": { "$ref": "#/$defs/OpaqueId" },
+        "data_complete": { "type": "boolean" },
+        "revision": { "$ref": "#/$defs/Revision" }
+      }
+    },
+    "RiskDecisionData": {
+      "type": "object",
+      "required": ["risk_decision_id", "decision_id", "account_id", "status", "reject_code"],
+      "additionalProperties": false,
+      "properties": {
+        "risk_decision_id": { "$ref": "#/$defs/OpaqueId" },
+        "decision_id": { "$ref": "#/$defs/OpaqueId" },
+        "account_id": { "$ref": "#/$defs/OpaqueId" },
+        "status": { "type": "string", "enum": ["approved", "rejected"] },
+        "reject_code": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
     "OperationData": {
       "type": "object",
       "required": ["operation_id", "kind", "status", "updated_at"],
@@ -348,6 +383,9 @@
             { "properties": { "type": { "const": "market_analysis.created" }, "data": { "$ref": "#/$defs/MarketAnalysisSummaryData" } } },
             { "properties": { "type": { "const": "trader.job.changed" }, "data": { "$ref": "#/$defs/TraderJobData" } } },
             { "properties": { "type": { "const": "trade_decision.created" }, "data": { "$ref": "#/$defs/TradeDecisionSummaryData" } } },
+            { "properties": { "type": { "const": "risk.policy.changed" }, "data": { "$ref": "#/$defs/RiskPolicyChangedData" } } },
+            { "properties": { "type": { "const": "risk.summary.changed" }, "data": { "$ref": "#/$defs/RiskSummaryChangedData" } } },
+            { "properties": { "type": { "const": "risk.decision.created" }, "data": { "$ref": "#/$defs/RiskDecisionData" } } },
             {
               "properties": {
                 "type": { "const": "operation.changed" },

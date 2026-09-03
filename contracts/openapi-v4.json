@@ -602,7 +602,44 @@
             }
           },
           "412": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
           "422": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/risk-accounts/{account_id}/summary": {
+      "get": {
+        "operationId": "getAccountRiskSummary",
+        "summary": "Get the current deterministic account risk summary",
+        "tags": ["Risk"],
+        "parameters": [{ "$ref": "#/components/parameters/AccountId" }],
+        "responses": {
+          "200": { "description": "Account risk summary", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AccountRiskSummaryResponse" } } } },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/risk-decisions": {
+      "get": {
+        "operationId": "listRiskDecisions",
+        "summary": "List deterministic risk decisions for one owned account",
+        "tags": ["Risk"],
+        "parameters": [{ "$ref": "#/components/parameters/AccountIdQuery" }, { "$ref": "#/components/parameters/PageSize" }],
+        "responses": {
+          "200": { "description": "Risk decision summaries", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RiskDecisionListResponse" } } } },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/risk-decisions/{risk_decision_id}": {
+      "get": {
+        "operationId": "getRiskDecision",
+        "summary": "Get one complete deterministic risk decision",
+        "tags": ["Risk"],
+        "parameters": [{ "name": "risk_decision_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } }],
+        "responses": {
+          "200": { "description": "Complete risk decision", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RiskDecisionDetailResponse" } } } },
+          "404": { "$ref": "#/components/responses/Problem" }
         }
       }
     }
@@ -1426,27 +1463,62 @@
       "TradeDecisionDetailResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/TradeDecisionDetail" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
       "RiskPolicyInput": {
         "type": "object",
-        "required": ["max_risk_per_trade_percent", "max_daily_loss_percent", "max_open_positions", "trade_send_enabled"],
+        "required": ["reason"],
+        "additionalProperties": false,
         "properties": {
           "max_risk_per_trade_percent": { "$ref": "#/components/schemas/Decimal" },
           "max_daily_loss_percent": { "$ref": "#/components/schemas/Decimal" },
+          "max_drawdown_percent": { "$ref": "#/components/schemas/Decimal" },
           "max_open_positions": { "type": "integer", "minimum": 0, "maximum": 1000 },
-          "trade_send_enabled": { "type": "boolean" }
+          "max_pending_orders": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "max_total_volume": { "$ref": "#/components/schemas/Decimal" },
+          "max_spread_points": { "$ref": "#/components/schemas/Decimal" },
+          "min_open_interval_seconds": { "type": "integer", "minimum": 0, "maximum": 86400 },
+          "max_daily_open_count": { "type": "integer", "minimum": 0, "maximum": 10000 },
+          "consecutive_loss_limit": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "loss_cooldown_minutes": { "type": "integer", "minimum": 0, "maximum": 10080 },
+          "pending_valid_minutes": { "type": "integer", "minimum": 1, "maximum": 10080 },
+          "weekend_close_minutes": { "type": "integer", "minimum": 0, "maximum": 2880 },
+          "trade_send_enabled": { "type": "boolean" },
+          "account_kill_switch": { "type": "boolean" },
+          "reason": { "type": "string", "minLength": 3, "maxLength": 500 }
         }
       },
       "RiskPolicy": {
-        "allOf": [
-          { "$ref": "#/components/schemas/RiskPolicyInput" },
-          {
-            "type": "object",
-            "required": ["account_id", "revision", "updated_at"],
-            "properties": {
-              "account_id": { "$ref": "#/components/schemas/OpaqueId" },
-              "revision": { "$ref": "#/components/schemas/Revision" },
-              "updated_at": { "$ref": "#/components/schemas/UtcDateTime" }
-            }
-          }
-        ]
+        "type": "object",
+        "required": ["account_id", "platform_policy_version_id", "account_policy_version_id", "global_kill_switch", "allowed_symbols", "fail_closed_on_incomplete_data", "max_quote_age_seconds", "max_risk_summary_age_seconds", "max_decision_age_seconds", "max_price_deviation_percent", "max_risk_per_trade_percent", "max_daily_loss_percent", "max_drawdown_percent", "max_open_positions", "max_pending_orders", "max_total_volume", "max_spread_points", "min_open_interval_seconds", "max_daily_open_count", "consecutive_loss_limit", "loss_cooldown_minutes", "pending_valid_minutes", "weekend_close_minutes", "trade_send_enabled", "account_kill_switch", "require_stop_loss", "editable_fields", "revision", "updated_at"],
+        "additionalProperties": false,
+        "properties": {
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "platform_policy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "account_policy_version_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "global_kill_switch": { "type": "boolean", "readOnly": true },
+          "allowed_symbols": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "minItems": 1, "uniqueItems": true, "readOnly": true },
+          "fail_closed_on_incomplete_data": { "const": true, "readOnly": true },
+          "max_quote_age_seconds": { "type": "integer", "minimum": 1, "readOnly": true },
+          "max_risk_summary_age_seconds": { "type": "integer", "minimum": 1, "readOnly": true },
+          "max_decision_age_seconds": { "type": "integer", "minimum": 1, "readOnly": true },
+          "max_price_deviation_percent": { "$ref": "#/components/schemas/Decimal", "readOnly": true },
+          "max_risk_per_trade_percent": { "$ref": "#/components/schemas/Decimal" },
+          "max_daily_loss_percent": { "$ref": "#/components/schemas/Decimal" },
+          "max_drawdown_percent": { "$ref": "#/components/schemas/Decimal" },
+          "max_open_positions": { "type": "integer", "minimum": 0 },
+          "max_pending_orders": { "type": "integer", "minimum": 0 },
+          "max_total_volume": { "$ref": "#/components/schemas/Decimal" },
+          "max_spread_points": { "$ref": "#/components/schemas/Decimal" },
+          "min_open_interval_seconds": { "type": "integer", "minimum": 0 },
+          "max_daily_open_count": { "type": "integer", "minimum": 0 },
+          "consecutive_loss_limit": { "type": "integer", "minimum": 0 },
+          "loss_cooldown_minutes": { "type": "integer", "minimum": 0 },
+          "pending_valid_minutes": { "type": "integer", "minimum": 1 },
+          "weekend_close_minutes": { "type": "integer", "minimum": 0 },
+          "trade_send_enabled": { "type": "boolean" },
+          "account_kill_switch": { "type": "boolean" },
+          "require_stop_loss": { "const": true },
+          "editable_fields": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "uniqueItems": true },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "updated_at": { "$ref": "#/components/schemas/UtcDateTime" }
+        }
       },
       "RiskPolicyResponse": {
         "type": "object",
@@ -1455,11 +1527,70 @@
           "data": { "$ref": "#/components/schemas/RiskPolicy" },
           "meta": { "$ref": "#/components/schemas/Meta" }
         }
-      }
+      },
+      "AccountRiskSummary": {
+        "type": "object",
+        "required": ["account_id", "business_date", "equity", "free_margin", "margin_level_percent", "daily_loss_percent", "drawdown_percent", "open_positions", "pending_orders", "total_volume", "daily_open_count", "consecutive_losses", "terminal_timezone_offset_minutes", "clock_status", "last_successful_open_at", "cooldown_until", "data_complete", "incomplete_reasons", "observed_at", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "business_date": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "equity": { "$ref": "#/components/schemas/Decimal" },
+          "free_margin": { "$ref": "#/components/schemas/Decimal" },
+          "margin_level_percent": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "daily_loss_percent": { "$ref": "#/components/schemas/Decimal" },
+          "drawdown_percent": { "$ref": "#/components/schemas/Decimal" },
+          "open_positions": { "type": "integer", "minimum": 0 },
+          "pending_orders": { "type": "integer", "minimum": 0 },
+          "total_volume": { "$ref": "#/components/schemas/Decimal" },
+          "daily_open_count": { "type": "integer", "minimum": 0 },
+          "consecutive_losses": { "type": "integer", "minimum": 0 },
+          "terminal_timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
+          "clock_status": { "type": "string", "enum": ["calibrated", "observer_bootstrap", "stale", "unavailable"] },
+          "last_successful_open_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "cooldown_until": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "data_complete": { "type": "boolean" },
+          "incomplete_reasons": { "type": "array", "items": { "type": "string", "maxLength": 128 }, "uniqueItems": true },
+          "observed_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "AccountRiskSummaryResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/AccountRiskSummary" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
+      "RiskDecisionSummary": {
+        "type": "object",
+        "required": ["risk_decision_id", "trade_decision_id", "account_id", "status", "reject_code", "platform_policy_version_id", "account_policy_version_id", "account_risk_revision", "created_at", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "risk_decision_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "trade_decision_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "status": { "type": "string", "enum": ["approved", "rejected"] },
+          "reject_code": { "type": ["string", "null"], "maxLength": 128 },
+          "platform_policy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "account_policy_version_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "account_risk_revision": { "$ref": "#/components/schemas/Revision" },
+          "created_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "RiskDecisionDetail": {
+        "type": "object",
+        "required": ["summary", "rules", "approved_actions", "evaluated_at", "policy_hash"],
+        "additionalProperties": false,
+        "properties": {
+          "summary": { "$ref": "#/components/schemas/RiskDecisionSummary" },
+          "rules": { "type": "array", "items": { "type": "object", "required": ["code", "outcome", "action_id", "details"], "additionalProperties": false, "properties": { "code": { "type": "string", "maxLength": 128 }, "outcome": { "type": "string", "enum": ["passed", "rejected", "not_applicable"] }, "action_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] }, "details": { "type": "object", "additionalProperties": true } } } },
+          "approved_actions": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "evaluated_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "policy_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      },
+      "RiskDecisionListResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/RiskDecisionSummary" } } } }, "meta": { "$ref": "#/components/schemas/Meta" } } },
+      "RiskDecisionDetailResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/RiskDecisionDetail" }, "meta": { "$ref": "#/components/schemas/Meta" } } }
     }
   },
   "security": [
     { "applicationSession": [] }
   ],
-  "x-contract-status": "stage-12c-account-trader-worker"
+  "x-contract-status": "stage-12d-deterministic-risk-review"
 }
