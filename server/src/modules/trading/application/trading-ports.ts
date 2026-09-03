@@ -47,6 +47,37 @@ export interface TradingProjectionRepository {
   applyProjection(input: TradingProjectionWrite): Promise<boolean>
 }
 
+export interface TrustedBridgeProjectionRoute {
+  userId: number
+  accountId: string
+  terminalProfileId: string
+  terminalInstanceId: string
+  connectionEpoch: number
+}
+
+export interface BridgeExactTradeState {
+  ticket: string
+  symbol: string
+  direction: 'buy' | 'sell'
+  order_type: 'market' | 'buy_limit' | 'sell_limit' | 'buy_stop' | 'sell_stop' | 'buy_stop_limit' | 'sell_stop_limit'
+  magic: number
+  volume: string
+  open_price: string
+  stop_limit_price: string | null
+  stop_loss: string | null
+  take_profit: string | null
+  expiration_utc_msc: number | null
+}
+
+export type TrustedBridgeProjectionWrite =
+  | { route: TrustedBridgeProjectionRoute; projection: Exclude<TradingProjectionWrite, { resource: 'positions' | 'pending_orders' }> }
+  | { route: TrustedBridgeProjectionRoute; projection: Extract<TradingProjectionWrite, { resource: 'positions' }>; tradeStates: BridgeExactTradeState[]; observedAt: string }
+  | { route: TrustedBridgeProjectionRoute; projection: Extract<TradingProjectionWrite, { resource: 'pending_orders' }>; tradeStates: BridgeExactTradeState[]; observedAt: string }
+
+export interface TrustedBridgeProjectionRepository {
+  applyTrustedProjection(input: TrustedBridgeProjectionWrite): Promise<{ applied: boolean; absorbedReservationIds: string[] }>
+}
+
 export type TradingProjectionWrite =
   | { accountId: string; resource: 'account.metrics'; resourceId: 'current'; revision: number; data: AccountSnapshot }
   | { accountId: string; resource: 'market.quote'; resourceId: string; revision: number; data: MarketQuote }

@@ -7,6 +7,7 @@ import {
   type AccountSnapshot, type BrowserRealtimeSink, type ConnectionLeaseStore, type MarketCandle, type MarketQuote,
   type OpenPosition, type PendingOrder, type RealtimeResource, type TradingAccountSummary,
   ConnectionCapacityExceededError, type TradingProjectionRepository, type TradingReadRepository, type TradingRealtimeEvent,
+  type TrustedBridgeProjectionRepository,
 } from '../src/modules/trading/index.js'
 
 const account: TradingAccountSummary = {
@@ -15,7 +16,7 @@ const account: TradingAccountSummary = {
   lastSeenAt: '2026-09-03T08:00:00.000Z',
 }
 
-function repository(): TradingReadRepository & TradingProjectionRepository {
+function repository(): TradingReadRepository & TradingProjectionRepository & TrustedBridgeProjectionRepository {
   let context = { userId: 42, mode: 'full' as const, accountId: '7', observerChannelId: null, readOnly: false, revision: 1 }
   const revisions = new Map<string, number>()
   return {
@@ -41,6 +42,9 @@ function repository(): TradingReadRepository & TradingProjectionRepository {
       const key = `${input.accountId}:${input.resource}:${input.resourceId}`; const previous = revisions.get(key) ?? 0
       if (input.revision <= previous) return false
       revisions.set(key, input.revision); return true
+    },
+    async applyTrustedProjection(input) {
+      return { applied: await this.applyProjection(input.projection), absorbedReservationIds: [] }
     },
   }
 }
@@ -121,16 +125,18 @@ describe('Stage 11 trading vertical slice', () => {
     const messages: unknown[] = []; const sink: BrowserRealtimeSink = { send(value) { messages.push(value) }, close() {} }
     const stop = await hub.subscribe({ userId: 42, accountId: '7', resources: ['market.quote:XAUUSD'], afterRevision: { 'market.quote:XAUUSD': 0 }, sink })
     expect(stop).toBeTypeOf('function')
-    await expect(projector.ingest(42, '7', 'terminal-1', { resource: 'market.quote', resourceId: 'XAUUSD', revision: 1, data: { ...quote(), revision: 1 } })).resolves.toBe(true)
-    await expect(projector.ingest(42, '7', 'terminal-1', { resource: 'market.quote', resourceId: 'XAUUSD', revision: 1, data: { ...quote(), revision: 1 } })).resolves.toBe(false)
+    const route = { userId: 42, accountId: '7', terminalProfileId: 'profile-1', terminalInstanceId: 'terminal-1', connectionEpoch: 1 }
+    await expect(projector.ingest(route, { resource: 'market.quote', resourceId: 'XAUUSD', revision: 1, data: { ...quote(), revision: 1 } })).resolves.toBe(true)
+    await expect(projector.ingest(route, { resource: 'market.quote', resourceId: 'XAUUSD', revision: 1, data: { ...quote(), revision: 1 } })).resolves.toBe(false)
     expect(published).toHaveLength(1)
     expect(messages).toContainEqual(expect.objectContaining({ type: 'market.quote.updated', sequence: 1, revision: '1' }))
   })
 
   it('rejects a projection whose payload or resource identity belongs to another account', async () => {
     const projector = new BridgeStreamProjector(repository(), { publish() {} })
-    await expect(projector.ingest(42, '7', 'terminal-1', { resource: 'market.quote', resourceId: 'XAUUSD', revision: 1, data: { ...quote(), accountId: '8', revision: 1 } })).rejects.toMatchObject({ code: 'trading_context_invalid' })
-    await expect(projector.ingest(42, '7', 'terminal-1', { resource: 'market.candle', resourceId: 'XAUUSD', revision: 1, data: { ...candle(), revision: 1 } })).rejects.toMatchObject({ code: 'trading_context_invalid' })
+    const route = { userId: 42, accountId: '7', terminalProfileId: 'profile-1', terminalInstanceId: 'terminal-1', connectionEpoch: 1 }
+    await expect(projector.ingest(route, { resource: 'market.quote', resourceId: 'XAUUSD', revision: 1, data: { ...quote(), accountId: '8', revision: 1 } })).rejects.toMatchObject({ code: 'trading_context_invalid' })
+    await expect(projector.ingest(route, { resource: 'market.candle', resourceId: 'XAUUSD', revision: 1, data: { ...candle(), revision: 1 } })).rejects.toMatchObject({ code: 'trading_context_invalid' })
   })
 
   it('requires a precise HTTP resync when a reconnect revision does not match the current projection', async () => {

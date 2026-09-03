@@ -1,22 +1,35 @@
 import { randomUUID } from 'node:crypto'
-import type { BrowserRealtimePublisher, TradingProjectionRepository, TradingProjectionWrite, TradingRealtimeEvent } from './trading-ports.js'
+import type { BridgeExactTradeState, BrowserRealtimePublisher, TradingProjectionWrite, TradingRealtimeEvent, TrustedBridgeProjectionRepository, TrustedBridgeProjectionRoute } from './trading-ports.js'
 import { TradingAccessError, type RealtimeResource } from '../domain/trading.js'
 
 type WithoutAccount<T> = T extends unknown ? Omit<T, 'accountId'> : never
-export type BridgeProjectionInput = WithoutAccount<TradingProjectionWrite>
+type ProjectionPayload = WithoutAccount<TradingProjectionWrite>
+export type BridgeProjectionInput =
+  | Exclude<ProjectionPayload, { resource: 'positions' | 'pending_orders' }>
+  | (Extract<ProjectionPayload, { resource: 'positions' | 'pending_orders' }> & { tradeStates: BridgeExactTradeState[]; observedAt: string })
 
 export class BridgeStreamProjector {
   constructor(
-    private readonly repository: TradingProjectionRepository,
+    private readonly repository: TrustedBridgeProjectionRepository,
     private readonly publisher: BrowserRealtimePublisher,
     private readonly now = () => new Date(),
   ) {}
 
-  async ingest(userId: number, accountId: string, terminalInstanceId: string, input: BridgeProjectionInput) {
+  async ingest(route: TrustedBridgeProjectionRoute, input: BridgeProjectionInput) {
+    const { userId, accountId, terminalInstanceId } = route
     if (!Number.isSafeInteger(input.revision) || input.revision <= 0 || !belongsToAccount(accountId, input)) {
       throw new TradingAccessError('trading_context_invalid', 400)
     }
-    if (!await this.repository.applyProjection({ ...input, accountId } as TradingProjectionWrite)) return false
+    if ((input.resource === 'positions' || input.resource === 'pending_orders')
+      && (!Number.isFinite(Date.parse(input.observedAt)) || !tradeStatesMatch(input.data, input.tradeStates))) {
+      throw new TradingAccessError('trading_context_invalid', 400)
+    }
+    const projection = { ...input, accountId } as TradingProjectionWrite
+    const write = input.resource === 'positions' || input.resource === 'pending_orders'
+      ? { route, projection, tradeStates: input.tradeStates, observedAt: input.observedAt }
+      : { route, projection }
+    const applied = await this.repository.applyTrustedProjection(write as import('./trading-ports.js').TrustedBridgeProjectionWrite)
+    if (!applied.applied) return false
     const event: TradingRealtimeEvent = {
       eventId: randomUUID(), type: eventType(input.resource, input), occurredAt: this.now().toISOString(),
       userId, accountId, terminalInstanceId, resource: input.resource, resourceId: input.resourceId,
@@ -25,6 +38,25 @@ export class BridgeStreamProjector {
     this.publisher.publish(event)
     return true
   }
+}
+
+function tradeStatesMatch(items: Array<{ ticket: string }>, states: BridgeExactTradeState[]) {
+  if (items.length !== states.length) return false
+  const tickets = new Set(items.map(item => item.ticket))
+  return states.every(state => tickets.has(state.ticket) && validTradeState(state))
+}
+
+function validTradeState(state: BridgeExactTradeState) {
+  const decimal = (value: unknown) => typeof value === 'string' && /^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$/.test(value)
+  const nullableDecimal = (value: unknown) => value === null || decimal(value)
+  return /^[1-9][0-9]{0,19}$/.test(state.ticket)
+    && /^[A-Za-z0-9._-]{1,64}$/.test(state.symbol)
+    && (state.direction === 'buy' || state.direction === 'sell')
+    && ['market', 'buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit'].includes(state.order_type)
+    && Number.isSafeInteger(state.magic) && state.magic >= 0 && state.magic <= 2_147_483_647
+    && decimal(state.volume) && decimal(state.open_price) && nullableDecimal(state.stop_limit_price)
+    && nullableDecimal(state.stop_loss) && nullableDecimal(state.take_profit)
+    && (state.expiration_utc_msc === null || Number.isSafeInteger(state.expiration_utc_msc) && state.expiration_utc_msc > 0)
 }
 
 function belongsToAccount(accountId: string, input: BridgeProjectionInput) {

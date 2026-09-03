@@ -240,7 +240,7 @@ export function resultAck(command: BridgeCommand, resultMessageId: string, dupli
 
 export function reconcileEnvelope(command: BridgeCommand, terminalTicket: string | null, now = new Date(), route = command.request.route): BridgeCommandReconcileEnvelope {
   assertDate(now)
-  if (command.status !== 'uncertain') fail('bridge_command_reconcile_status_invalid', 409)
+  if (command.status !== 'uncertain' && command.status !== 'reconciling') fail('bridge_command_reconcile_status_invalid', 409)
   if (terminalTicket !== null && !/^[1-9][0-9]{0,19}$/.test(terminalTicket)) fail('bridge_command_terminal_ticket_invalid')
   const payload: BridgeCommandReconcileEnvelope['payload'] = { command_id: command.id, action: command.action }
   if (terminalTicket !== null) payload.terminal_ticket = terminalTicket

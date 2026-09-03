@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.aurum.invalid/bridge-v4.schema.json",
   "title": "AURUM Bridge Device Protocol V4",
-  "$comment": "Stage 8 prototype contract. Resource and action names are frozen for the net48/Win7 prototype; resource-specific request/response payload shapes remain under implementation and must pass the Stage 8 real-machine gate before final freeze.",
+  "$comment": "Stage 12G server contract. Envelope, resource and action names remain frozen for the net48/Win7 client; normalized position and pending-order stream items are implemented, while remaining resource-specific payloads still require later runtime and real-machine acceptance.",
   "oneOf": [
     { "$ref": "#/$defs/SessionHello" },
     { "$ref": "#/$defs/SessionWelcome" },
@@ -497,6 +497,50 @@
         "max_updates_per_second": { "type": "integer", "minimum": 1, "maximum": 100 }
       }
     },
+    "PositionStreamItem": {
+      "type": "object",
+      "required": ["ticket", "symbol", "direction", "order_type", "magic", "volume", "open_price", "current_price", "stop_limit_price", "stop_loss", "take_profit", "expiration_utc_msc", "profit", "opened_at_utc_msc"],
+      "additionalProperties": false,
+      "properties": {
+        "ticket": { "$ref": "#/$defs/Ticket" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "direction": { "$ref": "#/$defs/TradeDirection" },
+        "order_type": { "const": "market" },
+        "magic": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "volume": { "$ref": "#/$defs/PositiveDecimal" },
+        "open_price": { "$ref": "#/$defs/PositiveDecimal" },
+        "current_price": { "$ref": "#/$defs/PositiveDecimal" },
+        "stop_limit_price": { "type": "null" },
+        "stop_loss": { "oneOf": [{ "$ref": "#/$defs/PositiveDecimal" }, { "type": "null" }] },
+        "take_profit": { "oneOf": [{ "$ref": "#/$defs/PositiveDecimal" }, { "type": "null" }] },
+        "expiration_utc_msc": { "type": "null" },
+        "profit": { "$ref": "#/$defs/Decimal" },
+        "opened_at_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "source": { "type": "string", "enum": ["manual", "signal", "unknown"] },
+        "signal_id": { "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }] }
+      }
+    },
+    "PendingOrderStreamItem": {
+      "type": "object",
+      "required": ["ticket", "symbol", "direction", "order_type", "magic", "volume", "open_price", "stop_limit_price", "stop_loss", "take_profit", "expiration_utc_msc", "created_at_utc_msc"],
+      "additionalProperties": false,
+      "properties": {
+        "ticket": { "$ref": "#/$defs/Ticket" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "direction": { "$ref": "#/$defs/TradeDirection" },
+        "order_type": { "type": "string", "enum": ["buy_limit", "sell_limit", "buy_stop", "sell_stop", "buy_stop_limit", "sell_stop_limit"] },
+        "magic": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "volume": { "$ref": "#/$defs/PositiveDecimal" },
+        "open_price": { "$ref": "#/$defs/PositiveDecimal" },
+        "stop_limit_price": { "oneOf": [{ "$ref": "#/$defs/PositiveDecimal" }, { "type": "null" }] },
+        "stop_loss": { "oneOf": [{ "$ref": "#/$defs/PositiveDecimal" }, { "type": "null" }] },
+        "take_profit": { "oneOf": [{ "$ref": "#/$defs/PositiveDecimal" }, { "type": "null" }] },
+        "expiration_utc_msc": { "oneOf": [{ "$ref": "#/$defs/UtcMsc" }, { "type": "null" }] },
+        "created_at_utc_msc": { "$ref": "#/$defs/UtcMsc" },
+        "source": { "type": "string", "enum": ["manual", "signal", "unknown"] },
+        "signal_id": { "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }] }
+      }
+    },
     "StreamSubscribe": {
       "allOf": [
         { "$ref": "#/$defs/RoutedEnvelope" },
@@ -546,7 +590,11 @@
                 "source_time_msc": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
                 "upserts": { "type": "array", "maxItems": 10000, "items": { "type": "object" } },
                 "deletes": { "type": "array", "maxItems": 10000, "items": { "type": "string", "minLength": 1, "maxLength": 64 } }
-              }
+              },
+              "allOf": [
+                { "if": { "properties": { "stream": { "const": "positions" } } }, "then": { "properties": { "upserts": { "items": { "$ref": "#/$defs/PositionStreamItem" } } } } },
+                { "if": { "properties": { "stream": { "const": "pending_orders" } } }, "then": { "properties": { "upserts": { "items": { "$ref": "#/$defs/PendingOrderStreamItem" } } } } }
+              ]
             }
           }
         }

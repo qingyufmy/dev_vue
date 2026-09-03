@@ -23,6 +23,7 @@ interface CommandLocator extends RowDataPacket { id: string; trading_account_id:
 interface IntentRow extends RowDataPacket { id: string; operation_id: string; user_id: number; trading_account_id: string; action_kind: string; status: string; revision: number; expires_at_utc: Date }
 interface ExistingResultRow extends RowDataPacket { bridge_command_id: string; result_sha256: string }
 interface PriorResultRow extends RowDataPacket { status: BridgeCommandResultEnvelope['payload']['status'] }
+interface RecoverableCommandRow extends CommandRow { result_json: string | Record<string, unknown> | null }
 interface CountRow extends RowDataPacket { status: string; quantity: number }
 interface IntentPayloadRow extends RowDataPacket { action_json: string | TraderAction; action_sha256: string }
 interface TradeStateRow extends RowDataPacket {
@@ -53,6 +54,11 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
         }
         return mapped
       }
+      const [activeRows] = await connection.execute<RowDataPacket[]>(`SELECT id FROM bridge_commands_v4
+        WHERE trading_account_id=? AND execution_intent_id<>?
+          AND status IN ('queued','dispatched','accepted','uncertain','reconciling')
+        LIMIT 1 FOR UPDATE`, [command.accountId, command.executionIntentId])
+      if (activeRows[0]) throw new BridgeCommandError('bridge_account_command_inflight', 409)
       await lockExactRoute(connection, command)
       const intent = await lockIntent(connection, command.executionIntentId)
       if (intent.user_id !== command.userId || String(intent.trading_account_id) !== command.accountId
@@ -190,6 +196,23 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
       if (intent.status !== 'reconciling') await moveIntent(connection, intent, 'reconciling', now, null)
       return next
     })
+  }
+
+  async listReconciliationCandidates(accountId: string, route: BridgeCommand['route'], limit: number) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new BridgeCommandError('bridge_command_reconcile_limit_invalid', 422)
+    const [rows] = await this.pool.execute<RecoverableCommandRow[]>(`${selectCommand}
+      LEFT JOIN bridge_command_results_v4 r ON r.id=(
+        SELECT r2.id FROM bridge_command_results_v4 r2
+        WHERE r2.bridge_command_id=c.id AND r2.result_sha256=c.result_sha256
+        ORDER BY r2.id DESC LIMIT 1
+      )
+      WHERE c.trading_account_id=? AND c.status IN ('uncertain','reconciling')
+        AND c.terminal_instance_id=? AND BINARY c.broker_server=BINARY ? AND BINARY c.account_login=BINARY ?
+        AND c.connection_epoch<=?
+      ORDER BY c.updated_at_utc,c.id LIMIT ?`, [
+      accountId, route.terminalInstanceId, route.brokerServer, route.login, route.connectionEpoch, limit,
+    ])
+    return rows.map(row => ({ command: mapCommand(row), terminalTicket: resultTicket(row.result_json) }))
   }
 
   private async locked<T>(commandId: string, work: (connection: PoolConnection, command: BridgeCommand, intent: IntentRow) => Promise<T>, requireCurrentRoute = false, resultRoute: BridgeWireRoute | null = null) {
@@ -346,6 +369,16 @@ function mapCommand(row: CommandRow): BridgeCommand {
   }
 }
 function parse<T>(value: string | T): T { return typeof value === 'string' ? JSON.parse(value) as T : value }
+function resultTicket(value: string | Record<string, unknown> | null) {
+  if (!value) return null
+  const result = parse<Record<string, unknown>>(value)
+  for (const key of ['position_ticket', 'position', 'order_ticket', 'order', 'pending_ticket', 'ticket']) {
+    const ticket = result[key]
+    if (typeof ticket === 'string' && /^[1-9][0-9]{0,19}$/.test(ticket)) return ticket
+    if (Number.isSafeInteger(ticket) && Number(ticket) > 0) return String(ticket)
+  }
+  return null
+}
 function utc(value: Date | null) { return value ? new Date(value).toISOString() : null }
 function conflict(): never { throw new BridgeCommandError('bridge_command_revision_conflict', 409) }
 function bridgeAction(kind: string): BridgeCommand['action'] | null {

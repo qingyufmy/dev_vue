@@ -18,6 +18,14 @@ export class BridgeCommandService {
     return this.repository.create(candidate)
   }
 
+  /** Resume only a durable queued command after a worker crash; never re-send a possibly dispatched command. */
+  async resume(executionIntentId: string, commandSequence: number, transport: BridgeCommandTransport, now = new Date()) {
+    const command = await this.repository.get(bridgeCommandId(executionIntentId, commandSequence))
+    if (!command) return null
+    if (command.status !== 'queued') return { command, dispatched: false }
+    return { command: await this.dispatch(command.id, transport, now), dispatched: true }
+  }
+
   /** Persist dispatched before attempting a socket write; a thrown write is possibly sent. */
   async dispatch(commandId: string, transport: BridgeCommandTransport, now = new Date()) {
     const command = await this.required(commandId)
@@ -33,7 +41,7 @@ export class BridgeCommandService {
     }
     const dispatched = await this.repository.markDispatched(command.id, command.revision, now.toISOString())
     try {
-      await transport.send(dispatched.request)
+      await transport.send(dispatched.request, dispatched.accountId)
       return dispatched
     } catch {
       return this.repository.markUncertain(dispatched.id, dispatched.revision, 'bridge_transport_write_uncertain', new Date().toISOString())
@@ -73,13 +81,26 @@ export class BridgeCommandService {
       account_ref: { broker_server: activeRoute.brokerServer, login: activeRoute.login }, connection_epoch: activeRoute.connectionEpoch }
     if (!routeContinues(command, wireRoute)) throw new BridgeCommandError('bridge_command_reconcile_route_mismatch', 409)
     const message = reconcileEnvelope(command, terminalTicket, now, wireRoute)
-    const reconciling = await this.repository.beginReconciliation(command.id, command.revision, now.toISOString())
+    const reconciling = command.status === 'reconciling'
+      ? command
+      : await this.repository.beginReconciliation(command.id, command.revision, now.toISOString())
     try {
-      await transport.send(message)
+      await transport.send(message, command.accountId)
       return reconciling
     } catch {
       return this.repository.markUncertain(reconciling.id, reconciling.revision, 'bridge_reconcile_transport_uncertain', new Date().toISOString())
     }
+  }
+
+  /** Reconnect recovery is reconciliation-only; it never sends command.request. */
+  async recover(accountId: string, route: import('../domain/bridge-command.js').BridgeRoute, transport: BridgeCommandTransport, now = new Date(), limit = 1) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 32) throw new BridgeCommandError('bridge_command_reconcile_limit_invalid', 422)
+    const candidates = await this.repository.listReconciliationCandidates(accountId, route, limit)
+    const recovered = []
+    for (const candidate of candidates) {
+      recovered.push(await this.reconcile(candidate.command.id, transport, candidate.terminalTicket, now))
+    }
+    return recovered
   }
 
   private async required(commandId: string) {

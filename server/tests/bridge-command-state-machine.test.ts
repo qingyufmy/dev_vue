@@ -141,6 +141,19 @@ describe('Bridge V4 server command lifecycle', () => {
     expect(repo.reservation).toBe('committed')
   })
 
+  it('retries an interrupted reconciling query without replaying the trading command', async () => {
+    const repo = new MemoryBridgeRepository(); const firstTransport = new MemoryTransport(repo.trace)
+    const service = new BridgeCommandService(repo); const command = await service.create(input(), NOW)
+    await repo.markDispatched(command.id, 1, NOW.toISOString()); await repo.markUncertain(command.id, 2, 'write_unknown', NOW.toISOString())
+    const first = await service.reconcile(command.id, firstTransport, null, NOW)
+    const revision = first.revision
+    const reconnectTransport = new MemoryTransport(repo.trace)
+    const retried = await service.reconcile(command.id, reconnectTransport, null, NOW)
+    expect(retried).toMatchObject({ status: 'reconciling', revision })
+    expect(reconnectTransport.messages.map(item => item.type)).toEqual(['command.reconcile'])
+    expect(reconnectTransport.messages).not.toContainEqual(expect.objectContaining({ type: 'command.request' }))
+  })
+
   it('builds stable command identity from intent plus sequence', () => {
     const first = createBridgeCommand(input(), NOW)
     const second = createBridgeCommand(input(), NOW)
@@ -224,6 +237,9 @@ class MemoryBridgeRepository implements BridgeCommandRepository {
     const current = this.must(id)
     if (current.errorCode === 'bridge_result_conflict') throw Object.assign(new Error('manual review'), { code: 'bridge_command_conflict_manual_review_required' })
     return this.move(id, revision, 'reconciling', now, null, 'persist:reconciling')
+  }
+  async listReconciliationCandidates() {
+    return this.command?.status === 'uncertain' ? [{ command: this.command, terminalTicket: null }] : []
   }
   private async move(id: string, revision: number, status: BridgeCommand['status'], now: string, errorCode: string | null, trace: string) {
     const current = this.must(id); if (current.revision !== revision) throw new Error('revision conflict')

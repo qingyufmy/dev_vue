@@ -1,12 +1,15 @@
-import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type {
-  ConnectionCapacityRepository, TradingProjectionRepository, TradingProjectionWrite, TradingReadRepository,
+  BridgeExactTradeState, ConnectionCapacityRepository, TradingProjectionRepository, TradingProjectionWrite, TradingReadRepository,
+  TrustedBridgeProjectionRepository, TrustedBridgeProjectionWrite,
 } from '../application/trading-ports.js'
 import type {
   AccountSnapshot, MarketCandle, MarketQuote, OpenPosition, PendingOrder, RealtimeResource,
   TerminalProfileSummary, Timeframe, TradingAccountSummary, TradingContext,
 } from '../domain/trading.js'
 import { TradingAccessError } from '../domain/trading.js'
+import { sha256Canonical } from '../../execution/domain/execution.js'
+import { projectionProvesCommandResult } from '../../execution/domain/projection-absorption.js'
 
 interface ContextRow extends RowDataPacket { user_id: number; mode: TradingContext['mode']; trading_account_id: string | null; observer_channel_id: string | null; read_only: number; revision: number }
 interface AccountRow extends RowDataPacket { id: string; platform: TradingAccountSummary['platform']; account_login: string; broker_server: string; currency: string; profile_id: string; terminal_instance_id: string | null; bridge_state: TradingAccountSummary['bridgeState']; trade_permission: number; last_seen_at_utc: Date | null }
@@ -18,6 +21,11 @@ interface ProfileRow extends RowDataPacket { id: string; display_name: string; p
 interface ObserverRow extends RowDataPacket { id: string; display_name: string; source_trading_account_id: string; active: number }
 interface RevisionRow extends RowDataPacket { revision: number }
 interface CapacityRow extends RowDataPacket { quantity: number }
+interface ReservationProjectionRow extends RowDataPacket {
+  reservation_id: string; reservation_revision: number; command_id: string; action: string
+  params_json: string | Record<string, unknown>; expected_state_json: string | Record<string, unknown> | null; result_json: string | Record<string, unknown> | null
+  action_json: string | Record<string, unknown>; completed_at_utc: Date
+}
 
 async function transaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>) {
   const connection = await pool.getConnection()
@@ -55,7 +63,7 @@ function accountByIdSelect() { return `
   LEFT JOIN bridge_connection_sessions s ON s.trading_account_id=a.id AND s.connection_epoch=(SELECT s2.connection_epoch FROM bridge_connection_sessions s2 WHERE s2.trading_account_id=a.id AND s2.disconnected_at_utc IS NULL ORDER BY s2.connected_at_utc DESC LIMIT 1)
   WHERE a.id=? AND a.deleted_at_utc IS NULL` }
 
-export class MysqlTradingRepository implements TradingReadRepository, TradingProjectionRepository, ConnectionCapacityRepository {
+export class MysqlTradingRepository implements TradingReadRepository, TradingProjectionRepository, TrustedBridgeProjectionRepository, ConnectionCapacityRepository {
   constructor(private readonly pool: Pool) {}
 
   async getContext(userId: number) {
@@ -120,29 +128,31 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   async getPurchasedCapacity(userId: number) { const [rows] = await this.pool.execute<CapacityRow[]>(`SELECT COALESCE(SUM(quantity),0) quantity FROM bridge_connection_capacity_grants WHERE user_id=? AND revoked_at_utc IS NULL AND starts_at_utc<=UTC_TIMESTAMP(3) AND (expires_at_utc IS NULL OR expires_at_utc>UTC_TIMESTAMP(3))`, [userId]); return Number(rows[0]?.quantity ?? 0) }
 
   async applyProjection(input: TradingProjectionWrite) {
+    return transaction(this.pool, connection => applyProjectionWrite(connection, input))
+  }
+
+  async applyTrustedProjection(input: TrustedBridgeProjectionWrite) {
     return transaction(this.pool, async connection => {
-      await connection.execute('INSERT IGNORE INTO trading_projection_revisions (trading_account_id,resource_kind,resource_id,revision,updated_at_utc) VALUES (?,?,?,0,UTC_TIMESTAMP(3))', [input.accountId, input.resource, input.resourceId])
-      const [rows] = await connection.execute<RevisionRow[]>('SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind=? AND resource_id=? FOR UPDATE', [input.accountId, input.resource, input.resourceId])
-      if (Number(rows[0]?.revision ?? 0) >= input.revision) return false
-      switch (input.resource) {
-        case 'account.metrics':
-          await connection.execute(`INSERT INTO account_runtime_snapshots (trading_account_id,balance,equity,margin_amount,free_margin,floating_profit,leverage,timezone_offset_minutes,clock_status,trade_permission,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE balance=VALUES(balance),equity=VALUES(equity),margin_amount=VALUES(margin_amount),free_margin=VALUES(free_margin),floating_profit=VALUES(floating_profit),leverage=VALUES(leverage),timezone_offset_minutes=VALUES(timezone_offset_minutes),clock_status=VALUES(clock_status),trade_permission=VALUES(trade_permission),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.id, input.data.balance, input.data.equity, input.data.margin, input.data.freeMargin, input.data.floatingProfit, input.data.leverage, input.data.timezoneOffsetMinutes, input.data.clockStatus, input.data.tradePermission ? 1 : 0, input.data.observedAt, input.data.revision])
-          break
-        case 'market.quote':
-          await connection.execute(`INSERT INTO market_quotes (trading_account_id,symbol,bid,ask,last_price,spread,trade_mode,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE bid=VALUES(bid),ask=VALUES(ask),last_price=VALUES(last_price),spread=VALUES(spread),trade_mode=VALUES(trade_mode),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.accountId, input.data.symbol, input.data.bid, input.data.ask, input.data.last, input.data.spread, input.data.tradeMode, input.data.observedAt, input.data.revision])
-          break
-        case 'market.candle':
-          await connection.execute(`INSERT INTO market_candles (trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE high_price=VALUES(high_price),low_price=VALUES(low_price),close_price=VALUES(close_price),tick_volume=VALUES(tick_volume),closed=VALUES(closed),revision=VALUES(revision)`, [input.data.accountId, input.data.symbol, input.data.timeframe, input.data.openTime, input.data.open, input.data.high, input.data.low, input.data.close, input.data.tickVolume, input.data.closed ? 1 : 0, input.data.revision])
-          break
-        case 'positions':
-          await replaceCollection(connection, 'open_position_snapshots', input.accountId, input.revision, input.data)
-          break
-        case 'pending_orders':
-          await replaceCollection(connection, 'pending_order_snapshots', input.accountId, input.revision, input.data)
-          break
+      const route = input.route
+      await connection.execute('SELECT id FROM trading_accounts WHERE id=? AND deleted_at_utc IS NULL FOR UPDATE', [route.accountId])
+      const [sessions] = await connection.execute<RowDataPacket[]>(`SELECT id FROM bridge_connection_sessions
+        WHERE user_id=? AND trading_account_id=? AND terminal_profile_id=? AND terminal_instance_id=?
+          AND connection_epoch_v4=? AND disconnected_at_utc IS NULL LIMIT 1 FOR UPDATE`, [
+        route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId, route.connectionEpoch,
+      ])
+      if (!sessions[0] || input.projection.accountId !== route.accountId) throw new TradingAccessError('trading_context_invalid', 403)
+      const applied = await applyProjectionWrite(connection, input.projection)
+      if (!applied) return { applied: false, absorbedReservationIds: [] }
+      if (input.projection.resource !== 'positions' && input.projection.resource !== 'pending_orders') {
+        return { applied: true, absorbedReservationIds: [] }
       }
-      await connection.execute('UPDATE trading_projection_revisions SET revision=?,updated_at_utc=UTC_TIMESTAMP(3) WHERE trading_account_id=? AND resource_kind=? AND resource_id=?', [input.revision, input.accountId, input.resource, input.resourceId])
-      return true
+      const entityKind = input.projection.resource === 'positions' ? 'position' : 'pending_order'
+      if (!('tradeStates' in input)) throw new TradingAccessError('trading_context_invalid', 400)
+      await replaceExactTradeStates(connection, route.accountId, entityKind, route.terminalInstanceId, route.connectionEpoch,
+        input.projection.revision, input.tradeStates, input.observedAt)
+      const absorbedReservationIds = await absorbProjectedReservations(connection, route.accountId, entityKind, input.projection.revision,
+        input.observedAt, input.tradeStates, new Date().toISOString())
+      return { applied: true, absorbedReservationIds }
     })
   }
 }
@@ -151,4 +161,74 @@ function parsePayload<T>(value: string | object): T { return (typeof value === '
 async function replaceCollection(connection: PoolConnection, table: 'open_position_snapshots' | 'pending_order_snapshots', accountId: string, revision: number, items: Array<OpenPosition | PendingOrder>) {
   await connection.execute(`DELETE FROM ${table} WHERE trading_account_id=?`, [accountId])
   for (const item of [...items].sort((a, b) => a.ticket.localeCompare(b.ticket))) await connection.execute(`INSERT INTO ${table} (trading_account_id,ticket,payload_json,revision,observed_at_utc) VALUES (?,?,?,?,UTC_TIMESTAMP(3))`, [accountId, item.ticket, JSON.stringify(item), revision])
+}
+
+async function applyProjectionWrite(connection: PoolConnection, input: TradingProjectionWrite) {
+  await connection.execute('INSERT IGNORE INTO trading_projection_revisions (trading_account_id,resource_kind,resource_id,revision,updated_at_utc) VALUES (?,?,?,0,UTC_TIMESTAMP(3))', [input.accountId, input.resource, input.resourceId])
+  const [rows] = await connection.execute<RevisionRow[]>('SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind=? AND resource_id=? FOR UPDATE', [input.accountId, input.resource, input.resourceId])
+  if (Number(rows[0]?.revision ?? 0) >= input.revision) return false
+  switch (input.resource) {
+    case 'account.metrics':
+      await connection.execute(`INSERT INTO account_runtime_snapshots (trading_account_id,balance,equity,margin_amount,free_margin,floating_profit,leverage,timezone_offset_minutes,clock_status,trade_permission,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE balance=VALUES(balance),equity=VALUES(equity),margin_amount=VALUES(margin_amount),free_margin=VALUES(free_margin),floating_profit=VALUES(floating_profit),leverage=VALUES(leverage),timezone_offset_minutes=VALUES(timezone_offset_minutes),clock_status=VALUES(clock_status),trade_permission=VALUES(trade_permission),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.id, input.data.balance, input.data.equity, input.data.margin, input.data.freeMargin, input.data.floatingProfit, input.data.leverage, input.data.timezoneOffsetMinutes, input.data.clockStatus, input.data.tradePermission ? 1 : 0, input.data.observedAt, input.data.revision])
+      break
+    case 'market.quote':
+      await connection.execute(`INSERT INTO market_quotes (trading_account_id,symbol,bid,ask,last_price,spread,trade_mode,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE bid=VALUES(bid),ask=VALUES(ask),last_price=VALUES(last_price),spread=VALUES(spread),trade_mode=VALUES(trade_mode),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.accountId, input.data.symbol, input.data.bid, input.data.ask, input.data.last, input.data.spread, input.data.tradeMode, input.data.observedAt, input.data.revision])
+      break
+    case 'market.candle':
+      await connection.execute(`INSERT INTO market_candles (trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE high_price=VALUES(high_price),low_price=VALUES(low_price),close_price=VALUES(close_price),tick_volume=VALUES(tick_volume),closed=VALUES(closed),revision=VALUES(revision)`, [input.data.accountId, input.data.symbol, input.data.timeframe, input.data.openTime, input.data.open, input.data.high, input.data.low, input.data.close, input.data.tickVolume, input.data.closed ? 1 : 0, input.data.revision])
+      break
+    case 'positions': await replaceCollection(connection, 'open_position_snapshots', input.accountId, input.revision, input.data); break
+    case 'pending_orders': await replaceCollection(connection, 'pending_order_snapshots', input.accountId, input.revision, input.data); break
+  }
+  await connection.execute('UPDATE trading_projection_revisions SET revision=?,updated_at_utc=UTC_TIMESTAMP(3) WHERE trading_account_id=? AND resource_kind=? AND resource_id=?', [input.revision, input.accountId, input.resource, input.resourceId])
+  return true
+}
+
+async function replaceExactTradeStates(connection: PoolConnection, accountId: string, entityKind: 'position' | 'pending_order', terminalInstanceId: string,
+  connectionEpoch: number, revision: number, states: BridgeExactTradeState[], observedAt: string) {
+  await connection.execute('DELETE FROM bridge_trade_state_snapshots_v4 WHERE trading_account_id=? AND entity_kind=?', [accountId, entityKind])
+  for (const state of [...states].sort((left, right) => left.ticket.localeCompare(right.ticket))) {
+    const stateJson = JSON.stringify(state)
+    await connection.execute(`INSERT INTO bridge_trade_state_snapshots_v4
+      (trading_account_id,entity_kind,ticket,terminal_instance_id,connection_epoch,projection_revision,state_json,state_sha256,observed_at_utc,updated_at_utc)
+      VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(3))`, [
+      accountId, entityKind, state.ticket, terminalInstanceId, connectionEpoch, revision, stateJson, sha256Canonical(state), observedAt,
+    ])
+  }
+}
+
+async function absorbProjectedReservations(connection: PoolConnection, accountId: string, entityKind: 'position' | 'pending_order', projectionRevision: number,
+  observedAt: string, states: BridgeExactTradeState[], now: string) {
+  const [rows] = await connection.execute<ReservationProjectionRow[]>(`SELECT r.id reservation_id,r.revision reservation_revision,c.id command_id,c.action,
+      p.params_json,p.expected_state_json,ip.action_json,cr.result_json,cr.completed_at_utc
+    FROM risk_reservations_v4 r
+    INNER JOIN execution_intents i ON i.id=r.execution_intent_id AND i.status='succeeded'
+    INNER JOIN execution_intent_payloads ip ON ip.execution_intent_id=i.id
+    INNER JOIN bridge_commands_v4 c ON c.execution_intent_id=i.id AND c.status='succeeded' AND c.result_sha256 IS NOT NULL
+    INNER JOIN bridge_command_payloads_v4 p ON p.bridge_command_id=c.id
+    INNER JOIN bridge_command_results_v4 cr ON cr.bridge_command_id=c.id AND cr.result_sha256=c.result_sha256 AND cr.conflict=0
+    WHERE r.trading_account_id=? AND r.status='committed' ORDER BY r.id FOR UPDATE`, [accountId])
+  const byTicket = new Map(states.map(state => [state.ticket, state]))
+  const absorbed: string[] = []
+  for (const row of rows) {
+    const params = parsePayload<Record<string, unknown>>(row.params_json)
+    const expectedState = row.expected_state_json ? parsePayload<BridgeExactTradeState>(row.expected_state_json) : null
+    const result = row.result_json ? parsePayload<Record<string, unknown>>(row.result_json) : null
+    const sourceAction = parsePayload<{ expectedState?: Record<string, unknown> }>(row.action_json)
+    const expectedRevision = Number(sourceAction.expectedState?.[entityKind === 'position' ? 'positionsRevision' : 'pendingOrdersRevision'])
+    if (!Number.isSafeInteger(expectedRevision) || projectionRevision <= expectedRevision
+      || Date.parse(observedAt) < new Date(row.completed_at_utc).getTime()) continue
+    if (!projectionProvesCommandResult({ action: row.action, entityKind, params, expectedState, result, states: byTicket })) continue
+    const [update] = await connection.execute<ResultSetHeader>(`UPDATE risk_reservations_v4
+      SET status='absorbed',released_at_utc=?,release_reason='trusted_projection_absorbed',updated_at_utc=?,revision=revision+1
+      WHERE id=? AND status='committed' AND revision=?`, [now, now, row.reservation_id, row.reservation_revision])
+    if (update.affectedRows !== 1) continue
+    await connection.execute(`INSERT INTO risk_reservation_events_v4
+      (risk_reservation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,occurred_at_utc)
+      VALUES (?,'risk.reservation.absorbed','committed','absorbed','trusted_projection_absorbed',?,?,?)`, [
+      row.reservation_id, row.reservation_revision, row.reservation_revision + 1, now,
+    ])
+    absorbed.push(row.reservation_id)
+  }
+  return absorbed
 }

@@ -488,6 +488,10 @@ V4 查询只允许以下资源：
 
 行情可合并和限频；账户、持仓、挂单的结构变化不得被丢弃。终端时区只在可信校准值或状态变化时发送。
 
+阶段 12G 将交易状态流进一步收窄：一个已认证 V4 WebSocket 只承载一个终端档案和一个账户 route，多账户客户端通过多个独立档案连接；额度按活跃 WebSocket/档案而不是保存的账户数量计算。`positions` 与 `pending_orders` 首版只接受 `full_snapshot=true` 且 `deletes=[]` 的完整基线，增量帧返回 `resync_required`，避免用不完整集合证明平仓或撤单。两类 `upserts` 已在 `contracts/bridge-v4.schema.json` 固定为拒绝未知字段的规范化条目：ticket 为十进制文本，价格/手数为十进制定点文本，并完整携带 direction、order type、magic、止损止盈、stop-limit 与到期时间。账户身份从认证 route 注入，Bridge 条目不得自报或覆盖 `account_id`。
+
+服务端只有在以下证据同时成立时，才把成功命令的风险预留从 `committed` 转为 `absorbed`：当前未被替换的 session、严格递增的投影 revision、快照观测时间不早于终端结果、命令结果 ticket 与快照实体精确相符，或完整快照明确证明已平仓/撤单。证据不足继续保留 committed 容量，不按超时猜测吸收。
+
 ### 8.6 确定性命令
 
 命令只允许：
@@ -521,6 +525,8 @@ Bridge 必须先把命令写入本地命令账本，再回复 `command.accepted`
 - `uncertain`
 
 网络断开不能把已提交给 MT 的命令直接标记为 failed；无法确认时使用 `uncertain`，等待 `command.reconcile`。服务端持久化结果后发送 `command.result_ack`，Bridge 收到确认前必须保留结果。
+
+重连恢复每个账户同一时刻最多发送一条 `command.reconcile`。收到并持久化该结果、发送 ACK 后，才处理下一条未知命令；恢复流程永远不进入普通 `command.request` 投递路径。执行 Worker 以 Redis 短租约串行进入账户边界，并由数据库活动命令门阻止前一条命令尚在 queued/dispatched/accepted/uncertain/reconciling 时投递另一个 intent。Worker 崩溃在 queued 之后时只能恢复原 durable command；已经进入 dispatched 的命令不得再次发送。
 
 ### 8.7 能力与 MT4/MT5 差异
 
