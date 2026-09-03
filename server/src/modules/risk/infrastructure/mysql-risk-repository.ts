@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type { TraderDecisionResult } from '../../inference/domain/inference.js'
+import { assessManualRelease, manualReleaseStillValid, type ManualRiskRelease, type ManualReleaseRuleCode } from '../domain/manual-risk-release.js'
 import { DEFAULT_RISK_POLICY, resolveRiskPolicy, riskPolicyHash, RiskError, type AccountRiskPolicyPatch, type AccountRiskSummary, type EffectiveRiskPolicy, type RiskEvaluationInput, type RiskEvaluationResult, type RiskInstrumentSnapshot } from '../domain/risk.js'
-import type { CompleteRiskReviewInput, ReplaceAccountRiskPolicyInput, RiskDecisionDetail, RiskDecisionSummary, RiskRepository, SaveRiskSummaryInput } from '../application/risk-ports.js'
+import type { CompleteRiskReviewInput, CreateManualRiskReleaseInput, ReplaceAccountRiskPolicyInput, RiskDecisionDetail, RiskDecisionSummary, RiskRepository, SaveRiskSummaryInput } from '../application/risk-ports.js'
 
 interface PolicyRow extends RowDataPacket {
   set_id: string; scope: 'platform' | 'account'; owner_user_id: number | null; trading_account_id: string | null
@@ -25,8 +26,16 @@ interface RiskDecisionRow extends RowDataPacket {
   decision_status: RiskDecisionSummary['status']; reject_code: string | null
   platform_policy_version_id: string; account_policy_version_id: string | null
   account_risk_revision: number; created_at_utc: Date; revision: number
+  manual_release_id: string | null
 }
 interface RiskDecisionDetailRow extends RiskDecisionRow { evaluation_json: string | object }
+interface ManualReleaseRow extends RowDataPacket {
+  id: string; user_id: number; trading_account_id: string; status: ManualRiskRelease['status']
+  platform_policy_version_id: string; account_policy_version_id: string | null; policy_set_revision: number
+  released_rules_json: string | object; baseline_json: string | object; risk_state_revision: number
+  breach_fingerprint: string; reason: string; expires_at_utc: Date; created_at_utc: Date
+  invalidated_at_utc: Date | null; invalidation_reason: string | null; revision: number; request_sha256: string
+}
 
 async function transaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>) {
   const connection = await pool.getConnection()
@@ -85,6 +94,11 @@ export class MysqlRiskRepository implements RiskRepository {
         await connection.execute(`INSERT INTO risk_policy_change_items (policy_set_id,policy_version_id,field_code,old_value_json,new_value_json,change_class,requested_by_user_id,reason,changed_at_utc) VALUES (?,?,?,?,?,?,?,?,?)`, [setId, version.insertId, key, JSON.stringify(currentPatch[key as keyof AccountRiskPolicyPatch] ?? null), JSON.stringify(input.patch[key as keyof AccountRiskPolicyPatch] ?? null), changeClass(key, currentPatch, input.patch), input.actorUserId, input.reason, input.changedAt])
       }
       await outbox(connection, 'risk_policy', setId, 'risk.policy.changed', { account_id: input.accountId, policy_version_id: String(version.insertId), revision: String(nextRevision) })
+      const [releaseRows] = await connection.execute<ManualReleaseRow[]>(`${manualReleaseSelect} WHERE r.trading_account_id=? AND r.status='active' FOR UPDATE`, [input.accountId])
+      for (const row of releaseRows) {
+        await connection.execute(`UPDATE risk_manual_releases SET status='superseded',invalidated_at_utc=?,invalidation_reason='policy_changed',revision=revision+1 WHERE id=? AND status='active'`, [input.changedAt, row.id])
+        await outbox(connection, 'risk_manual_release', row.id, 'risk.manual_release.changed', { manual_release_id: row.id, account_id: row.trading_account_id, status: 'superseded', invalidation_reason: 'policy_changed', revision: String(Number(row.revision) + 1) })
+      }
     })
     const policy = await this.getEffectivePolicy(input.userId, input.accountId)
     if (!policy) throw new RiskError('risk_policy_not_found', 404)
@@ -107,8 +121,63 @@ export class MysqlRiskRepository implements RiskRepository {
       await connection.execute(`INSERT INTO account_risk_summaries (trading_account_id,policy_version_id,payload_json,observed_at_utc,revision) VALUES (?,NULL,?,?,?) ON DUPLICATE KEY UPDATE payload_json=VALUES(payload_json),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.summary.accountId, payload, input.summary.observedAt, input.summary.revision])
       await connection.execute(`INSERT INTO risk_state_events (trading_account_id,user_id,event_type,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,?,'summary_projected',?,?,?,?)`, [input.summary.accountId, input.summary.userId, previous, input.summary.revision, payload, input.summary.observedAt])
       await outbox(connection, 'risk_summary', input.summary.accountId, 'risk.summary.changed', { account_id: input.summary.accountId, data_complete: input.summary.dataComplete, revision: String(input.summary.revision) })
+      const [releaseRows] = await connection.execute<ManualReleaseRow[]>(`${manualReleaseSelect} WHERE r.trading_account_id=? AND r.status='active' FOR UPDATE`, [input.summary.accountId])
+      for (const row of releaseRows) {
+        const release = mapManualRelease(row)
+        if (manualReleaseStillValid(release, input.summary, new Date(input.summary.observedAt))) continue
+        const status = Date.parse(release.expiresAt) <= Date.parse(input.summary.observedAt) ? 'expired' : 'superseded'
+        const reason = status === 'expired' ? 'release_expired' : 'risk_state_deteriorated'
+        await connection.execute('UPDATE risk_manual_releases SET status=?,invalidated_at_utc=?,invalidation_reason=?,revision=revision+1 WHERE id=? AND status=\'active\'', [status, input.summary.observedAt, reason, release.id])
+        await outbox(connection, 'risk_manual_release', release.id, 'risk.manual_release.changed', { manual_release_id: release.id, account_id: release.accountId, status, invalidation_reason: reason, revision: String(release.revision + 1) })
+      }
     })
     return input.summary
+  }
+
+  async createManualRelease(input: CreateManualRiskReleaseInput) {
+    return transaction(this.pool, async connection => {
+      const [owned] = await connection.execute<RowDataPacket[]>(`SELECT a.id FROM trading_accounts a INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.user_id=? AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE a.id=? FOR UPDATE`, [input.release.userId, input.release.accountId])
+      if (!owned[0]) throw new RiskError('risk_account_forbidden', 403)
+      const [duplicateRows] = await connection.execute<ManualReleaseRow[]>(`${manualReleaseSelect} WHERE r.user_id=? AND r.trading_account_id=? AND r.idempotency_key=? LIMIT 1 FOR UPDATE`, [input.release.userId, input.release.accountId, input.idempotencyKey])
+      if (duplicateRows[0]) {
+        if (duplicateRows[0].request_sha256 !== input.requestHash) throw new RiskError('idempotency_conflict', 409)
+        return mapManualRelease(duplicateRows[0])
+      }
+      const [stateRows] = await connection.execute<RevisionRow[]>('SELECT revision FROM account_risk_states WHERE trading_account_id=? FOR UPDATE', [input.release.accountId])
+      const [summaryRows] = await connection.execute<(PayloadRow & { revision: number })[]>('SELECT payload_json,revision FROM account_risk_summaries WHERE trading_account_id=? FOR UPDATE', [input.release.accountId])
+      const summaryRow = summaryRows[0]
+      if (!summaryRow || Number(stateRows[0]?.revision) !== input.expectedSummaryRevision || Number(summaryRow.revision) !== input.expectedSummaryRevision) throw new RiskError('risk_summary_revision_conflict', 412)
+      const policy = await effectivePolicyOnConnection(connection, input.release.userId, input.release.accountId)
+      if (riskPolicyHash(policy) !== input.expectedPolicyHash) throw new RiskError('risk_policy_revision_conflict', 409)
+      const summary = { ...parse<AccountRiskSummary>(summaryRow.payload_json), revision: Number(summaryRow.revision) }
+      const assessment = assessManualRelease(policy, summary, new Date(input.release.createdAt))
+      if (!assessment.available) throw new RiskError(assessment.code, 409)
+      if (assessment.breachFingerprint !== input.release.breachFingerprint || JSON.stringify(assessment.rules) !== JSON.stringify(input.release.releasedRules)) throw new RiskError('risk_manual_release_context_conflict', 409)
+      const [episodeRows] = await connection.execute<ManualReleaseRow[]>(`${manualReleaseSelect} WHERE r.trading_account_id=? AND r.breach_fingerprint=? LIMIT 1 FOR UPDATE`, [input.release.accountId, input.release.breachFingerprint])
+      if (episodeRows[0]) throw new RiskError('risk_manual_release_episode_already_released', 409)
+      const [activeRows] = await connection.execute<ManualReleaseRow[]>(`${manualReleaseSelect} WHERE r.trading_account_id=? AND r.status='active' FOR UPDATE`, [input.release.accountId])
+      await connection.execute(`UPDATE risk_manual_releases SET status='superseded',invalidated_at_utc=?,invalidation_reason='new_manual_release',revision=revision+1 WHERE trading_account_id=? AND status='active'`, [input.release.createdAt, input.release.accountId])
+      for (const row of activeRows) {
+        await outbox(connection, 'risk_manual_release', row.id, 'risk.manual_release.changed', { manual_release_id: row.id, account_id: row.trading_account_id, status: 'superseded', invalidation_reason: 'new_manual_release', revision: String(Number(row.revision) + 1) })
+      }
+      await connection.execute(`INSERT INTO risk_manual_releases (id,user_id,trading_account_id,platform_policy_version_id,account_policy_version_id,policy_set_revision,risk_state_revision,released_rules_json,baseline_json,breach_fingerprint,reason,idempotency_key,request_sha256,status,expires_at_utc,created_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,1)`, [input.release.id, input.release.userId, input.release.accountId, policy.platformPolicyVersionId, policy.accountPolicyVersionId, policy.policySetRevision, input.release.riskStateRevision, JSON.stringify(input.release.releasedRules), JSON.stringify(input.release.baseline), input.release.breachFingerprint, input.release.reason, input.idempotencyKey, input.requestHash, input.release.expiresAt, input.release.createdAt])
+      await outbox(connection, 'risk_manual_release', input.release.id, 'risk.manual_release.changed', { manual_release_id: input.release.id, account_id: input.release.accountId, status: 'active', invalidation_reason: null, revision: '1' })
+      return input.release
+    })
+  }
+
+  async getManualRelease(userId: number, accountId: string) {
+    const [rows] = await this.pool.execute<ManualReleaseRow[]>(`${manualReleaseSelect} INNER JOIN trading_account_ownerships o ON o.trading_account_id=r.trading_account_id AND o.user_id=? AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE r.trading_account_id=? ORDER BY r.created_at_utc DESC,r.id DESC LIMIT 1`, [userId, accountId])
+    if (!rows[0]) return null
+    const release = mapManualRelease(rows[0])
+    return release.status === 'active' && Date.parse(release.expiresAt) <= Date.now()
+      ? { ...release, status: 'expired' as const, invalidatedAt: release.expiresAt, invalidationReason: 'release_expired' }
+      : release
+  }
+
+  async getManualReleaseByIdempotency(userId: number, accountId: string, idempotencyKey: string) {
+    const [rows] = await this.pool.execute<ManualReleaseRow[]>(`${manualReleaseSelect} INNER JOIN trading_account_ownerships o ON o.trading_account_id=r.trading_account_id AND o.user_id=? AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE r.trading_account_id=? AND r.idempotency_key=? LIMIT 1`, [userId, accountId, idempotencyKey])
+    return rows[0] ? { release: mapManualRelease(rows[0]), requestHash: rows[0].request_sha256 } : null
   }
 
   async loadReviewCandidate(decisionId: string) {
@@ -132,6 +201,7 @@ export class MysqlRiskRepository implements RiskRepository {
       policy, summary,
       quote: { symbol: quote.symbol, bid: String(quote.bid), ask: String(quote.ask), observedAt: new Date(quote.observed_at_utc).toISOString(), revision: Number(quote.revision) },
       instrument: instrumentSnapshot(instrument), positions: positionRows.map(item => parse(item.payload_json)), pendingOrders: orderRows.map(item => parse(item.payload_json)),
+      manualRelease: await this.activeManualRelease(row.user_id, row.trading_account_id),
       currentRevisions: { analysis: Number(row.analysis_revision), subscription: Number(row.subscription_revision), account: Number(row.account_revision), positions: Number(row.positions_revision ?? 0), pendingOrders: Number(row.pending_orders_revision ?? 0), quote: Number(row.quote_revision), contract: Number(row.contract_revision), risk: Number(row.risk_revision) },
     } satisfies RiskEvaluationInput
   }
@@ -147,7 +217,7 @@ export class MysqlRiskRepository implements RiskRepository {
       if (!decision || decision.status !== 'proposed' || Number(decision.revision) !== input.decisionRevision || decision.risk_decision_id) throw new RiskError('risk_trade_decision_revision_conflict', 409)
       const [states] = await connection.execute<RevisionRow[]>('SELECT revision FROM account_risk_states WHERE trading_account_id=? FOR SHARE', [identity.trading_account_id])
       if (Number(states[0]?.revision) !== input.accountRiskRevision) throw new RiskError('risk_summary_revision_conflict', 409)
-      const [currentRows] = await connection.execute<(RowDataPacket & { analysis_revision: number; subscription_revision: number; account_revision: number; positions_revision: number; pending_orders_revision: number; quote_revision: number; contract_revision: number; risk_revision: number })[]>(`SELECT a.revision analysis_revision,s.revision subscription_revision,ars.revision account_revision,COALESCE(pr.revision,0) positions_revision,COALESCE(orr.revision,0) pending_orders_revision,q.revision quote_revision,i.revision contract_revision,rs.revision risk_revision FROM trade_decisions d INNER JOIN ai_trader_runs r ON r.id=d.trader_run_id INNER JOIN market_analyses a ON a.id=d.market_analysis_id INNER JOIN strategy_subscriptions s ON s.id=r.subscription_id LEFT JOIN account_runtime_snapshots ars ON ars.trading_account_id=d.trading_account_id LEFT JOIN trading_projection_revisions pr ON pr.trading_account_id=d.trading_account_id AND pr.resource_kind='positions' AND pr.resource_id='open' LEFT JOIN trading_projection_revisions orr ON orr.trading_account_id=d.trading_account_id AND orr.resource_kind='pending_orders' AND orr.resource_id='open' LEFT JOIN market_quotes q ON q.trading_account_id=d.trading_account_id AND q.symbol=a.standard_symbol LEFT JOIN market_instrument_snapshots i ON i.trading_account_id=d.trading_account_id AND i.symbol=a.standard_symbol LEFT JOIN account_risk_summaries rs ON rs.trading_account_id=d.trading_account_id WHERE d.id=? LIMIT 1 FOR SHARE`, [input.decisionId])
+      const [currentRows] = await connection.execute<(RowDataPacket & { analysis_revision: number; subscription_revision: number; account_revision: number; positions_revision: number; pending_orders_revision: number; quote_revision: number; contract_revision: number; risk_revision: number; risk_payload: string | object })[]>(`SELECT a.revision analysis_revision,s.revision subscription_revision,ars.revision account_revision,COALESCE(pr.revision,0) positions_revision,COALESCE(orr.revision,0) pending_orders_revision,q.revision quote_revision,i.revision contract_revision,rs.revision risk_revision,rs.payload_json risk_payload FROM trade_decisions d INNER JOIN ai_trader_runs r ON r.id=d.trader_run_id INNER JOIN market_analyses a ON a.id=d.market_analysis_id INNER JOIN strategy_subscriptions s ON s.id=r.subscription_id LEFT JOIN account_runtime_snapshots ars ON ars.trading_account_id=d.trading_account_id LEFT JOIN trading_projection_revisions pr ON pr.trading_account_id=d.trading_account_id AND pr.resource_kind='positions' AND pr.resource_id='open' LEFT JOIN trading_projection_revisions orr ON orr.trading_account_id=d.trading_account_id AND orr.resource_kind='pending_orders' AND orr.resource_id='open' LEFT JOIN market_quotes q ON q.trading_account_id=d.trading_account_id AND q.symbol=a.standard_symbol LEFT JOIN market_instrument_snapshots i ON i.trading_account_id=d.trading_account_id AND i.symbol=a.standard_symbol LEFT JOIN account_risk_summaries rs ON rs.trading_account_id=d.trading_account_id WHERE d.id=? LIMIT 1 FOR SHARE`, [input.decisionId])
       const current = currentRows[0]
       if (!current || Number(current.analysis_revision) !== input.expectedRevisions.analysis
         || Number(current.subscription_revision) !== input.expectedRevisions.subscription
@@ -159,8 +229,18 @@ export class MysqlRiskRepository implements RiskRepository {
         || Number(current.risk_revision) !== input.expectedRevisions.risk) throw new RiskError('risk_review_context_revision_conflict', 409)
       const policy = await effectivePolicyOnConnection(connection, identity.user_id, identity.trading_account_id)
       if (policy.policySetRevision !== input.policySetRevision || riskPolicyHash(policy) !== input.evaluation.policyHash) throw new RiskError('risk_policy_revision_conflict', 409)
+      if (input.evaluation.manualReleaseId) {
+        const [releaseRows] = await connection.execute<ManualReleaseRow[]>(`${manualReleaseSelect} WHERE r.id=? AND r.trading_account_id=? AND r.status='active' LIMIT 1 FOR SHARE`, [input.evaluation.manualReleaseId, identity.trading_account_id])
+        const release = releaseRows[0] ? mapManualRelease(releaseRows[0]) : null
+        const summary = { ...parse<AccountRiskSummary>(current.risk_payload), revision: Number(current.risk_revision) }
+        if (!release || release.revision !== input.evaluation.manualReleaseRevision
+          || release.platformPolicyVersionId !== policy.platformPolicyVersionId
+          || release.accountPolicyVersionId !== policy.accountPolicyVersionId
+          || release.policySetRevision !== policy.policySetRevision
+          || !manualReleaseStillValid(release, summary, new Date())) throw new RiskError('risk_manual_release_revision_conflict', 409)
+      }
       const payload = JSON.stringify(input.evaluation)
-      await connection.execute(`INSERT INTO risk_decisions (id,trade_decision_id,user_id,trading_account_id,platform_policy_version_id,account_policy_version_id,policy_set_revision,account_risk_revision,decision_status,reject_code,policy_sha256,revision,created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?)`, [input.riskDecisionId, input.decisionId, identity.user_id, identity.trading_account_id, policy.platformPolicyVersionId, policy.accountPolicyVersionId, policy.policySetRevision, input.accountRiskRevision, input.evaluation.status, input.evaluation.rejectCode, input.evaluation.policyHash, input.evaluation.evaluatedAt])
+      await connection.execute(`INSERT INTO risk_decisions (id,trade_decision_id,user_id,trading_account_id,platform_policy_version_id,account_policy_version_id,policy_set_revision,account_risk_revision,manual_release_id,decision_status,reject_code,policy_sha256,revision,created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)`, [input.riskDecisionId, input.decisionId, identity.user_id, identity.trading_account_id, policy.platformPolicyVersionId, policy.accountPolicyVersionId, policy.policySetRevision, input.accountRiskRevision, input.evaluation.manualReleaseId, input.evaluation.status, input.evaluation.rejectCode, input.evaluation.policyHash, input.evaluation.evaluatedAt])
       await connection.execute('INSERT INTO risk_decision_payloads (risk_decision_id,evaluation_json,payload_sha256,payload_bytes) VALUES (?,?,?,?)', [input.riskDecisionId, payload, sha256(input.evaluation), Buffer.byteLength(payload)])
       const tradeStatus = input.evaluation.status === 'approved' ? 'accepted' : 'risk_rejected'
       await connection.execute('UPDATE trade_decisions SET risk_decision_id=?,status=?,revision=revision+1 WHERE id=?', [input.riskDecisionId, tradeStatus, input.decisionId])
@@ -179,10 +259,17 @@ export class MysqlRiskRepository implements RiskRepository {
     const [rows] = await this.pool.execute<RiskDecisionRow[]>(`${riskDecisionSelect} WHERE rd.user_id=? AND rd.trading_account_id=? ORDER BY rd.created_at_utc DESC,rd.id DESC LIMIT ?`, [userId, accountId, limit])
     return rows.map(mapDecision)
   }
+
+  private async activeManualRelease(userId: number, accountId: string) {
+    const [rows] = await this.pool.execute<ManualReleaseRow[]>(`${manualReleaseSelect} WHERE r.user_id=? AND r.trading_account_id=? AND r.status='active' AND r.expires_at_utc>UTC_TIMESTAMP(3) ORDER BY r.created_at_utc DESC,r.id DESC LIMIT 1`, [userId, accountId])
+    return rows[0] ? mapManualRelease(rows[0]) : null
+  }
 }
 
-const riskDecisionFields = `rd.id,rd.trade_decision_id,rd.user_id,CAST(rd.trading_account_id AS CHAR) trading_account_id,rd.decision_status,rd.reject_code,CAST(rd.platform_policy_version_id AS CHAR) platform_policy_version_id,CAST(rd.account_policy_version_id AS CHAR) account_policy_version_id,rd.account_risk_revision,rd.created_at_utc,rd.revision`
+const riskDecisionFields = `rd.id,rd.trade_decision_id,rd.user_id,CAST(rd.trading_account_id AS CHAR) trading_account_id,rd.decision_status,rd.reject_code,CAST(rd.platform_policy_version_id AS CHAR) platform_policy_version_id,CAST(rd.account_policy_version_id AS CHAR) account_policy_version_id,rd.account_risk_revision,rd.manual_release_id,rd.created_at_utc,rd.revision`
 const riskDecisionSelect = `SELECT ${riskDecisionFields} FROM risk_decisions rd`
+const manualReleaseFields = `r.id,r.user_id,CAST(r.trading_account_id AS CHAR) trading_account_id,CAST(r.platform_policy_version_id AS CHAR) platform_policy_version_id,CAST(r.account_policy_version_id AS CHAR) account_policy_version_id,r.policy_set_revision,r.status,r.released_rules_json,r.baseline_json,r.risk_state_revision,r.breach_fingerprint,r.reason,r.expires_at_utc,r.created_at_utc,r.invalidated_at_utc,r.invalidation_reason,r.revision,r.request_sha256`
+const manualReleaseSelect = `SELECT ${manualReleaseFields} FROM risk_manual_releases r`
 
 function policySelect(where: string, lock = false) {
   return `SELECT CAST(p.id AS CHAR) set_id,p.scope,p.owner_user_id,CAST(p.trading_account_id AS CHAR) trading_account_id,p.revision set_revision,CAST(v.id AS CHAR) version_id,v.policy_json,p.updated_at_utc FROM risk_policy_sets p INNER JOIN risk_policy_versions v ON v.id=p.active_version_id AND v.policy_set_id=p.id WHERE p.status='active' AND ${where} LIMIT 1${lock ? ' FOR SHARE' : ''}`
@@ -228,7 +315,20 @@ function parseTradeEnabled(value: Record<string, unknown>) {
 }
 
 function mapDecision(row: RiskDecisionRow): RiskDecisionSummary {
-  return { id: row.id, tradeDecisionId: row.trade_decision_id, userId: row.user_id, accountId: row.trading_account_id, status: row.decision_status, rejectCode: row.reject_code, platformPolicyVersionId: row.platform_policy_version_id, accountPolicyVersionId: row.account_policy_version_id, accountRiskRevision: Number(row.account_risk_revision), createdAt: new Date(row.created_at_utc).toISOString(), revision: Number(row.revision) }
+  return { id: row.id, tradeDecisionId: row.trade_decision_id, userId: row.user_id, accountId: row.trading_account_id, status: row.decision_status, rejectCode: row.reject_code, platformPolicyVersionId: row.platform_policy_version_id, accountPolicyVersionId: row.account_policy_version_id, accountRiskRevision: Number(row.account_risk_revision), manualReleaseId: row.manual_release_id, createdAt: new Date(row.created_at_utc).toISOString(), revision: Number(row.revision) }
+}
+
+function mapManualRelease(row: ManualReleaseRow): ManualRiskRelease {
+  return {
+    id: row.id, userId: Number(row.user_id), accountId: row.trading_account_id,
+    platformPolicyVersionId: row.platform_policy_version_id, accountPolicyVersionId: row.account_policy_version_id,
+    policySetRevision: Number(row.policy_set_revision), status: row.status,
+    releasedRules: parse<ManualReleaseRuleCode[]>(row.released_rules_json), baseline: parse(row.baseline_json),
+    riskStateRevision: Number(row.risk_state_revision), breachFingerprint: row.breach_fingerprint, reason: row.reason,
+    expiresAt: new Date(row.expires_at_utc).toISOString(), createdAt: new Date(row.created_at_utc).toISOString(),
+    invalidatedAt: row.invalidated_at_utc ? new Date(row.invalidated_at_utc).toISOString() : null,
+    invalidationReason: row.invalidation_reason, revision: Number(row.revision),
+  }
 }
 
 function changeClass(key: string, current: AccountRiskPolicyPatch, patch: AccountRiskPolicyPatch): 'tighten' | 'relax_within_platform' | 'toggle' {

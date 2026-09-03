@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest'
 import type { TraderAction, TraderDecisionResult } from '../src/modules/inference/index.js'
 import {
   buildAccountRiskSummary, DEFAULT_RISK_POLICY, evaluateRisk, resolveRiskPolicy, RiskError,
-  RiskReviewWorker, riskRoutes, RiskService,
+  assessManualRelease, RiskReviewWorker, riskRoutes, RiskService,
   type AccountRiskSummary, type CompleteRiskReviewInput, type EffectiveRiskPolicy,
-  type ReplaceAccountRiskPolicyInput, type RiskDecisionDetail, type RiskDecisionSummary,
+  type CreateManualRiskReleaseInput, type ManualRiskRelease, type ReplaceAccountRiskPolicyInput, type RiskDecisionDetail, type RiskDecisionSummary,
   type RiskEvaluationInput, type RiskRepository, type SaveRiskSummaryInput,
 } from '../src/modules/risk/index.js'
 
@@ -60,7 +60,19 @@ function input(overrides: Partial<RiskEvaluationInput> = {}): RiskEvaluationInpu
 }
 
 function riskDecision(id = 'risk-1'): RiskDecisionSummary {
-  return { id, tradeDecisionId: 'decision-1', userId: 42, accountId: '7', status: 'approved', rejectCode: null, platformPolicyVersionId: '101', accountPolicyVersionId: '102', accountRiskRevision: 6, createdAt: now.toISOString(), revision: 1 }
+  return { id, tradeDecisionId: 'decision-1', userId: 42, accountId: '7', status: 'approved', rejectCode: null, platformPolicyVersionId: '101', accountPolicyVersionId: '102', accountRiskRevision: 6, manualReleaseId: null, createdAt: now.toISOString(), revision: 1 }
+}
+
+function manualRelease(blocked = summary({ dailyLossPercent: 3.2 })): ManualRiskRelease {
+  const assessment = assessManualRelease(policy(), blocked, now)
+  if (!assessment.available) throw new Error(assessment.code)
+  return {
+    id: 'release-1', userId: 42, accountId: '7', platformPolicyVersionId: '101', accountPolicyVersionId: '102',
+    policySetRevision: 3, status: 'active', releasedRules: assessment.rules,
+    baseline: assessment.baseline, riskStateRevision: blocked.revision, breachFingerprint: assessment.breachFingerprint,
+    reason: '用户确认风险后恢复交易', expiresAt: assessment.expiresAt, createdAt: now.toISOString(),
+    invalidatedAt: null, invalidationReason: null, revision: 1,
+  }
 }
 
 class MemoryRiskRepository implements RiskRepository {
@@ -69,11 +81,17 @@ class MemoryRiskRepository implements RiskRepository {
   replaceInput: ReplaceAccountRiskPolicyInput | null = null
   currentPolicy = policy()
   currentSummary = summary()
+  currentRelease: ManualRiskRelease | null = null
+  releaseRequestHash: string | null = null
+  releaseIdempotencyKey: string | null = null
 
   async getEffectivePolicy(userId: number, accountId: string) { return userId === 42 && accountId === '7' ? this.currentPolicy : null }
   async replaceAccountPolicy(value: ReplaceAccountRiskPolicyInput) { this.replaceInput = value; this.currentPolicy = { ...this.currentPolicy, policySetRevision: value.expectedRevision + 1, values: { ...this.currentPolicy.values, ...value.patch }, updatedAt: value.changedAt }; return this.currentPolicy }
   async getAccountSummary(userId: number, accountId: string) { return userId === 42 && accountId === '7' ? this.currentSummary : null }
   async saveAccountSummary(value: SaveRiskSummaryInput) { this.currentSummary = value.summary; return value.summary }
+  async createManualRelease(value: CreateManualRiskReleaseInput) { this.currentRelease = value.release; this.releaseRequestHash = value.requestHash; this.releaseIdempotencyKey = value.idempotencyKey; return value.release }
+  async getManualReleaseByIdempotency(userId: number, accountId: string, idempotencyKey: string) { return userId === 42 && accountId === '7' && idempotencyKey === this.releaseIdempotencyKey && this.currentRelease && this.releaseRequestHash ? { release: this.currentRelease, requestHash: this.releaseRequestHash } : null }
+  async getManualRelease(userId: number, accountId: string) { return userId === 42 && accountId === '7' ? this.currentRelease : null }
   async loadReviewCandidate(decisionId: string) { return decisionId === 'decision-1' ? this.candidate : null }
   async completeReview(value: CompleteRiskReviewInput) { this.completeInput = value; return { ...riskDecision(value.riskDecisionId), status: value.evaluation.status, rejectCode: value.evaluation.rejectCode } }
   async getDecision(userId: number, id: string): Promise<RiskDecisionDetail | null> { return userId === 42 ? { ...riskDecision(id), evaluation: evaluateRisk(input(), now) } : null }
@@ -135,6 +153,31 @@ describe('Stage 12D deterministic risk review', () => {
     expect(evaluateRisk(input({ result: hold }), now)).toMatchObject({ status: 'approved', approvedActions: [] })
   })
 
+  it('allows one audited account-level release but relocks on deterioration or a platform ceiling', () => {
+    const blocked = summary({ dailyLossPercent: 3.2 })
+    const released = evaluateRisk(input({ summary: blocked, manualRelease: manualRelease(blocked) }), now)
+    expect(released).toMatchObject({ status: 'approved', manualReleaseId: 'release-1', manualReleaseRevision: 1 })
+    expect(released.rules).toContainEqual(expect.objectContaining({ code: 'RISK_MANUAL_RELEASE_APPLIED', outcome: 'passed' }))
+    expect(evaluateRisk(input({ summary: summary({ dailyLossPercent: 3.3 }), manualRelease: manualRelease(blocked) }), now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_DAILY_LOSS_LIMIT', manualReleaseId: null })
+    expect(evaluateRisk(input({ summary: blocked, manualRelease: { ...manualRelease(blocked), platformPolicyVersionId: 'older-policy' } }), now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_DAILY_LOSS_LIMIT' })
+    expect(evaluateRisk(input({ summary: summary({ dailyLossPercent: 5 }), manualRelease: manualRelease(blocked) }), now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_PLATFORM_DAILY_LOSS_LIMIT' })
+    expect(assessManualRelease(policy(), summary({ dailyLossPercent: 5 }), now)).toEqual({ available: false, code: 'risk_manual_release_platform_limit' })
+    expect(assessManualRelease(policy(), summary({ dailyLossPercent: 3.2, businessDate: '2026-02-30' }), now)).toEqual({ available: false, code: 'risk_manual_release_business_date_invalid' })
+  })
+
+  it('creates a manual release only after explicit acknowledgement and a current risk revision', async () => {
+    const repository = new MemoryRiskRepository()
+    repository.currentSummary = summary({ dailyLossPercent: 3.2 })
+    const service = new RiskService(repository)
+    await expect(service.createManualRelease({ userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-request-1', acknowledgeRisk: false, reason: '恢复交易' }, now)).rejects.toMatchObject({ code: 'risk_manual_release_acknowledgement_required' })
+    const release = await service.createManualRelease({ userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-request-1', acknowledgeRisk: true, reason: '确认风险后恢复交易' }, now)
+    expect(release).toMatchObject({ accountId: '7', status: 'active', releasedRules: ['RISK_DAILY_LOSS_LIMIT'], riskStateRevision: 6 })
+    await expect(service.createManualRelease({ userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-request-1', acknowledgeRisk: true, reason: '确认风险后恢复交易' }, now)).resolves.toMatchObject({ id: release.id })
+    await expect(service.createManualRelease({ userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-request-1', acknowledgeRisk: true, reason: '修改后的恢复原因' }, now)).rejects.toMatchObject({ code: 'idempotency_conflict' })
+    expect(assessManualRelease(policy({}, true), repository.currentSummary, now)).toEqual({ available: false, code: 'risk_manual_release_global_control' })
+    await expect(service.manualRelease(9, '7')).rejects.toMatchObject({ code: 'risk_policy_not_found' })
+  })
+
   it('allows exact close, cancel and tighter protection while risk-increasing actions remain halted', () => {
     const closed = action({ kind: 'close_position', parameters: { ticket: 'p-1' } })
     const halted = input({ policy: policy({ accountKillSwitch: true }), summary: summary({ dataComplete: false, incompleteReasons: ['history_gap'] }), result: decision([closed]) })
@@ -178,6 +221,11 @@ describe('Stage 12D deterministic risk review', () => {
     expect(updated.statusCode).toBe(200); expect(repository.replaceInput).toMatchObject({ expectedRevision: 3, patch: { maxRiskPerTradePercent: 0.5 } })
     const missingCas = await app.inject({ method: 'PUT', url: '/api/v4/risk-accounts/7/policy', payload: { reason: '无版本' } })
     expect(missingCas.statusCode).toBe(428)
+    repository.currentSummary = summary({ dailyLossPercent: 3.2 })
+    const released = await app.inject({ method: 'POST', url: '/api/v4/risk-accounts/7/manual-release', headers: { 'if-match': '"6"', 'idempotency-key': 'release-request-http-1' }, payload: { acknowledge_risk: true, reason: '确认风险后恢复交易' } })
+    expect(released.statusCode).toBe(201); expect(released.json().data).toMatchObject({ status: 'active', released_rules: ['RISK_DAILY_LOSS_LIMIT'] })
+    const currentRelease = await app.inject({ method: 'GET', url: '/api/v4/risk-accounts/7/manual-release' })
+    expect(currentRelease.json().data).toMatchObject({ account_id: '7', risk_state_revision: '6' })
     const detail = await app.inject({ method: 'GET', url: '/api/v4/risk-decisions/risk-1' })
     expect(detail.json().data).toHaveProperty('rules')
     await app.close()
@@ -185,6 +233,7 @@ describe('Stage 12D deterministic risk review', () => {
 
   it('adds append-only normalized migration and keeps execution, Bridge and external I/O outside Stage 12D', async () => {
     const sql = await readFile(new URL('../db/migrations/20260903_007_deterministic_risk_review.sql', import.meta.url), 'utf8')
+    const releaseSql = await readFile(new URL('../db/migrations/20260903_008_manual_risk_release.sql', import.meta.url), 'utf8')
     const repository = await readFile(new URL('../src/modules/risk/infrastructure/mysql-risk-repository.ts', import.meta.url), 'utf8')
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS risk_policy_versions')
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS account_risk_states')
@@ -192,6 +241,11 @@ describe('Stage 12D deterministic risk review', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS risk_decisions')
     expect(sql).toContain('legacy_source_table')
     expect(sql).not.toMatch(/DROP TABLE|TRUNCATE TABLE|DELETE FROM/i)
+    expect(releaseSql).toContain('CREATE TABLE IF NOT EXISTS risk_manual_releases')
+    expect(releaseSql).toContain('breach_fingerprint')
+    expect(releaseSql).toContain('uk_risk_manual_release_request')
+    expect(releaseSql).toContain('legacy_source_table')
+    expect(releaseSql).not.toMatch(/DROP TABLE|TRUNCATE TABLE|DELETE FROM/i)
     expect(repository).toContain("'risk.decision.created'")
     expect(repository).not.toMatch(/execution_intents|bridge_commands|command\.request|OrderSend/i)
   })
@@ -202,10 +256,14 @@ describe('Stage 12D deterministic risk review', () => {
     expect(openapi).toContain('/risk-accounts/{account_id}/summary')
     expect(openapi).toContain('/risk-decisions/{risk_decision_id}')
     expect(openapi).toContain('approved_actions')
-    expect(openapi).toContain('stage-12d-deterministic-risk-review')
+    expect(openapi).toContain('stage-12d1-manual-risk-release')
+    expect(openapi).toContain('/risk-accounts/{account_id}/manual-release')
     expect(realtime).toContain('risk.policy.changed')
     expect(realtime).toContain('risk.summary.changed')
     expect(realtime).toContain('risk.decision.created')
+    expect(realtime).toContain('risk.manual_release.changed')
     expect(realtime).not.toContain('approved_actions')
+    expect(realtime).not.toContain('breach_fingerprint')
+    expect(realtime).not.toContain('released_rules')
   })
 })

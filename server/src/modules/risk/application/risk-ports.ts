@@ -1,4 +1,5 @@
 import type { AccountRiskPolicyPatch, AccountRiskSummary, EffectiveRiskPolicy, RiskEvaluationInput, RiskEvaluationResult } from '../domain/risk.js'
+import type { ManualRiskRelease } from '../domain/manual-risk-release.js'
 
 export interface ReplaceAccountRiskPolicyInput {
   userId: number
@@ -13,6 +14,14 @@ export interface ReplaceAccountRiskPolicyInput {
 export interface SaveRiskSummaryInput {
   summary: AccountRiskSummary
   expectedRevision: number | null
+}
+
+export interface CreateManualRiskReleaseInput {
+  release: ManualRiskRelease
+  expectedSummaryRevision: number
+  expectedPolicyHash: string
+  idempotencyKey: string
+  requestHash: string
 }
 
 export interface CompleteRiskReviewInput {
@@ -35,6 +44,7 @@ export interface RiskDecisionSummary {
   platformPolicyVersionId: string
   accountPolicyVersionId: string | null
   accountRiskRevision: number
+  manualReleaseId: string | null
   createdAt: string
   revision: number
 }
@@ -48,6 +58,9 @@ export interface RiskRepository {
   replaceAccountPolicy(input: ReplaceAccountRiskPolicyInput): Promise<EffectiveRiskPolicy>
   getAccountSummary(userId: number, accountId: string): Promise<AccountRiskSummary | null>
   saveAccountSummary(input: SaveRiskSummaryInput): Promise<AccountRiskSummary>
+  createManualRelease(input: CreateManualRiskReleaseInput): Promise<ManualRiskRelease>
+  getManualReleaseByIdempotency(userId: number, accountId: string, idempotencyKey: string): Promise<{ release: ManualRiskRelease; requestHash: string } | null>
+  getManualRelease(userId: number, accountId: string): Promise<ManualRiskRelease | null>
   loadReviewCandidate(decisionId: string): Promise<RiskEvaluationInput | null>
   completeReview(input: CompleteRiskReviewInput): Promise<RiskDecisionSummary>
   getDecision(userId: number, decisionId: string): Promise<RiskDecisionDetail | null>

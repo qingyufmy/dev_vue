@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import type { RiskService } from '../../application/risk-service.js'
 import type { RiskDecisionDetail, RiskDecisionSummary } from '../../application/risk-ports.js'
+import type { ManualRiskRelease } from '../../domain/manual-risk-release.js'
 import { RiskError, type AccountRiskPolicyPatch, type AccountRiskSummary, type EffectiveRiskPolicy } from '../../domain/risk.js'
 
 export interface RiskRequestAuthenticator {
@@ -22,6 +23,11 @@ function policyDto(value: EffectiveRiskPolicy) {
     allowed_symbols: policy.allowedSymbols, fail_closed_on_incomplete_data: policy.failClosedOnIncompleteData,
     max_quote_age_seconds: policy.maxQuoteAgeSeconds, max_risk_summary_age_seconds: policy.maxRiskSummaryAgeSeconds,
     max_decision_age_seconds: policy.maxDecisionAgeSeconds, max_price_deviation_percent: decimal(policy.maxPriceDeviationPercent),
+    manual_release_enabled: policy.manualReleaseEnabled,
+    manual_release_max_daily_loss_percent: decimal(policy.manualReleaseMaxDailyLossPercent),
+    manual_release_max_drawdown_percent: decimal(policy.manualReleaseMaxDrawdownPercent),
+    manual_release_max_daily_open_count: policy.manualReleaseMaxDailyOpenCount,
+    manual_release_consecutive_loss_limit: policy.manualReleaseConsecutiveLossLimit,
     max_risk_per_trade_percent: decimal(policy.maxRiskPerTradePercent), max_daily_loss_percent: decimal(policy.maxDailyLossPercent),
     max_drawdown_percent: decimal(policy.maxDrawdownPercent), max_open_positions: policy.maxOpenPositions,
     max_pending_orders: policy.maxPendingOrders, max_total_volume: decimal(policy.maxTotalVolume),
@@ -53,7 +59,25 @@ function decisionDto(value: RiskDecisionSummary) {
     risk_decision_id: value.id, trade_decision_id: value.tradeDecisionId, account_id: value.accountId,
     status: value.status, reject_code: value.rejectCode, platform_policy_version_id: value.platformPolicyVersionId,
     account_policy_version_id: value.accountPolicyVersionId, account_risk_revision: String(value.accountRiskRevision),
+    manual_release_id: value.manualReleaseId,
     created_at: value.createdAt, revision: String(value.revision),
+  }
+}
+
+function manualReleaseDto(value: ManualRiskRelease | null) {
+  if (!value) return null
+  return {
+    manual_release_id: value.id, account_id: value.accountId,
+    platform_policy_version_id: value.platformPolicyVersionId, account_policy_version_id: value.accountPolicyVersionId,
+    policy_set_revision: String(value.policySetRevision), status: value.status,
+    released_rules: value.releasedRules, baseline: {
+      business_date: value.baseline.businessDate, daily_loss_percent: decimal(value.baseline.dailyLossPercent),
+      drawdown_percent: decimal(value.baseline.drawdownPercent), daily_open_count: value.baseline.dailyOpenCount,
+      consecutive_losses: value.baseline.consecutiveLosses, cooldown_until: value.baseline.cooldownUntil,
+    },
+    risk_state_revision: String(value.riskStateRevision), reason: value.reason, expires_at: value.expiresAt,
+    created_at: value.createdAt, invalidated_at: value.invalidatedAt, invalidation_reason: value.invalidationReason,
+    revision: String(value.revision),
   }
 }
 
@@ -106,6 +130,22 @@ export const riskRoutes: FastifyPluginAsync<RiskRoutesOptions> = async (fastify,
   fastify.get<{ Params: { accountId: string } }>('/risk-accounts/:accountId/summary', async (request, reply) => {
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, summaryDto(await options.service.summary(userId, request.params.accountId))) }
     catch (error) { return problem(error, request, reply) }
+  })
+  fastify.get<{ Params: { accountId: string } }>('/risk-accounts/:accountId/manual-release', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); return response(request.id, manualReleaseDto(await options.service.manualRelease(userId, request.params.accountId))) }
+    catch (error) { return problem(error, request, reply) }
+  })
+  fastify.post<{ Params: { accountId: string }; Body: { acknowledge_risk?: boolean; reason?: string } }>('/risk-accounts/:accountId/manual-release', async (request, reply) => {
+    try {
+      const { userId } = await options.auth.assertWrite(request)
+      const body = request.body ?? {}
+      const release = await options.service.createManualRelease({
+        userId, accountId: request.params.accountId, expectedSummaryRevision: expectedRevision(request.headers['if-match']),
+        idempotencyKey: String(request.headers['idempotency-key'] ?? ''), acknowledgeRisk: body.acknowledge_risk === true,
+        reason: String(body.reason ?? ''),
+      })
+      return reply.code(201).header('ETag', `"${release.revision}"`).send(response(request.id, manualReleaseDto(release)))
+    } catch (error) { return problem(error, request, reply) }
   })
   fastify.get<{ Querystring: { account_id: string; page_size?: string } }>('/risk-decisions', async (request, reply) => {
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.decisions(userId, request.query.account_id, Number(request.query.page_size ?? 50))).map(decisionDto) }) }

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { JsonObject, TraderAction, TraderDecisionResult } from '../../inference/domain/inference.js'
+import { manualReleaseApplies, type ManualReleaseRuleCode, type ManualRiskRelease } from './manual-risk-release.js'
 
 export type RiskDecisionStatus = 'approved' | 'rejected'
 export type RiskRuleOutcome = 'passed' | 'rejected' | 'not_applicable'
@@ -19,6 +20,11 @@ export interface RiskPolicyValues {
   maxRiskSummaryAgeSeconds: number
   maxDecisionAgeSeconds: number
   maxPriceDeviationPercent: number
+  manualReleaseEnabled: boolean
+  manualReleaseMaxDailyLossPercent: number
+  manualReleaseMaxDrawdownPercent: number
+  manualReleaseMaxDailyOpenCount: number
+  manualReleaseConsecutiveLossLimit: number
   minOpenIntervalSeconds: number
   maxDailyOpenCount: number
   consecutiveLossLimit: number
@@ -117,6 +123,7 @@ export interface RiskEvaluationInput {
   instrument: RiskInstrumentSnapshot
   positions: JsonObject[]
   pendingOrders: JsonObject[]
+  manualRelease?: ManualRiskRelease | null
   currentRevisions: {
     analysis: number
     subscription: number
@@ -136,6 +143,8 @@ export interface RiskEvaluationResult {
   approvedActions: TraderAction[]
   evaluatedAt: string
   policyHash: string
+  manualReleaseId: string | null
+  manualReleaseRevision: number | null
 }
 
 export class RiskError extends Error {
@@ -147,6 +156,8 @@ export const DEFAULT_RISK_POLICY: Readonly<RiskPolicyValues> = Object.freeze({
   maxRiskPerTradePercent: 1, maxDailyLossPercent: 3, maxDrawdownPercent: 8,
   maxOpenPositions: 10, maxPendingOrders: 20, maxTotalVolume: 1, maxSpreadPoints: 120,
   maxQuoteAgeSeconds: 15, maxRiskSummaryAgeSeconds: 30, maxDecisionAgeSeconds: 300, maxPriceDeviationPercent: 0.1,
+  manualReleaseEnabled: true, manualReleaseMaxDailyLossPercent: 5, manualReleaseMaxDrawdownPercent: 12,
+  manualReleaseMaxDailyOpenCount: 30, manualReleaseConsecutiveLossLimit: 5,
   minOpenIntervalSeconds: 30, maxDailyOpenCount: 20, consecutiveLossLimit: 3,
   lossCooldownMinutes: 60, pendingValidMinutes: 180, weekendCloseMinutes: 60,
   tradeSendEnabled: false, accountKillSwitch: false,
@@ -256,6 +267,15 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
     return result('rejected', code, rules, [], input.policy, now)
   }
   const pass = (code: string, details: JsonObject = {}) => rules.push({ code, outcome: 'passed' as const, actionId: null, details })
+  let releaseApplied = false
+  const accountLimit = (triggered: boolean, code: ManualReleaseRuleCode, platformLimitReached = false) => {
+    if (!triggered) return null
+    if (platformLimitReached) return `RISK_PLATFORM_${code.slice('RISK_'.length)}`
+    if (!manualReleaseApplies(input.manualRelease, code, input.policy, input.summary, now)) return code
+    releaseApplied = true
+    pass('RISK_MANUAL_RELEASE_APPLIED', { released_rule: code, manual_release_id: input.manualRelease!.id })
+    return null
+  }
 
   if (input.summary.accountId !== input.policy.accountId || input.summary.userId !== input.policy.userId) return reject('RISK_ACCOUNT_SCOPE_MISMATCH')
   if (input.summary.revision !== input.currentRevisions.risk) return reject('RISK_SUMMARY_REVISION_STALE')
@@ -290,11 +310,16 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
   const summaryAge = ageSeconds(input.summary.observedAt, now)
   if (summaryAge === null || summaryAge < -5) return reject('RISK_SUMMARY_TIME_INVALID')
   if (summaryAge > policy.maxRiskSummaryAgeSeconds) return reject('RISK_SUMMARY_STALE')
-  if (input.summary.dailyLossPercent >= policy.maxDailyLossPercent) return reject('RISK_DAILY_LOSS_LIMIT')
-  if (input.summary.drawdownPercent >= policy.maxDrawdownPercent) return reject('RISK_DRAWDOWN_LIMIT')
-  if (input.summary.dailyOpenCount >= policy.maxDailyOpenCount) return reject('RISK_DAILY_OPEN_LIMIT')
-  if (input.summary.consecutiveLosses >= policy.consecutiveLossLimit) return reject('RISK_CONSECUTIVE_LOSS_LIMIT')
-  if (input.summary.cooldownUntil && Date.parse(input.summary.cooldownUntil) > now.getTime()) return reject('RISK_COOLDOWN_ACTIVE')
+  const dailyLossBlock = accountLimit(input.summary.dailyLossPercent >= policy.maxDailyLossPercent, 'RISK_DAILY_LOSS_LIMIT', input.summary.dailyLossPercent >= policy.manualReleaseMaxDailyLossPercent)
+  if (dailyLossBlock) return reject(dailyLossBlock)
+  const drawdownBlock = accountLimit(input.summary.drawdownPercent >= policy.maxDrawdownPercent, 'RISK_DRAWDOWN_LIMIT', input.summary.drawdownPercent >= policy.manualReleaseMaxDrawdownPercent)
+  if (drawdownBlock) return reject(drawdownBlock)
+  const dailyOpenBlock = accountLimit(input.summary.dailyOpenCount >= policy.maxDailyOpenCount, 'RISK_DAILY_OPEN_LIMIT', input.summary.dailyOpenCount >= policy.manualReleaseMaxDailyOpenCount)
+  if (dailyOpenBlock) return reject(dailyOpenBlock)
+  const consecutiveLossBlock = accountLimit(input.summary.consecutiveLosses >= policy.consecutiveLossLimit, 'RISK_CONSECUTIVE_LOSS_LIMIT', input.summary.consecutiveLosses >= policy.manualReleaseConsecutiveLossLimit)
+  if (consecutiveLossBlock) return reject(consecutiveLossBlock)
+  const cooldownBlock = accountLimit(Boolean(input.summary.cooldownUntil && Date.parse(input.summary.cooldownUntil) > now.getTime()), 'RISK_COOLDOWN_ACTIVE')
+  if (cooldownBlock) return reject(cooldownBlock)
   if (input.summary.lastSuccessfulOpenAt && now.getTime() - Date.parse(input.summary.lastSuccessfulOpenAt) < policy.minOpenIntervalSeconds * 1000) return reject('RISK_MIN_OPEN_INTERVAL')
   if (input.summary.openPositions >= policy.maxOpenPositions && riskIncreasing.some(action => action.kind === 'market_order')) return reject('RISK_OPEN_POSITION_LIMIT')
   if (input.summary.pendingOrders >= policy.maxPendingOrders && riskIncreasing.some(action => action.kind === 'pending_order')) return reject('RISK_PENDING_ORDER_LIMIT')
@@ -326,7 +351,7 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
   }
   if (Number(input.summary.totalVolume) + addedVolume > policy.maxTotalVolume + 1e-9) return reject('RISK_TOTAL_VOLUME_LIMIT')
   pass('RISK_POLICY_APPROVED', { added_volume: Number(addedVolume.toFixed(8)) })
-  return result('approved', null, rules, input.result.actions, input.policy, now)
+  return result('approved', null, rules, input.result.actions, input.policy, now, releaseApplied ? input.manualRelease ?? null : null)
 }
 
 function evaluateAction(action: TraderAction, input: RiskEvaluationInput, ask: number, bid: number) {
@@ -404,13 +429,16 @@ function assertPolicyValues(value: RiskPolicyValues): RiskPolicyValues {
   if (!Array.isArray(value.allowedSymbols)) throw new RiskError('risk_allowed_symbols_invalid', 500)
   const allowedSymbols = [...new Set(value.allowedSymbols.map(symbol => typeof symbol === 'string' ? symbol.trim().toUpperCase() : '').filter(Boolean))]
   if (allowedSymbols.length === 0) throw new RiskError('risk_allowed_symbols_invalid', 500)
-  const numeric = Object.entries(value).filter(([key]) => !['allowedSymbols', 'requireStopLoss', 'failClosedOnIncompleteData', 'tradeSendEnabled', 'accountKillSwitch'].includes(key))
+  const numeric = Object.entries(value).filter(([key]) => !['allowedSymbols', 'requireStopLoss', 'failClosedOnIncompleteData', 'manualReleaseEnabled', 'tradeSendEnabled', 'accountKillSwitch'].includes(key))
   if (numeric.some(([, candidate]) => typeof candidate !== 'number' || !Number.isFinite(candidate) || candidate < 0)) throw new RiskError('risk_platform_numeric_rule_invalid', 500)
   if (![value.maxOpenPositions, value.maxPendingOrders, value.maxQuoteAgeSeconds, value.maxRiskSummaryAgeSeconds,
-    value.maxDecisionAgeSeconds, value.minOpenIntervalSeconds, value.maxDailyOpenCount, value.consecutiveLossLimit,
+    value.maxDecisionAgeSeconds, value.manualReleaseMaxDailyOpenCount, value.manualReleaseConsecutiveLossLimit,
+    value.minOpenIntervalSeconds, value.maxDailyOpenCount, value.consecutiveLossLimit,
     value.lossCooldownMinutes, value.pendingValidMinutes, value.weekendCloseMinutes].every(Number.isSafeInteger)) throw new RiskError('risk_platform_integer_rule_invalid', 500)
   if (value.maxQuoteAgeSeconds < 1 || value.maxRiskSummaryAgeSeconds < 1 || value.maxDecisionAgeSeconds < 1 || value.pendingValidMinutes < 1) throw new RiskError('risk_platform_duration_rule_invalid', 500)
-  if (typeof value.tradeSendEnabled !== 'boolean' || typeof value.accountKillSwitch !== 'boolean') throw new RiskError('risk_platform_toggle_rule_invalid', 500)
+  if (value.manualReleaseMaxDailyLossPercent < value.maxDailyLossPercent || value.manualReleaseMaxDrawdownPercent < value.maxDrawdownPercent
+    || value.manualReleaseMaxDailyOpenCount < value.maxDailyOpenCount || value.manualReleaseConsecutiveLossLimit < value.consecutiveLossLimit) throw new RiskError('risk_platform_manual_release_boundary_invalid', 500)
+  if (typeof value.manualReleaseEnabled !== 'boolean' || typeof value.tradeSendEnabled !== 'boolean' || typeof value.accountKillSwitch !== 'boolean') throw new RiskError('risk_platform_toggle_rule_invalid', 500)
   return { ...value, allowedSymbols }
 }
 
@@ -441,8 +469,8 @@ function weekendProtected(now: Date, offsetMinutes: number, advanceMinutes: numb
   return minuteOfWeek >= 6 * 1440 - advanceMinutes
 }
 
-function result(status: RiskDecisionStatus, rejectCode: string | null, rules: RiskRuleResult[], approvedActions: TraderAction[], policy: EffectiveRiskPolicy, now: Date): RiskEvaluationResult {
-  return { status, rejectCode, rules, approvedActions, evaluatedAt: now.toISOString(), policyHash: riskPolicyHash(policy) }
+function result(status: RiskDecisionStatus, rejectCode: string | null, rules: RiskRuleResult[], approvedActions: TraderAction[], policy: EffectiveRiskPolicy, now: Date, manualRelease: ManualRiskRelease | null = null): RiskEvaluationResult {
+  return { status, rejectCode, rules, approvedActions, evaluatedAt: now.toISOString(), policyHash: riskPolicyHash(policy), manualReleaseId: manualRelease?.id ?? null, manualReleaseRevision: manualRelease?.revision ?? null }
 }
 
 export function riskPolicyHash(policy: EffectiveRiskPolicy) {

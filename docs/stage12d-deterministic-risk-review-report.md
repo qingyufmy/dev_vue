@@ -113,3 +113,5 @@ WebSocket 只发送 `risk.policy.changed`、`risk.summary.changed`、`risk.decis
 - 平台风险后台写入接口、全局控制操作和审计权限将在管理后台/API 阶段接入，不能复用普通用户账户接口。
 
 下一子阶段建议为 12E“执行意图与风险预留状态机”：只把已批准的风险决定转换为幂等 `execution_intent` 和短期风险预留，继续停在 Bridge 之前；该阶段开始前仍需用户确认。
+
+后续补充：账户级触发的有限手动解锁已在 [阶段 12D.1 验收记录](./stage12d1-manual-risk-release-report.md) 中独立设计和实现，不改变本阶段的确定性风险边界。

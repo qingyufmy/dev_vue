@@ -1,4 +1,5 @@
 export * from './domain/risk.js'
+export * from './domain/manual-risk-release.js'
 export * from './application/risk-ports.js'
 export * from './application/risk-service.js'
 export * from './application/risk-review-worker.js'

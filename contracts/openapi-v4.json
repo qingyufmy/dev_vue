@@ -619,6 +619,37 @@
         }
       }
     },
+    "/risk-accounts/{account_id}/manual-release": {
+      "get": {
+        "operationId": "getManualRiskRelease",
+        "summary": "Get the latest audited account risk manual release",
+        "tags": ["Risk"],
+        "parameters": [{ "$ref": "#/components/parameters/AccountId" }],
+        "responses": {
+          "200": { "description": "Latest release or null", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ManualRiskReleaseResponse" } } } },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createManualRiskRelease",
+        "summary": "Acknowledge and release the current account-level risk breach episode",
+        "tags": ["Risk"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountId" },
+          { "$ref": "#/components/parameters/IfMatch" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ManualRiskReleaseInput" } } } },
+        "responses": {
+          "201": { "description": "Manual release created", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ManualRiskReleaseCreatedResponse" } } } },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "412": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/risk-decisions": {
       "get": {
         "operationId": "listRiskDecisions",
@@ -1486,7 +1517,7 @@
       },
       "RiskPolicy": {
         "type": "object",
-        "required": ["account_id", "platform_policy_version_id", "account_policy_version_id", "global_kill_switch", "allowed_symbols", "fail_closed_on_incomplete_data", "max_quote_age_seconds", "max_risk_summary_age_seconds", "max_decision_age_seconds", "max_price_deviation_percent", "max_risk_per_trade_percent", "max_daily_loss_percent", "max_drawdown_percent", "max_open_positions", "max_pending_orders", "max_total_volume", "max_spread_points", "min_open_interval_seconds", "max_daily_open_count", "consecutive_loss_limit", "loss_cooldown_minutes", "pending_valid_minutes", "weekend_close_minutes", "trade_send_enabled", "account_kill_switch", "require_stop_loss", "editable_fields", "revision", "updated_at"],
+        "required": ["account_id", "platform_policy_version_id", "account_policy_version_id", "global_kill_switch", "allowed_symbols", "fail_closed_on_incomplete_data", "max_quote_age_seconds", "max_risk_summary_age_seconds", "max_decision_age_seconds", "max_price_deviation_percent", "manual_release_enabled", "manual_release_max_daily_loss_percent", "manual_release_max_drawdown_percent", "manual_release_max_daily_open_count", "manual_release_consecutive_loss_limit", "max_risk_per_trade_percent", "max_daily_loss_percent", "max_drawdown_percent", "max_open_positions", "max_pending_orders", "max_total_volume", "max_spread_points", "min_open_interval_seconds", "max_daily_open_count", "consecutive_loss_limit", "loss_cooldown_minutes", "pending_valid_minutes", "weekend_close_minutes", "trade_send_enabled", "account_kill_switch", "require_stop_loss", "editable_fields", "revision", "updated_at"],
         "additionalProperties": false,
         "properties": {
           "account_id": { "$ref": "#/components/schemas/OpaqueId" },
@@ -1499,6 +1530,11 @@
           "max_risk_summary_age_seconds": { "type": "integer", "minimum": 1, "readOnly": true },
           "max_decision_age_seconds": { "type": "integer", "minimum": 1, "readOnly": true },
           "max_price_deviation_percent": { "$ref": "#/components/schemas/Decimal", "readOnly": true },
+          "manual_release_enabled": { "type": "boolean", "readOnly": true },
+          "manual_release_max_daily_loss_percent": { "$ref": "#/components/schemas/Decimal", "readOnly": true },
+          "manual_release_max_drawdown_percent": { "$ref": "#/components/schemas/Decimal", "readOnly": true },
+          "manual_release_max_daily_open_count": { "type": "integer", "minimum": 0, "readOnly": true },
+          "manual_release_consecutive_loss_limit": { "type": "integer", "minimum": 0, "readOnly": true },
           "max_risk_per_trade_percent": { "$ref": "#/components/schemas/Decimal" },
           "max_daily_loss_percent": { "$ref": "#/components/schemas/Decimal" },
           "max_drawdown_percent": { "$ref": "#/components/schemas/Decimal" },
@@ -1556,9 +1592,55 @@
         }
       },
       "AccountRiskSummaryResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/AccountRiskSummary" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
+      "ManualRiskReleaseInput": {
+        "type": "object",
+        "required": ["acknowledge_risk", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge_risk": { "const": true },
+          "reason": { "type": "string", "minLength": 3, "maxLength": 500 }
+        }
+      },
+      "ManualRiskReleaseBaseline": {
+        "type": "object",
+        "required": ["business_date", "daily_loss_percent", "drawdown_percent", "daily_open_count", "consecutive_losses", "cooldown_until"],
+        "additionalProperties": false,
+        "properties": {
+          "business_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "daily_loss_percent": { "$ref": "#/components/schemas/Decimal" },
+          "drawdown_percent": { "$ref": "#/components/schemas/Decimal" },
+          "daily_open_count": { "type": "integer", "minimum": 0 },
+          "consecutive_losses": { "type": "integer", "minimum": 0 },
+          "cooldown_until": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] }
+        }
+      },
+      "ManualRiskRelease": {
+        "type": "object",
+        "required": ["manual_release_id", "account_id", "platform_policy_version_id", "account_policy_version_id", "policy_set_revision", "status", "released_rules", "baseline", "risk_state_revision", "reason", "expires_at", "created_at", "invalidated_at", "invalidation_reason", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "manual_release_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "platform_policy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "account_policy_version_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "policy_set_revision": { "$ref": "#/components/schemas/Revision" },
+          "status": { "type": "string", "enum": ["active", "superseded", "expired", "revoked"] },
+          "released_rules": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "enum": ["RISK_DAILY_LOSS_LIMIT", "RISK_DRAWDOWN_LIMIT", "RISK_DAILY_OPEN_LIMIT", "RISK_CONSECUTIVE_LOSS_LIMIT", "RISK_COOLDOWN_ACTIVE"] } },
+          "baseline": { "$ref": "#/components/schemas/ManualRiskReleaseBaseline" },
+          "risk_state_revision": { "$ref": "#/components/schemas/Revision" },
+          "reason": { "type": "string", "minLength": 3, "maxLength": 500 },
+          "expires_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "created_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "invalidated_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "invalidation_reason": { "type": ["string", "null"], "maxLength": 128 },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "ManualRiskReleaseResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "oneOf": [{ "$ref": "#/components/schemas/ManualRiskRelease" }, { "type": "null" }] }, "meta": { "$ref": "#/components/schemas/Meta" } } },
+      "ManualRiskReleaseCreatedResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/ManualRiskRelease" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
       "RiskDecisionSummary": {
         "type": "object",
-        "required": ["risk_decision_id", "trade_decision_id", "account_id", "status", "reject_code", "platform_policy_version_id", "account_policy_version_id", "account_risk_revision", "created_at", "revision"],
+        "required": ["risk_decision_id", "trade_decision_id", "account_id", "status", "reject_code", "platform_policy_version_id", "account_policy_version_id", "account_risk_revision", "manual_release_id", "created_at", "revision"],
         "additionalProperties": false,
         "properties": {
           "risk_decision_id": { "$ref": "#/components/schemas/OpaqueId" },
@@ -1569,6 +1651,7 @@
           "platform_policy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
           "account_policy_version_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
           "account_risk_revision": { "$ref": "#/components/schemas/Revision" },
+          "manual_release_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
           "created_at": { "$ref": "#/components/schemas/UtcDateTime" },
           "revision": { "$ref": "#/components/schemas/Revision" }
         }
@@ -1592,5 +1675,5 @@
   "security": [
     { "applicationSession": [] }
   ],
-  "x-contract-status": "stage-12d-deterministic-risk-review"
+  "x-contract-status": "stage-12d1-manual-risk-release"
 }

@@ -100,6 +100,7 @@
         "risk.policy.changed",
         "risk.summary.changed",
         "risk.decision.created",
+        "risk.manual_release.changed",
         "risk.status.changed",
         "risk.alert.created",
         "operation.changed",
@@ -302,6 +303,18 @@
         "reject_code": { "type": ["string", "null"], "maxLength": 128 }
       }
     },
+    "RiskManualReleaseData": {
+      "type": "object",
+      "required": ["manual_release_id", "account_id", "status", "invalidation_reason", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "manual_release_id": { "$ref": "#/$defs/OpaqueId" },
+        "account_id": { "$ref": "#/$defs/OpaqueId" },
+        "status": { "type": "string", "enum": ["active", "superseded", "expired", "revoked"] },
+        "invalidation_reason": { "type": ["string", "null"], "maxLength": 128 },
+        "revision": { "$ref": "#/$defs/Revision" }
+      }
+    },
     "OperationData": {
       "type": "object",
       "required": ["operation_id", "kind", "status", "updated_at"],
@@ -386,6 +399,7 @@
             { "properties": { "type": { "const": "risk.policy.changed" }, "data": { "$ref": "#/$defs/RiskPolicyChangedData" } } },
             { "properties": { "type": { "const": "risk.summary.changed" }, "data": { "$ref": "#/$defs/RiskSummaryChangedData" } } },
             { "properties": { "type": { "const": "risk.decision.created" }, "data": { "$ref": "#/$defs/RiskDecisionData" } } },
+            { "properties": { "type": { "const": "risk.manual_release.changed" }, "data": { "$ref": "#/$defs/RiskManualReleaseData" } } },
             {
               "properties": {
                 "type": { "const": "operation.changed" },
