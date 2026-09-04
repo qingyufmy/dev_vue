@@ -3,7 +3,6 @@ import { useTradeSession } from '~/features/auth/session'
 
 const moduleRoutes = [
   { path: '/market', title: '市场行情', description: '宏观环境、关键因子与黄金市场状态将在对应阶段接入。' },
-  { path: '/trader', title: 'AI 交易员', description: '持仓、挂单、手动交易与策略订阅者分发将在对应阶段接入。' },
   { path: '/risk', title: 'AI 风控师', description: '当前账户风控参数、快照和决策记录将在对应阶段接入。' },
   { path: '/strategist', title: 'AI 策略师', description: '策略提示词、版本、发布与订阅关系将在对应阶段接入。' },
   { path: '/reviewer', title: 'AI 复盘师', description: '日月复盘、手动交易复盘与记忆确认将在对应阶段接入。' },
@@ -33,6 +32,12 @@ export const router = createRouter({
       name: 'analyst',
       component: () => import('~/features/analyst').then((module) => module.AnalystView),
       meta: { title: 'AI 分析师' },
+    },
+    {
+      path: '/trader',
+      name: 'trader',
+      component: () => import('~/features/trader').then((module) => module.TraderView),
+      meta: { title: 'AI 交易员' },
     },
     ...moduleRoutes.map((route) => ({
       path: route.path,

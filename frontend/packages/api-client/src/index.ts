@@ -3,7 +3,7 @@ import {
   marketAnalysisDetailResponseSchema, marketAnalysisListResponseSchema, marketCandlesResponseSchema,
   marketQuoteResponseSchema, observerChannelsResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema,
   strategiesResponseSchema, terminalProfilesResponseSchema, tradingAccountsResponseSchema, tradingContextResponseSchema,
-  tradingWorkspaceResponseSchema,
+  traderDecisionDetailResponseSchema, traderDecisionListResponseSchema, tradingWorkspaceResponseSchema,
 } from '@aurum/contracts'
 import type { AnalysisJobCreate, ApiProblem, AuthLoginRequest, StrategyKind } from '@aurum/contracts'
 import { z, type ZodType } from 'zod'
@@ -93,6 +93,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
     listStrategies: (kind?: StrategyKind) => send(strategiesResponseSchema, `/api/v4/strategies${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
     listMarketAnalyses: (pageSize = 50) => send(marketAnalysisListResponseSchema, `/api/v4/market-analyses?page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
     getMarketAnalysis: (analysisId: string) => send(marketAnalysisDetailResponseSchema, `/api/v4/market-analyses/${encodeURIComponent(analysisId)}`),
+    listTradeDecisions: (accountId: string, pageSize = 50) => send(traderDecisionListResponseSchema, `/api/v4/trade-decisions?account_id=${encodeURIComponent(accountId)}&page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
+    getTradeDecision: (decisionId: string) => send(traderDecisionDetailResponseSchema, `/api/v4/trade-decisions/${encodeURIComponent(decisionId)}`),
     createManualAnalysis: (csrfToken: string, body: AnalysisJobCreate, idempotencyKey: string) => send(
       analysisJobResponseSchema,
       '/api/v4/analysis-jobs',

@@ -111,4 +111,25 @@ describe('createApiClient', () => {
     expect(new Headers(request?.headers).get('Idempotency-Key')).toBe('manual-analysis-idempotency-1')
     expect(request?.body).toBe(JSON.stringify({ strategy_id: 'strategy/1', symbol: 'XAUUSD', mode: 'manual' }))
   })
+
+  it('keeps trader decisions account-scoped and encodes detail identifiers', async () => {
+    const meta = { request_id: 'trader', generated_at: '2026-09-04T04:00:00.000Z' }
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [] }, meta }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+        summary: {
+          decision_id: 'decision/1', analysis_id: 'analysis-1', trading_account_id: 'account/7', strategy_id: 'strategy-1',
+          strategy_version_id: 'version-1', action: 'hold', side: null, confidence: 60, summary: '暂不调整',
+          status: 'proposed', created_at: '2026-09-04T04:00:00.000Z', revision: '1',
+        },
+        actions: [], reasoning: '账户状态稳定', input_snapshot_hash: 'a'.repeat(64),
+      }, meta }), { status: 200 }))
+    const client = createApiClient({ fetchImpl })
+
+    await client.listTradeDecisions('account/7', 200)
+    await client.getTradeDecision('decision/1')
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/trade-decisions?account_id=account%2F7&page_size=100')
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v4/trade-decisions/decision%2F1')
+  })
 })

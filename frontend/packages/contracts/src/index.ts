@@ -274,13 +274,14 @@ export const traderDecisionSummarySchema = z.object({
   confidence: z.number().min(0).max(100),
   summary: z.string(),
   status: traderDecisionStatusSchema,
+  stale_reason: z.string().nullable().optional(),
   created_at: z.iso.datetime({ offset: true }),
   revision: numericRevisionSchema,
 }).transform((value) => ({
   decisionId: value.decision_id, analysisId: value.analysis_id, tradingAccountId: value.trading_account_id,
   strategyId: value.strategy_id, strategyVersionId: value.strategy_version_id, action: value.action,
   side: value.side, confidence: value.confidence, summary: value.summary, status: value.status,
-  createdAt: value.created_at, revision: value.revision,
+  staleReason: value.stale_reason ?? null, createdAt: value.created_at, revision: value.revision,
 }))
 export const traderDecisionDetailSchema = z.object({
   summary: traderDecisionSummarySchema,
