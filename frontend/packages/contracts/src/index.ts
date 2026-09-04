@@ -304,19 +304,6 @@ export const traderDecisionDetailResponseSchema = z.object({ data: traderDecisio
  * an execution intent.
  */
 export const executionRevisionSchema = z.string().min(1).max(128).regex(/^\d+$/)
-export const executionExpectedStateSchema = z.object({
-  account_revision: executionRevisionSchema,
-  positions_revision: executionRevisionSchema,
-  pending_orders_revision: executionRevisionSchema,
-  quote_revision: executionRevisionSchema,
-  contract_revision: executionRevisionSchema,
-  risk_revision: executionRevisionSchema,
-}).strict()
-export const executionEntryExpectedStateSchema = executionExpectedStateSchema
-export const executionResourceExpectedStateSchema = executionExpectedStateSchema.extend({
-  resource_revision: executionRevisionSchema.regex(/^[1-9][0-9]*$/),
-}).strict()
-
 const executionSymbolSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/)
 const executionTicketSchema = z.string().trim().min(1).max(64).regex(/^[0-9A-Za-z._:-]+$/)
 const executionPositiveDecimalSchema = decimalSchema
@@ -325,6 +312,61 @@ const executionPositiveDecimalSchema = decimalSchema
 const executionUtcMscSchema = z.number().int().positive().safe()
 const executionOrderTypeSchema = z.enum(['buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit'])
 const executionSideSchema = z.enum(['buy', 'sell'])
+export const executionExpectedStateSchema = z.object({
+  account_revision: executionRevisionSchema,
+  positions_revision: executionRevisionSchema,
+  pending_orders_revision: executionRevisionSchema,
+  quote_revision: executionRevisionSchema,
+  contract_revision: executionRevisionSchema,
+  risk_revision: executionRevisionSchema,
+}).strict()
+
+export const executionCommandContextSchema = z.object({
+  account_id: z.string().min(1),
+  symbol: executionSymbolSchema,
+  ticket: executionTicketSchema.nullable(),
+  read_only: z.boolean(),
+  trade_permission: z.boolean(),
+  expected_state: executionExpectedStateSchema,
+  target_revision: executionRevisionSchema.regex(/^[1-9][0-9]*$/).nullable(),
+  quote: z.object({
+    bid: executionPositiveDecimalSchema,
+    ask: executionPositiveDecimalSchema,
+    observed_at: z.iso.datetime({ offset: true }),
+  }).nullable(),
+  instrument: z.object({
+    point: executionPositiveDecimalSchema,
+    tick_size: executionPositiveDecimalSchema,
+    tick_value: executionPositiveDecimalSchema,
+    volume_min: executionPositiveDecimalSchema,
+    volume_max: executionPositiveDecimalSchema,
+    volume_step: executionPositiveDecimalSchema,
+    trade_enabled: z.boolean(),
+  }).nullable(),
+}).strict().transform((value) => ({
+  accountId: value.account_id,
+  symbol: value.symbol,
+  ticket: value.ticket,
+  readOnly: value.read_only,
+  tradePermission: value.trade_permission,
+  expectedState: value.expected_state,
+  targetRevision: value.target_revision,
+  quote: value.quote ? { bid: value.quote.bid, ask: value.quote.ask, observedAt: value.quote.observed_at } : null,
+  instrument: value.instrument ? {
+    point: value.instrument.point,
+    tickSize: value.instrument.tick_size,
+    tickValue: value.instrument.tick_value,
+    volumeMin: value.instrument.volume_min,
+    volumeMax: value.instrument.volume_max,
+    volumeStep: value.instrument.volume_step,
+    tradeEnabled: value.instrument.trade_enabled,
+  } : null,
+}))
+export const executionCommandContextResponseSchema = z.object({ data: executionCommandContextSchema, meta: responseMetaSchema })
+export const executionEntryExpectedStateSchema = executionExpectedStateSchema
+export const executionResourceExpectedStateSchema = executionExpectedStateSchema.extend({
+  resource_revision: executionRevisionSchema.regex(/^[1-9][0-9]*$/),
+}).strict()
 
 const executionEntryExpectedCommandFields = {
   expected_state: executionEntryExpectedStateSchema,
@@ -449,12 +491,97 @@ export const executionDistributionSchema = z.object({
   command: executionDistributionCommandSchema,
 }).strict()
 
+export const operationStatusSchema = z.enum(['accepted', 'queued', 'running', 'succeeded', 'partially_succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'expired'])
+
 export const distributionCloseCommandSchema = z.object({
   expected_revision: executionRevisionSchema,
   target_ids: z.array(z.string().min(1).max(191)).max(10000).refine((values) => new Set(values).size === values.length, 'target_ids 不能重复'),
 }).strict()
 
-export const operationStatusSchema = z.enum(['accepted', 'queued', 'running', 'succeeded', 'partially_succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'expired'])
+export const executionDistributionPreviewSchema = z.object({
+  strategy_id: z.string().min(1),
+  strategy_version_id: z.string().min(1),
+  strategy_revision: executionRevisionSchema,
+  symbol: executionSymbolSchema,
+  target_count: z.number().int().nonnegative(),
+  targets: z.array(z.object({
+    account_id: z.string().min(1),
+    subscription_id: z.string().min(1),
+    trade_permission: z.boolean(),
+    ready: z.boolean(),
+    missing_resources: z.array(z.enum(['account', 'positions', 'pending_orders', 'quote', 'contract', 'risk'])),
+  }).strict()),
+}).strict().transform((value) => ({
+  strategyId: value.strategy_id,
+  strategyVersionId: value.strategy_version_id,
+  strategyRevision: value.strategy_revision,
+  symbol: value.symbol,
+  targetCount: value.target_count,
+  targets: value.targets.map((target) => ({
+    accountId: target.account_id,
+    subscriptionId: target.subscription_id,
+    tradePermission: target.trade_permission,
+    ready: target.ready,
+    missingResources: target.missing_resources,
+  })),
+}))
+export const executionDistributionPreviewResponseSchema = z.object({ data: executionDistributionPreviewSchema, meta: responseMetaSchema })
+
+const executionDistributionTargetSchema = z.object({
+  id: z.string().min(1),
+  account_id: z.string().min(1),
+  subscription_id: z.string().min(1),
+  child_operation_id: z.string().min(1).nullable(),
+  source_ticket: z.string().min(1).nullable(),
+  status: z.enum(['queued', 'running', 'succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'expired']),
+  error_code: z.string().nullable(),
+  revision: executionRevisionSchema,
+}).strict().transform((value) => ({
+  id: value.id,
+  accountId: value.account_id,
+  subscriptionId: value.subscription_id,
+  childOperationId: value.child_operation_id,
+  sourceTicket: value.source_ticket,
+  status: value.status,
+  errorCode: value.error_code,
+  revision: value.revision,
+}))
+
+const executionDistributionDetailSchema = z.object({
+  id: z.string().min(1),
+  operation_id: z.string().min(1),
+  strategy_id: z.string().min(1),
+  strategy_version_id: z.string().min(1),
+  kind: z.enum(['manual_order', 'close']),
+  source_distribution_id: z.string().min(1).nullable(),
+  command: z.record(z.string(), z.unknown()),
+  status: operationStatusSchema,
+  target_count: z.number().int().nonnegative(),
+  result_summary: z.record(z.string(), z.unknown()),
+  created_at: z.iso.datetime({ offset: true }),
+  updated_at: z.iso.datetime({ offset: true }),
+  completed_at: z.iso.datetime({ offset: true }).nullable(),
+  revision: executionRevisionSchema,
+  targets: z.array(executionDistributionTargetSchema),
+}).strict().transform((value) => ({
+  id: value.id,
+  operationId: value.operation_id,
+  strategyId: value.strategy_id,
+  strategyVersionId: value.strategy_version_id,
+  kind: value.kind,
+  sourceDistributionId: value.source_distribution_id,
+  command: value.command,
+  status: value.status,
+  targetCount: value.target_count,
+  resultSummary: value.result_summary,
+  createdAt: value.created_at,
+  updatedAt: value.updated_at,
+  completedAt: value.completed_at,
+  revision: value.revision,
+  targets: value.targets,
+}))
+export const executionDistributionDetailResponseSchema = z.object({ data: executionDistributionDetailSchema, meta: responseMetaSchema })
+
 export const operationSchema = z.object({
   operation_id: z.string().min(1),
   kind: z.string().min(1).max(128),
@@ -511,7 +638,7 @@ export const riskRealtimeEventSchema = z.object({
 export const operationRealtimeEventSchema = z.object({
   v: z.literal(4), event_id: z.string(), type: z.literal('operation.changed'),
   occurred_at: z.iso.datetime({ offset: true }), sequence: z.number().int().positive(),
-  scope: z.object({ user_id: z.string(), trading_account_id: z.string(), terminal_instance_id: z.string().nullable(), observer_channel_id: z.string().nullable() }),
+  scope: z.object({ user_id: z.string(), trading_account_id: z.string().nullable(), terminal_instance_id: z.string().nullable(), observer_channel_id: z.string().nullable() }),
   resource: z.object({ kind: z.literal('operation'), id: z.string() }), revision: z.string(), data: z.unknown(), correlation_id: z.string().nullable(),
 })
 
@@ -548,6 +675,7 @@ export type TraderDecisionSummary = z.infer<typeof traderDecisionSummarySchema>
 export type TraderDecisionDetail = z.infer<typeof traderDecisionDetailSchema>
 export type ExecutionRevision = z.infer<typeof executionRevisionSchema>
 export type ExecutionExpectedState = z.infer<typeof executionExpectedStateSchema>
+export type ExecutionCommandContext = z.infer<typeof executionCommandContextSchema>
 export type ExecutionEntryExpectedState = z.infer<typeof executionEntryExpectedStateSchema>
 export type ExecutionResourceExpectedState = z.infer<typeof executionResourceExpectedStateSchema>
 export type MarketOrderCommand = z.infer<typeof marketOrderCommandSchema>
@@ -560,6 +688,8 @@ export type ExecutionCommand = z.infer<typeof executionCommandSchema>
 export type ExecutionDistributionCommand = z.infer<typeof executionDistributionCommandSchema>
 export type ExecutionDistribution = z.infer<typeof executionDistributionSchema>
 export type DistributionCloseCommand = z.infer<typeof distributionCloseCommandSchema>
+export type ExecutionDistributionPreview = z.infer<typeof executionDistributionPreviewSchema>
+export type ExecutionDistributionDetail = z.infer<typeof executionDistributionDetailSchema>
 export type Operation = z.infer<typeof operationSchema>
 export type InferenceRealtimeEvent = z.infer<typeof inferenceRealtimeEventSchema>
 export type RiskRealtimeEvent = z.infer<typeof riskRealtimeEventSchema>

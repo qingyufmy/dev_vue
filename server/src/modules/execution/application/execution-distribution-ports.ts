@@ -10,6 +10,7 @@ import type {
   DistributionTargetCandidate,
   DistributionKind,
   ExecutionDistribution,
+  ExecutionDistributionPreview,
 } from '../domain/execution-distribution.js'
 import type { Operation } from '../domain/execution.js'
 import type { JsonObject } from '../../inference/domain/inference.js'
@@ -33,6 +34,7 @@ export interface ExecutionDistributionRepository {
   createManualOrderDistribution(input: NormalizedCreateDistributionInput): Promise<ExecutionDistributionResult>
   createDistributionClose(input: NormalizedCreateDistributionCloseInput): Promise<ExecutionDistributionResult>
   getDistribution(input: { actorUserId: number; distributionId: string }): Promise<ExecutionDistributionResult | null>
+  previewManualOrderDistribution(input: { actorUserId: number; strategyId: string; symbol: string }): Promise<ExecutionDistributionPreview>
 }
 
 /**

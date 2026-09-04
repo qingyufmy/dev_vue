@@ -62,6 +62,7 @@ export function createTraderRealtime(input: {
     const ownerTargets = input.observerChannelId ? [] : [
       { kind: 'signals', trading_account_id: input.accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'trade_decisions', after_revision: null },
       { kind: 'operations', trading_account_id: input.accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'all', after_revision: null },
+      { kind: 'operations', trading_account_id: null, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'all', after_revision: null },
     ]
     try {
       connection = connectRealtime({
@@ -98,7 +99,8 @@ export function createTraderRealtime(input: {
           const parsed = browserRealtimeEventSchema.safeParse(raw)
           if (!parsed.success || parsed.data.scope.user_id !== input.session.user.id) return
           const event = parsed.data
-          if (event.scope.trading_account_id !== input.accountId || event.scope.observer_channel_id !== input.observerChannelId) return
+          const userOperation = event.type === 'operation.changed' && event.scope.trading_account_id === null && input.observerChannelId === null
+          if (!userOperation && (event.scope.trading_account_id !== input.accountId || event.scope.observer_channel_id !== input.observerChannelId)) return
           if (lastSequence > 0 && event.sequence !== lastSequence + 1) {
             input.onState('recovering')
             connection?.close(4000, 'trader_sequence_gap')

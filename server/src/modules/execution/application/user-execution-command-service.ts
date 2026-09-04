@@ -39,6 +39,20 @@ export class UserExecutionCommandService {
     private readonly riskEvaluator: UserExecutionRiskEvaluator = { evaluate: evaluateRisk },
   ) {}
 
+  async commandContext(input: { userId: number; accountId: string; symbol?: string | null; ticket?: string | null }) {
+    if (!Number.isSafeInteger(input.userId) || input.userId < 1) throw new UserExecutionCommandError('user_command_user_invalid', 422)
+    const accountId = String(input.accountId ?? '').trim()
+    const symbol = input.symbol === undefined || input.symbol === null || input.symbol === '' ? null : String(input.symbol).trim().toUpperCase()
+    const ticket = input.ticket === undefined || input.ticket === null || input.ticket === '' ? null : String(input.ticket).trim()
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$/.test(accountId)) throw new UserExecutionCommandError('user_command_account_invalid', 400)
+    if (symbol !== null && !/^[A-Z0-9][A-Z0-9._-]{0,63}$/.test(symbol)) throw new UserExecutionCommandError('user_command_symbol_invalid', 400)
+    if (ticket !== null && !/^[0-9A-Za-z._:-]{1,64}$/.test(ticket)) throw new UserExecutionCommandError('user_command_ticket_invalid', 400)
+    if (symbol === null && ticket === null) throw new UserExecutionCommandError('user_command_target_required', 400)
+    const context = await this.repository.loadContext({ userId: input.userId, accountId, symbol, ticket })
+    if (!context) throw new UserExecutionCommandError('user_command_account_not_found', 404)
+    return { context, symbol, ticket }
+  }
+
   async execute(input: UserExecutionCommandInput, now = new Date()): Promise<UserExecutionCommandResult> {
     assertDate(now)
     // The ID is generated before hashing only as the default user-command

@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   analysisJobCreateSchema, closePositionCommandSchema, distributionCloseCommandSchema, executionCommandSchema,
+  executionCommandContextResponseSchema, executionDistributionDetailResponseSchema, executionDistributionPreviewResponseSchema,
   executionDistributionSchema, executionExpectedStateSchema, marketAnalysisSummarySchema, marketCandleSchema,
   modifyOrderCommandSchema, modifyPositionCommandSchema, observerChannelSchema, operationSchema,
-  pendingOrderCommandSchema, traderDecisionSummarySchema, traderRunSchema, tradingContextSchema,
+  operationRealtimeEventSchema, pendingOrderCommandSchema, traderDecisionSummarySchema, traderRunSchema, tradingContextSchema,
   tradingWorkspaceResponseSchema, sessionResponseSchema,
 } from './index'
 
@@ -36,6 +37,43 @@ describe('sessionResponseSchema', () => {
     })
 
     expect(result.success).toBe(false)
+  })
+})
+
+describe('execution read model schemas', () => {
+  const meta = { request_id: 'req-1', generated_at: '2026-09-04T08:00:00.000Z' }
+
+  it('parses command context without weakening the six-revision command boundary', () => {
+    const result = executionCommandContextResponseSchema.parse({ data: {
+      account_id: '42', symbol: 'XAUUSD', ticket: null, read_only: false, trade_permission: true,
+      expected_state: { account_revision: '2', positions_revision: '3', pending_orders_revision: '4', quote_revision: '5', contract_revision: '6', risk_revision: '7' },
+      target_revision: null,
+      quote: { bid: '2500.1', ask: '2500.3', observed_at: meta.generated_at },
+      instrument: { point: '0.01', tick_size: '0.01', tick_value: '1', volume_min: '0.01', volume_max: '100', volume_step: '0.01', trade_enabled: true },
+    }, meta })
+    expect(result.data.expectedState.risk_revision).toBe('7')
+    expect(result.data.instrument?.volumeStep).toBe('0.01')
+  })
+
+  it('parses distribution estimate and immutable frozen target detail', () => {
+    expect(executionDistributionPreviewResponseSchema.safeParse({ data: {
+      strategy_id: 's1', strategy_version_id: 'v1', strategy_revision: '2', symbol: 'XAUUSD', target_count: 1,
+      targets: [{ account_id: '42', subscription_id: 'sub1', trade_permission: true, ready: false, missing_resources: ['risk'] }],
+    }, meta }).success).toBe(true)
+    expect(executionDistributionDetailResponseSchema.safeParse({ data: {
+      id: 'd1', operation_id: 'op1', strategy_id: 's1', strategy_version_id: 'v1', kind: 'manual_order', source_distribution_id: null,
+      command: { command_type: 'market_order' }, status: 'running', target_count: 1, result_summary: { target_count: 1 },
+      created_at: meta.generated_at, updated_at: meta.generated_at, completed_at: null, revision: '2',
+      targets: [{ id: 't1', account_id: '42', subscription_id: 'sub1', child_operation_id: null, source_ticket: null, status: 'running', error_code: null, revision: '2' }],
+    }, meta }).success).toBe(true)
+  })
+
+  it('allows user-scoped operation events for distribution parent operations', () => {
+    expect(operationRealtimeEventSchema.safeParse({
+      v: 4, event_id: 'evt-1', type: 'operation.changed', occurred_at: meta.generated_at, sequence: 1,
+      scope: { user_id: '7', trading_account_id: null, terminal_instance_id: null, observer_channel_id: null },
+      resource: { kind: 'operation', id: 'op1' }, revision: '2', data: {}, correlation_id: null,
+    }).success).toBe(true)
   })
 })
 

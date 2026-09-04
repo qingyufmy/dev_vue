@@ -198,6 +198,25 @@
         "responses": { "200": { "description": "Owned trading accounts", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingAccountListResponse" } } } } }
       }
     },
+    "/trading-accounts/{account_id}/execution-context": {
+      "get": {
+        "operationId": "getExecutionCommandContext",
+        "summary": "Read the exact revisions and broker limits required to confirm a user command",
+        "tags": ["Execution"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountId" },
+          { "name": "symbol", "in": "query", "schema": { "$ref": "#/components/schemas/Symbol" } },
+          { "name": "ticket", "in": "query", "schema": { "type": "string", "minLength": 1, "maxLength": 64 } }
+        ],
+        "responses": {
+          "200": { "description": "Authoritative command confirmation context", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutionCommandContextResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/trading-accounts/{account_id}/execution-commands": {
       "post": {
         "operationId": "createExecutionCommand",
@@ -244,6 +263,36 @@
           "409": { "$ref": "#/components/responses/Problem" },
           "422": { "$ref": "#/components/responses/Problem" },
           "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/execution-distributions/preview": {
+      "get": {
+        "operationId": "previewExecutionDistribution",
+        "summary": "Estimate the currently eligible account scope before distribution confirmation",
+        "description": "This is a read-only estimate. The immutable target set is resolved and frozen again when the distribution is accepted.",
+        "tags": ["Execution"],
+        "parameters": [
+          { "name": "strategy_id", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "name": "symbol", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/Symbol" } }
+        ],
+        "responses": {
+          "200": { "description": "Current distribution estimate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutionDistributionPreviewResponse" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/execution-distributions/{distribution_id}": {
+      "get": {
+        "operationId": "getExecutionDistribution",
+        "summary": "Read the frozen targets and current state of an administrator distribution",
+        "tags": ["Execution"],
+        "parameters": [{ "$ref": "#/components/parameters/DistributionId" }],
+        "responses": {
+          "200": { "description": "Frozen distribution detail", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutionDistributionDetailResponse" } } } },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" }
         }
       }
     },
@@ -1344,6 +1393,37 @@
           "risk_revision": { "$ref": "#/components/schemas/ExecutionRevision" }
         }
       },
+      "ExecutionCommandContext": {
+        "type": "object",
+        "required": ["account_id", "symbol", "ticket", "read_only", "trade_permission", "expected_state", "target_revision", "quote", "instrument"],
+        "additionalProperties": false,
+        "properties": {
+          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "ticket": { "type": ["string", "null"], "maxLength": 64 },
+          "read_only": { "type": "boolean" },
+          "trade_permission": { "type": "boolean" },
+          "expected_state": { "$ref": "#/components/schemas/ExecutionExpectedState" },
+          "target_revision": { "oneOf": [{ "$ref": "#/components/schemas/ExecutionRevision" }, { "type": "null" }] },
+          "quote": {
+            "oneOf": [
+              { "type": "object", "required": ["bid", "ask", "observed_at"], "additionalProperties": false, "properties": { "bid": { "$ref": "#/components/schemas/PositiveDecimal" }, "ask": { "$ref": "#/components/schemas/PositiveDecimal" }, "observed_at": { "$ref": "#/components/schemas/UtcDateTime" } } },
+              { "type": "null" }
+            ]
+          },
+          "instrument": {
+            "oneOf": [
+              { "type": "object", "required": ["point", "tick_size", "tick_value", "volume_min", "volume_max", "volume_step", "trade_enabled"], "additionalProperties": false, "properties": { "point": { "$ref": "#/components/schemas/PositiveDecimal" }, "tick_size": { "$ref": "#/components/schemas/PositiveDecimal" }, "tick_value": { "$ref": "#/components/schemas/PositiveDecimal" }, "volume_min": { "$ref": "#/components/schemas/PositiveDecimal" }, "volume_max": { "$ref": "#/components/schemas/PositiveDecimal" }, "volume_step": { "$ref": "#/components/schemas/PositiveDecimal" }, "trade_enabled": { "type": "boolean" } } },
+              { "type": "null" }
+            ]
+          }
+        }
+      },
+      "ExecutionCommandContextResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": { "data": { "$ref": "#/components/schemas/ExecutionCommandContext" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
       "ExecutionResourceExpectedState": {
         "type": "object",
         "required": ["account_revision", "positions_revision", "pending_orders_revision", "quote_revision", "contract_revision", "risk_revision", "resource_revision"],
@@ -1502,6 +1582,43 @@
           "strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
           "command": { "$ref": "#/components/schemas/ExecutionDistributionCommand" }
         }
+      },
+      "ExecutionDistributionPreview": {
+        "type": "object",
+        "required": ["strategy_id", "strategy_version_id", "strategy_revision", "symbol", "target_count", "targets"],
+        "additionalProperties": false,
+        "properties": {
+          "strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "strategy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "strategy_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "target_count": { "type": "integer", "minimum": 0 },
+          "targets": { "type": "array", "items": { "type": "object", "required": ["account_id", "subscription_id", "trade_permission", "ready", "missing_resources"], "additionalProperties": false, "properties": { "account_id": { "$ref": "#/components/schemas/OpaqueId" }, "subscription_id": { "$ref": "#/components/schemas/OpaqueId" }, "trade_permission": { "type": "boolean" }, "ready": { "type": "boolean" }, "missing_resources": { "type": "array", "items": { "type": "string", "enum": ["account", "positions", "pending_orders", "quote", "contract", "risk"] } } } } }
+        }
+      },
+      "ExecutionDistributionPreviewResponse": {
+        "type": "object", "required": ["data", "meta"],
+        "properties": { "data": { "$ref": "#/components/schemas/ExecutionDistributionPreview" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ExecutionDistributionDetail": {
+        "type": "object",
+        "required": ["id", "operation_id", "strategy_id", "strategy_version_id", "kind", "source_distribution_id", "command", "status", "target_count", "result_summary", "created_at", "updated_at", "completed_at", "revision", "targets"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" }, "operation_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "strategy_id": { "$ref": "#/components/schemas/OpaqueId" }, "strategy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "kind": { "type": "string", "enum": ["manual_order", "close"] }, "source_distribution_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "command": { "type": "object", "additionalProperties": true },
+          "status": { "type": "string", "enum": ["accepted", "queued", "running", "succeeded", "partially_succeeded", "rejected", "failed", "uncertain", "cancelled", "expired"] },
+          "target_count": { "type": "integer", "minimum": 0 }, "result_summary": { "type": "object", "additionalProperties": true },
+          "created_at": { "$ref": "#/components/schemas/UtcDateTime" }, "updated_at": { "$ref": "#/components/schemas/UtcDateTime" }, "completed_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "targets": { "type": "array", "items": { "type": "object", "required": ["id", "account_id", "subscription_id", "child_operation_id", "source_ticket", "status", "error_code", "revision"], "additionalProperties": false, "properties": { "id": { "$ref": "#/components/schemas/OpaqueId" }, "account_id": { "$ref": "#/components/schemas/OpaqueId" }, "subscription_id": { "$ref": "#/components/schemas/OpaqueId" }, "child_operation_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] }, "source_ticket": { "type": ["string", "null"] }, "status": { "type": "string", "enum": ["queued", "running", "succeeded", "rejected", "failed", "uncertain", "cancelled", "expired"] }, "error_code": { "type": ["string", "null"] }, "revision": { "$ref": "#/components/schemas/ExecutionRevision" } } } }
+        }
+      },
+      "ExecutionDistributionDetailResponse": {
+        "type": "object", "required": ["data", "meta"],
+        "properties": { "data": { "$ref": "#/components/schemas/ExecutionDistributionDetail" }, "meta": { "$ref": "#/components/schemas/Meta" } }
       },
       "ExecutionDistributionCommand": {
         "oneOf": [

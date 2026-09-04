@@ -49,4 +49,11 @@ describe('Stage 12N user command and distribution persistence boundary', () => {
     expect(repository).toContain("completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?`, [now, row.id, row.revision]")
     expect(repository).not.toContain("completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?`, [now, now, row.id, row.revision]")
   })
+
+  it('keeps read-only distribution preview off the target-freeze lock path', async () => {
+    const repository = await readFile(new URL('../src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts', import.meta.url), 'utf8')
+    expect(repository).toContain('queryEligibleTargets(this.pool, input.strategyId, strategy.versionId, input.symbol, false)')
+    expect(repository).toContain("const lockClause = lock ? ' FOR UPDATE' : ''")
+    expect(repository).toContain('ready: candidate.tradePermission && missingResources.length === 0')
+  })
 })

@@ -2,6 +2,7 @@ import {
   analysisJobResponseSchema, apiProblemSchema, authLoginResponseSchema, connectionCapacityResponseSchema,
   marketAnalysisDetailResponseSchema, marketAnalysisListResponseSchema, marketCandlesResponseSchema,
   marketQuoteResponseSchema, observerChannelsResponseSchema, operationResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema,
+  executionCommandContextResponseSchema, executionDistributionDetailResponseSchema, executionDistributionPreviewResponseSchema,
   strategiesResponseSchema, terminalProfilesResponseSchema, tradingAccountsResponseSchema, tradingContextResponseSchema,
   traderDecisionDetailResponseSchema, traderDecisionListResponseSchema, tradingWorkspaceResponseSchema,
 } from '@aurum/contracts'
@@ -95,6 +96,15 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getMarketAnalysis: (analysisId: string) => send(marketAnalysisDetailResponseSchema, `/api/v4/market-analyses/${encodeURIComponent(analysisId)}`),
     listTradeDecisions: (accountId: string, pageSize = 50) => send(traderDecisionListResponseSchema, `/api/v4/trade-decisions?account_id=${encodeURIComponent(accountId)}&page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
     getTradeDecision: (decisionId: string) => send(traderDecisionDetailResponseSchema, `/api/v4/trade-decisions/${encodeURIComponent(decisionId)}`),
+    getExecutionCommandContext: (accountId: string, symbol?: string | null, ticket?: string | null) => {
+      const query = new URLSearchParams()
+      if (symbol) query.set('symbol', symbol)
+      if (ticket) query.set('ticket', ticket)
+      return send(executionCommandContextResponseSchema, `/api/v4/trading-accounts/${encodeURIComponent(accountId)}/execution-context?${query.toString()}`)
+    },
+    getOperation: (operationId: string) => send(operationResponseSchema, `/api/v4/operations/${encodeURIComponent(operationId)}`),
+    previewExecutionDistribution: (strategyId: string, symbol: string) => send(executionDistributionPreviewResponseSchema, `/api/v4/execution-distributions/preview?strategy_id=${encodeURIComponent(strategyId)}&symbol=${encodeURIComponent(symbol)}`),
+    getExecutionDistribution: (distributionId: string) => send(executionDistributionDetailResponseSchema, `/api/v4/execution-distributions/${encodeURIComponent(distributionId)}`),
     createExecutionCommand: (csrfToken: string, accountId: string, body: ExecutionCommand, idempotencyKey: string) => send(
       operationResponseSchema,
       `/api/v4/trading-accounts/${encodeURIComponent(accountId)}/execution-commands`,

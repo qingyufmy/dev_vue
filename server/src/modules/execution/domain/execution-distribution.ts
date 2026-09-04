@@ -126,6 +126,23 @@ export interface DistributionTargetCandidate {
   riskSnapshotId: string | null
 }
 
+export interface DistributionPreviewTarget {
+  accountId: string
+  subscriptionId: string
+  tradePermission: boolean
+  ready: boolean
+  missingResources: Array<'account' | 'positions' | 'pending_orders' | 'quote' | 'contract' | 'risk'>
+}
+
+export interface ExecutionDistributionPreview {
+  strategyId: string
+  strategyVersionId: string
+  strategyRevision: number
+  symbol: string
+  targetCount: number
+  targets: DistributionPreviewTarget[]
+}
+
 export interface FrozenDistributionTarget extends DistributionTargetCandidate {
   id: string
   distributionId: string
@@ -208,6 +225,18 @@ export function normalizeCreateDistributionInput(input: CreateDistributionInput)
   const command = normalizeOrderCommand(input.command)
   const requestHash = sha256Canonical({ actorUserId, strategyId, command })
   return { actorUserId, actorRole, strategyId, idempotencyKey, command, requestHash }
+}
+
+export function normalizeDistributionPreviewInput(input: { actorUserId: number; actorRole: string; strategyId: string; symbol: string }) {
+  const actorUserId = userId(input.actorUserId)
+  const actorRole = String(input.actorRole ?? '').trim()
+  if (!actorRole) throw distributionError('distribution_actor_role_required', 403)
+  return {
+    actorUserId,
+    actorRole,
+    strategyId: opaque(input.strategyId, 'distribution_strategy_id_invalid'),
+    symbol: normalizeSymbol(input.symbol),
+  }
 }
 
 export function normalizeCreateDistributionCloseInput(input: CreateDistributionCloseInput): NormalizedCreateDistributionCloseInput {

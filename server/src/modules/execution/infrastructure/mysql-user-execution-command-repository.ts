@@ -99,7 +99,7 @@ export class MysqlUserExecutionCommandRepository implements UserExecutionCommand
       accountId: String(account.account_id),
       accountCurrency: String(account.currency ?? '').trim().toUpperCase(),
       owned: true,
-      observer: tradingContext?.mode === 'observer' || Boolean(tradingContext?.read_only),
+      observer: !tradingContext || tradingContext.mode !== 'full' || Boolean(tradingContext.read_only),
       tradePermission: Boolean(runtime?.trade_permission),
       policy,
       summary,

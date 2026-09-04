@@ -10,6 +10,7 @@ import type { ExecutionDistributionService } from '../../application/execution-d
 import type { UserExecutionOrderType } from '../../domain/user-execution-command.js'
 
 export interface ExecutionDistributionRequestAuthenticator {
+  authenticate(request: { headers: Record<string, unknown> }): Promise<{ userId: number; role: string }>
   assertWrite(request: { headers: Record<string, unknown> }): Promise<{ userId: number; role: string }>
 }
 
@@ -36,6 +37,27 @@ const response = (requestId: string, data: unknown) => ({ data, meta: { request_
  * performed by the execution distribution repository transaction.
  */
 export const executionDistributionRoutes: FastifyPluginAsync<ExecutionDistributionRoutesOptions> = async (fastify, options) => {
+  fastify.get<{ Querystring: { strategy_id?: string; symbol?: string } }>('/execution-distributions/preview', async (request, reply) => {
+    try {
+      const actor = await options.auth.authenticate(request)
+      const preview = await options.service.previewManualOrderDistribution({
+        actorUserId: actor.userId,
+        actorRole: actor.role,
+        strategyId: String(request.query.strategy_id ?? ''),
+        symbol: String(request.query.symbol ?? ''),
+      })
+      return response(request.id, distributionPreviewDto(preview))
+    } catch (error) { return problem(error, request, reply) }
+  })
+
+  fastify.get<{ Params: { distribution_id: string } }>('/execution-distributions/:distribution_id', async (request, reply) => {
+    try {
+      const actor = await options.auth.authenticate(request)
+      const result = await options.service.getDistribution(actor.userId, actor.role, request.params.distribution_id)
+      return response(request.id, distributionDetailDto(result))
+    } catch (error) { return problem(error, request, reply) }
+  })
+
   fastify.post<{ Body: DistributionBody }>('/execution-distributions', async (request, reply) => {
     try {
       const actor = await options.auth.assertWrite(request)
@@ -70,6 +92,53 @@ export const executionDistributionRoutes: FastifyPluginAsync<ExecutionDistributi
       return reply.code(202).send(response(request.id, operationDto(result)))
     } catch (error) { return problem(error, request, reply) }
   })
+}
+
+function distributionPreviewDto(value: Awaited<ReturnType<ExecutionDistributionService['previewManualOrderDistribution']>>) {
+  return {
+    strategy_id: value.strategyId,
+    strategy_version_id: value.strategyVersionId,
+    strategy_revision: String(value.strategyRevision),
+    symbol: value.symbol,
+    target_count: value.targetCount,
+    targets: value.targets.map((target) => ({
+      account_id: target.accountId,
+      subscription_id: target.subscriptionId,
+      trade_permission: target.tradePermission,
+      ready: target.ready,
+      missing_resources: target.missingResources,
+    })),
+  }
+}
+
+function distributionDetailDto(result: ExecutionDistributionResult) {
+  const value = result.distribution
+  return {
+    id: value.id,
+    operation_id: value.operationId,
+    strategy_id: value.strategyId,
+    strategy_version_id: value.strategyVersionId,
+    kind: value.kind,
+    source_distribution_id: value.sourceDistributionId,
+    command: value.command,
+    status: value.status,
+    target_count: value.targetCount,
+    result_summary: value.resultSummary,
+    created_at: value.createdAt,
+    updated_at: value.updatedAt,
+    completed_at: value.completedAt,
+    revision: String(value.revision),
+    targets: result.targets.map((target) => ({
+      id: target.id,
+      account_id: target.accountId,
+      subscription_id: target.subscriptionId,
+      child_operation_id: target.childOperationId,
+      source_ticket: target.sourceTicket,
+      status: target.status,
+      error_code: target.errorCode,
+      revision: String(target.revision),
+    })),
+  }
 }
 
 function wireOrderCommand(body: Record<string, unknown>): DistributionOrderCommand {

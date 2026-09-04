@@ -23,9 +23,11 @@ const props = withDefaults(defineProps<{
   positions: OpenPosition[]
   orders: PendingOrder[]
   loading?: boolean
+  readOnly?: boolean
   timezoneOffsetMinutes?: number | null
 }>(), {
   loading: false,
+  readOnly: false,
   timezoneOffsetMinutes: null,
 })
 
@@ -48,12 +50,15 @@ function tradingTime(value: string | null) {
       <CardHeader class="gap-3 border-b sm:flex-row sm:items-center sm:justify-between">
         <div class="min-w-0">
           <CardTitle class="flex items-center gap-2 text-base"><ClipboardList aria-hidden="true" />持仓与挂单</CardTitle>
-          <CardDescription>实时查看账户资源；选择一项查看完整参数</CardDescription>
+          <CardDescription>{{ readOnly ? '当前为只读模式；选择一项查看完整参数' : '实时查看账户资源；选择一项查看参数与可用操作' }}</CardDescription>
         </div>
-        <TabsList variant="line" class="w-full sm:w-auto">
-          <TabsTrigger value="positions" class="min-h-11 flex-1 sm:flex-none"><ListChecks aria-hidden="true" />持仓 {{ positions.length }}</TabsTrigger>
-          <TabsTrigger value="orders" class="min-h-11 flex-1 sm:flex-none"><ClipboardList aria-hidden="true" />挂单 {{ orders.length }}</TabsTrigger>
-        </TabsList>
+        <div class="flex flex-wrap items-center gap-2">
+          <Badge v-if="readOnly" variant="secondary">只读模式</Badge>
+          <TabsList variant="line" class="w-full sm:w-auto">
+            <TabsTrigger value="positions" class="min-h-11 flex-1 sm:flex-none"><ListChecks aria-hidden="true" />持仓 {{ positions.length }}</TabsTrigger>
+            <TabsTrigger value="orders" class="min-h-11 flex-1 sm:flex-none"><ClipboardList aria-hidden="true" />挂单 {{ orders.length }}</TabsTrigger>
+          </TabsList>
+        </div>
       </CardHeader>
 
       <CardContent class="p-0">

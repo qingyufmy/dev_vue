@@ -238,6 +238,42 @@ export class MysqlExecutionDistributionRepository implements ExecutionDistributi
     return this.loadResult(this.pool, input.actorUserId, rows[0].id)
   }
 
+  async previewManualOrderDistribution(input: { actorUserId: number; strategyId: string; symbol: string }) {
+    void input.actorUserId
+    const strategy = await readActiveTraderStrategyVersion(this.pool, input.strategyId)
+    if (!strategy) throw new ExecutionDistributionError('distribution_strategy_not_active', 409)
+    const candidates = await queryEligibleTargets(this.pool, input.strategyId, strategy.versionId, input.symbol, false)
+    const uniqueAccounts = candidates.filter((candidate, index) => index === 0 || candidates[index - 1]?.accountId !== candidate.accountId)
+    const targets = uniqueAccounts.map((candidate) => {
+      const revisions = {
+        account: candidate.accountRevision,
+        positions: candidate.positionsRevision,
+        pending_orders: candidate.pendingOrdersRevision,
+        quote: candidate.quoteRevision,
+        contract: candidate.contractRevision,
+        risk: candidate.riskRevision,
+      } as const
+      const missingResources = (Object.entries(revisions) as Array<[keyof typeof revisions, number]>)
+        .filter(([, revision]) => revision < 1)
+        .map(([resource]) => resource)
+      return {
+        accountId: candidate.accountId,
+        subscriptionId: candidate.subscriptionId,
+        tradePermission: candidate.tradePermission,
+        ready: candidate.tradePermission && missingResources.length === 0,
+        missingResources,
+      }
+    })
+    return {
+      strategyId: strategy.strategyId,
+      strategyVersionId: strategy.versionId,
+      strategyRevision: strategy.revision,
+      symbol: input.symbol,
+      targetCount: targets.length,
+      targets,
+    }
+  }
+
   async claimTarget(targetId: string, now: Date): Promise<RunnableDistributionTarget | null> {
     return transaction(this.pool, async connection => {
       const [targetRows] = await connection.execute<TargetRow[]>(`${targetSelect} WHERE t.id=? LIMIT 1 FOR UPDATE`, [targetId])
@@ -299,28 +335,7 @@ export class MysqlExecutionDistributionRepository implements ExecutionDistributi
   }
 
   async listEligibleTargets(connection: PoolConnection, strategyId: string, strategyVersionId: string, symbol: string) {
-    const [rows] = await connection.execute<CandidateRow[]>(`SELECT CAST(s.id AS CHAR) subscription_id,s.user_id target_user_id,CAST(s.trading_account_id AS CHAR) trading_account_id,s.standard_symbol,s.revision subscription_revision,CAST(s.trader_strategy_id AS CHAR) trader_strategy_id,CAST(s.trader_strategy_version_id AS CHAR) trader_strategy_version_id,a.currency,COALESCE(ars.trade_permission,0) trade_permission,ars.revision account_revision,pr.revision positions_revision,por.revision pending_orders_revision,q.revision quote_revision,i.revision contract_revision,rs.revision risk_revision,CASE WHEN ars.revision IS NULL THEN NULL ELSE CONCAT('account_runtime:',a.id,':',ars.revision) END account_snapshot_id,CASE WHEN q.revision IS NULL THEN NULL ELSE CONCAT('market_quote:',a.id,':',q.symbol,':',q.revision) END quote_snapshot_id,CASE WHEN i.revision IS NULL THEN NULL ELSE CONCAT('market_contract:',a.id,':',i.symbol,':',i.revision) END contract_snapshot_id,CASE WHEN rs.revision IS NULL THEN NULL ELSE CONCAT('risk_summary:',a.id,':',rs.revision) END risk_snapshot_id FROM strategy_subscriptions s INNER JOIN strategies ts ON ts.id=s.trader_strategy_id AND ts.kind='trader' AND ts.status='active' AND ts.deleted_at_utc IS NULL AND ts.active_version_id=s.trader_strategy_version_id INNER JOIN strategy_versions tv ON tv.id=s.trader_strategy_version_id AND tv.strategy_id=s.trader_strategy_id INNER JOIN trading_accounts a ON a.id=s.trading_account_id AND a.deleted_at_utc IS NULL INNER JOIN trading_account_ownerships own ON own.trading_account_id=s.trading_account_id AND own.user_id=s.user_id AND own.role='owner' AND own.revoked_at_utc IS NULL LEFT JOIN account_runtime_snapshots ars ON ars.trading_account_id=s.trading_account_id LEFT JOIN trading_projection_revisions pr ON pr.trading_account_id=s.trading_account_id AND pr.resource_kind='positions' AND pr.resource_id='open' LEFT JOIN trading_projection_revisions por ON por.trading_account_id=s.trading_account_id AND por.resource_kind='pending_orders' AND por.resource_id='open' LEFT JOIN market_quotes q ON q.trading_account_id=s.trading_account_id AND q.symbol=s.standard_symbol LEFT JOIN market_instrument_snapshots i ON i.trading_account_id=s.trading_account_id AND i.symbol=s.standard_symbol LEFT JOIN account_risk_summaries rs ON rs.trading_account_id=s.trading_account_id WHERE s.status='active' AND s.trader_enabled=1 AND s.trade_send_enabled=1 AND s.trader_strategy_id=? AND s.trader_strategy_version_id=? AND s.standard_symbol=? ORDER BY s.trading_account_id,s.id FOR UPDATE`, [strategyId, strategyVersionId, symbol])
-    return rows.map(row => ({
-      subscriptionId: row.subscription_id,
-      userId: Number(row.target_user_id),
-      accountId: row.trading_account_id,
-      symbol: row.standard_symbol,
-      subscriptionRevision: Number(row.subscription_revision),
-      traderStrategyId: row.trader_strategy_id,
-      traderStrategyVersionId: row.trader_strategy_version_id,
-      accountCurrency: row.currency,
-      tradePermission: Boolean(row.trade_permission),
-      accountRevision: Number(row.account_revision ?? 0),
-      positionsRevision: Number(row.positions_revision ?? 0),
-      pendingOrdersRevision: Number(row.pending_orders_revision ?? 0),
-      quoteRevision: Number(row.quote_revision ?? 0),
-      contractRevision: Number(row.contract_revision ?? 0),
-      riskRevision: Number(row.risk_revision ?? 0),
-      accountSnapshotId: row.account_snapshot_id,
-      quoteSnapshotId: row.quote_snapshot_id,
-      contractSnapshotId: row.contract_snapshot_id,
-      riskSnapshotId: row.risk_snapshot_id,
-    }))
+    return queryEligibleTargets(connection, strategyId, strategyVersionId, symbol, true)
   }
 
   async listAttributableCloseOutcomes(connection: PoolConnection, sourceDistributionId: string) {
@@ -478,6 +493,38 @@ export class MysqlExecutionDistributionRepository implements ExecutionDistributi
     const [targetRows] = await executor.execute<TargetRow[]>(`${targetSelect} WHERE t.distribution_id=? ORDER BY t.id`, [distributionId])
     return { operation: mapOperation(operationRow), distribution: mapDistribution(distributionRow), targets: targetRows.map(mapTarget) }
   }
+}
+
+async function readActiveTraderStrategyVersion(executor: Pool | PoolConnection, strategyId: string): Promise<ActiveTraderStrategyVersion | null> {
+  const [rows] = await executor.execute<StrategyRow[]>(`SELECT CAST(s.id AS CHAR) strategy_id,CAST(s.active_version_id AS CHAR) version_id,s.revision,s.kind,s.status FROM strategies s INNER JOIN strategy_versions v ON v.id=s.active_version_id AND v.strategy_id=s.id WHERE s.id=? AND s.kind='trader' AND s.status='active' AND s.deleted_at_utc IS NULL LIMIT 1`, [strategyId])
+  const row = rows[0]
+  return row ? { strategyId: row.strategy_id, versionId: row.version_id, revision: Number(row.revision), kind: 'trader', status: 'active' } : null
+}
+
+async function queryEligibleTargets(executor: Pool | PoolConnection, strategyId: string, strategyVersionId: string, symbol: string, lock: boolean) {
+  const lockClause = lock ? ' FOR UPDATE' : ''
+  const [rows] = await executor.execute<CandidateRow[]>(`SELECT CAST(s.id AS CHAR) subscription_id,s.user_id target_user_id,CAST(s.trading_account_id AS CHAR) trading_account_id,s.standard_symbol,s.revision subscription_revision,CAST(s.trader_strategy_id AS CHAR) trader_strategy_id,CAST(s.trader_strategy_version_id AS CHAR) trader_strategy_version_id,a.currency,COALESCE(ars.trade_permission,0) trade_permission,ars.revision account_revision,pr.revision positions_revision,por.revision pending_orders_revision,q.revision quote_revision,i.revision contract_revision,rs.revision risk_revision,CASE WHEN ars.revision IS NULL THEN NULL ELSE CONCAT('account_runtime:',a.id,':',ars.revision) END account_snapshot_id,CASE WHEN q.revision IS NULL THEN NULL ELSE CONCAT('market_quote:',a.id,':',q.symbol,':',q.revision) END quote_snapshot_id,CASE WHEN i.revision IS NULL THEN NULL ELSE CONCAT('market_contract:',a.id,':',i.symbol,':',i.revision) END contract_snapshot_id,CASE WHEN rs.revision IS NULL THEN NULL ELSE CONCAT('risk_summary:',a.id,':',rs.revision) END risk_snapshot_id FROM strategy_subscriptions s INNER JOIN strategies ts ON ts.id=s.trader_strategy_id AND ts.kind='trader' AND ts.status='active' AND ts.deleted_at_utc IS NULL AND ts.active_version_id=s.trader_strategy_version_id INNER JOIN strategy_versions tv ON tv.id=s.trader_strategy_version_id AND tv.strategy_id=s.trader_strategy_id INNER JOIN trading_accounts a ON a.id=s.trading_account_id AND a.deleted_at_utc IS NULL INNER JOIN trading_account_ownerships own ON own.trading_account_id=s.trading_account_id AND own.user_id=s.user_id AND own.role='owner' AND own.revoked_at_utc IS NULL LEFT JOIN account_runtime_snapshots ars ON ars.trading_account_id=s.trading_account_id LEFT JOIN trading_projection_revisions pr ON pr.trading_account_id=s.trading_account_id AND pr.resource_kind='positions' AND pr.resource_id='open' LEFT JOIN trading_projection_revisions por ON por.trading_account_id=s.trading_account_id AND por.resource_kind='pending_orders' AND por.resource_id='open' LEFT JOIN market_quotes q ON q.trading_account_id=s.trading_account_id AND q.symbol=s.standard_symbol LEFT JOIN market_instrument_snapshots i ON i.trading_account_id=s.trading_account_id AND i.symbol=s.standard_symbol LEFT JOIN account_risk_summaries rs ON rs.trading_account_id=s.trading_account_id WHERE s.status='active' AND s.trader_enabled=1 AND s.trade_send_enabled=1 AND s.trader_strategy_id=? AND s.trader_strategy_version_id=? AND s.standard_symbol=? ORDER BY s.trading_account_id,s.id${lockClause}`, [strategyId, strategyVersionId, symbol])
+  return rows.map(row => ({
+    subscriptionId: row.subscription_id,
+    userId: Number(row.target_user_id),
+    accountId: row.trading_account_id,
+    symbol: row.standard_symbol,
+    subscriptionRevision: Number(row.subscription_revision),
+    traderStrategyId: row.trader_strategy_id,
+    traderStrategyVersionId: row.trader_strategy_version_id,
+    accountCurrency: row.currency,
+    tradePermission: Boolean(row.trade_permission),
+    accountRevision: Number(row.account_revision ?? 0),
+    positionsRevision: Number(row.positions_revision ?? 0),
+    pendingOrdersRevision: Number(row.pending_orders_revision ?? 0),
+    quoteRevision: Number(row.quote_revision ?? 0),
+    contractRevision: Number(row.contract_revision ?? 0),
+    riskRevision: Number(row.risk_revision ?? 0),
+    accountSnapshotId: row.account_snapshot_id,
+    quoteSnapshotId: row.quote_snapshot_id,
+    contractSnapshotId: row.contract_snapshot_id,
+    riskSnapshotId: row.risk_snapshot_id,
+  }))
 }
 
 async function insertTargets(connection: PoolConnection, targets: FrozenDistributionTarget[]) {

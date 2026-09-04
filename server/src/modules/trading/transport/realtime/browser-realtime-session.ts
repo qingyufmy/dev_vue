@@ -108,9 +108,10 @@ function validScope(target: Required<Target>) {
       : Boolean(target.trading_account_id) && target.observer_channel_id === null
         && ['trader_jobs', 'trade_decisions'].includes(target.resource_id ?? '')
   }
-  if (target.kind === 'risk' || target.kind === 'operations') {
+  if (target.kind === 'risk') {
     return Boolean(target.trading_account_id) && target.observer_channel_id === null
   }
+  if (target.kind === 'operations') return target.observer_channel_id === null
   return Boolean(target.trading_account_id)
 }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRight, Bot, ChartNoAxesCombined, CircleAlert, FileText } from '@lucide/vue'
+import { ArrowRight, Ban, Bot, ChartNoAxesCombined, CircleAlert, FileText, Pencil, ShieldCheck } from '@lucide/vue'
 import type { OpenPosition, PendingOrder, TraderDecisionSummary } from '@aurum/contracts'
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
@@ -41,11 +41,35 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
+  'modify-position': [resource: OpenPosition]
+  'close-position': [resource: OpenPosition]
+  'modify-order': [resource: PendingOrder]
+  'cancel-order': [resource: PendingOrder]
 }>()
 
 const title = computed(() => props.resource ? `${resourceKind(props.resource)} · ${props.resource.symbol}` : '交易资源详情')
 const description = computed(() => props.resource ? `订单号 #${props.resource.ticket} · ${props.resource.accountId}` : '选择持仓或挂单查看完整参数')
 const tradingTime = (value: string | null) => formatDateTime(value, props.timezoneOffsetMinutes)
+
+function requestModifyPosition() {
+  if (props.readOnly || !props.resource || !isPosition(props.resource)) return
+  emit('modify-position', props.resource)
+}
+
+function requestClosePosition() {
+  if (props.readOnly || !props.resource || !isPosition(props.resource)) return
+  emit('close-position', props.resource)
+}
+
+function requestModifyOrder() {
+  if (props.readOnly || !props.resource || isPosition(props.resource)) return
+  emit('modify-order', props.resource)
+}
+
+function requestCancelOrder() {
+  if (props.readOnly || !props.resource || isPosition(props.resource)) return
+  emit('cancel-order', props.resource)
+}
 </script>
 
 <template>
@@ -121,6 +145,25 @@ const tradingTime = (value: string | null) => formatDateTime(value, props.timezo
           <Card v-else-if="resource.signalId" size="sm" class="shadow-none">
             <CardHeader><CardTitle class="flex items-center gap-2 text-base"><Bot aria-hidden="true" />来源信号</CardTitle><CardDescription>交易资源保留了信号来源标记</CardDescription></CardHeader>
             <CardContent class="grid gap-2"><p class="font-mono text-sm break-all">{{ resource.signalId }}</p><p class="text-xs leading-5 text-muted-foreground">该来源编号目前不能直接定位完整推理；系统不会根据相似编号猜测关联记录。</p></CardContent>
+          </Card>
+
+          <Card size="sm" class="border-primary/25 shadow-none">
+            <CardHeader>
+              <CardTitle class="flex items-center gap-2 text-base"><ShieldCheck aria-hidden="true" />交易操作</CardTitle>
+              <CardDescription>操作会先交给父页面确认，再由服务端异步受理。</CardDescription>
+            </CardHeader>
+            <CardContent class="grid gap-3">
+              <div v-if="isPosition(resource)" class="grid gap-2 sm:grid-cols-2">
+                <Button variant="outline" size="lg" class="min-h-11" :disabled="readOnly" @click="requestModifyPosition"><Pencil data-icon="inline-start" />修改止盈止损</Button>
+                <Button variant="destructive" size="lg" class="min-h-11" :disabled="readOnly" @click="requestClosePosition"><Ban data-icon="inline-start" />平仓</Button>
+              </div>
+              <div v-else class="grid gap-2 sm:grid-cols-2">
+                <Button variant="outline" size="lg" class="min-h-11" :disabled="readOnly" @click="requestModifyOrder"><Pencil data-icon="inline-start" />修改挂单</Button>
+                <Button variant="destructive" size="lg" class="min-h-11" :disabled="readOnly" @click="requestCancelOrder"><Ban data-icon="inline-start" />撤单</Button>
+              </div>
+              <p v-if="readOnly" class="text-xs leading-5 text-muted-foreground">当前为观摩或只读模式，写操作已禁用；如需操作，请切换到本人且有交易权限的账户。</p>
+              <p v-else class="text-xs leading-5 text-muted-foreground">不会根据按钮点击直接推断成功；提交后请在操作中心等待最终状态和终端资源复核。</p>
+            </CardContent>
           </Card>
 
           <Separator />

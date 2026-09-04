@@ -211,7 +211,7 @@
 | bridge | `/bridge/pairings`、`/bridge/connections`、`/bridge/connection-capacity`、`/bridge/terminal-profiles`、`/bridge/releases` | 配对、当前账户 WebSocket 额度、多终端档案、诊断、下载和更新 |
 | trading context | `/trading-context`、`/trading-accounts` | 当前系统用户作用域、账户和观摩频道 |
 | market | `/market/symbols`、`/market/quotes`、`/market/candles`、`/macro-snapshots` | 精准报价、历史 K 线和宏观数据 |
-| execution | `/positions`、`/pending-orders`、`/order-intents`、`/operations` | 当前交易资源、命令受理和状态恢复 |
+| execution | `/positions`、`/pending-orders`、`/trading-accounts/{account_id}/execution-context`、`/trading-accounts/{account_id}/execution-commands`、`/execution-distributions`、`/operations` | 当前交易资源、权威执行上下文、账户命令、策略分发和状态恢复 |
 | analysis | `/market-analyses`、`/analysis-jobs` | 手动/自动行情分析、分析历史和完整推理；记录按系统用户归类 |
 | trader | `/trade-decisions`、`/market-analyses/{analysis_id}/trader-evaluations` | 每个交易账户独立的二次判断和动作建议，不直接执行交易 |
 | strategy | `/strategies`、`/strategy-versions`、`/strategy-subscriptions` | 私有/平台策略、版本和用户订阅 |
@@ -221,13 +221,14 @@
 | records | `/trades`、`/audit-events`、`/exports` | 历史交易、系统审计和导出 |
 | admin | `/admin/*` | 用户、会员、内容、商业、AI、风控、Bridge、集成、系统和审计 |
 
-交易写命令使用明确子资源：
+交易写命令统一通过服务端执行边界：
 
-- `POST /order-intents`
-- `POST /positions/{ticket}/close-commands`
-- `POST /positions/{ticket}/protection-commands`
-- `POST /pending-orders/{ticket}/cancel-commands`
-- `POST /pending-orders/{ticket}/modify-commands`
+- `GET /trading-accounts/{account_id}/execution-context?symbol=...|ticket=...`：返回六类当前 revision、目标资源 revision、报价和合约约束，不返回内部风控策略正文。
+- `POST /trading-accounts/{account_id}/execution-commands`：统一受理市价单、挂单、持仓/挂单修改、平仓和撤单；请求必须带完整 `expected_state` 与幂等键。
+- `GET /execution-distributions/preview?strategy_id=...&symbol=...`：管理员只读预览当前目标资格；预览不是最终名单。
+- `POST /execution-distributions`：管理员在受理事务内重新校验并冻结策略订阅目标。
+- `GET /execution-distributions/{distribution_id}`：读取父操作、目标和归因结果。
+- `POST /execution-distributions/{distribution_id}/close-commands`：只对原分发结果中仍可由 distribution、outcome 和 ticket 精确归因的持仓创建平仓命令。
 - `POST /analysis-jobs`
 
 这些端点只持久化和受理服务端意图。真实 MT 结果必须通过 `operations`、交易资源 revision、审计和 Bridge 结果共同确认。完整状态转换、分发父子操作和未知结果恢复以 [交易执行统一状态机](./trade-execution-state-machine.md) 为准。
@@ -309,7 +310,8 @@ AI、风控与执行资源使用以下受控目标，不能把任意 Redis 频�
 - 用户级行情分析：`kind=signals`，账户与观摩频道为空，`resource_id=analysis_jobs|market_analyses|all`；分析记录始终按系统用户归类，不随 MT4/MT5 账户切换。
 - 账户级交易员：`kind=signals`，必须提供 `trading_account_id`，`resource_id=trader_jobs|trade_decisions`。
 - 账户级风控：`kind=risk`，必须提供 `trading_account_id`，`resource_id=policy|summary|decisions|manual_release|all`。
-- 账户级异步操作：`kind=operations`，必须提供 `trading_account_id`，`resource_id=all`。
+- 账户级异步操作：`kind=operations`，提供 `trading_account_id`，`resource_id=all`。
+- 用户级分发父操作：`kind=operations`，`trading_account_id=null`、`observer_channel_id=null`、`resource_id=all`；只匹配事件中的同一活动系统用户。观摩频道不能订阅该目标。
 
 上述列表型目标的 `after_revision` 必须为 `null`：事件中的 revision 属于单个聚合根，而不是整张列表，不能伪造一个可比较的列表 revision。浏览器首次连接和每次重连先通过 HTTP 获取列表快照，再用 WebSocket 事件做小粒度失效通知；单个聚合收到旧 revision 时仍须丢弃。账户、报价、K 线、持仓和挂单继续携带可与 HTTP 快照精确比较的 `after_revision`。
 

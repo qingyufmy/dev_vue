@@ -9,6 +9,7 @@ import {
 import type { UserExecutionCommandService } from '../../application/user-execution-command-service.js'
 
 export interface UserExecutionCommandRequestAuthenticator {
+  authenticate(request: { headers: Record<string, unknown> }): Promise<{ userId: number }>
   /** Must perform the write-authentication and CSRF checks for this request. */
   assertWrite(request: { headers: Record<string, unknown> }): Promise<{ userId: number }>
 }
@@ -35,6 +36,19 @@ const response = (requestId: string, data: unknown) => ({ data, meta: { request_
  * still performs the authoritative validation and normalization.
  */
 export const userExecutionCommandRoutes: FastifyPluginAsync<UserExecutionCommandRoutesOptions> = async (fastify, options) => {
+  fastify.get<{ Params: { accountId: string }; Querystring: { symbol?: string; ticket?: string } }>('/trading-accounts/:accountId/execution-context', async (request, reply) => {
+    try {
+      const { userId } = await options.auth.authenticate(request)
+      const result = await options.service.commandContext({
+        userId,
+        accountId: request.params.accountId,
+        symbol: request.query.symbol ?? null,
+        ticket: request.query.ticket ?? null,
+      })
+      return response(request.id, commandContextDto(result.context, result.symbol, result.ticket))
+    } catch (error) { return problem(error, request, reply) }
+  })
+
   fastify.post<{ Params: { accountId: string }; Body: RequestBody }>('/trading-accounts/:accountId/execution-commands', async (request, reply) => {
     try {
       // Authenticate before parsing or mutating anything.  assertWrite owns
@@ -48,6 +62,51 @@ export const userExecutionCommandRoutes: FastifyPluginAsync<UserExecutionCommand
       return reply.code(202).send(response(request.id, commandResultDto(result)))
     } catch (error) { return problem(error, request, reply) }
   })
+}
+
+function commandContextDto(context: Awaited<ReturnType<UserExecutionCommandService['commandContext']>>['context'], requestedSymbol: string | null, ticket: string | null) {
+  const target = ticket
+    ? [...context.positions, ...context.pendingOrders].find((item) => String(item.ticket ?? '') === ticket) ?? null
+    : null
+  const symbol = String(requestedSymbol ?? target?.symbol ?? context.quote.symbol ?? '').trim().toUpperCase()
+  const quote = context.quote.revision > 0 && positiveDecimal(context.quote.bid) && positiveDecimal(context.quote.ask)
+    ? { bid: context.quote.bid, ask: context.quote.ask, observed_at: context.quote.observedAt }
+    : null
+  const instrument = context.instrument.revision > 0
+    && [context.instrument.point, context.instrument.tickSize, context.instrument.tickValue, context.instrument.volumeMin, context.instrument.volumeMax, context.instrument.volumeStep].every(positiveDecimal)
+    ? {
+        point: context.instrument.point,
+        tick_size: context.instrument.tickSize,
+        tick_value: context.instrument.tickValue,
+        volume_min: context.instrument.volumeMin,
+        volume_max: context.instrument.volumeMax,
+        volume_step: context.instrument.volumeStep,
+        trade_enabled: context.instrument.tradeEnabled,
+      }
+    : null
+  return {
+    account_id: context.accountId,
+    symbol,
+    ticket,
+    read_only: context.observer,
+    trade_permission: context.tradePermission,
+    expected_state: {
+      account_revision: String(context.currentRevisions.account),
+      positions_revision: String(context.currentRevisions.positions),
+      pending_orders_revision: String(context.currentRevisions.pendingOrders),
+      quote_revision: String(context.currentRevisions.quote),
+      contract_revision: String(context.currentRevisions.contract),
+      risk_revision: String(context.currentRevisions.risk),
+    },
+    target_revision: target && Number(target.revision) > 0 ? String(target.revision) : null,
+    quote,
+    instrument,
+  }
+}
+
+function positiveDecimal(value: unknown) {
+  const normalized = String(value ?? '').trim()
+  return /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(normalized) && Number(normalized) > 0
 }
 
 function toCommandInput(userId: number, accountId: string, body: RequestBody, idempotencyKey: string): UserExecutionCommandInput {

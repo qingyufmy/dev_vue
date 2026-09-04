@@ -44,15 +44,22 @@ describe('Stage 12M trader read workspace', () => {
     expect(source).not.toContain('v-html')
   })
 
-  it('does not pretend unsupported V4 commands are executable', async () => {
+  it('routes supported V4 commands through context, confirmation and operation state', async () => {
     const files = await Promise.all([
       feature('views/TraderView.vue'),
       feature('components/InventoryWorkspace.vue'),
       feature('components/InventoryDetailSheet.vue'),
+      feature('components/TraderDangerConfirm.vue'),
+      feature('composables/use-trader-commands.ts'),
+      feature('model/trader-command-builder.ts'),
     ])
     const source = files.join('\n')
 
-    expect(source).not.toMatch(/@click=.*(?:close|cancel|modify|distribute)/i)
+    expect(source).toContain('prepareCommand')
+    expect(source).toContain('expected_state')
+    expect(source).toContain('TraderDangerConfirm')
+    expect(source).toContain('HTTP 接受不等于终端成交')
+    expect(source).toContain('handleOperationChanged')
     expect(source).not.toContain('操作成功')
     expect(source).not.toContain('/api/v3')
   })

@@ -2,6 +2,7 @@ import {
   ExecutionDistributionError,
   normalizeCreateDistributionCloseInput,
   normalizeCreateDistributionInput,
+  normalizeDistributionPreviewInput,
   type CreateDistributionCloseInput,
   type CreateDistributionInput,
   type ExecutionDistributionResult,
@@ -28,6 +29,12 @@ export class ExecutionDistributionService {
       return existing.result
     }
     return this.repository.createManualOrderDistribution(normalized)
+  }
+
+  async previewManualOrderDistribution(input: { actorUserId: number; actorRole: string; strategyId: string; symbol: string }) {
+    assertAdministrator(input.actorRole)
+    const normalized = normalizeDistributionPreviewInput(input)
+    return this.repository.previewManualOrderDistribution({ actorUserId: normalized.actorUserId, strategyId: normalized.strategyId, symbol: normalized.symbol })
   }
 
   async createDistributionClose(input: CreateDistributionCloseInput): Promise<ExecutionDistributionResult> {

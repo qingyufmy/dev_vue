@@ -18,7 +18,7 @@ import {
 import { traderApi } from '../api/trader-api'
 import { createTraderRealtime, type TraderRealtimeState } from '../realtime/trader-realtime'
 
-export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecision: (id: string) => void) {
+export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecision: (id: string) => void, operationChanged?: (operationId: string) => void) {
   const { session } = useTradeSession()
   const loading = ref(false)
   const refreshing = ref(false)
@@ -31,6 +31,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
   const realtime = ref<TraderRealtimeState>('idle')
   const activeAccountId = ref<string | null>(null)
   const observerChannelId = ref<string | null>(null)
+  const symbols = ref<string[]>([])
   const strategies = ref<StrategySummary[]>([])
   const decisions = ref<TraderDecisionSummary[]>([])
   const detail = ref<TraderDecisionDetail | null>(null)
@@ -90,6 +91,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     }
     const workspaceResponse = workspaceResult.value
     accountSnapshot.value = workspaceResponse.data.snapshot
+    symbols.value = workspaceResponse.data.symbols
     openPositions.value = workspaceResponse.data.positions.items
     pendingOrders.value = workspaceResponse.data.pendingOrders.items
     resourceRevisions.value.account = workspaceResponse.data.snapshot?.revision ?? 0
@@ -111,6 +113,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     const workspace = await traderApi.getWorkspace(activeAccountId.value, observerChannelId.value)
     if (currentGeneration !== generation) return
     accountSnapshot.value = workspace.data.snapshot
+    symbols.value = workspace.data.symbols
     openPositions.value = workspace.data.positions.items
     pendingOrders.value = workspace.data.pendingOrders.items
     resourceRevisions.value.account = workspace.data.snapshot?.revision ?? 0
@@ -213,8 +216,9 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
         }
       },
       onDecisionChanged: (decisionId) => { void refreshDecisions(decisionId) },
-      onOperationChanged: () => {
+      onOperationChanged: (operationId) => {
         operationNotice.value = '交易执行状态已变化，账户资源已重新同步。'
+        operationChanged?.(operationId)
         void Promise.all([syncWorkspace(), refreshDecisions()])
       },
       resync: () => Promise.all([syncWorkspace(), refreshDecisions()]),
@@ -254,6 +258,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     accountSnapshot.value = null
     openPositions.value = []
     pendingOrders.value = []
+    symbols.value = []
     resourceRevisions.value.account = 0
     resourceRevisions.value.positions = 0
     resourceRevisions.value.pendingOrders = 0
@@ -273,6 +278,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     snapshot: accountSnapshot,
     positions: openPositions,
     pendingOrders,
+    symbols,
     strategies,
     decisions,
     detail,

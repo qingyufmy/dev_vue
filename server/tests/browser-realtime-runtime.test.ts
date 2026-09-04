@@ -45,6 +45,41 @@ describe('V4 browser realtime runtime', () => {
     expect(redis.unsubscribed).toBe(true)
   })
 
+  it('delivers user-scoped distribution operations without inventing an account scope', async () => {
+    const messages: unknown[] = []
+    const hub = new BrowserRealtimeHub(repository())
+    const unsubscribe = await hub.subscribeTargets({
+      userId: 42,
+      requestId: 'distribution-operations',
+      targets: [{
+        accountId: null,
+        observerChannelId: null,
+        resources: ['operation'],
+        afterRevision: { operation: null },
+        publicTarget: { kind: 'operations', trading_account_id: null, observer_channel_id: null, resource_id: 'all' },
+      }],
+      sink: { send(message) { messages.push(message) }, close() { throw new Error('unexpected_close') } },
+    })
+    hub.publish({
+      eventId: 'distribution-operation-1', type: 'operation.changed', occurredAt: '2026-09-04T08:00:00.000Z',
+      userId: 42, accountId: null, terminalInstanceId: null, resource: 'operation', resourceId: 'operation-parent-1',
+      revision: 2, data: { status: 'running' },
+    })
+    hub.publish({
+      eventId: 'distribution-operation-other-user', type: 'operation.changed', occurredAt: '2026-09-04T08:00:01.000Z',
+      userId: 43, accountId: null, terminalInstanceId: null, resource: 'operation', resourceId: 'operation-parent-2',
+      revision: 1, data: { status: 'running' },
+    })
+
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'operation.changed',
+      scope: expect.objectContaining({ user_id: '42', trading_account_id: null, observer_channel_id: null }),
+      resource: { kind: 'operation', id: 'operation-parent-1' },
+    }))
+    expect(messages).not.toContainEqual(expect.objectContaining({ resource: { kind: 'operation', id: 'operation-parent-2' } }))
+    unsubscribe?.()
+  })
+
   it('accepts only the exact same-origin subprotocol and sends welcome plus revision-ready', async () => {
     const http = createServer()
     await listen(http)
@@ -108,7 +143,8 @@ describe('V4 browser realtime runtime', () => {
       ['POST', '/api/v4/bridge/legacy-credential-exchanges'], ['POST', '/api/v4/bridge/session-tokens'],
       ['GET', '/api/v4/trading-context'], ['GET', '/api/v4/market/candles'],
       ['POST', '/api/v4/analysis-jobs'], ['GET', '/api/v4/risk-accounts/:accountId/policy'],
-      ['GET', '/api/v4/operations/:operationId'],
+      ['GET', '/api/v4/operations/:operationId'], ['GET', '/api/v4/trading-accounts/:accountId/execution-context'],
+      ['GET', '/api/v4/execution-distributions/preview'], ['GET', '/api/v4/execution-distributions/:distribution_id'],
     ] as const) expect(app.hasRoute({ method: route[0], url: route[1] })).toBe(true)
     await app.close()
   })

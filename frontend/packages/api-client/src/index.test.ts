@@ -174,4 +174,40 @@ describe('createApiClient', () => {
     expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual(expect.objectContaining({ command_type: 'market_order', expected_state: expectedState }))
     expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({ expected_revision: '8', target_ids: [] })
   })
+
+  it('reads command context, operation and distribution state from encoded V4 paths', async () => {
+    const meta = { request_id: 'read', generated_at: '2026-09-04T04:00:00.000Z' }
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+        account_id: 'account/7', symbol: 'XAUUSD', ticket: 'ticket:1', read_only: false, trade_permission: true,
+        expected_state: { account_revision: '1', positions_revision: '2', pending_orders_revision: '3', quote_revision: '4', contract_revision: '5', risk_revision: '6' },
+        target_revision: '7', quote: { bid: '2500', ask: '2501', observed_at: meta.generated_at }, instrument: null,
+      }, meta })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+        operation_id: 'op/1', kind: 'user_execution_command', status: 'running', accepted_at: meta.generated_at, updated_at: meta.generated_at,
+        completed_at: null, resource_id: null, error_code: null, revision: '2', parent_operation_id: null, distribution_id: null, result_summary: null,
+      }, meta })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+        strategy_id: 's/1', strategy_version_id: 'v1', strategy_revision: '3', symbol: 'XAUUSD', target_count: 0, targets: [],
+      }, meta })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+        id: 'd/1', operation_id: 'op/2', strategy_id: 's/1', strategy_version_id: 'v1', kind: 'manual_order', source_distribution_id: null,
+        command: {}, status: 'queued', target_count: 0, result_summary: {}, created_at: meta.generated_at, updated_at: meta.generated_at,
+        completed_at: null, revision: '1', targets: [],
+      }, meta })))
+    const client = createApiClient({ fetchImpl })
+
+    await client.getExecutionCommandContext('account/7', 'XAUUSD', 'ticket:1')
+    await client.getOperation('op/1')
+    await client.previewExecutionDistribution('s/1', 'XAUUSD')
+    await client.getExecutionDistribution('d/1')
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v4/trading-accounts/account%2F7/execution-context?symbol=XAUUSD&ticket=ticket%3A1',
+      '/api/v4/operations/op%2F1',
+      '/api/v4/execution-distributions/preview?strategy_id=s%2F1&symbol=XAUUSD',
+      '/api/v4/execution-distributions/d%2F1',
+    ])
+    for (const [, request] of fetchImpl.mock.calls) expect(request?.method).toBe('GET')
+  })
 })

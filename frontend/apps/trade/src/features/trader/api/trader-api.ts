@@ -11,4 +11,11 @@ export const traderApi = {
   listStrategies: () => client.listStrategies('trader'),
   listDecisions: client.listTradeDecisions,
   getDecision: client.getTradeDecision,
+  getCommandContext: client.getExecutionCommandContext,
+  createCommand: client.createExecutionCommand,
+  previewDistribution: client.previewExecutionDistribution,
+  createDistribution: client.createExecutionDistribution,
+  getDistribution: client.getExecutionDistribution,
+  createDistributionClose: client.createDistributionCloseCommand,
+  getOperation: client.getOperation,
 }
