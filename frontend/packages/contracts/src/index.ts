@@ -297,6 +297,308 @@ export const traderDecisionDetailSchema = z.object({
 export const traderDecisionListResponseSchema = z.object({ data: z.object({ items: z.array(traderDecisionSummarySchema) }), meta: responseMetaSchema })
 export const traderDecisionDetailResponseSchema = z.object({ data: traderDecisionDetailSchema, meta: responseMetaSchema })
 
+const riskPolicyDecimalSchema = decimalSchema
+const riskPolicyEditableInteger = (minimum: number, maximum?: number) => {
+  const schema = z.number().int().min(minimum)
+  return maximum === undefined ? schema : schema.max(maximum)
+}
+
+/**
+ * Account risk HTTP resources deliberately keep decimal values as strings on
+ * the wire.  This avoids silently changing broker precision in the browser;
+ * only revisions and explicitly integral counters are normalized to numbers.
+ */
+export const riskPolicySchema = z.object({
+  account_id: z.string().min(1),
+  platform_policy_version_id: z.string().min(1),
+  account_policy_version_id: z.string().min(1).nullable(),
+  global_kill_switch: z.boolean(),
+  allowed_symbols: z.array(z.string().trim().min(1).max(64)).min(1).refine((values) => new Set(values).size === values.length),
+  fail_closed_on_incomplete_data: z.literal(true),
+  max_quote_age_seconds: riskPolicyEditableInteger(1),
+  max_risk_summary_age_seconds: riskPolicyEditableInteger(1),
+  max_decision_age_seconds: riskPolicyEditableInteger(1),
+  max_price_deviation_percent: riskPolicyDecimalSchema,
+  manual_release_enabled: z.boolean(),
+  manual_release_max_daily_loss_percent: riskPolicyDecimalSchema,
+  manual_release_max_drawdown_percent: riskPolicyDecimalSchema,
+  manual_release_max_daily_open_count: riskPolicyEditableInteger(0),
+  manual_release_consecutive_loss_limit: riskPolicyEditableInteger(0),
+  max_risk_per_trade_percent: riskPolicyDecimalSchema,
+  max_daily_loss_percent: riskPolicyDecimalSchema,
+  max_drawdown_percent: riskPolicyDecimalSchema,
+  max_open_positions: riskPolicyEditableInteger(0, 1000),
+  max_pending_orders: riskPolicyEditableInteger(0, 1000),
+  max_total_volume: riskPolicyDecimalSchema,
+  max_spread_points: riskPolicyDecimalSchema,
+  min_open_interval_seconds: riskPolicyEditableInteger(0, 86400),
+  max_daily_open_count: riskPolicyEditableInteger(0, 10000),
+  consecutive_loss_limit: riskPolicyEditableInteger(0, 1000),
+  loss_cooldown_minutes: riskPolicyEditableInteger(0, 10080),
+  pending_valid_minutes: riskPolicyEditableInteger(1, 10080),
+  weekend_close_minutes: riskPolicyEditableInteger(0, 2880),
+  trade_send_enabled: z.boolean(),
+  account_kill_switch: z.boolean(),
+  require_stop_loss: z.literal(true),
+  editable_fields: z.array(z.string().trim().min(1).max(64)).refine((values) => new Set(values).size === values.length),
+  revision: numericRevisionSchema,
+  updated_at: z.iso.datetime({ offset: true }),
+}).strict().transform((value) => ({
+  accountId: value.account_id,
+  platformPolicyVersionId: value.platform_policy_version_id,
+  accountPolicyVersionId: value.account_policy_version_id,
+  globalKillSwitch: value.global_kill_switch,
+  allowedSymbols: value.allowed_symbols,
+  failClosedOnIncompleteData: value.fail_closed_on_incomplete_data,
+  maxQuoteAgeSeconds: value.max_quote_age_seconds,
+  maxRiskSummaryAgeSeconds: value.max_risk_summary_age_seconds,
+  maxDecisionAgeSeconds: value.max_decision_age_seconds,
+  maxPriceDeviationPercent: value.max_price_deviation_percent,
+  manualReleaseEnabled: value.manual_release_enabled,
+  manualReleaseMaxDailyLossPercent: value.manual_release_max_daily_loss_percent,
+  manualReleaseMaxDrawdownPercent: value.manual_release_max_drawdown_percent,
+  manualReleaseMaxDailyOpenCount: value.manual_release_max_daily_open_count,
+  manualReleaseConsecutiveLossLimit: value.manual_release_consecutive_loss_limit,
+  maxRiskPerTradePercent: value.max_risk_per_trade_percent,
+  maxDailyLossPercent: value.max_daily_loss_percent,
+  maxDrawdownPercent: value.max_drawdown_percent,
+  maxOpenPositions: value.max_open_positions,
+  maxPendingOrders: value.max_pending_orders,
+  maxTotalVolume: value.max_total_volume,
+  maxSpreadPoints: value.max_spread_points,
+  minOpenIntervalSeconds: value.min_open_interval_seconds,
+  maxDailyOpenCount: value.max_daily_open_count,
+  consecutiveLossLimit: value.consecutive_loss_limit,
+  lossCooldownMinutes: value.loss_cooldown_minutes,
+  pendingValidMinutes: value.pending_valid_minutes,
+  weekendCloseMinutes: value.weekend_close_minutes,
+  tradeSendEnabled: value.trade_send_enabled,
+  accountKillSwitch: value.account_kill_switch,
+  requireStopLoss: value.require_stop_loss,
+  editableFields: value.editable_fields,
+  revision: value.revision,
+  updatedAt: value.updated_at,
+}))
+
+export const riskPolicyPatchBodySchema = z.object({
+  max_risk_per_trade_percent: riskPolicyDecimalSchema.optional(),
+  max_daily_loss_percent: riskPolicyDecimalSchema.optional(),
+  max_drawdown_percent: riskPolicyDecimalSchema.optional(),
+  max_open_positions: riskPolicyEditableInteger(0, 1000).optional(),
+  max_pending_orders: riskPolicyEditableInteger(0, 1000).optional(),
+  max_total_volume: riskPolicyDecimalSchema.optional(),
+  max_spread_points: riskPolicyDecimalSchema.optional(),
+  min_open_interval_seconds: riskPolicyEditableInteger(0, 86400).optional(),
+  max_daily_open_count: riskPolicyEditableInteger(0, 10000).optional(),
+  consecutive_loss_limit: riskPolicyEditableInteger(0, 1000).optional(),
+  loss_cooldown_minutes: riskPolicyEditableInteger(0, 10080).optional(),
+  pending_valid_minutes: riskPolicyEditableInteger(1, 10080).optional(),
+  weekend_close_minutes: riskPolicyEditableInteger(0, 2880).optional(),
+  trade_send_enabled: z.boolean().optional(),
+  account_kill_switch: z.boolean().optional(),
+  reason: z.string().trim().min(3).max(500),
+}).strict()
+
+// Alias retained for feature code that groups these contracts under AI Risk.
+export const aiRiskPolicyPatchBodySchema = riskPolicyPatchBodySchema
+
+export const riskPolicyResponseSchema = z.object({ data: riskPolicySchema, meta: responseMetaSchema }).strict()
+
+export const riskSummarySchema = z.object({
+  account_id: z.string().min(1),
+  business_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+  equity: riskPolicyDecimalSchema,
+  free_margin: riskPolicyDecimalSchema,
+  margin_level_percent: riskPolicyDecimalSchema.nullable(),
+  daily_loss_percent: riskPolicyDecimalSchema,
+  drawdown_percent: riskPolicyDecimalSchema,
+  open_positions: riskPolicyEditableInteger(0),
+  pending_orders: riskPolicyEditableInteger(0),
+  total_volume: riskPolicyDecimalSchema,
+  daily_open_count: riskPolicyEditableInteger(0),
+  consecutive_losses: riskPolicyEditableInteger(0),
+  terminal_timezone_offset_minutes: z.number().int().min(-840).max(840).nullable(),
+  clock_status: z.enum(['calibrated', 'observer_bootstrap', 'stale', 'unavailable']),
+  last_successful_open_at: z.iso.datetime({ offset: true }).nullable(),
+  cooldown_until: z.iso.datetime({ offset: true }).nullable(),
+  data_complete: z.boolean(),
+  incomplete_reasons: z.array(z.string().trim().max(128)).refine((values) => new Set(values).size === values.length),
+  observed_at: z.iso.datetime({ offset: true }),
+  revision: numericRevisionSchema,
+}).strict().transform((value) => ({
+  accountId: value.account_id,
+  businessDate: value.business_date,
+  equity: value.equity,
+  freeMargin: value.free_margin,
+  marginLevelPercent: value.margin_level_percent,
+  dailyLossPercent: value.daily_loss_percent,
+  drawdownPercent: value.drawdown_percent,
+  openPositions: value.open_positions,
+  pendingOrders: value.pending_orders,
+  totalVolume: value.total_volume,
+  dailyOpenCount: value.daily_open_count,
+  consecutiveLosses: value.consecutive_losses,
+  terminalTimezoneOffsetMinutes: value.terminal_timezone_offset_minutes,
+  clockStatus: value.clock_status,
+  lastSuccessfulOpenAt: value.last_successful_open_at,
+  cooldownUntil: value.cooldown_until,
+  dataComplete: value.data_complete,
+  incompleteReasons: value.incomplete_reasons,
+  observedAt: value.observed_at,
+  revision: value.revision,
+}))
+
+export const riskSummaryResponseSchema = z.object({ data: riskSummarySchema, meta: responseMetaSchema }).strict()
+export const accountRiskSummarySchema = riskSummarySchema
+export const accountRiskSummaryResponseSchema = riskSummaryResponseSchema
+
+export const manualReleaseRuleSchema = z.enum([
+  'RISK_DAILY_LOSS_LIMIT', 'RISK_DRAWDOWN_LIMIT', 'RISK_DAILY_OPEN_LIMIT',
+  'RISK_CONSECUTIVE_LOSS_LIMIT', 'RISK_COOLDOWN_ACTIVE',
+])
+
+export const manualRiskReleaseBaselineSchema = z.object({
+  business_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  daily_loss_percent: riskPolicyDecimalSchema,
+  drawdown_percent: riskPolicyDecimalSchema,
+  daily_open_count: riskPolicyEditableInteger(0),
+  consecutive_losses: riskPolicyEditableInteger(0),
+  cooldown_until: z.iso.datetime({ offset: true }).nullable(),
+}).strict().transform((value) => ({
+  businessDate: value.business_date,
+  dailyLossPercent: value.daily_loss_percent,
+  drawdownPercent: value.drawdown_percent,
+  dailyOpenCount: value.daily_open_count,
+  consecutiveLosses: value.consecutive_losses,
+  cooldownUntil: value.cooldown_until,
+}))
+
+export const manualRiskReleaseSchema = z.object({
+  manual_release_id: z.string().min(1),
+  account_id: z.string().min(1),
+  platform_policy_version_id: z.string().min(1),
+  account_policy_version_id: z.string().min(1).nullable(),
+  policy_set_revision: numericRevisionSchema,
+  status: z.enum(['active', 'superseded', 'expired', 'revoked']),
+  released_rules: z.array(manualReleaseRuleSchema).min(1).refine((values) => new Set(values).size === values.length),
+  baseline: manualRiskReleaseBaselineSchema,
+  risk_state_revision: numericRevisionSchema,
+  reason: z.string().trim().min(3).max(500),
+  expires_at: z.iso.datetime({ offset: true }),
+  created_at: z.iso.datetime({ offset: true }),
+  invalidated_at: z.iso.datetime({ offset: true }).nullable(),
+  invalidation_reason: z.string().max(128).nullable(),
+  revision: numericRevisionSchema,
+}).strict().transform((value) => ({
+  id: value.manual_release_id,
+  accountId: value.account_id,
+  platformPolicyVersionId: value.platform_policy_version_id,
+  accountPolicyVersionId: value.account_policy_version_id,
+  policySetRevision: value.policy_set_revision,
+  status: value.status,
+  releasedRules: value.released_rules,
+  baseline: value.baseline,
+  riskStateRevision: value.risk_state_revision,
+  reason: value.reason,
+  expiresAt: value.expires_at,
+  createdAt: value.created_at,
+  invalidatedAt: value.invalidated_at,
+  invalidationReason: value.invalidation_reason,
+  revision: value.revision,
+}))
+
+export const manualReleaseAvailabilitySchema = z.object({
+  available: z.boolean(),
+  code: z.string().trim().min(1).nullable(),
+  rules: z.array(manualReleaseRuleSchema).refine((values) => new Set(values).size === values.length),
+  expires_at: z.iso.datetime({ offset: true }).nullable(),
+  policy_set_revision: numericRevisionSchema,
+  risk_state_revision: numericRevisionSchema.nullable(),
+}).strict().superRefine((value, context) => {
+  if (value.available && (value.code !== null || value.rules.length === 0 || value.expires_at === null || value.risk_state_revision === null)) {
+    context.addIssue({ code: 'custom', message: '可解除状态必须包含规则、有效期和风险版本且不能包含拒绝代码', path: ['available'] })
+  }
+  if (!value.available && (value.code === null || value.rules.length > 0 || value.expires_at !== null)) {
+    context.addIssue({ code: 'custom', message: '不可解除状态必须包含拒绝代码且不能包含可解除规则或有效期', path: ['code'] })
+  }
+}).transform((value) => ({
+  available: value.available,
+  code: value.code,
+  rules: value.rules,
+  expiresAt: value.expires_at,
+  policySetRevision: value.policy_set_revision,
+  riskStateRevision: value.risk_state_revision,
+}))
+
+export const manualReleaseStateSchema = z.object({
+  release: manualRiskReleaseSchema.nullable(),
+  availability: manualReleaseAvailabilitySchema,
+}).strict()
+export const manualRiskReleaseResponseSchema = z.object({ data: manualReleaseStateSchema, meta: responseMetaSchema }).strict()
+export const manualRiskReleaseCreatedResponseSchema = z.object({ data: manualRiskReleaseSchema, meta: responseMetaSchema }).strict()
+export const riskManualReleaseBodySchema = z.object({ acknowledge_risk: z.literal(true), reason: z.string().trim().min(3).max(500) }).strict()
+export const aiRiskManualReleaseBodySchema = riskManualReleaseBodySchema
+
+export const riskDecisionSummarySchema = z.object({
+  risk_decision_id: z.string().min(1),
+  trade_decision_id: z.string().min(1),
+  account_id: z.string().min(1),
+  status: z.enum(['approved', 'rejected']),
+  reject_code: z.string().max(128).nullable(),
+  platform_policy_version_id: z.string().min(1),
+  account_policy_version_id: z.string().min(1).nullable(),
+  account_risk_revision: numericRevisionSchema,
+  manual_release_id: z.string().min(1).nullable(),
+  created_at: z.iso.datetime({ offset: true }),
+  revision: numericRevisionSchema,
+}).strict().transform((value) => ({
+  riskDecisionId: value.risk_decision_id,
+  tradeDecisionId: value.trade_decision_id,
+  accountId: value.account_id,
+  status: value.status,
+  rejectCode: value.reject_code,
+  platformPolicyVersionId: value.platform_policy_version_id,
+  accountPolicyVersionId: value.account_policy_version_id,
+  accountRiskRevision: value.account_risk_revision,
+  manualReleaseId: value.manual_release_id,
+  createdAt: value.created_at,
+  revision: value.revision,
+}))
+
+const riskDecisionRuleSchema = z.object({
+  code: z.string().max(128),
+  outcome: z.enum(['passed', 'rejected', 'not_applicable']),
+  action_id: z.string().min(1).nullable(),
+  details: z.record(z.string(), z.unknown()),
+}).strict().transform((value) => ({ code: value.code, outcome: value.outcome, actionId: value.action_id, details: value.details }))
+
+const riskApprovedActionSchema = z.object({
+  action_id: z.string().min(1),
+  kind: traderExecutableActionSchema,
+  parameters: z.record(z.string(), z.unknown()),
+  expected_state: z.record(z.string(), z.unknown()),
+}).strict().transform((value) => ({ actionId: value.action_id, kind: value.kind, parameters: value.parameters, expectedState: value.expected_state }))
+
+export const riskDecisionDetailSchema = z.object({
+  summary: riskDecisionSummarySchema,
+  rules: z.array(riskDecisionRuleSchema),
+  approved_actions: z.array(riskApprovedActionSchema),
+  evaluated_at: z.iso.datetime({ offset: true }),
+  policy_hash: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict().transform((value) => ({
+  summary: value.summary,
+  rules: value.rules,
+  approvedActions: value.approved_actions,
+  evaluatedAt: value.evaluated_at,
+  policyHash: value.policy_hash,
+}))
+
+export const riskDecisionListResponseSchema = z.object({
+  data: z.object({ items: z.array(riskDecisionSummarySchema) }).strict(),
+  meta: responseMetaSchema,
+}).strict()
+export const riskDecisionDetailResponseSchema = z.object({ data: riskDecisionDetailSchema, meta: responseMetaSchema }).strict()
+
 /**
  * The browser execution boundary is intentionally narrower than the Bridge
  * command envelope.  The browser supplies a complete optimistic revision
@@ -673,6 +975,18 @@ export type TraderTaskMode = z.infer<typeof traderTaskModeSchema>
 export type TraderRun = z.infer<typeof traderRunSchema>
 export type TraderDecisionSummary = z.infer<typeof traderDecisionSummarySchema>
 export type TraderDecisionDetail = z.infer<typeof traderDecisionDetailSchema>
+export type RiskPolicy = z.infer<typeof riskPolicySchema>
+export type RiskPolicyPatchBody = z.infer<typeof riskPolicyPatchBodySchema>
+export type RiskSummary = z.infer<typeof riskSummarySchema>
+export type AccountRiskSummary = RiskSummary
+export type ManualReleaseRule = z.infer<typeof manualReleaseRuleSchema>
+export type ManualRiskReleaseBaseline = z.infer<typeof manualRiskReleaseBaselineSchema>
+export type ManualRiskRelease = z.infer<typeof manualRiskReleaseSchema>
+export type ManualReleaseAvailability = z.infer<typeof manualReleaseAvailabilitySchema>
+export type ManualReleaseState = z.infer<typeof manualReleaseStateSchema>
+export type RiskManualReleaseBody = z.infer<typeof riskManualReleaseBodySchema>
+export type RiskDecisionSummary = z.infer<typeof riskDecisionSummarySchema>
+export type RiskDecisionDetail = z.infer<typeof riskDecisionDetailSchema>
 export type ExecutionRevision = z.infer<typeof executionRevisionSchema>
 export type ExecutionExpectedState = z.infer<typeof executionExpectedStateSchema>
 export type ExecutionCommandContext = z.infer<typeof executionCommandContextSchema>

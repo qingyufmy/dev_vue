@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { assessManualRelease } from '../domain/manual-risk-release.js'
+import { assessManualRelease, manualReleaseStillValid, type ManualReleaseState } from '../domain/manual-risk-release.js'
 import { assertAccountPolicyPatch, buildAccountRiskSummary, riskPolicyHash, RiskError, type AccountRiskPolicyPatch, type AccountRiskSummary } from '../domain/risk.js'
 import type { RiskRepository } from './risk-ports.js'
 
@@ -32,6 +32,67 @@ export class RiskService {
   async manualRelease(userId: number, accountId: string) {
     await this.policy(userId, accountId)
     return this.repository.getManualRelease(userId, accountId)
+  }
+
+  /**
+   * Return the latest release together with the server-owned assessment used
+   * by the POST path.  Keeping this calculation here prevents the browser
+   * from reimplementing clock, completeness, platform-ceiling or recoverable
+   * rule checks when deciding whether to render the release action.
+   */
+  async manualReleaseState(userId: number, accountId: string, now = new Date()): Promise<ManualReleaseState> {
+    const policy = await this.policy(userId, accountId)
+    const [summary, release] = await Promise.all([
+      this.repository.getAccountSummary(userId, accountId),
+      this.repository.getManualRelease(userId, accountId),
+    ])
+    if (!summary) {
+      return {
+        release,
+        availability: {
+          available: false as const,
+          code: 'risk_summary_not_found',
+          rules: [],
+          expiresAt: null,
+          policySetRevision: policy.policySetRevision,
+          riskStateRevision: null,
+        },
+      }
+    }
+    const assessment = assessManualRelease(policy, summary, now)
+    if (release?.status === 'active' && manualReleaseStillValid(release, summary, now)) {
+      return {
+        release,
+        availability: {
+          available: false as const,
+          code: 'risk_manual_release_already_active',
+          rules: [],
+          expiresAt: null,
+          policySetRevision: policy.policySetRevision,
+          riskStateRevision: summary.revision,
+        },
+      }
+    }
+    return {
+      release,
+      availability: assessment.available
+        ? {
+            available: true as const,
+            code: null,
+            rules: assessment.rules,
+            expiresAt: assessment.expiresAt,
+            policySetRevision: policy.policySetRevision,
+            riskStateRevision: summary.revision,
+          }
+        : {
+            available: false as const,
+            code: assessment.code,
+            rules: [],
+            expiresAt: null,
+            policySetRevision: policy.policySetRevision,
+            riskStateRevision: summary.revision,
+          },
+    }
   }
 
   async createManualRelease(input: { userId: number; accountId: string; expectedSummaryRevision: number; idempotencyKey: string; acknowledgeRisk: boolean; reason: string }, now = new Date()) {

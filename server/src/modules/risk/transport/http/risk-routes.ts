@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import type { RiskService } from '../../application/risk-service.js'
 import type { RiskDecisionDetail, RiskDecisionSummary } from '../../application/risk-ports.js'
-import type { ManualRiskRelease } from '../../domain/manual-risk-release.js'
+import type { ManualReleaseState, ManualRiskRelease } from '../../domain/manual-risk-release.js'
 import { RiskError, type AccountRiskPolicyPatch, type AccountRiskSummary, type EffectiveRiskPolicy } from '../../domain/risk.js'
 
 export interface RiskRequestAuthenticator {
@@ -81,6 +81,20 @@ function manualReleaseDto(value: ManualRiskRelease | null) {
   }
 }
 
+function manualReleaseStateDto(value: ManualReleaseState) {
+  return {
+    release: manualReleaseDto(value.release),
+    availability: {
+      available: value.availability.available,
+      code: value.availability.code,
+      rules: value.availability.rules,
+      expires_at: value.availability.expiresAt,
+      policy_set_revision: String(value.availability.policySetRevision),
+      risk_state_revision: value.availability.riskStateRevision === null ? null : String(value.availability.riskStateRevision),
+    },
+  }
+}
+
 function detailDto(value: RiskDecisionDetail) {
   return { summary: decisionDto(value), rules: value.evaluation.rules.map(rule => ({ code: rule.code, outcome: rule.outcome, action_id: rule.actionId, details: rule.details })), approved_actions: value.evaluation.approvedActions.map(action => ({ action_id: action.actionId, kind: action.kind, parameters: action.parameters, expected_state: action.expectedState })), evaluated_at: value.evaluation.evaluatedAt, policy_hash: value.evaluation.policyHash }
 }
@@ -132,7 +146,7 @@ export const riskRoutes: FastifyPluginAsync<RiskRoutesOptions> = async (fastify,
     catch (error) { return problem(error, request, reply) }
   })
   fastify.get<{ Params: { accountId: string } }>('/risk-accounts/:accountId/manual-release', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, manualReleaseDto(await options.service.manualRelease(userId, request.params.accountId))) }
+    try { const { userId } = await options.auth.authenticate(request); return response(request.id, manualReleaseStateDto(await options.service.manualReleaseState(userId, request.params.accountId))) }
     catch (error) { return problem(error, request, reply) }
   })
   fastify.post<{ Params: { accountId: string }; Body: { acknowledge_risk?: boolean; reason?: string } }>('/risk-accounts/:accountId/manual-release', async (request, reply) => {

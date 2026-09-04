@@ -6,7 +6,8 @@ import {
   executionDistributionSchema, executionExpectedStateSchema, marketAnalysisSummarySchema, marketCandleSchema,
   modifyOrderCommandSchema, modifyPositionCommandSchema, observerChannelSchema, operationSchema,
   operationRealtimeEventSchema, pendingOrderCommandSchema, traderDecisionSummarySchema, traderRunSchema, tradingContextSchema,
-  tradingWorkspaceResponseSchema, sessionResponseSchema,
+  tradingWorkspaceResponseSchema, sessionResponseSchema, manualReleaseStateSchema, riskDecisionDetailSchema,
+  riskPolicyPatchBodySchema, riskPolicySchema, riskSummarySchema,
 } from './index'
 
 describe('sessionResponseSchema', () => {
@@ -100,6 +101,65 @@ describe('analyst and account-trader V4 contracts', () => {
     expect(marketAnalysisSummarySchema.parse({ analysis_id: 'a1', strategy_id: '10', strategy_version_id: '11', symbol: 'XAUUSD', market_bias: 'bullish', opportunity: 'long_setup', confidence: 76, summary: '结构偏多', analyzed_at: '2026-09-03T08:00:00.000Z', valid_until: '2026-09-03T08:03:00.000Z', revision: '1' })).toMatchObject({ analysisId: 'a1', marketBias: 'bullish', opportunity: 'long_setup' })
     expect(traderRunSchema.parse({ trader_run_id: 't1', analysis_id: 'a1', trading_account_id: '7', strategy_id: '20', strategy_version_id: '21', task_mode: 'manage', status: 'queued', created_at: '2026-09-03T08:00:01.000Z', updated_at: '2026-09-03T08:00:01.000Z', revision: '1' })).toMatchObject({ traderRunId: 't1', taskMode: 'manage' })
     expect(traderDecisionSummarySchema.parse({ decision_id: 'd1', analysis_id: 'a1', trading_account_id: '7', strategy_id: '20', strategy_version_id: '21', action: 'hold', side: null, confidence: 80, summary: '账户保证金不足', status: 'proposed', stale_reason: 'quote_revision_changed', created_at: '2026-09-03T08:00:01.000Z', revision: '1' })).toMatchObject({ decisionId: 'd1', tradingAccountId: '7', action: 'hold', staleReason: 'quote_revision_changed' })
+  })
+})
+
+describe('account risk V4 contracts', () => {
+  const meta = { request_id: 'risk-1', generated_at: '2026-09-04T04:00:00.000Z' }
+  const policy = {
+    account_id: 'account-7', platform_policy_version_id: 'platform-1', account_policy_version_id: 'account-policy-1',
+    global_kill_switch: false, allowed_symbols: ['XAUUSD'], fail_closed_on_incomplete_data: true,
+    max_quote_age_seconds: 15, max_risk_summary_age_seconds: 30, max_decision_age_seconds: 45, max_price_deviation_percent: '0.2',
+    manual_release_enabled: true, manual_release_max_daily_loss_percent: '5', manual_release_max_drawdown_percent: '12',
+    manual_release_max_daily_open_count: 30, manual_release_consecutive_loss_limit: 5,
+    max_risk_per_trade_percent: '1', max_daily_loss_percent: '3', max_drawdown_percent: '8', max_open_positions: 5,
+    max_pending_orders: 5, max_total_volume: '2', max_spread_points: '30', min_open_interval_seconds: 60,
+    max_daily_open_count: 20, consecutive_loss_limit: 3, loss_cooldown_minutes: 15, pending_valid_minutes: 240,
+    weekend_close_minutes: 30, trade_send_enabled: true, account_kill_switch: false, require_stop_loss: true,
+    editable_fields: ['max_risk_per_trade_percent', 'trade_send_enabled'], revision: '3', updated_at: meta.generated_at,
+  }
+
+  it('normalizes strict snake_case policy and summary resources without accepting camelCase wire fields', () => {
+    expect(riskPolicySchema.parse(policy)).toMatchObject({ accountId: 'account-7', maxRiskPerTradePercent: '1', editableFields: ['max_risk_per_trade_percent', 'trade_send_enabled'], revision: 3 })
+    expect(riskPolicySchema.safeParse({ ...policy, accountId: 'account-7' }).success).toBe(false)
+    expect(riskPolicyPatchBodySchema.safeParse({ max_risk_per_trade_percent: '0.5', reason: '降低风险' }).success).toBe(true)
+    expect(riskPolicyPatchBodySchema.safeParse({ maxRiskPerTradePercent: '0.5', reason: '降低风险' }).success).toBe(false)
+
+    expect(riskSummarySchema.parse({
+      account_id: 'account-7', business_date: '2026-09-04', equity: '10000', free_margin: '9000', margin_level_percent: null,
+      daily_loss_percent: '1.2', drawdown_percent: '2.1', open_positions: 1, pending_orders: 0, total_volume: '0.1',
+      daily_open_count: 2, consecutive_losses: 0, terminal_timezone_offset_minutes: 180, clock_status: 'calibrated',
+      last_successful_open_at: null, cooldown_until: null, data_complete: true, incomplete_reasons: [], observed_at: meta.generated_at, revision: '8',
+    })).toMatchObject({ accountId: 'account-7', dailyLossPercent: '1.2', clockStatus: 'calibrated', revision: 8 })
+  })
+
+  it('keeps the manual release envelope separate from the write response and exposes server availability', () => {
+    const state = manualReleaseStateSchema.parse({
+      release: null,
+      availability: {
+        available: true, code: null, rules: ['RISK_DAILY_LOSS_LIMIT'], expires_at: '2026-09-05T00:00:00.000Z',
+        policy_set_revision: '3', risk_state_revision: '8',
+      },
+    })
+    expect(state.release).toBeNull()
+    expect(state.availability).toMatchObject({ available: true, expiresAt: '2026-09-05T00:00:00.000Z', policySetRevision: 3, riskStateRevision: 8 })
+    expect(manualReleaseStateSchema.safeParse({
+      release: null,
+      availability: { available: false, code: null, rules: [], expires_at: null, policy_set_revision: '3', risk_state_revision: null },
+    }).success).toBe(false)
+  })
+
+  it('normalizes risk decisions while preserving explicit rule outcomes and actions', () => {
+    const detail = riskDecisionDetailSchema.parse({
+      summary: {
+        risk_decision_id: 'risk-1', trade_decision_id: 'trade-1', account_id: 'account-7', status: 'rejected', reject_code: 'RISK_DAILY_LOSS_LIMIT',
+        platform_policy_version_id: 'platform-1', account_policy_version_id: 'account-policy-1', account_risk_revision: '8', manual_release_id: null,
+        created_at: meta.generated_at, revision: '2',
+      },
+      rules: [{ code: 'RISK_DAILY_LOSS_LIMIT', outcome: 'rejected', action_id: null, details: { current: '3.2' } }],
+      approved_actions: [], evaluated_at: meta.generated_at, policy_hash: 'a'.repeat(64),
+    })
+    expect(detail).toMatchObject({ summary: { riskDecisionId: 'risk-1', rejectCode: 'RISK_DAILY_LOSS_LIMIT' }, rules: [{ actionId: null }], approvedActions: [] })
   })
 })
 

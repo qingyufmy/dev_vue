@@ -41,6 +41,25 @@ export interface ManualRiskRelease {
   revision: number
 }
 
+/**
+ * Safe read-model projection for the browser.  The breach fingerprint and
+ * assessment baseline stay server-side; the client only needs to know whether
+ * a release may be requested and which current rules would be released.
+ */
+export interface ManualReleaseAvailability {
+  available: boolean
+  code: string | null
+  rules: ManualReleaseRuleCode[]
+  expiresAt: string | null
+  policySetRevision: number
+  riskStateRevision: number | null
+}
+
+export interface ManualReleaseState {
+  release: ManualRiskRelease | null
+  availability: ManualReleaseAvailability
+}
+
 export type ManualReleaseAssessment =
   | { available: true; rules: ManualReleaseRuleCode[]; baseline: ManualRiskReleaseBaseline; breachFingerprint: string; expiresAt: string }
   | { available: false; code: string }

@@ -210,4 +210,71 @@ describe('createApiClient', () => {
     ])
     for (const [, request] of fetchImpl.mock.calls) expect(request?.method).toBe('GET')
   })
+
+  it('reads risk resources and preserves CAS, CSRF and idempotency headers on risk writes', async () => {
+    const generatedAt = '2026-09-04T04:00:00.000Z'
+    const meta = { request_id: 'risk', generated_at: generatedAt }
+    const policy = {
+      account_id: 'account/7', platform_policy_version_id: 'platform-1', account_policy_version_id: 'account-policy-1',
+      global_kill_switch: false, allowed_symbols: ['XAUUSD'], fail_closed_on_incomplete_data: true,
+      max_quote_age_seconds: 15, max_risk_summary_age_seconds: 30, max_decision_age_seconds: 45, max_price_deviation_percent: '0.2',
+      manual_release_enabled: true, manual_release_max_daily_loss_percent: '5', manual_release_max_drawdown_percent: '12',
+      manual_release_max_daily_open_count: 30, manual_release_consecutive_loss_limit: 5,
+      max_risk_per_trade_percent: '1', max_daily_loss_percent: '3', max_drawdown_percent: '8', max_open_positions: 5,
+      max_pending_orders: 5, max_total_volume: '2', max_spread_points: '30', min_open_interval_seconds: 60,
+      max_daily_open_count: 20, consecutive_loss_limit: 3, loss_cooldown_minutes: 15, pending_valid_minutes: 240,
+      weekend_close_minutes: 30, trade_send_enabled: true, account_kill_switch: false, require_stop_loss: true,
+      editable_fields: ['max_risk_per_trade_percent', 'trade_send_enabled'], revision: '3', updated_at: generatedAt,
+    }
+    const summary = {
+      account_id: 'account/7', business_date: '2026-09-04', equity: '10000', free_margin: '9000', margin_level_percent: null,
+      daily_loss_percent: '1.2', drawdown_percent: '2.1', open_positions: 1, pending_orders: 0, total_volume: '0.1',
+      daily_open_count: 2, consecutive_losses: 0, terminal_timezone_offset_minutes: 180, clock_status: 'calibrated',
+      last_successful_open_at: null, cooldown_until: null, data_complete: true, incomplete_reasons: [], observed_at: generatedAt, revision: '8',
+    }
+    const release = {
+      manual_release_id: 'release-1', account_id: 'account/7', platform_policy_version_id: 'platform-1', account_policy_version_id: 'account-policy-1',
+      policy_set_revision: '3', status: 'active', released_rules: ['RISK_DAILY_LOSS_LIMIT'],
+      baseline: { business_date: '2026-09-04', daily_loss_percent: '3.2', drawdown_percent: '2.1', daily_open_count: 2, consecutive_losses: 0, cooldown_until: null },
+      risk_state_revision: '8', reason: '确认风险后恢复交易', expires_at: '2026-09-05T00:00:00.000Z', created_at: generatedAt,
+      invalidated_at: null, invalidation_reason: null, revision: '1',
+    }
+    const decision = {
+      risk_decision_id: 'risk-1', trade_decision_id: 'trade-1', account_id: 'account/7', status: 'rejected', reject_code: 'RISK_DAILY_LOSS_LIMIT',
+      platform_policy_version_id: 'platform-1', account_policy_version_id: 'account-policy-1', account_risk_revision: '8', manual_release_id: null,
+      created_at: generatedAt, revision: '2',
+    }
+    const responses = [
+      { data: policy, meta }, { data: summary, meta },
+      { data: { release: null, availability: { available: false, code: 'risk_manual_release_no_active_block', rules: [], expires_at: null, policy_set_revision: '3', risk_state_revision: '8' } }, meta },
+      { data: policy, meta }, { data: release, meta }, { data: { items: [decision] }, meta },
+      { data: { summary: decision, rules: [], approved_actions: [], evaluated_at: generatedAt, policy_hash: 'a'.repeat(64) }, meta },
+    ]
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(responses.shift()), { status: 200 }))
+    const client = createApiClient({ fetchImpl })
+
+    await client.getRiskPolicy('account/7')
+    await client.getRiskSummary('account/7')
+    await client.getManualRiskRelease('account/7')
+    await client.replaceRiskPolicy('csrf', 'account/7', { max_risk_per_trade_percent: '0.5', reason: '降低风险' }, 3)
+    await client.createManualRiskRelease('csrf', 'account/7', { acknowledge_risk: true, reason: '确认风险后恢复交易' }, 8, 'risk-release-idempotency-1')
+    await client.listRiskDecisions('account/7', 200)
+    await client.getRiskDecision('risk/1')
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v4/risk-accounts/account%2F7/policy',
+      '/api/v4/risk-accounts/account%2F7/summary',
+      '/api/v4/risk-accounts/account%2F7/manual-release',
+      '/api/v4/risk-accounts/account%2F7/policy',
+      '/api/v4/risk-accounts/account%2F7/manual-release',
+      '/api/v4/risk-decisions?account_id=account%2F7&page_size=100',
+      '/api/v4/risk-decisions/risk%2F1',
+    ])
+    const [, policyRequest] = fetchImpl.mock.calls[3] ?? []
+    expect(new Headers(policyRequest?.headers).get('If-Match')).toBe('"3"')
+    const [, releaseRequest] = fetchImpl.mock.calls[4] ?? []
+    expect(new Headers(releaseRequest?.headers).get('If-Match')).toBe('"8"')
+    expect(new Headers(releaseRequest?.headers).get('Idempotency-Key')).toBe('risk-release-idempotency-1')
+    expect(new Headers(releaseRequest?.headers).get('X-CSRF-Token')).toBe('csrf')
+  })
 })

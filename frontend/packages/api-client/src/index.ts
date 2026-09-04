@@ -5,8 +5,14 @@ import {
   executionCommandContextResponseSchema, executionDistributionDetailResponseSchema, executionDistributionPreviewResponseSchema,
   strategiesResponseSchema, terminalProfilesResponseSchema, tradingAccountsResponseSchema, tradingContextResponseSchema,
   traderDecisionDetailResponseSchema, traderDecisionListResponseSchema, tradingWorkspaceResponseSchema,
+  manualRiskReleaseCreatedResponseSchema, manualRiskReleaseResponseSchema, riskDecisionDetailResponseSchema,
+  riskDecisionListResponseSchema, riskManualReleaseBodySchema, riskPolicyPatchBodySchema, riskPolicyResponseSchema,
+  riskSummaryResponseSchema,
 } from '@aurum/contracts'
-import type { AnalysisJobCreate, ApiProblem, AuthLoginRequest, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution, StrategyKind } from '@aurum/contracts'
+import type {
+  AnalysisJobCreate, ApiProblem, AuthLoginRequest, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution,
+  RiskManualReleaseBody, RiskPolicyPatchBody, StrategyKind,
+} from '@aurum/contracts'
 import { z, type ZodType } from 'zod'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -94,6 +100,23 @@ export function createApiClient(options: ApiClientOptions = {}) {
     listStrategies: (kind?: StrategyKind) => send(strategiesResponseSchema, `/api/v4/strategies${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
     listMarketAnalyses: (pageSize = 50) => send(marketAnalysisListResponseSchema, `/api/v4/market-analyses?page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
     getMarketAnalysis: (analysisId: string) => send(marketAnalysisDetailResponseSchema, `/api/v4/market-analyses/${encodeURIComponent(analysisId)}`),
+    getRiskPolicy: (accountId: string) => send(riskPolicyResponseSchema, `/api/v4/risk-accounts/${encodeURIComponent(accountId)}/policy`),
+    replaceRiskPolicy: (csrfToken: string, accountId: string, body: RiskPolicyPatchBody, expectedRevision: number) => {
+      const payload = riskPolicyPatchBodySchema.parse(body)
+      return send(riskPolicyResponseSchema, `/api/v4/risk-accounts/${encodeURIComponent(accountId)}/policy`, {
+        method: 'PUT', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload),
+      })
+    },
+    getRiskSummary: (accountId: string) => send(riskSummaryResponseSchema, `/api/v4/risk-accounts/${encodeURIComponent(accountId)}/summary`),
+    getManualRiskRelease: (accountId: string) => send(manualRiskReleaseResponseSchema, `/api/v4/risk-accounts/${encodeURIComponent(accountId)}/manual-release`),
+    createManualRiskRelease: (csrfToken: string, accountId: string, body: RiskManualReleaseBody, expectedSummaryRevision: number, idempotencyKey: string) => {
+      const payload = riskManualReleaseBodySchema.parse(body)
+      return send(manualRiskReleaseCreatedResponseSchema, `/api/v4/risk-accounts/${encodeURIComponent(accountId)}/manual-release`, {
+        method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedSummaryRevision}"`, 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(payload),
+      })
+    },
+    listRiskDecisions: (accountId: string, pageSize = 50) => send(riskDecisionListResponseSchema, `/api/v4/risk-decisions?account_id=${encodeURIComponent(accountId)}&page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
+    getRiskDecision: (decisionId: string) => send(riskDecisionDetailResponseSchema, `/api/v4/risk-decisions/${encodeURIComponent(decisionId)}`),
     listTradeDecisions: (accountId: string, pageSize = 50) => send(traderDecisionListResponseSchema, `/api/v4/trade-decisions?account_id=${encodeURIComponent(accountId)}&page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
     getTradeDecision: (decisionId: string) => send(traderDecisionDetailResponseSchema, `/api/v4/trade-decisions/${encodeURIComponent(decisionId)}`),
     getExecutionCommandContext: (accountId: string, symbol?: string | null, ticket?: string | null) => {

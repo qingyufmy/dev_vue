@@ -717,7 +717,7 @@
         "tags": ["Risk"],
         "parameters": [{ "$ref": "#/components/parameters/AccountId" }],
         "responses": {
-          "200": { "description": "Latest release or null", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ManualRiskReleaseResponse" } } } },
+          "200": { "description": "Latest release and server-owned release availability", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ManualRiskReleaseResponse" } } } },
           "403": { "$ref": "#/components/responses/Problem" }
         }
       },
@@ -1935,6 +1935,7 @@
       "RiskPolicyResponse": {
         "type": "object",
         "required": ["data", "meta"],
+        "additionalProperties": false,
         "properties": {
           "data": { "$ref": "#/components/schemas/RiskPolicy" },
           "meta": { "$ref": "#/components/schemas/Meta" }
@@ -1967,7 +1968,7 @@
           "revision": { "$ref": "#/components/schemas/Revision" }
         }
       },
-      "AccountRiskSummaryResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/AccountRiskSummary" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
+      "AccountRiskSummaryResponse": { "type": "object", "required": ["data", "meta"], "additionalProperties": false, "properties": { "data": { "$ref": "#/components/schemas/AccountRiskSummary" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
       "ManualRiskReleaseInput": {
         "type": "object",
         "required": ["acknowledge_risk", "reason"],
@@ -2012,8 +2013,30 @@
           "revision": { "$ref": "#/components/schemas/Revision" }
         }
       },
-      "ManualRiskReleaseResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "oneOf": [{ "$ref": "#/components/schemas/ManualRiskRelease" }, { "type": "null" }] }, "meta": { "$ref": "#/components/schemas/Meta" } } },
-      "ManualRiskReleaseCreatedResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/ManualRiskRelease" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
+      "ManualReleaseAvailability": {
+        "type": "object",
+        "required": ["available", "code", "rules", "expires_at", "policy_set_revision", "risk_state_revision"],
+        "additionalProperties": false,
+        "properties": {
+          "available": { "type": "boolean" },
+          "code": { "type": ["string", "null"], "maxLength": 128 },
+          "rules": { "type": "array", "uniqueItems": true, "items": { "type": "string", "enum": ["RISK_DAILY_LOSS_LIMIT", "RISK_DRAWDOWN_LIMIT", "RISK_DAILY_OPEN_LIMIT", "RISK_CONSECUTIVE_LOSS_LIMIT", "RISK_COOLDOWN_ACTIVE"] } },
+          "expires_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "policy_set_revision": { "$ref": "#/components/schemas/Revision" },
+          "risk_state_revision": { "oneOf": [{ "$ref": "#/components/schemas/Revision" }, { "type": "null" }] }
+        }
+      },
+      "ManualRiskReleaseState": {
+        "type": "object",
+        "required": ["release", "availability"],
+        "additionalProperties": false,
+        "properties": {
+          "release": { "oneOf": [{ "$ref": "#/components/schemas/ManualRiskRelease" }, { "type": "null" }] },
+          "availability": { "$ref": "#/components/schemas/ManualReleaseAvailability" }
+        }
+      },
+      "ManualRiskReleaseResponse": { "type": "object", "required": ["data", "meta"], "additionalProperties": false, "properties": { "data": { "$ref": "#/components/schemas/ManualRiskReleaseState" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
+      "ManualRiskReleaseCreatedResponse": { "type": "object", "required": ["data", "meta"], "additionalProperties": false, "properties": { "data": { "$ref": "#/components/schemas/ManualRiskRelease" }, "meta": { "$ref": "#/components/schemas/Meta" } } },
       "RiskDecisionSummary": {
         "type": "object",
         "required": ["risk_decision_id", "trade_decision_id", "account_id", "status", "reject_code", "platform_policy_version_id", "account_policy_version_id", "account_risk_revision", "manual_release_id", "created_at", "revision"],
@@ -2039,13 +2062,13 @@
         "properties": {
           "summary": { "$ref": "#/components/schemas/RiskDecisionSummary" },
           "rules": { "type": "array", "items": { "type": "object", "required": ["code", "outcome", "action_id", "details"], "additionalProperties": false, "properties": { "code": { "type": "string", "maxLength": 128 }, "outcome": { "type": "string", "enum": ["passed", "rejected", "not_applicable"] }, "action_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] }, "details": { "type": "object", "additionalProperties": true } } } },
-          "approved_actions": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+          "approved_actions": { "type": "array", "items": { "type": "object", "required": ["action_id", "kind", "parameters", "expected_state"], "additionalProperties": false, "properties": { "action_id": { "$ref": "#/components/schemas/OpaqueId" }, "kind": { "type": "string", "enum": ["market_order", "pending_order", "modify_position", "close_position", "modify_order", "cancel_order"] }, "parameters": { "type": "object", "additionalProperties": true }, "expected_state": { "type": "object", "additionalProperties": true } } } },
           "evaluated_at": { "$ref": "#/components/schemas/UtcDateTime" },
           "policy_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
         }
       },
-      "RiskDecisionListResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/RiskDecisionSummary" } } } }, "meta": { "$ref": "#/components/schemas/Meta" } } },
-      "RiskDecisionDetailResponse": { "type": "object", "required": ["data", "meta"], "properties": { "data": { "$ref": "#/components/schemas/RiskDecisionDetail" }, "meta": { "$ref": "#/components/schemas/Meta" } } }
+      "RiskDecisionListResponse": { "type": "object", "required": ["data", "meta"], "additionalProperties": false, "properties": { "data": { "type": "object", "required": ["items"], "additionalProperties": false, "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/RiskDecisionSummary" } } } }, "meta": { "$ref": "#/components/schemas/Meta" } } },
+      "RiskDecisionDetailResponse": { "type": "object", "required": ["data", "meta"], "additionalProperties": false, "properties": { "data": { "$ref": "#/components/schemas/RiskDecisionDetail" }, "meta": { "$ref": "#/components/schemas/Meta" } } }
     }
   },
   "security": [

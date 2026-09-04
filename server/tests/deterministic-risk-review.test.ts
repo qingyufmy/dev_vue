@@ -181,6 +181,10 @@ describe('Stage 12D deterministic risk review', () => {
     await expect(service.createManualRelease({ userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-request-1', acknowledgeRisk: false, reason: '恢复交易' }, now)).rejects.toMatchObject({ code: 'risk_manual_release_acknowledgement_required' })
     const release = await service.createManualRelease({ userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-request-1', acknowledgeRisk: true, reason: '确认风险后恢复交易' }, now)
     expect(release).toMatchObject({ accountId: '7', status: 'active', releasedRules: ['RISK_DAILY_LOSS_LIMIT'], riskStateRevision: 6 })
+    await expect(service.manualReleaseState(42, '7', now)).resolves.toMatchObject({
+      release: { id: release.id, status: 'active' },
+      availability: { available: false, code: 'risk_manual_release_already_active', rules: [], expiresAt: null, riskStateRevision: 6 },
+    })
     await expect(service.createManualRelease({ userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-request-1', acknowledgeRisk: true, reason: '确认风险后恢复交易' }, now)).resolves.toMatchObject({ id: release.id })
     await expect(service.createManualRelease({ userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-request-1', acknowledgeRisk: true, reason: '修改后的恢复原因' }, now)).rejects.toMatchObject({ code: 'idempotency_conflict' })
     expect(assessManualRelease(policy({}, true), repository.currentSummary, now)).toEqual({ available: false, code: 'risk_manual_release_global_control' })
@@ -233,10 +237,13 @@ describe('Stage 12D deterministic risk review', () => {
     const missingCas = await app.inject({ method: 'PUT', url: '/api/v4/risk-accounts/7/policy', payload: { reason: '无版本' } })
     expect(missingCas.statusCode).toBe(428)
     repository.currentSummary = summary({ dailyLossPercent: 3.2 })
+    const available = await app.inject({ method: 'GET', url: '/api/v4/risk-accounts/7/manual-release' })
+    expect(available.json().data).toMatchObject({ release: null, availability: { available: true, rules: ['RISK_DAILY_LOSS_LIMIT'], policy_set_revision: '4', risk_state_revision: '6' } })
     const released = await app.inject({ method: 'POST', url: '/api/v4/risk-accounts/7/manual-release', headers: { 'if-match': '"6"', 'idempotency-key': 'release-request-http-1' }, payload: { acknowledge_risk: true, reason: '确认风险后恢复交易' } })
     expect(released.statusCode).toBe(201); expect(released.json().data).toMatchObject({ status: 'active', released_rules: ['RISK_DAILY_LOSS_LIMIT'] })
     const currentRelease = await app.inject({ method: 'GET', url: '/api/v4/risk-accounts/7/manual-release' })
-    expect(currentRelease.json().data).toMatchObject({ account_id: '7', risk_state_revision: '6' })
+    expect(currentRelease.json().data.release).toMatchObject({ account_id: '7', risk_state_revision: '6' })
+    expect(currentRelease.json().data.availability).toMatchObject({ available: true, code: null, rules: ['RISK_DAILY_LOSS_LIMIT'], policy_set_revision: '4', risk_state_revision: '6' })
     const detail = await app.inject({ method: 'GET', url: '/api/v4/risk-decisions/risk-1' })
     expect(detail.json().data).toHaveProperty('rules')
     await app.close()
