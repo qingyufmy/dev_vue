@@ -20,7 +20,7 @@ interface CommandRow extends RowDataPacket {
   created_at_utc: Date; updated_at_utc: Date; request_envelope_json: string | BridgeCommand['request']
 }
 interface CommandLocator extends RowDataPacket { id: string; trading_account_id: string; execution_intent_id: string }
-interface IntentRow extends RowDataPacket { id: string; operation_id: string; user_id: number; trading_account_id: string; action_kind: string; status: string; revision: number; expires_at_utc: Date }
+interface IntentRow extends RowDataPacket { id: string; operation_id: string; user_id: number; trading_account_id: string; action_kind: string; source_type: string; source_id: string; status: string; revision: number; expires_at_utc: Date }
 interface ExistingResultRow extends RowDataPacket { bridge_command_id: string; result_sha256: string }
 interface PriorResultRow extends RowDataPacket { status: BridgeCommandResultEnvelope['payload']['status'] }
 interface RecoverableCommandRow extends CommandRow { result_json: string | Record<string, unknown> | null }
@@ -177,6 +177,7 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
       if (conflictResult) {
         const next = await moveCommand(connection, command, 'uncertain', now, 'bridge_result_conflict', {}, resultHash)
         if (intent.status !== 'uncertain') await moveIntent(connection, intent, 'uncertain', now, 'bridge_result_conflict')
+        await persistExecutionOutcome(connection, intent, envelope, resultHash, 'uncertain', now)
         await holdReservationForConflict(connection, intent.id, now)
         await refreshOperation(connection, intent.operation_id, now)
         return { command: next, disposition: 'conflict' }
@@ -187,6 +188,7 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
         { completed, terminalCode: envelope.payload.terminal_code ?? null, resultHash, resultMessageId: envelope.message_id }, resultHash)
       await moveIntent(connection, intent, envelope.payload.status, now, envelope.payload.error_code,
         envelope.payload.status !== 'uncertain', completed)
+      await persistExecutionOutcome(connection, intent, envelope, resultHash, envelope.payload.status, now)
       if (envelope.payload.status === 'succeeded') await settleReservation(connection, intent.id, 'committed', null, now)
       if (envelope.payload.status === 'rejected' || envelope.payload.status === 'failed') await settleReservation(connection, intent.id, 'released', envelope.payload.error_code ?? `bridge_${envelope.payload.status}`, now)
       await refreshOperation(connection, intent.operation_id, now)
@@ -277,9 +279,46 @@ async function lockAccount(connection: PoolConnection, accountId: string) {
 }
 
 async function lockIntent(connection: PoolConnection, intentId: string) {
-  const [rows] = await connection.execute<IntentRow[]>('SELECT id,operation_id,user_id,CAST(trading_account_id AS CHAR) trading_account_id,action_kind,status,revision,expires_at_utc FROM execution_intents WHERE id=? LIMIT 1 FOR UPDATE', [intentId])
+  const [rows] = await connection.execute<IntentRow[]>('SELECT id,operation_id,user_id,CAST(trading_account_id AS CHAR) trading_account_id,action_kind,source_type,source_id,status,revision,expires_at_utc FROM execution_intents WHERE id=? LIMIT 1 FOR UPDATE', [intentId])
   if (!rows[0]) throw new BridgeCommandError('bridge_command_intent_not_found', 404)
   return rows[0]
+}
+
+async function persistExecutionOutcome(
+  connection: PoolConnection,
+  intent: IntentRow,
+  envelope: BridgeCommandResultEnvelope,
+  resultHash: string,
+  status: BridgeCommandResultEnvelope['payload']['status'],
+  now: string,
+) {
+  const terminalResult = envelope.payload.result
+  const ticket = resultTicket(terminalResult)
+  const resourceKind = outcomeResourceKind(intent.action_kind, status, ticket)
+  const distributionTargetId = ['strategy_distribution', 'distribution_close'].includes(intent.source_type)
+    ? intent.source_id
+    : null
+  const completedAt = status === 'uncertain' ? null : new Date(envelope.payload.completed_at_utc_msc).toISOString()
+  await connection.execute(`INSERT INTO execution_outcomes
+    (id,execution_intent_id,distribution_target_id,trading_account_id,resource_kind,ticket,result_sha256,status,result_json,confirmed_at_utc,created_at_utc,updated_at_utc,revision)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)
+    ON DUPLICATE KEY UPDATE distribution_target_id=VALUES(distribution_target_id),resource_kind=VALUES(resource_kind),ticket=VALUES(ticket),
+      result_sha256=VALUES(result_sha256),status=VALUES(status),result_json=VALUES(result_json),confirmed_at_utc=VALUES(confirmed_at_utc),
+      updated_at_utc=VALUES(updated_at_utc),revision=revision+1`, [
+    randomUUID(), intent.id, distributionTargetId, intent.trading_account_id, resourceKind, ticket, resultHash, status,
+    terminalResult === null ? null : JSON.stringify(terminalResult), completedAt, now, now,
+  ])
+}
+
+function outcomeResourceKind(actionKind: string, status: string, ticket: string | null) {
+  if (status === 'uncertain') return 'unknown'
+  if (actionKind === 'market_order') return ticket ? 'position' : 'unknown'
+  if (actionKind === 'pending_order') return ticket ? 'pending_order' : 'unknown'
+  if (actionKind === 'modify_position') return 'position'
+  if (actionKind === 'modify_order') return 'pending_order'
+  if (actionKind === 'close_position') return status === 'succeeded' ? 'deal' : 'none'
+  if (actionKind === 'cancel_order') return 'none'
+  return 'unknown'
 }
 
 async function moveCommand(connection: PoolConnection, command: BridgeCommand, status: BridgeCommand['status'], now: string,
@@ -350,10 +389,70 @@ async function refreshOperation(connection: PoolConnection, operationId: string,
     : success > 0 ? 'partially_succeeded' : (counts.get('rejected') ?? 0) > 0 ? 'rejected' : 'failed'
   const terminal = !['running', 'uncertain'].includes(status)
   const [operationRows] = await connection.execute<(RowDataPacket & { status: string; revision: number })[]>('SELECT status,revision FROM operations WHERE id=? LIMIT 1 FOR UPDATE', [operationId])
-  const current = operationRows[0]; if (!current || current.status === status) return
-  await connection.execute('UPDATE operations SET status=?,updated_at_utc=?,completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?', [status, now, terminal ? now : null, operationId, current.revision])
-  await connection.execute(`INSERT INTO operation_events (operation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,?,?,?,NULL,?,?,JSON_OBJECT(),?)`, [operationId, `operation.${status}`, current.status, status, current.revision, current.revision + 1, now])
-  await connection.execute(`INSERT INTO outbox_events (event_id,aggregate_type,aggregate_id,event_type,payload_json,status,attempts,available_at_utc,created_at_utc) VALUES (?,?,?,'operation.changed',?,'pending',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [randomUUID(), 'operation', operationId, JSON.stringify({ operation_id: operationId, status, revision: String(current.revision + 1), updated_at: now })])
+  const current = operationRows[0]; if (!current) return
+  if (current.status !== status) {
+    await connection.execute('UPDATE operations SET status=?,updated_at_utc=?,completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?', [status, now, terminal ? now : null, operationId, current.revision])
+    await connection.execute(`INSERT INTO operation_events (operation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,?,?,?,NULL,?,?,JSON_OBJECT(),?)`, [operationId, `operation.${status}`, current.status, status, current.revision, current.revision + 1, now])
+    await connection.execute(`INSERT INTO outbox_events (event_id,aggregate_type,aggregate_id,event_type,payload_json,status,attempts,available_at_utc,created_at_utc) VALUES (?,?,?,'operation.changed',?,'pending',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [randomUUID(), 'operation', operationId, JSON.stringify({ operation_id: operationId, status, revision: String(current.revision + 1), updated_at: now })])
+  }
+  await refreshDistributionTargetFromChild(connection, operationId, status, now)
+}
+
+async function refreshDistributionTargetFromChild(connection: PoolConnection, childOperationId: string, childStatus: string, now: string) {
+  const [targetRows] = await connection.execute<(RowDataPacket & { id: string; distribution_id: string; status: string; revision: number })[]>('SELECT id,distribution_id,status,revision FROM execution_distribution_targets WHERE child_operation_id=? LIMIT 1 FOR UPDATE', [childOperationId])
+  const target = targetRows[0]
+  if (!target) return
+  const targetStatus = distributionTargetStatus(childStatus)
+  if (target.status !== targetStatus) {
+    const terminal = !['queued', 'running', 'uncertain'].includes(targetStatus)
+    await connection.execute('UPDATE execution_distribution_targets SET status=?,updated_at_utc=?,completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?', [targetStatus, now, terminal ? now : null, target.id, target.revision])
+  }
+  await refreshDistributionParent(connection, target.distribution_id, now)
+}
+
+async function refreshDistributionParent(connection: PoolConnection, distributionId: string, now: string) {
+  const [countRows] = await connection.execute<CountRow[]>('SELECT status,COUNT(*) quantity FROM execution_distribution_targets WHERE distribution_id=? GROUP BY status FOR UPDATE', [distributionId])
+  const counts = new Map(countRows.map(row => [row.status, Number(row.quantity)]))
+  const total = [...counts.values()].reduce((sum, value) => sum + value, 0)
+  const queued = counts.get('queued') ?? 0
+  const running = counts.get('running') ?? 0
+  const succeeded = counts.get('succeeded') ?? 0
+  const rejected = counts.get('rejected') ?? 0
+  const failed = counts.get('failed') ?? 0
+  const uncertain = counts.get('uncertain') ?? 0
+  const cancelled = counts.get('cancelled') ?? 0
+  const expired = counts.get('expired') ?? 0
+  const status = uncertain > 0 ? 'uncertain'
+    : running > 0 || (queued > 0 && queued < total) ? 'running'
+      : queued === total ? 'queued'
+        : succeeded === total ? 'succeeded'
+          : succeeded > 0 ? 'partially_succeeded'
+            : rejected === total ? 'rejected'
+              : 'failed'
+  const terminal = !['queued', 'running', 'uncertain'].includes(status)
+  const summary = { target_count: total, queued_targets: queued, running_targets: running, succeeded_targets: succeeded, rejected_targets: rejected, failed_targets: failed, uncertain_targets: uncertain, cancelled_targets: cancelled, expired_targets: expired }
+  const [distributionRows] = await connection.execute<(RowDataPacket & { parent_operation_id: string; status: string; revision: number; result_summary_json: string | object })[]>('SELECT parent_operation_id,status,revision,result_summary_json FROM execution_distributions WHERE id=? LIMIT 1 FOR UPDATE', [distributionId])
+  const distribution = distributionRows[0]
+  if (!distribution) return
+  const summaryJson = JSON.stringify(summary)
+  if (distribution.status === status && JSON.stringify(parse(distribution.result_summary_json)) === summaryJson) return
+  await connection.execute('UPDATE execution_distributions SET status=?,result_summary_json=?,updated_at_utc=?,completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?', [status, summaryJson, now, terminal ? now : null, distributionId, distribution.revision])
+  const [parentRows] = await connection.execute<(RowDataPacket & { status: string; revision: number })[]>('SELECT status,revision FROM operations WHERE id=? LIMIT 1 FOR UPDATE', [distribution.parent_operation_id])
+  const parent = parentRows[0]
+  if (!parent) return
+  await connection.execute('UPDATE operations SET status=?,result_summary_json=?,updated_at_utc=?,completed_at_utc=?,revision=revision+1 WHERE id=? AND revision=?', [status, summaryJson, now, terminal ? now : null, distribution.parent_operation_id, parent.revision])
+  await connection.execute(`INSERT INTO operation_events (operation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,?,?,?,NULL,?,?,?,?)`, [distribution.parent_operation_id, `operation.${status}`, parent.status, status, parent.revision, parent.revision + 1, JSON.stringify({ distribution_id: distributionId, result_summary: summary }), now])
+  await connection.execute(`INSERT INTO outbox_events (event_id,aggregate_type,aggregate_id,event_type,payload_json,status,attempts,available_at_utc,created_at_utc) VALUES (?,?,?,'operation.changed',?,'pending',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [randomUUID(), 'operation', distribution.parent_operation_id, JSON.stringify({ operation_id: distribution.parent_operation_id, status, revision: String(parent.revision + 1), updated_at: now })])
+}
+
+function distributionTargetStatus(status: string) {
+  if (status === 'succeeded') return 'succeeded'
+  if (status === 'rejected') return 'rejected'
+  if (status === 'uncertain') return 'uncertain'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'expired') return 'expired'
+  if (status === 'failed' || status === 'partially_succeeded') return 'failed'
+  return 'running'
 }
 
 async function commandEvent(connection: PoolConnection, id: string, type: string, from: string | null, to: string, reason: string | null,

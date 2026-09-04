@@ -147,6 +147,15 @@ describe('Stage 12D deterministic risk review', () => {
     expect(evaluateRisk(input({ summary: summary({ observedAt: '2026-09-03T08:59:00.000Z' }) }), now)).toMatchObject({ rejectCode: 'RISK_SUMMARY_STALE' })
   })
 
+  it('keeps the AI revision set strict while allowing explicit non-AI sources to bind only captured revisions', () => {
+    const staleAnalysis = action({ expectedState: { ...expectedState, analysisRevision: 99 } })
+    expect(evaluateRisk(input({ result: decision([staleAnalysis]) }), now)).toMatchObject({ rejectCode: 'RISK_EXPECTED_STATE_STALE' })
+    expect(evaluateRisk(input({
+      result: decision([staleAnalysis]),
+      requiredRevisionKeys: ['account', 'positions', 'pendingOrders', 'quote', 'contract', 'risk'],
+    }), now)).toMatchObject({ status: 'approved', rejectCode: null })
+  })
+
   it('still validates account scope and risk revision for a no-execution hold result', () => {
     const hold = decision([])
     expect(evaluateRisk(input({ result: hold, summary: summary({ accountId: '8' }) }), now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_ACCOUNT_SCOPE_MISMATCH' })
@@ -184,6 +193,8 @@ describe('Stage 12D deterministic risk review', () => {
     expect(evaluateRisk(halted, now)).toMatchObject({ status: 'approved', approvedActions: [{ kind: 'close_position' }] })
     const tighter = action({ kind: 'modify_position', parameters: { ticket: 'p-1', stop_loss: '3520' } })
     expect(evaluateRisk(input({ policy: policy({ accountKillSwitch: true }), result: decision([tighter]) }), now)).toMatchObject({ status: 'approved' })
+    const takeProfitOnly = action({ kind: 'modify_position', parameters: { ticket: 'p-1', take_profit: '3650' } })
+    expect(evaluateRisk(input({ policy: policy({ accountKillSwitch: true }), result: decision([takeProfitOnly]) }), now)).toMatchObject({ status: 'approved' })
     const wider = action({ kind: 'modify_position', parameters: { ticket: 'p-1', stop_loss: '3500' } })
     expect(evaluateRisk(input({ result: decision([wider]) }), now)).toMatchObject({ rejectCode: 'RISK_MODIFICATION_REQUIRES_DETERMINISTIC_DIFF' })
   })

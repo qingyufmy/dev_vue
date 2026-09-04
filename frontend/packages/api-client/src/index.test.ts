@@ -132,4 +132,46 @@ describe('createApiClient', () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/trade-decisions?account_id=account%2F7&page_size=100')
     expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v4/trade-decisions/decision%2F1')
   })
+
+  it('sends unified execution commands with idempotency, CSRF and exact account paths', async () => {
+    const operationPayload = {
+      data: {
+        operation_id: 'op_1', kind: 'user_execution_command', status: 'accepted',
+        accepted_at: '2026-09-04T04:00:00.000Z', updated_at: '2026-09-04T04:00:00.000Z',
+        completed_at: null, resource_id: null, error_code: null, revision: '1',
+        parent_operation_id: null, distribution_id: null, result_summary: null,
+      },
+      meta: { request_id: 'execution', generated_at: '2026-09-04T04:00:00.000Z' },
+    }
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(operationPayload), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(operationPayload), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(operationPayload), { status: 202 }))
+    const client = createApiClient({ fetchImpl })
+    const expectedState = {
+      account_revision: '12', positions_revision: '34', pending_orders_revision: '56',
+      quote_revision: '78', contract_revision: '90', risk_revision: '123',
+    }
+
+    await client.createExecutionCommand('csrf', 'account/7', {
+      command_type: 'market_order', side: 'buy', symbol: 'XAUUSD', volume: '0.10', stop_loss: '2300.00',
+      reference_price: '2350.00', expected_state: expectedState,
+    }, 'execution-idempotency-1')
+    await client.createExecutionDistribution('csrf', {
+      strategy_id: 'strategy/1',
+      command: { command_type: 'market_order', side: 'sell', symbol: 'XAUUSD', volume: '0.10', stop_loss: '2400.00', reference_price: '2350.00' },
+    }, 'distribution-idempotency-1')
+    await client.createDistributionCloseCommand('csrf', 'distribution/1', { expected_revision: '8', target_ids: [] }, 'distribution-close-idempotency-1')
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/trading-accounts/account%2F7/execution-commands')
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v4/execution-distributions')
+    expect(fetchImpl.mock.calls[2]?.[0]).toBe('/api/v4/execution-distributions/distribution%2F1/close-commands')
+    for (const [, request] of fetchImpl.mock.calls) {
+      expect(request?.method).toBe('POST')
+      expect(new Headers(request?.headers).get('X-CSRF-Token')).toBe('csrf')
+      expect(new Headers(request?.headers).get('Idempotency-Key')).toMatch(/idempotency-1$/)
+    }
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual(expect.objectContaining({ command_type: 'market_order', expected_state: expectedState }))
+    expect(JSON.parse(String(fetchImpl.mock.calls[2]?.[1]?.body))).toEqual({ expected_revision: '8', target_ids: [] })
+  })
 })

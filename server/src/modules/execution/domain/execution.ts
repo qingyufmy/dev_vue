@@ -53,15 +53,15 @@ export interface ApprovedRiskExecutionSource {
 export interface Operation {
   id: string
   userId: number
-  accountId: string
-  kind: 'risk_decision_execution'
+  accountId: string | null
+  kind: 'risk_decision_execution' | 'user_execution_command' | 'execution_distribution' | 'distribution_close'
   status: ExecutionOperationStatus
-  sourceType: 'risk_decision'
+  sourceType: 'risk_decision' | 'user_command' | 'strategy_distribution' | 'distribution_close'
   sourceId: string
-  idempotencyScope: 'risk_decision'
+  idempotencyScope: 'risk_decision' | 'user_command' | 'strategy_distribution' | 'distribution_close'
   idempotencyKey: string
   requestHash: string
-  resourceType: 'execution_intent'
+  resourceType: 'execution_intent' | 'execution_distribution'
   resourceId: string | null
   errorCode: string | null
   acceptedAt: string
@@ -69,19 +69,22 @@ export interface Operation {
   completedAt: string | null
   revision: number
   intentIds: string[]
+  parentOperationId?: string | null
+  distributionId?: string | null
+  resultSummary?: JsonObject | null
 }
 
 export interface ExecutionIntent {
   id: string
   operationId: string
-  riskDecisionId: string
-  tradeDecisionId: string
+  riskDecisionId: string | null
+  tradeDecisionId: string | null
   userId: number
   accountId: string
   actionId: string
   actionKind: TraderExecutableActionKind
   action: TraderAction
-  sourceType: 'risk_decision'
+  sourceType: 'risk_decision' | 'user_command' | 'strategy_distribution' | 'distribution_close'
   sourceId: string
   idempotencyKey: string
   requestHash: string
@@ -94,6 +97,7 @@ export interface ExecutionIntent {
   errorCode: string | null
   revision: number
   riskReservationId: string | null
+  userCommandId?: string | null
 }
 
 export interface RiskReservation {

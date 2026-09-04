@@ -1,11 +1,11 @@
 import {
   analysisJobResponseSchema, apiProblemSchema, authLoginResponseSchema, connectionCapacityResponseSchema,
   marketAnalysisDetailResponseSchema, marketAnalysisListResponseSchema, marketCandlesResponseSchema,
-  marketQuoteResponseSchema, observerChannelsResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema,
+  marketQuoteResponseSchema, observerChannelsResponseSchema, operationResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema,
   strategiesResponseSchema, terminalProfilesResponseSchema, tradingAccountsResponseSchema, tradingContextResponseSchema,
   traderDecisionDetailResponseSchema, traderDecisionListResponseSchema, tradingWorkspaceResponseSchema,
 } from '@aurum/contracts'
-import type { AnalysisJobCreate, ApiProblem, AuthLoginRequest, StrategyKind } from '@aurum/contracts'
+import type { AnalysisJobCreate, ApiProblem, AuthLoginRequest, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution, StrategyKind } from '@aurum/contracts'
 import { z, type ZodType } from 'zod'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -95,6 +95,21 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getMarketAnalysis: (analysisId: string) => send(marketAnalysisDetailResponseSchema, `/api/v4/market-analyses/${encodeURIComponent(analysisId)}`),
     listTradeDecisions: (accountId: string, pageSize = 50) => send(traderDecisionListResponseSchema, `/api/v4/trade-decisions?account_id=${encodeURIComponent(accountId)}&page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
     getTradeDecision: (decisionId: string) => send(traderDecisionDetailResponseSchema, `/api/v4/trade-decisions/${encodeURIComponent(decisionId)}`),
+    createExecutionCommand: (csrfToken: string, accountId: string, body: ExecutionCommand, idempotencyKey: string) => send(
+      operationResponseSchema,
+      `/api/v4/trading-accounts/${encodeURIComponent(accountId)}/execution-commands`,
+      { method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(body) },
+    ),
+    createExecutionDistribution: (csrfToken: string, body: ExecutionDistribution, idempotencyKey: string) => send(
+      operationResponseSchema,
+      '/api/v4/execution-distributions',
+      { method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(body) },
+    ),
+    createDistributionCloseCommand: (csrfToken: string, distributionId: string, body: DistributionCloseCommand, idempotencyKey: string) => send(
+      operationResponseSchema,
+      `/api/v4/execution-distributions/${encodeURIComponent(distributionId)}/close-commands`,
+      { method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(body) },
+    ),
     createManualAnalysis: (csrfToken: string, body: AnalysisJobCreate, idempotencyKey: string) => send(
       analysisJobResponseSchema,
       '/api/v4/analysis-jobs',

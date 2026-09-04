@@ -25,11 +25,13 @@ describe('AI runtime wiring', () => {
     await publisher.publish(event('trade_decision.created', { decision_id: 'decision-stale-1234', status: 'stale' }))
     await publisher.publish(event('risk.decision.created', { risk_decision_id: 'risk-12345678', user_id: 42, status: 'approved' }))
     await publisher.publish(event('risk.decision.created', { risk_decision_id: 'risk-rejected-1234', user_id: 42, status: 'rejected' }))
+    await publisher.publish(event('execution.distribution.target.requested', { distribution_target_id: 'target-12345678' }))
     expect(calls).toEqual([
       { queue: 'analysis', name: 'analysis.run', data: { analysisId: 'analysis-12345678' }, jobId: 'event-12345678' },
       { queue: 'trader', name: 'trader.run', data: { traderRunId: 'trader-12345678' }, jobId: 'event-12345678' },
       { queue: 'risk', name: 'risk.review', data: { decisionId: 'decision-12345678' }, jobId: 'event-12345678' },
       { queue: 'execution', name: 'execution.risk-decision.prepare', data: { riskDecisionId: 'risk-12345678', userId: 42 }, jobId: 'event-12345678' },
+      { queue: 'execution', name: 'execution.distribution.target', data: { distributionTargetId: 'target-12345678' }, jobId: 'event-12345678' },
     ])
   })
 

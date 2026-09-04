@@ -24,6 +24,9 @@ function operationDto(value: Operation) {
     operation_id: value.id, kind: value.kind, status: value.status,
     accepted_at: value.acceptedAt, updated_at: value.updatedAt, completed_at: value.completedAt,
     resource_id: value.resourceId, error_code: value.errorCode, revision: String(value.revision),
+    parent_operation_id: value.parentOperationId ?? null,
+    distribution_id: value.distributionId ?? null,
+    result_summary: value.resultSummary ?? null,
   }
 }
 

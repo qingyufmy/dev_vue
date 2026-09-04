@@ -297,6 +297,193 @@ export const traderDecisionDetailSchema = z.object({
 export const traderDecisionListResponseSchema = z.object({ data: z.object({ items: z.array(traderDecisionSummarySchema) }), meta: responseMetaSchema })
 export const traderDecisionDetailResponseSchema = z.object({ data: traderDecisionDetailSchema, meta: responseMetaSchema })
 
+/**
+ * The browser execution boundary is intentionally narrower than the Bridge
+ * command envelope.  The browser supplies a complete optimistic revision
+ * vector; the server resolves it to the exact terminal state before creating
+ * an execution intent.
+ */
+export const executionRevisionSchema = z.string().min(1).max(128).regex(/^\d+$/)
+export const executionExpectedStateSchema = z.object({
+  account_revision: executionRevisionSchema,
+  positions_revision: executionRevisionSchema,
+  pending_orders_revision: executionRevisionSchema,
+  quote_revision: executionRevisionSchema,
+  contract_revision: executionRevisionSchema,
+  risk_revision: executionRevisionSchema,
+}).strict()
+export const executionEntryExpectedStateSchema = executionExpectedStateSchema
+export const executionResourceExpectedStateSchema = executionExpectedStateSchema.extend({
+  resource_revision: executionRevisionSchema.regex(/^[1-9][0-9]*$/),
+}).strict()
+
+const executionSymbolSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/)
+const executionTicketSchema = z.string().trim().min(1).max(64).regex(/^[0-9A-Za-z._:-]+$/)
+const executionPositiveDecimalSchema = decimalSchema
+  .regex(/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/)
+  .refine((value) => Number(value) > 0, '交易价格和数量必须大于 0')
+const executionUtcMscSchema = z.number().int().positive().safe()
+const executionOrderTypeSchema = z.enum(['buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit'])
+const executionSideSchema = z.enum(['buy', 'sell'])
+
+const executionEntryExpectedCommandFields = {
+  expected_state: executionEntryExpectedStateSchema,
+} as const
+const executionResourceExpectedCommandFields = {
+  expected_state: executionResourceExpectedStateSchema,
+} as const
+
+export const marketOrderCommandSchema = z.object({
+  command_type: z.literal('market_order'),
+  side: executionSideSchema,
+  symbol: executionSymbolSchema,
+  volume: executionPositiveDecimalSchema,
+  stop_loss: executionPositiveDecimalSchema,
+  reference_price: executionPositiveDecimalSchema,
+  take_profit: executionPositiveDecimalSchema.optional(),
+  ...executionEntryExpectedCommandFields,
+}).strict()
+
+export const pendingOrderCommandSchema = z.object({
+  command_type: z.literal('pending_order'),
+  order_type: executionOrderTypeSchema,
+  symbol: executionSymbolSchema,
+  volume: executionPositiveDecimalSchema,
+  stop_loss: executionPositiveDecimalSchema,
+  reference_price: executionPositiveDecimalSchema,
+  price: executionPositiveDecimalSchema,
+  stop_limit_price: executionPositiveDecimalSchema.optional(),
+  take_profit: executionPositiveDecimalSchema.optional(),
+  expiration_utc_msc: executionUtcMscSchema.optional(),
+  ...executionEntryExpectedCommandFields,
+}).strict()
+
+const positionProtectionChanges = {
+  stop_loss: executionPositiveDecimalSchema.optional(),
+  remove_stop_loss: z.literal(true).optional(),
+  take_profit: executionPositiveDecimalSchema.optional(),
+  remove_take_profit: z.literal(true).optional(),
+} as const
+
+export const modifyPositionCommandSchema = z.object({
+  command_type: z.literal('modify_position'),
+  ticket: executionTicketSchema,
+  ...positionProtectionChanges,
+  ...executionResourceExpectedCommandFields,
+}).strict().superRefine((value, context) => {
+  const changes = ['stop_loss', 'remove_stop_loss', 'take_profit', 'remove_take_profit'] as const
+  if (!changes.some((key) => value[key] !== undefined)) {
+    context.addIssue({ code: 'custom', message: '至少指定一项止损或止盈变更', path: ['command_type'] })
+  }
+  if (value.stop_loss !== undefined && value.remove_stop_loss !== undefined) {
+    context.addIssue({ code: 'custom', message: '止损值与 remove_stop_loss 不能同时提供', path: ['stop_loss'] })
+  }
+  if (value.take_profit !== undefined && value.remove_take_profit !== undefined) {
+    context.addIssue({ code: 'custom', message: '止盈值与 remove_take_profit 不能同时提供', path: ['take_profit'] })
+  }
+})
+
+export const closePositionCommandSchema = z.object({
+  command_type: z.literal('close_position'),
+  ticket: executionTicketSchema,
+  volume: executionPositiveDecimalSchema.optional(),
+  ...executionResourceExpectedCommandFields,
+}).strict()
+
+const pendingOrderChanges = {
+  price: executionPositiveDecimalSchema.optional(),
+  stop_limit_price: executionPositiveDecimalSchema.optional(),
+  stop_loss: executionPositiveDecimalSchema.optional(),
+  remove_stop_loss: z.literal(true).optional(),
+  take_profit: executionPositiveDecimalSchema.optional(),
+  remove_take_profit: z.literal(true).optional(),
+  expiration_utc_msc: executionUtcMscSchema.optional(),
+  remove_expiration: z.literal(true).optional(),
+} as const
+
+export const modifyOrderCommandSchema = z.object({
+  command_type: z.literal('modify_order'),
+  ticket: executionTicketSchema,
+  ...pendingOrderChanges,
+  ...executionResourceExpectedCommandFields,
+}).strict().superRefine((value, context) => {
+  const changes = ['price', 'stop_limit_price', 'stop_loss', 'remove_stop_loss', 'take_profit', 'remove_take_profit', 'expiration_utc_msc', 'remove_expiration'] as const
+  if (!changes.some((key) => value[key] !== undefined)) {
+    context.addIssue({ code: 'custom', message: '至少指定一项挂单变更', path: ['command_type'] })
+  }
+  if (value.stop_loss !== undefined && value.remove_stop_loss !== undefined) {
+    context.addIssue({ code: 'custom', message: '止损值与 remove_stop_loss 不能同时提供', path: ['stop_loss'] })
+  }
+  if (value.take_profit !== undefined && value.remove_take_profit !== undefined) {
+    context.addIssue({ code: 'custom', message: '止盈值与 remove_take_profit 不能同时提供', path: ['take_profit'] })
+  }
+  if (value.expiration_utc_msc !== undefined && value.remove_expiration !== undefined) {
+    context.addIssue({ code: 'custom', message: '到期时间与 remove_expiration 不能同时提供', path: ['expiration_utc_msc'] })
+  }
+})
+
+export const cancelOrderCommandSchema = z.object({
+  command_type: z.literal('cancel_order'),
+  ticket: executionTicketSchema,
+  ...executionResourceExpectedCommandFields,
+}).strict()
+
+export const executionCommandSchema = z.discriminatedUnion('command_type', [
+  marketOrderCommandSchema,
+  pendingOrderCommandSchema,
+  modifyPositionCommandSchema,
+  closePositionCommandSchema,
+  modifyOrderCommandSchema,
+  cancelOrderCommandSchema,
+])
+
+const distributionMarketOrderCommandSchema = marketOrderCommandSchema.omit({ expected_state: true })
+const distributionPendingOrderCommandSchema = pendingOrderCommandSchema.omit({ expected_state: true })
+export const executionDistributionCommandSchema = z.discriminatedUnion('command_type', [
+  distributionMarketOrderCommandSchema,
+  distributionPendingOrderCommandSchema,
+])
+
+export const executionDistributionSchema = z.object({
+  strategy_id: z.string().min(1).max(191),
+  command: executionDistributionCommandSchema,
+}).strict()
+
+export const distributionCloseCommandSchema = z.object({
+  expected_revision: executionRevisionSchema,
+  target_ids: z.array(z.string().min(1).max(191)).max(10000).refine((values) => new Set(values).size === values.length, 'target_ids 不能重复'),
+}).strict()
+
+export const operationStatusSchema = z.enum(['accepted', 'queued', 'running', 'succeeded', 'partially_succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'expired'])
+export const operationSchema = z.object({
+  operation_id: z.string().min(1),
+  kind: z.string().min(1).max(128),
+  status: operationStatusSchema,
+  accepted_at: z.iso.datetime({ offset: true }),
+  updated_at: z.iso.datetime({ offset: true }),
+  completed_at: z.iso.datetime({ offset: true }).nullable().optional(),
+  resource_id: z.string().min(1).nullable().optional(),
+  error_code: z.string().max(128).nullable().optional(),
+  revision: executionRevisionSchema,
+  parent_operation_id: z.string().min(1).nullable().optional(),
+  distribution_id: z.string().min(1).nullable().optional(),
+  result_summary: z.record(z.string(), z.unknown()).nullable().optional(),
+}).strict().transform((value) => ({
+  operationId: value.operation_id,
+  kind: value.kind,
+  status: value.status,
+  acceptedAt: value.accepted_at,
+  updatedAt: value.updated_at,
+  completedAt: value.completed_at ?? null,
+  resourceId: value.resource_id ?? null,
+  errorCode: value.error_code ?? null,
+  revision: value.revision,
+  parentOperationId: value.parent_operation_id ?? null,
+  distributionId: value.distribution_id ?? null,
+  resultSummary: value.result_summary ?? null,
+}))
+export const operationResponseSchema = z.object({ data: operationSchema, meta: responseMetaSchema })
+
 export const tradingRealtimeEventSchema = z.object({
   v: z.literal(4), event_id: z.string(),
   type: z.enum(['runtime.bridge.changed', 'account.metrics.changed', 'market.quote.updated', 'market.candle.updated', 'market.candle.closed', 'positions.changed', 'pending_orders.changed']),
@@ -359,6 +546,21 @@ export type TraderTaskMode = z.infer<typeof traderTaskModeSchema>
 export type TraderRun = z.infer<typeof traderRunSchema>
 export type TraderDecisionSummary = z.infer<typeof traderDecisionSummarySchema>
 export type TraderDecisionDetail = z.infer<typeof traderDecisionDetailSchema>
+export type ExecutionRevision = z.infer<typeof executionRevisionSchema>
+export type ExecutionExpectedState = z.infer<typeof executionExpectedStateSchema>
+export type ExecutionEntryExpectedState = z.infer<typeof executionEntryExpectedStateSchema>
+export type ExecutionResourceExpectedState = z.infer<typeof executionResourceExpectedStateSchema>
+export type MarketOrderCommand = z.infer<typeof marketOrderCommandSchema>
+export type PendingOrderCommand = z.infer<typeof pendingOrderCommandSchema>
+export type ModifyPositionCommand = z.infer<typeof modifyPositionCommandSchema>
+export type ClosePositionCommand = z.infer<typeof closePositionCommandSchema>
+export type ModifyOrderCommand = z.infer<typeof modifyOrderCommandSchema>
+export type CancelOrderCommand = z.infer<typeof cancelOrderCommandSchema>
+export type ExecutionCommand = z.infer<typeof executionCommandSchema>
+export type ExecutionDistributionCommand = z.infer<typeof executionDistributionCommandSchema>
+export type ExecutionDistribution = z.infer<typeof executionDistributionSchema>
+export type DistributionCloseCommand = z.infer<typeof distributionCloseCommandSchema>
+export type Operation = z.infer<typeof operationSchema>
 export type InferenceRealtimeEvent = z.infer<typeof inferenceRealtimeEventSchema>
 export type RiskRealtimeEvent = z.infer<typeof riskRealtimeEventSchema>
 export type OperationRealtimeEvent = z.infer<typeof operationRealtimeEventSchema>

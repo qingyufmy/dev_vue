@@ -8,11 +8,12 @@ export const RISK_QUEUE = 'aurum-v4-risk'
 
 export interface ExecutionIntentJob { intentId: string }
 export interface ApprovedRiskDecisionJob { riskDecisionId: string; userId: number }
+export interface ExecutionDistributionTargetJob { distributionTargetId: string }
 export interface BridgeCommandJob { commandId: string }
 export interface AnalysisRunJob { analysisId: string }
 export interface TraderRunJob { traderRunId: string }
 export interface RiskReviewJob { decisionId: string }
-export type ExecutionJob = ExecutionIntentJob | ApprovedRiskDecisionJob
+export type ExecutionJob = ExecutionIntentJob | ApprovedRiskDecisionJob | ExecutionDistributionTargetJob
 
 const jobOptions: JobsOptions = {
   attempts: 5,

@@ -15,13 +15,13 @@ export class AuthTradeRequestAdapter implements TradeRequestAuthenticator {
   async authenticate(request: { headers: Record<string, unknown> }) {
     const rawSession = cookieValue(request.headers.cookie, [this.service.cookieName('trade-web'), 'aurum_dev_trade-web_session'])
     const { user } = await this.service.resolveSession(rawSession, 'trade-web')
-    return { userId: user.id }
+    return { userId: user.id, role: user.role }
   }
 
   async assertWrite(request: { headers: Record<string, unknown> }) {
     const rawSession = cookieValue(request.headers.cookie, [this.service.cookieName('trade-web'), 'aurum_dev_trade-web_session'])
     const { session, user } = await this.service.resolveSession(rawSession, 'trade-web')
     this.service.assertCsrf(rawSession!, session, String(request.headers['x-csrf-token'] ?? ''), String(request.headers.origin ?? ''))
-    return { userId: user.id }
+    return { userId: user.id, role: user.role }
   }
 }

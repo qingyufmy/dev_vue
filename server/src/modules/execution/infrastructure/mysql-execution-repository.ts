@@ -26,14 +26,15 @@ interface ReservationTotalRow extends RowDataPacket {
   reserved_volume: string | null; reserved_open_positions: string | null; reserved_pending_orders: string | null; reserved_daily_opens: string | null
 }
 interface OperationRow extends RowDataPacket {
-  id: string; user_id: number; trading_account_id: string; kind: Operation['kind']; status: Operation['status']
+  id: string; user_id: number; trading_account_id: string | null; kind: Operation['kind']; status: Operation['status']
   source_type: Operation['sourceType']; source_id: string; idempotency_scope: Operation['idempotencyScope']; idempotency_key: string
   request_sha256: string; resource_type: Operation['resourceType']; resource_id: string | null; error_code: string | null
+  parent_operation_id: string | null; distribution_id: string | null; result_summary_json: string | object | null
   accepted_at_utc: Date; updated_at_utc: Date; completed_at_utc: Date | null; revision: number
 }
 interface IntentRow extends RowDataPacket {
-  id: string; operation_id: string; risk_decision_id: string; trade_decision_id: string; user_id: number; trading_account_id: string
-  risk_decision_revision: number; account_risk_revision: number
+  id: string; operation_id: string; risk_decision_id: string | null; trade_decision_id: string | null; user_command_id: string | null; user_id: number; trading_account_id: string
+  risk_decision_revision: number | null; account_risk_revision: number
   action_id: string; action_kind: ExecutionIntent['actionKind']; source_type: ExecutionIntent['sourceType']; source_id: string
   idempotency_key: string; request_sha256: string; expected_state_sha256: string; status: ExecutionIntent['status']
   expires_at_utc: Date; error_code: string | null; created_at_utc: Date; updated_at_utc: Date; completed_at_utc: Date | null
@@ -122,7 +123,8 @@ export class MysqlExecutionRepository implements ExecutionRepository {
           AND NOT EXISTS (SELECT 1 FROM execution_intents other WHERE other.operation_id=op.id AND other.status<>'prepared')
           AND EXISTS (SELECT 1 FROM execution_intents due WHERE due.operation_id=op.id AND due.status='prepared' AND due.expires_at_utc<=?)
         ORDER BY op.updated_at_utc,op.id LIMIT ?`, [input.now, input.limit])
-      const accountIds = [...new Set(candidates.map(row => row.trading_account_id))].sort((left, right) => left.localeCompare(right, 'en', { numeric: true }))
+      const accountIds = [...new Set(candidates.map(row => row.trading_account_id).filter((value): value is string => value !== null))]
+        .sort((left, right) => left.localeCompare(right, 'en', { numeric: true }))
       for (const accountId of accountIds) await connection.execute('SELECT id FROM trading_accounts WHERE id=? FOR UPDATE', [accountId])
       const expired: Operation[] = []
       for (const candidate of candidates) {
@@ -268,15 +270,15 @@ function assertCapacity(policy: EffectiveRiskPolicy, current: CapacityRow, activ
     || Number(current.daily_open_count) + activeDaily + add.daily > dailyLimit) throw new ExecutionError('execution_capacity_exceeded', 409)
 }
 
-const operationSelect = `SELECT op.id,op.user_id,CAST(op.trading_account_id AS CHAR) trading_account_id,op.kind,op.status,op.source_type,op.source_id,op.idempotency_scope,op.idempotency_key,op.request_sha256,op.resource_type,op.resource_id,op.error_code,op.accepted_at_utc,op.updated_at_utc,op.completed_at_utc,op.revision FROM operations op`
+const operationSelect = `SELECT op.id,op.user_id,CAST(op.trading_account_id AS CHAR) trading_account_id,op.kind,op.status,op.source_type,op.source_id,op.idempotency_scope,op.idempotency_key,op.request_sha256,op.resource_type,op.resource_id,op.parent_operation_id,op.distribution_id,op.result_summary_json,op.error_code,op.accepted_at_utc,op.updated_at_utc,op.completed_at_utc,op.revision FROM operations op`
 
 function mapOperation(row: OperationRow, ids: string[]): Operation {
-  return { id: row.id, userId: Number(row.user_id), accountId: row.trading_account_id, kind: row.kind, status: row.status, sourceType: row.source_type, sourceId: row.source_id, idempotencyScope: row.idempotency_scope, idempotencyKey: row.idempotency_key, requestHash: row.request_sha256, resourceType: row.resource_type, resourceId: row.resource_id, errorCode: row.error_code, acceptedAt: iso(row.accepted_at_utc), updatedAt: iso(row.updated_at_utc), completedAt: row.completed_at_utc ? iso(row.completed_at_utc) : null, revision: Number(row.revision), intentIds: ids }
+  return { id: row.id, userId: Number(row.user_id), accountId: row.trading_account_id, kind: row.kind, status: row.status, sourceType: row.source_type, sourceId: row.source_id, idempotencyScope: row.idempotency_scope, idempotencyKey: row.idempotency_key, requestHash: row.request_sha256, resourceType: row.resource_type, resourceId: row.resource_id, errorCode: row.error_code, acceptedAt: iso(row.accepted_at_utc), updatedAt: iso(row.updated_at_utc), completedAt: row.completed_at_utc ? iso(row.completed_at_utc) : null, revision: Number(row.revision), intentIds: ids, parentOperationId: row.parent_operation_id, distributionId: row.distribution_id, resultSummary: row.result_summary_json === null ? null : parse(row.result_summary_json) }
 }
 
 function mapIntent(row: IntentRow): ExecutionIntent {
   const action = parse<TraderAction>(row.action_json)
-  return { id: row.id, operationId: row.operation_id, riskDecisionId: row.risk_decision_id, tradeDecisionId: row.trade_decision_id, userId: Number(row.user_id), accountId: row.trading_account_id, actionId: row.action_id, actionKind: row.action_kind, action, sourceType: row.source_type, sourceId: row.source_id, idempotencyKey: row.idempotency_key, requestHash: row.request_sha256, expectedStateHash: row.expected_state_sha256, status: row.status, expiresAt: iso(row.expires_at_utc), createdAt: iso(row.created_at_utc), updatedAt: iso(row.updated_at_utc), completedAt: row.completed_at_utc ? iso(row.completed_at_utc) : null, errorCode: row.error_code, revision: Number(row.revision), riskReservationId: row.reservation_id }
+  return { id: row.id, operationId: row.operation_id, riskDecisionId: row.risk_decision_id, tradeDecisionId: row.trade_decision_id, userId: Number(row.user_id), accountId: row.trading_account_id, actionId: row.action_id, actionKind: row.action_kind, action, sourceType: row.source_type, sourceId: row.source_id, idempotencyKey: row.idempotency_key, requestHash: row.request_sha256, expectedStateHash: row.expected_state_sha256, status: row.status, expiresAt: iso(row.expires_at_utc), createdAt: iso(row.created_at_utc), updatedAt: iso(row.updated_at_utc), completedAt: row.completed_at_utc ? iso(row.completed_at_utc) : null, errorCode: row.error_code, revision: Number(row.revision), riskReservationId: row.reservation_id, userCommandId: row.user_command_id }
 }
 
 function mapReservation(row: ReservationRow): RiskReservation {

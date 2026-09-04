@@ -24,7 +24,7 @@ describe('Stage 12E persistence and transport boundaries', () => {
     await app.register(executionRoutes, { prefix: '/api/v4', service: new ExecutionService(new ReadRepository()), auth: { async authenticate() { return { userId: 42 } } } })
     const found = await app.inject({ method: 'GET', url: '/api/v4/operations/op-1' })
     expect(found.statusCode).toBe(200)
-    expect(found.json().data).toEqual({ operation_id: 'op-1', kind: 'risk_decision_execution', status: 'queued', accepted_at: operation.acceptedAt, updated_at: operation.updatedAt, completed_at: null, resource_id: 'intent-1', error_code: null, revision: '1' })
+    expect(found.json().data).toEqual({ operation_id: 'op-1', kind: 'risk_decision_execution', status: 'queued', accepted_at: operation.acceptedAt, updated_at: operation.updatedAt, completed_at: null, resource_id: 'intent-1', error_code: null, revision: '1', parent_operation_id: null, distribution_id: null, result_summary: null })
     const missing = await app.inject({ method: 'GET', url: '/api/v4/operations/op-2' })
     expect(missing.statusCode).toBe(404)
     await app.close()

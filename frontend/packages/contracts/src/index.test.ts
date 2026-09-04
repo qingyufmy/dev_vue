@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { analysisJobCreateSchema, marketAnalysisSummarySchema, marketCandleSchema, observerChannelSchema, traderDecisionSummarySchema, traderRunSchema, tradingContextSchema, tradingWorkspaceResponseSchema, sessionResponseSchema } from './index'
+import {
+  analysisJobCreateSchema, closePositionCommandSchema, distributionCloseCommandSchema, executionCommandSchema,
+  executionDistributionSchema, executionExpectedStateSchema, marketAnalysisSummarySchema, marketCandleSchema,
+  modifyOrderCommandSchema, modifyPositionCommandSchema, observerChannelSchema, operationSchema,
+  pendingOrderCommandSchema, traderDecisionSummarySchema, traderRunSchema, tradingContextSchema,
+  tradingWorkspaceResponseSchema, sessionResponseSchema,
+} from './index'
 
 describe('sessionResponseSchema', () => {
   it('accepts the normalized V4 session envelope', () => {
@@ -56,5 +62,93 @@ describe('analyst and account-trader V4 contracts', () => {
     expect(marketAnalysisSummarySchema.parse({ analysis_id: 'a1', strategy_id: '10', strategy_version_id: '11', symbol: 'XAUUSD', market_bias: 'bullish', opportunity: 'long_setup', confidence: 76, summary: '结构偏多', analyzed_at: '2026-09-03T08:00:00.000Z', valid_until: '2026-09-03T08:03:00.000Z', revision: '1' })).toMatchObject({ analysisId: 'a1', marketBias: 'bullish', opportunity: 'long_setup' })
     expect(traderRunSchema.parse({ trader_run_id: 't1', analysis_id: 'a1', trading_account_id: '7', strategy_id: '20', strategy_version_id: '21', task_mode: 'manage', status: 'queued', created_at: '2026-09-03T08:00:01.000Z', updated_at: '2026-09-03T08:00:01.000Z', revision: '1' })).toMatchObject({ traderRunId: 't1', taskMode: 'manage' })
     expect(traderDecisionSummarySchema.parse({ decision_id: 'd1', analysis_id: 'a1', trading_account_id: '7', strategy_id: '20', strategy_version_id: '21', action: 'hold', side: null, confidence: 80, summary: '账户保证金不足', status: 'proposed', stale_reason: 'quote_revision_changed', created_at: '2026-09-03T08:00:01.000Z', revision: '1' })).toMatchObject({ decisionId: 'd1', tradingAccountId: '7', action: 'hold', staleReason: 'quote_revision_changed' })
+  })
+})
+
+describe('unified execution command contracts', () => {
+  const expectedState = {
+    account_revision: '12',
+    positions_revision: '34',
+    pending_orders_revision: '56',
+    quote_revision: '78',
+    contract_revision: '90',
+    risk_revision: '123',
+  }
+  const resourceExpectedState = { ...expectedState, resource_revision: '456' }
+
+  it('requires the complete optimistic revision vector for every account command', () => {
+    expect(executionExpectedStateSchema.safeParse(expectedState).success).toBe(true)
+    expect(executionExpectedStateSchema.safeParse({ ...expectedState, quote_revision: 'rev-1' }).success).toBe(false)
+    expect(executionExpectedStateSchema.safeParse({ ...expectedState, risk_revision: undefined }).success).toBe(false)
+    expect(executionExpectedStateSchema.safeParse({ ...expectedState, extra_revision: '1' }).success).toBe(false)
+
+    expect(executionCommandSchema.safeParse({
+      command_type: 'market_order', side: 'buy', symbol: 'XAUUSD', volume: '0.10', stop_loss: '2300.00',
+      reference_price: '2350.00', take_profit: '2400.00', expected_state: expectedState,
+    }).success).toBe(true)
+    expect(executionCommandSchema.safeParse({
+      command_type: 'market_order', side: 'buy', symbol: 'XAUUSD', volume: '0.10', stop_loss: '2300.00',
+      reference_price: '2350.00', expected_state: resourceExpectedState,
+    }).success).toBe(false)
+    expect(executionCommandSchema.safeParse({
+      command_type: 'market_order', side: 'buy', symbol: 'XAUUSD', volume: '0.10', stop_loss: '0',
+      reference_price: '2350.00', expected_state: expectedState,
+    }).success).toBe(false)
+  })
+
+  it('keeps pending order fields explicit and rejects unknown command fields', () => {
+    expect(pendingOrderCommandSchema.safeParse({
+      command_type: 'pending_order', order_type: 'buy_stop_limit', symbol: 'XAUUSD', volume: '0.10',
+      stop_loss: '2300.00', reference_price: '2350.00', price: '2360.00', stop_limit_price: '2359.00',
+      expiration_utc_msc: 1_756_000_000_000, expected_state: expectedState,
+    }).success).toBe(true)
+    expect(pendingOrderCommandSchema.safeParse({
+      command_type: 'pending_order', order_type: 'buy_limit', symbol: 'XAUUSD', volume: '0.10',
+      stop_loss: '2300.00', reference_price: '2350.00', price: '2360.00', expected_state: expectedState,
+      unsupported: true,
+    }).success).toBe(false)
+  })
+
+  it('requires an explicit value or remove flag for protection changes', () => {
+    expect(modifyPositionCommandSchema.safeParse({ command_type: 'modify_position', ticket: '1001', stop_loss: '2300.00', expected_state: resourceExpectedState }).success).toBe(true)
+    expect(modifyPositionCommandSchema.safeParse({ command_type: 'modify_position', ticket: '1001', remove_stop_loss: true, expected_state: resourceExpectedState }).success).toBe(true)
+    expect(modifyPositionCommandSchema.safeParse({ command_type: 'modify_position', ticket: '1001', stop_loss: '2300.00', expected_state: expectedState }).success).toBe(false)
+    expect(modifyPositionCommandSchema.safeParse({ command_type: 'modify_position', ticket: '1001', expected_state: resourceExpectedState }).success).toBe(false)
+    expect(modifyPositionCommandSchema.safeParse({ command_type: 'modify_position', ticket: '1001', stop_loss: '2300.00', remove_stop_loss: true, expected_state: resourceExpectedState }).success).toBe(false)
+    expect(modifyPositionCommandSchema.safeParse({ command_type: 'modify_position', ticket: '1001', stop_loss: '0', expected_state: resourceExpectedState }).success).toBe(false)
+    expect(modifyPositionCommandSchema.safeParse({ command_type: 'modify_position', ticket: '1001', stop_loss: '2300.00', expected_state: { ...resourceExpectedState, resource_revision: '0' } }).success).toBe(false)
+  })
+
+  it('supports exact ticket management and rejects empty order edits', () => {
+    expect(closePositionCommandSchema.safeParse({ command_type: 'close_position', ticket: '1001', expected_state: resourceExpectedState }).success).toBe(true)
+    expect(closePositionCommandSchema.safeParse({ command_type: 'close_position', ticket: '1001', volume: '0.05', expected_state: resourceExpectedState }).success).toBe(true)
+    expect(modifyOrderCommandSchema.safeParse({ command_type: 'modify_order', ticket: '2002', price: '2360.00', expected_state: resourceExpectedState }).success).toBe(true)
+    expect(modifyOrderCommandSchema.safeParse({ command_type: 'modify_order', ticket: '2002', remove_expiration: true, expected_state: resourceExpectedState }).success).toBe(true)
+    expect(modifyOrderCommandSchema.safeParse({ command_type: 'modify_order', ticket: '2002', expected_state: resourceExpectedState }).success).toBe(false)
+    expect(modifyOrderCommandSchema.safeParse({ command_type: 'modify_order', ticket: '2002', expiration_utc_msc: 1_756_000_000_000, remove_expiration: true, expected_state: resourceExpectedState }).success).toBe(false)
+  })
+
+  it('keeps distributions limited to entry commands and exact target IDs', () => {
+    expect(executionDistributionSchema.safeParse({
+      strategy_id: 'strategy_1',
+      command: { command_type: 'market_order', side: 'sell', symbol: 'XAUUSD', volume: '0.10', stop_loss: '2400.00', reference_price: '2350.00' },
+    }).success).toBe(true)
+    expect(executionDistributionSchema.safeParse({
+      strategy_id: 'strategy_1',
+      command: { command_type: 'close_position', ticket: '1001' },
+    }).success).toBe(false)
+    expect(distributionCloseCommandSchema.safeParse({ expected_revision: '8', target_ids: [] }).success).toBe(true)
+    expect(distributionCloseCommandSchema.safeParse({ expected_revision: '8', target_ids: ['target_1', 'target_1'] }).success).toBe(false)
+    expect(distributionCloseCommandSchema.safeParse({ expected_revision: '8', target_ids: [], ticket: '1001' }).success).toBe(false)
+  })
+
+  it('accepts operation extension fields without requiring them from older responses', () => {
+    const base = {
+      operation_id: 'op_1', kind: 'user_execution_command', status: 'accepted',
+      accepted_at: '2026-09-04T04:00:00.000Z', updated_at: '2026-09-04T04:00:00.000Z',
+      completed_at: null, resource_id: null, error_code: null, revision: '1',
+    }
+    expect(operationSchema.parse(base)).toMatchObject({ operationId: 'op_1', parentOperationId: null, distributionId: null, resultSummary: null })
+    expect(operationSchema.parse({ ...base, parent_operation_id: 'parent_1', distribution_id: 'dist_1', result_summary: { succeeded: 1 } })).toMatchObject({ parentOperationId: 'parent_1', distributionId: 'dist_1', resultSummary: { succeeded: 1 } })
   })
 })

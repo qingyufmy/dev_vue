@@ -54,5 +54,8 @@ describe('V4 runtime wiring', () => {
     expect(execution).toContain('intent_id: intent.id')
     expect(command).toContain("'bridge.command.queued'")
     expect(command).toContain('command_id: command.id')
+    const distribution = await readFile(new URL('../src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts', import.meta.url), 'utf8')
+    expect(distribution).toContain("'execution.distribution.target.requested'")
+    expect(distribution).toContain('distribution_target_id: target.id')
   })
 })

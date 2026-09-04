@@ -7,7 +7,10 @@ import { createAuthModule } from '../modules/auth/index.js'
 import {
   BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeSessionTicketStore,
 } from '../modules/bridge/index.js'
-import { ExecutionService, MysqlExecutionRepository } from '../modules/execution/index.js'
+import {
+  ExecutionDistributionService, ExecutionService, MysqlExecutionDistributionRepository, MysqlExecutionRepository,
+  MysqlUserExecutionCommandRepository, UserExecutionCommandService,
+} from '../modules/execution/index.js'
 import { InferenceService, MysqlInferenceRepository } from '../modules/inference/index.js'
 import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
@@ -31,6 +34,8 @@ async function main() {
   const auth = createAuthModule(pool, cache, web.auth)
   const tradeAuth = new AuthTradeRequestAdapter(auth)
   const tradingRepository = new MysqlTradingRepository(pool)
+  const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool))
+  const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
   const app = Fastify({ logger: true, bodyLimit: 1024 * 1024, trustProxy: true })
   await registerApiV4Routes(app, {
@@ -45,6 +50,8 @@ async function main() {
     strategies,
     risk: new RiskService(new MysqlRiskRepository(pool)),
     execution: new ExecutionService(new MysqlExecutionRepository(pool)),
+    userExecution,
+    executionDistribution,
     tradeAuth,
   }, { tradeOrigin: web.auth.tradeOrigin, secureCookies: web.secureCookies })
 

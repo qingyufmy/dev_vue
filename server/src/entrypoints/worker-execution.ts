@@ -4,8 +4,10 @@ import {
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
 import {
-  BridgeCommandService, ExecutionPreparationWorker, ExecutionService, MysqlBridgeCommandRepository,
-  MysqlExecutionCommandSource, MysqlExecutionRepository, RedisAccountExecutionLeaseStore,
+  BridgeCommandService, ExecutionDistributionTargetWorker, ExecutionPreparationWorker, ExecutionService,
+  MysqlBridgeCommandRepository, MysqlExecutionCommandSource, MysqlExecutionDistributionRepository,
+  MysqlExecutionRepository, MysqlUserExecutionCommandRepository, RedisAccountExecutionLeaseStore,
+  UserExecutionCommandService,
 } from '../modules/execution/index.js'
 import { EXECUTION_QUEUE, type ExecutionJob } from '../queue/task-queues.js'
 
@@ -25,12 +27,23 @@ async function main() {
     commands,
   )
   const planning = new ExecutionService(new MysqlExecutionRepository(pool))
+  const distributionRepository = new MysqlExecutionDistributionRepository(pool)
+  const distributionTargets = new ExecutionDistributionTargetWorker(
+    distributionRepository,
+    new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool)),
+  )
   const worker = new Worker<ExecutionJob>(EXECUTION_QUEUE, async job => {
     if (job.name === 'execution.risk-decision.prepare') {
       if (!('riskDecisionId' in job.data) || !Number.isSafeInteger(job.data.userId) || job.data.userId < 1) throw new Error('risk_decision_job_invalid')
       const result = await planning.prepare(job.data.userId, job.data.riskDecisionId)
       health.workSucceeded()
       return { riskDecisionId: job.data.riskDecisionId, kind: result.kind }
+    }
+    if (job.name === 'execution.distribution.target') {
+      if (!('distributionTargetId' in job.data) || !job.data.distributionTargetId) throw new Error('distribution_target_job_invalid')
+      const result = await distributionTargets.run(job.data.distributionTargetId)
+      health.workSucceeded()
+      return result
     }
     if (!('intentId' in job.data)) throw new Error('execution_intent_job_invalid')
     if (!job.data.intentId) throw new Error('execution_intent_job_invalid')

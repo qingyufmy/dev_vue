@@ -198,6 +198,81 @@
         "responses": { "200": { "description": "Owned trading accounts", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingAccountListResponse" } } } } }
       }
     },
+    "/trading-accounts/{account_id}/execution-commands": {
+      "post": {
+        "operationId": "createExecutionCommand",
+        "summary": "Create one asynchronous command for an owned trading account",
+        "description": "The server validates authorization, idempotency, optimistic revisions and risk before creating an execution intent. Accepted means durably recorded, not executed by MT.",
+        "tags": ["Execution"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutionCommand" } } }
+        },
+        "responses": {
+          "202": { "description": "Command durably accepted, not necessarily executed by MT", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperationResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/execution-distributions": {
+      "post": {
+        "operationId": "createExecutionDistribution",
+        "summary": "Create an asynchronous strategy distribution",
+        "description": "The server resolves and freezes the eligible subscribers for the strategy version. Each target is independently authorized, risk checked and executed.",
+        "tags": ["Execution"],
+        "parameters": [
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExecutionDistribution" } } }
+        },
+        "responses": {
+          "202": { "description": "Distribution durably accepted, not necessarily executed by MT", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperationResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/execution-distributions/{distribution_id}/close-commands": {
+      "post": {
+        "operationId": "createDistributionCloseCommand",
+        "summary": "Create an exact asynchronous close for distribution targets",
+        "description": "Targets are selected only by frozen distribution target IDs. An empty target_ids value means all still-attributable targets; symbol, strategy and ticket filters are not accepted.",
+        "tags": ["Execution"],
+        "parameters": [
+          { "$ref": "#/components/parameters/DistributionId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DistributionCloseCommand" } } }
+        },
+        "responses": {
+          "202": { "description": "Distribution close durably accepted, not necessarily executed by MT", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OperationResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/bridge/connection-capacity": {
       "get": {
         "operationId": "getBridgeConnectionCapacity",
@@ -353,39 +428,6 @@
             }
           },
           "401": { "$ref": "#/components/responses/Problem" },
-          "503": { "$ref": "#/components/responses/Problem" }
-        }
-      }
-    },
-    "/positions/{ticket}/close-commands": {
-      "post": {
-        "operationId": "createPositionCloseCommand",
-        "summary": "Create an asynchronous position close command",
-        "tags": ["Execution"],
-        "parameters": [
-          { "$ref": "#/components/parameters/Ticket" },
-          { "$ref": "#/components/parameters/IdempotencyKey" },
-          { "$ref": "#/components/parameters/CsrfToken" }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/PositionCloseCommand" }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Command durably accepted, not necessarily executed by MT",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/OperationResponse" }
-              }
-            }
-          },
-          "409": { "$ref": "#/components/responses/Problem" },
-          "422": { "$ref": "#/components/responses/Problem" },
           "503": { "$ref": "#/components/responses/Problem" }
         }
       }
@@ -760,6 +802,12 @@
         "required": true,
         "schema": { "$ref": "#/components/schemas/OpaqueId" }
       },
+      "DistributionId": {
+        "name": "distribution_id",
+        "in": "path",
+        "required": true,
+        "schema": { "$ref": "#/components/schemas/OpaqueId" }
+      },
       "AnalysisId": {
         "name": "analysis_id",
         "in": "path",
@@ -821,6 +869,10 @@
       "Decimal": {
         "type": "string",
         "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+      },
+      "PositiveDecimal": {
+        "type": "string",
+        "pattern": "^(?:(?:[1-9][0-9]*)(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
       },
       "UtcDateTime": {
         "type": "string",
@@ -1273,31 +1325,235 @@
           "source": { "type": "string", "enum": ["manual", "signal", "unknown"] }, "signal_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] }, "revision": { "$ref": "#/components/schemas/Revision" }
         }
       },
-      "PositionCloseCommand": {
+      "ExecutionRevision": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[0-9]+$"
+      },
+      "ExecutionExpectedState": {
         "type": "object",
-        "required": ["account_id", "confirm", "expected_state"],
+        "required": ["account_revision", "positions_revision", "pending_orders_revision", "quote_revision", "contract_revision", "risk_revision"],
         "additionalProperties": false,
         "properties": {
-          "account_id": { "$ref": "#/components/schemas/OpaqueId" },
-          "confirm": { "const": true },
-          "volume": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
-          "expected_state": {
-            "type": "object",
-            "required": ["position_revision"],
-            "additionalProperties": false,
-            "properties": {
-              "position_revision": { "$ref": "#/components/schemas/Revision" },
-              "volume": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }
-            }
-          },
-          "distribution": {
-            "type": ["object", "null"],
-            "required": ["strategy_id"],
-            "additionalProperties": false,
-            "properties": {
-              "strategy_id": { "$ref": "#/components/schemas/OpaqueId" }
-            }
+          "account_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "positions_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "pending_orders_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "quote_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "contract_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "risk_revision": { "$ref": "#/components/schemas/ExecutionRevision" }
+        }
+      },
+      "ExecutionResourceExpectedState": {
+        "type": "object",
+        "required": ["account_revision", "positions_revision", "pending_orders_revision", "quote_revision", "contract_revision", "risk_revision", "resource_revision"],
+        "additionalProperties": false,
+        "properties": {
+          "account_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "positions_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "pending_orders_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "quote_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "contract_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "risk_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "resource_revision": { "allOf": [{ "$ref": "#/components/schemas/ExecutionRevision" }], "pattern": "^[1-9][0-9]*$" }
+        }
+      },
+      "ExecutionCommand": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/MarketOrderCommand" },
+          { "$ref": "#/components/schemas/PendingOrderCommand" },
+          { "$ref": "#/components/schemas/ModifyPositionCommand" },
+          { "$ref": "#/components/schemas/ClosePositionCommand" },
+          { "$ref": "#/components/schemas/ModifyOrderCommand" },
+          { "$ref": "#/components/schemas/CancelOrderCommand" }
+        ],
+        "discriminator": {
+          "propertyName": "command_type",
+          "mapping": {
+            "market_order": "#/components/schemas/MarketOrderCommand",
+            "pending_order": "#/components/schemas/PendingOrderCommand",
+            "modify_position": "#/components/schemas/ModifyPositionCommand",
+            "close_position": "#/components/schemas/ClosePositionCommand",
+            "modify_order": "#/components/schemas/ModifyOrderCommand",
+            "cancel_order": "#/components/schemas/CancelOrderCommand"
           }
+        }
+      },
+      "MarketOrderCommand": {
+        "type": "object",
+        "required": ["command_type", "side", "symbol", "volume", "stop_loss", "reference_price", "expected_state"],
+        "additionalProperties": false,
+        "properties": {
+          "command_type": { "const": "market_order" },
+          "side": { "type": "string", "enum": ["buy", "sell"] },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "volume": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "stop_loss": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "reference_price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "take_profit": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "expected_state": { "$ref": "#/components/schemas/ExecutionExpectedState" }
+        }
+      },
+      "PendingOrderCommand": {
+        "type": "object",
+        "required": ["command_type", "order_type", "symbol", "volume", "stop_loss", "reference_price", "price", "expected_state"],
+        "additionalProperties": false,
+        "properties": {
+          "command_type": { "const": "pending_order" },
+          "order_type": { "type": "string", "enum": ["buy_limit", "sell_limit", "buy_stop", "sell_stop", "buy_stop_limit", "sell_stop_limit"] },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "volume": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "stop_loss": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "reference_price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "stop_limit_price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "take_profit": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "expiration_utc_msc": { "type": "integer", "format": "int64", "minimum": 1 },
+          "expected_state": { "$ref": "#/components/schemas/ExecutionExpectedState" }
+        }
+      },
+      "ModifyPositionCommand": {
+        "type": "object",
+        "required": ["command_type", "ticket", "expected_state"],
+        "additionalProperties": false,
+        "properties": {
+          "command_type": { "const": "modify_position" },
+          "ticket": { "$ref": "#/components/schemas/Ticket" },
+          "stop_loss": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "remove_stop_loss": { "const": true },
+          "take_profit": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "remove_take_profit": { "const": true },
+          "expected_state": { "$ref": "#/components/schemas/ExecutionResourceExpectedState" }
+        },
+        "anyOf": [
+          { "required": ["stop_loss"] },
+          { "required": ["remove_stop_loss"] },
+          { "required": ["take_profit"] },
+          { "required": ["remove_take_profit"] }
+        ],
+        "not": {
+          "anyOf": [
+            { "required": ["stop_loss", "remove_stop_loss"] },
+            { "required": ["take_profit", "remove_take_profit"] }
+          ]
+        }
+      },
+      "ClosePositionCommand": {
+        "type": "object",
+        "required": ["command_type", "ticket", "expected_state"],
+        "additionalProperties": false,
+        "properties": {
+          "command_type": { "const": "close_position" },
+          "ticket": { "$ref": "#/components/schemas/Ticket" },
+          "volume": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "expected_state": { "$ref": "#/components/schemas/ExecutionResourceExpectedState" }
+        }
+      },
+      "ModifyOrderCommand": {
+        "type": "object",
+        "required": ["command_type", "ticket", "expected_state"],
+        "additionalProperties": false,
+        "properties": {
+          "command_type": { "const": "modify_order" },
+          "ticket": { "$ref": "#/components/schemas/Ticket" },
+          "price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "stop_limit_price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "stop_loss": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "remove_stop_loss": { "const": true },
+          "take_profit": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "remove_take_profit": { "const": true },
+          "expiration_utc_msc": { "type": "integer", "format": "int64", "minimum": 1 },
+          "remove_expiration": { "const": true },
+          "expected_state": { "$ref": "#/components/schemas/ExecutionResourceExpectedState" }
+        },
+        "anyOf": [
+          { "required": ["price"] },
+          { "required": ["stop_limit_price"] },
+          { "required": ["stop_loss"] },
+          { "required": ["remove_stop_loss"] },
+          { "required": ["take_profit"] },
+          { "required": ["remove_take_profit"] },
+          { "required": ["expiration_utc_msc"] },
+          { "required": ["remove_expiration"] }
+        ],
+        "not": {
+          "anyOf": [
+            { "required": ["stop_loss", "remove_stop_loss"] },
+            { "required": ["take_profit", "remove_take_profit"] },
+            { "required": ["expiration_utc_msc", "remove_expiration"] }
+          ]
+        }
+      },
+      "CancelOrderCommand": {
+        "type": "object",
+        "required": ["command_type", "ticket", "expected_state"],
+        "additionalProperties": false,
+        "properties": {
+          "command_type": { "const": "cancel_order" },
+          "ticket": { "$ref": "#/components/schemas/Ticket" },
+          "expected_state": { "$ref": "#/components/schemas/ExecutionResourceExpectedState" }
+        }
+      },
+      "ExecutionDistribution": {
+        "type": "object",
+        "required": ["strategy_id", "command"],
+        "additionalProperties": false,
+        "properties": {
+          "strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "command": { "$ref": "#/components/schemas/ExecutionDistributionCommand" }
+        }
+      },
+      "ExecutionDistributionCommand": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/DistributionMarketOrderCommand" },
+          { "$ref": "#/components/schemas/DistributionPendingOrderCommand" }
+        ],
+        "discriminator": {
+          "propertyName": "command_type",
+          "mapping": {
+            "market_order": "#/components/schemas/DistributionMarketOrderCommand",
+            "pending_order": "#/components/schemas/DistributionPendingOrderCommand"
+          }
+        }
+      },
+      "DistributionMarketOrderCommand": {
+        "type": "object",
+        "required": ["command_type", "side", "symbol", "volume", "stop_loss", "reference_price"],
+        "additionalProperties": false,
+        "properties": {
+          "command_type": { "const": "market_order" },
+          "side": { "type": "string", "enum": ["buy", "sell"] },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "volume": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "stop_loss": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "reference_price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "take_profit": { "$ref": "#/components/schemas/PositiveDecimal" }
+        }
+      },
+      "DistributionPendingOrderCommand": {
+        "type": "object",
+        "required": ["command_type", "order_type", "symbol", "volume", "stop_loss", "reference_price", "price"],
+        "additionalProperties": false,
+        "properties": {
+          "command_type": { "const": "pending_order" },
+          "order_type": { "type": "string", "enum": ["buy_limit", "sell_limit", "buy_stop", "sell_stop", "buy_stop_limit", "sell_stop_limit"] },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "volume": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "stop_loss": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "reference_price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "stop_limit_price": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "take_profit": { "$ref": "#/components/schemas/PositiveDecimal" },
+          "expiration_utc_msc": { "type": "integer", "format": "int64", "minimum": 1 }
+        }
+      },
+      "DistributionCloseCommand": {
+        "type": "object",
+        "required": ["expected_revision", "target_ids"],
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": { "$ref": "#/components/schemas/ExecutionRevision" },
+          "target_ids": { "type": "array", "uniqueItems": true, "maxItems": 10000, "items": { "$ref": "#/components/schemas/OpaqueId" } }
         }
       },
       "AnalysisJobCreate": {
@@ -1368,7 +1624,10 @@
           "completed_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
           "resource_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
           "error_code": { "type": ["string", "null"], "maxLength": 128 },
-          "revision": { "$ref": "#/components/schemas/Revision" }
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "parent_operation_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "distribution_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "result_summary": { "type": ["object", "null"], "additionalProperties": true }
         }
       },
       "OperationResponse": {

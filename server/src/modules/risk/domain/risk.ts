@@ -134,6 +134,12 @@ export interface RiskEvaluationInput {
     contract: number
     risk: number
   }
+  /**
+   * AI decisions bind every captured revision. Non-AI execution sources may
+   * explicitly narrow this list to the account/market/resource revisions they
+   * actually captured. Omitting the field keeps the stricter AI default.
+   */
+  requiredRevisionKeys?: Array<keyof RiskEvaluationInput['currentRevisions']>
 }
 
 export interface RiskEvaluationResult {
@@ -279,9 +285,11 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
 
   if (input.summary.accountId !== input.policy.accountId || input.summary.userId !== input.policy.userId) return reject('RISK_ACCOUNT_SCOPE_MISMATCH')
   if (input.summary.revision !== input.currentRevisions.risk) return reject('RISK_SUMMARY_REVISION_STALE')
+  const requiredRevisionKeys = input.requiredRevisionKeys ?? Object.keys(input.currentRevisions) as Array<keyof RiskEvaluationInput['currentRevisions']>
   for (const action of input.result.actions) {
     const expected = expectedState(action)
-    for (const [key, current] of Object.entries(input.currentRevisions)) {
+    for (const key of requiredRevisionKeys) {
+      const current = input.currentRevisions[key]
       if (expected[`${key}Revision`] !== current) return reject('RISK_EXPECTED_STATE_STALE', action.actionId, { resource: key })
     }
   }
@@ -402,6 +410,12 @@ function isRiskReducing(action: TraderAction, input: RiskEvaluationInput) {
   if (action.kind === 'modify_position') {
     const position = input.positions.find(item => String(item.ticket ?? '') === ticket)
     if (!position) return false
+    if (action.parameters.remove_stop_loss === true) return false
+    const changesStop = action.parameters.stop_loss !== undefined && action.parameters.stop_loss !== null
+      || action.parameters.sl !== undefined && action.parameters.sl !== null
+    const changesOnlyTakeProfit = !changesStop
+      && (action.parameters.take_profit !== undefined || action.parameters.tp !== undefined || action.parameters.remove_take_profit === true)
+    if (changesOnlyTakeProfit) return true
     const side = String(position.side ?? '')
     const currentPrice = Number(position.currentPrice ?? position.current_price)
     const oldStop = Number(position.stopLoss ?? position.stop_loss ?? 0)
@@ -413,6 +427,16 @@ function isRiskReducing(action: TraderAction, input: RiskEvaluationInput) {
   if (action.kind === 'modify_order') {
     const order = input.pendingOrders.find(item => String(item.ticket ?? '') === ticket)
     if (!order) return false
+    if (action.parameters.remove_stop_loss === true) return false
+    const changesEntryRisk = action.parameters.price !== undefined && action.parameters.price !== null
+      || action.parameters.volume !== undefined && action.parameters.volume !== null
+      || action.parameters.stop_loss !== undefined && action.parameters.stop_loss !== null
+      || action.parameters.sl !== undefined && action.parameters.sl !== null
+    const changesOnlyNonRiskFields = !changesEntryRisk
+      && (action.parameters.take_profit !== undefined || action.parameters.tp !== undefined
+        || action.parameters.remove_take_profit === true || action.parameters.expiration_utc_msc !== undefined
+        || action.parameters.remove_expiration === true)
+    if (changesOnlyNonRiskFields) return true
     const type = String(order.type ?? '')
     const side = type.startsWith('buy') ? 'buy' : type.startsWith('sell') ? 'sell' : ''
     const oldEntry = Number(order.price)
