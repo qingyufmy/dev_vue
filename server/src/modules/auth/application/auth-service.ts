@@ -19,6 +19,7 @@ import type {
   RealtimeTicketStore,
   StoredSession,
 } from './auth-ports.js'
+import { RealtimeTicketAuthenticator } from './realtime-ticket-authenticator.js'
 
 const AUTH_SESSION_SECONDS = 30 * 24 * 60 * 60
 const CODE_TTL_SECONDS = 60
@@ -319,13 +320,11 @@ export class AuthService {
   }
 
   async consumeRealtimeTicket(rawTicket: string) {
-    const claims = await this.options.realtimeTickets.consumeTicket(hashSecret(rawTicket))
-    if (!claims) return null
-    const session = await this.options.repository.findActiveSessionById(claims.sessionId, this.now())
-    if (!session || session.clientId !== 'trade-web' || session.userId !== claims.userId) return null
-    const user = await this.options.repository.findUserById(claims.userId)
-    if (!user?.active || user.sessionVersion !== session.sessionVersion) return null
-    return claims
+    return new RealtimeTicketAuthenticator(
+      this.options.repository,
+      this.options.realtimeTickets,
+      this.now,
+    ).consume(rawTicket)
   }
 
   async logoutCurrent(session: StoredSession) {

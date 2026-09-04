@@ -1,8 +1,8 @@
 import mysql, { type Pool } from 'mysql2/promise'
 import { Redis } from 'ioredis'
-import type { RedisEndpoint, V4RuntimeConfig } from './runtime-config.js'
+import type { RedisEndpoint, V4BaseRuntimeConfig } from './runtime-config.js'
 
-export function createMysqlPool(config: V4RuntimeConfig['mysql']): Pool {
+export function createMysqlPool(config: V4BaseRuntimeConfig['mysql']): Pool {
   return mysql.createPool({
     host: config.host,
     port: config.port,

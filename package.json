@@ -22,6 +22,8 @@
     "verify:frontend-boundaries": "node frontend/scripts/verify-boundaries.mjs",
     "typecheck:server": "tsc -p server/tsconfig.json --noEmit",
     "build:server:v4": "tsc -p server/tsconfig.build.json",
+    "start:v4:api": "node server/dist-v4/entrypoints/api-v4.js",
+    "start:v4:realtime": "node server/dist-v4/entrypoints/browser-realtime.js",
     "start:v4:bridge": "node server/dist-v4/entrypoints/bridge-gateway.js",
     "start:v4:outbox": "node server/dist-v4/entrypoints/outbox-dispatcher.js",
     "start:v4:execution": "node server/dist-v4/entrypoints/worker-execution.js",

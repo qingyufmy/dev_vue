@@ -27,6 +27,9 @@ describe('Stage 11 trade home composition', () => {
     expect(realtime).toContain("from '@aurum/realtime'")
     expect(realtime).not.toMatch(/new\s+WebSocket/)
     expect(realtime).toContain("type: 'subscription.subscribe'")
+    expect(realtime).toContain('RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 20_000, 30_000]')
+    expect(realtime).toMatch(/void resync\(\)\.then\([\s\S]*return connect\(/)
+    expect(realtime).toContain("connection?.close(4000, 'revision_resync_required')")
   })
 
   it('keeps observer mode explicit across the selector, HTTP snapshot and realtime subscription', async () => {

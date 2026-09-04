@@ -10,11 +10,14 @@ export interface RedisEndpoint {
   db: number
 }
 
-export interface V4RuntimeConfig {
+export interface V4BaseRuntimeConfig {
   enabled: boolean
   host: string
   mysql: { host: string; port: number; user: string; password: string; database: string; poolSize: number }
   cacheRedis: RedisEndpoint
+}
+
+export interface V4RuntimeConfig extends V4BaseRuntimeConfig {
   queueRedis: RedisEndpoint & ConnectionOptions
   queuePrefix: string
   bridgeGatewayPort: number
@@ -25,6 +28,27 @@ export interface V4RuntimeConfig {
   executionDeviation: number
 }
 
+export interface V4ApiRuntimeConfig {
+  port: number
+  secureCookies: boolean
+  auth: {
+    authOrigin: string
+    wwwOrigin: string
+    tradeOrigin: string
+    adminOrigin: string
+    csrfSecret: string
+    bffExchangeSecret: string
+    idTokenPrivateKeyPem: string
+    idTokenKeyId: string
+  }
+}
+
+export interface V4BrowserRealtimeConfig {
+  port: number
+  secureCookies: boolean
+  tradeOrigin: string
+}
+
 export function loadServerEnvironment() {
   if (process.env.NODE_ENV === 'test') return
   const serverDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -32,6 +56,20 @@ export function loadServerEnvironment() {
 }
 
 export function loadV4RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V4RuntimeConfig {
+  return {
+    ...loadV4BaseRuntimeConfig(env),
+    queueRedis: redisEndpoint(env, 'QUEUE_REDIS', true),
+    queuePrefix: env.V4_QUEUE_PREFIX?.trim() || 'aurum-v4',
+    bridgeGatewayPort: integer(env.V4_BRIDGE_GATEWAY_PORT, 3012, 1, 65_535, 'V4_BRIDGE_GATEWAY_PORT'),
+    executionHealthPort: integer(env.V4_EXECUTION_HEALTH_PORT, 3021, 1, 65_535, 'V4_EXECUTION_HEALTH_PORT'),
+    outboxHealthPort: integer(env.V4_OUTBOX_HEALTH_PORT, 3020, 1, 65_535, 'V4_OUTBOX_HEALTH_PORT'),
+    executionConcurrency: integer(env.V4_EXECUTION_CONCURRENCY, 4, 1, 32, 'V4_EXECUTION_CONCURRENCY'),
+    executionMagic: integer(env.V4_EXECUTION_MAGIC, 0, 0, 2_147_483_647, 'V4_EXECUTION_MAGIC'),
+    executionDeviation: integer(env.V4_EXECUTION_DEVIATION, 20, 0, 100_000, 'V4_EXECUTION_DEVIATION'),
+  }
+}
+
+export function loadV4BaseRuntimeConfig(env: NodeJS.ProcessEnv = process.env): V4BaseRuntimeConfig {
   return {
     enabled: env.AURUM_V4_RUNTIME_ENABLED === 'true',
     host: env.V4_RUNTIME_HOST?.trim() || '127.0.0.1',
@@ -44,19 +82,36 @@ export function loadV4RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V4Run
       poolSize: integer(env.V4_MYSQL_POOL_SIZE, 4, 1, 20, 'V4_MYSQL_POOL_SIZE'),
     },
     cacheRedis: redisEndpoint(env, 'REDIS', false),
-    queueRedis: redisEndpoint(env, 'QUEUE_REDIS', true),
-    queuePrefix: env.V4_QUEUE_PREFIX?.trim() || 'aurum-v4',
-    bridgeGatewayPort: integer(env.V4_BRIDGE_GATEWAY_PORT, 3012, 1, 65_535, 'V4_BRIDGE_GATEWAY_PORT'),
-    executionHealthPort: integer(env.V4_EXECUTION_HEALTH_PORT, 3021, 1, 65_535, 'V4_EXECUTION_HEALTH_PORT'),
-    outboxHealthPort: integer(env.V4_OUTBOX_HEALTH_PORT, 3020, 1, 65_535, 'V4_OUTBOX_HEALTH_PORT'),
-    executionConcurrency: integer(env.V4_EXECUTION_CONCURRENCY, 4, 1, 32, 'V4_EXECUTION_CONCURRENCY'),
-    executionMagic: integer(env.V4_EXECUTION_MAGIC, 0, 0, 2_147_483_647, 'V4_EXECUTION_MAGIC'),
-    executionDeviation: integer(env.V4_EXECUTION_DEVIATION, 20, 0, 100_000, 'V4_EXECUTION_DEVIATION'),
   }
 }
 
-export function assertV4RuntimeEnabled(config: V4RuntimeConfig) {
+export function assertV4RuntimeEnabled(config: Pick<V4BaseRuntimeConfig, 'enabled'>) {
   if (!config.enabled) throw new Error('AURUM_V4_RUNTIME_ENABLED_must_be_true')
+}
+
+export function loadV4ApiRuntimeConfig(env: NodeJS.ProcessEnv = process.env): V4ApiRuntimeConfig {
+  return {
+    port: integer(env.V4_API_PORT, 3010, 1, 65_535, 'V4_API_PORT'),
+    secureCookies: booleanValue(env.V4_SECURE_COOKIES, true, 'V4_SECURE_COOKIES'),
+    auth: {
+      authOrigin: exactOrigin(env.AUTH_ORIGIN, 'AUTH_ORIGIN'),
+      wwwOrigin: exactOrigin(env.WWW_ORIGIN, 'WWW_ORIGIN'),
+      tradeOrigin: exactOrigin(env.TRADE_ORIGIN, 'TRADE_ORIGIN'),
+      adminOrigin: exactOrigin(env.ADMIN_ORIGIN, 'ADMIN_ORIGIN'),
+      csrfSecret: required(env.AUTH_CSRF_SECRET, 'AUTH_CSRF_SECRET'),
+      bffExchangeSecret: required(env.AUTH_BFF_EXCHANGE_SECRET, 'AUTH_BFF_EXCHANGE_SECRET'),
+      idTokenPrivateKeyPem: required(env.AUTH_ID_TOKEN_PRIVATE_KEY_PEM, 'AUTH_ID_TOKEN_PRIVATE_KEY_PEM').replace(/\\n/g, '\n'),
+      idTokenKeyId: required(env.AUTH_ID_TOKEN_KEY_ID, 'AUTH_ID_TOKEN_KEY_ID'),
+    },
+  }
+}
+
+export function loadV4BrowserRealtimeConfig(env: NodeJS.ProcessEnv = process.env): V4BrowserRealtimeConfig {
+  return {
+    port: integer(env.V4_BROWSER_REALTIME_PORT, 3011, 1, 65_535, 'V4_BROWSER_REALTIME_PORT'),
+    secureCookies: booleanValue(env.V4_SECURE_COOKIES, true, 'V4_SECURE_COOKIES'),
+    tradeOrigin: exactOrigin(env.TRADE_ORIGIN, 'TRADE_ORIGIN'),
+  }
 }
 
 function redisEndpoint(env: NodeJS.ProcessEnv, prefix: 'REDIS' | 'QUEUE_REDIS', worker: boolean): RedisEndpoint & ConnectionOptions {
@@ -86,4 +141,19 @@ function integer(value: string | undefined, fallback: number, minimum: number, m
   const parsed = value === undefined || value.trim() === '' ? fallback : Number(value)
   if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) throw new Error(`${name}_invalid`)
   return parsed
+}
+
+function booleanValue(value: string | undefined, fallback: boolean, name: string) {
+  if (value === undefined || value.trim() === '') return fallback
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new Error(`${name}_invalid`)
+}
+
+function exactOrigin(value: string | undefined, name: string) {
+  const origin = new URL(required(value, name))
+  if (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash) {
+    throw new Error(`${name}_invalid`)
+  }
+  return origin.origin
 }

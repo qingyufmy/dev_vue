@@ -16,8 +16,16 @@ export class BrowserRealtimeSession {
   constructor(private readonly userId: number, private readonly hub: BrowserRealtimeHub, private readonly sink: BrowserRealtimeSink) {}
 
   async receive(raw: unknown) {
+    if (isPing(raw)) {
+      this.sink.send({ v: 4, type: 'system.pong', request_id: raw.request_id, occurred_at: new Date().toISOString() })
+      return
+    }
+    if (isUnsubscribe(raw)) {
+      this.closeSubscriptions()
+      this.sink.send({ v: 4, type: 'subscription.unsubscribed', request_id: raw.request_id })
+      return
+    }
     if (!isSubscribe(raw)) return this.protocolError('realtime_message_invalid')
-    this.closeSubscriptions()
     const grouped = new Map<string, { accountId: string; observerChannelId: string | null; resources: string[]; afterRevision: Record<string, number | null> }>()
     for (const target of raw.targets) {
       if (!target.trading_account_id) return this.protocolError('realtime_scope_invalid')
@@ -31,8 +39,10 @@ export class BrowserRealtimeSession {
     if (grouped.size !== 1) return this.protocolError('realtime_scope_invalid')
     for (const group of grouped.values()) {
       const stop = await this.hub.subscribe({ userId: this.userId, accountId: group.accountId, observerChannelId: group.observerChannelId, requestId: raw.request_id, resources: group.resources, afterRevision: group.afterRevision, sink: this.sink })
-      if (!stop) { this.closeSubscriptions(); return }
+      if (!stop) return
+      const previous = this.stops.splice(0)
       this.stops.push(stop)
+      for (const release of previous) release()
     }
   }
 
@@ -40,10 +50,24 @@ export class BrowserRealtimeSession {
   private protocolError(code: string) { this.sink.send({ v: 4, type: 'protocol.error', request_id: null, code, message: code, retryable: false }) }
 }
 
+function isPing(raw: unknown): raw is { v: 4; type: 'system.ping'; request_id: string } {
+  if (typeof raw !== 'object' || raw === null) return false
+  const value = raw as Record<string, unknown>
+  return value.v === 4 && value.type === 'system.ping' && validRequestId(value.request_id)
+    && Object.keys(value).every(key => ['v', 'type', 'request_id'].includes(key))
+}
+
+function isUnsubscribe(raw: unknown): raw is { v: 4; type: 'subscription.unsubscribe'; request_id: string } {
+  if (typeof raw !== 'object' || raw === null) return false
+  const value = raw as Record<string, unknown>
+  return value.v === 4 && value.type === 'subscription.unsubscribe' && validRequestId(value.request_id)
+    && Object.keys(value).every(key => ['v', 'type', 'request_id'].includes(key))
+}
+
 function isSubscribe(raw: unknown): raw is { v: 4; type: 'subscription.subscribe'; request_id: string; targets: Target[] } {
   if (typeof raw !== 'object' || raw === null) return false
   const value = raw as Record<string, unknown>
-  return value.v === 4 && value.type === 'subscription.subscribe' && typeof value.request_id === 'string' && value.request_id.length > 0 && value.request_id.length <= 128
+  return value.v === 4 && value.type === 'subscription.subscribe' && validRequestId(value.request_id)
     && Array.isArray(value.targets) && value.targets.length > 0 && value.targets.length <= 32
     && value.targets.every((target) => {
       if (typeof target !== 'object' || target === null) return false
@@ -56,6 +80,10 @@ function isSubscribe(raw: unknown): raw is { v: 4; type: 'subscription.subscribe
         && (typeof item.resource_id === 'string' || item.resource_id === null)
         && (item.after_revision === null || (typeof item.after_revision === 'string' && /^\d+$/.test(item.after_revision)))
     })
+}
+
+function validRequestId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128
 }
 
 function resourceFor(target: Target) {

@@ -18,6 +18,18 @@ module.exports = {
   apps: [
     {
       ...common,
+      name: 'aurum-v4-api',
+      script: 'server/dist-v4/entrypoints/api-v4.js',
+      max_memory_restart: '512M',
+    },
+    {
+      ...common,
+      name: 'aurum-v4-browser-realtime',
+      script: 'server/dist-v4/entrypoints/browser-realtime.js',
+      max_memory_restart: '384M',
+    },
+    {
+      ...common,
       name: 'aurum-v4-bridge-gateway',
       script: 'server/dist-v4/entrypoints/bridge-gateway.js',
       max_memory_restart: '384M',

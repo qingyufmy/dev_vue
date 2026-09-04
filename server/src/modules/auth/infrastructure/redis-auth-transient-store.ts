@@ -32,7 +32,14 @@ export class RedisAuthTransientStore implements LoginTransactionStore, RealtimeT
 
   async consumeTicket(ticketHash: string): Promise<RealtimeTicketClaims | null> {
     const raw = await this.redis.eval(CONSUME_SCRIPT, 1, `auth:v4:realtime:${ticketHash}`)
-    return typeof raw === 'string' && raw ? JSON.parse(raw) as RealtimeTicketClaims : null
+    if (typeof raw !== 'string' || !raw) return null
+    try {
+      const value = JSON.parse(raw) as Record<string, unknown>
+      if (!Number.isSafeInteger(value.userId) || Number(value.userId) <= 0
+        || !Number.isSafeInteger(value.sessionId) || Number(value.sessionId) <= 0
+        || value.clientId !== 'trade-web') return null
+      return { userId: Number(value.userId), sessionId: Number(value.sessionId), clientId: 'trade-web' }
+    } catch { return null }
   }
 
   async issue(ticketHash: string, claims: RealtimeTicketClaims, ttlSeconds: number) {

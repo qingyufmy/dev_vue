@@ -7,6 +7,7 @@ import { MysqlAuthRepository } from './mysql-auth-repository.js'
 import { MysqlBridgeDeviceRevoker } from './mysql-bridge-device-revoker.js'
 import { RedisAuthTransientStore } from './redis-auth-transient-store.js'
 import { Es256IdTokenSigner } from './es256-id-token-signer.js'
+import { RealtimeTicketAuthenticator } from '../application/realtime-ticket-authenticator.js'
 
 export interface AuthModuleConfig {
   authOrigin: string
@@ -36,4 +37,11 @@ export function createAuthModule(pool: Pool, redis: Redis, config: AuthModuleCon
     bridgeDeviceRevoker: new MysqlBridgeDeviceRevoker(pool),
     idTokenSigner: new Es256IdTokenSigner(config.idTokenPrivateKeyPem, config.idTokenKeyId),
   })
+}
+
+export function createRealtimeTicketAuthenticator(pool: Pool, redis: Redis) {
+  return new RealtimeTicketAuthenticator(
+    new MysqlAuthRepository(pool),
+    new RedisAuthTransientStore(redis),
+  )
 }

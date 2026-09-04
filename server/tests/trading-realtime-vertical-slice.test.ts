@@ -172,6 +172,22 @@ describe('Stage 11 trading vertical slice', () => {
     expect(messages).toContainEqual(expect.objectContaining({ type: 'protocol.error', code: 'realtime_scope_invalid' }))
   })
 
+  it('supports protocol ping and explicit unsubscribe without a business command channel', async () => {
+    const messages: unknown[] = []; const storage = repository(); const hub = new BrowserRealtimeHub(storage)
+    const session = new BrowserRealtimeSession(42, hub, { send(value) { messages.push(value) }, close() {} })
+    await session.receive({ v: 4, type: 'subscription.subscribe', request_id: 'sub', targets: [
+      { kind: 'account', trading_account_id: '7', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'positions', after_revision: '0' },
+    ] })
+    await session.receive({ v: 4, type: 'system.ping', request_id: 'ping' })
+    await session.receive({ v: 4, type: 'subscription.unsubscribe', request_id: 'unsub' })
+    hub.publish({ eventId: 'after', type: 'positions.changed', occurredAt: '2026-09-04T08:00:00.000Z', userId: 42, accountId: '7', terminalInstanceId: 't1', resource: 'positions', resourceId: 'open', revision: 1, data: { items: [] } })
+    expect(messages).toContainEqual(expect.objectContaining({ type: 'system.pong', request_id: 'ping' }))
+    expect(messages).toContainEqual({ v: 4, type: 'subscription.unsubscribed', request_id: 'unsub' })
+    expect(messages).not.toContainEqual(expect.objectContaining({ event_id: 'after' }))
+    await session.receive({ v: 4, type: 'command', request_id: 'write' })
+    expect(messages).toContainEqual(expect.objectContaining({ type: 'protocol.error', code: 'realtime_message_invalid' }))
+  })
+
   it('keeps migration explicit, normalized, indexed and separate from the legacy source database', async () => {
     const sql = await readFile(new URL('../db/migrations/20260903_003_trading_context_and_market_projection.sql', import.meta.url), 'utf8')
     expect(sql).toContain('TARGET: empty V4 side-by-side database only')
