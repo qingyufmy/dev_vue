@@ -2,7 +2,7 @@ import type { BrowserRealtimeSink, BrowserRealtimeTarget } from './browser-realt
 import { BrowserRealtimeHub } from './browser-realtime-hub.js'
 
 interface Target {
-  kind: 'runtime' | 'account' | 'market' | 'signals' | 'risk' | 'reviews' | 'trades' | 'operations'
+  kind: 'runtime' | 'account' | 'market' | 'signals' | 'risk' | 'reviews' | 'trades' | 'operations' | 'audit'
   trading_account_id?: string | null
   observer_channel_id?: string | null
   symbol?: string | null
@@ -74,7 +74,7 @@ function isSubscribe(raw: unknown): raw is { v: 4; type: 'subscription.subscribe
       if (typeof target !== 'object' || target === null) return false
       const item = target as Record<string, unknown>
       return Object.keys(item).every(key => ['kind', 'trading_account_id', 'observer_channel_id', 'symbol', 'timeframe', 'resource_id', 'after_revision'].includes(key))
-        && ['runtime', 'account', 'market', 'signals', 'risk', 'reviews', 'trades', 'operations'].includes(String(item.kind))
+        && ['runtime', 'account', 'market', 'signals', 'risk', 'reviews', 'trades', 'operations', 'audit'].includes(String(item.kind))
         && (item.trading_account_id === undefined || typeof item.trading_account_id === 'string' || item.trading_account_id === null)
         && (item.observer_channel_id === undefined || typeof item.observer_channel_id === 'string' || item.observer_channel_id === null)
         && (item.symbol === undefined || typeof item.symbol === 'string' || item.symbol === null)
@@ -112,6 +112,7 @@ function validScope(target: Required<Target>) {
     return Boolean(target.trading_account_id) && target.observer_channel_id === null
   }
   if (target.kind === 'reviews') return target.trading_account_id === null && target.observer_channel_id === null
+  if (target.kind === 'audit') return target.trading_account_id === null && target.observer_channel_id === null
   if (target.kind === 'operations') return target.observer_channel_id === null
   return Boolean(target.trading_account_id)
 }
@@ -144,5 +145,6 @@ function resourcesFor(target: Required<Target>): string[] | null {
   }
   if (target.kind === 'trades' && (target.resource_id === null || target.resource_id === 'history')) return ['trade_history']
   if (target.kind === 'operations' && (target.resource_id === null || target.resource_id === 'all')) return ['operation']
+  if (target.kind === 'audit' && (target.resource_id === null || target.resource_id === 'all')) return ['audit']
   return null
 }

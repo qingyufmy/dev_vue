@@ -15,10 +15,11 @@ import {
   reviewCaseDetailResponseSchema, reviewCasesResponseSchema, reviewConfirmBodySchema, reviewGenerationBodySchema,
   reviewReturnBodySchema, reviewVersionCreateBodySchema, strategyMemoriesResponseSchema, strategyMemoryDecisionBodySchema,
   strategyMemoryDetailResponseSchema, strategyMemoryUpdateResponseSchema, strategyMemoryUpdatesResponseSchema,
-  tradeHistoryPageResponseSchema, tradeRecordDetailResponseSchema,
+  tradeHistoryPageResponseSchema, tradeRecordDetailResponseSchema, auditEventDetailResponseSchema, auditEventPageResponseSchema,
 } from '@aurum/contracts'
 import type {
   AnalysisJobCreate, ApiProblem, AuthLoginRequest, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution,
+  AuditActor, AuditCategory, AuditSourceKind, AuditStatus,
   ManualReviewCaseCreateBody, ReviewContent, ReviewKind,
   RiskManualReleaseBody, RiskPolicyPatchBody, StrategyCompileBody, StrategyCreateBody, StrategyKind, StrategyMetadataPatchBody,
   StrategySubscriptionCreateBody, StrategySubscriptionPatchBody, StrategyVersionCreateBody,
@@ -120,6 +121,22 @@ export function createApiClient(options: ApiClientOptions = {}) {
       return send(tradeHistoryPageResponseSchema, `/api/v4/trade-history?${query.toString()}`)
     },
     getTradeRecord: (recordId: string) => send(tradeRecordDetailResponseSchema, `/api/v4/trade-history/${encodeURIComponent(recordId)}`),
+    listAuditEvents: (filter: { accountId?: string; category?: AuditCategory; status?: AuditStatus; actor?: AuditActor; from?: string; to?: string; query?: string; pageSize?: number; cursor?: string | null } = {}) => {
+      const query = new URLSearchParams({ page_size: String(Math.min(Math.max(Math.trunc(filter.pageSize ?? 50), 1), 100)) })
+      if (filter.accountId) query.set('account_id', filter.accountId)
+      if (filter.category) query.set('category', filter.category)
+      if (filter.status) query.set('status', filter.status)
+      if (filter.actor) query.set('actor', filter.actor)
+      if (filter.from) query.set('from', filter.from)
+      if (filter.to) query.set('to', filter.to)
+      if (filter.query) query.set('q', filter.query)
+      if (filter.cursor) query.set('cursor', filter.cursor)
+      return send(auditEventPageResponseSchema, `/api/v4/audit/events?${query.toString()}`)
+    },
+    getAuditEvent: (sourceKind: AuditSourceKind, sourceId: string) => send(
+      auditEventDetailResponseSchema,
+      `/api/v4/audit/events/${encodeURIComponent(sourceKind)}/${encodeURIComponent(sourceId)}`,
+    ),
     listStrategies: (kind?: StrategyKind) => send(strategiesResponseSchema, `/api/v4/strategies${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
     getStrategy: (strategyId: string) => send(strategyDetailResponseSchema, `/api/v4/strategies/${encodeURIComponent(strategyId)}`),
     compileStrategy: (csrfToken: string, body: StrategyCompileBody) => {

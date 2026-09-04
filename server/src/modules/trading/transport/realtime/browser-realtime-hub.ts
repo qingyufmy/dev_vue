@@ -24,7 +24,7 @@ interface Subscription {
   sequence: number
 }
 
-const USER_RESOURCES = new Set(['analysis.job', 'market_analysis', 'review_case', 'strategy_memory', 'operation'])
+const USER_RESOURCES = new Set(['analysis.job', 'market_analysis', 'review_case', 'strategy_memory', 'operation', 'audit'])
 const DOMAIN_RESOURCES = new Set([
   ...USER_RESOURCES, 'trader.job', 'trade_decision', 'risk.policy', 'risk.summary',
   'risk.decision', 'risk.manual_release', 'operation',

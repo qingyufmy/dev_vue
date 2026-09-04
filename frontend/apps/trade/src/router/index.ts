@@ -3,7 +3,6 @@ import { useTradeSession } from '~/features/auth/session'
 
 const moduleRoutes = [
   { path: '/market', title: '市场行情', description: '宏观环境、关键因子与黄金市场状态将在对应阶段接入。' },
-  { path: '/audit', title: '系统审计', description: '操作日志、自动分析和信号执行链路将在对应阶段接入。' },
   { path: '/settings/models', title: '模型配置', description: '个人与平台共享模型、默认模型和用途路由将在对应阶段接入。' },
   { path: '/bridge', title: '量见智桥', description: '终端档案、连接额度、诊断和下载入口将在对应阶段接入。' },
 ]
@@ -58,6 +57,12 @@ export const router = createRouter({
       name: 'trades',
       component: () => import('~/features/trades').then((module) => module.TradesView),
       meta: { title: '交易记录' },
+    },
+    {
+      path: '/audit',
+      name: 'audit',
+      component: () => import('~/features/audit').then((module) => module.AuditView),
+      meta: { title: '系统审计' },
     },
     ...moduleRoutes.map((route) => ({
       path: route.path,

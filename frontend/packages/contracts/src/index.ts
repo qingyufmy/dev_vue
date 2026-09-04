@@ -225,6 +225,46 @@ export const tradeRecordDetailResponseSchema = z.object({ data: z.object({
   closedAt: value.closed_at, terminalTimezoneOffsetMinutes: value.terminal_timezone_offset_minutes, revision: value.revision, evidenceHash: value.evidence_hash,
   deals: value.deals, attributions: value.attributions })), meta: responseMetaSchema })
 
+export const auditSourceKindSchema = z.enum([
+  'analysis_run', 'trader_run', 'risk_decision', 'operation', 'bridge_command',
+  'risk_policy_change', 'risk_manual_release', 'terminal_trade',
+])
+export const auditCategorySchema = z.enum(['analysis', 'trading', 'risk', 'execution', 'terminal', 'configuration'])
+export const auditActorSchema = z.enum(['ai', 'user', 'system', 'bridge'])
+export const auditStatusSchema = z.enum(['queued', 'running', 'succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'info'])
+export const auditEventSchema = z.object({
+  source_kind: auditSourceKindSchema, source_id: z.string().min(1), account_id: z.string().min(1).nullable(),
+  category: auditCategorySchema, actor: auditActorSchema, action: z.string().min(1).max(128), status: auditStatusSchema,
+  title: z.string().min(1).max(191), summary: z.string().min(1).max(2000), reason_code: z.string().max(128).nullable(),
+  symbol: z.string().max(64).nullable(), occurred_at: z.iso.datetime({ offset: true }),
+  terminal_timezone_offset_minutes: z.number().int().min(-840).max(840).nullable(), correlation_id: z.string().max(191).nullable(),
+}).strict().transform((value) => ({
+  sourceKind: value.source_kind, sourceId: value.source_id, accountId: value.account_id, category: value.category,
+  actor: value.actor, action: value.action, status: value.status, title: value.title, summary: value.summary,
+  reasonCode: value.reason_code, symbol: value.symbol, occurredAt: value.occurred_at,
+  terminalTimezoneOffsetMinutes: value.terminal_timezone_offset_minutes, correlationId: value.correlation_id,
+}))
+export const auditSummarySchema = z.object({
+  total: z.number().int().nonnegative(), succeeded: z.number().int().nonnegative(), rejected: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(), uncertain: z.number().int().nonnegative(), active: z.number().int().nonnegative(),
+}).strict()
+export const auditTraceNodeSchema = z.object({
+  stage: z.enum(['analysis', 'trader', 'risk', 'operation', 'intent', 'bridge', 'terminal']), status: auditStatusSchema,
+  source_kind: z.string().min(1).max(64), source_id: z.string().min(1), title: z.string().min(1).max(191),
+  detail: z.string().min(1).max(2000), reason_code: z.string().max(128).nullable(), occurred_at: z.iso.datetime({ offset: true }),
+}).strict().transform((value) => ({ stage: value.stage, status: value.status, sourceKind: value.source_kind,
+  sourceId: value.source_id, title: value.title, detail: value.detail, reasonCode: value.reason_code, occurredAt: value.occurred_at }))
+export const auditEventPageResponseSchema = z.object({ data: z.object({
+  captured_end: z.iso.datetime({ offset: true }), items: z.array(auditEventSchema), next_cursor: z.string().min(1).nullable(),
+  has_more: z.boolean(), summary: auditSummarySchema,
+}).strict().transform((value) => ({ capturedEnd: value.captured_end, items: value.items, nextCursor: value.next_cursor,
+  hasMore: value.has_more, summary: value.summary })), meta: responseMetaSchema })
+export const auditEventDetailResponseSchema = z.object({ data: z.object({
+  event: auditEventSchema, trace: z.array(auditTraceNodeSchema),
+  evidence: z.array(z.object({ label: z.string().min(1).max(64), value: z.string().min(1).max(2000) }).strict()),
+  links: z.array(z.object({ kind: z.enum(['analysis', 'trader', 'risk', 'operation', 'trade']), id: z.string().min(1), label: z.string().min(1).max(64) }).strict()),
+}).strict(), meta: responseMetaSchema })
+
 export const strategyKindSchema = z.enum(['analysis', 'trader'])
 export const strategyScopeSchema = z.enum(['platform', 'user'])
 export const strategyStatusSchema = z.enum(['draft', 'active', 'retired'])
@@ -1153,6 +1193,14 @@ export const operationRealtimeEventSchema = z.object({
   resource: z.object({ kind: z.literal('operation'), id: z.string() }), revision: z.string(), data: z.unknown(), correlation_id: z.string().nullable(),
 })
 
+export const auditRealtimeEventSchema = z.object({
+  v: z.literal(4), event_id: z.string(), type: z.literal('audit.changed'),
+  occurred_at: z.iso.datetime({ offset: true }), sequence: z.number().int().positive(),
+  scope: z.object({ user_id: z.string(), trading_account_id: z.string().nullable(), terminal_instance_id: z.string().nullable(), observer_channel_id: z.null() }),
+  resource: z.object({ kind: z.literal('audit'), id: z.string() }), revision: z.string(),
+  data: z.object({ source_type: z.string().min(1), source_id: z.string().min(1) }).strict(), correlation_id: z.string().nullable(),
+})
+
 const reviewRealtimeBaseSchema = z.object({
   v: z.literal(4), event_id: z.string(),
   occurred_at: z.iso.datetime({ offset: true }), sequence: z.number().int().positive(),
@@ -1173,6 +1221,7 @@ export const reviewRealtimeEventSchema = z.union([
 
 export const browserRealtimeEventSchema = z.union([
   tradingRealtimeEventSchema, inferenceRealtimeEventSchema, riskRealtimeEventSchema, operationRealtimeEventSchema, reviewRealtimeEventSchema,
+  auditRealtimeEventSchema,
 ])
 
 export type ApiProblem = z.infer<typeof apiProblemSchema>
@@ -1194,6 +1243,15 @@ export type TradeHistoryRecord = z.infer<typeof tradeHistoryRecordSchema>
 export type TradeHistorySummary = z.infer<typeof tradeHistorySummarySchema>
 export type TradeHistoryPageResponse = z.infer<typeof tradeHistoryPageResponseSchema>
 export type TradeRecordDetail = z.infer<typeof tradeRecordDetailResponseSchema>['data']
+export type AuditSourceKind = z.infer<typeof auditSourceKindSchema>
+export type AuditCategory = z.infer<typeof auditCategorySchema>
+export type AuditActor = z.infer<typeof auditActorSchema>
+export type AuditStatus = z.infer<typeof auditStatusSchema>
+export type AuditEvent = z.infer<typeof auditEventSchema>
+export type AuditSummary = z.infer<typeof auditSummarySchema>
+export type AuditTraceNode = z.infer<typeof auditTraceNodeSchema>
+export type AuditEventPageResponse = z.infer<typeof auditEventPageResponseSchema>
+export type AuditEventDetail = z.infer<typeof auditEventDetailResponseSchema>['data']
 export type OpenPosition = z.infer<typeof openPositionSchema>
 export type PendingOrder = z.infer<typeof pendingOrderSchema>
 export type Timeframe = z.infer<typeof timeframeSchema>
@@ -1263,5 +1321,6 @@ export type Operation = z.infer<typeof operationSchema>
 export type InferenceRealtimeEvent = z.infer<typeof inferenceRealtimeEventSchema>
 export type RiskRealtimeEvent = z.infer<typeof riskRealtimeEventSchema>
 export type OperationRealtimeEvent = z.infer<typeof operationRealtimeEventSchema>
+export type AuditRealtimeEvent = z.infer<typeof auditRealtimeEventSchema>
 export type ReviewRealtimeEvent = z.infer<typeof reviewRealtimeEventSchema>
 export type BrowserRealtimeEvent = z.infer<typeof browserRealtimeEventSchema>

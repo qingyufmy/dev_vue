@@ -21,7 +21,7 @@ describe('browser realtime domain projector', () => {
     await publisher.publish(event('execution.intent.prepared', { intent_id: 'intent-1' }))
 
     const messages = redis.messages.map(item => JSON.parse(item) as Record<string, unknown>)
-    expect(messages).toHaveLength(9)
+    expect(messages).toHaveLength(13)
     expect(messages).toContainEqual(expect.objectContaining({
       type: 'market_analysis.created', accountId: null, userId: 42, resource: 'market_analysis',
       data: expect.objectContaining({ market_bias: 'bullish', opportunity: 'long_setup', confidence: 78 }),
@@ -37,6 +37,11 @@ describe('browser realtime domain projector', () => {
     expect(messages).toContainEqual(expect.objectContaining({
       type: 'operation.changed', accountId: '7', resource: 'operation',
       data: expect.objectContaining({ operation_id: 'operation-1', status: 'uncertain' }),
+    }))
+    expect(messages.filter(message => message.type === 'audit.changed')).toHaveLength(4)
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'audit.changed', accountId: null, userId: 42, resource: 'audit', resourceId: 'all',
+      data: { source_type: 'operation.changed', source_id: 'operation-1' },
     }))
     expect(messages).toContainEqual(expect.objectContaining({
       type: 'review.case.changed', accountId: null, userId: 42, resource: 'review_case',

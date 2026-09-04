@@ -107,6 +107,7 @@
         "risk.status.changed",
         "risk.alert.created",
         "operation.changed",
+        "audit.changed",
         "notification.created",
         "payment.status.changed",
         "admin.alert.created"
@@ -367,6 +368,15 @@
         }
       }
     },
+    "AuditChangedData": {
+      "type": "object",
+      "required": ["source_type", "source_id"],
+      "additionalProperties": false,
+      "properties": {
+        "source_type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source_id": { "$ref": "#/$defs/OpaqueId" }
+      }
+    },
     "SummaryData": {
       "type": "object",
       "required": ["id", "status"],
@@ -440,6 +450,7 @@
             { "properties": { "type": { "const": "review.case.changed" }, "data": { "$ref": "#/$defs/ReviewCaseChangedData" } } },
             { "properties": { "type": { "const": "strategy.memory.changed" }, "data": { "$ref": "#/$defs/StrategyMemoryChangedData" } } },
             { "properties": { "type": { "const": "trade.history.changed" }, "data": { "$ref": "#/$defs/TradeHistoryChangedData" } } },
+            { "properties": { "type": { "const": "audit.changed" }, "data": { "$ref": "#/$defs/AuditChangedData" } } },
             {
               "properties": {
                 "type": { "const": "operation.changed" },
@@ -534,7 +545,7 @@
       "required": ["kind", "after_revision"],
       "additionalProperties": false,
       "properties": {
-        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "reviews", "trades", "operations", "notifications", "payment", "admin_alerts"] },
+        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "reviews", "trades", "operations", "audit", "notifications", "payment", "admin_alerts"] },
         "trading_account_id": {
           "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
         },

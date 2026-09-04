@@ -45,6 +45,12 @@ const REALTIME_TYPES = new Set<ClaimedOutboxEvent['eventType']>([
   'review.case.changed', 'strategy.memory.changed',
   'operation.changed', 'trade.history.changed',
 ])
+const AUDIT_INVALIDATION_TYPES = new Set<ClaimedOutboxEvent['eventType']>([
+  'analysis.requested', 'analysis.running', 'analysis.failed', 'market_analysis.created',
+  'trader.requested', 'trader.running', 'trader.failed', 'trade_decision.created',
+  'risk.policy.changed', 'risk.decision.created', 'risk.manual_release.changed',
+  'operation.changed', 'trade.history.changed',
+])
 
 export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
   constructor(
@@ -55,7 +61,9 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
 
   async publish(event: ClaimedOutboxEvent) {
     if (!REALTIME_TYPES.has(event.eventType)) return
-    for (const projected of await this.project(event)) {
+    const events = await this.project(event)
+    if (AUDIT_INVALIDATION_TYPES.has(event.eventType) && events[0]) events.push(auditInvalidation(event, events.at(-1)!))
+    for (const projected of events) {
       await this.redis.publish(this.channel, JSON.stringify(projected))
     }
   }
@@ -271,3 +279,11 @@ function requiredId(value: unknown, code: string) {
 
 function iso(value: Date | string) { return new Date(value).toISOString() }
 function suffix(value: string, ending: string) { return (value + ':' + ending).slice(0, 191) }
+function auditInvalidation(source: ClaimedOutboxEvent, projected: BrowserRealtimeEvent): BrowserRealtimeEvent {
+  const outboxRevision = Number(source.id)
+  return base(source, {
+    eventId: suffix(source.eventId, 'audit'), type: 'audit.changed', userId: projected.userId, accountId: null,
+    resource: 'audit', resourceId: 'all', revision: Number.isSafeInteger(outboxRevision) && outboxRevision >= 0 ? outboxRevision : projected.revision,
+    data: { source_type: source.eventType, source_id: projected.resourceId },
+  })
+}

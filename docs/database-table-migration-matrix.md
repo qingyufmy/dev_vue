@@ -203,7 +203,7 @@
 | `close_signal_tickets` | 30 | 合并 | `execution_intents`、`trade_outcomes` | 旧 close_signal 与 original_ticket 关系迁移为来源引用；价格 DOUBLE 按原字符串/品种精度核对 |
 | `signal_outcomes` | 334 | 重塑 | `trade_outcomes`、`trade_outcome_payloads`、`account_trade_attributions_v4` | 保留 signal/delivery/intent/account/ticket 全链路；只有票据、订单、成交或分发目标精确匹配后才建立 Stage 12S 归因，不把命令成功当作终端成交 |
 | `signal_outcome_deals` | 427 | 重塑 | `terminal_history_deals_v4`、`account_trade_record_deals_v4` | 外键 outcome/account；deal_ticket 在交易账户范围唯一；利润、佣金、swap、fee 与终端事实逐笔对账，冲突保持显式状态；Stage 12T 只提供离线对账演练器，没有读取或改写源库 |
-| `trade_audit_logs` | 9,660 | 重塑 | `trade_audit_events` | 追加写；统一 operation/intent/command/correlation ID；request/result 大字段进入 payload，列表不读取正文 |
+| `trade_audit_logs` | 9,660 | 重塑 | `trade_audit_events`（仅旧证据迁移/归档）+ V4 权威领域记录 | 旧行必须全量保留并统一 operation/intent/command/correlation ID；request/result 大字段进入受控证据载荷，列表不读取正文。Stage 12U 的新 V4 页面直接读取权威领域记录，不再为新事件复制一份万能日志；旧 9,660 行的回填和对账仍待迁移阶段执行 |
 
 目标执行关系固定为：
 

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { auditRoutes, type AuditService } from '../modules/audit/index.js'
 import { registerSsoRoutes, type AuthService } from '../modules/auth/index.js'
 import { bridgeCredentialRoutes, type BridgeCredentialService } from '../modules/bridge/index.js'
 import {
@@ -27,6 +28,7 @@ export interface ApiV4RouteServices {
   userExecution: UserExecutionCommandService
   executionDistribution: ExecutionDistributionService
   tradeHistory: TradeHistoryService
+  audit: AuditService
   tradeAuth: AuthTradeRequestAdapter
 }
 
@@ -48,6 +50,7 @@ export async function registerApiV4Routes(
     await trade.register(userExecutionCommandRoutes, { prefix: '/api/v4', service: services.userExecution, auth: services.tradeAuth })
     await trade.register(executionDistributionRoutes, { prefix: '/api/v4', service: services.executionDistribution, auth: services.tradeAuth })
     await trade.register(tradeHistoryRoutes, { prefix: '/api/v4', service: services.tradeHistory, auth: services.tradeAuth })
+    await trade.register(auditRoutes, { prefix: '/api/v4', service: services.audit, auth: services.tradeAuth })
   })
 }
 

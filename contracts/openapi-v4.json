@@ -20,6 +20,7 @@
     { "name": "Market", "description": "Quotes and candle history" },
     { "name": "Execution", "description": "Positions and asynchronous operations" },
     { "name": "Trade History", "description": "Authoritative terminal orders, deals and reconciled account trade records" },
+    { "name": "Audit", "description": "Current-user operations and exact execution trace projections" },
     { "name": "Strategies", "description": "Versioned market-analysis and account-trader strategies" },
     { "name": "Analysis", "description": "AI market-analysis jobs and immutable results" },
     { "name": "Trader", "description": "Per-account AI trader evaluations without direct execution authority" },
@@ -984,6 +985,45 @@
         }
       }
     },
+    "/audit/events": {
+      "get": {
+        "operationId": "listAuditEvents",
+        "summary": "List current-user audit events from authoritative domain records",
+        "description": "Returns a frozen keyset page. The audit feed is a read projection and never stores a duplicate universal log payload.",
+        "tags": ["Audit"],
+        "parameters": [
+          { "name": "account_id", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "name": "category", "in": "query", "schema": { "$ref": "#/components/schemas/AuditCategory" } },
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/AuditStatus" } },
+          { "name": "actor", "in": "query", "schema": { "$ref": "#/components/schemas/AuditActor" } },
+          { "name": "from", "in": "query", "schema": { "$ref": "#/components/schemas/UtcDateTime" } },
+          { "name": "to", "in": "query", "schema": { "$ref": "#/components/schemas/UtcDateTime" } },
+          { "name": "q", "in": "query", "schema": { "type": "string", "minLength": 1, "maxLength": 80 } },
+          { "$ref": "#/components/parameters/PageSize" },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": {
+          "200": { "description": "Frozen audit event page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuditEventPageResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/audit/events/{source_kind}/{source_id}": {
+      "get": {
+        "operationId": "getAuditEvent",
+        "summary": "Get one audit event and its exact execution trace",
+        "tags": ["Audit"],
+        "parameters": [
+          { "name": "source_kind", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/AuditSourceKind" } },
+          { "name": "source_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } }
+        ],
+        "responses": {
+          "200": { "description": "Audit event and exact trace", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuditEventDetailResponse" } } } },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/review-cases": {
       "get": { "operationId": "listReviewCases", "summary": "List the current user's daily, monthly and manual review cases", "tags": ["Reviews"], "parameters": [{ "name": "kind", "in": "query", "schema": { "type": "string", "enum": ["daily", "monthly", "manual"] } }, { "name": "account_id", "in": "query", "schema": { "$ref": "#/components/schemas/OpaqueId" } }, { "$ref": "#/components/parameters/PageSize" }], "responses": { "200": { "description": "Review cases", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReviewCaseListResponse" } } } } } }
     },
@@ -1601,6 +1641,40 @@
       "TradeRecordDetailResponse": {
         "type": "object", "required": ["data", "meta"], "additionalProperties": false,
         "properties": { "data": { "allOf": [{ "$ref": "#/components/schemas/TradeHistoryRecordFields" }, { "type": "object", "required": ["evidence_hash", "deals", "attributions"], "properties": { "evidence_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "deals": { "type": "array", "items": { "$ref": "#/components/schemas/TradeRecordDeal" } }, "attributions": { "type": "array", "items": { "$ref": "#/components/schemas/TradeRecordAttribution" } } } }], "unevaluatedProperties": false }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "AuditSourceKind": { "type": "string", "enum": ["analysis_run", "trader_run", "risk_decision", "operation", "bridge_command", "risk_policy_change", "risk_manual_release", "terminal_trade"] },
+      "AuditCategory": { "type": "string", "enum": ["analysis", "trading", "risk", "execution", "terminal", "configuration"] },
+      "AuditActor": { "type": "string", "enum": ["ai", "user", "system", "bridge"] },
+      "AuditStatus": { "type": "string", "enum": ["queued", "running", "succeeded", "rejected", "failed", "uncertain", "cancelled", "info"] },
+      "AuditEvent": {
+        "type": "object", "additionalProperties": false,
+        "required": ["source_kind", "source_id", "account_id", "category", "actor", "action", "status", "title", "summary", "reason_code", "symbol", "occurred_at", "terminal_timezone_offset_minutes", "correlation_id"],
+        "properties": {
+          "source_kind": { "$ref": "#/components/schemas/AuditSourceKind" }, "source_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "account_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] }, "category": { "$ref": "#/components/schemas/AuditCategory" },
+          "actor": { "$ref": "#/components/schemas/AuditActor" }, "action": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "status": { "$ref": "#/components/schemas/AuditStatus" }, "title": { "type": "string", "minLength": 1, "maxLength": 191 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 2000 }, "reason_code": { "type": ["string", "null"], "maxLength": 128 },
+          "symbol": { "type": ["string", "null"], "maxLength": 64 }, "occurred_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "terminal_timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
+          "correlation_id": { "type": ["string", "null"], "maxLength": 191 }
+        }
+      },
+      "AuditSummary": {
+        "type": "object", "additionalProperties": false, "required": ["total", "succeeded", "rejected", "failed", "uncertain", "active"],
+        "properties": { "total": { "type": "integer", "minimum": 0 }, "succeeded": { "type": "integer", "minimum": 0 }, "rejected": { "type": "integer", "minimum": 0 }, "failed": { "type": "integer", "minimum": 0 }, "uncertain": { "type": "integer", "minimum": 0 }, "active": { "type": "integer", "minimum": 0 } }
+      },
+      "AuditTraceNode": {
+        "type": "object", "additionalProperties": false, "required": ["stage", "status", "source_kind", "source_id", "title", "detail", "reason_code", "occurred_at"],
+        "properties": { "stage": { "type": "string", "enum": ["analysis", "trader", "risk", "operation", "intent", "bridge", "terminal"] }, "status": { "$ref": "#/components/schemas/AuditStatus" }, "source_kind": { "type": "string", "minLength": 1, "maxLength": 64 }, "source_id": { "$ref": "#/components/schemas/OpaqueId" }, "title": { "type": "string", "minLength": 1, "maxLength": 191 }, "detail": { "type": "string", "minLength": 1, "maxLength": 2000 }, "reason_code": { "type": ["string", "null"], "maxLength": 128 }, "occurred_at": { "$ref": "#/components/schemas/UtcDateTime" } }
+      },
+      "AuditEventPageResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": { "data": { "type": "object", "additionalProperties": false, "required": ["captured_end", "items", "next_cursor", "has_more", "summary"], "properties": { "captured_end": { "$ref": "#/components/schemas/UtcDateTime" }, "items": { "type": "array", "items": { "$ref": "#/components/schemas/AuditEvent" } }, "next_cursor": { "type": ["string", "null"], "maxLength": 2048 }, "has_more": { "type": "boolean" }, "summary": { "$ref": "#/components/schemas/AuditSummary" } } }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "AuditEventDetailResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": { "data": { "type": "object", "additionalProperties": false, "required": ["event", "trace", "evidence", "links"], "properties": { "event": { "$ref": "#/components/schemas/AuditEvent" }, "trace": { "type": "array", "items": { "$ref": "#/components/schemas/AuditTraceNode" } }, "evidence": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["label", "value"], "properties": { "label": { "type": "string", "minLength": 1, "maxLength": 64 }, "value": { "type": "string", "minLength": 1, "maxLength": 2000 } } } }, "links": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["kind", "id", "label"], "properties": { "kind": { "type": "string", "enum": ["analysis", "trader", "risk", "operation", "trade"] }, "id": { "$ref": "#/components/schemas/OpaqueId" }, "label": { "type": "string", "minLength": 1, "maxLength": 64 } } } } } }, "meta": { "$ref": "#/components/schemas/Meta" } }
       },
       "TradingWorkspaceResponse": {
         "type": "object", "required": ["data", "meta"],

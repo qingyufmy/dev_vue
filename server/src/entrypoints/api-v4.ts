@@ -1,4 +1,5 @@
 import Fastify from 'fastify'
+import { AuditService, MysqlAuditRepository } from '../modules/audit/index.js'
 import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4ApiRuntimeConfig, loadV4BaseRuntimeConfig, RoleHealth,
@@ -56,6 +57,7 @@ async function main() {
     userExecution,
     executionDistribution,
     tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),
+    audit: new AuditService(new MysqlAuditRepository(pool)),
     tradeAuth,
   }, { tradeOrigin: web.auth.tradeOrigin, secureCookies: web.secureCookies })
 
