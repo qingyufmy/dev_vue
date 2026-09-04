@@ -21,4 +21,26 @@ describe('repository hygiene', () => {
     expect(bridge).not.toMatch(/^import .*routes\/ai\/config\.js/m)
     expect(bridge).toContain("from './routes/ai/runtime-state-registry.js'")
   })
+
+  it('keeps repository guidelines aligned with the V4 source layout and toolchain', () => {
+    const guidelines = readFileSync(new URL('AGENTS.md', root), 'utf8')
+    const normalizedGuidelines = guidelines.replaceAll('\\', '/')
+    for (const expected of [
+      'server/src/',
+      'frontend/apps/www',
+      'frontend/apps/trade',
+      'frontend/apps/admin',
+      'frontend/apps/auth',
+      'frontend/packages/ui',
+      'ecosystem.v4.config.cjs',
+      'bridge/prototypes/net48-win7/test.ps1',
+    ]) expect(normalizedGuidelines).toContain(expected)
+    for (const obsolete of [
+      'server/modules/',
+      'ecosystem.config.cjs',
+      'scripts/bridge-native/test-native.ps1',
+      '%APPDATA%/AURUM/BridgeV3',
+      '/account/?embed=',
+    ]) expect(normalizedGuidelines).not.toContain(obsolete)
+  })
 })
