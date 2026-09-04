@@ -1,1422 +1,586 @@
-# AI 交易实验室独立宏观看板正式实施方案
+# V4 市场行情、宏观研究与经济日历实施方案
 
-## 1. 文档状态
+> 文档状态：正式重写方案，尚未实施
+>
+> 当前基线：`dev_vue` / `8823579171549663992e7c1c07dbfd427cc160a6`
+>
+> 重写日期：2026-09-04
+>
+> 适用范围：AI 交易实验室 `trade`、V4 服务端、V4 管理后台、数据库迁移与后台任务
+>
+> 授权边界：本文件只定义方案，不授权安装依赖、购买或抓取数据、执行迁移、启动任务、调用模型、部署、删除历史数据或发送交易指令
 
-- 文档类型：正式实施方案，尚未开始功能实现
-- 方案基线：`D:\dev_codex\wall-street-skill-local`
-- 基线分支：`main`
-- 基线提交：`faa74975caa1325f72d206a29a6fc085bf3e6891`
-- 编写日期：2026-08-13
-- 需求来源：在 AI 交易实验室增加一个独立的黄金宏观看板，参考 Gold Monitor 的多因子信号强度、SHAP 归因瀑布图和体制切换预测
-- 实施授权边界：本文件只授权保存方案，不授权编码、安装 Python 依赖、获取或购买数据、执行迁移、启动任务、部署、回填、发布或把宏观结果接入交易链路
-- 当前结论：方案完成两轮复审后可作为实施基线；开始编码前仍需完成第 24 节的实施门槛
+## 1. 结论与实施原则
 
-## 2. 需求结论与产品定位
+旧版方案的 point-in-time、不可变快照、模型版本、失效保护和只读边界继续保留，但旧静态前端、双 API 路径、Plus/Pro 白名单、独立同义快照表和首版同时引入全部模型的设计全部废止。
 
-### 2.1 最终需求
+V4 采用以下结论：
 
-在 `/ai/` 内新增一个与 AI 分析师、AI 交易员、AI 风控师、AI 策略师和 AI 复盘师并列但业务独立的“宏观看板”模块，用统一、可追溯的数据回答三个问题：
+1. “市场行情”是 AI 交易实验室的独立一级导航，不属于 AI 分析师的子页面。
+2. 页面分为专业行情、跨市场宏观环境和经济日历三个相互独立的工作区。
+3. `macro_research_snapshots` 是宏观发布结果的唯一权威表，不再新增 `macro_dashboard_snapshots`。
+4. 宏观结果是平台级、只读、中期研究背景，不读取用户账户和持仓，不直接产生交易动作。
+5. AI 分析师可以读取已发布且有效的宏观快照，但必须冻结快照 ID、版本、截止时间和哈希；缺失宏观快照不得自动放宽策略或风控。
+6. 首版先完成可追溯数据、经济日历、透明因子状态和只读界面；XGBoost、概率校准、SHAP、HMM 分阶段研究，不作为首版页面上线的强制条件。
+7. 浏览器首次加载和详情读取走 HTTP；只对新快照、高影响事件实际值和风险级别变化推送小型 WebSocket 失效事件。
+8. 所有后台任务由独立 PM2 Worker 执行；HTTP API、浏览器实时网关和 Bridge Gateway 不执行宏观采集、训练或定时任务。
+9. 所有数据库变更使用追加迁移，保留现有数据和证据；不得修改已经存在的迁移文件。
 
-1. 当前黄金主要受哪些宏观和市场因子推动；
-2. 每个因子对模型预测产生了多少向上或向下的贡献；
-3. 当前处于什么宏观体制，未来短期发生体制切换的概率是多少。
+## 2. 当前 V4 基线
 
-### 2.2 产品定位
+### 2.1 已存在能力
 
-首版定位为“黄金宏观研究与解释模块”，不是交易信号发生器，也不是第二套 AI 分析师。
+- `frontend/apps/trade` 已有 `/market` 占位路由，正式实现应替换占位页。
+- 前端统一使用 Vue 3、Vite、TypeScript、Tailwind CSS 4、shadcn-vue（Reka UI）和 Lucide。
+- 所有新浏览器接口统一使用 `/api/v4`；不再新增 `/api` 或 `/aurum-api` 兼容入口。
+- V4 服务端按 `domain / application / infrastructure / transport` 分层，并由独立 PM2 角色运行 API、实时网关、调度器和 Worker。
+- `macro_research_snapshots` 已由迁移 `20260903_005_analysis_scheduler_and_account_fanout.sql` 创建。
+- `MysqlMacroSnapshotReader` 已在 AI 分析输入构建时读取最新有效宏观快照。
+- 分析任务已经冻结行情、策略和宏观输入，宏观研究不应进入五分钟分析的同步关键路径。
 
-- 面向 Plus、Pro 和管理员用户展示同一份平台级宏观结果；
-- 不读取用户账号、余额、权益、持仓、挂单、手数或风险额度；
-- 不调用 Bridge 执行，不生成 `order_intents`，不进入风险审批；
-- 不改变现有策略、自动推理、共享信号、复盘或记忆库输入；
-- 首版所有结果固定携带 `actionable:false`，用户文案使用“宏观偏向”而不是“买入/卖出”；
-- 用户手动刷新只重新读取服务器最近快照，不触发外部数据抓取、模型训练或重新计算。
+### 2.2 当前冲突
 
-### 2.3 成功标准
+现有 `macro_research_snapshots` 只具备最小占位结构，同时允许 `platform` 和 `user` 作用域。新宏观看板若再创建另一张发布快照表，将形成两个权威源；如果继续允许用户级宏观快照覆盖平台快照，也会让相同市场事实随用户变化。
 
-用户进入页面后，应在 10 秒内回答：
+因此实施时必须扩展现有表并收敛读取语义：
 
-- 当前黄金宏观环境偏多、偏空还是不确定；
-- 最主要的三个驱动因子是什么；
-- 数据截至何时，是否存在缺失或延迟；
-- 模型目前健康、降级还是休眠；
-- 当前体制及其切换风险是什么。
+- 新生成并向用户发布的宏观快照只允许 `owner_scope='platform'`；
+- 现有记录原样保留并标记来源和兼容状态，不直接删除；
+- 新看板和 AI 分析统一从同一套“已发布、未过期、哈希有效”的平台快照中读取；
+- 用户策略只能决定是否把该平台快照作为分析证据，不能生成一份用户专属宏观事实；
+- 如果未来确实需要用户研究笔记，必须使用不同领域和表名，不得复用宏观市场事实表。
 
-系统层面必须做到：
+## 3. 产品边界与术语
 
-- 所有历史训练和回测只使用当时已经可知的数据；
-- SHAP 基准值加全部贡献值能够还原模型预测；
-- 模型失效或数据过期时不继续展示高置信度方向；
-- 页面读取失败、外部数据失败和模型失败不影响现有 AI、交易、风控或 Bridge 链路；
-- 任一页面结果可以追溯到数据版本、特征版本、模型版本和快照哈希。
+### 3.1 页面目标
 
-## 3. 已验证现状
+“市场行情”回答三组问题：
 
-### 3.1 当前 AI 实验室
+1. 当前黄金价格、K 线、成交量和市场状态是什么；
+2. 利率、通胀预期、美元、黄金波动率和地缘风险等跨市场因子处于什么状态；
+3. 接下来有哪些重要经济事件，公布值与预期的差异是什么。
 
-已从当前代码确认：
+### 3.2 明确不做
 
-- AI 实验室前端由 `public/ai/index.html`、`public/ai/app.js`、`public/ai/styles.css` 和 `public/ai/responsive.css` 组成，没有独立前端构建步骤；
-- 主导航已经按 AI 团队角色组织，页面切换通过 `data-tab` 和 `setTab()` 完成；
-- `refreshTabData()` 已实现只加载当前页面数据的入口；
-- 已内置 Chart.js 和 Lightweight Charts，可以复用；
-- `observer-access.js` 同时控制 Plus/Pro 的页面白名单、HTTP GET 白名单和 WebSocket 只读能力；
-- `/api` 与 `/aurum-api` 同时挂载 AI 路由，新增接口必须保持兼容；
-- 静态资源使用显式查询参数作为缓存键，新增或修改入口资源时必须同步更新；
-- 前端 `app.js` 和 `styles.css` 已很大，新模块继续全部写入主文件会增加维护和回归风险。
+- 不读取余额、权益、持仓、挂单、手数或账户风险额度；
+- 不创建 `order_intents`、不调用 Bridge、不下单、不平仓；
+- 不以宏观偏向替代 AI 分析师的行情判断；
+- 不以宏观偏向绕过 AI 交易员或服务端确定性风控；
+- 不输出 Kelly 仓位、绝对手数或“立即买入/卖出”；
+- 不在页面请求期间抓取外部数据、训练模型或重新生成快照；
+- 不把新闻标题或 LLM 摘要当作可验证的宏观数值；
+- 不把相关性、SHAP 或事件后价格变化描述为已证明的经济因果。
 
-### 3.2 当前后端可复用能力
+### 3.3 统一术语
 
-可以复用设计和基础设施，但不能直接复用业务表：
+为避免与策略中 H1/H4 的“宏观方向”混淆，V4 使用：
 
-- `market_data_sources` 与 `market_candles` 可提供平台观摩源的 XAUUSD 当前价格和部分历史事实；
-- `inference_snapshots` 证明系统已有冻结证据与内容哈希模式；
-- `ai_model_tasks`、周期复盘和记忆任务已经实现租约、fencing token、幂等、重试和未知结果处理，可复用模式；
-- 现有 Chart.js 懒加载、页面切换、统一会话、套餐权限和错误本地化可以直接复用；
-- 统一管理后台固定为 `/admin/`，宏观数据和模型运维不得在 AI 实验室再建一套管理员界面。
+| 名称 | 含义 | 典型周期 |
+| --- | --- | --- |
+| 跨市场宏观环境 | 利率、通胀预期、美元、波动率、地缘风险等平台研究 | 约 2 至 4 周 |
+| 高周期技术背景 | H1/H4 的趋势和结构状态 | 小时至数日 |
+| 当前交易机会 | M15/M5/M1 的当前结构与触发 | 分钟至小时 |
 
-### 3.3 当前缺口
+页面、API、提示词和审计记录不得再用一个无时间范围的 `macro_direction` 同时表示以上三种概念。
 
-当前仓库没有：
+### 3.4 结果状态
 
-- FRED/ALFRED、Cboe GVZ、GPR 或授权证券日线的数据接入；
-- 宏观序列的 `observation_at`、`available_at` 和 vintage 存储；
-- Python、XGBoost、SHAP、HMM 或等价的确定性量化运行环境；
-- 宏观特征版本、模型版本、训练报告和不可变看板快照；
-- 宏观看板读取 API、前端页面、套餐白名单和自动化测试。
+跨市场宏观结论只允许：`bullish_strong`、`bullish`、`neutral`、`bearish`、`bearish_strong`、`uncertain`、`unavailable`。
 
-### 3.4 参考资料的使用边界
-
-参考网站、用户提供的 PDF 和后续 X 长文只作为需求、信息架构与研究方法参考：
-
-- 不复制参考站的模型参数、实时数值、回测结果、持仓、账户或交易推广；
-- 不把参考站当前标记为 `SIMULATED` 的示例数据当作生产依据；
-- 不把“100% 置信度”“强烈买入”等表达带入 AURUM；
-- PDF 中的 IC、CPCV、Bootstrap、因子精简和模型冬眠思想需要重新复现，不能把文档声称的结果视为已验证；
-- 参考站的账户净值、持仓、仓位和回测账户不进入本模块，它们在 AURUM 已有明确业务归属。
-
-### 3.5 X 长文补充评估
-
-补充参考：<https://x.com/viviennaBTC/status/2039685206555472362>，《用代码读懂黄金-GoldMonitor因子工程笔记》。
-
-可吸收的方法：
-
-- 因子数量不是目标；相关矩阵只能发现候选冗余，最终去留必须由训练折内消融实验和样本外稳定性决定；
-- 单因子 IC 为负不等于无信息，稳定的反向关系可以被模型利用，但不能事后用全样本结果随意翻转方向；
-- 水平与动量、单因子与复合因子应作为不同假设分别验证；
-- 20 日前向收益会产生严重重叠，验证、置信区间和健康监控必须按依赖样本处理；
-- 当前预测能力衰减时应降级或休眠，不能只展示漂亮的全历史指标。
-
-不能直接采用的结论：
-
-- 文中的 IC、Sharpe、最大回撤、CPCV 路径比例和 p 值都是作者自报结果，没有本项目的数据快照、代码、试验登记和 artifact，不能作为 AURUM 基线；
-- 对单一资产，因子 IC 应在日期维度比较一个因子与未来收益的秩相关，不能把同一天不同因子的横截面排名当作单资产 IC；
-- 20 日重叠目标使普通独立同分布 Bootstrap、普通 t 检验和名义样本数显著偏乐观；
-- 6 组取 2 组会产生 15 个组合切分，但这些切分或重构路径不是天然独立样本，不能仅凭“14/15 为正”和朴素 t 检验确认 alpha；
-- 文中的 Kelly、仓位缩放、回撤熔断和停止交易属于交易系统，不进入首版只读宏观看板；本方案的 `sleeping` 只停止发布方向，不影响现有交易链路。
-
-## 4. 目标与非目标
-
-### 4.1 目标
-
-1. 新增独立、只读、平台级的黄金宏观看板。
-2. 建立可追溯的宏观数据接入、版本化、特征计算和快照链路。
-3. 建立真实的 XGBoost 预测、SHAP 归因和概率型体制识别。
-4. 建立模型健康门控，数据或模型不可靠时自动降级或休眠。
-5. 复用 AURUM 现有会话、导航、视觉系统、Chart.js、套餐权限和部署方式。
-6. 为未来可选的“宏观证据进入 AI 分析”保留稳定快照合同，但首版不接入。
-
-### 4.2 非目标
-
-首版明确不做：
-
-- 自动下单、交易建议确认、风险审批或持仓管理；
-- 用户自定义因子、任意公式、任意数据源或上传模型；
-- 浏览器直接访问 FRED、Cboe、GPR 或行情供应商；
-- 在请求期间实时训练模型；
-- 用 LLM 生成 SHAP、因子值、概率或统计指标；
-- 复制参考站的净值曲线、Kelly 仓位、账户统计和开户入口；
-- 为每个用户训练个性化宏观模型；
-- 支持黄金以外的品种；
-- 修改 Bridge、MT4 EA、MT5 Worker 或本地 SQLite；
-- 修改现有策略输出合同、信号结构、风控规则和订单链路；
-- 在 AI 实验室提供数据源密钥、模型发布或任务重试管理。
-
-## 5. 固定业务边界
-
-### 5.1 全局结果，不按用户或账户变化
-
-宏观看板是一份平台级研究结果。所有符合权限的用户读取同一个已发布快照：
-
-- 不接受 `user_id`、交易账号、观摩频道或终端作为模型输入；
-- 不因为用户切换观摩频道而改变宏观看板；
-- 当前 XAUUSD 展示价格可以读取平台统一行情源，但必须标记该价格来源；
-- 训练目标使用经过批准的统一历史行情源，禁止把不同经纪商历史静默拼接成一条训练序列。
-
-### 5.2 与 AI 推理和交易隔离
-
-首版数据流在 `macro_dashboard_snapshots` 终止：
-
-- 不写入 `ai_signals`；
-- 不创建或复用 `inference_snapshots`；
-- 不使用 `ai_model_tasks`，因为宏观模型不是 LLM 供应商请求；
-- 不写入策略记忆库；
-- 不进入 period review、trade review 或 signal outcome；
-- 不向 Bridge 发送任何命令。
-
-### 5.3 未来集成边界
-
-只有后续单独获得授权，并完成至少一个稳定观察周期后，才允许评估把宏观快照作为“只读证据”加入 AI 分析。未来集成仍必须满足：
-
-- 默认关闭，按策略显式启用；
-- 冻结快照 ID、模型版本和数据截止时间；
-- 宏观证据缺失不能改变原策略的可执行性；
-- 不允许模型把宏观偏向直接转换为绝对手数或绕过风控；
-- 历史信号重放必须恢复当时宏观快照，不能使用当前快照。
-
-## 6. 总体架构
-
-```mermaid
-flowchart LR
-    F["FRED / ALFRED"] --> I["数据接入与版本化"]
-    C["Cboe GVZ"] --> I
-    G["GPR 日频数据"] --> I
-    M["授权 XAUUSD / GDX 历史行情"] --> I
-    P["平台 XAUUSD 当前行情"] --> S
-    I --> O["macro_observations"]
-    O --> T["隔离 Python 训练与推理 CLI"]
-    T --> V["macro_model_versions"]
-    V --> S["每日快照任务"]
-    O --> S
-    S --> D["macro_dashboard_snapshots"]
-    D --> A["Node 只读 API"]
-    A --> U["AI 实验室独立宏观看板"]
-    D -. "首版禁止连接" .-> X["AI 推理 / 风控 / 订单 / Bridge"]
-```
-
-### 6.1 职责分层
-
-| 层 | 职责 | 明确禁止 |
-|---|---|---|
-| 数据接入 | 拉取、校验、保存原始观测与 vintage | 计算交易建议 |
-| 特征层 | 按冻结公式生成 point-in-time 特征 | 使用未来修订值 |
-| 训练层 | walk-forward/CPCV、训练、评测、产物哈希 | 自动发布不合格模型 |
-| 快照层 | 加载已激活模型，生成当日预测、SHAP、体制和健康状态 | 请求期间训练 |
-| API 层 | 权限、只读响应、ETag、错误与新鲜度 | 暴露密钥、原始供应商错误 |
-| 前端层 | 解释、可视化、渐进披露、状态提示 | 重新计算核心统计或触发模型任务 |
-
-### 6.2 运行形态
-
-推荐使用“Node 编排 + 隔离 Python CLI”，不引入常驻 Python HTTP 服务：
-
-- Node 后台任务负责租约、幂等、超时、重试、日志和数据库状态；
-- Node 使用固定可执行路径和固定参数启动 Python，不拼接用户输入；
-- Python CLI 负责 pandas/numpy/xgboost/shap/hmmlearn 或经批准的等价库；
-- Python 只输出符合冻结 JSON Schema 的结果文件或标准输出；
-- Node 校验 schema、大小、哈希、模型版本和租约后才写入最终快照；
-- Python 环境使用独立 `pyproject.toml` 与锁文件，不写入全局 Python；
-- 生产使用 `MACRO_PYTHON_BIN` 指向固定虚拟环境，禁止从网页修改。
-
-如果生产服务器不能安全提供 Python 运行时，则停止在阶段 0，不得用 LLM、浏览器脚本或未经验证的纯 JS 近似替代 XGBoost/SHAP/HMM。
-
-## 7. 数据源与许可门槛
-
-### 7.1 推荐来源
-
-| 数据 | 首选来源 | 用途 | 主要边界 |
-|---|---|---|---|
-| 10 年实际利率 | FRED/ALFRED `DFII10` | 利率与机会成本 | 保存实时期和修订版本 |
-| 10 年盈亏平衡通胀 | FRED/ALFRED `T10YIE` | 通胀预期 | 保存实时期和修订版本 |
-| 广义美元指数 | FRED/ALFRED `DTWEXBGS` | 美元水平与动量 | 页面名称必须写“广义美元指数”，不冒充 ICE DXY |
-| 黄金波动率 | Cboe GVZ 历史数据 | 波动水平与动量 | 上线前复核展示与再分发条款 |
-| 地缘政治风险 | Caldara-Iacoviello 日频 GPR | 地缘风险 | 保存下载日期和 vintage，遵守 CC BY 署名 |
-| XAUUSD 日线 | 经批准的统一历史供应商 | 训练目标和黄金动量 | 禁止用不连续的用户终端历史拼接训练 |
-| GDX 日线 | 经批准的统一历史供应商 | 黄金/矿业股背离 | 未完成授权时禁用该因子而不是伪造或替代 |
-| 当前 XAUUSD | 平台市场源或经批准行情源 | 页面当前价格 | 与训练目标来源分开标注 |
-
-#### 7.1.1 官方核验入口（2026-08-13）
-
-- FRED `DFII10`：<https://fred.stlouisfed.org/series/DFII10>
-- FRED `T10YIE`：<https://fred.stlouisfed.org/series/T10YIE>
-- FRED `DTWEXBGS`：<https://fred.stlouisfed.org/series/DTWEXBGS>
-- FRED/ALFRED observations 与 vintage 参数：<https://fred.stlouisfed.org/docs/api/fred/series_observations.html>
-- Cboe 官方波动率历史数据页（包含 GVZ）：<https://www.cboe.com/tradable-products/vix/vix-historical-data>
-- Caldara-Iacoviello GPR 官方入口：<https://www.matteoiacoviello.com/gpr.htm>
-- 本需求参考站：<https://gold-monitor-delta.vercel.app/>
-
-这些入口只证明系列和官方获取路径存在，不等于已经完成商业展示、缓存、再分发或衍生结果许可。阶段 0 仍需保存当时有效的条款、署名要求和批准记录；链接或条款变化时重新审查。
-
-### 7.2 许可与可用性停止条件
-
-实现前必须形成数据源登记表，记录：
-
-- 供应商、接口、系列 ID、频率、时区、许可、署名要求；
-- 历史起点、当前延迟、修订规则、缺失值规则和限流；
-- 是否允许服务端存储、内部训练、向付费用户展示和缓存；
-- 数据源退出或不可用时的替代和历史连续性策略。
-
-以下任一项不明确时不得上线相应因子：
-
-- 没有长期 XAUUSD 历史数据的合法使用权；
-- GDX 数据只来自未承诺稳定性的非官方接口；
-- GVZ 再展示条款未确认；
-- FRED API Key 或供应商密钥需要下发浏览器；
-- 训练历史存在无法解释的来源切换或价格断点。
-
-### 7.3 数据源适配器
-
-服务端适配器统一返回：
+V1 客观因子快照没有经过验证的预测模型时，horizon 必须使用描述型口径，不能伪装成 20 日预测：
 
 ```json
 {
-  "series_key": "real_yield_10y",
-  "provider": "fred",
-  "provider_series_id": "DFII10",
-  "observation_at_utc_msc": 0,
-  "available_at_utc_msc": 0,
-  "value": 0.0,
-  "vintage_key": "YYYY-MM-DD",
-  "source_revision": "optional-provider-revision",
-  "source_hash": "sha256",
-  "quality_status": "valid"
+  "actionable": false,
+  "horizon": { "kind": "descriptive", "value": null, "label": "当前跨市场宏观环境" },
+  "disclaimer": "客观因子状态，不代表当前入场信号"
 }
 ```
 
-适配器不直接写最终快照。所有值先落入原始观测表，再由 point-in-time 查询生成特征。
+只有经过验证并激活的 20 日模型结果才使用预测型口径：
 
-## 8. 时间语义与防未来函数
-
-### 8.1 三种时间必须分开
-
-每个观测至少保存：
-
-- `observation_at_utc_msc`：数据描述的经济或市场时点；
-- `available_at_utc_msc`：该值最早可以被系统使用的时点；
-- `ingested_at_utc_msc`：AURUM 实际取得该值的时点。
-
-训练某个历史样本时，只允许选择 `available_at_utc_msc <= feature_cutoff_utc_msc` 的最高已知 vintage。禁止用当前修订后的全历史覆盖过去。
-
-### 8.2 日界线
-
-- 宏观快照使用 `America/New_York` 业务日定义并保存对应 UTC 截止时间，自动处理夏令时；
-- 默认在纽约工作日结束、已等待主要日频来源更新后运行，实际运行时间在数据源预检后冻结；
-- XAUUSD 训练目标使用统一行情供应商的明确日线 close 语义；
-- 页面展示当前价格可以更实时，但不得把实时价格混入已冻结的日频特征；
-- API 必须同时返回 `as_of_business_date`、`data_cutoff_utc_msc`、`generated_at_utc_msc` 和来源时区说明。
-
-### 8.3 缺失和前向填充
-
-每个系列有独立的最大填充期限：
-
-- 美国利率、通胀和美元日频：最多跨 3 个对应市场工作日；
-- GVZ：最多跨 3 个 Cboe 交易日；
-- 日频 GPR：最多跨其正式更新周期加 1 天；
-- XAUUSD/GDX：训练日必须有有效 close，禁止跨交易日伪造；
-- 超出期限后特征状态为 `stale`，不得继续计算完整模型信号。
-
-周末和市场假期不是自动缺失。日历判断必须区分“计划无数据”和“应有但缺失”。
-
-## 9. 特征合同 V1
-
-### 9.1 候选特征
-
-首个研究版本冻结以下候选特征，最终激活集合由样本外验证决定：
-
-| Key | 中文名称 | 计算口径 |
-|---|---|---|
-| `xau_momentum_20_60` | 黄金 20/60 日动量 | 20 日与 60 日对数收益的冻结组合 |
-| `broad_usd_level_z` | 广义美元指数 | point-in-time 252 日 Z-Score |
-| `broad_usd_momentum_20` | 美元 20 日动量 | 广义美元指数 20 日对数变化 |
-| `breakeven_10y_z` | 10 年通胀预期 | T10YIE 的 point-in-time Z-Score |
-| `real_yield_breakeven_composite_z` | 实际利率/通胀预期复合项 | 研究候选 `DFII10 - T10YIE`；必须与原始分量和替代公式消融比较后才可激活 |
-| `gpr_recent_z` | 地缘政治风险 | 日频 Recent GPR 的冻结 Z-Score |
-| `gvz_level_z` | 黄金波动率 | GVZ 的冻结 Z-Score |
-| `gvz_momentum_20` | 波动率动量 | GVZ 20 日变化或收益，公式在研究阶段二选一后冻结 |
-| `gold_miners_divergence_20` | 黄金-矿业股背离 | XAU 与 GDX 20 日收益差，仅在授权与完整性通过后启用 |
-
-### 9.2 标准化
-
-- 默认窗口为向后 252 个有效观测，不包含当前观测之后的数据；
-- 同时评估 126、252、504 窗口的方向稳定性；
-- 窗口不是为了把负 IC 修成正 IC，方向长期反转必须视为因子语义或体制问题；
-- Z-Score 分母过小、样本不足或窗口缺失时输出 `unavailable`；
-- Winsorize 或极值裁剪的阈值必须在训练折内拟合，不能用全样本阈值；
-- 所有特征公式、窗口、填充和裁剪规则进入 `feature_schema_json` 和 schema hash。
-
-### 9.3 冗余和删因子规则
-
-- 先计算训练折内 Spearman 相关矩阵；
-- `|r| > 0.8` 只产生候选冗余警告，不自动删除；
-- 通过消融实验比较“有该因子”和“无该因子”的样本外结果；
-- 单因子 IC 为正不等于模型必须保留，单因子 IC 为负也不等于模型必须删除；
-- 删除或恢复因子必须产生新的 feature schema 和模型版本，禁止原地改变已发布模型。
-
-### 9.4 因子方向与复合项治理
-
-- 每个因子冻结 `raw_formula`、`transform_formula`、`economic_hypothesis`、`expected_sign` 和 `sign_decision_scope`；
-- 同时报告原始 IC 和方向对齐后的 IC，禁止只展示翻转后较好看的数字；
-- 因子方向只能在训练折内确定，并在验证折和最终测试集保持冻结；
-- 负 IC 可以保留，但保留理由必须来自样本外稳定性、消融和模型贡献，而不是“理论上应当有效”；
-- FRED 的 `DFII10` 已是通胀指数国债实际收益率，`T10YIE` 是由名义与实际国债收益率推导的盈亏平衡通胀；再次相减可能重复加重通胀预期权重，因此 `DFII10 - T10YIE` 只作为文章提出的研究候选，不得直接命名为已确认的“机会成本真值”；
-- 复合项必须与 `DFII10`、`T10YIE`、二者变化率和经研究批准的替代定义并行消融，所有试验计入多重检验登记。
-
-## 10. 预测目标与输出语义
-
-### 10.1 回归目标
-
-```text
-y_reg(t) = log(XAU_close(t + 20 trading days) / XAU_close(t))
-```
-
-XGBoost 回归器输出未来 20 个交易日的预期对数收益。模型展示时可以转换为百分比，但原始输出和 SHAP 计算保持同一加法空间。
-
-### 10.2 方向概率
-
-使用独立分类器预测 `y_reg > 0` 的概率，并在纯样本外结果上执行概率校准。不得：
-
-- 把 XGBoost 原始 score 当作置信度；
-- 用训练集准确率生成方向概率；
-- 把回归预测值机械映射成“100%”；
-- 在校准样本不足时展示精确概率。
-
-### 10.3 用户可见方向
-
-用户可见方向由回归预测、校准概率和模型健康共同决定：
-
-| 结果 | 条件原则 | 用户文案 |
-|---|---|---|
-| `bullish_strong` | 正收益、方向概率高、健康门控通过 | 明显偏多 |
-| `bullish` | 正收益、概率通过一般阈值 | 偏多 |
-| `neutral` | 收益接近 0 或概率不明确 | 中性 |
-| `bearish` | 负收益、概率通过一般阈值 | 偏空 |
-| `bearish_strong` | 负收益、方向概率高、健康门控通过 | 明显偏空 |
-| `unavailable` | 数据或模型门控失败 | 暂不判断 |
-
-精确阈值通过历史校准确定并存入模型版本，禁止散落在前端。所有状态都固定 `actionable:false`。
-
-### 10.4 不确定区间
-
-- 优先使用样本外残差或共形预测生成 20 日预测区间；
-- 区间算法必须只使用训练折和已完成的样本外残差；
-- 样本不足时返回 `null`，不以固定正负百分比伪造区间。
-
-## 11. XGBoost 训练与验证
-
-### 11.1 训练原则
-
-- 训练、校准和最终测试按时间顺序隔离；
-- 目标重叠 20 个交易日，训练与验证之间至少保留 20 个交易日净化间隙；
-- 超参数搜索只在训练折内完成；
-- 首版保持浅树、较高 `min_child_weight`、低学习率、行列采样和早停；
-- 不以提高训练集 Sharpe 或拟合完整历史为目标；
-- 所有随机种子、依赖版本、CPU 线程数和输入哈希进入训练报告。
-
-### 11.2 验证体系
-
-至少包含：
-
-1. 扩展窗口或滚动窗口 walk-forward；
-2. 按每个标签真实信息区间执行 purge，并在研究证明需要时增加 embargo 的组合净化交叉验证；
-3. 单资产时间序列样本外 Spearman IC、ICIR 和方向准确率；
-4. 分类概率 Brier score、ECE 或等价校准指标；
-5. 尊重序列依赖和 20 日重叠的 moving-block/stationary Bootstrap 置信区间，并用 HAC/Newey-West 或等价稳健方法交叉检查；
-6. 各因子消融与相关性报告；
-7. 不同历史窗口、主要市场阶段和识别体制内的方向稳定性；
-8. 与简单基线比较：零收益、历史均值、黄金动量和 GLD/XAU buy-and-hold；
-9. 记录全部特征、窗口、方向翻转、超参数、模型和阈值试验次数；若报告研究型策略 Sharpe，计算 Deflated Sharpe Ratio，否则使用与预测指标相匹配的多重检验校正；
-10. CPCV 报告切分、重构路径、路径间依赖和 Probability of Backtest Overfitting，不把相关路径当独立观测做朴素 t 检验。
-
-单因子 IC 的冻结定义为：
-
-```text
-IC_j = Spearman({feature_j(t)}, {y_reg(t)}) over eligible out-of-sample dates t
-```
-
-它是同一因子跨日期与未来收益的时间序列秩相关，不是同一天多个不同因子之间的横截面相关。所有预测日期必须已有完整 20 日结果，尚未成熟的标签不进入 IC。
-
-方法参考：
-
-- Newey-West HAC：<https://www.nber.org/papers/t0055>
-- Probability of Backtest Overfitting：<https://papers.ssrn.com/sol3/Papers.cfm?abstract_id=2326253>
-- Deflated Sharpe Ratio：<https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551>
-
-### 11.3 模型发布门槛
-
-模型训练完成不等于激活。候选模型必须：
-
-- 通过全部 point-in-time 与数据泄漏测试；
-- 在冻结的最终测试区间优于简单预测基线；
-- CPCV/walk-forward 指标不存在由单一路径完全驱动的情况；
-- 试验登记、多重检验校正及适用时的 DSR/PBO 报告通过冻结门槛；
-- SHAP additivity 测试通过；
-- 概率校准达到模型版本冻结的验收线；
-- 最大特征依赖、极端值和缺失情况可解释；
-- 训练报告、模型文件和 feature schema 哈希一致；
-- 由明确的人工发布步骤将状态从 `candidate` 改为 `active`。
-
-如果没有模型通过，前端仍可展示原始因子和数据质量，但方向、SHAP 与切换预测显示“研究验证中”。禁止为了完成页面而降低门槛。
-
-## 12. SHAP 归因合同
-
-### 12.1 加法语义
-
-首版 SHAP 只解释回归模型，单位与回归原始输出一致：
-
-```text
-base_value + sum(shap_contributions) = predicted_20d_log_return
-```
-
-API 同时返回原始小数和格式化所需精度，前端不得重新计算 SHAP。
-
-### 12.2 每个贡献项
+所有用户可见结果固定包含：
 
 ```json
 {
-  "factor_key": "real_yield_breakeven_composite_z",
-  "label": "实际利率/通胀预期复合项",
-  "raw_value": 0.0,
-  "z_score": 0.0,
-  "contribution": 0.0,
-  "direction": "bullish",
-  "rank": 1,
-  "quality_status": "valid",
-  "observation_at_utc_msc": 0,
-  "available_at_utc_msc": 0,
-  "source_key": "fred:DFII10+T10YIE"
+  "actionable": false,
+  "horizon": { "kind": "trading_days", "value": 20, "label": "未来 20 个交易日" },
+  "disclaimer": "跨市场中期研究背景，不代表当前入场信号"
 }
 ```
 
-### 12.3 展示规则
+## 4. 信息架构与页面范围
 
-- 按绝对贡献降序展示；
-- 同时展示正贡献合计和负贡献合计；
-- 中文交易语境保持“偏多/上涨”为红、“偏空/下跌”为绿；
-- 每个颜色必须同时有正负号、方向文字或图标，不能只靠颜色；
-- 贡献表示“模型为何得出该预测”，不表示因果关系；
-- 页面必须显示“SHAP 是模型归因，不是经济因果证明”。
+### 4.1 路由
 
-## 13. 体制识别与切换概率
+```text
+/market                 专业行情
+/market/macro           跨市场宏观环境
+/market/calendar        经济日历
+```
 
-### 13.1 目标
+路由切换保留可分享 URL；筛选条件使用明确查询参数，禁止把大状态放入 URL。
 
-体制模型解释当前驱动结构，不直接预测交易方向。首版采用三状态概率模型：
+### 4.2 专业行情
 
-1. 实际利率与美元主导；
-2. 通胀与避险主导；
-3. 中性或高波动过渡。
+专业行情复用首页的市场合同和实时客户端，不复制第二份行情状态。主要模块：
 
-### 13.2 模型
+- 交易账户/行情来源选择，仅决定实时经纪商报价来源；
+- 标准品种与经纪商品种映射；
+- Bid、Ask、点差、市场开闭状态；
+- 完整交互 K 线、成交量、周期切换；
+- 24 小时高低、日内变化等可由权威行情推导的指标；
+- 数据时间、终端时间偏移、最后同步时间和陈旧状态。
 
-- 首选 Gaussian HMM 或经研究确认的 Markov switching 模型；
-- 输入使用冻结的宏观特征子集和必要的黄金波动/趋势统计；
-- 状态数固定为 3，除非离线研究证明 2 或 4 状态显著更稳定；
-- 每次训练后按状态中心和经济特征进行确定性重标记，防止 label switching；
-- 模型版本保存状态中心、转移矩阵、标签映射和训练窗口。
+专业行情是账户行情投影；跨市场宏观快照仍然是平台级，不随账户切换。
 
-### 13.3 输出
+### 4.3 跨市场宏观环境
 
-API 返回：
+默认页面只突出：
 
-- 当前三个状态的后验概率；
-- 当前最高概率状态；
-- 下一交易日转移概率；
-- 未来 5 个交易日“维持当前状态”和“离开当前状态”的概率；
-- 最近 180 个有效交易日的状态概率轨迹；
-- 当前置信度和 `uncertain` 标记。
+- 中期宏观偏向和时间范围；
+- 数据截止时间、新鲜度和研究状态；
+- 贡献最大的 3 个支持因子和 3 个反对因子；
+- 因子状态总览；
+- 重要变化时间线；
+- “查看方法与来源”的渐进披露入口。
 
-未来 5 日概率由当前后验和冻结转移矩阵推导，不使用 LLM。最大概率低于模型版本阈值时，页面显示“体制不确定”，不强行归类。
+只有模型达到发布门槛后，才显示预测区间、校准概率或 SHAP。没有 active 模型时仍可展示客观因子，不以占位概率伪造结论。
 
-### 13.4 稳定性门槛
+### 4.4 经济日历
 
-- 不允许状态一天内因缺失值来回跳动；
-- 状态标签跨重训必须通过中心匹配和历史重叠检查；
-- 切换预测必须与简单持久性基线比较；
-- 如果 HMM 不优于持久性基线，页面只展示当前宏观象限，不展示切换概率。
+经济日历至少显示：
 
-## 14. 模型健康与自动休眠
+- 事件名称、国家/地区、事件分类和重要程度；
+- 计划公布时间、原始时区和 UTC 时间；
+- 前值、预期值、实际值及其单位；
+- 是否修订、修订前值和修订时间；
+- `actual - consensus` 或适合该指标的标准化 surprise；
+- 历史上对黄金的统计敏感度，明确标记为相关性而非因果；
+- 数据来源、抓取时间和证据版本。
 
-### 14.1 健康状态
+事件公布前不预测“确定影响方向”。公布后分别展示“数据意外方向”和“黄金历史敏感度”，不能把两者压缩成必然涨跌结论。
 
-| 状态 | 含义 | 页面行为 |
-|---|---|---|
-| `healthy` | 数据完整，滚动指标与校准正常 | 展示方向、区间、SHAP 和体制 |
-| `degraded` | 指标接近下限或部分非关键数据延迟 | 展示结果但明确降级原因，不显示“明显偏多/偏空” |
-| `sleeping` | 模型预测力低于冻结门槛 | 隐藏方向强度，只展示因子与历史健康 |
-| `data_stale` | 关键输入过期 | 不生成新预测，展示上一快照及过期提示 |
-| `unavailable` | 没有可用模型或快照 | 教学型空状态，不展示模拟值 |
+## 5. 数据源与许可闸门
 
-### 14.2 门控指标
+### 5.1 首选因子
 
-模型版本必须冻结：
+| 因子 | 候选来源 | 首版级别 | 备注 |
+| --- | --- | --- | --- |
+| 统一黄金日线 | 待批准的连续、可商用来源 | 必需 | 不得拼接不同经纪商历史作为训练真相 |
+| 美国 10 年实际利率 | FRED/ALFRED `DFII10` | 必需 | 使用可证明的 vintage |
+| 美国 10 年盈亏平衡通胀 | FRED/ALFRED `T10YIE` | 必需 | 使用可证明的 vintage |
+| 广义美元指数 | FRED/ALFRED `DTWEXBGS` | 必需 | 周末/节假日按来源日历处理 |
+| 黄金隐含波动率 | Cboe `GVZ` | 条件必需 | 商业展示与再分发许可需书面确认 |
+| 地缘政治风险 | Caldara-Iacoviello GPR | 可选 | CC BY；保留作者、来源与下载日期 |
+| 黄金矿业股 | 待批准的 GDX 来源 | 可选 | 无稳定许可时不进入首版 |
 
-- 多个冻结窗口的已实现目标 OOS IC、名义观测数、有效样本数和依赖稳健置信区间；
-- 20 日均值 IC 或经研究确定的稳定窗口；
-- ICIR；
-- Brier/ECE；
-- 数据覆盖率和最大延迟；
-- 最近预测误差；
+### 5.2 经济日历来源
+
+实施前必须选择能够提供稳定事件 ID、计划时间和时区、前值/预期/实际/修订、历史事件、商业展示权和明确缓存条款的合法来源。
+
+没有批准来源时，只允许隐藏入口或明确“尚未接入”；禁止抓取不稳定网页或伪造事件数据。
+
+### 5.3 许可记录
+
+每个来源必须记录 provider、series key、用途、许可状态和版本、归属文案、缓存/留存/建模/展示权限、速率限制、数据延迟、禁止用途和停用日期。
+
+当前官方资料核对基线：
+
+- FRED/ALFRED 支持 real-time period 和 vintage 查询，但使用 API 必须遵守 FRED 及第三方序列条款，并展示要求的声明：<https://fred.stlouisfed.org/docs/api/terms_of_use.html>
+- FRED observation/vintage 参数说明：<https://fred.stlouisfed.org/docs/api/fred/series_observations.html>
+- GPR 页面提供历史 vintages，采用 CC BY 并要求注明来源和作者：<https://www.matteoiacoviello.com/gpr.htm>
+- Cboe 提供 GVZ 历史数据，但指数数据的展示和分发许可必须按实际用途确认：<https://www.cboe.com/tradable_products/vix/vix_historical_data>
+
+许可未确认、许可过期或使用范围不匹配时，对应来源不得进入生产快照。
+
+## 6. Point-in-time 与可复现数据合同
+
+### 6.1 三个时间
+
+每条观测必须区分：
+
+- `observation_at_utc`：经济或市场事实对应的观察时间；
+- `available_at_utc`：该值最早可被系统合法使用的时间；
+- `ingested_at_utc`：本系统实际取得并持久化的时间。
+
+训练和历史回放只允许读取 `available_at_utc <= feature_cutoff_at_utc` 的最后可用 vintage。禁止用今天修订后的完整历史覆盖过去。
+
+### 6.2 可得性证据
+
+提供方没有给出精确发布时间时，不得事后猜测。接入记录还要保存请求开始/完成时间、响应哈希、证据引用、vintage 参数、provider 更新时间、解析器版本和 `availability_confidence = exact | provider_date | retrieval_only | unknown`。
+
+`retrieval_only` 和 `unknown` 数据可以展示为当前事实，但不得伪装成历史时点已知数据参与严格回测。
+
+### 6.3 日历与缺失值
+
+- 存储统一使用 UTC `DATETIME(3)`；
+- 展示层可转换用户时区，但不改变业务事实；
+- 交易日采用被冻结的市场日历版本；
+- 不以简单前向填充掩盖来源中断；
+- 每个特征明确最大容忍陈旧时间；
+- 周末、节假日、延迟发布和修订分别建模；
+- 缺失关键因子时降级为 `uncertain` 或 `unavailable`。
+
+## 7. 唯一权威数据模型
+
+### 7.1 表职责
+
+| 表 | 职责 |
+| --- | --- |
+| `macro_data_sources` | 来源、许可、更新频率和启停状态 |
+| `macro_series` | 序列定义、单位、方向语义和新鲜度阈值 |
+| `macro_ingestion_runs` | 一次采集的租约、状态、证据和错误 |
+| `macro_observations` | 不可覆盖的 observation/vintage 数据 |
+| `macro_feature_sets` | 冻结特征 schema 和计算版本 |
+| `macro_model_versions` | 模型 artifact、配置、训练报告和状态 |
+| `macro_research_snapshots` | 唯一的已发布宏观快照 |
+| `macro_snapshot_observations` | 快照到输入观测的可追溯关系 |
+| `macro_pipeline_jobs` | 特征、训练、评估、快照和健康刷新任务 |
+| `economic_calendar_events` | 稳定事件身份和计划属性 |
+| `economic_calendar_event_revisions` | 预期、实际、修订和来源证据的追加版本 |
+
+不得另建 `macro_dashboard_snapshots`、`ai_macro_snapshots` 或前端专用持久化副本。
+
+### 7.2 `macro_research_snapshots` 扩展
+
+保留现有字段，通过新迁移增加 `schema_version`、`business_date`、`data_cutoff_at_utc`、`feature_set_id`、可空 `model_version_id`、发布/新鲜度/健康状态、horizon、发布时间和 supersede 时间，以及唯一发布键和最新读取索引。
+
+完整 DTO 可以保留在有 schema 上限的 `payload_json` 中，但可筛选、排序、关联和并发控制字段必须正规化，不能藏在 JSON 内。
+
+### 7.3 快照不变性
+
+- 已发布快照不得原地修改 payload；
+- 数据、解析器、模型或解释变化都生成新快照；
+- `content_sha256` 对规范化 payload 计算；
+- 读取时验证 schema 版本和哈希；
+- 新快照发布和旧快照 supersede 在同一短事务完成；
+- AI 输入保存快照 ID、revision、哈希和截止时间；
+- 已被展示、AI 使用或审计引用的快照永久保留。
+
+## 8. 数据库迁移与现有数据保护
+
+### 8.1 迁移原则
+
+- 迁移只追加到 `server/db/migrations/`；
+- 实施时使用 `20260904_015_*` 之后的下一个空闲编号；
+- 不修改现有迁移；不在服务启动时自动迁移；
+- DDL、回填、校验和 reader 切换分开；
+- 大回填使用稳定主键游标和有限批次；
+- 不在长事务内调用外部服务、Python 或对象存储。
+
+### 8.2 现有快照迁移
+
+1. 只读盘点现有记录数量、作用域、时间、哈希和 payload schema。
+2. 追加新表和可空扩展列，不改变旧读取行为。
+3. 将旧记录标记为 `schema_version=0`、`publication_status='legacy'`，原 payload 和哈希不变。
+4. 生成首个 V4 平台快照前完成来源、截止时间、许可和哈希校验。
+5. 同一发布批次部署新 reader，使看板和 AI 只读符合 V4 合同的平台快照。
+6. 旧用户级记录保留为只读证据，不再覆盖平台事实。
+7. 对账记录数、ID、哈希、最早/最晚时间和引用关系。
+8. 经过回滚窗口和正式审计后，才能另写清理迁移删除无引用的旧索引或冗余结构；不得删除历史证据。
+
+### 8.3 防死锁和查询
+
+- 统一按主键顺序锁定；
+- claim 使用短事务和 `FOR UPDATE SKIP LOCKED`；
+- 外部 I/O 全部在事务外；
+- 发布事务只操作必要快照和 active 指针；
+- 禁止 `SELECT *`；
+- 历史使用 `(published_at_utc, id)` 稳定游标；
+- 观测使用 `(series_id, available_at_utc, observation_at_utc, id)` 索引；
+- 事件使用 `(scheduled_at_utc, id)` 游标；
+- JSON 大字段不进入列表查询。
+
+## 9. 后台任务与运行架构
+
+### 9.1 PM2 角色
+
+在现有 PM2 项目中增加或扩展：`macro-scheduler`、`macro-ingest-worker`、`macro-research-worker`、`calendar-ingest-worker` 和 outbox dispatcher。可以由通用 Worker 承载低频队列，但用例、队列、并发、超时和指标必须独立。宝塔仍只管理一个 Node/PM2 项目。
+
+### 9.2 队列合同
+
+BullMQ 只携带 `v`、`job_id`、`job_kind`。Worker 从 MySQL 读取权威任务和输入；消息不得携带完整观测、模型正文、密钥或大 JSON。
+
+### 9.3 幂等、租约和未知状态
+
+建议幂等键：
+
+- 采集：`provider:series:vintage_or_window`；
+- 特征：`feature_set:data_cutoff:input_hash`；
+- 训练：`model_key:training_cutoff:config_hash:input_hash`；
+- 快照：`business_date:feature_set:model_version:input_hash`；
+- 日历：`provider:event_id:provider_revision`。
+
+每次 claim 增加 fencing token。超时后先进入 `status_unknown`；只有能证明外部进程已终止且没有结果，才允许重试。迟到结果不得覆盖新 generation。
+
+### 9.4 Python 边界
+
+模型研究允许固定 Python CLI，但只能由研究 Worker 有界启动。必须锁定依赖和路径、限制时间/内存/线程/输出、终止完整进程树、校验版本化 JSON Schema 和哈希、脱敏并限长日志，且 Python 不持有生产数据库写权限。
+
+生产服务器不能稳定提供 Python 时，模型阶段保持关闭；V1 客观因子和经济日历不应因此不可用。
+
+## 10. 分阶段研究与模型门槛
+
+### 10.1 V1：客观数据与透明状态
+
+先交付 point-in-time 数据链路、来源与新鲜度、因子水平/变化/历史分位/方向语义、冲突与缺失状态、经济日历、不可变快照、API、页面和运维。综合偏向只有在冻结规则经离线验证后显示，否则只展示因子。
+
+### 10.2 V2：离线 champion/challenger
+
+候选至少包括零收益、历史均值、黄金动量、线性/Elastic Net 和浅层 XGBoost。研究 20 日目标前必须预注册因子、窗口、截止规则、训练/校准/最终测试区间、主要指标、试验次数和淘汰标准，并保留不可触碰最终测试集。
+
+### 10.3 统计验证
+
+必须包含时间顺序 walk-forward、purge/必要 embargo、block bootstrap、HAC/Newey-West、样本外 IC/方向准确率及区间、Brier/校准误差、因子消融、阶段稳定性、简单基线、多重试验修正和 CPCV 路径依赖说明。
+
+20 个交易日影子运行只叫“运营稳定性观察”，不得作为 alpha 有效性证据。
+
+### 10.4 V3：概率、SHAP 与体制模型
+
+- 概率只能来自独立样本外校准，不能把回归分数当概率；
+- 回归方向和分类概率冲突时输出 `uncertain`；
+- SHAP 只解释已激活模型并通过 additivity；
+- HMM/Markov switching 必须优于持久性基线；
+- 不达标时不显示概率或体制切换，不能为完成 UI 降低门槛。
+
+### 10.5 生命周期
+
+`draft -> evaluating -> shadow -> active -> retired`，评估失败进入 `rejected`。自动训练不得自动激活；激活需要管理员二次确认、expected revision、审计和回滚版本。
+
+## 11. 与 AI 分析师的关系
+
+### 11.1 同源不同投影
+
+看板和分析师读取同一个权威快照：看板使用完整展示投影，分析师只使用受限 `analysis_evidence` 投影。分析任务冻结快照 ID、revision、schema、hash、cutoff 和 horizon。
+
+### 11.2 策略显式开关
+
+分析策略版本增加：
+
+```json
+{
+  "macro_evidence": {
+    "mode": "off | context | required",
+    "accepted_schema_versions": [1],
+    "max_age_seconds": 172800
+  }
+}
+```
+
+首发默认 `context`：可用则冻结，不可用则记录原因并继续原策略；它不能单独生成交易机会或替代技术触发。`required` 只允许专门验证的策略使用，缺失时返回不可评估而非放宽条件。当前隐式读取宏观快照的代码必须改为受策略版本控制。
+
+### 11.3 五分钟调度
+
+五分钟分析不访问外部宏观供应商、不运行宏观模型，只读取发布快照。新快照或高影响数据可登记一次分析触发，但仍受订阅、去重、latest-wins 和时效规则约束。
+
+## 12. HTTP API 合同
+
+### 12.1 用户接口
+
+```text
+GET /api/v4/market/overview
+GET /api/v4/market/macro-snapshots/latest
+GET /api/v4/market/macro-snapshots?before=<cursor>&limit=<1..100>
+GET /api/v4/market/macro-snapshots/:snapshotId
+GET /api/v4/market/macro-series
+GET /api/v4/market/calendar-events?from=<iso>&to=<iso>&importance=<...>&cursor=<...>
+GET /api/v4/market/calendar-events/:eventId
+```
+
+专业行情继续复用已有账户级行情接口。响应统一 `{ data, meta }` 和 RFC 9457 problem；Zod 合同放在 `frontend/packages/contracts`；列表不返回大 payload；历史使用稳定游标；支持 ETag；错误不泄漏密钥、Python 栈或 SQL。
+
+### 12.2 管理接口
+
+```text
+GET   /api/v4/admin/macro/sources
+PATCH /api/v4/admin/macro/sources/:sourceId
+GET   /api/v4/admin/macro/jobs
+POST  /api/v4/admin/macro/jobs
+GET   /api/v4/admin/macro/models
+POST  /api/v4/admin/macro/models/:modelId/activate
+POST  /api/v4/admin/macro/models/:modelId/retire
+GET   /api/v4/admin/macro/health
+```
+
+写操作必须有认证、RBAC、CSRF、幂等键、expected revision、二次确认和审计。API 只登记任务，不同步执行采集、训练或补算。
+
+## 13. 浏览器实时合同
+
+允许事件：`market.macro.changed`、`market.calendar.changed` 和仅管理员接收的 `market.source_health.changed`。事件只携资源 ID、revision、变化种类和必要时间，不携正文、全部因子或历史。
+
+平台事件在服务端授权后按用户扇出；客户端收到事件后使 Vue Query 失效并 HTTP 回读。sequence 缺口、重连和权限变化时重拉快照。页面不得创建第二个 WebSocket，不得用 WebSocket RPC，也不得对日频宏观数据秒级轮询。
+
+## 14. 权限、套餐与隐私
+
+不再硬编码 Plus/Pro 或旧 observer tab，改用能力型 entitlement：`trade.market.read`、`trade.market.macro.read`、`trade.market.calendar.read`、`admin.macro.operate`。套餐映射由管理后台配置，服务端对 API 和 realtime 独立授权。
+
+平台快照不含用户 ID、交易账号、资金、持仓或 Bridge 信息。日志不记录外部 API key。
+
+## 15. 前端模块化与设计要求
+
+建议目录：
+
+```text
+frontend/apps/trade/src/features/market/
+├─ api/
+├─ components/{professional,macro,calendar}/
+├─ composables/
+├─ model/
+├─ realtime/
+├─ views/
+└─ __tests__/
+```
+
+专业行情、宏观和日历分别拥有组件和 composable，不形成超大 `MarketView.vue`。Button、Tabs、Table、Select、Popover、Dialog、Sheet、Tooltip、Skeleton、Alert、Badge、Progress 等优先使用共享 shadcn-vue 组件，不引入第二套 UI 库。
+
+图表通过项目批准的适配层使用；新增可视化依赖要先评估体积、可访问性、生命周期和许可证。页面必须覆盖 loading、empty、partial、stale、no-access、error、realtime disconnected、source unconfigured 和 model unavailable。移动端使用详情 Sheet，避免大表横向拖动；触控目标至少 44px，并支持 reduced motion。
+
+## 16. 管理后台与运营能力
+
+后台提供数据源/许可、序列水位、任务状态、模型版本和报告、平台快照与哈希、陈旧/失败告警、功能开关、entitlement 映射和全部人工操作审计。密钥只能显示配置状态和脱敏指纹，不能读取明文。
+
+## 17. 监控、保留与清理
+
+监控来源成功率/延迟/限流、序列水位、queue lag、任务 unknown、Python 资源、快照发布延迟、API 分位延迟、payload、realtime resync 和 AI 引用快照版本。
+
+已被快照引用的观测、artifact、训练报告和来源证据不得清理；已发布或被 AI 引用的快照长期保留。无引用临时对象按许可和审计策略分批清理，先标记候选、再检查引用、最后限速删除并记录审计。
+
+## 18. 测试与验收
+
+### 18.1 数据与数据库
+
+- vintage 防未来数据、available 证据、修订不覆盖旧值；
+- 单位、频率、日历、缺失和事件 revision；
+- 许可关闭后不生成生产快照；
+- 旧快照 ID/payload/hash 不变；
+- user 旧记录不覆盖 V4 平台快照；
+- 新库、生产结构和重复迁移；
+- 索引、游标、双 Worker claim、迟到结果、fencing 和死锁重试。
+
+### 18.2 模型
+
+- 固定输入可复现；
+- purge/embargo 无泄漏；
+- block bootstrap/HAC 口径；
+- 概率只来自样本外校准；
+- 冲突输出 `uncertain`；
 - SHAP additivity；
-- 体制模型稳定性。
-
-文章提出的“滚动 60 日 IC < 0.05”只作为待验证假设，不作为生产默认值。20 日目标下相邻样本高度重叠，名义 60 个观测不能视为 60 个独立样本。生产门控必须综合依赖稳健置信区间、有效样本数、不同窗口一致性、概率校准、基线相对表现和体制内稳定性；持续低于模型版本冻结门槛、置信区间失效或方向明显反转时才进入 `sleeping`。最终规则存入模型版本，不能在前端修改。
-
-### 14.3 防抖和恢复
-
-- 单日异常优先降级，不立即频繁切换健康/休眠；
-- 连续 N 个完成目标样本低于门槛才休眠，N 在模型版本中冻结；
-- 每次健康评估只使用已经成熟的目标；同一批高度重叠结果不能被重复计作多个独立失败证据；
-- 恢复必须重新满足门槛并经过人工或明确的自动恢复规则；
-- 休眠不会删除旧快照、模型和观测；
-- 页面永远显示触发原因、触发时间和下一次评估条件。
-
-## 15. 数据库设计
-
-### 15.1 迁移原则
-
-- 只追加新 migration，不修改任何已发布 migration；
-- 实现时先重新读取 `server/migrations.js` 的最后 ID，再选择唯一新 ID；
-- 所有表使用 `utf8mb4`，时间主字段使用 UTC 毫秒 BIGINT；
-- 数据回填不得放进 migration；
-- migration 只建空表和索引，外部数据由受控任务分批写入；
-- 首版不删除、不重命名、不收窄现有列；
-- 旧应用版本完全忽略新表，新版本在表未就绪时不得启动宏观 worker。
-
-### 15.2 `macro_observations`
-
-```sql
-CREATE TABLE macro_observations (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  series_key VARCHAR(64) NOT NULL,
-  provider VARCHAR(32) NOT NULL,
-  provider_series_id VARCHAR(128) NOT NULL,
-  observation_at_utc_msc BIGINT NOT NULL,
-  available_at_utc_msc BIGINT NOT NULL,
-  ingested_at_utc_msc BIGINT NOT NULL,
-  value DECIMAL(30,12) DEFAULT NULL,
-  vintage_key VARCHAR(64) NOT NULL,
-  source_revision VARCHAR(128) DEFAULT NULL,
-  quality_status VARCHAR(32) NOT NULL,
-  quality_reason VARCHAR(128) DEFAULT NULL,
-  source_hash CHAR(64) NOT NULL,
-  raw_metadata_json TEXT DEFAULT NULL,
-  UNIQUE KEY uk_macro_observation_vintage
-    (series_key, observation_at_utc_msc, vintage_key),
-  KEY idx_macro_observation_asof
-    (series_key, available_at_utc_msc, observation_at_utc_msc),
-  KEY idx_macro_observation_ingested (ingested_at_utc_msc)
-);
-```
-
-`raw_metadata_json` 只保存非敏感来源元数据，不保存 API Key、完整响应正文或用户数据。
-
-### 15.3 `macro_model_versions`
-
-核心字段：
-
-- `id`、`model_key`、`version_no`、`status`；
-- `feature_schema_version`、`feature_schema_hash`、`feature_schema_json`；
-- `training_start_utc_msc`、`training_end_utc_msc`、`data_cutoff_utc_msc`；
-- `training_data_hash`、`artifact_hash`、`artifact_path`；
-- `regression_metrics_json`、`classification_metrics_json`、`regime_metrics_json`；
-- `health_thresholds_json`、`dependency_versions_json`、`random_seed`；
-- `created_at_utc_msc`、`activated_at_utc_msc`、`retired_at_utc_msc`；
-- 唯一索引 `(model_key, version_no)`；
-- 同一 `model_key` 最多一个 `active` 版本，由事务和应用锁保证。
-
-数据库只存受控相对 artifact 标识，不存任意用户路径。模型文件必须位于固定服务器目录并校验 SHA-256。
-
-### 15.4 `macro_pipeline_jobs`
-
-核心字段：
-
-- `id`、`job_kind`、`idempotency_key`；
-- `status`：`queued/leased/succeeded/failed/status_unknown/cancelled`；
-- `scheduled_at_utc_msc`、`deadline_at_utc_msc`；
-- `attempt_count`、`max_attempts`、`next_attempt_at_utc_msc`；
-- `lease_token`、`fencing_token`、`lease_owner`、`lease_expires_at_utc_msc`；
-- `input_hash`、`result_hash`、`result_ref`；
-- `error_code`、`error_message`；
-- `created_at_utc_msc`、`updated_at_utc_msc`、`completed_at_utc_msc`；
-- 唯一索引 `(job_kind, idempotency_key)`；
-- claim 索引 `(job_kind, status, next_attempt_at_utc_msc, scheduled_at_utc_msc)`。
-
-`job_kind` 首版仅允许：
-
-- `macro_ingest`；
-- `macro_train`；
-- `macro_snapshot`；
-- `macro_health_refresh`。
-
-### 15.5 `macro_dashboard_snapshots`
-
-核心字段：
-
-- `id`、`snapshot_key`、`schema_version`；
-- `as_of_business_date`、`data_cutoff_utc_msc`；
-- `model_version_id`、`feature_schema_hash`、`input_data_hash`；
-- `status`、`freshness_status`、`health_status`；
-- `summary_json`、`factors_json`、`shap_json`、`regime_json`、`health_json`、`sources_json`；
-- `content_hash`、`byte_size`；
-- `generated_at_utc_msc`、`published_at_utc_msc`；
-- 唯一索引 `snapshot_key`；
-- 查询索引 `(status, as_of_business_date, published_at_utc_msc)`。
-
-快照发布后不可原地修改。更正数据、模型或解释必须生成新快照并保留旧快照。
-
-### 15.6 容量与保留
-
-- 原始观测长期保留，用于复现 point-in-time 训练；
-- 快照长期保留，至少覆盖全部已对用户展示的版本；
-- 任务事件和失败记录按运营审计策略保留，不由用户删除；
-- 原始供应商完整响应不入主数据库；必要时只保存加密对象存储引用和哈希，并另行评估许可；
-- 每个快照 JSON 软目标不超过 128 KiB，硬上限 512 KiB；超限必须缩减历史数组或拆历史接口，不能静默截断核心贡献。
-
-## 16. 后台任务设计
-
-### 16.1 调度
-
-- `macro_ingest`：按来源频率调度，彼此隔离；
-- `macro_snapshot`：纽约业务日结束并满足关键来源水位后每天一次；
-- `macro_health_refresh`：在 20 日目标实现后刷新滚动模型健康；
-- `macro_train`：默认人工排队或低频计划任务，不随每次页面访问运行。
-
-### 16.2 幂等键
-
-示例：
-
-- 数据接入：`provider:series_key:expected_vintage`；
-- 训练：`model_key:feature_schema_hash:training_cutoff:config_hash`；
-- 快照：`as_of_business_date:model_version_id:input_data_hash`；
-- 健康刷新：`model_version_id:last_realized_target_date`。
-
-### 16.3 租约与 fencing
-
-- claim 必须在事务中检查状态和过期租约；
-- 每次重新 claim 递增 fencing token；
-- Python 返回后，Node 在事务中再次校验 lease token 和 fencing token；
-- 旧进程晚到结果不得覆盖新结果；
-- 任务超时后先标记 `status_unknown`，只有能证明子进程已停止且没有最终结果时才允许重试；
-- `macro_snapshot` 最终插入和任务成功更新放在同一事务或使用可恢复的 result_ref。
-
-### 16.4 失败和 last-known-good
-
-- 新数据接入失败不删除旧观测；
-- 新模型训练失败不影响当前 active 模型；
-- 当日快照失败继续提供最近已发布快照，并明确标记过期时长；
-- 关键数据超出期限后不使用旧值生成“新快照”；
-- 只有非关键因子缺失且该模型明确支持该缺失模式时，才允许 `degraded` 快照；
-- 所有失败使用稳定中文可映射错误码，日志不写 API Key、完整供应商响应或模型输入全集。
-
-## 17. API 合同
-
-### 17.1 读取接口
-
-首版提供：
-
-```text
-GET /api/ai/macro-dashboard/latest
-GET /aurum-api/ai/macro-dashboard/latest
-
-GET /api/ai/macro-dashboard/history?days=180
-GET /aurum-api/ai/macro-dashboard/history?days=180
-```
-
-规则：
-
-- `latest` 返回完整当前快照；
-- `history` 只返回绘图所需的有界时间、方向、预测、健康和体制概率；
-- `days` 白名单范围为 30、90、180、365，默认 180；
-- 不接受任意 series、SQL、模型路径、用户 ID、账号或供应商参数；
-- 支持 `ETag`/`If-None-Match`，ETag 使用快照 content hash；
-- GET 不触发外部调用、Python 或数据库写入。
-
-### 17.2 `latest` 响应草案
-
-```json
-{
-  "ok": true,
-  "schema_version": 1,
-  "snapshot_id": 1,
-  "content_hash": "sha256",
-  "as_of_business_date": "2026-08-12",
-  "data_cutoff_utc_msc": 0,
-  "generated_at_utc_msc": 0,
-  "published_at_utc_msc": 0,
-  "status": "ready",
-  "freshness": {
-    "status": "fresh",
-    "age_seconds": 0,
-    "next_expected_refresh_utc_msc": 0
-  },
-  "summary": {
-    "direction": "neutral",
-    "direction_label": "中性",
-    "strength": 0.0,
-    "predicted_return_20d": 0.0,
-    "prediction_interval": null,
-    "up_probability": null,
-    "actionable": false,
-    "top_driver_labels": []
-  },
-  "factors": [],
-  "shap": {
-    "base_value": 0.0,
-    "predicted_value": 0.0,
-    "contributions": [],
-    "additivity_error": 0.0
-  },
-  "regime": {
-    "status": "ready",
-    "current_state": "transition",
-    "current_label": "中性或高波动过渡",
-    "probabilities": [],
-    "stay_probability_5d": 0.0,
-    "switch_probability_5d": 0.0,
-    "uncertain": true
-  },
-  "health": {
-    "status": "degraded",
-    "reason_codes": [],
-    "rolling_oos_ic": null,
-    "rolling_ic_observation_count": 0,
-    "rolling_ic_effective_sample_count": 0,
-    "rolling_ic_confidence_interval": null,
-    "last_realized_target_date": null,
-    "icir": null,
-    "brier_score": null,
-    "model_version": "gold-macro-v1"
-  },
-  "sources": []
-}
-```
-
-### 17.3 HTTP 状态
-
-- 有最近快照但已过期：HTTP 200，`freshness.status = stale`；
-- 模型休眠：HTTP 200，`health.status = sleeping`，方向字段为 `unavailable`；
-- 没有任何可发布快照：HTTP 503，稳定错误码 `macro_dashboard_unavailable`；
-- 无套餐权限：沿用现有 AI access middleware 的 403；
-- 功能开关关闭：HTTP 404 或稳定的 `macro_dashboard_disabled`，前端同时隐藏入口；
-- 内部异常：不向用户暴露 Python 栈、供应商 URL、数据库错误或密钥。
-
-### 17.4 管理接口
-
-首版用户页面没有写接口。确需任务查看和人工排队时，只能进入统一管理后台并使用 `/api/admin/...`：
-
-- 查看数据水位、任务、模型版本和最近错误；
-- 创建训练或补算任务前必须二次确认；
-- 激活模型必须记录操作者、旧版本、新版本、指标摘要和回滚版本；
-- 数据删除、历史重写和批量回填不包含在本方案授权内。
-
-## 18. 权限与套餐
-
-### 18.1 页面权限
-
-推荐：
-
-| 用户 | 访问 | 数据 |
-|---|---|---|
-| 免费/过期 | 不可访问 | 无 |
-| Plus | 可只读访问 | 平台宏观快照 |
-| Pro，Bridge 离线 | 可只读访问 | 平台宏观快照 |
-| Pro，Bridge 在线 | 可只读访问 | 平台宏观快照 |
-| 管理员 | 可访问 | 平台宏观快照；运维入口仍在 `/admin/` |
-
-### 18.2 代码调整点
-
-- `PLUS_OBSERVER_TABS` 增加 `macro-dashboard`；
-- `PRO_OBSERVER_TABS` 增加 `macro-dashboard`；
-- Plus/Pro observer HTTP GET 白名单增加两个宏观看板接口；
-- 前端 `canAccessTab()` 和现有导航隐藏逻辑继续作为表现层；
-- 后端 access middleware 继续作为权威边界；
-- 宏观看板不加入 `OBSERVER_WS_READ_ACTIONS`，因为首版只使用 HTTP GET。
-
-### 18.3 功能开关
-
-使用服务端硬开关 `MACRO_DASHBOARD_ENABLED`：
-
-- 默认关闭；
-- 关闭时不启动 worker，不暴露页面入口，不提供读取结果；
-- 开启前必须确认 migration、Python 运行时、数据源、active 模型和首个快照；
-- 开关只控制宏观看板，不改变任何现有 AI 或交易行为。
-
-首版不增加复杂的按用户百分比灰度。需要灰度时优先先管理员、再 Plus/Pro 全量，而不是写隐蔽用户名单。
-
-## 19. 前端实施设计
-
-### 19.1 文件边界
-
-建议新增：
-
-```text
-public/ai/macro-dashboard.js
-public/ai/macro-dashboard.css
-```
-
-主文件只做薄接入：
-
-- `index.html`：导航入口、`<section id="macro-dashboard">` 容器和资源引用；
-- `app.js`：`setTab`/`refreshTabData` 接入 `window.MacroDashboard.refresh()`，离开页面调用必要的 `dispose()`；
-- `responsive.css`：只有跨页面共用的断点规则才写入；
-- `macro-dashboard.js`：状态、API 读取、渲染、图表生命周期和局部事件；
-- `macro-dashboard.css`：全部使用 `.macro-dashboard-*` 命名空间，复用现有 CSS 变量。
-
-不引入 Vue、React、PrimeVue、D3 或新的构建工具。
-
-### 19.2 导航
-
-桌面侧边栏新增独立分组：
-
-```text
-市场洞察
-└─ 宏观看板
-```
-
-- 不放进“AI 交易团队”，避免用户误以为它会执行交易；
-- 移动端放入“更多”抽屉，不挤占首页、分析、交易和风控四个主入口；
-- `data-tab="macro-dashboard"`，页面标题“宏观看板”；
-- 旧链接和 `signals` 兼容跳转不改变。
-
-### 19.3 页面信息层级
-
-```text
-宏观看板
-黄金当前主要在涨/跌什么？                      数据截至时间 / 模型状态
-
-宏观结论带
-方向 + 20 日预测区间 + 上涨概率 + 不可交易提示
-
-主要驱动
-紧凑因子列表：值 / Z-Score / 贡献 / 新鲜度 / 展开解释
-
-SHAP 因子归因瀑布图                 体制切换
-基准 → 因子贡献 → 预测               当前概率 + 5 日切换 + 180 日轨迹
-
-模型健康（默认收起）
-IC / ICIR / 校准 / 数据覆盖 / 相关性 / 模型版本 / 来源
-```
-
-### 19.4 视觉方向
-
-遵循现有 PRODUCT.md 和 DESIGN.md：
-
-- 长时间盯盘的深蓝黑工作面；
-- 协作金只用于当前导航、焦点和关键说明；
-- 红色表示偏多/上涨，绿色表示偏空/下跌；
-- 系统健康使用青绿，故障使用系统红，避免与交易方向混用；
-- 不使用参考站的大量同级卡片、霓虹、玻璃、炫光或渐变文字；
-- 信息密度可以高，但首屏只有一个首要结论；
-- 因子使用列表行和分隔，不做八张相同卡片；
-- 面板最多两层，技术指标进入折叠区或行内展开。
-
-### 19.5 图表
-
-复用 Chart.js：
-
-- SHAP：水平浮动条或自定义 waterfall 数据集；
-- 体制概率：三条概率面积/折线，默认只突出当前状态；
-- 健康：滚动 IC 折线与阈值线；
-- 历史只请求当前选定范围；
-- 进入页面时创建，离开或重建前 destroy，禁止重复实例和内存泄漏；
-- 动画 150-250ms，只表达数据状态；
-- `prefers-reduced-motion` 下关闭图表动画。
-
-### 19.6 关键状态
-
-| 状态 | 页面要求 |
-|---|---|
-| 首次加载 | 保留稳定骨架，不显示伪造数字 |
-| 正常 | 结论优先，详细证据渐进披露 |
-| 数据延迟 | 顶部明确“数据更新延迟”，显示最后有效时间 |
-| 模型降级 | 降低方向强调，列出原因和下一评估条件 |
-| 模型休眠 | 不显示方向强度，保留因子和健康历史 |
-| 无模型 | 教学型空状态：“模型仍在研究验证中” |
-| 部分因子缺失 | 明确缺失项；只有模型支持时才展示降级结果 |
-| API 失败 | 中文错误和重试读取按钮，不触发后台计算 |
-| 功能关闭 | 不显示入口 |
-
-### 19.7 因子解释
-
-每个因子行展开后展示：
-
-- 通俗解释：“它通常如何影响黄金”；
-- 当前值、标准化值和贡献；
-- 数据源、观测日期、可知日期和刷新状态；
-- 本模型中的当前方向；
-- “相关不是因果”的说明；
-- 技术名词中文优先，英文缩写作为补充。
-
-### 19.8 响应式与无障碍
-
-- 桌面目标宽度：1280-1920；
-- 820px 以下收敛为单列；
-- 390px 宽度下不得横向溢出整个页面，复杂图表允许自身有明确的横向滚动容器；
-- 因子行触摸目标至少 44px；
-- 所有展开、范围切换和重试支持键盘；
-- 状态使用文字、图标和颜色共同表达；
-- 文本和控件达到 WCAG 2.1 AA；
-- 图表提供可访问摘要和数据表替代；
-- 价格、概率和贡献使用等宽数字，正文保持 Noto Sans SC 体系。
-
-### 19.9 静态缓存
-
-- 新 JS/CSS 使用明确版本查询参数；
-- 修改 `app.js`、`index.html` 或共享 CSS 时同步更新其入口缓存键；
-- 发布后检查公共 HTML 实际引用的新键；
-- 浏览器验证不能只依赖本地无缓存刷新。
-
-## 20. 性能与容量预算
-
-### 20.1 读取路径
-
-- GET 请求只读已发布快照，不访问外部来源，不启动 Python；
-- `latest` 数据库冷读 P95 目标小于 500ms，应用缓存命中 P95 目标小于 200ms；
-- `latest` 非压缩响应软目标小于 128 KiB；
-- `history` 默认 180 日，非压缩响应软目标小于 256 KiB；
-- 单用户连续刷新复用 ETag/304；
-- 页面隐藏或离开后不保留轮询；
-- 首版不做秒级实时更新，日频快照只需在页面进入和用户手动刷新时读取。
-
-### 20.2 后台路径
-
-- 每个 job kind 固定并发 1；
-- 数据源接入并发受供应商限流控制；
-- 训练和快照任务使用独立超时，训练不得阻塞 Node 事件循环；
-- Python stdout/stderr 有字节上限，超限视为失败并保存截断后的脱敏摘要；
-- 模型训练使用固定最大线程数，避免与 Node/数据库争抢全部 CPU；
-- 回填按系列和时间分批，每批提交并记录水位。
-
-### 20.3 缓存
-
-- 内存缓存键为快照 content hash；
-- Redis 可作为可选读取缓存，但 MySQL 快照仍是权威来源；
-- 发布新快照后按 content hash 自然失效；
-- 禁止用缓存中的部分旧因子拼成新结果。
-
-## 21. 安全与合规
-
-- 数据供应商密钥只存在服务端环境，不写数据库、前端、日志或训练报告；
-- 外部 URL 固定白名单，禁止用户传入 URL、series ID 或文件路径；
-- 下载大小、内容类型、重定向次数和超时有硬限制；
-- CSV/XLSX 解析前校验大小、列名和数据类型；
-- Python 进程不使用 shell 拼接命令，不接受浏览器输入；
-- artifact 路径必须解析后位于固定模型目录；
-- artifact、训练数据输入、快照均校验 SHA-256；
-- SQL 全部参数化；
-- 前端动态文本使用现有 escape 规则或 textContent，不插入供应商 HTML；
-- 日志只记录 series key、任务 ID、状态、耗时、行数、哈希前缀和稳定错误码；
-- 页面展示数据来源、许可要求的署名和“研究工具、非投资建议”；
-- 不记录用户浏览的具体因子展开行为到模型数据，除非未来另行定义隐私合规的产品分析。
-
-## 22. 测试与验收
-
-### 22.1 数据测试
-
-- FRED/ALFRED vintage 选择只使用截止时点可知值；
-- 发布延迟、修订、`.` 缺失值和限流；
-- GVZ/GPR 格式变化、空文件、重复日期和回退版本；
-- 美国假日、Cboe 交易日、周末和 DST；
-- 统一 XAUUSD/GDX 日线连续性、拆分/复权和来源切换；
-- 前向填充期限、过期和计划无数据区别；
-- 重复接入幂等，历史 vintage 不被覆盖。
-
-### 22.2 特征与模型测试
-
-- 所有滚动窗口只向后看；
-- scaler、winsorize 和缺失处理只在训练折拟合；
-- 20 日 purge/embargo 生效；
-- 特征 schema/hash 和输入数据 hash 可复现；
-- 固定随机种子重复训练结果在允许误差内一致；
-- SHAP additivity 误差小于冻结容差；
-- 分类概率在 `[0,1]`，体制概率和为 1；
-- HMM label mapping 在重训后稳定；
-- 消融、基线比较、CPCV、Bootstrap 和最终测试报告完整；
-- IC 按单因子跨日期计算，block bootstrap/HAC 对重叠标签给出一致的风险结论；
-- CPCV 切分与重构路径不被错误当作独立样本，试验次数、多重检验及适用时的 DSR/PBO 报告完整；
-- 不合格模型不能激活。
-
-### 22.3 数据库与任务测试
-
-- migration 独立幂等、ID 唯一、索引存在；
-- migration 不回填、不访问外网；
-- 相同幂等键只创建一个任务；
-- 租约过期、旧 fencing 结果、子进程晚到、超时和重试；
-- active 模型切换事务与回滚；
-- 快照不可变、content hash 稳定；
-- 失败保留 last-known-good；
-- worker 关闭时现有 AI 系统正常运行。
-
-### 22.4 API 与权限测试
-
-- `/api` 与 `/aurum-api` 响应合同一致；
-- Plus、Pro 离线、Pro 在线和管理员均按方案可读；
-- 免费和过期用户不可读；
-- observer GET 白名单只开放指定接口；
-- 任何写请求继续被 observer middleware 拒绝；
-- 不接受任意 days、series、user、account、URL 或 path；
-- ETag/304、stale 200、sleeping 200、无快照 503 和功能关闭；
-- 错误响应不泄露供应商、Python、SQL 或密钥。
-
-### 22.5 前端自动化测试
-
-新增静态合同测试，至少覆盖：
-
-- 独立导航、移动“更多”入口和 tab ID；
-- `refreshTabData('macro-dashboard')` 只调用宏观看板读取；
-- 离开页面销毁图表；
-- loading、ready、stale、degraded、sleeping、unavailable、error；
-- `actionable:false` 和非投资建议始终可见；
-- 无“强烈买入/卖出”“100% 置信度”和绝对仓位文案；
-- 颜色之外存在文字/符号；
-- 新资源和共享入口缓存键更新；
-- Plus/Pro 白名单与前端导航一致。
-
-### 22.6 浏览器验收
-
-必须使用真实浏览器检查：
-
-- 管理员、Plus、Pro Bridge 离线、Pro Bridge 在线；
-- 1440x900、1920x1080、820px 和 390x844；
-- 深色主题、键盘导航、焦点、屏幕缩放 125%/150%；
-- 减少动态效果；
-- 网络慢、API 500、无快照、旧快照、模型休眠；
-- Chart.js 创建/销毁、切页往返、长时间停留和浏览器恢复；
-- 控制台无错误，网络无重复重型请求；
-- 公共服务器静态缓存键和接口响应与目标提交一致。
-
-### 22.7 实现后的最低验证命令
-
-文件名可随实现落点调整，但至少执行等价命令：
-
-```powershell
-node --check public/ai/app.js
-node --check public/ai/macro-dashboard.js
-node --check server/routes/ai/macro-dashboard.js
-node --check server/routes/ai/macro-dashboard-worker.js
-
-npx vitest run tests/ai/macro-dashboard-data.test.js `
-  tests/ai/macro-dashboard-api.test.js `
-  tests/ai/macro-dashboard-worker.test.js `
-  tests/ai/macro-dashboard-frontend.test.js `
-  tests/ai/observer-access.test.js `
-  tests/ai/frontend-governance.test.js
-
-& $env:MACRO_PYTHON_BIN -m pytest scripts/macro-dashboard/tests
-& $env:MACRO_PYTHON_BIN -m macro_dashboard validate-fixtures
-
-npm test
-```
-
-涉及服务运行链路时，按仓库要求使用可见 PowerShell 控制台启动 3000 端口，并验证 `/health`。实现完成不等于允许部署。
+- HMM 与持久性基线；
+- 无 active 模型时客观数据仍可用。
 
-## 23. 分阶段实施、提交与验收
+### 18.3 API、实时与前端
 
-### 阶段 0：冻结外部前置条件
+- 仅 `/api/v4`、strict contract、entitlement、RBAC、CSRF、幂等和 revision；
+- ETag、cursor、payload 上限和错误脱敏；
+- changed 小事件、授权扇出、重连、sequence gap 和 HTTP 回读；
+- 360、390、768、1024、1280、1440、1920 宽度；
+- 键盘、焦点、对比度、非颜色状态、长文本和 reduced motion；
+- 图表销毁、切路由和后台恢复；
+- 不混淆 20 日宏观背景与当前交易机会。
 
-工作：
-
-- 批准 XAUUSD/GDX 历史数据源和许可；
-- 复核 FRED、Cboe、GPR 的使用与署名条款；
-- 检查开发、测试和生产 Python 版本及可安装依赖；
-- 冻结纽约日界线、运行时间、系列 ID 和数据登记表；
-- 建立最小脱敏 fixture，不使用生产密钥。
+### 18.4 上线闸门
 
-验收：所有关键数据和 Python 运行时都有明确负责人、来源、许可、时点和停止条件。阶段 0 未通过不得进入模型实现。
+必须完成数据许可、migration rehearsal、旧数据零丢失对账、真实 PM2/MySQL/Redis 环境验证、至少一个可复现平台快照、API/实时/权限/响应式验收，并证明关闭宏观功能不影响行情、AI、交易、Bridge 和后台。全过程不执行真实交易指令。
 
-### 阶段 1：数据合同与追加迁移
+## 19. 发布与回滚
 
-工作：
-
-- 新增原始观测、模型版本、任务和快照表；
-- 建立数据适配器合同、稳定错误码和 fixture；
-- 建立 point-in-time 查询和 hash；
-- 增加 migration/schema 测试。
+独立开关：`TRADE_MARKET_WORKSPACE_ENABLED`、`MACRO_DATA_INGEST_ENABLED`、`MACRO_DASHBOARD_ENABLED`、`MACRO_MODEL_RESEARCH_ENABLED`、`MACRO_AI_EVIDENCE_ENABLED`、`ECONOMIC_CALENDAR_ENABLED`。
 
-提交建议：`feat(ai-macro): add point-in-time data contracts and storage`
-
-验收：migration 幂等，无外网和回填；历史 vintage 可并存；现有测试不回归。
-
-### 阶段 2：数据接入与有界回填
-
-工作：
+默认关闭，依次开放采集、管理员预览、shadow、用户只读页面和 AI `context`。回滚优先关闭开关并停止新任务，保留数据、快照和审计；数据库降级不删除新表或列。
 
-- 分来源实现 FRED/ALFRED、GVZ、GPR、XAUUSD/GDX 适配器；
-- 实现限流、断点、水位、重复去重和数据质量；
-- 分批回填，不在 Web 请求中执行；
-- 产出覆盖率、缺失、修订和连续性报告。
+## 20. 分阶段实施顺序
 
-提交建议：`feat(ai-macro): ingest and version macro research data`
-
-验收：每个系列可以按任意历史 cutoff 重建当时可知值；数据源失败不影响现有服务。
-
-### 阶段 3：离线研究、模型与报告
-
-工作：
-
-- 建立 Python 锁定环境；
-- 实现特征 V1、walk-forward、CPCV、block/stationary Bootstrap、HAC、基线和消融；
-- 训练回归、分类校准和 HMM；
-- 实现 SHAP、健康阈值、artifact 和训练报告；
-- 人工决定是否激活首个模型。
-
-提交建议：`feat(ai-macro): add reproducible gold macro model pipeline`
-
-验收：防泄漏、复现、SHAP、校准和体制稳定性通过；不合格时允许没有 active 模型。
-
-### 阶段 4：后台任务与只读 API
+### M0：前置决策
 
-工作：
-
-- 实现租约/fencing worker；
-- 实现每日快照、健康刷新和 last-known-good；
-- 实现 `/api`、`/aurum-api` 只读接口、ETag 和限界历史；
-- 更新 observer access 白名单和功能开关。
-
-提交建议：`feat(ai-macro): publish leased snapshot API`
-
-验收：GET 不触发计算；并发、晚到、超时和 stale 行为可证明；关闭开关不影响现有系统。
-
-### 阶段 5：独立前端模块
-
-工作：
-
-- 新增导航、页面容器、独立 JS/CSS；
-- 实现结论带、因子列表、SHAP、体制和健康区；
-- 完成关键状态、移动端、无障碍和图表生命周期；
-- 更新缓存键和使用手册。
-
-提交建议：`feat(ai-macro): add read-only macro dashboard workspace`
-
-验收：所有角色和状态通过自动化与真实浏览器；没有交易暗示和重复请求。
+批准黄金历史源、因子/日历许可、经济日历供应商、Python 环境；盘点现有快照；冻结合同和迁移策略。
 
-### 阶段 6：影子运行与发布
-
-工作：
-
-- 先仅管理员可见，验证数据水位、快照、错误和资源；
-- 观察至少 20 个交易日的日常运行稳定性；
-- 对照供应商原值、模型输出、SHAP 和体制轨迹；
-- 满足门槛后再向 Plus/Pro 开放；
-- 部署使用网站发布流程，不构建或发布 Bridge。
-
-验收：无数据泄漏、跨日漂移、任务重复、错误增长或现有 AI 性能回归；公共主机提交、静态资源和健康检查一致。
-
-### 阶段 7：可选的 AI 证据集成
-
-不属于首版实施。必须另写方案并获得授权，覆盖策略开关、历史快照恢复、prompt 合同、模型 token 成本、回测、风控边界和回滚。
-
-## 24. 发布、监控、回滚与停止条件
-
-### 24.1 发布边界
-
-- 本方案提交不等于授权实现；
-- 实现不等于授权安装生产依赖、迁移、回填或部署；
-- 网站部署不包含 Bridge 构建、上传或发布；
-- 生产数据库变更前必须重新检查 migration、目标提交和备份/回滚条件；
-- 公开发布前必须确认实际公共主机、运行目录、分支、提交和静态缓存键。
-
-### 24.2 监控
-
-至少记录：
-
-- 各来源最近成功时间、观测水位、延迟、缺失和修订数；
-- job 排队、租约、重试、超时、状态未知和耗时；
-- Python exit code、资源峰值和输出大小，不记录敏感内容；
-- active 模型、快照、content hash 和发布时间；
-- 模型健康、滚动 IC、校准、睡眠和恢复事件；
-- API 请求数、304 比例、P50/P95/P99、响应字节和错误率；
-- 前端错误和静态版本错位；
-- 宏观看板启用前后现有 AI 请求延迟和 Node 资源变化。
-
-### 24.3 回滚
-
-1. 设置 `MACRO_DASHBOARD_ENABLED=0`，停止 worker 并隐藏入口。
-2. 如果仅新模型异常，将 active 模型切回上一个已验证版本并生成新快照，不修改旧快照。
-3. 如果 API/前端异常，回滚网站提交；追加表可以保留，不清库。
-4. 如果 Python 环境异常，停止宏观任务；Node 主服务继续运行。
-5. 如果数据源异常，冻结最近有效快照并标记 stale，不用模拟数据补齐。
-6. 回滚不得删除原始 vintage、模型报告、任务证据或已展示快照。
-
-### 24.4 自动停止扩大流量
-
-出现任一情况，停止向更多用户开放：
-
-- point-in-time 检查发现未来数据或历史修订泄漏；
-- SHAP 无法还原预测或模型 artifact/hash 不一致；
-- 数据来源、许可或署名不满足要求；
-- 同一业务日产生无法解释的冲突快照；
-- 租约/fencing 失效导致旧任务覆盖新结果；
-- 宏观看板导致现有 AI、数据库或 Node 服务明显退化；
-- 页面把降级、休眠或 stale 结果显示为强方向；
-- Plus/Pro/免费权限出现越权；
-- Python 依赖或静态资源无法可靠部署和回滚；
-- 模型不优于简单基线或实时健康持续低于门槛。
-
-## 25. 第一轮复审：需求覆盖、业务边界与最小改动
-
-### 25.1 复审结论
-
-- 需求覆盖：多因子强度、SHAP 瀑布和体制切换三个核心需求均有数据、模型、API 和 UI 落点；
-- 独立模块：新增独立导航和文件，不塞入 AI 分析师，不依赖用户账号或 Bridge；
-- 现有能力复用：复用会话、access middleware、Chart.js、tab 加载、视觉令牌、任务模式、MySQL migration 和部署入口；
-- 最小改动：现有 AI 信号、风控、订单、复盘、记忆和 Bridge 合同全部不变；
-- 过度设计检查：首版不做多品种、个性化模型、用户公式、实时训练、交易按钮、第二套管理后台或常驻 Python 服务。
-
-### 25.2 第一轮发现与调整
-
-1. 将参考站的账户净值、持仓、Kelly 仓位、回测账户和交易推广全部移出范围。
-2. 将模块从“AI 分析师的子页”调整为“市场洞察”独立分组，防止宏观研究与单条 AI 信号混淆。
-3. 将首版输出固定为 `actionable:false`，移除“强烈买入/卖出”和绝对置信度文案。
-4. 不继续扩张 1.45 万行 `app.js` 与主 CSS，改为独立 JS/CSS 和主文件薄接入。
-5. 不引入新前端框架，继续复用 Chart.js 与现有静态前端。
-6. 不复用 `ai_model_tasks`，避免把确定性量化任务错误纳入 LLM token、供应商和结果语义。
-7. 将 GDX 背离设为有许可和完整数据才启用的条件因子，禁止为了凑齐因子使用不稳定接口。
-8. 将“当前价格”和“训练目标历史”来源分开，防止把平台实时行情与不一致历史混为一体。
-
-### 25.3 第一轮剩余风险
-
-- 生产可用的长期 XAUUSD/GDX 数据源尚未批准；
-- 公开服务器 Python/XGBoost 运行条件尚未验证；
-- 当前平台 `market_candles` 对长期宏观训练的覆盖和连续性未验证；
-- 最终因子集合和健康阈值需要离线研究，不能在方案阶段证明；
-- 参考 PDF 和网站的模型结论尚未独立复现。
-
-第一轮结论：需求、边界和最小改动闭环，已经去除交易、账户和管理扩张，可以进入第二轮风险复审。
-
-## 26. 第二轮复审：兼容、数据、并发、异常、时间、安全、测试与回滚
-
-### 26.1 兼容性
-
-- `/api` 与 `/aurum-api` 同时提供合同；
-- 新 tab 不改变旧 tab ID、`signals` 兼容跳转或移动主入口；
-- Plus/Pro 白名单和 HTTP GET 白名单同步更新；
-- 关闭功能开关时旧行为完全保持；
-- 旧应用忽略追加表，新应用不要求 Bridge 升级；
-- 新静态资源纳入显式缓存键检查。
-
-### 26.2 数据与迁移
-
-- migration 只建表和索引，不访问外网、不回填、不修改旧表语义；
-- 原始观测保存 observation/available/ingested 三时间和 vintage；
-- 回填与模型训练通过任务执行，不延长服务启动 migration；
-- 快照不可变，错误更正创建新快照；
-- 模型 artifact 与数据库记录通过 hash 绑定；
-- 大历史回填分批，先测索引和数据库增长。
-
-### 26.3 并发与幂等
-
-- 四类任务使用独立稳定幂等键；
-- claim、续租、fencing 和最终提交都有事务检查；
-- Python 旧进程晚到结果无法覆盖新任务；
-- 同一业务日、同一模型和同一输入最多一个相同快照；
-- 页面 GET 不创建任务，避免刷新风暴。
-
-### 26.4 异常恢复
-
-- 数据接入、训练、快照和健康刷新彼此隔离；
-- 新模型失败保留 active 模型；
-- 当日快照失败保留 last-known-good 并标记 stale；
-- 关键数据过期不生成伪新快照；
-- Python 不可用不会使 Node 主服务退出；
-- status unknown 和晚到结果有明确处理，不把未知伪装成失败或成功。
-
-### 26.5 时间语义
-
-- 纽约业务日与 UTC 截止时间同时保存，DST 自动处理；
-- 训练日线 close 由统一供应商合同定义；
-- 当前价格与冻结日频特征分离；
-- available_at 防止 FRED/GPR 修订和发布延迟造成未来函数；
-- 市场假期与真实缺失分开；
-- 20 日目标的 purge/embargo 明确。
-
-### 26.6 安全与权限
-
-- 所有外部来源和系列为服务端白名单；
-- 密钥不下发、不入库、不入日志；
-- Python 使用固定路径、固定参数和输出 schema；
-- artifact 路径和 hash 校验；
-- observer 只开放指定 GET；
-- 快照不含用户、账户或持仓信息；
-- 统一管理后台继续承担运维，不在用户页复制管理能力。
-
-### 26.7 测试与性能
-
-- 自动化覆盖数据时点、模型、SHAP、HMM、migration、任务、API、权限和前端状态；
-- 真实浏览器覆盖角色、断点、长时间切页和公共静态缓存；
-- GET 路径没有外部网络或 Python，性能预算可控；
-- worker 单并发、固定线程和输出上限，降低对 Node 的影响；
-- 模拟和 fixture 不能替代真实供应商、真实 MySQL、真实 Python 和公共主机验收。
-
-### 26.8 回滚
-
-- 一个硬开关可以同时停止 worker、隐藏入口和关闭 API；
-- 模型可切回前一版本，快照不原地覆盖；
-- 网站代码可回滚，追加表无需删除；
-- 数据问题冻结 last-known-good，不清库、不伪造；
-- Bridge 和交易链路不在变更范围内，因此不需要客户端回滚。
-
-### 26.9 第二轮发现与调整
-
-1. 增加 `available_at_utc_msc`，明确所有训练必须使用 point-in-time vintage。
-2. 将纽约业务日和供应商日线 close 语义写入合同，避免直接使用北京时间或经纪商不一致日界线。
-3. 将 daily snapshot 与模型训练拆成不同任务，页面请求永不训练。
-4. 增加 `status_unknown`、fencing token 和 Python 晚到结果检查，防止重复任务覆盖。
-5. 增加 last-known-good 但禁止关键数据过期时生成伪新快照。
-6. 将 HMM 切换预测与简单持久性基线比较；不优于基线时不展示切换概率。
-7. 增加 SHAP additivity 和“模型归因不是因果”的合同与文案。
-8. 增加模型人工激活、artifact hash 和快速回滚版本。
-9. 增加响应大小、GET 延迟、worker 并发和 Python 输出上限。
-10. 增加数据许可、署名、下载大小和外部 URL 白名单。
-11. 增加静态资源缓存键、Plus/Pro observer GET 白名单和 `/api`/`/aurum-api` 双路径验收。
-12. 把 AI 证据集成移动到阶段 7，明确不属于首版授权。
-
-### 26.10 第二轮剩余风险
-
-- 没有真实数据和原型，模型指标、训练时间、响应大小和资源预算仍是实施验收目标；
-- FRED、Cboe、GPR 与行情供应商的实际发布时刻和节假日差异需要用真实运行数据校准；
-- GPR 最新值可能修订，必须验证 vintage 下载和更新时间是否稳定可自动化；
-- Python 包在公开 Linux 主机的安装、原生依赖、内存和升级回滚尚未验证；
-- XGBoost 在不同原生库版本或线程数下的细微差异需要通过 artifact 固化和容差管理；
-- 20 日重叠目标有效独立样本少，历史指标可能比表面样本量乐观；
-- HMM 状态具有统计不确定性，经济标签可能随样本改变；
-- 宏观看板即使只读，也可能被用户误当交易建议，必须持续检查文案和视觉强调；
-- 影子运行 20 个交易日只能验证运营稳定性，不能单独证明长期 alpha。
-
-### 26.11 X 长文补充复审与调整
-
-1. 保留“少即是多”和训练折内消融原则，但拒绝按单因子 IC 正负机械删因子。
-2. 把 `DFII10 - T10YIE` 从已命名的确定因子降为复合项研究候选，要求与分量和替代公式并行消融。
-3. 冻结单资产 IC 的时间序列定义，禁止在同一天跨不同因子计算所谓 IC。
-4. 将普通 Bootstrap 收紧为 block/stationary Bootstrap，并增加 HAC/Newey-West 交叉检查。
-5. 明确 15 个 CPCV 组合切分不等于 15 个独立 alpha 证据；增加路径依赖、多重检验登记及适用时的 DSR/PBO。
-6. 取消“滚动 60 日 IC < 0.05”的预设生产阈值，改为依赖稳健置信区间、有效样本量、校准和体制稳定性的组合门控。
-7. API 健康信息增加名义观测数、有效样本数、置信区间和最后一个成熟目标日期，防止用户把窗口长度误认为独立样本量。
-8. 继续排除文章中的 Kelly、减仓、回撤熔断和停止交易逻辑；宏观看板休眠不触碰现有交易系统。
-
-### 26.12 补充复审剩余风险
-
-- 文章没有提供可复现代码、point-in-time 数据快照、试验总次数和 artifact，无法核验其高单因子 IC、Sharpe、p 值和极低回撤；
-- 单一资产的长期日频样本即使覆盖十年，20 日重叠目标的有效独立信息仍有限；
-- block 长度、HAC lag、CPCV 分组和 embargo 必须在研究协议中预注册，不能看到结果后选择；
-- 复合利率/通胀因子的经济标签可能误导用户，UI 文案必须与冻结公式一致；
-- 体制条件下拆分样本会进一步降低样本量，不能为了讲出清晰叙事牺牲统计可信度。
-
-第二轮结论：方案已覆盖兼容、数据与迁移、并发与幂等、异常恢复、时间语义、安全、测试、性能和回滚；调整后可以作为正式实施基线。外部数据许可、生产 Python 条件和真实模型有效性仍必须在阶段 0-3 以证据确认。
-
-## 27. 最终实施门槛
-
-只有同时满足以下条件才可以开始编码：
-
-1. 用户明确授权开始实施，而不是只授权保存本方案；
-2. 重新确认目标分支、HEAD、上游和工作区，隔离其他未提交文件；
-3. 完成数据源登记和 XAUUSD/GDX 许可决策；
-4. 验证开发、测试和生产 Python 运行时与依赖锁定方案；
-5. 冻结特征 V1、数据截止时间、日线 close 语义和 JSON Schema；
-6. 确认 migration 新 ID、表容量、回填批次和数据库回滚方式；
-7. 确认模型研究负责人、人工激活人、影子观察人和回滚人；
-8. 确认功能开关默认关闭且关闭时不启动 worker；
-9. 确认首版不会接入 AI 推理、策略、风控、订单、复盘、记忆或 Bridge；
-10. 实现、生产依赖安装、数据回填、数据库迁移、网站部署和对用户开放继续分别授权；
-11. 预注册 IC、block bootstrap/HAC、CPCV 路径、试验登记、多重检验、适用时的 DSR/PBO 和健康休眠统计口径。
-
-在以上门槛满足前，本方案状态保持“正式方案已完成，功能尚未实施”。
+### M1：合同与数据库
+
+增加 contracts；追加数据源、观测、任务、模型、lineage 和日历表；扩展唯一快照表；完成旧数据标记、对账和 migration rehearsal。
+
+### M2：采集与管理运维
+
+实现独立 scheduler/worker、V1 来源和后台运维；发布透明因子快照，不启用 ML。
+
+### M3：用户页面与实时失效
+
+实现专业行情、宏观环境和日历；使用 shadcn-vue；接入 HTTP 和小型 changed 事件；完成响应式与可访问性验收。
+
+### M4：离线模型研究
+
+预注册实验，运行基线、线性模型和 XGBoost challenger，生成不可变报告并进入 shadow。未优于基线则停在 V1。
+
+### M5：模型展示
+
+激活达标模型；展示预测区间、校准概率和可验证 SHAP；HMM 仅在达标时启用。
+
+### M6：AI 证据接入
+
+增加策略级 `macro_evidence`，改造隐式 reader，冻结 evidence projection，验证回放、缺失、陈旧、策略关闭和审计。
+
+## 21. 第一轮复审：架构、数据与产品边界
+
+### 21.1 发现
+
+1. 旧静态前端和旧 API 不适配 V4。
+2. 新建同义快照表会与现有权威表冲突。
+3. 当前分析构建器已隐式读取宏观快照。
+4. 20 日方向容易和五分钟机会混淆。
+5. 旧方案没有完整经济日历。
+6. 首版模型范围过大。
+
+### 21.2 调整
+
+改为 V4 Vue/shadcn-vue、`/api/v4`、独立 Worker；统一唯一快照；AI 接入受策略控制；统一术语；增加经济日历；拆分 V1 数据和 V2/V3 模型。
+
+### 21.3 结论
+
+方案层冲突已消除，但数据许可、生产 Python、现有快照真实内容和经济日历供应商仍是实施前 blocker。
+
+## 22. 第二轮复审：兼容、并发、安全、测试与回滚
+
+### 22.1 发现
+
+1. 事后猜测 `available_at` 会造成未来数据泄漏。
+2. DDL、回填和 reader 一次切换会扩大锁和失败面。
+3. API 启动 Python 会影响主进程。
+4. 大 JSON 进入列表会降低性能。
+5. 平台事件需要符合用户授权 scope。
+6. 旧用户级快照需保留但不能继续覆盖平台事实。
+7. 模型失败不能拖垮客观数据页面。
+
+### 22.2 调整
+
+增加可得性证据；拆分迁移步骤；Python 只由 Worker 启动；列表排除大字段并使用游标；平台事件授权扇出；旧记录保留为 legacy；V1 与模型链路独立开关。
+
+### 22.3 结论
+
+方案满足 V4 模块化、数据保留、异步任务、API/实时边界和可回滚要求。离线测试仍不能替代生产许可、真实运行环境或公网长稳证明。
+
+## 23. 剩余风险与开始条件
+
+### 23.1 剩余风险
+
+- 统一黄金长期历史来源未批准；
+- GVZ 商业展示/再分发许可未书面确认；
+- 经济日历供应商、额度和许可未选择；
+- 当前数据库宏观快照尚未做真实库只读盘点；
+- 生产 Python、原生依赖、内存和回滚未验证；
+- 20 日重叠目标有效样本有限，复杂模型可能不优于基线；
+- GPR 和经济数据修订使可得性证据质量不一；
+- 用户仍可能把中期偏向误认为入场建议；
+- 平台级 realtime target/schema 需在实现前冻结；
+- 可视化依赖可能增加体积和许可证风险。
+
+### 23.2 进入实施前必须确认
+
+1. 数据源和许可清单；
+2. 经济日历供应商；
+3. 是否接受 V1 不承诺 ML 综合方向，只先展示客观因子；
+4. 现有数据库宏观数据只读盘点授权；
+5. `/api/v4` 和 realtime 合同；
+6. migration rehearsal 与备份恢复方案；
+7. 管理员预览和用户开放顺序。
+
+未完成以上确认前，不进入 M1，不创建迁移，不抓取外部数据，不启动宏观 Worker。
