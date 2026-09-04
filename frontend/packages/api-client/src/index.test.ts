@@ -278,3 +278,72 @@ describe('createApiClient', () => {
     expect(new Headers(releaseRequest?.headers).get('X-CSRF-Token')).toBe('csrf')
   })
 })
+
+describe('strategy management API client', () => {
+  const meta = { request_id: 'strategy', generated_at: '2026-09-04T04:00:00.000Z' }
+  const version = {
+    id: 'version-1', strategy_id: 'strategy/1', kind: 'analysis', version: 1,
+    prompt_text: '分析黄金', prompt_hash: 'a'.repeat(64), config: { timeframes: ['M5'] },
+    input_contract_version: 'market-analysis-input/v1', output_contract_version: 'market-analysis/v1',
+    created_by_user_id: '7', created_at: meta.generated_at,
+  }
+  const detail = {
+    id: 'strategy/1', kind: 'analysis', scope: 'user', owner_user_id: '7', name: '黄金分析', description: '结构',
+    status: 'draft', active_version_id: null, revision: '1', versions: [version],
+  }
+  const compile = {
+    valid: true, kind: 'analysis', prompt_hash: 'a'.repeat(64), normalized_config: { timeframes: ['M5'], candle_limit: 300 },
+    input_contract_version: 'market-analysis-input/v1', output_contract_version: 'market-analysis/v1', issues: [],
+  }
+  const subscription = {
+    id: 'subscription/1', user_id: '7', trading_account_id: 'account/1', symbol: 'XAUUSD',
+    analysis_strategy_id: 'strategy/1', analysis_strategy_version_id: 'version-1', trader_strategy_id: null,
+    trader_strategy_version_id: null, analysis_enabled: true, trader_enabled: false, trade_send_enabled: false,
+    status: 'active', revision: '1', created_at: meta.generated_at, updated_at: meta.generated_at,
+    schedule: { cadence_seconds: 300, receive_timezone: 'UTC', receive_window: { enabled: false }, next_due_at: null, revision: '1' },
+  }
+
+  it('uses stable strategy paths, strict request bodies and CAS headers', async () => {
+    const responses = [
+      { data: detail, meta }, { data: compile, meta }, { data: detail, meta }, { data: detail, meta },
+      { data: detail, meta }, { data: detail, meta }, { data: detail, meta },
+      { data: { items: [subscription] }, meta }, { data: subscription, meta }, { data: subscription, meta },
+    ]
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(responses.shift()), { status: 200 }))
+    const client = createApiClient({ fetchImpl })
+
+    await client.getStrategy('strategy/1')
+    await client.compileStrategy('csrf', { kind: 'analysis', prompt_text: '分析黄金', config: { timeframes: ['M5'] } })
+    await client.createStrategy('csrf', { kind: 'analysis', name: '黄金分析', description: '结构', prompt_text: '分析黄金', config: {} })
+    await client.updateStrategyMetadata('csrf', 'strategy/1', { name: '新名字', description: '新说明' }, 1)
+    await client.createStrategyVersion('csrf', 'strategy/1', { prompt_text: 'v2', config: {} }, 2)
+    await client.publishStrategyVersion('csrf', 'strategy/1', 'version/2', 3)
+    await client.retireStrategy('csrf', 'strategy/1', 4)
+    await client.listStrategySubscriptions('account/1')
+    await client.createStrategySubscription('csrf', { trading_account_id: 'account/1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy/1' })
+    await client.updateStrategySubscription('csrf', 'subscription/1', { status: 'paused' }, 1)
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v4/strategies/strategy%2F1', '/api/v4/strategies/compile', '/api/v4/strategies',
+      '/api/v4/strategies/strategy%2F1', '/api/v4/strategies/strategy%2F1/versions',
+      '/api/v4/strategies/strategy%2F1/versions/version%2F2/publish', '/api/v4/strategies/strategy%2F1/retire',
+      '/api/v4/strategy-subscriptions?account_id=account%2F1', '/api/v4/strategy-subscriptions',
+      '/api/v4/strategy-subscriptions/subscription%2F1',
+    ])
+    for (const index of [1, 2, 3, 4, 5, 6, 8, 9]) {
+      const [, request] = fetchImpl.mock.calls[index] ?? []
+      expect(new Headers(request?.headers).get('X-CSRF-Token')).toBe('csrf')
+    }
+    expect(new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get('If-Match')).toBe('"1"')
+    expect(new Headers(fetchImpl.mock.calls[4]?.[1]?.headers).get('If-Match')).toBe('"2"')
+    expect(new Headers(fetchImpl.mock.calls[9]?.[1]?.headers).get('If-Match')).toBe('"1"')
+    expect(JSON.parse(String(fetchImpl.mock.calls[9]?.[1]?.body))).toEqual({ status: 'paused' })
+  })
+
+  it('validates strategy request bodies before making a network call', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+    const client = createApiClient({ fetchImpl })
+    expect(() => client.updateStrategySubscription('csrf', 'subscription/1', { status: 'bad' as never }, 1)).toThrow()
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+})

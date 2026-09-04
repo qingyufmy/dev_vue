@@ -7,7 +7,9 @@ import {
   modifyOrderCommandSchema, modifyPositionCommandSchema, observerChannelSchema, operationSchema,
   operationRealtimeEventSchema, pendingOrderCommandSchema, traderDecisionSummarySchema, traderRunSchema, tradingContextSchema,
   tradingWorkspaceResponseSchema, sessionResponseSchema, manualReleaseStateSchema, riskDecisionDetailSchema,
-  riskPolicyPatchBodySchema, riskPolicySchema, riskSummarySchema,
+  riskPolicyPatchBodySchema, riskPolicySchema, riskSummarySchema, strategyCompileBodySchema, strategyCompileResultSchema,
+  strategyCreateBodySchema, strategyDetailSchema, strategyMetadataPatchBodySchema, strategySubscriptionSchema,
+  strategySubscriptionCreateBodySchema, strategySubscriptionPatchBodySchema, strategyVersionCreateBodySchema,
 } from './index'
 
 describe('sessionResponseSchema', () => {
@@ -101,6 +103,55 @@ describe('analyst and account-trader V4 contracts', () => {
     expect(marketAnalysisSummarySchema.parse({ analysis_id: 'a1', strategy_id: '10', strategy_version_id: '11', symbol: 'XAUUSD', market_bias: 'bullish', opportunity: 'long_setup', confidence: 76, summary: '结构偏多', analyzed_at: '2026-09-03T08:00:00.000Z', valid_until: '2026-09-03T08:03:00.000Z', revision: '1' })).toMatchObject({ analysisId: 'a1', marketBias: 'bullish', opportunity: 'long_setup' })
     expect(traderRunSchema.parse({ trader_run_id: 't1', analysis_id: 'a1', trading_account_id: '7', strategy_id: '20', strategy_version_id: '21', task_mode: 'manage', status: 'queued', created_at: '2026-09-03T08:00:01.000Z', updated_at: '2026-09-03T08:00:01.000Z', revision: '1' })).toMatchObject({ traderRunId: 't1', taskMode: 'manage' })
     expect(traderDecisionSummarySchema.parse({ decision_id: 'd1', analysis_id: 'a1', trading_account_id: '7', strategy_id: '20', strategy_version_id: '21', action: 'hold', side: null, confidence: 80, summary: '账户保证金不足', status: 'proposed', stale_reason: 'quote_revision_changed', created_at: '2026-09-03T08:00:01.000Z', revision: '1' })).toMatchObject({ decisionId: 'd1', tradingAccountId: '7', action: 'hold', staleReason: 'quote_revision_changed' })
+  })
+})
+
+describe('strategy management V4 contracts', () => {
+  const version = {
+    id: 'version-1', strategy_id: 'strategy-1', kind: 'analysis', version: 1,
+    prompt_text: '分析 XAUUSD 的市场结构', prompt_hash: 'a'.repeat(64), config: { timeframes: ['M5'] },
+    input_contract_version: 'market-analysis-input/v1', output_contract_version: 'market-analysis/v1',
+    created_by_user_id: '7', created_at: '2026-09-04T04:00:00.000Z',
+  }
+  const subscription = {
+    id: 'subscription-1', user_id: '7', trading_account_id: 'account-1', symbol: 'XAUUSD',
+    analysis_strategy_id: 'strategy-1', analysis_strategy_version_id: 'version-1', trader_strategy_id: null,
+    trader_strategy_version_id: null, analysis_enabled: true, trader_enabled: false, trade_send_enabled: false,
+    status: 'active', revision: '1', created_at: '2026-09-04T04:00:00.000Z', updated_at: '2026-09-04T04:00:00.000Z',
+    schedule: { cadence_seconds: 300, receive_timezone: 'UTC', receive_window: { enabled: false }, next_due_at: null, revision: '1' },
+  }
+
+  it('normalizes strategy details and keeps immutable versions explicit', () => {
+    const result = strategyDetailSchema.parse({
+      id: 'strategy-1', kind: 'analysis', scope: 'user', owner_user_id: '7', name: '黄金分析', description: '结构分析',
+      status: 'draft', active_version_id: null, revision: '1', versions: [version],
+    })
+    expect(result).toMatchObject({ ownerUserId: '7', activeVersionId: null, versions: [{ strategyId: 'strategy-1', createdByUserId: '7' }] })
+    expect(strategyDetailSchema.safeParse({
+      id: 'strategy-1', kind: 'analysis', scope: 'user', owner_user_id: '7', name: '黄金分析', description: '结构分析',
+      status: 'draft', active_version_id: null, revision: '1', versions: [], unexpected: true,
+    }).success).toBe(false)
+  })
+
+  it('accepts strict strategy inputs and rejects camelCase or unsupported capabilities', () => {
+    expect(strategyCompileBodySchema.safeParse({ kind: 'analysis', prompt_text: '分析', config: { timeframes: ['M5'] } }).success).toBe(true)
+    expect(strategyCompileBodySchema.safeParse({ kind: 'analysis', promptText: '分析', config: {} }).success).toBe(false)
+    expect(strategyCreateBodySchema.safeParse({ kind: 'trader', name: '执行策略', description: '', prompt_text: '执行', config: {} }).success).toBe(true)
+    expect(strategyVersionCreateBodySchema.safeParse({ prompt_text: 'v2', config: {} }).success).toBe(true)
+    expect(strategyMetadataPatchBodySchema.safeParse({ name: '新名字', description: '说明' }).success).toBe(true)
+    expect(strategyCompileResultSchema.safeParse({
+      valid: false, kind: 'trader', prompt_hash: 'b'.repeat(64), normalized_config: {},
+      input_contract_version: 'account-trader-input/v1', output_contract_version: 'trade-decision/v1',
+      issues: [{ level: 'error', code: 'dangerous_capability_forbidden', message: '禁止', path: 'config.network' }],
+    }).success).toBe(true)
+  })
+
+  it('normalizes subscription resources and keeps update fields strict', () => {
+    expect(strategySubscriptionSchema.parse(subscription)).toMatchObject({ tradingAccountId: 'account-1', standardSymbol: 'XAUUSD', schedule: { cadenceSeconds: 300, receiveTimezone: 'UTC' } })
+    expect(strategySubscriptionSchema.parse({ ...subscription, schedule: { ...subscription.schedule, receive_timezone: 'Asia/Shanghai' } }).schedule.receiveTimezone).toBe('Asia/Shanghai')
+    expect(strategySubscriptionCreateBodySchema.safeParse({ trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-1' }).success).toBe(true)
+    expect(strategySubscriptionPatchBodySchema.safeParse({ trader_enabled: true, trader_strategy_id: 'trader-1' }).success).toBe(true)
+    expect(strategySubscriptionPatchBodySchema.safeParse({ traderEnabled: true }).success).toBe(false)
   })
 })
 

@@ -493,6 +493,186 @@
           "200": { "description": "Strategy catalog", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyListResponse" } } } },
           "401": { "$ref": "#/components/responses/Problem" }
         }
+      },
+      "post": {
+        "operationId": "createStrategy",
+        "summary": "Create a user-owned strategy with its first immutable draft version",
+        "tags": ["Strategies"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyCreate" } } }
+        },
+        "responses": {
+          "201": { "description": "Strategy created", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyDetailResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/strategies/compile": {
+      "post": {
+        "operationId": "compileStrategy",
+        "summary": "Validate and normalize a strategy draft without persisting it",
+        "tags": ["Strategies"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyCompile" } } }
+        },
+        "responses": {
+          "200": { "description": "Compile result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyCompileResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/strategies/{strategy_id}": {
+      "get": {
+        "operationId": "getStrategy",
+        "summary": "Get one visible strategy and its immutable version history",
+        "tags": ["Strategies"],
+        "parameters": [{ "name": "strategy_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } }],
+        "responses": {
+          "200": { "description": "Strategy detail", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyDetailResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "patch": {
+        "operationId": "updateStrategyMetadata",
+        "summary": "Change user-owned strategy metadata with optimistic concurrency",
+        "tags": ["Strategies"],
+        "parameters": [
+          { "name": "strategy_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyMetadataPatch" } } } },
+        "responses": {
+          "200": { "description": "Metadata updated", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyDetailResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "412": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/strategies/{strategy_id}/versions": {
+      "post": {
+        "operationId": "createStrategyVersion",
+        "summary": "Create a new immutable user-owned strategy version",
+        "tags": ["Strategies"],
+        "parameters": [
+          { "name": "strategy_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyVersionCreate" } } } },
+        "responses": {
+          "201": { "description": "Version created", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyDetailResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "412": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/strategies/{strategy_id}/versions/{version_id}/publish": {
+      "post": {
+        "operationId": "publishStrategyVersion",
+        "summary": "Publish one immutable version as the active strategy version",
+        "tags": ["Strategies"],
+        "parameters": [
+          { "name": "strategy_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "name": "version_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": { "description": "Version published", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyDetailResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "412": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/strategies/{strategy_id}/retire": {
+      "post": {
+        "operationId": "retireStrategy",
+        "summary": "Retire a user-owned strategy while preserving its audit history",
+        "tags": ["Strategies"],
+        "parameters": [
+          { "name": "strategy_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "responses": {
+          "200": { "description": "Strategy retired", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyDetailResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "412": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/strategy-subscriptions": {
+      "get": {
+        "operationId": "listStrategySubscriptions",
+        "summary": "List strategy subscriptions owned by the current user",
+        "tags": ["Strategies"],
+        "parameters": [{ "name": "account_id", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/OpaqueId" } }],
+        "responses": {
+          "200": { "description": "Strategy subscriptions", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategySubscriptionListResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createStrategySubscription",
+        "summary": "Subscribe an owned trading account to active analysis and optional trader strategies",
+        "tags": ["Strategies"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategySubscriptionCreate" } } } },
+        "responses": {
+          "201": { "description": "Subscription created", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategySubscriptionResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/strategy-subscriptions/{subscription_id}": {
+      "patch": {
+        "operationId": "updateStrategySubscription",
+        "summary": "Change an account strategy subscription with optimistic concurrency",
+        "tags": ["Strategies"],
+        "parameters": [
+          { "name": "subscription_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IfMatch" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategySubscriptionPatch" } } } },
+        "responses": {
+          "200": { "description": "Subscription updated", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategySubscriptionResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "412": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" },
+          "428": { "$ref": "#/components/responses/Problem" }
+        }
       }
     },
     "/analysis-jobs": {
@@ -1705,6 +1885,193 @@
         "properties": {
           "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/StrategySummary" } } } },
           "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "StrategyVersion": {
+        "type": "object",
+        "required": ["id", "strategy_id", "kind", "version", "prompt_text", "prompt_hash", "config", "input_contract_version", "output_contract_version", "created_by_user_id", "created_at"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "kind": { "type": "string", "enum": ["analysis", "trader"] },
+          "version": { "type": "integer", "minimum": 1 },
+          "prompt_text": { "type": "string", "minLength": 1, "maxLength": 100000 },
+          "prompt_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "config": { "type": "object", "additionalProperties": true },
+          "input_contract_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "output_contract_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "created_by_user_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "created_at": { "$ref": "#/components/schemas/UtcDateTime" }
+        }
+      },
+      "StrategyDetail": {
+        "type": "object",
+        "required": ["id", "kind", "scope", "owner_user_id", "name", "description", "status", "active_version_id", "revision", "versions"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "kind": { "type": "string", "enum": ["analysis", "trader"] },
+          "scope": { "type": "string", "enum": ["platform", "user"] },
+          "owner_user_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "name": { "type": "string", "minLength": 1, "maxLength": 191 },
+          "description": { "type": "string", "maxLength": 2000 },
+          "status": { "type": "string", "enum": ["draft", "active", "retired"] },
+          "active_version_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "versions": { "type": "array", "items": { "$ref": "#/components/schemas/StrategyVersion" } }
+        }
+      },
+      "StrategyDetailResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "additionalProperties": false,
+        "properties": { "data": { "$ref": "#/components/schemas/StrategyDetail" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "StrategyCompile": {
+        "type": "object",
+        "required": ["kind", "prompt_text", "config"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string", "enum": ["analysis", "trader"] },
+          "prompt_text": { "type": "string", "minLength": 1, "maxLength": 100000 },
+          "config": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "StrategyCompileIssue": {
+        "type": "object",
+        "required": ["level", "code", "message", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "level": { "type": "string", "enum": ["error", "warning"] },
+          "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "message": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "path": { "type": ["string", "null"], "maxLength": 256 }
+        }
+      },
+      "StrategyCompileResult": {
+        "type": "object",
+        "required": ["valid", "kind", "prompt_hash", "normalized_config", "input_contract_version", "output_contract_version", "issues"],
+        "additionalProperties": false,
+        "properties": {
+          "valid": { "type": "boolean" },
+          "kind": { "type": "string", "enum": ["analysis", "trader"] },
+          "prompt_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "normalized_config": { "type": "object", "additionalProperties": true },
+          "input_contract_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "output_contract_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "issues": { "type": "array", "items": { "$ref": "#/components/schemas/StrategyCompileIssue" } }
+        }
+      },
+      "StrategyCompileResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "additionalProperties": false,
+        "properties": { "data": { "$ref": "#/components/schemas/StrategyCompileResult" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "StrategyCreate": {
+        "type": "object",
+        "required": ["kind", "name", "description", "prompt_text", "config"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string", "enum": ["analysis", "trader"] },
+          "name": { "type": "string", "minLength": 1, "maxLength": 191 },
+          "description": { "type": "string", "maxLength": 2000 },
+          "prompt_text": { "type": "string", "minLength": 1, "maxLength": 100000 },
+          "config": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "StrategyMetadataPatch": {
+        "type": "object",
+        "required": ["name", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 191 },
+          "description": { "type": "string", "maxLength": 2000 }
+        }
+      },
+      "StrategyVersionCreate": {
+        "type": "object",
+        "required": ["prompt_text", "config"],
+        "additionalProperties": false,
+        "properties": {
+          "prompt_text": { "type": "string", "minLength": 1, "maxLength": 100000 },
+          "config": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "StrategySubscriptionSchedule": {
+        "type": "object",
+        "required": ["cadence_seconds", "receive_timezone", "receive_window", "next_due_at", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "cadence_seconds": { "type": "integer", "minimum": 60 },
+          "receive_timezone": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "receive_window": { "type": "object", "additionalProperties": true },
+          "next_due_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "StrategySubscription": {
+        "type": "object",
+        "required": ["id", "user_id", "trading_account_id", "symbol", "analysis_strategy_id", "analysis_strategy_version_id", "trader_strategy_id", "trader_strategy_version_id", "analysis_enabled", "trader_enabled", "trade_send_enabled", "status", "revision", "created_at", "updated_at", "schedule"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "user_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "trading_account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "analysis_strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "analysis_strategy_version_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "trader_strategy_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "trader_strategy_version_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "analysis_enabled": { "type": "boolean" },
+          "trader_enabled": { "type": "boolean" },
+          "trade_send_enabled": { "type": "boolean" },
+          "status": { "type": "string", "enum": ["active", "paused", "ended"] },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "created_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "updated_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "schedule": { "$ref": "#/components/schemas/StrategySubscriptionSchedule" }
+        }
+      },
+      "StrategySubscriptionResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "additionalProperties": false,
+        "properties": { "data": { "$ref": "#/components/schemas/StrategySubscription" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "StrategySubscriptionListResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "additionalProperties": false,
+        "properties": { "data": { "type": "object", "required": ["items"], "additionalProperties": false, "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/StrategySubscription" } } } }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "StrategySubscriptionCreate": {
+        "type": "object",
+        "required": ["trading_account_id", "symbol", "analysis_strategy_id"],
+        "additionalProperties": false,
+        "properties": {
+          "trading_account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "analysis_strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "trader_strategy_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "analysis_enabled": { "type": "boolean", "default": true },
+          "trader_enabled": { "type": "boolean", "default": false },
+          "trade_send_enabled": { "type": "boolean", "default": false },
+          "status": { "type": "string", "enum": ["active", "paused"], "default": "active" }
+        }
+      },
+      "StrategySubscriptionPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "analysis_strategy_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "trader_strategy_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
+          "analysis_enabled": { "type": "boolean" },
+          "trader_enabled": { "type": "boolean" },
+          "trade_send_enabled": { "type": "boolean" },
+          "status": { "type": "string", "enum": ["active", "paused", "ended"] }
         }
       },
       "AnalysisJob": {

@@ -184,6 +184,85 @@ export const strategySummarySchema = z.object({
 }))
 export const strategiesResponseSchema = z.object({ data: z.object({ items: z.array(strategySummarySchema) }), meta: responseMetaSchema })
 
+export const strategyVersionSchema = z.object({
+  id: z.string().min(1), strategy_id: z.string().min(1), kind: strategyKindSchema, version: z.number().int().positive(),
+  prompt_text: z.string().min(1).max(100_000), prompt_hash: z.string().regex(/^[a-f0-9]{64}$/),
+  config: z.record(z.string(), z.unknown()), input_contract_version: z.string().min(1).max(64),
+  output_contract_version: z.string().min(1).max(64), created_by_user_id: z.string().min(1),
+  created_at: z.iso.datetime({ offset: true }),
+}).strict().transform((value) => ({
+  id: value.id, strategyId: value.strategy_id, kind: value.kind, version: value.version, promptText: value.prompt_text,
+  promptHash: value.prompt_hash, config: value.config, inputContractVersion: value.input_contract_version,
+  outputContractVersion: value.output_contract_version, createdByUserId: value.created_by_user_id, createdAt: value.created_at,
+}))
+
+export const strategyDetailSchema = z.object({
+  id: z.string().min(1), kind: strategyKindSchema, scope: strategyScopeSchema, owner_user_id: z.string().min(1).nullable(),
+  name: z.string().min(1).max(191), description: z.string().max(2000), status: strategyStatusSchema,
+  active_version_id: z.string().min(1).nullable(), revision: numericRevisionSchema,
+  versions: z.array(strategyVersionSchema),
+}).strict().transform((value) => ({
+  id: value.id, kind: value.kind, scope: value.scope, ownerUserId: value.owner_user_id, name: value.name,
+  description: value.description, status: value.status, activeVersionId: value.active_version_id, revision: value.revision,
+  versions: value.versions,
+}))
+export const strategyDetailResponseSchema = z.object({ data: strategyDetailSchema, meta: responseMetaSchema })
+
+export const strategyCompileIssueSchema = z.object({
+  level: z.enum(['error', 'warning']), code: z.string().min(1).max(128), message: z.string().min(1).max(2000), path: z.string().max(256).nullable(),
+}).strict()
+export const strategyCompileResultSchema = z.object({
+  valid: z.boolean(), kind: strategyKindSchema, prompt_hash: z.string().regex(/^[a-f0-9]{64}$/),
+  normalized_config: z.record(z.string(), z.unknown()), input_contract_version: z.string().min(1).max(64),
+  output_contract_version: z.string().min(1).max(64), issues: z.array(strategyCompileIssueSchema),
+}).strict().transform((value) => ({
+  valid: value.valid, kind: value.kind, promptHash: value.prompt_hash, normalizedConfig: value.normalized_config,
+  inputContractVersion: value.input_contract_version, outputContractVersion: value.output_contract_version, issues: value.issues,
+}))
+export const strategyCompileResponseSchema = z.object({ data: strategyCompileResultSchema, meta: responseMetaSchema })
+
+export const strategyCompileBodySchema = z.object({ kind: strategyKindSchema, prompt_text: z.string().trim().min(1).max(100_000), config: z.record(z.string(), z.unknown()) }).strict()
+export const strategyCreateBodySchema = z.object({
+  kind: strategyKindSchema, name: z.string().trim().min(1).max(191), description: z.string().trim().max(2000),
+  prompt_text: z.string().trim().min(1).max(100_000), config: z.record(z.string(), z.unknown()),
+}).strict()
+export const strategyMetadataPatchBodySchema = z.object({ name: z.string().trim().min(1).max(191), description: z.string().trim().max(2000) }).strict()
+export const strategyVersionCreateBodySchema = z.object({ prompt_text: z.string().trim().min(1).max(100_000), config: z.record(z.string(), z.unknown()) }).strict()
+
+export const strategySubscriptionScheduleSchema = z.object({
+  cadence_seconds: z.number().int().min(60), receive_timezone: z.string().regex(/^[A-Za-z0-9_+/:-]{1,64}$/),
+  receive_window: z.record(z.string(), z.unknown()), next_due_at: z.iso.datetime({ offset: true }).nullable(), revision: numericRevisionSchema,
+}).strict().transform((value) => ({
+  cadenceSeconds: value.cadence_seconds, receiveTimezone: value.receive_timezone, receiveWindow: value.receive_window,
+  nextDueAt: value.next_due_at, revision: value.revision,
+}))
+export const strategySubscriptionSchema = z.object({
+  id: z.string().min(1), user_id: z.string().min(1), trading_account_id: z.string().min(1), symbol: z.string().min(1).max(64),
+  analysis_strategy_id: z.string().min(1), analysis_strategy_version_id: z.string().min(1),
+  trader_strategy_id: z.string().min(1).nullable(), trader_strategy_version_id: z.string().min(1).nullable(),
+  analysis_enabled: z.boolean(), trader_enabled: z.boolean(), trade_send_enabled: z.boolean(),
+  status: z.enum(['active', 'paused', 'ended']), revision: numericRevisionSchema,
+  created_at: z.iso.datetime({ offset: true }), updated_at: z.iso.datetime({ offset: true }), schedule: strategySubscriptionScheduleSchema,
+}).strict().transform((value) => ({
+  id: value.id, userId: value.user_id, tradingAccountId: value.trading_account_id, standardSymbol: value.symbol,
+  analysisStrategyId: value.analysis_strategy_id, analysisStrategyVersionId: value.analysis_strategy_version_id,
+  traderStrategyId: value.trader_strategy_id, traderStrategyVersionId: value.trader_strategy_version_id,
+  analysisEnabled: value.analysis_enabled, traderEnabled: value.trader_enabled, tradeSendEnabled: value.trade_send_enabled,
+  status: value.status, revision: value.revision, createdAt: value.created_at, updatedAt: value.updated_at, schedule: value.schedule,
+}))
+export const strategySubscriptionResponseSchema = z.object({ data: strategySubscriptionSchema, meta: responseMetaSchema })
+export const strategySubscriptionsResponseSchema = z.object({ data: z.object({ items: z.array(strategySubscriptionSchema) }), meta: responseMetaSchema })
+export const strategySubscriptionCreateBodySchema = z.object({
+  trading_account_id: z.string().min(1).max(191), symbol: z.string().trim().min(1).max(64), analysis_strategy_id: z.string().min(1).max(191),
+  trader_strategy_id: z.string().min(1).max(191).nullable().optional(), analysis_enabled: z.boolean().optional(), trader_enabled: z.boolean().optional(),
+  trade_send_enabled: z.boolean().optional(), status: z.enum(['active', 'paused']).optional(),
+}).strict()
+export const strategySubscriptionPatchBodySchema = z.object({
+  symbol: z.string().trim().min(1).max(64).optional(), analysis_strategy_id: z.string().min(1).max(191).optional(),
+  trader_strategy_id: z.string().min(1).max(191).nullable().optional(), analysis_enabled: z.boolean().optional(),
+  trader_enabled: z.boolean().optional(), trade_send_enabled: z.boolean().optional(), status: z.enum(['active', 'paused', 'ended']).optional(),
+}).strict()
+
 export const analysisRunStatusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled', 'expired'])
 export const analysisJobCreateSchema = z.object({
   strategy_id: z.string().min(1),
@@ -967,6 +1046,18 @@ export type Timeframe = z.infer<typeof timeframeSchema>
 export type TradingRealtimeEvent = z.infer<typeof tradingRealtimeEventSchema>
 export type StrategyKind = z.infer<typeof strategyKindSchema>
 export type StrategySummary = z.infer<typeof strategySummarySchema>
+export type StrategyVersion = z.infer<typeof strategyVersionSchema>
+export type StrategyDetail = z.infer<typeof strategyDetailSchema>
+export type StrategyCompileIssue = z.infer<typeof strategyCompileIssueSchema>
+export type StrategyCompileResult = z.infer<typeof strategyCompileResultSchema>
+export type StrategyCompileBody = z.infer<typeof strategyCompileBodySchema>
+export type StrategyCreateBody = z.infer<typeof strategyCreateBodySchema>
+export type StrategyMetadataPatchBody = z.infer<typeof strategyMetadataPatchBodySchema>
+export type StrategyVersionCreateBody = z.infer<typeof strategyVersionCreateBodySchema>
+export type StrategySubscriptionSchedule = z.infer<typeof strategySubscriptionScheduleSchema>
+export type StrategySubscription = z.infer<typeof strategySubscriptionSchema>
+export type StrategySubscriptionCreateBody = z.infer<typeof strategySubscriptionCreateBodySchema>
+export type StrategySubscriptionPatchBody = z.infer<typeof strategySubscriptionPatchBodySchema>
 export type AnalysisJobCreate = z.infer<typeof analysisJobCreateSchema>
 export type AnalysisJob = z.infer<typeof analysisJobSchema>
 export type MarketAnalysisSummary = z.infer<typeof marketAnalysisSummarySchema>

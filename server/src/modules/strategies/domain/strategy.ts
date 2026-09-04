@@ -1,6 +1,8 @@
 export type StrategyKind = 'analysis' | 'trader'
 export type StrategyScope = 'platform' | 'user'
 export type StrategyStatus = 'draft' | 'active' | 'retired'
+export type StrategySubscriptionStatus = 'active' | 'paused' | 'ended'
+export type StrategyIssueLevel = 'error' | 'warning'
 
 export interface StrategySummary {
   id: string
@@ -26,8 +28,134 @@ export interface StrategyVersion {
   outputContractVersion: string
 }
 
+export interface StrategyVersionDetail extends StrategyVersion {
+  createdByUserId: number
+  createdAt: string
+}
+
+export interface StrategyDetail {
+  summary: StrategySummary
+  versions: StrategyVersionDetail[]
+}
+
+export interface StrategyCompileIssue {
+  level: StrategyIssueLevel
+  code: string
+  message: string
+  path: string | null
+}
+
+export interface StrategyCompileResult {
+  valid: boolean
+  kind: StrategyKind
+  promptHash: string
+  normalizedConfig: Record<string, unknown>
+  inputContractVersion: string
+  outputContractVersion: string
+  issues: StrategyCompileIssue[]
+}
+
+export interface StrategySubscriptionSchedule {
+  cadenceSeconds: number
+  receiveTimezone: string
+  receiveWindow: Record<string, unknown>
+  nextDueAt: string | null
+  revision: number
+}
+
+export interface StrategySubscription {
+  id: string
+  userId: number
+  tradingAccountId: string
+  standardSymbol: string
+  analysisStrategyId: string
+  analysisStrategyVersionId: string
+  traderStrategyId: string | null
+  traderStrategyVersionId: string | null
+  analysisEnabled: boolean
+  traderEnabled: boolean
+  tradeSendEnabled: boolean
+  status: StrategySubscriptionStatus
+  revision: number
+  createdAt: string
+  updatedAt: string
+  schedule: StrategySubscriptionSchedule
+}
+
+export interface CreateStrategyInput {
+  userId: number
+  kind: StrategyKind
+  name: string
+  description: string
+  promptText: string
+  config: Record<string, unknown>
+}
+
+export interface UpdateStrategyMetadataInput {
+  userId: number
+  strategyId: string
+  expectedRevision: number
+  name: string
+  description: string
+}
+
+export interface CreateStrategyVersionInput {
+  userId: number
+  strategyId: string
+  expectedRevision: number
+  promptText: string
+  config: Record<string, unknown>
+  compiled: StrategyCompileResult
+}
+
+export interface PublishStrategyVersionInput {
+  userId: number
+  strategyId: string
+  versionId: string
+  expectedRevision: number
+}
+
+export interface RetireStrategyInput {
+  userId: number
+  strategyId: string
+  expectedRevision: number
+}
+
+export interface CreateStrategySubscriptionInput {
+  userId: number
+  tradingAccountId: string
+  standardSymbol: string
+  analysisStrategyId: string
+  traderStrategyId: string | null
+  analysisEnabled: boolean
+  traderEnabled: boolean
+  tradeSendEnabled: boolean
+  status: StrategySubscriptionStatus
+  nextDueAt: string | null
+}
+
+export interface UpdateStrategySubscriptionInput {
+  userId: number
+  subscriptionId: string
+  expectedRevision: number
+  standardSymbol?: string
+  analysisStrategyId?: string
+  analysisStrategyVersionId?: string
+  traderStrategyId?: string | null
+  traderStrategyVersionId?: string | null
+  analysisEnabled?: boolean
+  traderEnabled?: boolean
+  tradeSendEnabled?: boolean
+  status?: StrategySubscriptionStatus
+  nextDueAt: string | null
+}
+
 export class StrategyAccessError extends Error {
-  constructor(public readonly code: string, public readonly status: number) {
+  constructor(
+    public readonly code: string,
+    public readonly status: number,
+    public readonly errors: StrategyCompileIssue[] = [],
+  ) {
     super(code)
   }
 }

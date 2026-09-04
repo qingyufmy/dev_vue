@@ -3,6 +3,9 @@ import {
   marketAnalysisDetailResponseSchema, marketAnalysisListResponseSchema, marketCandlesResponseSchema,
   marketQuoteResponseSchema, observerChannelsResponseSchema, operationResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema,
   executionCommandContextResponseSchema, executionDistributionDetailResponseSchema, executionDistributionPreviewResponseSchema,
+  strategyCompileBodySchema, strategyCompileResponseSchema, strategyCreateBodySchema, strategyDetailResponseSchema,
+  strategyMetadataPatchBodySchema, strategySubscriptionCreateBodySchema, strategySubscriptionPatchBodySchema,
+  strategySubscriptionResponseSchema, strategySubscriptionsResponseSchema, strategyVersionCreateBodySchema,
   strategiesResponseSchema, terminalProfilesResponseSchema, tradingAccountsResponseSchema, tradingContextResponseSchema,
   traderDecisionDetailResponseSchema, traderDecisionListResponseSchema, tradingWorkspaceResponseSchema,
   manualRiskReleaseCreatedResponseSchema, manualRiskReleaseResponseSchema, riskDecisionDetailResponseSchema,
@@ -11,7 +14,8 @@ import {
 } from '@aurum/contracts'
 import type {
   AnalysisJobCreate, ApiProblem, AuthLoginRequest, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution,
-  RiskManualReleaseBody, RiskPolicyPatchBody, StrategyKind,
+  RiskManualReleaseBody, RiskPolicyPatchBody, StrategyCompileBody, StrategyCreateBody, StrategyKind, StrategyMetadataPatchBody,
+  StrategySubscriptionCreateBody, StrategySubscriptionPatchBody, StrategyVersionCreateBody,
 } from '@aurum/contracts'
 import { z, type ZodType } from 'zod'
 
@@ -98,6 +102,57 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getMarketQuote: (accountId: string, symbol: string, observerChannelId?: string | null) => send(marketQuoteResponseSchema, `/api/v4/market/quotes/${encodeURIComponent(symbol)}?account_id=${encodeURIComponent(accountId)}${observerQuery(observerChannelId, '&')}`),
     getMarketCandles: (accountId: string, symbol: string, timeframe: string, limit = 200, observerChannelId?: string | null) => send(marketCandlesResponseSchema, `/api/v4/market/candles?account_id=${encodeURIComponent(accountId)}&symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&page_size=${limit}${observerQuery(observerChannelId, '&')}`),
     listStrategies: (kind?: StrategyKind) => send(strategiesResponseSchema, `/api/v4/strategies${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
+    getStrategy: (strategyId: string) => send(strategyDetailResponseSchema, `/api/v4/strategies/${encodeURIComponent(strategyId)}`),
+    compileStrategy: (csrfToken: string, body: StrategyCompileBody) => {
+      const payload = strategyCompileBodySchema.parse(body)
+      return send(strategyCompileResponseSchema, '/api/v4/strategies/compile', {
+        method: 'POST', csrfToken, body: JSON.stringify(payload),
+      })
+    },
+    createStrategy: (csrfToken: string, body: StrategyCreateBody) => {
+      const payload = strategyCreateBodySchema.parse(body)
+      return send(strategyDetailResponseSchema, '/api/v4/strategies', {
+        method: 'POST', csrfToken, body: JSON.stringify(payload),
+      })
+    },
+    updateStrategyMetadata: (csrfToken: string, strategyId: string, body: StrategyMetadataPatchBody, expectedRevision: number) => {
+      const payload = strategyMetadataPatchBodySchema.parse(body)
+      return send(strategyDetailResponseSchema, `/api/v4/strategies/${encodeURIComponent(strategyId)}`, {
+        method: 'PATCH', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload),
+      })
+    },
+    createStrategyVersion: (csrfToken: string, strategyId: string, body: StrategyVersionCreateBody, expectedRevision: number) => {
+      const payload = strategyVersionCreateBodySchema.parse(body)
+      return send(strategyDetailResponseSchema, `/api/v4/strategies/${encodeURIComponent(strategyId)}/versions`, {
+        method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload),
+      })
+    },
+    publishStrategyVersion: (csrfToken: string, strategyId: string, versionId: string, expectedRevision: number) => send(
+      strategyDetailResponseSchema,
+      `/api/v4/strategies/${encodeURIComponent(strategyId)}/versions/${encodeURIComponent(versionId)}/publish`,
+      { method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` } },
+    ),
+    retireStrategy: (csrfToken: string, strategyId: string, expectedRevision: number) => send(
+      strategyDetailResponseSchema,
+      `/api/v4/strategies/${encodeURIComponent(strategyId)}/retire`,
+      { method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` } },
+    ),
+    listStrategySubscriptions: (tradingAccountId?: string | null) => send(
+      strategySubscriptionsResponseSchema,
+      tradingAccountId ? `/api/v4/strategy-subscriptions?account_id=${encodeURIComponent(tradingAccountId)}` : '/api/v4/strategy-subscriptions',
+    ),
+    createStrategySubscription: (csrfToken: string, body: StrategySubscriptionCreateBody) => {
+      const payload = strategySubscriptionCreateBodySchema.parse(body)
+      return send(strategySubscriptionResponseSchema, '/api/v4/strategy-subscriptions', {
+        method: 'POST', csrfToken, body: JSON.stringify(payload),
+      })
+    },
+    updateStrategySubscription: (csrfToken: string, subscriptionId: string, body: StrategySubscriptionPatchBody, expectedRevision: number) => {
+      const payload = strategySubscriptionPatchBodySchema.parse(body)
+      return send(strategySubscriptionResponseSchema, `/api/v4/strategy-subscriptions/${encodeURIComponent(subscriptionId)}`, {
+        method: 'PATCH', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload),
+      })
+    },
     listMarketAnalyses: (pageSize = 50) => send(marketAnalysisListResponseSchema, `/api/v4/market-analyses?page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
     getMarketAnalysis: (analysisId: string) => send(marketAnalysisDetailResponseSchema, `/api/v4/market-analyses/${encodeURIComponent(analysisId)}`),
     getRiskPolicy: (accountId: string) => send(riskPolicyResponseSchema, `/api/v4/risk-accounts/${encodeURIComponent(accountId)}/policy`),
