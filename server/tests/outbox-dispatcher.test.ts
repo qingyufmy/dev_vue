@@ -3,7 +3,7 @@ import { OutboxDispatcher } from '../src/outbox/application/outbox-dispatcher.js
 import type { ClaimedOutboxEvent } from '../src/outbox/application/outbox-ports.js'
 
 function event(attempts = 1): ClaimedOutboxEvent {
-  return { id: '1', eventId: 'event-12345678', eventType: 'execution.intent.prepared', payload: { intent_id: 'intent-12345678' }, attempts }
+  return { id: '1', eventId: 'event-12345678', eventType: 'execution.intent.prepared', occurredAt: '2026-09-04T00:00:00.000Z', payload: { intent_id: 'intent-12345678' }, attempts }
 }
 
 describe('OutboxDispatcher', () => {

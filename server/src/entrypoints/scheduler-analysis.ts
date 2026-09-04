@@ -5,6 +5,7 @@ import {
 import {
   AnalysisScheduler, InferenceService, ModelTaskRecovery, MysqlAnalysisScheduleRepository,
   MysqlInferenceRepository, MysqlModelTaskRecoveryRepository,
+  MysqlModelUsageLedger,
 } from '../modules/inference/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
 
@@ -22,14 +23,23 @@ async function main() {
     new InferenceService(new MysqlInferenceRepository(pool), strategies),
   )
   const recovery = new ModelTaskRecovery(new MysqlModelTaskRecoveryRepository(pool))
+  const usage = new MysqlModelUsageLedger(pool)
   const loop = new AsyncPollLoop(async () => {
     try {
-      await recovery.expireOverdue(new Date(), config.modelRecoveryBatchSize)
-      const result = await scheduler.tick(new Date(), config.analysisScheduleBatchSize)
+      const now = new Date()
+      await recovery.expireOverdue(now, config.modelRecoveryBatchSize)
+      const recoveredUsage = await usage.recoverAbandoned(
+        new Date(now.getTime() - config.modelUsageReservationMaxAgeMs), config.modelRecoveryBatchSize,
+      )
+      if (recoveredUsage > 0) {
+        health.workFailed('model_usage_reservations_recovered')
+        console.error('[scheduler-analysis] abandoned model usage recovered', recoveredUsage)
+      }
+      const result = await scheduler.tick(now, config.analysisScheduleBatchSize)
       if (result.failures.length > 0) {
         health.workFailed('analysis_schedule_partial_failure')
         console.error('[scheduler-analysis] schedules failed', result.failures.length)
-      } else health.workSucceeded()
+      } else if (recoveredUsage === 0) health.workSucceeded()
     } catch (error) {
       health.workFailed(publicError(error, 'analysis_scheduler_failed'))
       console.error('[scheduler-analysis] tick failed', error instanceof Error ? error.message : 'unknown_error')

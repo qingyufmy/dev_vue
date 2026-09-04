@@ -312,6 +312,25 @@ export const inferenceRealtimeEventSchema = z.object({
   resource: z.object({ kind: z.string(), id: z.string() }), revision: z.string(), data: z.unknown(), correlation_id: z.string().nullable(),
 })
 
+export const riskRealtimeEventSchema = z.object({
+  v: z.literal(4), event_id: z.string(),
+  type: z.enum(['risk.policy.changed', 'risk.summary.changed', 'risk.decision.created', 'risk.manual_release.changed']),
+  occurred_at: z.iso.datetime({ offset: true }), sequence: z.number().int().positive(),
+  scope: z.object({ user_id: z.string(), trading_account_id: z.string(), terminal_instance_id: z.string().nullable(), observer_channel_id: z.string().nullable() }),
+  resource: z.object({ kind: z.string(), id: z.string() }), revision: z.string(), data: z.unknown(), correlation_id: z.string().nullable(),
+})
+
+export const operationRealtimeEventSchema = z.object({
+  v: z.literal(4), event_id: z.string(), type: z.literal('operation.changed'),
+  occurred_at: z.iso.datetime({ offset: true }), sequence: z.number().int().positive(),
+  scope: z.object({ user_id: z.string(), trading_account_id: z.string(), terminal_instance_id: z.string().nullable(), observer_channel_id: z.string().nullable() }),
+  resource: z.object({ kind: z.literal('operation'), id: z.string() }), revision: z.string(), data: z.unknown(), correlation_id: z.string().nullable(),
+})
+
+export const browserRealtimeEventSchema = z.union([
+  tradingRealtimeEventSchema, inferenceRealtimeEventSchema, riskRealtimeEventSchema, operationRealtimeEventSchema,
+])
+
 export type ApiProblem = z.infer<typeof apiProblemSchema>
 export type AppSurface = z.infer<typeof appSurfaceSchema>
 export type AuthLoginRequest = z.infer<typeof authLoginRequestSchema>
@@ -340,3 +359,6 @@ export type TraderRun = z.infer<typeof traderRunSchema>
 export type TraderDecisionSummary = z.infer<typeof traderDecisionSummarySchema>
 export type TraderDecisionDetail = z.infer<typeof traderDecisionDetailSchema>
 export type InferenceRealtimeEvent = z.infer<typeof inferenceRealtimeEventSchema>
+export type RiskRealtimeEvent = z.infer<typeof riskRealtimeEventSchema>
+export type OperationRealtimeEvent = z.infer<typeof operationRealtimeEventSchema>
+export type BrowserRealtimeEvent = z.infer<typeof browserRealtimeEventSchema>

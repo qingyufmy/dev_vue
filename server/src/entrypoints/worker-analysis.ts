@@ -28,18 +28,24 @@ async function main() {
     maxAttempts: config.modelMaxAttempts,
     defaultTimeoutMs: config.modelDefaultTimeoutMs,
   })
+  let usageSettlementFailureRevision = 0
   const processor = new AnalysisWorker(
     repository,
     new InferenceService(repository, strategies),
     strategies,
     new AnalysisContextBuilder(new TradingAnalysisMarketSource(trading), new MysqlMacroSnapshotReader(pool)),
-    new MysqlAnalysisModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool)),
+    new MysqlAnalysisModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
+      usageSettlementFailureRevision += 1
+      health.workFailed('model_usage_settlement_failed')
+      console.error('[worker-analysis] model usage settlement failed')
+    }),
     `analysis:${process.pid}`,
   )
   const worker = new Worker<AnalysisRunJob>(ANALYSIS_QUEUE, async job => {
     if (job.name !== 'analysis.run' || !job.data.analysisId) throw new Error('analysis_job_invalid')
+    const settlementRevision = usageSettlementFailureRevision
     const result = await processor.process(job.data.analysisId)
-    health.workSucceeded()
+    if (settlementRevision === usageSettlementFailureRevision) health.workSucceeded()
     return result
   }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: config.analysisConcurrency, autorun: false })
   worker.on('failed', (_job, error) => health.workFailed(publicError(error, 'analysis_worker_failed')))

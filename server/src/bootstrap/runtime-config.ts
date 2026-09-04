@@ -38,6 +38,7 @@ export interface V4RuntimeConfig extends V4BaseRuntimeConfig {
   modelDefaultTimeoutMs: number
   modelMaxAttempts: number
   modelRecoveryBatchSize: number
+  modelUsageReservationMaxAgeMs: number
   allowPrivateModelEndpoints: boolean
 }
 
@@ -91,6 +92,7 @@ export function loadV4RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V4Run
     modelDefaultTimeoutMs: integer(env.V4_MODEL_DEFAULT_TIMEOUT_MS, 120_000, 1_000, 600_000, 'V4_MODEL_DEFAULT_TIMEOUT_MS'),
     modelMaxAttempts: integer(env.V4_MODEL_MAX_ATTEMPTS, 2, 1, 3, 'V4_MODEL_MAX_ATTEMPTS'),
     modelRecoveryBatchSize: integer(env.V4_MODEL_RECOVERY_BATCH_SIZE, 50, 1, 500, 'V4_MODEL_RECOVERY_BATCH_SIZE'),
+    modelUsageReservationMaxAgeMs: integer(env.V4_MODEL_USAGE_RESERVATION_MAX_AGE_MS, 1_800_000, 60_000, 86_400_000, 'V4_MODEL_USAGE_RESERVATION_MAX_AGE_MS'),
     allowPrivateModelEndpoints: booleanValue(env.AI_ALLOW_PRIVATE_MODEL_ENDPOINTS, false, 'AI_ALLOW_PRIVATE_MODEL_ENDPOINTS'),
   }
 }

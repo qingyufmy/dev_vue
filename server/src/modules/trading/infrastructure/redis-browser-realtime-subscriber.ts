@@ -1,10 +1,10 @@
 import type { Redis } from 'ioredis'
-import type { TradingRealtimeEvent } from '../application/trading-ports.js'
+import type { BrowserRealtimeEvent, BrowserRealtimeEventType, BrowserRealtimeResource } from '../application/trading-ports.js'
 import type { BrowserRealtimeHub } from '../transport/realtime/browser-realtime-hub.js'
 
 export const BROWSER_REALTIME_EVENT_CHANNEL = 'aurum:v4:browser-realtime:events'
 const MAX_EVENT_BYTES = 64 * 1024
-const EVENT_RESOURCES = new Map<TradingRealtimeEvent['type'], TradingRealtimeEvent['resource']>([
+const EVENT_RESOURCES = new Map<BrowserRealtimeEventType, BrowserRealtimeResource>([
   ['runtime.bridge.changed', 'runtime.bridge'],
   ['account.metrics.changed', 'account.metrics'],
   ['market.quote.updated', 'market.quote'],
@@ -12,7 +12,17 @@ const EVENT_RESOURCES = new Map<TradingRealtimeEvent['type'], TradingRealtimeEve
   ['market.candle.closed', 'market.candle'],
   ['positions.changed', 'positions'],
   ['pending_orders.changed', 'pending_orders'],
+  ['analysis.job.changed', 'analysis.job'],
+  ['market_analysis.created', 'market_analysis'],
+  ['trader.job.changed', 'trader.job'],
+  ['trade_decision.created', 'trade_decision'],
+  ['risk.policy.changed', 'risk.policy'],
+  ['risk.summary.changed', 'risk.summary'],
+  ['risk.decision.created', 'risk.decision'],
+  ['risk.manual_release.changed', 'risk.manual_release'],
+  ['operation.changed', 'operation'],
 ])
+const USER_SCOPED_TYPES = new Set<BrowserRealtimeEventType>(['analysis.job.changed', 'market_analysis.created'])
 
 export class RedisBrowserRealtimeSubscriber {
   private started = false
@@ -53,22 +63,23 @@ export class RedisBrowserRealtimeSubscriber {
   }
 }
 
-export function parseBrowserRealtimeEvent(raw: string): TradingRealtimeEvent | null {
+export function parseBrowserRealtimeEvent(raw: string): BrowserRealtimeEvent | null {
   if (Buffer.byteLength(raw, 'utf8') > MAX_EVENT_BYTES) return null
   let value: unknown
   try { value = JSON.parse(raw) }
   catch { return null }
   if (!record(value)) return null
-  const type = typeof value.type === 'string' ? value.type as TradingRealtimeEvent['type'] : null
-  const resource = typeof value.resource === 'string' ? value.resource as TradingRealtimeEvent['resource'] : null
+  const type = typeof value.type === 'string' ? value.type as BrowserRealtimeEventType : null
+  const resource = typeof value.resource === 'string' ? value.resource as BrowserRealtimeResource : null
   if (!type || !resource || EVENT_RESOURCES.get(type) !== resource) return null
   if (!bounded(value.eventId, 1, 191) || !isoUtc(value.occurredAt)
     || !Number.isSafeInteger(value.userId) || Number(value.userId) <= 0
-    || !bounded(value.accountId, 1, 191)
+    || !(value.accountId === null || bounded(value.accountId, 1, 191))
     || !(value.terminalInstanceId === null || bounded(value.terminalInstanceId, 1, 191))
     || !bounded(value.resourceId, 1, 191)
     || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0
     || !Object.hasOwn(value, 'data')) return null
+  if (USER_SCOPED_TYPES.has(type) !== (value.accountId === null)) return null
   return {
     eventId: value.eventId,
     type,

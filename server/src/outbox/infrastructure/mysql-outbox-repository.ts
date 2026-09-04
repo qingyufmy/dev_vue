@@ -5,11 +5,12 @@ interface OutboxRow extends RowDataPacket {
   id: string | number
   event_id: string
   event_type: ClaimedOutboxEvent['eventType']
+  created_at_utc: Date
   payload_json: string | Record<string, unknown>
   attempts: number
 }
 
-const supported = "'analysis.requested','trader.requested','trade_decision.created','risk.decision.created','execution.intent.prepared','bridge.command.queued'"
+const supported = "'analysis.requested','analysis.running','analysis.failed','market_analysis.created','trader.requested','trader.running','trader.failed','trade_decision.created','risk.policy.changed','risk.summary.changed','risk.decision.created','risk.manual_release.changed','operation.changed','execution.intent.prepared','bridge.command.queued'"
 
 export class MysqlOutboxRepository implements OutboxRepository {
   constructor(private readonly pool: Pool) {}
@@ -18,7 +19,7 @@ export class MysqlOutboxRepository implements OutboxRepository {
     return transaction(this.pool, async connection => {
       await connection.execute(`UPDATE outbox_events SET status='pending',lease_owner=NULL,lease_expires_at_utc=NULL
         WHERE status='dispatching' AND lease_expires_at_utc<=? AND event_type IN (${supported})`, [now])
-      const [rows] = await connection.execute<OutboxRow[]>(`SELECT id,event_id,event_type,payload_json,attempts
+      const [rows] = await connection.execute<OutboxRow[]>(`SELECT id,event_id,event_type,payload_json,attempts,created_at_utc
         FROM outbox_events WHERE status='pending' AND available_at_utc<=? AND event_type IN (${supported})
         ORDER BY id LIMIT ${limit} FOR UPDATE SKIP LOCKED`, [now])
       if (rows.length === 0) return []
@@ -29,7 +30,7 @@ export class MysqlOutboxRepository implements OutboxRepository {
         owner, now, leaseSeconds, ...ids,
       ])
       return rows.map(row => ({
-        id: String(row.id), eventId: row.event_id, eventType: row.event_type,
+        id: String(row.id), eventId: row.event_id, eventType: row.event_type, occurredAt: new Date(row.created_at_utc).toISOString(),
         payload: parsePayload(row.payload_json), attempts: Number(row.attempts) + 1,
       }))
     })

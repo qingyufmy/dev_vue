@@ -89,15 +89,33 @@ export interface BrowserRealtimePublisher {
   publish(event: TradingRealtimeEvent): void
 }
 
-export interface TradingRealtimeEvent {
+export type BrowserRealtimeEventType =
+  | 'runtime.bridge.changed' | 'account.metrics.changed' | 'market.quote.updated' | 'market.candle.updated'
+  | 'market.candle.closed' | 'positions.changed' | 'pending_orders.changed'
+  | 'analysis.job.changed' | 'market_analysis.created' | 'trader.job.changed' | 'trade_decision.created'
+  | 'risk.policy.changed' | 'risk.summary.changed' | 'risk.decision.created' | 'risk.manual_release.changed'
+  | 'operation.changed'
+
+export type BrowserRealtimeResource = RealtimeResource
+  | 'analysis.job' | 'market_analysis' | 'trader.job' | 'trade_decision'
+  | 'risk.policy' | 'risk.summary' | 'risk.decision' | 'risk.manual_release' | 'operation'
+
+export interface BrowserRealtimeEvent {
   eventId: string
-  type: 'runtime.bridge.changed' | 'account.metrics.changed' | 'market.quote.updated' | 'market.candle.updated' | 'market.candle.closed' | 'positions.changed' | 'pending_orders.changed'
+  type: BrowserRealtimeEventType
   occurredAt: string
   userId: number
-  accountId: string
+  accountId: string | null
   terminalInstanceId: string | null
-  resource: RealtimeResource
+  resource: BrowserRealtimeResource
   resourceId: string
   revision: number
   data: unknown
+}
+
+export type TradingRealtimeEvent = BrowserRealtimeEvent & {
+  type: 'runtime.bridge.changed' | 'account.metrics.changed' | 'market.quote.updated' | 'market.candle.updated'
+    | 'market.candle.closed' | 'positions.changed' | 'pending_orders.changed'
+  accountId: string
+  resource: RealtimeResource
 }

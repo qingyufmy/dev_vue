@@ -304,6 +304,15 @@
 
 同一目标重复订阅必须幂等。作用域切换时先订阅新目标并得到 ready，再释放旧目标，避免界面空窗；旧作用域事件即使延迟到达也必须被 scope 检查丢弃。
 
+AI、风控与执行资源使用以下受控目标，不能把任意 Redis 频道或用户 ID 传给服务端：
+
+- 用户级行情分析：`kind=signals`，账户与观摩频道为空，`resource_id=analysis_jobs|market_analyses|all`；分析记录始终按系统用户归类，不随 MT4/MT5 账户切换。
+- 账户级交易员：`kind=signals`，必须提供 `trading_account_id`，`resource_id=trader_jobs|trade_decisions`。
+- 账户级风控：`kind=risk`，必须提供 `trading_account_id`，`resource_id=policy|summary|decisions|manual_release|all`。
+- 账户级异步操作：`kind=operations`，必须提供 `trading_account_id`，`resource_id=all`。
+
+上述列表型目标的 `after_revision` 必须为 `null`：事件中的 revision 属于单个聚合根，而不是整张列表，不能伪造一个可比较的列表 revision。浏览器首次连接和每次重连先通过 HTTP 获取列表快照，再用 WebSocket 事件做小粒度失效通知；单个聚合收到旧 revision 时仍须丢弃。账户、报价、K 线、持仓和挂单继续携带可与 HTTP 快照精确比较的 `after_revision`。
+
 ### 7.4 事件目录
 
 | 事件 | 数据内容 | 恢复源 |
@@ -322,8 +331,10 @@
 | `market_analysis.created` | 最新市场分析摘要及 `opportunity`，不含完整推理 | market analyses HTTP |
 | `trader.job.changed` | 单个交易账户的交易员任务状态及 `task_mode`（entry/manage/both） | trade decisions HTTP |
 | `trade_decision.created` | 单个交易账户的动作建议摘要，不含完整正文 | trade decisions HTTP |
-| `risk.status.changed` | kill switch、规则 revision、当前状态 | risk snapshot HTTP |
-| `risk.alert.created` | 新风险告警摘要 | risk decisions HTTP |
+| `risk.policy.changed` | 当前规则版本和 revision，不含完整规则 | risk policy HTTP |
+| `risk.summary.changed` | 风险摘要完整性和 revision，不含完整快照 | risk summary HTTP |
+| `risk.decision.created` | 风控通过/拒绝与公开错误码，不含规则明细 | risk decisions HTTP |
+| `risk.manual_release.changed` | 手动放开状态、失效原因和 revision | manual release HTTP |
 | `operation.changed` | 异步命令或任务状态、错误摘要 | operation HTTP |
 | `notification.created` | 新通知摘要和未读数 | notifications HTTP |
 | `payment.status.changed` | 活跃订单到账、确认、完成、异常、过期 | payment HTTP |
@@ -332,6 +343,7 @@
 ### 7.5 断线、恢复与顺序
 
 - 不承诺跨连接事件重放，不建设新的永久事件总线。
+- AI、风控和 operation 事件由业务事务写入 Outbox；Dispatcher 必须等任务队列投递与 Redis 实时发布都成功后才标记该 Outbox 行完成。Redis 失败会重试同一 `event_id`，客户端按事件 ID 与聚合 revision 去重。
 - 客户端发现 sequence 缺口、收到 `resync_required`、网络重连、账户切换、观摩频道切换或权限变化时，只通过 HTTP 重拉受影响资源。
 - HTTP 快照必须在返回前读取统一 revision；订阅时携带该 revision，服务端只有在能证明没有缺口时才发 ready。
 - 资源事件必须按 revision 幂等合并。旧 revision、旧账户和旧终端事件必须丢弃。

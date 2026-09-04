@@ -33,8 +33,10 @@ export class BullMqOutboxTaskPublisher implements OutboxTaskPublisher {
       await this.queues.execution.add('execution.intent.prepare', { intentId }, { jobId: event.eventId })
       return
     }
-    const commandId = requiredId(event.payload.command_id, 'outbox_command_id_invalid')
-    await this.queues.bridgeDispatch.add('bridge.command.dispatch', { commandId }, { jobId: event.eventId })
+    if (event.eventType === 'bridge.command.queued') {
+      const commandId = requiredId(event.payload.command_id, 'outbox_command_id_invalid')
+      await this.queues.bridgeDispatch.add('bridge.command.dispatch', { commandId }, { jobId: event.eventId })
+    }
   }
 }
 

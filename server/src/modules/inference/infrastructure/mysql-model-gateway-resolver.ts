@@ -4,7 +4,7 @@ import type { AnalysisModelGatewayResolver } from '../application/analysis-worke
 import type { TraderModelGatewayResolver } from '../application/trader-worker.js'
 import { InferenceError } from '../domain/inference.js'
 import {
-  HttpJsonAnalysisModelGateway, HttpJsonTraderModelGateway, type RuntimeModelProfile,
+  HttpJsonAnalysisModelGateway, HttpJsonTraderModelGateway, type ModelUsageSettlementErrorHandler, type RuntimeModelProfile,
 } from './http-json-model-gateway.js'
 import type { ModelUsageLedger, RuntimeModelUsageKind } from './mysql-model-usage-ledger.js'
 
@@ -80,16 +80,31 @@ export class MysqlRuntimeModelProfileCatalog {
 }
 
 export class MysqlAnalysisModelGatewayResolver implements AnalysisModelGatewayResolver {
-  constructor(private readonly profiles: MysqlRuntimeModelProfileCatalog, private readonly usage: ModelUsageLedger) {}
+  constructor(
+    private readonly profiles: MysqlRuntimeModelProfileCatalog,
+    private readonly usage: ModelUsageLedger,
+    private readonly onUsageSettlementError?: ModelUsageSettlementErrorHandler,
+  ) {}
   async resolve(input: { userId: number; strategyId: string; strategyVersionId: string; trigger: 'manual' | 'scheduled' | 'event' }) {
-    return new HttpJsonAnalysisModelGateway(await this.profiles.resolve({ ...input, usage: input.trigger === 'manual' ? 'manual' : 'auto' }), this.usage)
+    return new HttpJsonAnalysisModelGateway(
+      await this.profiles.resolve({ ...input, usage: input.trigger === 'manual' ? 'manual' : 'auto' }),
+      this.usage,
+      fetch,
+      this.onUsageSettlementError,
+    )
   }
 }
 
 export class MysqlTraderModelGatewayResolver implements TraderModelGatewayResolver {
-  constructor(private readonly profiles: MysqlRuntimeModelProfileCatalog, private readonly usage: ModelUsageLedger) {}
+  constructor(
+    private readonly profiles: MysqlRuntimeModelProfileCatalog,
+    private readonly usage: ModelUsageLedger,
+    private readonly onUsageSettlementError?: ModelUsageSettlementErrorHandler,
+  ) {}
   async resolve(input: { userId: number; strategyId: string; strategyVersionId: string }) {
-    return new HttpJsonTraderModelGateway(await this.profiles.resolve({ ...input, usage: 'auto' }), this.usage)
+    return new HttpJsonTraderModelGateway(
+      await this.profiles.resolve({ ...input, usage: 'auto' }), this.usage, fetch, this.onUsageSettlementError,
+    )
   }
 }
 

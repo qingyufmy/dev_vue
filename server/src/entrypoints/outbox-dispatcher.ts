@@ -1,8 +1,11 @@
 import {
-  assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, createMysqlPool,
+  assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool,
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
-import { BullMqOutboxTaskPublisher, MysqlOutboxRepository, OutboxDispatcher } from '../outbox/index.js'
+import {
+  BullMqOutboxTaskPublisher, CompositeOutboxPublisher, MysqlOutboxRepository,
+  OutboxDispatcher, RedisOutboxRealtimePublisher,
+} from '../outbox/index.js'
 import { RuntimeTaskQueues } from '../queue/task-queues.js'
 
 loadServerEnvironment()
@@ -12,13 +15,18 @@ async function main() {
   assertV4RuntimeEnabled(config)
   const health = new RoleHealth('outbox-dispatcher')
   const pool = createMysqlPool(config.mysql)
+  const realtimeRedis = createCacheRedis(config.cacheRedis)
   await pool.query('SELECT 1')
+  await connectCacheRedis(realtimeRedis)
   const queues = new RuntimeTaskQueues(config.queueRedis, config.queuePrefix)
   await Promise.all([
     queues.execution.waitUntilReady(), queues.bridgeDispatch.waitUntilReady(), queues.analysis.waitUntilReady(),
     queues.trader.waitUntilReady(), queues.risk.waitUntilReady(),
   ])
-  const dispatcher = new OutboxDispatcher(new MysqlOutboxRepository(pool), new BullMqOutboxTaskPublisher(queues))
+  const dispatcher = new OutboxDispatcher(new MysqlOutboxRepository(pool), new CompositeOutboxPublisher([
+    new BullMqOutboxTaskPublisher(queues),
+    new RedisOutboxRealtimePublisher(pool, realtimeRedis),
+  ]))
   const loop = new AsyncPollLoop(async () => {
     try {
       await dispatcher.runBatch(50)
@@ -35,7 +43,7 @@ async function main() {
     dependencyReady: async () => {
       try {
         await Promise.all([
-          pool.query('SELECT 1'), queues.execution.getJobCounts(), queues.bridgeDispatch.getJobCounts(),
+          pool.query('SELECT 1'), realtimeRedis.ping(), queues.execution.getJobCounts(), queues.bridgeDispatch.getJobCounts(),
           queues.analysis.getJobCounts(), queues.trader.getJobCounts(), queues.risk.getJobCounts(),
         ])
         return true
@@ -50,7 +58,7 @@ async function main() {
     health.setReady(false)
     await loop.stop()
     await closeHttpServer(healthServer)
-    await Promise.allSettled([queues.close(), pool.end()])
+    await Promise.allSettled([queues.close(), realtimeRedis.quit(), pool.end()])
   })
 }
 

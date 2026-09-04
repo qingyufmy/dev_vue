@@ -63,7 +63,7 @@ export class MysqlModelUsageLedger implements ModelUsageLedger {
 
   async finish(reservationId: string, completion: ModelUsageCompletion) {
     const tokens = usageTokens(completion.usage)
-    await this.pool.execute(`UPDATE ai_model_usage_logs SET
+    const [result] = await this.pool.execute<ResultSetHeader>(`UPDATE ai_model_usage_logs SET
       token_count=?,input_tokens=?,output_tokens=?,reasoning_tokens=?,cached_tokens=?,request_status=?,error_code=?,
       provider_request_id=?,accounting_status=?,request_bytes=?,response_bytes=?,duration_ms=?
       WHERE id=? AND request_status='reserved'`, [
@@ -72,6 +72,16 @@ export class MysqlModelUsageLedger implements ModelUsageLedger {
       completion.usage ? 'settled' : 'usage_unknown', nonNegative(completion.requestBytes),
       nonNegative(completion.responseBytes), nonNegative(completion.durationMs), reservationId,
     ])
+    if (result.affectedRows !== 1) throw new Error('model_usage_reservation_not_pending')
+  }
+
+  async recoverAbandoned(before: Date, limit: number) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error('model_usage_recovery_limit_invalid')
+    const [result] = await this.pool.execute<ResultSetHeader>(`UPDATE ai_model_usage_logs SET
+      request_status='error',error_code='model_usage_reservation_abandoned',accounting_status='usage_unknown',
+      duration_ms=GREATEST(0,FLOOR(TIMESTAMPDIFF(MICROSECOND,created_at,UTC_TIMESTAMP(3))/1000))
+      WHERE request_status='reserved' AND created_at<? ORDER BY id LIMIT ${limit}`, [before])
+    return result.affectedRows
   }
 }
 

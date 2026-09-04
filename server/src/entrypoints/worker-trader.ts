@@ -27,22 +27,28 @@ async function main() {
     maxAttempts: config.modelMaxAttempts,
     defaultTimeoutMs: config.modelDefaultTimeoutMs,
   })
+  let usageSettlementFailureRevision = 0
   const processor = new TraderWorker(
     repository,
     new InferenceService(repository, strategies),
     strategies,
     new TraderContextBuilder(repository, new MysqlTradingRepository(pool), new MysqlInstrumentSnapshotReader(pool), new MysqlRiskSummaryReader(pool)),
-    new MysqlTraderModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool)),
+    new MysqlTraderModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
+      usageSettlementFailureRevision += 1
+      health.workFailed('model_usage_settlement_failed')
+      console.error('[worker-trader] model usage settlement failed')
+    }),
     `trader:${process.pid}`,
   )
   const worker = new Worker<TraderRunJob>(TRADER_QUEUE, async (job, token) => {
     if (job.name !== 'trader.run' || !job.data.traderRunId) throw new Error('trader_job_invalid')
+    const settlementRevision = usageSettlementFailureRevision
     const result = await processor.process(job.data.traderRunId)
     if (result.status === 'deferred') {
       await job.moveToDelayed(Date.now() + Math.min(Math.max(result.retryAfterMs ?? 250, 250), 30_000), token)
       throw new DelayedError()
     }
-    health.workSucceeded()
+    if (settlementRevision === usageSettlementFailureRevision) health.workSucceeded()
     return result
   }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: config.traderConcurrency, autorun: false })
   worker.on('failed', (_job, error) => health.workFailed(publicError(error, 'trader_worker_failed')))

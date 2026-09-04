@@ -163,13 +163,74 @@ describe('Stage 11 trading vertical slice', () => {
     expect(messages).toContainEqual(expect.objectContaining({ type: 'market.quote.updated' }))
   })
 
-  it('rejects one browser subscription request spanning multiple trading accounts', async () => {
-    const messages: unknown[] = []; const session = new BrowserRealtimeSession(42, new BrowserRealtimeHub(repository()), { send(value) { messages.push(value) }, close() {} })
+  it('supports one browser connection subscribing to multiple owned trading accounts', async () => {
+    const messages: unknown[] = []; const storage = repository()
+    const original = storage.findOwnedAccount.bind(storage)
+    storage.findOwnedAccount = async (userId, accountId) => accountId === '8' && userId === 42 ? { ...account, id: '8' } : original(userId, accountId)
+    const session = new BrowserRealtimeSession(42, new BrowserRealtimeHub(storage), { send(value) { messages.push(value) }, close() {} })
     await session.receive({ v: 4, type: 'subscription.subscribe', request_id: 'multi-account', targets: [
       { kind: 'account', trading_account_id: '7', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'positions', after_revision: '0' },
       { kind: 'account', trading_account_id: '8', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'positions', after_revision: '0' },
     ] })
-    expect(messages).toContainEqual(expect.objectContaining({ type: 'protocol.error', code: 'realtime_scope_invalid' }))
+    expect(messages).toContainEqual(expect.objectContaining({ type: 'subscription.ready', request_id: 'multi-account', subscriptions: expect.any(Array) }))
+  })
+
+  it('keeps analysis updates user-scoped while trader, risk and operation updates remain account-scoped', async () => {
+    const messages: unknown[] = []; const hub = new BrowserRealtimeHub(repository())
+    const session = new BrowserRealtimeSession(42, hub, { send(value) { messages.push(value) }, close() {} })
+    await session.receive({ v: 4, type: 'subscription.subscribe', request_id: 'domains', targets: [
+      { kind: 'signals', trading_account_id: null, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'all', after_revision: null },
+      { kind: 'signals', trading_account_id: '7', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'trade_decisions', after_revision: null },
+      { kind: 'risk', trading_account_id: '7', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'summary', after_revision: null },
+      { kind: 'operations', trading_account_id: '7', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'all', after_revision: null },
+    ] })
+    hub.publish({ eventId: 'analysis-evt', type: 'market_analysis.created', occurredAt: '2026-09-04T08:00:00.000Z', userId: 42, accountId: null, terminalInstanceId: null, resource: 'market_analysis', resourceId: 'analysis-1', revision: 1, data: {} })
+    hub.publish({ eventId: 'decision-evt', type: 'trade_decision.created', occurredAt: '2026-09-04T08:00:01.000Z', userId: 42, accountId: '7', terminalInstanceId: null, resource: 'trade_decision', resourceId: 'decision-1', revision: 1, data: {} })
+    hub.publish({ eventId: 'foreign-evt', type: 'market_analysis.created', occurredAt: '2026-09-04T08:00:02.000Z', userId: 99, accountId: null, terminalInstanceId: null, resource: 'market_analysis', resourceId: 'analysis-2', revision: 1, data: {} })
+    expect(messages).toContainEqual(expect.objectContaining({ event_id: 'analysis-evt', scope: expect.objectContaining({ trading_account_id: null }) }))
+    expect(messages).toContainEqual(expect.objectContaining({ event_id: 'decision-evt', scope: expect.objectContaining({ trading_account_id: '7' }) }))
+    expect(messages).not.toContainEqual(expect.objectContaining({ event_id: 'foreign-evt' }))
+  })
+
+  it('accepts the compact user-scoped signals target with omitted optional fields', async () => {
+    const messages: unknown[] = []
+    const session = new BrowserRealtimeSession(42, new BrowserRealtimeHub(repository()), {
+      send(value) { messages.push(value) }, close() {},
+    })
+    await session.receive({
+      v: 4, type: 'subscription.subscribe', request_id: 'compact-signals',
+      targets: [{ kind: 'signals', resource_id: 'all', after_revision: null }],
+    })
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'subscription.ready', request_id: 'compact-signals', subscriptions: expect.any(Array),
+    }))
+  })
+
+  it('rejects empty and oversized subscription batches before authorization work', async () => {
+    for (const targets of [[], Array.from({ length: 33 }, () => ({
+      kind: 'signals', resource_id: 'all', after_revision: null,
+    }))]) {
+      const messages: unknown[] = []
+      const session = new BrowserRealtimeSession(42, new BrowserRealtimeHub(repository()), {
+        send(value) { messages.push(value) }, close() {},
+      })
+      await session.receive({ v: 4, type: 'subscription.subscribe', request_id: 'bounded', targets })
+      expect(messages).toContainEqual(expect.objectContaining({
+        type: 'protocol.error', code: 'realtime_message_invalid',
+      }))
+    }
+  })
+
+  it('does not let a read-only observer subscribe to owner-only AI, risk or operation resources', async () => {
+    const messages: unknown[] = []; const closes: Array<{ code: number; reason: string }> = []
+    const session = new BrowserRealtimeSession(99, new BrowserRealtimeHub(repository()), {
+      send(value) { messages.push(value) }, close(code, reason) { closes.push({ code, reason }) },
+    })
+    await session.receive({ v: 4, type: 'subscription.subscribe', request_id: 'observer-risk', targets: [
+      { kind: 'risk', trading_account_id: '7', observer_channel_id: 'observer-1', symbol: null, timeframe: null, resource_id: 'summary', after_revision: null },
+    ] })
+    expect(messages).toContainEqual(expect.objectContaining({ type: 'protocol.error', code: 'realtime_target_invalid' }))
+    expect(closes).toEqual([])
   })
 
   it('supports protocol ping and explicit unsubscribe without a business command channel', async () => {

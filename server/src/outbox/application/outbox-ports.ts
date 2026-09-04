@@ -1,8 +1,11 @@
 export interface ClaimedOutboxEvent {
   id: string
   eventId: string
-  eventType: 'analysis.requested' | 'trader.requested' | 'trade_decision.created' | 'risk.decision.created'
-    | 'execution.intent.prepared' | 'bridge.command.queued'
+  eventType: 'analysis.requested' | 'analysis.running' | 'analysis.failed' | 'market_analysis.created'
+    | 'trader.requested' | 'trader.running' | 'trader.failed' | 'trade_decision.created'
+    | 'risk.policy.changed' | 'risk.summary.changed' | 'risk.decision.created' | 'risk.manual_release.changed'
+    | 'operation.changed' | 'execution.intent.prepared' | 'bridge.command.queued'
+  occurredAt: string
   payload: Record<string, unknown>
   attempts: number
 }

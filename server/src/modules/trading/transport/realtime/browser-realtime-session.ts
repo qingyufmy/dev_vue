@@ -1,13 +1,13 @@
-import type { BrowserRealtimeSink } from './browser-realtime-hub.js'
+import type { BrowserRealtimeSink, BrowserRealtimeTarget } from './browser-realtime-hub.js'
 import { BrowserRealtimeHub } from './browser-realtime-hub.js'
 
 interface Target {
-  kind: 'runtime' | 'account' | 'market'
-  trading_account_id: string | null
-  observer_channel_id: string | null
-  symbol: string | null
-  timeframe: string | null
-  resource_id: string | null
+  kind: 'runtime' | 'account' | 'market' | 'signals' | 'risk' | 'operations'
+  trading_account_id?: string | null
+  observer_channel_id?: string | null
+  symbol?: string | null
+  timeframe?: string | null
+  resource_id?: string | null
   after_revision: string | null
 }
 
@@ -26,24 +26,25 @@ export class BrowserRealtimeSession {
       return
     }
     if (!isSubscribe(raw)) return this.protocolError('realtime_message_invalid')
-    const grouped = new Map<string, { accountId: string; observerChannelId: string | null; resources: string[]; afterRevision: Record<string, number | null> }>()
-    for (const target of raw.targets) {
-      if (!target.trading_account_id) return this.protocolError('realtime_scope_invalid')
-      const resource = resourceFor(target)
-      if (!resource) return this.protocolError('realtime_target_invalid')
-      const groupKey = `${target.trading_account_id}:${target.observer_channel_id ?? ''}`
-      const group = grouped.get(groupKey) ?? { accountId: target.trading_account_id, observerChannelId: target.observer_channel_id, resources: [], afterRevision: {} }
-      group.resources.push(resource); group.afterRevision[resource] = target.after_revision === null ? null : Number(target.after_revision)
-      grouped.set(groupKey, group)
+    const targets: BrowserRealtimeTarget[] = []
+    for (const rawTarget of raw.targets) {
+      const target = normalizeTarget(rawTarget)
+      const resources = resourcesFor(target)
+      if (!resources || !validScope(target)) return this.protocolError('realtime_target_invalid')
+      const after = target.after_revision === null ? null : Number(target.after_revision)
+      targets.push({
+        accountId: target.trading_account_id,
+        observerChannelId: target.observer_channel_id,
+        resources,
+        afterRevision: Object.fromEntries(resources.map(resource => [resource, after])),
+        publicTarget: target as unknown as Record<string, unknown>,
+      })
     }
-    if (grouped.size !== 1) return this.protocolError('realtime_scope_invalid')
-    for (const group of grouped.values()) {
-      const stop = await this.hub.subscribe({ userId: this.userId, accountId: group.accountId, observerChannelId: group.observerChannelId, requestId: raw.request_id, resources: group.resources, afterRevision: group.afterRevision, sink: this.sink })
-      if (!stop) return
-      const previous = this.stops.splice(0)
-      this.stops.push(stop)
-      for (const release of previous) release()
-    }
+    const stop = await this.hub.subscribeTargets({ userId: this.userId, requestId: raw.request_id, targets, sink: this.sink })
+    if (!stop) return
+    const previous = this.stops.splice(0)
+    this.stops.push(stop)
+    for (const release of previous) release()
   }
 
   closeSubscriptions() { for (const stop of this.stops.splice(0)) stop() }
@@ -72,26 +73,68 @@ function isSubscribe(raw: unknown): raw is { v: 4; type: 'subscription.subscribe
     && value.targets.every((target) => {
       if (typeof target !== 'object' || target === null) return false
       const item = target as Record<string, unknown>
-      return ['runtime', 'account', 'market'].includes(String(item.kind))
-        && (typeof item.trading_account_id === 'string' || item.trading_account_id === null)
-        && (typeof item.observer_channel_id === 'string' || item.observer_channel_id === null)
-        && (typeof item.symbol === 'string' || item.symbol === null)
-        && (typeof item.timeframe === 'string' || item.timeframe === null)
-        && (typeof item.resource_id === 'string' || item.resource_id === null)
+      return Object.keys(item).every(key => ['kind', 'trading_account_id', 'observer_channel_id', 'symbol', 'timeframe', 'resource_id', 'after_revision'].includes(key))
+        && ['runtime', 'account', 'market', 'signals', 'risk', 'operations'].includes(String(item.kind))
+        && (item.trading_account_id === undefined || typeof item.trading_account_id === 'string' || item.trading_account_id === null)
+        && (item.observer_channel_id === undefined || typeof item.observer_channel_id === 'string' || item.observer_channel_id === null)
+        && (item.symbol === undefined || typeof item.symbol === 'string' || item.symbol === null)
+        && (item.timeframe === undefined || typeof item.timeframe === 'string' || item.timeframe === null)
+        && (item.resource_id === undefined || typeof item.resource_id === 'string' || item.resource_id === null)
         && (item.after_revision === null || (typeof item.after_revision === 'string' && /^\d+$/.test(item.after_revision)))
     })
+}
+
+function normalizeTarget(target: Target): Required<Target> {
+  return {
+    kind: target.kind,
+    trading_account_id: target.trading_account_id ?? null,
+    observer_channel_id: target.observer_channel_id ?? null,
+    symbol: target.symbol ?? null,
+    timeframe: target.timeframe ?? null,
+    resource_id: target.resource_id ?? null,
+    after_revision: target.after_revision,
+  }
 }
 
 function validRequestId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 128
 }
 
-function resourceFor(target: Target) {
-  if (target.kind === 'runtime' && target.resource_id === 'bridge') return 'runtime.bridge:current'
-  if (target.kind === 'account' && target.resource_id === 'metrics') return 'account.metrics:current'
-  if (target.kind === 'account' && target.resource_id === 'positions') return 'positions:open'
-  if (target.kind === 'account' && target.resource_id === 'pending_orders') return 'pending_orders:open'
-  if (target.kind === 'market' && target.resource_id === 'quote' && target.symbol) return `market.quote:${target.symbol}`
-  if (target.kind === 'market' && target.resource_id === 'candle' && target.symbol && target.timeframe) return `market.candle:${target.symbol}:${target.timeframe}`
+function validScope(target: Required<Target>) {
+  if (target.kind === 'signals') {
+    const userScoped = target.resource_id === null || ['all', 'analysis_jobs', 'market_analyses'].includes(target.resource_id)
+    return userScoped
+      ? target.trading_account_id === null && target.observer_channel_id === null
+      : Boolean(target.trading_account_id) && target.observer_channel_id === null
+        && ['trader_jobs', 'trade_decisions'].includes(target.resource_id ?? '')
+  }
+  if (target.kind === 'risk' || target.kind === 'operations') {
+    return Boolean(target.trading_account_id) && target.observer_channel_id === null
+  }
+  return Boolean(target.trading_account_id)
+}
+
+function resourcesFor(target: Required<Target>): string[] | null {
+  if (target.kind === 'runtime' && target.resource_id === 'bridge') return ['runtime.bridge:current']
+  if (target.kind === 'account' && target.resource_id === 'metrics') return ['account.metrics:current']
+  if (target.kind === 'account' && target.resource_id === 'positions') return ['positions:open']
+  if (target.kind === 'account' && target.resource_id === 'pending_orders') return ['pending_orders:open']
+  if (target.kind === 'market' && target.resource_id === 'quote' && target.symbol) return [`market.quote:${target.symbol}`]
+  if (target.kind === 'market' && target.resource_id === 'candle' && target.symbol && target.timeframe) return [`market.candle:${target.symbol}:${target.timeframe}`]
+  if (target.kind === 'signals') {
+    if (target.resource_id === null || target.resource_id === 'all') return ['analysis.job', 'market_analysis']
+    if (target.resource_id === 'analysis_jobs') return ['analysis.job']
+    if (target.resource_id === 'market_analyses') return ['market_analysis']
+    if (target.resource_id === 'trader_jobs') return ['trader.job']
+    if (target.resource_id === 'trade_decisions') return ['trade_decision']
+  }
+  if (target.kind === 'risk') {
+    if (target.resource_id === null || target.resource_id === 'all') return ['risk.policy', 'risk.summary', 'risk.decision', 'risk.manual_release']
+    if (target.resource_id === 'policy') return ['risk.policy']
+    if (target.resource_id === 'summary') return ['risk.summary']
+    if (target.resource_id === 'decisions') return ['risk.decision']
+    if (target.resource_id === 'manual_release') return ['risk.manual_release']
+  }
+  if (target.kind === 'operations' && (target.resource_id === null || target.resource_id === 'all')) return ['operation']
   return null
 }

@@ -23,6 +23,7 @@ export interface RuntimeModelProfile {
 }
 
 type Fetch = typeof fetch
+export type ModelUsageSettlementErrorHandler = (error: unknown) => void
 
 export class HttpJsonAnalysisModelGateway implements AnalysisModelGateway {
   readonly profileId: string
@@ -31,7 +32,12 @@ export class HttpJsonAnalysisModelGateway implements AnalysisModelGateway {
   readonly timeoutMs: number
   readonly maxAttempts: number
 
-  constructor(private readonly profile: RuntimeModelProfile, private readonly usageLedger: ModelUsageLedger, private readonly request: Fetch = fetch) {
+  constructor(
+    private readonly profile: RuntimeModelProfile,
+    private readonly usageLedger: ModelUsageLedger,
+    private readonly request: Fetch = fetch,
+    private readonly onUsageSettlementError: ModelUsageSettlementErrorHandler = logUsageSettlementError,
+  ) {
     this.profileId = profile.id
     this.provider = profile.provider
     this.model = profile.model
@@ -44,7 +50,7 @@ export class HttpJsonAnalysisModelGateway implements AnalysisModelGateway {
       { role: 'system', content: input.snapshot.strategy.promptText },
       { role: 'system', content: analysisContract },
       { role: 'user', content: JSON.stringify(snapshotWithoutPrompt(input.snapshot)) },
-    ])
+    ], this.onUsageSettlementError)
     return { result: output.value as unknown as MarketAnalysisResult, usage: output.usage }
   }
 }
@@ -56,7 +62,12 @@ export class HttpJsonTraderModelGateway implements TraderGateway {
   readonly timeoutMs: number
   readonly maxAttempts: number
 
-  constructor(private readonly profile: RuntimeModelProfile, private readonly usageLedger: ModelUsageLedger, private readonly request: Fetch = fetch) {
+  constructor(
+    private readonly profile: RuntimeModelProfile,
+    private readonly usageLedger: ModelUsageLedger,
+    private readonly request: Fetch = fetch,
+    private readonly onUsageSettlementError: ModelUsageSettlementErrorHandler = logUsageSettlementError,
+  ) {
     this.profileId = profile.id
     this.provider = profile.provider
     this.model = profile.model
@@ -69,7 +80,7 @@ export class HttpJsonTraderModelGateway implements TraderGateway {
       { role: 'system', content: input.snapshot.strategy.promptText },
       { role: 'system', content: traderContract },
       { role: 'user', content: JSON.stringify(snapshotWithoutPrompt(input.snapshot)) },
-    ])
+    ], this.onUsageSettlementError)
     return { result: output.value as unknown as TraderDecisionResult, usage: output.usage }
   }
 }
@@ -80,6 +91,7 @@ async function requestJson(
   request: Fetch,
   signal: AbortSignal,
   messages: Array<{ role: 'system' | 'user'; content: string }>,
+  onUsageSettlementError: ModelUsageSettlementErrorHandler,
 ) {
   const body = profile.protocol === 'responses'
     ? responsesBody(profile, messages)
@@ -113,7 +125,7 @@ async function requestJson(
     await settleUsage(usageLedger, reservationId, {
       status: 'error', errorCode: completionError.code, usage: null, providerRequestId: null,
       requestBytes, responseBytes: 0, durationMs: Date.now() - startedAt,
-    })
+    }, onUsageSettlementError)
     throw completionError
   }
   try {
@@ -148,7 +160,7 @@ async function requestJson(
     await settleUsage(usageLedger, reservationId, {
       status: completionError ? 'error' : 'success', errorCode: completionError?.code ?? null, usage, providerRequestId,
       requestBytes, responseBytes, durationMs: Date.now() - startedAt,
-    })
+    }, onUsageSettlementError)
   }
 }
 
@@ -179,9 +191,21 @@ function privateAddress(address: string): boolean {
   return mapped ? privateAddress(mapped[1] ?? '') : false
 }
 
-async function settleUsage(ledger: ModelUsageLedger, reservationId: string, completion: Parameters<ModelUsageLedger['finish']>[1]) {
+async function settleUsage(
+  ledger: ModelUsageLedger,
+  reservationId: string,
+  completion: Parameters<ModelUsageLedger['finish']>[1],
+  onError: ModelUsageSettlementErrorHandler,
+) {
   try { await ledger.finish(reservationId, completion) }
-  catch (error) { console.error('[model-usage] settlement failed', error instanceof Error ? error.message : 'model_usage_settlement_failed') }
+  catch (error) {
+    try { onError(error) }
+    catch (handlerError) { logUsageSettlementError(handlerError) }
+  }
+}
+
+function logUsageSettlementError(error: unknown) {
+  console.error('[model-usage] settlement failed', error instanceof Error ? error.message : 'model_usage_settlement_failed')
 }
 
 async function boundedResponseText(response: Response, maximumBytes: number) {

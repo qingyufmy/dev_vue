@@ -79,6 +79,24 @@ describe('AI runtime wiring', () => {
     expect(request).not.toHaveBeenCalled()
   })
 
+  it('keeps a completed model result while surfacing settlement failure to role health', async () => {
+    const failures: string[] = []
+    const ledger: ModelUsageLedger = {
+      async begin() { return 'reservation-1' },
+      async finish() { throw new Error('database_unavailable') },
+    }
+    const request = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(analysisResult()) } }],
+    }), { status: 200 })) as typeof fetch
+    const gateway = new HttpJsonAnalysisModelGateway(profile(), ledger, request, error => {
+      failures.push(error instanceof Error ? error.message : 'unknown')
+    })
+    await expect(gateway.analyze({
+      taskId: 'task-1', attemptId: 'attempt-1', snapshot: analysisSnapshot(), signal: new AbortController().signal,
+    })).resolves.toMatchObject({ result: { opportunity: 'none' } })
+    expect(failures).toEqual(['database_unavailable'])
+  })
+
   it('serializes platform quota admission on the user row before inserting a reservation', async () => {
     const statements: string[] = []
     const connection = {
@@ -103,6 +121,21 @@ describe('AI runtime wiring', () => {
     expect(statements[2]).toContain("credential_source='platform_shared'")
     expect(statements[3]).toContain('INSERT INTO ai_model_usage_logs')
     expect(statements.at(-1)).toBe('COMMIT')
+  })
+
+  it('marks only stale reserved usage rows unknown without replaying a provider call', async () => {
+    const statements: Array<{ sql: string; values: unknown[] | undefined }> = []
+    const pool = { async execute(sql: string, values?: unknown[]) {
+      statements.push({ sql: sql.replace(/\s+/g, ' ').trim(), values })
+      return [{ affectedRows: 3 }, []]
+    } }
+    const before = new Date('2026-09-04T00:00:00.000Z')
+    await expect(new MysqlModelUsageLedger(pool as never).recoverAbandoned(before, 50)).resolves.toBe(3)
+    expect(statements[0]?.sql).toContain("request_status='reserved'")
+    expect(statements[0]?.sql).toContain("accounting_status='usage_unknown'")
+    expect(statements[0]?.sql).toContain('ORDER BY id LIMIT 50')
+    expect(statements[0]?.sql).toContain('UTC_TIMESTAMP(3)')
+    expect(statements[0]?.values).toEqual([before])
   })
 
   it('supports the Responses output envelope for trader decisions', async () => {
@@ -141,7 +174,7 @@ describe('AI runtime wiring', () => {
 })
 
 function event(eventType: ClaimedOutboxEvent['eventType'], payload: Record<string, unknown>): ClaimedOutboxEvent {
-  return { id: '1', eventId: 'event-12345678', eventType, payload, attempts: 1 }
+  return { id: '1', eventId: 'event-12345678', eventType, occurredAt: '2026-09-04T00:00:00.000Z', payload, attempts: 1 }
 }
 
 function profile(overrides: Partial<RuntimeModelProfile> = {}): RuntimeModelProfile {

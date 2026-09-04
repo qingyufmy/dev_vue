@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { RealtimeTicketAuthenticator, type AuthRepository, type RealtimeTicketStore } from '../src/modules/auth/index.js'
 import {
   BrowserRealtimeHub, RedisBrowserRealtimeSubscriber, parseBrowserRealtimeEvent,
-  type TradingReadRepository, type TradingRealtimeEvent,
+  type BrowserRealtimeEvent, type TradingReadRepository, type TradingRealtimeEvent,
 } from '../src/modules/trading/index.js'
 import { BrowserRealtimeWebSocketServer } from '../src/transport/browser-realtime-websocket-server.js'
 import { exactTradeHostHook, registerApiV4Routes, type ApiV4RouteServices } from '../src/transport/api-v4-route-registrar.js'
@@ -31,7 +31,7 @@ describe('V4 browser realtime runtime', () => {
 
   it('validates committed Redis events before publishing them to the local hub', async () => {
     const redis = new FakeRedis()
-    const published: TradingRealtimeEvent[] = []
+    const published: BrowserRealtimeEvent[] = []
     const invalid: string[] = []
     const subscriber = new RedisBrowserRealtimeSubscriber(redis as unknown as Redis, { publish(event) { published.push(event) } }, undefined, code => invalid.push(code))
     await subscriber.start()

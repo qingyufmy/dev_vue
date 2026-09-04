@@ -62,7 +62,7 @@
 | 9 | 清理旧前端并建立三前端工程与设计系统骨架 | 删除 `dev_vue` 旧手写前端；建立 Nuxt www、Vite trade/admin、唯一 shadcn-vue 源、合同包、令牌、图标、图表库和 CI 边界 | 旧前端源码归零且三应用独立测试、构建，跨应用依赖检查通过；旧版只从参考仓库读取 | 已完成 |
 | 10 | SSO 端到端竖切 | auth 中心、三应用独立会话、PKCE、CSRF、WebSocket 单次票据和退出范围 | trade 登录、HTTP、WebSocket 和注销真实链路通过 | 已完成（实现与离线验证） |
 | 11 | 账户、终端与实时行情竖切 | 账户归属、单终端约束、观摩模式、Bridge 状态、报价、K线、持仓和挂单 | 真实 MT4 与 MT5 数据、断线和切换账户验收通过 | 已完成（实现与离线验证；实机门延期） |
-| 12 | AI 交易实验室全模块迁移 | 首页、分析师、交易员、风控师、策略师、复盘师、交易记录、审计、市场行情和设置 | AI 实验室迁移矩阵全部关闭，多终端验收通过 | 进行中（12E 执行意图与风险预留已完成离线实现） |
+| 12 | AI 交易实验室全模块迁移 | 首页、分析师、交易员、风控师、策略师、复盘师、交易记录、审计、市场行情和设置 | AI 实验室迁移矩阵全部关闭，多终端验收通过 | 进行中（12K 领域实时投影已完成离线实现） |
 | 13 | 主站全模块迁移 | 企业展示、课程、内容、社区、会员、支付、账户入口和公开页面 | 主站迁移矩阵全部关闭，SEO、性能和支付验收通过 | 未开始 |
 | 14 | 管理后台全模块迁移 | 用户、会员、内容、策略、模型、商业、通知、Bridge、审计和系统配置 | 后台迁移矩阵全部关闭，权限矩阵验收通过 | 未开始 |
 | 15 | 全量数据迁移演练 | `dev_vue` 到旁路目标库的重复迁移、逐表/逐用户对账、恢复和回滚演练 | 零未解释差异，备份恢复和回滚可重复 | 未开始 |
@@ -224,3 +224,4 @@
 - 阶段 12H 已完成本地运行时接线与离线验证，正式记录见 [阶段 12H：Bridge Gateway、Execution Worker 与 Outbox 运行时接线验收记录](./stage12h-v4-runtime-wiring-report.md)。`/bridge/v4/ws` 严格使用 Authorization bearer、首帧 hello、512 KiB 帧和有界串行背压；prepared intent 与 queued command 均在各自 MySQL 事务写 outbox，由独立 dispatcher 以确定性 job ID 唤醒 execution worker 和 Bridge gateway。重复队列投递只有仍为 queued 的 command 可以进入“先标 dispatched、后写 socket”，已跨边界的命令不重发。新增三个独立 PM2 角色、健康/就绪和优雅停机骨架，仍由宝塔一个 ecosystem 项目管理；显式 V4 总开关默认关闭，未启动进程、未执行迁移、未连接真实依赖或终端。
 - 阶段 12I 已完成 API V4 与浏览器实时网关的本地运行时接线，正式记录见 [阶段 12I：API V4 与浏览器实时网关运行时接线验收记录](./stage12i-v4-api-browser-realtime-wiring-report.md)。API 统一挂载 SSO、Bridge 凭据和当前已实现的 trade V4 模块，并按精确 trade Host 隔离；浏览器实时网关只消费经活动会话复核的一次性 HttpOnly 票据及 Redis 已提交事件，保留账户授权、revision 缺口重拉、上/下行帧、慢消费者和心跳边界。trade 前端已改为断线前先重拉 HTTP 快照，再按 1/2/5/10/20/30 秒抖动退避携新 revision 重连。宝塔 ecosystem 增至五个独立角色；仍未启动真实进程、执行迁移或连接真实基础设施与终端。
 - 阶段 12J 已完成 AI 异步运行链路的本地接线，正式记录见 [阶段 12J：AI 调度、模型 Worker、风控与执行运行时接线验收记录](./stage12j-ai-runtime-orchestration-report.md)。Analysis Scheduler、Analysis/Trader/Risk Worker 分离为独立 BullMQ/PM2 角色，任务型 Outbox 从分析请求一直唤醒到执行意图和 Bridge 命令；模型按用户与策略逐任务解析，平台共享请求在发网前原子检查每日额度并保留用量证据，崩溃遗留任务按绝对 deadline fail closed 回收且不重放 provider/终端。宝塔 ecosystem 增至九个角色；非任务领域事件实时投影、旁路数据库迁移、真实 provider/MySQL/Redis/Bridge/MT 和长稳压测仍待后续阶段。
+- 阶段 12K 已完成 AI、风控与异步操作的小事件实时投影，正式记录见 [阶段 12K：浏览器领域实时投影与模型用量恢复验收记录](./stage12k-browser-realtime-projection-report.md)。分析记录保持系统用户级，交易员、风控和 operation 保持账户级；一个用户会话可订阅多个自有账户，观摩会话不能读取所有者专属领域事件。业务事务仍只写 Outbox，Dispatcher 在稳定 BullMQ 任务与 Redis 事件均成功后才完成该行；断线先 HTTP 重拉，完整推理、规则和快照不进入 WebSocket。遗留用量 reservation 只结算为 usage unknown，不重放模型请求。迁移、真实依赖、浏览器页面接线与端到端验收仍待后续阶段。
