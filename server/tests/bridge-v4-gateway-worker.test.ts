@@ -114,7 +114,7 @@ class MemoryGatewayLeases implements BridgeGatewayLeaseStore {
 class MemoryRoutes implements BridgeGatewayRouteRepository {
   async authorizeAndOpen(input: Parameters<BridgeGatewayRouteRepository['authorizeAndOpen']>[0]) {
     const route = input.hello.payload.terminals[0]!.route
-    return { userId: input.claims.userId, accountId: '7', terminalProfileId: input.claims.profileId,
+    return { userId: input.claims.userId, accountId: '7', platform: 'mt5' as const, timezoneOffsetMinutes: 180, terminalProfileId: input.claims.profileId,
       terminalInstanceId: route.terminal_instance_id, brokerServer: route.account_ref.broker_server, login: route.account_ref.login,
       connectionEpoch: route.connection_epoch, connectionId: input.connectionId, sessionId: input.hello.payload.session_id }
   }

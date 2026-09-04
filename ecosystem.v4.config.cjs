@@ -76,5 +76,11 @@ module.exports = {
       script: 'server/dist-v4/entrypoints/worker-review.js',
       max_memory_restart: '768M',
     },
+    {
+      ...common,
+      name: 'aurum-v4-scheduler-trade-history',
+      script: 'server/dist-v4/entrypoints/scheduler-trade-history.js',
+      max_memory_restart: '256M',
+    },
   ],
 }

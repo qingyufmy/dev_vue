@@ -36,13 +36,14 @@ interface OperationRow extends RowDataPacket {
 }
 interface ReviewCaseRow extends RowDataPacket { id: string; user_id: number; status: string; current_version_id: string | null; revision: number }
 interface StrategyMemoryRow extends RowDataPacket { id: string; user_id: number; status: string; pending_count: number; revision: number }
+interface TradeHistoryRow extends RowDataPacket { user_id: number; account_id: string; status: string; history_revision: number; fresh_through_utc: Date | null }
 
 const REALTIME_TYPES = new Set<ClaimedOutboxEvent['eventType']>([
   'analysis.requested', 'analysis.running', 'analysis.failed', 'market_analysis.created',
   'trader.requested', 'trader.running', 'trader.failed', 'trade_decision.created',
   'risk.policy.changed', 'risk.summary.changed', 'risk.decision.created', 'risk.manual_release.changed',
   'review.case.changed', 'strategy.memory.changed',
-  'operation.changed',
+  'operation.changed', 'trade.history.changed',
 ])
 
 export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
@@ -70,6 +71,7 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
     if (event.eventType === 'risk.manual_release.changed') return [await this.riskRelease(event)]
     if (event.eventType === 'review.case.changed') return [await this.reviewCase(event)]
     if (event.eventType === 'strategy.memory.changed') return [await this.strategyMemory(event)]
+    if (event.eventType === 'trade.history.changed') return [await this.tradeHistory(event)]
     return [await this.operation(event)]
   }
 
@@ -214,6 +216,20 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
       type: 'strategy.memory.changed', userId: row.user_id, accountId: null, resource: 'strategy_memory',
       resourceId: row.id, revision: row.revision,
       data: { strategy_memory_id: row.id, status: row.status, pending_count: Number(row.pending_count), revision: String(row.revision) },
+    })
+  }
+
+  private async tradeHistory(event: ClaimedOutboxEvent) {
+    const accountId = requiredId(event.payload.account_id, 'outbox_account_id_invalid')
+    const row = await one<TradeHistoryRow>(this.pool,
+      `SELECT o.user_id,CAST(s.trading_account_id AS CHAR) account_id,s.status,s.history_revision,s.fresh_through_utc
+        FROM trade_history_sync_states_v4 s INNER JOIN trading_account_ownerships o ON o.trading_account_id=s.trading_account_id
+          AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE s.trading_account_id=? LIMIT 1`,
+      [accountId], 'outbox_trade_history_missing')
+    return base(event, {
+      type: 'trade.history.changed', userId: row.user_id, accountId: row.account_id, resource: 'trade_history',
+      resourceId: row.account_id, revision: row.history_revision,
+      data: { status: row.status, history_revision: String(row.history_revision), fresh_through: row.fresh_through_utc ? iso(row.fresh_through_utc) : null },
     })
   }
 

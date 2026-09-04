@@ -6,6 +6,8 @@ export interface ClaimedOutboxEvent {
     | 'risk.policy.changed' | 'risk.summary.changed' | 'risk.decision.created' | 'risk.manual_release.changed'
     | 'review.job.requested' | 'review.case.changed' | 'strategy.memory.changed'
     | 'operation.changed' | 'execution.intent.prepared' | 'execution.distribution.target.requested' | 'bridge.command.queued'
+    | 'trade.history.changed'
+    | 'trade.history.requested'
   occurredAt: string
   payload: Record<string, unknown>
   attempts: number

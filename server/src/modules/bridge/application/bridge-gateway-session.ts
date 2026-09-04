@@ -4,7 +4,7 @@ import { assertAcceptedEnvelope, assertResultEnvelope, type BridgeCommandAccepte
 import { assertHeartbeat, assertSessionHello, BridgeGatewayError, welcomeEnvelope, type BridgeGatewayRoute, type BridgeHeartbeatEnvelope, type BridgeSessionHelloEnvelope } from '../domain/bridge-gateway.js'
 import type {
   BridgeGatewayCapacityRepository, BridgeGatewayDirectory, BridgeGatewayLeaseStore, BridgeGatewayRouteRepository,
-  BridgeGatewaySink, BridgeGatewayStreamIngestor, BridgeSessionTicketStore,
+  BridgeGatewayQueryReceiver, BridgeGatewaySink, BridgeGatewayStreamIngestor, BridgeSessionTicketStore,
 } from './bridge-gateway-ports.js'
 import type { BridgeGatewayCommandTransport } from './bridge-gateway-transport.js'
 
@@ -25,6 +25,7 @@ export class BridgeGatewayService {
     private readonly commands: BridgeCommandService,
     private readonly streams: BridgeGatewayStreamIngestor,
     private readonly now = () => new Date(),
+    private readonly queries: BridgeGatewayQueryReceiver = NO_QUERY_RECEIVER,
   ) {}
 
   async open(input: OpenBridgeGatewayInput) {
@@ -50,7 +51,7 @@ export class BridgeGatewayService {
       // The new epoch can only reconcile durable uncertain commands. It never
       // enters the ordinary dispatch path during reconnect recovery.
       await this.commands.recover(route.accountId, route, this.transport, this.now()).catch(() => [])
-      return new BridgeGatewaySession(route, input.sink, this.routes, this.leases, this.directory, this.transport, this.commands, this.streams, this.now)
+      return new BridgeGatewaySession(route, input.sink, this.routes, this.leases, this.directory, this.transport, this.commands, this.streams, this.now, this.queries)
     } catch (error) {
       this.directory.detach(route.connectionId)
       if (claimed) await this.leases.release(route)
@@ -72,6 +73,7 @@ export class BridgeGatewaySession {
     private readonly commands: BridgeCommandService,
     private readonly streams: BridgeGatewayStreamIngestor,
     private readonly now: () => Date,
+    private readonly queries: BridgeGatewayQueryReceiver = NO_QUERY_RECEIVER,
   ) {}
 
   async receive(message: unknown) {
@@ -104,6 +106,11 @@ export class BridgeGatewaySession {
           if (acknowledgement) await this.sink.send(acknowledgement)
           return acknowledgement
         }
+      case 'query.response':
+      case 'query.error':
+        this.assertRoute(envelope.route)
+        await this.ensureCurrent()
+        return this.queries.receive(this.route, message)
       default:
         throw new BridgeGatewayError('bridge_message_type_unsupported', 400)
     }
@@ -112,6 +119,7 @@ export class BridgeGatewaySession {
   async close(reason = 'bridge_socket_closed') {
     if (this.closed) return
     this.closed = true
+    this.queries.cancelConnection(this.route.connectionId)
     this.directory.detach(this.route.connectionId)
     await this.leases.release(this.route)
     await this.routes.close(this.route, reason, this.now().toISOString())
@@ -144,4 +152,9 @@ export class BridgeGatewaySession {
       throw new BridgeGatewayError('bridge_session_route_mismatch', 409)
     }
   }
+}
+
+const NO_QUERY_RECEIVER: BridgeGatewayQueryReceiver = {
+  receive() { throw new BridgeGatewayError('bridge_query_result_unsupported', 400) },
+  cancelConnection() {},
 }

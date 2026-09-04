@@ -40,6 +40,8 @@ export interface BridgeProtocolLimits {
 export interface BridgeGatewayRoute extends BridgeRoute {
   userId: number
   accountId: string
+  platform: 'mt4' | 'mt5'
+  timezoneOffsetMinutes: number | null
   terminalProfileId: string
   connectionId: string
   sessionId: string

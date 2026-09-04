@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "partitions": [
+    {
+      "source_table": "signal_outcomes",
+      "source_partition": "user:7/account:42",
+      "source_count": 2,
+      "migrated_count": 2,
+      "reconciled_count": 2,
+      "source_totals": {
+        "gross_profit": "100.00",
+        "commission": "-2.00",
+        "swap": "-1.00",
+        "fee": "0.00",
+        "net_profit": "97.00"
+      },
+      "target_totals": {
+        "gross_profit": "100.00",
+        "commission": "-2.00",
+        "swap": "-1.00",
+        "fee": "0.00",
+        "net_profit": "97.00"
+      }
+    }
+  ]
+}

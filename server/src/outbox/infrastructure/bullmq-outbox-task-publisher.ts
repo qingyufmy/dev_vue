@@ -46,8 +46,19 @@ export class BullMqOutboxTaskPublisher implements OutboxTaskPublisher {
     if (event.eventType === 'bridge.command.queued') {
       const commandId = requiredId(event.payload.command_id, 'outbox_command_id_invalid')
       await this.queues.bridgeDispatch.add('bridge.command.dispatch', { commandId }, { jobId: event.eventId })
+      return
+    }
+    if (event.eventType === 'trade.history.requested') {
+      const accountId = requiredAccountId(event.payload.account_id)
+      await this.queues.bridgeHistory.add('trade.history.collect', { accountId }, { jobId: event.eventId })
     }
   }
+}
+
+function requiredAccountId(value: unknown) {
+  if (typeof value !== 'string' || !/^[1-9]\d{0,19}$/.test(value)
+    || BigInt(value) > 18_446_744_073_709_551_615n) throw new Error('outbox_account_id_invalid')
+  return value
 }
 
 function requiredUserId(value: unknown) {

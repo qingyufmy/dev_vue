@@ -9,13 +9,16 @@ import {
 } from '../modules/execution/index.js'
 import {
   BridgeGatewayCommandTransport, BridgeGatewayService, BridgeTradeProjectionDecoder, BridgeV4StreamIngestor,
-  InProcessBridgeGatewayDirectory, MysqlBridgeGatewayRouteRepository, RedisBridgeGatewayLeaseStore,
+  BridgeGatewayQueryTransport, InProcessBridgeGatewayDirectory, MysqlBridgeGatewayRouteRepository, RedisBridgeGatewayLeaseStore,
   RedisBridgeSessionTicketStore,
 } from '../modules/bridge/index.js'
 import {
   BridgeStreamProjector, MysqlTradingRepository, RedisBrowserRealtimePublisher,
 } from '../modules/trading/index.js'
-import { BRIDGE_DISPATCH_QUEUE, type BridgeCommandJob } from '../queue/task-queues.js'
+import {
+  MysqlTradeHistoryCollectorRepository, TradeHistoryCollector,
+} from '../modules/trade-history/index.js'
+import { BRIDGE_DISPATCH_QUEUE, BRIDGE_HISTORY_QUEUE, type BridgeCommandJob, type BridgeHistoryJob } from '../queue/task-queues.js'
 import { BridgeV4WebSocketServer } from '../transport/bridge-v4-websocket-server.js'
 
 loadServerEnvironment()
@@ -37,6 +40,8 @@ async function main() {
   const directory = new InProcessBridgeGatewayDirectory()
   const leases = new RedisBridgeGatewayLeaseStore(cache)
   const transport = new BridgeGatewayCommandTransport(leases, directory)
+  const queries = new BridgeGatewayQueryTransport(leases, directory)
+  const historyCollector = new TradeHistoryCollector(new MysqlTradeHistoryCollectorRepository(pool), queries)
   const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool))
   const gateway = new BridgeGatewayService(
     new RedisBridgeSessionTicketStore(cache),
@@ -46,18 +51,18 @@ async function main() {
     directory,
     transport,
     commands,
-    streams,
+    streams, undefined, queries,
   )
 
   const app = Fastify({ logger: true, bodyLimit: 8 * 1024 })
   const webSockets = new BridgeV4WebSocketServer(app.server, gateway)
-  app.get('/health/live', async () => ({ status: 'ok', ...health.snapshot(), connections: webSockets.connectionCount() }))
+  app.get('/health/live', async () => ({ status: 'ok', ...health.snapshot(), connections: webSockets.connectionCount(), history_queries: queries.inflight() }))
   app.get('/health/ready', async (_request, reply) => {
-    const dependencies = await dependenciesReady(pool, cache) && commandWorker.isRunning()
+    const dependencies = await dependenciesReady(pool, cache) && commandWorker.isRunning() && historyWorker.isRunning()
     const snapshot = health.snapshot()
     const ready = dependencies && snapshot.accepting && snapshot.ready
     return reply.code(ready ? 200 : 503).send({ status: ready ? 'ok' : 'not_ready', ...snapshot,
-      dependencies_ready: dependencies, connections: webSockets.connectionCount() })
+      dependencies_ready: dependencies, connections: webSockets.connectionCount(), history_queries: queries.inflight() })
   })
 
   const commandWorker = new Worker<BridgeCommandJob>(BRIDGE_DISPATCH_QUEUE, async job => {
@@ -68,9 +73,20 @@ async function main() {
   }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: 1, autorun: false })
   commandWorker.on('failed', (_job, error) => health.workFailed(publicError(error)))
 
+  const historyWorker = new Worker<BridgeHistoryJob>(BRIDGE_HISTORY_QUEUE, async job => {
+    if (!job.data.accountId) throw new Error('trade_history_job_invalid')
+    const route = await leases.current(job.data.accountId)
+    if (!route) throw new Error('bridge_query_route_unavailable')
+    const result = await historyCollector.collect(route)
+    health.workSucceeded()
+    return { accountId: job.data.accountId, ...result }
+  }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: 1, autorun: false })
+  historyWorker.on('failed', (_job, error) => health.workFailed(publicError(error)))
+
   webSockets.start()
   await app.listen({ host: config.host, port: config.bridgeGatewayPort })
   void commandWorker.run()
+  void historyWorker.run()
   health.setReady(true)
   health.setAccepting(true)
 
@@ -78,6 +94,7 @@ async function main() {
     health.setAccepting(false)
     health.setReady(false)
     await commandWorker.close()
+    await historyWorker.close()
     await webSockets.close()
     await app.close()
     await Promise.allSettled([cache.quit(), pool.end()])

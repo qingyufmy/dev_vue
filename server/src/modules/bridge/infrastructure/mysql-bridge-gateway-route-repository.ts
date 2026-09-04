@@ -44,6 +44,8 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
       return {
         userId: input.claims.userId,
         accountId,
+        platform: terminal.platform,
+        timezoneOffsetMinutes: terminal.timezone_offset_minutes ?? null,
         terminalProfileId: input.claims.profileId,
         terminalInstanceId: wire.terminal_instance_id,
         brokerServer: wire.account_ref.broker_server,

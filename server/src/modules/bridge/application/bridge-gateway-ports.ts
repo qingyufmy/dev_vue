@@ -41,4 +41,9 @@ export interface BridgeGatewayDirectory {
   replace(connectionId: string, code: number, reason: string): void
 }
 
+export interface BridgeGatewayQueryReceiver {
+  receive(route: BridgeGatewayRoute, message: unknown): unknown
+  cancelConnection(connectionId: string, code?: string): void
+}
+
 export type { BridgeSessionTicketStore }

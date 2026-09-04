@@ -26,6 +26,7 @@ describe('V4 runtime wiring', () => {
       'aurum-v4-outbox-dispatcher', 'aurum-v4-worker-execution',
       'aurum-v4-scheduler-analysis', 'aurum-v4-worker-analysis',
       'aurum-v4-worker-trader', 'aurum-v4-worker-risk', 'aurum-v4-worker-review',
+      'aurum-v4-scheduler-trade-history',
     ])
     expect(ecosystem.apps.every(app => app.instances === 1 && app.exec_mode === 'fork' && app.watch === false)).toBe(true)
   })

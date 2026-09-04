@@ -21,7 +21,7 @@ async function main() {
   const queues = new RuntimeTaskQueues(config.queueRedis, config.queuePrefix)
   await Promise.all([
     queues.execution.waitUntilReady(), queues.bridgeDispatch.waitUntilReady(), queues.analysis.waitUntilReady(),
-    queues.trader.waitUntilReady(), queues.risk.waitUntilReady(), queues.review.waitUntilReady(),
+    queues.trader.waitUntilReady(), queues.risk.waitUntilReady(), queues.review.waitUntilReady(), queues.bridgeHistory.waitUntilReady(),
   ])
   const dispatcher = new OutboxDispatcher(new MysqlOutboxRepository(pool), new CompositeOutboxPublisher([
     new BullMqOutboxTaskPublisher(queues),
@@ -44,7 +44,7 @@ async function main() {
       try {
         await Promise.all([
           pool.query('SELECT 1'), realtimeRedis.ping(), queues.execution.getJobCounts(), queues.bridgeDispatch.getJobCounts(),
-          queues.analysis.getJobCounts(), queues.trader.getJobCounts(), queues.risk.getJobCounts(), queues.review.getJobCounts(),
+          queues.analysis.getJobCounts(), queues.trader.getJobCounts(), queues.risk.getJobCounts(), queues.review.getJobCounts(), queues.bridgeHistory.getJobCounts(),
         ])
         return true
       } catch { return false }

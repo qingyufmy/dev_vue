@@ -32,7 +32,9 @@
     "start:v4:trader": "node server/dist-v4/entrypoints/worker-trader.js",
     "start:v4:risk": "node server/dist-v4/entrypoints/worker-risk.js",
     "start:v4:review": "node server/dist-v4/entrypoints/worker-review.js",
-    "verify:payment-schema": "node scripts/verify-payment-schema.mjs"
+    "start:v4:history-scheduler": "node server/dist-v4/entrypoints/scheduler-trade-history.js",
+    "verify:payment-schema": "node scripts/verify-payment-schema.mjs",
+    "rehearse:trade-history": "node scripts/rehearse-trade-history-migration.mjs"
   },
   "dependencies": {
     "@alicloud/dysmsapi20170525": "^4.6.0",

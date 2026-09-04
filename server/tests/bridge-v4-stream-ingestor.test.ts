@@ -3,6 +3,7 @@ import { BridgeTradeProjectionDecoder, BridgeV4StreamIngestor, type BridgeGatewa
 import { BridgeStreamProjector, type TrustedBridgeProjectionRepository } from '../src/modules/trading/index.js'
 
 const route: BridgeGatewayRoute = {
+  platform: 'mt5', timezoneOffsetMinutes: 180,
   userId: 42, accountId: '7', terminalProfileId: 'profile_12345678', terminalInstanceId: 'terminal_12345678',
   brokerServer: 'DPrime-Demo', login: '8950701', connectionEpoch: 2, connectionId: 'connection_12345678', sessionId: 'session_12345678',
 }
