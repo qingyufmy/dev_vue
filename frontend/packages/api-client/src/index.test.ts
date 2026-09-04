@@ -86,4 +86,29 @@ describe('createApiClient', () => {
     expect(fetchImpl.mock.calls[3]?.[0]).toBe('/api/v4/trading-context/observer?expected_revision=4')
     expect(new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get('X-CSRF-Token')).toBe('csrf')
   })
+
+  it('keeps analysis reads user-scoped and manual analysis idempotent', async () => {
+    const meta = { request_id: 'analysis', generated_at: '2026-09-04T04:00:00.000Z' }
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [] }, meta }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [] }, meta }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+        analysis_id: 'run-1', strategy_id: 'strategy/1', strategy_version_id: 'version-1', symbol: 'XAUUSD',
+        trigger: 'manual', status: 'queued', created_at: '2026-09-04T04:00:00.000Z',
+        updated_at: '2026-09-04T04:00:00.000Z', revision: '1',
+      }, meta }), { status: 202 }))
+    const client = createApiClient({ fetchImpl })
+
+    await client.listStrategies('analysis')
+    await client.listMarketAnalyses(200)
+    await client.createManualAnalysis('csrf', { strategy_id: 'strategy/1', symbol: 'XAUUSD', mode: 'manual' }, 'manual-analysis-idempotency-1')
+
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/strategies?kind=analysis')
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v4/market-analyses?page_size=100')
+    expect(fetchImpl.mock.calls[2]?.[0]).toBe('/api/v4/analysis-jobs')
+    const [, request] = fetchImpl.mock.calls[2] ?? []
+    expect(new Headers(request?.headers).get('X-CSRF-Token')).toBe('csrf')
+    expect(new Headers(request?.headers).get('Idempotency-Key')).toBe('manual-analysis-idempotency-1')
+    expect(request?.body).toBe(JSON.stringify({ strategy_id: 'strategy/1', symbol: 'XAUUSD', mode: 'manual' }))
+  })
 })

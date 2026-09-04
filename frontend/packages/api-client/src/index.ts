@@ -1,9 +1,11 @@
 import {
-  apiProblemSchema, authLoginResponseSchema, connectionCapacityResponseSchema, marketCandlesResponseSchema,
-  marketQuoteResponseSchema, observerChannelsResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema, terminalProfilesResponseSchema, tradingAccountsResponseSchema,
-  tradingContextResponseSchema, tradingWorkspaceResponseSchema,
+  analysisJobResponseSchema, apiProblemSchema, authLoginResponseSchema, connectionCapacityResponseSchema,
+  marketAnalysisDetailResponseSchema, marketAnalysisListResponseSchema, marketCandlesResponseSchema,
+  marketQuoteResponseSchema, observerChannelsResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema,
+  strategiesResponseSchema, terminalProfilesResponseSchema, tradingAccountsResponseSchema, tradingContextResponseSchema,
+  tradingWorkspaceResponseSchema,
 } from '@aurum/contracts'
-import type { ApiProblem, AuthLoginRequest } from '@aurum/contracts'
+import type { AnalysisJobCreate, ApiProblem, AuthLoginRequest, StrategyKind } from '@aurum/contracts'
 import { z, type ZodType } from 'zod'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -88,6 +90,14 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getTradingWorkspace: (accountId: string, observerChannelId?: string | null) => send(tradingWorkspaceResponseSchema, `/api/v4/trading-accounts/${encodeURIComponent(accountId)}/snapshot${observerQuery(observerChannelId)}`),
     getMarketQuote: (accountId: string, symbol: string, observerChannelId?: string | null) => send(marketQuoteResponseSchema, `/api/v4/market/quotes/${encodeURIComponent(symbol)}?account_id=${encodeURIComponent(accountId)}${observerQuery(observerChannelId, '&')}`),
     getMarketCandles: (accountId: string, symbol: string, timeframe: string, limit = 200, observerChannelId?: string | null) => send(marketCandlesResponseSchema, `/api/v4/market/candles?account_id=${encodeURIComponent(accountId)}&symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&page_size=${limit}${observerQuery(observerChannelId, '&')}`),
+    listStrategies: (kind?: StrategyKind) => send(strategiesResponseSchema, `/api/v4/strategies${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
+    listMarketAnalyses: (pageSize = 50) => send(marketAnalysisListResponseSchema, `/api/v4/market-analyses?page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
+    getMarketAnalysis: (analysisId: string) => send(marketAnalysisDetailResponseSchema, `/api/v4/market-analyses/${encodeURIComponent(analysisId)}`),
+    createManualAnalysis: (csrfToken: string, body: AnalysisJobCreate, idempotencyKey: string) => send(
+      analysisJobResponseSchema,
+      '/api/v4/analysis-jobs',
+      { method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(body) },
+    ),
     selectTradingAccount: (csrfToken: string, accountId: string, expectedRevision: number) => send(tradingContextResponseSchema, '/api/v4/trading-context', { method: 'PUT', csrfToken, body: JSON.stringify({ mode: 'full', account_id: accountId, expected_revision: String(expectedRevision) }) }),
     enterObserverMode: (csrfToken: string, observerChannelId: string, expectedRevision: number) => send(tradingContextResponseSchema, '/api/v4/trading-context', { method: 'PUT', csrfToken, body: JSON.stringify({ mode: 'observer', observer_channel_id: observerChannelId, expected_revision: String(expectedRevision) }) }),
     leaveObserverMode: (csrfToken: string, expectedRevision: number) => send(tradingContextResponseSchema, `/api/v4/trading-context/observer?expected_revision=${expectedRevision}`, { method: 'DELETE', csrfToken }),

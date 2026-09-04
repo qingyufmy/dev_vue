@@ -1,5 +1,5 @@
 import { createApiClient } from '@aurum/api-client'
-import { marketCandleSchema, marketQuoteSchema, openPositionSchema, pendingOrderSchema, tradingRealtimeEventSchema } from '@aurum/contracts'
+import { browserRealtimeEventSchema, marketCandleSchema, marketQuoteSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
 import type { SessionSummary, Timeframe } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
 import { accountSnapshot, marketCandles, marketQuote, openPositions, pendingOrders, realtimeState, resourceRevisions } from './home-runtime'
@@ -21,13 +21,13 @@ export function stopTradingRealtime() {
   realtimeState.value = 'idle'
 }
 
-export async function startTradingRealtime(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>) {
+export async function startTradingRealtime(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, onAnalysisChanged?: () => void) {
   stopTradingRealtime()
   const currentGeneration = generation
-  await connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration)
+  await connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged)
 }
 
-async function connect(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number) {
+async function connect(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
   let lastSequence = 0
   realtimeState.value = 'connecting'
   try { await client.createRealtimeTicket(session.csrf_token) }
@@ -47,6 +47,7 @@ async function connect(session: SessionSummary, accountId: string, symbol: strin
         { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'pending_orders', after_revision: String(resourceRevisions.value.pendingOrders) },
         { kind: 'market', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol, timeframe: null, resource_id: 'quote', after_revision: String(resourceRevisions.value.quote) },
         { kind: 'market', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol, timeframe, resource_id: 'candle', after_revision: String(resourceRevisions.value.candle) },
+        { kind: 'signals', trading_account_id: null, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'market_analyses', after_revision: null },
       ],
       }))
     },
@@ -55,11 +56,16 @@ async function connect(session: SessionSummary, accountId: string, symbol: strin
     const messageType = typeof raw === 'object' && raw !== null && 'type' in raw ? String(raw.type) : ''
     if (messageType === 'subscription.ready') { reconnectAttempt = 0; realtimeState.value = 'live'; return }
     if (messageType === 'subscription.resync_required') { realtimeState.value = 'recovering'; connection?.close(4000, 'revision_resync_required'); return }
-    const parsed = tradingRealtimeEventSchema.safeParse(raw)
-    if (!parsed.success || parsed.data.scope.trading_account_id !== accountId || parsed.data.scope.observer_channel_id !== observerChannelId) return
+    const parsed = browserRealtimeEventSchema.safeParse(raw)
+    if (!parsed.success || parsed.data.scope.user_id !== session.user.id) return
     const event = parsed.data
     if (lastSequence > 0 && event.sequence !== lastSequence + 1) { realtimeState.value = 'recovering'; connection?.close(4000, 'sequence_gap'); return }
     lastSequence = event.sequence
+    if (event.type === 'market_analysis.created' && event.scope.trading_account_id === null) {
+      onAnalysisChanged?.()
+      return
+    }
+    if (event.scope.trading_account_id !== accountId || event.scope.observer_channel_id !== observerChannelId) return
     if (event.type === 'runtime.bridge.changed') {
       if (accountSnapshot.value && isBridgeRuntime(event.data)) accountSnapshot.value = {
         ...accountSnapshot.value, bridgeState: event.data.state, lastSeenAt: event.data.last_seen_at,
@@ -86,12 +92,12 @@ async function connect(session: SessionSummary, accountId: string, symbol: strin
     onClose() {
     if (currentGeneration !== generation) return
     connection = null
-    scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration)
+    scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged)
     },
-  }) } catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration) }
+  }) } catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged) }
 }
 
-function scheduleReconnect(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number) {
+function scheduleReconnect(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
   if (currentGeneration !== generation || reconnectTimer !== null) return
   realtimeState.value = 'offline'
   const baseDelay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)] ?? 30_000
@@ -102,9 +108,9 @@ function scheduleReconnect(session: SessionSummary, accountId: string, symbol: s
     if (currentGeneration !== generation) return
     void resync().then(
       () => {
-        if (currentGeneration === generation) return connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration)
+        if (currentGeneration === generation) return connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged)
       },
-      () => scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration),
+      () => scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged),
     )
   }, delay)
 }
