@@ -70,6 +70,20 @@ export class MysqlRuntimeModelProfileCatalog {
     return mapProfile(profile, this.keyring, this.options, input)
   }
 
+  async resolveForFrozenReview(input: { userId: number; strategyId: string; usage: RuntimeModelUsageKind }): Promise<RuntimeModelProfile> {
+    const [strategies] = await this.pool.execute<StrategyScopeRow[]>(`SELECT CAST(id AS CHAR) id,CAST(active_version_id AS CHAR) active_version_id,scope,owner_user_id
+      FROM strategies WHERE id=? AND deleted_at_utc IS NULL AND (scope='platform' OR owner_user_id=?) LIMIT 1`, [input.strategyId, input.userId])
+    if (!strategies[0]) throw new InferenceError('model_strategy_unavailable', 409)
+    const [profiles] = await this.pool.execute<ProfileRow[]>(`${profileSelect}
+      INNER JOIN user_model_defaults d ON d.model_profile_id=p.id AND d.user_id=?
+      WHERE ((p.scope='user' AND p.owner_user_id=?) OR (p.scope='platform' AND p.owner_user_id=0))
+        AND p.status='active' AND p.deleted_at IS NULL LIMIT 1`, [input.userId, input.userId])
+    const profile = profiles[0]
+    if (!profile) throw new InferenceError('model_profile_unavailable', 409)
+    if (profile.scope === 'platform') await this.assertPlatformSharing(input.userId, input.usage)
+    return mapProfile(profile, this.keyring, this.options, input)
+  }
+
   private async assertPlatformSharing(userId: number, usage: 'manual' | 'auto') {
     const [rows] = await this.pool.execute<PlatformUsageRow[]>(`SELECT u.plan,p.share_for_manual,p.share_for_auto,p.allowed_plans
       FROM users u INNER JOIN platform_model_usage_policy p ON p.id=1 WHERE u.id=? LIMIT 1`, [userId])

@@ -11,9 +11,14 @@ import {
   manualRiskReleaseCreatedResponseSchema, manualRiskReleaseResponseSchema, riskDecisionDetailResponseSchema,
   riskDecisionListResponseSchema, riskManualReleaseBodySchema, riskPolicyPatchBodySchema, riskPolicyResponseSchema,
   riskSummaryResponseSchema,
+  manualReviewCandidatesResponseSchema, manualReviewCaseCreateBodySchema,
+  reviewCaseDetailResponseSchema, reviewCasesResponseSchema, reviewConfirmBodySchema, reviewGenerationBodySchema,
+  reviewReturnBodySchema, reviewVersionCreateBodySchema, strategyMemoriesResponseSchema, strategyMemoryDecisionBodySchema,
+  strategyMemoryDetailResponseSchema, strategyMemoryUpdateResponseSchema, strategyMemoryUpdatesResponseSchema,
 } from '@aurum/contracts'
 import type {
   AnalysisJobCreate, ApiProblem, AuthLoginRequest, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution,
+  ManualReviewCaseCreateBody, ReviewContent, ReviewKind,
   RiskManualReleaseBody, RiskPolicyPatchBody, StrategyCompileBody, StrategyCreateBody, StrategyKind, StrategyMetadataPatchBody,
   StrategySubscriptionCreateBody, StrategySubscriptionPatchBody, StrategyVersionCreateBody,
 } from '@aurum/contracts'
@@ -174,6 +179,46 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getRiskDecision: (decisionId: string) => send(riskDecisionDetailResponseSchema, `/api/v4/risk-decisions/${encodeURIComponent(decisionId)}`),
     listTradeDecisions: (accountId: string, pageSize = 50) => send(traderDecisionListResponseSchema, `/api/v4/trade-decisions?account_id=${encodeURIComponent(accountId)}&page_size=${Math.min(Math.max(Math.trunc(pageSize), 1), 100)}`),
     getTradeDecision: (decisionId: string) => send(traderDecisionDetailResponseSchema, `/api/v4/trade-decisions/${encodeURIComponent(decisionId)}`),
+    listReviewCases: (filter: { kind?: ReviewKind; accountId?: string; pageSize?: number } = {}) => {
+      const query = new URLSearchParams()
+      if (filter.kind) query.set('kind', filter.kind)
+      if (filter.accountId) query.set('account_id', filter.accountId)
+      query.set('page_size', String(Math.min(Math.max(Math.trunc(filter.pageSize ?? 50), 1), 100)))
+      return send(reviewCasesResponseSchema, `/api/v4/review-cases?${query.toString()}`)
+    },
+    getReviewCase: (caseId: string) => send(reviewCaseDetailResponseSchema, `/api/v4/review-cases/${encodeURIComponent(caseId)}`),
+    listManualReviewCandidates: (accountId?: string, pageSize = 50) => {
+      const query = new URLSearchParams({ page_size: String(Math.min(Math.max(Math.trunc(pageSize), 1), 100)) })
+      if (accountId) query.set('account_id', accountId)
+      return send(manualReviewCandidatesResponseSchema, `/api/v4/manual-review-candidates?${query.toString()}`)
+    },
+    createManualReviewCase: (csrfToken: string, body: ManualReviewCaseCreateBody, idempotencyKey: string) => {
+      const payload = manualReviewCaseCreateBodySchema.parse(body)
+      return send(reviewCaseDetailResponseSchema, '/api/v4/manual-review-cases', { method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(payload) })
+    },
+    requestReviewGeneration: (csrfToken: string, caseId: string, mode: 'retry' | 'refresh_evidence', expectedRevision: number) => {
+      const payload = reviewGenerationBodySchema.parse({ mode })
+      return send(reviewCaseDetailResponseSchema, `/api/v4/review-cases/${encodeURIComponent(caseId)}/generations`, { method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload) })
+    },
+    createReviewVersion: (csrfToken: string, caseId: string, content: ReviewContent, expectedRevision: number) => {
+      const payload = reviewVersionCreateBodySchema.parse({ content: reviewContentWire(content) })
+      return send(reviewCaseDetailResponseSchema, `/api/v4/review-cases/${encodeURIComponent(caseId)}/versions`, { method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload) })
+    },
+    confirmReviewVersion: (csrfToken: string, caseId: string, versionId: string, expectedRevision: number) => {
+      const payload = reviewConfirmBodySchema.parse({ version_id: versionId })
+      return send(reviewCaseDetailResponseSchema, `/api/v4/review-cases/${encodeURIComponent(caseId)}/confirm`, { method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload) })
+    },
+    returnReviewCase: (csrfToken: string, caseId: string, reason: string, expectedRevision: number) => {
+      const payload = reviewReturnBodySchema.parse({ reason })
+      return send(reviewCaseDetailResponseSchema, `/api/v4/review-cases/${encodeURIComponent(caseId)}/return`, { method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload) })
+    },
+    listStrategyMemories: () => send(strategyMemoriesResponseSchema, '/api/v4/strategy-memories'),
+    getStrategyMemory: (memoryId: string) => send(strategyMemoryDetailResponseSchema, `/api/v4/strategy-memories/${encodeURIComponent(memoryId)}`),
+    listMemoryUpdates: (memoryId: string) => send(strategyMemoryUpdatesResponseSchema, `/api/v4/strategy-memories/${encodeURIComponent(memoryId)}/updates`),
+    decideMemoryUpdate: (csrfToken: string, updateId: string, decision: 'accept' | 'reject' | 'revoke', expectedRevision: number) => {
+      const payload = strategyMemoryDecisionBodySchema.parse({ decision })
+      return send(strategyMemoryUpdateResponseSchema, `/api/v4/strategy-memory-updates/${encodeURIComponent(updateId)}/decision`, { method: 'POST', csrfToken, headers: { 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload) })
+    },
     getExecutionCommandContext: (accountId: string, symbol?: string | null, ticket?: string | null) => {
       const query = new URLSearchParams()
       if (symbol) query.set('symbol', symbol)
@@ -214,4 +259,17 @@ export type ApiClient = ReturnType<typeof createApiClient>
 
 function observerQuery(observerChannelId?: string | null, prefix = '?') {
   return observerChannelId ? `${prefix}observer_channel_id=${encodeURIComponent(observerChannelId)}` : ''
+}
+
+function reviewContentWire(value: ReviewContent) {
+  const role = (item: ReviewContent['roles']['analyst']) => ({ assessment: item.assessment, summary: item.summary, evidence_refs: item.evidenceRefs })
+  return {
+    schema_version: value.schemaVersion, conclusion: value.conclusion, headline: value.headline, summary: value.summary,
+    metrics: { net_profit: value.metrics.netProfit, trade_count: value.metrics.tradeCount, win_rate_percent: value.metrics.winRatePercent, profit_factor: value.metrics.profitFactor },
+    trade_episodes: value.tradeEpisodes.map(item => ({ source_id: item.sourceId, symbol: item.symbol, side: item.side, opened_at: item.openedAt, closed_at: item.closedAt, net_profit: item.netProfit, outcome: item.outcome, summary: item.summary })),
+    roles: { analyst: role(value.roles.analyst), trader: role(value.roles.trader), risk: role(value.roles.risk), execution: role(value.roles.execution) },
+    counterexamples: value.counterexamples.map(item => ({ kind: item.kind, title: item.title, summary: item.summary, evidence_refs: item.evidenceRefs, status: item.status })),
+    memory_candidates: value.memoryCandidates.map(item => ({ strategy_id: item.strategyId, memory_key: item.memoryKey, update_kind: item.updateKind, title: item.title, content: item.content, evidence_refs: item.evidenceRefs })),
+    evidence_refs: value.evidenceRefs, full_analysis_text: value.fullAnalysisText,
+  }
 }

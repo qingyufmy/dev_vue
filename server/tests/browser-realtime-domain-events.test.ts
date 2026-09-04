@@ -15,11 +15,13 @@ describe('browser realtime domain projector', () => {
     await publisher.publish(event('market_analysis.created', { market_analysis_id: 'market-1' }))
     await publisher.publish(event('trade_decision.created', { decision_id: 'decision-1', status: 'proposed' }))
     await publisher.publish(event('risk.summary.changed', { account_id: '7' }))
+    await publisher.publish(event('review.case.changed', { review_case_id: 'review-case-1' }))
+    await publisher.publish(event('strategy.memory.changed', { strategy_memory_id: 'memory-1' }))
     await publisher.publish(event('operation.changed', { operation_id: 'operation-1' }))
     await publisher.publish(event('execution.intent.prepared', { intent_id: 'intent-1' }))
 
     const messages = redis.messages.map(item => JSON.parse(item) as Record<string, unknown>)
-    expect(messages).toHaveLength(7)
+    expect(messages).toHaveLength(9)
     expect(messages).toContainEqual(expect.objectContaining({
       type: 'market_analysis.created', accountId: null, userId: 42, resource: 'market_analysis',
       data: expect.objectContaining({ market_bias: 'bullish', opportunity: 'long_setup', confidence: 78 }),
@@ -35,6 +37,14 @@ describe('browser realtime domain projector', () => {
     expect(messages).toContainEqual(expect.objectContaining({
       type: 'operation.changed', accountId: '7', resource: 'operation',
       data: expect.objectContaining({ operation_id: 'operation-1', status: 'uncertain' }),
+    }))
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'review.case.changed', accountId: null, userId: 42, resource: 'review_case',
+      data: { review_case_id: 'review-case-1', status: 'awaiting_confirmation', current_version_id: 'review-version-1', revision: '3' },
+    }))
+    expect(messages).toContainEqual(expect.objectContaining({
+      type: 'strategy.memory.changed', accountId: null, userId: 42, resource: 'strategy_memory',
+      data: { strategy_memory_id: 'memory-1', status: 'active', pending_count: 2, revision: '4' },
     }))
     expect(JSON.stringify(messages)).not.toMatch(/analysisBody|reasoning|approvedActions|policy_json|evaluation_json/)
     for (const raw of redis.messages) expect(parseBrowserRealtimeEvent(raw)).not.toBeNull()
@@ -85,6 +95,12 @@ class FakePool {
     }], []]
     if (sql.includes('FROM account_risk_states')) return [[{
       user_id: 42, account_id: '7', data_complete: 1, revision: 6,
+    }], []]
+    if (sql.includes('FROM review_cases_v4')) return [[{
+      id: 'review-case-1', user_id: 42, status: 'awaiting_confirmation', current_version_id: 'review-version-1', revision: 3,
+    }], []]
+    if (sql.includes('FROM strategy_memory_libraries_v4')) return [[{
+      id: 'memory-1', user_id: 42, status: 'active', pending_count: 2, revision: 4,
     }], []]
     if (sql.includes('FROM operations')) return [[{
       id: 'operation-1', user_id: 42, account_id: '7', kind: 'risk_decision_execution',

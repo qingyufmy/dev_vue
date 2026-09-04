@@ -101,6 +101,8 @@
         "risk.summary.changed",
         "risk.decision.created",
         "risk.manual_release.changed",
+        "review.case.changed",
+        "strategy.memory.changed",
         "risk.status.changed",
         "risk.alert.created",
         "operation.changed",
@@ -330,6 +332,28 @@
         "error_code": { "type": ["string", "null"], "maxLength": 128 }
       }
     },
+    "ReviewCaseChangedData": {
+      "type": "object",
+      "required": ["review_case_id", "status", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "review_case_id": { "$ref": "#/$defs/OpaqueId" },
+        "status": { "type": "string", "enum": ["awaiting_evidence", "queued", "running", "awaiting_confirmation", "needs_changes", "confirmed", "failed"] },
+        "current_version_id": { "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }] },
+        "revision": { "$ref": "#/$defs/Revision" }
+      }
+    },
+    "StrategyMemoryChangedData": {
+      "type": "object",
+      "required": ["strategy_memory_id", "status", "pending_count", "revision"],
+      "additionalProperties": false,
+      "properties": {
+        "strategy_memory_id": { "$ref": "#/$defs/OpaqueId" },
+        "status": { "type": "string", "enum": ["active", "revalidating", "retired"] },
+        "pending_count": { "type": "integer", "minimum": 0 },
+        "revision": { "$ref": "#/$defs/Revision" }
+      }
+    },
     "SummaryData": {
       "type": "object",
       "required": ["id", "status"],
@@ -400,6 +424,8 @@
             { "properties": { "type": { "const": "risk.summary.changed" }, "data": { "$ref": "#/$defs/RiskSummaryChangedData" } } },
             { "properties": { "type": { "const": "risk.decision.created" }, "data": { "$ref": "#/$defs/RiskDecisionData" } } },
             { "properties": { "type": { "const": "risk.manual_release.changed" }, "data": { "$ref": "#/$defs/RiskManualReleaseData" } } },
+            { "properties": { "type": { "const": "review.case.changed" }, "data": { "$ref": "#/$defs/ReviewCaseChangedData" } } },
+            { "properties": { "type": { "const": "strategy.memory.changed" }, "data": { "$ref": "#/$defs/StrategyMemoryChangedData" } } },
             {
               "properties": {
                 "type": { "const": "operation.changed" },
@@ -494,7 +520,7 @@
       "required": ["kind", "after_revision"],
       "additionalProperties": false,
       "properties": {
-        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "operations", "notifications", "payment", "admin_alerts"] },
+        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "reviews", "operations", "notifications", "payment", "admin_alerts"] },
         "trading_account_id": {
           "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
         },

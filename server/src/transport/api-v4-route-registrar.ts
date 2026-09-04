@@ -7,6 +7,7 @@ import {
 } from '../modules/execution/index.js'
 import { inferenceRoutes, type InferenceService } from '../modules/inference/index.js'
 import { riskRoutes, type RiskService } from '../modules/risk/index.js'
+import { reviewRoutes, type ReviewService } from '../modules/reviews/index.js'
 import { strategyRoutes, type StrategyService } from '../modules/strategies/index.js'
 import {
   tradingRoutes, type AuthTradeRequestAdapter, type ConnectionCapacityService, type TradingService,
@@ -20,6 +21,7 @@ export interface ApiV4RouteServices {
   inference: InferenceService
   strategies: StrategyService
   risk: RiskService
+  reviews: ReviewService
   execution: ExecutionService
   userExecution: UserExecutionCommandService
   executionDistribution: ExecutionDistributionService
@@ -39,6 +41,7 @@ export async function registerApiV4Routes(
     await trade.register(inferenceRoutes, { prefix: '/api/v4', service: services.inference, strategies: services.strategies, auth: services.tradeAuth })
     await trade.register(strategyRoutes, { prefix: '/api/v4', service: services.strategies, auth: services.tradeAuth })
     await trade.register(riskRoutes, { prefix: '/api/v4', service: services.risk, auth: services.tradeAuth })
+    await trade.register(reviewRoutes, { prefix: '/api/v4', service: services.reviews, auth: services.tradeAuth })
     await trade.register(executionRoutes, { prefix: '/api/v4', service: services.execution, auth: services.tradeAuth })
     await trade.register(userExecutionCommandRoutes, { prefix: '/api/v4', service: services.userExecution, auth: services.tradeAuth })
     await trade.register(executionDistributionRoutes, { prefix: '/api/v4', service: services.executionDistribution, auth: services.tradeAuth })

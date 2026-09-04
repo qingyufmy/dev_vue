@@ -10,6 +10,8 @@ import {
   riskPolicyPatchBodySchema, riskPolicySchema, riskSummarySchema, strategyCompileBodySchema, strategyCompileResultSchema,
   strategyCreateBodySchema, strategyDetailSchema, strategyMetadataPatchBodySchema, strategySubscriptionSchema,
   strategySubscriptionCreateBodySchema, strategySubscriptionPatchBodySchema, strategyVersionCreateBodySchema,
+  browserRealtimeEventSchema, manualReviewCandidateSchema, reviewCaseDetailSchema, reviewContentSchema,
+  reviewVersionCreateBodySchema, strategyMemoryDetailSchema, strategyMemoryUpdateSchema,
 } from './index'
 
 describe('sessionResponseSchema', () => {
@@ -211,6 +213,47 @@ describe('account risk V4 contracts', () => {
       approved_actions: [], evaluated_at: meta.generated_at, policy_hash: 'a'.repeat(64),
     })
     expect(detail).toMatchObject({ summary: { riskDecisionId: 'risk-1', rejectCode: 'RISK_DAILY_LOSS_LIMIT' }, rules: [{ actionId: null }], approvedActions: [] })
+  })
+})
+
+describe('review and strategy-memory contracts', () => {
+  const reviewContent = {
+    schema_version: 'review.v4.1', conclusion: 'mixed', headline: '复盘结论', summary: '冻结证据下的摘要',
+    metrics: { net_profit: '12.5', trade_count: 1, win_rate_percent: '100', profit_factor: '2.0' },
+    trade_episodes: [],
+    roles: Object.fromEntries(['analyst', 'trader', 'risk', 'execution'].map(key => [key, { assessment: 'effective', summary: `${key} 正常`, evidence_refs: ['source:1'] }])),
+    counterexamples: [], memory_candidates: [], evidence_refs: ['source:1'], full_analysis_text: '完整正文',
+  }
+
+  it('normalizes a complete review while retaining the full analysis body', () => {
+    expect(reviewContentSchema.parse(reviewContent)).toMatchObject({ schemaVersion: 'review.v4.1', fullAnalysisText: '完整正文', roles: { analyst: { evidenceRefs: ['source:1'] } } })
+    expect(reviewCaseDetailSchema.parse({
+      summary: {
+        id: 'case-1', kind: 'daily', user_id: '7', trading_account_id: 'account-1', account_label: 'MT5 · 10001 · Demo', symbol: 'XAUUSD',
+        subscription_id: 'subscription-1', subscription_revision: '4',
+        analysis_strategy_id: 'strategy-1', analysis_strategy_name: '分析策略', trader_strategy_id: 'strategy-2', trader_strategy_name: '交易策略',
+        terminal_period_start: '2026-09-03T21:00:00.000Z', terminal_period_end: '2026-09-04T21:00:00.000Z', terminal_timezone_offset_minutes: 180,
+        status: 'awaiting_confirmation', evidence_status: 'complete', evidence_revision: '2', evidence_hash: 'b'.repeat(64), current_version_id: 'version-1', confirmed_version_id: null,
+        updated_at: '2026-09-04T22:00:00.000Z', revision: '3',
+      },
+      current_version: { id: 'version-1', review_case_id: 'case-1', version: 1, author_kind: 'ai', conclusion: 'mixed', content: reviewContent, created_at: '2026-09-04T22:00:00.000Z' },
+      sources: [{ kind: 'market_analysis', source_id: 'source:1', relation: 'direct', evidence_hash: 'a'.repeat(64) }],
+      current_job: null, return_reason: null,
+    })).toMatchObject({ summary: { evidenceRevision: 2, evidenceHash: 'b'.repeat(64), revision: 3 }, currentVersion: { versionNumber: 1 } })
+  })
+
+  it('keeps manual candidate tokens and memory CAS revisions explicit', () => {
+    expect(manualReviewCandidateSchema.parse({ id: 'candidate-1', trading_account_id: 'account-1', account_label: 'MT5 · 10001 · Demo', ticket: '123', position_id: null, symbol: 'XAUUSD', side: 'buy', volume: '0.10', opened_at: '2026-09-04T08:00:00.000Z', closed_at: '2026-09-04T09:00:00.000Z', net_profit: '12.5', terminal_timezone_offset_minutes: 180, source_classification: 'manual', eligibility_status: 'eligible', selection_token: `candidate-1.2.${'b'.repeat(64)}`, selection_expires_at: '2026-09-04T09:05:00.000Z', revision: '2' })).toMatchObject({ selectionToken: expect.any(String), revision: 2, terminalTimezoneOffsetMinutes: 180 })
+    expect(strategyMemoryDetailSchema.parse({ id: 'memory-1', strategy_id: 'strategy-1', strategy_name: '分析策略', strategy_kind: 'analysis', owner_user_id: '7', mode: 'shadow', status: 'active', current_version: 1, pending_count: 1, updated_at: '2026-09-04T09:00:00.000Z', revision: '4', current_revision_id: 'memory-version-1', content_text: '经验正文', content_hash: 'c'.repeat(64), max_context_tokens: 800 })).toMatchObject({ currentVersionNumber: 1, pendingCount: 1, revision: 4 })
+    expect(strategyMemoryUpdateSchema.parse({ id: 'update-1', library_id: 'memory-1', source_review_case_id: 'case-1', source_review_version_id: 'version-1', update_kind: 'short_term', status: 'awaiting_confirmation', expected_library_revision: '4', proposal: { memory_key: 'entry.confirmation', title: '等待确认', content: '连续证据确认后再入场。', evidence_refs: ['market_analysis:1'] }, diff_preview_text: '+经验', conflicts: [{ type: 'same_key_content_changed', prior_update_id: 'update-0', memory_key: 'entry.confirmation' }], created_at: '2026-09-04T09:00:00.000Z', revision: '1' })).toMatchObject({ proposal: { memoryKey: 'entry.confirmation' }, conflicts: [{ priorUpdateId: 'update-0' }], revision: 1 })
+    expect(strategyMemoryUpdateSchema.safeParse({ id: 'update-1', library_id: 'memory-1', source_review_case_id: 'case-1', source_review_version_id: 'version-1', update_kind: 'short_term', status: 'awaiting_confirmation', expected_library_revision: '4', proposal: {}, diff_preview_text: '+经验', conflicts: [], created_at: '2026-09-04T09:00:00.000Z', revision: '1' }).success).toBe(false)
+    expect(reviewVersionCreateBodySchema.safeParse({ content: reviewContent }).success).toBe(true)
+    expect(reviewVersionCreateBodySchema.safeParse({ content: { schema_version: 'review.v4.1' } }).success).toBe(false)
+  })
+
+  it('recognizes review invalidation events without accepting an oversized payload', () => {
+    expect(browserRealtimeEventSchema.safeParse({ v: 4, event_id: 'event-1', type: 'review.case.changed', occurred_at: '2026-09-04T09:00:00.000Z', sequence: 1, scope: { user_id: '7', trading_account_id: 'account-1', terminal_instance_id: null, observer_channel_id: null }, resource: { kind: 'review_case', id: 'case-1' }, revision: '4', data: { review_case_id: 'case-1', status: 'awaiting_confirmation', current_version_id: 'version-1', revision: '4' }, correlation_id: null }).success).toBe(true)
+    expect(browserRealtimeEventSchema.safeParse({ v: 4, event_id: 'event-1', type: 'review.case.changed', occurred_at: '2026-09-04T09:00:00.000Z', sequence: 1, scope: { user_id: '7', trading_account_id: null, terminal_instance_id: null, observer_channel_id: null }, resource: { kind: 'review_case', id: 'case-1' }, revision: '4', data: { review_case_id: 'case-1', status: 'confirmed', revision: '4', full_analysis_text: 'must-not-stream' }, correlation_id: null }).success).toBe(false)
   })
 })
 

@@ -30,11 +30,13 @@ export interface V4RuntimeConfig extends V4BaseRuntimeConfig {
   analysisHealthPort: number
   traderHealthPort: number
   riskHealthPort: number
+  reviewHealthPort: number
   analysisSchedulePollMs: number
   analysisScheduleBatchSize: number
   analysisConcurrency: number
   traderConcurrency: number
   riskConcurrency: number
+  reviewConcurrency: number
   modelDefaultTimeoutMs: number
   modelMaxAttempts: number
   modelRecoveryBatchSize: number
@@ -84,11 +86,13 @@ export function loadV4RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V4Run
     analysisHealthPort: integer(env.V4_ANALYSIS_HEALTH_PORT, 3023, 1, 65_535, 'V4_ANALYSIS_HEALTH_PORT'),
     traderHealthPort: integer(env.V4_TRADER_HEALTH_PORT, 3024, 1, 65_535, 'V4_TRADER_HEALTH_PORT'),
     riskHealthPort: integer(env.V4_RISK_HEALTH_PORT, 3025, 1, 65_535, 'V4_RISK_HEALTH_PORT'),
+    reviewHealthPort: integer(env.V4_REVIEW_HEALTH_PORT, 3026, 1, 65_535, 'V4_REVIEW_HEALTH_PORT'),
     analysisSchedulePollMs: integer(env.V4_ANALYSIS_SCHEDULE_POLL_MS, 1_000, 100, 60_000, 'V4_ANALYSIS_SCHEDULE_POLL_MS'),
     analysisScheduleBatchSize: integer(env.V4_ANALYSIS_SCHEDULE_BATCH_SIZE, 100, 1, 500, 'V4_ANALYSIS_SCHEDULE_BATCH_SIZE'),
     analysisConcurrency: integer(env.V4_ANALYSIS_CONCURRENCY, 2, 1, 16, 'V4_ANALYSIS_CONCURRENCY'),
     traderConcurrency: integer(env.V4_TRADER_CONCURRENCY, 4, 1, 32, 'V4_TRADER_CONCURRENCY'),
     riskConcurrency: integer(env.V4_RISK_CONCURRENCY, 8, 1, 64, 'V4_RISK_CONCURRENCY'),
+    reviewConcurrency: integer(env.V4_REVIEW_CONCURRENCY, 1, 1, 4, 'V4_REVIEW_CONCURRENCY'),
     modelDefaultTimeoutMs: integer(env.V4_MODEL_DEFAULT_TIMEOUT_MS, 120_000, 1_000, 600_000, 'V4_MODEL_DEFAULT_TIMEOUT_MS'),
     modelMaxAttempts: integer(env.V4_MODEL_MAX_ATTEMPTS, 2, 1, 3, 'V4_MODEL_MAX_ATTEMPTS'),
     modelRecoveryBatchSize: integer(env.V4_MODEL_RECOVERY_BATCH_SIZE, 50, 1, 500, 'V4_MODEL_RECOVERY_BATCH_SIZE'),

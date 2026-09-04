@@ -20,9 +20,13 @@ const EVENT_RESOURCES = new Map<BrowserRealtimeEventType, BrowserRealtimeResourc
   ['risk.summary.changed', 'risk.summary'],
   ['risk.decision.created', 'risk.decision'],
   ['risk.manual_release.changed', 'risk.manual_release'],
+  ['review.case.changed', 'review_case'],
+  ['strategy.memory.changed', 'strategy_memory'],
   ['operation.changed', 'operation'],
 ])
-const USER_SCOPED_TYPES = new Set<BrowserRealtimeEventType>(['analysis.job.changed', 'market_analysis.created'])
+const USER_SCOPED_TYPES = new Set<BrowserRealtimeEventType>([
+  'analysis.job.changed', 'market_analysis.created', 'review.case.changed', 'strategy.memory.changed',
+])
 
 export class RedisBrowserRealtimeSubscriber {
   private started = false

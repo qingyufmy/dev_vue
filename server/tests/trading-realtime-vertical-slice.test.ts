@@ -175,20 +175,23 @@ describe('Stage 11 trading vertical slice', () => {
     expect(messages).toContainEqual(expect.objectContaining({ type: 'subscription.ready', request_id: 'multi-account', subscriptions: expect.any(Array) }))
   })
 
-  it('keeps analysis updates user-scoped while trader, risk and operation updates remain account-scoped', async () => {
+  it('keeps analysis and review updates user-scoped while trader, risk and operation updates remain account-scoped', async () => {
     const messages: unknown[] = []; const hub = new BrowserRealtimeHub(repository())
     const session = new BrowserRealtimeSession(42, hub, { send(value) { messages.push(value) }, close() {} })
     await session.receive({ v: 4, type: 'subscription.subscribe', request_id: 'domains', targets: [
       { kind: 'signals', trading_account_id: null, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'all', after_revision: null },
       { kind: 'signals', trading_account_id: '7', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'trade_decisions', after_revision: null },
       { kind: 'risk', trading_account_id: '7', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'summary', after_revision: null },
+      { kind: 'reviews', trading_account_id: null, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'all', after_revision: null },
       { kind: 'operations', trading_account_id: '7', observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'all', after_revision: null },
     ] })
     hub.publish({ eventId: 'analysis-evt', type: 'market_analysis.created', occurredAt: '2026-09-04T08:00:00.000Z', userId: 42, accountId: null, terminalInstanceId: null, resource: 'market_analysis', resourceId: 'analysis-1', revision: 1, data: {} })
     hub.publish({ eventId: 'decision-evt', type: 'trade_decision.created', occurredAt: '2026-09-04T08:00:01.000Z', userId: 42, accountId: '7', terminalInstanceId: null, resource: 'trade_decision', resourceId: 'decision-1', revision: 1, data: {} })
+    hub.publish({ eventId: 'review-evt', type: 'review.case.changed', occurredAt: '2026-09-04T08:00:01.000Z', userId: 42, accountId: null, terminalInstanceId: null, resource: 'review_case', resourceId: 'review-1', revision: 1, data: {} })
     hub.publish({ eventId: 'foreign-evt', type: 'market_analysis.created', occurredAt: '2026-09-04T08:00:02.000Z', userId: 99, accountId: null, terminalInstanceId: null, resource: 'market_analysis', resourceId: 'analysis-2', revision: 1, data: {} })
     expect(messages).toContainEqual(expect.objectContaining({ event_id: 'analysis-evt', scope: expect.objectContaining({ trading_account_id: null }) }))
     expect(messages).toContainEqual(expect.objectContaining({ event_id: 'decision-evt', scope: expect.objectContaining({ trading_account_id: '7' }) }))
+    expect(messages).toContainEqual(expect.objectContaining({ event_id: 'review-evt', scope: expect.objectContaining({ trading_account_id: null }) }))
     expect(messages).not.toContainEqual(expect.objectContaining({ event_id: 'foreign-evt' }))
   })
 

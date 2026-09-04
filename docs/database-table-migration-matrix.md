@@ -259,10 +259,10 @@ operations
 | 源表 | 行数 | 动作 | 目标 | 转换与对账重点 |
 | --- | ---: | --- | --- | --- |
 | `trades` | 2 | 重塑 | `manual_trade_records` | 这是用户手填交易日志而非 MT 成交；字段转精确类型并保留原文本，不能并入 terminal deals 后丢失笔记/截图 |
-| `trade_review_cases` | 155 | 拆分 | `trade_review_cases`、`review_evidence_payloads` | case 摘要/状态留主表，约 75.67 MiB evidence 拆载荷；outcome 一对一，原 hash 验证 |
+| `trade_review_cases` | 155 | 合并 | `review_cases_v4`、`review_case_sources_v4`、`review_evidence_payloads_v4` | 系统交易复盘统一进入 case/source/evidence 模型；约 75.67 MiB evidence 拆载荷，保留 legacy id、outcome 关联和原 hash |
 | `trade_review_jobs` | 0 | 保留 | `trade_review_jobs` | 异步 job；幂等键、lease、模型配置和错误码保留 |
 | `trade_review_versions` | 0 | 保留 | `trade_review_versions` | case + version 唯一；人工确认版本与模型草稿都不可变保留 |
-| `manual_trade_review_cases` | 3 | 拆分 | `manual_trade_review_cases`、`review_evidence_payloads` | 手动交易复盘独立于系统订单复盘；选择结果、当前版本和状态留主表，大证据拆载荷 |
+| `manual_trade_review_cases` | 3 | 合并 | `review_cases_v4`、`review_case_sources_v4`、`review_evidence_payloads_v4` | 手动交易复盘以 kind 区分但复用统一状态机；选择结果、版本和证据哈希完整保留 |
 | `manual_trade_review_sources` | 3 | 保留 | `manual_trade_review_sources` | 稳定 source hash 去重；账户/ticket/position 是证据引用，不用于改变用户归属 |
 | `manual_trade_review_jobs` | 3 | 保留 | `manual_trade_review_jobs` | 异步 stage 编排、lease、next attempt 和模型 task 保留 |
 | `manual_trade_review_stage_runs` | 18 | 保留 | `manual_trade_review_stage_runs` | case/job/generation/stage 唯一；冻结输入输出 hash，可将正文拆 payload |
@@ -271,7 +271,7 @@ operations
 | `manual_trade_review_aggregate_cases` | 0 | 保留 | `manual_trade_review_aggregate_cases` | 手动交易跨案例总结；与日/月 period review 不混用，空表不删能力 |
 | `manual_trade_review_aggregate_sources` | 0 | 保留 | `manual_trade_review_aggregate_sources` | aggregate case + source case 唯一；只存引用和 hash |
 | `manual_trade_review_aggregate_versions` | 0 | 保留 | `manual_trade_review_aggregate_versions` | 不可变版本；人工批准字段明确 |
-| `period_review_cases` | 25 | 拆分 | `period_review_cases`、`review_evidence_payloads` | 日/月类型、系统用户、账户/策略上下文、终端业务时段留主表；19.60 MiB evidence 拆载荷 |
+| `period_review_cases` | 25 | 合并 | `review_cases_v4`、`review_case_sources_v4`、`review_evidence_payloads_v4` | 日/月类型、系统用户、账户/策略版本、订阅 revision 与终端业务时段冻结在统一 case；19.60 MiB evidence 拆载荷 |
 | `period_review_sources` | 176 | 保留 | `period_review_sources` | outcome/trade review/子 period 来源三选一 CHECK；source hash 去重 |
 | `period_review_versions` | 33 | 保留 | `period_review_versions` | case + version 唯一；current/approved 外键，内容 hash 保留 |
 | `period_review_jobs` | 25 | 拆分 | `period_review_jobs`、`review_job_payloads` | job 当前态留主表；记忆库和策略文本快照拆 payload；模型 task 精确关联 |
@@ -279,9 +279,9 @@ operations
 | `period_review_derivation_jobs` | 12 | 保留 | `period_review_derivation_jobs` | 经验/记忆派生异步任务；目标类型受控，幂等和重试边界明确 |
 | `period_review_monthly_checkpoints` | 8 | 拆分 | `period_review_monthly_checkpoints`、`review_checkpoint_payloads` | checkpoint 元数据和 hash 留主表，sources/content 大载荷拆分；可断点继续 |
 | `period_review_user_states` | 33 | 保留 | `period_review_user_states` | case + user 唯一；仅是已读投影，不参与复盘事实状态 |
-| `strategy_memory_libraries` | 2 | 拆分 | `strategy_memory_libraries`、`strategy_memory_library_revisions` | library 只保留当前版本指针、容量和状态；正文以 revision 为不可变权威 |
-| `strategy_memory_library_revisions` | 20 | 保留 | `strategy_memory_library_revisions` | strategy + version 唯一；正文、hash、来源和 actor 保留 |
-| `strategy_memory_pending_updates` | 10 | 保留 | `strategy_memory_pending_updates` | 人工确认前的候选更新；source review/version 强关系，合并 revision 后幂等完成 |
+| `strategy_memory_libraries` | 2 | 拆分 | `strategy_memory_libraries_v4`、`strategy_memory_library_revisions_v4` | 每条策略唯一库；library 只保留当前版本指针、容量和状态，分析/交易策略自然分离 |
+| `strategy_memory_library_revisions` | 20 | 重塑 | `strategy_memory_library_revisions_v4` | strategy + version 唯一；文本、结构化内容块、hash、来源和 actor 保留，合并与撤销都追加新版本 |
+| `strategy_memory_pending_updates` | 10 | 重塑 | `strategy_memory_pending_updates_v4` | 人工确认前保存精确差异/冲突；长期候选至少三个独立已确认案例后才开放额外确认，合并后仍可生成 revoke revision |
 | `strategy_memory_compression_jobs` | 0 | 保留 | `strategy_memory_compression_jobs` | 异步压缩；输入 hash、目标字符数、结果 revision 和验证状态保留 |
 | `strategy_memory_injection_logs` | 5,417 | 保留 | `strategy_memory_injection_logs` | 记录实际注入的 library version/hash/token，不保存或广播不必要完整正文 |
 | `strategy_memory_consistency_jobs` | 48 | 拆分 | `strategy_memory_consistency_jobs`、`memory_job_payloads` | 任务元数据留主表，策略/记忆快照和 result JSON 拆载荷；模型 task 精确关联 |
@@ -302,6 +302,7 @@ operations
 
 - `case` 表描述对象和流程状态，`version` 表保存不可变结果，`payload` 表保存大型证据，`job/event` 表只描述异步执行。
 - 模型生成结果只有在人工确认后才能形成 `strategy_memory_pending_updates`，随后以新 revision 合入对应策略唯一记忆库。
+- 单个复盘不能直接形成长期记忆；同一稳定 `proposal_key` 至少需要三个不同已确认 case，再由用户额外确认。撤销不删除旧版本，而是移除对应结构化内容块并追加 `revoke` revision。
 - 当前 6,093 条平台经验注入日志与 5,417 条策略记忆注入日志必须迁入同一查询模型但保留来源类型，不能简单去重相加。
 
 ## 14. 165 张表覆盖校验

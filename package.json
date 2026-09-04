@@ -31,6 +31,7 @@
     "start:v4:analysis": "node server/dist-v4/entrypoints/worker-analysis.js",
     "start:v4:trader": "node server/dist-v4/entrypoints/worker-trader.js",
     "start:v4:risk": "node server/dist-v4/entrypoints/worker-risk.js",
+    "start:v4:review": "node server/dist-v4/entrypoints/worker-review.js",
     "verify:payment-schema": "node scripts/verify-payment-schema.mjs"
   },
   "dependencies": {

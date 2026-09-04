@@ -13,6 +13,7 @@ import {
 } from '../modules/execution/index.js'
 import { InferenceService, MysqlInferenceRepository } from '../modules/inference/index.js'
 import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
+import { MysqlReviewRepository, ReviewService } from '../modules/reviews/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
 import {
   AuthTradeRequestAdapter, ConnectionCapacityService, MysqlTradingRepository, RedisConnectionLeaseStore,
@@ -49,6 +50,7 @@ async function main() {
     inference: new InferenceService(new MysqlInferenceRepository(pool), strategies),
     strategies,
     risk: new RiskService(new MysqlRiskRepository(pool)),
+    reviews: new ReviewService(new MysqlReviewRepository(pool)),
     execution: new ExecutionService(new MysqlExecutionRepository(pool)),
     userExecution,
     executionDistribution,

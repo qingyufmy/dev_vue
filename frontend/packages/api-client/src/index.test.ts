@@ -277,6 +277,28 @@ describe('createApiClient', () => {
     expect(new Headers(releaseRequest?.headers).get('Idempotency-Key')).toBe('risk-release-idempotency-1')
     expect(new Headers(releaseRequest?.headers).get('X-CSRF-Token')).toBe('csrf')
   })
+
+  it('uses the normalized review paths, selection tokens and optimistic revisions', async () => {
+    const response = () => new Response(JSON.stringify({ data: { items: [] }, meta: { request_id: 'review-1', generated_at: '2026-09-04T09:00:00.000Z' } }), { status: 200 })
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => response())
+    const client = createApiClient({ fetchImpl })
+
+    await client.listReviewCases({ kind: 'manual', accountId: 'account/1', pageSize: 25 })
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/review-cases?kind=manual&account_id=account%2F1&page_size=25')
+
+    await client.createManualReviewCase('csrf-review', {
+      candidate_ids: ['candidate-1'], selection_tokens: [`candidate-1.2.${'a'.repeat(64)}`], strategy_id: 'strategy-1', user_thesis: '当时计划等待突破',
+    }, 'manual-review-0001').catch(() => undefined)
+    const [, request] = fetchImpl.mock.calls[1] ?? []
+    expect(new Headers(request?.headers).get('X-CSRF-Token')).toBe('csrf-review')
+    expect(new Headers(request?.headers).get('Idempotency-Key')).toBe('manual-review-0001')
+    expect(request?.body).toContain('selection_tokens')
+
+    await client.returnReviewCase('csrf-review', 'case/1', '证据引用需要修正', 4).catch(() => undefined)
+    const [, returnRequest] = fetchImpl.mock.calls[2] ?? []
+    expect(fetchImpl.mock.calls[2]?.[0]).toBe('/api/v4/review-cases/case%2F1/return')
+    expect(new Headers(returnRequest?.headers).get('If-Match')).toBe('"4"')
+  })
 })
 
 describe('strategy management API client', () => {

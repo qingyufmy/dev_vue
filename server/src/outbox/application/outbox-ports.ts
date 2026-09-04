@@ -4,6 +4,7 @@ export interface ClaimedOutboxEvent {
   eventType: 'analysis.requested' | 'analysis.running' | 'analysis.failed' | 'market_analysis.created'
     | 'trader.requested' | 'trader.running' | 'trader.failed' | 'trade_decision.created'
     | 'risk.policy.changed' | 'risk.summary.changed' | 'risk.decision.created' | 'risk.manual_release.changed'
+    | 'review.job.requested' | 'review.case.changed' | 'strategy.memory.changed'
     | 'operation.changed' | 'execution.intent.prepared' | 'execution.distribution.target.requested' | 'bridge.command.queued'
   occurredAt: string
   payload: Record<string, unknown>

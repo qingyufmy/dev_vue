@@ -54,7 +54,7 @@ describe('Stage 12E persistence and transport boundaries', () => {
   it('publishes the Stage 12E operation contract while keeping action payloads off realtime', async () => {
     const openapi = await readFile(new URL('../../contracts/openapi-v4.json', import.meta.url), 'utf8')
     const realtime = await readFile(new URL('../../contracts/realtime-v4.schema.json', import.meta.url), 'utf8')
-    expect(openapi).toContain('stage-12f-bridge-command-reconciliation')
+    expect(openapi).toContain('stage-12r-reviewer-memory-core')
     expect(openapi).toContain('/operations/{operation_id}')
     expect(realtime).toContain('operation.changed')
     expect(realtime).not.toContain('expected_state_sha256')

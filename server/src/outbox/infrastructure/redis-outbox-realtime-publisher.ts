@@ -34,11 +34,14 @@ interface OperationRow extends RowDataPacket {
   id: string; user_id: number; account_id: string; kind: string; status: string; updated_at_utc: Date
   resource_id: string | null; error_code: string | null; revision: number
 }
+interface ReviewCaseRow extends RowDataPacket { id: string; user_id: number; status: string; current_version_id: string | null; revision: number }
+interface StrategyMemoryRow extends RowDataPacket { id: string; user_id: number; status: string; pending_count: number; revision: number }
 
 const REALTIME_TYPES = new Set<ClaimedOutboxEvent['eventType']>([
   'analysis.requested', 'analysis.running', 'analysis.failed', 'market_analysis.created',
   'trader.requested', 'trader.running', 'trader.failed', 'trade_decision.created',
   'risk.policy.changed', 'risk.summary.changed', 'risk.decision.created', 'risk.manual_release.changed',
+  'review.case.changed', 'strategy.memory.changed',
   'operation.changed',
 ])
 
@@ -65,6 +68,8 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
     if (event.eventType === 'risk.summary.changed') return [await this.riskSummary(event)]
     if (event.eventType === 'risk.decision.created') return [await this.riskDecision(event)]
     if (event.eventType === 'risk.manual_release.changed') return [await this.riskRelease(event)]
+    if (event.eventType === 'review.case.changed') return [await this.reviewCase(event)]
+    if (event.eventType === 'strategy.memory.changed') return [await this.strategyMemory(event)]
     return [await this.operation(event)]
   }
 
@@ -185,6 +190,30 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
       resource: 'risk.manual_release', resourceId: row.id, revision: row.revision,
       data: { manual_release_id: row.id, account_id: row.account_id, status: row.status,
         invalidation_reason: row.invalidation_reason, revision: String(row.revision) },
+    })
+  }
+
+  private async reviewCase(event: ClaimedOutboxEvent) {
+    const id = requiredId(event.payload.review_case_id, 'outbox_review_case_id_invalid')
+    const row = await one<ReviewCaseRow>(this.pool,
+      'SELECT c.id,c.user_id,c.status,c.current_version_id,c.revision FROM review_cases_v4 c WHERE c.id=? LIMIT 1',
+      [id], 'outbox_review_case_missing')
+    return base(event, {
+      type: 'review.case.changed', userId: row.user_id, accountId: null, resource: 'review_case',
+      resourceId: row.id, revision: row.revision,
+      data: { review_case_id: row.id, status: row.status, current_version_id: row.current_version_id, revision: String(row.revision) },
+    })
+  }
+
+  private async strategyMemory(event: ClaimedOutboxEvent) {
+    const id = requiredId(event.payload.strategy_memory_id, 'outbox_strategy_memory_id_invalid')
+    const row = await one<StrategyMemoryRow>(this.pool,
+      `SELECT l.id,l.owner_user_id user_id,l.status,l.revision,(SELECT COUNT(*) FROM strategy_memory_pending_updates_v4 u WHERE u.library_id=l.id AND u.status='awaiting_confirmation') pending_count FROM strategy_memory_libraries_v4 l WHERE l.id=? AND l.owner_user_id IS NOT NULL LIMIT 1`,
+      [id], 'outbox_strategy_memory_missing')
+    return base(event, {
+      type: 'strategy.memory.changed', userId: row.user_id, accountId: null, resource: 'strategy_memory',
+      resourceId: row.id, revision: row.revision,
+      data: { strategy_memory_id: row.id, status: row.status, pending_count: Number(row.pending_count), revision: String(row.revision) },
     })
   }
 

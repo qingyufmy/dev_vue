@@ -85,6 +85,32 @@ export class HttpJsonTraderModelGateway implements TraderGateway {
   }
 }
 
+/** Generic structured-output gateway for bounded domains such as reviews. */
+export class HttpJsonObjectModelGateway {
+  readonly profileId: string
+  readonly provider: string
+  readonly model: string
+  readonly timeoutMs: number
+  readonly maxAttempts: number
+
+  constructor(
+    private readonly profile: RuntimeModelProfile,
+    private readonly usageLedger: ModelUsageLedger,
+    private readonly request: Fetch = fetch,
+    private readonly onUsageSettlementError: ModelUsageSettlementErrorHandler = logUsageSettlementError,
+  ) {
+    this.profileId = profile.id
+    this.provider = profile.provider
+    this.model = profile.model
+    this.timeoutMs = profile.timeoutMs
+    this.maxAttempts = profile.maxAttempts
+  }
+
+  invoke(messages: Array<{ role: 'system' | 'user'; content: string }>, signal: AbortSignal) {
+    return requestJson(this.profile, this.usageLedger, this.request, signal, messages, this.onUsageSettlementError)
+  }
+}
+
 async function requestJson(
   profile: RuntimeModelProfile,
   usageLedger: ModelUsageLedger,

@@ -70,5 +70,11 @@ module.exports = {
       script: 'server/dist-v4/entrypoints/worker-risk.js',
       max_memory_restart: '384M',
     },
+    {
+      ...common,
+      name: 'aurum-v4-worker-review',
+      script: 'server/dist-v4/entrypoints/worker-review.js',
+      max_memory_restart: '768M',
+    },
   ],
 }

@@ -217,7 +217,7 @@
 | strategy | `/strategies`、`/strategy-versions`、`/strategy-subscriptions` | 私有/平台策略、版本和用户订阅 |
 | models | `/model-profiles`、`/model-routes`、`/model-evaluations` | 个人/平台模型、默认模型和用途路由 |
 | risk | `/risk-accounts`、`/risk-policies`、`/risk-snapshots`、`/risk-decisions` | 当前账户规则、快照、告警和决策 |
-| review | `/review-periods`、`/review-items`、`/memories` | 日/月/手动复盘、确认和统一策略记忆 |
+| review | `/review-cases`、`/manual-review-candidates`、`/manual-review-cases`、`/strategy-memories`、`/strategy-memory-updates` | 日/月/手动复盘、不可变版本、人工确认及可撤销的统一策略记忆 |
 | records | `/trades`、`/audit-events`、`/exports` | 历史交易、系统审计和导出 |
 | admin | `/admin/*` | 用户、会员、内容、商业、AI、风控、Bridge、集成、系统和审计 |
 
@@ -310,6 +310,7 @@ AI、风控与执行资源使用以下受控目标，不能把任意 Redis 频�
 - 用户级行情分析：`kind=signals`，账户与观摩频道为空，`resource_id=analysis_jobs|market_analyses|all`；分析记录始终按系统用户归类，不随 MT4/MT5 账户切换。
 - 账户级交易员：`kind=signals`，必须提供 `trading_account_id`，`resource_id=trader_jobs|trade_decisions`。
 - 账户级风控：`kind=risk`，必须提供 `trading_account_id`，`resource_id=policy|summary|decisions|manual_release|all`。
+- 用户级复盘与策略记忆：`kind=reviews`，账户与观摩频道为空，`resource_id=cases|memories|all`；事件只用于失效通知，完整复盘和记忆正文必须重新读取 HTTP。
 - 账户级异步操作：`kind=operations`，提供 `trading_account_id`，`resource_id=all`。
 - 用户级分发父操作：`kind=operations`，`trading_account_id=null`、`observer_channel_id=null`、`resource_id=all`；只匹配事件中的同一活动系统用户。观摩频道不能订阅该目标。
 
@@ -337,6 +338,8 @@ AI、风控与执行资源使用以下受控目标，不能把任意 Redis 频�
 | `risk.summary.changed` | 风险摘要完整性和 revision，不含完整快照 | risk summary HTTP |
 | `risk.decision.created` | 风控通过/拒绝与公开错误码，不含规则明细 | risk decisions HTTP |
 | `risk.manual_release.changed` | 手动放开状态、失效原因和 revision | manual release HTTP |
+| `review.case.changed` | 复盘 case 状态、当前版本 ID 和 revision，不含证据或完整正文 | review case HTTP |
+| `strategy.memory.changed` | 策略记忆状态、待确认数量和 revision，不含记忆正文 | strategy memory HTTP |
 | `operation.changed` | 异步命令或任务状态、错误摘要 | operation HTTP |
 | `notification.created` | 新通知摘要和未读数 | notifications HTTP |
 | `payment.status.changed` | 活跃订单到账、确认、完成、异常、过期 | payment HTTP |

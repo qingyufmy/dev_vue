@@ -21,6 +21,11 @@ export class BullMqOutboxTaskPublisher implements OutboxTaskPublisher {
       await this.queues.risk.add('risk.review', { decisionId }, { jobId: event.eventId })
       return
     }
+    if (event.eventType === 'review.job.requested') {
+      const reviewJobId = requiredId(event.payload.review_job_id, 'outbox_review_job_id_invalid')
+      await this.queues.review.add('review.run', { reviewJobId }, { jobId: event.eventId, priority: 20 })
+      return
+    }
     if (event.eventType === 'risk.decision.created') {
       if (event.payload.status !== 'approved') return
       const riskDecisionId = requiredId(event.payload.risk_decision_id, 'outbox_risk_decision_id_invalid')
