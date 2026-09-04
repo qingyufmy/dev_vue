@@ -95,12 +95,14 @@ export type BrowserRealtimeEventType =
   | 'analysis.job.changed' | 'market_analysis.created' | 'trader.job.changed' | 'trade_decision.created'
   | 'risk.policy.changed' | 'risk.summary.changed' | 'risk.decision.created' | 'risk.manual_release.changed'
   | 'review.case.changed' | 'strategy.memory.changed'
+  | 'trade.history.changed'
   | 'operation.changed'
 
 export type BrowserRealtimeResource = RealtimeResource
   | 'analysis.job' | 'market_analysis' | 'trader.job' | 'trade_decision'
   | 'risk.policy' | 'risk.summary' | 'risk.decision' | 'risk.manual_release' | 'operation'
   | 'review_case' | 'strategy_memory'
+  | 'trade_history'
 
 export interface BrowserRealtimeEvent {
   eventId: string

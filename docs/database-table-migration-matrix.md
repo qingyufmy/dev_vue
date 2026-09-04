@@ -103,7 +103,7 @@
 | `bridge_v3_account_latest` | 6 | 重塑 | `terminal_account_snapshots` | 显式 `trading_account_id`、连接世代和 revision；只保存恢复所需最近投影，不作为经纪商权威事实 |
 | `bridge_v3_positions_latest` | 3 | 重塑 | `terminal_position_snapshots` | 以交易账户、position/ticket 唯一；payload 中可搜索字段提升为列，大载荷独立保存 |
 | `bridge_v3_orders_latest` | 2 | 重塑 | `terminal_order_snapshots` | 持仓、挂单和历史订单类型明确；ticket 唯一范围包含交易账户 |
-| `bridge_v3_deals` | 0 | 重塑 | `terminal_deals` | 交易账户 + deal_ticket 唯一；金额/价格/手数 DECIMAL；来源原文可留 payload |
+| `bridge_v3_deals` | 0 | 重塑 | `terminal_history_deals_v4`、`account_trade_records_v4`、`account_trade_record_deals_v4` | Stage 12S 旁路建立权威终端事实与账户交易记录；交易账户 + deal_ticket 唯一，金额/价格/手数用 DECIMAL，原始证据留服务端且不下发浏览器 |
 | `bridge_v3_stream_revisions` | 243 | 重塑 | `terminal_stream_revisions` | 账户、连接世代、stream 唯一；浏览器和 Bridge revision 不混用 |
 | `bridge_v3_command_ledger` | 3,525 | 重塑 | `bridge_commands_v4`、`bridge_command_payloads_v4`、`bridge_command_results_v4`、`bridge_command_events_v4`、`bridge_trade_state_snapshots_v4` | Stage 12F 先旁路建立服务端 V4 命令账本；command_id、幂等哈希、精确 route、deadline、可信 expected-state 快照和每份回执证据分层保存。旧账本暂不自动回填；任何可能送达 MT 的未知结果保持 `uncertain`，只能对账、不得重放 |
 | `bridge_v3_command_events` | 10,506 | 重塑 | `bridge_command_events` | 追加写并外键到命令；事件 payload 继续保留，按 command_id + id 游标读取 |
@@ -201,8 +201,8 @@
 | `admin_position_protection_targets` | 3 | 合并 | `operation_targets`、`execution_intents` | 每个 position/ticket 独立修改，部分成功可表达，目标快照不可被后续行情覆盖 |
 | `pending_orders` | 0 | 合并 | `terminal_order_snapshots`、`trade_outcomes` | 不再维护第三套挂单真相；旧行若出现需按 ticket/账户归并，无法归因则进入迁移异常表 |
 | `close_signal_tickets` | 30 | 合并 | `execution_intents`、`trade_outcomes` | 旧 close_signal 与 original_ticket 关系迁移为来源引用；价格 DOUBLE 按原字符串/品种精度核对 |
-| `signal_outcomes` | 334 | 重塑 | `trade_outcomes`、`trade_outcome_payloads` | 保留 signal/delivery/intent/account/ticket 全链路；当前状态、费用稳定和保护修订结构化，大快照拆载荷 |
-| `signal_outcome_deals` | 427 | 重塑 | `trade_outcome_deals` | 外键 outcome/account；deal_ticket 在交易账户范围唯一；利润、佣金、swap、fee 汇总必须与 outcome 对账 |
+| `signal_outcomes` | 334 | 重塑 | `trade_outcomes`、`trade_outcome_payloads`、`account_trade_attributions_v4` | 保留 signal/delivery/intent/account/ticket 全链路；只有票据、订单、成交或分发目标精确匹配后才建立 Stage 12S 归因，不把命令成功当作终端成交 |
+| `signal_outcome_deals` | 427 | 重塑 | `terminal_history_deals_v4`、`account_trade_record_deals_v4` | 外键 outcome/account；deal_ticket 在交易账户范围唯一；利润、佣金、swap、fee 与终端事实逐笔对账，冲突保持显式状态 |
 | `trade_audit_logs` | 9,660 | 重塑 | `trade_audit_events` | 追加写；统一 operation/intent/command/correlation ID；request/result 大字段进入 payload，列表不读取正文 |
 
 目标执行关系固定为：

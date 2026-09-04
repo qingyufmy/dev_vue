@@ -165,6 +165,66 @@ export const tradingWorkspaceResponseSchema = z.object({
 export const marketQuoteResponseSchema = z.object({ data: marketQuoteSchema.nullable(), meta: responseMetaSchema })
 export const marketCandlesResponseSchema = z.object({ data: z.object({ items: z.array(marketCandleSchema) }), meta: responseMetaSchema })
 
+export const tradeHistorySideSchema = z.enum(['buy', 'sell'])
+export const tradeHistorySourceSchema = z.enum(['system', 'manual', 'other_ea', 'mixed', 'unknown'])
+export const tradeHistoryRecordSchema = z.object({
+  id: z.string().min(1), account_id: z.string().min(1), platform: tradingPlatformSchema, primary_ticket: z.string().min(1),
+  position_id: z.string().nullable(), symbol: z.string().min(1), side: tradeHistorySideSchema,
+  status: z.enum(['open', 'closed', 'partial', 'unknown']), source: tradeHistorySourceSchema,
+  attribution_status: z.enum(['exact', 'partial', 'conflicted', 'unresolved']), evidence_status: z.enum(['complete', 'partial', 'conflicted']),
+  volume: decimalSchema, entry_price: decimalSchema, exit_price: decimalSchema.nullable(), stop_loss: decimalSchema.nullable(), take_profit: decimalSchema.nullable(),
+  gross_profit: decimalSchema, commission: decimalSchema, swap: decimalSchema, fee: decimalSchema, net_profit: decimalSchema,
+  opened_at: z.iso.datetime({ offset: true }), closed_at: z.iso.datetime({ offset: true }).nullable(),
+  terminal_timezone_offset_minutes: z.number().int().min(-840).max(840), revision: numericRevisionSchema,
+}).strict().transform((value) => ({
+  id: value.id, accountId: value.account_id, platform: value.platform, primaryTicket: value.primary_ticket, positionId: value.position_id,
+  symbol: value.symbol, side: value.side, status: value.status, source: value.source, attributionStatus: value.attribution_status,
+  evidenceStatus: value.evidence_status, volume: value.volume, entryPrice: value.entry_price, exitPrice: value.exit_price,
+  stopLoss: value.stop_loss, takeProfit: value.take_profit, grossProfit: value.gross_profit, commission: value.commission,
+  swap: value.swap, fee: value.fee, netProfit: value.net_profit, openedAt: value.opened_at, closedAt: value.closed_at,
+  terminalTimezoneOffsetMinutes: value.terminal_timezone_offset_minutes, revision: value.revision,
+}))
+export const tradeHistorySummarySchema = z.object({
+  trade_count: z.number().int().nonnegative(), winning_count: z.number().int().nonnegative(), losing_count: z.number().int().nonnegative(), breakeven_count: z.number().int().nonnegative(),
+  win_rate_percent: decimalSchema.nullable(), gross_profit: decimalSchema, commission: decimalSchema, swap: decimalSchema, fee: decimalSchema,
+  net_profit: decimalSchema, profit_factor: decimalSchema.nullable(),
+}).strict().transform((value) => ({ tradeCount: value.trade_count, winningCount: value.winning_count, losingCount: value.losing_count,
+  breakevenCount: value.breakeven_count, winRatePercent: value.win_rate_percent, grossProfit: value.gross_profit, commission: value.commission,
+  swap: value.swap, fee: value.fee, netProfit: value.net_profit, profitFactor: value.profit_factor }))
+export const tradeHistoryPageResponseSchema = z.object({ data: z.object({
+  captured_end: z.iso.datetime({ offset: true }),
+  freshness: z.object({ status: z.enum(['empty', 'syncing', 'ready', 'stale', 'failed']), history_revision: numericRevisionSchema,
+    fresh_through: z.iso.datetime({ offset: true }).nullable(), last_success_at: z.iso.datetime({ offset: true }).nullable() }).strict(),
+  items: z.array(tradeHistoryRecordSchema), next_cursor: z.string().min(1).nullable(), has_more: z.boolean(), summary: tradeHistorySummarySchema,
+  daily: z.array(z.object({ business_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), trade_count: z.number().int().nonnegative(), net_profit: decimalSchema, cumulative_net_profit: decimalSchema }).strict()
+    .transform((value) => ({ businessDate: value.business_date, tradeCount: value.trade_count, netProfit: value.net_profit, cumulativeNetProfit: value.cumulative_net_profit }))),
+}).strict().transform((value) => ({ capturedEnd: value.captured_end, freshness: { status: value.freshness.status, historyRevision: value.freshness.history_revision,
+  freshThrough: value.freshness.fresh_through, lastSuccessAt: value.freshness.last_success_at }, items: value.items, nextCursor: value.next_cursor,
+  hasMore: value.has_more, summary: value.summary, daily: value.daily })), meta: responseMetaSchema })
+export const tradeRecordDealSchema = z.object({ id: z.string(), deal_ticket: z.string(), order_ticket: z.string().nullable(), role: z.enum(['entry', 'exit', 'fee', 'adjustment', 'unknown']),
+  side: z.enum(['buy', 'sell', 'none', 'unknown']), entry_kind: z.enum(['in', 'out', 'inout', 'out_by', 'none', 'unknown']), volume: decimalSchema.nullable(), price: decimalSchema.nullable(),
+  gross_profit: decimalSchema, commission: decimalSchema, swap: decimalSchema, fee: decimalSchema, occurred_at: z.iso.datetime({ offset: true }) }).strict()
+  .transform((value) => ({ id: value.id, dealTicket: value.deal_ticket, orderTicket: value.order_ticket, role: value.role, side: value.side,
+    entryKind: value.entry_kind, volume: value.volume, price: value.price, grossProfit: value.gross_profit, commission: value.commission,
+    swap: value.swap, fee: value.fee, occurredAt: value.occurred_at }))
+export const tradeRecordAttributionSchema = z.object({ kind: z.enum(['market_analysis', 'trade_decision', 'risk_decision', 'execution_intent', 'execution_outcome', 'bridge_command', 'review_case']),
+  source_id: z.string().min(1), relation: z.enum(['opened', 'modified', 'closed', 'cancelled', 'reviewed', 'related']), proof_kind: z.enum(['terminal_ticket', 'terminal_order', 'terminal_deal', 'distribution_target', 'legacy_mapping']) }).strict()
+  .transform((value) => ({ kind: value.kind, sourceId: value.source_id, relation: value.relation, proofKind: value.proof_kind }))
+export const tradeRecordDetailResponseSchema = z.object({ data: z.object({
+  id: z.string().min(1), account_id: z.string().min(1), platform: tradingPlatformSchema, primary_ticket: z.string().min(1), position_id: z.string().nullable(), symbol: z.string().min(1),
+  side: tradeHistorySideSchema, status: z.enum(['open', 'closed', 'partial', 'unknown']), source: tradeHistorySourceSchema,
+  attribution_status: z.enum(['exact', 'partial', 'conflicted', 'unresolved']), evidence_status: z.enum(['complete', 'partial', 'conflicted']), volume: decimalSchema,
+  entry_price: decimalSchema, exit_price: decimalSchema.nullable(), stop_loss: decimalSchema.nullable(), take_profit: decimalSchema.nullable(), gross_profit: decimalSchema,
+  commission: decimalSchema, swap: decimalSchema, fee: decimalSchema, net_profit: decimalSchema, opened_at: z.iso.datetime({ offset: true }), closed_at: z.iso.datetime({ offset: true }).nullable(),
+  terminal_timezone_offset_minutes: z.number().int().min(-840).max(840), revision: numericRevisionSchema, evidence_hash: z.string().regex(/^[a-f0-9]{64}$/),
+  deals: z.array(tradeRecordDealSchema), attributions: z.array(tradeRecordAttributionSchema),
+}).strict().transform((value) => ({ id: value.id, accountId: value.account_id, platform: value.platform, primaryTicket: value.primary_ticket, positionId: value.position_id,
+  symbol: value.symbol, side: value.side, status: value.status, source: value.source, attributionStatus: value.attribution_status, evidenceStatus: value.evidence_status,
+  volume: value.volume, entryPrice: value.entry_price, exitPrice: value.exit_price, stopLoss: value.stop_loss, takeProfit: value.take_profit,
+  grossProfit: value.gross_profit, commission: value.commission, swap: value.swap, fee: value.fee, netProfit: value.net_profit, openedAt: value.opened_at,
+  closedAt: value.closed_at, terminalTimezoneOffsetMinutes: value.terminal_timezone_offset_minutes, revision: value.revision, evidenceHash: value.evidence_hash,
+  deals: value.deals, attributions: value.attributions })), meta: responseMetaSchema })
+
 export const strategyKindSchema = z.enum(['analysis', 'trader'])
 export const strategyScopeSchema = z.enum(['platform', 'user'])
 export const strategyStatusSchema = z.enum(['draft', 'active', 'retired'])
@@ -1064,7 +1124,7 @@ export const operationResponseSchema = z.object({ data: operationSchema, meta: r
 
 export const tradingRealtimeEventSchema = z.object({
   v: z.literal(4), event_id: z.string(),
-  type: z.enum(['runtime.bridge.changed', 'account.metrics.changed', 'market.quote.updated', 'market.candle.updated', 'market.candle.closed', 'positions.changed', 'pending_orders.changed']),
+  type: z.enum(['runtime.bridge.changed', 'account.metrics.changed', 'market.quote.updated', 'market.candle.updated', 'market.candle.closed', 'positions.changed', 'pending_orders.changed', 'trade.history.changed']),
   occurred_at: z.iso.datetime({ offset: true }), sequence: z.number().int().positive(),
   scope: z.object({ user_id: z.string(), trading_account_id: z.string(), terminal_instance_id: z.string().nullable(), observer_channel_id: z.string().nullable() }),
   resource: z.object({ kind: z.string(), id: z.string() }), revision: z.string(), data: z.unknown(), correlation_id: z.string().nullable(),
@@ -1128,6 +1188,12 @@ export type TradingAccount = z.infer<typeof tradingAccountSchema>
 export type AccountSnapshot = z.infer<typeof accountSnapshotSchema>
 export type MarketQuote = z.infer<typeof marketQuoteSchema>
 export type MarketCandle = z.infer<typeof marketCandleSchema>
+export type TradeHistorySide = z.infer<typeof tradeHistorySideSchema>
+export type TradeHistorySource = z.infer<typeof tradeHistorySourceSchema>
+export type TradeHistoryRecord = z.infer<typeof tradeHistoryRecordSchema>
+export type TradeHistorySummary = z.infer<typeof tradeHistorySummarySchema>
+export type TradeHistoryPageResponse = z.infer<typeof tradeHistoryPageResponseSchema>
+export type TradeRecordDetail = z.infer<typeof tradeRecordDetailResponseSchema>['data']
 export type OpenPosition = z.infer<typeof openPositionSchema>
 export type PendingOrder = z.infer<typeof pendingOrderSchema>
 export type Timeframe = z.infer<typeof timeframeSchema>

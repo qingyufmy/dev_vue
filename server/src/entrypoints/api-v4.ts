@@ -15,6 +15,7 @@ import { InferenceService, MysqlInferenceRepository } from '../modules/inference
 import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
 import { MysqlReviewRepository, ReviewService } from '../modules/reviews/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
+import { MysqlTradeHistoryRepository, TradeHistoryService } from '../modules/trade-history/index.js'
 import {
   AuthTradeRequestAdapter, ConnectionCapacityService, MysqlTradingRepository, RedisConnectionLeaseStore,
   TradingService,
@@ -54,6 +55,7 @@ async function main() {
     execution: new ExecutionService(new MysqlExecutionRepository(pool)),
     userExecution,
     executionDistribution,
+    tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),
     tradeAuth,
   }, { tradeOrigin: web.auth.tradeOrigin, secureCookies: web.secureCookies })
 

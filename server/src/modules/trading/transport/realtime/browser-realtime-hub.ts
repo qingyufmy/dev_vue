@@ -28,6 +28,7 @@ const USER_RESOURCES = new Set(['analysis.job', 'market_analysis', 'review_case'
 const DOMAIN_RESOURCES = new Set([
   ...USER_RESOURCES, 'trader.job', 'trade_decision', 'risk.policy', 'risk.summary',
   'risk.decision', 'risk.manual_release', 'operation',
+  'trade_history',
 ])
 
 export class BrowserRealtimeHub {

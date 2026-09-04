@@ -22,6 +22,7 @@ const EVENT_RESOURCES = new Map<BrowserRealtimeEventType, BrowserRealtimeResourc
   ['risk.manual_release.changed', 'risk.manual_release'],
   ['review.case.changed', 'review_case'],
   ['strategy.memory.changed', 'strategy_memory'],
+  ['trade.history.changed', 'trade_history'],
   ['operation.changed', 'operation'],
 ])
 const USER_SCOPED_TYPES = new Set<BrowserRealtimeEventType>([

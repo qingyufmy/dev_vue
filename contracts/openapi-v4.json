@@ -19,6 +19,7 @@
     { "name": "Accounts", "description": "Trading account snapshots" },
     { "name": "Market", "description": "Quotes and candle history" },
     { "name": "Execution", "description": "Positions and asynchronous operations" },
+    { "name": "Trade History", "description": "Authoritative terminal orders, deals and reconciled account trade records" },
     { "name": "Strategies", "description": "Versioned market-analysis and account-trader strategies" },
     { "name": "Analysis", "description": "AI market-analysis jobs and immutable results" },
     { "name": "Trader", "description": "Per-account AI trader evaluations without direct execution authority" },
@@ -946,6 +947,43 @@
         }
       }
     },
+    "/trade-history": {
+      "get": {
+        "operationId": "listTradeHistory",
+        "summary": "List one owned account's reconciled terminal trade history",
+        "description": "Returns a frozen keyset page. Date filters use the stored terminal business date; HTTP carries records and chart data while realtime only invalidates this snapshot.",
+        "tags": ["Trade History"],
+        "parameters": [
+          { "$ref": "#/components/parameters/AccountIdQuery" },
+          { "$ref": "#/components/parameters/SymbolQueryOptional" },
+          { "name": "side", "in": "query", "schema": { "type": "string", "enum": ["buy", "sell"] } },
+          { "name": "source", "in": "query", "schema": { "type": "string", "enum": ["system", "manual", "other_ea", "mixed", "unknown"] } },
+          { "name": "outcome", "in": "query", "schema": { "type": "string", "enum": ["profit", "loss", "breakeven"] } },
+          { "name": "from_date", "in": "query", "description": "Inclusive terminal business date", "schema": { "$ref": "#/components/schemas/BusinessDate" } },
+          { "name": "to_date", "in": "query", "description": "Inclusive terminal business date", "schema": { "$ref": "#/components/schemas/BusinessDate" } },
+          { "name": "q", "in": "query", "description": "Exact ticket, position ID or symbol", "schema": { "type": "string", "minLength": 1, "maxLength": 64 } },
+          { "$ref": "#/components/parameters/PageSize" },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": {
+          "200": { "description": "Frozen trade history page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradeHistoryPageResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/trade-history/{trade_record_id}": {
+      "get": {
+        "operationId": "getTradeRecord",
+        "summary": "Get one authoritative record with terminal deals and exact evidence links",
+        "tags": ["Trade History"],
+        "parameters": [{ "name": "trade_record_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } }],
+        "responses": {
+          "200": { "description": "Trade record detail", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradeRecordDetailResponse" } } } },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/review-cases": {
       "get": { "operationId": "listReviewCases", "summary": "List the current user's daily, monthly and manual review cases", "tags": ["Reviews"], "parameters": [{ "name": "kind", "in": "query", "schema": { "type": "string", "enum": ["daily", "monthly", "manual"] } }, { "name": "account_id", "in": "query", "schema": { "$ref": "#/components/schemas/OpaqueId" } }, { "$ref": "#/components/parameters/PageSize" }], "responses": { "200": { "description": "Review cases", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReviewCaseListResponse" } } } } } }
     },
@@ -1153,6 +1191,11 @@
       "Decimal": {
         "type": "string",
         "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+      },
+      "BusinessDate": {
+        "type": "string",
+        "format": "date",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
       },
       "PositiveDecimal": {
         "type": "string",
@@ -1500,6 +1543,64 @@
           "data": { "$ref": "#/components/schemas/AccountSnapshot" },
           "meta": { "$ref": "#/components/schemas/Meta" }
         }
+      },
+      "TradeHistoryRecordFields": {
+        "type": "object",
+        "required": ["id", "account_id", "platform", "primary_ticket", "position_id", "symbol", "side", "status", "source", "attribution_status", "evidence_status", "volume", "entry_price", "exit_price", "stop_loss", "take_profit", "gross_profit", "commission", "swap", "fee", "net_profit", "opened_at", "closed_at", "terminal_timezone_offset_minutes", "revision"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" }, "account_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "platform": { "type": "string", "enum": ["mt4", "mt5"] }, "primary_ticket": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "position_id": { "type": ["string", "null"], "maxLength": 64 }, "symbol": { "$ref": "#/components/schemas/Symbol" },
+          "side": { "type": "string", "enum": ["buy", "sell"] }, "status": { "type": "string", "enum": ["open", "closed", "partial", "unknown"] },
+          "source": { "type": "string", "enum": ["system", "manual", "other_ea", "mixed", "unknown"] },
+          "attribution_status": { "type": "string", "enum": ["exact", "partial", "conflicted", "unresolved"] },
+          "evidence_status": { "type": "string", "enum": ["complete", "partial", "conflicted"] },
+          "volume": { "$ref": "#/components/schemas/Decimal" }, "entry_price": { "$ref": "#/components/schemas/Decimal" },
+          "exit_price": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "stop_loss": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "take_profit": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "gross_profit": { "$ref": "#/components/schemas/Decimal" }, "commission": { "$ref": "#/components/schemas/Decimal" },
+          "swap": { "$ref": "#/components/schemas/Decimal" }, "fee": { "$ref": "#/components/schemas/Decimal" }, "net_profit": { "$ref": "#/components/schemas/Decimal" },
+          "opened_at": { "$ref": "#/components/schemas/UtcDateTime" }, "closed_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "terminal_timezone_offset_minutes": { "type": "integer", "minimum": -840, "maximum": 840 }, "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "TradeHistoryRecord": {
+        "allOf": [{ "$ref": "#/components/schemas/TradeHistoryRecordFields" }],
+        "unevaluatedProperties": false
+      },
+      "TradeHistorySummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["trade_count", "winning_count", "losing_count", "breakeven_count", "win_rate_percent", "gross_profit", "commission", "swap", "fee", "net_profit", "profit_factor"],
+        "properties": {
+          "trade_count": { "type": "integer", "minimum": 0 }, "winning_count": { "type": "integer", "minimum": 0 }, "losing_count": { "type": "integer", "minimum": 0 }, "breakeven_count": { "type": "integer", "minimum": 0 },
+          "win_rate_percent": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "gross_profit": { "$ref": "#/components/schemas/Decimal" },
+          "commission": { "$ref": "#/components/schemas/Decimal" }, "swap": { "$ref": "#/components/schemas/Decimal" }, "fee": { "$ref": "#/components/schemas/Decimal" },
+          "net_profit": { "$ref": "#/components/schemas/Decimal" }, "profit_factor": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }
+        }
+      },
+      "TradeHistoryPageResponse": {
+        "type": "object", "required": ["data", "meta"], "additionalProperties": false,
+        "properties": { "data": { "type": "object", "additionalProperties": false, "required": ["captured_end", "freshness", "items", "next_cursor", "has_more", "summary", "daily"], "properties": {
+          "captured_end": { "$ref": "#/components/schemas/UtcDateTime" },
+          "freshness": { "type": "object", "additionalProperties": false, "required": ["status", "history_revision", "fresh_through", "last_success_at"], "properties": { "status": { "type": "string", "enum": ["empty", "syncing", "ready", "stale", "failed"] }, "history_revision": { "$ref": "#/components/schemas/Revision" }, "fresh_through": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] }, "last_success_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] } } },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/TradeHistoryRecord" } }, "next_cursor": { "type": ["string", "null"], "maxLength": 2048 }, "has_more": { "type": "boolean" },
+          "summary": { "$ref": "#/components/schemas/TradeHistorySummary" },
+          "daily": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["business_date", "trade_count", "net_profit", "cumulative_net_profit"], "properties": { "business_date": { "$ref": "#/components/schemas/BusinessDate" }, "trade_count": { "type": "integer", "minimum": 0 }, "net_profit": { "$ref": "#/components/schemas/Decimal" }, "cumulative_net_profit": { "$ref": "#/components/schemas/Decimal" } } } }
+        } }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "TradeRecordDeal": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "deal_ticket", "order_ticket", "role", "side", "entry_kind", "volume", "price", "gross_profit", "commission", "swap", "fee", "occurred_at"],
+        "properties": { "id": { "$ref": "#/components/schemas/OpaqueId" }, "deal_ticket": { "type": "string" }, "order_ticket": { "type": ["string", "null"] }, "role": { "type": "string", "enum": ["entry", "exit", "fee", "adjustment", "unknown"] }, "side": { "type": "string", "enum": ["buy", "sell", "none", "unknown"] }, "entry_kind": { "type": "string", "enum": ["in", "out", "inout", "out_by", "none", "unknown"] }, "volume": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "price": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "gross_profit": { "$ref": "#/components/schemas/Decimal" }, "commission": { "$ref": "#/components/schemas/Decimal" }, "swap": { "$ref": "#/components/schemas/Decimal" }, "fee": { "$ref": "#/components/schemas/Decimal" }, "occurred_at": { "$ref": "#/components/schemas/UtcDateTime" } }
+      },
+      "TradeRecordAttribution": {
+        "type": "object", "additionalProperties": false, "required": ["kind", "source_id", "relation", "proof_kind"],
+        "properties": { "kind": { "type": "string", "enum": ["market_analysis", "trade_decision", "risk_decision", "execution_intent", "execution_outcome", "bridge_command", "review_case"] }, "source_id": { "$ref": "#/components/schemas/OpaqueId" }, "relation": { "type": "string", "enum": ["opened", "modified", "closed", "cancelled", "reviewed", "related"] }, "proof_kind": { "type": "string", "enum": ["terminal_ticket", "terminal_order", "terminal_deal", "distribution_target", "legacy_mapping"] } }
+      },
+      "TradeRecordDetailResponse": {
+        "type": "object", "required": ["data", "meta"], "additionalProperties": false,
+        "properties": { "data": { "allOf": [{ "$ref": "#/components/schemas/TradeHistoryRecordFields" }, { "type": "object", "required": ["evidence_hash", "deals", "attributions"], "properties": { "evidence_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "deals": { "type": "array", "items": { "$ref": "#/components/schemas/TradeRecordDeal" } }, "attributions": { "type": "array", "items": { "$ref": "#/components/schemas/TradeRecordAttribution" } } } }], "unevaluatedProperties": false }, "meta": { "$ref": "#/components/schemas/Meta" } }
       },
       "TradingWorkspaceResponse": {
         "type": "object", "required": ["data", "meta"],
@@ -2521,5 +2622,5 @@
   "security": [
     { "applicationSession": [] }
   ],
-  "x-contract-status": "stage-12r-reviewer-memory-core"
+  "x-contract-status": "stage-12s-authoritative-trade-history"
 }

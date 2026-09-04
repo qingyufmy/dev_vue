@@ -103,6 +103,7 @@
         "risk.manual_release.changed",
         "review.case.changed",
         "strategy.memory.changed",
+        "trade.history.changed",
         "risk.status.changed",
         "risk.alert.created",
         "operation.changed",
@@ -354,6 +355,18 @@
         "revision": { "$ref": "#/$defs/Revision" }
       }
     },
+    "TradeHistoryChangedData": {
+      "type": "object",
+      "required": ["status", "history_revision", "fresh_through"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["empty", "syncing", "ready", "stale", "failed"] },
+        "history_revision": { "$ref": "#/$defs/Revision" },
+        "fresh_through": {
+          "oneOf": [{ "$ref": "#/$defs/UtcDateTime" }, { "type": "null" }]
+        }
+      }
+    },
     "SummaryData": {
       "type": "object",
       "required": ["id", "status"],
@@ -426,6 +439,7 @@
             { "properties": { "type": { "const": "risk.manual_release.changed" }, "data": { "$ref": "#/$defs/RiskManualReleaseData" } } },
             { "properties": { "type": { "const": "review.case.changed" }, "data": { "$ref": "#/$defs/ReviewCaseChangedData" } } },
             { "properties": { "type": { "const": "strategy.memory.changed" }, "data": { "$ref": "#/$defs/StrategyMemoryChangedData" } } },
+            { "properties": { "type": { "const": "trade.history.changed" }, "data": { "$ref": "#/$defs/TradeHistoryChangedData" } } },
             {
               "properties": {
                 "type": { "const": "operation.changed" },
@@ -520,7 +534,7 @@
       "required": ["kind", "after_revision"],
       "additionalProperties": false,
       "properties": {
-        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "reviews", "operations", "notifications", "payment", "admin_alerts"] },
+        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "reviews", "trades", "operations", "notifications", "payment", "admin_alerts"] },
         "trading_account_id": {
           "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
         },

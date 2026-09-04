@@ -15,6 +15,7 @@ import {
   reviewCaseDetailResponseSchema, reviewCasesResponseSchema, reviewConfirmBodySchema, reviewGenerationBodySchema,
   reviewReturnBodySchema, reviewVersionCreateBodySchema, strategyMemoriesResponseSchema, strategyMemoryDecisionBodySchema,
   strategyMemoryDetailResponseSchema, strategyMemoryUpdateResponseSchema, strategyMemoryUpdatesResponseSchema,
+  tradeHistoryPageResponseSchema, tradeRecordDetailResponseSchema,
 } from '@aurum/contracts'
 import type {
   AnalysisJobCreate, ApiProblem, AuthLoginRequest, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution,
@@ -106,6 +107,19 @@ export function createApiClient(options: ApiClientOptions = {}) {
     getTradingWorkspace: (accountId: string, observerChannelId?: string | null) => send(tradingWorkspaceResponseSchema, `/api/v4/trading-accounts/${encodeURIComponent(accountId)}/snapshot${observerQuery(observerChannelId)}`),
     getMarketQuote: (accountId: string, symbol: string, observerChannelId?: string | null) => send(marketQuoteResponseSchema, `/api/v4/market/quotes/${encodeURIComponent(symbol)}?account_id=${encodeURIComponent(accountId)}${observerQuery(observerChannelId, '&')}`),
     getMarketCandles: (accountId: string, symbol: string, timeframe: string, limit = 200, observerChannelId?: string | null) => send(marketCandlesResponseSchema, `/api/v4/market/candles?account_id=${encodeURIComponent(accountId)}&symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&page_size=${limit}${observerQuery(observerChannelId, '&')}`),
+    listTradeHistory: (filter: { accountId: string; symbol?: string; side?: string; source?: string; outcome?: string; fromDate?: string; toDate?: string; query?: string; pageSize?: number; cursor?: string | null }) => {
+      const query = new URLSearchParams({ account_id: filter.accountId, page_size: String(Math.min(Math.max(Math.trunc(filter.pageSize ?? 50), 1), 100)) })
+      if (filter.symbol) query.set('symbol', filter.symbol)
+      if (filter.side) query.set('side', filter.side)
+      if (filter.source) query.set('source', filter.source)
+      if (filter.outcome) query.set('outcome', filter.outcome)
+      if (filter.fromDate) query.set('from_date', filter.fromDate)
+      if (filter.toDate) query.set('to_date', filter.toDate)
+      if (filter.query) query.set('q', filter.query)
+      if (filter.cursor) query.set('cursor', filter.cursor)
+      return send(tradeHistoryPageResponseSchema, `/api/v4/trade-history?${query.toString()}`)
+    },
+    getTradeRecord: (recordId: string) => send(tradeRecordDetailResponseSchema, `/api/v4/trade-history/${encodeURIComponent(recordId)}`),
     listStrategies: (kind?: StrategyKind) => send(strategiesResponseSchema, `/api/v4/strategies${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
     getStrategy: (strategyId: string) => send(strategyDetailResponseSchema, `/api/v4/strategies/${encodeURIComponent(strategyId)}`),
     compileStrategy: (csrfToken: string, body: StrategyCompileBody) => {
