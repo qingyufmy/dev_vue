@@ -244,7 +244,7 @@ export class MysqlRiskRepository implements RiskRepository {
       await connection.execute('INSERT INTO risk_decision_payloads_v4 (risk_decision_id,evaluation_json,payload_sha256,payload_bytes) VALUES (?,?,?,?)', [input.riskDecisionId, payload, sha256(input.evaluation), Buffer.byteLength(payload)])
       const tradeStatus = input.evaluation.status === 'approved' ? 'accepted' : 'risk_rejected'
       await connection.execute('UPDATE trade_decisions SET risk_decision_id=?,status=?,revision=revision+1 WHERE id=?', [input.riskDecisionId, tradeStatus, input.decisionId])
-      await outbox(connection, 'risk_decision', input.riskDecisionId, 'risk.decision.created', { risk_decision_id: input.riskDecisionId, decision_id: input.decisionId, account_id: identity.trading_account_id, status: input.evaluation.status, reject_code: input.evaluation.rejectCode })
+      await outbox(connection, 'risk_decision', input.riskDecisionId, 'risk.decision.created', { risk_decision_id: input.riskDecisionId, decision_id: input.decisionId, user_id: identity.user_id, account_id: identity.trading_account_id, status: input.evaluation.status, reject_code: input.evaluation.rejectCode })
       const [created] = await connection.execute<RiskDecisionRow[]>(`${riskDecisionSelect} WHERE rd.id=?`, [input.riskDecisionId])
       return mapDecision(created[0]!)
     })

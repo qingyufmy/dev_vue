@@ -9,7 +9,7 @@ interface OutboxRow extends RowDataPacket {
   attempts: number
 }
 
-const supported = "'execution.intent.prepared','bridge.command.queued'"
+const supported = "'analysis.requested','trader.requested','trade_decision.created','risk.decision.created','execution.intent.prepared','bridge.command.queued'"
 
 export class MysqlOutboxRepository implements OutboxRepository {
   constructor(private readonly pool: Pool) {}

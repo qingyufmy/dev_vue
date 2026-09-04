@@ -1,7 +1,8 @@
 export interface ClaimedOutboxEvent {
   id: string
   eventId: string
-  eventType: 'execution.intent.prepared' | 'bridge.command.queued'
+  eventType: 'analysis.requested' | 'trader.requested' | 'trade_decision.created' | 'risk.decision.created'
+    | 'execution.intent.prepared' | 'bridge.command.queued'
   payload: Record<string, unknown>
   attempts: number
 }

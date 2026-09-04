@@ -15,13 +15,17 @@ export interface TraderModelGateway {
   decide(input: { taskId: string; attemptId: string; snapshot: TraderInputSnapshot; signal: AbortSignal }): Promise<{ result: TraderDecisionResult; usage: JsonObject | null }>
 }
 
+export interface TraderModelGatewayResolver {
+  resolve(input: { userId: number; strategyId: string; strategyVersionId: string }): Promise<TraderModelGateway>
+}
+
 export class TraderWorker {
   constructor(
     private readonly repository: InferenceRepository,
     private readonly inference: InferenceService,
     private readonly strategies: StrategyService,
     private readonly contexts: TraderContextBuilder,
-    private readonly model: TraderModelGateway,
+    private readonly modelSource: TraderModelGateway | TraderModelGatewayResolver,
     private readonly workerId: string,
   ) {}
 
@@ -30,23 +34,39 @@ export class TraderWorker {
     if (!run || run.status !== 'queued') return { status: 'ignored' as const }
 
     let strategy
-    let snapshot
     try {
       strategy = await this.strategies.requireActiveVersion(run.userId, run.strategyId, 'trader')
       if (strategy.id !== run.strategyVersionId) throw new InferenceError('strategy_version_conflict', 409)
+    } catch (error) {
+      await this.repository.failQueuedTrader(run.id, errorCode(error))
+      return { status: 'failed' as const, code: errorCode(error) }
+    }
+
+    let model
+    try {
+      model = 'resolve' in this.modelSource
+        ? await this.modelSource.resolve({ userId: run.userId, strategyId: run.strategyId, strategyVersionId: run.strategyVersionId })
+        : this.modelSource
+    } catch (error) {
+      await this.repository.failQueuedTrader(run.id, errorCode(error, 'trader_model_unavailable'))
+      return { status: 'failed' as const, code: errorCode(error, 'trader_model_unavailable') }
+    }
+
+    let snapshot
+    try {
       snapshot = await this.contexts.build(run, strategy, now)
     } catch (error) {
       await this.repository.failQueuedTrader(run.id, errorCode(error))
       return { status: 'failed' as const, code: errorCode(error) }
     }
 
-    const timeoutMs = normalizeTimeout(this.model.timeoutMs)
-    const maxAttempts = normalizeAttempts(this.model.maxAttempts)
+    const timeoutMs = normalizeTimeout(model.timeoutMs)
+    const maxAttempts = normalizeAttempts(model.maxAttempts)
     let claim
     try {
       claim = await this.inference.beginTrader(
         run.userId, run.id, run.revision, snapshot,
-        { profileId: this.model.profileId, provider: this.model.provider, model: this.model.model },
+        { profileId: model.profileId, provider: model.provider, model: model.model },
         this.workerId, new Date(now.getTime() + timeoutMs * maxAttempts).toISOString(),
       )
     } catch (error) {
@@ -58,10 +78,10 @@ export class TraderWorker {
     while (true) {
       let output
       try {
-        output = await this.model.decide({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot, signal: AbortSignal.timeout(timeoutMs) })
+        output = await model.decide({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot, signal: AbortSignal.timeout(timeoutMs) })
       } catch (error) {
         const failure = modelFailure(error)
-        const retry = await this.inference.failTraderAttempt(claim, this.model, failure, maxAttempts)
+        const retry = await this.inference.failTraderAttempt(claim, model, failure, maxAttempts)
         if (!retry) return { status: 'failed' as const, code: failure.code }
         claim = retry
         continue
@@ -73,7 +93,7 @@ export class TraderWorker {
       } catch (error) {
         if (error instanceof InferenceError && error.status === 409) return { status: 'ignored' as const, code: error.code }
         if (error instanceof InferenceError && error.status === 422) {
-          await this.inference.failTraderAttempt(claim, this.model, new ModelInvocationError(error.code, 'contract_invalid', false), maxAttempts)
+          await this.inference.failTraderAttempt(claim, model, new ModelInvocationError(error.code, 'contract_invalid', false), maxAttempts)
           return { status: 'failed' as const, code: error.code }
         }
         throw error
@@ -84,7 +104,11 @@ export class TraderWorker {
 
 function normalizeTimeout(value: number) { return Number.isFinite(value) ? Math.max(1_000, Math.trunc(value)) : 120_000 }
 function normalizeAttempts(value: number) { return Number.isSafeInteger(value) ? Math.min(Math.max(value, 1), 3) : 1 }
-function errorCode(error: unknown) { return error instanceof InferenceError ? error.code : 'trader_preparation_failed' }
+function errorCode(error: unknown, fallback = 'trader_preparation_failed') {
+  if (error instanceof InferenceError) return error.code
+  const code = error instanceof Error ? error.message : ''
+  return /^[a-z0-9_]{3,128}$/.test(code) ? code : fallback
+}
 function modelFailure(error: unknown) {
   if (error instanceof ModelInvocationError) return error
   if (error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) return new ModelInvocationError('model_timeout', 'timed_out', true)

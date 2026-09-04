@@ -1,5 +1,5 @@
 import type { StrategyService } from '../../strategies/application/strategy-service.js'
-import type { AnalysisInputSnapshot, JsonObject, MarketAnalysisResult } from '../domain/inference.js'
+import type { AnalysisInputSnapshot, AnalysisRun, JsonObject, MarketAnalysisResult } from '../domain/inference.js'
 import { InferenceError } from '../domain/inference.js'
 import type { AnalysisContextBuilder } from './analysis-context-builder.js'
 import type { InferenceRepository } from './inference-ports.js'
@@ -14,6 +14,10 @@ export interface AnalysisModelGateway {
   analyze(input: { taskId: string; attemptId: string; snapshot: AnalysisInputSnapshot; signal: AbortSignal }): Promise<{ result: MarketAnalysisResult; usage: JsonObject | null }>
 }
 
+export interface AnalysisModelGatewayResolver {
+  resolve(input: { userId: number; strategyId: string; strategyVersionId: string; trigger: AnalysisRun['trigger'] }): Promise<AnalysisModelGateway>
+}
+
 export class ModelInvocationError extends Error {
   constructor(readonly code: string, readonly status: 'failed' | 'timed_out' | 'contract_invalid', readonly retryable: boolean) {
     super(code)
@@ -26,7 +30,7 @@ export class AnalysisWorker {
     private readonly inference: InferenceService,
     private readonly strategies: StrategyService,
     private readonly contexts: AnalysisContextBuilder,
-    private readonly model: AnalysisModelGateway,
+    private readonly modelSource: AnalysisModelGateway | AnalysisModelGatewayResolver,
     private readonly workerId: string,
   ) {}
 
@@ -43,6 +47,16 @@ export class AnalysisWorker {
       return { status: 'failed' as const, code: errorCode(error) }
     }
 
+    let model
+    try {
+      model = 'resolve' in this.modelSource
+        ? await this.modelSource.resolve({ userId: run.userId, strategyId: run.strategyId, strategyVersionId: run.strategyVersionId, trigger: run.trigger })
+        : this.modelSource
+    } catch (error) {
+      await this.repository.failQueuedAnalysis(run.id, errorCode(error, 'analysis_model_unavailable'))
+      return { status: 'failed' as const, code: errorCode(error, 'analysis_model_unavailable') }
+    }
+
     let snapshot
     try {
       snapshot = await this.contexts.build(run, strategy, now)
@@ -51,21 +65,21 @@ export class AnalysisWorker {
       return { status: 'failed' as const, code: errorCode(error) }
     }
 
-    const timeoutMs = normalizeTimeout(this.model.timeoutMs)
-    const maxAttempts = normalizeAttempts(this.model.maxAttempts)
+    const timeoutMs = normalizeTimeout(model.timeoutMs)
+    const maxAttempts = normalizeAttempts(model.maxAttempts)
     let claim = await this.inference.beginAnalysis(
       run.userId, run.id, run.revision, snapshot,
-      { profileId: this.model.profileId, provider: this.model.provider, model: this.model.model },
+      { profileId: model.profileId, provider: model.provider, model: model.model },
       this.workerId, new Date(now.getTime() + timeoutMs * maxAttempts).toISOString(),
     )
 
     while (true) {
       let output
       try {
-        output = await this.model.analyze({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot, signal: AbortSignal.timeout(timeoutMs) })
+        output = await model.analyze({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot, signal: AbortSignal.timeout(timeoutMs) })
       } catch (error) {
         const failure = modelFailure(error)
-        const retry = await this.inference.failAnalysisAttempt(claim, this.model, failure, maxAttempts)
+        const retry = await this.inference.failAnalysisAttempt(claim, model, failure, maxAttempts)
         if (!retry) return { status: 'failed' as const, code: failure.code }
         claim = retry
         continue
@@ -81,7 +95,7 @@ export class AnalysisWorker {
         if (error instanceof InferenceError && error.status === 422) {
           await this.inference.failAnalysisAttempt(
             claim,
-            this.model,
+            model,
             new ModelInvocationError(error.code, 'contract_invalid', false),
             maxAttempts,
           )
@@ -101,8 +115,10 @@ function normalizeAttempts(value: number) {
   return Number.isSafeInteger(value) ? Math.min(Math.max(value, 1), 3) : 1
 }
 
-function errorCode(error: unknown) {
-  return error instanceof InferenceError ? error.code : 'analysis_preparation_failed'
+function errorCode(error: unknown, fallback = 'analysis_preparation_failed') {
+  if (error instanceof InferenceError) return error.code
+  const code = error instanceof Error ? error.message : ''
+  return /^[a-z0-9_]{3,128}$/.test(code) ? code : fallback
 }
 
 function modelFailure(error: unknown) {

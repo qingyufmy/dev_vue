@@ -46,5 +46,29 @@ module.exports = {
       script: 'server/dist-v4/entrypoints/worker-execution.js',
       max_memory_restart: '384M',
     },
+    {
+      ...common,
+      name: 'aurum-v4-scheduler-analysis',
+      script: 'server/dist-v4/entrypoints/scheduler-analysis.js',
+      max_memory_restart: '256M',
+    },
+    {
+      ...common,
+      name: 'aurum-v4-worker-analysis',
+      script: 'server/dist-v4/entrypoints/worker-analysis.js',
+      max_memory_restart: '768M',
+    },
+    {
+      ...common,
+      name: 'aurum-v4-worker-trader',
+      script: 'server/dist-v4/entrypoints/worker-trader.js',
+      max_memory_restart: '768M',
+    },
+    {
+      ...common,
+      name: 'aurum-v4-worker-risk',
+      script: 'server/dist-v4/entrypoints/worker-risk.js',
+      max_memory_restart: '384M',
+    },
   ],
 }

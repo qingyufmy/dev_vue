@@ -14,7 +14,10 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
   const queues = new RuntimeTaskQueues(config.queueRedis, config.queuePrefix)
-  await Promise.all([queues.execution.waitUntilReady(), queues.bridgeDispatch.waitUntilReady()])
+  await Promise.all([
+    queues.execution.waitUntilReady(), queues.bridgeDispatch.waitUntilReady(), queues.analysis.waitUntilReady(),
+    queues.trader.waitUntilReady(), queues.risk.waitUntilReady(),
+  ])
   const dispatcher = new OutboxDispatcher(new MysqlOutboxRepository(pool), new BullMqOutboxTaskPublisher(queues))
   const loop = new AsyncPollLoop(async () => {
     try {
@@ -31,7 +34,10 @@ async function main() {
     health,
     dependencyReady: async () => {
       try {
-        await Promise.all([pool.query('SELECT 1'), queues.execution.getJobCounts(), queues.bridgeDispatch.getJobCounts()])
+        await Promise.all([
+          pool.query('SELECT 1'), queues.execution.getJobCounts(), queues.bridgeDispatch.getJobCounts(),
+          queues.analysis.getJobCounts(), queues.trader.getJobCounts(), queues.risk.getJobCounts(),
+        ])
         return true
       } catch { return false }
     },

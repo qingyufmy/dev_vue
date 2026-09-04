@@ -4,10 +4,10 @@ import {
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
 import {
-  BridgeCommandService, ExecutionPreparationWorker, MysqlBridgeCommandRepository,
-  MysqlExecutionCommandSource, RedisAccountExecutionLeaseStore,
+  BridgeCommandService, ExecutionPreparationWorker, ExecutionService, MysqlBridgeCommandRepository,
+  MysqlExecutionCommandSource, MysqlExecutionRepository, RedisAccountExecutionLeaseStore,
 } from '../modules/execution/index.js'
-import { EXECUTION_QUEUE, type ExecutionIntentJob } from '../queue/task-queues.js'
+import { EXECUTION_QUEUE, type ExecutionJob } from '../queue/task-queues.js'
 
 loadServerEnvironment()
 
@@ -24,7 +24,15 @@ async function main() {
     new RedisAccountExecutionLeaseStore(cache),
     commands,
   )
-  const worker = new Worker<ExecutionIntentJob>(EXECUTION_QUEUE, async job => {
+  const planning = new ExecutionService(new MysqlExecutionRepository(pool))
+  const worker = new Worker<ExecutionJob>(EXECUTION_QUEUE, async job => {
+    if (job.name === 'execution.risk-decision.prepare') {
+      if (!('riskDecisionId' in job.data) || !Number.isSafeInteger(job.data.userId) || job.data.userId < 1) throw new Error('risk_decision_job_invalid')
+      const result = await planning.prepare(job.data.userId, job.data.riskDecisionId)
+      health.workSucceeded()
+      return { riskDecisionId: job.data.riskDecisionId, kind: result.kind }
+    }
+    if (!('intentId' in job.data)) throw new Error('execution_intent_job_invalid')
     if (!job.data.intentId) throw new Error('execution_intent_job_invalid')
     const result = await preparation.run(job.data.intentId)
     if (result.kind === 'busy') throw new Error('execution_prepare_busy')

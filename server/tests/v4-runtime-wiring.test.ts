@@ -24,6 +24,8 @@ describe('V4 runtime wiring', () => {
     expect(ecosystem.apps.map(app => app.name)).toEqual([
       'aurum-v4-api', 'aurum-v4-browser-realtime', 'aurum-v4-bridge-gateway',
       'aurum-v4-outbox-dispatcher', 'aurum-v4-worker-execution',
+      'aurum-v4-scheduler-analysis', 'aurum-v4-worker-analysis',
+      'aurum-v4-worker-trader', 'aurum-v4-worker-risk',
     ])
     expect(ecosystem.apps.every(app => app.instances === 1 && app.exec_mode === 'fork' && app.watch === false)).toBe(true)
   })

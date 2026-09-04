@@ -27,6 +27,10 @@
     "start:v4:bridge": "node server/dist-v4/entrypoints/bridge-gateway.js",
     "start:v4:outbox": "node server/dist-v4/entrypoints/outbox-dispatcher.js",
     "start:v4:execution": "node server/dist-v4/entrypoints/worker-execution.js",
+    "start:v4:scheduler": "node server/dist-v4/entrypoints/scheduler-analysis.js",
+    "start:v4:analysis": "node server/dist-v4/entrypoints/worker-analysis.js",
+    "start:v4:trader": "node server/dist-v4/entrypoints/worker-trader.js",
+    "start:v4:risk": "node server/dist-v4/entrypoints/worker-risk.js",
     "verify:payment-schema": "node scripts/verify-payment-schema.mjs"
   },
   "dependencies": {
