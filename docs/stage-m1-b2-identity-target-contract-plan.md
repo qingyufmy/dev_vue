@@ -11,6 +11,7 @@
 - 当前结构：`server/db/migrations/bootstrap/v4-foundation-v1.sql`、001、002、003、013 等已执行文件。任何实现只追加新迁移，禁止改写它们。
 - 当前生产者/消费者：`server/src/modules/auth`、`trading`、`bridge`、`trade-history`、`reviews`，`contracts/openapi-v4.json`，`frontend/apps/trade`。
 - 权威原则：系统用户不等于交易账户；账户实体不等于当前归属；当前归属不等于历史记录的访问权；观摩不等于交易授权。
+- 最新补充见[观摩主动切换与 Pro 无桥接订阅](./observer-and-pro-analysis-subscription-requirements.md)：进入/退出观摩由用户主动决定；无本人账户不应屏蔽 Pro 分析订阅。现有账户级调度仍待独立订阅 B2 批次拆分，本项未因 P4A 完成而自动实现。
 
 本次设计覆盖首批的用户字段、会员/推荐事实、账户关系、离线读取、观摩政策和退役状态证据。模型配置、策略/订阅、执行/复盘全字段、商业账本仍在后续 B2；不得以本方案关闭这些领域的阻断。
 
