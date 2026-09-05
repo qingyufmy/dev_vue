@@ -2,6 +2,7 @@
 
 > 2026-09-05 07:39 UTC 开始的只读核验；本地基线 `eb816b36`，分支 `dev_vue`。
 > 关联：[B1 工具实施](./stage-m1-b1-backup-verification-tooling.md)、[回填总方案](./stage-m1-data-backfill-and-reconciliation-plan.md)。
+> 后续：用户已确认本文第 5 节精确范围，执行工具与演练结果见[加密备份与独立恢复记录](./stage-m1-b1-encrypted-restore-rehearsal.md)。下文保留本次只读检查时的事实。
 
 ## 1. 结论和证据范围
 
