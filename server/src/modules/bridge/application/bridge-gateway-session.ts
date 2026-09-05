@@ -37,11 +37,11 @@ export class BridgeGatewayService {
     const connectionId = randomUUID()
     const openedAt = this.now()
     const route = await this.routes.authorizeAndOpen({ claims, hello, connectionId, connectedAt: openedAt.toISOString() })
-    const capacity = 1 + await this.capacities.getPurchasedCapacity(claims.userId)
-    let claimed = false
+    let claimAttempted = false
     try {
+      const capacity = 1 + await this.capacities.getPurchasedCapacity(claims.userId)
+      claimAttempted = true
       const lease = await this.leases.claim({ route, capacity, ttlSeconds: 45 })
-      claimed = true
       await this.routes.activate(route, this.now().toISOString())
       this.directory.attach(route, input.sink)
       await input.sink.send(welcomeEnvelope(route, hello, openedAt))
@@ -53,9 +53,14 @@ export class BridgeGatewayService {
       await this.commands.recover(route.accountId, route, this.transport, this.now()).catch(() => [])
       return new BridgeGatewaySession(route, input.sink, this.routes, this.leases, this.directory, this.transport, this.commands, this.streams, this.now, this.queries)
     } catch (error) {
-      this.directory.detach(route.connectionId)
-      if (claimed) await this.leases.release(route)
-      await this.routes.close(route, 'bridge_session_open_failed', this.now().toISOString())
+      const failures = await runCleanup([
+        () => this.directory.detach(route.connectionId),
+        // claim may have committed before its response was lost. Release is
+        // fenced by this connection ID and cannot release a newer connection.
+        () => claimAttempted ? this.leases.release(route) : undefined,
+        () => this.routes.close(route, 'bridge_session_open_failed', this.now().toISOString()),
+      ])
+      if (failures.length) throw new AggregateError([error, ...failures], 'bridge_session_open_cleanup_failed')
       throw error
     }
   }
@@ -63,6 +68,7 @@ export class BridgeGatewayService {
 
 export class BridgeGatewaySession {
   private closed = false
+  private closeTask: Promise<void> | undefined
   constructor(
     readonly route: BridgeGatewayRoute,
     private readonly sink: BridgeGatewaySink,
@@ -116,13 +122,25 @@ export class BridgeGatewaySession {
     }
   }
 
-  async close(reason = 'bridge_socket_closed') {
-    if (this.closed) return
+  close(reason = 'bridge_socket_closed'): Promise<void> {
+    if (this.closeTask) return this.closeTask
     this.closed = true
-    this.queries.cancelConnection(this.route.connectionId)
-    this.directory.detach(this.route.connectionId)
-    await this.leases.release(this.route)
-    await this.routes.close(this.route, reason, this.now().toISOString())
+    this.closeTask = this.cleanup(reason).catch(error => {
+      // A failed cleanup remains retryable without reopening message handling.
+      this.closeTask = undefined
+      throw error
+    })
+    return this.closeTask
+  }
+
+  private async cleanup(reason: string) {
+    const failures = await runCleanup([
+      () => this.queries.cancelConnection(this.route.connectionId),
+      () => this.directory.detach(this.route.connectionId),
+      () => this.leases.release(this.route),
+      () => this.routes.close(this.route, reason, this.now().toISOString()),
+    ])
+    if (failures.length) throw new AggregateError(failures, 'bridge_session_close_cleanup_failed')
   }
 
   private async heartbeat(message: BridgeHeartbeatEnvelope) {
@@ -157,4 +175,9 @@ export class BridgeGatewaySession {
 const NO_QUERY_RECEIVER: BridgeGatewayQueryReceiver = {
   receive() { throw new BridgeGatewayError('bridge_query_result_unsupported', 400) },
   cancelConnection() {},
+}
+
+async function runCleanup(actions: Array<() => void | Promise<void>>): Promise<unknown[]> {
+  const results = await Promise.allSettled(actions.map(action => Promise.resolve().then(action)))
+  return results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
 }

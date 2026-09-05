@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   BridgeGatewayCommandTransport, BridgeGatewayService, InProcessBridgeGatewayDirectory,
   assertHeartbeat, assertSessionHello,
@@ -16,6 +16,72 @@ const NOW = new Date('2026-09-03T09:00:00.000Z')
 const oldRoute = { terminalInstanceId: 'terminal_12345678', brokerServer: 'DPrime-Demo', login: '8950701', connectionEpoch: 1 }
 
 describe('Stage 12G Bridge V4 gateway and execution worker', () => {
+  it.each(['capacity', 'claim', 'activate', 'welcome'] as const)('cleans a pending connection when %s fails', async stage => {
+    const f = cleanupFixture()
+    const failure = new Error(`${stage}_failed`)
+    if (stage === 'capacity') f.capacity.mockRejectedValueOnce(failure)
+    if (stage === 'claim') f.claim.mockImplementationOnce(async input => {
+      f.leases.route = input.route // Redis committed, but the reply was lost.
+      throw failure
+    })
+    if (stage === 'activate') f.activate.mockRejectedValueOnce(failure)
+    if (stage === 'welcome') f.send.mockRejectedValueOnce(failure)
+
+    await expect(f.open()).rejects.toBe(failure)
+    expect(f.close).toHaveBeenCalledWith(expect.objectContaining({ userId: 42 }), 'bridge_session_open_failed', NOW.toISOString())
+    const route = f.close.mock.calls[0]![0]
+    expect(f.directory.get(route.connectionId)).toBeNull()
+    expect(f.leases.route).toBeNull()
+    expect(f.release).toHaveBeenCalledTimes(stage === 'capacity' ? 0 : 1)
+    expect(f.recover).not.toHaveBeenCalled()
+  })
+
+  it('attempts database cleanup even when Redis cleanup fails and retains both errors', async () => {
+    const f = cleanupFixture()
+    const original = new Error('activation_failed')
+    const redis = new Error('redis_release_failed')
+    const sql = new Error('sql_close_failed')
+    f.activate.mockRejectedValueOnce(original)
+    f.release.mockRejectedValueOnce(redis)
+    f.close.mockRejectedValueOnce(sql)
+    await expect(f.open()).rejects.toMatchObject({
+      message: 'bridge_session_open_cleanup_failed', errors: [original, redis, sql],
+    })
+    expect(f.close).toHaveBeenCalledTimes(1)
+    const route = f.close.mock.calls[0]![0]
+    expect(f.directory.get(route.connectionId)).toBeNull()
+    expect(f.recover).not.toHaveBeenCalled()
+  })
+
+  it('does not release a newer lease when a claim response is lost', async () => {
+    const f = cleanupFixture()
+    f.claim.mockImplementationOnce(async input => {
+      f.leases.route = { ...input.route, connectionId: 'newer_connection_12345678' }
+      throw new Error('claim_response_lost')
+    })
+    await expect(f.open()).rejects.toThrow('claim_response_lost')
+    expect(f.leases.route?.connectionId).toBe('newer_connection_12345678')
+    expect(f.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('coalesces close, retries failed cleanup, and never reopens message handling', async () => {
+    const f = cleanupFixture()
+    const session = await f.open()
+    const redis = new Error('redis_unavailable')
+    f.release.mockRejectedValueOnce(redis)
+    const first = session.close()
+    expect(session.close()).toBe(first)
+    await expect(first).rejects.toMatchObject({ message: 'bridge_session_close_cleanup_failed', errors: [redis] })
+    expect(f.close).toHaveBeenCalledTimes(1)
+    expect(f.directory.get(session.route.connectionId)).toBeNull()
+    await expect(session.receive({ type: 'stream.event' })).rejects.toMatchObject({ code: 'bridge_session_closed' })
+    await session.close()
+    await session.close()
+    expect(f.release).toHaveBeenCalledTimes(2)
+    expect(f.close).toHaveBeenCalledTimes(2)
+    expect(f.leases.route).toBeNull()
+  })
+
   it('uses the credential device-id contract for hello without relaxing message ids', () => {
     const schema = JSON.parse(readFileSync(new URL('../../contracts/bridge-v4.schema.json', import.meta.url), 'utf8'))
     expect(schema.$defs.SessionHelloPayload.properties.profile_id.$ref).toBe('#/$defs/DeviceId')
@@ -147,7 +213,30 @@ class MemoryRoutes implements BridgeGatewayRouteRepository {
   }
   async activate() {}
   async touch() { return true }
-  async close() {}
+  async close(_route: BridgeGatewayRoute, _reason: string, _at: string) {}
+}
+
+function cleanupFixture() {
+  const routes = new MemoryRoutes()
+  const leases = new MemoryGatewayLeases()
+  const directory = new InProcessBridgeGatewayDirectory()
+  const transport = new BridgeGatewayCommandTransport(leases, directory, routes)
+  const commands = new BridgeCommandService(new MemoryCommands())
+  const sink: BridgeGatewaySink = { send: vi.fn(async () => {}), close() {} }
+  const capacity = vi.fn(async () => 0)
+  const f = {
+    leases, directory, capacity,
+    claim: vi.spyOn(leases, 'claim'), release: vi.spyOn(leases, 'release'),
+    activate: vi.spyOn(routes, 'activate'), close: vi.spyOn(routes, 'close'),
+    recover: vi.spyOn(commands, 'recover'), send: vi.spyOn(sink, 'send'),
+  }
+  const gateway = new BridgeGatewayService(
+    { async issue() { throw new Error('unused') }, async consume() {
+      return { userId: 42, installationId: 'installation_12345678', profileId: 'profile_12345678', generation: 1 }
+    } }, routes, leases, { getPurchasedCapacity: capacity }, directory, transport, commands,
+    { async ingest() { return null } }, () => NOW,
+  )
+  return { ...f, open: () => gateway.open({ ticket: 'ticket', hello: hello(2), sink }) }
 }
 
 class MemoryAccountLeases implements AccountExecutionLeaseStore {
