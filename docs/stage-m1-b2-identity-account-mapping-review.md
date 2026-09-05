@@ -49,7 +49,7 @@
 - `plan_source=observer_source` 不等于购买额度，也不能直接给管理员权限。`NULL` 来源不自动猜成付费，永久期与无效日期需分别处理。
 - 1 个用户有非零 `referral_credit DECIMAL(20,8)`，必须精确保留并对账，不能降为 DOUBLE、置零或只放历史不可用。
 - **`referred_by` 存的是推荐码字符串，不是 user ID。** 写入/解析依据 `server/routes/auth.js` 按 `users.referral_code` 查询。本快照非空 referred_by 为 0，但结构与后续快照必须按推荐码关系实现，不能靠 MySQL 隐式转数字联表。
-- Telegram 绑定/通知、changelog 已读、last_seen 等按活动需求补承接；旧 `bridge_heartbeat` 仅历史，不作为新在线状态。
+- changelog 已读、last_seen 等按活动需求补承接；旧 `bridge_heartbeat` 仅历史，不作为新在线状态。2026-09-05 用户后续明确不需要 Telegram 绑定，因此取消其活动承接，转为待逐字段验证的退役历史处置，详见目标方案 §3.2。下方冻结映射表保留原评审记录，不代表当前仍要实现绑定。
 - 推荐：保留现有 users 身份/快速会员读合同；简单验证/会员来源字段可追加 users；外部联系、推荐权益等有独立生命周期的内容由所属域承接。此轮不强制为每个旧字段拆一张新表。
 
 证据：`server/routes/auth.js`、`server/routes/user.js`、`server/membership.js`、V4 `mysql-auth-repository.ts`、bootstrap `v4-foundation-v1.sql`。
