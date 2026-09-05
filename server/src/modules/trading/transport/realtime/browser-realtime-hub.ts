@@ -24,11 +24,12 @@ interface Subscription {
   sequence: number
 }
 
-const USER_RESOURCES = new Set(['analysis.job', 'market_analysis', 'review_case', 'strategy_memory', 'operation', 'audit'])
+const PLATFORM_RESOURCES = new Set(['macro_snapshot', 'calendar_event'])
+const USER_RESOURCES = new Set(['analysis.job', 'market_analysis', 'review_case', 'strategy_memory', 'operation', 'audit', ...PLATFORM_RESOURCES])
 const DOMAIN_RESOURCES = new Set([
   ...USER_RESOURCES, 'trader.job', 'trade_decision', 'risk.policy', 'risk.summary',
   'risk.decision', 'risk.manual_release', 'operation',
-  'trade_history',
+  'trade_history', ...PLATFORM_RESOURCES,
 ])
 
 export class BrowserRealtimeHub {
@@ -161,6 +162,7 @@ export class BrowserRealtimeHub {
 function targetMatches(target: AuthorizedTarget, userId: number, event: BrowserRealtimeEvent) {
   const key = `${event.resource}:${event.resourceId}`
   if (!target.resources.includes(key) && !target.resources.includes(event.resource)) return false
+  if (PLATFORM_RESOURCES.has(event.resource)) return event.userId === null && target.accountId === null && target.observerChannelId === null
   if (event.accountId === null) return target.accountId === null && target.observerChannelId === null && event.userId === userId
   if (target.accountId !== event.accountId) return false
   return target.observerChannelId !== null || event.userId === userId

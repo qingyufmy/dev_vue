@@ -165,6 +165,127 @@ export const tradingWorkspaceResponseSchema = z.object({
 export const marketQuoteResponseSchema = z.object({ data: marketQuoteSchema.nullable(), meta: responseMetaSchema })
 export const marketCandlesResponseSchema = z.object({ data: z.object({ items: z.array(marketCandleSchema) }), meta: responseMetaSchema })
 
+const macroUtcDatetimeSchema = z.iso.datetime({ offset: true }).refine((value) => value.endsWith('Z'), '宏观数据时间必须使用 UTC Z')
+const macroBusinessDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+export const macroSnapshotStatusSchema = z.enum(['fresh', 'stale', 'partial', 'unavailable'])
+export const macroDirectionSchema = z.enum(['supportive', 'adverse', 'neutral', 'uncertain'])
+export const macroFreshnessSchema = z.enum(['fresh', 'stale', 'missing', 'disabled', 'invalid'])
+export const macroGoldRelationSchema = z.enum(['supportive', 'adverse', 'neutral', 'uncertain'])
+
+export const macroFactorSchema = z.object({
+  code: z.string().trim().min(1).max(64),
+  label: z.string().trim().min(1).max(191),
+  value: decimalSchema.nullable(),
+  unit: z.string().trim().min(1).max(64).nullable(),
+  observation_at: macroUtcDatetimeSchema,
+  available_at: macroUtcDatetimeSchema,
+  freshness: macroFreshnessSchema,
+  gold_relation: macroGoldRelationSchema,
+}).strict().transform((value) => ({
+  code: value.code, label: value.label, value: value.value, unit: value.unit,
+  observationAt: value.observation_at, availableAt: value.available_at,
+  freshness: value.freshness, goldRelation: value.gold_relation,
+}))
+
+const macroSnapshotFields = {
+  id: z.string().trim().min(1).max(191),
+  schema_version: z.number().int().positive(),
+  revision: numericRevisionSchema,
+  business_date: macroBusinessDateSchema,
+  horizon: z.literal('medium_term'),
+  data_cutoff_at: macroUtcDatetimeSchema,
+  published_at: macroUtcDatetimeSchema,
+  valid_until: macroUtcDatetimeSchema,
+  status: macroSnapshotStatusSchema,
+  direction: macroDirectionSchema,
+  summary: z.string().trim().min(1).max(5000),
+  content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+} as const
+
+export const macroSnapshotSchema = z.object({
+  ...macroSnapshotFields,
+  factors: z.array(macroFactorSchema).max(128),
+}).strict().transform((value) => ({
+  id: value.id, schemaVersion: value.schema_version, revision: value.revision,
+  businessDate: value.business_date, horizon: value.horizon, dataCutoffAt: value.data_cutoff_at,
+  publishedAt: value.published_at, validUntil: value.valid_until, status: value.status,
+  direction: value.direction, summary: value.summary, factors: value.factors,
+  contentSha256: value.content_sha256,
+}))
+export const macroSnapshotDetailSchema = macroSnapshotSchema
+export const macroSnapshotSummarySchema = z.object({
+  ...macroSnapshotFields,
+  factor_count: z.number().int().nonnegative().max(128),
+}).strict().transform((value) => ({
+  id: value.id, schemaVersion: value.schema_version, revision: value.revision,
+  businessDate: value.business_date, horizon: value.horizon, dataCutoffAt: value.data_cutoff_at,
+  publishedAt: value.published_at, validUntil: value.valid_until, status: value.status,
+  direction: value.direction, summary: value.summary, factorCount: value.factor_count,
+  contentSha256: value.content_sha256,
+}))
+export const macroSnapshotResponseSchema = z.object({ data: macroSnapshotSchema, meta: responseMetaSchema }).strict()
+export const macroSnapshotDetailResponseSchema = z.object({ data: macroSnapshotDetailSchema, meta: responseMetaSchema }).strict()
+export const macroSnapshotsResponseSchema = z.object({ data: z.object({
+  items: z.array(macroSnapshotSummarySchema), next_cursor: z.string().min(1).nullable(), has_more: z.boolean(),
+}).strict(), meta: responseMetaSchema }).strict()
+export const macroSnapshotListResponseSchema = macroSnapshotsResponseSchema
+
+export const macroSeriesPointSchema = z.object({
+  code: z.string().trim().min(1).max(64),
+  observation_at: macroUtcDatetimeSchema,
+  available_at: macroUtcDatetimeSchema,
+  value: decimalSchema.nullable(),
+  unit: z.string().trim().min(1).max(64).nullable(),
+  freshness: macroFreshnessSchema,
+}).strict().transform((value) => ({
+  code: value.code, observationAt: value.observation_at, availableAt: value.available_at,
+  value: value.value, unit: value.unit, freshness: value.freshness,
+}))
+export const macroSeriesResponseSchema = z.object({ data: z.object({
+  items: z.array(macroSeriesPointSchema), next_cursor: z.string().min(1).nullable(), has_more: z.boolean(),
+}).strict(), meta: responseMetaSchema }).strict()
+
+export const economicCalendarTimePrecisionSchema = z.enum(['exact', 'date_only', 'tentative'])
+export const economicCalendarImportanceSchema = z.enum(['low', 'medium', 'high', 'unknown'])
+export const economicCalendarStatusSchema = z.enum(['scheduled', 'released', 'revised', 'delayed', 'cancelled'])
+export const economicCalendarEventSchema = z.object({
+  id: z.string().trim().min(1).max(191),
+  provider_event_id: z.string().trim().min(1).max(191).nullable(),
+  country: z.string().trim().min(1).max(64),
+  currency: z.string().trim().min(1).max(16).nullable(),
+  title: z.string().trim().min(1).max(300),
+  scheduled_at: macroUtcDatetimeSchema,
+  time_precision: economicCalendarTimePrecisionSchema,
+  importance: economicCalendarImportanceSchema,
+  period: z.string().trim().min(1).max(128).nullable(),
+  unit: z.string().trim().min(1).max(64).nullable(),
+  previous: decimalSchema.nullable(),
+  consensus: decimalSchema.nullable(),
+  actual: decimalSchema.nullable(),
+  revised_previous: decimalSchema.nullable(),
+  status: economicCalendarStatusSchema,
+  provider_updated_at: macroUtcDatetimeSchema.nullable(),
+  revision: numericRevisionSchema,
+}).strict().transform((value) => ({
+  id: value.id, providerEventId: value.provider_event_id, country: value.country, currency: value.currency,
+  title: value.title, scheduledAt: value.scheduled_at, timePrecision: value.time_precision,
+  importance: value.importance, period: value.period, unit: value.unit, previous: value.previous,
+  consensus: value.consensus, actual: value.actual, revisedPrevious: value.revised_previous,
+  status: value.status, providerUpdatedAt: value.provider_updated_at, revision: value.revision,
+}))
+export const calendarEventSchema = economicCalendarEventSchema
+export const economicCalendarEventsResponseSchema = z.object({ data: z.object({
+  items: z.array(economicCalendarEventSchema), next_cursor: z.string().min(1).nullable(), has_more: z.boolean(),
+}).strict(), meta: responseMetaSchema }).strict()
+export const calendarEventsResponseSchema = economicCalendarEventsResponseSchema
+export const economicCalendarEventResponseSchema = z.object({ data: economicCalendarEventSchema, meta: responseMetaSchema }).strict()
+export const calendarEventResponseSchema = economicCalendarEventResponseSchema
+export const macroMarketOverviewResponseSchema = z.object({ data: z.object({
+  snapshot: macroSnapshotSummarySchema.nullable(),
+  high_impact_events: z.array(economicCalendarEventSchema).max(20),
+}).strict(), meta: responseMetaSchema }).strict()
+export const macroOverviewResponseSchema = macroMarketOverviewResponseSchema
+
 export const tradeHistorySideSchema = z.enum(['buy', 'sell'])
 export const tradeHistorySourceSchema = z.enum(['system', 'manual', 'other_ea', 'mixed', 'unknown'])
 export const tradeHistoryRecordSchema = z.object({
@@ -1219,9 +1340,63 @@ export const reviewRealtimeEventSchema = z.union([
   }),
 ])
 
+export const macroRealtimeChangeSchema = z.enum(['created', 'updated', 'superseded', 'invalidated'])
+export const macroSourceHealthSchema = z.string().trim().min(1).max(64)
+
+const platformMacroRealtimeEnvelopeSchema = z.object({
+  v: z.literal(4), event_id: z.string().min(1).max(191),
+  occurred_at: macroUtcDatetimeSchema, sequence: z.number().int().positive(),
+  scope: z.object({
+    user_id: z.string().min(1).max(191), trading_account_id: z.null(),
+    terminal_instance_id: z.null(), observer_channel_id: z.null(),
+  }).strict(),
+  revision: z.string().min(1).max(128), correlation_id: z.string().min(1).max(191).nullable(),
+}).strict()
+
+export const marketMacroChangedRealtimeEventSchema = platformMacroRealtimeEnvelopeSchema.extend({
+  type: z.literal('market.macro.changed'),
+  resource: z.object({ kind: z.literal('macro_snapshot'), id: z.string().min(1).max(191) }).strict(),
+  data: z.object({
+    change: macroRealtimeChangeSchema,
+    published_at: macroUtcDatetimeSchema,
+    status: macroSnapshotStatusSchema,
+  }).strict(),
+}).strict()
+
+export const marketCalendarChangedRealtimeEventSchema = platformMacroRealtimeEnvelopeSchema.extend({
+  type: z.literal('market.calendar.changed'),
+  resource: z.object({ kind: z.literal('calendar_event'), id: z.string().min(1).max(191) }).strict(),
+  data: z.object({
+    change: macroRealtimeChangeSchema,
+    scheduled_at: macroUtcDatetimeSchema,
+    importance: economicCalendarImportanceSchema,
+    status: economicCalendarStatusSchema,
+  }).strict(),
+}).strict()
+
+export const marketSourceHealthChangedRealtimeEventSchema = platformMacroRealtimeEnvelopeSchema.extend({
+  type: z.literal('market.source_health.changed'),
+  resource: z.object({ kind: z.literal('macro_source_health'), id: z.string().min(1).max(191) }).strict(),
+  data: z.object({
+    source_id: z.string().min(1).max(191),
+    health: macroSourceHealthSchema,
+    observed_at: macroUtcDatetimeSchema,
+  }).strict(),
+}).strict()
+
+export const marketMacroRealtimeEventSchema = z.union([
+  marketMacroChangedRealtimeEventSchema,
+  marketCalendarChangedRealtimeEventSchema,
+  marketSourceHealthChangedRealtimeEventSchema,
+])
+export const macroRealtimeEventSchema = marketMacroRealtimeEventSchema
+export const marketMacroChangedEventSchema = marketMacroChangedRealtimeEventSchema
+export const marketCalendarChangedEventSchema = marketCalendarChangedRealtimeEventSchema
+export const marketSourceHealthChangedEventSchema = marketSourceHealthChangedRealtimeEventSchema
+
 export const browserRealtimeEventSchema = z.union([
   tradingRealtimeEventSchema, inferenceRealtimeEventSchema, riskRealtimeEventSchema, operationRealtimeEventSchema, reviewRealtimeEventSchema,
-  auditRealtimeEventSchema,
+  auditRealtimeEventSchema, marketMacroRealtimeEventSchema,
 ])
 
 export type ApiProblem = z.infer<typeof apiProblemSchema>
@@ -1237,6 +1412,14 @@ export type TradingAccount = z.infer<typeof tradingAccountSchema>
 export type AccountSnapshot = z.infer<typeof accountSnapshotSchema>
 export type MarketQuote = z.infer<typeof marketQuoteSchema>
 export type MarketCandle = z.infer<typeof marketCandleSchema>
+export type MacroFactor = z.infer<typeof macroFactorSchema>
+export type MacroSnapshot = z.infer<typeof macroSnapshotSchema>
+export type MacroSnapshotDetail = z.infer<typeof macroSnapshotDetailSchema>
+export type MacroSnapshotSummary = z.infer<typeof macroSnapshotSummarySchema>
+export type MacroSeriesPoint = z.infer<typeof macroSeriesPointSchema>
+export type EconomicCalendarEvent = z.infer<typeof economicCalendarEventSchema>
+export type CalendarEvent = z.infer<typeof calendarEventSchema>
+export type MacroMarketOverview = z.infer<typeof macroMarketOverviewResponseSchema>['data']
 export type TradeHistorySide = z.infer<typeof tradeHistorySideSchema>
 export type TradeHistorySource = z.infer<typeof tradeHistorySourceSchema>
 export type TradeHistoryRecord = z.infer<typeof tradeHistoryRecordSchema>
@@ -1323,4 +1506,9 @@ export type RiskRealtimeEvent = z.infer<typeof riskRealtimeEventSchema>
 export type OperationRealtimeEvent = z.infer<typeof operationRealtimeEventSchema>
 export type AuditRealtimeEvent = z.infer<typeof auditRealtimeEventSchema>
 export type ReviewRealtimeEvent = z.infer<typeof reviewRealtimeEventSchema>
+export type MarketMacroChangedRealtimeEvent = z.infer<typeof marketMacroChangedRealtimeEventSchema>
+export type MarketCalendarChangedRealtimeEvent = z.infer<typeof marketCalendarChangedRealtimeEventSchema>
+export type MarketSourceHealthChangedRealtimeEvent = z.infer<typeof marketSourceHealthChangedRealtimeEventSchema>
+export type MarketMacroRealtimeEvent = z.infer<typeof marketMacroRealtimeEventSchema>
+export type MacroRealtimeEvent = z.infer<typeof macroRealtimeEventSchema>
 export type BrowserRealtimeEvent = z.infer<typeof browserRealtimeEventSchema>

@@ -99,8 +99,21 @@ const auth = {
 describe('Stage 12Q strategy management', () => {
   it('compiles deterministic analysis config and fails closed on unsupported capabilities', () => {
     const valid = compileStrategy('analysis', '  只分析黄金  ', { candle_limit: 500, timeframes: ['M5', 'H1'] })
-    expect(valid).toMatchObject({ valid: true, normalizedConfig: { candle_limit: 500, timeframes: ['M5', 'H1'] }, inputContractVersion: 'market-analysis-input/v1' })
-    expect(compileStrategy('analysis', '分析', {}).normalizedConfig).toEqual({ timeframes: ['M5', 'M15', 'H1', 'H4'], candle_limit: 300 })
+    expect(valid).toMatchObject({ valid: true, normalizedConfig: { candle_limit: 500, timeframes: ['M5', 'H1'], macro_evidence: { mode: 'off' } }, inputContractVersion: 'market-analysis-input/v1' })
+    expect(compileStrategy('analysis', '分析', {}).normalizedConfig).toEqual({ timeframes: ['M5', 'M15', 'H1', 'H4'], candle_limit: 300, macro_evidence: { mode: 'off' } })
+    expect(compileStrategy('analysis', '分析', {
+      macro_evidence: { mode: 'context', accepted_schema_versions: [1, 2], max_age_seconds: 172800 },
+    })).toMatchObject({
+      valid: true,
+      normalizedConfig: { macro_evidence: { mode: 'context', accepted_schema_versions: [1, 2], max_age_seconds: 172800 } },
+    })
+    expect(compileStrategy('analysis', '分析', { macro_evidence: { mode: 'required', accepted_schema_versions: [1], max_age_seconds: 172800 } }).issues)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ code: 'macro_evidence_mode_invalid' })]))
+    expect(compileStrategy('analysis', '分析', { macro_evidence: { mode: 'context', accepted_schema_versions: [1, 1], max_age_seconds: 10 } }).issues)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'macro_evidence_schema_versions_invalid' }),
+        expect.objectContaining({ code: 'macro_evidence_max_age_invalid' }),
+      ]))
     const rejected = compileStrategy('trader', '执行判断', { network: { url: 'https://example.test' } })
     expect(rejected.valid).toBe(false)
     expect(rejected.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'dangerous_capability_forbidden', path: 'config.network' })]))

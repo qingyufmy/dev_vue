@@ -101,6 +101,10 @@ function validRequestId(value: unknown): value is string {
 }
 
 function validScope(target: Required<Target>) {
+  if (target.kind === 'market' && ['macro', 'calendar'].includes(target.resource_id ?? '')) {
+    return target.trading_account_id === null && target.observer_channel_id === null
+      && target.symbol === null && target.timeframe === null && target.after_revision === null
+  }
   if (target.kind === 'signals') {
     const userScoped = target.resource_id === null || ['all', 'analysis_jobs', 'market_analyses'].includes(target.resource_id)
     return userScoped
@@ -124,6 +128,8 @@ function resourcesFor(target: Required<Target>): string[] | null {
   if (target.kind === 'account' && target.resource_id === 'pending_orders') return ['pending_orders:open']
   if (target.kind === 'market' && target.resource_id === 'quote' && target.symbol) return [`market.quote:${target.symbol}`]
   if (target.kind === 'market' && target.resource_id === 'candle' && target.symbol && target.timeframe) return [`market.candle:${target.symbol}:${target.timeframe}`]
+  if (target.kind === 'market' && target.resource_id === 'macro') return ['macro_snapshot']
+  if (target.kind === 'market' && target.resource_id === 'calendar') return ['calendar_event']
   if (target.kind === 'signals') {
     if (target.resource_id === null || target.resource_id === 'all') return ['analysis.job', 'market_analysis']
     if (target.resource_id === 'analysis_jobs') return ['analysis.job']

@@ -91,6 +91,9 @@
         "market.quote.updated",
         "market.candle.updated",
         "market.candle.closed",
+        "market.macro.changed",
+        "market.calendar.changed",
+        "market.source_health.changed",
         "positions.changed",
         "pending_orders.changed",
         "analysis.job.changed",
@@ -377,6 +380,37 @@
         "source_id": { "$ref": "#/$defs/OpaqueId" }
       }
     },
+    "MacroChangedData": {
+      "type": "object",
+      "required": ["change", "published_at", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "change": { "type": "string", "enum": ["created", "updated", "superseded", "invalidated"] },
+        "published_at": { "$ref": "#/$defs/UtcDateTime" },
+        "status": { "type": "string", "enum": ["fresh", "stale", "partial", "unavailable"] }
+      }
+    },
+    "CalendarChangedData": {
+      "type": "object",
+      "required": ["change", "scheduled_at", "importance", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "change": { "type": "string", "enum": ["created", "updated", "superseded", "invalidated"] },
+        "scheduled_at": { "$ref": "#/$defs/UtcDateTime" },
+        "importance": { "type": "string", "enum": ["low", "medium", "high", "unknown"] },
+        "status": { "type": "string", "enum": ["scheduled", "released", "revised", "delayed", "cancelled"] }
+      }
+    },
+    "MacroSourceHealthChangedData": {
+      "type": "object",
+      "required": ["source_id", "health", "observed_at"],
+      "additionalProperties": false,
+      "properties": {
+        "source_id": { "$ref": "#/$defs/OpaqueId" },
+        "health": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "observed_at": { "$ref": "#/$defs/UtcDateTime" }
+      }
+    },
     "SummaryData": {
       "type": "object",
       "required": ["id", "status"],
@@ -451,6 +485,9 @@
             { "properties": { "type": { "const": "strategy.memory.changed" }, "data": { "$ref": "#/$defs/StrategyMemoryChangedData" } } },
             { "properties": { "type": { "const": "trade.history.changed" }, "data": { "$ref": "#/$defs/TradeHistoryChangedData" } } },
             { "properties": { "type": { "const": "audit.changed" }, "data": { "$ref": "#/$defs/AuditChangedData" } } },
+            { "properties": { "type": { "const": "market.macro.changed" }, "data": { "$ref": "#/$defs/MacroChangedData" }, "resource": { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "macro_snapshot" }, "id": { "$ref": "#/$defs/OpaqueId" } } } } },
+            { "properties": { "type": { "const": "market.calendar.changed" }, "data": { "$ref": "#/$defs/CalendarChangedData" }, "resource": { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "calendar_event" }, "id": { "$ref": "#/$defs/OpaqueId" } } } } },
+            { "properties": { "type": { "const": "market.source_health.changed" }, "data": { "$ref": "#/$defs/MacroSourceHealthChangedData" }, "resource": { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "macro_source_health" }, "id": { "$ref": "#/$defs/OpaqueId" } } } } },
             {
               "properties": {
                 "type": { "const": "operation.changed" },
@@ -545,7 +582,7 @@
       "required": ["kind", "after_revision"],
       "additionalProperties": false,
       "properties": {
-        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "reviews", "trades", "operations", "audit", "notifications", "payment", "admin_alerts"] },
+        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "reviews", "trades", "operations", "audit", "notifications", "payment", "admin_alerts", "admin"] },
         "trading_account_id": {
           "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
         },
@@ -564,7 +601,24 @@
         "after_revision": {
           "oneOf": [{ "$ref": "#/$defs/Revision" }, { "type": "null" }]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "market" }, "resource_id": { "enum": ["macro", "calendar"] } }, "required": ["kind", "resource_id"] },
+          "then": {
+            "required": ["trading_account_id", "observer_channel_id", "symbol", "timeframe", "resource_id", "after_revision"],
+            "properties": {
+              "trading_account_id": { "type": "null" }, "observer_channel_id": { "type": "null" },
+              "symbol": { "type": "null" }, "timeframe": { "type": "null" },
+              "resource_id": { "enum": ["macro", "calendar"] }, "after_revision": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "admin" } }, "required": ["kind"] },
+          "then": { "properties": { "resource_id": { "const": "macro_source_health" } }, "required": ["resource_id"] }
+        }
+      ]
     },
     "Subscribe": {
       "type": "object",

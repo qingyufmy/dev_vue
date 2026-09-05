@@ -28,6 +28,8 @@ export type StrategyRepository = StrategyCatalog & StrategyManagementRepository
 
 const DEFAULT_ANALYSIS_TIMEFRAMES = ['M5', 'M15', 'H1', 'H4'] as const
 const ALLOWED_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
+const MACRO_EVIDENCE_MIN_AGE_SECONDS = 3_600
+const MACRO_EVIDENCE_MAX_AGE_SECONDS = 604_800
 const DANGEROUS_CONFIG_KEYS = new Set([
   'script', 'scripts', 'network', 'sql', 'file', 'files', 'filesystem', 'shell', 'exec', 'executable',
   'command', 'commands', 'tool', 'tools', 'bridge', 'tradingtools', 'tradeapi', 'brokercommand',
@@ -71,7 +73,7 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
     try { return canonicalClone(config) }
     catch { issues.push(issue('error', 'config_json_invalid', '策略配置必须是可序列化的 JSON 对象', 'config')); return {} }
   }
-  const allowed = new Set(['timeframes', 'candle_limit'])
+  const allowed = new Set(['timeframes', 'candle_limit', 'macro_evidence'])
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) issues.push(issue('error', 'config_field_unknown', `不支持的配置字段：${key}`, `config.${key}`))
   }
@@ -93,7 +95,45 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
       issues.push(issue('error', 'candle_limit_invalid', 'K 线数量必须是 50 到 1000 之间的整数', 'config.candle_limit'))
     } else candleLimit = value
   }
-  return { timeframes, candle_limit: candleLimit }
+  return { timeframes, candle_limit: candleLimit, macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues) }
+}
+
+function normalizeMacroEvidence(value: unknown, issues: StrategyCompileIssue[]) {
+  if (value === undefined) return { mode: 'off' }
+  const evidence = plainObject(value)
+  if (!evidence) {
+    issues.push(issue('error', 'macro_evidence_object_required', '宏观证据配置必须是 JSON 对象', 'config.macro_evidence'))
+    return { mode: 'off' }
+  }
+  const allowed = new Set(['mode', 'accepted_schema_versions', 'max_age_seconds'])
+  for (const key of Object.keys(evidence)) {
+    if (!allowed.has(key)) issues.push(issue('error', 'macro_evidence_field_unknown', `不支持的宏观证据字段：${key}`, `config.macro_evidence.${key}`))
+  }
+  if (evidence.mode === undefined || evidence.mode === 'off') {
+    if (evidence.accepted_schema_versions !== undefined || evidence.max_age_seconds !== undefined) {
+      issues.push(issue('error', 'macro_evidence_off_fields_forbidden', '关闭宏观证据时不能配置 schema 版本或最大陈旧时间', 'config.macro_evidence'))
+    }
+    return { mode: 'off' }
+  }
+  if (evidence.mode !== 'context') {
+    issues.push(issue('error', 'macro_evidence_mode_invalid', '宏观证据首版只支持 off 或 context', 'config.macro_evidence.mode'))
+    return { mode: 'off' }
+  }
+  const versions = evidence.accepted_schema_versions
+  if (!Array.isArray(versions) || versions.length < 1 || versions.length > 8
+    || versions.some(version => !Number.isSafeInteger(version) || Number(version) <= 0)
+    || new Set(versions).size !== versions.length) {
+    issues.push(issue('error', 'macro_evidence_schema_versions_invalid', '宏观证据 schema 版本必须是 1 到 8 个不重复正整数', 'config.macro_evidence.accepted_schema_versions'))
+  }
+  const maxAge = evidence.max_age_seconds
+  if (!Number.isSafeInteger(maxAge) || Number(maxAge) < MACRO_EVIDENCE_MIN_AGE_SECONDS || Number(maxAge) > MACRO_EVIDENCE_MAX_AGE_SECONDS) {
+    issues.push(issue('error', 'macro_evidence_max_age_invalid', '宏观证据最大陈旧时间必须是 3600 到 604800 秒的整数', 'config.macro_evidence.max_age_seconds'))
+  }
+  return {
+    mode: 'context',
+    accepted_schema_versions: Array.isArray(versions) ? versions.filter(version => Number.isSafeInteger(version) && Number(version) > 0).map(Number) : [],
+    max_age_seconds: Number.isSafeInteger(maxAge) ? Number(maxAge) : 0,
+  }
 }
 
 function canonicalClone(value: unknown): Record<string, unknown> {

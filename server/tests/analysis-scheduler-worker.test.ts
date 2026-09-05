@@ -75,11 +75,14 @@ describe('Stage 12B analysis scheduling and worker', () => {
   })
 
   it('freezes explicit market and macro inputs without provider conversation state', async () => {
+    const macroVersion = { ...version, config: {
+      ...version.config, macro_evidence: { mode: 'context', accepted_schema_versions: [1], max_age_seconds: 172800 },
+    } }
     const contexts = new AnalysisContextBuilder(
       { async read(input) { return { source_account_id: input.preferredAccountId, symbol: input.symbol, quote: { revision: 9 }, candles: { M5: [] } } } },
       { async latest() { return { id: 'macro-1', revision: 3, payload: { usd: 'strong' } } } },
     )
-    const snapshot = await contexts.build(run('a1'), version, new Date('2026-09-03T08:00:10.000Z'))
+    const snapshot = await contexts.build(run('a1'), macroVersion, new Date('2026-09-03T08:00:10.000Z'))
     expect(snapshot).toMatchObject({ kind: 'analysis', strategy: { versionId: '11' }, market: { source_account_id: '7' }, macro: { id: 'macro-1' } })
     expect(JSON.stringify(snapshot)).not.toMatch(/conversation_id|previous_response_id|chat_history/)
   })

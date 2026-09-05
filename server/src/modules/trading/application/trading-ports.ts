@@ -96,19 +96,20 @@ export type BrowserRealtimeEventType =
   | 'risk.policy.changed' | 'risk.summary.changed' | 'risk.decision.created' | 'risk.manual_release.changed'
   | 'review.case.changed' | 'strategy.memory.changed'
   | 'trade.history.changed'
+  | 'market.macro.changed' | 'market.calendar.changed' | 'market.source_health.changed'
   | 'operation.changed' | 'audit.changed'
 
 export type BrowserRealtimeResource = RealtimeResource
   | 'analysis.job' | 'market_analysis' | 'trader.job' | 'trade_decision'
   | 'risk.policy' | 'risk.summary' | 'risk.decision' | 'risk.manual_release' | 'operation'
   | 'review_case' | 'strategy_memory'
-  | 'trade_history' | 'audit'
+  | 'trade_history' | 'audit' | 'macro_snapshot' | 'calendar_event' | 'macro_source_health'
 
 export interface BrowserRealtimeEvent {
   eventId: string
   type: BrowserRealtimeEventType
   occurredAt: string
-  userId: number
+  userId: number | null
   accountId: string | null
   terminalInstanceId: string | null
   resource: BrowserRealtimeResource
@@ -121,5 +122,6 @@ export type TradingRealtimeEvent = BrowserRealtimeEvent & {
   type: 'runtime.bridge.changed' | 'account.metrics.changed' | 'market.quote.updated' | 'market.candle.updated'
     | 'market.candle.closed' | 'positions.changed' | 'pending_orders.changed'
   accountId: string
+  userId: number
   resource: RealtimeResource
 }

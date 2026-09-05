@@ -23,11 +23,17 @@ const EVENT_RESOURCES = new Map<BrowserRealtimeEventType, BrowserRealtimeResourc
   ['review.case.changed', 'review_case'],
   ['strategy.memory.changed', 'strategy_memory'],
   ['trade.history.changed', 'trade_history'],
+  ['market.macro.changed', 'macro_snapshot'],
+  ['market.calendar.changed', 'calendar_event'],
+  ['market.source_health.changed', 'macro_source_health'],
   ['operation.changed', 'operation'],
   ['audit.changed', 'audit'],
 ])
 const USER_SCOPED_TYPES = new Set<BrowserRealtimeEventType>([
   'analysis.job.changed', 'market_analysis.created', 'review.case.changed', 'strategy.memory.changed', 'audit.changed',
+])
+const PLATFORM_SCOPED_TYPES = new Set<BrowserRealtimeEventType>([
+  'market.macro.changed', 'market.calendar.changed', 'market.source_health.changed',
 ])
 
 export class RedisBrowserRealtimeSubscriber {
@@ -78,19 +84,23 @@ export function parseBrowserRealtimeEvent(raw: string): BrowserRealtimeEvent | n
   const type = typeof value.type === 'string' ? value.type as BrowserRealtimeEventType : null
   const resource = typeof value.resource === 'string' ? value.resource as BrowserRealtimeResource : null
   if (!type || !resource || EVENT_RESOURCES.get(type) !== resource) return null
+  const platformScoped = PLATFORM_SCOPED_TYPES.has(type)
   if (!bounded(value.eventId, 1, 191) || !isoUtc(value.occurredAt)
-    || !Number.isSafeInteger(value.userId) || Number(value.userId) <= 0
+    || (platformScoped ? value.userId !== null : (!Number.isSafeInteger(value.userId) || Number(value.userId) <= 0))
     || !(value.accountId === null || bounded(value.accountId, 1, 191))
     || !(value.terminalInstanceId === null || bounded(value.terminalInstanceId, 1, 191))
     || !bounded(value.resourceId, 1, 191)
     || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0
     || !Object.hasOwn(value, 'data')) return null
-  if (USER_SCOPED_TYPES.has(type) !== (value.accountId === null)) return null
+  if (platformScoped) {
+    if (value.accountId !== null || value.terminalInstanceId !== null) return null
+    if (!platformDataValid(type, value.data)) return null
+  } else if (USER_SCOPED_TYPES.has(type) !== (value.accountId === null)) return null
   return {
     eventId: value.eventId,
     type,
     occurredAt: value.occurredAt,
-    userId: Number(value.userId),
+    userId: platformScoped ? null : Number(value.userId),
     accountId: value.accountId,
     terminalInstanceId: value.terminalInstanceId,
     resource,
@@ -98,6 +108,36 @@ export function parseBrowserRealtimeEvent(raw: string): BrowserRealtimeEvent | n
     revision: Number(value.revision),
     data: value.data,
   }
+}
+
+function platformDataValid(type: BrowserRealtimeEventType, data: unknown) {
+  if (!record(data)) return false
+  if (type === 'market.macro.changed') {
+    return exactKeys(data, ['change', 'published_at', 'status'])
+      && ['created', 'updated', 'superseded', 'invalidated'].includes(String(data.change))
+      && isoUtc(data.published_at)
+      && ['fresh', 'stale', 'partial', 'unavailable'].includes(String(data.status))
+  }
+  if (type === 'market.calendar.changed') {
+    return exactKeys(data, ['change', 'scheduled_at', 'importance', 'status'])
+      && ['created', 'updated', 'superseded', 'invalidated'].includes(String(data.change))
+      && isoUtc(data.scheduled_at)
+      && ['low', 'medium', 'high', 'unknown'].includes(String(data.importance))
+      && ['scheduled', 'released', 'revised', 'delayed', 'cancelled'].includes(String(data.status))
+  }
+  if (type === 'market.source_health.changed') {
+    return exactKeys(data, ['source_id', 'health', 'observed_at'])
+      && bounded(data.source_id, 1, 191)
+      && bounded(data.health, 1, 64)
+      && isoUtc(data.observed_at)
+  }
+  return false
+}
+
+function exactKeys(value: Record<string, unknown>, keys: string[]) {
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
 }
 
 function record(value: unknown): value is Record<string, unknown> {

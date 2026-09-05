@@ -457,6 +457,118 @@
         }
       }
     },
+    "/market/overview": {
+      "get": {
+        "operationId": "getMacroMarketOverview",
+        "summary": "Get the latest bounded macro summary and nearby high-impact calendar events",
+        "tags": ["Market"],
+        "responses": {
+          "200": { "description": "Macro market overview", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MacroMarketOverviewResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/market/macro-snapshots/latest": {
+      "get": {
+        "operationId": "getLatestMacroSnapshot",
+        "summary": "Get the latest compatible published platform macro snapshot",
+        "tags": ["Market"],
+        "responses": {
+          "200": { "description": "Latest macro snapshot", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MacroSnapshotResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/market/macro-snapshots": {
+      "get": {
+        "operationId": "listMacroSnapshots",
+        "summary": "List published platform macro snapshot summaries with a stable cursor",
+        "tags": ["Market"],
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": {
+          "200": { "description": "Macro snapshot summaries", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MacroSnapshotListResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/market/macro-snapshots/{snapshot_id}": {
+      "get": {
+        "operationId": "getMacroSnapshot",
+        "summary": "Get one immutable published platform macro snapshot",
+        "tags": ["Market"],
+        "parameters": [{ "name": "snapshot_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } }],
+        "responses": {
+          "200": { "description": "Macro snapshot detail", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MacroSnapshotResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/market/macro-series": {
+      "get": {
+        "operationId": "listMacroSeriesPoints",
+        "summary": "List point-in-time macro series observations",
+        "tags": ["Market"],
+        "parameters": [
+          { "name": "code", "in": "query", "required": true, "schema": { "type": "string", "minLength": 1, "maxLength": 64 } },
+          { "name": "from", "in": "query", "schema": { "$ref": "#/components/schemas/UtcDateTime" } },
+          { "name": "to", "in": "query", "schema": { "$ref": "#/components/schemas/UtcDateTime" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": {
+          "200": { "description": "Macro series observations", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MacroSeriesResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/market/calendar-events": {
+      "get": {
+        "operationId": "listEconomicCalendarEvents",
+        "summary": "List economic calendar events by schedule and importance",
+        "tags": ["Market"],
+        "parameters": [
+          { "name": "from", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UtcDateTime" } },
+          { "name": "to", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/UtcDateTime" } },
+          { "name": "importance", "in": "query", "schema": { "type": "string", "enum": ["low", "medium", "high", "unknown"] } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
+          { "$ref": "#/components/parameters/Cursor" }
+        ],
+        "responses": {
+          "200": { "description": "Economic calendar events", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EconomicCalendarEventListResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/market/calendar-events/{event_id}": {
+      "get": {
+        "operationId": "getEconomicCalendarEvent",
+        "summary": "Get one economic calendar event at its latest known revision",
+        "tags": ["Market"],
+        "parameters": [{ "name": "event_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } }],
+        "responses": {
+          "200": { "description": "Economic calendar event", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EconomicCalendarEventResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/positions": {
       "get": {
         "operationId": "listPositions",
@@ -1739,6 +1851,141 @@
         "required": ["data", "meta"],
         "properties": {
           "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Candle" } } } },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "MacroFactor": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "label", "value", "unit", "observation_at", "available_at", "freshness", "gold_relation"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "label": { "type": "string", "minLength": 1, "maxLength": 191 },
+          "value": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "unit": { "type": ["string", "null"], "minLength": 1, "maxLength": 64 },
+          "observation_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "available_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "freshness": { "type": "string", "enum": ["fresh", "stale", "missing", "disabled", "invalid"] },
+          "gold_relation": { "type": "string", "enum": ["supportive", "adverse", "neutral", "uncertain"] }
+        }
+      },
+      "MacroSnapshot": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "schema_version", "revision", "business_date", "horizon", "data_cutoff_at", "published_at", "valid_until", "status", "direction", "summary", "factors", "content_sha256"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "schema_version": { "type": "integer", "minimum": 1 },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "business_date": { "$ref": "#/components/schemas/BusinessDate" },
+          "horizon": { "const": "medium_term" },
+          "data_cutoff_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "published_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "valid_until": { "$ref": "#/components/schemas/UtcDateTime" },
+          "status": { "type": "string", "enum": ["fresh", "stale", "partial", "unavailable"] },
+          "direction": { "type": "string", "enum": ["supportive", "adverse", "neutral", "uncertain"] },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 5000 },
+          "factors": { "type": "array", "maxItems": 128, "items": { "$ref": "#/components/schemas/MacroFactor" } },
+          "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      },
+      "MacroSnapshotSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "schema_version", "revision", "business_date", "horizon", "data_cutoff_at", "published_at", "valid_until", "status", "direction", "summary", "factor_count", "content_sha256"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "schema_version": { "type": "integer", "minimum": 1 },
+          "revision": { "$ref": "#/components/schemas/Revision" },
+          "business_date": { "$ref": "#/components/schemas/BusinessDate" },
+          "horizon": { "const": "medium_term" },
+          "data_cutoff_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "published_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "valid_until": { "$ref": "#/components/schemas/UtcDateTime" },
+          "status": { "type": "string", "enum": ["fresh", "stale", "partial", "unavailable"] },
+          "direction": { "type": "string", "enum": ["supportive", "adverse", "neutral", "uncertain"] },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 5000 },
+          "factor_count": { "type": "integer", "minimum": 0, "maximum": 128 },
+          "content_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      },
+      "MacroSnapshotResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": { "data": { "$ref": "#/components/schemas/MacroSnapshot" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "MacroSnapshotListResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "object", "additionalProperties": false, "required": ["items", "next_cursor", "has_more"], "properties": {
+            "items": { "type": "array", "items": { "$ref": "#/components/schemas/MacroSnapshotSummary" } },
+            "next_cursor": { "type": ["string", "null"], "maxLength": 2048 }, "has_more": { "type": "boolean" }
+          } },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "MacroSeriesPoint": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "observation_at", "available_at", "value", "unit", "freshness"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "observation_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "available_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "value": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "unit": { "type": ["string", "null"], "minLength": 1, "maxLength": 64 },
+          "freshness": { "type": "string", "enum": ["fresh", "stale", "missing", "disabled", "invalid"] }
+        }
+      },
+      "MacroSeriesResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "object", "additionalProperties": false, "required": ["items", "next_cursor", "has_more"], "properties": {
+            "items": { "type": "array", "items": { "$ref": "#/components/schemas/MacroSeriesPoint" } },
+            "next_cursor": { "type": ["string", "null"], "maxLength": 2048 }, "has_more": { "type": "boolean" }
+          } },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "EconomicCalendarEvent": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "provider_event_id", "country", "currency", "title", "scheduled_at", "time_precision", "importance", "period", "unit", "previous", "consensus", "actual", "revised_previous", "status", "provider_updated_at", "revision"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "provider_event_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 191 },
+          "country": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "currency": { "type": ["string", "null"], "minLength": 1, "maxLength": 16 },
+          "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "scheduled_at": { "$ref": "#/components/schemas/UtcDateTime" },
+          "time_precision": { "type": "string", "enum": ["exact", "date_only", "tentative"] },
+          "importance": { "type": "string", "enum": ["low", "medium", "high", "unknown"] },
+          "period": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
+          "unit": { "type": ["string", "null"], "minLength": 1, "maxLength": 64 },
+          "previous": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "consensus": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "actual": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "revised_previous": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "status": { "type": "string", "enum": ["scheduled", "released", "revised", "delayed", "cancelled"] },
+          "provider_updated_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "revision": { "$ref": "#/components/schemas/Revision" }
+        }
+      },
+      "EconomicCalendarEventListResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "object", "additionalProperties": false, "required": ["items", "next_cursor", "has_more"], "properties": {
+            "items": { "type": "array", "items": { "$ref": "#/components/schemas/EconomicCalendarEvent" } },
+            "next_cursor": { "type": ["string", "null"], "maxLength": 2048 }, "has_more": { "type": "boolean" }
+          } },
+          "meta": { "$ref": "#/components/schemas/Meta" }
+        }
+      },
+      "EconomicCalendarEventResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": { "data": { "$ref": "#/components/schemas/EconomicCalendarEvent" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "MacroMarketOverviewResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "object", "additionalProperties": false, "required": ["snapshot", "high_impact_events"], "properties": {
+            "snapshot": { "oneOf": [{ "$ref": "#/components/schemas/MacroSnapshotSummary" }, { "type": "null" }] },
+            "high_impact_events": { "type": "array", "maxItems": 20, "items": { "$ref": "#/components/schemas/EconomicCalendarEvent" } }
+          } },
           "meta": { "$ref": "#/components/schemas/Meta" }
         }
       },
