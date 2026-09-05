@@ -12,6 +12,7 @@ import {
   strategySubscriptionCreateBodySchema, strategySubscriptionPatchBodySchema, strategyVersionCreateBodySchema,
   browserRealtimeEventSchema, manualReviewCandidateSchema, reviewCaseDetailSchema, reviewContentSchema,
   reviewVersionCreateBodySchema, strategyMemoryDetailSchema, strategyMemoryUpdateSchema,
+  accountSnapshotSchema, tradingAccountSchema,
 } from './index'
 
 describe('sessionResponseSchema', () => {
@@ -92,6 +93,22 @@ describe('trading V4 contracts', () => {
   it('rejects legacy or accidental camelCase at the HTTP boundary', () => {
     expect(tradingContextSchema.safeParse({ userId: '7', mode: 'full', accountId: '21', observerChannelId: null, readOnly: false, revision: '3' }).success).toBe(false)
     expect(tradingWorkspaceResponseSchema.safeParse({ data: { pendingOrders: [] }, meta: {} }).success).toBe(false)
+  })
+
+  it('requires terminal_profile_id while accepting an explicit null profile', () => {
+    const account = {
+      id: 'account-1', platform: 'mt5', login: '10001', server: 'Demo', currency: 'USD',
+      terminal_instance_id: null, bridge_state: 'offline', trade_permission: false, last_seen_at: null,
+    }
+    const snapshot = {
+      ...account, balance: '10000', equity: '10000', margin: '0', free_margin: '10000', floating_profit: '0',
+      leverage: null, timezone_offset_minutes: null, clock_status: 'unavailable', observed_at: '2026-09-04T08:00:00.000Z', revision: '1',
+    }
+
+    expect(tradingAccountSchema.safeParse(account).success).toBe(false)
+    expect(tradingAccountSchema.parse({ ...account, terminal_profile_id: null })).toMatchObject({ terminalProfileId: null })
+    expect(accountSnapshotSchema.safeParse(snapshot).success).toBe(false)
+    expect(accountSnapshotSchema.parse({ ...snapshot, terminal_profile_id: null })).toMatchObject({ terminalProfileId: null })
   })
 })
 

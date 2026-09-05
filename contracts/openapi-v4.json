@@ -198,6 +198,7 @@
         "operationId": "listTradingAccounts",
         "summary": "List trading accounts owned by the current system user",
         "tags": ["Accounts"],
+        "parameters": [{ "name": "access", "in": "query", "required": false, "schema": { "type": "string", "enum": ["current", "history"], "default": "current" } }],
         "responses": { "200": { "description": "Owned trading accounts", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TradingAccountListResponse" } } } } }
       }
     },
@@ -1615,7 +1616,7 @@
           "login": { "type": "string", "maxLength": 64 },
           "server": { "type": "string", "maxLength": 191 },
           "currency": { "type": "string", "minLength": 3, "maxLength": 12 },
-          "terminal_profile_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "terminal_profile_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
           "terminal_instance_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
           "bridge_state": { "type": "string", "enum": ["online", "offline", "paused", "replaced", "unauthorized"] },
           "trade_permission": { "type": "boolean" },
@@ -1668,7 +1669,7 @@
         "properties": {
           "id": { "$ref": "#/components/schemas/OpaqueId" },
           "terminal_instance_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
-          "terminal_profile_id": { "$ref": "#/components/schemas/OpaqueId" },
+          "terminal_profile_id": { "oneOf": [{ "$ref": "#/components/schemas/OpaqueId" }, { "type": "null" }] },
           "platform": { "type": "string", "enum": ["mt4", "mt5"] },
           "server": { "type": "string", "maxLength": 191 },
           "login": { "type": "string", "maxLength": 64 },

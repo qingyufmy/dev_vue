@@ -101,7 +101,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
       { method: 'POST', csrfToken },
     ),
     getTradingContext: () => send(tradingContextResponseSchema, '/api/v4/trading-context'),
-    listTradingAccounts: () => send(tradingAccountsResponseSchema, '/api/v4/trading-accounts'),
+    listTradingAccounts: (access: 'current' | 'history' = 'current') => send(
+      tradingAccountsResponseSchema,
+      `/api/v4/trading-accounts${access === 'history' ? '?access=history' : ''}`,
+    ),
     getConnectionCapacity: () => send(connectionCapacityResponseSchema, '/api/v4/bridge/connection-capacity'),
     listTerminalProfiles: () => send(terminalProfilesResponseSchema, '/api/v4/bridge/terminal-profiles'),
     listObserverChannels: () => send(observerChannelsResponseSchema, '/api/v4/observer-channels'),

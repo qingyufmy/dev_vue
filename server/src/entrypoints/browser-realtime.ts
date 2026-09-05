@@ -4,6 +4,7 @@ import {
   loadServerEnvironment, loadV4BaseRuntimeConfig, loadV4BrowserRealtimeConfig, RoleHealth,
 } from '../bootstrap/index.js'
 import { createRealtimeTicketAuthenticator } from '../modules/auth/index.js'
+import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   BrowserRealtimeHub, MysqlTradingRepository, RedisBrowserRealtimeSubscriber,
 } from '../modules/trading/index.js'
@@ -21,7 +22,7 @@ async function main() {
   const eventCache = createCacheRedis(runtime.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(ticketCache), connectCacheRedis(eventCache)])
 
-  const hub = new BrowserRealtimeHub(new MysqlTradingRepository(pool))
+  const hub = new BrowserRealtimeHub(new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(ticketCache)))
   const events = new RedisBrowserRealtimeSubscriber(eventCache, {
     publish(event) { hub.publish(event); health.workSucceeded() },
   }, undefined, code => health.workFailed(code))

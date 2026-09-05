@@ -1,5 +1,6 @@
 import type { Pool, RowDataPacket } from 'mysql2/promise'
 import type { TradeHistoryRepository, TradeHistoryRepositoryPage } from '../application/trade-history-ports.js'
+import { ownHistoryAccountSql, provenHistoryRecordSql } from './trade-history-ownership-sql.js'
 import type {
   TradeHistoryDailyPoint, TradeHistoryFilter, TradeHistoryFreshness, TradeHistorySummary,
   TradeRecordAttribution, TradeRecordDeal, TradeRecordDetail, TradeRecordSummary,
@@ -22,9 +23,8 @@ interface AttributionRow extends RowDataPacket { source_kind: TradeRecordAttribu
 export class MysqlTradeHistoryRepository implements TradeHistoryRepository {
   constructor(private readonly pool: Pool) {}
 
-  async ownsAccount(userId: number, accountId: string) {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT 1 FROM trading_account_ownerships
-      WHERE user_id=? AND trading_account_id=? AND role='owner' AND revoked_at_utc IS NULL LIMIT 1`, [userId, accountId])
+  async canReadHistoryAccount(userId: number, accountId: string) {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(ownHistoryAccountSql(), [userId, accountId])
     return Boolean(rows[0])
   }
 
@@ -33,7 +33,9 @@ export class MysqlTradeHistoryRepository implements TradeHistoryRepository {
     const page = criteria(userId, filter, true)
     const [records, freshnessRows, summaryRows, dailyRows] = await Promise.all([
       this.pool.execute<TradeRow[]>(`${tradeSelect()} ${page.sql} ORDER BY r.closed_at_utc DESC,r.id DESC LIMIT ?`, [...page.params, filter.limit + 1]),
-      this.pool.execute<FreshnessRow[]>('SELECT status,history_revision,fresh_through_utc,last_success_at_utc FROM trade_history_sync_states_v4 WHERE trading_account_id=?', [filter.accountId]),
+      this.pool.execute<FreshnessRow[]>(`SELECT 'stale' status,MAX(r.revision) history_revision,
+        NULL fresh_through_utc,NULL last_success_at_utc
+        FROM account_trade_records_v4 r ${base.sql} HAVING COUNT(*)>0`, base.params),
       this.pool.execute<SummaryRow[]>(`SELECT COUNT(*) trade_count,SUM(r.net_profit>0) winning_count,SUM(r.net_profit<0) losing_count,SUM(r.net_profit=0) breakeven_count,
         CASE WHEN COUNT(*)=0 THEN NULL ELSE CAST(ROUND(100*SUM(r.net_profit>0)/COUNT(*),4) AS CHAR) END win_rate_percent,
         CAST(COALESCE(SUM(r.gross_profit),0) AS CHAR) gross_profit,CAST(COALESCE(SUM(r.commission),0) AS CHAR) commission,
@@ -59,14 +61,17 @@ export class MysqlTradeHistoryRepository implements TradeHistoryRepository {
 
   async find(userId: number, recordId: string): Promise<TradeRecordDetail | null> {
     const [records, deals, attributions] = await Promise.all([
-      this.pool.execute<TradeRow[]>(`${tradeSelect()} WHERE r.user_id=? AND r.id=? LIMIT 1`, [userId, recordId]),
+      this.pool.execute<TradeRow[]>(`${tradeSelect()} WHERE r.user_id=? AND r.id=? AND ${provenHistoryRecordSql()} LIMIT 1`, [userId, recordId]),
       this.pool.execute<DealRow[]>(`SELECT d.id,d.deal_ticket,d.order_ticket,x.role,d.side,d.entry_kind,CAST(d.volume AS CHAR) volume,CAST(d.price AS CHAR) price,
         CAST(d.gross_profit AS CHAR) gross_profit,CAST(d.commission AS CHAR) commission,CAST(d.swap_amount AS CHAR) swap_amount,
         CAST(d.fee_amount AS CHAR) fee_amount,d.occurred_at_utc FROM account_trade_record_deals_v4 x
         INNER JOIN account_trade_records_v4 r ON r.id=x.trade_record_id AND r.user_id=?
-        INNER JOIN terminal_history_deals_v4 d ON d.id=x.terminal_deal_id WHERE x.trade_record_id=? ORDER BY x.sequence_number`, [userId, recordId]),
+        INNER JOIN terminal_history_deals_v4 d ON d.id=x.terminal_deal_id AND d.trading_account_id=r.trading_account_id
+        WHERE x.trade_record_id=? AND ${provenHistoryRecordSql()}
+          AND d.occurred_at_utc>=r.opened_at_utc AND d.occurred_at_utc<=r.closed_at_utc ORDER BY x.sequence_number`, [userId, recordId]),
       this.pool.execute<AttributionRow[]>(`SELECT a.source_kind,a.source_id,a.relation_kind,a.proof_kind FROM account_trade_attributions_v4 a
-        INNER JOIN account_trade_records_v4 r ON r.id=a.trade_record_id AND r.user_id=? WHERE a.trade_record_id=? ORDER BY a.id`, [userId, recordId]),
+        INNER JOIN account_trade_records_v4 r ON r.id=a.trade_record_id AND r.user_id=?
+        WHERE a.trade_record_id=? AND ${provenHistoryRecordSql()} ORDER BY a.id`, [userId, recordId]),
     ])
     const row = records[0][0]
     if (!row) return null
@@ -85,7 +90,7 @@ function tradeSelect() { return `SELECT r.id,CAST(r.trading_account_id AS CHAR) 
   r.terminal_timezone_offset_minutes,r.evidence_sha256,r.revision FROM account_trade_records_v4 r` }
 
 function criteria(userId: number, filter: TradeHistoryFilter, includeCursor: boolean) {
-  const conditions = ['r.user_id=?', 'r.trading_account_id=?', "r.status='closed'", 'r.closed_at_utc IS NOT NULL', 'r.closed_at_utc<=?']
+  const conditions = ['r.user_id=?', 'r.trading_account_id=?', "r.status='closed'", 'r.closed_at_utc IS NOT NULL', 'r.closed_at_utc<=?', provenHistoryRecordSql()]
   const params: Array<string | number> = [userId, filter.accountId, filter.capturedEnd]
   if (filter.symbol) { conditions.push('r.symbol=?'); params.push(filter.symbol) }
   if (filter.side) { conditions.push('r.side=?'); params.push(filter.side) }

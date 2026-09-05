@@ -30,14 +30,19 @@ export class TraderContextBuilder {
     if (!analysis || Date.parse(analysis.summary.validUntil) <= now.getTime()) throw new InferenceError('trader_analysis_expired', 409)
     const [owned, account, positions, pendingOrders, quote, contract, risk] = await Promise.all([
       this.trading.findOwnedAccount(run.userId, run.tradingAccountId),
-      this.trading.getAccountSnapshot(run.tradingAccountId),
-      this.trading.listPositions(run.tradingAccountId),
-      this.trading.listPendingOrders(run.tradingAccountId),
+      this.trading.getAccountSnapshot(run.tradingAccountId, run.userId),
+      this.trading.listPositions(run.tradingAccountId, run.userId),
+      this.trading.listPendingOrders(run.tradingAccountId, run.userId),
       this.trading.getQuote(run.tradingAccountId, analysis.summary.symbol),
       this.instruments.read(run.tradingAccountId, analysis.summary.symbol),
       this.risks.read(run.userId, run.tradingAccountId),
     ])
     if (!owned || !account) throw new InferenceError('trader_account_unavailable', 409)
+    // Revision zero is an unavailable/unproven collection, not a confirmed
+    // empty portfolio. It must never become model input for a trading decision.
+    if ([positions.revision, pendingOrders.revision].some(revision => !Number.isSafeInteger(revision) || revision < 1)) {
+      throw new InferenceError('trader_context_torn_read', 409)
+    }
     if (!quote) throw new InferenceError('trader_quote_unavailable', 409)
     if (!contract) throw new InferenceError('trader_contract_unavailable', 409)
     if (!risk) throw new InferenceError('trader_risk_summary_unavailable', 409)

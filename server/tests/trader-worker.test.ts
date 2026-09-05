@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   InferenceError, InferenceService, ModelInvocationError, TraderContextBuilder, TraderWorker,
   type InferenceRepository, type MarketAnalysisDetail, type TraderDecisionResult, type TraderInputSnapshot, type TraderRun, type TraderWorkClaim,
@@ -53,6 +53,20 @@ function expected(snapshot: TraderInputSnapshot) {
 }
 
 describe('Stage 12C account Trader Worker', () => {
+  it('binds every private projection to the queued task user, never an implicit current owner', async () => {
+    const repo = inferenceRepository({ async getAnalysisDetail() { return analysis } })
+    const trading = tradingRepository()
+    const snapshot = vi.spyOn(trading, 'getAccountSnapshot').mockResolvedValue(null)
+    const positions = vi.spyOn(trading, 'listPositions')
+    const pending = vi.spyOn(trading, 'listPendingOrders')
+    const builder = new TraderContextBuilder(repo, trading,
+      { async read() { return { revision: 6, data: {} } } }, { async read() { return { revision: 7, data: {} } } })
+    await expect(builder.build(run(), strategy, new Date('2026-09-03T08:00:10.000Z'))).rejects.toMatchObject({ code: 'trader_account_unavailable' })
+    expect(snapshot).toHaveBeenCalledWith('7', 42)
+    expect(positions).toHaveBeenCalledWith('7', 42)
+    expect(pending).toHaveBeenCalledWith('7', 42)
+  })
+
   it('freezes one owned account with exact account, exposure, quote, contract and risk revisions', async () => {
     const repo = inferenceRepository({ async getAnalysisDetail() { return analysis } })
     const snapshot = await new TraderContextBuilder(repo, tradingRepository(), { async read() { return { revision: 6, data: { symbol: 'XAUUSD', volume_step: '0.01' } } } }, { async read() { return { revision: 7, data: { status: 'ready', max_risk_percent: '1' } } } }).build(run(), strategy, new Date('2026-09-03T08:00:10.000Z'))
@@ -65,6 +79,15 @@ describe('Stage 12C account Trader Worker', () => {
     const trading = tradingRepository(); trading.latestRevision = async (_id, resource) => resource === 'positions' ? 99 : resource === 'account.metrics' ? 8 : resource === 'market.quote' ? 9 : 13
     const builder = new TraderContextBuilder(repo, trading, { async read() { return { revision: 6, data: {} } } }, { async read() { return { revision: 7, data: {} } } })
     await expect(builder.build(run(), strategy, new Date('2026-09-03T08:00:10.000Z'))).rejects.toMatchObject({ code: 'trader_context_torn_read' })
+  })
+
+  it('does not treat missing collection evidence as a confirmed empty portfolio', async () => {
+    const repo = inferenceRepository({ async getAnalysisDetail() { return analysis } })
+    const trading = tradingRepository({ account: 8, quote: 9, positions: 0, pending: 0 })
+    const builder = new TraderContextBuilder(repo, trading,
+      { async read() { return { revision: 6, data: {} } } }, { async read() { return { revision: 7, data: {} } } })
+    await expect(builder.build(run({ positionsRevision: 0, pendingOrdersRevision: 0 }), strategy,
+      new Date('2026-09-03T08:00:10.000Z'))).rejects.toMatchObject({ code: 'trader_context_torn_read' })
   })
 
   it('retries the same frozen account snapshot and persists a structured decision without Bridge or execution intents', async () => {

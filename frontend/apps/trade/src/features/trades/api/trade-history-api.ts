@@ -4,7 +4,7 @@ const client = createApiClient()
 
 export const tradeHistoryApi = {
   getContext: () => client.getTradingContext(),
-  listAccounts: () => client.listTradingAccounts(),
+  listAccounts: () => client.listTradingAccounts('history'),
   list: (filter: Parameters<typeof client.listTradeHistory>[0]) => client.listTradeHistory(filter),
   detail: (recordId: string) => client.getTradeRecord(recordId),
 }

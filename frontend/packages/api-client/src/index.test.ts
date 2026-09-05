@@ -87,6 +87,24 @@ describe('createApiClient', () => {
     expect(new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get('X-CSRF-Token')).toBe('csrf')
   })
 
+  it('keeps current account listing backward compatible and adds history access explicitly', async () => {
+    const response = () => new Response(JSON.stringify({
+      data: { items: [] }, meta: { request_id: 'accounts', generated_at: '2026-09-03T04:00:00.000Z' },
+    }), { status: 200 })
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => response())
+    const client = createApiClient({ fetchImpl })
+
+    await client.listTradingAccounts()
+    await client.listTradingAccounts('current')
+    await client.listTradingAccounts('history')
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v4/trading-accounts',
+      '/api/v4/trading-accounts',
+      '/api/v4/trading-accounts?access=history',
+    ])
+  })
+
   it('keeps analysis reads user-scoped and manual analysis idempotent', async () => {
     const meta = { request_id: 'analysis', generated_at: '2026-09-04T04:00:00.000Z' }
     const fetchImpl = vi.fn<typeof fetch>()

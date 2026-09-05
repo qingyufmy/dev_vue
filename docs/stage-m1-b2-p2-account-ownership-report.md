@@ -81,4 +81,6 @@ validateOwnershipTimeline 检查重复 interval/origin、无效时间、owner �
 
 ## 7. 下一阶段
 
+后续进度：P3 已完成源码接线与离线验证，见 [P3 记录](./stage-m1-b2-p3-offline-accounts-history-report.md)。当前下一确认门为 P4；018–020 仍未执行真实迁移。以下保留 P2 结束时的建议。
+
 建议下一确认门为 **P3：离线账户读模型与历史记录归属防护**。按统一合同同步修改 API 生产者、消费者、查询授权和历史采集关联，禁止仅靠当前 owner 或采集时用户决定旧交易可见性。仍先实现和离线验证，不据此执行迁移、启动服务或访问 MT。

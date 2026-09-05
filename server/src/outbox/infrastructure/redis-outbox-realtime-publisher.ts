@@ -62,7 +62,10 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
   async publish(event: ClaimedOutboxEvent) {
     if (!REALTIME_TYPES.has(event.eventType)) return
     const events = await this.project(event)
-    if (AUDIT_INVALIDATION_TYPES.has(event.eventType) && events[0]) events.push(auditInvalidation(event, events.at(-1)!))
+    if (AUDIT_INVALIDATION_TYPES.has(event.eventType) && events[0]) {
+      const auditTargets = event.eventType === 'trade.history.changed' ? [...events] : [events.at(-1)!]
+      events.push(...auditTargets.map(target => auditInvalidation(event, target)))
+    }
     for (const projected of events) {
       await this.redis.publish(this.channel, JSON.stringify(projected))
     }
@@ -79,7 +82,7 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
     if (event.eventType === 'risk.manual_release.changed') return [await this.riskRelease(event)]
     if (event.eventType === 'review.case.changed') return [await this.reviewCase(event)]
     if (event.eventType === 'strategy.memory.changed') return [await this.strategyMemory(event)]
-    if (event.eventType === 'trade.history.changed') return [await this.tradeHistory(event)]
+    if (event.eventType === 'trade.history.changed') return this.tradeHistory(event)
     return [await this.operation(event)]
   }
 
@@ -229,16 +232,29 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
 
   private async tradeHistory(event: ClaimedOutboxEvent) {
     const accountId = requiredId(event.payload.account_id, 'outbox_account_id_invalid')
-    const row = await one<TradeHistoryRow>(this.pool,
-      `SELECT o.user_id,CAST(s.trading_account_id AS CHAR) account_id,s.status,s.history_revision,s.fresh_through_utc
-        FROM trade_history_sync_states_v4 s INNER JOIN trading_account_ownerships o ON o.trading_account_id=s.trading_account_id
-          AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE s.trading_account_id=? LIMIT 1`,
-      [accountId], 'outbox_trade_history_missing')
-    return base(event, {
-      type: 'trade.history.changed', userId: row.user_id, accountId: row.account_id, resource: 'trade_history',
-      resourceId: row.account_id, revision: row.history_revision,
-      data: { status: row.status, history_revision: String(row.history_revision), fresh_through: row.fresh_through_utc ? iso(row.fresh_through_utc) : null },
-    })
+    const events: BrowserRealtimeEvent[] = []
+    let afterUserId = 0
+    do {
+      const [rows] = await this.pool.execute<TradeHistoryRow[]>(`SELECT DISTINCT hi.user_id,
+        CAST(s.trading_account_id AS CHAR) account_id,s.history_revision
+        FROM trade_history_sync_states_v4 s
+        INNER JOIN trading_account_ownership_intervals hi ON hi.trading_account_id=s.trading_account_id
+          AND hi.role='owner' AND hi.started_at_utc<=UTC_TIMESTAMP(3)
+          AND (hi.ended_at_utc IS NULL OR hi.ended_at_utc>hi.started_at_utc)
+        INNER JOIN users u ON u.id=hi.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
+        WHERE s.trading_account_id=? AND hi.user_id>? ORDER BY hi.user_id LIMIT 100`, [accountId, afterUserId])
+      for (const row of rows) events.push(base(event, {
+        type: 'trade.history.changed', userId: row.user_id, accountId: row.account_id, resource: 'trade_history',
+        resourceId: row.account_id, revision: row.history_revision,
+        // Invalidation only: no current owner's sync timestamp or record data.
+        data: { status: 'stale', history_revision: String(row.history_revision), fresh_through: null },
+      }))
+      if (rows.length < 100) break
+      const next = Number(rows.at(-1)!.user_id)
+      if (next <= afterUserId) throw new Error('outbox_history_recipient_cursor_invalid')
+      afterUserId = next
+    } while (true)
+    return events
   }
 
   private async operation(event: ClaimedOutboxEvent) {

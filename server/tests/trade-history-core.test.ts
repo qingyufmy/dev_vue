@@ -16,7 +16,7 @@ const detail: TradeRecordDetail = { ...item, evidenceHash: 'a'.repeat(64), deals
 
 function repository(overrides: Partial<TradeHistoryRepository> = {}): TradeHistoryRepository {
   return {
-    ownsAccount: async () => true,
+    canReadHistoryAccount: async () => true,
     list: async () => ({ items: [item], hasMore: false, freshness: { status: 'ready', historyRevision: 8, freshThrough: now, lastSuccessAt: now }, summary, daily: [{ businessDate: '2026-09-04', tradeCount: 1, netProfit: '97', cumulativeNetProfit: '97' }] }),
     find: async () => detail,
     ...overrides,
@@ -38,9 +38,9 @@ describe('Stage 12S authoritative trade history', () => {
     await expect(moreService.records(7, { accountId: '42', symbol: 'EURUSD', cursor: page.nextCursor! })).rejects.toMatchObject({ code: 'trade_history_cursor_invalid' })
   })
 
-  it('checks account ownership before querying history', async () => {
+  it('checks personal history access rather than current ownership before querying history', async () => {
     const list = vi.fn()
-    const service = new TradeHistoryService(repository({ ownsAccount: async () => false, list }))
+    const service = new TradeHistoryService(repository({ canReadHistoryAccount: async () => false, list }))
     await expect(service.records(7, { accountId: '42' })).rejects.toMatchObject({ code: 'trade_history_account_forbidden', status: 403 })
     expect(list).not.toHaveBeenCalled()
   })

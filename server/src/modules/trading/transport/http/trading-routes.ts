@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify'
 import type { ConnectionCapacityService, TradingService } from '../../application/trading-service.js'
 import { TradingAccessError } from '../../domain/trading.js'
 import type { AccountSnapshot, MarketCandle, MarketQuote, ObserverChannelSummary, OpenPosition, PendingOrder, TerminalProfileSummary, TradingAccountSummary, TradingContext } from '../../domain/trading.js'
+import type { TradingAccountAccess } from '../../application/trading-ports.js'
 
 export interface TradeRequestAuthenticator {
   authenticate(request: { headers: Record<string, unknown> }): Promise<{ userId: number }>
@@ -59,8 +60,8 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
       return response(request.id, contextDto(await options.service.leaveObserver(userId, expected)))
     } catch (error) { return problem(error, request, reply) }
   })
-  fastify.get('/trading-accounts', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.listAccounts(userId)).map(accountDto) }) }
+  fastify.get<{ Querystring: { access?: TradingAccountAccess } }>('/trading-accounts', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.listAccounts(userId, request.query.access)).map(accountDto) }) }
     catch (error) { return problem(error, request, reply) }
   })
   fastify.get('/bridge/connection-capacity', async (request, reply) => {

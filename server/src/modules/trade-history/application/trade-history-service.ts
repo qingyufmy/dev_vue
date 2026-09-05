@@ -24,7 +24,7 @@ export class TradeHistoryService {
 
   async records(userId: number, input: TradeHistoryQuery) {
     const accountId = validId(input.accountId, 'trading_account_id')
-    if (!await this.repository.ownsAccount(userId, accountId)) throw new TradeHistoryError('trade_history_account_forbidden', 403)
+    if (!await this.repository.canReadHistoryAccount(userId, accountId)) throw new TradeHistoryError('trade_history_account_forbidden', 403)
     const normalized = normalize(input, accountId, this.now())
     const page = await this.repository.list(userId, normalized)
     const last = page.items.at(-1)

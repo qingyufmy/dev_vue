@@ -3,20 +3,22 @@ import type {
   ObserverChannelSummary, RealtimeResource, TerminalProfileSummary, Timeframe, TradingAccountSummary, TradingContext,
 } from '../domain/trading.js'
 
+export type TradingAccountAccess = 'current' | 'history'
+
 export interface TradingReadRepository {
   getContext(userId: number): Promise<TradingContext | null>
   saveContext(context: Omit<TradingContext, 'revision'>, expectedRevision: number | null): Promise<TradingContext>
-  listAccounts(userId: number): Promise<TradingAccountSummary[]>
+  listAccounts(userId: number, access?: TradingAccountAccess): Promise<TradingAccountSummary[]>
   listTerminalProfiles(userId: number): Promise<TerminalProfileSummary[]>
   listObserverChannels(userId: number): Promise<ObserverChannelSummary[]>
   findAccount(accountId: string): Promise<TradingAccountSummary | null>
   findOwnedAccount(userId: number, accountId: string): Promise<TradingAccountSummary | null>
-  getAccountSnapshot(accountId: string): Promise<AccountSnapshot | null>
+  getAccountSnapshot(accountId: string, userId: number): Promise<AccountSnapshot | null>
   listSymbols(accountId: string): Promise<string[]>
   getQuote(accountId: string, symbol: string): Promise<MarketQuote | null>
   listCandles(accountId: string, symbol: string, timeframe: Timeframe, limit: number): Promise<MarketCandle[]>
-  listPositions(accountId: string): Promise<{ revision: number; items: OpenPosition[] }>
-  listPendingOrders(accountId: string): Promise<{ revision: number; items: PendingOrder[] }>
+  listPositions(accountId: string, userId: number): Promise<{ revision: number; items: OpenPosition[] }>
+  listPendingOrders(accountId: string, userId: number): Promise<{ revision: number; items: PendingOrder[] }>
   latestRevision(accountId: string, resource: RealtimeResource, resourceId: string): Promise<number>
 }
 
@@ -53,6 +55,8 @@ export interface TrustedBridgeProjectionRoute {
   terminalProfileId: string
   terminalInstanceId: string
   connectionEpoch: number
+  /** Present on a gateway route; omitted by legacy in-process projector callers. */
+  connectionId?: string
 }
 
 export interface BridgeExactTradeState {

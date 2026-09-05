@@ -31,14 +31,14 @@ async function main() {
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
 
-  const trading = new MysqlTradingRepository(pool)
+  const leases = new RedisBridgeGatewayLeaseStore(cache)
+  const trading = new MysqlTradingRepository(pool, leases)
   const publisher = new RedisBrowserRealtimePublisher(cache, 'aurum:v4:browser-realtime:events', error => {
     console.error('[bridge-gateway] realtime publish failed', safeError(error))
   })
   const projector = new BridgeStreamProjector(trading, publisher)
   const streams = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), projector)
   const directory = new InProcessBridgeGatewayDirectory()
-  const leases = new RedisBridgeGatewayLeaseStore(cache)
   const transport = new BridgeGatewayCommandTransport(leases, directory)
   const queries = new BridgeGatewayQueryTransport(leases, directory)
   const historyCollector = new TradeHistoryCollector(new MysqlTradeHistoryCollectorRepository(pool), queries)

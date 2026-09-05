@@ -13,13 +13,14 @@ const [alterAccounts, createIntervals, alterOwnerships, createSettings] = statem
 const sourceAccounts = new Map(sourceObservation.source.trading_accounts.columns.map(column => [column.name, column]))
 
 describe('V4 account ownership and per-user account settings migration', () => {
-  it('is the final numbered migration and contains exactly the four approved DDL statements in order', async () => {
+  it('is migration 019 at the fixed pre-provenance boundary and contains exactly the four approved DDL statements in order', async () => {
     const plan = await loadMigrationPlan({ rootDirectory: root })
-    const last = plan.at(-1)
+    const migration = plan[19]
 
-    expect(last).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })
-    expect(last.statements).toHaveLength(4)
-    expect(last.statements).toEqual(statements)
+    expect(migration).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })
+    expect(plan.at(-1).id).toBe('20260905_020_account_projection_and_history_provenance')
+    expect(migration.statements).toHaveLength(4)
+    expect(migration.statements).toEqual(statements)
     for (const statement of statements) expect(() => validateMigrationStatement(statement, migrationId)).not.toThrow()
     expect(statements.map(statement => statement.match(/^(ALTER TABLE|CREATE TABLE)\s+([a-z0-9_]+)/i)?.[2])).toEqual([
       'trading_accounts', 'trading_account_ownership_intervals', 'trading_account_ownerships', 'user_trading_account_settings',

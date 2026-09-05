@@ -281,4 +281,4 @@
 
 补充需求复审：第一轮确认 Telegram 绑定不再属于活动功能，避免为已取消需求建表；第二轮确认取消功能不等于删除旧数据，保留冻结证据及后续逐字段历史处置门，不复活旧绑定或通知。本次修订仅改文档。
 
-用户随后已确认并完成 P1（不含 Telegram 绑定）和 P2 的源码/离线批次；最终验证以 [P1 记录](./stage-m1-b2-p1-user-state-schema-report.md)、[P2 记录](./stage-m1-b2-p2-account-ownership-report.md) 为准。不改运行库，不启用认证、财务或通知写入；下一确认门为 P3 离线账户读模型与历史记录归属防护。
+用户随后已确认并完成 P1（不含 Telegram 绑定）、P2、P3 的源码/离线批次；最终验证以 [P1 记录](./stage-m1-b2-p1-user-state-schema-report.md)、[P2 记录](./stage-m1-b2-p2-account-ownership-report.md)、[P3 记录](./stage-m1-b2-p3-offline-accounts-history-report.md) 为准。不改运行库，不启用认证、财务或通知写入；下一确认门为 P4 观摩发布与统一动态授权。018–020 未执行，后续登记/接管与历史回填尚未完成，不以离线接线代替运行切换验收。

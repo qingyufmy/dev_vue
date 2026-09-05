@@ -3,6 +3,9 @@ import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import type { BridgeGatewayRoute } from '../../bridge/domain/bridge-gateway.js'
 import type { BridgeHistoryResource, BridgeQueryResponseEnvelope } from '../../bridge/domain/bridge-query.js'
 import type { TradeHistoryCollectorRepository } from '../application/trade-history-collector-ports.js'
+import { resolveTradeRecordOwner } from '../application/trade-record-owner.js'
+import type { OwnershipInterval } from '../../trading/index.js'
+import { provenHistoryRecordSql } from './trade-history-ownership-sql.js'
 import {
   decodeTerminalHistoryPage, projectMt4Trade, projectMt5Position,
   type AccountTradeProjection, type TerminalDealFact, type TerminalHistoryFact, type TerminalOrderFact,
@@ -13,6 +16,10 @@ interface FactHashRow extends RowDataPacket { id: string; ticket: string; eviden
 interface DealEvidenceRow extends RowDataPacket { id: string; evidence_json: string | Record<string, unknown> }
 interface RecordRow extends RowDataPacket { id: string }
 interface FailureStateRow extends RowDataPacket { status: string; history_revision: number; fresh_through_utc: Date | null }
+interface IntervalRow extends RowDataPacket {
+  id: string; user_id: number; trading_account_id: string; role: OwnershipInterval['role']; started_at_utc: Date
+  ended_at_utc: Date | null; origin_kind: OwnershipInterval['originKind']; origin_ref: string
+}
 
 // Both supported terminal generations post-date this boundary. Starting from a
 // fixed epoch avoids silently losing an old account's history on first sync.
@@ -24,6 +31,7 @@ export class MysqlTradeHistoryCollectorRepository implements TradeHistoryCollect
 
   async begin(route: BridgeGatewayRoute, now: Date) {
     return transaction(this.pool, async connection => {
+      await lockAccount(connection, route)
       await connection.execute(`INSERT INTO trade_history_sync_states_v4
         (trading_account_id,status,history_revision,fresh_through_utc,last_success_at_utc,last_error_code,updated_at_utc)
         VALUES (?,'empty',0,NULL,NULL,NULL,?) ON DUPLICATE KEY UPDATE trading_account_id=VALUES(trading_account_id)`, [route.accountId, now])
@@ -42,6 +50,7 @@ export class MysqlTradeHistoryCollectorRepository implements TradeHistoryCollect
     if (response.payload.resource !== resource) throw new Error('trade_history_resource_mismatch')
     const facts = decodeTerminalHistoryPage(resource, response.payload.items).sort((left, right) => left.ticket.localeCompare(right.ticket))
     await transaction(this.pool, async connection => {
+      await lockAccount(connection, route)
       await lockSync(connection, route.accountId)
       await assertFactsCompatible(connection, route.accountId, facts)
       for (const fact of facts) {
@@ -69,19 +78,24 @@ export class MysqlTradeHistoryCollectorRepository implements TradeHistoryCollect
 
   async complete(route: BridgeGatewayRoute, freshThroughUtcMsc: number, now: Date) {
     await transaction(this.pool, async connection => {
+      await lockAccount(connection, route)
       await lockSync(connection, route.accountId)
       await connection.execute(`UPDATE trade_history_sync_states_v4 SET status='ready',history_revision=history_revision+1,
         fresh_through_utc=?,last_success_at_utc=?,last_error_code=NULL,updated_at_utc=? WHERE trading_account_id=?`, [date(freshThroughUtcMsc), now, now, route.accountId])
+      // Rebuild only this derived cache, including former owners. Facts/records
+      // are never deleted; removed ownership proof cannot leave a stale total.
+      await connection.execute('DELETE FROM account_trade_daily_summaries_v4 WHERE trading_account_id=?', [route.accountId])
       await connection.execute(`INSERT INTO account_trade_daily_summaries_v4
         (user_id,trading_account_id,business_date,terminal_timezone_offset_minutes,trade_count,winning_count,losing_count,gross_profit,commission,swap_amount,fee_amount,net_profit,history_revision,updated_at_utc)
-        SELECT r.user_id,r.trading_account_id,r.close_business_date,r.terminal_timezone_offset_minutes,COUNT(*),SUM(r.net_profit>0),SUM(r.net_profit<0),
+        SELECT r.user_id,r.trading_account_id,r.close_business_date,MIN(r.terminal_timezone_offset_minutes),COUNT(*),SUM(r.net_profit>0),SUM(r.net_profit<0),
           SUM(r.gross_profit),SUM(r.commission),SUM(r.swap_amount),SUM(r.fee_amount),SUM(r.net_profit),s.history_revision,?
         FROM account_trade_records_v4 r INNER JOIN trade_history_sync_states_v4 s ON s.trading_account_id=r.trading_account_id
-        WHERE r.user_id=? AND r.trading_account_id=? AND r.status='closed' AND r.close_business_date IS NOT NULL
-        GROUP BY r.user_id,r.trading_account_id,r.close_business_date,r.terminal_timezone_offset_minutes,s.history_revision
+        WHERE r.trading_account_id=? AND r.status='closed' AND r.close_business_date IS NOT NULL AND ${provenHistoryRecordSql()}
+        GROUP BY r.user_id,r.trading_account_id,r.close_business_date,s.history_revision
+        HAVING COUNT(DISTINCT r.terminal_timezone_offset_minutes)=1 AND COUNT(r.terminal_timezone_offset_minutes)=COUNT(*)
         ON DUPLICATE KEY UPDATE terminal_timezone_offset_minutes=VALUES(terminal_timezone_offset_minutes),trade_count=VALUES(trade_count),
           winning_count=VALUES(winning_count),losing_count=VALUES(losing_count),gross_profit=VALUES(gross_profit),commission=VALUES(commission),
-          swap_amount=VALUES(swap_amount),fee_amount=VALUES(fee_amount),net_profit=VALUES(net_profit),history_revision=VALUES(history_revision),updated_at_utc=VALUES(updated_at_utc)`, [now, route.userId, route.accountId])
+          swap_amount=VALUES(swap_amount),fee_amount=VALUES(fee_amount),net_profit=VALUES(net_profit),history_revision=VALUES(history_revision),updated_at_utc=VALUES(updated_at_utc)`, [now, route.accountId])
       const [revisionRows] = await connection.execute<(RowDataPacket & { history_revision: number })[]>('SELECT history_revision FROM trade_history_sync_states_v4 WHERE trading_account_id=?', [route.accountId])
       const revision = Number(revisionRows[0]!.history_revision)
       await connection.execute(`INSERT INTO outbox_events
@@ -93,6 +107,7 @@ export class MysqlTradeHistoryCollectorRepository implements TradeHistoryCollect
 
   async fail(route: BridgeGatewayRoute, code: string, now: Date) {
     await transaction(this.pool, async connection => {
+      await lockAccount(connection, route)
       const [rows] = await connection.execute<FailureStateRow[]>(`SELECT status,history_revision,fresh_through_utc
         FROM trade_history_sync_states_v4 WHERE trading_account_id=? FOR UPDATE`, [route.accountId])
       const state = rows[0]
@@ -106,6 +121,12 @@ export class MysqlTradeHistoryCollectorRepository implements TradeHistoryCollect
         JSON.stringify({ account_id: route.accountId, status: 'failed', history_revision: String(state.history_revision), fresh_through: state.fresh_through_utc?.toISOString() ?? null }), now, now])
     })
   }
+}
+
+async function lockAccount(connection: PoolConnection, route: BridgeGatewayRoute) {
+  const [rows] = await connection.execute<RowDataPacket[]>(
+    'SELECT id FROM trading_accounts WHERE id=? AND platform=? FOR UPDATE', [route.accountId, route.platform])
+  if (!rows[0]) throw new Error('trade_history_account_invalid')
 }
 
 async function lockSync(connection: PoolConnection, accountId: string) {
@@ -152,21 +173,34 @@ async function loadPositionDeals(connection: PoolConnection, accountId: string, 
 }
 
 async function upsertTradeRecord(connection: PoolConnection, route: BridgeGatewayRoute, projection: AccountTradeProjection, observed: number, now: Date) {
+  const [intervalRows] = await connection.execute<IntervalRow[]>(`SELECT id,user_id,CAST(trading_account_id AS CHAR) trading_account_id,
+    role,started_at_utc,ended_at_utc,origin_kind,origin_ref FROM trading_account_ownership_intervals
+    WHERE trading_account_id=? AND role='owner' AND started_at_utc<=?
+      AND (ended_at_utc IS NULL OR ended_at_utc>?)
+      AND (ended_at_utc IS NULL OR ended_at_utc>started_at_utc)
+    ORDER BY started_at_utc,id LIMIT 2 FOR SHARE`, [route.accountId, date(projection.closedAtUtcMsc), date(projection.openedAtUtcMsc)])
+  const intervals: OwnershipInterval[] = intervalRows.map(row => ({
+    id: row.id, userId: row.user_id, accountId: row.trading_account_id, role: row.role,
+    startedAtUtc: row.started_at_utc.toISOString(), endedAtUtc: row.ended_at_utc?.toISOString() ?? null,
+    originKind: row.origin_kind, originRef: row.origin_ref,
+  }))
+  const owner = resolveTradeRecordOwner(route.accountId, projection, intervals, now)
   const businessDate = terminalBusinessDate(projection.closedAtUtcMsc, route.timezoneOffsetMinutes!)
   await connection.execute(`INSERT INTO account_trade_records_v4
     (id,user_id,trading_account_id,stable_trade_key,platform,primary_ticket,position_id,symbol,side,status,source_classification,attribution_status,evidence_status,
       volume_opened,volume_closed,entry_price,exit_price,stop_loss,take_profit,gross_profit,commission,swap_amount,fee_amount,net_profit,opened_at_utc,closed_at_utc,
-      close_business_date,terminal_timezone_offset_minutes,evidence_sha256,observed_at_utc,legacy_source_table,legacy_id,created_at_utc,updated_at_utc,revision)
-    VALUES (?,?,?,?,?,?,?,?,?,'closed','unknown','unresolved',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?,1)
-    ON DUPLICATE KEY UPDATE evidence_status=VALUES(evidence_status),volume_opened=VALUES(volume_opened),volume_closed=VALUES(volume_closed),
+      close_business_date,terminal_timezone_offset_minutes,evidence_sha256,observed_at_utc,legacy_source_table,legacy_id,created_at_utc,updated_at_utc,revision,ownership_interval_id)
+    VALUES (?,?,?,?,?,?,?,?,?,'closed','unknown','unresolved',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?,1,?)
+    ON DUPLICATE KEY UPDATE ownership_interval_id=IF(user_id IS NULL OR user_id=VALUES(user_id),VALUES(ownership_interval_id),NULL),
+      user_id=COALESCE(user_id,VALUES(user_id)),evidence_status=VALUES(evidence_status),volume_opened=VALUES(volume_opened),volume_closed=VALUES(volume_closed),
       entry_price=VALUES(entry_price),exit_price=VALUES(exit_price),stop_loss=VALUES(stop_loss),take_profit=VALUES(take_profit),gross_profit=VALUES(gross_profit),
       commission=VALUES(commission),swap_amount=VALUES(swap_amount),fee_amount=VALUES(fee_amount),net_profit=VALUES(net_profit),opened_at_utc=VALUES(opened_at_utc),
       closed_at_utc=VALUES(closed_at_utc),close_business_date=VALUES(close_business_date),terminal_timezone_offset_minutes=VALUES(terminal_timezone_offset_minutes),
       observed_at_utc=VALUES(observed_at_utc),updated_at_utc=VALUES(updated_at_utc),revision=IF(evidence_sha256=VALUES(evidence_sha256),revision,revision+1),evidence_sha256=VALUES(evidence_sha256)`, [
-    randomUUID(), route.userId, route.accountId, projection.stableKey, route.platform, projection.primaryTicket, projection.positionId, projection.symbol, projection.side,
+    randomUUID(), owner?.userId ?? null, route.accountId, projection.stableKey, route.platform, projection.primaryTicket, projection.positionId, projection.symbol, projection.side,
     projection.evidenceStatus, projection.volumeOpened, projection.volumeClosed, projection.entryPrice, projection.exitPrice, projection.stopLoss, projection.takeProfit,
     projection.grossProfit, projection.commission, projection.swap, projection.fee, projection.netProfit, date(projection.openedAtUtcMsc), date(projection.closedAtUtcMsc),
-    businessDate, route.timezoneOffsetMinutes, projection.evidenceHash, date(observed), now, now,
+    businessDate, route.timezoneOffsetMinutes, projection.evidenceHash, date(observed), now, now, owner?.intervalId ?? null,
   ])
   const [records] = await connection.execute<RecordRow[]>(`SELECT id FROM account_trade_records_v4
     WHERE trading_account_id=? AND stable_trade_key=? FOR UPDATE`, [route.accountId, projection.stableKey])

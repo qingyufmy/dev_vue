@@ -1,8 +1,9 @@
 import { Worker } from 'bullmq'
 import {
-  assertV4RuntimeEnabled, closeHttpServer, createMysqlPool, installProcessLifecycle,
+  assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
+import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   AnalysisContextBuilder, AnalysisWorker, InferenceService, loadCredentialKeyring,
   MysqlAnalysisModelGatewayResolver, MysqlInferenceRepository, MysqlMacroSnapshotReader, MysqlModelUsageLedger,
@@ -19,10 +20,11 @@ async function main() {
   assertV4RuntimeEnabled(config)
   const health = new RoleHealth('worker-analysis')
   const pool = createMysqlPool(config.mysql)
-  await pool.query('SELECT 1')
+  const cache = createCacheRedis(config.cacheRedis)
+  await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
   const repository = new MysqlInferenceRepository(pool)
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
-  const trading = new MysqlTradingRepository(pool)
+  const trading = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache))
   const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
     allowPrivateEndpoints: config.allowPrivateModelEndpoints,
     maxAttempts: config.modelMaxAttempts,
@@ -63,7 +65,7 @@ async function main() {
     health.setReady(false)
     await worker.close()
     await closeHttpServer(healthServer)
-    await pool.end()
+    await Promise.allSettled([cache.quit(), pool.end()])
   })
 }
 

@@ -1,4 +1,4 @@
-import { ConnectionCapacityExceededError, type ConnectionCapacityRepository, type ConnectionLeaseStore, type TradingReadRepository } from './trading-ports.js'
+import { ConnectionCapacityExceededError, type ConnectionCapacityRepository, type ConnectionLeaseStore, type TradingAccountAccess, type TradingReadRepository } from './trading-ports.js'
 import { assertOpaqueId, assertSymbol, TradingAccessError, type Timeframe, type TradingContext } from '../domain/trading.js'
 
 const TIMEFRAMES = new Set<Timeframe>(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
@@ -37,15 +37,18 @@ export class TradingService {
     }, expectedRevision)
   }
 
-  listAccounts(userId: number) { return this.repository.listAccounts(userId) }
+  listAccounts(userId: number, access: TradingAccountAccess = 'current') {
+    if (access !== 'current' && access !== 'history') throw new TradingAccessError('trading_context_invalid', 400)
+    return this.repository.listAccounts(userId, access)
+  }
   listTerminalProfiles(userId: number) { return this.repository.listTerminalProfiles(userId) }
   listObserverChannels(userId: number) { return this.repository.listObserverChannels(userId) }
 
   async workspace(userId: number, accountId: string, observerChannelId?: string) {
     const account = await this.readableAccount(userId, accountId, observerChannelId)
     const [snapshot, symbols, positions, pendingOrders] = await Promise.all([
-      this.repository.getAccountSnapshot(account.id), this.repository.listSymbols(account.id),
-      this.repository.listPositions(account.id), this.repository.listPendingOrders(account.id),
+      this.repository.getAccountSnapshot(account.id, userId), this.repository.listSymbols(account.id),
+      this.repository.listPositions(account.id, userId), this.repository.listPendingOrders(account.id, userId),
     ])
     return { account, snapshot: observerChannelId && snapshot ? { ...snapshot, tradePermission: false } : snapshot, symbols, positions, pendingOrders }
   }

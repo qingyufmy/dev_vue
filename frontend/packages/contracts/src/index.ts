@@ -95,7 +95,7 @@ export const tradingContextSchema = z.object({
 
 export const tradingAccountSchema = z.object({
   id: z.string().min(1), platform: tradingPlatformSchema, login: z.string().min(1), server: z.string().min(1),
-  currency: z.string().min(3), terminal_profile_id: z.string().min(1), terminal_instance_id: z.string().min(1).nullable(),
+  currency: z.string().min(3), terminal_profile_id: z.string().min(1).nullable(), terminal_instance_id: z.string().min(1).nullable(),
   bridge_state: bridgeStateSchema, trade_permission: z.boolean(), last_seen_at: z.iso.datetime({ offset: true }).nullable(),
 }).transform((value) => ({ id: value.id, platform: value.platform, login: value.login, server: value.server, currency: value.currency,
   terminalProfileId: value.terminal_profile_id, terminalInstanceId: value.terminal_instance_id, bridgeState: value.bridge_state,
@@ -103,7 +103,7 @@ export const tradingAccountSchema = z.object({
 
 export const accountSnapshotSchema = z.object({
   id: z.string().min(1), platform: tradingPlatformSchema, login: z.string().min(1), server: z.string().min(1), currency: z.string().min(3),
-  terminal_profile_id: z.string().min(1), terminal_instance_id: z.string().min(1).nullable(), bridge_state: bridgeStateSchema,
+  terminal_profile_id: z.string().min(1).nullable(), terminal_instance_id: z.string().min(1).nullable(), bridge_state: bridgeStateSchema,
   trade_permission: z.boolean(), last_seen_at: z.iso.datetime({ offset: true }).nullable(),
   balance: decimalSchema, equity: decimalSchema, margin: decimalSchema, free_margin: decimalSchema,
   floating_profit: decimalSchema, leverage: z.number().int().positive().nullable(), timezone_offset_minutes: z.number().int().min(-840).max(840).nullable(),

@@ -17,7 +17,7 @@ export interface TradingAccountSummary {
   login: string
   server: string
   currency: string
-  terminalProfileId: string
+  terminalProfileId: string | null
   terminalInstanceId: string | null
   bridgeState: 'online' | 'offline' | 'paused' | 'replaced' | 'unauthorized'
   tradePermission: boolean

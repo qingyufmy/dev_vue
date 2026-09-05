@@ -6,7 +6,7 @@ import {
 } from '../bootstrap/index.js'
 import { createAuthModule } from '../modules/auth/index.js'
 import {
-  BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeSessionTicketStore,
+  BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeGatewayLeaseStore, RedisBridgeSessionTicketStore,
 } from '../modules/bridge/index.js'
 import {
   ExecutionDistributionService, ExecutionService, MysqlExecutionDistributionRepository, MysqlExecutionRepository,
@@ -36,7 +36,7 @@ async function main() {
 
   const auth = createAuthModule(pool, cache, web.auth)
   const tradeAuth = new AuthTradeRequestAdapter(auth)
-  const tradingRepository = new MysqlTradingRepository(pool)
+  const tradingRepository = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache))
   const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool))
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))

@@ -9,7 +9,7 @@ export interface TradeHistoryRepositoryPage {
 }
 
 export interface TradeHistoryRepository {
-  ownsAccount(userId: number, accountId: string): Promise<boolean>
+  canReadHistoryAccount(userId: number, accountId: string): Promise<boolean>
   list(userId: number, filter: TradeHistoryFilter): Promise<TradeHistoryRepositoryPage>
   find(userId: number, recordId: string): Promise<TradeRecordDetail | null>
 }

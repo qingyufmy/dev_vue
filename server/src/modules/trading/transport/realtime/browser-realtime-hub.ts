@@ -79,9 +79,13 @@ export class BrowserRealtimeHub {
           input.sink.close(4403, 'realtime_scope_forbidden')
           return null
         }
-        const key = `${target.accountId}:${target.observerChannelId ?? ''}`
+        const historyOnly = isHistoryOnly(target)
+        const key = `${target.accountId}:${target.observerChannelId ?? ''}:${historyOnly ? 'history' : 'current'}`
         if (!accounts.has(key)) {
-          if (!await this.authorizeAccount(input.userId, target.accountId, target.observerChannelId)) {
+          const allowed = historyOnly
+            ? target.observerChannelId === null && (await this.repository.listAccounts(input.userId, 'history')).some(account => account.id === target.accountId)
+            : await this.authorizeAccount(input.userId, target.accountId, target.observerChannelId)
+          if (!allowed) {
             input.sink.close(4403, 'trading_account_forbidden')
             return null
           }
@@ -157,6 +161,10 @@ export class BrowserRealtimeHub {
     const account = channel ? await this.repository.findAccount(accountId) : await this.repository.findOwnedAccount(userId, accountId)
     return Boolean(account)
   }
+}
+
+function isHistoryOnly(target: BrowserRealtimeTarget) {
+  return target.observerChannelId === null && target.resources.length > 0 && target.resources.every(resource => resource === 'trade_history')
 }
 
 function targetMatches(target: AuthorizedTarget, userId: number, event: BrowserRealtimeEvent) {
