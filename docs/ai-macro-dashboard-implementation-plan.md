@@ -34,18 +34,18 @@ V4 采用以下结论：
 - 前端统一使用 Vue 3、Vite、TypeScript、Tailwind CSS 4、shadcn-vue（Reka UI）和 Lucide。
 - 所有新浏览器接口统一使用 `/api/v4`；不再新增 `/api` 或 `/aurum-api` 兼容入口。
 - V4 服务端按 `domain / application / infrastructure / transport` 分层，并由独立 PM2 角色运行 API、实时网关、调度器和 Worker。
-- `macro_research_snapshots` 已由迁移 `20260903_005_analysis_scheduler_and_account_fanout.sql` 创建。
+- 源码迁移 `20260903_005_analysis_scheduler_and_account_fanout.sql` 已定义最小 `macro_research_snapshots`，但只适用于空的 V4 旁路目标库；当前 `dev_vue` 旧版迁移源并未应用该迁移，表也不存在。
 - `MysqlMacroSnapshotReader` 已在 AI 分析输入构建时读取最新有效宏观快照。
 - 分析任务已经冻结行情、策略和宏观输入，宏观研究不应进入五分钟分析的同步关键路径。
 
 ### 2.2 当前冲突
 
-现有 `macro_research_snapshots` 只具备最小占位结构，同时允许 `platform` 和 `user` 作用域。新宏观看板若再创建另一张发布快照表，将形成两个权威源；如果继续允许用户级宏观快照覆盖平台快照，也会让相同市场事实随用户变化。
+V4 目标结构中计划的 `macro_research_snapshots` 只具备最小占位结构，同时允许 `platform` 和 `user` 作用域。新宏观看板若再创建另一张发布快照表，将形成两个权威源；如果未来继续允许用户级宏观快照覆盖平台快照，也会让相同市场事实随用户变化。
 
-因此实施时必须扩展现有表并收敛读取语义：
+因此实施时必须在 V4 旁路目标中扩展这张唯一表并收敛读取语义：
 
 - 新生成并向用户发布的宏观快照只允许 `owner_scope='platform'`；
-- 现有记录原样保留并标记来源和兼容状态，不直接删除；
+- 若未来任何目标环境已经产生记录，原样保留并标记来源和兼容状态，不直接删除；
 - 新看板和 AI 分析统一从同一套“已发布、未过期、哈希有效”的平台快照中读取；
 - 用户策略只能决定是否把该平台快照作为分析证据，不能生成一份用户专属宏观事实；
 - 如果未来确实需要用户研究笔记，必须使用不同领域和表名，不得复用宏观市场事实表。
@@ -167,7 +167,7 @@ V1 客观因子快照没有经过验证的预测模型时，horizon 必须使用
 
 | 因子 | 候选来源 | 首版级别 | 备注 |
 | --- | --- | --- | --- |
-| 统一黄金日线 | 待批准的连续、可商用来源 | 必需 | 不得拼接不同经纪商历史作为训练真相 |
+| 统一黄金日线 | Twelve Data 首选试用；EODHD、Trading Economics 对照 | V2 前必需 | 不阻塞 V1 客观因子页面；不得拼接不同经纪商历史作为训练真相 |
 | 美国 10 年实际利率 | FRED/ALFRED `DFII10` | 必需 | 使用可证明的 vintage |
 | 美国 10 年盈亏平衡通胀 | FRED/ALFRED `T10YIE` | 必需 | 使用可证明的 vintage |
 | 广义美元指数 | FRED/ALFRED `DTWEXBGS` | 必需 | 周末/节假日按来源日历处理 |
@@ -177,7 +177,9 @@ V1 客观因子快照没有经过验证的预测模型时，horizon 必须使用
 
 ### 5.2 经济日历来源
 
-实施前必须选择能够提供稳定事件 ID、计划时间和时区、前值/预期/实际/修订、历史事件、商业展示权和明确缓存条款的合法来源。
+首选试用候选为 Trading Economics，EODHD 为降级候选。前者公开合同具备稳定事件 ID、计划时间精度、重要性、前值/预期/实际/修订、更新时间、流式更新和中文翻译；但两者都必须在接入前确认商业展示、缓存、留存和建模权利。
+
+实施前必须选择能够提供稳定事件 ID、计划时间和时区、前值/预期/实际/修订、历史事件、商业展示权和明确缓存条款的合法来源。供应商未提供稳定 ID 时不得用标题拼接伪造身份。
 
 没有批准来源时，只允许隐藏入口或明确“尚未接入”；禁止抓取不稳定网页或伪造事件数据。
 
@@ -191,6 +193,9 @@ V1 客观因子快照没有经过验证的预测模型时，horizon 必须使用
 - FRED observation/vintage 参数说明：<https://fred.stlouisfed.org/docs/api/fred/series_observations.html>
 - GPR 页面提供历史 vintages，采用 CC BY 并要求注明来源和作者：<https://www.matteoiacoviello.com/gpr.htm>
 - Cboe 提供 GVZ 历史数据，但指数数据的展示和分发许可必须按实际用途确认：<https://www.cboe.com/tradable_products/vix/vix_historical_data>
+- Twelve Data 提供 XAU/USD 商品聚合候选；商业用途与外部展示仍按实际套餐和书面许可确认：<https://twelvedata.com/exchanges/commodity>、<https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage>
+- Trading Economics 经济日历合同包含稳定 ID、重要性、修订和更新时间：<https://docs.tradingeconomics.com/economic_calendar/schema/>
+- EODHD 经济事件是降级候选，但公开响应字段缺少稳定事件 ID、重要性和明确修订身份：<https://eodhd.com/financial-apis/economic-events-data-api>
 
 许可未确认、许可过期或使用范围不匹配时，对应来源不得进入生产快照。
 
@@ -244,7 +249,7 @@ V1 客观因子快照没有经过验证的预测模型时，horizon 必须使用
 
 ### 7.2 `macro_research_snapshots` 扩展
 
-保留现有字段，通过新迁移增加 `schema_version`、`business_date`、`data_cutoff_at_utc`、`feature_set_id`、可空 `model_version_id`、发布/新鲜度/健康状态、horizon、发布时间和 supersede 时间，以及唯一发布键和最新读取索引。
+在空 V4 旁路目标库先由既有迁移创建最小结构，再通过后续新迁移增加 `schema_version`、`business_date`、`data_cutoff_at_utc`、`feature_set_id`、可空 `model_version_id`、发布/新鲜度/健康状态、horizon、发布时间和 supersede 时间，以及唯一发布键和最新读取索引。当前旧版 `dev_vue` 中没有这张表，不存在可原地扩展的宏观记录。
 
 完整 DTO 可以保留在有 schema 上限的 `payload_json` 中，但可筛选、排序、关联和并发控制字段必须正规化，不能藏在 JSON 内。
 
@@ -263,7 +268,7 @@ V1 客观因子快照没有经过验证的预测模型时，horizon 必须使用
 ### 8.1 迁移原则
 
 - 迁移只追加到 `server/db/migrations/`；
-- 实施时使用 `20260904_015_*` 之后的下一个空闲编号；
+- 实施时使用 `20260905_015_*` 起的下一个实际空闲编号；
 - 不修改现有迁移；不在服务启动时自动迁移；
 - DDL、回填、校验和 reader 切换分开；
 - 大回填使用稳定主键游标和有限批次；
@@ -271,14 +276,14 @@ V1 客观因子快照没有经过验证的预测模型时，horizon 必须使用
 
 ### 8.2 现有快照迁移
 
-1. 只读盘点现有记录数量、作用域、时间、哈希和 payload schema。
-2. 追加新表和可空扩展列，不改变旧读取行为。
-3. 将旧记录标记为 `schema_version=0`、`publication_status='legacy'`，原 payload 和哈希不变。
-4. 生成首个 V4 平台快照前完成来源、截止时间、许可和哈希校验。
-5. 同一发布批次部署新 reader，使看板和 AI 只读符合 V4 合同的平台快照。
-6. 旧用户级记录保留为只读证据，不再覆盖平台事实。
-7. 对账记录数、ID、哈希、最早/最晚时间和引用关系。
-8. 经过回滚窗口和正式审计后，才能另写清理迁移删除无引用的旧索引或冗余结构；不得删除历史证据。
+1. 将当前 `dev_vue` 固定为旧版只读迁移源，不在其上执行 V4 DDL。
+2. 用户另行授权后创建空的 V4 旁路目标库，从 `20260903_001` 顺序执行结构迁移。
+3. 迁移前校验目标库结构指纹；若发现旧版 `inference_snapshots` 等同名异构表，立即失败关闭，禁止由 `IF NOT EXISTS` 静默复用。
+4. 使用专用回填程序把旧推理快照转换到 V4 元数据表和 payload 表，并完成数量与 SHA-256 对账。
+5. 当前源库没有宏观快照，因此不伪造 `schema_version=0` 记录；如果正式公网源后来出现宏观表，重新盘点并增加显式转换分支。
+6. 生成首个 V4 平台快照前完成来源、截止时间、许可和哈希校验。
+7. 同一发布批次部署新 reader，使看板和 AI 只读符合 V4 合同的平台快照。
+8. 同一源快照至少完整迁移两次；经过回滚窗口和正式审计后，才能另写清理迁移删除无引用的旧索引或冗余结构。
 
 ### 8.3 防死锁和查询
 
@@ -361,14 +366,14 @@ BullMQ 只携带 `v`、`job_id`、`job_kind`。Worker 从 MySQL 读取权威任�
 ```json
 {
   "macro_evidence": {
-    "mode": "off | context | required",
+    "mode": "off | context",
     "accepted_schema_versions": [1],
     "max_age_seconds": 172800
   }
 }
 ```
 
-首发默认 `context`：可用则冻结，不可用则记录原因并继续原策略；它不能单独生成交易机会或替代技术触发。`required` 只允许专门验证的策略使用，缺失时返回不可评估而非放宽条件。当前隐式读取宏观快照的代码必须改为受策略版本控制。
+未声明时默认 `off`，保证现有策略不会因部署宏观模块而隐式改变输入。首发只接受 `off | context`：`context` 可用则冻结，不可用则记录原因并继续原策略；它不能单独生成交易机会或替代技术触发。`required` 仅保留为未来设计，完成专门验证前编译器不得接受。当前隐式读取宏观快照的代码必须改为受策略版本控制；`off` 路径不得查询宏观表。
 
 ### 11.3 五分钟调度
 
@@ -407,7 +412,7 @@ GET   /api/v4/admin/macro/health
 
 ## 13. 浏览器实时合同
 
-允许事件：`market.macro.changed`、`market.calendar.changed` 和仅管理员接收的 `market.source_health.changed`。事件只携资源 ID、revision、变化种类和必要时间，不携正文、全部因子或历史。
+允许事件：`market.macro.changed`、`market.calendar.changed` 和仅管理员接收的 `market.source_health.changed`。交易端在现有 `kind=market` 下增加无账户、无观摩频道的 `resource_id=macro|calendar` 平台目标，`after_revision=null`；管理员来源健康使用受 RBAC 限制的 `kind=admin, resource_id=macro_source_health`。事件只携资源 ID、revision、变化种类和必要时间，不携正文、全部因子或历史。
 
 平台事件在服务端授权后按用户扇出；客户端收到事件后使 Vue Query 失效并 HTTP 回读。sequence 缺口、重连和权限变化时重拉快照。页面不得创建第二个 WebSocket，不得用 WebSocket RPC，也不得对日频宏观数据秒级轮询。
 
@@ -493,7 +498,7 @@ frontend/apps/trade/src/features/market/
 
 ### M0：前置决策
 
-批准黄金历史源、因子/日历许可、经济日历供应商、Python 环境；盘点现有快照；冻结合同和迁移策略。
+M0 结论记录在 [Stage M0 宏观研究数据源与合同冻结决策](./stage-m0-macro-data-source-and-contract-decision.md)：冻结候选排序、V1 因子、API/实时/策略合同和旁路迁移门；供应商只有通过试用与书面许可后才算批准。
 
 ### M1：合同与数据库
 
@@ -562,25 +567,22 @@ frontend/apps/trade/src/features/market/
 
 ### 23.1 剩余风险
 
-- 统一黄金长期历史来源未批准；
+- 统一黄金长期历史仅冻结候选排序，尚未完成试用与书面许可；
 - GVZ 商业展示/再分发许可未书面确认；
-- 经济日历供应商、额度和许可未选择；
-- 当前数据库宏观快照尚未做真实库只读盘点；
+- 经济日历已冻结候选排序，但试用额度和许可尚未选择；
+- 当前旧版数据库已完成只读盘点，但 V4 旁路目标尚未创建，`inference_snapshots` 同名异构迁移仍待演练；
 - 生产 Python、原生依赖、内存和回滚未验证；
 - 20 日重叠目标有效样本有限，复杂模型可能不优于基线；
 - GPR 和经济数据修订使可得性证据质量不一；
 - 用户仍可能把中期偏向误认为入场建议；
-- 平台级 realtime target/schema 需在实现前冻结；
+- 平台级 realtime target/schema 已完成设计冻结，但尚未进入共享合同和服务端授权实现；
 - 可视化依赖可能增加体积和许可证风险。
 
 ### 23.2 进入实施前必须确认
 
-1. 数据源和许可清单；
-2. 经济日历供应商；
-3. 是否接受 V1 不承诺 ML 综合方向，只先展示客观因子；
-4. 现有数据库宏观数据只读盘点授权；
-5. `/api/v4` 和 realtime 合同；
-6. migration rehearsal 与备份恢复方案；
-7. 管理员预览和用户开放顺序。
+1. 统一黄金和经济日历候选的试用账号、数据质量对比及书面许可；
+2. M1 创建空旁路目标库与迁移演练的单独授权；
+3. V1 透明因子合成规则的离线冻结结果；
+4. 管理员预览和用户开放顺序。
 
 未完成以上确认前，不进入 M1，不创建迁移，不抓取外部数据，不启动宏观 Worker。
