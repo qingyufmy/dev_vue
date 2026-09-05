@@ -2,6 +2,7 @@
 
 > 2026-09-05；B1 首批工具实施记录。只有本地源码与离线测试，不是备份完成或恢复成功证明。
 > 前置方案：[源备份、字段映射与回填对账](./stage-m1-data-backfill-and-reconciliation-plan.md)。
+> 后续现场记录：[服务器备份条件只读核验](./stage-m1-b1-server-backup-readiness.md)；工具与容量已检查，实际加密备份/恢复仍未执行。
 
 ## 1. 本次范围与未执行事项
 
