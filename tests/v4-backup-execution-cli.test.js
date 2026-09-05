@@ -11,6 +11,7 @@ describe('explicit backup execution CLI', () => {
     const { stdout, stderr } = await run(['help'])
     expect(stdout).toContain('--confirm-no-source-ddl')
     expect(stdout).toContain('No resume or cleanup')
+    expect(stdout).toContain('continue-existing')
     expect(stderr).toBe('')
   })
   it('rejects cleanup, incomplete approval, extra arguments and arbitrary database targets', async () => {
@@ -18,6 +19,9 @@ describe('explicit backup execution CLI', () => {
       ['execute', '--run-id=20260905-01', '--server-uuid=ac423207-6ef3-11f1-b302-000c29fda104'],
       ['execute', '--run-id=dev_vue', '--server-uuid=unknown', '--confirm-no-source-ddl'],
       ['execute', '--run-id=20260905-01', '--server-uuid=unknown', '--confirm-no-source-ddl', '--force'],
+      ['continue-existing', '--run-id=20260905-01', '--server-uuid=ac423207-6ef3-11f1-b302-000c29fda104', '--confirm-no-source-ddl'],
+      ['continue-existing', '--run-id=20260905-02', '--server-uuid=ac423207-6ef3-11f1-b302-000c29fda104', '--confirm-new-target'],
+      ['continue-existing', '--run-id=20260905-01', '--server-uuid=unknown', '--confirm-new-target'],
     ]) {
       try { await run(args); expect.unreachable('must refuse') }
       catch (error) {

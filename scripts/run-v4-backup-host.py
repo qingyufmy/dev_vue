@@ -11,9 +11,14 @@ import sys
 
 
 def main():
-    if len(sys.argv) != 3 or not re.fullmatch(r"\d{8}-\d{2}", sys.argv[1]):
+    if len(sys.argv) not in (3, 4) or not re.fullmatch(r"\d{8}-\d{2}", sys.argv[1]):
         raise ValueError("arguments")
-    run_id, server_uuid = sys.argv[1:]
+    continuation = len(sys.argv) == 4
+    if continuation and sys.argv[3] != "continue-existing":
+        raise ValueError("mode")
+    run_id, server_uuid = sys.argv[1:3]
+    if continuation and (run_id != "20260905-01" or server_uuid != "ac423207-6ef3-11f1-b302-000c29fda104"):
+        raise ValueError("continuation scope")
     if not re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", server_uuid):
         raise ValueError("uuid")
     if os.getuid() != 0 or sys.platform != "linux":
@@ -51,8 +56,9 @@ def main():
                "V4_BACKUP_MYSQL2_MODULE": "/www/wwwroot/aurum-ai/node_modules/mysql2/promise.js"}
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "execute-v4-backup.mjs")
         completed = subprocess.run(
-            ["/www/server/nodejs/v24.18.0/bin/node", script, "execute", "--run-id=" + run_id,
-             "--server-uuid=" + server_uuid, "--confirm-no-source-ddl"], env=env, pass_fds=tuple(fds), timeout=7200,
+            ["/www/server/nodejs/v24.18.0/bin/node", script, "continue-existing" if continuation else "execute", "--run-id=" + run_id,
+             "--server-uuid=" + server_uuid, "--confirm-new-target" if continuation else "--confirm-no-source-ddl"],
+            env=env, pass_fds=tuple(fds), timeout=7200,
         )
         return completed.returncode
     finally:

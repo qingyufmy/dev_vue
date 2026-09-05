@@ -17,6 +17,7 @@ FILES = {
     "scripts/execute-v4-backup.mjs",
     "scripts/run-v4-backup-host.py",
     "scripts/lib/v4-backup-executor.mjs",
+    "scripts/lib/v4-backup-continuation.mjs",
     "scripts/lib/v4-backup-io.mjs",
     "scripts/lib/v4-backup-artifact.mjs",
     "scripts/lib/v4-backup-preflight.mjs",
@@ -68,7 +69,18 @@ def prepare(bundle):
         decoded[item["path"]] = raw
     directory = Path("/www/backup/aurum-v4/m1") / run_id
     key_directory = Path("/root/.local/share/aurum-v4-backup-keys") / ("m1-" + run_id)
-    for path in [directory, key_directory]:
+    continuation = bundle.get("mode") == "continue-existing"
+    if bundle.get("mode") not in (None, "continue-existing"):
+        raise ValueError("mode")
+    if continuation:
+        if run_id != "20260905-01":
+            raise ValueError("continuation scope")
+        for path in [directory, directory / "artifacts", key_directory]:
+            no_links(path)
+            if not path.is_dir() or stat.S_IMODE(path.stat().st_mode) != 0o700:
+                raise ValueError("missing private original")
+        directory = directory / "continuation-01"
+    for path in ([directory] if continuation else [directory, key_directory]):
         no_links(path)
         if os.path.lexists(path):
             raise ValueError("run path already exists")
@@ -78,7 +90,8 @@ def prepare(bundle):
             raise ValueError("capacity")
     os.umask(0o077)
     private_tree(directory, Path("/www/backup/aurum-v4"))
-    private_tree(key_directory, Path("/root/.local/share/aurum-v4-backup-keys"))
+    if not continuation:
+        private_tree(key_directory, Path("/root/.local/share/aurum-v4-backup-keys"))
     for relative, raw in decoded.items():
         target = directory / "tools" / relative
         private_tree(target.parent, directory)
@@ -87,7 +100,8 @@ def prepare(bundle):
             output.write(raw)
             output.flush()
             os.fsync(output.fileno())
-    receipt = {"status": "prepared", "runId": run_id, "files": [{"path": key, "sha256": hashlib.sha256(value).hexdigest()} for key, value in decoded.items()]}
+    receipt = {"status": "prepared", "runId": run_id, "mode": "continue-existing" if continuation else "execute",
+               "files": [{"path": key, "sha256": hashlib.sha256(value).hexdigest()} for key, value in decoded.items()]}
     fd = os.open(directory / "tool-receipt.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as output:
         json.dump(receipt, output, sort_keys=True)

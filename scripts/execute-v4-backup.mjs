@@ -3,16 +3,22 @@ import { fstatSync, readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { isAbsolute } from 'node:path'
 import { backupExecutionConfig, executeBackupRehearsal } from './lib/v4-backup-executor.mjs'
+import { backupContinuationConfig, continueBackupRestore } from './lib/v4-backup-continuation.mjs'
 import { requireBackup as check } from './lib/v4-backup-artifact.mjs'
 
 try {
   const args = process.argv.slice(2)
   if (args.length === 1 && args[0] === 'help') {
     process.stdout.write('execute --run-id=YYYYMMDD-NN --server-uuid=UUID --confirm-no-source-ddl\nLinux host only. Explicit approval of paths and new database is required. No resume or cleanup.\n')
+    process.stdout.write('continue-existing --run-id=20260905-01 --server-uuid=UUID --confirm-new-target\nOne separately approved continuation; old artifacts are immutable. No retry of an existing continuation.\n')
   } else {
-    check(args.length === 4 && args[0] === 'execute' && args[3] === '--confirm-no-source-ddl', 'backup_execution_arguments_invalid')
+    const continuation = args[0] === 'continue-existing'
+    check(args.length === 4 && (continuation ? args[3] === '--confirm-new-target'
+      : args[0] === 'execute' && args[3] === '--confirm-no-source-ddl'), 'backup_execution_arguments_invalid')
     check(args[1].startsWith('--run-id=') && args[2].startsWith('--server-uuid='), 'backup_execution_arguments_invalid')
-    const config = backupExecutionConfig({ runId: args[1].slice(9), serverUuid: args[2].slice(14), ddlWindowConfirmed: true })
+    const scope = { runId: args[1].slice(9), serverUuid: args[2].slice(14) }
+    const config = continuation ? backupContinuationConfig({ ...scope, newTargetConfirmed: true })
+      : backupExecutionConfig({ ...scope, ddlWindowConfirmed: true })
     check(process.platform === 'linux' && process.getuid() === 0, 'backup_execution_host_invalid')
     const credentialFd = Number(process.env.V4_BACKUP_CREDENTIAL_FD)
     const defaultsFd = Number(process.env.V4_BACKUP_MYSQL_DEFAULTS_FD)
@@ -32,7 +38,8 @@ try {
     const { default: mysql } = await import(pathToFileURL(modulePath).href)
     const connect = database => mysql.createConnection({ ...credential, database, multipleStatements: false,
       connectTimeout: 10000, timezone: 'Z', supportBigNumbers: true, bigNumberStrings: true, dateStrings: true })
-    const receipt = await executeBackupRehearsal(config, { connect, mysqlDefaultsFd: defaultsFd,
+    const execute = continuation ? continueBackupRestore : executeBackupRehearsal
+    const receipt = await execute(config, { connect, mysqlDefaultsFd: defaultsFd,
       progress: value => process.stdout.write(`${JSON.stringify(value)}\n`) })
     process.stdout.write(`${JSON.stringify(receipt)}\n`)
   }

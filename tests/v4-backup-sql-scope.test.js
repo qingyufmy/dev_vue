@@ -7,6 +7,11 @@ const tables = [
   { name: 'user_notes', columns: [{ name: 'id' }, { name: 'user_id' }, { name: 'note' }] },
 ]
 
+const literalShapeTables = [
+  { name: 'users', columns: [{ name: 'id' }, { name: 'display_name' }, { name: 'payload' }, { name: 'created_at' }] },
+  { name: 'user_notes', columns: [{ name: 'id' }, { name: 'user_id' }, { name: 'note' }] },
+]
+
 function dump({ users = [], notes = [], header = true, footer = true } = {}) {
   const statements = []
   if (header) statements.push(
@@ -55,8 +60,18 @@ async function review(sql, options = {}) {
   return inspectBackupSql(chunks(sql), { tables, ...options })
 }
 
+async function reviewWithTables(sql, tableMetadata, options = {}) {
+  return inspectBackupSql(chunks(sql), { tables: tableMetadata, ...options })
+}
+
 async function expectCode(sql, code, options = {}) {
   await expect(review(sql, options)).rejects.toSatisfy(error => error instanceof BackupSqlScopeError && error.code === code)
+}
+
+async function expectCodeWithTables(sql, tableMetadata, code, options = {}) {
+  await expect(reviewWithTables(sql, tableMetadata, options)).rejects.toSatisfy(
+    error => error instanceof BackupSqlScopeError && error.code === code,
+  )
 }
 
 describe('bounded mysqldump SQL scope review', () => {
@@ -131,8 +146,61 @@ describe('bounded mysqldump SQL scope review', () => {
       'CREATE TABLE `user_notes` (`id` bigint, `user_id` bigint, `note` text, KEY `idx_user` (`user_id`(4))) ENGINE=InnoDB;',
       '/*!40101 SET character_set_client = @saved_cs_client */;',
     ].join('\n')
-    const result = await review(sql)
+    const result = await inspectBackupSql(chunks(sql), { tables: literalShapeTables })
     expect(result.tables.every(table => table.rows === '0')).toBe(true)
+  })
+
+  it('derives generated-column omissions from frozen DDL, including nested CASE expressions', async () => {
+    const generatedTables = [
+      { name: 'ai_model_profiles', columns: ['id', 'is_default', 'status', 'deleted_at', 'owner_user_id', 'active_default_owner_key'].map(name => ({ name })) },
+      { name: 'strategy_subscriptions', columns: ['id', 'execution_enabled', 'is_deleted', 'user_id', 'active_execution_user_key'].map(name => ({ name })) },
+    ]
+    const sql = [
+      'CREATE TABLE `ai_model_profiles` (`id` int, `is_default` int, `status` varchar(32), `deleted_at` datetime(3), `owner_user_id` int, `active_default_owner_key` int GENERATED ALWAYS AS ((case when ((`is_default` = 1) and (`status` = _utf8mb4\'active\') and (`deleted_at` is null)) then `owner_user_id` else NULL end)) STORED /*!80023 INVISIBLE */) ENGINE=InnoDB;',
+      'CREATE TABLE `strategy_subscriptions` (`id` int, `execution_enabled` int, `is_deleted` int, `user_id` int, `active_execution_user_key` int GENERATED ALWAYS AS ((case when ((`execution_enabled` = 1) and (`is_deleted` = 0)) then `user_id` else NULL end)) STORED /*!80023 INVISIBLE */) ENGINE=InnoDB;',
+      'INSERT INTO `ai_model_profiles` (`id`,`is_default`,`status`,`deleted_at`,`owner_user_id`) VALUES (1,1,\'active\',NULL,7);',
+      'INSERT INTO `strategy_subscriptions` (`id`,`execution_enabled`,`is_deleted`,`user_id`) VALUES (1,1,0,7);',
+    ].join('\n')
+    const result = await reviewWithTables(sql, generatedTables)
+    expect(result.tables.map(table => table.rows)).toEqual(['1', '1'])
+  })
+
+  it('accepts a visible virtual generated column but requires ordinary invisible columns', async () => {
+    const metadata = [{ name: 'virtual_demo', columns: ['id', 'status', 'hidden_value', 'virtual_key'].map(name => ({ name })) }]
+    const ddl = 'CREATE TABLE `virtual_demo` (`id` int, `status` int, `hidden_value` int INVISIBLE, `virtual_key` int AS ((case when (`status` in (1,2)) then (`id`) else NULL end)) VIRTUAL VISIBLE) ENGINE=InnoDB;'
+    const accepted = `${ddl}\nINSERT INTO \`virtual_demo\` (\`id\`,\`status\`,\`hidden_value\`) VALUES (1,1,9);`
+    const result = await reviewWithTables(accepted, metadata)
+    expect(result.tables[0].rows).toBe('1')
+    await expectCodeWithTables(`${ddl}\nINSERT INTO \`virtual_demo\` (\`id\`,\`status\`) VALUES (1,1);`, metadata, 'backup_sql_insert_columns_invalid')
+    await expectCodeWithTables(`${ddl}\nINSERT INTO \`virtual_demo\` (\`id\`,\`hidden_value\`,\`status\`) VALUES (1,9,1);`, metadata, 'backup_sql_insert_columns_invalid')
+    await expectCodeWithTables(`${ddl}\nINSERT INTO \`virtual_demo\` (\`id\`,\`status\`,\`hidden_value\`,\`virtual_key\`) VALUES (1,1,9,1);`, metadata, 'backup_sql_insert_columns_invalid')
+  })
+
+  it('rejects CREATE DDL whose column names do not match frozen metadata', async () => {
+    const metadata = [{ name: 'ddl_binding_demo', columns: [{ name: 'id' }, { name: 'payload' }] }]
+    await expectCodeWithTables('CREATE TABLE `ddl_binding_demo` (`id` int, `payload` text, `extra` int) ENGINE=InnoDB;', metadata, 'backup_sql_create_columns_invalid')
+    await expectCodeWithTables('CREATE TABLE `ddl_binding_demo` (`id` int) ENGINE=InnoDB;', metadata, 'backup_sql_create_columns_invalid')
+    await expectCodeWithTables('CREATE TABLE `ddl_binding_demo` (`payload` text, `id` int) ENGINE=InnoDB;', metadata, 'backup_sql_create_columns_invalid')
+  })
+
+  it('does not treat parenthesized defaults as generated columns', async () => {
+    const metadata = [{ name: 'default_demo', columns: [{ name: 'id' }, { name: 'defaulted' }, { name: 'hidden_value' }] }]
+    const ddl = 'CREATE TABLE `default_demo` (`id` int, `defaulted` int DEFAULT (1 + 2), `hidden_value` int INVISIBLE) ENGINE=InnoDB;'
+    const accepted = `${ddl}\nINSERT INTO \`default_demo\` (\`id\`,\`defaulted\`,\`hidden_value\`) VALUES (1,3,9);`
+    const result = await reviewWithTables(accepted, metadata)
+    expect(result.tables[0].rows).toBe('1')
+    await expectCodeWithTables(`${ddl}\nINSERT INTO \`default_demo\` (\`id\`,\`hidden_value\`) VALUES (1,9);`, metadata, 'backup_sql_insert_columns_invalid')
+  })
+
+  it.each([
+    ['nested unknown function', 'int AS ((CASE WHEN (`id` = evil((1))) THEN `id` ELSE NULL END)) VIRTUAL', 'backup_sql_function_forbidden'],
+    ['quoted unknown function', 'int AS ((`evil`((1)))) VIRTUAL', 'backup_sql_function_forbidden'],
+    ['qualified reference', 'int AS ((dev_vue.`evil`((1)))) VIRTUAL', 'backup_sql_cross_schema_identifier'],
+    ['keyword-shaped function', 'int AS ((CASE WHEN (1) THEN WHEN(2) ELSE NULL END)) VIRTUAL', 'backup_sql_function_forbidden'],
+  ])('rejects %s in generated/default expressions', async (_label, expression, code) => {
+    const metadata = [{ name: 'expression_demo', columns: [{ name: 'id' }, { name: 'derived' }] }]
+    const ddl = `CREATE TABLE \`expression_demo\` (\`id\` int, \`derived\` ${expression}) ENGINE=InnoDB;`
+    await expectCodeWithTables(`${ddl}\nINSERT INTO \`expression_demo\` (\`id\`) VALUES (1);`, metadata, code)
   })
 
   it('rejects SELECT-shaped CREATE statements and quoted identifier calls', async () => {
