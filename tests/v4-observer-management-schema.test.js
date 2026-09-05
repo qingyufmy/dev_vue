@@ -14,12 +14,13 @@ describe('V4 observer management coordination and operation ledger migration', (
   it('is migration 022 after the fixed 021 boundary with the reviewed statement count', async () => {
     const plan = await loadMigrationPlan({ rootDirectory: root })
 
-    expect(plan).toHaveLength(23)
+    expect(plan).toHaveLength(24)
     expect(plan[21].id).toBe('20260905_021_observer_sources_and_audiences')
     expect(plan[22]).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })
     expect(plan[22].statements).toHaveLength(3)
     expect(plan[22].statements).toEqual(statements)
-    expect(plan.reduce((total, item) => total + item.statements.length, 0)).toBe(157)
+    expect(plan[23].id).toBe('20260906_023_bridge_profile_epoch_scope')
+    expect(plan.reduce((total, item) => total + item.statements.length, 0)).toBe(158)
   })
 
   it('creates a single-row registry with an explicit zero revision', () => {

@@ -1,4 +1,4 @@
-import type { BridgeGatewayDirectory, BridgeGatewayLeaseStore } from './bridge-gateway-ports.js'
+import type { BridgeGatewayDirectory, BridgeGatewayLeaseStore, BridgeGatewayRouteRepository } from './bridge-gateway-ports.js'
 import { BridgeGatewayError, type BridgeGatewayRoute } from '../domain/bridge-gateway.js'
 import {
   assertQueryResultEnvelope, historyQueryEnvelope, sameQueryRoute,
@@ -34,12 +34,17 @@ export class BridgeGatewayQueryTransport implements BridgeHistoryQueryClient {
   constructor(
     private readonly leases: BridgeGatewayLeaseStore,
     private readonly directory: BridgeGatewayDirectory,
+    private readonly authorization: Pick<BridgeGatewayRouteRepository, 'isAuthorized'>,
     private readonly now = () => new Date(),
   ) {}
 
   async query(input: BridgeHistoryQueryInput) {
     const current = await this.leases.current(input.route.accountId)
     if (!current || current.connectionId !== input.route.connectionId || !sameRoute(current, input.route)) {
+      throw new BridgeGatewayError('bridge_query_route_unavailable', 409)
+    }
+    if (!await this.authorization.isAuthorized(current)) throw new BridgeGatewayError('bridge_route_authorization_revoked', 403)
+    if ((await this.leases.current(input.route.accountId))?.connectionId !== current.connectionId) {
       throw new BridgeGatewayError('bridge_query_route_unavailable', 409)
     }
     if ([...this.pending.values()].some(value => value.route.connectionId === current.connectionId)) {

@@ -13,6 +13,12 @@ export interface BridgeReconciliationCandidate {
   terminalTicket: string | null
 }
 
+/** Server-derived identity scope for every gateway command write. */
+export interface BridgeCommandScope {
+  userId: number
+  terminalProfileId: string
+}
+
 /** Every method is one short database transaction and contains no network I/O. */
 export interface BridgeCommandRepository {
   create(command: BridgeCommand): Promise<BridgeCommand>
@@ -29,5 +35,5 @@ export interface BridgeCommandRepository {
 /** A transport call is deliberately outside every repository transaction. */
 export interface BridgeCommandTransport {
   currentRoute(command: BridgeCommand): Promise<import('../domain/bridge-command.js').BridgeRoute | null>
-  send(message: BridgeCommandRequestEnvelope | import('../domain/bridge-command.js').BridgeCommandReconcileEnvelope, accountId: string): Promise<void>
+  send(message: BridgeCommandRequestEnvelope | import('../domain/bridge-command.js').BridgeCommandReconcileEnvelope, accountId: string, scope: BridgeCommandScope): Promise<void>
 }

@@ -7,6 +7,7 @@ export interface BridgeGatewaySink {
 }
 
 export interface BridgeGatewayRouteRepository {
+  isAuthorized(route: BridgeGatewayRoute): Promise<boolean>
   authorizeAndOpen(input: {
     claims: BridgeSessionTicketClaims
     hello: BridgeSessionHelloEnvelope

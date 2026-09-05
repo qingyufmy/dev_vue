@@ -37,6 +37,7 @@ interface ProjectionSourceRow extends RowDataPacket {
 }
 interface ProjectionPayloadRow extends RowDataPacket { payload_json: string | OpenPosition | PendingOrder; revision: string | number }
 interface OwnershipProofRow extends RowDataPacket { interval_id: string; ownership_revision: string | number }
+interface CredentialProofRow extends RowDataPacket { id: string | number }
 interface PermissionRow extends ProjectionSourceRow { trade_permission: number }
 interface ReservationProjectionRow extends RowDataPacket {
   reservation_id: string; reservation_revision: number; command_id: string; action: string
@@ -398,6 +399,27 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   async applyTrustedProjection(input: TrustedBridgeProjectionWrite) {
     return transaction(this.pool, async connection => {
       const route = input.route
+      // A connection id identifies a production gateway route.  Its frozen
+      // device/ownership proof is mandatory there; the id-less path remains
+      // for the in-process projector used by legacy/offline callers.
+      const gatewayRoute = route.connectionId !== undefined
+      let gatewayProof: {
+        connectionId: string
+        installationId: string
+        credentialGeneration: number
+        ownershipRevision: string
+      } | null = null
+      if (gatewayRoute) {
+        const { connectionId, installationId, credentialGeneration, ownershipRevision } = route
+        if (typeof connectionId !== 'string' || connectionId.length === 0 || typeof installationId !== 'string' || installationId.length === 0
+          || typeof ownershipRevision !== 'string' || !/^[1-9][0-9]*$/.test(ownershipRevision)) {
+          throw new TradingAccessError('trading_context_invalid', 403)
+        }
+        if (typeof credentialGeneration !== 'number' || !Number.isSafeInteger(credentialGeneration) || credentialGeneration <= 0) {
+          throw new TradingAccessError('trading_context_invalid', 403)
+        }
+        gatewayProof = { connectionId, installationId, credentialGeneration, ownershipRevision }
+      }
       const [accounts] = await connection.execute<RowDataPacket[]>('SELECT id FROM trading_accounts WHERE id=? AND deleted_at_utc IS NULL FOR UPDATE', [route.accountId])
       if (accounts.length !== 1 || input.projection.accountId !== route.accountId) throw new TradingAccessError('trading_context_invalid', 403)
       const [owners] = await connection.execute<OwnershipProofRow[]>(`SELECT o.interval_id,a.ownership_revision
@@ -410,6 +432,22 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
         INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
         WHERE a.id=? AND o.revision=a.ownership_revision
         FOR UPDATE`, [route.userId, route.accountId])
+      if (gatewayProof && (owners.length !== 1 || String(owners[0]!.ownership_revision) !== gatewayProof.ownershipRevision)) {
+        throw new TradingAccessError('trading_context_invalid', 403)
+      }
+      if (gatewayProof) {
+        const [credentials] = await connection.execute<CredentialProofRow[]>(`SELECT s.id
+          FROM bridge_refresh_sessions s
+          INNER JOIN users u ON u.id=s.user_id
+          INNER JOIN terminal_profiles p ON p.id=s.profile_id AND p.user_id=s.user_id
+            AND p.installation_id=? AND p.deleted_at_utc IS NULL
+          WHERE s.user_id=? AND s.installation_id=? AND s.profile_id=? AND s.generation=?
+            AND s.credential_version=4 AND s.revoked_at IS NULL
+            AND u.deletion_status='active' AND u.deleted_at IS NULL
+            AND (u.role='admin' OR (u.plan='pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at>UTC_TIMESTAMP(3))))
+          FOR UPDATE`, [gatewayProof.installationId, route.userId, gatewayProof.installationId, route.terminalProfileId, gatewayProof.credentialGeneration])
+        if (credentials.length !== 1) throw new TradingAccessError('trading_context_invalid', 403)
+      }
       const [bindings] = await connection.execute<RowDataPacket[]>(`SELECT b.terminal_profile_id
         FROM terminal_account_bindings b
         INNER JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=?
@@ -421,10 +459,10 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
         INNER JOIN trading_accounts a ON a.id=s.trading_account_id AND a.deleted_at_utc IS NULL
         WHERE s.user_id=? AND s.trading_account_id=? AND s.terminal_profile_id=? AND s.terminal_instance_id=?
           AND s.connection_epoch_v4=? AND s.disconnected_at_utc IS NULL
-          ${route.connectionId ? 'AND s.connection_epoch=?' : ''}
-        FOR UPDATE`, route.connectionId ? [
+          ${gatewayProof ? 'AND s.connection_epoch=?' : ''}
+        FOR UPDATE`, gatewayProof ? [
           route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId,
-          route.connectionEpoch, `v4:${route.connectionId}`,
+          route.connectionEpoch, `v4:${gatewayProof.connectionId}`,
         ] : [route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId, route.connectionEpoch])
       if (owners.length !== 1 || bindings.length !== 1 || sessions.length !== 1) throw new TradingAccessError('trading_context_invalid', 403)
       const ownership = { intervalId: owners[0]!.interval_id, ownershipRevision: String(owners[0]!.ownership_revision) }

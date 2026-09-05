@@ -18,6 +18,8 @@ class FakePool {
   positionRows: Row[] = []
   trustedAccountRows: Row[] = [{ id: '42' }]
   trustedOwnerRows: Row[] = [{ interval_id: 'interval-a', ownership_revision: 3 }]
+  trustedCredentialRows: Row[] = [{ id: 1 }]
+  trustedCredentialGeneration = 1
   trustedBindingRows: Row[] = [{ terminal_profile_id: 'profile-a' }]
   trustedSessionRows: Row[] = [{ id: 1 }]
   trustedRevisionRows: Row[] = [{ revision: 0 }]
@@ -29,6 +31,9 @@ class FakePool {
     this.calls.push({ sql, params })
     if (sql.startsWith('SELECT id FROM trading_accounts WHERE id=')) return [this.trustedAccountRows, []]
     if (sql.includes('SELECT o.interval_id')) return [this.trustedOwnerRows, []]
+    if (sql.includes('FROM bridge_refresh_sessions s') && sql.includes('s.credential_version=4')) {
+      return Number(params[4]) === this.trustedCredentialGeneration ? [this.trustedCredentialRows, []] : [[], []]
+    }
     if (sql.includes('SELECT b.terminal_profile_id')) return [this.trustedBindingRows, []]
     if (sql.includes('SELECT s.id')) return [this.trustedSessionRows, []]
     if (sql.includes('SELECT s.last_seen_at_utc')) return [this.heartbeatRows, []]
@@ -66,6 +71,7 @@ function route(overrides: Partial<BridgeGatewayRoute> = {}): BridgeGatewayRoute 
     userId: 7, accountId: '42', platform: 'mt5', brokerServer: 'Demo', login: '596520',
     terminalProfileId: 'profile-a', terminalInstanceId: 'instance-a', connectionEpoch: 4,
     connectionId: 'connection-a', sessionId: 'session-a', timezoneOffsetMinutes: 0,
+    installationId: 'installation-a', credentialGeneration: 1, ownershipRevision: '3',
     ...overrides,
   }
 }
@@ -223,6 +229,59 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
     const untrusted = new FakePool()
     await new MysqlTradingRepository(untrusted.asPool()).applyProjection(projection)
     expect(untrusted.calls.some(call => call.sql.includes('trading_projection_provenance_v4'))).toBe(false)
+  })
+
+  it('requires frozen gateway proof and rechecks the live credential before writing', async () => {
+    const projection = {
+      accountId: '42', resource: 'account.metrics' as const, resourceId: 'current' as const, revision: 4,
+      data: {
+        id: '42', platform: 'mt5' as const, login: '596520', server: 'Demo', currency: 'USD', terminalProfileId: 'profile-a', terminalInstanceId: 'instance-a', bridgeState: 'online' as const,
+        tradePermission: true, lastSeenAt: null, balance: '10000', equity: '10000', margin: '0', freeMargin: '10000', floatingProfit: '0', leverage: 100,
+        timezoneOffsetMinutes: 0, clockStatus: 'calibrated' as const, observedAt: '2026-09-05T08:00:00.000Z', revision: 4,
+      },
+    }
+    const missingProof = new FakePool()
+    const missingProofRoute = { ...route() } as import('../src/modules/trading/application/trading-ports.js').TrustedBridgeProjectionRoute
+    delete missingProofRoute.installationId
+    delete missingProofRoute.credentialGeneration
+    delete missingProofRoute.ownershipRevision
+    await expect(new MysqlTradingRepository(missingProof.asPool()).applyTrustedProjection({
+      route: missingProofRoute,
+      projection,
+    })).rejects.toMatchObject({ code: 'trading_context_invalid' })
+    expect(missingProof.calls.some(call => call.sql.includes('trading_projection_revisions'))).toBe(false)
+
+    for (const configure of [
+      (pool: FakePool) => { pool.trustedCredentialRows = [] },
+      (pool: FakePool) => { pool.trustedCredentialGeneration = 2 },
+      (pool: FakePool) => { pool.trustedOwnerRows = [{ interval_id: 'interval-a', ownership_revision: 4 }] },
+    ]) {
+      const pool = new FakePool(); configure(pool)
+      await expect(new MysqlTradingRepository(pool.asPool()).applyTrustedProjection({ route: route(), projection }))
+        .rejects.toMatchObject({ code: 'trading_context_invalid' })
+      expect(pool.calls.some(call => call.sql.includes('trading_projection_revisions'))).toBe(false)
+      expect(pool.calls.some(call => call.sql.includes('trading_projection_provenance_v4'))).toBe(false)
+    }
+  })
+
+  it('keeps the id-less in-process projector path without gateway proof requirements', async () => {
+    const pool = new FakePool()
+    const legacyRoute = { ...route() } as import('../src/modules/trading/application/trading-ports.js').TrustedBridgeProjectionRoute
+    delete legacyRoute.connectionId
+    delete legacyRoute.installationId
+    delete legacyRoute.credentialGeneration
+    delete legacyRoute.ownershipRevision
+    const projection = {
+      accountId: '42', resource: 'account.metrics' as const, resourceId: 'current' as const, revision: 4,
+      data: {
+        id: '42', platform: 'mt5' as const, login: '596520', server: 'Demo', currency: 'USD', terminalProfileId: 'profile-a', terminalInstanceId: 'instance-a', bridgeState: 'online' as const,
+        tradePermission: true, lastSeenAt: null, balance: '10000', equity: '10000', margin: '0', freeMargin: '10000', floatingProfit: '0', leverage: 100,
+        timezoneOffsetMinutes: 0, clockStatus: 'calibrated' as const, observedAt: '2026-09-05T08:00:00.000Z', revision: 4,
+      },
+    }
+    await expect(new MysqlTradingRepository(pool.asPool()).applyTrustedProjection({ route: legacyRoute, projection }))
+      .resolves.toEqual({ applied: true, absorbedReservationIds: [] })
+    expect(pool.calls.some(call => call.sql.includes('FROM bridge_refresh_sessions s'))).toBe(false)
   })
 
   it('allows history-only realtime targets through history ownership but never uses that grant for mixed private resources', async () => {

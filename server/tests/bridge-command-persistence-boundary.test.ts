@@ -44,7 +44,9 @@ describe('Stage 12F Bridge command persistence boundaries', () => {
 
   it('persists dispatch before transport and creates result acknowledgement only after persistence', async () => {
     const source = await readFile(new URL('../src/modules/execution/application/bridge-command-service.ts', import.meta.url), 'utf8')
-    expect(source.indexOf('markDispatched')).toBeLessThan(source.indexOf('transport.send(dispatched.request, dispatched.accountId)'))
+    const send = source.indexOf('transport.send(dispatched.request, dispatched.accountId, commandScope(dispatched))')
+    expect(send).toBeGreaterThan(-1)
+    expect(source.indexOf('markDispatched')).toBeLessThan(send)
     expect(source.indexOf('persistResult(envelope')).toBeLessThan(source.indexOf('resultAck(persisted.command'))
     expect(source).toContain('bridge_transport_write_uncertain')
     expect(source).toContain('reconcileEnvelope')

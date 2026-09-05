@@ -39,13 +39,14 @@ async function main() {
   const projector = new BridgeStreamProjector(trading, publisher)
   const streams = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), projector)
   const directory = new InProcessBridgeGatewayDirectory()
-  const transport = new BridgeGatewayCommandTransport(leases, directory)
-  const queries = new BridgeGatewayQueryTransport(leases, directory)
+  const routes = new MysqlBridgeGatewayRouteRepository(pool)
+  const transport = new BridgeGatewayCommandTransport(leases, directory, routes)
+  const queries = new BridgeGatewayQueryTransport(leases, directory, routes)
   const historyCollector = new TradeHistoryCollector(new MysqlTradeHistoryCollectorRepository(pool), queries)
   const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool))
   const gateway = new BridgeGatewayService(
     new RedisBridgeSessionTicketStore(cache),
-    new MysqlBridgeGatewayRouteRepository(pool),
+    routes,
     leases,
     trading,
     directory,

@@ -3,7 +3,7 @@ import {
   createBridgeCommand, reconcileEnvelope, resultAck, routeContinues, routeMatches,
   type BridgeCommandAcceptedEnvelope, type BridgeCommandResultEnvelope, type CreateBridgeCommandInput,
 } from '../domain/bridge-command.js'
-import type { BridgeCommandRepository, BridgeCommandTransport } from './bridge-command-ports.js'
+import type { BridgeCommandRepository, BridgeCommandScope, BridgeCommandTransport } from './bridge-command-ports.js'
 
 export class BridgeCommandService {
   constructor(private readonly repository: BridgeCommandRepository) {}
@@ -52,25 +52,27 @@ export class BridgeCommandService {
     }
     const dispatched = await this.repository.markDispatched(command.id, command.revision, now.toISOString())
     try {
-      await transport.send(dispatched.request, dispatched.accountId)
+      await transport.send(dispatched.request, dispatched.accountId, commandScope(dispatched))
       return dispatched
     } catch {
       return this.repository.markUncertain(dispatched.id, dispatched.revision, 'bridge_transport_write_uncertain', new Date().toISOString())
     }
   }
 
-  async accepted(envelope: BridgeCommandAcceptedEnvelope, now = new Date()) {
+  async accepted(envelope: BridgeCommandAcceptedEnvelope, now = new Date(), scope?: BridgeCommandScope) {
     assertAcceptedEnvelope(envelope)
     const command = await this.required(envelope.payload.command_id)
+    assertCommandScope(command, scope)
     if (!routeMatches(command, envelope.route)) throw new BridgeCommandError('bridge_command_route_mismatch', 409)
     if (envelope.payload.accepted_at_utc_msc < command.request.payload.issued_at_utc_msc) throw new BridgeCommandError('bridge_command_accepted_time_invalid', 409)
     return this.repository.markAccepted(envelope, now.toISOString())
   }
 
   /** The acknowledgement is constructed only after repository persistence returns. */
-  async result(envelope: BridgeCommandResultEnvelope, now = new Date()) {
+  async result(envelope: BridgeCommandResultEnvelope, now = new Date(), scope?: BridgeCommandScope) {
     assertResultEnvelope(envelope)
     const command = await this.required(envelope.payload.command_id)
+    assertCommandScope(command, scope)
     if (!routeContinues(command, envelope.route) || envelope.payload.action !== command.action) {
       throw new BridgeCommandError('bridge_command_result_route_mismatch', 409)
     }
@@ -99,7 +101,7 @@ export class BridgeCommandService {
       ? command
       : await this.repository.beginReconciliation(command.id, command.revision, now.toISOString())
     try {
-      await transport.send(message, command.accountId)
+      await transport.send(message, command.accountId, commandScope(command))
       return reconciling
     } catch {
       return this.repository.markUncertain(reconciling.id, reconciling.revision, 'bridge_reconcile_transport_uncertain', new Date().toISOString())
@@ -121,5 +123,16 @@ export class BridgeCommandService {
     const command = await this.repository.get(commandId)
     if (!command) throw new BridgeCommandError('bridge_command_not_found', 404)
     return command
+  }
+}
+
+function commandScope(command: { userId: number; terminalProfileId: string }): BridgeCommandScope {
+  return { userId: command.userId, terminalProfileId: command.terminalProfileId }
+}
+
+function assertCommandScope(command: { userId: number; terminalProfileId: string }, scope: BridgeCommandScope | undefined) {
+  if (scope === undefined) return
+  if (scope.userId !== command.userId || scope.terminalProfileId !== command.terminalProfileId) {
+    throw new BridgeCommandError('bridge_command_scope_mismatch', 403)
   }
 }

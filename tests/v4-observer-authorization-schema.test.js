@@ -15,13 +15,14 @@ describe('V4 observer source and audience authorization migration', () => {
   it('is the final migration after the fixed 019 and 020 boundaries', async () => {
     const plan = await loadMigrationPlan({ rootDirectory: root })
 
-    expect(plan).toHaveLength(23)
+    expect(plan).toHaveLength(24)
     expect(plan[19].id).toBe('20260905_019_account_ownership_intervals')
     expect(plan[20].id).toBe('20260905_020_account_projection_and_history_provenance')
     expect(plan[21]).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })
     expect(plan[21].statements).toHaveLength(3)
     expect(plan[21].statements).toEqual(statements)
     expect(plan[22].id).toBe('20260905_022_observer_management_ledger')
+    expect(plan[23].id).toBe('20260906_023_bridge_profile_epoch_scope')
   })
 
   it('creates observer sources with explicit ownership, safe disabled/pending defaults and required foreign keys', () => {

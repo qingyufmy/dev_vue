@@ -87,13 +87,13 @@ export class BridgeGatewaySession {
         const accepted = message as BridgeCommandAcceptedEnvelope
         assertAcceptedEnvelope(accepted); this.assertRoute(accepted.route)
         await this.ensureCurrent()
-        return this.commands.accepted(accepted, this.now())
+        return this.commands.accepted(accepted, this.now(), this.route)
       }
       case 'command.result': {
         const result = message as BridgeCommandResultEnvelope
         assertResultEnvelope(result); this.assertRoute(result.route)
         await this.ensureCurrent()
-        const persisted = await this.commands.result(result, this.now())
+        const persisted = await this.commands.result(result, this.now(), this.route)
         await this.sink.send(persisted.acknowledgement)
         await this.commands.recover(this.route.accountId, this.route, this.transport, this.now(), 1).catch(() => [])
         return persisted.command
@@ -138,7 +138,7 @@ export class BridgeGatewaySession {
   }
 
   private async ensureCurrent() {
-    if (!await this.leases.renew(this.route, 45) || !await this.routes.touch(this.route, this.now().toISOString())) {
+    if (!await this.routes.touch(this.route, this.now().toISOString()) || !await this.leases.renew(this.route, 45)) {
       throw new BridgeGatewayError('bridge_session_fenced', 409)
     }
   }

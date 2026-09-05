@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   BridgeGatewayCommandTransport, BridgeGatewayService, InProcessBridgeGatewayDirectory,
@@ -15,6 +16,31 @@ const NOW = new Date('2026-09-03T09:00:00.000Z')
 const oldRoute = { terminalInstanceId: 'terminal_12345678', brokerServer: 'DPrime-Demo', login: '8950701', connectionEpoch: 1 }
 
 describe('Stage 12G Bridge V4 gateway and execution worker', () => {
+  it('uses the credential device-id contract for hello without relaxing message ids', () => {
+    const schema = JSON.parse(readFileSync(new URL('../../contracts/bridge-v4.schema.json', import.meta.url), 'utf8'))
+    expect(schema.$defs.SessionHelloPayload.properties.profile_id.$ref).toBe('#/$defs/DeviceId')
+    expect(schema.$defs.SessionHelloPayload.properties.installation_id.$ref).toBe('#/$defs/DeviceId')
+    const pattern = new RegExp(schema.$defs.DeviceId.pattern)
+    for (const id of ['default', 'a', 'profile_12345678', 'x'.repeat(128)]) {
+      const value = hello(1)
+      value.payload.profile_id = id
+      value.payload.installation_id = id
+      expect(pattern.test(id)).toBe(true)
+      expect(assertSessionHello(value)).toBe(value)
+    }
+    for (const id of ['', 'x'.repeat(129), 'invalid:id', '../profile', 'a b']) {
+      expect(pattern.test(id)).toBe(false)
+      for (const field of ['profile_id', 'installation_id'] as const) {
+        const value = hello(1)
+        value.payload[field] = id
+        expect(() => assertSessionHello(value)).toThrowError(expect.objectContaining({ code: 'bridge_session_hello_invalid' }))
+      }
+    }
+    const invalid = hello(1)
+    invalid.message_id = 'short'
+    expect(() => assertSessionHello(invalid)).toThrowError(expect.objectContaining({ code: 'bridge_session_hello_invalid' }))
+  })
+
   it('rejects malformed heartbeat queues with a protocol error', () => {
     expect(() => assertHeartbeat({
       v: 4,
@@ -37,7 +63,7 @@ describe('Stage 12G Bridge V4 gateway and execution worker', () => {
     const service = new BridgeCommandService(repository)
     const leases = new MemoryGatewayLeases()
     const directory = new InProcessBridgeGatewayDirectory()
-    const transport = new BridgeGatewayCommandTransport(leases, directory)
+    const transport = new BridgeGatewayCommandTransport(leases, directory, new MemoryRoutes())
     const sink = new MemorySink()
     const gateway = new BridgeGatewayService(
       { async issue() { throw new Error('unused') }, async consume() { return { userId: 42, installationId: 'installation_12345678', profileId: 'profile_12345678', generation: 1 } } },
@@ -112,6 +138,7 @@ class MemoryGatewayLeases implements BridgeGatewayLeaseStore {
 }
 
 class MemoryRoutes implements BridgeGatewayRouteRepository {
+  async isAuthorized() { return true }
   async authorizeAndOpen(input: Parameters<BridgeGatewayRouteRepository['authorizeAndOpen']>[0]) {
     const route = input.hello.payload.terminals[0]!.route
     return { userId: input.claims.userId, accountId: '7', platform: 'mt5' as const, timezoneOffsetMinutes: 180, terminalProfileId: input.claims.profileId,

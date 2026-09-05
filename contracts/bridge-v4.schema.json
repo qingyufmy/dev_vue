@@ -32,6 +32,12 @@
       "maxLength": 191,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
     },
+    "DeviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
     "UtcMsc": {
       "type": "integer",
       "minimum": 1,
@@ -144,8 +150,8 @@
       "additionalProperties": false,
       "properties": {
         "session_id": { "$ref": "#/$defs/OpaqueId" },
-        "installation_id": { "$ref": "#/$defs/OpaqueId" },
-        "profile_id": { "$ref": "#/$defs/OpaqueId" },
+        "installation_id": { "$ref": "#/$defs/DeviceId" },
+        "profile_id": { "$ref": "#/$defs/DeviceId" },
         "bridge_version": { "type": "string", "minLength": 1, "maxLength": 64 },
         "protocol_versions": {
           "type": "array",

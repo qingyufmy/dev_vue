@@ -1,6 +1,7 @@
 import type { BridgeRoute, BridgeWireRoute } from '../../execution/domain/bridge-command.js'
 
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,190}$/
+const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 export interface BridgeTerminalHello {
   route: BridgeWireRoute
@@ -38,6 +39,10 @@ export interface BridgeProtocolLimits {
 }
 
 export interface BridgeGatewayRoute extends BridgeRoute {
+  /** Server-only proof. Missing legacy/in-memory proof never authorizes a production route. */
+  installationId?: string
+  credentialGeneration?: number
+  ownershipRevision?: string
   userId: number
   accountId: string
   platform: 'mt4' | 'mt5'
@@ -89,9 +94,12 @@ export class BridgeGatewayError extends Error {
 
 export function assertSessionHello(value: BridgeSessionHelloEnvelope) {
   if (!value || value.v !== 4 || value.type !== 'session.hello') fail('bridge_session_hello_invalid')
-  opaque(value.message_id); utcMsc(value.sent_at_utc_msc)
+  if (!opaque(value.message_id)) fail('bridge_session_hello_invalid')
+  utcMsc(value.sent_at_utc_msc)
   const payload = value.payload
-  if (!payload || !opaque(payload.session_id) || !opaque(payload.installation_id) || !opaque(payload.profile_id)) fail('bridge_session_hello_invalid')
+  if (!payload || !opaque(payload.session_id)
+    || typeof payload.installation_id !== 'string' || !DEVICE_ID.test(payload.installation_id)
+    || typeof payload.profile_id !== 'string' || !DEVICE_ID.test(payload.profile_id)) fail('bridge_session_hello_invalid')
   if (typeof payload.bridge_version !== 'string' || payload.bridge_version.length < 1 || payload.bridge_version.length > 64) fail('bridge_session_hello_invalid')
   if (!Array.isArray(payload.protocol_versions) || payload.protocol_versions.length !== 1 || payload.protocol_versions[0] !== 4) fail('bridge_protocol_version_unsupported', 409)
   if (!Array.isArray(payload.terminals) || payload.terminals.length !== 1) fail('bridge_session_route_count_invalid', 409)

@@ -21,7 +21,7 @@ describe('Stage 12T Bridge history collection', () => {
   it('correlates a read-only query response to the exact live route', async () => {
     const leases = new MemoryLeases(route); const directory = new InProcessBridgeGatewayDirectory(); const sink = new MemorySink()
     directory.attach(route, sink)
-    const transport = new BridgeGatewayQueryTransport(leases, directory, () => NOW)
+    const transport = new BridgeGatewayQueryTransport(leases, directory, { async isAuthorized() { return true } }, () => NOW)
     const pending = transport.query({ route, resource: 'history.deals', rangeStartUtcMsc: NOW.getTime() - 1_000,
       rangeEndUtcMsc: NOW.getTime(), limit: 500, cursor: null })
     await vi.waitFor(() => expect(sink.messages).toHaveLength(1))
@@ -35,7 +35,7 @@ describe('Stage 12T Bridge history collection', () => {
   it('rejects a response whose epoch or correlation does not match the pending request', async () => {
     const leases = new MemoryLeases(route); const directory = new InProcessBridgeGatewayDirectory(); const sink = new MemorySink()
     directory.attach(route, sink)
-    const transport = new BridgeGatewayQueryTransport(leases, directory, () => NOW)
+    const transport = new BridgeGatewayQueryTransport(leases, directory, { async isAuthorized() { return true } }, () => NOW)
     const pending = transport.query({ route, resource: 'history.deals', rangeStartUtcMsc: NOW.getTime() - 1_000, rangeEndUtcMsc: NOW.getTime() })
     await vi.waitFor(() => expect(sink.messages).toHaveLength(1))
     const request = sink.messages[0] as Parameters<typeof response>[0]

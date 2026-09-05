@@ -57,6 +57,10 @@ export interface TrustedBridgeProjectionRoute {
   connectionEpoch: number
   /** Present on a gateway route; omitted by legacy in-process projector callers. */
   connectionId?: string
+  /** Frozen V4 device proof carried by production gateway routes. */
+  installationId?: string
+  credentialGeneration?: number
+  ownershipRevision?: string
 }
 
 export interface BridgeExactTradeState {
