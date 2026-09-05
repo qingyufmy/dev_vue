@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { BOOTSTRAP_ID, loadMigrationPlan, sha256, splitSqlStatements, validateMigrationStatement } from '../scripts/lib/v4-migration-plan.mjs'
+import { loadMigrationCorrections } from '../scripts/lib/v4-migration-corrections.mjs'
 import { runSchemaMigrations, validateHistory } from '../scripts/lib/v4-schema-migration-runner.mjs'
 
 const options = { sourceDatabase: 'source_db', targetDatabase: 'test_db' }
@@ -12,11 +13,61 @@ const plan = [
 ]
 
 describe('V4 schema runner', () => {
-  it('loads all 18 files including reviewed DML in original order', async () => {
+  it('loads all 19 files including reviewed DML in original order', async () => {
     const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
-    expect(actual).toHaveLength(18)
+    expect(actual).toHaveLength(19)
     expect(actual[0].id).toBe(BOOTSTRAP_ID)
-    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(143)
+    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(145)
+  })
+  it('applies real 018 only after 017 and skips its completed statements without replay', async () => {
+    const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
+    const corrections = await loadMigrationCorrections({ rootDirectory: process.cwd() }, actual)
+    const f = fixture()
+    const paused = await runSchemaMigrations(f.execution, f.control, actual, {
+      ...options, apply: true, stopAfterMigration: actual[17].id, corrections,
+    })
+
+    expect(paused).toMatchObject({ status: 'paused', applied: actual.slice(0, 18).map(migration => migration.id) })
+    expect(f.state.executionSql).not.toContain(actual[18].statements[0])
+    expect(f.state.executionSql).not.toContain(actual[18].statements[1])
+
+    const resumed = await runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections })
+    expect(resumed).toMatchObject({ status: 'completed', applied: [actual[18].id], skipped: 18 })
+    expect(f.state.executionSql.filter(sql => sql === actual[18].statements[0])).toHaveLength(1)
+    expect(f.state.executionSql.filter(sql => sql === actual[18].statements[1])).toHaveLength(1)
+    const priorStatementIndex = f.state.executionSql.indexOf(actual[17].statements.at(-1))
+    const first018Index = f.state.executionSql.indexOf(actual[18].statements[0])
+    const second018Index = f.state.executionSql.indexOf(actual[18].statements[1])
+    expect(first018Index).toBeGreaterThan(priorStatementIndex)
+    expect(f.state.executionSql.slice(first018Index, second018Index + 1)).toEqual(actual[18].statements)
+
+    const skipped = await runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections })
+    expect(skipped).toMatchObject({ applied: [], skipped: 19 })
+    expect(f.state.executionSql.filter(sql => sql === actual[18].statements[0])).toHaveLength(1)
+    expect(f.state.executionSql.filter(sql => sql === actual[18].statements[1])).toHaveLength(1)
+  })
+  it('records a failed 018 checkpoint after its first DDL and never replays either statement', async () => {
+    const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
+    const corrections = await loadMigrationCorrections({ rootDirectory: process.cwd() }, actual)
+    const f = fixture({ failStatement: actual[18].statements[1] })
+    await runSchemaMigrations(f.execution, f.control, actual, {
+      ...options, apply: true, stopAfterMigration: actual[17].id, corrections,
+    })
+
+    await expect(runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections }))
+      .rejects.toThrow('migration_statement_failed')
+    expect(f.state.history.get(actual[18].id)).toMatchObject({
+      status: 'failed', statement_count: 2, completed_statements: 1, error_code: 'migration_statement_failed',
+    })
+    expect(f.state.executionSql.filter(sql => sql === actual[18].statements[0])).toHaveLength(1)
+    expect(f.state.executionSql.filter(sql => sql === actual[18].statements[1])).toHaveLength(1)
+
+    f.state.failStatement = null
+    await expect(runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections }))
+      .rejects.toThrow('migration_incomplete')
+    expect(f.state.history.get(actual[18].id)).toMatchObject({ status: 'failed', completed_statements: 1 })
+    expect(f.state.executionSql.filter(sql => sql === actual[18].statements[0])).toHaveLength(1)
+    expect(f.state.executionSql.filter(sql => sql === actual[18].statements[1])).toHaveLength(1)
   })
   it('splits quoted semicolons, escapes and comments without executing comments', () => {
     expect(splitSqlStatements("-- skip;\nCREATE TABLE x (v TEXT DEFAULT 'a;''b'); /* skip; */ ALTER TABLE x ADD y INT;"))
@@ -150,8 +201,9 @@ function fixture(overrides = {}) {
     if (sql.includes('GET_LOCK')) { const acquired = state.locked ? 0 : 1; state.locked = true; return [[{ acquired }]] }
     if (sql.includes('RELEASE_LOCK')) { state.locked = false; return [[{ released: 1 }]] }
     if (sql === 'SHOW WARNINGS') return [state.warnings]
+    if (state.failStatement === sql) throw Object.assign(new Error('raw SQL with private details'), { errno: 1826 })
     if (state.failDdl) throw Object.assign(new Error('raw SQL with private details'), { errno: 1826 })
-    const table = /^CREATE TABLE (\w+)/.exec(sql)?.[1]
+    const table = /^CREATE TABLE(?: IF NOT EXISTS)? (\w+)/.exec(sql)?.[1]
     if (table) state.tables.add(table)
     return [{ warningStatus: state.warnings?.length ?? 0 }]
   } }
