@@ -1289,7 +1289,34 @@ export const tradingRealtimeEventSchema = z.object({
   occurred_at: z.iso.datetime({ offset: true }), sequence: z.number().int().positive(),
   scope: z.object({ user_id: z.string(), trading_account_id: z.string(), terminal_instance_id: z.string().nullable(), observer_channel_id: z.string().nullable() }),
   resource: z.object({ kind: z.string(), id: z.string() }), revision: z.string(), data: z.unknown(), correlation_id: z.string().nullable(),
+}).refine(value => value.resource.kind !== 'observer_publication', {
+  path: ['resource', 'kind'], message: 'observer publications use their dedicated event type',
 })
+
+export const observerPublicationResourceSchema = z.enum(['account.metrics', 'market.quote', 'market.candle', 'positions', 'pending_orders'])
+export const observerPublicationChangedDataSchema = z.object({
+  channel_id: z.string().min(1).max(191),
+  source_revision: z.string().min(1).max(128),
+  resource: observerPublicationResourceSchema,
+  resource_id: z.string().min(1).max(191),
+}).strict()
+export const observerPublicationChangedRealtimeEventSchema = z.object({
+  v: z.literal(4), event_id: z.string().min(1).max(191), type: z.literal('observer.publication.changed'),
+  occurred_at: z.iso.datetime({ offset: true }), sequence: z.number().int().positive(),
+  scope: z.object({
+    user_id: z.string().min(1).max(191), trading_account_id: z.string().min(1).max(191),
+    terminal_instance_id: z.null(), observer_channel_id: z.string().min(1).max(191),
+  }).strict(),
+  resource: z.object({ kind: z.literal('observer_publication'), id: z.string().min(1).max(191) }).strict(),
+  revision: z.string().min(1).max(128),
+  data: observerPublicationChangedDataSchema,
+  correlation_id: z.string().min(1).max(191).nullable(),
+}).strict().superRefine((value, context) => {
+  if (value.scope.observer_channel_id !== value.resource.id || value.scope.observer_channel_id !== value.data.channel_id) {
+    context.addIssue({ code: 'custom', path: ['scope', 'observer_channel_id'], message: 'observer channel identity mismatch' })
+  }
+})
+export const observerPublicationChangedEventSchema = observerPublicationChangedRealtimeEventSchema
 
 export const inferenceRealtimeEventSchema = z.object({
   v: z.literal(4), event_id: z.string(),
@@ -1395,7 +1422,7 @@ export const marketCalendarChangedEventSchema = marketCalendarChangedRealtimeEve
 export const marketSourceHealthChangedEventSchema = marketSourceHealthChangedRealtimeEventSchema
 
 export const browserRealtimeEventSchema = z.union([
-  tradingRealtimeEventSchema, inferenceRealtimeEventSchema, riskRealtimeEventSchema, operationRealtimeEventSchema, reviewRealtimeEventSchema,
+  tradingRealtimeEventSchema, observerPublicationChangedRealtimeEventSchema, inferenceRealtimeEventSchema, riskRealtimeEventSchema, operationRealtimeEventSchema, reviewRealtimeEventSchema,
   auditRealtimeEventSchema, marketMacroRealtimeEventSchema,
 ])
 
@@ -1439,6 +1466,10 @@ export type OpenPosition = z.infer<typeof openPositionSchema>
 export type PendingOrder = z.infer<typeof pendingOrderSchema>
 export type Timeframe = z.infer<typeof timeframeSchema>
 export type TradingRealtimeEvent = z.infer<typeof tradingRealtimeEventSchema>
+export type ObserverPublicationResource = z.infer<typeof observerPublicationResourceSchema>
+export type ObserverPublicationChangedData = z.infer<typeof observerPublicationChangedDataSchema>
+export type ObserverPublicationChangedRealtimeEvent = z.infer<typeof observerPublicationChangedRealtimeEventSchema>
+export type ObserverPublicationChangedEvent = z.infer<typeof observerPublicationChangedEventSchema>
 export type StrategyKind = z.infer<typeof strategyKindSchema>
 export type StrategySummary = z.infer<typeof strategySummarySchema>
 export type StrategyVersion = z.infer<typeof strategyVersionSchema>

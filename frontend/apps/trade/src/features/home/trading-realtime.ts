@@ -29,6 +29,26 @@ export async function startTradingRealtime(session: SessionSummary, accountId: s
 
 async function connect(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
   let lastSequence = 0
+  let connectionAlive = true
+  let resyncInFlight = false
+  let resyncQueued = false
+  const requestObserverResync = async () => {
+    if (currentGeneration !== generation || !connectionAlive) return
+    if (resyncInFlight) { resyncQueued = true; return }
+    resyncInFlight = true
+    realtimeState.value = 'recovering'
+    try {
+      do {
+        resyncQueued = false
+        await resync()
+      } while (resyncQueued && currentGeneration === generation && connectionAlive)
+      if (currentGeneration === generation && connectionAlive) realtimeState.value = 'live'
+    } catch {
+      if (currentGeneration === generation && connectionAlive) realtimeState.value = 'recovering'
+    } finally {
+      resyncInFlight = false
+    }
+  }
   realtimeState.value = 'connecting'
   try { await client.createRealtimeTicket(session.csrf_token) }
   catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration); return }
@@ -37,22 +57,31 @@ async function connect(session: SessionSummary, accountId: string, symbol: strin
   try { connection = connectRealtime({
     url: `${scheme}//${location.host}/realtime/v4`, protocol: 'aurum.realtime.v4',
     onOpen(ws) {
-      if (currentGeneration !== generation) return ws.close()
+      if (currentGeneration !== generation || !connectionAlive) return ws.close()
+      const accountTargets = observerChannelId === null ? [
+        { kind: 'runtime', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'bridge', after_revision: null },
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'metrics', after_revision: String(resourceRevisions.value.account) },
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'positions', after_revision: String(resourceRevisions.value.positions) },
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'pending_orders', after_revision: String(resourceRevisions.value.pendingOrders) },
+        { kind: 'market', trading_account_id: accountId, observer_channel_id: null, symbol, timeframe: null, resource_id: 'quote', after_revision: String(resourceRevisions.value.quote) },
+        { kind: 'market', trading_account_id: accountId, observer_channel_id: null, symbol, timeframe, resource_id: 'candle', after_revision: String(resourceRevisions.value.candle) },
+      ] : [
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'metrics', after_revision: null },
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'positions', after_revision: null },
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'pending_orders', after_revision: null },
+        { kind: 'market', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol, timeframe: null, resource_id: 'quote', after_revision: null },
+        { kind: 'market', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol, timeframe, resource_id: 'candle', after_revision: null },
+      ]
       ws.send(JSON.stringify({
       v: 4, type: 'subscription.subscribe', request_id: crypto.randomUUID(),
       targets: [
-        { kind: 'runtime', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'bridge', after_revision: null },
-        { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'metrics', after_revision: String(resourceRevisions.value.account) },
-        { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'positions', after_revision: String(resourceRevisions.value.positions) },
-        { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'pending_orders', after_revision: String(resourceRevisions.value.pendingOrders) },
-        { kind: 'market', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol, timeframe: null, resource_id: 'quote', after_revision: String(resourceRevisions.value.quote) },
-        { kind: 'market', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol, timeframe, resource_id: 'candle', after_revision: String(resourceRevisions.value.candle) },
+        ...accountTargets,
         { kind: 'signals', trading_account_id: null, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'market_analyses', after_revision: null },
       ],
       }))
     },
     async onMessage(raw) {
-    if (currentGeneration !== generation) return
+    if (currentGeneration !== generation || !connectionAlive) return
     const messageType = typeof raw === 'object' && raw !== null && 'type' in raw ? String(raw.type) : ''
     if (messageType === 'subscription.ready') { reconnectAttempt = 0; realtimeState.value = 'live'; return }
     if (messageType === 'subscription.resync_required') { realtimeState.value = 'recovering'; connection?.close(4000, 'revision_resync_required'); return }
@@ -65,6 +94,15 @@ async function connect(session: SessionSummary, accountId: string, symbol: strin
       onAnalysisChanged?.()
       return
     }
+    if (event.type === 'observer.publication.changed') {
+      if (observerChannelId === null || event.scope.trading_account_id !== accountId
+        || event.scope.terminal_instance_id !== null || event.scope.observer_channel_id !== observerChannelId
+        || event.resource.kind !== 'observer_publication' || event.resource.id !== observerChannelId
+        || event.data.channel_id !== observerChannelId) return
+      void requestObserverResync()
+      return
+    }
+    if (observerChannelId !== null) return
     if (event.scope.trading_account_id !== accountId || event.scope.observer_channel_id !== observerChannelId) return
     if (event.type === 'runtime.bridge.changed') {
       if (accountSnapshot.value && isBridgeRuntime(event.data)) accountSnapshot.value = {
@@ -88,8 +126,9 @@ async function connect(session: SessionSummary, accountId: string, symbol: strin
       resourceRevisions.value.account = Number(event.revision)
     }
     },
-    onError() { if (currentGeneration === generation) realtimeState.value = 'recovering' },
+    onError() { if (currentGeneration === generation && connectionAlive) realtimeState.value = 'recovering' },
     onClose() {
+    connectionAlive = false
     if (currentGeneration !== generation) return
     connection = null
     scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged)

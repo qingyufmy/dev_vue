@@ -1,10 +1,11 @@
 import { ConnectionCapacityExceededError, type ConnectionCapacityRepository, type ConnectionLeaseStore, type TradingAccountAccess, type TradingReadRepository } from './trading-ports.js'
 import { assertOpaqueId, assertSymbol, TradingAccessError, type Timeframe, type TradingContext } from '../domain/trading.js'
+import type { ObserverPublicationService } from './observer-publication-service.js'
 
 const TIMEFRAMES = new Set<Timeframe>(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 
 export class TradingService {
-  constructor(private readonly repository: TradingReadRepository) {}
+  constructor(private readonly repository: TradingReadRepository, private readonly publications?: ObserverPublicationService) {}
 
   async context(userId: number) {
     const stored = await this.repository.getContext(userId)
@@ -45,23 +46,30 @@ export class TradingService {
   listObserverChannels(userId: number) { return this.repository.listObserverChannels(userId) }
 
   async workspace(userId: number, accountId: string, observerChannelId?: string) {
+    if (observerChannelId) return this.observerPublications().workspace(userId,
+      assertOpaqueId(accountId, 'account_id'), assertOpaqueId(observerChannelId, 'observer_channel_id'))
     const account = await this.readableAccount(userId, accountId, observerChannelId)
     const [snapshot, symbols, positions, pendingOrders] = await Promise.all([
       this.repository.getAccountSnapshot(account.id, userId), this.repository.listSymbols(account.id),
       this.repository.listPositions(account.id, userId), this.repository.listPendingOrders(account.id, userId),
     ])
-    return { account, snapshot: observerChannelId && snapshot ? { ...snapshot, tradePermission: false } : snapshot, symbols, positions, pendingOrders }
+    return { account, snapshot, symbols, positions, pendingOrders }
   }
 
   async quote(userId: number, accountId: string, symbol: string, observerChannelId?: string) {
+    if (observerChannelId) return this.observerPublications().quote(userId,
+      assertOpaqueId(accountId, 'account_id'), assertSymbol(symbol), assertOpaqueId(observerChannelId, 'observer_channel_id'))
     const account = await this.readableAccount(userId, accountId, observerChannelId)
     return this.repository.getQuote(account.id, assertSymbol(symbol))
   }
 
   async candles(userId: number, accountId: string, symbol: string, timeframe: string, limit = 200, observerChannelId?: string) {
-    const account = await this.readableAccount(userId, accountId, observerChannelId)
     if (!TIMEFRAMES.has(timeframe as Timeframe)) throw new TradingAccessError('trading_context_invalid', 400)
     if (!Number.isFinite(limit)) throw new TradingAccessError('trading_context_invalid', 400)
+    if (observerChannelId) return this.observerPublications().candles(userId,
+      assertOpaqueId(accountId, 'account_id'), assertSymbol(symbol), timeframe as Timeframe,
+      Math.max(1, Math.min(500, Math.trunc(limit))), assertOpaqueId(observerChannelId, 'observer_channel_id'))
+    const account = await this.readableAccount(userId, accountId)
     return this.repository.listCandles(account.id, assertSymbol(symbol), timeframe as Timeframe, Math.max(1, Math.min(500, limit)))
   }
 
@@ -75,11 +83,12 @@ export class TradingService {
     const normalizedAccountId = assertOpaqueId(accountId, 'account_id')
     if (!observerChannelId) return this.ownedAccount(userId, normalizedAccountId)
     const channelId = assertOpaqueId(observerChannelId, 'observer_channel_id')
-    const allowed = (await this.repository.listObserverChannels(userId)).some((channel) => channel.id === channelId && channel.active && channel.sourceAccountId === normalizedAccountId)
-    if (!allowed) throw new TradingAccessError('trading_account_forbidden', 403)
-    const account = await this.repository.findAccount(normalizedAccountId)
-    if (!account) throw new TradingAccessError('trading_account_forbidden', 403)
-    return { ...account, tradePermission: false }
+    return this.observerPublications().account(userId, normalizedAccountId, channelId)
+  }
+
+  private observerPublications() {
+    if (!this.publications) throw new TradingAccessError('trading_account_forbidden', 403)
+    return this.publications
   }
 }
 

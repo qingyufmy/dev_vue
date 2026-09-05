@@ -19,7 +19,7 @@ import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/ind
 import { MysqlTradeHistoryRepository, TradeHistoryService } from '../modules/trade-history/index.js'
 import {
   AuthTradeRequestAdapter, ConnectionCapacityService, MysqlTradingRepository, RedisConnectionLeaseStore,
-  TradingService,
+  TradingService, MysqlObserverAccessReader, ObserverPublicationService,
 } from '../modules/trading/index.js'
 import { registerApiV4Routes } from '../transport/api-v4-route-registrar.js'
 
@@ -36,7 +36,8 @@ async function main() {
 
   const auth = createAuthModule(pool, cache, web.auth)
   const tradeAuth = new AuthTradeRequestAdapter(auth)
-  const tradingRepository = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache))
+  const observerAccess = new MysqlObserverAccessReader(pool)
+  const tradingRepository = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache), observerAccess)
   const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool))
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
@@ -47,7 +48,7 @@ async function main() {
       new MysqlBridgeCredentialRepository(pool),
       new RedisBridgeSessionTicketStore(cache),
     ),
-    trading: new TradingService(tradingRepository),
+    trading: new TradingService(tradingRepository, new ObserverPublicationService(observerAccess, tradingRepository)),
     connectionCapacity: new ConnectionCapacityService(tradingRepository, new RedisConnectionLeaseStore(cache)),
     inference: new InferenceService(new MysqlInferenceRepository(pool), strategies),
     strategies,

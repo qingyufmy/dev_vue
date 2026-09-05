@@ -18,7 +18,7 @@ describe('V4 account ownership and per-user account settings migration', () => {
     const migration = plan[19]
 
     expect(migration).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })
-    expect(plan.at(-1).id).toBe('20260905_020_account_projection_and_history_provenance')
+    expect(plan.at(-1).id).toBe('20260905_021_observer_sources_and_audiences')
     expect(migration.statements).toHaveLength(4)
     expect(migration.statements).toEqual(statements)
     for (const statement of statements) expect(() => validateMigrationStatement(statement, migrationId)).not.toThrow()

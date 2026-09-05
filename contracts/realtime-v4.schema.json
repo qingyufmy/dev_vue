@@ -96,6 +96,7 @@
         "market.source_health.changed",
         "positions.changed",
         "pending_orders.changed",
+        "observer.publication.changed",
         "analysis.job.changed",
         "market_analysis.created",
         "trader.job.changed",
@@ -371,6 +372,17 @@
         }
       }
     },
+    "ObserverPublicationChangedData": {
+      "type": "object",
+      "required": ["channel_id", "source_revision", "resource", "resource_id"],
+      "additionalProperties": false,
+      "properties": {
+        "channel_id": { "$ref": "#/$defs/OpaqueId" },
+        "source_revision": { "$ref": "#/$defs/Revision" },
+        "resource": { "type": "string", "enum": ["account.metrics", "market.quote", "market.candle", "positions", "pending_orders"] },
+        "resource_id": { "$ref": "#/$defs/OpaqueId" }
+      }
+    },
     "AuditChangedData": {
       "type": "object",
       "required": ["source_type", "source_id"],
@@ -484,6 +496,32 @@
             { "properties": { "type": { "const": "review.case.changed" }, "data": { "$ref": "#/$defs/ReviewCaseChangedData" } } },
             { "properties": { "type": { "const": "strategy.memory.changed" }, "data": { "$ref": "#/$defs/StrategyMemoryChangedData" } } },
             { "properties": { "type": { "const": "trade.history.changed" }, "data": { "$ref": "#/$defs/TradeHistoryChangedData" } } },
+            {
+              "properties": {
+                "type": { "const": "observer.publication.changed" },
+                "scope": {
+                  "type": "object",
+                  "required": ["user_id", "trading_account_id", "terminal_instance_id", "observer_channel_id"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "user_id": { "$ref": "#/$defs/OpaqueId" },
+                    "trading_account_id": { "$ref": "#/$defs/OpaqueId" },
+                    "terminal_instance_id": { "type": "null" },
+                    "observer_channel_id": { "$ref": "#/$defs/OpaqueId" }
+                  }
+                },
+                "resource": {
+                  "type": "object",
+                  "required": ["kind", "id"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": { "const": "observer_publication" },
+                    "id": { "$ref": "#/$defs/OpaqueId" }
+                  }
+                },
+                "data": { "$ref": "#/$defs/ObserverPublicationChangedData" }
+              }
+            },
             { "properties": { "type": { "const": "audit.changed" }, "data": { "$ref": "#/$defs/AuditChangedData" } } },
             { "properties": { "type": { "const": "market.macro.changed" }, "data": { "$ref": "#/$defs/MacroChangedData" }, "resource": { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "macro_snapshot" }, "id": { "$ref": "#/$defs/OpaqueId" } } } } },
             { "properties": { "type": { "const": "market.calendar.changed" }, "data": { "$ref": "#/$defs/CalendarChangedData" }, "resource": { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "calendar_event" }, "id": { "$ref": "#/$defs/OpaqueId" } } } } },

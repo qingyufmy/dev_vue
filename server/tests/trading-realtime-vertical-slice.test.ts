@@ -2,12 +2,12 @@ import { readFile } from 'node:fs/promises'
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import {
-  BridgeStreamProjector, BrowserRealtimeHub, BrowserRealtimeSession, ConnectionCapacityService, TradingAccessError, TradingService,
+  BridgeStreamProjector, BrowserRealtimeHub, BrowserRealtimeSession, ConnectionCapacityService, ObserverPublicationService, TradingAccessError, TradingService,
   tradingRoutes,
   type AccountSnapshot, type BrowserRealtimeSink, type ConnectionLeaseStore, type MarketCandle, type MarketQuote,
   type OpenPosition, type PendingOrder, type RealtimeResource, type TradingAccountSummary,
   ConnectionCapacityExceededError, type TradingProjectionRepository, type TradingReadRepository, type TradingRealtimeEvent,
-  type TrustedBridgeProjectionRepository,
+  type TrustedBridgeProjectionRepository, type ObserverAccessReader, type ObserverAuthorization,
 } from '../src/modules/trading/index.js'
 
 const account: TradingAccountSummary = {
@@ -107,16 +107,28 @@ describe('Stage 11 trading vertical slice', () => {
   })
 
   it('allows an authorized observer to read and subscribe to one source account without trade permission', async () => {
-    const storage = repository(); const service = new TradingService(storage)
+    const storage = repository()
+    const authorization: ObserverAuthorization = {
+      userId: 99, channelId: 'observer-1', sourceId: 'source-1', sourceRevision: '1', ownershipRevision: '1',
+      channelRevision: '1', accessRevision: '1', userTokenVersion: 1, accountId: '7', operatorUserId: 42,
+      displayName: '黄金观摩', expiresAtUtc: new Date(Date.now() + 30_000).toISOString(),
+    }
+    const observers: ObserverAccessReader = {
+      list: async () => [{ id: 'observer-1', displayName: '黄金观摩', sourceAccountId: '7', active: true }],
+      authorize: async (userId, channelId, accountId) => userId === authorization.userId
+        && channelId === authorization.channelId && accountId === authorization.accountId ? authorization : null,
+    }
+    const service = new TradingService(storage, new ObserverPublicationService(observers, storage))
     await expect(service.workspace(99, '7', 'observer-1')).resolves.toMatchObject({ account: { id: '7', tradePermission: false }, snapshot: { tradePermission: false } })
     await expect(service.workspace(99, '7', 'observer-missing')).rejects.toMatchObject({ code: 'trading_account_forbidden' })
     const messages: unknown[] = []
-    const hub = new BrowserRealtimeHub(storage)
-    const stop = await hub.subscribe({ userId: 99, accountId: '7', observerChannelId: 'observer-1', resources: ['market.quote:XAUUSD'], afterRevision: { 'market.quote:XAUUSD': 0 }, sink: { send(value) { messages.push(value) }, close() {} } })
+    const hub = new BrowserRealtimeHub(storage, observers)
+    const stop = await hub.subscribe({ userId: 99, accountId: '7', observerChannelId: 'observer-1', resources: ['market.quote:XAUUSD'], afterRevision: { 'market.quote:XAUUSD': null }, sink: { send(value) { messages.push(value) }, close() {} } })
     expect(stop).toBeTypeOf('function')
     expect(messages).toContainEqual(expect.objectContaining({ type: 'subscription.ready', subscriptions: expect.arrayContaining([expect.objectContaining({ target: expect.objectContaining({ observer_channel_id: 'observer-1' }) })]) }))
     hub.publish({ eventId: 'observer-event', type: 'market.quote.updated', occurredAt: '2026-09-03T08:00:00.000Z', userId: 42, accountId: '7', terminalInstanceId: 'terminal-1', resource: 'market.quote', resourceId: 'XAUUSD', revision: 1, data: {} })
-    expect(messages).toContainEqual(expect.objectContaining({ event_id: 'observer-event', scope: expect.objectContaining({ user_id: '99', observer_channel_id: 'observer-1' }) }))
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(messages).toContainEqual(expect.objectContaining({ type: 'observer.publication.changed', scope: expect.objectContaining({ user_id: '99', observer_channel_id: 'observer-1' }) }))
   })
 
   it('projects one MT4/MT5-neutral stream revision once and isolates browser subscriptions by user and account', async () => {

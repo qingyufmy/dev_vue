@@ -3,6 +3,7 @@ import type {
   BridgeExactTradeState, ConnectionCapacityRepository, TradingProjectionRepository, TradingProjectionWrite, TradingReadRepository,
   TrustedBridgeProjectionRepository, TrustedBridgeProjectionWrite,
 } from '../application/trading-ports.js'
+import { MysqlObserverAccessReader } from './mysql-observer-access-reader.js'
 import type { BridgeGatewayLeaseStore } from '../../bridge/index.js'
 import type {
   AccountSnapshot, MarketCandle, MarketQuote, OpenPosition, PendingOrder, RealtimeResource,
@@ -25,7 +26,6 @@ interface QuoteRow extends RowDataPacket { trading_account_id: string; symbol: s
 interface CandleRow extends RowDataPacket { trading_account_id: string; symbol: string; timeframe: Timeframe; open_time_utc: Date; open_price: string; high_price: string; low_price: string; close_price: string; tick_volume: string; closed: number; revision: number }
 interface PayloadRow extends RowDataPacket { payload_json: string | OpenPosition | PendingOrder }
 interface ProfileRow extends RowDataPacket { id: string; display_name: string; platform: TerminalProfileSummary['platform']; installation_id: string; trading_account_id: string | null; connection_state: TerminalProfileSummary['connectionState']; last_seen_at_utc: Date | null }
-interface ObserverRow extends RowDataPacket { id: string; display_name: string; source_trading_account_id: string; active: number }
 interface RevisionRow extends RowDataPacket { revision: number }
 interface CapacityRow extends RowDataPacket { quantity: number }
 interface SessionHeartbeatRow extends RowDataPacket { last_seen_at_utc: Date }
@@ -147,14 +147,27 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   constructor(
     private readonly pool: Pool,
     private readonly gatewayLeases: Pick<BridgeGatewayLeaseStore, 'current'> | null = null,
-  ) {}
+    observerAccessReader?: MysqlObserverAccessReader,
+  ) { this.observerAccessReader = observerAccessReader ?? new MysqlObserverAccessReader(pool) }
+
+  private readonly observerAccessReader: MysqlObserverAccessReader
 
   async getContext(userId: number) {
     const [rows] = await this.pool.execute<ContextRow[]>('SELECT user_id, mode, CAST(trading_account_id AS CHAR) trading_account_id, CAST(observer_channel_id AS CHAR) observer_channel_id, read_only, revision FROM trading_contexts WHERE user_id=?', [userId])
-    const row = rows[0]; return row ? { userId: row.user_id, mode: row.mode, accountId: row.trading_account_id, observerChannelId: row.observer_channel_id, readOnly: Boolean(row.read_only), revision: Number(row.revision) } : null
+    const row = rows[0]
+    if (!row) return null
+    const context = { userId: row.user_id, mode: row.mode, accountId: row.trading_account_id, observerChannelId: row.observer_channel_id, readOnly: row.mode === 'observer' ? true : Boolean(row.read_only), revision: Number(row.revision) } satisfies TradingContext
+    if (context.mode !== 'observer') return context
+    if (!context.observerChannelId) {
+      return { ...context, mode: 'blocked' as const, accountId: null, observerChannelId: null, readOnly: true }
+    }
+    const allowed = await this.observerAccessReader.authorize(userId, context.observerChannelId, context.accountId ?? undefined)
+    if (allowed && (context.accountId === null || allowed.accountId === context.accountId)) return context
+    return { ...context, mode: 'blocked' as const, accountId: null, observerChannelId: null, readOnly: true }
   }
 
   async saveContext(next: Omit<TradingContext, 'revision'>, expectedRevision: number | null) {
+    if (next.mode === 'observer' && !next.readOnly) throw new TradingAccessError('trading_context_invalid', 400)
     return transaction(this.pool, async connection => {
       const [rows] = await connection.execute<ContextRow[]>('SELECT revision FROM trading_contexts WHERE user_id=? FOR UPDATE', [next.userId])
       const current = rows[0]?.revision ?? 0
@@ -163,8 +176,9 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
         const [access] = await connection.execute<RowDataPacket[]>('SELECT 1 FROM trading_account_ownerships WHERE user_id=? AND trading_account_id=? AND role=\'owner\' AND revoked_at_utc IS NULL LIMIT 1 FOR SHARE', [next.userId, next.accountId])
         if (!access[0]) throw new TradingAccessError('trading_account_forbidden', 403)
       } else if (next.mode === 'observer') {
-        const [access] = await connection.execute<RowDataPacket[]>('SELECT 1 FROM observer_channel_accesses x INNER JOIN observer_channels c ON c.id=x.observer_channel_id AND c.active=1 WHERE x.user_id=? AND x.observer_channel_id=? AND x.revoked_at_utc IS NULL LIMIT 1 FOR SHARE', [next.userId, next.observerChannelId])
-        if (!access[0]) throw new TradingAccessError('trading_account_forbidden', 403)
+        if (next.accountId !== null || !next.observerChannelId) throw new TradingAccessError('trading_account_forbidden', 403)
+        const allowed = await this.observerAccessReader.authorizeOn(connection, next.userId, next.observerChannelId)
+        if (!allowed) throw new TradingAccessError('trading_account_forbidden', 403)
       }
       const revision = Number(current) + 1
       await connection.execute(`INSERT INTO trading_contexts (user_id,mode,trading_account_id,observer_channel_id,read_only,revision,updated_at_utc) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE mode=VALUES(mode),trading_account_id=VALUES(trading_account_id),observer_channel_id=VALUES(observer_channel_id),read_only=VALUES(read_only),revision=VALUES(revision),updated_at_utc=VALUES(updated_at_utc)`, [next.userId, next.mode, next.accountId, next.observerChannelId, next.readOnly ? 1 : 0, revision])
@@ -197,8 +211,7 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     return rows.map(row => ({ id: row.id, displayName: row.display_name, platform: row.platform, installationId: row.installation_id, accountId: row.trading_account_id, connectionState: row.connection_state, lastSeenAt: utc(row.last_seen_at_utc) }))
   }
   async listObserverChannels(userId: number) {
-    const [rows] = await this.pool.execute<ObserverRow[]>(`SELECT CAST(c.id AS CHAR) id,c.display_name,CAST(c.source_trading_account_id AS CHAR) source_trading_account_id,c.active FROM observer_channels c INNER JOIN observer_channel_accesses x ON x.observer_channel_id=c.id AND x.user_id=? AND x.revoked_at_utc IS NULL WHERE c.active=1 ORDER BY c.id`, [userId])
-    return rows.map(row => ({ id: row.id, displayName: row.display_name, sourceAccountId: row.source_trading_account_id, active: Boolean(row.active) }))
+    return this.observerAccessReader.list(userId)
   }
 
   async getAccountSnapshot(accountId: string, userId: number) {

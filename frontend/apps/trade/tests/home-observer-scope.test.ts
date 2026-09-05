@@ -1,0 +1,115 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiClientError } from '@aurum/api-client'
+import { useHomeWorkspace } from '../src/features/home/use-home-workspace'
+import { accountSnapshot, clearAccountRuntime, marketQuote } from '../src/features/home/home-runtime'
+
+const mocks = vi.hoisted(() => ({
+  api: {
+    getTradingContext: vi.fn(), listTradingAccounts: vi.fn(), listObserverChannels: vi.fn(),
+    listMarketAnalyses: vi.fn(), listStrategies: vi.fn(), selectTradingAccount: vi.fn(),
+    getTradingWorkspace: vi.fn(), getMarketQuote: vi.fn(), getMarketCandles: vi.fn(),
+  },
+  start: vi.fn(), stop: vi.fn(),
+}))
+vi.mock('@aurum/api-client', async importOriginal => ({
+  ...await importOriginal<typeof import('@aurum/api-client')>(), createApiClient: () => mocks.api,
+}))
+vi.mock('~/features/auth/session', () => ({
+  useTradeSession: () => ({ session: { value: { csrf_token: 'test-csrf', user: { id: '9' } } } }),
+}))
+vi.mock('../src/features/home/trading-realtime', () => ({
+  startTradingRealtime: mocks.start, stopTradingRealtime: mocks.stop,
+}))
+
+function workspace(id: string) {
+  return { data: { account: { id }, snapshot: { id, balance: id, revision: 1 }, symbols: ['XAUUSD', 'EURUSD', 'GBPUSD'],
+    positions: { revision: 1, items: [] }, pendingOrders: { revision: 1, items: [] } } }
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+function latestResync(): () => Promise<void> {
+  return mocks.start.mock.calls.at(-1)![5]
+}
+
+beforeEach(() => {
+  Object.values(mocks.api).forEach(mock => mock.mockReset())
+  mocks.start.mockReset()
+  mocks.stop.mockReset()
+  clearAccountRuntime()
+  mocks.api.getTradingContext.mockResolvedValue({ data: { mode: 'observer', accountId: null, observerChannelId: '12', revision: 1 } })
+  mocks.api.listTradingAccounts.mockResolvedValue({ data: { items: [{ id: '2' }] } })
+  mocks.api.listObserverChannels.mockResolvedValue({ data: { items: [{ id: '12', sourceAccountId: '1', active: true }] } })
+  mocks.api.listMarketAnalyses.mockResolvedValue({ data: { items: [] } })
+  mocks.api.listStrategies.mockResolvedValue({ data: { items: [] } })
+  mocks.api.getTradingWorkspace.mockImplementation(async (id: string) => workspace(id))
+  mocks.api.selectTradingAccount.mockResolvedValue({ data: { mode: 'full', accountId: '2', observerChannelId: null, revision: 2 } })
+  mocks.api.getMarketQuote.mockImplementation(async (accountId: string, symbol: string) => ({ data: { accountId, symbol, revision: 1 } }))
+  mocks.api.getMarketCandles.mockResolvedValue({ data: { items: [] } })
+})
+
+describe('observer HTTP resync scope protection', () => {
+  it('does not apply an old observer snapshot after switching to a personal account', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    const pending = deferred<ReturnType<typeof workspace>>()
+    mocks.api.getTradingWorkspace.mockReturnValueOnce(pending.promise)
+    const oldRefresh = latestResync()()
+    await home.selectAccount('2')
+    pending.resolve(workspace('1'))
+    await oldRefresh
+    expect(accountSnapshot.value?.id).toBe('2')
+    expect(marketQuote.value?.accountId).toBe('2')
+    home.stop()
+  })
+
+  it('does not let an older symbol response overwrite the newest selected symbol', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    const pending = deferred<{ data: { accountId: string; symbol: string; revision: number } }>()
+    mocks.api.getMarketQuote.mockReturnValueOnce(pending.promise)
+    const oldMarket = home.selectSymbol('GBPUSD')
+    await home.selectSymbol('EURUSD')
+    pending.resolve({ data: { accountId: '1', symbol: 'GBPUSD', revision: 1 } })
+    await oldMarket
+    expect(marketQuote.value?.symbol).toBe('EURUSD')
+    home.stop()
+  })
+
+  it('drops an in-flight observer refresh after the workspace is stopped', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    const pending = deferred<ReturnType<typeof workspace>>()
+    mocks.api.getTradingWorkspace.mockReturnValueOnce(pending.promise)
+    const oldRefresh = latestResync()()
+    home.stop()
+    clearAccountRuntime()
+    pending.resolve(workspace('1'))
+    await oldRefresh
+    expect(accountSnapshot.value).toBeNull()
+    expect(marketQuote.value).toBeNull()
+  })
+
+  it('clears published account data when a current refresh loses authorization', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    mocks.api.getTradingWorkspace.mockRejectedValueOnce(new ApiClientError(403, null))
+    await expect(latestResync()()).rejects.toMatchObject({ status: 403 })
+    expect(accountSnapshot.value).toBeNull()
+    expect(marketQuote.value).toBeNull()
+    expect(home.error.value).toContain('访问权限已失效')
+    home.stop()
+  })
+
+  it('clears the snapshot if authorization is revoked before the market read completes', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    mocks.api.getMarketQuote.mockRejectedValueOnce(new ApiClientError(403, null))
+    await expect(latestResync()()).rejects.toMatchObject({ status: 403 })
+    expect(accountSnapshot.value).toBeNull()
+    expect(marketQuote.value).toBeNull()
+    home.stop()
+  })
+})

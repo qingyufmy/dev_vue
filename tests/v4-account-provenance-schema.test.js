@@ -16,9 +16,10 @@ describe('V4 account projection provenance schema migration', () => {
   it('is the final migration after the fixed 019 ownership boundary', async () => {
     const plan = await loadMigrationPlan({ rootDirectory: root })
 
-    expect(plan).toHaveLength(21)
+    expect(plan).toHaveLength(22)
     expect(plan[19].id).toBe('20260905_019_account_ownership_intervals')
     expect(plan[20]).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })
+    expect(plan[21].id).toBe('20260905_021_observer_sources_and_audiences')
     expect(plan[20].statements).toHaveLength(2)
     expect(plan[20].statements).toEqual(statements)
   })

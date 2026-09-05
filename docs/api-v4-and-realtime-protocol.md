@@ -314,7 +314,11 @@ AI、风控与执行资源使用以下受控目标，不能把任意 Redis 频�
 - 账户级异步操作：`kind=operations`，提供 `trading_account_id`，`resource_id=all`。
 - 用户级分发父操作：`kind=operations`，`trading_account_id=null`、`observer_channel_id=null`、`resource_id=all`；只匹配事件中的同一活动系统用户。观摩频道不能订阅该目标。
 
-上述列表型目标的 `after_revision` 必须为 `null`：事件中的 revision 属于单个聚合根，而不是整张列表，不能伪造一个可比较的列表 revision。浏览器首次连接和每次重连先通过 HTTP 获取列表快照，再用 WebSocket 事件做小粒度失效通知；单个聚合收到旧 revision 时仍须丢弃。账户、报价、K 线、持仓和挂单继续携带可与 HTTP 快照精确比较的 `after_revision`。
+上述列表型目标的 `after_revision` 必须为 `null`：事件中的 revision 属于单个聚合根，而不是整张列表，不能伪造一个可比较的列表 revision。浏览器首次连接和每次重连先通过 HTTP 获取列表快照，再用 WebSocket 事件做小粒度失效通知；单个聚合收到旧 revision 时仍须丢弃。本人账户的报价、K 线、账户指标、持仓和挂单继续携带可与 HTTP 快照精确比较的 `after_revision`；观摩发布采用下述独立失效合同，不能把私有投影版本视作公开事件重放游标。
+
+观摩目标仅允许 `account.metrics`、`market.quote`、`market.candle`、`positions`、`pending_orders`，必须有明确频道及来源账户，`after_revision=null`。列表、进入、HTTP 发布和 WS 统一使用动态受众授权。发布证明最长 30 秒，从查询开始计时；每次事件投递前重验，查询后再次确认未过期。到期、撤权、来源/归属版本变化或依赖失败后停止投递，发送 `subscription.resync_required(reason=authorization_changed)` 并关闭（当前 V4 实现为 `4403`）。到期任务仅关闭连接，不在网关中轮询数据库。P4B 的管理事务/outbox 负责更及时的撤权通知，不能以其尚未接入为由无限缓存旧授权。
+
+观摩 WS 不转发源用户原始事件：只生成 `observer.publication.changed`，data 白名单为 `channel_id/source_revision/resource/resource_id`，scope 里的终端实例为 null。浏览器合并通知后回读经过授权和脱敏的 HTTP 投影；不携带登录号、服务器名、设备档案、信号关联、历史或执行指令。该通知不授予来源用户权限，也不适用于本人正常行情增量。
 
 ### 7.4 事件目录
 
@@ -330,6 +334,7 @@ AI、风控与执行资源使用以下受控目标，不能把任意 Redis 频�
 | `market.candle.closed` | 已收线蜡烛和下一根起点 | candle HTTP |
 | `positions.changed` | upsert/remove 和账户 revision | positions HTTP |
 | `pending_orders.changed` | upsert/remove 和账户 revision | pending orders HTTP |
+| `observer.publication.changed` | 授权后的频道/source 版本与资源失效元数据，不含源事件正文 | 带 observer_channel_id 的发布 HTTP |
 | `analysis.job.changed` | 分析任务排队、运行、完成、失败或过期 | analysis job HTTP |
 | `market_analysis.created` | 最新市场分析摘要及 `opportunity`，不含完整推理 | market analyses HTTP |
 | `trader.job.changed` | 单个交易账户的交易员任务状态及 `task_mode`（entry/manage/both） | trade decisions HTTP |

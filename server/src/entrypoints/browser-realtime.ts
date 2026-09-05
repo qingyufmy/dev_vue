@@ -6,7 +6,7 @@ import {
 import { createRealtimeTicketAuthenticator } from '../modules/auth/index.js'
 import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
-  BrowserRealtimeHub, MysqlTradingRepository, RedisBrowserRealtimeSubscriber,
+  BrowserRealtimeHub, MysqlTradingRepository, MysqlObserverAccessReader, RedisBrowserRealtimeSubscriber,
 } from '../modules/trading/index.js'
 import { BrowserRealtimeWebSocketServer } from '../transport/browser-realtime-websocket-server.js'
 
@@ -22,7 +22,9 @@ async function main() {
   const eventCache = createCacheRedis(runtime.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(ticketCache), connectCacheRedis(eventCache)])
 
-  const hub = new BrowserRealtimeHub(new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(ticketCache)))
+  const observerAccess = new MysqlObserverAccessReader(pool)
+  const tradingRepository = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(ticketCache), observerAccess)
+  const hub = new BrowserRealtimeHub(tradingRepository, observerAccess)
   const events = new RedisBrowserRealtimeSubscriber(eventCache, {
     publish(event) { hub.publish(event); health.workSucceeded() },
   }, undefined, code => health.workFailed(code))
