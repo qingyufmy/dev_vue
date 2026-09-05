@@ -35,6 +35,7 @@
     "start:v4:history-scheduler": "node server/dist-v4/entrypoints/scheduler-trade-history.js",
     "verify:payment-schema": "node scripts/verify-payment-schema.mjs",
     "verify:v4-migration-target": "node scripts/verify-v4-migration-target.mjs",
+    "migrate:v4-schema": "node scripts/migrate-v4-schema.mjs",
     "rehearse:trade-history": "node scripts/rehearse-trade-history-migration.mjs"
   },
   "dependencies": {

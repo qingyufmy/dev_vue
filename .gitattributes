@@ -1,0 +1,3 @@
+# Executed migration artifacts are byte-hashed; keep their existing LF bytes on every checkout.
+server/db/migrations/**/*.sql text eol=lf
+server/db/migrations/*.sql text eol=lf
