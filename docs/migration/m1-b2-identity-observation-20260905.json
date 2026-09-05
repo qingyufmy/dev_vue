@@ -1,0 +1,3428 @@
+{
+  "kind": "b2-sanitized-metadata",
+  "observedAtUtc": "2026-09-05T09:52:39.747943Z",
+  "sourceDatabase": "dev_vue_m1_source_20260905_01",
+  "targetDatabase": "dev_vue_m1_a",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "mysqlVersion": "8.4.8",
+  "source": {
+    "users": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "uid",
+          "type": "varchar(32)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "email",
+          "type": "varchar(255)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "email_verified",
+          "type": "tinyint",
+          "nullable": "YES",
+          "default": "1",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "auth_method",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": "email",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "password",
+          "type": "varchar(255)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "nickname",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "default": "",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "avatar",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "default": "",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "role",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": "user",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "plan",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": "free",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "plan_period",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": "",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "plan_expires_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "telegram_id",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "telegram_username",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "telegram_name",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "telegram_chat_id",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "telegram_group_status",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "default": "",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "telegram_bot_started_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "telegram_joined_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "telegram_last_invite_sent_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "referral_code",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "referral_credit",
+          "type": "decimal(20,8)",
+          "nullable": "NO",
+          "default": "0.00000000",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "referred_by",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "last_seen_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "bridge_heartbeat",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": "now()",
+          "collation": null,
+          "extra": "DEFAULT_GENERATED"
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": "now()",
+          "collation": null,
+          "extra": "DEFAULT_GENERATED"
+        },
+        {
+          "name": "phone",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "phone_verified",
+          "type": "tinyint",
+          "nullable": "YES",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "changelog_seen_version",
+          "type": "int",
+          "nullable": "YES",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "token_version",
+          "type": "int",
+          "nullable": "NO",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "plan_source",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "deleted_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "deletion_status",
+          "type": "varchar(24)",
+          "nullable": "NO",
+          "default": "active",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "email",
+          0,
+          1,
+          "email"
+        ],
+        [
+          "idx_users_deletion_status",
+          1,
+          1,
+          "deletion_status"
+        ],
+        [
+          "idx_users_deletion_status",
+          1,
+          2,
+          "deleted_at"
+        ],
+        [
+          "idx_users_last_seen",
+          1,
+          1,
+          "last_seen_at"
+        ],
+        [
+          "idx_users_phone",
+          0,
+          1,
+          "phone"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "referral_code",
+          0,
+          1,
+          "referral_code"
+        ],
+        [
+          "uid",
+          0,
+          1,
+          "uid"
+        ]
+      ],
+      "rowCount": "25"
+    },
+    "verification_codes": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "email",
+          "type": "varchar(255)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "code",
+          "type": "varchar(20)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "purpose",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": "login",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "expires_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "used",
+          "type": "tinyint",
+          "nullable": "YES",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "verify_token",
+          "type": "varchar(36)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": "now()",
+          "collation": null,
+          "extra": "DEFAULT_GENERATED"
+        },
+        {
+          "name": "phone",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "token_used",
+          "type": "tinyint",
+          "nullable": "YES",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_verification_codes_phone",
+          1,
+          1,
+          "phone"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ]
+      ],
+      "rowCount": "17"
+    },
+    "bridge_device_pairings": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "device_code_hash",
+          "type": "char(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "user_code_hash",
+          "type": "char(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "approved_token_version",
+          "type": "int",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "status",
+          "type": "varchar(16)",
+          "nullable": "NO",
+          "default": "pending",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "device_name",
+          "type": "varchar(120)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "created_ip",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "approved_ip",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "expires_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "approved_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "consumed_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_bridge_pair_expiry",
+          1,
+          1,
+          "status"
+        ],
+        [
+          "idx_bridge_pair_expiry",
+          1,
+          2,
+          "expires_at"
+        ],
+        [
+          "idx_bridge_pair_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_bridge_pair_user",
+          1,
+          2,
+          "status"
+        ],
+        [
+          "idx_bridge_pair_user",
+          1,
+          3,
+          "updated_at"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_bridge_pair_device_code",
+          0,
+          1,
+          "device_code_hash"
+        ],
+        [
+          "uk_bridge_pair_user_code",
+          0,
+          1,
+          "user_code_hash"
+        ]
+      ],
+      "rowCount": "1"
+    },
+    "bridge_refresh_sessions": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "token_hash",
+          "type": "char(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "expires_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "revoked_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "last_used_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "user_agent",
+          "type": "varchar(255)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "last_ip",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_bridge_refresh_expiry",
+          1,
+          1,
+          "expires_at"
+        ],
+        [
+          "idx_bridge_refresh_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_bridge_refresh_user",
+          1,
+          2,
+          "revoked_at"
+        ],
+        [
+          "idx_bridge_refresh_user",
+          1,
+          3,
+          "expires_at"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_bridge_refresh_token",
+          0,
+          1,
+          "token_hash"
+        ]
+      ],
+      "rowCount": "17"
+    },
+    "trading_accounts": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "broker_server",
+          "type": "varchar(100)",
+          "nullable": "NO",
+          "default": "",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "login_account",
+          "type": "varchar(50)",
+          "nullable": "NO",
+          "default": "",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "nickname",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "default": "",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "margin_mode",
+          "type": "varchar(20)",
+          "nullable": "NO",
+          "default": "netting",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "review_status",
+          "type": "varchar(20)",
+          "nullable": "NO",
+          "default": "pending",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "observe_status",
+          "type": "varchar(20)",
+          "nullable": "NO",
+          "default": "active",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "is_deleted",
+          "type": "tinyint",
+          "nullable": "NO",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": "now()",
+          "collation": null,
+          "extra": "DEFAULT_GENERATED"
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": "now()",
+          "collation": null,
+          "extra": "DEFAULT_GENERATED"
+        },
+        {
+          "name": "observed_until",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "identity_verified_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "first_verified_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "anomaly_code",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_ta_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_ta_user",
+          1,
+          2,
+          "is_deleted"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_trading_account_identity",
+          0,
+          1,
+          "user_id"
+        ],
+        [
+          "uk_trading_account_identity",
+          0,
+          2,
+          "broker_server"
+        ],
+        [
+          "uk_trading_account_identity",
+          0,
+          3,
+          "login_account"
+        ]
+      ],
+      "rowCount": "4"
+    },
+    "mt5_account_bindings": {
+      "columns": [
+        {
+          "name": "broker_server_key",
+          "type": "varchar(100)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "login_account",
+          "type": "varchar(50)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "current_user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "current_trading_account_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "last_verified_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "first_connected_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "last_connected_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "account_currency",
+          "type": "varchar(16)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_mt5_binding_user",
+          1,
+          1,
+          "current_user_id"
+        ],
+        [
+          "idx_mt5_binding_user",
+          1,
+          2,
+          "updated_at"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "broker_server_key"
+        ],
+        [
+          "PRIMARY",
+          0,
+          2,
+          "login_account"
+        ],
+        [
+          "uk_mt5_binding_account",
+          0,
+          1,
+          "current_trading_account_id"
+        ]
+      ],
+      "rowCount": "3"
+    },
+    "mt5_account_ownership_history": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "broker_server_key",
+          "type": "varchar(100)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "login_account",
+          "type": "varchar(50)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "trading_account_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "started_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "ended_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "end_reason",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_mt5_ownership_account",
+          1,
+          1,
+          "trading_account_id"
+        ],
+        [
+          "idx_mt5_ownership_account",
+          1,
+          2,
+          "started_at"
+        ],
+        [
+          "idx_mt5_ownership_identity",
+          1,
+          1,
+          "broker_server_key"
+        ],
+        [
+          "idx_mt5_ownership_identity",
+          1,
+          2,
+          "login_account"
+        ],
+        [
+          "idx_mt5_ownership_identity",
+          1,
+          3,
+          "started_at"
+        ],
+        [
+          "idx_mt5_ownership_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_mt5_ownership_user",
+          1,
+          2,
+          "started_at"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ]
+      ],
+      "rowCount": "274"
+    },
+    "bridge_v3_terminal_sessions": {
+      "columns": [
+        {
+          "name": "terminal_instance_id",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "platform",
+          "type": "varchar(8)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "broker_server",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "login_account",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "connection_epoch",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "session_id",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "client_version",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "connected",
+          "type": "tinyint(1)",
+          "nullable": "NO",
+          "default": "1",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "last_seen_at_utc_msc",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": "CURRENT_TIMESTAMP(3)",
+          "collation": null,
+          "extra": "DEFAULT_GENERATED"
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": "CURRENT_TIMESTAMP(3)",
+          "collation": null,
+          "extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)"
+        },
+        {
+          "name": "installation_id",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "bridge_version",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "update_release_id",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "update_target_version",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "update_state",
+          "type": "varchar(24)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "update_started_at_utc_msc",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "update_reported_at_utc_msc",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "update_error_code",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_bridge_v3_installation",
+          1,
+          1,
+          "installation_id"
+        ],
+        [
+          "idx_bridge_v3_installation",
+          1,
+          2,
+          "connected"
+        ],
+        [
+          "idx_bridge_v3_installation",
+          1,
+          3,
+          "last_seen_at_utc_msc"
+        ],
+        [
+          "idx_bridge_v3_terminal_account",
+          1,
+          1,
+          "broker_server"
+        ],
+        [
+          "idx_bridge_v3_terminal_account",
+          1,
+          2,
+          "login_account"
+        ],
+        [
+          "idx_bridge_v3_terminal_account",
+          1,
+          3,
+          "connected"
+        ],
+        [
+          "idx_bridge_v3_terminal_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_bridge_v3_terminal_user",
+          1,
+          2,
+          "connected"
+        ],
+        [
+          "idx_bridge_v3_terminal_user",
+          1,
+          3,
+          "updated_at"
+        ],
+        [
+          "idx_bridge_v3_update_release",
+          1,
+          1,
+          "update_release_id"
+        ],
+        [
+          "idx_bridge_v3_update_release",
+          1,
+          2,
+          "update_state"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "terminal_instance_id"
+        ]
+      ],
+      "rowCount": "7"
+    },
+    "ai_observer_sources": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "name",
+          "type": "varchar(80)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "bridge_user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "trading_account_id",
+          "type": "int",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "strategy_id",
+          "type": "int",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "status",
+          "type": "enum('active','disabled')",
+          "nullable": "NO",
+          "default": "active",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "notes",
+          "type": "varchar(255)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "created_by_user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_observer_source_account",
+          1,
+          1,
+          "trading_account_id"
+        ],
+        [
+          "idx_observer_source_status",
+          1,
+          1,
+          "status"
+        ],
+        [
+          "idx_observer_source_status",
+          1,
+          2,
+          "updated_at"
+        ],
+        [
+          "idx_observer_source_strategy",
+          1,
+          1,
+          "strategy_id"
+        ],
+        [
+          "idx_observer_source_strategy",
+          1,
+          2,
+          "status"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_observer_source_bridge_user",
+          0,
+          1,
+          "bridge_user_id"
+        ]
+      ],
+      "rowCount": "2"
+    },
+    "ai_observer_channels": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "name",
+          "type": "varchar(80)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "slug",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "description",
+          "type": "varchar(255)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "source_id",
+          "type": "bigint",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "audience",
+          "type": "enum('all','plus','pro','assigned')",
+          "nullable": "NO",
+          "default": "all",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "status",
+          "type": "enum('active','disabled')",
+          "nullable": "NO",
+          "default": "active",
+          "collation": "utf8mb4_0900_ai_ci",
+          "extra": ""
+        },
+        {
+          "name": "is_default",
+          "type": "tinyint(1)",
+          "nullable": "NO",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "sort_order",
+          "type": "int",
+          "nullable": "NO",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_observer_channel_default",
+          1,
+          1,
+          "is_default"
+        ],
+        [
+          "idx_observer_channel_default",
+          1,
+          2,
+          "status"
+        ],
+        [
+          "idx_observer_channel_default",
+          1,
+          3,
+          "sort_order"
+        ],
+        [
+          "idx_observer_channel_source",
+          1,
+          1,
+          "source_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_observer_channel_slug",
+          0,
+          1,
+          "slug"
+        ]
+      ],
+      "rowCount": "2"
+    },
+    "ai_observer_channel_assignments": {
+      "columns": [
+        {
+          "name": "channel_id",
+          "type": "bigint",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_by_user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_observer_assignment_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_observer_assignment_user",
+          1,
+          2,
+          "channel_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "channel_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          2,
+          "user_id"
+        ]
+      ],
+      "rowCount": "0"
+    }
+  },
+  "target": {
+    "users": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "uid",
+          "type": "varchar(32)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "email",
+          "type": "varchar(255)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "phone",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "password",
+          "type": "varchar(255)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "nickname",
+          "type": "varchar(100)",
+          "nullable": "NO",
+          "default": "",
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "avatar",
+          "type": "varchar(500)",
+          "nullable": "NO",
+          "default": "",
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "role",
+          "type": "varchar(20)",
+          "nullable": "NO",
+          "default": "user",
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "plan",
+          "type": "varchar(20)",
+          "nullable": "NO",
+          "default": "free",
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "plan_expires_at",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "token_version",
+          "type": "int",
+          "nullable": "NO",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "deletion_status",
+          "type": "varchar(24)",
+          "nullable": "NO",
+          "default": "active",
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "deleted_at",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_v4_users_email",
+          1,
+          1,
+          "email"
+        ],
+        [
+          "idx_v4_users_phone",
+          1,
+          1,
+          "phone"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_v4_users_uid",
+          0,
+          1,
+          "uid"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "bridge_refresh_sessions": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "token_hash",
+          "type": "char(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "credential_version",
+          "type": "tinyint unsigned",
+          "nullable": "NO",
+          "default": "3",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "installation_id",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "profile_id",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "generation",
+          "type": "int unsigned",
+          "nullable": "NO",
+          "default": "1",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "migration_key",
+          "type": "char(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "source_fingerprint",
+          "type": "char(71)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "source_refresh_session_id",
+          "type": "bigint",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "expires_at",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "revoked_at",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "last_used_at",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "user_agent",
+          "type": "varchar(255)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "last_ip",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "created_at",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_bridge_refresh_device",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_bridge_refresh_device",
+          1,
+          2,
+          "installation_id"
+        ],
+        [
+          "idx_bridge_refresh_device",
+          1,
+          3,
+          "profile_id"
+        ],
+        [
+          "idx_bridge_refresh_device",
+          1,
+          4,
+          "credential_version"
+        ],
+        [
+          "idx_bridge_refresh_device",
+          1,
+          5,
+          "revoked_at"
+        ],
+        [
+          "idx_bridge_refresh_device",
+          1,
+          6,
+          "expires_at"
+        ],
+        [
+          "idx_bridge_refresh_expiry",
+          1,
+          1,
+          "expires_at"
+        ],
+        [
+          "idx_bridge_refresh_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_bridge_refresh_user",
+          1,
+          2,
+          "revoked_at"
+        ],
+        [
+          "idx_bridge_refresh_user",
+          1,
+          3,
+          "expires_at"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_bridge_refresh_migration_key",
+          0,
+          1,
+          "migration_key"
+        ],
+        [
+          "uk_bridge_refresh_source_migration",
+          0,
+          1,
+          "source_refresh_session_id"
+        ],
+        [
+          "uk_bridge_refresh_token",
+          0,
+          1,
+          "token_hash"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "auth_sessions": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "session_hash",
+          "type": "char(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "client_id",
+          "type": "enum('auth','www-web','trade-web','admin-web')",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "parent_session_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "auth_time_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "mfa_level",
+          "type": "enum('none','otp','strong')",
+          "nullable": "NO",
+          "default": "none",
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "session_version",
+          "type": "int",
+          "nullable": "NO",
+          "default": "0",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "last_seen_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "idle_expires_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "absolute_expires_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "revoked_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "revocation_reason",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_auth_sessions_expiry",
+          1,
+          1,
+          "absolute_expires_at_utc"
+        ],
+        [
+          "idx_auth_sessions_parent",
+          1,
+          1,
+          "parent_session_id"
+        ],
+        [
+          "idx_auth_sessions_user_active",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_auth_sessions_user_active",
+          1,
+          2,
+          "revoked_at_utc"
+        ],
+        [
+          "idx_auth_sessions_user_active",
+          1,
+          3,
+          "absolute_expires_at_utc"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_auth_sessions_hash",
+          0,
+          1,
+          "session_hash"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "auth_authorization_codes": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "code_hash",
+          "type": "char(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "auth_session_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "client_id",
+          "type": "enum('www-web','trade-web','admin-web')",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "redirect_uri",
+          "type": "varchar(512)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "scope",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "nonce",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "code_challenge",
+          "type": "char(43)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "code_challenge_method",
+          "type": "enum('S256')",
+          "nullable": "NO",
+          "default": "S256",
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "expires_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "consumed_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "fk_auth_codes_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_auth_codes_expiry",
+          1,
+          1,
+          "expires_at_utc"
+        ],
+        [
+          "idx_auth_codes_session",
+          1,
+          1,
+          "auth_session_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_auth_codes_hash",
+          0,
+          1,
+          "code_hash"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "trading_accounts": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "platform",
+          "type": "enum('mt4','mt5')",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "broker_server",
+          "type": "varchar(191)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "account_login",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "currency",
+          "type": "varchar(12)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "deleted_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_trading_accounts_active",
+          1,
+          1,
+          "deleted_at_utc"
+        ],
+        [
+          "idx_trading_accounts_active",
+          1,
+          2,
+          "id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_trading_account_identity",
+          0,
+          1,
+          "platform"
+        ],
+        [
+          "uk_trading_account_identity",
+          0,
+          2,
+          "broker_server"
+        ],
+        [
+          "uk_trading_account_identity",
+          0,
+          3,
+          "account_login"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "trading_account_ownerships": {
+      "columns": [
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "trading_account_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "role",
+          "type": "enum('owner','observer_source')",
+          "nullable": "NO",
+          "default": "owner",
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "granted_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "revoked_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_account_owners_account",
+          1,
+          1,
+          "trading_account_id"
+        ],
+        [
+          "idx_account_owners_account",
+          1,
+          2,
+          "revoked_at_utc"
+        ],
+        [
+          "idx_account_owners_account",
+          1,
+          3,
+          "user_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "user_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          2,
+          "trading_account_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          3,
+          "role"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "terminal_profiles": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "display_name",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "platform",
+          "type": "enum('mt4','mt5')",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "installation_id",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "deleted_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_terminal_profiles_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_terminal_profiles_user",
+          1,
+          2,
+          "deleted_at_utc"
+        ],
+        [
+          "idx_terminal_profiles_user",
+          1,
+          3,
+          "updated_at_utc"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_terminal_profile_install",
+          0,
+          1,
+          "user_id"
+        ],
+        [
+          "uk_terminal_profile_install",
+          0,
+          2,
+          "installation_id"
+        ],
+        [
+          "uk_terminal_profile_install",
+          0,
+          3,
+          "id"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "terminal_account_bindings": {
+      "columns": [
+        {
+          "name": "terminal_profile_id",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "trading_account_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "terminal_instance_id",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "bound_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "unbound_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_terminal_bindings_route",
+          1,
+          1,
+          "trading_account_id"
+        ],
+        [
+          "idx_terminal_bindings_route",
+          1,
+          2,
+          "unbound_at_utc"
+        ],
+        [
+          "idx_terminal_bindings_route",
+          1,
+          3,
+          "terminal_instance_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "terminal_profile_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          2,
+          "trading_account_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          3,
+          "bound_at_utc"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "bridge_connection_capacity_grants": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "quantity",
+          "type": "int unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "source_type",
+          "type": "enum('purchase','admin','migration')",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "source_id",
+          "type": "varchar(191)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "starts_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "expires_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "revoked_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_bridge_capacity_active",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_bridge_capacity_active",
+          1,
+          2,
+          "revoked_at_utc"
+        ],
+        [
+          "idx_bridge_capacity_active",
+          1,
+          3,
+          "starts_at_utc"
+        ],
+        [
+          "idx_bridge_capacity_active",
+          1,
+          4,
+          "expires_at_utc"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_bridge_capacity_source",
+          0,
+          1,
+          "source_type"
+        ],
+        [
+          "uk_bridge_capacity_source",
+          0,
+          2,
+          "source_id"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "bridge_connection_sessions": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "trading_account_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "terminal_profile_id",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "terminal_instance_id",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "connection_epoch",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        },
+        {
+          "name": "connection_epoch_v4",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "connected_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "last_seen_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "disconnected_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "disconnect_reason",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "default": null,
+          "collation": "ascii_bin",
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "fk_bridge_sessions_profile",
+          1,
+          1,
+          "terminal_profile_id"
+        ],
+        [
+          "idx_bridge_sessions_route",
+          1,
+          1,
+          "trading_account_id"
+        ],
+        [
+          "idx_bridge_sessions_route",
+          1,
+          2,
+          "disconnected_at_utc"
+        ],
+        [
+          "idx_bridge_sessions_route",
+          1,
+          3,
+          "connected_at_utc"
+        ],
+        [
+          "idx_bridge_sessions_user_online",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_bridge_sessions_user_online",
+          1,
+          2,
+          "disconnected_at_utc"
+        ],
+        [
+          "idx_bridge_sessions_user_online",
+          1,
+          3,
+          "last_seen_at_utc"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ],
+        [
+          "uk_bridge_connection_route_epoch",
+          0,
+          1,
+          "terminal_instance_id"
+        ],
+        [
+          "uk_bridge_connection_route_epoch",
+          0,
+          2,
+          "connection_epoch"
+        ],
+        [
+          "uk_bridge_connection_route_epoch_v4",
+          0,
+          1,
+          "terminal_instance_id"
+        ],
+        [
+          "uk_bridge_connection_route_epoch_v4",
+          0,
+          2,
+          "connection_epoch_v4"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "observer_channels": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": "auto_increment"
+        },
+        {
+          "name": "source_trading_account_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "display_name",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "default": null,
+          "collation": "utf8mb4_unicode_ci",
+          "extra": ""
+        },
+        {
+          "name": "active",
+          "type": "tinyint(1)",
+          "nullable": "NO",
+          "default": "1",
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_by_user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "fk_observer_channel_account",
+          1,
+          1,
+          "source_trading_account_id"
+        ],
+        [
+          "fk_observer_channel_creator",
+          1,
+          1,
+          "created_by_user_id"
+        ],
+        [
+          "idx_observer_channels_active",
+          1,
+          1,
+          "active"
+        ],
+        [
+          "idx_observer_channels_active",
+          1,
+          2,
+          "id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "id"
+        ]
+      ],
+      "rowCount": "0"
+    },
+    "observer_channel_accesses": {
+      "columns": [
+        {
+          "name": "observer_channel_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "granted_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        },
+        {
+          "name": "revoked_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "default": null,
+          "collation": null,
+          "extra": ""
+        }
+      ],
+      "indexes": [
+        [
+          "idx_observer_access_user",
+          1,
+          1,
+          "user_id"
+        ],
+        [
+          "idx_observer_access_user",
+          1,
+          2,
+          "revoked_at_utc"
+        ],
+        [
+          "idx_observer_access_user",
+          1,
+          3,
+          "observer_channel_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          1,
+          "observer_channel_id"
+        ],
+        [
+          "PRIMARY",
+          0,
+          2,
+          "user_id"
+        ]
+      ],
+      "rowCount": "0"
+    }
+  },
+  "checks": {
+    "email_target_collation_duplicate_groups": "0",
+    "phone_duplicate_groups": "0",
+    "uid_target_collation_duplicate_groups": "0",
+    "users_missing_password": "0",
+    "users_non_bcrypt_password": "0",
+    "users_null_nickname": "0",
+    "users_null_avatar": "0",
+    "users_email_unverified": "0",
+    "users_phone_unverified": "0",
+    "users_nonzero_referral_credit": "1",
+    "ownership_missing_user": "0",
+    "ownership_missing_account": "0",
+    "ownership_repeated_user_account_groups": "2",
+    "ownership_reverse_intervals": "0",
+    "ownership_open_rows": "3",
+    "bindings_missing_current_account": "0",
+    "accounts_no_matching_session": "0",
+    "accounts_multiple_matching_platforms": "0",
+    "accounts_missing_currency_binding": "0",
+    "bridge_sessions_missing_installation": "7",
+    "bridge_sessions_recorded_connected": "2",
+    "refresh_missing_user": "0",
+    "refresh_unrevoked": "17",
+    "observer_missing_source_account": "0",
+    "users.role": [
+      [
+        "admin",
+        "1"
+      ],
+      [
+        "user",
+        "24"
+      ]
+    ],
+    "users.plan": [
+      [
+        "pro",
+        "4"
+      ],
+      [
+        "free",
+        "20"
+      ],
+      [
+        "plus",
+        "1"
+      ]
+    ],
+    "users.plan_period": [
+      [
+        "month",
+        "1"
+      ],
+      [
+        "",
+        "24"
+      ]
+    ],
+    "users.plan_source": [
+      [
+        "paid",
+        "1"
+      ],
+      [
+        null,
+        "21"
+      ],
+      [
+        "gift",
+        "2"
+      ],
+      [
+        "observer_source",
+        "1"
+      ]
+    ],
+    "users.auth_method": [
+      [
+        "email",
+        "23"
+      ],
+      [
+        "phone",
+        "2"
+      ]
+    ],
+    "users.deletion_status": [
+      [
+        "active",
+        "6"
+      ],
+      [
+        "anonymized",
+        "19"
+      ]
+    ],
+    "trading_accounts.review_status": [
+      [
+        "approved",
+        "4"
+      ]
+    ],
+    "trading_accounts.observe_status": [
+      [
+        "active",
+        "2"
+      ],
+      [
+        "transferred",
+        "1"
+      ],
+      [
+        "switched",
+        "1"
+      ]
+    ],
+    "trading_accounts.margin_mode": [
+      [
+        "hedging",
+        "4"
+      ]
+    ],
+    "trading_accounts.anomaly_code": [
+      [
+        null,
+        "3"
+      ],
+      [
+        "account_transferred",
+        "1"
+      ]
+    ],
+    "bridge_v3_terminal_sessions.platform": [
+      [
+        "mt4",
+        "1"
+      ],
+      [
+        "mt5",
+        "6"
+      ]
+    ],
+    "ai_observer_channels.audience": [
+      [
+        "all",
+        "2"
+      ]
+    ],
+    "ai_observer_channels.status": [
+      [
+        "active",
+        "2"
+      ]
+    ],
+    "bridge_device_pairings.status": [
+      [
+        "consumed",
+        "1"
+      ]
+    ],
+    "users_missing_referrer_by_code": "0",
+    "users_nonempty_referred_by": "0",
+    "users_nullable_target_required_values": "0",
+    "users_unrecognized_lifecycle": "0",
+    "users_email_phone_login_collision_pairs": "0",
+    "accounts_identity_groups": "3",
+    "accounts_identity_duplicate_groups": "1",
+    "accounts_deleted_rows": "0",
+    "accounts_nonascii_login": "0",
+    "bindings_currency_too_long": "0",
+    "ownership_overlapping_pairs": "0",
+    "bindings_current_owner_disagrees": "0",
+    "bindings_open_interval_disagrees": "0",
+    "ownership_identity_disagrees": "0",
+    "bridge_refresh_invalid_hash_format": "0",
+    "bridge_refresh_inactive_user": "0",
+    "verification_rows": "17",
+    "observer_bridge_user_not_admin": "1",
+    "observer_channels_missing_source": "0"
+  },
+  "supplementObservedAtUtc": "2026-09-05T09:54:38.895346Z",
+  "aggregateQueries": {
+    "users_missing_referrer_by_code": "SELECT COUNT(*) FROM users u WHERE u.referred_by IS NOT NULL AND u.referred_by<>'' AND NOT EXISTS(SELECT 1 FROM users p WHERE p.referral_code=u.referred_by)",
+    "users_nonempty_referred_by": "SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL AND referred_by<>''",
+    "users_nullable_target_required_values": "SELECT COUNT(*) FROM users WHERE nickname IS NULL OR avatar IS NULL OR role IS NULL OR plan IS NULL OR created_at IS NULL OR updated_at IS NULL",
+    "users_unrecognized_lifecycle": "SELECT COUNT(*) FROM users WHERE deletion_status NOT IN ('active','anonymized') OR (deletion_status='active' AND deleted_at IS NOT NULL)",
+    "users_email_phone_login_collision_pairs": "SELECT COUNT(*) FROM users a JOIN users b ON a.id<b.id WHERE (a.email IS NOT NULL AND a.email<>'' AND a.email COLLATE utf8mb4_unicode_ci=b.phone COLLATE utf8mb4_unicode_ci) OR (b.email IS NOT NULL AND b.email<>'' AND b.email COLLATE utf8mb4_unicode_ci=a.phone COLLATE utf8mb4_unicode_ci)",
+    "accounts_identity_groups": "SELECT COUNT(*) FROM (SELECT LOWER(TRIM(broker_server)),login_account FROM trading_accounts GROUP BY LOWER(TRIM(broker_server)),login_account) x",
+    "accounts_identity_duplicate_groups": "SELECT COUNT(*) FROM (SELECT LOWER(TRIM(broker_server)),login_account FROM trading_accounts GROUP BY LOWER(TRIM(broker_server)),login_account HAVING COUNT(*)>1) x",
+    "accounts_deleted_rows": "SELECT COUNT(*) FROM trading_accounts WHERE is_deleted<>0",
+    "accounts_nonascii_login": "SELECT COUNT(*) FROM trading_accounts WHERE LENGTH(login_account)<>CHAR_LENGTH(login_account)",
+    "bindings_currency_too_long": "SELECT COUNT(*) FROM mt5_account_bindings WHERE CHAR_LENGTH(account_currency)>12",
+    "ownership_overlapping_pairs": "SELECT COUNT(*) FROM mt5_account_ownership_history a JOIN mt5_account_ownership_history b ON a.id<b.id AND a.broker_server_key=b.broker_server_key AND a.login_account=b.login_account AND a.started_at<COALESCE(b.ended_at,'9999-12-31 23:59:59') AND b.started_at<COALESCE(a.ended_at,'9999-12-31 23:59:59')",
+    "bindings_current_owner_disagrees": "SELECT COUNT(*) FROM mt5_account_bindings b JOIN trading_accounts a ON a.id=b.current_trading_account_id WHERE b.current_user_id<>a.user_id",
+    "bindings_open_interval_disagrees": "SELECT COUNT(*) FROM mt5_account_bindings b WHERE NOT EXISTS (SELECT 1 FROM mt5_account_ownership_history o WHERE o.broker_server_key=b.broker_server_key AND o.login_account=b.login_account AND o.user_id=b.current_user_id AND o.trading_account_id=b.current_trading_account_id AND o.ended_at IS NULL)",
+    "ownership_identity_disagrees": "SELECT COUNT(*) FROM mt5_account_ownership_history o JOIN trading_accounts a ON a.id=o.trading_account_id WHERE UPPER(TRIM(a.broker_server))<>UPPER(TRIM(o.broker_server_key)) OR a.login_account<>o.login_account",
+    "bridge_refresh_invalid_hash_format": "SELECT COUNT(*) FROM bridge_refresh_sessions WHERE token_hash NOT REGEXP '^[0-9a-f]{64}$'",
+    "bridge_refresh_inactive_user": "SELECT COUNT(*) FROM bridge_refresh_sessions s JOIN users u ON u.id=s.user_id WHERE u.deletion_status<>'active' OR u.deleted_at IS NOT NULL",
+    "verification_rows": "SELECT COUNT(*) FROM verification_codes",
+    "observer_bridge_user_not_admin": "SELECT COUNT(*) FROM ai_observer_sources s LEFT JOIN users u ON u.id=s.bridge_user_id WHERE u.id IS NULL OR u.role<>'admin'",
+    "observer_channels_missing_source": "SELECT COUNT(*) FROM ai_observer_channels c LEFT JOIN ai_observer_sources s ON s.id=c.source_id WHERE s.id IS NULL"
+  },
+  "provenance": {
+    "sourceSnapshotId": "sha256:af5ed95821a392b62acc24779a3c802dba8d60fb32e713fead5ed25c7817e08c",
+    "localReferenceCommit": "75b8e944aafc759248e72800ca0ec36d00abd9b7",
+    "mode": "READ ONLY transaction; SELECT metadata and aggregates; ROLLBACK; no row values exported",
+    "scope": "11 first-wave source tables; selected target A metadata only; not a complete M1 audit",
+    "limitations": [
+      "Current reference source is not proof of every historical writer version.",
+      "No business rows or row hashes are published. B1 retains encrypted raw evidence.",
+      "Candidate normalized identity joins do not authorize entity merges.",
+      "Only supplemental aggregate query texts are included; first probe definitions are summarized in the B2 report."
+    ]
+  }
+}
