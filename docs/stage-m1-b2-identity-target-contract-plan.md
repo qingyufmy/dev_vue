@@ -1,6 +1,6 @@
 # M1 / B2 首批目标结构与读写合同设计
 
-> 2026-09-05；原设计基于 `a75efa71`。状态：设计与两轮复审完成；P1–P3、P4A/P4B 源码/离线批次完成，下一确认门为 P5 真实设备登记与只读发布能力。P4B 详见[实施记录](./stage-m1-b2-p4b-observer-management-report.md)，不代表管理页面或真实环境验收完成。
+> 2026-09-05；原设计基于 `a75efa71`。2026-09-06 修订：P1–P3、P4A/P4B 及 P5A 源码/离线批次完成；先补普通用户首次连接和换号，再按主路线图 §3.1 推进真实只读联调、P5B 与 Pro 无桥接订阅。此次收缩退役技术记录的在线查询范围，不代表迁移阻断解除或真实环境验收完成。
 >
 > 原设计轮次只修改方案与路线图，没有新增/执行 SQL 迁移。后续追加文件与离线验证见 [P1 记录](./stage-m1-b2-p1-user-state-schema-report.md)、[P2 记录](./stage-m1-b2-p2-account-ownership-report.md)、[P3 记录](./stage-m1-b2-p3-offline-accounts-history-report.md) 和 [P4A 记录](./stage-m1-b2-p4a-observer-read-authorization-report.md)。P3 已接线离线账户和历史归属边界；这些批次没有执行数据库/Redis/Bridge 连接、数据回填、服务启动、前端改版或交易测试，文件内容不是运行环境现状。
 
@@ -28,7 +28,7 @@
 | `terminal_profiles/bindings/sessions` | 沿用，禁止由缺失旧字段伪造 | 真实设备和当前路由 |
 | `observer_sources`（新增） | 一观摩源一行 | 源操作者、账户、可选分析策略及配置状态 |
 | `observer_channels/accesses` | 沿用并追加 | 频道受众/排序及显式授权 |
-| `legacy_domain_records`（新增，和 B3 共同实施） | 仅退役事实的可查询索引 | 加密历史载荷定位和授权元数据，不承接活动会员/推荐功能 |
+| 退役技术记录归档（B3 处置证据） | 备份、来源定位与逐行对账 | 不强制新增 `legacy_domain_records` 在线表；有明确业务查询需求时另定专用读取方式，不承接活动会员/推荐功能 |
 
 不添加第二套认证服务、万能属性 EAV 表、迁移常驻 Worker 或第二套交易事实库。新增表由对应域 repository 负责；跨域只调用应用端口，不从路由直接写 SQL。
 
@@ -205,15 +205,12 @@
 
 ## 7. 受控历史证据与迁移清单衔接
 
-为退役 verification、consumed pairing、旧 terminal session、旧在线心跳提供 `legacy_domain_records`，与 B3 row receipt 分工：receipt 证明每源行处置；domain record 提供受控查询入口，不能代替 receipt。
+2026-09-06 用户确认收缩：已退役的 verification、consumed pairing、旧 terminal session、旧在线心跳不默认建立通用在线解密查询系统。原 `legacy_domain_records` 表及逐行 payload 服务不再是首版强制前置能力。
 
-最小列：id CHAR(36)、logical_source_id、source_table（代码白名单）、source_pk_canonical/hash、record_kind（有限领域类型）、subject_user_id NULL、trading_account_id NULL、ownership_interval_id NULL、occurred_at_utc NULL、time_kind、payload_ref、payload_sha256、snapshot_id、created_at_utc；唯一 `(logical_source_id,source_table,source_pk_hash)`，hash 命中还必须比较完整规范化 PK，避免悄悄合并冲突。
-
-- payload_ref 指向受限加密逐行载荷/包，类型、NULL、原时间词法和原字段字节保留；不是公开磁盘路径或任意 SQL 查询入口。原 encrypted dump 继续保留为恢复证据。
-- 索引按 subject_user/record_kind/id 及 account/interval/id；列表不读取 payload，详情先鉴权再解密。用户/管理员两套明确读取权限；管理员访问敏感历史须有专门能力和审计，不等于所有管理员常规列表可导出验证码。
-- 不提供重新消费验证码/配对、恢复 session、重发通知或执行历史命令的按钮/API。退出活动流程不等于删除原事实。
-- 用户/member/推荐/观摩等仍需使用的功能不能只存此表。所有未知时间字段仍 blocked，不能用保存进历史的成功替代活动 UTC 转换成功。
-- B3 真正执行前还需配置加密服务/key reference、载荷格式版本、保留/删除策略和恢复演练。没有这些就保持 G-EVIDENCE，不临时自创加密算法或明文落盘。
+- 继续保留完整受限加密备份、格式/密钥引用、checksum、来源表与主键定位、逐行 receipt 和恢复演练。receipt 证明处置结果，不代替源数据；保留原类型、NULL、时间词法及字段字节，不允许因退役而直接丢弃。
+- 排障恢复走受控离线流程并记录访问；不默认提供普通用户/管理员逐行解密接口，不提供重新消费验证码/配对、恢复旧 session、重发通知或执行历史命令的入口。
+- 交易、资金、会员、推荐、账户归属及其它仍需使用的业务历史，继续落入对应活动领域及授权查询接口，不能只留备份。新增在线归档查询必须有明确功能与访问需求，优先专用读取，不预建通用平台。
+- B3 前在新版映射中列明每种退役记录的备份位置标识、定位与恢复证明、保存规则；加密备份和恢复门仍保留，不新创加密算法。没有证据仍保持 G-EVIDENCE；未知活动时间字段仍 blocked。
 
 本设计不修改 `m1-b2-identity-field-manifest-20260905.json` 的 reviewed/blocked 结果。后续实现提供新的 manifest 版本和每个 gap 的证据，再逐项关闭；规格文字完成不等于 138 个阻断字段已可迁移。
 
@@ -239,7 +236,7 @@
 | P2 | 归属区间/用户账户设置/授权投影及 AccountAccessPolicy 合同与测试 | 重复转入转出不覆盖；本人历史可读；他人私有历史/当前交易不可读 | 原库数据合并、终端操作 |
 | P3 | 离线账户查询、nullable DTO/客户端；历史入口和采集归属 guard | 无 profile 仍可见；不靠最新连接用户重分历史；列表无重复、无假在线 | 新 UI 设计、真实执行测试 |
 | P4 | source/channel/accesses 结构、统一观摩鉴权、失效合同 | all/等级/显式授权四类真值表；列表/进入/HTTP/WS 一致；禁用传播有界且失败关闭 | 任意授予操作者交易权 |
-| P5 | 与 Bridge 专项合并完成真实设备登记和只读发布能力；B3 历史证据适配 | 不伪造 profile；刷新兼容/撤销保留；模拟跨账户攻击失败 | 未获许可的实机连接/交易、安装器发布 |
+| P5 | P5A 已认证设备登记后，先补首次连接/换号；再做获准只读联调、P5B 发布 | 不伪造 profile；刷新兼容/撤销保留；用户流程与异常可验收；详见主路线图 §3.1 | 未获许可的实机连接/交易、安装器发布；B3 归档查询不是首次连接前置条件 |
 | 后续 B2 | 模型/策略/执行/复盘/商业等剩余字段与时间证明 | 完整领域映射与全部活动功能承接 | 未确认的 B3 回填、切流、删表 |
 
 最低负向/并发样例：
@@ -282,4 +279,6 @@
 
 补充需求复审：第一轮确认 Telegram 绑定不再属于活动功能，避免为已取消需求建表；第二轮确认取消功能不等于删除旧数据，保留冻结证据及后续逐字段历史处置门，不复活旧绑定或通知。本次修订仅改文档。
 
-用户随后已确认并完成 P1（不含 Telegram 绑定）、P2、P3 和 P4A/P4B 的源码/离线批次；最终验证以各批次记录为准。P4B 补管理 HTTP、存储、审计和失效传播，不含管理页面视觉实现。不改运行库，不启用认证、财务或通知写入；下一确认门为 P5。018–022 未执行，后续登记/接管与历史回填尚未完成，不以离线接线代替运行切换验收。
+用户随后已确认并完成 P1（不含 Telegram 绑定）、P2、P3、P4A/P4B 和 [P5A](./stage-m1-b2-p5a-device-registration-report.md) 的源码/离线批次；最终验证以各批次记录为准。当前顺序以[主路线图 §3.1](./refactor-master-roadmap.md#31-当前优先顺序与最小交付范围2026-09-06-修订)为准，首次配对、认领和完整换号仍待实现。018–023 未执行，历史回填和运行切换未完成。
+
+本次两轮复审：第一轮去掉无明确用户需求的通用退役记录查询平台，保留活动历史与普通用户入口；第二轮确认不修改冻结 manifest/既有迁移，不将备份等同于活动查询，不因收缩在线功能解除逐字段对账、时间证明与恢复门。部署与提交规则同步主路线图，未进行代码、数据库或运行环境修改。

@@ -1,6 +1,6 @@
 # 后端目标架构与异步任务隔离方案
 
-> 状态：阶段 5 已冻结，尚未实施
+> 状态：架构已冻结，V4 TypeScript 入口及独立 PM2 角色已实现；具体业务进度见主路线图。2026-09-06 按本地 `c433155e` 校正部署入口，不代表宝塔或真实依赖验收通过。
 >
 > 日期：2026-09-02
 >
@@ -25,9 +25,11 @@
 
 这里的“模块化单体”不等于“所有工作跑在一个进程”：业务代码和数据合同仍在一个代码库中复用，但不同运行职责必须由不同 OS 进程承载。后台任务故障、阻塞或内存上涨不得影响 API、实时网关、Bridge 网关或其它任务组。
 
-## 2. 当前代码事实
+## 2. 重构前代码事实（历史基线）
 
 以下是 2026-09-02 对本地 `dev_vue`、提交 `3813000f0e3b1b5ce99e198360bdaf66c8abc658` 的只读审查结果，不代表目标架构已经实现。
+
+本节只保留重构动机，不用于判断当前源码或运行状态。当前源码入口为 `server/src/entrypoints/`，运行角色以根 `ecosystem.v4.config.cjs` 为准，阶段证据以[主路线图](./refactor-master-roadmap.md)为准。
 
 ### 2.1 单进程承担过多职责
 
@@ -104,7 +106,7 @@ cache Redis                     可重建缓存、限流、短锁、实时修订
 
 正式环境继续使用宝塔“网站 → Node 项目”作为统一管理入口，不创建十个宝塔项目，也不要求运维人员在终端逐个启动进程。
 
-宝塔官方 Node.js 部署文档推荐使用 `ecosystem.config.cjs` 创建 PM2 项目；本项目按该方式注册一个 `aurum_ai` PM2 项目，由同一配置文件的 `apps` 数组声明全部独立运行角色。参见[宝塔面板 Node.js PM2 部署](https://docs.bt.cn/practical-tutorials/nodejs-pm2-deployment)与 [PM2 Ecosystem File](https://pm2.keymetrics.io/docs/usage/application-declaration/)。
+本项目使用根 `ecosystem.v4.config.cjs` 注册一个 `aurum_ai` PM2 项目，由同一配置文件的 `apps` 数组声明全部独立运行角色；不要误选旧版启动配置。面板使用方式参考[宝塔面板 Node.js PM2 部署](https://docs.bt.cn/practical-tutorials/nodejs-pm2-deployment)与 [PM2 Ecosystem File](https://pm2.keymetrics.io/docs/usage/application-declaration/)，目标面板版本仍须实际验收。
 
 宝塔面板目标配置：
 
@@ -113,15 +115,15 @@ cache Redis                     可重建缓存、限流、短锁、实时修订
 | 项目类型 | PM2 项目 | 不使用默认单入口项目或传统项目 |
 | 项目名称 | `aurum_ai` | 面板只保留一个统一项目入口 |
 | Node 版本 | Node.js 24 LTS 的已验证补丁版本 | 截图中的 `v24.18.0` 属于 24 LTS；上线前以锁定版本的完整测试为准 |
-| 启动文件 | `ecosystem.config.cjs` | `apps` 数组声明 API、网关、scheduler 和 Worker |
+| 启动文件 | `ecosystem.v4.config.cjs` | `apps` 数组声明 API、网关、scheduler 和 Worker |
 | 运行目录 | 项目正式部署根目录 | 当前目录未变时为 `/www/wwwroot/aurum-ai` |
 | 面板负载实例数 | `1` | 禁止由面板把 scheduler 或 Worker 整体复制多份 |
 | 内存上限 | 不使用一个项目级统一上限代替角色预算 | 每个 app 在 ecosystem 中分别配置 |
 | 自动重载 | 关闭 | 生产环境 `watch: false`，代码发布后受控 reload |
-| 包管理器 | `npm` | 与仓库 `packageManager` 保持一致，不切换为 pnpm |
+| 包管理器 | `pnpm` | 版本以根 `package.json` 的 `packageManager` 为准；安装使用仓库 lockfile，面板不支持锁定版本时先独立安装再选择不安装依赖，不改用 npm 重解依赖 |
 | 环境变量 | 只放非敏感启动参数 | 密钥仍由 `server/.env` 或后续密钥机制提供 |
 
-`ecosystem.config.cjs` 的原则：
+`ecosystem.v4.config.cjs` 的原则：
 
 - 每个运行角色是一个独立 `apps` 项，使用 `fork` 模式和独立进程名。
 - 初始每个角色 `instances: 1`；API 是否增加实例必须经过连接池、幂等和负载测试，scheduler 不能靠增加实例提升性能。
@@ -129,6 +131,8 @@ cache Redis                     可重建缓存、限流、短锁、实时修订
 - 宝塔项目列表负责“一键启动/停止/重启整个 AURUM”；宝塔的 PM2 监控负责查看和处理单个角色。
 - 单个 Worker 崩溃时由 PM2 只重启该角色；只有用户在宝塔主动停止整个项目时，所有角色才一起停止。
 - 数据库迁移是独立部署命令，不得放进任一 app 的启动入口，避免多进程同时迁移。
+
+2026-09-06 本地配置已有 11 个角色，数量不是目标；不为每个小功能继续增加进程。保持 API、实时、Bridge 与耗时/关键任务隔离，新增独立角色必须有故障隔离或调度预算依据。`max_memory_restart` 是重启阈值，不是实测占用；先测总连接池、CPU、内存、队列延迟与启动恢复，再优化低频任务分组。本次没有改变运行配置。
 
 这种方式保留用户熟悉的宝塔管理体验，同时仍满足后台任务和主进程的 OS 进程隔离。最终需在目标宝塔版本上实测项目启停、单角色重启、日志、开机自启、优雅停机和异常恢复。
 
