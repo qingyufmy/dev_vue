@@ -1,6 +1,8 @@
 # 数据库规范化与全量数据迁移方案
 
-> 状态：阶段 7 逐表设计已完成，尚未执行结构变更
+> 状态：阶段 7 历史设计基线；2026-09-05 已完成 M1 双库结构演练，尚未回填旧数据。
+>
+> 最新执行依据：[M1 源备份、字段映射与回填对账方案](./stage-m1-data-backfill-and-reconciliation-plan.md)。本文的逻辑实体候选不等于当前已建物理表。
 >
 > 版本：1.1
 >
@@ -208,7 +210,7 @@ trading_account_ownerships
 - 关系键统一 `<entity>_id`；外部协议标识使用清楚名称，如 `command_id`、`ticket`、`provider_request_id`。
 - 现有用户 ID 和核心业务 ID 迁移时原值保留；新建高频事件表默认使用 `BIGINT UNSIGNED` 自增主键。
 - 金额、价格、手数和风险金额使用明确精度的 `DECIMAL`，禁止新增 `DOUBLE` 保存需要精确比较的交易数值。由 MT 原始浮点转换时按品种 digits、volume step 和原始字符串核对。
-- 布尔值使用 `TINYINT(1) NOT NULL`，状态使用受控字符串并由 CHECK/应用合同共同校验；不使用难以演进的 MySQL ENUM。
+- 布尔值使用 `TINYINT(1) NOT NULL`；状态由数据库约束与应用合同共同校验。当前已执行 SQL 的稳定 ENUM 保留，新增状态须追加迁移并同步合同，不为符合早期类型偏好重写历史 SQL。
 - 新时间列使用 `DATETIME(3)` 并按 UTC 写入；会话统一 `time_zone = '+00:00'`。终端业务时间不直接替代 UTC，只保存 `observed_at_utc`、`timezone_offset_minutes`、校准状态和来源。
 - 原生结构化数据优先使用 MySQL JSON；需要 `gzip-base64` 或其它编码的大载荷使用 `LONGTEXT/LONGBLOB + encoding + sha256 + byte_size`，不能伪装成原生 JSON。
 - 可搜索、可关联、可排序的业务字段不得只存在 JSON 中。
@@ -307,27 +309,18 @@ users
 
 ### 6.1 文件结构
 
-停止继续向单个 `server/migrations.js` 追加。目标结构：
+停止继续向单个 `server/migrations.js` 追加。当前已落地结构（不再采用早期 JS migration 目录草图）：
 
 ```text
-server/db/
-  pool.js
-  transaction.js
-  migration-runner.js
-  migrations/
-    0001-baseline.js
-    0002-auth-sessions.js
-    0003-trading-account-identity.js
-  repositories/
-    auth/
-    users/
-    commerce/
-    trading/
-    strategies/
-    analysis/
-    risk/
-    reviews/
-    audit/
+server/db/migrations/
+  bootstrap/v4-foundation-v1.sql
+  20260903_001_bridge_v4_device_sessions.sql
+  ...                             # 001～017，已执行文件不可变
+  20260905_017_economic_calendar.sql
+  corrections/011-execution-intent-foreign-keys.sql
+scripts/migrate-v4-schema.mjs      # 显式 CLI，非应用启动钩子
+scripts/lib/v4-*.mjs              # 清单、执行、审计与恢复模块
+server/src/modules/*/infrastructure/ # 领域 Repository
 ```
 
 迁移文件一经在任何共享环境执行不得修改，只能新增纠正迁移。
@@ -342,24 +335,26 @@ server/db/
 
 ### 6.2 迁移记录
 
-新版 `schema_migrations` 至少记录：
+当前新版 `schema_migrations` 记录：
 
-- `version`
-- `name`
+- `id`
 - `checksum_sha256`
-- `applied_at`
-- `duration_ms`
-- `application_version`
 - `execution_id`
+- `status`
+- `statement_count` / `completed_statements`
+- `started_at_utc` / `completed_at_utc`
+- `error_code`
 
-启动时：
+追加 `schema_migration_events` 保存恢复授权、原失败现场与纠正产物 hash。旧库 214 条迁移事实另行完整保留，不作为 V4 SQL 已执行记录，不补造旧正文 checksum。数据回填 run、ID map、receipt 与 checkpoint 尚待独立实现。
+
+显式运行迁移 CLI 时：
 
 - 数据库存在仓库未知版本：失败关闭并提示先同步代码。
 - 同版本校验和不同：失败关闭，禁止继续。
 - 迁移顺序缺口或重复：失败关闭。
 - 继续使用数据库级 advisory lock，避免并发迁移。
 
-不要把大型数据回填塞入启动迁移。启动迁移只做可预估的结构步骤；大数据迁移由显式命令运行并记录 checkpoint。
+结构和数据迁移均不能随应用/PM2 启动自动执行。结构由受控 CLI 执行；大数据迁移由另一个显式命令运行并记录 checkpoint。
 
 ### 6.3 DDL 安全
 
@@ -372,25 +367,29 @@ server/db/
 
 ### 7.1 总策略
 
-当前 `dev_vue` 是从最新测试虚拟机备份导入的迁移源。它应当先被冻结为只读基线，不在原表上直接做破坏性重写。
+当前 `dev_vue` 是从测试虚拟机备份导入的迁移源。当前操作只读，但不能把本轮计数观测等同于持久化冻结；须经新备份和恢复源镜像固定回填输入，不在原表上重写。
 
 开发期采用旁路目标库：
 
 ```text
 dev_vue                  # 迁移源，只读保留
-dev_vue_next             # 新结构迁移演练目标，实施时创建
+dev_vue_m1_a             # 已批准并完成结构安装，保留审计
+dev_vue_m1_b             # 已批准并完成结构安装，保留审计
+dev_vue_m1_source_20260905_01 # 建议的恢复源镜像，尚未批准/创建
 ```
 
-本方案不授权现在创建 `dev_vue_next`。正式实施前先生成新的可恢复备份并记录哈希、MySQL 版本和源库快照时间。
+新恢复源镜像和受限备份路径须单独确认。正式回填前生成可恢复备份，记录 hash、版本和快照来源；A/B 共用同一恢复源。
 
 旁路迁移的收益：
 
 - 任一转换失败不污染源库。
 - 可以逐表比较用户、账户、策略、信号、订单、复盘和支付数据。
-- 可以反复清空目标库并从同一源快照重跑，证明迁移确定性。
+- 使用同一冻结源在独立 A/B 目标验证确定性与幂等；保留失败现场，不自行清空目标库。
 - 前后端可以通过独立配置切换，不需要在旧表和新表之间长期双写。
 
 正式上线时使用维护窗口完成最后增量或重新从停写快照迁移；本项目本地阶段不需要提前实现复杂双写。
+
+切流后若产生新写入，不能仅切回旧连接；必须先冻结新增事实并逆向对账，终端成交也不能通过恢复旧库撤销。具体门禁以最新 M1 方案为准。
 
 ### 7.2 阶段
 

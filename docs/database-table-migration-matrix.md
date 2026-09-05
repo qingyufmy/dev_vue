@@ -1,10 +1,12 @@
 # 数据库逐表迁移矩阵
 
-> 状态：阶段 7 设计基线，尚未执行 DDL、DML、回填、建库或删除
+> 状态：阶段 7 逻辑设计基线；M1 已完成双库结构安装，尚未回填旧数据。
+>
+> 最新执行依据：[M1 回填方案](./stage-m1-data-backfill-and-reconciliation-plan.md) 与 [165 表物理差异清单](./migration/m1-source-target-gap-matrix-20260905.md)。下列候选目标不代表已经建成，禁止直接据此复制数据。
 >
 > 数据源：`dev_vue`，MySQL 8.4.8
 >
-> 冻结时间：2026-09-02（只读一致性快照）
+> 初始观测时间：2026-09-02（只读一致性事务，不是持久化备份）；2026-09-05 复核源表计数不变。
 >
 > 关联方案：[数据库规范化与全量数据迁移方案](./database-normalization-and-data-migration-plan.md)
 
@@ -185,7 +187,7 @@
 - `ai_signals` 有 1,015 条记录使用 `user_id=0` 表示平台分析，不是真实 `users` 孤儿。目标改为 `owner_user_id NULL + owner_scope='platform'`，不能创建 ID 0 伪用户，也不能删除这些信号。
 - 分析记录仍按系统账号归类；交易账户只记录信号所用交易上下文或后续交付目标，不能按 MT 登录账号重分类历史分析。
 
-## 10. 统一交易执行、分发和终端结果（14 张）
+## 10. 统一交易执行、分发和终端结果（15 张）
 
 | 源表 | 行数 | 动作 | 目标 | 转换与对账重点 |
 | --- | ---: | --- | --- | --- |
@@ -221,7 +223,9 @@ operations
 - 批量操作的父状态由子目标推导；父行不保存会与子状态分叉的第二套手工状态。
 - 交易执行细则统一执行[交易执行统一状态机与数据一致性方案](./trade-execution-state-machine.md)。
 
-## 11. 风控政策、决策和账户状态（9 张）
+## 11. 风控政策、决策和账户状态（8 张）
+
+`risk_reservations` 的唯一迁移条目见第 10 节，风控域引用其结果，不重复回填。
 
 迁移期间，旧库已经存在且字段不同的 `risk_policy_sets`、`risk_policy_versions`、`risk_policy_change_items`、`risk_decisions` 必须保留给旧程序读取；V4 先落到对应 `_v4` 旁路表。只有回填、拒绝清单、行数/哈希双读对账及流量切换全部通过后，才允许在最终清理迁移中归档旧表并把 V4 表规范化为下表目标名称。
 
@@ -233,7 +237,6 @@ operations
 | `risk_profiles` | 0 | 合并 | `risk_policy_sets`、`risk_policy_versions` | 旧 profile 配置迁版本模型；空表仍需先移除服务引用 |
 | `risk_account_state` | 4 | 重塑 | `account_risk_states`、`risk_state_events` | 当前态按 trading_account 唯一；kill switch、停机原因和手工重置变更写不可变事件 |
 | `risk_decisions` | 395 | 保留 | `risk_decisions` | intent 一对一；原始/批准订单和规则结果拆 payload 可选，拒绝码结构化 |
-| `risk_reservations` | 362 | 保留 | `risk_reservations` | intent 一对一；金额/手数/名义价值 DECIMAL，过期释放幂等，状态与账户索引匹配 worker claim |
 | `risk_rule_rollouts` | 19 | 保留 | `risk_rule_rollouts` | 规则代码唯一；模式、强制执行和修改审计保留，revision/CAS 更新 |
 | `global_risk_control` | 1 | 重塑 | `global_risk_controls`、`risk_state_events` | 全局 kill switch 当前态与每次变化事件分离；所有交易入口读取同一权威状态 |
 
@@ -434,19 +437,15 @@ unknown_matrix_tables = 0
 
 ```text
 server/db/migrations/
-  0001_migration_infrastructure.js
-  0002_identity_and_auth.js
-  0003_membership_and_commerce.js
-  0004_terminal_and_trading_accounts.js
-  0005_strategies_and_subscriptions.js
-  0006_models_and_analysis.js
-  0007_execution_and_risk.js
-  0008_reviews_and_memory.js
-  0009_content_notifications_and_audit.js
-  0010_constraints_and_query_indexes.js
+  bootstrap/v4-foundation-v1.sql
+  20260903_001_bridge_v4_device_sessions.sql
+  ... # 001～017，已执行文件保持不可变
+  20260905_017_economic_calendar.sql
+  corrections/011-execution-intent-foreign-keys.sql
+scripts/migrate-v4-schema.mjs
 ```
 
-迁移文件只建目标结构和小型确定性种子；数据回填使用独立命令，不能在应用或 PM2 多进程启动时自动执行。
+以上为当前实现，替代早期 0001～0010 JS 文件草图。缺失领域及回填审计结构使用后续追加 SQL，不重写现有文件。迁移文件只建目标结构和小型确定性种子；数据回填使用独立命令，不能在应用或 PM2 多进程启动时自动执行。
 
 ### 18.2 数据回填批次
 
