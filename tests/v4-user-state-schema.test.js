@@ -14,13 +14,13 @@ const [alterUsers, createReferralAccounts] = statements
 const sourceUsers = new Map(sourceObservation.source.users.columns.map(column => [column.name, column]))
 
 describe('V4 user state and referral-account migration', () => {
-  it('is the final numbered migration and contains exactly the two planned statements', async () => {
+  it('retains its append-only position and contains exactly the two planned statements', async () => {
     const plan = await loadMigrationPlan({ rootDirectory: root })
-    const last = plan.at(-1)
+    const userMigration = plan[18]
 
-    expect(last).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })
-    expect(last.statements).toHaveLength(2)
-    expect(last.statements).toEqual(statements)
+    expect(userMigration).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })
+    expect(userMigration.statements).toHaveLength(2)
+    expect(userMigration.statements).toEqual(statements)
     expect(() => validateMigrationStatement(alterUsers, migrationId)).not.toThrow()
     expect(() => validateMigrationStatement(createReferralAccounts, migrationId)).not.toThrow()
   })

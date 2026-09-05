@@ -1,4 +1,6 @@
 export * from './domain/trading.js'
+export * from './domain/account-access.js'
+export * from './application/account-access-policy.js'
 export * from './application/trading-ports.js'
 export * from './application/trading-service.js'
 export * from './application/bridge-stream-projector.js'

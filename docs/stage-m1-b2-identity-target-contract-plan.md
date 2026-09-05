@@ -2,7 +2,7 @@
 
 > 2026-09-05；基于 `a75efa71`。状态：设计与两轮复审完成，等待分批实施确认。
 >
-> 原设计轮次只修改方案与路线图，没有新增/执行 SQL 迁移。后续 P1 用户状态及推荐账户的追加 SQL 文件与离线验证见 [P1 记录](./stage-m1-b2-p1-user-state-schema-report.md)；其余仍是待实施合同。没有因 P1 执行数据库/Redis/Bridge 连接、数据回填、服务启动、前端改版或交易测试，文件内容不是运行环境现状。
+> 原设计轮次只修改方案与路线图，没有新增/执行 SQL 迁移。后续追加文件与离线验证见 [P1 记录](./stage-m1-b2-p1-user-state-schema-report.md)、[P2 记录](./stage-m1-b2-p2-account-ownership-report.md)。P2 已提供归属结构与内部权限规则，但 repository、HTTP/WS 和历史采集尚未接线；没有执行数据库/Redis/Bridge 连接、数据回填、服务启动、前端改版或交易测试，文件内容不是运行环境现状。
 
 ## 1. 输入与边界
 
@@ -137,7 +137,7 @@
 
 历史账户列表是独立 read-only 入口（候选 `GET /api/v4/trading-accounts?access=history`），可以展示本人曾经拥有/具有本人记录的账户；不能复用它作为 execution 的 ownsAccount。
 
-新增内部端口 `AccountAccessPolicy`，明确 `canReadCurrentAccount / canReadOwnHistory / canExecute / canObservePublished`，由 trading 域实现，history/reviews/execution 调用端口。不得写一个含混的 `canAccessAccount=true` 横跨全部用途。当前 `TradeHistoryService.records → ownsAccount` 必须在该批改为历史读取授权，详情、列表、统计、下载采用同一记录范围。
+新增内部端口 `AccountAccessPolicy`，明确 `canReadCurrentAccount / canReadOwnHistory / canExecute / canObservePublished`，由 trading 域实现，history/reviews/execution 调用端口。不得写一个含混的 `canAccessAccount=true` 横跨全部用途。P2 先提供合同和规则测试；当前 `TradeHistoryService.records → ownsAccount` 必须在 P3 与下述采集归因一起改为历史读取授权，详情、列表、统计、下载采用同一记录范围，不能只放开查询而继续错误归因。
 
 还需修正历史采集归因：当前 collector 新建记录使用 route.userId，而终端可能返回前一 owner 时期的数据。必须按不可变系统来源或发生时间对应的可靠区间解析；不按采集时的连接用户给历史数据改 owner。跨归属区间的持仓、分批成交不能仅按开/平某一时间给整单授权；无法明确时保留 terminal facts 并标 unresolved，等待精确拆分/对账，不暴露给新 owner。现唯一 `(account, stable_trade_key)` 继续防止同笔交易重复计数；本批不为新旧用户各复制一份完整成交。
 
@@ -281,4 +281,4 @@
 
 补充需求复审：第一轮确认 Telegram 绑定不再属于活动功能，避免为已取消需求建表；第二轮确认取消功能不等于删除旧数据，保留冻结证据及后续逐字段历史处置门，不复活旧绑定或通知。本次修订仅改文档。
 
-用户随后已确认 P1（不含 Telegram 绑定），本批交付范围为追加 018 文件和离线测试；最终验证及下一确认门以 [P1 记录](./stage-m1-b2-p1-user-state-schema-report.md) 为准。不改运行库，不启用认证、财务或通知写入；后续 P2 仍需另行确认。
+用户随后已确认并完成 P1（不含 Telegram 绑定）和 P2 的源码/离线批次；最终验证以 [P1 记录](./stage-m1-b2-p1-user-state-schema-report.md)、[P2 记录](./stage-m1-b2-p2-account-ownership-report.md) 为准。不改运行库，不启用认证、财务或通知写入；下一确认门为 P3 离线账户读模型与历史记录归属防护。

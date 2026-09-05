@@ -13,14 +13,14 @@ const plan = [
 ]
 
 describe('V4 schema runner', () => {
-  it('loads all 19 files including reviewed DML in original order', async () => {
+  it('loads all 20 files including reviewed DML in original order', async () => {
     const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
-    expect(actual).toHaveLength(19)
+    expect(actual).toHaveLength(20)
     expect(actual[0].id).toBe(BOOTSTRAP_ID)
-    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(145)
+    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(149)
   })
   it('applies real 018 only after 017 and skips its completed statements without replay', async () => {
-    const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
+    const actual = (await loadMigrationPlan({ rootDirectory: process.cwd() })).slice(0, 19)
     const corrections = await loadMigrationCorrections({ rootDirectory: process.cwd() }, actual)
     const f = fixture()
     const paused = await runSchemaMigrations(f.execution, f.control, actual, {
@@ -47,7 +47,7 @@ describe('V4 schema runner', () => {
     expect(f.state.executionSql.filter(sql => sql === actual[18].statements[1])).toHaveLength(1)
   })
   it('records a failed 018 checkpoint after its first DDL and never replays either statement', async () => {
-    const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
+    const actual = (await loadMigrationPlan({ rootDirectory: process.cwd() })).slice(0, 19)
     const corrections = await loadMigrationCorrections({ rootDirectory: process.cwd() }, actual)
     const f = fixture({ failStatement: actual[18].statements[1] })
     await runSchemaMigrations(f.execution, f.control, actual, {
@@ -68,6 +68,64 @@ describe('V4 schema runner', () => {
     expect(f.state.history.get(actual[18].id)).toMatchObject({ status: 'failed', completed_statements: 1 })
     expect(f.state.executionSql.filter(sql => sql === actual[18].statements[0])).toHaveLength(1)
     expect(f.state.executionSql.filter(sql => sql === actual[18].statements[1])).toHaveLength(1)
+  })
+  it('applies real 019 only after 018, skips its completed statements and never replays them', async () => {
+    const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
+    const corrections = await loadMigrationCorrections({ rootDirectory: process.cwd() }, actual)
+    const f = fixture()
+    const paused = await runSchemaMigrations(f.execution, f.control, actual, {
+      ...options, apply: true, stopAfterMigration: actual[18].id, corrections,
+    })
+
+    expect(paused).toMatchObject({ status: 'paused', applied: actual.slice(0, 19).map(migration => migration.id) })
+    expect(f.state.executionSql).not.toContain(actual[19].statements[0])
+    expect(f.state.executionSql).not.toContain(actual[19].statements[1])
+    expect(f.state.executionSql).not.toContain(actual[19].statements[2])
+    expect(f.state.executionSql).not.toContain(actual[19].statements[3])
+
+    const resumed = await runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections })
+    expect(resumed).toMatchObject({ status: 'completed', applied: [actual[19].id], skipped: 19 })
+    for (const statement of actual[19].statements) {
+      expect(f.state.executionSql.filter(sql => sql === statement)).toHaveLength(1)
+    }
+    const priorStatementIndex = f.state.executionSql.indexOf(actual[18].statements.at(-1))
+    const first019Index = f.state.executionSql.indexOf(actual[19].statements[0])
+    const last019Index = f.state.executionSql.indexOf(actual[19].statements.at(-1))
+    expect(first019Index).toBeGreaterThan(priorStatementIndex)
+    expect(f.state.executionSql.slice(first019Index, last019Index + 1)).toEqual(actual[19].statements)
+
+    const skipped = await runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections })
+    expect(skipped).toMatchObject({ applied: [], skipped: 20 })
+    for (const statement of actual[19].statements) {
+      expect(f.state.executionSql.filter(sql => sql === statement)).toHaveLength(1)
+    }
+  })
+  it('records a failed 019 checkpoint after a partial DDL and fail-closes without replay', async () => {
+    const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
+    const corrections = await loadMigrationCorrections({ rootDirectory: process.cwd() }, actual)
+    const f = fixture({ failStatement: actual[19].statements[1] })
+    await runSchemaMigrations(f.execution, f.control, actual, {
+      ...options, apply: true, stopAfterMigration: actual[18].id, corrections,
+    })
+
+    await expect(runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections }))
+      .rejects.toThrow('migration_statement_failed')
+    expect(f.state.history.get(actual[19].id)).toMatchObject({
+      status: 'failed', statement_count: 4, completed_statements: 1, error_code: 'migration_statement_failed',
+    })
+    expect(f.state.executionSql.filter(sql => sql === actual[19].statements[0])).toHaveLength(1)
+    expect(f.state.executionSql.filter(sql => sql === actual[19].statements[1])).toHaveLength(1)
+    expect(f.state.executionSql).not.toContain(actual[19].statements[2])
+    expect(f.state.executionSql).not.toContain(actual[19].statements[3])
+
+    f.state.failStatement = null
+    await expect(runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections }))
+      .rejects.toThrow('migration_incomplete')
+    expect(f.state.history.get(actual[19].id)).toMatchObject({ status: 'failed', completed_statements: 1 })
+    expect(f.state.executionSql.filter(sql => sql === actual[19].statements[0])).toHaveLength(1)
+    expect(f.state.executionSql.filter(sql => sql === actual[19].statements[1])).toHaveLength(1)
+    expect(f.state.executionSql).not.toContain(actual[19].statements[2])
+    expect(f.state.executionSql).not.toContain(actual[19].statements[3])
   })
   it('splits quoted semicolons, escapes and comments without executing comments', () => {
     expect(splitSqlStatements("-- skip;\nCREATE TABLE x (v TEXT DEFAULT 'a;''b'); /* skip; */ ALTER TABLE x ADD y INT;"))

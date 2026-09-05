@@ -6,6 +6,8 @@
 
 ## 1. 输入和可复核产物
 
+后续结构进度：[P2 记录](./stage-m1-b2-p2-account-ownership-report.md) 已补归属区间、用户账户设置和四类内部授权规则，仅源码与离线验证。下方冻结清单及源观测不改写；时间转换、关系映射、运行接线和回填证据门仍未关闭。
+
 - 冻结输入：`dev_vue_m1_source_20260905_01`；实例 UUID `ac423207-6ef3-11f1-b302-000c29fda104`；MySQL 8.4.8。
 - source snapshot：`sha256:af5ed95821a392b62acc24779a3c802dba8d60fb32e713fead5ed25c7817e08c`；恢复证明见 [B1 验收](./stage-m1-b1-retained-backup-continuation.md)。
 - 本次元数据/聚合观测开始于 `2026-09-05T09:52:39.747943Z`。通过独立 READ ONLY 事务执行 SELECT 后 ROLLBACK；未重新导出源库。
