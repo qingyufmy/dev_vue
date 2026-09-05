@@ -27,6 +27,7 @@ async function main() {
   const hub = new BrowserRealtimeHub(tradingRepository, observerAccess)
   const events = new RedisBrowserRealtimeSubscriber(eventCache, {
     publish(event) { hub.publish(event); health.workSucceeded() },
+    invalidateObserverAuthorization(control) { hub.invalidateObserverAuthorization(control); health.workSucceeded() },
   }, undefined, code => health.workFailed(code))
   const app = Fastify({ logger: true, bodyLimit: 8 * 1024, trustProxy: true })
   const webSockets = new BrowserRealtimeWebSocketServer(

@@ -11,7 +11,7 @@ import {
   type BrowserRealtimeEvent, type TradingReadRepository, type TradingRealtimeEvent,
 } from '../src/modules/trading/index.js'
 import { BrowserRealtimeWebSocketServer } from '../src/transport/browser-realtime-websocket-server.js'
-import { exactTradeHostHook, registerApiV4Routes, type ApiV4RouteServices } from '../src/transport/api-v4-route-registrar.js'
+import { exactTradeHostHook, exactAdminHostHook, registerApiV4Routes, type ApiV4RouteServices } from '../src/transport/api-v4-route-registrar.js'
 
 const closers: Array<() => Promise<void>> = []
 afterEach(async () => { for (const close of closers.splice(0).reverse()) await close() })
@@ -33,7 +33,7 @@ describe('V4 browser realtime runtime', () => {
     const redis = new FakeRedis()
     const published: BrowserRealtimeEvent[] = []
     const invalid: string[] = []
-    const subscriber = new RedisBrowserRealtimeSubscriber(redis as unknown as Redis, { publish(event) { published.push(event) } }, undefined, code => invalid.push(code))
+    const subscriber = new RedisBrowserRealtimeSubscriber(redis as unknown as Redis, { publish(event) { published.push(event) }, invalidateObserverAuthorization() {} }, undefined, code => invalid.push(code))
     await subscriber.start()
     const event = realtimeEvent()
     redis.emit('message', 'aurum:v4:browser-realtime:events', JSON.stringify(event))
@@ -136,7 +136,7 @@ describe('V4 browser realtime runtime', () => {
 
   it('mounts SSO, Bridge credentials and every implemented trade V4 HTTP module in one API role', async () => {
     const app = Fastify()
-    await registerApiV4Routes(app, {} as ApiV4RouteServices, { tradeOrigin: 'https://trade.example.test', secureCookies: false })
+    await registerApiV4Routes(app, {} as ApiV4RouteServices, { tradeOrigin: 'https://trade.example.test', adminOrigin: 'https://admin.example.test', secureCookies: false })
     await app.ready()
     for (const route of [
       ['GET', '/oauth/authorize'], ['POST', '/api/v4/realtime/tickets'],
@@ -145,7 +145,22 @@ describe('V4 browser realtime runtime', () => {
       ['POST', '/api/v4/analysis-jobs'], ['GET', '/api/v4/risk-accounts/:accountId/policy'],
       ['GET', '/api/v4/operations/:operationId'], ['GET', '/api/v4/trading-accounts/:accountId/execution-context'],
       ['GET', '/api/v4/execution-distributions/preview'], ['GET', '/api/v4/execution-distributions/:distribution_id'],
+      ['GET', '/api/v4/admin/observer/sources'], ['POST', '/api/v4/admin/observer/sources'],
+      ['PUT', '/api/v4/admin/observer/default-channel'], ['PUT', '/api/v4/admin/observer/channels/:channel_id/accesses/:user_id'],
     ] as const) expect(app.hasRoute({ method: route[0], url: route[1] })).toBe(true)
+    await app.close()
+  })
+
+  it('isolates observer management to the exact admin host, including port', async () => {
+    const app = Fastify()
+    app.addHook('onRequest', exactAdminHostHook('https://admin.example.test:8443'))
+    app.get('/api/v4/admin/observer/channels', async () => ({ ok: true }))
+    for (const host of ['trade.example.test:8443', 'admin.example.test', 'admin.example.test.evil:8443']) {
+      const result = await app.inject({ url: '/api/v4/admin/observer/channels', headers: { host } })
+      expect(result.statusCode).toBe(421)
+      expect(result.json().code).toBe('admin_host_required')
+    }
+    expect((await app.inject({ url: '/api/v4/admin/observer/channels', headers: { host: 'admin.example.test:8443' } })).statusCode).toBe(200)
     await app.close()
   })
 })

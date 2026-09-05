@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis'
 import type { Pool, RowDataPacket } from 'mysql2/promise'
 import type { BrowserRealtimeEvent } from '../../modules/trading/application/trading-ports.js'
+import { OBSERVER_CONTROL_CHANNEL, observerInvalidation } from '../../modules/trading/application/observer-invalidation.js'
 import { BROWSER_REALTIME_EVENT_CHANNEL } from '../../modules/trading/infrastructure/redis-browser-realtime-subscriber.js'
 import type { ClaimedOutboxEvent, OutboxTaskPublisher } from '../application/outbox-ports.js'
 
@@ -60,6 +61,12 @@ export class RedisOutboxRealtimePublisher implements OutboxTaskPublisher {
   ) {}
 
   async publish(event: ClaimedOutboxEvent) {
+    if (event.eventType === 'observer.authorization.changed') {
+      const payload = observerInvalidation(event.payload)
+      if (!payload) throw new Error('observer_invalidation_invalid')
+      await this.redis.publish(OBSERVER_CONTROL_CHANNEL, JSON.stringify(payload))
+      return
+    }
     if (!REALTIME_TYPES.has(event.eventType)) return
     const events = await this.project(event)
     if (AUDIT_INVALIDATION_TYPES.has(event.eventType) && events[0]) {

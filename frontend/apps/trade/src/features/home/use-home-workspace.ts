@@ -23,6 +23,7 @@ export function useHomeWorkspace() {
   let scopeVersion = 0
   let snapshotRequest = 0
   let marketRequest = 0
+  let contextRequest = 0
 
   function stop() {
     scopeVersion += 1
@@ -37,22 +38,30 @@ export function useHomeWorkspace() {
   }
 
   async function load() {
+    const request = ++contextRequest
+    stop()
+    const scope = scopeVersion
+    const userId = session.value?.user.id
     loading.value = true; error.value = ''
     try {
       const [contextResponse, accountResponse, observerResponse] = await Promise.all([client.getTradingContext(), client.listTradingAccounts(), client.listObserverChannels(), loadLatestAnalysis(true)])
+      if (scope !== scopeVersion || request !== contextRequest || userId !== session.value?.user.id) return
       tradingContext.value = contextResponse.data; tradingAccounts.value = accountResponse.data.items; observerChannels.value = observerResponse.data.items
       const observer = tradingContext.value.mode === 'observer' ? observerChannels.value.find((item) => item.id === tradingContext.value?.observerChannelId) : null
       if (tradingContext.value.mode === 'observer' && !observer) throw new Error('当前观摩授权已失效，请退出观摩后重新选择')
       const selected = observer?.sourceAccountId ?? tradingContext.value.accountId ?? tradingAccounts.value[0]?.id ?? null
       if (!selected) { activeAccountId.value = null; clearAccountRuntime(); return }
       if (tradingContext.value.mode !== 'observer' && selected !== tradingContext.value.accountId && session.value) {
-        tradingContext.value = (await client.selectTradingAccount(session.value.csrf_token, selected, tradingContext.value.revision)).data
+        const selectedContext = (await client.selectTradingAccount(session.value.csrf_token, selected, tradingContext.value.revision)).data
+        if (scope !== scopeVersion || request !== contextRequest || userId !== session.value?.user.id) return
+        tradingContext.value = selectedContext
       }
       await loadAccount(selected, true, observer?.id ?? null)
     } catch (reason) {
+      if (request !== contextRequest) return
       error.value = reason instanceof Error ? reason.message : '交易工作区加载失败'
       clearAccountRuntime()
-    } finally { loading.value = false }
+    } finally { if (request === contextRequest) loading.value = false }
   }
 
   async function loadAccount(accountId: string, reset = true, observerChannelId: string | null = tradingContext.value?.mode === 'observer' ? tradingContext.value.observerChannelId ?? null : null) {
@@ -101,33 +110,45 @@ export function useHomeWorkspace() {
 
   async function selectAccount(accountId: string) {
     if (!session.value || !tradingContext.value || (tradingContext.value.mode === 'full' && accountId === tradingContext.value.accountId)) return
-    loading.value = true
-    try {
-      tradingContext.value = (await client.selectTradingAccount(session.value.csrf_token, accountId, tradingContext.value.revision)).data
-      await loadAccount(accountId)
-    } finally { loading.value = false }
+    const { csrf_token } = session.value
+    const revision = tradingContext.value.revision
+    await changeContext(() => client.selectTradingAccount(csrf_token, accountId, revision), accountId, null)
   }
 
   async function selectObserver(observerChannelId: string) {
     if (!session.value || !tradingContext.value) return
     const channel = observerChannels.value.find((item) => item.id === observerChannelId && item.active)
     if (!channel) return
-    loading.value = true
-    try {
-      tradingContext.value = (await client.enterObserverMode(session.value.csrf_token, observerChannelId, tradingContext.value.revision)).data
-      await loadAccount(channel.sourceAccountId, true, observerChannelId)
-    } finally { loading.value = false }
+    const { csrf_token } = session.value
+    const revision = tradingContext.value.revision
+    await changeContext(() => client.enterObserverMode(csrf_token, observerChannelId, revision), channel.sourceAccountId, observerChannelId)
   }
 
   async function leaveObserver() {
     if (!session.value || !tradingContext.value || tradingContext.value.mode !== 'observer') return
-    loading.value = true
+    const { csrf_token } = session.value
+    const revision = tradingContext.value.revision
+    await changeContext(() => client.leaveObserverMode(csrf_token, revision), null, null)
+  }
+
+  async function changeContext(
+    write: () => ReturnType<typeof client.getTradingContext>, accountId: string | null, observerChannelId: string | null,
+  ) {
+    const request = ++contextRequest
+    stop(); clearAccountRuntime(); activeAccountId.value = null
+    const scope = scopeVersion
+    const userId = session.value?.user.id
+    loading.value = true; error.value = ''
     try {
-      tradingContext.value = (await client.leaveObserverMode(session.value.csrf_token, tradingContext.value.revision)).data
-      const accountId = tradingContext.value.accountId
-      if (accountId) await loadAccount(accountId)
-      else { stop(); activeAccountId.value = null; clearAccountRuntime() }
-    } finally { loading.value = false }
+      const result = await write()
+      if (request !== contextRequest || scope !== scopeVersion || userId !== session.value?.user.id) return
+      tradingContext.value = result.data
+      const selected = accountId ?? result.data.accountId
+      if (selected) await loadAccount(selected, true, observerChannelId)
+    } catch (reason) {
+      if (request === contextRequest) error.value = reason instanceof Error ? reason.message : '切换失败，请刷新后重试'
+      throw reason
+    } finally { if (request === contextRequest) loading.value = false }
   }
 
   async function selectSymbol(value: string) { symbol.value = value; await loadMarket() }

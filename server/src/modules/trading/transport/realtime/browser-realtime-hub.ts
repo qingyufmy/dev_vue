@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { observerInvalidation, type ObserverInvalidation } from '../../application/observer-invalidation.js'
 import {
   OBSERVER_AUTHORIZATION_TTL_MS, sameObserverAuthorization,
   type ObserverAccessReader, type ObserverAuthorization,
@@ -73,6 +74,22 @@ const OBSERVER_RESOURCES = new Set<ObserverPublicationResource>([
 
 export class BrowserRealtimeHub {
   private readonly subscriptions = new Set<Subscription>()
+  private observerGeneration = 0
+
+  invalidateObserverAuthorization(input: ObserverInvalidation) {
+    const invalidation = observerInvalidation(input)
+    if (!invalidation) return
+    // A racing initial authorization cannot install proof captured before this control event.
+    this.observerGeneration += 1
+    for (const subscription of this.subscriptions) {
+      if (invalidation.user_id !== null && invalidation.user_id !== subscription.userId) continue
+      if (subscription.targets.some(target => {
+        const proof = target.observerAuthorization
+        return proof && (invalidation.source_id === null || invalidation.source_id === proof.sourceId)
+          && (invalidation.channel_id === null || invalidation.channel_id === proof.channelId)
+      })) this.invalidateObserver(subscription)
+    }
+  }
 
   constructor(
     private readonly repository: TradingReadRepository,
@@ -109,6 +126,7 @@ export class BrowserRealtimeHub {
     targets: BrowserRealtimeTarget[]
     sink: BrowserRealtimeSink
   }) {
+    const observerGeneration = this.observerGeneration
     const authorized: AuthorizedTarget[] = []
     const accounts = new Set<string>()
     const observerAuthorizations = new Map<string, ObserverAuthorization>()
@@ -213,6 +231,10 @@ export class BrowserRealtimeHub {
     }
     const observerTargets = authorized.filter(target => target.observerAuthorization)
     if (observerTargets.length > 0) {
+      if (observerGeneration !== this.observerGeneration) {
+        input.sink.close(4403, 'authorization_changed')
+        return null
+      }
       // The authorization may have expired while a slow initial read was in flight.
       if (observerTargets.some(target => !validObserverAuthorization(
         target.observerAuthorization!, input.userId, target.observerChannelId!, target.accountId!, this.currentTime(),

@@ -13,6 +13,7 @@ import { strategyRoutes, type StrategyService } from '../modules/strategies/inde
 import { tradeHistoryRoutes, type TradeHistoryService } from '../modules/trade-history/index.js'
 import {
   tradingRoutes, type AuthTradeRequestAdapter, type ConnectionCapacityService, type TradingService,
+  observerManagementRoutes, type ObserverManagementService, type AuthObserverAdminAdapter,
 } from '../modules/trading/index.js'
 
 export interface ApiV4RouteServices {
@@ -30,14 +31,22 @@ export interface ApiV4RouteServices {
   tradeHistory: TradeHistoryService
   audit: AuditService
   tradeAuth: AuthTradeRequestAdapter
+  observerManagement: ObserverManagementService
+  observerAdminAuth: AuthObserverAdminAdapter
 }
 
 export async function registerApiV4Routes(
   fastify: FastifyInstance,
   services: ApiV4RouteServices,
-  input: { tradeOrigin: string; secureCookies: boolean },
+  input: { tradeOrigin: string; adminOrigin: string; secureCookies: boolean },
 ) {
   await registerSsoRoutes(fastify, services.auth, input.secureCookies)
+  await fastify.register(async admin => {
+    admin.addHook('onRequest', exactAdminHostHook(input.adminOrigin))
+    await admin.register(observerManagementRoutes, {
+      prefix: '/api/v4/admin/observer', service: services.observerManagement, auth: services.observerAdminAuth,
+    })
+  })
   await fastify.register(async trade => {
     trade.addHook('onRequest', exactTradeHostHook(input.tradeOrigin))
     await trade.register(bridgeCredentialRoutes, { prefix: '/api/v4', service: services.bridgeCredentials })
@@ -52,6 +61,18 @@ export async function registerApiV4Routes(
     await trade.register(tradeHistoryRoutes, { prefix: '/api/v4', service: services.tradeHistory, auth: services.tradeAuth })
     await trade.register(auditRoutes, { prefix: '/api/v4', service: services.audit, auth: services.tradeAuth })
   })
+}
+
+export function exactAdminHostHook(adminOrigin: string) {
+  const expected = new URL(adminOrigin).host.toLowerCase()
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (String(request.headers.host ?? '').toLowerCase() === expected) return
+    return reply.code(421).send({
+      type: 'urn:aurum:problem:admin_host_required', title: 'Admin application host required', status: 421,
+      code: 'admin_host_required', detail: 'admin_host_required', instance: request.url,
+      correlation_id: request.id, retryable: false,
+    })
+  }
 }
 
 export function exactTradeHostHook(tradeOrigin: string) {

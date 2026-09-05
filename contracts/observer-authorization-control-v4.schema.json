@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aurum:observer-authorization-control:v4",
+  "title": "Internal observer authorization invalidation",
+  "description": "Outbox to Redis control channel only. Never forward to browser clients. Null dimensions mean all observers for that dimension; non-null dimensions are intersected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_id", "channel_id", "user_id", "registry_revision"],
+  "properties": {
+    "source_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]{0,19}$" },
+    "channel_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]{0,19}$" },
+    "user_id": { "type": ["integer", "null"], "minimum": 1, "maximum": 2147483647 },
+    "registry_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+  }
+}

@@ -645,6 +645,8 @@ MT4 不支持的 stop-limit、字段或历史证据必须明确返回 `capabilit
 
 ## 14. 验证记录
 
+本节历史基线数字仅对应最初协议评审；后续扩展以各阶段实施记录为准。
+
 - `npx --yes @redocly/cli lint contracts/openapi-v4.json`：通过，OpenAPI 3.1 合同无错误和警告。
 - Python `jsonschema` Draft 2020-12 元 Schema 检查：浏览器 realtime 与 Bridge 两份 Schema 均通过。
 - 三份合同内部 `$ref` 完整性检查：通过，无悬空引用。
@@ -653,3 +655,11 @@ MT4 不支持的 stop-limit、字段或历史证据必须明确返回 `capabilit
 - Bridge 资源目录检查：13 类精准查询与 6 类确定性命令与正式方案一致。
 - 本地文档相对链接检查和 `git diff --check`：通过。
 - 本阶段没有修改可执行代码，因此没有把旧源码单元测试当作 V4 实现证明；真实端到端验证分别留在路线图阶段 8、10、11、15 和 16。
+
+## 15. P4B 观摩管理控制事件（2026-09-05）
+
+管理 HTTP 位于 `/api/v4/admin/observer`，仅 admin-web 会话和精确 admin Host 可访问；写入还需 CSRF、幂等键及更新版本。接口与严格 DTO 见 `contracts/openapi-v4.json`，范围见 [P4B 报告](./stage-m1-b2-p4b-observer-management-report.md)。
+
+事务 outbox 的 `observer.authorization.changed` 由独立 dispatcher 发布到内部 Redis 频道 `aurum:v4:observer-authorization`，不进入浏览器通用事件频道。机器合同为 `contracts/observer-authorization-control-v4.schema.json`，只含 nullable `source_id/channel_id/user_id` 与安全整数 `registry_revision`，不含审计、个人数据或大正文。匹配维度采用 AND；默认频道切换使用全部空维度使全部观摩订阅重新鉴权，不影响 owner 订阅。
+
+网关清理匹配观摩订阅队列并发 resync/close；初次异步鉴权期间收到控制事件也不安装旧证明。重复控制事件允许保守失效；Redis Pub/Sub 不是持久确认通道，成功发布不能证明每个网关已接收。丢失消息仍依赖既有最长 30 秒授权 TTL 和后续鉴权兜底；不得宣称零延迟吊销或端到端已验收。

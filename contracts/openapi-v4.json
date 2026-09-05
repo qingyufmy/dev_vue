@@ -26,7 +26,8 @@
     { "name": "Trader", "description": "Per-account AI trader evaluations without direct execution authority" },
     { "name": "Risk", "description": "Account risk policy" },
     { "name": "Reviews", "description": "Evidence-frozen review cases, human confirmation and strategy memory" },
-    { "name": "Bridge", "description": "Bridge device credential lifecycle" }
+    { "name": "Bridge", "description": "Bridge device credential lifecycle" },
+    { "name": "Observer Management", "description": "Administrator-only observer source, channel and explicit audience authorization configuration" }
   ],
   "paths": {
     "/auth/login": {
@@ -348,6 +349,160 @@
         "summary": "List observer channels authorized for the current user",
         "tags": ["Context"],
         "responses": { "200": { "description": "Authorized observer channels", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverChannelListResponse" } } } } }
+      }
+    },
+    "/admin/observer/sources": {
+      "get": {
+        "operationId": "listObserverSourcesForAdmin",
+        "summary": "List observer sources for the current administrator",
+        "description": "Uses only the admin-web Host-only session. Results are bounded by an opaque stable-id cursor and never expose private bridge credentials.",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/ObserverAdminLimit" }, { "$ref": "#/components/parameters/ObserverAdminCursor" }],
+        "responses": {
+          "200": { "description": "Observer source page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverSourcePageResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createObserverSource",
+        "summary": "Create a disabled, pending observer source",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/ObserverAdminIdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverSourceCreateInput" } } } },
+        "responses": {
+          "201": { "description": "Observer source operation receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverManagementWriteResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/admin/observer/sources/{source_id}": {
+      "put": {
+        "operationId": "updateObserverSource",
+        "summary": "Replace one observer source configuration with CAS",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/ObserverSourceId" }, { "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/ObserverAdminIdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverSourceUpdateInput" } } } },
+        "responses": {
+          "200": { "description": "Observer source operation receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverManagementWriteResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/admin/observer/channels": {
+      "get": {
+        "operationId": "listObserverChannelsForAdmin",
+        "summary": "List observer channels for the current administrator",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/ObserverAdminLimit" }, { "$ref": "#/components/parameters/ObserverAdminCursor" }],
+        "responses": {
+          "200": { "description": "Observer channel page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverChannelPageResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
+      },
+      "post": {
+        "operationId": "createObserverChannel",
+        "summary": "Create an assigned, inactive observer channel",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/ObserverAdminIdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverChannelCreateInput" } } } },
+        "responses": {
+          "201": { "description": "Observer channel operation receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverManagementWriteResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "422": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/admin/observer/channels/{channel_id}": {
+      "put": {
+        "operationId": "updateObserverChannel",
+        "summary": "Replace one observer channel configuration with CAS",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/ObserverChannelId" }, { "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/ObserverAdminIdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverChannelUpdateInput" } } } },
+        "responses": {
+          "200": { "description": "Observer channel operation receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverManagementWriteResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/admin/observer/channels/{channel_id}/accesses": {
+      "get": {
+        "operationId": "listObserverChannelAccesses",
+        "summary": "List explicit observer grants for one channel",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/ObserverChannelId" }, { "$ref": "#/components/parameters/ObserverAdminLimit" }, { "$ref": "#/components/parameters/ObserverAdminCursor" }],
+        "responses": {
+          "200": { "description": "Observer access page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverAccessPageResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/admin/observer/channels/{channel_id}/accesses/{user_id}": {
+      "put": {
+        "operationId": "setObserverChannelAccess",
+        "summary": "Grant or revoke one explicit observer access tombstone",
+        "description": "A revoke removes only the explicit grant; it does not override an all/plus/pro audience rule.",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/ObserverChannelId" }, { "$ref": "#/components/parameters/ObserverUserId" }, { "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/ObserverAdminIdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverAccessInput" } } } },
+        "responses": {
+          "200": { "description": "Observer access operation receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverManagementWriteResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/admin/observer/default-channel": {
+      "put": {
+        "operationId": "setObserverDefaultChannel",
+        "summary": "Set or clear the default observer channel with registry CAS",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/ObserverAdminIdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverDefaultChannelInput" } } } },
+        "responses": {
+          "200": { "description": "Observer default operation receipt", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverManagementWriteResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/admin/observer/operations": {
+      "get": {
+        "operationId": "listObserverManagementOperations",
+        "summary": "List observer management operation receipts",
+        "description": "Admin-only audit-safe receipt fields plus the canonical command in audit_json; idempotency keys and request hashes are never returned.",
+        "tags": ["Observer Management"],
+        "parameters": [{ "$ref": "#/components/parameters/ObserverAdminLimit" }, { "$ref": "#/components/parameters/ObserverOperationCursor" }],
+        "responses": {
+          "200": { "description": "Observer operation page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ObserverOperationPageResponse" } } } },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }
+        }
       }
     },
     "/realtime/tickets": {
@@ -1312,6 +1467,50 @@
         "in": "header",
         "required": true,
         "schema": { "type": "string", "minLength": 16, "maxLength": 256 }
+      },
+      "ObserverAdminLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 }
+      },
+      "ObserverAdminCursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Stable positive decimal ID cursor for source, channel or access pages.",
+        "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$", "maxLength": 20 }
+      },
+      "ObserverOperationCursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Stable UUID cursor for operation pages.",
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "ObserverSourceId": {
+        "name": "source_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$", "maxLength": 20 }
+      },
+      "ObserverChannelId": {
+        "name": "channel_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$", "maxLength": 20 }
+      },
+      "ObserverUserId": {
+        "name": "user_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,9}$", "maxLength": 10 }
+      },
+      "ObserverAdminIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$" }
       }
     },
     "headers": {
@@ -1639,6 +1838,206 @@
         "description": "Authenticated active users only. Source/channel must be ready and aligned. Audience all, exact effective plus/pro plan, or an explicit active grant authorizes reading; pro does not inherit plus. This never grants trading rights. Observer HTTP reads return a sanitized publication, not operator metadata or private history.",
         "type": "object", "required": ["data", "meta"],
         "properties": { "data": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "type": "object", "required": ["id", "display_name", "source_account_id", "active"], "additionalProperties": false, "properties": { "id": { "$ref": "#/components/schemas/OpaqueId" }, "display_name": { "type": "string" }, "source_account_id": { "$ref": "#/components/schemas/OpaqueId" }, "active": { "type": "boolean" } } } } } }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ObserverUnsignedId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{0,19}$",
+        "maxLength": 20,
+        "description": "Positive decimal identifier bounded by the target unsigned BIGINT range (1..18446744073709551615)."
+      },
+      "ObserverRevisionInput": {
+        "description": "A JSON integer or its decimal string representation. Updates require at least 1; access creation and registry CAS may use 0.",
+        "oneOf": [
+          { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,15})$" }
+        ]
+      },
+      "ObserverSourceCreateInput": {
+        "type": "object",
+        "required": ["display_name"],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "notes": { "type": ["string", "null"], "maxLength": 255, "default": null },
+          "trading_account_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }], "default": null },
+          "analysis_strategy_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }], "default": null },
+          "status": { "type": "string", "const": "disabled", "default": "disabled" }
+        }
+      },
+      "ObserverSourceUpdateInput": {
+        "type": "object",
+        "required": ["display_name", "notes", "trading_account_id", "analysis_strategy_id", "status", "expected_revision"],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "notes": { "type": ["string", "null"], "maxLength": 255 },
+          "trading_account_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] },
+          "analysis_strategy_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] },
+          "status": { "type": "string", "enum": ["active", "disabled"] },
+          "expected_revision": { "$ref": "#/components/schemas/ObserverRevisionInput" }
+        }
+      },
+      "ObserverChannelCreateInput": {
+        "type": "object",
+        "required": ["display_name", "slug"],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "source_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }], "default": null },
+          "slug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength": 1, "maxLength": 64 },
+          "description": { "type": ["string", "null"], "maxLength": 255, "default": null },
+          "audience": { "type": "string", "enum": ["all", "plus", "pro", "assigned"], "default": "assigned" },
+          "active": { "type": "boolean", "const": false, "default": false },
+          "sort_order": { "type": "integer", "minimum": 0, "maximum": 1000000, "default": 0 }
+        }
+      },
+      "ObserverChannelUpdateInput": {
+        "type": "object",
+        "required": ["display_name", "source_id", "slug", "description", "audience", "active", "sort_order", "expected_revision"],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "source_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] },
+          "slug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength": 1, "maxLength": 64 },
+          "description": { "type": ["string", "null"], "maxLength": 255 },
+          "audience": { "type": "string", "enum": ["all", "plus", "pro", "assigned"] },
+          "active": { "type": "boolean" },
+          "sort_order": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+          "expected_revision": { "$ref": "#/components/schemas/ObserverRevisionInput" }
+        }
+      },
+      "ObserverAccessInput": {
+        "type": "object",
+        "required": ["granted", "expected_revision"],
+        "additionalProperties": false,
+        "properties": {
+          "granted": { "type": "boolean" },
+          "expected_revision": { "$ref": "#/components/schemas/ObserverRevisionInput" }
+        }
+      },
+      "ObserverDefaultChannelInput": {
+        "type": "object",
+        "required": ["channel_id", "expected_revision"],
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] },
+          "expected_revision": { "$ref": "#/components/schemas/ObserverRevisionInput" }
+        }
+      },
+      "ObserverManagementWriteResult": {
+        "type": "object",
+        "required": ["operation_id", "target_id", "revision", "registry_revision"],
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": { "type": "string", "format": "uuid" },
+          "target_id": { "type": "string" },
+          "revision": { "type": "string", "pattern": "^[0-9]+$" },
+          "registry_revision": { "type": "string", "pattern": "^[0-9]+$" }
+        }
+      },
+      "ObserverManagementWriteResponse": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "additionalProperties": false,
+        "properties": { "data": { "$ref": "#/components/schemas/ObserverManagementWriteResult" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ObserverSourceAdminItem": {
+        "type": "object",
+        "required": ["id", "display_name", "notes", "operator_user_id", "trading_account_id", "analysis_strategy_id", "status", "configuration_status", "created_by_user_id", "created_at_utc", "updated_at_utc", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/ObserverUnsignedId" },
+          "display_name": { "type": "string", "maxLength": 80 },
+          "notes": { "type": ["string", "null"], "maxLength": 255 },
+          "operator_user_id": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+          "trading_account_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] },
+          "analysis_strategy_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] },
+          "status": { "type": "string", "enum": ["active", "disabled"] },
+          "configuration_status": { "type": "string", "enum": ["pending", "ready"] },
+          "created_by_user_id": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+          "created_at_utc": { "$ref": "#/components/schemas/UtcDateTime" },
+          "updated_at_utc": { "$ref": "#/components/schemas/UtcDateTime" },
+          "revision": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+        }
+      },
+      "ObserverChannelAdminItem": {
+        "type": "object",
+        "required": ["id", "source_id", "source_trading_account_id", "display_name", "slug", "description", "audience", "active", "is_default", "sort_order", "created_at_utc", "updated_at_utc", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/ObserverUnsignedId" },
+          "source_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] },
+          "source_trading_account_id": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] },
+          "display_name": { "type": "string", "maxLength": 80 },
+          "slug": { "type": "string", "maxLength": 64 },
+          "description": { "type": ["string", "null"], "maxLength": 255 },
+          "audience": { "type": "string", "enum": ["all", "plus", "pro", "assigned"] },
+          "active": { "type": "boolean" },
+          "is_default": { "type": "boolean" },
+          "sort_order": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+          "created_at_utc": { "$ref": "#/components/schemas/UtcDateTime" },
+          "updated_at_utc": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "revision": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+        }
+      },
+      "ObserverAccessAdminItem": {
+        "type": "object",
+        "required": ["observer_channel_id", "user_id", "granted_at_utc", "revoked_at_utc", "granted_by_user_id", "revision"],
+        "additionalProperties": false,
+        "properties": {
+          "observer_channel_id": { "$ref": "#/components/schemas/ObserverUnsignedId" },
+          "user_id": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+          "granted_at_utc": { "$ref": "#/components/schemas/UtcDateTime" },
+          "revoked_at_utc": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "granted_by_user_id": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 2147483647 }, { "type": "null" }] },
+          "revision": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+        }
+      },
+      "ObserverOperationAdminItem": {
+        "type": "object",
+        "required": ["id", "action", "actor_user_id", "target_id", "result", "audit_json", "created_at_utc"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "action": { "type": "string", "maxLength": 40 },
+          "actor_user_id": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+          "target_id": { "type": "string", "maxLength": 191 },
+          "result": { "$ref": "#/components/schemas/ObserverManagementWriteResult" },
+          "audit_json": { "type": "object", "description": "Canonical observer-management command; returned only from the admin-only operation endpoint." },
+          "created_at_utc": { "$ref": "#/components/schemas/UtcDateTime" }
+        }
+      },
+      "ObserverSourcePageResponse": {
+        "type": "object", "required": ["data", "meta"], "additionalProperties": false,
+        "properties": { "data": { "$ref": "#/components/schemas/ObserverSourcePage" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ObserverSourcePage": {
+        "type": "object", "required": ["items", "next_cursor", "registry_revision"], "additionalProperties": false,
+        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/ObserverSourceAdminItem" } }, "next_cursor": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] }, "registry_revision": { "type": "string", "pattern": "^[0-9]+$" } }
+      },
+      "ObserverChannelPageResponse": {
+        "type": "object", "required": ["data", "meta"], "additionalProperties": false,
+        "properties": { "data": { "$ref": "#/components/schemas/ObserverChannelPage" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ObserverChannelPage": {
+        "type": "object", "required": ["items", "next_cursor", "registry_revision"], "additionalProperties": false,
+        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/ObserverChannelAdminItem" } }, "next_cursor": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] }, "registry_revision": { "type": "string", "pattern": "^[0-9]+$" } }
+      },
+      "ObserverAccessPageResponse": {
+        "type": "object", "required": ["data", "meta"], "additionalProperties": false,
+        "properties": { "data": { "$ref": "#/components/schemas/ObserverAccessPage" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ObserverAccessPage": {
+        "type": "object", "required": ["items", "next_cursor", "registry_revision"], "additionalProperties": false,
+        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/ObserverAccessAdminItem" } }, "next_cursor": { "oneOf": [{ "$ref": "#/components/schemas/ObserverUnsignedId" }, { "type": "null" }] }, "registry_revision": { "type": "string", "pattern": "^[0-9]+$" } }
+      },
+      "ObserverOperationPageResponse": {
+        "type": "object", "required": ["data", "meta"], "additionalProperties": false,
+        "properties": { "data": { "$ref": "#/components/schemas/ObserverOperationPage" }, "meta": { "$ref": "#/components/schemas/Meta" } }
+      },
+      "ObserverOperationPage": {
+        "type": "object", "required": ["items", "next_cursor", "registry_revision"], "additionalProperties": false,
+        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/ObserverOperationAdminItem" } }, "next_cursor": { "oneOf": [{ "type": "string", "format": "uuid" }, { "type": "null" }] }, "registry_revision": { "type": "string", "pattern": "^[0-9]+$" } }
       },
       "RealtimeTicket": {
         "type": "object",

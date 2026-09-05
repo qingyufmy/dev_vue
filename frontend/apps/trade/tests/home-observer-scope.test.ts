@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     getTradingContext: vi.fn(), listTradingAccounts: vi.fn(), listObserverChannels: vi.fn(),
     listMarketAnalyses: vi.fn(), listStrategies: vi.fn(), selectTradingAccount: vi.fn(),
     getTradingWorkspace: vi.fn(), getMarketQuote: vi.fn(), getMarketCandles: vi.fn(),
+    enterObserverMode: vi.fn(), leaveObserverMode: vi.fn(),
   },
   start: vi.fn(), stop: vi.fn(),
 }))
@@ -48,9 +49,55 @@ beforeEach(() => {
   mocks.api.selectTradingAccount.mockResolvedValue({ data: { mode: 'full', accountId: '2', observerChannelId: null, revision: 2 } })
   mocks.api.getMarketQuote.mockImplementation(async (accountId: string, symbol: string) => ({ data: { accountId, symbol, revision: 1 } }))
   mocks.api.getMarketCandles.mockResolvedValue({ data: { items: [] } })
+  mocks.api.enterObserverMode.mockResolvedValue({ data: { mode: 'observer', accountId: null, observerChannelId: '12', revision: 2 } })
+  mocks.api.leaveObserverMode.mockResolvedValue({ data: { mode: 'blocked', accountId: null, observerChannelId: null, revision: 2 } })
 })
 
 describe('observer HTTP resync scope protection', () => {
+  it('leaves explicitly without a personal account and retains the independent latest analysis', async () => {
+    mocks.api.listTradingAccounts.mockResolvedValue({ data: { items: [] } })
+    mocks.api.listMarketAnalyses.mockResolvedValue({ data: { items: [{ id: 'personal-analysis' }] } })
+    const home = useHomeWorkspace()
+    await home.load()
+    const analysisCalls = mocks.api.listMarketAnalyses.mock.calls.length
+    await home.leaveObserver()
+    expect(mocks.api.leaveObserverMode).toHaveBeenCalledWith('test-csrf', 1)
+    expect(home.context.value?.mode).toBe('blocked')
+    expect(home.hasAccount.value).toBe(false)
+    expect(accountSnapshot.value).toBeNull()
+    expect(mocks.api.listMarketAnalyses).toHaveBeenCalledTimes(analysisCalls)
+    expect(mocks.api.enterObserverMode).not.toHaveBeenCalled()
+    home.stop()
+  })
+
+  it('does not automatically enter observation when no personal account exists', async () => {
+    mocks.api.getTradingContext.mockResolvedValue({ data: { mode: 'blocked', accountId: null, observerChannelId: null, revision: 1 } })
+    mocks.api.listTradingAccounts.mockResolvedValue({ data: { items: [] } })
+    const home = useHomeWorkspace()
+    await home.load()
+    expect(home.hasAccount.value).toBe(false)
+    expect(mocks.api.enterObserverMode).not.toHaveBeenCalled()
+    expect(mocks.api.getTradingWorkspace).not.toHaveBeenCalled()
+    expect(mocks.api.listMarketAnalyses).toHaveBeenCalled()
+    home.stop()
+  })
+
+  it('drops a late enter response after an explicit exit wins', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    const pending = deferred<{ data: { mode: string; accountId: null; observerChannelId: string; revision: number } }>()
+    mocks.api.enterObserverMode.mockReturnValueOnce(pending.promise)
+    const entering = home.selectObserver('12')
+    expect(accountSnapshot.value).toBeNull()
+    await home.leaveObserver()
+    pending.resolve({ data: { mode: 'observer', accountId: null, observerChannelId: '12', revision: 2 } })
+    await entering
+    expect(home.context.value?.mode).toBe('blocked')
+    expect(accountSnapshot.value).toBeNull()
+    expect(home.loading.value).toBe(false)
+    home.stop()
+  })
+
   it('does not apply an old observer snapshot after switching to a personal account', async () => {
     const home = useHomeWorkspace()
     await home.load()

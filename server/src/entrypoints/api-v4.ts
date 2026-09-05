@@ -20,6 +20,7 @@ import { MysqlTradeHistoryRepository, TradeHistoryService } from '../modules/tra
 import {
   AuthTradeRequestAdapter, ConnectionCapacityService, MysqlTradingRepository, RedisConnectionLeaseStore,
   TradingService, MysqlObserverAccessReader, ObserverPublicationService,
+  ObserverManagementService, MysqlObserverManagementRepository, AuthObserverAdminAdapter,
 } from '../modules/trading/index.js'
 import { registerApiV4Routes } from '../transport/api-v4-route-registrar.js'
 
@@ -60,7 +61,9 @@ async function main() {
     tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),
     audit: new AuditService(new MysqlAuditRepository(pool)),
     tradeAuth,
-  }, { tradeOrigin: web.auth.tradeOrigin, secureCookies: web.secureCookies })
+    observerManagement: new ObserverManagementService(new MysqlObserverManagementRepository(pool)),
+    observerAdminAuth: new AuthObserverAdminAdapter(auth),
+  }, { tradeOrigin: web.auth.tradeOrigin, adminOrigin: web.auth.adminOrigin, secureCookies: web.secureCookies })
 
   app.get('/health/live', async () => ({ status: 'ok', ...health.snapshot() }))
   app.get('/health/ready', async (_request, reply) => {

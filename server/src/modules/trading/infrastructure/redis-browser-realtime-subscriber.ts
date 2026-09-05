@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis'
 import type { BrowserRealtimeEvent, BrowserRealtimeEventType, BrowserRealtimeResource } from '../application/trading-ports.js'
 import type { BrowserRealtimeHub } from '../transport/realtime/browser-realtime-hub.js'
+import { OBSERVER_CONTROL_CHANNEL, observerInvalidation } from '../application/observer-invalidation.js'
 
 export const BROWSER_REALTIME_EVENT_CHANNEL = 'aurum:v4:browser-realtime:events'
 const MAX_EVENT_BYTES = 64 * 1024
@@ -39,6 +40,15 @@ const PLATFORM_SCOPED_TYPES = new Set<BrowserRealtimeEventType>([
 export class RedisBrowserRealtimeSubscriber {
   private started = false
   private readonly onMessage = (channel: string, raw: string) => {
+    if (channel === OBSERVER_CONTROL_CHANNEL) {
+      let payload: unknown
+      try { payload = Buffer.byteLength(raw, 'utf8') <= 1024 ? JSON.parse(raw) : null }
+      catch { payload = null }
+      const invalidation = observerInvalidation(payload)
+      if (!invalidation) { this.onInvalidEvent('observer_invalidation_invalid'); return }
+      this.hub.invalidateObserverAuthorization(invalidation)
+      return
+    }
     if (channel !== this.channel) return
     const event = parseBrowserRealtimeEvent(raw)
     if (!event) {
@@ -50,7 +60,7 @@ export class RedisBrowserRealtimeSubscriber {
 
   constructor(
     private readonly redis: Redis,
-    private readonly hub: Pick<BrowserRealtimeHub, 'publish'>,
+    private readonly hub: Pick<BrowserRealtimeHub, 'publish' | 'invalidateObserverAuthorization'>,
     private readonly channel = BROWSER_REALTIME_EVENT_CHANNEL,
     private readonly onInvalidEvent: (code: string) => void = () => undefined,
   ) {}
@@ -59,7 +69,7 @@ export class RedisBrowserRealtimeSubscriber {
     if (this.started) return
     this.redis.on('message', this.onMessage)
     try {
-      await this.redis.subscribe(this.channel)
+      await this.redis.subscribe(this.channel, OBSERVER_CONTROL_CHANNEL)
       this.started = true
     } catch (error) {
       this.redis.off('message', this.onMessage)
@@ -71,7 +81,7 @@ export class RedisBrowserRealtimeSubscriber {
     this.redis.off('message', this.onMessage)
     if (!this.started) return
     this.started = false
-    await this.redis.unsubscribe(this.channel)
+    await this.redis.unsubscribe(this.channel, OBSERVER_CONTROL_CHANNEL)
   }
 }
 

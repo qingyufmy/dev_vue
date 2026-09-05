@@ -18,6 +18,7 @@ export function validateDatabaseIdentifier(name) {
 // Only these previously reviewed, file-bound data transformations are allowed.
 const approvedDml = {
   '20260903_005_analysis_scheduler_and_account_fanout': ['cc93fa43f977f7bcae3a2e479b085fbbe1cc1dd1a6821e92534ec1653e1d8a83'],
+  '20260905_022_observer_management_ledger': ['d5f205b290811a4f861fe7b3e57aff74964c12bb9ce6d2dbc9bca039d8b793e3'],
   '20260903_007_deterministic_risk_review': [
     'c110c61c1be8f1bd62aac99992792cc7db2c8dd7c2570d0e3208c6530aa9ae0f',
     '2c12bafb983025bc542ae4845144647d71f3c7bd8aece7e5973b5cc15b0449ef',

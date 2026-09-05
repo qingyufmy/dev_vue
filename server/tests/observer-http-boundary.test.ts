@@ -46,6 +46,33 @@ async function appFor(service: TradingService) {
 }
 
 describe('P4A observer HTTP boundary', () => {
+  it('allows an explicit exit with no personal account even when the observer grant is gone', async () => {
+    const f = fixture()
+    f.repository.listAccounts = vi.fn(async () => [])
+    f.repository.saveContext = vi.fn(async (next, expected) => ({ ...next, revision: Number(expected) + 1 }))
+    f.authorize.mockResolvedValue(null)
+    const app = await appFor(new TradingService(f.repository))
+    const response = await app.inject({ method: 'DELETE', url: '/api/v4/trading-context/observer?expected_revision=4' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toMatchObject({ mode: 'blocked', account_id: null, observer_channel_id: null, read_only: true, revision: '5' })
+    expect(f.authorize).not.toHaveBeenCalled()
+    expect(f.repository.saveContext).toHaveBeenCalledWith({ userId: 9, mode: 'blocked', accountId: null, observerChannelId: null, readOnly: true }, 4)
+    await app.close()
+  })
+
+  it('keeps an offline personal account available after leaving observation', async () => {
+    const f = fixture()
+    f.repository.listAccounts = vi.fn(async () => [{ id: '2', platform: 'mt4' as const, login: 'x', server: 'demo', currency: 'USD',
+      terminalProfileId: null, terminalInstanceId: null, bridgeState: 'offline' as const, tradePermission: false, lastSeenAt: null }])
+    f.repository.saveContext = vi.fn(async next => ({ ...next, revision: 2 }))
+    const app = await appFor(new TradingService(f.repository))
+    const response = await app.inject({ method: 'DELETE', url: '/api/v4/trading-context/observer?expected_revision=1' })
+    expect(response.statusCode).toBe(200)
+    expect(response.json().data).toMatchObject({ mode: 'full', account_id: '2', observer_channel_id: null, read_only: true })
+    expect(f.getSnapshot).not.toHaveBeenCalled()
+    await app.close()
+  })
+
   it('does not fall back to legacy channel/private repository reads if the publication service is absent', async () => {
     const f = fixture()
     const app = await appFor(new TradingService(f.repository))

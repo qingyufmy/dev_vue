@@ -8,6 +8,7 @@ export interface ClaimedOutboxEvent {
     | 'operation.changed' | 'execution.intent.prepared' | 'execution.distribution.target.requested' | 'bridge.command.queued'
     | 'trade.history.changed'
     | 'trade.history.requested'
+    | 'observer.authorization.changed'
   occurredAt: string
   payload: Record<string, unknown>
   attempts: number
