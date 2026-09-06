@@ -1,0 +1,12 @@
+{
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "statuses": {
+    "completed": 51,
+    "pending": 1
+  },
+  "originalSchemaVerified": true,
+  "applied": false
+}
