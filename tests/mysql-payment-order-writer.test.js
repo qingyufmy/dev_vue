@@ -3,6 +3,8 @@ import { hash } from '../scripts/lib/v4-backfill-contract.mjs'
 import { paymentOrderFields } from '../scripts/lib/v4-payment-order-source.mjs'
 import { createPaymentOrderWriter } from '../scripts/lib/mysql-payment-order-writer.mjs'
 import { paymentOrderFactFields, reconcilePaymentOrderFacts } from '../scripts/lib/v4-payment-order-fact-audit.mjs'
+import { createPaymentOrderBackfill } from '../scripts/lib/v4-payment-order-backfill.mjs'
+import { prepareBatch, streamIdentity } from '../scripts/lib/v4-payment-order-backfill-contract.mjs'
 const source = { ...Object.fromEntries(Object.entries(paymentOrderFields).map(([key, [, nullable]]) => [key, nullable ? null : '0'])),
   id: '1', user_id: '2', order_no: "O'Brien", order_id: 'external', plan: 'plus', status: 'cancelled', currency: 'USD',
   amount: '300', amount_confirmed: '1', referral_credit_applied: '0', created_at: '2026-09-06 12:00:00' }
@@ -56,4 +58,26 @@ it('reports missing/extra source identities and refuses duplicate legacy rows', 
   const result = reconcilePaymentOrderFacts([source], [{ ...row, legacy_order_id: '7' }], new Set(['2']))
   expect(result.differences.map(d => d.code)).toEqual(['missing', 'unexpected'])
   expect(() => reconcilePaymentOrderFacts([source], [row, row], new Set(['2']))).toThrow('payment_order_audit_duplicate_legacy')
+})
+it('packages a scoped batch and persists complete source plus bound per-row time evidence', async () => {
+  const p = createPaymentOrderBackfill([source], options(), { batchSize: 1 }), row = p.batches[0].rows[0]
+  const spec = { runId: options().run.id, admission: { approved: true, blockers: [] }, bindings: {
+    logicalSourceId: 'fixture', sourceDatabase: 'dev_vue', mirrorDatabase: 'mirror', targetDatabase: 'dev_vue', targetServerUuid: options().run.id,
+    snapshotHash: p.sourceHash, schemaHash: 'c'.repeat(64), manifestHash: 'd'.repeat(64), transformHash: p.transformHash,
+    storageMode: 'inplace-payment-order-v1', streams: [p.stream] } }
+  expect(prepareBatch(spec, p.batches[0]).requestHash).toBe(hash(p.batches[0]))
+  const evidence = p.sourceEvidence(streamIdentity(p.stream), row)
+  expect(evidence.source).toEqual(source)
+  expect(evidence.timeResolutions).toEqual(options().timeBasis.resolutions)
+  expect(row.idMaps[0].target).toEqual({ table: 'payment_orders', pk: [{ type: 'integer', value: '9' }] })
+  expect((await p.writer.write(database(), row)).transformedHash).toBe(row.transformedHash)
+  const changed = structuredClone(p.batches[0]); changed.rows[0].targets[0].table = 'users'
+  expect(() => prepareBatch(spec, changed)).toThrow('backfill_inplace_target_invalid')
+})
+it('refuses source-evidence tampering and an unrelated stream before persistence', () => {
+  const p = createPaymentOrderBackfill([source], options()), row = p.batches[0].rows[0]
+  expect(() => p.sourceEvidence('a'.repeat(64), row)).toThrow('payment_order_evidence_stream')
+  row.payload.timeResolutions[0].offsetMinutes = 180
+  row.transformedHash = hash({ payload: row.payload, targets: row.targets })
+  expect(() => p.sourceEvidence(streamIdentity(p.stream), row)).toThrow('payment_order_batch_row_changed')
 })
