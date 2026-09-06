@@ -1,0 +1,36 @@
+{
+  "registeredAtUtc": "2026-09-06T19:15:28.159Z",
+  "bindingManifest": {
+    "kind": "referral-backfill-manifest/v1",
+    "sourceHash": "6cc709552b2c661c1205b2e3f59b61b3df58c2bfc90d52821839654cfe8ea7ac",
+    "registeredAtUtc": "2026-09-06T19:15:28.159Z",
+    "sourceUsers": 25,
+    "batchSize": 10,
+    "toolManifestHash": "f03e651a366586fef9ec065e46cb7222db5efbe883a96f8ee3de6cb0ab859c62"
+  },
+  "spec": {
+    "runId": "b67093fa-6e6b-49c6-b6cb-629c0b455621",
+    "admission": {
+      "approved": true,
+      "blockers": []
+    },
+    "bindings": {
+      "logicalSourceId": "referral:dev_vue_m1_source_20260907_02",
+      "sourceDatabase": "dev_vue_m1_source_20260907_02",
+      "mirrorDatabase": "dev_vue_m1_source_20260906_01",
+      "targetDatabase": "dev_vue_m1_source_20260907_02",
+      "targetServerUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+      "storageMode": "inplace-referral-v1",
+      "snapshotHash": "9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+      "schemaHash": "6226387ab050ee7702f60428c276494f07341d3ae85ea4ad50498755b70e6681",
+      "manifestHash": "38f14d1c6c4a00f5c7c3a4de2ffddd9c1916100333e6021b62b3973a4be52594",
+      "transformHash": "639f1eaa91b37b836722c7b39c7aad48e0eee63b59fb724117016734622f8d0c",
+      "streams": [
+        {
+          "sourceTable": "users",
+          "role": "referral-account-v1"
+        }
+      ]
+    }
+  }
+}
