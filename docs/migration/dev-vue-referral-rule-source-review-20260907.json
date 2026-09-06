@@ -1,0 +1,137 @@
+{
+  "kind": "referral-rule-source-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 51,
+  "columns": [
+    {
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": null
+    },
+    {
+      "name": "plan",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "period",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "rate_bps",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": "1000",
+      "collationName": null
+    },
+    {
+      "name": "enabled",
+      "type": "tinyint",
+      "nullable": "NO",
+      "defaultValue": "1",
+      "collationName": null
+    }
+  ],
+  "indexes": [
+    {
+      "name": "PRIMARY",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "id"
+    },
+    {
+      "name": "uk_plan_period",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "plan"
+    },
+    {
+      "name": "uk_plan_period",
+      "nonUnique": 0,
+      "position": 2,
+      "columnName": "period"
+    }
+  ],
+  "result": {
+    "version": "referral-rule-source/v1",
+    "sourceFields": 5,
+    "sourceHash": "6fce5f71912f8beeb223a44bb5479c814bd25177eeb0431a0acd6e278eed6a4f",
+    "entries": [
+      {
+        "sourceId": "1",
+        "sourceHash": "701504758cb3d887c7f7edae646edc2d70a60c65bd347861e59f0a4af85bf386",
+        "source": {
+          "id": "1",
+          "plan": "plus",
+          "period": "monthly",
+          "rate_bps": "1000",
+          "enabled": "1"
+        }
+      },
+      {
+        "sourceId": "2",
+        "sourceHash": "12b7be0c5ea3c960286a3a847b6dc621b2564bee6fbc6a18b5dcc7b22b3f9846",
+        "source": {
+          "id": "2",
+          "plan": "plus",
+          "period": "yearly",
+          "rate_bps": "1000",
+          "enabled": "1"
+        }
+      },
+      {
+        "sourceId": "3",
+        "sourceHash": "1521997bdd69ac424efbcbb1ff8e4325ce91643ff342a1a4531dfc61d251510c",
+        "source": {
+          "id": "3",
+          "plan": "pro",
+          "period": "monthly",
+          "rate_bps": "1000",
+          "enabled": "1"
+        }
+      },
+      {
+        "sourceId": "4",
+        "sourceHash": "3aa8a894b880f2950646945038ac72aeeee8adc7ada942df90ecf96f16ff779c",
+        "source": {
+          "id": "4",
+          "plan": "pro",
+          "period": "yearly",
+          "rate_bps": "1000",
+          "enabled": "1"
+        }
+      }
+    ],
+    "blockers": [],
+    "missingScopes": [],
+    "historicalTimeConversionRequired": false,
+    "legacyMissingOrDisabledRuleFallbackBps": "1000",
+    "businessCutoverReady": false
+  },
+  "referenceFiles": [
+    {
+      "path": "server/db.js",
+      "sha256": "0a19666e458f0a1ccd2253b4432062fbdabfc4ab8e4d51a10304035ffcc5e22a"
+    },
+    {
+      "path": "server/utils.js",
+      "sha256": "7fd636114fcdec327ef854d9f826538d31e6ee94c0658301f281502be1c55cf5"
+    },
+    {
+      "path": "server/routes/admin.js",
+      "sha256": "5670ac20d5a38a052acbad73422c1812875faefc8490e233a42ce27154420d1f"
+    }
+  ],
+  "sourceDatabaseWritten": false,
+  "businessConsumersSwitched": false
+}
