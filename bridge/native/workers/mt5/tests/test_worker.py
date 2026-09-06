@@ -21,6 +21,7 @@ from worker import (  # noqa: E402
     IPC_VERSION,
     LIVE_CAPABILITIES,
     BrokerClock,
+    sample_clock_evidence,
     ReadOnlyMt5Adapter,
     Mt5Worker,
     WorkerError,
@@ -254,6 +255,44 @@ class WorkerTests(unittest.TestCase):
         self.worker = Mt5Worker(self.adapter, self.route)
         self.archive_worker = Mt5Worker(self.adapter, self.route, role="archive")
         self.worker.trade._clock_msc = lambda: self.now
+
+    def test_clock_evidence_keeps_utc_tick_untrusted_and_does_not_reuse_offset(self):
+        self.mt5.symbols_get = lambda: [SimpleNamespace(name="XAUUSD", visible=True)]
+        self.mt5.symbol_info_tick = lambda name: SimpleNamespace(time_msc=self.now)
+        before = self.clock_state_path.read_bytes()
+        result = self.adapter.data("terminal_clock", {})
+        self.assertEqual(self.now, result["raw_tick_time_msc"])
+        self.assertEqual("captured", result["sample_status"])
+        self.assertEqual("unavailable", result["clock_status"])
+        self.assertIsNone(result["timezone_offset_minutes"])
+        self.assertIsNone(result["server_time_utc_msc"])
+        self.assertEqual(before, self.clock_state_path.read_bytes())
+        self.assertEqual(180, self.adapter.clock.offset_minutes)
+        wire = self.worker.handle(self.request("data", {
+            "action": "terminal_clock", "params": {},
+        }))
+        self.assertEqual("terminal_clock", wire["payload"]["data"]["action"])
+        self.assertEqual("unavailable", wire["payload"]["data"]["payload"]["clock_status"])
+        with self.assertRaisesRegex(WorkerError, "worker_data_params_invalid"):
+            self.adapter.data("terminal_clock", {"offset": 180})
+
+    def test_clock_evidence_rejects_clock_jump_and_slow_sample(self):
+        api = SimpleNamespace(symbols_get=lambda: [SimpleNamespace(name="X", visible=True)],
+                              symbol_info_tick=lambda name: SimpleNamespace(time_msc=self.now))
+        for elapsed in [-1, 5001]:
+            samples = iter([self.now, self.now + elapsed])
+            result = sample_clock_evidence(api, lambda: next(samples))
+            self.assertEqual("unavailable", result["sample_status"])
+            self.assertIsNone(result["raw_tick_time_msc"])
+
+    def test_clock_evidence_is_bounded_and_tolerates_no_tick(self):
+        calls = []
+        api = SimpleNamespace(symbols_get=lambda: [SimpleNamespace(name=str(i), visible=True) for i in range(100)],
+                              symbol_info_tick=lambda name: calls.append(name))
+        result = sample_clock_evidence(api, lambda: self.now)
+        self.assertEqual(32, len(calls))
+        self.assertEqual("unavailable", result["sample_status"])
+        self.assertIsNone(result["raw_tick_time_msc"])
 
     def test_probe_terminal_returns_only_strict_identity_and_closes_mt5(self):
         with tempfile.TemporaryDirectory() as directory:

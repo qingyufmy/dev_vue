@@ -38,6 +38,17 @@ namespace Liangjian.BridgeV4.SmokeTests
                     IDictionary<string, object> facts = BridgeAccountFacts.Read(runtime, source, Now + 2);
                     Assert((string)facts["currency"] == "EUR" && (string)facts["login"] == "10001"
                         && (string)facts["broker_server"] == "Demo", "mt5_account_facts_adapter_not_mapped");
+                    TerminalQueryResult clock = source.Query(runtime, Request(runtime, "terminal.clock",
+                        new Dictionary<string, object>()), Now + 3);
+                    IDictionary<string, object> clockData = Parse(clock.DataJson);
+                    Assert(clock.Succeeded && clock.ClockStatus == "unavailable"
+                        && clockData["timezone_offset_minutes"] == null
+                        && Convert.ToInt64(clockData["raw_tick_time_msc"]) == Now,
+                        "mt5_clock_sample_promoted_or_lost");
+                    host.ForgeClock = true;
+                    Assert(!source.Query(runtime, Request(runtime, "terminal.clock",
+                        new Dictionary<string, object>()), Now + 4).Succeeded,
+                        "mt5_clock_unverified_sample_promoted");
                 }
             }
             finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
@@ -83,6 +94,7 @@ namespace Liangjian.BridgeV4.SmokeTests
         private sealed class FakeHost : IMt5WorkerRequestHost
         {
             public readonly List<string> Operations = new List<string>();
+            public bool ForgeClock;
 
             public Mt5WorkerResponse Request(string terminalInstanceId, string brokerServer, string login,
                 string expectedRole, string operation, IDictionary<string, object> payload)
@@ -90,6 +102,23 @@ namespace Liangjian.BridgeV4.SmokeTests
                 if (terminalInstanceId != "terminal-a" || brokerServer != "Demo" || login != "10001"
                     || expectedRole != "live") throw new InvalidOperationException("fake_mt5_route_wrong");
                 Operations.Add(operation);
+                if (operation == "data")
+                {
+                    Assert((string)payload["action"] == "terminal_clock", "mt5_clock_action_wrong");
+                    return Mt5WorkerResponse.FromAdapter("request-terminal.clock", "data",
+                        new Dictionary<string, object> { { "data", new Dictionary<string, object>
+                        {
+                            { "action", "terminal_clock" }, { "observed_at_utc_msc", Now },
+                            { "payload", new Dictionary<string, object>
+                            {
+                                { "server_time_utc_msc", null }, { "sampled_at_utc_msc", Now },
+                                { "sampling_started_at_utc_msc", Now }, { "sample_status", "captured" },
+                                { "timezone_offset_minutes", null }, { "clock_status", ForgeClock ? "calibrated" : "unavailable" },
+                                { "source_kind", "mt5_tick_time_unverified" }, { "symbol", "XAUUSD" },
+                                { "raw_tick_time_msc", Now }
+                            } }
+                        } } });
+                }
                 if (operation == "quote")
                 {
                     return Mt5WorkerResponse.FromAdapter("request-market.quote", "quote",

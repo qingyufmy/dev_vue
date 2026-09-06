@@ -341,6 +341,38 @@ def _history_item_in_utc_range(item: Any, range_start: int, range_end: int,
     return False
 
 
+def sample_clock_evidence(mt5, clock_msc):
+    """Capture bounded evidence without assuming tick time is broker wall time."""
+    started = int(clock_msc())
+    sample = None
+    symbols = mt5.symbols_get() or ()
+    for item in symbols[:32]:
+        if not getattr(item, "visible", False):
+            continue
+        name = str(getattr(item, "name", "") or "")
+        if not name or len(name) > 64:
+            continue
+        tick = mt5.symbol_info_tick(name)
+        raw = getattr(tick, "time_msc", None) if tick else None
+        if isinstance(raw, bool) or not isinstance(raw, int) or not 0 < raw <= 253402300799999:
+            continue
+        sample = (name, raw)
+        break
+    ended = int(clock_msc())
+    usable = started > 0 and 0 <= ended - started <= 5000
+    return {
+        "server_time_utc_msc": None,
+        "sampled_at_utc_msc": ended,
+        "sampling_started_at_utc_msc": started,
+        "timezone_offset_minutes": None,
+        "clock_status": "unavailable",
+        "source_kind": "mt5_tick_time_unverified",
+        "sample_status": "captured" if sample and usable else "unavailable",
+        "symbol": sample[0] if sample and usable else None,
+        "raw_tick_time_msc": sample[1] if sample and usable else None,
+    }
+
+
 class BrokerClock:
     def __init__(self, state_path: Path | None, clock_msc: Any | None = None):
         self._state_path = state_path
@@ -895,6 +927,12 @@ class ReadOnlyMt5Adapter:
 
     def data(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         self._ensure_identity()
+        if action == "terminal_clock":
+            if params:
+                raise WorkerError("worker_data_params_invalid")
+            evidence = sample_clock_evidence(self.mt5, self.clock.now_utc_msc)
+            self._ensure_identity()
+            return evidence
         if action == "rates":
             return self._rates(params)
         if action == "symbol_snapshot":
@@ -1893,7 +1931,7 @@ class Mt5Worker:
                     raise WorkerError("worker_request_payload_invalid")
                 action = payload.get("action")
                 if action not in {"rates", "symbols", "symbol_snapshot", "risk_snapshot",
-                                  "performance_daily", "pending_order_state", "diagnostics"}:
+                                  "performance_daily", "pending_order_state", "diagnostics", "terminal_clock"}:
                     raise WorkerError("worker_data_action_invalid")
                 return self._complete_successful_request(self._response(request_id, "data", {"data": {
                     "action": action,

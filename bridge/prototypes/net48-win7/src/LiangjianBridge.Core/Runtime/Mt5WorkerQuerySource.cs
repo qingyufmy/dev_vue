@@ -51,11 +51,7 @@ namespace Liangjian.BridgeV4.Runtime
                 case "diagnostics.health":
                     return Data(route, "diagnostics", new Dictionary<string, object>(), nowUtcMsc);
                 case "terminal.clock":
-                    return new QueryPayload(new Dictionary<string, object>
-                    {
-                        { "server_time_utc_msc", null }, { "sampled_at_utc_msc", nowUtcMsc },
-                        { "timezone_offset_minutes", null }, { "clock_status", "unavailable" }
-                    }, nowUtcMsc, 0, "unavailable", null, false);
+                    return ClockEvidence(route, nowUtcMsc);
                 case "account.snapshot":
                     return Snapshot(route, "account", request.Parameters, nowUtcMsc);
                 case "trading.positions":
@@ -172,6 +168,33 @@ namespace Liangjian.BridgeV4.Runtime
                 observed, offset, status, null, false);
         }
 
+        private QueryPayload ClockEvidence(ProfileRuntimeConfiguration route, long nowUtcMsc)
+        {
+            QueryPayload response = Data(route, "terminal_clock", new Dictionary<string, object>(), nowUtcMsc);
+            IDictionary<string, object> data = response.Data as IDictionary<string, object>;
+            if (data == null || Text(data, "clock_status") != "unavailable"
+                || Text(data, "source_kind") != "mt5_tick_time_unverified"
+                || Value(data, "timezone_offset_minutes") != null || Value(data, "server_time_utc_msc") != null)
+                throw new Mt5WorkerQueryException("bridge_mt5_clock_evidence_invalid");
+            long sampled = Long(data, "sampled_at_utc_msc", 0);
+            long started = Long(data, "sampling_started_at_utc_msc", 0);
+            string status = Text(data, "sample_status");
+            if (sampled < 1 || sampled > 253402300799999L || started < 1
+                || (status != "captured" && status != "unavailable"))
+                throw new Mt5WorkerQueryException("bridge_mt5_clock_evidence_invalid");
+            if (status == "captured")
+            {
+                long raw = Long(data, "raw_tick_time_msc", 0);
+                string symbol = Text(data, "symbol");
+                if (sampled < started || sampled - started > 5000 || raw < 1
+                    || raw > 253402300799999L || string.IsNullOrWhiteSpace(symbol) || symbol.Length > 64)
+                    throw new Mt5WorkerQueryException("bridge_mt5_clock_evidence_invalid");
+            }
+            else if (Value(data, "symbol") != null || Value(data, "raw_tick_time_msc") != null)
+                throw new Mt5WorkerQueryException("bridge_mt5_clock_evidence_invalid");
+            return new QueryPayload(data, sampled, 0, "unavailable", null, false);
+        }
+
         private QueryPayload Data(ProfileRuntimeConfiguration route, string action,
             IDictionary<string, object> parameters, long nowUtcMsc)
         {
@@ -180,6 +203,8 @@ namespace Liangjian.BridgeV4.Runtime
                 { "action", action }, { "params", parameters }
             });
             IDictionary<string, object> data = Object(response.Payload, "data");
+            if (action == "terminal_clock" && Text(data, "action") != action)
+                throw new Mt5WorkerQueryException("bridge_mt5_clock_evidence_invalid");
             long observed = Long(data, "observed_at_utc_msc", nowUtcMsc);
             return new QueryPayload(Value(data, "payload"), observed, 0, "unavailable", null, false);
         }

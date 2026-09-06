@@ -1,0 +1,42 @@
+{
+  "ok": true,
+  "terminalPath": "D:\\Program Files\\MetaTrader 5\\terminal64.exe",
+  "terminalBuild": 6180,
+  "pythonPackageVersion": "5.0.6147",
+  "runtimeKind": "local_installed_python_not_win7_frozen_runtime",
+  "accountIdentityHash": "45e797a99c73dede09bc155091f0f8ec9be7679fb03c8a83cf2956ea14beaad8",
+  "samples": [
+    {
+      "server_time_utc_msc": null,
+      "sampled_at_utc_msc": 1788695576048,
+      "sampling_started_at_utc_msc": 1788695576044,
+      "timezone_offset_minutes": null,
+      "clock_status": "unavailable",
+      "source_kind": "mt5_tick_time_unverified",
+      "sample_status": "captured",
+      "symbol": "AUDCAD.s",
+      "raw_tick_time_msc": 1788566099721
+    },
+    {
+      "server_time_utc_msc": null,
+      "sampled_at_utc_msc": 1788695576550,
+      "sampling_started_at_utc_msc": 1788695576548,
+      "timezone_offset_minutes": null,
+      "clock_status": "unavailable",
+      "source_kind": "mt5_tick_time_unverified",
+      "sample_status": "captured",
+      "symbol": "AUDCAD.s",
+      "raw_tick_time_msc": 1788566099721
+    }
+  ],
+  "terminalWallClockIndependentlyObserved": false,
+  "tradingCommandsSent": false,
+  "calibrated": false,
+  "mysqlRedisConnected": false,
+  "browserEndToEndVerified": false,
+  "sourceProvenance": {
+    "workerModifiedLocally": true,
+    "workerSha256": "9116a898438925114a33180e4becfdd5d36b66dd096da14288edc84312435b7a",
+    "baseCommit": "9946e0e1"
+  }
+}
