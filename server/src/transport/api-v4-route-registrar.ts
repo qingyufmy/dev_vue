@@ -1,3 +1,4 @@
+import { referralRuleRoutes, type ReferralRuleManagementService } from '../modules/commerce/index.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { auditRoutes, type AuditService } from '../modules/audit/index.js'
 import { registerSsoRoutes, type AuthService } from '../modules/auth/index.js'
@@ -32,6 +33,7 @@ export interface ApiV4RouteServices {
   tradeHistory: TradeHistoryService
   audit: AuditService
   tradeAuth: AuthTradeRequestAdapter
+  referralRules: ReferralRuleManagementService
   observerManagement: ObserverManagementService
   observerAdminAuth: AuthObserverAdminAdapter
 }
@@ -44,6 +46,9 @@ export async function registerApiV4Routes(
   await registerSsoRoutes(fastify, services.auth, input.secureCookies)
   await fastify.register(async admin => {
     admin.addHook('onRequest', exactAdminHostHook(input.adminOrigin))
+    await admin.register(referralRuleRoutes, {
+      prefix: '/api/v4/admin/referrals', service: services.referralRules, auth: services.observerAdminAuth,
+    })
     await admin.register(observerManagementRoutes, {
       prefix: '/api/v4/admin/observer', service: services.observerManagement, auth: services.observerAdminAuth,
     })

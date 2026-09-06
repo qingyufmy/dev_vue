@@ -1,3 +1,4 @@
+import { ReferralRuleManagementService, MysqlReferralRuleManagement } from '../modules/commerce/index.js'
 import Fastify from 'fastify'
 import { AuditService, MysqlAuditRepository } from '../modules/audit/index.js'
 import {
@@ -63,6 +64,7 @@ async function main() {
     tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),
     audit: new AuditService(new MysqlAuditRepository(pool)),
     tradeAuth,
+    referralRules: new ReferralRuleManagementService(new MysqlReferralRuleManagement(pool)),
     observerManagement: new ObserverManagementService(new MysqlObserverManagementRepository(pool)),
     observerAdminAuth: new AuthObserverAdminAdapter(auth),
   }, { tradeOrigin: web.auth.tradeOrigin, adminOrigin: web.auth.adminOrigin, secureCookies: web.secureCookies })

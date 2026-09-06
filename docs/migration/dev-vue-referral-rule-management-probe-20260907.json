@@ -1,0 +1,31 @@
+{
+  "kind": "referral-rule-management-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceFiles": [
+    {
+      "path": "modules/commerce/infrastructure/mysql-referral-rule-management.js",
+      "sha256": "a9c53a817c9e968d2d9239188e171666b738450f0884a3b6458808570f6eebf5"
+    },
+    {
+      "path": "modules/commerce/infrastructure/mysql-referral-rule-writer.js",
+      "sha256": "7fcd89c167810fc14bb0fae4c76fa6c1d9dfd78943660ee564d15acd5c462a89"
+    },
+    {
+      "path": "modules/commerce/application/referral-rule-management.js",
+      "sha256": "52868e76bffd2ea3aa410c28d1feaae3599afaaceecb9a83c9c5541bd85a0ed5"
+    }
+  ],
+  "concurrentConnections": 2,
+  "duplicateAppliedOnce": true,
+  "competingRevisionRejected": true,
+  "commitResponseLostRecovered": true,
+  "changedRequestRejected": true,
+  "auditRowsVerified": 4,
+  "originalRulesPreserved": true,
+  "fixturesRemoved": true,
+  "currentDevVueWritten": false
+}
