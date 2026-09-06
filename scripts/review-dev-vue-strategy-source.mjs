@@ -6,12 +6,14 @@ import { legacyStrategyFields, legacySubscriptionFields, reviewStrategySources }
 import { convertSubscriptionSymbols } from './lib/v4-subscription-symbol-conversion.mjs'
 import { planAccountIdMappings } from './lib/v4-account-id-mapping.mjs'
 import { reviewSubscriptionAccountScopes } from './lib/v4-subscription-account-review.mjs'
+import { convertSubscriptionSchedule } from './lib/v4-subscription-schedule-conversion.mjs'
 
 const root = new URL('../', import.meta.url)
 let connection
 try {
   const [mode] = process.argv.slice(2)
-  if (process.argv.length !== 3 || !['--write', '--verify', '--write-symbols', '--verify-symbols', '--write-scopes', '--verify-scopes'].includes(mode)) throw new Error('strategy_source_arguments')
+  if (process.argv.length !== 3 || !['--write', '--verify', '--write-symbols', '--verify-symbols', '--write-scopes', '--verify-scopes', '--write-schedules', '--verify-schedules'].includes(mode)) throw new Error('strategy_source_arguments')
+  const scheduleMode = mode.endsWith('-schedules')
   const scopeMode = mode.endsWith('-scopes')
   const symbolMode = mode.endsWith('-symbols') || scopeMode
   const env = parse(await readFile(new URL('server/.env', root)))
@@ -42,23 +44,29 @@ try {
   }
   await connection.rollback()
   const report = { observedAt: new Date().toISOString(), identity, ...review }
-  if (symbolMode) {
+  if (symbolMode || scheduleMode) {
     const previousSource = JSON.parse(await readFile(new URL('docs/migration/dev-vue-strategy-source-review-20260906.json', root), 'utf8'))
     if (previousSource.sourceHash !== review.sourceHash) throw new Error('strategy_source_changed')
+  }
+  if (symbolMode) {
     const byId = new Map(strategies.map(row => [row.id, row]))
     report.symbolConversions = subscriptions.map(row => ({ locatorHash: hash(row.id), sourceRowHash: hash(row),
       ...convertSubscriptionSymbols(row.symbols_json, byId.get(row.strategy_id)?.symbols_json) }))
     report.symbolConversionReady = report.symbolConversions.every(row => row.status === 'converted')
   }
   if (scopeMode) report.accountScopes = scopeReview
-  const path = new URL(scopeMode ? 'docs/migration/dev-vue-subscription-account-review-20260907.json' : symbolMode ? 'docs/migration/dev-vue-subscription-symbol-review-20260907.json' : 'docs/migration/dev-vue-strategy-source-review-20260906.json', root)
+  if (scheduleMode) {
+    report.scheduleConversions = subscriptions.map(row => ({ locatorHash: hash(row.id), sourceRowHash: hash(row), ...convertSubscriptionSchedule(row) }))
+    report.scheduleConversionReady = report.scheduleConversions.every(row => row.status === 'converted')
+  }
+  const path = new URL(scheduleMode ? 'docs/migration/dev-vue-subscription-schedule-review-20260907.json' : scopeMode ? 'docs/migration/dev-vue-subscription-account-review-20260907.json' : symbolMode ? 'docs/migration/dev-vue-subscription-symbol-review-20260907.json' : 'docs/migration/dev-vue-strategy-source-review-20260906.json', root)
   if (mode.startsWith('--verify')) {
     const old = JSON.parse(await readFile(path, 'utf8'))
     const stable = ({ observedAt, ...value }) => value
     if (hash(stable(old)) !== hash(stable(report))) throw new Error('strategy_source_changed')
   } else await writeFile(path, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' })
   console.log(JSON.stringify({ counts: report.counts, issues: report.issues, blockers: report.blockers,
-    ...(scopeMode ? { accountScopes: report.accountScopes } : symbolMode ? { symbolConversionReady: report.symbolConversionReady, symbolConversions: report.symbolConversions } : {}), businessWritesPerformed: false }))
+    ...(scheduleMode ? { scheduleConversionReady: report.scheduleConversionReady, scheduleConversions: report.scheduleConversions } : scopeMode ? { accountScopes: report.accountScopes } : symbolMode ? { symbolConversionReady: report.symbolConversionReady, symbolConversions: report.symbolConversions } : {}), businessWritesPerformed: false }))
 } catch (error) {
   console.error(JSON.stringify({ code: /^strategy_source_/.test(error.message) ? error.message : 'strategy_source_review_failed' }))
   process.exitCode = 1
