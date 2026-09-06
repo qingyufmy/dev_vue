@@ -62,7 +62,7 @@ describe('Stage 12B analysis scheduling and worker', () => {
     const advanced: string[] = []
     const schedules: AnalysisScheduleRepository = {
       async listDue() {
-        return ['8', '7'].map(accountId => ({ subscriptionId: `s-${accountId}`, userId: 42, marketSourceAccountId: accountId, strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', cadenceSeconds: 300, nextDueAt: '2026-09-03T08:00:00.000Z' }))
+        return ['8', '7'].map(accountId => ({ subscriptionId: `s-${accountId}`, receiveTimezone: 'UTC', receiveWindow: { enabled: false }, userId: 42, marketSourceAccountId: accountId, strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', cadenceSeconds: 300, nextDueAt: '2026-09-03T08:00:00.000Z' }))
       },
       async advance(subscriptionId) { advanced.push(subscriptionId); return true },
     }

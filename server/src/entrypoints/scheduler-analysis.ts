@@ -8,6 +8,7 @@ import {
   MysqlModelUsageLedger,
 } from '../modules/inference/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
+import { MysqlTradingRepository } from '../modules/trading/index.js'
 
 loadServerEnvironment()
 
@@ -18,9 +19,11 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
+  const trading = new MysqlTradingRepository(pool)
   const scheduler = new AnalysisScheduler(
     new MysqlAnalysisScheduleRepository(pool),
     new InferenceService(new MysqlInferenceRepository(pool), strategies),
+    (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
   )
   const recovery = new ModelTaskRecovery(new MysqlModelTaskRecoveryRepository(pool))
   const usage = new MysqlModelUsageLedger(pool)
