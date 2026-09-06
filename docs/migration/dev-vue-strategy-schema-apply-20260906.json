@@ -1,0 +1,56 @@
+{
+  "kind": "dev_vue_strategy_schema_upgrade",
+  "status": "verified",
+  "database": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "backupSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "completedAtUtc": "2026-09-06T15:51:39.854Z",
+  "result": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_005_01_strategies",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_005_02_strategy_versions",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_005_03_strategy_active_version_fk",
+        "status": "applied"
+      }
+    ]
+  },
+  "stepChecksums": [
+    {
+      "id": "inplace_005_01_strategies",
+      "checksum": "c3ecdab295a7e4acaf102d5521696316adf07eb00468e4a5c43d6bc16fe25dbb",
+      "beforeHash": null,
+      "afterHash": "9260d6ef6ca6e649e62d8ea00bec276ce5bcdcdeffa5751a334fab61434802bd"
+    },
+    {
+      "id": "inplace_005_02_strategy_versions",
+      "checksum": "0821d9ae7c6322b0d7ade0feea07cfd14c929f8cdebc9ffac0bba876c01acd35",
+      "beforeHash": null,
+      "afterHash": "768295142175363f8f381a4bc6b68d56ec1171e5e9211bf7ffa5a2ec90db31ee"
+    },
+    {
+      "id": "inplace_005_03_strategy_active_version_fk",
+      "checksum": "24dbdf2987fa31116e323445724e436eb7083bb99e1a6d8a1900ac3c76ed1b9e",
+      "beforeHash": "9260d6ef6ca6e649e62d8ea00bec276ce5bcdcdeffa5751a334fab61434802bd",
+      "afterHash": "8435f65723f4c195d0b8767fa7cf1d9eefa4eae7ca20177d141946fcd8768bab"
+    }
+  ],
+  "ddlExecutions": 3,
+  "counts": {
+    "table_count": "182",
+    "completed_steps": "26"
+  },
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "repeatNoop": true,
+  "noBusinessRowsSeeded": true,
+  "sourceRenamed": false,
+  "fullNormalizationComplete": false
+}
