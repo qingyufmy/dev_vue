@@ -1,0 +1,94 @@
+{
+  "kind": "payment-order-writer-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "toolManifest": [
+    {
+      "path": "lib/mysql-payment-order-writer.mjs",
+      "sha256": "7431eb9a9fa4d719e55657d1845edd5bba1ddbc6be2e0c9d41ffbfbc34639b24"
+    },
+    {
+      "path": "lib/v4-payment-order-rows.mjs",
+      "sha256": "f8e16e9d54f3796c67fa0ee2ec9e220de1c3fb45c7667d28d044f2690d2a2b2b"
+    },
+    {
+      "path": "lib/v4-backfill-contract.mjs",
+      "sha256": "4dff263678f769cc2f733861446b9e50d4a0a2d1d2b9f3e1dc1e278d2c3d8810"
+    },
+    {
+      "path": "lib/v4-identity-values.mjs",
+      "sha256": "4d6c51c97ef6841c17536c1e2a794eacca715981c0ef497d73c68b998d89fd6e"
+    },
+    {
+      "path": "lib/v4-identity-time.mjs",
+      "sha256": "aa52d388a8fdb6854b79b8c3be724cf491d476b23560f619396772851f212976"
+    },
+    {
+      "path": "lib/v4-payment-order-source.mjs",
+      "sha256": "095c32f6a06bbd0f428af936108246e50fc7062790e2b9b46dfdcd5862128a8b"
+    },
+    {
+      "path": "lib/v4-order-credit-conversion.mjs",
+      "sha256": "d78657ee284ff8e8834e5e17f262a3f7674272b688e56f17ebd2f5111eaeab88"
+    },
+    {
+      "path": "lib/v4-payment-order-fact-audit.mjs",
+      "sha256": "9ada3bc754bf370477090fd70ec5ff1476122d8474d7cc20a08c50c6edd6c375"
+    },
+    {
+      "path": "probe-payment-order-writer-host.mjs",
+      "sha256": "06796c820343c14f34c45372314e461b747af246cd5d8b6e7690e05ff871d699"
+    },
+    {
+      "path": "run-payment-order-writer-host.py",
+      "sha256": "827cf6f9cb29becf07bb4293c1f8d09e76e8d9ea8f64e93dfd6e886299382b15"
+    }
+  ],
+  "fixtureOnly": true,
+  "first": {
+    "applied": true,
+    "targetHash": "25e605201f7381164d556e2af2e4ad98073d2d12936ba6c64e62a626909aeddd"
+  },
+  "repeated": {
+    "applied": false,
+    "targetHash": "25e605201f7381164d556e2af2e4ad98073d2d12936ba6c64e62a626909aeddd"
+  },
+  "audit": {
+    "sourceRows": 1,
+    "targetRows": 1,
+    "sourceFactsMatch": true,
+    "differences": [],
+    "checkedFields": [
+      "legacy_order_id",
+      "user_id",
+      "order_number",
+      "external_order_id",
+      "product_code",
+      "product_label",
+      "billing_period_code",
+      "billing_period_label",
+      "order_amount",
+      "legacy_amount_confirmed",
+      "referral_credit_applied",
+      "currency_code",
+      "status",
+      "status_label",
+      "payment_method_code"
+    ],
+    "timeAndProvenanceVerified": false,
+    "fullReconciliationComplete": false
+  },
+  "conflictRejected": true,
+  "missingVerifyOnlyRejected": true,
+  "rolledBack": true,
+  "finalCounts": {
+    "users_count": 0,
+    "orders_count": 0,
+    "runs_count": 0
+  },
+  "sourceDatabaseWritten": false,
+  "realHistoricalTimeValidated": false
+}
