@@ -1,0 +1,1960 @@
+{
+  "kind": "approved-ab-schema-install",
+  "completedAtUtc": "2026-09-06T10:09:58.892Z",
+  "host": "aurum-vm",
+  "hostAddress": "192.168.1.254",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "sourceCommit": "2b4efad1",
+  "authorization": "User continued in response to the explicit A/B 018-025 installation request and linked scope.",
+  "planHash": "c3506cbb9ab3600d6e6fd5f5b42d38014f001f4ee9779c216d2552fa06453a7f",
+  "toolBundleSha256": "d76752daac535f660c05217230027d815082ac0de9660954dba0f3011663c2b1",
+  "installedFiles": [
+    {
+      "id": "20260905_018_user_state_and_referral_accounts",
+      "file": "20260905_018_user_state_and_referral_accounts.sql",
+      "checksum": "64e8b88cd337fe45202d9bf277317cc6af37942ddf8ae3055f155c58d01c9a29",
+      "statementCount": 2
+    },
+    {
+      "id": "20260905_019_account_ownership_intervals",
+      "file": "20260905_019_account_ownership_intervals.sql",
+      "checksum": "3b17b685274b0eb1fe225305fea9de673fea60cc81c629dc8477a73913a48a1a",
+      "statementCount": 4
+    },
+    {
+      "id": "20260905_020_account_projection_and_history_provenance",
+      "file": "20260905_020_account_projection_and_history_provenance.sql",
+      "checksum": "9f55df7803e2429e395f253d6396edf694b97d1059f1cc2daadb5eb73c62b2f8",
+      "statementCount": 2
+    },
+    {
+      "id": "20260905_021_observer_sources_and_audiences",
+      "file": "20260905_021_observer_sources_and_audiences.sql",
+      "checksum": "aed263e66171f336d7750bbdfa565c03ae8e82f6f69521483a022ec0a3e687d2",
+      "statementCount": 3
+    },
+    {
+      "id": "20260905_022_observer_management_ledger",
+      "file": "20260905_022_observer_management_ledger.sql",
+      "checksum": "0d33169447c5f77f158ae028662c55aadcc09a1eb256d9c5befee2abe8d2a863",
+      "statementCount": 3
+    },
+    {
+      "id": "20260906_023_bridge_profile_epoch_scope",
+      "file": "20260906_023_bridge_profile_epoch_scope.sql",
+      "checksum": "ea314526bb0bbbf1f5fd427ecfc71ea5b97a1997b434348c37e283e9ae82ed4a",
+      "statementCount": 1
+    },
+    {
+      "id": "20260906_024_bridge_pairing_requests",
+      "file": "20260906_024_bridge_pairing_requests.sql",
+      "checksum": "acfbcd21fdaa99b6f5e6cd081e56dd4e1c21cae928049dc35a085e67571d624e",
+      "statementCount": 1
+    },
+    {
+      "id": "20260906_025_data_migration_batch_ledger",
+      "file": "20260906_025_data_migration_batch_ledger.sql",
+      "checksum": "6523e515b62147be2157c3b8a6e1e6fd1dc96d131343cbfbd02c180cc8cdb107",
+      "statementCount": 5
+    }
+  ],
+  "perTargetStatements": 21,
+  "preflight": {
+    "observedAtUtc": "2026-09-06T10:08:04.036Z",
+    "targets": [
+      {
+        "database": "dev_vue_m1_a",
+        "structureHash": "dd799b70b93dc01526ca6220cba0b1f2f314c2d94f7df1c59d0827f9236aea93",
+        "tableCount": 102,
+        "columnsHash": "545b6e00bd97a5de17790144bda236f2ec66a695856722ff6bf54dba6c3509c5",
+        "constraintCount": "467",
+        "indexColumnCount": "837",
+        "counts": {
+          "account_risk_states": "0",
+          "account_risk_summaries": "0",
+          "account_runtime_snapshots": "0",
+          "account_trade_attributions_v4": "0",
+          "account_trade_daily_summaries_v4": "0",
+          "account_trade_record_deals_v4": "0",
+          "account_trade_records_v4": "0",
+          "ai_analysis_runs": "0",
+          "ai_manual_analysis_cooldowns": "0",
+          "ai_model_attempts": "0",
+          "ai_model_profiles": "0",
+          "ai_model_provider_capabilities": "0",
+          "ai_model_tasks": "0",
+          "ai_model_usage_logs": "0",
+          "ai_trader_runs": "0",
+          "auth_authorization_codes": "0",
+          "auth_sessions": "0",
+          "bridge_command_events_v4": "0",
+          "bridge_command_payloads_v4": "0",
+          "bridge_command_results_v4": "0",
+          "bridge_commands_v4": "0",
+          "bridge_connection_capacity_grants": "0",
+          "bridge_connection_sessions": "0",
+          "bridge_refresh_sessions": "0",
+          "bridge_trade_state_snapshots_v4": "0",
+          "economic_calendar_event_revisions": "0",
+          "economic_calendar_events": "0",
+          "execution_distribution_targets": "0",
+          "execution_distributions": "0",
+          "execution_intent_events": "0",
+          "execution_intent_payloads": "0",
+          "execution_intents": "0",
+          "execution_outcomes": "0",
+          "global_risk_controls": "1",
+          "inference_snapshot_payloads": "0",
+          "inference_snapshots": "0",
+          "macro_data_sources": "0",
+          "macro_feature_sets": "0",
+          "macro_ingestion_runs": "0",
+          "macro_model_versions": "0",
+          "macro_observations": "0",
+          "macro_pipeline_jobs": "0",
+          "macro_research_snapshots": "0",
+          "macro_series": "0",
+          "macro_snapshot_observations": "0",
+          "manual_review_candidates_v4": "0",
+          "market_analyses": "0",
+          "market_analysis_payloads": "0",
+          "market_candles": "0",
+          "market_instrument_snapshots": "0",
+          "market_quotes": "0",
+          "observer_channel_accesses": "0",
+          "observer_channels": "0",
+          "open_position_snapshots": "0",
+          "operation_events": "0",
+          "operations": "0",
+          "outbox_events": "0",
+          "pending_order_snapshots": "0",
+          "platform_model_usage_policy": "0",
+          "review_case_sources_v4": "0",
+          "review_cases_v4": "0",
+          "review_evidence_payloads_v4": "0",
+          "review_job_events_v4": "0",
+          "review_jobs_v4": "0",
+          "review_model_attempts_v4": "0",
+          "review_user_states_v4": "0",
+          "review_version_payloads_v4": "0",
+          "review_versions_v4": "0",
+          "risk_decision_payloads_v4": "0",
+          "risk_decisions_v4": "0",
+          "risk_manual_releases": "0",
+          "risk_policy_change_items_v4": "0",
+          "risk_policy_sets_v4": "1",
+          "risk_policy_versions_v4": "2",
+          "risk_reservation_events_v4": "0",
+          "risk_reservations_v4": "0",
+          "risk_state_events": "0",
+          "schema_migration_events": "3",
+          "schema_migrations": "18",
+          "strategies": "0",
+          "strategy_memory_injection_logs_v4": "0",
+          "strategy_memory_libraries_v4": "0",
+          "strategy_memory_library_revisions_v4": "0",
+          "strategy_memory_pending_updates_v4": "0",
+          "strategy_subscriptions": "0",
+          "strategy_versions": "0",
+          "subscription_schedules": "0",
+          "terminal_account_bindings": "0",
+          "terminal_history_deals_v4": "0",
+          "terminal_history_orders_v4": "0",
+          "terminal_profiles": "0",
+          "trade_decision_payloads": "0",
+          "trade_decisions": "0",
+          "trade_history_migration_checkpoints_v4": "0",
+          "trade_history_sync_states_v4": "0",
+          "trading_account_ownerships": "0",
+          "trading_accounts": "0",
+          "trading_contexts": "0",
+          "trading_projection_revisions": "0",
+          "user_execution_commands": "0",
+          "user_model_defaults": "0",
+          "users": "0"
+        }
+      },
+      {
+        "database": "dev_vue_m1_b",
+        "structureHash": "dd799b70b93dc01526ca6220cba0b1f2f314c2d94f7df1c59d0827f9236aea93",
+        "tableCount": 102,
+        "columnsHash": "545b6e00bd97a5de17790144bda236f2ec66a695856722ff6bf54dba6c3509c5",
+        "constraintCount": "467",
+        "indexColumnCount": "837",
+        "counts": {
+          "account_risk_states": "0",
+          "account_risk_summaries": "0",
+          "account_runtime_snapshots": "0",
+          "account_trade_attributions_v4": "0",
+          "account_trade_daily_summaries_v4": "0",
+          "account_trade_record_deals_v4": "0",
+          "account_trade_records_v4": "0",
+          "ai_analysis_runs": "0",
+          "ai_manual_analysis_cooldowns": "0",
+          "ai_model_attempts": "0",
+          "ai_model_profiles": "0",
+          "ai_model_provider_capabilities": "0",
+          "ai_model_tasks": "0",
+          "ai_model_usage_logs": "0",
+          "ai_trader_runs": "0",
+          "auth_authorization_codes": "0",
+          "auth_sessions": "0",
+          "bridge_command_events_v4": "0",
+          "bridge_command_payloads_v4": "0",
+          "bridge_command_results_v4": "0",
+          "bridge_commands_v4": "0",
+          "bridge_connection_capacity_grants": "0",
+          "bridge_connection_sessions": "0",
+          "bridge_refresh_sessions": "0",
+          "bridge_trade_state_snapshots_v4": "0",
+          "economic_calendar_event_revisions": "0",
+          "economic_calendar_events": "0",
+          "execution_distribution_targets": "0",
+          "execution_distributions": "0",
+          "execution_intent_events": "0",
+          "execution_intent_payloads": "0",
+          "execution_intents": "0",
+          "execution_outcomes": "0",
+          "global_risk_controls": "1",
+          "inference_snapshot_payloads": "0",
+          "inference_snapshots": "0",
+          "macro_data_sources": "0",
+          "macro_feature_sets": "0",
+          "macro_ingestion_runs": "0",
+          "macro_model_versions": "0",
+          "macro_observations": "0",
+          "macro_pipeline_jobs": "0",
+          "macro_research_snapshots": "0",
+          "macro_series": "0",
+          "macro_snapshot_observations": "0",
+          "manual_review_candidates_v4": "0",
+          "market_analyses": "0",
+          "market_analysis_payloads": "0",
+          "market_candles": "0",
+          "market_instrument_snapshots": "0",
+          "market_quotes": "0",
+          "observer_channel_accesses": "0",
+          "observer_channels": "0",
+          "open_position_snapshots": "0",
+          "operation_events": "0",
+          "operations": "0",
+          "outbox_events": "0",
+          "pending_order_snapshots": "0",
+          "platform_model_usage_policy": "0",
+          "review_case_sources_v4": "0",
+          "review_cases_v4": "0",
+          "review_evidence_payloads_v4": "0",
+          "review_job_events_v4": "0",
+          "review_jobs_v4": "0",
+          "review_model_attempts_v4": "0",
+          "review_user_states_v4": "0",
+          "review_version_payloads_v4": "0",
+          "review_versions_v4": "0",
+          "risk_decision_payloads_v4": "0",
+          "risk_decisions_v4": "0",
+          "risk_manual_releases": "0",
+          "risk_policy_change_items_v4": "0",
+          "risk_policy_sets_v4": "1",
+          "risk_policy_versions_v4": "2",
+          "risk_reservation_events_v4": "0",
+          "risk_reservations_v4": "0",
+          "risk_state_events": "0",
+          "schema_migration_events": "3",
+          "schema_migrations": "18",
+          "strategies": "0",
+          "strategy_memory_injection_logs_v4": "0",
+          "strategy_memory_libraries_v4": "0",
+          "strategy_memory_library_revisions_v4": "0",
+          "strategy_memory_pending_updates_v4": "0",
+          "strategy_subscriptions": "0",
+          "strategy_versions": "0",
+          "subscription_schedules": "0",
+          "terminal_account_bindings": "0",
+          "terminal_history_deals_v4": "0",
+          "terminal_history_orders_v4": "0",
+          "terminal_profiles": "0",
+          "trade_decision_payloads": "0",
+          "trade_decisions": "0",
+          "trade_history_migration_checkpoints_v4": "0",
+          "trade_history_sync_states_v4": "0",
+          "trading_account_ownerships": "0",
+          "trading_accounts": "0",
+          "trading_contexts": "0",
+          "trading_projection_revisions": "0",
+          "user_execution_commands": "0",
+          "user_model_defaults": "0",
+          "users": "0"
+        }
+      }
+    ],
+    "structure": {
+      "charset": "utf8mb4",
+      "collation": "utf8mb4_unicode_ci",
+      "tableCount": 102,
+      "sha256": "dd799b70b93dc01526ca6220cba0b1f2f314c2d94f7df1c59d0827f9236aea93",
+      "tables": [
+        {
+          "name": "account_risk_states",
+          "sha256": "4db6d16d799e757edba4be707dd9ded038e3e8c8020d0b60bcda635df05a478d"
+        },
+        {
+          "name": "account_risk_summaries",
+          "sha256": "6ef593a712583d2ad55ab2af25fc5ba3f1bafd47c9f3306b68a872b65523901f"
+        },
+        {
+          "name": "account_runtime_snapshots",
+          "sha256": "6df92a77561d6592901e84bbe41055ce90fe61c018069c0e2cad67e5b1af35b8"
+        },
+        {
+          "name": "account_trade_attributions_v4",
+          "sha256": "021590d670e6a4144d60fe86bb697da950779d6c2da24046b98633e327185f7b"
+        },
+        {
+          "name": "account_trade_daily_summaries_v4",
+          "sha256": "36c6f642e167bdb41fb2d28e7924096c4c8ca930cce0f96b965d3ddace8a4ebc"
+        },
+        {
+          "name": "account_trade_record_deals_v4",
+          "sha256": "9eaade8b8c534ca8802f8a024b01c486910b44fefba25270b64e616f9a985532"
+        },
+        {
+          "name": "account_trade_records_v4",
+          "sha256": "b22bb3b72efa43150931db20d149d2ff5e11d66a2a9ab42c20165eeabc993b37"
+        },
+        {
+          "name": "ai_analysis_runs",
+          "sha256": "7df9f2aed1e3e05f4e8da936f6bc253c8c1815bcbc709aa9dae51e477ed0b2bc"
+        },
+        {
+          "name": "ai_manual_analysis_cooldowns",
+          "sha256": "c616b1b559e14fa9ad032ad9c2c4400b57340a5196463c896b7eb7694a03258b"
+        },
+        {
+          "name": "ai_model_attempts",
+          "sha256": "382ce8c9f3c250d88dcf54d1af833fd11da8e007add0c029af03835418a7dc95"
+        },
+        {
+          "name": "ai_model_profiles",
+          "sha256": "df62be0ffe3e42e9c3c39e248b330d0d964d03e1d1a980295ae5ef40fd7cb181"
+        },
+        {
+          "name": "ai_model_provider_capabilities",
+          "sha256": "ccbc727a2e672ad5a3235dd811f25d8a702130d459e5175ac0ef8669db04e95f"
+        },
+        {
+          "name": "ai_model_tasks",
+          "sha256": "271cbf95a2f6349da7ca4aa60ceadac8c6b37f9cee46f267ec827e7908c6f9f2"
+        },
+        {
+          "name": "ai_model_usage_logs",
+          "sha256": "8d85527af41479e22fb4e1e7a6a735324fcd0f8ee0c0ff5e94b5e835e0a5e637"
+        },
+        {
+          "name": "ai_trader_runs",
+          "sha256": "8748e65e2dbf98fd9700e13544100594f848fa2d6f8df50bed220d125e63d9a8"
+        },
+        {
+          "name": "auth_authorization_codes",
+          "sha256": "d4d3a5bf3923c2caa7a078701cdbc37a8271a5b872646367a5af79b41b35b695"
+        },
+        {
+          "name": "auth_sessions",
+          "sha256": "93fdf62a0b4a7eedc3f1381e4415c848a13b09cf2c5301cd6338422776871b41"
+        },
+        {
+          "name": "bridge_command_events_v4",
+          "sha256": "3709fe89be1cc6e928e2fee2adc844267feac96cd6363888e95b598af16b1fe0"
+        },
+        {
+          "name": "bridge_command_payloads_v4",
+          "sha256": "ad78a41ddeed4971e3f56058a049c6c1cc50519d8f3c204d343d4856e8c14d9f"
+        },
+        {
+          "name": "bridge_command_results_v4",
+          "sha256": "3222d01e633605e65d6e7f07636824f56a41b35aab608732d3dfdb7a73feaccc"
+        },
+        {
+          "name": "bridge_commands_v4",
+          "sha256": "5aa38e81dc4747aaf1d1cf6ccd59fe2494d74efc3583f13f796ab5d1f5a951eb"
+        },
+        {
+          "name": "bridge_connection_capacity_grants",
+          "sha256": "0097e963de0cecdef7e7e99feacd71d88264c309ffee2ebc98c1454647dc2f78"
+        },
+        {
+          "name": "bridge_connection_sessions",
+          "sha256": "91f0166dabeefc51f109e2b0597a5079a1dda1b893365d6f3a09690c69ac4e7f"
+        },
+        {
+          "name": "bridge_refresh_sessions",
+          "sha256": "4e7e3595cd689df9bfe3feddc71a5f22c25a9d3374aed01309596782c86e0d44"
+        },
+        {
+          "name": "bridge_trade_state_snapshots_v4",
+          "sha256": "5f241b3a6bc90f2ad9ab8172ee67ac7e921fe3f0910f690c21afa48c0d167ab8"
+        },
+        {
+          "name": "economic_calendar_event_revisions",
+          "sha256": "d817cdf681687772de1a2e366b8532b2b877488b1e0a8c57a9b8efadb15ceeaa"
+        },
+        {
+          "name": "economic_calendar_events",
+          "sha256": "1d15592445c70ee2cda77a66c24f6bd6ded6f991458f5478be1cbdba67cba67f"
+        },
+        {
+          "name": "execution_distribution_targets",
+          "sha256": "4bc4089091c7515c22042c2297b44ed665ad136a1f3cf1bf81457ef51ed2ff6a"
+        },
+        {
+          "name": "execution_distributions",
+          "sha256": "2e9df186d3342eec7ddba605eca4db3742c2bdc9ea5a83d00750a9139366fdaa"
+        },
+        {
+          "name": "execution_intent_events",
+          "sha256": "14968fd862f69892c961bf2ec7b3f9857180d86eb3db44e2c25a3af8f6a8ebe7"
+        },
+        {
+          "name": "execution_intent_payloads",
+          "sha256": "34e077334ceac64debadcf051441d15d025b83774dc41369e67416e6cb3a206a"
+        },
+        {
+          "name": "execution_intents",
+          "sha256": "02f6e7dcdb1ba05b4366bcc2fca4510c3c9f41dd22aa35b1481f245e72a284be"
+        },
+        {
+          "name": "execution_outcomes",
+          "sha256": "8ef89d9bbc8eb90a1892225f891045b0267359487dc612a3c3e6d510869df1f3"
+        },
+        {
+          "name": "global_risk_controls",
+          "sha256": "b0bd42f2c8c9d2a629176da3240d1f1b6edfa32f1920fcecfcc286ae67951484"
+        },
+        {
+          "name": "inference_snapshot_payloads",
+          "sha256": "8022645cf6454e80239da3cc58061951ec46d6973478ea208fe3f245f9130f45"
+        },
+        {
+          "name": "inference_snapshots",
+          "sha256": "ff044870a8962f47e3cce30987d5e570a2dbad64b5969c0040a1fbb46787e508"
+        },
+        {
+          "name": "macro_data_sources",
+          "sha256": "5d05c45a305b622a615e653dfb56c47b41526fa6f7ed98198f0a4f044610d38f"
+        },
+        {
+          "name": "macro_feature_sets",
+          "sha256": "c93ecfeb3f0e7f4726ebabc46f3449e3bbff8b04c5dd27ab3352ec2a02eb3dfb"
+        },
+        {
+          "name": "macro_ingestion_runs",
+          "sha256": "dd64d5149dacac702eb87ea27530b5630f1e45238034724ef88a01fc5b3da3f7"
+        },
+        {
+          "name": "macro_model_versions",
+          "sha256": "fc705bf274a2a483c644eb37b66d914ee1976db7dadc785c40b50a00a335eb2a"
+        },
+        {
+          "name": "macro_observations",
+          "sha256": "8c7a2d1bd1b4d513a5f949ee3a38d44490741dae394d83b8b09d41ad9958cedb"
+        },
+        {
+          "name": "macro_pipeline_jobs",
+          "sha256": "d88b82740c39091915df0b8f6cb9b01246fb7bc355c565a55fcb8741690164ff"
+        },
+        {
+          "name": "macro_research_snapshots",
+          "sha256": "58a565eeaf7770522d5c11e3af95ad1514f0e105dbbede3957666ad53cdb903e"
+        },
+        {
+          "name": "macro_series",
+          "sha256": "5cd2165a5f8c9bd782f79f86110f4ec21ae7b849b14f645d5fbf23636893ea2c"
+        },
+        {
+          "name": "macro_snapshot_observations",
+          "sha256": "4c7bf7addbd6aaa8edb84eb5a500a5cc1f6c707562ef4a0352aa6c833bff6936"
+        },
+        {
+          "name": "manual_review_candidates_v4",
+          "sha256": "eaa470328160a246c08ccbc05847cd1ca3610e77fc012a60f8785bfdf2750df6"
+        },
+        {
+          "name": "market_analyses",
+          "sha256": "d2395f0d404fe94d6f29368d9aff50cba345dd40bfa4c12c2bce986c556fbef4"
+        },
+        {
+          "name": "market_analysis_payloads",
+          "sha256": "9187114c51634dc6993eddee83d62aa1155bbb8614bc2b1a9b413083d4993941"
+        },
+        {
+          "name": "market_candles",
+          "sha256": "b636fc5b2a48c8529d881f6db7ebf128337b377cd4c0e1fc3dda8641ec71258c"
+        },
+        {
+          "name": "market_instrument_snapshots",
+          "sha256": "d7a7b28b85efcd6f0cd87f67594e38a7ca2de80ee1dbb103a545e86d2782dbe3"
+        },
+        {
+          "name": "market_quotes",
+          "sha256": "fff559ffb1a66e81abd132e2e5373a1c9e2aca84efac8b6f034cf98d78bfa9d6"
+        },
+        {
+          "name": "observer_channel_accesses",
+          "sha256": "3b0a7d382db71084ee9bf8da1a33b3d6db4d459506033bc91c165a5ccec2340a"
+        },
+        {
+          "name": "observer_channels",
+          "sha256": "ed83de3ee1eebe98720b5bcbb932f5c37a7b37c4b47250f034e6b79c2daa7ce4"
+        },
+        {
+          "name": "open_position_snapshots",
+          "sha256": "6f66c9ced2edff02042c80498c2639f33b3f77ed095632ae7c999d034f4288c9"
+        },
+        {
+          "name": "operation_events",
+          "sha256": "625c106c9fa011e1f598573dd9d7a7593f30038059e6456e085352963af6781d"
+        },
+        {
+          "name": "operations",
+          "sha256": "b98db8c185529205f64bce886034dc7701cc0e85f4c1bd10e93e9361b78e6b24"
+        },
+        {
+          "name": "outbox_events",
+          "sha256": "e64b9140c85329940c71e3dd95a75b7a6c5f77a3cfad48d3f97795d708d2e670"
+        },
+        {
+          "name": "pending_order_snapshots",
+          "sha256": "1415e329515c6e3a5fa45e9f64bcb37e3509990f851583717d13244813b170b9"
+        },
+        {
+          "name": "platform_model_usage_policy",
+          "sha256": "b61664424fe03a7ad183f3f7c4aab4cf6abe369a0601ee9838c3f0db1e969559"
+        },
+        {
+          "name": "review_case_sources_v4",
+          "sha256": "da2af96137367837bddc70c22307587155b73b32ae01f144cd306de99987ab96"
+        },
+        {
+          "name": "review_cases_v4",
+          "sha256": "60641650b20608c9ebc650f89cb43863c07220cae805e7e78f894092c95af447"
+        },
+        {
+          "name": "review_evidence_payloads_v4",
+          "sha256": "f8efbce2034139afcac175c9cbe0db4efa2664746f4b5ce00457062aa7edd2f6"
+        },
+        {
+          "name": "review_job_events_v4",
+          "sha256": "97a69fddc7fa0e6b2419b42da87967574542ed5822f3646366d391356dbe0cba"
+        },
+        {
+          "name": "review_jobs_v4",
+          "sha256": "56d96fe23f81b262b04a1db72f55d699994a7ff3d1af5c099289f19c7569f9a6"
+        },
+        {
+          "name": "review_model_attempts_v4",
+          "sha256": "519785a5d0dd90b906428633b26a727250ae0a0b270f73eca886dbb71d6d6c95"
+        },
+        {
+          "name": "review_user_states_v4",
+          "sha256": "3246541397522add077362fa1c1b6e2ce3047ee7736e03095929b0ddd6d93553"
+        },
+        {
+          "name": "review_version_payloads_v4",
+          "sha256": "c9f0d0e7b6b69766ab2dfb606433279489a6710d5258ba69e4b5353eb91fc2f1"
+        },
+        {
+          "name": "review_versions_v4",
+          "sha256": "c2b9e920aedd0295d7be03a2de8d7bfe022cf2b348d57fcd706f4652b7a7315f"
+        },
+        {
+          "name": "risk_decision_payloads_v4",
+          "sha256": "58ef2b04561670eb9c8c56193b9349946e0345fae4a0eecc3f008280a455a845"
+        },
+        {
+          "name": "risk_decisions_v4",
+          "sha256": "07f535fb69ab06f052b67969784d330c13cbd3af5e45777d1d4bdd949b395adc"
+        },
+        {
+          "name": "risk_manual_releases",
+          "sha256": "9029f29656c503a2eb9d13271409fc1f319b29d45d82e2f64d82652425284aad"
+        },
+        {
+          "name": "risk_policy_change_items_v4",
+          "sha256": "c614b34e0765241477580bec159e8aa34b9bf630659c8af17a639f487df01c6f"
+        },
+        {
+          "name": "risk_policy_sets_v4",
+          "sha256": "7a931972f59546b3b5b4ff7070672d9611507d76fdd3c0c12384bc18ae443718"
+        },
+        {
+          "name": "risk_policy_versions_v4",
+          "sha256": "dfa7a7777c56b293e5a13842c071c401f1034962255bf373daed3aeba8cb880d"
+        },
+        {
+          "name": "risk_reservation_events_v4",
+          "sha256": "1f6f0f55faea7da672be72336479deefdcfefd5889283b4901adc74fd66f9745"
+        },
+        {
+          "name": "risk_reservations_v4",
+          "sha256": "717b4dcd2492425ef023163e8f3ed9e6eb3f4f7a25223d935994d8591b73c837"
+        },
+        {
+          "name": "risk_state_events",
+          "sha256": "0c28e4e3a42fc3f02b7a3f28095329a82465c44875b6b48cf915adbeee783230"
+        },
+        {
+          "name": "schema_migration_events",
+          "sha256": "52f35cd23526d0599861b4478b0fa0b5e20002c99fe396a79775080b8c97b05f"
+        },
+        {
+          "name": "schema_migrations",
+          "sha256": "c315069d907203c0c5b9bee89b8430467da83c96d9db6e649d690d2b7dcc76f5"
+        },
+        {
+          "name": "strategies",
+          "sha256": "8435f65723f4c195d0b8767fa7cf1d9eefa4eae7ca20177d141946fcd8768bab"
+        },
+        {
+          "name": "strategy_memory_injection_logs_v4",
+          "sha256": "183e2689d0cc176f4fe69d2bac550f59bc5f597a99119686870a10adbd43775b"
+        },
+        {
+          "name": "strategy_memory_libraries_v4",
+          "sha256": "0d735d68cdaf5675252cd37fcc7b54f25e344b85f37f84f3ba3d82ee887c4935"
+        },
+        {
+          "name": "strategy_memory_library_revisions_v4",
+          "sha256": "d99ece45edc693c8033fa0379007f0d18628a98bd8e2d46f816c3539235675d5"
+        },
+        {
+          "name": "strategy_memory_pending_updates_v4",
+          "sha256": "779f7a2a0761f9602dc4f52e89224ba3211b023a42c4defd4da78a56415dcca9"
+        },
+        {
+          "name": "strategy_subscriptions",
+          "sha256": "7170eec3b0da61b8dd2a0b0d556015ea34af334dc1d14a8fe28e515147cf5937"
+        },
+        {
+          "name": "strategy_versions",
+          "sha256": "768295142175363f8f381a4bc6b68d56ec1171e5e9211bf7ffa5a2ec90db31ee"
+        },
+        {
+          "name": "subscription_schedules",
+          "sha256": "a844d827f8d7d0d0c4af9f78f57caab00a6944e4c4bf97c517f0c6540c38f2dd"
+        },
+        {
+          "name": "terminal_account_bindings",
+          "sha256": "d6cbfddedf81c880a0e615a52362c8f683ae9b32bf5be75e633283ae9c56875f"
+        },
+        {
+          "name": "terminal_history_deals_v4",
+          "sha256": "e86f0cc91f1618a18c00bc61629f16c54d54dffb7c923fb4830c4f63a5304d68"
+        },
+        {
+          "name": "terminal_history_orders_v4",
+          "sha256": "f143b39c29bb2c3ec4de61f3e573c1079560fa78159550bb35c77c39c5402d73"
+        },
+        {
+          "name": "terminal_profiles",
+          "sha256": "e796241d28dd63d6ee3b60b846184bc9f2b73c574dd33dd31240c873d604a13c"
+        },
+        {
+          "name": "trade_decision_payloads",
+          "sha256": "9fb9de347c0dc47729ce25f91998c62862b5c9d03e885a061193f3554bc2d3fb"
+        },
+        {
+          "name": "trade_decisions",
+          "sha256": "914f8840b347afcf460aa729c052f2f1021eb16e9de8c047580cf290f639ed03"
+        },
+        {
+          "name": "trade_history_migration_checkpoints_v4",
+          "sha256": "bb4b1d757e26b4144891111aaecd922457f98c7e4eab89758e075bf6829e822e"
+        },
+        {
+          "name": "trade_history_sync_states_v4",
+          "sha256": "4c08b0a050a28609deddd2da34a25e62942b5c1dea5c74f97c523f1c07352d64"
+        },
+        {
+          "name": "trading_account_ownerships",
+          "sha256": "d7bd02153affc4c71e89179bddf1ed539d3dc3bc6557595dde0291085632a99e"
+        },
+        {
+          "name": "trading_accounts",
+          "sha256": "23b45e559dc4fbb36b86026ebf6f6da6ca570121cf515a289ca485ac4331b382"
+        },
+        {
+          "name": "trading_contexts",
+          "sha256": "5d37635fa64a607331206ce05fe8cdfaa42af3692acccb8c684fd7ac42c3c7b7"
+        },
+        {
+          "name": "trading_projection_revisions",
+          "sha256": "7fc29a4c9ce460152e4ce2896e199b6f881e0c0b4addd90e552d8f9835fa1e3e"
+        },
+        {
+          "name": "user_execution_commands",
+          "sha256": "d2d86a2bdb4684bea8617309f26ccbffe503ae13d268d200b4eefed50ffb4346"
+        },
+        {
+          "name": "user_model_defaults",
+          "sha256": "63064eae78b15a3f45f126493af590cb042bef2281dccb203d9c1abc2d8473a5"
+        },
+        {
+          "name": "users",
+          "sha256": "b852e4f2d220e12ed6d2d5fee1e8aa1208fe63dbc9bb157e7c4cadb077aa5e79"
+        }
+      ]
+    }
+  },
+  "execution": [
+    {
+      "observedAtUtc": "2026-09-06T10:08:24.319Z",
+      "status": "completed",
+      "applied": [
+        "20260905_018_user_state_and_referral_accounts",
+        "20260905_019_account_ownership_intervals",
+        "20260905_020_account_projection_and_history_provenance",
+        "20260905_021_observer_sources_and_audiences",
+        "20260905_022_observer_management_ledger",
+        "20260906_023_bridge_profile_epoch_scope",
+        "20260906_024_bridge_pairing_requests",
+        "20260906_025_data_migration_batch_ledger"
+      ],
+      "skipped": 18,
+      "database": "dev_vue_m1_a",
+      "before": {
+        "database": "dev_vue_m1_a",
+        "structureHash": "dd799b70b93dc01526ca6220cba0b1f2f314c2d94f7df1c59d0827f9236aea93",
+        "tableCount": 102,
+        "columnsHash": "545b6e00bd97a5de17790144bda236f2ec66a695856722ff6bf54dba6c3509c5",
+        "constraintCount": "467",
+        "indexColumnCount": "837",
+        "counts": {
+          "account_risk_states": "0",
+          "account_risk_summaries": "0",
+          "account_runtime_snapshots": "0",
+          "account_trade_attributions_v4": "0",
+          "account_trade_daily_summaries_v4": "0",
+          "account_trade_record_deals_v4": "0",
+          "account_trade_records_v4": "0",
+          "ai_analysis_runs": "0",
+          "ai_manual_analysis_cooldowns": "0",
+          "ai_model_attempts": "0",
+          "ai_model_profiles": "0",
+          "ai_model_provider_capabilities": "0",
+          "ai_model_tasks": "0",
+          "ai_model_usage_logs": "0",
+          "ai_trader_runs": "0",
+          "auth_authorization_codes": "0",
+          "auth_sessions": "0",
+          "bridge_command_events_v4": "0",
+          "bridge_command_payloads_v4": "0",
+          "bridge_command_results_v4": "0",
+          "bridge_commands_v4": "0",
+          "bridge_connection_capacity_grants": "0",
+          "bridge_connection_sessions": "0",
+          "bridge_refresh_sessions": "0",
+          "bridge_trade_state_snapshots_v4": "0",
+          "economic_calendar_event_revisions": "0",
+          "economic_calendar_events": "0",
+          "execution_distribution_targets": "0",
+          "execution_distributions": "0",
+          "execution_intent_events": "0",
+          "execution_intent_payloads": "0",
+          "execution_intents": "0",
+          "execution_outcomes": "0",
+          "global_risk_controls": "1",
+          "inference_snapshot_payloads": "0",
+          "inference_snapshots": "0",
+          "macro_data_sources": "0",
+          "macro_feature_sets": "0",
+          "macro_ingestion_runs": "0",
+          "macro_model_versions": "0",
+          "macro_observations": "0",
+          "macro_pipeline_jobs": "0",
+          "macro_research_snapshots": "0",
+          "macro_series": "0",
+          "macro_snapshot_observations": "0",
+          "manual_review_candidates_v4": "0",
+          "market_analyses": "0",
+          "market_analysis_payloads": "0",
+          "market_candles": "0",
+          "market_instrument_snapshots": "0",
+          "market_quotes": "0",
+          "observer_channel_accesses": "0",
+          "observer_channels": "0",
+          "open_position_snapshots": "0",
+          "operation_events": "0",
+          "operations": "0",
+          "outbox_events": "0",
+          "pending_order_snapshots": "0",
+          "platform_model_usage_policy": "0",
+          "review_case_sources_v4": "0",
+          "review_cases_v4": "0",
+          "review_evidence_payloads_v4": "0",
+          "review_job_events_v4": "0",
+          "review_jobs_v4": "0",
+          "review_model_attempts_v4": "0",
+          "review_user_states_v4": "0",
+          "review_version_payloads_v4": "0",
+          "review_versions_v4": "0",
+          "risk_decision_payloads_v4": "0",
+          "risk_decisions_v4": "0",
+          "risk_manual_releases": "0",
+          "risk_policy_change_items_v4": "0",
+          "risk_policy_sets_v4": "1",
+          "risk_policy_versions_v4": "2",
+          "risk_reservation_events_v4": "0",
+          "risk_reservations_v4": "0",
+          "risk_state_events": "0",
+          "schema_migration_events": "3",
+          "schema_migrations": "18",
+          "strategies": "0",
+          "strategy_memory_injection_logs_v4": "0",
+          "strategy_memory_libraries_v4": "0",
+          "strategy_memory_library_revisions_v4": "0",
+          "strategy_memory_pending_updates_v4": "0",
+          "strategy_subscriptions": "0",
+          "strategy_versions": "0",
+          "subscription_schedules": "0",
+          "terminal_account_bindings": "0",
+          "terminal_history_deals_v4": "0",
+          "terminal_history_orders_v4": "0",
+          "terminal_profiles": "0",
+          "trade_decision_payloads": "0",
+          "trade_decisions": "0",
+          "trade_history_migration_checkpoints_v4": "0",
+          "trade_history_sync_states_v4": "0",
+          "trading_account_ownerships": "0",
+          "trading_accounts": "0",
+          "trading_contexts": "0",
+          "trading_projection_revisions": "0",
+          "user_execution_commands": "0",
+          "user_model_defaults": "0",
+          "users": "0"
+        }
+      },
+      "after": {
+        "database": "dev_vue_m1_a",
+        "structureHash": "9bce7856c13d7b54a0042a7414d30f209e5d3f2d152d6d28d6e8bf012c4f2218",
+        "tableCount": 115,
+        "columnsHash": "26a93b63b48979cbb2dd1d2e4ba8a5c8b0d23e95c7a5a55db8cef2dea1aa234d",
+        "constraintCount": "522",
+        "indexColumnCount": "916",
+        "counts": {
+          "account_risk_states": "0",
+          "account_risk_summaries": "0",
+          "account_runtime_snapshots": "0",
+          "account_trade_attributions_v4": "0",
+          "account_trade_daily_summaries_v4": "0",
+          "account_trade_record_deals_v4": "0",
+          "account_trade_records_v4": "0",
+          "ai_analysis_runs": "0",
+          "ai_manual_analysis_cooldowns": "0",
+          "ai_model_attempts": "0",
+          "ai_model_profiles": "0",
+          "ai_model_provider_capabilities": "0",
+          "ai_model_tasks": "0",
+          "ai_model_usage_logs": "0",
+          "ai_trader_runs": "0",
+          "auth_authorization_codes": "0",
+          "auth_sessions": "0",
+          "bridge_command_events_v4": "0",
+          "bridge_command_payloads_v4": "0",
+          "bridge_command_results_v4": "0",
+          "bridge_commands_v4": "0",
+          "bridge_connection_capacity_grants": "0",
+          "bridge_connection_sessions": "0",
+          "bridge_refresh_sessions": "0",
+          "bridge_trade_state_snapshots_v4": "0",
+          "bridge_v4_pairing_requests": "0",
+          "data_migration_batches": "0",
+          "data_migration_checkpoints": "0",
+          "data_migration_id_maps": "0",
+          "data_migration_row_receipts": "0",
+          "data_migration_runs": "0",
+          "economic_calendar_event_revisions": "0",
+          "economic_calendar_events": "0",
+          "execution_distribution_targets": "0",
+          "execution_distributions": "0",
+          "execution_intent_events": "0",
+          "execution_intent_payloads": "0",
+          "execution_intents": "0",
+          "execution_outcomes": "0",
+          "global_risk_controls": "1",
+          "inference_snapshot_payloads": "0",
+          "inference_snapshots": "0",
+          "macro_data_sources": "0",
+          "macro_feature_sets": "0",
+          "macro_ingestion_runs": "0",
+          "macro_model_versions": "0",
+          "macro_observations": "0",
+          "macro_pipeline_jobs": "0",
+          "macro_research_snapshots": "0",
+          "macro_series": "0",
+          "macro_snapshot_observations": "0",
+          "manual_review_candidates_v4": "0",
+          "market_analyses": "0",
+          "market_analysis_payloads": "0",
+          "market_candles": "0",
+          "market_instrument_snapshots": "0",
+          "market_quotes": "0",
+          "observer_channel_accesses": "0",
+          "observer_channels": "0",
+          "observer_management_operations": "0",
+          "observer_management_registry": "1",
+          "observer_sources": "0",
+          "open_position_snapshots": "0",
+          "operation_events": "0",
+          "operations": "0",
+          "outbox_events": "0",
+          "pending_order_snapshots": "0",
+          "platform_model_usage_policy": "0",
+          "review_case_sources_v4": "0",
+          "review_cases_v4": "0",
+          "review_evidence_payloads_v4": "0",
+          "review_job_events_v4": "0",
+          "review_jobs_v4": "0",
+          "review_model_attempts_v4": "0",
+          "review_user_states_v4": "0",
+          "review_version_payloads_v4": "0",
+          "review_versions_v4": "0",
+          "risk_decision_payloads_v4": "0",
+          "risk_decisions_v4": "0",
+          "risk_manual_releases": "0",
+          "risk_policy_change_items_v4": "0",
+          "risk_policy_sets_v4": "1",
+          "risk_policy_versions_v4": "2",
+          "risk_reservation_events_v4": "0",
+          "risk_reservations_v4": "0",
+          "risk_state_events": "0",
+          "schema_migration_events": "3",
+          "schema_migrations": "26",
+          "strategies": "0",
+          "strategy_memory_injection_logs_v4": "0",
+          "strategy_memory_libraries_v4": "0",
+          "strategy_memory_library_revisions_v4": "0",
+          "strategy_memory_pending_updates_v4": "0",
+          "strategy_subscriptions": "0",
+          "strategy_versions": "0",
+          "subscription_schedules": "0",
+          "terminal_account_bindings": "0",
+          "terminal_history_deals_v4": "0",
+          "terminal_history_orders_v4": "0",
+          "terminal_profiles": "0",
+          "trade_decision_payloads": "0",
+          "trade_decisions": "0",
+          "trade_history_migration_checkpoints_v4": "0",
+          "trade_history_sync_states_v4": "0",
+          "trading_account_ownership_intervals": "0",
+          "trading_account_ownerships": "0",
+          "trading_accounts": "0",
+          "trading_contexts": "0",
+          "trading_projection_provenance_v4": "0",
+          "trading_projection_revisions": "0",
+          "user_execution_commands": "0",
+          "user_model_defaults": "0",
+          "user_referral_accounts": "0",
+          "user_trading_account_settings": "0",
+          "users": "0"
+        }
+      }
+    },
+    {
+      "observedAtUtc": "2026-09-06T10:08:32.153Z",
+      "status": "completed",
+      "applied": [
+        "20260905_018_user_state_and_referral_accounts",
+        "20260905_019_account_ownership_intervals",
+        "20260905_020_account_projection_and_history_provenance",
+        "20260905_021_observer_sources_and_audiences",
+        "20260905_022_observer_management_ledger",
+        "20260906_023_bridge_profile_epoch_scope",
+        "20260906_024_bridge_pairing_requests",
+        "20260906_025_data_migration_batch_ledger"
+      ],
+      "skipped": 18,
+      "database": "dev_vue_m1_b",
+      "before": {
+        "database": "dev_vue_m1_b",
+        "structureHash": "dd799b70b93dc01526ca6220cba0b1f2f314c2d94f7df1c59d0827f9236aea93",
+        "tableCount": 102,
+        "columnsHash": "545b6e00bd97a5de17790144bda236f2ec66a695856722ff6bf54dba6c3509c5",
+        "constraintCount": "467",
+        "indexColumnCount": "837",
+        "counts": {
+          "account_risk_states": "0",
+          "account_risk_summaries": "0",
+          "account_runtime_snapshots": "0",
+          "account_trade_attributions_v4": "0",
+          "account_trade_daily_summaries_v4": "0",
+          "account_trade_record_deals_v4": "0",
+          "account_trade_records_v4": "0",
+          "ai_analysis_runs": "0",
+          "ai_manual_analysis_cooldowns": "0",
+          "ai_model_attempts": "0",
+          "ai_model_profiles": "0",
+          "ai_model_provider_capabilities": "0",
+          "ai_model_tasks": "0",
+          "ai_model_usage_logs": "0",
+          "ai_trader_runs": "0",
+          "auth_authorization_codes": "0",
+          "auth_sessions": "0",
+          "bridge_command_events_v4": "0",
+          "bridge_command_payloads_v4": "0",
+          "bridge_command_results_v4": "0",
+          "bridge_commands_v4": "0",
+          "bridge_connection_capacity_grants": "0",
+          "bridge_connection_sessions": "0",
+          "bridge_refresh_sessions": "0",
+          "bridge_trade_state_snapshots_v4": "0",
+          "economic_calendar_event_revisions": "0",
+          "economic_calendar_events": "0",
+          "execution_distribution_targets": "0",
+          "execution_distributions": "0",
+          "execution_intent_events": "0",
+          "execution_intent_payloads": "0",
+          "execution_intents": "0",
+          "execution_outcomes": "0",
+          "global_risk_controls": "1",
+          "inference_snapshot_payloads": "0",
+          "inference_snapshots": "0",
+          "macro_data_sources": "0",
+          "macro_feature_sets": "0",
+          "macro_ingestion_runs": "0",
+          "macro_model_versions": "0",
+          "macro_observations": "0",
+          "macro_pipeline_jobs": "0",
+          "macro_research_snapshots": "0",
+          "macro_series": "0",
+          "macro_snapshot_observations": "0",
+          "manual_review_candidates_v4": "0",
+          "market_analyses": "0",
+          "market_analysis_payloads": "0",
+          "market_candles": "0",
+          "market_instrument_snapshots": "0",
+          "market_quotes": "0",
+          "observer_channel_accesses": "0",
+          "observer_channels": "0",
+          "open_position_snapshots": "0",
+          "operation_events": "0",
+          "operations": "0",
+          "outbox_events": "0",
+          "pending_order_snapshots": "0",
+          "platform_model_usage_policy": "0",
+          "review_case_sources_v4": "0",
+          "review_cases_v4": "0",
+          "review_evidence_payloads_v4": "0",
+          "review_job_events_v4": "0",
+          "review_jobs_v4": "0",
+          "review_model_attempts_v4": "0",
+          "review_user_states_v4": "0",
+          "review_version_payloads_v4": "0",
+          "review_versions_v4": "0",
+          "risk_decision_payloads_v4": "0",
+          "risk_decisions_v4": "0",
+          "risk_manual_releases": "0",
+          "risk_policy_change_items_v4": "0",
+          "risk_policy_sets_v4": "1",
+          "risk_policy_versions_v4": "2",
+          "risk_reservation_events_v4": "0",
+          "risk_reservations_v4": "0",
+          "risk_state_events": "0",
+          "schema_migration_events": "3",
+          "schema_migrations": "18",
+          "strategies": "0",
+          "strategy_memory_injection_logs_v4": "0",
+          "strategy_memory_libraries_v4": "0",
+          "strategy_memory_library_revisions_v4": "0",
+          "strategy_memory_pending_updates_v4": "0",
+          "strategy_subscriptions": "0",
+          "strategy_versions": "0",
+          "subscription_schedules": "0",
+          "terminal_account_bindings": "0",
+          "terminal_history_deals_v4": "0",
+          "terminal_history_orders_v4": "0",
+          "terminal_profiles": "0",
+          "trade_decision_payloads": "0",
+          "trade_decisions": "0",
+          "trade_history_migration_checkpoints_v4": "0",
+          "trade_history_sync_states_v4": "0",
+          "trading_account_ownerships": "0",
+          "trading_accounts": "0",
+          "trading_contexts": "0",
+          "trading_projection_revisions": "0",
+          "user_execution_commands": "0",
+          "user_model_defaults": "0",
+          "users": "0"
+        }
+      },
+      "after": {
+        "database": "dev_vue_m1_b",
+        "structureHash": "9bce7856c13d7b54a0042a7414d30f209e5d3f2d152d6d28d6e8bf012c4f2218",
+        "tableCount": 115,
+        "columnsHash": "26a93b63b48979cbb2dd1d2e4ba8a5c8b0d23e95c7a5a55db8cef2dea1aa234d",
+        "constraintCount": "522",
+        "indexColumnCount": "916",
+        "counts": {
+          "account_risk_states": "0",
+          "account_risk_summaries": "0",
+          "account_runtime_snapshots": "0",
+          "account_trade_attributions_v4": "0",
+          "account_trade_daily_summaries_v4": "0",
+          "account_trade_record_deals_v4": "0",
+          "account_trade_records_v4": "0",
+          "ai_analysis_runs": "0",
+          "ai_manual_analysis_cooldowns": "0",
+          "ai_model_attempts": "0",
+          "ai_model_profiles": "0",
+          "ai_model_provider_capabilities": "0",
+          "ai_model_tasks": "0",
+          "ai_model_usage_logs": "0",
+          "ai_trader_runs": "0",
+          "auth_authorization_codes": "0",
+          "auth_sessions": "0",
+          "bridge_command_events_v4": "0",
+          "bridge_command_payloads_v4": "0",
+          "bridge_command_results_v4": "0",
+          "bridge_commands_v4": "0",
+          "bridge_connection_capacity_grants": "0",
+          "bridge_connection_sessions": "0",
+          "bridge_refresh_sessions": "0",
+          "bridge_trade_state_snapshots_v4": "0",
+          "bridge_v4_pairing_requests": "0",
+          "data_migration_batches": "0",
+          "data_migration_checkpoints": "0",
+          "data_migration_id_maps": "0",
+          "data_migration_row_receipts": "0",
+          "data_migration_runs": "0",
+          "economic_calendar_event_revisions": "0",
+          "economic_calendar_events": "0",
+          "execution_distribution_targets": "0",
+          "execution_distributions": "0",
+          "execution_intent_events": "0",
+          "execution_intent_payloads": "0",
+          "execution_intents": "0",
+          "execution_outcomes": "0",
+          "global_risk_controls": "1",
+          "inference_snapshot_payloads": "0",
+          "inference_snapshots": "0",
+          "macro_data_sources": "0",
+          "macro_feature_sets": "0",
+          "macro_ingestion_runs": "0",
+          "macro_model_versions": "0",
+          "macro_observations": "0",
+          "macro_pipeline_jobs": "0",
+          "macro_research_snapshots": "0",
+          "macro_series": "0",
+          "macro_snapshot_observations": "0",
+          "manual_review_candidates_v4": "0",
+          "market_analyses": "0",
+          "market_analysis_payloads": "0",
+          "market_candles": "0",
+          "market_instrument_snapshots": "0",
+          "market_quotes": "0",
+          "observer_channel_accesses": "0",
+          "observer_channels": "0",
+          "observer_management_operations": "0",
+          "observer_management_registry": "1",
+          "observer_sources": "0",
+          "open_position_snapshots": "0",
+          "operation_events": "0",
+          "operations": "0",
+          "outbox_events": "0",
+          "pending_order_snapshots": "0",
+          "platform_model_usage_policy": "0",
+          "review_case_sources_v4": "0",
+          "review_cases_v4": "0",
+          "review_evidence_payloads_v4": "0",
+          "review_job_events_v4": "0",
+          "review_jobs_v4": "0",
+          "review_model_attempts_v4": "0",
+          "review_user_states_v4": "0",
+          "review_version_payloads_v4": "0",
+          "review_versions_v4": "0",
+          "risk_decision_payloads_v4": "0",
+          "risk_decisions_v4": "0",
+          "risk_manual_releases": "0",
+          "risk_policy_change_items_v4": "0",
+          "risk_policy_sets_v4": "1",
+          "risk_policy_versions_v4": "2",
+          "risk_reservation_events_v4": "0",
+          "risk_reservations_v4": "0",
+          "risk_state_events": "0",
+          "schema_migration_events": "3",
+          "schema_migrations": "26",
+          "strategies": "0",
+          "strategy_memory_injection_logs_v4": "0",
+          "strategy_memory_libraries_v4": "0",
+          "strategy_memory_library_revisions_v4": "0",
+          "strategy_memory_pending_updates_v4": "0",
+          "strategy_subscriptions": "0",
+          "strategy_versions": "0",
+          "subscription_schedules": "0",
+          "terminal_account_bindings": "0",
+          "terminal_history_deals_v4": "0",
+          "terminal_history_orders_v4": "0",
+          "terminal_profiles": "0",
+          "trade_decision_payloads": "0",
+          "trade_decisions": "0",
+          "trade_history_migration_checkpoints_v4": "0",
+          "trade_history_sync_states_v4": "0",
+          "trading_account_ownership_intervals": "0",
+          "trading_account_ownerships": "0",
+          "trading_accounts": "0",
+          "trading_contexts": "0",
+          "trading_projection_provenance_v4": "0",
+          "trading_projection_revisions": "0",
+          "user_execution_commands": "0",
+          "user_model_defaults": "0",
+          "user_referral_accounts": "0",
+          "user_trading_account_settings": "0",
+          "users": "0"
+        }
+      }
+    }
+  ],
+  "verification": {
+    "observedAtUtc": "2026-09-06T10:08:37.914Z",
+    "targets": [
+      {
+        "database": "dev_vue_m1_a",
+        "structureHash": "9bce7856c13d7b54a0042a7414d30f209e5d3f2d152d6d28d6e8bf012c4f2218",
+        "tableCount": 115,
+        "columnsHash": "26a93b63b48979cbb2dd1d2e4ba8a5c8b0d23e95c7a5a55db8cef2dea1aa234d",
+        "constraintCount": "522",
+        "indexColumnCount": "916",
+        "counts": {
+          "account_risk_states": "0",
+          "account_risk_summaries": "0",
+          "account_runtime_snapshots": "0",
+          "account_trade_attributions_v4": "0",
+          "account_trade_daily_summaries_v4": "0",
+          "account_trade_record_deals_v4": "0",
+          "account_trade_records_v4": "0",
+          "ai_analysis_runs": "0",
+          "ai_manual_analysis_cooldowns": "0",
+          "ai_model_attempts": "0",
+          "ai_model_profiles": "0",
+          "ai_model_provider_capabilities": "0",
+          "ai_model_tasks": "0",
+          "ai_model_usage_logs": "0",
+          "ai_trader_runs": "0",
+          "auth_authorization_codes": "0",
+          "auth_sessions": "0",
+          "bridge_command_events_v4": "0",
+          "bridge_command_payloads_v4": "0",
+          "bridge_command_results_v4": "0",
+          "bridge_commands_v4": "0",
+          "bridge_connection_capacity_grants": "0",
+          "bridge_connection_sessions": "0",
+          "bridge_refresh_sessions": "0",
+          "bridge_trade_state_snapshots_v4": "0",
+          "bridge_v4_pairing_requests": "0",
+          "data_migration_batches": "0",
+          "data_migration_checkpoints": "0",
+          "data_migration_id_maps": "0",
+          "data_migration_row_receipts": "0",
+          "data_migration_runs": "0",
+          "economic_calendar_event_revisions": "0",
+          "economic_calendar_events": "0",
+          "execution_distribution_targets": "0",
+          "execution_distributions": "0",
+          "execution_intent_events": "0",
+          "execution_intent_payloads": "0",
+          "execution_intents": "0",
+          "execution_outcomes": "0",
+          "global_risk_controls": "1",
+          "inference_snapshot_payloads": "0",
+          "inference_snapshots": "0",
+          "macro_data_sources": "0",
+          "macro_feature_sets": "0",
+          "macro_ingestion_runs": "0",
+          "macro_model_versions": "0",
+          "macro_observations": "0",
+          "macro_pipeline_jobs": "0",
+          "macro_research_snapshots": "0",
+          "macro_series": "0",
+          "macro_snapshot_observations": "0",
+          "manual_review_candidates_v4": "0",
+          "market_analyses": "0",
+          "market_analysis_payloads": "0",
+          "market_candles": "0",
+          "market_instrument_snapshots": "0",
+          "market_quotes": "0",
+          "observer_channel_accesses": "0",
+          "observer_channels": "0",
+          "observer_management_operations": "0",
+          "observer_management_registry": "1",
+          "observer_sources": "0",
+          "open_position_snapshots": "0",
+          "operation_events": "0",
+          "operations": "0",
+          "outbox_events": "0",
+          "pending_order_snapshots": "0",
+          "platform_model_usage_policy": "0",
+          "review_case_sources_v4": "0",
+          "review_cases_v4": "0",
+          "review_evidence_payloads_v4": "0",
+          "review_job_events_v4": "0",
+          "review_jobs_v4": "0",
+          "review_model_attempts_v4": "0",
+          "review_user_states_v4": "0",
+          "review_version_payloads_v4": "0",
+          "review_versions_v4": "0",
+          "risk_decision_payloads_v4": "0",
+          "risk_decisions_v4": "0",
+          "risk_manual_releases": "0",
+          "risk_policy_change_items_v4": "0",
+          "risk_policy_sets_v4": "1",
+          "risk_policy_versions_v4": "2",
+          "risk_reservation_events_v4": "0",
+          "risk_reservations_v4": "0",
+          "risk_state_events": "0",
+          "schema_migration_events": "3",
+          "schema_migrations": "26",
+          "strategies": "0",
+          "strategy_memory_injection_logs_v4": "0",
+          "strategy_memory_libraries_v4": "0",
+          "strategy_memory_library_revisions_v4": "0",
+          "strategy_memory_pending_updates_v4": "0",
+          "strategy_subscriptions": "0",
+          "strategy_versions": "0",
+          "subscription_schedules": "0",
+          "terminal_account_bindings": "0",
+          "terminal_history_deals_v4": "0",
+          "terminal_history_orders_v4": "0",
+          "terminal_profiles": "0",
+          "trade_decision_payloads": "0",
+          "trade_decisions": "0",
+          "trade_history_migration_checkpoints_v4": "0",
+          "trade_history_sync_states_v4": "0",
+          "trading_account_ownership_intervals": "0",
+          "trading_account_ownerships": "0",
+          "trading_accounts": "0",
+          "trading_contexts": "0",
+          "trading_projection_provenance_v4": "0",
+          "trading_projection_revisions": "0",
+          "user_execution_commands": "0",
+          "user_model_defaults": "0",
+          "user_referral_accounts": "0",
+          "user_trading_account_settings": "0",
+          "users": "0"
+        },
+        "runner": {
+          "status": "planned",
+          "writes": false,
+          "completed": 26,
+          "pending": []
+        }
+      },
+      {
+        "database": "dev_vue_m1_b",
+        "structureHash": "9bce7856c13d7b54a0042a7414d30f209e5d3f2d152d6d28d6e8bf012c4f2218",
+        "tableCount": 115,
+        "columnsHash": "26a93b63b48979cbb2dd1d2e4ba8a5c8b0d23e95c7a5a55db8cef2dea1aa234d",
+        "constraintCount": "522",
+        "indexColumnCount": "916",
+        "counts": {
+          "account_risk_states": "0",
+          "account_risk_summaries": "0",
+          "account_runtime_snapshots": "0",
+          "account_trade_attributions_v4": "0",
+          "account_trade_daily_summaries_v4": "0",
+          "account_trade_record_deals_v4": "0",
+          "account_trade_records_v4": "0",
+          "ai_analysis_runs": "0",
+          "ai_manual_analysis_cooldowns": "0",
+          "ai_model_attempts": "0",
+          "ai_model_profiles": "0",
+          "ai_model_provider_capabilities": "0",
+          "ai_model_tasks": "0",
+          "ai_model_usage_logs": "0",
+          "ai_trader_runs": "0",
+          "auth_authorization_codes": "0",
+          "auth_sessions": "0",
+          "bridge_command_events_v4": "0",
+          "bridge_command_payloads_v4": "0",
+          "bridge_command_results_v4": "0",
+          "bridge_commands_v4": "0",
+          "bridge_connection_capacity_grants": "0",
+          "bridge_connection_sessions": "0",
+          "bridge_refresh_sessions": "0",
+          "bridge_trade_state_snapshots_v4": "0",
+          "bridge_v4_pairing_requests": "0",
+          "data_migration_batches": "0",
+          "data_migration_checkpoints": "0",
+          "data_migration_id_maps": "0",
+          "data_migration_row_receipts": "0",
+          "data_migration_runs": "0",
+          "economic_calendar_event_revisions": "0",
+          "economic_calendar_events": "0",
+          "execution_distribution_targets": "0",
+          "execution_distributions": "0",
+          "execution_intent_events": "0",
+          "execution_intent_payloads": "0",
+          "execution_intents": "0",
+          "execution_outcomes": "0",
+          "global_risk_controls": "1",
+          "inference_snapshot_payloads": "0",
+          "inference_snapshots": "0",
+          "macro_data_sources": "0",
+          "macro_feature_sets": "0",
+          "macro_ingestion_runs": "0",
+          "macro_model_versions": "0",
+          "macro_observations": "0",
+          "macro_pipeline_jobs": "0",
+          "macro_research_snapshots": "0",
+          "macro_series": "0",
+          "macro_snapshot_observations": "0",
+          "manual_review_candidates_v4": "0",
+          "market_analyses": "0",
+          "market_analysis_payloads": "0",
+          "market_candles": "0",
+          "market_instrument_snapshots": "0",
+          "market_quotes": "0",
+          "observer_channel_accesses": "0",
+          "observer_channels": "0",
+          "observer_management_operations": "0",
+          "observer_management_registry": "1",
+          "observer_sources": "0",
+          "open_position_snapshots": "0",
+          "operation_events": "0",
+          "operations": "0",
+          "outbox_events": "0",
+          "pending_order_snapshots": "0",
+          "platform_model_usage_policy": "0",
+          "review_case_sources_v4": "0",
+          "review_cases_v4": "0",
+          "review_evidence_payloads_v4": "0",
+          "review_job_events_v4": "0",
+          "review_jobs_v4": "0",
+          "review_model_attempts_v4": "0",
+          "review_user_states_v4": "0",
+          "review_version_payloads_v4": "0",
+          "review_versions_v4": "0",
+          "risk_decision_payloads_v4": "0",
+          "risk_decisions_v4": "0",
+          "risk_manual_releases": "0",
+          "risk_policy_change_items_v4": "0",
+          "risk_policy_sets_v4": "1",
+          "risk_policy_versions_v4": "2",
+          "risk_reservation_events_v4": "0",
+          "risk_reservations_v4": "0",
+          "risk_state_events": "0",
+          "schema_migration_events": "3",
+          "schema_migrations": "26",
+          "strategies": "0",
+          "strategy_memory_injection_logs_v4": "0",
+          "strategy_memory_libraries_v4": "0",
+          "strategy_memory_library_revisions_v4": "0",
+          "strategy_memory_pending_updates_v4": "0",
+          "strategy_subscriptions": "0",
+          "strategy_versions": "0",
+          "subscription_schedules": "0",
+          "terminal_account_bindings": "0",
+          "terminal_history_deals_v4": "0",
+          "terminal_history_orders_v4": "0",
+          "terminal_profiles": "0",
+          "trade_decision_payloads": "0",
+          "trade_decisions": "0",
+          "trade_history_migration_checkpoints_v4": "0",
+          "trade_history_sync_states_v4": "0",
+          "trading_account_ownership_intervals": "0",
+          "trading_account_ownerships": "0",
+          "trading_accounts": "0",
+          "trading_contexts": "0",
+          "trading_projection_provenance_v4": "0",
+          "trading_projection_revisions": "0",
+          "user_execution_commands": "0",
+          "user_model_defaults": "0",
+          "user_referral_accounts": "0",
+          "user_trading_account_settings": "0",
+          "users": "0"
+        },
+        "runner": {
+          "status": "planned",
+          "writes": false,
+          "completed": 26,
+          "pending": []
+        }
+      }
+    ],
+    "structure": {
+      "charset": "utf8mb4",
+      "collation": "utf8mb4_unicode_ci",
+      "tableCount": 115,
+      "sha256": "9bce7856c13d7b54a0042a7414d30f209e5d3f2d152d6d28d6e8bf012c4f2218",
+      "tables": [
+        {
+          "name": "account_risk_states",
+          "sha256": "4db6d16d799e757edba4be707dd9ded038e3e8c8020d0b60bcda635df05a478d"
+        },
+        {
+          "name": "account_risk_summaries",
+          "sha256": "6ef593a712583d2ad55ab2af25fc5ba3f1bafd47c9f3306b68a872b65523901f"
+        },
+        {
+          "name": "account_runtime_snapshots",
+          "sha256": "6df92a77561d6592901e84bbe41055ce90fe61c018069c0e2cad67e5b1af35b8"
+        },
+        {
+          "name": "account_trade_attributions_v4",
+          "sha256": "021590d670e6a4144d60fe86bb697da950779d6c2da24046b98633e327185f7b"
+        },
+        {
+          "name": "account_trade_daily_summaries_v4",
+          "sha256": "36c6f642e167bdb41fb2d28e7924096c4c8ca930cce0f96b965d3ddace8a4ebc"
+        },
+        {
+          "name": "account_trade_record_deals_v4",
+          "sha256": "9eaade8b8c534ca8802f8a024b01c486910b44fefba25270b64e616f9a985532"
+        },
+        {
+          "name": "account_trade_records_v4",
+          "sha256": "1e4769e8f51a4db04aecad2db75967aad275f4ce140c7185c0ec8a5465fad204"
+        },
+        {
+          "name": "ai_analysis_runs",
+          "sha256": "7df9f2aed1e3e05f4e8da936f6bc253c8c1815bcbc709aa9dae51e477ed0b2bc"
+        },
+        {
+          "name": "ai_manual_analysis_cooldowns",
+          "sha256": "c616b1b559e14fa9ad032ad9c2c4400b57340a5196463c896b7eb7694a03258b"
+        },
+        {
+          "name": "ai_model_attempts",
+          "sha256": "382ce8c9f3c250d88dcf54d1af833fd11da8e007add0c029af03835418a7dc95"
+        },
+        {
+          "name": "ai_model_profiles",
+          "sha256": "df62be0ffe3e42e9c3c39e248b330d0d964d03e1d1a980295ae5ef40fd7cb181"
+        },
+        {
+          "name": "ai_model_provider_capabilities",
+          "sha256": "ccbc727a2e672ad5a3235dd811f25d8a702130d459e5175ac0ef8669db04e95f"
+        },
+        {
+          "name": "ai_model_tasks",
+          "sha256": "271cbf95a2f6349da7ca4aa60ceadac8c6b37f9cee46f267ec827e7908c6f9f2"
+        },
+        {
+          "name": "ai_model_usage_logs",
+          "sha256": "8d85527af41479e22fb4e1e7a6a735324fcd0f8ee0c0ff5e94b5e835e0a5e637"
+        },
+        {
+          "name": "ai_trader_runs",
+          "sha256": "8748e65e2dbf98fd9700e13544100594f848fa2d6f8df50bed220d125e63d9a8"
+        },
+        {
+          "name": "auth_authorization_codes",
+          "sha256": "d4d3a5bf3923c2caa7a078701cdbc37a8271a5b872646367a5af79b41b35b695"
+        },
+        {
+          "name": "auth_sessions",
+          "sha256": "93fdf62a0b4a7eedc3f1381e4415c848a13b09cf2c5301cd6338422776871b41"
+        },
+        {
+          "name": "bridge_command_events_v4",
+          "sha256": "3709fe89be1cc6e928e2fee2adc844267feac96cd6363888e95b598af16b1fe0"
+        },
+        {
+          "name": "bridge_command_payloads_v4",
+          "sha256": "ad78a41ddeed4971e3f56058a049c6c1cc50519d8f3c204d343d4856e8c14d9f"
+        },
+        {
+          "name": "bridge_command_results_v4",
+          "sha256": "3222d01e633605e65d6e7f07636824f56a41b35aab608732d3dfdb7a73feaccc"
+        },
+        {
+          "name": "bridge_commands_v4",
+          "sha256": "5aa38e81dc4747aaf1d1cf6ccd59fe2494d74efc3583f13f796ab5d1f5a951eb"
+        },
+        {
+          "name": "bridge_connection_capacity_grants",
+          "sha256": "0097e963de0cecdef7e7e99feacd71d88264c309ffee2ebc98c1454647dc2f78"
+        },
+        {
+          "name": "bridge_connection_sessions",
+          "sha256": "ebb00bf41d389a6c367c1256a6fc6f027a43fdbb437d876577c15d8264f9de8b"
+        },
+        {
+          "name": "bridge_refresh_sessions",
+          "sha256": "4e7e3595cd689df9bfe3feddc71a5f22c25a9d3374aed01309596782c86e0d44"
+        },
+        {
+          "name": "bridge_trade_state_snapshots_v4",
+          "sha256": "5f241b3a6bc90f2ad9ab8172ee67ac7e921fe3f0910f690c21afa48c0d167ab8"
+        },
+        {
+          "name": "bridge_v4_pairing_requests",
+          "sha256": "39d6a91a1428601142d6a5a7859456a7c3f4f4ef0dd6647e1bb61b9ed1cb3862"
+        },
+        {
+          "name": "data_migration_batches",
+          "sha256": "6d7c073609f8bd04f5b7b34938c62c8eb9dff877364c7c4915a72ac9bc699b8b"
+        },
+        {
+          "name": "data_migration_checkpoints",
+          "sha256": "63b25e568b62520e5b4da354f5dc2d6ac7914568a9e6cb8925a88bef74023ffb"
+        },
+        {
+          "name": "data_migration_id_maps",
+          "sha256": "e28d01c271e64f9acd262de3bb6ea12401f3700826c171bc83b17da8344beed0"
+        },
+        {
+          "name": "data_migration_row_receipts",
+          "sha256": "c82b221448572f6957a444576a1c33989e0a82dc62805268bf3ff10308977e0b"
+        },
+        {
+          "name": "data_migration_runs",
+          "sha256": "7aa4ec51dfbb2b317ee2facf4a6de7401e1d3a82379f15317aa6d396157ac7cb"
+        },
+        {
+          "name": "economic_calendar_event_revisions",
+          "sha256": "d817cdf681687772de1a2e366b8532b2b877488b1e0a8c57a9b8efadb15ceeaa"
+        },
+        {
+          "name": "economic_calendar_events",
+          "sha256": "1d15592445c70ee2cda77a66c24f6bd6ded6f991458f5478be1cbdba67cba67f"
+        },
+        {
+          "name": "execution_distribution_targets",
+          "sha256": "4bc4089091c7515c22042c2297b44ed665ad136a1f3cf1bf81457ef51ed2ff6a"
+        },
+        {
+          "name": "execution_distributions",
+          "sha256": "2e9df186d3342eec7ddba605eca4db3742c2bdc9ea5a83d00750a9139366fdaa"
+        },
+        {
+          "name": "execution_intent_events",
+          "sha256": "14968fd862f69892c961bf2ec7b3f9857180d86eb3db44e2c25a3af8f6a8ebe7"
+        },
+        {
+          "name": "execution_intent_payloads",
+          "sha256": "34e077334ceac64debadcf051441d15d025b83774dc41369e67416e6cb3a206a"
+        },
+        {
+          "name": "execution_intents",
+          "sha256": "02f6e7dcdb1ba05b4366bcc2fca4510c3c9f41dd22aa35b1481f245e72a284be"
+        },
+        {
+          "name": "execution_outcomes",
+          "sha256": "8ef89d9bbc8eb90a1892225f891045b0267359487dc612a3c3e6d510869df1f3"
+        },
+        {
+          "name": "global_risk_controls",
+          "sha256": "b0bd42f2c8c9d2a629176da3240d1f1b6edfa32f1920fcecfcc286ae67951484"
+        },
+        {
+          "name": "inference_snapshot_payloads",
+          "sha256": "8022645cf6454e80239da3cc58061951ec46d6973478ea208fe3f245f9130f45"
+        },
+        {
+          "name": "inference_snapshots",
+          "sha256": "ff044870a8962f47e3cce30987d5e570a2dbad64b5969c0040a1fbb46787e508"
+        },
+        {
+          "name": "macro_data_sources",
+          "sha256": "5d05c45a305b622a615e653dfb56c47b41526fa6f7ed98198f0a4f044610d38f"
+        },
+        {
+          "name": "macro_feature_sets",
+          "sha256": "c93ecfeb3f0e7f4726ebabc46f3449e3bbff8b04c5dd27ab3352ec2a02eb3dfb"
+        },
+        {
+          "name": "macro_ingestion_runs",
+          "sha256": "dd64d5149dacac702eb87ea27530b5630f1e45238034724ef88a01fc5b3da3f7"
+        },
+        {
+          "name": "macro_model_versions",
+          "sha256": "fc705bf274a2a483c644eb37b66d914ee1976db7dadc785c40b50a00a335eb2a"
+        },
+        {
+          "name": "macro_observations",
+          "sha256": "8c7a2d1bd1b4d513a5f949ee3a38d44490741dae394d83b8b09d41ad9958cedb"
+        },
+        {
+          "name": "macro_pipeline_jobs",
+          "sha256": "d88b82740c39091915df0b8f6cb9b01246fb7bc355c565a55fcb8741690164ff"
+        },
+        {
+          "name": "macro_research_snapshots",
+          "sha256": "58a565eeaf7770522d5c11e3af95ad1514f0e105dbbede3957666ad53cdb903e"
+        },
+        {
+          "name": "macro_series",
+          "sha256": "5cd2165a5f8c9bd782f79f86110f4ec21ae7b849b14f645d5fbf23636893ea2c"
+        },
+        {
+          "name": "macro_snapshot_observations",
+          "sha256": "4c7bf7addbd6aaa8edb84eb5a500a5cc1f6c707562ef4a0352aa6c833bff6936"
+        },
+        {
+          "name": "manual_review_candidates_v4",
+          "sha256": "eaa470328160a246c08ccbc05847cd1ca3610e77fc012a60f8785bfdf2750df6"
+        },
+        {
+          "name": "market_analyses",
+          "sha256": "d2395f0d404fe94d6f29368d9aff50cba345dd40bfa4c12c2bce986c556fbef4"
+        },
+        {
+          "name": "market_analysis_payloads",
+          "sha256": "9187114c51634dc6993eddee83d62aa1155bbb8614bc2b1a9b413083d4993941"
+        },
+        {
+          "name": "market_candles",
+          "sha256": "b636fc5b2a48c8529d881f6db7ebf128337b377cd4c0e1fc3dda8641ec71258c"
+        },
+        {
+          "name": "market_instrument_snapshots",
+          "sha256": "d7a7b28b85efcd6f0cd87f67594e38a7ca2de80ee1dbb103a545e86d2782dbe3"
+        },
+        {
+          "name": "market_quotes",
+          "sha256": "fff559ffb1a66e81abd132e2e5373a1c9e2aca84efac8b6f034cf98d78bfa9d6"
+        },
+        {
+          "name": "observer_channel_accesses",
+          "sha256": "66fa22bcbc88e84aaaaa2eb3f6099cc54be9220a5dd4ee175671eb5eb0ba0122"
+        },
+        {
+          "name": "observer_channels",
+          "sha256": "e8c0442a1259ed5273a530a5bf8f9e2584a7f0b52d84e7ab119d0be2c62350b1"
+        },
+        {
+          "name": "observer_management_operations",
+          "sha256": "0ac941a7b8cc5a2bd93dad3050284f76df57486eb2ed17267f2f11d48a445582"
+        },
+        {
+          "name": "observer_management_registry",
+          "sha256": "46762539482251ac70bb99d8614c4614c3946b0d42933ec1e4c1dd0299154882"
+        },
+        {
+          "name": "observer_sources",
+          "sha256": "cd5f67cfbec4eed3fdc9fe2d1526ecfa9f8cfa96aaaca5b37a27ccba871713b5"
+        },
+        {
+          "name": "open_position_snapshots",
+          "sha256": "6f66c9ced2edff02042c80498c2639f33b3f77ed095632ae7c999d034f4288c9"
+        },
+        {
+          "name": "operation_events",
+          "sha256": "625c106c9fa011e1f598573dd9d7a7593f30038059e6456e085352963af6781d"
+        },
+        {
+          "name": "operations",
+          "sha256": "b98db8c185529205f64bce886034dc7701cc0e85f4c1bd10e93e9361b78e6b24"
+        },
+        {
+          "name": "outbox_events",
+          "sha256": "e64b9140c85329940c71e3dd95a75b7a6c5f77a3cfad48d3f97795d708d2e670"
+        },
+        {
+          "name": "pending_order_snapshots",
+          "sha256": "1415e329515c6e3a5fa45e9f64bcb37e3509990f851583717d13244813b170b9"
+        },
+        {
+          "name": "platform_model_usage_policy",
+          "sha256": "b61664424fe03a7ad183f3f7c4aab4cf6abe369a0601ee9838c3f0db1e969559"
+        },
+        {
+          "name": "review_case_sources_v4",
+          "sha256": "da2af96137367837bddc70c22307587155b73b32ae01f144cd306de99987ab96"
+        },
+        {
+          "name": "review_cases_v4",
+          "sha256": "60641650b20608c9ebc650f89cb43863c07220cae805e7e78f894092c95af447"
+        },
+        {
+          "name": "review_evidence_payloads_v4",
+          "sha256": "f8efbce2034139afcac175c9cbe0db4efa2664746f4b5ce00457062aa7edd2f6"
+        },
+        {
+          "name": "review_job_events_v4",
+          "sha256": "97a69fddc7fa0e6b2419b42da87967574542ed5822f3646366d391356dbe0cba"
+        },
+        {
+          "name": "review_jobs_v4",
+          "sha256": "56d96fe23f81b262b04a1db72f55d699994a7ff3d1af5c099289f19c7569f9a6"
+        },
+        {
+          "name": "review_model_attempts_v4",
+          "sha256": "519785a5d0dd90b906428633b26a727250ae0a0b270f73eca886dbb71d6d6c95"
+        },
+        {
+          "name": "review_user_states_v4",
+          "sha256": "3246541397522add077362fa1c1b6e2ce3047ee7736e03095929b0ddd6d93553"
+        },
+        {
+          "name": "review_version_payloads_v4",
+          "sha256": "c9f0d0e7b6b69766ab2dfb606433279489a6710d5258ba69e4b5353eb91fc2f1"
+        },
+        {
+          "name": "review_versions_v4",
+          "sha256": "c2b9e920aedd0295d7be03a2de8d7bfe022cf2b348d57fcd706f4652b7a7315f"
+        },
+        {
+          "name": "risk_decision_payloads_v4",
+          "sha256": "58ef2b04561670eb9c8c56193b9349946e0345fae4a0eecc3f008280a455a845"
+        },
+        {
+          "name": "risk_decisions_v4",
+          "sha256": "07f535fb69ab06f052b67969784d330c13cbd3af5e45777d1d4bdd949b395adc"
+        },
+        {
+          "name": "risk_manual_releases",
+          "sha256": "9029f29656c503a2eb9d13271409fc1f319b29d45d82e2f64d82652425284aad"
+        },
+        {
+          "name": "risk_policy_change_items_v4",
+          "sha256": "c614b34e0765241477580bec159e8aa34b9bf630659c8af17a639f487df01c6f"
+        },
+        {
+          "name": "risk_policy_sets_v4",
+          "sha256": "7a931972f59546b3b5b4ff7070672d9611507d76fdd3c0c12384bc18ae443718"
+        },
+        {
+          "name": "risk_policy_versions_v4",
+          "sha256": "dfa7a7777c56b293e5a13842c071c401f1034962255bf373daed3aeba8cb880d"
+        },
+        {
+          "name": "risk_reservation_events_v4",
+          "sha256": "1f6f0f55faea7da672be72336479deefdcfefd5889283b4901adc74fd66f9745"
+        },
+        {
+          "name": "risk_reservations_v4",
+          "sha256": "717b4dcd2492425ef023163e8f3ed9e6eb3f4f7a25223d935994d8591b73c837"
+        },
+        {
+          "name": "risk_state_events",
+          "sha256": "0c28e4e3a42fc3f02b7a3f28095329a82465c44875b6b48cf915adbeee783230"
+        },
+        {
+          "name": "schema_migration_events",
+          "sha256": "52f35cd23526d0599861b4478b0fa0b5e20002c99fe396a79775080b8c97b05f"
+        },
+        {
+          "name": "schema_migrations",
+          "sha256": "c315069d907203c0c5b9bee89b8430467da83c96d9db6e649d690d2b7dcc76f5"
+        },
+        {
+          "name": "strategies",
+          "sha256": "8435f65723f4c195d0b8767fa7cf1d9eefa4eae7ca20177d141946fcd8768bab"
+        },
+        {
+          "name": "strategy_memory_injection_logs_v4",
+          "sha256": "183e2689d0cc176f4fe69d2bac550f59bc5f597a99119686870a10adbd43775b"
+        },
+        {
+          "name": "strategy_memory_libraries_v4",
+          "sha256": "0d735d68cdaf5675252cd37fcc7b54f25e344b85f37f84f3ba3d82ee887c4935"
+        },
+        {
+          "name": "strategy_memory_library_revisions_v4",
+          "sha256": "d99ece45edc693c8033fa0379007f0d18628a98bd8e2d46f816c3539235675d5"
+        },
+        {
+          "name": "strategy_memory_pending_updates_v4",
+          "sha256": "779f7a2a0761f9602dc4f52e89224ba3211b023a42c4defd4da78a56415dcca9"
+        },
+        {
+          "name": "strategy_subscriptions",
+          "sha256": "7170eec3b0da61b8dd2a0b0d556015ea34af334dc1d14a8fe28e515147cf5937"
+        },
+        {
+          "name": "strategy_versions",
+          "sha256": "768295142175363f8f381a4bc6b68d56ec1171e5e9211bf7ffa5a2ec90db31ee"
+        },
+        {
+          "name": "subscription_schedules",
+          "sha256": "a844d827f8d7d0d0c4af9f78f57caab00a6944e4c4bf97c517f0c6540c38f2dd"
+        },
+        {
+          "name": "terminal_account_bindings",
+          "sha256": "d6cbfddedf81c880a0e615a52362c8f683ae9b32bf5be75e633283ae9c56875f"
+        },
+        {
+          "name": "terminal_history_deals_v4",
+          "sha256": "e86f0cc91f1618a18c00bc61629f16c54d54dffb7c923fb4830c4f63a5304d68"
+        },
+        {
+          "name": "terminal_history_orders_v4",
+          "sha256": "f143b39c29bb2c3ec4de61f3e573c1079560fa78159550bb35c77c39c5402d73"
+        },
+        {
+          "name": "terminal_profiles",
+          "sha256": "e796241d28dd63d6ee3b60b846184bc9f2b73c574dd33dd31240c873d604a13c"
+        },
+        {
+          "name": "trade_decision_payloads",
+          "sha256": "9fb9de347c0dc47729ce25f91998c62862b5c9d03e885a061193f3554bc2d3fb"
+        },
+        {
+          "name": "trade_decisions",
+          "sha256": "914f8840b347afcf460aa729c052f2f1021eb16e9de8c047580cf290f639ed03"
+        },
+        {
+          "name": "trade_history_migration_checkpoints_v4",
+          "sha256": "bb4b1d757e26b4144891111aaecd922457f98c7e4eab89758e075bf6829e822e"
+        },
+        {
+          "name": "trade_history_sync_states_v4",
+          "sha256": "4c08b0a050a28609deddd2da34a25e62942b5c1dea5c74f97c523f1c07352d64"
+        },
+        {
+          "name": "trading_account_ownership_intervals",
+          "sha256": "0face2b2030aed803698bc335f445cfa2e97ca738f8608ec52ec469acae526ac"
+        },
+        {
+          "name": "trading_account_ownerships",
+          "sha256": "d0ddb2be8628098d163ac58e8637203635427c408b076c45976153ed322f8253"
+        },
+        {
+          "name": "trading_accounts",
+          "sha256": "98c307aab0a4fd281a033187fc60da495ddab74a82693d7a9b4627cb1d27f0d1"
+        },
+        {
+          "name": "trading_contexts",
+          "sha256": "5d37635fa64a607331206ce05fe8cdfaa42af3692acccb8c684fd7ac42c3c7b7"
+        },
+        {
+          "name": "trading_projection_provenance_v4",
+          "sha256": "af9447fdb2f5dc6c3343146b6854b47e958779111dd19a08f6ea07527d76f26e"
+        },
+        {
+          "name": "trading_projection_revisions",
+          "sha256": "7fc29a4c9ce460152e4ce2896e199b6f881e0c0b4addd90e552d8f9835fa1e3e"
+        },
+        {
+          "name": "user_execution_commands",
+          "sha256": "d2d86a2bdb4684bea8617309f26ccbffe503ae13d268d200b4eefed50ffb4346"
+        },
+        {
+          "name": "user_model_defaults",
+          "sha256": "63064eae78b15a3f45f126493af590cb042bef2281dccb203d9c1abc2d8473a5"
+        },
+        {
+          "name": "user_referral_accounts",
+          "sha256": "86ccaad6f6d5ea8a488fd8f71c01ef0e893be5a6a862fdf58bdf0b6038c9c2c6"
+        },
+        {
+          "name": "user_trading_account_settings",
+          "sha256": "40654f3a04a78551cf0ba3d5ac7f353803d6e5cd283586f651b0c3f56c6fab08"
+        },
+        {
+          "name": "users",
+          "sha256": "ca649ea6c77f05bc0517bff291695adaa83430f965196aad28e651bf95269a7a"
+        }
+      ]
+    }
+  },
+  "boundaries": {
+    "sourceDatabaseWrites": false,
+    "businessBackfill": false,
+    "serviceRestart": false,
+    "applicationDeployment": false,
+    "existingTableCountsPreserved": true,
+    "seedValuesIndependentlyReconciled": false,
+    "snapshotContentVerified": false,
+    "readyForPublicUpgrade": false
+  }
+}
