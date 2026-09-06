@@ -1,0 +1,46 @@
+{
+  "kind": "referral-posting-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "concurrent": [
+    {
+      "applied": true,
+      "eventRevision": "2",
+      "eventBalance": "51.00000000"
+    },
+    {
+      "applied": false,
+      "eventRevision": "2",
+      "eventBalance": "51.00000000"
+    }
+  ],
+  "rollbackVerified": true,
+  "released": {
+    "applied": true,
+    "eventRevision": "3",
+    "eventBalance": "80.00000000"
+  },
+  "finalBalanceBeforeCleanup": {
+    "balance": "80.00000000",
+    "revision": "3"
+  },
+  "ledgerRowsBeforeCleanup": 3,
+  "fixtureRowsRemaining": 0,
+  "tools": [
+    {
+      "name": "probe-referral-posting-host.mjs",
+      "sha256": "f3844033efcf44321362c581ac78880d5981411dab9fd8b2fe3291839a743b93"
+    },
+    {
+      "name": "posting/infrastructure/mysql-referral-credit.js",
+      "sha256": "4f8731ca87d921943e915d2fa3bd2a65b44ba3d8edfdad445a8b363f66e118b7"
+    },
+    {
+      "name": "posting/domain/referral-credit.js",
+      "sha256": "489fb62c6ed6fbba91380ddb9964bf7a0df09c3082b14d3bc8978c4da6ddcc8f"
+    }
+  ],
+  "sourceDatabaseWritten": false
+}
