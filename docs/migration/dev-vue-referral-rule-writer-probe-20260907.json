@@ -1,0 +1,17 @@
+{
+  "kind": "referral-rule-writer-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "974289baa2e851ecbe5e9cc3b7d42997f75aa2b9ca4a0b78c1da058a95599607",
+  "ddl": "CREATE TABLE `referral_rule_changes` (\n  `rule_id` int NOT NULL,\n  `rule_revision` bigint unsigned NOT NULL,\n  `request_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `actor_user_id` int NOT NULL,\n  `previous_rate_bps` int NOT NULL,\n  `rate_bps` int NOT NULL,\n  `previous_enabled` tinyint NOT NULL,\n  `enabled` tinyint NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`rule_id`,`rule_revision`),\n  UNIQUE KEY `uk_referral_rule_request` (`request_id`,`rule_id`),\n  KEY `fk_referral_rule_change_actor` (`actor_user_id`),\n  CONSTRAINT `fk_referral_rule_change_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_referral_rule_change_rule` FOREIGN KEY (`rule_id`) REFERENCES `referral_rules` (`id`),\n  CONSTRAINT `chk_referral_rule_change_enabled` CHECK (((`previous_enabled` in (0,1)) and (`enabled` in (0,1)))),\n  CONSTRAINT `chk_referral_rule_change_rates` CHECK (((`previous_rate_bps` between 0 and 10000) and (`rate_bps` between 0 and 10000))),\n  CONSTRAINT `chk_referral_rule_change_revision` CHECK ((`rule_revision` > 1))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "writerSha256": "7fcd89c167810fc14bb0fae4c76fa6c1d9dfd78943660ee564d15acd5c462a89",
+  "auditRowsVerified": 2,
+  "staleRevisionRejected": true,
+  "auditFailureRolledBack": true,
+  "originalRulesPreserved": true,
+  "fixturesRemoved": true,
+  "currentDevVueWritten": false
+}
