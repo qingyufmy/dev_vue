@@ -30,10 +30,12 @@ export class BridgeStreamProjector {
       : { route, projection }
     const applied = await this.repository.applyTrustedProjection(write as import('./trading-ports.js').TrustedBridgeProjectionWrite)
     if (!applied.applied) return false
+    const committed = input.resource === 'account.metrics' && applied.clock
+      ? { ...input, data: { ...input.data, ...applied.clock } } : input
     const event: TradingRealtimeEvent = {
       eventId: randomUUID(), type: eventType(input.resource, input), occurredAt: this.now().toISOString(),
       userId, accountId, terminalInstanceId, resource: input.resource, resourceId: input.resourceId,
-      revision: input.revision, data: realtimeData(input),
+      revision: input.revision, data: realtimeData(committed),
     }
     this.publisher.publish(event)
     return true

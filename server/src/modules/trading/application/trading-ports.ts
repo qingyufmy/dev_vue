@@ -1,3 +1,4 @@
+import type { AccountClock } from '../domain/account-clock.js'
 import type {
   AccountSnapshot, MarketCandle, MarketQuote, OpenPosition, PendingOrder,
   ObserverChannelSummary, RealtimeResource, TerminalProfileSummary, Timeframe, TradingAccountSummary, TradingContext,
@@ -83,7 +84,7 @@ export type TrustedBridgeProjectionWrite =
   | { route: TrustedBridgeProjectionRoute; projection: Extract<TradingProjectionWrite, { resource: 'pending_orders' }>; tradeStates: BridgeExactTradeState[]; observedAt: string }
 
 export interface TrustedBridgeProjectionRepository {
-  applyTrustedProjection(input: TrustedBridgeProjectionWrite): Promise<{ applied: boolean; absorbedReservationIds: string[] }>
+  applyTrustedProjection(input: TrustedBridgeProjectionWrite): Promise<{ applied: boolean; absorbedReservationIds: string[]; clock?: AccountClock }>
 }
 
 export type TradingProjectionWrite =

@@ -58,3 +58,16 @@ Python Worker通过已有IPC `data`新增`terminal_clock`动作，仅接受空�
 验证：trade既有及新增测试累计102项通过（全量101项后新增消息回调1项定向通过），contracts既有40项与新增6项通过，服务端竖切16项通过、服务端类型检查通过；四应用相关类型检查和构建完成。首次trade类型检查发现新增测试fixture的never断言导致两处类型错误，修正为AccountSnapshot后trade类型检查/构建通过，其余应用无需重跑。前端边界与diff检查通过。均为源码/离线证据，未做真实WSS/Redis/MySQL/浏览器端到端验证。
 
 剩余主链：可信终端偏移来源确认；terminal.clock按账户/终端/epoch写入及休市最后可信结果保留；可重建Redis投影与仅变化失效通知；实际刷新/重连验收。当前阶段继续进行。
+
+## 休市保留实施前复核（2026-09-06）
+
+第一轮：复用account_runtime_snapshots及trading_projection_provenance_v4，不新增表或缓存。只在已认证、归属/绑定/会话复核通过的投影事务内保留同一来源的最近可信偏移；unavailable不能覆盖同源旧偏移，保留结果标为stale。没有可信旧值则保持NULL，不保存展示默认180。
+
+第二轮：保留须匹配账户、user、ownership interval/revision、profile、instance、epoch，且快照revision与provenance一致。重连epoch变化时不自动信任旧校准；stale不能凭新上报偏移建立校准，也不能把observer_bootstrap升级为可信。事务返回有效时钟给发布者，避免实际SQL状态与事件不一致；重复/回滚不发布。新增来源的可信判定及terminal.clock解码仍独立未完成，此次只完成现有受信投影保存的保留语义。
+
+
+实施结果：新增纯领域account-clock规则及专用MySQL读取辅助，已接入applyTrustedProjection现有事务。先锁revision并拒绝重复，再查询与账户/归属/终端/epoch完全匹配的快照来源；快照、provenance及当前revision必须一致。保留值和stale状态写回账户快照，事务结果将有效clock传回BridgeStreamProjector，实时消息发布实际提交的时钟。直接applyProjection的原有语义保留，两条路径统一revision在前的锁序。没有新增/修改迁移、额外表或Redis键。
+
+范围说明：此规则以受信应用端口收到的calibrated为前提，不证明MT5现有原始tick已具备可信语义；stale/unavailable不能自行建立或改变偏移，observer_bootstrap不会作为最近可信值保留。身份/epoch改变且新样本不可校准时保持NULL，前端显示默认UTC+3。原始采样到受信端口尚未贯通，不宣称真实终端全链路完成。
+
+验证：4个服务端测试文件39项通过，服务端类型检查及V4构建通过，diff检查通过。覆盖零/负偏移、休市连续stale、无证据/观摩源拒绝提升、非法校准、SQL身份条件与参数、有效写入和事件一致、锁顺序、重复投影不读取时钟及原有持仓预留吸收。首次类型检查仅发现测试清空readonly数组方式不当，修正为清空数组内容后通过。MySQL测试采用离线FakePool，未执行真实DDL/DML、Redis写入、部署或交易。下一步仍须解决可信采样来源与terminal.clock进入受信投影的接线，以及专门的变化通知/端到端验收。

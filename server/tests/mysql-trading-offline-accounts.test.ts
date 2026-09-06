@@ -22,6 +22,7 @@ class FakePool {
   trustedCredentialGeneration = 1
   trustedBindingRows: Row[] = [{ terminal_profile_id: 'profile-a' }]
   trustedSessionRows: Row[] = [{ id: 1 }]
+  clockRows: Row[] = []
   trustedRevisionRows: Row[] = [{ revision: 0 }]
   transactionCalls: string[] = []
 
@@ -38,6 +39,7 @@ class FakePool {
     if (sql.includes('SELECT s.id')) return [this.trustedSessionRows, []]
     if (sql.includes('SELECT s.last_seen_at_utc')) return [this.heartbeatRows, []]
     if (sql.includes('WHERE EXISTS (') && sql.includes('trading_account_ownership_intervals')) return [this.historyRows, []]
+    if (sql.includes('SELECT snap.timezone_offset_minutes,snap.clock_status')) return [this.clockRows, []]
     if (sql.includes('FROM account_runtime_snapshots snap') && sql.includes('snap.balance')) return [this.snapshotRows, []]
     if (sql.includes('FROM account_runtime_snapshots snap') && sql.includes('snap.trade_permission')) return [this.permissionRows, []]
     if (sql.includes('FROM trading_projection_revisions pr') && sql.includes('LEFT JOIN trading_projection_provenance_v4')) return [this.sourceRowsQueue.shift() ?? this.sourceRows, []]
@@ -194,6 +196,39 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
     await expect(repository.listPositions('42', 7)).resolves.toMatchObject({ revision: 0, items: [] })
   })
 
+  it('stores the retained clock and returns exactly that evidence to the publisher', async () => {
+    const pool = new FakePool()
+    pool.clockRows = [{ timezone_offset_minutes: 0, clock_status: 'calibrated' }]
+    const repository = new MysqlTradingRepository(pool.asPool())
+    const projection = {
+      accountId: '42', resource: 'account.metrics' as const, resourceId: 'current' as const, revision: 5,
+      data: {
+        id: '42', platform: 'mt5' as const, login: '596520', server: 'Demo', currency: 'USD', terminalProfileId: 'profile-a', terminalInstanceId: 'instance-a', bridgeState: 'online' as const,
+        tradePermission: true, lastSeenAt: null, balance: '10000', equity: '10000', margin: '0', freeMargin: '10000', floatingProfit: '0', leverage: 100,
+        timezoneOffsetMinutes: null, clockStatus: 'unavailable' as const, observedAt: '2026-09-06T08:00:00.000Z', revision: 5,
+      },
+    }
+    await expect(repository.applyTrustedProjection({ route: route(), projection })).resolves.toMatchObject({ applied: true, clock: { timezoneOffsetMinutes: 0, clockStatus: 'stale' } })
+    const read = pool.calls.find(call => call.sql.includes('SELECT snap.timezone_offset_minutes'))!
+    expect(read.params).toEqual(['42', 7, 'interval-a', '3', 'profile-a', 'instance-a', 4])
+    for (const condition of ['pp.projection_revision=snap.revision', 'snap.trading_account_id=?', 'pp.user_id=?', 'pp.ownership_interval_id=?', 'pp.ownership_revision=?', 'pp.terminal_profile_id=?', 'pp.terminal_instance_id=?', 'pp.connection_epoch=?', 'FOR UPDATE']) expect(read.sql).toContain(condition)
+    const saved = pool.calls.find(call => call.sql.startsWith('INSERT INTO account_runtime_snapshots'))!
+    expect(saved.params.slice(7, 9)).toEqual([0, 'stale'])
+    expect(projection.data.timezoneOffsetMinutes).toBeNull()
+    expect(pool.transactionCalls).toEqual(['begin', 'commit', 'release'])
+    expect(pool.calls.findIndex(call => call.sql.includes('SELECT revision FROM trading_projection_revisions'))).toBeLessThan(pool.calls.indexOf(read))
+
+    pool.calls.length = 0
+    pool.clockRows = [] // No matching provenance, including a changed epoch or owner.
+    await expect(repository.applyTrustedProjection({ route: route(), projection })).resolves.toMatchObject({ clock: { timezoneOffsetMinutes: null, clockStatus: 'unavailable' } })
+    expect(pool.calls.find(call => call.sql.startsWith('INSERT INTO account_runtime_snapshots'))!.params.slice(7, 9)).toEqual([null, 'unavailable'])
+
+    pool.calls.length = 0
+    pool.trustedRevisionRows = [{ revision: 5 }]
+    await expect(repository.applyTrustedProjection({ route: route(), projection })).resolves.toEqual({ applied: false, absorbedReservationIds: [] })
+    expect(pool.calls.some(call => call.sql.includes('SELECT snap.timezone_offset_minutes'))).toBe(false)
+  })
+
   it('writes provenance only for an applied trusted private projection', async () => {
     const pool = new FakePool()
     const repository = new MysqlTradingRepository(pool.asPool())
@@ -205,7 +240,7 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
         timezoneOffsetMinutes: 0, clockStatus: 'calibrated' as const, observedAt: '2026-09-05T08:00:00.000Z', revision: 4,
       },
     }
-    await expect(repository.applyTrustedProjection({ route: route(), projection })).resolves.toEqual({ applied: true, absorbedReservationIds: [] })
+    await expect(repository.applyTrustedProjection({ route: route(), projection })).resolves.toMatchObject({ applied: true, absorbedReservationIds: [] })
     const provenance = pool.calls.find(call => call.sql.includes('INSERT INTO trading_projection_provenance_v4'))
     expect(provenance?.params).toEqual(['42', 'account.metrics', 'current', 7, 'interval-a', '3', 'profile-a', 'instance-a', 4, 4, '2026-09-05T08:00:00.000Z'])
 
@@ -213,7 +248,7 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
       accountId: '42', resource: 'positions' as const, resourceId: 'open' as const, revision: 4, data: [],
       tradeStates: [], observedAt: '2026-09-05T08:00:00.000Z',
     }
-    await expect(repository.applyTrustedProjection({ route: route(), projection: positions, tradeStates: [], observedAt: positions.observedAt })).resolves.toEqual({ applied: true, absorbedReservationIds: [] })
+    await expect(repository.applyTrustedProjection({ route: route(), projection: positions, tradeStates: [], observedAt: positions.observedAt })).resolves.toMatchObject({ applied: true, absorbedReservationIds: [] })
     pool.currentRows = [account()]; pool.sourceRows = [source()]; pool.positionRows = []
     await expect(repository.listPositions('42', 7)).resolves.toEqual({ revision: 4, items: [] })
 
@@ -280,7 +315,7 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
       },
     }
     await expect(new MysqlTradingRepository(pool.asPool()).applyTrustedProjection({ route: legacyRoute, projection }))
-      .resolves.toEqual({ applied: true, absorbedReservationIds: [] })
+      .resolves.toMatchObject({ applied: true, absorbedReservationIds: [] })
     expect(pool.calls.some(call => call.sql.includes('FROM bridge_refresh_sessions s'))).toBe(false)
   })
 

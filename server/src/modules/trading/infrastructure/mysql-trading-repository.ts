@@ -1,3 +1,4 @@
+import { resolveStoredAccountClock } from './mysql-account-clock.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type {
   BridgeExactTradeState, ConnectionCapacityRepository, TradingProjectionRepository, TradingProjectionWrite, TradingReadRepository,
@@ -393,7 +394,10 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   async getPurchasedCapacity(userId: number) { const [rows] = await this.pool.execute<CapacityRow[]>(`SELECT COALESCE(SUM(quantity),0) quantity FROM bridge_connection_capacity_grants WHERE user_id=? AND revoked_at_utc IS NULL AND starts_at_utc<=UTC_TIMESTAMP(3) AND (expires_at_utc IS NULL OR expires_at_utc>UTC_TIMESTAMP(3))`, [userId]); return Number(rows[0]?.quantity ?? 0) }
 
   async applyProjection(input: TradingProjectionWrite) {
-    return transaction(this.pool, connection => applyProjectionWrite(connection, input))
+    return transaction(this.pool, async connection => {
+      if (!await lockProjectionRevision(connection, input)) return false
+      return writeLockedProjection(connection, input)
+    })
   }
 
   async applyTrustedProjection(input: TrustedBridgeProjectionWrite) {
@@ -466,11 +470,14 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
         ] : [route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId, route.connectionEpoch])
       if (owners.length !== 1 || bindings.length !== 1 || sessions.length !== 1) throw new TradingAccessError('trading_context_invalid', 403)
       const ownership = { intervalId: owners[0]!.interval_id, ownershipRevision: String(owners[0]!.ownership_revision) }
-      const applied = await applyProjectionWrite(connection, input.projection)
-      if (!applied) return { applied: false, absorbedReservationIds: [] }
+      if (!await lockProjectionRevision(connection, input.projection)) return { applied: false, absorbedReservationIds: [] }
+      const clock = await resolveStoredAccountClock(connection, input, ownership)
+      const projection = input.projection.resource === 'account.metrics' && clock
+        ? { ...input.projection, data: { ...input.projection.data, ...clock } } : input.projection
+      await writeLockedProjection(connection, projection)
       await writeProjectionProvenance(connection, input, ownership)
       if (input.projection.resource !== 'positions' && input.projection.resource !== 'pending_orders') {
-        return { applied: true, absorbedReservationIds: [] }
+        return { applied: true, absorbedReservationIds: [], ...(clock ? { clock } : {}) }
       }
       const entityKind = input.projection.resource === 'positions' ? 'position' : 'pending_order'
       if (!('tradeStates' in input)) throw new TradingAccessError('trading_context_invalid', 400)
@@ -542,10 +549,13 @@ async function replaceCollection(connection: PoolConnection, table: 'open_positi
   for (const item of [...items].sort((a, b) => a.ticket.localeCompare(b.ticket))) await connection.execute(`INSERT INTO ${table} (trading_account_id,ticket,payload_json,revision,observed_at_utc) VALUES (?,?,?,?,UTC_TIMESTAMP(3))`, [accountId, item.ticket, JSON.stringify(item), revision])
 }
 
-async function applyProjectionWrite(connection: PoolConnection, input: TradingProjectionWrite) {
+async function lockProjectionRevision(connection: PoolConnection, input: TradingProjectionWrite) {
   await connection.execute('INSERT IGNORE INTO trading_projection_revisions (trading_account_id,resource_kind,resource_id,revision,updated_at_utc) VALUES (?,?,?,0,UTC_TIMESTAMP(3))', [input.accountId, input.resource, input.resourceId])
   const [rows] = await connection.execute<RevisionRow[]>('SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind=? AND resource_id=? FOR UPDATE', [input.accountId, input.resource, input.resourceId])
-  if (Number(rows[0]?.revision ?? 0) >= input.revision) return false
+  return Number(rows[0]?.revision ?? 0) < input.revision
+}
+
+async function writeLockedProjection(connection: PoolConnection, input: TradingProjectionWrite) {
   switch (input.resource) {
     case 'account.metrics':
       await connection.execute(`INSERT INTO account_runtime_snapshots (trading_account_id,balance,equity,margin_amount,free_margin,floating_profit,leverage,timezone_offset_minutes,clock_status,trade_permission,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE balance=VALUES(balance),equity=VALUES(equity),margin_amount=VALUES(margin_amount),free_margin=VALUES(free_margin),floating_profit=VALUES(floating_profit),leverage=VALUES(leverage),timezone_offset_minutes=VALUES(timezone_offset_minutes),clock_status=VALUES(clock_status),trade_permission=VALUES(trade_permission),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.id, input.data.balance, input.data.equity, input.data.margin, input.data.freeMargin, input.data.floatingProfit, input.data.leverage, input.data.timezoneOffsetMinutes, input.data.clockStatus, input.data.tradePermission ? 1 : 0, input.data.observedAt, input.data.revision])

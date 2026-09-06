@@ -131,6 +131,16 @@ describe('Stage 11 trading vertical slice', () => {
     expect(messages).toContainEqual(expect.objectContaining({ type: 'observer.publication.changed', scope: expect.objectContaining({ user_id: '99', observer_channel_id: 'observer-1' }) }))
   })
 
+  it('publishes the committed retained clock instead of the incoming unavailable sample', async () => {
+    const published: TradingRealtimeEvent[] = []
+    const storage = repository()
+    storage.applyTrustedProjection = async () => ({ applied: true, absorbedReservationIds: [], clock: { timezoneOffsetMinutes: 120, clockStatus: 'stale' } })
+    const projector = new BridgeStreamProjector(storage, { publish(event) { published.push(event) } })
+    const route = { userId: 42, accountId: '7', terminalProfileId: 'profile-1', terminalInstanceId: 'terminal-1', connectionEpoch: 1 }
+    await projector.ingest(route, { resource: 'account.metrics', resourceId: 'current', revision: 5, data: { ...snapshot(), revision: 5, timezoneOffsetMinutes: null, clockStatus: 'unavailable' } })
+    expect(published[0]?.data).toMatchObject({ timezone_offset_minutes: 120, clock_status: 'stale' })
+  })
+
   it('publishes stored clock evidence only after the projection is accepted', async () => {
     const published: TradingRealtimeEvent[] = []
     const storage = repository()
