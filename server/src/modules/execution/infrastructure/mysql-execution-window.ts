@@ -34,7 +34,7 @@ export async function assertRiskDecisionWindow(connection: PoolConnection, riskD
 }
 
 export async function assertDistributionWindow(connection: PoolConnection, targetId: string, userId: number, accountId: string, now: Date) {
-  const [rows] = await connection.execute<(RowDataPacket & { receive_timezone: string; receive_window_json: unknown })[]>(`SELECT sc.receive_timezone,sc.receive_window_json
+  const [rows] = await connection.execute<(RowDataPacket & { receive_timezone: string; receive_window_json: unknown; frozen_context_json: unknown; request_sha256: string; distribution_id: string; command_json: unknown; source_outcome_id: string | null; source_ticket: string | null })[]>(`SELECT sc.receive_timezone,sc.receive_window_json,target.frozen_context_json,target.request_sha256,target.distribution_id,distribution.command_json,target.source_outcome_id,target.source_ticket
     FROM execution_distribution_targets target
     INNER JOIN execution_distributions distribution ON distribution.id=target.distribution_id AND distribution.kind='manual_order'
     INNER JOIN strategy_subscriptions s ON s.id=target.subscription_id AND s.user_id=target.target_user_id
@@ -50,6 +50,19 @@ export async function assertDistributionWindow(connection: PoolConnection, targe
     WHERE target.id=? AND target.target_user_id=? AND target.trading_account_id=? FOR SHARE`, [targetId, userId, accountId])
   if (rows.length !== 1) throw new ExecutionError('execution_subscription_changed', 409)
   await assertWindow(connection, rows[0]!, userId, accountId, now)
+  const row = rows[0]!
+  let context: unknown, command: unknown
+  try {
+    context = typeof row.frozen_context_json === 'string' ? JSON.parse(row.frozen_context_json) : row.frozen_context_json
+    command = typeof row.command_json === 'string' ? JSON.parse(row.command_json) : row.command_json
+  } catch { throw new ExecutionError('execution_schedule_unproven', 409) }
+  if (!context || typeof context !== 'object' || Array.isArray(context) || !command || typeof command !== 'object' || Array.isArray(command)) throw new ExecutionError('execution_schedule_unproven', 409)
+  const hash = sha256Canonical({ distributionId: row.distribution_id, targetId, command, frozenContext: context, sourceOutcomeId: row.source_outcome_id, sourceTicket: row.source_ticket })
+  if (hash !== row.request_sha256) throw new ExecutionError('execution_schedule_unproven', 409)
+  const subscription = (context as Record<string, unknown>).subscription
+  const frozen = subscription && typeof subscription === 'object' ? (subscription as Record<string, unknown>).windowHash : null
+  if (typeof frozen !== 'string' || !/^[a-f0-9]{64}$/.test(frozen)) throw new ExecutionError('execution_schedule_unproven', 409)
+  if (frozen !== subscriptionWindowFingerprint(row.receive_window_json, row.receive_timezone)) throw new ExecutionError('execution_schedule_changed', 409)
 }
 
 async function assertWindow(connection: PoolConnection, row: { receive_timezone: string; receive_window_json: unknown }, userId: number, accountId: string, now: Date) {

@@ -88,7 +88,7 @@ export interface NormalizedCreateDistributionCloseInput extends Omit<CreateDistr
  */
 export interface FrozenDistributionContext {
   strategy: { id: string; versionId: string }
-  subscription: { id: string | null; revision: number | null; symbol: string }
+  subscription: { id: string | null; revision: number | null; symbol: string; windowHash?: string }
   account: { id: string; currency: string; tradePermission: boolean }
   expected: UserExecutionExpectedRevisions
   snapshots: {
@@ -105,6 +105,8 @@ export interface FrozenDistributionContext {
 }
 
 export interface DistributionTargetCandidate {
+  /** Absent for historical targets; never backfilled from today's settings. */
+  subscriptionWindowHash?: string
   subscriptionId: string
   userId: number
   accountId: string
@@ -257,7 +259,8 @@ export function normalizeCreateDistributionCloseInput(input: CreateDistributionC
 export function freezeDistributionTarget(candidate: DistributionTargetCandidate, distributionId: string, targetId: string, now: string, command: JsonObject, source?: { outcomeId: string; ticket: string; sourceTargetId: string }): FrozenDistributionTarget {
   const frozenContext: FrozenDistributionContext = {
     strategy: { id: candidate.traderStrategyId, versionId: candidate.traderStrategyVersionId },
-    subscription: { id: candidate.subscriptionId, revision: candidate.subscriptionRevision, symbol: candidate.symbol },
+    subscription: { id: candidate.subscriptionId, revision: candidate.subscriptionRevision, symbol: candidate.symbol,
+      ...(candidate.subscriptionWindowHash ? { windowHash: candidate.subscriptionWindowHash } : {}) },
     account: { id: candidate.accountId, currency: candidate.accountCurrency, tradePermission: candidate.tradePermission },
     expected: {
       accountRevision: candidate.accountRevision,

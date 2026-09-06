@@ -8,17 +8,32 @@ const evidence = (window: unknown, timezone: string) => {
   const snapshot = { subscriptionWindowHash: subscriptionWindowFingerprint(window, timezone) }
   return { snapshot_json: JSON.stringify(snapshot), snapshot_sha256: sha256Canonical(snapshot) }
 }
+const distributionEvidence = (timezone = 'UTC') => {
+  const frozenContext = { subscription: { windowHash: subscriptionWindowFingerprint({ enabled: false }, timezone) } }
+  return { frozen_context_json: frozenContext, command_json: {}, distribution_id: 'distribution', source_outcome_id: null, source_ticket: null,
+    request_sha256: sha256Canonical({ distributionId: 'distribution', targetId: 'target', command: {}, frozenContext, sourceOutcomeId: null, sourceTicket: null }) }
+}
 
 describe('execution subscription window', () => {
   it('binds manual-order distribution to its frozen target and refuses a missing subscription', async () => {
     let present = false
     const connection = { async execute(_sql: string, args: unknown[]) {
       expect(args).toEqual(['target', 42, '7'])
-      return [present ? [{ receive_timezone: 'UTC', receive_window_json: { enabled: false } }] : []]
+      return [present ? [{ receive_timezone: 'UTC', receive_window_json: { enabled: false }, ...distributionEvidence() }] : []]
     } } as unknown as PoolConnection
     await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_subscription_changed')
     present = true
     await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).resolves.toBeUndefined()
+  })
+  it('rejects old, tampered or changed distribution window evidence', async () => {
+    const base = { receive_timezone: 'UTC', receive_window_json: { enabled: false } }
+    let row: object = base
+    const connection = { async execute() { return [[row]] } } as unknown as PoolConnection
+    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
+    row = { ...base, ...distributionEvidence(), request_sha256: 'a'.repeat(64) }
+    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
+    row = { ...base, ...distributionEvidence('terminal_server') }
+    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_changed')
   })
   it('refuses missing/changed subscription and malformed window, preserves disabled window', async () => {
     let rows: unknown[] = []

@@ -28,6 +28,12 @@ const marketCommand = {
 }
 
 describe('execution distribution domain', () => {
+  it('freezes the window identity into the target integrity hash', () => {
+    const first = freezeDistributionTarget(candidate({ subscriptionWindowHash: 'a'.repeat(64) }), 'distribution', 'target', '2026-09-07T00:00:00Z', {})
+    const changed = freezeDistributionTarget(candidate({ subscriptionWindowHash: 'b'.repeat(64) }), 'distribution', 'target', '2026-09-07T00:00:00Z', {})
+    expect(first.frozenContext.subscription.windowHash).toBe('a'.repeat(64))
+    expect(changed.requestHash).not.toBe(first.requestHash)
+  })
   it('normalizes an entry command without accepting close or modification actions', () => {
     const normalized = normalizeCreateDistributionInput({ actorUserId: 9, actorRole: 'admin', strategyId: 'strategy-1', idempotencyKey: 'dist-20260904-01', command: marketCommand })
     expect(normalized.command).toEqual({ ...marketCommand, symbol: 'XAUUSD' })

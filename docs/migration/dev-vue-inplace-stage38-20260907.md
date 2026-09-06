@@ -1,0 +1,9 @@
+# 同库升级第三十八批：分发目标冻结窗口证据
+
+分发候选查询读取当前订阅窗口并计算配置摘要，freezeDistributionTarget将其写入frozenContext.subscription.windowHash，参与既有requestHash。历史目标类型允许缺失，读取时不补造；从原目标生成精确平仓上下文时只保留已有摘要。
+
+assertDistributionWindow在同一事务读取目标快照、父分发命令及原来源字段，按原算法重算目标requestHash，再比较冻结windowHash与当前配置。无历史证据、快照损坏、配置变化分别进入既有execution_schedule_unproven/changed拒绝路径。它已用于策略分发子命令创建及首次发送，旧目标不重写，不按当前设置恢复旧许可。
+
+22项分发/执行测试通过，包含配置摘要改变会改变目标完整性hash、旧目标缺证据、篡改和配置变化拒绝。类型检查曾发现历史字段undefined不符合exactOptionalPropertyTypes，已改为缺失时省略并重新通过类型及构建。构建成功后重新提取SQL，v4捕获9条查询；开发V4参考库MySQL8.4.8全部EXPLAIN和SELECT通过，均0行并回滚。见[输入v4](subscription-window-sql-input-v4-20260907.json)和[回执v4](subscription-window-sql-validation-v4-20260907.json)，远端window-sql-20260907-06三文件hash一致。
+
+时段转换已有运行读取、当前配置检查及冻结证据检查，但仍缺有数据/并发验证；零行SQL不证明授权场景正确。下一步做有数据场景验证并继续策略/订阅其余字段转换与同库回填，不将此批视为完整数据库升级完成。本批无数据库业务写入、服务或终端启动。
