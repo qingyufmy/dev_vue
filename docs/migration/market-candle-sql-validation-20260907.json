@@ -1,0 +1,57 @@
+{
+  "observedAt": "2026-09-06T17:45:23.722Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sqlHash": "4f02428afb20097831a74f9c41532a0b0401b44b5176f9c4900c29cdbbeb62b6",
+  "fixtureHash": "606afe2a7b80eb618ae46f1314f700c97abbb599d59bf6810c5db99d44cbf72a",
+  "numericControl": "succeeded",
+  "results": [
+    {
+      "limit": 1,
+      "count": 1,
+      "firstRevision": 160,
+      "lastRevision": 160,
+      "resultHash": "75e8700cd7f2bc5fee61fd371d4b380c398d0b0b49f669fb4392a1c32ee49630"
+    },
+    {
+      "limit": 10,
+      "count": 10,
+      "firstRevision": 151,
+      "lastRevision": 160,
+      "resultHash": "acf95271a1f93c8c35fc4875bdd5d2f51aae9a123a03b38b420a6a0e28ed53bf"
+    },
+    {
+      "limit": 30,
+      "count": 30,
+      "firstRevision": 131,
+      "lastRevision": 160,
+      "resultHash": "3e7d0148b4a3010917662c14d9bd1abaf2c706ba1b10414890f9204d12a1890f"
+    },
+    {
+      "limit": 100,
+      "count": 100,
+      "firstRevision": 61,
+      "lastRevision": 160,
+      "resultHash": "6843490e61ecc70bc3d4a09f29254884b63523b01cce4be3dacc73022353a08c"
+    },
+    {
+      "limit": 150,
+      "count": 150,
+      "firstRevision": 11,
+      "lastRevision": 160,
+      "resultHash": "3845931e73037b5abbcf1663cbd7d23c914e8a650de36bda7137c55b73cef77d"
+    },
+    {
+      "limit": 1000,
+      "count": 160,
+      "firstRevision": 1,
+      "lastRevision": 160,
+      "resultHash": "291d8b8628c002c9a3744357b81ab2f3af06b25e5b3bd200d1f09e5b91b8d1b9"
+    }
+  ],
+  "businessWritesPerformed": false,
+  "physicalSchemaVerified": false
+}

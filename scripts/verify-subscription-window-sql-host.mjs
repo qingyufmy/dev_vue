@@ -8,9 +8,9 @@ let connection
 let queryName = 'setup', phase = 'connect'
 try {
   const credentials = JSON.parse(await readFile(`/proc/self/fd/${process.env.V4_BACKUP_CREDENTIAL_FD}`, 'utf8'))
-  const bytes = await readFile(new URL('./subscription-window-sql-input-v5-20260907.json', import.meta.url))
+  const bytes = await readFile(new URL('./subscription-window-sql-input-v7-20260907.json', import.meta.url))
   const input = JSON.parse(bytes)
-  if (input.kind !== 'subscription-window-selects/v5' || input.queries.length !== 10) throw new Error('input')
+  if (input.kind !== 'subscription-window-selects/v7' || input.queries.length !== 11) throw new Error('input')
   connection = await mysql.createConnection({ ...credentials, database: 'dev_vue_m1_a', timezone: 'Z' })
   await connection.query("SET SESSION time_zone='+00:00'")
   const [[identity]] = await connection.query('SELECT DATABASE() db,@@server_uuid uuid,VERSION() version')
@@ -28,7 +28,7 @@ try {
     results.push({ name: query.name, sqlSha256: query.sqlSha256, explainRows: plan.length, resultRows: rows.length })
   }
   await connection.rollback()
-  console.log(JSON.stringify({ kind: 'subscription-window-sql-validation/v5', observedAt: new Date().toISOString(), identity,
+  console.log(JSON.stringify({ kind: 'subscription-window-sql-validation/v7', observedAt: new Date().toISOString(), identity,
     inputSha256: sha(bytes), results, businessWritesPerformed: false, fixtureBehaviorVerified: false }))
 } catch (error) {
   if (connection) await connection.rollback().catch(() => {})
