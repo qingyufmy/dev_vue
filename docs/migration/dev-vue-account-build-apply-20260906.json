@@ -1,0 +1,128 @@
+{
+  "kind": "dev_vue_account_build_upgrade",
+  "status": "verified",
+  "database": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "backupSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "completedAtUtc": "2026-09-06T14:25:42.195Z",
+  "result": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_002_01_auth_sessions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_02_auth_authorization_codes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_03_terminal_profiles",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_04_bridge_connection_capacity_grants",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_05_data_migration_runs",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_06_data_migration_checkpoints",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_07_data_migration_batches",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_08_data_migration_id_maps",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_09_data_migration_row_receipts",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_01_trading_accounts_v4_build",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_003_03_trading_account_ownerships_v4_build",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_003_04_user_trading_account_settings_v4_build",
+        "status": "applied"
+      }
+    ]
+  },
+  "stepChecksums": [
+    {
+      "id": "inplace_003_01_trading_accounts_v4_build",
+      "checksum": "814f7b8a5f07a344b21371952a2107417d36498b26b361ac0bbc19c331768e1d",
+      "expectedHash": "220cc2cd841761764ce726ec672217d1dbab5e1c2407eb329cc0efa9e477d3e1"
+    },
+    {
+      "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+      "checksum": "f1cae5e187123c4c26b3072b0901cf2099c113fbb7d7057c79fb33ca0c9c6560",
+      "expectedHash": "621cdbad3bf4f137d334f31e6c7e2100463d22f80a2690eca159ffd95d7d82c0"
+    },
+    {
+      "id": "inplace_003_03_trading_account_ownerships_v4_build",
+      "checksum": "12c5bc764f95c4fb06a9391c0017adb73c0c7bf8f0be6f18ffbde38a30dab307",
+      "expectedHash": "1ca9e83cdd8b60c5cc7e6290931867af43db41451398065221b5159ddd9a3c14"
+    },
+    {
+      "id": "inplace_003_04_user_trading_account_settings_v4_build",
+      "checksum": "54440c8bcf20c4ebad8cda1cb9d5e169b004ed7a4b35cb49063fc1145a489998",
+      "expectedHash": "77f25e7acae84325481b7b68c503c31346a389a4d3f32dd8f653c79bdb4aa981"
+    }
+  ],
+  "sourceFiles": [
+    {
+      "path": "scripts/upgrade-dev-vue-account-build.mjs",
+      "sha256": "1f9277684a571525a4119ca5d416fef52ca9932515a0b166d185c4c0926df4fd"
+    },
+    {
+      "path": "scripts/lib/inplace-account-build.mjs",
+      "sha256": "2b9ef4dbab27edce134266d82092042d857ef9ae3d099c791969709423d6d453"
+    },
+    {
+      "path": "scripts/lib/inplace-foundation-upgrade.mjs",
+      "sha256": "9b024fc4ca674cc8ac5cec70754aeeb4c873cf6878d27b312e0876bf74a46f6d"
+    },
+    {
+      "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+      "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-column-store.mjs",
+      "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+    },
+    {
+      "path": "scripts/lib/inplace-column-evidence.mjs",
+      "sha256": "7f62a4fae29a8e3ce12c84b6f704aa04f32c4ab324b53a2bf9bc706e66b67349"
+    },
+    {
+      "path": "scripts/lib/v4-migration-plan.mjs",
+      "sha256": "087d097447de41bda0781aca7cfd6bab82bf6bedaa5c22fde9e8b80e443c2c37"
+    },
+    {
+      "path": "server/db/migrations/inplace/004_account_build_tables.sql",
+      "sha256": "9b66231313014b799153bc592615ec5ea40710b3f4a538fc03da9dfd0e71951b"
+    }
+  ],
+  "ddlExecutions": 4,
+  "repeatNoop": true,
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "sourceRenamed": false,
+  "noBusinessRowsSeeded": true,
+  "fullNormalizationComplete": false
+}
