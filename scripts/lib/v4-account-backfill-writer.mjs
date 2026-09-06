@@ -1,45 +1,8 @@
-import { canonical, exactKeys, hash, requireBackfill as check } from './v4-backfill-contract.mjs'
+import { canonical, hash, requireBackfill as check } from './v4-backfill-contract.mjs'
 import { convertAccountRows } from './v4-account-conversion.mjs'
-import { inplaceAccountTable } from './mysql-inplace-account-backfill.mjs'
+import { writeExact, accountWriterSchemas as schemas } from './v4-inplace-account-row-store.mjs'
 
 const pk = value => [{ type: 'integer', value }]
-const schemas = {
-  trading_accounts: { keys: ['id'], integers: ['id', 'ownership_revision'], dates: ['created_at_utc', 'updated_at_utc', 'deleted_at_utc'],
-    columns: ['id', 'platform', 'broker_server', 'account_login', 'currency', 'margin_mode', 'created_at_utc', 'updated_at_utc', 'deleted_at_utc', 'ownership_revision'] },
-  user_trading_account_settings: { keys: ['user_id', 'trading_account_id'], integers: ['user_id', 'trading_account_id', 'hidden', 'legacy_is_deleted', 'connection_paused', 'revision'],
-    dates: ['observed_until_utc', 'identity_verified_at_utc', 'first_verified_at_utc', 'updated_at_utc'],
-    columns: ['user_id', 'trading_account_id', 'nickname', 'review_status', 'observe_status', 'anomaly_code', 'hidden', 'legacy_is_deleted', 'connection_paused',
-      'observed_until_utc', 'identity_verified_at_utc', 'first_verified_at_utc', 'revision', 'updated_at_utc'] },
-}
-
-async function writeExact(connection, logicalTable, target) {
-  const schema = schemas[logicalTable], table = inplaceAccountTable(logicalTable)
-  check(schema, 'account_writer_table_invalid'); exactKeys(target, schema.columns)
-  const columns = schema.columns.map(name => schema.integers.includes(name) ? `CAST(\`${name}\` AS CHAR) AS \`${name}\``
-    : schema.dates.includes(name) ? `DATE_FORMAT(\`${name}\`,'%Y-%m-%d %H:%i:%s.%f') AS \`${name}\`` : `\`${name}\``).join(',')
-  const sql = `SELECT ${columns} FROM \`${table}\` WHERE ${schema.keys.map(name => `\`${name}\`=?`).join(' AND ')} FOR UPDATE`
-  const values = schema.keys.map(name => target[name])
-  const read = async () => {
-    const [rows] = await connection.execute(sql, values)
-    check(rows.length <= 1, 'account_writer_target_duplicate')
-    if (!rows.length) return null
-    const row = { ...rows[0] }
-    for (const name of schema.dates) if (row[name] !== null) {
-      check(typeof row[name] === 'string' && /\.\d{3}000$/.test(row[name]), 'account_writer_time_precision_invalid')
-      row[name] = row[name].slice(0, -3)
-    }
-    return row
-  }
-  const existing = await read()
-  if (existing !== null) {
-    check(canonical(existing) === canonical(target), 'account_writer_target_conflict')
-    return
-  }
-  await connection.execute(`INSERT INTO \`${table}\` (${schema.columns.map(name => `\`${name}\``).join(',')}) VALUES (${schema.columns.map(() => '?').join(',')})`,
-    schema.columns.map(name => target[name]))
-  check(canonical(await read()) === canonical(target), 'account_writer_readback_mismatch')
-}
-
 // One conversion over the entire frozen set, then pagination. A shared entity has
 // identical values in every source row; no batch computes its own min/max or IDs.
 export function createAccountBackfill(rows, plan, options, { batchSize = 100 } = {}) {
