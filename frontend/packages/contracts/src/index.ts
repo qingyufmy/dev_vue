@@ -1,4 +1,5 @@
 import { z } from 'zod'
+export { bridgePairingRequestSchema, bridgePairingResponseSchema } from './bridge-pairing'
 
 export const appSurfaceSchema = z.enum(['www', 'trade', 'admin'])
 

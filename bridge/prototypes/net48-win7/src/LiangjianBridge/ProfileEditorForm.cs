@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using System.Threading.Tasks;
 using Liangjian.BridgeV4.Configuration;
 
 namespace Liangjian.BridgeV4.App
@@ -13,19 +14,27 @@ namespace Liangjian.BridgeV4.App
         private readonly TextBox broker = Field();
         private readonly TextBox login = Field();
         private readonly TextBox serverUri = Field();
-        private readonly TextBox refreshToken = Field();
+        private readonly TextBox pairingCode = Field();
         private readonly CheckBox autoConnect = new CheckBox();
         private readonly TextBox python = Field();
         private readonly TextBox worker = Field();
         private readonly TextBox terminal = Field();
         private readonly TableLayoutPanel fields = new TableLayoutPanel();
         private readonly bool newProfile;
+        private readonly BridgePairingDraftStore pairing;
+        private readonly string installationId;
+        private bool saving;
+        private Button save;
+        private Button cancel;
 
-        public ProfileEditorForm(BridgeProfileSettings profileValue, bool isNew)
+        public ProfileEditorForm(BridgeProfileSettings profileValue, bool isNew,
+            BridgePairingDraftStore pairingStore = null, string installation = null, string resumeCode = null)
         {
             if (profileValue == null) throw new ArgumentNullException("profileValue");
             Profile = profileValue;
             newProfile = isNew;
+            pairing = pairingStore;
+            installationId = installation;
             Text = isNew ? "新增终端档案" : "编辑终端档案";
             StartPosition = FormStartPosition.CenterParent;
             MinimumSize = new Size(620, 590);
@@ -35,7 +44,8 @@ namespace Liangjian.BridgeV4.App
             platform.DropDownStyle = ComboBoxStyle.DropDownList;
             platform.Items.AddRange(new object[] { "MT5", "MT4" });
             platform.SelectedIndexChanged += delegate { ApplyPlatformVisibility(); };
-            refreshToken.UseSystemPasswordChar = true;
+            pairingCode.UseSystemPasswordChar = true;
+            pairingCode.Text = resumeCode ?? string.Empty;
             autoConnect.Text = "程序启动后自动连接";
             autoConnect.AutoSize = true;
 
@@ -51,7 +61,12 @@ namespace Liangjian.BridgeV4.App
             AddRow("经纪商服务器", broker);
             AddRow("交易账号", login);
             AddRow("Bridge 实时地址", serverUri);
-            AddRow(isNew ? "V4 刷新凭据" : "新 V4 刷新凭据（留空不变）", refreshToken);
+            if (isNew)
+            {
+                AddRow("网页配对码", pairingCode);
+                AddRow("", new Label { AutoSize = true, MaximumSize = new Size(440, 0),
+                    Text = "在交易实验室的“量见智桥”页面生成并复制。网络中断后可重新打开本窗口继续配对。" });
+            }
             AddRow("", autoConnect);
             AddRow("Python 可执行文件", python);
             AddRow("MT5 Worker 脚本", worker);
@@ -62,9 +77,10 @@ namespace Liangjian.BridgeV4.App
                 Dock = DockStyle.Bottom, Height = 58, FlowDirection = FlowDirection.RightToLeft,
                 Padding = new Padding(12)
             };
-            Button save = new Button { Text = "保存", DialogResult = DialogResult.None, Width = 90, Height = 34 };
-            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Width = 90, Height = 34 };
-            save.Click += delegate { SaveAndClose(); };
+            save = new Button { Text = isNew ? "配对并保存" : "保存", DialogResult = DialogResult.None, Width = 120, Height = 36 };
+            cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Width = 90, Height = 36 };
+            save.Click += async delegate { await SaveAndClose(); };
+            FormClosing += delegate(object sender, FormClosingEventArgs args) { if (saving) args.Cancel = true; };
             footer.Controls.Add(save);
             footer.Controls.Add(cancel);
             Controls.Add(fields);
@@ -86,10 +102,9 @@ namespace Liangjian.BridgeV4.App
         }
 
         public BridgeProfileSettings Profile { get; private set; }
-        public string RefreshToken { get; private set; }
-
-        private void SaveAndClose()
+        private async Task SaveAndClose()
         {
+            if (saving) return;
             Profile.DisplayName = displayName.Text.Trim();
             Profile.Platform = string.Equals(platform.SelectedItem as string, "MT4", StringComparison.Ordinal) ? "mt4" : "mt5";
             Profile.TerminalInstanceId = terminalId.Text.Trim();
@@ -100,18 +115,35 @@ namespace Liangjian.BridgeV4.App
             Profile.PythonExecutablePath = Profile.Platform == "mt5" ? python.Text.Trim() : string.Empty;
             Profile.WorkerScriptPath = Profile.Platform == "mt5" ? worker.Text.Trim() : string.Empty;
             Profile.TerminalPath = Profile.Platform == "mt5" ? terminal.Text.Trim() : string.Empty;
-            RefreshToken = refreshToken.Text;
             try
             {
-                if (newProfile && string.IsNullOrWhiteSpace(RefreshToken))
-                    throw new InvalidOperationException("新档案必须填写 V4 刷新凭据。");
                 BridgeProfileStore.ValidateProfile(Profile, true);
+                if (newProfile)
+                {
+                    string code = pairingCode.Text.Trim();
+                    if (pairing == null) throw new InvalidOperationException("bridge_pairing_unavailable");
+                    saving = true;
+                    fields.Enabled = false;
+                    save.Enabled = false;
+                    cancel.Enabled = false;
+                    save.Text = "正在配对…";
+                    Profile = await Task.Run(() => pairing.Pair(Profile, installationId, code));
+                }
+                saving = false;
                 DialogResult = DialogResult.OK;
                 Close();
             }
             catch (Exception error)
             {
                 MessageBox.Show(this, Friendly(error.Message), "请检查档案", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                saving = false;
+                fields.Enabled = true;
+                save.Enabled = true;
+                cancel.Enabled = true;
+                save.Text = newProfile ? "配对并保存" : "保存";
             }
         }
 
@@ -143,7 +175,11 @@ namespace Liangjian.BridgeV4.App
                 case "bridge_profile_server_uri_invalid": return "实时地址必须是有效的 ws:// 或 wss:// 地址。";
                 case "bridge_profile_mt5_path_invalid": return "MT5 档案必须填写三个绝对路径。";
                 case "bridge_profile_invalid": return "请完整填写档案名称、终端实例、服务器和交易账号。";
-                default: return code;
+                case "bridge_pairing_code_invalid": return "请粘贴网页生成的完整配对码。";
+                case "bridge_pairing_server_changed": return "此配对码已用于原服务地址。请恢复原地址，或生成新码后再配对。";
+                case "bridge_pairing_exchange_failed": return "暂未确认配对结果。请检查网络后重试；若配对码已过期或撤销，请从网页重新生成。";
+                case "bridge_pairing_draft_unavailable": return "无法读取已保存的配对请求。请使用原 Windows 用户重试，不要删除现有档案。";
+                default: return "未能保存档案，请检查填写内容及本地文件访问权限后重试。";
             }
         }
     }

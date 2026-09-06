@@ -95,6 +95,7 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("legacy_v3_credential_exchange_and_import", LegacyV3CredentialExchangeSmokeTests.RunAll);
             Run("bridge_session_token_provider", BridgeSessionTokenProviderSmokeTests.RunAll);
             Run("bridge_pairing", BridgePairingSmokeTests.RunAll);
+            Run("bridge_pairing_durable_retry", BridgePairingDraftSmokeTests.RunAll);
 
             Console.WriteLine(failures == 0 ? "PASS bridge_v4_prototype_smoke" : "FAIL bridge_v4_prototype_smoke " + failures);
             return failures == 0 ? 0 : 1;

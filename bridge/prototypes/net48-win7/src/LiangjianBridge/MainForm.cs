@@ -241,27 +241,52 @@ namespace Liangjian.BridgeV4.App
         private void AddProfile()
         {
             if (!configurationAvailable) return;
+            BridgePairingDraftStore pairing = new BridgePairingDraftStore(Path.Combine(dataRoot, "pairing.pending"),
+                new CurrentUserSecretProtector(), profileStore, new BridgePairingClient());
+            BridgePairingDraft pending;
+            try
+            {
+                pending = pairing.Load(catalog.InstallationId);
+                if (pending != null && pending.Redeemed && catalog.Profiles.Exists(item => item.ProfileId == pending.Profile.ProfileId))
+                {
+                    pairing.ClearCompleted(catalog.InstallationId, pending.Profile.ProfileId);
+                    pending = null;
+                }
+            }
+            catch (Exception)
+            {
+                MessageBox.Show(this, "无法读取待配对记录。请确认仍在使用原 Windows 用户，并检查本地配置目录的访问权限。现有档案未修改。",
+                    "配对记录不可用", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             BridgeProfileSettings profile = new BridgeProfileSettings
             {
                 ProfileId = "profile-" + Guid.NewGuid().ToString("N"), Platform = "mt5",
                 DisplayName = "新终端档案", AutoConnect = false
             };
-            using (ProfileEditorForm editor = new ProfileEditorForm(profile, true))
+            if (pending != null) profile = pending.Profile.Clone();
+            using (ProfileEditorForm editor = new ProfileEditorForm(profile, true, pairing, catalog.InstallationId, pending == null ? null : pending.Code))
             {
                 if (editor.ShowDialog(this) != DialogResult.OK) return;
                 try
                 {
-                    profileStore.SetRefreshToken(editor.Profile, editor.RefreshToken);
                     BridgeProfileCatalog candidate = CopyCatalog();
                     candidate.Profiles.Add(editor.Profile);
                     profileStore.Save(candidate);
                     catalog = candidate;
                     RefreshProfiles();
                     SelectProfile(editor.Profile.ProfileId);
+                    try { pairing.ClearCompleted(catalog.InstallationId, editor.Profile.ProfileId); }
+                    catch (Exception)
+                    {
+                        MessageBox.Show(this, "档案已保存，但待配对记录暂未清理。下次新增档案时会再次尝试清理，无需重新配对。",
+                            "档案已保存", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
                 }
-                catch (Exception error)
+                catch (Exception)
                 {
-                    ShowOperationError(error);
+                    MessageBox.Show(this, "配对信息已保留，但档案尚未保存。请检查是否重复添加了同一终端，以及本地配置目录的写入权限，再点击“新增档案”继续。",
+                        "档案未保存", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
         }
@@ -277,8 +302,6 @@ namespace Liangjian.BridgeV4.App
                 try
                 {
                     bool routeChanged = !current.SameRoute(editor.Profile);
-                    if (!string.IsNullOrWhiteSpace(editor.RefreshToken))
-                        profileStore.SetRefreshToken(editor.Profile, editor.RefreshToken);
                     if (routeChanged) editor.Profile.ProfileId = "profile-" + Guid.NewGuid().ToString("N");
                     int index = catalog.Profiles.IndexOf(current);
                     BridgeProfileCatalog candidate = CopyCatalog();

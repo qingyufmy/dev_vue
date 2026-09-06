@@ -1,4 +1,5 @@
 import {
+  bridgePairingRequestSchema, bridgePairingResponseSchema,
   analysisJobResponseSchema, apiProblemSchema, authLoginResponseSchema, connectionCapacityResponseSchema,
   marketAnalysisDetailResponseSchema, marketAnalysisListResponseSchema, marketCandlesResponseSchema,
   marketQuoteResponseSchema, observerChannelsResponseSchema, operationResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema,
@@ -106,6 +107,11 @@ export function createApiClient(options: ApiClientOptions = {}) {
       `/api/v4/trading-accounts${access === 'history' ? '?access=history' : ''}`,
     ),
     getConnectionCapacity: () => send(connectionCapacityResponseSchema, '/api/v4/bridge/connection-capacity'),
+    createBridgePairing: (codeHash: string, requestKey: string, csrfToken: string, signal?: AbortSignal) => send(
+      bridgePairingResponseSchema, '/api/v4/bridge/pairing-requests',
+      { method: 'POST', csrfToken, headers: { 'Idempotency-Key': requestKey },
+        body: JSON.stringify(bridgePairingRequestSchema.parse({ code_hash: codeHash })), ...(signal ? { signal } : {}), cache: 'no-store' },
+    ),
     listTerminalProfiles: () => send(terminalProfilesResponseSchema, '/api/v4/bridge/terminal-profiles'),
     listObserverChannels: () => send(observerChannelsResponseSchema, '/api/v4/observer-channels'),
     getTradingWorkspace: (accountId: string, observerChannelId?: string | null) => send(tradingWorkspaceResponseSchema, `/api/v4/trading-accounts/${encodeURIComponent(accountId)}/snapshot${observerQuery(observerChannelId)}`),
