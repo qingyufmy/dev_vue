@@ -1,13 +1,6 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
 import { StrategyAccessError } from '../domain/strategy.js'
-
-export type SubscriptionTakeProfitMode = 'ai_recommended' | 'conservative' | 'standard' | 'trend'
-
-export interface SubscriptionExecutionPreferences {
-  contractVersion: 1
-  takeProfitMode: SubscriptionTakeProfitMode
-  revision: string
-}
+import type { SubscriptionExecutionPreferences, SubscriptionTakeProfitMode } from '../domain/subscription-take-profit.js'
 
 // The caller owns the subscription creation transaction. No upsert: a duplicate
 // indicates conflicting initialization and must roll back, not overwrite evidence.

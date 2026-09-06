@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { SubscriptionExecutionPreferences } from '../../strategies/index.js'
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -104,6 +105,8 @@ export interface AnalysisInputSnapshot {
 }
 
 export interface TraderInputSnapshot {
+  /** Explicitly frozen preferences only; historical absence is not a default. */
+  executionPreferences?: SubscriptionExecutionPreferences
   /** Missing only in historical snapshots, never inferred from today's settings. */
   subscriptionWindowHash?: string
   kind: 'trader'

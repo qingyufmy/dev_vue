@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { StrategyService } from '../../strategies/application/strategy-service.js'
 import type { AnalysisInputSnapshot, AnalysisWorkClaim, JsonObject, MarketAnalysisResult, TraderDecisionResult, TraderInputSnapshot, TraderWorkClaim } from '../domain/inference.js'
 import { assertConfidence, assertMarketAnalysisResult, assertTraderDecisionResult, contentHash, InferenceError, normalizeSymbol, snapshotHash } from '../domain/inference.js'
+import { applyTraderTakeProfit } from '../domain/trader-take-profit.js'
 import type { InferenceRepository } from './inference-ports.js'
 
 const MANUAL_COOLDOWN_SECONDS = 180
@@ -84,9 +85,10 @@ export class InferenceService {
   async completeTrader(claim: TraderWorkClaim, snapshot: TraderInputSnapshot, result: TraderDecisionResult, usage: JsonObject | null = null) {
     assertConfidence(result.confidence)
     assertTraderDecisionResult(result, snapshot)
+    const selectedResult = applyTraderTakeProfit(snapshot, result)
     return this.repository.completeTrader({
       runId: claim.run.id, userId: claim.run.userId, expectedRevision: claim.run.revision, decisionId: randomUUID(),
-      taskId: claim.taskId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, usage, result,
+      taskId: claim.taskId, attemptId: claim.attemptId, fencingToken: claim.fencingToken, usage, result: selectedResult,
     })
   }
 
