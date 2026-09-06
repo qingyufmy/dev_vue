@@ -25,17 +25,19 @@ namespace Liangjian.BridgeV4.Runtime
         private readonly Mt5WorkerHost mt5Live;
         private readonly Mt5WorkerHost mt5Archive;
         private readonly string terminalInstanceId;
+        private readonly IDisposable profileLease;
         private string lastErrorCode;
         private bool disposed;
 
         public ManagedProfileConnection(ProfileRuntime runtimeValue, BridgeProfileWorker workerValue,
-            string terminalId, Mt5WorkerHost liveHost, Mt5WorkerHost archiveHost)
+            string terminalId, Mt5WorkerHost liveHost, Mt5WorkerHost archiveHost, IDisposable lease)
         {
             runtime = runtimeValue;
             worker = workerValue;
             terminalInstanceId = terminalId;
             mt5Live = liveHost;
             mt5Archive = archiveHost;
+            profileLease = lease;
             worker.ConnectionError += OnConnectionError;
             worker.StateChanged += OnStateChanged;
         }
@@ -107,7 +109,8 @@ namespace Liangjian.BridgeV4.Runtime
             worker.Dispose();
             if (mt5Archive != null) mt5Archive.Disconnect(terminalInstanceId);
             if (mt5Live != null) mt5Live.Disconnect(terminalInstanceId);
-            runtime.Dispose();
+            try { runtime.Dispose(); }
+            finally { profileLease.Dispose(); }
             RaiseStateChanged();
         }
 
@@ -359,9 +362,17 @@ namespace Liangjian.BridgeV4.Runtime
 
         private ManagedProfileConnection Create(BridgeProfileSettings profile)
         {
-            string directory = Path.Combine(profileDataRoot, "profiles", profile.ProfileId);
-            string databasePath = Path.Combine(directory, "bridge.db");
-            long epoch = ProfileDataStore.ReadPersistedConnectionEpoch(databasePath);
+            IDisposable lease = ProfileAccountDataLocation.AcquireLease(profileDataRoot, profile);
+            try { return Create(profile, lease); }
+            catch { lease.Dispose(); throw; }
+        }
+
+        private ManagedProfileConnection Create(BridgeProfileSettings profile, IDisposable lease)
+        {
+            ProfileAccountDataLocation location = ProfileAccountDataLocation.Resolve(profileDataRoot, profile);
+            string directory = location.DirectoryPath;
+            string databasePath = location.DatabasePath;
+            long epoch = location.ConnectionEpoch;
             ProfileRuntime runtime = new ProfileRuntime(new ProfileRuntimeConfiguration(databasePath,
                 profile.ProfileId, profile.TerminalInstanceId, profile.Platform, profile.BrokerServer,
                 profile.Login, epoch));
@@ -417,7 +428,7 @@ namespace Liangjian.BridgeV4.Runtime
                 BridgeProfileWorker worker = new BridgeProfileWorker(runtime, controller,
                     new Rfc6455MessageChannelFactory(new Uri(profile.ServerUri),
                         acquireSessionToken, 15000), releaseStatus);
-                return new ManagedProfileConnection(runtime, worker, profile.TerminalInstanceId, live, archive);
+                return new ManagedProfileConnection(runtime, worker, profile.TerminalInstanceId, live, archive, lease);
             }
             catch
             {

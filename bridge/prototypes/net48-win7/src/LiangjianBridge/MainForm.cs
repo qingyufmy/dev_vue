@@ -304,7 +304,8 @@ namespace Liangjian.BridgeV4.App
                 try
                 {
                     bool routeChanged = !current.SameRoute(editor.Profile);
-                    if (routeChanged) editor.Profile.ProfileId = "profile-" + Guid.NewGuid().ToString("N");
+                    // The credential belongs to this paired profile, not to its current account.
+                    editor.Profile.ProfileId = current.ProfileId;
                     int index = catalog.Profiles.IndexOf(current);
                     BridgeProfileCatalog candidate = CopyCatalog();
                     candidate.Profiles[index] = editor.Profile;

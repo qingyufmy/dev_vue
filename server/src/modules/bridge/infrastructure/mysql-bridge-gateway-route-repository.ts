@@ -330,7 +330,19 @@ async function registerOrLoadProfile(
   const [rows] = await connection.execute<ProfileRow[]>(`SELECT ${PROFILE_COLUMNS}
     FROM terminal_profiles p WHERE p.id=? LIMIT 1 FOR UPDATE`, [profileId])
   const existing = rows[0]
-  if (existing) return existing
+  if (existing) {
+    // Pairing identity is immutable; platform describes the currently selected terminal.
+    // Target-account ownership and the current credential were checked before this call.
+    await assertProfile(existing, userId, profileId, installationId, existing.platform)
+    if (existing.platform !== platform) {
+      const [updated] = await connection.execute<ResultSetHeader>(`UPDATE terminal_profiles
+        SET platform=?,updated_at_utc=UTC_TIMESTAMP(3) WHERE id=? AND user_id=? AND installation_id=?
+          AND deleted_at_utc IS NULL`, [platform, profileId, userId, installationId])
+      if (updated.affectedRows !== 1) throw gatewayError('bridge_route_storage_unavailable', 503)
+      return { ...existing, platform }
+    }
+    return existing
+  }
 
   const [inserted] = await connection.execute<ResultSetHeader>(`INSERT INTO terminal_profiles
     (id,user_id,display_name,platform,installation_id,created_at_utc,updated_at_utc,deleted_at_utc)

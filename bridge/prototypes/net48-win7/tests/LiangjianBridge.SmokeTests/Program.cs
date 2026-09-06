@@ -100,6 +100,7 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("bridge_pairing", BridgePairingSmokeTests.RunAll);
             Run("bridge_pairing_durable_retry", BridgePairingDraftSmokeTests.RunAll);
             Run("terminal_discovery_readonly_selection", TerminalDiscoverySmokeTests.RunAll);
+            Run("profile_account_data_isolation", ProfileAccountDataSmokeTests.RunAll);
 
             Console.WriteLine(failures == 0 ? "PASS bridge_v4_prototype_smoke" : "FAIL bridge_v4_prototype_smoke " + failures);
             return failures == 0 ? 0 : 1;

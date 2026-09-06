@@ -226,6 +226,14 @@ class FakePool {
       return [{ affectedRows: 1 } as T, []]
     }
 
+    if (sql.includes('UPDATE terminal_profiles')) {
+      const [platform, id, userId, installationId] = params
+      const row = this.current.profiles.find(item => item.id === id && item.userId === Number(userId)
+        && item.installationId === installationId && item.deletedAt === null)
+      if (row) row.platform = platform as 'mt4' | 'mt5'
+      return [{ affectedRows: row ? 1 : 0 } as T, []]
+    }
+
     if (sql.includes('UPDATE terminal_account_bindings')) {
       const [unboundAt, profileId] = params.map(String) as [string, string]
       for (const row of this.current.bindings) {
@@ -360,6 +368,7 @@ interface InputOptions {
   epoch?: number
   connectionId?: string
   sessionId?: string
+  connectedAt?: string
 }
 
 function claims(options: InputOptions = {}) {
@@ -390,7 +399,7 @@ function hello(options: InputOptions = {}): BridgeSessionHelloEnvelope {
 
 function registrationInput(options: InputOptions = {}) {
   return {
-    claims: claims(options), hello: hello(options), connectionId: options.connectionId ?? 'connection-1', connectedAt: NOW,
+    claims: claims(options), hello: hello(options), connectionId: options.connectionId ?? 'connection-1', connectedAt: options.connectedAt ?? NOW,
   }
 }
 
@@ -554,7 +563,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     }
   })
 
-  it('does not adopt deleted, mismatched, or cross-platform profiles', async () => {
+  it('does not adopt deleted or mismatched profiles', async () => {
     const cases: Array<{ name: string; prepare: (pool: FakePool) => InputOptions }> = [
       { name: 'profile belongs to another user', prepare: pool => {
         pool.state.profiles.push({ id: 'profile-1', userId: 8, platform: 'mt5', installationId: 'install-1', deletedAt: null })
@@ -568,13 +577,6 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
         pool.state.profiles.push({ id: 'profile-1', userId: 7, platform: 'mt5', installationId: 'install-1', deletedAt: LATER })
         return {}
       } },
-      { name: 'mt4 route cannot reuse an mt5 profile', prepare: pool => {
-        pool.state.accounts.push({ id: '44', platform: 'mt4', brokerServer: 'DPrime-Demo 5', login: '8950704', deletedAt: null, ownershipRevision: '1' })
-        pool.state.ownerships.push({ userId: 7, accountId: '44', revision: '1', intervalId: 'interval-44', role: 'owner', revokedAt: null,
-          intervalRole: 'owner', intervalStart: '2026-09-01T00:00:00.000Z', intervalEnd: null, grantedAt: '2026-09-01T00:00:00.000Z' })
-        pool.state.profiles.push({ id: 'profile-1', userId: 7, platform: 'mt5', installationId: 'install-1', deletedAt: null })
-        return { platform: 'mt4', login: '8950704' }
-      } },
     ]
     for (const value of cases) {
       const pool = new FakePool()
@@ -582,6 +584,35 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
       await expect(open(new MysqlBridgeGatewayRouteRepository(pool.asPool()), options), value.name)
         .rejects.toSatisfy(error => errorCode(error) === 'bridge_route_binding_invalid')
     }
+  })
+
+  it('switches an owned MT5 profile to an owned MT4 account without replacing its credential', async () => {
+    const pool = new FakePool()
+    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const old = await open(repository)
+    await repository.activate(old, NOW)
+    pool.state.accounts.push({ id: '44', platform: 'mt4', brokerServer: 'DPrime-Demo 5', login: '8950704', deletedAt: null, ownershipRevision: '1' })
+    pool.state.ownerships.push({ ...pool.state.ownerships[0]!, accountId: '44', revision: '1', intervalId: 'interval-44' })
+    const credentials = structuredClone(pool.state.credentials)
+    const switched = await open(repository, { platform: 'mt4', login: '8950704', epoch: 2, connectedAt: LATER, connectionId: 'connection-2' })
+    expect(switched.terminalProfileId).toBe(old.terminalProfileId)
+    expect(pool.state.credentials).toEqual(credentials)
+    expect(pool.state.profiles[0]!.platform).toBe('mt4')
+    expect(pool.state.bindings[0]!.unboundAt).not.toBeNull()
+    await expect(repository.isAuthorized(old)).resolves.toBe(false)
+    await repository.activate(switched, LATER)
+    await expect(repository.isAuthorized(switched)).resolves.toBe(true)
+  })
+
+  it('rolls back a platform change when a later epoch check fails', async () => {
+    const pool = new FakePool()
+    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    await open(repository, { epoch: 5 })
+    pool.state.accounts.push({ id: '44', platform: 'mt4', brokerServer: 'DPrime-Demo 5', login: '8950704', deletedAt: null, ownershipRevision: '1' })
+    pool.state.ownerships.push({ ...pool.state.ownerships[0]!, accountId: '44', revision: '1', intervalId: 'interval-44' })
+    await expect(open(repository, { platform: 'mt4', login: '8950704', epoch: 4 })).rejects.toBeInstanceOf(BridgeGatewayError)
+    expect(pool.state.profiles[0]!.platform).toBe('mt5')
+    expect(pool.state.bindings).toHaveLength(1)
   })
 
   it('rolls back profile/binding/session writes on a mid-transaction storage error', async () => {
