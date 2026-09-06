@@ -1,0 +1,859 @@
+{
+  "kind": "settings-inventory/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 54,
+  "columns": [
+    {
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": null
+    },
+    {
+      "name": "category",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "key",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "value",
+      "type": "mediumtext",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "label",
+      "type": "varchar(255)",
+      "nullable": "YES",
+      "defaultValue": "",
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "sort_order",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": "0",
+      "collationName": null
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collationName": null
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collationName": null
+    }
+  ],
+  "indexes": [
+    {
+      "name": "PRIMARY",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "id"
+    },
+    {
+      "name": "uq_category_key",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "category"
+    },
+    {
+      "name": "uq_category_key",
+      "nonUnique": 0,
+      "position": 2,
+      "columnName": "key"
+    }
+  ],
+  "result": {
+    "version": "settings-values-review/v1",
+    "entries": [
+      {
+        "sourceId": "1",
+        "sourceRowSha256": "5f6d98d527f092b9fa276578ed7c93a00ac896d7c663d45084d94fcbc730aadc",
+        "namespace": "smtp",
+        "key": "host",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "10",
+        "sourceRowSha256": "e5e731438ccaf20b279b7f62c13823f307a009d1b87a14a0e0d793ea8a1ae66c",
+        "namespace": "qiniu",
+        "key": "bucket",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "11",
+        "sourceRowSha256": "08f7733f7b5c9dba847fc209f09d3c43da9dad68adcf18c46ffd02bc2aee5b89",
+        "namespace": "qiniu",
+        "key": "domain",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "114",
+        "sourceRowSha256": "10a6a0af07b333651e11fea99ea9875fafd01f6255be9736e52793b42ed11bee",
+        "namespace": "plan_prices",
+        "key": "plus_month_original",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "115",
+        "sourceRowSha256": "239ae08dc1deeb00128f62c47143b5efebc028ecf5da3543b01eaa887c43c4f9",
+        "namespace": "plan_prices",
+        "key": "plus_month",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "116",
+        "sourceRowSha256": "afaa606e5d3fc0a8766c2970c6daaae53938649876d8765b1f7e5785f2539f87",
+        "namespace": "plan_prices",
+        "key": "plus_year_original",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "117",
+        "sourceRowSha256": "f8fbc3e890ad9dc57a10cd6381652c5f6337752b0fbbcb17f6e418466ac78716",
+        "namespace": "plan_prices",
+        "key": "plus_year",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "118",
+        "sourceRowSha256": "259f8c4288111bd1f659ce66913a31f179ebdea3369b2448c4f1a87e2d2d4809",
+        "namespace": "plan_prices",
+        "key": "pro_month_original",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "119",
+        "sourceRowSha256": "f463f4b9e9f82435e359d34b82bf76dec87578fcb689d9ecccd0a4b94e2412bb",
+        "namespace": "plan_prices",
+        "key": "pro_month",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "12",
+        "sourceRowSha256": "b9e5319a148aa36bf47fdde63936ae1a9137fc1446195de03ded3994811602c0",
+        "namespace": "qiniu",
+        "key": "region",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "120",
+        "sourceRowSha256": "4b6d6081a18fc0bb84ab92ff614fa36ca9e07fd757a277e4ecbd0d5b023ed138",
+        "namespace": "plan_prices",
+        "key": "pro_year_original",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "121",
+        "sourceRowSha256": "f6d891e49669f63ca0d3e8a2f62b1dc600a0a1cbd165a282fff47988e841b1b9",
+        "namespace": "plan_prices",
+        "key": "pro_year",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "13",
+        "sourceRowSha256": "a6ce0c81b1535a62369cc203d4f08f47eef149468ddb4dcdb3a26fe190ee5405",
+        "namespace": "toolbox",
+        "key": "items",
+        "type": "json_array",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [
+          "item_schema_review"
+        ],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "14",
+        "sourceRowSha256": "5e3b2f05c433bdd8bbc74e5f72f955199a03d964acbec8e8ea398fe32651ee67",
+        "namespace": "market_menu",
+        "key": "items",
+        "type": "json_array",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [
+          "item_schema_review"
+        ],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "2",
+        "sourceRowSha256": "161d384135934ea70d34ecf4eb8aeb2b3be605a1b6fcc7c3aecf5e69afefd97f",
+        "namespace": "smtp",
+        "key": "port",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "224",
+        "sourceRowSha256": "cdaf65348ead25fb933e9c16ed626ac181749a8c97efa581c34361f60cf4723a",
+        "namespace": "crypto_wallet",
+        "key": "fixed_erc20_address",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "empty",
+        "compatible": true,
+        "needs": [
+          "chain_address_validation"
+        ],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "225",
+        "sourceRowSha256": "00627a673e77e8373acd94c4e93bf14a159abbc3b04a0e40aa9fc505efffe40d",
+        "namespace": "crypto_wallet",
+        "key": "fixed_bep20_address",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "empty",
+        "compatible": true,
+        "needs": [
+          "chain_address_validation"
+        ],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "226",
+        "sourceRowSha256": "de1a3e35f2cde6f9ac1d21897e64ab88536cc3be06372f0b5ac8743f2f4703f9",
+        "namespace": "crypto_wallet",
+        "key": "fixed_sol_address",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "empty",
+        "compatible": true,
+        "needs": [
+          "chain_address_validation"
+        ],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "256",
+        "sourceRowSha256": "45f34ea1d4162eba593a54476e0527167f784279ff9e6a6fb817609d7ead9a90",
+        "namespace": "auth_toggle",
+        "key": "gift_enabled",
+        "type": "boolean",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "257",
+        "sourceRowSha256": "3aa7eff31dcc35e4c41d4a6afee81351d8df5500e3f828ddae6c43f747f3dd71",
+        "namespace": "auth_toggle",
+        "key": "gift_plan",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "258",
+        "sourceRowSha256": "0db2aaf83b5d7d942676b7af6b003d8e892445d3a627056d3aefcc2f15a647c9",
+        "namespace": "auth_toggle",
+        "key": "gift_duration",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "259",
+        "sourceRowSha256": "1c0a132804141264f55f45a962ba2f170eadea83ac065388b49ebd6cc55227bc",
+        "namespace": "auth_toggle",
+        "key": "gift_duration_unit",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "261",
+        "sourceRowSha256": "77079c03c1fdd6cc6507f939582469271266924aed9026bd96f3b1ecac876ba5",
+        "namespace": "sms",
+        "key": "template_code_membership_expiry",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "262",
+        "sourceRowSha256": "4adac14b2488969b20c5a2d897a0943c2de5e8e4eb26b1a48e4e662e543654af",
+        "namespace": "sms",
+        "key": "template_code_membership_expired",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "274",
+        "sourceRowSha256": "13e570b69c9094d4f67c057cf62d3fc3c342fe8969b01e84c4616a082ee3099a",
+        "namespace": "media_storage",
+        "key": "default_provider",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "275",
+        "sourceRowSha256": "5c0e3149507064329653ee1a03991d49ba8a80be4622456b48dc13600d76bf99",
+        "namespace": "media_storage",
+        "key": "video_provider",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "276",
+        "sourceRowSha256": "2306bc5ed228d99c740fe27f0cef8f27f4d3ba5a36bc3e18276767572528f2fb",
+        "namespace": "media_storage",
+        "key": "attachment_provider",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "277",
+        "sourceRowSha256": "1f4958970fe59e3c6bcdc8fc6bac3185ecf0272ebb9137d65543e716df8dce12",
+        "namespace": "media_storage",
+        "key": "image_provider",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "278",
+        "sourceRowSha256": "8d212a8b5e136762a53bed8457e1b50abc9162ace9e664ef2ef0f025b982da05",
+        "namespace": "media_storage",
+        "key": "resource_provider",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "279",
+        "sourceRowSha256": "aebf07b1d67e723a5b1f9c23f0f1a17c7bb5da2abf6dc0a4c69dcc532f877609",
+        "namespace": "media_storage",
+        "key": "local_root",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "empty",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "280",
+        "sourceRowSha256": "75602cd550c798e166cb292f77ae7754c7dde630ec35215c15c987e2d50356c2",
+        "namespace": "media_storage",
+        "key": "qiniu_connection_test_version",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "281",
+        "sourceRowSha256": "a5b5e4c5b6d6ac4d5e720954d28a7efe8ef3ec98c676338907966501ab7df6e5",
+        "namespace": "media_storage",
+        "key": "qiniu_connection_test_status",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "282",
+        "sourceRowSha256": "fb4b2244df3e5580415980b5a9a66c2bab349495be1102ea852255e120ab7534",
+        "namespace": "media_storage",
+        "key": "qiniu_connection_test_stage",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "283",
+        "sourceRowSha256": "c6d5ea9f2273dfc150c3d825d73e90f94d1ef6c33f3b74e9027b88357a1ffcfe",
+        "namespace": "media_storage",
+        "key": "qiniu_connection_tested_at",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "284",
+        "sourceRowSha256": "13818f46d66981e2a071f90541b8c65f6b82dd7b71cc98f8db75739e439aeed1",
+        "namespace": "media_storage",
+        "key": "qiniu_connection_test_error",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "empty",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "285",
+        "sourceRowSha256": "f4b08174ca27380b79ca9d2c204673d38a4af18139ef7e9ceb1320351b8b713a",
+        "namespace": "media_storage",
+        "key": "qiniu_connection_test_cleanup_pending",
+        "type": "boolean",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "286",
+        "sourceRowSha256": "0e1314739f9b65e42c4390066243876ae29a8a5b04202cc036f0586ee30d5cb8",
+        "namespace": "qiniu",
+        "key": "private_bucket",
+        "type": "boolean",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "3",
+        "sourceRowSha256": "1094394d1632d17d2f012a6e232d5901979ba9e54a7c9bc848a37c1df243c8a6",
+        "namespace": "smtp",
+        "key": "user",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "39",
+        "sourceRowSha256": "1e7441d4bc7d7cf0ae4bfcd47e82bff337855d252e91e52a433df94007f8756a",
+        "namespace": "sms",
+        "key": "sign_name",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "40",
+        "sourceRowSha256": "783e15fdaa43288a18819cd0c4d87e159fd75b52cc9c956457f49756bb01d195",
+        "namespace": "sms",
+        "key": "template_code",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "41",
+        "sourceRowSha256": "517220e83b8390b36f9bbafafa7b48d80a117ada0413e361f20ed7ad79dead43",
+        "namespace": "sms",
+        "key": "test_phone",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "5",
+        "sourceRowSha256": "37329d92bdab73d4d0b909475c4495736316376243ea19c9a04d825c6b4e0917",
+        "namespace": "smtp",
+        "key": "from",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "6",
+        "sourceRowSha256": "8ee397f282188cbd17df3cb18dee4a07ca6d05a855eb6015bfcc43d0dcd3ffd8",
+        "namespace": "smtp",
+        "key": "from_name",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "66",
+        "sourceRowSha256": "d17e623d9cc30654a8f17998bdc44b0c641d013e2f838c466d2c7aa23f2b1ce9",
+        "namespace": "sms",
+        "key": "template_code_login",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "67",
+        "sourceRowSha256": "a3a79b9794ac8b1543883004a46863c1284d9e9f573455f0821dc8d60cde3a9a",
+        "namespace": "sms",
+        "key": "template_code_register",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "68",
+        "sourceRowSha256": "f9f2b22f20dd9ccf6895fe04d8f5b5cf2fcb122c2780ccb7021dbf82d4709354",
+        "namespace": "sms",
+        "key": "template_code_reset",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "69",
+        "sourceRowSha256": "e26fc7945e55a04fcdd494c2fb003afbe690bab33186bd5b7dbd38b3babc29fd",
+        "namespace": "sms",
+        "key": "template_code_bind",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "7",
+        "sourceRowSha256": "ca188b410d05fc3b2312868393ee09603bbd6cda06d32c6db036b816e7856b9e",
+        "namespace": "smtp",
+        "key": "secure",
+        "type": "boolean",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "70",
+        "sourceRowSha256": "4812533d20010a41b99686a5d705aed98a40ccf29c2c886405b863076b7c3def",
+        "namespace": "auth_toggle",
+        "key": "email_enabled",
+        "type": "boolean",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "71",
+        "sourceRowSha256": "57dea6a99329ed38250115ca1215c7263fe6c46f6909200cfc1ce4916c4764e0",
+        "namespace": "auth_toggle",
+        "key": "phone_enabled",
+        "type": "boolean",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "77",
+        "sourceRowSha256": "c9245c303ba192bb2525f189cfc07173281a2bcc968330df1a36231f5b22bdce",
+        "namespace": "changelog",
+        "key": "version",
+        "type": "integer",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "78",
+        "sourceRowSha256": "11e836a9a1598ecc13d3669bc467edcf621e754ab3be81eddcac54955027dd79",
+        "namespace": "changelog",
+        "key": "content",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "91",
+        "sourceRowSha256": "112a56699a6273fe32aea5df12fddf4d0f89733f88ed9afcf91af20da612981f",
+        "namespace": "crypto_wallet",
+        "key": "payment_mode",
+        "type": "enum",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      },
+      {
+        "sourceId": "99",
+        "sourceRowSha256": "4dc45faf5a7ea81b5480d4f025c4e3f2b5804f8e609c5fb8257e59d8be47f1fe",
+        "namespace": "crypto_wallet",
+        "key": "fixed_tron_address",
+        "type": "string",
+        "exposure": "restricted",
+        "valueKind": "text",
+        "compatible": true,
+        "needs": [
+          "chain_address_validation"
+        ],
+        "rawValuePreserved": true,
+        "semanticAcceptanceVerified": false
+      }
+    ],
+    "sourceHash": "416a21a88d763fd2a1259d21919734cea14107fbef0c0ef54dbdb343fb56d2d0",
+    "credentialKeysExcluded": [
+      {
+        "namespace": "sms",
+        "key": "access_key_id"
+      },
+      {
+        "namespace": "sms",
+        "key": "access_key_secret"
+      },
+      {
+        "namespace": "smtp",
+        "key": "pass"
+      },
+      {
+        "namespace": "qiniu",
+        "key": "access_key"
+      },
+      {
+        "namespace": "qiniu",
+        "key": "secret_key"
+      }
+    ],
+    "compatibleRows": 54,
+    "valuesDecrypted": false,
+    "semanticAcceptanceVerified": false
+  },
+  "referenceFiles": [
+    {
+      "path": "server/system-config-secrets.js",
+      "sha256": "e366f11f6d49ebe2caf98cc398adaa95aaa5c51c61bd97035996b9b3e925ba8a"
+    },
+    {
+      "path": "server/admin/content-system.js",
+      "sha256": "8e095c29b11e4bca254dfcbe5a88f61dc024df8f765b7d76550ec38c51c24da3"
+    },
+    {
+      "path": "server/routes/config.js",
+      "sha256": "f199527719cd1ddc7320ab10b0bdf7043c12fcebfede1eef28f5928c86af87c6"
+    },
+    {
+      "path": "server/storage/storage-config.js",
+      "sha256": "908d346ad664c4999e119ba6db343d263ebff3d76a30b0fc2d0836d03ab06277"
+    },
+    {
+      "path": "server/sms.js",
+      "sha256": "9b350a16ef1a7eee6a0d17d8517b3814c83714cf5874f70298b1a8827a28fcc4"
+    },
+    {
+      "path": "server/system-email.js",
+      "sha256": "790586b9722a8075ffb3bdfdb6c85b839e00db8a0ecdd334241c7a3dac3545cc"
+    }
+  ],
+  "sourceDatabaseWritten": false,
+  "businessConsumersSwitched": false
+}
