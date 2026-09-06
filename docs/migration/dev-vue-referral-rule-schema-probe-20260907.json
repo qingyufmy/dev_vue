@@ -1,0 +1,38 @@
+{
+  "kind": "referral-rule-schema-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "5ea8da14048762e719341737b5a81d20f36cca9a052d2f040beee2cd71ec86be",
+  "sourceRowsSha256": "5a8480fc382c1aa4d526c0224fccf064a26a8e8672bd5268a47c78db4a69f5b2",
+  "beforeDdl": "CREATE TABLE `referral_rules` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `plan` varchar(20) NOT NULL,\n  `period` varchar(20) NOT NULL,\n  `rate_bps` int NOT NULL DEFAULT '1000',\n  `enabled` tinyint NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_plan_period` (`plan`,`period`)\n) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "afterDdl": "CREATE TABLE `referral_rules` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `plan` varchar(20) NOT NULL,\n  `period` varchar(20) NOT NULL,\n  `rate_bps` int NOT NULL DEFAULT '1000',\n  `enabled` tinyint NOT NULL DEFAULT '1',\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_plan_period` (`plan`,`period`),\n  CONSTRAINT `chk_referral_rule_enabled` CHECK ((`enabled` in (0,1))),\n  CONSTRAINT `chk_referral_rule_rate` CHECK ((`rate_bps` between 0 and 10000)),\n  CONSTRAINT `chk_referral_rule_revision` CHECK ((`revision` > 0))\n) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "preservedRows": 4,
+  "rejectedCases": [
+    {
+      "name": "negative_rate",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "excess_rate",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "negative_enabled",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "excess_enabled",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "zero_revision",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    }
+  ],
+  "boundaryAccepted": true,
+  "probesRolledBack": true,
+  "currentDevVueWritten": false
+}

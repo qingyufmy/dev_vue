@@ -1,0 +1,37 @@
+{
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "ddl": "CREATE TABLE `referral_rules` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `plan` varchar(20) NOT NULL,\n  `period` varchar(20) NOT NULL,\n  `rate_bps` int NOT NULL DEFAULT '1000',\n  `enabled` tinyint NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_plan_period` (`plan`,`period`)\n) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "rows": [
+    {
+      "id": "1",
+      "plan": "plus",
+      "period": "monthly",
+      "rate_bps": "1000",
+      "enabled": "1"
+    },
+    {
+      "id": "2",
+      "plan": "plus",
+      "period": "yearly",
+      "rate_bps": "1000",
+      "enabled": "1"
+    },
+    {
+      "id": "3",
+      "plan": "pro",
+      "period": "monthly",
+      "rate_bps": "1000",
+      "enabled": "1"
+    },
+    {
+      "id": "4",
+      "plan": "pro",
+      "period": "yearly",
+      "rate_bps": "1000",
+      "enabled": "1"
+    }
+  ]
+}
