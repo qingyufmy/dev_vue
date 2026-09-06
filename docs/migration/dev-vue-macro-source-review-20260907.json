@@ -1,0 +1,1256 @@
+{
+  "kind": "macro-source-disposition-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "originalSchemaHash": "a5031597b419f41ae21ae2cf6cd1cf80616db601473079c0c8a2a542ad3e3e36",
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "targets": [
+    {
+      "table": "macro_data_sources",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "source_key",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "provider",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "display_name",
+          "type": "varchar(191)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "status",
+          "type": "enum('candidate','trial','legal_review','approved','suspended','retired')",
+          "nullable": "NO",
+          "defaultValue": "candidate"
+        },
+        {
+          "name": "credential_ref",
+          "type": "varchar(191)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "terms_uri",
+          "type": "varchar(2048)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "terms_version",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "attribution_text",
+          "type": "varchar(2000)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "display_allowed",
+          "type": "tinyint(1)",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "cache_allowed",
+          "type": "tinyint(1)",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "retention_allowed",
+          "type": "tinyint(1)",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "modeling_allowed",
+          "type": "tinyint(1)",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "derived_data_allowed",
+          "type": "tinyint(1)",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "license_reviewed_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "license_expires_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "rate_limit_json",
+          "type": "json",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "revision",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "1"
+        },
+        {
+          "name": "created_by_user_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "retired_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "macro_feature_sets",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "feature_key",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "version_number",
+          "type": "int unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "schema_version",
+          "type": "smallint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "definition_json",
+          "type": "json",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "definition_sha256",
+          "type": "char(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "status",
+          "type": "enum('draft','active','retired')",
+          "nullable": "NO",
+          "defaultValue": "draft"
+        },
+        {
+          "name": "created_by_user_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "activated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "retired_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "economic_calendar_events",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "source_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "provider_event_id",
+          "type": "varchar(191)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "country_code",
+          "type": "char(2)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "country_name",
+          "type": "varchar(191)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "currency_code",
+          "type": "char(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "title",
+          "type": "varchar(500)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "scheduled_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "time_precision",
+          "type": "enum('exact','date_only','tentative')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "importance",
+          "type": "enum('low','medium','high','unknown')",
+          "nullable": "NO",
+          "defaultValue": "unknown"
+        },
+        {
+          "name": "period_label",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "unit",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "status",
+          "type": "enum('scheduled','released','revised','delayed','cancelled')",
+          "nullable": "NO",
+          "defaultValue": "scheduled"
+        },
+        {
+          "name": "revision",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "1"
+        },
+        {
+          "name": "provider_updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "macro_model_versions",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "model_key",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "version_number",
+          "type": "int unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "feature_set_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "model_kind",
+          "type": "enum('baseline','linear','elastic_net','xgboost','regime')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "lifecycle_status",
+          "type": "enum('draft','evaluating','shadow','active','rejected','retired')",
+          "nullable": "NO",
+          "defaultValue": "draft"
+        },
+        {
+          "name": "training_cutoff_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "config_json",
+          "type": "json",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "input_sha256",
+          "type": "char(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "artifact_ref",
+          "type": "varchar(2048)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "artifact_sha256",
+          "type": "char(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "report_ref",
+          "type": "varchar(2048)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "report_sha256",
+          "type": "char(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "revision",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "1"
+        },
+        {
+          "name": "created_by_user_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "activated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "retired_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "macro_series",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "source_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "series_code",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "provider_series_key",
+          "type": "varchar(191)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "display_name",
+          "type": "varchar(191)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "series_kind",
+          "type": "enum('factor','gold_benchmark','volatility','geopolitical_risk')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "value_kind",
+          "type": "enum('decimal','text')",
+          "nullable": "NO",
+          "defaultValue": "decimal"
+        },
+        {
+          "name": "unit",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "frequency",
+          "type": "enum('intraday','daily','weekly','monthly','irregular')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "freshness_calendar",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "freshness_limit_seconds",
+          "type": "int unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "gold_relation_rule_json",
+          "type": "json",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "status",
+          "type": "enum('enabled','disabled','retired')",
+          "nullable": "NO",
+          "defaultValue": "disabled"
+        },
+        {
+          "name": "revision",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "1"
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "source_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "series_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "idempotency_key",
+          "type": "varchar(255)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "requested_from_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "requested_to_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "status",
+          "type": "enum('queued','running','succeeded','failed','status_unknown','cancelled')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "lease_owner",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "lease_expires_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "fencing_token",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "request_started_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "response_received_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "response_sha256",
+          "type": "char(64)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "evidence_ref",
+          "type": "varchar(2048)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "parser_version",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "inserted_count",
+          "type": "int unsigned",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "skipped_count",
+          "type": "int unsigned",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "error_code",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "error_summary",
+          "type": "varchar(1000)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "revision",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "1"
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "completed_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "job_kind",
+          "type": "enum('feature_build','model_train','model_evaluate','snapshot_publish','health_refresh')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "idempotency_key",
+          "type": "varchar(255)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "feature_set_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "model_version_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "data_cutoff_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "input_sha256",
+          "type": "char(64)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "status",
+          "type": "enum('queued','running','succeeded','failed','status_unknown','cancelled')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "lease_owner",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "lease_expires_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "fencing_token",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "error_code",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "error_summary",
+          "type": "varchar(1000)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "result_ref",
+          "type": "varchar(2048)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "result_sha256",
+          "type": "char(64)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "revision",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "1"
+        },
+        {
+          "name": "requested_by_user_id",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "completed_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "macro_research_snapshots",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "schema_version",
+          "type": "smallint unsigned",
+          "nullable": "NO",
+          "defaultValue": "0"
+        },
+        {
+          "name": "business_date",
+          "type": "date",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "data_cutoff_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "feature_set_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "model_version_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "owner_scope",
+          "type": "enum('platform','user')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "owner_user_id",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "revision",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "publication_status",
+          "type": "enum('legacy','draft','published','superseded','invalidated')",
+          "nullable": "NO",
+          "defaultValue": "legacy"
+        },
+        {
+          "name": "freshness_status",
+          "type": "enum('fresh','stale','partial','unavailable')",
+          "nullable": "NO",
+          "defaultValue": "unavailable"
+        },
+        {
+          "name": "health_status",
+          "type": "enum('healthy','degraded','failed')",
+          "nullable": "NO",
+          "defaultValue": "failed"
+        },
+        {
+          "name": "horizon",
+          "type": "varchar(64)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "observed_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "valid_until_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "published_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "superseded_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "content_sha256",
+          "type": "char(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "payload_json",
+          "type": "json",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "active_publication_key",
+          "type": "varchar(96)",
+          "nullable": "YES",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "event_id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "revision_number",
+          "type": "int unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "provider_revision_key",
+          "type": "varchar(191)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "status",
+          "type": "enum('scheduled','released','revised','delayed','cancelled')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "scheduled_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "previous_value",
+          "type": "decimal(30,10)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "consensus_value",
+          "type": "decimal(30,10)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "actual_value",
+          "type": "decimal(30,10)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "revised_previous_value",
+          "type": "decimal(30,10)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "display_previous",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "display_consensus",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "display_actual",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "display_revised_previous",
+          "type": "varchar(128)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "provider_updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "available_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "ingested_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "availability_confidence",
+          "type": "enum('exact','provider_date','retrieval_only','unknown')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "content_sha256",
+          "type": "char(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "evidence_ref",
+          "type": "varchar(2048)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "ingestion_run_id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "macro_observations",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "series_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "ingestion_run_id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "observation_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "available_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "ingested_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "provider_updated_at_utc",
+          "type": "datetime(3)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "provider_vintage_key",
+          "type": "varchar(191)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "availability_confidence",
+          "type": "enum('exact','provider_date','retrieval_only','unknown')",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "decimal_value",
+          "type": "decimal(30,10)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "text_value",
+          "type": "varchar(2000)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "content_sha256",
+          "type": "char(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "evidence_ref",
+          "type": "varchar(2048)",
+          "nullable": "YES",
+          "defaultValue": null
+        },
+        {
+          "name": "parser_version",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "rows": "0",
+      "fields": [
+        {
+          "name": "snapshot_id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "observation_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "factor_code",
+          "type": "varchar(64)",
+          "nullable": "NO",
+          "defaultValue": null
+        },
+        {
+          "name": "created_at_utc",
+          "type": "datetime(3)",
+          "nullable": "NO",
+          "defaultValue": null
+        }
+      ],
+      "dedicatedLegacyTablePresent": false,
+      "historicalRowsMigrated": false,
+      "initializerExecuted": false
+    }
+  ],
+  "configKeysScanned": 75,
+  "configKeysetHash": "ec74010c6207193b50c710e72d06eefc46c9c6ff0ead223733f0ab7ae5a5689b",
+  "matchingConfigKeys": [],
+  "coverage": "dedicated_table_names_and_system_config_keys_only",
+  "remainingChecks": [
+    "embedded_snapshot_content_mapping",
+    "new_domain_initialization_contract",
+    "macro_runtime_creation_and_ingestion"
+  ],
+  "databaseWrites": 0,
+  "fullNormalizationComplete": false
+}
