@@ -13,6 +13,12 @@ function textValue(cell) {
   return value
 }
 
+// Internal adapter for reviewed identity tables; callers must not log these values.
+export function decodeIdentitySourceRow(tableContract, row) {
+  const inspection = inspectIdentityValues(tableContract, row)
+  return { inspection, values: Object.fromEntries(row.envelope.cells.map(cell => [cell.column, textValue(cell)])) }
+}
+
 // No defaults, coercive Number conversion, rounding or truncation are permitted.
 export function representIdentityValue(value, type, nullable) {
   check(typeof type === 'string' && typeof nullable === 'boolean', 'identity_type_invalid')

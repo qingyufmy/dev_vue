@@ -1,0 +1,346 @@
+{
+  "observedAtUtc": "2026-09-06T09:57:38.6414320Z",
+  "host": "debian",
+  "runtimeDirectory": "/www/wwwroot/aurum-ai",
+  "runtimeBranch": "dev_codex",
+  "runtimeCommit": "61610c3c3dc055974d1da90700ecf5336f19434c",
+  "identity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "mysqlVersion": "8.4.8"
+  },
+  "inventory": [
+    {
+      "tables": 102,
+      "database": "dev_vue_m1_a"
+    },
+    {
+      "tables": 102,
+      "database": "dev_vue_m1_b"
+    },
+    {
+      "tables": 165,
+      "database": "dev_vue_m1_source_20260905_01"
+    }
+  ],
+  "metrics": [
+    {
+      "count": 25,
+      "metric": "users_rows"
+    },
+    {
+      "count": 0,
+      "metric": "users_lifecycle_inconsistent"
+    },
+    {
+      "count": 0,
+      "metric": "users_role_plan_unknown"
+    },
+    {
+      "count": 4,
+      "metric": "accounts_rows"
+    },
+    {
+      "count": 1,
+      "metric": "accounts_identity_duplicate_groups"
+    },
+    {
+      "count": 0,
+      "metric": "intervals_missing_user_or_account"
+    },
+    {
+      "count": 0,
+      "metric": "multiple_open_owner_groups"
+    },
+    {
+      "count": 0,
+      "metric": "bindings_missing_user_or_account"
+    },
+    {
+      "count": 0,
+      "metric": "bindings_open_interval_disagrees"
+    },
+    {
+      "count": 274,
+      "metric": "ownership_exact_bytes_disagree"
+    },
+    {
+      "count": 0,
+      "metric": "ownership_normalized_identity_disagree"
+    }
+  ],
+  "targets": [
+    {
+      "database": "dev_vue_m1_a",
+      "journal": [
+        {
+          "id": "20260903_001_bridge_v4_device_sessions",
+          "status": "completed",
+          "checksum": "2e98051350645fc30b6ccbc2843da08516bd906a6bdf000bfec5080cf0374adf"
+        },
+        {
+          "id": "20260903_002_auth_sso_sessions",
+          "status": "completed",
+          "checksum": "6d99b0c61769b66fdf934a7fd0f96500b864bb55264c469bd020fe0c4820f728"
+        },
+        {
+          "id": "20260903_003_trading_context_and_market_projection",
+          "status": "completed",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e"
+        },
+        {
+          "id": "20260903_004_ai_strategy_and_inference_core",
+          "status": "completed",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960"
+        },
+        {
+          "id": "20260903_005_analysis_scheduler_and_account_fanout",
+          "status": "completed",
+          "checksum": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16"
+        },
+        {
+          "id": "20260903_006_account_trader_worker",
+          "status": "completed",
+          "checksum": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8"
+        },
+        {
+          "id": "20260903_007_deterministic_risk_review",
+          "status": "completed",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e"
+        },
+        {
+          "id": "20260903_008_manual_risk_release",
+          "status": "completed",
+          "checksum": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1"
+        },
+        {
+          "id": "20260903_009_execution_intents_and_reservations",
+          "status": "completed",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e"
+        },
+        {
+          "id": "20260903_010_bridge_v4_command_ledger",
+          "status": "completed",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1"
+        },
+        {
+          "id": "20260904_011_user_execution_commands_and_distributions",
+          "status": "completed",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f"
+        },
+        {
+          "id": "20260904_012_review_memory_core",
+          "status": "completed",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53"
+        },
+        {
+          "id": "20260904_013_authoritative_trade_history",
+          "status": "completed",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258"
+        },
+        {
+          "id": "20260904_014_audit_read_indexes",
+          "status": "completed",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23"
+        },
+        {
+          "id": "20260905_015_macro_sources_and_observations",
+          "status": "completed",
+          "checksum": "bbc94e17b2b0f34895b09291126c30dc20c23277ea13b5315ca34d295b531444"
+        },
+        {
+          "id": "20260905_016_macro_snapshot_research",
+          "status": "completed",
+          "checksum": "78d7365ae9feab93bcd8646dcbdeac4de64ccf1536462ee1f4abe19e8455510e"
+        },
+        {
+          "id": "20260905_017_economic_calendar",
+          "status": "completed",
+          "checksum": "7a29716aefd45691b29d11d97874480e0d58ef1f9ab139bf4049be917e7a1946"
+        },
+        {
+          "id": "bootstrap_v4_foundation_v1",
+          "status": "completed",
+          "checksum": "3a5a1f4b1cd76d505884f3a4702da54f3d67ff379d1fcf832866b31a0f3ff215"
+        }
+      ],
+      "plannedButNotInstalled": [
+        "20260905_018_user_state_and_referral_accounts",
+        "20260905_019_account_ownership_intervals",
+        "20260905_020_account_projection_and_history_provenance",
+        "20260905_021_observer_sources_and_audiences",
+        "20260905_022_observer_management_ledger",
+        "20260906_023_bridge_profile_epoch_scope",
+        "20260906_024_bridge_pairing_requests",
+        "20260906_025_data_migration_batch_ledger"
+      ],
+      "journalChecksumMismatches": []
+    },
+    {
+      "database": "dev_vue_m1_b",
+      "journal": [
+        {
+          "id": "20260903_001_bridge_v4_device_sessions",
+          "status": "completed",
+          "checksum": "2e98051350645fc30b6ccbc2843da08516bd906a6bdf000bfec5080cf0374adf"
+        },
+        {
+          "id": "20260903_002_auth_sso_sessions",
+          "status": "completed",
+          "checksum": "6d99b0c61769b66fdf934a7fd0f96500b864bb55264c469bd020fe0c4820f728"
+        },
+        {
+          "id": "20260903_003_trading_context_and_market_projection",
+          "status": "completed",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e"
+        },
+        {
+          "id": "20260903_004_ai_strategy_and_inference_core",
+          "status": "completed",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960"
+        },
+        {
+          "id": "20260903_005_analysis_scheduler_and_account_fanout",
+          "status": "completed",
+          "checksum": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16"
+        },
+        {
+          "id": "20260903_006_account_trader_worker",
+          "status": "completed",
+          "checksum": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8"
+        },
+        {
+          "id": "20260903_007_deterministic_risk_review",
+          "status": "completed",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e"
+        },
+        {
+          "id": "20260903_008_manual_risk_release",
+          "status": "completed",
+          "checksum": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1"
+        },
+        {
+          "id": "20260903_009_execution_intents_and_reservations",
+          "status": "completed",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e"
+        },
+        {
+          "id": "20260903_010_bridge_v4_command_ledger",
+          "status": "completed",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1"
+        },
+        {
+          "id": "20260904_011_user_execution_commands_and_distributions",
+          "status": "completed",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f"
+        },
+        {
+          "id": "20260904_012_review_memory_core",
+          "status": "completed",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53"
+        },
+        {
+          "id": "20260904_013_authoritative_trade_history",
+          "status": "completed",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258"
+        },
+        {
+          "id": "20260904_014_audit_read_indexes",
+          "status": "completed",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23"
+        },
+        {
+          "id": "20260905_015_macro_sources_and_observations",
+          "status": "completed",
+          "checksum": "bbc94e17b2b0f34895b09291126c30dc20c23277ea13b5315ca34d295b531444"
+        },
+        {
+          "id": "20260905_016_macro_snapshot_research",
+          "status": "completed",
+          "checksum": "78d7365ae9feab93bcd8646dcbdeac4de64ccf1536462ee1f4abe19e8455510e"
+        },
+        {
+          "id": "20260905_017_economic_calendar",
+          "status": "completed",
+          "checksum": "7a29716aefd45691b29d11d97874480e0d58ef1f9ab139bf4049be917e7a1946"
+        },
+        {
+          "id": "bootstrap_v4_foundation_v1",
+          "status": "completed",
+          "checksum": "3a5a1f4b1cd76d505884f3a4702da54f3d67ff379d1fcf832866b31a0f3ff215"
+        }
+      ],
+      "plannedButNotInstalled": [
+        "20260905_018_user_state_and_referral_accounts",
+        "20260905_019_account_ownership_intervals",
+        "20260905_020_account_projection_and_history_provenance",
+        "20260905_021_observer_sources_and_audiences",
+        "20260905_022_observer_management_ledger",
+        "20260906_023_bridge_profile_epoch_scope",
+        "20260906_024_bridge_pairing_requests",
+        "20260906_025_data_migration_batch_ledger"
+      ],
+      "journalChecksumMismatches": []
+    }
+  ],
+  "aggregateQueries": {
+    "users_rows": "SELECT COUNT(*) FROM users",
+    "users_lifecycle_inconsistent": "SELECT COUNT(*) FROM users WHERE deletion_status IS NULL OR deletion_status NOT IN ('active','anonymized') OR (deletion_status='active' AND deleted_at IS NOT NULL) OR (deletion_status='anonymized' AND (deleted_at IS NULL OR role IS NULL OR role<>'user' OR plan IS NULL OR plan<>'free')) OR token_version IS NULL OR token_version<0",
+    "users_role_plan_unknown": "SELECT COUNT(*) FROM users WHERE role IS NULL OR role NOT IN ('user','admin') OR plan IS NULL OR plan NOT IN ('free','plus','pro')",
+    "accounts_rows": "SELECT COUNT(*) FROM trading_accounts",
+    "accounts_identity_duplicate_groups": "SELECT COUNT(*) FROM (SELECT LOWER(TRIM(broker_server)),login_account FROM trading_accounts GROUP BY LOWER(TRIM(broker_server)),login_account HAVING COUNT(*)>1) x",
+    "intervals_missing_user_or_account": "SELECT COUNT(*) FROM mt5_account_ownership_history o LEFT JOIN users u ON u.id=o.user_id LEFT JOIN trading_accounts a ON a.id=o.trading_account_id WHERE u.id IS NULL OR a.id IS NULL",
+    "multiple_open_owner_groups": "SELECT COUNT(*) FROM (SELECT broker_server_key,login_account FROM mt5_account_ownership_history WHERE ended_at IS NULL GROUP BY broker_server_key,login_account HAVING COUNT(*)>1) x",
+    "bindings_missing_user_or_account": "SELECT COUNT(*) FROM mt5_account_bindings b LEFT JOIN users u ON u.id=b.current_user_id LEFT JOIN trading_accounts a ON a.id=b.current_trading_account_id WHERE u.id IS NULL OR a.id IS NULL",
+    "bindings_open_interval_disagrees": "SELECT COUNT(*) FROM mt5_account_bindings b WHERE NOT EXISTS (SELECT 1 FROM mt5_account_ownership_history o WHERE o.broker_server_key=b.broker_server_key AND o.login_account=b.login_account AND o.user_id=b.current_user_id AND o.trading_account_id=b.current_trading_account_id AND o.ended_at IS NULL)",
+    "ownership_exact_bytes_disagree": "SELECT COUNT(*) FROM mt5_account_ownership_history o JOIN trading_accounts a ON a.id=o.trading_account_id WHERE BINARY a.broker_server<>BINARY o.broker_server_key OR BINARY a.login_account<>BINARY o.login_account",
+    "ownership_normalized_identity_disagree": "SELECT COUNT(*) FROM mt5_account_ownership_history o JOIN trading_accounts a ON a.id=o.trading_account_id WHERE UPPER(TRIM(a.broker_server))<>UPPER(TRIM(o.broker_server_key)) OR a.login_account<>o.login_account"
+  },
+  "snapshotContentVerified": false,
+  "readyForBackfill": false,
+  "mode": "SELECT-only metadata and aggregate queries; source READ ONLY transaction then ROLLBACK; no DDL/DML; no business row export",
+  "supplementalObservedAtUtc": "2026-09-06T09:58:52.6359800Z",
+  "supplementalMetrics": [
+    {
+      "count": 274,
+      "metric": "ownership_rows"
+    },
+    {
+      "count": 274,
+      "metric": "ownership_server_case_only"
+    },
+    {
+      "count": 0,
+      "metric": "ownership_server_whitespace_required"
+    },
+    {
+      "count": 0,
+      "metric": "ownership_login_bytes_disagree"
+    },
+    {
+      "count": 0,
+      "metric": "account_identity_nonascii"
+    },
+    {
+      "count": 0,
+      "metric": "ownership_identity_nonascii"
+    },
+    {
+      "count": 0,
+      "metric": "account_server_whitespace"
+    },
+    {
+      "count": 1,
+      "metric": "duplicate_groups_different_users"
+    }
+  ],
+  "supplementalQueries": {
+    "ownership_rows": "SELECT COUNT(*) FROM mt5_account_ownership_history",
+    "ownership_server_case_only": "SELECT COUNT(*) FROM mt5_account_ownership_history o JOIN trading_accounts a ON a.id=o.trading_account_id WHERE BINARY a.broker_server<>BINARY o.broker_server_key AND BINARY UPPER(a.broker_server)=BINARY UPPER(o.broker_server_key) AND BINARY a.login_account=BINARY o.login_account",
+    "ownership_server_whitespace_required": "SELECT COUNT(*) FROM mt5_account_ownership_history o JOIN trading_accounts a ON a.id=o.trading_account_id WHERE BINARY UPPER(a.broker_server)<>BINARY UPPER(o.broker_server_key) AND BINARY UPPER(TRIM(a.broker_server))=BINARY UPPER(TRIM(o.broker_server_key))",
+    "ownership_login_bytes_disagree": "SELECT COUNT(*) FROM mt5_account_ownership_history o JOIN trading_accounts a ON a.id=o.trading_account_id WHERE BINARY a.login_account<>BINARY o.login_account",
+    "account_identity_nonascii": "SELECT COUNT(*) FROM trading_accounts WHERE LENGTH(broker_server)<>CHAR_LENGTH(broker_server) OR LENGTH(login_account)<>CHAR_LENGTH(login_account)",
+    "ownership_identity_nonascii": "SELECT COUNT(*) FROM mt5_account_ownership_history WHERE LENGTH(broker_server_key)<>CHAR_LENGTH(broker_server_key) OR LENGTH(login_account)<>CHAR_LENGTH(login_account)",
+    "account_server_whitespace": "SELECT COUNT(*) FROM trading_accounts WHERE BINARY broker_server<>BINARY TRIM(broker_server)",
+    "duplicate_groups_different_users": "SELECT COUNT(*) FROM (SELECT UPPER(TRIM(broker_server)),login_account FROM trading_accounts GROUP BY UPPER(TRIM(broker_server)),login_account HAVING COUNT(*)>1 AND COUNT(DISTINCT user_id)>1) x"
+  }
+}
