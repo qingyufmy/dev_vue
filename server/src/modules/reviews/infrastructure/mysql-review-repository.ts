@@ -59,6 +59,10 @@ interface ReviewJobContextRow extends RowDataPacket {
 const caseSelect = `SELECT c.id,c.kind,c.user_id,CAST(c.trading_account_id AS CHAR) trading_account_id,CONCAT(a.platform,' · ',a.account_login,' · ',a.broker_server) account_label,c.standard_symbol,CAST(c.subscription_id AS CHAR) subscription_id,c.subscription_revision,CAST(c.analysis_strategy_id AS CHAR) analysis_strategy_id,sa.name analysis_strategy_name,CAST(c.trader_strategy_id AS CHAR) trader_strategy_id,st.name trader_strategy_name,c.terminal_period_start_utc,c.terminal_period_end_utc,c.terminal_timezone_offset_minutes,c.status,c.evidence_status,c.evidence_revision,c.evidence_sha256,c.current_version_id,c.confirmed_version_id,c.updated_at_utc,c.revision,c.return_reason FROM review_cases_v4 c INNER JOIN trading_accounts a ON a.id=c.trading_account_id LEFT JOIN strategies sa ON sa.id=c.analysis_strategy_id LEFT JOIN strategies st ON st.id=c.trader_strategy_id`
 const memorySelect = `SELECT l.id,CAST(l.strategy_id AS CHAR) strategy_id,s.name strategy_name,s.kind strategy_kind,l.owner_user_id,l.mode,l.status,l.current_revision_id,r.version_number current_version_number,r.content_text,r.content_sha256,l.max_context_tokens,(SELECT COUNT(*) FROM strategy_memory_pending_updates_v4 u WHERE u.library_id=l.id AND u.status='awaiting_confirmation') pending_count,l.updated_at_utc,l.revision FROM strategy_memory_libraries_v4 l INNER JOIN strategies s ON s.id=l.strategy_id LEFT JOIN strategy_memory_library_revisions_v4 r ON r.id=l.current_revision_id AND r.library_id=l.id`
 
+const candidateColumns = `m.id,CAST(m.trading_account_id AS CHAR) trading_account_id,CONCAT(a.platform,' · ',a.account_login,' · ',a.broker_server) account_label,m.ticket,m.position_id,m.symbol,m.side,m.volume,m.opened_at_utc,m.closed_at_utc,m.net_profit,m.terminal_timezone_offset_minutes,m.source_classification,m.eligibility_status,m.evidence_sha256,m.selection_token_sha256,m.selection_expires_at_utc,m.revision`
+const memoryUpdateColumns = `u.id,u.library_id,u.source_review_case_id,u.source_review_version_id,u.update_kind,u.proposal_key,u.status,u.expected_library_revision,u.proposal_json,u.diff_preview_text,u.conflict_json,u.created_at_utc,u.revision`
+type CaseLockRow = RowDataPacket & Pick<CaseRow, 'revision' | 'status' | 'evidence_status' | 'evidence_sha256' | 'evidence_revision' | 'current_version_id'>
+
 export class MysqlReviewRepository implements ReviewRepository, ReviewWorkerRepository {
   constructor(private readonly pool: Pool) {}
 
@@ -77,7 +81,7 @@ export class MysqlReviewRepository implements ReviewRepository, ReviewWorkerRepo
     const where = [`m.user_id=?`, `m.source_classification='manual'`]; const values: Array<string | number> = [userId]
     if (tradingAccountId) { where.push('m.trading_account_id=?'); values.push(tradingAccountId) }
     values.push(limit)
-    const [rows] = await this.pool.execute<CandidateRow[]>(`SELECT m.id,CAST(m.trading_account_id AS CHAR) trading_account_id,CONCAT(a.platform,' · ',a.account_login,' · ',a.broker_server) account_label,m.ticket,m.position_id,m.symbol,m.side,m.volume,m.opened_at_utc,m.closed_at_utc,m.net_profit,m.terminal_timezone_offset_minutes,m.source_classification,m.eligibility_status,m.evidence_sha256,m.selection_token_sha256,m.selection_expires_at_utc,m.revision FROM manual_review_candidates_v4 m INNER JOIN trading_accounts a ON a.id=m.trading_account_id INNER JOIN trading_account_ownerships o ON o.trading_account_id=m.trading_account_id AND o.user_id=m.user_id AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE ${where.join(' AND ')} ORDER BY m.closed_at_utc DESC,m.id DESC LIMIT ?`, values)
+    const [rows] = await this.pool.execute<CandidateRow[]>(`SELECT ${candidateColumns} FROM manual_review_candidates_v4 m INNER JOIN trading_accounts a ON a.id=m.trading_account_id INNER JOIN trading_account_ownerships o ON o.trading_account_id=m.trading_account_id AND o.user_id=m.user_id AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE ${where.join(' AND ')} ORDER BY m.closed_at_utc DESC,m.id DESC LIMIT ?`, values)
     return rows.map(candidateDto)
   }
 
@@ -87,7 +91,7 @@ export class MysqlReviewRepository implements ReviewRepository, ReviewWorkerRepo
       const [existing] = await connection.execute<(RowDataPacket & { id: string })[]>('SELECT id FROM review_cases_v4 WHERE user_id=? AND kind=\'manual\' AND scope_key=? LIMIT 1', [input.userId, scopeKey])
       if (existing[0]) return existing[0].id
       const placeholders = input.candidateIds.map(() => '?').join(',')
-      const [rows] = await connection.execute<CandidateRow[]>(`SELECT m.*,CONCAT(a.platform,' · ',a.account_login,' · ',a.broker_server) account_label,CAST(m.trading_account_id AS CHAR) trading_account_id FROM manual_review_candidates_v4 m INNER JOIN trading_accounts a ON a.id=m.trading_account_id INNER JOIN trading_account_ownerships o ON o.trading_account_id=m.trading_account_id AND o.user_id=? AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE m.id IN (${placeholders}) FOR UPDATE`, [input.userId, ...input.candidateIds])
+      const [rows] = await connection.execute<CandidateRow[]>(`SELECT ${candidateColumns} FROM manual_review_candidates_v4 m INNER JOIN trading_accounts a ON a.id=m.trading_account_id INNER JOIN trading_account_ownerships o ON o.trading_account_id=m.trading_account_id AND o.user_id=? AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE m.id IN (${placeholders}) FOR UPDATE`, [input.userId, ...input.candidateIds])
       if (rows.length !== input.candidateIds.length) throw new ReviewError('manual_review_candidate_not_found', 404)
       const [replayed] = await connection.execute<(RowDataPacket & { id: string })[]>('SELECT id FROM review_cases_v4 WHERE user_id=? AND kind=\'manual\' AND scope_key=? LIMIT 1 FOR SHARE', [input.userId, scopeKey])
       if (replayed[0]) return replayed[0].id
@@ -199,13 +203,13 @@ export class MysqlReviewRepository implements ReviewRepository, ReviewWorkerRepo
     return rows[0] ? memoryDetailDto(rows[0]) : null
   }
   async listMemoryUpdates(userId: number, memoryId: string) {
-    const [rows] = await this.pool.execute<MemoryUpdateRow[]>(`SELECT u.* FROM strategy_memory_pending_updates_v4 u INNER JOIN strategy_memory_libraries_v4 l ON l.id=u.library_id INNER JOIN strategies s ON s.id=l.strategy_id WHERE u.library_id=? AND (l.owner_user_id=? OR (l.owner_user_id IS NULL AND s.scope='platform')) ORDER BY u.created_at_utc DESC,u.id`, [memoryId, userId])
+    const [rows] = await this.pool.execute<MemoryUpdateRow[]>(`SELECT ${memoryUpdateColumns} FROM strategy_memory_pending_updates_v4 u INNER JOIN strategy_memory_libraries_v4 l ON l.id=u.library_id INNER JOIN strategies s ON s.id=l.strategy_id WHERE u.library_id=? AND (l.owner_user_id=? OR (l.owner_user_id IS NULL AND s.scope='platform')) ORDER BY u.created_at_utc DESC,u.id`, [memoryId, userId])
     return rows.map(memoryUpdateDto)
   }
 
   async decideMemoryUpdate(input: Parameters<ReviewRepository['decideMemoryUpdate']>[0]) {
     await transaction(this.pool, async connection => {
-      const [rows] = await connection.execute<MemoryDecisionRow[]>(`SELECT u.*,l.owner_user_id,l.revision library_revision,r.version_number current_version_number,r.content_text,r.content_json FROM strategy_memory_pending_updates_v4 u INNER JOIN strategy_memory_libraries_v4 l ON l.id=u.library_id LEFT JOIN strategy_memory_library_revisions_v4 r ON r.id=l.current_revision_id AND r.library_id=l.id WHERE u.id=? FOR UPDATE`, [input.updateId])
+      const [rows] = await connection.execute<MemoryDecisionRow[]>(`SELECT ${memoryUpdateColumns},l.owner_user_id,l.revision library_revision,r.version_number current_version_number,r.content_text,r.content_json FROM strategy_memory_pending_updates_v4 u INNER JOIN strategy_memory_libraries_v4 l ON l.id=u.library_id LEFT JOIN strategy_memory_library_revisions_v4 r ON r.id=l.current_revision_id AND r.library_id=l.id WHERE u.id=? FOR UPDATE`, [input.updateId])
       const row = rows[0]
       if (!row || row.owner_user_id !== input.userId) throw new ReviewError('strategy_memory_update_not_found', 404)
       const expectedStatus = input.decision === 'revoke' ? 'merged' : 'awaiting_confirmation'
@@ -257,7 +261,7 @@ export class MysqlReviewRepository implements ReviewRepository, ReviewWorkerRepo
       const resultingLibraryRevision = input.decision === 'reject' ? Number(row.library_revision) : Number(row.library_revision) + 1
       await outbox(connection, 'strategy_memory', row.library_id, 'strategy.memory.changed', { strategy_memory_id: row.library_id, status: 'active', pending_count: Number(pendingRows[0]?.pending_count ?? 0), revision: String(resultingLibraryRevision) })
     })
-    const [rows] = await this.pool.execute<MemoryUpdateRow[]>('SELECT * FROM strategy_memory_pending_updates_v4 WHERE id=? LIMIT 1', [input.updateId])
+    const [rows] = await this.pool.execute<MemoryUpdateRow[]>(`SELECT ${memoryUpdateColumns} FROM strategy_memory_pending_updates_v4 u WHERE u.id=? LIMIT 1`, [input.updateId])
     if (!rows[0]) throw new ReviewError('strategy_memory_update_not_found', 404)
     return memoryUpdateDto(rows[0])
   }
@@ -369,7 +373,7 @@ async function loadDetail(pool: Pool, userId: number, caseId: string): Promise<R
 }
 
 async function lockCase(connection: PoolConnection, userId: number, caseId: string) {
-  const [rows] = await connection.execute<CaseRow[]>('SELECT * FROM review_cases_v4 WHERE id=? AND user_id=? FOR UPDATE', [caseId, userId])
+  const [rows] = await connection.execute<CaseLockRow[]>('SELECT revision,status,evidence_status,evidence_sha256,evidence_revision,current_version_id FROM review_cases_v4 WHERE id=? AND user_id=? FOR UPDATE', [caseId, userId])
   if (!rows[0]) throw new ReviewError('review_case_not_found', 404)
   return rows[0]
 }
