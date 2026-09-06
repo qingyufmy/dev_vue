@@ -1,6 +1,6 @@
 # 公网无损升级接续实施方案
 
-状态：2026-09-06 方案已完成两轮复审，待进入首批实施。当前任务仅制定方案，不执行数据库写入或部署。依据 [结构核查](public-upgrade-compatibility-review-20260906.md)、[既有 B1–B4 方案](../stage-m1-data-backfill-and-reconciliation-plan.md) 和主路线图，不另起一套迁移体系。
+状态：2026-09-06 方案已完成两轮复审，U1清单及U2事务框架、只读预检/源读取器源码已实施；当前证据见[主路线图§3.1](../refactor-master-roadmap.md)和[U2读取合同](public-upgrade-u2-reader-contract-20260906.md)。尚未执行数据库写入或部署。依据 [结构核查](public-upgrade-compatibility-review-20260906.md)、[既有 B1–B4 方案](../stage-m1-data-backfill-and-reconciliation-plan.md) 和主路线图，不另起一套迁移体系。以下首批步骤保留为原始实施顺序。
 
 ## 1. 实施结论
 
