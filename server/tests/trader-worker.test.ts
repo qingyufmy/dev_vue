@@ -109,10 +109,11 @@ describe('Stage 12C account Trader Worker', () => {
         if (modelCalls === 1) throw new ModelInvocationError('provider_busy', 'failed', true)
         return { result: { action: 'market_order', side: 'buy', confidence: 82, summary: '账户允许候选买入', reasoning: '资金与敞口允许', actions: [{ actionId: 'action-1', kind: 'market_order', parameters: { symbol: 'XAUUSD', side: 'buy', volume: '0.01' }, expectedState: expected(input.snapshot) }] }, usage: { total_tokens: 80 } }
       },
-    }, 'trader-worker-1', { async assertAllowed() {} })
+    }, 'trader-worker-1', { async assertAllowed() { return 'a'.repeat(64) } })
     await expect(worker.process(base.id, new Date('2026-09-03T08:00:10.000Z'))).resolves.toMatchObject({ status: 'succeeded' })
     expect(modelCalls).toBe(2)
     expect(completed).toMatchObject({ attemptId: 'attempt-2', fencingToken: 5 })
+    expect(frozen).toMatchObject({ subscriptionWindowHash: 'a'.repeat(64) })
     expect(JSON.stringify(completed)).not.toMatch(/bridge|execution_intent/i)
   })
 
@@ -142,7 +143,7 @@ describe('Stage 12C account Trader Worker', () => {
     const worker = new TraderWorker(repo, new InferenceService(repo, strategies), strategies, contexts, {
       profileId: null, provider: 'test', model: 'trader', timeoutMs: 1000, maxAttempts: 2,
       async decide() { if (++calls === 1) throw new ModelInvocationError('provider_busy', 'failed', true); return { result: {} as TraderDecisionResult, usage: null } },
-    }, 'worker', { async assertAllowed() { if (++checks === blockedCheck) throw new InferenceError('trader_schedule_closed', 409) } })
+    }, 'worker', { async assertAllowed() { if (++checks === blockedCheck) throw new InferenceError('trader_schedule_closed', 409); return 'a'.repeat(64) } })
     expect(await worker.process(base.id, new Date('2026-09-03T08:00:10.000Z'))).toMatchObject({ status: 'failed', code: 'trader_schedule_closed' })
     expect(calls).toBe(Math.max(0, blockedCheck - 2))
     expect(completed).toBe(false)
@@ -159,7 +160,7 @@ describe('Stage 12C account Trader Worker', () => {
       repo, new InferenceService(repo, new StrategyService(new Strategies())), new StrategyService(new Strategies()),
       new TraderContextBuilder(repo, tradingRepository(), { async read() { return { revision: 6, data: {} } } }, { async read() { return { revision: 7, data: {} } } }),
       { profileId: null, provider: 'test', model: 'trader', timeoutMs: 5_000, maxAttempts: 1, async decide() { modelCalls += 1; throw new Error('must not run') } },
-      'worker-2', { async assertAllowed() {} },
+      'worker-2', { async assertAllowed() { return 'a'.repeat(64) } },
     )
     await expect(worker.process(base.id, new Date('2026-09-03T08:00:10.000Z'))).resolves.toEqual({ status: 'deferred', code: 'trader_account_busy', retryAfterMs: 2_000 })
     expect(modelCalls).toBe(0)

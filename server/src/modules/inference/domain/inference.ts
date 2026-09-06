@@ -104,6 +104,8 @@ export interface AnalysisInputSnapshot {
 }
 
 export interface TraderInputSnapshot {
+  /** Missing only in historical snapshots, never inferred from today's settings. */
+  subscriptionWindowHash?: string
   kind: 'trader'
   taskMode: TraderTaskMode
   strategy: { id: string; versionId: string; promptHash: string; promptText: string }

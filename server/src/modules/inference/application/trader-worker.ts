@@ -37,8 +37,9 @@ export class TraderWorker {
     if (!run || run.status !== 'queued') return { status: 'ignored' as const }
 
     let strategy
+    let windowHash: string
     try {
-      await this.windows.assertAllowed(run, this.currentTime())
+      windowHash = await this.windows.assertAllowed(run, this.currentTime())
       strategy = await this.strategies.requireActiveVersion(run.userId, run.strategyId, 'trader')
       if (strategy.id !== run.strategyVersionId) throw new InferenceError('strategy_version_conflict', 409)
     } catch (error) {
@@ -59,6 +60,7 @@ export class TraderWorker {
     let snapshot
     try {
       snapshot = await this.contexts.build(run, strategy, now)
+      snapshot.subscriptionWindowHash = windowHash
     } catch (error) {
       await this.repository.failQueuedTrader(run.id, errorCode(error))
       return { status: 'failed' as const, code: errorCode(error) }
@@ -75,6 +77,10 @@ export class TraderWorker {
       )
     } catch (error) {
       if (error instanceof InferenceError && error.code === 'trader_account_busy') return { status: 'deferred' as const, code: error.code, retryAfterMs: error.retryAfterMs }
+      if (error instanceof InferenceError && error.code === 'trader_schedule_changed') {
+        await this.repository.failQueuedTrader(run.id, error.code)
+        return { status: 'failed' as const, code: error.code }
+      }
       if (error instanceof InferenceError && error.status === 409) return { status: 'ignored' as const, code: error.code }
       throw error
     }
@@ -82,7 +88,7 @@ export class TraderWorker {
     while (true) {
       let output
       try {
-        await this.windows.assertAllowed(run, this.currentTime())
+        if (await this.windows.assertAllowed(run, this.currentTime()) !== windowHash) throw new InferenceError('trader_schedule_changed', 409)
         output = await model.decide({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot, signal: AbortSignal.timeout(timeoutMs) })
       } catch (error) {
         const failure = modelFailure(error)
@@ -93,11 +99,11 @@ export class TraderWorker {
       }
 
       try {
-        await this.windows.assertAllowed(run, this.currentTime())
+        if (await this.windows.assertAllowed(run, this.currentTime()) !== windowHash) throw new InferenceError('trader_schedule_changed', 409)
         const decision = await this.inference.completeTrader(claim, snapshot, output.result, output.usage)
         return decision.status === 'stale' ? { status: 'stale' as const, decision } : { status: 'succeeded' as const, decision }
       } catch (error) {
-        if (error instanceof InferenceError && (error.code === 'trader_schedule_closed' || error.code === 'subscription_revision_conflict')) {
+        if (error instanceof InferenceError && ['trader_schedule_closed', 'trader_schedule_changed', 'subscription_revision_conflict'].includes(error.code)) {
           await this.inference.failTraderAttempt(claim, model, new ModelInvocationError(error.code, 'failed', false), maxAttempts)
           return { status: 'failed' as const, code: error.code }
         }

@@ -1,3 +1,19 @@
+import { createHash } from 'node:crypto'
+
+// Only configuration enters this identity; scheduler cursor/revision and clock
+// observations must not invalidate an otherwise unchanged queued task.
+export function subscriptionWindowFingerprint(raw: unknown, timezone: string): string {
+  evaluateSubscriptionWindow(raw, timezone, new Date(0), null)
+  const window = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw
+  const canonical = (value: unknown): string => {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value)
+    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonical(record[key])}`).join(',')}}`
+  }
+  return createHash('sha256').update(canonical({ timezone, window })).digest('hex')
+}
+
 export interface SubscriptionWindowClock {
   timezoneOffsetMinutes: number | null
   clockStatus: string
