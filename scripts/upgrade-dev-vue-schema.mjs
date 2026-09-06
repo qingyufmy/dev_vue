@@ -1,11 +1,11 @@
-import { loadMembershipCoordinator } from './lib/inplace-membership-schema.mjs'
+import { loadReferralRuleCoordinator, verifyOriginalSchemaWithReferralRules } from './lib/inplace-referral-rule-schema.mjs'
+import { verifyReferralRuleProof, readReferralRuleRevisions } from './lib/inplace-referral-rule-proof.mjs'
 import { verifyMembershipProof } from './lib/inplace-membership-proof.mjs'
 import { readMembershipUpgradeRows, verifyMembershipUpgradeRows } from './lib/inplace-membership-row-guard.mjs'
 import { verifyPaymentMatchProof } from './lib/inplace-payment-match-proof.mjs'
 import { verifyPaymentOrderProof } from './lib/inplace-payment-order-proof.mjs'
 import { verifyReferralLedgerProof } from './lib/inplace-referral-ledger-proof.mjs'
 import { verifyReferralSchemaProof } from './lib/inplace-referral-schema-proof.mjs'
-import { verifyOriginalSchemaWithUserDefaults } from './lib/inplace-user-defaults.mjs'
 import { verifyUserDefaultsProof } from './lib/inplace-user-defaults-proof.mjs'
 import { verifyMacroCoordinatorProof } from './lib/inplace-macro-coordinator-proof.mjs'
 import { readFile, open } from 'node:fs/promises'
@@ -29,7 +29,8 @@ try {
   const backup = await json('docs/migration/dev-vue-inplace-backup-20260906.json')
   const columns = await json('docs/migration/dev-vue-inplace-column-rehearsal-20260906.json')
   validateColumnEvidence(backup, columns)
-  const plan = await loadMembershipCoordinator(root)
+  const plan = await loadReferralRuleCoordinator(root)
+  const ruleProof = await verifyReferralRuleProof(root)
   const baseProof = await verifyCoordinatorProof(root, await json('docs/migration/dev-vue-schema-coordinator-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 29) })
   const macroProof = await verifyMacroCoordinatorProof(root, await json('docs/migration/dev-vue-macro-schema-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 40) })
   const defaultsProof = await verifyUserDefaultsProof(root, await json('docs/migration/dev-vue-user-defaults-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 45) })
@@ -37,8 +38,8 @@ try {
   const ledgerProof = await verifyReferralLedgerProof(root, await json('docs/migration/dev-vue-referral-ledger-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 47) })
   const paymentOrderProof = await verifyPaymentOrderProof(root, await json('docs/migration/dev-vue-payment-order-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 48) })
   const paymentMatchProof = await verifyPaymentMatchProof(root, await json('docs/migration/dev-vue-payment-match-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 50) })
-  const membershipProof = await verifyMembershipProof(root, await json('docs/migration/dev-vue-membership-rehearsal-20260907.json'), backup, columns, plan)
-  const proof = { base: baseProof, macro: macroProof, userDefaults: defaultsProof, referral: referralProof, ledger: ledgerProof, paymentOrders: paymentOrderProof, paymentMatches: paymentMatchProof, memberships: membershipProof }
+  const membershipProof = await verifyMembershipProof(root, await json('docs/migration/dev-vue-membership-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 51) })
+  const proof = { referralRules: ruleProof, base: baseProof, macro: macroProof, userDefaults: defaultsProof, referral: referralProof, ledger: ledgerProof, paymentOrders: paymentOrderProof, paymentMatches: paymentMatchProof, memberships: membershipProof }
   const env = parse(await readFile(new URL('server/.env', root)))
   check(env.MYSQL_DATABASE === 'dev_vue', 'inplace_coordinator_database')
   // Reserve an exclusive receipt before any database mutation. Failed attempts remain inspectable.
@@ -62,12 +63,16 @@ try {
     const readOrders = async () => { const [[table]] = await connection.query("SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='payment_orders'"); if (Number(table.n) === 0) return null; const [rows] = await connection.query('SELECT id,user_id,order_number,external_order_id,product_code,product_label,billing_period_code,billing_period_label,order_amount,legacy_amount_confirmed,referral_credit_applied,currency_code,status,status_label,payment_method_code,created_at_utc,paid_at_utc,revision,origin,legacy_order_id,migration_run_id,source_sha256,imported_at_utc FROM payment_orders ORDER BY id'); return sha256(JSON.stringify(rows)) }
     const orderHash = await readOrders()
     const protectedRows = await readMembershipUpgradeRows(connection)
+    const ruleRevisions = await readReferralRuleRevisions(connection)
     const verifyOriginal = async () => {
       verifyMembershipUpgradeRows(protectedRows, await readMembershipUpgradeRows(connection))
       if (orderHash !== null) check(await readOrders() === orderHash, 'inplace_coordinator_orders_changed')
       if (ledgerHash !== null) check(await readLedger() === ledgerHash, 'inplace_coordinator_ledger_changed')
       if (referralHash !== null) check(await readReferrals() === referralHash, 'inplace_coordinator_referrals_changed')
-      await verifyOriginalSchemaWithUserDefaults(connection, backup.schemaSha256, excluded)
+      await verifyOriginalSchemaWithReferralRules(connection, backup.schemaSha256, excluded, plan.referralRuleReference)
+      const revisions = await readReferralRuleRevisions(connection)
+      if (ruleRevisions !== null) check(JSON.stringify(revisions) === JSON.stringify(ruleRevisions), 'inplace_rule_revisions_changed')
+      else if (revisions !== null) check(revisions.length === 4 && revisions.every(row => row.revision === '1'), 'inplace_rule_revision_initialization')
       check(JSON.stringify(await readOriginalRows(connection, columns.originalColumns)) === JSON.stringify(columns.parity), 'inplace_coordinator_original_changed')
     }
     const store = plan.store(connection)
@@ -88,7 +93,7 @@ try {
     await verifyOriginal()
     return applied
   })
-  const report = { kind: 'dev-vue-schema-upgrade/v8', status: apply ? 'verified' : 'planned', identity, proof,
+  const report = { kind: 'dev-vue-schema-upgrade/v9', status: apply ? 'verified' : 'planned', identity, proof,
     completedAtUtc: new Date().toISOString(), result, ddlExecutions, journalWrites, originalTables: columns.parity.length,
     originalRows: backup.parity.rows, originalParityHash: sha256(JSON.stringify(columns.parity)),
     repeatNoop: apply, businessRowsWritten: false, fullNormalizationComplete: false }
