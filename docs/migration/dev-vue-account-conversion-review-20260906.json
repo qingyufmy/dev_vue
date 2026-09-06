@@ -1,0 +1,54 @@
+{
+  "kind": "dev_vue_account_conversion_review",
+  "observedAtUtc": "2026-09-06T14:31:31.558Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "counts": {
+    "sourceRows": 4,
+    "entities": 3,
+    "settings": 4,
+    "fieldsPerSource": 15
+  },
+  "coveredFields": [
+    "id",
+    "user_id",
+    "broker_server",
+    "login_account",
+    "nickname",
+    "margin_mode",
+    "review_status",
+    "observe_status",
+    "is_deleted",
+    "created_at",
+    "updated_at",
+    "observed_until",
+    "identity_verified_at",
+    "first_verified_at",
+    "anomaly_code"
+  ],
+  "sourceHash": "dae015aef77252a79d4730542e3325651ee9d6b59716678f9d61a14f1aef67e7",
+  "mappingHash": "e3446474af9da37b9935f8ffe3f7237d180d42b9f383069ad05f1217458de575",
+  "perSource": [
+    {
+      "locatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "sourceHash": "65219408611720bd153c6e3682c8cd38297fdd21b9f7c330e9a0c6b0334a0280"
+    },
+    {
+      "locatorHash": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+      "sourceHash": "444b143020464ef5983ce9c41fd327318d1209e002578b242b02f075a23dbac8"
+    },
+    {
+      "locatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "sourceHash": "62631da9e769961cc6e1b410ff43fe87bd5a828556258955fc2d71ebbc8a804f"
+    },
+    {
+      "locatorHash": "2bf175f9655e7bb7357b9f0a7c6051465a5ae701104ffe741b98e852c0e4d460",
+      "sourceHash": "febab37b1e5cc47963be62d2711d8f642c65c19c1cc48531dad3ad29c8863857"
+    }
+  ],
+  "timeBasisConfirmed": false,
+  "businessWritesPerformed": false,
+  "readyForBackfill": false
+}
