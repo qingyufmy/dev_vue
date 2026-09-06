@@ -1,0 +1,298 @@
+{
+  "kind": "user-default-source-reference/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "ddl": "CREATE TABLE `users` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `uid` varchar(32) DEFAULT NULL,\n  `email` varchar(255) DEFAULT NULL,\n  `email_verified` tinyint DEFAULT '1',\n  `auth_method` varchar(20) DEFAULT 'email',\n  `password` varchar(255) NOT NULL,\n  `nickname` varchar(100) DEFAULT '',\n  `avatar` varchar(500) DEFAULT '',\n  `role` varchar(20) DEFAULT 'user',\n  `plan` varchar(20) DEFAULT 'free',\n  `plan_period` varchar(20) DEFAULT '',\n  `plan_expires_at` datetime DEFAULT NULL,\n  `telegram_id` varchar(100) DEFAULT NULL,\n  `telegram_username` varchar(100) DEFAULT NULL,\n  `telegram_name` varchar(100) DEFAULT NULL,\n  `telegram_chat_id` varchar(100) DEFAULT NULL,\n  `telegram_group_status` varchar(50) DEFAULT '',\n  `telegram_bot_started_at` datetime DEFAULT NULL,\n  `telegram_joined_at` datetime DEFAULT NULL,\n  `telegram_last_invite_sent_at` datetime DEFAULT NULL,\n  `referral_code` varchar(50) DEFAULT NULL,\n  `referral_credit` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `referred_by` varchar(50) DEFAULT NULL,\n  `last_seen_at` datetime DEFAULT NULL,\n  `bridge_heartbeat` datetime DEFAULT NULL,\n  `created_at` datetime DEFAULT (now()),\n  `updated_at` datetime DEFAULT (now()),\n  `phone` varchar(20) DEFAULT NULL,\n  `phone_verified` tinyint DEFAULT '0',\n  `changelog_seen_version` int DEFAULT '0',\n  `token_version` int NOT NULL DEFAULT '0',\n  `plan_source` varchar(20) DEFAULT NULL,\n  `deleted_at` datetime DEFAULT NULL,\n  `deletion_status` varchar(24) NOT NULL DEFAULT 'active',\n  `last_seen_at_utc` datetime(3) DEFAULT NULL,\n  `profile_revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `email` (`email`),\n  UNIQUE KEY `uid` (`uid`),\n  UNIQUE KEY `referral_code` (`referral_code`),\n  UNIQUE KEY `idx_users_phone` (`phone`),\n  KEY `idx_users_last_seen` (`last_seen_at`),\n  KEY `idx_users_deletion_status` (`deletion_status`,`deleted_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=31 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "columns": [
+    {
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collation": null,
+      "extra": "auto_increment"
+    },
+    {
+      "name": "uid",
+      "type": "varchar(32)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "email",
+      "type": "varchar(255)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "email_verified",
+      "type": "tinyint",
+      "nullable": "YES",
+      "defaultValue": "1",
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "auth_method",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": "email",
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "password",
+      "type": "varchar(255)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "nickname",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": "",
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "avatar",
+      "type": "varchar(500)",
+      "nullable": "YES",
+      "defaultValue": "",
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "role",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": "user",
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "plan",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": "free",
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "plan_period",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": "",
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "plan_expires_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "telegram_id",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "telegram_username",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "telegram_name",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "telegram_chat_id",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "telegram_group_status",
+      "type": "varchar(50)",
+      "nullable": "YES",
+      "defaultValue": "",
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "telegram_bot_started_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "telegram_joined_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "telegram_last_invite_sent_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "referral_code",
+      "type": "varchar(50)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "referral_credit",
+      "type": "decimal(20,8)",
+      "nullable": "NO",
+      "defaultValue": "0.00000000",
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "referred_by",
+      "type": "varchar(50)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "last_seen_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "bridge_heartbeat",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collation": null,
+      "extra": "DEFAULT_GENERATED"
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collation": null,
+      "extra": "DEFAULT_GENERATED"
+    },
+    {
+      "name": "phone",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "phone_verified",
+      "type": "tinyint",
+      "nullable": "YES",
+      "defaultValue": "0",
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "changelog_seen_version",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": "0",
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "token_version",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "plan_source",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "deleted_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "deletion_status",
+      "type": "varchar(24)",
+      "nullable": "NO",
+      "defaultValue": "active",
+      "collation": "utf8mb4_0900_ai_ci",
+      "extra": ""
+    },
+    {
+      "name": "last_seen_at_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collation": null,
+      "extra": ""
+    },
+    {
+      "name": "profile_revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": "1",
+      "collation": null,
+      "extra": ""
+    }
+  ]
+}
