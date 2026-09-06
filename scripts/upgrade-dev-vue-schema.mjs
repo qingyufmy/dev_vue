@@ -1,4 +1,5 @@
-import { loadMacroSchemaCoordinator } from './lib/inplace-macro-schema.mjs'
+import { loadUserDefaultsCoordinator, verifyOriginalSchemaWithUserDefaults } from './lib/inplace-user-defaults.mjs'
+import { verifyUserDefaultsProof } from './lib/inplace-user-defaults-proof.mjs'
 import { verifyMacroCoordinatorProof } from './lib/inplace-macro-coordinator-proof.mjs'
 import { readFile, open } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -7,7 +8,7 @@ import { parse } from 'dotenv'
 import { coordinateInplaceSchema } from './lib/inplace-schema-coordinator.mjs'
 import { verifyCoordinatorProof } from './lib/inplace-coordinator-proof.mjs'
 import { verifyInplaceJournal, withInplaceUpgradeLock } from './lib/mysql-inplace-column-store.mjs'
-import { validateColumnEvidence, readOriginalRows, verifyOriginalSchema } from './lib/inplace-column-evidence.mjs'
+import { validateColumnEvidence, readOriginalRows } from './lib/inplace-column-evidence.mjs'
 import { sha256 } from './lib/v4-migration-plan.mjs'
 
 const root = new URL('../', import.meta.url)
@@ -21,10 +22,11 @@ try {
   const backup = await json('docs/migration/dev-vue-inplace-backup-20260906.json')
   const columns = await json('docs/migration/dev-vue-inplace-column-rehearsal-20260906.json')
   validateColumnEvidence(backup, columns)
-  const plan = await loadMacroSchemaCoordinator(root)
+  const plan = await loadUserDefaultsCoordinator(root)
   const baseProof = await verifyCoordinatorProof(root, await json('docs/migration/dev-vue-schema-coordinator-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 29) })
-  const macroProof = await verifyMacroCoordinatorProof(root, await json('docs/migration/dev-vue-macro-schema-rehearsal-20260907.json'), backup, columns, plan)
-  const proof = { base: baseProof, macro: macroProof }
+  const macroProof = await verifyMacroCoordinatorProof(root, await json('docs/migration/dev-vue-macro-schema-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 40) })
+  const defaultsProof = await verifyUserDefaultsProof(root, await json('docs/migration/dev-vue-user-defaults-rehearsal-20260907.json'), backup, columns, plan)
+  const proof = { base: baseProof, macro: macroProof, userDefaults: defaultsProof }
   const env = parse(await readFile(new URL('server/.env', root)))
   check(env.MYSQL_DATABASE === 'dev_vue', 'inplace_coordinator_database')
   // Reserve an exclusive receipt before any database mutation. Failed attempts remain inspectable.
@@ -42,7 +44,7 @@ try {
     check(await verifyInplaceJournal(connection), 'inplace_coordinator_journal_required')
     const excluded = [...new Set(plan.steps.filter(step => !step.column).map(step => step.table))]
     const verifyOriginal = async () => {
-      await verifyOriginalSchema(connection, backup.schemaSha256, excluded)
+      await verifyOriginalSchemaWithUserDefaults(connection, backup.schemaSha256, excluded)
       check(JSON.stringify(await readOriginalRows(connection, columns.originalColumns)) === JSON.stringify(columns.parity), 'inplace_coordinator_original_changed')
     }
     const store = plan.store(connection)
@@ -63,7 +65,7 @@ try {
     await verifyOriginal()
     return applied
   })
-  const report = { kind: 'dev-vue-schema-upgrade/v2', status: apply ? 'verified' : 'planned', identity, proof,
+  const report = { kind: 'dev-vue-schema-upgrade/v3', status: apply ? 'verified' : 'planned', identity, proof,
     completedAtUtc: new Date().toISOString(), result, ddlExecutions, journalWrites, originalTables: columns.parity.length,
     originalRows: backup.parity.rows, originalParityHash: sha256(JSON.stringify(columns.parity)),
     repeatNoop: apply, businessRowsWritten: false, fullNormalizationComplete: false }
