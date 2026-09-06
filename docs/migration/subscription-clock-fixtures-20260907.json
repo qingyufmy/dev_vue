@@ -1,0 +1,110 @@
+{
+  "kind": "subscription-clock-fixtures/v1",
+  "observedAt": "2026-09-06T16:56:15.659Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sqlHash": "f41cc8528002df194ba3cf6f5dc6597e73c6e103d2098003161be833d993fd15",
+  "results": [
+    {
+      "name": "matching_source",
+      "fixtureSha256": "94f06c582e4c37859c9e93968d32b9e35bbf6ea8b9b172859408be9685819d24",
+      "sourceMatched": true,
+      "executionAllowed": true
+    },
+    {
+      "name": "old_owner_revision",
+      "fixtureSha256": "e3e7c4e8788157870292973bded237209634099dfe36306cf27a69ddff498f33",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "wrong_owner",
+      "fixtureSha256": "6bdb5f2ff2448f1537b8e56e3fd25e36c5c6621db707904c451002fa4746a777",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "ended_interval",
+      "fixtureSha256": "7ce07265e8722cb3fe9e64fda363f14a3977be7c0a95cc084768367ff808b06a",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "deleted_user",
+      "fixtureSha256": "bfccb6aa3cb003c232bff2a9b6a1650a5a57a5b6bbf5d131ec5717d59ea52efe",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "unbound_terminal",
+      "fixtureSha256": "94fd555cbfd67ba9ab0ce14a8da6644aa7e03ec4a7450255abd7868a31e50275",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "different_profile_user",
+      "fixtureSha256": "a2cb20128580eb59fd3fcaaeb51a8ede63329d2734a0d32d6a9759700c2636a4",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "different_platform",
+      "fixtureSha256": "dfadb0aadf2cb9bae32bac802e91df48963ae96e2dbd4ecb08fe362b764d88b1",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "torn_projection",
+      "fixtureSha256": "6a98fc12f6fca29f4857520ed0f2262731f98791c7b005533d9513fe200fe271",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "wrong_provenance_user",
+      "fixtureSha256": "ffcd0c6e1d88712e5b06e3251b4b444e4623828355cd533545f4b327b1dbab00",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "wrong_provenance_interval",
+      "fixtureSha256": "567895c21df3751c82e38fcdca05d60b446aed0939aa186c6ba58a490e881003",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "rebound_instance",
+      "fixtureSha256": "e8e3acd72940b9fe10fceeb531190ff8d3879cfb2800d1801afd2bdff89440f4",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "new_connection_epoch",
+      "fixtureSha256": "d062ee464ddf2e2ce4d4459c464eb70452ab57cceed0139c9b3d172cd24a864a",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "multiple_bindings",
+      "fixtureSha256": "6e53ce0c3e83bba83b91bf3425cf9bf9cff82809f62155508ef37ef0c0329a55",
+      "sourceMatched": false,
+      "executionAllowed": false
+    },
+    {
+      "name": "stale_clock",
+      "fixtureSha256": "c6d667965af3008e365b0457bffce966f4debf1a3d5e777702e258c54b022d74",
+      "sourceMatched": true,
+      "executionAllowed": false
+    },
+    {
+      "name": "bootstrap_clock",
+      "fixtureSha256": "91f397d5e18ba80e5ca61b2819526866c79e1c470ab16171aa8e4a6033a4d609",
+      "sourceMatched": true,
+      "executionAllowed": false
+    }
+  ],
+  "businessWritesPerformed": false,
+  "concurrencyVerified": false
+}
