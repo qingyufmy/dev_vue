@@ -1,0 +1,13 @@
+# 同库升级第四十六批：订阅构建表实际升级
+
+恢复副本 dev_vue_m1_source_20260906_01 与开发源 dev_vue 已实际创建3张构建表：strategy_subscriptions_v4_build、subscription_schedules_v4_build、subscription_execution_preferences_v4_build。开发源当前185张表、29项完成的同库升级步骤；三张新表均为空，未回填、重命名或删除旧数据。
+
+恢复副本首次在第一条CREATE完成后注入连接丢失，日志停在started。后续预检发现MySQL按重命名后的约束名重排SHOW CREATE，原摘要比较误报冲突。新增subscriptionBuildObservedHash仅把约束展示顺序恢复为已冻结SQL中的顺序；所有约束名、定义、其它列/索引仍参与摘要，未知/重复约束拒绝。没有修改已开始步骤的SQL、前后摘要或日志校验和，也没有重建第一张表。
+
+修正后依据实际started日志与完整表定义恢复第一步，再在第三步CREATE后注入连接丢失并恢复。三条CREATE总计各一次，末次重跑全部completed。恢复回执记录resumedFirst=true，其中首条执行来自前次已核实的物理表和started状态；后两条由本次执行计数。恢复副本前后165张原表结构及271007行旧列摘要与原备份一致。
+
+开发源应用前验证固定UUID、备份证据、恢复回执、全部98个工具摘要、前置结构/日志、原数据与约束名。执行三步后同锁内重复检查无额外DDL，再核对全部原结构/旧列数据。实际回执 [dev-vue-subscription-schema-apply-20260907.json](dev-vue-subscription-schema-apply-20260907.json)；恢复回执 [dev-vue-subscription-schema-rehearsal-20260907.json](dev-vue-subscription-schema-rehearsal-20260907.json)。
+
+远端证据保留在/www/backup/aurum-v4/m1/20260906-01/subscription-rehearsal及subscription-rehearsal-v2，独立0700目录、0600文件。第一包SHA256为6b9748729165477f1020d7c9a8a8a311f44d9bcb19abab9a4c28b7638c0223d8，修正包为dc46f195ad3f3f200019ad6a55d8bc17d5ea3e3e2fe58b60651755875febb734。原包保留，不覆盖历史证据。
+
+16项定向测试通过，覆盖约束展示重排而不隐藏定义变化、未登记冲突、重复执行和响应丢失恢复；脚本在真实MySQL执行通过。开发源升级程序复用既有证据/锁/日志实现，未启动应用或终端。当前只是目标结构准备完成；策略角色/版本、时间依据、订阅配置和权限映射仍需完成，之后才能业务回填、切换、自动升级交付及旧结构清理。

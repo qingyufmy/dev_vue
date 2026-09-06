@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { loadSubscriptionBuild, subscriptionBuildNames, executeSubscriptionBuild } from '../scripts/lib/inplace-subscription-build.mjs'
+import { loadSubscriptionBuild, subscriptionBuildNames, executeSubscriptionBuild, subscriptionBuildObservedHash } from '../scripts/lib/inplace-subscription-build.mjs'
 
 const root = new URL('../', import.meta.url)
 const time = '2026-09-07T00:00:00Z'
@@ -15,6 +15,16 @@ async function fixture() {
 }
 
 describe('subscription build migration', () => {
+  it('accepts MySQL constraint display ordering without hiding definition changes', async () => {
+    const { plan } = await fixture(), step = plan.steps[0]
+    const lines = step.sql.split('\n'), constraints = lines.filter(line => /^  CONSTRAINT `/.test(line))
+    const first = lines.indexOf(constraints[0])
+    const reordered = [...constraints].reverse().map((line, i) => line.replace(/,$/, '') + (i < constraints.length - 1 ? ',' : ''))
+    const actual = [...lines.slice(0, first), ...reordered, ...lines.slice(first + constraints.length)].join('\n')
+    expect(subscriptionBuildObservedHash(actual, step.sql)).toBe(step.afterHash)
+    expect(subscriptionBuildObservedHash(actual.replace('REFERENCES `users`', 'REFERENCES `other_users`'), step.sql)).not.toBe(step.afterHash)
+    expect(() => subscriptionBuildObservedHash(actual.replace(/CONSTRAINT `build_sub_[^`]+`/, 'CONSTRAINT `unexpected`'), step.sql)).toThrow('constraint_definition_conflict')
+  })
   it('binds the live reference and all prior migrations without referencing legacy accounts or subscriptions', async () => {
     const { plan } = await fixture()
     expect(plan.priorSteps).toHaveLength(26)

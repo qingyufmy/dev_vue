@@ -15,6 +15,19 @@ export function subscriptionBuildDefinition(ddl) {
     .replace(/CONSTRAINT `([a-z][a-z0-9_]*)`/g, (_match, name) => `CONSTRAINT \`build_sub_${sha256(name).slice(0, 24)}\``)
 }
 
+// MySQL sorts renamed FK/CHECK names in SHOW CREATE. Restore only their
+// display order; never erase definitions, duplicate names, or unknown constraints.
+export function subscriptionBuildObservedHash(ddl, plannedSql) {
+  const names = [...plannedSql.matchAll(/CONSTRAINT `([^`]+)`/g)].map(match => match[1])
+  const lines = ddl.split('\n'), constraints = lines.filter(line => /^  CONSTRAINT `/.test(line))
+  const actual = constraints.map(line => /^  CONSTRAINT `([^`]+)`/.exec(line)[1])
+  if (new Set(actual).size !== actual.length || actual.length !== names.length || actual.some(name => !names.includes(name))) throw new Error('inplace_subscription_constraint_definition_conflict')
+  const first = lines.findIndex(line => /^  CONSTRAINT `/.test(line))
+  if (first < 0 || lines.slice(first, first + constraints.length).some(line => !/^  CONSTRAINT `/.test(line))) throw new Error('inplace_subscription_constraint_layout_conflict')
+  const ordered = names.map((name, i) => constraints[actual.indexOf(name)].replace(/,$/, '') + (i < names.length - 1 ? ',' : ''))
+  return tableDefinitionHash([...lines.slice(0, first), ...ordered, ...lines.slice(first + constraints.length)].join('\n'))
+}
+
 export async function loadSubscriptionBuild(root) {
   const reference = JSON.parse(await readFile(new URL('docs/migration/dev-vue-subscription-build-reference-20260907.json', root), 'utf8'))
   if (reference.kind !== 'subscription-build-reference/v1' || reference.identity.db !== 'dev_vue_m1_a'
@@ -45,7 +58,7 @@ export function subscriptionBuildStore(connection, store, plan) {
       const [triggers] = await connection.execute('SELECT TRIGGER_NAME name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE=?', [name])
       if (triggers.length) throw new Error('inplace_subscription_trigger_conflict')
       const [[row]] = await connection.query(`SHOW CREATE TABLE \`${name}\``)
-      return tableDefinitionHash(row['Create Table'])
+      return subscriptionBuildObservedHash(row['Create Table'], plan.steps.find(step => step.table === name).sql)
     },
   }
 }
