@@ -79,7 +79,7 @@
 | --- | ---: | --- | --- | --- |
 | `orders` | 12 | 重塑 | `payment_orders` | 保留 `id/order_no/order_id` legacy key；产品、周期、应付金额、金额差、状态和 UTC 时间规范化，禁止与交易订单混名 |
 | `crypto_watch_list` | 8 | 重塑 | `payment_matches`、`payment_transactions` | TRC20 共享地址、期望金额和创建时间窗匹配语义不变；链上 tx_hash 唯一，确认数作为投影 |
-| `payment_side_effects` | 4 | 重塑 | `membership_activations`、`outbox_events` | 支付成功后的会员激活成为幂等业务事实；通知等外部副作用由 outbox Worker 处理 |
+| `payment_side_effects` | 4 | 重塑 | 支付后投递历史；未完成义务经核验进入 `outbox_events` | 原表仅记录通知/佣金处理，不直接生成 `membership_activations`；completed 历史不重新入队或发放权益，见阶段 83 |
 | `wallet_keys` | 4 | 重塑 | `payment_wallet_addresses` | 不迁移或记录私钥明文；只保留链、索引、地址和密钥托管引用，字段名不得暗示数据库保存私钥 |
 | `referral_rules` | 4 | 保留 | `referral_rules` | 唯一键 `plan + period`，rate_bps 范围 CHECK，变更带 revision 和审计 |
 | `referrals` | 0 | 重塑 | `referral_attributions`、`referral_commissions` | 邀请归因与订单佣金事实拆分；订单和用户强关系，金额使用 DECIMAL |

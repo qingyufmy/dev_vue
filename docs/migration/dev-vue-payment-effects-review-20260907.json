@@ -1,0 +1,41 @@
+{
+  "kind": "payment-effects-source/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 47,
+  "sourceFields": 11,
+  "rows": 4,
+  "sourceHash": "6f9eb39caf580b9e895c18dd625c1fea8816fcb562f9fdb4ec5a544dff11082e",
+  "orderProjectionHash": "203bc7fefcb610659d851401bd944cbefd1b427affb46d8fc41f4689bfd32b4d",
+  "ddl": "CREATE TABLE `payment_side_effects` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `order_id` varchar(100) NOT NULL,\n  `user_id` int NOT NULL,\n  `status` varchar(20) NOT NULL DEFAULT 'pending',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `next_attempt_at` datetime NOT NULL DEFAULT (now()),\n  `locked_at` datetime DEFAULT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  `last_error` varchar(1000) DEFAULT NULL,\n  `created_at` datetime NOT NULL DEFAULT (now()),\n  `updated_at` datetime NOT NULL DEFAULT (now()),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uq_payment_side_effect_order` (`order_id`),\n  KEY `idx_payment_side_effect_ready` (`status`,`next_attempt_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "statuses": [
+    {
+      "status": "completed",
+      "rows": 4
+    }
+  ],
+  "exactAndSqlLinksAgree": true,
+  "blockers": [
+    {
+      "locator": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "code": "historical_time_basis_required"
+    },
+    {
+      "locator": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+      "code": "historical_time_basis_required"
+    },
+    {
+      "locator": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "code": "historical_time_basis_required"
+    },
+    {
+      "locator": "2bf175f9655e7bb7357b9f0a7c6051465a5ae701104ffe741b98e852c0e4d460",
+      "code": "historical_time_basis_required"
+    }
+  ],
+  "membershipActivationsProven": 0,
+  "databaseWrites": 0,
+  "fullPaymentConverted": false
+}
