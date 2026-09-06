@@ -3,6 +3,7 @@ import { decodeIdentitySourceRow } from './v4-identity-values.mjs'
 import { inspectUserLifecycle } from './v4-identity-lifecycle.mjs'
 import { epochMillisecondsToUtc, inspectWallClock } from './v4-identity-time.mjs'
 import { auditOwnershipGraph } from './v4-identity-ownership-audit.mjs'
+import { proposeAccountMappings } from './v4-account-mapping-candidates.mjs'
 
 const scope = ['users', 'verification_codes', 'bridge_device_pairings', 'bridge_refresh_sessions', 'trading_accounts', 'mt5_account_bindings', 'mt5_account_ownership_history', 'bridge_v3_terminal_sessions', 'ai_observer_sources', 'ai_observer_channels', 'ai_observer_channel_assignments']
 
@@ -48,7 +49,19 @@ export function auditIdentitySourceBatch(review, rowsByTable) {
     intervals: values.mt5_account_ownership_history.map(i => ({ id: i.id, userId: i.user_id, accountId: i.trading_account_id, server: i.broker_server_key, login: i.login_account, startedAt: i.started_at, endedAt: i.ended_at })),
     bindings: values.mt5_account_bindings.map(b => ({ server: b.broker_server_key, login: b.login_account, userId: b.current_user_id, accountId: b.current_trading_account_id })),
   })
+  const withHash = (table, map) => values[table].map((v, i) => ({ ...map(v), sourceHash: rowsByTable[table][i].sourceHash }))
+  const mappings = proposeAccountMappings(review.frozenSource.logicalSourceId, {
+    accounts: withHash('trading_accounts', a => ({ id: a.id, userId: a.user_id, server: a.broker_server, login: a.login_account })),
+    terminals: withHash('bridge_v3_terminal_sessions', t => ({ id: t.terminal_instance_id, userId: t.user_id, platform: t.platform, server: t.broker_server, login: t.login_account })),
+    bindings: withHash('mt5_account_bindings', b => ({ server: b.broker_server_key, login: b.login_account, currentUserId: b.current_user_id, currentAccountId: b.current_trading_account_id, currency: b.account_currency })),
+  })
+  const accountLocator = id => hash(['trading_accounts', [{ type: 'integer', value: id }]])
+  const accountCandidates = {
+    candidates: mappings.candidates.map(c => ({ locatorHash: accountLocator(c.sourceAccountId), candidateKey: c.candidateKey, issues: c.issues, terminalEvidenceHashes: c.terminalEvidenceHashes, bindingEvidenceHashes: c.bindingEvidenceHashes })),
+    groups: mappings.groups.map(g => ({ candidateKey: g.candidateKey, memberLocators: g.sourceAccountIds.map(accountLocator), mergeReviewRequired: g.mergeReviewRequired, settingsConflict: g.settingsConflict })),
+    blockers: mappings.blockers, readyForBackfill: false,
+  }
   return { reviewHash: hash(review), inputHash: hash(hashes.sort((a, b) => canonical(a) < canonical(b) ? -1 : canonical(a) > canonical(b) ? 1 : 0)), counts,
     lifecycle: lifecycle.map(l => ({ locatorHash: hash(['users', [{ type: 'integer', value: l.userId }]]), stateConsistent: l.stateConsistent, issues: l.issues, sourceLoginEligible: l.sourceLoginEligible })),
-    ownership, timeChecks, valueIssues, completeSourceVerified: false, readyForBackfill: false }
+    ownership, accountCandidates, timeChecks, valueIssues, completeSourceVerified: false, readyForBackfill: false }
 }

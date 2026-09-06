@@ -43,6 +43,16 @@ describe('reviewed source envelopes to lifecycle and relationship diagnostics', 
     expect(result.lifecycle[0].issues).toContain('identity_active_with_deleted_time')
     expect(result.ownership.issues.map(i => i.code)).toContain('binding_identity_unresolved')
   })
+  it('uses validated terminal and binding columns for a redacted account candidate', () => {
+    const input = batch()
+    input.bridge_v3_terminal_sessions.push(row('bridge_v3_terminal_sessions', { terminal_instance_id: 'terminal-private-id', user_id: '1', platform: 'mt5', broker_server: 'BROKER', login_account: '00123' }))
+    input.mt5_account_bindings = [row('mt5_account_bindings', { current_user_id: '1', current_trading_account_id: '1', broker_server_key: 'BROKER', login_account: '00123', account_currency: 'USD' })]
+    const result = auditIdentitySourceBatch(review, input)
+    expect(result.accountCandidates.candidates[0]).toMatchObject({ candidateKey: expect.stringMatching(/^[a-f0-9]{64}$/), issues: [] })
+    expect(result.accountCandidates.groups[0]).toMatchObject({ mergeReviewRequired: false, settingsConflict: false })
+    expect(JSON.stringify(result)).not.toMatch(/terminal-private-id|BROKER|00123/)
+    expect(result.accountCandidates.readyForBackfill).toBe(false)
+  })
   it('rejects incomplete table input, duplicate source rows and changed source hashes', () => {
     const missing = batch(); delete missing.users
     expect(() => auditIdentitySourceBatch(review, missing)).toThrow('backfill_shape_invalid')
