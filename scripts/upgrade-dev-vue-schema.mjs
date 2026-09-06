@@ -1,4 +1,6 @@
-import { loadUserDefaultsCoordinator, verifyOriginalSchemaWithUserDefaults } from './lib/inplace-user-defaults.mjs'
+import { loadReferralSchemaCoordinator } from './lib/inplace-referral-schema.mjs'
+import { verifyReferralSchemaProof } from './lib/inplace-referral-schema-proof.mjs'
+import { verifyOriginalSchemaWithUserDefaults } from './lib/inplace-user-defaults.mjs'
 import { verifyUserDefaultsProof } from './lib/inplace-user-defaults-proof.mjs'
 import { verifyMacroCoordinatorProof } from './lib/inplace-macro-coordinator-proof.mjs'
 import { readFile, open } from 'node:fs/promises'
@@ -22,11 +24,12 @@ try {
   const backup = await json('docs/migration/dev-vue-inplace-backup-20260906.json')
   const columns = await json('docs/migration/dev-vue-inplace-column-rehearsal-20260906.json')
   validateColumnEvidence(backup, columns)
-  const plan = await loadUserDefaultsCoordinator(root)
+  const plan = await loadReferralSchemaCoordinator(root)
   const baseProof = await verifyCoordinatorProof(root, await json('docs/migration/dev-vue-schema-coordinator-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 29) })
   const macroProof = await verifyMacroCoordinatorProof(root, await json('docs/migration/dev-vue-macro-schema-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 40) })
-  const defaultsProof = await verifyUserDefaultsProof(root, await json('docs/migration/dev-vue-user-defaults-rehearsal-20260907.json'), backup, columns, plan)
-  const proof = { base: baseProof, macro: macroProof, userDefaults: defaultsProof }
+  const defaultsProof = await verifyUserDefaultsProof(root, await json('docs/migration/dev-vue-user-defaults-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 45) })
+  const referralProof = await verifyReferralSchemaProof(root, await json('docs/migration/dev-vue-referral-schema-rehearsal-20260907.json'), backup, columns, plan)
+  const proof = { base: baseProof, macro: macroProof, userDefaults: defaultsProof, referral: referralProof }
   const env = parse(await readFile(new URL('server/.env', root)))
   check(env.MYSQL_DATABASE === 'dev_vue', 'inplace_coordinator_database')
   // Reserve an exclusive receipt before any database mutation. Failed attempts remain inspectable.
@@ -65,7 +68,7 @@ try {
     await verifyOriginal()
     return applied
   })
-  const report = { kind: 'dev-vue-schema-upgrade/v3', status: apply ? 'verified' : 'planned', identity, proof,
+  const report = { kind: 'dev-vue-schema-upgrade/v4', status: apply ? 'verified' : 'planned', identity, proof,
     completedAtUtc: new Date().toISOString(), result, ddlExecutions, journalWrites, originalTables: columns.parity.length,
     originalRows: backup.parity.rows, originalParityHash: sha256(JSON.stringify(columns.parity)),
     repeatNoop: apply, businessRowsWritten: false, fullNormalizationComplete: false }

@@ -1,0 +1,160 @@
+{
+  "kind": "referral-schema-reference/v1",
+  "observedAt": "2026-09-06T19:03:30.659Z",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "tables": [
+    {
+      "name": "user_referral_accounts",
+      "ddl": "CREATE TABLE `user_referral_accounts` (\n  `user_id` int NOT NULL,\n  `referral_code` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,\n  `referred_by_code` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,\n  `referral_credit` decimal(20,8) NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`user_id`),\n  KEY `idx_user_referral_accounts_referral_code` (`referral_code`),\n  CONSTRAINT `fk_user_referral_accounts_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    }
+  ],
+  "migrations": [
+    {
+      "id": "20260903_001_bridge_v4_device_sessions",
+      "checksum_sha256": "2e98051350645fc30b6ccbc2843da08516bd906a6bdf000bfec5080cf0374adf",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_002_auth_sso_sessions",
+      "checksum_sha256": "6d99b0c61769b66fdf934a7fd0f96500b864bb55264c469bd020fe0c4820f728",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_003_trading_context_and_market_projection",
+      "checksum_sha256": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_004_ai_strategy_and_inference_core",
+      "checksum_sha256": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_005_analysis_scheduler_and_account_fanout",
+      "checksum_sha256": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_006_account_trader_worker",
+      "checksum_sha256": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_007_deterministic_risk_review",
+      "checksum_sha256": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_008_manual_risk_release",
+      "checksum_sha256": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_009_execution_intents_and_reservations",
+      "checksum_sha256": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_010_bridge_v4_command_ledger",
+      "checksum_sha256": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_011_user_execution_commands_and_distributions",
+      "checksum_sha256": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_012_review_memory_core",
+      "checksum_sha256": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_013_authoritative_trade_history",
+      "checksum_sha256": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_014_audit_read_indexes",
+      "checksum_sha256": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_015_macro_sources_and_observations",
+      "checksum_sha256": "bbc94e17b2b0f34895b09291126c30dc20c23277ea13b5315ca34d295b531444",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_016_macro_snapshot_research",
+      "checksum_sha256": "78d7365ae9feab93bcd8646dcbdeac4de64ccf1536462ee1f4abe19e8455510e",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_017_economic_calendar",
+      "checksum_sha256": "7a29716aefd45691b29d11d97874480e0d58ef1f9ab139bf4049be917e7a1946",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_018_user_state_and_referral_accounts",
+      "checksum_sha256": "64e8b88cd337fe45202d9bf277317cc6af37942ddf8ae3055f155c58d01c9a29",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_019_account_ownership_intervals",
+      "checksum_sha256": "3b17b685274b0eb1fe225305fea9de673fea60cc81c629dc8477a73913a48a1a",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_020_account_projection_and_history_provenance",
+      "checksum_sha256": "9f55df7803e2429e395f253d6396edf694b97d1059f1cc2daadb5eb73c62b2f8",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_021_observer_sources_and_audiences",
+      "checksum_sha256": "aed263e66171f336d7750bbdfa565c03ae8e82f6f69521483a022ec0a3e687d2",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_022_observer_management_ledger",
+      "checksum_sha256": "0d33169447c5f77f158ae028662c55aadcc09a1eb256d9c5befee2abe8d2a863",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_023_bridge_profile_epoch_scope",
+      "checksum_sha256": "ea314526bb0bbbf1f5fd427ecfc71ea5b97a1997b434348c37e283e9ae82ed4a",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_024_bridge_pairing_requests",
+      "checksum_sha256": "acfbcd21fdaa99b6f5e6cd081e56dd4e1c21cae928049dc35a085e67571d624e",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_025_data_migration_batch_ledger",
+      "checksum_sha256": "6523e515b62147be2157c3b8a6e1e6fd1dc96d131343cbfbd02c180cc8cdb107",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_026_trade_history_currency_evidence",
+      "checksum_sha256": "9a8c19b12c6627332b6a3bab8a6ddee8c30a58328666e7697a1648353f23c5a0",
+      "status": "completed"
+    },
+    {
+      "id": "20260907_027_subscription_execution_preferences",
+      "checksum_sha256": "87c8d3e026442c73bf502c251828d719962b0dfbe3609a2b3150aabf8b651b99",
+      "status": "completed"
+    },
+    {
+      "id": "bootstrap_v4_foundation_v1",
+      "checksum_sha256": "3a5a1f4b1cd76d505884f3a4702da54f3d67ff379d1fcf832866b31a0f3ff215",
+      "status": "completed"
+    }
+  ],
+  "businessWritesPerformed": false,
+  "fixtureBehaviorVerified": false
+}
