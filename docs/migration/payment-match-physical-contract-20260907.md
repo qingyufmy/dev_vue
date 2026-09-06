@@ -1,6 +1,6 @@
 # 支付交易与匹配物理合同
 
-013_payment_matches.sql 追加 payment_transactions、payment_matches，依赖已有 payment_orders。已在开发参考库通过真实约束演练，SQL 内容冻结；尚待接入同库协调器并安装当前 dev_vue。不改变旧表或启动支付监听，结果见 [阶段 86](dev-vue-inplace-stage86-20260907.md)。
+013_payment_matches.sql 追加 payment_transactions、payment_matches，依赖已有 payment_orders。已在开发参考库通过真实约束演练，SQL 内容冻结；现已完成第 49/50 步恢复演练与当前 dev_vue 安装，业务行仍为零。不改变旧表或启动支付监听，结构约束见 [阶段 86](dev-vue-inplace-stage86-20260907.md)，同库结果见 [阶段 87](dev-vue-inplace-stage87-20260907.md)。
 
 payment_transactions 表示一笔已采集证据的实际入账转账，记录链、交易哈希、资产合约及代码、收款地址、实际金额、发生时间、首次/最近观测时间、确认数、revision 和证据 hash。不从旧 expected_amount 或 amount_confirmed 补造 received_amount，不从监听创建时间补造交易发生时间。当前 8 条旧监听没有可据以建立实际交易的完整链上证据，不能因建表而增加交易行。
 
