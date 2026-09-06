@@ -93,4 +93,21 @@ export class BridgeCredentialService {
       websocket_path: WEBSOCKET_PATH,
     }
   }
+
+  async revokeDeviceCredential(input: DeviceSessionTokenInput) {
+    const refreshToken = assertRefreshToken(input.refreshToken)
+    const installationId = assertDeviceId(input.installationId)
+    const profileId = assertDeviceId(input.profileId)
+    if (installationId !== input.installationId || profileId !== input.profileId) {
+      throw new BridgeCredentialError('bridge_credential_request_invalid', 400)
+    }
+    const session = await this.repository.revokeDeviceRefresh({ tokenHash: hashSecret(refreshToken), installationId, profileId })
+    return {
+      credential_type: 'bridge_revocation' as const,
+      installation_id: session.installationId,
+      profile_id: session.profileId,
+      generation: session.generation,
+      revoked: true as const,
+    }
+  }
 }

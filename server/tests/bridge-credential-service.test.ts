@@ -48,6 +48,17 @@ class MemoryRepository implements BridgeCredentialRepository {
   }
 
   async useDeviceRefresh(input: UseDeviceRefreshInput): Promise<DeviceRefreshSession> {
+    if (this.revoked) throw new BridgeCredentialError('bridge_credential_binding_invalid', 401)
+    return this.exactDevice(input)
+  }
+
+  async revokeDeviceRefresh(input: Pick<UseDeviceRefreshInput, 'tokenHash' | 'installationId' | 'profileId'>): Promise<DeviceRefreshSession> {
+    const session = this.exactDevice(input)
+    this.revoked = true
+    return session
+  }
+
+  private exactDevice(input: Pick<UseDeviceRefreshInput, 'tokenHash' | 'installationId' | 'profileId'>) {
     const session = this.deviceSession
     const current = [...this.migrations.values()][0]
     if (!session || !current || current.tokenHash !== input.tokenHash
@@ -161,6 +172,33 @@ describe('BridgeCredentialService', () => {
 })
 
 describe('Bridge credential V4 routes', () => {
+  it('rejects extra fields, coercion, invalid bodies and oversize revocations without reflecting secrets', async () => {
+    const fixture = createFixture()
+    const app = Fastify({ logger: false })
+    await app.register(bridgeCredentialRoutes, { prefix: '/api/v4', service: fixture.service })
+    try {
+      const valid = { refresh_token: legacyToken, installation_id: 'install-01', profile_id: 'default' }
+      for (const payload of [
+        { ...valid, user_id: 7 }, { ...valid, profile_id: 3 }, { ...valid, installation_id: 'install-01\n' },
+        { ...valid, refresh_token: 'x'.repeat(5000) }, {}, null, [],
+      ]) {
+        const result = await app.inject({ method: 'POST', url: '/api/v4/bridge/credential-revocations',
+          headers: { 'content-type': 'application/json' }, payload: JSON.stringify(payload) })
+        expect(result.statusCode).toBe(400)
+        expect(result.json()).toMatchObject({ code: 'bridge_credential_request_invalid' })
+        expect(result.body).not.toContain(legacyToken)
+      }
+      const denied = await app.inject({ method: 'POST', url: '/api/v4/bridge/credential-revocations', payload: valid })
+      expect(denied.statusCode).toBe(401)
+      expect(denied.body).not.toContain(legacyToken)
+      fixture.repository.revokeDeviceRefresh = async () => { throw new Error(`database detail ${legacyToken}`) }
+      const failure = await app.inject({ method: 'POST', url: '/api/v4/bridge/credential-revocations', payload: valid })
+      expect(failure.statusCode).toBe(503)
+      expect(failure.body).not.toContain(legacyToken)
+      expect(failure.body).not.toContain('database detail')
+    } finally { await app.close() }
+  })
+
   it('serializes successful exchange and session-token responses through the route schemas', async () => {
     const fixture = createFixture()
     const { hashSecret } = await import('../src/modules/bridge/domain/bridge-credential.js')
@@ -204,6 +242,16 @@ describe('Bridge credential V4 routes', () => {
       },
       meta: { request_id: expect.any(String) },
     })
+    const revokeInput = { refresh_token: refresh, installation_id: 'install-01', profile_id: 'default' }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const revoked = await app.inject({ method: 'POST', url: '/api/v4/bridge/credential-revocations', payload: revokeInput })
+      expect(revoked.statusCode).toBe(200)
+      expect(revoked.json()).toMatchObject({ data: { credential_type: 'bridge_revocation', installation_id: 'install-01',
+        profile_id: 'default', generation: 1, revoked: true }, meta: { request_id: expect.any(String) } })
+      expect(revoked.body).not.toContain(refresh)
+    }
+    const after = await app.inject({ method: 'POST', url: '/api/v4/bridge/session-tokens', payload: revokeInput })
+    expect(after.statusCode).toBe(401)
     await app.close()
   })
 

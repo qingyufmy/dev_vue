@@ -82,7 +82,7 @@ namespace Liangjian.BridgeV4.Runtime
             });
             IDictionary<string, object> snapshot = Object(response.Payload, "snapshot");
             IDictionary<string, object> streams = Object(snapshot, "streams");
-            long observed = Long(snapshot, "source_time_msc", nowUtcMsc);
+            long observed = Long(snapshot, "source_time_msc", 0);
             if (stream == "account")
             {
                 return new QueryPayload(Object(streams, stream), observed, 0, "unavailable", null, false);

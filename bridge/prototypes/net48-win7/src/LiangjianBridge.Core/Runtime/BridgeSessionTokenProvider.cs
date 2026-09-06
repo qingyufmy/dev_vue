@@ -51,6 +51,9 @@ namespace Liangjian.BridgeV4.Runtime
     internal sealed class HttpWebRequestSessionTokenClient : IBridgeSessionTokenHttpClient
     {
         private const int MaximumResponseBytes = 256 * 1024;
+        private readonly int expectedStatus;
+
+        public HttpWebRequestSessionTokenClient(int status = 201) { expectedStatus = status; }
 
         public string Post(Uri endpoint, byte[] requestBody, int timeoutMilliseconds)
         {
@@ -75,7 +78,7 @@ namespace Liangjian.BridgeV4.Runtime
                 using (WebResponse response = request.GetResponse())
                 {
                     HttpWebResponse httpResponse = response as HttpWebResponse;
-                    if (httpResponse == null || (int)httpResponse.StatusCode != 201)
+                    if (httpResponse == null || (int)httpResponse.StatusCode != expectedStatus)
                         throw new InvalidDataException("bridge_session_token_exchange_failed");
                     return ReadResponse(response.GetResponseStream());
                 }

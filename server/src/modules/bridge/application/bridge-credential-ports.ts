@@ -32,6 +32,7 @@ export interface DeviceRefreshSession {
 export interface BridgeCredentialRepository {
   rotateFromLegacy(input: RotateLegacyCredentialInput): Promise<RotatedBridgeCredential>
   useDeviceRefresh(input: UseDeviceRefreshInput): Promise<DeviceRefreshSession>
+  revokeDeviceRefresh(input: Pick<UseDeviceRefreshInput, 'tokenHash' | 'installationId' | 'profileId'>): Promise<DeviceRefreshSession>
 }
 
 export interface BridgeSessionTicketClaims {

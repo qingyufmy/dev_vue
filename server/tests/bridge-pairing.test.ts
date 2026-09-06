@@ -84,6 +84,13 @@ describe('V4 pairing persistence (SQL double, not real MySQL)', () => {
     await expect(f.repository.redeem(hash(code), installation, 'c'.repeat(64))).rejects.toMatchObject({ code: 'bridge_pairing_already_used' })
     expect(f.connection.commit).not.toHaveBeenCalled()
   })
+  it('cannot recreate an explicitly revoked credential by retrying the original consumed pairing code and token', async () => {
+    const f = database([[{ id: 7 }], [{ ...pair, consumed_at_utc: 'now', installation_id: 'install-1', refresh_session_id: 88 }], []])
+    await expect(f.repository.redeem(hash(code), 'install-1', hash(token))).rejects.toMatchObject({ code: 'bridge_pairing_already_used' })
+    expect(String(f.execute.mock.calls[2]![0])).toContain('revoked_at IS NULL')
+    expect(f.execute.mock.calls.every(call => !/INSERT|UPDATE/.test(String(call[0]).replace(/FOR UPDATE/g, '')))).toBe(true)
+    expect(f.connection.rollback).toHaveBeenCalledOnce()
+  })
   it.each([
     [{ ...pair, unexpired: 0 }, 'bridge_pairing_expired'],
     [{ ...pair, revoked_at_utc: 'now' }, 'bridge_pairing_revoked'],

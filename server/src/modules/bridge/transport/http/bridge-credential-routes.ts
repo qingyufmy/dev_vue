@@ -120,6 +120,51 @@ export const bridgeCredentialRoutes: FastifyPluginAsync<BridgeCredentialRoutesOp
     return sendProblem(error, request, reply)
   })
 
+  fastify.post<{ Body: SessionTokenBody }>('/bridge/credential-revocations', {
+    bodyLimit: 4 * 1024,
+    preValidation: async request => {
+      // Fastify's default removeAdditional can otherwise silently strip unknown fields.
+      if (!request.body || typeof request.body !== 'object' || Array.isArray(request.body)
+        || Object.keys(request.body).some(key => !['refresh_token', 'installation_id', 'profile_id'].includes(key))
+        || ['refresh_token', 'installation_id', 'profile_id'].some(key => typeof request.body[key as keyof SessionTokenBody] !== 'string')) {
+        throw new BridgeCredentialError('bridge_credential_request_invalid', 400)
+      }
+    },
+    schema: {
+      body: {
+        type: 'object', additionalProperties: false,
+        required: ['refresh_token', 'installation_id', 'profile_id'],
+        properties: { refresh_token: refreshTokenSchema, installation_id: deviceIdSchema, profile_id: deviceIdSchema },
+      },
+      response: {
+        200: {
+          type: 'object', additionalProperties: false, required: ['data', 'meta'],
+          properties: {
+            data: {
+              type: 'object', additionalProperties: false,
+              required: ['credential_type', 'installation_id', 'profile_id', 'generation', 'revoked'],
+              properties: {
+                credential_type: { const: 'bridge_revocation' }, installation_id: deviceIdSchema, profile_id: deviceIdSchema,
+                generation: { type: 'integer', minimum: 1 }, revoked: { const: true },
+              },
+            },
+            meta: metaSchema,
+          },
+        },
+        400: problemSchema, 401: problemSchema, 429: problemSchema, 503: problemSchema,
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const data = await options.service.revokeDeviceCredential({
+        refreshToken: request.body.refresh_token, installationId: request.body.installation_id, profileId: request.body.profile_id,
+      })
+      return reply.code(200).send({ data, meta: meta(request.id) })
+    } catch (error) {
+      return sendProblem(error, request, reply)
+    }
+  })
+
   fastify.post<{ Body: LegacyExchangeBody }>('/bridge/legacy-credential-exchanges', {
     bodyLimit: 8 * 1024,
     schema: {

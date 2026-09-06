@@ -141,6 +141,7 @@ describe('V4 browser realtime runtime', () => {
     for (const route of [
       ['GET', '/oauth/authorize'], ['POST', '/api/v4/realtime/tickets'],
       ['POST', '/api/v4/bridge/legacy-credential-exchanges'], ['POST', '/api/v4/bridge/session-tokens'],
+      ['POST', '/api/v4/bridge/credential-revocations'],
       ['GET', '/api/v4/trading-context'], ['GET', '/api/v4/market/candles'],
       ['POST', '/api/v4/analysis-jobs'], ['GET', '/api/v4/risk-accounts/:accountId/policy'],
       ['GET', '/api/v4/operations/:operationId'], ['GET', '/api/v4/trading-accounts/:accountId/execution-context'],

@@ -86,6 +86,11 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("profile_worker_stop_rejects_late_connect", SessionLifecycleSmokeTests.TestWorkerStopRejectsLateConnect);
             Run("profile_worker_pause_during_connect_resumes", SessionLifecycleSmokeTests.TestWorkerPauseDuringConnectResumes);
             Run("bridge_account_facts_fresh_exact_route", BridgeAccountFactsSmokeTests.RunAll);
+            Run("bridge_profile_removal_durable_revoke", BridgeProfileRemovalSmokeTests.RunAll);
+            Run("terminal_identity_observation_age_and_polling", SessionLifecycleSmokeTests.TestIdentityObservationAgeAndPolling);
+            Run("terminal_identity_change_closes_idle_route", SessionLifecycleSmokeTests.TestIdentityChangeClosesIdleRoute);
+            Run("terminal_identity_blocked_probe_expires", SessionLifecycleSmokeTests.TestBlockedIdentityProbeExpiresWithoutHeartbeatLock);
+            Run("terminal_identity_invalidated_accepted_never_executes", SessionLifecycleSmokeTests.TestIdentityInvalidationBeforeAcceptedSendNeverExecutes);
             Run("profile_worker_stop_retains_runtime_and_lease", SessionLifecycleSmokeTests.TestWorkerStopRetainsRuntimeAndLease);
             Run("profile_manager_retries_close_and_cleans_independently", SessionLifecycleSmokeTests.TestManagerRetriesFailedCloseAndCleansOtherProfiles);
             Run("profile_worker_pauses_and_resumes_for_update", SessionLifecycleSmokeTests.TestWorkerPauseAndResumeForUpdate);

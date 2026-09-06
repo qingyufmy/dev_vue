@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest'
 import type { BridgeGatewayRoute, BridgeSessionHelloEnvelope } from '../src/modules/bridge/domain/bridge-gateway.js'
 import { assertSessionHello, BridgeGatewayError } from '../src/modules/bridge/domain/bridge-gateway.js'
 import { MysqlBridgeGatewayRouteRepository } from '../src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.js'
+import { MysqlBridgeCredentialRepository } from '../src/modules/bridge/infrastructure/mysql-bridge-credential-repository.js'
+import { RedisBridgeSessionTicketStore } from '../src/modules/bridge/infrastructure/redis-bridge-session-ticket-store.js'
+import type { Redis } from 'ioredis'
 
 const NOW = '2026-09-06T00:00:00.000Z'
 const LATER = '2026-09-06T00:01:00.000Z'
@@ -19,6 +22,8 @@ interface Account {
 }
 
 interface Credential {
+  id?: number
+  tokenHash?: string
   userId: number
   installationId: string
   profileId: string
@@ -112,6 +117,7 @@ class FakePool {
       deletedAt: null, ownershipRevision: '3', currency: 'EUR',
     }],
     credentials: [{
+      id: 1, tokenHash: 'a'.repeat(64),
       userId: 7, installationId: 'install-1', profileId: 'profile-1', generation: 2,
       credentialVersion: 4, revokedAt: null, role: 'user', plan: 'pro', planExpiresAt: '2099-01-01T00:00:00.000Z',
       deletionStatus: 'active', deletedAt: null,
@@ -168,6 +174,23 @@ class FakePool {
     if (this.failOn && sql.includes(this.failOn)) {
       this.failOn = null
       throw sqlError('simulated storage failure', this.failureCode)
+    }
+
+    if (sql.startsWith('SELECT id AS session_id,user_id,')) {
+      const [tokenHash, installationId, profileId] = params
+      const rows = this.current.credentials.filter(row => row.tokenHash === tokenHash && row.installationId === installationId
+        && row.profileId === profileId && row.credentialVersion === 4)
+        .map(row => ({ session_id: row.id, user_id: row.userId, installation_id: row.installationId,
+          profile_id: row.profileId, generation: row.generation, revoked_at: row.revokedAt }))
+      return [rows as T, []]
+    }
+    if (sql.startsWith('UPDATE bridge_refresh_sessions')) {
+      const [id, tokenHash, installationId, profileId, generation] = params
+      const row = this.current.credentials.find(item => item.id === id && item.tokenHash === tokenHash
+        && item.installationId === installationId && item.profileId === profileId && item.generation === generation
+        && item.credentialVersion === 4 && item.revokedAt === null)
+      if (row) row.revokedAt = NOW
+      return [{ affectedRows: row ? 1 : 0 } as T, []]
     }
 
     if (sql.includes('SELECT s.user_id,s.generation')) {
@@ -453,6 +476,38 @@ function addAccount(pool: FakePool, id: string, login: string, revision: string,
 }
 
 describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
+  it('rejects pre-revocation tickets and all old route proofs after exact credential revocation, preserving account history', async () => {
+    const pool = new FakePool()
+    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const active = await open(repository)
+    await repository.activate(active, NOW)
+    const pending = await open(repository, { epoch: 2, connectionId: 'connection-2' })
+    const ticketsByKey = new Map<string, string>()
+    const tickets = new RedisBridgeSessionTicketStore({
+      set: async (key: string, value: string) => { ticketsByKey.set(key, value); return 'OK' },
+      eval: async (_script: string, _count: number, key: string) => {
+        const value = ticketsByKey.get(key); ticketsByKey.delete(key); return value ?? null
+      },
+    } as unknown as Redis)
+    const oldTicket = await tickets.issue(claims())
+    const before = structuredClone(pool.state)
+    await new MysqlBridgeCredentialRepository(pool.asPool()).revokeDeviceRefresh({
+      tokenHash: 'a'.repeat(64), installationId: 'install-1', profileId: 'profile-1',
+    })
+    const consumedClaims = await tickets.consume(oldTicket.token)
+    expect(consumedClaims).toEqual(claims())
+    await expect(repository.authorizeAndOpen({ ...registrationInput({ epoch: 3 }), claims: consumedClaims }))
+      .rejects.toMatchObject({ code: 'bridge_route_binding_invalid', status: 403 })
+    expect(await repository.isAuthorized(active)).toBe(false)
+    expect(await repository.touch(active, LATER)).toBe(false)
+    await expect(repository.activate(pending, LATER)).rejects.toMatchObject({ code: 'bridge_session_open_missing' })
+    expect(pool.state.accounts).toEqual(before.accounts)
+    expect(pool.state.ownerships).toEqual(before.ownerships)
+    expect(pool.state.profiles).toEqual(before.profiles)
+    expect(pool.state.bindings).toEqual(before.bindings)
+    expect(pool.state.sessions).toEqual(before.sessions)
+  })
+
   function firstInput(options: InputOptions = {}) {
     const input = registrationInput(options)
     const terminal = input.hello.payload.terminals[0]!

@@ -217,6 +217,7 @@ namespace Liangjian.BridgeV4.Runtime
         public void Start(BridgeProfileSettings profile)
         {
             BridgeProfileStore.ValidateProfile(profile, false);
+            if (profile.RemovalPending) throw new InvalidOperationException("bridge_profile_removal_pending");
             StartAttempt attempt;
             lock (gate)
             {
@@ -524,10 +525,11 @@ namespace Liangjian.BridgeV4.Runtime
                 }
                 BridgeProfileSession session = new BridgeProfileSession(runtime, terminal, commands);
                 BridgeSessionConfiguration configuration = SessionConfiguration(profile);
-                configuration.AccountFactsProvider = delegate(long nowUtcMsc)
+                BridgeTerminalIdentityMonitor identityMonitor = new BridgeTerminalIdentityMonitor(delegate(long nowUtcMsc)
                 {
                     return BridgeAccountFacts.Read(runtime, terminal, nowUtcMsc);
-                };
+                });
+                configuration.AccountFactsProvider = identityMonitor.Read;
                 BridgeSessionController controller = new BridgeSessionController(runtime, session, configuration);
                 Func<string> acquireSessionToken = delegate
                 {
@@ -546,7 +548,7 @@ namespace Liangjian.BridgeV4.Runtime
                 };
                 BridgeProfileWorker worker = new BridgeProfileWorker(runtime, controller,
                     new Rfc6455MessageChannelFactory(new Uri(profile.ServerUri),
-                        acquireSessionToken, 15000), releaseStatus);
+                        acquireSessionToken, 15000), releaseStatus, identityMonitor);
                 return new ManagedProfileConnection(runtime, worker, profile.TerminalInstanceId, live, archive, lease);
             }
             catch

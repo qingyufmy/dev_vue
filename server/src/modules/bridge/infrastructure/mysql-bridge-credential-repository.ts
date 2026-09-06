@@ -1,4 +1,4 @@
-import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { BridgeCredentialError } from '../domain/bridge-credential.js'
 import type {
   BridgeCredentialRepository,
@@ -48,6 +48,36 @@ async function inTransaction<T>(pool: Pool, work: (connection: PoolConnection) =
 
 export class MysqlBridgeCredentialRepository implements BridgeCredentialRepository {
   constructor(private readonly pool: Pool) {}
+
+  async revokeDeviceRefresh(input: Pick<UseDeviceRefreshInput, 'tokenHash' | 'installationId' | 'profileId'>): Promise<DeviceRefreshSession> {
+    try {
+      return await inTransaction(this.pool, async connection => {
+        // This operation locks only the exact credential. It never takes account,
+        // owner or user locks and cannot invert gateway authorization's lock order.
+        const [rows] = await connection.execute<DeviceSessionRow[]>(`SELECT id AS session_id,user_id,installation_id,profile_id,generation,revoked_at
+          FROM bridge_refresh_sessions
+          WHERE token_hash=? AND credential_version=4 AND installation_id=? AND profile_id=?
+          FOR UPDATE`, [input.tokenHash, input.installationId, input.profileId])
+        const session = rows[0]
+        if (rows.length !== 1 || !session) throw new BridgeCredentialError('bridge_credential_binding_invalid', 401)
+        if (!Number.isSafeInteger(session.generation) || session.generation < 1) {
+          throw new BridgeCredentialError('bridge_credential_storage_failed', 503, true)
+        }
+        if (session.revoked_at === null) {
+          const [updated] = await connection.execute<ResultSetHeader>(`UPDATE bridge_refresh_sessions
+            SET revoked_at=UTC_TIMESTAMP(3),updated_at=UTC_TIMESTAMP(3)
+            WHERE id=? AND token_hash=? AND credential_version=4 AND installation_id=? AND profile_id=?
+              AND generation=? AND revoked_at IS NULL`,
+          [session.session_id, input.tokenHash, input.installationId, input.profileId, session.generation])
+          if (updated.affectedRows !== 1) throw new BridgeCredentialError('bridge_credential_storage_failed', 503, true)
+        }
+        return { userId: session.user_id, installationId: session.installation_id, profileId: session.profile_id, generation: session.generation }
+      })
+    } catch (error) {
+      if (error instanceof BridgeCredentialError) throw error
+      throw new BridgeCredentialError('bridge_credential_storage_failed', 503, true)
+    }
+  }
 
   async rotateFromLegacy(input: RotateLegacyCredentialInput): Promise<RotatedBridgeCredential> {
     return inTransaction(this.pool, async connection => {

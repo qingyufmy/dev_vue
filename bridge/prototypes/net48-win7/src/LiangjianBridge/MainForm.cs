@@ -23,6 +23,7 @@ namespace Liangjian.BridgeV4.App
         private readonly BridgeProfileStore profileStore;
         private readonly TerminalSessionHost terminalHost;
         private readonly BridgeProfileConnectionManager connections;
+        private readonly BridgeProfileRemovalService removals;
         private readonly BridgeUpdateService updates;
         private readonly string installRoot;
         private LegacyLaunchRequest launchRequest;
@@ -40,6 +41,7 @@ namespace Liangjian.BridgeV4.App
         private bool legacyReadyWritten;
         private volatile bool updateActivationStarted;
         private bool shutdownRequested;
+        private bool removalInProgress;
 
         public MainForm()
             : this(new LegacyLaunchRequest())
@@ -78,6 +80,8 @@ namespace Liangjian.BridgeV4.App
             connections = new BridgeProfileConnectionManager(terminalHost, profileStore,
                 catalog.InstallationId, dataRoot,
                 new HttpBridgeSessionTokenProvider(catalog.InstallationId));
+            removals = new BridgeProfileRemovalService(profileStore, new HttpBridgeCredentialRevoker(catalog.InstallationId),
+                delegate(string profileId) { connections.Stop(profileId); });
             string detectedInstallRoot;
             if (BridgeInstallLayout.TryResolve(AppDomain.CurrentDomain.BaseDirectory, out detectedInstallRoot))
             {
@@ -109,13 +113,19 @@ namespace Liangjian.BridgeV4.App
                 return;
             }
             foreach (BridgeProfileSettings profile in catalog.Profiles)
-                if (profile.AutoConnect) StartProfile(profile);
+                if (profile.AutoConnect && !profile.RemovalPending) StartProfile(profile);
         }
 
         protected override void OnFormClosing(FormClosingEventArgs eventArgs)
         {
             base.OnFormClosing(eventArgs);
             if (eventArgs.Cancel) return;
+            if (removalInProgress)
+            {
+                eventArgs.Cancel = true;
+                detail.Text = "正在确认设备凭据撤销，请稍候再关闭窗口。";
+                return;
+            }
             shutdownRequested = true;
             refreshTimer.Stop();
             addButton.Enabled = editButton.Enabled = connectButton.Enabled = false;
@@ -261,6 +271,7 @@ namespace Liangjian.BridgeV4.App
 
         private void AddProfile()
         {
+            if (removalInProgress || shutdownRequested) return;
             if (!configurationAvailable) return;
             BridgePairingDraftStore pairing = new BridgePairingDraftStore(Path.Combine(dataRoot, "pairing.pending"),
                 new CurrentUserSecretProtector(), profileStore, new BridgePairingClient());
@@ -316,7 +327,7 @@ namespace Liangjian.BridgeV4.App
         private void EditSelected()
         {
             BridgeProfileSettings current = SelectedProfile();
-            if (current == null || !configurationAvailable) return;
+            if (current == null || !configurationAvailable || current.RemovalPending || removalInProgress || shutdownRequested) return;
             BridgeProfileSettings edited = current.Clone();
             using (ProfileEditorForm editor = new ProfileEditorForm(edited, false,
                 terminalDiscovery: WindowsTerminalDiscovery.Create(terminalHost)))
@@ -343,23 +354,55 @@ namespace Liangjian.BridgeV4.App
         private void DeleteSelected()
         {
             BridgeProfileSettings profile = SelectedProfile();
-            if (profile == null || !configurationAvailable) return;
-            if (MessageBox.Show(this, "确定移除档案“" + profile.DisplayName + "”吗？本地安全账本和缓存会保留。",
+            if (profile == null || !configurationAvailable || removalInProgress || shutdownRequested || updateActivationStarted) return;
+            if (!profile.RemovalPending && MessageBox.Show(this, "确定移除档案“" + profile.DisplayName
+                + "”并撤销对应设备凭据吗？账户历史、本地安全账本和缓存会保留。",
                 "移除终端档案", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
             try
             {
-                BridgeProfileCatalog candidate = CopyCatalog();
-                candidate.Profiles.RemoveAt(catalog.Profiles.IndexOf(profile));
-                StopProfile(profile.ProfileId);
-                profileStore.Save(candidate);
-                catalog = candidate;
+                catalog = removals.Prepare(catalog, profile.ProfileId);
+                lock (stateGate)
+                {
+                    if (starting.Contains(profile.ProfileId)) cancelledStarts.Add(profile.ProfileId);
+                    operationErrors.Remove(profile.ProfileId);
+                }
+                removalInProgress = true;
+                BridgeProfileCatalog pending = catalog;
                 RefreshProfiles();
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    Exception failure = null;
+                    try { removals.Complete(pending, profile.ProfileId); }
+                    catch (Exception error) { failure = error; }
+                    try
+                    {
+                        BeginInvoke(new Action(delegate
+                        {
+                            removalInProgress = false;
+                            try { catalog = profileStore.LoadOrCreate(); }
+                            catch (Exception) { configurationAvailable = false; }
+                            lock (stateGate)
+                            {
+                                if (failure != null) operationErrors[profile.ProfileId] = "未完成移除，请检查网络或本地配置权限后点击“重试移除”。";
+                            }
+                            RefreshProfiles();
+                        }));
+                    }
+                    catch (InvalidOperationException) { }
+                });
             }
-            catch (Exception error) { ShowOperationError(error); }
+            catch (Exception error)
+            {
+                removalInProgress = false;
+                try { catalog = profileStore.LoadOrCreate(); } catch (Exception) { configurationAvailable = false; }
+                RefreshProfiles();
+                ShowOperationError(error);
+            }
         }
 
         private void StartProfile(BridgeProfileSettings profile)
         {
+            if (profile == null || profile.RemovalPending || shutdownRequested) return;
             lock (stateGate)
             {
                 if (starting.Contains(profile.ProfileId)) return;
@@ -428,7 +471,8 @@ namespace Liangjian.BridgeV4.App
                     item.SubItems.Add(profile.Login);
                     item.SubItems.Add(profile.BrokerServer);
                     item.SubItems.Add(TerminalText(state.TerminalState));
-                    item.SubItems.Add(busy ? "正在启动" : ConnectionText(state.State));
+                    item.SubItems.Add(profile.RemovalPending ? (removalInProgress ? "正在移除" : "待移除，可重试")
+                        : busy ? "正在启动" : ConnectionText(state.State));
                     item.SubItems.Add(profile.AutoConnect ? "是" : "否");
                     if (!string.IsNullOrEmpty(localError) || !string.IsNullOrEmpty(state.LastErrorCode))
                         item.ForeColor = Color.DarkRed;
@@ -448,7 +492,7 @@ namespace Liangjian.BridgeV4.App
 
         private void CheckForUpdates()
         {
-            if (shutdownRequested) return;
+            if (shutdownRequested || removalInProgress) return;
             if (updates == null || updateActivationStarted || IsDisposed) return;
             PendingBridgeRelease newest = null;
             foreach (PendingBridgeRelease release in connections.ReadObservedReleases())
@@ -514,11 +558,12 @@ namespace Liangjian.BridgeV4.App
         {
             BridgeProfileSettings profile = SelectedProfile();
             bool selected = profile != null;
-            editButton.Enabled = selected && configurationAvailable;
-            connectButton.Enabled = selected && configurationAvailable;
+            editButton.Enabled = selected && configurationAvailable && !profile.RemovalPending && !removalInProgress;
+            connectButton.Enabled = selected && configurationAvailable && !profile.RemovalPending;
             disconnectButton.Enabled = selected;
-            deleteButton.Enabled = selected && configurationAvailable;
-            addButton.Enabled = configurationAvailable;
+            deleteButton.Enabled = selected && configurationAvailable && !removalInProgress && !updateActivationStarted;
+            deleteButton.Text = selected && profile.RemovalPending ? "重试移除" : "删除";
+            addButton.Enabled = configurationAvailable && !removalInProgress;
             if (!selected)
             {
                 detail.Text = configurationAvailable
@@ -530,6 +575,13 @@ namespace Liangjian.BridgeV4.App
             string error;
             lock (stateGate) operationErrors.TryGetValue(profile.ProfileId, out error);
             if (string.IsNullOrEmpty(error)) error = state.LastErrorCode;
+            if (profile.RemovalPending)
+            {
+                detail.Text = removalInProgress ? "正在停止连接并撤销设备凭据，账户历史和本地账本会保留。"
+                    : "此档案等待移除，不会自动连接。请点击“重试移除”完成服务器撤销和本地移除。"
+                        + (string.IsNullOrEmpty(error) ? string.Empty : "  " + error);
+                return;
+            }
             detail.Text = "实例：" + profile.TerminalInstanceId + "  ·  实时地址：" + profile.ServerUri
                 + (string.IsNullOrEmpty(error) ? string.Empty : "  ·  最近错误：" + error);
         }

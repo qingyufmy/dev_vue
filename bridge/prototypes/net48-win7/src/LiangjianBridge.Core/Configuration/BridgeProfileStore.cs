@@ -100,6 +100,7 @@ namespace Liangjian.BridgeV4.Configuration
         public string Login { get; set; }
         public string ServerUri { get; set; }
         public bool AutoConnect { get; set; }
+        public bool RemovalPending { get; set; }
         public string PythonExecutablePath { get; set; }
         public string WorkerScriptPath { get; set; }
         public string TerminalPath { get; set; }
@@ -179,7 +180,15 @@ namespace Liangjian.BridgeV4.Configuration
             string backup = path + ".previous";
             try
             {
-                File.WriteAllText(temporary, serializer.Serialize(catalog), new UTF8Encoding(false));
+                // Keep unchanged profiles readable by previous V4 binaries. A
+                // pending-removal profile intentionally fails their strict reader.
+                IDictionary<string, object> encoded = serializer.DeserializeObject(serializer.Serialize(catalog)) as IDictionary<string, object>;
+                foreach (object value in (object[])encoded["Profiles"])
+                {
+                    IDictionary<string, object> profile = (IDictionary<string, object>)value;
+                    if (!(bool)profile["RemovalPending"]) profile.Remove("RemovalPending");
+                }
+                File.WriteAllText(temporary, serializer.Serialize(encoded), new UTF8Encoding(false));
                 using (FileStream stream = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read))
                 {
                     stream.Flush(true);
@@ -234,6 +243,8 @@ namespace Liangjian.BridgeV4.Configuration
 
         public static void ValidateProfile(BridgeProfileSettings profile, bool allowMissingSecret)
         {
+            if (profile != null && profile.RemovalPending && profile.AutoConnect)
+                throw new InvalidDataException("bridge_profile_removal_pending");
             if (profile == null
                 || !ValidIdentifier(profile.ProfileId, 128)
                 || !ValidText(profile.DisplayName, 80)
@@ -279,7 +290,15 @@ namespace Liangjian.BridgeV4.Configuration
                 "ProtectedRefreshToken"
             };
             foreach (object value in profiles)
-                RequireExactFields(value as IDictionary<string, object>, fields);
+            {
+                IDictionary<string, object> profile = value as IDictionary<string, object>;
+                if (profile != null && profile.ContainsKey("RemovalPending"))
+                {
+                    if (!(profile["RemovalPending"] is bool)) throw new InvalidDataException("bridge_profile_catalog_invalid");
+                    profile.Remove("RemovalPending");
+                }
+                RequireExactFields(profile, fields);
+            }
         }
 
         private static void RequireExactFields(IDictionary<string, object> values, string[] fields)

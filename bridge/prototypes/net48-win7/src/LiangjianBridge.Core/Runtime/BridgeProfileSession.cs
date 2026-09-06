@@ -102,6 +102,7 @@ namespace Liangjian.BridgeV4.Runtime
 
         public void PrepareReconnect(long nowUtcMsc)
         {
+            pendingCommand = null;
             IList<CommandLedgerRecord> rows = runtime.CommandLedger.ReadRecoverable(
                 runtime.Configuration.ProfileId, 500);
             for (int index = 0; index < rows.Count; index++)

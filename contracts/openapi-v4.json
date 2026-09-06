@@ -146,6 +146,22 @@
         }
       }
     },
+    "/bridge/credential-revocations": {
+      "post": {
+        "operationId": "revokeBridgeDeviceCredential",
+        "summary": "Idempotently revoke the exact V4 device refresh credential",
+        "description": "The token and device binding identify the exact generation. Confirmation remains available after membership expiry or earlier revocation. Later rotated tokens, accounts, ownership and execution history are unaffected. Routes reject subsequent authorization checks; physical socket closure is asynchronous.",
+        "tags": ["Bridge"], "security": [],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BridgeSessionTokenRequest" } } } },
+        "responses": {
+          "200": { "description": "The exact device credential is revoked", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BridgeCredentialRevocationResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "429": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/bridge/session-tokens": {
       "post": {
         "operationId": "createBridgeSessionToken",
@@ -1807,6 +1823,23 @@
           "refresh_token": { "$ref": "#/components/schemas/BridgeRefreshToken" },
           "installation_id": { "$ref": "#/components/schemas/BridgeDeviceId" },
           "profile_id": { "$ref": "#/components/schemas/BridgeDeviceId" }
+        }
+      },
+      "BridgeCredentialRevocationResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": {
+          "data": {
+            "type": "object", "additionalProperties": false,
+            "required": ["credential_type", "installation_id", "profile_id", "generation", "revoked"],
+            "properties": {
+              "credential_type": { "const": "bridge_revocation" },
+              "installation_id": { "$ref": "#/components/schemas/BridgeDeviceId" },
+              "profile_id": { "$ref": "#/components/schemas/BridgeDeviceId" },
+              "generation": { "type": "integer", "minimum": 1 },
+              "revoked": { "const": true }
+            }
+          },
+          "meta": { "$ref": "#/components/schemas/Meta" }
         }
       },
       "BridgeSessionToken": {

@@ -562,6 +562,14 @@ MT4 不支持的 stop-limit、字段或历史证据必须明确返回 `capabilit
 
 ### 8.8 设备认证、流控和更新
 
+2026-09-06 精确设备撤销：`POST /api/v4/bridge/credential-revocations` 接收 `refresh_token`、`installation_id`、`profile_id`，以 token 哈希定位单个 V4 凭据当前代次。成功 HTTP 200 返回 `data: { credential_type: "bridge_revocation", installation_id, profile_id, generation, revoked: true }` 及标准 meta；完整合同见 OpenAPI。匹配已撤销凭据可重复确认，保持原撤销时间；会员到期不阻止撤销。旧 token 不能撤销后来轮换的新 token，错误身份不返回成功，不以用户级 revoke-all 代替。请求中的设备凭据承担认证，不使用浏览器会话或 Cookie。
+
+撤销事务不删账户、owner、绑定、会话历史或交易证据。已签发票据在网关当前凭据检查处拒绝，现有 route 的后续授权检查失败；HTTP 成功表示撤销持久化，不表示远端 socket/Redis lease 已同步关闭，清理仍由 socket close、心跳及 TTL 处理。配对重取必须继续检查凭据未撤销，不能复活旧授权。
+
+客户端先保存待移除标志并关闭自动连接，再停止当前连接、请求撤销；严格确认回执身份后才从目录移除。网络、停止或保存失败时保留待移除档案及 DPAPI 凭据，重启可重试。普通档案保存时省略 `RemovalPending=false`，维持旧 V4 目录形状；待移除档案携带新字段，旧版严格读取器会拒绝该目录，不能回退旧程序绕过撤销流程。没有引入缓存/账本删除。
+
+活跃连接每 10 秒复用账户快照检查当前终端身份；身份不匹配、离线或事实过期则停止旧路线，不自动改档案或登录其他账号。25 秒是源事实新鲜度的过期判断阈值，迟到快照按其真实年龄扣减有效期；I/O 与线程调度可能延迟实际断连，不能将阈值解释为硬实时关闭上限。远端仍有最后有效心跳后 45 秒的租约 TTL。检测线程未退出前保留运行时，身份失效后禁止迟到响应触发尚未执行的旧命令。
+
 - 配对码只用于建立设备身份；后续使用可轮换的设备刷新会话换取短时连接凭据。
 - 设备凭据绑定安装 ID、档案 ID和用户，不写入 URL或日志。
 - V3 到 V4 过渡只允许调用 `POST /api/v4/bridge/legacy-credential-exchanges`：请求携带原用户上下文解密出的 V3 refresh token、安装 ID、档案 ID 和只读迁移快照指纹；服务端只保存 token 哈希，并把一个 V3 session 唯一映射到一个 V4 设备 session。同一映射重试只轮换同一行并递增 generation，换安装或档案重用同一 V3 session 返回 409。
