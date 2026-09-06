@@ -1,0 +1,56 @@
+{
+  "kind": "referral-rule-list-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "rows": 4,
+  "result": [
+    {
+      "id": "1",
+      "plan": "plus",
+      "period": "monthly",
+      "rateBps": 1000,
+      "enabled": true,
+      "revision": "1"
+    },
+    {
+      "id": "2",
+      "plan": "plus",
+      "period": "yearly",
+      "rateBps": 1000,
+      "enabled": true,
+      "revision": "1"
+    },
+    {
+      "id": "3",
+      "plan": "pro",
+      "period": "monthly",
+      "rateBps": 1000,
+      "enabled": true,
+      "revision": "1"
+    },
+    {
+      "id": "4",
+      "plan": "pro",
+      "period": "yearly",
+      "rateBps": 1000,
+      "enabled": true,
+      "revision": "1"
+    }
+  ],
+  "sourceSha256": "11e6090e7c7cd6feceb6a21953675dfe800b0dfc70cdef418994a9188a4dd157",
+  "sourceFiles": [
+    {
+      "path": "server/src/modules/commerce/infrastructure/mysql-referral-rule-list.ts",
+      "sha256": "7e12ee4bd3d6891e359c2eeeda3417c2bd04da35446953cd0db5155a9f7e7b22"
+    },
+    {
+      "path": "server/dist-v4/modules/commerce/infrastructure/mysql-referral-rule-list.js",
+      "sha256": "b3ecb031c2acf5174f073940b4a5f7f5be933effb6ec33a9ebd2a5c048f87761"
+    }
+  ],
+  "legacyFieldsMatched": true,
+  "databaseWritten": false,
+  "httpSessionVerified": false
+}

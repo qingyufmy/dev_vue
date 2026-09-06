@@ -1,7 +1,11 @@
 export interface RuleChange { id: number; expectedRevision: string; rateBps: number; enabled: boolean }
 export interface RuleChangeCommand { requestId: string; actorUserId: number; changes: RuleChange[] }
 export interface RuleChangeResult { rules: { id: number; revision: string }[]; replayed: boolean }
-export interface ReferralRuleManagementRepository { execute(command: RuleChangeCommand): Promise<RuleChangeResult> }
+export interface RuleConfiguration { id: string; plan: 'plus' | 'pro'; period: 'monthly' | 'yearly'; rateBps: number; enabled: boolean; revision: string }
+export interface ReferralRuleManagementRepository {
+  execute(command: RuleChangeCommand): Promise<RuleChangeResult>
+  list(actorUserId: number): Promise<RuleConfiguration[]>
+}
 
 export function normalizeRuleChangeCommand(command: RuleChangeCommand): RuleChangeCommand {
   if (!command || Object.keys(command).sort().join(',') !== 'actorUserId,changes,requestId'
@@ -23,6 +27,11 @@ export function normalizeRuleChangeCommand(command: RuleChangeCommand): RuleChan
 
 export class ReferralRuleManagementService {
   constructor(private readonly repository: ReferralRuleManagementRepository) {}
+  async list(actor: { userId: number; role: string }) {
+    if (actor.role !== 'admin') throw Error('referral_admin_required')
+    if (!Number.isSafeInteger(actor.userId) || actor.userId < 1 || actor.userId > 2147483647) throw Error('referral_rule_update_invalid')
+    return this.repository.list(actor.userId)
+  }
   async update(actor: { userId: number; role: string }, requestId: string, changes: RuleChange[]) {
     if (actor.role !== 'admin') throw Error('referral_admin_required')
     return this.repository.execute(normalizeRuleChangeCommand({ actorUserId: actor.userId, requestId, changes }))

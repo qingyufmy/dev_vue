@@ -1,11 +1,13 @@
 import type { Pool, RowDataPacket } from 'mysql2/promise'
 import { normalizeRuleChangeCommand, type RuleChangeCommand, type RuleChangeResult, type ReferralRuleManagementRepository } from '../application/referral-rule-management.js'
 import { updateReferralRulesInTransaction } from './mysql-referral-rule-writer.js'
+import { listAdminReferralRules } from './mysql-referral-rule-list.js'
 
 interface AuditReceipt extends RowDataPacket { rule_id: string; rule_revision: string; actor_user_id: string; rate_bps: string; enabled: string }
 
 export class MysqlReferralRuleManagement implements ReferralRuleManagementRepository {
   constructor(private readonly pool: Pick<Pool, 'getConnection'>) {}
+  list(actorUserId: number) { return listAdminReferralRules(this.pool, actorUserId) }
   async execute(input: RuleChangeCommand): Promise<RuleChangeResult> {
     const command = normalizeRuleChangeCommand(input)
     const connection = await this.pool.getConnection()

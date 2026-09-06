@@ -5,6 +5,13 @@ const contract = JSON.parse(await readFile(new URL('../contracts/openapi-v4.json
 const operation = contract.paths['/admin/referrals/rules'].put
 const ajv = new Ajv({ strict: false, formats: { 'date-time': true } })
 describe('referral rule HTTP contract examples', () => {
+  it('publishes current-rule reads with all editable values and exact revisions', () => {
+    const get = contract.paths['/admin/referrals/rules'].get
+    const validate = ajv.compile(get.responses['200'].content['application/json'].schema)
+    expect(validate({ data: { rules: [{ rule_id: '2', plan: 'plus', period: 'monthly', rate_bps: 0, enabled: false, revision: '9007199254740993' }] },
+      meta: { request_id: 'req-1', generated_at: '2026-09-07T00:00:00.000Z' } })).toBe(true)
+    expect(get.responses['200'].headers['Cache-Control'].schema.const).toBe('no-store')
+  })
   it('accepts exact integer basis points and string revisions, rejecting coercion and extra fields', () => {
     const validate = ajv.compile(operation.requestBody.content['application/json'].schema)
     const change = { rule_id: '2', expected_revision: '9007199254740993', rate_bps: 0, enabled: false }

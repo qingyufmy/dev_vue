@@ -4,7 +4,10 @@ import type { ReferralRuleManagementService, RuleChange } from '../../applicatio
 
 export interface ReferralRuleRoutesOptions {
   service: ReferralRuleManagementService
-  auth: { assertWrite(request: { headers: Record<string, unknown> }): Promise<{ userId: number; role: string }> }
+  auth: {
+    authenticate(request: { headers: Record<string, unknown> }): Promise<{ userId: number; role: string }>
+    assertWrite(request: { headers: Record<string, unknown> }): Promise<{ userId: number; role: string }>
+  }
 }
 const statuses: Record<string, number> = { referral_admin_required: 403, referral_rule_update_invalid: 400,
   referral_rule_missing: 404, referral_rule_revision_conflict: 409, referral_rule_idempotency_conflict: 409,
@@ -23,6 +26,22 @@ function changesFromBody(body: unknown): RuleChange[] {
 }
 
 export const referralRuleRoutes: FastifyPluginAsync<ReferralRuleRoutesOptions> = async (app, options) => {
+  app.get('/rules', async (request, reply) => {
+    try {
+      const actor = await options.auth.authenticate(request)
+      if (Object.keys(request.query as object).length) throw Error('referral_rule_update_invalid')
+      const rules = await options.service.list(actor)
+      reply.header('Cache-Control', 'no-store')
+      return { data: { rules: rules.map(rule => ({ rule_id: rule.id, plan: rule.plan, period: rule.period,
+        rate_bps: rule.rateBps, enabled: rule.enabled, revision: rule.revision })) },
+        meta: { request_id: request.id, generated_at: new Date().toISOString() } }
+    } catch (error) {
+      const code = error instanceof AuthError ? error.code : error instanceof Error && Object.hasOwn(statuses, error.message) ? error.message : 'referral_rule_unavailable'
+      const status = error instanceof AuthError ? error.status : statuses[code] ?? 503
+      return reply.code(status).send({ type: `urn:aurum:problem:${code}`, title: '返佣规则读取失败', status, code,
+        detail: '暂时无法读取规则，请检查权限后重试。', instance: request.url, correlation_id: request.id, retryable: status === 503 })
+    }
+  })
   app.put<{ Body: unknown }>('/rules', async (request, reply) => {
     try {
       const actor = await options.auth.assertWrite(request)

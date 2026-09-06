@@ -7,15 +7,29 @@ import { exactAdminHostHook } from '../src/transport/api-v4-route-registrar.js'
 const body = { changes: [{ rule_id: '2', expected_revision: '9007199254740993', rate_bps: 0, enabled: false }] }
 async function fixture() {
   const execute = vi.fn().mockResolvedValue({ rules: [{ id: 2, revision: '9007199254740994' }], replayed: false })
-  const auth = { assertWrite: vi.fn().mockResolvedValue({ userId: 1, role: 'admin' }) }
+  const list = vi.fn().mockResolvedValue([{ id: '2', plan: 'plus', period: 'monthly', rateBps: 0, enabled: false, revision: '9007199254740993' }])
+  const auth = { authenticate: vi.fn().mockResolvedValue({ userId: 1, role: 'admin' }), assertWrite: vi.fn().mockResolvedValue({ userId: 1, role: 'admin' }) }
   const app = Fastify()
   app.addHook('onRequest', exactAdminHostHook('https://admin.example.test'))
-  await app.register(referralRuleRoutes, { prefix: '/api/v4/admin/referrals', service: new ReferralRuleManagementService({ execute }), auth })
+  await app.register(referralRuleRoutes, { prefix: '/api/v4/admin/referrals', service: new ReferralRuleManagementService({ execute, list }), auth })
   const send = (payload: unknown = body, headers = {}) => app.inject({ method: 'PUT', url: '/api/v4/admin/referrals/rules',
     headers: { host: 'admin.example.test', 'idempotency-key': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', ...headers }, payload: payload as object })
-  return { app, send, execute, auth }
+  return { app, send, execute, list, auth }
 }
 describe('admin referral rules HTTP boundary', () => {
+  it('reads canonical rules without caching or invoking write authentication', async () => {
+    const f = await fixture()
+    try {
+      const reply = await f.app.inject({ method: 'GET', url: '/api/v4/admin/referrals/rules', headers: { host: 'admin.example.test' } })
+      expect(reply.statusCode).toBe(200)
+      expect(reply.headers['cache-control']).toBe('no-store')
+      expect(reply.json().data.rules[0]).toEqual({ rule_id: '2', plan: 'plus', period: 'monthly', rate_bps: 0, enabled: false, revision: '9007199254740993' })
+      expect(f.list).toHaveBeenCalledWith(1)
+      expect(f.auth.assertWrite).not.toHaveBeenCalled()
+      expect(f.execute).not.toHaveBeenCalled()
+    } finally { await f.app.close() }
+  })
+
   it('preserves string revisions and maps the verified actor rather than a body user ID', async () => {
     const f = await fixture()
     try {

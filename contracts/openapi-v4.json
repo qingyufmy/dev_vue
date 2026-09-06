@@ -32,6 +32,124 @@
   ],
   "paths": {
     "/admin/referrals/rules": {
+      "get": {
+        "operationId": "listReferralRules",
+        "summary": "Read current administrator referral configuration and revisions",
+        "tags": [
+          "Referral Management"
+        ],
+        "description": "Admin host and admin-web session only. No query parameters. No synthetic default rules; disabled records are returned. Responses use Cache-Control: no-store.",
+        "responses": {
+          "200": {
+            "description": "Current configuration",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "rules"
+                      ],
+                      "properties": {
+                        "rules": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "rule_id",
+                              "plan",
+                              "period",
+                              "rate_bps",
+                              "enabled",
+                              "revision"
+                            ],
+                            "properties": {
+                              "rule_id": {
+                                "type": "string"
+                              },
+                              "revision": {
+                                "type": "string"
+                              },
+                              "plan": {
+                                "type": "string",
+                                "enum": [
+                                  "plus",
+                                  "pro"
+                                ]
+                              },
+                              "period": {
+                                "type": "string",
+                                "enum": [
+                                  "monthly",
+                                  "yearly"
+                                ]
+                              },
+                              "rate_bps": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 10000
+                              },
+                              "enabled": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "maxItems": 4
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "required": [
+                        "request_id",
+                        "generated_at"
+                      ],
+                      "properties": {
+                        "request_id": {
+                          "type": "string"
+                        },
+                        "generated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "421": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
       "put": {
         "operationId": "updateReferralRules",
         "summary": "Update referral rules atomically with revision checks and audit receipts",
