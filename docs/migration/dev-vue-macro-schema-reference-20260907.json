@@ -1,0 +1,210 @@
+{
+  "kind": "macro-schema-reference/v1",
+  "observedAt": "2026-09-06T18:32:20.053Z",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "tables": [
+    {
+      "name": "macro_data_sources",
+      "ddl": "CREATE TABLE `macro_data_sources` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `source_key` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `provider` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `display_name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `status` enum('candidate','trial','legal_review','approved','suspended','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'candidate',\n  `credential_ref` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `terms_uri` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `terms_version` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `attribution_text` varchar(2000) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `display_allowed` tinyint(1) NOT NULL DEFAULT '0',\n  `cache_allowed` tinyint(1) NOT NULL DEFAULT '0',\n  `retention_allowed` tinyint(1) NOT NULL DEFAULT '0',\n  `modeling_allowed` tinyint(1) NOT NULL DEFAULT '0',\n  `derived_data_allowed` tinyint(1) NOT NULL DEFAULT '0',\n  `license_reviewed_at_utc` datetime(3) DEFAULT NULL,\n  `license_expires_at_utc` datetime(3) DEFAULT NULL,\n  `rate_limit_json` json NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `created_by_user_id` int NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `retired_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_macro_data_sources_key` (`source_key`),\n  KEY `idx_macro_data_sources_status` (`status`,`id`),\n  KEY `fk_macro_data_sources_creator` (`created_by_user_id`),\n  CONSTRAINT `fk_macro_data_sources_creator` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_macro_source_approved_rights` CHECK (((`status` <> _utf8mb4'approved') or ((`license_reviewed_at_utc` is not null) and (`cache_allowed` = 1) and (`retention_allowed` = 1))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "macro_feature_sets",
+      "ddl": "CREATE TABLE `macro_feature_sets` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `feature_key` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `schema_version` smallint unsigned NOT NULL,\n  `definition_json` json NOT NULL,\n  `definition_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `status` enum('draft','active','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',\n  `created_by_user_id` int NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `activated_at_utc` datetime(3) DEFAULT NULL,\n  `retired_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_macro_feature_set_version` (`feature_key`,`version_number`),\n  KEY `idx_macro_feature_set_status` (`status`,`id`),\n  KEY `fk_macro_feature_set_creator` (`created_by_user_id`),\n  CONSTRAINT `fk_macro_feature_set_creator` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_macro_feature_set_version` CHECK (((`version_number` > 0) and (`schema_version` > 0)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "macro_research_snapshots",
+      "ddl": "CREATE TABLE `macro_research_snapshots` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `schema_version` smallint unsigned NOT NULL DEFAULT '0',\n  `business_date` date DEFAULT NULL,\n  `data_cutoff_at_utc` datetime(3) DEFAULT NULL,\n  `feature_set_id` bigint unsigned DEFAULT NULL,\n  `model_version_id` bigint unsigned DEFAULT NULL,\n  `owner_scope` enum('platform','user') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `publication_status` enum('legacy','draft','published','superseded','invalidated') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'legacy',\n  `freshness_status` enum('fresh','stale','partial','unavailable') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'unavailable',\n  `health_status` enum('healthy','degraded','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'failed',\n  `horizon` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  `valid_until_utc` datetime(3) NOT NULL,\n  `published_at_utc` datetime(3) DEFAULT NULL,\n  `superseded_at_utc` datetime(3) DEFAULT NULL,\n  `content_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_json` json NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `active_publication_key` varchar(96) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS ((case when ((`publication_status` = _utf8mb4'published') and (`superseded_at_utc` is null)) then concat(convert(coalesce(`horizon`,_ascii'') using utf8mb4),_utf8mb4':',coalesce(cast(`business_date` as char charset utf8mb4),_utf8mb4'')) else NULL end)) STORED,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_macro_snapshot_active_publication` (`active_publication_key`),\n  KEY `idx_macro_snapshot_user` (`owner_user_id`,`valid_until_utc`,`observed_at_utc`,`id`),\n  KEY `idx_macro_snapshot_platform` (`owner_scope`,`valid_until_utc`,`observed_at_utc`,`id`),\n  KEY `idx_macro_snapshot_latest` (`publication_status`,`published_at_utc`,`id`),\n  KEY `idx_macro_snapshot_feature` (`feature_set_id`,`data_cutoff_at_utc`,`id`),\n  KEY `fk_macro_snapshot_model` (`model_version_id`),\n  CONSTRAINT `fk_macro_snapshot_feature` FOREIGN KEY (`feature_set_id`) REFERENCES `macro_feature_sets` (`id`),\n  CONSTRAINT `fk_macro_snapshot_model` FOREIGN KEY (`model_version_id`) REFERENCES `macro_model_versions` (`id`),\n  CONSTRAINT `fk_macro_snapshot_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_macro_snapshot_owner` CHECK ((((`owner_scope` = _utf8mb4'platform') and (`owner_user_id` is null)) or ((`owner_scope` = _utf8mb4'user') and (`owner_user_id` is not null)))),\n  CONSTRAINT `chk_macro_snapshot_platform_v1` CHECK (((`schema_version` = 0) or ((`owner_scope` = _utf8mb4'platform') and (`owner_user_id` is null)))),\n  CONSTRAINT `chk_macro_snapshot_publication` CHECK (((`publication_status` in (_utf8mb4'legacy',_utf8mb4'draft')) or ((`schema_version` > 0) and (`business_date` is not null) and (`data_cutoff_at_utc` is not null) and (`feature_set_id` is not null) and (`horizon` is not null) and (`published_at_utc` is not null)))),\n  CONSTRAINT `chk_macro_snapshot_superseded` CHECK ((((`publication_status` = _utf8mb4'superseded') and (`superseded_at_utc` is not null)) or (`publication_status` <> _utf8mb4'superseded'))),\n  CONSTRAINT `chk_macro_snapshot_timing` CHECK (((`schema_version` = 0) or (`publication_status` in (_utf8mb4'legacy',_utf8mb4'draft')) or ((`data_cutoff_at_utc` <= `published_at_utc`) and (`published_at_utc` < `valid_until_utc`)))),\n  CONSTRAINT `chk_macro_snapshot_validity` CHECK ((`valid_until_utc` > `observed_at_utc`))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "economic_calendar_events",
+      "ddl": "CREATE TABLE `economic_calendar_events` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_id` bigint unsigned NOT NULL,\n  `provider_event_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `country_code` char(2) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `country_name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `currency_code` char(3) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `title` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `scheduled_at_utc` datetime(3) NOT NULL,\n  `time_precision` enum('exact','date_only','tentative') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `importance` enum('low','medium','high','unknown') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'unknown',\n  `period_label` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `unit` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `status` enum('scheduled','released','revised','delayed','cancelled') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'scheduled',\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `provider_updated_at_utc` datetime(3) DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_economic_calendar_provider_event` (`source_id`,`provider_event_id`),\n  KEY `idx_economic_calendar_schedule` (`scheduled_at_utc`,`id`),\n  KEY `idx_economic_calendar_filter` (`importance`,`country_code`,`scheduled_at_utc`,`id`),\n  CONSTRAINT `fk_economic_calendar_source` FOREIGN KEY (`source_id`) REFERENCES `macro_data_sources` (`id`),\n  CONSTRAINT `chk_economic_calendar_provider_id` CHECK (((`provider_event_id` is null) or (char_length(`provider_event_id`) > 0)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "macro_model_versions",
+      "ddl": "CREATE TABLE `macro_model_versions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `model_key` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `feature_set_id` bigint unsigned NOT NULL,\n  `model_kind` enum('baseline','linear','elastic_net','xgboost','regime') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `lifecycle_status` enum('draft','evaluating','shadow','active','rejected','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',\n  `training_cutoff_at_utc` datetime(3) NOT NULL,\n  `config_json` json NOT NULL,\n  `input_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `artifact_ref` varchar(2048) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `artifact_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `report_ref` varchar(2048) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `report_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `created_by_user_id` int NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `activated_at_utc` datetime(3) DEFAULT NULL,\n  `retired_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_macro_model_version` (`model_key`,`version_number`),\n  KEY `idx_macro_model_lifecycle` (`lifecycle_status`,`id`),\n  KEY `fk_macro_model_feature_set` (`feature_set_id`),\n  KEY `fk_macro_model_creator` (`created_by_user_id`),\n  CONSTRAINT `fk_macro_model_creator` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_macro_model_feature_set` FOREIGN KEY (`feature_set_id`) REFERENCES `macro_feature_sets` (`id`),\n  CONSTRAINT `chk_macro_model_version` CHECK ((`version_number` > 0))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "macro_series",
+      "ddl": "CREATE TABLE `macro_series` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `source_id` bigint unsigned NOT NULL,\n  `series_code` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `provider_series_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `display_name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `series_kind` enum('factor','gold_benchmark','volatility','geopolitical_risk') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `value_kind` enum('decimal','text') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'decimal',\n  `unit` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `frequency` enum('intraday','daily','weekly','monthly','irregular') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `freshness_calendar` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `freshness_limit_seconds` int unsigned NOT NULL,\n  `gold_relation_rule_json` json NOT NULL,\n  `status` enum('enabled','disabled','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'disabled',\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_macro_series_code` (`series_code`),\n  UNIQUE KEY `uk_macro_series_provider_key` (`source_id`,`provider_series_key`),\n  KEY `idx_macro_series_source_status` (`source_id`,`status`,`id`),\n  CONSTRAINT `fk_macro_series_source` FOREIGN KEY (`source_id`) REFERENCES `macro_data_sources` (`id`),\n  CONSTRAINT `chk_macro_series_freshness` CHECK ((`freshness_limit_seconds` between 60 and 31536000))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "macro_ingestion_runs",
+      "ddl": "CREATE TABLE `macro_ingestion_runs` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_id` bigint unsigned NOT NULL,\n  `series_id` bigint unsigned DEFAULT NULL,\n  `idempotency_key` varchar(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `requested_from_utc` datetime(3) DEFAULT NULL,\n  `requested_to_utc` datetime(3) DEFAULT NULL,\n  `status` enum('queued','running','succeeded','failed','status_unknown','cancelled') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `lease_owner` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `lease_expires_at_utc` datetime(3) DEFAULT NULL,\n  `fencing_token` bigint unsigned NOT NULL DEFAULT '0',\n  `request_started_at_utc` datetime(3) DEFAULT NULL,\n  `response_received_at_utc` datetime(3) DEFAULT NULL,\n  `response_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `evidence_ref` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `parser_version` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `inserted_count` int unsigned NOT NULL DEFAULT '0',\n  `skipped_count` int unsigned NOT NULL DEFAULT '0',\n  `error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `error_summary` varchar(1000) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `completed_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_macro_ingestion_idempotency` (`source_id`,`idempotency_key`),\n  KEY `idx_macro_ingestion_claim` (`status`,`lease_expires_at_utc`,`created_at_utc`,`id`),\n  KEY `idx_macro_ingestion_series` (`series_id`,`created_at_utc`,`id`),\n  CONSTRAINT `fk_macro_ingestion_series` FOREIGN KEY (`series_id`) REFERENCES `macro_series` (`id`),\n  CONSTRAINT `fk_macro_ingestion_source` FOREIGN KEY (`source_id`) REFERENCES `macro_data_sources` (`id`),\n  CONSTRAINT `chk_macro_ingestion_window` CHECK (((`requested_from_utc` is null) or (`requested_to_utc` is null) or (`requested_to_utc` >= `requested_from_utc`)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "macro_pipeline_jobs",
+      "ddl": "CREATE TABLE `macro_pipeline_jobs` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `job_kind` enum('feature_build','model_train','model_evaluate','snapshot_publish','health_refresh') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `idempotency_key` varchar(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `feature_set_id` bigint unsigned DEFAULT NULL,\n  `model_version_id` bigint unsigned DEFAULT NULL,\n  `data_cutoff_at_utc` datetime(3) DEFAULT NULL,\n  `input_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `status` enum('queued','running','succeeded','failed','status_unknown','cancelled') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `lease_owner` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `lease_expires_at_utc` datetime(3) DEFAULT NULL,\n  `fencing_token` bigint unsigned NOT NULL DEFAULT '0',\n  `error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `error_summary` varchar(1000) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `result_ref` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `result_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `requested_by_user_id` int DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `completed_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_macro_pipeline_job_idempotency` (`job_kind`,`idempotency_key`),\n  KEY `idx_macro_pipeline_job_claim` (`status`,`lease_expires_at_utc`,`created_at_utc`,`id`),\n  KEY `fk_macro_pipeline_feature_set` (`feature_set_id`),\n  KEY `fk_macro_pipeline_model` (`model_version_id`),\n  KEY `fk_macro_pipeline_requester` (`requested_by_user_id`),\n  CONSTRAINT `fk_macro_pipeline_feature_set` FOREIGN KEY (`feature_set_id`) REFERENCES `macro_feature_sets` (`id`),\n  CONSTRAINT `fk_macro_pipeline_model` FOREIGN KEY (`model_version_id`) REFERENCES `macro_model_versions` (`id`),\n  CONSTRAINT `fk_macro_pipeline_requester` FOREIGN KEY (`requested_by_user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "economic_calendar_event_revisions",
+      "ddl": "CREATE TABLE `economic_calendar_event_revisions` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `event_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `revision_number` int unsigned NOT NULL,\n  `provider_revision_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `status` enum('scheduled','released','revised','delayed','cancelled') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `scheduled_at_utc` datetime(3) NOT NULL,\n  `previous_value` decimal(30,10) DEFAULT NULL,\n  `consensus_value` decimal(30,10) DEFAULT NULL,\n  `actual_value` decimal(30,10) DEFAULT NULL,\n  `revised_previous_value` decimal(30,10) DEFAULT NULL,\n  `display_previous` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `display_consensus` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `display_actual` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `display_revised_previous` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `provider_updated_at_utc` datetime(3) DEFAULT NULL,\n  `available_at_utc` datetime(3) NOT NULL,\n  `ingested_at_utc` datetime(3) NOT NULL,\n  `availability_confidence` enum('exact','provider_date','retrieval_only','unknown') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `content_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `evidence_ref` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `ingestion_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_economic_calendar_revision` (`event_id`,`revision_number`),\n  UNIQUE KEY `uk_economic_calendar_revision_content` (`event_id`,`content_sha256`),\n  UNIQUE KEY `uk_economic_calendar_provider_revision` (`event_id`,`provider_revision_key`,`content_sha256`),\n  KEY `idx_economic_calendar_available` (`event_id`,`available_at_utc`,`id`),\n  KEY `idx_economic_calendar_ingestion` (`ingestion_run_id`,`id`),\n  CONSTRAINT `fk_economic_calendar_revision_event` FOREIGN KEY (`event_id`) REFERENCES `economic_calendar_events` (`id`),\n  CONSTRAINT `fk_economic_calendar_revision_ingestion` FOREIGN KEY (`ingestion_run_id`) REFERENCES `macro_ingestion_runs` (`id`),\n  CONSTRAINT `chk_economic_calendar_availability` CHECK (((`available_at_utc` <= `ingested_at_utc`) or (`availability_confidence` in (_utf8mb4'retrieval_only',_utf8mb4'unknown')))),\n  CONSTRAINT `chk_economic_calendar_provider_revision` CHECK (((`provider_revision_key` is null) or (char_length(`provider_revision_key`) > 0))),\n  CONSTRAINT `chk_economic_calendar_revision_number` CHECK ((`revision_number` > 0))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "macro_observations",
+      "ddl": "CREATE TABLE `macro_observations` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `series_id` bigint unsigned NOT NULL,\n  `ingestion_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `observation_at_utc` datetime(3) NOT NULL,\n  `available_at_utc` datetime(3) NOT NULL,\n  `ingested_at_utc` datetime(3) NOT NULL,\n  `provider_updated_at_utc` datetime(3) DEFAULT NULL,\n  `provider_vintage_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `availability_confidence` enum('exact','provider_date','retrieval_only','unknown') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `decimal_value` decimal(30,10) DEFAULT NULL,\n  `text_value` varchar(2000) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `content_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `evidence_ref` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `parser_version` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_macro_observation_version` (`series_id`,`observation_at_utc`,`available_at_utc`,`content_sha256`),\n  KEY `idx_macro_observations_point_in_time` (`series_id`,`available_at_utc`,`observation_at_utc`,`id`),\n  KEY `idx_macro_observations_ingestion` (`ingestion_run_id`,`id`),\n  CONSTRAINT `fk_macro_observation_ingestion` FOREIGN KEY (`ingestion_run_id`) REFERENCES `macro_ingestion_runs` (`id`),\n  CONSTRAINT `fk_macro_observation_series` FOREIGN KEY (`series_id`) REFERENCES `macro_series` (`id`),\n  CONSTRAINT `chk_macro_observation_availability` CHECK (((`available_at_utc` <= `ingested_at_utc`) or (`availability_confidence` in (_utf8mb4'retrieval_only',_utf8mb4'unknown')))),\n  CONSTRAINT `chk_macro_observation_value` CHECK (((`decimal_value` is null) <> (`text_value` is null)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    },
+    {
+      "name": "macro_snapshot_observations",
+      "ddl": "CREATE TABLE `macro_snapshot_observations` (\n  `snapshot_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `observation_id` bigint unsigned NOT NULL,\n  `factor_code` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`snapshot_id`,`observation_id`),\n  KEY `idx_macro_snapshot_observation_reverse` (`observation_id`,`snapshot_id`),\n  KEY `idx_macro_snapshot_factor` (`snapshot_id`,`factor_code`,`observation_id`),\n  CONSTRAINT `fk_macro_snapshot_observation_snapshot` FOREIGN KEY (`snapshot_id`) REFERENCES `macro_research_snapshots` (`id`),\n  CONSTRAINT `fk_macro_snapshot_observation_value` FOREIGN KEY (`observation_id`) REFERENCES `macro_observations` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": "0"
+    }
+  ],
+  "migrations": [
+    {
+      "id": "20260903_001_bridge_v4_device_sessions",
+      "checksum_sha256": "2e98051350645fc30b6ccbc2843da08516bd906a6bdf000bfec5080cf0374adf",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_002_auth_sso_sessions",
+      "checksum_sha256": "6d99b0c61769b66fdf934a7fd0f96500b864bb55264c469bd020fe0c4820f728",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_003_trading_context_and_market_projection",
+      "checksum_sha256": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_004_ai_strategy_and_inference_core",
+      "checksum_sha256": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_005_analysis_scheduler_and_account_fanout",
+      "checksum_sha256": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_006_account_trader_worker",
+      "checksum_sha256": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_007_deterministic_risk_review",
+      "checksum_sha256": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_008_manual_risk_release",
+      "checksum_sha256": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_009_execution_intents_and_reservations",
+      "checksum_sha256": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_010_bridge_v4_command_ledger",
+      "checksum_sha256": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_011_user_execution_commands_and_distributions",
+      "checksum_sha256": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_012_review_memory_core",
+      "checksum_sha256": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_013_authoritative_trade_history",
+      "checksum_sha256": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_014_audit_read_indexes",
+      "checksum_sha256": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_015_macro_sources_and_observations",
+      "checksum_sha256": "bbc94e17b2b0f34895b09291126c30dc20c23277ea13b5315ca34d295b531444",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_016_macro_snapshot_research",
+      "checksum_sha256": "78d7365ae9feab93bcd8646dcbdeac4de64ccf1536462ee1f4abe19e8455510e",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_017_economic_calendar",
+      "checksum_sha256": "7a29716aefd45691b29d11d97874480e0d58ef1f9ab139bf4049be917e7a1946",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_018_user_state_and_referral_accounts",
+      "checksum_sha256": "64e8b88cd337fe45202d9bf277317cc6af37942ddf8ae3055f155c58d01c9a29",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_019_account_ownership_intervals",
+      "checksum_sha256": "3b17b685274b0eb1fe225305fea9de673fea60cc81c629dc8477a73913a48a1a",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_020_account_projection_and_history_provenance",
+      "checksum_sha256": "9f55df7803e2429e395f253d6396edf694b97d1059f1cc2daadb5eb73c62b2f8",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_021_observer_sources_and_audiences",
+      "checksum_sha256": "aed263e66171f336d7750bbdfa565c03ae8e82f6f69521483a022ec0a3e687d2",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_022_observer_management_ledger",
+      "checksum_sha256": "0d33169447c5f77f158ae028662c55aadcc09a1eb256d9c5befee2abe8d2a863",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_023_bridge_profile_epoch_scope",
+      "checksum_sha256": "ea314526bb0bbbf1f5fd427ecfc71ea5b97a1997b434348c37e283e9ae82ed4a",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_024_bridge_pairing_requests",
+      "checksum_sha256": "acfbcd21fdaa99b6f5e6cd081e56dd4e1c21cae928049dc35a085e67571d624e",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_025_data_migration_batch_ledger",
+      "checksum_sha256": "6523e515b62147be2157c3b8a6e1e6fd1dc96d131343cbfbd02c180cc8cdb107",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_026_trade_history_currency_evidence",
+      "checksum_sha256": "9a8c19b12c6627332b6a3bab8a6ddee8c30a58328666e7697a1648353f23c5a0",
+      "status": "completed"
+    },
+    {
+      "id": "20260907_027_subscription_execution_preferences",
+      "checksum_sha256": "87c8d3e026442c73bf502c251828d719962b0dfbe3609a2b3150aabf8b651b99",
+      "status": "completed"
+    },
+    {
+      "id": "bootstrap_v4_foundation_v1",
+      "checksum_sha256": "3a5a1f4b1cd76d505884f3a4702da54f3d67ff379d1fcf832866b31a0f3ff215",
+      "status": "completed"
+    }
+  ],
+  "businessWritesPerformed": false,
+  "fixtureBehaviorVerified": false
+}
