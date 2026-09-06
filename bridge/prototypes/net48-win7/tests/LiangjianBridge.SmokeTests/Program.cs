@@ -22,6 +22,9 @@ namespace Liangjian.BridgeV4.SmokeTests
 
         private static int Main(string[] arguments)
         {
+            if (arguments != null && arguments.Length == 4 && arguments[0].EndsWith(".probe-fixture", StringComparison.Ordinal)
+                && arguments[1] == "--probe" && arguments[2] == "--terminal" && File.Exists(arguments[0]))
+                return TerminalDiscoverySmokeTests.RunFixture(arguments[0], arguments[3]);
             if (arguments != null && arguments.Length == 1 && File.Exists(arguments[0]))
             {
                 string[] fakeLines = File.ReadAllLines(arguments[0]);
@@ -96,6 +99,7 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("bridge_session_token_provider", BridgeSessionTokenProviderSmokeTests.RunAll);
             Run("bridge_pairing", BridgePairingSmokeTests.RunAll);
             Run("bridge_pairing_durable_retry", BridgePairingDraftSmokeTests.RunAll);
+            Run("terminal_discovery_readonly_selection", TerminalDiscoverySmokeTests.RunAll);
 
             Console.WriteLine(failures == 0 ? "PASS bridge_v4_prototype_smoke" : "FAIL bridge_v4_prototype_smoke " + failures);
             return failures == 0 ? 0 : 1;

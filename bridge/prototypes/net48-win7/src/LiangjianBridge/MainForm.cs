@@ -265,7 +265,8 @@ namespace Liangjian.BridgeV4.App
                 DisplayName = "新终端档案", AutoConnect = false
             };
             if (pending != null) profile = pending.Profile.Clone();
-            using (ProfileEditorForm editor = new ProfileEditorForm(profile, true, pairing, catalog.InstallationId, pending == null ? null : pending.Code))
+            using (ProfileEditorForm editor = new ProfileEditorForm(profile, true, pairing, catalog.InstallationId,
+                pending == null ? null : pending.Code, WindowsTerminalDiscovery.Create(terminalHost)))
             {
                 if (editor.ShowDialog(this) != DialogResult.OK) return;
                 try
@@ -296,7 +297,8 @@ namespace Liangjian.BridgeV4.App
             BridgeProfileSettings current = SelectedProfile();
             if (current == null || !configurationAvailable) return;
             BridgeProfileSettings edited = current.Clone();
-            using (ProfileEditorForm editor = new ProfileEditorForm(edited, false))
+            using (ProfileEditorForm editor = new ProfileEditorForm(edited, false,
+                terminalDiscovery: WindowsTerminalDiscovery.Create(terminalHost)))
             {
                 if (editor.ShowDialog(this) != DialogResult.OK) return;
                 try

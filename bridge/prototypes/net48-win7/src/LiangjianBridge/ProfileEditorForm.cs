@@ -3,6 +3,8 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.Threading.Tasks;
 using Liangjian.BridgeV4.Configuration;
+using Liangjian.BridgeV4.Terminal;
+using System.IO;
 
 namespace Liangjian.BridgeV4.App
 {
@@ -26,15 +28,20 @@ namespace Liangjian.BridgeV4.App
         private bool saving;
         private Button save;
         private Button cancel;
+        private readonly TerminalDiscovery discovery;
+        private readonly ComboBox candidates = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList };
+        private readonly Label discoveryStatus = new Label { AutoSize = true, MaximumSize = new Size(440, 0) };
 
         public ProfileEditorForm(BridgeProfileSettings profileValue, bool isNew,
-            BridgePairingDraftStore pairingStore = null, string installation = null, string resumeCode = null)
+            BridgePairingDraftStore pairingStore = null, string installation = null, string resumeCode = null,
+            TerminalDiscovery terminalDiscovery = null)
         {
             if (profileValue == null) throw new ArgumentNullException("profileValue");
             Profile = profileValue;
             newProfile = isNew;
             pairing = pairingStore;
             installationId = installation;
+            discovery = terminalDiscovery;
             Text = isNew ? "新增终端档案" : "编辑终端档案";
             StartPosition = FormStartPosition.CenterParent;
             MinimumSize = new Size(620, 590);
@@ -43,7 +50,12 @@ namespace Liangjian.BridgeV4.App
 
             platform.DropDownStyle = ComboBoxStyle.DropDownList;
             platform.Items.AddRange(new object[] { "MT5", "MT4" });
-            platform.SelectedIndexChanged += delegate { ApplyPlatformVisibility(); };
+            platform.SelectedIndexChanged += delegate
+            {
+                candidates.Items.Clear();
+                discoveryStatus.Text = "先刷新列表，再选择已启动的终端。不会启动终端或切换其账号。";
+                ApplyPlatformVisibility();
+            };
             pairingCode.UseSystemPasswordChar = true;
             pairingCode.Text = resumeCode ?? string.Empty;
             autoConnect.Text = "程序启动后自动连接";
@@ -57,6 +69,20 @@ namespace Liangjian.BridgeV4.App
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             AddRow("档案名称", displayName);
             AddRow("平台", platform);
+            if (discovery != null)
+            {
+                AddRow("已启动终端", candidates);
+                FlowLayoutPanel actions = new FlowLayoutPanel { AutoSize = true, WrapContents = true };
+                Button refresh = new Button { Text = "刷新列表", Width = 110, Height = 44 };
+                Button identify = new Button { Text = "识别并填入", Width = 120, Height = 44 };
+                refresh.Click += async delegate { await Discover(false); };
+                identify.Click += async delegate { await Discover(true); };
+                actions.Controls.Add(refresh);
+                actions.Controls.Add(identify);
+                AddRow("", actions);
+                AddRow("", discoveryStatus);
+                candidates.AccessibleName = "选择已启动的交易终端";
+            }
             AddRow("终端实例 ID", terminalId);
             AddRow("经纪商服务器", broker);
             AddRow("交易账号", login);
@@ -102,6 +128,72 @@ namespace Liangjian.BridgeV4.App
         }
 
         public BridgeProfileSettings Profile { get; private set; }
+        private async Task Discover(bool identify)
+        {
+            if (saving || discovery == null) return;
+            DiscoveredTerminal selected = candidates.SelectedItem as DiscoveredTerminal;
+            if (identify && selected == null)
+            {
+                discoveryStatus.Text = "请先刷新列表并选择一个终端。";
+                candidates.Focus();
+                return;
+            }
+            string targetPlatform = (platform.SelectedItem as string) == "MT4" ? "mt4" : "mt5";
+            string pythonPath = python.Text.Trim(), workerPath = worker.Text.Trim();
+            saving = true;
+            fields.Enabled = save.Enabled = cancel.Enabled = false;
+            discoveryStatus.Text = identify ? "正在读取所选终端的当前账号…" : "正在查找已启动的终端…";
+            try
+            {
+                if (!identify)
+                {
+                    var found = await Task.Run(() => discovery.List(targetPlatform));
+                    candidates.Items.Clear();
+                    foreach (DiscoveredTerminal item in found) candidates.Items.Add(item);
+                    // A list is not a selection: never silently choose one of several terminals.
+                    discoveryStatus.Text = found.Count == 0
+                        ? (targetPlatform == "mt4" ? "未找到在线 MT4 EA。请在 MT4 加载桥接 EA 后刷新。"
+                            : "未找到可读取的 MT5。请先打开 MT5 并登录账号，再刷新列表。")
+                        : "请选择终端，再点“识别并填入”。MT5 需使用下方配置的 Python 与 Worker。";
+                }
+                else
+                {
+                    DiscoveredTerminal result = await Task.Run(() => discovery.Identify(selected, pythonPath, workerPath));
+                    // Preserve an existing instance identity when recognizing the same MT5 path.
+                    bool sameMt5 = result.Platform == "mt5" && !string.IsNullOrWhiteSpace(Profile.TerminalPath)
+                        && string.Equals(Path.GetFullPath(Profile.TerminalPath), result.TerminalPath, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(Profile.TerminalInstanceId);
+                    terminalId.Text = sameMt5 ? Profile.TerminalInstanceId : result.TerminalInstanceId;
+                    broker.Text = result.BrokerServer;
+                    login.Text = result.Login;
+                    terminal.Text = result.TerminalPath ?? string.Empty;
+                    discoveryStatus.Text = "已填入 " + result.Login + " · " + result.BrokerServer
+                        + "。请核对后保存；此结果不代表桥接已连接。";
+                }
+            }
+            catch (Exception error)
+            {
+                discoveryStatus.Text = DiscoveryError(error.Message);
+            }
+            finally
+            {
+                saving = false;
+                fields.Enabled = save.Enabled = cancel.Enabled = true;
+                ApplyPlatformVisibility();
+            }
+        }
+
+        private static string DiscoveryError(string code)
+        {
+            switch (code)
+            {
+                case "bridge_discovery_paths_invalid": return "请检查下方 Python、Worker 的绝对路径，以及所选 MT5 是否仍在运行。";
+                case "bridge_discovery_terminal_changed": return "终端已退出或账号发生变化，请刷新列表后重新识别。原填写内容已保留。";
+                case "bridge_discovery_probe_timeout": return "读取超时，请检查 MT5 是否已登录并正常联网，然后重试。";
+                default: return "未能识别账号。请检查所选终端及 Worker 配置后重试，原填写内容已保留。";
+            }
+        }
+
         private async Task SaveAndClose()
         {
             if (saving) return;
