@@ -1,0 +1,103 @@
+{
+  "kind": "payment-match-schema-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "4ed0e8e055ecb823ad690c65d8a2d8aec1d01b9cfa155c4fb73c0ca471bb762f",
+  "definitions": [
+    {
+      "table": "payment_transactions",
+      "ddl": "CREATE TABLE `payment_transactions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `chain` varchar(10) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `transaction_hash` varchar(100) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,\n  `asset_contract` varchar(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `asset_code` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `recipient_address` varchar(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `received_amount` decimal(20,8) NOT NULL,\n  `occurred_at_utc` datetime(3) NOT NULL,\n  `first_observed_at_utc` datetime(3) NOT NULL,\n  `last_observed_at_utc` datetime(3) NOT NULL,\n  `confirmations` int unsigned NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `evidence_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uq_payment_transaction_hash` (`transaction_hash`),\n  UNIQUE KEY `uq_payment_transaction_destination` (`id`,`chain`,`asset_contract`,`recipient_address`),\n  KEY `idx_payment_transaction_observed` (`last_observed_at_utc`,`id`),\n  CONSTRAINT `ck_payment_transaction_amount` CHECK ((`received_amount` > 0)),\n  CONSTRAINT `ck_payment_transaction_observation` CHECK ((`last_observed_at_utc` >= `first_observed_at_utc`)),\n  CONSTRAINT `ck_payment_transaction_revision` CHECK ((`revision` > 0))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "table": "payment_matches",
+      "ddl": "CREATE TABLE `payment_matches` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `payment_order_id` bigint unsigned NOT NULL,\n  `user_id` int NOT NULL,\n  `chain` varchar(10) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `asset_contract` varchar(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `recipient_address` varchar(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `expected_amount` decimal(20,8) NOT NULL,\n  `required_confirmations` int DEFAULT NULL,\n  `payment_transaction_id` bigint unsigned DEFAULT NULL,\n  `status` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `window_start_at_utc` datetime(3) NOT NULL,\n  `expires_at_utc` datetime(3) NOT NULL,\n  `created_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `legacy_watch_id` int DEFAULT NULL,\n  `legacy_confirmations` int DEFAULT NULL,\n  `legacy_wallet_index` int DEFAULT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uq_payment_match_order` (`payment_order_id`),\n  UNIQUE KEY `uq_payment_match_transaction` (`payment_transaction_id`),\n  UNIQUE KEY `uq_payment_match_legacy` (`legacy_watch_id`),\n  KEY `idx_payment_match_expiry` (`status`,`expires_at_utc`,`id`),\n  KEY `idx_payment_match_scan` (`chain`,`status`,`recipient_address`,`id`),\n  KEY `fk_payment_match_owner` (`payment_order_id`,`user_id`),\n  KEY `fk_payment_match_transaction` (`payment_transaction_id`,`chain`,`asset_contract`,`recipient_address`),\n  KEY `fk_payment_match_migration` (`migration_run_id`),\n  CONSTRAINT `fk_payment_match_migration` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `fk_payment_match_owner` FOREIGN KEY (`payment_order_id`, `user_id`) REFERENCES `payment_orders` (`id`, `user_id`),\n  CONSTRAINT `fk_payment_match_transaction` FOREIGN KEY (`payment_transaction_id`, `chain`, `asset_contract`, `recipient_address`) REFERENCES `payment_transactions` (`id`, `chain`, `asset_contract`, `recipient_address`),\n  CONSTRAINT `ck_payment_match_amount` CHECK ((`expected_amount` > 0)),\n  CONSTRAINT `ck_payment_match_claim` CHECK ((((`status` = _utf8mb4'pending') and (`payment_transaction_id` is null)) or ((`status` in (_utf8mb4'confirming',_utf8mb4'confirmed')) and (`payment_transaction_id` is not null) and (`required_confirmations` is not null)) or (`status` in (_utf8mb4'cancelled',_utf8mb4'expired')))),\n  CONSTRAINT `ck_payment_match_confirmations` CHECK (((`required_confirmations` is null) or (`required_confirmations` > 0))),\n  CONSTRAINT `ck_payment_match_origin` CHECK ((((`origin` = _utf8mb4'legacy_import') and (`legacy_watch_id` is not null) and (`legacy_watch_id` > 0) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)) or ((`origin` = _utf8mb4'native') and (`legacy_watch_id` is null) and (`legacy_confirmations` is null) and (`legacy_wallet_index` is null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null) and (`required_confirmations` is not null) and (`created_at_utc` is not null)))),\n  CONSTRAINT `ck_payment_match_revision` CHECK ((`revision` > 0)),\n  CONSTRAINT `ck_payment_match_status` CHECK ((`status` in (_utf8mb4'pending',_utf8mb4'confirming',_utf8mb4'confirmed',_utf8mb4'cancelled',_utf8mb4'expired'))),\n  CONSTRAINT `ck_payment_match_window` CHECK ((`expires_at_utc` > `window_start_at_utc`))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    }
+  ],
+  "acceptedTransactions": 2,
+  "acceptedMatches": 3,
+  "rejectedCases": [
+    {
+      "name": "cross_user",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "cross_address",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "cross_asset",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "cross_chain",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "duplicate_order",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "duplicate_claim",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "missing_order",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "missing_run",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "negative_expected",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "zero_confirmations",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "native_null_policy",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "invalid_window",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "unknown_status",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "confirmed_without_transaction",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "pending_with_transaction",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "duplicate_hash_case",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "zero_received",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "invalid_observation",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    }
+  ],
+  "amountDifferencePreserved": true,
+  "rolledBack": true,
+  "counts": {
+    "matches_count": 0,
+    "transactions_count": 0,
+    "orders_count": 0
+  },
+  "sourceDatabaseWritten": false
+}
