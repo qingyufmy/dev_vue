@@ -1,5 +1,6 @@
 import type { TradingReadRepository } from '../../trading/application/trading-ports.js'
 import type { StrategyVersion } from '../../strategies/domain/strategy.js'
+import type { SubscriptionExecutionPreferences } from '../../strategies/index.js'
 import type { InferenceRepository } from './inference-ports.js'
 import type { JsonObject, TraderInputSnapshot, TraderRun } from '../domain/inference.js'
 import { contentHash, InferenceError } from '../domain/inference.js'
@@ -23,6 +24,7 @@ export class TraderContextBuilder {
     private readonly trading: TradingReadRepository,
     private readonly instruments: InstrumentSnapshotReader,
     private readonly risks: RiskSummaryReader,
+    private readonly preferences?: { read(run: TraderRun): Promise<SubscriptionExecutionPreferences> },
   ) {}
 
   async build(run: TraderRun, strategy: StrategyVersion, now = new Date()): Promise<TraderInputSnapshot> {
@@ -59,6 +61,7 @@ export class TraderContextBuilder {
     if (run.positionsRevision !== positionsRevision || run.pendingOrdersRevision !== pendingOrdersRevision) throw new InferenceError('trader_projection_revision_conflict', 409)
 
     return {
+      ...(this.preferences ? { executionPreferences: await this.preferences.read(run) } : {}),
       kind: 'trader', taskMode: run.taskMode,
       strategy: { id: strategy.strategyId, versionId: strategy.id, promptHash: strategy.promptHash, promptText: strategy.promptText },
       analysis: { id: analysis.summary.id, contentHash: contentHash(analysis.result), result: jsonObject(analysis.result) },

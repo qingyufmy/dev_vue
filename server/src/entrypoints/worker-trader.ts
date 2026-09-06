@@ -7,7 +7,7 @@ import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   InferenceService, loadCredentialKeyring, MysqlInferenceRepository, MysqlInstrumentSnapshotReader,
   MysqlModelUsageLedger, MysqlRiskSummaryReader, MysqlRuntimeModelProfileCatalog, MysqlTraderModelGatewayResolver,
-  TraderContextBuilder, TraderWorker, MysqlTraderWindowGuard,
+  TraderContextBuilder, TraderWorker, MysqlTraderWindowGuard, MysqlTraderPreferencesReader,
 } from '../modules/inference/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
 import { MysqlTradingRepository } from '../modules/trading/index.js'
@@ -34,7 +34,7 @@ async function main() {
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    new TraderContextBuilder(repository, new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache)), new MysqlInstrumentSnapshotReader(pool), new MysqlRiskSummaryReader(pool)),
+    new TraderContextBuilder(repository, new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache)), new MysqlInstrumentSnapshotReader(pool), new MysqlRiskSummaryReader(pool), new MysqlTraderPreferencesReader(pool)),
     new MysqlTraderModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')

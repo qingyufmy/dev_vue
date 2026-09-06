@@ -21,9 +21,10 @@ describe('frozen trader window evidence', () => {
   })
   it('compares durable snapshot hash with current configuration, ignoring operational cursor revision', async () => {
     const fingerprint = subscriptionWindowFingerprint({ enabled: false }, 'UTC')
-    const snapshot = { subscriptionWindowHash: fingerprint }
+    const snapshot = { subscriptionWindowHash: fingerprint, executionPreferences: { contractVersion: 1, takeProfitMode: 'ai_recommended', revision: '1' } }
     let timezone = 'UTC', cursorRevision = 1
     const connection = { async execute(sql: string) {
+      if (sql.includes('FROM subscription_execution_preferences_v4')) return [[{ contract_version: 1, take_profit_mode: 'ai_recommended', revision: '1' }]]
       if (sql.includes('FROM inference_snapshots')) return [[{ payload_json: JSON.stringify(snapshot), payload_sha256: contentHash(snapshot) }]]
       return [[{ receive_timezone: timezone, receive_window_json: { enabled: false }, revision: cursorRevision }]]
     } } as unknown as PoolConnection

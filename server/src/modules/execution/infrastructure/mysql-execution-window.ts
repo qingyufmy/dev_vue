@@ -1,10 +1,10 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
-import { evaluateSubscriptionWindow, subscriptionWindowFingerprint } from '../../strategies/index.js'
+import { evaluateSubscriptionWindow, subscriptionWindowFingerprint, executionPreferencesMatch, type SubscriptionExecutionPreferences } from '../../strategies/index.js'
 import { readTransactionAccountClock } from '../../trading/index.js'
 import { ExecutionError, sha256Canonical } from '../domain/execution.js'
 
 export async function assertRiskDecisionWindow(connection: PoolConnection, riskDecisionId: string, userId: number, accountId: string, now: Date) {
-  const [rows] = await connection.execute<(RowDataPacket & { receive_timezone: string; receive_window_json: unknown; snapshot_json: unknown; snapshot_sha256: string | null })[]>(`SELECT sc.receive_timezone,sc.receive_window_json,payload.payload_json snapshot_json,snapshot.payload_sha256 snapshot_sha256
+  const [rows] = await connection.execute<(RowDataPacket & { receive_timezone: string; receive_window_json: unknown; snapshot_json: unknown; snapshot_sha256: string | null; preference_version: number; preference_mode: string; preference_revision: string })[]>(`SELECT sc.receive_timezone,sc.receive_window_json,payload.payload_json snapshot_json,snapshot.payload_sha256 snapshot_sha256,pref.contract_version preference_version,pref.take_profit_mode preference_mode,CAST(pref.revision AS CHAR) preference_revision
     FROM risk_decisions_v4 rd INNER JOIN trade_decisions d ON d.id=rd.trade_decision_id
     INNER JOIN ai_trader_runs r ON r.id=d.trader_run_id AND r.user_id=d.user_id AND r.trading_account_id=d.trading_account_id
     INNER JOIN strategy_subscriptions s ON s.id=r.subscription_id AND s.user_id=r.user_id AND s.trading_account_id=r.trading_account_id
@@ -16,6 +16,7 @@ export async function assertRiskDecisionWindow(connection: PoolConnection, riskD
     INNER JOIN strategies strategy ON strategy.id=s.trader_strategy_id AND strategy.kind='trader'
       AND strategy.status='active' AND strategy.deleted_at_utc IS NULL AND strategy.active_version_id=s.trader_strategy_version_id
     INNER JOIN subscription_schedules sc ON sc.subscription_id=s.id
+    LEFT JOIN subscription_execution_preferences_v4 pref ON pref.subscription_id=s.id
     LEFT JOIN inference_snapshots snapshot ON snapshot.id=d.input_snapshot_id AND snapshot.id=r.input_snapshot_id
       AND snapshot.purpose='trader' AND snapshot.user_id=d.user_id AND snapshot.trading_account_id=d.trading_account_id
     LEFT JOIN inference_snapshot_payloads payload ON payload.snapshot_id=snapshot.id AND payload.encoding='json'
@@ -31,6 +32,8 @@ export async function assertRiskDecisionWindow(connection: PoolConnection, riskD
   const frozen = (snapshot as Record<string, unknown>).subscriptionWindowHash
   if (typeof frozen !== 'string' || !/^[a-f0-9]{64}$/.test(frozen)) throw new ExecutionError('execution_schedule_unproven', 409)
   if (frozen !== subscriptionWindowFingerprint(row.receive_window_json, row.receive_timezone)) throw new ExecutionError('execution_schedule_changed', 409)
+  const preferences = { contractVersion: Number(row.preference_version), takeProfitMode: row.preference_mode, revision: row.preference_revision } as SubscriptionExecutionPreferences
+  if (!executionPreferencesMatch((snapshot as Record<string, unknown>).executionPreferences, preferences)) throw new ExecutionError('execution_preferences_changed', 409)
 }
 
 export async function assertDistributionWindow(connection: PoolConnection, targetId: string, userId: number, accountId: string, now: Date) {

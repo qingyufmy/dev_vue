@@ -5,8 +5,8 @@ import { subscriptionWindowFingerprint } from '../src/modules/strategies/index.j
 import { sha256Canonical } from '../src/modules/execution/domain/execution.js'
 
 const evidence = (window: unknown, timezone: string) => {
-  const snapshot = { subscriptionWindowHash: subscriptionWindowFingerprint(window, timezone) }
-  return { snapshot_json: JSON.stringify(snapshot), snapshot_sha256: sha256Canonical(snapshot) }
+  const snapshot = { subscriptionWindowHash: subscriptionWindowFingerprint(window, timezone), executionPreferences: { contractVersion: 1, takeProfitMode: 'ai_recommended', revision: '1' } }
+  return { preference_version: 1, preference_mode: 'ai_recommended', preference_revision: '1', snapshot_json: JSON.stringify(snapshot), snapshot_sha256: sha256Canonical(snapshot) }
 }
 const distributionEvidence = (timezone = 'UTC') => {
   const frozenContext = { subscription: { windowHash: subscriptionWindowFingerprint({ enabled: false }, timezone) } }
@@ -15,6 +15,16 @@ const distributionEvidence = (timezone = 'UTC') => {
 }
 
 describe('execution subscription window', () => {
+  it('refuses changed preference content, changed revision, and missing current settings', async () => {
+    const base = { receive_timezone: 'UTC', receive_window_json: { enabled: false }, ...evidence({ enabled: false }, 'UTC') }
+    for (const changes of [{ preference_mode: 'trend' }, { preference_revision: '2' }, { preference_version: null }, { preference_revision: null }]) {
+      const db = { execute: async () => [[{ ...base, ...changes }]] } as unknown as PoolConnection
+      await expect(assertRiskDecisionWindow(db, 'risk', 42, '7', new Date())).rejects.toThrow('execution_preferences_changed')
+    }
+    const old = { subscriptionWindowHash: subscriptionWindowFingerprint({ enabled: false }, 'UTC') }
+    const db = { execute: async () => [[{ ...base, snapshot_json: old, snapshot_sha256: sha256Canonical(old) }]] } as unknown as PoolConnection
+    await expect(assertRiskDecisionWindow(db, 'risk', 42, '7', new Date())).rejects.toThrow('execution_preferences_changed')
+  })
   it('binds manual-order distribution to its frozen target and refuses a missing subscription', async () => {
     let present = false
     const connection = { async execute(_sql: string, args: unknown[]) {

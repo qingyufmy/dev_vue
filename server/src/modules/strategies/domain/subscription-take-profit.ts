@@ -6,6 +6,15 @@ export interface SubscriptionExecutionPreferences {
   revision: string
 }
 
+export function executionPreferencesMatch(frozen: unknown, current: SubscriptionExecutionPreferences | null): boolean {
+  if (!current || !frozen || typeof frozen !== 'object' || Array.isArray(frozen)) return false
+  if (current.contractVersion !== 1 || !['ai_recommended', 'conservative', 'standard', 'trend'].includes(current.takeProfitMode)
+    || typeof current.revision !== 'string' || !/^[1-9]\d*$/.test(current.revision)) return false
+  const value = frozen as Record<string, unknown>
+  return Object.keys(value).sort().join(',') === 'contractVersion,revision,takeProfitMode'
+    && value.contractVersion === current.contractVersion && value.revision === current.revision && value.takeProfitMode === current.takeProfitMode
+}
+
 export interface SubscriptionTakeProfitSelection {
   mode: SubscriptionTakeProfitMode
   source: 'ai_recommended' | 'legacy_tp1_fallback' | 'subscription_preference'

@@ -77,7 +77,7 @@ export class TraderWorker {
       )
     } catch (error) {
       if (error instanceof InferenceError && error.code === 'trader_account_busy') return { status: 'deferred' as const, code: error.code, retryAfterMs: error.retryAfterMs }
-      if (error instanceof InferenceError && error.code === 'trader_schedule_changed') {
+      if (error instanceof InferenceError && ['trader_schedule_changed', 'trader_preferences_changed'].includes(error.code)) {
         await this.repository.failQueuedTrader(run.id, error.code)
         return { status: 'failed' as const, code: error.code }
       }

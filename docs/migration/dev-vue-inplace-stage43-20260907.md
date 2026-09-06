@@ -1,0 +1,11 @@
+# 同库升级第四十三批：止盈偏好读取、冻结与执行核对
+
+生产 worker-trader 的 TraderContextBuilder 注入 MysqlTraderPreferencesReader，按订阅/用户/账户读取明确配置并加入冻结输入。缺行失败，不补默认。读取器使用短事务，完整精度的 revision 字符串进入快照。测试构造器保留可省略reader的历史输入能力，但真实MysqlInferenceRepository开始事务强制核对配置，不能靠省略字段绕过。
+
+开始推理的事务在写快照、任务和尝试前核对当前偏好与输入一致。完成事务在验证持久化快照整体hash与窗口后核对偏好，配置变化、缺失或坏版本记作 trader_preferences_changed/stale，不成为proposed。连接故障仍抛出，不伪装成正常拒绝。比较同时检查版本、模式和revision；同模式改回但revision已变化也拒绝。
+
+风险决策创建执行意图以及Bridge首次dispatch共用的assertRiskDecisionWindow，在同一事务查询当前偏好并比较已验证hash的输入快照。缺历史偏好或当前配置变化返回 execution_preferences_changed；Bridge使用已有发送前失败路径释放预留，不发送socket。手动分发、已有持仓/订单的人工管理不新增AI止盈配置要求。未修改已发送/uncertain重放策略。
+
+验证：71项定向测试通过，覆盖读取缺失/精确作用域参数、冻结缺失/额外键/模式/revision变化、失效版本、基础设施异常、最终执行缺配置及旧快照拒绝；服务端类型检查和构建通过。证据为源码与Mock/离线测试，不宣称真实数据库并发锁或终端验收。
+
+运行依赖：027仍未在实际库执行。本批未启动服务、执行DDL/DML或删除结构。新Worker与新订阅创建都依赖027；旧订阅需先完成逐字段转换和偏好回填，缺行会明确失败。执行SQL已变化，第三十八批SQL回执仅证明其历史版本，不能证明本批SQL；下一步补实际结构与SQL/有数据演练。全量同库自动升级、其它业务域转换与旧结构清理仍未完成。

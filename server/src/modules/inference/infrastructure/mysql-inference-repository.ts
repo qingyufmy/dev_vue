@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { traderWindowAllows } from './mysql-trader-window.js'
 import { readTraderWindowFingerprint } from './mysql-trader-window-guard.js'
 import { traderWindowStaleReason } from './mysql-trader-window-evidence.js'
+import { assertTraderPreferencesCurrent } from './mysql-trader-preferences.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type { CompleteAnalysisInput, CompleteTraderInput, InferenceRepository, QueueAnalysisInput, RequestTraderEvaluationInput } from '../application/inference-ports.js'
 import type { AnalysisRun, MarketAnalysisResult, MarketAnalysisSummary, TraderDecisionResult, TraderDecisionSummary, TraderInputSnapshot, TraderRun } from '../domain/inference.js'
@@ -368,6 +369,7 @@ export class MysqlInferenceRepository implements InferenceRepository {
       if (analysisRows[0]?.content_sha256 !== input.snapshot.analysis.contentHash || Number(analysisRows[0]?.revision) !== input.snapshot.analysisRevision) throw new InferenceError('trader_analysis_hash_mismatch', 409)
       await assertTraderSnapshotCurrent(connection, row, input.snapshot)
       if (input.snapshot.subscriptionWindowHash !== await readTraderWindowFingerprint(connection, traderRun(row), new Date())) throw new InferenceError('trader_schedule_changed', 409)
+      await assertTraderPreferencesCurrent(connection, traderRun(row), input.snapshot.executionPreferences)
       const [activeTasks] = await connection.execute<ActiveTraderTaskRow[]>(`SELECT t.id,t.lease_expires_at_utc FROM ai_model_tasks t INNER JOIN ai_trader_runs r ON r.model_task_id=t.id WHERE t.purpose='trader' AND t.trading_account_id=? AND t.status='running' ORDER BY t.id FOR UPDATE`, [row.trading_account_id])
       for (const task of activeTasks.filter(task => task.lease_expires_at_utc.getTime() <= Date.now())) {
         await connection.execute(`UPDATE ai_model_attempts SET status='timed_out',error_code='trader_lease_expired',completed_at_utc=UTC_TIMESTAMP(3) WHERE task_id=? AND status='running'`, [task.id])

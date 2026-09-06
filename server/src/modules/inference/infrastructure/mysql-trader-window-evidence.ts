@@ -1,6 +1,7 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
 import { contentHash, InferenceError, type TraderRun } from '../domain/inference.js'
 import { readTraderWindowFingerprint } from './mysql-trader-window-guard.js'
+import { assertTraderPreferencesCurrent } from './mysql-trader-preferences.js'
 
 export async function traderWindowStaleReason(connection: PoolConnection, run: TraderRun): Promise<string | null> {
   const [rows] = await connection.execute<(RowDataPacket & { payload_json: string | object; payload_sha256: string })[]>(`SELECT p.payload_json,s.payload_sha256
@@ -14,6 +15,10 @@ export async function traderWindowStaleReason(connection: PoolConnection, run: T
   if (!value || typeof value !== 'object' || Array.isArray(value) || contentHash(value) !== row.payload_sha256) return 'trader_schedule_unproven'
   const frozen = (value as Record<string, unknown>).subscriptionWindowHash
   if (typeof frozen !== 'string' || !/^[a-f0-9]{64}$/.test(frozen)) return 'trader_schedule_unproven'
-  try { return await readTraderWindowFingerprint(connection, run, new Date()) === frozen ? null : 'trader_schedule_changed' }
+  try {
+    if (await readTraderWindowFingerprint(connection, run, new Date()) !== frozen) return 'trader_schedule_changed'
+    await assertTraderPreferencesCurrent(connection, run, (value as Record<string, unknown>).executionPreferences)
+    return null
+  }
   catch (error) { if (error instanceof InferenceError) return error.code; throw error }
 }
