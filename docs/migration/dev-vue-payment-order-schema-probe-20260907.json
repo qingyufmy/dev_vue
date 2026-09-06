@@ -1,0 +1,73 @@
+{
+  "kind": "payment-order-schema-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "8178754caf38c398fe8120ca7f7144d2f26872bcd5895b327eb1009705b50a54",
+  "ddl": "CREATE TABLE `payment_orders` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `order_number` varchar(100) NOT NULL,\n  `external_order_id` varchar(100) DEFAULT NULL,\n  `product_code` varchar(50) NOT NULL,\n  `product_label` varchar(50) DEFAULT NULL,\n  `billing_period_code` varchar(20) DEFAULT NULL,\n  `billing_period_label` varchar(50) DEFAULT NULL,\n  `order_amount` decimal(20,8) NOT NULL,\n  `legacy_amount_confirmed` decimal(20,8) DEFAULT NULL,\n  `referral_credit_applied` decimal(20,8) NOT NULL,\n  `currency_code` varchar(10) DEFAULT NULL,\n  `status` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `status_label` varchar(50) DEFAULT NULL,\n  `payment_method_code` varchar(50) DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `paid_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `legacy_order_id` int DEFAULT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uq_payment_order_number` (`order_number`),\n  UNIQUE KEY `uq_payment_order_owner` (`id`,`user_id`),\n  UNIQUE KEY `uq_payment_order_external` (`external_order_id`),\n  UNIQUE KEY `uq_payment_order_legacy` (`legacy_order_id`),\n  KEY `idx_payment_order_user_created` (`user_id`,`created_at_utc`,`id`),\n  KEY `idx_payment_order_status_created` (`status`,`created_at_utc`,`id`),\n  KEY `fk_payment_order_migration` (`migration_run_id`),\n  CONSTRAINT `fk_payment_order_migration` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `fk_payment_order_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `ck_payment_order_amount` CHECK (((`order_amount` >= 0) and (`referral_credit_applied` >= 0) and (`referral_credit_applied` <= `order_amount`) and ((`legacy_amount_confirmed` is null) or (`legacy_amount_confirmed` >= 0)))),\n  CONSTRAINT `ck_payment_order_origin` CHECK ((((`origin` = _utf8mb4'legacy_import') and (`legacy_order_id` is not null) and (`legacy_order_id` > 0) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null) and (`legacy_amount_confirmed` is not null)) or ((`origin` = _utf8mb4'native') and (`legacy_order_id` is null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null) and (`legacy_amount_confirmed` is null)))),\n  CONSTRAINT `ck_payment_order_paid_time` CHECK (((`status` <> _utf8mb4'paid') or (`paid_at_utc` is not null))),\n  CONSTRAINT `ck_payment_order_revision` CHECK ((`revision` > 0)),\n  CONSTRAINT `ck_payment_order_status` CHECK ((`status` in (_utf8mb4'pending',_utf8mb4'paid',_utf8mb4'cancelled',_utf8mb4'expired')))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "acceptedInserts": 3,
+  "rejectedCases": [
+    {
+      "name": "negative_amount",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "excess_credit",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "negative_confirmed",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "missing_origin_evidence",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "native_with_legacy",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "missing_run",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "missing_user",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "duplicate_legacy",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "duplicate_order_number",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "duplicate_external_id",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "paid_without_time",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "zero_revision",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "unknown_status",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "created_time_missing",
+      "code": "ER_BAD_NULL_ERROR"
+    }
+  ],
+  "amountRoundtrip": true,
+  "rolledBack": true,
+  "paymentOrderRows": 0,
+  "sourceDatabaseWritten": false
+}

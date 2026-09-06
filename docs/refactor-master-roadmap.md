@@ -555,3 +555,5 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 阶段 82：真实核验 8 条监听与 12 笔订单，最终两次读取一致，16 项测试通过；8 条取消/过期监听关联匹配，4 笔已支付抵扣订单无监听，TIMESTAMP 与 DATETIME 分别处理。未写数据库，见 [阶段 82](migration/dev-vue-inplace-stage82-20260907.md)。
 
 阶段 83：修正 payment_side_effects 直接映射会员激活的错误假设；真实核验 4 条 completed 投递记录，15 项测试及两次读取通过。历史不重放，不生成新权益，目标 DDL 尚未执行，见 [阶段 83](migration/dev-vue-inplace-stage83-20260907.md)。
+
+阶段 84：payment_orders 012 SQL 已在开发参考库真实建表，3 条合法写入/14 类拒绝及金额回读、事务回滚通过；当前库尚未安装，第 48 步协调与恢复演练待接入，见 [阶段 84](migration/dev-vue-inplace-stage84-20260907.md)。
