@@ -1,0 +1,175 @@
+{
+  "kind": "payment-config-source-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 54,
+  "columns": [
+    {
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": null
+    },
+    {
+      "name": "category",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "key",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "value",
+      "type": "mediumtext",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "label",
+      "type": "varchar(255)",
+      "nullable": "YES",
+      "defaultValue": "",
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "sort_order",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": "0",
+      "collationName": null
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collationName": null
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collationName": null
+    }
+  ],
+  "indexes": [
+    {
+      "name": "PRIMARY",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "id"
+    },
+    {
+      "name": "uq_category_key",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "category"
+    },
+    {
+      "name": "uq_category_key",
+      "nonUnique": 0,
+      "position": 2,
+      "columnName": "key"
+    }
+  ],
+  "result": {
+    "version": "payment-config-source/v1",
+    "sourceFields": 8,
+    "entries": [
+      {
+        "sourceId": "91",
+        "sourceHash": "cc55bc94bacec6342864b34b6e7cefd6a0f3b666ab6a5a7c43a588186afd0055",
+        "valueKind": "text",
+        "key": "payment_mode",
+        "valueSha256": "992a93455c71fedd36ac9bbc439952c041cf61445958472af479269b8d873513",
+        "createdAtRaw": "2026-07-06 15:18:41",
+        "updatedAtRaw": "2026-07-08 17:46:37"
+      },
+      {
+        "sourceId": "99",
+        "sourceHash": "e6632d18ac4d0d5832a9563de5fd69b38276af58f5f6cf7b9382aada94446087",
+        "valueKind": "text",
+        "key": "fixed_tron_address",
+        "valueSha256": "b382615147e7e5d05478205b401ab965a57119a61360b3e9f16ea58e571c2e9f",
+        "createdAtRaw": "2026-07-06 15:22:08",
+        "updatedAtRaw": "2026-07-06 15:22:08"
+      },
+      {
+        "sourceId": "224",
+        "sourceHash": "c8c26b898ec3b1160097da488945b8f411f4586263588820c980f0fdf34a83bb",
+        "valueKind": "empty",
+        "key": "fixed_erc20_address",
+        "valueSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "createdAtRaw": "2026-07-08 10:42:40",
+        "updatedAtRaw": "2026-07-08 10:42:40"
+      },
+      {
+        "sourceId": "225",
+        "sourceHash": "74c3cfc52c0896844f0fe65b000af46b86b94a393ca54598ffbda03657c8cf5b",
+        "valueKind": "empty",
+        "key": "fixed_bep20_address",
+        "valueSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "createdAtRaw": "2026-07-08 10:42:40",
+        "updatedAtRaw": "2026-07-08 10:42:40"
+      },
+      {
+        "sourceId": "226",
+        "sourceHash": "f947639c2a66972fc939e9371ca34fe21ef32b9861f35cffa39e3fb4093eee8a",
+        "valueKind": "empty",
+        "key": "fixed_sol_address",
+        "valueSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "createdAtRaw": "2026-07-08 10:42:40",
+        "updatedAtRaw": "2026-07-08 10:42:40"
+      }
+    ],
+    "sourceHash": "cbe4f33760b39f641d6696bdcc3424203b1e8ef8b42ae553c2e3261cec281566",
+    "missingKeys": [],
+    "blockers": [
+      {
+        "sourceId": "91",
+        "code": "payment_config_time_basis_required"
+      },
+      {
+        "sourceId": "99",
+        "code": "payment_config_time_basis_required"
+      },
+      {
+        "sourceId": "224",
+        "code": "payment_config_time_basis_required"
+      },
+      {
+        "sourceId": "225",
+        "code": "payment_config_time_basis_required"
+      },
+      {
+        "sourceId": "226",
+        "code": "payment_config_time_basis_required"
+      }
+    ],
+    "historicalRecipientBindingVerified": false,
+    "custodyControlVerified": false
+  },
+  "referenceFiles": [
+    {
+      "path": "server/crypto/fixed-address.js",
+      "sha256": "40fe9ad498365a5a6464229709f8fb4334e5513ff31255ffa14dae8e240f147b"
+    },
+    {
+      "path": "server/routes/payment.js",
+      "sha256": "9775953bba4258595ca7e02ff947c9295181b554db8b1d5defe83503f713bcf5"
+    }
+  ],
+  "sourceDatabaseWritten": false,
+  "businessConsumersSwitched": false
+}
