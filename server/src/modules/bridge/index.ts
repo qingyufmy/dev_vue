@@ -1,4 +1,7 @@
 export { BridgeCredentialService } from './application/bridge-credential-service.js'
+export { BridgePairingService } from './application/bridge-pairing-service.js'
+export { MysqlBridgePairingRepository } from './infrastructure/mysql-bridge-pairing-repository.js'
+export { bridgePairingRoutes } from './transport/http/bridge-pairing-routes.js'
 export type {
   BridgeCredentialRepository,
   BridgeSessionTicketClaims,

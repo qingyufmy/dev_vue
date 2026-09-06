@@ -87,6 +87,34 @@
         "responses": { "204": { "description": "All website and device sessions revoked" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" } }
       }
     },
+    "/bridge/pairing-requests": {
+      "post": {
+        "operationId": "createBridgePairingRequest", "tags": ["Bridge"],
+        "summary": "Approve a ten-minute pairing code hash for the current trade user",
+        "parameters": [{ "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BridgePairingRequest" } } } },
+        "responses": {
+          "201": { "description": "Pairing registered; no account ownership or connection quota granted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BridgePairingResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" },
+          "410": { "$ref": "#/components/responses/Problem" }, "429": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/bridge/pairing-redemptions": {
+      "post": {
+        "operationId": "redeemBridgePairing", "tags": ["Bridge"], "security": [],
+        "summary": "Bind a client-generated random refresh credential to a one-use pairing code",
+        "description": "The client retains the same installation ID and random credential for lost-response retries. Codes expire after ten minutes; redemption does not grant trading account ownership. Never send secrets through URLs.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BridgePairingRedemption" } } } },
+        "responses": {
+          "201": { "description": "Credential bound, or identical redemption replayed while still valid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BridgePairingCredentialResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" },
+          "410": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/bridge/legacy-credential-exchanges": {
       "post": {
         "operationId": "exchangeLegacyBridgeCredential",
@@ -1709,6 +1737,34 @@
         "minLength": 40,
         "maxLength": 512,
         "pattern": "^\\S+$"
+      },
+      "BridgePairingRequest": {
+        "type": "object", "additionalProperties": false, "required": ["code_hash"],
+        "properties": { "code_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$", "description": "SHA-256 of bpc_ plus base64url of 32 cryptographically random bytes, generated in browser memory." } }
+      },
+      "BridgePairingResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": {
+          "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": { "type": "object", "additionalProperties": false, "required": ["pairing_id", "profile_id", "expires_at"],
+            "properties": { "pairing_id": { "type": "string", "format": "uuid" }, "profile_id": { "$ref": "#/components/schemas/BridgeDeviceId" }, "expires_at": { "type": "string", "format": "date-time" } } }
+        }
+      },
+      "BridgePairingRedemption": {
+        "type": "object", "additionalProperties": false, "required": ["pairing_code", "installation_id", "refresh_token"],
+        "properties": { "pairing_code": { "type": "string", "minLength": 47, "maxLength": 47, "pattern": "^bpc_[A-Za-z0-9_-]{43}$" },
+          "installation_id": { "$ref": "#/components/schemas/BridgeDeviceId" },
+          "refresh_token": { "type": "string", "minLength": 68, "maxLength": 68, "pattern": "^br4_[A-Za-z0-9_-]{64}$", "description": "Client-generated CSPRNG 48-byte secret. Persist securely before redemption and reuse for retries." } }
+      },
+      "BridgePairingCredentialResponse": {
+        "type": "object", "additionalProperties": false, "required": ["data", "meta"],
+        "properties": { "meta": { "$ref": "#/components/schemas/Meta" },
+          "data": { "type": "object", "additionalProperties": false,
+            "required": ["credential_type", "installation_id", "profile_id", "generation", "session_token_path", "websocket_path"],
+            "properties": { "credential_type": { "const": "bridge_refresh" }, "installation_id": { "$ref": "#/components/schemas/BridgeDeviceId" },
+              "profile_id": { "$ref": "#/components/schemas/BridgeDeviceId" }, "generation": { "type": "integer", "minimum": 1 },
+              "session_token_path": { "const": "/api/v4/bridge/session-tokens" }, "websocket_path": { "const": "/bridge/v4/ws" } } }
+        }
       },
       "LegacyBridgeCredentialExchange": {
         "type": "object",

@@ -7,6 +7,7 @@ import {
 import { createAuthModule } from '../modules/auth/index.js'
 import {
   BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeGatewayLeaseStore, RedisBridgeSessionTicketStore,
+  BridgePairingService, MysqlBridgePairingRepository,
 } from '../modules/bridge/index.js'
 import {
   ExecutionDistributionService, ExecutionService, MysqlExecutionDistributionRepository, MysqlExecutionRepository,
@@ -45,6 +46,7 @@ async function main() {
   const app = Fastify({ logger: true, bodyLimit: 1024 * 1024, trustProxy: true })
   await registerApiV4Routes(app, {
     auth,
+    bridgePairing: new BridgePairingService(new MysqlBridgePairingRepository(pool)),
     bridgeCredentials: new BridgeCredentialService(
       new MysqlBridgeCredentialRepository(pool),
       new RedisBridgeSessionTicketStore(cache),

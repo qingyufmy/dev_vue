@@ -14,7 +14,7 @@ const sourceAccounts = new Map(sourceObservation.source.trading_accounts.columns
 
 describe('V4 account ownership and per-user account settings migration', () => {
   it('is migration 019 at the fixed pre-provenance boundary and contains exactly the four approved DDL statements in order', async () => {
-    const plan = await loadMigrationPlan({ rootDirectory: root })
+    const plan = (await loadMigrationPlan({ rootDirectory: root })).slice(0, 24)
     const migration = plan[19]
 
     expect(migration).toMatchObject({ id: migrationId, file: `${migrationId}.sql` })

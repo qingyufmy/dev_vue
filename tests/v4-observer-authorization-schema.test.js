@@ -13,7 +13,7 @@ const existingProjection = readFileSync(join(root, 'server/db/migrations/2026090
 
 describe('V4 observer source and audience authorization migration', () => {
   it('is the final migration after the fixed 019 and 020 boundaries', async () => {
-    const plan = await loadMigrationPlan({ rootDirectory: root })
+    const plan = (await loadMigrationPlan({ rootDirectory: root })).slice(0, 24)
 
     expect(plan).toHaveLength(24)
     expect(plan[19].id).toBe('20260905_019_account_ownership_intervals')

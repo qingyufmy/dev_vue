@@ -10,7 +10,7 @@ const statements = splitSqlStatements(sql)
 
 describe('P5A profile-scoped Bridge epoch index', () => {
   it('appends one correction without altering the frozen migration order', async () => {
-    const plan = await loadMigrationPlan({ rootDirectory: root })
+    const plan = (await loadMigrationPlan({ rootDirectory: root })).slice(0, 24)
     expect(plan).toHaveLength(24)
     expect(plan[22].id).toBe('20260905_022_observer_management_ledger')
     expect(plan[23]).toMatchObject({ id, file: `${id}.sql`, statements })

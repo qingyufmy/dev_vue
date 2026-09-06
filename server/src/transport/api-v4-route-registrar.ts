@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { auditRoutes, type AuditService } from '../modules/audit/index.js'
 import { registerSsoRoutes, type AuthService } from '../modules/auth/index.js'
-import { bridgeCredentialRoutes, type BridgeCredentialService } from '../modules/bridge/index.js'
+import { bridgeCredentialRoutes, bridgePairingRoutes, type BridgeCredentialService, type BridgePairingService } from '../modules/bridge/index.js'
 import {
   executionDistributionRoutes, executionRoutes, userExecutionCommandRoutes, type ExecutionDistributionService,
   type ExecutionService, type UserExecutionCommandService,
@@ -19,6 +19,7 @@ import {
 export interface ApiV4RouteServices {
   auth: AuthService
   bridgeCredentials: BridgeCredentialService
+  bridgePairing: BridgePairingService
   trading: TradingService
   connectionCapacity: ConnectionCapacityService
   inference: InferenceService
@@ -50,6 +51,7 @@ export async function registerApiV4Routes(
   await fastify.register(async trade => {
     trade.addHook('onRequest', exactTradeHostHook(input.tradeOrigin))
     await trade.register(bridgeCredentialRoutes, { prefix: '/api/v4', service: services.bridgeCredentials })
+    await trade.register(bridgePairingRoutes, { prefix: '/api/v4', service: services.bridgePairing, auth: services.tradeAuth })
     await trade.register(tradingRoutes, { prefix: '/api/v4', service: services.trading, capacity: services.connectionCapacity, auth: services.tradeAuth })
     await trade.register(inferenceRoutes, { prefix: '/api/v4', service: services.inference, strategies: services.strategies, auth: services.tradeAuth })
     await trade.register(strategyRoutes, { prefix: '/api/v4', service: services.strategies, auth: services.tradeAuth })

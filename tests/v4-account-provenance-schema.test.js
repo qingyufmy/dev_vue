@@ -14,7 +14,7 @@ const historyMigration = readFileSync(join(root, 'server/db/migrations/20260904_
 
 describe('V4 account projection provenance schema migration', () => {
   it('is the final migration after the fixed 019 ownership boundary', async () => {
-    const plan = await loadMigrationPlan({ rootDirectory: root })
+    const plan = (await loadMigrationPlan({ rootDirectory: root })).slice(0, 24)
 
     expect(plan).toHaveLength(24)
     expect(plan[19].id).toBe('20260905_019_account_ownership_intervals')

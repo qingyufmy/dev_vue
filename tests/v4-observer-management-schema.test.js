@@ -12,7 +12,7 @@ const [createRegistry, seedRegistry, createOperations] = statements
 
 describe('V4 observer management coordination and operation ledger migration', () => {
   it('is migration 022 after the fixed 021 boundary with the reviewed statement count', async () => {
-    const plan = await loadMigrationPlan({ rootDirectory: root })
+    const plan = (await loadMigrationPlan({ rootDirectory: root })).slice(0, 24)
 
     expect(plan).toHaveLength(24)
     expect(plan[21].id).toBe('20260905_021_observer_sources_and_audiences')

@@ -13,16 +13,17 @@ const plan = [
 ]
 
 describe('V4 schema runner', () => {
-  it('loads all 24 files including reviewed DML in original order', async () => {
+  it('loads all 25 files including reviewed DML in original order', async () => {
     const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
-    expect(actual).toHaveLength(24)
+    expect(actual).toHaveLength(25)
     expect(actual[0].id).toBe(BOOTSTRAP_ID)
     expect(actual[19].id).toBe('20260905_019_account_ownership_intervals')
     expect(actual[20].id).toBe('20260905_020_account_projection_and_history_provenance')
     expect(actual[21].id).toBe('20260905_021_observer_sources_and_audiences')
     expect(actual[22].id).toBe('20260905_022_observer_management_ledger')
     expect(actual[23].id).toBe('20260906_023_bridge_profile_epoch_scope')
-    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(158)
+    expect(actual[24].id).toBe('20260906_024_bridge_pairing_requests')
+    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(159)
   })
   it('applies real 018 only after 017 and skips its completed statements without replay', async () => {
     const actual = (await loadMigrationPlan({ rootDirectory: process.cwd() })).slice(0, 19)
@@ -102,7 +103,7 @@ describe('V4 schema runner', () => {
     expect(f.state.executionSql.slice(first019Index, last019Index + 1)).toEqual(actual[19].statements)
 
     const finished = await runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections })
-    expect(finished).toMatchObject({ status: 'completed', applied: [actual[20].id, actual[21].id, actual[22].id, actual[23].id], skipped: 20 })
+    expect(finished).toMatchObject({ status: 'completed', applied: actual.slice(20).map(item => item.id), skipped: 20 })
     for (const statement of actual[20].statements) {
       expect(f.state.executionSql.filter(sql => sql === statement)).toHaveLength(1)
     }
@@ -111,7 +112,7 @@ describe('V4 schema runner', () => {
     }
 
     const skipped = await runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections })
-    expect(skipped).toMatchObject({ applied: [], skipped: 24 })
+    expect(skipped).toMatchObject({ applied: [], skipped: 25 })
     for (const statement of actual[19].statements) {
       expect(f.state.executionSql.filter(sql => sql === statement)).toHaveLength(1)
     }
@@ -263,7 +264,7 @@ describe('V4 schema runner', () => {
     }
 
     const skipped = await runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections })
-    expect(skipped).toMatchObject({ status: 'completed', applied: [actual[23].id], skipped: 23 })
+    expect(skipped).toMatchObject({ status: 'completed', applied: actual.slice(23).map(item => item.id), skipped: 23 })
     for (const statement of actual[22].statements) {
       expect(f.state.executionSql.filter(sql => sql === statement)).toHaveLength(1)
     }
