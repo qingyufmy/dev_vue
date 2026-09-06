@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "observedAtUtc": "2026-09-06T14:07:33.407Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "counts": {
+    "accounts": 4,
+    "terminals": 7,
+    "bindings": 3,
+    "intervals": 274,
+    "openIntervals": 3,
+    "zeroLength": 0,
+    "candidateEntities": 3
+  },
+  "sourceHash": "08c8c0d632ad0908ef6318459e7946fd7c8959b5341a5348b133ebb5362e43c9",
+  "candidates": [
+    {
+      "sourceLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "candidateKey": "5358ac274d1a98ae857cd3dc1d632f35e55a8e4c8edd372c8f3029670ab5c46e",
+      "issues": []
+    },
+    {
+      "sourceLocatorHash": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+      "candidateKey": "e931a652de55c61fd1544feaaae888aa27302cf191dea546cf3704b802d769b7",
+      "issues": []
+    },
+    {
+      "sourceLocatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "candidateKey": "5e6d410514404bdb8a992348921134f0352a8b4b26eab342cd259a227efbe357",
+      "issues": []
+    },
+    {
+      "sourceLocatorHash": "2bf175f9655e7bb7357b9f0a7c6051465a5ae701104ffe741b98e852c0e4d460",
+      "candidateKey": "e931a652de55c61fd1544feaaae888aa27302cf191dea546cf3704b802d769b7",
+      "issues": []
+    }
+  ],
+  "issues": [],
+  "scope": "current_identity_candidates_and_raw_wall_clock_order_only",
+  "timeBasisConfirmed": false,
+  "targetIdsAssigned": false,
+  "businessWritesPerformed": false,
+  "readyForBackfill": false,
+  "plannedIds": {
+    "mappingHash": "e3446474af9da37b9935f8ffe3f7237d180d42b9f383069ad05f1217458de575",
+    "sourceFingerprint": "ad7f0451e83c9d7c2454d3bb9a5f842948f4c9883418cca128d74c4e8b843b15",
+    "mappings": [
+      {
+        "entityKind": "trading_account",
+        "sourceTable": "trading_accounts",
+        "sourcePk": [
+          {
+            "type": "integer",
+            "value": "1"
+          }
+        ],
+        "target": {
+          "table": "trading_accounts",
+          "pk": [
+            {
+              "type": "integer",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      {
+        "entityKind": "trading_account",
+        "sourceTable": "trading_accounts",
+        "sourcePk": [
+          {
+            "type": "integer",
+            "value": "2"
+          }
+        ],
+        "target": {
+          "table": "trading_accounts",
+          "pk": [
+            {
+              "type": "integer",
+              "value": "2"
+            }
+          ]
+        }
+      },
+      {
+        "entityKind": "trading_account",
+        "sourceTable": "trading_accounts",
+        "sourcePk": [
+          {
+            "type": "integer",
+            "value": "3"
+          }
+        ],
+        "target": {
+          "table": "trading_accounts",
+          "pk": [
+            {
+              "type": "integer",
+              "value": "3"
+            }
+          ]
+        }
+      },
+      {
+        "entityKind": "trading_account",
+        "sourceTable": "trading_accounts",
+        "sourcePk": [
+          {
+            "type": "integer",
+            "value": "4"
+          }
+        ],
+        "target": {
+          "table": "trading_accounts",
+          "pk": [
+            {
+              "type": "integer",
+              "value": "2"
+            }
+          ]
+        }
+      }
+    ],
+    "entities": [
+      {
+        "candidateKey": "5358ac274d1a98ae857cd3dc1d632f35e55a8e4c8edd372c8f3029670ab5c46e",
+        "targetAccountId": "1",
+        "sourceAccountIds": [
+          "1"
+        ]
+      },
+      {
+        "candidateKey": "e931a652de55c61fd1544feaaae888aa27302cf191dea546cf3704b802d769b7",
+        "targetAccountId": "2",
+        "sourceAccountIds": [
+          "2",
+          "4"
+        ]
+      },
+      {
+        "candidateKey": "5e6d410514404bdb8a992348921134f0352a8b4b26eab342cd259a227efbe357",
+        "targetAccountId": "3",
+        "sourceAccountIds": [
+          "3"
+        ]
+      }
+    ],
+    "settingsKeys": [
+      {
+        "sourceAccountId": "1",
+        "targetAccountId": "1",
+        "userLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf"
+      },
+      {
+        "sourceAccountId": "2",
+        "targetAccountId": "2",
+        "userLocatorHash": "06998a9f7c3bd27271effa6f37d89ba0f60a00fb32f5f48b1d1309c30fade120"
+      },
+      {
+        "sourceAccountId": "3",
+        "targetAccountId": "3",
+        "userLocatorHash": "5defc92d11f38e34facc727521e1d9b596052c3a5e3ba1375fab31609f1edc3a"
+      },
+      {
+        "sourceAccountId": "4",
+        "targetAccountId": "2",
+        "userLocatorHash": "5defc92d11f38e34facc727521e1d9b596052c3a5e3ba1375fab31609f1edc3a"
+      }
+    ],
+    "persisted": false,
+    "remainingChecks": [
+      "historical_platform_currency_coverage",
+      "utc_business_fields",
+      "target_id_reservation",
+      "business_write_and_reconciliation"
+    ]
+  }
+}
