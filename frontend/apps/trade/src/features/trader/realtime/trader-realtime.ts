@@ -1,6 +1,6 @@
 import { createApiClient } from '@aurum/api-client'
-import { browserRealtimeEventSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
-import type { OpenPosition, PendingOrder, SessionSummary } from '@aurum/contracts'
+import { accountMetricsUpdateSchema, browserRealtimeEventSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
+import type { AccountMetricsUpdate, OpenPosition, PendingOrder, SessionSummary } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
 
 const client = createApiClient()
@@ -148,25 +148,13 @@ function numericRevision(value: string) {
   catch { return null }
 }
 
-interface AccountMetricsUpdate {
-  balance: string
-  equity: string
-  margin: string
-  free_margin: string
-  floating_profit: string
-  observed_at: string
-}
-
 interface BridgeRuntimeUpdate {
   state: 'online' | 'offline' | 'paused' | 'replaced' | 'unauthorized'
   last_seen_at: string
 }
 
 function isMetrics(value: unknown): value is AccountMetricsUpdate {
-  if (typeof value !== 'object' || value === null) return false
-  const data = value as Record<string, unknown>
-  return ['balance', 'equity', 'margin', 'free_margin', 'floating_profit', 'observed_at']
-    .every((key) => typeof data[key] === 'string')
+  return accountMetricsUpdateSchema.safeParse(value).success
 }
 
 function isBridgeRuntime(value: unknown): value is BridgeRuntimeUpdate {

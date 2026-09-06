@@ -167,6 +167,7 @@
       "type": "object",
       "required": ["balance", "equity", "margin", "free_margin", "floating_profit", "currency", "observed_at"],
       "additionalProperties": false,
+      "dependentRequired": { "timezone_offset_minutes": ["clock_status"], "clock_status": ["timezone_offset_minutes"] },
       "properties": {
         "balance": { "$ref": "#/$defs/Decimal" },
         "equity": { "$ref": "#/$defs/Decimal" },
@@ -174,6 +175,8 @@
         "free_margin": { "$ref": "#/$defs/Decimal" },
         "floating_profit": { "$ref": "#/$defs/Decimal" },
         "currency": { "type": "string", "minLength": 3, "maxLength": 12 },
+        "timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
+        "clock_status": { "type": "string", "enum": ["calibrated", "observer_bootstrap", "stale", "unavailable"] },
         "observed_at": { "$ref": "#/$defs/UtcDateTime" }
       }
     },

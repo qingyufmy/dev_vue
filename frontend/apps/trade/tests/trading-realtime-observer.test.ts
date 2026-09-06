@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { SessionSummary } from '@aurum/contracts'
+import type { AccountSnapshot, SessionSummary } from '@aurum/contracts'
 import { accountSnapshot, clearAccountRuntime, realtimeState } from '../src/features/home/home-runtime'
 
 const mocks = vi.hoisted(() => ({
@@ -62,6 +62,21 @@ describe('trade home observer realtime adapter', () => {
       return { socket, close: vi.fn() }
     })
     accountSnapshot.value = { id: '7' } as never
+  })
+
+  it('updates the owner clock from metrics and rejects older or foreign-account events', async () => {
+    accountSnapshot.value = { id: '7', revision: 10, timezoneOffsetMinutes: 120, clockStatus: 'calibrated' } as AccountSnapshot
+    await startTradingRealtime(session, '7', 'XAUUSD', 'M5', null, async () => undefined)
+    const metrics = { balance: '100', equity: '100', margin: '0', free_margin: '100', floating_profit: '0', currency: 'USD', observed_at: '2026-09-06T08:00:00.000Z', timezone_offset_minutes: 0, clock_status: 'stale' }
+    const event = sourceEvent({ type: 'account.metrics.changed', scope: { user_id: '99', trading_account_id: '7', terminal_instance_id: 'terminal-1', observer_channel_id: null }, resource: { kind: 'account.metrics', id: 'current' }, revision: '11', data: metrics })
+    await options.onMessage(event)
+    expect(accountSnapshot.value).toMatchObject({ revision: 11, timezoneOffsetMinutes: 0, clockStatus: 'stale' })
+    await options.onMessage({ ...event, sequence: 2, revision: '10', data: { ...metrics, timezone_offset_minutes: 180, clock_status: 'calibrated' } })
+    expect(accountSnapshot.value?.timezoneOffsetMinutes).toBe(0)
+    await options.onMessage({ ...event, sequence: 3, revision: '12', scope: { ...(event.scope as object), trading_account_id: '8' }, data: { ...metrics, timezone_offset_minutes: 180 } })
+    expect(accountSnapshot.value?.revision).toBe(11)
+    await options.onMessage({ ...event, sequence: 4, revision: '13', data: { ...metrics, timezone_offset_minutes: null, clock_status: 'unavailable' } })
+    expect(accountSnapshot.value).toMatchObject({ revision: 13, timezoneOffsetMinutes: null, clockStatus: 'unavailable' })
   })
 
   it('omits runtime observer targets and sends null after revisions', async () => {

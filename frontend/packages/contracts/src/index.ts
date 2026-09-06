@@ -1284,6 +1284,17 @@ export const operationSchema = z.object({
 }))
 export const operationResponseSchema = z.object({ data: operationSchema, meta: responseMetaSchema })
 
+export const accountMetricsUpdateSchema = z.object({
+  balance: decimalSchema, equity: decimalSchema, margin: decimalSchema,
+  free_margin: decimalSchema, floating_profit: decimalSchema,
+  currency: z.string().min(3).max(12), observed_at: z.iso.datetime({ offset: true }),
+  timezone_offset_minutes: z.number().int().min(-840).max(840).nullable().optional(),
+  clock_status: z.enum(['calibrated', 'observer_bootstrap', 'stale', 'unavailable']).optional(),
+}).strict().refine(value => (value.timezone_offset_minutes !== undefined) === (value.clock_status !== undefined), {
+  message: 'timezone offset and clock status must be supplied together',
+})
+export type AccountMetricsUpdate = z.infer<typeof accountMetricsUpdateSchema>
+
 export const tradingRealtimeEventSchema = z.object({
   v: z.literal(4), event_id: z.string(),
   type: z.enum(['runtime.bridge.changed', 'account.metrics.changed', 'market.quote.updated', 'market.candle.updated', 'market.candle.closed', 'positions.changed', 'pending_orders.changed', 'trade.history.changed']),

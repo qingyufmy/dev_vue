@@ -131,6 +131,28 @@ describe('Stage 11 trading vertical slice', () => {
     expect(messages).toContainEqual(expect.objectContaining({ type: 'observer.publication.changed', scope: expect.objectContaining({ user_id: '99', observer_channel_id: 'observer-1' }) }))
   })
 
+  it('publishes stored clock evidence only after the projection is accepted', async () => {
+    const published: TradingRealtimeEvent[] = []
+    const storage = repository()
+    const projector = new BridgeStreamProjector(storage, { publish(event) { published.push(event) } })
+    const route = { userId: 42, accountId: '7', terminalProfileId: 'profile-1', terminalInstanceId: 'terminal-1', connectionEpoch: 1 }
+    for (const [index, clock] of [
+      { timezoneOffsetMinutes: 0, clockStatus: 'calibrated' as const },
+      { timezoneOffsetMinutes: 0, clockStatus: 'stale' as const },
+      { timezoneOffsetMinutes: null, clockStatus: 'unavailable' as const },
+    ].entries()) {
+      const revision = index + 1
+      const input = { resource: 'account.metrics' as const, resourceId: 'current' as const, revision, data: { ...snapshot(), ...clock, revision } }
+      await expect(projector.ingest(route, input)).resolves.toBe(true)
+      await expect(projector.ingest(route, input)).resolves.toBe(false)
+      expect(published.at(-1)?.data).toMatchObject({ timezone_offset_minutes: clock.timezoneOffsetMinutes, clock_status: clock.clockStatus })
+    }
+    expect(published).toHaveLength(3)
+    storage.applyTrustedProjection = async () => { throw new Error('storage unavailable') }
+    await expect(projector.ingest(route, { resource: 'account.metrics', resourceId: 'current', revision: 4, data: { ...snapshot(), revision: 4 } })).rejects.toThrow('storage unavailable')
+    expect(published).toHaveLength(3)
+  })
+
   it('projects one MT4/MT5-neutral stream revision once and isolates browser subscriptions by user and account', async () => {
     const storage = repository(); const hub = new BrowserRealtimeHub(storage); const published: TradingRealtimeEvent[] = []
     const projector = new BridgeStreamProjector(storage, { publish(event) { published.push(event); hub.publish(event) } }, () => new Date('2026-09-03T08:00:01.000Z'))

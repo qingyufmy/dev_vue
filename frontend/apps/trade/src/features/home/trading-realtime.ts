@@ -1,3 +1,4 @@
+import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import { createApiClient } from '@aurum/api-client'
 import { browserRealtimeEventSchema, marketCandleSchema, marketQuoteSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
 import type { SessionSummary, Timeframe } from '@aurum/contracts'
@@ -118,12 +119,10 @@ async function connect(session: SessionSummary, accountId: string, symbol: strin
     } else if (event.type === 'pending_orders.changed') {
       const data = pendingOrderSchema.array().safeParse(collectionItems(event.data)); if (data.success) { pendingOrders.value = data.data; resourceRevisions.value.pendingOrders = Number(event.revision) }
     } else if (event.type === 'account.metrics.changed') {
-      if (accountSnapshot.value && isMetrics(event.data)) accountSnapshot.value = {
-        ...accountSnapshot.value, balance: event.data.balance, equity: event.data.equity, margin: event.data.margin,
-        freeMargin: event.data.free_margin, floatingProfit: event.data.floating_profit, observedAt: event.data.observed_at,
-        revision: Number(event.revision),
+      if (accountSnapshot.value && accountSnapshot.value.id === accountId) {
+        accountSnapshot.value = applyAccountMetrics(accountSnapshot.value, event.data, Number(event.revision))
+        resourceRevisions.value.account = accountSnapshot.value.revision
       }
-      resourceRevisions.value.account = Number(event.revision)
     }
     },
     onError() { if (currentGeneration === generation && connectionAlive) realtimeState.value = 'recovering' },
@@ -158,12 +157,6 @@ function collectionItems(value: unknown) {
   return typeof value === 'object' && value !== null && 'items' in value ? value.items : null
 }
 function objectData(value: unknown) { return typeof value === 'object' && value !== null ? value : {} }
-
-function isMetrics(value: unknown): value is { balance: string; equity: string; margin: string; free_margin: string; floating_profit: string; observed_at: string } {
-  if (typeof value !== 'object' || value === null) return false
-  const data = value as Record<string, unknown>
-  return ['balance', 'equity', 'margin', 'free_margin', 'floating_profit', 'observed_at'].every((key) => typeof data[key] === 'string')
-}
 
 function isBridgeRuntime(value: unknown): value is { state: 'online' | 'offline' | 'paused' | 'replaced' | 'unauthorized'; last_seen_at: string } {
   if (typeof value !== 'object' || value === null) return false

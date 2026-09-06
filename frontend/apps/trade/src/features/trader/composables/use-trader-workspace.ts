@@ -1,3 +1,4 @@
+import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import type {
   AccountSnapshot,
   StrategySummary,
@@ -195,18 +196,9 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
       onPositions: (items, revision) => { openPositions.value = items; resourceRevisions.value.positions = revision },
       onPendingOrders: (items, revision) => { pendingOrders.value = items; resourceRevisions.value.pendingOrders = revision },
       onMetrics: (data, revision) => {
-        if (!accountSnapshot.value) return
-        accountSnapshot.value = {
-          ...accountSnapshot.value,
-          balance: data.balance,
-          equity: data.equity,
-          margin: data.margin,
-          freeMargin: data.free_margin,
-          floatingProfit: data.floating_profit,
-          observedAt: data.observed_at,
-          revision,
-        }
-        resourceRevisions.value.account = revision
+        if (!accountSnapshot.value || accountSnapshot.value.id !== accountId) return
+        accountSnapshot.value = applyAccountMetrics(accountSnapshot.value, data, revision)
+        resourceRevisions.value.account = accountSnapshot.value.revision
       },
       onBridge: (data) => {
         if (accountSnapshot.value) accountSnapshot.value = {
