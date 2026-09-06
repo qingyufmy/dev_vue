@@ -13,9 +13,9 @@ const plan = [
 ]
 
 describe('V4 schema runner', () => {
-  it('loads all 25 files including reviewed DML in original order', async () => {
+  it('loads all 26 files including reviewed DML in original order', async () => {
     const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
-    expect(actual).toHaveLength(25)
+    expect(actual).toHaveLength(26)
     expect(actual[0].id).toBe(BOOTSTRAP_ID)
     expect(actual[19].id).toBe('20260905_019_account_ownership_intervals')
     expect(actual[20].id).toBe('20260905_020_account_projection_and_history_provenance')
@@ -23,7 +23,9 @@ describe('V4 schema runner', () => {
     expect(actual[22].id).toBe('20260905_022_observer_management_ledger')
     expect(actual[23].id).toBe('20260906_023_bridge_profile_epoch_scope')
     expect(actual[24].id).toBe('20260906_024_bridge_pairing_requests')
-    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(159)
+    expect(actual[25].id).toBe('20260906_025_data_migration_batch_ledger')
+    expect(actual.slice(0, 25).reduce((total, m) => total + m.statements.length, 0)).toBe(159)
+    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(164)
   })
   it('applies real 018 only after 017 and skips its completed statements without replay', async () => {
     const actual = (await loadMigrationPlan({ rootDirectory: process.cwd() })).slice(0, 19)
@@ -112,7 +114,7 @@ describe('V4 schema runner', () => {
     }
 
     const skipped = await runSchemaMigrations(f.execution, f.control, actual, { ...options, apply: true, corrections })
-    expect(skipped).toMatchObject({ applied: [], skipped: 25 })
+    expect(skipped).toMatchObject({ applied: [], skipped: actual.length })
     for (const statement of actual[19].statements) {
       expect(f.state.executionSql.filter(sql => sql === statement)).toHaveLength(1)
     }

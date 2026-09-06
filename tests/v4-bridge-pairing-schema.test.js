@@ -4,7 +4,7 @@ import { loadMigrationPlan, validateMigrationStatement } from '../scripts/lib/v4
 describe('V4 pairing migration 024', () => {
   it('appends one new table after 023 without rewriting source data', async () => {
     const plan = await loadMigrationPlan({ rootDirectory: process.cwd() })
-    expect(plan).toHaveLength(25)
+    expect(plan.slice(0, 25)).toHaveLength(25)
     expect(plan[23].id).toBe('20260906_023_bridge_profile_epoch_scope')
     const migration = plan[24]
     expect(migration.id).toBe('20260906_024_bridge_pairing_requests')

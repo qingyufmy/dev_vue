@@ -136,6 +136,11 @@
         "id": "20260906_024_bridge_pairing_requests",
         "file": "20260906_024_bridge_pairing_requests.sql",
         "checksum": "acfbcd21fdaa99b6f5e6cd081e56dd4e1c21cae928049dc35a085e67571d624e"
+      },
+      {
+        "id": "20260906_025_data_migration_batch_ledger",
+        "file": "20260906_025_data_migration_batch_ledger.sql",
+        "checksum": "6523e515b62147be2157c3b8a6e1e6fd1dc96d131343cbfbd02c180cc8cdb107"
       }
     ],
     "targetEvidence": "source SQL only; no database connection",
@@ -2885,7 +2890,7 @@
       "targets": [
         {
           "name": "data_migration_runs",
-          "existsInPlan": false
+          "existsInPlan": true
         }
       ],
       "status": "blocked",
@@ -5967,11 +5972,11 @@
         },
         {
           "name": "data_migration_runs",
-          "existsInPlan": false
+          "existsInPlan": true
         },
         {
           "name": "data_migration_checkpoints",
-          "existsInPlan": false
+          "existsInPlan": true
         }
       ],
       "status": "blocked",
