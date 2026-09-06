@@ -1,0 +1,295 @@
+{
+  "observedAt": "2026-09-06T16:01:19.310Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "kind": "legacy_strategy_source_review",
+  "sourceHash": "45aeab4521578c2662a0eec8eb38c6a45744d21a84993f886640f00347f73549",
+  "counts": {
+    "strategies": 3,
+    "subscriptions": 5,
+    "sourceFields": 44,
+    "subscriptionSymbolOccurrences": 5
+  },
+  "fields": {
+    "auto_prompt_types": [
+      "id",
+      "title",
+      "description",
+      "system_prompt",
+      "symbols_json",
+      "interval_minutes",
+      "is_active",
+      "sort_order",
+      "created_by",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "scope",
+      "owner_user_id",
+      "model_profile_id",
+      "inference_mode",
+      "visibility_status",
+      "version",
+      "version_label",
+      "market_data_plan_json",
+      "strategy_policy_json",
+      "entry_methods_json",
+      "use_chan_analysis",
+      "use_ema34_filter",
+      "include_portfolio_context"
+    ],
+    "strategy_subscriptions": [
+      "id",
+      "user_id",
+      "trading_account_id",
+      "strategy_id",
+      "risk_profile_id",
+      "symbols_json",
+      "execution_enabled",
+      "memory_mode",
+      "conflicting_strategy_id",
+      "is_deleted",
+      "created_at",
+      "updated_at",
+      "schedule_enabled",
+      "schedule_timezone",
+      "schedule_weekdays_json",
+      "schedule_windows_json",
+      "outside_window_behavior",
+      "take_profit_mode",
+      "active_execution_user_key"
+    ]
+  },
+  "perStrategy": [
+    {
+      "locatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "sourceHash": "f021d377dd4027a7848ff1f6dd397de88b654830d23dc149ded83328c19a2232",
+      "promptHash": "da031ebc31df27668c37bbf96beb7b907a786117f577ef4c4702a62e2a41d509",
+      "promptBytes": 16971,
+      "descriptionCharacters": 80,
+      "scope": "platform",
+      "visibilityStatus": "active",
+      "isActive": "1",
+      "deleted": false,
+      "currentVersion": "44",
+      "inferenceMode": "platform_model",
+      "symbolCount": 1,
+      "marketConfigKeys": [
+        "primary_timeframe",
+        "timeframes"
+      ],
+      "policyConfigKeys": [
+        "constraints",
+        "engine_version",
+        "features",
+        "indicators",
+        "mode",
+        "prompt_rules",
+        "schema_version",
+        "ui",
+        "workflow"
+      ],
+      "targetKind": null,
+      "historicalVersionsReconstructed": false
+    },
+    {
+      "locatorHash": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+      "sourceHash": "6188d7ae3349483b4e925b1746508e07c37ac55375078908f0d2cc65f16cb6aa",
+      "promptHash": "f6e0a1e2ac41945a9aa7ff8a8aaa0cebc12a3bcc981a929ad5cf810a090e11ae",
+      "promptBytes": 3,
+      "descriptionCharacters": 12,
+      "scope": "platform",
+      "visibilityStatus": "archived",
+      "isActive": "0",
+      "deleted": true,
+      "currentVersion": "1",
+      "inferenceMode": "platform_model",
+      "symbolCount": 2,
+      "marketConfigKeys": [
+        "primary_timeframe",
+        "timeframes"
+      ],
+      "policyConfigKeys": null,
+      "targetKind": null,
+      "historicalVersionsReconstructed": false
+    },
+    {
+      "locatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "sourceHash": "551f24f510d6e45474721481b330ddfb911cb7d60e6ca57fd75b7e85e609a927",
+      "promptHash": "11b5e0dc40438592a56a39d001712812ad1c1624a1a1282ed5928badb71e8ed7",
+      "promptBytes": 11007,
+      "descriptionCharacters": 0,
+      "scope": "platform",
+      "visibilityStatus": "active",
+      "isActive": "1",
+      "deleted": false,
+      "currentVersion": "11",
+      "inferenceMode": "platform_model",
+      "symbolCount": 1,
+      "marketConfigKeys": [
+        "primary_timeframe",
+        "timeframes"
+      ],
+      "policyConfigKeys": null,
+      "targetKind": null,
+      "historicalVersionsReconstructed": false
+    }
+  ],
+  "perSubscription": [
+    {
+      "locatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "sourceHash": "b5b4d5c669e7be4d7e958163d9185b4e9c7148203106438f835097443ef492ec",
+      "strategyLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "symbolCount": 1,
+      "symbolSource": "subscription_explicit",
+      "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+      "executionEnabled": "1",
+      "deleted": "0",
+      "scheduleEnabled": "0"
+    },
+    {
+      "locatorHash": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+      "sourceHash": "633090efec9bb02391af9ed7c81ed9d5cbe98445760f5e360e8a7c762cdf4dbc",
+      "strategyLocatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "symbolCount": 1,
+      "symbolSource": "subscription_explicit",
+      "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+      "executionEnabled": "0",
+      "deleted": "0",
+      "scheduleEnabled": "0"
+    },
+    {
+      "locatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "sourceHash": "6008e13722929cc87769c2e1fe3495ed094f51aaf805546588c30b17d477c8c3",
+      "strategyLocatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "symbolCount": 1,
+      "symbolSource": "strategy_inherited",
+      "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+      "executionEnabled": "0",
+      "deleted": "0",
+      "scheduleEnabled": "0"
+    },
+    {
+      "locatorHash": "2bf175f9655e7bb7357b9f0a7c6051465a5ae701104ffe741b98e852c0e4d460",
+      "sourceHash": "1296a9c4ca7fdf9f82f1bb75aa65c94483a2d83b8d5463a5487d8054a9440210",
+      "strategyLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "symbolCount": 1,
+      "symbolSource": "strategy_inherited",
+      "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+      "executionEnabled": "0",
+      "deleted": "0",
+      "scheduleEnabled": "0"
+    },
+    {
+      "locatorHash": "d10a4bc9e0c1fa4e8f3d7ce2512b8756e47ca5fa451f373c39a1431bb88db49f",
+      "sourceHash": "ab16f2f8c1404b3b621e2a8266e3b3f56ea72b7b3882257c7b53f623acd62fee",
+      "strategyLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "symbolCount": 1,
+      "symbolSource": "strategy_inherited",
+      "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+      "executionEnabled": "1",
+      "deleted": "0",
+      "scheduleEnabled": "0"
+    }
+  ],
+  "issues": [],
+  "blockers": [
+    "strategy_kind_and_output_contract_mapping",
+    "configuration_field_conversion",
+    "historical_time_basis",
+    "subscription_account_symbol_permissions",
+    "historical_version_evidence"
+  ],
+  "executable": false,
+  "businessWritesPerformed": false,
+  "symbolConversions": [
+    {
+      "locatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "sourceRowHash": "b5b4d5c669e7be4d7e958163d9185b4e9c7148203106438f835097443ef492ec",
+      "sourceHash": "3d1516321cd0d0c3d4164873d457414234ad36d4369e876bcd851d5d28c6a252",
+      "selectionMode": "explicit",
+      "status": "converted",
+      "problems": [],
+      "symbols": [
+        "XAUUSD"
+      ],
+      "schedulerSymbols": [
+        "XAUUSD"
+      ],
+      "dispatchSymbols": [
+        "XAUUSD"
+      ]
+    },
+    {
+      "locatorHash": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+      "sourceRowHash": "633090efec9bb02391af9ed7c81ed9d5cbe98445760f5e360e8a7c762cdf4dbc",
+      "sourceHash": "3d1516321cd0d0c3d4164873d457414234ad36d4369e876bcd851d5d28c6a252",
+      "selectionMode": "explicit",
+      "status": "converted",
+      "problems": [],
+      "symbols": [
+        "XAUUSD"
+      ],
+      "schedulerSymbols": [
+        "XAUUSD"
+      ],
+      "dispatchSymbols": [
+        "XAUUSD"
+      ]
+    },
+    {
+      "locatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "sourceRowHash": "6008e13722929cc87769c2e1fe3495ed094f51aaf805546588c30b17d477c8c3",
+      "sourceHash": "9b8c90af81095510bd726fdd6c4404d93e3a3d4ebe4985f08c4a47e74fa51665",
+      "selectionMode": "inherit_strategy",
+      "status": "converted",
+      "problems": [],
+      "symbols": [
+        "XAUUSD"
+      ],
+      "schedulerSymbols": [
+        "XAUUSD"
+      ],
+      "dispatchSymbols": [
+        "XAUUSD"
+      ]
+    },
+    {
+      "locatorHash": "2bf175f9655e7bb7357b9f0a7c6051465a5ae701104ffe741b98e852c0e4d460",
+      "sourceRowHash": "1296a9c4ca7fdf9f82f1bb75aa65c94483a2d83b8d5463a5487d8054a9440210",
+      "sourceHash": "9b8c90af81095510bd726fdd6c4404d93e3a3d4ebe4985f08c4a47e74fa51665",
+      "selectionMode": "inherit_strategy",
+      "status": "converted",
+      "problems": [],
+      "symbols": [
+        "XAUUSD"
+      ],
+      "schedulerSymbols": [
+        "XAUUSD"
+      ],
+      "dispatchSymbols": [
+        "XAUUSD"
+      ]
+    },
+    {
+      "locatorHash": "d10a4bc9e0c1fa4e8f3d7ce2512b8756e47ca5fa451f373c39a1431bb88db49f",
+      "sourceRowHash": "ab16f2f8c1404b3b621e2a8266e3b3f56ea72b7b3882257c7b53f623acd62fee",
+      "sourceHash": "9b8c90af81095510bd726fdd6c4404d93e3a3d4ebe4985f08c4a47e74fa51665",
+      "selectionMode": "inherit_strategy",
+      "status": "converted",
+      "problems": [],
+      "symbols": [
+        "XAUUSD"
+      ],
+      "schedulerSymbols": [
+        "XAUUSD"
+      ],
+      "dispatchSymbols": [
+        "XAUUSD"
+      ]
+    }
+  ],
+  "symbolConversionReady": true
+}
