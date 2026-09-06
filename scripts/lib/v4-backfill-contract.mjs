@@ -18,6 +18,10 @@ export const hash = value => createHash('sha256').update(canonical(value)).diges
 export const hashPattern = /^[a-f0-9]{64}$/
 const identifier = /^[a-z][a-z0-9_]{0,63}$/
 const label = /^[A-Za-z0-9_.:-]{1,64}$/
+export const inplaceAccountTargets = Object.freeze({ trading_accounts: 'trading_accounts_v4_build',
+  trading_account_ownership_intervals: 'trading_account_ownership_intervals_v4_build',
+  trading_account_ownerships: 'trading_account_ownerships_v4_build',
+  user_trading_account_settings: 'user_trading_account_settings_v4_build' })
 export function exactKeys(value, keys) {
   requireBackfill(value && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).sort().join('|') === [...keys].sort().join('|'), 'backfill_shape_invalid')
 }
@@ -43,14 +47,19 @@ export function validateSpec(spec) {
   exactKeys(spec.admission, ['approved', 'blockers'])
   requireBackfill(spec.admission.approved === true && Array.isArray(spec.admission.blockers) && spec.admission.blockers.length === 0, 'backfill_wave_not_approved')
   const b = spec.bindings
-  exactKeys(b, ['logicalSourceId', 'sourceDatabase', 'mirrorDatabase', 'snapshotHash', 'targetServerUuid', 'targetDatabase', 'schemaHash', 'manifestHash', 'transformHash', 'streams'])
+  const inplace = Object.hasOwn(b, 'storageMode')
+  exactKeys(b, ['logicalSourceId', 'sourceDatabase', 'mirrorDatabase', 'snapshotHash', 'targetServerUuid', 'targetDatabase', 'schemaHash', 'manifestHash', 'transformHash', 'streams', ...(inplace ? ['storageMode'] : [])])
   requireBackfill(/^[A-Za-z0-9_.:-]{1,128}$/.test(b.logicalSourceId), 'backfill_source_invalid')
   requireBackfill([b.sourceDatabase, b.mirrorDatabase, b.targetDatabase].every(v => typeof v === 'string' && identifier.test(v)), 'backfill_database_invalid')
-  requireBackfill(b.targetDatabase !== b.sourceDatabase && b.targetDatabase !== b.mirrorDatabase, 'backfill_target_is_source')
+  if (inplace) {
+    requireBackfill(b.storageMode === 'inplace-account-v1' && b.targetDatabase === b.sourceDatabase
+      && b.mirrorDatabase !== b.targetDatabase, 'backfill_inplace_scope_invalid')
+  } else requireBackfill(b.targetDatabase !== b.sourceDatabase && b.targetDatabase !== b.mirrorDatabase, 'backfill_target_is_source')
   requireBackfill(typeof b.targetServerUuid === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(b.targetServerUuid), 'backfill_target_invalid')
   requireBackfill([b.snapshotHash, b.schemaHash, b.manifestHash, b.transformHash].every(v => typeof v === 'string' && hashPattern.test(v)), 'backfill_hash_invalid')
   requireBackfill(Array.isArray(b.streams) && b.streams.length > 0 && b.streams.length <= 165, 'backfill_stream_invalid')
   const streams = b.streams.map(streamIdentity)
+  if (inplace) requireBackfill(b.streams.every(stream => ['trading_accounts', 'mt5_account_ownership_history'].includes(stream.sourceTable)), 'backfill_inplace_stream_invalid')
   requireBackfill(new Set(streams).size === streams.length, 'backfill_stream_duplicate')
 }
 function targetRef(target) {
@@ -79,6 +88,7 @@ export function prepareBatch(spec, batch) {
     requireBackfill([row.sourceHash, row.transformedHash].every(v => typeof v === 'string' && hashPattern.test(v)), 'backfill_row_hash_invalid')
     requireBackfill(Array.isArray(row.targets) && row.targets.length > 0 && row.targets.length <= 32, 'backfill_targets_invalid')
     row.targets.forEach(targetRef)
+    if (spec.bindings.storageMode === 'inplace-account-v1') requireBackfill(row.targets.every(target => Object.hasOwn(inplaceAccountTargets, target.table)), 'backfill_inplace_target_invalid')
     requireBackfill(row.transformedHash === hash({ payload: row.payload, targets: row.targets }), 'backfill_transform_hash_mismatch')
     requireBackfill(Array.isArray(row.idMaps) && row.idMaps.length <= 32, 'backfill_maps_invalid')
     for (const mapping of row.idMaps) {

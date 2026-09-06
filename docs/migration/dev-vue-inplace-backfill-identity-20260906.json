@@ -1,0 +1,13 @@
+{
+  "kind": "dev_vue_inplace_backfill_identity",
+  "observedAtUtc": "2026-09-06T14:36:27.639Z",
+  "identity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "database": "dev_vue",
+    "storageMode": "inplace-account-v1",
+    "schemaHash": "580a062c4329cff29ed76b7db76151d81972809c85d824012b0354864b97e461"
+  },
+  "repeatStable": true,
+  "scope": "account_source_and_working_tables_plus_complete_upgrade_registry",
+  "businessWritesPerformed": false
+}

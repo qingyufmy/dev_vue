@@ -11,6 +11,7 @@ async function withRetry(repository, work) {
 }
 async function verifyTarget(tx, bindings) {
   const actual = await tx.targetIdentity()
+  check(actual.storageMode === bindings.storageMode, 'backfill_storage_mode_mismatch')
   check(actual.serverUuid === bindings.targetServerUuid && actual.database === bindings.targetDatabase, 'backfill_target_identity_mismatch')
   check(actual.schemaHash === bindings.schemaHash, 'backfill_schema_drift')
 }
@@ -46,6 +47,7 @@ export async function executeBackfillBatch(repository, spec, input, writer) {
   const batch = structuredClone(input)
   const prepared = prepareBatch(spec, batch)
   check(writer && writer.transformHash === spec.bindings.transformHash && typeof writer.write === 'function', 'backfill_writer_mismatch')
+  check(writer.storageMode === spec.bindings.storageMode, 'backfill_writer_storage_mode_mismatch')
   return withRetry(repository, async tx => {
     await verifyTarget(tx, spec.bindings)
     await lockedRun(tx, spec)
