@@ -1,0 +1,93 @@
+{
+  "kind": "null-membership-wave/v1",
+  "status": "verified",
+  "identity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "database": "dev_vue",
+    "storageMode": "inplace-membership-v1",
+    "schemaHash": "a686ea5778e74b6146e69d3cb88ec14635d44417d3688206a710cf706002fdc6"
+  },
+  "run": {
+    "id": "7f2362e2-8256-435d-8ce2-6e4e9c7a5c2c",
+    "sourceSnapshotId": "dev-vue-null-memberships-20260907",
+    "registeredAtUtc": "2026-09-06T22:03:39.997Z"
+  },
+  "reviewSha256": "d787e0dfb878873225589be5235be12cb6beb02703f1e8340c41807ba6260830",
+  "selectedRows": 21,
+  "deferredRows": 4,
+  "batchSizes": [
+    10,
+    10,
+    1
+  ],
+  "sourceHash": "bb3e7853f75081debf916faaaca9e24586595378e966fd66601895e6fedba008",
+  "transformHash": "54beed53a17d88b6058a0df282518df690daae9115b79fab0b79234f2a6465c3",
+  "audit": {
+    "version": "membership-import-audit/v1",
+    "sourceRows": 21,
+    "targetRows": 21,
+    "archiveRows": 21,
+    "importMatchesReviewedInputs": true,
+    "differences": [],
+    "checkedTargetFields": [
+      "user_id",
+      "plan_code",
+      "billing_period_code",
+      "source_code",
+      "expiration_kind",
+      "expires_at_utc",
+      "current_state_observed_at_utc",
+      "revision",
+      "origin",
+      "migration_run_id",
+      "source_sha256",
+      "imported_at_utc"
+    ],
+    "evidenceCatalogExternallyRequired": true,
+    "businessCutoverVerified": false,
+    "deletionAuthorized": false,
+    "fullMembershipConverted": false
+  },
+  "recovered": [],
+  "repeatNoop": true,
+  "mapsAndReceiptsVerified": true,
+  "checkpoint": {
+    "sequence_number": "3",
+    "processed_rows": "21",
+    "cursor_json": "[{\"type\": \"integer\", \"value\": \"29\"}]"
+  },
+  "originalRows": "271007",
+  "protectedRows": [
+    {
+      "name": "user_referral_accounts",
+      "rows": 25,
+      "sha256": "17125d8a4fc86b31aba14080a0ea00bd92f030bda11adad15a2740ddad665abe"
+    },
+    {
+      "name": "referral_credit_ledger",
+      "rows": 25,
+      "sha256": "09513eaa5e9cc6785d04ffd7435ee09c165d9093fbbb613154ed6ebcf0d6affd"
+    },
+    {
+      "name": "payment_orders",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "payment_transactions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "payment_matches",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "originalParityHash": "1acdcef31318fdb532899bd8f5260b878cd357fbd597ec01d21a6640154fe872",
+  "otherMembershipHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "consumersSwitched": false,
+  "fullMembershipConverted": false,
+  "rehearsalSha256": "975fe17f3eead5141a5a1cf2848321fc826be048bc28693830793e565dc8bc6e",
+  "driverSha256": "09d74045c5c3b8bd870c563ffa260652e816062c4f9e484974eb34e7f9fd1a35"
+}
