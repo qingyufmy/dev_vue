@@ -1,3 +1,4 @@
+import { calculateEma34Evidence } from '../../strategies/index.js'
 import type { TradingReadRepository } from '../../trading/application/trading-ports.js'
 import type { Timeframe, TradingAccountSummary } from '../../trading/domain/trading.js'
 import type { AnalysisMarketPlan, AnalysisMarketSource } from '../application/analysis-context-builder.js'
@@ -7,20 +8,35 @@ import { InferenceError } from '../domain/inference.js'
 export class TradingAnalysisMarketSource implements AnalysisMarketSource {
   constructor(private readonly trading: TradingReadRepository) {}
 
-  async read(input: { userId: number; preferredAccountId: string | null; symbol: string; plan: AnalysisMarketPlan }) {
+  async read(input: { userId: number; preferredAccountId: string | null; symbol: string; referenceTime?: string; plan: AnalysisMarketPlan }) {
+    const referenceTime = input.referenceTime ?? new Date().toISOString()
+    const intervalMinutes = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 }
     const accounts = await this.candidates(input.userId, input.preferredAccountId)
     for (const account of accounts) {
       const quote = await this.trading.getQuote(account.id, input.symbol)
       if (!quote) continue
       const candles: Record<string, JsonObject[]> = {}
+      let ema34: JsonObject | undefined
       let complete = true
-      for (const timeframe of input.plan.timeframes) {
-        const items = await this.trading.listCandles(account.id, input.symbol, timeframe as Timeframe, input.plan.candleLimits?.[timeframe] ?? input.plan.candleLimit)
-        if (items.length === 0) { complete = false; break }
-        candles[timeframe] = items.map(item => ({
+      for (const timeframe of new Set([...input.plan.timeframes, ...(input.plan.ema34 ? [input.plan.ema34.timeframe] : [])])) {
+        const modelLimit = input.plan.candleLimits?.[timeframe] ?? input.plan.candleLimit
+        const indicatorFrame = input.plan.ema34?.timeframe === timeframe
+        const items = await this.trading.listCandles(account.id, input.symbol, timeframe as Timeframe, Math.max(input.plan.timeframes.includes(timeframe) ? modelLimit : 0, indicatorFrame ? 61 : 0))
+        if (items.length === 0 && input.plan.timeframes.includes(timeframe)) { complete = false; break }
+        if (input.plan.timeframes.includes(timeframe)) candles[timeframe] = items.slice(-modelLimit).map(item => ({
           open_time: item.openTime, open: item.open, high: item.high, low: item.low, close: item.close,
           tick_volume: item.tickVolume, closed: item.closed, revision: item.revision,
         }))
+        if (indicatorFrame) {
+          const history = items.slice(-61)
+          const timeframeMs = intervalMinutes[timeframe] * 60_000
+          const bars = history.map(item => ({ openTimeUtcMs: Date.parse(item.openTime), close: item.close, closed: item.closed }))
+          const internalGapUnresolved = bars.some((bar, i) => i > 0 && bar.openTimeUtcMs - bars[i - 1]!.openTimeUtcMs !== timeframeMs)
+          ema34 = { ...calculateEma34Evidence(bars, { timeframeMs, referenceTimeUtcMs: Date.parse(referenceTime), internalGapUnresolved }),
+            source_account_id: account.id, symbol: input.symbol, timeframe, reference_time: referenceTime,
+            gap_policy: 'contiguous_only/v1', requested_bars: 61,
+            input_bars: history.map(item => ({ open_time: item.openTime, close: item.close, closed: item.closed, revision: item.revision })) }
+        }
       }
       if (!complete) continue
       return {
@@ -28,6 +44,7 @@ export class TradingAnalysisMarketSource implements AnalysisMarketSource {
         symbol: input.symbol,
         quote: { bid: quote.bid, ask: quote.ask, last: quote.last, spread: quote.spread, trade_mode: quote.tradeMode, observed_at: quote.observedAt, revision: quote.revision },
         candles,
+        ...(ema34 ? { indicators: { ema34 } } : {}),
         ...(input.plan.primaryTimeframe ? { primary_timeframe: input.plan.primaryTimeframe,
           market_data_plan: { version: 1, primary_timeframe: input.plan.primaryTimeframe,
             timeframes: input.plan.timeframes.map(timeframe => ({ timeframe, kline_count: input.plan.candleLimits?.[timeframe] ?? input.plan.candleLimit })) } } : {}),

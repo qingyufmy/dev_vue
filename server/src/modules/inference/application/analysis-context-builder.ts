@@ -1,16 +1,17 @@
 import type { StrategyVersion } from '../../strategies/domain/strategy.js'
-import { parseStrategyMarketDataPlan } from '../../strategies/index.js'
+import { parseStrategyMarketDataPlan, parseEma34Plan, type Ema34Plan } from '../../strategies/index.js'
 import type { AnalysisInputSnapshot, AnalysisRun, JsonObject } from '../domain/inference.js'
 
 export interface AnalysisMarketPlan {
   timeframes: Array<'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1'>
+  ema34?: Ema34Plan
   candleLimit: number
   candleLimits?: Record<string, number>
   primaryTimeframe?: string
 }
 
 export interface AnalysisMarketSource {
-  read(input: { userId: number; preferredAccountId: string | null; symbol: string; plan: AnalysisMarketPlan }): Promise<JsonObject>
+  read(input: { userId: number; preferredAccountId: string | null; symbol: string; referenceTime?: string; plan: AnalysisMarketPlan }): Promise<JsonObject>
 }
 
 export interface MacroSnapshotReader {
@@ -24,16 +25,18 @@ export type MacroEvidencePlan =
 const allowedTimeframes = new Set<AnalysisMarketPlan['timeframes'][number]>(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 
 export function marketPlan(config: Record<string, unknown>): AnalysisMarketPlan {
+  const indicators = config.ema34_evidence === undefined ? {} : { ema34: parseEma34Plan(config.ema34_evidence) }
   if (config.market_data_plan !== undefined) {
     if (config.timeframes !== undefined || config.candle_limit !== undefined) throw new Error('market_data_plan_conflict')
     const plan = parseStrategyMarketDataPlan(config.market_data_plan)
-    return { timeframes: plan.timeframes.map(item => item.timeframe as AnalysisMarketPlan['timeframes'][number]),
+    return { ...indicators, timeframes: plan.timeframes.map(item => item.timeframe as AnalysisMarketPlan['timeframes'][number]),
       candleLimit: Math.max(...plan.timeframes.map(item => item.kline_count)),
       candleLimits: Object.fromEntries(plan.timeframes.map(item => [item.timeframe, item.kline_count])), primaryTimeframe: plan.primary_timeframe }
   }
   const requested = Array.isArray(config.timeframes) ? config.timeframes.filter((value): value is AnalysisMarketPlan['timeframes'][number] => typeof value === 'string' && allowedTimeframes.has(value as AnalysisMarketPlan['timeframes'][number])) : []
   const candleLimit = Number(config.candle_limit)
   return {
+    ...indicators,
     timeframes: requested.length > 0 ? [...new Set(requested)] : ['M5', 'M15', 'H1', 'H4'],
     candleLimit: Number.isSafeInteger(candleLimit) && candleLimit >= 50 && candleLimit <= 1000 ? candleLimit : 300,
   }
@@ -61,7 +64,7 @@ export class AnalysisContextBuilder {
     return {
       kind: 'analysis',
       strategy: { id: strategy.strategyId, versionId: strategy.id, promptHash: strategy.promptHash, promptText: strategy.promptText },
-      market: await this.market.read({ userId: run.userId, preferredAccountId: run.marketSourceAccountId, symbol: run.symbol, plan: marketPlan(strategy.config) }),
+      market: await this.market.read({ userId: run.userId, preferredAccountId: run.marketSourceAccountId, symbol: run.symbol, referenceTime: capturedAt, plan: marketPlan(strategy.config) }),
       macro: macroPlan.mode === 'off'
         ? { status: 'disabled' }
         : await this.macro.latest({ now: capturedAt, acceptedSchemaVersions: macroPlan.acceptedSchemaVersions, maxAgeSeconds: macroPlan.maxAgeSeconds })

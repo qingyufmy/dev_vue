@@ -58,3 +58,13 @@ export function calculateEma34Evidence(bars: readonly EmaBar[], source: EmaSourc
       bars_below: observations.filter(item => item === 'below').length, bars_at_average: observations.filter(item => item === 'at_average').length,
       latest_cross: latestCross, cross_bars_ago: crossBarsAgo } }
 }
+
+export interface Ema34Plan { version: 1; timeframe: 'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1' }
+
+export function parseEma34Plan(value: unknown): Ema34Plan {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('ema34_plan_invalid')
+  const plan = value as Record<string, unknown>
+  if (Object.keys(plan).length !== 2 || plan.version !== 1 || typeof plan.timeframe !== 'string'
+    || !['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'].includes(plan.timeframe)) throw new Error('ema34_plan_invalid')
+  return { version: 1, timeframe: plan.timeframe as Ema34Plan['timeframe'] }
+}

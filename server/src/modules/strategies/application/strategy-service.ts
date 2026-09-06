@@ -1,3 +1,4 @@
+import { parseEma34Plan } from '../domain/ema34-evidence.js'
 import { createHash } from 'node:crypto'
 import type {
   CreateStrategyInput, CreateStrategySubscriptionInput, CreateStrategyVersionInput, PublishStrategyVersionInput,
@@ -79,13 +80,18 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
     try { return canonicalClone(config) }
     catch { issues.push(issue('error', 'config_json_invalid', '策略配置必须是可序列化的 JSON 对象', 'config')); return {} }
   }
-  const allowed = new Set(['timeframes', 'candle_limit', 'macro_evidence', 'market_data_plan'])
+  const allowed = new Set(['timeframes', 'candle_limit', 'macro_evidence', 'market_data_plan', 'ema34_evidence'])
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) issues.push(issue('error', 'config_field_unknown', `不支持的配置字段：${key}`, `config.${key}`))
   }
+  let indicators = {}
+  if (config.ema34_evidence !== undefined) {
+    try { indicators = { ema34_evidence: parseEma34Plan(config.ema34_evidence) } }
+    catch { issues.push(issue('error', 'ema34_plan_invalid', '请检查 EMA34 证据版本和周期', 'config.ema34_evidence')) }
+  }
   if (config.market_data_plan !== undefined) {
     if (config.timeframes !== undefined || config.candle_limit !== undefined) issues.push(issue('error', 'market_data_plan_conflict', '市场数据计划不能同时使用统一周期或数量配置', 'config.market_data_plan'))
-    try { return { market_data_plan: parseStrategyMarketDataPlan(config.market_data_plan), macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues) } }
+    try { return { ...indicators, market_data_plan: parseStrategyMarketDataPlan(config.market_data_plan), macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues) } }
     catch { issues.push(issue('error', 'strategy_market_data_plan_invalid', '请检查主周期及各周期的 K 线数量', 'config.market_data_plan')); return {} }
   }
   let timeframes = [...DEFAULT_ANALYSIS_TIMEFRAMES]
@@ -106,7 +112,7 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
       issues.push(issue('error', 'candle_limit_invalid', 'K 线数量必须是 50 到 1000 之间的整数', 'config.candle_limit'))
     } else candleLimit = value
   }
-  return { timeframes, candle_limit: candleLimit, macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues) }
+  return { ...indicators, timeframes, candle_limit: candleLimit, macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues) }
 }
 
 function normalizeMacroEvidence(value: unknown, issues: StrategyCompileIssue[]) {
