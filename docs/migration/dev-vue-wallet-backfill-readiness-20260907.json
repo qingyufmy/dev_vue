@@ -1,0 +1,51 @@
+{
+  "kind": "wallet-backfill-readiness/v1",
+  "identity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "database": "dev_vue",
+    "storageMode": "inplace-wallet-v1",
+    "schemaHash": "abe2b48da8b59e33fda7cc8f7dd26f8bd72278aacdead686ef30487e020b957f"
+  },
+  "sourceRows": 4,
+  "sourceHash": "8fcb1191a9ce206534571b81db39dba55d49be12abe887ba3be960ee550b0557",
+  "counts": {
+    "targetRows": "0",
+    "completedSteps": "54"
+  },
+  "blockers": [
+    {
+      "sourceId": "1",
+      "code": "wallet_created_time_basis_required"
+    },
+    {
+      "sourceId": "1",
+      "code": "wallet_custody_binding_unverified"
+    },
+    {
+      "sourceId": "2",
+      "code": "wallet_created_time_basis_required"
+    },
+    {
+      "sourceId": "2",
+      "code": "wallet_custody_binding_unverified"
+    },
+    {
+      "sourceId": "3",
+      "code": "wallet_created_time_basis_required"
+    },
+    {
+      "sourceId": "3",
+      "code": "wallet_custody_binding_unverified"
+    },
+    {
+      "sourceId": "4",
+      "code": "wallet_created_time_basis_required"
+    },
+    {
+      "sourceId": "4",
+      "code": "wallet_custody_binding_unverified"
+    }
+  ],
+  "databaseWritten": false,
+  "actualBackfillVerified": false
+}
