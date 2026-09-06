@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { SubscriptionExecutionPreferences } from '../../strategies/index.js'
+import { parseStrategyEntryMethods, entryMethodForAction, type StrategyEntryMethod } from '../../strategies/index.js'
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -105,6 +106,7 @@ export interface AnalysisInputSnapshot {
 }
 
 export interface TraderInputSnapshot {
+  entryMethods?: StrategyEntryMethod[]
   /** Explicitly frozen preferences only; historical absence is not a default. */
   executionPreferences?: SubscriptionExecutionPreferences
   /** Missing only in historical snapshots, never inferred from today's settings. */
@@ -233,6 +235,11 @@ export function assertTraderDecisionResult(value: TraderDecisionResult, snapshot
   if (value.action === 'hold' && (value.side !== null || value.actions.length > 0)) throw new InferenceError('hold_actions_forbidden', 422)
   if (value.action !== 'hold' && value.actions.length === 0) throw new InferenceError('trader_actions_required', 422)
   if (value.action !== 'hold' && !value.actions.some(action => action.kind === value.action)) throw new InferenceError('trader_action_summary_mismatch', 422)
+  let entryMethods: StrategyEntryMethod[] | undefined
+  if (snapshot.entryMethods !== undefined) {
+    try { entryMethods = parseStrategyEntryMethods(snapshot.entryMethods) }
+    catch { throw new InferenceError('strategy_entry_methods_invalid', 422) }
+  }
   const actionIds = new Set<string>()
   const expected: TraderExpectedState = {
     analysisRevision: snapshot.analysisRevision, subscriptionRevision: snapshot.subscriptionRevision,
@@ -245,6 +252,10 @@ export function assertTraderDecisionResult(value: TraderDecisionResult, snapshot
     actionIds.add(action.actionId)
     if (!traderExecutableActionKinds.has(action.kind) || !isJsonObject(action.parameters) || !isJsonObject(action.expectedState)) throw new InferenceError('trader_action_structure_invalid', 422)
     assertTraderActionParameters(action.kind, action.parameters)
+    if (entryMethods !== undefined) {
+      const method = entryMethodForAction(action.kind, action.parameters.type)
+      if (method && !entryMethods.includes(method)) throw new InferenceError('trader_entry_method_forbidden', 422)
+    }
     for (const key of expectedStateKeys) {
       if (action.expectedState[key] !== expected[key]) throw new InferenceError('trader_expected_state_mismatch', 422)
     }

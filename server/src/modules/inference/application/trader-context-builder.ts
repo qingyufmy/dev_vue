@@ -1,6 +1,7 @@
 import type { TradingReadRepository } from '../../trading/application/trading-ports.js'
 import type { StrategyVersion } from '../../strategies/domain/strategy.js'
 import type { SubscriptionExecutionPreferences } from '../../strategies/index.js'
+import { parseStrategyEntryMethods, strategyEntryMethods } from '../../strategies/index.js'
 import type { InferenceRepository } from './inference-ports.js'
 import type { JsonObject, TraderInputSnapshot, TraderRun } from '../domain/inference.js'
 import { contentHash, InferenceError } from '../domain/inference.js'
@@ -61,6 +62,7 @@ export class TraderContextBuilder {
     if (run.positionsRevision !== positionsRevision || run.pendingOrdersRevision !== pendingOrdersRevision) throw new InferenceError('trader_projection_revision_conflict', 409)
 
     return {
+      entryMethods: parseStrategyEntryMethods(strategy.config.entry_methods === undefined ? [...strategyEntryMethods] : strategy.config.entry_methods),
       ...(this.preferences ? { executionPreferences: await this.preferences.read(run) } : {}),
       kind: 'trader', taskMode: run.taskMode,
       strategy: { id: strategy.strategyId, versionId: strategy.id, promptHash: strategy.promptHash, promptText: strategy.promptText },

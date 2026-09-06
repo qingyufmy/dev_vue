@@ -6,6 +6,7 @@ import type {
 } from '../domain/strategy.js'
 import { StrategyAccessError } from '../domain/strategy.js'
 import { parseStrategyMarketDataPlan } from '../domain/strategy-market-plan.js'
+import { parseStrategyEntryMethods } from '../domain/strategy-entry-methods.js'
 
 export interface StrategyCatalog {
   listAvailable(userId: number, kind?: StrategyKind): Promise<StrategySummary[]>
@@ -71,6 +72,10 @@ function plainObject(value: unknown): Record<string, unknown> | null {
 
 function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, issues: StrategyCompileIssue[]) {
   if (kind === 'trader') {
+    if (config.entry_methods !== undefined) {
+      try { parseStrategyEntryMethods(config.entry_methods) }
+      catch { issues.push(issue('error', 'strategy_entry_methods_invalid', '请选择有效且不重复的入场方式', 'config.entry_methods')) }
+    }
     try { return canonicalClone(config) }
     catch { issues.push(issue('error', 'config_json_invalid', '策略配置必须是可序列化的 JSON 对象', 'config')); return {} }
   }
