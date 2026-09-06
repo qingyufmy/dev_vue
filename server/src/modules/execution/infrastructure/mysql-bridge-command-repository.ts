@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { assertRiskDecisionWindow } from './mysql-execution-window.js'
+import { assertDistributionWindow, assertRiskDecisionWindow } from './mysql-execution-window.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type {
   BridgeCommandRepository, BridgeResultPersistence,
@@ -107,8 +107,11 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
     return this.locked(commandId, async (connection, command, intent) => {
       if (command.status !== 'queued' || command.revision !== expectedRevision) conflict()
       if (Date.parse(command.deadlineAt) <= Date.parse(now)) throw new BridgeCommandError('bridge_command_deadline_expired', 409)
-      if (intent.source_type === 'risk_decision') {
-        try { await assertRiskDecisionWindow(connection, intent.source_id, intent.user_id, intent.trading_account_id, new Date()) }
+      if (intent.source_type === 'risk_decision' || intent.source_type === 'strategy_distribution') {
+        try {
+          const assertWindow = intent.source_type === 'risk_decision' ? assertRiskDecisionWindow : assertDistributionWindow
+          await assertWindow(connection, intent.source_id, intent.user_id, intent.trading_account_id, new Date())
+        }
         catch (error) {
           if (error instanceof ExecutionError) throw new BridgeCommandError(error.code, 409)
           throw error

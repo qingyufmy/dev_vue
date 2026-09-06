@@ -1,0 +1,78 @@
+{
+  "kind": "subscription-window-selects/v2",
+  "queries": [
+    {
+      "name": "analysis_schedule",
+      "sql": "SELECT CAST(s.id AS CHAR) subscription_id,s.user_id,CAST(s.trading_account_id AS CHAR) trading_account_id,CAST(s.analysis_strategy_id AS CHAR) analysis_strategy_id,CAST(s.analysis_strategy_version_id AS CHAR) analysis_strategy_version_id,s.standard_symbol,sc.cadence_seconds,sc.receive_timezone,sc.receive_window_json,sc.next_due_at_utc FROM subscription_schedules sc INNER JOIN strategy_subscriptions s ON s.id=sc.subscription_id AND s.status='active' AND s.analysis_enabled=1 INNER JOIN strategies st ON st.id=s.analysis_strategy_id AND st.status='active' AND st.active_version_id=s.analysis_strategy_version_id AND st.deleted_at_utc IS NULL INNER JOIN trading_account_ownerships own ON own.user_id=s.user_id AND own.trading_account_id=s.trading_account_id AND own.role='owner' AND own.revoked_at_utc IS NULL WHERE sc.next_due_at_utc IS NOT NULL AND sc.next_due_at_utc<=? ORDER BY sc.next_due_at_utc,s.id LIMIT ?",
+      "parameters": [
+        "2000-01-01T00:00:00.000Z",
+        "1"
+      ],
+      "sqlSha256": "f33a09ade1fc68e63673f8d61fa03ae2cb121fa4272c9402e1b5a388a2971170"
+    },
+    {
+      "name": "analysis_window",
+      "sql": "SELECT sc.receive_timezone,sc.receive_window_json\n      FROM strategy_subscriptions s INNER JOIN subscription_schedules sc ON sc.subscription_id=s.id\n      INNER JOIN trading_account_ownerships own ON own.trading_account_id=s.trading_account_id\n        AND own.user_id=s.user_id AND own.role='owner' AND own.revoked_at_utc IS NULL\n      WHERE s.user_id=? AND s.trading_account_id=? AND s.analysis_strategy_id=?\n        AND s.analysis_strategy_version_id=? AND s.standard_symbol=? AND s.status='active' AND s.analysis_enabled=1\n      ORDER BY s.id",
+      "parameters": [
+        -1,
+        "-1",
+        "-1",
+        "-1",
+        "SQL_PROBE"
+      ],
+      "sqlSha256": "55bc5125858a5ed149ba29ec8160b2e4a8784ec097d88c18e1438f850bdccd1b"
+    },
+    {
+      "name": "trader_window",
+      "sql": "SELECT s.user_id,CAST(s.trading_account_id AS CHAR) trading_account_id,sc.receive_timezone,sc.receive_window_json\n        FROM strategy_subscriptions s INNER JOIN subscription_schedules sc ON sc.subscription_id=s.id\n        INNER JOIN trading_account_ownerships own ON own.trading_account_id=s.trading_account_id AND own.user_id=s.user_id\n          AND own.role='owner' AND own.revoked_at_utc IS NULL\n        WHERE s.id=? AND s.user_id=? AND s.trading_account_id=? AND s.revision=? AND s.status='active'\n          AND s.trader_enabled=1 AND s.trader_strategy_id=? AND s.trader_strategy_version_id=? FOR SHARE",
+      "parameters": [
+        "-1",
+        -1,
+        "-1",
+        1,
+        "-1",
+        "-1"
+      ],
+      "sqlSha256": "668e5508d1fc3ae91d0e5d4e9cc24f0b301dd052a232bd866d20c46809d34e9b"
+    },
+    {
+      "name": "clock_provenance",
+      "sql": "SELECT snap.timezone_offset_minutes,snap.clock_status\n    FROM trading_accounts a\n    INNER JOIN trading_account_ownerships own ON own.trading_account_id=a.id AND own.user_id=?\n      AND own.role='owner' AND own.revoked_at_utc IS NULL AND own.revision=a.ownership_revision\n    INNER JOIN trading_account_ownership_intervals oi ON oi.id=own.interval_id AND oi.user_id=own.user_id\n      AND oi.trading_account_id=a.id AND oi.role='owner' AND oi.ended_at_utc IS NULL\n      AND oi.started_at_utc=own.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)\n    INNER JOIN users u ON u.id=own.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL\n    INNER JOIN terminal_account_bindings b ON b.trading_account_id=a.id AND b.unbound_at_utc IS NULL\n    INNER JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=own.user_id\n      AND p.platform=a.platform AND p.deleted_at_utc IS NULL\n    INNER JOIN account_runtime_snapshots snap ON snap.trading_account_id=a.id\n    INNER JOIN trading_projection_revisions pr ON pr.trading_account_id=a.id\n      AND pr.resource_kind='account.metrics' AND pr.resource_id='current' AND pr.revision=snap.revision\n    INNER JOIN trading_projection_provenance_v4 pp ON pp.trading_account_id=a.id\n      AND pp.resource_kind=pr.resource_kind AND pp.resource_id=pr.resource_id AND pp.projection_revision=pr.revision\n      AND pp.user_id=own.user_id AND pp.ownership_interval_id=own.interval_id AND pp.ownership_revision=a.ownership_revision\n      AND pp.terminal_profile_id=b.terminal_profile_id AND pp.terminal_instance_id=b.terminal_instance_id\n    WHERE a.id=? AND a.deleted_at_utc IS NULL\n      AND NOT EXISTS (SELECT 1 FROM terminal_account_bindings other WHERE other.trading_account_id=a.id\n        AND other.unbound_at_utc IS NULL AND other.terminal_profile_id<>b.terminal_profile_id)\n      AND NOT EXISTS (SELECT 1 FROM bridge_connection_sessions session WHERE session.terminal_profile_id=b.terminal_profile_id\n        AND session.disconnected_at_utc IS NULL AND session.connection_epoch<>pp.connection_epoch)\n    FOR SHARE",
+      "parameters": [
+        -1,
+        "-1"
+      ],
+      "sqlSha256": "f41cc8528002df194ba3cf6f5dc6597e73c6e103d2098003161be833d993fd15"
+    },
+    {
+      "name": "execution_window",
+      "sql": "SELECT sc.receive_timezone,sc.receive_window_json\n    FROM risk_decisions_v4 rd INNER JOIN trade_decisions d ON d.id=rd.trade_decision_id\n    INNER JOIN ai_trader_runs r ON r.id=d.trader_run_id AND r.user_id=d.user_id AND r.trading_account_id=d.trading_account_id\n    INNER JOIN strategy_subscriptions s ON s.id=r.subscription_id AND s.user_id=r.user_id AND s.trading_account_id=r.trading_account_id\n      AND s.revision=r.subscription_revision AND s.trader_strategy_id=r.strategy_id AND s.trader_strategy_version_id=r.strategy_version_id\n      AND s.status='active' AND s.trader_enabled=1 AND s.trade_send_enabled=1\n    INNER JOIN trading_accounts account ON account.id=s.trading_account_id AND account.deleted_at_utc IS NULL\n    INNER JOIN trading_account_ownerships own ON own.trading_account_id=account.id AND own.user_id=s.user_id\n      AND own.role='owner' AND own.revoked_at_utc IS NULL AND own.revision=account.ownership_revision\n    INNER JOIN strategies strategy ON strategy.id=s.trader_strategy_id AND strategy.kind='trader'\n      AND strategy.status='active' AND strategy.deleted_at_utc IS NULL AND strategy.active_version_id=s.trader_strategy_version_id\n    INNER JOIN subscription_schedules sc ON sc.subscription_id=s.id\n    WHERE rd.id=? AND rd.user_id=? AND rd.trading_account_id=? AND d.user_id=rd.user_id AND d.trading_account_id=rd.trading_account_id\n    FOR SHARE",
+      "parameters": [
+        "sql-probe-nonexistent",
+        -1,
+        "-1"
+      ],
+      "sqlSha256": "768d4387fac09c4a48ad74094cb6b860cb58cac6c88a77cb9f92f985b5f31867"
+    },
+    {
+      "name": "distribution_window",
+      "sql": "SELECT sc.receive_timezone,sc.receive_window_json\n    FROM execution_distribution_targets target\n    INNER JOIN execution_distributions distribution ON distribution.id=target.distribution_id AND distribution.kind='manual_order'\n    INNER JOIN strategy_subscriptions s ON s.id=target.subscription_id AND s.user_id=target.target_user_id\n      AND s.trading_account_id=target.trading_account_id AND s.revision=target.subscription_revision\n      AND s.trader_strategy_id=distribution.strategy_id AND s.trader_strategy_version_id=distribution.strategy_version_id\n      AND s.status='active' AND s.trader_enabled=1 AND s.trade_send_enabled=1\n    INNER JOIN strategies strategy ON strategy.id=s.trader_strategy_id AND strategy.kind='trader'\n      AND strategy.status='active' AND strategy.deleted_at_utc IS NULL AND strategy.active_version_id=s.trader_strategy_version_id\n    INNER JOIN trading_accounts account ON account.id=s.trading_account_id AND account.deleted_at_utc IS NULL\n    INNER JOIN trading_account_ownerships own ON own.trading_account_id=account.id AND own.user_id=s.user_id\n      AND own.role='owner' AND own.revoked_at_utc IS NULL AND own.revision=account.ownership_revision\n    INNER JOIN subscription_schedules sc ON sc.subscription_id=s.id\n    WHERE target.id=? AND target.target_user_id=? AND target.trading_account_id=? FOR SHARE",
+      "parameters": [
+        "sql-probe-nonexistent",
+        -1,
+        "-1"
+      ],
+      "sqlSha256": "df45e9b3c1197e07371ab2f02b5934f41cb0bb85dcafb6e8056358bbca754405"
+    },
+    {
+      "name": "trader_fanout",
+      "sql": "SELECT CAST(s.id AS CHAR) id,s.user_id,CAST(s.trading_account_id AS CHAR) trading_account_id,s.revision,CAST(s.trader_strategy_id AS CHAR) trader_strategy_id,CAST(s.trader_strategy_version_id AS CHAR) trader_strategy_version_id,sc.receive_timezone,sc.receive_window_json,COALESCE(pr.revision,0) positions_revision,COALESCE(orr.revision,0) pending_orders_revision,EXISTS(SELECT 1 FROM open_position_snapshots p WHERE p.trading_account_id=s.trading_account_id AND JSON_UNQUOTE(JSON_EXTRACT(p.payload_json,'$.symbol'))=s.standard_symbol) has_positions,EXISTS(SELECT 1 FROM pending_order_snapshots o WHERE o.trading_account_id=s.trading_account_id AND JSON_UNQUOTE(JSON_EXTRACT(o.payload_json,'$.symbol'))=s.standard_symbol) has_pending_orders FROM strategy_subscriptions s INNER JOIN subscription_schedules sc ON sc.subscription_id=s.id INNER JOIN trading_account_ownerships own ON own.trading_account_id=s.trading_account_id AND own.user_id=s.user_id AND own.role='owner' AND own.revoked_at_utc IS NULL LEFT JOIN trading_projection_revisions pr ON pr.trading_account_id=s.trading_account_id AND pr.resource_kind='positions' AND pr.resource_id='open' LEFT JOIN trading_projection_revisions orr ON orr.trading_account_id=s.trading_account_id AND orr.resource_kind='pending_orders' AND orr.resource_id='open' WHERE s.user_id=? AND s.analysis_strategy_version_id=? AND s.standard_symbol=? AND s.status='active' AND s.analysis_enabled=1 AND s.trader_enabled=1 AND s.trader_strategy_id IS NOT NULL AND s.trader_strategy_version_id IS NOT NULL ORDER BY s.trading_account_id,s.id FOR SHARE",
+      "parameters": [
+        -1,
+        "-1",
+        "SQL_PROBE"
+      ],
+      "sqlSha256": "9f2edeaac906f1b1f51896a58514e0f2eba706f96e57894db454eccaa32e95b5"
+    }
+  ]
+}

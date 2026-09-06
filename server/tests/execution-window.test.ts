@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { PoolConnection } from 'mysql2/promise'
-import { assertRiskDecisionWindow } from '../src/modules/execution/infrastructure/mysql-execution-window.js'
+import { assertDistributionWindow, assertRiskDecisionWindow } from '../src/modules/execution/infrastructure/mysql-execution-window.js'
 
 describe('execution subscription window', () => {
+  it('binds manual-order distribution to its frozen target and refuses a missing subscription', async () => {
+    let present = false
+    const connection = { async execute(_sql: string, args: unknown[]) {
+      expect(args).toEqual(['target', 42, '7'])
+      return [present ? [{ receive_timezone: 'UTC', receive_window_json: { enabled: false } }] : []]
+    } } as unknown as PoolConnection
+    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_subscription_changed')
+    present = true
+    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).resolves.toBeUndefined()
+  })
   it('refuses missing/changed subscription and malformed window, preserves disabled window', async () => {
     let rows: unknown[] = []
     const connection = { async execute(_sql: string, args: unknown[]) {

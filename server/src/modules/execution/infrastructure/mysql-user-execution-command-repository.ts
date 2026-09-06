@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { assertDistributionWindow } from './mysql-execution-window.js'
+import { ExecutionError } from '../domain/execution.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { sha256Canonical } from '../domain/execution.js'
 import type { JsonObject } from '../../inference/domain/inference.js'
@@ -141,6 +143,13 @@ export class MysqlUserExecutionCommandRepository implements UserExecutionCommand
       }
 
       const symbol = await assertCurrentState(connection, input.command, input.action, account.currency, input.expected)
+      if (input.command.sourceType === 'strategy_distribution') {
+        try { await assertDistributionWindow(connection, input.command.sourceId, input.command.userId, input.command.accountId, new Date()) }
+        catch (error) {
+          if (error instanceof ExecutionError) throw new UserExecutionCommandError(error.code, 409)
+          throw error
+        }
+      }
       assertOperationIdentity(input)
       const operation = input.result.operation
       const now = operation.updatedAt
