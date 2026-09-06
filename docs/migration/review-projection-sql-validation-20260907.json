@@ -1,0 +1,279 @@
+{
+  "kind": "review-projection-sql-receipt/v2",
+  "runs": [
+    {
+      "kind": "review-projection-sql-validation/v2",
+      "observedAt": "2026-09-06T18:29:02.337Z",
+      "identity": {
+        "db": "dev_vue_m1_a",
+        "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+        "version": "8.4.8"
+      },
+      "inputSha256": "ffc8a95b3720b71b3abf505a1e580afe2f6b2970841ded9e2fdf6ea0598793ec",
+      "results": [
+        {
+          "name": "review_cases",
+          "sqlSha256": "5603d459c3266666d2378aa75969407c6a9b542bfe8d273109eb1048f81ac0f7",
+          "explainRows": 4,
+          "plan": [
+            {
+              "table": "c",
+              "type": "ref",
+              "possibleKeys": "uk_review_case_scope,idx_review_case_list,idx_review_case_account,fk_review_case_account",
+              "key": "uk_review_case_scope",
+              "rows": 1,
+              "extra": "Using filesort"
+            },
+            {
+              "table": "a",
+              "type": "eq_ref",
+              "possibleKeys": "PRIMARY",
+              "key": "PRIMARY",
+              "rows": 1,
+              "extra": null
+            },
+            {
+              "table": "sa",
+              "type": "eq_ref",
+              "possibleKeys": "PRIMARY",
+              "key": "PRIMARY",
+              "rows": 1,
+              "extra": null
+            },
+            {
+              "table": "st",
+              "type": "eq_ref",
+              "possibleKeys": "PRIMARY",
+              "key": "PRIMARY",
+              "rows": 1,
+              "extra": null
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "manual_candidates",
+          "sqlSha256": "492f76e5a72af765f5d872a3a8bd73aa2e74f03742c839b1b07229ab92e6418b",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "manual_selection_lock",
+          "sqlSha256": "68d1f2702dcad7b70d63012c9475ca6bc77dc911a0d237c964ab6c08189b18f8",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "memory_updates",
+          "sqlSha256": "ad1054cf693f078e36ec1a5f1e5e450e8366990de0f99c8cc39b6f0b4f967fc5",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "memory_decision_lock",
+          "sqlSha256": "d3ac2a09d96bdaf4fee899c097ac78dd056f77dca884a7b18ccb340867ddc9d7",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "review_case_lock",
+          "sqlSha256": "72f6e78a13b03deec5353840cb35b545daa4b6abc60f90230715f65c3bcb9f3e",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        }
+      ],
+      "businessWritesPerformed": false,
+      "fixtureBehaviorVerified": false
+    },
+    {
+      "kind": "review-projection-sql-validation/v2",
+      "observedAt": "2026-09-06T18:29:02.713Z",
+      "identity": {
+        "db": "dev_vue_m1_a",
+        "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+        "version": "8.4.8"
+      },
+      "inputSha256": "ffc8a95b3720b71b3abf505a1e580afe2f6b2970841ded9e2fdf6ea0598793ec",
+      "results": [
+        {
+          "name": "review_cases",
+          "sqlSha256": "5603d459c3266666d2378aa75969407c6a9b542bfe8d273109eb1048f81ac0f7",
+          "explainRows": 4,
+          "plan": [
+            {
+              "table": "c",
+              "type": "ref",
+              "possibleKeys": "uk_review_case_scope,idx_review_case_list,idx_review_case_account,fk_review_case_account",
+              "key": "uk_review_case_scope",
+              "rows": 1,
+              "extra": "Using filesort"
+            },
+            {
+              "table": "a",
+              "type": "eq_ref",
+              "possibleKeys": "PRIMARY",
+              "key": "PRIMARY",
+              "rows": 1,
+              "extra": null
+            },
+            {
+              "table": "sa",
+              "type": "eq_ref",
+              "possibleKeys": "PRIMARY",
+              "key": "PRIMARY",
+              "rows": 1,
+              "extra": null
+            },
+            {
+              "table": "st",
+              "type": "eq_ref",
+              "possibleKeys": "PRIMARY",
+              "key": "PRIMARY",
+              "rows": 1,
+              "extra": null
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "manual_candidates",
+          "sqlSha256": "492f76e5a72af765f5d872a3a8bd73aa2e74f03742c839b1b07229ab92e6418b",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "manual_selection_lock",
+          "sqlSha256": "68d1f2702dcad7b70d63012c9475ca6bc77dc911a0d237c964ab6c08189b18f8",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "memory_updates",
+          "sqlSha256": "ad1054cf693f078e36ec1a5f1e5e450e8366990de0f99c8cc39b6f0b4f967fc5",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "memory_decision_lock",
+          "sqlSha256": "d3ac2a09d96bdaf4fee899c097ac78dd056f77dca884a7b18ccb340867ddc9d7",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        },
+        {
+          "name": "review_case_lock",
+          "sqlSha256": "72f6e78a13b03deec5353840cb35b545daa4b6abc60f90230715f65c3bcb9f3e",
+          "explainRows": 1,
+          "plan": [
+            {
+              "table": null,
+              "type": null,
+              "possibleKeys": null,
+              "key": null,
+              "rows": null,
+              "extra": "no matching row in const table"
+            }
+          ],
+          "resultRows": 0
+        }
+      ],
+      "businessWritesPerformed": false,
+      "fixtureBehaviorVerified": false
+    }
+  ],
+  "toolHashes": {
+    "verify-review-projection-sql-host.mjs": "d04d21cb4e9d6241827c879925b16253154367d3c3a5dfb7f309340d8335ca77",
+    "run-review-projection-sql-host.py": "5d1ad7ee3b4fa5ca58fce0ec72a37bf4bc21f6addc9151dc5c42906bc7b0f847",
+    "review-projection-sql-input-v2-20260907.json": "ffc8a95b3720b71b3abf505a1e580afe2f6b2970841ded9e2fdf6ea0598793ec"
+  },
+  "repeatMatched": true
+}

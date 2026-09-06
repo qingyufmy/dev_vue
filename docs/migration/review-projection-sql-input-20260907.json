@@ -1,0 +1,60 @@
+{
+  "kind": "review-projection-selects/v1",
+  "sourceSha256": "a4bc771e14f7ff52f50b1674bda4c13395bee11501f99b702fd3f040dc9f4159",
+  "queries": [
+    {
+      "name": "review_cases",
+      "sql": "SELECT c.id,c.kind,c.user_id,CAST(c.trading_account_id AS CHAR) trading_account_id,CONCAT(a.platform,' · ',a.account_login,' · ',a.broker_server) account_label,c.standard_symbol,CAST(c.subscription_id AS CHAR) subscription_id,c.subscription_revision,CAST(c.analysis_strategy_id AS CHAR) analysis_strategy_id,sa.name analysis_strategy_name,CAST(c.trader_strategy_id AS CHAR) trader_strategy_id,st.name trader_strategy_name,c.terminal_period_start_utc,c.terminal_period_end_utc,c.terminal_timezone_offset_minutes,c.status,c.evidence_status,c.evidence_revision,c.evidence_sha256,c.current_version_id,c.confirmed_version_id,c.updated_at_utc,c.revision,c.return_reason FROM review_cases_v4 c INNER JOIN trading_accounts a ON a.id=c.trading_account_id LEFT JOIN strategies sa ON sa.id=c.analysis_strategy_id LEFT JOIN strategies st ON st.id=c.trader_strategy_id WHERE c.user_id=? ORDER BY c.terminal_period_end_utc DESC,c.id DESC LIMIT ?",
+      "sqlSha256": "5603d459c3266666d2378aa75969407c6a9b542bfe8d273109eb1048f81ac0f7",
+      "parameters": [
+        1,
+        10
+      ]
+    },
+    {
+      "name": "manual_candidates",
+      "sql": "SELECT m.id,CAST(m.trading_account_id AS CHAR) trading_account_id,CONCAT(a.platform,' · ',a.account_login,' · ',a.broker_server) account_label,m.ticket,m.position_id,m.symbol,m.side,m.volume,m.opened_at_utc,m.closed_at_utc,m.net_profit,m.terminal_timezone_offset_minutes,m.source_classification,m.eligibility_status,m.evidence_sha256,m.selection_token_sha256,m.selection_expires_at_utc,m.revision FROM manual_review_candidates_v4 m INNER JOIN trading_accounts a ON a.id=m.trading_account_id INNER JOIN trading_account_ownerships o ON o.trading_account_id=m.trading_account_id AND o.user_id=m.user_id AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE m.user_id=? AND m.source_classification='manual' AND m.trading_account_id=? ORDER BY m.closed_at_utc DESC,m.id DESC LIMIT ?",
+      "sqlSha256": "492f76e5a72af765f5d872a3a8bd73aa2e74f03742c839b1b07229ab92e6418b",
+      "parameters": [
+        1,
+        "1",
+        10
+      ]
+    },
+    {
+      "name": "manual_selection_lock",
+      "sql": "SELECT m.id,CAST(m.trading_account_id AS CHAR) trading_account_id,CONCAT(a.platform,' · ',a.account_login,' · ',a.broker_server) account_label,m.ticket,m.position_id,m.symbol,m.side,m.volume,m.opened_at_utc,m.closed_at_utc,m.net_profit,m.terminal_timezone_offset_minutes,m.source_classification,m.eligibility_status,m.evidence_sha256,m.selection_token_sha256,m.selection_expires_at_utc,m.revision FROM manual_review_candidates_v4 m INNER JOIN trading_accounts a ON a.id=m.trading_account_id INNER JOIN trading_account_ownerships o ON o.trading_account_id=m.trading_account_id AND o.user_id=? AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE m.id IN (?) FOR UPDATE",
+      "sqlSha256": "68d1f2702dcad7b70d63012c9475ca6bc77dc911a0d237c964ab6c08189b18f8",
+      "parameters": [
+        1,
+        "00000000-0000-4000-8000-000000000000"
+      ]
+    },
+    {
+      "name": "memory_updates",
+      "sql": "SELECT u.id,u.library_id,u.source_review_case_id,u.source_review_version_id,u.update_kind,u.proposal_key,u.status,u.expected_library_revision,u.proposal_json,u.diff_preview_text,u.conflict_json,u.created_at_utc,u.revision FROM strategy_memory_pending_updates_v4 u INNER JOIN strategy_memory_libraries_v4 l ON l.id=u.library_id INNER JOIN strategies s ON s.id=l.strategy_id WHERE u.library_id=? AND (l.owner_user_id=? OR (l.owner_user_id IS NULL AND s.scope='platform')) ORDER BY u.created_at_utc DESC,u.id",
+      "sqlSha256": "ad1054cf693f078e36ec1a5f1e5e450e8366990de0f99c8cc39b6f0b4f967fc5",
+      "parameters": [
+        "00000000-0000-4000-8000-000000000000",
+        1
+      ]
+    },
+    {
+      "name": "memory_decision_lock",
+      "sql": "SELECT u.id,u.library_id,u.source_review_case_id,u.source_review_version_id,u.update_kind,u.proposal_key,u.status,u.expected_library_revision,u.proposal_json,u.diff_preview_text,u.conflict_json,u.created_at_utc,u.revision,l.owner_user_id,l.revision library_revision,r.version_number current_version_number,r.content_text,r.content_json FROM strategy_memory_pending_updates_v4 u INNER JOIN strategy_memory_libraries_v4 l ON l.id=u.library_id LEFT JOIN strategy_memory_library_revisions_v4 r ON r.id=l.current_revision_id AND r.library_id=l.id WHERE u.id=? FOR UPDATE",
+      "sqlSha256": "d3ac2a09d96bdaf4fee899c097ac78dd056f77dca884a7b18ccb340867ddc9d7",
+      "parameters": [
+        "00000000-0000-4000-8000-000000000000"
+      ]
+    },
+    {
+      "name": "review_case_lock",
+      "sql": "SELECT revision,status,evidence_status,evidence_sha256,evidence_revision,current_version_id FROM review_cases_v4 WHERE id=? AND user_id=? FOR UPDATE",
+      "sqlSha256": "72f6e78a13b03deec5353840cb35b545daa4b6abc60f90230715f65c3bcb9f3e",
+      "parameters": [
+        "00000000-0000-4000-8000-000000000000",
+        1
+      ]
+    }
+  ]
+}

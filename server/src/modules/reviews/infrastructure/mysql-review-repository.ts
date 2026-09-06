@@ -70,7 +70,7 @@ export class MysqlReviewRepository implements ReviewRepository, ReviewWorkerRepo
     const where = ['c.user_id=?']; const values: Array<string | number> = [userId]
     if (filter.kind) { where.push('c.kind=?'); values.push(filter.kind) }
     if (filter.tradingAccountId) { where.push('c.trading_account_id=?'); values.push(filter.tradingAccountId) }
-    values.push(filter.limit)
+    values.push(String(filter.limit))
     const [rows] = await this.pool.execute<CaseRow[]>(`${caseSelect} WHERE ${where.join(' AND ')} ORDER BY c.terminal_period_end_utc DESC,c.id DESC LIMIT ?`, values)
     return rows.map(caseDto)
   }
@@ -80,7 +80,7 @@ export class MysqlReviewRepository implements ReviewRepository, ReviewWorkerRepo
   async listManualCandidates(userId: number, tradingAccountId: string | undefined, limit: number) {
     const where = [`m.user_id=?`, `m.source_classification='manual'`]; const values: Array<string | number> = [userId]
     if (tradingAccountId) { where.push('m.trading_account_id=?'); values.push(tradingAccountId) }
-    values.push(limit)
+    values.push(String(limit))
     const [rows] = await this.pool.execute<CandidateRow[]>(`SELECT ${candidateColumns} FROM manual_review_candidates_v4 m INNER JOIN trading_accounts a ON a.id=m.trading_account_id INNER JOIN trading_account_ownerships o ON o.trading_account_id=m.trading_account_id AND o.user_id=m.user_id AND o.role='owner' AND o.revoked_at_utc IS NULL WHERE ${where.join(' AND ')} ORDER BY m.closed_at_utc DESC,m.id DESC LIMIT ?`, values)
     return rows.map(candidateDto)
   }
