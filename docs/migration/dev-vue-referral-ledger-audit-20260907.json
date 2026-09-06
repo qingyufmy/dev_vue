@@ -1,0 +1,30 @@
+{
+  "kind": "referral-backfill-ledger-audit/v1",
+  "identity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "database": "dev_vue_m1_source_20260907_02",
+    "storageMode": "inplace-referral-v1",
+    "schemaHash": "6226387ab050ee7702f60428c276494f07341d3ae85ea4ad50498755b70e6681"
+  },
+  "runManifestHash": "c16be54b9c2253a3e317e26c77dc97bb041cf3e522732e9e24c6dec0adee27ba",
+  "sourceHash": "6cc709552b2c661c1205b2e3f59b61b3df58c2bfc90d52821839654cfe8ea7ac",
+  "audit": {
+    "runVerified": true,
+    "checkpointsVerified": 1,
+    "batchesVerified": 3,
+    "mappingsVerified": 25,
+    "processedRows": 25,
+    "databaseWrites": 0
+  },
+  "toolManifest": [
+    {
+      "path": "scripts/audit-referral-backfill-host.mjs",
+      "sha256": "8e3c811bcc4217c8298b8ca6812ea827b429dea4ca72c63059ecac9d1ffec04d"
+    },
+    {
+      "path": "scripts/lib/v4-referral-ledger-audit.mjs",
+      "sha256": "8c63b69e93ae4eb344dfa2a060dd2004eafd3bf869df3c25936da309d03974ec"
+    }
+  ],
+  "databaseWrites": 0
+}
