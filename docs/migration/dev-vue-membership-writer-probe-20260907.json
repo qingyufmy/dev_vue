@@ -1,0 +1,83 @@
+{
+  "kind": "membership-writer-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "toolManifest": [
+    {
+      "path": "scripts/lib/mysql-membership-writer.mjs",
+      "sha256": "7d184905672be05305e76832b02a7d84998e74e07edb35eff3bd78a7421cce91"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-contract.mjs",
+      "sha256": "4dff263678f769cc2f733861446b9e50d4a0a2d1d2b9f3e1dc1e278d2c3d8810"
+    },
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/lib/v4-identity-time.mjs",
+      "sha256": "aa52d388a8fdb6854b79b8c3be724cf491d476b23560f619396772851f212976"
+    },
+    {
+      "path": "scripts/lib/v4-identity-values.mjs",
+      "sha256": "4d6c51c97ef6841c17536c1e2a794eacca715981c0ef497d73c68b998d89fd6e"
+    },
+    {
+      "path": "scripts/lib/v4-membership-rows.mjs",
+      "sha256": "42d99ff83624c6fbc402870d740c983681a19aa9c3bb464d8987e408d818cd9e"
+    },
+    {
+      "path": "scripts/lib/v4-membership-source.mjs",
+      "sha256": "94681611df377570aa201fa645ac4c23ae8606143262bb3c24d01b320d3a1378"
+    },
+    {
+      "path": "scripts/lib/v4-payment-effects-source.mjs",
+      "sha256": "f62ef15f8597f195d87745abed7ac7c7e380b3866f19d59f296b2abfb2a15fb9"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-source.mjs",
+      "sha256": "095c32f6a06bbd0f428af936108246e50fc7062790e2b9b46dfdcd5862128a8b"
+    },
+    {
+      "path": "scripts/probe-membership-writer-host.mjs",
+      "sha256": "1656ee3ec422695c24e7ec484976be23f688084c37b7e1cf7603a5ca9ecaef3d"
+    },
+    {
+      "path": "scripts/run-membership-writer-host.py",
+      "sha256": "ada24a9399c092f46f34cc0337205628280e48cef8cfa1188cab1395afbddac6"
+    },
+    {
+      "path": "tests/fixtures/membership-fixture.mjs",
+      "sha256": "55731b3f53633e6effad166b63ef9401e7a18830b2fa1c1aef35c8b2576c2a61"
+    }
+  ],
+  "fixtureOnly": true,
+  "first": {
+    "applied": true,
+    "targetHash": "0385e14704d78738cc08bd9194765af5ab8745a949a8ca0324ba5d20e41e3107"
+  },
+  "repeat": {
+    "applied": false,
+    "targetHash": "0385e14704d78738cc08bd9194765af5ab8745a949a8ca0324ba5d20e41e3107"
+  },
+  "sourceLockedAndVerified": true,
+  "missingVerifyOnlyRejected": true,
+  "sourceDriftRejected": true,
+  "membershipDriftRejected": true,
+  "rolledBack": true,
+  "finalCounts": {
+    "users_count": 0,
+    "memberships_count": 0,
+    "runs_count": 0
+  },
+  "currentDevVueWritten": false,
+  "realHistoricalEvidenceValidated": false
+}
