@@ -1,0 +1,37 @@
+{
+  "kind": "referral-source-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 45,
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "candidateRegistrationTimeUtc": "2026-09-06T19:01:02.576Z",
+  "conversionVersion": "referral-conversion/v1",
+  "sourceProjectionHash": "6cc709552b2c661c1205b2e3f59b61b3df58c2bfc90d52821839654cfe8ea7ac",
+  "candidateTargetsHash": "ef723c1a309d0f7ad7ea416cd15fe618c4165b5a35aed8157932a9017edfbd7f",
+  "sourceUsers": 25,
+  "candidateRows": 25,
+  "totalCreditUnits": "8000000000",
+  "creditScale": 8,
+  "negativeBalances": 0,
+  "nullReferralCodes": 20,
+  "emptyReferralCodes": 0,
+  "nullReferredBy": 25,
+  "emptyReferredBy": 0,
+  "duplicateCodeGroups": "0",
+  "duplicateCodeUsers": "0",
+  "unmatchedNonemptyReferrals": "0",
+  "ambiguousNonemptyReferrals": "0",
+  "targetTablePresent": false,
+  "databaseWrites": 0,
+  "businessBackfillComplete": false,
+  "remainingChecks": [
+    "target_schema_rehearsal",
+    "transactional_writer_and_receipts",
+    "independent_target_readback",
+    "financial_write_protocol"
+  ],
+  "fullNormalizationComplete": false
+}
