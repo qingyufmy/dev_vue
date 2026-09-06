@@ -1,0 +1,282 @@
+{
+  "kind": "dev_vue_account_wave_draft",
+  "version": 1,
+  "sourceDatabase": "dev_vue",
+  "restoreDatabase": "dev_vue_m1_source_20260906_01",
+  "targetIdentity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "database": "dev_vue",
+    "storageMode": "inplace-account-v2",
+    "schemaHash": "47b32e4bfbe776de7dac42882016ee8c55dd0d237df7544bddf3ac9690bd91a3"
+  },
+  "backupSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "originalSchemaHash": "a5031597b419f41ae21ae2cf6cd1cf80616db601473079c0c8a2a542ad3e3e36",
+  "originalRowsHash": "1acdcef31318fdb532899bd8f5260b878cd357fbd597ec01d21a6640154fe872",
+  "sourceEvidenceHash": "f3553a27a2b41d30dea5f916512e58e1ef3055dd231f3ebf13b1ceb4e2793e75",
+  "accountSourceHash": "dae015aef77252a79d4730542e3325651ee9d6b59716678f9d61a14f1aef67e7",
+  "accountMappingHash": "e3446474af9da37b9935f8ffe3f7237d180d42b9f383069ad05f1217458de575",
+  "counts": {
+    "sourceAccounts": 4,
+    "historicalIntervals": 274,
+    "currentBindings": 3,
+    "openIntervals": 3,
+    "historicalUserAccountPairs": 4,
+    "targetsWithCurrentFacts": 3
+  },
+  "ownershipNotes": [
+    {
+      "code": "legacy_single_account_switched",
+      "locatorHash": "4c14f0aa3e497f0c6896453a927f7841ad42e7054caf619d993f861a3e95a4a8"
+    }
+  ],
+  "tools": [
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "3613e0b3677457aa04ae83fa2476eb149a79f1758577b48457b57bb9635920a9"
+    },
+    {
+      "path": "scripts/freeze-dev-vue-account-wave.mjs",
+      "sha256": "760bfc07fbf283d1a6a77afe1c4b038ac5863a725b94edd506ba4af821a356ce"
+    },
+    {
+      "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+      "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+    },
+    {
+      "path": "scripts/lib/dev-vue-inplace-review.mjs",
+      "sha256": "c814141b7e7c0fb2fcec45da6ab7b460d9375e32eb7dcfa25301637288af9922"
+    },
+    {
+      "path": "scripts/lib/inplace-account-build.mjs",
+      "sha256": "2b9ef4dbab27edce134266d82092042d857ef9ae3d099c791969709423d6d453"
+    },
+    {
+      "path": "scripts/lib/inplace-column-evidence.mjs",
+      "sha256": "7f62a4fae29a8e3ce12c84b6f704aa04f32c4ab324b53a2bf9bc706e66b67349"
+    },
+    {
+      "path": "scripts/lib/inplace-foundation-upgrade.mjs",
+      "sha256": "9b024fc4ca674cc8ac5cec70754aeeb4c873cf6878d27b312e0876bf74a46f6d"
+    },
+    {
+      "path": "scripts/lib/inplace-source-evidence-upgrade.mjs",
+      "sha256": "29caa1458af104e06c4f2795b257fc3432fd14e89a958338f567f86e8a7c9d8e"
+    },
+    {
+      "path": "scripts/lib/inplace-table-dependencies.mjs",
+      "sha256": "73e0af66529ee27eda339ae4327fb653acc9d8e2057dd8c344e8e35d66bd2562"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-account-backfill.mjs",
+      "sha256": "51d92f4be55670ad26dac0b93574a9703d117c8fb4bd470d13ae119b287fef9c"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-column-store.mjs",
+      "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+    },
+    {
+      "path": "scripts/lib/trade-history-migration-rehearsal.mjs",
+      "sha256": "546ac565d54d10cf67d8b4e3fbcb20e22a51d0928ed3c66abcb2a7be912c4ec9"
+    },
+    {
+      "path": "scripts/lib/v4-account-backfill-writer.mjs",
+      "sha256": "2bd9331d05120b3a3b9b4395021e5b235458e7402daf5833fdcca7b3b1da41e7"
+    },
+    {
+      "path": "scripts/lib/v4-account-conversion.mjs",
+      "sha256": "e013544b335cd9a7cb6f532a5cf9ea03715eff82bbfff2adfe72d28799236da0"
+    },
+    {
+      "path": "scripts/lib/v4-account-id-mapping.mjs",
+      "sha256": "0b77de5c0bbff5ce10bb388aa841d40b80d8fc1aaa36b107e67c394c4420335a"
+    },
+    {
+      "path": "scripts/lib/v4-account-mapping-candidates.mjs",
+      "sha256": "025140e71268f47e26681965522543fb38978f25d8787ad13ab1eb2742551270"
+    },
+    {
+      "path": "scripts/lib/v4-account-ownership-consistency.mjs",
+      "sha256": "511fa90b1a4bb52c31bb054aec59d9894fcd2a7fc1aeb4836bf75ff83941bb99"
+    },
+    {
+      "path": "scripts/lib/v4-account-wave-manifest.mjs",
+      "sha256": "9459868977b3bc80c1e0bb1e5979288b668956dc79e8795972734b6ab24aa59a"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-contract.mjs",
+      "sha256": "4dff263678f769cc2f733861446b9e50d4a0a2d1d2b9f3e1dc1e278d2c3d8810"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-mysql-rehearsal.mjs",
+      "sha256": "8930f4173d80ada138e92406a50f0fba927d2d62a767d70fc83cbb58e998baa6"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-mysql-repository.mjs",
+      "sha256": "c10905a49e99e8c12dabcb9e86434634eeb34344f4c0769f0fb88f543eb31c92"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-preflight.mjs",
+      "sha256": "7554474d364cd76202191ad67f008fd4df0d3a48d716b5b787001266f6408bbe"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-runner.mjs",
+      "sha256": "34a2e26ea0d09e8968825aaabee66f2e0c887853bf649f2c3e0327104231dbc2"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-source-reader.mjs",
+      "sha256": "125c10ee99eed7c9830a8372e18cd6787b668ae250e330281fe89744434f931d"
+    },
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/lib/v4-backup-continuation.mjs",
+      "sha256": "b8a6e944a37b6b7616983fb0f4693ed4a6768194e072efd702374dac19db2771"
+    },
+    {
+      "path": "scripts/lib/v4-backup-executor.mjs",
+      "sha256": "076e76278f0a2ba3a638687453c2aeb3a26da2fe396ca74680a75a1e07a42443"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/lib/v4-backup-observation.mjs",
+      "sha256": "0259300b24c366eefdf5262875d2791e341ea34c754677a25912abc703855031"
+    },
+    {
+      "path": "scripts/lib/v4-backup-preflight.mjs",
+      "sha256": "c6c66455b49c6634903b10025092c380167b21afd2a6516e5faccebf7c445fd9"
+    },
+    {
+      "path": "scripts/lib/v4-backup-sql-scope.mjs",
+      "sha256": "fdeff43a990150c3052ea632d671fd268c035ab026d55d935b67ca3f18540388"
+    },
+    {
+      "path": "scripts/lib/v4-field-manifest.mjs",
+      "sha256": "ada31b0efdc4efc2853d148319e5435b18eae69bc450731b91ba4c07cd969848"
+    },
+    {
+      "path": "scripts/lib/v4-identity-lifecycle.mjs",
+      "sha256": "d3ffcd4e95759b46642140d6011d4f8633493d77b46a1c729bf44784eaf9796b"
+    },
+    {
+      "path": "scripts/lib/v4-identity-ownership-audit.mjs",
+      "sha256": "e92662215fa30caeb4af945816f7dc2fe3df0210617ff2fbf19f9afde814af0e"
+    },
+    {
+      "path": "scripts/lib/v4-identity-source-audit.mjs",
+      "sha256": "580815c956bacb9ac9620b59f0f5a48edf2d8966bebbe56a38160e80248d2f35"
+    },
+    {
+      "path": "scripts/lib/v4-identity-time.mjs",
+      "sha256": "aa52d388a8fdb6854b79b8c3be724cf491d476b23560f619396772851f212976"
+    },
+    {
+      "path": "scripts/lib/v4-identity-values.mjs",
+      "sha256": "4d6c51c97ef6841c17536c1e2a794eacca715981c0ef497d73c68b998d89fd6e"
+    },
+    {
+      "path": "scripts/lib/v4-inplace-account-row-store.mjs",
+      "sha256": "43c4701f151960ba16ea70f5137830876c1f71b6a2aa63638dd837d27b1d3fc7"
+    },
+    {
+      "path": "scripts/lib/v4-migration-corrections.mjs",
+      "sha256": "d1c4fabe1bd4029fa1c62c6e95ed4c7e6775cbd32947fdc6732619cd3efb4189"
+    },
+    {
+      "path": "scripts/lib/v4-migration-events.mjs",
+      "sha256": "8c162873b2e3b7ad54ded5274ac1782c04f41fc6f1a5690dc357e674e2fa5dc9"
+    },
+    {
+      "path": "scripts/lib/v4-migration-plan.mjs",
+      "sha256": "087d097447de41bda0781aca7cfd6bab82bf6bedaa5c22fde9e8b80e443c2c37"
+    },
+    {
+      "path": "scripts/lib/v4-migration-recovery.mjs",
+      "sha256": "a102d98d5e14171a6dee45d43c63d448a03a60298899d440aff89530d9cdcdd5"
+    },
+    {
+      "path": "scripts/lib/v4-migration-target-preflight.mjs",
+      "sha256": "b5487faef44493c3cbeee35a047f389943d26b5fec3f4bdbe0a887a6ab9e1cdd"
+    },
+    {
+      "path": "scripts/lib/v4-ownership-backfill-writer.mjs",
+      "sha256": "5ae19500bab065b6dd9791256dc9d75e65eb513cf3a7adddd18c3e3b4e3ac173"
+    },
+    {
+      "path": "scripts/lib/v4-ownership-conversion.mjs",
+      "sha256": "2ee5350462aa182fa60d5e2f5dee0b25b28a8ba5ac4e205c0251eb760ec40f44"
+    },
+    {
+      "path": "scripts/lib/v4-schema-fingerprint.mjs",
+      "sha256": "0255e014bbf75e3631d409cf5babec7c70c4c43112a101d6b4f63a6e8b1aabaf"
+    },
+    {
+      "path": "scripts/lib/v4-schema-migration-runner.mjs",
+      "sha256": "76ee60bebba8405d29d10a9c0a72cbbb9e79b0321e19b8f5c41274b3899db749"
+    },
+    {
+      "path": "scripts/lib/v4-source-row-evidence.mjs",
+      "sha256": "aee6566776e1ff94679283cf1ec1b5e78e218dfc1de89375438c588427781b0e"
+    },
+    {
+      "path": "scripts/lib/v4-upgrade-review.mjs",
+      "sha256": "10145c3cd665494083b8dcfddfc7398c23d2f7057bdb7265e34b42705e70ba48"
+    },
+    {
+      "path": "server/db/migrations/inplace/001_upgrade_journal.sql",
+      "sha256": "74952b442e780025a01f7626b37bd2de643dfe1ade68b2ac6d4c43db160318c3"
+    },
+    {
+      "path": "server/db/migrations/inplace/002_user_bridge_columns.sql",
+      "sha256": "7a7d90511d271cd7118a9d35de506bd5f2ec18cb6e8455452b254371b513004d"
+    },
+    {
+      "path": "server/db/migrations/inplace/003_identity_migration_tables.sql",
+      "sha256": "158e5283b3e0fa99545c59ae66ed013db4b54ffdaa6c173013c234b2630a51ee"
+    },
+    {
+      "path": "server/db/migrations/inplace/004_account_build_tables.sql",
+      "sha256": "9b66231313014b799153bc592615ec5ea40710b3f4a538fc03da9dfd0e71951b"
+    },
+    {
+      "path": "server/db/migrations/inplace/005_source_row_evidence.sql",
+      "sha256": "4d7b0151f8ab3bc68228b1cd644435d6d7d4810c58e24678439e45432ba60183"
+    }
+  ],
+  "timeBases": {
+    "trading_accounts": null,
+    "mt5_account_ownership_history": null
+  },
+  "sourceProvenanceRequired": true,
+  "admission": {
+    "approved": false,
+    "blockers": [
+      "historical_time_basis_required",
+      "historical_platform_currency_coverage",
+      "permission_projection_reconciliation",
+      "real_business_rehearsal_required"
+    ]
+  },
+  "scope": {
+    "sourceTables": [
+      "trading_accounts",
+      "mt5_account_ownership_history"
+    ],
+    "sourceRows": 278,
+    "writes": [
+      "trading_accounts_v4_build",
+      "user_trading_account_settings_v4_build",
+      "trading_account_ownership_intervals_v4_build",
+      "trading_account_ownerships_v4_build"
+    ],
+    "activation": false,
+    "rename": false,
+    "deleteLegacy": false
+  },
+  "executable": false,
+  "manifestHash": "20758167ea94e51b94888b725c5f3f07612a4491b731e5551c6534c39366c0e8"
+}
