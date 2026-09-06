@@ -6,7 +6,7 @@ export const emptyTradeHistoryFilters = (): TradeHistoryFilters => ({ symbol: ''
 export const sourceLabel = (value: TradeHistorySource) => ({ system: '系统策略', manual: '手动交易', other_ea: '其他 EA', mixed: '混合来源', unknown: '待核实' })[value]
 export const sideLabel = (value: TradeHistoryRecord['side']) => value === 'buy' ? '买入' : '卖出'
 export const evidenceLabel = (value: TradeHistoryRecord['evidenceStatus']) => ({ complete: '证据完整', partial: '证据待补', conflicted: '证据冲突' })[value]
-export const money = (value: string, currency = 'USD') => `${Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`
+export const money = (value: string | null, currency: string | null) => value === null ? '--' : `${Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency ?? '币种未知'}`
 export const decimal = (value: string | null, digits = 2) => value === null ? '--' : Number(value).toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 export const terminalTime = (value: string | null, offsetMinutes: number) => {
   if (!value) return '--'
@@ -20,3 +20,5 @@ export const attributionLink = (item: TradeRecordDetail['attributions'][number])
   if (item.kind === 'review_case') return { label: '查看交易复盘', to: { path: '/reviewer', query: { case_id: item.sourceId } } }
   return { label: item.kind === 'bridge_command' ? '查看终端指令证据' : '查看执行链路', to: { path: '/audit', query: { source_kind: item.kind, source_id: item.sourceId } } }
 }
+
+export const moneyStatusLabel = (status: 'comparable' | 'unknown' | 'mixed' | 'empty') => ({ comparable: '已计入佣金、库存费和手续费', unknown: '币种证据不足，暂不汇总金额', mixed: '包含不同币种，暂不汇总金额', empty: '当前范围暂无交易记录' })[status]

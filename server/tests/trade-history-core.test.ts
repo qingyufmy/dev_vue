@@ -4,14 +4,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { classifyTradeAttribution, TradeHistoryService, tradeHistoryRoutes, type TradeHistoryRepository, type TradeRecordDetail } from '../src/modules/trade-history/index.js'
 
 const now = '2026-09-04T08:00:00.000Z'
-const item = {
+const item = { accountCurrency: 'USD', currencyEvidence: 'explicit_record' as const,
   id: 'trade-1', accountId: '42', platform: 'mt5' as const, primaryTicket: '1001', positionId: '9001', symbol: 'XAUUSD', side: 'buy' as const,
   status: 'closed' as const, source: 'system' as const, attributionStatus: 'exact' as const, evidenceStatus: 'complete' as const,
   volume: '0.10', entryPrice: '2500.10', exitPrice: '2510.10', stopLoss: '2490', takeProfit: '2520', grossProfit: '100', commission: '-2',
   swap: '-1', fee: '0', netProfit: '97', openedAt: '2026-09-04T07:00:00.000Z', closedAt: '2026-09-04T07:30:00.000Z',
   terminalTimezoneOffsetMinutes: 180, revision: 1,
 }
-const summary = { tradeCount: 1, winningCount: 1, losingCount: 0, breakevenCount: 0, winRatePercent: '100', grossProfit: '100', commission: '-2', swap: '-1', fee: '0', netProfit: '97', profitFactor: null }
+const summary = { accountCurrency: 'USD', moneyStatus: 'comparable' as const, tradeCount: 1, winningCount: 1, losingCount: 0, breakevenCount: 0, winRatePercent: '100', grossProfit: '100', commission: '-2', swap: '-1', fee: '0', netProfit: '97', profitFactor: null }
 const detail: TradeRecordDetail = { ...item, evidenceHash: 'a'.repeat(64), deals: [], attributions: [{ kind: 'market_analysis', sourceId: 'analysis-1', relation: 'opened', proofKind: 'terminal_deal' }] }
 
 function repository(overrides: Partial<TradeHistoryRepository> = {}): TradeHistoryRepository {
@@ -67,12 +67,27 @@ describe('Stage 12S authoritative trade history', () => {
     await app.register(tradeHistoryRoutes, { prefix: '/api/v4', service: new TradeHistoryService(repository(), () => new Date(now)), auth: { async authenticate() { return { userId: 7 } } } })
     const list = await app.inject({ method: 'GET', url: '/api/v4/trade-history?account_id=42' })
     expect(list.statusCode).toBe(200)
-    expect(list.json().data).toMatchObject({ captured_end: now, freshness: { history_revision: '8' }, items: [{ primary_ticket: '1001', source: 'system', net_profit: '97' }] })
+    expect(list.json().data).toMatchObject({ captured_end: now, freshness: { history_revision: '8' }, summary: { account_currency: 'USD', money_status: 'comparable' }, items: [{ account_currency: 'USD', currency_evidence: 'explicit_record', primary_ticket: '1001', source: 'system', net_profit: '97' }] })
     const record = await app.inject({ method: 'GET', url: '/api/v4/trade-history/trade-1' })
     expect(record.statusCode).toBe(200)
     expect(record.json().data.attributions).toEqual([{ kind: 'market_analysis', source_id: 'analysis-1', relation: 'opened', proof_kind: 'terminal_deal' }])
     expect(record.body).not.toContain('evidence_json')
     await app.close()
+  })
+
+  it('preserves unavailable money as null through HTTP', async () => {
+    const base = await repository().list(7, { accountId: '42', capturedEnd: now, limit: 50, cursor: null })
+    const repo = repository({ list: async () => ({ ...base,
+      summary: { ...summary, accountCurrency: null, moneyStatus: 'unknown', grossProfit: null, commission: null, swap: null, fee: null, netProfit: null, profitFactor: null },
+      daily: [{ businessDate: '2026-09-04', tradeCount: 1, netProfit: null, cumulativeNetProfit: null }],
+    }) })
+    const app = Fastify({ logger: false })
+    await app.register(tradeHistoryRoutes, { prefix: '/api/v4', service: new TradeHistoryService(repo, () => new Date(now)), auth: { async authenticate() { return { userId: 7 } } } })
+    try {
+      const result = await app.inject({ method: 'GET', url: '/api/v4/trade-history?account_id=42' })
+      expect(result.statusCode).toBe(200)
+      expect(result.json().data).toMatchObject({ summary: { account_currency: null, money_status: 'unknown', net_profit: null, profit_factor: null }, daily: [{ net_profit: null, cumulative_net_profit: null }] })
+    } finally { await app.close() }
   })
 
   it('keeps the migration append-only and separates terminal facts from account-level records', async () => {

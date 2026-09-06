@@ -1,3 +1,5 @@
+import type { TradeMoneyCurrency } from './trade-money-currency.js'
+
 export type TradeHistorySide = 'buy' | 'sell'
 export type TradeHistorySource = 'system' | 'manual' | 'other_ea' | 'mixed' | 'unknown'
 export type TradeHistoryStatus = 'open' | 'closed' | 'partial' | 'unknown'
@@ -28,7 +30,7 @@ export interface TradeHistoryCursor {
   id: string
 }
 
-export interface TradeRecordSummary {
+export interface TradeRecordSummary extends TradeMoneyCurrency {
   id: string
   accountId: string
   platform: 'mt4' | 'mt5'
@@ -56,7 +58,7 @@ export interface TradeRecordSummary {
   revision: number
 }
 
-export interface TradeRecordDeal {
+export interface TradeRecordDeal extends TradeMoneyCurrency {
   id: string
   dealTicket: string
   orderTicket: string | null
@@ -86,24 +88,26 @@ export interface TradeRecordDetail extends TradeRecordSummary {
 }
 
 export interface TradeHistorySummary {
+  accountCurrency: string | null
+  moneyStatus: 'comparable' | 'unknown' | 'mixed' | 'empty'
   tradeCount: number
   winningCount: number
   losingCount: number
   breakevenCount: number
   winRatePercent: string | null
-  grossProfit: string
-  commission: string
-  swap: string
-  fee: string
-  netProfit: string
+  grossProfit: string | null
+  commission: string | null
+  swap: string | null
+  fee: string | null
+  netProfit: string | null
   profitFactor: string | null
 }
 
 export interface TradeHistoryDailyPoint {
   businessDate: string
   tradeCount: number
-  netProfit: string
-  cumulativeNetProfit: string
+  netProfit: string | null
+  cumulativeNetProfit: string | null
 }
 
 export interface TradeHistoryFreshness {

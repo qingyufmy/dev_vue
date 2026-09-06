@@ -2188,8 +2188,10 @@
       },
       "TradeHistoryRecordFields": {
         "type": "object",
-        "required": ["id", "account_id", "platform", "primary_ticket", "position_id", "symbol", "side", "status", "source", "attribution_status", "evidence_status", "volume", "entry_price", "exit_price", "stop_loss", "take_profit", "gross_profit", "commission", "swap", "fee", "net_profit", "opened_at", "closed_at", "terminal_timezone_offset_minutes", "revision"],
+        "required": ["id", "account_id", "platform", "primary_ticket", "position_id", "symbol", "side", "status", "source", "attribution_status", "evidence_status", "volume", "entry_price", "exit_price", "stop_loss", "take_profit", "gross_profit", "commission", "swap", "fee", "net_profit", "opened_at", "closed_at", "terminal_timezone_offset_minutes", "revision", "account_currency", "currency_evidence"],
         "properties": {
+          "account_currency": { "type": ["string", "null"], "minLength": 1, "maxLength": 16 },
+          "currency_evidence": { "type": "string", "enum": ["unknown", "explicit_record"] },
           "id": { "$ref": "#/components/schemas/OpaqueId" }, "account_id": { "$ref": "#/components/schemas/OpaqueId" },
           "platform": { "type": "string", "enum": ["mt4", "mt5"] }, "primary_ticket": { "type": "string", "minLength": 1, "maxLength": 64 },
           "position_id": { "type": ["string", "null"], "maxLength": 64 }, "symbol": { "$ref": "#/components/schemas/Symbol" },
@@ -2213,12 +2215,18 @@
       },
       "TradeHistorySummary": {
         "type": "object", "additionalProperties": false,
-        "required": ["trade_count", "winning_count", "losing_count", "breakeven_count", "win_rate_percent", "gross_profit", "commission", "swap", "fee", "net_profit", "profit_factor"],
+        "allOf": [
+          { "if": { "properties": { "money_status": { "const": "comparable" } } }, "then": { "properties": { "account_currency": { "type": "string" }, "trade_count": { "minimum": 1 }, "gross_profit": { "$ref": "#/components/schemas/Decimal" }, "commission": { "$ref": "#/components/schemas/Decimal" }, "swap": { "$ref": "#/components/schemas/Decimal" }, "fee": { "$ref": "#/components/schemas/Decimal" }, "net_profit": { "$ref": "#/components/schemas/Decimal" } } }, "else": { "properties": { "account_currency": { "type": "null" }, "gross_profit": { "type": "null" }, "commission": { "type": "null" }, "swap": { "type": "null" }, "fee": { "type": "null" }, "net_profit": { "type": "null" }, "profit_factor": { "type": "null" } } } },
+          { "if": { "properties": { "money_status": { "const": "empty" } } }, "then": { "properties": { "trade_count": { "const": 0 } } }, "else": { "properties": { "trade_count": { "minimum": 1 } } } }
+        ],
+        "required": ["trade_count", "winning_count", "losing_count", "breakeven_count", "win_rate_percent", "gross_profit", "commission", "swap", "fee", "net_profit", "profit_factor", "account_currency", "money_status"],
         "properties": {
+          "account_currency": { "type": ["string", "null"], "minLength": 1, "maxLength": 16 },
+          "money_status": { "type": "string", "enum": ["comparable", "unknown", "mixed", "empty"] },
           "trade_count": { "type": "integer", "minimum": 0 }, "winning_count": { "type": "integer", "minimum": 0 }, "losing_count": { "type": "integer", "minimum": 0 }, "breakeven_count": { "type": "integer", "minimum": 0 },
-          "win_rate_percent": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "gross_profit": { "$ref": "#/components/schemas/Decimal" },
-          "commission": { "$ref": "#/components/schemas/Decimal" }, "swap": { "$ref": "#/components/schemas/Decimal" }, "fee": { "$ref": "#/components/schemas/Decimal" },
-          "net_profit": { "$ref": "#/components/schemas/Decimal" }, "profit_factor": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }
+          "win_rate_percent": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "gross_profit": { "anyOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "commission": { "anyOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "swap": { "anyOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "fee": { "anyOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "net_profit": { "anyOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "profit_factor": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }
         }
       },
       "TradeHistoryPageResponse": {
@@ -2228,13 +2236,15 @@
           "freshness": { "type": "object", "additionalProperties": false, "required": ["status", "history_revision", "fresh_through", "last_success_at"], "properties": { "status": { "type": "string", "enum": ["empty", "syncing", "ready", "stale", "failed"] }, "history_revision": { "$ref": "#/components/schemas/Revision" }, "fresh_through": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] }, "last_success_at": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] } } },
           "items": { "type": "array", "items": { "$ref": "#/components/schemas/TradeHistoryRecord" } }, "next_cursor": { "type": ["string", "null"], "maxLength": 2048 }, "has_more": { "type": "boolean" },
           "summary": { "$ref": "#/components/schemas/TradeHistorySummary" },
-          "daily": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["business_date", "trade_count", "net_profit", "cumulative_net_profit"], "properties": { "business_date": { "$ref": "#/components/schemas/BusinessDate" }, "trade_count": { "type": "integer", "minimum": 0 }, "net_profit": { "$ref": "#/components/schemas/Decimal" }, "cumulative_net_profit": { "$ref": "#/components/schemas/Decimal" } } } }
+          "daily": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["business_date", "trade_count", "net_profit", "cumulative_net_profit"], "properties": { "business_date": { "$ref": "#/components/schemas/BusinessDate" }, "trade_count": { "type": "integer", "minimum": 0 }, "net_profit": { "anyOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "cumulative_net_profit": { "anyOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] } } } }
         } }, "meta": { "$ref": "#/components/schemas/Meta" } }
       },
       "TradeRecordDeal": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "deal_ticket", "order_ticket", "role", "side", "entry_kind", "volume", "price", "gross_profit", "commission", "swap", "fee", "occurred_at"],
-        "properties": { "id": { "$ref": "#/components/schemas/OpaqueId" }, "deal_ticket": { "type": "string" }, "order_ticket": { "type": ["string", "null"] }, "role": { "type": "string", "enum": ["entry", "exit", "fee", "adjustment", "unknown"] }, "side": { "type": "string", "enum": ["buy", "sell", "none", "unknown"] }, "entry_kind": { "type": "string", "enum": ["in", "out", "inout", "out_by", "none", "unknown"] }, "volume": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "price": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "gross_profit": { "$ref": "#/components/schemas/Decimal" }, "commission": { "$ref": "#/components/schemas/Decimal" }, "swap": { "$ref": "#/components/schemas/Decimal" }, "fee": { "$ref": "#/components/schemas/Decimal" }, "occurred_at": { "$ref": "#/components/schemas/UtcDateTime" } }
+        "required": ["id", "deal_ticket", "order_ticket", "role", "side", "entry_kind", "volume", "price", "gross_profit", "commission", "swap", "fee", "occurred_at", "account_currency", "currency_evidence"],
+        "properties": {
+          "account_currency": { "type": ["string", "null"], "minLength": 1, "maxLength": 16 },
+          "currency_evidence": { "type": "string", "enum": ["unknown", "explicit_record"] }, "id": { "$ref": "#/components/schemas/OpaqueId" }, "deal_ticket": { "type": "string" }, "order_ticket": { "type": ["string", "null"] }, "role": { "type": "string", "enum": ["entry", "exit", "fee", "adjustment", "unknown"] }, "side": { "type": "string", "enum": ["buy", "sell", "none", "unknown"] }, "entry_kind": { "type": "string", "enum": ["in", "out", "inout", "out_by", "none", "unknown"] }, "volume": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "price": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] }, "gross_profit": { "$ref": "#/components/schemas/Decimal" }, "commission": { "$ref": "#/components/schemas/Decimal" }, "swap": { "$ref": "#/components/schemas/Decimal" }, "fee": { "$ref": "#/components/schemas/Decimal" }, "occurred_at": { "$ref": "#/components/schemas/UtcDateTime" } }
       },
       "TradeRecordAttribution": {
         "type": "object", "additionalProperties": false, "required": ["kind", "source_id", "relation", "proof_kind"],

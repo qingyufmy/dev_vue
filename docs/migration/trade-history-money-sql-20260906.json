@@ -1,0 +1,164 @@
+{
+  "verifiedAt": "2026-09-06T15:36:54.471Z",
+  "scope": "read_only_synthetic_cte_repository_aggregates",
+  "identity": {
+    "version": "8.4.8",
+    "server_uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "database_name": "dev_vue"
+  },
+  "repositorySha256": "54de38983bc804dc82c25a896650a26e4baa624518e13e9eafbf647485daa34f",
+  "cases": [
+    {
+      "name": "same_currency",
+      "passed": true,
+      "summary": {
+        "accountCurrency": "USD",
+        "moneyStatus": "comparable",
+        "tradeCount": 2,
+        "winningCount": 1,
+        "losingCount": 1,
+        "breakevenCount": 0,
+        "winRatePercent": "50.0000",
+        "grossProfit": "-0.10000000",
+        "commission": "0",
+        "swap": "0",
+        "fee": "0",
+        "netProfit": "-0.10000000",
+        "profitFactor": "0.50000000"
+      },
+      "daily": [
+        {
+          "businessDate": "2020-01-02",
+          "tradeCount": 1,
+          "netProfit": "0.10000000",
+          "cumulativeNetProfit": "0.10000000"
+        },
+        {
+          "businessDate": "2020-01-03",
+          "tradeCount": 1,
+          "netProfit": "-0.20000000",
+          "cumulativeNetProfit": "-0.10000000"
+        }
+      ]
+    },
+    {
+      "name": "mixed_across_days",
+      "passed": true,
+      "summary": {
+        "accountCurrency": null,
+        "moneyStatus": "mixed",
+        "tradeCount": 2,
+        "winningCount": 1,
+        "losingCount": 1,
+        "breakevenCount": 0,
+        "winRatePercent": "50.0000",
+        "grossProfit": null,
+        "commission": null,
+        "swap": null,
+        "fee": null,
+        "netProfit": null,
+        "profitFactor": null
+      },
+      "daily": [
+        {
+          "businessDate": "2020-01-02",
+          "tradeCount": 1,
+          "netProfit": null,
+          "cumulativeNetProfit": null
+        },
+        {
+          "businessDate": "2020-01-03",
+          "tradeCount": 1,
+          "netProfit": null,
+          "cumulativeNetProfit": null
+        }
+      ]
+    },
+    {
+      "name": "partial_unknown",
+      "passed": true,
+      "summary": {
+        "accountCurrency": null,
+        "moneyStatus": "unknown",
+        "tradeCount": 2,
+        "winningCount": 1,
+        "losingCount": 1,
+        "breakevenCount": 0,
+        "winRatePercent": "50.0000",
+        "grossProfit": null,
+        "commission": null,
+        "swap": null,
+        "fee": null,
+        "netProfit": null,
+        "profitFactor": null
+      },
+      "daily": [
+        {
+          "businessDate": "2020-01-02",
+          "tradeCount": 1,
+          "netProfit": null,
+          "cumulativeNetProfit": null
+        },
+        {
+          "businessDate": "2020-01-03",
+          "tradeCount": 1,
+          "netProfit": null,
+          "cumulativeNetProfit": null
+        }
+      ]
+    },
+    {
+      "name": "all_unknown",
+      "passed": true,
+      "summary": {
+        "accountCurrency": null,
+        "moneyStatus": "unknown",
+        "tradeCount": 2,
+        "winningCount": 1,
+        "losingCount": 1,
+        "breakevenCount": 0,
+        "winRatePercent": "50.0000",
+        "grossProfit": null,
+        "commission": null,
+        "swap": null,
+        "fee": null,
+        "netProfit": null,
+        "profitFactor": null
+      },
+      "daily": [
+        {
+          "businessDate": "2020-01-02",
+          "tradeCount": 1,
+          "netProfit": null,
+          "cumulativeNetProfit": null
+        },
+        {
+          "businessDate": "2020-01-03",
+          "tradeCount": 1,
+          "netProfit": null,
+          "cumulativeNetProfit": null
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "passed": true,
+      "summary": {
+        "accountCurrency": null,
+        "moneyStatus": "empty",
+        "tradeCount": 0,
+        "winningCount": 0,
+        "losingCount": 0,
+        "breakevenCount": 0,
+        "winRatePercent": null,
+        "grossProfit": null,
+        "commission": null,
+        "swap": null,
+        "fee": null,
+        "netProfit": null,
+        "profitFactor": null
+      },
+      "daily": []
+    }
+  ]
+}

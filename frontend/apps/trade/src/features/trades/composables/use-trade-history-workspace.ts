@@ -5,11 +5,11 @@ import { tradeHistoryApi } from '../api/trade-history-api'
 import { createTradeHistoryRealtime, type TradeHistoryRealtimeState } from '../realtime/trade-history-realtime'
 import type { TradeHistoryFilters } from '../model/trade-history-presentation'
 
-const emptySummary: TradeHistorySummary = { tradeCount: 0, winningCount: 0, losingCount: 0, breakevenCount: 0, winRatePercent: null, grossProfit: '0', commission: '0', swap: '0', fee: '0', netProfit: '0', profitFactor: null }
+const emptySummary: TradeHistorySummary = { accountCurrency: null, moneyStatus: 'empty', tradeCount: 0, winningCount: 0, losingCount: 0, breakevenCount: 0, winRatePercent: null, grossProfit: null, commission: null, swap: null, fee: null, netProfit: null, profitFactor: null }
 
 export function useTradeHistoryWorkspace(accountId: Ref<string>, filters: Ref<TradeHistoryFilters>) {
   const { session } = useTradeSession(); const accounts = ref<TradingAccount[]>([]); const items = ref<TradeHistoryRecord[]>([]); const summary = ref(emptySummary)
-  const daily = ref<Array<{ businessDate: string; tradeCount: number; netProfit: string; cumulativeNetProfit: string }>>([])
+  const daily = ref<Array<{ businessDate: string; tradeCount: number; netProfit: string | null; cumulativeNetProfit: string | null }>>([])
   const freshness = ref<{ status: 'empty' | 'syncing' | 'ready' | 'stale' | 'failed'; historyRevision: number; freshThrough: string | null; lastSuccessAt: string | null }>({ status: 'empty', historyRevision: 0, freshThrough: null, lastSuccessAt: null })
   const selected = ref<TradeRecordDetail | null>(null); const nextCursor = ref<string | null>(null); const loading = ref(false); const loadingMore = ref(false); const detailLoading = ref(false); const error = ref(''); const detailError = ref(''); const realtime = ref<TradeHistoryRealtimeState>('idle')
   let generation = 0; let detailGeneration = 0; let realtimeController: ReturnType<typeof createTradeHistoryRealtime> | null = null; let refreshTimer: number | null = null

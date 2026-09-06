@@ -19,7 +19,6 @@ const accountId = ref(text(route.query.account_id))
 const filters = ref<TradeHistoryFilters>({ symbol: text(route.query.symbol).toUpperCase(), side: ['buy', 'sell'].includes(text(route.query.side)) ? text(route.query.side) as TradeHistoryFilters['side'] : '', source: ['system', 'manual', 'other_ea', 'mixed', 'unknown'].includes(text(route.query.source)) ? text(route.query.source) as TradeHistoryFilters['source'] : '', outcome: ['profit', 'loss', 'breakeven'].includes(text(route.query.outcome)) ? text(route.query.outcome) as TradeHistoryFilters['outcome'] : '', from: text(route.query.from), to: text(route.query.to), query: text(route.query.q) })
 const workspace = useTradeHistoryWorkspace(accountId, filters)
 const detailOpen = computed(() => Boolean(workspace.selected.value || workspace.detailLoading.value || workspace.detailError.value))
-const currency = computed(() => workspace.selectedAccount.value?.currency ?? 'USD')
 const realtimeLabel = computed(() => ({ idle: '未连接', connecting: '连接中', live: '实时同步', recovering: '恢复中', offline: '快照模式' })[workspace.realtime.value])
 const freshnessLabel = computed(() => ({ empty: '等待历史数据', syncing: '历史同步中', ready: '历史已就绪', stale: '历史可能滞后', failed: '历史同步失败' })[workspace.freshness.value.status])
 
@@ -51,9 +50,9 @@ watch(accountId, (value) => {
     <Alert v-else-if="workspace.freshness.value.status === 'stale' || workspace.freshness.value.status === 'syncing'"><Clock3 /><AlertTitle>{{ freshnessLabel }}</AlertTitle><AlertDescription>当前页面仍可查看最近一次已确认快照；新成交会在历史投影封口后通过轻量实时事件触发刷新。</AlertDescription></Alert>
 
     <TradeHistoryFilterBar v-model:account-id="accountId" v-model:filters="filters" :accounts="workspace.accounts.value" :loading="workspace.loading.value" @apply="applyFilters" @reset="resetFilters" />
-    <TradeSummaryCards :summary="workspace.summary.value" :currency="currency" :loading="workspace.loading.value" />
-    <TradePnlChart :points="workspace.daily.value" :currency="currency" />
-    <TradeHistoryTable :items="workspace.items.value" :currency="currency" :loading="workspace.loading.value" :loading-more="workspace.loadingMore.value" :has-more="Boolean(workspace.nextCursor.value)" @select="openDetail" @more="workspace.load(false)" />
-    <TradeDetailSheet :open="detailOpen" :detail="workspace.selected.value" :loading="workspace.detailLoading.value" :error="workspace.detailError.value" :currency="currency" @update:open="value => { if (!value) closeDetail() }" />
+    <TradeSummaryCards :summary="workspace.summary.value" :loading="workspace.loading.value" />
+    <TradePnlChart :points="workspace.daily.value" :summary="workspace.summary.value" />
+    <TradeHistoryTable :items="workspace.items.value" :loading="workspace.loading.value" :loading-more="workspace.loadingMore.value" :has-more="Boolean(workspace.nextCursor.value)" @select="openDetail" @more="workspace.load(false)" />
+    <TradeDetailSheet :open="detailOpen" :detail="workspace.selected.value" :loading="workspace.detailLoading.value" :error="workspace.detailError.value" @update:open="value => { if (!value) closeDetail() }" />
   </div>
 </template>

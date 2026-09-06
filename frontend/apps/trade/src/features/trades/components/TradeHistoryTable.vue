@@ -9,7 +9,7 @@ import { Skeleton } from '@aurum/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@aurum/ui/table'
 import { decimal, evidenceLabel, sideLabel, sourceLabel, terminalTime } from '../model/trade-history-presentation'
 
-defineProps<{ items: TradeHistoryRecord[]; currency: string; loading: boolean; loadingMore: boolean; hasMore: boolean }>()
+defineProps<{ items: TradeHistoryRecord[]; loading: boolean; loadingMore: boolean; hasMore: boolean }>()
 const emit = defineEmits<{ select: [id: string]; more: [] }>()
 const pnlClass = (value: string) => Number(value) > 0 ? 'text-trade-up' : Number(value) < 0 ? 'text-trade-down' : 'text-foreground'
 </script>
@@ -29,14 +29,14 @@ const pnlClass = (value: string) => Number(value) > 0 ? 'text-trade-up' : Number
               <TableCell class="font-mono text-xs tabular-nums">{{ item.primaryTicket }}</TableCell>
               <TableCell class="text-xs"><div>{{ terminalTime(item.openedAt, item.terminalTimezoneOffsetMinutes).slice(0, 19) }}</div><div class="text-muted-foreground">{{ terminalTime(item.closedAt, item.terminalTimezoneOffsetMinutes).slice(0, 19) }}</div></TableCell>
               <TableCell class="text-right font-mono tabular-nums">{{ item.volume }}</TableCell><TableCell class="text-right font-mono tabular-nums">{{ decimal(item.entryPrice) }}</TableCell><TableCell class="text-right font-mono tabular-nums">{{ decimal(item.exitPrice) }}</TableCell>
-              <TableCell :class="['text-right font-mono font-medium tabular-nums', pnlClass(item.netProfit)]">{{ decimal(item.netProfit) }} {{ currency }}</TableCell>
+              <TableCell :class="['text-right font-mono font-medium tabular-nums', pnlClass(item.netProfit)]">{{ decimal(item.netProfit) }} {{ item.accountCurrency ?? '币种未知' }}</TableCell>
               <TableCell><div class="flex flex-col items-start gap-1"><Badge variant="secondary">{{ sourceLabel(item.source) }}</Badge><span class="text-[11px] text-muted-foreground">{{ evidenceLabel(item.evidenceStatus) }}</span></div></TableCell><TableCell><ChevronRight class="size-4 text-muted-foreground" /></TableCell>
             </TableRow></TableBody>
           </Table>
         </div>
         <div class="grid gap-2 p-3 lg:hidden">
           <Button v-for="item in items" :key="item.id" type="button" variant="outline" class="h-auto min-h-24 w-full flex-col items-stretch justify-start whitespace-normal p-3 text-left" @click="emit('select', item.id)">
-            <span class="flex items-start justify-between gap-3"><span><strong>{{ item.symbol }} · {{ sideLabel(item.side) }}</strong><span class="mt-1 block font-mono text-xs text-muted-foreground">#{{ item.primaryTicket }}</span></span><strong :class="['font-mono tabular-nums', pnlClass(item.netProfit)]">{{ decimal(item.netProfit) }} {{ currency }}</strong></span>
+            <span class="flex items-start justify-between gap-3"><span><strong>{{ item.symbol }} · {{ sideLabel(item.side) }}</strong><span class="mt-1 block font-mono text-xs text-muted-foreground">#{{ item.primaryTicket }}</span></span><strong :class="['font-mono tabular-nums', pnlClass(item.netProfit)]">{{ decimal(item.netProfit) }} {{ item.accountCurrency ?? '币种未知' }}</strong></span>
             <span class="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>{{ sourceLabel(item.source) }} · {{ item.volume }} 手</span><span>{{ terminalTime(item.closedAt, item.terminalTimezoneOffsetMinutes).slice(5, 16) }}</span></span>
           </Button>
         </div>
