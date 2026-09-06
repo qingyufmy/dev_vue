@@ -1,0 +1,196 @@
+{
+  "kind": "dev-vue-schema-upgrade/v2",
+  "status": "verified",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "proof": {
+    "base": {
+      "rehearsalDatabase": "dev_vue_m1_source_20260907_02",
+      "rehearsalSha256": "a3ff0410f98fdc333cf8978cd96dd8d5d2f5e413322d4c8e0092cb6fbc68fe65",
+      "toolsVerified": 101
+    },
+    "macro": {
+      "rehearsalDatabase": "dev_vue_m1_source_20260907_02",
+      "rehearsalSha256": "35fabc2d5e1c5ca9bef32138556dc0fd395150a752d57cec9ff0f8117be2553e",
+      "toolsVerified": 106
+    }
+  },
+  "completedAtUtc": "2026-09-06T18:38:49.040Z",
+  "result": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_001_01_users_last_seen_at_utc",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_02_users_profile_revision",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_03_bridge_refresh_sessions_credential_version",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_04_bridge_refresh_sessions_installation_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_05_bridge_refresh_sessions_profile_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_06_bridge_refresh_sessions_generation",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_07_bridge_refresh_sessions_migration_key",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_08_bridge_refresh_sessions_source_fingerprint",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_09_bridge_refresh_sessions_source_refresh_session_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_01_auth_sessions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_02_auth_authorization_codes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_03_terminal_profiles",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_04_bridge_connection_capacity_grants",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_05_data_migration_runs",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_06_data_migration_checkpoints",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_07_data_migration_batches",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_08_data_migration_id_maps",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_09_data_migration_row_receipts",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_01_trading_accounts_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_03_trading_account_ownerships_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_04_user_trading_account_settings_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_004_01_data_migration_source_rows",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_01_strategies",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_02_strategy_versions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_03_strategy_active_version_fk",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_01_strategy_subscriptions_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_02_subscription_schedules_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_03_subscription_execution_preferences_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_01_macro_data_sources",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_02_macro_feature_sets",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_03_economic_calendar_events",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_04_macro_model_versions",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_05_macro_series",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_06_macro_ingestion_runs",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_07_macro_pipeline_jobs",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_08_macro_research_snapshots",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_09_economic_calendar_event_revisions",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_10_macro_observations",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_007_11_macro_snapshot_observations",
+        "status": "applied"
+      }
+    ],
+    "structureComplete": true,
+    "fullNormalizationComplete": false
+  },
+  "ddlExecutions": 11,
+  "journalWrites": 22,
+  "originalTables": 165,
+  "originalRows": "271007",
+  "originalParityHash": "1acdcef31318fdb532899bd8f5260b878cd357fbd597ec01d21a6640154fe872",
+  "repeatNoop": true,
+  "businessRowsWritten": false,
+  "fullNormalizationComplete": false
+}
