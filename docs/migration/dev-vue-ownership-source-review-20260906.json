@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "observedAtUtc": "2026-09-06T14:00:16.022Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "counts": {
+    "accounts": 4,
+    "terminals": 7,
+    "bindings": 3,
+    "intervals": 274,
+    "openIntervals": 3,
+    "zeroLength": 0,
+    "candidateEntities": 3
+  },
+  "sourceHash": "08c8c0d632ad0908ef6318459e7946fd7c8959b5341a5348b133ebb5362e43c9",
+  "candidates": [
+    {
+      "sourceLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+      "candidateKey": "5358ac274d1a98ae857cd3dc1d632f35e55a8e4c8edd372c8f3029670ab5c46e",
+      "issues": []
+    },
+    {
+      "sourceLocatorHash": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+      "candidateKey": "e931a652de55c61fd1544feaaae888aa27302cf191dea546cf3704b802d769b7",
+      "issues": []
+    },
+    {
+      "sourceLocatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+      "candidateKey": "5e6d410514404bdb8a992348921134f0352a8b4b26eab342cd259a227efbe357",
+      "issues": []
+    },
+    {
+      "sourceLocatorHash": "2bf175f9655e7bb7357b9f0a7c6051465a5ae701104ffe741b98e852c0e4d460",
+      "candidateKey": "e931a652de55c61fd1544feaaae888aa27302cf191dea546cf3704b802d769b7",
+      "issues": []
+    }
+  ],
+  "issues": [],
+  "scope": "current_identity_candidates_and_raw_wall_clock_order_only",
+  "timeBasisConfirmed": false,
+  "targetIdsAssigned": false,
+  "businessWritesPerformed": false,
+  "readyForBackfill": false
+}
